@@ -8,6 +8,7 @@
     "core:event:default",
     "core:window:allow-set-focus",
     "opener:default",
+    "dialog:default",
     "process:default",
     "updater:default"
   ]

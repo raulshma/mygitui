@@ -32,6 +32,7 @@ notify = "8.2.0"
 thiserror = "2.0.21"
 parking_lot = "0.12.5"
 tracing = "0.1.44"
+tauri-plugin-dialog = "2.8.1"
 
 # M1+ git core will add: git2, imara-diff, notify, tokio — installed when contracts land.
 
