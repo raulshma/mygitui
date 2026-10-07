@@ -613,3 +613,143 @@ export async function onAuthRequest(
     return noop;
   }
 }
+
+// ---------- M3: power + safety wrappers ----------
+
+export async function mergeBranch(repoId: string, refName: string, noFF: boolean): Promise<MergeResult> {
+  return invokeTauri("merge_branch", { repo_id: repoId, ref_name: refName, no_ff: noFF });
+}
+
+export async function mergeAbort(repoId: string): Promise<void> {
+  return invokeTauri("merge_abort", { repo_id: repoId });
+}
+
+export async function conflicts(repoId: string): Promise<ConflictFile[]> {
+  return invokeTauri("conflicts", { repo_id: repoId });
+}
+
+export async function conflictResolve(
+  repoId: string,
+  path: string,
+  resolution: ConflictResolution,
+  customContent?: Uint8Array,
+): Promise<void> {
+  return invokeTauri("conflict_resolve", {
+    repo_id: repoId,
+    path,
+    resolution,
+    custom_content: customContent ? Array.from(customContent) : undefined,
+  });
+}
+
+export async function cherryPick(repoId: string, shas: string[]): Promise<MergeResult> {
+  return invokeTauri("cherry_pick", { repo_id: repoId, shas });
+}
+
+export async function revertCommits(repoId: string, shas: string[]): Promise<MergeResult> {
+  return invokeTauri("revert", { repo_id: repoId, shas });
+}
+
+export async function resetRepo(repoId: string, kind: ResetKind, to: string): Promise<void> {
+  return invokeTauri("reset", { repo_id: repoId, kind, to });
+}
+
+export async function rebaseStart(repoId: string, plan: RebaseStep[], onto?: string): Promise<RebaseState> {
+  return invokeTauri("rebase_start", { repo_id: repoId, plan, onto: onto ?? undefined });
+}
+
+export async function rebaseState(repoId: string): Promise<RebaseState> {
+  return invokeTauri("rebase_state", { repo_id: repoId });
+}
+
+export async function rebaseContinue(repoId: string): Promise<RebaseState> {
+  return invokeTauri("rebase_continue", { repo_id: repoId });
+}
+
+export async function rebaseAbort(repoId: string): Promise<void> {
+  return invokeTauri("rebase_abort", { repo_id: repoId });
+}
+
+export async function stashList(repoId: string): Promise<StashInfo[]> {
+  return invokeTauri("stash_list", { repo_id: repoId });
+}
+
+export async function stashPush(
+  repoId: string,
+  message?: string,
+  keepIndex = false,
+  includeUntracked = true,
+): Promise<void> {
+  return invokeTauri("stash_push", {
+    repo_id: repoId,
+    message: message ?? undefined,
+    keep_index: keepIndex,
+    include_untracked: includeUntracked,
+  });
+}
+
+export async function stashApply(repoId: string, index: number, pop = false): Promise<void> {
+  return invokeTauri("stash_apply", { repo_id: repoId, index, pop });
+}
+
+export async function stashDrop(repoId: string, index: number): Promise<void> {
+  return invokeTauri("stash_drop", { repo_id: repoId, index });
+}
+
+export async function stashBranch(repoId: string, name: string, index: number): Promise<void> {
+  return invokeTauri("stash_branch", { repo_id: repoId, name, index });
+}
+
+export async function worktrees(repoId: string): Promise<WorktreeInfo[]> {
+  return invokeTauri("worktrees", { repo_id: repoId });
+}
+
+export async function worktreeAdd(
+  repoId: string,
+  path: string,
+  branch?: string,
+  newBranch?: string,
+): Promise<void> {
+  return invokeTauri("worktree_add", {
+    repo_id: repoId,
+    path,
+    branch: branch ?? undefined,
+    new_branch: newBranch ?? undefined,
+  });
+}
+
+export async function worktreeRemove(repoId: string, name: string, force = false): Promise<void> {
+  return invokeTauri("worktree_remove", { repo_id: repoId, name, force });
+}
+
+export async function reflog(repoId: string, name?: string): Promise<ReflogEntry[]> {
+  return invokeTauri("reflog", { repo_id: repoId, name: name ?? undefined });
+}
+
+export async function checkpointCreate(repoId: string, reason: string): Promise<CheckpointInfo> {
+  return invokeTauri("checkpoint_create", { repo_id: repoId, reason });
+}
+
+export async function checkpoints(repoId: string): Promise<CheckpointInfo[]> {
+  return invokeTauri("checkpoints", { repo_id: repoId });
+}
+
+export async function checkpointRestore(repoId: string, id: string): Promise<void> {
+  return invokeTauri("checkpoint_restore", { repo_id: repoId, id });
+}
+
+export async function checkpointGc(repoId: string, olderThanDays: number): Promise<number> {
+  return invokeTauri("checkpoint_gc", { repo_id: repoId, older_than_days: olderThanDays });
+}
+
+export async function opsPreview(
+  repoId: string,
+  kind: string,
+  params: Record<string, unknown>,
+): Promise<PreviewInfo> {
+  return invokeTauri("ops_preview", { repo_id: repoId, kind, params });
+}
+
+export async function guardCheckpoint(repoId: string, reason: string): Promise<CheckpointInfo> {
+  return invokeTauri("guard_checkpoint", { repo_id: repoId, reason });
+}

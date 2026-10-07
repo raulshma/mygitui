@@ -1276,3 +1276,21 @@ pub async fn ops_preview(
     .await
     .map_err(|e| format!("preview task failed: {e}"))?
 }
+/// Snapshot current state as an undo point right before a dangerous op.
+/// FE flow: ops_preview → dialog → guard_checkpoint → confirm → op.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn guard_checkpoint(
+    repo_id: RepoId,
+    reason: String,
+    state: State<'_, RepoManager>,
+) -> Result<CheckpointInfo, String> {
+    let handle = get_handle(&state, &repo_id)?;
+    let engine = handle.m3();
+    let repo = handle.repo();
+    tauri::async_runtime::spawn_blocking(move || {
+        let repo = repo.lock();
+        engine.checkpoint_create(&repo, &reason).map_err(engine_err)
+    })
+    .await
+    .map_err(|e| format!("guard checkpoint task failed: {e}"))?
+}
