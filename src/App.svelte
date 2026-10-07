@@ -16,10 +16,10 @@
     startTabEvents,
     tabStore,
   } from "$lib/stores/tabs.svelte";
-  import type { RepoStatus } from "$lib/ipc/types";
   import { toast } from "$lib/toast";
   import Toaster from "$lib/components/Toaster.svelte";
   import TabStrip from "$lib/components/TabStrip.svelte";
+  import RepoView from "$lib/components/panels/RepoView.svelte";
 
   let repos = $state(recentRepos.list());
 
@@ -58,18 +58,6 @@
     }
   }
 
-  function branchLabel(status: RepoStatus): string {
-    if (status.branch) return status.branch;
-    if (status.detached && status.head) return `detached @ ${status.head.slice(0, 7)}`;
-    return status.detached ? "detached" : "unknown";
-  }
-
-  function changedFiles(status: RepoStatus): number {
-    return status.entries.filter(
-      (entry) => entry.index !== "unmodified" || entry.worktree !== "unmodified",
-    ).length;
-  }
-
   onMount(() => {
     const cleanups: Array<() => void> = [];
 
@@ -106,38 +94,12 @@
 
     <main class="repo-view">
       {#if active}
-        <section class="status-summary" aria-label="Repository status summary">
-          <header class="repo-header">
-            <h1 class="repo-title">{active.name}</h1>
-            <p class="repo-root">{active.root}</p>
-          </header>
-
-          {#if active.status}
-            <dl class="facts">
-              <div class="fact">
-                <dt>Branch</dt>
-                <dd class="fact-value">{branchLabel(active.status)}</dd>
-              </div>
-              <div class="fact">
-                <dt>Ahead</dt>
-                <dd class="fact-value">↑ {active.status.ahead}</dd>
-              </div>
-              <div class="fact">
-                <dt>Behind</dt>
-                <dd class="fact-value">↓ {active.status.behind}</dd>
-              </div>
-              <div class="fact">
-                <dt>Changed files</dt>
-                <dd class="fact-value">{changedFiles(active.status)}</dd>
-              </div>
-            </dl>
-            <p class="stub">
-              Working copy, diff and history views land in M1.
-            </p>
-          {:else}
-            <p class="loading">Loading repository status…</p>
-          {/if}
-        </section>
+        <RepoView
+          repoId={active.id}
+          name={active.name}
+          root={active.root}
+          status={active.status}
+        />
       {/if}
     </main>
   {:else}
@@ -192,83 +154,11 @@
     color: var(--m3-on-surface);
   }
 
-  /* Per-tab content area (M1 status summary stub) */
+  /* Per-tab content area */
   .repo-view {
     flex: 1;
-    overflow-y: auto;
+    min-height: 0;
     display: flex;
-    justify-content: center;
-    padding: 2.5rem 1rem;
-  }
-
-  .status-summary {
-    width: 100%;
-    max-width: 40rem;
-    display: flex;
-    flex-direction: column;
-    gap: 1.25rem;
-  }
-
-  .repo-header {
-    display: flex;
-    flex-direction: column;
-    gap: 0.25rem;
-  }
-
-  .repo-title {
-    font-size: 1.375rem;
-    font-weight: 500;
-    margin: 0;
-    color: var(--m3-on-surface);
-  }
-
-  .repo-root {
-    margin: 0;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    font-size: 0.75rem;
-    font-family: ui-monospace, Consolas, monospace;
-    overflow-wrap: anywhere;
-  }
-
-  .facts {
-    margin: 0;
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
-    gap: 0.75rem;
-  }
-
-  .fact {
-    display: flex;
-    flex-direction: column;
-    gap: 0.25rem;
-    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    border-radius: 0.75rem;
-    background: var(--m3-surface-container, var(--m3-surface));
-    padding: 0.75rem 1rem;
-  }
-
-  .fact dt {
-    font-size: 0.75rem;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-  }
-
-  .fact-value {
-    margin: 0;
-    font-size: 1rem;
-    font-weight: 500;
-    color: var(--m3-primary);
-  }
-
-  .stub,
-  .loading {
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    border: 1px dashed var(--m3-outline-variant, var(--m3-primary));
-    border-radius: 0.75rem;
-    padding: 1.25rem 1.5rem;
-    text-align: center;
-    margin: 0;
   }
 
   /* Home area (no tabs open) */
