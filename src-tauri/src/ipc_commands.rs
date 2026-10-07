@@ -1163,3 +1163,116 @@ mod m2_tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
+
+// ---------------------------------------------------------------------------
+// M3 (lane D4): checkpoints (undo system) + dangerous-op previews.
+//
+// Checkpoints are snapshot commits under hidden refs
+// `refs/mygitui/checkpoints/<unix_millis>-<reason>` capturing the full
+// workdir state (tracked + untracked) over the current HEAD. Restore
+// auto-creates a `pre-restore` checkpoint first (the undo system is itself
+// undoable) and never moves HEAD or branch refs; GC keeps the newest
+// checkpoint regardless of age.
+//
+// Routing: create/restore/gc are mutations and go through the serial op
+// queue with the generation bump (`enqueue_mutation`, mirroring M2);
+// listing and `ops_preview` are pure reads on the M1 read path (repo mutex
+// + spawn_blocking, no queue, no generation bump).
+//
+// WIRING NOTE: these commands call the inherent `*_impl` twins on
+// `Libgit2Engine` directly because the single `impl GitEngineM3` block is
+// owned by merge.rs; the `GitEngineM3::checkpoint_*` forwarding lines land
+// there at integration (afterwards `handle.m3()` is equivalent).
+// ---------------------------------------------------------------------------
+
+use crate::engine::libgit2::Libgit2Engine;
+use crate::engine::types::{CheckpointInfo, PreviewInfo};
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn checkpoint_create(
+    repo_id: RepoId,
+    reason: String,
+    state: State<'_, RepoManager>,
+) -> Result<CheckpointInfo, String> {
+    let handle = get_handle(&state, &repo_id)?;
+    let engine = Libgit2Engine::new();
+    finish_op(enqueue_mutation(
+        &handle,
+        "checkpoint",
+        move |_ctx, repo| engine.checkpoint_create_impl(repo, &reason),
+    ))
+    .await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn checkpoints(
+    repo_id: RepoId,
+    state: State<'_, RepoManager>,
+) -> Result<Vec<CheckpointInfo>, String> {
+    let handle = get_handle(&state, &repo_id)?;
+    let engine = Libgit2Engine::new();
+    let repo = handle.repo();
+    tauri::async_runtime::spawn_blocking(move || {
+        let repo = repo.lock();
+        engine.checkpoints_impl(&repo).map_err(engine_err)
+    })
+    .await
+    .map_err(|e| format!("checkpoints task failed: {e}"))?
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn checkpoint_restore(
+    repo_id: RepoId,
+    id: String,
+    state: State<'_, RepoManager>,
+) -> Result<(), String> {
+    let handle = get_handle(&state, &repo_id)?;
+    let engine = Libgit2Engine::new();
+    finish_op(enqueue_mutation(
+        &handle,
+        "checkpoint",
+        move |_ctx, repo| engine.checkpoint_restore_impl(repo, &id),
+    ))
+    .await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn checkpoint_gc(
+    repo_id: RepoId,
+    older_than_days: u32,
+    state: State<'_, RepoManager>,
+) -> Result<u32, String> {
+    let handle = get_handle(&state, &repo_id)?;
+    let engine = Libgit2Engine::new();
+    finish_op(enqueue_mutation(
+        &handle,
+        "checkpoint",
+        move |_ctx, repo| engine.checkpoint_gc_impl(repo, older_than_days),
+    ))
+    .await
+}
+
+/// Pure what-if preview of a dangerous op (no mutation, no checkpoint):
+/// `kind` is one of "reset_hard" / "clean" / "checkout_force" /
+/// "branch_delete", `params` carries the kind's arguments (e.g.
+/// `{"to": "<commit-ish>"}`, `{"dirs": bool}`, `{"name": "...",
+/// "into": "..."}`).
+#[tauri::command(rename_all = "snake_case")]
+pub async fn ops_preview(
+    repo_id: RepoId,
+    kind: String,
+    params: serde_json::Value,
+    state: State<'_, RepoManager>,
+) -> Result<PreviewInfo, String> {
+    let handle = get_handle(&state, &repo_id)?;
+    let engine = Libgit2Engine::new();
+    let repo = handle.repo();
+    tauri::async_runtime::spawn_blocking(move || {
+        let repo = repo.lock();
+        engine
+            .preview_impl(&repo, &kind, &params)
+            .map_err(engine_err)
+    })
+    .await
+    .map_err(|e| format!("preview task failed: {e}"))?
+}

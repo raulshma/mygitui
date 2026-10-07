@@ -302,7 +302,7 @@ export interface PreviewFile {
 }
 
 export interface PreviewInfo {
+  kind: string;
   summary: string;
   files: PreviewFile[];
-  checkpoint_id: string | null;
 }

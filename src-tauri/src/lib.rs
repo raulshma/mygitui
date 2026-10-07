@@ -74,6 +74,11 @@ pub fn run() {
             ipc_commands::pull,
             ipc_commands::push,
             ipc_commands::auth_respond,
+            ipc_commands::checkpoint_create,
+            ipc_commands::checkpoints,
+            ipc_commands::checkpoint_restore,
+            ipc_commands::checkpoint_gc,
+            ipc_commands::ops_preview,
         ])
         .run(tauri::generate_context!())
         .expect("error while running mygitui");

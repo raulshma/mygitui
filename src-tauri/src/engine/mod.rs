@@ -20,3 +20,6 @@ mod rebase_tests;
 pub mod stash;
 #[cfg(test)]
 mod stash_tests;
+
+#[cfg(test)]
+mod checkpoint_tests;

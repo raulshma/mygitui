@@ -55,7 +55,9 @@ use git2::{Index, Repository, RepositoryState, Signature, Time};
 use super::git_engine::{EngineError, EngineResult, GitEngineM3};
 use super::libgit2::Libgit2Engine;
 use super::types::{ConflictFile, ConflictResolution, MergeOutcome, MergeResult, ResetKind};
-use crate::engine::types::{RebaseState, RebaseStep, ReflogEntry, StashInfo, WorktreeInfo};
+use crate::engine::types::{
+    CheckpointInfo, RebaseState, RebaseStep, ReflogEntry, StashInfo, WorktreeInfo,
+};
 
 // ---------------------------------------------------------------------------
 // helpers
@@ -631,5 +633,19 @@ impl GitEngineM3 for Libgit2Engine {
     }
     fn reflog(&self, repo: &Repository, name: Option<&str>) -> EngineResult<Vec<ReflogEntry>> {
         self.reflog_impl(repo, name)
+    }
+
+    // ---------- D4 checkpoint forwarding ----------
+    fn checkpoint_create(&self, repo: &Repository, reason: &str) -> EngineResult<CheckpointInfo> {
+        self.checkpoint_create_impl(repo, reason)
+    }
+    fn checkpoints(&self, repo: &Repository) -> EngineResult<Vec<CheckpointInfo>> {
+        self.checkpoints_impl(repo)
+    }
+    fn checkpoint_restore(&self, repo: &Repository, id: &str) -> EngineResult<()> {
+        self.checkpoint_restore_impl(repo, id)
+    }
+    fn checkpoint_gc(&self, repo: &Repository, older_than_days: u32) -> EngineResult<u32> {
+        self.checkpoint_gc_impl(repo, older_than_days)
     }
 }

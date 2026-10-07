@@ -376,3 +376,26 @@ pub struct CheckpointInfo {
     /// Working tree was captured too (stash-style 2nd parent).
     pub has_worktree_state: bool,
 }
+
+// ---------- M3: dangerous-op previews (lane D4) ----------
+
+/// One path a dangerous op would change.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PreviewFile {
+    pub path: String,
+    /// "modified" | "added" | "deleted" (ops that list commits use the
+    /// commit summary here instead).
+    pub change: String,
+}
+
+/// Pure preview of what a dangerous operation would do — computed without
+/// touching the workdir, index, or any ref.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PreviewInfo {
+    /// The previewed op kind ("reset_hard", "clean", "checkout_force",
+    /// "branch_delete").
+    pub kind: String,
+    /// One-line human summary.
+    pub summary: String,
+    pub files: Vec<PreviewFile>,
+}

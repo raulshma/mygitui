@@ -107,8 +107,8 @@ Same op-queue + op-progress machinery as M2. All `#[tauri::command(rename_all = 
 | `checkpoint_gc` | `repo_id, older_than_days` | `u32` (count removed) |
 | `ops_preview` | `repo_id, kind: "reset_hard" \| "clean" \| "checkout_force" \| "branch_delete", params` | `PreviewInfo` |
 
-`PreviewInfo = { summary: string; files: { path: string; change: string }[]; checkpoint_id: string | null }`
-(dangerous ops must call preview first; FE shows dialog before confirm; checkpoint auto-created).
+`PreviewInfo = { kind: string; summary: string; files: { path: string; change: string }[] }`
+(dangerous ops: FE calls `ops_preview` → dialog → `guard_checkpoint` → confirm → op).
 
 Checkpoints live at `refs/mygitui/checkpoints/<ts>-<reason>`; worktree state is a stash-style
 2-parent commit; GC default 30 days; restore = reset soft to checkpoint + apply worktree blob.
