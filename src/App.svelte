@@ -10,6 +10,7 @@
   import { listen } from "@tauri-apps/api/event";
   import { initTheme } from "$lib/theme";
   import { isTauri, listenDragDrop } from "$lib/entry/dragdrop";
+  import { pickFolder } from "$lib/ipc/client";
   import {
     openTab,
     recentRepos,
@@ -20,8 +21,13 @@
   import Toaster from "$lib/components/Toaster.svelte";
   import TabStrip from "$lib/components/TabStrip.svelte";
   import RepoView from "$lib/components/panels/RepoView.svelte";
+  import QuickSwitcher from "$lib/components/QuickSwitcher.svelte";
+  import CloneDialog from "$lib/components/CloneDialog.svelte";
 
   let repos = $state(recentRepos.list());
+
+  /** Clone-dialog visibility (home view's "Clone repo…" button). */
+  let cloneOpen = $state(false);
 
   /** The focused repository tab, or `null` when the home view is showing. */
   const active = $derived(tabStore.active);
@@ -41,11 +47,10 @@
     refreshRepos();
   }
 
-  /** "+" button: real folder picker (@tauri-apps/plugin-dialog) lands M1.1. */
-  function openFromDisk(): void {
-    toast(
-      "Folder picker lands in M1.1 — drop a folder or pick a recent repo for now.",
-    );
+  /** "+" button: real folder picker (@tauri-apps/plugin-dialog). */
+  async function openFromDisk(): Promise<void> {
+    const path = await pickFolder();
+    if (path) await openRepoTab(path);
   }
 
   async function openRepoTab(path: string): Promise<void> {
@@ -105,12 +110,22 @@
   {:else}
     <main class="home">
       <section class="recent" aria-labelledby="recent-heading">
-        <h1 id="recent-heading" class="recent-heading">Recent repositories</h1>
+        <div class="recent-head">
+          <h1 id="recent-heading" class="recent-heading">Recent repositories</h1>
+          <button
+            class="clone-btn"
+            type="button"
+            onclick={() => (cloneOpen = true)}
+          >
+            Clone repo…
+          </button>
+        </div>
 
         {#if repos.length === 0}
           <p class="empty">
             No recent repositories yet. Drag a repository folder onto this
-            window, or launch <code>mygitui .</code> from a terminal.
+            window, launch <code>mygitui .</code> from a terminal, or clone a
+            repository with the button above.
           </p>
         {:else}
           <ul class="repo-list">
@@ -144,6 +159,8 @@
 </div>
 
 <Toaster />
+<QuickSwitcher />
+<CloneDialog bind:open={cloneOpen} />
 
 <style>
   .app-shell {
@@ -173,6 +190,40 @@
   .recent {
     width: 100%;
     max-width: 40rem;
+  }
+
+  .recent-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    margin-bottom: 1rem;
+  }
+
+  .recent-head .recent-heading {
+    margin: 0;
+  }
+
+  .clone-btn {
+    flex: none;
+    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
+    border-radius: var(--m3-shape-full, 9999px);
+    background: var(--m3-primary);
+    color: var(--m3-on-primary);
+    font: inherit;
+    font-size: 0.8125rem;
+    padding: 0.4rem 1rem;
+    cursor: pointer;
+  }
+
+  .clone-btn:hover,
+  .clone-btn:focus-visible {
+    filter: brightness(1.1);
+  }
+
+  .clone-btn:focus-visible {
+    outline: 2px solid var(--m3-primary);
+    outline-offset: 2px;
   }
 
   .recent-heading {

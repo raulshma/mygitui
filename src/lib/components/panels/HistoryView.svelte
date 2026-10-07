@@ -1,9 +1,1030 @@
 <script lang="ts">
-  /** Wave-2 stub. Contract (owned by B3 lane): owns the log stream + filter
-   *  bar + GraphCanvas + commit detail pane. */
+  /**
+   * HistoryView (B3 lane) — filter bar + streamed commit log + commit detail.
+   *
+   * Layout (top to bottom):
+   *   1. filter bar (text / author / path / after / before; regex shown but
+   *      disabled until M1.1) with an optional CompareBar strip,
+   *   2. the log: DOM commit rows (left) beside GraphCanvas (right, 220px).
+   *      GraphCanvas owns its native scroll container (B2 contract), so the
+   *      two panes keep their scrollTops in lockstep instead of sharing one
+   *      scroller: the visible DOM-row window IS the canvas's reported
+   *      window (`onVisibleRowsChange`), the DOM pane hides its own gutter,
+   *      and the canvas's scrollbar effectively drives both. Wheel over
+   *      either pane, keyboard nav, and `scrollToRow`/`scrollToIndex` all
+   *      converge (equality-guarded pushes — no feedback loop). If B2's
+   *      internal `.gc-scroll` element can't be found, sync degrades to the
+   *      exported `scrollToRow(index)` + a locally computed window.
+   *   3. commit detail pane (bottom): full message, author/committer dates,
+   *      clickable parents, and the commit's diff (repoDiff parent0 → sha,
+   *      lazy + loading state) rendered in DiffViewer; per-file "Blame"
+   *      swaps in a BlameView, and CompareBar results render here too.
+   *
+   * Data: one HistoryStore per mounted view (see `$lib/stores/history.svelte`)
+   * started/destroyed in an `$effect` keyed on `repoId`.
+   *
+   * Keyboard: the list is a role="listbox" — j/k or arrows move the
+   * selection (g/G/Home/End jump), and aria-activedescendant tracks it.
+   */
+  import { repoDiff } from "$lib/ipc/client";
+  import type { CommitInfo, FileDiff } from "$lib/ipc/types";
+  import GraphCanvas from "$lib/components/graph/GraphCanvas.svelte";
+  import DiffViewer from "$lib/components/diff/DiffViewer.svelte";
+  import BlameView from "$lib/components/panels/BlameView.svelte";
+  import CompareBar from "$lib/components/panels/CompareBar.svelte";
+  import { HistoryStore } from "$lib/stores/history.svelte";
+  import {
+    classifyRef,
+    formatDateTime,
+    formatRelativeTime,
+    shortRefName,
+  } from "$lib/stores/history-logic";
+  import { toast } from "$lib/toast";
+
   let { repoId }: { repoId: string } = $props();
+
+  /** Must match the row height passed to (and defaulted by) GraphCanvas. */
+  const ROW_HEIGHT = 24;
+  const GRAPH_WIDTH = 220;
+  const OVERSCAN = 10;
+
+  const store = new HistoryStore();
+
+  // -- selection + detail state ------------------------------------------------
+
+  let selectedSha = $state<string | null>(null);
+  /** Last known CommitInfo for the selection (survives filter restarts). */
+  let selectedInfo = $state<CommitInfo | null>(null);
+  let detailOpen = $state(false);
+  let showCompare = $state(false);
+  let compare = $state<{ files: FileDiff[]; base: string; target: string } | null>(null);
+  let blameTarget = $state<{ path: string; from: string } | null>(null);
+  let detailFiles = $state<FileDiff[] | null>(null);
+  let detailLoading = $state(false);
+  let detailToken = 0;
+
+  // -- virtualizer + canvas scroll sync ------------------------------------------
+
+  let scrollerEl = $state<HTMLDivElement | undefined>(undefined);
+  let graphColEl = $state<HTMLDivElement | undefined>(undefined);
+  let canvasRef = $state<unknown>(null);
+  /** B2's internal scroll element (`.gc-scroll`) — exact sync fast path. */
+  let canvasScrollEl: HTMLDivElement | null = null;
+  let ownRange = $state({ start: 0, end: 0 });
+  let canvasWindow = $state<{ first: number; last: number } | null>(null);
+
+  $effect(() => {
+    // Grab (or drop) the canvas's internal scroller when its column mounts.
+    canvasScrollEl = graphColEl
+      ? (graphColEl.querySelector<HTMLDivElement>(":scope .gc-scroll") ?? null)
+      : null;
+  });
+
+  /** Render window: the canvas's reported window when live, else our own. */
+  const range = $derived(
+    canvasWindow && canvasWindow.last > canvasWindow.first
+      ? { start: Math.max(0, canvasWindow.first), end: canvasWindow.last }
+      : ownRange,
+  );
+
+  function updateOwnRange(): void {
+    const el = scrollerEl;
+    if (!el || el.clientHeight === 0) return;
+    const first = Math.floor(el.scrollTop / ROW_HEIGHT);
+    const count = Math.ceil(el.clientHeight / ROW_HEIGHT);
+    const start = Math.max(0, first - OVERSCAN);
+    const end = Math.min(total, first + count + OVERSCAN);
+    if (start !== ownRange.start || end !== ownRange.end) ownRange = { start, end };
+  }
+
+  /** Exported-handle fallback (B2 contract: `scrollToRow(index)` centers). */
+  function syncCanvasToRow(index: number): void {
+    const exports = canvasRef as { scrollToRow?: (i: number) => void } | null;
+    if (exports && typeof exports.scrollToRow === "function") exports.scrollToRow(index);
+  }
+
+  /** Mirrors our scrollTop into the canvas (exact when possible). */
+  function pushScrollToCanvas(): void {
+    const mine = scrollerEl;
+    if (!mine) return;
+    if (
+      canvasScrollEl &&
+      Math.abs(canvasScrollEl.scrollTop - mine.scrollTop) >= 1
+    ) {
+      canvasScrollEl.scrollTop = mine.scrollTop;
+    } else if (!canvasScrollEl) {
+      syncCanvasToRow(
+        Math.floor((mine.scrollTop + mine.clientHeight / 2) / ROW_HEIGHT),
+      );
+    }
+  }
+
+  function onScroll(): void {
+    updateOwnRange();
+    pushScrollToCanvas();
+    if (range.end >= total) store.loadMore();
+  }
+
+  /** Canvas reports its drawn window (incl. its overscan) — adopt + follow. */
+  function onCanvasVisible(first: number, last: number): void {
+    canvasWindow = { first, last };
+    const mine = scrollerEl;
+    if (
+      canvasScrollEl &&
+      mine &&
+      Math.abs(mine.scrollTop - canvasScrollEl.scrollTop) >= 1
+    ) {
+      // The user scrolled the canvas directly — follow it exactly. Our
+      // resulting scroll event pushes the same value back (no-op).
+      mine.scrollTop = canvasScrollEl.scrollTop;
+    }
+  }
+
+  $effect(() => {
+    // Fill the viewport when data first lands (or grows past the window).
+    void total;
+    updateOwnRange();
+    if (range.end >= total && total > 0) store.loadMore();
+  });
+
+  function scrollToIndex(index: number): void {
+    const el = scrollerEl;
+    if (!el) {
+      syncCanvasToRow(index);
+      return;
+    }
+    const top = index * ROW_HEIGHT;
+    if (top < el.scrollTop) el.scrollTop = top;
+    else if (top + ROW_HEIGHT > el.scrollTop + el.clientHeight) {
+      el.scrollTop = top + ROW_HEIGHT - el.clientHeight;
+    }
+    pushScrollToCanvas();
+  }
+
+  // -- lifecycle ------------------------------------------------------------------
+
+  $effect(() => {
+    store.start(repoId);
+    return () => store.destroy();
+  });
+
+  // Reset view state when switching repos (scroll position + range).
+  $effect(() => {
+    void repoId;
+    selectedSha = null;
+    selectedInfo = null;
+    detailOpen = false;
+    compare = null;
+    blameTarget = null;
+    ownRange = { start: 0, end: 0 };
+    canvasWindow = null;
+    if (scrollerEl) scrollerEl.scrollTop = 0;
+    if (canvasScrollEl) canvasScrollEl.scrollTop = 0;
+  });
+
+  // -- derived ----------------------------------------------------------------------
+
+  const commits = $derived(store.flat.commits);
+  const total = $derived(commits.length);
+  const selectedIdx = $derived.by(() => {
+    void store.flat; // re-resolve after stream restarts reset the index
+    return selectedSha ? store.indexOfSha(selectedSha) : -1;
+  });
+  const filterActive = $derived(store.filterActive);
+
+  const activeDescendant = $derived(
+    selectedIdx >= range.start && selectedIdx < range.end
+      ? `commit-row-${selectedIdx}`
+      : undefined,
+  );
+
+  const visible = $derived.by(() => {
+    const start = Math.max(0, Math.min(range.start, total));
+    const end = Math.max(start, Math.min(range.end, total));
+    const out: Array<{ commit: CommitInfo; idx: number }> = [];
+    for (let i = start; i < end; i++) {
+      const commit = commits[i];
+      if (commit) out.push({ commit, idx: i });
+    }
+    return out;
+  });
+
+  // -- selection ----------------------------------------------------------------------
+
+  function select(sha: string, opts: { scroll?: boolean; open?: boolean } = {}): void {
+    selectedSha = sha;
+    const idx = store.indexOfSha(sha);
+    const commit = idx >= 0 ? commits[idx] : null;
+    if (commit) selectedInfo = commit;
+    if (opts.open !== false) detailOpen = Boolean(selectedInfo);
+    if (opts.scroll && idx >= 0) scrollToIndex(idx);
+  }
+
+  function selectParent(sha: string): void {
+    if (!store.revealSha(sha)) {
+      toast("Parent commit is not in the loaded history");
+      return;
+    }
+    select(sha, { scroll: true });
+  }
+
+  function onKeydown(event: KeyboardEvent): void {
+    if (total === 0) return;
+    const current = selectedIdx;
+    let next: number;
+    switch (event.key) {
+      case "j":
+      case "ArrowDown":
+        next = Math.min(total - 1, current + 1);
+        break;
+      case "k":
+      case "ArrowUp":
+        next = Math.max(0, current < 0 ? 0 : current - 1);
+        break;
+      case "g":
+      case "Home":
+        next = 0;
+        break;
+      case "G":
+      case "End":
+        next = total - 1;
+        break;
+      default:
+        return;
+    }
+    event.preventDefault();
+    const sha = commits[next]?.sha;
+    if (sha) select(sha, { scroll: true });
+  }
+
+  // -- commit detail diff (lazy, token-guarded) --------------------------------------
+
+  $effect(() => {
+    const info = selectedInfo;
+    const sha = selectedSha;
+    void repoId; // reload on repo switch
+    blameTarget = null;
+    const token = ++detailToken;
+    if (!info || info.parents.length === 0 || !sha) {
+      detailFiles = null;
+      detailLoading = false;
+      return;
+    }
+    detailLoading = true;
+    detailFiles = null;
+    repoDiff(repoId, { commit: info.parents[0] as string }, { commit: sha })
+      .then((files) => {
+        if (token !== detailToken) return;
+        detailFiles = files;
+        detailLoading = false;
+      })
+      .catch((err: unknown) => {
+        if (token !== detailToken) return;
+        detailLoading = false;
+        detailFiles = null;
+        toast(`Diff failed: ${err instanceof Error ? err.message : String(err)}`, {
+          kind: "error",
+        });
+      });
+  });
+
+  function openBlame(path: string): void {
+    if (!selectedSha) return;
+    blameTarget = { path, from: selectedSha };
+  }
+
+  function onCompare(files: FileDiff[], base: string, target: string): void {
+    compare = { files, base, target };
+    blameTarget = null;
+    detailOpen = true;
+  }
 </script>
 
-<section aria-label="Commit history">
-  <p>History for {repoId}</p>
+<section class="history" aria-label="Commit history">
+  <!-- 1. filter bar -->
+  <div class="filterbar" role="search" aria-label="Filter commits">
+    <input
+      class="f"
+      type="search"
+      placeholder="Search commits"
+      aria-label="Search commit text"
+      value={store.filter.text}
+      oninput={(e) => store.setFilter({ text: e.currentTarget.value })}
+    />
+    <input
+      class="f"
+      placeholder="Author"
+      aria-label="Filter by author"
+      value={store.filter.author}
+      oninput={(e) => store.setFilter({ author: e.currentTarget.value })}
+    />
+    <input
+      class="f wide"
+      placeholder="Path"
+      aria-label="Filter by path"
+      value={store.filter.path}
+      oninput={(e) => store.setFilter({ path: e.currentTarget.value })}
+    />
+    <label class="date">
+      <span class="dl">after</span>
+      <input
+        type="date"
+        aria-label="Commits after this date"
+        value={store.filter.after}
+        onchange={(e) => store.setFilter({ after: e.currentTarget.value })}
+      />
+    </label>
+    <label class="date">
+      <span class="dl">before</span>
+      <input
+        type="date"
+        aria-label="Commits before this date"
+        value={store.filter.before}
+        onchange={(e) => store.setFilter({ before: e.currentTarget.value })}
+      />
+    </label>
+    <!-- Regex lands in M1.1 — shown but disabled. -->
+    <label class="regex" title="M1.1">
+      <input type="checkbox" disabled aria-describedby="regex-note" />
+      <span>Regex</span>
+    </label>
+    <span id="regex-note" class="sr-only">Regex search lands in M1.1</span>
+
+    {#if filterActive}
+      <button class="clear" onclick={() => store.clearFilter()}>Clear</button>
+    {/if}
+
+    <button
+      class="compare-toggle"
+      aria-expanded={showCompare}
+      onclick={() => (showCompare = !showCompare)}
+    >
+      Compare…
+    </button>
+
+    <span class="status" role="status" aria-live="polite">
+      {#if store.error}
+        <span class="err" role="alert">{store.error}</span>
+        <button class="retry" onclick={() => store.restart()}>Retry</button>
+      {:else if store.loading}
+        Streaming…
+      {:else}
+        {total}
+        {total === 1 ? "commit" : "commits"}
+        {#if store.hasMore}({store.pendingCount} pages buffered — scroll to load){/if}
+      {/if}
+    </span>
+  </div>
+
+  {#if showCompare}
+    <CompareBar {repoId} {onCompare} />
+  {/if}
+
+  <!-- 2. log: DOM rows (left) + GraphCanvas (right), scroll-synced -->
+  <div class="listwrap">
+    {#if !store.loading && !store.error && total === 0}
+      <p class="empty">No commits match the current filters.</p>
+    {:else}
+      <div
+        class="scroller"
+        bind:this={scrollerEl}
+        onscroll={onScroll}
+        role="listbox"
+        aria-label="Commits"
+        tabindex="0"
+        aria-activedescendant={activeDescendant}
+        onkeydown={onKeydown}
+      >
+        <div class="spacer" style:height={`${total * ROW_HEIGHT}px`}>
+          {#each visible as v (v.commit.sha)}
+            <div
+              id={`commit-row-${v.idx}`}
+              class="row"
+              class:selected={v.idx === selectedIdx}
+              role="option"
+              tabindex="-1"
+              aria-selected={v.idx === selectedIdx}
+              style:top={`${v.idx * ROW_HEIGHT}px`}
+              style:height={`${ROW_HEIGHT}px`}
+              onclick={() => select(v.commit.sha)}
+              onkeydown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  select(v.commit.sha);
+                }
+              }}
+            >
+              <span class="sha">{v.commit.sha.slice(0, 7)}</span>
+              {#each v.commit.refs as ref (ref)}
+                <span class="ref ref-{classifyRef(ref)}">{shortRefName(ref)}</span>
+              {/each}
+              <span class="summary" title={v.commit.summary}>{v.commit.summary}</span>
+              <span class="author">{v.commit.author.name}</span>
+              <span class="date">{formatRelativeTime(v.commit.author.time)}</span>
+            </div>
+          {/each}
+        </div>
+      </div>
+      <div class="graphcol" bind:this={graphColEl} style:width={`${GRAPH_WIDTH}px`}>
+        <GraphCanvas
+          pages={store.pages}
+          rowHeight={ROW_HEIGHT}
+          onCommitClick={(sha) => select(sha)}
+          onReachEnd={() => store.loadMore()}
+          onVisibleRowsChange={onCanvasVisible}
+          bind:this={canvasRef}
+        />
+      </div>
+    {/if}
+  </div>
+
+  <!-- 3. commit detail -->
+  {#if !detailOpen && selectedInfo}
+    <button class="detail-open" onclick={() => (detailOpen = true)} aria-expanded="false">
+      Show commit detail — {selectedInfo.summary}
+    </button>
+  {/if}
+
+  {#if detailOpen && (selectedInfo || compare)}
+    <div class="detail" aria-label="Commit detail">
+      <header class="dhead">
+        {#if selectedInfo}
+          <span class="dsha">{selectedInfo.sha.slice(0, 7)}</span>
+          <span class="dsummary" title={selectedInfo.summary}>{selectedInfo.summary}</span>
+        {:else}
+          <span class="dsha">diff</span>
+          <span class="dsummary">{compare?.base} → {compare?.target}</span>
+        {/if}
+        <button class="dclose" onclick={() => (detailOpen = false)} aria-label="Close detail">
+          ×
+        </button>
+      </header>
+      <div class="dbody">
+        {#if selectedInfo}
+          <aside class="dmeta">
+            <dl>
+              <dt>Author</dt>
+              <dd>
+                {selectedInfo.author.name}
+                <span class="muted">&lt;{selectedInfo.author.email}&gt;</span><br />
+                {formatDateTime(selectedInfo.author.time)}
+                <span class="muted">({formatRelativeTime(selectedInfo.author.time)})</span>
+              </dd>
+              <dt>Committer</dt>
+              <dd>
+                {selectedInfo.committer.name}<br />
+                {formatDateTime(selectedInfo.committer.time)}
+                <span class="muted">({formatRelativeTime(selectedInfo.committer.time)})</span>
+              </dd>
+              <dt>Parents</dt>
+              <dd>
+                {#if selectedInfo.parents.length === 0}
+                  <em>root</em>
+                {:else}
+                  {#each selectedInfo.parents as p (p)}
+                    <button class="parent" onclick={() => selectParent(p)} title={"Go to " + p}>
+                      {p.slice(0, 7)}
+                    </button>
+                  {/each}
+                {/if}
+              </dd>
+              {#if selectedInfo.refs.length > 0}
+                <dt>Refs</dt>
+                <dd class="drefs">
+                  {#each selectedInfo.refs as ref (ref)}
+                    <span class="ref ref-{classifyRef(ref)}">{shortRefName(ref)}</span>
+                  {/each}
+                </dd>
+              {/if}
+            </dl>
+            <pre class="msg">{selectedInfo.message}</pre>
+          </aside>
+        {/if}
+
+        <div class="dfiles">
+          {#if blameTarget}
+            <div class="dtab">
+              <span>Blame: {blameTarget.path}</span>
+              <button
+                onclick={() => (blameTarget = null)}
+                aria-label="Close blame">×
+              </button>
+            </div>
+            <div class="dtabbody">
+              <BlameView {repoId} path={blameTarget.path} from={blameTarget.from} />
+            </div>
+          {:else if compare}
+            <div class="dtab">
+              <span>Compare: {compare.base} → {compare.target} ({compare.files.length} files)</span>
+              <button onclick={() => (compare = null)} aria-label="Close compare">×</button>
+            </div>
+            <div class="dtabbody">
+              <DiffViewer files={compare.files} />
+            </div>
+          {:else if detailLoading}
+            <p class="dstate" role="status">Loading diff…</p>
+          {:else if !selectedInfo || selectedInfo.parents.length === 0}
+            <p class="dstate">Root commit — nothing to diff against.</p>
+          {:else if detailFiles === null}
+            <p class="dstate">Diff unavailable.</p>
+          {:else if detailFiles.length === 0}
+            <p class="dstate">No changes against first parent.</p>
+          {:else}
+            <ul class="filelist" aria-label="Changed files">
+              {#each detailFiles as file (file.path)}
+                <li>
+                  <span class="fpath" title={file.path}>
+                    {#if file.old_path}{file.old_path} → {/if}{file.path}
+                  </span>
+                  <span class="stats">
+                    {#if !file.binary}
+                      <span class="add">+{file.additions}</span>
+                      <span class="del">−{file.deletions}</span>
+                    {:else}
+                      <span class="muted">binary</span>
+                    {/if}
+                  </span>
+                  <button class="blame" onclick={() => openBlame(file.path)}>Blame</button>
+                </li>
+              {/each}
+            </ul>
+            <div class="ddiff">
+              <DiffViewer files={detailFiles} />
+            </div>
+          {/if}
+        </div>
+      </div>
+    </div>
+  {/if}
 </section>
+
+<style>
+  .history {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    min-height: 0;
+    background: var(--m3-surface);
+  }
+
+  /* -- filter bar ------------------------------------------------------------ */
+
+  .filterbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.375rem;
+    padding: 0.375rem 0.75rem;
+    border-bottom: 1px solid var(--m3-outline-variant);
+    background: var(--m3-surface-container, var(--m3-surface));
+    font-size: 0.75rem;
+  }
+
+  input.f {
+    width: 9rem;
+    padding: 0.2rem 0.45rem;
+    font-size: 0.75rem;
+    color: var(--m3-on-surface);
+    background: var(--m3-surface);
+    border: 1px solid var(--m3-outline-variant);
+    border-radius: var(--m3-shape-extra-small, 4px);
+  }
+
+  input.f.wide {
+    width: 12rem;
+  }
+
+  input.f:focus-visible,
+  input[type="date"]:focus-visible {
+    outline: 2px solid var(--m3-primary);
+    outline-offset: -1px;
+  }
+
+  label.date {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+    color: var(--m3-on-surface-variant);
+  }
+
+  input[type="date"] {
+    padding: 0.15rem 0.3rem;
+    font-size: 0.6875rem;
+    color: var(--m3-on-surface);
+    background: var(--m3-surface);
+    border: 1px solid var(--m3-outline-variant);
+    border-radius: var(--m3-shape-extra-small, 4px);
+  }
+
+  label.regex {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+    color: var(--m3-on-surface-variant);
+    cursor: not-allowed;
+  }
+
+  .sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
+
+  button.clear,
+  button.compare-toggle,
+  button.retry {
+    padding: 0.2rem 0.55rem;
+    font-size: 0.6875rem;
+    color: var(--m3-on-surface);
+    background: var(--m3-surface-container-high, var(--m3-surface));
+    border: 1px solid var(--m3-outline-variant);
+    border-radius: var(--m3-shape-extra-small, 4px);
+    cursor: pointer;
+  }
+
+  button.clear:focus-visible,
+  button.compare-toggle:focus-visible,
+  button.retry:focus-visible,
+  button.dclose:focus-visible,
+  button.parent:focus-visible,
+  button.blame:focus-visible,
+  .dtab button:focus-visible,
+  .detail-open:focus-visible {
+    outline: 2px solid var(--m3-primary);
+    outline-offset: 1px;
+  }
+
+  .status {
+    margin-left: auto;
+    color: var(--m3-on-surface-variant);
+    font-size: 0.6875rem;
+    display: flex;
+    align-items: center;
+    gap: 0.375rem;
+  }
+
+  .status .err {
+    color: var(--m3-error);
+  }
+
+  /* -- log list + graph (scroll-synced panes) --------------------------------- */
+
+  .listwrap {
+    position: relative;
+    flex: 1;
+    min-height: 0;
+    display: flex;
+  }
+
+  .empty {
+    margin: auto;
+    color: var(--m3-on-surface-variant);
+    font-size: 0.8125rem;
+  }
+
+  /* Rows pane: hides its own gutter — the canvas's scrollbar drives both. */
+  .scroller {
+    flex: 1;
+    min-width: 0;
+    overflow-y: auto;
+    scrollbar-width: none;
+  }
+
+  .scroller::-webkit-scrollbar {
+    display: none;
+  }
+
+  .scroller:focus-visible {
+    outline: 2px solid var(--m3-primary);
+    outline-offset: -2px;
+  }
+
+  .spacer {
+    position: relative;
+  }
+
+  .row {
+    position: absolute;
+    left: 0;
+    right: 0;
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0 0.6rem 0 0.75rem;
+    font-size: 0.75rem;
+    cursor: pointer;
+    border-bottom: 1px solid color-mix(in srgb, var(--m3-outline-variant) 45%, transparent);
+  }
+
+  .row:hover {
+    background: var(--m3-surface-container-low, var(--m3-surface));
+  }
+
+  .row.selected {
+    background: var(--m3-secondary-container);
+    color: var(--m3-on-secondary-container);
+  }
+
+  .row .sha {
+    flex: none;
+    font-family: ui-monospace, Consolas, monospace;
+    color: var(--m3-on-surface-variant);
+  }
+
+  .row.selected .sha {
+    color: inherit;
+  }
+
+  .row .summary {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .row .author {
+    flex: none;
+    max-width: 10rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--m3-on-surface-variant);
+  }
+
+  .row.selected .author {
+    color: inherit;
+  }
+
+  .row .date {
+    flex: none;
+    color: var(--m3-on-surface-variant);
+    font-size: 0.6875rem;
+  }
+
+  /* ref chips (shared with the detail pane) */
+  .ref {
+    flex: none;
+    max-width: 9rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    padding: 0 0.35rem;
+    border-radius: var(--m3-shape-extra-small, 4px);
+    font-size: 0.6875rem;
+    line-height: 1.4;
+  }
+
+  .ref-local {
+    color: var(--m3-on-primary-container);
+    background: var(--m3-primary-container);
+  }
+
+  .ref-remote {
+    color: var(--m3-on-tertiary-container);
+    background: var(--m3-tertiary-container);
+  }
+
+  .ref-tag {
+    color: var(--m3-on-secondary-container);
+    background: var(--m3-secondary-container);
+  }
+
+  .ref-head {
+    color: var(--m3-inverse-on-surface);
+    background: var(--m3-inverse-surface);
+  }
+
+  .graphcol {
+    flex: none;
+    height: 100%;
+    min-height: 0;
+    border-left: 1px solid var(--m3-outline-variant);
+    background: var(--m3-surface);
+  }
+
+  /* -- detail pane -------------------------------------------------------------- */
+
+  .detail-open {
+    flex: none;
+    padding: 0.25rem 0.75rem;
+    text-align: left;
+    font-size: 0.72rem;
+    color: var(--m3-primary);
+    background: var(--m3-surface-container, var(--m3-surface));
+    border: none;
+    border-top: 1px solid var(--m3-outline-variant);
+    cursor: pointer;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .detail {
+    flex: none;
+    display: flex;
+    flex-direction: column;
+    height: 38%;
+    min-height: 9rem;
+    border-top: 1px solid var(--m3-outline-variant);
+    background: var(--m3-surface);
+  }
+
+  .dhead {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.25rem 0.75rem;
+    background: var(--m3-surface-container, var(--m3-surface));
+    border-bottom: 1px solid var(--m3-outline-variant);
+    font-size: 0.8125rem;
+  }
+
+  .dsha {
+    font-family: ui-monospace, Consolas, monospace;
+    color: var(--m3-primary);
+  }
+
+  .dsummary {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-weight: 500;
+    color: var(--m3-on-surface);
+  }
+
+  .dclose,
+  .dtab button,
+  button.blame {
+    padding: 0.1rem 0.4rem;
+    color: var(--m3-on-surface-variant);
+    background: none;
+    border: 1px solid var(--m3-outline-variant);
+    border-radius: var(--m3-shape-extra-small, 4px);
+    cursor: pointer;
+    font-size: 0.72rem;
+  }
+
+  .dbody {
+    flex: 1;
+    display: flex;
+    min-height: 0;
+  }
+
+  .dmeta {
+    flex: none;
+    width: 20rem;
+    overflow-y: auto;
+    padding: 0.5rem 0.75rem;
+    border-right: 1px solid var(--m3-outline-variant);
+    font-size: 0.75rem;
+  }
+
+  .dmeta dl {
+    margin: 0;
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 0.25rem 0.75rem;
+  }
+
+  .dmeta dt {
+    color: var(--m3-on-surface-variant);
+    font-size: 0.6875rem;
+    text-transform: uppercase;
+    letter-spacing: 0.02em;
+    padding-top: 0.1rem;
+  }
+
+  .dmeta dd {
+    margin: 0;
+    color: var(--m3-on-surface);
+  }
+
+  .muted {
+    color: var(--m3-on-surface-variant);
+  }
+
+  button.parent {
+    margin-right: 0.25rem;
+    padding: 0.05rem 0.3rem;
+    font-family: ui-monospace, Consolas, monospace;
+    font-size: 0.6875rem;
+    color: var(--m3-primary);
+    background: none;
+    border: 1px solid var(--m3-outline-variant);
+    border-radius: var(--m3-shape-extra-small, 4px);
+    cursor: pointer;
+  }
+
+  .drefs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25rem;
+  }
+
+  .msg {
+    margin: 0.5rem 0 0;
+    padding: 0.5rem;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    font-family: ui-monospace, Consolas, monospace;
+    font-size: 0.72rem;
+    color: var(--m3-on-surface);
+    background: var(--m3-surface-container-low, var(--m3-surface));
+    border: 1px solid var(--m3-outline-variant);
+    border-radius: var(--m3-shape-extra-small, 4px);
+  }
+
+  .dfiles {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .dtab {
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.2rem 0.5rem 0.2rem 0.75rem;
+    font-size: 0.72rem;
+    color: var(--m3-on-surface);
+    background: var(--m3-surface-container-low, var(--m3-surface));
+    border-bottom: 1px solid var(--m3-outline-variant);
+  }
+
+  .dtab span {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-family: ui-monospace, Consolas, monospace;
+  }
+
+  .dtabbody {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .dstate {
+    margin: auto;
+    color: var(--m3-on-surface-variant);
+    font-size: 0.8125rem;
+  }
+
+  .filelist {
+    flex: none;
+    max-height: 30%;
+    margin: 0;
+    padding: 0.15rem 0;
+    list-style: none;
+    overflow-y: auto;
+    border-bottom: 1px solid var(--m3-outline-variant);
+    font-size: 0.72rem;
+  }
+
+  .filelist li {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.05rem 0.75rem;
+  }
+
+  .fpath {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-family: ui-monospace, Consolas, monospace;
+    color: var(--m3-on-surface);
+  }
+
+  .stats {
+    flex: none;
+    font-family: ui-monospace, Consolas, monospace;
+  }
+
+  .add {
+    color: var(--m3-tertiary);
+  }
+
+  .del {
+    color: var(--m3-error);
+  }
+
+  .ddiff {
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+  }
+</style>

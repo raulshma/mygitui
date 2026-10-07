@@ -298,3 +298,84 @@ export async function onRepoChanged(
     return noop;
   }
 }
+
+// ---------------------------------------------------------------------------
+// Clone (B4) — repo_clone command, clone-progress events, folder picker
+// (appended; everything above is byte-identical)
+// ---------------------------------------------------------------------------
+
+/**
+ * Payload of the `clone-progress` event emitted by `repo_clone`.
+ * `total`/`objects` count git objects (libgit2 exposes no total-bytes
+ * estimate); `received` is the byte counter.
+ */
+export interface CloneProgressEvent {
+  /** URL of the clone this progress belongs to. */
+  url: string;
+  /** Bytes received so far. */
+  received: number;
+  /** Total objects the remote announced (0 = not yet known). */
+  total: number;
+  /** Objects received so far. */
+  objects: number;
+}
+
+/**
+ * Clones `url` into `destination` (created if missing, must be empty if it
+ * exists). `depth` 1 performs a shallow clone. Resolves with the cloned
+ * repository path on success.
+ */
+export function cloneRepo(
+  url: string,
+  destination: string,
+  depth?: number,
+): Promise<string> {
+  const args: Record<string, unknown> = { url, destination };
+  if (depth !== undefined) args.depth = depth;
+  return call<string>("repo_clone", args);
+}
+
+/**
+ * Subscribes to `clone-progress` events (emitted by an in-flight
+ * `repo_clone`; identify yours by `url`). Same contract as
+ * {@link onRepoChanged}: never throws, no-op unlisten outside Tauri.
+ */
+export async function onCloneProgress(
+  cb: (event: CloneProgressEvent) => void,
+): Promise<() => void> {
+  const noop = (): void => {};
+  if (!isTauri()) return noop;
+  try {
+    return await listen<CloneProgressEvent>("clone-progress", (event) =>
+      cb(event.payload),
+    );
+  } catch {
+    return noop;
+  }
+}
+
+/**
+ * Opens the native folder picker (@tauri-apps/plugin-dialog) and resolves
+ * the chosen directory, or `null` when the user cancelled / the picker is
+ * unavailable (non-Tauri). Never throws.
+ */
+export async function pickFolder(): Promise<string | null> {
+  if (!isTauri()) return null;
+  try {
+    const dialog = await import("@tauri-apps/plugin-dialog");
+    const selection = await dialog.open({
+      directory: true,
+      multiple: false,
+      title: "Choose a repository folder",
+    });
+    if (typeof selection === "string") return selection;
+    if (Array.isArray(selection)) {
+      const first = selection[0];
+      return typeof first === "string" ? first : null;
+    }
+    return null;
+  } catch (err) {
+    console.warn("[ipc] folder picker failed:", err);
+    return null;
+  }
+}

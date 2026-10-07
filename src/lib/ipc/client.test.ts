@@ -4,12 +4,15 @@
  * mock transport or the documented non-Tauri fallbacks.
  */
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  cloneRepo,
   closeRepo,
   IpcError,
+  onCloneProgress,
   onRepoChanged,
   openRepo,
+  pickFolder,
   repoBlame,
   repoDiff,
   repoRefs,
@@ -397,5 +400,82 @@ describe("ipc client non-Tauri behavior", () => {
     expect(typeof unlisten).toBe("function");
     expect(() => unlisten()).not.toThrow();
     expect(fired).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Clone + dialog wrappers (B4, appended)
+// ---------------------------------------------------------------------------
+
+vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn() }));
+
+describe("ipc client clone + dialog wrappers", () => {
+  it("cloneRepo sends url/destination and omits depth unless given", async () => {
+    const { transport, calls } = mockTransport(() => "C:/repos/cloned");
+    setTransport(transport);
+
+    await expect(cloneRepo("https://host/x.git", "C:/repos/cloned")).resolves.toBe(
+      "C:/repos/cloned",
+    );
+    await cloneRepo("https://host/x.git", "C:/repos/cloned", 1);
+
+    expect(calls[0]).toMatchObject({
+      command: "repo_clone",
+      args: { url: "https://host/x.git", destination: "C:/repos/cloned" },
+    });
+    expect(calls[0]?.args.depth).toBeUndefined();
+    expect(calls[1]?.args).toEqual({
+      url: "https://host/x.git",
+      destination: "C:/repos/cloned",
+      depth: 1,
+    });
+  });
+
+  it("cloneRepo normalizes failures to IpcError", async () => {
+    const { transport } = mockTransport(() => {
+      throw new Error("destination exists and is not empty");
+    });
+    setTransport(transport);
+
+    const err = await cloneRepo("https://host/x.git", "C:/occupied").catch(
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(IpcError);
+    expect((err as IpcError).command).toBe("repo_clone");
+    expect((err as IpcError).message).toBe("destination exists and is not empty");
+  });
+
+  it("onCloneProgress resolves with a no-op unlisten outside Tauri", async () => {
+    const events: unknown[] = [];
+    const unlisten = await onCloneProgress((event) => events.push(event));
+    expect(typeof unlisten).toBe("function");
+    expect(() => unlisten()).not.toThrow();
+    expect(events).toEqual([]);
+  });
+
+  it("pickFolder returns null outside Tauri", async () => {
+    await expect(pickFolder()).resolves.toBeNull();
+  });
+
+  it("pickFolder forwards to the dialog plugin inside Tauri and nulls on cancel", async () => {
+    const { open } = await import("@tauri-apps/plugin-dialog");
+    const mockOpen = vi.mocked(open);
+    // Pretend the Tauri runtime is present (isTauri just checks the flag).
+    (window as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
+    try {
+      mockOpen.mockResolvedValue("C:/repos/picked");
+      await expect(pickFolder()).resolves.toBe("C:/repos/picked");
+      expect(mockOpen).toHaveBeenCalledWith(
+        expect.objectContaining({ directory: true, multiple: false }),
+      );
+
+      mockOpen.mockResolvedValue(null);
+      await expect(pickFolder()).resolves.toBeNull();
+
+      mockOpen.mockRejectedValue(new Error("dialog blew up"));
+      await expect(pickFolder()).resolves.toBeNull();
+    } finally {
+      delete (window as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
+    }
   });
 });
