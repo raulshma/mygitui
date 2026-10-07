@@ -1,0 +1,15 @@
+# Linker flags for every target (app binary, cdylib, and test exes).
+#
+# Test binaries link tauri's windowing stack whenever a test reaches a
+# runtime path (e.g. the auth broker's credentials callback). Those exes
+# carry no common-controls SxS manifest — tauri-build embeds one into app
+# binaries only — so muda's `TaskDialogIndirect` import resolves against
+# the v5 comctl32.dll in System32, which lacks the export, and the exe
+# dies at load time with STATUS_ENTRYPOINT_NOT_FOUND. Requesting the v6
+# side-by-side assembly for all targets fixes test-exe loading; app
+# binaries simply restate the dependency they already embed.
+[target.'cfg(all(windows, target_env = "msvc"))']
+rustflags = [
+    "-C",
+    "link-arg=/MANIFESTDEPENDENCY:type='win32' name='Microsoft.Windows.Common-Controls' version='6.0.0.0' publicKeyToken='6595b64144ccf1df' language='*' processorArchitecture='*'",
+]

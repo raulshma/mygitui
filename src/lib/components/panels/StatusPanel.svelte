@@ -1,6 +1,6 @@
 <script lang="ts">
   /**
-   * Working-copy status panel (real, B4 lane).
+   * Working-copy status panel (real, B4 lane; staging actions added in M2).
    *
    * Sections (Conflicted / Staged / Unstaged / Untracked, collapsible, with
    * counts) come from the pure model in `statusModel.ts`; one entry can
@@ -9,8 +9,14 @@
    * `old → new` for renames.
    *
    * Interaction: click opens the diff (`onOpenDiff`) and selects the path;
-   * the checkbox toggles `selected` membership (visual only in M1 — staging
-   * actions land in M2, hence the disabled Stage/Unstage all buttons).
+   * Ctrl-click toggles multi-`selected` membership. Per-row checkboxes are
+   * actionable staging controls (M2): checking an Unstaged/Untracked/
+   * Conflicted row stages that file, unchecking a Staged row unstages it —
+   * both go through `client.stage` and end with `onAfterMutation()` (the
+   * owning RepoView refreshes the status). The toolbar Stage all / Unstage
+   * all buttons call `client.stageAll` the same way. Without a `repoId`
+   * (e.g. detached previews) the controls disable gracefully.
+   *
    * Full keyboard: roving-tabindex rows, Arrows/Home/End to move (Shift
    * extends a range, Ctrl moves without selecting), Space toggles selection,
    * Enter opens the diff.
@@ -19,6 +25,8 @@
    * everywhere, `aria-expanded` collapse toggles, `aria-selected` rows.
    */
   import type { RepoStatus, StatusEntry } from "$lib/ipc/types";
+  import { stage, stageAll } from "$lib/ipc/client";
+  import { toast } from "$lib/toast";
   import {
     buildStatusIndex,
     filterSections,
@@ -33,10 +41,16 @@
     status,
     onOpenDiff,
     selected = $bindable([]),
+    repoId = null,
+    onAfterMutation = undefined,
   }: {
     status: RepoStatus | null;
     onOpenDiff: (entry: StatusEntry) => void;
     selected: string[];
+    /** Owning repository; staging controls disable while null. */
+    repoId?: string | null;
+    /** Called after a successful stage/unstage (RepoView refreshes). */
+    onAfterMutation?: () => void;
   } = $props();
 
   let filterText = $state("");
@@ -53,6 +67,8 @@
   let anchorIndex = 0;
   /** Row elements by key (roving-tabindex focus targets; non-reactive). */
   const rowEls: Record<string, HTMLElement | undefined> = {};
+  /** Staging mutation in flight (disables the controls momentarily). */
+  let mutating = $state(false);
 
   /** Search index — rebuilt once per status change, not per keystroke. */
   const index: StatusIndex | null = $derived(
@@ -70,6 +86,8 @@
       ? focusKey
       : (visibleRows[0]?.key ?? null),
   );
+  /** Staging controls need a repo and no in-flight mutation. */
+  const canMutate = $derived(repoId !== null && !mutating);
 
   function isSelected(path: string): boolean {
     return selected.includes(path);
@@ -107,6 +125,45 @@
     } else {
       selected = [row.entry.path];
       onOpenDiff(row.entry);
+    }
+  }
+
+  /**
+   * A checkbox in the Staged section unstages; everywhere else it stages.
+   * The native toggle is cancelled — the visual state follows the refreshed
+   * status once the async mutation lands (no desync on failure).
+   */
+  function onRowCheck(row: StatusRow, event: Event): void {
+    event.preventDefault();
+    event.stopPropagation();
+    if (!repoId) return;
+    const unstage = row.section === "staged";
+    void mutate(
+      unstage ? `Unstage ${row.entry.path}` : `Stage ${row.entry.path}`,
+      () => stage(repoId, { targets: [{ file: row.entry.path }], unstage }),
+    );
+  }
+
+  function onStageAll(unstage: boolean): void {
+    if (!repoId) return;
+    void mutate(
+      unstage ? "Unstage all files" : "Stage all files",
+      () => stageAll(repoId, unstage),
+    );
+  }
+
+  /** Runs one staging mutation: error toast on failure, refresh on success. */
+  async function mutate(label: string, run: () => Promise<void>): Promise<void> {
+    mutating = true;
+    try {
+      await run();
+      onAfterMutation?.();
+    } catch (err) {
+      toast(`${label} failed: ${err instanceof Error ? err.message : String(err)}`, {
+        kind: "error",
+      });
+    } finally {
+      mutating = false;
     }
   }
 
@@ -182,18 +239,20 @@
       <button
         class="tb"
         type="button"
-        disabled
-        title="Staging actions land in M2"
-        aria-label="Stage all (available in M2)"
+        disabled={!canMutate}
+        title={repoId ? "Stage every change" : "No repository open"}
+        aria-label="Stage all files"
+        onclick={() => onStageAll(false)}
       >
         Stage all
       </button>
       <button
         class="tb"
         type="button"
-        disabled
-        title="Staging actions land in M2"
-        aria-label="Unstage all (available in M2)"
+        disabled={!canMutate}
+        title={repoId ? "Unstage everything (keep changes)" : "No repository open"}
+        aria-label="Unstage all files"
+        onclick={() => onStageAll(true)}
       >
         Unstage all
       </button>
@@ -255,13 +314,16 @@
                   <input
                     class="check"
                     type="checkbox"
-                    checked={isSelected(row.entry.path)}
-                    aria-label={`Select ${row.entry.path}`}
+                    checked={row.section === "staged"}
+                    disabled={!canMutate}
+                    aria-label={`${row.section === "staged" ? "Unstage" : "Stage"} ${row.entry.path}`}
+                    title={
+                      repoId
+                        ? `${row.section === "staged" ? "Unstage" : "Stage"} this file`
+                        : "No repository open"
+                    }
                     tabindex={-1}
-                    onclick={(event) => {
-                      event.stopPropagation();
-                      toggleSelected(row.entry.path);
-                    }}
+                    onclick={(event) => onRowCheck(row, event)}
                   />
                   <span class={`kind ${kindClass(row.kind)}`} aria-hidden="true">
                     {kindLetter(row.kind)}
@@ -328,7 +390,21 @@
     font: inherit;
     font-size: 0.75rem;
     padding: 0.25rem 0.5rem;
+    cursor: pointer;
+  }
+
+  .tb:hover:not(:disabled) {
+    background: var(--m3-surface-container-high, var(--m3-surface));
+  }
+
+  .tb:focus-visible {
+    outline: 2px solid var(--m3-primary);
+    outline-offset: -1px;
+  }
+
+  .tb:disabled {
     cursor: not-allowed;
+    opacity: 0.55;
   }
 
   .banners {

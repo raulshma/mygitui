@@ -1,0 +1,438 @@
+<script lang="ts">
+  /**
+   * Commit bar (M2) — sits at the bottom of the repo workspace.
+   *
+   * Message textarea (Ctrl/Cmd+Enter commits), Amend checkbox, --no-verify
+   * toggle ("skip hooks"), signing badge (`signing_info`), per-hook badges
+   * (`hooks_list`, present + executable → "pre-commit will run"), an author
+   * override disclosure, and the Commit button (spinner while a commit op
+   * runs per the OpStore; disabled with no message unless amending).
+   * Success clears the form, toasts the short sha and asks the owner to
+   * refresh (`onCommitted` → RepoView refreshStatus). Failures render
+   * inline next to the button. The AI button is a disabled ghost (M6).
+   */
+  import { commit, hooksList, signingInfo } from "$lib/ipc/client";
+  import type { GitSignature, HookInfo, SigningInfo } from "$lib/ipc/types";
+  import { busy } from "$lib/stores/ops.svelte";
+  import { toast } from "$lib/toast";
+
+  let {
+    repoId,
+    onCommitted = undefined,
+  }: {
+    repoId: string;
+    /** Called after a successful commit (RepoView refreshes the status). */
+    onCommitted?: () => void;
+  } = $props();
+
+  let message = $state("");
+  let amend = $state(false);
+  let noVerify = $state(false);
+  let showAuthor = $state(false);
+  let authorName = $state("");
+  let authorEmail = $state("");
+  let error = $state<string | null>(null);
+  let committing = $state(false);
+
+  let signing = $state<SigningInfo | null>(null);
+  let hooks = $state<HookInfo[]>([]);
+  let metaToken = 0;
+
+  /** Hooks that will actually run on commit (present + executable). */
+  const runningHooks = $derived(
+    hooks.filter((h) => h.present && h.executable && !h.kind.startsWith("pre-push")),
+  );
+
+  const commitBusy = $derived(busy(repoId, "commit"));
+  const canCommit = $derived((amend || message.trim().length > 0) && !commitBusy && !committing);
+
+  $effect(() => {
+    // Load signing + hooks state (reloads when the repo switches).
+    void repoId;
+    const token = ++metaToken;
+    signing = null;
+    hooks = [];
+    signingInfo(repoId)
+      .then((info) => {
+        if (token === metaToken) signing = info;
+      })
+      .catch(() => {
+        // Signing info is decorative; ignore failures.
+      });
+    hooksList(repoId)
+      .then((list) => {
+        if (token === metaToken) hooks = list;
+      })
+      .catch(() => {
+        // Hook badges are decorative; ignore failures.
+      });
+  });
+
+  /** Builds the CommitOptions author override, or null when not filled. */
+  function authorOverride(): GitSignature | null {
+    const name = authorName.trim();
+    const email = authorEmail.trim();
+    if (!name || !email) return null;
+    const now = new Date();
+    return {
+      name,
+      email,
+      time: Math.floor(now.getTime() / 1000),
+      offset_minutes: -now.getTimezoneOffset(),
+    };
+  }
+
+  async function doCommit(): Promise<void> {
+    if (!canCommit) return;
+    committing = true;
+    error = null;
+    try {
+      const sha = await commit(repoId, {
+        message: message.trimEnd(),
+        amend,
+        no_verify: noVerify,
+        allow_empty: false,
+        author: authorOverride(),
+      });
+      message = "";
+      authorName = "";
+      authorEmail = "";
+      showAuthor = false;
+      amend = false;
+      noVerify = false;
+      toast(`Committed ${sha.slice(0, 7)}`, { kind: "success" });
+      onCommitted?.();
+    } catch (err) {
+      error = err instanceof Error ? err.message : String(err);
+    } finally {
+      committing = false;
+    }
+  }
+
+  function onMessageKeydown(event: KeyboardEvent): void {
+    if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
+      event.preventDefault();
+      void doCommit();
+    }
+  }
+</script>
+
+<form
+  class="commit-bar"
+  aria-label="Create commit"
+  onsubmit={(e) => {
+    e.preventDefault();
+    void doCommit();
+  }}
+>
+  <div class="row-main">
+    <label class="sr-only" for="commit-message">Commit message</label>
+    <textarea
+      id="commit-message"
+      class="message"
+      placeholder="Commit message… (Ctrl+Enter to commit)"
+      rows="2"
+      bind:value={message}
+      onkeydown={onMessageKeydown}
+      disabled={commitBusy || committing}
+    ></textarea>
+
+    <div class="side">
+      <div class="chips" aria-hidden="false">
+        {#if signing?.active}
+          <span
+            class="chip chip-sign"
+            title={signing.key_id ? `Signing key ${signing.key_id}` : "Commits will be signed"}
+          >
+            signed: {signing.format}
+          </span>
+        {/if}
+        {#each runningHooks as hook (hook.kind)}
+          <span class="chip chip-hook" title="This hook is present and executable">
+            {hook.kind} will run
+          </span>
+        {/each}
+      </div>
+
+      <div class="controls">
+        <label class="toggle" title="Amend the previous commit">
+          <input type="checkbox" bind:checked={amend} />
+          <span>Amend</span>
+        </label>
+        <label class="toggle" title="skip hooks">
+          <input type="checkbox" bind:checked={noVerify} />
+          <span>--no-verify</span>
+        </label>
+
+        <button
+          class="disclosure"
+          type="button"
+          aria-expanded={showAuthor}
+          onclick={() => (showAuthor = !showAuthor)}
+        >
+          Author…
+        </button>
+
+        <button
+          class="ai"
+          type="button"
+          disabled
+          title="AI commit messages land in M6"
+          aria-label="Generate commit message with AI (lands in M6)"
+        >
+          AI
+        </button>
+
+        <button class="go" type="submit" disabled={!canCommit}>
+          {#if commitBusy || committing}
+            <span class="spinner" aria-hidden="true"></span>
+            <span>Committing…</span>
+          {:else}
+            <span>Commit</span>
+          {/if}
+        </button>
+      </div>
+
+      {#if showAuthor}
+        <div class="author">
+          <label>
+            <span class="al">Name</span>
+            <input
+              type="text"
+              class="ai-input"
+              placeholder="Ada Lovelace"
+              bind:value={authorName}
+              aria-label="Author name override"
+            />
+          </label>
+          <label>
+            <span class="al">Email</span>
+            <input
+              type="email"
+              class="ai-input"
+              placeholder="ada@example.com"
+              bind:value={authorEmail}
+              aria-label="Author email override"
+            />
+          </label>
+        </div>
+      {/if}
+    </div>
+  </div>
+
+  {#if error}
+    <p class="error" role="alert">{error}</p>
+  {/if}
+</form>
+
+<style>
+  .commit-bar {
+    flex: none;
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    padding: 0.375rem 0.5rem;
+    border-top: 1px solid var(--m3-outline-variant, var(--m3-primary));
+    background: var(--m3-surface-container, var(--m3-surface));
+    font-size: 0.8125rem;
+  }
+
+  .row-main {
+    display: flex;
+    gap: 0.5rem;
+    min-height: 0;
+  }
+
+  .message {
+    flex: 1;
+    min-width: 0;
+    resize: none;
+    font: inherit;
+    font-family: ui-monospace, Consolas, monospace;
+    font-size: 0.75rem;
+    color: var(--m3-on-surface);
+    background: var(--m3-surface-container-lowest, var(--m3-surface));
+    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
+    border-radius: var(--m3-shape-extra-small, 4px);
+    padding: 0.3rem 0.5rem;
+  }
+
+  .message:focus-visible {
+    outline: 2px solid var(--m3-primary);
+    outline-offset: -1px;
+  }
+
+  .side {
+    flex: none;
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    width: 17rem;
+  }
+
+  .chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25rem;
+    min-height: 1rem;
+  }
+
+  .chip {
+    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
+    border-radius: var(--m3-shape-full, 9999px);
+    padding: 0.05rem 0.5rem;
+    font-size: 0.6875rem;
+    color: var(--m3-on-surface-variant, var(--m3-on-surface));
+    white-space: nowrap;
+  }
+
+  .chip-sign {
+    color: var(--m3-on-secondary-container, var(--m3-on-surface));
+    background: var(--m3-secondary-container, transparent);
+    border-color: transparent;
+  }
+
+  .chip-hook {
+    color: var(--m3-on-tertiary-container, var(--m3-on-surface));
+    background: var(--m3-tertiary-container, transparent);
+    border-color: transparent;
+  }
+
+  .controls {
+    display: flex;
+    align-items: center;
+    gap: 0.375rem;
+    flex-wrap: wrap;
+  }
+
+  .toggle {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+    color: var(--m3-on-surface-variant, var(--m3-on-surface));
+    font-size: 0.72rem;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+
+  .toggle input {
+    accent-color: var(--m3-primary);
+    margin: 0;
+  }
+
+  .disclosure,
+  .ai {
+    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
+    border-radius: var(--m3-shape-extra-small, 4px);
+    background: none;
+    color: var(--m3-on-surface-variant, var(--m3-on-surface));
+    font: inherit;
+    font-size: 0.72rem;
+    padding: 0.15rem 0.5rem;
+    cursor: pointer;
+  }
+
+  .disclosure[aria-expanded="true"] {
+    background: var(--m3-surface-container-high, var(--m3-surface));
+  }
+
+  .ai {
+    cursor: not-allowed;
+    opacity: 0.55;
+  }
+
+  .disclosure:focus-visible,
+  .ai:focus-visible,
+  .go:focus-visible {
+    outline: 2px solid var(--m3-primary);
+    outline-offset: 1px;
+  }
+
+  .go {
+    margin-left: auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.375rem;
+    border: none;
+    border-radius: var(--m3-shape-full, 9999px);
+    background: var(--m3-primary);
+    color: var(--m3-on-primary);
+    font: inherit;
+    font-size: 0.75rem;
+    font-weight: 500;
+    padding: 0.3rem 1rem;
+    cursor: pointer;
+  }
+
+  .go:disabled {
+    cursor: not-allowed;
+    opacity: 0.55;
+  }
+
+  .spinner {
+    width: 0.75rem;
+    height: 0.75rem;
+    border: 2px solid color-mix(in srgb, var(--m3-on-primary) 40%, transparent);
+    border-top-color: var(--m3-on-primary);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+  }
+
+  @keyframes spin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+
+  .author {
+    display: flex;
+    gap: 0.5rem;
+  }
+
+  .author label {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    gap: 0.375rem;
+    min-width: 0;
+  }
+
+  .al {
+    flex: none;
+    color: var(--m3-on-surface-variant, var(--m3-on-surface));
+    font-size: 0.6875rem;
+  }
+
+  .ai-input {
+    flex: 1;
+    min-width: 0;
+    font: inherit;
+    font-size: 0.72rem;
+    color: var(--m3-on-surface);
+    background: var(--m3-surface-container-lowest, var(--m3-surface));
+    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
+    border-radius: var(--m3-shape-extra-small, 4px);
+    padding: 0.15rem 0.375rem;
+  }
+
+  .ai-input:focus-visible {
+    outline: 2px solid var(--m3-primary);
+    outline-offset: -1px;
+  }
+
+  .error {
+    margin: 0;
+    color: var(--m3-error, inherit);
+    font-size: 0.72rem;
+    overflow-wrap: anywhere;
+  }
+
+  .sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
+</style>

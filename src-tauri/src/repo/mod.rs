@@ -21,6 +21,7 @@ use tauri::Emitter;
 use crate::engine::git_engine::{EngineError, EngineResult, GitEngine};
 use crate::engine::types::{RepoId, RepoInfo};
 use crate::graph::types::LaneState;
+use crate::ops::OpQueue;
 use crate::watcher::{self, RepoWatcher};
 
 /// Construct the engine used for newly opened repositories.
@@ -84,6 +85,9 @@ pub struct RepoHandle {
     /// Bumped on every watcher batch; clients discard stale stream pages.
     generation: Arc<AtomicU64>,
     engine: Arc<dyn GitEngine>,
+    /// M2: serial op queue for mutations/net ops (contracts.md M2). M1
+    /// read commands bypass it and share the `repo` mutex instead.
+    ops: OpQueue,
     /// Graph lane layout state carried between log-stream pages.
     pub lanes: Mutex<LaneState>,
     /// Active log stream; a new request cancels the previous.
@@ -107,6 +111,11 @@ impl RepoHandle {
 
     pub fn engine(&self) -> Arc<dyn GitEngine> {
         self.engine.clone()
+    }
+
+    /// M2: this repo's serial op queue (mutations + net ops).
+    pub fn ops(&self) -> &OpQueue {
+        &self.ops
     }
 
     pub fn repo(&self) -> Arc<Mutex<git2::Repository>> {
@@ -136,6 +145,9 @@ impl RepoHandle {
         if let Some(token) = self.history_stream.lock().take() {
             token.cancel();
         }
+        // M2 op queue: stop accepting new ops; the worker drains its
+        // backlog (jobs still resolve) and then exits.
+        self.ops.shutdown();
         // Dropping the watcher joins its debounce thread.
         drop(self.watcher.lock().take());
     }
@@ -170,6 +182,10 @@ impl RepoManager {
     pub fn open(&self, app: &tauri::AppHandle, path: &Path) -> EngineResult<RepoInfo> {
         let info = self.open_unwatched(path)?;
         if let Some(handle) = self.get(&info.repo_id) {
+            // M2: op-progress events flow over the app emitter.
+            handle
+                .ops()
+                .set_sink(Arc::new(crate::ops::TauriEventSink::new(app.clone())));
             let mut slot = handle.watcher.lock();
             if slot.is_none() {
                 let app = app.clone();
@@ -221,8 +237,10 @@ impl RepoManager {
             }
         }
 
+        let repo_id = self.next_repo_id();
         let handle = Arc::new(RepoHandle {
-            id: self.next_repo_id(),
+            id: repo_id.clone(),
+            ops: OpQueue::new(repo_id),
             root,
             git_dir,
             repo: Arc::new(Mutex::new(repo)),

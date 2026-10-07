@@ -4,8 +4,11 @@ pub mod graph;
 use tauri::{Emitter, Manager};
 
 mod auth;
+mod cli;
+mod diffcore;
 mod ipc_commands;
 mod keyring_store;
+mod ops;
 mod repo;
 mod watcher;
 
@@ -28,6 +31,13 @@ pub fn run() {
                 let _ = window.set_focus();
             }
         }))
+        // M2: the auth broker emits `auth-request` events through this
+        // handle; must be registered before the first net op, hence before
+        // `.manage` hands out the RepoManager.
+        .setup(|app| {
+            auth::init(app.handle().clone());
+            Ok(())
+        })
         .manage(repo::RepoManager::new())
         .invoke_handler(tauri::generate_handler![
             keyring_store::secrets_get,
@@ -43,6 +53,27 @@ pub fn run() {
             ipc_commands::repo_log_stream,
             ipc_commands::repo_file_history,
             ipc_commands::repo_clone,
+            ipc_commands::stage,
+            ipc_commands::stage_all,
+            ipc_commands::commit,
+            ipc_commands::signing_info,
+            ipc_commands::hooks_list,
+            ipc_commands::branches,
+            ipc_commands::branch_create,
+            ipc_commands::branch_switch,
+            ipc_commands::branch_is_merged,
+            ipc_commands::branch_delete,
+            ipc_commands::branch_rename,
+            ipc_commands::tag_create,
+            ipc_commands::tag_delete,
+            ipc_commands::remotes,
+            ipc_commands::remote_add,
+            ipc_commands::remote_remove,
+            ipc_commands::remote_set_url,
+            ipc_commands::fetch,
+            ipc_commands::pull,
+            ipc_commands::push,
+            ipc_commands::auth_respond,
         ])
         .run(tauri::generate_context!())
         .expect("error while running mygitui");

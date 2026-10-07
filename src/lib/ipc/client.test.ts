@@ -6,13 +6,31 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  authRespond,
+  branchCreate,
+  branchDelete,
+  branchIsMerged,
+  branchRename,
+  branchSwitch,
+  branches,
   cloneRepo,
   closeRepo,
+  commit,
+  fetchRepo,
+  hooksList,
   IpcError,
+  onAuthRequest,
   onCloneProgress,
+  onOpProgress,
   onRepoChanged,
   openRepo,
   pickFolder,
+  pullRepo,
+  pushRepo,
+  remotes,
+  remoteAdd,
+  remoteRemove,
+  remoteSetUrl,
   repoBlame,
   repoDiff,
   repoRefs,
@@ -21,18 +39,33 @@ import {
   resetTransport,
   setChannelFactory,
   setTransport,
+  signingInfo,
+  stage,
+  stageAll,
   streamDiff,
   streamFileHistory,
   streamLog,
+  tagCreate,
+  tagDelete,
   type ChannelLike,
   type Transport,
 } from "$lib/ipc/client";
 import type {
   BlameLine,
+  BranchInfo,
+  CommitOptions,
+  FetchOptions,
   FileDiff,
+  HookInfo,
   LogPage,
+  NetStats,
+  PullOptions,
+  PushOptions,
+  RemoteInfo,
   RepoInfo,
   RepoStatus,
+  SigningInfo,
+  StageRequest,
 } from "$lib/ipc/types";
 
 // ---------------------------------------------------------------------------
@@ -477,5 +510,281 @@ describe("ipc client clone + dialog wrappers", () => {
     } finally {
       delete (window as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// M2 mutation wrappers (appended)
+// ---------------------------------------------------------------------------
+
+const STAGE_REQUEST: StageRequest = {
+  targets: [{ file: "src/a.ts" }, { hunk: { path: "src/b.ts", hunk: 1 } }],
+  unstage: false,
+};
+
+const COMMIT_OPTIONS: CommitOptions = {
+  message: "fix: thing",
+  amend: false,
+  no_verify: false,
+  allow_empty: false,
+  author: null,
+};
+
+const SIGNING_INFO: SigningInfo = { active: true, format: "ssh", key_id: "SHA256:abc" };
+
+const HOOKS: HookInfo[] = [
+  { kind: "pre-commit", present: true, executable: true },
+  { kind: "commit-msg", present: true, executable: false },
+  { kind: "pre-push", present: false, executable: false },
+];
+
+const BRANCHES: BranchInfo[] = [
+  { name: "main", sha: "abc123def4567890", upstream: "origin/main", ahead: 1, behind: 0, gone: false, is_head: true },
+  { name: "feature/x", sha: "def456abc1237890", upstream: "origin/feature/x", ahead: 0, behind: 3, gone: true, is_head: false },
+];
+
+const REMOTES: RemoteInfo[] = [
+  { name: "origin", url: "https://host/origin.git", push_url: null },
+  { name: "upstream", url: "https://host/up.git", push_url: "git@host:up.git" },
+];
+
+const FETCH_OPTIONS: FetchOptions = { remote: "origin", prune: true, refs: [], depth: null };
+const PULL_OPTIONS: PullOptions = { remote: "origin", branch: "main", ff_only: true, rebase: false };
+const PUSH_OPTIONS: PushOptions = { remote: "origin", branch: "main", force: false, set_upstream: false };
+
+const NET_STATS: NetStats = {
+  received_bytes: 4_096,
+  objects: 12,
+  updated_refs: [["refs/heads/main", "def456"]],
+};
+
+describe("ipc client M2 mutation wrappers", () => {
+  it("stage sends the request verbatim under the `request` key", async () => {
+    const { transport, calls } = mockTransport(() => undefined);
+    setTransport(transport);
+
+    await stage("repo-1", STAGE_REQUEST);
+
+    expect(calls).toEqual([
+      { command: "stage", args: { repo_id: "repo-1", request: STAGE_REQUEST } },
+    ]);
+  });
+
+  it("stageAll forwards the unstage flag", async () => {
+    const { transport, calls } = mockTransport(() => undefined);
+    setTransport(transport);
+
+    await stageAll("repo-1", false);
+    await stageAll("repo-1", true);
+
+    expect(calls[0]).toEqual({
+      command: "stage_all",
+      args: { repo_id: "repo-1", unstage: false },
+    });
+    expect(calls[1]).toEqual({
+      command: "stage_all",
+      args: { repo_id: "repo-1", unstage: true },
+    });
+  });
+
+  it("commit resolves with the new sha and passes options verbatim", async () => {
+    const { transport, calls } = mockTransport(() => "0123456789abcdef");
+    setTransport(transport);
+
+    await expect(commit("repo-1", COMMIT_OPTIONS)).resolves.toBe("0123456789abcdef");
+    expect(calls[0]).toEqual({
+      command: "commit",
+      args: { repo_id: "repo-1", options: COMMIT_OPTIONS },
+    });
+  });
+
+  it("signingInfo and hooksList return typed payloads", async () => {
+    const { transport, calls } = mockTransport((call) =>
+      call.command === "signing_info" ? SIGNING_INFO : HOOKS,
+    );
+    setTransport(transport);
+
+    await expect(signingInfo("repo-1")).resolves.toEqual(SIGNING_INFO);
+    await expect(hooksList("repo-1")).resolves.toEqual(HOOKS);
+    expect(calls.map((c) => c.command)).toEqual(["signing_info", "hooks_list"]);
+    expect(calls[0]?.args).toEqual({ repo_id: "repo-1" });
+    expect(calls[1]?.args).toEqual({ repo_id: "repo-1" });
+  });
+
+  it("branches returns the typed branch list", async () => {
+    const { transport } = mockTransport(() => BRANCHES);
+    setTransport(transport);
+
+    await expect(branches("repo-1")).resolves.toEqual(BRANCHES);
+  });
+
+  it("branchCreate omits `from` when not given and includes it when given", async () => {
+    const { transport, calls } = mockTransport(() => undefined);
+    setTransport(transport);
+
+    await branchCreate("repo-1", "feature/y", true);
+    await branchCreate("repo-1", "feature/z", false, "abc123");
+
+    expect(calls[0]).toEqual({
+      command: "branch_create",
+      args: { repo_id: "repo-1", name: "feature/y", checkout: true },
+    });
+    expect(calls[1]).toEqual({
+      command: "branch_create",
+      args: { repo_id: "repo-1", name: "feature/z", checkout: false, from: "abc123" },
+    });
+  });
+
+  it("branchSwitch / branchDelete forward the force flag", async () => {
+    const { transport, calls } = mockTransport(() => undefined);
+    setTransport(transport);
+
+    await branchSwitch("repo-1", "feature/x", false);
+    await branchDelete("repo-1", "feature/x", true);
+
+    expect(calls[0]).toEqual({
+      command: "branch_switch",
+      args: { repo_id: "repo-1", name: "feature/x", force: false },
+    });
+    expect(calls[1]).toEqual({
+      command: "branch_delete",
+      args: { repo_id: "repo-1", name: "feature/x", force: true },
+    });
+  });
+
+  it("branchRename maps oldName/newName onto the reserved-word keys `old`/`new`", async () => {
+    const { transport, calls } = mockTransport(() => undefined);
+    setTransport(transport);
+
+    await branchRename("repo-1", "old-name", "new-name");
+
+    expect(calls).toEqual([
+      {
+        command: "branch_rename",
+        args: { repo_id: "repo-1", old: "old-name", new: "new-name" },
+      },
+    ]);
+  });
+
+  it("branchIsMerged returns the merged flag", async () => {
+    const { transport, calls } = mockTransport(() => true);
+    setTransport(transport);
+
+    await expect(branchIsMerged("repo-1", "feature/x", "main")).resolves.toBe(true);
+    expect(calls[0]).toEqual({
+      command: "branch_is_merged",
+      args: { repo_id: "repo-1", name: "feature/x", into: "main" },
+    });
+  });
+
+  it("tagCreate omits optional target/message; tagDelete sends the name", async () => {
+    const { transport, calls } = mockTransport(() => undefined);
+    setTransport(transport);
+
+    await tagCreate("repo-1", "v1.0.0");
+    await tagCreate("repo-1", "v2.0.0", "abc123", "release two");
+    await tagDelete("repo-1", "v1.0.0");
+
+    expect(calls[0]?.args).toEqual({ repo_id: "repo-1", name: "v1.0.0" });
+    expect(calls[1]?.args).toEqual({
+      repo_id: "repo-1",
+      name: "v2.0.0",
+      target: "abc123",
+      message: "release two",
+    });
+    expect(calls[2]).toEqual({ command: "tag_delete", args: { repo_id: "repo-1", name: "v1.0.0" } });
+  });
+
+  it("remotes returns the typed remote list", async () => {
+    const { transport } = mockTransport(() => REMOTES);
+    setTransport(transport);
+
+    await expect(remotes("repo-1")).resolves.toEqual(REMOTES);
+  });
+
+  it("remoteAdd / remoteRemove / remoteSetUrl send their args in snake_case", async () => {
+    const { transport, calls } = mockTransport(() => undefined);
+    setTransport(transport);
+
+    await remoteAdd("repo-1", "origin", "https://host/o.git");
+    await remoteRemove("repo-1", "upstream");
+    await remoteSetUrl("repo-1", "origin", "git@host:o.git", true);
+    await remoteSetUrl("repo-1", "origin", "https://host/o.git", false);
+
+    expect(calls[0]).toEqual({
+      command: "remote_add",
+      args: { repo_id: "repo-1", name: "origin", url: "https://host/o.git" },
+    });
+    expect(calls[1]).toEqual({
+      command: "remote_remove",
+      args: { repo_id: "repo-1", name: "upstream" },
+    });
+    expect(calls[2]).toEqual({
+      command: "remote_set_url",
+      args: { repo_id: "repo-1", name: "origin", url: "git@host:o.git", push: true },
+    });
+    expect(calls[3]?.args).toMatchObject({ push: false });
+  });
+
+  it("fetchRepo / pullRepo / pushRepo send options verbatim and resolve NetStats", async () => {
+    const { transport, calls } = mockTransport(() => NET_STATS);
+    setTransport(transport);
+
+    await expect(fetchRepo("repo-1", FETCH_OPTIONS)).resolves.toEqual(NET_STATS);
+    await expect(pullRepo("repo-1", PULL_OPTIONS)).resolves.toEqual(NET_STATS);
+    await expect(pushRepo("repo-1", PUSH_OPTIONS)).resolves.toEqual(NET_STATS);
+
+    expect(calls.map((c) => c.command)).toEqual(["fetch", "pull", "push"]);
+    expect(calls[0]?.args).toEqual({ repo_id: "repo-1", options: FETCH_OPTIONS });
+    expect(calls[1]?.args).toEqual({ repo_id: "repo-1", options: PULL_OPTIONS });
+    expect(calls[2]?.args).toEqual({ repo_id: "repo-1", options: PUSH_OPTIONS });
+  });
+
+  it("M2 wrapper failures normalize to IpcError", async () => {
+    const { transport } = mockTransport(() => {
+      throw new Error("nothing to commit");
+    });
+    setTransport(transport);
+
+    const err = await commit("repo-1", COMMIT_OPTIONS).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(IpcError);
+    expect((err as IpcError).command).toBe("commit");
+    expect((err as IpcError).message).toBe("nothing to commit");
+  });
+
+  it("authRespond includes op_id + store and omits empty credentials", async () => {
+    const { transport, calls } = mockTransport(() => undefined);
+    setTransport(transport);
+
+    await authRespond("op-1", "user", "pass", true);
+    await authRespond("op-2"); // cancel: no creds, store false
+
+    expect(calls[0]).toEqual({
+      command: "auth_respond",
+      args: { op_id: "op-1", username: "user", password: "pass", store: true },
+    });
+    expect(calls[1]).toEqual({
+      command: "auth_respond",
+      args: { op_id: "op-2", store: false },
+    });
+  });
+
+  it("onOpProgress and onAuthRequest resolve with no-op unlistens outside Tauri", async () => {
+    let ops = 0;
+    let auths = 0;
+    const unOps = await onOpProgress(() => {
+      ops += 1;
+    });
+    const unAuth = await onAuthRequest(() => {
+      auths += 1;
+    });
+    expect(typeof unOps).toBe("function");
+    expect(typeof unAuth).toBe("function");
+    expect(() => {
+      unOps();
+      unAuth();
+    }).not.toThrow();
+    expect(ops).toBe(0);
+    expect(auths).toBe(0);
   });
 });

@@ -544,3 +544,622 @@ mod clone_tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
+
+// ---------------------------------------------------------------------------
+// M2 (lane C3): mutations, branches/tags, remotes, net ops, auth — all
+// routed through the per-repo serial op queue (contracts.md M2). M1 reads
+// stay outside the queue: they share the repo mutex, which already
+// serializes engine access, so concurrent reads never race a queued
+// mutation.
+//
+// Progress: net ops forward engine callbacks to `OpCtx::emit_progress`
+// (throttled ≥80ms); the queue emits the final `done: true` event for every
+// op, success or error. Mutations bump the repo generation afterwards so
+// in-flight log streams abort and clients re-request (streaming rules).
+//
+// Op kinds are the fixed set from contracts.md (`stage`, `commit`,
+// `branch`, `fetch`, `pull`, `push`, `clone`): tags report as `branch`
+// (ref-affecting), remote config ops as `fetch` (net category).
+// ---------------------------------------------------------------------------
+
+use tokio::sync::oneshot;
+
+use crate::cli;
+use crate::engine::git_engine::{FetchProgress, PushProgress};
+use crate::engine::types::{
+    BranchInfo, CommitOptions, FetchOptions, HookInfo, NetStats, PullOptions, PushOptions,
+    RemoteInfo, SigningInfo, StageRequest,
+};
+use crate::ops::OpCtx;
+
+/// Enqueue a mutating engine op on the repo's serial queue: `f` runs with
+/// the repo lock held, the generation is bumped after it finishes (success
+/// or error — hooks may have touched state even on failure), and the
+/// command resolves through the returned receiver.
+fn enqueue_mutation<T, F>(
+    handle: &RepoHandle,
+    kind: &'static str,
+    f: F,
+) -> oneshot::Receiver<Result<T, String>>
+where
+    T: Send + 'static,
+    F: FnOnce(OpCtx, &git2::Repository) -> Result<T, EngineError> + Send + 'static,
+{
+    let repo = handle.repo();
+    let generation = handle.generation_shared();
+    let (_op_id, rx) = handle.ops().enqueue(kind, move |ctx| {
+        let result = {
+            let guard = repo.lock();
+            f(ctx, &guard)
+        };
+        generation.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        result.map_err(engine_err)
+    });
+    rx
+}
+
+/// Same as [`enqueue_mutation`] but without the generation bump (M2 read
+/// ops that still run on the queue: branches, remotes, hook/signing info).
+fn enqueue_read<T, F>(
+    handle: &RepoHandle,
+    kind: &'static str,
+    f: F,
+) -> oneshot::Receiver<Result<T, String>>
+where
+    T: Send + 'static,
+    F: FnOnce(OpCtx, &git2::Repository) -> Result<T, EngineError> + Send + 'static,
+{
+    let repo = handle.repo();
+    let (_op_id, rx) = handle.ops().enqueue(kind, move |ctx| {
+        let guard = repo.lock();
+        f(ctx, &guard).map_err(engine_err)
+    });
+    rx
+}
+
+/// Await an enqueued op's result (worker done or queue closed).
+async fn finish_op<T>(rx: oneshot::Receiver<Result<T, String>>) -> Result<T, String> {
+    rx.await
+        .map_err(|_| "op queue closed before completion".to_string())?
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn stage(
+    repo_id: RepoId,
+    request: StageRequest,
+    state: State<'_, RepoManager>,
+) -> Result<(), String> {
+    let handle = get_handle(&state, &repo_id)?;
+    let engine = handle.engine();
+    finish_op(enqueue_mutation(&handle, "stage", move |_ctx, repo| {
+        engine.stage(repo, &request)
+    }))
+    .await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn stage_all(
+    repo_id: RepoId,
+    unstage: bool,
+    state: State<'_, RepoManager>,
+) -> Result<(), String> {
+    let handle = get_handle(&state, &repo_id)?;
+    let engine = handle.engine();
+    finish_op(enqueue_mutation(&handle, "stage", move |_ctx, repo| {
+        engine.stage_all(repo, unstage)
+    }))
+    .await
+}
+
+/// Commit: engine first; `EngineError::Unsupported` (active hooks/signing
+/// per C1's routing) falls back to the git CLI (cli.rs) so hooks and
+/// signing actually run. Returns the new sha.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn commit(
+    repo_id: RepoId,
+    options: CommitOptions,
+    state: State<'_, RepoManager>,
+) -> Result<String, String> {
+    let handle = get_handle(&state, &repo_id)?;
+    let engine = handle.engine();
+    let repo = handle.repo();
+    let workdir = handle.root.clone();
+    let generation = handle.generation_shared();
+    let (_op_id, rx) = handle.ops().enqueue("commit", move |ctx| {
+        let outcome = {
+            let guard = repo.lock();
+            engine.commit(&guard, &options)
+        };
+        let sha = match outcome {
+            Ok(sha) => Ok(sha),
+            Err(EngineError::Unsupported(reason)) => {
+                ctx.emit_progress(&format!("falling back to git CLI: {reason}"), None);
+                cli::commit_via_cli(&workdir, &options)
+            }
+            Err(err) => Err(engine_err(err)),
+        };
+        generation.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        sha
+    });
+    finish_op(rx).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn signing_info(
+    repo_id: RepoId,
+    state: State<'_, RepoManager>,
+) -> Result<SigningInfo, String> {
+    let handle = get_handle(&state, &repo_id)?;
+    let engine = handle.engine();
+    finish_op(enqueue_read(&handle, "commit", move |_ctx, repo| {
+        engine.signing_info(repo)
+    }))
+    .await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn hooks_list(
+    repo_id: RepoId,
+    state: State<'_, RepoManager>,
+) -> Result<Vec<HookInfo>, String> {
+    let handle = get_handle(&state, &repo_id)?;
+    let engine = handle.engine();
+    finish_op(enqueue_read(&handle, "commit", move |_ctx, repo| {
+        engine.hooks(repo)
+    }))
+    .await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn branches(
+    repo_id: RepoId,
+    state: State<'_, RepoManager>,
+) -> Result<Vec<BranchInfo>, String> {
+    let handle = get_handle(&state, &repo_id)?;
+    let engine = handle.engine();
+    finish_op(enqueue_read(&handle, "branch", move |_ctx, repo| {
+        engine.branches(repo)
+    }))
+    .await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn branch_create(
+    repo_id: RepoId,
+    name: String,
+    from: Option<String>,
+    checkout: bool,
+    state: State<'_, RepoManager>,
+) -> Result<(), String> {
+    let handle = get_handle(&state, &repo_id)?;
+    let engine = handle.engine();
+    finish_op(enqueue_mutation(&handle, "branch", move |_ctx, repo| {
+        engine.branch_create(repo, &name, from.as_deref(), checkout)
+    }))
+    .await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn branch_switch(
+    repo_id: RepoId,
+    name: String,
+    force: bool,
+    state: State<'_, RepoManager>,
+) -> Result<(), String> {
+    let handle = get_handle(&state, &repo_id)?;
+    let engine = handle.engine();
+    finish_op(enqueue_mutation(&handle, "branch", move |_ctx, repo| {
+        engine.branch_switch(repo, &name, force)
+    }))
+    .await
+}
+
+/// `r#into` unraws to the IPC arg key `into` (contracts.md M2).
+#[tauri::command(rename_all = "snake_case")]
+pub async fn branch_is_merged(
+    repo_id: RepoId,
+    name: String,
+    r#into: String,
+    state: State<'_, RepoManager>,
+) -> Result<bool, String> {
+    let handle = get_handle(&state, &repo_id)?;
+    let engine = handle.engine();
+    finish_op(enqueue_read(&handle, "branch", move |_ctx, repo| {
+        engine.branch_is_merged(repo, &name, &r#into)
+    }))
+    .await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn branch_delete(
+    repo_id: RepoId,
+    name: String,
+    force: bool,
+    state: State<'_, RepoManager>,
+) -> Result<(), String> {
+    let handle = get_handle(&state, &repo_id)?;
+    let engine = handle.engine();
+    finish_op(enqueue_mutation(&handle, "branch", move |_ctx, repo| {
+        engine.branch_delete(repo, &name, force)
+    }))
+    .await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn branch_rename(
+    repo_id: RepoId,
+    old: String,
+    new: String,
+    state: State<'_, RepoManager>,
+) -> Result<(), String> {
+    let handle = get_handle(&state, &repo_id)?;
+    let engine = handle.engine();
+    finish_op(enqueue_mutation(&handle, "branch", move |_ctx, repo| {
+        engine.branch_rename(repo, &old, &new)
+    }))
+    .await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn tag_create(
+    repo_id: RepoId,
+    name: String,
+    target: Option<String>,
+    message: Option<String>,
+    state: State<'_, RepoManager>,
+) -> Result<(), String> {
+    let handle = get_handle(&state, &repo_id)?;
+    let engine = handle.engine();
+    finish_op(enqueue_mutation(&handle, "branch", move |_ctx, repo| {
+        engine.tag_create(repo, &name, target.as_deref(), message.as_deref())
+    }))
+    .await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn tag_delete(
+    repo_id: RepoId,
+    name: String,
+    state: State<'_, RepoManager>,
+) -> Result<(), String> {
+    let handle = get_handle(&state, &repo_id)?;
+    let engine = handle.engine();
+    finish_op(enqueue_mutation(&handle, "branch", move |_ctx, repo| {
+        engine.tag_delete(repo, &name)
+    }))
+    .await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn remotes(
+    repo_id: RepoId,
+    state: State<'_, RepoManager>,
+) -> Result<Vec<RemoteInfo>, String> {
+    let handle = get_handle(&state, &repo_id)?;
+    let engine = handle.engine();
+    finish_op(enqueue_read(&handle, "fetch", move |_ctx, repo| {
+        engine.remotes(repo)
+    }))
+    .await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn remote_add(
+    repo_id: RepoId,
+    name: String,
+    url: String,
+    state: State<'_, RepoManager>,
+) -> Result<(), String> {
+    let handle = get_handle(&state, &repo_id)?;
+    let engine = handle.engine();
+    finish_op(enqueue_mutation(&handle, "fetch", move |_ctx, repo| {
+        engine.remote_add(repo, &name, &url)
+    }))
+    .await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn remote_remove(
+    repo_id: RepoId,
+    name: String,
+    state: State<'_, RepoManager>,
+) -> Result<(), String> {
+    let handle = get_handle(&state, &repo_id)?;
+    let engine = handle.engine();
+    finish_op(enqueue_mutation(&handle, "fetch", move |_ctx, repo| {
+        engine.remote_remove(repo, &name)
+    }))
+    .await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn remote_set_url(
+    repo_id: RepoId,
+    name: String,
+    url: String,
+    push: bool,
+    state: State<'_, RepoManager>,
+) -> Result<(), String> {
+    let handle = get_handle(&state, &repo_id)?;
+    let engine = handle.engine();
+    finish_op(enqueue_mutation(&handle, "fetch", move |_ctx, repo| {
+        engine.remote_set_url(repo, &name, &url, push)
+    }))
+    .await
+}
+
+/// Forward one libgit2 fetch/pull progress callback to the op's throttled
+/// `op-progress` stream.
+fn emit_fetch_progress(ctx: &OpCtx, progress: &FetchProgress) {
+    ctx.emit_progress(
+        &format!(
+            "{}/{} objects",
+            progress.objects_received, progress.objects_total
+        ),
+        fetch_pct(progress.objects_received, progress.objects_total),
+    );
+}
+
+/// Pure: fetch/pull percentage; `None` until the remote announces a total
+/// (contracts.md: `pct: number | null`).
+pub(crate) fn fetch_pct(received: u32, total: u32) -> Option<f64> {
+    (total > 0).then(|| received as f64 / total as f64 * 100.0)
+}
+
+/// Pure: push percentage, same null rule as [`fetch_pct`].
+pub(crate) fn push_pct(current: u32, total: u32) -> Option<f64> {
+    (total > 0).then(|| current as f64 / total as f64 * 100.0)
+}
+
+fn emit_push_progress(ctx: &OpCtx, progress: &PushProgress) {
+    let message = if progress.message.is_empty() {
+        format!("{}/{} refs", progress.current, progress.total)
+    } else {
+        progress.message.clone()
+    };
+    ctx.emit_progress(&message, push_pct(progress.current, progress.total));
+}
+
+/// Common enqueue body for fetch/pull/push: initial progress line, engine
+/// op with the repo lock held and credentials attributed to this repo
+/// (`auth::with_netop_context`), progress wiring, generation bump.
+fn enqueue_net_op<T, F>(
+    handle: &RepoHandle,
+    kind: &'static str,
+    opening: String,
+    f: F,
+) -> oneshot::Receiver<Result<T, String>>
+where
+    T: Send + 'static,
+    F: for<'a> FnOnce(&'a OpCtx, &'a mut dyn FnMut(FetchProgress)) -> Result<T, EngineError>
+        + Send
+        + 'static,
+{
+    let generation = handle.generation_shared();
+    let net_repo = handle.id.clone();
+    let (_op_id, rx) = handle.ops().enqueue(kind, move |ctx| {
+        ctx.emit_progress(&opening, None);
+        let result = crate::auth::with_netop_context(&net_repo, || {
+            f(&ctx, &mut |p| {
+                emit_fetch_progress(&ctx, &p);
+            })
+        });
+        generation.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        result.map_err(engine_err)
+    });
+    rx
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn fetch(
+    repo_id: RepoId,
+    options: FetchOptions,
+    state: State<'_, RepoManager>,
+) -> Result<NetStats, String> {
+    let handle = get_handle(&state, &repo_id)?;
+    let engine = handle.engine();
+    let repo = handle.repo();
+    let opening = format!("fetching {}", options.remote);
+    finish_op(enqueue_net_op(
+        &handle,
+        "fetch",
+        opening,
+        move |_ctx, progress| {
+            let guard = repo.lock();
+            engine.fetch(&guard, &options, progress)
+        },
+    ))
+    .await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn pull(
+    repo_id: RepoId,
+    options: PullOptions,
+    state: State<'_, RepoManager>,
+) -> Result<NetStats, String> {
+    let handle = get_handle(&state, &repo_id)?;
+    let engine = handle.engine();
+    let repo = handle.repo();
+    let opening = format!("pulling {}", options.remote);
+    finish_op(enqueue_net_op(
+        &handle,
+        "pull",
+        opening,
+        move |_ctx, progress| {
+            let guard = repo.lock();
+            engine.pull(&guard, &options, progress)
+        },
+    ))
+    .await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn push(
+    repo_id: RepoId,
+    options: PushOptions,
+    state: State<'_, RepoManager>,
+) -> Result<NetStats, String> {
+    let handle = get_handle(&state, &repo_id)?;
+    let engine = handle.engine();
+    let repo = handle.repo();
+    let generation = handle.generation_shared();
+    let net_repo = handle.id.clone();
+    let opening = if options.branch.is_empty() {
+        format!("pushing to {}", options.remote)
+    } else {
+        format!("pushing {} to {}", options.branch, options.remote)
+    };
+    let (_op_id, rx) = handle.ops().enqueue("push", move |ctx| {
+        ctx.emit_progress(&opening, None);
+        let result = crate::auth::with_netop_context(&net_repo, || {
+            let guard = repo.lock();
+            engine.push(&guard, &options, &mut |p| {
+                emit_push_progress(&ctx, &p);
+            })
+        });
+        generation.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        result.map_err(engine_err)
+    });
+    finish_op(rx).await
+}
+
+/// FE answer to an `auth-request` event: routes `(username, password,
+/// store)` to the blocked credentials callback (auth broker).
+#[tauri::command(rename_all = "snake_case")]
+pub fn auth_respond(
+    op_id: String,
+    username: Option<String>,
+    password: Option<String>,
+    store: bool,
+) -> Result<(), String> {
+    let delivered = crate::auth::broker().answer(
+        op_id.clone(),
+        crate::auth::AuthAnswer {
+            username,
+            password,
+            store,
+        },
+    );
+    if delivered {
+        Ok(())
+    } else {
+        Err(format!("no pending auth request for op {op_id}"))
+    }
+}
+
+#[cfg(test)]
+mod m2_tests {
+    use super::*;
+
+    #[test]
+    fn fetch_pct_null_until_total_known() {
+        assert_eq!(fetch_pct(5, 0), None);
+        assert_eq!(fetch_pct(0, 8), Some(0.0));
+        assert_eq!(fetch_pct(4, 8), Some(50.0));
+        assert_eq!(fetch_pct(8, 8), Some(100.0));
+    }
+
+    #[test]
+    fn push_pct_null_until_total_known() {
+        assert_eq!(push_pct(1, 0), None);
+        assert_eq!(push_pct(3, 4), Some(75.0));
+    }
+
+    /// Queue wiring through a real RepoManager handle (no engine involved):
+    /// events reach the installed sink and close rejects new ops.
+    #[test]
+    fn repo_handle_op_queue_emits_progress_and_closes() {
+        let dir = std::env::temp_dir().join(format!(
+            "mygitui-ipc-queue-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        git2::Repository::init(&dir).unwrap();
+
+        let manager = RepoManager::new();
+        let info = manager.open_unwatched(&dir).expect("open temp repo");
+        let handle = manager.get(&info.repo_id).unwrap();
+        let sink = crate::ops::test_sink::CollectorSink::shared();
+        handle.ops().set_sink(sink.clone());
+
+        let start_generation = handle.generation();
+        let (op_id, rx) = handle.ops().enqueue("stage", move |ctx| {
+            ctx.emit_progress("staging", None);
+            Ok(())
+        });
+        rx.blocking_recv()
+            .expect("queue alive")
+            .expect("op succeeds");
+        let events = sink.snapshot();
+        assert_eq!(events.len(), 2, "progress + done: {events:?}");
+        assert!(!events[0].done);
+        assert_eq!(events[0].message, "staging");
+        assert_eq!(events[1].op_id, op_id);
+        assert!(events[1].done);
+        assert_eq!(events[1].error, None);
+        // Reads never touched the generation; queued ops here neither (the
+        // bump lives in enqueue_mutation, not the queue).
+        assert_eq!(handle.generation(), start_generation);
+
+        manager.close(&info.repo_id);
+        let (_id, rx) = handle.ops().enqueue("commit", move |_ctx| Ok(()));
+        assert!(
+            rx.blocking_recv().expect("receiver resolves").is_err(),
+            "enqueue after close must reject"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The generation bump used by mutations: same counter the log streams
+    /// snapshot (streaming rules in contracts.md).
+    #[test]
+    fn mutation_helper_bumps_generation_like_the_watcher() {
+        // enqueue_mutation needs the engine trait object; drive the same
+        // plumbing through the default engine's `stage`. Its result depends
+        // on C1's parallel impl state (Unsupported stub vs real logic) —
+        // the generation bump must happen regardless, which is what this
+        // asserts.
+        let dir = std::env::temp_dir().join(format!(
+            "mygitui-ipc-bump-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        git2::Repository::init(&dir).unwrap();
+
+        let manager = RepoManager::new();
+        let info = manager.open_unwatched(&dir).unwrap();
+        let handle = manager.get(&info.repo_id).unwrap();
+        let before = handle.generation();
+
+        let request = StageRequest {
+            targets: Vec::new(),
+            unstage: false,
+        };
+        let rx = {
+            let engine = handle.engine();
+            enqueue_mutation(&handle, "stage", move |_ctx, repo| {
+                engine.stage(repo, &request)
+            })
+        };
+        // Resolve (success or engine error both fine); then check the bump.
+        let _ = rx.blocking_recv().expect("queue alive");
+        assert_eq!(
+            handle.generation(),
+            before + 1,
+            "generation bumps after the mutation op, whatever the engine result"
+        );
+        manager.close(&info.repo_id);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}

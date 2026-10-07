@@ -25,14 +25,26 @@ import type { InvokeOptions } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { isTauri } from "$lib/entry/dragdrop";
 import type {
+  AuthRequest,
   BlameLine,
+  BranchInfo,
+  CommitOptions,
   DiffSide,
+  FetchOptions,
   FileDiff,
+  HookInfo,
   LogFilter,
   LogPage,
+  NetStats,
+  OpProgress,
+  PullOptions,
+  PushOptions,
+  RemoteInfo,
   RepoId,
   RepoInfo,
   RepoStatus,
+  SigningInfo,
+  StageRequest,
 } from "./types";
 
 // ---------------------------------------------------------------------------
@@ -377,5 +389,227 @@ export async function pickFolder(): Promise<string | null> {
   } catch (err) {
     console.warn("[ipc] folder picker failed:", err);
     return null;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// M2: mutations (appended; docs/contracts.md "Commands (M2)")
+// ---------------------------------------------------------------------------
+
+/** Stages or unstages the files/hunks/line-ranges in `request`. */
+export function stage(repoId: RepoId, request: StageRequest): Promise<void> {
+  return call<void>("stage", { repo_id: repoId, request });
+}
+
+/** Stages (`unstage=false`) or unstages everything at once. */
+export function stageAll(repoId: RepoId, unstage: boolean): Promise<void> {
+  return call<void>("stage_all", { repo_id: repoId, unstage });
+}
+
+/** Commits the index; resolves with the new commit sha. */
+export function commit(repoId: RepoId, options: CommitOptions): Promise<string> {
+  return call<string>("commit", { repo_id: repoId, options });
+}
+
+/** Whether commits are signed and with what (ssh / openpgp / ...). */
+export function signingInfo(repoId: RepoId): Promise<SigningInfo> {
+  return call<SigningInfo>("signing_info", { repo_id: repoId });
+}
+
+/** Git hooks that exist under `.git/hooks` and their executable bit. */
+export function hooksList(repoId: RepoId): Promise<HookInfo[]> {
+  return call<HookInfo[]>("hooks_list", { repo_id: repoId });
+}
+
+/** Local branches with upstream tracking state and the HEAD marker. */
+export function branches(repoId: RepoId): Promise<BranchInfo[]> {
+  return call<BranchInfo[]>("branches", { repo_id: repoId });
+}
+
+/** Creates a branch (optionally starting at `from`) and checks it out. */
+export function branchCreate(
+  repoId: RepoId,
+  name: string,
+  checkout: boolean,
+  from?: string,
+): Promise<void> {
+  const args: Record<string, unknown> = { repo_id: repoId, name, checkout };
+  if (from !== undefined && from !== "") args.from = from;
+  return call<void>("branch_create", args);
+}
+
+/** Checks out `name`; `force` discards local modifications. */
+export function branchSwitch(
+  repoId: RepoId,
+  name: string,
+  force: boolean,
+): Promise<void> {
+  return call<void>("branch_switch", { repo_id: repoId, name, force });
+}
+
+/** True when `name` is fully merged into `into` (safe delete). */
+export function branchIsMerged(
+  repoId: RepoId,
+  name: string,
+  into: string,
+): Promise<boolean> {
+  return call<boolean>("branch_is_merged", {
+    repo_id: repoId,
+    name,
+    into,
+  });
+}
+
+/** Deletes a branch; `force` removes it even when unmerged. */
+export function branchDelete(
+  repoId: RepoId,
+  name: string,
+  force: boolean,
+): Promise<void> {
+  return call<void>("branch_delete", { repo_id: repoId, name, force });
+}
+
+/** Renames a branch (`old` → `new`). */
+export function branchRename(
+  repoId: RepoId,
+  oldName: string,
+  newName: string,
+): Promise<void> {
+  // `new` is a reserved word, so it is set as a computed property key.
+  const args: Record<string, unknown> = {
+    repo_id: repoId,
+    old: oldName,
+    new: newName,
+  };
+  return call<void>("branch_rename", args);
+}
+
+/** Creates a (lightweight unless `message` given) tag at `target`/HEAD. */
+export function tagCreate(
+  repoId: RepoId,
+  name: string,
+  target?: string,
+  message?: string,
+): Promise<void> {
+  const args: Record<string, unknown> = { repo_id: repoId, name };
+  if (target !== undefined && target !== "") args.target = target;
+  if (message !== undefined && message !== "") args.message = message;
+  return call<void>("tag_create", args);
+}
+
+/** Deletes a tag. */
+export function tagDelete(repoId: RepoId, name: string): Promise<void> {
+  return call<void>("tag_delete", { repo_id: repoId, name });
+}
+
+/** Configured remotes with fetch and (optional) push URLs. */
+export function remotes(repoId: RepoId): Promise<RemoteInfo[]> {
+  return call<RemoteInfo[]>("remotes", { repo_id: repoId });
+}
+
+/** Adds a remote. */
+export function remoteAdd(
+  repoId: RepoId,
+  name: string,
+  url: string,
+): Promise<void> {
+  return call<void>("remote_add", { repo_id: repoId, name, url });
+}
+
+/** Removes a remote (tracking branches go with it). */
+export function remoteRemove(repoId: RepoId, name: string): Promise<void> {
+  return call<void>("remote_remove", { repo_id: repoId, name });
+}
+
+/** Sets a remote's fetch URL, or its push URL when `push` is true. */
+export function remoteSetUrl(
+  repoId: RepoId,
+  name: string,
+  url: string,
+  push: boolean,
+): Promise<void> {
+  return call<void>("remote_set_url", {
+    repo_id: repoId,
+    name,
+    url,
+    push,
+  });
+}
+
+/** Fetches a remote (optionally pruning); resolves with transfer stats. */
+export function fetchRepo(
+  repoId: RepoId,
+  options: FetchOptions,
+): Promise<NetStats> {
+  return call<NetStats>("fetch", { repo_id: repoId, options });
+}
+
+/** Pulls a branch (ff-only and/or rebase per `options`). */
+export function pullRepo(
+  repoId: RepoId,
+  options: PullOptions,
+): Promise<NetStats> {
+  return call<NetStats>("pull", { repo_id: repoId, options });
+}
+
+/** Pushes a branch (force / set-upstream per `options`). */
+export function pushRepo(
+  repoId: RepoId,
+  options: PushOptions,
+): Promise<NetStats> {
+  return call<NetStats>("push", { repo_id: repoId, options });
+}
+
+/**
+ * Answers a pending `auth-request`: the credentials for `op_id`, or empty
+ * (cancel). `store=true` asks the backend to persist them in the keyring.
+ */
+export function authRespond(
+  opId: string,
+  username?: string,
+  password?: string,
+  store = false,
+): Promise<void> {
+  const args: Record<string, unknown> = { op_id: opId, store };
+  if (username !== undefined && username !== "") args.username = username;
+  if (password !== undefined && password !== "") args.password = password;
+  return call<void>("auth_respond", args);
+}
+
+/**
+ * Subscribes to `op-progress` events (per-repo serial op queue; see
+ * `OpProgress`). Same contract as {@link onRepoChanged}: never throws,
+ * no-op unlisten outside Tauri.
+ */
+export async function onOpProgress(
+  cb: (event: OpProgress) => void,
+): Promise<() => void> {
+  const noop = (): void => {};
+  if (!isTauri()) return noop;
+  try {
+    return await listen<OpProgress>("op-progress", (event) =>
+      cb(event.payload),
+    );
+  } catch {
+    return noop;
+  }
+}
+
+/**
+ * Subscribes to `auth-request` events (engine needs credentials for an
+ * in-flight network op; answer via {@link authRespond}). Same contract as
+ * {@link onRepoChanged}: never throws, no-op unlisten outside Tauri.
+ */
+export async function onAuthRequest(
+  cb: (event: AuthRequest) => void,
+): Promise<() => void> {
+  const noop = (): void => {};
+  if (!isTauri()) return noop;
+  try {
+    return await listen<AuthRequest>("auth-request", (event) =>
+      cb(event.payload),
+    );
+  } catch {
+    return noop;
   }
 }
