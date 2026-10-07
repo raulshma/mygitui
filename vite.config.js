@@ -41,5 +41,14 @@ export default defineConfig({
   test: {
     environment: "jsdom",
     include: ["src/**/*.{test,spec}.{js,ts}"],
+    server: {
+      deps: {
+        // @material/material-color-utilities@0.4.0 ships extensionless ESM
+        // relative imports ("../dynamiccolor/dynamic_scheme") that Node's
+        // loader rejects when the package is externalized; inlining it lets
+        // Vite resolve them. Applies to all suites (added by entry UX lane).
+        inline: ["@material/material-color-utilities"],
+      },
+    },
   },
 });

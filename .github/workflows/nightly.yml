@@ -1,0 +1,47 @@
+name: Nightly
+
+on:
+  schedule:
+    # Every night at 03:00 UTC.
+    # TODO(M8): the 8h watcher-leak soak lands in M8 (hardening). This workflow
+    # is the placeholder home for it; the soak job below will be replaced with
+    # a long-running harness that asserts RSS stays < 250MB over 8h under
+    # watcher churn. Until then, the nightly run only exercises the long-run
+    # test set and exits cleanly.
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+
+jobs:
+  nightly-soak:
+    name: Long-run tests + soak placeholder
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: src-tauri
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: nightly-cargo-${{ runner.os }}-${{ hashFiles('src-tauri/Cargo.lock') }}
+
+      # Long-run tests: the standard suite for now. M8 moves slow/leak tests
+      # behind #[ignore] + a dedicated filter so nightly runs
+      #   cargo test --release -- --ignored
+      # instead of the full set.
+      - name: Long-run tests
+        run: cargo test
+
+      - name: 8h watcher soak (placeholder)
+        run: |
+          echo "TODO(M8): replace with the 8h watcher leak soak (RSS < 250MB gate)."
+          echo "Placeholder passes so the nightly schedule stays green until then."
+          exit 0

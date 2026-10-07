@@ -1,0 +1,84 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  frontend:
+    name: Frontend (test / check / build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # node_modules cache keyed on the lockfile so `npm ci` is fast on re-runs.
+      - name: Cache node_modules
+        uses: actions/cache@v4
+        with:
+          path: node_modules
+          key: node-modules-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Unit tests (vitest)
+        run: npm run test
+
+      - name: Type check (svelte-check)
+        run: npm run check
+
+      - name: Build (vite)
+        run: npm run build
+
+  rust:
+    name: Rust (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: src-tauri
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Rust (stable + rustfmt + clippy)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      # Cargo registry/git sources + build cache, keyed on Cargo.lock.
+      #
+      # NOTE(M1): the git2 crate (libgit2) lands in M1. It vendors its own
+      # libgit2 via cc/cmake and needs no extra system packages, but CMake and
+      # a C toolchain are required on all three OS images (already present on
+      # GitHub runners). If we later switch to the system libgit2, ubuntu will
+      # need `apt-get install -y libgit2-dev cmake` here.
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: cargo-${{ runner.os }}-${{ hashFiles('src-tauri/Cargo.lock') }}
+
+      - name: Format check
+        run: cargo fmt --check
+
+      - name: Lint (clippy, warnings are errors)
+        run: cargo clippy -- -D warnings
+
+      - name: Tests
+        run: cargo test
