@@ -176,7 +176,11 @@ pub enum StageTarget {
     /// One hunk (hunk index within the file's current diff, worktree vs index).
     Hunk { path: String, hunk: u32 },
     /// Selected lines within one hunk.
-    Lines { path: String, hunk: u32, ranges: Vec<LineRange> },
+    Lines {
+        path: String,
+        hunk: u32,
+        ranges: Vec<LineRange>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

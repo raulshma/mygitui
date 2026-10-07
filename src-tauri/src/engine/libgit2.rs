@@ -14,10 +14,11 @@ use git2::{
 };
 use imara_diff::{Algorithm, Diff as WordDiff, InternedInput, TokenSource};
 
-use super::git_engine::{EngineError, EngineResult, GitEngine};
+use super::git_engine::{EngineError, EngineResult, FetchProgress, GitEngine, PushProgress};
 use super::types::{
-    BlameLine, ChangeKind, CommitInfo, DiffHunk, DiffLine, DiffSide, FileDiff, GitSignature,
-    LogFilter, RepoStatus, StatusEntry,
+    BlameLine, BranchInfo, ChangeKind, CommitInfo, CommitOptions, DiffHunk, DiffLine, DiffSide,
+    FetchOptions, FileDiff, GitSignature, HookInfo, LogFilter, NetStats, PullOptions, PushOptions,
+    RemoteInfo, RepoStatus, SigningInfo, StageRequest, StatusEntry,
 };
 
 /// Lines longer than this (bytes) skip the imara-diff word pass; the whole
@@ -1041,5 +1042,120 @@ impl GitEngine for Libgit2Engine {
         }
         out.sort();
         Ok(out)
+    }
+
+    // ---------- M2: mutations — forwarded to engine/{mutations,branches,netops}.rs ----------
+
+    fn stage(&self, repo: &Repository, req: &StageRequest) -> EngineResult<()> {
+        self.stage_impl(repo, req)
+    }
+
+    fn stage_all(&self, repo: &Repository, unstage: bool) -> EngineResult<()> {
+        self.stage_all_impl(repo, unstage)
+    }
+
+    fn commit(&self, repo: &Repository, opts: &CommitOptions) -> EngineResult<String> {
+        self.commit_impl(repo, opts)
+    }
+
+    fn signing_info(&self, repo: &Repository) -> EngineResult<SigningInfo> {
+        self.signing_info_impl(repo)
+    }
+
+    fn hooks(&self, repo: &Repository) -> EngineResult<Vec<HookInfo>> {
+        self.hooks_impl(repo)
+    }
+
+    fn branches(&self, repo: &Repository) -> EngineResult<Vec<BranchInfo>> {
+        self.branches_impl(repo)
+    }
+
+    fn branch_create(
+        &self,
+        repo: &Repository,
+        name: &str,
+        from: Option<&str>,
+        checkout: bool,
+    ) -> EngineResult<()> {
+        self.branch_create_impl(repo, name, from, checkout)
+    }
+
+    fn branch_switch(&self, repo: &Repository, name: &str, force: bool) -> EngineResult<()> {
+        self.branch_switch_impl(repo, name, force)
+    }
+
+    fn branch_is_merged(&self, repo: &Repository, name: &str, into: &str) -> EngineResult<bool> {
+        self.branch_is_merged_impl(repo, name, into)
+    }
+
+    fn branch_delete(&self, repo: &Repository, name: &str, force: bool) -> EngineResult<()> {
+        self.branch_delete_impl(repo, name, force)
+    }
+
+    fn branch_rename(&self, repo: &Repository, old: &str, new: &str) -> EngineResult<()> {
+        self.branch_rename_impl(repo, old, new)
+    }
+
+    fn tag_create(
+        &self,
+        repo: &Repository,
+        name: &str,
+        target: Option<&str>,
+        message: Option<&str>,
+    ) -> EngineResult<()> {
+        self.tag_create_impl(repo, name, target, message)
+    }
+
+    fn tag_delete(&self, repo: &Repository, name: &str) -> EngineResult<()> {
+        self.tag_delete_impl(repo, name)
+    }
+
+    fn remotes(&self, repo: &Repository) -> EngineResult<Vec<RemoteInfo>> {
+        self.remotes_impl(repo)
+    }
+
+    fn remote_add(&self, repo: &Repository, name: &str, url: &str) -> EngineResult<()> {
+        self.remote_add_impl(repo, name, url)
+    }
+
+    fn remote_remove(&self, repo: &Repository, name: &str) -> EngineResult<()> {
+        self.remote_remove_impl(repo, name)
+    }
+
+    fn remote_set_url(
+        &self,
+        repo: &Repository,
+        name: &str,
+        url: &str,
+        push: bool,
+    ) -> EngineResult<()> {
+        self.remote_set_url_impl(repo, name, url, push)
+    }
+
+    fn fetch(
+        &self,
+        repo: &Repository,
+        opts: &FetchOptions,
+        progress: &mut dyn FnMut(FetchProgress),
+    ) -> EngineResult<NetStats> {
+        self.fetch_impl(repo, opts, progress)
+    }
+
+    fn pull(
+        &self,
+        repo: &Repository,
+        opts: &PullOptions,
+        progress: &mut dyn FnMut(FetchProgress),
+    ) -> EngineResult<NetStats> {
+        self.pull_impl(repo, opts, progress)
+    }
+
+    fn push(
+        &self,
+        repo: &Repository,
+        opts: &PushOptions,
+        progress: &mut dyn FnMut(PushProgress),
+    ) -> EngineResult<NetStats> {
+        self.push_impl(repo, opts, progress)
     }
 }

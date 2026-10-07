@@ -104,12 +104,7 @@ pub trait GitEngine: Send + Sync {
         Err(EngineError::Unsupported("branch_create".into()))
     }
 
-    fn branch_switch(
-        &self,
-        _repo: &Repository,
-        _name: &str,
-        _force: bool,
-    ) -> EngineResult<()> {
+    fn branch_switch(&self, _repo: &Repository, _name: &str, _force: bool) -> EngineResult<()> {
         Err(EngineError::Unsupported("branch_switch".into()))
     }
 
