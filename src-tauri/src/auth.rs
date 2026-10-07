@@ -62,18 +62,23 @@ impl AuthBroker {
 
     /// C2 consumes this inside RemoteCallbacks::credentials.
     /// Stub: ssh-agent + plaintext only. C3 adds keyring + FE round-trip.
-    pub fn credentials(&self) -> git2::Credentials<'static> {
-        Box::new(move |_url, username, allowed| {
-            if allowed.contains(git2::CredentialType::SSH_KEY) {
-                return git2::Cred::ssh_key_from_agent(username.unwrap_or("git"));
-            }
-            if allowed.contains(git2::CredentialType::USER_PASS_PLAINTEXT) {
-                let user = username
-                    .map(|u| u.to_string())
-                    .unwrap_or_else(|| "git".to_string());
-                return git2::Cred::userpass_plaintext(&user, "");
-            }
-            Err(git2::Error::from_str("no credential source available"))
-        })
+    pub fn credentials(&self) -> Box<git2::Credentials<'static>> {
+        Box::new(
+            move |_url: &str,
+                  username: Option<&str>,
+                  allowed: git2::CredentialType|
+                  -> Result<git2::Cred, git2::Error> {
+                if allowed.contains(git2::CredentialType::SSH_KEY) {
+                    return git2::Cred::ssh_key_from_agent(username.unwrap_or("git"));
+                }
+                if allowed.contains(git2::CredentialType::USER_PASS_PLAINTEXT) {
+                    let user = username
+                        .map(|u| u.to_string())
+                        .unwrap_or_else(|| "git".to_string());
+                    return git2::Cred::userpass_plaintext(&user, "");
+                }
+                Err(git2::Error::from_str("no credential source available"))
+            },
+        )
     }
 }
