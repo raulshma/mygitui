@@ -157,3 +157,114 @@ pub struct RepoInfo {
     pub bare: bool,
     pub git_dir: String,
 }
+
+// ---------- M2: mutation model ----------
+
+/// Which lines of a hunk to (un)stage: inclusive ranges over the NEW-side
+/// line numbers (matching what the diff viewer displays).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LineRange {
+    pub start: u32,
+    pub end: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StageTarget {
+    /// Whole file by path.
+    File(String),
+    /// One hunk (hunk index within the file's current diff, worktree vs index).
+    Hunk { path: String, hunk: u32 },
+    /// Selected lines within one hunk.
+    Lines { path: String, hunk: u32, ranges: Vec<LineRange> },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StageRequest {
+    pub targets: Vec<StageTarget>,
+    /// true = remove from index (restore from HEAD), false = add to index.
+    pub unstage: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CommitOptions {
+    pub message: String,
+    pub amend: bool,
+    pub no_verify: bool,
+    pub allow_empty: bool,
+    /// Override author (name/email); committer stays the configured identity.
+    pub author: Option<GitSignature>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SigningInfo {
+    pub active: bool,
+    /// "openpgp" | "ssh" | "x509" (git config gpg.format).
+    pub format: String,
+    pub key_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HookInfo {
+    /// "pre-commit", "commit-msg", "pre-push", ...
+    pub kind: String,
+    pub present: bool,
+    pub executable: bool,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct FetchOptions {
+    pub remote: String,
+    pub prune: bool,
+    /// Fetch only these refs; empty = all.
+    pub refs: Vec<String>,
+    /// Fetch depth (partial clone support via CLI fallback path).
+    pub depth: Option<u32>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct PullOptions {
+    pub remote: String,
+    /// Branch to pull; empty = upstream of current branch.
+    pub branch: String,
+    /// Fail instead of creating a merge when not fast-forward.
+    pub ff_only: bool,
+    /// Pull with rebase (git pull --rebase semantics).
+    pub rebase: bool,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct PushOptions {
+    pub remote: String,
+    /// Branch to push; empty = current.
+    pub branch: String,
+    /// Force (with lease when supported).
+    pub force: bool,
+    /// Set upstream while pushing (-u).
+    pub set_upstream: bool,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct NetStats {
+    pub received_bytes: u64,
+    pub objects: u32,
+    pub updated_refs: Vec<(String, String)>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BranchInfo {
+    pub name: String,
+    pub sha: String,
+    pub upstream: Option<String>,
+    pub ahead: u32,
+    pub behind: u32,
+    pub gone: bool,
+    pub is_head: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RemoteInfo {
+    pub name: String,
+    pub url: String,
+    pub push_url: Option<String>,
+}

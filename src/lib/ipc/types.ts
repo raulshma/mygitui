@@ -128,3 +128,101 @@ export interface LogPage {
   next_cursor: string | null;
   generation: number;
 }
+
+// ---------- M2: mutation model ----------
+
+export interface LineRange {
+  start: number;
+  end: number;
+}
+
+export type StageTarget =
+  | { file: string }
+  | { hunk: { path: string; hunk: number } }
+  | { lines: { path: string; hunk: number; ranges: LineRange[] } };
+
+export interface StageRequest {
+  targets: StageTarget[];
+  unstage: boolean;
+}
+
+export interface CommitOptions {
+  message: string;
+  amend: boolean;
+  no_verify: boolean;
+  allow_empty: boolean;
+  author: GitSignature | null;
+}
+
+export interface SigningInfo {
+  active: boolean;
+  format: string;
+  key_id: string | null;
+}
+
+export interface HookInfo {
+  kind: string;
+  present: boolean;
+  executable: boolean;
+}
+
+export interface FetchOptions {
+  remote: string;
+  prune: boolean;
+  refs: string[];
+  depth: number | null;
+}
+
+export interface PullOptions {
+  remote: string;
+  branch: string;
+  ff_only: boolean;
+  rebase: boolean;
+}
+
+export interface PushOptions {
+  remote: string;
+  branch: string;
+  force: boolean;
+  set_upstream: boolean;
+}
+
+export interface NetStats {
+  received_bytes: number;
+  objects: number;
+  updated_refs: [string, string][];
+}
+
+export interface BranchInfo {
+  name: string;
+  sha: string;
+  upstream: string | null;
+  ahead: number;
+  behind: number;
+  gone: boolean;
+  is_head: boolean;
+}
+
+export interface RemoteInfo {
+  name: string;
+  url: string;
+  push_url: string | null;
+}
+
+export interface OpProgress {
+  repo_id: string;
+  op_id: string;
+  kind: string;
+  message: string;
+  pct: number | null;
+  done: boolean;
+  error: string | null;
+}
+
+export interface AuthRequest {
+  op_id: string;
+  repo_id: string;
+  url: string;
+  kind: "https-user" | "https-pass" | "ssh-passphrase";
+  prompt: string;
+}

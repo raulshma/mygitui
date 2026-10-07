@@ -41,3 +41,38 @@ with same kind+repo replaces the prior stream.
 `src/lib/ipc/types.ts` exports the same shapes (camelCase fields, serde uses
 snake_case + `rename_all` where noted — mirror the Rust serde attributes).
 `src/lib/ipc/client.ts` provides typed wrappers; UI never calls `invoke` directly.
+
+## Commands (M2 — mutations)
+
+All run through the per-repo serial op queue; progress streams on the
+`op-progress` event. Arg keys snake_case (commands use `rename_all`).
+
+| Command | Args | Returns |
+|---|---|---|
+| `stage` | `repo_id, request: StageRequest` | `void` |
+| `stage_all` | `repo_id, unstage: bool` | `void` |
+| `commit` | `repo_id, options: CommitOptions` | `String` (new sha) |
+| `signing_info` | `repo_id` | `SigningInfo` |
+| `hooks_list` | `repo_id` | `HookInfo[]` |
+| `branches` | `repo_id` | `BranchInfo[]` |
+| `branch_create` | `repo_id, name, from?, checkout: bool` | `void` |
+| `branch_switch` | `repo_id, name, force: bool` | `void` |
+| `branch_is_merged` | `repo_id, name, into` | `bool` |
+| `branch_delete` | `repo_id, name, force: bool` | `void` |
+| `branch_rename` | `repo_id, old, new` | `void` |
+| `tag_create` | `repo_id, name, target?, message?` | `void` |
+| `tag_delete` | `repo_id, name` | `void` |
+| `remotes` | `repo_id` | `RemoteInfo[]` |
+| `remote_add` / `remote_remove` | `repo_id, name [, url]` | `void` |
+| `remote_set_url` | `repo_id, name, url, push: bool` | `void` |
+| `fetch` | `repo_id, options: FetchOptions` | `NetStats` |
+| `pull` | `repo_id, options: PullOptions` | `NetStats` |
+| `push` | `repo_id, options: PushOptions` | `NetStats` |
+| `auth_respond` | `op_id: string, username?, password?, store: bool` | `void` |
+
+## Events (M2)
+
+| Event | Payload | Meaning |
+|---|---|---|
+| `op-progress` | `{ repo_id, op_id, kind, message, pct: number \| null, done: bool, error: string \| null }` | op queue progress; kinds: `stage`, `commit`, `branch`, `fetch`, `pull`, `push`, `clone` |
+| `auth-request` | `{ op_id, repo_id, url, kind: "https-user" \| "https-pass" \| "ssh-passphrase", prompt }` | engine needs credentials; FE shows dialog, answers via `auth_respond` |
