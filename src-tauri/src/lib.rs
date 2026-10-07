@@ -3,6 +3,7 @@ pub mod graph;
 
 use tauri::{Emitter, Manager};
 
+mod auth;
 mod ipc_commands;
 mod keyring_store;
 mod repo;
