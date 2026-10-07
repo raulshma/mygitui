@@ -1,0 +1,32 @@
+/* M3 design tokens are populated by the theme lane (src/lib/theme).
+   These are the bootstrap fallbacks so the app renders before theming lands. */
+:root {
+  color-scheme: light dark;
+  --m3-surface: #fef7ff;
+  --m3-on-surface: #1d1b20;
+  --m3-primary: #6750a4;
+  --m3-on-primary: #ffffff;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --m3-surface: #141218;
+    --m3-on-surface: #e6e0e9;
+    --m3-primary: #cfbcff;
+    --m3-on-primary: #381e72;
+  }
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  font-family: Roboto, "Segoe UI", system-ui, sans-serif;
+  background: var(--m3-surface);
+  color: var(--m3-on-surface);
+}
+
+#app {
+  height: 100%;
+}
