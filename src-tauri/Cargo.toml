@@ -26,6 +26,12 @@ tauri-plugin-single-instance = "2.5.2"
 keyring = { version = "4.2.0", features = ["apple-native-keyring-store"] }
 tauri-plugin-updater = "2.13.1"
 tauri-plugin-process = "2.4.0"
+git2 = "0.21.0"
+imara-diff = "0.2.0"
+notify = "8.2.0"
+thiserror = "2.0.21"
+parking_lot = "0.12.5"
+tracing = "0.1.44"
 
 # M1+ git core will add: git2, imara-diff, notify, tokio — installed when contracts land.
 

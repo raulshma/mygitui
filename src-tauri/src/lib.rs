@@ -1,3 +1,6 @@
+pub mod engine;
+pub mod graph;
+
 use tauri::{Emitter, Manager};
 
 mod keyring_store;
