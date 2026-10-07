@@ -226,3 +226,83 @@ export interface AuthRequest {
   kind: "https-user" | "https-pass" | "ssh-passphrase";
   prompt: string;
 }
+
+// ---------- M3: power + safety ----------
+
+export type ConflictResolution = "ours" | "theirs" | "both";
+
+export interface ConflictFile {
+  path: string;
+  has_base: boolean;
+  has_ours: boolean;
+  has_theirs: boolean;
+  source: string;
+}
+
+export type MergeOutcome = "fast_forward" | "merged" | "conflicted" | "up_to_date";
+
+export interface MergeResult {
+  outcome: MergeOutcome;
+  conflicts: ConflictFile[];
+  new_head: string | null;
+}
+
+export type ResetKind = "soft" | "mixed" | "hard";
+
+export interface RebaseStep {
+  sha: string;
+  action: string;
+  new_message: string | null;
+}
+
+export interface RebaseState {
+  active: boolean;
+  plan: RebaseStep[];
+  current: number;
+  paused_for_edit: boolean;
+  rewritten: [string, string][];
+}
+
+export interface StashInfo {
+  index: number;
+  sha: string;
+  message: string;
+  author: GitSignature;
+}
+
+export interface WorktreeInfo {
+  path: string;
+  name: string;
+  branch: string | null;
+  head: string | null;
+  detached: boolean;
+  locked: boolean;
+  prunable: string | null;
+}
+
+export interface ReflogEntry {
+  old_sha: string;
+  new_sha: string;
+  signature: GitSignature;
+  message: string;
+}
+
+export interface CheckpointInfo {
+  id: string;
+  reason: string;
+  ref_name: string;
+  created_at: number;
+  branch: string | null;
+  has_worktree_state: boolean;
+}
+
+export interface PreviewFile {
+  path: string;
+  change: string;
+}
+
+export interface PreviewInfo {
+  summary: string;
+  files: PreviewFile[];
+  checkpoint_id: string | null;
+}

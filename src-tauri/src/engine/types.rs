@@ -272,3 +272,107 @@ pub struct RemoteInfo {
     pub url: String,
     pub push_url: Option<String>,
 }
+
+// ---------- M3: power + safety model ----------
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConflictResolution {
+    Ours,
+    Theirs,
+    Both,
+}
+
+/// One conflicted path, with blob availability for the 3-way editor.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConflictFile {
+    pub path: String,
+    /// Base ("stage 1") content, when a merge base exists.
+    pub has_base: bool,
+    pub has_ours: bool,
+    pub has_theirs: bool,
+    /// Which sequencer is active: merge / cherry-pick / revert / rebase.
+    pub source: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MergeOutcome {
+    FastForward,
+    Merged,
+    Conflicted,
+    UpToDate,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MergeResult {
+    pub outcome: MergeOutcome,
+    pub conflicts: Vec<ConflictFile>,
+    pub new_head: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ResetKind {
+    Soft,
+    Mixed,
+    Hard,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RebaseStep {
+    /// Commit sha being rewritten.
+    pub sha: String,
+    pub action: String,
+    pub new_message: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RebaseState {
+    pub active: bool,
+    pub plan: Vec<RebaseStep>,
+    pub current: usize,
+    /// When set: paused for `edit` — user amends the worktree, then continues.
+    pub paused_for_edit: bool,
+    /// Commit-sha mapping applied so far (old → new).
+    pub rewritten: Vec<(String, String)>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StashInfo {
+    pub index: u32,
+    pub sha: String,
+    pub message: String,
+    pub author: GitSignature,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorktreeInfo {
+    pub path: String,
+    pub name: String,
+    pub branch: Option<String>,
+    pub head: Option<String>,
+    pub detached: bool,
+    pub locked: bool,
+    pub prunable: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReflogEntry {
+    pub old_sha: String,
+    pub new_sha: String,
+    pub signature: GitSignature,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CheckpointInfo {
+    pub id: String,
+    pub reason: String,
+    /// Hidden ref holding the snapshot commit.
+    pub ref_name: String,
+    pub created_at: i64,
+    pub branch: Option<String>,
+    /// Working tree was captured too (stash-style 2nd parent).
+    pub has_worktree_state: bool,
+}

@@ -204,3 +204,137 @@ pub struct PushProgress {
     pub bytes: u64,
     pub message: String,
 }
+
+// ---------- M3: power + safety (default Unsupported until lanes land) ----------
+
+use super::types::{
+    CheckpointInfo, ConflictFile, ConflictResolution, MergeResult, RebaseState, RebaseStep,
+    ReflogEntry, ResetKind, StashInfo, WorktreeInfo,
+};
+
+/// Additional trait items live in an extension impl to keep M2 diff small.
+pub trait GitEngineM3: Send + Sync {
+    fn merge_branch(
+        &self,
+        _repo: &Repository,
+        _ref_name: &str,
+        _no_ff: bool,
+    ) -> EngineResult<MergeResult> {
+        Err(EngineError::Unsupported("merge_branch".into()))
+    }
+
+    fn merge_abort(&self, _repo: &Repository) -> EngineResult<()> {
+        Err(EngineError::Unsupported("merge_abort".into()))
+    }
+
+    fn conflicts(&self, _repo: &Repository) -> EngineResult<Vec<ConflictFile>> {
+        Err(EngineError::Unsupported("conflicts".into()))
+    }
+
+    fn conflict_resolve(
+        &self,
+        _repo: &Repository,
+        _path: &str,
+        _res: ConflictResolution,
+        _custom_content: Option<&[u8]>,
+    ) -> EngineResult<()> {
+        Err(EngineError::Unsupported("conflict_resolve".into()))
+    }
+
+    fn cherry_pick(&self, _repo: &Repository, _shas: &[String]) -> EngineResult<MergeResult> {
+        Err(EngineError::Unsupported("cherry_pick".into()))
+    }
+
+    fn revert(&self, _repo: &Repository, _shas: &[String]) -> EngineResult<MergeResult> {
+        Err(EngineError::Unsupported("revert".into()))
+    }
+
+    fn reset(&self, _repo: &Repository, _kind: ResetKind, _to: &str) -> EngineResult<()> {
+        Err(EngineError::Unsupported("reset".into()))
+    }
+
+    fn rebase_start(
+        &self,
+        _repo: &Repository,
+        _plan: &[RebaseStep],
+        _onto: Option<&str>,
+    ) -> EngineResult<RebaseState> {
+        Err(EngineError::Unsupported("rebase_start".into()))
+    }
+
+    fn rebase_state(&self, _repo: &Repository) -> EngineResult<RebaseState> {
+        Err(EngineError::Unsupported("rebase_state".into()))
+    }
+
+    fn rebase_continue(&self, _repo: &Repository) -> EngineResult<RebaseState> {
+        Err(EngineError::Unsupported("rebase_continue".into()))
+    }
+
+    fn rebase_abort(&self, _repo: &Repository) -> EngineResult<()> {
+        Err(EngineError::Unsupported("rebase_abort".into()))
+    }
+
+    fn stash_list(&self, _repo: &Repository) -> EngineResult<Vec<StashInfo>> {
+        Err(EngineError::Unsupported("stash_list".into()))
+    }
+
+    fn stash_push(
+        &self,
+        _repo: &Repository,
+        _message: Option<&str>,
+        _keep_index: bool,
+        _include_untracked: bool,
+    ) -> EngineResult<()> {
+        Err(EngineError::Unsupported("stash_push".into()))
+    }
+
+    fn stash_apply(&self, _repo: &Repository, _index: u32, _pop: bool) -> EngineResult<()> {
+        Err(EngineError::Unsupported("stash_apply".into()))
+    }
+
+    fn stash_drop(&self, _repo: &Repository, _index: u32) -> EngineResult<()> {
+        Err(EngineError::Unsupported("stash_drop".into()))
+    }
+
+    fn stash_branch(&self, _repo: &Repository, _name: &str, _index: u32) -> EngineResult<()> {
+        Err(EngineError::Unsupported("stash_branch".into()))
+    }
+
+    fn worktrees(&self, _repo: &Repository) -> EngineResult<Vec<WorktreeInfo>> {
+        Err(EngineError::Unsupported("worktrees".into()))
+    }
+
+    fn worktree_add(
+        &self,
+        _repo: &Repository,
+        _path: &str,
+        _branch: Option<&str>,
+        _new_branch: Option<&str>,
+    ) -> EngineResult<()> {
+        Err(EngineError::Unsupported("worktree_add".into()))
+    }
+
+    fn worktree_remove(&self, _repo: &Repository, _name: &str, _force: bool) -> EngineResult<()> {
+        Err(EngineError::Unsupported("worktree_remove".into()))
+    }
+
+    fn reflog(&self, _repo: &Repository, _name: Option<&str>) -> EngineResult<Vec<ReflogEntry>> {
+        Err(EngineError::Unsupported("reflog".into()))
+    }
+
+    fn checkpoint_create(&self, _repo: &Repository, _reason: &str) -> EngineResult<CheckpointInfo> {
+        Err(EngineError::Unsupported("checkpoint_create".into()))
+    }
+
+    fn checkpoints(&self, _repo: &Repository) -> EngineResult<Vec<CheckpointInfo>> {
+        Err(EngineError::Unsupported("checkpoints".into()))
+    }
+
+    fn checkpoint_restore(&self, _repo: &Repository, _id: &str) -> EngineResult<()> {
+        Err(EngineError::Unsupported("checkpoint_restore".into()))
+    }
+
+    fn checkpoint_gc(&self, _repo: &Repository, _older_than_days: u32) -> EngineResult<u32> {
+        Err(EngineError::Unsupported("checkpoint_gc".into()))
+    }
+}

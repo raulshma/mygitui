@@ -76,3 +76,39 @@ All run through the per-repo serial op queue; progress streams on the
 |---|---|---|
 | `op-progress` | `{ repo_id, op_id, kind, message, pct: number \| null, done: bool, error: string \| null }` | op queue progress; kinds: `stage`, `commit`, `branch`, `fetch`, `pull`, `push`, `clone` |
 | `auth-request` | `{ op_id, repo_id, url, kind: "https-user" \| "https-pass" \| "ssh-passphrase", prompt }` | engine needs credentials; FE shows dialog, answers via `auth_respond` |
+
+## Commands (M3 — power + safety)
+
+Same op-queue + op-progress machinery as M2. All `#[tauri::command(rename_all = "snake_case")]`.
+
+| Command | Args | Returns |
+|---|---|---|
+| `merge_branch` | `repo_id, ref_name, no_ff: bool` | `MergeResult` |
+| `merge_abort` | `repo_id` | `void` |
+| `conflicts` | `repo_id` | `ConflictFile[]` |
+| `conflict_resolve` | `repo_id, path, resolution, custom_content?: number[] (bytes)` | `void` |
+| `cherry_pick` | `repo_id, shas: string[]` | `MergeResult` |
+| `revert` | `repo_id, shas: string[]` | `MergeResult` |
+| `reset` | `repo_id, kind, to` | `void` (checkpoint auto-created before hard) |
+| `rebase_start` | `repo_id, plan: RebaseStep[], onto?: string` | `RebaseState` |
+| `rebase_state` | `repo_id` | `RebaseState` |
+| `rebase_continue` / `rebase_abort` | `repo_id` | `RebaseState` / `void` |
+| `stash_list` | `repo_id` | `StashInfo[]` |
+| `stash_push` | `repo_id, message?, keep_index, include_untracked` | `void` |
+| `stash_apply` / `stash_drop` | `repo_id, index` (+`pop: bool` for apply) | `void` |
+| `stash_branch` | `repo_id, name, index` | `void` |
+| `worktrees` | `repo_id` | `WorktreeInfo[]` |
+| `worktree_add` | `repo_id, path, branch?, new_branch?` | `void` |
+| `worktree_remove` | `repo_id, name, force` | `void` |
+| `reflog` | `repo_id, name?` | `ReflogEntry[]` |
+| `checkpoint_create` | `repo_id, reason` | `CheckpointInfo` |
+| `checkpoints` | `repo_id` | `CheckpointInfo[]` |
+| `checkpoint_restore` | `repo_id, id` | `void` (new checkpoint of current state first) |
+| `checkpoint_gc` | `repo_id, older_than_days` | `u32` (count removed) |
+| `ops_preview` | `repo_id, kind: "reset_hard" \| "clean" \| "checkout_force" \| "branch_delete", params` | `PreviewInfo` |
+
+`PreviewInfo = { summary: string; files: { path: string; change: string }[]; checkpoint_id: string | null }`
+(dangerous ops must call preview first; FE shows dialog before confirm; checkpoint auto-created).
+
+Checkpoints live at `refs/mygitui/checkpoints/<ts>-<reason>`; worktree state is a stash-style
+2-parent commit; GC default 30 days; restore = reset soft to checkpoint + apply worktree blob.
