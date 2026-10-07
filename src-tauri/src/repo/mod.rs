@@ -120,6 +120,8 @@ impl RepoHandle {
     }
 
     /// M3 power/safety operations.
+    // Unwired until the M3 IPC commands land; nothing reads it yet.
+    #[allow(dead_code)]
     pub fn m3(&self) -> Arc<dyn GitEngineM3> {
         self.m3.clone()
     }

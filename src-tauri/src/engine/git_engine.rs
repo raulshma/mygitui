@@ -214,11 +214,6 @@ use super::types::{
 
 /// Additional trait items live in an extension impl to keep M2 diff small.
 pub trait GitEngineM3: Send + Sync {
-    /// TEMP: removed when lane D1 lands real methods.
-    fn placeholder(&self, _repo: &Repository) -> EngineResult<()> {
-        Err(EngineError::Unsupported("placeholder".into()))
-    }
-
     fn merge_branch(
         &self,
         _repo: &Repository,

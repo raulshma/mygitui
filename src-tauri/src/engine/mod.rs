@@ -11,6 +11,12 @@ mod tests;
 pub mod checkpoints;
 pub mod merge;
 #[cfg(test)]
+mod merge_tests;
+#[cfg(test)]
 mod net_tests;
 pub mod rebase;
+#[cfg(test)]
+mod rebase_tests;
 pub mod stash;
+#[cfg(test)]
+mod stash_tests;
