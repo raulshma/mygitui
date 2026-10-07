@@ -18,7 +18,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use parking_lot::Mutex;
 use tauri::Emitter;
 
-use crate::engine::git_engine::{EngineError, EngineResult, GitEngine};
+use crate::engine::git_engine::{EngineError, EngineResult, GitEngine, GitEngineM3};
 use crate::engine::types::{RepoId, RepoInfo};
 use crate::graph::types::LaneState;
 use crate::ops::OpQueue;
@@ -30,6 +30,10 @@ use crate::watcher::{self, RepoWatcher};
 /// factory exists so this module depends on the trait, not the concrete type
 /// (capability-table fallbacks land post-M1).
 pub fn default_engine() -> Arc<dyn GitEngine> {
+    Arc::new(crate::engine::libgit2::Libgit2Engine::new())
+}
+
+fn m3_engine() -> Arc<dyn GitEngineM3> {
     Arc::new(crate::engine::libgit2::Libgit2Engine::new())
 }
 
@@ -85,6 +89,8 @@ pub struct RepoHandle {
     /// Bumped on every watcher batch; clients discard stale stream pages.
     generation: Arc<AtomicU64>,
     engine: Arc<dyn GitEngine>,
+    /// M3 power/safety operations (merge, rebase, stash, checkpoints…).
+    m3: Arc<dyn GitEngineM3>,
     /// M2: serial op queue for mutations/net ops (contracts.md M2). M1
     /// read commands bypass it and share the `repo` mutex instead.
     ops: OpQueue,
@@ -111,6 +117,11 @@ impl RepoHandle {
 
     pub fn engine(&self) -> Arc<dyn GitEngine> {
         self.engine.clone()
+    }
+
+    /// M3 power/safety operations.
+    pub fn m3(&self) -> Arc<dyn GitEngineM3> {
+        self.m3.clone()
     }
 
     /// M2: this repo's serial op queue (mutations + net ops).
@@ -246,6 +257,7 @@ impl RepoManager {
             repo: Arc::new(Mutex::new(repo)),
             generation: Arc::new(AtomicU64::new(0)),
             engine: default_engine(),
+            m3: m3_engine(),
             lanes: Mutex::new(LaneState::default()),
             log_stream: Mutex::new(None),
             history_stream: Mutex::new(None),

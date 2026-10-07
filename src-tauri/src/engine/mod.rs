@@ -8,5 +8,9 @@ pub mod types;
 #[cfg(test)]
 mod tests;
 
+pub mod checkpoints;
+pub mod merge;
 #[cfg(test)]
 mod net_tests;
+pub mod rebase;
+pub mod stash;
