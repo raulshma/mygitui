@@ -917,3 +917,286 @@ export async function onActionOutput(
     return noop;
   }
 }
+
+// ---------------------------------------------------------------------------
+// M6 (lane H1): OS-keyring secrets (appended; src-tauri keyring_store.rs).
+// Used exclusively for AI credentials — API keys / server passwords must
+// never land in localStorage (see $lib/ai). Secret values are also never
+// logged by the backend; error strings describe storage failures only.
+// ---------------------------------------------------------------------------
+
+/**
+ * Known secret keys used by the app. Keep in lockstep with callers; the
+ * backend treats them as opaque usernames under the single `"mygitui"`
+ * keyring service.
+ */
+export const SECRET_KEYS = {
+  /** OpenRouter API key (`openrouter.api-key`). */
+  openrouterApiKey: "openrouter.api-key",
+  /** opencode server basic-auth password (`opencode.server.password`). */
+  opencodeServerPassword: "opencode.server.password",
+} as const;
+
+/** Reads a secret from the OS keyring; `null` when no entry exists. */
+export function secretsGet(key: string): Promise<string | null> {
+  return call<string | null>("secrets_get", { key });
+}
+
+/** Creates or overwrites a secret in the OS keyring. */
+export function secretsSet(key: string, value: string): Promise<void> {
+  return call<void>("secrets_set", { key, value });
+}
+
+/**
+ * Deletes a secret from the OS keyring. Idempotent: deleting a key that
+ * does not exist resolves normally.
+ */
+export function secretsDelete(key: string): Promise<void> {
+  return call<void>("secrets_delete", { key });
+}
+
+// ---------------------------------------------------------------------------
+// M5 (lane G2): terminal PTY (appended; everything above is byte-identical).
+//
+// One long-lived shell session per repository: `pty_create` spawns the
+// process (cwd = the repo workdir) and resolves its session id; output and
+// exit stream back as `pty-output` / `pty-exit` events identified by that
+// id. Same transport + no-Tauri guards as every other command here (tests
+// inject a mock; outside Tauri the commands reject with `IpcError` and the
+// event subscriptions resolve with a no-op unlisten).
+// ---------------------------------------------------------------------------
+
+/** Payload of the `pty-output` event (raw terminal bytes for one session). */
+export interface PtyOutputEvent {
+  session_id: string;
+  /** Chunk of terminal output (UTF-8 decoded, escape sequences intact). */
+  data: string;
+}
+
+/** Payload of the `pty-exit` event (the shell process finished). */
+export interface PtyExitEvent {
+  session_id: string;
+  /** Process exit code (`null` when it was killed / could not be read). */
+  exit_code: number | null;
+}
+
+/**
+ * Spawns the shell for `repoId` (cwd = the repository workdir), sized to
+ * `rows`×`cols` when given. Resolves with the new pty session id.
+ */
+export function ptyCreate(
+  repoId: string,
+  rows?: number,
+  cols?: number,
+): Promise<string> {
+  const args: Record<string, unknown> = { repo_id: repoId };
+  if (rows !== undefined) args.rows = rows;
+  if (cols !== undefined) args.cols = cols;
+  return call<string>("pty_create", args);
+}
+
+/** Writes raw keystroke bytes to a pty session. */
+export function ptyWrite(sessionId: string, data: string): Promise<void> {
+  return call<void>("pty_write", { session_id: sessionId, data });
+}
+
+/** Notifies the backend that the terminal was resized. */
+export function ptyResize(
+  sessionId: string,
+  rows: number,
+  cols: number,
+): Promise<void> {
+  return call<void>("pty_resize", { session_id: sessionId, rows, cols });
+}
+
+/**
+ * Kills a pty session (the whole process tree). Resolves even when the
+ * session is unknown or already gone (cancel is best-effort, never an
+ * error).
+ */
+export function ptyKill(sessionId: string): Promise<void> {
+  return call<void>("pty_kill", { session_id: sessionId });
+}
+
+/**
+ * Subscribes to `pty-output` events (identify yours by `session_id`). Same
+ * contract as {@link onRepoChanged}: never throws, no-op unlisten outside
+ * Tauri.
+ */
+export async function onPtyOutput(
+  cb: (event: PtyOutputEvent) => void,
+): Promise<() => void> {
+  const noop = (): void => {};
+  if (!isTauri()) return noop;
+  try {
+    return await listen<PtyOutputEvent>("pty-output", (event) =>
+      cb(event.payload),
+    );
+  } catch {
+    return noop;
+  }
+}
+
+/**
+ * Subscribes to `pty-exit` events (the shell process for `session_id`
+ * finished). Same contract as {@link onRepoChanged}: never throws, no-op
+ * unlisten outside Tauri.
+ */
+export async function onPtyExit(
+  cb: (event: PtyExitEvent) => void,
+): Promise<() => void> {
+  const noop = (): void => {};
+  if (!isTauri()) return noop;
+  try {
+    return await listen<PtyExitEvent>("pty-exit", (event) =>
+      cb(event.payload),
+    );
+  } catch {
+    return noop;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// M6 (lane H2): forge — gh-assisted GitHub flow (appended;
+// docs/contracts.md "Commands (M6 forge)"). All GitHub traffic goes through
+// the user's `gh` CLI backend-side; these wrappers mirror `forge.rs`.
+// ---------------------------------------------------------------------------
+
+/** Result of `forge_status`: is the user's `gh` CLI usable at all? */
+export interface ForgeStatus {
+  /** `gh` was found on PATH and ran. */
+  available: boolean;
+  /** Parsed `gh --version` number ("2.63.3"); empty when unavailable. */
+  version: string;
+  /** `gh auth status` exited 0 (only meaningful when `available`). */
+  authed: boolean;
+}
+
+/** Owner/repo/branch context of one open repository (`forge_context`). */
+export interface ForgeContext {
+  owner: string;
+  repo: string;
+  /** Current branch (backend errors on detached HEAD instead). */
+  branch: string;
+  /** The `origin` URL the pair was derived from. */
+  remote_url: string;
+}
+
+/** `pr_create` success payload. */
+export interface PrCreated {
+  url: string;
+  number: number;
+}
+
+/** One PR of `pr_list` (`state`: verbatim gh value OPEN/MERGED/CLOSED). */
+export interface PrInfo {
+  number: number;
+  title: string;
+  head_ref_name: string;
+  base_ref_name: string;
+  state: string;
+  is_draft: boolean;
+  url: string;
+  created_at: string | null;
+}
+
+/** Canonical CI check state (`pr_checks`). */
+export type CheckState = "pass" | "fail" | "pending" | "skipping";
+
+/** One CI check of `pr_checks`. */
+export interface CheckInfo {
+  name: string;
+  state: CheckState;
+}
+
+/** `pr_create` rejection kinds (contracts.md `ForgeError.kind`). */
+export type ForgeFailureKind = "NoGh" | "NotAuthed" | "AlreadyExists" | "Other";
+
+/** Structured `pr_create` rejection (serialized object, not a string). */
+export interface ForgeFailure {
+  kind: ForgeFailureKind;
+  message: string;
+  /** For `AlreadyExists`: the existing PR's URL when parseable. */
+  url: string | null;
+}
+
+/** Type guard for the serialized `ForgeError` rejection value. */
+export function isForgeFailure(err: unknown): err is ForgeFailure {
+  return (
+    typeof err === "object" &&
+    err !== null &&
+    typeof (err as { kind?: unknown }).kind === "string" &&
+    typeof (err as { message?: unknown }).message === "string"
+  );
+}
+
+/** {@link IpcError} carrying the structured forge failure fields. */
+export class ForgeIpcError extends IpcError {
+  readonly kind: ForgeFailureKind;
+  readonly url: string | null;
+
+  constructor(command: string, failure: ForgeFailure) {
+    super(command, failure.message);
+    this.name = "ForgeIpcError";
+    this.kind = failure.kind;
+    this.url = failure.url;
+  }
+}
+
+/**
+ * `call` variant that preserves the structured `ForgeError` rejection of the
+ * forge commands: a rejection shaped `{kind, message, url}` becomes a
+ * {@link ForgeIpcError}; anything else normalizes to a plain `IpcError`.
+ */
+async function callForge<T>(
+  command: string,
+  args: Record<string, unknown>,
+): Promise<T> {
+  const transport = transportOverride ?? defaultTransport;
+  try {
+    return (await transport(command, args)) as T;
+  } catch (err) {
+    if (isForgeFailure(err)) throw new ForgeIpcError(command, err);
+    throw toIpcError(command, err);
+  }
+}
+
+/** Detects `gh` on PATH and whether the user is authenticated. */
+export function forgeStatus(): Promise<ForgeStatus> {
+  return call<ForgeStatus>("forge_status", {});
+}
+
+/** Owner/repo/branch context of one open repo (errors on non-GitHub origin). */
+export function forgeContext(repoId: RepoId): Promise<ForgeContext> {
+  return call<ForgeContext>("forge_context", { repo_id: repoId });
+}
+
+/**
+ * Creates a PR via `gh pr create`. Rejects with {@link ForgeIpcError};
+ * `kind "AlreadyExists"` carries the existing PR's URL.
+ */
+export function prCreate(
+  repoId: RepoId,
+  base: string,
+  title: string,
+  body: string,
+  draft: boolean,
+): Promise<PrCreated> {
+  return callForge<PrCreated>("pr_create", {
+    repo_id: repoId,
+    base,
+    title,
+    body,
+    draft,
+  });
+}
+
+/** Open PRs of the repo (`gh pr list --json … --limit 50`). */
+export function prList(repoId: RepoId): Promise<PrInfo[]> {
+  return call<PrInfo[]>("pr_list", { repo_id: repoId });
+}
+
+/** CI checks of one PR, states canonicalized to pass/fail/pending/skipping. */
+export function prChecks(repoId: RepoId, number: number): Promise<CheckInfo[]> {
+  return call<CheckInfo[]>("pr_checks", { repo_id: repoId, number });
+}

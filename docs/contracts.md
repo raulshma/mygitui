@@ -140,3 +140,94 @@ Rust, Python, C++, Go, Java, macOS, Windows, VS Code, JetBrains, Svelte, Vite,
 Terraform, Unreal, Unity); `patterns` is one newline-joined `.gitignore`
 snippet, applied line-by-line via `gitignore_add` (idempotent exact-line
 append at the repo root; single-line patterns only).
+
+## Commands (M5 — embedded terminal)
+
+Backend: `src-tauri/src/pty.rs` (portable-pty; ConPTY on Windows). One
+process-global `PtyRegistry` (tauri-managed state) owns every session; ids
+are `pty-<counter hex>`.
+
+ConPTY handshake: conhost opens every session with a cursor-position probe
+(`ESC[6n`) and withholds child output until it is answered. The backend
+answers the probe and strips it from `pty-output` — the FE never sees it
+and must NOT reply to it (a stray cursor report would pollute shell input).
+
+| Command | Args | Returns | Notes |
+|---|---|---|---|
+| `pty_create` | `repo_id, rows?: u16, cols?: u16` | `session_id: string` | spawns an interactive shell in a fresh pty with cwd = repo root (rows/cols default 24/80; open repo required — no app-cwd sessions) |
+| `pty_write` | `session_id, data: string` | `void` | frontend keystrokes/paste to the shell |
+| `pty_resize` | `session_id, rows: u16, cols: u16` | `void` | panel size changed; informs the kernel winsize |
+| `pty_kill` | `session_id` | `void` (error if unknown/gone) | kills the shell, unregisters; `pty-exit` still fires |
+
+Shell discovery: Windows prefers `pwsh.exe` → `powershell.exe` → `cmd.exe`
+(PATH probe); unix uses `$SHELL` → `bash` → `/bin/sh`, spawned with
+`TERM=xterm-256color` on top of the inherited env.
+
+## Events (M5)
+
+| Event | Payload | Meaning |
+|---|---|---|
+| `pty-output` | `{ session_id, data: string }` | terminal bytes, lossy UTF-8, coalesced into ≤1 event per 16 ms window (256 KiB/event cap, surplus split across consecutive events — never dropped) |
+| `pty-exit` | `{ session_id, code: number }` | final event of a session; `code` is the real exit code (`1` on signal/kill); the session is unregistered before it fires |
+
+Lifecycle: at most 8 concurrent sessions (`pty_create` rejects past the
+cap); a session that exits on its own unregisters itself. Sessions are NOT
+killed backend-side on repo close — the FE must `pty_kill` each terminal
+panel's session when its tab closes; as a backstop the registry's `Drop`
+kills every remaining shell on app exit.
+
+## Commands (M6 — forge / gh-assisted GitHub flow)
+
+All GitHub interaction shells out to the user's `gh` CLI (JSON mode) with the
+repo workdir as cwd — mygitui stores no GitHub tokens; `gh` brings its own
+auth. Processes run argv-array-only (no shell), streams drained concurrently,
+hard timeout with kill on exceed: `--version` 3 s, `auth status` 10 s,
+`pr list` 60 s, `pr checks` 30 s, `pr create` 120 s. Commands run on
+`spawn_blocking` (no op-queue membership — long ops with their own timeouts,
+no event stream). Logic: `src-tauri/src/forge.rs`; tests: `forge_tests.rs`.
+
+| Command | Args | Returns | Notes |
+|---|---|---|---|
+| `forge_status` | — | `ForgeStatus` | `gh --version` + `gh auth status` |
+| `forge_context` | `repo_id` | `ForgeContext` | owner/repo from `origin` URL parse + current branch |
+| `pr_create` | `repo_id, base, title, body, draft: bool` | `PrCreated` | `gh pr create --base --title --body-file <tmp> [--draft]`; rejection is structured `ForgeError` |
+| `pr_list` | `repo_id` | `PrInfo[]` | `gh pr list --json number,title,headRefName,baseRefName,state,isDraft,url,createdAt --limit 50` |
+| `pr_checks` | `repo_id, number` | `CheckInfo[]` | `gh pr checks <n> --json name,state,bucket`; table fallback (✓/✗/- rows) for older gh |
+
+Types (TS mirrors in `src/lib/ipc/client.ts`):
+
+```
+ForgeStatus  = { available: bool, version: string, authed: bool }
+ForgeContext = { owner, repo, branch, remote_url }
+PrCreated    = { url, number }
+PrInfo       = { number, title, head_ref_name, base_ref_name, state: "OPEN"|"MERGED"|"CLOSED",
+                 is_draft: bool, url, created_at: string | null }
+CheckInfo    = { name, state: "pass"|"fail"|"pending"|"skipping" }
+ForgeError   = { kind: "NoGh"|"NotAuthed"|"AlreadyExists"|"Other", message, url: string | null }
+```
+
+`pr_create` rejects with `ForgeError` (serialized object, not a string):
+`NoGh` = gh missing from PATH; `NotAuthed` = auth markers in gh output
+(run `gh auth login`); `AlreadyExists` = a PR exists for the branch —
+`url` carries the existing PR's URL when one is parseable. Remote URL
+parsing accepts `https://github.com/o/r(.git)`, `git@github.com:o/r.git`,
+`ssh|git://…github.com/o/r(.git)` (host matched case-insensitively, `www.`
+stripped); non-GitHub remotes fail `forge_context` with an explanatory
+error and the FE panel explains the gh flow is unavailable.
+
+### M6 FE contracts (orchestrator notes)
+
+- **Mounting**: `ForgePanel.svelte` takes `{ repoId }` and needs a
+  `PanelId` registry entry to be placeable — add `"forge"` to the `PanelId`
+  union + `PANEL_META` (`src/lib/layout/layoutModel.ts`, read-only for this
+  lane) + a `RepoView.svelte` snippet + `TREE_PANELS` membership.
+- **AI event contract** (CreatePrDialog prefill, independent of H1's
+  commit-message contract — reconcile names if H1 shipped a different pair):
+  - dialog **emits** `ai-generate-pr` on `window`:
+    `detail = { repoId: string, commits: [{ sha, summary }] }` (up to 10
+    recent commits, may be empty);
+  - dialog **listens** for `ai-pr-result` on `window`:
+    `detail = { subject: string, body: string }` fills the title/body
+    fields (user typing clears the pending state).
+- **Open in browser** goes through `@tauri-apps/plugin-opener`'s JS API
+  (`openUrl`), guarded outside Tauri — no Rust command needed.

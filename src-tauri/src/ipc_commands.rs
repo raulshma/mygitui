@@ -2371,3 +2371,88 @@ mod m4_gitignore_tests {
         assert_eq!(json[0]["patterns"], templates[0].patterns);
     }
 }
+
+// ---------------------------------------------------------------------------
+// M6 (lane H2): forge — gh-assisted GitHub flow (contracts.md "Commands (M6
+// forge)"). All GitHub traffic shells out to the user's `gh` CLI (JSON mode)
+// with the repo workdir as cwd; mygitui stores no GitHub tokens. The logic
+// lives in `forge.rs` (process runner with hard timeouts + pure parsers,
+// fixture-tested in `forge_tests.rs`); these are thin wrappers. None of the
+// commands join the op queue — `pr_create` is a spec'd long op (120 s
+// timeout inside the runner, kill on exceed) and the rest are
+// `spawn_blocking` reads, following the actions.rs pattern minus the event
+// stream.
+// ---------------------------------------------------------------------------
+
+use crate::forge::{self, CheckInfo, ForgeContext, ForgeError, ForgeStatus, PrCreated, PrInfo};
+
+/// Detect `gh` on PATH and whether the user is authenticated (no repo).
+#[tauri::command(rename_all = "snake_case")]
+pub async fn forge_status() -> ForgeStatus {
+    tauri::async_runtime::spawn_blocking(forge::status_sync)
+        .await
+        .unwrap_or_default()
+}
+
+/// Owner/repo/branch context of one open repo (derived from the `origin`
+/// remote + HEAD; errors when the remote is not GitHub or HEAD is detached).
+#[tauri::command(rename_all = "snake_case")]
+pub async fn forge_context(
+    repo_id: RepoId,
+    state: State<'_, RepoManager>,
+) -> Result<ForgeContext, String> {
+    let root = get_handle(&state, &repo_id)?.root.clone();
+    tauri::async_runtime::spawn_blocking(move || forge::context_sync(&root))
+        .await
+        .map_err(|e| format!("forge_context task failed: {e}"))?
+}
+
+/// Create a PR via `gh pr create` (base, title, body via temp file, draft).
+/// Rejection is the structured [`ForgeError`]; `AlreadyExists` carries the
+/// existing PR's URL when one is parseable from gh's output.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn pr_create(
+    repo_id: RepoId,
+    base: String,
+    title: String,
+    body: String,
+    draft: bool,
+    state: State<'_, RepoManager>,
+) -> Result<PrCreated, ForgeError> {
+    let root = get_handle(&state, &repo_id)
+        .map_err(ForgeError::other)?
+        .root
+        .clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        forge::pr_create_sync(&root, &base, &title, &body, draft)
+    })
+    .await
+    .map_err(|e| ForgeError::other(format!("pr_create task failed: {e}")))?
+}
+
+/// Open PRs of the repo (`gh pr list --json … --limit 50`).
+#[tauri::command(rename_all = "snake_case")]
+pub async fn pr_list(
+    repo_id: RepoId,
+    state: State<'_, RepoManager>,
+) -> Result<Vec<PrInfo>, String> {
+    let root = get_handle(&state, &repo_id)?.root.clone();
+    tauri::async_runtime::spawn_blocking(move || forge::pr_list_sync(&root))
+        .await
+        .map_err(|e| format!("pr_list task failed: {e}"))?
+}
+
+/// CI checks of one PR (`gh pr checks <n> --json name,state,bucket`, table
+/// fallback for older gh); states are canonicalized to
+/// pass/fail/pending/skipping.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn pr_checks(
+    repo_id: RepoId,
+    number: u64,
+    state: State<'_, RepoManager>,
+) -> Result<Vec<CheckInfo>, String> {
+    let root = get_handle(&state, &repo_id)?.root.clone();
+    tauri::async_runtime::spawn_blocking(move || forge::pr_checks_sync(&root, number))
+        .await
+        .map_err(|e| format!("pr_checks task failed: {e}"))?
+}

@@ -36,7 +36,10 @@ export type PanelId =
   | "reflog"
   | "undo"
   | "history"
-  | "diff";
+  | "diff"
+  | "terminal"
+  | "forge"
+  | "actions";
 
 /** Registry order = default tab order (mirrors the pre-M4 RepoView stack). */
 export const PANEL_IDS: readonly PanelId[] = [
@@ -49,6 +52,9 @@ export const PANEL_IDS: readonly PanelId[] = [
   "undo",
   "history",
   "diff",
+  "terminal",
+  "forge",
+  "actions",
 ];
 
 /**
@@ -104,6 +110,18 @@ export const PANEL_META: Record<PanelId, PanelMeta> = {
   diff: {
     label: "Diff",
     icon: "M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8zM14 2v6h6M9 15l6-6M9 9h.01M15 15h.01",
+  },
+  terminal: {
+    label: "Terminal",
+    icon: "M4 17l6-6-6-6M12 19h8",
+  },
+  forge: {
+    label: "GitHub",
+    icon: "M9 12h6m-6 4h4M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20z",
+  },
+  actions: {
+    label: "Actions",
+    icon: "M5 7h14M5 12h9M5 17h5",
   },
 };
 
@@ -602,6 +620,8 @@ export function presetToLayout(preset: LayoutPreset): WorkspaceLayout {
   };
 }
 
+// "terminal" joined the pre-M4 tab stack in M5 (lane G2) — appended last so
+// every earlier tab keeps its index.
 const ALL_LEFT_TABS: PanelId[] = [
   "status",
   "branches",
@@ -610,12 +630,13 @@ const ALL_LEFT_TABS: PanelId[] = [
   "worktrees",
   "reflog",
   "undo",
+  "terminal",
 ];
 
 /**
  * Mirrors the pre-M4 RepoView: a left tabbed stack (status / branches /
- * remotes / stashes / worktrees / reflog / undo) beside history, with the
- * diff as the fixed bottom pane at 40%.
+ * remotes / stashes / worktrees / reflog / undo / terminal) beside history,
+ * with the diff as the fixed bottom pane at 40%.
  */
 export const DEFAULT_LAYOUT: WorkspaceLayout = {
   main: {

@@ -15,6 +15,7 @@
   import type { GitSignature, HookInfo, SigningInfo } from "$lib/ipc/types";
   import { busy } from "$lib/stores/ops.svelte";
   import { toast } from "$lib/toast";
+  import CommitMessageButton from "$lib/components/ai/CommitMessageButton.svelte";
 
   let {
     repoId,
@@ -173,15 +174,14 @@
           Author…
         </button>
 
-        <button
-          class="ai"
-          type="button"
-          disabled
-          title="AI commit messages land in M6"
-          aria-label="Generate commit message with AI (lands in M6)"
-        >
-          AI
-        </button>
+        <CommitMessageButton
+          {repoId}
+          onResult={(d) => {
+            message = d.body ? `${d.subject}
+
+${d.body}` : d.subject;
+          }}
+        />
 
         <button class="go" type="submit" disabled={!canCommit}>
           {#if commitBusy || committing}
@@ -320,8 +320,7 @@
     margin: 0;
   }
 
-  .disclosure,
-  .ai {
+  .disclosure {
     border: 1px solid var(--m3-outline-variant, var(--m3-primary));
     border-radius: var(--m3-shape-extra-small, 4px);
     background: none;
@@ -336,13 +335,7 @@
     background: var(--m3-surface-container-high, var(--m3-surface));
   }
 
-  .ai {
-    cursor: not-allowed;
-    opacity: 0.55;
-  }
-
   .disclosure:focus-visible,
-  .ai:focus-visible,
   .go:focus-visible {
     outline: 2px solid var(--m3-primary);
     outline-offset: 1px;

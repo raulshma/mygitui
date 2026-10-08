@@ -124,6 +124,7 @@ describe("queries", () => {
       "worktrees",
       "reflog",
       "undo",
+      "terminal",
       "history",
     ]);
   });
@@ -395,6 +396,7 @@ describe("default layout + presets", () => {
       "worktrees",
       "reflog",
       "undo",
+      "terminal",
     ]);
     expect((root.a as TabsNode).active).toBe(0);
     expect(root.b).toEqual({ kind: "leaf", id: "leaf-history", panel: "history" });

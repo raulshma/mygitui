@@ -41,6 +41,12 @@
   import HistoryView from "$lib/components/panels/HistoryView.svelte";
   import DiffViewer from "$lib/components/diff/DiffViewer.svelte";
   import AuthDialog from "$lib/components/AuthDialog.svelte";
+  import TerminalPanel from "$lib/components/terminal/TerminalPanel.svelte";
+  import ForgePanel from "$lib/components/forge/ForgePanel.svelte";
+  import ActionsPanel from "$lib/components/actions/ActionsPanel.svelte";
+  import CleanDialog from "$lib/components/actions/CleanDialog.svelte";
+  import CommitMessageButton from "$lib/components/ai/CommitMessageButton.svelte";
+  import { ai } from "$lib/ai/ai.svelte";
   import SplitContainer from "$lib/components/layout/SplitContainer.svelte";
   import { conflictsStore } from "$lib/components/panels/conflictsStore.svelte";
   import {
@@ -50,6 +56,7 @@
   } from "$lib/components/panels/panelModel";
   import {
     firstTabsId,
+    findPanelNode,
     moveToRightGroup,
     panelLabel,
     rightSiblingOf,
@@ -59,6 +66,7 @@
     type PanelId,
   } from "$lib/layout/layoutModel";
   import { layouts } from "$lib/layout/layout.svelte";
+  import { terminals } from "$lib/terminal/terminalStore.svelte";
   import { openPanelPopout } from "$lib/layout/popout";
   import { refreshStatus } from "$lib/stores/tabs.svelte";
   import { startAuthEvents, startOpsEvents } from "$lib/stores/ops.svelte";
@@ -166,6 +174,21 @@
     layouts.addPanel(root, panel, target);
   }
 
+  /**
+   * Header "＋ Terminal" button: focuses the terminal tab when the panel is
+   * already placed, otherwise adds it into the first tab group.
+   */
+  function onNewTerminal(): void {
+    const holder = findPanelNode(resolved.layout.main, "terminal");
+    if (holder) {
+      if (holder.kind === "tabs") {
+        layouts.setActiveTab(root, holder.id, holder.tabs.indexOf("terminal"));
+      }
+      return;
+    }
+    layouts.addPanel(root, "terminal", firstTabsId(resolved.layout.main) ?? undefined);
+  }
+
   // --- Panel registry (PanelId → snippet) -----------------------------------
 
   function renderPanel(id: PanelId): Snippet {
@@ -186,10 +209,50 @@
         return undoPanel;
       case "history":
         return historyPanel;
+      case "terminal":
+        return terminalPanel;
+      case "forge":
+        return forgePanel;
+      case "actions":
+        return actionsPanel;
       default:
         return missingPanel;
     }
   }
+
+  // --- Clean dialog + AI feature bridge ------------------------------------
+
+  let cleanOpen = $state(false);
+
+  // H2's CreatePrDialog asks for AI generation via a window event; H1's
+  // runFeature answers it. One bridge, registered once per workspace mount.
+  $effect(() => {
+    const onGenerate = (event: Event) => {
+      const detail = (event as CustomEvent).detail as
+        | { repoId?: string }
+        | undefined;
+      const target = detail?.repoId ?? repoId;
+      void (async () => {
+        try {
+          const { ai } = await import("$lib/ai/ai.svelte");
+          const outcome = await ai.run("pr-title-body", { repoId: target });
+          window.dispatchEvent(
+            new CustomEvent("ai-pr-result", {
+              detail: {
+                subject: outcome.message?.subject ?? outcome.result.text,
+                body: outcome.message?.body ?? "",
+              },
+            }),
+          );
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          toast(`AI PR description failed: ${message}`, { kind: "error" });
+        }
+      })();
+    };
+    window.addEventListener("ai-generate-pr", onGenerate);
+    return () => window.removeEventListener("ai-generate-pr", onGenerate);
+  });
 
   // --- Conflict banner state ---------------------------------------------
 
@@ -247,6 +310,20 @@
     const id = repoId;
     void autofetch.start(id);
     return () => autofetch.stop(id);
+  });
+
+  // Terminal teardown on repo close: the view unmounts only when the last
+  // tab closes (switching repos re-uses this component), so mirror the
+  // current repoId in a plain variable and dispose that one at unmount —
+  // the cleanup must NOT run per repoId change, or switching tabs would
+  // kill the previous repo's shell. (Initialized empty: the first effect
+  // fills it before anything can unmount.)
+  let latestRepoId = "";
+  $effect(() => {
+    latestRepoId = repoId;
+  });
+  $effect(() => {
+    return () => terminals.dispose(latestRepoId);
   });
 
   // Reset view state when switching repos.
@@ -370,6 +447,15 @@
 {#snippet historyPanel()}
   <HistoryView {repoId} onPopout={popOutHistory} />
 {/snippet}
+{#snippet terminalPanel()}
+  <TerminalPanel {repoId} />
+{/snippet}
+{#snippet forgePanel()}
+  <ForgePanel {repoId} />
+{/snippet}
+{#snippet actionsPanel()}
+  <ActionsPanel {repoId} />
+{/snippet}
 {#snippet missingPanel()}
   <aside class="missing-panel">This panel is not available.</aside>
 {/snippet}
@@ -400,6 +486,22 @@
         onclick={onSaveLayout}
       >
         Save layout…
+      </button>
+      <button
+        class="layout-btn"
+        type="button"
+        title="Open (or focus) this repository's terminal panel"
+        onclick={onNewTerminal}
+      >
+        ＋ Terminal
+      </button>
+      <button
+        class="layout-btn"
+        type="button"
+        title="Clean untracked files (preview + undo checkpoint)"
+        onclick={() => (cleanOpen = true)}
+      >
+        Clean…
       </button>
       {#if hiddenPanels.length > 0}
         <select
@@ -521,7 +623,16 @@
   </div>
 {/if}
 
-<AuthDialog />
+<CleanDialog
+      {repoId}
+      open={cleanOpen}
+      onClose={() => (cleanOpen = false)}
+      onDone={() => {
+        cleanOpen = false;
+        void refreshStatus(repoId);
+      }}
+    />
+    <AuthDialog />
 
 <style>
   .repo-workspace {

@@ -9,9 +9,15 @@ mod actions_tests;
 mod auth;
 mod cli;
 mod diffcore;
+mod forge;
+#[cfg(test)]
+mod forge_tests;
 mod ipc_commands;
 mod keyring_store;
 mod ops;
+mod pty;
+#[cfg(test)]
+mod pty_tests;
 mod repo;
 mod watcher;
 
@@ -45,6 +51,10 @@ pub fn run() {
         // M4: custom action runs (action_run/action_cancel + action-output
         // events) track their live children here.
         .manage(actions::ActionRegistry::default())
+        // M5: embedded terminal sessions (pty_create/pty_write/pty_resize/
+        // pty_kill + pty-output/pty-exit events) live here; dropping the
+        // registry on app exit kills every remaining shell.
+        .manage(pty::PtyRegistry::default())
         .invoke_handler(tauri::generate_handler![
             keyring_store::secrets_get,
             keyring_store::secrets_set,
@@ -115,6 +125,15 @@ pub fn run() {
             ipc_commands::repo_clean,
             ipc_commands::action_run,
             ipc_commands::action_cancel,
+            pty::pty_create,
+            pty::pty_write,
+            pty::pty_resize,
+            pty::pty_kill,
+            ipc_commands::forge_status,
+            ipc_commands::forge_context,
+            ipc_commands::pr_create,
+            ipc_commands::pr_list,
+            ipc_commands::pr_checks,
         ])
         .run(tauri::generate_context!())
         .expect("error while running mygitui");

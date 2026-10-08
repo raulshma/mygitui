@@ -40,6 +40,10 @@ import {
   resetTransport,
   setChannelFactory,
   setTransport,
+  SECRET_KEYS,
+  secretsDelete,
+  secretsGet,
+  secretsSet,
   signingInfo,
   stage,
   stageAll,
@@ -825,5 +829,58 @@ describe("ipc client repo_read_file wrapper", () => {
     expect(err).toBeInstanceOf(IpcError);
     expect((err as IpcError).command).toBe("repo_read_file");
     expect((err as IpcError).message).toContain("..");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// M6 (lane H1, appended): OS-keyring secrets wrappers
+// ---------------------------------------------------------------------------
+
+describe("ipc client secrets_* wrappers", () => {
+  it("secretsGet sends the key and resolves the stored value verbatim", async () => {
+    const { transport, calls } = mockTransport(() => "sk-or-v1-abc");
+    setTransport(transport);
+
+    await expect(secretsGet(SECRET_KEYS.openrouterApiKey)).resolves.toBe("sk-or-v1-abc");
+
+    expect(calls).toEqual([
+      { command: "secrets_get", args: { key: "openrouter.api-key" } },
+    ]);
+  });
+
+  it("secretsGet resolves null when no entry exists", async () => {
+    const { transport } = mockTransport(() => null);
+    setTransport(transport);
+
+    await expect(secretsGet("opencode.server.password")).resolves.toBeNull();
+  });
+
+  it("secretsSet sends key + value (snake_case command name)", async () => {
+    const { transport, calls } = mockTransport(() => undefined);
+    setTransport(transport);
+
+    await expect(
+      secretsSet(SECRET_KEYS.opencodeServerPassword, "hunter2"),
+    ).resolves.toBeUndefined();
+
+    expect(calls).toEqual([
+      { command: "secrets_set", args: { key: "opencode.server.password", value: "hunter2" } },
+    ]);
+  });
+
+  it("secretsDelete sends the key and is idempotent (no entry = ok)", async () => {
+    const { transport, calls } = mockTransport(() => undefined);
+    setTransport(transport);
+
+    await expect(secretsDelete(SECRET_KEYS.openrouterApiKey)).resolves.toBeUndefined();
+
+    expect(calls).toEqual([
+      { command: "secrets_delete", args: { key: "openrouter.api-key" } },
+    ]);
+  });
+
+  it("SECRET_KEYS pins the keyring entry names", () => {
+    expect(SECRET_KEYS.openrouterApiKey).toBe("openrouter.api-key");
+    expect(SECRET_KEYS.opencodeServerPassword).toBe("opencode.server.password");
   });
 });
