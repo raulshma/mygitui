@@ -360,6 +360,47 @@ pub struct BisectState {
     pub orig_branch: Option<String>,
 }
 
+// ---------- M11: repo health / maintenance ----------
+
+/// Health snapshot for one repository (fs-only reads; no CLI).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct RepoHealth {
+    /// Size of the `.git` directory.
+    pub git_size_bytes: u64,
+    /// Size of the worktree (tracked + untracked files).
+    pub worktree_size_bytes: u64,
+    pub loose_objects: u64,
+    /// `git count-objects -v` pack size in KiB when freshly measured;
+    /// null until the first `count_objects` op runs.
+    pub packed_objects: Option<u64>,
+    pub pack_files: u64,
+    /// `objects/info/commit-graph` present (revwalk acceleration).
+    pub has_commit_graph: bool,
+    pub commit_graph_bytes: u64,
+    pub packed_refs: bool,
+    /// Last `gc.log` modification (unix seconds), when any.
+    pub last_gc: Option<i64>,
+}
+
+/// Sparse-checkout state (`git sparse-checkout list`, cone mode flag).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SparseInfo {
+    pub enabled: bool,
+    pub cone: bool,
+    pub patterns: Vec<String>,
+}
+
+/// `git lfs` availability + what the repo tracks through it.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct LfsStatus {
+    /// `git lfs version` succeeded.
+    pub installed: bool,
+    /// Detail line from `git lfs version` (or the failure reason).
+    pub version: Option<String>,
+    /// `filter=lfs` patterns declared in tracked `.gitattributes` files.
+    pub tracked_patterns: Vec<String>,
+}
+
 // ---------- M3: power + safety model ----------
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

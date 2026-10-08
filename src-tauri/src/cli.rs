@@ -57,6 +57,12 @@ where
         .collect()
 }
 
+/// Pure: is this env key on the pass-through list? (Shared with the
+/// maintenance/rebase-exec runners.)
+pub(crate) fn allowlisted(key: &str) -> bool {
+    ENV_ALLOWLIST.contains(&key)
+}
+
 /// Pure: argv for `git commit`. The message always goes through `-F` with a
 /// file argument (quoting-proof); flags map 1:1 from [`CommitOptions`].
 pub(crate) fn build_commit_args(message_file: &str, opts: &CommitOptions) -> Vec<String> {

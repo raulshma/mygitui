@@ -411,3 +411,31 @@ export interface MergetoolResult {
   /** Combined trimmed stdout+stderr. */
   output: string;
 }
+
+// ---------- M11: repo health / maintenance ----------
+
+export interface RepoHealth {
+  git_size_bytes: number;
+  worktree_size_bytes: number;
+  loose_objects: number;
+  /** `count-objects -v` pack size KiB (null until first measured). */
+  packed_objects: number | null;
+  pack_files: number;
+  has_commit_graph: boolean;
+  commit_graph_bytes: number;
+  packed_refs: boolean;
+  /** Last gc.log modification (unix seconds). */
+  last_gc: number | null;
+}
+
+export interface SparseInfo {
+  enabled: boolean;
+  cone: boolean;
+  patterns: string[];
+}
+
+export interface LfsStatus {
+  installed: boolean;
+  version: string | null;
+  tracked_patterns: string[];
+}

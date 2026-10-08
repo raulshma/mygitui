@@ -30,7 +30,7 @@
    * selection (g/G/Home/End jump), and aria-activedescendant tracks it.
    */
   import { cherryPick, repoDiff, revertCommits } from "$lib/ipc/client";
-  import { describe } from "$lib/ipc/client";
+  import { describe, archiveSpec, pickSaveFile } from "$lib/ipc/client";
   import type { CommitInfo, FileDiff, MergeResult } from "$lib/ipc/types";
   import GraphCanvas from "$lib/components/graph/GraphCanvas.svelte";
   import DiffViewer from "$lib/components/diff/DiffViewer.svelte";
@@ -553,8 +553,32 @@
       { id: "rebase", label: "Rebase from here…", run: rebaseFromHere },
       { id: "bookmark", label: bookmarked ? "Remove bookmark" : "Bookmark commit", run: () => toggleBookmark(sha) },
       { id: "copy", label: "Copy sha", run: copySha },
+      { id: "archive", label: "Export archive…", run: () => void exportArchive(sha) },
     ];
     showMenuAt(event, entries);
+  }
+
+  /** M11: zip/tar export of the commit's tree via the save picker. */
+  async function exportArchive(spec: string): Promise<void> {
+    const destination = await pickSaveFile("Export archive", `archive-${spec.slice(0, 8)}.zip`, [
+      { name: "Zip archive", extensions: ["zip"] },
+      { name: "Tar archive", extensions: ["tar", "gz"] },
+    ]);
+    if (!destination) return;
+    const format = destination.endsWith(".zip")
+      ? "zip"
+      : destination.endsWith(".tar")
+        ? "tar"
+        : "tar.gz";
+    try {
+      await archiveSpec(repoId, spec, format, destination);
+      toast(`Archive written to ${destination}`, { kind: "success" });
+    } catch (err) {
+      toast(
+        `Archive failed: ${err instanceof Error ? err.message : String(err)}`,
+        { kind: "error" },
+      );
+    }
   }
 
   /** Changed-file right-click: per-file actions. */

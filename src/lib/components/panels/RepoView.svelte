@@ -40,6 +40,7 @@
   import StashPanel from "$lib/components/panels/StashPanel.svelte";
   import WorktreePanel from "$lib/components/panels/WorktreePanel.svelte";
   import SubmodulePanel from "$lib/components/panels/SubmodulePanel.svelte";
+  import RepoPanel from "$lib/components/panels/RepoPanel.svelte";
   import ReflogPanel from "$lib/components/panels/ReflogPanel.svelte";
   import UndoPanel from "$lib/components/safety/UndoPanel.svelte";
   import ConflictEditor from "$lib/components/merge/ConflictEditor.svelte";
@@ -229,6 +230,8 @@
         return stashesPanel;
       case "worktrees":
         return worktreesPanel;
+      case "health":
+        return healthPanel;
       case "submodules":
         return submodulesPanel;
       case "reflog":
@@ -505,6 +508,9 @@
 {/snippet}
 {#snippet worktreesPanel()}
   <WorktreePanel {repoId} {root} onMutated={refresh} />
+{/snippet}
+{#snippet healthPanel()}
+  <RepoPanel {repoId} onMutated={refresh} />
 {/snippet}
 {#snippet submodulesPanel()}
   <SubmodulePanel {repoId} {root} onMutated={refresh} />

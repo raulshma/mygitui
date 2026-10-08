@@ -33,6 +33,7 @@ export type PanelId =
   | "remotes"
   | "stashes"
   | "worktrees"
+  | "health"
   | "submodules"
   | "reflog"
   | "undo"
@@ -50,6 +51,7 @@ export const PANEL_IDS: readonly PanelId[] = [
   "remotes",
   "stashes",
   "worktrees",
+  "health",
   "submodules",
   "reflog",
   "undo",
@@ -98,6 +100,10 @@ export const PANEL_META: Record<PanelId, PanelMeta> = {
   worktrees: {
     label: "Worktrees",
     icon: "M20 9h-9a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h9a2 2 0 0 0 2-2v-9a2 2 0 0 0-2-2zM5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1",
+  },
+  health: {
+    label: "Repo",
+    icon: "M12 3v18M3 12h18M5.5 5.5l13 13M18.5 5.5l-13 13",
   },
   submodules: {
     label: "Submodules",

@@ -13,6 +13,7 @@ mod forge;
 #[cfg(test)]
 mod forge_tests;
 mod ipc_commands;
+mod maintenance;
 mod keyring_store;
 mod mergetool;
 mod ops;
@@ -124,6 +125,14 @@ pub fn run() {
             ipc_commands::bisect_reset,
             ipc_commands::describe,
             ipc_commands::autosquash_plan,
+            ipc_commands::repo_health,
+            ipc_commands::maintenance_run,
+            ipc_commands::archive,
+            ipc_commands::sparse_info,
+            ipc_commands::sparse_apply,
+            ipc_commands::lfs_status,
+            ipc_commands::lfs_run,
+            ipc_commands::clone_blobless,
             ipc_commands::stash_list,
             ipc_commands::stash_push,
             ipc_commands::stash_apply,

@@ -38,6 +38,7 @@ import type {
   FetchOptions,
   FileDiff,
   HookInfo,
+  LfsStatus,
   LogFilter,
   LogPage,
   MergeOptions,
@@ -54,11 +55,13 @@ import type {
   ReflogEntry,
   RemoteBranchInfo,
   RemoteInfo,
+  RepoHealth,
   RepoId,
   RepoInfo,
   RepoStatus,
   ResetKind,
   SigningInfo,
+  SparseInfo,
   StageRequest,
   StageTarget,
   StashInfo,
@@ -410,6 +413,83 @@ export async function pickFolder(): Promise<string | null> {
     console.warn("[ipc] folder picker failed:", err);
     return null;
   }
+}
+
+/**
+ * Save-file picker for exports (M11 archive). Returns the chosen path or
+ * `null` on cancel / non-Tauri. Never throws.
+ */
+export async function pickSaveFile(
+  title: string,
+  defaultName: string,
+  filters: { name: string; extensions: string[] }[],
+): Promise<string | null> {
+  if (!isTauri()) return null;
+  try {
+    const dialog = await import("@tauri-apps/plugin-dialog");
+    const path = await dialog.save({ title, defaultPath: defaultName, filters });
+    return typeof path === "string" && path !== "" ? path : null;
+  } catch (err) {
+    console.warn("[ipc] save picker failed:", err);
+    return null;
+  }
+}
+
+// ---------- M11: repo health / maintenance / sparse / LFS / archive ----------
+
+/** Health snapshot (fs-only sizes + object counts). */
+export function repoHealth(repoId: RepoId): Promise<RepoHealth> {
+  return call<RepoHealth>("repo_health", { repo_id: repoId });
+}
+
+/** Runs one maintenance op (`gc`|`prune`|`commit_graph`|`pack_refs`|`count_objects`). */
+export function maintenanceRun(repoId: RepoId, op: string): Promise<string> {
+  return call<string>("maintenance_run", { repo_id: repoId, op });
+}
+
+/** `git archive --format <format> <spec>` into `destination`. */
+export function archiveSpec(
+  repoId: RepoId,
+  spec: string,
+  format: string,
+  destination: string,
+): Promise<void> {
+  return call<void>("archive", { repo_id: repoId, spec, format, destination });
+}
+
+/** Sparse-checkout state (cone mode). */
+export function sparseInfo(repoId: RepoId): Promise<SparseInfo> {
+  return call<SparseInfo>("sparse_info", { repo_id: repoId });
+}
+
+/** Applies sparse-checkout patterns (cone; empty list = full checkout). */
+export function sparseApply(
+  repoId: RepoId,
+  patterns: string[],
+  add: boolean,
+): Promise<void> {
+  return call<void>("sparse_apply", { repo_id: repoId, patterns, add });
+}
+
+/** `git lfs` availability + tracked patterns. */
+export function lfsStatus(repoId: RepoId): Promise<LfsStatus> {
+  return call<LfsStatus>("lfs_status", { repo_id: repoId });
+}
+
+/** Runs `git lfs pull|push|install|fetch`. */
+export function lfsRun(repoId: RepoId, subcommand: string): Promise<string> {
+  return call<string>("lfs_run", { repo_id: repoId, subcommand });
+}
+
+/** Blobless (partial) clone via the git CLI (`--filter=blob:none`). */
+export function cloneBlobless(
+  url: string,
+  destination: string,
+  depth?: number,
+): Promise<string> {
+  const args: Record<string, unknown> = { url, destination };
+  if (depth !== undefined) args.depth = depth;
+  return call<string>("clone_blobless", args);
 }
 
 // ---------------------------------------------------------------------------

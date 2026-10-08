@@ -18,9 +18,9 @@ use tauri::State;
 use crate::engine::git_engine::EngineError;
 use crate::engine::types::{
     BisectMark, BisectState, BlameLine, CheckpointInfo, CommitInfo, ConflictFile,
-    ConflictResolution, DiffSide, FileDiff, LogFilter, MergeOptions, MergeResult, RebaseState,
-    RebaseStep, ReflogEntry, RemoteBranchInfo, RepoId, RepoInfo, RepoStatus, ResetKind, StashInfo,
-    TagInfo, WorktreeInfo,
+    ConflictResolution, DiffSide, FileDiff, LogFilter, LfsStatus, MergeOptions, MergeResult,
+    RebaseState, RebaseStep, ReflogEntry, RemoteBranchInfo, RepoHealth, RepoId, RepoInfo,
+    RepoStatus, ResetKind, SparseInfo, StashInfo, TagInfo, WorktreeInfo,
 };
 use crate::graph::types::{self, GraphRow};
 use crate::repo::{RepoHandle, RepoManager, StreamHandle};
@@ -1749,6 +1749,184 @@ pub async fn autosquash_plan(
     })
     .await
     .map_err(|e| format!("autosquash_plan task failed: {e}"))?
+}
+
+// ---------- M11: repo health / maintenance / sparse / LFS / archive ----------
+
+/// Health snapshot (fs-only, fast; safe to poll from a panel).
+#[tauri::command(rename_all = "snake_case")]
+pub async fn repo_health(
+    repo_id: RepoId,
+    state: State<'_, RepoManager>,
+) -> Result<RepoHealth, String> {
+    let handle = get_handle(&state, &repo_id)?;
+    let root = handle.root.clone();
+    let git_dir = handle.git_dir.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        Ok(crate::maintenance::repo_health(
+            std::path::Path::new(&root),
+            std::path::Path::new(&git_dir),
+        ))
+    })
+    .await
+    .map_err(|e| format!("repo_health task failed: {e}"))?
+}
+
+/// Runs one maintenance op on the op queue (`gc`, `prune`, `commit_graph`,
+/// `pack_refs`, `count_objects`); resolves with the command output.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn maintenance_run(
+    repo_id: RepoId,
+    op: String,
+    state: State<'_, RepoManager>,
+) -> Result<String, String> {
+    let handle = get_handle(&state, &repo_id)?;
+    let root = handle.root.clone();
+    finish_op(enqueue_mutation(&handle, "maintenance", move |_ctx, _repo| {
+        let workdir = std::path::Path::new(&root);
+        let parsed = match op.as_str() {
+            "gc" => crate::maintenance::MaintenanceOp::Gc,
+            "prune" => crate::maintenance::MaintenanceOp::Prune,
+            "commit_graph" => crate::maintenance::MaintenanceOp::CommitGraph,
+            "pack_refs" => crate::maintenance::MaintenanceOp::PackRefs,
+            // Exact object counts (parses count-objects -v into a summary).
+            "count_objects" => {
+                return crate::maintenance::count_objects(workdir)
+                    .map(|(loose, packed_kib)| {
+                        format!("loose objects: {loose}, packed size: {packed_kib} KiB")
+                    })
+                    .map_err(EngineError::Invalid);
+            }
+            other => return Err(EngineError::Invalid(format!("unknown maintenance op `{other}`"))),
+        };
+        let (args, timeout) = parsed.args();
+        crate::maintenance::git_run(workdir, args, timeout).map_err(EngineError::Invalid)
+    }))
+    .await
+}
+
+/// `git archive --format <zip|tar|tar.gz> <ref> -o <destination>`.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn archive(
+    repo_id: RepoId,
+    spec: String,
+    format: String,
+    destination: String,
+    state: State<'_, RepoManager>,
+) -> Result<(), String> {
+    if !["zip", "tar", "tar.gz"].contains(&format.as_str()) {
+        return Err(format!("unsupported archive format `{format}`"));
+    }
+    if spec.contains(';') || destination.is_empty() {
+        return Err("invalid archive arguments".into());
+    }
+    let handle = get_handle(&state, &repo_id)?;
+    let root = handle.root.clone();
+    finish_op(enqueue_mutation(&handle, "archive", move |_ctx, _repo| {
+        crate::maintenance::git_run(
+            std::path::Path::new(&root),
+            &["archive", "--format", &format, &spec, "-o", &destination],
+            1800,
+        )
+        .map(|_| ())
+        .map_err(EngineError::Invalid)
+    }))
+    .await
+}
+
+/// Sparse-checkout state.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn sparse_info(
+    repo_id: RepoId,
+    state: State<'_, RepoManager>,
+) -> Result<SparseInfo, String> {
+    let handle = get_handle(&state, &repo_id)?;
+    let root = handle.root.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        Ok(crate::maintenance::sparse_info(std::path::Path::new(&root)))
+    })
+    .await
+    .map_err(|e| format!("sparse_info task failed: {e}"))?
+}
+
+/// Applies sparse-checkout patterns (cone mode; empty = full checkout).
+#[tauri::command(rename_all = "snake_case")]
+pub async fn sparse_apply(
+    repo_id: RepoId,
+    patterns: Vec<String>,
+    add: bool,
+    state: State<'_, RepoManager>,
+) -> Result<(), String> {
+    let handle = get_handle(&state, &repo_id)?;
+    let root = handle.root.clone();
+    finish_op(enqueue_mutation(&handle, "sparse", move |_ctx, _repo| {
+        crate::maintenance::sparse_apply(std::path::Path::new(&root), &patterns, add)
+            .map_err(EngineError::Invalid)
+    }))
+    .await
+}
+
+/// `git lfs` availability + tracked patterns.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn lfs_status(
+    repo_id: RepoId,
+    state: State<'_, RepoManager>,
+) -> Result<LfsStatus, String> {
+    let handle = get_handle(&state, &repo_id)?;
+    let root = handle.root.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        Ok(crate::maintenance::lfs_status(std::path::Path::new(&root)))
+    })
+    .await
+    .map_err(|e| format!("lfs_status task failed: {e}"))?
+}
+
+/// Runs `git lfs pull|push|install|fetch`.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn lfs_run(
+    repo_id: RepoId,
+    subcommand: String,
+    state: State<'_, RepoManager>,
+) -> Result<String, String> {
+    let handle = get_handle(&state, &repo_id)?;
+    let root = handle.root.clone();
+    finish_op(enqueue_mutation(&handle, "lfs", move |_ctx, _repo| {
+        crate::maintenance::lfs_run(std::path::Path::new(&root), &subcommand)
+            .map_err(EngineError::Invalid)
+    }))
+    .await
+}
+
+/// Blobless (partial) clone via the git CLI: `git clone --filter=blob:none`.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn clone_blobless(
+    url: String,
+    destination: String,
+    depth: Option<u32>,
+) -> Result<String, String> {
+    if url.contains(';') || destination.is_empty() {
+        return Err("invalid clone arguments".into());
+    }
+    let parent = std::path::Path::new(&destination)
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(std::env::temp_dir);
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut args: Vec<String> = vec![
+            "clone".into(),
+            "--filter=blob:none".into(),
+            url.clone(),
+            destination.clone(),
+        ];
+        if let Some(depth) = depth {
+            args.insert(2, format!("--depth={depth}"));
+        }
+        let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
+        crate::maintenance::git_run(&parent, &arg_refs, 3600)?;
+        Ok(destination)
+    })
+    .await
+    .map_err(|e| format!("clone_blobless task failed: {e}"))?
 }
 
 #[tauri::command(rename_all = "snake_case")]

@@ -16,6 +16,7 @@
   import { onMount } from "svelte";
   import {
     cloneRepo,
+    cloneBlobless,
     onCloneProgress,
     pickFolder,
     type CloneProgressEvent,
@@ -28,6 +29,7 @@
   let url = $state("");
   let destination = $state("");
   let shallow = $state(false);
+  let blobless = $state(false);
   let cloning = $state(false);
   let error = $state("");
   let progress = $state<CloneProgressEvent | null>(null);
@@ -85,7 +87,10 @@
     progress = null;
     activeUrl = targetUrl;
     try {
-      const path = await cloneRepo(targetUrl, destPath, shallow ? 1 : undefined);
+      // Blobless clones route through the git CLI (libgit2 has no --filter).
+      const path = blobless
+        ? await cloneBlobless(targetUrl, destPath, shallow ? 1 : undefined)
+        : await cloneRepo(targetUrl, destPath, shallow ? 1 : undefined);
       toast(`Cloned ${targetUrl} → ${path}`, { kind: "success" });
       open = false;
       try {
@@ -173,6 +178,11 @@
         <label class="check">
           <input type="checkbox" bind:checked={shallow} disabled={cloning} />
           <span>Shallow clone (<code>--depth 1</code>)</span>
+        </label>
+
+        <label class="check">
+          <input type="checkbox" bind:checked={blobless} disabled={cloning} />
+          <span>Blobless clone (<code>--filter=blob:none</code>, fetches file contents on demand)</span>
         </label>
 
         {#if error}
