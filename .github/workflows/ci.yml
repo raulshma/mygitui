@@ -53,6 +53,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Same package set release.yml installs: Tauri's Linux backend links
+      # against GTK/WebKit, which ubuntu runners don't ship by default.
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev librsvg2-dev patchelf
+
       - name: Setup Rust (stable + rustfmt + clippy)
         uses: dtolnay/rust-toolchain@stable
         with:
