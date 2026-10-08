@@ -433,17 +433,21 @@ mod tests {
 
     #[test]
     fn relativize_uses_forward_slashes() {
+        // Forward slashes segment on every platform, so this case is portable.
         let root = Path::new("C:/Code/mygitui/fixtures/basic");
         let path = Path::new("C:/Code/mygitui/fixtures/basic/src/main.py");
         assert_eq!(relativize(root, path), "src/main.py");
+    }
 
+    // Backslash separators and \\?\ verbatim prefixes only segment as path
+    // components on Windows; on unix they'd be literal filename characters.
+    #[cfg(windows)]
+    #[test]
+    fn relativize_normalizes_windows_separators_and_verbatim_prefix() {
         let root_bs = Path::new(r"C:\Code\mygitui\fixtures\basic\");
         let path_bs = Path::new(r"C:\Code\mygitui\fixtures\basic\src\main.py");
         assert_eq!(relativize(root_bs, path_bs), "src/main.py");
-    }
 
-    #[test]
-    fn relativize_strips_verbatim_prefix() {
         let root = Path::new(r"C:\Code\mygitui");
         let path = Path::new(r"\\?\C:\Code\mygitui\src\lib.rs");
         assert_eq!(relativize(root, path), "src/lib.rs");

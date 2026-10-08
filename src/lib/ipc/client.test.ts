@@ -178,7 +178,7 @@ function mockTransport(
 
 /** Extracts the channel a streaming command received. */
 function channelOf<T>(call: RecordedCall): ChannelLike<T> {
-  return call.args.channel as ChannelLike<T>;
+  return call.args.on_page as ChannelLike<T>;
 }
 
 afterEach(() => {
@@ -295,7 +295,7 @@ describe("ipc client streaming wrappers", () => {
     expect(calls[0]?.command).toBe("repo_log_stream");
     expect(calls[0]?.args.repo_id).toBe("repo-1");
     expect(calls[0]?.args.filter).toEqual({ regex: false, refs: [], follow: false });
-    expect(typeof (calls[0]?.args.channel as ChannelLike<LogPage>).onmessage).toBe(
+    expect(typeof (calls[0]?.args.on_page as ChannelLike<LogPage>).onmessage).toBe(
       "function",
     );
   });

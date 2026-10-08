@@ -27,7 +27,7 @@
     branchColorStore,
     type BranchColorRule,
   } from "$lib/stats/branchColors.svelte";
-  import { buildHeatmap, streaks, totals } from "$lib/stats/heatmapModel";
+  import { buildHeatmap, streaks, todayISO, totals } from "$lib/stats/heatmapModel";
   import { statsStore } from "$lib/stats/statsStore.svelte";
 
   let { repoId, root }: { repoId: string; root: string } = $props();
@@ -62,7 +62,7 @@
 
   const grid = $derived(buildHeatmap(activity));
   const summary = $derived(totals(activity));
-  const streakSummary = $derived(streaks(activity));
+  const streakSummary = $derived(streaks(activity, todayISO()));
   /** Longest contributor count — the bar scale (0-safe). */
   const maxCount = $derived(
     contributors.reduce((max, c) => Math.max(max, c.count), 0),

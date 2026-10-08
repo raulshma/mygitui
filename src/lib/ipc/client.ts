@@ -192,7 +192,8 @@ async function runStream<T>(
   }
   const factory = channelFactoryOverride ?? defaultChannelFactory;
   const channel = factory<T>((page) => onPage(page));
-  await call<void>(command, { ...args, channel });
+  // Backend stream commands declare the channel arg as `on_page`.
+  await call<void>(command, { ...args, on_page: channel });
 }
 
 const EMPTY_LOG_PAGE: LogPage = {

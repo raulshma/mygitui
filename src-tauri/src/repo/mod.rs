@@ -348,23 +348,45 @@ mod tests {
 
     /// Generate fixtures if missing (requires git; `bash` from Git Bash on
     /// Windows). Tolerates a concurrent regeneration by another lane's test
-    /// bootstrap: the script wipes and recreates `fixtures/`, so a failure is
-    /// retried and accepted as soon as the fixture repo exists.
+    /// bootstrap: the script wipes and recreates `fixtures/`, so generation
+    /// is single-flighted — parallel tests queue on the lock instead of each
+    /// running the script and wiping it out from under the others.
     fn ensure_fixtures() {
+        static BOOTSTRAP: std::sync::Mutex<()> = std::sync::Mutex::new(());
         if fixtures_basic().join(".git").exists() {
             return;
         }
+        let _guard = BOOTSTRAP.lock().unwrap();
+        // A sibling test may have finished generating while we waited.
+        if fixtures_basic().join(".git").exists() {
+            return;
+        }
+        // On Windows, a bare `bash` on PATH can resolve to the WSL launcher
+        // (System32\bash.exe), which exits 1 on distro-less runner images.
+        // Fall back to Git for Windows' own bash, which the script targets.
+        #[cfg(windows)]
+        let candidates: Vec<std::ffi::OsString> = vec![
+            "bash".into(),
+            "C:\\Program Files\\Git\\bin\\bash.exe".into(),
+        ];
+        #[cfg(not(windows))]
+        let candidates: Vec<std::ffi::OsString> = vec!["bash".into()];
         let mut last_status = None;
         for _ in 0..3 {
-            let status = std::process::Command::new("bash")
-                .arg("scripts/make-fixtures.sh")
-                .current_dir(project_root())
-                .status()
-                .expect("spawn `bash scripts/make-fixtures.sh`");
-            if status.success() && fixtures_basic().join(".git").exists() {
-                return;
+            for bash in &candidates {
+                let Ok(status) = std::process::Command::new(bash)
+                    .arg("scripts/make-fixtures.sh")
+                    .current_dir(project_root())
+                    .status()
+                else {
+                    last_status = None;
+                    continue;
+                };
+                last_status = Some(status);
+                if status.success() && fixtures_basic().join(".git").exists() {
+                    return;
+                }
             }
-            last_status = Some(status);
             std::thread::sleep(std::time::Duration::from_millis(300));
         }
         panic!(

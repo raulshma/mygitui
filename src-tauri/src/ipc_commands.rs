@@ -1833,7 +1833,16 @@ mod m4_clean_tests {
         ));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        git2::Repository::init(&dir).unwrap();
+        let repo = git2::Repository::init(&dir).unwrap();
+        // Clean writes a checkpoint commit, which needs a committer identity.
+        // CI runners have no global git config, so set it locally (same as the
+        // other engine test helpers).
+        repo.config()
+            .and_then(|mut c| {
+                c.set_str("user.name", "Clean Test")?;
+                c.set_str("user.email", "clean@test.local")
+            })
+            .unwrap();
         dir
     }
 

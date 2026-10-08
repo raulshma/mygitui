@@ -88,5 +88,12 @@ jobs:
       - name: Lint (clippy, warnings are errors)
         run: cargo clippy -- -D warnings
 
+      # Engine tests open fixture repos (fixtures/ is generated output, not
+      # committed). The script sets a local git identity inside each fixture,
+      # which CI runners need anyway.
+      - name: Generate test fixtures
+        shell: bash
+        run: bash ../scripts/make-fixtures.sh
+
       - name: Tests
         run: cargo test

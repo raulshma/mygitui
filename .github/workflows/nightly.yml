@@ -75,6 +75,10 @@ jobs:
             src-tauri/target
           key: soak-cargo-${{ runner.os }}-${{ hashFiles('src-tauri/Cargo.lock') }}
 
+      - name: Generate test fixtures
+        shell: bash
+        run: bash ../scripts/make-fixtures.sh
+
       - name: Full test suite
         run: cargo test
 
