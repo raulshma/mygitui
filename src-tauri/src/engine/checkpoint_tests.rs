@@ -430,26 +430,21 @@ fn checkpoint_on_unborn_head_roundtrips() {
 fn gc_zero_days_keeps_only_newest_and_thirty_keeps_all() {
     let dir = TempDir::new("gc-zero");
     let repo = init_repo(dir.path());
-    commit_file(&repo, "a.txt", "one\n", "base");
+    let base = commit_file(
+        &repo, "a.txt", "one
+", "base",
+    );
 
-    write_file(&repo, "a.txt", "v1\n");
-    ENGINE.checkpoint_create_impl(&repo, "one").unwrap();
-    tick();
-    write_file(&repo, "a.txt", "v2\n");
-    ENGINE.checkpoint_create_impl(&repo, "two").unwrap();
-    tick();
-    write_file(&repo, "a.txt", "v3\n");
-    let newest = ENGINE.checkpoint_create_impl(&repo, "three").unwrap();
-
-    // Cross a unix-second boundary so `now` is strictly newer than every
-    // snapshot commit time (strict `< cutoff` deletion).
-    thread::sleep(Duration::from_millis(1100));
+    // Backdated refs make the cutoff deterministic — no wall-clock sleeps.
+    let oldest = forge_old_checkpoint(&repo, &base, "one", 300);
+    let middle = forge_old_checkpoint(&repo, &oldest, "two", 200);
+    let newest = forge_old_checkpoint(&repo, &middle, "three", 100);
 
     let deleted = ENGINE.checkpoint_gc_impl(&repo, 0).expect("gc 0 days");
     assert_eq!(deleted, 2, "all but the newest are deleted");
     let list = ENGINE.checkpoints_impl(&repo).expect("list");
     assert_eq!(list.len(), 1);
-    assert_eq!(list[0].id, newest.id, "safety floor keeps the newest");
+    assert_eq!(list[0].ref_name, newest, "safety floor keeps the newest");
 
     // Fresh checkpoints: nothing is older than 30 days, none deleted.
     let deleted = ENGINE.checkpoint_gc_impl(&repo, 30).expect("gc 30 days");

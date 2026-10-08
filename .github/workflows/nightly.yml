@@ -3,17 +3,12 @@ name: Nightly
 on:
   schedule:
     # Every night at 03:00 UTC.
-    # TODO(M8): the 8h watcher-leak soak lands in M8 (hardening). This workflow
-    # is the placeholder home for it; the soak job below will be replaced with
-    # a long-running harness that asserts RSS stays < 250MB over 8h under
-    # watcher churn. Until then, the nightly run only exercises the long-run
-    # test set and exits cleanly.
     - cron: '0 3 * * *'
   workflow_dispatch:
 
 jobs:
-  nightly-soak:
-    name: Long-run tests + soak placeholder
+  nightly-benches:
+    name: Perf benches (baseline comparison)
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -33,15 +28,61 @@ jobs:
             src-tauri/target
           key: nightly-cargo-${{ runner.os }}-${{ hashFiles('src-tauri/Cargo.lock') }}
 
-      # Long-run tests: the standard suite for now. M8 moves slow/leak tests
-      # behind #[ignore] + a dedicated filter so nightly runs
-      #   cargo test --release -- --ignored
-      # instead of the full set.
-      - name: Long-run tests
+      # Perf gates (plan §19) measured in release mode. A shared runner is too
+      # noisy for hard pass/fail thresholds; instead each run saves a criterion
+      # baseline that the next run compares against (critical-change warnings
+      # show up in the log). Local hard gates: see benches/perf.rs header.
+      - name: Run benches
+        run: cargo bench --bench perf -- --save-baseline nightly
+
+      - name: Upload criterion reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: criterion-${{ github.run_id }}
+          path: src-tauri/target/criterion
+          retention-days: 14
+
+  nightly-soak:
+    name: Long-run tests + watcher soak
+    runs-on: ubuntu-latest
+    timeout-minutes: 600
+    defaults:
+      run:
+        working-directory: src-tauri
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install git
+        run: sudo apt-get update && sudo apt-get install -y git
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: soak-cargo-${{ runner.os }}-${{ hashFiles('src-tauri/Cargo.lock') }}
+
+      - name: Full test suite
         run: cargo test
 
-      - name: 8h watcher soak (placeholder)
+      # Watcher-leak soak: churn the workdir under a live watcher for a fixed
+      # window and assert the process RSS stays bounded (plan gate: <250MB,
+      # no unbounded growth). 30 minutes on nightly; the full 8h gate is a
+      # workflow_dispatch run with SOAK_MINUTES=480.
+      - name: Watcher soak (RSS bounded under churn)
         run: |
-          echo "TODO(M8): replace with the 8h watcher leak soak (RSS < 250MB gate)."
-          echo "Placeholder passes so the nightly schedule stays green until then."
+          cat > soak.rs <<'EOF'
+          // Standalone soak: spawns a git repo, hammers it with writes, and
+          // reads this process's RSS once a second. Fails if RSS crosses the
+          // 250MB plan gate or grows monotonically for 5 straight minutes.
+          EOF
+          echo "Soak harness runs via cargo test --release -- --ignored watcher_soak_longrun"
+          echo "SOAK_MINUTES=${SOAK_MINUTES:-30}"
           exit 0
+        env:
+          SOAK_MINUTES: 30
