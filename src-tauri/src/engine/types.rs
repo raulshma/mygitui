@@ -399,3 +399,19 @@ pub struct PreviewInfo {
     pub summary: String,
     pub files: Vec<PreviewFile>,
 }
+
+// ---------- M4: housekeeping ----------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SubmoduleInfo {
+    pub path: String,
+    pub name: String,
+    pub url: String,
+    /// Checked-out commit in the worktree (None when not initialized).
+    pub head_sha: Option<String>,
+    /// Commit the superproject records.
+    pub recorded_sha: String,
+    pub initialized: bool,
+    /// "new commits", "modified content", "untracked content", "" = clean.
+    pub status: String,
+}

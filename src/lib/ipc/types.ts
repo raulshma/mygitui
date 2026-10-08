@@ -306,3 +306,24 @@ export interface PreviewInfo {
   summary: string;
   files: PreviewFile[];
 }
+
+// ---------- M4: housekeeping ----------
+
+export interface SubmoduleInfo {
+  path: string;
+  name: string;
+  url: string;
+  head_sha: string | null;
+  recorded_sha: string;
+  initialized: boolean;
+  status: string;
+}
+
+export interface ActionOutputEvent {
+  run_id: string;
+  repo_id: string;
+  name: string;
+  line: string;
+  done: boolean;
+  exit_code: number | null;
+}

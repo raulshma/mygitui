@@ -112,3 +112,25 @@ Same op-queue + op-progress machinery as M2. All `#[tauri::command(rename_all = 
 
 Checkpoints live at `refs/mygitui/checkpoints/<ts>-<reason>`; worktree state is a stash-style
 2-parent commit; GC default 30 days; restore = reset soft to checkpoint + apply worktree blob.
+
+## Commands (M4 — housekeeping)
+
+| Command | Args | Returns |
+|---|---|---|
+| `submodules` | `repo_id` | `SubmoduleInfo[]` |
+| `submodule_update` | `repo_id, path, init: bool, recursive: bool` | `void` (op queue, kind `submodule`) |
+| `submodule_sync` | `repo_id, path?` (empty = all) | `void` |
+| `gitignore_add` | `repo_id, pattern` | `void` (appends to .gitignore, creates if missing) |
+| `gitignore_templates` | — | `{name, description, patterns: string}[]` (curated builtin list) |
+| `repo_clean` | `repo_id, paths: string[], checkpoint_reason: string` | `u32` (count removed; checkpoint auto-created first) |
+| `action_run` | `repo_id, name, command` | `run_id: string` (streams `action-output` events) |
+| `action_cancel` | `run_id` | `void` |
+
+## Events (M4)
+
+| Event | Payload |
+|---|---|
+| `action-output` | `{ run_id, repo_id, name, line, done: bool, exit_code: number \| null }` |
+
+Custom actions config lives FE-side (localStorage `mygitui.actions`), scope global or per-repo.
+Layout presets FE-side (localStorage `mygitui.layouts` + per-repo overlay `mygitui.layouts.<root>`).
