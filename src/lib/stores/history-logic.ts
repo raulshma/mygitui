@@ -113,6 +113,8 @@ export function formatDateTime(
 /** Editable filter-bar fields (strings, as typed; dates are `YYYY-MM-DD`). */
 export interface HistoryFilterFields {
   text: string;
+  /** When true, `text` is a regex (M9). */
+  regex: boolean;
   author: string;
   path: string;
   after: string;
@@ -121,6 +123,7 @@ export interface HistoryFilterFields {
 
 export const EMPTY_FILTER: HistoryFilterFields = {
   text: "",
+  regex: false,
   author: "",
   path: "",
   after: "",
@@ -149,19 +152,22 @@ export function dayToUnixSeconds(
 
 /**
  * Serializes filter-bar fields into the exact backend `LogFilter` shape.
- * `regex` is hardcoded off until M1.1; `refs`/`follow` are not filter-bar
- * concerns yet (file history uses `streamFileHistory` separately).
+ * `refs` stays a filter-bar non-concern; `follow` marks a file-history walk
+ * (rename-following, single path).
  */
-export function toLogFilter(fields: HistoryFilterFields): LogFilter {
+export function toLogFilter(
+  fields: HistoryFilterFields,
+  opts: { follow?: boolean } = {},
+): LogFilter {
   return {
     text: fields.text.trim() || null,
-    regex: false,
+    regex: fields.regex,
     author: fields.author.trim() || null,
     path: fields.path.trim() || null,
     after_unix: dayToUnixSeconds(fields.after, "start"),
     before_unix: dayToUnixSeconds(fields.before, "end"),
     refs: [],
-    follow: false,
+    follow: opts.follow ?? false,
   };
 }
 

@@ -31,6 +31,7 @@
   import { rebaseStart, streamLog } from "$lib/ipc/client";
   import type { CommitInfo, RebaseStep } from "$lib/ipc/types";
   import { toast } from "$lib/toast";
+  import ConfirmDialog from "$lib/components/safety/ConfirmDialog.svelte";
   import { rebaseMonitor } from "./rebaseStore.svelte";
   import {
     REBASE_ACTIONS,
@@ -252,16 +253,15 @@
     await monitor.continueRebase();
   }
 
+  /** Abort confirmation (ConfirmDialog state, M9 F9). */
+  let abortOpen = $state(false);
+
   function cancel(): void {
-    if (phase === "running") void abortRunning();
+    if (phase === "running") abortOpen = true;
     else onClose();
   }
 
   async function abortRunning(): Promise<void> {
-    const ok = window.confirm(
-      "Abort the running rebase and restore the original branch state?",
-    );
-    if (!ok) return;
     phase = "done"; // the settle effect must not double-report
     const aborted = await monitor.abort();
     if (aborted) {
@@ -476,6 +476,15 @@
     {/if}
   </div>
 </div>
+
+<ConfirmDialog
+  bind:open={abortOpen}
+  title="Abort the running rebase?"
+  message="The original branch state is restored; completed steps of this run are discarded."
+  confirmLabel="Abort rebase"
+  danger
+  onConfirm={() => void abortRunning()}
+/>
 
 <style>
   .scrim {

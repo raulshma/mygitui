@@ -17,6 +17,7 @@
    */
   import { repoBlame } from "$lib/ipc/client";
   import { toast } from "$lib/toast";
+  import { emitUiEvent } from "$lib/palette/events";
   import type { BlameLine } from "$lib/ipc/types";
   import { formatRelativeTime, hashHue } from "$lib/stores/history-logic";
 
@@ -124,8 +125,9 @@
     return `hsl(${hashHue(sha)} 60% 55%)`;
   }
 
-  function shaClick(): void {
-    toast("Commit actions land in M2");
+  /** M9: selecting the authoring commit in history (typed event bus). */
+  function shaClick(sha: string): void {
+    emitUiEvent("history-select-commit", { sha });
   }
 </script>
 
@@ -168,8 +170,8 @@
               <button
                 class="bsha"
                 style:color={shaColor(v.row.sha)}
-                title="Commit actions land in M2"
-                onclick={shaClick}
+                title="Show this commit in history"
+                onclick={() => shaClick(v.row.sha)}
               >
                 {v.row.sha.slice(0, 8)}
               </button>

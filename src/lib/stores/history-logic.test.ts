@@ -155,6 +155,7 @@ describe("toLogFilter", () => {
     expect(
       toLogFilter({
         text: "  fix leak  ",
+        regex: false,
         author: " alice ",
         path: "src/lib/",
         after: "2026-01-02",

@@ -25,6 +25,7 @@
   import { opsFor } from "$lib/stores/ops.svelte";
   import { autofetch } from "$lib/stores/autofetch.svelte";
   import { toast } from "$lib/toast";
+  import ConfirmDialog from "$lib/components/safety/ConfirmDialog.svelte";
 
   let {
     repoId,
@@ -149,7 +150,11 @@
         remote: remote.name,
         branch: branchFor(remote),
         force,
+        force_with_lease: false,
         set_upstream: setUpstream,
+        refs: [],
+        tags: false,
+        delete: false,
       }), true);
   }
 
@@ -169,10 +174,17 @@
     }
   }
 
-  async function onRemove(remote: RemoteInfo): Promise<void> {
-    if (!window.confirm(`Remove remote ${remote.name}? Tracking branches go with it.`)) {
-      return;
-    }
+  /** Remove confirmation (ConfirmDialog state, M9 F9). */
+  let removeCandidate = $state<RemoteInfo | null>(null);
+
+  function onRemove(remote: RemoteInfo): void {
+    removeCandidate = remote;
+  }
+
+  async function onRemoveConfirmed(): Promise<void> {
+    const remote = removeCandidate;
+    if (!remote) return;
+    removeCandidate = null;
     try {
       await remoteRemove(repoId, remote.name);
       void reload();
@@ -415,6 +427,20 @@
     </button>
   </form>
 </aside>
+
+<ConfirmDialog
+  bind:open={
+    () => removeCandidate !== null,
+    (v) => {
+      if (!v) removeCandidate = null;
+    }
+  }
+  title={removeCandidate ? `Remove remote ${removeCandidate.name}?` : ""}
+  message="Tracking branches that follow this remote go with it."
+  confirmLabel="Remove remote"
+  danger
+  onConfirm={() => void onRemoveConfirmed()}
+/>
 
 <style>
   .remote-panel {

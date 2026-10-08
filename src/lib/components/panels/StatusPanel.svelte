@@ -27,9 +27,13 @@
    * everywhere, `aria-expanded` collapse toggles, `aria-selected` rows.
    */
   import type { RepoStatus, StatusEntry } from "$lib/ipc/types";
-  import { gitignoreAdd, stage, stageAll } from "$lib/ipc/client";
+  import { discard, gitignoreAdd, stage, stageAll } from "$lib/ipc/client";
   import { toast } from "$lib/toast";
   import { patternFor } from "./gitignore";
+  import { showMenuAt, type MenuEntry } from "$lib/components/menu/contextMenuStore.svelte";
+  import ConfirmDialog from "$lib/components/safety/ConfirmDialog.svelte";
+  import GitignoreGallery from "$lib/components/panels/GitignoreGallery.svelte";
+  import { openPanelPopout } from "$lib/layout/popout";
   import {
     buildStatusIndex,
     filterSections,
@@ -225,6 +229,72 @@
     }
   }
 
+  // -- M9 F1/F10: row context menu, discard, templates gallery ----------------
+
+  let galleryOpen = $state(false);
+  /** Row pending a discard confirmation (whole file; checkpointed upstream). */
+  let discardCandidate = $state<StatusRow | null>(null);
+
+  /** Row right-click: the file action menu. */
+  function rowMenu(event: MouseEvent, row: StatusRow): void {
+    const path = row.entry.path;
+    const entries: MenuEntry[] = [];
+    if (repoId) {
+      if (row.section !== "staged" && row.entry.worktree !== "unmodified") {
+        entries.push({
+          id: "stage",
+          label: "Stage",
+          run: () =>
+            void mutate(`Stage ${path}`, () =>
+              stage(repoId, { targets: [{ file: path }], unstage: false }),
+            ),
+        });
+      }
+      if (row.section === "staged") {
+        entries.push({
+          id: "unstage",
+          label: "Unstage",
+          run: () =>
+            void mutate(`Unstage ${path}`, () =>
+              stage(repoId, { targets: [{ file: path }], unstage: true }),
+            ),
+        });
+      }
+      if (row.section !== "untracked" && row.section !== "conflicted") {
+        entries.push({
+          id: "discard",
+          label: "Discard changes…",
+          danger: true,
+          run: () => (discardCandidate = row),
+        });
+      }
+      if (row.section === "untracked") {
+        for (const choice of choicesFor(path)) {
+          entries.push({
+            id: `ignore-${choice.label}`,
+            label: `Ignore ${choice.label} (${choice.pattern})`,
+            run: () => void onIgnore(choice),
+          });
+        }
+      }
+      entries.push(
+        { id: "history", label: "File history", run: () => void openPanelPopout("filehistory", repoId, `History: ${path}`, { path }) },
+        { id: "open", label: "Open diff", run: () => openRow(row) },
+      );
+    }
+    showMenuAt(event, entries);
+  }
+
+  /** Discard confirmed: the backend snapshots a checkpoint first. */
+  async function onDiscardConfirmed(): Promise<void> {
+    const row = discardCandidate;
+    if (!repoId || !row) return;
+    discardCandidate = null;
+    await mutate(`Discard ${row.entry.path}`, () =>
+      discard(repoId, [{ file: row.entry.path }]),
+    );
+  }
+
   function onTreeKeydown(event: KeyboardEvent): void {
     // The Ignore quick-add controls handle their own keys (Enter/Space must
     // not bubble into row open/toggle).
@@ -323,6 +393,16 @@
       >
         Unstage all
       </button>
+      {#if repoId}
+        <button
+          class="tb"
+          type="button"
+          title="Apply a builtin .gitignore template"
+          onclick={() => (galleryOpen = true)}
+        >
+          Templates…
+        </button>
+      {/if}
     </div>
 
     {#if status.merging || status.rebasing || status.sequencer || status.detached || status.ahead > 0 || status.behind > 0}
@@ -371,6 +451,7 @@
                   data-row-key={row.key}
                   bind:this={rowEls[row.key]}
                   onkeydown={onTreeKeydown}
+                  oncontextmenu={(event) => rowMenu(event, row)}
                   onclick={(event) =>
                     onRowClick(
                       event,
@@ -449,6 +530,28 @@
     <p class="empty">Loading status…</p>
   {/if}
 </aside>
+
+<ConfirmDialog
+  bind:open={
+    () => discardCandidate !== null,
+    (v) => {
+      if (!v) discardCandidate = null;
+    }
+  }
+  title={discardCandidate ? `Discard changes to ${discardCandidate.entry.path}?` : ""}
+  message="Staged and unstaged changes to this file return to HEAD (untracked files are deleted). A checkpoint is created first — restorable from the Undo panel."
+  confirmLabel="Discard changes"
+  danger
+  onConfirm={() => void onDiscardConfirmed()}
+/>
+
+{#if repoId}
+  <GitignoreGallery
+    bind:open={galleryOpen}
+    {repoId}
+    onApplied={onAfterMutation}
+  />
+{/if}
 
 <style>
   aside {

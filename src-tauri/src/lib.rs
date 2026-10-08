@@ -133,6 +133,7 @@ pub fn run() {
             ipc_commands::submodule_sync,
             ipc_commands::gitignore_add,
             ipc_commands::gitignore_templates,
+            ipc_commands::gitignore_apply_template,
             ipc_commands::repo_clean,
             ipc_commands::action_run,
             ipc_commands::action_cancel,

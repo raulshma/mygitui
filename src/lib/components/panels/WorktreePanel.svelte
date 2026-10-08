@@ -15,6 +15,7 @@
   import type { BranchInfo, WorktreeInfo } from "$lib/ipc/types";
   import { openTab } from "$lib/stores/tabs.svelte";
   import { toast } from "$lib/toast";
+  import ConfirmDialog from "$lib/components/safety/ConfirmDialog.svelte";
   import {
     baseName,
     worktreeBadges,
@@ -115,12 +116,17 @@
     removeForce = worktreeNeedsForce(info);
   }
 
-  async function onRemove(info: WorktreeInfo): Promise<void> {
-    const why = worktreeNeedsForce(info) ? " (locked or prunable — force required)" : "";
-    if (!window.confirm(`Remove worktree "${info.name}" at ${info.path}?${why}`)) {
-      removeConfirmFor = null;
-      return;
-    }
+  /** Remove confirmation (ConfirmDialog state, M9 F9). */
+  let removeDialogFor = $state<WorktreeInfo | null>(null);
+
+  function onRemove(info: WorktreeInfo): void {
+    removeDialogFor = info;
+  }
+
+  async function onRemoveConfirmed(): Promise<void> {
+    const info = removeDialogFor;
+    if (!info) return;
+    removeDialogFor = null;
     busy = true;
     try {
       await worktreeRemove(repoId, info.name, removeForce);
@@ -319,6 +325,22 @@
     </ul>
   {/if}
 </aside>
+
+<ConfirmDialog
+  bind:open={
+    () => removeDialogFor !== null,
+    (v) => {
+      if (!v) removeDialogFor = null;
+    }
+  }
+  title={removeDialogFor ? `Remove worktree “${removeDialogFor.name}”?` : ""}
+  message={removeDialogFor
+    ? `${removeDialogFor.path}${worktreeNeedsForce(removeDialogFor) ? " — locked or prunable, force required" : ""}`
+    : ""}
+  confirmLabel="Remove worktree"
+  danger
+  onConfirm={() => void onRemoveConfirmed()}
+/>
 
 <style>
   .worktree-panel {

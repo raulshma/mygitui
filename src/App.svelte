@@ -28,6 +28,9 @@
   import QuickSwitcher from "$lib/components/QuickSwitcher.svelte";
   import CloneDialog from "$lib/components/CloneDialog.svelte";
   import CommandPalette from "$lib/components/CommandPalette.svelte";
+  // M9 F1: global context menu (opened by panels via contextMenu.show).
+  import ContextMenu from "$lib/components/menu/ContextMenu.svelte";
+  import FileHistoryView from "$lib/components/panels/FileHistoryView.svelte";
   // M4 F2: global keybind engine + palette execution entry point.
   import { startKeybinds } from "$lib/palette/keybinds";
   import { executeCommandById, togglePalette } from "$lib/palette/palette.svelte";
@@ -145,6 +148,11 @@
     <main class="popout-view">
       {#if popout.panel === "history"}
         <HistoryView repoId={popout.repoId} />
+      {:else if popout.panel === "filehistory"}
+        <FileHistoryView
+          repoId={popout.repoId}
+          path={popout.path ?? ""}
+        />
       {:else}
         <PopoutDiff repoId={popout.repoId} />
       {/if}
@@ -217,6 +225,7 @@
 <QuickSwitcher />
 <CommandPalette />
 <CloneDialog bind:open={cloneOpen} />
+<ContextMenu />
 
 <style>
   .app-shell {

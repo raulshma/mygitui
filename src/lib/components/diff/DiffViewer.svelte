@@ -13,6 +13,9 @@
    * perf-gated in diff/virtualizer.test.ts.
    */
   import type { FileDiff } from "$lib/ipc/types";
+  import { discard, stage } from "$lib/ipc/client";
+  import { onUiEvent } from "$lib/palette/events";
+  import { toast } from "$lib/toast";
   import {
     buildRowModel,
     rowHeights,
@@ -26,10 +29,22 @@
     files,
     mode = $bindable("split"),
     onLoadImage,
+    repoId = undefined,
+    /** Hunk-level actions: `stage` = stage hunks, `unstage` = unstage hunks. */
+    hunkStaging = undefined,
+    /** Show "Discard hunk" buttons (workdir-only; backend checkpoints first). */
+    hunkDiscard = false,
+    /** Called after a successful hunk stage/unstage/discard. */
+    onMutated = undefined,
   }: {
     files: FileDiff[];
     mode?: DiffMode;
     onLoadImage?: LoadImageFn;
+    /** Required for hunk actions (targets the IPC by repo id). */
+    repoId?: string;
+    hunkStaging?: "stage" | "unstage";
+    hunkDiscard?: boolean;
+    onMutated?: () => void;
   } = $props();
 
   /** Rows rendered beyond the viewport (px, top and bottom). */
@@ -60,6 +75,43 @@
 
   function cycleMode(): void {
     mode = mode === "split" ? "unified" : "split";
+  }
+
+  // Palette command rides the bus; every mounted viewer flips its mode.
+  $effect(() => onUiEvent("diff-toggle-mode", cycleMode));
+
+  // -- M9 F6: hunk staging / discard ------------------------------------------
+
+  function describeError(err: unknown): string {
+    return err instanceof Error ? err.message : String(err);
+  }
+
+  function stageHunk(fileIndex: number, hunkIndex: number): void {
+    if (!repoId || !hunkStaging) return;
+    const file = files[fileIndex];
+    if (!file) return;
+    const unstage = hunkStaging === "unstage";
+    stage(repoId, {
+      targets: [{ hunk: { path: file.path, hunk: hunkIndex } }],
+      unstage,
+    })
+      .then(() => onMutated?.())
+      .catch((err: unknown) =>
+        toast(`${unstage ? "Unstage" : "Stage"} failed: ${describeError(err)}`, {
+          kind: "error",
+        }),
+      );
+  }
+
+  function discardHunk(fileIndex: number, hunkIndex: number): void {
+    if (!repoId) return;
+    const file = files[fileIndex];
+    if (!file) return;
+    discard(repoId, [{ hunk: { path: file.path, hunk: hunkIndex } }])
+      .then(() => onMutated?.())
+      .catch((err: unknown) =>
+        toast(`Discard failed: ${describeError(err)}`, { kind: "error" }),
+      );
   }
 
   // A new diff resets the scroll position.
@@ -134,7 +186,14 @@
         {#each slices as slice (slice.bucketIndex)}
           <div class="slice" style="top: {slice.top}px">
             {#each model.rows.slice(slice.firstRow, slice.firstRow + slice.count) as row, i (slice.firstRow + i)}
-              <DiffRow {row} onToggleCollapse={toggleCollapse} {onLoadImage} />
+              <DiffRow
+                {row}
+                onToggleCollapse={toggleCollapse}
+                {onLoadImage}
+                onStageHunk={repoId && hunkStaging ? stageHunk : undefined}
+                onDiscardHunk={repoId && hunkDiscard ? discardHunk : undefined}
+                stageLabel={hunkStaging === "unstage" ? "Unstage hunk" : "Stage hunk"}
+              />
             {/each}
           </div>
         {/each}

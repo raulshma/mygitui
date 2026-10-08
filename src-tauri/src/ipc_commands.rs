@@ -2357,6 +2357,44 @@ fn gitignore_add_sync(root: &Path, pattern: &str) -> Result<(), String> {
     std::fs::write(&file, updated).map_err(|e| format!("writing .gitignore failed: {e}"))
 }
 
+/// Applies a builtin gitignore template by name: appends every pattern
+/// (idempotent per line, same rule as `gitignore_add`) under a
+/// `# <name>` comment header in ONE write.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn gitignore_apply_template(
+    repo_id: RepoId,
+    name: String,
+    state: State<'_, RepoManager>,
+) -> Result<(), String> {
+    let handle = get_handle(&state, &repo_id)?;
+    let root = handle.root.clone();
+    let template = gitignore_templates_list()
+        .into_iter()
+        .find(|t| t.name.eq_ignore_ascii_case(&name))
+        .ok_or_else(|| format!("no gitignore template named `{name}`"))?;
+    let file = std::path::Path::new(&root).join(".gitignore");
+    let existing = std::fs::read_to_string(&file).unwrap_or_default();
+    let mut updated = existing.clone();
+    let fresh: Vec<&str> = template
+        .patterns
+        .lines()
+        .filter(|line| !existing.lines().any(|old| old == *line))
+        .collect();
+    if fresh.is_empty() {
+        return Ok(()); // everything already ignored
+    }
+    if !updated.is_empty() && !updated.ends_with('\n') {
+        updated.push('\n');
+    }
+    updated.push_str(&format!("# {}", template.name));
+    updated.push('\n');
+    for line in fresh {
+        updated.push_str(line);
+        updated.push('\n');
+    }
+    std::fs::write(&file, updated).map_err(|e| format!("writing .gitignore failed: {e}"))
+}
+
 /// List every submodule with checked-out vs recorded state (contracts.md:
 /// `SubmoduleInfo[]`; status strings mirror `git status` submodule wording).
 #[tauri::command(rename_all = "snake_case")]

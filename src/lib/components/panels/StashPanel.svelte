@@ -16,6 +16,7 @@
   import { refreshStatus } from "$lib/stores/tabs.svelte";
   import { toast } from "$lib/toast";
   import { relativeAge, shortSha, stashRef } from "./panelModel";
+  import ConfirmDialog from "$lib/components/safety/ConfirmDialog.svelte";
 
   let {
     repoId,
@@ -102,10 +103,17 @@
     }
   }
 
+  /** Drop confirmation (ConfirmDialog state). */
+  let dropCandidate = $state<StashInfo | null>(null);
+
   async function onDrop(info: StashInfo): Promise<void> {
-    if (!window.confirm(`Drop ${stashRef(info)} (${info.message})? This cannot be undone.`)) {
-      return;
-    }
+    dropCandidate = info;
+  }
+
+  async function onDropConfirmed(): Promise<void> {
+    const info = dropCandidate;
+    if (!info) return;
+    dropCandidate = null;
     busy = true;
     try {
       await stashDrop(repoId, info.index);
@@ -265,6 +273,22 @@
     </ul>
   {/if}
 </aside>
+
+<ConfirmDialog
+  bind:open={
+    () => dropCandidate !== null,
+    (v) => {
+      if (!v) dropCandidate = null;
+    }
+  }
+  title={dropCandidate ? `Drop ${stashRef(dropCandidate)}?` : ""}
+  message={dropCandidate
+    ? `${dropCandidate.message} — this cannot be undone.`
+    : ""}
+  confirmLabel="Drop stash"
+  danger
+  onConfirm={() => void onDropConfirmed()}
+/>
 
 <style>
   .stash-panel {

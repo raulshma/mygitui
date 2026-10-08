@@ -182,9 +182,19 @@ export interface PullOptions {
 
 export interface PushOptions {
   remote: string;
+  /** Branch to push; empty = current. Ignored when `refs` is non-empty. */
   branch: string;
+  /** Force (plain `+` refspec). */
   force: boolean;
+  /** Force only if the remote still matches the last-fetched tracking ref. */
+  force_with_lease: boolean;
   set_upstream: boolean;
+  /** Explicit refs (bare branch names, `refs/...`); empty = `branch`. */
+  refs: string[];
+  /** Push every local tag (`--tags`). */
+  tags: boolean;
+  /** Delete the remote refs named in `refs` instead of updating them. */
+  delete: boolean;
 }
 
 export interface NetStats {
@@ -207,6 +217,26 @@ export interface RemoteInfo {
   name: string;
   url: string;
   push_url: string | null;
+}
+
+export interface TagInfo {
+  name: string;
+  /** Direct ref target (tag object for annotated, commit for lightweight). */
+  sha: string;
+  /** Peeled commit the tag points at. */
+  target: string;
+  annotated: boolean;
+  tagger: GitSignature | null;
+  message: string | null;
+}
+
+export interface RemoteBranchInfo {
+  remote: string;
+  /** Short name after `<remote>/`. */
+  name: string;
+  sha: string;
+  /** Local branch whose upstream is this remote branch, when any. */
+  tracked_by: string | null;
 }
 
 export interface OpProgress {
@@ -239,7 +269,23 @@ export interface ConflictFile {
   source: string;
 }
 
-export type MergeOutcome = "fast_forward" | "merged" | "conflicted" | "up_to_date";
+export type MergeOutcome =
+  | "fast_forward"
+  | "merged"
+  | "conflicted"
+  | "up_to_date"
+  | "squashed"
+  | "no_commit";
+
+/** `-X ours/theirs` auto-resolution for conflicting hunks. */
+export type MergeFavor = "none" | "ours" | "theirs";
+
+export interface MergeOptions {
+  no_ff: boolean;
+  squash: boolean;
+  no_commit: boolean;
+  favor: MergeFavor;
+}
 
 export interface MergeResult {
   outcome: MergeOutcome;
@@ -326,4 +372,18 @@ export interface ActionOutputEvent {
   line: string;
   done: boolean;
   exit_code: number | null;
+}
+
+// ---------- M9: mergetool ----------
+
+/** Configured external merge tools (git config merge.tool / merge.guitool). */
+export interface MergetoolInfo {
+  tool: string | null;
+  gui_tool: string | null;
+}
+
+export interface MergetoolResult {
+  success: boolean;
+  /** Combined trimmed stdout+stderr. */
+  output: string;
 }

@@ -307,3 +307,109 @@ per call. TS mirrors live in `src/lib/ipc/client.ts` (`DayCount`,
   `bookmarks`/`branchColors` into `HistoryView` (additive optional props)
   → `GraphCanvas`. Popout history windows omit the props (safe:
   decorations are optional).
+
+---
+
+## M9 — Complete git core (engine + UI)
+
+### Engine additions (all mirrored in `src/lib/ipc/types.ts`)
+
+- **`MergeOptions`** `{ no_ff, squash, no_commit, favor }` — `favor` is
+  `none | ours | theirs` (git `-X` file favor). `merge_branch(repo_id,
+  ref_name, opts)` replaces the old `no_ff: bool` arg. New
+  `MergeOutcome` values: `squashed` (result staged + `SQUASH_MSG`
+  written, NO merge state — the next commit is a normal 1-parent
+  commit, also when the squash merge conflicted) and `no_commit`
+  (clean merge, MERGE_HEAD stays — the finishing commit goes through
+  the normal commit path).
+- **Commit during a merge**: the finishing commit now takes MERGE_HEAD
+  as its second parent and consumes the merge state
+  (MERGE_HEAD/MERGE_MSG/MERGE_MODE via `cleanup_state`).
+  `RepoStatus::merging` drops. Amend during a merge is rejected.
+- **Pull `--rebase` (diverged)**: replays the local-only commits onto
+  the fetched tip through the custom rebase engine. A conflict pauses
+  in rebase state — `RepoStatus::rebasing` (the custom rebase state
+  file is now visible to status + conflict-source detection) and the
+  FE rebase monitor/conflict editor drive it; abort restores the
+  pre-pull state.
+- **`PushOptions`** gains `force_with_lease` (refuses without a
+  tracking ref — the tracking ref IS the lease value), `refs: string[]`
+  (explicit refs, bare names allowed; multi-ref push), `tags: true`
+  (`--tags`), `delete: true` (delete the remote refs named in `refs`;
+  `NetStats.updated_refs` reports `"(deleted)"` as the new value).
+- **`tag_list`** → `TagInfo[]` `{ name, sha, target, annotated, tagger?,
+  message? }` (`sha` = the ref's direct target: the tag object for
+  annotated, the commit for lightweight). **`tag_create_signed`**
+  creates signed annotated tags via the git CLI (`git tag -s`,
+  sanitized env, message via `-F` file).
+- **`remote_branches`** → `RemoteBranchInfo[]` `{ remote, name, sha,
+  tracked_by? }` (HEAD refs skipped). **`branch_checkout_remote`**
+  creates + checks out a local branch tracking `<remote>/<name>`
+  with upstream configured; returns the local name; errors when it
+  already exists.
+- **`discard`** `{ targets: StageTarget[] }` — `git checkout --` on
+  steroids: whole file = index+workdir back to HEAD (or deleted when
+  not in HEAD); hunk/line targets = workdir-only line surgery (the
+  index is untouched; libgit2 `apply(WorkDir)` cannot be used because
+  its preimage is the index). A checkpoint is created BEFORE any side
+  effect (same ordering rule as `repo_clean`).
+- **Regex log filter**: `LogFilter.regex` is live (Rust `regex` crate,
+  compiled once per query; invalid patterns → `Invalid`).
+- **Diff Index→Commit** side pair is implemented (index materialized
+  to a throwaway tree; old side = Index).
+- **`mergetool_info`** → `MergetoolInfo` `{ tool?, gui_tool? }` (git
+  config); **`mergetool_run(repo_id, path, tool?)`** launches
+  `git mergetool --no-prompt` for one path — deliberately NOT on the
+  op queue (interactive, minutes-long; watcher still fires). The
+  built-in 3-way editor stays the default.
+- **`gitignore_apply_template(repo_id, name)`** — appends a builtin
+  template's patterns (idempotent per line) under a `# <name>` header
+  in one write.
+
+### Frontend
+
+- **Typed event bus**: `src/lib/palette/events.ts` (`emitUiEvent` /
+  `onUiEvent`) — replaces the dead CustomEvent wiring hints. Panels
+  subscribe in `$effect`s: RepoView (`focus-panel`, `open-conflicts`,
+  `conflicts-recheck`), HistoryView (`history-*`,
+  `history-select-commit`, `commit-action`), BranchPanel
+  (`branches-focus-*`, `branches-cleanup`), DiffViewer
+  (`diff-toggle-mode`).
+- **Global context menu**: `src/lib/components/menu/contextMenu.svelte.ts`
+  (`show`/`hide`/`move`, keyboard-accessible) + `ContextMenu.svelte`
+  (mounted once in App.svelte). Menus: history commits (cherry-pick,
+  revert, rebase-from-here, bookmark, copy), changed files (file
+  history, blame), status rows (stage/unstage/discard/ignore/file
+  history/open diff), branches (switch/merge/push/upstream/rename/
+  reset/delete/copy), reflog entries (copy/show/reset/branch).
+- **MergeDialog** (`src/lib/components/merge/`) — ff policy, squash,
+  --no-commit, -X favor; wired from BranchPanel rows + context menu.
+- **TagsSection** (in BranchPanel) — list/create (lightweight,
+  annotated, signed)/delete/push-tags.
+- **SubmodulePanel is registered** (PanelId `submodules`).
+- **FileHistoryView** — popout `?panel=filehistory&repo=<id>&path=`
+  (rename-following walk via `HistoryStore({ follow: true })`);
+  opened from changed-file menus/buttons.
+- **Hunk actions in DiffViewer** — optional `repoId` +
+  `hunkStaging` ("stage"|"unstage") + `hunkDiscard` props; RepoView's
+  working-copy pane enables them only when the shown file has no
+  staged changes (head→worktree hunks must coincide with the
+  index→workdir hunks the backend targets).
+- **Branch cleanup wizard** — "Clean merged…" scans
+  `branch_is_merged` into HEAD, checkbox list, batch delete.
+- **Reflog recovery** — reset-to (ResetDialog) / branch-from-here
+  (PromptDialog) / show-in-history; BlameView sha-click selects the
+  commit in history (stale M2 toast removed).
+- **Bookmark UI** — context-menu toggle on history commits
+  (`mygitui.bookmarks.<root>`); the M7 "display-only" note is
+  obsolete.
+- **Regex filter checkbox is live** in the history filter bar
+  (`HistoryFilterFields.regex`).
+- **ConfirmDialog / PromptDialog**
+  (`src/lib/components/safety/`) replace every `window.confirm` /
+  `window.prompt` (stash drop, remote/worktree removal, layout
+  save-as, aborts, GC, merged-delete).
+- **GitignoreGallery** — template gallery dialog from the StatusPanel
+  toolbar ("Templates…").
+- Palette: `branches.clean-merged` command added; PopoutPanel
+  extended with `filehistory`.

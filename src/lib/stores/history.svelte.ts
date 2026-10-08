@@ -62,6 +62,8 @@ export class HistoryStore {
   pendingCount = $state(0);
 
   readonly #index = new LogIndex();
+  /** Rename-following walk (file-history mode). */
+  readonly #follow: boolean;
   #pending: LogPage[] = [];
   #releasedCommits = 0;
   #releaseCap = RELEASE_CHUNK_COMMITS;
@@ -71,6 +73,14 @@ export class HistoryStore {
   #acceptedGen = 0;
   #debounceTimer: ReturnType<typeof setTimeout> | null = null;
   #unlisten: (() => void) | null = null;
+
+  /**
+   * `opts.follow` marks a file-history store: the walk follows the path in
+   * `filter.path` through renames (backend `LogFilter.follow`).
+   */
+  constructor(opts: { follow?: boolean } = {}) {
+    this.#follow = opts.follow ?? false;
+  }
 
   /** Repo this store is bound to, or null before `start`/after `destroy`. */
   get repoId(): RepoId | null {
@@ -199,7 +209,7 @@ export class HistoryStore {
     this.pendingCount = 0;
 
     try {
-      streamLog(repoId, toLogFilter(this.filter), (page) =>
+      streamLog(repoId, toLogFilter(this.filter, { follow: this.#follow }), (page) =>
         this.#onPage(token, page),
       )
         .then(() => {

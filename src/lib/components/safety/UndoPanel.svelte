@@ -22,6 +22,7 @@
   import { refreshStatus } from "$lib/stores/tabs.svelte";
   import { loadUndo, safetyStore } from "$lib/stores/safety.svelte";
   import { toast } from "$lib/toast";
+  import ConfirmDialog from "$lib/components/safety/ConfirmDialog.svelte";
   import { checkpointTitle } from "./safetyModel";
 
   let {
@@ -79,14 +80,14 @@
     }
   }
 
-  async function doGc(): Promise<void> {
-    if (
-      !window.confirm(
-        "Clean checkpoints older than 30 days? (newer checkpoints are kept)",
-      )
-    ) {
-      return;
-    }
+  /** GC confirmation (ConfirmDialog state, M9 F9). */
+  let gcOpen = $state(false);
+
+  function doGc(): void {
+    gcOpen = true;
+  }
+
+  async function doGcConfirmed(): Promise<void> {
     gcBusy = true;
     try {
       const removed = await checkpointGc(repoId, 30);
@@ -195,6 +196,14 @@
     </ul>
   {/if}
 </section>
+
+<ConfirmDialog
+  bind:open={gcOpen}
+  title="Clean old checkpoints?"
+  message="Checkpoints older than 30 days are removed; the newest is always kept."
+  confirmLabel="Clean"
+  onConfirm={() => void doGcConfirmed()}
+/>
 
 <style>
   .undo-panel {

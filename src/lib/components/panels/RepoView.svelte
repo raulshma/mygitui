@@ -39,9 +39,12 @@
   import RemotePanel from "$lib/components/panels/RemotePanel.svelte";
   import StashPanel from "$lib/components/panels/StashPanel.svelte";
   import WorktreePanel from "$lib/components/panels/WorktreePanel.svelte";
+  import SubmodulePanel from "$lib/components/panels/SubmodulePanel.svelte";
   import ReflogPanel from "$lib/components/panels/ReflogPanel.svelte";
   import UndoPanel from "$lib/components/safety/UndoPanel.svelte";
   import ConflictEditor from "$lib/components/merge/ConflictEditor.svelte";
+  import ConfirmDialog from "$lib/components/safety/ConfirmDialog.svelte";
+  import PromptDialog from "$lib/components/safety/PromptDialog.svelte";
   import CommitBar from "$lib/components/panels/CommitBar.svelte";
   import HistoryView from "$lib/components/panels/HistoryView.svelte";
   import DiffViewer from "$lib/components/diff/DiffViewer.svelte";
@@ -55,6 +58,7 @@
   import { ai } from "$lib/ai/ai.svelte";
   import SplitContainer from "$lib/components/layout/SplitContainer.svelte";
   import { conflictsStore } from "$lib/components/panels/conflictsStore.svelte";
+  import { onUiEvent } from "$lib/palette/events";
   import {
     conflictAbortCommand,
     conflictSource,
@@ -173,9 +177,12 @@
     layouts.applyPreset(root, (event.currentTarget as HTMLSelectElement).value);
   }
 
+  /** Save-layout prompt + abort confirmation (M9 F9 dialog state). */
+  let saveLayoutOpen = $state(false);
+  let abortOpen = $state(false);
+
   function onSaveLayout(): void {
-    const name = window.prompt("Save the current layout as:");
-    if (name !== null && name.trim() !== "") layouts.saveAs(root, name);
+    saveLayoutOpen = true;
   }
 
   function onResetLayout(): void {
@@ -221,6 +228,8 @@
         return stashesPanel;
       case "worktrees":
         return worktreesPanel;
+      case "submodules":
+        return submodulesPanel;
       case "reflog":
         return reflogPanel;
       case "undo":
@@ -306,6 +315,34 @@
     return () => conflictsStore.clear(id);
   });
 
+  // --- M9 F1: palette event wiring -----------------------------------------
+
+  $effect(() => {
+    const unlisteners = [
+      onUiEvent("focus-panel", ({ panel, repoId: target }) => {
+        if (target !== null && target !== repoId) return;
+        // Activate the panel where it lives; add it when hidden.
+        const holder = findPanelNode(resolved.layout.main, panel as PanelId);
+        if (holder) {
+          if (holder.kind === "tabs") {
+            layouts.setActiveTab(root, holder.id, holder.tabs.indexOf(panel as PanelId));
+          }
+        } else {
+          layouts.addPanel(root, panel as PanelId, firstTabsId(resolved.layout.main) ?? undefined);
+        }
+      }),
+      onUiEvent("open-conflicts", () => {
+        if (opSource) conflictEditorOpen = true;
+      }),
+      onUiEvent("conflicts-recheck", () => {
+        void conflictsStore.load(repoId);
+      }),
+    ];
+    return () => {
+      for (const unlisten of unlisteners) unlisten();
+    };
+  });
+
   function branchLabel(s: RepoStatus): string {
     if (s.branch) return s.branch;
     if (s.detached && s.head) return `detached @ ${s.head.slice(0, 7)}`;
@@ -355,8 +392,16 @@
     conflictEditorOpen = false;
   });
 
+  /**
+   * Whether the working-copy diff pane may offer hunk staging/discard: only
+   * when the shown file has NO staged changes, so the pane's head→worktree
+   * hunks coincide with the index→workdir hunks the backend stages against.
+   */
+  let diffHunkable = $state(false);
+
   async function openDiff(entry: StatusEntry): Promise<void> {
     diffFiles = [];
+    diffHunkable = entry.index === "unmodified";
     try {
       await streamDiff(repoId, "head", "worktree", (page) => {
         const match = page.filter(
@@ -404,18 +449,17 @@
   }
 
   /** Aborts the in-progress operation (rebase / merge / sequencer each have
-   *  their own backend command — `conflictAbortCommand`). */
+   *  their own backend command — `conflictAbortCommand`). The confirmation
+   *  is a ConfirmDialog (M9 F9). */
   async function onAbort(): Promise<void> {
+    if (!opSource || aborting) return;
+    abortOpen = true;
+  }
+
+  async function onAbortConfirmed(): Promise<void> {
     if (!opSource || aborting) return;
     const label = conflictSourceLabel(opSource);
     const command = conflictAbortCommand(opSource);
-    if (
-      !window.confirm(
-        `Abort the ${label.toLowerCase()}? The repository returns to its pre-operation state.`,
-      )
-    ) {
-      return;
-    }
     aborting = true;
     try {
       if (command === "rebase_abort") {
@@ -461,6 +505,9 @@
 {#snippet worktreesPanel()}
   <WorktreePanel {repoId} {root} onMutated={refresh} />
 {/snippet}
+{#snippet submodulesPanel()}
+  <SubmodulePanel {repoId} {root} onMutated={refresh} />
+{/snippet}
 {#snippet reflogPanel()}
   <ReflogPanel {repoId} />
 {/snippet}
@@ -470,6 +517,7 @@
 {#snippet historyPanel()}
   <HistoryView
     {repoId}
+    {root}
     onPopout={popOutHistory}
     bookmarks={bookmarks.shas(root)}
     branchColors={(refs) => branchColorForRefs(refs, branchColorStore.rules(root))}
@@ -633,7 +681,13 @@
       </header>
       {#if !diffCollapsed}
         <div class="diff-body">
-          <DiffViewer files={diffFiles} />
+          <DiffViewer
+            files={diffFiles}
+            {repoId}
+            hunkStaging={diffHunkable ? "stage" : undefined}
+            hunkDiscard={diffHunkable}
+            onMutated={refresh}
+          />
         </div>
       {/if}
     </div>
@@ -664,6 +718,24 @@
       }}
     />
     <AuthDialog />
+
+<PromptDialog
+  bind:open={saveLayoutOpen}
+  title="Save layout as"
+  message="Name the preset (per-repo overlays are kept)."
+  placeholder="Preset name"
+  confirmLabel="Save"
+  onSubmit={(value) => layouts.saveAs(root, value)}
+/>
+
+<ConfirmDialog
+  bind:open={abortOpen}
+  title={opSource ? `Abort the ${conflictSourceLabel(opSource).toLowerCase()}?` : "Abort?"}
+  message="The repository returns to its pre-operation state."
+  confirmLabel="Abort operation"
+  danger
+  onConfirm={() => void onAbortConfirmed()}
+/>
 
 <style>
   .repo-workspace {

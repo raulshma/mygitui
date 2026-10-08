@@ -1,7 +1,8 @@
 <script lang="ts">
   /**
-   * Branch panel (M2, extended in M3) — local branches +
-   * create/switch/rename/delete + reset.
+   * Branch panel (M2, extended in M3 and M9) — local branches +
+   * create/switch/rename/delete/reset/merge, a tags section, merged-branch
+   * cleanup, and right-click context menus.
    *
    * Rows show name, short sha, upstream with ↑ahead/↓behind, a "gone" badge
    * when the upstream disappeared, and a HEAD marker on the current branch.
@@ -9,17 +10,20 @@
    * Switching with a dirty worktree offers a real choice: "Stash changes"
    * (stash_push → switch) or "Proceed anyway" (forced checkout); clean
    * switches stay one click. Deleting previews the operation first
-   * (`ops_preview`): merged branches get a plain confirm; unmerged ones open
+   * (`ops_preview`): merged branches get a ConfirmDialog; unmerged ones open
    * the PreviewDialog — type the branch name, optionally keep the undo
    * checkpoint (guard_checkpoint "pre-branch-delete"), then force-delete.
    * "Reset to…" per row opens the ResetDialog (reset the current branch to
-   * that branch — gitk semantics). Every mutation reloads the list and
-   * notifies the owner (`onMutated` → RepoView refreshStatus). Remote
-   * branches land later; the panel is local-only for now.
+   * that branch — gitk semantics). "Merge…" opens the MergeDialog (ff
+   * policy / squash / no-commit / -X favor). "Clean merged…" batch-deletes
+   * every branch already merged into HEAD behind one dialog. Every mutation
+   * reloads the list and notifies the owner (`onMutated` → RepoView
+   * refreshStatus).
    */
   import {
     branchCreate,
     branchDelete,
+    branchIsMerged,
     branchRename,
     branchSwitch,
     branches,
@@ -31,8 +35,13 @@
   import { tabStore } from "$lib/stores/tabs.svelte";
   import { busy } from "$lib/stores/ops.svelte";
   import { toast } from "$lib/toast";
+  import { onUiEvent } from "$lib/palette/events";
+  import { showMenuAt, type MenuEntry } from "$lib/components/menu/contextMenuStore.svelte";
   import PreviewDialog from "$lib/components/safety/PreviewDialog.svelte";
   import ResetDialog from "$lib/components/safety/ResetDialog.svelte";
+  import ConfirmDialog from "$lib/components/safety/ConfirmDialog.svelte";
+  import MergeDialog from "$lib/components/merge/MergeDialog.svelte";
+  import TagsSection from "$lib/components/panels/TagsSection.svelte";
   import { isMergedPreview } from "$lib/components/safety/safetyModel";
 
   let {
@@ -47,6 +56,10 @@
   let list = $state<BranchInfo[]>([]);
   let loading = $state(false);
   let error = $state<string | null>(null);
+  /** Contains-filter (branches-focus-switch focuses it). */
+  let filter = $state("");
+  let filterEl = $state<HTMLInputElement | undefined>(undefined);
+  let createNameEl = $state<HTMLInputElement | undefined>(undefined);
 
   // Create form
   let newName = $state("");
@@ -62,8 +75,20 @@
   let resetTo = $state<string | null>(null);
   let stashButton = $state<HTMLButtonElement | undefined>();
 
+  // M9 flows
+  let merging = $state<string | null>(null);
+  /** Clean-merged wizard: candidate list + checked set. */
+  let cleanupOpen = $state(false);
+  let cleanupCandidates = $state<{ name: string; checked: boolean }[]>([]);
+  let cleanupBusy = $state(false);
+
   const branchBusy = $derived(busy(repoId, "branch"));
   const headBranch = $derived(list.find((b) => b.is_head) ?? null);
+  const visibleBranches = $derived(
+    filter.trim() === ""
+      ? list
+      : list.filter((b) => b.name.toLowerCase().includes(filter.trim().toLowerCase())),
+  );
 
   // Focus the primary choice when the switch dialog appears.
   $effect(() => {
@@ -79,7 +104,25 @@
     switchChoice = null;
     previewDelete = null;
     resetTo = null;
+    merging = null;
+    filter = "";
     void reload();
+  });
+
+  // Palette commands ride the typed event bus.
+  $effect(() => {
+    const unlisteners = [
+      onUiEvent("branches-focus-create", () => {
+        createNameEl?.focus();
+      }),
+      onUiEvent("branches-focus-switch", () => {
+        filterEl?.focus();
+      }),
+      onUiEvent("branches-cleanup", () => void onCleanupStart()),
+    ];
+    return () => {
+      for (const unlisten of unlisteners) unlisten();
+    };
   });
 
   async function reload(): Promise<void> {
@@ -172,7 +215,7 @@
   }
 
   /**
-   * Starts a delete: preview first. Merged → plain confirm (safe delete);
+   * Starts a delete: preview first. Merged → ConfirmDialog (safe delete);
    * unmerged → PreviewDialog with type-the-name + undo checkpoint.
    */
   async function onDeleteStart(branch: BranchInfo): Promise<void> {
@@ -193,14 +236,20 @@
       return;
     }
     if (isMergedPreview(info)) {
-      if (window.confirm(`Delete branch ${branch.name}? (${info.summary})`)) {
-        await run(`Delete ${branch.name}`, () =>
-          branchDelete(repoId, branch.name, false),
-        );
-      }
+      confirmDelete = { name: branch.name };
       return;
     }
     previewDelete = { name: branch.name, info };
+  }
+
+  /** Merged-delete confirmation (ConfirmDialog state). */
+  let confirmDelete = $state<{ name: string } | null>(null);
+
+  async function onDeleteConfirmed(): Promise<void> {
+    const job = confirmDelete;
+    if (!job) return;
+    confirmDelete = null;
+    await run(`Delete ${job.name}`, () => branchDelete(repoId, job.name, false));
   }
 
   /** PreviewDialog confirmed: optional guard checkpoint, then force delete. */
@@ -222,6 +271,124 @@
     });
   }
 
+  /** Pushes one branch to its default remote (optionally setting upstream). */
+  async function onPush(branch: BranchInfo, setUpstream: boolean): Promise<void> {
+    await run(`Push ${branch.name}`, async () => {
+      const { pushRepo, remotes } = await import("$lib/ipc/client");
+      const remoteList = await remotes(repoId);
+      const remote =
+        remoteList.find((r) => r.name === "origin") ?? remoteList[0];
+      if (!remote) {
+        toast("No remote configured — cannot push", { kind: "error" });
+        return;
+      }
+      const stats = await pushRepo(repoId, {
+        remote: remote.name,
+        branch: branch.name,
+        force: false,
+        force_with_lease: false,
+        set_upstream: setUpstream,
+        refs: [],
+        tags: false,
+        delete: false,
+      });
+      toast(
+        `Pushed ${branch.name} (${stats.updated_refs.length} ref${stats.updated_refs.length === 1 ? "" : "s"} updated)`,
+        { kind: "success" },
+      );
+    });
+  }
+
+  // -- M9: merged-branch cleanup wizard --------------------------------------
+
+  async function onCleanupStart(): Promise<void> {
+    const into = headBranch?.name ?? "HEAD";
+    const candidates: { name: string; checked: boolean }[] = [];
+    for (const branch of list) {
+      if (branch.is_head) continue;
+      try {
+        if (await branchIsMerged(repoId, branch.name, into)) {
+          candidates.push({ name: branch.name, checked: true });
+        }
+      } catch {
+        // Unresolvable branch (unborn etc.) — skip it.
+      }
+    }
+    if (candidates.length === 0) {
+      toast(`No branches are fully merged into ${into}`, { kind: "info" });
+      return;
+    }
+    cleanupCandidates = candidates;
+    cleanupOpen = true;
+  }
+
+  async function onCleanupRun(): Promise<void> {
+    const names = cleanupCandidates
+      .filter((candidate) => candidate.checked)
+      .map((candidate) => candidate.name);
+    cleanupOpen = false;
+    if (names.length === 0) return;
+    cleanupBusy = true;
+    let deleted = 0;
+    const failed: string[] = [];
+    for (const name of names) {
+      try {
+        await branchDelete(repoId, name, false);
+        deleted++;
+      } catch {
+        failed.push(name);
+      }
+    }
+    cleanupBusy = false;
+    if (failed.length === 0) {
+      toast(`Deleted ${deleted} merged branch${deleted === 1 ? "" : "es"}`, {
+        kind: "success",
+      });
+    } else {
+      toast(
+        `Deleted ${deleted}; failed: ${failed.join(", ")}`,
+        { kind: "error" },
+      );
+    }
+    afterMutation();
+  }
+
+  // -- M9 F1: row context menu -------------------------------------------------
+
+  function branchMenu(event: MouseEvent, branch: BranchInfo): void {
+    const entries: MenuEntry[] = [];
+    if (!branch.is_head) {
+      entries.push(
+        { id: "switch", label: "Switch", run: () => void onSwitch(branch) },
+        { id: "merge", label: "Merge into current…", run: () => (merging = branch.name) },
+      );
+    }
+    entries.push(
+      { id: "push", label: "Push", run: () => void onPush(branch, false) },
+      { id: "upstream", label: "Push and set upstream", run: () => void onPush(branch, true) },
+      {
+        id: "rename",
+        label: "Rename…",
+        run: () => (renaming = { old: branch.name, value: branch.name }),
+      },
+      {
+        id: "reset",
+        label: "Reset current branch to here…",
+        run: () => (resetTo = branch.name),
+      },
+      { id: "copy", label: "Copy branch name", run: () => void navigator.clipboard.writeText(branch.name) },
+    );
+    if (!branch.is_head) {
+      entries.push({
+        id: "delete",
+        label: "Delete…",
+        danger: true,
+        run: () => void onDeleteStart(branch),
+      });
+    }
+    showMenuAt(event, entries);
+  }
+
   function shortSha(sha: string): string {
     return sha.slice(0, 7);
   }
@@ -232,6 +399,23 @@
     <button class="tb" type="button" onclick={() => void reload()} disabled={loading}>
       {loading ? "Loading…" : "Refresh"}
     </button>
+    <button
+      class="tb"
+      type="button"
+      title="Delete every branch already merged into the current one"
+      onclick={() => void onCleanupStart()}
+      disabled={cleanupBusy}
+    >
+      Clean merged…
+    </button>
+    <input
+      class="filter"
+      type="search"
+      bind:this={filterEl}
+      bind:value={filter}
+      placeholder="Filter branches"
+      aria-label="Filter branches"
+    />
     {#if branchBusy}<span class="busy" role="status">Branch op running…</span>{/if}
   </div>
 
@@ -248,6 +432,7 @@
       type="text"
       placeholder="New branch name"
       aria-label="New branch name"
+      bind:this={createNameEl}
       bind:value={newName}
     />
     <label class="from">
@@ -274,8 +459,12 @@
     <p class="state">No branches.</p>
   {:else}
     <ul class="branches" role="list" aria-label="Local branches">
-      {#each list as branch (branch.name)}
-        <li class="row" class:head={branch.is_head}>
+      {#each visibleBranches as branch (branch.name)}
+        <li
+          class="row"
+          class:head={branch.is_head}
+          oncontextmenu={(e) => branchMenu(e, branch)}
+        >
           {#if renaming?.old === branch.name}
             <form
               class="rename"
@@ -319,6 +508,15 @@
                 <button class="tb" type="button" onclick={() => void onSwitch(branch)}>
                   Switch
                 </button>
+                <button
+                  class="tb"
+                  type="button"
+                  aria-label={`Merge ${branch.name} into the current branch`}
+                  title={`Merge ${branch.name} into ${headBranch?.name ?? "HEAD"}`}
+                  onclick={() => (merging = branch.name)}
+                >
+                  Merge…
+                </button>
               {:else}
                 <span class="head-chip">HEAD</span>
               {/if}
@@ -355,6 +553,85 @@
       {/each}
     </ul>
   {/if}
+
+  <TagsSection {repoId} targets={list.map((b) => b.name)} onMutated={afterMutation} />
+
+  {#if merging}
+    <MergeDialog
+      open={true}
+      {repoId}
+      branch={merging}
+      onClose={() => (merging = null)}
+      onDone={() => {
+        merging = null;
+        afterMutation();
+      }}
+    />
+  {/if}
+
+  {#if cleanupOpen}
+    <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+    <div
+      class="scrim"
+      role="presentation"
+      onkeydown={(e) => {
+        if (e.key === "Escape") {
+          e.preventDefault();
+          cleanupOpen = false;
+        }
+      }}
+    >
+      <div
+        class="dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="cleanup-title"
+      >
+        <h2 id="cleanup-title" class="title">Delete merged branches</h2>
+        <p class="text">
+          Fully merged into <strong>{headBranch?.name ?? "HEAD"}</strong> — no
+          commits will be lost. Uncheck anything you want to keep.
+        </p>
+        <ul class="cleanup-list">
+          {#each cleanupCandidates as candidate (candidate.name)}
+            <li>
+              <label>
+                <input type="checkbox" bind:checked={candidate.checked} />
+                <span>{candidate.name}</span>
+              </label>
+            </li>
+          {/each}
+        </ul>
+        <div class="actions">
+          <button class="secondary" type="button" onclick={() => (cleanupOpen = false)}>
+            Cancel
+          </button>
+          <button
+            class="primary"
+            type="button"
+            disabled={cleanupCandidates.every((c) => !c.checked)}
+            onclick={() => void onCleanupRun()}
+          >
+            Delete checked
+          </button>
+        </div>
+      </div>
+    </div>
+  {/if}
+
+  <ConfirmDialog
+    bind:open={
+      () => confirmDelete !== null,
+      (v) => {
+        if (!v) confirmDelete = null;
+      }
+    }
+    title={confirmDelete ? `Delete branch ${confirmDelete.name}?` : ""}
+    message="The branch is fully merged into the current branch — deleting it loses no commits."
+    confirmLabel="Delete branch"
+    danger
+    onConfirm={() => void onDeleteConfirmed()}
+  />
 
   {#if switchChoice}
     <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
@@ -436,6 +713,46 @@
     gap: 0.5rem;
     padding: 0.375rem 0.5rem;
     flex: none;
+  }
+
+  .filter {
+    flex: 1;
+    min-width: 5rem;
+    font: inherit;
+    font-size: 0.72rem;
+    color: var(--m3-on-surface);
+    background: var(--m3-surface-container-lowest, var(--m3-surface));
+    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
+    border-radius: var(--m3-shape-extra-small, 4px);
+    padding: 0.2rem 0.45rem;
+  }
+
+  .filter:focus-visible {
+    outline: 2px solid var(--m3-primary);
+    outline-offset: -1px;
+  }
+
+  .cleanup-list {
+    margin: 0 0 0.75rem;
+    padding: 0;
+    list-style: none;
+    max-height: 14rem;
+    overflow-y: auto;
+  }
+
+  .cleanup-list label {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.15rem 0;
+    cursor: pointer;
+    font-family: ui-monospace, Consolas, monospace;
+    font-size: 0.75rem;
+  }
+
+  .cleanup-list input {
+    accent-color: var(--m3-primary);
+    margin: 0;
   }
 
   .busy {

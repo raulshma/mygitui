@@ -39,6 +39,10 @@
   import { orderForCherryPick } from "$lib/components/rebase/plannerModel";
   import { HistoryStore } from "$lib/stores/history.svelte";
   import { tabStore } from "$lib/stores/tabs.svelte";
+  import { bookmarks as bookmarkStore } from "$lib/components/graph/bookmarks.svelte";
+  import { onUiEvent } from "$lib/palette/events";
+  import { showMenuAt, type MenuEntry } from "$lib/components/menu/contextMenuStore.svelte";
+  import { openPanelPopout } from "$lib/layout/popout";
   import SplitPane from "$lib/components/layout/SplitPane.svelte";
   import { readSplitRatio, writeSplitRatio } from "$lib/layout/splitPrefs";
   import {
@@ -51,11 +55,14 @@
 
   let {
     repoId,
+    root = "",
     onPopout,
     bookmarks,
     branchColors,
   }: {
     repoId: string;
+    /** Worktree root (bookmark persistence key); empty in popouts. */
+    root?: string;
     onPopout?: () => void;
     /** M7: bookmarked shas → dashed ring markers on graph nodes (optional;
      *  popouts omit it — display-only decorations, safe to be absent). */
@@ -468,6 +475,76 @@
     // History restarts itself via repo-changed (HEAD moved); refresh status.
     void tabStore.refreshStatus(repoId);
   }
+
+  // -- M9 F1: palette event wiring + context menus ---------------------------
+
+  let filterTextEl = $state<HTMLInputElement | undefined>(undefined);
+
+  // Palette commands ride the typed event bus (palette/events.ts).
+  $effect(() => {
+    const unlisteners = [
+      onUiEvent("history-focus-filter", () => filterTextEl?.focus()),
+      onUiEvent("history-clear-filter", () => store.clearFilter()),
+      onUiEvent("history-refresh", () => store.restart()),
+      onUiEvent("history-toggle-blame", () => {
+        if (blameTarget) {
+          blameTarget = null;
+        } else if (selectedSha && detailFiles && detailFiles.length > 0) {
+          openBlame(detailFiles[0]!.path);
+        } else {
+          toast("Select a commit with file changes to blame");
+        }
+      }),
+      onUiEvent("history-select-commit", ({ sha }) => {
+        if (store.revealSha(sha)) {
+          select(sha, { scroll: true });
+        }
+      }),
+      onUiEvent("commit-action", ({ sha, action }) => {
+        if (repoId === "") return;
+        select(sha);
+        if (action === "cherry-pick") void doCherryPick();
+        else if (action === "revert") void doRevert();
+        else if (action === "bookmark") toggleBookmark(sha);
+      }),
+    ];
+    return () => {
+      for (const unlisten of unlisteners) unlisten();
+    };
+  });
+
+  /** Flips the commit's bookmark (persisted per repo root). */
+  function toggleBookmark(sha: string): void {
+    if (root === "") return;
+    bookmarkStore.ensure(root);
+    const added = bookmarkStore.toggle(root, sha);
+    toast(added ? "Commit bookmarked" : "Bookmark removed", {
+      kind: "success",
+    });
+  }
+
+  /** Row right-click: the commit action menu. */
+  function commitMenu(event: MouseEvent, sha: string, idx: number): void {
+    onRowClick(sha, idx, event);
+    const bookmarked = root !== "" && bookmarkStore.has(root, sha);
+    const entries: MenuEntry[] = [
+      { id: "pick", label: "Cherry-pick…", run: () => void doCherryPick() },
+      { id: "revert", label: "Revert…", run: () => void doRevert() },
+      { id: "rebase", label: "Rebase from here…", run: rebaseFromHere },
+      { id: "bookmark", label: bookmarked ? "Remove bookmark" : "Bookmark commit", run: () => toggleBookmark(sha) },
+      { id: "copy", label: "Copy sha", run: copySha },
+    ];
+    showMenuAt(event, entries);
+  }
+
+  /** Changed-file right-click: per-file actions. */
+  function fileMenu(event: MouseEvent, path: string): void {
+    const entries: MenuEntry[] = [
+      { id: "history", label: "File history", run: () => void openPanelPopout("filehistory", repoId, `History: ${path}`, { path }) },
+      { id: "blame", label: "Blame", run: () => openBlame(path) },
+    ];
+    showMenuAt(event, entries);
+  }
 </script>
 
 <section class="history" aria-label="Commit history">
@@ -475,6 +552,7 @@
   <div class="filterbar" role="search" aria-label="Filter commits">
     <input
       class="f"
+      bind:this={filterTextEl}
       type="search"
       placeholder="Search commits"
       aria-label="Search commit text"
@@ -513,12 +591,15 @@
         onchange={(e) => store.setFilter({ before: e.currentTarget.value })}
       />
     </label>
-    <!-- Regex lands in M1.1 — shown but disabled. -->
-    <label class="regex" title="M1.1">
-      <input type="checkbox" disabled aria-describedby="regex-note" />
+    <!-- M9: regex mode is live (backend `LogFilter.regex`). -->
+    <label class="regex" title="Treat the search text as a regular expression">
+      <input
+        type="checkbox"
+        checked={store.filter.regex}
+        onchange={(e) => store.setFilter({ regex: e.currentTarget.checked })}
+      />
       <span>Regex</span>
     </label>
-    <span id="regex-note" class="sr-only">Regex search lands in M1.1</span>
 
     {#if filterActive}
       <button class="clear" onclick={() => store.clearFilter()}>Clear</button>
@@ -589,6 +670,7 @@
               style:top={`${v.idx * ROW_HEIGHT}px`}
               style:height={`${ROW_HEIGHT}px`}
               onclick={(e) => onRowClick(v.commit.sha, v.idx, e)}
+              oncontextmenu={(e) => commitMenu(e, v.commit.sha, v.idx)}
               onkeydown={(e) => {
                 if (e.key === "Enter" || e.key === " ") {
                   e.preventDefault();
@@ -707,7 +789,9 @@
           {:else}
             <ul class="filelist" aria-label="Changed files">
               {#each detailFiles as file (file.path)}
-                <li>
+                <li
+                  oncontextmenu={(e) => fileMenu(e, file.path)}
+                >
                   <span class="fpath" title={file.path}>
                     {#if file.old_path}{file.old_path} → {/if}{file.path}
                   </span>
@@ -720,6 +804,12 @@
                     {/if}
                   </span>
                   <button class="blame" onclick={() => openBlame(file.path)}>Blame</button>
+                  <button
+                    class="blame"
+                    title="History of {file.path} (popout)"
+                    onclick={() =>
+                      void openPanelPopout("filehistory", repoId, `History: ${file.path}`, { path: file.path })}
+                  >History</button>
                 </li>
               {/each}
             </ul>

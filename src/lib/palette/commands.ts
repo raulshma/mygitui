@@ -179,7 +179,11 @@ async function runPush(ctx: CommandCtx): Promise<void> {
     remote,
     branch,
     force: false,
+    force_with_lease: false,
     set_upstream: false,
+    refs: [],
+    tags: false,
+    delete: false,
   };
   const stats = await pushRepo(repoId, options);
   ok(`Pushed ${branch} to ${remote} (${stats.updated_refs.length} refs updated)`);
@@ -432,6 +436,14 @@ export const COMMANDS: Command[] = [
     keywords: ["git push", "publish"],
     when: (ctx) => ctx.repoId !== null,
     run: (ctx) => runPush(ctx),
+  },
+  {
+    id: "branches.clean-merged",
+    title: "Delete merged branches…",
+    section: "Branches",
+    keywords: ["cleanup", "prune branches", "delete merged"],
+    when: (ctx) => ctx.repoId !== null,
+    run: () => dispatch("branches-cleanup"),
   },
 
   // -- History --------------------------------------------------------------

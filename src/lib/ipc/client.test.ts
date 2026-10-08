@@ -555,7 +555,16 @@ const REMOTES: RemoteInfo[] = [
 
 const FETCH_OPTIONS: FetchOptions = { remote: "origin", prune: true, refs: [], depth: null };
 const PULL_OPTIONS: PullOptions = { remote: "origin", branch: "main", ff_only: true, rebase: false };
-const PUSH_OPTIONS: PushOptions = { remote: "origin", branch: "main", force: false, set_upstream: false };
+const PUSH_OPTIONS: PushOptions = {
+  remote: "origin",
+  branch: "main",
+  force: false,
+  force_with_lease: false,
+  set_upstream: false,
+  refs: [],
+  tags: false,
+  delete: false,
+};
 
 const NET_STATS: NetStats = {
   received_bytes: 4_096,

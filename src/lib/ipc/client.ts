@@ -38,7 +38,10 @@ import type {
   HookInfo,
   LogFilter,
   LogPage,
+  MergeOptions,
   MergeResult,
+  MergetoolInfo,
+  MergetoolResult,
   NetStats,
   OpProgress,
   PreviewInfo,
@@ -47,6 +50,7 @@ import type {
   RebaseState,
   RebaseStep,
   ReflogEntry,
+  RemoteBranchInfo,
   RemoteInfo,
   RepoId,
   RepoInfo,
@@ -54,7 +58,9 @@ import type {
   ResetKind,
   SigningInfo,
   StageRequest,
+  StageTarget,
   StashInfo,
+  TagInfo,
   WorktreeInfo,
 } from "./types";
 
@@ -640,8 +646,77 @@ function invokeTauri<T>(
   return call<T>(command, args);
 }
 
-export async function mergeBranch(repoId: string, refName: string, noFF: boolean): Promise<MergeResult> {
-  return invokeTauri("merge_branch", { repo_id: repoId, ref_name: refName, no_ff: noFF });
+export async function mergeBranch(
+  repoId: string,
+  refName: string,
+  opts: MergeOptions,
+): Promise<MergeResult> {
+  return invokeTauri("merge_branch", {
+    repo_id: repoId,
+    ref_name: refName,
+    opts,
+  });
+}
+
+/** Deletes a tag (alias of {@link tagDelete} with the M3-era name). */
+export function tagList(repoId: RepoId): Promise<TagInfo[]> {
+  return call<TagInfo[]>("tag_list", { repo_id: repoId });
+}
+
+/** Creates a signed annotated tag via the git CLI (`git tag -s`). */
+export function tagCreateSigned(
+  repoId: RepoId,
+  name: string,
+  message: string,
+  target?: string,
+): Promise<void> {
+  const args: Record<string, unknown> = { repo_id: repoId, name, message };
+  if (target !== undefined && target !== "") args.target = target;
+  return call<void>("tag_create_signed", args);
+}
+
+/** Remote-tracking branches across all remotes. */
+export function remoteBranches(repoId: RepoId): Promise<RemoteBranchInfo[]> {
+  return call<RemoteBranchInfo[]>("remote_branches", { repo_id: repoId });
+}
+
+/**
+ * Creates + checks out a local branch tracking `<remote>/<name>`
+ * (`git switch <name>`); returns the local branch name.
+ */
+export function branchCheckoutRemote(
+  repoId: RepoId,
+  remote: string,
+  name: string,
+  newLocal?: string,
+): Promise<string> {
+  const args: Record<string, unknown> = { repo_id: repoId, remote, name };
+  if (newLocal !== undefined && newLocal !== "") args.new_local = newLocal;
+  return call<string>("branch_checkout_remote", args);
+}
+
+/** Configured external merge tools (pure config read). */
+export function mergetoolInfo(repoId: RepoId): Promise<MergetoolInfo> {
+  return call<MergetoolInfo>("mergetool_info", { repo_id: repoId });
+}
+
+/** Launches `git mergetool` for one conflicted path. */
+export function mergetoolRun(
+  repoId: RepoId,
+  path: string,
+  tool?: string,
+): Promise<MergetoolResult> {
+  const args: Record<string, unknown> = { repo_id: repoId, path };
+  if (tool !== undefined && tool !== "") args.tool = tool;
+  return call<MergetoolResult>("mergetool_run", args);
+}
+
+/** Discards local changes (files or hunks); checkpoints first. */
+export function discard(
+  repoId: RepoId,
+  targets: StageTarget[],
+): Promise<void> {
+  return call<void>("discard", { repo_id: repoId, targets });
 }
 
 export async function mergeAbort(repoId: string): Promise<void> {
@@ -852,6 +927,14 @@ export function gitignoreAdd(repoId: string, pattern: string): Promise<void> {
 /** The curated builtin gitignore templates (no repository needed). */
 export function gitignoreTemplates(): Promise<GitignoreTemplate[]> {
   return call<GitignoreTemplate[]>("gitignore_templates", {});
+}
+
+/** Applies a builtin gitignore template by name (idempotent per line). */
+export function gitignoreApplyTemplate(
+  repoId: string,
+  name: string,
+): Promise<void> {
+  return call<void>("gitignore_apply_template", { repo_id: repoId, name });
 }
 
 // ---------------------------------------------------------------------------

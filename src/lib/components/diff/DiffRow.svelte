@@ -18,10 +18,19 @@
     row,
     onToggleCollapse,
     onLoadImage,
+    onStageHunk,
+    onDiscardHunk,
+    /** Hunk-header staging button label ("Unstage hunk" when unstaging). */
+    stageLabel = "Stage hunk",
   }: {
     row: DiffRow;
     onToggleCollapse?: (path: string) => void;
     onLoadImage?: LoadImageFn;
+    /** Stage/unstage this hunk. */
+    onStageHunk?: (fileIndex: number, hunkIndex: number) => void;
+    /** Discard this hunk (workdir-only; checkpointed upstream). */
+    onDiscardHunk?: (fileIndex: number, hunkIndex: number) => void;
+    stageLabel?: string;
   } = $props();
 </script>
 
@@ -65,6 +74,23 @@
     aria-label={`Hunk: old lines ${row.oldStart} to ${row.oldStart + row.oldCount - 1}, new lines ${row.newStart} to ${row.newStart + row.newCount - 1}`}
   >
     <span class="hh">@@ -{row.oldStart},{row.oldCount} +{row.newStart},{row.newCount} @@</span>
+    {#if onStageHunk || onDiscardHunk}
+      <span class="hunk-actions">
+        {#if onStageHunk}
+          <button
+            type="button"
+            onclick={() => onStageHunk?.(row.fileIndex, row.hunkIndex)}
+          >{stageLabel}</button>
+        {/if}
+        {#if onDiscardHunk}
+          <button
+            type="button"
+            class="discard"
+            onclick={() => onDiscardHunk?.(row.fileIndex, row.hunkIndex)}
+          >Discard hunk</button>
+        {/if}
+      </span>
+    {/if}
   </div>
 
 {:else if row.kind === "context"}
@@ -299,6 +325,30 @@
   .row.hunk-header:focus-visible {
     outline: 2px solid var(--m3-primary);
     outline-offset: -2px;
+  }
+  .hunk-actions {
+    display: none;
+    gap: 0.25rem;
+    margin-left: auto;
+    flex: none;
+  }
+  .row.hunk-header:hover .hunk-actions,
+  .row.hunk-header:focus-within .hunk-actions,
+  .row.hunk-header:focus-visible .hunk-actions {
+    display: inline-flex;
+  }
+  .hunk-actions button {
+    border: 1px solid var(--m3-outline-variant, transparent);
+    border-radius: var(--m3-shape-small, 8px);
+    background: var(--m3-surface, none);
+    color: var(--m3-on-surface);
+    font: inherit;
+    font-size: 10px;
+    padding: 0.05rem 0.4rem;
+    cursor: pointer;
+  }
+  .hunk-actions button.discard {
+    color: var(--m3-error);
   }
 
   /* ---- placeholders -------------------------------------------------------- */

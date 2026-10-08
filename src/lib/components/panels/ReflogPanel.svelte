@@ -1,17 +1,22 @@
 <script lang="ts">
   /**
-   * Reflog panel (M3) — the safety net for lost commits.
+   * Reflog panel (M3, real actions in M9) — the safety net for lost commits.
    *
    * A ref selector (HEAD + local branches) drives `reflog`; entries are
    * grouped by calendar day and show short sha, message, author and
    * relative date. Rendering caps at 500 entries (the full list stays in
    * memory; virtualization lands if it ever matters). Clicking an entry
-   * copies its sha and toasts that commit actions arrive in M4. A hint
-   * banner explains the recovery story.
+   * copies its sha; the right-click menu (and per-entry buttons) offer the
+   * recovery actions: select the commit in history, reset the current
+   * branch to it (ResetDialog), or branch from here.
    */
-  import { branches, reflog } from "$lib/ipc/client";
+  import { branchCreate, branches, reflog } from "$lib/ipc/client";
   import type { BranchInfo, ReflogEntry } from "$lib/ipc/types";
   import { toast } from "$lib/toast";
+  import { emitUiEvent } from "$lib/palette/events";
+  import { showMenuAt, type MenuEntry } from "$lib/components/menu/contextMenuStore.svelte";
+  import ResetDialog from "$lib/components/safety/ResetDialog.svelte";
+  import PromptDialog from "$lib/components/safety/PromptDialog.svelte";
   import {
     groupReflogByDay,
     REFLOG_DISPLAY_CAP,
@@ -32,6 +37,10 @@
   let loading = $state(false);
   let error = $state<string | null>(null);
 
+  // Recovery flows
+  let resetTo = $state<string | null>(null);
+  let branchFrom = $state<string | null>(null);
+
   const visible = $derived(
     entries.length > REFLOG_DISPLAY_CAP ? entries.slice(0, REFLOG_DISPLAY_CAP) : entries,
   );
@@ -41,6 +50,8 @@
     // Reload (back to HEAD) when the repo switches.
     void repoId;
     selectedRef = "HEAD";
+    resetTo = null;
+    branchFrom = null;
     void reload();
   });
 
@@ -64,13 +75,54 @@
     void reload();
   }
 
-  function onEntryClick(entry: ReflogEntry): void {
-    const sha = shortSha(entry.new_sha);
-    void navigator.clipboard?.writeText(entry.new_sha).catch(() => {
-      // Clipboard can be unavailable (permissions); the toast still tells
-      // the user which commit it was.
-    });
-    toast(`${sha} copied — commit actions land in M4`, { kind: "info" });
+  function copySha(entry: ReflogEntry): void {
+    void navigator.clipboard?.writeText(entry.new_sha).then(() =>
+      toast(`${shortSha(entry.new_sha)} copied`, { kind: "success" }),
+    );
+  }
+
+  function entryMenu(event: MouseEvent, entry: ReflogEntry): void {
+    const entries: MenuEntry[] = [
+      {
+        id: "copy",
+        label: "Copy sha",
+        run: () => copySha(entry),
+      },
+      {
+        id: "show",
+        label: "Show in history",
+        run: () => emitUiEvent("history-select-commit", { sha: entry.new_sha }),
+      },
+      {
+        id: "reset",
+        label: "Reset current branch to here…",
+        run: () => (resetTo = entry.new_sha),
+      },
+      {
+        id: "branch",
+        label: "Create branch here…",
+        run: () => (branchFrom = entry.new_sha),
+      },
+    ];
+    showMenuAt(event, entries);
+  }
+
+  async function onCreateBranch(name: string): Promise<void> {
+    const sha = branchFrom;
+    branchFrom = null;
+    if (!sha) return;
+    try {
+      await branchCreate(repoId, name, true, sha);
+      toast(`Created branch ${name} at ${shortSha(sha)} (checked out)`, {
+        kind: "success",
+      });
+      void reload();
+    } catch (err) {
+      toast(
+        `Branch create failed: ${err instanceof Error ? err.message : String(err)}`,
+        { kind: "error" },
+      );
+    }
   }
 </script>
 
@@ -113,7 +165,8 @@
                 class="entry"
                 type="button"
                 title={`${entry.message} — click to copy ${shortSha(entry.new_sha)}`}
-                onclick={() => onEntryClick(entry)}
+                onclick={() => copySha(entry)}
+                oncontextmenu={(e) => entryMenu(e, entry)}
               >
                 <span class="sha">{shortSha(entry.new_sha)}</span>
                 <span class="what">
@@ -133,6 +186,27 @@
     </div>
   {/if}
 </aside>
+
+<ResetDialog
+  {repoId}
+  open={resetTo !== null}
+  defaultTarget={resetTo ?? undefined}
+  onClose={() => (resetTo = null)}
+  onDone={() => {
+    resetTo = null;
+    void reload();
+  }}
+/>
+
+<PromptDialog
+  open={branchFrom !== null}
+  title="Create branch here"
+  message={branchFrom ? `New branch at ${shortSha(branchFrom)} (checked out).` : ""}
+  placeholder="Branch name"
+  confirmLabel="Create"
+  onCancel={() => (branchFrom = null)}
+  onSubmit={(name) => void onCreateBranch(name)}
+/>
 
 <style>
   .reflog-panel {
