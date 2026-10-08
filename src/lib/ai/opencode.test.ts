@@ -38,11 +38,11 @@ const FAKE_CLIENT = vi.hoisted(() => {
   return client;
 });
 
-vi.mock("@opencode-ai/sdk", () => ({
+vi.mock("@opencode-ai/sdk/client", () => ({
   createOpencodeClient: vi.fn(() => FAKE_CLIENT),
 }));
 
-import { createOpencodeClient } from "@opencode-ai/sdk";
+import { createOpencodeClient } from "@opencode-ai/sdk/client";
 
 /** A fetch mock that answers `/global/health` (and records requests). */
 function healthFetch(

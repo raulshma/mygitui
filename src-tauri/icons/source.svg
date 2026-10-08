@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#8a76f0"/>
+      <stop offset="1" stop-color="#4e3ab8"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.5" cy="0.1" r="0.95">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.20"/>
+      <stop offset="0.6" stop-color="#ffffff" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffc490"/>
+      <stop offset="1" stop-color="#ff9350"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1024" height="1024" rx="185" fill="url(#bg)"/>
+  <rect width="1024" height="1024" rx="185" fill="url(#glow)"/>
+
+  <!-- commit graph: main line + branch diverging from mid commit -->
+  <g fill="none" stroke="#f4f1ff" stroke-width="56" stroke-linecap="round">
+    <path d="M360 160 V864"/>
+    <path d="M360 512 C472 536 584 576 644 680"/>
+  </g>
+
+  <!-- main branch commits (donut style) -->
+  <circle cx="360" cy="224" r="48" fill="#f4f1ff"/>
+  <circle cx="360" cy="224" r="17" fill="#6452cd"/>
+  <circle cx="360" cy="512" r="48" fill="#f4f1ff"/>
+  <circle cx="360" cy="512" r="17" fill="#5b46c8"/>
+  <circle cx="644" cy="680" r="48" fill="#f4f1ff"/>
+  <circle cx="644" cy="680" r="17" fill="#5240bf"/>
+
+  <!-- HEAD commit -->
+  <circle cx="360" cy="800" r="61" fill="url(#accent)" stroke="#ffffff" stroke-width="14"/>
+</svg>

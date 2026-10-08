@@ -267,13 +267,12 @@ pub fn parse_github_remote(url: &str) -> Option<(String, String)> {
         let host = authority.rsplit('@').next().unwrap_or(authority);
         let host = host.split(':').next().unwrap_or(host);
         (host, path)
-    } else if let Some(colon) = url.find(':') {
+    } else {
+        let colon = url.find(':')?;
         // scp-like: `git@github.com:owner/repo.git` (no scheme).
         let authority = &url[..colon];
         let host = authority.rsplit('@').next().unwrap_or(authority);
         (host, &url[colon + 1..])
-    } else {
-        return None;
     };
 
     let host = host.trim().to_ascii_lowercase();

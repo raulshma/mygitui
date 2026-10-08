@@ -24,8 +24,11 @@
  * `AiError{backend: "opencode"}` with safe (secret-free) messages.
  */
 
-import { createOpencodeClient } from "@opencode-ai/sdk";
-import type { OpencodeClient } from "@opencode-ai/sdk";
+// Client-only subpath: the package root also re-exports ./server.js, whose
+// node-only deps (`which`, cross-spawn) read bare `process` at module scope
+// and crash the webview bundle.
+import { createOpencodeClient } from "@opencode-ai/sdk/client";
+import type { OpencodeClient } from "@opencode-ai/sdk/client";
 import { DEFAULT_OPENCODE_URL } from "./provider";
 import type { AiGenerateRequest, AiProvider, AiProbeResult } from "./provider";
 import { AiError } from "./types";
