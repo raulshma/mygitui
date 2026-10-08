@@ -13,8 +13,8 @@ mod forge;
 #[cfg(test)]
 mod forge_tests;
 mod ipc_commands;
-mod maintenance;
 mod keyring_store;
+mod maintenance;
 mod mergetool;
 mod ops;
 mod pty;

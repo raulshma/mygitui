@@ -18,7 +18,7 @@ use tauri::State;
 use crate::engine::git_engine::EngineError;
 use crate::engine::types::{
     BisectMark, BisectState, BlameLine, CheckpointInfo, CommitInfo, ConflictFile,
-    ConflictResolution, DiffSide, FileDiff, LogFilter, LfsStatus, MergeOptions, MergeResult,
+    ConflictResolution, DiffSide, FileDiff, LfsStatus, LogFilter, MergeOptions, MergeResult,
     RebaseState, RebaseStep, ReflogEntry, RemoteBranchInfo, RepoHealth, RepoId, RepoInfo,
     RepoStatus, ResetKind, SparseInfo, StashInfo, TagInfo, WorktreeInfo,
 };
@@ -1782,26 +1782,34 @@ pub async fn maintenance_run(
 ) -> Result<String, String> {
     let handle = get_handle(&state, &repo_id)?;
     let root = handle.root.clone();
-    finish_op(enqueue_mutation(&handle, "maintenance", move |_ctx, _repo| {
-        let workdir = std::path::Path::new(&root);
-        let parsed = match op.as_str() {
-            "gc" => crate::maintenance::MaintenanceOp::Gc,
-            "prune" => crate::maintenance::MaintenanceOp::Prune,
-            "commit_graph" => crate::maintenance::MaintenanceOp::CommitGraph,
-            "pack_refs" => crate::maintenance::MaintenanceOp::PackRefs,
-            // Exact object counts (parses count-objects -v into a summary).
-            "count_objects" => {
-                return crate::maintenance::count_objects(workdir)
-                    .map(|(loose, packed_kib)| {
-                        format!("loose objects: {loose}, packed size: {packed_kib} KiB")
-                    })
-                    .map_err(EngineError::Invalid);
-            }
-            other => return Err(EngineError::Invalid(format!("unknown maintenance op `{other}`"))),
-        };
-        let (args, timeout) = parsed.args();
-        crate::maintenance::git_run(workdir, args, timeout).map_err(EngineError::Invalid)
-    }))
+    finish_op(enqueue_mutation(
+        &handle,
+        "maintenance",
+        move |_ctx, _repo| {
+            let workdir = std::path::Path::new(&root);
+            let parsed = match op.as_str() {
+                "gc" => crate::maintenance::MaintenanceOp::Gc,
+                "prune" => crate::maintenance::MaintenanceOp::Prune,
+                "commit_graph" => crate::maintenance::MaintenanceOp::CommitGraph,
+                "pack_refs" => crate::maintenance::MaintenanceOp::PackRefs,
+                // Exact object counts (parses count-objects -v into a summary).
+                "count_objects" => {
+                    return crate::maintenance::count_objects(workdir)
+                        .map(|(loose, packed_kib)| {
+                            format!("loose objects: {loose}, packed size: {packed_kib} KiB")
+                        })
+                        .map_err(EngineError::Invalid);
+                }
+                other => {
+                    return Err(EngineError::Invalid(format!(
+                        "unknown maintenance op `{other}`"
+                    )))
+                }
+            };
+            let (args, timeout) = parsed.args();
+            crate::maintenance::git_run(workdir, args, timeout).map_err(EngineError::Invalid)
+        },
+    ))
     .await
 }
 

@@ -12,6 +12,7 @@
   import type { DiffLine } from "$lib/ipc/types";
   import { applyHighlights } from "$lib/components/diff/bytes";
   import { rowHeight, type DiffRow, type LoadImageFn } from "$lib/components/diff/rowModel";
+  import { cachedTokens, type TokenSpan } from "$lib/diff/highlight";
   import ImageCompare from "$lib/components/diff/ImageCompare.svelte";
 
   let {
@@ -20,6 +21,8 @@
     onLoadImage,
     onStageHunk,
     onDiscardHunk,
+    /** Owning file path (syntax highlighting); null disables it. */
+    filePath = null,
     /** Hunk-header staging button label ("Unstage hunk" when unstaging). */
     stageLabel = "Stage hunk",
   }: {
@@ -30,14 +33,34 @@
     onStageHunk?: (fileIndex: number, hunkIndex: number) => void;
     /** Discard this hunk (workdir-only; checkpointed upstream). */
     onDiscardHunk?: (fileIndex: number, hunkIndex: number) => void;
+    filePath?: string | null;
     stageLabel?: string;
   } = $props();
+
+  /**
+   * Syntax tokens when Shiki has them cached (M11): replaces word-level
+   * highlights for that line. Synchronous only — the render path never
+   * awaits; DiffViewer schedules the background parse.
+   */
+  function syntax(line: DiffLine): TokenSpan[] | null {
+    if (filePath === null) return null;
+    return cachedTokens(line.text, filePath);
+  }
 </script>
 
-<!-- Line text with word-level highlight spans (byte-safe, see bytes.ts).
-     Kept on one line: the cells are white-space:pre, so stray template
-     whitespace would render as spaces. -->
-{#snippet text(line: DiffLine)}{#if line.highlights.length > 0}{#each applyHighlights(line.text, line.highlights) as seg}{#if seg.hl}<span class="hl">{seg.text}</span>{:else}{seg.text}{/if}{/each}{:else}{line.text}{/if}{/snippet}
+<!-- Line text: syntax tokens win over word-level highlights. Kept on one
+     line: the cells are white-space:pre, so stray template whitespace would
+     render as spaces. -->
+{#snippet text(line: DiffLine)}
+  {@const tokens = syntax(line)}
+  {#if tokens !== null}
+    {#each tokens as token}{#if token.color}<span style:color={token.color}>{token.text}</span>{:else}{token.text}{/if}{/each}
+  {:else if line.highlights.length > 0}
+    {#each applyHighlights(line.text, line.highlights) as seg}{#if seg.hl}<span class="hl">{seg.text}</span>{:else}{seg.text}{/if}{/each}
+  {:else}
+    {line.text}
+  {/if}
+{/snippet}
 
 {#if row.kind === "file-header"}
   <div class="row file-header" style:height={`${rowHeight(row)}px`}>

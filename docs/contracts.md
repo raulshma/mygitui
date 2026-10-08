@@ -466,3 +466,57 @@ walk midpoint, known-bad tip excluded)
 - **RemotePanel "Branches" toggle per remote** — lists
   `remote_branches()` with per-branch Checkout (tracking local branch;
   hidden when already tracked) and Delete (push `:refs/heads/<name>`).
+
+---
+
+## M11 (cont.) — maintenance/sparse/LFS/archive, syntax highlighting, i18n
+
+### Backend (`src-tauri/src/maintenance.rs`; sanitized CLI layer)
+
+- **`repo_health(repo_id)`** → `RepoHealth` `{ git_size_bytes,
+  worktree_size_bytes, loose_objects, packed_objects?, pack_files,
+  has_commit_graph, commit_graph_bytes, packed_refs, last_gc? }` — pure fs
+  walk (bounded depth 3).
+- **`maintenance_run(repo_id, op)`** — op queue; `gc` (`git gc --auto`),
+  `prune`, `commit_graph` (`git commit-graph write --reachable
+  --split=replace` — revwalk acceleration; the Health panel surfaces a
+  "none — write one" hint when absent), `pack_refs` (`--all --prune`),
+  `count_objects` (parses `count-objects -v`).
+- **`archive(repo_id, spec, format, destination)`** — `git archive`;
+  formats `zip|tar|tar.gz`; metacharacter guard on spec/destination.
+- **`sparse_info` / `sparse_apply(repo_id, patterns, add)`** — cone-mode
+  `git sparse-checkout`; empty pattern list = `disable` (full checkout).
+- **`lfs_status`** → `LfsStatus` `{ installed, version?, tracked_patterns }`
+  (`git lfs version` probe + `filter=lfs` patterns from tracked
+  `.gitattributes`); **`lfs_run(subcommand)`** — `pull|push|fetch|install`
+  only (allowlist).
+- **`clone_blobless(url, destination, depth?)`** — `git clone
+  --filter=blob:none` CLI path (libgit2 cannot filter-promote).
+- **Pickaxe budget**: `-S` page requests scan at most
+  `LOG_CURSOR_SCAN_LIMIT` (100k) commits per page (~2.6 ms/commit measured
+  on the bench fixture — `git log -S` is inherently expensive; the budget
+  keeps huge repos responsive and the stream cancellable).
+
+### Frontend
+
+- **RepoPanel** (PanelId `health`, label "Repo") — health facts grid +
+  maintenance buttons + archive export (save-file picker) + sparse pattern
+  editor + LFS section (install guidance when the binary is absent).
+- **HistoryView commit context menu**: "Export archive…".
+- **CloneDialog**: blobless (`--filter=blob:none`) checkbox.
+- **Syntax highlighting** (`src/lib/diff/highlight.ts`, Shiki, lazy
+  singleton + on-demand grammars): the virtualized render path never
+  awaits — `cachedTokens` is synchronous; background parses bump a version
+  counter (`onTokensLanded`) that repaints the visible window. Line cache
+  keyed (scheme, lang, text), capped 20k entries, 800-char line cap,
+  permanent plain-text degrade on any failure. Replaces word-level
+  highlights for tokenized lines. `rowModel` gained a parallel
+  `fileIndexes` array (row → owning file) — additive, no row shape change.
+- **i18n groundwork** (`src/lib/i18n/`): `t(key, vars)` with `{placeholder}`
+  interpolation, English catalog seeded (panels/actions/dialogs/toasts/
+  states), fallback chain active→English→key, `setLocale` with unknown-
+  locale guard. Applying more strings is mechanical; `Intl` keeps owning
+  dates/numbers.
+- **Benches** (`refs` group): `tag_list_500_commits` ≈ 1.75 ms,
+  `describe_head` ≈ 3.7 ms, `log_pickaxe_substring` ≈ 1.3 s/500-commit
+  full walk (budgeted as above).

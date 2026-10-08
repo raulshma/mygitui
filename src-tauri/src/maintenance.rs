@@ -94,9 +94,7 @@ pub fn git_run(workdir: &Path, args: &[&str], timeout_secs: u64) -> Result<Strin
     cmd.current_dir(workdir).args(args);
     cmd.env_clear();
     for (key, value) in std::env::vars() {
-        if key.starts_with("GIT_")
-            || crate::cli::allowlisted(key.as_str())
-        {
+        if key.starts_with("GIT_") || crate::cli::allowlisted(key.as_str()) {
             cmd.env(key, value);
         }
     }
@@ -117,7 +115,10 @@ pub fn git_run(workdir: &Path, args: &[&str], timeout_secs: u64) -> Result<Strin
         } else {
             stderr.trim().to_string()
         };
-        Err(format!("git {} failed: {detail}", args.first().unwrap_or(&"")))
+        Err(format!(
+            "git {} failed: {detail}",
+            args.first().unwrap_or(&"")
+        ))
     }
 }
 
@@ -177,9 +178,13 @@ use crate::engine::types::{LfsStatus, SparseInfo};
 /// from config `core.sparseCheckoutCone`).
 pub fn sparse_info(workdir: &Path) -> SparseInfo {
     let list = git_run(workdir, &["sparse-checkout", "list"], 30).unwrap_or_default();
-    let cone = git_run(workdir, &["config", "--bool", "core.sparseCheckoutCone"], 15)
-        .map(|v| v == "true")
-        .unwrap_or(false);
+    let cone = git_run(
+        workdir,
+        &["config", "--bool", "core.sparseCheckoutCone"],
+        15,
+    )
+    .map(|v| v == "true")
+    .unwrap_or(false);
     let patterns: Vec<String> = list
         .lines()
         .map(str::trim)

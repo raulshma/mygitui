@@ -147,5 +147,74 @@ fn bench_diff(c: &mut Criterion) {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-criterion_group!(benches, bench_status, bench_log_layout, bench_diff);
+/// M9–M11 ops on the same fixture: tag listing, describe, pickaxe filter.
+fn bench_refs_ops(c: &mut Criterion) {
+    use mygitui_lib::engine::git_engine::GitEngineM3;
+
+    let dir = fixture_repo();
+    let repo = Repository::open(&dir).unwrap();
+    let engine = Libgit2Engine::new();
+    // A few annotated + lightweight tags across history.
+    for i in [0, 100, 250, 499] {
+        let oid = repo
+            .revparse_single(&format!("HEAD~{}", 499 - i))
+            .unwrap()
+            .id();
+        let commit = repo.find_commit(oid).unwrap();
+        if i % 2 == 0 {
+            repo.tag(
+                &format!("v0.{i}"),
+                commit.as_object(),
+                &commit.author(),
+                "bench",
+                false,
+            )
+            .ok();
+        } else {
+            repo.tag_lightweight(&format!("v0.{i}"), commit.as_object(), false)
+                .ok();
+        }
+    }
+    let head = repo
+        .head()
+        .unwrap()
+        .peel_to_commit()
+        .unwrap()
+        .id()
+        .to_string();
+
+    let mut group = c.benchmark_group("refs");
+    group.bench_function("tag_list_500_commits", |b| {
+        b.iter(|| {
+            let tags = engine.tag_list(&repo).unwrap();
+            assert_eq!(tags.len(), 4);
+        })
+    });
+    group.bench_function("describe_head", |b| {
+        b.iter(|| {
+            let text = engine.describe(&repo, &head).unwrap();
+            assert!(text.starts_with("v0."));
+        })
+    });
+    group.bench_function("log_pickaxe_substring", |b| {
+        b.iter(|| {
+            let filter = LogFilter {
+                pickaxe: Some("content 42".into()),
+                ..Default::default()
+            };
+            let (commits, _) = engine.log(&repo, &filter, 100, None).unwrap();
+            assert!(!commits.is_empty());
+        })
+    });
+    group.finish();
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+criterion_group!(
+    benches,
+    bench_status,
+    bench_log_layout,
+    bench_diff,
+    bench_refs_ops
+);
 criterion_main!(benches);

@@ -914,6 +914,10 @@ impl GitEngine for Libgit2Engine {
         let mut cursor_seen = after.is_none();
         let mut skipped = 0usize;
         let mut next_cursor = None;
+        // Pickaxe budget: a patch scan per candidate commit is ~2.6ms; cap
+        // the examined count so huge-repo queries stay responsive (the FE
+        // keeps streaming pages, so the budget applies per page request).
+        let mut pickaxe_examined = 0usize;
 
         for oid in walk.by_ref() {
             let oid = oid?;
@@ -940,8 +944,17 @@ impl GitEngine for Libgit2Engine {
 
             // Pickaxe (-S): the commit's patch must add or remove the needle.
             if let Some(needle) = &filter.pickaxe {
-                if !needle.is_empty() && !commit_touches_string(repo, &commit, needle)? {
-                    continue;
+                if !needle.is_empty() {
+                    if pickaxe_examined >= LOG_CURSOR_SCAN_LIMIT {
+                        // Budget exhausted: return what we have (page flow
+                        // continues on the next request only when the caller
+                        // re-queries — documented soft limit).
+                        break;
+                    }
+                    pickaxe_examined += 1;
+                    if !commit_touches_string(repo, &commit, needle)? {
+                        continue;
+                    }
                 }
             }
 

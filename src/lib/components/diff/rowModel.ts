@@ -89,6 +89,8 @@ export type DiffRow =
 
 export interface RowModel {
   rows: DiffRow[];
+  /** Parallel to `rows`: owning file's index (syntax highlighting, M11). */
+  fileIndexes: number[];
   /** Longest line text in JS chars — drives the horizontal scroll width. */
   maxTextChars: number;
   /** Σ additions across all files (toolbar stat). */
@@ -189,6 +191,8 @@ export function buildRowModel(
   collapsedPaths: ReadonlySet<string>,
 ): RowModel {
   const rows: DiffRow[] = [];
+  /** Parallel to `rows`: owning file's index (syntax highlighting, M11). */
+  const fileIndexes: number[] = [];
   let maxTextChars = 0;
   let totalAdditions = 0;
   let totalDeletions = 0;
@@ -205,14 +209,17 @@ export function buildRowModel(
 
     const collapsed = collapsedPaths.has(file.path);
     rows.push({ kind: "file-header", file, fileIndex, collapsed });
+    fileIndexes.push(fileIndex);
     if (collapsed) continue;
 
     if (file.is_image) {
       rows.push({ kind: "image", file });
+      fileIndexes.push(fileIndex);
       continue;
     }
     if (file.binary) {
       rows.push({ kind: "binary" });
+      fileIndexes.push(fileIndex);
       continue;
     }
     for (let hunkIndex = 0; hunkIndex < file.hunks.length; hunkIndex++) {
@@ -227,13 +234,19 @@ export function buildRowModel(
         newStart: hunk.new_start,
         newCount,
       });
+      fileIndexes.push(fileIndex);
       if (mode === "unified") {
-        for (const line of hunk.lines) rows.push({ kind: "line", line });
+        for (const line of hunk.lines) {
+          rows.push({ kind: "line", line });
+          fileIndexes.push(fileIndex);
+        }
       } else {
+        const before = rows.length;
         appendHunkBodySplit(hunk.lines, rows);
+        for (let i = before; i < rows.length; i++) fileIndexes.push(fileIndex);
       }
     }
   }
 
-  return { rows, maxTextChars, totalAdditions, totalDeletions };
+  return { rows, fileIndexes, maxTextChars, totalAdditions, totalDeletions };
 }

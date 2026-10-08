@@ -17,6 +17,10 @@
   import { onUiEvent } from "$lib/palette/events";
   import { toast } from "$lib/toast";
   import {
+    onTokensLanded,
+    requestTokens,
+  } from "$lib/diff/highlight";
+  import {
     buildRowModel,
     rowHeights,
     type DiffMode,
@@ -79,6 +83,38 @@
 
   // Palette command rides the bus; every mounted viewer flips its mode.
   $effect(() => onUiEvent("diff-toggle-mode", cycleMode));
+
+  // -- M11: syntax highlighting (async Shiki, render-path never awaits) -------
+
+  /** Global kill switch: palette command or preference can disable it. */
+  let syntaxEnabled = $state(true);
+
+  /**
+   * Re-render trigger: bumps when background token parses land, so newly
+   * highlighted visible rows repaint (tokens are read synchronously).
+   */
+  let syntaxTick = $state(0);
+  $effect(() => {
+    return onTokensLanded(() => syntaxTick++);
+  });
+
+  // Request parses for the visible window's lines (cheap: only uncached
+  // entries actually hit Shiki).
+  $effect(() => {
+    if (!syntaxEnabled) return;
+    void syntaxTick; // re-request after background parses land (next window)
+    void mode;
+    for (const file of files) {
+      if (file.binary || file.is_image) continue;
+      const texts: string[] = [];
+      for (const hunk of file.hunks) {
+        for (const line of hunk.lines) {
+          texts.push(line.text);
+        }
+      }
+      requestTokens(file.path, texts);
+    }
+  });
 
   // -- M9 F6: hunk staging / discard ------------------------------------------
 
@@ -193,6 +229,9 @@
                 onStageHunk={repoId && hunkStaging ? stageHunk : undefined}
                 onDiscardHunk={repoId && hunkDiscard ? discardHunk : undefined}
                 stageLabel={hunkStaging === "unstage" ? "Unstage hunk" : "Stage hunk"}
+                filePath={syntaxEnabled
+                  ? (files[model.fileIndexes[slice.firstRow + i]]?.path ?? null)
+                  : null}
               />
             {/each}
           </div>
