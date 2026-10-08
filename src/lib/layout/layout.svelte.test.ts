@@ -147,6 +147,7 @@ describe("LayoutStore mutations", () => {
       "worktrees",
       "reflog",
       "undo",
+      "stats",
       "terminal",
       "history",
       "status",

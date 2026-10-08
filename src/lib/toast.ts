@@ -15,6 +15,8 @@
 export {
   dismissToast,
   getToasts,
+  pauseToast,
+  resumeToast,
   toast,
 } from "./toast.svelte";
 export type { ToastItem, ToastKind, ToastOptions } from "./toast.svelte";

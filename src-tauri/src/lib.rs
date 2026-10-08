@@ -134,6 +134,8 @@ pub fn run() {
             ipc_commands::pr_create,
             ipc_commands::pr_list,
             ipc_commands::pr_checks,
+            ipc_commands::commit_activity,
+            ipc_commands::contributor_stats,
         ])
         .run(tauri::generate_context!())
         .expect("error while running mygitui");

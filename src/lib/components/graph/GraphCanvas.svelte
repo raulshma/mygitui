@@ -24,8 +24,14 @@
    *   headSha             [additive] HEAD commit sha → highlight band + ring
    *   laneWidth / padding [additive] lane column geometry (14 / 10 px)
    *   overscan            [additive] rows drawn beyond each viewport edge (20)
-   *   nodeTolerance       [additive] hit tolerance around lane columns (6 px)
-   *   reachEndThresholdRows [additive] onReachEnd lookahead in rows (500)
+ *   nodeTolerance       [additive] hit tolerance around lane columns (6 px)
+ *   reachEndThresholdRows [additive] onReachEnd lookahead in rows (500)
+ *   bookmarks           [additive, M7] bookmarked commit shas → small dashed
+ *                       ring marker on those nodes (display-only in M7)
+ *   branchColors        [additive, M7] (refs: string[]) => color | null —
+ *                       resolved per drawn row against the row commit's ref
+ *                       decorations; a hit recolors the row's node + edges
+ *                       instead of the lane palette
    *
    * Imperative API (via bind:this):
    *   scrollToRow(index: number): void — centers row `index` in the viewport
@@ -54,6 +60,10 @@
     overscan?: number;
     nodeTolerance?: number;
     reachEndThresholdRows?: number;
+    /** M7: shas of bookmarked commits (small dashed ring marker). */
+    bookmarks?: ReadonlySet<string>;
+    /** M7: refs decorations → branch color override (null = lane palette). */
+    branchColors?: (refs: string[]) => string | null;
   }
 
   let {
@@ -68,6 +78,8 @@
     overscan = 20,
     nodeTolerance = 6,
     reachEndThresholdRows = 500,
+    bookmarks = undefined,
+    branchColors = undefined,
   }: Props = $props();
 
   // ---------------------------------------------------------------------------
@@ -230,6 +242,18 @@
     if (canvas.height !== size.h) canvas.height = size.h;
     applyDprTransform(ctx, dpr);
     const { first, last } = visible;
+    // M7 branch colors: resolve the override per drawn row from the row
+    // commit's ref decorations (first matching rule wins — see RepoView).
+    let colorOverrides: Map<number, string> | undefined;
+    if (branchColors) {
+      colorOverrides = new Map();
+      for (let i = first; i < last; i += 1) {
+        const commit = cache.commitAt(i);
+        if (!commit || commit.refs.length === 0) continue;
+        const hit = branchColors(commit.refs);
+        if (hit) colorOverrides.set(i, hit);
+      }
+    }
     drawGraph(ctx, {
       rows: cache.rows,
       first,
@@ -247,6 +271,8 @@
       headRow,
       focusRow: safeFocusRow,
       focusRing: hasFocus,
+      ...(colorOverrides ? { colorOverrides } : {}),
+      ...(bookmarks ? { bookmarks } : {}),
     });
   });
 

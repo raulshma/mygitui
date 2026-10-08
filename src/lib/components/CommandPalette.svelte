@@ -13,9 +13,10 @@
    * effective keybind map. Running a command closes the palette; failures
    * toast (see `runCommand`).
    *
-   * Accessibility mirrors the quick switcher: a combobox input driving a
-   * grouped `listbox` via `aria-activedescendant` (flat option indexes).
-   */
+ * Accessibility mirrors the quick switcher: a combobox input driving a
+ * grouped `listbox` via `aria-activedescendant` (flat option indexes), and
+ * focus returns to the pre-open trigger element when the palette closes.
+ */
   import { tabStore } from "$lib/stores/tabs.svelte";
   import { formatCombo } from "$lib/palette/keybinds";
   import {
@@ -42,6 +43,8 @@ import {
   let query = $state("");
   let activeIndex = $state(0);
   let inputEl: HTMLInputElement | undefined = $state();
+  /** Element focused before the palette opened; focus returns there on close. */
+  let triggerEl: HTMLElement | null = null;
 
   /** Filtered + grouped commands (Recent block on top when unfiltered). */
   const sections = $derived.by(() => {
@@ -51,9 +54,11 @@ import {
   /** Flat arrow-key navigation order (section by section). */
   const flat = $derived(flattenSections(sections));
 
-  // Opening resets the session and focuses the input.
+  // Opening resets the session, remembers the trigger and focuses the input.
   $effect(() => {
     if (open) {
+      triggerEl =
+        document.activeElement instanceof HTMLElement ? document.activeElement : null;
       query = "";
       activeIndex = 0;
       inputEl?.focus();
@@ -70,6 +75,10 @@ import {
   function close(): void {
     query = "";
     closePalette();
+    // Return focus to the trigger (keybind source element, button, …) so
+    // keyboard users are not dropped at <body>. Detached triggers no-op.
+    triggerEl?.focus();
+    triggerEl = null;
   }
 
   /** The command's effective shortcut hint ("Ctrl+Shift+P"), or null. */

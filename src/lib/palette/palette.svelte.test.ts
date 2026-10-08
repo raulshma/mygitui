@@ -23,6 +23,12 @@ import {
   stageAll,
 } from "$lib/ipc/client";
 import { DEFAULT_BINDINGS } from "$lib/palette/keybinds";
+import {
+  THEME_STORAGE_KEY,
+  getThemePreference,
+  initTheme,
+  setThemePreference,
+} from "$lib/theme";
 import { getToasts } from "$lib/toast";
 import { resetTabStore, tabStore } from "$lib/stores/tabs.svelte";
 import {
@@ -429,5 +435,60 @@ describe("activeCtx", () => {
     expect(activeCtx()).toEqual({ repoId: null, root: null });
     seedTab();
     expect(activeCtx()).toEqual({ repoId: "r1", root: "/repos/r1" });
+  });
+});
+
+describe("theme commands (M7 I2)", () => {
+  afterEach(() => {
+    localStorage.removeItem(THEME_STORAGE_KEY);
+    setThemePreference("system");
+  });
+
+  it("registers toggle + follow-system entries in the App section", () => {
+    const toggle = commandById(COMMANDS, "app.theme-toggle");
+    const system = commandById(COMMANDS, "app.theme-system");
+    expect(toggle).toBeDefined();
+    expect(system).toBeDefined();
+    expect(toggle!.section).toBe("App");
+    expect(system!.section).toBe("App");
+    expect(toggle!.title.length).toBeGreaterThan(0);
+    expect(system!.title.toLowerCase()).toContain("system");
+  });
+
+  it("toggle title reflects the live preference (names the target scheme)", async () => {
+    await initTheme(); // back the toggle's currentScheme() read with real state
+    setThemePreference("dark");
+    expect(commandById(COMMANDS, "app.theme-toggle")!.title).toMatch(
+      /switch to light theme/i,
+    );
+    setThemePreference("light");
+    expect(commandById(COMMANDS, "app.theme-toggle")!.title).toMatch(
+      /switch to dark theme/i,
+    );
+  });
+
+  it("app.theme-toggle flips the pinned scheme and remembers it", async () => {
+    await initTheme(); // currentScheme() must reflect applied state, not the "light" default
+    const toggle = commandById(COMMANDS, "app.theme-toggle")!;
+
+    // jsdom has no matchMedia: the applied scheme is light, so toggle → dark.
+    await toggle.run(HOME);
+    expect(getThemePreference()).toBe("dark");
+    expect(localStorage.getItem(THEME_STORAGE_KEY)).toBe("dark");
+
+    await toggle.run(HOME);
+    expect(getThemePreference()).toBe("light");
+    expect(localStorage.getItem(THEME_STORAGE_KEY)).toBe("light");
+  });
+
+  it("app.theme-system resets to live OS follow", async () => {
+    await initTheme();
+    setThemePreference("dark");
+
+    const system = commandById(COMMANDS, "app.theme-system")!;
+    await system.run(HOME);
+
+    expect(getThemePreference()).toBe("system");
+    expect(localStorage.getItem(THEME_STORAGE_KEY)).toBe("system");
   });
 });

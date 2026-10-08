@@ -9,7 +9,9 @@
  *      wrapped m3-svelte components pick the exact same palette) onto
  *      document.documentElement, and
  *   4. follows `prefers-color-scheme` reactively via matchMedia — the token
- *      set is swapped in place when the OS switches, no reload.
+ *      set is swapped in place when the OS switches, no reload — unless a
+ *      manual override ("light" / "dark") is active, in which case the OS
+ *      switch is ignored until the override returns to "system".
  *
  * Published CSS variables (light/dark pairs, hex values):
  *   --m3-primary, --m3-on-primary, --m3-primary-container,
@@ -32,7 +34,8 @@
  *   --m3-scrim  (each also as --m3c-<name> for m3-svelte compatibility)
  *
  * Static, non-color M3 tokens (--m3-shape-*, --m3-elevation-*) live in
- * src/app.css. Persistence is out of scope for M0: OS-follow only.
+ * src/app.css. The manual theme preference persists to localStorage
+ * "mygitui.theme" as `"system" | "light" | "dark"`.
  */
 export { TOKEN_NAMES } from "./dynamic-color";
 
@@ -40,7 +43,68 @@ import { BASELINE_SEED, resolveSeedColor, schemeFromSeed, tokensForScheme } from
 
 export type ColorScheme = "light" | "dark";
 
+/** What the user asked the theme to do (persisted choice). */
+export type ThemePreference = "system" | "light" | "dark";
+
+/** localStorage key holding the persisted {@link ThemePreference}. */
+export const THEME_STORAGE_KEY = "mygitui.theme";
+
 const DARK_QUERY = "(prefers-color-scheme: dark)";
+
+// ---------------------------------------------------------------------------
+// Preference persistence (never throws; corrupt values fall back to system)
+// ---------------------------------------------------------------------------
+
+/** In-memory mirror of the persisted preference ("system" until loaded/set). */
+let preference: ThemePreference = "system";
+
+/** Reads the persisted preference, silently defaulting to "system". */
+function loadPreference(): ThemePreference {
+  try {
+    if (typeof localStorage === "undefined") return "system";
+    const raw = localStorage.getItem(THEME_STORAGE_KEY);
+    return raw === "light" || raw === "dark" ? raw : "system";
+  } catch {
+    return "system";
+  }
+}
+
+/** Persists the preference (storage failures are swallowed). */
+function savePreference(value: ThemePreference): void {
+  try {
+    if (typeof localStorage === "undefined") return;
+    localStorage.setItem(THEME_STORAGE_KEY, value);
+  } catch {
+    // Storage may be full or unavailable; the choice stays in memory.
+  }
+}
+
+/**
+ * Sets the theme preference and applies it immediately (when the theme is
+ * initialized). "system" hands control back to `prefers-color-scheme`
+ * (followed live); "light" / "dark" pin the scheme until reset. The choice
+ * persists to localStorage. Never throws.
+ */
+export function setThemePreference(value: ThemePreference): void {
+  try {
+    if (value !== "system" && value !== "light" && value !== "dark") return;
+    preference = value;
+    savePreference(value);
+    if (applied !== null) applyTokens(applied, resolveScheme());
+  } catch {
+    // A theming failure must never propagate to the caller.
+  }
+}
+
+/** The current preference ("system" until a manual override is set). */
+export function getThemePreference(): ThemePreference {
+  return preference;
+}
+
+/** The scheme to apply right now: override wins, system follows the OS. */
+function resolveScheme(): ColorScheme {
+  return preference === "system" ? preferredScheme() : preference;
+}
 
 /** Inline styles of <html> — the single write target for runtime tokens. */
 function rootStyle(): CSSStyleDeclaration | null {
@@ -107,11 +171,12 @@ export async function initTheme(): Promise<void> {
 
     if (typeof document === "undefined") return;
 
+    preference = loadPreference();
     const seed = (await resolveSeedColor()) ?? BASELINE_SEED;
     const theme: AppliedTheme = {
       light: tokensForScheme(schemeFromSeed(seed, false)),
       dark: tokensForScheme(schemeFromSeed(seed, true)),
-      scheme: preferredScheme(),
+      scheme: resolveScheme(),
       stopWatching: () => {},
     };
 
@@ -122,6 +187,8 @@ export async function initTheme(): Promise<void> {
       try {
         const query = mm(DARK_QUERY);
         const onChange = (event: MediaQueryListEvent) => {
+          // The OS only drives the scheme while no override is pinned.
+          if (preference !== "system") return;
           applyTokens(theme, event.matches ? "dark" : "light");
         };
         if (typeof query.addEventListener === "function") {

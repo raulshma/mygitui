@@ -1200,3 +1200,53 @@ export function prList(repoId: RepoId): Promise<PrInfo[]> {
 export function prChecks(repoId: RepoId, number: number): Promise<CheckInfo[]> {
   return call<CheckInfo[]>("pr_checks", { repo_id: repoId, number });
 }
+
+// ---------------------------------------------------------------------------
+// M7 (stats lane): contribution statistics (contracts.md "Commands (M7)").
+// Pure reads on the backend; logic in `src-tauri/src/engine/stats.rs`.
+// ---------------------------------------------------------------------------
+
+/** One day of commit activity (`day` is "YYYY-MM-DD", committer local date). */
+export interface DayCount {
+  day: string;
+  count: number;
+}
+
+/** One author identity aggregated over the stats window. */
+export interface Contributor {
+  name: string;
+  email: string;
+  count: number;
+  /** First active day, "YYYY-MM-DD". */
+  first_day: string;
+  /** Last active day, "YYYY-MM-DD". */
+  last_day: string;
+}
+
+/**
+ * Commits per local day inside the `maxDays` window, day ascending; days
+ * with zero commits are omitted. `author` (when set) is a case-insensitive
+ * substring matched against the author name OR email.
+ */
+export function commitActivity(
+  repoId: RepoId,
+  maxDays: number,
+  author?: string | null,
+): Promise<DayCount[]> {
+  return call<DayCount[]>("commit_activity", {
+    repo_id: repoId,
+    max_days: maxDays,
+    author: author ?? null,
+  });
+}
+
+/** Per-author rollups (identity = exact name+email pair), count descending. */
+export function contributorStats(
+  repoId: RepoId,
+  maxDays: number,
+): Promise<Contributor[]> {
+  return call<Contributor[]>("contributor_stats", {
+    repo_id: repoId,
+    max_days: maxDays,
+  });
+}

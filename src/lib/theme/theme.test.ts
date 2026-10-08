@@ -30,7 +30,15 @@ registerHooks({
 });
 
 // Imported dynamically so the hook above is in place first.
-const { initTheme, disposeTheme, currentScheme, TOKEN_NAMES } = await import("./index");
+const {
+  initTheme,
+  disposeTheme,
+  currentScheme,
+  getThemePreference,
+  setThemePreference,
+  THEME_STORAGE_KEY,
+  TOKEN_NAMES,
+} = await import("./index");
 const { BASELINE_SEED, schemeFromSeed, tokensForScheme } = await import("./dynamic-color");
 
 const LIGHT = tokensForScheme(schemeFromSeed(BASELINE_SEED, false));
@@ -103,6 +111,8 @@ describe("initTheme", () => {
   beforeEach(() => {
     disposeTheme();
     rootStyle().cssText = "";
+    localStorage.removeItem(THEME_STORAGE_KEY);
+    setThemePreference("system");
     vi.unstubAllGlobals();
   });
 
@@ -209,6 +219,121 @@ describe("initTheme", () => {
     media.setDark(true);
     expect(rootStyle().getPropertyValue("--m3-surface")).toBe(DARK.surface);
     media.setDark(false);
+    expect(rootStyle().getPropertyValue("--m3-surface")).toBe(LIGHT.surface);
+  });
+});
+
+describe("theme preference override (M7 I2)", () => {
+  beforeEach(() => {
+    disposeTheme();
+    rootStyle().cssText = "";
+    localStorage.removeItem(THEME_STORAGE_KEY);
+    setThemePreference("system");
+    vi.unstubAllGlobals();
+  });
+
+  it("defaults to system and applies the OS scheme", async () => {
+    installMatchMediaStub(true);
+    await initTheme();
+
+    expect(getThemePreference()).toBe("system");
+    expect(rootStyle().getPropertyValue("--m3-surface")).toBe(DARK.surface);
+    expect(currentScheme()).toBe("dark");
+  });
+
+  it("override pins light even when the OS is dark, and persists", async () => {
+    installMatchMediaStub(true);
+    await initTheme();
+
+    setThemePreference("light");
+
+    expect(rootStyle().getPropertyValue("--m3-surface")).toBe(LIGHT.surface);
+    expect(rootStyle().getPropertyValue("color-scheme")).toBe("light");
+    expect(currentScheme()).toBe("light");
+    expect(getThemePreference()).toBe("light");
+    expect(localStorage.getItem(THEME_STORAGE_KEY)).toBe("light");
+  });
+
+  it("override pins dark when the OS is light", async () => {
+    installMatchMediaStub(false);
+    await initTheme();
+
+    setThemePreference("dark");
+
+    expect(rootStyle().getPropertyValue("--m3-surface")).toBe(DARK.surface);
+    expect(rootStyle().getPropertyValue("color-scheme")).toBe("dark");
+    expect(currentScheme()).toBe("dark");
+  });
+
+  it("ignores OS switches while overridden; system re-follows after reset", async () => {
+    const media = installMatchMediaStub(false);
+    await initTheme();
+
+    setThemePreference("light");
+    media.setDark(true);
+    expect(rootStyle().getPropertyValue("--m3-surface")).toBe(LIGHT.surface);
+    expect(currentScheme()).toBe("light");
+
+    setThemePreference("system");
+    // The stored override is gone, so the current OS state applies…
+    expect(rootStyle().getPropertyValue("--m3-surface")).toBe(DARK.surface);
+    expect(currentScheme()).toBe("dark");
+    // …and the OS keeps driving live from here on.
+    media.setDark(false);
+    expect(rootStyle().getPropertyValue("--m3-surface")).toBe(LIGHT.surface);
+    media.setDark(true);
+    expect(rootStyle().getPropertyValue("--m3-surface")).toBe(DARK.surface);
+    expect(getThemePreference()).toBe("system");
+    expect(localStorage.getItem(THEME_STORAGE_KEY)).toBe("system");
+  });
+
+  it("persists across re-initialization (initTheme re-applies the override)", async () => {
+    installMatchMediaStub(false);
+    await initTheme();
+    setThemePreference("dark");
+
+    await initTheme();
+
+    expect(getThemePreference()).toBe("dark");
+    expect(rootStyle().getPropertyValue("--m3-surface")).toBe(DARK.surface);
+  });
+
+  it("seeds the preference from localStorage at init", async () => {
+    installMatchMediaStub(false); // OS light — override must win anyway
+    localStorage.setItem(THEME_STORAGE_KEY, "dark");
+
+    await initTheme();
+
+    expect(getThemePreference()).toBe("dark");
+    expect(rootStyle().getPropertyValue("--m3-surface")).toBe(DARK.surface);
+  });
+
+  it("falls back to system on a corrupt persisted value", async () => {
+    installMatchMediaStub(true);
+    localStorage.setItem(THEME_STORAGE_KEY, "sepia");
+
+    await initTheme();
+
+    expect(getThemePreference()).toBe("system");
+    expect(rootStyle().getPropertyValue("--m3-surface")).toBe(DARK.surface);
+  });
+
+  it("honors a preference set before init", async () => {
+    installMatchMediaStub(false);
+    disposeTheme();
+    setThemePreference("dark");
+
+    await initTheme();
+
+    expect(rootStyle().getPropertyValue("--m3-surface")).toBe(DARK.surface);
+  });
+
+  it("setThemePreference is never-throwing and ignores invalid values", async () => {
+    installMatchMediaStub(false);
+    await initTheme();
+
+    expect(() => setThemePreference("banana" as never)).not.toThrow();
+    expect(getThemePreference()).toBe("system");
     expect(rootStyle().getPropertyValue("--m3-surface")).toBe(LIGHT.surface);
   });
 });

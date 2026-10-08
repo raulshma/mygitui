@@ -231,3 +231,79 @@ error and the FE panel explains the gh flow is unavailable.
     fields (user typing clears the pending state).
 - **Open in browser** goes through `@tauri-apps/plugin-opener`'s JS API
   (`openUrl`), guarded outside Tauri — no Rust command needed.
+
+## Commands (M7 — contribution statistics)
+
+Pure backend reads (repo mutex + `spawn_blocking`, no op queue, no generation
+bump). Logic: `src-tauri/src/engine/stats.rs` (inherent `*_impl` methods on
+`Libgit2Engine`, the M2-lane convention); tests: `engine/stats_tests.rs`.
+
+| Command | Args | Returns | Notes |
+|---|---|---|---|
+| `commit_activity` | `repo_id, max_days: u32, author?: string` | `DayCount[]` | commits per local day, day ascending; zero days omitted |
+| `contributor_stats` | `repo_id, max_days: u32` | `Contributor[]` | per-author rollups, count descending |
+
+```
+DayCount    = { day: string,        // "YYYY-MM-DD", committer local date
+                count: number }
+Contributor = { name, email, count: number,
+                first_day: string,      // "YYYY-MM-DD"
+                last_day: string }
+```
+
+Walk semantics (both commands): every commit reachable from
+`refs/heads/*`, `refs/remotes/*`, `refs/tags/*` or HEAD (revwalk-deduped —
+shared history counts once). Internal `refs/mygitui/*` namespaces
+(checkpoint snapshots) are deliberately NOT pushed and never count as
+activity. Window is committer time in `[now - max_days, now]`; buckets use
+the committer timestamp plus its recorded UTC offset ("local date").
+`author` on `commit_activity` is a case-insensitive substring matched
+against the author name OR email (blank/None = no filter). Contributor
+identity is the exact `(name, email)` pair. The walk caps at 100k commits
+per call. TS mirrors live in `src/lib/ipc/client.ts` (`DayCount`,
+`Contributor`, `commitActivity`, `contributorStats`).
+
+### M7 FE contracts (lane I1)
+
+- **Stats panel**: `PanelId "stats"` (registry + `PANEL_META` + default
+  left tab group, placed before `terminal`); `StatsPanel.svelte` takes
+  `{ repoId, root }` and hosts:
+  - the heatmap grid (GitHub-style: weeks × 7 weekday rows, 53 columns,
+    last column ends today; a real `<table>` with per-cell
+    `aria-label="N commits on DATE"`, intensity via `--m3-primary`
+    `color-mix` buckets over quartile thresholds of the nonzero counts),
+  - summary cards (commits, active days, avg per active day, current +
+    longest streaks — an idle today defers the current streak to
+    yesterday, GitHub semantics),
+  - an author filter (datalist from the contributor rollups → re-fetch
+    `commit_activity` with the author substring),
+  - the contributor list (name, count bar, active range),
+  - the **"Colors…" popover** — the editor for branch color rules. It was
+    placed in StatsPanel by design (simplest single home for M7's
+    settings-ish UI).
+- **Branch color rules**: per-repo localStorage
+  `mygitui.branchcolors.<root>` = `[{ pattern, color }]` (array order =
+  match priority). Pattern grammar: `feature/*` prefix, `*-hotfix` suffix,
+  `main` exact, `*` catch-all; case-sensitive. `branchColorForRefs(refs,
+  rules)` matches SHORT ref decoration names ("main", "origin/main");
+  `HEAD -> …` decorations never match; first matching rule wins. Store +
+  pure matcher: `src/lib/stats/branchColors.svelte.ts`.
+- **Commit bookmarks**: per-repo localStorage
+  `mygitui.bookmarks.<root>` = `[{ sha, label }]`. Store:
+  `src/lib/components/graph/bookmarks.svelte.ts`
+  (`add`/`remove`/`list`/`toggle`/`shas`; injectable storage). M7 ships
+  the store + graph display only — creation UI is intentionally out of
+  scope (display-only decorations).
+- **GraphCanvas additive props** (beyond the B2 contract):
+  `bookmarks?: ReadonlySet<string>` (shas → small dashed ring marker on
+  the node, same geometry as the HEAD ring but dashed) and
+  `branchColors?: (refs: string[]) => string | null` (resolved per drawn
+  row against the row commit's `refs`; a hit recolors that row's node +
+  outgoing edges instead of the lane palette). `render.ts` threads both
+  through `DrawParams` as the additive optional fields
+  `bookmarks` / `colorOverrides` (`Map<rowIndex, color>`).
+- **Wiring**: `RepoView` hydrates both per-root stores in an `$effect`
+  (never inside `$derived`, like the layout overlays) and passes
+  `bookmarks`/`branchColors` into `HistoryView` (additive optional props)
+  → `GraphCanvas`. Popout history windows omit the props (safe:
+  decorations are optional).

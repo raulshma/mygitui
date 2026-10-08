@@ -44,6 +44,7 @@
   import TerminalPanel from "$lib/components/terminal/TerminalPanel.svelte";
   import ForgePanel from "$lib/components/forge/ForgePanel.svelte";
   import ActionsPanel from "$lib/components/actions/ActionsPanel.svelte";
+  import StatsPanel from "$lib/components/panels/StatsPanel.svelte";
   import CleanDialog from "$lib/components/actions/CleanDialog.svelte";
   import CommitMessageButton from "$lib/components/ai/CommitMessageButton.svelte";
   import { ai } from "$lib/ai/ai.svelte";
@@ -68,6 +69,11 @@
   import { layouts } from "$lib/layout/layout.svelte";
   import { terminals } from "$lib/terminal/terminalStore.svelte";
   import { openPanelPopout } from "$lib/layout/popout";
+  import { bookmarks } from "$lib/components/graph/bookmarks.svelte";
+  import {
+    branchColorForRefs,
+    branchColorStore,
+  } from "$lib/stats/branchColors.svelte";
   import { refreshStatus } from "$lib/stores/tabs.svelte";
   import { startAuthEvents, startOpsEvents } from "$lib/stores/ops.svelte";
   import { autofetch } from "$lib/stores/autofetch.svelte";
@@ -96,6 +102,13 @@
   // store writes `$state`); the derived below re-runs once it lands.
   $effect(() => {
     layouts.ensureRepo(root);
+  });
+
+  // M7: hydrate the per-root bookmark + branch-color stores the same way
+  // (the history graph consumes both — see the historyPanel snippet).
+  $effect(() => {
+    bookmarks.ensure(root);
+    branchColorStore.ensure(root);
   });
 
   /** The active layout for this repo (overlay > preset > default). */
@@ -215,6 +228,8 @@
         return forgePanel;
       case "actions":
         return actionsPanel;
+      case "stats":
+        return statsPanel;
       default:
         return missingPanel;
     }
@@ -445,7 +460,12 @@
   <UndoPanel {repoId} />
 {/snippet}
 {#snippet historyPanel()}
-  <HistoryView {repoId} onPopout={popOutHistory} />
+  <HistoryView
+    {repoId}
+    onPopout={popOutHistory}
+    bookmarks={bookmarks.shas(root)}
+    branchColors={(refs) => branchColorForRefs(refs, branchColorStore.rules(root))}
+  />
 {/snippet}
 {#snippet terminalPanel()}
   <TerminalPanel {repoId} />
@@ -455,6 +475,9 @@
 {/snippet}
 {#snippet actionsPanel()}
   <ActionsPanel {repoId} />
+{/snippet}
+{#snippet statsPanel()}
+  <StatsPanel {repoId} {root} />
 {/snippet}
 {#snippet missingPanel()}
   <aside class="missing-panel">This panel is not available.</aside>

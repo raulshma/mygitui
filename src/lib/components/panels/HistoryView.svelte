@@ -44,7 +44,20 @@
   } from "$lib/stores/history-logic";
   import { toast } from "$lib/toast";
 
-  let { repoId, onPopout }: { repoId: string; onPopout?: () => void } = $props();
+  let {
+    repoId,
+    onPopout,
+    bookmarks,
+    branchColors,
+  }: {
+    repoId: string;
+    onPopout?: () => void;
+    /** M7: bookmarked shas → dashed ring markers on graph nodes (optional;
+     *  popouts omit it — display-only decorations, safe to be absent). */
+    bookmarks?: ReadonlySet<string>;
+    /** M7: refs decorations → branch color override (optional). */
+    branchColors?: (refs: string[]) => string | null;
+  } = $props();
 
   /** Must match the row height passed to (and defaulted by) GraphCanvas. */
   const ROW_HEIGHT = 24;
@@ -562,6 +575,8 @@
           onCommitClick={(sha) => select(sha)}
           onReachEnd={() => store.loadMore()}
           onVisibleRowsChange={onCanvasVisible}
+          {bookmarks}
+          {branchColors}
           bind:this={canvasRef}
         />
       </div>

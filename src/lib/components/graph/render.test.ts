@@ -187,6 +187,50 @@ describe("drawGraph", () => {
     expect(opsNamed(ops, "rect")).toEqual([{ op: "rect", args: [1, 1, 198, 22] }]);
     expect(opsNamed(ops, "roundRect")).toHaveLength(0);
   });
+
+  // -- M7 (stats lane): branch color overrides + bookmark markers ------------
+
+  it("recolors a row's node and outgoing edges via colorOverrides", () => {
+    const rows = [
+      row("a", 0, 3, [{ from: 0, to: 1 }]),
+      row("b", 1, 3, []),
+      row("c", 2, 3, []),
+    ];
+    const { ctx, ops } = createMockContext();
+    drawGraph(
+      ctx,
+      baseParams({
+        rows,
+        first: 0,
+        last: rows.length,
+        colorOverrides: new Map([[0, "#123456"]]),
+      }),
+    );
+
+    const strokes = opsNamed(ops, "set strokeStyle").map((entry) => entry.args[0]);
+    // Row 0's edge uses the override; the other rows keep their palette.
+    expect(strokes).toContain("#123456");
+    const fills = opsNamed(ops, "set fillStyle").map((entry) => entry.args[0]);
+    expect(fills).toEqual(["#123456", "#00ff00", "#0000ff"]);
+    // No bookmark markers without the bookmarks param.
+    expect(opsNamed(ops, "setLineDash")).toHaveLength(0);
+  });
+
+  it("draws a dashed bookmark ring for bookmarked shas", () => {
+    const rows = [row("a", 0, 1, []), row("b", 0, 1, [])];
+    const { ctx, ops } = createMockContext();
+    drawGraph(
+      ctx,
+      baseParams({ rows, first: 0, last: rows.length, bookmarks: new Set(["b"]) }),
+    );
+
+    const dashes = opsNamed(ops, "setLineDash").map((entry) => entry.args[0]);
+    expect(dashes).toEqual([[2, 2], []]); // dash pattern on, then reset
+    // The marker ring: radius nodeRadius + 3, centered on row b (index 1).
+    const rings = opsNamed(ops, "arc").filter((entry) => entry.args[2] === 7);
+    expect(rings).toHaveLength(1);
+    expect(rings[0]?.args?.slice(0, 2)).toEqual([10, 1.5 * 24]);
+  });
 });
 
 function row1Center(): number {

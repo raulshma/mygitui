@@ -2,8 +2,14 @@
   /**
    * Renders the toast stack (bottom-right). State and auto-dismiss live in
    * `$lib/toast`; this component is purely presentational.
+   *
+   * Accessibility (M7 I2): each toast is its own live region — polite
+   * `role="status"` for info/success, assertive `role="alert"` for errors —
+   * so new toasts are announced without nesting live regions (a live-region
+   * ancestor here would double-announce or suppress the children). Hovering
+   * a toast pauses its auto-dismiss timer; leaving resumes the remainder.
    */
-  import { dismissToast, getToasts, type ToastKind } from "$lib/toast";
+  import { dismissToast, getToasts, pauseToast, resumeToast, type ToastKind } from "$lib/toast";
 
   function glyph(kind: ToastKind): string {
     switch (kind) {
@@ -17,9 +23,16 @@
   }
 </script>
 
-<div class="toaster" aria-live="polite">
+<div class="toaster">
   {#each getToasts() as item (item.id)}
-    <div class="toast" role="status" data-kind={item.kind}>
+    <div
+      class="toast"
+      role={item.kind === "error" ? "alert" : "status"}
+      aria-live={item.kind === "error" ? "assertive" : "polite"}
+      data-kind={item.kind}
+      onpointerenter={() => pauseToast(item.id)}
+      onpointerleave={() => resumeToast(item.id)}
+    >
       <span class="badge" aria-hidden="true">{glyph(item.kind)}</span>
       <span class="message">{item.message}</span>
       <button

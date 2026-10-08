@@ -8,8 +8,9 @@
  * (commands that need a repository hide on the home view) and `run(ctx)`.
  *
  * Two kinds of commands live here:
- *   1. Real ones — they call tab-store / op-store / safety-store APIs or
- *      `$lib/ipc/client` wrappers directly (stage all, fetch, checkpoint…).
+ *   1. Real ones — they call tab-store / op-store / safety-store APIs,
+ *      `$lib/ipc/client` wrappers or the theme module directly (stage all,
+ *      fetch, checkpoint, theme toggle…).
  *   2. Wiring hints — features whose UI lives in panels that have no
  *      programmatic API yet. These dispatch documented DOM CustomEvents the
  *      owning panel is expected to listen for (see each command's doc):
@@ -17,8 +18,9 @@
  *      `open-conflicts`, `conflicts-recheck`, `history-focus-filter`,
  *      `history-clear-filter`, `history-refresh`, `history-toggle-blame`,
  *      `open-clone-dialog` (listened for by App.svelte today),
- *      `branches-focus-create`, `branches-focus-switch` and `theme-toggle`
- *      (window-level; the theme module has no toggle API yet).
+ *      `branches-focus-create` and `branches-focus-switch`.
+ *      (The former `theme-toggle` window event is gone: the theme module
+ *      gained a real API — commands call it directly now.)
  *
  * The registry is plain data + closures (no runes) so it is unit-testable
  * without a component; `visibleCommands` applies the `when` filters.
@@ -51,6 +53,12 @@ import {
 import { openSwitcher } from "$lib/stores/switcher.svelte";
 import { guardNow, loadUndo } from "$lib/stores/safety.svelte";
 import { resetBindings } from "$lib/palette/keybinds";
+import {
+  currentScheme,
+  getThemePreference,
+  setThemePreference,
+  type ThemePreference,
+} from "$lib/theme";
 
 /** What a command knows about the active tab when it runs. */
 export interface CommandCtx {
@@ -180,6 +188,30 @@ async function runPush(ctx: CommandCtx): Promise<void> {
 /** Focuses a panel via the documented `focus-panel` event. */
 function focusPanel(panel: string, ctx: CommandCtx): void {
   dispatchFocusPanel(panel, ctx.repoId);
+}
+
+// ---------------------------------------------------------------------------
+// Theme commands (M7 I2) — direct calls into $lib/theme, no event hop
+// ---------------------------------------------------------------------------
+
+/** The scheme a toggle switches TO: the opposite of what is applied now. */
+function oppositeScheme(): ThemePreference {
+  return currentScheme() === "dark" ? "light" : "dark";
+}
+
+/** Palette label for the toggle command; reflects the live theme state. */
+function themeToggleTitle(): string {
+  const target = oppositeScheme();
+  const preference = getThemePreference();
+  const suffix = preference === "system" ? " (system)" : "";
+  return `Switch to ${target} theme${suffix}`;
+}
+
+/** Runs the light↔dark toggle, remembering the choice. */
+function runThemeToggle(): void {
+  const target = oppositeScheme();
+  setThemePreference(target);
+  ok(`Theme set to ${target}`);
 }
 
 // ---------------------------------------------------------------------------
@@ -536,11 +568,25 @@ export const COMMANDS: Command[] = [
     run: () => dispatchWindow("toggle-command-palette"),
   },
   {
+    // Getter (not a static string) so the palette label always reflects the
+    // live preference — sections are recomputed on open / per keystroke.
     id: "app.theme-toggle",
-    title: "Toggle light / dark theme",
+    get title() {
+      return themeToggleTitle();
+    },
     section: "App",
-    keywords: ["appearance", "dark mode", "scheme"],
-    run: () => dispatchWindow("theme-toggle"),
+    keywords: ["appearance", "dark mode", "light mode", "scheme", "toggle"],
+    run: () => runThemeToggle(),
+  },
+  {
+    id: "app.theme-system",
+    title: "Theme: follow system setting",
+    section: "App",
+    keywords: ["appearance", "auto", "match os", "scheme", "reset"],
+    run: () => {
+      setThemePreference("system");
+      ok(`Theme follows the system (${currentScheme()})`);
+    },
   },
   {
     id: "app.keybinds-reset",

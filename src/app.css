@@ -108,6 +108,15 @@
   --m3-elevation-5:
     0px 4px 4px 0px color-mix(in srgb, var(--m3-shadow) 30%, transparent),
     0px 8px 12px 6px color-mix(in srgb, var(--m3-shadow) 15%, transparent);
+
+  /*
+   * Scrollbar tokens (M7 I2 a11y pass). Both engines follow the palette:
+   * `scrollbar-color` covers Firefox, the ::-webkit-* rules below cover
+   * WebView2/Chromium (Tauri's Windows webview).
+   */
+  --scrollbar-thumb: var(--m3-outline-variant);
+  --scrollbar-thumb-hover: var(--m3-outline);
+  --scrollbar-track: transparent;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -185,4 +194,61 @@ body {
 
 #app {
   height: 100%;
+}
+
+/* ---------------------------------------------------------------------------
+ * Accessibility (M7 I2)
+ * ------------------------------------------------------------------------- */
+
+/*
+ * Global keyboard-focus ring. Components may refine it (e.g. TabStrip uses a
+ * negative offset so the ring hugs inset tabs); anything more specific in a
+ * scoped Svelte style wins the cascade over this baseline.
+ */
+:focus-visible {
+  outline: 2px solid var(--m3-primary);
+  outline-offset: 1px;
+}
+
+/* Scrollbars follow the theme tokens instead of the UA defaults. */
+* {
+  scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--scrollbar-track);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+  border-radius: 5px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-thumb-hover);
+}
+
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/*
+ * Honor prefers-reduced-motion globally: collapse animations/transitions to
+ * effectively-zero durations and stop smooth scrolling. Component-level
+ * rules (e.g. Toaster's animation:none) remain compatible with this floor.
+ */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }

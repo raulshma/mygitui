@@ -37,6 +37,17 @@ export interface DrawParams {
   focusRing?: boolean;
   nodeRadius?: number;
   edgeWidth?: number;
+  /**
+   * Row index → color override (M7 branch color rules): when present, the
+   * row's node AND its outgoing edges use that color instead of the lane
+   * palette. Missing rows keep the palette.
+   */
+  colorOverrides?: ReadonlyMap<number, string>;
+  /**
+   * M7 commit bookmarks: shas carrying a small dashed ring marker (same
+   * geometry as the HEAD ring, dashed so the two are distinguishable).
+   */
+  bookmarks?: ReadonlySet<string>;
 }
 
 const TAU = Math.PI * 2;
@@ -69,16 +80,18 @@ export function drawGraph(ctx: CanvasRenderingContext2D, p: DrawParams): void {
   // 2) Edges. An edge on row i connects (from, i) to (to, i+1). Same-lane
   //    edges are straight verticals (the common case — fast path); lane
   //    changes get a horizontal-midpoint bezier. Edge color follows the
-  //    `from` lane so each branch keeps its lane color along its run.
+  //    `from` lane so each branch keeps its lane color along its run, or
+  //    the row's branch-color override when one matches (M7).
   for (let i = first; i < last; i += 1) {
     const row = p.rows[i];
     if (!row || row.edges.length === 0) continue;
+    const override = p.colorOverrides?.get(i);
     const y1 = rowCenterY(i, p.rowHeight);
     const y2 = rowCenterY(i + 1, p.rowHeight);
     for (const edge of row.edges) {
       const x1 = crisp(laneX(edge.from, p.laneWidth, p.padding), edgeWidth);
       const x2 = crisp(laneX(edge.to, p.laneWidth, p.padding), edgeWidth);
-      ctx.strokeStyle = color(edge.from);
+      ctx.strokeStyle = override ?? color(edge.from);
       ctx.lineWidth = edgeWidth;
       ctx.beginPath();
       ctx.moveTo(x1, y1);
@@ -92,14 +105,27 @@ export function drawGraph(ctx: CanvasRenderingContext2D, p: DrawParams): void {
     }
   }
 
-  // 3) Commit nodes on top of the edges.
+  // 3) Commit nodes on top of the edges. A bookmarked node (M7) gets a
+  //    small dashed ring marker in addition (display-only in M7).
   for (let i = first; i < last; i += 1) {
     const row = p.rows[i];
     if (!row) continue;
+    const override = p.colorOverrides?.get(i);
+    const cx = laneX(row.lane, p.laneWidth, p.padding);
+    const cy = rowCenterY(i, p.rowHeight);
     ctx.beginPath();
-    ctx.arc(laneX(row.lane, p.laneWidth, p.padding), rowCenterY(i, p.rowHeight), nodeRadius, 0, TAU);
-    ctx.fillStyle = color(row.lane);
+    ctx.arc(cx, cy, nodeRadius, 0, TAU);
+    ctx.fillStyle = override ?? color(row.lane);
     ctx.fill();
+    if (p.bookmarks?.has(row.sha)) {
+      ctx.beginPath();
+      ctx.arc(cx, cy, nodeRadius + 3, 0, TAU);
+      ctx.strokeStyle = override ?? p.outline;
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([2, 2]);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
   }
 
   // 4) HEAD node ring (the band was drawn in step 1).

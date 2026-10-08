@@ -124,6 +124,7 @@ describe("queries", () => {
       "worktrees",
       "reflog",
       "undo",
+      "stats",
       "terminal",
       "history",
     ]);
@@ -396,6 +397,7 @@ describe("default layout + presets", () => {
       "worktrees",
       "reflog",
       "undo",
+      "stats",
       "terminal",
     ]);
     expect((root.a as TabsNode).active).toBe(0);

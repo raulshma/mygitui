@@ -4,12 +4,18 @@
    * except `openFolder`, the "+" button callback (App wires it to the
    * placeholder folder-picker toast until the dialog plugin lands in M1.1).
    *
-   * Accessibility: the strip is a `tablist` with a roving tabindex — the
-   * active tab is tab-reachable (tabindex 0), the rest are programmatic
-   * (tabindex -1). Arrow/Home/End keys move focus; Enter/Space activate the
-   * focused tab (native button behavior routes through `setActive`).
-   * Middle-click (auxclick button 1) closes a tab, as does its × button.
-   */
+ * Accessibility: the strip is a `tablist` with a roving tabindex — the
+ * active tab is tab-reachable (tabindex 0), the rest are programmatic
+ * (tabindex -1). Arrow/Home/End keys move focus; Enter/Space activate the
+ * focused tab (native button behavior routes through `setActive`).
+ * Middle-click (auxclick button 1) closes a tab, as does its × button.
+ *
+ * Focus order is sane: each × close button follows its tab in DOM order, so
+ * Tab runs tab → its close → next reachable control. Overflowed (ellipsis-
+ * truncated) names announce in full: each tab's accessible name is
+ * "name — root" (label-in-name compliant) and the title tooltip shows the
+ * root on hover.
+ */
   import { closeTab, setActive, tabStore } from "$lib/stores/tabs.svelte";
 
   let { openFolder }: { openFolder?: () => void } = $props();
@@ -71,6 +77,7 @@
         aria-selected={tab.id === tabStore.activeId}
         tabindex={tab.id === tabStore.activeId ? 0 : -1}
         title={tab.root}
+        aria-label={`${tab.name} — ${tab.root}`}
         onclick={() => setActive(tab.id)}
         onauxclick={(event) => onAuxClick(event, tab.id)}
         onmousedown={(event) => {

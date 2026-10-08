@@ -39,7 +39,8 @@ export type PanelId =
   | "diff"
   | "terminal"
   | "forge"
-  | "actions";
+  | "actions"
+  | "stats";
 
 /** Registry order = default tab order (mirrors the pre-M4 RepoView stack). */
 export const PANEL_IDS: readonly PanelId[] = [
@@ -55,6 +56,7 @@ export const PANEL_IDS: readonly PanelId[] = [
   "terminal",
   "forge",
   "actions",
+  "stats",
 ];
 
 /**
@@ -122,6 +124,10 @@ export const PANEL_META: Record<PanelId, PanelMeta> = {
   actions: {
     label: "Actions",
     icon: "M5 7h14M5 12h9M5 17h5",
+  },
+  stats: {
+    label: "Stats",
+    icon: "M18 20V10M12 20V4M6 20v-6",
   },
 };
 
@@ -621,7 +627,8 @@ export function presetToLayout(preset: LayoutPreset): WorkspaceLayout {
 }
 
 // "terminal" joined the pre-M4 tab stack in M5 (lane G2) — appended last so
-// every earlier tab keeps its index.
+// every earlier tab keeps its index. "stats" joined in M7 (lane I1), placed
+// before "terminal" per the M7 contracts section.
 const ALL_LEFT_TABS: PanelId[] = [
   "status",
   "branches",
@@ -630,6 +637,7 @@ const ALL_LEFT_TABS: PanelId[] = [
   "worktrees",
   "reflog",
   "undo",
+  "stats",
   "terminal",
 ];
 

@@ -2456,3 +2456,57 @@ pub async fn pr_checks(
         .await
         .map_err(|e| format!("pr_checks task failed: {e}"))?
 }
+
+// ---------------------------------------------------------------------------
+// M7 (lane I1): contribution statistics — commit activity heatmap buckets +
+// contributor rollups (contracts.md "Commands (M7 stats)"). Pure reads on
+// the M1 read path (repo mutex + spawn_blocking, no op queue, no generation
+// bump); the logic lives in `engine/stats.rs` as inherent `*_impl` twins on
+// `Libgit2Engine` (the M2-lane convention).
+// ---------------------------------------------------------------------------
+
+use crate::engine::stats::{Contributor, DayCount};
+
+/// Commits per local day inside the `max_days` window, day ascending.
+/// `author` (when set) is a case-insensitive substring matched against the
+/// author name OR email; blank/None = no filter.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn commit_activity(
+    repo_id: RepoId,
+    max_days: u32,
+    author: Option<String>,
+    state: State<'_, RepoManager>,
+) -> Result<Vec<DayCount>, String> {
+    let handle = get_handle(&state, &repo_id)?;
+    let engine = Libgit2Engine::new();
+    let repo = handle.repo();
+    tauri::async_runtime::spawn_blocking(move || {
+        let repo = repo.lock();
+        engine
+            .commit_activity_impl(&repo, max_days, author.as_deref())
+            .map_err(engine_err)
+    })
+    .await
+    .map_err(|e| format!("commit_activity task failed: {e}"))?
+}
+
+/// Per-author rollups (identity = exact name+email pair) inside the
+/// `max_days` window, count descending.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn contributor_stats(
+    repo_id: RepoId,
+    max_days: u32,
+    state: State<'_, RepoManager>,
+) -> Result<Vec<Contributor>, String> {
+    let handle = get_handle(&state, &repo_id)?;
+    let engine = Libgit2Engine::new();
+    let repo = handle.repo();
+    tauri::async_runtime::spawn_blocking(move || {
+        let repo = repo.lock();
+        engine
+            .contributor_stats_impl(&repo, max_days)
+            .map_err(engine_err)
+    })
+    .await
+    .map_err(|e| format!("contributor_stats task failed: {e}"))?
+}
