@@ -9,7 +9,9 @@ use git2::{IndexAddOption, Repository, RepositoryInitOptions, RepositoryState};
 
 use super::git_engine::{EngineError, GitEngine, GitEngineM3};
 use super::libgit2::Libgit2Engine;
-use super::types::{CommitOptions, ConflictResolution, MergeOutcome, ResetKind};
+use super::types::{
+    CommitOptions, ConflictResolution, MergeFavor, MergeOptions, MergeOutcome, ResetKind,
+};
 
 const ENGINE: Libgit2Engine = Libgit2Engine;
 
@@ -230,7 +232,7 @@ fn conflicted_fixture(name: &str) -> Fixture {
 /// Merge `feature` into `main` in `conflicted_fixture`, expecting a conflict.
 fn merge_feature_conflicted(repo: &Repository) -> super::types::MergeResult {
     let result = ENGINE
-        .merge_branch(repo, "feature", false)
+        .merge_branch(repo, "feature", &Default::default())
         .expect("merge branch");
     assert!(
         matches!(result.outcome, MergeOutcome::Conflicted),
@@ -257,7 +259,7 @@ fn merge_fast_forward_moves_branch_and_workdir() {
         .expect("switch back");
 
     let result = ENGINE
-        .merge_branch(&fx.repo, "feature", false)
+        .merge_branch(&fx.repo, "feature", &Default::default())
         .expect("merge");
 
     assert!(matches!(result.outcome, MergeOutcome::FastForward));
@@ -282,7 +284,7 @@ fn merge_diverged_creates_two_parent_commit() {
     let main_tip = commit_file(&fx.repo, "main.txt", "from main\n", "main adds");
 
     let result = ENGINE
-        .merge_branch(&fx.repo, "feature", false)
+        .merge_branch(&fx.repo, "feature", &Default::default())
         .expect("merge");
 
     assert!(matches!(result.outcome, MergeOutcome::Merged));
@@ -328,7 +330,14 @@ fn merge_no_ff_forces_merge_commit() {
         .expect("switch back");
 
     let result = ENGINE
-        .merge_branch(&fx.repo, "feature", true)
+        .merge_branch(
+            &fx.repo,
+            "feature",
+            &MergeOptions {
+                no_ff: true,
+                ..Default::default()
+            },
+        )
         .expect("merge --no-ff");
 
     assert!(matches!(result.outcome, MergeOutcome::Merged));
@@ -353,7 +362,7 @@ fn merge_up_to_date_is_noop() {
         .expect("branch feature at base");
 
     let result = ENGINE
-        .merge_branch(&fx.repo, "feature", false)
+        .merge_branch(&fx.repo, "feature", &Default::default())
         .expect("merge");
 
     assert!(matches!(result.outcome, MergeOutcome::UpToDate));
@@ -428,6 +437,264 @@ fn merge_abort_without_merge_errors() {
 
     let err = ENGINE.merge_abort(&fx.repo).expect_err("no merge running");
     assert_invalid(err);
+}
+
+// ---------------------------------------------------------------------------
+// merge options (squash / no-commit / favor)
+// ---------------------------------------------------------------------------
+
+/// Diverged fixture: base, then `feature` adds feature.txt while `main` adds
+/// main.txt. Returns (fixture, main_tip, feature_tip).
+fn diverged_fixture(name: &str) -> (Fixture, String, String) {
+    let fx = init_fixture(name);
+    commit_file(&fx.repo, "base.txt", "base\n", "base");
+    ENGINE
+        .branch_create(&fx.repo, "feature", None, true)
+        .expect("branch feature");
+    let feature_tip = commit_file(&fx.repo, "feature.txt", "from feature\n", "feature adds");
+    ENGINE
+        .branch_switch(&fx.repo, "main", false)
+        .expect("switch back");
+    let main_tip = commit_file(&fx.repo, "main.txt", "from main\n", "main adds");
+    (fx, main_tip, feature_tip)
+}
+
+#[test]
+fn merge_squash_stages_result_without_commit_or_state() {
+    let (fx, main_tip, _feature_tip) = diverged_fixture("merge-squash");
+
+    let result = ENGINE
+        .merge_branch(
+            &fx.repo,
+            "feature",
+            &MergeOptions {
+                squash: true,
+                ..Default::default()
+            },
+        )
+        .expect("squash merge");
+
+    assert!(matches!(result.outcome, MergeOutcome::Squashed));
+    // HEAD did not move; no merge state; SQUASH_MSG seeds the commit.
+    assert_eq!(head_sha(&fx.repo), main_tip);
+    assert!(!fx.repo.path().join("MERGE_HEAD").exists());
+    assert!(fx.repo.path().join("SQUASH_MSG").exists());
+    assert_eq!(fx.repo.state(), RepositoryState::Clean);
+    let status = ENGINE.status(&fx.repo).expect("status");
+    assert!(!status.merging);
+    // Both sides' content is in the workdir; the merge result is staged.
+    assert_eq!(workdir_text(&fx.repo, "feature.txt"), "from feature\n");
+    assert_eq!(workdir_text(&fx.repo, "main.txt"), "from main\n");
+    assert_eq!(
+        staged_content(&fx.repo, "feature.txt", 0).as_deref(),
+        Some(b"from feature\n".as_slice())
+    );
+
+    // The user's next commit is a NORMAL 1-parent commit (squash semantics).
+    ENGINE
+        .commit_impl(
+            &fx.repo,
+            &CommitOptions {
+                message: "squash feature into main".into(),
+                amend: false,
+                no_verify: true,
+                allow_empty: false,
+                author: None,
+            },
+        )
+        .expect("squash finishing commit");
+    let head = fx
+        .repo
+        .head()
+        .expect("head")
+        .peel_to_commit()
+        .expect("commit");
+    assert_eq!(head.parent_count(), 1, "squash commit has one parent");
+    assert_eq!(head.parent(0).expect("p0").id().to_string(), main_tip);
+}
+
+#[test]
+fn merge_squash_on_ffable_branch_stages_instead_of_moving() {
+    let fx = init_fixture("merge-squash-ff");
+    commit_file(&fx.repo, "file.txt", "base\n", "base");
+    let main_tip = head_sha(&fx.repo);
+    ENGINE
+        .branch_create(&fx.repo, "feature", None, true)
+        .expect("branch feature");
+    commit_file(&fx.repo, "new.txt", "feature\n", "feature adds");
+    ENGINE
+        .branch_switch(&fx.repo, "main", false)
+        .expect("switch back");
+
+    let result = ENGINE
+        .merge_branch(
+            &fx.repo,
+            "feature",
+            &MergeOptions {
+                squash: true,
+                ..Default::default()
+            },
+        )
+        .expect("squash ff");
+
+    assert!(matches!(result.outcome, MergeOutcome::Squashed));
+    assert_eq!(head_sha(&fx.repo), main_tip, "ref not fast-forwarded");
+    assert_eq!(workdir_text(&fx.repo, "new.txt"), "feature\n");
+    assert_eq!(
+        staged_content(&fx.repo, "new.txt", 0).as_deref(),
+        Some(b"feature\n".as_slice())
+    );
+}
+
+#[test]
+fn merge_squash_conflict_drops_merge_state_keeps_markers() {
+    let fx = conflicted_fixture("merge-squash-conflict");
+    let main_tip = head_sha(&fx.repo);
+
+    let result = ENGINE
+        .merge_branch(
+            &fx.repo,
+            "feature",
+            &MergeOptions {
+                squash: true,
+                ..Default::default()
+            },
+        )
+        .expect("squash merge conflicts");
+
+    assert!(matches!(result.outcome, MergeOutcome::Conflicted));
+    // No MERGE_HEAD: the finishing commit must be a 1-parent commit.
+    assert!(!fx.repo.path().join("MERGE_HEAD").exists());
+    assert_eq!(head_sha(&fx.repo), main_tip);
+    assert!(
+        workdir_text(&fx.repo, "conflict1.txt").contains("<<<<<<<"),
+        "markers stay for the editor"
+    );
+
+    // Resolve + commit: normal commit, not a merge commit.
+    for path in ["conflict1.txt", "conflict2.txt", "conflict3.txt"] {
+        ENGINE
+            .conflict_resolve(&fx.repo, path, ConflictResolution::Ours, None)
+            .unwrap_or_else(|e| panic!("resolve {path}: {e}"));
+    }
+    ENGINE
+        .commit_impl(
+            &fx.repo,
+            &CommitOptions {
+                message: "squash: took ours".into(),
+                amend: false,
+                no_verify: true,
+                allow_empty: false,
+                author: None,
+            },
+        )
+        .expect("finishing commit");
+    let head = fx
+        .repo
+        .head()
+        .expect("head")
+        .peel_to_commit()
+        .expect("commit");
+    assert_eq!(head.parent_count(), 1);
+    let status = ENGINE.status(&fx.repo).expect("status");
+    assert!(!status.merging && !status.sequencer && status.entries.is_empty());
+}
+
+#[test]
+fn merge_no_commit_stages_and_awaits_merge_commit() {
+    let (fx, main_tip, feature_tip) = diverged_fixture("merge-no-commit");
+
+    let result = ENGINE
+        .merge_branch(
+            &fx.repo,
+            "feature",
+            &MergeOptions {
+                no_commit: true,
+                ..Default::default()
+            },
+        )
+        .expect("no-commit merge");
+
+    assert!(matches!(result.outcome, MergeOutcome::NoCommit));
+    assert_eq!(head_sha(&fx.repo), main_tip, "no commit yet");
+    // Merge state live for the finishing (2-parent) commit.
+    assert!(fx.repo.path().join("MERGE_HEAD").exists());
+    let status = ENGINE.status(&fx.repo).expect("status");
+    assert!(status.merging);
+
+    ENGINE
+        .commit_impl(
+            &fx.repo,
+            &CommitOptions {
+                message: "Merge branch 'feature'".into(),
+                amend: false,
+                no_verify: true,
+                allow_empty: false,
+                author: None,
+            },
+        )
+        .expect("finishing commit");
+    let head = fx
+        .repo
+        .head()
+        .expect("head")
+        .peel_to_commit()
+        .expect("commit");
+    assert_eq!(head.parent_count(), 2);
+    assert_eq!(head.parent(0).expect("p0").id().to_string(), main_tip);
+    assert_eq!(head.parent(1).expect("p1").id().to_string(), feature_tip);
+    assert_eq!(fx.repo.state(), RepositoryState::Clean);
+}
+
+#[test]
+fn merge_favor_ours_auto_resolves_conflicts() {
+    let fx = conflicted_fixture("merge-favor-ours");
+
+    let result = ENGINE
+        .merge_branch(
+            &fx.repo,
+            "feature",
+            &MergeOptions {
+                favor: MergeFavor::Ours,
+                ..Default::default()
+            },
+        )
+        .expect("favor-ours merge");
+
+    assert!(matches!(result.outcome, MergeOutcome::Merged));
+    // Conflicting hunks resolved to ours; clean feature additions land.
+    assert_eq!(workdir_text(&fx.repo, "conflict1.txt"), "main one\n");
+    assert_eq!(workdir_text(&fx.repo, "conflict2.txt"), "main two\n");
+    assert_eq!(workdir_text(&fx.repo, "conflict3.txt"), "main three\n");
+    assert_eq!(workdir_text(&fx.repo, "feature_new.txt"), "brand new\n");
+    let head = fx
+        .repo
+        .head()
+        .expect("head")
+        .peel_to_commit()
+        .expect("commit");
+    assert_eq!(head.parent_count(), 2);
+    assert_eq!(fx.repo.state(), RepositoryState::Clean);
+}
+
+#[test]
+fn merge_favor_theirs_auto_resolves_conflicts() {
+    let fx = conflicted_fixture("merge-favor-theirs");
+
+    let result = ENGINE
+        .merge_branch(
+            &fx.repo,
+            "feature",
+            &MergeOptions {
+                favor: MergeFavor::Theirs,
+                ..Default::default()
+            },
+        )
+        .expect("favor-theirs merge");
+
+    assert!(matches!(result.outcome, MergeOutcome::Merged));
+    assert_eq!(workdir_text(&fx.repo, "conflict1.txt"), "feature one\n");
+    assert_eq!(workdir_text(&fx.repo, "keep.txt"), "same\n");
 }
 
 // ---------------------------------------------------------------------------
@@ -792,7 +1059,12 @@ fn cherry_pick_abort_restores_pre_pick_state() {
     assert_sequencer_cleared(&fx);
     // Workdir and index are back at HEAD ("main\n"); the pick left no commit.
     assert_eq!(workdir_text(&fx.repo, "shared.txt"), "main\n");
-    let head = fx.repo.head().expect("head").peel_to_commit().expect("commit");
+    let head = fx
+        .repo
+        .head()
+        .expect("head")
+        .peel_to_commit()
+        .expect("commit");
     assert_eq!(head.message().ok(), Some("main edit"));
     let index = fx.repo.index().expect("index");
     assert!(!index.has_conflicts());
@@ -833,7 +1105,12 @@ fn cherry_pick_abort_keeps_landed_picks_of_the_leg() {
 
     assert_sequencer_cleared(&fx);
     // The leg's landed pick stays; the conflicted step is fully undone.
-    let head = fx.repo.head().expect("head").peel_to_commit().expect("commit");
+    let head = fx
+        .repo
+        .head()
+        .expect("head")
+        .peel_to_commit()
+        .expect("commit");
     assert_eq!(head.message().ok(), Some("feature: a"));
     assert_eq!(workdir_text(&fx.repo, "a.txt"), "a feature\n");
     assert_eq!(workdir_text(&fx.repo, "b.txt"), "b main\n");
@@ -855,7 +1132,12 @@ fn revert_abort_restores_pre_revert_state() {
 
     assert_sequencer_cleared(&fx);
     assert_eq!(workdir_text(&fx.repo, "file.txt"), "three\n");
-    let head = fx.repo.head().expect("head").peel_to_commit().expect("commit");
+    let head = fx
+        .repo
+        .head()
+        .expect("head")
+        .peel_to_commit()
+        .expect("commit");
     assert_eq!(head.message().ok(), Some("third"));
 }
 
@@ -879,16 +1161,160 @@ fn commit_after_resolved_pick_clears_sequencer_state() {
         )
         .expect("resolve");
     ENGINE
-        .commit_impl(&fx.repo, &CommitOptions {
-            message: "main edit (resolved pick)".into(),
-            amend: false,
-            no_verify: true,
-            allow_empty: false,
-            author: None,
-        })
+        .commit_impl(
+            &fx.repo,
+            &CommitOptions {
+                message: "main edit (resolved pick)".into(),
+                amend: false,
+                no_verify: true,
+                allow_empty: false,
+                author: None,
+            },
+        )
         .expect("commit");
 
     assert_sequencer_cleared(&fx);
+}
+
+#[test]
+fn commit_after_resolved_merge_takes_merge_head_parent_and_clears_state() {
+    let fx = conflicted_fixture("merge-resolve-commit");
+    let main_tip = head_sha(&fx.repo);
+    let feature_tip = branch_sha(&fx.repo, "feature");
+    let result = merge_feature_conflicted(&fx.repo);
+
+    // Resolve every conflict (ours/theirs/custom mix), then commit through
+    // the normal path — the merge-finishing commit.
+    let resolutions = [
+        ("conflict1.txt", ConflictResolution::Ours, None),
+        ("conflict2.txt", ConflictResolution::Theirs, None),
+        (
+            "conflict3.txt",
+            ConflictResolution::Both,
+            Some(b"merged by hand\n".as_slice()),
+        ),
+    ];
+    for (path, res, custom) in resolutions {
+        ENGINE
+            .conflict_resolve(&fx.repo, path, res, custom)
+            .unwrap_or_else(|e| panic!("resolve {path}: {e}"));
+    }
+    let conflicts = result.conflicts;
+    assert_eq!(conflicts.len(), 3);
+    ENGINE
+        .commit_impl(
+            &fx.repo,
+            &CommitOptions {
+                message: "Merge branch 'feature' (resolved in mygitui)".into(),
+                amend: false,
+                no_verify: true,
+                allow_empty: false,
+                author: None,
+            },
+        )
+        .expect("merge-finishing commit");
+
+    // Two parents: ours first, MERGE_HEAD second.
+    let head = fx
+        .repo
+        .head()
+        .expect("head")
+        .peel_to_commit()
+        .expect("commit");
+    assert_eq!(head.parent_count(), 2, "finishing commit is a merge commit");
+    assert_eq!(head.parent(0).expect("p0").id().to_string(), main_tip);
+    assert_eq!(head.parent(1).expect("p1").id().to_string(), feature_tip);
+    assert_eq!(
+        head.message().ok(),
+        Some("Merge branch 'feature' (resolved in mygitui)")
+    );
+    // Merge state fully consumed.
+    assert!(!fx.repo.path().join("MERGE_HEAD").exists());
+    assert!(!fx.repo.path().join("MERGE_MSG").exists());
+    assert!(!fx.repo.path().join("MERGE_MODE").exists());
+    assert_eq!(fx.repo.state(), RepositoryState::Clean);
+    let status = ENGINE.status(&fx.repo).expect("status");
+    assert!(!status.merging, "RepoStatus::merging must drop");
+    assert!(status.entries.is_empty(), "clean tree after finishing");
+    // Resolved bytes landed.
+    assert_eq!(workdir_text(&fx.repo, "conflict1.txt"), "main one\n");
+    assert_eq!(workdir_text(&fx.repo, "conflict2.txt"), "feature two\n");
+    assert_eq!(workdir_text(&fx.repo, "conflict3.txt"), "merged by hand\n");
+}
+
+#[test]
+fn merge_finishing_commit_allowed_when_resolved_tree_matches_head() {
+    // Theirs is a strict subset of ours: resolving everything to ours leaves
+    // a tree identical to HEAD's — the merge commit is still meaningful.
+    let fx = init_fixture("merge-empty-tree");
+    commit_file(&fx.repo, "file.txt", "base\n", "base");
+    ENGINE
+        .branch_create(&fx.repo, "feature", None, true)
+        .expect("branch feature");
+    commit_file(&fx.repo, "sub.txt", "sub\n", "feature adds");
+    ENGINE
+        .branch_switch(&fx.repo, "main", false)
+        .expect("switch back");
+    commit_file(&fx.repo, "sub.txt", "main\n", "main adds same file");
+    let result = ENGINE
+        .merge_branch(
+            &fx.repo,
+            "feature",
+            &MergeOptions {
+                no_ff: true,
+                ..Default::default()
+            },
+        )
+        .expect("no-ff merge");
+    assert!(matches!(result.outcome, MergeOutcome::Conflicted));
+
+    ENGINE
+        .conflict_resolve(&fx.repo, "sub.txt", ConflictResolution::Ours, None)
+        .expect("resolve ours");
+    // Tree now equals HEAD's tree; allow_empty is false — must still commit.
+    ENGINE
+        .commit_impl(
+            &fx.repo,
+            &CommitOptions {
+                message: "merge: took ours".into(),
+                amend: false,
+                no_verify: true,
+                allow_empty: false,
+                author: None,
+            },
+        )
+        .expect("commit despite matching tree");
+
+    let head = fx
+        .repo
+        .head()
+        .expect("head")
+        .peel_to_commit()
+        .expect("commit");
+    assert_eq!(head.parent_count(), 2);
+    assert_eq!(fx.repo.state(), RepositoryState::Clean);
+    let status = ENGINE.status(&fx.repo).expect("status");
+    assert!(!status.merging);
+}
+
+#[test]
+fn amend_during_merge_is_rejected() {
+    let fx = conflicted_fixture("merge-amend-reject");
+    merge_feature_conflicted(&fx.repo);
+
+    let err = ENGINE
+        .commit_impl(
+            &fx.repo,
+            &CommitOptions {
+                message: "attempt amend".into(),
+                amend: true,
+                no_verify: true,
+                allow_empty: true,
+                author: None,
+            },
+        )
+        .expect_err("amend during merge");
+    assert_invalid(err);
 }
 
 // ---------------------------------------------------------------------------
@@ -1025,7 +1451,7 @@ fn merge_remote_tracking_branch_message() {
         .expect("tracking ref");
 
     let result = ENGINE
-        .merge_branch(&fx.repo, "origin/main", false)
+        .merge_branch(&fx.repo, "origin/main", &Default::default())
         .expect("merge tracking ref");
 
     assert!(matches!(result.outcome, MergeOutcome::Merged));

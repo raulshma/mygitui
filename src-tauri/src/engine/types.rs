@@ -96,7 +96,7 @@ pub struct FileDiff {
     pub hunks: Vec<DiffHunk>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GitSignature {
     pub name: String,
     pub email: String,
@@ -240,12 +240,23 @@ pub struct PullOptions {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PushOptions {
     pub remote: String,
-    /// Branch to push; empty = current.
+    /// Branch to push; empty = current. Ignored when `refs` is non-empty.
     pub branch: String,
-    /// Force (with lease when supported).
+    /// Force (plain `+` refspec).
     pub force: bool,
+    /// Force only if the remote still matches the last-fetched tracking ref
+    /// (`--force-with-lease`, approximated client-side: the tracking ref is
+    /// the lease value — see netops.rs).
+    pub force_with_lease: bool,
     /// Set upstream while pushing (-u).
     pub set_upstream: bool,
+    /// Explicit refs to push (`refs/heads/x`, `refs/tags/y`, or bare branch
+    /// names); empty = `branch`.
+    pub refs: Vec<String>,
+    /// Push every local tag (`--tags`).
+    pub tags: bool,
+    /// Delete the remote refs named in `refs` instead of updating them.
+    pub delete: bool,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -273,6 +284,48 @@ pub struct RemoteInfo {
     pub push_url: Option<String>,
 }
 
+/// One tag with its metadata (annotated tags carry tagger + message).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TagInfo {
+    pub name: String,
+    /// The tag ref's direct target (tag object for annotated, commit for
+    /// lightweight).
+    pub sha: String,
+    /// The peeled commit the tag points at.
+    pub target: String,
+    pub annotated: bool,
+    pub tagger: Option<GitSignature>,
+    pub message: Option<String>,
+}
+
+/// One remote-tracking branch (`refs/remotes/<remote>/<name>`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RemoteBranchInfo {
+    pub remote: String,
+    /// Short name after `<remote>/`.
+    pub name: String,
+    pub sha: String,
+    /// Local branch whose upstream is this remote branch, when any.
+    pub tracked_by: Option<String>,
+}
+
+/// Configured external merge tools (read from git config).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct MergetoolInfo {
+    /// `merge.tool` — the CLI-preferred tool.
+    pub tool: Option<String>,
+    /// `merge.guitool` — the GUI-preferred tool.
+    pub gui_tool: Option<String>,
+}
+
+/// Result of one `git mergetool` run.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct MergetoolResult {
+    pub success: bool,
+    /// Combined trimmed stdout+stderr (diagnostics for the FE dialog).
+    pub output: String,
+}
+
 // ---------- M3: power + safety model ----------
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -295,13 +348,42 @@ pub struct ConflictFile {
     pub source: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MergeOutcome {
     FastForward,
     Merged,
     Conflicted,
     UpToDate,
+    /// `--squash`: the merge result is staged (SQUASH_MSG written), no merge
+    /// state, no commit — the user's next commit is a normal 1-parent commit.
+    Squashed,
+    /// `--no-commit`: the merge went cleanly but stops before committing;
+    /// MERGE_HEAD stays live so the finishing commit is a merge commit.
+    NoCommit,
+}
+
+/// How conflicting hunks auto-resolve during a merge (`-X ours` / `-X theirs`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MergeFavor {
+    #[default]
+    None,
+    Ours,
+    Theirs,
+}
+
+/// Options for `merge_branch` (mirrors the `git merge` flags mygitui exposes).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct MergeOptions {
+    /// Force a merge commit even when a fast-forward is possible (`--no-ff`).
+    pub no_ff: bool,
+    /// Stage the merge result without committing or merge state (`--squash`).
+    pub squash: bool,
+    /// Perform the merge but stop before creating the commit (`--no-commit`).
+    pub no_commit: bool,
+    /// Auto-resolve conflicting hunks in favor of one side (`-X ours/theirs`).
+    pub favor: MergeFavor,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

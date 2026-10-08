@@ -18,7 +18,7 @@ use crate::auth;
 use super::branches::current_branch_name;
 use super::git_engine::{EngineError, EngineResult, FetchProgress, PushProgress};
 use super::libgit2::Libgit2Engine;
-use super::types::{FetchOptions, NetStats, PullOptions, PushOptions, RemoteInfo};
+use super::types::{FetchOptions, NetStats, PullOptions, PushOptions, RebaseStep, RemoteInfo};
 
 /// Minimum spacing between two progress emissions (the final tick is exempt).
 const PROGRESS_MIN_INTERVAL: Duration = Duration::from_millis(100);
@@ -308,12 +308,7 @@ impl Libgit2Engine {
             ));
         }
         if opts.rebase {
-            // Diverged rebases need the interactive machinery (conflict
-            // routing through the UI); in-memory ff-style rebases are covered
-            // by the fast-forward branch above.
-            return Err(EngineError::Unsupported(
-                "diverged pull with rebase: interactive rebase lands in M3; use merge pull".into(),
-            ));
+            return self.pull_rebase(repo, &current, fetched_oid, stats);
         }
 
         // Default: merge, favoring fast-forward (handled above).
@@ -346,43 +341,188 @@ impl Libgit2Engine {
         Ok(stats)
     }
 
+    /// Diverged `pull --rebase`: replay the local-only commits onto the
+    /// fetched tip through the interactive rebase engine (plan = picks,
+    /// onto = fetched tip). A conflict pauses exactly like an interactive
+    /// rebase — the FE rebase monitor + conflict editor drive resolution —
+    /// and surfaces here as a friendly Invalid error; the fetch stats are
+    /// already banked.
+    fn pull_rebase(
+        &self,
+        repo: &Repository,
+        current: &str,
+        fetched_oid: git2::Oid,
+        stats: NetStats,
+    ) -> EngineResult<NetStats> {
+        let head = repo
+            .head()
+            .map_err(|_| EngineError::Invalid("cannot rebase: HEAD is unborn".into()))?
+            .peel_to_commit()?;
+        let base = repo.merge_base(head.id(), fetched_oid).map_err(|_| {
+            EngineError::Invalid(format!(
+                "cannot rebase `{current}`: no merge base with the fetched tip (histories are unrelated)"
+            ))
+        })?;
+        // Local-only commits, oldest first (pick order).
+        let mut walk = repo.revwalk()?;
+        walk.push(head.id())?;
+        walk.hide(fetched_oid)?;
+        walk.set_sorting(git2::Sort::TOPOLOGICAL)?;
+        let mut shas: Vec<String> = walk
+            .filter_map(Result::ok)
+            .filter(|oid| *oid != base)
+            .map(|oid| oid.to_string())
+            .collect();
+        shas.reverse();
+        if shas.is_empty() {
+            // Not actually diverged (defensive; merge_analysis said so).
+            return Ok(stats);
+        }
+        let plan: Vec<RebaseStep> = shas
+            .into_iter()
+            .map(|sha| RebaseStep {
+                sha,
+                action: "pick".to_owned(),
+                new_message: None,
+            })
+            .collect();
+        let state = self.rebase_start_impl(repo, &plan, Some(&fetched_oid.to_string()))?;
+        if state.active {
+            return Err(EngineError::Invalid(format!(
+                "pull --rebase hit a conflict on `{current}`: resolve it in the rebase view, then continue (or abort)",
+            )));
+        }
+        Ok(stats)
+    }
+
     pub(crate) fn push_impl(
         &self,
         repo: &Repository,
         opts: &PushOptions,
         progress: &mut dyn FnMut(PushProgress),
     ) -> EngineResult<NetStats> {
-        let branch_name = if opts.branch.is_empty() {
-            current_branch_name(repo).ok_or_else(|| {
-                EngineError::Invalid(
-                    "cannot push: no current branch (detached or unborn HEAD)".into(),
-                )
-            })?
-        } else {
-            opts.branch.clone()
-        };
-        let branch = repo
-            .find_branch(&branch_name, BranchType::Local)
-            .map_err(|e| EngineError::Invalid(format!("branch `{branch_name}` not found: {e}")))?;
-        let tip = branch
-            .get()
-            .peel_to_commit()
-            .map_err(|_| {
-                EngineError::Invalid(format!("branch `{branch_name}` is unborn; nothing to push"))
-            })?
-            .id();
-        let tip_str = tip.to_string();
+        let mut branch_name: Option<String> = None;
 
-        // `+` forces the update (with-lease semantics arrive with the remote
-        // state cache in M3).
-        let refspec = format!(
-            "{}refs/heads/{branch_name}:refs/heads/{branch_name}",
-            if opts.force { "+" } else { "" }
-        );
+        // Resolve the refspecs for this push mode:
+        //  * delete  -> `:refs/...` for every ref in `refs`
+        //  * refs    -> each ref (bare names become refs/heads/...; tags pass)
+        //  * tags    -> every local tag
+        //  * default -> `branch` (or the current branch)
+        // `full_ref` mirrors git's push refspec shorthand resolution.
+        let full_ref = |spec: &str| -> String {
+            if spec.starts_with("refs/") {
+                spec.to_owned()
+            } else if repo.find_reference(&format!("refs/tags/{spec}")).is_ok() {
+                format!("refs/tags/{spec}")
+            } else {
+                format!("refs/heads/{spec}")
+            }
+        };
+        // The remote-tracking ref git would use as the force-with-lease
+        // expectation for a branch refspec.
+        let tracking_of = |remote: &str, full: &str| -> Option<String> {
+            full.strip_prefix("refs/heads/")
+                .map(|short| format!("refs/remotes/{remote}/{short}"))
+        };
+
+        let mut refspecs: Vec<String> = Vec::new();
+        if opts.delete {
+            if opts.refs.is_empty() {
+                return Err(EngineError::Invalid(
+                    "delete push requires at least one ref in `refs`".into(),
+                ));
+            }
+            for spec in &opts.refs {
+                refspecs.push(format!(":{}", full_ref(spec)));
+            }
+        } else {
+            if opts.tags {
+                for entry in repo.references_glob("refs/tags/*")? {
+                    let reference = entry?;
+                    if let Ok(name) = reference.name() {
+                        refspecs.push(format!("{name}:{name}"));
+                    }
+                }
+                if refspecs.is_empty() {
+                    return Err(EngineError::Invalid("no local tags to push".into()));
+                }
+            }
+            for spec in &opts.refs {
+                let full = full_ref(spec);
+                let force = if opts.force_with_lease && full.starts_with("refs/heads/") {
+                    // Lease: the remote must still match the last-fetched
+                    // tracking ref. libgit2 has no native lease, so the
+                    // tracking ref IS the expectation — refuse when we have
+                    // never fetched the branch (we would be blindly forcing).
+                    let tracking = tracking_of(&opts.remote, &full)
+                        .ok_or_else(|| EngineError::Invalid(format!("cannot lease `{spec}`")))?;
+                    if repo.find_reference(&tracking).is_err() {
+                        return Err(EngineError::Invalid(format!(
+                            "force-with-lease refused: no tracking ref `{tracking}` (fetch first)"
+                        )));
+                    }
+                    true
+                } else {
+                    opts.force
+                };
+                refspecs.push(format!("{}{full}:{full}", if force { "+" } else { "" }));
+            }
+            if refspecs.is_empty() {
+                let name = if opts.branch.is_empty() {
+                    current_branch_name(repo).ok_or_else(|| {
+                        EngineError::Invalid(
+                            "cannot push: no current branch (detached or unborn HEAD)".into(),
+                        )
+                    })?
+                } else {
+                    opts.branch.clone()
+                };
+                repo.find_branch(&name, BranchType::Local)
+                    .map_err(|e| EngineError::Invalid(format!("branch `{name}` not found: {e}")))?
+                    .get()
+                    .peel_to_commit()
+                    .map_err(|_| {
+                        EngineError::Invalid(format!("branch `{name}` is unborn; nothing to push"))
+                    })?;
+                if opts.force_with_lease {
+                    let tracking = format!("refs/remotes/{}/{}", opts.remote, name);
+                    if repo.find_reference(&tracking).is_err() {
+                        return Err(EngineError::Invalid(format!(
+                            "force-with-lease refused: no tracking ref `{tracking}` (fetch first)"
+                        )));
+                    }
+                }
+                let force = opts.force || opts.force_with_lease;
+                refspecs.push(format!(
+                    "{}refs/heads/{name}:refs/heads/{name}",
+                    if force { "+" } else { "" }
+                ));
+                branch_name = Some(name);
+            }
+        }
 
         let mut remote = repo.find_remote(&opts.remote).map_err(|e| {
             EngineError::Invalid(format!("remote `{}` not found: {e}", opts.remote))
         })?;
+
+        // Per-remote-ref new values for the stats map: source ref target for
+        // updates, "(deleted)" for delete refspecs.
+        let mut new_values: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
+        for spec in &refspecs {
+            if let Some((src, dst)) = spec.split_once(':') {
+                let value = if src.is_empty() {
+                    "(deleted)".to_owned()
+                } else {
+                    repo.find_reference(src)
+                        .ok()
+                        .and_then(|r| r.target())
+                        .map(|o| o.to_string())
+                        .unwrap_or_default()
+                };
+                new_values.insert(dst.to_owned(), value);
+            }
+        }
 
         struct PushCtx<'a> {
             progress: &'a mut dyn FnMut(PushProgress),
@@ -434,15 +574,22 @@ impl Libgit2Engine {
                     "push of `{refname}` rejected: {reason}"
                 )));
             }
+            // New value per ref: the local source ref's target for updates,
+            // "(deleted)" for delete refspecs.
+            let new_value = new_values
+                .get(refname)
+                .cloned()
+                .unwrap_or_else(|| "(unknown)".to_owned());
             updated_ref
                 .borrow_mut()
-                .push((refname.to_owned(), tip_str.clone()));
+                .push((refname.to_owned(), new_value));
             Ok(())
         });
 
         let mut po = GitPushOptions::new();
         po.remote_callbacks(cbs);
-        remote.push(&[refspec.as_str()], Some(&mut po))?;
+        let spec_refs: Vec<&str> = refspecs.iter().map(String::as_str).collect();
+        remote.push(&spec_refs, Some(&mut po))?;
         // Release the callbacks (they borrow `ctx` and `updated`) before
         // consuming them.
         drop(po);
@@ -457,9 +604,9 @@ impl Libgit2Engine {
             message: "done".to_owned(),
         });
 
-        if opts.set_upstream {
-            let mut local = repo.find_branch(&branch_name, BranchType::Local)?;
-            local.set_upstream(Some(&format!("{}/{}", opts.remote, branch_name)))?;
+        if let (Some(name), true) = (branch_name.as_deref(), opts.set_upstream) {
+            let mut local = repo.find_branch(name, BranchType::Local)?;
+            local.set_upstream(Some(&format!("{}/{}", opts.remote, name)))?;
         }
 
         Ok(NetStats {

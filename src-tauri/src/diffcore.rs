@@ -106,7 +106,130 @@ pub(crate) fn apply_selection(
     selections: &[Selection],
     unstage: bool,
 ) -> EngineResult<()> {
-    // Merge selections per hunk index.
+    selection_core(
+        repo,
+        path,
+        selections,
+        unstage,
+        unstage,
+        ApplyLocation::Index,
+    )
+}
+
+/// Discard the selected worktree hunks for `path` by reconstructing the
+/// working file: selected additions are dropped, selected deletions are
+/// restored, everything else (including unselected hunks and index content)
+/// stays byte-identical.
+///
+/// libgit2's `Repository::apply` cannot express this: with
+/// `ApplyLocation::WorkDir` the preimage is the *index*, while the patch we
+/// need to reverse has the *workdir* as its preimage. Line surgery over the
+/// (index→workdir) hunks avoids patch-application entirely.
+pub(crate) fn discard_selection(
+    repo: &Repository,
+    path: &str,
+    selections: &[Selection],
+) -> EngineResult<()> {
+    let subsets = merge_subsets(selections)?;
+    if subsets.is_empty() {
+        return Ok(());
+    }
+
+    let (diff, delta_idx) = source_diff(repo, path, false)?;
+    let patch = Patch::from_diff(&diff, delta_idx)?;
+    let delta = diff.get_delta(delta_idx).expect("chosen delta exists");
+    if delta.flags().contains(git2::DiffFlags::BINARY) {
+        return Err(EngineError::Invalid(format!(
+            "binary hunk discard unsupported: {path}"
+        )));
+    }
+    let mut hunks: Vec<RawHunk> = match &patch {
+        Some(patch) => raw_hunks(patch)?,
+        None => Vec::new(),
+    };
+    if hunks.is_empty() && delta.status() == git2::Delta::Untracked {
+        hunks = untracked_hunks(repo, path)?;
+    }
+    for (hunk_idx, hunk) in hunks.iter_mut().enumerate() {
+        if let Some(subset) = subsets.get(&(hunk_idx as u32)) {
+            mark_kept(hunk, subset);
+        }
+    }
+
+    // Workdir bytes split into lines WITH their trailing newlines preserved.
+    let workdir = repo
+        .workdir()
+        .ok_or_else(|| EngineError::Invalid("bare repository has no workdir".into()))?;
+    let bytes = std::fs::read(workdir.join(path))?;
+    let lines: Vec<&[u8]> = split_lines(&bytes);
+
+    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
+    let mut consumed: usize = 0; // workdir lines already emitted/skipped
+    for (hunk_idx, hunk) in hunks.iter().enumerate() {
+        // Unselected hunks keep their workdir lines exactly as they are;
+        // only selected hunks walk their region.
+        if !subsets.contains_key(&(hunk_idx as u32)) {
+            continue;
+        }
+        // 1-based workdir position where this hunk's region starts.
+        let region_start = (hunk.new_start.max(1)) as usize;
+        let prefix_end = region_start.saturating_sub(1).min(lines.len());
+        for line in &lines[consumed..prefix_end] {
+            out.extend_from_slice(line);
+        }
+        for line in &hunk.lines {
+            match (line.origin, line.kept) {
+                // Context: present in the workdir region; emit.
+                (' ', _) => out.extend_from_slice(&line.content),
+                // Selected addition: discard (drop the line).
+                ('+', true) => {}
+                // Unselected addition: keep.
+                ('+', false) => out.extend_from_slice(&line.content),
+                // Selected deletion: restore the line.
+                ('-', true) => out.extend_from_slice(&line.content),
+                // Unselected deletion: stays deleted.
+                ('-', false) => {}
+                _ => {}
+            }
+        }
+        // Advance past the workdir region: context + addition lines.
+        consumed = prefix_end
+            + hunk
+                .lines
+                .iter()
+                .filter(|l| matches!(l.origin, ' ' | '+'))
+                .count();
+    }
+    for line in &lines[consumed.min(lines.len())..] {
+        out.extend_from_slice(line);
+    }
+
+    std::fs::write(workdir.join(path), &out)?;
+    Ok(())
+}
+
+/// Split into lines keeping the trailing `\n` on each (the last line may
+/// lack one — preserved verbatim).
+fn split_lines(bytes: &[u8]) -> Vec<&[u8]> {
+    let mut out = Vec::new();
+    let mut rest = bytes;
+    while !rest.is_empty() {
+        match rest.iter().position(|&b| b == b'\n') {
+            Some(pos) => {
+                out.push(&rest[..=pos]);
+                rest = &rest[pos + 1..];
+            }
+            None => {
+                out.push(rest);
+                break;
+            }
+        }
+    }
+    out
+}
+
+/// Merge selections per hunk index (shared by apply and discard).
+fn merge_subsets(selections: &[Selection]) -> EngineResult<BTreeMap<u32, HunkSubset>> {
     let mut subsets: BTreeMap<u32, HunkSubset> = BTreeMap::new();
     for selection in selections {
         match selection {
@@ -123,11 +246,26 @@ pub(crate) fn apply_selection(
             }
         }
     }
+    Ok(subsets)
+}
+
+/// Shared patch engine. `source_unstage` picks the source diff
+/// (index→workdir vs HEAD→index), `reverse` flips the rendered patch's
+/// directions, `location` is the apply target.
+fn selection_core(
+    repo: &Repository,
+    path: &str,
+    selections: &[Selection],
+    source_unstage: bool,
+    reverse: bool,
+    location: ApplyLocation,
+) -> EngineResult<()> {
+    let subsets = merge_subsets(selections)?;
     if subsets.is_empty() {
         return Ok(());
     }
 
-    let (diff, delta_idx) = source_diff(repo, path, unstage)?;
+    let (diff, delta_idx) = source_diff(repo, path, source_unstage)?;
     // Generate the patch first: like the M1 read path, this is what
     // populates the delta's BINARY flag (checked right after).
     let patch = Patch::from_diff(&diff, delta_idx)?;
@@ -155,7 +293,7 @@ pub(crate) fn apply_selection(
             continue;
         };
         mark_kept(hunk, subset);
-        if let Some(r) = render_hunk(hunk, unstage) {
+        if let Some(r) = render_hunk(hunk, reverse) {
             rendered.push(r);
         }
     }
@@ -167,8 +305,8 @@ pub(crate) fn apply_selection(
     // deleted-file patch.
     let old_total: u32 = rendered.iter().map(|r| r.old_count).sum();
     let new_total: u32 = rendered.iter().map(|r| r.new_count).sum();
-    let (old_mode, new_mode) = if unstage {
-        // Output old side = source new side (the index), and vice versa.
+    let (old_mode, new_mode) = if reverse {
+        // Output old side = source new side, and vice versa.
         (
             side_mode(delta.new_file().mode()),
             side_mode(delta.old_file().mode()),
@@ -208,7 +346,7 @@ pub(crate) fn apply_selection(
 
     let diff = Diff::from_buffer(&out)
         .map_err(|e| EngineError::Invalid(format!("built patch for `{path}` is invalid: {e}")))?;
-    repo.apply(&diff, ApplyLocation::Index, None)?;
+    repo.apply(&diff, location, None)?;
     Ok(())
 }
 

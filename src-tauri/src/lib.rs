@@ -14,6 +14,7 @@ mod forge;
 mod forge_tests;
 mod ipc_commands;
 mod keyring_store;
+mod mergetool;
 mod ops;
 mod pty;
 #[cfg(test)]
@@ -84,6 +85,13 @@ pub fn run() {
             ipc_commands::branch_rename,
             ipc_commands::tag_create,
             ipc_commands::tag_delete,
+            ipc_commands::tag_list,
+            ipc_commands::tag_create_signed,
+            ipc_commands::mergetool_info,
+            ipc_commands::mergetool_run,
+            ipc_commands::discard,
+            ipc_commands::remote_branches,
+            ipc_commands::branch_checkout_remote,
             ipc_commands::remotes,
             ipc_commands::remote_add,
             ipc_commands::remote_remove,

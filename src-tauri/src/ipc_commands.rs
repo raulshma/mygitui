@@ -18,8 +18,8 @@ use tauri::State;
 use crate::engine::git_engine::EngineError;
 use crate::engine::types::{
     BlameLine, CheckpointInfo, CommitInfo, ConflictFile, ConflictResolution, DiffSide, FileDiff,
-    LogFilter, MergeResult, RebaseState, RebaseStep, ReflogEntry, RepoId, RepoInfo, RepoStatus,
-    ResetKind, StashInfo, WorktreeInfo,
+    LogFilter, MergeOptions, MergeResult, RebaseState, RebaseStep, ReflogEntry, RemoteBranchInfo,
+    RepoId, RepoInfo, RepoStatus, ResetKind, StashInfo, TagInfo, WorktreeInfo,
 };
 use crate::graph::types::{self, GraphRow};
 use crate::repo::{RepoHandle, RepoManager, StreamHandle};
@@ -569,8 +569,8 @@ use tokio::sync::oneshot;
 use crate::cli;
 use crate::engine::git_engine::{FetchProgress, PushProgress};
 use crate::engine::types::{
-    BranchInfo, CommitOptions, FetchOptions, HookInfo, NetStats, PullOptions, PushOptions,
-    RemoteInfo, SigningInfo, StageRequest,
+    BranchInfo, CommitOptions, FetchOptions, HookInfo, MergetoolInfo, MergetoolResult, NetStats,
+    PullOptions, PushOptions, RemoteInfo, SigningInfo, StageRequest, StageTarget,
 };
 use crate::ops::OpCtx;
 
@@ -649,6 +649,25 @@ pub async fn stage_all(
     let engine = handle.engine();
     finish_op(enqueue_mutation(&handle, "stage", move |_ctx, repo| {
         engine.stage_all(repo, unstage)
+    }))
+    .await
+}
+
+/// Discard local changes (files or hunks). A checkpoint is snapshotted
+/// BEFORE any side effect — a failed discard leaves the repo untouched
+/// (same ordering rule as repo_clean).
+#[tauri::command(rename_all = "snake_case")]
+pub async fn discard(
+    repo_id: RepoId,
+    targets: Vec<StageTarget>,
+    state: State<'_, RepoManager>,
+) -> Result<(), String> {
+    let handle = get_handle(&state, &repo_id)?;
+    let engine = handle.engine();
+    let m3 = handle.m3();
+    finish_op(enqueue_mutation(&handle, "discard", move |_ctx, repo| {
+        m3.checkpoint_create(repo, "discard changes")?;
+        engine.discard(repo, &targets)
     }))
     .await
 }
@@ -830,6 +849,109 @@ pub async fn tag_delete(
         engine.tag_delete(repo, &name)
     }))
     .await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn tag_list(
+    repo_id: RepoId,
+    state: State<'_, RepoManager>,
+) -> Result<Vec<TagInfo>, String> {
+    let handle = get_handle(&state, &repo_id)?;
+    let engine = handle.engine();
+    let repo = handle.repo();
+    tauri::async_runtime::spawn_blocking(move || {
+        let repo = repo.lock();
+        engine.tag_list(&repo).map_err(engine_err)
+    })
+    .await
+    .map_err(|e| format!("tag_list task failed: {e}"))?
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn remote_branches(
+    repo_id: RepoId,
+    state: State<'_, RepoManager>,
+) -> Result<Vec<RemoteBranchInfo>, String> {
+    let handle = get_handle(&state, &repo_id)?;
+    let engine = handle.engine();
+    let repo = handle.repo();
+    tauri::async_runtime::spawn_blocking(move || {
+        let repo = repo.lock();
+        engine.remote_branches(&repo).map_err(engine_err)
+    })
+    .await
+    .map_err(|e| format!("remote_branches task failed: {e}"))?
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn branch_checkout_remote(
+    repo_id: RepoId,
+    remote: String,
+    name: String,
+    new_local: Option<String>,
+    state: State<'_, RepoManager>,
+) -> Result<String, String> {
+    let handle = get_handle(&state, &repo_id)?;
+    let engine = handle.engine();
+    finish_op(enqueue_mutation(&handle, "branch", move |_ctx, repo| {
+        engine.branch_checkout_remote(repo, &remote, &name, new_local.as_deref())
+    }))
+    .await
+}
+
+/// Create a signed annotated tag via the git CLI (`git tag -s`; libgit2
+/// cannot sign). Runs hooks/GPG natively.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn tag_create_signed(
+    repo_id: RepoId,
+    name: String,
+    target: Option<String>,
+    message: String,
+    state: State<'_, RepoManager>,
+) -> Result<(), String> {
+    let handle = get_handle(&state, &repo_id)?;
+    let root = handle.root.clone();
+    finish_op(enqueue_mutation(&handle, "branch", move |_ctx, _repo| {
+        crate::mergetool::tag_sign_via_cli(&root, &name, target.as_deref(), &message)
+            .map_err(EngineError::Invalid)
+    }))
+    .await
+}
+
+/// Configured external merge tools (pure config read).
+#[tauri::command(rename_all = "snake_case")]
+pub async fn mergetool_info(
+    repo_id: RepoId,
+    state: State<'_, RepoManager>,
+) -> Result<MergetoolInfo, String> {
+    let handle = get_handle(&state, &repo_id)?;
+    let repo = handle.repo();
+    tauri::async_runtime::spawn_blocking(move || {
+        let repo = repo.lock();
+        Ok(crate::mergetool::mergetool_info(&repo))
+    })
+    .await
+    .map_err(|e| format!("mergetool_info task failed: {e}"))?
+}
+
+/// Launch `git mergetool` for one conflicted path. Deliberately NOT on the
+/// op queue: the external tool runs interactively for minutes, and blocking
+/// every repo op behind it would freeze the app (watcher events still fire
+/// when the tool writes files).
+#[tauri::command(rename_all = "snake_case")]
+pub async fn mergetool_run(
+    repo_id: RepoId,
+    path: String,
+    tool: Option<String>,
+    state: State<'_, RepoManager>,
+) -> Result<MergetoolResult, String> {
+    let handle = get_handle(&state, &repo_id)?;
+    let workdir = handle.root.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::mergetool::mergetool_run(&workdir, &path, tool.as_deref())
+    })
+    .await
+    .map_err(|e| format!("mergetool_run task failed: {e}"))?
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -1375,13 +1497,13 @@ fn has_windows_prefix(path: &Path) -> bool {
 pub async fn merge_branch(
     repo_id: RepoId,
     ref_name: String,
-    no_ff: bool,
+    opts: MergeOptions,
     state: State<'_, RepoManager>,
 ) -> Result<MergeResult, String> {
     let handle = get_handle(&state, &repo_id)?;
     let engine = handle.m3();
     finish_op(enqueue_mutation(&handle, "merge", move |_ctx, repo| {
-        engine.merge_branch(repo, &ref_name, no_ff)
+        engine.merge_branch(repo, &ref_name, &opts)
     }))
     .await
 }

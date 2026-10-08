@@ -8,7 +8,7 @@ use git2::{BranchType, Repository};
 
 use super::git_engine::{EngineError, EngineResult};
 use super::libgit2::Libgit2Engine;
-use super::types::BranchInfo;
+use super::types::{BranchInfo, GitSignature, RemoteBranchInfo, TagInfo};
 
 /// Branch name of HEAD; also resolves unborn (symbolic-only) HEAD.
 /// Twin of the private helper in libgit2.rs (that file is owned by C1).
@@ -277,5 +277,129 @@ impl Libgit2Engine {
             git2::ErrorCode::NotFound => EngineError::Invalid(format!("tag `{name}` not found")),
             _ => e.into(),
         })
+    }
+
+    pub(crate) fn tags_impl(&self, repo: &Repository) -> EngineResult<Vec<TagInfo>> {
+        let mut out = Vec::new();
+        for entry in repo.references_glob("refs/tags/*")? {
+            let reference = entry?;
+            let Ok(full) = reference.name().map(str::to_owned) else {
+                continue;
+            };
+            let name = full.strip_prefix("refs/tags/").unwrap_or(&full).to_owned();
+            let Some(oid) = reference.target() else {
+                continue; // symbolic tag chain; skip (git rare)
+            };
+            // Annotated: the ref points at a tag object. Peeling it to the
+            // tag type first distinguishes annotated from lightweight.
+            let annotated = reference
+                .peel(git2::ObjectType::Tag)
+                .map(|obj| obj.id() == oid)
+                .unwrap_or(false);
+            let target = reference.peel_to_commit()?.id().to_string();
+            let (tagger, message) = if annotated {
+                let tag = repo.find_tag(oid)?;
+                let tagger = tag.tagger().map(|sig| GitSignature {
+                    name: sig.name().unwrap_or_default().to_owned(),
+                    email: sig.email().unwrap_or_default().to_owned(),
+                    time: sig.when().seconds(),
+                    offset_minutes: sig.when().offset_minutes(),
+                });
+                let message = tag
+                    .message()
+                    .ok()
+                    .flatten()
+                    .map(str::to_owned)
+                    .map(|m| m.trim_end().to_owned());
+                (tagger, message)
+            } else {
+                (None, None)
+            };
+            out.push(TagInfo {
+                name,
+                sha: oid.to_string(),
+                target,
+                annotated,
+                tagger,
+                message,
+            });
+        }
+        out.sort_by(|a, b| a.name.cmp(&b.name));
+        Ok(out)
+    }
+
+    pub(crate) fn remote_branches_impl(
+        &self,
+        repo: &Repository,
+    ) -> EngineResult<Vec<RemoteBranchInfo>> {
+        // Reverse map: remote-tracking name -> local branch tracking it.
+        let mut tracked_by: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
+        for entry in repo.branches(Some(BranchType::Local))? {
+            let (branch, _) = entry?;
+            let Some(local) = branch.name().ok().flatten().map(str::to_owned) else {
+                continue;
+            };
+            if let Ok(up) = branch.upstream() {
+                if let Ok(full) = up.get().name().map(str::to_owned) {
+                    tracked_by.insert(full, local);
+                }
+            }
+        }
+        let mut out = Vec::new();
+        for entry in repo.branches(Some(BranchType::Remote))? {
+            let (branch, _) = entry?;
+            // Remote branch names include the remote prefix; skip HEAD refs.
+            let Some(short) = branch.name().ok().flatten().map(str::to_owned) else {
+                continue;
+            };
+            if short.ends_with("/HEAD") {
+                continue;
+            }
+            let (remote, name) = short.split_once('/').unwrap_or((&short, ""));
+            let sha = branch
+                .get()
+                .target()
+                .map(|o| o.to_string())
+                .unwrap_or_default();
+            // Remote branch names are shorthands ("origin/main"); the map
+            // from the local scan is keyed by the full ref.
+            let full = format!("refs/remotes/{short}");
+            out.push(RemoteBranchInfo {
+                remote: remote.to_owned(),
+                name: name.to_owned(),
+                sha,
+                tracked_by: tracked_by.get(&full).cloned(),
+            });
+        }
+        out.sort_by(|a, b| (&a.remote, &a.name).cmp(&(&b.remote, &b.name)));
+        Ok(out)
+    }
+
+    /// `git switch <name>` from a remote branch: create the local branch at
+    /// the tracking tip with upstream configured, then check it out.
+    pub(crate) fn branch_checkout_remote_impl(
+        &self,
+        repo: &Repository,
+        remote: &str,
+        name: &str,
+        new_local: Option<&str>,
+    ) -> EngineResult<String> {
+        let tracking_ref = format!("refs/remotes/{remote}/{name}");
+        let tracking = repo.find_reference(&tracking_ref).map_err(|_| {
+            EngineError::Invalid(format!("remote branch `{remote}/{name}` not found"))
+        })?;
+        let commit = tracking.peel_to_commit()?;
+        let local_name = new_local.unwrap_or(name);
+        if repo.find_branch(local_name, BranchType::Local).is_ok() {
+            return Err(EngineError::Invalid(format!(
+                "branch `{local_name}` already exists; switch to it or pick another name"
+            )));
+        }
+        let mut branch = repo.branch(local_name, &commit, false)?;
+        branch.set_upstream(Some(&format!("{remote}/{name}")))?;
+        let refname = format!("refs/heads/{local_name}");
+        checkout_branch_target(repo, &refname, &commit, false)?;
+        Ok(local_name.to_owned())
     }
 }

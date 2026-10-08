@@ -18,7 +18,8 @@ use super::git_engine::{EngineError, EngineResult, FetchProgress, GitEngine, Pus
 use super::types::{
     BlameLine, BranchInfo, ChangeKind, CommitInfo, CommitOptions, DiffHunk, DiffLine, DiffSide,
     FetchOptions, FileDiff, GitSignature, HookInfo, LogFilter, NetStats, PullOptions, PushOptions,
-    RemoteInfo, RepoStatus, SigningInfo, StageRequest, StatusEntry,
+    RemoteBranchInfo, RemoteInfo, RepoStatus, SigningInfo, StageRequest, StageTarget, StatusEntry,
+    TagInfo,
 };
 
 /// Lines longer than this (bytes) skip the imara-diff word pass; the whole
@@ -126,6 +127,9 @@ fn in_progress_state(repo: &Repository) -> (bool, bool, bool) {
 
     let rebasing = gitdir.join("rebase-merge").is_dir()
         || gitdir.join("rebase-apply").is_dir()
+        // mygitui's custom rebase sequencer (engine/rebase.rs) persists its
+        // state as JSON instead of git's rebase dirs.
+        || gitdir.join("mygitui").join("rebase.json").exists()
         || matches!(
             state,
             RepositoryState::Rebase
@@ -480,6 +484,15 @@ fn build_diff<'r>(repo: &'r Repository, old: &DiffSide, new: &DiffSide) -> Engin
         (DiffSide::Index, DiffSide::Worktree) => {
             repo.diff_index_to_workdir(None, Some(&mut opts))?
         }
+        (DiffSide::Index, DiffSide::Commit(_) | DiffSide::Head) => {
+            // "What changed since <commit>?" over staged content: materialize
+            // the index to a tree and diff tree-to-tree (git writes the same
+            // throwaway tree object for `git diff --cached <commit>`).
+            let index_tree_oid = repo.index()?.write_tree()?;
+            let index_tree = repo.find_tree(index_tree_oid)?;
+            let new_tree = side_tree(repo, new)?;
+            repo.diff_tree_to_tree(Some(&index_tree), new_tree.as_ref(), Some(&mut opts))?
+        }
         (_, DiffSide::Index) => {
             let old_tree = side_tree(repo, old)?;
             repo.diff_tree_to_index(old_tree.as_ref(), None, Some(&mut opts))?
@@ -776,11 +789,6 @@ impl GitEngine for Libgit2Engine {
             // The working directory cannot be the base side of a git diff,
             // and identical sides produce no deltas.
             (DiffSide::Worktree, _) | (DiffSide::Index, DiffSide::Index) => return Ok(Vec::new()),
-            (DiffSide::Index, DiffSide::Head | DiffSide::Commit(_)) => {
-                return Err(EngineError::Unsupported(
-                    "diffing from the index to a commit side".into(),
-                ))
-            }
             _ => {}
         }
         let diff = build_diff(repo, old, new)?;
@@ -794,14 +802,24 @@ impl GitEngine for Libgit2Engine {
         limit: usize,
         after: Option<&str>,
     ) -> EngineResult<(Vec<CommitInfo>, Option<String>)> {
-        if filter.regex && filter.text.is_some() {
-            return Err(EngineError::Unsupported(
-                "regex log filter arrives in M1.1".into(),
-            ));
-        }
         if limit == 0 {
             return Ok((Vec::new(), after.map(str::to_owned)));
         }
+        // Regex mode: compile once, case-sensitive (git `--grep` semantics);
+        // invalid patterns fail fast with a friendly message.
+        let text_regex = if filter.regex {
+            filter
+                .text
+                .as_deref()
+                .filter(|t| !t.is_empty())
+                .map(|t| {
+                    regex::Regex::new(t)
+                        .map_err(|e| EngineError::Invalid(format!("invalid regex `{t}`: {e}")))
+                })
+                .transpose()?
+        } else {
+            None
+        };
 
         let decos = decorations(repo)?;
         let mut walk = repo.revwalk()?;
@@ -913,7 +931,13 @@ impl GitEngine for Libgit2Engine {
                 }
             }
 
-            if let Some(text_filter) = &text {
+            if let Some(re) = &text_regex {
+                let message = commit.message().unwrap_or_default();
+                let summary = commit.summary().ok().flatten().unwrap_or_default();
+                if !re.is_match(message) && !re.is_match(summary) {
+                    continue;
+                }
+            } else if let Some(text_filter) = &text {
                 let message = commit.message().unwrap_or_default().to_lowercase();
                 let summary = commit
                     .summary()
@@ -1054,6 +1078,10 @@ impl GitEngine for Libgit2Engine {
         self.stage_all_impl(repo, unstage)
     }
 
+    fn discard(&self, repo: &Repository, targets: &[StageTarget]) -> EngineResult<()> {
+        self.discard_impl(repo, targets)
+    }
+
     fn commit(&self, repo: &Repository, opts: &CommitOptions) -> EngineResult<String> {
         self.commit_impl(repo, opts)
     }
@@ -1108,6 +1136,24 @@ impl GitEngine for Libgit2Engine {
 
     fn tag_delete(&self, repo: &Repository, name: &str) -> EngineResult<()> {
         self.tag_delete_impl(repo, name)
+    }
+
+    fn tag_list(&self, repo: &Repository) -> EngineResult<Vec<TagInfo>> {
+        self.tags_impl(repo)
+    }
+
+    fn remote_branches(&self, repo: &Repository) -> EngineResult<Vec<RemoteBranchInfo>> {
+        self.remote_branches_impl(repo)
+    }
+
+    fn branch_checkout_remote(
+        &self,
+        repo: &Repository,
+        remote: &str,
+        name: &str,
+        new_local: Option<&str>,
+    ) -> EngineResult<String> {
+        self.branch_checkout_remote_impl(repo, remote, name, new_local)
     }
 
     fn remotes(&self, repo: &Repository) -> EngineResult<Vec<RemoteInfo>> {

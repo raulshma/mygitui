@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 
 use git2::{BranchType, IndexAddOption, Repository, RepositoryInitOptions};
 
-use super::git_engine::{EngineError, FetchProgress, GitEngine, PushProgress};
+use super::git_engine::{EngineError, FetchProgress, GitEngine, GitEngineM3, PushProgress};
 use super::libgit2::Libgit2Engine;
 use super::types::{FetchOptions, PullOptions, PushOptions};
 
@@ -633,48 +633,73 @@ fn pull_ff_only_rejects_diverged_histories() {
 }
 
 #[test]
-fn pull_rebase_diverged_defers_to_m3() {
+fn pull_rebase_diverged_replays_local_commits() {
     let f = NetFixture::new("pull-rebase");
     commit_file(&f.a, "local.md", "l\n", "a local");
-    commit_file(&f.b, "remote.md", "r\n", "b remote");
+    let remote_tip = {
+        commit_file(&f.b, "remote.md", "r\n", "b remote");
+        raw_push(&f.b, "refs/heads/main:refs/heads/main");
+        head_sha(&f.b)
+    };
+
+    let opts = PullOptions {
+        rebase: true,
+        ..pull_opts()
+    };
+    ENGINE.pull(&f.a, &opts, &mut |_| {}).unwrap();
+
+    // The local commit replays on top of the fetched tip: linear history.
+    let head = f.a.head().unwrap().peel_to_commit().unwrap();
+    assert_eq!(
+        head.parent_count(),
+        1,
+        "rebase must not create a merge commit"
+    );
+    assert_eq!(head.parent(0).unwrap().id().to_string(), remote_tip);
+    assert_eq!(head.summary().ok(), Some(Some("a local")));
+    assert!(f.a.workdir().unwrap().join("local.md").exists());
+    assert!(f.a.workdir().unwrap().join("remote.md").exists());
+    let status = ENGINE.status(&f.a).unwrap();
+    assert!(!status.merging && !status.rebasing);
+    assert_eq!((status.ahead, status.behind), (1, 0));
+}
+
+#[test]
+fn pull_rebase_conflict_pauses_in_rebase_state_and_aborts_cleanly() {
+    let f = NetFixture::new("pull-rebase-conflict");
+    let before = commit_file(&f.a, "shared.md", "base\nlocal\n", "a local");
+    commit_file(&f.b, "shared.md", "base\nremote\n", "b remote");
     raw_push(&f.b, "refs/heads/main:refs/heads/main");
-    let before = head_sha(&f.a);
 
     let opts = PullOptions {
         rebase: true,
         ..pull_opts()
     };
     match ENGINE.pull(&f.a, &opts, &mut |_| {}) {
-        Err(EngineError::Unsupported(msg)) => {
-            assert!(msg.contains("M3") && msg.contains("merge pull"), "{msg}")
+        Err(EngineError::Invalid(msg)) => {
+            assert!(msg.contains("conflict"), "{msg}")
         }
-        other => panic!("expected Unsupported, got {other:?}"),
+        other => panic!("expected Invalid, got {other:?}"),
     }
-    assert_eq!(
-        head_sha(&f.a),
-        before,
-        "failed rebase pull must not move HEAD"
+
+    // The rebase is paused exactly like an interactive rebase: state live,
+    // conflicts exposed for the FE editor.
+    let status = ENGINE.status(&f.a).unwrap();
+    assert!(status.rebasing, "rebase state active after conflicted pull");
+    assert!(
+        ENGINE
+            .conflicts(&f.a)
+            .expect("conflicts")
+            .iter()
+            .any(|c| c.path == "shared.md"),
+        "conflicted path exposed"
     );
 
-    // Rebase over a strictly-behind history is just the fast-forward: sync A
-    // to the fetched tip, then move the remote forward again.
-    let origin_main =
-        f.a.find_reference("refs/remotes/origin/main")
-            .expect("tracking ref after failed pulls")
-            .peel_to_commit()
-            .unwrap();
-    f.a.reset(origin_main.as_object(), git2::ResetType::Hard, None)
-        .expect("sync A to origin");
-    commit_file(&f.b, "more.md", "m\n", "more remote");
-    raw_push(&f.b, "refs/heads/main:refs/heads/main");
-    let pushed = head_sha(&f.b);
-    ENGINE.pull(&f.a, &opts, &mut |_| {}).unwrap();
-    assert_eq!(head_sha(&f.a), pushed);
-    assert_eq!(
-        f.a.head().unwrap().peel_to_commit().unwrap().parent_count(),
-        1,
-        "ff-style rebase rewinds, no merge commit"
-    );
+    // Abort restores the pre-pull local state.
+    ENGINE.rebase_abort(&f.a).expect("rebase abort");
+    assert_eq!(head_sha(&f.a), before);
+    let status = ENGINE.status(&f.a).unwrap();
+    assert!(!status.rebasing && status.entries.is_empty());
 }
 
 #[test]
@@ -726,8 +751,8 @@ fn push_branch_sets_upstream_and_reports_progress() {
     let opts = PushOptions {
         remote: "origin".into(),
         branch: "feature".into(),
-        force: false,
         set_upstream: true,
+        ..Default::default()
     };
     let mut events: Vec<PushProgress> = Vec::new();
     let stats = ENGINE.push(&f.a, &opts, &mut |p| events.push(p)).unwrap();
@@ -792,8 +817,7 @@ fn push_force_overwrites_non_fast_forward() {
     let opts = PushOptions {
         remote: "origin".into(),
         branch: "main".into(),
-        force: false,
-        set_upstream: false,
+        ..Default::default()
     };
     match ENGINE.push(&f.a, &opts, &mut |_| {}) {
         Err(EngineError::Git(err)) => {
@@ -832,4 +856,262 @@ fn push_force_overwrites_non_fast_forward() {
             .any(|(r, s)| r == "origin/main" && s == &rewritten),
         "tracking ref must follow rewritten remote history"
     );
+}
+
+// ---------------------------------------------------------------------------
+// push: refs / tags / delete / force-with-lease
+// ---------------------------------------------------------------------------
+
+#[test]
+fn push_tags_publishes_all_local_tags() {
+    let f = NetFixture::new("push-tags");
+    let head = head_sha(&f.a);
+    ENGINE
+        .tag_create(&f.a, "v1.0", None, Some("first release"))
+        .unwrap();
+    ENGINE
+        .tag_create(&f.a, "v1.1", None, Some("second"))
+        .unwrap();
+    ENGINE.tag_create(&f.a, "lw", None, None).unwrap();
+
+    let opts = PushOptions {
+        remote: "origin".into(),
+        tags: true,
+        ..Default::default()
+    };
+    let stats = ENGINE.push(&f.a, &opts, &mut |_| {}).unwrap();
+
+    let remote_tag = |name: &str| {
+        f.origin
+            .find_reference(&format!("refs/tags/{name}"))
+            .unwrap_or_else(|e| panic!("tag {name} on origin: {e}"))
+    };
+    assert_eq!(
+        remote_tag("v1.0")
+            .peel_to_commit()
+            .unwrap()
+            .id()
+            .to_string(),
+        head
+    );
+    assert_eq!(
+        remote_tag("lw").peel_to_commit().unwrap().id().to_string(),
+        head
+    );
+    assert_eq!(stats.updated_refs.len(), 3, "{:?}", stats.updated_refs);
+}
+
+#[test]
+fn push_explicit_refs_and_delete_remote_branch() {
+    let f = NetFixture::new("push-refs-delete");
+    ENGINE.branch_create(&f.a, "feature", None, false).unwrap();
+    ENGINE.branch_switch(&f.a, "feature", false).unwrap();
+    let tip = commit_file(&f.a, "feat.md", "f\n", "feature work");
+
+    // Explicit ref push (bare branch name in `refs`).
+    let opts = PushOptions {
+        remote: "origin".into(),
+        refs: vec!["feature".into()],
+        ..Default::default()
+    };
+    ENGINE.push(&f.a, &opts, &mut |_| {}).unwrap();
+    assert_eq!(
+        f.origin
+            .find_reference("refs/heads/feature")
+            .unwrap()
+            .peel_to_commit()
+            .unwrap()
+            .id()
+            .to_string(),
+        tip
+    );
+
+    // Delete the remote branch (leave the local one intact).
+    let opts = PushOptions {
+        remote: "origin".into(),
+        refs: vec!["feature".into()],
+        delete: true,
+        ..Default::default()
+    };
+    let stats = ENGINE.push(&f.a, &opts, &mut |_| {}).unwrap();
+    assert!(
+        f.origin.find_reference("refs/heads/feature").is_err(),
+        "remote branch deleted"
+    );
+    assert!(
+        stats
+            .updated_refs
+            .iter()
+            .any(|(r, s)| r == "refs/heads/feature" && s == "(deleted)"),
+        "{:?}",
+        stats.updated_refs
+    );
+    assert!(
+        f.a.find_branch("feature", BranchType::Local).is_ok(),
+        "local branch survives"
+    );
+
+    // Delete without refs is a usage error.
+    let bad = PushOptions {
+        remote: "origin".into(),
+        delete: true,
+        ..Default::default()
+    };
+    match ENGINE.push(&f.a, &bad, &mut |_| {}) {
+        Err(EngineError::Invalid(msg)) => assert!(msg.contains("delete"), "{msg}"),
+        other => panic!("expected Invalid, got {other:?}"),
+    }
+}
+
+#[test]
+fn push_force_with_lease_requires_tracking_ref_then_forces() {
+    let f = NetFixture::new("push-lease");
+    let first = commit_file(&f.a, "h.txt", "one\n", "one");
+    let _pushed = commit_file(&f.a, "h.txt", "one\ntwo\n", "two");
+    raw_push(&f.a, "refs/heads/main:refs/heads/main");
+
+    // Rewrite local history so the push is non-fast-forward.
+    let old =
+        f.a.find_commit(git2::Oid::from_str(&first).unwrap())
+            .unwrap();
+    f.a.reset(old.as_object(), git2::ResetType::Hard, None)
+        .unwrap();
+    let rewritten = commit_file(&f.a, "h.txt", "one\ntwo-rewritten\n", "two rewritten");
+
+    // Drop the tracking ref: lease must refuse (we would be blind-forcing).
+    f.a.find_reference("refs/remotes/origin/main")
+        .unwrap()
+        .delete()
+        .unwrap();
+    let opts = PushOptions {
+        remote: "origin".into(),
+        branch: "main".into(),
+        force_with_lease: true,
+        ..Default::default()
+    };
+    match ENGINE.push(&f.a, &opts, &mut |_| {}) {
+        Err(EngineError::Invalid(msg)) => assert!(msg.contains("lease"), "{msg}"),
+        other => panic!("expected Invalid, got {other:?}"),
+    }
+
+    // With the tracking ref present (a fetch happened), lease forces through.
+    let mut a_remote = f.a.find_remote("origin").unwrap();
+    a_remote.fetch(&[] as &[&str], None, None).unwrap();
+    drop(a_remote);
+    ENGINE.push(&f.a, &opts, &mut |_| {}).unwrap();
+    assert_eq!(
+        f.origin
+            .find_reference("refs/heads/main")
+            .unwrap()
+            .peel_to_commit()
+            .unwrap()
+            .id()
+            .to_string(),
+        rewritten
+    );
+}
+
+#[test]
+fn tags_list_reports_annotated_and_lightweight_metadata() {
+    let f = NetFixture::new("tags-list");
+    let base = commit_file(&f.a, "a.md", "1\n", "c1");
+    commit_file(&f.a, "a.md", "2\n", "c2");
+    let head = head_sha(&f.a);
+    ENGINE
+        .tag_create(&f.a, "v1.0", None, Some("first release\n\nnotes"))
+        .unwrap();
+    ENGINE.tag_create(&f.a, "lw", Some(&base), None).unwrap();
+
+    let tags = ENGINE.tag_list(&f.a).expect("tag_list");
+    assert_eq!(tags.len(), 2, "{tags:?}");
+    assert_eq!(tags[0].name, "lw");
+    assert!(!tags[0].annotated);
+    assert_eq!(tags[0].target, base);
+    assert_eq!(tags[0].sha, base, "lightweight: ref points at the commit");
+    assert_eq!(tags[0].tagger, None);
+    assert_eq!(tags[0].message, None);
+
+    assert_eq!(tags[1].name, "v1.0");
+    assert!(tags[1].annotated);
+    assert_eq!(tags[1].target, head);
+    assert_ne!(tags[1].sha, head, "annotated: ref points at the tag object");
+    let tagger = tags[1].tagger.as_ref().expect("tagger");
+    assert_eq!(tagger.name, "Net Test");
+    assert_eq!(tags[1].message.as_deref(), Some("first release\n\nnotes"));
+}
+
+#[test]
+fn remote_branches_and_checkout_creates_tracking_local() {
+    let f = NetFixture::new("remote-checkout");
+    // B pushes a topic branch; A fetches it.
+    ENGINE.branch_create(&f.b, "topic", None, false).unwrap();
+    ENGINE.branch_switch(&f.b, "topic", false).unwrap();
+    let topic_tip = commit_file(&f.b, "topic.md", "t\n", "topic work");
+    raw_push(&f.b, "refs/heads/topic:refs/heads/topic");
+    ENGINE.fetch(&f.a, &fetch_opts(false), &mut |_| {}).unwrap();
+
+    let remotes = ENGINE.remote_branches(&f.a).expect("remote_branches");
+    let find = |name: &str| {
+        remotes
+            .iter()
+            .find(|r| r.name == name)
+            .unwrap_or_else(|| panic!("{name} missing from {remotes:?}"))
+    };
+    assert_eq!(
+        (
+            find("main").remote.as_str(),
+            find("main").tracked_by.as_deref()
+        ),
+        ("origin", Some("main"))
+    );
+    assert_eq!(
+        (
+            find("topic").remote.as_str(),
+            find("topic").tracked_by.as_deref()
+        ),
+        ("origin", None)
+    );
+    assert_eq!(find("topic").sha, topic_tip);
+
+    // Checkout creates the local branch at the tracking tip with upstream set.
+    let local = ENGINE
+        .branch_checkout_remote(&f.a, "origin", "topic", None)
+        .expect("checkout remote branch");
+    assert_eq!(local, "topic");
+    assert_eq!(
+        ENGINE.status(&f.a).unwrap().branch.as_deref(),
+        Some("topic")
+    );
+    assert!(f.a.workdir().unwrap().join("topic.md").exists());
+    let topic = ENGINE
+        .branches(&f.a)
+        .unwrap()
+        .into_iter()
+        .find(|b| b.name == "topic")
+        .unwrap();
+    assert_eq!(topic.upstream.as_deref(), Some("origin/topic"));
+    assert_eq!(topic.sha, topic_tip);
+
+    // Existing local name → Invalid; custom name works.
+    match ENGINE.branch_checkout_remote(&f.a, "origin", "topic", None) {
+        Err(EngineError::Invalid(msg)) => assert!(msg.contains("already exists"), "{msg}"),
+        other => panic!("expected Invalid, got {other:?}"),
+    }
+    let renamed = ENGINE
+        .branch_checkout_remote(&f.a, "origin", "topic", Some("topic-local"))
+        .expect("checkout with custom name");
+    assert_eq!(renamed, "topic-local");
+    let custom = ENGINE
+        .branches(&f.a)
+        .unwrap()
+        .into_iter()
+        .find(|b| b.name == "topic-local")
+        .unwrap();
+    assert_eq!(custom.upstream.as_deref(), Some("origin/topic"));
+
+    // Missing remote branch → Invalid.
+    match ENGINE.branch_checkout_remote(&f.a, "origin", "ghost", None) {
+        Err(EngineError::Invalid(msg)) => assert!(msg.contains("not found"), "{msg}"),
+        other => panic!("expected Invalid, got {other:?}"),
+    }
 }

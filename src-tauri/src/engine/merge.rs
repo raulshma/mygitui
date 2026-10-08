@@ -8,11 +8,9 @@
 //!   `Merge remote-tracking branch '<name>'` for refs under `refs/remotes/`),
 //!   or `Conflicted` (libgit2's merge state stays: MERGE_HEAD + 3-stage index
 //!   entries + conflict markers in the workdir; the FE drives resolution via
-//!   `conflict_resolve`, then the user commits normally).
-//!   KNOWN GAP: `commit` (lane C1) does not consume MERGE_HEAD, so
-//!   `RepoStatus::merging` stays true after the finishing commit until
-//!   something calls state cleanup — cherry-pick/revert runs clean their own
-//!   state, merge finishing needs the same in the IPC layer.
+//!   `conflict_resolve`, then the user commits normally). The finishing
+//!   commit (mutations.rs) takes MERGE_HEAD as its second parent and consumes
+//!   the merge state.
 //! * `conflict_resolve` — preset `Ours`/`Theirs` write that side's bytes to
 //!   the workdir file and clear the index conflict (the path becomes staged);
 //!   `Both` materializes a 2-way marker preview into the workdir and KEEPS
@@ -56,7 +54,10 @@ use git2::{Index, Repository, RepositoryState, Signature, Time};
 
 use super::git_engine::{EngineError, EngineResult, GitEngineM3};
 use super::libgit2::Libgit2Engine;
-use super::types::{ConflictFile, ConflictResolution, MergeOutcome, MergeResult, ResetKind};
+use super::types::{
+    ConflictFile, ConflictResolution, MergeFavor, MergeOptions, MergeOutcome, MergeResult,
+    ResetKind,
+};
 use crate::engine::types::{
     CheckpointInfo, RebaseState, RebaseStep, ReflogEntry, StashInfo, WorktreeInfo,
 };
@@ -91,7 +92,7 @@ fn head_commit<'r>(repo: &'r Repository) -> EngineResult<Option<git2::Commit<'r>
 }
 
 /// Is a merge in progress (MERGE_HEAD written by `git merge` / `repo.merge`)?
-fn merge_in_progress(repo: &Repository) -> bool {
+pub(crate) fn merge_in_progress(repo: &Repository) -> bool {
     repo.path().join("MERGE_HEAD").exists() || repo.state() == RepositoryState::Merge
 }
 
@@ -103,6 +104,8 @@ fn sequencer_source(repo: &Repository) -> String {
     let state = repo.state();
     let rebasing = gitdir.join("rebase-merge").is_dir()
         || gitdir.join("rebase-apply").is_dir()
+        // mygitui's custom rebase sequencer state (engine/rebase.rs).
+        || gitdir.join("mygitui").join("rebase.json").exists()
         || matches!(
             state,
             RepositoryState::Rebase
@@ -468,7 +471,7 @@ impl GitEngineM3 for Libgit2Engine {
         &self,
         repo: &Repository,
         ref_name: &str,
-        no_ff: bool,
+        opts: &MergeOptions,
     ) -> EngineResult<MergeResult> {
         if merge_in_progress(repo) {
             return Err(EngineError::Invalid(
@@ -489,7 +492,10 @@ impl GitEngineM3 for Libgit2Engine {
             });
         }
 
-        if analysis.is_fast_forward() && !no_ff {
+        // `git merge --squash` of a fast-forwardable branch stages the diff
+        // instead of moving the ref — the real-merge path below handles it
+        // (base == ours, so the 3-way result is theirs' tree).
+        if analysis.is_fast_forward() && !opts.no_ff && !opts.squash {
             // Workdir first, ref last (checkout_branch_target convention: a
             // failed checkout leaves the ref untouched).
             let mut checkout = CheckoutBuilder::new();
@@ -505,13 +511,55 @@ impl GitEngineM3 for Libgit2Engine {
 
         let mut checkout = CheckoutBuilder::new();
         checkout.safe();
-        repo.merge(&[&annotated], None, Some(&mut checkout))?;
+        let mut merge_opts = git2::MergeOptions::new();
+        match opts.favor {
+            MergeFavor::Ours => {
+                merge_opts.file_favor(git2::FileFavor::Ours);
+            }
+            MergeFavor::Theirs => {
+                merge_opts.file_favor(git2::FileFavor::Theirs);
+            }
+            MergeFavor::None => {}
+        }
+        repo.merge(&[&annotated], Some(&mut merge_opts), Some(&mut checkout))?;
         let mut index = repo.index()?;
         if index.has_conflicts() {
+            if opts.squash {
+                // `git merge --squash` conflicts carry no MERGE_HEAD: the
+                // finishing commit must be a normal 1-parent commit. Keep the
+                // conflicted index + workdir markers, drop the merge state.
+                repo.cleanup_state()?;
+            }
             return Ok(MergeResult {
                 outcome: MergeOutcome::Conflicted,
                 conflicts: conflicts_impl(repo)?,
                 new_head: None,
+            });
+        }
+
+        if opts.squash {
+            // Stage-only result: index holds the merged entries (repo.merge
+            // staged them), workdir has the content, HEAD did not move.
+            // SQUASH_MSG seeds the commit bar; no merge state remains.
+            std::fs::write(
+                repo.path().join("SQUASH_MSG"),
+                merge_message(repo, ref_name),
+            )?;
+            repo.cleanup_state()?;
+            return Ok(MergeResult {
+                outcome: MergeOutcome::Squashed,
+                conflicts: Vec::new(),
+                new_head: Some(ours.id().to_string()),
+            });
+        }
+
+        if opts.no_commit {
+            // MERGE_HEAD stays live: the FE resolve/commit flow finishes the
+            // merge commit through the normal commit path.
+            return Ok(MergeResult {
+                outcome: MergeOutcome::NoCommit,
+                conflicts: Vec::new(),
+                new_head: Some(ours.id().to_string()),
             });
         }
 

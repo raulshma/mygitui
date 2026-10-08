@@ -12,8 +12,8 @@ use git2::Repository;
 
 use super::types::{
     BlameLine, BranchInfo, CommitInfo, CommitOptions, DiffSide, FetchOptions, FileDiff, HookInfo,
-    LogFilter, NetStats, PullOptions, PushOptions, RemoteInfo, RepoStatus, SigningInfo,
-    StageRequest,
+    LogFilter, NetStats, PullOptions, PushOptions, RemoteBranchInfo, RemoteInfo, RepoStatus,
+    SigningInfo, StageRequest, StageTarget, TagInfo,
 };
 
 pub type EngineResult<T> = Result<T, EngineError>;
@@ -78,6 +78,12 @@ pub trait GitEngine: Send + Sync {
         Err(EngineError::Unsupported("stage_all".into()))
     }
 
+    /// Throw away local changes for paths/hunks (`git checkout --`).
+    /// Callers snapshot a checkpoint first.
+    fn discard(&self, _repo: &Repository, _targets: &[StageTarget]) -> EngineResult<()> {
+        Err(EngineError::Unsupported("discard".into()))
+    }
+
     fn commit(&self, _repo: &Repository, _opts: &CommitOptions) -> EngineResult<String> {
         Err(EngineError::Unsupported("commit".into()))
     }
@@ -133,6 +139,28 @@ pub trait GitEngine: Send + Sync {
 
     fn tag_delete(&self, _repo: &Repository, _name: &str) -> EngineResult<()> {
         Err(EngineError::Unsupported("tag_delete".into()))
+    }
+
+    /// Tags with metadata (annotated: tagger + message).
+    fn tag_list(&self, _repo: &Repository) -> EngineResult<Vec<TagInfo>> {
+        Err(EngineError::Unsupported("tag_list".into()))
+    }
+
+    /// Remote-tracking branches across all remotes.
+    fn remote_branches(&self, _repo: &Repository) -> EngineResult<Vec<RemoteBranchInfo>> {
+        Err(EngineError::Unsupported("remote_branches".into()))
+    }
+
+    /// Create + switch to a local branch tracking `<remote>/<name>`
+    /// (`git switch <name>` from a remote branch). Returns the local name.
+    fn branch_checkout_remote(
+        &self,
+        _repo: &Repository,
+        _remote: &str,
+        _name: &str,
+        _new_local: Option<&str>,
+    ) -> EngineResult<String> {
+        Err(EngineError::Unsupported("branch_checkout_remote".into()))
     }
 
     fn remotes(&self, _repo: &Repository) -> EngineResult<Vec<RemoteInfo>> {
@@ -208,8 +236,8 @@ pub struct PushProgress {
 // ---------- M3: power + safety (default Unsupported until lanes land) ----------
 
 use super::types::{
-    CheckpointInfo, ConflictFile, ConflictResolution, MergeResult, RebaseState, RebaseStep,
-    ReflogEntry, ResetKind, StashInfo, WorktreeInfo,
+    CheckpointInfo, ConflictFile, ConflictResolution, MergeOptions, MergeResult, RebaseState,
+    RebaseStep, ReflogEntry, ResetKind, StashInfo, WorktreeInfo,
 };
 
 /// Additional trait items live in an extension impl to keep M2 diff small.
@@ -218,7 +246,7 @@ pub trait GitEngineM3: Send + Sync {
         &self,
         _repo: &Repository,
         _ref_name: &str,
-        _no_ff: bool,
+        _opts: &MergeOptions,
     ) -> EngineResult<MergeResult> {
         Err(EngineError::Unsupported("merge_branch".into()))
     }

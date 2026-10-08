@@ -116,6 +116,50 @@ fn stage_file(repo: &Repository, path: &str, unstage: bool) -> EngineResult<()> 
     Ok(())
 }
 
+/// Whole-file discard: back to HEAD when tracked there, gone when not.
+fn discard_file(repo: &Repository, path: &str) -> EngineResult<()> {
+    let head = head_commit_object(repo)?;
+    let in_head = head
+        .as_ref()
+        .map(|obj| {
+            obj.peel_to_commit()
+                .and_then(|c| c.tree())
+                .and_then(|t| t.get_path(Path::new(path)))
+                .is_ok()
+        })
+        .unwrap_or(false);
+    if in_head {
+        // Index := HEAD for the path, then restore the workdir bytes.
+        let commit = head.expect("checked").peel_to_commit()?;
+        repo.reset_default(Some(commit.as_object()), [path])?;
+        let entry = commit.tree()?.get_path(Path::new(path))?;
+        let blob = repo.find_blob(entry.id())?;
+        write_workdir_bytes(repo, path, blob.content())?;
+    } else {
+        // Not in HEAD (untracked or newly added): index entry out, file gone.
+        repo.reset_default(None, [path])?;
+        if let Some(workdir) = repo.workdir() {
+            let file = workdir.join(path);
+            if std::fs::symlink_metadata(&file).is_ok() {
+                let _ = std::fs::remove_file(file);
+            }
+        }
+    }
+    Ok(())
+}
+
+fn write_workdir_bytes(repo: &Repository, path: &str, content: &[u8]) -> EngineResult<()> {
+    let workdir = repo
+        .workdir()
+        .ok_or_else(|| EngineError::Invalid("bare repository has no workdir".into()))?;
+    let file = workdir.join(path);
+    if let Some(parent) = file.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(file, content)?;
+    Ok(())
+}
+
 impl Libgit2Engine {
     pub(crate) fn stage_impl(&self, repo: &Repository, req: &StageRequest) -> EngineResult<()> {
         // Hunk/line selections are grouped per path and applied as one
@@ -137,6 +181,44 @@ impl Libgit2Engine {
         }
         for (path, sels) in &selections {
             diffcore::apply_selection(repo, path, sels, req.unstage)?;
+        }
+        Ok(())
+    }
+
+    /// Throw away local changes for the targeted paths/hunks
+    /// (`git checkout --` on steroids):
+    /// * whole tracked file — index entry and workdir bytes both return to
+    ///   HEAD (staged + unstaged changes gone);
+    /// * whole untracked/newly-added file — dropped from the index and
+    ///   deleted from the workdir;
+    /// * hunk/line selections — reverse-applied onto the workdir only
+    ///   (the index is untouched).
+    ///
+    /// The IPC layer snapshots a checkpoint before calling this.
+    pub(crate) fn discard_impl(
+        &self,
+        repo: &Repository,
+        targets: &[StageTarget],
+    ) -> EngineResult<()> {
+        // Hunk/line selections are grouped per path and applied as one
+        // reverse patch per path so hunk indices stay valid.
+        let mut selections: std::collections::BTreeMap<String, Vec<Selection>> =
+            std::collections::BTreeMap::new();
+        for target in targets {
+            match target {
+                StageTarget::File(path) => discard_file(repo, path)?,
+                StageTarget::Hunk { path, hunk } => selections
+                    .entry(path.clone())
+                    .or_default()
+                    .push(Selection::Hunk(*hunk)),
+                StageTarget::Lines { path, hunk, ranges } => selections
+                    .entry(path.clone())
+                    .or_default()
+                    .push(Selection::Lines(*hunk, ranges.clone())),
+            }
+        }
+        for (path, sels) in &selections {
+            diffcore::discard_selection(repo, path, sels)?;
         }
         Ok(())
     }
@@ -208,13 +290,34 @@ impl Libgit2Engine {
             Err(e) => return Err(e.into()),
         };
 
+        // Merge-finishing commit (`git commit` during a merge): MERGE_HEAD
+        // becomes the second parent and the commit consumes the merge state.
+        // libgit2's commit does neither on its own.
+        let merging = super::merge::merge_in_progress(repo);
+        if merging && opts.amend {
+            return Err(EngineError::Invalid(
+                "cannot amend while a merge is in progress (commit or abort it first)".into(),
+            ));
+        }
+        let merge_parent = if merging {
+            let bytes = std::fs::read(repo.path().join("MERGE_HEAD"))
+                .map_err(|e| EngineError::Invalid(format!("cannot read MERGE_HEAD: {e}")))?;
+            let oid = git2::Oid::from_str(String::from_utf8_lossy(&bytes).trim())
+                .map_err(|e| EngineError::Invalid(format!("corrupt MERGE_HEAD: {e}")))?;
+            Some(repo.find_commit(oid)?)
+        } else {
+            None
+        };
+
         let mut index = repo.index()?;
         let tree_oid = index.write_tree()?;
         let tree = repo.find_tree(tree_oid)?;
 
         // git refuses "nothing to commit" unless --allow-empty. Amending is
-        // always meaningful (message/author change), so it skips the check.
-        if !opts.allow_empty && !opts.amend {
+        // always meaningful (message/author change), and so is finishing a
+        // merge whose resolved tree matches HEAD's (theirs was a subset of
+        // ours) — the merge commit's meaning is the second parent.
+        if !opts.allow_empty && !opts.amend && !merging {
             let unchanged = match &head {
                 Some(head) => head.tree_id() == tree_oid,
                 None => index.is_empty(),
@@ -255,7 +358,11 @@ impl Libgit2Engine {
                 head.ok_or_else(|| EngineError::Invalid("cannot amend: HEAD is unborn".into()))?;
             head.parents().collect()
         } else {
-            head.into_iter().collect()
+            let mut parents: Vec<git2::Commit<'_>> = head.into_iter().collect();
+            if let Some(theirs) = merge_parent {
+                parents.push(theirs);
+            }
+            parents
         };
         let parent_refs: Vec<&git2::Commit<'_>> = parents.iter().collect();
 
@@ -297,9 +404,11 @@ impl Libgit2Engine {
         // (CHERRY_PICK_HEAD / REVERT_HEAD / MERGE_MSG); libgit2's commit does
         // not. A cherry-pick/revert conflict resolved through this path must
         // terminate the sequencer, or RepoStatus::sequencer stays lit
-        // forever. (A real merge stays until its MERGE_HEAD becomes the
-        // second parent — documented gap in merge.rs; the helper is a no-op
-        // while a merge is in progress.)
+        // forever. A merge is consumed by the 2-parent commit itself
+        // (MERGE_HEAD/MERGE_MSG/MERGE_MODE dropped via cleanup_state).
+        if merging {
+            repo.cleanup_state()?;
+        }
         super::merge::clear_sequencer_files(repo);
         Ok(oid.to_string())
     }

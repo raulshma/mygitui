@@ -290,12 +290,9 @@ fn log_regex_filter_is_reported_unsupported() {
         regex: true,
         ..Default::default()
     };
-    match ENGINE.log(&repo, &filter, 10, None) {
-        Err(EngineError::Unsupported(msg)) => {
-            assert!(msg.contains("M1.1"), "unexpected message: {msg}")
-        }
-        other => panic!("expected Unsupported, got {other:?}"),
-    }
+    // `.*` matches everything (M9: regex filtering is implemented).
+    let (commits, _) = ENGINE.log(&repo, &filter, 10, None).expect("regex log");
+    assert!(!commits.is_empty());
 }
 
 #[test]
@@ -1328,4 +1325,199 @@ fn hooks_reported_and_commit_hooks_route_to_cli() {
             },
         )
         .expect("no_verify bypasses hooks");
+}
+
+// ---------------------------------------------------------------------------
+// discard (M9)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn discard_file_restores_head_and_drops_untracked() {
+    let temp = TempRepo::new("discard-file");
+    temp.write("a.txt", "v1\n");
+    temp.write("gone.txt", "x\n");
+    temp.add_all_and_commit("base");
+
+    // Tracked file: staged + unstaged changes both vanish.
+    temp.write("a.txt", "v1\nstaged\n");
+    temp.stage("a.txt");
+    temp.write("a.txt", "v1\nstaged\nworkdir\n");
+    // Untracked file.
+    temp.write("new.txt", "brand new\n");
+
+    ENGINE
+        .discard(&temp, &[file_target("a.txt"), file_target("new.txt")])
+        .expect("discard");
+
+    assert_eq!(index_blob(&temp, "a.txt"), "v1\n", "index back to HEAD");
+    assert_eq!(workdir_file(&temp, "a.txt"), "v1\n", "workdir back to HEAD");
+    assert!(
+        !temp.repo.workdir().unwrap().join("new.txt").exists(),
+        "untracked file deleted"
+    );
+    assert!(
+        temp.repo
+            .index()
+            .unwrap()
+            .get_path(Path::new("new.txt"), 0)
+            .is_none(),
+        "index entry gone"
+    );
+    assert_eq!(workdir_file(&temp, "gone.txt"), "x\n", "untouched path");
+}
+
+#[test]
+fn discard_file_deletes_newly_added_and_restores_deleted() {
+    let temp = TempRepo::new("discard-add-del");
+    temp.write("base.txt", "b\n");
+    temp.add_all_and_commit("base");
+
+    // Newly added (staged, not in HEAD): file + index entry gone.
+    temp.write("added.txt", "a\n");
+    temp.stage("added.txt");
+    ENGINE
+        .discard(&temp, &[file_target("added.txt")])
+        .expect("discard added");
+    assert!(!temp.repo.workdir().unwrap().join("added.txt").exists());
+
+    // Deleted in workdir (not staged): restored from index/HEAD.
+    let _ = std::fs::remove_file(temp.repo.workdir().unwrap().join("base.txt"));
+    ENGINE
+        .discard(&temp, &[file_target("base.txt")])
+        .expect("discard delete");
+    assert_eq!(workdir_file(&temp, "base.txt"), "b\n");
+}
+
+#[test]
+fn discard_hunks_reverses_only_selected_changes() {
+    let temp = TempRepo::new("discard-hunks");
+    let (path, base, _changed) = three_change_file(&temp);
+
+    // Discard only the first hunk (the L02 modification): the inserted
+    // lines and the deleted L23 stay.
+    ENGINE
+        .discard(
+            &temp,
+            &[StageTarget::Hunk {
+                path: path.to_string(),
+                hunk: 0,
+            }],
+        )
+        .expect("discard hunk 0");
+
+    let after = workdir_file(&temp, path);
+    assert!(after.contains("L02\n"), "line 2 back to base: {after}");
+    assert!(after.contains("INS-A"), "insertion kept");
+    assert!(!after.contains("L23"), "deletion kept");
+    // Index untouched (still HEAD).
+    assert_eq!(index_blob(&temp, path), base);
+}
+
+#[test]
+fn discard_lines_reverses_selected_lines_only() {
+    let temp = TempRepo::new("discard-lines");
+    let (path, base, _changed) = three_change_file(&temp);
+
+    // Discard just INS-B (new-side line of the insertion hunk).
+    ENGINE
+        .discard(
+            &temp,
+            &[StageTarget::Lines {
+                path: path.to_string(),
+                hunk: 1,
+                ranges: line_ranges(&[(14, 14)]),
+            }],
+        )
+        .expect("discard one line");
+
+    let after = workdir_file(&temp, path);
+    assert!(after.contains("INS-A"), "INS-A kept: {after}");
+    assert!(!after.contains("INS-B"), "INS-B discarded");
+    assert!(!after.contains("L23"), "other hunks untouched");
+    assert_eq!(index_blob(&temp, path), base, "index untouched");
+}
+
+// ---------------------------------------------------------------------------
+// regex log filter + diff Index→Commit (M9)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn log_regex_filter_matches_and_rejects_bad_patterns() {
+    let temp = TempRepo::new("log-regex");
+    temp.write("a.txt", "1\n");
+    temp.add_all_and_commit("feat: add widget");
+    temp.write("a.txt", "2\n");
+    temp.add_all_and_commit("fix(widget): repair");
+    temp.write("a.txt", "3\n");
+    temp.add_all_and_commit("chore: cleanup");
+
+    let filter = LogFilter {
+        text: Some(r"^(feat|fix)\(widget\)".to_string()),
+        regex: true,
+        ..Default::default()
+    };
+    let (commits, _) = ENGINE.log(&temp, &filter, 10, None).expect("regex log");
+    assert_eq!(commits.len(), 1, "{commits:?}");
+    assert!(commits[0].summary.contains("fix(widget)"));
+
+    // Anchored pattern that matches nothing.
+    let filter = LogFilter {
+        text: Some(r"^nope$".to_string()),
+        regex: true,
+        ..Default::default()
+    };
+    let (commits, _) = ENGINE.log(&temp, &filter, 10, None).unwrap();
+    assert!(commits.is_empty());
+
+    // Invalid regex → friendly Invalid, not a panic.
+    let filter = LogFilter {
+        text: Some("(unclosed".to_string()),
+        regex: true,
+        ..Default::default()
+    };
+    match ENGINE.log(&temp, &filter, 10, None) {
+        Err(EngineError::Invalid(msg)) => assert!(msg.contains("invalid regex"), "{msg}"),
+        other => panic!("expected Invalid, got {other:?}"),
+    }
+}
+
+#[test]
+fn diff_index_against_commit_shows_staged_vs_target() {
+    let temp = TempRepo::new("diff-index-commit");
+    temp.write("a.txt", "one\n");
+    temp.add_all_and_commit("c1");
+    let first = temp.head_sha();
+    temp.write("a.txt", "one\ntwo\n");
+    temp.add_all_and_commit("c2");
+    // Staged change diverging from HEAD.
+    temp.write("a.txt", "one\ntwo\nthree\n");
+    temp.stage("a.txt");
+
+    // Staged content vs the first commit (old side = Index): "two" and
+    // "three" exist only on the index side → deletions going index→commit.
+    let diff = ENGINE
+        .diff(
+            &temp,
+            &DiffSide::Index,
+            &DiffSide::Commit(first.clone()),
+            None,
+        )
+        .expect("index vs commit");
+    assert_eq!(diff.len(), 1);
+    assert_eq!(diff[0].deletions, 2, "{:?}", diff[0].hunks);
+
+    // Staged content vs HEAD: only "three" is index-only.
+    let diff = ENGINE
+        .diff(&temp, &DiffSide::Index, &DiffSide::Head, None)
+        .expect("index vs HEAD");
+    assert_eq!(diff.len(), 1);
+    assert_eq!(diff[0].deletions, 1);
+
+    // Identical sides (index == HEAD's tree) → empty.
+    temp.write("a.txt", "one\ntwo\n");
+    temp.stage("a.txt");
+    let diff = ENGINE
+        .diff(&temp, &DiffSide::Index, &DiffSide::Head, None)
+        .unwrap();
+    assert!(diff.is_empty());
 }
