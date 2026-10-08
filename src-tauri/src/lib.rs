@@ -3,6 +3,9 @@ pub mod graph;
 
 use tauri::{Emitter, Manager};
 
+mod actions;
+#[cfg(test)]
+mod actions_tests;
 mod auth;
 mod cli;
 mod diffcore;
@@ -39,6 +42,9 @@ pub fn run() {
             Ok(())
         })
         .manage(repo::RepoManager::new())
+        // M4: custom action runs (action_run/action_cancel + action-output
+        // events) track their live children here.
+        .manage(actions::ActionRegistry::default())
         .invoke_handler(tauri::generate_handler![
             keyring_store::secrets_get,
             keyring_store::secrets_set,
@@ -101,6 +107,14 @@ pub fn run() {
             ipc_commands::worktree_remove,
             ipc_commands::reflog,
             ipc_commands::repo_read_file,
+            ipc_commands::submodules,
+            ipc_commands::submodule_update,
+            ipc_commands::submodule_sync,
+            ipc_commands::gitignore_add,
+            ipc_commands::gitignore_templates,
+            ipc_commands::repo_clean,
+            ipc_commands::action_run,
+            ipc_commands::action_cancel,
         ])
         .run(tauri::generate_context!())
         .expect("error while running mygitui");

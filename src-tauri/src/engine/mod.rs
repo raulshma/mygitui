@@ -23,3 +23,6 @@ mod stash_tests;
 
 #[cfg(test)]
 mod checkpoint_tests;
+#[cfg(test)]
+mod submodule_tests;
+pub mod submodules;

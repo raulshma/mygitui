@@ -27,8 +27,9 @@
    * everywhere, `aria-expanded` collapse toggles, `aria-selected` rows.
    */
   import type { RepoStatus, StatusEntry } from "$lib/ipc/types";
-  import { stage, stageAll } from "$lib/ipc/client";
+  import { gitignoreAdd, stage, stageAll } from "$lib/ipc/client";
   import { toast } from "$lib/toast";
+  import { patternFor } from "./gitignore";
   import {
     buildStatusIndex,
     filterSections,
@@ -74,6 +75,47 @@
   const rowEls: Record<string, HTMLElement | undefined> = {};
   /** Staging mutation in flight (disables the controls momentarily). */
   let mutating = $state(false);
+
+  /**
+   * Gitignore quick-add (M4): the row key whose "Ignore" dropdown is open
+   * plus the candidate patterns computed from that row's path.
+   */
+  let ignoreFor = $state<string | null>(null);
+  let ignoreChoices = $state<{ label: string; pattern: string }[]>([]);
+
+  /** Candidate ignore patterns for one path: exact, `*.ext`, `dir/`. */
+  function choicesFor(path: string): { label: string; pattern: string }[] {
+    const opts = patternFor(path);
+    const out = [{ label: "exact", pattern: opts.exact }];
+    if (opts.ext) out.push({ label: `all ${opts.ext}`, pattern: opts.ext });
+    if (opts.dir) out.push({ label: `dir ${opts.dir}`, pattern: opts.dir });
+    return out;
+  }
+
+  function toggleIgnore(row: StatusRow): void {
+    if (ignoreFor === row.key) {
+      ignoreFor = null;
+      return;
+    }
+    ignoreFor = row.key;
+    ignoreChoices = choicesFor(row.entry.path);
+  }
+
+  /** Adds the pattern to .gitignore and refreshes the status. */
+  async function onIgnore(choice: { label: string; pattern: string }): Promise<void> {
+    if (!repoId || !choice.pattern) return;
+    ignoreFor = null;
+    try {
+      await gitignoreAdd(repoId, choice.pattern);
+      toast(`Ignored ${choice.pattern}`, { kind: "success" });
+      onAfterMutation?.();
+    } catch (err) {
+      toast(
+        `Ignore failed: ${err instanceof Error ? err.message : String(err)}`,
+        { kind: "error" },
+      );
+    }
+  }
 
   /** Search index — rebuilt once per status change, not per keystroke. */
   const index: StatusIndex | null = $derived(
@@ -184,6 +226,9 @@
   }
 
   function onTreeKeydown(event: KeyboardEvent): void {
+    // The Ignore quick-add controls handle their own keys (Enter/Space must
+    // not bubble into row open/toggle).
+    if ((event.target as HTMLElement).closest(".ignore-wrap")) return;
     const rows = visibleRows;
     if (rows.length === 0) return;
     const current =
@@ -240,6 +285,12 @@
     collapsed[id] = !collapsed[id];
   }
 </script>
+
+<svelte:window
+  onkeydown={(event) => {
+    if (event.key === "Escape") ignoreFor = null;
+  }}
+/>
 
 <aside aria-label="Working copy">
   {#if status}
@@ -352,6 +403,41 @@
                     {#if row.dir}<span class="dir">{row.dir}</span>{/if}
                     <span class="base">{row.base}</span>
                   </span>
+                  {#if row.section === "untracked" && canMutate}
+                    <span class="ignore-wrap">
+                      <button
+                        class="ignore-btn"
+                        type="button"
+                        disabled={mutating}
+                        aria-label={`Ignore ${row.entry.path}`}
+                        aria-expanded={ignoreFor === row.key}
+                        title="Add to .gitignore"
+                        tabindex={-1}
+                        onclick={(event) => {
+                          event.stopPropagation();
+                          toggleIgnore(row);
+                        }}
+                      >
+                        Ignore
+                      </button>
+                      {#if ignoreFor === row.key}
+                        <span class="ignore-menu" role="menu" aria-label="Ignore pattern choices">
+                          {#each ignoreChoices as choice (choice.pattern)}
+                            <button
+                              role="menuitem"
+                              type="button"
+                              onclick={(event) => {
+                                event.stopPropagation();
+                                void onIgnore(choice);
+                              }}
+                            >
+                              {choice.label}: <code>{choice.pattern}</code>
+                            </button>
+                          {/each}
+                        </span>
+                      {/if}
+                    </span>
+                  {/if}
                 </div>
               {/each}
             {/if}
@@ -600,5 +686,83 @@
     padding: 1rem 0.75rem;
     margin: 0;
     font-size: 0.8125rem;
+  }
+
+  /* --- gitignore quick-add (M4): hover-revealed action + pattern menu --- */
+
+  .ignore-wrap {
+    position: relative;
+    flex: none;
+    margin-left: auto;
+  }
+
+  .ignore-btn {
+    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
+    border-radius: var(--m3-shape-extra-small, 4px);
+    background: none;
+    color: var(--m3-on-surface-variant, var(--m3-on-surface));
+    font: inherit;
+    font-size: 0.6875rem;
+    padding: 0.0625rem 0.375rem;
+    cursor: pointer;
+    opacity: 0;
+  }
+
+  .row:hover .ignore-btn,
+  .ignore-btn:focus-visible,
+  .ignore-btn[aria-expanded="true"] {
+    opacity: 1;
+  }
+
+  .ignore-btn:hover {
+    background: var(--m3-surface-container-high, var(--m3-surface));
+  }
+
+  .ignore-btn:focus-visible {
+    outline: 2px solid var(--m3-primary);
+    outline-offset: -1px;
+  }
+
+  .ignore-menu {
+    position: absolute;
+    right: 0;
+    top: 100%;
+    z-index: 2;
+    display: flex;
+    flex-direction: column;
+    min-width: 12rem;
+    background: var(--m3-surface-container-high, var(--m3-surface));
+    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
+    border-radius: var(--m3-shape-small, 8px);
+    box-shadow: 0 4px 12px rgb(0 0 0 / 0.25);
+    padding: 0.125rem;
+  }
+
+  .ignore-menu button {
+    border: none;
+    background: none;
+    color: var(--m3-on-surface);
+    font: inherit;
+    font-size: 0.75rem;
+    text-align: left;
+    padding: 0.25rem 0.5rem;
+    cursor: pointer;
+    border-radius: var(--m3-shape-extra-small, 4px);
+    white-space: nowrap;
+  }
+
+  .ignore-menu button:hover {
+    background: var(--m3-surface-container-highest, var(--m3-surface));
+  }
+
+  .ignore-menu button:focus-visible {
+    outline: 2px solid var(--m3-primary);
+    outline-offset: -2px;
+  }
+
+  .ignore-menu code {
+    font-family: ui-monospace, Consolas, monospace;
+    font-size: 0.6875rem;
+    color: var(--m3-on-surface-variant, var(--m3-on-surface));
   }
 </style>

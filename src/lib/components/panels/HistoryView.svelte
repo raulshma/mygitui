@@ -44,7 +44,7 @@
   } from "$lib/stores/history-logic";
   import { toast } from "$lib/toast";
 
-  let { repoId }: { repoId: string } = $props();
+  let { repoId, onPopout }: { repoId: string; onPopout?: () => void } = $props();
 
   /** Must match the row height passed to (and defaulted by) GraphCanvas. */
   const ROW_HEIGHT = 24;
@@ -483,6 +483,13 @@
     >
       Compare…
     </button>
+
+    {#if onPopout}
+      <!-- M4 F1: pop the history out into its own window (desktop only). -->
+      <button class="compare-toggle" title="Pop out history" onclick={onPopout}>
+        Pop out
+      </button>
+    {/if}
 
     <span class="status" role="status" aria-live="polite">
       {#if store.error}

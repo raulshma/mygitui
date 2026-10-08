@@ -1,18 +1,27 @@
 <script lang="ts">
   /**
-   * Per-tab repo workspace (M2, extended in M3): header facts + a tabbed
-   * left panel stack (Status | Branches | Remotes | Stashes | Worktrees |
-   * Reflog | Undo) beside the history view, with the CommitBar fixed at
-   * the bottom (above the diff pane). The AuthDialog is mounted once here;
+   * Per-tab repo workspace (M2, extended in M3, layout-configurable in M4):
+   * header facts + the configurable main splitter tree (SplitContainer) +
+   * the CommitBar fixed at the bottom + the diff pane as a fixed bottom
+   * pane (collapse / pop out). The AuthDialog is mounted once here;
    * op/auth event subscriptions and the per-repo auto-fetch interval start
-   * on mount. Selected-file diffs still open in the DiffViewer below.
+   * on mount.
    *
-   * M3 conflict flow: while `repo_status` reports a merge / rebase /
-   * sequencer operation in progress, the per-repo conflicts cache polls
-   * `conflicts(repoId)`; when files come back, a banner across the top of
-   * the workspace offers Resolve (opens the ConflictEditor overlay) and
-   * Abort (merge_abort, or rebase_abort when the rebase flag is up).
+   * M4 layout: the main area renders the active layout tree from the
+   * `layouts` store (per-repo overlay > preset > default). Panels are
+   * mapped PanelId → `{#snippet}` here — the only place that knows both
+   * sides of the registry (see `$lib/layout/index.ts`). Tab groups get
+   * context menus (move / new group / hide) and a "+ Add panel" menu; the
+   * header exposes the preset select, "Save layout as…", "Add panel" and
+   * per-repo reset.
+   *
+   * M3 conflict flow (unchanged): while `repo_status` reports a merge /
+   * rebase / sequencer operation in progress, the per-repo conflicts cache
+   * polls `conflicts(repoId)`; when files come back, a banner across the
+   * top offers Resolve (ConflictEditor overlay) and Abort (merge_abort, or
+   * rebase_abort when the rebase flag is up).
    */
+  import type { Snippet } from "svelte";
   import type {
     ConflictFile,
     FileDiff,
@@ -32,12 +41,25 @@
   import HistoryView from "$lib/components/panels/HistoryView.svelte";
   import DiffViewer from "$lib/components/diff/DiffViewer.svelte";
   import AuthDialog from "$lib/components/AuthDialog.svelte";
+  import SplitContainer from "$lib/components/layout/SplitContainer.svelte";
   import { conflictsStore } from "$lib/components/panels/conflictsStore.svelte";
   import {
     conflictAbortCommand,
     conflictSource,
     conflictSourceLabel,
   } from "$lib/components/panels/panelModel";
+  import {
+    firstTabsId,
+    moveToRightGroup,
+    panelLabel,
+    rightSiblingOf,
+    TREE_PANELS,
+    visiblePanels,
+    type PanelGroupAction,
+    type PanelId,
+  } from "$lib/layout/layoutModel";
+  import { layouts } from "$lib/layout/layout.svelte";
+  import { openPanelPopout } from "$lib/layout/popout";
   import { refreshStatus } from "$lib/stores/tabs.svelte";
   import { startAuthEvents, startOpsEvents } from "$lib/stores/ops.svelte";
   import { autofetch } from "$lib/stores/autofetch.svelte";
@@ -55,61 +77,119 @@
     status: RepoStatus | null;
   } = $props();
 
-  type PanelTab =
-    | "status"
-    | "branches"
-    | "remotes"
-    | "stashes"
-    | "worktrees"
-    | "reflog"
-    | "undo";
-
-  /**
-   * Compact icon+label tab registry; icons are stroke paths on a 24×24
-   * grid (Feather-style geometry), rendered `aria-hidden` next to the
-   * label. Arrow-key tablist semantics are handled in `onTablistKeydown`.
-   */
-  const PANEL_TABS: Array<{ id: PanelTab; label: string; icon: string }> = [
-    {
-      id: "status",
-      label: "Status",
-      icon: "M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01",
-    },
-    {
-      id: "branches",
-      label: "Branches",
-      icon: "M6 3v12M21 6a3 3 0 1 1-6 0 3 3 0 0 1 6 0zM9 18a3 3 0 1 1-6 0 3 3 0 0 1 6 0zM18 9a9 9 0 0 1-9 9",
-    },
-    {
-      id: "remotes",
-      label: "Remotes",
-      icon: "M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z",
-    },
-    {
-      id: "stashes",
-      label: "Stashes",
-      icon: "M21 8v13H3V8M1 3h22v5H1zM10 12h4",
-    },
-    {
-      id: "worktrees",
-      label: "Worktrees",
-      icon: "M20 9h-9a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h9a2 2 0 0 0 2-2v-9a2 2 0 0 0-2-2zM5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1",
-    },
-    {
-      id: "reflog",
-      label: "Reflog",
-      icon: "M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20zM12 6v6l4 2",
-    },
-    {
-      id: "undo",
-      label: "Undo",
-      icon: "M9 14L4 9l5-5M20 20v-7a4 4 0 0 0-4-4H4",
-    },
-  ];
-
-  let panelTab = $state<PanelTab>("status");
   let selected: string[] = $state([]);
   let diffFiles: FileDiff[] = $state([]);
+  /** Diff pane body collapsed (header stays for restore/pop out). */
+  let diffCollapsed = $state(false);
+
+  // --- Layout ---------------------------------------------------------------
+
+  // Hydrate this repo's persisted overlay (never inside `$derived` — the
+  // store writes `$state`); the derived below re-runs once it lands.
+  $effect(() => {
+    layouts.ensureRepo(root);
+  });
+
+  /** The active layout for this repo (overlay > preset > default). */
+  const resolved = $derived(layouts.active(root));
+  /** Panels not currently placed (candidates for "Add panel" menus). */
+  const hiddenPanels = $derived(
+    TREE_PANELS.filter((p) => !visiblePanels(resolved.layout.main).includes(p)),
+  );
+  /** Whether the tab group at `tabsId` has a group to its right. */
+  function canMoveRightFor(tabsId: string): boolean {
+    return rightSiblingOf(resolved.layout.main, tabsId) !== null;
+  }
+
+  function onRatio(splitId: string, ratio: number): void {
+    layouts.setRatio(root, splitId, ratio);
+  }
+
+  function onActivateTab(tabsId: string, index: number): void {
+    layouts.setActiveTab(root, tabsId, index);
+  }
+
+  function onAddPanel(tabsId: string, panel: PanelId): void {
+    layouts.addPanel(root, panel, tabsId);
+  }
+
+  function onPanelAction(
+    action: PanelGroupAction,
+    tabsId: string,
+    panel: PanelId,
+  ): void {
+    if (action === "hide") {
+      layouts.hidePanel(root, panel);
+      return;
+    }
+    if (action === "new-group-right") {
+      layouts.movePanelTo(root, panel, { kind: "after", nodeId: tabsId });
+      return;
+    }
+    // move-right-group: merge into the sibling group right of the holder.
+    let failed: string | null = null;
+    layouts.updateTree(root, (tree) => {
+      const outcome = moveToRightGroup(tree, panel);
+      if (!outcome.ok) {
+        failed = outcome.reason ?? "failed";
+        return null;
+      }
+      return outcome.tree;
+    });
+    if (failed === "sibling-not-a-group") {
+      toast("The area to the right is not a tab group");
+    } else if (failed !== null) {
+      toast("No group to the right");
+    }
+  }
+
+  function onPresetChange(event: Event): void {
+    layouts.applyPreset(root, (event.currentTarget as HTMLSelectElement).value);
+  }
+
+  function onSaveLayout(): void {
+    const name = window.prompt("Save the current layout as:");
+    if (name !== null && name.trim() !== "") layouts.saveAs(root, name);
+  }
+
+  function onResetLayout(): void {
+    layouts.resetRepo(root);
+  }
+
+  /** Header "＋ panel" select: adds into the first tab group (or wraps). */
+  function onHeaderAddPanel(event: Event): void {
+    const select = event.currentTarget as HTMLSelectElement;
+    const panel = select.value as PanelId;
+    select.value = "";
+    if (!TREE_PANELS.includes(panel)) return;
+    const target = firstTabsId(resolved.layout.main) ?? undefined;
+    layouts.addPanel(root, panel, target);
+  }
+
+  // --- Panel registry (PanelId → snippet) -----------------------------------
+
+  function renderPanel(id: PanelId): Snippet {
+    switch (id) {
+      case "status":
+        return statusPanel;
+      case "branches":
+        return branchesPanel;
+      case "remotes":
+        return remotesPanel;
+      case "stashes":
+        return stashesPanel;
+      case "worktrees":
+        return worktreesPanel;
+      case "reflog":
+        return reflogPanel;
+      case "undo":
+        return undoPanel;
+      case "history":
+        return historyPanel;
+      default:
+        return missingPanel;
+    }
+  }
 
   // --- Conflict banner state ---------------------------------------------
 
@@ -172,26 +252,11 @@
   // Reset view state when switching repos.
   $effect(() => {
     void repoId;
-    panelTab = "status";
     selected = [];
     diffFiles = [];
+    diffCollapsed = false;
     conflictEditorOpen = false;
   });
-
-  function onTablistKeydown(event: KeyboardEvent): void {
-    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
-    event.preventDefault();
-    const idx = PANEL_TABS.findIndex((t) => t.id === panelTab);
-    const dir = event.key === "ArrowRight" ? 1 : -1;
-    const next = PANEL_TABS[(idx + dir + PANEL_TABS.length) % PANEL_TABS.length];
-    panelTab = next.id;
-    // Move focus to the newly selected tab button.
-    requestAnimationFrame(() => {
-      document
-        .getElementById(`panel-tab-${next.id}`)
-        ?.focus();
-    });
-  }
 
   async function openDiff(entry: StatusEntry): Promise<void> {
     diffFiles = [];
@@ -206,6 +271,22 @@
       diffFiles = [];
     }
   }
+
+  // --- Popouts ---------------------------------------------------------------
+
+  function popOutDiff(): void {
+    void openPanelPopout("diff", repoId, `${name} — diff`);
+  }
+
+  function popOutHistory(): void {
+    void openPanelPopout("history", repoId, `${name} — history`);
+  }
+
+  // --- Diff pane ---------------------------------------------------------------
+
+  const diffHeightStyle = $derived(
+    diffCollapsed ? "auto" : `${Math.round(resolved.layout.diffRatio * 100)}%`,
+  );
 
   // --- Conflict banner actions -------------------------------------------
 
@@ -259,6 +340,40 @@
   }
 </script>
 
+{#snippet statusPanel()}
+  <StatusPanel
+    {status}
+    {repoId}
+    onOpenDiff={(e) => void openDiff(e)}
+    onAfterMutation={refresh}
+    bind:selected
+  />
+{/snippet}
+{#snippet branchesPanel()}
+  <BranchPanel {repoId} onMutated={refresh} />
+{/snippet}
+{#snippet remotesPanel()}
+  <RemotePanel {repoId} onMutated={refresh} />
+{/snippet}
+{#snippet stashesPanel()}
+  <StashPanel {repoId} onMutated={refresh} />
+{/snippet}
+{#snippet worktreesPanel()}
+  <WorktreePanel {repoId} {root} onMutated={refresh} />
+{/snippet}
+{#snippet reflogPanel()}
+  <ReflogPanel {repoId} />
+{/snippet}
+{#snippet undoPanel()}
+  <UndoPanel {repoId} />
+{/snippet}
+{#snippet historyPanel()}
+  <HistoryView {repoId} onPopout={popOutHistory} />
+{/snippet}
+{#snippet missingPanel()}
+  <aside class="missing-panel">This panel is not available.</aside>
+{/snippet}
+
 <div class="repo-workspace">
   <header class="repo-header">
     <span class="repo-name">{name}</span>
@@ -266,6 +381,51 @@
       <span class="branch">{branchLabel(status)}</span>
       <span class="aheadbehind">↑{status.ahead} ↓{status.behind}</span>
     {/if}
+    <span class="layout-controls">
+      <select
+        class="preset-select"
+        aria-label="Layout preset"
+        title="Layout preset"
+        value={resolved.presetId}
+        onchange={onPresetChange}
+      >
+        {#each layouts.listPresets() as preset (preset.id)}
+          <option value={preset.id}>{preset.name}</option>
+        {/each}
+      </select>
+      <button
+        class="layout-btn"
+        type="button"
+        title="Save the current layout as a preset"
+        onclick={onSaveLayout}
+      >
+        Save layout…
+      </button>
+      {#if hiddenPanels.length > 0}
+        <select
+          class="preset-select"
+          aria-label="Add panel"
+          title="Add panel"
+          value=""
+          onchange={onHeaderAddPanel}
+        >
+          <option value="" disabled>＋ panel…</option>
+          {#each hiddenPanels as panel (panel)}
+            <option value={panel}>{panelLabel(panel)}</option>
+          {/each}
+        </select>
+      {/if}
+      {#if resolved.hasOverlay}
+        <button
+          class="layout-btn"
+          type="button"
+          title="Reset this repository's layout to the preset"
+          onclick={onResetLayout}
+        >
+          Reset
+        </button>
+      {/if}
+    </span>
     <span class="repo-root" title={root}>{root}</span>
   </header>
 
@@ -292,83 +452,57 @@
     </div>
   {/if}
 
-  <div class="split">
-    <div class="left">
-      <div
-        class="panel-tabs"
-        role="tablist"
-        aria-label="Repository panels"
-        tabindex="-1"
-        onkeydown={onTablistKeydown}
-      >
-        {#each PANEL_TABS as tab (tab.id)}
-          <button
-            id={`panel-tab-${tab.id}`}
-            class="panel-tab"
-            type="button"
-            role="tab"
-            aria-selected={panelTab === tab.id}
-            aria-controls="panel-tabpanel"
-            tabindex={panelTab === tab.id ? 0 : -1}
-            onclick={() => (panelTab = tab.id)}
-          >
-            <svg
-              class="tab-icon"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-              aria-hidden="true"
-            >
-              <path d={tab.icon} />
-            </svg>
-            {tab.label}
-          </button>
-        {/each}
-      </div>
-
-      <div
-        id="panel-tabpanel"
-        class="panel-body"
-        role="tabpanel"
-        aria-labelledby={`panel-tab-${panelTab}`}
-      >
-        {#if panelTab === "status"}
-          <StatusPanel
-            {status}
-            {repoId}
-            onOpenDiff={(e) => void openDiff(e)}
-            onAfterMutation={refresh}
-            bind:selected
-          />
-        {:else if panelTab === "branches"}
-          <BranchPanel {repoId} onMutated={refresh} />
-        {:else if panelTab === "remotes"}
-          <RemotePanel {repoId} onMutated={refresh} />
-        {:else if panelTab === "stashes"}
-          <StashPanel {repoId} onMutated={refresh} />
-        {:else if panelTab === "worktrees"}
-          <WorktreePanel {repoId} {root} onMutated={refresh} />
-        {:else if panelTab === "reflog"}
-          <ReflogPanel {repoId} />
-        {:else}
-          <UndoPanel {repoId} />
-        {/if}
-      </div>
-    </div>
-
-    <HistoryView {repoId} />
+  <div class="main-area">
+    <SplitContainer
+      node={resolved.layout.main}
+      renderPanel={renderPanel}
+      {hiddenPanels}
+      canMoveRightFor={canMoveRightFor}
+      onRatio={onRatio}
+      onActivateTab={onActivateTab}
+      onAddPanel={onAddPanel}
+      onPanelAction={onPanelAction}
+    />
   </div>
 
-  <div class="commit-pane">
+  <div class="commit-pane" class:zen={resolved.layout.autoHideCommitBar}>
     <CommitBar {repoId} onCommitted={refresh} />
   </div>
 
   {#if diffFiles.length > 0}
-    <div class="diff-pane">
-      <DiffViewer files={diffFiles} />
+    <div class="diff-pane" style:height={diffHeightStyle}>
+      <header class="diff-head">
+        <span class="diff-title">Working copy diff</span>
+        <span class="diff-count">
+          {diffFiles.length} file{diffFiles.length === 1 ? "" : "s"}
+        </span>
+        <span class="diff-actions">
+          <button
+            class="layout-btn"
+            type="button"
+            onclick={() => (diffCollapsed = !diffCollapsed)}
+          >
+            {diffCollapsed ? "Show" : "Collapse"}
+          </button>
+          <button class="layout-btn" type="button" onclick={popOutDiff}>
+            Pop out
+          </button>
+          <button
+            class="layout-btn"
+            type="button"
+            aria-label="Close diff"
+            title="Close diff"
+            onclick={() => (diffFiles = [])}
+          >
+            ×
+          </button>
+        </span>
+      </header>
+      {#if !diffCollapsed}
+        <div class="diff-body">
+          <DiffViewer files={diffFiles} />
+        </div>
+      {/if}
     </div>
   {/if}
 </div>
@@ -421,14 +555,62 @@
     color: var(--m3-on-surface-variant, var(--m3-on-surface));
   }
 
-  .repo-root {
+  .layout-controls {
     margin-left: auto;
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: 0.375rem;
+  }
+
+  .preset-select {
+    max-width: 9rem;
+    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
+    border-radius: var(--m3-shape-small, 8px);
+    background: var(--m3-surface);
+    color: var(--m3-on-surface);
+    font: inherit;
+    font-size: 0.6875rem;
+    padding: 0.1rem 0.25rem;
+  }
+
+  .layout-btn {
+    flex: none;
+    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
+    border-radius: var(--m3-shape-small, 8px);
+    background: none;
+    color: var(--m3-on-surface-variant, var(--m3-on-surface));
+    font: inherit;
+    font-size: 0.6875rem;
+    padding: 0.1rem 0.45rem;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+
+  .layout-btn:hover,
+  .layout-btn:focus-visible {
+    color: var(--m3-primary);
+    background: var(--m3-surface-container-high, var(--m3-surface));
+  }
+
+  .repo-root {
     color: var(--m3-on-surface-variant, var(--m3-on-surface));
     font-family: ui-monospace, Consolas, monospace;
     font-size: 0.6875rem;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    flex: none;
+    max-width: 22rem;
+  }
+
+  .missing-panel {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--m3-on-surface-variant, var(--m3-on-surface));
+    font-size: 0.8125rem;
   }
 
   .conflict-banner {
@@ -507,97 +689,67 @@
     opacity: 0.55;
   }
 
-  .split {
-    flex: 1;
-    display: flex;
-    min-height: 0;
-  }
-
-  .left {
-    width: 24rem;
-    flex: none;
-    display: flex;
-    flex-direction: column;
-    min-height: 0;
-    border-right: 1px solid var(--m3-outline-variant, var(--m3-primary));
-  }
-
-  .panel-tabs {
-    flex: none;
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.125rem;
-    padding: 0.25rem 0.5rem 0;
-    border-bottom: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    background: var(--m3-surface-container, var(--m3-surface));
-  }
-
-  .panel-tab {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.25rem;
-    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    border-bottom: none;
-    border-radius: var(--m3-shape-small, 8px) var(--m3-shape-small, 8px) 0 0;
-    background: none;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    font: inherit;
-    font-size: 0.6875rem;
-    padding: 0.25rem 0.5rem;
-    cursor: pointer;
-  }
-
-  .tab-icon {
-    width: 0.75rem;
-    height: 0.75rem;
-    flex: none;
-  }
-
-  .panel-tab:hover {
-    background: var(--m3-surface-container-high, var(--m3-surface));
-  }
-
-  .panel-tab:focus-visible {
-    outline: 2px solid var(--m3-primary);
-    outline-offset: -2px;
-  }
-
-  .panel-tab[aria-selected="true"] {
-    background: var(--m3-surface);
-    color: var(--m3-primary);
-    font-weight: 600;
-    /* Visually merge with the panel body below. */
-    padding-bottom: calc(0.25rem + 1px);
-    margin-bottom: -1px;
-  }
-
-  .panel-body {
+  .main-area {
     flex: 1;
     min-height: 0;
     display: flex;
-    flex-direction: column;
-    overflow-y: auto;
-  }
-
-  .panel-body > :global(aside),
-  .panel-body > :global(section) {
-    flex: 1;
-    min-height: 0;
-  }
-
-  .split > :global(section) {
-    flex: 1;
-    min-width: 0;
   }
 
   .commit-pane {
     flex: none;
   }
 
+  /* Zen layouts collapse the commit bar to a slim strip; hovering the
+     area expands it again (no state — pure CSS). */
+  .commit-pane.zen {
+    height: 1.25rem;
+    overflow: hidden;
+  }
+
+  .commit-pane.zen:hover,
+  .commit-pane.zen:focus-within {
+    height: auto;
+  }
+
   .diff-pane {
-    height: 40%;
     flex: none;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
     border-top: 1px solid var(--m3-outline-variant, var(--m3-primary));
+    overflow: hidden;
+  }
+
+  .diff-head {
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.2rem 0.75rem;
+    background: var(--m3-surface-container, var(--m3-surface));
+    border-bottom: 1px solid var(--m3-outline-variant, var(--m3-primary));
+    font-size: 0.75rem;
+  }
+
+  .diff-title {
+    font-weight: 500;
+  }
+
+  .diff-count {
+    color: var(--m3-on-surface-variant, var(--m3-on-surface));
+  }
+
+  .diff-actions {
+    margin-left: auto;
+    display: flex;
+    gap: 0.25rem;
+  }
+
+  .diff-body {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
     overflow: hidden;
   }
 

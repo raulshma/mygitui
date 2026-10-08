@@ -789,3 +789,131 @@ export async function guardCheckpoint(repoId: string, reason: string): Promise<C
 export function readFile(repoId: string, path: string): Promise<number[]> {
   return invokeTauri<number[]>("repo_read_file", { repo_id: repoId, path });
 }
+
+// ---------------------------------------------------------------------------
+// M4 (lane F3): submodules + gitignore quick-add (appended).
+// ---------------------------------------------------------------------------
+
+import type { SubmoduleInfo } from "./types";
+
+/** A curated builtin `.gitignore` template (`gitignore_templates` reply). */
+export interface GitignoreTemplate {
+  name: string;
+  description: string;
+  /** One newline-joined `.gitignore` snippet (no trailing newline). */
+  patterns: string;
+}
+
+/** Lists every submodule with checked-out vs recorded state. */
+export function submodules(repoId: string): Promise<SubmoduleInfo[]> {
+  return call<SubmoduleInfo[]>("submodules", { repo_id: repoId });
+}
+
+/**
+ * `git submodule update [--init] [--recursive] <path>` for one submodule.
+ * `init` also initializes uninitialized submodules; `recursive` descends
+ * into nested submodules (depth-capped).
+ */
+export function submoduleUpdate(
+  repoId: string,
+  path: string,
+  init = false,
+  recursive = false,
+): Promise<void> {
+  return call<void>("submodule_update", {
+    repo_id: repoId,
+    path,
+    init,
+    recursive,
+  });
+}
+
+/**
+ * Rewrites the submodule URL from `.gitmodules` into the repository config
+ * (`git submodule sync`); `path` omitted/empty syncs all submodules.
+ */
+export function submoduleSync(repoId: string, path?: string): Promise<void> {
+  return call<void>("submodule_sync", {
+    repo_id: repoId,
+    path: path ?? undefined,
+  });
+}
+
+/** Appends one pattern to the repo-root `.gitignore` (creates if missing). */
+export function gitignoreAdd(repoId: string, pattern: string): Promise<void> {
+  return call<void>("gitignore_add", { repo_id: repoId, pattern });
+}
+
+/** The curated builtin gitignore templates (no repository needed). */
+export function gitignoreTemplates(): Promise<GitignoreTemplate[]> {
+  return call<GitignoreTemplate[]>("gitignore_templates", {});
+}
+
+// ---------------------------------------------------------------------------
+// M4 (lane F4): git clean execution + custom shell actions (appended;
+// docs/contracts.md "Commands (M4)" + "Events (M4)").
+// ---------------------------------------------------------------------------
+
+import type { ActionOutputEvent } from "./types";
+
+/**
+ * Deletes the given workdir-relative untracked paths (as listed by
+ * `opsPreview(repoId, "clean", { dirs: true })`). A checkpoint of the full
+ * workdir state is created FIRST (`checkpoint_reason`, conventionally
+ * "pre-clean"), so the deletion is undoable via checkpoints. Resolves with
+ * the number of paths actually removed (paths that vanished in the meantime
+ * are skipped).
+ */
+export function repoClean(
+  repoId: string,
+  paths: string[],
+  checkpointReason: string,
+): Promise<number> {
+  return invokeTauri<number>("repo_clean", {
+    repo_id: repoId,
+    paths,
+    checkpoint_reason: checkpointReason,
+  });
+}
+
+/**
+ * Runs a user-defined shell action with cwd = the repo's workdir root.
+ * Output streams back as `action-output` events (subscribe via
+ * {@link onActionOutput}, identify runs by the returned run id). Rejects on
+ * validation failure or when the repo already has the maximum number of
+ * concurrent actions running.
+ */
+export function actionRun(
+  repoId: string,
+  name: string,
+  command: string,
+): Promise<string> {
+  return invokeTauri<string>("action_run", { repo_id: repoId, name, command });
+}
+
+/**
+ * Kills a running action; resolves `false` when the run is unknown or
+ * already finished (cancel is best-effort, never an error).
+ */
+export function actionCancel(runId: string): Promise<boolean> {
+  return invokeTauri<boolean>("action_cancel", { run_id: runId });
+}
+
+/**
+ * Subscribes to `action-output` events (emitted by an in-flight
+ * `action_run`; identify yours by `run_id`). Same contract as
+ * {@link onRepoChanged}: never throws, no-op unlisten outside Tauri.
+ */
+export async function onActionOutput(
+  cb: (event: ActionOutputEvent) => void,
+): Promise<() => void> {
+  const noop = (): void => {};
+  if (!isTauri()) return noop;
+  try {
+    return await listen<ActionOutputEvent>("action-output", (event) =>
+      cb(event.payload),
+    );
+  } catch {
+    return noop;
+  }
+}

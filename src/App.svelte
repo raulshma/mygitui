@@ -21,8 +21,25 @@
   import Toaster from "$lib/components/Toaster.svelte";
   import TabStrip from "$lib/components/TabStrip.svelte";
   import RepoView from "$lib/components/panels/RepoView.svelte";
+  import HistoryView from "$lib/components/panels/HistoryView.svelte";
+  import PopoutDiff from "$lib/components/layout/PopoutDiff.svelte";
+  // M4 F1: panel popout query contract (?panel=diff|history&repo=<id>).
+  import { parsePopoutQuery } from "$lib/layout/popout";
   import QuickSwitcher from "$lib/components/QuickSwitcher.svelte";
   import CloneDialog from "$lib/components/CloneDialog.svelte";
+  import CommandPalette from "$lib/components/CommandPalette.svelte";
+  // M4 F2: global keybind engine + palette execution entry point.
+  import { startKeybinds } from "$lib/palette/keybinds";
+  import { executeCommandById, togglePalette } from "$lib/palette/palette.svelte";
+
+  /**
+   * M4 F1 popout contract: a window opened with
+   * `?panel=diff|history&repo=<repoId>` renders only that panel (with its
+   * own store wiring) instead of the tab shell. Parsed once at startup.
+   */
+  const popout = parsePopoutQuery(
+    typeof location !== "undefined" ? location.search : "",
+  );
 
   let repos = $state(recentRepos.list());
 
@@ -72,6 +89,35 @@
 
     startTabEvents();
 
+    // Popout windows render one panel only — no shell-level listeners.
+    if (popout) {
+      return () => {
+        for (const unlisten of cleanups) unlisten();
+      };
+    }
+
+    // M4 F2: global keyboard shortcuts (Ctrl/Cmd+Shift+P palette et al).
+    cleanups.push(startKeybinds((commandId) => {
+      void executeCommandById(commandId);
+    }));
+
+    // Palette "Clone repository…" opens the dialog App owns (real today).
+    const onOpenCloneDialog = (): void => {
+      cloneOpen = true;
+    };
+    document.addEventListener("open-clone-dialog", onOpenCloneDialog);
+    cleanups.push(() =>
+      document.removeEventListener("open-clone-dialog", onOpenCloneDialog),
+    );
+
+    // The palette command routes through an event (commands.ts must not
+    // import the palette store — that would be a registry cycle).
+    const onTogglePalette = (): void => togglePalette();
+    window.addEventListener("toggle-command-palette", onTogglePalette);
+    cleanups.push(() =>
+      window.removeEventListener("toggle-command-palette", onTogglePalette),
+    );
+
     void listenDragDrop((paths) => {
       for (const path of paths) void openRepoTab(path);
     }).then((unlisten) => cleanups.push(unlisten));
@@ -94,7 +140,16 @@
 </script>
 
 <div class="app-shell">
-  {#if tabStore.tabs.length > 0}
+  {#if popout}
+    <!-- M4 F1 popout window: exactly one panel, own store wiring. -->
+    <main class="popout-view">
+      {#if popout.panel === "history"}
+        <HistoryView repoId={popout.repoId} />
+      {:else}
+        <PopoutDiff repoId={popout.repoId} />
+      {/if}
+    </main>
+  {:else if tabStore.tabs.length > 0}
     <TabStrip openFolder={openFromDisk} />
 
     <main class="repo-view">
@@ -160,6 +215,7 @@
 
 <Toaster />
 <QuickSwitcher />
+<CommandPalette />
 <CloneDialog bind:open={cloneOpen} />
 
 <style>
@@ -176,6 +232,18 @@
     flex: 1;
     min-height: 0;
     display: flex;
+  }
+
+  /* M4 F1 popout window: one panel filling the window. */
+  .popout-view {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+  }
+
+  .popout-view > :global(*) {
+    flex: 1;
+    min-height: 0;
   }
 
   /* Home area (no tabs open) */

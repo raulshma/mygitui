@@ -1664,3 +1664,710 @@ pub async fn reflog(
     .await
     .map_err(|e| format!("reflog task failed: {e}"))?
 }
+
+// ---------------------------------------------------------------------------
+// M4 (lane F4): git clean execution + custom shell actions (contracts.md
+// "Commands (M4)").
+//
+// `repo_clean` deletes a caller-supplied list of workdir-relative untracked
+// paths (as computed by `ops_preview` kind "clean"). Safety chain: every
+// path is validated first (relative, no `..`, inside the repo root — one
+// bad path aborts the whole op with zero side effects), then a checkpoint
+// of the full workdir state is created (reason argument, FE passes
+// "pre-clean"), then the paths are removed. Missing paths are skipped;
+// symlinks are unlinked, never traversed. Returns the count of removed
+// paths. It is an op-queue mutation: serialized with other mutations and
+// bumps the generation after (the watcher-driven clients resync).
+//
+// `action_run` / `action_cancel` delegate to the `actions` runner; the
+// registry is process-global managed state (see actions.rs).
+// ---------------------------------------------------------------------------
+
+use crate::actions::{ActionRegistry, ActionSpec, TauriActionSink};
+
+/// git clean execution: checkpoint first, then delete each validated path.
+/// Returns the number of paths removed.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn repo_clean(
+    repo_id: RepoId,
+    paths: Vec<String>,
+    checkpoint_reason: String,
+    state: State<'_, RepoManager>,
+) -> Result<u32, String> {
+    let handle = get_handle(&state, &repo_id)?;
+    finish_op(clean_op(&handle, paths, checkpoint_reason)).await
+}
+
+/// Enqueued `clean` body (op-queue mutation with the generation bump, like
+/// [`enqueue_mutation`]). Split from the command so tests can drive it
+/// through a real handle without `State`.
+fn clean_op(
+    handle: &RepoHandle,
+    paths: Vec<String>,
+    checkpoint_reason: String,
+) -> oneshot::Receiver<Result<u32, String>> {
+    let engine = handle.m3();
+    let repo = handle.repo();
+    let root = handle.root.clone();
+    let generation = handle.generation_shared();
+    let (_op_id, rx) = handle.ops().enqueue("clean", move |_ctx| {
+        let result = (|| -> Result<u32, String> {
+            // Validate FIRST so a rejected op has zero side effects —
+            // notably no checkpoint.
+            let resolved = validate_clean_paths(&root, &paths)?;
+            // SAFETY SECOND: the exact pre-clean state becomes an undo
+            // point (checkpoint refs never move HEAD/branches, status
+            // untouched).
+            {
+                let guard = repo.lock();
+                engine
+                    .checkpoint_create(&guard, &checkpoint_reason)
+                    .map_err(engine_err)?;
+            }
+            remove_resolved(&resolved)
+        })();
+        generation.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        result
+    });
+    rx
+}
+
+/// Validation half of the clean deletion: every path must be
+/// workdir-relative, non-empty, free of `..` and resolve inside `root`.
+/// One bad path fails the whole op before anything is touched.
+fn validate_clean_paths(root: &Path, paths: &[String]) -> Result<Vec<std::path::PathBuf>, String> {
+    let mut resolved = Vec::with_capacity(paths.len());
+    for path in paths {
+        if path.trim().is_empty() || path.trim() == "." {
+            return Err(format!(
+                "clean path must be a non-empty workdir-relative path: `{path}`"
+            ));
+        }
+        let relative = Path::new(path);
+        if relative.is_absolute() || has_windows_prefix(relative) {
+            return Err(format!("clean path must be workdir-relative: `{path}`"));
+        }
+        if relative
+            .components()
+            .any(|component| component == std::path::Component::ParentDir)
+        {
+            return Err(format!("clean path must not contain `..`: `{path}`"));
+        }
+        let full = root.join(relative);
+        // Belt and braces (same containment rule as `read_workdir_file`),
+        // plus an explicit root guard: "." forms resolve onto the repo root.
+        if full.strip_prefix(root).is_err() || full == root {
+            return Err(format!("clean path escapes the repository: `{path}`"));
+        }
+        resolved.push(full);
+    }
+    Ok(resolved)
+}
+
+/// Deletion half of the clean deletion: remove already-validated
+/// paths. A missing path (vanished between preview and confirm) is
+/// skipped; a symlink is unlinked, never traversed. Returns the count of
+/// paths removed.
+fn remove_resolved(resolved: &[std::path::PathBuf]) -> Result<u32, String> {
+    let mut removed = 0u32;
+    for full in resolved {
+        // symlink_metadata does not follow links: a symlinked "directory"
+        // goes through remove_file below instead of remove_dir_all.
+        let Ok(meta) = std::fs::symlink_metadata(full) else {
+            continue; // gone already — nothing to clean
+        };
+        let result = if meta.is_dir() {
+            std::fs::remove_dir_all(full)
+        } else {
+            std::fs::remove_file(full)
+        };
+        result.map_err(|e| format!("removing `{}` failed: {e}", full.display()))?;
+        removed += 1;
+    }
+    Ok(removed)
+}
+
+/// Run a user-defined shell action with cwd = repo root, streaming its
+/// output as `action-output` events. Returns the run id (cancel token).
+#[tauri::command(rename_all = "snake_case")]
+pub fn action_run(
+    repo_id: RepoId,
+    name: String,
+    command: String,
+    app: tauri::AppHandle,
+    state: State<'_, RepoManager>,
+    runs: State<'_, ActionRegistry>,
+) -> Result<String, String> {
+    let handle = get_handle(&state, &repo_id)?;
+    let launch = crate::actions::run_action(
+        &runs,
+        ActionSpec {
+            repo_id: repo_id.0,
+            name,
+            command,
+            cwd: handle.root.clone(),
+        },
+        Arc::new(TauriActionSink::new(app)),
+    )?;
+    Ok(launch.run_id)
+}
+
+/// Kill a running action; `false` when the run is unknown or already done.
+#[tauri::command(rename_all = "snake_case")]
+pub fn action_cancel(run_id: String, runs: State<'_, ActionRegistry>) -> Result<bool, String> {
+    Ok(runs.cancel(&run_id))
+}
+
+#[cfg(test)]
+mod m4_clean_tests {
+    use super::*;
+
+    fn temp_repo(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "mygitui-clean-{tag}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        git2::Repository::init(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn clean_removal_removes_files_dirs_and_counts() {
+        let root = temp_repo("del");
+        std::fs::write(root.join("loose.txt"), b"x").unwrap();
+        std::fs::create_dir_all(root.join("nested/deep")).unwrap();
+        std::fs::write(root.join("nested/deep/a.txt"), b"x").unwrap();
+        std::fs::write(root.join("nested/b.txt"), b"x").unwrap();
+
+        let resolved = validate_clean_paths(
+            &root,
+            &["loose.txt".into(), "nested".into(), "missing.txt".into()],
+        )
+        .unwrap();
+        let removed = remove_resolved(&resolved).unwrap();
+        assert_eq!(removed, 2, "missing paths are skipped, not counted");
+        assert!(!root.join("loose.txt").exists());
+        assert!(!root.join("nested").exists());
+        assert!(root.join(".git").exists(), "repo itself untouched");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn clean_validation_rejects_escaping_paths_before_touching_disk() {
+        let root = temp_repo("escape");
+        std::fs::write(root.join("keep.txt"), b"x").unwrap();
+        let outside = root.parent().unwrap().join("outside-target.txt");
+        std::fs::write(&outside, b"x").unwrap();
+
+        let bad: Vec<String> = vec![
+            "../outside-target.txt".into(),
+            "a/../../b".into(),
+            std::fs::canonicalize(&outside)
+                .unwrap()
+                .to_string_lossy()
+                .into_owned(),
+            String::new(),
+            ".".into(),
+        ];
+        for path in bad {
+            let err = validate_clean_paths(&root, std::slice::from_ref(&path)).unwrap_err();
+            assert!(
+                err.contains("relative") || err.contains("..") || err.contains("escapes"),
+                "`{path}` rejected with a clear reason, got: {err}"
+            );
+        }
+        assert!(root.join("keep.txt").exists(), "nothing deleted on reject");
+        assert!(outside.exists(), "outside target untouched");
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_file(&outside);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn clean_removal_unlinks_symlinks_without_traversing() {
+        let root = temp_repo("symlink");
+        let target_dir =
+            std::env::temp_dir().join(format!("mygitui-clean-target-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&target_dir);
+        std::fs::create_dir_all(&target_dir).unwrap();
+        std::fs::write(target_dir.join("precious.txt"), b"x").unwrap();
+        std::os::unix::fs::symlink(&target_dir, root.join("linked")).unwrap();
+
+        let resolved = validate_clean_paths(&root, &["linked".into()]).unwrap();
+        let removed = remove_resolved(&resolved).unwrap();
+        assert_eq!(removed, 1);
+        assert!(!root.join("linked").exists(), "link removed");
+        assert!(target_dir.join("precious.txt").exists(), "target survived");
+        let _ = std::fs::remove_dir_all(&target_dir);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// End-to-end through the op queue: checkpoint lands first, files are
+    /// gone, generation bumps, and the checkpoint is listed afterwards.
+    #[test]
+    fn clean_op_checkpoints_then_deletes_and_bumps_generation() {
+        let root = temp_repo("e2e");
+        std::fs::write(root.join("junk.log"), b"x").unwrap();
+        std::fs::write(root.join("keep.txt"), b"x").unwrap();
+
+        let manager = RepoManager::new();
+        let info = manager.open_unwatched(&root).unwrap();
+        let handle = manager.get(&info.repo_id).unwrap();
+        let before = handle.generation();
+
+        let removed = clean_op(
+            &handle,
+            vec!["junk.log".to_string()],
+            "pre-clean".to_string(),
+        )
+        .blocking_recv()
+        .expect("queue alive")
+        .expect("clean succeeds");
+        assert_eq!(removed, 1);
+        assert!(!root.join("junk.log").exists());
+        assert!(root.join("keep.txt").exists());
+        assert_eq!(handle.generation(), before + 1, "generation bumps");
+
+        // The undo point exists and names the reason.
+        let engine = Libgit2Engine::new();
+        let checkpoints = {
+            let repo = handle.repo();
+            let repo = repo.lock();
+            engine.checkpoints_impl(&repo).unwrap()
+        };
+        assert!(
+            checkpoints.iter().any(|cp| cp.reason == "pre-clean"),
+            "pre-clean checkpoint present: {checkpoints:?}"
+        );
+
+        manager.close(&info.repo_id);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn clean_op_rejects_escaping_paths_without_checkpoint_or_deletion() {
+        let root = temp_repo("reject");
+        std::fs::write(root.join("junk.log"), b"x").unwrap();
+
+        let manager = RepoManager::new();
+        let info = manager.open_unwatched(&root).unwrap();
+        let handle = manager.get(&info.repo_id).unwrap();
+
+        let err = clean_op(
+            &handle,
+            vec!["../evil".to_string()],
+            "pre-clean".to_string(),
+        )
+        .blocking_recv()
+        .expect("queue alive")
+        .unwrap_err();
+        assert!(err.contains(".."), "got: {err}");
+        assert!(root.join("junk.log").exists(), "file survived the reject");
+
+        // No checkpoint was taken for the rejected op.
+        let engine = Libgit2Engine::new();
+        let checkpoints = {
+            let repo = handle.repo();
+            let repo = repo.lock();
+            engine.checkpoints_impl(&repo).unwrap()
+        };
+        assert!(
+            !checkpoints.iter().any(|cp| cp.reason == "pre-clean"),
+            "no checkpoint on rejected clean: {checkpoints:?}"
+        );
+
+        manager.close(&info.repo_id);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// M4 (lane F3): submodule management + gitignore quick-add.
+//
+// `submodules` is a plain read (M1 read path: repo mutex + spawn_blocking);
+// `submodule_update` / `submodule_sync` are mutations on the serial op queue
+// (contracts.md M4: queue kind `submodule`); `gitignore_add` is a pure
+// workdir file write (no git objects touched — the FS-only twin of
+// `repo_read_file`'s no-mutex shortcut), and `gitignore_templates` is a
+// static builtin list with no repo involved.
+// ---------------------------------------------------------------------------
+
+use crate::engine::types::SubmoduleInfo;
+
+/// One curated builtin gitignore template (the `gitignore_templates` reply,
+/// mirroring the contracts.md shape `{name, description, patterns}`).
+/// `patterns` is ONE newline-joined `.gitignore` snippet (no trailing
+/// newline); the FE applies it line-by-line via `gitignore_add`.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct GitignoreTemplate {
+    pub name: String,
+    pub description: String,
+    pub patterns: String,
+}
+
+/// The curated template list. Small and accurate on purpose: real
+/// `.gitignore` patterns only (GitHub gitignore / gitignore.io canon).
+pub fn gitignore_templates_list() -> Vec<GitignoreTemplate> {
+    let entry = |name: &str, description: &str, lines: &[&str]| GitignoreTemplate {
+        name: name.to_owned(),
+        description: description.to_owned(),
+        patterns: lines.join("\n"),
+    };
+    vec![
+        entry(
+            "Node",
+            "Node.js / npm / yarn / pnpm projects",
+            &[
+                "node_modules/",
+                "npm-debug.log*",
+                "yarn-debug.log*",
+                "yarn-error.log*",
+                "pnpm-debug.log*",
+                ".npm",
+                ".eslintcache",
+                "coverage/",
+            ],
+        ),
+        entry(
+            "Rust",
+            "Cargo projects (build output, backups)",
+            &["/target", "**/*.rs.bk"],
+        ),
+        entry(
+            "Python",
+            "CPython bytecode, packaging, tool caches",
+            &[
+                "__pycache__/",
+                "*.py[cod]",
+                "*.egg-info/",
+                ".eggs/",
+                "build/",
+                "dist/",
+                ".venv/",
+                "venv/",
+                ".pytest_cache/",
+                ".mypy_cache/",
+                ".ruff_cache/",
+            ],
+        ),
+        entry(
+            "C++",
+            "Object files, binaries, build directories",
+            &[
+                "*.o", "*.obj", "*.out", "*.a", "*.lib", "*.so", "*.so.*", "*.dylib", "*.dll",
+                "*.exe", "build/", "bin/", "Debug/", "Release/", "x64/", "x86/",
+            ],
+        ),
+        entry(
+            "Go",
+            "Compiled binaries, test artifacts, vendor tree",
+            &[
+                "*.exe", "*.exe~", "*.dll", "*.so", "*.dylib", "*.test", "*.out", "vendor/",
+            ],
+        ),
+        entry(
+            "Java",
+            "Class/jar output, Maven + Gradle artifacts",
+            &[
+                "*.class",
+                "*.jar",
+                "*.war",
+                "*.ear",
+                "target/",
+                "build/",
+                "out/",
+                ".gradle/",
+                ".settings/",
+                ".classpath",
+                ".project",
+            ],
+        ),
+        entry(
+            "macOS",
+            "Finder metadata and resource forks",
+            &[
+                ".DS_Store",
+                ".AppleDouble",
+                ".LSOverride",
+                "._*",
+                ".Spotlight-V100",
+                ".Trashes",
+                ".fseventsd",
+            ],
+        ),
+        entry(
+            "Windows",
+            "Explorer metadata and the recycle bin",
+            &[
+                "Thumbs.db",
+                "Thumbs.db:encryptable",
+                "ehthumbs.db",
+                "ehthumbs_vista.db",
+                "Desktop.ini",
+                "$RECYCLE.BIN/",
+                "*.lnk",
+            ],
+        ),
+        entry(
+            "VS Code",
+            "Editor settings except shared workspace files",
+            &[
+                ".vscode/*",
+                "!.vscode/settings.json",
+                "!.vscode/tasks.json",
+                "!.vscode/launch.json",
+                "!.vscode/extensions.json",
+                "*.code-workspace",
+            ],
+        ),
+        entry(
+            "JetBrains",
+            "IDE workspace files and build output",
+            &[".idea/", "*.iml", "*.ipr", "*.iws", "out/"],
+        ),
+        entry(
+            "Svelte",
+            "SvelteKit / Svelte build and cache dirs",
+            &[".svelte-kit/", "build/", "dist/", ".vercel", ".netlify"],
+        ),
+        entry(
+            "Vite",
+            "Vite output, caches, local env files",
+            &["dist/", "dist-ssr/", "*.local", ".vite/"],
+        ),
+        entry(
+            "Terraform",
+            "State, variable values, crash logs, overrides",
+            &[
+                "*.tfstate",
+                "*.tfstate.*",
+                "*.tfvars",
+                "*.tfvars.json",
+                ".terraform/",
+                "crash.log",
+                "crash.*.log",
+                "override.tf",
+                "override.tf.json",
+                "*_override.tf",
+                "*_override.tf.json",
+                ".terraformrc",
+                "terraform.rc",
+            ],
+        ),
+        entry(
+            "Unreal",
+            "Unreal Engine generated content",
+            &[
+                "Build/",
+                "Binaries/",
+                "DerivedDataCache/",
+                "Intermediate/",
+                "Saved/",
+                ".vs/",
+            ],
+        ),
+        entry(
+            "Unity",
+            "Unity library, temp, logs and build output",
+            &[
+                "[Ll]ibrary/",
+                "[Tt]emp/",
+                "[Oo]bj/",
+                "[Bb]uild/",
+                "[Bb]uilds/",
+                "[Ll]ogs/",
+                "[Uu]serSettings/",
+                "MemoryCaptures/",
+                "sysinfo.txt",
+                "crashlytics-build.properties",
+            ],
+        ),
+    ]
+}
+
+/// Append `pattern` to the repo-root `.gitignore` (creating the file when
+/// missing). Idempotent: an existing exact line match is left untouched.
+/// Validation: the pattern must be non-empty and a single line.
+fn gitignore_add_sync(root: &Path, pattern: &str) -> Result<(), String> {
+    if pattern.contains('\n') || pattern.contains('\r') {
+        return Err("gitignore pattern must be a single line".to_string());
+    }
+    let pattern = pattern.trim();
+    if pattern.is_empty() {
+        return Err("gitignore pattern is empty".to_string());
+    }
+    let file = root.join(".gitignore");
+    let existing = std::fs::read_to_string(&file).unwrap_or_default();
+    if existing.lines().any(|line| line == pattern) {
+        return Ok(()); // already present (exact line match)
+    }
+    let mut updated = existing;
+    if !updated.is_empty() && !updated.ends_with('\n') {
+        updated.push('\n');
+    }
+    updated.push_str(pattern);
+    updated.push('\n');
+    std::fs::write(&file, updated).map_err(|e| format!("writing .gitignore failed: {e}"))
+}
+
+/// List every submodule with checked-out vs recorded state (contracts.md:
+/// `SubmoduleInfo[]`; status strings mirror `git status` submodule wording).
+#[tauri::command(rename_all = "snake_case")]
+pub async fn submodules(
+    repo_id: RepoId,
+    state: State<'_, RepoManager>,
+) -> Result<Vec<SubmoduleInfo>, String> {
+    let handle = get_handle(&state, &repo_id)?;
+    let engine = Libgit2Engine::new();
+    let repo = handle.repo();
+    tauri::async_runtime::spawn_blocking(move || {
+        let repo = repo.lock();
+        engine.submodules_impl(&repo).map_err(engine_err)
+    })
+    .await
+    .map_err(|e| format!("submodules task failed: {e}"))?
+}
+
+/// `git submodule update [--init] [--recursive] <path>` for one submodule.
+/// Network fetches (missing clone / missing target commit) route credential
+/// prompts through the auth broker attributed to this repo.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn submodule_update(
+    repo_id: RepoId,
+    path: String,
+    init: bool,
+    recursive: bool,
+    state: State<'_, RepoManager>,
+) -> Result<(), String> {
+    let handle = get_handle(&state, &repo_id)?;
+    let engine = Libgit2Engine::new();
+    finish_op(enqueue_mutation(&handle, "submodule", move |_ctx, repo| {
+        crate::auth::with_netop_context(&repo_id, || {
+            engine.submodule_update_impl(repo, &path, init, recursive)
+        })
+    }))
+    .await
+}
+
+/// `git submodule sync [path]`: rewrite the submodule URL from `.gitmodules`
+/// into the repository config. `None`/empty `path` syncs all submodules.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn submodule_sync(
+    repo_id: RepoId,
+    path: Option<String>,
+    state: State<'_, RepoManager>,
+) -> Result<(), String> {
+    let handle = get_handle(&state, &repo_id)?;
+    let engine = Libgit2Engine::new();
+    finish_op(enqueue_mutation(&handle, "submodule", move |_ctx, repo| {
+        engine.submodule_sync_impl(repo, path.as_deref())
+    }))
+    .await
+}
+
+/// Append one pattern to the repo-root `.gitignore` (created when missing).
+/// The watcher picks the change up; the FE refreshes status afterwards.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn gitignore_add(
+    repo_id: RepoId,
+    pattern: String,
+    state: State<'_, RepoManager>,
+) -> Result<(), String> {
+    let handle = get_handle(&state, &repo_id)?;
+    let root = handle.root.clone();
+    tauri::async_runtime::spawn_blocking(move || gitignore_add_sync(&root, &pattern))
+        .await
+        .map_err(|e| format!("gitignore_add task failed: {e}"))?
+}
+
+/// The curated builtin gitignore templates (`{name, description, patterns}`).
+#[tauri::command(rename_all = "snake_case")]
+pub fn gitignore_templates() -> Vec<GitignoreTemplate> {
+    gitignore_templates_list()
+}
+
+#[cfg(test)]
+mod m4_gitignore_tests {
+    use super::*;
+
+    fn scratch(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("mygitui-gi-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn gitignore_add_creates_appends_and_dedups() {
+        let dir = scratch("ok");
+        // Creates the file.
+        gitignore_add_sync(&dir, "node_modules/").unwrap();
+        assert_eq!(
+            std::fs::read_to_string(dir.join(".gitignore")).unwrap(),
+            "node_modules/\n"
+        );
+        // Appends, normalizing a missing trailing newline first.
+        std::fs::write(dir.join(".gitignore"), "target").unwrap();
+        gitignore_add_sync(&dir, "*.log").unwrap();
+        assert_eq!(
+            std::fs::read_to_string(dir.join(".gitignore")).unwrap(),
+            "target\n*.log\n"
+        );
+        // Exact-line dedup is a no-op (whitespace-trimmed pattern).
+        gitignore_add_sync(&dir, "  *.log  ").unwrap();
+        assert_eq!(
+            std::fs::read_to_string(dir.join(".gitignore")).unwrap(),
+            "target\n*.log\n"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn gitignore_add_rejects_empty_and_newlines() {
+        let dir = scratch("bad");
+        assert!(gitignore_add_sync(&dir, "   ").is_err());
+        assert!(gitignore_add_sync(&dir, "a\nb").is_err());
+        assert!(gitignore_add_sync(&dir, "a\r\nb").is_err());
+        assert!(
+            !dir.join(".gitignore").exists(),
+            "nothing written on rejection"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn templates_are_curated_unique_and_wellformed() {
+        let templates = gitignore_templates_list();
+        assert!(templates.len() >= 15, "curated list: {}", templates.len());
+        let mut names: Vec<&str> = templates.iter().map(|t| t.name.as_str()).collect();
+        let count = names.len();
+        names.sort_unstable();
+        names.dedup();
+        assert_eq!(names.len(), count, "template names must be unique");
+        for t in &templates {
+            assert!(!t.description.is_empty(), "{}: description", t.name);
+            assert!(!t.patterns.is_empty(), "{}: patterns", t.name);
+            assert!(!t.patterns.contains('\r'), "{}: no CR", t.name);
+            assert!(
+                !t.patterns.ends_with('\n'),
+                "{}: no trailing newline (FE joins lines)",
+                t.name
+            );
+            assert!(
+                t.patterns.lines().all(|l| !l.trim().is_empty()),
+                "{}: no blank pattern lines",
+                t.name
+            );
+        }
+        // Serializes with the documented field names.
+        let json = serde_json::to_value(&templates).unwrap();
+        assert_eq!(json[0]["name"], templates[0].name);
+        assert_eq!(json[0]["patterns"], templates[0].patterns);
+    }
+}

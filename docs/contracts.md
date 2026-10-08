@@ -134,3 +134,9 @@ Checkpoints live at `refs/mygitui/checkpoints/<ts>-<reason>`; worktree state is 
 
 Custom actions config lives FE-side (localStorage `mygitui.actions`), scope global or per-repo.
 Layout presets FE-side (localStorage `mygitui.layouts` + per-repo overlay `mygitui.layouts.<root>`).
+
+Gitignore quick-add: `gitignore_templates` ships a curated builtin list (Node,
+Rust, Python, C++, Go, Java, macOS, Windows, VS Code, JetBrains, Svelte, Vite,
+Terraform, Unreal, Unity); `patterns` is one newline-joined `.gitignore`
+snippet, applied line-by-line via `gitignore_add` (idempotent exact-line
+append at the repo root; single-line patterns only).
