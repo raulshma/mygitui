@@ -35,8 +35,10 @@ pub fn run() {
         .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
             // A second launch (`mygitui <path>`) forwards its argv to the
             // running instance; the frontend opens it as a repo tab (M1).
+            // argv[0] is this executable's own path — never a repo argument.
+            let args: Vec<String> = argv.iter().skip(1).cloned().collect();
             if let Some(window) = app.get_webview_window("main") {
-                let _ = window.emit("cli-args", argv);
+                let _ = window.emit("cli-args", args);
                 let _ = window.set_focus();
             }
         }))
@@ -98,6 +100,7 @@ pub fn run() {
             ipc_commands::guard_checkpoint,
             ipc_commands::merge_branch,
             ipc_commands::merge_abort,
+            ipc_commands::sequencer_abort,
             ipc_commands::conflicts,
             ipc_commands::conflict_resolve,
             ipc_commands::cherry_pick,

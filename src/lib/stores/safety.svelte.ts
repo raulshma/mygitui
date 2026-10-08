@@ -14,6 +14,7 @@
 import { checkpoints, guardCheckpoint } from "$lib/ipc/client";
 import type { CheckpointInfo, RepoId } from "$lib/ipc/types";
 import { sortNewestFirst } from "$lib/components/safety/safetyModel";
+import { untrack } from "svelte";
 
 /** Per-repo undo state (repos with no data yet have no entry). */
 export interface SafetyState {
@@ -86,9 +87,13 @@ export class SafetyStore {
   }
 
   #patch(repoId: RepoId, patch: Partial<SafetyState>): void {
+    // Read the record untracked: load() runs inside component effects, and a
+    // tracked read here would make each patch write re-trigger the effect
+    // that called it — an infinite checkpoints IPC loop.
+    const prev = untrack(() => this.states);
     this.states = {
-      ...this.states,
-      [repoId]: { ...EMPTY, ...this.states[repoId], ...patch },
+      ...prev,
+      [repoId]: { ...EMPTY, ...prev[repoId], ...patch },
     };
   }
 }

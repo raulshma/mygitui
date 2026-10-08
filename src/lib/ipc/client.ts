@@ -648,6 +648,10 @@ export async function mergeAbort(repoId: string): Promise<void> {
   return invokeTauri("merge_abort", { repo_id: repoId });
 }
 
+export async function sequencerAbort(repoId: string): Promise<void> {
+  return invokeTauri("sequencer_abort", { repo_id: repoId });
+}
+
 export async function conflicts(repoId: string): Promise<ConflictFile[]> {
   return invokeTauri("conflicts", { repo_id: repoId });
 }

@@ -42,7 +42,9 @@
 //!   committed (reported in `new_head`); the remaining shas are NOT applied
 //!   — the FE resolves + commits the conflict, then re-drives with the shas
 //!   AFTER the conflicted one. A clean run drops libgit2's sequencer markers
-//!   when it finishes.
+//!   when it finishes. `sequencer_abort` cancels an interrupted pick/revert:
+//!   workdir + index return to HEAD (already-committed picks of this leg
+//!   stay) and the marker files are dropped.
 //! * `reset` — `Soft` moves the branch/HEAD ref only; `Mixed` also resets the
 //!   index to the target tree; `Hard` also checks the target tree out into
 //!   the workdir (force). Works on unborn and detached HEAD.
@@ -255,13 +257,61 @@ fn render_conflict_markers(path: &str, ours: &[u8], theirs: &[u8]) -> Vec<u8> {
 
 /// Best-effort removal of our sequencer marker files. Only safe when no
 /// merge is running (an active merge owns MERGE_MSG).
-fn clear_sequencer_files(repo: &Repository) {
+pub(crate) fn clear_sequencer_files(repo: &Repository) {
     if merge_in_progress(repo) {
         return;
     }
     for name in ["CHERRY_PICK_HEAD", "REVERT_HEAD", "MERGE_MSG"] {
         let _ = std::fs::remove_file(repo.path().join(name));
     }
+}
+
+/// True while a cherry-pick or revert is interrupted (marker files or the
+/// matching libgit2 repository state) and `sequencer_abort` may run.
+fn sequencer_in_progress(repo: &Repository) -> bool {
+    let gitdir = repo.path();
+    matches!(
+        repo.state(),
+        RepositoryState::CherryPick
+            | RepositoryState::CherryPickSequence
+            | RepositoryState::Revert
+            | RepositoryState::RevertSequence
+    ) || gitdir.join("CHERRY_PICK_HEAD").exists()
+        || gitdir.join("REVERT_HEAD").exists()
+}
+
+/// Undo the workdir side of an interrupted operation: every path it staged
+/// (auto-merged or conflicted) goes back to its HEAD content, files it added
+/// are removed — `git merge --abort` semantics for exactly the files the
+/// operation touched. Unrelated local changes are kept. Shared by
+/// `merge_abort` and `sequencer_abort`.
+fn restore_workdir_to_head(repo: &Repository, head: &git2::Commit<'_>) -> EngineResult<()> {
+    let head_tree = head.tree()?;
+    let index = repo.index()?;
+    let diff = repo.diff_tree_to_index(Some(&head_tree), Some(&index), None)?;
+    let mut touched: Vec<std::path::PathBuf> = Vec::new();
+    for delta in diff.deltas() {
+        if let Some(path) = delta.new_file().path().or_else(|| delta.old_file().path()) {
+            touched.push(path.to_path_buf());
+        }
+    }
+    drop(diff);
+    drop(index);
+    for path in &touched {
+        match head_tree.get_path(path) {
+            Ok(entry) => {
+                let content = repo.find_blob(entry.id())?.content().to_vec();
+                write_workdir_file(repo, path.to_string_lossy().as_ref(), &content)?;
+            }
+            // Added by the operation, absent from HEAD: drop the workdir file.
+            Err(_) => {
+                if let Some(workdir) = repo.workdir() {
+                    let _ = std::fs::remove_file(workdir.join(path));
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -300,6 +350,38 @@ fn revert_message(sha: &str, commit: &git2::Commit<'_>) -> String {
         .map(str::to_owned)
         .unwrap_or_else(fallback);
     format!("Revert \"{summary}\"\n\nThis reverts commit {sha}.\n")
+}
+
+impl Libgit2Engine {
+    /// Abort an interrupted cherry-pick/revert: the workdir and index go back
+    /// to HEAD (the state before the conflicted step — picks that already
+    /// committed in this leg stay), then the marker files
+    /// (CHERRY_PICK_HEAD / REVERT_HEAD / MERGE_MSG) are removed.
+    /// `git cherry-pick --abort` also rewinds picks that already landed; that
+    /// needs the CLI sequencer's persisted pre-run HEAD, which our apply loop
+    /// doesn't keep — each FE re-drive is a fresh run, so the leg is the
+    /// abortable unit here.
+    pub(crate) fn sequencer_abort_impl(&self, repo: &Repository) -> EngineResult<()> {
+        if merge_in_progress(repo) {
+            return Err(EngineError::Invalid(
+                "a merge is in progress (abort the merge first)".into(),
+            ));
+        }
+        if !sequencer_in_progress(repo) {
+            return Err(EngineError::Invalid(
+                "no cherry-pick or revert in progress".into(),
+            ));
+        }
+        let head = head_commit(repo)?
+            .ok_or_else(|| EngineError::Invalid("cannot abort: HEAD is unborn".into()))?;
+
+        restore_workdir_to_head(repo, &head)?;
+
+        // Index := HEAD, then drop the sequencer markers (safe: no merge runs).
+        repo.reset_default(Some(head.as_object()), ["*"])?;
+        clear_sequencer_files(repo);
+        Ok(())
+    }
 }
 
 fn sequencer_apply(
@@ -461,36 +543,8 @@ impl GitEngineM3 for Libgit2Engine {
             return Err(EngineError::Invalid("no merge in progress".into()));
         }
         let head = repo.head()?.peel_to_commit()?;
-        let head_tree = head.tree()?;
 
-        // Undo what the merge wrote into the workdir: every path it staged
-        // (auto-merged or conflicted) goes back to its HEAD content, files it
-        // added are removed — `git merge --abort` semantics for exactly the
-        // files the merge touched. Unrelated local changes are kept.
-        let index = repo.index()?;
-        let diff = repo.diff_tree_to_index(Some(&head_tree), Some(&index), None)?;
-        let mut touched: Vec<std::path::PathBuf> = Vec::new();
-        for delta in diff.deltas() {
-            if let Some(path) = delta.new_file().path().or_else(|| delta.old_file().path()) {
-                touched.push(path.to_path_buf());
-            }
-        }
-        drop(diff);
-        drop(index);
-        for path in &touched {
-            match head_tree.get_path(path) {
-                Ok(entry) => {
-                    let content = repo.find_blob(entry.id())?.content().to_vec();
-                    write_workdir_file(repo, path.to_string_lossy().as_ref(), &content)?;
-                }
-                // Added by the merge, absent from HEAD: drop the workdir file.
-                Err(_) => {
-                    if let Some(workdir) = repo.workdir() {
-                        let _ = std::fs::remove_file(workdir.join(path));
-                    }
-                }
-            }
-        }
+        restore_workdir_to_head(repo, &head)?;
 
         // Index := HEAD (mixed), then drop MERGE_HEAD/MERGE_MSG/MERGE_MODE.
         repo.reset_default(Some(head.as_object()), ["*"])?;
@@ -548,6 +602,10 @@ impl GitEngineM3 for Libgit2Engine {
 
     fn cherry_pick(&self, repo: &Repository, shas: &[String]) -> EngineResult<MergeResult> {
         sequencer_apply(repo, shas, Sequencer::CherryPick)
+    }
+
+    fn sequencer_abort(&self, repo: &Repository) -> EngineResult<()> {
+        self.sequencer_abort_impl(repo)
     }
 
     fn revert(&self, repo: &Repository, shas: &[String]) -> EngineResult<MergeResult> {

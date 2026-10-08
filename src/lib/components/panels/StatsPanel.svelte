@@ -369,6 +369,7 @@
     gap: 0.5rem;
     padding: 0.5rem 0.75rem;
     overflow-y: auto;
+    overflow-x: hidden;
     font-size: 0.75rem;
     background: var(--m3-surface);
     color: var(--m3-on-surface);
@@ -376,14 +377,20 @@
 
   .stats-head {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
     gap: 0.375rem;
     flex: none;
+    min-width: 0;
   }
 
   .title {
     font-weight: 500;
     margin-right: 0.25rem;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .spacer {
@@ -392,6 +399,8 @@
 
   input.author {
     width: 11rem;
+    min-width: 5rem;
+    flex: 0 1 auto;
     padding: 0.15rem 0.45rem;
     font-size: 0.72rem;
     color: var(--m3-on-surface);

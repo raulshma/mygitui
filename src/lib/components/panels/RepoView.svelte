@@ -18,8 +18,8 @@
    * M3 conflict flow (unchanged): while `repo_status` reports a merge /
    * rebase / sequencer operation in progress, the per-repo conflicts cache
    * polls `conflicts(repoId)`; when files come back, a banner across the
-   * top offers Resolve (ConflictEditor overlay) and Abort (merge_abort, or
-   * rebase_abort when the rebase flag is up).
+   * top offers Resolve (ConflictEditor overlay) and Abort (rebase_abort /
+   * merge_abort / sequencer_abort, chosen by the in-progress op).
    */
   import type { Snippet } from "svelte";
   import type {
@@ -28,7 +28,12 @@
     RepoStatus,
     StatusEntry,
   } from "$lib/ipc/types";
-  import { mergeAbort, rebaseAbort, streamDiff } from "$lib/ipc/client";
+  import {
+    mergeAbort,
+    rebaseAbort,
+    sequencerAbort,
+    streamDiff,
+  } from "$lib/ipc/client";
   import StatusPanel from "$lib/components/panels/StatusPanel.svelte";
   import BranchPanel from "$lib/components/panels/BranchPanel.svelte";
   import RemotePanel from "$lib/components/panels/RemotePanel.svelte";
@@ -398,7 +403,8 @@
     conflictEditorOpen = false;
   }
 
-  /** Aborts the in-progress operation (rebase → rebase_abort, else merge_abort). */
+  /** Aborts the in-progress operation (rebase / merge / sequencer each have
+   *  their own backend command — `conflictAbortCommand`). */
   async function onAbort(): Promise<void> {
     if (!opSource || aborting) return;
     const label = conflictSourceLabel(opSource);
@@ -414,6 +420,8 @@
     try {
       if (command === "rebase_abort") {
         await rebaseAbort(repoId);
+      } else if (command === "sequencer_abort") {
+        await sequencerAbort(repoId);
       } else {
         await mergeAbort(repoId);
       }
@@ -663,6 +671,11 @@
     flex-direction: column;
     height: 100%;
     min-height: 0;
+    /* Never wider than the tab area: without this the flex min-width:auto
+       floor lets panel content (wide history rows, tables) stretch the whole
+       workspace past the window edge. Panels clip/scroll inside their panes. */
+    min-width: 0;
+    overflow: hidden;
   }
 
   .repo-header {
@@ -674,10 +687,15 @@
     background: var(--m3-surface-container, var(--m3-surface));
     font-size: 0.8125rem;
     flex: none;
+    min-width: 0;
   }
 
   .repo-name {
     font-weight: 500;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .branch {
@@ -734,7 +752,8 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    flex: none;
+    flex: 0 1 auto;
+    min-width: 0;
     max-width: 22rem;
   }
 

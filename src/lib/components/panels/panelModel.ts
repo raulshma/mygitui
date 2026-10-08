@@ -62,8 +62,8 @@ export type ConflictSource = "rebase" | "merge" | "sequencer";
 /**
  * Reads the in-progress op off a status snapshot (`null` when the working
  * copy is clean of any in-progress operation). Rebase wins over the
- * sequencer flag (a rebase drives the sequencer, and only rebase can be
- * aborted with `rebase_abort`).
+ * sequencer flag (a rebase drives the sequencer). Each source aborts with
+ * its own backend command — see `conflictAbortCommand`.
  */
 export function conflictSource(status: RepoStatus): ConflictSource | null {
   if (status.rebasing) return "rebase";
@@ -84,11 +84,25 @@ export function conflictSourceLabel(source: ConflictSource): string {
   }
 }
 
-/** Which backend command aborts the in-progress op (`rebase` → rebase_abort). */
+/** Which backend command aborts the in-progress op. */
+export type ConflictAbortCommand =
+  | "rebase_abort"
+  | "merge_abort"
+  | "sequencer_abort";
+
+/** Backend command that aborts the in-progress op (`rebase` → rebase_abort,
+ *  sequencer (cherry-pick/revert) → sequencer_abort, else merge_abort). */
 export function conflictAbortCommand(
   source: ConflictSource,
-): "rebase_abort" | "merge_abort" {
-  return source === "rebase" ? "rebase_abort" : "merge_abort";
+): ConflictAbortCommand {
+  switch (source) {
+    case "rebase":
+      return "rebase_abort";
+    case "sequencer":
+      return "sequencer_abort";
+    case "merge":
+      return "merge_abort";
+  }
 }
 
 // ---------------------------------------------------------------------------

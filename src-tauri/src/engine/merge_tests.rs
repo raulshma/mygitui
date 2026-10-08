@@ -9,7 +9,7 @@ use git2::{IndexAddOption, Repository, RepositoryInitOptions, RepositoryState};
 
 use super::git_engine::{EngineError, GitEngine, GitEngineM3};
 use super::libgit2::Libgit2Engine;
-use super::types::{ConflictResolution, MergeOutcome, ResetKind};
+use super::types::{CommitOptions, ConflictResolution, MergeOutcome, ResetKind};
 
 const ENGINE: Libgit2Engine = Libgit2Engine;
 
@@ -739,6 +739,156 @@ fn revert_conflict_writes_sequencer_state() {
     assert_eq!(fx.repo.state(), RepositoryState::Revert);
     let marked = workdir_text(&fx.repo, "file.txt");
     assert!(marked.contains("<<<<<<<"), "markers in workdir: {marked:?}");
+}
+
+// ---------------------------------------------------------------------------
+// sequencer_abort
+// ---------------------------------------------------------------------------
+
+/// Conflict setup shared by the abort tests: main edits `shared.txt` after
+/// branching, picking the feature commit conflicts.
+fn pick_conflict_fixture(name: &str) -> (Fixture, String) {
+    let fx = init_fixture(name);
+    commit_file(&fx.repo, "shared.txt", "base\n", "base");
+    ENGINE
+        .branch_create(&fx.repo, "feature", None, true)
+        .expect("branch feature");
+    let x = commit_file(&fx.repo, "shared.txt", "feature\n", "feature edit");
+    ENGINE
+        .branch_switch(&fx.repo, "main", false)
+        .expect("switch back");
+    commit_file(&fx.repo, "shared.txt", "main\n", "main edit");
+    (fx, x)
+}
+
+fn assert_sequencer_cleared(fx: &Fixture) {
+    assert!(!fx.repo.path().join("CHERRY_PICK_HEAD").exists());
+    assert!(!fx.repo.path().join("REVERT_HEAD").exists());
+    assert!(!fx.repo.path().join("MERGE_MSG").exists());
+    assert_eq!(fx.repo.state(), RepositoryState::Clean);
+    assert!(
+        ENGINE.conflicts(&fx.repo).expect("conflicts").is_empty(),
+        "index must be conflict-free after abort"
+    );
+    let status = ENGINE.status(&fx.repo).expect("status");
+    assert!(!status.sequencer, "sequencer flag must drop");
+}
+
+#[test]
+fn cherry_pick_abort_restores_pre_pick_state() {
+    let (fx, x) = pick_conflict_fixture("pick-abort");
+
+    let result = ENGINE
+        .cherry_pick(&fx.repo, std::slice::from_ref(&x))
+        .expect("cherry-pick");
+    assert!(matches!(result.outcome, MergeOutcome::Conflicted));
+    assert!(
+        workdir_text(&fx.repo, "shared.txt").contains("<<<<<<<"),
+        "conflict markers expected before abort"
+    );
+
+    ENGINE.sequencer_abort(&fx.repo).expect("abort");
+
+    assert_sequencer_cleared(&fx);
+    // Workdir and index are back at HEAD ("main\n"); the pick left no commit.
+    assert_eq!(workdir_text(&fx.repo, "shared.txt"), "main\n");
+    let head = fx.repo.head().expect("head").peel_to_commit().expect("commit");
+    assert_eq!(head.message().ok(), Some("main edit"));
+    let index = fx.repo.index().expect("index");
+    assert!(!index.has_conflicts());
+    let entry = index.get_path(Path::new("shared.txt"), 0).expect("staged");
+    let blob = fx.repo.find_blob(entry.id).expect("blob");
+    assert_eq!(String::from_utf8_lossy(blob.content()), "main\n");
+
+    // Nothing left in progress: a second abort reports that.
+    let err = ENGINE.sequencer_abort(&fx.repo).expect_err("second abort");
+    assert!(
+        matches!(err, EngineError::Invalid(ref m) if m.contains("no cherry-pick")),
+        "unexpected error: {err:?}"
+    );
+}
+
+#[test]
+fn cherry_pick_abort_keeps_landed_picks_of_the_leg() {
+    let fx = init_fixture("pick-abort-sequence");
+    commit_file(&fx.repo, "a.txt", "a base\n", "base a");
+    commit_file(&fx.repo, "b.txt", "b base\n", "base b");
+    ENGINE
+        .branch_create(&fx.repo, "feature", None, true)
+        .expect("branch feature");
+    let x1 = commit_file(&fx.repo, "a.txt", "a feature\n", "feature: a");
+    let x2 = commit_file(&fx.repo, "b.txt", "b feature\n", "feature: b");
+    ENGINE
+        .branch_switch(&fx.repo, "main", false)
+        .expect("switch back");
+    commit_file(&fx.repo, "b.txt", "b main\n", "main: b");
+
+    // x1 lands, x2 conflicts.
+    let result = ENGINE
+        .cherry_pick(&fx.repo, &[x1, x2])
+        .expect("cherry-pick sequence");
+    assert!(matches!(result.outcome, MergeOutcome::Conflicted));
+
+    ENGINE.sequencer_abort(&fx.repo).expect("abort");
+
+    assert_sequencer_cleared(&fx);
+    // The leg's landed pick stays; the conflicted step is fully undone.
+    let head = fx.repo.head().expect("head").peel_to_commit().expect("commit");
+    assert_eq!(head.message().ok(), Some("feature: a"));
+    assert_eq!(workdir_text(&fx.repo, "a.txt"), "a feature\n");
+    assert_eq!(workdir_text(&fx.repo, "b.txt"), "b main\n");
+}
+
+#[test]
+fn revert_abort_restores_pre_revert_state() {
+    let fx = init_fixture("revert-abort");
+    commit_file(&fx.repo, "file.txt", "one\n", "first");
+    let second = commit_file(&fx.repo, "file.txt", "two\n", "second");
+    commit_file(&fx.repo, "file.txt", "three\n", "third");
+
+    let result = ENGINE
+        .revert(&fx.repo, std::slice::from_ref(&second))
+        .expect("revert attempt");
+    assert!(matches!(result.outcome, MergeOutcome::Conflicted));
+
+    ENGINE.sequencer_abort(&fx.repo).expect("abort");
+
+    assert_sequencer_cleared(&fx);
+    assert_eq!(workdir_text(&fx.repo, "file.txt"), "three\n");
+    let head = fx.repo.head().expect("head").peel_to_commit().expect("commit");
+    assert_eq!(head.message().ok(), Some("third"));
+}
+
+#[test]
+fn commit_after_resolved_pick_clears_sequencer_state() {
+    let (fx, x) = pick_conflict_fixture("pick-resolve-commit");
+
+    let result = ENGINE
+        .cherry_pick(&fx.repo, std::slice::from_ref(&x))
+        .expect("cherry-pick");
+    assert!(matches!(result.outcome, MergeOutcome::Conflicted));
+
+    // Resolve with edited content (the FE editor path), which stages the
+    // path, then commit like the resolve flow does.
+    ENGINE
+        .conflict_resolve(
+            &fx.repo,
+            "shared.txt",
+            ConflictResolution::Ours,
+            Some(b"merged\n" as &[u8]),
+        )
+        .expect("resolve");
+    ENGINE
+        .commit_impl(&fx.repo, &CommitOptions {
+            message: "main edit (resolved pick)".into(),
+            amend: false,
+            no_verify: true,
+            allow_empty: false,
+            author: None,
+        })
+        .expect("commit");
+
+    assert_sequencer_cleared(&fx);
 }
 
 // ---------------------------------------------------------------------------

@@ -48,8 +48,12 @@
  *   `resetRepo`.
  * - `popout.ts` — WebviewWindow popouts for `diff` / `history`
  *   (`?panel=<id>&repo=<id>` query contract, guarded outside Tauri).
+ * - `splitPrefs.ts` — persisted ratios for panel-internal splitters
+ *   (`SplitPane`: history list ↔ detail, detail meta ↔ diff).
  * - `../components/layout/SplitContainer.svelte` — recursive renderer for
  *   the tree (draggable + keyboard-accessible dividers).
+ * - `../components/layout/SplitPane.svelte` — generic two-pane splitter for
+ *   panel-internal resize handles (same divider UX, local ratio state).
  * - `../components/layout/TabGroup.svelte` — tab-group leaf renderer
  *   (tablist + tab context menu + "+ Add panel").
  *
@@ -58,11 +62,14 @@
  * - `mygitui.layouts` — user presets (`LayoutPreset[]`).
  * - `mygitui.layouts.overlay.<repoRoot>` — per-repo overlay
  *   (`{ presetId?, treeOverride?, ratios?, activeTabs?, diffRatio? }`).
+ * - `mygitui.split.<name>` — panel-internal splitter ratios (global prefs;
+ *   see `splitPrefs.ts`).
  *
  * All writes go through a 150 ms debounce; storage is injectable for tests.
  */
 export * from "./layoutModel";
 export * from "./layout.svelte";
+export * from "./splitPrefs";
 export {
   openPanelPopout,
   parsePopoutQuery,

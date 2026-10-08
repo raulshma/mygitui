@@ -249,6 +249,11 @@ pub trait GitEngineM3: Send + Sync {
         Err(EngineError::Unsupported("revert".into()))
     }
 
+    /// Abort an interrupted cherry-pick/revert (`git cherry-pick --abort`).
+    fn sequencer_abort(&self, _repo: &Repository) -> EngineResult<()> {
+        Err(EngineError::Unsupported("sequencer_abort".into()))
+    }
+
     fn reset(&self, _repo: &Repository, _kind: ResetKind, _to: &str) -> EngineResult<()> {
         Err(EngineError::Unsupported("reset".into()))
     }

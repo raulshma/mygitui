@@ -124,7 +124,7 @@ describe("conflictSource", () => {
     expect(conflictSourceLabel("sequencer")).toBe("Cherry-pick/revert");
     expect(conflictAbortCommand("rebase")).toBe("rebase_abort");
     expect(conflictAbortCommand("merge")).toBe("merge_abort");
-    expect(conflictAbortCommand("sequencer")).toBe("merge_abort");
+    expect(conflictAbortCommand("sequencer")).toBe("sequencer_abort");
   });
 });
 

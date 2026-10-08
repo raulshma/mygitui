@@ -259,7 +259,7 @@ impl Libgit2Engine {
         };
         let parent_refs: Vec<&git2::Commit<'_>> = parents.iter().collect();
 
-        if opts.amend {
+        let oid = if opts.amend {
             // `git_commit_create` refuses to move a ref onto a commit whose
             // first parent is not the current tip — and amending a ROOT
             // commit has no parents at all. So: write the object first,
@@ -281,20 +281,28 @@ impl Libgit2Engine {
                 .unwrap_or("HEAD")
                 .to_string();
             repo.reference(&ref_name, oid, true, "commit: amend")?;
-            Ok(oid.to_string())
+            oid
         } else {
-            let oid = repo.commit(
+            repo.commit(
                 Some("HEAD"),
                 &author,
                 &committer,
                 &opts.message,
                 &tree,
                 &parent_refs,
-            )?;
-            Ok(oid.to_string())
-        }
-    }
+            )?
+        };
 
+        // `git commit` consumes the in-progress operation's state
+        // (CHERRY_PICK_HEAD / REVERT_HEAD / MERGE_MSG); libgit2's commit does
+        // not. A cherry-pick/revert conflict resolved through this path must
+        // terminate the sequencer, or RepoStatus::sequencer stays lit
+        // forever. (A real merge stays until its MERGE_HEAD becomes the
+        // second parent — documented gap in merge.rs; the helper is a no-op
+        // while a merge is in progress.)
+        super::merge::clear_sequencer_files(repo);
+        Ok(oid.to_string())
+    }
     pub(crate) fn signing_info_impl(&self, repo: &Repository) -> EngineResult<SigningInfo> {
         let config = repo.config()?;
         let active = config.get_bool("commit.gpgsign").unwrap_or(false);

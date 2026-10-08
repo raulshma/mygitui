@@ -19,6 +19,9 @@
    *      clickable parents, and the commit's diff (repoDiff parent0 → sha,
    *      lazy + loading state) rendered in DiffViewer; per-file "Blame"
    *      swaps in a BlameView, and CompareBar results render here too.
+   *      Both boundaries are user-resizable via `SplitPane` — list ↔ detail
+   *      (stacked) and metadata ↔ diff (side by side) — with the ratios
+   *      persisted as global prefs (`splitPrefs`, `mygitui.split.*`).
    *
    * Data: one HistoryStore per mounted view (see `$lib/stores/history.svelte`)
    * started/destroyed in an `$effect` keyed on `repoId`.
@@ -36,6 +39,8 @@
   import { orderForCherryPick } from "$lib/components/rebase/plannerModel";
   import { HistoryStore } from "$lib/stores/history.svelte";
   import { tabStore } from "$lib/stores/tabs.svelte";
+  import SplitPane from "$lib/components/layout/SplitPane.svelte";
+  import { readSplitRatio, writeSplitRatio } from "$lib/layout/splitPrefs";
   import {
     classifyRef,
     formatDateTime,
@@ -78,6 +83,25 @@
   let detailFiles = $state<FileDiff[] | null>(null);
   let detailLoading = $state(false);
   let detailToken = 0;
+
+  // -- resizable panes (SplitPane ratios, persisted as global prefs) --------
+
+  /** Commit list fraction of the history panel (detail takes the rest). */
+  const DETAIL_RATIO_KEY = "history-detail";
+  const META_RATIO_KEY = "history-meta";
+  let detailRatio = $state(readSplitRatio(DETAIL_RATIO_KEY, 0.62));
+  /** Commit-metadata fraction of the detail pane (diff takes the rest). */
+  let metaRatio = $state(readSplitRatio(META_RATIO_KEY, 0.34));
+
+  function setDetailRatio(ratio: number): void {
+    detailRatio = ratio;
+    writeSplitRatio(DETAIL_RATIO_KEY, ratio);
+  }
+
+  function setMetaRatio(ratio: number): void {
+    metaRatio = ratio;
+    writeSplitRatio(META_RATIO_KEY, ratio);
+  }
 
   // -- commit actions (M3 E2) -------------------------------------------------
 
@@ -151,6 +175,17 @@
     pushScrollToCanvas();
     if (range.end >= total) store.loadMore();
   }
+
+  $effect(() => {
+    // Splitter drags resize the scroller without a scroll event: re-window
+    // the virtualizer as the box changes (guarded — ResizeObserver is
+    // absent in some test environments).
+    const el = scrollerEl;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => updateOwnRange());
+    observer.observe(el);
+    return () => observer.disconnect();
+  });
 
   /** Canvas reports its drawn window (incl. its overscan) — adopt + follow. */
   function onCanvasVisible(first: number, last: number): void {
@@ -522,7 +557,11 @@
     <CompareBar {repoId} {onCompare} />
   {/if}
 
-  <!-- 2. log: DOM rows (left) + GraphCanvas (right), scroll-synced -->
+  <!-- 2. log: DOM rows (left) + GraphCanvas (right), scroll-synced.
+       Declared as a snippet: it renders standalone (detail closed) or as
+       pane `a` of the detail SplitPane (detail open) — one copy of the
+       virtualizer markup. -->
+  {#snippet logPane()}
   <div class="listwrap">
     {#if !store.loading && !store.error && total === 0}
       <p class="empty">No commits match the current filters.</p>
@@ -582,15 +621,22 @@
       </div>
     {/if}
   </div>
+  {/snippet}
 
-  <!-- 3. commit detail -->
-  {#if !detailOpen && selectedInfo}
-    <button class="detail-open" onclick={() => (detailOpen = true)} aria-expanded="false">
-      Show commit detail — {selectedInfo.summary}
-    </button>
-  {/if}
-
+  <!-- 3. commit detail — open: the log and the detail pane share a stacked
+       SplitPane (the list fraction is user-resizable + persisted); closed:
+       a slim reopen strip. -->
   {#if detailOpen && (selectedInfo || compare)}
+    <SplitPane
+      axis="y"
+      ratio={detailRatio}
+      onRatio={setDetailRatio}
+      label="Resize commit list and detail"
+    >
+      {#snippet a()}
+        {@render logPane()}
+      {/snippet}
+      {#snippet b()}
     <div class="detail" aria-label="Commit detail">
       <header class="dhead">
         {#if selectedInfo}
@@ -629,47 +675,7 @@
         </div>
       {/if}
       <div class="dbody">
-        {#if selectedInfo}
-          <aside class="dmeta">
-            <dl>
-              <dt>Author</dt>
-              <dd>
-                {selectedInfo.author.name}
-                <span class="muted">&lt;{selectedInfo.author.email}&gt;</span><br />
-                {formatDateTime(selectedInfo.author.time)}
-                <span class="muted">({formatRelativeTime(selectedInfo.author.time)})</span>
-              </dd>
-              <dt>Committer</dt>
-              <dd>
-                {selectedInfo.committer.name}<br />
-                {formatDateTime(selectedInfo.committer.time)}
-                <span class="muted">({formatRelativeTime(selectedInfo.committer.time)})</span>
-              </dd>
-              <dt>Parents</dt>
-              <dd>
-                {#if selectedInfo.parents.length === 0}
-                  <em>root</em>
-                {:else}
-                  {#each selectedInfo.parents as p (p)}
-                    <button class="parent" onclick={() => selectParent(p)} title={"Go to " + p}>
-                      {p.slice(0, 7)}
-                    </button>
-                  {/each}
-                {/if}
-              </dd>
-              {#if selectedInfo.refs.length > 0}
-                <dt>Refs</dt>
-                <dd class="drefs">
-                  {#each selectedInfo.refs as ref (ref)}
-                    <span class="ref ref-{classifyRef(ref)}">{shortRefName(ref)}</span>
-                  {/each}
-                </dd>
-              {/if}
-            </dl>
-            <pre class="msg">{selectedInfo.message}</pre>
-          </aside>
-        {/if}
-
+        {#snippet filesPane()}
         <div class="dfiles">
           {#if blameTarget}
             <div class="dtab">
@@ -722,8 +728,78 @@
             </div>
           {/if}
         </div>
+        {/snippet}
+
+        {#if selectedInfo}
+          <!-- Meta ↔ files/diff: the detail's second resizable split. -->
+          <SplitPane
+            axis="x"
+            ratio={metaRatio}
+            onRatio={setMetaRatio}
+            label="Resize commit metadata and diff"
+          >
+            {#snippet a()}
+              <!-- Snippet bodies don't inherit the outer {#if selectedInfo}
+                   narrowing — re-guard here (renders only while active). -->
+              {#if selectedInfo}
+        <aside class="dmeta">
+            <dl>
+              <dt>Author</dt>
+              <dd>
+                {selectedInfo.author.name}
+                <span class="muted">&lt;{selectedInfo.author.email}&gt;</span><br />
+                {formatDateTime(selectedInfo.author.time)}
+                <span class="muted">({formatRelativeTime(selectedInfo.author.time)})</span>
+              </dd>
+              <dt>Committer</dt>
+              <dd>
+                {selectedInfo.committer.name}<br />
+                {formatDateTime(selectedInfo.committer.time)}
+                <span class="muted">({formatRelativeTime(selectedInfo.committer.time)})</span>
+              </dd>
+              <dt>Parents</dt>
+              <dd>
+                {#if selectedInfo.parents.length === 0}
+                  <em>root</em>
+                {:else}
+                  {#each selectedInfo.parents as p (p)}
+                    <button class="parent" onclick={() => selectParent(p)} title={"Go to " + p}>
+                      {p.slice(0, 7)}
+                    </button>
+                  {/each}
+                {/if}
+              </dd>
+              {#if selectedInfo.refs.length > 0}
+                <dt>Refs</dt>
+                <dd class="drefs">
+                  {#each selectedInfo.refs as ref (ref)}
+                    <span class="ref ref-{classifyRef(ref)}">{shortRefName(ref)}</span>
+                  {/each}
+                </dd>
+              {/if}
+            </dl>
+            <pre class="msg">{selectedInfo.message}</pre>
+          </aside>
+              {/if}
+            {/snippet}
+            {#snippet b()}
+              {@render filesPane()}
+            {/snippet}
+          </SplitPane>
+        {:else}
+          {@render filesPane()}
+        {/if}
       </div>
     </div>
+      {/snippet}
+    </SplitPane>
+  {:else}
+    {@render logPane()}
+    {#if selectedInfo}
+      <button class="detail-open" onclick={() => (detailOpen = true)} aria-expanded="false">
+        Show commit detail — {selectedInfo.summary}
+      </button>
+    {/if}
   {/if}
 
   <!-- 4. interactive rebase planner (M3 E2) -->
@@ -744,6 +820,13 @@
     height: 100%;
     min-height: 0;
     background: var(--m3-surface);
+  }
+
+  /* The list ↔ detail SplitPane fills the rest of the panel (its divider
+   * carries the user's ratio; the panes size both children). */
+  .history > :global(.split) {
+    flex: 1;
+    min-height: 0;
   }
 
   /* -- filter bar ------------------------------------------------------------ */
@@ -1008,12 +1091,9 @@
   }
 
   .detail {
-    flex: none;
     display: flex;
     flex-direction: column;
-    height: 38%;
-    min-height: 9rem;
-    border-top: 1px solid var(--m3-outline-variant);
+    min-height: 0;
     background: var(--m3-surface);
   }
 
@@ -1058,6 +1138,13 @@
     flex: 1;
     display: flex;
     min-height: 0;
+  }
+
+  /* SplitPane (meta ↔ files) or the bare files pane fills the body; the
+   * child needs :global — the splitter owns its own scope. */
+  .dbody > :global(*) {
+    flex: 1;
+    min-width: 0;
   }
 
   /* -- commit action bar (M3 E2) ------------------------------------------------ */
@@ -1106,11 +1193,10 @@
   }
 
   .dmeta {
-    flex: none;
-    width: 20rem;
+    flex: 1;
+    min-width: 0;
     overflow-y: auto;
     padding: 0.5rem 0.75rem;
-    border-right: 1px solid var(--m3-outline-variant);
     font-size: 0.75rem;
   }
 

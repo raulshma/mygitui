@@ -572,6 +572,7 @@
   .row {
     display: flex;
     align-items: center;
+    flex-wrap: wrap;
     gap: 0.375rem;
     padding: 0.2rem 0.5rem 0.2rem 0.25rem;
     min-width: 0;
@@ -593,7 +594,8 @@
   }
 
   .bname {
-    flex: none;
+    flex: 0 1 auto;
+    min-width: 3rem;
     max-width: 11rem;
     overflow: hidden;
     text-overflow: ellipsis;

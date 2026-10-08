@@ -1397,6 +1397,16 @@ pub async fn merge_abort(repo_id: RepoId, state: State<'_, RepoManager>) -> Resu
 }
 
 #[tauri::command(rename_all = "snake_case")]
+pub async fn sequencer_abort(repo_id: RepoId, state: State<'_, RepoManager>) -> Result<(), String> {
+    let handle = get_handle(&state, &repo_id)?;
+    let engine = handle.m3();
+    finish_op(enqueue_mutation(&handle, "merge", move |_ctx, repo| {
+        engine.sequencer_abort(repo)
+    }))
+    .await
+}
+
+#[tauri::command(rename_all = "snake_case")]
 pub async fn conflicts(
     repo_id: RepoId,
     state: State<'_, RepoManager>,
