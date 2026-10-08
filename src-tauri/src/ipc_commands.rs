@@ -17,7 +17,9 @@ use tauri::State;
 
 use crate::engine::git_engine::EngineError;
 use crate::engine::types::{
-    BlameLine, CommitInfo, DiffSide, FileDiff, LogFilter, RepoId, RepoInfo, RepoStatus,
+    BlameLine, CheckpointInfo, CommitInfo, ConflictFile, ConflictResolution, DiffSide, FileDiff,
+    LogFilter, MergeResult, RebaseState, RebaseStep, ReflogEntry, RepoId, RepoInfo, RepoStatus,
+    ResetKind, StashInfo, WorktreeInfo,
 };
 use crate::graph::types::{self, GraphRow};
 use crate::repo::{RepoHandle, RepoManager, StreamHandle};
@@ -1186,7 +1188,7 @@ mod m2_tests {
 // ---------------------------------------------------------------------------
 
 use crate::engine::libgit2::Libgit2Engine;
-use crate::engine::types::{CheckpointInfo, PreviewInfo};
+use crate::engine::types::PreviewInfo;
 
 #[tauri::command(rename_all = "snake_case")]
 pub async fn checkpoint_create(
@@ -1293,4 +1295,372 @@ pub async fn guard_checkpoint(
     })
     .await
     .map_err(|e| format!("guard checkpoint task failed: {e}"))?
+}
+
+// ---------------------------------------------------------------------------
+// M3 E1: conflict editor file access
+// ---------------------------------------------------------------------------
+
+/// Raw bytes of one workdir file (`path` workdir-relative). Backs the
+/// conflict editor: conflicted paths carry marker previews in the workdir
+/// (see `engine::merge`) and no other command returns raw file content.
+/// A path that escapes the workdir (`..` components, absolute or
+/// drive-prefixed forms) or is not a regular file rejects; a file that does
+/// not exist resolves to an empty vec (the editor treats that as "no
+/// marker preview written yet"). Workdir reads need no engine call, so the
+/// repo mutex is not taken.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn repo_read_file(
+    repo_id: RepoId,
+    path: String,
+    state: State<'_, RepoManager>,
+) -> Result<Vec<u8>, String> {
+    let handle = get_handle(&state, &repo_id)?;
+    let root = handle.root.clone();
+    tauri::async_runtime::spawn_blocking(move || read_workdir_file(&root, &path))
+        .await
+        .map_err(|e| format!("read_file task failed: {e}"))?
+}
+
+/// Synchronous body of [`repo_read_file`] (validation + disk read).
+fn read_workdir_file(root: &Path, path: &str) -> Result<Vec<u8>, String> {
+    let relative = Path::new(path);
+    if path.is_empty() {
+        return Err("path is empty".into());
+    }
+    if relative.is_absolute() || has_windows_prefix(relative) {
+        return Err(format!("path must be workdir-relative: `{path}`"));
+    }
+    if relative
+        .components()
+        .any(|component| component == std::path::Component::ParentDir)
+    {
+        return Err(format!("path must not contain `..`: `{path}`"));
+    }
+    let full = root.join(relative);
+    // Belt and braces: a drive-relative form like `C:foo` slips past the
+    // absolute check but `join` replaces the base with it — the containment
+    // check catches every replacement case.
+    if full.strip_prefix(root).is_err() {
+        return Err(format!("path escapes the repository: `{path}`"));
+    }
+    match std::fs::metadata(&full) {
+        // Missing file → empty content (documented "no preview written").
+        Err(_) => Ok(Vec::new()),
+        Ok(meta) if !meta.is_file() => Err(format!("`{path}` is not a regular file")),
+        Ok(_) => std::fs::read(&full).map_err(|e| format!("reading `{path}` failed: {e}")),
+    }
+}
+
+/// True when `path` carries a Windows prefix (`C:\`, `\\?\C:\`, `\\server`).
+fn has_windows_prefix(path: &Path) -> bool {
+    #[cfg(windows)]
+    {
+        use std::path::Component;
+        matches!(
+            path.components().next(),
+            Some(Component::Prefix(_)) | Some(Component::RootDir)
+        )
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = path;
+        false
+    }
+}
+
+// ---------- M3: power + safety commands ----------
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn merge_branch(
+    repo_id: RepoId,
+    ref_name: String,
+    no_ff: bool,
+    state: State<'_, RepoManager>,
+) -> Result<MergeResult, String> {
+    let handle = get_handle(&state, &repo_id)?;
+    let engine = handle.m3();
+    finish_op(enqueue_mutation(&handle, "merge", move |_ctx, repo| {
+        engine.merge_branch(repo, &ref_name, no_ff)
+    }))
+    .await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn merge_abort(repo_id: RepoId, state: State<'_, RepoManager>) -> Result<(), String> {
+    let handle = get_handle(&state, &repo_id)?;
+    let engine = handle.m3();
+    finish_op(enqueue_mutation(&handle, "merge", move |_ctx, repo| {
+        engine.merge_abort(repo)
+    }))
+    .await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn conflicts(
+    repo_id: RepoId,
+    state: State<'_, RepoManager>,
+) -> Result<Vec<ConflictFile>, String> {
+    let handle = get_handle(&state, &repo_id)?;
+    let engine = handle.m3();
+    let repo = handle.repo();
+    tauri::async_runtime::spawn_blocking(move || {
+        let repo = repo.lock();
+        engine.conflicts(&repo).map_err(engine_err)
+    })
+    .await
+    .map_err(|e| format!("conflicts task failed: {e}"))?
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn conflict_resolve(
+    repo_id: RepoId,
+    path: String,
+    resolution: ConflictResolution,
+    custom_content: Option<Vec<u8>>,
+    state: State<'_, RepoManager>,
+) -> Result<(), String> {
+    let handle = get_handle(&state, &repo_id)?;
+    let engine = handle.m3();
+    finish_op(enqueue_mutation(&handle, "merge", move |_ctx, repo| {
+        engine.conflict_resolve(repo, &path, resolution, custom_content.as_deref())
+    }))
+    .await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn cherry_pick(
+    repo_id: RepoId,
+    shas: Vec<String>,
+    state: State<'_, RepoManager>,
+) -> Result<MergeResult, String> {
+    let handle = get_handle(&state, &repo_id)?;
+    let engine = handle.m3();
+    finish_op(enqueue_mutation(&handle, "merge", move |_ctx, repo| {
+        engine.cherry_pick(repo, &shas)
+    }))
+    .await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn revert(
+    repo_id: RepoId,
+    shas: Vec<String>,
+    state: State<'_, RepoManager>,
+) -> Result<MergeResult, String> {
+    let handle = get_handle(&state, &repo_id)?;
+    let engine = handle.m3();
+    finish_op(enqueue_mutation(&handle, "merge", move |_ctx, repo| {
+        engine.revert(repo, &shas)
+    }))
+    .await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn reset(
+    repo_id: RepoId,
+    kind: ResetKind,
+    to: String,
+    state: State<'_, RepoManager>,
+) -> Result<(), String> {
+    let handle = get_handle(&state, &repo_id)?;
+    let engine = handle.m3();
+    finish_op(enqueue_mutation(&handle, "merge", move |_ctx, repo| {
+        engine.reset(repo, kind, &to)
+    }))
+    .await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn rebase_start(
+    repo_id: RepoId,
+    plan: Vec<RebaseStep>,
+    onto: Option<String>,
+    state: State<'_, RepoManager>,
+) -> Result<RebaseState, String> {
+    let handle = get_handle(&state, &repo_id)?;
+    let engine = handle.m3();
+    finish_op(enqueue_mutation(&handle, "rebase", move |_ctx, repo| {
+        engine.rebase_start(repo, &plan, onto.as_deref())
+    }))
+    .await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn rebase_state(
+    repo_id: RepoId,
+    state: State<'_, RepoManager>,
+) -> Result<RebaseState, String> {
+    let handle = get_handle(&state, &repo_id)?;
+    let engine = handle.m3();
+    let repo = handle.repo();
+    tauri::async_runtime::spawn_blocking(move || {
+        let repo = repo.lock();
+        engine.rebase_state(&repo).map_err(engine_err)
+    })
+    .await
+    .map_err(|e| format!("rebase state task failed: {e}"))?
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn rebase_continue(
+    repo_id: RepoId,
+    state: State<'_, RepoManager>,
+) -> Result<RebaseState, String> {
+    let handle = get_handle(&state, &repo_id)?;
+    let engine = handle.m3();
+    finish_op(enqueue_mutation(&handle, "rebase", move |_ctx, repo| {
+        engine.rebase_continue(repo)
+    }))
+    .await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn rebase_abort(repo_id: RepoId, state: State<'_, RepoManager>) -> Result<(), String> {
+    let handle = get_handle(&state, &repo_id)?;
+    let engine = handle.m3();
+    finish_op(enqueue_mutation(&handle, "rebase", move |_ctx, repo| {
+        engine.rebase_abort(repo)
+    }))
+    .await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn stash_list(
+    repo_id: RepoId,
+    state: State<'_, RepoManager>,
+) -> Result<Vec<StashInfo>, String> {
+    let handle = get_handle(&state, &repo_id)?;
+    let engine = handle.m3();
+    let repo = handle.repo();
+    tauri::async_runtime::spawn_blocking(move || {
+        let repo = repo.lock();
+        engine.stash_list(&repo).map_err(engine_err)
+    })
+    .await
+    .map_err(|e| format!("stash list task failed: {e}"))?
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn stash_push(
+    repo_id: RepoId,
+    message: Option<String>,
+    keep_index: bool,
+    include_untracked: bool,
+    state: State<'_, RepoManager>,
+) -> Result<(), String> {
+    let handle = get_handle(&state, &repo_id)?;
+    let engine = handle.m3();
+    finish_op(enqueue_mutation(&handle, "stash", move |_ctx, repo| {
+        engine.stash_push(repo, message.as_deref(), keep_index, include_untracked)
+    }))
+    .await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn stash_apply(
+    repo_id: RepoId,
+    index: u32,
+    pop: bool,
+    state: State<'_, RepoManager>,
+) -> Result<(), String> {
+    let handle = get_handle(&state, &repo_id)?;
+    let engine = handle.m3();
+    finish_op(enqueue_mutation(&handle, "stash", move |_ctx, repo| {
+        engine.stash_apply(repo, index, pop)
+    }))
+    .await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn stash_drop(
+    repo_id: RepoId,
+    index: u32,
+    state: State<'_, RepoManager>,
+) -> Result<(), String> {
+    let handle = get_handle(&state, &repo_id)?;
+    let engine = handle.m3();
+    finish_op(enqueue_mutation(&handle, "stash", move |_ctx, repo| {
+        engine.stash_drop(repo, index)
+    }))
+    .await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn stash_branch(
+    repo_id: RepoId,
+    name: String,
+    index: u32,
+    state: State<'_, RepoManager>,
+) -> Result<(), String> {
+    let handle = get_handle(&state, &repo_id)?;
+    let engine = handle.m3();
+    finish_op(enqueue_mutation(&handle, "stash", move |_ctx, repo| {
+        engine.stash_branch(repo, &name, index)
+    }))
+    .await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn worktrees(
+    repo_id: RepoId,
+    state: State<'_, RepoManager>,
+) -> Result<Vec<WorktreeInfo>, String> {
+    let handle = get_handle(&state, &repo_id)?;
+    let engine = handle.m3();
+    let repo = handle.repo();
+    tauri::async_runtime::spawn_blocking(move || {
+        let repo = repo.lock();
+        engine.worktrees(&repo).map_err(engine_err)
+    })
+    .await
+    .map_err(|e| format!("worktrees task failed: {e}"))?
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn worktree_add(
+    repo_id: RepoId,
+    path: String,
+    branch: Option<String>,
+    new_branch: Option<String>,
+    state: State<'_, RepoManager>,
+) -> Result<(), String> {
+    let handle = get_handle(&state, &repo_id)?;
+    let engine = handle.m3();
+    finish_op(enqueue_mutation(&handle, "worktree", move |_ctx, repo| {
+        engine.worktree_add(repo, &path, branch.as_deref(), new_branch.as_deref())
+    }))
+    .await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn worktree_remove(
+    repo_id: RepoId,
+    name: String,
+    force: bool,
+    state: State<'_, RepoManager>,
+) -> Result<(), String> {
+    let handle = get_handle(&state, &repo_id)?;
+    let engine = handle.m3();
+    finish_op(enqueue_mutation(&handle, "worktree", move |_ctx, repo| {
+        engine.worktree_remove(repo, &name, force)
+    }))
+    .await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn reflog(
+    repo_id: RepoId,
+    name: Option<String>,
+    state: State<'_, RepoManager>,
+) -> Result<Vec<ReflogEntry>, String> {
+    let handle = get_handle(&state, &repo_id)?;
+    let engine = handle.m3();
+    let repo = handle.repo();
+    tauri::async_runtime::spawn_blocking(move || {
+        let repo = repo.lock();
+        engine.reflog(&repo, name.as_deref()).map_err(engine_err)
+    })
+    .await
+    .map_err(|e| format!("reflog task failed: {e}"))?
 }

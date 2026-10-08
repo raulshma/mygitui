@@ -28,23 +28,34 @@ import type {
   AuthRequest,
   BlameLine,
   BranchInfo,
+  CheckpointInfo,
   CommitOptions,
+  ConflictFile,
+  ConflictResolution,
   DiffSide,
   FetchOptions,
   FileDiff,
   HookInfo,
   LogFilter,
   LogPage,
+  MergeResult,
   NetStats,
   OpProgress,
+  PreviewInfo,
   PullOptions,
   PushOptions,
+  RebaseState,
+  RebaseStep,
+  ReflogEntry,
   RemoteInfo,
   RepoId,
   RepoInfo,
   RepoStatus,
+  ResetKind,
   SigningInfo,
   StageRequest,
+  StashInfo,
+  WorktreeInfo,
 } from "./types";
 
 // ---------------------------------------------------------------------------
@@ -616,6 +627,18 @@ export async function onAuthRequest(
 
 // ---------- M3: power + safety wrappers ----------
 
+/**
+ * M3 wrappers funnel through the same injectable transport as the M1/M2
+ * commands: `call` honors `setTransport` (tests) and normalizes failures
+ * into `IpcError`.
+ */
+function invokeTauri<T>(
+  command: string,
+  args?: Record<string, unknown>,
+): Promise<T> {
+  return call<T>(command, args);
+}
+
 export async function mergeBranch(repoId: string, refName: string, noFF: boolean): Promise<MergeResult> {
   return invokeTauri("merge_branch", { repo_id: repoId, ref_name: refName, no_ff: noFF });
 }
@@ -752,4 +775,17 @@ export async function opsPreview(
 
 export async function guardCheckpoint(repoId: string, reason: string): Promise<CheckpointInfo> {
   return invokeTauri("guard_checkpoint", { repo_id: repoId, reason });
+}
+
+// ---------- M3 E1: conflict editor file access ----------
+
+/**
+ * Raw bytes of one workdir file (`path` is workdir-relative, forward or
+ * back slashes). A path that escapes the repository root or points at a
+ * non-file rejects; a *missing* file resolves to an empty byte array. The
+ * conflict editor uses this to load the marker-bearing workdir copy of a
+ * conflicted path (there is no raw-file command in the M1 contract).
+ */
+export function readFile(repoId: string, path: string): Promise<number[]> {
+  return invokeTauri<number[]>("repo_read_file", { repo_id: repoId, path });
 }

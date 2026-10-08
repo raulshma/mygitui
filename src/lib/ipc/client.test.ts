@@ -27,6 +27,7 @@ import {
   pickFolder,
   pullRepo,
   pushRepo,
+  readFile,
   remotes,
   remoteAdd,
   remoteRemove,
@@ -786,5 +787,43 @@ describe("ipc client M2 mutation wrappers", () => {
     }).not.toThrow();
     expect(ops).toBe(0);
     expect(auths).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// M3 conflict-editor file access (E1, appended)
+// ---------------------------------------------------------------------------
+
+describe("ipc client repo_read_file wrapper", () => {
+  it("readFile sends repo_id + path and returns byte arrays verbatim", async () => {
+    // `<<<<<<< HEAD\n` as UTF-8 bytes — what the conflict editor consumes.
+    const bytes = [0x3c, 0x3c, 0x3c, 0x3c, 0x3c, 0x3c, 0x3c, 0x20, 0x48, 0x0a];
+    const { transport, calls } = mockTransport(() => bytes);
+    setTransport(transport);
+
+    await expect(readFile("repo-1", "src/a.ts")).resolves.toEqual(bytes);
+
+    expect(calls).toEqual([
+      { command: "repo_read_file", args: { repo_id: "repo-1", path: "src/a.ts" } },
+    ]);
+  });
+
+  it("readFile resolves an empty array for a missing file (documented fallback)", async () => {
+    const { transport } = mockTransport(() => []);
+    setTransport(transport);
+
+    await expect(readFile("repo-1", "gone.txt")).resolves.toEqual([]);
+  });
+
+  it("readFile normalizes failures (path escape, not a file) to IpcError", async () => {
+    const { transport } = mockTransport(() => {
+      throw "path must not contain `..`";
+    });
+    setTransport(transport);
+
+    const err = await readFile("repo-1", "../secrets").catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(IpcError);
+    expect((err as IpcError).command).toBe("repo_read_file");
+    expect((err as IpcError).message).toContain("..");
   });
 });

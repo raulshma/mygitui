@@ -1,28 +1,39 @@
 <script lang="ts">
   /**
-   * Branch panel (M2) — local branches + create/switch/rename/delete.
+   * Branch panel (M2, extended in M3) — local branches +
+   * create/switch/rename/delete + reset.
    *
    * Rows show name, short sha, upstream with ↑ahead/↓behind, a "gone" badge
    * when the upstream disappeared, and a HEAD marker on the current branch.
-   * Switching guards a dirty worktree with a confirm dialog (auto-stash
-   * lands in M3). Deleting checks `branch_is_merged`: merged branches get a
-   * plain confirm; unmerged ones must be force-deleted by typing the branch
-   * name. Every mutation reloads the list and notifies the owner
-   * (`onMutated` → RepoView refreshStatus). Remote branches land in M3;
-   * the panel is local-only for now.
+   *
+   * Switching with a dirty worktree offers a real choice: "Stash changes"
+   * (stash_push → switch) or "Proceed anyway" (forced checkout); clean
+   * switches stay one click. Deleting previews the operation first
+   * (`ops_preview`): merged branches get a plain confirm; unmerged ones open
+   * the PreviewDialog — type the branch name, optionally keep the undo
+   * checkpoint (guard_checkpoint "pre-branch-delete"), then force-delete.
+   * "Reset to…" per row opens the ResetDialog (reset the current branch to
+   * that branch — gitk semantics). Every mutation reloads the list and
+   * notifies the owner (`onMutated` → RepoView refreshStatus). Remote
+   * branches land later; the panel is local-only for now.
    */
   import {
     branchCreate,
     branchDelete,
-    branchIsMerged,
     branchRename,
     branchSwitch,
     branches,
+    guardCheckpoint,
+    opsPreview,
+    stashPush,
   } from "$lib/ipc/client";
-  import type { BranchInfo } from "$lib/ipc/types";
+  import type { BranchInfo, PreviewInfo } from "$lib/ipc/types";
   import { tabStore } from "$lib/stores/tabs.svelte";
   import { busy } from "$lib/stores/ops.svelte";
   import { toast } from "$lib/toast";
+  import PreviewDialog from "$lib/components/safety/PreviewDialog.svelte";
+  import ResetDialog from "$lib/components/safety/ResetDialog.svelte";
+  import { isMergedPreview } from "$lib/components/safety/safetyModel";
 
   let {
     repoId,
@@ -44,16 +55,30 @@
 
   // Inline row editors
   let renaming = $state<{ old: string; value: string } | null>(null);
-  let deleting = $state<{ name: string; merged: boolean; typed: string } | null>(null);
+
+  // M3 flows
+  let switchChoice = $state<{ name: string } | null>(null);
+  let previewDelete = $state<{ name: string; info: PreviewInfo } | null>(null);
+  let resetTo = $state<string | null>(null);
+  let stashButton = $state<HTMLButtonElement | undefined>();
 
   const branchBusy = $derived(busy(repoId, "branch"));
   const headBranch = $derived(list.find((b) => b.is_head) ?? null);
+
+  // Focus the primary choice when the switch dialog appears.
+  $effect(() => {
+    if (switchChoice) {
+      requestAnimationFrame(() => stashButton?.focus());
+    }
+  });
 
   $effect(() => {
     // Reload when the repo switches.
     void repoId;
     renaming = null;
-    deleting = null;
+    switchChoice = null;
+    previewDelete = null;
+    resetTo = null;
     void reload();
   });
 
@@ -104,14 +129,34 @@
 
   async function onSwitch(branch: BranchInfo): Promise<void> {
     if (dirtyWorktree()) {
-      const ok = window.confirm(
-        `uncommitted changes; M3 adds auto-stash\n\nSwitch to ${branch.name} anyway?`,
-      );
-      if (!ok) return;
+      // Real choice replaces the old "M3 adds auto-stash" hint.
+      switchChoice = { name: branch.name };
+      return;
     }
-    await run(`Switch to ${branch.name}`, () =>
-      branchSwitch(repoId, branch.name, false),
-    );
+    await doSwitch(branch.name, false);
+  }
+
+  async function doSwitch(name: string, force: boolean): Promise<void> {
+    switchChoice = null;
+    await run(`Switch to ${name}`, () => branchSwitch(repoId, name, force));
+  }
+
+  /** "Stash changes": stash_push → clean switch. */
+  async function onSwitchStash(): Promise<void> {
+    if (!switchChoice) return;
+    const name = switchChoice.name;
+    switchChoice = null;
+    await run(`Switch to ${name}`, async () => {
+      await stashPush(repoId, `pre-switch stash (switching to ${name})`);
+      await branchSwitch(repoId, name, false);
+    });
+  }
+
+  /** "Proceed anyway": forced checkout (discards local modifications). */
+  async function onSwitchForce(): Promise<void> {
+    if (!switchChoice) return;
+    const name = switchChoice.name;
+    await doSwitch(name, true);
   }
 
   async function onRename(): Promise<void> {
@@ -126,36 +171,55 @@
     await run(`Rename ${old} → ${value}`, () => branchRename(repoId, old, value));
   }
 
-  /** Starts a delete: merged → plain confirm; unmerged → typed confirmation. */
+  /**
+   * Starts a delete: preview first. Merged → plain confirm (safe delete);
+   * unmerged → PreviewDialog with type-the-name + undo checkpoint.
+   */
   async function onDeleteStart(branch: BranchInfo): Promise<void> {
     const into = headBranch?.name ?? "HEAD";
-    let merged = false;
+    let info: PreviewInfo;
     try {
-      merged = await branchIsMerged(repoId, branch.name, into);
+      info = await opsPreview(repoId, "branch_delete", {
+        name: branch.name,
+        into,
+      });
     } catch (err) {
       toast(
-        `Cannot check if ${branch.name} is merged: ${
+        `Cannot preview delete of ${branch.name}: ${
           err instanceof Error ? err.message : String(err)
         }`,
         { kind: "error" },
       );
       return;
     }
-    if (merged) {
-      if (window.confirm(`Delete branch ${branch.name}? (merged into ${into})`)) {
-        await run(`Delete ${branch.name}`, () => branchDelete(repoId, branch.name, false));
+    if (isMergedPreview(info)) {
+      if (window.confirm(`Delete branch ${branch.name}? (${info.summary})`)) {
+        await run(`Delete ${branch.name}`, () =>
+          branchDelete(repoId, branch.name, false),
+        );
       }
       return;
     }
-    // Unmerged: force delete requires typing the branch name.
-    deleting = { name: branch.name, merged: false, typed: "" };
+    previewDelete = { name: branch.name, info };
   }
 
-  async function onDeleteForce(): Promise<void> {
-    if (!deleting || deleting.typed !== deleting.name) return;
-    const name = deleting.name;
-    deleting = null;
-    await run(`Force delete ${name}`, () => branchDelete(repoId, name, true));
+  /** PreviewDialog confirmed: optional guard checkpoint, then force delete. */
+  async function onDeleteConfirm(createCheckpoint: boolean): Promise<void> {
+    const job = previewDelete;
+    if (!job) return;
+    previewDelete = null;
+    await run(`Force delete ${job.name}`, async () => {
+      if (createCheckpoint) {
+        const cp = await guardCheckpoint(repoId, "pre-branch-delete");
+        await branchDelete(repoId, job.name, true);
+        toast(
+          `Force deleted ${job.name} — undo available (checkpoint ${cp.id})`,
+          { kind: "success" },
+        );
+      } else {
+        await branchDelete(repoId, job.name, true);
+      }
+    });
   }
 
   function shortSha(sha: string): string {
@@ -212,39 +276,7 @@
     <ul class="branches" role="list" aria-label="Local branches">
       {#each list as branch (branch.name)}
         <li class="row" class:head={branch.is_head}>
-          {#if deleting?.name === branch.name}
-            <div class="confirm-force" role="alertdialog" aria-label={`Force delete ${branch.name}`}>
-              <span class="cf-text">
-                {branch.name} is not merged — type its name to force delete:
-              </span>
-              <input
-                class="cf-input"
-                type="text"
-                aria-label={`Type ${branch.name} to confirm force delete`}
-                placeholder={branch.name}
-                bind:value={deleting.typed}
-                onkeydown={(e) => {
-                  if (e.key === "Enter") {
-                    e.preventDefault();
-                    void onDeleteForce();
-                  } else if (e.key === "Escape") {
-                    deleting = null;
-                  }
-                }}
-              />
-              <button
-                class="danger"
-                type="button"
-                disabled={deleting.typed !== deleting.name}
-                onclick={() => void onDeleteForce()}
-              >
-                Force delete
-              </button>
-              <button class="tb" type="button" onclick={() => (deleting = null)}>
-                Cancel
-              </button>
-            </div>
-          {:else if renaming?.old === branch.name}
+          {#if renaming?.old === branch.name}
             <form
               class="rename"
               aria-label={`Rename ${branch.name}`}
@@ -299,6 +331,15 @@
                 Rename
               </button>
               <button
+                class="tb"
+                type="button"
+                aria-label={`Reset current branch to ${branch.name}`}
+                title="Reset current branch to here ({branch.name})"
+                onclick={() => (resetTo = branch.name)}
+              >
+                Reset to…
+              </button>
+              <button
                 class="tb danger"
                 type="button"
                 aria-label={`Delete ${branch.name}`}
@@ -314,6 +355,71 @@
       {/each}
     </ul>
   {/if}
+
+  {#if switchChoice}
+    <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+    <div
+      class="scrim"
+      role="presentation"
+      onkeydown={(e) => {
+        if (e.key === "Escape") {
+          e.preventDefault();
+          switchChoice = null;
+        }
+      }}
+    >
+      <div
+        class="dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="switch-choice-title"
+      >
+        <h2 id="switch-choice-title" class="title">Uncommitted changes</h2>
+        <p class="text">
+          You have uncommitted changes. What should happen to them when
+          switching to <strong>{switchChoice.name}</strong>?
+        </p>
+        <div class="actions">
+          <button
+            class="primary"
+            type="button"
+            bind:this={stashButton}
+            onclick={() => void onSwitchStash()}
+          >
+            Stash changes
+          </button>
+          <button class="danger-btn" type="button" onclick={() => void onSwitchForce()}>
+            Proceed anyway
+          </button>
+          <button class="secondary" type="button" onclick={() => (switchChoice = null)}>
+            Cancel
+          </button>
+        </div>
+      </div>
+    </div>
+  {/if}
+
+  {#if previewDelete}
+    <PreviewDialog
+      info={previewDelete.info}
+      danger
+      confirmPhrase={previewDelete.name}
+      title={`Force delete ${previewDelete.name}`}
+      onConfirm={(createCheckpoint) => void onDeleteConfirm(createCheckpoint)}
+      onCancel={() => (previewDelete = null)}
+    />
+  {/if}
+
+  <ResetDialog
+    {repoId}
+    open={resetTo !== null}
+    defaultTarget={resetTo ?? undefined}
+    onClose={() => (resetTo = null)}
+    onDone={() => {
+      resetTo = null;
+      afterMutation();
+    }}
+  />
 </aside>
 
 <style>
@@ -361,7 +467,6 @@
 
   .create .name:focus-visible,
   .rename .name:focus-visible,
-  .cf-input:focus-visible,
   select:focus-visible {
     outline: 2px solid var(--m3-primary);
     outline-offset: -1px;
@@ -421,7 +526,10 @@
 
   .tb:focus-visible,
   .go:focus-visible,
-  .danger:focus-visible {
+  .danger:focus-visible,
+  .primary:focus-visible,
+  .secondary:focus-visible,
+  .danger-btn:focus-visible {
     outline: 2px solid var(--m3-primary);
     outline-offset: 1px;
   }
@@ -555,51 +663,6 @@
     min-width: 0;
   }
 
-  .confirm-force {
-    display: flex;
-    align-items: center;
-    gap: 0.375rem;
-    flex: 1;
-    min-width: 0;
-    flex-wrap: wrap;
-    padding: 0.25rem 0;
-  }
-
-  .cf-text {
-    flex: none;
-    color: var(--m3-error, inherit);
-    font-size: 0.72rem;
-  }
-
-  .cf-input {
-    flex: 1;
-    min-width: 6rem;
-    font: inherit;
-    font-size: 0.75rem;
-    font-family: ui-monospace, Consolas, monospace;
-    color: var(--m3-on-surface);
-    background: var(--m3-surface-container-lowest, var(--m3-surface));
-    border: 1px solid var(--m3-error, var(--m3-outline-variant));
-    border-radius: var(--m3-shape-extra-small, 4px);
-    padding: 0.2rem 0.45rem;
-  }
-
-  .confirm-force .danger {
-    border: 1px solid var(--m3-error, currentColor);
-    background: var(--m3-error);
-    color: var(--m3-on-error, white);
-    border-radius: var(--m3-shape-full, 9999px);
-    font: inherit;
-    font-size: 0.72rem;
-    padding: 0.2rem 0.75rem;
-    cursor: pointer;
-  }
-
-  .confirm-force .danger:disabled {
-    cursor: not-allowed;
-    opacity: 0.55;
-  }
-
   .state {
     color: var(--m3-on-surface-variant, var(--m3-on-surface));
     padding: 1rem 0.75rem;
@@ -609,5 +672,76 @@
 
   .error {
     color: var(--m3-error, inherit);
+  }
+
+  /* Switch dirty-choice modal (same pattern as AuthDialog). */
+  .scrim {
+    position: fixed;
+    inset: 0;
+    z-index: 60;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: color-mix(in srgb, var(--m3-scrim, black) 40%, transparent);
+  }
+
+  .dialog {
+    width: min(24rem, calc(100vw - 2rem));
+    padding: 1.25rem 1.5rem;
+    border-radius: var(--m3-shape-large, 16px);
+    background: var(--m3-surface-container-high, var(--m3-surface));
+    color: var(--m3-on-surface);
+    box-shadow: var(--m3-elevation-3, 0 8px 24px rgba(0, 0, 0, 0.3));
+    font-size: 0.875rem;
+  }
+
+  .title {
+    margin: 0 0 0.5rem;
+    font-size: 1.125rem;
+    font-weight: 500;
+  }
+
+  .text {
+    margin: 0 0 1rem;
+    color: var(--m3-on-surface);
+    overflow-wrap: anywhere;
+  }
+
+  .actions {
+    display: flex;
+    justify-content: flex-end;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+  }
+
+  .primary {
+    border: none;
+    border-radius: var(--m3-shape-full, 9999px);
+    background: var(--m3-primary);
+    color: var(--m3-on-primary);
+    font: inherit;
+    font-weight: 500;
+    padding: 0.45rem 1.25rem;
+    cursor: pointer;
+  }
+
+  .danger-btn {
+    border: none;
+    border-radius: var(--m3-shape-full, 9999px);
+    background: var(--m3-error, var(--m3-primary));
+    color: var(--m3-on-error, white);
+    font: inherit;
+    padding: 0.45rem 1rem;
+    cursor: pointer;
+  }
+
+  .secondary {
+    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
+    border-radius: var(--m3-shape-full, 9999px);
+    background: none;
+    color: var(--m3-on-surface-variant, var(--m3-on-surface));
+    font: inherit;
+    padding: 0.45rem 1rem;
+    cursor: pointer;
   }
 </style>

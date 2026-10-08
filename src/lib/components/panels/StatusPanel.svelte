@@ -8,7 +8,9 @@
    * (A/M/D/R/C/U/!), a path with the dir dimmed and the basename bold, and
    * `old → new` for renames.
    *
-   * Interaction: click opens the diff (`onOpenDiff`) and selects the path;
+   * Interaction: click opens the diff (`onOpenDiff`) and selects the path —
+   * except Conflicted rows, which go to the optional `onOpenConflict` (M3
+   * conflict editor) when provided, falling back to `onOpenDiff` otherwise.
    * Ctrl-click toggles multi-`selected` membership. Per-row checkboxes are
    * actionable staging controls (M2): checking an Unstaged/Untracked/
    * Conflicted row stages that file, unchecking a Staged row unstages it —
@@ -19,7 +21,7 @@
    *
    * Full keyboard: roving-tabindex rows, Arrows/Home/End to move (Shift
    * extends a range, Ctrl moves without selecting), Space toggles selection,
-   * Enter opens the diff.
+   * Enter opens the diff (or the conflict editor for conflicted rows).
    *
    * Accessibility: `role="tree"` + grouped `treeitem`s, aria-labels
    * everywhere, `aria-expanded` collapse toggles, `aria-selected` rows.
@@ -43,6 +45,7 @@
     selected = $bindable([]),
     repoId = null,
     onAfterMutation = undefined,
+    onOpenConflict = undefined,
   }: {
     status: RepoStatus | null;
     onOpenDiff: (entry: StatusEntry) => void;
@@ -51,6 +54,8 @@
     repoId?: string | null;
     /** Called after a successful stage/unstage (RepoView refreshes). */
     onAfterMutation?: () => void;
+    /** Called instead of `onOpenDiff` for Conflicted rows (M3 editor). */
+    onOpenConflict?: (entry: StatusEntry) => void;
   } = $props();
 
   let filterText = $state("");
@@ -114,7 +119,18 @@
     rowEls[key]?.focus();
   }
 
-  /** Plain click: select + open diff. Ctrl: toggle. Shift: range. */
+  /**
+   * Plain click: select + open (conflict editor for conflicted rows, diff
+   * otherwise). Ctrl: toggle. Shift: range.
+   */
+  function openRow(row: StatusRow): void {
+    if (row.section === "conflicted" && onOpenConflict !== undefined) {
+      onOpenConflict(row.entry);
+    } else {
+      onOpenDiff(row.entry);
+    }
+  }
+
   function onRowClick(event: MouseEvent, row: StatusRow, rowIndex: number): void {
     anchorIndex = rowIndex;
     focusKey = row.key;
@@ -124,7 +140,7 @@
       toggleSelected(row.entry.path);
     } else {
       selected = [row.entry.path];
-      onOpenDiff(row.entry);
+      openRow(row);
     }
   }
 
@@ -207,7 +223,7 @@
       if (row) {
         anchorIndex = base;
         selected = [row.entry.path];
-        onOpenDiff(row.entry);
+        openRow(row);
       }
     }
   }

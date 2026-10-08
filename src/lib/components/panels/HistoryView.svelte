@@ -26,13 +26,16 @@
    * Keyboard: the list is a role="listbox" — j/k or arrows move the
    * selection (g/G/Home/End jump), and aria-activedescendant tracks it.
    */
-  import { repoDiff } from "$lib/ipc/client";
-  import type { CommitInfo, FileDiff } from "$lib/ipc/types";
+  import { cherryPick, repoDiff, revertCommits } from "$lib/ipc/client";
+  import type { CommitInfo, FileDiff, MergeResult } from "$lib/ipc/types";
   import GraphCanvas from "$lib/components/graph/GraphCanvas.svelte";
   import DiffViewer from "$lib/components/diff/DiffViewer.svelte";
   import BlameView from "$lib/components/panels/BlameView.svelte";
   import CompareBar from "$lib/components/panels/CompareBar.svelte";
+  import RebasePlanner from "$lib/components/rebase/RebasePlanner.svelte";
+  import { orderForCherryPick } from "$lib/components/rebase/plannerModel";
   import { HistoryStore } from "$lib/stores/history.svelte";
+  import { tabStore } from "$lib/stores/tabs.svelte";
   import {
     classifyRef,
     formatDateTime,
@@ -62,6 +65,17 @@
   let detailFiles = $state<FileDiff[] | null>(null);
   let detailLoading = $state(false);
   let detailToken = 0;
+
+  // -- commit actions (M3 E2) -------------------------------------------------
+
+  /** Multi-selection as row indices (list order); shift-click range. */
+  let multiIdx = $state<number[]>([]);
+  /** Anchor row for shift-click ranges (last plain click). */
+  let anchorIdx: number | null = null;
+  /** True while a cherry-pick/revert IPC is in flight. */
+  let opBusy = $state(false);
+  let plannerOpen = $state(false);
+  let plannerBaseSha = $state<string | null>(null);
 
   // -- virtualizer + canvas scroll sync ------------------------------------------
 
@@ -176,6 +190,9 @@
     detailOpen = false;
     compare = null;
     blameTarget = null;
+    multiIdx = [];
+    anchorIdx = null;
+    plannerOpen = false;
     ownRange = { start: 0, end: 0 };
     canvasWindow = null;
     if (scrollerEl) scrollerEl.scrollTop = 0;
@@ -189,6 +206,16 @@
   const selectedIdx = $derived.by(() => {
     void store.flat; // re-resolve after stream restarts reset the index
     return selectedSha ? store.indexOfSha(selectedSha) : -1;
+  });
+
+  /** Shas of the multi-selection (cherry-pick/revert input), list order. */
+  const selectedShas = $derived.by(() => {
+    const out: string[] = [];
+    for (const i of multiIdx) {
+      const commit = commits[i];
+      if (commit) out.push(commit.sha);
+    }
+    return out;
   });
   const filterActive = $derived(store.filterActive);
 
@@ -211,13 +238,38 @@
 
   // -- selection ----------------------------------------------------------------------
 
-  function select(sha: string, opts: { scroll?: boolean; open?: boolean } = {}): void {
+  function select(
+    sha: string,
+    opts: { scroll?: boolean; open?: boolean; keepMulti?: boolean } = {},
+  ): void {
     selectedSha = sha;
     const idx = store.indexOfSha(sha);
     const commit = idx >= 0 ? commits[idx] : null;
     if (commit) selectedInfo = commit;
+    if (!opts.keepMulti) {
+      multiIdx = idx >= 0 ? [idx] : [];
+      anchorIdx = idx >= 0 ? idx : null;
+    }
     if (opts.open !== false) detailOpen = Boolean(selectedInfo);
     if (opts.scroll && idx >= 0) scrollToIndex(idx);
+  }
+
+  /**
+   * List row click: plain click (re)selects one commit; shift-click extends
+   * the multi-selection to the anchor..clicked range (cherry-pick input).
+   */
+  function onRowClick(sha: string, idx: number, event: MouseEvent): void {
+    if (event.shiftKey && anchorIdx !== null) {
+      const lo = Math.min(anchorIdx, idx);
+      const hi = Math.max(anchorIdx, idx);
+      const range: number[] = [];
+      for (let i = lo; i <= hi; i++) range.push(i);
+      multiIdx = range;
+      select(sha, { keepMulti: true });
+    } else {
+      anchorIdx = idx;
+      select(sha);
+    }
   }
 
   function selectParent(sha: string): void {
@@ -297,6 +349,76 @@
     compare = { files, base, target };
     blameTarget = null;
     detailOpen = true;
+  }
+
+  // -- commit actions (M3 E2) ---------------------------------------------------
+
+  function describeError(err: unknown): string {
+    return err instanceof Error ? err.message : String(err);
+  }
+
+  /** Toasts a mutation result and refreshes the tab status. The history
+   *  store restarts on its own via the backend `repo-changed` event. */
+  function reportMergeResult(op: string, count: number, result: MergeResult): void {
+    if (result.outcome === "conflicted" || result.conflicts.length > 0) {
+      toast(`${op} conflicts — resolve in the status panel`, { kind: "error" });
+    } else {
+      toast(`${op} ${count === 1 ? "1 commit" : `${count} commits`} — done`, {
+        kind: "success",
+      });
+    }
+    void tabStore.refreshStatus(repoId);
+  }
+
+  async function doCherryPick(): Promise<void> {
+    const shas = orderForCherryPick(selectedShas, commits);
+    if (opBusy || shas.length === 0) return;
+    opBusy = true;
+    try {
+      const result = await cherryPick(repoId, shas);
+      reportMergeResult("Cherry-picked", shas.length, result);
+    } catch (err) {
+      toast(`Cherry-pick failed: ${describeError(err)}`, { kind: "error" });
+    } finally {
+      opBusy = false;
+    }
+  }
+
+  async function doRevert(): Promise<void> {
+    const shas = orderForCherryPick(selectedShas, commits);
+    if (opBusy || shas.length === 0) return;
+    opBusy = true;
+    try {
+      const result = await revertCommits(repoId, shas);
+      reportMergeResult("Reverted", shas.length, result);
+    } catch (err) {
+      toast(`Revert failed: ${describeError(err)}`, { kind: "error" });
+    } finally {
+      opBusy = false;
+    }
+  }
+
+  /** Opens the planner for `HEAD..selected` (the selected commit is the
+   *  exclusive base — it is NOT part of the rebase). */
+  function rebaseFromHere(): void {
+    if (!selectedInfo || opBusy) return;
+    plannerBaseSha = selectedInfo.sha;
+    plannerOpen = true;
+  }
+
+  async function copySha(): Promise<void> {
+    if (!selectedInfo) return;
+    try {
+      await navigator.clipboard.writeText(selectedInfo.sha);
+      toast("SHA copied to clipboard", { kind: "success" });
+    } catch {
+      toast("Could not copy the SHA", { kind: "error" });
+    }
+  }
+
+  function onRebaseFinished(): void {
+    // History restarts itself via repo-changed (HEAD moved); refresh status.
+    void tabStore.refreshStatus(repoId);
   }
 </script>
 
@@ -401,12 +523,13 @@
               id={`commit-row-${v.idx}`}
               class="row"
               class:selected={v.idx === selectedIdx}
+              class:multisel={v.idx !== selectedIdx && multiIdx.includes(v.idx)}
               role="option"
               tabindex="-1"
-              aria-selected={v.idx === selectedIdx}
+              aria-selected={v.idx === selectedIdx || multiIdx.includes(v.idx)}
               style:top={`${v.idx * ROW_HEIGHT}px`}
               style:height={`${ROW_HEIGHT}px`}
-              onclick={() => select(v.commit.sha)}
+              onclick={(e) => onRowClick(v.commit.sha, v.idx, e)}
               onkeydown={(e) => {
                 if (e.key === "Enter" || e.key === " ") {
                   e.preventDefault();
@@ -459,6 +582,30 @@
           ×
         </button>
       </header>
+      {#if selectedInfo}
+        <div class="cactions" role="toolbar" aria-label="Commit actions">
+          <button class="act" onclick={doCherryPick} disabled={opBusy}>
+            Cherry-pick{selectedShas.length > 1 ? ` (${selectedShas.length})` : ""}
+          </button>
+          <button class="act" onclick={doRevert} disabled={opBusy}>
+            Revert{selectedShas.length > 1 ? ` (${selectedShas.length})` : ""}
+          </button>
+          <button
+            class="act"
+            onclick={rebaseFromHere}
+            disabled={opBusy}
+            title={`Rebase HEAD..${selectedInfo.sha.slice(0, 7)} (selected commit is the exclusive base)`}
+          >
+            Rebase from here
+          </button>
+          <button class="act" onclick={copySha}>Copy sha</button>
+          <span class="cinfo" role="status">
+            {#if selectedShas.length > 1}
+              {selectedShas.length} commits selected (shift-click to extend)
+            {/if}
+          </span>
+        </div>
+      {/if}
       <div class="dbody">
         {#if selectedInfo}
           <aside class="dmeta">
@@ -555,6 +702,16 @@
         </div>
       </div>
     </div>
+  {/if}
+
+  <!-- 4. interactive rebase planner (M3 E2) -->
+  {#if plannerOpen}
+    <RebasePlanner
+      {repoId}
+      baseSha={plannerBaseSha}
+      onClose={() => (plannerOpen = false)}
+      onFinished={onRebaseFinished}
+    />
   {/if}
 </section>
 
@@ -728,6 +885,11 @@
     color: var(--m3-on-secondary-container);
   }
 
+  /* shift-click range members (primary selection stays `.selected`) */
+  .row.multisel {
+    background: color-mix(in srgb, var(--m3-secondary-container) 45%, var(--m3-surface));
+  }
+
   .row .sha {
     flex: none;
     font-family: ui-monospace, Consolas, monospace;
@@ -874,6 +1036,51 @@
     flex: 1;
     display: flex;
     min-height: 0;
+  }
+
+  /* -- commit action bar (M3 E2) ------------------------------------------------ */
+
+  .cactions {
+    flex: none;
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+    padding: 0.25rem 0.75rem;
+    border-bottom: 1px solid var(--m3-outline-variant);
+    background: var(--m3-surface-container-low, var(--m3-surface));
+    font-size: 0.72rem;
+  }
+
+  button.act {
+    padding: 0.18rem 0.6rem;
+    font-size: 0.72rem;
+    color: var(--m3-on-surface);
+    background: var(--m3-surface-container-high, var(--m3-surface));
+    border: 1px solid var(--m3-outline-variant);
+    border-radius: var(--m3-shape-full, 9999px);
+    cursor: pointer;
+  }
+
+  button.act:hover:not(:disabled) {
+    background: var(--m3-secondary-container);
+    color: var(--m3-on-secondary-container);
+  }
+
+  button.act:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  button.act:focus-visible {
+    outline: 2px solid var(--m3-primary);
+    outline-offset: 1px;
+  }
+
+  .cinfo {
+    margin-left: auto;
+    color: var(--m3-on-surface-variant);
+    font-size: 0.6875rem;
   }
 
   .dmeta {
