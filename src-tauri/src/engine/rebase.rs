@@ -43,8 +43,9 @@ use super::git_engine::{EngineError, EngineResult};
 use super::libgit2::Libgit2Engine;
 use super::types::{RebaseState, RebaseStep};
 
-/// Actions accepted in `RebaseStep::action`.
-const ACTIONS: [&str; 6] = ["pick", "squash", "fixup", "drop", "edit", "reword"];
+/// Actions accepted in `RebaseStep::action`. `exec` runs `new_message` as
+/// a shell command in the repo workdir (`git rebase -i`'s exec lines).
+const ACTIONS: [&str; 7] = ["pick", "squash", "fixup", "drop", "edit", "reword", "exec"];
 
 /// Persisted sequencer state (schema in the module docs).
 #[derive(Debug, Serialize, Deserialize)]
@@ -55,6 +56,12 @@ struct RebaseFileState {
     /// Current step's merge result sits in the index awaiting resolution /
     /// commit instead of a fresh apply.
     mid_merge: bool,
+    /// The current step is a failed `exec`: `rebase_continue` re-runs it.
+    #[serde(default)]
+    paused_for_exec: bool,
+    /// Diagnostics of the failed exec step (surface to the FE).
+    #[serde(default)]
+    exec_error: Option<String>,
     /// Committed rewrites so far: (original sha, rewritten sha).
     rewritten: Vec<(String, String)>,
     /// Resolved base commit sha when `onto` was given (informational).
@@ -102,6 +109,8 @@ fn active_state(st: &RebaseFileState) -> RebaseState {
         plan: st.plan.clone(),
         current: st.current,
         paused_for_edit: st.paused_for_edit,
+        paused_for_exec: st.paused_for_exec,
+        exec_error: st.exec_error.clone(),
         rewritten: st.rewritten.clone(),
     }
 }
@@ -163,7 +172,21 @@ impl Libgit2Engine {
                     "step {i}: `reword` requires a non-empty new_message"
                 )));
             }
-            resolve_commitish(repo, &step.sha)?;
+            if step.action == "exec"
+                && step
+                    .new_message
+                    .as_deref()
+                    .map(str::trim)
+                    .unwrap_or_default()
+                    .is_empty()
+            {
+                return Err(EngineError::Invalid(format!(
+                    "step {i}: `exec` requires the command in new_message"
+                )));
+            }
+            if step.action != "exec" {
+                resolve_commitish(repo, &step.sha)?;
+            }
         }
 
         let onto_sha = match onto {
@@ -176,7 +199,15 @@ impl Libgit2Engine {
         let base_commit = match &onto_sha {
             Some(sha) => repo.find_commit(Oid::from_str(sha)?)?,
             None => {
-                let first = resolve_commitish(repo, &plan[0].sha)?;
+                let first = plan
+                    .iter()
+                    .find(|step| step.action != "exec")
+                    .ok_or_else(|| {
+                        EngineError::Invalid(
+                            "plan contains only `exec` steps: provide `onto`".into(),
+                        )
+                    })?;
+                let first = resolve_commitish(repo, &first.sha)?;
                 match first.parent(0) {
                     Ok(parent) => parent,
                     Err(_) => {
@@ -198,6 +229,8 @@ impl Libgit2Engine {
             current: 0,
             paused_for_edit: false,
             mid_merge: false,
+            paused_for_exec: false,
+            exec_error: None,
             rewritten: Vec::new(),
             onto: onto_sha.clone(),
             orig_head,
@@ -223,6 +256,8 @@ impl Libgit2Engine {
                 plan: Vec::new(),
                 current: 0,
                 paused_for_edit: false,
+                paused_for_exec: false,
+                exec_error: None,
                 rewritten: Vec::new(),
             },
         })
@@ -238,6 +273,8 @@ impl Libgit2Engine {
             st.paused_for_edit = false;
             st.current += 1;
         }
+        // A paused `exec` intentionally does NOT advance: continue re-runs it
+        // (the user is expected to fix whatever failed first).
         run_rebase(repo, &mut st)
     }
 
@@ -283,10 +320,32 @@ fn run_rebase(repo: &Repository, st: &mut RebaseFileState) -> EngineResult<Rebas
             st.mid_merge = false;
             resume = true;
         }
+        // Resume after an exec pause: the step re-runs (git semantics — the
+        // user fixed whatever failed, then continued).
+        if st.paused_for_exec {
+            st.paused_for_exec = false;
+            save_state(repo, st)?;
+        }
 
         if step.action == "drop" {
             st.current += 1;
             continue;
+        }
+
+        if step.action == "exec" {
+            let command = step.new_message.as_deref().unwrap_or_default();
+            match run_exec(repo, command) {
+                Ok(()) => {
+                    st.current += 1;
+                    continue;
+                }
+                Err(err) => {
+                    st.paused_for_exec = true;
+                    st.exec_error = Some(err);
+                    save_state(repo, st)?;
+                    return Ok(active_state(st));
+                }
+            }
         }
 
         let commit = resolve_commitish(repo, &step.sha)?;
@@ -310,6 +369,71 @@ fn run_rebase(repo: &Repository, st: &mut RebaseFileState) -> EngineResult<Rebas
     }
 }
 
+/// Runs an `exec` step's command in the repo workdir. `sh -c` on Unix,
+/// `cmd /c` on Windows (git's exec lines are shell commands by contract).
+/// Returns the captured diagnostics on failure.
+fn run_exec(repo: &Repository, command: &str) -> Result<(), String> {
+    if command.trim().is_empty() {
+        return Err("exec command is empty".into());
+    }
+    let workdir = repo
+        .workdir()
+        .ok_or_else(|| "bare repository has no workdir".to_owned())?;
+    #[cfg(windows)]
+    let mut cmd = {
+        let mut cmd = std::process::Command::new("cmd");
+        cmd.arg("/c").arg(command);
+        cmd
+    };
+    #[cfg(not(windows))]
+    let mut cmd = {
+        let mut cmd = std::process::Command::new("sh");
+        cmd.arg("-c").arg(command);
+        cmd
+    };
+    cmd.current_dir(workdir);
+    cmd.env_clear();
+    for (key, value) in std::env::vars() {
+        if key.starts_with("GIT_")
+            || [
+                "PATH",
+                "HOME",
+                "SYSTEMROOT",
+                "COMSPEC",
+                "PATHEXT",
+                "TMP",
+                "TEMP",
+                "APPDATA",
+                "LOCALAPPDATA",
+                "USERPROFILE",
+                "LANG",
+                "LC_ALL",
+            ]
+            .contains(&key.as_str())
+        {
+            cmd.env(key, value);
+        }
+    }
+    let output = cmd
+        .output()
+        .map_err(|err| format!("failed to spawn exec command: {err}"))?;
+    if output.status.success() {
+        return Ok(());
+    }
+    let mut detail = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    if !stderr.is_empty() {
+        if !detail.is_empty() {
+            detail.push('\n');
+        }
+        detail.push_str(&stderr);
+    }
+    Err(format!(
+        "exec `{command}` failed (exit {}): {detail}",
+        output.status.code().unwrap_or(-1)
+    ))
+}
+
 fn finish_rebase(repo: &Repository, st: &mut RebaseFileState) -> EngineResult<RebaseState> {
     let final_head = head_commit(repo)?;
     if let Some(branch) = st.orig_branch.as_deref() {
@@ -324,6 +448,8 @@ fn finish_rebase(repo: &Repository, st: &mut RebaseFileState) -> EngineResult<Re
         plan: st.plan.clone(),
         current: st.current,
         paused_for_edit: false,
+        paused_for_exec: false,
+        exec_error: None,
         rewritten: st.rewritten.clone(),
     })
 }
@@ -506,4 +632,105 @@ fn hard_checkout(repo: &Repository, commit: &Commit<'_>) -> EngineResult<()> {
     index.read_tree(&tree)?;
     index.write()?;
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// M10: autosquash planning + describe
+// ---------------------------------------------------------------------------
+
+impl Libgit2Engine {
+    /// `git rebase --autosquash` planning: the `fixup!`/`squash!` commits in
+    /// `base..HEAD` (oldest first) are reordered to sit right after their
+    /// target commit (matched by subject prefix), with `fixup!` → `fixup`
+    /// and `squash!` → `squash` actions; every other commit becomes `pick`.
+    /// The plan feeds `rebase_start` unchanged.
+    pub(crate) fn autosquash_plan_impl(
+        &self,
+        repo: &Repository,
+        base: &str,
+    ) -> EngineResult<Vec<RebaseStep>> {
+        let base_commit = resolve_commitish(repo, base)?;
+        let mut walk = repo.revwalk()?;
+        walk.push(repo.head()?.peel_to_commit()?.id())?;
+        walk.hide(base_commit.id())?;
+        walk.set_sorting(git2::Sort::REVERSE | git2::Sort::TOPOLOGICAL)?;
+
+        struct Entry {
+            sha: String,
+            subject: String,
+            action: String,
+            new_message: Option<String>,
+        }
+        let mut entries: Vec<Entry> = Vec::new();
+        for oid in walk.filter_map(Result::ok) {
+            let commit = repo.find_commit(oid)?;
+            let message = commit.message().unwrap_or_default();
+            let subject = message.lines().next().unwrap_or_default().trim();
+            let (action, new_message) = if let Some(target) = subject.strip_prefix("fixup! ") {
+                ("fixup".to_owned(), Some(target.to_owned()))
+            } else if let Some(target) = subject.strip_prefix("squash! ") {
+                ("squash".to_owned(), Some(target.to_owned()))
+            } else {
+                ("pick".to_owned(), None)
+            };
+            entries.push(Entry {
+                sha: oid.to_string(),
+                subject: subject.to_owned(),
+                action,
+                new_message,
+            });
+        }
+
+        // Reorder: move each fixup/squash right after the first commit whose
+        // subject matches its target (fallback: keep position — the run will
+        // surface it as a fold onto whatever precedes it, like git's
+        // unmatched-autosquash behavior of leaving it in place).
+        let mut plan: Vec<Entry> = Vec::with_capacity(entries.len());
+        while let Some(entry) = entries.first() {
+            if entry.action == "pick" {
+                plan.push(entries.remove(0));
+                continue;
+            }
+            // Find the target among the already-placed picks.
+            let target = entry.new_message.clone().unwrap_or_default();
+            let position = plan
+                .iter()
+                .position(|placed| placed.action == "pick" && placed.subject == target)
+                .map(|index| {
+                    // After the target's own fold chain (fixups already moved).
+                    let mut last = index;
+                    while plan.get(last + 1).is_some_and(|next| next.action != "pick") {
+                        last += 1;
+                    }
+                    last + 1
+                });
+            let entry = entries.remove(0);
+            match position {
+                Some(at) => plan.insert(at, entry),
+                None => plan.push(entry),
+            }
+        }
+
+        Ok(plan
+            .into_iter()
+            .map(|entry| RebaseStep {
+                sha: entry.sha,
+                action: entry.action,
+                new_message: entry.new_message,
+            })
+            .collect())
+    }
+
+    /// `git describe --tags` for a commit-ish (annotated tags preferred by
+    /// libgit2's default options); errors fall back to the short sha.
+    pub(crate) fn describe_impl(&self, repo: &Repository, spec: &str) -> EngineResult<String> {
+        let commit = resolve_commitish(repo, spec)?;
+        let mut opts = git2::DescribeOptions::new();
+        opts.describe_tags();
+        let described = commit.as_object().describe(&opts);
+        match described {
+            Ok(describe) => Ok(describe.format(None)?),
+            Err(_) => Ok(commit.id().to_string()[..7].to_owned()),
+        }
+    }
 }

@@ -445,6 +445,14 @@ export const COMMANDS: Command[] = [
     when: (ctx) => ctx.repoId !== null,
     run: () => dispatch("branches-cleanup"),
   },
+  {
+    id: "bisect.start",
+    title: "Start bisect…",
+    section: "Branches",
+    keywords: ["binary search", "find bad commit", "debug"],
+    when: (ctx) => ctx.repoId !== null,
+    run: () => dispatch("bisect-open-start"),
+  },
 
   // -- History --------------------------------------------------------------
   {

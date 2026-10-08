@@ -413,3 +413,56 @@ per call. TS mirrors live in `src/lib/ipc/client.ts` (`DayCount`,
   toolbar ("Templates…").
 - Palette: `branches.clean-merged` command added; PopoutPanel
   extended with `filehistory`.
+
+---
+
+## M10 — Power git (bisect, describe, autosquash, exec, pickaxe, remote branches)
+
+### Engine (`<gitdir>/mygitui/bisect.json` persistence; probe = first-parent
+walk midpoint, known-bad tip excluded)
+
+- **`bisect_start(repo_id, bad?, good?)`** → `BisectState` — HEAD detaches
+  onto the first probe (bad defaults to HEAD; guards: same good/bad,
+  unknown refs, double start). **`bisect_state`** → `BisectState`
+  (`active: false` singleton when none). **`bisect_mark(mark)`**
+  (`good|bad|skip`) → next `BisectState` — moves the good/bad bound or
+  adds to `skipped`, checks out the next midpoint; when
+  `remaining === 0` the `bad` tip IS the first bad commit (the bisect
+  stays active until `bisect_reset` for inspection).
+  **`bisect_reset`** restores the original branch/HEAD and removes the
+  state file. `BisectState` = `{ active, bad, good?, current?, remaining,
+  skipped[], orig_head, orig_branch? }`.
+- **`describe(repo_id, spec)`** — `git describe --tags` (libgit2
+  `Object::describe`); falls back to the 7-char sha when no tag is
+  reachable.
+- **`autosquash_plan(repo_id, base)`** → `RebaseStep[]` — `fixup!` /
+  `squash!` commits in `base..HEAD` moved right after their (subject-
+  matched) targets, as `fixup`/`squash` steps; everything else `pick`.
+  Feeds `rebase_start` unchanged.
+- **Rebase `exec` action** — `RebaseStep { action: "exec", new_message:
+  <command> }` runs in the workdir (`sh -c` / `cmd /c`, sanitized env).
+  A failing exec pauses the rebase: `RebaseState.paused_for_exec` +
+  `exec_error` (new additive fields); `rebase_continue` RE-RUNS the
+  failed step (git semantics); validation demands a non-empty command;
+  plans of only exec steps require `onto`.
+- **Pickaxe**: `LogFilter.pickaxe` (optional) — `-S` semantics: a commit
+  matches when its first-parent patch adds or removes the string
+  (per-hunk patch line scan, rename detection on). Mirrored:
+  `HistoryFilterFields.pickaxe` + the History filter-bar
+  "Changes containing… (-S)" input.
+
+### Frontend
+
+- **BisectBanner** (`src/lib/components/bisect/`) — mounted in RepoView
+  under the conflict banner. Inactive: "Bisect…" launcher → start form
+  (bad prefills HEAD). Active: probe sha, remaining count, Good/Bad/Skip
+  marks, Reset; on completion the bad tip gets "Show in history" (typed
+  bus). Palette: `bisect.start` → `bisect-open-start` event.
+- **Describe** line in the history commit-detail meta (lazy per
+  selection, decorative failures swallowed).
+- **RebasePlanner "Autosquash" button** (visible when a base is set) —
+  replaces the plan rows with `autosquash_plan` output, summaries
+  preserved by sha lookup.
+- **RemotePanel "Branches" toggle per remote** — lists
+  `remote_branches()` with per-branch Checkout (tracking local branch;
+  hidden when already tracked) and Delete (push `:refs/heads/<name>`).

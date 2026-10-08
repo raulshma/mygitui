@@ -12,16 +12,18 @@
    * interval (localStorage-backed `autofetch` store).
    */
   import {
+    branchCheckoutRemote,
     branches,
     fetchRepo,
     pullRepo,
     pushRepo,
     remoteAdd,
+    remoteBranches,
     remoteRemove,
     remoteSetUrl,
     remotes,
   } from "$lib/ipc/client";
-  import type { NetStats, RemoteInfo } from "$lib/ipc/types";
+  import type { NetStats, RemoteBranchInfo, RemoteInfo } from "$lib/ipc/types";
   import { opsFor } from "$lib/stores/ops.svelte";
   import { autofetch } from "$lib/stores/autofetch.svelte";
   import { toast } from "$lib/toast";
@@ -177,6 +179,64 @@
   /** Remove confirmation (ConfirmDialog state, M9 F9). */
   let removeCandidate = $state<RemoteInfo | null>(null);
 
+  // -- M10: remote branch management ------------------------------------------
+
+  let expandedRemote = $state<string | null>(null);
+  let remoteBranchList = $state<RemoteBranchInfo[]>([]);
+
+  async function onToggleRemoteBranches(remote: RemoteInfo): Promise<void> {
+    if (expandedRemote === remote.name) {
+      expandedRemote = null;
+      return;
+    }
+    expandedRemote = remote.name;
+    try {
+      remoteBranchList = await remoteBranches(repoId);
+    } catch (err) {
+      toast(
+        `Remote branches failed: ${err instanceof Error ? err.message : String(err)}`,
+        { kind: "error" },
+      );
+    }
+  }
+
+  async function onCheckoutRemote(rb: RemoteBranchInfo): Promise<void> {
+    try {
+      const local = await branchCheckoutRemote(repoId, rb.remote, rb.name);
+      toast(`Created and switched to ${local} (tracking ${rb.remote}/${rb.name})`, {
+        kind: "success",
+      });
+      onMutated?.();
+    } catch (err) {
+      toast(
+        `Checkout failed: ${err instanceof Error ? err.message : String(err)}`,
+        { kind: "error" },
+      );
+    }
+  }
+
+  async function onDeleteRemoteBranch(rb: RemoteBranchInfo): Promise<void> {
+    try {
+      await pushRepo(repoId, {
+        remote: rb.remote,
+        branch: "",
+        force: false,
+        force_with_lease: false,
+        set_upstream: false,
+        refs: [rb.name],
+        tags: false,
+        delete: true,
+      });
+      toast(`Deleted remote branch ${rb.remote}/${rb.name}`, { kind: "success" });
+      remoteBranchList = await remoteBranches(repoId);
+    } catch (err) {
+      toast(
+        `Delete failed: ${err instanceof Error ? err.message : String(err)}`,
+        { kind: "error" },
+      );
+    }
+  }
+
   function onRemove(remote: RemoteInfo): void {
     removeCandidate = remote;
   }
@@ -327,8 +387,53 @@
                 </button>
               </span>
             </div>
+            {#if expandedRemote === remote.name}
+              <div class="remote-branches">
+                <p class="rb-head">Remote branches</p>
+                {#if remoteBranchList.length === 0}
+                  <p class="rb-empty">Fetch to discover remote branches.</p>
+                {:else}
+                  <ul class="rb-list">
+                    {#each remoteBranchList.filter((b) => b.remote === remote.name) as rb (rb.remote + "/" + rb.name)}
+                      <li class="rb-row">
+                        <span class="rb-name" title="{rb.remote}/{rb.name}">
+                          {rb.name}
+                          {#if rb.tracked_by}<span class="rb-tracked">({rb.tracked_by})</span>{/if}
+                        </span>
+                        {#if rb.tracked_by === null}
+                          <button
+                            class="tb"
+                            type="button"
+                            title="Create a local branch tracking {rb.remote}/{rb.name} and check it out"
+                            onclick={() => void onCheckoutRemote(rb)}
+                          >
+                            Checkout
+                          </button>
+                        {/if}
+                        <button
+                          class="tb danger"
+                          type="button"
+                          title="Delete {rb.remote}/{rb.name} on the remote"
+                          onclick={() => void onDeleteRemoteBranch(rb)}
+                        >
+                          Delete
+                        </button>
+                      </li>
+                    {/each}
+                  </ul>
+                {/if}
+              </div>
+            {/if}
             <div class="card-actions">
               <div class="opt-group">
+                <button
+                  class="act"
+                  type="button"
+                  disabled={netBusy}
+                  onclick={() => onToggleRemoteBranches(remote)}
+                >
+                  {expandedRemote === remote.name ? "Hide branches" : "Branches"}
+                </button>
                 <button
                   class="act"
                   type="button"

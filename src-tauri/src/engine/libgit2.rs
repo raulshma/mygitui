@@ -657,6 +657,47 @@ fn commit_touches_path(repo: &Repository, commit: &Commit<'_>, path: &str) -> En
     Ok(diff.deltas().len() > 0)
 }
 
+/// Pickaxe `-S` test: does the commit's patch add or remove `needle`?
+/// Walks the patch lines of the (first-parent) tree diff; content is
+/// scanned byte-wise (needle is UTF-8; the diff may not be).
+fn commit_touches_string(
+    repo: &Repository,
+    commit: &Commit<'_>,
+    needle: &str,
+) -> EngineResult<bool> {
+    let tree = tree_of(commit)?;
+    let parent_tree = commit.parent(0).ok().map(|p| tree_of(&p)).transpose()?;
+    let mut diff = repo.diff_tree_to_tree(parent_tree.as_ref(), Some(&tree), None)?;
+    let mut find = DiffFindOptions::new();
+    find.renames(true).copies(false);
+    let _ = diff.find_similar(Some(&mut find));
+    let needle_bytes = needle.as_bytes();
+    for delta_idx in 0..diff.deltas().len() {
+        let patch = match Patch::from_diff(&diff, delta_idx)? {
+            Some(patch) => patch,
+            None => continue, // binary delta
+        };
+        for hunk_idx in 0..patch.num_hunks() {
+            for line_idx in 0..patch.num_lines_in_hunk(hunk_idx)? {
+                let line = patch.line_in_hunk(hunk_idx, line_idx)?;
+                let origin = line.origin();
+                if origin != '+' && origin != '-' {
+                    continue;
+                }
+                let content = line.content();
+                if content.len() >= needle_bytes.len()
+                    && content
+                        .windows(needle_bytes.len())
+                        .any(|window| window == needle_bytes)
+                {
+                    return Ok(true);
+                }
+            }
+        }
+    }
+    Ok(false)
+}
+
 /// `--follow` support: diff the commit against its first parent with rename
 /// detection; if the followed path was renamed here, shift `current` to the
 /// old name so older commits are matched under their historical name.
@@ -896,6 +937,13 @@ impl GitEngine for Libgit2Engine {
             }
 
             let commit = repo.find_commit(oid)?;
+
+            // Pickaxe (-S): the commit's patch must add or remove the needle.
+            if let Some(needle) = &filter.pickaxe {
+                if !needle.is_empty() && !commit_touches_string(repo, &commit, needle)? {
+                    continue;
+                }
+            }
 
             if let Some(path) = &filter.path {
                 let touched = match &mut follow_path {

@@ -119,6 +119,8 @@ export interface HistoryFilterFields {
   path: string;
   after: string;
   before: string;
+  /** Pickaxe -S: patches must add or remove this string (M10). */
+  pickaxe: string;
 }
 
 export const EMPTY_FILTER: HistoryFilterFields = {
@@ -128,6 +130,7 @@ export const EMPTY_FILTER: HistoryFilterFields = {
   path: "",
   after: "",
   before: "",
+  pickaxe: "",
 };
 
 const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -168,6 +171,7 @@ export function toLogFilter(
     before_unix: dayToUnixSeconds(fields.before, "end"),
     refs: [],
     follow: opts.follow ?? false,
+    pickaxe: fields.pickaxe.trim() || null,
   };
 }
 

@@ -27,6 +27,8 @@ import { isTauri } from "$lib/entry/dragdrop";
 import type {
   AuthRequest,
   BlameLine,
+  BisectMark,
+  BisectState,
   BranchInfo,
   CheckpointInfo,
   CommitOptions,
@@ -717,6 +719,51 @@ export function discard(
   targets: StageTarget[],
 ): Promise<void> {
   return call<void>("discard", { repo_id: repoId, targets });
+}
+
+// ---------- M10: bisect / describe / autosquash ----------
+
+/** Starts a bisect (bad = HEAD when omitted); HEAD detaches on the probe. */
+export function bisectStart(
+  repoId: RepoId,
+  bad?: string,
+  good?: string,
+): Promise<BisectState> {
+  const args: Record<string, unknown> = { repo_id: repoId };
+  if (bad) args.bad = bad;
+  if (good) args.good = good;
+  return call<BisectState>("bisect_start", args);
+}
+
+/** Current bisect state (inactive singleton when none is running). */
+export function bisectState(repoId: RepoId): Promise<BisectState> {
+  return call<BisectState>("bisect_state", { repo_id: repoId });
+}
+
+/** Marks the checked-out probe good/bad/skip; returns the next state. */
+export function bisectMark(
+  repoId: RepoId,
+  mark: BisectMark,
+): Promise<BisectState> {
+  return call<BisectState>("bisect_mark", { repo_id: repoId, mark });
+}
+
+/** Ends the bisect and restores the original branch/HEAD. */
+export function bisectReset(repoId: RepoId): Promise<void> {
+  return call<void>("bisect_reset", { repo_id: repoId });
+}
+
+/** `git describe --tags` for a commit-ish (short-sha fallback). */
+export function describe(repoId: RepoId, spec: string): Promise<string> {
+  return call<string>("describe", { repo_id: repoId, spec });
+}
+
+/** Builds an autosquash plan for `base..HEAD` (feeds `rebaseStart`). */
+export function autosquashPlan(
+  repoId: RepoId,
+  base: string,
+): Promise<RebaseStep[]> {
+  return call<RebaseStep[]>("autosquash_plan", { repo_id: repoId, base });
 }
 
 export async function mergeAbort(repoId: string): Promise<void> {

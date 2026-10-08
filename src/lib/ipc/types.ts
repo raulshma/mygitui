@@ -91,6 +91,8 @@ export interface LogFilter {
   before_unix?: number | null;
   refs: string[];
   follow: boolean;
+  /** Pickaxe -S: commit patches must add or remove this string. (M10) */
+  pickaxe?: string | null;
 }
 
 export interface BlameLine {
@@ -306,7 +308,29 @@ export interface RebaseState {
   plan: RebaseStep[];
   current: number;
   paused_for_edit: boolean;
+  /** Paused for a failed `exec` step — continue re-runs it. (M10) */
+  paused_for_exec: boolean;
+  exec_error: string | null;
   rewritten: [string, string][];
+}
+
+// ---------- M10: bisect ----------
+
+export type BisectMark = "good" | "bad" | "skip";
+
+/** Live bisect state (`active: false` = none in progress). */
+export interface BisectState {
+  active: boolean;
+  /** Current bad tip; when `remaining === 0` this is the first bad commit. */
+  bad: string;
+  good: string | null;
+  /** Commit HEAD is detached on for probing. */
+  current: string | null;
+  /** Untested probes left (0 = done). */
+  remaining: number;
+  skipped: string[];
+  orig_head: string;
+  orig_branch: string | null;
 }
 
 export interface StashInfo {

@@ -30,6 +30,7 @@
    * selection (g/G/Home/End jump), and aria-activedescendant tracks it.
    */
   import { cherryPick, repoDiff, revertCommits } from "$lib/ipc/client";
+  import { describe } from "$lib/ipc/client";
   import type { CommitInfo, FileDiff, MergeResult } from "$lib/ipc/types";
   import GraphCanvas from "$lib/components/graph/GraphCanvas.svelte";
   import DiffViewer from "$lib/components/diff/DiffViewer.svelte";
@@ -395,6 +396,25 @@
       });
   });
 
+  // -- M10: describe line for the selected commit ------------------------------
+
+  let describeText = $state<string | null>(null);
+
+  $effect(() => {
+    const sha = selectedSha;
+    void repoId;
+    describeText = null;
+    if (!sha || !selectedInfo) return;
+    const token = ++detailToken;
+    describe(repoId, sha)
+      .then((text) => {
+        if (token === detailToken) describeText = text;
+      })
+      .catch(() => {
+        /* describe is decorative */
+      });
+  });
+
   function openBlame(path: string): void {
     if (!selectedSha) return;
     blameTarget = { path, from: selectedSha };
@@ -600,6 +620,14 @@
       />
       <span>Regex</span>
     </label>
+    <!-- M10: pickaxe -S — commits whose patch adds/removes the string. -->
+    <input
+      class="f"
+      placeholder="Changes containing… (-S)"
+      aria-label="Pickaxe: patches adding or removing this string"
+      value={store.filter.pickaxe}
+      oninput={(e) => store.setFilter({ pickaxe: e.currentTarget.value })}
+    />
 
     {#if filterActive}
       <button class="clear" onclick={() => store.clearFilter()}>Clear</button>
@@ -857,6 +885,14 @@
                       {p.slice(0, 7)}
                     </button>
                   {/each}
+                {/if}
+              </dd>
+              <dt>Describe</dt>
+              <dd>
+                {#if describeText}
+                  <code>{describeText}</code>
+                {:else}
+                  <span class="muted">…</span>
                 {/if}
               </dd>
               {#if selectedInfo.refs.length > 0}

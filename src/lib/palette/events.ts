@@ -35,6 +35,8 @@ export interface UiEventMap {
   "branches-focus-switch": undefined;
   /** Open the merged-branch cleanup wizard (BranchPanel). */
   "branches-cleanup": undefined;
+  /** Open the bisect start form (BisectBanner). */
+  "bisect-open-start": undefined;
   /** Open file history for a path: `{ path, repoId? }`. */
   "open-file-history": { path: string; repoId?: string };
   /** Request a commit action from anywhere: `{ sha, action }`. */

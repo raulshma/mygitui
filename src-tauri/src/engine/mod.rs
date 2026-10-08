@@ -1,3 +1,4 @@
+pub mod bisect;
 pub mod branches;
 pub mod git_engine;
 pub mod libgit2;
@@ -21,6 +22,8 @@ pub mod stash;
 #[cfg(test)]
 mod stash_tests;
 
+#[cfg(test)]
+mod bisect_tests;
 #[cfg(test)]
 mod checkpoint_tests;
 pub mod stats;

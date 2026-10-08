@@ -17,9 +17,10 @@ use tauri::State;
 
 use crate::engine::git_engine::EngineError;
 use crate::engine::types::{
-    BlameLine, CheckpointInfo, CommitInfo, ConflictFile, ConflictResolution, DiffSide, FileDiff,
-    LogFilter, MergeOptions, MergeResult, RebaseState, RebaseStep, ReflogEntry, RemoteBranchInfo,
-    RepoId, RepoInfo, RepoStatus, ResetKind, StashInfo, TagInfo, WorktreeInfo,
+    BisectMark, BisectState, BlameLine, CheckpointInfo, CommitInfo, ConflictFile,
+    ConflictResolution, DiffSide, FileDiff, LogFilter, MergeOptions, MergeResult, RebaseState,
+    RebaseStep, ReflogEntry, RemoteBranchInfo, RepoId, RepoInfo, RepoStatus, ResetKind, StashInfo,
+    TagInfo, WorktreeInfo,
 };
 use crate::graph::types::{self, GraphRow};
 use crate::repo::{RepoHandle, RepoManager, StreamHandle};
@@ -1655,6 +1656,99 @@ pub async fn rebase_abort(repo_id: RepoId, state: State<'_, RepoManager>) -> Res
         engine.rebase_abort(repo)
     }))
     .await
+}
+
+// ---------- M10: bisect / describe / autosquash ----------
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn bisect_start(
+    repo_id: RepoId,
+    bad: Option<String>,
+    good: Option<String>,
+    state: State<'_, RepoManager>,
+) -> Result<BisectState, String> {
+    let handle = get_handle(&state, &repo_id)?;
+    let engine = handle.m3();
+    finish_op(enqueue_mutation(&handle, "bisect", move |_ctx, repo| {
+        engine.bisect_start(repo, bad.as_deref(), good.as_deref())
+    }))
+    .await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn bisect_state(
+    repo_id: RepoId,
+    state: State<'_, RepoManager>,
+) -> Result<BisectState, String> {
+    let handle = get_handle(&state, &repo_id)?;
+    let engine = handle.m3();
+    let repo = handle.repo();
+    tauri::async_runtime::spawn_blocking(move || {
+        let repo = repo.lock();
+        engine.bisect_state(&repo).map_err(engine_err)
+    })
+    .await
+    .map_err(|e| format!("bisect_state task failed: {e}"))?
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn bisect_mark(
+    repo_id: RepoId,
+    mark: BisectMark,
+    state: State<'_, RepoManager>,
+) -> Result<BisectState, String> {
+    let handle = get_handle(&state, &repo_id)?;
+    let engine = handle.m3();
+    finish_op(enqueue_mutation(&handle, "bisect", move |_ctx, repo| {
+        engine.bisect_mark(repo, mark)
+    }))
+    .await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn bisect_reset(repo_id: RepoId, state: State<'_, RepoManager>) -> Result<(), String> {
+    let handle = get_handle(&state, &repo_id)?;
+    let engine = handle.m3();
+    finish_op(enqueue_mutation(&handle, "bisect", move |_ctx, repo| {
+        engine.bisect_reset(repo)
+    }))
+    .await
+}
+
+/// `git describe --tags` for a commit-ish.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn describe(
+    repo_id: RepoId,
+    spec: String,
+    state: State<'_, RepoManager>,
+) -> Result<String, String> {
+    let handle = get_handle(&state, &repo_id)?;
+    let engine = handle.m3();
+    let repo = handle.repo();
+    tauri::async_runtime::spawn_blocking(move || {
+        let repo = repo.lock();
+        engine.describe(&repo, &spec).map_err(engine_err)
+    })
+    .await
+    .map_err(|e| format!("describe task failed: {e}"))?
+}
+
+/// Builds an autosquash rebase plan for `base..HEAD` (feeds `rebase_start`).
+#[tauri::command(rename_all = "snake_case")]
+pub async fn autosquash_plan(
+    repo_id: RepoId,
+    base: String,
+    state: State<'_, RepoManager>,
+) -> Result<Vec<RebaseStep>, String> {
+    let handle = get_handle(&state, &repo_id)?;
+    let engine = handle.m3();
+    let repo = handle.repo();
+    tauri::async_runtime::spawn_blocking(move || {
+        let repo = repo.lock();
+        engine.autosquash_plan(&repo, &base).map_err(engine_err)
+    })
+    .await
+    .map_err(|e| format!("autosquash_plan task failed: {e}"))?
 }
 
 #[tauri::command(rename_all = "snake_case")]

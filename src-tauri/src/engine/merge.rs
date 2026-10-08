@@ -55,8 +55,8 @@ use git2::{Index, Repository, RepositoryState, Signature, Time};
 use super::git_engine::{EngineError, EngineResult, GitEngineM3};
 use super::libgit2::Libgit2Engine;
 use super::types::{
-    ConflictFile, ConflictResolution, MergeFavor, MergeOptions, MergeOutcome, MergeResult,
-    ResetKind,
+    BisectMark, BisectState, ConflictFile, ConflictResolution, MergeFavor, MergeOptions,
+    MergeOutcome, MergeResult, ResetKind,
 };
 use crate::engine::types::{
     CheckpointInfo, RebaseState, RebaseStep, ReflogEntry, StashInfo, WorktreeInfo,
@@ -753,5 +753,30 @@ impl GitEngineM3 for Libgit2Engine {
     }
     fn checkpoint_gc(&self, repo: &Repository, older_than_days: u32) -> EngineResult<u32> {
         self.checkpoint_gc_impl(repo, older_than_days)
+    }
+
+    // ---------- M10: bisect / describe / autosquash forwarding ----------
+    fn bisect_start(
+        &self,
+        repo: &Repository,
+        bad: Option<&str>,
+        good: Option<&str>,
+    ) -> EngineResult<BisectState> {
+        self.bisect_start_impl(repo, bad, good)
+    }
+    fn bisect_state(&self, repo: &Repository) -> EngineResult<BisectState> {
+        self.bisect_state_impl(repo)
+    }
+    fn bisect_mark(&self, repo: &Repository, mark: BisectMark) -> EngineResult<BisectState> {
+        self.bisect_mark_impl(repo, mark)
+    }
+    fn bisect_reset(&self, repo: &Repository) -> EngineResult<()> {
+        self.bisect_reset_impl(repo)
+    }
+    fn describe(&self, repo: &Repository, spec: &str) -> EngineResult<String> {
+        self.describe_impl(repo, spec)
+    }
+    fn autosquash_plan(&self, repo: &Repository, base: &str) -> EngineResult<Vec<RebaseStep>> {
+        self.autosquash_plan_impl(repo, base)
     }
 }

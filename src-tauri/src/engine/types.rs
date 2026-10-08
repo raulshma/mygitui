@@ -133,6 +133,10 @@ pub struct LogFilter {
     pub refs: Vec<String>,
     /// Follow renames for `path` (single-path walks only).
     pub follow: bool,
+    /// Pickaxe `-S`: only commits whose patch adds or removes this string.
+    /// (M10; cost is one tree-diff per candidate commit.)
+    #[serde(default)]
+    pub pickaxe: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -326,6 +330,36 @@ pub struct MergetoolResult {
     pub output: String,
 }
 
+// ---------- M10: bisect / describe ----------
+
+/// `bisect_mark` argument.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BisectMark {
+    Good,
+    Bad,
+    Skip,
+}
+
+/// Live bisect state (`active: false` = no bisect in progress).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct BisectState {
+    pub active: bool,
+    /// Current bad tip (first-bad candidate while active; the answer when
+    /// `remaining == 0`).
+    pub bad: String,
+    /// Known-good commit (None = no good marked yet).
+    pub good: Option<String>,
+    /// Commit HEAD is detached on for probing.
+    pub current: Option<String>,
+    /// Candidates still under test (0 = `bad` is the first bad commit).
+    pub remaining: usize,
+    pub skipped: Vec<String>,
+    /// HEAD when the bisect started (reset target).
+    pub orig_head: String,
+    pub orig_branch: Option<String>,
+}
+
 // ---------- M3: power + safety model ----------
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -416,6 +450,12 @@ pub struct RebaseState {
     pub current: usize,
     /// When set: paused for `edit` — user amends the worktree, then continues.
     pub paused_for_edit: bool,
+    /// When set: paused for a failed `exec` — user fixes, then continues
+    /// (the step re-runs). Diagnostics in `exec_error`. (M10)
+    #[serde(default)]
+    pub paused_for_exec: bool,
+    #[serde(default)]
+    pub exec_error: Option<String>,
     /// Commit-sha mapping applied so far (old → new).
     pub rewritten: Vec<(String, String)>,
 }

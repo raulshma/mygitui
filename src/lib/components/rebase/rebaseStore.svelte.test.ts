@@ -42,6 +42,8 @@ function state(patch: Partial<RebaseState> = {}): RebaseState {
     plan: [],
     current: 0,
     paused_for_edit: false,
+    paused_for_exec: false,
+    exec_error: null,
     rewritten: [],
     ...patch,
   };

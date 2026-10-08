@@ -43,6 +43,7 @@
   import ReflogPanel from "$lib/components/panels/ReflogPanel.svelte";
   import UndoPanel from "$lib/components/safety/UndoPanel.svelte";
   import ConflictEditor from "$lib/components/merge/ConflictEditor.svelte";
+  import BisectBanner from "$lib/components/bisect/BisectBanner.svelte";
   import ConfirmDialog from "$lib/components/safety/ConfirmDialog.svelte";
   import PromptDialog from "$lib/components/safety/PromptDialog.svelte";
   import CommitBar from "$lib/components/panels/CommitBar.svelte";
@@ -632,6 +633,8 @@
       </span>
     </div>
   {/if}
+
+  <BisectBanner {repoId} />
 
   <div class="main-area">
     <SplitContainer

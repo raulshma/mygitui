@@ -134,7 +134,7 @@ export class HistoryStore {
   /** True when any filter field is set (drives the "clear" button). */
   get filterActive(): boolean {
     const f = this.filter;
-    return Boolean(f.text || f.author || f.path || f.after || f.before);
+    return Boolean(f.text || f.author || f.path || f.after || f.before || f.pickaxe);
   }
 
   /** Clears all filter fields and restarts immediately-ish (debounced). */

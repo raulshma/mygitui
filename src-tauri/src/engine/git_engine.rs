@@ -236,8 +236,8 @@ pub struct PushProgress {
 // ---------- M3: power + safety (default Unsupported until lanes land) ----------
 
 use super::types::{
-    CheckpointInfo, ConflictFile, ConflictResolution, MergeOptions, MergeResult, RebaseState,
-    RebaseStep, ReflogEntry, ResetKind, StashInfo, WorktreeInfo,
+    BisectMark, BisectState, CheckpointInfo, ConflictFile, ConflictResolution, MergeOptions,
+    MergeResult, RebaseState, RebaseStep, ReflogEntry, ResetKind, StashInfo, WorktreeInfo,
 };
 
 /// Additional trait items live in an extension impl to keep M2 diff small.
@@ -369,5 +369,40 @@ pub trait GitEngineM3: Send + Sync {
 
     fn checkpoint_gc(&self, _repo: &Repository, _older_than_days: u32) -> EngineResult<u32> {
         Err(EngineError::Unsupported("checkpoint_gc".into()))
+    }
+
+    // ---------- M10: bisect / describe / autosquash ----------
+
+    fn bisect_start(
+        &self,
+        _repo: &Repository,
+        _bad: Option<&str>,
+        _good: Option<&str>,
+    ) -> EngineResult<BisectState> {
+        Err(EngineError::Unsupported("bisect_start".into()))
+    }
+
+    fn bisect_state(&self, _repo: &Repository) -> EngineResult<BisectState> {
+        Err(EngineError::Unsupported("bisect_state".into()))
+    }
+
+    fn bisect_mark(&self, _repo: &Repository, _mark: BisectMark) -> EngineResult<BisectState> {
+        Err(EngineError::Unsupported("bisect_mark".into()))
+    }
+
+    fn bisect_reset(&self, _repo: &Repository) -> EngineResult<()> {
+        Err(EngineError::Unsupported("bisect_reset".into()))
+    }
+
+    /// `git describe --tags` for a commit-ish (falls back to the short sha).
+    fn describe(&self, _repo: &Repository, _spec: &str) -> EngineResult<String> {
+        Err(EngineError::Unsupported("describe".into()))
+    }
+
+    /// Builds a rebase plan from `fixup!` / `squash!` commits in
+    /// `base..HEAD` (`git rebase --autosquash` semantics, expressed in our
+    /// plan format for `rebase_start`).
+    fn autosquash_plan(&self, _repo: &Repository, _base: &str) -> EngineResult<Vec<RebaseStep>> {
+        Err(EngineError::Unsupported("autosquash_plan".into()))
     }
 }

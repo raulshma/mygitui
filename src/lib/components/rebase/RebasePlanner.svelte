@@ -28,7 +28,7 @@
    * Closing the dialog never stops a live rebase — the shared monitor keeps
    * watching and a reopened planner re-attaches to it.
    */
-  import { rebaseStart, streamLog } from "$lib/ipc/client";
+  import { rebaseStart, streamLog, autosquashPlan } from "$lib/ipc/client";
   import type { CommitInfo, RebaseStep } from "$lib/ipc/types";
   import { toast } from "$lib/toast";
   import ConfirmDialog from "$lib/components/safety/ConfirmDialog.svelte";
@@ -82,6 +82,31 @@
       validationError === null,
   );
   const shortBase = $derived(baseSha === null ? "root" : baseSha.slice(0, 7));
+
+  /** M10: replace the plan with the backend's autosquash ordering. */
+  let autosquashing = $state(false);
+  async function onAutosquash(): Promise<void> {
+    if (autosquashing || baseSha === null || loading) return;
+    autosquashing = true;
+    try {
+      const steps = await autosquashPlan(repoId, baseSha);
+      const summaryOf = new Map(rows.map((row) => [row.sha, row.summary]));
+      rows = steps.map((step) => ({
+        sha: step.sha,
+        summary: summaryOf.get(step.sha) ?? step.new_message ?? step.sha.slice(0, 7),
+        action: step.action as PlanRow["action"],
+        message: step.new_message ?? "",
+      }));
+      toast(`Autosquash: ${steps.filter((s) => s.action !== "pick").length} fixup/squash step(s) placed`, { kind: "success" });
+    } catch (err) {
+      toast(
+        `Autosquash failed: ${err instanceof Error ? err.message : String(err)}`,
+        { kind: "error" },
+      );
+    } finally {
+      autosquashing = false;
+    }
+  }
 
   /** "step k/n (action sha)" for the run view. */
   const progress = $derived.by(() => {
@@ -404,6 +429,18 @@
         {/if}
       {/if}
       <div class="actions">
+        {#if baseSha !== null}
+          <button
+            class="ghost"
+            type="button"
+            onclick={() => void onAutosquash()}
+            disabled={autosquashing || loading}
+            title="Move fixup!/squash! commits after their targets"
+          >
+            {autosquashing ? "Autosquashing…" : "Autosquash"}
+          </button>
+        {/if}
+        <span style:flex="1"></span>
         <button class="ghost" type="button" onclick={cancel} disabled={starting}>
           Cancel
         </button>

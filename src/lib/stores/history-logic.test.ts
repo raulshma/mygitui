@@ -148,6 +148,7 @@ describe("toLogFilter", () => {
       before_unix: null,
       refs: [],
       follow: false,
+      pickaxe: null,
     });
   });
 
@@ -156,6 +157,7 @@ describe("toLogFilter", () => {
       toLogFilter({
         text: "  fix leak  ",
         regex: false,
+        pickaxe: "",
         author: " alice ",
         path: "src/lib/",
         after: "2026-01-02",
@@ -170,6 +172,7 @@ describe("toLogFilter", () => {
       before_unix: 1_775_001_599,
       refs: [],
       follow: false,
+      pickaxe: null,
     });
   });
 

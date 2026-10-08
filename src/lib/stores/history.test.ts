@@ -112,6 +112,7 @@ describe("start + page append", () => {
       before_unix: null,
       refs: [],
       follow: false,
+      pickaxe: null,
     });
     expect(store.loading).toBe(true);
 
@@ -235,6 +236,7 @@ describe("filter debounce", () => {
       before_unix: null,
       refs: [],
       follow: false,
+      pickaxe: null,
     });
     // Restart resets the released pages until fresh ones arrive.
     expect(store.pages).toHaveLength(0);
