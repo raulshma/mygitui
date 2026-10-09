@@ -59,8 +59,14 @@ where
 
 /// Pure: is this env key on the pass-through list? (Shared with the
 /// maintenance/rebase-exec runners.)
-pub(crate) fn allowlisted(key: &str) -> bool {
-    ENV_ALLOWLIST.contains(&key)
+/// Clears `cmd`'s environment, then re-applies the sanitized set
+/// ([`sanitize_env`] over the parent env). Every spawned git must go
+/// through this — the allowlist has exactly one home.
+pub(crate) fn apply_sanitized_env(cmd: &mut Command) {
+    cmd.env_clear();
+    for (key, value) in sanitize_env(std::env::vars()) {
+        cmd.env(key, value);
+    }
 }
 
 /// Pure: argv for `git commit`. The message always goes through `-F` with a
@@ -94,10 +100,7 @@ pub(crate) fn build_commit_args(message_file: &str, opts: &CommitOptions) -> Vec
 fn git(workdir: &Path, args: &[String]) -> Result<String, String> {
     let mut cmd = Command::new("git");
     cmd.current_dir(workdir).args(args);
-    cmd.env_clear();
-    for (key, value) in sanitize_env(std::env::vars()) {
-        cmd.env(key, value);
-    }
+    apply_sanitized_env(&mut cmd);
     let output = cmd
         .output()
         .map_err(|err| format!("failed to spawn git: {err}"))?;

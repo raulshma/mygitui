@@ -49,10 +49,7 @@ pub fn mergetool_run(
 
     let mut cmd = Command::new("git");
     cmd.current_dir(workdir).args(&args);
-    cmd.env_clear();
-    for (key, value) in crate::cli::sanitize_env(std::env::vars()) {
-        cmd.env(key, value);
-    }
+    crate::cli::apply_sanitized_env(&mut cmd);
     let output = cmd
         .output()
         .map_err(|err| format!("failed to spawn git mergetool: {err}"))?;
@@ -98,10 +95,7 @@ pub fn tag_sign_via_cli(
         }
         let mut cmd = Command::new("git");
         cmd.current_dir(workdir).args(&args);
-        cmd.env_clear();
-        for (key, value) in crate::cli::sanitize_env(std::env::vars()) {
-            cmd.env(key, value);
-        }
+        crate::cli::apply_sanitized_env(&mut cmd);
         let output = cmd
             .output()
             .map_err(|err| format!("failed to spawn git tag: {err}"))?;

@@ -946,9 +946,12 @@ impl GitEngine for Libgit2Engine {
             if let Some(needle) = &filter.pickaxe {
                 if !needle.is_empty() {
                     if pickaxe_examined >= LOG_CURSOR_SCAN_LIMIT {
-                        // Budget exhausted: return what we have (page flow
-                        // continues on the next request only when the caller
-                        // re-queries — documented soft limit).
+                        // Budget exhausted: the caller resumes from the last
+                        // examined commit, so the stream continues in a fresh
+                        // page instead of silently dropping the rest of the
+                        // walk. The cursor advances every page, so this stays
+                        // finite.
+                        next_cursor = Some(commit.id().to_string());
                         break;
                     }
                     pickaxe_examined += 1;

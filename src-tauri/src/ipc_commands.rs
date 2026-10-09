@@ -1806,11 +1806,38 @@ pub async fn maintenance_run(
                     )))
                 }
             };
-            let (args, timeout) = parsed.args();
-            crate::maintenance::git_run(workdir, args, timeout).map_err(EngineError::Invalid)
+            let args = parsed.args();
+            crate::maintenance::git_run(workdir, args).map_err(EngineError::Invalid)
         },
     ))
     .await
+}
+
+/// Arguments reach `git archive` as argv entries (never a shell), but the
+/// IPC contract promises a metacharacter guard on `spec`/`destination`:
+/// reject shell metacharacters, control characters, and option-shaped
+/// values (a leading `-` would be parsed as a flag).
+fn archive_arg_ok(value: &str) -> bool {
+    !value.is_empty()
+        && !value.starts_with('-')
+        && !value.chars().any(|c| {
+            matches!(
+                c,
+                ';' | '&'
+                    | '|'
+                    | '$'
+                    | '`'
+                    | '('
+                    | ')'
+                    | '<'
+                    | '>'
+                    | '"'
+                    | '\''
+                    | '\n'
+                    | '\r'
+                    | '\0'
+            )
+        })
 }
 
 /// `git archive --format <zip|tar|tar.gz> <ref> -o <destination>`.
@@ -1825,7 +1852,7 @@ pub async fn archive(
     if !["zip", "tar", "tar.gz"].contains(&format.as_str()) {
         return Err(format!("unsupported archive format `{format}`"));
     }
-    if spec.contains(';') || destination.is_empty() {
+    if !archive_arg_ok(&spec) || !archive_arg_ok(&destination) {
         return Err("invalid archive arguments".into());
     }
     let handle = get_handle(&state, &repo_id)?;
@@ -1834,7 +1861,6 @@ pub async fn archive(
         crate::maintenance::git_run(
             std::path::Path::new(&root),
             &["archive", "--format", &format, &spec, "-o", &destination],
-            1800,
         )
         .map(|_| ())
         .map_err(EngineError::Invalid)
@@ -1930,7 +1956,7 @@ pub async fn clone_blobless(
             args.insert(2, format!("--depth={depth}"));
         }
         let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
-        crate::maintenance::git_run(&parent, &arg_refs, 3600)?;
+        crate::maintenance::git_run(&parent, &arg_refs)?;
         Ok(destination)
     })
     .await

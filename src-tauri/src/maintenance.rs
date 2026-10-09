@@ -89,22 +89,15 @@ pub fn repo_health(workdir: &Path, git_dir: &Path) -> RepoHealth {
 }
 
 /// Sanitized `git <args>` runner (shared rules with cli.rs).
-pub fn git_run(workdir: &Path, args: &[&str], timeout_secs: u64) -> Result<String, String> {
+pub fn git_run(workdir: &Path, args: &[&str]) -> Result<String, String> {
     let mut cmd = std::process::Command::new("git");
     cmd.current_dir(workdir).args(args);
-    cmd.env_clear();
-    for (key, value) in std::env::vars() {
-        if key.starts_with("GIT_") || crate::cli::allowlisted(key.as_str()) {
-            cmd.env(key, value);
-        }
-    }
+    crate::cli::apply_sanitized_env(&mut cmd);
     let Ok(output) = cmd.output() else {
-        // A missing git binary errors immediately; timeouts are not
-        // enforceable portably without spawn plumbing — long-running ops are
+        // A missing git binary errors immediately; long-running ops are
         // op-queued so the UI stays responsive.
         return Err(format!("failed to spawn git {args:?}"));
     };
-    let _ = timeout_secs; // documented; see note above
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     if output.status.success() {
@@ -130,24 +123,19 @@ pub enum MaintenanceOp {
     Prune,
     CommitGraph,
     PackRefs,
-    /// Handled before the `args()` dispatch (parses `count-objects -v`).
-    #[allow(dead_code)]
-    CountObjects,
 }
 
 impl MaintenanceOp {
-    pub fn args(self) -> (&'static [&'static str], u64) {
+    pub fn args(self) -> &'static [&'static str] {
         match self {
             // Aggressive enough to matter, gentle enough for interactive use:
             // no --aggressive (hours on big repos), auto-detaches packs.
-            MaintenanceOp::Gc => (&["gc", "--auto"], 3600),
-            MaintenanceOp::Prune => (&["prune"], 3600),
-            MaintenanceOp::CommitGraph => (
-                &["commit-graph", "write", "--reachable", "--split=replace"],
-                600,
-            ),
-            MaintenanceOp::PackRefs => (&["pack-refs", "--all", "--prune"], 300),
-            MaintenanceOp::CountObjects => (&["count-objects", "-v"], 60),
+            MaintenanceOp::Gc => &["gc", "--auto"],
+            MaintenanceOp::Prune => &["prune"],
+            MaintenanceOp::CommitGraph => {
+                &["commit-graph", "write", "--reachable", "--split=replace"]
+            }
+            MaintenanceOp::PackRefs => &["pack-refs", "--all", "--prune"],
         }
     }
 }
@@ -155,7 +143,7 @@ impl MaintenanceOp {
 /// Exact object counts via `git count-objects -v` (fills the packed side of
 /// the health panel).
 pub fn count_objects(workdir: &Path) -> Result<(u64, u64), String> {
-    let out = git_run(workdir, &["count-objects", "-v"], 60)?;
+    let out = git_run(workdir, &["count-objects", "-v"])?;
     let mut count = 0u64;
     let mut size = 0u64;
     for line in out.lines() {
@@ -177,14 +165,10 @@ use crate::engine::types::{LfsStatus, SparseInfo};
 /// Sparse-checkout state (`git sparse-checkout list`; `--cone` detection
 /// from config `core.sparseCheckoutCone`).
 pub fn sparse_info(workdir: &Path) -> SparseInfo {
-    let list = git_run(workdir, &["sparse-checkout", "list"], 30).unwrap_or_default();
-    let cone = git_run(
-        workdir,
-        &["config", "--bool", "core.sparseCheckoutCone"],
-        15,
-    )
-    .map(|v| v == "true")
-    .unwrap_or(false);
+    let list = git_run(workdir, &["sparse-checkout", "list"]).unwrap_or_default();
+    let cone = git_run(workdir, &["config", "--bool", "core.sparseCheckoutCone"])
+        .map(|v| v == "true")
+        .unwrap_or(false);
     let patterns: Vec<String> = list
         .lines()
         .map(str::trim)
@@ -203,7 +187,7 @@ pub fn sparse_info(workdir: &Path) -> SparseInfo {
 pub fn sparse_apply(workdir: &Path, patterns: &[String], add: bool) -> Result<(), String> {
     if patterns.is_empty() {
         // Disabling: back to full checkout.
-        return git_run(workdir, &["sparse-checkout", "disable"], 300).map(|_| ());
+        return git_run(workdir, &["sparse-checkout", "disable"]).map(|_| ());
     }
     let mut args: Vec<&str> = vec!["sparse-checkout"];
     args.push(if add { "add" } else { "set" });
@@ -211,15 +195,15 @@ pub fn sparse_apply(workdir: &Path, patterns: &[String], add: bool) -> Result<()
     for pattern in patterns {
         args.push(pattern);
     }
-    git_run(workdir, &args, 600).map(|_| ())
+    git_run(workdir, &args).map(|_| ())
 }
 
 /// `git lfs` presence + tracked patterns (parsed from every tracked
 /// `.gitattributes` — the root one and simple per-dir ones via ls-files).
 pub fn lfs_status(workdir: &Path) -> LfsStatus {
-    let version = git_run(workdir, &["lfs", "version"], 15).ok();
+    let version = git_run(workdir, &["lfs", "version"]).ok();
     let mut tracked = Vec::new();
-    if let Ok(list) = git_run(workdir, &["ls-files", "*.gitattributes"], 30) {
+    if let Ok(list) = git_run(workdir, &["ls-files", "*.gitattributes"]) {
         for attributes_file in list.lines() {
             let path = workdir.join(attributes_file.trim());
             if let Ok(content) = std::fs::read_to_string(path) {
@@ -248,5 +232,5 @@ pub fn lfs_run(workdir: &Path, subcommand: &str) -> Result<String, String> {
     if !allowed.contains(&subcommand) {
         return Err(format!("unsupported git lfs subcommand `{subcommand}`"));
     }
-    git_run(workdir, &["lfs", subcommand], 3600)
+    git_run(workdir, &["lfs", subcommand])
 }

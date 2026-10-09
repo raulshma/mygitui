@@ -33,7 +33,7 @@ with same kind+repo replaces the prior stream.
 
 | Event | Payload | Meaning |
 |---|---|---|
-| `cli-args` | `string[]` | second instance launched with args |
+| `cli-args` | `string[]` | second instance launched with args (argv[0] = the executable's own path, stripped backend-side) |
 | `repo-changed` | `{ repo_id, paths: string[], head_moved: bool, full: bool }` | watcher fired; `full=true` → resync everything |
 
 ## TS mirrors
@@ -89,6 +89,7 @@ Same op-queue + op-progress machinery as M2. All `#[tauri::command(rename_all = 
 | `conflict_resolve` | `repo_id, path, resolution, custom_content?: number[] (bytes)` | `void` |
 | `cherry_pick` | `repo_id, shas: string[]` | `MergeResult` |
 | `revert` | `repo_id, shas: string[]` | `MergeResult` |
+| `sequencer_abort` | `repo_id` | `void` (aborts in-progress cherry-pick/revert state) |
 | `reset` | `repo_id, kind, to` | `void` (checkpoint auto-created before hard) |
 | `rebase_start` | `repo_id, plan: RebaseStep[], onto?: string` | `RebaseState` |
 | `rebase_state` | `repo_id` | `RebaseState` |
@@ -476,7 +477,9 @@ walk midpoint, known-bad tip excluded)
 - **`repo_health(repo_id)`** → `RepoHealth` `{ git_size_bytes,
   worktree_size_bytes, loose_objects, packed_objects?, pack_files,
   has_commit_graph, commit_graph_bytes, packed_refs, last_gc? }` — pure fs
-  walk (bounded depth 3).
+  walk (bounded depth 3). `last_gc` is the mtime of `<gitdir>/gc.log`
+  (git writes it only on gc warnings) — null for cleanly maintained
+  repos, not a true "last gc ran" timestamp.
 - **`maintenance_run(repo_id, op)`** — op queue; `gc` (`git gc --auto`),
   `prune`, `commit_graph` (`git commit-graph write --reachable
   --split=replace` — revwalk acceleration; the Health panel surfaces a
@@ -495,7 +498,9 @@ walk midpoint, known-bad tip excluded)
 - **Pickaxe budget**: `-S` page requests scan at most
   `LOG_CURSOR_SCAN_LIMIT` (100k) commits per page (~2.6 ms/commit measured
   on the bench fixture — `git log -S` is inherently expensive; the budget
-  keeps huge repos responsive and the stream cancellable).
+  keeps huge repos responsive and the stream cancellable). On exhaustion a
+  page returns the last examined commit as `next_cursor`, so the stream
+  resumes in a fresh page — nothing beyond the budget is silently dropped.
 
 ### Frontend
 

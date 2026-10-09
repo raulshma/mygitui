@@ -420,10 +420,23 @@ impl Libgit2Engine {
         };
         // The remote-tracking ref git would use as the force-with-lease
         // expectation for a branch refspec.
-        let tracking_of = |remote: &str, full: &str| -> Option<String> {
-            full.strip_prefix("refs/heads/")
-                .map(|short| format!("refs/remotes/{remote}/{short}"))
-        };
+        let require_tracking_ref =
+            |repo: &Repository, remote: &str, spec: &str, full: &str| -> Result<(), EngineError> {
+                // Lease: the remote must still match the last-fetched
+                // tracking ref. libgit2 has no native lease, so the
+                // tracking ref IS the expectation — refuse when we have
+                // never fetched the branch (we would be blindly forcing).
+                let Some(short) = full.strip_prefix("refs/heads/") else {
+                    return Err(EngineError::Invalid(format!("cannot lease `{spec}`")));
+                };
+                let tracking = format!("refs/remotes/{remote}/{short}");
+                if repo.find_reference(&tracking).is_err() {
+                    return Err(EngineError::Invalid(format!(
+                        "force-with-lease refused: no tracking ref `{tracking}` (fetch first)"
+                    )));
+                }
+                Ok(())
+            };
 
         let mut refspecs: Vec<String> = Vec::new();
         if opts.delete {
@@ -450,17 +463,7 @@ impl Libgit2Engine {
             for spec in &opts.refs {
                 let full = full_ref(spec);
                 let force = if opts.force_with_lease && full.starts_with("refs/heads/") {
-                    // Lease: the remote must still match the last-fetched
-                    // tracking ref. libgit2 has no native lease, so the
-                    // tracking ref IS the expectation — refuse when we have
-                    // never fetched the branch (we would be blindly forcing).
-                    let tracking = tracking_of(&opts.remote, &full)
-                        .ok_or_else(|| EngineError::Invalid(format!("cannot lease `{spec}`")))?;
-                    if repo.find_reference(&tracking).is_err() {
-                        return Err(EngineError::Invalid(format!(
-                            "force-with-lease refused: no tracking ref `{tracking}` (fetch first)"
-                        )));
-                    }
+                    require_tracking_ref(&repo, &opts.remote, spec, &full)?;
                     true
                 } else {
                     opts.force
@@ -485,12 +488,12 @@ impl Libgit2Engine {
                         EngineError::Invalid(format!("branch `{name}` is unborn; nothing to push"))
                     })?;
                 if opts.force_with_lease {
-                    let tracking = format!("refs/remotes/{}/{}", opts.remote, name);
-                    if repo.find_reference(&tracking).is_err() {
-                        return Err(EngineError::Invalid(format!(
-                            "force-with-lease refused: no tracking ref `{tracking}` (fetch first)"
-                        )));
-                    }
+                    require_tracking_ref(
+                        &repo,
+                        &opts.remote,
+                        &name,
+                        &format!("refs/heads/{name}"),
+                    )?;
                 }
                 let force = opts.force || opts.force_with_lease;
                 refspecs.push(format!(

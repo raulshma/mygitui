@@ -392,28 +392,9 @@ fn run_exec(repo: &Repository, command: &str) -> Result<(), String> {
         cmd
     };
     cmd.current_dir(workdir);
-    cmd.env_clear();
-    for (key, value) in std::env::vars() {
-        if key.starts_with("GIT_")
-            || [
-                "PATH",
-                "HOME",
-                "SYSTEMROOT",
-                "COMSPEC",
-                "PATHEXT",
-                "TMP",
-                "TEMP",
-                "APPDATA",
-                "LOCALAPPDATA",
-                "USERPROFILE",
-                "LANG",
-                "LC_ALL",
-            ]
-            .contains(&key.as_str())
-        {
-            cmd.env(key, value);
-        }
-    }
+    // Same rules as every other spawn (cli.rs): GIT_* + allowlist, nothing
+    // else inherited.
+    crate::cli::apply_sanitized_env(&mut cmd);
     let output = cmd
         .output()
         .map_err(|err| format!("failed to spawn exec command: {err}"))?;
