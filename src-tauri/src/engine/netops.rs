@@ -463,7 +463,7 @@ impl Libgit2Engine {
             for spec in &opts.refs {
                 let full = full_ref(spec);
                 let force = if opts.force_with_lease && full.starts_with("refs/heads/") {
-                    require_tracking_ref(&repo, &opts.remote, spec, &full)?;
+                    require_tracking_ref(repo, &opts.remote, spec, &full)?;
                     true
                 } else {
                     opts.force
@@ -488,12 +488,7 @@ impl Libgit2Engine {
                         EngineError::Invalid(format!("branch `{name}` is unborn; nothing to push"))
                     })?;
                 if opts.force_with_lease {
-                    require_tracking_ref(
-                        &repo,
-                        &opts.remote,
-                        &name,
-                        &format!("refs/heads/{name}"),
-                    )?;
+                    require_tracking_ref(repo, &opts.remote, &name, &format!("refs/heads/{name}"))?;
                 }
                 let force = opts.force || opts.force_with_lease;
                 refspecs.push(format!(
