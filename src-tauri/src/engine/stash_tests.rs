@@ -568,3 +568,36 @@ fn reflog_head_chain_after_commits() {
         .expect_err("unknown ref");
     assert!(expect_invalid(err).starts_with("no reflog for `nosuchref`"));
 }
+
+#[test]
+fn log_walk_excludes_stash_commits_and_starts_at_head() {
+    use super::git_engine::GitEngine;
+    use super::types::LogFilter;
+
+    let dir = TempDir::new("log-excludes-stash");
+    let repo = init_repo(dir.path());
+    commit_file(&repo, "a.txt", "one\n", "base");
+
+    write_file(&repo, "a.txt", "two\n");
+    ENGINE
+        .stash_push_impl(&repo, None, false, false)
+        .expect("stash push");
+    let stashes = ENGINE.stash_list_impl(&repo).expect("stash list");
+    assert_eq!(stashes.len(), 1);
+
+    let (page, next) = ENGINE
+        .log(&repo, &LogFilter::default(), 10, None)
+        .expect("log");
+    assert!(next.is_none(), "one real commit must end the walk");
+    // The merge-shaped stash commits never enter the commit-graph walk; the
+    // list is real history only, newest first.
+    for commit in &page {
+        assert_ne!(
+            commit.sha, stashes[0].sha,
+            "stash commit leaked into the log walk"
+        );
+    }
+    let head = repo.head().expect("head").target().expect("target");
+    assert_eq!(page[0].sha, head.to_string(), "HEAD pops first");
+    assert_eq!(page[0].summary, "base");
+}

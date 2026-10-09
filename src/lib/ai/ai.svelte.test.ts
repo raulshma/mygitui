@@ -260,6 +260,24 @@ describe("AiStore opt-in gating and run state", () => {
     expect(opencode.generate).not.toHaveBeenCalled();
   });
 
+  it("a one-shot run runs without persisted opt-in and does not persist it", async () => {
+    const { store, git, opencode } = makeHarness();
+
+    const outcome = await store.generateCommitMessage("r1", git, { oneShot: true });
+    expect(outcome.message).toEqual({
+      subject: "feat(ui): add the thing",
+      body: "It was missing.",
+    });
+    expect(git.repoDiff).toHaveBeenCalledWith("r1", "head", "index");
+    expect(opencode.generate).toHaveBeenCalledTimes(1);
+    expect(store.isOptedIn("r1")).toBe(false);
+
+    // The next run without consent still refuses.
+    await expect(store.run("commit-message", { repoId: "r1" }, git)).rejects.toMatchObject({
+      kind: "opt-in",
+    });
+  });
+
   it("a successful commit-message run parses subject/body and records state", async () => {
     const { store, git, opencode } = makeHarness();
     store.setOptIn("r1", true);

@@ -73,7 +73,10 @@
   async function run(): Promise<void> {
     error = null;
     try {
-      const outcome = await ai.generateCommitMessage(repoId);
+      // Not persisted-opted-in here is only possible right after the
+      // dialog's consent ("Just once"): carry that consent on the run.
+      const opts = ai.isOptedIn(repoId) ? undefined : { oneShot: true };
+      const outcome = await ai.generateCommitMessage(repoId, undefined, opts);
       const message = outcome.message ?? { subject: outcome.result.text, body: "" };
       onResult?.({
         subject: message.subject,
@@ -109,12 +112,11 @@
     type="button"
     {disabled}
     aria-label="Generate commit message with AI"
+    aria-busy={busy}
     title="Generate a commit message from the staged diff"
     onclick={openConfirm}
   >
-    {#if busy}
-      <span class="spinner" aria-hidden="true"></span>
-    {:else}
+    <span class="icon-box" class:busy>
       <svg
         class="icon"
         aria-hidden="true"
@@ -128,7 +130,10 @@
         />
         <path d="M19 15l1.18 3.32L23.5 19.5l-3.32 1.18L19 24l-1.18-3.32L14.5 19.5l3.32-1.18L19 15z" />
       </svg>
-    {/if}
+      {#if busy}
+        <span class="spinner" aria-hidden="true"></span>
+      {/if}
+    </span>
   </button>
 
   {#if confirmOpen}
@@ -203,14 +208,27 @@
     outline-offset: 1px;
   }
 
+  .icon-box {
+    position: relative;
+    display: block;
+  }
+
+  .icon-box.busy .icon {
+    opacity: 0.25;
+  }
+
   .icon {
     display: block;
   }
 
+  /* Overlays the sparkle while a generation is in flight. */
   .spinner {
-    width: 0.75rem;
-    height: 0.75rem;
-    border: 2px solid color-mix(in srgb, var(--m3-primary) 35%, transparent);
+    position: absolute;
+    inset: 0;
+    margin: auto;
+    width: 0.9rem;
+    height: 0.9rem;
+    border: 2px solid color-mix(in srgb, var(--m3-primary) 30%, transparent);
     border-top-color: var(--m3-primary);
     border-radius: 50%;
     animation: spin 0.8s linear infinite;

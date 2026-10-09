@@ -10,7 +10,9 @@
  *
  * Per-repo generate state (`busy`/`error`/`last`) drives the feature
  * buttons' spinners and inline errors. `run` refuses to fire unless the
- * repo is opted in (the first-use dialog lives in the feature buttons).
+ * repo is opted in (the first-use dialog lives in the feature buttons) —
+ * except for a one-shot run (`{ oneShot: true }`), which carries the
+ * dialog's "Just once" consent for that single run without persisting it.
  *
  * Lives in a `.svelte.ts` module because `$state` only compiles there.
  * Tests construct isolated instances with an in-memory storage and mock
@@ -75,6 +77,17 @@ export interface AiGenerateState {
 
 function freshState(): AiGenerateState {
   return { busy: false, error: null, last: null };
+}
+
+/** Per-run options. */
+export interface AiRunOptions {
+  /**
+   * Consent for exactly this run without persisting the opt-in ("Just
+   * once" in the first-use dialog — the dialog itself is the consent).
+   * The run's own Retry keeps the consent; anything re-asking the
+   * dialog does not.
+   */
+  oneShot?: boolean;
 }
 
 /** Shared frozen default for {@link AiStore.peekState} reads (never mutated). */
@@ -360,8 +373,14 @@ export class AiStore {
    * the caller can react (toast etc.). No automatic retries — the user
    * re-invokes.
    */
-  async run(kind: FeatureKind, ctx: FeatureCtx, git?: FeatureGitClient): Promise<FeatureOutcome> {
-    if (!this.isOptedIn(ctx.repoId)) {
+  async run(
+    kind: FeatureKind,
+    ctx: FeatureCtx,
+    git?: FeatureGitClient,
+    opts?: AiRunOptions,
+  ): Promise<FeatureOutcome> {
+    const oneShot = opts?.oneShot === true;
+    if (!oneShot && !this.isOptedIn(ctx.repoId)) {
       throw new AiError(
         "opt-in",
         "AI features are not enabled for this repository — allow them when prompted or in AI settings",
@@ -376,7 +395,8 @@ export class AiStore {
     const deps: FeatureDeps = {
       git: git ?? (await defaultGitClient()),
       router: this.#supervisor,
-      isOptedIn: (repoId) => this.isOptedIn(repoId),
+      // One-shot consent satisfies runFeature's gate for this run only.
+      isOptedIn: (repoId) => oneShot || this.isOptedIn(repoId),
     };
 
     state.busy = true;
@@ -394,8 +414,12 @@ export class AiStore {
   }
 
   /** Convenience: commit message from the repo's staged diff. */
-  async generateCommitMessage(repoId: string, git?: FeatureGitClient): Promise<FeatureOutcome> {
-    return this.run("commit-message", { repoId }, git);
+  async generateCommitMessage(
+    repoId: string,
+    git?: FeatureGitClient,
+    opts?: AiRunOptions,
+  ): Promise<FeatureOutcome> {
+    return this.run("commit-message", { repoId }, git, opts);
   }
 }
 

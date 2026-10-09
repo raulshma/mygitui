@@ -11,6 +11,7 @@
    * nothing is auto-applied.
    */
   import { ai } from "$lib/ai/ai.svelte";
+  import type { AiRunOptions } from "$lib/ai/ai.svelte";
   import type { FeatureOutcome } from "$lib/ai/features";
   import DialogShell from "$lib/components/safety/DialogShell.svelte";
   import { toast } from "$lib/toast";
@@ -21,8 +22,8 @@
   let findings = $state<string | null>(null);
   let open = $state(false);
 
-  function run(): Promise<FeatureOutcome> {
-    return ai.run("review-staged", { repoId });
+  function run(opts?: AiRunOptions): Promise<FeatureOutcome> {
+    return ai.run("review-staged", { repoId }, undefined, opts);
   }
 
   function onResult(outcome: FeatureOutcome): void {

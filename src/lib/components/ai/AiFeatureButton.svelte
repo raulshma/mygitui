@@ -18,6 +18,7 @@
    * serves every FeatureKind; results flow back through `onResult`.
    */
   import { ai } from "$lib/ai/ai.svelte";
+  import type { AiRunOptions } from "$lib/ai/ai.svelte";
   import { isAiError } from "$lib/ai/types";
   import type { FeatureOutcome } from "$lib/ai/features";
   import AiSettings from "./AiSettings.svelte";
@@ -50,7 +51,7 @@
     /** Tighter padding for in-row placement. */
     compact?: boolean;
     /** The feature runner (closes over any context it needs). */
-    run: () => Promise<FeatureOutcome>;
+    run: (opts?: AiRunOptions) => Promise<FeatureOutcome>;
     /** Called with the finished outcome (the caller owns the result UI). */
     onResult?: (outcome: FeatureOutcome) => void;
   } = $props();
@@ -87,7 +88,10 @@
     running = true;
     error = null;
     try {
-      const outcome = await run();
+      // Not persisted-opted-in here is only possible right after the
+      // dialog's consent ("Just once"): carry that consent on the run.
+      const opts = ai.isOptedIn(repoId) ? undefined : { oneShot: true };
+      const outcome = await run(opts);
       onResult?.(outcome);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);

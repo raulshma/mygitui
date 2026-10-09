@@ -11,6 +11,7 @@
    * fills its input).
    */
   import { ai } from "$lib/ai/ai.svelte";
+  import type { AiRunOptions } from "$lib/ai/ai.svelte";
   import { stagedDiffText, type FeatureOutcome } from "$lib/ai/features";
   import { repoDiff } from "$lib/ipc/client";
   import type { FileDiff } from "$lib/ipc/types";
@@ -26,13 +27,13 @@
     onMessage: (message: string) => void;
   } = $props();
 
-  async function run(): Promise<FeatureOutcome> {
+  async function run(opts?: AiRunOptions): Promise<FeatureOutcome> {
     const files = await repoDiff(repoId, "head", "worktree");
     const summary = wipSummary(files);
     if (summary.trim().length === 0) {
       throw new Error("nothing to stash — the worktree is clean");
     }
-    return ai.run("stash-message", { repoId, diff: summary });
+    return ai.run("stash-message", { repoId, diff: summary }, undefined, opts);
   }
 
   /** Per-file stats + (capped downstream) patch text for the whole WIP. */

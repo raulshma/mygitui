@@ -917,7 +917,10 @@ impl GitEngine for Libgit2Engine {
 
         let decos = decorations(repo)?;
         let mut walk = repo.revwalk()?;
-        walk.set_sorting(Sort::TOPOLOGICAL)?;
+        // Date-prioritized topological order (git `--topo-order`): children
+        // always precede parents, otherwise newest commits pop first. Plain
+        // TOPOLOGICAL lets stale branch tips surface above HEAD.
+        walk.set_sorting(Sort::TIME | Sort::TOPOLOGICAL)?;
 
         let mut pushed: HashSet<Oid> = HashSet::new();
         if filter.refs.is_empty() {
@@ -928,6 +931,16 @@ impl GitEngine for Libgit2Engine {
                 }
             }
             for reference in repo.references()?.flatten() {
+                // Stash commits live in the Stash panel: interleaving the
+                // merge-shaped WIP/index/untracked triples here derails the
+                // commit-graph lanes (their base commit is often weeks old,
+                // holding a lane open across the whole graph).
+                if reference
+                    .name()
+                    .is_ok_and(|n| n.starts_with("refs/stash"))
+                {
+                    continue;
+                }
                 if let Ok(commit) = reference.peel_to_commit() {
                     let oid = commit.id();
                     if pushed.insert(oid) {
