@@ -18,8 +18,8 @@ export interface AiGenerateRequest {
   prompt: string;
   /**
    * Backend-specific model id. When omitted the provider uses its default
-   * (opencode: server default; openrouter: {@link DEFAULT_OPENROUTER_MODEL}
-   * or the configured `openrouterModel`).
+   * (opencode: configured model or server default; openrouter:
+   * {@link DEFAULT_OPENROUTER_MODEL} or the configured `openrouterModel`).
    */
   model?: string;
   /** Cancellation (wired to feature-run timeouts / future UI aborts). */

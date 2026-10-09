@@ -2,7 +2,7 @@
  * AI store (Svelte 5 runes) — config, opt-in gating, per-repo run state.
  *
  * Non-secret config persists to localStorage under `mygitui.ai`
- * (`{backend, opencodeUrl, openrouterModel, allowFallback, repoOptIn}`).
+ * (`{backend, opencodeUrl, opencodeModel, openrouterModel, allowFallback, repoOptIn}`).
  * SECRETS (OpenRouter API key, opencode basic-auth password) are NEVER
  * written to localStorage — they live in the OS keyring via the
  * `secrets_set`/`secrets_get` IPC commands; this store only forwards
@@ -111,6 +111,9 @@ export function parseAiConfig(raw: string | null): AiConfig {
   if (typeof obj.opencodeUrl === "string" && obj.opencodeUrl.length > 0) {
     config.opencodeUrl = obj.opencodeUrl;
   }
+  if (typeof obj.opencodeModel === "string" && obj.opencodeModel.length > 0) {
+    config.opencodeModel = obj.opencodeModel;
+  }
   if (typeof obj.openrouterModel === "string" && obj.openrouterModel.length > 0) {
     config.openrouterModel = obj.openrouterModel;
   }
@@ -165,6 +168,7 @@ export class AiStore {
             return resolved === "managed" && !isTauri() ? "attach" : resolved;
           },
           url: () => this.config.opencodeUrl ?? undefined,
+          defaultModel: () => this.config.opencodeModel,
           managed: () => (isTauri() ? managedServeBridge : null),
           directory: opencodeDirectory,
           password: () => secretsGet(SECRET_KEYS.opencodeServerPassword),
@@ -245,6 +249,14 @@ export class AiStore {
     const trimmed = url?.trim();
     if (trimmed) this.config.opencodeUrl = trimmed;
     else delete this.config.opencodeUrl;
+    this.#persist();
+  }
+
+  /** Sets the default OpenCode model (empty/whitespace uses the server default). */
+  setOpencodeModel(model: string | undefined): void {
+    const trimmed = model?.trim();
+    if (trimmed) this.config.opencodeModel = trimmed;
+    else delete this.config.opencodeModel;
     this.#persist();
   }
 

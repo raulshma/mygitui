@@ -48,6 +48,8 @@
   let opencodeEnabled = $state(true);
   let opencodeModeChoice = $state<OpencodeMode>("managed");
   let opencodeUrl = $state("");
+  let opencodeModel = $state("");
+  let opencodeModelSearch = $state("");
   let openrouterModel = $state("");
   let allowFallback = $state(true);
   /** Write-only secret inputs (never rendered back, never persisted here). */
@@ -58,6 +60,22 @@
   let testing = $state(false);
   let models = $state<ModelInfo[]>([]);
   let modelsError = $state<string | null>(null);
+  let opencodeModels = $state<ModelInfo[]>([]);
+  let opencodeModelsError = $state<string | null>(null);
+  let opencodeModelsLoading = $state(false);
+  let opencodeModelGroups = $derived.by(() => {
+    const groups = new Map<string, ModelInfo[]>();
+    const query = opencodeModelSearch.trim().toLowerCase();
+    for (const model of opencodeModels) {
+      const provider = model.provider ?? "Other";
+      const searchText = `${provider} ${model.label ?? model.id} ${model.id}`.toLowerCase();
+      if (query && !searchText.includes(query)) continue;
+      const group = groups.get(provider) ?? [];
+      group.push(model);
+      groups.set(provider, group);
+    }
+    return [...groups].map(([provider, models]) => ({ provider, models }));
+  });
   /** Collapsed-by-default section for mode/URL/password. */
   let showAdvanced = $state(false);
 
@@ -106,6 +124,8 @@
       opencodeModeChoice =
         ai.config.opencodeMode ?? (ai.config.opencodeUrl ? "attach" : "managed");
       opencodeUrl = ai.config.opencodeUrl ?? "";
+      opencodeModel = ai.config.opencodeModel ?? "";
+      opencodeModelSearch = "";
       openrouterModel = ai.config.openrouterModel ?? "";
       allowFallback = ai.config.allowFallback !== false;
       opencodePassword = "";
@@ -115,21 +135,48 @@
     });
   });
 
-  // Model suggestions in this dialog are only used by OpenRouter.
+  // Refresh both model lists whenever the settings dialog opens.
   $effect(() => {
     if (!open) return;
     models = [];
     modelsError = null;
+    opencodeModels = [];
+    opencodeModelsError = null;
+    let current = true;
     ai.supervisor
       .provider("openrouter")
       .listModels()
       .then((list) => {
+        if (!current) return;
         models = list;
       })
       .catch((err: unknown) => {
+        if (!current) return;
         models = [];
         modelsError = err instanceof Error ? err.message : String(err);
       });
+    if (untrack(() => ai.config.opencodeEnabled !== false)) {
+      opencodeModelsLoading = true;
+      ai.supervisor
+        .provider("opencode")
+        .listModels()
+        .then((list) => {
+          if (!current) return;
+          opencodeModels = list;
+          opencodeModelsLoading = false;
+        })
+        .catch((err: unknown) => {
+          if (!current) return;
+          opencodeModels = [];
+          opencodeModelsError = err instanceof Error ? err.message : String(err);
+          opencodeModelsLoading = false;
+        });
+    } else {
+      opencodeModelsLoading = false;
+    }
+    return () => {
+      current = false;
+    };
   });
 
   /** One-line summary of the local OpenCode install and server. */
@@ -186,6 +233,7 @@
       // Kept even in managed mode (attach needs it again after a switch);
       // the resolver only reads it in attach mode.
       ai.setOpencodeUrl(opencodeUrl);
+      ai.setOpencodeModel(opencodeModel);
       ai.setOpenrouterModel(openrouterModel);
       ai.setAllowFallback(allowFallback);
       if (opencodePassword.trim().length > 0) {
@@ -319,6 +367,51 @@
             <input type="checkbox" bind:checked={opencodeEnabled} />
             <span>Enable OpenCode</span>
           </label>
+          <label class="field">
+            <span class="field-label">Search models</span>
+            <input
+              class="input"
+              type="search"
+              placeholder="Filter by model or provider"
+              aria-label="Search OpenCode models"
+              bind:value={opencodeModelSearch}
+              disabled={!opencodeEnabled}
+            />
+          </label>
+          <label class="field">
+            <span class="field-label">Default model</span>
+            <select class="input" bind:value={opencodeModel} disabled={!opencodeEnabled}>
+              <option value="">Use OpenCode server default</option>
+              {#if opencodeModel && !opencodeModelGroups.some(
+                  (group) => group.models.some((model) => model.id === opencodeModel),
+                )}
+                <option value={opencodeModel}>
+                  {opencodeModelsLoading
+                    ? `Saved · ${opencodeModel}`
+                    : opencodeModels.some((model) => model.id === opencodeModel)
+                      ? `Selected · ${opencodeModel}`
+                      : `Unavailable · ${opencodeModel}`}
+                </option>
+              {/if}
+              {#each opencodeModelGroups as group (group.provider)}
+                <optgroup label={group.provider}>
+                  {#each group.models as model (model.id)}
+                    <option value={model.id}>{model.label ?? model.id}</option>
+                  {/each}
+                </optgroup>
+              {/each}
+            </select>
+          </label>
+          <p class="hint">
+            Used whenever an AI feature is routed to OpenCode. Leave on the server default to
+            follow OpenCode’s own model setting.
+          </p>
+          {#if opencodeModelsLoading}
+            <p class="hint" role="status">Loading OpenCode models…</p>
+          {/if}
+          {#if opencodeModelsError}
+            <p class="hint error-text">OpenCode model list unavailable: {opencodeModelsError}</p>
+          {/if}
           {#if !opencodeEnabled}
             <p class="hint warn">
               OpenCode is disabled. AI features can use OpenRouter when fallback is enabled.

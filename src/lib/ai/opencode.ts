@@ -89,6 +89,8 @@ export interface OpenCodeOptions {
    * is configured. Lazy so generate/check always see the current secret.
    */
   password?: () => Promise<string | null>;
+  /** Selected model id, or `undefined` to use OpenCode's server default. */
+  defaultModel?: string | (() => string | null | undefined);
   /** Injectable fetch (tests); defaults to `globalThis.fetch`. */
   fetchImpl?: FetchLike;
 }
@@ -590,19 +592,24 @@ export class OpenCodeProvider implements AiProvider {
     }
 
     const key = `${directory ?? ""}\0${req.sessionKey ?? "default"}`;
+    const configuredModel = this.#options.defaultModel;
+    const defaultModel =
+      (typeof configuredModel === "function" ? configuredModel() : configuredModel)?.trim() ||
+      undefined;
+    const model = req.model ?? defaultModel;
     const body: {
       parts: Array<{ type: "text"; text: string }>;
       system?: string;
       model?: { providerID: string; modelID: string };
     } = { parts: [{ type: "text", text: req.prompt }] };
     if (req.system) body.system = req.system;
-    if (req.model) {
-      const [providerID, ...rest] = req.model.split("/");
+    if (model) {
+      const [providerID, ...rest] = model.split("/");
       const modelID = rest.join("/");
       body.model =
         providerID && modelID
           ? { providerID, modelID }
-          : { providerID: req.model, modelID: req.model };
+          : { providerID: model, modelID: model };
     }
 
     try {
@@ -637,7 +644,7 @@ export class OpenCodeProvider implements AiProvider {
       }
       return {
         text,
-        model: req.model ?? "opencode/default",
+        model: model ?? "opencode/default",
         backend: "opencode",
         elapsedMs: Date.now() - started,
       };

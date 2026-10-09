@@ -47,6 +47,8 @@ export interface AiConfig {
    * autodiscovers the default {@link DEFAULT_OPENCODE_URL}.
    */
   opencodeUrl?: string;
+  /** OpenCode model id (`provider/model`); unset uses the server default. */
+  opencodeModel?: string;
   /** OpenRouter model id (`provider/model`); default when generate has none. */
   openrouterModel?: string;
   /**
