@@ -137,6 +137,10 @@ pub struct LogFilter {
     /// (M10; cost is one tree-diff per candidate commit.)
     #[serde(default)]
     pub pickaxe: Option<String>,
+    /// Pickaxe `-G`: only commits whose patch text matches this regex.
+    /// (M12; same per-commit tree-diff cost, regex matched over the patch.)
+    #[serde(default)]
+    pub pickaxe_regex: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -320,6 +324,12 @@ pub struct MergetoolInfo {
     pub tool: Option<String>,
     /// `merge.guitool` — the GUI-preferred tool.
     pub gui_tool: Option<String>,
+    /// `mergetool.<tool>.path` for the resolved tool, when configured.
+    #[serde(default)]
+    pub path: Option<String>,
+    /// `mergetool.<tool>.cmd` for the resolved tool, when configured.
+    #[serde(default)]
+    pub cmd: Option<String>,
 }
 
 /// Result of one `git mergetool` run.
@@ -358,6 +368,19 @@ pub struct BisectState {
     /// HEAD when the bisect started (reset target).
     pub orig_head: String,
     pub orig_branch: Option<String>,
+    /// Mark history, oldest first (M12: `bisect_log` / shown in the banner).
+    #[serde(default)]
+    pub log: Vec<BisectLogEntry>,
+}
+
+/// One recorded mark in the bisect history (M12).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BisectLogEntry {
+    /// "good" | "bad" | "skip".
+    pub mark: String,
+    pub sha: String,
+    /// Unix seconds when the mark was recorded.
+    pub at: i64,
 }
 
 // ---------- M11: repo health / maintenance ----------
@@ -380,6 +403,13 @@ pub struct RepoHealth {
     pub packed_refs: bool,
     /// Last `gc.log` modification (unix seconds), when any.
     pub last_gc: Option<i64>,
+    /// Dangling object count from `git fsck` (M12; null until first run —
+    /// fsck walks every object, so it is only computed on demand).
+    #[serde(default)]
+    pub fsck_dangling: Option<u64>,
+    /// Sample of dangling object shas (cap 10) from the same run.
+    #[serde(default)]
+    pub fsck_samples: Vec<String>,
 }
 
 /// Sparse-checkout state (`git sparse-checkout list`, cone mode flag).
@@ -399,6 +429,43 @@ pub struct LfsStatus {
     pub version: Option<String>,
     /// `filter=lfs` patterns declared in tracked `.gitattributes` files.
     pub tracked_patterns: Vec<String>,
+}
+
+// ---------- M12: signature verification / branch trash ----------
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SignatureKind {
+    Gpg,
+    Ssh,
+}
+
+/// Verification status of one commit's signature (M12). Signed commits are
+/// verified through the git CLI so gpg/ssh-agent behave exactly like the
+/// terminal (`verify-commit` honors `gpg.ssh.allowedSignersFile`).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct CommitSignature {
+    /// False = the commit object carries no signature at all.
+    pub signed: bool,
+    pub kind: Option<SignatureKind>,
+    /// Some(true) = valid; Some(false) = bad signature; None = signed but
+    /// not verifiable here (missing key / no allowed_signers for SSH).
+    pub valid: Option<bool>,
+    /// Trimmed tool output (why it failed / who signed), for tooltips.
+    pub detail: String,
+}
+
+/// One deleted branch preserved under `refs/mygitui/trash/*` (M12).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BranchTrashEntry {
+    /// Trash id: `<sanitized-branch-name>-<unix-millis>`.
+    pub id: String,
+    /// Original branch name.
+    pub name: String,
+    /// Commit the branch pointed at when deleted.
+    pub sha: String,
+    /// Unix seconds when it was deleted.
+    pub deleted_at: i64,
 }
 
 // ---------- M3: power + safety model ----------
@@ -518,6 +585,9 @@ pub struct WorktreeInfo {
     pub detached: bool,
     pub locked: bool,
     pub prunable: Option<String>,
+    /// True for the main worktree itself, not a linked one (M12).
+    #[serde(default)]
+    pub is_main: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

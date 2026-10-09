@@ -63,6 +63,13 @@ pub fn chunk_vec<T>(items: Vec<T>, size: usize) -> Vec<Vec<T>> {
     pages
 }
 
+/// M12: argv captured at first launch (`mygitui <path>`); consumed once.
+/// Second-launch arguments arrive via the `cli-args` event instead.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn cli_args_initial(state: State<'_, crate::CliArgs>) -> Result<Vec<String>, String> {
+    Ok(std::mem::take(&mut state.0.lock().unwrap()))
+}
+
 /// Open (or reuse) the repository at/above `path` and start its watcher.
 #[tauri::command(rename_all = "snake_case")]
 pub async fn repo_open(

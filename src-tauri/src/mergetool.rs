@@ -29,6 +29,8 @@ pub fn mergetool_info(repo: &Repository) -> MergetoolInfo {
     MergetoolInfo {
         tool: get("merge.tool"),
         gui_tool: get("merge.guitool"),
+        path: None,
+        cmd: None,
     }
 }
 

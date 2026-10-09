@@ -26,9 +26,11 @@ mod stash_tests;
 mod bisect_tests;
 #[cfg(test)]
 mod checkpoint_tests;
+pub mod signing;
 pub mod stats;
 #[cfg(test)]
 mod stats_tests;
 #[cfg(test)]
 mod submodule_tests;
 pub mod submodules;
+pub mod trash;

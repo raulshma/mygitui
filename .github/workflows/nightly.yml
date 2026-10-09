@@ -35,12 +35,23 @@ jobs:
             src-tauri/target
           key: nightly-cargo-${{ runner.os }}-${{ hashFiles('src-tauri/Cargo.lock') }}
 
-      # Perf gates (plan §19) measured in release mode. A shared runner is too
-      # noisy for hard pass/fail thresholds; instead each run saves a criterion
-      # baseline that the next run compares against (critical-change warnings
-      # show up in the log). Local hard gates: see benches/perf.rs header.
+      # Perf gates (plan §19) measured in release mode. Each run downloads
+      # the previous nightly's criterion baseline, compares against it, and
+      # saves the new one. `--baseline` fails the run when a benchmark
+      # regresses beyond criterion's default noise threshold; a missing
+      # previous artifact (first run / retention expiry) just saves fresh.
+      - name: Download previous baseline
+        uses: dawidd6/action-download-artifact@v6
+        continue-on-error: true
+        with:
+          workflow: nightly.yml
+          name: criterion-baseline
+          path: src-tauri/target/criterion
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Run benches
-        run: cargo bench --bench perf -- --save-baseline nightly
+        run: cargo bench --bench perf -- --baseline nightly --save-baseline nightly
 
       - name: Upload criterion reports
         uses: actions/upload-artifact@v4
@@ -48,6 +59,14 @@ jobs:
           name: criterion-${{ github.run_id }}
           path: src-tauri/target/criterion
           retention-days: 14
+
+      - name: Upload baseline for next run
+        uses: actions/upload-artifact@v4
+        with:
+          name: criterion-baseline
+          path: src-tauri/target/criterion
+          retention-days: 90
+          overwrite: true
 
   nightly-soak:
     name: Long-run tests + watcher soak
@@ -82,19 +101,12 @@ jobs:
       - name: Full test suite
         run: cargo test
 
-      # Watcher-leak soak: churn the workdir under a live watcher for a fixed
-      # window and assert the process RSS stays bounded (plan gate: <250MB,
-      # no unbounded growth). 30 minutes on nightly; the full 8h gate is a
-      # workflow_dispatch run with SOAK_MINUTES=480.
+      # Watcher-leak soak: churn the workdir under a live watcher and sample
+      # process RSS once a second (M12: examples/soak.rs replaces the
+      # placeholder stub). Fails when RSS crosses the 250MB plan gate or
+      # grows monotonically for 5 straight minutes. 30 minutes on nightly;
+      # the full 8h gate is a workflow_dispatch run with SOAK_MINUTES=480.
       - name: Watcher soak (RSS bounded under churn)
-        run: |
-          cat > soak.rs <<'EOF'
-          // Standalone soak: spawns a git repo, hammers it with writes, and
-          // reads this process's RSS once a second. Fails if RSS crosses the
-          // 250MB plan gate or grows monotonically for 5 straight minutes.
-          EOF
-          echo "Soak harness runs via cargo test --release -- --ignored watcher_soak_longrun"
-          echo "SOAK_MINUTES=${SOAK_MINUTES:-30}"
-          exit 0
+        run: cargo run --release --example soak -- --minutes "${SOAK_MINUTES:-30}" --max-rss-mb 250
         env:
           SOAK_MINUTES: 30

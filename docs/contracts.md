@@ -525,3 +525,35 @@ walk midpoint, known-bad tip excluded)
 - **Benches** (`refs` group): `tag_list_500_commits` ≈ 1.75 ms,
   `describe_head` ≈ 3.7 ms, `log_pickaxe_substring` ≈ 1.3 s/500-commit
   full walk (budgeted as above).
+
+## M12 — gap closure: safety, verification, infra gates
+
+Additive contracts only; all commands take `repo_id` unless noted.
+
+| Command | Args → Result | Notes |
+| --- | --- | --- |
+| `commit_signature` | `sha` → `CommitSignature` | `{signed, kind: "gpg"\|"ssh"\|null, valid: bool\|null, detail}`. Verified via `git verify-commit` (CLI route) so gpg/ssh-agent match terminal behavior; `valid: null` = signed but no key / no `gpg.ssh.allowedSignersFile`. |
+| `branch_trash_list` | → `[BranchTrashEntry]` | Entries from `refs/mygitui/trash/*`, newest first: `{id, name, sha, deleted_at}`. `branch_delete` now snapshots the tip here before deleting. |
+| `branch_trash_restore` | `id`, `new_name?` → `string` | Recreates the branch (optionally renamed) at the trashed sha; returns the branch name. Errors when the name exists and no `new_name`. Trash entries are cleaned by checkpoint GC (30d). |
+| `worktree_prune` | → `u32` | `git worktree prune`; returns pruned count. `worktrees` now also lists the main worktree (`is_main: true`) and prune stale admin files itself. |
+| `bisect_log` | → `[BisectLogEntry]` | `{mark, sha, at}` oldest first; also mirrored into `BisectState.log`. |
+| `op_cancel` | `op_id` → `bool` | Best-effort cancel of a queued/running mutation. Queued → dropped; running → stops at the next cooperative checkpoint (long libgit2 ops check between steps). Returns false when already finished. |
+| `cli_args_initial` | → `[string]` | argv captured at first launch (`mygitui <path>`), consumed once; second-launch args keep arriving via the `cli-args` event. |
+
+Shape changes (additive, mirrored in `src/lib/ipc/types.ts`):
+- `LogFilter.pickaxe_regex` — pickaxe `-G` (patch regex) alongside `-S`.
+- `RepoHealth.fsck_dangling` / `fsck_samples` — from `git fsck` on demand.
+- `WorktreeInfo.is_main`; `MergetoolInfo.path` / `cmd` (mergetool.<tool> introspection).
+- `CommitSignature`, `SignatureKind`, `BranchTrashEntry`, `BisectLogEntry` (new types).
+
+Platform:
+- Deep links: `mygitui://open?path=<abs>` — `tauri-plugin-deep-link`, schemes in `tauri.conf.json`, frontend router `src/lib/entry/deeplink.ts` (same open-repo-tab path as `cli-args`).
+- First-launch argv: `CliArgs` state captured in `run()`, served by `cli_args_initial`.
+- Updater: release workflow overlays `plugins.updater` (pubkey + GitHub latest.json endpoint) only when the `TAURI_UPDATER_PUBKEY` secret exists; signing env vars always wired (`TAURI_SIGNING_PRIVATE_KEY[_PASSWORD]`).
+- Nightly: criterion `--baseline nightly` compare (fails on regression) + `examples/soak.rs` real RSS soak (250MB gate, monotonic-growth detector, `SOAK_MINUTES`).
+- Fixtures: `signed` (ssh-keygen + `gpg.format=ssh` signed commits + allowed_signers), `detached` (detached HEAD mid-history), `files-100k` (`--files N` scale knob).
+
+Quality gates:
+- `prop_tests.rs`: proptest roundtrips — hunk-apply selection and checkpoint restore over randomized worktree states.
+- Benches added: `cold/open_plus_status`, `diff/synthetic_10k_hunks`, `search/log_filter_regex_page`, `history/file_history_page`, `bisect/mark_step`.
+- Playwright smoke (SPA-level, mocked `__TAURI_INTERNALS__`): app boot → open repo → stage → commit dialog.

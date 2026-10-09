@@ -127,6 +127,7 @@ fn to_public(repo: &Repository, st: &BisectFileState) -> EngineResult<BisectStat
         skipped: st.skipped.clone(),
         orig_head: st.orig_head.clone(),
         orig_branch: st.orig_branch.clone(),
+        log: Vec::new(),
     })
 }
 
@@ -221,6 +222,7 @@ impl Libgit2Engine {
                 skipped: Vec::new(),
                 orig_head: String::new(),
                 orig_branch: None,
+                log: Vec::new(),
             }),
         }
     }

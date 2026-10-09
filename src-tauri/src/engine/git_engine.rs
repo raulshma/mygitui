@@ -406,3 +406,44 @@ pub trait GitEngineM3: Send + Sync {
         Err(EngineError::Unsupported("autosquash_plan".into()))
     }
 }
+
+// ---------- M12: signature verify / branch trash / worktree prune ----------
+
+use super::types::{BisectLogEntry, BranchTrashEntry, CommitSignature};
+
+/// M12 extension trait. Impls live in the owning modules (`signing.rs`,
+/// `trash.rs`, `stash.rs`) so lanes never share an impl block.
+pub trait GitEngineM12: Send + Sync {
+    /// Verification status of a commit's signature via the git CLI
+    /// (`verify-commit`), so gpg/ssh-agent match terminal behavior.
+    fn commit_signature(&self, _repo: &Repository, _sha: &str) -> EngineResult<CommitSignature> {
+        Err(EngineError::Unsupported("commit_signature".into()))
+    }
+
+    /// Branches preserved under `refs/mygitui/trash/*`, newest first.
+    fn branch_trash_list(&self, _repo: &Repository) -> EngineResult<Vec<BranchTrashEntry>> {
+        Err(EngineError::Unsupported("branch_trash_list".into()))
+    }
+
+    /// Restore a trashed branch (optionally under a new name). Returns the
+    /// branch name. Refuses when the name already exists unless renamed.
+    fn branch_trash_restore(
+        &self,
+        _repo: &Repository,
+        _id: &str,
+        _new_name: Option<&str>,
+    ) -> EngineResult<String> {
+        Err(EngineError::Unsupported("branch_trash_restore".into()))
+    }
+
+    /// `git worktree prune` — drop stale administrative files. Returns the
+    /// number of pruned worktrees reported by git.
+    fn worktree_prune(&self, _repo: &Repository) -> EngineResult<u32> {
+        Err(EngineError::Unsupported("worktree_prune".into()))
+    }
+
+    /// Recorded mark history for a live bisect (empty when none).
+    fn bisect_log(&self, _repo: &Repository) -> EngineResult<Vec<BisectLogEntry>> {
+        Err(EngineError::Unsupported("bisect_log".into()))
+    }
+}

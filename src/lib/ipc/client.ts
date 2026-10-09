@@ -27,11 +27,14 @@ import { isTauri } from "$lib/entry/dragdrop";
 import type {
   AuthRequest,
   BlameLine,
+  BisectLogEntry,
   BisectMark,
   BisectState,
   BranchInfo,
+  BranchTrashEntry,
   CheckpointInfo,
   CommitOptions,
+  CommitSignature,
   ConflictFile,
   ConflictResolution,
   DiffSide,
@@ -1464,4 +1467,66 @@ export function contributorStats(
     repo_id: repoId,
     max_days: maxDays,
   });
+}
+
+// ---------------------------------------------------------------------------
+// M12: signature verify / branch trash / worktree prune / bisect log / ops
+// ---------------------------------------------------------------------------
+
+/**
+ * Verification status of one commit's signature (`git verify-commit`).
+ * `signed: false` for unsigned commits; `valid: null` when signed but not
+ * verifiable here (missing key / no `gpg.ssh.allowedSignersFile`).
+ */
+export function commitSignature(
+  repoId: RepoId,
+  sha: string,
+): Promise<CommitSignature> {
+  return call<CommitSignature>("commit_signature", { repo_id: repoId, sha });
+}
+
+/** Branches preserved under `refs/mygitui/trash/*`, newest first. */
+export function branchTrashList(repoId: RepoId): Promise<BranchTrashEntry[]> {
+  return call<BranchTrashEntry[]>("branch_trash_list", { repo_id: repoId });
+}
+
+/** Restore a trashed branch (optionally renamed); returns the branch name. */
+export function branchTrashRestore(
+  repoId: RepoId,
+  id: string,
+  newName?: string,
+): Promise<string> {
+  return call<string>("branch_trash_restore", {
+    repo_id: repoId,
+    id,
+    new_name: newName ?? null,
+  });
+}
+
+/** `git worktree prune` — returns the number of pruned worktrees. */
+export function worktreePrune(repoId: RepoId): Promise<number> {
+  return call<number>("worktree_prune", { repo_id: repoId });
+}
+
+/** Recorded mark history for a live bisect, oldest first. */
+export function bisectLog(repoId: RepoId): Promise<BisectLogEntry[]> {
+  return call<BisectLogEntry[]>("bisect_log", { repo_id: repoId });
+}
+
+/**
+ * Best-effort cancel of a queued/running mutation op. Queued ops are
+ * dropped; running ops stop at the next cooperative checkpoint. Returns
+ * false when the op already finished.
+ */
+export function opCancel(repoId: RepoId, opId: string): Promise<boolean> {
+  return call<boolean>("op_cancel", { repo_id: repoId, op_id: opId });
+}
+
+/**
+ * argv captured at first launch (`mygitui <path>`), consumed once.
+ * Second-launch arguments arrive via the `cli-args` event instead.
+ */
+export async function cliArgsInitial(): Promise<string[]> {
+  if (!isTauri()) return [];
+  return call<string[]>("cli_args_initial", {});
 }

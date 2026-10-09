@@ -12,6 +12,7 @@
     "check:watch": "svelte-check --tsconfig ./tsconfig.json --watch",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:e2e": "playwright test",
     "tauri": "tauri"
   },
   "license": "MIT",
@@ -20,6 +21,7 @@
     "@opencode-ai/sdk": "^1.18.35",
     "@openrouter/ai-sdk-provider": "^3.1.0",
     "@tauri-apps/api": "^2",
+    "@tauri-apps/plugin-deep-link": "^2",
     "@tauri-apps/plugin-dialog": "^2.8.1",
     "@tauri-apps/plugin-opener": "^2",
     "@xterm/addon-fit": "^0.11.0",
@@ -30,6 +32,7 @@
     "shiki": "^4.5.0"
   },
   "devDependencies": {
+    "@playwright/test": "^1.49.0",
     "@sveltejs/vite-plugin-svelte": "^7.1.2",
     "@tauri-apps/cli": "^2",
     "@testing-library/jest-dom": "^6.9.1",

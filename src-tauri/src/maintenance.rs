@@ -48,6 +48,8 @@ pub fn repo_health(workdir: &Path, git_dir: &Path) -> RepoHealth {
         commit_graph_bytes: 0,
         packed_refs: git_dir.join("packed-refs").exists(),
         last_gc: None,
+        fsck_dangling: None,
+        fsck_samples: Vec::new(),
     };
     let objects = git_dir.join("objects");
     // Loose objects: two-hex-char fanout dirs.

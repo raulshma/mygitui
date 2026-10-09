@@ -93,6 +93,8 @@ export interface LogFilter {
   follow: boolean;
   /** Pickaxe -S: commit patches must add or remove this string. (M10) */
   pickaxe?: string | null;
+  /** Pickaxe -G: commit patches must match this regex. (M12) */
+  pickaxe_regex?: string | null;
 }
 
 export interface BlameLine {
@@ -331,6 +333,17 @@ export interface BisectState {
   skipped: string[];
   orig_head: string;
   orig_branch: string | null;
+  /** Mark history, oldest first. (M12) */
+  log: BisectLogEntry[];
+}
+
+/** One recorded mark in the bisect history. (M12) */
+export interface BisectLogEntry {
+  /** "good" | "bad" | "skip". */
+  mark: string;
+  sha: string;
+  /** Unix seconds when the mark was recorded. */
+  at: number;
 }
 
 export interface StashInfo {
@@ -348,6 +361,8 @@ export interface WorktreeInfo {
   detached: boolean;
   locked: boolean;
   prunable: string | null;
+  /** True for the main worktree itself, not a linked one. (M12) */
+  is_main: boolean;
 }
 
 export interface ReflogEntry {
@@ -404,6 +419,10 @@ export interface ActionOutputEvent {
 export interface MergetoolInfo {
   tool: string | null;
   gui_tool: string | null;
+  /** `mergetool.<tool>.path` for the resolved tool, when configured. (M12) */
+  path?: string | null;
+  /** `mergetool.<tool>.cmd` for the resolved tool, when configured. (M12) */
+  cmd?: string | null;
 }
 
 export interface MergetoolResult {
@@ -426,6 +445,10 @@ export interface RepoHealth {
   packed_refs: boolean;
   /** Last gc.log modification (unix seconds). */
   last_gc: number | null;
+  /** Dangling object count from `git fsck` (null until first run). (M12) */
+  fsck_dangling: number | null;
+  /** Sample of dangling object shas (cap 10). (M12) */
+  fsck_samples: string[];
 }
 
 export interface SparseInfo {
@@ -438,4 +461,34 @@ export interface LfsStatus {
   installed: boolean;
   version: string | null;
   tracked_patterns: string[];
+}
+
+// ---------- M12: signature verify / branch trash ----------
+
+export type SignatureKind = "gpg" | "ssh";
+
+/**
+ * Verification status of one commit's signature (verified through the git
+ * CLI so gpg/ssh-agent behave exactly like the terminal).
+ */
+export interface CommitSignature {
+  /** False = the commit object carries no signature at all. */
+  signed: boolean;
+  kind: SignatureKind | null;
+  /** true = valid; false = bad signature; null = not verifiable here. */
+  valid: boolean | null;
+  /** Trimmed tool output, for tooltips. */
+  detail: string;
+}
+
+/** One deleted branch preserved under `refs/mygitui/trash/*`. (M12) */
+export interface BranchTrashEntry {
+  /** Trash id: `<sanitized-branch-name>-<unix-millis>`. */
+  id: string;
+  /** Original branch name. */
+  name: string;
+  /** Commit the branch pointed at when deleted. */
+  sha: string;
+  /** Unix seconds when it was deleted. */
+  deleted_at: number;
 }

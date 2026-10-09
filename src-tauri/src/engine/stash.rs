@@ -280,6 +280,7 @@ impl Libgit2Engine {
                 detached,
                 locked,
                 prunable,
+                is_main: false,
             });
         }
         out.sort_by(|a, b| a.name.cmp(&b.name));

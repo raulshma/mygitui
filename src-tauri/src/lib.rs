@@ -17,21 +17,36 @@ mod keyring_store;
 mod maintenance;
 mod mergetool;
 mod ops;
+#[cfg(test)]
+mod prop_tests;
 mod pty;
 #[cfg(test)]
 mod pty_tests;
 mod repo;
 mod watcher;
 
+/// Arguments captured at first launch (`mygitui <path>`), consumed once by
+/// the frontend via `cli_args_initial`. The single-instance plugin handles
+/// the *second*-launch path by emitting `cli-args` directly.
+#[derive(Default)]
+pub struct CliArgs(pub std::sync::Mutex<Vec<String>>);
+
 /// M0 bootstrap: single-instance with CLI arg forwarding, updater wiring.
 /// The L1 lane adds `keyring_store` (secret storage for AI provider keys).
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // M12: first-launch `mygitui <path>` — previously argv was only read on
+    // the second-instance path, so the first launch silently ignored it.
+    let cli_args: Vec<String> = std::env::args().skip(1).collect();
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
+        // M12: `mygitui://open?path=...` deep links. The plugin re-fires
+        // second-instance URLs through the same scheme; the frontend routes
+        // them in `src/lib/entry/deeplink.ts`.
+        .plugin(tauri_plugin_deep_link::init())
         // Must be the last plugin registered: it decides whether this instance
         // runs or defers to the existing one.
         .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
@@ -47,10 +62,12 @@ pub fn run() {
         // M2: the auth broker emits `auth-request` events through this
         // handle; must be registered before the first net op, hence before
         // `.manage` hands out the RepoManager.
-        .setup(|app| {
+        .setup(move |app| {
             auth::init(app.handle().clone());
+            *app.state::<CliArgs>().0.lock().unwrap() = cli_args;
             Ok(())
         })
+        .manage(CliArgs::default())
         .manage(repo::RepoManager::new())
         // M4: custom action runs (action_run/action_cancel + action-output
         // events) track their live children here.
@@ -64,6 +81,7 @@ pub fn run() {
             keyring_store::secrets_set,
             keyring_store::secrets_delete,
             ipc_commands::repo_open,
+            ipc_commands::cli_args_initial,
             ipc_commands::repo_close,
             ipc_commands::repo_status,
             ipc_commands::repo_refs,

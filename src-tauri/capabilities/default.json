@@ -14,6 +14,7 @@
     "process:default",
     "updater:default",
     "core:webview:allow-create-webview-window",
-    "core:webview:allow-create-webview"
+    "core:webview:allow-create-webview",
+    "deep-link:default"
   ]
 }
