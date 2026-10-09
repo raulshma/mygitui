@@ -2,9 +2,17 @@
   /**
    * TabGroup — renders a `{ kind: "tabs" }` layout leaf: the tab strip
    * (same visual + keyboard pattern as the pre-M4 RepoView tablist),
-   * the active panel's body, a "+ Add panel" menu listing hidden panels,
+   * the panel bodies, a "+ Add panel" menu listing hidden panels,
    * and a right-click context menu per tab ("Move to right group" /
    * "New group to the right" / "Hide").
+   *
+   * Keep-alive mounting: every panel, once activated, stays mounted —
+   * inactive bodies are hidden (`display: none` hosts), not unmounted —
+   * so view state (history selection + open detail, scroll positions,
+   * loaded streams) survives tab switches. Panels mount lazily on their
+   * first activation, which keeps never-visited panels (and their dynamic
+   * import trees) out of the session. Panels removed from the group
+   * ("Hide" / move) unmount; re-adding starts fresh.
    *
    * Pure presentation: every action is delegated to callbacks owned by
    * RepoView (which applies them through the layout store). Component
@@ -48,6 +56,26 @@
       : Math.min(Math.max(node.active, 0), node.tabs.length - 1),
   );
   const activePanel = $derived(node.tabs[activeIndex]);
+
+  // -- keep-alive mounting -----------------------------------------------------
+
+  /** Panels already activated in this group, in first-activation order. */
+  let mounted: PanelId[] = $state([]);
+
+  // Runs pre-render so a newly activated panel mounts in the same flush —
+  // the body never renders a frame without it.
+  $effect.pre(() => {
+    if (activePanel && !mounted.includes(activePanel)) {
+      mounted = [...mounted, activePanel];
+    }
+  });
+
+  /** Panels to keep mounted: visited ∩ current tabs (active always wins). */
+  const shownPanels = $derived.by(() => {
+    const list = mounted.filter((panel) => node.tabs.includes(panel));
+    if (activePanel && !list.includes(activePanel)) list.push(activePanel);
+    return list;
+  });
 
   // -- popovers (context menu + add menu) ----------------------------------
 
@@ -191,9 +219,13 @@
     role="tabpanel"
     aria-labelledby={activePanel ? `tab-${node.id}-${activePanel}` : undefined}
   >
-    {#if activePanel}
-      {@render renderPanel(activePanel)()}
-    {/if}
+    <!-- Keep-alive hosts: one per visited panel; inactive ones are hidden,
+         not unmounted (see the script's keep-alive note). -->
+    {#each shownPanels as panel (panel)}
+      <div class="panel-host" hidden={panel !== activePanel}>
+        {@render renderPanel(panel)()}
+      </div>
+    {/each}
   </div>
 </div>
 
@@ -346,8 +378,22 @@
     overflow-y: auto;
   }
 
-  .panel-body > :global(aside),
-  .panel-body > :global(section) {
+  /* Keep-alive hosts: inactive panels stay mounted but out of layout and
+   * the a11y tree. `display: flex` would beat the UA's `[hidden]` rule,
+   * so the hidden state is explicit. */
+  .panel-host {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .panel-host[hidden] {
+    display: none;
+  }
+
+  .panel-host > :global(aside),
+  .panel-host > :global(section) {
     flex: 1;
     min-height: 0;
   }

@@ -22,8 +22,10 @@
    *      `SplitPane` (ratio persisted as a global pref, `splitPrefs`); the
    *      detail's own meta↔diff split lives inside `CommitDetail`.
    *
-   * Data: one HistoryStore per mounted view (see `$lib/stores/history.svelte`)
-   * started/destroyed in an `$effect` keyed on `repoId`.
+ * Data: one HistoryStore per mounted view (see `$lib/stores/history.svelte`)
+ * started/destroyed in an `$effect` keyed on `repoId`. The view's filter,
+ * selection and detail visibility persist per repo root (`historyPrefs`) —
+ * restored on mount/re-target before the stream starts, saved on change.
    *
    * Keyboard: the list is a role="listbox" — j/k or arrows move the
    * selection (g/G/Home/End jump), and aria-activedescendant tracks it.
@@ -40,6 +42,10 @@
   import { orderForCherryPick } from "$lib/components/rebase/plannerModel";
   import { HistoryStore } from "$lib/stores/history.svelte";
   import { tabStore } from "$lib/stores/tabs.svelte";
+  import {
+    loadHistoryPrefs,
+    saveHistoryPrefs,
+  } from "$lib/stores/historyPrefs";
   import { bookmarks as bookmarkStore } from "$lib/components/graph/bookmarks.svelte";
   import { onUiEvent } from "$lib/palette/events";
   import { showMenuAt, type MenuEntry } from "$lib/components/menu/contextMenuStore.svelte";
@@ -51,6 +57,7 @@
   import TagAtDialog from "$lib/components/panels/TagAtDialog.svelte";
   import {
     classifyRef,
+    EMPTY_FILTER,
     formatRelativeTime,
     shortRefName,
   } from "$lib/stores/history-logic";
@@ -234,20 +241,25 @@
 
   // -- lifecycle ------------------------------------------------------------------
 
-  $effect(() => {
-    store.start(repoId);
-    return () => store.destroy();
-  });
+  /** Scroll to the restored selection once its commit lands in the log. */
+  let restoreScroll = false;
 
-  let lastRepoId: string | null = null;
-
-  // Reset view state when switching repos (scroll position + range).
+  /**
+   * Repo re-targeting — MUST stay above the `store.start` effect (effects
+   * run in creation order): on mount and on every repo switch it applies
+   * the persisted per-root state (filter + selection + detail visibility)
+   * BEFORE the stream begins, so the first `repo_log_stream` carries the
+   * restored filter. Repo switches keep the pre-persistence reset of
+   * transient view state (dialogs, compare results, scroll/range).
+   */
+  let lastTarget: string | null = null;
   $effect(() => {
-    if (lastRepoId !== null && repoId !== lastRepoId) {
+    const target = `${repoId}\u0000${root}`;
+    if (target === lastTarget) return;
+    const switching = lastTarget !== null;
+    lastTarget = target;
+    if (switching) {
       untrack(() => {
-        selectedSha = null;
-        selectedInfo = null;
-        detailOpen = false;
         compare = null;
         multiIdx = [];
         anchorIdx = null;
@@ -261,7 +273,59 @@
         if (canvasScrollEl) canvasScrollEl.scrollTop = 0;
       });
     }
-    lastRepoId = repoId;
+    // Popouts (root === "") are display-only: nothing is restored or saved.
+    const prefs = root === "" ? null : loadHistoryPrefs(root);
+    store.filter = { ...EMPTY_FILTER, ...(prefs?.filter ?? {}) };
+    selectedSha = prefs?.selectedSha ?? null;
+    selectedInfo = null; // the effect below resolves it once commits land
+    detailOpen = prefs?.detailOpen ?? false;
+    restoreScroll = selectedSha !== null;
+  });
+
+  $effect(() => {
+    store.start(repoId);
+    return () => store.destroy();
+  });
+
+  /**
+   * Resolves a hydrated selection once its commit reaches the loaded log:
+   * fills `selectedInfo` (the detail pane renders from it), mirrors a
+   * click's multi-select bookkeeping, and scrolls to it once. A selection
+   * that never appears (outside the restored filter, gc'd, …) is dropped
+   * when the stream exhausts, so no phantom detail state lingers.
+   */
+  $effect(() => {
+    const sha = selectedSha;
+    if (!sha || selectedInfo) return;
+    void store.flat; // re-run as pages release into the index
+    if (store.revealSha(sha)) {
+      const idx = store.indexOfSha(sha);
+      const commit = idx >= 0 ? commits[idx] : null;
+      if (!commit) return;
+      selectedInfo = commit;
+      multiIdx = [idx];
+      anchorIdx = idx;
+      if (restoreScroll) {
+        restoreScroll = false;
+        scrollToIndex(idx);
+      }
+    } else if (!store.loading && !store.hasMore) {
+      selectedSha = null;
+      detailOpen = false;
+      restoreScroll = false;
+    }
+  });
+
+  // Persist per-root history state on every change (debounced in the prefs
+  // module); the hydration above writes identical data back — harmless.
+  $effect(() => {
+    if (root === "") return;
+    const filter = { ...store.filter };
+    saveHistoryPrefs(root, {
+      filter,
+      selectedSha,
+      detailOpen: detailOpen && selectedSha !== null,
+    });
   });
 
   // -- derived ----------------------------------------------------------------------
