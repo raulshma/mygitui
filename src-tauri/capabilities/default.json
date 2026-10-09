@@ -1,9 +1,10 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Capability for the main window",
+  "description": "Capability for the main window and panel popouts",
   "windows": [
-    "main"
+    "main",
+    "popout-*"
   ],
   "permissions": [
     "core:default",

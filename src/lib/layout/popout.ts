@@ -13,12 +13,16 @@
  * (each wires its own stores). Outside Tauri (browser / tests) opening a
  * popout toasts instead of throwing.
  *
- * NOTE: creating a webview window needs the `core:webview:allow-create-
- * webview-window` capability; if the backend refuses, the failure is
- * toasted (the capability file lives outside this lane's edit scope).
+ * NOTE: windows are created by the Rust `open_popout` command, not the core
+ * `create-webview-window` one. On Windows, WebView2 rejects a controller
+ * whose browser args differ from the environment already running on the
+ * same user data folder (0x8007139F), and the main window is configured
+ * with `additionalBrowserArgs` that the JS API cannot pass — so the Rust
+ * side copies them from tauri.conf.json. The capability file must also
+ * cover the `popout-*` labels or IPC inside the window is denied.
  */
 
-import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
+import { invoke } from "@tauri-apps/api/core";
 import { isTauri } from "$lib/entry/dragdrop";
 import { toast } from "$lib/toast";
 
@@ -99,9 +103,10 @@ function popoutLabel(
 }
 
 /**
- * Opens (or focuses) the popout window for a panel + repo. Non-Tauri
- * environments get an explanatory toast; Tauri failures (e.g. a missing
- * capability) toast the backend error instead of throwing.
+ * Opens (or focuses) the popout window for a panel + repo via the Rust
+ * `open_popout` command (which reuses the main window's browser args — see
+ * the module note). Non-Tauri environments get an explanatory toast;
+ * Tauri failures toast the backend error instead of throwing.
  */
 export async function openPanelPopout(
   panel: PopoutPanel,
@@ -123,31 +128,10 @@ export async function openPanelPopout(
   }
   const label = popoutLabel(panel, repoId, options);
   try {
-    const existing = await WebviewWindow.getByLabel(label);
-    if (existing) {
-      await existing.setFocus();
-      return;
-    }
-    const webview = new WebviewWindow(label, {
-      url: popoutQueryString(panel, repoId, options),
+    await invoke("open_popout", {
+      label,
+      query: popoutQueryString(panel, repoId, options),
       title,
-      width: 960,
-      height: 680,
-      minWidth: 420,
-      minHeight: 300,
-    });
-    await new Promise<void>((resolve, reject) => {
-      webview.once("tauri://created", () => resolve());
-      webview.once("tauri://error", (event) => {
-        const payload = (event as { payload?: unknown }).payload;
-        reject(
-          new Error(
-            typeof payload === "string"
-              ? payload
-              : "the window could not be created",
-          ),
-        );
-      });
     });
   } catch (err) {
     toast(

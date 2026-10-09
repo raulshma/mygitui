@@ -18,6 +18,7 @@ mod maintenance;
 mod mergetool;
 mod opencode;
 mod ops;
+mod popout;
 #[cfg(test)]
 mod prop_tests;
 mod pty;
@@ -199,6 +200,7 @@ pub fn run() {
             opencode::opencode_serve_status,
             opencode::opencode_serve_start,
             opencode::opencode_serve_stop,
+            popout::open_popout,
         ])
         // Tauri does NOT drop managed state on exit (verified live: the
         // pty registry's Drop comment notwithstanding) — kill the managed
