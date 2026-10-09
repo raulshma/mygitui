@@ -29,6 +29,7 @@
    * Keyboard: the list is a role="listbox" — j/k or arrows move the
    * selection (g/G/Home/End jump), and aria-activedescendant tracks it.
    */
+  import { untrack } from "svelte";
   import { cherryPick, repoDiff, revertCommits } from "$lib/ipc/client";
   import { describe, archiveSpec, pickSaveFile } from "$lib/ipc/client";
   import { branchCreate, tagCreate } from "$lib/ipc/client";
@@ -95,7 +96,8 @@
   let blameTarget = $state<{ path: string; from: string } | null>(null);
   let detailFiles = $state<FileDiff[] | null>(null);
   let detailLoading = $state(false);
-  let detailToken = 0;
+  let diffToken = 0;
+  let describeToken = 0;
 
   // -- resizable panes (SplitPane ratios, persisted as global prefs) --------
 
@@ -251,24 +253,30 @@
     return () => store.destroy();
   });
 
+  let lastRepoId: string | null = null;
+
   // Reset view state when switching repos (scroll position + range).
   $effect(() => {
-    void repoId;
-    selectedSha = null;
-    selectedInfo = null;
-    detailOpen = false;
-    compare = null;
-    blameTarget = null;
-    multiIdx = [];
-    anchorIdx = null;
-    plannerOpen = false;
-    branchFromSha = null;
-    tagAtSha = null;
-    resetToSha = null;
-    ownRange = { start: 0, end: 0 };
-    canvasWindow = null;
-    if (scrollerEl) scrollerEl.scrollTop = 0;
-    if (canvasScrollEl) canvasScrollEl.scrollTop = 0;
+    if (lastRepoId !== null && repoId !== lastRepoId) {
+      untrack(() => {
+        selectedSha = null;
+        selectedInfo = null;
+        detailOpen = false;
+        compare = null;
+        blameTarget = null;
+        multiIdx = [];
+        anchorIdx = null;
+        plannerOpen = false;
+        branchFromSha = null;
+        tagAtSha = null;
+        resetToSha = null;
+        ownRange = { start: 0, end: 0 };
+        canvasWindow = null;
+        if (scrollerEl) scrollerEl.scrollTop = 0;
+        if (canvasScrollEl) canvasScrollEl.scrollTop = 0;
+      });
+    }
+    lastRepoId = repoId;
   });
 
   // -- derived ----------------------------------------------------------------------
@@ -402,7 +410,7 @@
     const sha = selectedSha;
     void repoId; // reload on repo switch
     blameTarget = null;
-    const token = ++detailToken;
+    const token = ++diffToken;
     if (!info || info.parents.length === 0 || !sha) {
       detailFiles = null;
       detailLoading = false;
@@ -412,12 +420,12 @@
     detailFiles = null;
     repoDiff(repoId, { commit: info.parents[0] as string }, { commit: sha })
       .then((files) => {
-        if (token !== detailToken) return;
+        if (token !== diffToken) return;
         detailFiles = files;
         detailLoading = false;
       })
       .catch((err: unknown) => {
-        if (token !== detailToken) return;
+        if (token !== diffToken) return;
         detailLoading = false;
         detailFiles = null;
         toast(`Diff failed: ${err instanceof Error ? err.message : String(err)}`, {
@@ -435,10 +443,10 @@
     void repoId;
     describeText = null;
     if (!sha || !selectedInfo) return;
-    const token = ++detailToken;
+    const token = ++describeToken;
     describe(repoId, sha)
       .then((text) => {
-        if (token === detailToken) describeText = text;
+        if (token === describeToken) describeText = text;
       })
       .catch(() => {
         /* describe is decorative */

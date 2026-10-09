@@ -262,6 +262,7 @@ export class HistoryStore {
     }
     if (released) {
       // Cheap wrapper swap (same inner arrays) → rune readers re-run.
+      this.pages = this.pages.slice();
       this.flat = { commits: this.#index.commits, rows: this.#index.rows };
     }
   }

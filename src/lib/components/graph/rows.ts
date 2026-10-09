@@ -38,7 +38,7 @@ export class RowCache {
    * scroll frame (the parent reassigns `pages` only when data arrives).
    */
   update(pages: readonly LogPage[]): boolean {
-    if (pages === this.#source) return false;
+    if (pages === this.#source && pages.length === this.#pageRefs.length) return false;
 
     const previous = this.#pageRefs;
     let common = 0;

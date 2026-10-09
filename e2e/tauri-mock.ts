@@ -243,9 +243,10 @@ function BOOTSTRAP(options: TauriMockOptions): void {
         return Promise.resolve(null);
       }
 
-      // Streaming: deliver one empty page through the channel, then resolve.
+      // Streaming: deliver one page through the channel, then resolve.
       if (cmd === "repo_log_stream" || cmd === "repo_file_history") {
-        deliverChannel((args as { on_page?: unknown })?.on_page, EMPTY_LOG_PAGE);
+        const page = (cmd in commandMocks ? commandMocks[cmd] : EMPTY_LOG_PAGE);
+        deliverChannel((args as { on_page?: unknown })?.on_page, page);
         return Promise.resolve(null);
       }
       if (cmd === "repo_diff_stream") {
