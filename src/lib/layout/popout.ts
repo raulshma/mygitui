@@ -1,16 +1,17 @@
 /**
  * Panel popouts (M4 F1, extended in M9): "Pop out diff" / "Pop out history"
- * / "File history" open a separate Tauri webview window rendering just that
- * panel.
+ * / "File history" / "Commit detail" open a separate Tauri webview window
+ * rendering just that panel.
  *
  * Query contract (the new window's own URL):
  *
- *   ?panel=diff|history|filehistory&repo=<repoId>[&path=<repo-relative path>]
+ *   ?panel=diff|history|filehistory|commitdetail&repo=<repoId>
+ *   [&path=<repo-relative path>][&sha=<commit sha>]
  *
- * `path` is required for `filehistory`. `App.svelte` reads it once at
- * startup and renders the matching view alone (each wires its own stores).
- * Outside Tauri (browser / tests) opening a popout toasts instead of
- * throwing.
+ * `path` is required for `filehistory`; `sha` for `commitdetail`.
+ * `App.svelte` reads it once at startup and renders the matching view alone
+ * (each wires its own stores). Outside Tauri (browser / tests) opening a
+ * popout toasts instead of throwing.
  *
  * NOTE: creating a webview window needs the `core:webview:allow-create-
  * webview-window` capability; if the backend refuses, the failure is
@@ -22,12 +23,14 @@ import { isTauri } from "$lib/entry/dragdrop";
 import { toast } from "$lib/toast";
 
 /** Panels that support popout windows. */
-export type PopoutPanel = "diff" | "history" | "filehistory";
+export type PopoutPanel = "diff" | "history" | "filehistory" | "commitdetail";
 
 /** Options beyond the panel + repo (M9: file history path). */
 export interface PopoutOptions {
   /** Repo-relative path (required for `filehistory`). */
   path?: string;
+  /** Full commit sha (required for `commitdetail`). */
+  sha?: string;
 }
 
 /** The popout window URL query for a panel + repo. */
@@ -40,6 +43,9 @@ export function popoutQueryString(
   if (options.path !== undefined && options.path !== "") {
     query += `&path=${encodeURIComponent(options.path)}`;
   }
+  if (options.sha !== undefined && options.sha !== "") {
+    query += `&sha=${encodeURIComponent(options.sha)}`;
+  }
   return query;
 }
 
@@ -47,6 +53,7 @@ export interface ParsedPopout {
   panel: PopoutPanel;
   repoId: string;
   path: string | null;
+  sha: string | null;
 }
 
 /** Parses `location.search`; `null` when this window is not a popout. */
@@ -60,13 +67,17 @@ export function parsePopoutQuery(search: string): ParsedPopout | null {
   const panel = params.get("panel");
   const repoId = params.get("repo");
   if (
-    (panel !== "diff" && panel !== "history" && panel !== "filehistory") ||
+    (panel !== "diff" &&
+      panel !== "history" &&
+      panel !== "filehistory" &&
+      panel !== "commitdetail") ||
     !repoId
   ) {
     return null;
   }
   if (panel === "filehistory" && !params.get("path")) return null;
-  return { panel, repoId, path: params.get("path") };
+  if (panel === "commitdetail" && !params.get("sha")) return null;
+  return { panel, repoId, path: params.get("path"), sha: params.get("sha") };
 }
 
 /** WebviewWindow labels allow `a-zA-Z0-9-/:_`; everything else is dropped. */
@@ -80,7 +91,11 @@ function popoutLabel(
     options.path !== undefined && options.path !== ""
       ? `-${options.path.replace(/[^a-zA-Z0-9-/:_]/g, "").slice(0, 32)}`
       : "";
-  return `popout-${panel}-${safe || "repo"}${pathKey}`;
+  const shaKey =
+    options.sha !== undefined && options.sha !== ""
+      ? `-${options.sha.replace(/[^a-zA-Z0-9-/:_]/g, "").slice(0, 12)}`
+      : "";
+  return `popout-${panel}-${safe || "repo"}${pathKey}${shaKey}`;
 }
 
 /**
@@ -100,6 +115,10 @@ export async function openPanelPopout(
   }
   if (panel === "filehistory" && !options.path) {
     toast("File history needs a path", { kind: "error" });
+    return;
+  }
+  if (panel === "commitdetail" && !options.sha) {
+    toast("Commit detail needs a sha", { kind: "error" });
     return;
   }
   const label = popoutLabel(panel, repoId, options);

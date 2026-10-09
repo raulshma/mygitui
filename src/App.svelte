@@ -25,6 +25,7 @@
   import RepoView from "$lib/components/panels/RepoView.svelte";
   import HistoryView from "$lib/components/panels/HistoryView.svelte";
   import PopoutDiff from "$lib/components/layout/PopoutDiff.svelte";
+  import PopoutCommitDetail from "$lib/components/layout/PopoutCommitDetail.svelte";
   // M4 F1: panel popout query contract (?panel=diff|history&repo=<id>).
   import { parsePopoutQuery } from "$lib/layout/popout";
   import QuickSwitcher from "$lib/components/QuickSwitcher.svelte";
@@ -188,6 +189,8 @@
           repoId={popout.repoId}
           path={popout.path ?? ""}
         />
+      {:else if popout.panel === "commitdetail"}
+        <PopoutCommitDetail repoId={popout.repoId} sha={popout.sha ?? ""} />
       {:else}
         <PopoutDiff repoId={popout.repoId} />
       {/if}

@@ -15,13 +15,12 @@
    *      converge (equality-guarded pushes — no feedback loop). If B2's
    *      internal `.gc-scroll` element can't be found, sync degrades to the
    *      exported `scrollToRow(index)` + a locally computed window.
-   *   3. commit detail pane (bottom): full message, author/committer dates,
-   *      clickable parents, and the commit's diff (repoDiff parent0 → sha,
-   *      lazy + loading state) rendered in DiffViewer; per-file "Blame"
-   *      swaps in a BlameView, and CompareBar results render here too.
-   *      Both boundaries are user-resizable via `SplitPane` — list ↔ detail
-   *      (stacked) and metadata ↔ diff (side by side) — with the ratios
-   *      persisted as global prefs (`splitPrefs`, `mygitui.split.*`).
+   *   3. commit detail pane (bottom, `CommitDetail`): full message,
+   *      author/committer dates, clickable parents, and the commit's diff;
+   *      per-file "Blame" swaps in a BlameView, and CompareBar results
+   *      render there too. The list↔detail boundary is user-resizable via
+   *      `SplitPane` (ratio persisted as a global pref, `splitPrefs`); the
+   *      detail's own meta↔diff split lives inside `CommitDetail`.
    *
    * Data: one HistoryStore per mounted view (see `$lib/stores/history.svelte`)
    * started/destroyed in an `$effect` keyed on `repoId`.
@@ -30,14 +29,13 @@
    * selection (g/G/Home/End jump), and aria-activedescendant tracks it.
    */
   import { untrack } from "svelte";
-  import { cherryPick, repoDiff, revertCommits } from "$lib/ipc/client";
+  import { cherryPick, revertCommits } from "$lib/ipc/client";
   import { describe, archiveSpec, pickSaveFile } from "$lib/ipc/client";
   import { branchCreate, tagCreate } from "$lib/ipc/client";
   import type { CommitInfo, FileDiff, MergeResult } from "$lib/ipc/types";
   import GraphCanvas from "$lib/components/graph/GraphCanvas.svelte";
-  import DiffViewer from "$lib/components/diff/DiffViewer.svelte";
-  import BlameView from "$lib/components/panels/BlameView.svelte";
   import CompareBar from "$lib/components/panels/CompareBar.svelte";
+  import CommitDetail from "$lib/components/panels/CommitDetail.svelte";
   import RebasePlanner from "$lib/components/rebase/RebasePlanner.svelte";
   import { orderForCherryPick } from "$lib/components/rebase/plannerModel";
   import { HistoryStore } from "$lib/stores/history.svelte";
@@ -51,10 +49,8 @@
   import PromptDialog from "$lib/components/safety/PromptDialog.svelte";
   import ResetDialog from "$lib/components/safety/ResetDialog.svelte";
   import TagAtDialog from "$lib/components/panels/TagAtDialog.svelte";
-  import SignatureBadge from "$lib/components/commit/SignatureBadge.svelte";
   import {
     classifyRef,
-    formatDateTime,
     formatRelativeTime,
     shortRefName,
   } from "$lib/stores/history-logic";
@@ -93,29 +89,19 @@
   let detailOpen = $state(false);
   let showCompare = $state(false);
   let compare = $state<{ files: FileDiff[]; base: string; target: string } | null>(null);
-  let blameTarget = $state<{ path: string; from: string } | null>(null);
-  let detailFiles = $state<FileDiff[] | null>(null);
-  let detailLoading = $state(false);
-  let diffToken = 0;
-  let describeToken = 0;
+
+  /** Live `CommitDetail` instance (palette blame toggle; null when closed). */
+  let detailRef = $state<ReturnType<typeof CommitDetail> | null>(null);
 
   // -- resizable panes (SplitPane ratios, persisted as global prefs) --------
 
   /** Commit list fraction of the history panel (detail takes the rest). */
   const DETAIL_RATIO_KEY = "history-detail";
-  const META_RATIO_KEY = "history-meta";
   let detailRatio = $state(readSplitRatio(DETAIL_RATIO_KEY, 0.62));
-  /** Commit-metadata fraction of the detail pane (diff takes the rest). */
-  let metaRatio = $state(readSplitRatio(META_RATIO_KEY, 0.34));
 
   function setDetailRatio(ratio: number): void {
     detailRatio = ratio;
     writeSplitRatio(DETAIL_RATIO_KEY, ratio);
-  }
-
-  function setMetaRatio(ratio: number): void {
-    metaRatio = ratio;
-    writeSplitRatio(META_RATIO_KEY, ratio);
   }
 
   // -- commit actions (M3 E2) -------------------------------------------------
@@ -263,7 +249,6 @@
         selectedInfo = null;
         detailOpen = false;
         compare = null;
-        blameTarget = null;
         multiIdx = [];
         anchorIdx = null;
         plannerOpen = false;
@@ -360,16 +345,8 @@
     select(sha, { scroll: true });
   }
 
-  // -- M12: bookmark star on the detail header -----------------------------------
-
-  /** Whether the selected commit is bookmarked (drives the star toggle). */
-  const selectedBookmarked = $derived(
-    root !== "" &&
-      selectedInfo !== null &&
-      bookmarkStore.has(root, selectedInfo.sha),
-  );
-
-  // Bookmark state is lazy per root — hydrate outside derived reads.
+  // Bookmark state is lazy per root — hydrate outside derived reads (the
+  // row context menu and CommitDetail's star read the store).
   $effect(() => {
     if (root !== "") bookmarkStore.ensure(root);
   });
@@ -403,64 +380,10 @@
     if (sha) select(sha, { scroll: true });
   }
 
-  // -- commit detail diff (lazy, token-guarded) --------------------------------------
-
-  $effect(() => {
-    const info = selectedInfo;
-    const sha = selectedSha;
-    void repoId; // reload on repo switch
-    blameTarget = null;
-    const token = ++diffToken;
-    if (!info || info.parents.length === 0 || !sha) {
-      detailFiles = null;
-      detailLoading = false;
-      return;
-    }
-    detailLoading = true;
-    detailFiles = null;
-    repoDiff(repoId, { commit: info.parents[0] as string }, { commit: sha })
-      .then((files) => {
-        if (token !== diffToken) return;
-        detailFiles = files;
-        detailLoading = false;
-      })
-      .catch((err: unknown) => {
-        if (token !== diffToken) return;
-        detailLoading = false;
-        detailFiles = null;
-        toast(`Diff failed: ${err instanceof Error ? err.message : String(err)}`, {
-          kind: "error",
-        });
-      });
-  });
-
-  // -- M10: describe line for the selected commit ------------------------------
-
-  let describeText = $state<string | null>(null);
-
-  $effect(() => {
-    const sha = selectedSha;
-    void repoId;
-    describeText = null;
-    if (!sha || !selectedInfo) return;
-    const token = ++describeToken;
-    describe(repoId, sha)
-      .then((text) => {
-        if (token === describeToken) describeText = text;
-      })
-      .catch(() => {
-        /* describe is decorative */
-      });
-  });
-
-  function openBlame(path: string): void {
-    if (!selectedSha) return;
-    blameTarget = { path, from: selectedSha };
-  }
+  // -- commit detail: diff/describe/blame live in CommitDetail ------------------
 
   function onCompare(files: FileDiff[], base: string, target: string): void {
     compare = { files, base, target };
-    blameTarget = null;
     detailOpen = true;
   }
 
@@ -620,11 +543,9 @@
       onUiEvent("history-clear-filter", () => store.clearFilter()),
       onUiEvent("history-refresh", () => store.restart()),
       onUiEvent("history-toggle-blame", () => {
-        if (blameTarget) {
-          blameTarget = null;
-        } else if (selectedSha && detailFiles && detailFiles.length > 0) {
-          openBlame(detailFiles[0]!.path);
-        } else {
+        // The file list lives in CommitDetail — delegate to its exported
+        // handler (null when the detail pane is closed).
+        if (!detailRef?.toggleBlameFirstFile()) {
           toast("Select a commit with file changes to blame");
         }
       }),
@@ -698,13 +619,16 @@
     }
   }
 
-  /** Changed-file right-click: per-file actions. */
-  function fileMenu(event: MouseEvent, path: string): void {
-    const entries: MenuEntry[] = [
-      { id: "history", label: "File history", run: () => void openPanelPopout("filehistory", repoId, `History: ${path}`, { path }) },
-      { id: "blame", label: "Blame", run: () => openBlame(path) },
-    ];
-    showMenuAt(event, entries);
+  /** Pops the selected commit's detail out into its own window. */
+  function popOutDetail(): void {
+    const sha = selectedInfo?.sha;
+    if (!sha) return;
+    void openPanelPopout(
+      "commitdetail",
+      repoId,
+      `Commit ${sha.slice(0, 7)}`,
+      { sha },
+    );
   }
 </script>
 
@@ -899,197 +823,22 @@
         {@render logPane()}
       {/snippet}
       {#snippet b()}
-    <div class="detail" aria-label="Commit detail">
-      <header class="dhead">
-        {#if selectedInfo}
-          <span class="dsha">{selectedInfo.sha.slice(0, 7)}</span>
-          <span class="dsummary" title={selectedInfo.summary}>{selectedInfo.summary}</span>
-          {#if root !== ""}
-            <!-- M12: bookmark star (same store mutation as the menu item). -->
-            <button
-              class="star"
-              aria-pressed={selectedBookmarked}
-              aria-label={selectedBookmarked
-                ? "Remove bookmark from this commit"
-                : "Bookmark this commit"}
-              title={selectedBookmarked ? "Remove bookmark" : "Bookmark commit"}
-              onclick={() => {
-                // Snippet narrowing doesn't reach the callback closure.
-                const sha = selectedInfo?.sha;
-                if (sha) toggleBookmark(sha);
-              }}
-            >
-              {selectedBookmarked ? "★" : "☆"}
-            </button>
-          {/if}
-        {:else}
-          <span class="dsha">diff</span>
-          <span class="dsummary">{compare?.base} → {compare?.target}</span>
-        {/if}
-        <button class="dclose" onclick={() => (detailOpen = false)} aria-label="Close detail">
-          ×
-        </button>
-      </header>
-      {#if selectedInfo}
-        <div class="cactions" role="toolbar" aria-label="Commit actions">
-          <button class="act" onclick={doCherryPick} disabled={opBusy}>
-            Cherry-pick{selectedShas.length > 1 ? ` (${selectedShas.length})` : ""}
-          </button>
-          <button class="act" onclick={doRevert} disabled={opBusy}>
-            Revert{selectedShas.length > 1 ? ` (${selectedShas.length})` : ""}
-          </button>
-          <button
-            class="act"
-            onclick={rebaseFromHere}
-            disabled={opBusy}
-            title={`Rebase HEAD..${selectedInfo.sha.slice(0, 7)} (selected commit is the exclusive base)`}
-          >
-            Rebase from here
-          </button>
-          <button class="act" onclick={copySha}>Copy sha</button>
-          <span class="cinfo" role="status">
-            {#if selectedShas.length > 1}
-              {selectedShas.length} commits selected (shift-click to extend)
-            {/if}
-          </span>
-        </div>
-      {/if}
-      <div class="dbody">
-        {#snippet filesPane()}
-        <div class="dfiles">
-          {#if blameTarget}
-            <div class="dtab">
-              <span>Blame: {blameTarget.path}</span>
-              <button
-                onclick={() => (blameTarget = null)}
-                aria-label="Close blame">×
-              </button>
-            </div>
-            <div class="dtabbody">
-              <BlameView {repoId} path={blameTarget.path} from={blameTarget.from} />
-            </div>
-          {:else if compare}
-            <div class="dtab">
-              <span>Compare: {compare.base} → {compare.target} ({compare.files.length} files)</span>
-              <button onclick={() => (compare = null)} aria-label="Close compare">×</button>
-            </div>
-            <div class="dtabbody">
-              <DiffViewer files={compare.files} />
-            </div>
-          {:else if detailLoading}
-            <p class="dstate" role="status">Loading diff…</p>
-          {:else if !selectedInfo || selectedInfo.parents.length === 0}
-            <p class="dstate">Root commit — nothing to diff against.</p>
-          {:else if detailFiles === null}
-            <p class="dstate">Diff unavailable.</p>
-          {:else if detailFiles.length === 0}
-            <p class="dstate">No changes against first parent.</p>
-          {:else}
-            <ul class="filelist" aria-label="Changed files">
-              {#each detailFiles as file (file.path)}
-                <li
-                  oncontextmenu={(e) => fileMenu(e, file.path)}
-                >
-                  <span class="fpath" title={file.path}>
-                    {#if file.old_path}{file.old_path} → {/if}{file.path}
-                  </span>
-                  <span class="stats">
-                    {#if !file.binary}
-                      <span class="add">+{file.additions}</span>
-                      <span class="del">−{file.deletions}</span>
-                    {:else}
-                      <span class="muted">binary</span>
-                    {/if}
-                  </span>
-                  <button class="blame" onclick={() => openBlame(file.path)}>Blame</button>
-                  <button
-                    class="blame"
-                    title="History of {file.path} (popout)"
-                    onclick={() =>
-                      void openPanelPopout("filehistory", repoId, `History: ${file.path}`, { path: file.path })}
-                  >History</button>
-                </li>
-              {/each}
-            </ul>
-            <div class="ddiff">
-              <DiffViewer files={detailFiles} />
-            </div>
-          {/if}
-        </div>
-        {/snippet}
-
-        {#if selectedInfo}
-          <!-- Meta ↔ files/diff: the detail's second resizable split. -->
-          <SplitPane
-            axis="x"
-            ratio={metaRatio}
-            onRatio={setMetaRatio}
-            label="Resize commit metadata and diff"
-          >
-            {#snippet a()}
-              <!-- Snippet bodies don't inherit the outer {#if selectedInfo}
-                   narrowing — re-guard here (renders only while active). -->
-              {#if selectedInfo}
-        <aside class="dmeta">
-            <dl>
-              <dt>Author</dt>
-              <dd>
-                {selectedInfo.author.name}
-                <span class="muted">&lt;{selectedInfo.author.email}&gt;</span><br />
-                {formatDateTime(selectedInfo.author.time)}
-                <span class="muted">({formatRelativeTime(selectedInfo.author.time)})</span>
-              </dd>
-              <dt>Committer</dt>
-              <dd>
-                {selectedInfo.committer.name}<br />
-                {formatDateTime(selectedInfo.committer.time)}
-                <span class="muted">({formatRelativeTime(selectedInfo.committer.time)})</span>
-              </dd>
-              <dt>Parents</dt>
-              <dd>
-                {#if selectedInfo.parents.length === 0}
-                  <em>root</em>
-                {:else}
-                  {#each selectedInfo.parents as p (p)}
-                    <button class="parent" onclick={() => selectParent(p)} title={"Go to " + p}>
-                      {p.slice(0, 7)}
-                    </button>
-                  {/each}
-                {/if}
-              </dd>
-              <dt>Describe</dt>
-              <dd>
-                {#if describeText}
-                  <code>{describeText}</code>
-                {:else}
-                  <span class="muted">…</span>
-                {/if}
-              </dd>
-              <!-- M12: commit-signature verification badge. -->
-              <dt>Signature</dt>
-              <dd><SignatureBadge {repoId} sha={selectedInfo.sha} /></dd>
-              {#if selectedInfo.refs.length > 0}
-                <dt>Refs</dt>
-                <dd class="drefs">
-                  {#each selectedInfo.refs as ref (ref)}
-                    <span class="ref ref-{classifyRef(ref)}">{shortRefName(ref)}</span>
-                  {/each}
-                </dd>
-              {/if}
-            </dl>
-            <pre class="msg">{selectedInfo.message}</pre>
-          </aside>
-              {/if}
-            {/snippet}
-            {#snippet b()}
-              {@render filesPane()}
-            {/snippet}
-          </SplitPane>
-        {:else}
-          {@render filesPane()}
-        {/if}
-      </div>
-    </div>
+        <CommitDetail
+          bind:this={detailRef}
+          {repoId}
+          info={selectedInfo}
+          {compare}
+          {root}
+          actionCount={selectedShas.length}
+          actionBusy={opBusy}
+          onClose={() => (detailOpen = false)}
+          onCloseCompare={() => (compare = null)}
+          onSelectParent={selectParent}
+          onCherryPick={() => void doCherryPick()}
+          onRevert={() => void doRevert()}
+          onRebaseFromHere={rebaseFromHere}
+          onPopout={selectedInfo ? popOutDetail : undefined}
+        />
       {/snippet}
     </SplitPane>
   {:else}
@@ -1241,10 +990,6 @@
   button.clear:focus-visible,
   button.compare-toggle:focus-visible,
   button.retry:focus-visible,
-  button.dclose:focus-visible,
-  button.parent:focus-visible,
-  button.blame:focus-visible,
-  .dtab button:focus-visible,
   .detail-open:focus-visible {
     outline: 2px solid var(--m3-primary);
     outline-offset: 1px;
@@ -1363,7 +1108,7 @@
     font-size: 0.6875rem;
   }
 
-  /* ref chips (shared with the detail pane) */
+  /* ref chips (rows; CommitDetail carries its own copies) */
   .ref {
     flex: none;
     max-width: 9rem;
@@ -1404,7 +1149,7 @@
     background: var(--m3-surface);
   }
 
-  /* -- detail pane -------------------------------------------------------------- */
+  /* -- detail pane (CommitDetail owns its styles; the reopen strip stays) ---- */
 
   .detail-open {
     flex: none;
@@ -1419,281 +1164,5 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-  }
-
-  .detail {
-    display: flex;
-    flex-direction: column;
-    min-height: 0;
-    background: var(--m3-surface);
-  }
-
-  .dhead {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    padding: 0.25rem 0.75rem;
-    background: var(--m3-surface-container, var(--m3-surface));
-    border-bottom: 1px solid var(--m3-outline-variant);
-    font-size: 0.8125rem;
-  }
-
-  .dsha {
-    font-family: ui-monospace, Consolas, monospace;
-    color: var(--m3-primary);
-  }
-
-  .dsummary {
-    flex: 1;
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    font-weight: 500;
-    color: var(--m3-on-surface);
-  }
-
-  .dclose,
-  .dtab button,
-  button.blame {
-    padding: 0.1rem 0.4rem;
-    color: var(--m3-on-surface-variant);
-    background: none;
-    border: 1px solid var(--m3-outline-variant);
-    border-radius: var(--m3-shape-extra-small, 4px);
-    cursor: pointer;
-    font-size: 0.72rem;
-  }
-
-  /* M12: bookmark star in the detail header. */
-  button.star {
-    flex: none;
-    padding: 0.05rem 0.45rem;
-    color: var(--m3-on-surface-variant);
-    background: none;
-    border: 1px solid var(--m3-outline-variant);
-    border-radius: var(--m3-shape-extra-small, 4px);
-    cursor: pointer;
-    font-size: 0.8125rem;
-    line-height: 1.3;
-  }
-
-  button.star[aria-pressed="true"] {
-    color: var(--m3-primary);
-    border-color: var(--m3-primary);
-  }
-
-  button.star:focus-visible {
-    outline: 2px solid var(--m3-primary);
-    outline-offset: 1px;
-  }
-
-  .dbody {
-    flex: 1;
-    display: flex;
-    min-height: 0;
-  }
-
-  /* SplitPane (meta ↔ files) or the bare files pane fills the body; the
-   * child needs :global — the splitter owns its own scope. */
-  .dbody > :global(*) {
-    flex: 1;
-    min-width: 0;
-  }
-
-  /* -- commit action bar (M3 E2) ------------------------------------------------ */
-
-  .cactions {
-    flex: none;
-    display: flex;
-    align-items: center;
-    flex-wrap: wrap;
-    gap: 0.35rem;
-    padding: 0.25rem 0.75rem;
-    border-bottom: 1px solid var(--m3-outline-variant);
-    background: var(--m3-surface-container-low, var(--m3-surface));
-    font-size: 0.72rem;
-  }
-
-  button.act {
-    padding: 0.18rem 0.6rem;
-    font-size: 0.72rem;
-    color: var(--m3-on-surface);
-    background: var(--m3-surface-container-high, var(--m3-surface));
-    border: 1px solid var(--m3-outline-variant);
-    border-radius: var(--m3-shape-full, 9999px);
-    cursor: pointer;
-  }
-
-  button.act:hover:not(:disabled) {
-    background: var(--m3-secondary-container);
-    color: var(--m3-on-secondary-container);
-  }
-
-  button.act:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-  }
-
-  button.act:focus-visible {
-    outline: 2px solid var(--m3-primary);
-    outline-offset: 1px;
-  }
-
-  .cinfo {
-    margin-left: auto;
-    color: var(--m3-on-surface-variant);
-    font-size: 0.6875rem;
-  }
-
-  .dmeta {
-    flex: 1;
-    min-width: 0;
-    overflow-y: auto;
-    padding: 0.5rem 0.75rem;
-    font-size: 0.75rem;
-  }
-
-  .dmeta dl {
-    margin: 0;
-    display: grid;
-    grid-template-columns: auto 1fr;
-    gap: 0.25rem 0.75rem;
-  }
-
-  .dmeta dt {
-    color: var(--m3-on-surface-variant);
-    font-size: 0.6875rem;
-    text-transform: uppercase;
-    letter-spacing: 0.02em;
-    padding-top: 0.1rem;
-  }
-
-  .dmeta dd {
-    margin: 0;
-    color: var(--m3-on-surface);
-  }
-
-  .muted {
-    color: var(--m3-on-surface-variant);
-  }
-
-  button.parent {
-    margin-right: 0.25rem;
-    padding: 0.05rem 0.3rem;
-    font-family: ui-monospace, Consolas, monospace;
-    font-size: 0.6875rem;
-    color: var(--m3-primary);
-    background: none;
-    border: 1px solid var(--m3-outline-variant);
-    border-radius: var(--m3-shape-extra-small, 4px);
-    cursor: pointer;
-  }
-
-  .drefs {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.25rem;
-  }
-
-  .msg {
-    margin: 0.5rem 0 0;
-    padding: 0.5rem;
-    white-space: pre-wrap;
-    overflow-wrap: anywhere;
-    font-family: ui-monospace, Consolas, monospace;
-    font-size: 0.72rem;
-    color: var(--m3-on-surface);
-    background: var(--m3-surface-container-low, var(--m3-surface));
-    border: 1px solid var(--m3-outline-variant);
-    border-radius: var(--m3-shape-extra-small, 4px);
-  }
-
-  .dfiles {
-    flex: 1;
-    min-width: 0;
-    display: flex;
-    flex-direction: column;
-  }
-
-  .dtab {
-    flex: none;
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    padding: 0.2rem 0.5rem 0.2rem 0.75rem;
-    font-size: 0.72rem;
-    color: var(--m3-on-surface);
-    background: var(--m3-surface-container-low, var(--m3-surface));
-    border-bottom: 1px solid var(--m3-outline-variant);
-  }
-
-  .dtab span {
-    flex: 1;
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    font-family: ui-monospace, Consolas, monospace;
-  }
-
-  .dtabbody {
-    flex: 1;
-    min-height: 0;
-    display: flex;
-    flex-direction: column;
-  }
-
-  .dstate {
-    margin: auto;
-    color: var(--m3-on-surface-variant);
-    font-size: 0.8125rem;
-  }
-
-  .filelist {
-    flex: none;
-    max-height: 30%;
-    margin: 0;
-    padding: 0.15rem 0;
-    list-style: none;
-    overflow-y: auto;
-    border-bottom: 1px solid var(--m3-outline-variant);
-    font-size: 0.72rem;
-  }
-
-  .filelist li {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    padding: 0.05rem 0.75rem;
-  }
-
-  .fpath {
-    flex: 1;
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    font-family: ui-monospace, Consolas, monospace;
-    color: var(--m3-on-surface);
-  }
-
-  .stats {
-    flex: none;
-    font-family: ui-monospace, Consolas, monospace;
-  }
-
-  .add {
-    color: var(--m3-tertiary);
-  }
-
-  .del {
-    color: var(--m3-error);
-  }
-
-  .ddiff {
-    flex: 1;
-    min-height: 0;
-    overflow: auto;
   }
 </style>

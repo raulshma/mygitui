@@ -391,6 +391,13 @@ per call. TS mirrors live in `src/lib/ipc/client.ts` (`DayCount`,
 - **FileHistoryView** — popout `?panel=filehistory&repo=<id>&path=`
   (rename-following walk via `HistoryStore({ follow: true })`);
   opened from changed-file menus/buttons.
+- **CommitDetail** (`src/lib/components/panels/CommitDetail.svelte`) —
+  the commit detail pane shared by HistoryView and its own popout
+  `?panel=commitdetail&repo=<id>&sha=<full sha>` ("Pop out" in the
+  detail header; `PopoutCommitDetail` self-wires the `CommitInfo`
+  fetch via a one-root log walk, parent clicks retarget the window;
+  the bookmark star stays hidden in popouts — bookmarks persist per
+  worktree root, which only the main window knows).
 - **Hunk actions in DiffViewer** — optional `repoId` +
   `hunkStaging` ("stage"|"unstage") + `hunkDiscard` props; RepoView's
   working-copy pane enables them only when the shown file has no
