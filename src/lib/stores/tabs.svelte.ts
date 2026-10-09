@@ -57,6 +57,21 @@ interface SessionStorage {
   setItem(key: string, value: string): void;
 }
 
+/** Optional behavior for {@link TabStore.openTab}. */
+export interface OpenTabOptions {
+  /**
+   * Focus the tab after opening (default `true`). Session restore passes
+   * `false` so parallel opens don't fight over the focused tab.
+   */
+  activate?: boolean;
+  /**
+   * Strip position for a newly created tab (default: append at the end).
+   * Ignored when the open dedupes into an existing tab. Session restore
+   * passes the stored index so resolve order can't reshuffle the strip.
+   */
+  index?: number;
+}
+
 /** Returns `localStorage` when available, else `null` (never throws). */
 function defaultSessionStorage(): SessionStorage | null {
   try {
@@ -126,23 +141,35 @@ export class TabStore {
 
   /**
    * Reopens the last session's tabs (launch restore): opens every stored
-   * root (folders that vanished are skipped silently) and focuses the
-   * stored active root when it came back. Tabs opened before this call
-   * (CLI arg / deep link) are kept and deduped by root.
+   * root in parallel (folders that vanished are skipped silently) and
+   * focuses the stored active root the moment its own open resolves, so
+   * the previously-focused repository is the first full view. Tabs insert
+   * at their stored strip position, so resolve order never reshuffles the
+   * strip. Tabs opened before this call (CLI arg / deep link) are kept and
+   * deduped by root.
    */
   async restoreSession(): Promise<void> {
     const session = parseStoredSession(
       this.#sessionStorage?.getItem(SESSION_STORAGE_KEY) ?? null,
     );
-    for (const root of session.roots) {
-      await this.openTab(root).catch(() => {
-        // Folder deleted/moved since the last run — skip it.
-      });
+    if (session.roots.length === 0) return;
+    await Promise.all(
+      session.roots.map((root, index) =>
+        this.openTab(root, { activate: false, index })
+          .then((tab) => {
+            if (tab.root === session.activeRoot) this.activeId = tab.id;
+          })
+          .catch(() => {
+            // Folder deleted/moved since the last run — skip it.
+          }),
+      ),
+    );
+    // The stored active root may not have come back (deleted/moved): fall
+    // back to the first restored tab instead of landing on the home view.
+    if (this.active === null && this.tabs.length > 0) {
+      this.activeId = this.tabs[0]!.id;
     }
-    if (session.activeRoot) {
-      const tab = this.tabs.find((t) => t.root === session.activeRoot);
-      if (tab) this.activeId = tab.id;
-    }
+    this.#persistSession();
   }
 
   /**
@@ -151,11 +178,17 @@ export class TabStore {
    * focuses that tab (matched by exact path first, then by the canonical
    * root the backend returns). Rejects (IpcError) when the backend refuses
    * the open.
+   *
+   * The first `repo_status` snapshot is fetched in the background: the tab
+   * renders immediately with `status: null` and the snapshot swaps in via
+   * reactivity (awaiting it here serialized session restore behind a full
+   * working-copy scan per tab).
    */
-  async openTab(path: string): Promise<Tab> {
+  async openTab(path: string, options: OpenTabOptions = {}): Promise<Tab> {
+    const activate = options.activate ?? true;
     const byPath = this.tabs.find((tab) => tab.root === path);
     if (byPath) {
-      this.activeId = byPath.id;
+      if (activate) this.activeId = byPath.id;
       this.#recents.add(path);
       this.#persistSession();
       return byPath;
@@ -165,7 +198,7 @@ export class TabStore {
 
     const byRoot = this.tabs.find((tab) => tab.root === info.root);
     if (byRoot) {
-      this.activeId = byRoot.id;
+      if (activate) this.activeId = byRoot.id;
       this.#recents.add(path);
       this.#persistSession();
       return byRoot;
@@ -178,13 +211,15 @@ export class TabStore {
       status: null,
       generation: 0,
     };
-    this.tabs.push(tab);
-    this.activeId = tab.id;
+    const at = Math.min(options.index ?? this.tabs.length, this.tabs.length);
+    this.tabs.splice(at, 0, tab);
+    if (activate) this.activeId = tab.id;
     this.#recents.add(path);
     this.#persistSession();
 
-    // Populate the status stub; failures are non-fatal (logged inside).
-    await this.refreshStatus(tab.id);
+    // Populate the status stub in the background; failures are non-fatal
+    // (logged inside, and `refreshStatus` never throws).
+    void this.refreshStatus(tab.id);
     return tab;
   }
 
@@ -247,8 +282,8 @@ export function getActiveId(): string | null {
   return tabStore.activeId;
 }
 
-export function openTab(path: string): Promise<Tab> {
-  return tabStore.openTab(path);
+export function openTab(path: string, options: OpenTabOptions = {}): Promise<Tab> {
+  return tabStore.openTab(path, options);
 }
 
 export function closeTab(id: RepoId): Promise<void> {

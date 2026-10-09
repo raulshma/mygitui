@@ -9,7 +9,8 @@
  *   file-header  one per file: path, +/- counts, collapse toggle, states
  *   hunk-header  "@@ -a,b +c,d @@" — also an a11y focus stop
  *   line         one row per DiffLine (unified mode; any origin)
- *   context      split mode: unchanged line rendered once, spanning both halves
+ *   context      split mode: unchanged line rendered in both halves, each
+ *                clipped at the divider
  *   pair         split mode: aligned (-line | +line) pair; shorter side padded
  *                with null (rendered as an empty filler cell)
  *   binary       "binary file" placeholder

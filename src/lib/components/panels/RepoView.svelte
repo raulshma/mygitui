@@ -35,28 +35,21 @@
     streamDiff,
   } from "$lib/ipc/client";
   import StatusPanel from "$lib/components/panels/StatusPanel.svelte";
-  import BranchPanel from "$lib/components/panels/BranchPanel.svelte";
-  import RemotePanel from "$lib/components/panels/RemotePanel.svelte";
-  import StashPanel from "$lib/components/panels/StashPanel.svelte";
-  import WorktreePanel from "$lib/components/panels/WorktreePanel.svelte";
-  import SubmodulePanel from "$lib/components/panels/SubmodulePanel.svelte";
-  import RepoPanel from "$lib/components/panels/RepoPanel.svelte";
-  import ReflogPanel from "$lib/components/panels/ReflogPanel.svelte";
-  import UndoPanel from "$lib/components/safety/UndoPanel.svelte";
   import ConflictEditor from "$lib/components/merge/ConflictEditor.svelte";
   import BisectBanner from "$lib/components/bisect/BisectBanner.svelte";
   import ConfirmDialog from "$lib/components/safety/ConfirmDialog.svelte";
   import PromptDialog from "$lib/components/safety/PromptDialog.svelte";
   import CommitBar from "$lib/components/panels/CommitBar.svelte";
-  import HistoryView from "$lib/components/panels/HistoryView.svelte";
   import DiffViewer from "$lib/components/diff/DiffViewer.svelte";
   import AuthDialog from "$lib/components/AuthDialog.svelte";
-  import TerminalPanel from "$lib/components/terminal/TerminalPanel.svelte";
-  import ForgePanel from "$lib/components/forge/ForgePanel.svelte";
-  import ActionsPanel from "$lib/components/actions/ActionsPanel.svelte";
-  import StatsPanel from "$lib/components/panels/StatsPanel.svelte";
   import CleanDialog from "$lib/components/actions/CleanDialog.svelte";
   import CommitMessageButton from "$lib/components/ai/CommitMessageButton.svelte";
+  // Startup: every panel that is not part of the first paint (status is the
+  // default tab; diff and CommitBar are always visible) is dynamically
+  // imported inside its snippet below — hidden panels (terminal/xterm,
+  // forge, stats, history's graph, …) and their dependency trees only load
+  // when first activated, which keeps the launch-critical module graph
+  // small. Imports are cached, so later activations are synchronous-fast.
   import { ai } from "$lib/ai/ai.svelte";
   import SplitContainer from "$lib/components/layout/SplitContainer.svelte";
   import { conflictsStore } from "$lib/components/panels/conflictsStore.svelte";
@@ -503,49 +496,75 @@
   />
 {/snippet}
 {#snippet branchesPanel()}
-  <BranchPanel {repoId} onMutated={refresh} />
+  {#await import("$lib/components/panels/BranchPanel.svelte") then BranchPanelModule}
+    <BranchPanelModule.default {repoId} onMutated={refresh} />
+  {/await}
 {/snippet}
 {#snippet remotesPanel()}
-  <RemotePanel {repoId} onMutated={refresh} />
+  {#await import("$lib/components/panels/RemotePanel.svelte") then RemotePanelModule}
+    <RemotePanelModule.default {repoId} onMutated={refresh} />
+  {/await}
 {/snippet}
 {#snippet stashesPanel()}
-  <StashPanel {repoId} onMutated={refresh} />
+  {#await import("$lib/components/panels/StashPanel.svelte") then StashPanelModule}
+    <StashPanelModule.default {repoId} onMutated={refresh} />
+  {/await}
 {/snippet}
 {#snippet worktreesPanel()}
-  <WorktreePanel {repoId} {root} onMutated={refresh} />
+  {#await import("$lib/components/panels/WorktreePanel.svelte") then WorktreePanelModule}
+    <WorktreePanelModule.default {repoId} {root} onMutated={refresh} />
+  {/await}
 {/snippet}
 {#snippet healthPanel()}
-  <RepoPanel {repoId} onMutated={refresh} />
+  {#await import("$lib/components/panels/RepoPanel.svelte") then RepoPanelModule}
+    <RepoPanelModule.default {repoId} onMutated={refresh} />
+  {/await}
 {/snippet}
 {#snippet submodulesPanel()}
-  <SubmodulePanel {repoId} {root} onMutated={refresh} />
+  {#await import("$lib/components/panels/SubmodulePanel.svelte") then SubmodulePanelModule}
+    <SubmodulePanelModule.default {repoId} {root} onMutated={refresh} />
+  {/await}
 {/snippet}
 {#snippet reflogPanel()}
-  <ReflogPanel {repoId} />
+  {#await import("$lib/components/panels/ReflogPanel.svelte") then ReflogPanelModule}
+    <ReflogPanelModule.default {repoId} />
+  {/await}
 {/snippet}
 {#snippet undoPanel()}
-  <UndoPanel {repoId} />
+  {#await import("$lib/components/safety/UndoPanel.svelte") then UndoPanelModule}
+    <UndoPanelModule.default {repoId} />
+  {/await}
 {/snippet}
 {#snippet historyPanel()}
-  <HistoryView
-    {repoId}
-    {root}
-    onPopout={popOutHistory}
-    bookmarks={bookmarks.shas(root)}
-    branchColors={(refs) => branchColorForRefs(refs, branchColorStore.rules(root))}
-  />
+  {#await import("$lib/components/panels/HistoryView.svelte") then HistoryViewModule}
+    <HistoryViewModule.default
+      {repoId}
+      {root}
+      onPopout={popOutHistory}
+      bookmarks={bookmarks.shas(root)}
+      branchColors={(refs) => branchColorForRefs(refs, branchColorStore.rules(root))}
+    />
+  {/await}
 {/snippet}
 {#snippet terminalPanel()}
-  <TerminalPanel {repoId} />
+  {#await import("$lib/components/terminal/TerminalPanel.svelte") then TerminalPanelModule}
+    <TerminalPanelModule.default {repoId} />
+  {/await}
 {/snippet}
 {#snippet forgePanel()}
-  <ForgePanel {repoId} />
+  {#await import("$lib/components/forge/ForgePanel.svelte") then ForgePanelModule}
+    <ForgePanelModule.default {repoId} />
+  {/await}
 {/snippet}
 {#snippet actionsPanel()}
-  <ActionsPanel {repoId} />
+  {#await import("$lib/components/actions/ActionsPanel.svelte") then ActionsPanelModule}
+    <ActionsPanelModule.default {repoId} />
+  {/await}
 {/snippet}
 {#snippet statsPanel()}
-  <StatsPanel {repoId} {root} />
+  {#await import("$lib/components/panels/StatsPanel.svelte") then StatsPanelModule}
+    <StatsPanelModule.default {repoId} {root} />
+  {/await}
 {/snippet}
 {#snippet missingPanel()}
   <aside class="missing-panel">This panel is not available.</aside>

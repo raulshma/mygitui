@@ -37,12 +37,31 @@
 // Client-only subpath: the package root also re-exports ./server.js, whose
 // node-only deps (`which`, cross-spawn) read bare `process` at module scope
 // and crash the webview bundle.
-import { createOpencodeClient } from "@opencode-ai/sdk/client";
+//
+// The SDK module itself is imported dynamically (see `sdkClientFactory`):
+// statically it would be parsed on every app launch — including launches
+// that never touch an AI feature — because the providers are constructed
+// eagerly by the AI store.
 import type { OpencodeClient } from "@opencode-ai/sdk/client";
 import { DEFAULT_OPENCODE_URL } from "./provider";
 import type { AiGenerateRequest, AiProvider, AiProbeResult } from "./provider";
 import { AiError } from "./types";
 import type { AiResult, ModelInfo, OpencodeResolve } from "./types";
+
+/** Memoized SDK factory (dynamic import resolves once, then caches). */
+let createOpencodeClient: typeof import("@opencode-ai/sdk/client")["createOpencodeClient"] | null =
+  null;
+
+/** Resolves `createOpencodeClient`, importing the SDK on first use. */
+async function sdkClientFactory(): Promise<
+  NonNullable<typeof createOpencodeClient>
+> {
+  if (!createOpencodeClient) {
+    const sdk = await import("@opencode-ai/sdk/client");
+    createOpencodeClient = sdk.createOpencodeClient;
+  }
+  return createOpencodeClient;
+}
 
 /** Health probe timeout (ms) — the server is local; slow means absent. */
 export const HEALTH_TIMEOUT_MS = 2_000;
@@ -504,12 +523,13 @@ export class OpenCodeProvider implements AiProvider {
   }
 
   /** SDK client for a base URL (rebuilt when the URL changes). */
-  #clientFor(base: string, rawDirectory?: string): OpencodeClient {
+  async #clientFor(base: string, rawDirectory?: string): Promise<OpencodeClient> {
     // Backslash directories (Windows paths, \\?\ canonical forms) break the
     // server's project resolution — see normalizeDirectory.
     const directory = normalizeDirectory(rawDirectory);
     const clientKey = `${base}\0${directory ?? ""}`;
     if (this.#client && this.#clientKey === clientKey) return this.#client;
+    const createOpencodeClient = await sdkClientFactory();
     this.#client = createOpencodeClient({
       baseUrl: base,
       ...(directory ? { directory } : {}),
@@ -566,7 +586,8 @@ export class OpenCodeProvider implements AiProvider {
   async listModels(): Promise<ModelInfo[]> {
     try {
       const base = await this.#resolveServer().then((s) => s.base);
-      const response = await this.#clientFor(base, this.#options.directory?.()).config.providers();
+      const client = await this.#clientFor(base, this.#options.directory?.());
+      const response = await client.config.providers();
       if (response.error) {
         throw new AiError(
           "bad-response",
@@ -607,7 +628,7 @@ export class OpenCodeProvider implements AiProvider {
     const directory = this.#options.directory?.(req.sessionKey);
     try {
       const base = await this.#resolveServer().then((s) => s.base);
-      client = this.#clientFor(base, directory);
+      client = await this.#clientFor(base, directory);
     } catch (err) {
       if (err instanceof AiError) throw err;
       throw toAiError(err);

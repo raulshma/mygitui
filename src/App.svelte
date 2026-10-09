@@ -23,9 +23,10 @@
   import Toaster from "$lib/components/Toaster.svelte";
   import TabStrip from "$lib/components/TabStrip.svelte";
   import RepoView from "$lib/components/panels/RepoView.svelte";
-  import HistoryView from "$lib/components/panels/HistoryView.svelte";
-  import PopoutDiff from "$lib/components/layout/PopoutDiff.svelte";
-  import PopoutCommitDetail from "$lib/components/layout/PopoutCommitDetail.svelte";
+  // Startup: the popout-only views below are dynamically imported inside
+  // the popout branch — the main window never renders them, so their
+  // module trees (history graph, file-history, popout panels) stay out of
+  // the launch-critical graph.
   // M4 F1: panel popout query contract (?panel=diff|history&repo=<id>).
   import { parsePopoutQuery } from "$lib/layout/popout";
   import QuickSwitcher from "$lib/components/QuickSwitcher.svelte";
@@ -33,7 +34,6 @@
   import CommandPalette from "$lib/components/CommandPalette.svelte";
   // M9 F1: global context menu (opened by panels via contextMenu.show).
   import ContextMenu from "$lib/components/menu/ContextMenu.svelte";
-  import FileHistoryView from "$lib/components/panels/FileHistoryView.svelte";
   // M4 F2: global keybind engine + palette execution entry point.
   import { startKeybinds } from "$lib/palette/keybinds";
   import { executeCommandById, togglePalette } from "$lib/palette/palette.svelte";
@@ -191,16 +191,27 @@
     <!-- M4 F1 popout window: exactly one panel, own store wiring. -->
     <main class="popout-view">
       {#if popout.panel === "history"}
-        <HistoryView repoId={popout.repoId} />
+        {#await import("$lib/components/panels/HistoryView.svelte") then HistoryViewModule}
+          <HistoryViewModule.default repoId={popout.repoId} />
+        {/await}
       {:else if popout.panel === "filehistory"}
-        <FileHistoryView
-          repoId={popout.repoId}
-          path={popout.path ?? ""}
-        />
+        {#await import("$lib/components/panels/FileHistoryView.svelte") then FileHistoryViewModule}
+          <FileHistoryViewModule.default
+            repoId={popout.repoId}
+            path={popout.path ?? ""}
+          />
+        {/await}
       {:else if popout.panel === "commitdetail"}
-        <PopoutCommitDetail repoId={popout.repoId} sha={popout.sha ?? ""} />
+        {#await import("$lib/components/layout/PopoutCommitDetail.svelte") then PopoutCommitDetailModule}
+          <PopoutCommitDetailModule.default
+            repoId={popout.repoId}
+            sha={popout.sha ?? ""}
+          />
+        {/await}
       {:else}
-        <PopoutDiff repoId={popout.repoId} />
+        {#await import("$lib/components/layout/PopoutDiff.svelte") then PopoutDiffModule}
+          <PopoutDiffModule.default repoId={popout.repoId} />
+        {/await}
       {/if}
     </main>
   {:else if tabStore.tabs.length > 0}

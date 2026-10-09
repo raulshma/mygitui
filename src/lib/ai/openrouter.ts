@@ -12,8 +12,10 @@
  * message before it can reach a toast or log (see {@link scrubSecret}).
  */
 
-import { createOpenRouter } from "@openrouter/ai-sdk-provider";
-import { generateText } from "ai";
+// The Vercel AI SDK + provider package are imported dynamically inside
+// `generate` (see below): statically they would be parsed on every app
+// launch — including launches that never touch an AI feature — because the
+// providers are constructed eagerly by the AI store.
 import { secretsGet, SECRET_KEYS } from "$lib/ipc/client";
 import { AiError } from "./types";
 import {
@@ -171,6 +173,11 @@ export class OpenRouterProvider implements AiProvider {
     }
 
     const modelId = req.model ?? this.#options.defaultModel ?? DEFAULT_OPENROUTER_MODEL;
+    // Deferred SDK load: first AI call pays the import, launch does not.
+    const [{ createOpenRouter }, { generateText }] = await Promise.all([
+      import("@openrouter/ai-sdk-provider"),
+      import("ai"),
+    ]);
     const openrouter = createOpenRouter({ apiKey: key });
     try {
       const result = await generateText({

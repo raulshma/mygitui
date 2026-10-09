@@ -5,8 +5,8 @@
    * virtualizer's uniform-height buckets.
    *
    * Layout:
-   *   split    [ old# | - | text ][ new# | + | text ]  (equal halves)
-   *   context  [ old# | new# | text spanning both halves ]
+ *   split    [ old# | - | text ][ new# | + | text ]  (equal halves)
+ *   context  [ old# | text ][ new# | text ]  (same line, clipped per half)
    *   unified  [ old# | new# | sign | text ]
    */
   import type { DiffLine } from "$lib/ipc/types";
@@ -188,32 +188,39 @@
   </div>
 
 {:else if row.kind === "context"}
-  <div
-    class="row line context"
-    class:selected={selectedInRow(row.lineIndex)}
-    style:height={`${rowHeight(row)}px`}
-  >
-    <button
-      type="button"
-      class="no" class:click={onGutterClick !== undefined}
-      tabindex="-1"
-      aria-label="Select line {row.line.old_no ?? ""}"
-      onclick={(e) => {
-        e.stopPropagation();
-        gutter(row.fileIndex, row.hunkIndex, row.lineIndex, e);
-      }}
-    >{row.line.old_no ?? ""}</button>
-    <button
-      type="button"
-      class="no" class:click={onGutterClick !== undefined}
-      tabindex="-1"
-      aria-label="Select line {row.line.new_no ?? ""}"
-      onclick={(e) => {
-        e.stopPropagation();
-        gutter(row.fileIndex, row.hunkIndex, row.lineIndex, e);
-      }}
-    >{row.line.new_no ?? ""}</button>
-    <span class="txt">{@render text(row.line)}</span>
+  <!-- Context renders the line in BOTH halves (like GitHub/VS Code split):
+       each side clips at the divider, so text never crosses into the other
+       section. The empty sign spacer keeps text columns aligned with the
+       pair rows directly above/below. -->
+  <div class="row line context" style:height={`${rowHeight(row)}px`}>
+    <div class="half" class:selected={selectedInRow(row.lineIndex)}>
+      <button
+        type="button"
+        class="no" class:click={onGutterClick !== undefined}
+        tabindex="-1"
+        aria-label="Select line {row.line.old_no ?? ""}"
+        onclick={(e) => {
+          e.stopPropagation();
+          gutter(row.fileIndex, row.hunkIndex, row.lineIndex, e);
+        }}
+      >{row.line.old_no ?? ""}</button>
+      <span class="sign" aria-hidden="true"></span>
+      <span class="txt">{@render text(row.line)}</span>
+    </div>
+    <div class="half right" class:selected={selectedInRow(row.lineIndex)}>
+      <button
+        type="button"
+        class="no" class:click={onGutterClick !== undefined}
+        tabindex="-1"
+        aria-label="Select line {row.line.new_no ?? ""}"
+        onclick={(e) => {
+          e.stopPropagation();
+          gutter(row.fileIndex, row.hunkIndex, row.lineIndex, e);
+        }}
+      >{row.line.new_no ?? ""}</button>
+      <span class="sign" aria-hidden="true"></span>
+      <span class="txt">{@render text(row.line)}</span>
+    </div>
   </div>
 
 {:else if row.kind === "pair"}
@@ -408,21 +415,8 @@
     border-left: 1px solid var(--diff-divider);
   }
 
-  .row.context {
-    position: relative;
-  }
-  .row.context .txt {
-    flex: 1;
-  }
-  .row.context::after {
-    content: "";
-    position: absolute;
-    left: 50%;
-    top: 0;
-    bottom: 0;
-    width: 1px;
-    background: var(--diff-divider);
-  }
+  /* Context rows use the same two-half layout as pairs; the right half's
+     border-left is the divider, so no ::after overlay is needed. */
 
   /* ---- unified single line ------------------------------------------------ */
   .row.single {

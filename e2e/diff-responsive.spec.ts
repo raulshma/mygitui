@@ -76,7 +76,9 @@ async function openCommitDiff(page: Page, firstLine: string) {
   await page.getByRole("button", { name: /repo\s*\/tmp\/repo/ }).click();
   await page.locator("#commit-row-0").click();
   await expect(page.locator(".diff-viewer .viewport")).toBeVisible();
-  await expect(page.getByText(firstLine)).toBeVisible();
+  // Context rows render the line in both halves, so the first context line
+  // matches twice — any one instance proves the diff landed.
+  await expect(page.getByText(firstLine).first()).toBeVisible();
 }
 
 interface DiffMetrics {
@@ -124,6 +126,41 @@ test("split view shares the pane and never scrolls horizontally", async ({ page 
   m = await diffMetrics(page);
   expect(m.vpScroll).toBeLessThanOrEqual(m.vpClient);
   expect(m.rowWidth).toBe(m.vpClient);
+
+  expect(tracked.errors).toEqual([]);
+});
+
+test("split view keeps context text inside its own half", async ({ page }) => {
+  const tracked = trackErrors(page);
+  // A context line far wider than the pane: it must be clipped at the
+  // divider in each half (rendered per half), never spill from the left
+  // section into the right one.
+  const long = "unchanged ".repeat(30).trim();
+  await bootRepoWithDiff(page, [long, "second line"]);
+  await page.setViewportSize({ width: 1400, height: 1000 });
+  await openCommitDiff(page, long);
+
+  const laidOut = await page.evaluate(() => {
+    const rows = [...document.querySelectorAll<HTMLElement>(".diff-viewer .row.context")];
+    return rows.every((row) => {
+      const halves = [...row.querySelectorAll<HTMLElement>(".half")];
+      if (halves.length !== 2) return false;
+      const [left, right] = halves.map((h) => h.getBoundingClientRect());
+      // Divider edge shared, and each half's text box stays inside it.
+      const divider = Math.round(left.right);
+      return (
+        Math.abs(divider - Math.round(right.left)) <= 1 &&
+        [...halves].every((half, i) => {
+          const box = half.getBoundingClientRect();
+          const txt = half.querySelector<HTMLElement>(".txt")!.getBoundingClientRect();
+          return i === 0
+            ? txt.right <= box.right + 1
+            : txt.left >= box.left - 1;
+        })
+      );
+    });
+  });
+  expect(laidOut).toBe(true);
 
   expect(tracked.errors).toEqual([]);
 });

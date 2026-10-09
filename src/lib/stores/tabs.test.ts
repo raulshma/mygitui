@@ -112,7 +112,12 @@ describe("openTab", () => {
     });
     expect(store.tabs).toHaveLength(1);
     expect(store.activeId).toBe("repo-1");
-    expect(store.tabs[0]?.status).toEqual(STATUS_1); // populated by refreshStatus
+    // The status snapshot loads in the background: openTab resolves with
+    // `status: null` and the fetched status swaps in reactively.
+    expect(store.tabs[0]?.status).toBeNull();
+    await vi.waitFor(() => {
+      expect(store.tabs[0]?.status).toEqual(STATUS_1);
+    });
     expect(recents.list().map((entry) => entry.path)).toEqual(["C:/repos/alpha"]);
   });
 
@@ -271,6 +276,10 @@ describe("refreshStatus", () => {
     mockOpenRepo.mockResolvedValue(ALPHA);
     mockRepoStatus.mockResolvedValue(STATUS_1);
     await store.openTab("C:/repos/alpha");
+    // The background fetch from openTab must have landed before the swap.
+    await vi.waitFor(() => {
+      expect(store.tabs[0]?.status).toEqual(STATUS_1);
+    });
 
     const before = store.tabs[0]?.status;
     expect(before).toEqual(STATUS_1);
@@ -288,6 +297,9 @@ describe("refreshStatus", () => {
     mockOpenRepo.mockResolvedValue(ALPHA);
     mockRepoStatus.mockResolvedValue(STATUS_1);
     await store.openTab("C:/repos/alpha");
+    await vi.waitFor(() => {
+      expect(store.tabs[0]?.status).toEqual(STATUS_1);
+    });
 
     mockRepoStatus.mockRejectedValue(new Error("repo busy"));
     await expect(store.refreshStatus("repo-1")).resolves.toBeUndefined();
@@ -434,6 +446,57 @@ describe("session persistence", () => {
     expect(store.activeId).toBe("repo-2");
   });
 
+  it("restoreSession keeps strip order when opens resolve out of order", async () => {
+    const storage = memSessionStorage();
+    storage.data.set(
+      "mygitui.session",
+      JSON.stringify({ roots: [ALPHA.root, BETA.root], activeRoot: ALPHA.root }),
+    );
+    const store = new TabStore(new RecentRepoStore(noStorage), storage);
+    // BETA opens immediately; ALPHA hangs until released — resolve order
+    // must not reshuffle the strip (insert at the stored index instead).
+    let releaseAlpha!: (info: typeof ALPHA) => void;
+    mockOpenRepo.mockImplementation((path: string) =>
+      path === ALPHA.root
+        ? new Promise((resolve) => (releaseAlpha = resolve))
+        : Promise.resolve(BETA),
+    );
+
+    const restored = store.restoreSession();
+    await vi.waitFor(() => expect(store.tabs.map((t) => t.root)).toEqual([BETA.root]));
+    releaseAlpha(ALPHA);
+    await restored;
+
+    expect(store.tabs.map((t) => t.root)).toEqual([ALPHA.root, BETA.root]);
+    expect(store.activeId).toBe("repo-1");
+  });
+
+  it("restoreSession opens tabs in parallel, not one after another", async () => {
+    const storage = memSessionStorage();
+    storage.data.set(
+      "mygitui.session",
+      JSON.stringify({ roots: [ALPHA.root, BETA.root], activeRoot: BETA.root }),
+    );
+    const store = new TabStore(new RecentRepoStore(noStorage), storage);
+    // Both opens hang until both have been *issued*: a serial restore would
+    // never reach the second open before the first resolves.
+    const issued: string[] = [];
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    mockOpenRepo.mockImplementation((path: string) => {
+      issued.push(path);
+      return gate.then(() => (path === ALPHA.root ? ALPHA : BETA));
+    });
+
+    const restored = store.restoreSession();
+    await vi.waitFor(() => expect(issued).toHaveLength(2));
+    release();
+    await restored;
+
+    expect(store.tabs).toHaveLength(2);
+    expect(store.activeId).toBe("repo-2");
+  });
+
   it("restoreSession skips folders that no longer open and never throws", async () => {
     const storage = memSessionStorage();
     storage.data.set(
@@ -448,6 +511,8 @@ describe("session persistence", () => {
 
     await expect(store.restoreSession()).resolves.toBeUndefined();
     expect(store.tabs.map((t) => t.root)).toEqual([BETA.root]);
+    // The stored active root (alpha) is gone — fall back to the first
+    // restored tab instead of landing on the home view.
     expect(store.activeId).toBe("repo-2");
   });
 });
