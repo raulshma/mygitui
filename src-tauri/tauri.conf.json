@@ -17,7 +17,8 @@
         "height": 900,
         "minWidth": 900,
         "minHeight": 600,
-        "additionalBrowserArgs": "--remote-debugging-port=9222"
+        "additionalBrowserArgs": "--remote-debugging-port=9222",
+        "backgroundColor": "#141218"
       }
     ],
     "security": {

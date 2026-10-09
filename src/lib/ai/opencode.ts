@@ -284,6 +284,21 @@ export function basicAuthHeader(password: string): string {
 }
 
 /**
+ * Normalizes a workspace directory for server calls. OpenCode 1.x resolves
+ * the `x-opencode-directory` value with forward slashes only: a Windows
+ * backslash path (git2's `C:\repo`, or Rust's canonicalized `\\?\C:\repo`)
+ * is mis-parsed into a garbage project directory and every prompt fails
+ * with a 500 "Unexpected server error". Verified against opencode 1.18.35:
+ * `C:/repo` works, `C:\repo` and `\\?\C:\repo` do not.
+ */
+export function normalizeDirectory(directory: string | null | undefined): string | undefined {
+  if (!directory) return undefined;
+  const stripped = directory.replace(/^\\\\\?\\/, "");
+  const normalized = stripped.replace(/\\/g, "/");
+  return normalized.length > 0 ? normalized : undefined;
+}
+
+/**
  * Wraps `fetch` so every request to the opencode base carries the basic
  * auth header. Request/init headers are merged (the SDK passes a `Request`
  * with its own headers); requests to other origins pass through untouched.
@@ -489,7 +504,10 @@ export class OpenCodeProvider implements AiProvider {
   }
 
   /** SDK client for a base URL (rebuilt when the URL changes). */
-  #clientFor(base: string, directory?: string): OpencodeClient {
+  #clientFor(base: string, rawDirectory?: string): OpencodeClient {
+    // Backslash directories (Windows paths, \\?\ canonical forms) break the
+    // server's project resolution — see normalizeDirectory.
+    const directory = normalizeDirectory(rawDirectory);
     const clientKey = `${base}\0${directory ?? ""}`;
     if (this.#client && this.#clientKey === clientKey) return this.#client;
     this.#client = createOpencodeClient({
@@ -550,9 +568,11 @@ export class OpenCodeProvider implements AiProvider {
       const base = await this.#resolveServer().then((s) => s.base);
       const response = await this.#clientFor(base, this.#options.directory?.()).config.providers();
       if (response.error) {
-        throw new AiError("bad-response", "opencode rejected the provider list request", {
-          backend: "opencode",
-        });
+        throw new AiError(
+          "bad-response",
+          `opencode rejected the provider list request: ${summarizeError(response.error)}`,
+          { backend: "opencode" },
+        );
       }
       return providersToModels(response.data);
     } catch (err) {
@@ -571,9 +591,11 @@ export class OpenCodeProvider implements AiProvider {
     if (known) return known;
     const response = await client.session.create({ body: { title: SESSION_TITLE } });
     if (response.error || !response.data?.id) {
-      throw new AiError("bad-response", "opencode refused to create a session", {
-        backend: "opencode",
-      });
+      throw new AiError(
+        "bad-response",
+        `opencode refused to create a session${response.error ? `: ${summarizeError(response.error)}` : ""}`,
+        { backend: "opencode" },
+      );
     }
     this.#sessions.set(key, response.data.id);
     return response.data.id;
@@ -591,7 +613,7 @@ export class OpenCodeProvider implements AiProvider {
       throw toAiError(err);
     }
 
-    const key = `${directory ?? ""}\0${req.sessionKey ?? "default"}`;
+    const key = `${normalizeDirectory(directory) ?? ""}\0${req.sessionKey ?? "default"}`;
     const configuredModel = this.#options.defaultModel;
     const defaultModel =
       (typeof configuredModel === "function" ? configuredModel() : configuredModel)?.trim() ||
@@ -636,6 +658,17 @@ export class OpenCodeProvider implements AiProvider {
       }
       const text = partsToText(response.data?.parts);
       if (text === null) {
+        // 200 with no text usually carries the failure on info.error (e.g.
+        // the model's provider has no API key on the server) — surface it
+        // instead of a generic "no text" that hides the actual cause.
+        const info = describeInfoError(response.data?.info);
+        if (info) {
+          throw new AiError(
+            info.kind === "unauthenticated" ? "unauthenticated" : "bad-response",
+            `opencode model failed: ${info.message} — check the model/API key in AI settings or opencode`,
+            { backend: "opencode" },
+          );
+        }
         throw new AiError(
           "bad-response",
           "opencode returned no text output for the prompt",
@@ -668,9 +701,46 @@ export class OpenCodeProvider implements AiProvider {
 /** Last-error text from an SDK error object (safe, no request dump). */
 function summarizeError(err: unknown): string {
   if (typeof err === "string") return err.slice(0, 300);
-  const message = (err as { message?: unknown } | null)?.message;
-  if (typeof message === "string" && message.length > 0) return message.slice(0, 300);
-  return "unknown server error";
+  // Non-2xx bodies decode to NamedError POJOs (`{name, data: {message, ref}}`)
+  // — there is no top-level `.message`, so read both shapes.
+  const shape = err as
+    | { name?: unknown; message?: unknown; data?: { message?: unknown; ref?: unknown } }
+    | null;
+  const message =
+    typeof shape?.message === "string" && shape.message.length > 0
+      ? shape.message
+      : typeof shape?.data?.message === "string" && shape.data.message.length > 0
+        ? shape.data.message
+        : null;
+  const name = typeof shape?.name === "string" && shape.name.length > 0 ? shape.name : null;
+  const ref = typeof shape?.data?.ref === "string" && shape.data.ref.length > 0 ? shape.data.ref : null;
+  let out = message ?? name ?? "unknown server error";
+  if (name && message) out = `${name}: ${message}`;
+  if (ref) out = `${out} (ref ${ref})`;
+  return out.slice(0, 300);
+}
+
+/**
+ * Renders the `info.error` field of a successful prompt reply (200 with a
+ * failed model call). `null` when the reply carries no error info.
+ */
+function describeInfoError(
+  info: unknown,
+): { kind: "unauthenticated" | "bad-response"; message: string } | null {
+  const error = (info as { error?: unknown } | null)?.error;
+  if (typeof error !== "object" || error === null) return null;
+  const shape = error as { name?: unknown; data?: { message?: unknown } };
+  const message =
+    typeof shape.data?.message === "string" && shape.data.message.length > 0
+      ? shape.data.message
+      : typeof shape.name === "string"
+        ? shape.name
+        : null;
+  if (message === null) return null;
+  return {
+    kind: shape.name === "ProviderAuthError" ? "unauthenticated" : "bad-response",
+    message,
+  };
 }
 
 /** Maps an arbitrary thrown value to an {@link AiError} for this backend. */

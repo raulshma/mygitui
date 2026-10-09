@@ -288,6 +288,9 @@
     color: var(--m3-on-surface-variant, var(--m3-on-surface));
     font: inherit;
     font-size: 0.6875rem;
+    /* Constant across selected/unselected: a selected-state weight bump
+       widens the label, resizing the tab and shifting every sibling tab. */
+    font-weight: 500;
     padding: 0.25rem 0.5rem;
     cursor: pointer;
   }
@@ -310,7 +313,6 @@
   .panel-tab[aria-selected="true"] {
     background: var(--m3-surface);
     color: var(--m3-primary);
-    font-weight: 600;
     /* Visually merge with the panel body below. */
     padding-bottom: calc(0.25rem + 1px);
     margin-bottom: -1px;

@@ -17,6 +17,7 @@
  */
 
 import type { DiffHunk, DiffLine, FileDiff } from "$lib/ipc/types";
+import { visualColumns } from "$lib/components/diff/textWidth";
 
 export type DiffMode = "split" | "unified";
 
@@ -107,8 +108,13 @@ export interface RowModel {
   rows: DiffRow[];
   /** Parallel to `rows`: owning file's index (syntax highlighting, M11). */
   fileIndexes: number[];
-  /** Longest line text in JS chars — drives the horizontal scroll width. */
+  /** Longest line text in JS chars (raw length stat). */
   maxTextChars: number;
+  /**
+   * Widest line's text by rendered columns (tabs expanded to their stops) —
+   * drives the unified-mode horizontal scroll width (see textWidth.ts).
+   */
+  maxLineText: string;
   /** Σ additions across all files (toolbar stat). */
   totalAdditions: number;
   /** Σ deletions across all files (toolbar stat). */
@@ -220,6 +226,8 @@ export function buildRowModel(
   /** Parallel to `rows`: owning file's index (syntax highlighting, M11). */
   const fileIndexes: number[] = [];
   let maxTextChars = 0;
+  let maxLineCols = 0;
+  let maxLineText = "";
   let totalAdditions = 0;
   let totalDeletions = 0;
 
@@ -230,6 +238,11 @@ export function buildRowModel(
     for (const hunk of file.hunks) {
       for (const line of hunk.lines) {
         if (line.text.length > maxTextChars) maxTextChars = line.text.length;
+        const cols = visualColumns(line.text);
+        if (cols > maxLineCols) {
+          maxLineCols = cols;
+          maxLineText = line.text;
+        }
       }
     }
 
@@ -280,5 +293,12 @@ export function buildRowModel(
     }
   }
 
-  return { rows, fileIndexes, maxTextChars, totalAdditions, totalDeletions };
+  return {
+    rows,
+    fileIndexes,
+    maxTextChars,
+    maxLineText,
+    totalAdditions,
+    totalDeletions,
+  };
 }

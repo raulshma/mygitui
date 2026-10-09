@@ -5,8 +5,75 @@
     <link rel="icon" type="image/png" href="/favicon.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>mygitui</title>
+    <style>
+      /* Pre-paint + splash: the native window background (tauri.conf.json
+         `backgroundColor`) and this HTML background share one dark tone, so
+         launch never flashes white. The splash overlay renders on first
+         parse — before the app bundle has loaded — and App.svelte fades it
+         out once the app shell has mounted. */
+      html {
+        background: #141218;
+      }
+      #app-splash {
+        position: fixed;
+        inset: 0;
+        z-index: 2147483647;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 18px;
+        background: #141218;
+        font-family: Roboto, "Segoe UI", system-ui, sans-serif;
+      }
+      #app-splash svg {
+        width: 56px;
+        height: 56px;
+        color: #d0bcff;
+      }
+      #app-splash .app-splash__name {
+        font-size: 20px;
+        font-weight: 500;
+        letter-spacing: 0.5px;
+        color: #e6e0e9;
+      }
+      #app-splash .app-splash__spinner {
+        width: 26px;
+        height: 26px;
+        border-radius: 50%;
+        border: 3px solid rgba(208, 188, 255, 0.25);
+        border-top-color: #d0bcff;
+        animation: app-splash-spin 0.8s linear infinite;
+      }
+      #app-splash.app-splash--done {
+        opacity: 0;
+        transition: opacity 0.2s ease;
+      }
+      @keyframes app-splash-spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+    </style>
   </head>
   <body>
+    <div id="app-splash" aria-hidden="true">
+      <svg
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="1.8"
+        stroke-linecap="round"
+      >
+        <circle cx="6" cy="6" r="2.4" />
+        <circle cx="6" cy="18" r="2.4" />
+        <circle cx="18" cy="12" r="2.4" />
+        <path d="M6 8.4v7.2" />
+        <path d="M15.7 10.9c-2.6-.9-6-.3-7.5 1.7" />
+      </svg>
+      <div class="app-splash__name">mygitui</div>
+      <div class="app-splash__spinner"></div>
+    </div>
     <div id="app"></div>
     <script type="module" src="/src/main.ts"></script>
   </body>

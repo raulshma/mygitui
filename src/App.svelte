@@ -100,6 +100,14 @@
   onMount(() => {
     const cleanups: Array<() => void> = [];
 
+    // Fade out the index.html splash (#app-splash) now that the app shell
+    // has mounted; runs for the main window and popouts alike.
+    const splash = document.getElementById("app-splash");
+    if (splash) {
+      splash.classList.add("app-splash--done");
+      setTimeout(() => splash.remove(), 250);
+    }
+
     void initTheme().catch((err) =>
       console.error("[mygitui] theme init failed:", err),
     );

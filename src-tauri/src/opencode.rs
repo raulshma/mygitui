@@ -334,6 +334,20 @@ fn startup_error(message: String, output: &Mutex<VecDeque<String>>) -> String {
     }
 }
 
+/// Strips the `\\?\` verbatim prefix Windows `canonicalize()` adds (dunce
+/// style). OpenCode resolves its workspace with forward-slash-friendly
+/// logic; a verbatim UNC cwd confuses its project detection.
+fn strip_verbatim(path: PathBuf) -> PathBuf {
+    let text = path.as_os_str().to_string_lossy();
+    if let Some(stripped) = text.strip_prefix(r"\\?\UNC\") {
+        return PathBuf::from(format!(r"\\{stripped}"));
+    }
+    if let Some(stripped) = text.strip_prefix(r"\\?\") {
+        return PathBuf::from(stripped.to_string());
+    }
+    path
+}
+
 /// Uses the requested project as OpenCode's workspace, or a private empty
 /// directory when startup is triggered before any repository is active.
 fn server_working_directory(cwd: Option<&Path>) -> Result<PathBuf, String> {
@@ -344,7 +358,7 @@ fn server_working_directory(cwd: Option<&Path>) -> Result<PathBuf, String> {
         if !resolved.is_dir() {
             return Err("OpenCode workspace is not a directory".into());
         }
-        return Ok(resolved);
+        return Ok(strip_verbatim(resolved));
     }
 
     let fallback = std::env::temp_dir().join("mygitui-opencode");
@@ -352,6 +366,7 @@ fn server_working_directory(cwd: Option<&Path>) -> Result<PathBuf, String> {
         .map_err(|err| format!("could not prepare OpenCode workspace: {err}"))?;
     fallback
         .canonicalize()
+        .map(|resolved| strip_verbatim(resolved))
         .map_err(|err| format!("could not resolve OpenCode workspace: {err}"))
 }
 
@@ -634,6 +649,23 @@ mod tests {
             Some("https://0.0.0.0:4096/".into())
         );
         assert_eq!(parse_listening_url("nothing to see"), None);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn strip_verbatim_removes_unc_prefixes() {
+        assert_eq!(
+            strip_verbatim(PathBuf::from(r"\\?\C:\Code\repo")),
+            PathBuf::from(r"C:\Code\repo")
+        );
+        assert_eq!(
+            strip_verbatim(PathBuf::from(r"\\?\UNC\server\share\repo")),
+            PathBuf::from(r"\\server\share\repo")
+        );
+        assert_eq!(
+            strip_verbatim(PathBuf::from(r"C:\plain\path")),
+            PathBuf::from(r"C:\plain\path")
+        );
     }
 
     #[cfg(windows)]

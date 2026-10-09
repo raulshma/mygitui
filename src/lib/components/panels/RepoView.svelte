@@ -280,6 +280,11 @@
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
           toast(`AI PR description failed: ${message}`, { kind: "error" });
+          // The dialog's "Waiting for AI…" only clears on events — tell it
+          // the run failed so the user can retry or fill the fields manually.
+          window.dispatchEvent(
+            new CustomEvent("ai-pr-error", { detail: { message } }),
+          );
         }
       })();
     };

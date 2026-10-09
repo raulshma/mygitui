@@ -59,6 +59,8 @@
   /** Recent commits handed to the AI layer as context. */
   let commits = $state<{ sha: string; summary: string }[]>([]);
   let aiPending = $state(false);
+  /** Inline failure from the last AI generation (cleared on retry/success). */
+  let aiError = $state<string | null>(null);
 
   let seq = 0;
 
@@ -76,6 +78,7 @@
     existingUrl = null;
     commits = [];
     aiPending = false;
+    aiError = null;
     loading = true;
 
     branches(repoId)
@@ -111,7 +114,8 @@
       });
   });
 
-  // AI result listener (only while open).
+  // AI result listener (only while open). Failure events clear the wait and
+  // show the reason inline — without this the button sticks on "Waiting…".
   $effect(() => {
     if (!open) return;
     const handler = (event: Event): void => {
@@ -124,9 +128,22 @@
         body = detail.body;
       }
       aiPending = false;
+      aiError = null;
+    };
+    const errorHandler = (event: Event): void => {
+      const detail = (event as CustomEvent<{ message?: unknown }>).detail ?? {};
+      aiPending = false;
+      aiError =
+        typeof detail.message === "string" && detail.message.length > 0
+          ? detail.message
+          : "AI generation failed";
     };
     window.addEventListener("ai-pr-result", handler);
-    return () => window.removeEventListener("ai-pr-result", handler);
+    window.addEventListener("ai-pr-error", errorHandler);
+    return () => {
+      window.removeEventListener("ai-pr-result", handler);
+      window.removeEventListener("ai-pr-error", errorHandler);
+    };
   });
 
   /** Base options: remote-tracked branches first (fallback: all). */
@@ -147,6 +164,7 @@
 
   function requestAi(): void {
     aiPending = true;
+    aiError = null;
     window.dispatchEvent(
       new CustomEvent("ai-generate-pr", { detail: { repoId, commits } }),
     );
@@ -242,6 +260,8 @@
           </button>
           {#if aiPending}
             <span class="ai-hint">Waiting for the AI layer — type to fill manually.</span>
+          {:else if aiError}
+            <span class="ai-hint ai-fail" role="alert">{aiError}</span>
           {/if}
         </div>
 
@@ -364,6 +384,11 @@
   .ai-hint {
     font-size: 0.6875rem;
     color: var(--m3-on-surface-variant, var(--m3-on-surface));
+    overflow-wrap: anywhere;
+  }
+
+  .ai-hint.ai-fail {
+    color: var(--m3-error, inherit);
   }
 
   .tb {

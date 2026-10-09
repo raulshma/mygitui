@@ -142,6 +142,9 @@
     color: var(--m3-on-surface-variant, var(--m3-on-surface));
     font: inherit;
     font-size: 0.875rem;
+    /* Constant across active/inactive: a selected-state weight bump widens
+       the label, resizing the tab and shifting every sibling tab. */
+    font-weight: 500;
     padding: 0.5rem 0.25rem 0.5rem 0.875rem;
     cursor: pointer;
     overflow: hidden;
@@ -151,7 +154,6 @@
 
   .tab.active .tab-main {
     color: var(--m3-primary);
-    font-weight: 500;
   }
 
   .tab-main:focus-visible {

@@ -40,10 +40,20 @@ pub async fn open_popout(
         WebviewWindowBuilder::new(&app, label, WebviewUrl::App(query.into()))
             .title(title)
             .inner_size(960.0, 680.0)
-            .min_inner_size(420.0, 300.0);
+            .min_inner_size(420.0, 300.0)
+            // Matches the main window + the index.html splash: the popout
+            // opens on the dark splash instead of flashing white while its
+            // webview is still loading.
+            .background_color(SPLASH_BACKGROUND);
     if let Some(args) = browser_args {
         builder = builder.additional_browser_args(&args);
     }
     builder.build().map_err(|e| e.to_string())?;
     Ok(())
 }
+
+/// Native window/webview background for popouts — keep in sync with the
+/// main window's `backgroundColor` in tauri.conf.json and `#app-splash`
+/// in index.html (#141218).
+const SPLASH_BACKGROUND: tauri::utils::config::Color =
+    tauri::utils::config::Color(0x14, 0x12, 0x18, 0xff);

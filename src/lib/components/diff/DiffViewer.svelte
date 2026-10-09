@@ -29,6 +29,7 @@
     type LoadImageFn,
   } from "$lib/components/diff/rowModel";
   import { buildLayout, visibleSlices } from "$lib/components/diff/virtualizer";
+  import { measureLineWidth } from "$lib/components/diff/textWidth";
   import {
     beginSelection,
     extendSelection,
@@ -78,11 +79,20 @@
   const layout = $derived(buildLayout(rowHeights(model.rows)));
   const slices = $derived(visibleSlices(layout, scrollTop, viewportH, OVERSCAN_PX));
 
-  /** Horizontal scroll width: gutters/signs in rem + longest line in ch. */
-  const minWidth = $derived(
-    mode === "split"
-      ? `calc(9.5rem + 2 * ${model.maxTextChars}ch + 2rem)`
-      : `calc(8rem + ${model.maxTextChars}ch + 1rem)`,
+  /**
+   * Horizontal extent of the scroll content.
+   *
+   * Split halves share the pane 50/50 and clip long lines — the layout is
+   * fully responsive and never grows a horizontal scrollbar. Unified fills
+   * the pane (`100%` floor) and scrolls only when the widest line genuinely
+   * exceeds it; the text width is measured in the rows' own monospace font
+   * (see textWidth.ts), and 8.75rem covers both gutters + the sign column +
+   * the text's right padding.
+   */
+  const contentMinWidth = $derived(
+    mode === "unified"
+      ? `max(100%, calc(8.75rem + ${measureLineWidth(model.maxLineText)}px))`
+      : "100%",
   );
 
   function toggleCollapse(path: string): void {
@@ -382,7 +392,7 @@
            line selection (those stop propagation). -->
       <!-- svelte-ignore a11y_click_events_have_key_events -->
       <!-- svelte-ignore a11y_no_static_element_interactions -->
-      <div class="content" onclick={clearSelectionOnClick} style="height: {layout.totalHeight}px; min-width: {minWidth}">
+      <div class="content" onclick={clearSelectionOnClick} style="height: {layout.totalHeight}px; min-width: {contentMinWidth}">
         {#each slices as slice (slice.bucketIndex)}
           <div class="slice" style="top: {slice.top}px">
             {#each model.rows.slice(slice.firstRow, slice.firstRow + slice.count) as row, i (slice.firstRow + i)}

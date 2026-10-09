@@ -304,6 +304,22 @@ describe("stats and heights", () => {
     expect(model.totalAdditions).toBe(5);
     expect(model.totalDeletions).toBe(6);
     expect(model.maxTextChars).toBe("a-very-long-line-here".length);
+    expect(model.maxLineText).toBe("a-very-long-line-here");
+  });
+
+  it("picks the widest line by rendered columns, not raw chars (tabs)", () => {
+    // "\tX" renders 9 columns; the 6-char plain line only 6.
+    const files = [
+      file({ hunks: [hunk([line("+", "\tX", null, 1), line("-", "abcdef", 1, null)])] }),
+    ];
+    const model = buildRowModel(files, "unified", NO_COLLAPSE);
+    expect(model.maxTextChars).toBe("abcdef".length);
+    expect(model.maxLineText).toBe("\tX");
+  });
+
+  it("leaves maxLineText empty when no file has lines", () => {
+    const model = buildRowModel([file({ path: "empty.txt" })], "unified", NO_COLLAPSE);
+    expect(model.maxLineText).toBe("");
   });
 
   it("maps every row kind to a uniform bucket height", () => {

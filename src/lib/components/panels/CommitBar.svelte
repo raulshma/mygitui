@@ -7,6 +7,10 @@
    * (`hooks_list`, present + executable → "pre-commit will run"), an author
    * override disclosure, and the Commit button (spinner while a commit op
    * runs per the OpStore; disabled with no message unless amending).
+   * The side column groups the controls into rows: status chips, then the
+   * option toggles (Amend / --no-verify / Author…), then the actions row
+   * (Fixup left; AI generate + Commit pinned bottom-right). The author
+   * override fields expand as a full-width row under the message row.
    * Success clears the form, toasts the short sha and asks the owner to
    * refresh (`onCommitted` → RepoView refreshStatus). Failures render
    * inline next to the button. The AI button is a disabled ghost (M6).
@@ -225,11 +229,30 @@
         {/each}
       </div>
 
-      <div class="controls">
+      <div class="options">
         <label class="toggle" title="Amend the previous commit">
           <input type="checkbox" bind:checked={amend} />
           <span>Amend</span>
         </label>
+        <label
+          class="toggle"
+          title="Skip the pre-commit and commit-msg hooks (--no-verify)"
+        >
+          <input type="checkbox" bind:checked={noVerify} />
+          <span>--no-verify</span>
+        </label>
+        <button
+          class="disclosure"
+          type="button"
+          aria-expanded={showAuthor}
+          title="Override the commit author"
+          onclick={() => (showAuthor = !showAuthor)}
+        >
+          Author…
+        </button>
+      </div>
+
+      <div class="actions">
         <button
           class="disclosure fixup"
           type="button"
@@ -239,65 +262,55 @@
         >
           {fixing ? "Fixing…" : "Fixup into HEAD"}
         </button>
-        <label class="toggle" title="skip hooks">
-          <input type="checkbox" bind:checked={noVerify} />
-          <span>--no-verify</span>
-        </label>
 
-        <button
-          class="disclosure"
-          type="button"
-          aria-expanded={showAuthor}
-          onclick={() => (showAuthor = !showAuthor)}
-        >
-          Author…
-        </button>
-
-        <CommitMessageButton
-          {repoId}
-          onResult={(d) => {
-            message = d.body ? `${d.subject}
+        <div class="primary">
+          <CommitMessageButton
+            {repoId}
+            disabled={commitBusy || committing}
+            onResult={(d) => {
+              message = d.body ? `${d.subject}
 
 ${d.body}` : d.subject;
-          }}
-        />
+            }}
+          />
 
-        <button class="go" type="submit" disabled={!canCommit}>
-          {#if commitBusy || committing}
-            <span class="spinner" aria-hidden="true"></span>
-            <span>Committing…</span>
-          {:else}
-            <span>Commit</span>
-          {/if}
-        </button>
-      </div>
-
-      {#if showAuthor}
-        <div class="author">
-          <label>
-            <span class="al">Name</span>
-            <input
-              type="text"
-              class="ai-input"
-              placeholder="Ada Lovelace"
-              bind:value={authorName}
-              aria-label="Author name override"
-            />
-          </label>
-          <label>
-            <span class="al">Email</span>
-            <input
-              type="email"
-              class="ai-input"
-              placeholder="ada@example.com"
-              bind:value={authorEmail}
-              aria-label="Author email override"
-            />
-          </label>
+          <button class="go" type="submit" disabled={!canCommit}>
+            {#if commitBusy || committing}
+              <span class="spinner" aria-hidden="true"></span>
+              <span>Committing…</span>
+            {:else}
+              <span>Commit</span>
+            {/if}
+          </button>
         </div>
-      {/if}
+      </div>
     </div>
   </div>
+
+  {#if showAuthor}
+    <div class="author">
+      <label>
+        <span class="al">Name</span>
+        <input
+          type="text"
+          class="ai-input"
+          placeholder="Ada Lovelace"
+          bind:value={authorName}
+          aria-label="Author name override"
+        />
+      </label>
+      <label>
+        <span class="al">Email</span>
+        <input
+          type="email"
+          class="ai-input"
+          placeholder="ada@example.com"
+          bind:value={authorEmail}
+          aria-label="Author email override"
+        />
+      </label>
+    </div>
+  {/if}
 
   {#if error}
     <p class="error" role="alert">{error}</p>
@@ -377,11 +390,25 @@ ${d.body}` : d.subject;
     border-color: transparent;
   }
 
-  .controls {
+  .options {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+  }
+
+  .actions {
     display: flex;
     align-items: center;
     gap: 0.375rem;
-    flex-wrap: wrap;
+    margin-top: auto;
+  }
+
+  .primary {
+    margin-left: auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.375rem;
   }
 
   .toggle {
@@ -430,10 +457,11 @@ ${d.body}` : d.subject;
   }
 
   .go {
-    margin-left: auto;
     display: inline-flex;
     align-items: center;
+    justify-content: center;
     gap: 0.375rem;
+    min-width: 6.5rem;
     border: none;
     border-radius: var(--m3-shape-full, 9999px);
     background: var(--m3-primary);
@@ -441,7 +469,7 @@ ${d.body}` : d.subject;
     font: inherit;
     font-size: 0.75rem;
     font-weight: 500;
-    padding: 0.3rem 1rem;
+    padding: 0.35rem 1.25rem;
     cursor: pointer;
   }
 
@@ -468,6 +496,7 @@ ${d.body}` : d.subject;
   .author {
     display: flex;
     gap: 0.5rem;
+    padding-top: 0.125rem;
   }
 
   .author label {

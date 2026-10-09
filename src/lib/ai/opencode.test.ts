@@ -15,6 +15,7 @@ import {
   discoverOpencode,
   HEALTH_TIMEOUT_MS,
   isJsonContentType,
+  normalizeDirectory,
   OpenCodeProvider,
   partsToText,
   probeOpencodeServer,
@@ -639,5 +640,104 @@ describe("OpenCodeProvider managed mode", () => {
     const result = await provider.check();
     expect(result.status).to.equal("down");
     expect(result.error).to.contain("desktop app");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Windows directory normalization + error surfacing
+// ---------------------------------------------------------------------------
+
+describe("normalizeDirectory", () => {
+  it("converts backslash Windows paths to forward slashes", () => {
+    expect(normalizeDirectory("C:\\Code\\Projects\\mygitui")).toBe(
+      "C:/Code/Projects/mygitui",
+    );
+  });
+
+  it("strips the Rust canonicalize \\\\?\\ prefix before normalizing", () => {
+    expect(normalizeDirectory("\\\\?\\C:\\Code\\repo")).toBe("C:/Code/repo");
+  });
+
+  it("leaves forward-slash and POSIX paths untouched", () => {
+    expect(normalizeDirectory("C:/Code/repo")).toBe("C:/Code/repo");
+    expect(normalizeDirectory("/home/user/repo")).toBe("/home/user/repo");
+  });
+
+  it("returns undefined for empty/absent input", () => {
+    expect(normalizeDirectory(undefined)).toBeUndefined();
+    expect(normalizeDirectory(null)).toBeUndefined();
+    expect(normalizeDirectory("")).toBeUndefined();
+  });
+});
+
+describe("directory header + error surfacing in generate", () => {
+  it("passes a forward-slash directory to the SDK (backslashes break 1.x servers)", async () => {
+    FAKE_CLIENT.session.create.mockResolvedValue({ data: SESSION, error: undefined });
+    FAKE_CLIENT.session.prompt.mockResolvedValue({
+      data: { parts: PROMPT_PARTS },
+      error: undefined,
+    });
+    // The live store maps sessionKey → tab root, which on Windows is a
+    // backslash path straight from git2.
+    const providerWithDir = new OpenCodeProvider({
+      fetchImpl: healthFetch(200),
+      directory: () => "C:\\Code\\Projects\\mygitui",
+    });
+    await providerWithDir.generate({ prompt: "hello", sessionKey: "repo-1" });
+    expect(createOpencodeClient).toHaveBeenLastCalledWith(
+      expect.objectContaining({ directory: "C:/Code/Projects/mygitui" }),
+    );
+  });
+
+  it("summarizes NamedError POJOs ({name, data:{message, ref}}) instead of 'unknown server error'", async () => {
+    FAKE_CLIENT.session.create.mockResolvedValue({ data: SESSION, error: undefined });
+    FAKE_CLIENT.session.prompt.mockResolvedValue({
+      data: undefined,
+      error: { name: "UnknownError", data: { message: "Unexpected server error.", ref: "err_cbdb30af" } },
+    });
+    const err = await makeProvider()
+      .generate({ prompt: "hello", sessionKey: "repo-5" })
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(AiError);
+    expect((err as AiError).message).toContain("Unexpected server error.");
+    expect((err as AiError).message).toContain("UnknownError");
+    expect((err as AiError).message).toContain("err_cbdb30af");
+  });
+
+  it("surfaces info.error from a textless 200 reply (provider auth failure)", async () => {
+    FAKE_CLIENT.session.create.mockResolvedValue({ data: SESSION, error: undefined });
+    FAKE_CLIENT.session.prompt.mockResolvedValue({
+      data: {
+        info: {
+          error: {
+            name: "ProviderAuthError",
+            data: { providerID: "anthropic", message: "no API key configured" },
+          },
+        },
+        parts: [{ type: "step-start" }],
+      },
+      error: undefined,
+    });
+    const err = await makeProvider()
+      .generate({ prompt: "hello", sessionKey: "repo-6" })
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(AiError);
+    expect((err as AiError).kind).toBe("unauthenticated");
+    expect((err as AiError).message).toContain("no API key configured");
+    expect((err as AiError).message).toContain("AI settings");
+  });
+
+  it("keeps the generic no-text error when info carries no error", async () => {
+    FAKE_CLIENT.session.create.mockResolvedValue({ data: SESSION, error: undefined });
+    FAKE_CLIENT.session.prompt.mockResolvedValue({
+      data: { info: {}, parts: [] },
+      error: undefined,
+    });
+    await expect(
+      makeProvider().generate({ prompt: "hello", sessionKey: "repo-7" }),
+    ).rejects.toMatchObject({
+      kind: "bad-response",
+      message: expect.stringContaining("no text output"),
+    });
   });
 });

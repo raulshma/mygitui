@@ -317,6 +317,7 @@
     font-size: 12px;
     line-height: 20px;
     white-space: pre;
+    tab-size: 8; /* must match textWidth.ts (tab-stop math) */
   }
 
   .no {
