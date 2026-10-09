@@ -15,6 +15,7 @@ import { RecentRepoStore, type StorageLike } from "$lib/entry/recentRepos";
 import {
   closeTab,
   openTab,
+  parseStoredSession,
   resetTabStore,
   setActive,
   startTabEvents,
@@ -369,5 +370,96 @@ describe("singleton function API", () => {
     await closeTab("repo-1");
     expect(tabStore.tabs).toHaveLength(0);
     expect(tabStore.activeId).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Session persistence (relaunch restores the last open tabs)
+// ---------------------------------------------------------------------------
+
+/** In-memory session storage double. */
+function memSessionStorage(): { getItem: (k: string) => string | null; setItem: (k: string, v: string) => void; data: Map<string, string> } {
+  const data = new Map<string, string>();
+  return {
+    data,
+    getItem: (k) => data.get(k) ?? null,
+    setItem: (k, v) => void data.set(k, v),
+  };
+}
+
+describe("session persistence", () => {
+  it("persists open roots + the focused root on open/activate/close", async () => {
+    const storage = memSessionStorage();
+    const store = new TabStore(new RecentRepoStore(noStorage), storage);
+    mockOpenRepo.mockImplementation(async (path: string) =>
+      path === ALPHA.root ? ALPHA : BETA,
+    );
+
+    await store.openTab(ALPHA.root);
+    expect(JSON.parse(storage.data.get("mygitui.session")!)).toEqual({
+      roots: [ALPHA.root],
+      activeRoot: ALPHA.root,
+    });
+
+    await store.openTab(BETA.root);
+    expect(JSON.parse(storage.data.get("mygitui.session")!)).toEqual({
+      roots: [ALPHA.root, BETA.root],
+      activeRoot: BETA.root,
+    });
+
+    store.setActive("repo-1");
+    expect(JSON.parse(storage.data.get("mygitui.session")!).activeRoot).toBe(ALPHA.root);
+
+    await store.closeTab("repo-1");
+    expect(JSON.parse(storage.data.get("mygitui.session")!)).toEqual({
+      roots: [BETA.root],
+      activeRoot: BETA.root,
+    });
+  });
+
+  it("restoreSession reopens the stored tabs and focuses the stored root", async () => {
+    const storage = memSessionStorage();
+    storage.data.set(
+      "mygitui.session",
+      JSON.stringify({ roots: [ALPHA.root, BETA.root], activeRoot: BETA.root }),
+    );
+    const store = new TabStore(new RecentRepoStore(noStorage), storage);
+    mockOpenRepo.mockImplementation(async (path: string) =>
+      path === ALPHA.root ? ALPHA : BETA,
+    );
+
+    await store.restoreSession();
+
+    expect(store.tabs.map((t) => t.root)).toEqual([ALPHA.root, BETA.root]);
+    expect(store.activeId).toBe("repo-2");
+  });
+
+  it("restoreSession skips folders that no longer open and never throws", async () => {
+    const storage = memSessionStorage();
+    storage.data.set(
+      "mygitui.session",
+      JSON.stringify({ roots: [ALPHA.root, BETA.root], activeRoot: ALPHA.root }),
+    );
+    const store = new TabStore(new RecentRepoStore(noStorage), storage);
+    mockOpenRepo.mockImplementation(async (path: string) => {
+      if (path === ALPHA.root) throw new Error("not a git repository");
+      return BETA;
+    });
+
+    await expect(store.restoreSession()).resolves.toBeUndefined();
+    expect(store.tabs.map((t) => t.root)).toEqual([BETA.root]);
+    expect(store.activeId).toBe("repo-2");
+  });
+});
+
+describe("parseStoredSession", () => {
+  it("drops malformed payloads", () => {
+    expect(parseStoredSession(null)).toEqual({ roots: [], activeRoot: null });
+    expect(parseStoredSession("not json")).toEqual({ roots: [], activeRoot: null });
+    expect(parseStoredSession('{"roots":"nope"}')).toEqual({ roots: [], activeRoot: null });
+    expect(parseStoredSession('{"roots":["ok", 42, ""], "activeRoot": 9}')).toEqual({
+      roots: ["ok"],
+      activeRoot: null,
+    });
   });
 });

@@ -34,12 +34,59 @@ export interface Tab {
   generation: number;
 }
 
-/**
- * Shared recent-repositories instance for the whole app (App.svelte's home
+/** Shared recent-repositories instance for the whole app (App.svelte's home
  * view reads it; TabStore touches it on open). Lives here because the tab
  * flow owns "a repository was opened".
  */
 export const recentRepos = new RecentRepoStore();
+
+// -- last-session persistence ----------------------------------------------
+
+/** localStorage key for the open-tabs session (roots + focused root). */
+export const SESSION_STORAGE_KEY = "mygitui.session";
+
+/** What gets persisted: the open tab roots and the focused one. */
+interface StoredSession {
+  roots: string[];
+  activeRoot: string | null;
+}
+
+/** Minimal storage surface (subset of DOM `Storage`; injectable in tests). */
+interface SessionStorage {
+  getItem(key: string): string | null;
+  setItem(key: string, value: string): void;
+}
+
+/** Returns `localStorage` when available, else `null` (never throws). */
+function defaultSessionStorage(): SessionStorage | null {
+  try {
+    return globalThis.localStorage ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** Parses persisted session JSON; drops anything malformed. */
+export function parseStoredSession(raw: string | null): StoredSession {
+  if (!raw) return { roots: [], activeRoot: null };
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (typeof parsed !== "object" || parsed === null) {
+      return { roots: [], activeRoot: null };
+    }
+    const obj = parsed as Record<string, unknown>;
+    const roots = Array.isArray(obj.roots)
+      ? obj.roots.filter((r): r is string => typeof r === "string" && r.length > 0)
+      : [];
+    const activeRoot =
+      typeof obj.activeRoot === "string" && obj.activeRoot.length > 0
+        ? obj.activeRoot
+        : null;
+    return { roots, activeRoot };
+  } catch {
+    return { roots: [], activeRoot: null };
+  }
+}
 
 export class TabStore {
   /** Open tabs, in strip order. */
@@ -48,14 +95,54 @@ export class TabStore {
   activeId: string | null = $state(null);
 
   readonly #recents: RecentRepoStore;
+  readonly #sessionStorage: SessionStorage | null;
 
-  constructor(recents: RecentRepoStore = recentRepos) {
+  constructor(
+    recents: RecentRepoStore = recentRepos,
+    sessionStorage: SessionStorage | null = defaultSessionStorage(),
+  ) {
     this.#recents = recents;
+    this.#sessionStorage = sessionStorage;
   }
 
   /** The currently active tab, or `null`. */
   get active(): Tab | null {
     return this.tabs.find((tab) => tab.id === this.activeId) ?? null;
+  }
+
+  /** Writes the current open-tab roots + focused root to storage. */
+  #persistSession(): void {
+    if (!this.#sessionStorage) return;
+    try {
+      const session: StoredSession = {
+        roots: this.tabs.map((tab) => tab.root),
+        activeRoot: this.active?.root ?? null,
+      };
+      this.#sessionStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(session));
+    } catch {
+      // Storage may be full or unavailable; the session stays in memory.
+    }
+  }
+
+  /**
+   * Reopens the last session's tabs (launch restore): opens every stored
+   * root (folders that vanished are skipped silently) and focuses the
+   * stored active root when it came back. Tabs opened before this call
+   * (CLI arg / deep link) are kept and deduped by root.
+   */
+  async restoreSession(): Promise<void> {
+    const session = parseStoredSession(
+      this.#sessionStorage?.getItem(SESSION_STORAGE_KEY) ?? null,
+    );
+    for (const root of session.roots) {
+      await this.openTab(root).catch(() => {
+        // Folder deleted/moved since the last run — skip it.
+      });
+    }
+    if (session.activeRoot) {
+      const tab = this.tabs.find((t) => t.root === session.activeRoot);
+      if (tab) this.activeId = tab.id;
+    }
   }
 
   /**
@@ -70,6 +157,7 @@ export class TabStore {
     if (byPath) {
       this.activeId = byPath.id;
       this.#recents.add(path);
+      this.#persistSession();
       return byPath;
     }
 
@@ -79,6 +167,7 @@ export class TabStore {
     if (byRoot) {
       this.activeId = byRoot.id;
       this.#recents.add(path);
+      this.#persistSession();
       return byRoot;
     }
 
@@ -92,6 +181,7 @@ export class TabStore {
     this.tabs.push(tab);
     this.activeId = tab.id;
     this.#recents.add(path);
+    this.#persistSession();
 
     // Populate the status stub; failures are non-fatal (logged inside).
     await this.refreshStatus(tab.id);
@@ -118,11 +208,15 @@ export class TabStore {
       const neighbor = this.tabs[Math.max(0, index - 1)];
       this.activeId = neighbor ? neighbor.id : null;
     }
+    this.#persistSession();
   }
 
   /** Activates a tab (no-op for unknown ids). */
   setActive(id: RepoId): void {
-    if (this.tabs.some((tab) => tab.id === id)) this.activeId = id;
+    if (this.tabs.some((tab) => tab.id === id)) {
+      this.activeId = id;
+      this.#persistSession();
+    }
   }
 
   /**
@@ -163,6 +257,11 @@ export function closeTab(id: RepoId): Promise<void> {
 
 export function setActive(id: RepoId): void {
   tabStore.setActive(id);
+}
+
+/** Reopens the last session's tabs (see {@link TabStore.restoreSession}). */
+export function restoreSession(): Promise<void> {
+  return tabStore.restoreSession();
 }
 
 export function refreshStatus(id: RepoId): Promise<void> {

@@ -1,12 +1,22 @@
 /**
- * opencode backend adapter (M6, lane H1).
+ * opencode backend adapter (M6, lane H1; M12 adds managed serve).
  *
- * v1 is ATTACH-only: mygitui never spawns an opencode server — it talks to
- * one the user already runs. Autodiscovery probes the default
- * `http://127.0.0.1:4096` (`GET /global/health`, 2s timeout); a manual base
- * URL from settings wins when configured. All server access goes through
- * `@opencode-ai/sdk` (`createOpencodeClient`); the health/discovery probes
- * use plain fetch because the SDK surface has no health endpoint.
+ * Resolution order for the server base URL (the `resolve` option, wired
+ * from config by the store):
+ *   - `"managed"`  — the app owns the server: ask the Rust side for the
+ *     managed `opencode serve` state and lazily start it when not running
+ *     (t3-style: detect the CLI, spawn on a free port, done). Requires
+ *     Tauri; the store only selects this mode when IPC is available.
+ *   - `"disabled"` — opencode is switched off in settings: fail fast with
+ *     an actionable message, never probing or spawning anything.
+ *   - `"attach"`   — v1 behavior: probe the manual base URL from settings,
+ *     then the default `http://127.0.0.1:4096`. Candidates are strictly
+ *     identified (JSON `/api/info` or `/global/health`, 2s timeout) — a
+ *     200 alone does not make an opencode server.
+ *
+ * All server access goes through `@opencode-ai/sdk`
+ * (`createOpencodeClient`); the health/discovery probes use plain fetch
+ * because the SDK surface has no health endpoint.
  *
  * Auth: when a password is configured (keyring key
  * `opencode.server.password`), every request carries
@@ -32,7 +42,7 @@ import type { OpencodeClient } from "@opencode-ai/sdk/client";
 import { DEFAULT_OPENCODE_URL } from "./provider";
 import type { AiGenerateRequest, AiProvider, AiProbeResult } from "./provider";
 import { AiError } from "./types";
-import type { AiResult, ModelInfo } from "./types";
+import type { AiResult, ModelInfo, OpencodeResolve } from "./types";
 
 /** Health probe timeout (ms) — the server is local; slow means absent. */
 export const HEALTH_TIMEOUT_MS = 2_000;
@@ -43,14 +53,35 @@ export const SESSION_TITLE = "mygitui";
 /** Minimal fetch surface used here (subset of DOM fetch; injectable). */
 export type FetchLike = typeof fetch;
 
+/**
+ * Managed-serve surface (Rust IPC). Injectable so tests exercise the
+ * managed path without a Tauri runtime.
+ */
+export interface ManagedServe {
+  /** Current managed-server state (starts nothing). */
+  status(): Promise<{ running: boolean; url: string | null; error: string | null }>;
+  /** Starts the managed server (idempotent) / returns its state. */
+  start(): Promise<{ running: boolean; url: string | null; error: string | null }>;
+}
+
 /** Options for building an {@link OpenCodeProvider}. */
 export interface OpenCodeOptions {
   /**
-   * Manual base URL (settings override). When unset, {@link discover}
-   * probes {@link DEFAULT_OPENCODE_URL}. A setter so the adapter survives
-   * settings changes without being rebuilt.
+   * Decides how to reach the server (see the module doc). Defaults to
+   * `"attach"` (v1 behavior; tests).
+   */
+  resolve?: () => OpencodeResolve;
+  /**
+   * Attach mode: manual base URL (settings override). When unset,
+   * {@link discover} probes {@link DEFAULT_OPENCODE_URL}. A setter so the
+   * adapter survives settings changes without being rebuilt.
    */
   url?: string | (() => string | undefined | null);
+  /**
+   * Managed-mode bridge to the Rust serve registry. Required only when
+   * `resolve` can return `"managed"`.
+   */
+  managed?: () => ManagedServe | null;
   /**
    * Resolves the basic-auth password (keyring read), or `null` when none
    * is configured. Lazy so generate/check always see the current secret.
@@ -61,44 +92,159 @@ export interface OpenCodeOptions {
 }
 
 /**
- * Probes `GET {base}/global/health` with a 2s timeout. Resolves `true` when
- * the endpoint answers (any status counts as "server present" — a 4xx/5xx
- * from a live server still means reachable; 401 maps to unauthenticated at
- * the supervisor layer). Never throws.
+ * Health/discovery probing, t3-style (versionProbe.ts): a candidate base
+ * URL only counts as an opencode server when an endpoint answers
+ * `application/json` with a body that decodes to a known shape —
+ * `/api/info` `{version, pid}` for 2.x servers, `/global/health`
+ * `{healthy: true, version}` for 1.x. A 200 alone is NOT enough: opencode
+ * servers serve their web UI's HTML with a 200 on unknown paths, so a
+ * lenient probe misclassifies any server (and unrelated local services)
+ * as "opencode".
  */
-export async function probeHealth(
-  base: string,
-  fetchImpl: FetchLike = fetch,
-  timeoutMs = HEALTH_TIMEOUT_MS,
-): Promise<{ ok: boolean; status: number }> {
+
+/** Which server API generation answered the probe. */
+export type OpencodeServerKind = "v1" | "v2";
+
+/** A server that identified itself as opencode. */
+export interface OpencodeServer {
+  base: string;
+  kind: OpencodeServerKind;
+  /** Server-reported `x.y.z`, when parseable. */
+  version: string | null;
+}
+
+/** Outcome of probing one candidate base URL. */
+export type OpencodeProbe =
+  | { state: "ok"; server: OpencodeServer }
+  | { state: "unauthorized"; status: number }
+  | { state: "absent"; status: number };
+
+/** True when the content type advertises JSON (HTML web-UI replies fail). */
+export function isJsonContentType(contentType: string | null): boolean {
+  return contentType !== null && /application\/(?:json|\S*json)/i.test(contentType);
+}
+
+/** Decodes the v1 `/global/health` body; resolves the version or `null`. */
+export function decodeHealthV1(text: string): string | null {
+  try {
+    const parsed: unknown = JSON.parse(text);
+    if (
+      typeof parsed === "object" &&
+      parsed !== null &&
+      (parsed as { healthy?: unknown }).healthy === true &&
+      typeof (parsed as { version?: unknown }).version === "string"
+    ) {
+      return (parsed as { version: string }).version;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/** Decodes the v2 `/api/info` body; resolves the version or `null`. */
+export function decodeInfoV2(text: string): string | null {
+  try {
+    const parsed: unknown = JSON.parse(text);
+    if (
+      typeof parsed === "object" &&
+      parsed !== null &&
+      typeof (parsed as { version?: unknown }).version === "string" &&
+      typeof (parsed as { pid?: unknown }).pid === "number"
+    ) {
+      return (parsed as { version: string }).version;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/** One GET with an abort timeout; `null` on network failure. Never throws. */
+async function fetchText(
+  url: URL,
+  fetchImpl: FetchLike,
+  timeoutMs: number,
+): Promise<{ status: number; contentType: string | null; text: string } | null> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const response = await fetchImpl(new URL("/global/health", base), {
-      signal: controller.signal,
-    });
-    return { ok: true, status: response.status };
+    const response = await fetchImpl(url, { signal: controller.signal });
+    let text = "";
+    try {
+      text = await response.text();
+    } catch {
+      text = "";
+    }
+    const contentType = response.headers?.get?.("content-type") ?? null;
+    return { status: response.status, contentType, text };
   } catch {
-    return { ok: false, status: 0 };
+    return null;
   } finally {
     clearTimeout(timer);
   }
 }
 
 /**
+ * Probes `base` for an opencode server, t3-order: `/api/info` (2.x) first,
+ * then `/global/health` (1.x). A 401/403 on either path means an
+ * opencode server (or something equally guarded) is listening — reported
+ * as `unauthorized`. Only a 200 JSON reply with a decodable body
+ * identifies the server (see the module probe doc).
+ */
+export async function probeOpencodeServer(
+  base: string,
+  fetchImpl: FetchLike = fetch,
+  timeoutMs = HEALTH_TIMEOUT_MS,
+): Promise<OpencodeProbe> {
+  let lastStatus = 0;
+  for (const path of ["/api/info", "/global/health"] as const) {
+    const reply = await fetchText(new URL(path, base), fetchImpl, timeoutMs);
+    if (!reply) return { state: "absent", status: 0 };
+    lastStatus = reply.status;
+    if (reply.status === 401 || reply.status === 403) {
+      return { state: "unauthorized", status: reply.status };
+    }
+    if (reply.status === 200 && isJsonContentType(reply.contentType)) {
+      const version = path === "/api/info" ? decodeInfoV2(reply.text) : decodeHealthV1(reply.text);
+      if (version !== null) {
+        return {
+          state: "ok",
+          server: { base, kind: path === "/api/info" ? "v2" : "v1", version },
+        };
+      }
+    }
+  }
+  return { state: "absent", status: lastStatus };
+}
+
+/** What {@link discoverOpencode} found across its candidates. */
+export interface Discovery {
+  /** The first candidate that identified itself as opencode. */
+  server: OpencodeServer | null;
+  /** First candidate that answered 401/403 (server present, auth needed). */
+  unauthorizedBase: string | null;
+}
+
+/**
  * Autodiscovers a running opencode server. Order: manual `url` (when set),
- * then {@link DEFAULT_OPENCODE_URL}. Resolves the working base URL or
- * `null` when nothing answers within the health timeout.
+ * then {@link DEFAULT_OPENCODE_URL}; each candidate is strictly identified
+ * by {@link probeOpencodeServer}.
  */
 export async function discoverOpencode(
   manualUrl?: string | null,
   fetchImpl: FetchLike = fetch,
-): Promise<string | null> {
+): Promise<Discovery> {
   const candidates = manualUrl ? [manualUrl, DEFAULT_OPENCODE_URL] : [DEFAULT_OPENCODE_URL];
+  let unauthorizedBase: string | null = null;
   for (const base of candidates) {
-    if (await probeHealth(base, fetchImpl).then((r) => r.ok)) return base;
+    const probe = await probeOpencodeServer(base, fetchImpl);
+    if (probe.state === "ok") return { server: probe.server, unauthorizedBase };
+    if (probe.state === "unauthorized" && unauthorizedBase === null) {
+      unauthorizedBase = base;
+    }
   }
-  return null;
+  return { server: null, unauthorizedBase };
 }
 
 /** Builds the `Authorization: Basic …` header value for a password. */
@@ -212,20 +358,104 @@ export class OpenCodeProvider implements AiProvider {
     return url ?? undefined;
   }
 
-  /** Resolves a reachable base URL: manual setting first, then autodiscovery. */
-  async #baseUrl(): Promise<string> {
+  /** Managed-serve bridge, or `null` when none is wired. */
+  #managed(): ManagedServe | null {
+    return this.#options.managed?.() ?? null;
+  }
+
+  /**
+   * Managed mode: return the running server's URL, lazily starting it when
+   * needed (the CLI-detection failure copy comes from the Rust side).
+   */
+  async #managedUrl(managed: ManagedServe): Promise<string> {
+    const live = await managed.status().catch(() => null);
+    if (live?.running && live.url) return live.url;
+    const started = await managed.start().catch(() => null);
+    if (started?.running && started.url) return started.url;
+    throw new AiError(
+      "unavailable",
+      started?.error ?? live?.error ?? "failed to reach the managed opencode server",
+      { backend: "opencode" },
+    );
+  }
+
+  /** Attach mode: strict autodiscovery over manual URL + default. */
+  async #attachServer(): Promise<OpencodeServer> {
     const manual = this.#manualUrl();
-    const base = await discoverOpencode(manual, this.#fetch);
-    if (!base) {
+    const { server, unauthorizedBase } = await discoverOpencode(manual, this.#fetch);
+    if (server) {
+      if (server.kind === "v2") {
+        throw new AiError(
+          "unavailable",
+          `opencode server at ${server.base} speaks the 2.x API (v${server.version ?? "?"}) — this build supports 1.x servers`,
+          { backend: "opencode" },
+        );
+      }
+      return server;
+    }
+    if (unauthorizedBase) {
       throw new AiError(
-        "unavailable",
-        manual
-          ? `opencode server not reachable at ${manual} (health probe failed)`
-          : `no opencode server found (probed ${DEFAULT_OPENCODE_URL}) — start one or set the URL in AI settings`,
+        "unauthenticated",
+        `opencode server at ${unauthorizedBase} requires the basic-auth password (AI settings)`,
         { backend: "opencode" },
       );
     }
-    return base;
+    throw new AiError(
+      "unavailable",
+      manual
+        ? `opencode server not reachable at ${manual} (health probe failed) — start it, clear the URL, or switch to Managed in AI settings`
+        : `no opencode server found (probed ${DEFAULT_OPENCODE_URL}) — start one or switch to Managed in AI settings`,
+      { backend: "opencode" },
+    );
+  }
+
+  /**
+   * Resolves a server that identified itself as opencode per the
+   * configured mode. Throws `AiError` (`unavailable`/`unauthenticated`)
+   * with safe, actionable copy otherwise.
+   */
+  async #resolveServer(): Promise<OpencodeServer> {
+    const mode = this.#options.resolve?.() ?? "attach";
+    if (mode === "disabled") {
+      throw new AiError("unavailable", "opencode is disabled in AI settings", {
+        backend: "opencode",
+      });
+    }
+    if (mode === "managed") {
+      const managed = this.#managed();
+      if (!managed) {
+        throw new AiError(
+          "unavailable",
+          "managed opencode requires the desktop app — switch to attach mode or another backend",
+          { backend: "opencode" },
+        );
+      }
+      const url = await this.#managedUrl(managed);
+      const probe = await probeOpencodeServer(url, this.#fetch);
+      if (probe.state === "ok") {
+        if (probe.server.kind === "v2") {
+          throw new AiError(
+            "unavailable",
+            `the managed opencode serves the 2.x API (v${probe.server.version ?? "?"}) — this build supports 1.x servers; install opencode 1.x`,
+            { backend: "opencode" },
+          );
+        }
+        return probe.server;
+      }
+      if (probe.state === "unauthorized") {
+        throw new AiError(
+          "unauthenticated",
+          "the managed opencode server rejected our request — clear or fix the stored password in AI settings",
+          { backend: "opencode" },
+        );
+      }
+      throw new AiError(
+        "unavailable",
+        "the managed opencode server did not answer a valid health probe — try Re-check in AI settings",
+        { backend: "opencode" },
+      );
+    }
+    return this.#attachServer();
   }
 
   /** SDK client for a base URL (rebuilt when the URL changes). */
@@ -243,21 +473,19 @@ export class OpenCodeProvider implements AiProvider {
     return this.#client;
   }
 
-  /** Reachability probe: health endpoint + status mapping (supervisor). */
+  /**
+   * Reachability probe: strict server identification + status mapping
+   * (supervisor). `unauthenticated` means an opencode server answered but
+   * rejected the request (basic auth).
+   */
   async check(): Promise<AiProbeResult> {
     try {
-      const health = await this.health();
-      if (!health.ok) {
-        return { status: "down", error: `no opencode server at ${health.base ?? DEFAULT_OPENCODE_URL}` };
-      }
-      if (health.status === 401 || health.status === 403) {
-        return {
-          status: "unauthenticated",
-          error: "opencode server requires the basic-auth password (AI settings)",
-        };
-      }
+      await this.#resolveServer();
       return { status: "ok" };
     } catch (err) {
+      if (err instanceof AiError && err.kind === "unauthenticated") {
+        return { status: "unauthenticated", error: err.message };
+      }
       return {
         status: "down",
         error: err instanceof Error ? err.message : String(err),
@@ -265,16 +493,21 @@ export class OpenCodeProvider implements AiProvider {
     }
   }
 
-  /** Raw health probe: resolves the reachable base and HTTP status. */
-  async health(): Promise<{ ok: boolean; base: string | null; status: number }> {
-    const base = await this.#baseUrl();
-    const result = await probeHealth(base, this.#fetch);
-    return { ok: result.ok, base, status: result.status };
+  /**
+   * Resolves the reachable server (never throws: `base` is `null` on any
+   * failure). Consumers (the SSE liveness loop) only need the base URL.
+   */
+  async health(): Promise<{ base: string | null }> {
+    try {
+      return { base: (await this.#resolveServer()).base };
+    } catch {
+      return { base: null };
+    }
   }
 
   async available(): Promise<boolean> {
     try {
-      return (await this.health()).ok;
+      return (await this.health()).base !== null;
     } catch {
       return false;
     }
@@ -282,7 +515,7 @@ export class OpenCodeProvider implements AiProvider {
 
   async listModels(): Promise<ModelInfo[]> {
     try {
-      const base = await this.#baseUrl();
+      const base = await this.#resolveServer().then((s) => s.base);
       const response = await this.#clientFor(base).config.providers();
       if (response.error) {
         throw new AiError("bad-response", "opencode rejected the provider list request", {
@@ -318,7 +551,7 @@ export class OpenCodeProvider implements AiProvider {
     const started = Date.now();
     let client: OpencodeClient;
     try {
-      const base = await this.#baseUrl();
+      const base = await this.#resolveServer().then((s) => s.base);
       client = this.#clientFor(base);
     } catch (err) {
       if (err instanceof AiError) throw err;

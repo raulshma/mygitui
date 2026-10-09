@@ -16,6 +16,7 @@ mod ipc_commands;
 mod keyring_store;
 mod maintenance;
 mod mergetool;
+mod opencode;
 mod ops;
 #[cfg(test)]
 mod prop_tests;
@@ -47,6 +48,9 @@ pub fn run() {
         // second-instance URLs through the same scheme; the frontend routes
         // them in `src/lib/entry/deeplink.ts`.
         .plugin(tauri_plugin_deep_link::init())
+        // Restores window position/size/maximized state across launches
+        // (state file under the app config dir; saved on close).
+        .plugin(tauri_plugin_window_state::Builder::default().build())
         // Must be the last plugin registered: it decides whether this instance
         // runs or defers to the existing one.
         .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
@@ -76,6 +80,9 @@ pub fn run() {
         // pty_kill + pty-output/pty-exit events) live here; dropping the
         // registry on app exit kills every remaining shell.
         .manage(pty::PtyRegistry::default())
+        // AI: the managed `opencode serve` child (opencode_serve_start/
+        // status/stop); dropped on app exit, killing the server.
+        .manage(opencode::OpenCodeServerRegistry::default())
         .invoke_handler(tauri::generate_handler![
             keyring_store::secrets_get,
             keyring_store::secrets_set,
@@ -188,7 +195,21 @@ pub fn run() {
             ipc_commands::pr_checks,
             ipc_commands::commit_activity,
             ipc_commands::contributor_stats,
+            opencode::opencode_detect,
+            opencode::opencode_serve_status,
+            opencode::opencode_serve_start,
+            opencode::opencode_serve_stop,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running mygitui");
+        // Tauri does NOT drop managed state on exit (verified live: the
+        // pty registry's Drop comment notwithstanding) — kill the managed
+        // opencode serve tree explicitly on the graceful-exit path.
+        .build(tauri::generate_context!())
+        .expect("error while building mygitui")
+        .run(|app, event| {
+            if let tauri::RunEvent::Exit = event {
+                if let Some(registry) = app.try_state::<opencode::OpenCodeServerRegistry>() {
+                    registry.stop();
+                }
+            }
+        });
 }

@@ -10,7 +10,7 @@ import type { FileDiff } from "$lib/ipc/types";
 import { AiStore, parseAiConfig, AI_STORAGE_KEY } from "./ai.svelte";
 import type { AiProbeResult, AiProvider, ProviderSet } from "./provider";
 import type { FeatureGitClient } from "./features";
-import { AiError } from "./types";
+import { AiError, defaultAiConfig, resolveOpencode, resolveOpencodeMode } from "./types";
 import type { AiBackend, AiResult } from "./types";
 
 const secrets = vi.hoisted(() => ({
@@ -29,6 +29,10 @@ vi.mock("$lib/ipc/client", () => ({
   },
   repoDiff: vi.fn(),
   streamLog: vi.fn(),
+  opencodeDetect: vi.fn(async () => ({ installed: false, path: null, version: null, major: null })),
+  opencodeServeStatus: vi.fn(async () => ({ running: false, url: null, port: null, error: null })),
+  opencodeServeStart: vi.fn(async () => ({ running: false, url: null, port: null, error: null })),
+  opencodeServeStop: vi.fn(async () => ({ running: false, url: null, port: null, error: null })),
 }));
 
 // ---------------------------------------------------------------------------
@@ -161,6 +165,46 @@ describe("AiStore config persistence", () => {
     );
     expect(config.backend).toBe("opencode");
     expect(config.repoOptIn).toEqual({ s: true });
+  });
+
+  it("parses the opencode mode/enabled fields, dropping unknown modes", () => {
+    const config = parseAiConfig(
+      JSON.stringify({ backend: "opencode", opencodeMode: "managed", opencodeEnabled: false }),
+    );
+    expect(config.opencodeMode).toBe("managed");
+    expect(config.opencodeEnabled).toBe(false);
+
+    const unknown = parseAiConfig(
+      JSON.stringify({ backend: "opencode", opencodeMode: "telepathy" }),
+    );
+    expect(unknown.opencodeMode).toBeUndefined();
+  });
+
+  it("resolves the mode: explicit value wins, legacy URL implies attach, else managed", () => {
+    expect(
+      resolveOpencodeMode({ ...defaultAiConfig(), opencodeMode: "attach" }),
+    ).toBe("attach");
+    // Legacy configs (pre-M12) only set a manual attach URL.
+    expect(resolveOpencodeMode({ ...defaultAiConfig(), opencodeUrl: "http://localhost:9999" })).toBe(
+      "attach",
+    );
+    expect(resolveOpencodeMode(defaultAiConfig())).toBe("managed");
+  });
+
+  it("resolves the provider behavior: disabled wins over the mode", () => {
+    expect(resolveOpencode({ ...defaultAiConfig(), opencodeEnabled: false })).toBe("disabled");
+    expect(resolveOpencode({ ...defaultAiConfig(), opencodeMode: "attach" })).toBe("attach");
+    expect(resolveOpencode(defaultAiConfig())).toBe("managed");
+  });
+
+  it("round-trips the managed mode through storage", () => {
+    const storage = memStorage();
+    const first = new AiStore({ storage, providers: {} });
+    first.setOpencodeMode("attach");
+    first.setOpencodeEnabled(false);
+    const second = new AiStore({ storage, providers: {} });
+    expect(second.config.opencodeMode).toBe("attach");
+    expect(second.config.opencodeEnabled).toBe(false);
   });
 
   it("setOptIn(false) removes the entry (and persists the removal)", () => {

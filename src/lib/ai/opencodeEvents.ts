@@ -104,8 +104,9 @@ export function subscribeOpencodeEvents(
   };
 
   void (async () => {
-    const base = await discoverOpencode(options.url, fetchImpl);
-    if (!base) {
+    // Strict discovery (JSON health/info), shared with the provider.
+    const { server } = await discoverOpencode(options.url, fetchImpl);
+    if (!server) {
       options.onUnreachable?.(
         options.url
           ? `no opencode server at ${options.url}`
@@ -115,6 +116,9 @@ export function subscribeOpencodeEvents(
     }
     if (stopped) return;
 
+    // 1.x servers stream at /event; 2.x moved the stream to /api/event.
+    const eventPath = server.kind === "v2" ? "/api/event" : "/event";
+
     const headers: Record<string, string> = {
       Accept: "text/event-stream",
     };
@@ -122,7 +126,7 @@ export function subscribeOpencodeEvents(
     if (password) headers.Authorization = basicAuthHeader(password);
 
     try {
-      const response = await fetchImpl(new URL("/event", base), {
+      const response = await fetchImpl(new URL(eventPath, server.base), {
         headers,
         signal: controller.signal,
       });

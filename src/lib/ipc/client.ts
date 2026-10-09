@@ -1543,3 +1543,58 @@ export async function osAccentColor(): Promise<string | null> {
     return null;
   }
 }
+
+// ---------------------------------------------------------------------------
+// AI: managed opencode lifecycle (appended; src-tauri opencode.rs).
+//
+// Detection resolves the `opencode` CLI through PATH (never cached, so a
+// fresh install is found on the next call); the managed-serve commands
+// start/status/stop the app-owned `opencode serve` child (bound to a free
+// 127.0.0.1 port, killed on app exit). Outside a Tauri webview these return
+// inert defaults — the AI layer falls back to attach mode there.
+// ---------------------------------------------------------------------------
+
+/** Result of probing the machine for a local opencode CLI. */
+export interface OpencodeDetection {
+  installed: boolean;
+  /** Resolved binary path (first PATH hit), when installed. */
+  path: string | null;
+  /** `x.y.z` parsed from `--version` output, when parseable. */
+  version: string | null;
+  /** Major version (`1` for 1.x, `2` for 2.x), when parseable. */
+  major: number | null;
+}
+
+/** State of the app-managed `opencode serve` child. */
+export interface OpencodeServeState {
+  running: boolean;
+  /** Base URL of the managed server (`http://127.0.0.1:<port>`). */
+  url: string | null;
+  port: number | null;
+  /** Failure description when not running. */
+  error: string | null;
+}
+
+/** Probes for a local opencode CLI (PATH scan + `--version`). */
+export async function opencodeDetect(): Promise<OpencodeDetection> {
+  if (!isTauri()) return { installed: false, path: null, version: null, major: null };
+  return call<OpencodeDetection>("opencode_detect", {});
+}
+
+/** State of the managed opencode server (starts nothing). */
+export async function opencodeServeStatus(): Promise<OpencodeServeState> {
+  if (!isTauri()) return { running: false, url: null, port: null, error: null };
+  return call<OpencodeServeState>("opencode_serve_status", {});
+}
+
+/** Starts (or returns the running) managed opencode server. */
+export async function opencodeServeStart(): Promise<OpencodeServeState> {
+  if (!isTauri()) return { running: false, url: null, port: null, error: null };
+  return call<OpencodeServeState>("opencode_serve_start", {});
+}
+
+/** Stops the managed opencode server (no-op when none is running). */
+export async function opencodeServeStop(): Promise<OpencodeServeState> {
+  if (!isTauri()) return { running: false, url: null, port: null, error: null };
+  return call<OpencodeServeState>("opencode_serve_stop", {});
+}

@@ -15,6 +15,7 @@
   import {
     openTab,
     recentRepos,
+    restoreSession,
     startTabEvents,
     tabStore,
   } from "$lib/stores/tabs.svelte";
@@ -103,6 +104,11 @@
     );
 
     startTabEvents();
+
+    // Relaunch polish: reopen the tabs (and the focused one) from the last
+    // session. Runs before the CLI-arg/deep-link listeners below, so an
+    // explicit `mygitui <path>` still wins the focus when it lands.
+    if (!popout) void restoreSession();
 
     // Popout windows render one panel only — no shell-level listeners.
     if (popout) {

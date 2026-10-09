@@ -1,12 +1,18 @@
 <script lang="ts">
   /**
-   * AI settings dialog (M6, lane H1).
+   * AI settings dialog (M6, lane H1; M12 redesign).
    *
-   * Backend radio (opencode / openrouter), opencode base URL + basic-auth
-   * password, OpenRouter API key, default OpenRouter model (datalist fed by
-   * the backend's model list), a "Test connection" button (runs the
-   * supervisor probe and shows per-backend status + latency) and the
-   * per-repo opt-in note.
+   * opencode is status-first: the dialog probes for a local opencode
+   * install (PATH scan + version) and shows the managed server's state.
+   * The default path needs nothing from the user — managed mode detects
+   * the CLI and spawns `opencode serve` automatically; the visible knobs
+   * are a single Enable switch, a Re-check button, and (under Advanced)
+   * the attach mode for users who run their own server (manual URL +
+   * optional basic-auth password).
+   *
+   * OpenRouter keeps its direct-API fields (key in the OS keyring, model
+   * datalist fed by the backend's model list), plus the "Test connection"
+   * button with per-backend status + latency.
    *
    * Secret fields are write-only: type to change, blank = keep what is
    * stored. Values are saved to the OS keyring (`secrets_set`), NEVER to
@@ -16,9 +22,16 @@
    * orchestrator's lane. The commit-message button opens its own instance
    * from the first-use prompt's "Configure" action.
    */
+  import { untrack } from "svelte";
   import { ai } from "$lib/ai/ai.svelte";
   import { AI_BACKENDS } from "$lib/ai/types";
-  import type { AiBackend, ModelInfo } from "$lib/ai/types";
+  import type { AiBackend, ModelInfo, OpencodeMode } from "$lib/ai/types";
+  import {
+    opencodeDetect,
+    opencodeServeStatus,
+    type OpencodeDetection,
+    type OpencodeServeState,
+  } from "$lib/ipc/client";
   import { toast } from "$lib/toast";
 
   let {
@@ -32,6 +45,8 @@
 
   // --- form state (copies of the live config; applied on Save) ---------------
   let backendChoice = $state<AiBackend>("opencode");
+  let opencodeEnabled = $state(true);
+  let opencodeModeChoice = $state<OpencodeMode>("managed");
   let opencodeUrl = $state("");
   let openrouterModel = $state("");
   let allowFallback = $state(true);
@@ -43,21 +58,51 @@
   let testing = $state(false);
   let models = $state<ModelInfo[]>([]);
   let modelsError = $state<string | null>(null);
+  /** Collapsed-by-default section for mode/URL/password. */
+  let showAdvanced = $state(false);
+
+  // Live install/server state (not form state — refreshed, never saved).
+  let detection = $state<OpencodeDetection | null>(null);
+  let serveState = $state<OpencodeServeState | null>(null);
+  let checkingInstall = $state(false);
 
   // Supervisor status, mirrored into runes (the supervisor is a plain
   // Svelte-store-contract observable, not a runes store).
   let statuses = $state(ai.supervisor.statuses);
   $effect(() => ai.supervisor.subscribe((next) => (statuses = next)));
 
-  // Hydrate the form whenever the dialog opens.
+  /** Probes for the local CLI + managed server (best effort, never throws). */
+  async function refreshInstall(): Promise<void> {
+    checkingInstall = true;
+    try {
+      [detection, serveState] = await Promise.all([
+        opencodeDetect().catch(() => null),
+        opencodeServeStatus().catch(() => null),
+      ]);
+    } finally {
+      checkingInstall = false;
+    }
+  }
+
+  // Hydrate the form whenever the dialog opens. Reads are untracked: the
+  // effect must fire on `open` transitions ONLY — the config mutations in
+  // save() would otherwise re-run this mid-save and wipe the form state
+  // (including the not-yet-persisted secret inputs) between awaits.
   $effect(() => {
     if (!open) return;
-    backendChoice = ai.config.backend;
-    opencodeUrl = ai.config.opencodeUrl ?? "";
-    openrouterModel = ai.config.openrouterModel ?? "";
-    allowFallback = ai.config.allowFallback !== false;
-    opencodePassword = "";
-    openrouterKey = "";
+    untrack(() => {
+      backendChoice = ai.config.backend;
+      opencodeEnabled = ai.config.opencodeEnabled !== false;
+      opencodeModeChoice =
+        ai.config.opencodeMode ?? (ai.config.opencodeUrl ? "attach" : "managed");
+      opencodeUrl = ai.config.opencodeUrl ?? "";
+      openrouterModel = ai.config.openrouterModel ?? "";
+      allowFallback = ai.config.allowFallback !== false;
+      opencodePassword = "";
+      openrouterKey = "";
+      showAdvanced = false;
+      void refreshInstall();
+    });
   });
 
   // Load the model list for the selected backend (datalist suggestions).
@@ -79,9 +124,29 @@
   });
 
   const backendLabels: Record<AiBackend, string> = {
-    opencode: "opencode server (local, attach to a running instance)",
-    openrouter: "OpenRouter (direct API, needs an API key)",
+    opencode: "opencode — local, auto-managed (recommended)",
+    openrouter: "OpenRouter — direct API (needs an API key)",
   };
+
+  /** One-line summary of the local opencode install + managed server. */
+  function installLine(): string {
+    if (detection === null) return "checking for a local opencode install…";
+    if (!detection.installed) {
+      return "not found on PATH — install opencode, then Re-check";
+    }
+    const version = detection.version ?? "unknown version";
+    const at = detection.path ? ` (${detection.path})` : "";
+    if (serveState?.running && serveState.url) {
+      return `v${version} — managed server running at ${serveState.url}`;
+    }
+    if (opencodeModeChoice === "attach") {
+      return `v${version}${at} — attach mode: using a server you run`;
+    }
+    if (opencodeEnabled) {
+      return `v${version}${at} — will start automatically (managed)`;
+    }
+    return `v${version}${at} — disabled`;
+  }
 
   /** Per-backend status line for the display under "Test connection". */
   function statusLine(backend: AiBackend): string {
@@ -106,15 +171,22 @@
     saving = true;
     try {
       ai.setBackend(backendChoice);
+      ai.setOpencodeMode(opencodeModeChoice);
+      // Kept even in managed mode (attach needs it again after a switch);
+      // the resolver only reads it in attach mode.
       ai.setOpencodeUrl(opencodeUrl);
       ai.setOpenrouterModel(openrouterModel);
       ai.setAllowFallback(allowFallback);
+      await ai.setOpencodeEnabled(opencodeEnabled);
       if (opencodePassword.trim().length > 0) {
         await ai.saveOpencodePassword(opencodePassword);
       }
       if (openrouterKey.trim().length > 0) {
         await ai.saveOpenrouterKey(openrouterKey);
       }
+      // Reflect the new config immediately (managed mode spawns here).
+      await ai.supervisor.checkAll().catch(() => {});
+      void refreshInstall();
       toast("AI settings saved", { kind: "success" });
       onclose?.();
     } catch (err) {
@@ -154,6 +226,9 @@
   }
 
   function close(): void {
+    // `open` is bindable and the app shell passes no `onclose` — clearing
+    // it here is what actually dismisses the dialog (Cancel/Escape).
+    open = false;
     onclose?.();
   }
 
@@ -199,34 +274,85 @@
 
         <fieldset class="group">
           <legend class="legend">opencode</legend>
-          <label class="field">
-            <span class="field-label">Server URL</span>
-            <input
-              class="input"
-              type="url"
-              placeholder="http://127.0.0.1:4096"
-              spellcheck="false"
-              bind:value={opencodeUrl}
-            />
-          </label>
-          <p class="hint">
-            Leave empty to autodiscover the default (127.0.0.1:4096).
-          </p>
-          <label class="field">
-            <span class="field-label">Password (basic auth)</span>
-            <input
-              class="input"
-              type="password"
-              autocomplete="off"
-              placeholder="stored in OS keyring (type to change)"
-              bind:value={opencodePassword}
-            />
-          </label>
+          <p class="status-line" role="status">{installLine()}</p>
           <div class="row">
-            <button class="link" type="button" onclick={() => void clearOpencodePassword()}>
-              Remove stored password
+            <button
+              class="link"
+              type="button"
+              disabled={checkingInstall}
+              onclick={() => void refreshInstall()}
+            >
+              {#if checkingInstall}Checking…{:else}Re-check{/if}
             </button>
+            {#if detection?.installed && detection.major !== null && detection.major >= 2}
+              <span class="hint">opencode 2.x detected — this build targets 1.x servers</span>
+            {/if}
           </div>
+          <label class="radio">
+            <input type="checkbox" bind:checked={opencodeEnabled} />
+            <span>Enable opencode (the app starts and manages the server)</span>
+          </label>
+          {#if !opencodeEnabled}
+            <p class="hint warn">
+              opencode is off — nothing is probed or spawned and AI features
+              use OpenRouter only.
+            </p>
+          {/if}
+
+          <label class="radio advanced-toggle">
+            <input type="checkbox" bind:checked={showAdvanced} />
+            <span>Advanced</span>
+          </label>
+          {#if showAdvanced}
+            <fieldset class="group inner">
+              <legend class="legend">Server mode</legend>
+              {#each ["managed", "attach"] as modeOption (modeOption)}
+                <label class="radio">
+                  <input
+                    type="radio"
+                    name="opencode-mode"
+                    value={modeOption}
+                    bind:group={opencodeModeChoice}
+                  />
+                  <span>
+                    {modeOption === "managed"
+                      ? "Managed — mygitui spawns opencode serve itself (default)"
+                      : "Attach — connect to a server I run"}
+                  </span>
+                </label>
+              {/each}
+              {#if opencodeModeChoice === "attach"}
+                <label class="field">
+                  <span class="field-label">Server URL</span>
+                  <input
+                    class="input"
+                    type="url"
+                    placeholder="http://127.0.0.1:4096"
+                    spellcheck="false"
+                    bind:value={opencodeUrl}
+                  />
+                </label>
+                <p class="hint">
+                  Leave empty to autodiscover the default (127.0.0.1:4096).
+                </p>
+              {/if}
+            </fieldset>
+            <label class="field">
+              <span class="field-label">Password (basic auth, optional)</span>
+              <input
+                class="input"
+                type="password"
+                autocomplete="off"
+                placeholder="stored in OS keyring (type to change)"
+                bind:value={opencodePassword}
+              />
+            </label>
+            <div class="row">
+              <button class="link" type="button" onclick={() => void clearOpencodePassword()}>
+                Remove stored password
+              </button>
+            </div>
+          {/if}
         </fieldset>
 
         <fieldset class="group">
@@ -395,6 +521,27 @@
   .hint {
     margin: 0;
     font-size: 0.72rem;
+    color: var(--m3-on-surface-variant, var(--m3-on-surface));
+  }
+
+  .hint.warn {
+    color: var(--m3-error, inherit);
+  }
+
+  .status-line {
+    margin: 0;
+    font-size: 0.8125rem;
+    color: var(--m3-on-surface);
+  }
+
+  .group.inner {
+    margin: 0.25rem 0 0 0.875rem;
+    border-left: 1px solid var(--m3-outline-variant, var(--m3-primary));
+    padding-left: 0.625rem;
+  }
+
+  .advanced-toggle {
+    margin-top: 0.25rem;
     color: var(--m3-on-surface-variant, var(--m3-on-surface));
   }
 

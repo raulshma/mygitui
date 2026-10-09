@@ -17,16 +17,26 @@
  * providers; the {@link ai} singleton wires the real backends.
  */
 
-import { secretsDelete, secretsGet, secretsSet, SECRET_KEYS } from "$lib/ipc/client";
+import {
+  secretsDelete,
+  secretsGet,
+  secretsSet,
+  SECRET_KEYS,
+  opencodeServeStart,
+  opencodeServeStatus,
+  opencodeServeStop,
+} from "$lib/ipc/client";
+import { isTauri } from "$lib/entry/dragdrop";
 import { ConnectionSupervisor } from "./connection";
 import { subscribeOpencodeEvents, type OpencodeEventSession } from "./opencodeEvents";
 import type { SupervisorOptions } from "./connection";
 import { OpenCodeProvider } from "./opencode";
+import type { ManagedServe } from "./opencode";
 import { OpenRouterProvider } from "./openrouter";
 import { runFeature } from "./features";
 import type { FeatureCtx, FeatureDeps, FeatureGitClient, FeatureOutcome } from "./features";
-import { defaultAiConfig, AiError } from "./types";
-import type { AiBackend, AiConfig, FeatureKind } from "./types";
+import { defaultAiConfig, AiError, resolveOpencode } from "./types";
+import type { AiBackend, AiConfig, FeatureKind, OpencodeMode } from "./types";
 import type { ProviderSet } from "./provider";
 
 /** localStorage key for the non-secret AI config. */
@@ -38,6 +48,15 @@ export interface StorageLike {
   setItem(key: string, value: string): void;
   removeItem?(key: string): void;
 }
+
+/**
+ * Managed opencode serve bridge (Rust IPC). The provider only receives it
+ * inside a Tauri webview; everywhere else managed mode degrades to attach.
+ */
+const managedServeBridge: ManagedServe = {
+  status: () => opencodeServeStatus(),
+  start: () => opencodeServeStart(),
+};
 
 /** Per-repo state of a feature run. */
 export interface AiGenerateState {
@@ -92,6 +111,12 @@ export function parseAiConfig(raw: string | null): AiConfig {
   if (typeof obj.allowFallback === "boolean") {
     config.allowFallback = obj.allowFallback;
   }
+  if (obj.opencodeMode === "managed" || obj.opencodeMode === "attach") {
+    config.opencodeMode = obj.opencodeMode;
+  }
+  if (typeof obj.opencodeEnabled === "boolean") {
+    config.opencodeEnabled = obj.opencodeEnabled;
+  }
   if (typeof obj.repoOptIn === "object" && obj.repoOptIn !== null) {
     for (const [repoId, value] of Object.entries(obj.repoOptIn as Record<string, unknown>)) {
       if (typeof value === "boolean") config.repoOptIn[repoId] = value;
@@ -126,12 +151,20 @@ export class AiStore {
       opencode:
         deps.providers?.opencode ??
         new OpenCodeProvider({
-          // Live getter: settings changes apply without rebuilding.
+          // Live getters: settings changes apply without rebuilding.
+          resolve: () => {
+            const resolved = resolveOpencode(this.config);
+            // Outside Tauri there is no serve registry: managed degrades
+            // to the v1 attach autodiscovery (browser dev, tests).
+            return resolved === "managed" && !isTauri() ? "attach" : resolved;
+          },
           url: () => this.config.opencodeUrl ?? undefined,
+          managed: () => (isTauri() ? managedServeBridge : null),
           password: () => secretsGet(SECRET_KEYS.opencodeServerPassword),
         }),
       openrouter: deps.providers?.openrouter ?? new OpenRouterProvider(),
     };
+    if (!deps.providers?.opencode) this.#opencode = providers.opencode as OpenCodeProvider;
     this.#supervisor = new ConnectionSupervisor({
       providers,
       config: () => this.config,
@@ -141,22 +174,35 @@ export class AiStore {
     // M12: opencode SSE liveness — while the server streams /event, every
     // decoded event refreshes transport freshness via the supervisor.
     // Retry stays with the supervisor: the stream never reconnects itself;
-    // the next successful probe re-subscribes. Skipped when tests inject a
-    // provider (no real server to discover).
-    if (!deps.providers?.opencode && deps.events !== false) {
+    // the next successful probe re-subscribes. Gated to the real Tauri app:
+    // tests/browser must not fetch or spawn anything at module import.
+    if (!deps.providers?.opencode && deps.events !== false && isTauri()) {
       this.#supervisor.subscribe((statuses) => {
-        if (statuses.opencode.status === "ok") this.#ensureEvents();
+        if (statuses.opencode.status === "ok") void this.#ensureEvents();
+      });
+      // M12: proactive startup probe (managed mode also spawns the server
+      // here), so the health chip reflects reality immediately instead of
+      // staying gray "not configured" until the first AI click.
+      void this.supervisor.checkAll().catch(() => {
+        // Probe failures are recorded on the supervisor; nothing to do.
       });
     }
   }
 
+  /** The real opencode provider when this store owns one (else `null`). */
+  #opencode: OpenCodeProvider | null = null;
+
   #events: OpencodeEventSession | null = null;
 
   /** Starts the SSE loop once per "opencode became ok" transition. */
-  #ensureEvents(): void {
+  async #ensureEvents(): Promise<void> {
     if (this.#events) return;
+    // Managed mode puts the server on a random port: resolve the base the
+    // same way the provider does (its health() probes managed status too).
+    const health = await this.#opencode?.health().catch(() => null);
+    if (!health?.base) return;
     this.#events = subscribeOpencodeEvents({
-      url: this.config.opencodeUrl ?? undefined,
+      url: health.base,
       password: () => secretsGet(SECRET_KEYS.opencodeServerPassword),
       onEvent: () => this.#supervisor.noteTransportEvent("opencode"),
       onEnded: () => {
@@ -193,6 +239,29 @@ export class AiStore {
     if (trimmed) this.config.opencodeUrl = trimmed;
     else delete this.config.opencodeUrl;
     this.#persist();
+  }
+
+  /** Sets how the opencode server is reached ("managed" | "attach"). */
+  setOpencodeMode(mode: OpencodeMode): void {
+    this.config.opencodeMode = mode;
+    this.#persist();
+  }
+
+  /**
+   * Enables/disables the opencode backend (default on). Disabling stops
+   * the managed server immediately; enabling re-probes (managed mode
+   * spawns on demand through the supervisor check).
+   */
+  async setOpencodeEnabled(enabled: boolean): Promise<void> {
+    if (enabled) delete this.config.opencodeEnabled;
+    else this.config.opencodeEnabled = false;
+    this.#persist();
+    if (enabled) {
+      await this.supervisor.checkAll().catch(() => {});
+    } else {
+      await opencodeServeStop().catch(() => {});
+      await this.supervisor.check("opencode").catch(() => {});
+    }
   }
 
   /** Sets the default OpenRouter model (empty/whitespace clears it). */

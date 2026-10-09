@@ -539,6 +539,10 @@ Additive contracts only; all commands take `repo_id` unless noted.
 | `bisect_log` | → `[BisectLogEntry]` | `{mark, sha, at}` oldest first; also mirrored into `BisectState.log`. |
 | `op_cancel` | `op_id` → `bool` | Best-effort cancel of a queued/running mutation. Queued → dropped; running → stops at the next cooperative checkpoint (long libgit2 ops check between steps). Returns false when already finished. |
 | `cli_args_initial` | → `[string]` | argv captured at first launch (`mygitui <path>`), consumed once; second-launch args keep arriving via the `cli-args` event. |
+| `opencode_detect` | → `OpencodeDetection` | `{installed, path, version, major}` — PATH × PATHEXT scan (never cached) + `opencode --version` (4s timeout, sanitized env). |
+| `opencode_serve_status` | → `OpencodeServeState` | `{running, url, port, error}` of the app-managed `opencode serve` child; reaps a child that exited. Starts nothing. |
+| `opencode_serve_start` | → `OpencodeServeState` | Idempotent: returns the live server or spawns on a free 127.0.0.1 port (ready = TCP connect; ≤10s wait). Error copy names the fix ("not found on PATH — install opencode…"). |
+| `opencode_serve_stop` | → `OpencodeServeState` | Kills (tree-kill on Windows) and reaps the managed server; no-op when none runs. |
 
 Shape changes (additive, mirrored in `src/lib/ipc/types.ts`):
 - `LogFilter.pickaxe_regex` — pickaxe `-G` (patch regex) alongside `-S`.
@@ -548,7 +552,9 @@ Shape changes (additive, mirrored in `src/lib/ipc/types.ts`):
 
 Platform:
 - Dynamic color: `os_accent_color` (Windows DWM registry accent → seed) + `mygitui.seed` localStorage override (palette: "Appearance: Set/Reset accent seed color…"); resolution order override → OS accent → baseline.
-- opencode SSE: `subscribeOpencodeEvents` consumes `GET /event` (fetch-based, basic-auth) and feeds the supervisor's `noteTransportEvent` — transport liveness refreshes `lastCheck`; a down backend re-probes instead of trusting the stream. Retry stays with the supervisor.
+- opencode managed serve (M12): `opencode_detect` (PATH × PATHEXT scan, never cached — misses re-scan so fresh installs are found; `--version` probe → `{installed, path, version, major}`), `opencode_serve_status/start/stop` over the `OpenCodeServerRegistry` (one app-owned `opencode serve --hostname 127.0.0.1 --port <free>` child; ready = TCP connect succeeds; stdout `… listening on http://…` parsed when announced; registry Drop + `taskkill /T` tree-kill the child on app exit). Frontend resolution (`resolveOpencode`): `opencodeEnabled === false` → disabled (no probe, no spawn), else `opencodeMode` — managed (default; attach when a legacy manual `opencodeUrl` exists and no mode is set) → provider asks the registry for the URL and lazily starts the server; attach keeps the v1 autodiscovery (manual URL → `127.0.0.1:4096`). Outside Tauri managed degrades to attach.
+- AI startup probe: the `AiStore` singleton runs `supervisor.checkAll()` once at construction (real app only, not tests/browser) — the health chip reflects reality immediately; managed mode spawns the server through that probe.
+- opencode SSE: `subscribeOpencodeEvents` consumes `GET /event` (fetch-based, basic-auth) and feeds the supervisor's `noteTransportEvent` — transport liveness refreshes `lastCheck`; a down backend re-probes instead of trusting the stream. Retry stays with the supervisor. The base URL resolves through the provider's `health()` so managed-mode random ports work.
 - Deep links: `mygitui://open?path=<abs>` — `tauri-plugin-deep-link`, schemes in `tauri.conf.json`, frontend router `src/lib/entry/deeplink.ts` (same open-repo-tab path as `cli-args`).
 - First-launch argv: `CliArgs` state captured in `run()`, served by `cli_args_initial`.
 - Updater: release workflow overlays `plugins.updater` (pubkey + GitHub latest.json endpoint) only when the `TAURI_UPDATER_PUBKEY` secret exists; signing env vars always wired (`TAURI_SIGNING_PRIVATE_KEY[_PASSWORD]`).
