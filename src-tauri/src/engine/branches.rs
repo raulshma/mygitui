@@ -217,6 +217,14 @@ impl Libgit2Engine {
                 "branch `{name}` is not fully merged into HEAD; delete with force to bypass"
             )));
         }
+        // SAFETY NET (M12): park the tip under a hidden trash ref
+        // (`refs/mygitui/trash/<id>`) BEFORE the branch ref goes away, so a
+        // mistaken delete stays recoverable from the Health panel. A failed
+        // trash write aborts the delete (deleting while unrecoverable is
+        // worse than not deleting).
+        if let Some(oid) = branch.get().target() {
+            super::trash::trash_create(repo, name, &oid.to_string())?;
+        }
         branch.delete()?;
         Ok(())
     }

@@ -385,8 +385,14 @@ fn worktree_add_list_remove_roundtrip() {
     assert!(wt_path.join(".git").is_file(), "worktree checked out");
 
     let wts = ENGINE.worktrees_impl(&repo).expect("worktrees");
-    assert_eq!(wts.len(), 1);
-    let wt = &wts[0];
+    // M12: the listing leads with the main worktree; linked entries follow.
+    assert_eq!(wts.len(), 2, "main + wt-feature: {wts:?}");
+    assert!(wts[0].is_main);
+    let wt = wts
+        .iter()
+        .find(|w| w.name == "wt-feature")
+        .expect("linked entry present");
+    assert!(!wt.is_main);
     assert_eq!(wt.name, "wt-feature"); // name derived from path file_name
     assert_eq!(wt.branch.as_deref(), Some("feature"));
     assert_eq!(wt.head.as_deref(), Some(feature_sha.as_str()));
@@ -398,7 +404,10 @@ fn worktree_add_list_remove_roundtrip() {
         .worktree_remove_impl(&repo, "wt-feature", false)
         .expect("worktree remove");
     assert!(!wt_path.exists(), "worktree dir removed with admin area");
-    assert!(ENGINE.worktrees_impl(&repo).expect("list").is_empty());
+    // Only the main worktree remains after the linked one is removed.
+    let remaining = ENGINE.worktrees_impl(&repo).expect("list");
+    assert_eq!(remaining.len(), 1);
+    assert!(remaining[0].is_main);
 
     let err = ENGINE
         .worktree_remove_impl(&repo, "wt-feature", false)
@@ -416,8 +425,12 @@ fn worktree_add_new_branch_and_argument_guards() {
         .expect("worktree add with new branch");
     assert!(repo.find_branch("fresh", git2::BranchType::Local).is_ok());
     let wts = ENGINE.worktrees_impl(&repo).expect("worktrees");
-    assert_eq!(wts.len(), 1);
-    assert_eq!(wts[0].branch.as_deref(), Some("fresh"));
+    assert_eq!(wts.len(), 2, "main + fresh: {wts:?}");
+    let fresh = wts
+        .iter()
+        .find(|w| w.name == "wt-fresh")
+        .expect("linked entry present");
+    assert_eq!(fresh.branch.as_deref(), Some("fresh"));
 
     // Neither branch nor new_branch is out of M3 scope.
     let err = ENGINE
@@ -479,7 +492,13 @@ fn worktree_locked_detection_and_remove_guards() {
     std::fs::write(&lock_file, "held for the test").expect("write lock file");
 
     let wts = ENGINE.worktrees_impl(&repo).expect("worktrees");
-    assert!(wts[0].locked, "lock file must be detected");
+    // M12: the main worktree leads the list; the linked entry follows.
+    let wt_l = wts
+        .iter()
+        .find(|w| w.name == "wt-l")
+        .expect("linked entry present");
+    assert!(wt_l.locked, "lock file must be detected");
+    assert!(!wts[0].is_main || !wts[0].locked, "main entry is unlocked");
 
     let err = ENGINE
         .worktree_remove_impl(&repo, "wt-l", false)
@@ -493,7 +512,9 @@ fn worktree_locked_detection_and_remove_guards() {
     ENGINE
         .worktree_remove_impl(&repo, "wt-l", true)
         .expect("force removes a locked worktree");
-    assert!(ENGINE.worktrees_impl(&repo).expect("list").is_empty());
+    let remaining = ENGINE.worktrees_impl(&repo).expect("list");
+    assert_eq!(remaining.len(), 1, "only the main worktree remains");
+    assert!(remaining[0].is_main);
 
     // Main-worktree guard: not in the linked list, never removable.
     let err = ENGINE

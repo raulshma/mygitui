@@ -7,11 +7,17 @@
   and the merge run. Outcomes toast (squashed / no-commit / merged /
   fast-forward / up-to-date); conflicts land in the existing banner +
   ConflictEditor flow (RepoView reacts to the refreshed status).
+
+  M12 (lane C) dirty guard: on open the dialog checks `repo_status` and —
+  when the working copy carries any real change (see mergeModel.ts) — shows
+  a warning banner and disables the Merge confirm (no override): commit or
+  stash first.
 -->
 <script lang="ts">
-  import { mergeBranch } from "$lib/ipc/client";
+  import { mergeBranch, repoStatus } from "$lib/ipc/client";
   import type { MergeOptions, MergeResult } from "$lib/ipc/types";
   import { toast } from "$lib/toast";
+  import { workingCopyDirty } from "./mergeModel";
 
   let {
     open,
@@ -35,6 +41,8 @@
   let noCommit = $state(false);
   let favor = $state<"none" | "ours" | "theirs">("none");
   let busy = $state(false);
+  /** True when the working copy has uncommitted changes (blocks Merge). */
+  let dirty = $state(false);
 
   $effect(() => {
     if (open) {
@@ -42,6 +50,14 @@
       squash = false;
       noCommit = false;
       favor = "none";
+      dirty = false;
+      // Dirty guard: check the working copy fresh on every open. A failed
+      // check does not block (the merge itself will surface real errors).
+      repoStatus(repoId)
+        .then((status) => {
+          if (open) dirty = workingCopyDirty(status.entries);
+        })
+        .catch(() => {});
     }
   });
 
@@ -119,6 +135,12 @@
       <h2 id="merge-title" class="title">Merge “{branch}”</h2>
       <p class="text">Into the current branch.</p>
 
+      {#if dirty}
+        <p class="dirty" role="alert">
+          Working copy has uncommitted changes — commit or stash first
+        </p>
+      {/if}
+
       <fieldset class="group">
         <legend>Fast-forward</legend>
         <label>
@@ -168,7 +190,7 @@
         >
           Cancel
         </button>
-        <button class="primary" type="submit" disabled={busy}>
+        <button class="primary" type="submit" disabled={busy || dirty}>
           {busy ? "Merging…" : "Merge"}
         </button>
       </div>
@@ -208,6 +230,15 @@
   .text {
     margin: 0 0 0.75rem;
     color: var(--m3-on-surface-variant, var(--m3-on-surface));
+  }
+
+  .dirty {
+    margin: 0 0 0.75rem;
+    padding: 0.4rem 0.6rem;
+    border-radius: var(--m3-shape-small, 8px);
+    background: color-mix(in srgb, var(--m3-error, #ba1a1a) 12%, transparent);
+    color: var(--m3-error, #ba1a1a);
+    font-size: 0.8125rem;
   }
 
   .group {

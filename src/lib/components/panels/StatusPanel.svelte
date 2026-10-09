@@ -276,6 +276,11 @@
             run: () => void onIgnore(choice),
           });
         }
+        entries.push({
+          id: "ignore-templates",
+          label: "Ignore templates…",
+          run: () => (galleryOpen = true),
+        });
       }
       entries.push(
         { id: "history", label: "File history", run: () => void openPanelPopout("filehistory", repoId, `History: ${path}`, { path }) },

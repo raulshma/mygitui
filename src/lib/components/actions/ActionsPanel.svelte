@@ -23,6 +23,14 @@
     RUN_LINE_CAP,
   } from "./actionsModel";
   import {
+    comboFromKeyboardEvent,
+    defForEvent,
+    formatShortcut,
+    shortcutHolders,
+  } from "./shortcutModel";
+  import { detectPlatform } from "$lib/palette/keybinds";
+  import { toast } from "$lib/toast";
+  import {
     actionsStore,
     startActionsEvents,
     type ActionDef,
@@ -35,6 +43,25 @@
   $effect(() => {
     void repoId;
     startActionsEvents();
+  });
+
+  // M12: global shortcut runner — ONE window keydown listener matching any
+  // stored shortcut of this repo's actions (global + repo scopes) and
+  // running the hit through the same `actionsStore.run` path as the Run
+  // button. Capture-phase like the palette keybinds; the pure match rules
+  // (typing protection, capture-field exemption) live in shortcutModel.
+  $effect(() => {
+    void repoId;
+    const platform = detectPlatform();
+    const handler = (event: KeyboardEvent): void => {
+      const def = defForEvent(event, actionsStore.defsFor(repoId), platform);
+      if (!def) return;
+      event.preventDefault();
+      event.stopPropagation();
+      void actionsStore.run(repoId, def);
+    };
+    window.addEventListener("keydown", handler, true);
+    return () => window.removeEventListener("keydown", handler, true);
   });
 
   // Merged config view for the active repo (fresh array per store change).
@@ -74,6 +101,53 @@
 
   function removeDef(id: string): void {
     actionsStore.removeDef(id);
+  }
+
+  // -- M12: shortcut capture -------------------------------------------------
+  // The shortcut field is a readonly input; focusing it arms capture and the
+  // NEXT keydown carrying a modifier is recorded (Escape clears, blur
+  // cancels). Duplicates are rejected with a toast.
+
+  /** Def id currently capturing keys (null = none). */
+  let capturingId = $state<string | null>(null);
+  /** Live preview of the in-progress combo while capturing. */
+  let capturePreview = $state("");
+
+  function onCaptureFocus(def: ActionDef): void {
+    capturingId = def.id;
+    capturePreview = "";
+  }
+
+  function onCaptureBlur(): void {
+    capturingId = null;
+    capturePreview = "";
+  }
+
+  function onCaptureKeydown(event: KeyboardEvent, def: ActionDef): void {
+    if (capturingId !== def.id) return;
+    if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
+      actionsStore.updateDef(def.id, { shortcut: "" });
+      capturingId = null;
+      capturePreview = "";
+      return;
+    }
+    const combo = comboFromKeyboardEvent(event, detectPlatform());
+    if (combo === null) {
+      capturePreview = formatShortcut(event.key.toLowerCase());
+      return; // bare modifier — wait for the full combo
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    const holders = shortcutHolders(combo, actionsStore.defs, def.id);
+    if (holders.length > 0) {
+      toast(`Shortcut already used by “${holders[0]!.name}”`, { kind: "error" });
+      return;
+    }
+    actionsStore.updateDef(def.id, { shortcut: combo });
+    capturingId = null;
+    capturePreview = "";
   }
 
   function toggleRun(runId: string): void {
@@ -145,6 +219,25 @@
               <option value="global">global</option>
               <option value="repo">this repo</option>
             </select>
+            <!-- M12: shortcut capture — focus, press e.g. Ctrl+Shift+R;
+                 Escape clears, blur cancels. -->
+            <input
+              class="def-shortcut"
+              type="text"
+              readonly
+              data-shortcut-capture
+              placeholder="shortcut"
+              aria-label={`Shortcut for action ${def.name}`}
+              title="Focus and press a key combination (e.g. Ctrl+Shift+R). Escape clears."
+              value={capturingId === def.id
+                ? capturePreview || "press keys…"
+                : def.shortcut
+                  ? formatShortcut(def.shortcut)
+                  : ""}
+              onfocus={() => onCaptureFocus(def)}
+              onblur={onCaptureBlur}
+              onkeydown={(e) => onCaptureKeydown(e, def)}
+            />
             <button
               class="btn run"
               type="button"
@@ -339,6 +432,15 @@
 
   .def-scope {
     flex: 0 0 auto;
+  }
+
+  /* M12: shortcut capture field (monospace, captures the next combo). */
+  .def-shortcut {
+    flex: 0 0 7.5rem;
+    font-family: ui-monospace, Consolas, monospace;
+    font-size: 0.7rem;
+    color: var(--m3-primary);
+    cursor: pointer;
   }
 
   .btn {

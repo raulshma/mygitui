@@ -5,8 +5,11 @@
 //! [`DEBOUNCE`] (200 ms), then one batch is emitted. Batches are pre-filtered
 //! so clients never see noise: git object-store churn is dropped, only the
 //! `.git` metadata entries that can change HEAD/status pass through, and
-//! dependency/build directories are skipped (full ignore parsing arrives with
-//! engine integration).
+//! M12 adds real gitignore matching — a `Gitignore` matcher is built per
+//! repo from the root `.gitignore`, nested `.gitignore` files (up to depth
+//! 3), `.git/info/exclude`, and the global `core.excludesFile`, rebuilt
+//! lazily whenever those sources change (mtime check per window + forced
+//! rebuild when a `.gitignore` event itself arrives).
 //!
 //! Robustness: a watcher error logs a warning, emits a `full = true` batch so
 //! clients resync everything, and restarts the watcher with backoff (3 tries
@@ -22,8 +25,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
+use ignore::gitignore::{Gitignore, GitignoreBuilder};
 use notify::{Event, RecommendedWatcher, RecursiveMode, Watcher as _};
 use serde::Serialize;
 
@@ -82,13 +86,18 @@ pub fn is_git_entry_allowed(name: &str) -> bool {
     ALLOWED_GIT_ENTRIES.contains(&name)
 }
 
-/// M1 ignore filter on a repo-relative, forward-slash path.
+/// Baseline ignore filter on a repo-relative, forward-slash path.
 ///
+/// This is the part that needs no repo context:
 /// - any component in [`IGNORED_DIRS`] → ignored;
 /// - a `.git` component with no successor (the directory itself) → ignored;
 /// - the component right after `.git` not in [`ALLOWED_GIT_ENTRIES`] →
 ///   ignored (deep `.git` internals; lock files such as `index.lock` are
 ///   dropped because only exact allowed names pass).
+///
+/// Per-repo gitignore matching (root/nested `.gitignore`, excludes, global
+/// excludesFile) lives in [`IgnoreCache`] and runs after this check in the
+/// event loop.
 pub fn is_ignored_rel(rel: &str) -> bool {
     let comps: Vec<&str> = rel.split('/').filter(|c| !c.is_empty()).collect();
     for comp in &comps {
@@ -115,6 +124,175 @@ pub fn is_head_move_rel(rel: &str) -> bool {
         || rel == ".git/refs"
         || rel.starts_with(".git/refs/")
         || (rel.starts_with(".git/worktrees/") && rel.ends_with("/HEAD"))
+}
+
+// ---------------------------------------------------------------------------
+// M12: gitignore-aware filtering
+// ---------------------------------------------------------------------------
+
+/// How deep below the repo root nested `.gitignore` files are collected
+/// (root is depth 0; depth 3 = `a/b/c/.gitignore`).
+const GITIGNORE_MAX_DEPTH: u8 = 3;
+
+/// Hard cap on directories scanned while collecting nested `.gitignore`
+/// files (huge source trees must not stall the debounce thread).
+const GITIGNORE_SCAN_CAP: usize = 2000;
+
+/// Repo-relative paths whose change means the ignore matcher must be rebuilt
+/// right away (the source itself may be new, so mtimes alone can't catch it).
+fn is_ignore_source_rel(rel: &str) -> bool {
+    rel == ".gitignore" || rel.ends_with("/.gitignore") || rel == ".git/info/exclude"
+}
+
+/// The repo's git directory: `root/.git` when it is a directory, or the
+/// target of the `gitdir: <path>` file for linked worktrees.
+fn git_dir_of(root: &Path) -> Option<PathBuf> {
+    let dot_git = root.join(".git");
+    if dot_git.is_dir() {
+        return Some(dot_git);
+    }
+    let text = std::fs::read_to_string(&dot_git).ok()?;
+    let target = text.trim().strip_prefix("gitdir:")?.trim();
+    let path = PathBuf::from(target);
+    Some(if path.is_absolute() {
+        path
+    } else {
+        root.join(path)
+    })
+}
+
+/// Global `core.excludesFile`, when configured and present.
+fn global_excludes_file() -> Option<PathBuf> {
+    git2::Config::open_default()
+        .and_then(|cfg| cfg.get_path("core.excludesFile"))
+        .ok()
+}
+
+/// Nested `.gitignore` files from the root down to [`GITIGNORE_MAX_DEPTH`].
+/// `.git` internals and known dependency/build dirs are not descended into;
+/// the walk is capped at [`GITIGNORE_SCAN_CAP`] directories.
+fn nested_gitignores(root: &Path) -> Vec<PathBuf> {
+    let mut found = Vec::new();
+    let mut stack = vec![(root.to_path_buf(), 0u8)];
+    let mut scanned = 0usize;
+    while let Some((dir, depth)) = stack.pop() {
+        if scanned >= GITIGNORE_SCAN_CAP {
+            break;
+        }
+        scanned += 1;
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if file_type.is_dir() {
+                if name == ".git" || IGNORED_DIRS.contains(&name.as_ref()) {
+                    continue;
+                }
+                if depth < GITIGNORE_MAX_DEPTH {
+                    stack.push((entry.path(), depth + 1));
+                }
+            } else if name == ".gitignore" {
+                found.push(entry.path());
+            }
+        }
+    }
+    found
+}
+
+/// Pure gitignore decision (free fn so tests can build matchers without a
+/// repo): drop when the path OR any parent matches an `Ignore` pattern —
+/// a plain `matched` call would miss `build/x` for a `build/` dir pattern,
+/// which git expresses by not descending at all.
+fn ignore_matches(gi: &Gitignore, rel: &str, is_dir: bool) -> bool {
+    matches!(
+        gi.matched_path_or_any_parents(rel, is_dir),
+        ignore::Match::Ignore(_)
+    )
+}
+
+/// Mtime-tracked gitignore matcher for one repo root. Built from the root
+/// `.gitignore`, nested `.gitignore` files (to [`GITIGNORE_MAX_DEPTH`]),
+/// `.git/info/exclude`, and the global `core.excludesFile` — plus a baseline
+/// pattern list for dependency/build dirs git itself would never ignore.
+/// Rebuilt lazily when any source's mtime changed, or forced when a source
+/// file is itself an event (it may be brand new).
+struct IgnoreCache {
+    root: PathBuf,
+    gi: Gitignore,
+    /// Every file the matcher was built from + its mtime at build time.
+    sources: Vec<(PathBuf, Option<SystemTime>)>,
+}
+
+impl IgnoreCache {
+    fn build(root: &Path) -> IgnoreCache {
+        let mut builder = GitignoreBuilder::new(root);
+        // Baseline: `node_modules/` etc. are noise in every repo, ignored or
+        // not — git has no default ignore for them.
+        for dir in IGNORED_DIRS {
+            let _ = builder.add_line(None, &format!("{dir}/"));
+        }
+        let mut files = nested_gitignores(root);
+        if let Some(exclude) = git_dir_of(root)
+            .map(|git_dir| git_dir.join("info/exclude"))
+            .filter(|p| p.is_file())
+        {
+            files.push(exclude);
+        }
+        if let Some(global) = global_excludes_file().filter(|p| p.is_file()) {
+            files.push(global);
+        }
+        // Shallowest first (root .gitignore), so deeper — more specific —
+        // files are added later and win ties, mirroring git's precedence.
+        files.sort_by_key(|p| (p.components().count(), p.to_path_buf()));
+        let mut sources = Vec::with_capacity(files.len());
+        for path in files {
+            sources.push((path.clone(), mtime_of(&path)));
+            // Unreadable/undecodable ignore files are skipped: filtering is
+            // best-effort noise reduction, never a hard failure.
+            let _ = builder.add(&path);
+        }
+        let gi = builder.build().unwrap_or_else(|_| Gitignore::empty());
+        IgnoreCache {
+            root: root.to_path_buf(),
+            gi,
+            sources,
+        }
+    }
+
+    /// Rebuild when any tracked source file's mtime changed (added, edited,
+    /// or deleted). Cheap: a handful of stats per debounce window.
+    fn refresh_if_changed(&mut self) {
+        for (path, seen) in &self.sources {
+            if mtime_of(path) != *seen {
+                self.rebuild();
+                return;
+            }
+        }
+    }
+
+    /// Unconditional rebuild — used when an ignore source file itself shows
+    /// up as an event (it may be new and therefore absent from `sources`).
+    fn force_rebuild(&mut self) {
+        self.rebuild();
+    }
+
+    fn rebuild(&mut self) {
+        *self = IgnoreCache::build(&self.root);
+    }
+
+    /// Whether a repo-relative path is ignored (parents included).
+    fn ignores(&self, rel: &str, is_dir: bool) -> bool {
+        ignore_matches(&self.gi, rel, is_dir)
+    }
+}
+
+fn mtime_of(path: &Path) -> Option<SystemTime> {
+    std::fs::metadata(path).and_then(|m| m.modified()).ok()
 }
 
 /// Strip a Windows extended-length (`\\?\`) drive prefix, if present.
@@ -276,6 +454,10 @@ fn run(
         on_batch,
     };
 
+    // M12: gitignore-aware filtering. Built once per watcher lifetime and
+    // refreshed lazily (source mtimes) or forced (a .gitignore event).
+    let mut ignores = IgnoreCache::build(&ctx.root);
+
     let mut attempts = 0usize;
     let mut watcher = create_watcher(&ctx.root, &tx);
     if watcher.is_none() {
@@ -283,6 +465,9 @@ fn run(
     }
 
     'events: loop {
+        // Re-check the ignore sources once per debounce window.
+        ignores.refresh_if_changed();
+
         let mut pending: Vec<String> = Vec::new();
         let mut head_moved = false;
         let mut errored = false;
@@ -317,6 +502,17 @@ fn run(
                     for path in &event.paths {
                         let rel = relativize(&ctx.root, path);
                         if is_ignored_rel(&rel) {
+                            continue;
+                        }
+                        if is_ignore_source_rel(&rel) {
+                            // A (new?) ignore source changed: rebuild before
+                            // filtering the rest of the window with it.
+                            ignores.force_rebuild();
+                        }
+                        let is_dir = std::fs::metadata(strip_verbatim(path))
+                            .map(|m| m.is_dir())
+                            .unwrap_or(false);
+                        if ignores.ignores(&rel, is_dir) {
                             continue;
                         }
                         if is_head_move_rel(&rel) {
@@ -509,5 +705,128 @@ mod tests {
             "generation must bump"
         );
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    // -------------------------------------------------------------------
+    // M12: gitignore-aware filtering
+    // -------------------------------------------------------------------
+
+    struct TempRepo(PathBuf);
+
+    impl TempRepo {
+        fn new(tag: &str) -> TempRepo {
+            let dir =
+                std::env::temp_dir().join(format!("mygitui-wtignore-{}-{tag}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).expect("create temp dir");
+            git2::Repository::init(&dir).expect("init temp repo");
+            TempRepo(dir)
+        }
+
+        fn write(&self, rel: &str, content: &str) {
+            let path = self.0.join(rel);
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent).expect("mkdir");
+            }
+            std::fs::write(path, content).expect("write file");
+        }
+    }
+
+    impl Drop for TempRepo {
+        fn drop(&mut self) {
+            let dir = self.0.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_millis(50));
+                let _ = std::fs::remove_dir_all(dir);
+            });
+        }
+    }
+
+    fn matcher_from_lines(lines: &[&str]) -> Gitignore {
+        let mut builder = GitignoreBuilder::new("");
+        for line in lines {
+            builder.add_line(None, line).expect("add_line");
+        }
+        builder.build().expect("build")
+    }
+
+    #[test]
+    fn gitignore_match_drops_dir_pattern_and_descendants() {
+        let gi = matcher_from_lines(&["build/"]);
+        assert!(
+            ignore_matches(&gi, "build/x", false),
+            "child of ignored dir"
+        );
+        assert!(ignore_matches(&gi, "build", true), "the dir itself");
+        assert!(!ignore_matches(&gi, "src/x", false), "tracked code kept");
+
+        // Whitelist beats the ignore.
+        let gi = matcher_from_lines(&["node_modules/", "!node_modules/keep.js"]);
+        assert!(ignore_matches(&gi, "node_modules/react/index.js", false));
+        assert!(!ignore_matches(&gi, "node_modules/keep.js", false));
+    }
+
+    #[test]
+    fn ignore_cache_reads_gitignore_exclude_and_nested_files() {
+        let repo = TempRepo::new("sources");
+        repo.write(".gitignore", "build/\n");
+        repo.write(".git/info/exclude", "secret-dir/\n");
+        // Depth 3 nested file (root = 0) is collected…
+        repo.write("crates/inner/.gitignore", "*.tmp\nlog/\n");
+        // Depth 4 is beyond the collection limit.
+        repo.write("a/b/c/d/.gitignore", "deep/\n");
+
+        let cache = IgnoreCache::build(&repo.0);
+        assert!(cache.ignores("build/out.obj", false), "root .gitignore");
+        assert!(
+            cache.ignores("secret-dir/key.pem", false),
+            ".git/info/exclude"
+        );
+        assert!(
+            cache.ignores("crates/inner/a.tmp", false),
+            "depth-3 nested .gitignore"
+        );
+        assert!(
+            cache.ignores("crates/inner/log/x", false),
+            "nested pattern for its subtree"
+        );
+        assert!(
+            !cache.ignores("a/b/c/d/deep/x", false),
+            "depth-4 .gitignore not collected"
+        );
+        assert!(!cache.ignores("src/main.rs", false), "code kept");
+    }
+
+    #[test]
+    fn default_ignored_dirs_stay_dropped_without_gitignore() {
+        let repo = TempRepo::new("baseline");
+        let cache = IgnoreCache::build(&repo.0);
+        assert!(
+            cache.ignores("node_modules/react/index.js", false),
+            "baseline ignore list keeps dependency churn out"
+        );
+        assert!(cache.ignores("target/debug/x", false));
+        assert!(!cache.ignores("src/main.rs", false));
+    }
+
+    #[test]
+    fn force_rebuild_picks_up_gitignore_edits() {
+        let repo = TempRepo::new("rebuild");
+        repo.write(".gitignore", "build/\n");
+        let mut cache = IgnoreCache::build(&repo.0);
+        assert!(!cache.ignores("log-dir/x", false));
+
+        repo.write(".gitignore", "build/\nlog-dir/\n");
+        // The event path itself forces the rebuild (mtime granularity on
+        // some filesystems is too coarse to catch fast successive writes).
+        assert!(is_ignore_source_rel(".gitignore"));
+        assert!(is_ignore_source_rel("crates/web/.gitignore"));
+        assert!(is_ignore_source_rel(".git/info/exclude"));
+        cache.force_rebuild();
+        assert!(cache.ignores("log-dir/x", false), "new pattern active");
+        assert!(
+            cache.ignores("build/out.obj", false),
+            "old pattern survives"
+        );
     }
 }

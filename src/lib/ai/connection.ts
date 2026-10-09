@@ -143,6 +143,24 @@ export class ConnectionSupervisor {
     return this.statuses[backend];
   }
 
+  /**
+   * Records a transport-level liveness signal (M12: opencode SSE events).
+   * Transport health is not data freshness — this only refreshes
+   * `lastCheck` when the backend already reads ok, and asks for a real
+   * probe when it reads down (probe-before-reconnect, so a server that
+   * starts emitting events again recovers on the supervisor's normal
+   * coalesced path instead of being trusted blindly).
+   */
+  noteTransportEvent(backend: AiBackend): void {
+    const status = this.statuses[backend];
+    if (status.status === "unknown" || status.status === "checking") return;
+    if (status.status === "down") {
+      void this.check(backend);
+      return;
+    }
+    this.#setStatus(backend, { lastCheck: this.#now() });
+  }
+
   // -- probing ----------------------------------------------------------------
 
   /** Probes one backend via its adapter's `check()` (or `available()`). */

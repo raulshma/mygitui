@@ -38,6 +38,7 @@
  * "mygitui.theme" as `"system" | "light" | "dark"`.
  */
 export { TOKEN_NAMES } from "./dynamic-color";
+export { setUserSeedColor, userSeedColor } from "./dynamic-color";
 
 import { BASELINE_SEED, resolveSeedColor, schemeFromSeed, tokensForScheme } from "./dynamic-color";
 

@@ -20,6 +20,7 @@
 //! has drained. Jobs still queued at close are executed, not dropped; their
 //! oneshot receivers still resolve.
 
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc};
 use std::time::Instant;
@@ -114,6 +115,11 @@ struct QueueInner {
     counter: AtomicU64,
     sink: RwLock<Option<Arc<dyn EventSink>>>,
     closed: AtomicBool,
+    /// M12 cooperative cancellation: one token per live op, keyed by op id.
+    /// An entry exists from `enqueue` until the op finishes (or is skipped);
+    /// `cancel_op` flips the token and the op observes it via
+    /// [`OpCtx::cancelled`]. Queued-not-started ops are skipped entirely.
+    cancels: Mutex<HashMap<String, Arc<AtomicBool>>>,
 }
 
 impl OpQueue {
@@ -125,7 +131,27 @@ impl OpQueue {
                 counter: AtomicU64::new(0),
                 sink: RwLock::new(None),
                 closed: AtomicBool::new(false),
+                cancels: Mutex::new(HashMap::new()),
             }),
+        }
+    }
+
+    /// Request cancellation of one op (M12). Queued-not-started ops are
+    /// skipped entirely (the job closure resolves with a "cancelled" error);
+    /// running ops observe the flag cooperatively through
+    /// [`OpCtx::cancelled`]. Unknown or already-finished ops return `false`.
+    pub fn cancel_op(&self, repo_id: &str, op_id: &str) -> bool {
+        // Op ids are minted as `<repo_id>-op-<n>`; a foreign repo_id can
+        // never match an op of this queue (the registry is per-repo anyway).
+        if !repo_id.is_empty() && !op_id.starts_with(repo_id) {
+            return false;
+        }
+        match self.inner.cancels.lock().get(op_id) {
+            Some(token) => {
+                token.store(true, Ordering::Release);
+                true
+            }
+            None => false,
         }
     }
 
@@ -165,12 +191,20 @@ impl OpQueue {
         let repo_id = self.inner.repo_id.0.clone();
         let kind_owned = kind.to_string();
         let sender = self.ensure_worker();
+        // M12 cancellation token: registered before the job is queued so a
+        // cancel that arrives while the op waits in line skips it entirely.
+        let token = Arc::new(AtomicBool::new(false));
+        self.inner
+            .cancels
+            .lock()
+            .insert(op_id.clone(), token.clone());
         // The result sender is consumed by whoever runs first: the job's
         // closure (normal path) or the enqueue call (worker gone) — hence
         // the shared slot.
         let tx = Arc::new(Mutex::new(Some(tx)));
         let job_tx = tx.clone();
         let returned_op_id = op_id.clone();
+        let inner = self.inner.clone();
         let job = Job {
             run: Box::new(move || {
                 // Final-event copies: `ctx` is consumed by `run`.
@@ -179,12 +213,35 @@ impl OpQueue {
                 let final_kind = kind_owned.clone();
                 let ctx = OpCtx {
                     repo_id,
-                    op_id,
+                    op_id: op_id.clone(),
                     kind: kind_owned,
                     sink: sink.clone(),
                     last_emit: Mutex::new(None),
+                    cancel: Some(token.clone()),
                 };
+                // Cancelled while queued: skip execution, report as failed.
+                if token.load(Ordering::Acquire) {
+                    inner.cancels.lock().remove(&final_op);
+                    if let Some(sink) = &sink {
+                        sink.emit(&OpProgress {
+                            repo_id: final_repo,
+                            op_id: final_op,
+                            kind: final_kind,
+                            message: "cancelled".to_string(),
+                            pct: None,
+                            done: true,
+                            error: Some("cancelled".to_string()),
+                        });
+                    }
+                    if let Some(tx) = job_tx.lock().take() {
+                        let _ = tx.send(Err("cancelled".to_string()));
+                    }
+                    return;
+                }
                 let result = run(ctx);
+                // The registry entry dies with the op: a later cancel_op
+                // correctly reports "unknown/finished".
+                inner.cancels.lock().remove(&final_op);
                 let error = result.as_ref().err().cloned();
                 let event = OpProgress {
                     repo_id: final_repo,
@@ -246,7 +303,8 @@ impl OpQueue {
     }
 }
 
-/// Handout to one running op: identity fields plus the throttled emitter.
+/// Handout to one running op: identity fields, the throttled emitter, and
+/// the M12 cancellation token.
 pub struct OpCtx {
     repo_id: String,
     op_id: String,
@@ -254,6 +312,9 @@ pub struct OpCtx {
     sink: Option<Arc<dyn EventSink>>,
     /// Last emitted (throttled) progress timestamp; `None` = never.
     last_emit: Mutex<Option<Instant>>,
+    /// Cooperative cancellation token ([`OpQueue::cancel_op`] flips it);
+    /// always `Some` for queue-enqueued ops.
+    cancel: Option<Arc<AtomicBool>>,
 }
 
 impl OpCtx {
@@ -286,6 +347,30 @@ impl OpCtx {
                 error: None,
             });
         }
+    }
+
+    /// True once [`OpQueue::cancel_op`] targeted this op. Long-running
+    /// closures poll this between phases and bail out with an error (the
+    /// queue still emits the final done event).
+    // Convenience reader; netops paths take `cancel_token()` instead, so
+    // this is exercised by tests only.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn cancelled(&self) -> bool {
+        self.cancel
+            .as_ref()
+            .is_some_and(|t| t.load(Ordering::Acquire))
+    }
+
+    /// Shared clone of the cancellation token, for passing into engine
+    /// entry points that accept `Option<&AtomicBool>` (netops fetch/push).
+    pub fn cancel_token(&self) -> Option<Arc<AtomicBool>> {
+        self.cancel.clone()
+    }
+
+    /// Repo + op identity (diagnostics, sub-wiring).
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn ids(&self) -> (&str, &str) {
+        (&self.repo_id, &self.op_id)
     }
 }
 
@@ -548,6 +633,92 @@ mod tests {
             Ok(())
         });
         recv(rx).expect("ops succeed with no sink installed");
+        queue.shutdown();
+    }
+
+    // -------------------------------------------------------------------
+    // M12: cooperative cancellation
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn cancel_queued_op_skips_execution_and_queue_continues() {
+        let queue = queue();
+        let gate_rx = Arc::new(Mutex::new(None::<std::sync::mpsc::Receiver<()>>));
+        let (gate_tx, gate_r) = std::sync::mpsc::channel::<()>();
+        *gate_rx.lock() = Some(gate_r);
+
+        // Op 1 holds the single worker until the test releases the gate.
+        let (_id1, rx1) = {
+            let gate_rx = gate_rx.clone();
+            queue.enqueue("push", move |_ctx| {
+                if let Some(rx) = gate_rx.lock().take() {
+                    let _ = rx.recv(); // blocks the worker
+                }
+                Ok(1u32)
+            })
+        };
+        // Op 2 queues behind it; the test cancels it BEFORE it starts.
+        let ran = Arc::new(AtomicBool::new(false));
+        let (id2, rx2) = {
+            let ran = ran.clone();
+            queue.enqueue("push", move |_ctx| {
+                ran.store(true, Ordering::SeqCst);
+                Ok(2u32)
+            })
+        };
+        assert!(queue.cancel_op("test-repo", &id2), "queued op cancellable");
+
+        drop(gate_tx); // release op 1
+        assert_eq!(recv(rx1).unwrap(), 1, "running op finishes normally");
+        assert_eq!(recv(rx2).unwrap_err(), "cancelled", "queued op skipped");
+        assert!(!ran.load(Ordering::SeqCst), "skipped closure never ran");
+
+        // The queue keeps serving: a later op runs fine.
+        let (_id3, rx3) = queue.enqueue("stage", move |_ctx| Ok(3u32));
+        assert_eq!(recv(rx3).unwrap(), 3);
+        queue.shutdown();
+    }
+
+    #[test]
+    fn cancel_running_op_is_observed_by_ctx() {
+        let queue = queue();
+        const MAX_ITERS: u32 = 1000;
+        let (id, rx) = queue.enqueue("fetch", move |ctx| {
+            let mut iters = 0u32;
+            while iters < MAX_ITERS {
+                if ctx.cancelled() {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(2));
+                iters += 1;
+            }
+            Ok(iters)
+        });
+        // Give the worker a moment to enter the loop, then cancel.
+        std::thread::sleep(Duration::from_millis(30));
+        assert!(queue.cancel_op("test-repo", &id), "running op cancellable");
+        let iters = recv(rx).unwrap();
+        assert!(
+            iters < MAX_ITERS,
+            "cooperative stop must land before the loop ends (ran {iters})"
+        );
+        // Finished ops are no longer cancellable.
+        assert!(!queue.cancel_op("test-repo", &id), "finished op unknown");
+        queue.shutdown();
+    }
+
+    #[test]
+    fn cancel_unknown_or_foreign_ops_return_false() {
+        let queue = queue();
+        assert!(!queue.cancel_op("test-repo", "test-repo-op-never-existed"));
+        assert!(
+            !queue.cancel_op("other-repo", "test-repo-op-1"),
+            "foreign repo id never matches"
+        );
+        // A live op IS cancellable through the same path.
+        let (id, rx) = queue.enqueue("stage", move |_ctx| Ok(()));
+        recv(rx).unwrap();
+        assert!(!queue.cancel_op("test-repo", &id), "finished op unknown");
         queue.shutdown();
     }
 }

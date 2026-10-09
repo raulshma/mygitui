@@ -8,6 +8,8 @@
 -->
 <script lang="ts">
   import {
+    archiveSpec,
+    pickSaveFile,
     pushRepo,
     remotes,
     tagCreate,
@@ -113,6 +115,30 @@
     } catch (err) {
       toast(
         `Tag delete failed: ${err instanceof Error ? err.message : String(err)}`,
+        { kind: "error" },
+      );
+    }
+  }
+
+  /** M12: zip/tar export of the tag's tree via the save picker (the tag
+   *  name is the `git archive` spec; mirrors RepoPanel's archive form). */
+  async function onExportArchive(tag: TagInfo): Promise<void> {
+    const destination = await pickSaveFile("Export archive", `${tag.name}.zip`, [
+      { name: "Zip archive", extensions: ["zip"] },
+      { name: "Tar archive", extensions: ["tar", "gz"] },
+    ]);
+    if (!destination) return;
+    const format = destination.endsWith(".zip")
+      ? "zip"
+      : destination.endsWith(".tar")
+        ? "tar"
+        : "tar.gz";
+    try {
+      await archiveSpec(repoId, tag.name, format, destination);
+      toast(`Archive written to ${destination}`, { kind: "success" });
+    } catch (err) {
+      toast(
+        `Archive failed: ${err instanceof Error ? err.message : String(err)}`,
         { kind: "error" },
       );
     }
@@ -229,6 +255,15 @@
             {/if}
             <span class="sha">{tag.target.slice(0, 7)}</span>
             <span class="actions">
+              <button
+                class="tb"
+                type="button"
+                aria-label={`Export archive of tag ${tag.name}`}
+                title="Export this tag's tree as a zip/tar archive"
+                onclick={() => void onExportArchive(tag)}
+              >
+                Export…
+              </button>
               <button
                 class="tb danger"
                 type="button"

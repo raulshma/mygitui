@@ -22,12 +22,19 @@
     remoteRemove,
     remoteSetUrl,
     remotes,
+    repoDiff,
   } from "$lib/ipc/client";
-  import type { NetStats, RemoteBranchInfo, RemoteInfo } from "$lib/ipc/types";
+  import type {
+    FileDiff,
+    NetStats,
+    RemoteBranchInfo,
+    RemoteInfo,
+  } from "$lib/ipc/types";
   import { opsFor } from "$lib/stores/ops.svelte";
   import { autofetch } from "$lib/stores/autofetch.svelte";
   import { toast } from "$lib/toast";
   import ConfirmDialog from "$lib/components/safety/ConfirmDialog.svelte";
+  import DiffViewer from "$lib/components/diff/DiffViewer.svelte";
 
   let {
     repoId,
@@ -74,6 +81,8 @@
     // Reload when the repo switches.
     void repoId;
     editing = null;
+    compareKey = null;
+    compareFiles = null;
     void reload();
   });
 
@@ -234,6 +243,34 @@
         `Delete failed: ${err instanceof Error ? err.message : String(err)}`,
         { kind: "error" },
       );
+    }
+  }
+
+  // -- M12: compare remote branch with HEAD ------------------------------------
+  // There is no cross-panel compare event (CompareBar lives inside
+  // HistoryView), so the compare renders inline in this panel: repoDiff
+  // HEAD → <remote>/<branch>, result in a collapsible DiffViewer.
+
+  /** Key (`<remote>/<name>`) of the row whose compare result is open. */
+  let compareKey = $state<string | null>(null);
+  let compareFiles = $state<FileDiff[] | null>(null);
+  let compareLoading = $state(false);
+
+  async function onCompareHead(rb: RemoteBranchInfo): Promise<void> {
+    const key = `${rb.remote}/${rb.name}`;
+    compareKey = key;
+    compareFiles = null;
+    compareLoading = true;
+    try {
+      compareFiles = await repoDiff(repoId, { commit: "HEAD" }, { commit: key });
+    } catch (err) {
+      toast(
+        `Compare failed: ${err instanceof Error ? err.message : String(err)}`,
+        { kind: "error" },
+      );
+      compareKey = null;
+    } finally {
+      compareLoading = false;
     }
   }
 
@@ -410,6 +447,16 @@
                             Checkout
                           </button>
                         {/if}
+                        <!-- M12: diff HEAD against this remote branch inline. -->
+                        <button
+                          class="tb"
+                          type="button"
+                          aria-expanded={compareKey === `${rb.remote}/${rb.name}`}
+                          title="Diff HEAD against {rb.remote}/{rb.name}"
+                          onclick={() => void onCompareHead(rb)}
+                        >
+                          Compare with HEAD
+                        </button>
                         <button
                           class="tb danger"
                           type="button"
@@ -419,6 +466,31 @@
                           Delete
                         </button>
                       </li>
+                      {#if compareKey === `${rb.remote}/${rb.name}`}
+                        <li class="rb-compare">
+                          <div class="rb-compare-head">
+                            <span>HEAD ↔ {rb.remote}/{rb.name}
+                              {#if compareFiles}({compareFiles.length}
+                                file{compareFiles.length === 1 ? "" : "s"}){/if}
+                            </span>
+                            <button
+                              class="tb"
+                              type="button"
+                              aria-label="Close compare"
+                              onclick={() => (compareKey = null)}
+                            >×</button>
+                          </div>
+                          {#if compareLoading}
+                            <p class="rb-compare-state">Comparing…</p>
+                          {:else if compareFiles !== null && compareFiles.length === 0}
+                            <p class="rb-compare-state">No differences.</p>
+                          {:else if compareFiles}
+                            <div class="rb-compare-diff">
+                              <DiffViewer files={compareFiles} />
+                            </div>
+                          {/if}
+                        </li>
+                      {/if}
                     {/each}
                   </ul>
                 {/if}
@@ -892,5 +964,34 @@
     overflow: hidden;
     clip: rect(0 0 0 0);
     white-space: nowrap;
+  }
+
+  /* M12: inline HEAD ↔ remote-branch compare block. */
+  .rb-compare {
+    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
+    border-radius: var(--m3-shape-small, 8px);
+    padding: 0.3rem 0.4rem;
+  }
+
+  .rb-compare-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    font-size: 0.72rem;
+    font-family: ui-monospace, Consolas, monospace;
+    color: var(--m3-on-surface-variant, var(--m3-on-surface));
+  }
+
+  .rb-compare-state {
+    margin: 0.25rem 0 0;
+    font-size: 0.72rem;
+    color: var(--m3-on-surface-variant, var(--m3-on-surface));
+  }
+
+  .rb-compare-diff {
+    margin-top: 0.25rem;
+    max-height: 18rem;
+    overflow: auto;
   }
 </style>

@@ -19,6 +19,7 @@
 
 import { secretsDelete, secretsGet, secretsSet, SECRET_KEYS } from "$lib/ipc/client";
 import { ConnectionSupervisor } from "./connection";
+import { subscribeOpencodeEvents, type OpencodeEventSession } from "./opencodeEvents";
 import type { SupervisorOptions } from "./connection";
 import { OpenCodeProvider } from "./opencode";
 import { OpenRouterProvider } from "./openrouter";
@@ -62,6 +63,8 @@ export interface AiStoreDeps {
   providers?: Partial<ProviderSet>;
   /** Supervisor option overrides (tests). */
   supervisor?: Partial<Pick<SupervisorOptions, "now" | "scheduler" | "jitter">>;
+  /** Set `false` to disable the opencode SSE liveness stream (tests). */
+  events?: false;
 }
 
 /** Parses persisted config; drops malformed entries, fills defaults. */
@@ -133,6 +136,32 @@ export class AiStore {
       providers,
       config: () => this.config,
       ...deps.supervisor,
+    });
+
+    // M12: opencode SSE liveness — while the server streams /event, every
+    // decoded event refreshes transport freshness via the supervisor.
+    // Retry stays with the supervisor: the stream never reconnects itself;
+    // the next successful probe re-subscribes. Skipped when tests inject a
+    // provider (no real server to discover).
+    if (!deps.providers?.opencode && deps.events !== false) {
+      this.#supervisor.subscribe((statuses) => {
+        if (statuses.opencode.status === "ok") this.#ensureEvents();
+      });
+    }
+  }
+
+  #events: OpencodeEventSession | null = null;
+
+  /** Starts the SSE loop once per "opencode became ok" transition. */
+  #ensureEvents(): void {
+    if (this.#events) return;
+    this.#events = subscribeOpencodeEvents({
+      url: this.config.opencodeUrl ?? undefined,
+      password: () => secretsGet(SECRET_KEYS.opencodeServerPassword),
+      onEvent: () => this.#supervisor.noteTransportEvent("opencode"),
+      onEnded: () => {
+        this.#events = null;
+      },
     });
   }
 

@@ -18,7 +18,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use parking_lot::Mutex;
 use tauri::Emitter;
 
-use crate::engine::git_engine::{EngineError, EngineResult, GitEngine, GitEngineM3};
+use crate::engine::git_engine::{EngineError, EngineResult, GitEngine, GitEngineM12, GitEngineM3};
 use crate::engine::types::{RepoId, RepoInfo};
 use crate::graph::types::LaneState;
 use crate::ops::OpQueue;
@@ -34,6 +34,10 @@ pub fn default_engine() -> Arc<dyn GitEngine> {
 }
 
 fn m3_engine() -> Arc<dyn GitEngineM3> {
+    Arc::new(crate::engine::libgit2::Libgit2Engine::new())
+}
+
+fn m12_engine() -> Arc<dyn GitEngineM12> {
     Arc::new(crate::engine::libgit2::Libgit2Engine::new())
 }
 
@@ -91,6 +95,8 @@ pub struct RepoHandle {
     engine: Arc<dyn GitEngine>,
     /// M3 power/safety operations (merge, rebase, stash, checkpoints…).
     m3: Arc<dyn GitEngineM3>,
+    /// M12: signature verify, branch trash, worktree prune, bisect log.
+    m12: Arc<dyn GitEngineM12>,
     /// M2: serial op queue for mutations/net ops (contracts.md M2). M1
     /// read commands bypass it and share the `repo` mutex instead.
     ops: OpQueue,
@@ -124,6 +130,12 @@ impl RepoHandle {
     #[allow(dead_code)]
     pub fn m3(&self) -> Arc<dyn GitEngineM3> {
         self.m3.clone()
+    }
+
+    /// M12 operations (signature verify, branch trash, worktree prune,
+    /// bisect log).
+    pub fn m12(&self) -> Arc<dyn GitEngineM12> {
+        self.m12.clone()
     }
 
     /// M2: this repo's serial op queue (mutations + net ops).
@@ -251,6 +263,7 @@ impl RepoManager {
         }
 
         let repo_id = self.next_repo_id();
+        let git_dir_for_gc = normalize_root(repo.path().to_path_buf());
         let handle = Arc::new(RepoHandle {
             id: repo_id.clone(),
             ops: OpQueue::new(repo_id),
@@ -260,6 +273,7 @@ impl RepoManager {
             generation: Arc::new(AtomicU64::new(0)),
             engine: default_engine(),
             m3: m3_engine(),
+            m12: m12_engine(),
             lanes: Mutex::new(LaneState::default()),
             log_stream: Mutex::new(None),
             history_stream: Mutex::new(None),
@@ -268,6 +282,19 @@ impl RepoManager {
         });
         let info = repo_info_of(&handle);
         self.repos.lock().insert(handle.id.clone(), handle);
+
+        // M12: best-effort checkpoint auto-GC. The marker check + ref walk
+        // run on their own thread so even a huge repo never delays an open;
+        // the engine reopens its own handle (gc only reads/deletes hidden
+        // refs) and every error is swallowed inside `maybe_auto_gc`.
+        let _ = std::thread::Builder::new()
+            .name("ckpt-auto-gc".to_owned())
+            .spawn(move || {
+                if let Ok(repo) = git2::Repository::open(&git_dir_for_gc) {
+                    crate::engine::checkpoints::maybe_auto_gc(&repo);
+                }
+            });
+
         Ok(info)
     }
 

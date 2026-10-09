@@ -4,3 +4,7 @@ fixtures
 src-tauri/target
 .DS_Store
 *.local
+
+# Playwright (M12 e2e smoke)
+test-results
+playwright-report

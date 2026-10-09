@@ -25,6 +25,20 @@
     filePath = null,
     /** Hunk-header staging button label ("Unstage hunk" when unstaging). */
     stageLabel = "Stage hunk",
+    /** M12 line selection: O(1) membership check for a hunk line index. */
+    selectedAt = undefined,
+    /** M12 line selection: a gutter was clicked (extend = shift-click). */
+    onGutterClick = undefined,
+    /** M12 line selection: lines selected in THIS hunk (0 = none). */
+    selectionCount = 0,
+    /** M12 line selection: stage/unstage button label for the selection. */
+    selectionStageLabel = "Stage selected",
+    /** M12 line selection: stage/unstage the selected ranges of this hunk. */
+    onStageSelection = undefined,
+    /** M12 line selection: discard the selected ranges of this hunk. */
+    onDiscardSelection = undefined,
+    /** M12 AI: explain this hunk (viewer opens its explain panel). */
+    onExplainHunk = undefined,
   }: {
     row: DiffRow;
     onToggleCollapse?: (path: string) => void;
@@ -35,6 +49,17 @@
     onDiscardHunk?: (fileIndex: number, hunkIndex: number) => void;
     filePath?: string | null;
     stageLabel?: string;
+    selectedAt?:
+      | ((fileIndex: number, hunkIndex: number, lineIndex: number | null) => boolean)
+      | undefined;
+    onGutterClick?:
+      | ((fileIndex: number, hunkIndex: number, lineIndex: number, extend: boolean) => void)
+      | undefined;
+    selectionCount?: number;
+    selectionStageLabel?: string;
+    onStageSelection?: ((fileIndex: number, hunkIndex: number) => void) | undefined;
+    onDiscardSelection?: ((fileIndex: number, hunkIndex: number) => void) | undefined;
+    onExplainHunk?: ((fileIndex: number, hunkIndex: number) => void) | undefined;
   } = $props();
 
   /**
@@ -45,6 +70,19 @@
   function syntax(line: DiffLine): TokenSpan[] | null {
     if (filePath === null) return null;
     return cachedTokens(line.text, filePath);
+  }
+
+  /** M12: gutter click → selection start/extend (rows carry their owner). */
+  function gutter(fileIndex: number, hunkIndex: number, lineIndex: number, event: MouseEvent): void {
+    if (!onGutterClick) return;
+    onGutterClick(fileIndex, hunkIndex, lineIndex, event.shiftKey);
+  }
+
+  /** M12: membership check bound to this row's hunk. */
+  function selectedInRow(lineIndex: number | null): boolean {
+    if (lineIndex === null || !selectedAt) return false;
+    if (row.kind !== "line" && row.kind !== "context" && row.kind !== "pair") return false;
+    return selectedAt(row.fileIndex, row.hunkIndex, lineIndex);
   }
 </script>
 
@@ -90,6 +128,7 @@
   <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
   <div
     class="row hunk-header"
+    class:has-selection={selectionCount > 0}
     style:height={`${rowHeight(row)}px`}
     tabindex="0"
     role="heading"
@@ -97,44 +136,122 @@
     aria-label={`Hunk: old lines ${row.oldStart} to ${row.oldStart + row.oldCount - 1}, new lines ${row.newStart} to ${row.newStart + row.newCount - 1}`}
   >
     <span class="hh">@@ -{row.oldStart},{row.oldCount} +{row.newStart},{row.newCount} @@</span>
-    {#if onStageHunk || onDiscardHunk}
-      <span class="hunk-actions">
-        {#if onStageHunk}
-          <button
-            type="button"
-            onclick={() => onStageHunk?.(row.fileIndex, row.hunkIndex)}
-          >{stageLabel}</button>
-        {/if}
-        {#if onDiscardHunk}
-          <button
-            type="button"
-            class="discard"
-            onclick={() => onDiscardHunk?.(row.fileIndex, row.hunkIndex)}
-          >Discard hunk</button>
-        {/if}
-      </span>
+    {#if selectionCount > 0}
+      <span class="sel-count" aria-live="polite">{selectionCount} selected</span>
     {/if}
+    <span class="hunk-actions">
+      {#if selectionCount > 0 && onStageSelection}
+        <button
+          type="button"
+          class="sel"
+          onclick={(e) => {
+            e.stopPropagation();
+            onStageSelection?.(row.fileIndex, row.hunkIndex);
+          }}
+        >{selectionStageLabel}</button>
+      {/if}
+      {#if selectionCount > 0 && onDiscardSelection}
+        <button
+          type="button"
+          class="sel discard"
+          onclick={(e) => {
+            e.stopPropagation();
+            onDiscardSelection?.(row.fileIndex, row.hunkIndex);
+          }}
+        >Discard selected</button>
+      {/if}
+      {#if onStageHunk}
+        <button
+          type="button"
+          onclick={() => onStageHunk?.(row.fileIndex, row.hunkIndex)}
+        >{stageLabel}</button>
+      {/if}
+      {#if onDiscardHunk}
+        <button
+          type="button"
+          class="discard"
+          onclick={() => onDiscardHunk?.(row.fileIndex, row.hunkIndex)}
+        >Discard hunk</button>
+      {/if}
+      {#if onExplainHunk}
+        <button
+          type="button"
+          class="explain"
+          title="Explain this change with AI"
+          onclick={(e) => {
+            e.stopPropagation();
+            onExplainHunk?.(row.fileIndex, row.hunkIndex);
+          }}
+        >Explain</button>
+      {/if}
+    </span>
   </div>
 
 {:else if row.kind === "context"}
-  <div class="row line context" style:height={`${rowHeight(row)}px`}>
-    <span class="no">{row.line.old_no ?? ""}</span>
-    <span class="no">{row.line.new_no ?? ""}</span>
+  <div
+    class="row line context"
+    class:selected={selectedInRow(row.lineIndex)}
+    style:height={`${rowHeight(row)}px`}
+  >
+    <button
+      type="button"
+      class="no" class:click={onGutterClick !== undefined}
+      tabindex="-1"
+      aria-label="Select line {row.line.old_no ?? ""}"
+      onclick={(e) => {
+        e.stopPropagation();
+        gutter(row.fileIndex, row.hunkIndex, row.lineIndex, e);
+      }}
+    >{row.line.old_no ?? ""}</button>
+    <button
+      type="button"
+      class="no" class:click={onGutterClick !== undefined}
+      tabindex="-1"
+      aria-label="Select line {row.line.new_no ?? ""}"
+      onclick={(e) => {
+        e.stopPropagation();
+        gutter(row.fileIndex, row.hunkIndex, row.lineIndex, e);
+      }}
+    >{row.line.new_no ?? ""}</button>
     <span class="txt">{@render text(row.line)}</span>
   </div>
 
 {:else if row.kind === "pair"}
   <div class="row line pair" style:height={`${rowHeight(row)}px`}>
-    <div class="half{row.left ? " del" : " filler"}">
+    <div
+      class="half{row.left ? " del" : " filler"}"
+      class:selected={row.left !== null && selectedInRow(row.leftIndex)}
+    >
       {#if row.left}
-        <span class="no">{row.left.old_no ?? ""}</span>
+        <button
+          type="button"
+          class="no" class:click={onGutterClick !== undefined}
+          tabindex="-1"
+          aria-label="Select line {row.left.old_no ?? ""}"
+          onclick={(e) => {
+            e.stopPropagation();
+            gutter(row.fileIndex, row.hunkIndex, row.leftIndex ?? -1, e);
+          }}
+        >{row.left.old_no ?? ""}</button>
         <span class="sign del" aria-hidden="true">−</span>
         <span class="txt">{@render text(row.left)}</span>
       {/if}
     </div>
-    <div class="half right{row.right ? " add" : " filler"}">
+    <div
+      class="half right{row.right ? " add" : " filler"}"
+      class:selected={row.right !== null && selectedInRow(row.rightIndex)}
+    >
       {#if row.right}
-        <span class="no">{row.right.new_no ?? ""}</span>
+        <button
+          type="button"
+          class="no" class:click={onGutterClick !== undefined}
+          tabindex="-1"
+          aria-label="Select line {row.right.new_no ?? ""}"
+          onclick={(e) => {
+            e.stopPropagation();
+            gutter(row.fileIndex, row.hunkIndex, row.rightIndex ?? -1, e);
+          }}
+        >{row.right.new_no ?? ""}</button>
         <span class="sign add" aria-hidden="true">+</span>
         <span class="txt">{@render text(row.right)}</span>
       {/if}
@@ -144,9 +261,31 @@
 {:else if row.kind === "line"}
   {@const isAdd = row.line.origin === "+"}
   {@const isDel = row.line.origin === "-"}
-  <div class="row line single{isAdd ? " add" : isDel ? " del" : ""}" style:height={`${rowHeight(row)}px`}>
-    <span class="no">{row.line.old_no ?? ""}</span>
-    <span class="no">{row.line.new_no ?? ""}</span>
+  <div
+    class="row line single{isAdd ? " add" : isDel ? " del" : ""}"
+    class:selected={selectedInRow(row.lineIndex)}
+    style:height={`${rowHeight(row)}px`}
+  >
+    <button
+      type="button"
+      class="no" class:click={onGutterClick !== undefined}
+      tabindex="-1"
+      aria-label="Select line {row.line.old_no ?? ""}"
+      onclick={(e) => {
+        e.stopPropagation();
+        gutter(row.fileIndex, row.hunkIndex, row.lineIndex, e);
+      }}
+    >{row.line.old_no ?? ""}</button>
+    <button
+      type="button"
+      class="no" class:click={onGutterClick !== undefined}
+      tabindex="-1"
+      aria-label="Select line {row.line.new_no ?? ""}"
+      onclick={(e) => {
+        e.stopPropagation();
+        gutter(row.fileIndex, row.hunkIndex, row.lineIndex, e);
+      }}
+    >{row.line.new_no ?? ""}</button>
     <span class="sign{isAdd ? " add" : isDel ? " del" : ""}" aria-hidden="true">{row.line.origin.trim()}</span>
     <span class="txt">{@render text(row.line)}</span>
   </div>
@@ -190,6 +329,34 @@
     user-select: none;
     overflow: hidden;
     text-overflow: clip;
+  }
+
+  /* M12: gutters. tabindex=-1 keeps them OUT of the tab order — hunk
+     headers remain the only deliberate stops. The `click` affordance only
+     applies when the viewer actually wired a selection handler. */
+  button.no {
+    border: none;
+    background: none;
+    padding: 0 0.5rem 0 0;
+    margin: 0;
+    font: inherit;
+  }
+  button.no.click {
+    cursor: pointer;
+  }
+  button.no.click:hover {
+    color: var(--m3-on-surface);
+    text-decoration: underline;
+  }
+  button.no.click:focus-visible {
+    outline: 2px solid var(--m3-primary);
+    outline-offset: -2px;
+  }
+
+  /* M12: selected-line highlight (wins over the add/del wash). */
+  .row.line.selected > *,
+  .half.selected > * {
+    background: var(--diff-sel-bg, var(--diff-hl-bg));
   }
 
   .sign {
@@ -357,8 +524,17 @@
   }
   .row.hunk-header:hover .hunk-actions,
   .row.hunk-header:focus-within .hunk-actions,
-  .row.hunk-header:focus-visible .hunk-actions {
+  .row.hunk-header:focus-visible .hunk-actions,
+  /* An active line selection keeps its actions visible without hover. */
+  .row.hunk-header.has-selection .hunk-actions {
     display: inline-flex;
+  }
+  .sel-count {
+    flex: none;
+    font-size: 10px;
+    color: var(--m3-primary);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
   }
   .hunk-actions button {
     border: 1px solid var(--m3-outline-variant, transparent);
@@ -372,6 +548,14 @@
   }
   .hunk-actions button.discard {
     color: var(--m3-error);
+  }
+  .hunk-actions button.sel {
+    border-color: var(--m3-primary);
+    color: var(--m3-primary);
+    font-weight: 600;
+  }
+  .hunk-actions button.explain {
+    color: var(--m3-tertiary, var(--m3-primary));
   }
 
   /* ---- placeholders -------------------------------------------------------- */

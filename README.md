@@ -52,25 +52,41 @@ generated output — do not commit it.
   branch checkout and deletion
 - **Tags**: lightweight + annotated + signed (`git tag -s`), push tags
 - **History**: virtualized canvas graph (250k commits), regex + pickaxe
-  (`-S`) filters, two-ref compare, blame with jump-to-commit, file history
-  popout (rename-following), describe line, bookmarks, archive export
+  (`-S`/`-G`) filters, two-ref compare, blame with jump-to-commit, file
+  history popout (rename-following), describe line, bookmarks, archive
+  export
 - **Rewriting**: interactive rebase (reorder, squash/fixup/drop/edit/
   reword, `exec` lines), autosquash `fixup!`/`squash!`, cherry-pick and
   revert sequences with a 3-way conflict editor + external mergetool
   launch
 - **Safety net**: checkpoint undo system (pre-restore snapshots, GC),
-  dangerous-op previews, reflog recovery (reset/branch/show)
+  deleted-branch trash with one-click restore, dangerous-op previews,
+  reflog recovery (reset/branch/show)
 - **Network**: fetch (prune/depth), pull (ff/merge/**rebase**), push
-  (force, **force-with-lease**, tags, multi-ref, remote ref deletion),
-  ssh-agent/keyring auth, blobless (`--filter=blob:none`) clones
+  (force, **force-with-lease** with real expected-sha checking, tags,
+  multi-ref, remote ref deletion), ssh-agent/keyring auth, blobless
+  (`--filter=blob:none`) clones
 - **Bisect**: full stepper (start form, Good/Bad/Skip, first-bad result)
-- **Housekeeping**: worktrees, submodules, stashes, repo health panel
-  (sizes/objects) with `gc` / `prune` / `commit-graph` / `pack-refs`,
-  sparse checkout (cone mode), LFS status + pull/push
-- **Platform**: embedded terminal, custom shell actions, GitHub PRs + CI
-  checks (`gh` CLI), configurable layouts with popouts and split panes,
-  command palette + keybinds + context menus, M3 theming, syntax
+  with mark-history log
+- **Housekeeping**: worktrees (main entry + prune), submodules, stashes,
+  repo health panel (sizes/objects/**fsck dangling census**) with `gc` /
+  `prune` / `commit-graph` / `pack-refs`, sparse checkout (cone mode),
+  LFS status + pull/push
+- **Verification**: commit signature badges (GPG/SSH via
+  `git verify-commit`), signed fixture repos
+- **Platform**: embedded terminal, custom shell actions **with keyboard
+  shortcuts**, GitHub PRs + CI checks (`gh` CLI), configurable layouts
+  with popouts and split panes, command palette + keybinds + context
+  menus, M3 theming (accent-seed dynamic color + OS accent), syntax
   highlighting in diffs (Shiki), a11y throughout
+- **AI assist (opt-in per repo)**: commit message, PR title/desc,
+  explain-hunk, staged-diff review, stash message, branch-name
+  suggestion; connection health chip
+- **Diff workflow**: line-granular stage/unstage/discard (gutter
+  selection), blame with age heat and re-blame-at-parent
+- **Quality gates**: proptest roundtrips (hunk apply, checkpoint
+  restore), Playwright smoke flows, criterion benches with nightly
+  baseline comparison, watcher soak with RSS gate, 3-OS CI matrix
 
 ## Roadmap
 
@@ -83,8 +99,13 @@ push upgrades, mergetool, regex filter) →
 **M10 power git** (bisect, describe, autosquash, rebase `exec`, remote
 branch management, pickaxe) →
 **M11 repo health** (maintenance ops, archive, sparse checkout, blobless
-clone, LFS, syntax highlighting, i18n groundwork). See `docs/contracts.md`
-for the per-milestone IPC contracts.
+clone, LFS, syntax highlighting, i18n groundwork) →
+**M12 gap closure** (branch trash + restore, real force-with-lease,
+fsck census, op cancellation, gitignore-aware watcher, auto checkpoint
+GC, signature badges, pickaxe `-G`, bisect log, line staging, blame
+heat + re-blame, all six AI features, deep links, first-launch argv,
+proptests + soak + baseline-compare gates, Playwright smoke). See
+`docs/contracts.md` for the per-milestone IPC contracts.
 
 
 ## License

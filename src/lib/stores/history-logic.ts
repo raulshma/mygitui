@@ -121,6 +121,11 @@ export interface HistoryFilterFields {
   before: string;
   /** Pickaxe -S: patches must add or remove this string (M10). */
   pickaxe: string;
+  /**
+   * Pickaxe -G: patches must match this regex (M12). Optional (default "")
+   * so persisted older filter literals stay type-compatible.
+   */
+  pickaxeRegex?: string;
 }
 
 export const EMPTY_FILTER: HistoryFilterFields = {
@@ -131,6 +136,7 @@ export const EMPTY_FILTER: HistoryFilterFields = {
   after: "",
   before: "",
   pickaxe: "",
+  pickaxeRegex: "",
 };
 
 const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -156,12 +162,15 @@ export function dayToUnixSeconds(
 /**
  * Serializes filter-bar fields into the exact backend `LogFilter` shape.
  * `refs` stays a filter-bar non-concern; `follow` marks a file-history walk
- * (rename-following, single path).
+ * (rename-following, single path). `pickaxe_regex` is only emitted when set
+ * (keeps the serialized default shape identical to the M10 contract, and
+ * `-S`/`-G` may both be present — the backend intersects them).
  */
 export function toLogFilter(
   fields: HistoryFilterFields,
   opts: { follow?: boolean } = {},
 ): LogFilter {
+  const pickaxeRegex = fields.pickaxeRegex?.trim() || null;
   return {
     text: fields.text.trim() || null,
     regex: fields.regex,
@@ -172,6 +181,7 @@ export function toLogFilter(
     refs: [],
     follow: opts.follow ?? false,
     pickaxe: fields.pickaxe.trim() || null,
+    ...(pickaxeRegex !== null ? { pickaxe_regex: pickaxeRegex } : {}),
   };
 }
 

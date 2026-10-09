@@ -11,7 +11,14 @@
    * input + native folder picker), then either an existing not-checked-out
    * branch or a new branch name.
    */
-  import { branches, pickFolder, worktreeAdd, worktreeRemove, worktrees } from "$lib/ipc/client";
+  import {
+    branches,
+    pickFolder,
+    worktreeAdd,
+    worktreePrune,
+    worktreeRemove,
+    worktrees,
+  } from "$lib/ipc/client";
   import type { BranchInfo, WorktreeInfo } from "$lib/ipc/types";
   import { openTab } from "$lib/stores/tabs.svelte";
   import { toast } from "$lib/toast";
@@ -57,6 +64,31 @@
 
   /** Branches safe to check out in a new worktree (not checked out here). */
   const candidates = $derived(worktreeCandidateBranches(allBranches));
+
+  /**
+   * M12: the backend now lists the main worktree too (`is_main`); this
+   * panel already renders the repo's own root as the synthetic "main" card
+   * above, so a backend main entry for the same path is dropped (chip or
+   * not, it would be a duplicate row). Main entries for OTHER roots (this
+   * tab is itself a linked worktree) stay — with the main chip.
+   */
+  const linked = $derived(list.filter((info) => info.path !== root));
+
+  async function onPrune(): Promise<void> {
+    busy = true;
+    try {
+      const pruned = await worktreePrune(repoId);
+      toast(`Pruned ${pruned} stale worktree${pruned === 1 ? "" : "s"}`, {
+        kind: "success",
+      });
+      await reload();
+      onMutated?.();
+    } catch (err) {
+      fail("Prune worktrees", err);
+    } finally {
+      busy = false;
+    }
+  }
 
   $effect(() => {
     // Reload when the repo switches.
@@ -177,6 +209,16 @@
     <button class="act" type="button" onclick={() => (formOpen = !formOpen)} disabled={busy}>
       {formOpen ? "Close form" : "Add worktree"}
     </button>
+    <!-- M12: git worktree prune — drops stale admin dirs for deleted paths. -->
+    <button
+      class="act"
+      type="button"
+      disabled={busy}
+      title="git worktree prune — remove administration entries for deleted worktree folders"
+      onclick={() => void onPrune()}
+    >
+      Prune stale…
+    </button>
     <button class="tb" type="button" onclick={() => void reload()} disabled={loading}>
       {loading ? "Loading…" : "Refresh"}
     </button>
@@ -266,10 +308,15 @@
           </button>
         </div>
       </li>
-      {#each list as info (info.path)}
+      {#each linked as info (info.path)}
         <li class="card">
           <div class="row">
             <span class="name">{info.name}</span>
+            {#if info.is_main}
+              <!-- M12: marks the repository's true main worktree (this tab is
+                   itself a linked one). -->
+              <span class="badge main-badge" title="The repository's main worktree">main</span>
+            {/if}
             {#each worktreeBadges(info) as badge (badge.label)}
               <span
                 class="badge"

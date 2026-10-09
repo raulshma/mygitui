@@ -14,12 +14,15 @@
  * (`setInterval`/`clearInterval`) and storage are injectable for tests.
  */
 
-import { fetchRepo, remotes } from "$lib/ipc/client";
-import type { NetStats, RepoId } from "$lib/ipc/types";
+import { branches, fetchRepo, remotes } from "$lib/ipc/client";
+import type { BranchInfo, NetStats, RepoId } from "$lib/ipc/types";
 import { toast } from "$lib/toast";
 
 /** localStorage key: `{ [repoId]: minutes }`. */
 export const AUTOFETCH_STORAGE_KEY = "mygitui.autofetch";
+
+/** Max "upstream moved" toasts per fetch cycle (M12). */
+export const UPSTREAM_MOVED_TOAST_CAP = 3;
 
 /** Minimal storage surface this store needs (subset of DOM `Storage`). */
 export interface StorageLike {
@@ -72,6 +75,31 @@ interface RunningFetch {
   remote: string;
 }
 
+/**
+ * M12 upstream-moved detection (pure): given the previous cycle's
+ * branch → behind counts and the fresh branch list, returns the messages to
+ * toast — one per local branch that is behind its upstream (behind > 0,
+ * upstream not gone) whose behind-count INCREASED or appeared since last
+ * cycle, capped at {@link UPSTREAM_MOVED_TOAST_CAP} entries. Also returns
+ * the current counts map to store for the next cycle.
+ */
+export function upstreamMoved(
+  previous: ReadonlyMap<string, number>,
+  list: readonly BranchInfo[],
+): { messages: string[]; current: Map<string, number> } {
+  const current = new Map<string, number>();
+  const messages: string[] = [];
+  for (const branch of list) {
+    if (branch.behind <= 0 || branch.gone) continue;
+    current.set(branch.name, branch.behind);
+    const before = previous.get(branch.name);
+    if (before === undefined || branch.behind > before) {
+      messages.push(`upstream moved: ${branch.name} is ${branch.behind} behind`);
+    }
+  }
+  return { messages: messages.slice(0, UPSTREAM_MOVED_TOAST_CAP), current };
+}
+
 export class AutofetchStore {
   /** Configured interval minutes per repo (0 = off); persisted on change. */
   config: Record<RepoId, number> = $state({});
@@ -79,6 +107,8 @@ export class AutofetchStore {
   #storage: StorageLike | null;
   #scheduler: Scheduler;
   #running = new Map<RepoId, RunningFetch>();
+  /** M12: last cycle's branch → behind counts, per repo (dedupe baseline). */
+  #lastBehind = new Map<RepoId, Map<string, number>>();
 
   constructor(
     storage: StorageLike | null = defaultStorage(),
@@ -136,6 +166,9 @@ export class AutofetchStore {
         .then((stats: NetStats) => {
           if (stats.updated_refs.length > 0) {
             toast(`${remote} updated: ${stats.updated_refs.length} refs`);
+            // M12: after refs moved, check which local branches fell behind
+            // their upstream and toast the deltas (capped, deduped).
+            void this.reportUpstreamMoved(repoId);
           }
         })
         .catch((err: unknown) => {
@@ -155,7 +188,29 @@ export class AutofetchStore {
     const running = this.#running.get(repoId);
     if (!running) return;
     this.#running.delete(repoId);
+    this.#lastBehind.delete(repoId);
     this.#scheduler.clearInterval(running.timer);
+  }
+
+  /**
+   * M12: after a fetch updated refs, re-reads the branch list and toasts
+   * "upstream moved" for every local branch whose behind-count increased or
+   * appeared since the previous cycle (cap {@link UPSTREAM_MOVED_TOAST_CAP}
+   * per cycle; branch-list failures are silent — the toast is a bonus).
+   */
+  async reportUpstreamMoved(repoId: RepoId): Promise<void> {
+    let list: BranchInfo[];
+    try {
+      list = await branches(repoId);
+    } catch {
+      return;
+    }
+    const { messages, current } = upstreamMoved(
+      this.#lastBehind.get(repoId) ?? new Map<string, number>(),
+      list,
+    );
+    this.#lastBehind.set(repoId, current);
+    for (const message of messages) toast(message);
   }
 
   /** Stops every running interval (test helper / teardown). */

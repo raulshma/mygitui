@@ -17,6 +17,7 @@
   import { toast } from "$lib/toast";
   import { relativeAge, shortSha, stashRef } from "./panelModel";
   import ConfirmDialog from "$lib/components/safety/ConfirmDialog.svelte";
+  import StashMessageButton from "$lib/components/ai/StashMessageButton.svelte";
 
   let {
     repoId,
@@ -171,6 +172,10 @@
         placeholder="Stash message (optional)"
         aria-label="Stash message"
         bind:value={message}
+      />
+      <StashMessageButton
+        {repoId}
+        onMessage={(suggested) => (message = suggested)}
       />
       <div class="opts">
         <label class="toggle" title="Keep changes already staged in the index">

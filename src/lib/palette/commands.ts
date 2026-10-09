@@ -56,7 +56,9 @@ import { resetBindings } from "$lib/palette/keybinds";
 import {
   currentScheme,
   getThemePreference,
+  initTheme,
   setThemePreference,
+  setUserSeedColor,
   type ThemePreference,
 } from "$lib/theme";
 
@@ -216,6 +218,18 @@ function runThemeToggle(): void {
   const target = oppositeScheme();
   setThemePreference(target);
   ok(`Theme set to ${target}`);
+}
+
+// M12: accent seed color (dynamic color). The dialog owns the picker UI;
+// commands only dispatch the open event / clear the override.
+async function runSeedSet(): Promise<void> {
+  dispatch("open-seed-dialog");
+}
+
+async function runSeedReset(): Promise<void> {
+  setUserSeedColor(null);
+  await initTheme();
+  ok("Accent seed reset to the baseline palette");
 }
 
 // ---------------------------------------------------------------------------
@@ -607,6 +621,20 @@ export const COMMANDS: Command[] = [
       setThemePreference("system");
       ok(`Theme follows the system (${currentScheme()})`);
     },
+  },
+  {
+    id: "app.theme-seed-set",
+    title: "Appearance: Set accent seed color…",
+    section: "App",
+    keywords: ["dynamic color", "accent", "material you", "palette"],
+    run: () => runSeedSet(),
+  },
+  {
+    id: "app.theme-seed-reset",
+    title: "Appearance: Reset accent seed color",
+    section: "App",
+    keywords: ["appearance", "baseline palette", "default colors"],
+    run: () => runSeedReset(),
   },
   {
     id: "app.keybinds-reset",

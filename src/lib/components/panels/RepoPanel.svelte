@@ -1,12 +1,13 @@
 <!--
-  RepoPanel (M11) — repository health, maintenance, archive export,
-  sparse-checkout (cone mode), and LFS in one place.
+  RepoPanel (M11, fsck added in M12) — repository health, maintenance,
+  archive export, sparse-checkout (cone mode), and LFS in one place.
 
   Health refreshes on mount + after every maintenance run. Maintenance ops
   run on the backend op queue and toast their output. Archive asks for the
   destination via the save-file picker. Sparse edits apply cone-mode
   patterns (empty list = full checkout). LFS degrades gracefully when the
-  binary is absent.
+  binary is absent. "Check objects (fsck)" runs the fsck op and reveals a
+  dangling-objects block (hidden until the first run).
 -->
 <script lang="ts">
   import {
@@ -21,6 +22,7 @@
   } from "$lib/ipc/client";
   import type { LfsStatus, RepoHealth, SparseInfo } from "$lib/ipc/types";
   import { toast } from "$lib/toast";
+  import { formatRelativeTime } from "$lib/stores/history-logic";
 
   let {
     repoId,
@@ -33,6 +35,9 @@
   let health = $state<RepoHealth | null>(null);
   let error = $state<string | null>(null);
   let running = $state<string | null>(null);
+  /** M12: local record of when the last fsck ran (no backend timestamp in
+   *  RepoHealth — the FE timestamp covers this session). */
+  let fsckRanAt = $state<number | null>(null);
 
   // Archive form
   let archiveSpecText = $state("HEAD");
@@ -85,6 +90,7 @@
     running = op;
     try {
       const output = await maintenanceRun(repoId, op);
+      if (op === "fsck") fsckRanAt = Date.now();
       toast(`${label} done${output ? `: ${output}` : ""}`, { kind: "success" });
       await reload();
       onMutated?.();
@@ -95,6 +101,16 @@
       );
     } finally {
       running = null;
+    }
+  }
+
+  /** Copies a dangling-object sha to the clipboard (M12). */
+  async function copySha(sha: string): Promise<void> {
+    try {
+      await navigator.clipboard.writeText(sha);
+      toast("SHA copied to clipboard", { kind: "success" });
+    } catch {
+      toast("Could not copy the SHA", { kind: "error" });
     }
   }
 
@@ -215,7 +231,36 @@
         <button class="tb" type="button" disabled={running !== null} title="git gc --auto — pack, repack, and tidy" onclick={() => void run("gc", "GC")}>
           GC
         </button>
+        <!-- M12: git fsck — object-store integrity + dangling-object census.
+             The result block below stays hidden until the first run
+             (fsck_dangling is null in a fresh RepoHealth). -->
+        <button class="tb" type="button" disabled={running !== null} title="git fsck — check object connectivity and list dangling objects" onclick={() => void run("fsck", "Check objects")}>
+          Check objects (fsck)
+        </button>
       </div>
+
+      {#if health.fsck_dangling !== null}
+        <div class="fsck" aria-label="Dangling objects">
+          <p class="state">
+            Dangling objects: {health.fsck_dangling}{#if fsckRanAt}
+              (checked {formatRelativeTime(Math.floor(fsckRanAt / 1000))}){/if}
+          </p>
+          {#if health.fsck_samples.length > 0}
+            <div class="fsck-samples">
+              {#each health.fsck_samples as sha (sha)}
+                <button
+                  class="sha"
+                  type="button"
+                  title="Copy {sha}"
+                  onclick={() => void copySha(sha)}
+                >
+                  {sha.slice(0, 12)}
+                </button>
+              {/each}
+            </div>
+          {/if}
+        </div>
+      {/if}
     </section>
 
     <section class="group" aria-label="Archive export">
@@ -453,5 +498,40 @@
 
   code {
     font-family: ui-monospace, Consolas, monospace;
+  }
+
+  /* M12: fsck dangling-objects block. */
+  .fsck {
+    margin-top: 0.375rem;
+  }
+
+  .fsck .state {
+    margin-bottom: 0.25rem;
+  }
+
+  .fsck-samples {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25rem;
+  }
+
+  button.sha {
+    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
+    border-radius: var(--m3-shape-extra-small, 4px);
+    background: none;
+    color: var(--m3-on-surface-variant, var(--m3-on-surface));
+    font-family: ui-monospace, Consolas, monospace;
+    font-size: 0.6875rem;
+    padding: 0.1rem 0.35rem;
+    cursor: pointer;
+  }
+
+  button.sha:hover {
+    background: var(--m3-surface-container-high, var(--m3-surface));
+  }
+
+  button.sha:focus-visible {
+    outline: 2px solid var(--m3-primary);
+    outline-offset: 1px;
   }
 </style>

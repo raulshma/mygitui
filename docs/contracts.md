@@ -542,11 +542,13 @@ Additive contracts only; all commands take `repo_id` unless noted.
 
 Shape changes (additive, mirrored in `src/lib/ipc/types.ts`):
 - `LogFilter.pickaxe_regex` — pickaxe `-G` (patch regex) alongside `-S`.
-- `RepoHealth.fsck_dangling` / `fsck_samples` — from `git fsck` on demand.
+- `RepoHealth.fsck_dangling` / `fsck_samples` — filled from the `<gitdir>/mygitui/fsck.json` cache written by `maintenance_run(op: "fsck")` (the op parses `git fsck --no-progress --dangling` on both streams and caches count + up to 10 sample shas).
 - `WorktreeInfo.is_main`; `MergetoolInfo.path` / `cmd` (mergetool.<tool> introspection).
 - `CommitSignature`, `SignatureKind`, `BranchTrashEntry`, `BisectLogEntry` (new types).
 
 Platform:
+- Dynamic color: `os_accent_color` (Windows DWM registry accent → seed) + `mygitui.seed` localStorage override (palette: "Appearance: Set/Reset accent seed color…"); resolution order override → OS accent → baseline.
+- opencode SSE: `subscribeOpencodeEvents` consumes `GET /event` (fetch-based, basic-auth) and feeds the supervisor's `noteTransportEvent` — transport liveness refreshes `lastCheck`; a down backend re-probes instead of trusting the stream. Retry stays with the supervisor.
 - Deep links: `mygitui://open?path=<abs>` — `tauri-plugin-deep-link`, schemes in `tauri.conf.json`, frontend router `src/lib/entry/deeplink.ts` (same open-repo-tab path as `cli-args`).
 - First-launch argv: `CliArgs` state captured in `run()`, served by `cli_args_initial`.
 - Updater: release workflow overlays `plugins.updater` (pubkey + GitHub latest.json endpoint) only when the `TAURI_UPDATER_PUBKEY` secret exists; signing env vars always wired (`TAURI_SIGNING_PRIVATE_KEY[_PASSWORD]`).

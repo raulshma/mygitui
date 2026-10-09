@@ -13,6 +13,7 @@ import {
   diffSummaryText,
   explainHunkPrompt,
   formatFileDiff,
+  formatHunkText,
   MAX_DIFF_CHARS,
   parseBranchName,
   parseCommitMessage,
@@ -298,6 +299,23 @@ describe("formatFileDiff / stagedDiffText", () => {
 
   it("diffSummaryText lists path with +/- counts", () => {
     expect(diffSummaryText([FILE])).toBe("- src/a.ts (+2/-1)");
+  });
+});
+
+describe("formatHunkText", () => {
+  it("renders one hunk with header, markers and '=' as context", () => {
+    const text = formatHunkText(FILE.hunks[0]);
+    expect(text.startsWith("@@ -1 +1 @@")).toBe(true);
+    expect(text).toContain("\n-const b = 2;");
+    expect(text).toContain("\n+const b = 3;");
+    expect(text).toContain(" export { a, b };");
+    expect(text).not.toContain("=export");
+  });
+
+  it("is exactly the per-hunk slice of formatFileDiff (minus file headers)", () => {
+    const whole = formatFileDiff(FILE);
+    const slice = formatHunkText(FILE.hunks[0]);
+    expect(whole.endsWith(slice)).toBe(true);
   });
 });
 

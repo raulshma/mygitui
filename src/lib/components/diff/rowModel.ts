@@ -54,21 +54,37 @@ export interface RowHunkHeader {
   newStart: number;
   newCount: number;
 }
-/** Unified mode, or a context line rendered on its own row. */
+/**
+ * Unified mode, or a context line rendered on its own row. Owner fields
+ * (M12) let the row handle gutter clicks / selection without parallel
+ * lookups: `lineIndex` is the position in the owning hunk's `lines`.
+ */
 export interface RowLine {
   kind: "line";
   line: DiffLine;
+  fileIndex: number;
+  hunkIndex: number;
+  lineIndex: number;
 }
 /** Split mode: unchanged line spanning both halves. */
 export interface RowContext {
   kind: "context";
   line: DiffLine;
+  fileIndex: number;
+  hunkIndex: number;
+  lineIndex: number;
 }
 /** Split mode: aligned deletion/addition; `null` pads the shorter run. */
 export interface RowPair {
   kind: "pair";
   left: DiffLine | null;
   right: DiffLine | null;
+  fileIndex: number;
+  hunkIndex: number;
+  /** Index of `left` in the hunk's lines (`null` when padded). */
+  leftIndex: number | null;
+  /** Index of `right` in the hunk's lines (`null` when padded). */
+  rightIndex: number | null;
 }
 export interface RowBinary {
   kind: "binary";
@@ -145,13 +161,19 @@ export function rowHeights(rows: readonly DiffRow[]): number[] {
  * form a block; k-th '-' pairs with k-th '+' of the block; the longer run
  * pads with null. (libgit2 emits '-'-runs before '+'-runs per block, but the
  * walker is order-agnostic so interleaved orders still pair sensibly.)
+ * `fileIndex`/`hunkIndex` are stamped onto every row (M12 selection owner).
  */
-function appendHunkBodySplit(lines: readonly DiffLine[], rows: DiffRow[]): void {
+function appendHunkBodySplit(
+  lines: readonly DiffLine[],
+  rows: DiffRow[],
+  fileIndex: number,
+  hunkIndex: number,
+): void {
   let i = 0;
   while (i < lines.length) {
     const line = lines[i];
     if (isContextLine(line)) {
-      rows.push({ kind: "context", line });
+      rows.push({ kind: "context", line, fileIndex, hunkIndex, lineIndex: i });
       i++;
       continue;
     }
@@ -174,6 +196,10 @@ function appendHunkBodySplit(lines: readonly DiffLine[], rows: DiffRow[]): void 
         kind: "pair",
         left: d < i ? lines[d] : null,
         right: a < i ? lines[a] : null,
+        fileIndex,
+        hunkIndex,
+        leftIndex: d < i ? d : null,
+        rightIndex: a < i ? a : null,
       });
       if (d < i) d++;
       if (a < i) a++;
@@ -236,13 +262,19 @@ export function buildRowModel(
       });
       fileIndexes.push(fileIndex);
       if (mode === "unified") {
-        for (const line of hunk.lines) {
-          rows.push({ kind: "line", line });
+        for (let lineIndex = 0; lineIndex < hunk.lines.length; lineIndex++) {
+          rows.push({
+            kind: "line",
+            line: hunk.lines[lineIndex],
+            fileIndex,
+            hunkIndex,
+            lineIndex,
+          });
           fileIndexes.push(fileIndex);
         }
       } else {
         const before = rows.length;
-        appendHunkBodySplit(hunk.lines, rows);
+        appendHunkBodySplit(hunk.lines, rows, fileIndex, hunkIndex);
         for (let i = before; i < rows.length; i++) fileIndexes.push(fileIndex);
       }
     }

@@ -698,6 +698,48 @@ fn commit_touches_string(
     Ok(false)
 }
 
+/// Pickaxe `-G` test: does the commit's patch text (the added + removed
+/// lines) match `re`? Same per-commit tree-diff walk as [`commit_touches_string`]
+/// (M12); the +/- lines are joined into one buffer so the regex matches as
+/// if the whole patch text were the haystack. Like git's `-G`, matching is
+/// line-oriented: use `(?m)` anchors to bind to line boundaries (diff line
+/// content already carries its trailing newline; a missing one is added so
+/// lines stay separated).
+fn commit_touches_regex(
+    repo: &Repository,
+    commit: &Commit<'_>,
+    re: &regex::Regex,
+) -> EngineResult<bool> {
+    let tree = tree_of(commit)?;
+    let parent_tree = commit.parent(0).ok().map(|p| tree_of(&p)).transpose()?;
+    let mut diff = repo.diff_tree_to_tree(parent_tree.as_ref(), Some(&tree), None)?;
+    let mut find = DiffFindOptions::new();
+    find.renames(true).copies(false);
+    let _ = diff.find_similar(Some(&mut find));
+    let mut patch_text = String::new();
+    for delta_idx in 0..diff.deltas().len() {
+        let patch = match Patch::from_diff(&diff, delta_idx)? {
+            Some(patch) => patch,
+            None => continue, // binary delta
+        };
+        for hunk_idx in 0..patch.num_hunks() {
+            for line_idx in 0..patch.num_lines_in_hunk(hunk_idx)? {
+                let line = patch.line_in_hunk(hunk_idx, line_idx)?;
+                let origin = line.origin();
+                if origin != '+' && origin != '-' {
+                    continue;
+                }
+                let content = String::from_utf8_lossy(line.content()).into_owned();
+                patch_text.push_str(&content);
+                if !content.ends_with('\n') {
+                    patch_text.push('\n');
+                }
+            }
+        }
+    }
+    Ok(re.is_match(&patch_text))
+}
+
 /// `--follow` support: diff the commit against its first parent with rename
 /// detection; if the followed path was renamed here, shift `current` to the
 /// old name so older commits are matched under their historical name.
@@ -861,6 +903,17 @@ impl GitEngine for Libgit2Engine {
         } else {
             None
         };
+        // Pickaxe -G (M12): compiled once per walk, same fail-fast treatment
+        // for invalid patterns as the `regex` log filter above.
+        let pickaxe_regex = filter
+            .pickaxe_regex
+            .as_deref()
+            .filter(|r| !r.is_empty())
+            .map(|r| {
+                regex::Regex::new(r)
+                    .map_err(|e| EngineError::Invalid(format!("invalid pickaxe regex `{r}`: {e}")))
+            })
+            .transpose()?;
 
         let decos = decorations(repo)?;
         let mut walk = repo.revwalk()?;
@@ -942,20 +995,29 @@ impl GitEngine for Libgit2Engine {
 
             let commit = repo.find_commit(oid)?;
 
-            // Pickaxe (-S): the commit's patch must add or remove the needle.
-            if let Some(needle) = &filter.pickaxe {
-                if !needle.is_empty() {
-                    if pickaxe_examined >= LOG_CURSOR_SCAN_LIMIT {
-                        // Budget exhausted: the caller resumes from the last
-                        // examined commit, so the stream continues in a fresh
-                        // page instead of silently dropping the rest of the
-                        // walk. The cursor advances every page, so this stays
-                        // finite.
-                        next_cursor = Some(commit.id().to_string());
-                        break;
-                    }
-                    pickaxe_examined += 1;
+            // Pickaxe (-S / -G): the commit's patch must add or remove the
+            // needle (-S) AND match the regex (-G) — git requires both when
+            // they are given together, so do we. One scan budget covers
+            // both: each candidate's patch is examined at most once per page.
+            let pickaxe_s = filter.pickaxe.as_deref().filter(|p| !p.is_empty());
+            if pickaxe_s.is_some() || pickaxe_regex.is_some() {
+                if pickaxe_examined >= LOG_CURSOR_SCAN_LIMIT {
+                    // Budget exhausted: the caller resumes from the last
+                    // examined commit, so the stream continues in a fresh
+                    // page instead of silently dropping the rest of the
+                    // walk. The cursor advances every page, so this stays
+                    // finite.
+                    next_cursor = Some(commit.id().to_string());
+                    break;
+                }
+                pickaxe_examined += 1;
+                if let Some(needle) = pickaxe_s {
                     if !commit_touches_string(repo, &commit, needle)? {
+                        continue;
+                    }
+                }
+                if let Some(re) = pickaxe_regex.as_ref() {
+                    if !commit_touches_regex(repo, &commit, re)? {
                         continue;
                     }
                 }
@@ -1267,5 +1329,229 @@ impl GitEngine for Libgit2Engine {
         progress: &mut dyn FnMut(PushProgress),
     ) -> EngineResult<NetStats> {
         self.push_impl(repo, opts, progress)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// M12 tests: pickaxe -G (this file's other M12 work lives in signing.rs /
+// bisect.rs so lanes never share an impl block).
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod m12_pickaxe_tests {
+    use std::path::{Path, PathBuf};
+
+    use git2::{IndexAddOption, Repository, RepositoryInitOptions};
+
+    use super::*;
+
+    const ENGINE: Libgit2Engine = Libgit2Engine;
+
+    struct TempDir(PathBuf);
+
+    impl TempDir {
+        fn new(name: &str) -> TempDir {
+            let dir =
+                std::env::temp_dir().join(format!("mygitui-pickaxe-{}-{name}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).expect("create temp dir");
+            TempDir(dir)
+        }
+
+        fn path(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let dir = self.0.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+                let _ = std::fs::remove_dir_all(dir);
+            });
+        }
+    }
+
+    struct Fixture {
+        repo: Repository,
+        _dir: Option<TempDir>,
+    }
+
+    fn init_fixture(name: &str) -> Fixture {
+        let dir = TempDir::new(name);
+        let mut opts = RepositoryInitOptions::new();
+        opts.bare(false).initial_head("main");
+        let repo = Repository::init_opts(dir.path(), &opts).expect("init temp repo");
+        repo.config()
+            .and_then(|mut c| {
+                c.set_str("user.name", "Pickaxe Test")?;
+                c.set_str("user.email", "pickaxe@test.local")?;
+                c.set_bool("core.autocrlf", false)
+            })
+            .expect("configure identity");
+        Fixture {
+            repo,
+            _dir: Some(dir),
+        }
+    }
+
+    fn commit_file(repo: &Repository, path: &str, content: &str, message: &str) -> String {
+        let file = repo.workdir().unwrap().join(path);
+        if let Some(parent) = file.parent() {
+            std::fs::create_dir_all(parent).expect("mkdir");
+        }
+        std::fs::write(file, content).expect("write file");
+        let mut index = repo.index().expect("index");
+        index
+            .add_all(["*"].iter(), IndexAddOption::DEFAULT, None)
+            .expect("add all");
+        index.write().expect("write index");
+        let tree_oid = index.write_tree().expect("write tree");
+        let tree = repo.find_tree(tree_oid).expect("tree");
+        let sig = repo.signature().expect("signature");
+        let mut parents = Vec::new();
+        if let Ok(head) = repo.head() {
+            parents.push(head.peel_to_commit().expect("head commit"));
+        }
+        let parent_refs: Vec<&git2::Commit<'_>> = parents.iter().collect();
+        repo.commit(Some("HEAD"), &sig, &sig, message, &tree, &parent_refs)
+            .expect("commit")
+            .to_string()
+    }
+
+    /// c1 base; c2 adds "alpha NEEDLE" to f.txt; c3 adds "NEEDLE" to a new
+    /// g.txt (patch has no "alpha"); c4 edits the "alpha NEEDLE" line away
+    /// (removes the old line, adds a new one).
+    fn token_fixture(name: &str) -> (Fixture, [String; 4]) {
+        let fx = init_fixture(name);
+        let c1 = commit_file(&fx.repo, "f.txt", "one\ntwo\n", "c1 base");
+        let c2 = commit_file(
+            &fx.repo,
+            "f.txt",
+            "one\ntwo\nalpha NEEDLE\n",
+            "c2 add token",
+        );
+        let c3 = commit_file(&fx.repo, "g.txt", "NEEDLE only\n", "c3 other file");
+        let c4 = commit_file(
+            &fx.repo,
+            "f.txt",
+            "one\ntwo\nalpha NEEDLE v2\n",
+            "c4 edit token",
+        );
+        (fx, [c1, c2, c3, c4])
+    }
+
+    fn shas(commits: &[CommitInfo]) -> Vec<String> {
+        commits.iter().map(|c| c.sha.clone()).collect()
+    }
+
+    #[test]
+    fn pickaxe_regex_matches_only_patch_matching_commits() {
+        let (fx, [c1, c2, _c3, c4]) = token_fixture("regex");
+
+        // -G "alpha NEEDLE$": c2 added the line, c4 removed it; c3's patch
+        // (g.txt) has no "alpha".
+        let filter = LogFilter {
+            pickaxe_regex: Some("(?m)alpha NEEDLE$".into()),
+            ..Default::default()
+        };
+        let (commits, _) = ENGINE.log(&fx.repo, &filter, 100, None).expect("log");
+        assert_eq!(
+            shas(&commits),
+            [c4.as_str(), c2.as_str()],
+            "-G matches c2 and c4"
+        );
+
+        // The base commit touches nothing matching.
+        let (commits, _) = ENGINE
+            .log(
+                &fx.repo,
+                &LogFilter {
+                    pickaxe_regex: Some("alpha".into()),
+                    ..Default::default()
+                },
+                100,
+                None,
+            )
+            .expect("log");
+        assert_eq!(shas(&commits), [c4.as_str(), c2.as_str()]);
+        let _ = c1;
+    }
+
+    #[test]
+    fn pickaxe_regex_and_substring_intersect() {
+        let (fx, [c1, c2, c3, c4]) = token_fixture("intersect");
+
+        // -S alone: every commit whose patch adds/removes NEEDLE (c2, c3, c4).
+        let (commits, _) = ENGINE
+            .log(
+                &fx.repo,
+                &LogFilter {
+                    pickaxe: Some("NEEDLE".into()),
+                    ..Default::default()
+                },
+                100,
+                None,
+            )
+            .expect("log");
+        assert_eq!(shas(&commits), [c4.as_str(), c3.as_str(), c2.as_str()]);
+
+        // -S "NEEDLE" + -G "alpha" (both set: git requires both) = c2 + c4;
+        // c3's NEEDLE patch never mentions alpha.
+        let (commits, _) = ENGINE
+            .log(
+                &fx.repo,
+                &LogFilter {
+                    pickaxe: Some("NEEDLE".into()),
+                    pickaxe_regex: Some("alpha".into()),
+                    ..Default::default()
+                },
+                100,
+                None,
+            )
+            .expect("log");
+        assert_eq!(
+            shas(&commits),
+            [c4.as_str(), c2.as_str()],
+            "S+G intersection"
+        );
+        let _ = (c1, c3);
+    }
+
+    #[test]
+    fn pickaxe_regex_invalid_pattern_fails_fast() {
+        let (fx, _) = token_fixture("invalid");
+        let filter = LogFilter {
+            pickaxe_regex: Some("alpha(".into()),
+            ..Default::default()
+        };
+        match ENGINE.log(&fx.repo, &filter, 10, None) {
+            Err(EngineError::Invalid(msg)) => {
+                assert!(msg.contains("invalid pickaxe regex"), "{msg}")
+            }
+            other => panic!("expected Invalid, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn pickaxe_regex_empty_pattern_is_ignored() {
+        let (fx, [c1, c2, c3, c4]) = token_fixture("empty");
+        let (commits, _) = ENGINE
+            .log(
+                &fx.repo,
+                &LogFilter {
+                    pickaxe_regex: Some(String::new()),
+                    ..Default::default()
+                },
+                100,
+                None,
+            )
+            .expect("log");
+        assert_eq!(
+            shas(&commits),
+            [c4.as_str(), c3.as_str(), c2.as_str(), c1.as_str()],
+            "no filter applied"
+        );
     }
 }

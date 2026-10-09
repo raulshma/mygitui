@@ -16,7 +16,7 @@ use git2::{Oid, Repository, Sort};
 
 use super::git_engine::{EngineError, EngineResult};
 use super::libgit2::Libgit2Engine;
-use super::types::BisectState;
+use super::types::{BisectLogEntry, BisectState};
 
 /// Persisted bisect state (schema in the module docs).
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -32,10 +32,36 @@ struct BisectFileState {
     orig_head: String,
     /// Full branch ref HEAD pointed at when the bisect started.
     orig_branch: Option<String>,
+    /// Mark history, oldest first. Old files (pre-M12) lack the field:
+    /// `serde(default)` loads them with an empty log.
+    #[serde(default)]
+    log: Vec<BisectLogEntry>,
 }
 
 fn state_path(repo: &Repository) -> std::path::PathBuf {
     repo.path().join("mygitui").join("bisect.json")
+}
+
+/// Archive of the last finished bisect (written by `bisect_reset`), so the
+/// UI can still show the mark history after the search is over.
+fn archive_path(repo: &Repository) -> std::path::PathBuf {
+    repo.path().join("mygitui").join("bisect-last.json")
+}
+
+fn unix_secs() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+/// `"good" | "bad" | "skip"` — the persisted/public mark spelling.
+fn mark_name(mark: super::types::BisectMark) -> &'static str {
+    match mark {
+        super::types::BisectMark::Good => "good",
+        super::types::BisectMark::Bad => "bad",
+        super::types::BisectMark::Skip => "skip",
+    }
 }
 
 fn load_state(repo: &Repository) -> EngineResult<Option<BisectFileState>> {
@@ -110,6 +136,8 @@ fn to_public(repo: &Repository, st: &BisectFileState) -> EngineResult<BisectStat
         .into_iter()
         .filter(|oid| *oid != bad)
         .count();
+    // The mark log travels with the state; the (inactive) caller-facing
+    // struct carries it so the banner can show progress so far.
     Ok(BisectState {
         active: true,
         bad: st.bad.clone(),
@@ -127,7 +155,7 @@ fn to_public(repo: &Repository, st: &BisectFileState) -> EngineResult<BisectStat
         skipped: st.skipped.clone(),
         orig_head: st.orig_head.clone(),
         orig_branch: st.orig_branch.clone(),
-        log: Vec::new(),
+        log: st.log.clone(),
     })
 }
 
@@ -183,6 +211,25 @@ impl Libgit2Engine {
             }
         }
 
+        // Record the starting good/bad the user gave us (explicit arguments
+        // only; an implicit bad = HEAD is not a "mark").
+        let now = unix_secs();
+        let mut log = Vec::new();
+        if bad.is_some() {
+            log.push(BisectLogEntry {
+                mark: "bad".into(),
+                sha: bad_commit.id().to_string(),
+                at: now,
+            });
+        }
+        if let Some(good) = &good_commit {
+            log.push(BisectLogEntry {
+                mark: "good".into(),
+                sha: good.id().to_string(),
+                at: now,
+            });
+        }
+
         let st = BisectFileState {
             bad: bad_commit.id().to_string(),
             good: good_commit
@@ -195,6 +242,7 @@ impl Libgit2Engine {
                 .find_reference("HEAD")
                 .ok()
                 .and_then(|head| head.symbolic_target().ok().flatten().map(str::to_owned)),
+            log,
         };
         save_state(repo, &st)?;
 
@@ -252,6 +300,11 @@ impl Libgit2Engine {
                 }
             }
         }
+        st.log.push(BisectLogEntry {
+            mark: mark_name(mark).to_string(),
+            sha: current.id().to_string(),
+            at: unix_secs(),
+        });
         save_state(repo, &st)?;
 
         // Next probe: midpoint of what is left.
@@ -295,7 +348,41 @@ impl Libgit2Engine {
             repo.set_head(branch)?;
         }
         remove_state(repo);
+        // Archive the finished run (state + final log) so `bisect_log` can
+        // still answer after the reset; best-effort — a failed archive write
+        // must not fail the reset itself (the mygitui/ dir already exists,
+        // the state file lived there).
+        if let Ok(json) = serde_json::to_string_pretty(&st) {
+            let _ = std::fs::write(archive_path(repo), json);
+        }
         Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// M12: mark history (`bisect_log`)
+// ---------------------------------------------------------------------------
+
+impl Libgit2Engine {
+    /// Mark history of the live bisect; once no live state remains, the
+    /// archive written by `bisect_reset` (`mygitui/bisect-last.json`).
+    /// Empty when this repo never ran a bisect (or predates the log field).
+    ///
+    /// WIRING NOTE (M2-lane convention): the crate's single
+    /// `impl GitEngineM12 for Libgit2Engine` lives in trash.rs (Rust
+    /// coherence); its `bisect_log` forwards here.
+    pub(crate) fn bisect_log_impl(&self, repo: &Repository) -> EngineResult<Vec<BisectLogEntry>> {
+        if let Some(st) = load_state(repo)? {
+            return Ok(st.log);
+        }
+        let path = archive_path(repo);
+        if !path.exists() {
+            return Ok(Vec::new());
+        }
+        let text = std::fs::read_to_string(&path)?;
+        let st: BisectFileState = serde_json::from_str(&text)
+            .map_err(|e| EngineError::Invalid(format!("corrupt mygitui/bisect-last.json: {e}")))?;
+        Ok(st.log)
     }
 }
 

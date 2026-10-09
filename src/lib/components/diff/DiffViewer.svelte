@@ -16,6 +16,8 @@
   import { discard, stage } from "$lib/ipc/client";
   import { onUiEvent } from "$lib/palette/events";
   import { toast } from "$lib/toast";
+  import { ai } from "$lib/ai/ai.svelte";
+  import { formatHunkText } from "$lib/ai/features";
   import {
     onTokensLanded,
     requestTokens,
@@ -27,7 +29,17 @@
     type LoadImageFn,
   } from "$lib/components/diff/rowModel";
   import { buildLayout, visibleSlices } from "$lib/components/diff/virtualizer";
+  import {
+    beginSelection,
+    extendSelection,
+    isLineSelected,
+    selectableAnchor,
+    selectedSet as toSelectedSet,
+    selectionRanges,
+    type LineSelection,
+  } from "$lib/components/diff/lineSelection";
   import DiffRow from "$lib/components/diff/DiffRow.svelte";
+  import ExplainHunkPanel from "$lib/components/ai/ExplainHunkPanel.svelte";
 
   let {
     files,
@@ -150,9 +162,157 @@
       );
   }
 
-  // A new diff resets the scroll position.
+  // -- M12: line-granular selection -------------------------------------------
+  //
+  // ONE active selection per viewer, held here — outside the per-row render
+  // path (rows only get derived booleans, so the 60fps virtualization is
+  // untouched). Selection is only offered when the viewer can act on it:
+  // staging (hunkStaging) and/or discarding (hunkDiscard), mirroring the
+  // hunk-level gating props exactly.
+
+  let selection = $state<LineSelection | null>(null);
+  const selSet = $derived(toSelectedSet(selection));
+
+  /** Selection is offered when any selection action is available. */
+  const selectionEnabled = $derived(
+    repoId !== undefined && (hunkStaging !== undefined || hunkDiscard),
+  );
+
+  function onGutterClick(
+    fileIndex: number,
+    hunkIndex: number,
+    lineIndex: number,
+    extend: boolean,
+  ): void {
+    const hunkLines = files[fileIndex]?.hunks[hunkIndex]?.lines;
+    if (!hunkLines) return;
+    const anchor = selectableAnchor(hunkLines, lineIndex);
+    if (anchor === null) return;
+    if (
+      extend &&
+      selection &&
+      selection.fileIndex === fileIndex &&
+      selection.hunkIndex === hunkIndex
+    ) {
+      selection = extendSelection(selection, anchor, hunkLines);
+    } else {
+      selection = beginSelection(fileIndex, hunkIndex, anchor);
+    }
+  }
+
+  /** O(1)-ish per-row membership check handed down to DiffRow. */
+  function selectedAt(
+    fileIndex: number,
+    hunkIndex: number,
+    lineIndex: number | null,
+  ): boolean {
+    if (lineIndex === null || !selection) return false;
+    if (selection.fileIndex !== fileIndex || selection.hunkIndex !== hunkIndex) {
+      return false;
+    }
+    const hunkLines = files[fileIndex]?.hunks[hunkIndex]?.lines;
+    if (!hunkLines) return false;
+    return isLineSelected(hunkLines, lineIndex, selSet);
+  }
+
+  function selectionCountFor(fileIndex: number, hunkIndex: number): number {
+    return selection &&
+      selection.fileIndex === fileIndex &&
+      selection.hunkIndex === hunkIndex
+      ? selection.lines.length
+      : 0;
+  }
+
+  function stageSelection(fileIndex: number, hunkIndex: number): void {
+    if (!repoId || !hunkStaging || !selection) return;
+    const file = files[fileIndex];
+    if (!file) return;
+    const unstage = hunkStaging === "unstage";
+    stage(repoId, {
+      targets: [
+        {
+          lines: {
+            path: file.path,
+            hunk: hunkIndex,
+            ranges: selectionRanges(selection),
+          },
+        },
+      ],
+      unstage,
+    })
+      .then(() => {
+        selection = null;
+        onMutated?.();
+      })
+      .catch((err: unknown) =>
+        toast(
+          `${unstage ? "Unstage" : "Stage"} selected failed: ${describeError(err)}`,
+          { kind: "error" },
+        ),
+      );
+  }
+
+  function discardSelection(fileIndex: number, hunkIndex: number): void {
+    if (!repoId || !hunkDiscard || !selection) return;
+    const file = files[fileIndex];
+    if (!file) return;
+    discard(repoId, [
+      {
+        lines: {
+          path: file.path,
+          hunk: hunkIndex,
+          ranges: selectionRanges(selection),
+        },
+      },
+    ])
+      .then(() => {
+        selection = null;
+        onMutated?.();
+      })
+      .catch((err: unknown) =>
+        toast(`Discard selected failed: ${describeError(err)}`, { kind: "error" }),
+      );
+  }
+
+  // Escape anywhere (and clicks elsewhere in the diff) clear the selection.
+  $effect(() => {
+    const onKey = (event: KeyboardEvent): void => {
+      if (event.key === "Escape") selection = null;
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  });
+
+  function clearSelectionOnClick(): void {
+    selection = null;
+  }
+
+  // -- M12 AI: explain-hunk (visible once the repo opted in) -------------------
+
+  let explain = $state<{ path: string; hunkText: string; label: string } | null>(
+    null,
+  );
+
+  const explainEnabled = $derived(
+    repoId !== undefined && ai.isOptedIn(repoId),
+  );
+
+  function explainHunk(fileIndex: number, hunkIndex: number): void {
+    if (!repoId) return;
+    const file = files[fileIndex];
+    const hunk = file?.hunks[hunkIndex];
+    if (!file || !hunk) return;
+    explain = {
+      path: file.path,
+      hunkText: formatHunkText(hunk),
+      label: `@@ -${hunk.old_start} +${hunk.new_start} @@`,
+    };
+  }
+
+  // A new diff resets the scroll position (and any line selection).
   $effect(() => {
     void files;
+    selection = null;
     scrollTop = 0;
     viewportEl?.scrollTo(0, 0);
   });
@@ -218,7 +378,11 @@
       role="region"
       aria-label="Diff viewer — scrollable diff content"
     >
-      <div class="content" style="height: {layout.totalHeight}px; min-width: {minWidth}">
+      <!-- Clicking anywhere that is not a gutter / action button clears the
+           line selection (those stop propagation). -->
+      <!-- svelte-ignore a11y_click_events_have_key_events -->
+      <!-- svelte-ignore a11y_no_static_element_interactions -->
+      <div class="content" onclick={clearSelectionOnClick} style="height: {layout.totalHeight}px; min-width: {minWidth}">
         {#each slices as slice (slice.bucketIndex)}
           <div class="slice" style="top: {slice.top}px">
             {#each model.rows.slice(slice.firstRow, slice.firstRow + slice.count) as row, i (slice.firstRow + i)}
@@ -232,12 +396,33 @@
                 filePath={syntaxEnabled
                   ? (files[model.fileIndexes[slice.firstRow + i]]?.path ?? null)
                   : null}
+                selectedAt={selectionEnabled ? selectedAt : undefined}
+                onGutterClick={selectionEnabled ? onGutterClick : undefined}
+                selectionCount={row.kind === "hunk-header"
+                  ? selectionCountFor(row.fileIndex, row.hunkIndex)
+                  : 0}
+                selectionStageLabel={hunkStaging === "unstage"
+                  ? "Unstage selected"
+                  : "Stage selected"}
+                onStageSelection={repoId && hunkStaging ? stageSelection : undefined}
+                onDiscardSelection={repoId && hunkDiscard ? discardSelection : undefined}
+                onExplainHunk={explainEnabled ? explainHunk : undefined}
               />
             {/each}
           </div>
         {/each}
       </div>
     </div>
+
+    {#if explain && repoId}
+      <ExplainHunkPanel
+        {repoId}
+        path={explain.path}
+        hunkText={explain.hunkText}
+        label={explain.label}
+        onClose={() => (explain = null)}
+      />
+    {/if}
   </div>
 {/if}
 
@@ -250,7 +435,10 @@
     --diff-empty-bg: color-mix(in srgb, var(--m3-surface-variant) 40%, transparent);
     --diff-hl-bg: var(--m3-tertiary-container);
     --diff-divider: var(--m3-outline-variant);
+    /* M12 line selection highlight. */
+    --diff-sel-bg: color-mix(in srgb, var(--m3-primary) 22%, transparent);
 
+    position: relative; /* anchors the docked explain panel */
     display: flex;
     flex-direction: column;
     height: 100%;

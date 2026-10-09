@@ -12,7 +12,7 @@
  * gates on per-repo opt-in BEFORE any data is gathered or sent.
  */
 
-import type { FileDiff, LogFilter, LogPage, RepoId } from "$lib/ipc/types";
+import type { DiffHunk, FileDiff, LogFilter, LogPage, RepoId } from "$lib/ipc/types";
 import type { ConnectionSupervisor } from "./connection";
 import { AiError } from "./types";
 import type { AiResult, FeatureKind } from "./types";
@@ -247,6 +247,19 @@ export function formatFileDiff(file: FileDiff): string {
 /** Renders the staged diff (list of {@link FileDiff}) as prompt text. */
 export function stagedDiffText(files: FileDiff[]): string {
   return files.map(formatFileDiff).join("\n");
+}
+
+/**
+ * Renders ONE hunk as unified-diff-style text (the per-hunk slice of
+ * {@link formatFileDiff}) — the `hunk` input the explain-hunk runner wants.
+ */
+export function formatHunkText(hunk: DiffHunk): string {
+  const out: string[] = [`@@ -${hunk.old_start} +${hunk.new_start} @@`];
+  for (const line of hunk.lines) {
+    const marker = line.origin === "=" ? " " : line.origin;
+    out.push(`${marker}${line.text}`);
+  }
+  return out.join("\n");
 }
 
 /** Renders per-file add/del stats (used by the PR body prompt). */

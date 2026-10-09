@@ -16,6 +16,8 @@ import {
   hexFromArgb,
 } from "@material/material-color-utilities";
 import type { DynamicScheme } from "@material/material-color-utilities";
+import { isTauri } from "$lib/entry/dragdrop";
+import { osAccentColor } from "$lib/ipc/client";
 
 /** Baseline M3 purple seed, used whenever no source color is available. */
 export const BASELINE_SEED = "#6750a4";
@@ -113,11 +115,64 @@ export function schemeFromSeed(seed: string, dark: boolean): DynamicScheme {
  * `@ktibow/material-color-utilities-nightly` (an unresolvable import breaks
  * `vite build` even inside try/catch).
  *
- * This function is the single seam for real dynamic color later (Tauri
- * wallpaper plugin, OS accent color, ...): return a hex string from here and
- * the whole token pipeline picks it up. Until then callers keep the baseline
- * palette. Never throws, never rejects.
+ * Resolution order (M12):
+ *  1. user override — `mygitui.seed` (hex `#rrggbb`, set from the command
+ *     palette's "Appearance: Set accent seed color…"); invalid values fall
+ *     through;
+ *  2. OS accent color — Windows reads the DWM `AccentColor` registry value
+ *     synchronously-ish at startup; other platforms return null for now;
+ *  3. null → callers keep the baseline palette.
+ *
+ * This remains the single seam for real wallpaper-derived color (Tauri
+ * wallpaper plugin) later. Never throws, never rejects.
  */
 export async function resolveSeedColor(): Promise<string | null> {
-  return null;
+  return userSeedColor() ?? (await osAccentColorAsync());
 }
+
+/** `mygitui.seed` localStorage override; null when unset or invalid. */
+export function userSeedColor(): string | null {
+  try {
+    const raw = globalThis.localStorage?.getItem("mygitui.seed");
+    if (!raw) return null;
+    const hex = normalizeHex(raw);
+    return hex ? hex : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Persist (or clear, with null/empty) the user seed override. */
+export function setUserSeedColor(hex: string | null): void {
+  try {
+    if (!hex) {
+      globalThis.localStorage?.removeItem("mygitui.seed");
+      return;
+    }
+    const normalized = normalizeHex(hex);
+    if (normalized) globalThis.localStorage?.setItem("mygitui.seed", normalized);
+  } catch {
+    // Storage unavailable (private mode) — the override just won't persist.
+  }
+}
+
+/** `#rrggbb` lowercase, or null when the input isn't a 3/6-digit hex color. */
+export function normalizeHex(input: string): string | null {
+  const raw = input.trim().replace(/^#/, "");
+  const hex = raw.length === 3 ? [...raw].map((c) => c + c).join("") : raw;
+  return /^[0-9a-fA-F]{6}$/.test(hex) ? `#${hex.toLowerCase()}` : null;
+}
+
+/**
+ * OS accent color. Windows: `HKCU\Software\Microsoft\Windows\DWM` →
+ * `AccentColor` (DWORD 0xAABBGGRR), read by the backend command
+ * `os_accent_color`. Everywhere else: null (macOS needs an objc bridge,
+ * Linux has no standard — both stay on the baseline palette until a Tauri
+ * plugin covers them). Never throws.
+ */
+export async function osAccentColorAsync(): Promise<string | null> {
+  if (!isTauri()) return null;
+  const hex = await osAccentColor();
+  return hex ? normalizeHex(hex) : null;
+}
+

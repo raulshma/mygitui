@@ -4,19 +4,23 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { fetchRepo, remotes } from "$lib/ipc/client";
-import type { NetStats, RemoteInfo } from "$lib/ipc/types";
+import { branches, fetchRepo, remotes } from "$lib/ipc/client";
+import type { BranchInfo, NetStats, RemoteInfo } from "$lib/ipc/types";
 import { getToasts } from "$lib/toast";
 import {
   AutofetchStore,
+  upstreamMoved,
+  UPSTREAM_MOVED_TOAST_CAP,
   type StorageLike,
 } from "$lib/stores/autofetch.svelte";
 
 vi.mock("$lib/ipc/client", () => ({
+  branches: vi.fn(),
   fetchRepo: vi.fn(),
   remotes: vi.fn(),
 }));
 
+const mockBranches = vi.mocked(branches);
 const mockFetchRepo = vi.mocked(fetchRepo);
 const mockRemotes = vi.mocked(remotes);
 
@@ -66,8 +70,10 @@ async function flush(): Promise<void> {
 
 beforeEach(() => {
   vi.useFakeTimers();
+  mockBranches.mockReset();
   mockFetchRepo.mockReset();
   mockRemotes.mockReset();
+  mockBranches.mockResolvedValue([]);
   mockFetchRepo.mockResolvedValue(STATS_EMPTY);
   mockRemotes.mockResolvedValue(REMOTES);
 });
@@ -225,6 +231,130 @@ describe("AutofetchStore", () => {
     const dirtyStore = new AutofetchStore(dirty);
     expect(dirtyStore.getInterval("repo-1")).toBe(0);
     expect(dirtyStore.getInterval("repo-2")).toBe(0);
+
+    store.stopAll();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// M12: upstream-moved toasts
+// ---------------------------------------------------------------------------
+
+function branch(name: string, behind: number, gone = false): BranchInfo {
+  return {
+    name,
+    sha: "a".repeat(40),
+    upstream: `origin/${name}`,
+    ahead: 0,
+    behind,
+    gone,
+    is_head: name === "main",
+  };
+}
+
+describe("upstreamMoved (M12 pure)", () => {
+  it("toasts branches that appear behind or increased, skips equal/decreasing", () => {
+    const previous = new Map<string, number>([
+      ["same", 2],
+      ["more", 1],
+      ["less", 5],
+    ]);
+    const list = [
+      branch("same", 2), // unchanged → silent
+      branch("more", 4), // increased → toast
+      branch("less", 3), // decreased → silent
+      branch("new", 1), // appeared → toast
+      branch("gone", 9, true), // upstream gone → silent
+      branch("synced", 0), // not behind → silent
+    ];
+
+    const { messages, current } = upstreamMoved(previous, list);
+    expect(messages).toEqual([
+      "upstream moved: more is 4 behind",
+      "upstream moved: new is 1 behind",
+    ]);
+    // Current counts keep only still-behind branches (baseline for next time).
+    expect([...current.entries()].sort()).toEqual([
+      ["less", 3],
+      ["more", 4],
+      ["new", 1],
+      ["same", 2],
+    ]);
+  });
+
+  it("caps messages at the per-cycle toast cap", () => {
+    const list = Array.from({ length: UPSTREAM_MOVED_TOAST_CAP + 2 }, (_, i) =>
+      branch(`b${i}`, 1),
+    );
+    const { messages } = upstreamMoved(new Map(), list);
+    expect(messages).toHaveLength(UPSTREAM_MOVED_TOAST_CAP);
+  });
+
+  it("a branch that disappears from the baseline toasts again when it reappears", () => {
+    const first = upstreamMoved(new Map(), [branch("x", 2)]);
+    expect(first.messages).toEqual(["upstream moved: x is 2 behind"]);
+
+    // Next cycle: branch caught up (no toast)…
+    const second = upstreamMoved(first.current, [branch("x", 0)]);
+    expect(second.messages).toEqual([]);
+
+    // …then fell behind again → toast fires (count "reappeared").
+    const third = upstreamMoved(second.current, [branch("x", 1)]);
+    expect(third.messages).toEqual(["upstream moved: x is 1 behind"]);
+  });
+});
+
+describe("reportUpstreamMoved (store integration)", () => {
+  it("toasts upstream-moved after a fetch that updated refs", async () => {
+    const store = new AutofetchStore(memStorage({
+      "mygitui.autofetch": JSON.stringify({ "repo-1": 1 }),
+    }));
+    await store.start("repo-1");
+
+    mockFetchRepo.mockResolvedValueOnce(STATS_UPDATED);
+    mockBranches.mockResolvedValueOnce([
+      branch("main", 0),
+      branch("feature", 3),
+    ]);
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(mockBranches).toHaveBeenCalledWith("repo-1");
+    expect(
+      getToasts().some((t) => t.message === "upstream moved: feature is 3 behind"),
+    ).toBe(true);
+
+    // Same behind-count next cycle → no repeat "upstream moved" toast
+    // (the plain "origin updated" toast still fires — that is by design).
+    const idsBefore = new Set(getToasts().map((t) => t.id));
+    mockFetchRepo.mockResolvedValueOnce(STATS_UPDATED);
+    mockBranches.mockResolvedValueOnce([branch("feature", 3)]);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(
+      getToasts()
+        .filter((t) => !idsBefore.has(t.id))
+        .filter((t) => t.message.startsWith("upstream moved")),
+    ).toEqual([]);
+
+    store.stopAll();
+  });
+
+  it("stays silent when the branch list cannot be read", async () => {
+    const store = new AutofetchStore(memStorage({
+      "mygitui.autofetch": JSON.stringify({ "repo-1": 1 }),
+    }));
+    await store.start("repo-1");
+
+    mockFetchRepo.mockResolvedValueOnce(STATS_UPDATED);
+    mockBranches.mockRejectedValueOnce(new Error("repo gone") as never);
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    // The "origin updated" toast still fires; no crash, no upstream toast.
+    expect(
+      getToasts().some((t) => t.message === "origin updated: 2 refs"),
+    ).toBe(true);
+    expect(
+      getToasts().some((t) => t.message.startsWith("upstream moved")),
+    ).toBe(false);
 
     store.stopAll();
   });

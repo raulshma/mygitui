@@ -5,6 +5,7 @@
 //! `file://` remotes never ask for credentials, so tests run without auth.
 
 use std::cell::RefCell;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use git2::build::CheckoutBuilder;
@@ -93,8 +94,15 @@ fn expand_refspec(remote: &str, spec: &str) -> String {
     format!("+{src}:refs/remotes/{remote}/{short}")
 }
 
+/// Error raised when an op observes its cancellation token.
+fn cancelled_err() -> EngineError {
+    EngineError::Invalid("cancelled".to_owned())
+}
+
 /// Core fetch: download + update tips + collect stats, running the given
 /// explicit refspecs (empty slice = the remote's configured refspecs).
+/// `cancel` is checked between phases and inside the transfer-progress
+/// callback (returning `false` aborts the pack transfer mid-flight).
 fn fetch_with_refspecs(
     repo: &Repository,
     remote_name: &str,
@@ -102,7 +110,11 @@ fn fetch_with_refspecs(
     prune: bool,
     depth: Option<u32>,
     progress: &mut dyn FnMut(FetchProgress),
+    cancel: Option<&AtomicBool>,
 ) -> EngineResult<NetStats> {
+    if cancel.is_some_and(|c| c.load(Ordering::Acquire)) {
+        return Err(cancelled_err());
+    }
     let mut remote = repo
         .find_remote(remote_name)
         .map_err(|e| EngineError::Invalid(format!("remote `{remote_name}` not found: {e}")))?;
@@ -112,6 +124,9 @@ fn fetch_with_refspecs(
     let mut cbs = RemoteCallbacks::new();
     cbs.credentials(auth::broker().credentials());
     cbs.transfer_progress(move |stats| {
+        if cancel.is_some_and(|c| c.load(Ordering::Acquire)) {
+            return false; // aborts the pack transfer
+        }
         let mut ctx = ctx_ref.borrow_mut();
         ctx.bytes = stats.received_bytes() as u64;
         ctx.objects_total = stats.total_objects() as u32;
@@ -122,6 +137,9 @@ fn fetch_with_refspecs(
     // Local transports have no sideband; when one arrives, tick progress with
     // the latest known counters.
     cbs.sideband_progress(move |_msg| {
+        if cancel.is_some_and(|c| c.load(Ordering::Acquire)) {
+            return false;
+        }
         ctx_ref.borrow_mut().emit_throttled();
         true
     });
@@ -145,9 +163,17 @@ fn fetch_with_refspecs(
     }
 
     let refs: Vec<&str> = refspecs.iter().map(String::as_str).collect();
-    remote.fetch(&refs, Some(&mut fo), None)?;
+    let fetch_result = remote.fetch(&refs, Some(&mut fo), None);
+    // A cancelled transfer surfaces as a generic git error — translate it.
+    if fetch_result.is_err() && cancel.is_some_and(|c| c.load(Ordering::Acquire)) {
+        return Err(cancelled_err());
+    }
+    fetch_result?;
     // Release the callbacks (they borrow `ctx`) before consuming it.
     drop(fo);
+    if cancel.is_some_and(|c| c.load(Ordering::Acquire)) {
+        return Err(cancelled_err());
+    }
     // Read the counters before disconnecting (remote stats are authoritative
     // over per-callback snapshots).
     let received_bytes = remote.stats().received_bytes() as u64;
@@ -247,6 +273,19 @@ impl Libgit2Engine {
         opts: &FetchOptions,
         progress: &mut dyn FnMut(FetchProgress),
     ) -> EngineResult<NetStats> {
+        self.fetch_impl_ext(repo, opts, progress, None)
+    }
+
+    /// Cancellation-aware fetch: `cancel` is polled between phases and inside
+    /// the transfer callbacks. Wired by the op queue (M12); `fetch_impl` keeps
+    /// the trait-facing signature.
+    pub(crate) fn fetch_impl_ext(
+        &self,
+        repo: &Repository,
+        opts: &FetchOptions,
+        progress: &mut dyn FnMut(FetchProgress),
+        cancel: Option<&AtomicBool>,
+    ) -> EngineResult<NetStats> {
         let refspecs: Vec<String> = opts
             .refs
             .iter()
@@ -259,6 +298,7 @@ impl Libgit2Engine {
             opts.prune,
             opts.depth,
             progress,
+            cancel,
         )
     }
 
@@ -282,7 +322,8 @@ impl Libgit2Engine {
         // leading `+` keeps the tracking ref movable when the remote rewrote
         // history, matching the configured `+refs/heads/*` refspec).
         let refspec = format!("+refs/heads/{branch}:{tracking_ref}");
-        let stats = fetch_with_refspecs(repo, &opts.remote, &[refspec], false, None, progress)?;
+        let stats =
+            fetch_with_refspecs(repo, &opts.remote, &[refspec], false, None, progress, None)?;
 
         // 2. Merge the fetched tip into the current branch.
         let tracking = repo.find_reference(&tracking_ref).map_err(|e| {
@@ -401,6 +442,21 @@ impl Libgit2Engine {
         opts: &PushOptions,
         progress: &mut dyn FnMut(PushProgress),
     ) -> EngineResult<NetStats> {
+        self.push_impl_ext(repo, opts, progress, None)
+    }
+
+    /// Cancellation-aware push: `cancel` is polled between phases. Wired by
+    /// the op queue (M12); `push_impl` keeps the trait-facing signature.
+    pub(crate) fn push_impl_ext(
+        &self,
+        repo: &Repository,
+        opts: &PushOptions,
+        progress: &mut dyn FnMut(PushProgress),
+        cancel: Option<&AtomicBool>,
+    ) -> EngineResult<NetStats> {
+        if cancel.is_some_and(|c| c.load(Ordering::Acquire)) {
+            return Err(cancelled_err());
+        }
         let mut branch_name: Option<String> = None;
 
         // Resolve the refspecs for this push mode:
@@ -418,26 +474,37 @@ impl Libgit2Engine {
                 format!("refs/heads/{spec}")
             }
         };
-        // The remote-tracking ref git would use as the force-with-lease
-        // expectation for a branch refspec.
-        let require_tracking_ref =
-            |repo: &Repository, remote: &str, spec: &str, full: &str| -> Result<(), EngineError> {
-                // Lease: the remote must still match the last-fetched
-                // tracking ref. libgit2 has no native lease, so the
-                // tracking ref IS the expectation — refuse when we have
-                // never fetched the branch (we would be blindly forcing).
-                let Some(short) = full.strip_prefix("refs/heads/") else {
-                    return Err(EngineError::Invalid(format!("cannot lease `{spec}`")));
-                };
-                let tracking = format!("refs/remotes/{remote}/{short}");
-                if repo.find_reference(&tracking).is_err() {
-                    return Err(EngineError::Invalid(format!(
-                        "force-with-lease refused: no tracking ref `{tracking}` (fetch first)"
-                    )));
-                }
-                Ok(())
+        // Force-with-lease expectation for one branch refspec: the CURRENT
+        // oid of the local remote-tracking ref — exactly what
+        // `--force-with-lease=<ref>:<oid>` encodes. Refuses when the branch
+        // was never fetched (we would be blind-forcing).
+        let lease_expectation = |repo: &Repository,
+                                 remote: &str,
+                                 spec: &str,
+                                 full: &str|
+         -> EngineResult<(String, String)> {
+            let Some(short) = full.strip_prefix("refs/heads/") else {
+                return Err(EngineError::Invalid(format!("cannot lease `{spec}`")));
             };
+            let tracking = format!("refs/remotes/{remote}/{short}");
+            let tracking_ref = repo.find_reference(&tracking).map_err(|_| {
+                EngineError::Invalid(format!(
+                    "force-with-lease refused: no tracking ref `{tracking}` (fetch first)"
+                ))
+            })?;
+            let oid = tracking_ref.target().ok_or_else(|| {
+                    EngineError::Invalid(format!(
+                        "force-with-lease refused: tracking ref `{tracking}` has no target (fetch first)"
+                    ))
+                })?;
+            Ok((full.to_owned(), oid.to_string()))
+        };
 
+        // Real `--force-with-lease` flags (branch refspecs only; deletes and
+        // tags never lease). Non-empty routes the push through the CLI —
+        // libgit2 has no native lease, and the client-side approximation
+        // cannot see a concurrent remote update between fetch and push.
+        let mut leases: Vec<(String, String)> = Vec::new();
         let mut refspecs: Vec<String> = Vec::new();
         if opts.delete {
             if opts.refs.is_empty() {
@@ -462,9 +529,14 @@ impl Libgit2Engine {
             }
             for spec in &opts.refs {
                 let full = full_ref(spec);
+                // A `+` refspec is per-ref --force and SILENTLY CANCELS the
+                // lease (verified against git 2.55: leased `+` refspecs push
+                // straight through stale remotes). Leased refs therefore get
+                // a plain refspec — `--force-with-lease=<ref>:<oid>` is what
+                // authorizes the non-fast-forward update when it holds.
                 let force = if opts.force_with_lease && full.starts_with("refs/heads/") {
-                    require_tracking_ref(repo, &opts.remote, spec, &full)?;
-                    true
+                    leases.push(lease_expectation(repo, &opts.remote, spec, &full)?);
+                    false
                 } else {
                     opts.force
                 };
@@ -488,9 +560,16 @@ impl Libgit2Engine {
                         EngineError::Invalid(format!("branch `{name}` is unborn; nothing to push"))
                     })?;
                 if opts.force_with_lease {
-                    require_tracking_ref(repo, &opts.remote, &name, &format!("refs/heads/{name}"))?;
+                    leases.push(lease_expectation(
+                        repo,
+                        &opts.remote,
+                        &name,
+                        &format!("refs/heads/{name}"),
+                    )?);
                 }
-                let force = opts.force || opts.force_with_lease;
+                // Same as above: no `+` for leased refs (the lease flag
+                // carries the force authorization).
+                let force = opts.force;
                 refspecs.push(format!(
                     "{}refs/heads/{name}:refs/heads/{name}",
                     if force { "+" } else { "" }
@@ -499,12 +578,9 @@ impl Libgit2Engine {
             }
         }
 
-        let mut remote = repo.find_remote(&opts.remote).map_err(|e| {
-            EngineError::Invalid(format!("remote `{}` not found: {e}", opts.remote))
-        })?;
-
         // Per-remote-ref new values for the stats map: source ref target for
-        // updates, "(deleted)" for delete refspecs.
+        // updates, "(deleted)" for delete refspecs. (Force refspecs carry a
+        // `+` marker on the source side — it is not part of the ref name.)
         let mut new_values: std::collections::HashMap<String, String> =
             std::collections::HashMap::new();
         for spec in &refspecs {
@@ -512,7 +588,7 @@ impl Libgit2Engine {
                 let value = if src.is_empty() {
                     "(deleted)".to_owned()
                 } else {
-                    repo.find_reference(src)
+                    repo.find_reference(src.trim_start_matches('+'))
                         .ok()
                         .and_then(|r| r.target())
                         .map(|o| o.to_string())
@@ -521,6 +597,27 @@ impl Libgit2Engine {
                 new_values.insert(dst.to_owned(), value);
             }
         }
+
+        // Real lease push: hand the whole refspec set to the sanitized CLI.
+        if !leases.is_empty() {
+            let stats = cli_push_with_leases(
+                repo,
+                &opts.remote,
+                &refspecs,
+                &leases,
+                &new_values,
+                progress,
+            )?;
+            if let (Some(name), true) = (branch_name.as_deref(), opts.set_upstream) {
+                let mut local = repo.find_branch(name, BranchType::Local)?;
+                local.set_upstream(Some(&format!("{}/{}", opts.remote, name)))?;
+            }
+            return Ok(stats);
+        }
+
+        let mut remote = repo.find_remote(&opts.remote).map_err(|e| {
+            EngineError::Invalid(format!("remote `{}` not found: {e}", opts.remote))
+        })?;
 
         struct PushCtx<'a> {
             progress: &'a mut dyn FnMut(PushProgress),
@@ -587,7 +684,17 @@ impl Libgit2Engine {
         let mut po = GitPushOptions::new();
         po.remote_callbacks(cbs);
         let spec_refs: Vec<&str> = refspecs.iter().map(String::as_str).collect();
-        remote.push(&spec_refs, Some(&mut po))?;
+        // Cancellation between the per-ref resolution phase and the pack
+        // phase. (libgit2's push-transfer callback cannot abort mid-pack;
+        // a cancel lands once the push returns.)
+        if cancel.is_some_and(|c| c.load(Ordering::Acquire)) {
+            return Err(cancelled_err());
+        }
+        let push_result = remote.push(&spec_refs, Some(&mut po));
+        if push_result.is_err() && cancel.is_some_and(|c| c.load(Ordering::Acquire)) {
+            return Err(cancelled_err());
+        }
+        push_result?;
         // Release the callbacks (they borrow `ctx` and `updated`) before
         // consuming them.
         drop(po);
@@ -612,5 +719,415 @@ impl Libgit2Engine {
             objects: push_ctx.total,
             updated_refs: updated.into_inner(),
         })
+    }
+}
+
+/// Push through the sanitized CLI when a real `--force-with-lease` is
+/// requested: libgit2 has no lease, so `git push
+/// --force-with-lease=<full-ref>:<expected-oid>` (one flag per branch
+/// refspec) makes the REMOTE enforce the expectation atomically — a remote
+/// that moved after our last fetch rejects the push with "stale info".
+///
+/// Progress is a single final tick (the CLI exposes no per-object
+/// callbacks); `updated_refs` is parsed from git's stdout report, falling
+/// back to the local source targets when the format surprises us.
+fn cli_push_with_leases(
+    repo: &Repository,
+    remote: &str,
+    refspecs: &[String],
+    leases: &[(String, String)],
+    new_values: &std::collections::HashMap<String, String>,
+    progress: &mut dyn FnMut(PushProgress),
+) -> EngineResult<NetStats> {
+    let workdir = repo.workdir().unwrap_or_else(|| repo.path());
+    let mut args: Vec<String> = Vec::with_capacity(2 + leases.len() + refspecs.len());
+    args.push("push".to_owned());
+    for (full, oid) in leases {
+        args.push(format!("--force-with-lease={full}:{oid}"));
+    }
+    args.push(remote.to_owned());
+    args.extend(refspecs.iter().cloned());
+    let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
+    match crate::maintenance::git_run(workdir, &arg_refs) {
+        Ok(report) => {
+            (progress)(PushProgress {
+                current: 0,
+                total: 0,
+                bytes: 0,
+                message: "done".to_owned(),
+            });
+            let updated = parse_push_report(&report);
+            Ok(NetStats {
+                received_bytes: 0,
+                objects: updated.len() as u32,
+                updated_refs: if updated.is_empty() {
+                    new_values
+                        .iter()
+                        .map(|(dst, value)| (dst.clone(), value.clone()))
+                        .collect()
+                } else {
+                    updated
+                },
+            })
+        }
+        // `git push failed: <git's own message>`.
+        Err(detail) => {
+            if detail.to_lowercase().contains("stale info") {
+                Err(EngineError::Invalid(
+                    "force-with-lease refused: stale tracking info: fetch first".to_owned(),
+                ))
+            } else {
+                // "[rejected]", non-fast-forward, hook failures: surface git.
+                Err(EngineError::Invalid(detail))
+            }
+        }
+    }
+}
+
+/// Best-effort parse of `git push`'s stdout report, one line per ref:
+/// `   1234567..89abcde  main -> main` or
+/// ` + 1234567...89abcde main -> main (forced update)`.
+/// Returns (remote ref, new value) pairs.
+fn parse_push_report(report: &str) -> Vec<(String, String)> {
+    let mut updated = Vec::new();
+    for line in report.lines() {
+        let Some((left, right)) = line.split_once("->") else {
+            continue;
+        };
+        // Drop trailing annotations ("(forced update)", "(fast-forward)").
+        let dst = right.split_whitespace().next().unwrap_or("");
+        if dst.is_empty() {
+            continue;
+        }
+        // The range token is the last `old..new` / `old...new` on the left.
+        let Some(new_sha) = left.split_whitespace().rev().find_map(|token| {
+            token
+                .split_once("..")
+                .map(|(_, new)| new.trim_start_matches('.').to_owned())
+        }) else {
+            continue;
+        };
+        if new_sha.is_empty() {
+            continue;
+        }
+        updated.push((dst.to_owned(), new_sha));
+    }
+    updated
+}
+
+#[cfg(test)]
+mod tests {
+    //! Force-with-lease integration tests. The lease path shells out to real
+    //! git against `file://` remotes, so these need git on PATH. The shared
+    //! fixture scaffolding lives in net_tests.rs, which this module does not
+    //! own — it is re-created here, trimmed to what the lease tests need.
+
+    use std::path::{Path, PathBuf};
+    use std::sync::atomic::AtomicBool;
+
+    use git2::{IndexAddOption, Repository, RepositoryInitOptions};
+
+    use super::super::git_engine::{EngineError, GitEngine};
+    use super::super::libgit2::Libgit2Engine;
+    use super::super::types::{FetchOptions, PushOptions};
+    use super::parse_push_report;
+
+    const ENGINE: Libgit2Engine = Libgit2Engine;
+
+    struct TempDir(PathBuf);
+
+    impl TempDir {
+        fn new(name: &str) -> TempDir {
+            let dir =
+                std::env::temp_dir().join(format!("mygitui-lease-{}-{name}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).expect("create temp dir");
+            TempDir(dir)
+        }
+
+        fn path(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let dir = self.0.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+                let _ = std::fs::remove_dir_all(dir);
+            });
+        }
+    }
+
+    fn file_url(path: &Path) -> String {
+        let p = path.to_string_lossy().replace('\\', "/");
+        if p.starts_with('/') {
+            format!("file://{p}")
+        } else {
+            format!("file:///{p}")
+        }
+    }
+
+    fn init_repo(path: &Path, bare: bool) -> Repository {
+        let mut opts = RepositoryInitOptions::new();
+        opts.bare(bare).initial_head("main");
+        let repo = Repository::init_opts(path, &opts).expect("init temp repo");
+        if !bare {
+            repo.config()
+                .and_then(|mut c| {
+                    c.set_str("user.name", "Lease Test")?;
+                    c.set_str("user.email", "lease@test.local")
+                })
+                .expect("configure identity");
+        }
+        repo
+    }
+
+    fn commit_file(repo: &Repository, path: &str, content: &str, message: &str) -> String {
+        let file = repo.workdir().unwrap().join(path);
+        std::fs::write(file, content).expect("write file");
+        let mut index = repo.index().expect("index");
+        index
+            .add_all(["*"].iter(), IndexAddOption::DEFAULT, None)
+            .expect("add all");
+        index.write().expect("write index");
+        let tree_oid = index.write_tree().expect("write tree");
+        let tree = repo.find_tree(tree_oid).expect("tree");
+        let sig = repo.signature().expect("signature");
+        let mut parents = Vec::new();
+        if let Ok(head) = repo.head() {
+            parents.push(head.peel_to_commit().expect("head commit"));
+        }
+        let parent_refs: Vec<&git2::Commit<'_>> = parents.iter().collect();
+        repo.commit(Some("HEAD"), &sig, &sig, message, &tree, &parent_refs)
+            .expect("commit")
+            .to_string()
+    }
+
+    fn head_sha(repo: &Repository) -> String {
+        repo.head()
+            .unwrap()
+            .peel_to_commit()
+            .unwrap()
+            .id()
+            .to_string()
+    }
+
+    fn remote_main_sha(origin: &Repository) -> String {
+        origin
+            .find_reference("refs/heads/main")
+            .expect("remote main")
+            .peel_to_commit()
+            .unwrap()
+            .id()
+            .to_string()
+    }
+
+    /// Bare `origin` + working clone `a` with one pushed base commit and a
+    /// seeded tracking ref.
+    struct LeaseFixture {
+        origin: Repository,
+        a: Repository,
+        /// Kept so the temp dirs outlive the test body (drop order: repos
+        /// first, dirs deleted after a short delay).
+        #[allow(dead_code)]
+        origin_dir: TempDir,
+        #[allow(dead_code)]
+        a_dir: TempDir,
+    }
+
+    impl LeaseFixture {
+        fn new(name: &str) -> LeaseFixture {
+            let origin_dir = TempDir::new(&format!("{name}-origin"));
+            let a_dir = TempDir::new(&format!("{name}-a"));
+            let origin = init_repo(origin_dir.path(), true);
+            let a = init_repo(a_dir.path(), false);
+            a.remote("origin", &file_url(origin_dir.path()))
+                .expect("remote");
+            commit_file(&a, "base.md", "base\n", "base commit");
+            let mut a_remote = a.find_remote("origin").expect("origin");
+            a_remote
+                .push(&["refs/heads/main:refs/heads/main"], None)
+                .expect("seed push");
+            a_remote
+                .fetch(&[] as &[&str], None, None)
+                .expect("seed fetch");
+            drop(a_remote);
+            LeaseFixture {
+                origin,
+                a,
+                origin_dir,
+                a_dir,
+            }
+        }
+
+        fn lease_opts() -> PushOptions {
+            PushOptions {
+                remote: "origin".into(),
+                branch: "main".into(),
+                force_with_lease: true,
+                ..Default::default()
+            }
+        }
+
+        fn fetch_opts() -> FetchOptions {
+            FetchOptions {
+                remote: "origin".into(),
+                ..Default::default()
+            }
+        }
+    }
+
+    /// A second clone that advances the remote behind our back: commits one
+    /// file locally, then pushes it.
+    fn advance_remote(f: &LeaseFixture, tag: &str) -> (TempDir, Repository) {
+        let b_dir = TempDir::new(tag);
+        let b = Repository::clone(&file_url(f.origin_dir.path()), b_dir.path()).expect("clone b");
+        b.config()
+            .and_then(|mut c| {
+                c.set_str("user.name", "Lease Test")?;
+                c.set_str("user.email", "lease@test.local")
+            })
+            .expect("configure identity b");
+        commit_file(&b, "b.md", "remote\n", "b remote");
+        b.find_remote("origin")
+            .unwrap()
+            .push(&["refs/heads/main:refs/heads/main"], None)
+            .expect("b push");
+        (b_dir, b)
+    }
+
+    /// Reset `a` onto `base` and commit a diverging replacement.
+    fn rewrite_local(f: &LeaseFixture, base: &str) -> String {
+        f.a.reset(
+            f.a.find_commit(git2::Oid::from_str(base).unwrap())
+                .unwrap()
+                .as_object(),
+            git2::ResetType::Hard,
+            None,
+        )
+        .unwrap();
+        commit_file(&f.a, "a.md", "local\n", "a rewritten")
+    }
+
+    /// Remote moved forward (another clone pushed): a lease push from a stale
+    /// clone must be refused as stale info. The previous approximation only
+    /// checked that the tracking ref existed — which still held here — so
+    /// only the real remote-side lease catches this.
+    #[test]
+    fn lease_push_fails_when_remote_moved_without_fetch() {
+        let f = LeaseFixture::new("stale");
+        let base = head_sha(&f.a);
+
+        let (_b_dir, b) = advance_remote(&f, "stale-b");
+
+        rewrite_local(&f, &base);
+
+        let err = ENGINE
+            .push(&f.a, &LeaseFixture::lease_opts(), &mut |_| {})
+            .expect_err("stale lease must be refused");
+        match err {
+            EngineError::Invalid(msg) => {
+                assert!(
+                    msg.contains("stale tracking info") && msg.contains("fetch first"),
+                    "got: {msg}"
+                );
+            }
+            other => panic!("expected Invalid, got {other:?}"),
+        }
+        // The push did not land: the remote still holds b's tip.
+        assert_eq!(remote_main_sha(&f.origin), head_sha(&b));
+    }
+
+    /// After a fetch the tracking ref matches the remote: the lease holds and
+    /// the (non-fast-forward) push forces through.
+    #[test]
+    fn lease_push_succeeds_after_fetch() {
+        let f = LeaseFixture::new("fresh");
+        let base = head_sha(&f.a);
+
+        let (_b_dir, _b) = advance_remote(&f, "fresh-b");
+
+        let rewritten = rewrite_local(&f, &base);
+
+        // Without a fetch the lease fails...
+        assert!(ENGINE
+            .push(&f.a, &LeaseFixture::lease_opts(), &mut |_| {})
+            .is_err());
+        // ...after a fetch it forces through.
+        ENGINE
+            .fetch(&f.a, &LeaseFixture::fetch_opts(), &mut |_| {})
+            .expect("fetch refreshes the lease");
+        let stats = ENGINE
+            .push(&f.a, &LeaseFixture::lease_opts(), &mut |_| {})
+            .expect("lease push lands after fetch");
+        assert_eq!(remote_main_sha(&f.origin), rewritten);
+        assert!(
+            stats
+                .updated_refs
+                .iter()
+                .any(|(r, s)| r == "refs/heads/main" && s == &rewritten),
+            "push report parsed from the CLI output: {:?}",
+            stats.updated_refs
+        );
+    }
+
+    /// Plain force (no lease) keeps the libgit2 path and still overwrites.
+    #[test]
+    fn plain_force_push_still_works_without_lease() {
+        let f = LeaseFixture::new("plain-force");
+        let base = head_sha(&f.a);
+
+        let (_b_dir, _b) = advance_remote(&f, "plain-force-b");
+
+        let rewritten = rewrite_local(&f, &base);
+
+        let opts = PushOptions {
+            remote: "origin".into(),
+            branch: "main".into(),
+            force: true,
+            ..Default::default()
+        };
+        ENGINE.push(&f.a, &opts, &mut |_| {}).expect("plain force");
+        assert_eq!(remote_main_sha(&f.origin), rewritten);
+    }
+
+    #[test]
+    fn parse_push_report_extracts_updated_refs() {
+        let report = concat!(
+            "To file:///tmp/origin\n",
+            "   1234567..89abcde  main -> main\n",
+            " + 1111111...2222222 topic -> topic (forced update)\n",
+            " * [new branch]      feat -> feat\n",
+        );
+        let updated = parse_push_report(report);
+        assert_eq!(
+            updated,
+            vec![
+                ("main".to_owned(), "89abcde".to_owned()),
+                ("topic".to_owned(), "2222222".to_owned()),
+            ],
+            "new-branch lines carry no range and are skipped: {updated:?}"
+        );
+    }
+
+    /// A cancelled push refuses before touching the remote.
+    #[test]
+    fn cancelled_push_refuses_up_front() {
+        let f = LeaseFixture::new("cancel");
+        let cancel = AtomicBool::new(true);
+        let err = ENGINE
+            .push_impl_ext(
+                &f.a,
+                &LeaseFixture::lease_opts(),
+                &mut |_| {},
+                Some(&cancel),
+            )
+            .expect_err("cancelled op must not run");
+        match err {
+            EngineError::Invalid(msg) => assert_eq!(msg, "cancelled"),
+            other => panic!("expected Invalid(cancelled), got {other:?}"),
+        }
     }
 }

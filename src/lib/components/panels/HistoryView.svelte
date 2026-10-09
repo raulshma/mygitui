@@ -31,6 +31,7 @@
    */
   import { cherryPick, repoDiff, revertCommits } from "$lib/ipc/client";
   import { describe, archiveSpec, pickSaveFile } from "$lib/ipc/client";
+  import { branchCreate, tagCreate } from "$lib/ipc/client";
   import type { CommitInfo, FileDiff, MergeResult } from "$lib/ipc/types";
   import GraphCanvas from "$lib/components/graph/GraphCanvas.svelte";
   import DiffViewer from "$lib/components/diff/DiffViewer.svelte";
@@ -46,6 +47,10 @@
   import { openPanelPopout } from "$lib/layout/popout";
   import SplitPane from "$lib/components/layout/SplitPane.svelte";
   import { readSplitRatio, writeSplitRatio } from "$lib/layout/splitPrefs";
+  import PromptDialog from "$lib/components/safety/PromptDialog.svelte";
+  import ResetDialog from "$lib/components/safety/ResetDialog.svelte";
+  import TagAtDialog from "$lib/components/panels/TagAtDialog.svelte";
+  import SignatureBadge from "$lib/components/commit/SignatureBadge.svelte";
   import {
     classifyRef,
     formatDateTime,
@@ -121,6 +126,14 @@
   let opBusy = $state(false);
   let plannerOpen = $state(false);
   let plannerBaseSha = $state<string | null>(null);
+
+  // M12 commit-menu dialogs (sha the dialog operates on, null = closed).
+  /** "Branch from here…" PromptDialog open for this sha. */
+  let branchFromSha = $state<string | null>(null);
+  /** "Tag here…" TagAtDialog open for this sha. */
+  let tagAtSha = $state<string | null>(null);
+  /** "Reset current branch to here…" ResetDialog open for this sha. */
+  let resetToSha = $state<string | null>(null);
 
   // -- virtualizer + canvas scroll sync ------------------------------------------
 
@@ -249,6 +262,9 @@
     multiIdx = [];
     anchorIdx = null;
     plannerOpen = false;
+    branchFromSha = null;
+    tagAtSha = null;
+    resetToSha = null;
     ownRange = { start: 0, end: 0 };
     canvasWindow = null;
     if (scrollerEl) scrollerEl.scrollTop = 0;
@@ -335,6 +351,20 @@
     }
     select(sha, { scroll: true });
   }
+
+  // -- M12: bookmark star on the detail header -----------------------------------
+
+  /** Whether the selected commit is bookmarked (drives the star toggle). */
+  const selectedBookmarked = $derived(
+    root !== "" &&
+      selectedInfo !== null &&
+      bookmarkStore.has(root, selectedInfo.sha),
+  );
+
+  // Bookmark state is lazy per root — hydrate outside derived reads.
+  $effect(() => {
+    if (root !== "") bookmarkStore.ensure(root);
+  });
 
   function onKeydown(event: KeyboardEvent): void {
     if (total === 0) return;
@@ -481,14 +511,89 @@
     plannerOpen = true;
   }
 
+  /**
+   * Writes `text` to the clipboard with success/error toasts (the shared
+   * helper behind "Copy sha" and M12's "Copy describe").
+   */
+  async function copyToClipboard(
+    text: string,
+    okMessage: string,
+    errMessage: string,
+  ): Promise<boolean> {
+    try {
+      await navigator.clipboard.writeText(text);
+      toast(okMessage, { kind: "success" });
+      return true;
+    } catch {
+      toast(errMessage, { kind: "error" });
+      return false;
+    }
+  }
+
   async function copySha(): Promise<void> {
     if (!selectedInfo) return;
+    await copyToClipboard(
+      selectedInfo.sha,
+      "SHA copied to clipboard",
+      "Could not copy the SHA",
+    );
+  }
+
+  /** M12: `git describe` for a commit → clipboard (menu + detail action). */
+  async function copyDescribe(sha: string): Promise<void> {
     try {
-      await navigator.clipboard.writeText(selectedInfo.sha);
-      toast("SHA copied to clipboard", { kind: "success" });
-    } catch {
-      toast("Could not copy the SHA", { kind: "error" });
+      const text = await describe(repoId, sha);
+      await copyToClipboard(
+        text,
+        `Describe copied: ${text}`,
+        "Could not copy the describe",
+      );
+    } catch (err) {
+      toast(`Describe failed: ${describeError(err)}`, { kind: "error" });
     }
+  }
+
+  // -- M12: branch / tag / reset "from here" (commit menu) ----------------------
+
+  /** Creates a branch at `sha` (not checked out — HEAD stays put). */
+  async function createBranchFrom(sha: string, name: string): Promise<void> {
+    branchFromSha = null;
+    try {
+      await branchCreate(repoId, name, false, sha);
+      toast(`Created branch ${name} at ${sha.slice(0, 7)}`, { kind: "success" });
+      void tabStore.refreshStatus(repoId);
+    } catch (err) {
+      toast(
+        `Create branch failed: ${err instanceof Error ? err.message : String(err)}`,
+        { kind: "error" },
+      );
+    }
+  }
+
+  /** Creates a (lightweight or annotated) tag at `sha`. */
+  async function createTagAt(
+    sha: string,
+    name: string,
+    annotated: boolean,
+    message: string,
+  ): Promise<void> {
+    tagAtSha = null;
+    try {
+      // The backend makes a tag annotated by passing a message.
+      await tagCreate(repoId, name, sha, annotated ? message : undefined);
+      toast(`Created tag ${name} at ${sha.slice(0, 7)}`, { kind: "success" });
+    } catch (err) {
+      toast(
+        `Tag create failed: ${err instanceof Error ? err.message : String(err)}`,
+        { kind: "error" },
+      );
+    }
+  }
+
+  /** ResetDialog finished: the history restarts via repo-changed. */
+  function onResetFromHereDone(): void {
+    resetToSha = null;
+    void tabStore.refreshStatus(repoId);
   }
 
   function onRebaseFinished(): void {
@@ -552,7 +657,11 @@
       { id: "revert", label: "Revert…", run: () => void doRevert() },
       { id: "rebase", label: "Rebase from here…", run: rebaseFromHere },
       { id: "bookmark", label: bookmarked ? "Remove bookmark" : "Bookmark commit", run: () => toggleBookmark(sha) },
+      { id: "branch-from", label: "Branch from here…", run: () => (branchFromSha = sha) },
+      { id: "tag-at", label: "Tag here…", run: () => (tagAtSha = sha) },
+      { id: "reset-to", label: "Reset current branch to here…", run: () => (resetToSha = sha) },
       { id: "copy", label: "Copy sha", run: copySha },
+      { id: "copy-describe", label: "Copy describe", run: () => void copyDescribe(sha) },
       { id: "archive", label: "Export archive…", run: () => void exportArchive(sha) },
     ];
     showMenuAt(event, entries);
@@ -651,6 +760,17 @@
       aria-label="Pickaxe: patches adding or removing this string"
       value={store.filter.pickaxe}
       oninput={(e) => store.setFilter({ pickaxe: e.currentTarget.value })}
+    />
+    <!-- M12: pickaxe -G — commits whose patch adds/removes lines matching
+         this regex. -S and -G may BOTH be set: the values are forwarded
+         verbatim and the backend intersects them (simplest contract — no
+         cross-clearing UI to get out of sync). -->
+    <input
+      class="f"
+      placeholder="patch regex (-G)"
+      aria-label="Pickaxe: patches adding or removing lines matching this regex"
+      value={store.filter.pickaxeRegex ?? ""}
+      oninput={(e) => store.setFilter({ pickaxeRegex: e.currentTarget.value })}
     />
 
     {#if filterActive}
@@ -776,6 +896,24 @@
         {#if selectedInfo}
           <span class="dsha">{selectedInfo.sha.slice(0, 7)}</span>
           <span class="dsummary" title={selectedInfo.summary}>{selectedInfo.summary}</span>
+          {#if root !== ""}
+            <!-- M12: bookmark star (same store mutation as the menu item). -->
+            <button
+              class="star"
+              aria-pressed={selectedBookmarked}
+              aria-label={selectedBookmarked
+                ? "Remove bookmark from this commit"
+                : "Bookmark this commit"}
+              title={selectedBookmarked ? "Remove bookmark" : "Bookmark commit"}
+              onclick={() => {
+                // Snippet narrowing doesn't reach the callback closure.
+                const sha = selectedInfo?.sha;
+                if (sha) toggleBookmark(sha);
+              }}
+            >
+              {selectedBookmarked ? "★" : "☆"}
+            </button>
+          {/if}
         {:else}
           <span class="dsha">diff</span>
           <span class="dsummary">{compare?.base} → {compare?.target}</span>
@@ -919,6 +1057,9 @@
                   <span class="muted">…</span>
                 {/if}
               </dd>
+              <!-- M12: commit-signature verification badge. -->
+              <dt>Signature</dt>
+              <dd><SignatureBadge {repoId} sha={selectedInfo.sha} /></dd>
               {#if selectedInfo.refs.length > 0}
                 <dt>Refs</dt>
                 <dd class="drefs">
@@ -959,6 +1100,38 @@
       baseSha={plannerBaseSha}
       onClose={() => (plannerOpen = false)}
       onFinished={onRebaseFinished}
+    />
+  {/if}
+
+  <!-- 5. M12 commit-menu dialogs (branch / tag / reset "from here") -->
+  {#if branchFromSha}
+    <PromptDialog
+      open={true}
+      title={`Branch from ${branchFromSha.slice(0, 7)}`}
+      message="Creates the branch at this commit; your current branch stays checked out."
+      placeholder="New branch name"
+      confirmLabel="Create branch"
+      onSubmit={(name) => void createBranchFrom(branchFromSha ?? "", name)}
+      onCancel={() => (branchFromSha = null)}
+    />
+  {/if}
+
+  {#if tagAtSha}
+    <TagAtDialog
+      sha={tagAtSha}
+      onSubmit={(name, annotated, message) =>
+        void createTagAt(tagAtSha ?? "", name, annotated, message)}
+      onCancel={() => (tagAtSha = null)}
+    />
+  {/if}
+
+  {#if resetToSha}
+    <ResetDialog
+      {repoId}
+      open={true}
+      defaultTarget={resetToSha}
+      onClose={() => (resetToSha = null)}
+      onDone={onResetFromHereDone}
     />
   {/if}
 </section>
@@ -1282,6 +1455,29 @@
     border-radius: var(--m3-shape-extra-small, 4px);
     cursor: pointer;
     font-size: 0.72rem;
+  }
+
+  /* M12: bookmark star in the detail header. */
+  button.star {
+    flex: none;
+    padding: 0.05rem 0.45rem;
+    color: var(--m3-on-surface-variant);
+    background: none;
+    border: 1px solid var(--m3-outline-variant);
+    border-radius: var(--m3-shape-extra-small, 4px);
+    cursor: pointer;
+    font-size: 0.8125rem;
+    line-height: 1.3;
+  }
+
+  button.star[aria-pressed="true"] {
+    color: var(--m3-primary);
+    border-color: var(--m3-primary);
+  }
+
+  button.star:focus-visible {
+    outline: 2px solid var(--m3-primary);
+    outline-offset: 1px;
   }
 
   .dbody {

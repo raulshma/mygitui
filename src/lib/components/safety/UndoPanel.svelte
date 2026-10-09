@@ -15,14 +15,18 @@
    * (`$lib/stores/safety.svelte`).
    */
   import {
+    branchTrashList,
+    branchTrashRestore,
     checkpointGc,
     checkpointRestore,
   } from "$lib/ipc/client";
-  import type { CheckpointInfo } from "$lib/ipc/types";
+  import type { BranchTrashEntry, CheckpointInfo } from "$lib/ipc/types";
   import { refreshStatus } from "$lib/stores/tabs.svelte";
   import { loadUndo, safetyStore } from "$lib/stores/safety.svelte";
   import { toast } from "$lib/toast";
+  import { formatDateTime } from "$lib/stores/history-logic";
   import ConfirmDialog from "$lib/components/safety/ConfirmDialog.svelte";
+  import PromptDialog from "$lib/components/safety/PromptDialog.svelte";
   import { checkpointTitle } from "./safetyModel";
 
   let {
@@ -41,10 +45,12 @@
   let gcBusy = $state(false);
 
   $effect(() => {
-    // Reload when the repo switches.
+    // Reload when the repo switches (panel open = both sections refresh).
     void repoId;
     confirmingRestore = null;
+    restoringTrash = null;
     void loadUndo(repoId);
+    void loadTrash();
   });
 
   async function reload(): Promise<void> {
@@ -105,6 +111,55 @@
     } finally {
       gcBusy = false;
       await reload();
+    }
+  }
+
+  // -- M12: deleted branches (branch trash) ------------------------------------
+  // Force-deleted branches live under refs/mygitui/trash/* until checkpoint
+  // GC cleans them; Restore recreates the branch (optionally renamed).
+
+  let trash = $state<BranchTrashEntry[]>([]);
+  let trashLoading = $state(false);
+  let trashError = $state<string | null>(null);
+  /** Trash entry whose restore PromptDialog is open. */
+  let restoringTrash = $state<BranchTrashEntry | null>(null);
+  let restoreBusy = $state(false);
+
+  async function loadTrash(): Promise<void> {
+    trashLoading = true;
+    trashError = null;
+    try {
+      trash = await branchTrashList(repoId);
+    } catch (err) {
+      trashError = err instanceof Error ? err.message : String(err);
+    } finally {
+      trashLoading = false;
+    }
+  }
+
+  async function doTrashRestore(entry: BranchTrashEntry, newName: string): Promise<void> {
+    restoringTrash = null;
+    restoreBusy = true;
+    try {
+      // Same name → no `new_name` (backend errors on an existing name);
+      // a renamed restore passes the new name through.
+      const name = await branchTrashRestore(
+        repoId,
+        entry.id,
+        newName === entry.name ? undefined : newName,
+      );
+      toast(`Restored branch ${name}`, { kind: "success" });
+      await loadTrash();
+      // No branch-list event exists — refresh status (branch name chips) too.
+      void refreshStatus(repoId);
+      onMutated?.();
+    } catch (err) {
+      toast(
+        `Restore failed: ${err instanceof Error ? err.message : String(err)}`,
+        { kind: "error" },
+      );
+    } finally {
+      restoreBusy = false;
     }
   }
 </script>
@@ -195,6 +250,53 @@
       {/each}
     </ul>
   {/if}
+
+  <!-- M12: force-deleted branches preserved under refs/mygitui/trash/* -->
+  <section class="trash" aria-label="Deleted branches">
+    <header class="trash-head">
+      <h2 class="trash-title">Deleted branches</h2>
+      <button class="tb" type="button" onclick={() => void loadTrash()} disabled={trashLoading}>
+        {trashLoading ? "Loading…" : "Refresh"}
+      </button>
+    </header>
+
+    {#if trashError}
+      <p class="state error" role="alert">{trashError}</p>
+    {:else if !trashLoading && trash.length === 0}
+      <p class="trash-empty">
+        No deleted branches. Force-deleted branches are kept here (under
+        <code>refs/mygitui/trash/*</code>) so their commits stay recoverable
+        until checkpoint GC cleans them up.
+      </p>
+    {:else}
+      <ul class="trash-list" role="list" aria-label="Deleted branches, newest first">
+        {#each trash as entry (entry.id)}
+          <li class="row">
+            <div class="info">
+              <span class="title" title={entry.name}>{entry.name}</span>
+              <span class="chips">
+                <span class="chip sha-chip" title={entry.sha}>{entry.sha.slice(0, 7)}</span>
+                <span class="chip" title="Deleted {formatDateTime(entry.deleted_at)}">
+                  deleted {formatDateTime(entry.deleted_at)}
+                </span>
+              </span>
+            </div>
+            <span class="actions">
+              <button
+                class="tb"
+                type="button"
+                aria-label={`Restore branch ${entry.name}`}
+                disabled={restoreBusy}
+                onclick={() => (restoringTrash = entry)}
+              >
+                Restore
+              </button>
+            </span>
+          </li>
+        {/each}
+      </ul>
+    {/if}
+  </section>
 </section>
 
 <ConfirmDialog
@@ -204,6 +306,18 @@
   confirmLabel="Clean"
   onConfirm={() => void doGcConfirmed()}
 />
+
+{#if restoringTrash}
+  <PromptDialog
+    open={true}
+    title={`Restore branch ${restoringTrash.name}`}
+    message="Restores the branch at its deleted tip. Keep the name (or edit it to restore under a new name — useful when the original was recreated)."
+    initial={restoringTrash.name}
+    confirmLabel="Restore branch"
+    onSubmit={(value) => void doTrashRestore(restoringTrash!, value)}
+    onCancel={() => (restoringTrash = null)}
+  />
+{/if}
 
 <style>
   .undo-panel {
@@ -381,5 +495,51 @@
   .danger-btn:disabled {
     cursor: not-allowed;
     opacity: 0.55;
+  }
+
+  /* -- M12: deleted branches (trash) section ---------------------------------- */
+
+  .trash {
+    flex: none;
+    border-top: 1px solid var(--m3-outline-variant, var(--m3-primary));
+    margin-top: 0.25rem;
+  }
+
+  .trash-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    padding: 0.375rem 0.5rem 0.15rem;
+  }
+
+  .trash-title {
+    margin: 0;
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: var(--m3-on-surface);
+  }
+
+  .trash-empty {
+    margin: 0;
+    padding: 0.15rem 0.5rem 0.5rem;
+    color: var(--m3-on-surface-variant, var(--m3-on-surface));
+    font-size: 0.75rem;
+    line-height: 1.45;
+  }
+
+  .trash-empty code {
+    font-family: ui-monospace, Consolas, monospace;
+    font-size: 0.6875rem;
+  }
+
+  .trash-list {
+    margin: 0;
+    padding: 0 0 0.5rem;
+    list-style: none;
+  }
+
+  .sha-chip {
+    font-family: ui-monospace, Consolas, monospace;
   }
 </style>

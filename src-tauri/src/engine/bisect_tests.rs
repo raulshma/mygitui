@@ -5,9 +5,9 @@ use std::path::{Path, PathBuf};
 
 use git2::{IndexAddOption, Repository, RepositoryInitOptions};
 
-use super::git_engine::{EngineError, GitEngine, GitEngineM3};
+use super::git_engine::{EngineError, GitEngine, GitEngineM12, GitEngineM3};
 use super::libgit2::Libgit2Engine;
-use super::types::{BisectMark, RebaseStep};
+use super::types::{BisectLogEntry, BisectMark, RebaseStep};
 
 const ENGINE: Libgit2Engine = Libgit2Engine;
 
@@ -347,4 +347,128 @@ fn describe_uses_tags_and_falls_back() {
         after_tag.starts_with("v1.0-") && after_tag.ends_with(&format!("-g{}", &c3[..7])),
         "describe --tags format: {after_tag}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// M12: mark log (`bisect_log` + persistence)
+// ---------------------------------------------------------------------------
+
+/// (`mark`, `sha`, `at`) tuples — `BisectLogEntry` has no `PartialEq`.
+fn tupled(entries: &[BisectLogEntry]) -> Vec<(&str, &str, i64)> {
+    entries
+        .iter()
+        .map(|e| (e.mark.as_str(), e.sha.as_str(), e.at))
+        .collect()
+}
+
+#[test]
+fn bisect_log_builds_in_mark_order() {
+    let (fx, [c1, _c2, _c3, _c4, c5]) = linear_fixture("m12-log");
+
+    let state = ENGINE
+        .bisect_start(&fx.repo, Some(&c5), Some(&c1))
+        .expect("start");
+    // Start records the explicitly given bad + good.
+    assert_eq!(
+        state
+            .log
+            .iter()
+            .map(|e| e.mark.as_str())
+            .collect::<Vec<_>>(),
+        vec!["bad", "good"]
+    );
+    assert_eq!(state.log[0].sha, c5);
+    assert_eq!(state.log[1].sha, c1);
+    assert!(state.log.iter().all(|e| e.at > 0), "timestamps set");
+
+    // Each mark appends exactly one entry, oldest first, with the sha of the
+    // probe that was marked.
+    let probe1 = head_sha(&fx.repo);
+    ENGINE
+        .bisect_mark(&fx.repo, BisectMark::Good)
+        .expect("mark good");
+    let probe2 = head_sha(&fx.repo);
+    let state = ENGINE
+        .bisect_mark(&fx.repo, BisectMark::Bad)
+        .expect("mark bad");
+    let marks: Vec<(&str, &String)> = state.log[2..]
+        .iter()
+        .map(|e| (e.mark.as_str(), &e.sha))
+        .collect();
+    assert_eq!(marks, vec![("good", &probe1), ("bad", &probe2)]);
+
+    // The live-state accessor returns the same history — via the trait
+    // method (trash.rs forwarder) and the inherent impl alike.
+    let log = GitEngineM12::bisect_log(&ENGINE, &fx.repo).expect("trait bisect_log");
+    assert_eq!(log.len(), state.log.len());
+    assert_eq!(log.last().map(|e| e.sha.as_str()), Some(probe2.as_str()));
+    let log = ENGINE
+        .bisect_log_impl(&fx.repo)
+        .expect("inherent bisect_log");
+    assert_eq!(log.len(), state.log.len());
+    assert_eq!(log.last().map(|e| e.sha.as_str()), Some(probe2.as_str()));
+
+    // Old state files (no `log` field) still load: strip the field from the
+    // on-disk JSON and read the state back.
+    let path = fx.repo.path().join("mygitui").join("bisect.json");
+    let text = std::fs::read_to_string(&path).expect("read state");
+    let mut json: serde_json::Value = serde_json::from_str(&text).expect("parse state");
+    json.as_object_mut().unwrap().remove("log");
+    std::fs::write(&path, json.to_string()).expect("write legacy state");
+    let state = ENGINE
+        .bisect_state(&fx.repo)
+        .expect("state after legacy load");
+    assert!(state.active);
+    assert!(state.log.is_empty(), "legacy file loads with an empty log");
+}
+
+#[test]
+fn bisect_reset_archives_log_and_bisect_log_falls_back() {
+    let (fx, [c1, _c2, _c3, _c4, c5]) = linear_fixture("m12-archive");
+
+    ENGINE
+        .bisect_start(&fx.repo, Some(&c5), Some(&c1))
+        .expect("start");
+    let state = ENGINE
+        .bisect_mark(&fx.repo, BisectMark::Good)
+        .expect("mark");
+    let expected: Vec<BisectLogEntry> = state.log.clone();
+
+    ENGINE.bisect_reset(&fx.repo).expect("reset");
+    assert!(!fx.repo.path().join("mygitui").join("bisect.json").exists());
+    let archive = fx.repo.path().join("mygitui").join("bisect-last.json");
+    assert!(archive.exists(), "reset archives the finished run");
+
+    // No live state: bisect_log serves the archive.
+    let log = ENGINE.bisect_log(&fx.repo).expect("bisect_log after reset");
+    assert_eq!(tupled(&log), tupled(&expected));
+
+    // A repo that never ran a bisect has an empty log (no live state, no
+    // archive file).
+    let (fx2, _) = linear_fixture("m12-no-history");
+    assert!(ENGINE.bisect_log(&fx2.repo).expect("empty log").is_empty());
+}
+
+#[test]
+fn bisect_log_start_without_good_only_records_bad() {
+    let (fx, [.., c5]) = linear_fixture("m12-start-bad-only");
+    let state = ENGINE
+        .bisect_start(&fx.repo, Some(&c5), None)
+        .expect("start");
+    assert_eq!(state.log.len(), 1);
+    assert_eq!(state.log[0].mark, "bad");
+    assert_eq!(state.log[0].sha, c5);
+    ENGINE.bisect_reset(&fx.repo).expect("reset");
+    let log = ENGINE.bisect_log(&fx.repo).expect("archived log");
+    assert_eq!(log.len(), 1, "single-entry run still archived");
+}
+
+#[test]
+fn bisect_log_never_recorded_start_is_empty() {
+    let (fx, _) = linear_fixture("m12-unstarted");
+    // bisect_start(HEAD) records nothing: the implicit bad is not a mark.
+    ENGINE.bisect_start(&fx.repo, None, None).expect("start");
+    let state = ENGINE.bisect_state(&fx.repo).expect("state");
+    assert!(state.active);
+    assert!(state.log.is_empty());
 }

@@ -32,15 +32,22 @@
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use git2::build::CheckoutBuilder;
-use git2::{Delta, ErrorCode, IndexAddOption, Repository, Signature, Sort, StatusOptions};
-
 use super::git_engine::{EngineError, EngineResult};
 use super::libgit2::Libgit2Engine;
 use super::types::{CheckpointInfo, PreviewFile, PreviewInfo};
+use git2::build::CheckoutBuilder;
+use git2::{Delta, ErrorCode, IndexAddOption, Repository, Signature, Sort, StatusOptions};
 
 /// Namespace holding all snapshot refs.
 const CHECKPOINT_PREFIX: &str = "refs/mygitui/checkpoints/";
+
+/// Marker file (under `<gitdir>/mygitui/`) holding the unix millis of the
+/// last automatic checkpoint GC.
+const AUTO_GC_MARKER: &str = "last_ckpt_gc";
+
+/// Auto-GC cadence (days between runs) and the age cutoff it passes to the
+/// real GC.
+const AUTO_GC_DAYS: u32 = 30;
 
 /// Marker line in a snapshot commit message (identifies our commits).
 const MESSAGE_MARKER: &str = "mygitui-checkpoint";
@@ -215,6 +222,55 @@ impl Libgit2Engine {
 // ---------------------------------------------------------------------------
 // checkpoint helpers
 // ---------------------------------------------------------------------------
+
+/// Best-effort automatic GC at repo open (M12): when the marker file
+/// `<gitdir>/mygitui/last_ckpt_gc` is missing or older than
+/// [`AUTO_GC_DAYS`] AND at least one checkpoint ref exists, run the regular
+/// GC (`checkpoint_gc_impl`, same 30-day cutoff) and write the marker.
+/// Every error is swallowed — this must never block or fail a repo open.
+/// Callers on the open path may run it on a spawned thread (see repo.rs).
+pub(crate) fn maybe_auto_gc(repo: &Repository) {
+    let result = auto_gc_inner(repo);
+    if let Err(err) = result {
+        tracing::debug!(
+            error = %err,
+            "checkpoint auto-gc skipped (best-effort)"
+        );
+    }
+}
+
+fn auto_gc_inner(repo: &Repository) -> EngineResult<()> {
+    let marker = repo.path().join("mygitui").join(AUTO_GC_MARKER);
+    if marker_is_fresh(&marker) {
+        return Ok(());
+    }
+    // No checkpoints → nothing to collect (and no marker: the first real
+    // checkpoint still gets a GC pass at the next open).
+    let mut any = repo.references_glob(&format!("{CHECKPOINT_PREFIX}*"))?;
+    if any.next().is_none() {
+        return Ok(());
+    }
+    let engine = Libgit2Engine;
+    engine.checkpoint_gc_impl(repo, AUTO_GC_DAYS)?;
+    // Marker written only after a run that actually happened.
+    if let Some(parent) = marker.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(&marker, unix_millis().to_string())?;
+    Ok(())
+}
+
+/// True when the marker exists and is younger than [`AUTO_GC_DAYS`].
+fn marker_is_fresh(marker: &std::path::Path) -> bool {
+    let Ok(text) = std::fs::read_to_string(marker) else {
+        return false;
+    };
+    let Ok(last) = text.trim().parse::<i64>() else {
+        return false;
+    };
+    let now = unix_millis() as i64;
+    now - last < i64::from(AUTO_GC_DAYS) * 86_400_000
+}
 
 /// Tree of the full workdir state: HEAD tree overlaid with all workdir
 /// modifications + untracked files (`git add -A` semantics).
@@ -532,4 +588,196 @@ fn preview_branch_delete(
         summary: format!("UNMERGED: {} commits would be unreachable", files.len()),
         files,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    //! M12: automatic checkpoint GC at repo open.
+
+    use std::path::{Path, PathBuf};
+
+    use git2::{IndexAddOption, Repository, Signature, Time};
+
+    use super::super::libgit2::Libgit2Engine;
+    use super::maybe_auto_gc;
+    use super::{AUTO_GC_MARKER, CHECKPOINT_PREFIX};
+
+    const ENGINE: Libgit2Engine = Libgit2Engine;
+
+    struct TempDir(PathBuf);
+
+    impl TempDir {
+        fn new(name: &str) -> TempDir {
+            let dir =
+                std::env::temp_dir().join(format!("mygitui-ckptgc-{}-{name}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).expect("create temp dir");
+            TempDir(dir)
+        }
+
+        fn path(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let dir = self.0.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+                let _ = std::fs::remove_dir_all(dir);
+            });
+        }
+    }
+
+    fn init_repo(path: &Path) -> Repository {
+        let repo = Repository::init(path).expect("init temp repo");
+        repo.config()
+            .and_then(|mut c| {
+                c.set_str("user.name", "Gc Test")?;
+                c.set_str("user.email", "gc@test.local")
+            })
+            .expect("configure identity");
+        repo
+    }
+
+    fn commit_file(repo: &Repository, path: &str, content: &str, message: &str) -> String {
+        let file = repo.workdir().unwrap().join(path);
+        std::fs::write(file, content).expect("write file");
+        let mut index = repo.index().expect("index");
+        index
+            .add_all(["*"].iter(), IndexAddOption::DEFAULT, None)
+            .expect("add all");
+        index.write().expect("write index");
+        let tree_oid = index.write_tree().expect("write tree");
+        let tree = repo.find_tree(tree_oid).expect("tree");
+        let sig = repo.signature().expect("signature");
+        let mut parents = Vec::new();
+        if let Ok(head) = repo.head() {
+            parents.push(head.peel_to_commit().expect("head commit"));
+        }
+        let parent_refs: Vec<&git2::Commit<'_>> = parents.iter().collect();
+        repo.commit(Some("HEAD"), &sig, &sig, message, &tree, &parent_refs)
+            .expect("commit")
+            .to_string()
+    }
+
+    /// Forge a checkpoint whose commit is backdated `age_days`, with a ref
+    /// name that sorts as older than anything created "now".
+    fn forge_aged_checkpoint(
+        repo: &Repository,
+        parent_sha: &str,
+        tag: &str,
+        age_days: i64,
+    ) -> String {
+        let mut index = repo.index().expect("index");
+        index
+            .add_all(["*"].iter(), IndexAddOption::DEFAULT, None)
+            .expect("add all");
+        index.write().expect("write index");
+        let tree_oid = index.write_tree().expect("write tree");
+        let tree = repo.find_tree(tree_oid).expect("tree");
+        let parent = repo
+            .revparse_single(parent_sha)
+            .expect("parent")
+            .peel_to_commit()
+            .expect("parent commit");
+        let when = now_secs() - age_days * 86_400;
+        let sig = Signature::new("Old Test", "old@test.local", &Time::new(when, 0))
+            .expect("backdated signature");
+        let message =
+            format!("checkpoint: aged-{tag}\n\nmygitui-checkpoint\nbranch: main\nworktree: yes\n");
+        let oid = repo
+            .commit(None, &sig, &sig, &message, &tree, &[&parent])
+            .expect("backdated commit");
+        let ref_name = format!("{CHECKPOINT_PREFIX}{}-aged-{tag}", now_millis());
+        repo.reference(&ref_name, oid, true, "checkpoint: create")
+            .expect("forge ref");
+        ref_name
+    }
+
+    fn marker_path(repo: &Repository) -> PathBuf {
+        repo.path().join("mygitui").join(AUTO_GC_MARKER)
+    }
+
+    fn now_secs() -> i64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64
+    }
+
+    fn now_millis() -> u128 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis()
+    }
+
+    #[test]
+    fn auto_gc_prunes_aged_checkpoints_and_writes_marker() {
+        let dir = TempDir::new("prunes");
+        let repo = init_repo(dir.path());
+        let base = commit_file(&repo, "a.txt", "one\n", "base");
+
+        // One aged checkpoint (40 days) + one fresh (the safety floor).
+        let aged = forge_aged_checkpoint(&repo, &base, "old", 40);
+        let fresh = ENGINE
+            .checkpoint_create_impl(&repo, "fresh")
+            .expect("fresh checkpoint");
+
+        // No marker (never gc'd): the call must collect the aged ref.
+        assert!(!marker_path(&repo).exists());
+        maybe_auto_gc(&repo);
+
+        assert!(
+            repo.find_reference(&aged).is_err(),
+            "40-day-old checkpoint pruned"
+        );
+        assert!(
+            repo.find_reference(&fresh.ref_name).is_ok(),
+            "fresh checkpoint survives"
+        );
+        assert!(marker_path(&repo).exists(), "marker written after the run");
+    }
+
+    #[test]
+    fn auto_gc_second_call_within_window_is_a_no_op() {
+        let dir = TempDir::new("no-op");
+        let repo = init_repo(dir.path());
+        let base = commit_file(&repo, "a.txt", "one\n", "base");
+
+        let aged = forge_aged_checkpoint(&repo, &base, "one", 40);
+        ENGINE
+            .checkpoint_create_impl(&repo, "fresh")
+            .expect("fresh checkpoint");
+        maybe_auto_gc(&repo);
+        assert!(repo.find_reference(&aged).is_err());
+
+        // A NEW aged checkpoint appears, but the marker is now fresh: the
+        // next call must not collect anything.
+        let aged2 = forge_aged_checkpoint(&repo, &base, "two", 40);
+        maybe_auto_gc(&repo);
+        assert!(
+            repo.find_reference(&aged2).is_ok(),
+            "fresh marker ⇒ gc skipped entirely"
+        );
+
+        // Deleting the marker re-arms the gc.
+        std::fs::remove_file(marker_path(&repo)).expect("remove marker");
+        maybe_auto_gc(&repo);
+        assert!(repo.find_reference(&aged2).is_err(), "gc ran again");
+    }
+
+    #[test]
+    fn auto_gc_without_checkpoints_writes_no_marker() {
+        let dir = TempDir::new("empty");
+        let repo = init_repo(dir.path());
+        commit_file(&repo, "a.txt", "one\n", "base");
+        maybe_auto_gc(&repo);
+        assert!(
+            !marker_path(&repo).exists(),
+            "no checkpoints ⇒ no run ⇒ no marker"
+        );
+    }
 }

@@ -17,10 +17,11 @@ use tauri::State;
 
 use crate::engine::git_engine::EngineError;
 use crate::engine::types::{
-    BisectMark, BisectState, BlameLine, CheckpointInfo, CommitInfo, ConflictFile,
-    ConflictResolution, DiffSide, FileDiff, LfsStatus, LogFilter, MergeOptions, MergeResult,
-    RebaseState, RebaseStep, ReflogEntry, RemoteBranchInfo, RepoHealth, RepoId, RepoInfo,
-    RepoStatus, ResetKind, SparseInfo, StashInfo, TagInfo, WorktreeInfo,
+    BisectLogEntry, BisectMark, BisectState, BlameLine, BranchTrashEntry, CheckpointInfo,
+    CommitInfo, CommitSignature, ConflictFile, ConflictResolution, DiffSide, FileDiff, LfsStatus,
+    LogFilter, MergeOptions, MergeResult, RebaseState, RebaseStep, ReflogEntry, RemoteBranchInfo,
+    RepoHealth, RepoId, RepoInfo, RepoStatus, ResetKind, SparseInfo, StashInfo, TagInfo,
+    WorktreeInfo,
 };
 use crate::graph::types::{self, GraphRow};
 use crate::repo::{RepoHandle, RepoManager, StreamHandle};
@@ -1089,16 +1090,20 @@ pub async fn fetch(
     state: State<'_, RepoManager>,
 ) -> Result<NetStats, String> {
     let handle = get_handle(&state, &repo_id)?;
-    let engine = handle.engine();
     let repo = handle.repo();
     let opening = format!("fetching {}", options.remote);
     finish_op(enqueue_net_op(
         &handle,
         "fetch",
         opening,
-        move |_ctx, progress| {
+        move |ctx, progress| {
+            // Cancellation-aware ext path: `op_cancel` flips the ctx token
+            // and the fetch polls it between phases and inside the transfer
+            // callbacks. The engine is stateless, so the concrete instance
+            // here matches how every other dispatch reaches libgit2.
+            let engine = crate::engine::libgit2::Libgit2Engine::new();
             let guard = repo.lock();
-            engine.fetch(&guard, &options, progress)
+            engine.fetch_impl_ext(&guard, &options, progress, ctx.cancel_token().as_deref())
         },
     ))
     .await
@@ -1133,7 +1138,6 @@ pub async fn push(
     state: State<'_, RepoManager>,
 ) -> Result<NetStats, String> {
     let handle = get_handle(&state, &repo_id)?;
-    let engine = handle.engine();
     let repo = handle.repo();
     let generation = handle.generation_shared();
     let net_repo = handle.id.clone();
@@ -1144,11 +1148,19 @@ pub async fn push(
     };
     let (_op_id, rx) = handle.ops().enqueue("push", move |ctx| {
         ctx.emit_progress(&opening, None);
+        // Cancellation-aware ext path (see fetch): op_cancel flips the ctx
+        // token; push polls it between phases.
+        let engine = crate::engine::libgit2::Libgit2Engine::new();
         let result = crate::auth::with_netop_context(&net_repo, || {
             let guard = repo.lock();
-            engine.push(&guard, &options, &mut |p| {
-                emit_push_progress(&ctx, &p);
-            })
+            engine.push_impl_ext(
+                &guard,
+                &options,
+                &mut |p| {
+                    emit_push_progress(&ctx, &p);
+                },
+                ctx.cancel_token().as_deref(),
+            )
         });
         generation.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         result.map_err(engine_err)
@@ -1722,6 +1734,141 @@ pub async fn bisect_reset(repo_id: RepoId, state: State<'_, RepoManager>) -> Res
     .await
 }
 
+// ---------- M12: signature verify / branch trash / prune / bisect log ----------
+
+/// Verification status of one commit's signature (read path; shares the
+/// repo mutex like the other read commands).
+#[tauri::command(rename_all = "snake_case")]
+pub async fn commit_signature(
+    repo_id: RepoId,
+    sha: String,
+    state: State<'_, RepoManager>,
+) -> Result<CommitSignature, String> {
+    let handle = get_handle(&state, &repo_id)?;
+    let engine = handle.m12();
+    let repo = handle.repo();
+    tauri::async_runtime::spawn_blocking(move || {
+        let repo = repo.lock();
+        engine.commit_signature(&repo, &sha).map_err(engine_err)
+    })
+    .await
+    .map_err(|e| format!("commit_signature task failed: {e}"))?
+}
+
+/// Branches preserved under `refs/mygitui/trash/*`, newest first (read).
+#[tauri::command(rename_all = "snake_case")]
+pub async fn branch_trash_list(
+    repo_id: RepoId,
+    state: State<'_, RepoManager>,
+) -> Result<Vec<BranchTrashEntry>, String> {
+    let handle = get_handle(&state, &repo_id)?;
+    let engine = handle.m12();
+    let repo = handle.repo();
+    tauri::async_runtime::spawn_blocking(move || {
+        let repo = repo.lock();
+        engine.branch_trash_list(&repo).map_err(engine_err)
+    })
+    .await
+    .map_err(|e| format!("branch_trash_list task failed: {e}"))?
+}
+
+/// Restore a trashed branch (optionally renamed); returns the branch name.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn branch_trash_restore(
+    repo_id: RepoId,
+    id: String,
+    new_name: Option<String>,
+    state: State<'_, RepoManager>,
+) -> Result<String, String> {
+    let handle = get_handle(&state, &repo_id)?;
+    let engine = handle.m12();
+    finish_op(enqueue_mutation(&handle, "branch", move |_ctx, repo| {
+        engine.branch_trash_restore(repo, &id, new_name.as_deref())
+    }))
+    .await
+}
+
+/// `git worktree prune`; returns the number of pruned worktrees.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn worktree_prune(repo_id: RepoId, state: State<'_, RepoManager>) -> Result<u32, String> {
+    let handle = get_handle(&state, &repo_id)?;
+    let engine = handle.m12();
+    finish_op(enqueue_mutation(&handle, "worktree", move |_ctx, repo| {
+        engine.worktree_prune(repo)
+    }))
+    .await
+}
+
+/// Recorded mark history for a bisect: the live run's log, else the last
+/// archived run (read).
+#[tauri::command(rename_all = "snake_case")]
+pub async fn bisect_log(
+    repo_id: RepoId,
+    state: State<'_, RepoManager>,
+) -> Result<Vec<BisectLogEntry>, String> {
+    let handle = get_handle(&state, &repo_id)?;
+    let engine = handle.m12();
+    let repo = handle.repo();
+    tauri::async_runtime::spawn_blocking(move || {
+        let repo = repo.lock();
+        engine.bisect_log(&repo).map_err(engine_err)
+    })
+    .await
+    .map_err(|e| format!("bisect_log task failed: {e}"))?
+}
+
+/// M12: OS accent color for the dynamic-color pipeline (Windows DWM
+/// registry read; null on other platforms). Frontend probes it once at
+/// theme init.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn os_accent_color() -> Result<Option<String>, String> {
+    #[cfg(windows)]
+    {
+        Ok(windows_accent_color())
+    }
+    #[cfg(not(windows))]
+    {
+        Ok(None)
+    }
+}
+
+#[cfg(windows)]
+fn windows_accent_color() -> Option<String> {
+    use std::os::windows::process::CommandExt as _;
+    // `reg query` output line: "    AccentColor    REG_DWORD    0xff9966dd"
+    // The DWORD is 0xAABBGGRR — swizzle to #RRGGBB.
+    let output = std::process::Command::new("reg")
+        .args([
+            "query",
+            r"HKCU\Software\Microsoft\Windows\DWM",
+            "/v",
+            "AccentColor",
+        ])
+        .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
+        .output()
+        .ok()?;
+    let text = String::from_utf8_lossy(&output.stdout);
+    let line = text.lines().find(|l| l.contains("AccentColor"))?;
+    let raw = line.split_whitespace().last()?;
+    let dword = u32::from_str_radix(raw.trim_start_matches("0x"), 16).ok()?;
+    let r = dword & 0xff;
+    let g = (dword >> 8) & 0xff;
+    let b = (dword >> 16) & 0xff;
+    Some(format!("#{r:02x}{g:02x}{b:02x}"))
+}
+
+/// Best-effort cancel of a queued/running mutation op. Cheap (atomics only)
+/// so it runs inline, off the repo mutex.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn op_cancel(
+    repo_id: RepoId,
+    op_id: String,
+    state: State<'_, RepoManager>,
+) -> Result<bool, String> {
+    let handle = get_handle(&state, &repo_id)?;
+    Ok(handle.ops().cancel_op(repo_id.0.as_str(), &op_id))
+}
+
 /// `git describe --tags` for a commit-ish.
 #[tauri::command(rename_all = "snake_case")]
 pub async fn describe(
@@ -1789,6 +1936,7 @@ pub async fn maintenance_run(
 ) -> Result<String, String> {
     let handle = get_handle(&state, &repo_id)?;
     let root = handle.root.clone();
+    let git_dir = handle.git_dir.clone();
     finish_op(enqueue_mutation(
         &handle,
         "maintenance",
@@ -1804,6 +1952,22 @@ pub async fn maintenance_run(
                     return crate::maintenance::count_objects(workdir)
                         .map(|(loose, packed_kib)| {
                             format!("loose objects: {loose}, packed size: {packed_kib} KiB")
+                        })
+                        .map_err(EngineError::Invalid);
+                }
+                // M12: dangling-object census — needs stderr capture, so it
+                // bypasses plain `git_run` and writes the fsck.json cache.
+                "fsck" => {
+                    return crate::maintenance::fsck_run(workdir, &git_dir)
+                        .map(|(dangling, samples)| {
+                            format!(
+                                "dangling objects: {dangling}{}",
+                                if samples.is_empty() {
+                                    String::new()
+                                } else {
+                                    format!(" (e.g. {})", samples.first().unwrap_or(&String::new()))
+                                }
+                            )
                         })
                         .map_err(EngineError::Invalid);
                 }

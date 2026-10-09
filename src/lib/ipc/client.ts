@@ -1530,3 +1530,16 @@ export async function cliArgsInitial(): Promise<string[]> {
   if (!isTauri()) return [];
   return call<string[]>("cli_args_initial", {});
 }
+
+/**
+ * OS accent color (Windows DWM registry), for the dynamic-color pipeline.
+ * Null on other platforms or when the value is unreadable.
+ */
+export async function osAccentColor(): Promise<string | null> {
+  if (!isTauri()) return null;
+  try {
+    return await call<string | null>("os_accent_color", {});
+  } catch {
+    return null;
+  }
+}

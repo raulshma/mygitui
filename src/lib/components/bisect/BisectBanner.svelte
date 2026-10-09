@@ -9,10 +9,11 @@
   action (the typed event bus reaches HistoryView in this same window).
 -->
 <script lang="ts">
-  import { bisectMark, bisectReset, bisectStart, bisectState } from "$lib/ipc/client";
-  import type { BisectState } from "$lib/ipc/types";
+  import { bisectLog, bisectMark, bisectReset, bisectStart, bisectState } from "$lib/ipc/client";
+  import type { BisectLogEntry, BisectState } from "$lib/ipc/types";
   import { tabStore } from "$lib/stores/tabs.svelte";
   import { toast } from "$lib/toast";
+  import { formatDateTime } from "$lib/stores/history-logic";
   import { emitUiEvent, onUiEvent } from "$lib/palette/events";
 
   let { repoId }: { repoId: string } = $props();
@@ -23,6 +24,11 @@
   let badRef = $state("");
   let goodRef = $state("");
   let marking = $state(false);
+
+  // M12: mark-history dialog.
+  let logOpen = $state(false);
+  let logLoading = $state(false);
+  let logEntries = $state<BisectLogEntry[] | null>(null);
 
   const status = $derived(tabStore.tabs.find((t) => t.id === repoId)?.status ?? null);
 
@@ -51,6 +57,24 @@
       bisect = await bisectState(repoId);
     } catch {
       bisect = null;
+    }
+  }
+
+  /** M12: opens the mark-history dialog (fetches fresh, handles empty). */
+  async function onLog(): Promise<void> {
+    logOpen = true;
+    logLoading = true;
+    logEntries = null;
+    try {
+      logEntries = await bisectLog(repoId);
+    } catch (err) {
+      toast(
+        `Bisect log failed: ${err instanceof Error ? err.message : String(err)}`,
+        { kind: "error" },
+      );
+      logOpen = false;
+    } finally {
+      logLoading = false;
     }
   }
 
@@ -130,6 +154,9 @@
       <button class="btn bad" type="button" disabled={marking} onclick={() => void onMark("bad")}>Bad</button>
       <button class="btn" type="button" disabled={marking} onclick={() => void onMark("skip")}>Skip</button>
     {/if}
+    <button class="btn subtle" type="button" disabled={marking} onclick={() => void onLog()}>
+      Log…
+    </button>
     <button class="btn subtle" type="button" disabled={marking} onclick={() => void onReset()}>
       Reset
     </button>
@@ -189,6 +216,45 @@
         </button>
       </div>
     </form>
+  </div>
+{/if}
+
+{#if logOpen}
+  <!-- M12: bisect mark history (oldest first; empty state handled). -->
+  <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+  <div
+    class="scrim"
+    role="presentation"
+    onkeydown={(e) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        logOpen = false;
+      }
+    }}
+  >
+    <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="bisect-log-title">
+      <h2 id="bisect-log-title" class="title">Bisect log</h2>
+      {#if logLoading}
+        <p class="text">Loading…</p>
+      {:else if logEntries === null || logEntries.length === 0}
+        <p class="text">No marks recorded yet — mark a probe Good, Bad or Skip first.</p>
+      {:else}
+        <ol class="log-list" aria-label="Marks, oldest first">
+          {#each logEntries as entry, i (i)}
+            <li class="log-row">
+              <span class={`mark mark-${entry.mark}`}>{entry.mark}</span>
+              <code class="log-sha" title={entry.sha}>{entry.sha.slice(0, 8)}</code>
+              <span class="log-time">{formatDateTime(entry.at)}</span>
+            </li>
+          {/each}
+        </ol>
+      {/if}
+      <div class="actions">
+        <button class="secondary" type="button" onclick={() => (logOpen = false)}>
+          Close
+        </button>
+      </div>
+    </div>
   </div>
 {/if}
 
@@ -332,6 +398,61 @@
     justify-content: flex-end;
     gap: 0.5rem;
     margin-top: 0.75rem;
+  }
+
+  /* M12: mark-history dialog rows. */
+  .log-list {
+    margin: 0 0 0.25rem;
+    padding: 0;
+    list-style: none;
+    max-height: 16rem;
+    overflow-y: auto;
+    font-size: 0.75rem;
+  }
+
+  .log-row {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.15rem 0;
+  }
+
+  .mark {
+    flex: none;
+    width: 3rem;
+    padding: 0 0.35rem;
+    border-radius: var(--m3-shape-full, 9999px);
+    font-size: 0.625rem;
+    text-align: center;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+  }
+
+  .mark-good {
+    background: var(--m3-primary-container, transparent);
+    color: var(--m3-on-primary-container, inherit);
+  }
+
+  .mark-bad {
+    background: var(--m3-error-container, transparent);
+    color: var(--m3-on-error-container, inherit);
+  }
+
+  .mark-skip {
+    background: var(--m3-surface-container-highest, transparent);
+    color: var(--m3-on-surface-variant, inherit);
+  }
+
+  .log-sha {
+    font-family: ui-monospace, Consolas, monospace;
+    color: var(--m3-primary);
+  }
+
+  .log-time {
+    margin-left: auto;
+    color: var(--m3-on-surface-variant, var(--m3-on-surface));
+    font-size: 0.6875rem;
   }
 
   .primary {

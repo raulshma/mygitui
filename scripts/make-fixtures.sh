@@ -11,15 +11,24 @@
 #   fixtures/commits-100k   bulk-history repo (fast-import). Quick mode
 #                           (default): 500 commits. Full mode (--full): 100000
 #   fixtures/worktree       repo + a linked worktree on a feature branch
+#   fixtures/signed         SSH-signed commits: ed25519 key, repo-local
+#                           gpg.format=ssh config and an allowed_signers
+#                           file (skipped when ssh-keygen is missing)
+#   fixtures/detached       repo whose HEAD is detached mid-history with one
+#                           commit made on the detached HEAD
+#   fixtures/files-scale    one commit with --files N small files (default
+#                           500; --files 100000 reproduces the perf fixture)
 #
 # Usage:
 #   bash scripts/make-fixtures.sh            # quick mode (~500-commit stub)
 #   bash scripts/make-fixtures.sh --full     # full 100k-commit history
+#   bash scripts/make-fixtures.sh --files N  # files-scale fixture size
 #   MYGITUI_FIXTURE_COMMITS=50 bash scripts/make-fixtures.sh
 #
-# Requires: git (>= 2.28 for `git init -b`). Safe: only ever writes inside
-# <repo-root>/fixtures/, and refuses to run if not invoked from the mygitui
-# project layout. Fixtures are generated output — do not commit them.
+# Requires: git (>= 2.28 for `git init -b`); ssh-keygen for fixtures/signed
+# (that one fixture is skipped when it is missing). Safe: only ever writes
+# inside <repo-root>/fixtures/, and refuses to run if not invoked from the
+# mygitui project layout. Fixtures are generated output — do not commit them.
 
 set -euo pipefail
 
@@ -36,19 +45,24 @@ fi
 
 QUICK_COMMITS="${MYGITUI_FIXTURE_COMMITS:-500}"
 FULL_COMMITS=100000
+FILES_N="${MYGITUI_FIXTURE_FILES:-500}"
 MODE="quick"
 
 usage() {
-  sed -n '3,21p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+  sed -n '3,31p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
 }
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --full) MODE="full"; shift ;;
+    --files)
+      [[ "${2:-}" =~ ^[0-9]+$ ]] || { echo "--files needs a number" >&2; usage >&2; exit 2; }
+      FILES_N="$2"; shift 2 ;;
     --help|-h) usage; exit 0 ;;
     *) echo "Unknown option: $1" >&2; usage >&2; exit 2 ;;
   esac
 done
+(( FILES_N >= 1 )) || { echo "--files must be >= 1" >&2; exit 2; }
 
 # Per-repo defaults so fixture creation is deterministic and never blocked by
 # host gitconfig (identity, GPG signing, CRLF rewriting).
@@ -249,6 +263,97 @@ make_worktree() {
   echo "worktree:       repo on main + linked worktree at feature-wt (feature @ $(git -C "$wt" rev-parse --short HEAD))"
 }
 
+# ---------------------------------------------------------------- signed ----
+make_signed() {
+  if ! command -v ssh-keygen >/dev/null 2>&1; then
+    echo "signed:         SKIPPED (ssh-keygen not found)"
+    return
+  fi
+  local dir pub
+  dir="$(fresh_dir signed)"
+  git init -q -b main "$dir"
+  cfg "$dir"
+
+  # Signing material lives in keys/, gitignored so the fixture's status
+  # panel stays clean. The allowed_signers principal matches the fixture
+  # committer email — `git verify-commit` checks that principal by default.
+  mkdir -p "$dir/keys"
+  printf 'keys/\n' > "$dir/.gitignore"
+  git -C "$dir" add .gitignore
+  git -C "$dir" commit -q -m "init: ignore local signing keys"
+
+  ssh-keygen -q -t ed25519 -N "" -C "fixtures@mygitui.local" -f "$dir/keys/signing_ed25519"
+  pub="$(cat "$dir/keys/signing_ed25519.pub")"
+  printf 'fixtures@mygitui.local %s\n' "$pub" > "$dir/keys/allowed_signers"
+
+  git -C "$dir" config gpg.format ssh
+  git -C "$dir" config user.signingkey "$dir/keys/signing_ed25519.pub"
+  git -C "$dir" config commit.gpgsign true
+  git -C "$dir" config gpg.ssh.allowedSignersFile "$dir/keys/allowed_signers"
+
+  printf 'signed work one\n' > "$dir/file.txt"
+  git -C "$dir" add file.txt
+  git -C "$dir" commit -q -m "feat: signed commit one"
+  printf 'signed work two\n' >> "$dir/file.txt"
+  git -C "$dir" add file.txt
+  git -C "$dir" commit -q -m "feat: signed commit two"
+
+  if git -C "$dir" verify-commit --raw HEAD >/dev/null 2>&1; then
+    echo "signed:         2 SSH-signed commits (key + allowed_signers under keys/)"
+  else
+    echo "signed:         ERROR — commits are not verifiable; check ssh-keygen/gpg.ssh" >&2
+    exit 1
+  fi
+}
+
+# -------------------------------------------------------------- detached ----
+make_detached() {
+  local dir
+  dir="$(fresh_dir detached)"
+  git init -q -b main "$dir"
+  cfg "$dir"
+
+  printf 'one\n' > "$dir/file.txt"
+  git -C "$dir" add file.txt
+  git -C "$dir" commit -q -m "one"
+  printf 'two\n' >> "$dir/file.txt"
+  git -C "$dir" add file.txt
+  git -C "$dir" commit -q -m "two"
+  printf 'three\n' >> "$dir/file.txt"
+  git -C "$dir" add file.txt
+  git -C "$dir" commit -q -m "three"
+
+  # Detach mid-history and commit on top: the classic "floating commit" a
+  # git client must handle (branch pickers, status banner, checkpoints).
+  git -C "$dir" checkout -q --detach HEAD~1
+  printf 'work done while detached\n' > "$dir/hotfix.txt"
+  git -C "$dir" add hotfix.txt
+  git -C "$dir" commit -q -m "wip: committed while HEAD detached"
+
+  echo "detached:       HEAD detached at main~1 with 1 commit on top ($(git -C "$dir" rev-parse --short HEAD))"
+}
+
+# ----------------------------------------------------------- files-scale ----
+make_files_scale() {
+  local dir i batch
+  dir="$(fresh_dir files-scale)"
+  git init -q -b main "$dir"
+  cfg "$dir"
+
+  # N tiny files in ONE commit: drives the workdir-scanning code paths
+  # (status enumeration, diff stat, tree diffs). Batches of 1000 per
+  # directory keep directory listings quick on every OS.
+  for ((i = 1; i <= FILES_N; i++)); do
+    batch="$dir/batch$(( (i - 1) / 1000 ))"
+    mkdir -p "$batch"
+    printf 'file %d\n' "$i" > "$batch/file$i.txt"
+  done
+  git -C "$dir" add .
+  git -C "$dir" commit -q -m "feat: $FILES_N small files"
+
+  echo "files-scale:    $FILES_N files in one commit"
+}
+
 echo "mygitui fixtures -> $FIXTURES"
 mkdir -p "$FIXTURES"
 
@@ -257,5 +362,8 @@ make_conflicted
 make_submodules
 make_commits_scale
 make_worktree
+make_signed
+make_detached
+make_files_scale
 
 echo "Done. Fixtures live in $FIXTURES (generated output — do not commit)."

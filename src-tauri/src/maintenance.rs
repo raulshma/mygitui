@@ -9,7 +9,7 @@
 
 use std::path::Path;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::engine::types::RepoHealth;
 
@@ -37,6 +37,7 @@ fn dir_size(path: &Path, depth: u8) -> u64 {
 pub fn repo_health(workdir: &Path, git_dir: &Path) -> RepoHealth {
     let git_size_bytes = dir_size(git_dir, 0);
     let worktree_size_bytes = dir_size(workdir, 0);
+    let fsck = read_fsck_cache(git_dir);
     let mut health = RepoHealth {
         git_size_bytes,
         worktree_size_bytes,
@@ -48,8 +49,8 @@ pub fn repo_health(workdir: &Path, git_dir: &Path) -> RepoHealth {
         commit_graph_bytes: 0,
         packed_refs: git_dir.join("packed-refs").exists(),
         last_gc: None,
-        fsck_dangling: None,
-        fsck_samples: Vec::new(),
+        fsck_dangling: fsck.as_ref().map(|c| c.dangling),
+        fsck_samples: fsck.map(|c| c.samples).unwrap_or_default(),
     };
     let objects = git_dir.join("objects");
     // Loose objects: two-hex-char fanout dirs.
@@ -125,6 +126,9 @@ pub enum MaintenanceOp {
     Prune,
     CommitGraph,
     PackRefs,
+    /// M12: dangling-object census (`fsck_run`, not plain `git_run` — the
+    /// result must be parsed AND cached for the health panel). Wired by the
+    Fsck,
 }
 
 impl MaintenanceOp {
@@ -138,6 +142,7 @@ impl MaintenanceOp {
                 &["commit-graph", "write", "--reachable", "--split=replace"]
             }
             MaintenanceOp::PackRefs => &["pack-refs", "--all", "--prune"],
+            MaintenanceOp::Fsck => &["fsck", "--no-progress", "--dangling"],
         }
     }
 }
@@ -156,6 +161,97 @@ pub fn count_objects(workdir: &Path) -> Result<(u64, u64), String> {
         }
     }
     Ok((count, size))
+}
+
+// ---------------------------------------------------------------------------
+// fsck (dangling-object census; M12)
+// ---------------------------------------------------------------------------
+
+/// Cap on dangling shas kept as samples (the count stays exact).
+pub const FSCK_SAMPLE_CAP: usize = 10;
+
+/// Cached result of the last fsck run, persisted under
+/// `<gitdir>/mygitui/fsck.json` (fsck walks every object, so the health
+/// panel shows the last on-demand run instead of computing it per open).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FsckCache {
+    /// Unix seconds when fsck last ran.
+    pub checked_at: i64,
+    pub dangling: u64,
+    pub samples: Vec<String>,
+}
+
+fn fsck_cache_path(git_dir: &Path) -> std::path::PathBuf {
+    git_dir.join("mygitui").join("fsck.json")
+}
+
+/// Last cached fsck result, when any (`None` = never checked).
+pub fn read_fsck_cache(git_dir: &Path) -> Option<FsckCache> {
+    let text = std::fs::read_to_string(fsck_cache_path(git_dir)).ok()?;
+    serde_json::from_str(&text).ok()
+}
+
+/// `git fsck --no-progress --dangling`: count dangling objects and keep up
+/// to [`FSCK_SAMPLE_CAP`] shas, persisting the result to
+/// `<gitdir>/mygitui/fsck.json` for [`repo_health`]. Dangling lines can
+/// arrive on either stream, so both are parsed; a run whose output carries
+/// no dangling lines still refreshes the cache (zero is an answer).
+pub fn fsck_run(workdir: &Path, git_dir: &Path) -> Result<(u64, Vec<String>), String> {
+    let mut cmd = std::process::Command::new("git");
+    cmd.current_dir(workdir).args(MaintenanceOp::Fsck.args());
+    crate::cli::apply_sanitized_env(&mut cmd);
+    let output = cmd
+        .output()
+        .map_err(|err| format!("failed to spawn git fsck: {err}"))?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    let mut dangling = 0u64;
+    let mut samples = Vec::new();
+    for line in stdout.lines().chain(stderr.lines()) {
+        if let Some(rest) = line.strip_prefix("dangling ") {
+            dangling += 1;
+            if samples.len() < FSCK_SAMPLE_CAP {
+                samples.push(rest.trim().to_owned());
+            }
+        }
+    }
+
+    if !output.status.success() && dangling == 0 {
+        // Real corruption (not just dangling objects): surface git's report.
+        let detail = if stderr.trim().is_empty() {
+            stdout.trim().to_string()
+        } else {
+            stderr.trim().to_string()
+        };
+        return Err(format!("git fsck failed: {detail}"));
+    }
+
+    let cache = FsckCache {
+        checked_at: now_secs(),
+        dangling,
+        samples: samples.clone(),
+    };
+    write_fsck_cache(git_dir, &cache);
+    Ok((dangling, samples))
+}
+
+/// Best-effort cache write (a read-only gitdir just means no caching).
+fn write_fsck_cache(git_dir: &Path, cache: &FsckCache) {
+    let path = fsck_cache_path(git_dir);
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if let Ok(json) = serde_json::to_string(cache) {
+        let _ = std::fs::write(path, json);
+    }
+}
+
+fn now_secs() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
 }
 
 // ---------------------------------------------------------------------------
@@ -235,4 +331,137 @@ pub fn lfs_run(workdir: &Path, subcommand: &str) -> Result<String, String> {
         return Err(format!("unsupported git lfs subcommand `{subcommand}`"));
     }
     git_run(workdir, &["lfs", subcommand])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    struct TempDir(PathBuf);
+
+    impl TempDir {
+        fn new(name: &str) -> TempDir {
+            let dir =
+                std::env::temp_dir().join(format!("mygitui-maint-{}-{name}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).expect("create temp dir");
+            TempDir(dir)
+        }
+
+        fn path(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let dir = self.0.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+                let _ = std::fs::remove_dir_all(dir);
+            });
+        }
+    }
+
+    fn init_repo(path: &Path) -> git2::Repository {
+        let repo = git2::Repository::init(path).expect("init temp repo");
+        repo.config()
+            .and_then(|mut c| {
+                c.set_str("user.name", "Maint Test")?;
+                c.set_str("user.email", "maint@test.local")
+            })
+            .expect("configure identity");
+        repo
+    }
+
+    fn commit_file(repo: &git2::Repository, path: &str, content: &str, message: &str) {
+        let file = repo.workdir().unwrap().join(path);
+        std::fs::write(file, content).expect("write file");
+        let mut index = repo.index().expect("index");
+        index
+            .add_all(["*"].iter(), git2::IndexAddOption::DEFAULT, None)
+            .ok();
+        index.write().expect("write index");
+        let tree_oid = index.write_tree().expect("write tree");
+        let tree = repo.find_tree(tree_oid).expect("tree");
+        let sig = repo.signature().expect("signature");
+        let mut parents = Vec::new();
+        if let Ok(head) = repo.head() {
+            parents.push(head.peel_to_commit().expect("head commit"));
+        }
+        let parent_refs: Vec<&git2::Commit<'_>> = parents.iter().collect();
+        repo.commit(Some("HEAD"), &sig, &sig, message, &tree, &parent_refs)
+            .expect("commit");
+    }
+
+    #[test]
+    fn fsck_op_args_are_pinned() {
+        assert_eq!(
+            MaintenanceOp::Fsck.args(),
+            &["fsck", "--no-progress", "--dangling"]
+        );
+    }
+
+    #[test]
+    fn fsck_run_counts_dangling_and_caches_result() {
+        let dir = TempDir::new("fsck");
+        let repo = init_repo(dir.path());
+        commit_file(&repo, "a.txt", "one\n", "base");
+
+        // A blob written straight into the odb and referenced by nothing is
+        // exactly what fsck reports as "dangling blob <sha>".
+        let odb = repo.odb().expect("odb");
+        odb.write(git2::ObjectType::Blob, b"dangling payload\n")
+            .expect("write unreferenced blob");
+
+        let git_dir = dir.path().join(".git");
+        let (dangling, samples) = fsck_run(dir.path(), &git_dir).expect("fsck runs");
+        assert!(dangling >= 1, "at least the orphan blob dangles");
+        assert!(!samples.is_empty(), "samples captured: {samples:?}");
+        assert!(
+            samples.iter().all(|s| s.len() >= 7),
+            "samples are shas: {samples:?}"
+        );
+
+        // Cache file written and readable.
+        let cache_path = git_dir.join("mygitui").join("fsck.json");
+        assert!(
+            cache_path.exists(),
+            "cache file at {}",
+            cache_path.display()
+        );
+        let cache = read_fsck_cache(&git_dir).expect("cache parses");
+        assert_eq!(cache.dangling, dangling);
+        assert_eq!(cache.samples, samples);
+        assert!(cache.checked_at > 0);
+
+        // repo_health fills the fsck fields from the cache.
+        let health = repo_health(dir.path(), &git_dir);
+        assert_eq!(health.fsck_dangling, Some(dangling));
+        assert_eq!(health.fsck_samples, samples);
+    }
+
+    #[test]
+    fn repo_health_reports_null_fsck_until_first_run() {
+        let dir = TempDir::new("fsck-null");
+        init_repo(dir.path());
+        let git_dir = dir.path().join(".git");
+        let health = repo_health(dir.path(), &git_dir);
+        assert_eq!(health.fsck_dangling, None, "never checked");
+        assert!(health.fsck_samples.is_empty());
+        assert!(!git_dir.join("mygitui").join("fsck.json").exists());
+    }
+
+    #[test]
+    fn fsck_on_clean_repo_reports_zero_dangling() {
+        let dir = TempDir::new("fsck-clean");
+        let repo = init_repo(dir.path());
+        commit_file(&repo, "a.txt", "one\n", "base");
+        let git_dir = dir.path().join(".git");
+        let (dangling, samples) = fsck_run(dir.path(), &git_dir).expect("fsck runs");
+        assert_eq!(dangling, 0, "fully referenced repo: {samples:?}");
+        assert!(samples.is_empty());
+        assert_eq!(read_fsck_cache(&git_dir).unwrap().dangling, 0);
+    }
 }

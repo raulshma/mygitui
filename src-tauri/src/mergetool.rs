@@ -16,8 +16,14 @@ use git2::Repository;
 
 use crate::engine::types::{MergetoolInfo, MergetoolResult};
 
-/// Read `merge.tool` / `merge.guitool` from the repo+global config (pure
+/// Read `merge.tool` / `merge.guitool` plus the resolved tool's
+/// `mergetool.<tool>.path` / `.cmd` from the repo+global config (pure
 /// introspection; no process spawned).
+///
+/// Resolution follows `git mergetool --gui` semantics: `merge.guitool` wins
+/// (the FE conflict dialog launches the GUI tool), falling back to
+/// `merge.tool`; `path`/`cmd` are read for that effective tool and stay
+/// `None` when unset.
 pub fn mergetool_info(repo: &Repository) -> MergetoolInfo {
     let config = repo.config().ok();
     let get = |key: &str| -> Option<String> {
@@ -26,11 +32,21 @@ pub fn mergetool_info(repo: &Repository) -> MergetoolInfo {
             .and_then(|c| c.get_string(key).ok())
             .filter(|v| !v.trim().is_empty())
     };
+    let tool = get("merge.tool");
+    let gui_tool = get("merge.guitool");
+    let effective = gui_tool.clone().or_else(|| tool.clone());
+    let (path, cmd) = match effective {
+        Some(tool) => (
+            get(&format!("mergetool.{tool}.path")),
+            get(&format!("mergetool.{tool}.cmd")),
+        ),
+        None => (None, None),
+    };
     MergetoolInfo {
-        tool: get("merge.tool"),
-        gui_tool: get("merge.guitool"),
-        path: None,
-        cmd: None,
+        tool,
+        gui_tool,
+        path,
+        cmd,
     }
 }
 
@@ -124,12 +140,70 @@ mod tests {
         let info = mergetool_info(&repo);
         assert_eq!(info.tool, None);
         assert_eq!(info.gui_tool, None);
+        assert_eq!(info.path, None, "no tool resolved ⇒ no path/cmd");
+        assert_eq!(info.cmd, None);
         repo.config()
             .unwrap()
             .set_str("merge.tool", "kdiff3")
             .unwrap();
         let info = mergetool_info(&repo);
         assert_eq!(info.tool.as_deref(), Some("kdiff3"));
+        drop(repo);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn mergetool_info_reads_path_and_cmd_of_resolved_tool() {
+        let dir = std::env::temp_dir().join(format!("mygitui-mt-path-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let repo = Repository::init(&dir).unwrap();
+        {
+            let mut cfg = repo.config().unwrap();
+            cfg.set_str("merge.tool", "kdiff3").unwrap();
+            cfg.set_str("mergetool.kdiff3.path", "/usr/bin/kdiff3")
+                .unwrap();
+            cfg.set_str("mergetool.kdiff3.cmd", "\"$base\" \"$local\" \"$remote\"")
+                .unwrap();
+        }
+        let info = mergetool_info(&repo);
+        assert_eq!(info.tool.as_deref(), Some("kdiff3"));
+        assert_eq!(info.path.as_deref(), Some("/usr/bin/kdiff3"));
+        assert_eq!(
+            info.cmd.as_deref(),
+            Some("\"$base\" \"$local\" \"$remote\"")
+        );
+
+        // An unrelated tool's mergetool.* entries are ignored.
+        repo.config()
+            .unwrap()
+            .set_str("mergetool.vimdiff.path", "/usr/bin/vim")
+            .unwrap();
+        let info = mergetool_info(&repo);
+        assert_eq!(info.path.as_deref(), Some("/usr/bin/kdiff3"));
+        drop(repo);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn mergetool_info_prefers_guitool_for_resolution() {
+        let dir = std::env::temp_dir().join(format!("mygitui-mt-gui-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let repo = Repository::init(&dir).unwrap();
+        {
+            let mut cfg = repo.config().unwrap();
+            cfg.set_str("merge.tool", "kdiff3").unwrap();
+            cfg.set_str("merge.guitool", "mgui").unwrap();
+            cfg.set_str("mergetool.kdiff3.path", "/kdiff3-path")
+                .unwrap();
+            cfg.set_str("mergetool.mgui.cmd", "mgui --do-it").unwrap();
+        }
+        let info = mergetool_info(&repo);
+        assert_eq!(info.gui_tool.as_deref(), Some("mgui"));
+        // Effective tool = guitool ⇒ its cmd wins, kdiff3's path is ignored.
+        assert_eq!(info.path, None);
+        assert_eq!(info.cmd.as_deref(), Some("mgui --do-it"));
         drop(repo);
         let _ = std::fs::remove_dir_all(&dir);
     }

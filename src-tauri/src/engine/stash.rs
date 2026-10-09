@@ -18,9 +18,9 @@
 //!   `&mut Repository` while the trait hands out `&Repository`; those ops
 //!   reopen the same gitdir into a fresh owned handle (cheap metadata reads;
 //!   the outer handle's index cache revalidates from disk).
-//! - `worktrees` lists linked worktrees only (libgit2's `git_worktree_list`
-//!   never includes the main worktree); HEAD is read from that worktree's
-//!   admin dir under the common gitdir.
+//! - `worktrees` leads with the main worktree (`is_main: true`; libgit2's
+//!   `git_worktree_list` never includes it) followed by the linked ones;
+//!   each entry's HEAD is read from its admin dir under the common gitdir.
 
 use std::path::{Path, PathBuf};
 
@@ -256,9 +256,10 @@ impl Libgit2Engine {
     }
 
     pub(crate) fn worktrees_impl(&self, repo: &Repository) -> EngineResult<Vec<WorktreeInfo>> {
-        let names = repo.worktrees()?;
-        let mut out = Vec::new();
-        for entry in names.iter() {
+        // M12: the main worktree leads the list; libgit2's `git_worktree_list`
+        // only ever returns linked ones. HEAD comes from the main gitdir.
+        let mut out = vec![main_worktree_info(repo)];
+        for entry in repo.worktrees()?.iter() {
             let Some(name) = entry.ok().flatten() else {
                 continue; // non-UTF-8 worktree name; skip rather than fail the listing
             };
@@ -283,8 +284,32 @@ impl Libgit2Engine {
                 is_main: false,
             });
         }
-        out.sort_by(|a, b| a.name.cmp(&b.name));
+        // Linked entries alphabetical behind the (already first) main entry.
+        out[1..].sort_by(|a, b| a.name.cmp(&b.name));
         Ok(out)
+    }
+
+    /// `git worktree prune` — drop stale administrative files for worktrees
+    /// whose directories vanished. Returns how many listed worktrees were
+    /// prunable before the prune (the count the UI promised); the prune itself
+    /// runs through the sanitized CLI (libgit2's `Worktree::prune` is
+    /// per-worktree, `git worktree prune` sweeps everything at once).
+    pub(crate) fn worktree_prune_impl(&self, repo: &Repository) -> EngineResult<u32> {
+        let mut prunable = 0u32;
+        for entry in repo.worktrees()?.iter() {
+            let Some(name) = entry.ok().flatten() else {
+                continue;
+            };
+            if let Ok(wt) = repo.find_worktree(name) {
+                if wt.is_prunable(None).unwrap_or(false) {
+                    prunable += 1;
+                }
+            }
+        }
+        let workdir = repo.workdir().unwrap_or_else(|| repo.path());
+        crate::maintenance::git_run(workdir, &["worktree", "prune"])
+            .map_err(EngineError::Invalid)?;
+        Ok(prunable)
     }
 
     pub(crate) fn worktree_add_impl(
@@ -422,12 +447,32 @@ fn fresh_created_branch<'r>(
     })
 }
 
-/// (branch, head sha, detached) from a linked worktree's `HEAD` file under
-/// the common gitdir. A missing/unreadable HEAD is reported as a detached
+/// The main worktree's listing entry: path/name from the repo workdir,
+/// branch/head/detached from the main gitdir's `HEAD` file.
+fn main_worktree_info(repo: &Repository) -> WorktreeInfo {
+    let path = repo.workdir().unwrap_or_else(|| repo.path());
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let (branch, head, detached) = head_from_file(&repo.path().join("HEAD"), repo);
+    WorktreeInfo {
+        path: path.to_string_lossy().into_owned(),
+        name,
+        branch,
+        head,
+        detached,
+        locked: false,
+        prunable: None,
+        is_main: true,
+    }
+}
+
+/// (branch, head sha, detached) parsed from any `HEAD` file under the
+/// common gitdir. A missing/unreadable HEAD is reported as a detached
 /// with no target; the worktree will also show up as prunable.
-fn worktree_head(repo: &Repository, name: &str) -> (Option<String>, Option<String>, bool) {
-    let head_file = repo.commondir().join("worktrees").join(name).join("HEAD");
-    let Ok(content) = std::fs::read_to_string(&head_file) else {
+fn head_from_file(head_file: &Path, repo: &Repository) -> (Option<String>, Option<String>, bool) {
+    let Ok(content) = std::fs::read_to_string(head_file) else {
         return (None, None, true);
     };
     let content = content.trim();
@@ -448,6 +493,15 @@ fn worktree_head(repo: &Repository, name: &str) -> (Option<String>, Option<Strin
     }
 }
 
+/// (branch, head sha, detached) from a linked worktree's `HEAD` file under
+/// the common gitdir.
+fn worktree_head(repo: &Repository, name: &str) -> (Option<String>, Option<String>, bool) {
+    head_from_file(
+        &repo.commondir().join("worktrees").join(name).join("HEAD"),
+        repo,
+    )
+}
+
 /// Human-readable prunable reason (libgit2 exposes only a boolean).
 fn prune_reason(wt: &Worktree) -> String {
     if !wt.path().exists() {
@@ -456,5 +510,161 @@ fn prune_reason(wt: &Worktree) -> String {
         "worktree metadata is invalid".to_owned()
     } else {
         "worktree can be pruned".to_owned()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    //! M12 additions: main-worktree listing + `worktree prune`. (The older
+    //! stash/worktree coverage lives in stash_tests.rs.)
+
+    use std::path::{Path, PathBuf};
+
+    use git2::{IndexAddOption, Repository};
+
+    use super::super::libgit2::Libgit2Engine;
+
+    const ENGINE: Libgit2Engine = Libgit2Engine;
+
+    struct TempDir(PathBuf);
+
+    impl TempDir {
+        fn new(name: &str) -> TempDir {
+            let dir =
+                std::env::temp_dir().join(format!("mygitui-wtmain-{}-{name}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).expect("create temp dir");
+            TempDir(dir)
+        }
+
+        fn path(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let dir = self.0.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+                let _ = std::fs::remove_dir_all(dir);
+            });
+        }
+    }
+
+    fn init_repo(path: &Path) -> Repository {
+        // Pin the initial branch: init.defaultBranch varies by environment.
+        let mut opts = git2::RepositoryInitOptions::new();
+        opts.initial_head("main");
+        let repo = Repository::init_opts(path, &opts).expect("init temp repo");
+        repo.config()
+            .and_then(|mut c| {
+                c.set_str("user.name", "Wt Test")?;
+                c.set_str("user.email", "wt@test.local")
+            })
+            .expect("configure identity");
+        repo
+    }
+
+    fn commit_file(repo: &Repository, path: &str, content: &str, message: &str) -> String {
+        let file = repo.workdir().unwrap().join(path);
+        std::fs::write(file, content).expect("write file");
+        let mut index = repo.index().expect("index");
+        index
+            .add_all(["*"].iter(), IndexAddOption::DEFAULT, None)
+            .expect("add all");
+        index.write().expect("write index");
+        let tree_oid = index.write_tree().expect("write tree");
+        let tree = repo.find_tree(tree_oid).expect("tree");
+        let sig = repo.signature().expect("signature");
+        let mut parents = Vec::new();
+        if let Ok(head) = repo.head() {
+            parents.push(head.peel_to_commit().expect("head commit"));
+        }
+        let parent_refs: Vec<&git2::Commit<'_>> = parents.iter().collect();
+        repo.commit(Some("HEAD"), &sig, &sig, message, &tree, &parent_refs)
+            .expect("commit")
+            .to_string()
+    }
+
+    #[test]
+    fn worktree_list_leads_with_main_entry() {
+        let dir = TempDir::new("main-first");
+        let repo = init_repo(dir.path());
+        let tip = commit_file(&repo, "a.txt", "one\n", "base");
+
+        // A linked worktree sorts alphabetically BEFORE the repo dir name —
+        // the main entry must still come first.
+        let linked_path = dir.path().join("aaa-linked");
+        ENGINE
+            .worktree_add_impl(&repo, linked_path.to_str().unwrap(), None, Some("linked"))
+            .expect("worktree add");
+
+        let wts = ENGINE.worktrees_impl(&repo).expect("worktrees");
+        assert_eq!(wts.len(), 2, "main + linked: {wts:?}");
+
+        let main = &wts[0];
+        assert!(main.is_main, "first entry is the main worktree");
+        assert_eq!(
+            Path::new(&main.path),
+            repo.workdir().unwrap(),
+            "main entry path is the repo workdir"
+        );
+        assert_eq!(main.branch.as_deref(), Some("main"));
+        assert_eq!(main.head.as_deref(), Some(tip.as_str()));
+        assert!(!main.detached);
+        assert!(!main.locked);
+        assert_eq!(main.prunable, None);
+
+        let linked = wts
+            .iter()
+            .find(|w| w.name == "aaa-linked")
+            .expect("linked entry");
+        assert!(!linked.is_main, "linked entries are not main");
+        assert_eq!(linked.branch.as_deref(), Some("linked"));
+    }
+
+    #[test]
+    fn worktree_prune_on_healthy_repo_returns_zero() {
+        let dir = TempDir::new("prune-healthy");
+        let repo = init_repo(dir.path());
+        commit_file(&repo, "a.txt", "one\n", "base");
+
+        let pruned = ENGINE.worktree_prune_impl(&repo).expect("prune");
+        assert_eq!(pruned, 0, "nothing prunable in a healthy repo");
+
+        // With a linked worktree present and valid: still zero.
+        let linked_path = dir.path().join("linked");
+        ENGINE
+            .worktree_add_impl(&repo, linked_path.to_str().unwrap(), None, Some("linked"))
+            .expect("worktree add");
+        let pruned = ENGINE.worktree_prune_impl(&repo).expect("prune");
+        assert_eq!(pruned, 0);
+        assert!(
+            ENGINE.worktrees_impl(&repo).unwrap().len() == 2,
+            "valid worktree survives the prune"
+        );
+    }
+
+    #[test]
+    fn worktree_prune_counts_and_sweeps_stale_worktrees() {
+        let dir = TempDir::new("prune-stale");
+        let repo = init_repo(dir.path());
+        commit_file(&repo, "a.txt", "one\n", "base");
+        let linked_path = dir.path().join("linked");
+        ENGINE
+            .worktree_add_impl(&repo, linked_path.to_str().unwrap(), None, Some("linked"))
+            .expect("worktree add");
+
+        // Simulate a worktree whose directory vanished (git's classic prune
+        // case): the admin area remains but the tree is gone.
+        std::fs::remove_dir_all(&linked_path).expect("remove worktree dir");
+
+        let pruned = ENGINE.worktree_prune_impl(&repo).expect("prune");
+        assert_eq!(pruned, 1, "the stale worktree was prunable");
+        assert!(
+            repo.find_worktree("linked").is_err(),
+            "git worktree prune removed the admin area"
+        );
     }
 }

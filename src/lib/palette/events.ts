@@ -41,6 +41,10 @@ export interface UiEventMap {
   "open-file-history": { path: string; repoId?: string };
   /** Request a commit action from anywhere: `{ sha, action }`. */
   "commit-action": { sha: string; action: "cherry-pick" | "revert" | "bookmark" };
+  /** Open the AI settings dialog (M12 AiHealthChip / anywhere). */
+  "open-ai-settings": undefined;
+  /** M12: open the accent-seed picker (App owns the dialog). */
+  "open-seed-dialog": undefined;
 }
 
 export type UiEventName = keyof UiEventMap;

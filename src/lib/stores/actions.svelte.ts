@@ -47,7 +47,11 @@ export interface ActionDef {
   scope: "global" | "repo";
   /** Repo binding for `scope: "repo"` defs (ignored otherwise). */
   repoId?: string;
-  /** Optional palette shortcut hint (display only for now). */
+  /**
+   * Global keyboard shortcut (canonical combo, e.g. `"ctrl+shift+r"`).
+   * M12: live — a single window keydown listener in ActionsPanel matches
+   * stored shortcuts for the current repo and runs the action.
+   */
   shortcut?: string;
 }
 

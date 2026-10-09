@@ -10,12 +10,20 @@
    * Success clears the form, toasts the short sha and asks the owner to
    * refresh (`onCommitted` → RepoView refreshStatus). Failures render
    * inline next to the button. The AI button is a disabled ghost (M6).
+   *
+   * M12 (lane C): "Fixup into HEAD" commits the staged changes straight
+   * into `fixup! <HEAD summary>` (no message needed; respects the
+   * --no-verify toggle and the author override). Disabled until something
+   * is staged and HEAD exists (read from the tab store's status); the HEAD
+   * summary is fetched lazily through a one-page `stream_log`.
    */
-  import { commit, hooksList, signingInfo } from "$lib/ipc/client";
-  import type { GitSignature, HookInfo, SigningInfo } from "$lib/ipc/types";
+  import { commit, hooksList, signingInfo, streamLog } from "$lib/ipc/client";
+  import type { GitSignature, HookInfo, LogFilter, SigningInfo } from "$lib/ipc/types";
   import { busy } from "$lib/stores/ops.svelte";
+  import { tabStore } from "$lib/stores/tabs.svelte";
   import { toast } from "$lib/toast";
   import CommitMessageButton from "$lib/components/ai/CommitMessageButton.svelte";
+  import { fixupMessage, hasStagedChanges, headCommitInPage } from "$lib/commit/commitBarModel";
 
   let {
     repoId,
@@ -116,6 +124,68 @@
       void doCommit();
     }
   }
+
+  // -- M12: "Fixup into HEAD" quick action -------------------------------------
+
+  let fixing = $state(false);
+
+  /** The repo's latest status snapshot (staged detection + HEAD sha). */
+  const status = $derived(
+    tabStore.tabs.find((tab) => tab.id === repoId)?.status ?? null,
+  );
+  const staged = $derived(hasStagedChanges(status?.entries ?? []));
+  const canFixup = $derived(
+    Boolean(status?.head) && staged && !commitBusy && !committing && !fixing,
+  );
+
+  const HEAD_LOG_FILTER: LogFilter = {
+    text: null,
+    regex: false,
+    author: null,
+    path: null,
+    refs: [],
+    follow: false,
+  };
+
+  /** HEAD's summary via a one-page log stream (shallow: stops at page 1). */
+  async function fetchHeadSummary(): Promise<string | null> {
+    const headSha = status?.head ?? null;
+    if (!headSha) return null;
+    return new Promise<string | null>((resolve) => {
+      void streamLog(repoId, HEAD_LOG_FILTER, (page) => {
+        resolve(headCommitInPage(page, headSha)?.summary ?? null);
+      }).catch(() => resolve(null));
+    });
+  }
+
+  async function doFixup(): Promise<void> {
+    if (!canFixup) return;
+    fixing = true;
+    error = null;
+    try {
+      const head = await fetchHeadSummary();
+      if (head === null) {
+        toast("Fixup failed: could not determine HEAD", { kind: "error" });
+        return;
+      }
+      const sha = await commit(repoId, {
+        message: fixupMessage(head),
+        amend: false,
+        no_verify: noVerify,
+        allow_empty: false,
+        author: authorOverride(),
+      });
+      toast(`Fixup committed into ${sha.slice(0, 7)}`, { kind: "success" });
+      onCommitted?.();
+    } catch (err) {
+      toast(
+        `Fixup failed: ${err instanceof Error ? err.message : String(err)}`,
+        { kind: "error" },
+      );
+    } finally {
+      fixing = false;
+    }
+  }
 </script>
 
 <form
@@ -160,6 +230,15 @@
           <input type="checkbox" bind:checked={amend} />
           <span>Amend</span>
         </label>
+        <button
+          class="disclosure fixup"
+          type="button"
+          title="Commit the staged changes as fixup! into HEAD (message not needed)"
+          disabled={!canFixup}
+          onclick={() => void doFixup()}
+        >
+          {fixing ? "Fixing…" : "Fixup into HEAD"}
+        </button>
         <label class="toggle" title="skip hooks">
           <input type="checkbox" bind:checked={noVerify} />
           <span>--no-verify</span>
@@ -333,6 +412,15 @@ ${d.body}` : d.subject;
 
   .disclosure[aria-expanded="true"] {
     background: var(--m3-surface-container-high, var(--m3-surface));
+  }
+
+  .fixup {
+    color: var(--m3-tertiary, var(--m3-on-surface-variant, var(--m3-on-surface)));
+  }
+
+  .fixup:disabled {
+    cursor: not-allowed;
+    opacity: 0.55;
   }
 
   .disclosure:focus-visible,

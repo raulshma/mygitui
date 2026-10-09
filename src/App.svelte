@@ -10,6 +10,7 @@
   import { listen } from "@tauri-apps/api/event";
   import { initTheme } from "$lib/theme";
   import { isTauri, listenDragDrop } from "$lib/entry/dragdrop";
+  import { initDeepLinks } from "$lib/entry/deeplink";
   import { pickFolder } from "$lib/ipc/client";
   import {
     openTab,
@@ -34,6 +35,11 @@
   // M4 F2: global keybind engine + palette execution entry point.
   import { startKeybinds } from "$lib/palette/keybinds";
   import { executeCommandById, togglePalette } from "$lib/palette/palette.svelte";
+  import { onUiEvent } from "$lib/palette/events";
+  import AiHealthChip from "$lib/components/ai/AiHealthChip.svelte";
+  import AiSettings from "$lib/components/ai/AiSettings.svelte";
+  import SeedColorDialog from "$lib/components/SeedColorDialog.svelte";
+  import { setUserSeedColor } from "$lib/theme/dynamic-color";
 
   /**
    * M4 F1 popout contract: a window opened with
@@ -48,6 +54,12 @@
 
   /** Clone-dialog visibility (home view's "Clone repo…" button). */
   let cloneOpen = $state(false);
+
+  /** AI settings dialog (opened by the AiHealthChip, M12). */
+  let aiSettingsOpen = $state(false);
+
+  /** Accent-seed picker (opened by the palette seed commands, M12). */
+  let seedOpen = $state(false);
 
   /** The focused repository tab, or `null` when the home view is showing. */
   const active = $derived(tabStore.active);
@@ -135,6 +147,23 @@
           console.error("[mygitui] cli-args listener failed:", err),
         );
     }
+
+    // M12: first-launch argv + mygitui://open deep links — same tab-open
+    // path as the cli-args listener above (guarded against double-opens).
+    void initDeepLinks((path) => openRepoTab(path));
+
+    // M12: the AI health chip opens the settings dialog; the palette seed
+    // command opens the accent picker.
+    cleanups.push(
+      onUiEvent("open-ai-settings", () => {
+        aiSettingsOpen = true;
+      }),
+    );
+    cleanups.push(
+      onUiEvent("open-seed-dialog", () => {
+        seedOpen = true;
+      }),
+    );
 
     return () => {
       for (const unlisten of cleanups) unlisten();
@@ -226,6 +255,28 @@
 <CommandPalette />
 <CloneDialog bind:open={cloneOpen} />
 <ContextMenu />
+
+<!-- M12: persistent AI connection health; click opens the settings dialog. -->
+{#if !popout}
+  <div class="ai-chip-slot">
+    <AiHealthChip />
+  </div>
+{/if}
+<AiSettings bind:open={aiSettingsOpen} />
+
+{#if seedOpen}
+  <SeedColorDialog
+    onSubmit={(hex) => {
+      setUserSeedColor(hex);
+      void initTheme();
+    }}
+    onClear={() => {
+      setUserSeedColor(null);
+      void initTheme();
+    }}
+    onCancel={() => (seedOpen = false)}
+  />
+{/if}
 
 <style>
   .app-shell {
@@ -389,5 +440,13 @@
   .pin[aria-pressed="true"] {
     color: var(--m3-on-primary);
     background: var(--m3-primary);
+  }
+
+  /* M12: AI health chip parked bottom-left (toaster owns bottom-right). */
+  .ai-chip-slot {
+    position: fixed;
+    left: 0.75rem;
+    bottom: 0.75rem;
+    z-index: 900;
   }
 </style>

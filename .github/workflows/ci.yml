@@ -40,6 +40,12 @@ jobs:
       - name: Build (vite)
         run: npm run build
 
+      # M12: Playwright smoke flows against the Vite dev server with a
+      # mocked Tauri IPC bridge (e2e/tauri-mock.ts) — SPA-level coverage of
+      # boot → open repo → stage → commit, no native build needed.
+      - name: Playwright smoke
+        run: npx playwright install --with-deps chromium && npm run test:e2e
+
   rust:
     name: Rust (${{ matrix.os }})
     strategy:
