@@ -26,7 +26,7 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": ""
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDMxMkEzNTVGNDM0MUIzRjAKUldUd3MwRkRYelVxTWJmdFhaTll2THBGWVd2SXRSaGxkeURsc1d2TjAzR0h5R3F1d2JDTWZKRmwK"
     },
     "deep-link": {
       "desktop": {
