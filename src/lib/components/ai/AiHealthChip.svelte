@@ -15,12 +15,21 @@
    */
   import { ai } from "$lib/ai/ai.svelte";
   import { aiHealth } from "$lib/ai/health";
+  import { isTauri } from "$lib/entry/dragdrop";
   import { emitUiEvent } from "$lib/palette/events";
+  import { onMount } from "svelte";
 
   // The supervisor is a plain Svelte-store-contract observable, not a
   // runes store — mirror it into $state like AiSettings does.
   let statuses = $state(ai.supervisor.statuses);
   $effect(() => ai.supervisor.subscribe((next) => (statuses = next)));
+  onMount(() => {
+    // The store may have been evaluated before the Tauri bridge was ready.
+    // Probe after mount so the health chip cannot remain unknown forever.
+    if (isTauri() && ai.supervisor.status("opencode").status === "unknown") {
+      void ai.supervisor.check("opencode");
+    }
+  });
 
   const view = $derived(
     aiHealth(statuses, ai.config.backend, ai.config.allowFallback !== false),

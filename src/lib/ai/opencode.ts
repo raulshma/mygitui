@@ -61,7 +61,7 @@ export interface ManagedServe {
   /** Current managed-server state (starts nothing). */
   status(): Promise<{ running: boolean; url: string | null; error: string | null }>;
   /** Starts the managed server (idempotent) / returns its state. */
-  start(): Promise<{ running: boolean; url: string | null; error: string | null }>;
+  start(cwd?: string): Promise<{ running: boolean; url: string | null; error: string | null }>;
 }
 
 /** Options for building an {@link OpenCodeProvider}. */
@@ -82,6 +82,8 @@ export interface OpenCodeOptions {
    * `resolve` can return `"managed"`.
    */
   managed?: () => ManagedServe | null;
+  /** Maps a session key (repo id) to its workspace directory for SDK calls. */
+  directory?: (sessionKey?: string) => string | undefined;
   /**
    * Resolves the basic-auth password (keyring read), or `null` when none
    * is configured. Lazy so generate/check always see the current secret.
@@ -165,11 +167,15 @@ async function fetchText(
   url: URL,
   fetchImpl: FetchLike,
   timeoutMs: number,
+  password?: string | null,
 ): Promise<{ status: number; contentType: string | null; text: string } | null> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const response = await fetchImpl(url, { signal: controller.signal });
+    const response = await fetchImpl(url, {
+      signal: controller.signal,
+      ...(password ? { headers: { Authorization: basicAuthHeader(password) } } : {}),
+    });
     let text = "";
     try {
       text = await response.text();
@@ -196,10 +202,23 @@ export async function probeOpencodeServer(
   base: string,
   fetchImpl: FetchLike = fetch,
   timeoutMs = HEALTH_TIMEOUT_MS,
+  password?: string | null,
 ): Promise<OpencodeProbe> {
   let lastStatus = 0;
+  let root: URL;
+  try {
+    root = new URL(base);
+  } catch {
+    return { state: "absent", status: 0 };
+  }
+  if (root.protocol !== "http:" && root.protocol !== "https:") {
+    return { state: "absent", status: 0 };
+  }
   for (const path of ["/api/info", "/global/health"] as const) {
-    const reply = await fetchText(new URL(path, base), fetchImpl, timeoutMs);
+    // Keep reverse-proxy path prefixes and routing queries from the configured URL.
+    const endpoint = new URL(root);
+    endpoint.pathname = `${endpoint.pathname.replace(/\/+$/, "")}${path}`;
+    const reply = await fetchText(endpoint, fetchImpl, timeoutMs, password);
     if (!reply) return { state: "absent", status: 0 };
     lastStatus = reply.status;
     if (reply.status === 401 || reply.status === 403) {
@@ -234,11 +253,14 @@ export interface Discovery {
 export async function discoverOpencode(
   manualUrl?: string | null,
   fetchImpl: FetchLike = fetch,
+  password?: string | null,
 ): Promise<Discovery> {
-  const candidates = manualUrl ? [manualUrl, DEFAULT_OPENCODE_URL] : [DEFAULT_OPENCODE_URL];
+  const candidates = manualUrl
+    ? [...new Set([manualUrl, DEFAULT_OPENCODE_URL])]
+    : [DEFAULT_OPENCODE_URL];
   let unauthorizedBase: string | null = null;
   for (const base of candidates) {
-    const probe = await probeOpencodeServer(base, fetchImpl);
+    const probe = await probeOpencodeServer(base, fetchImpl, HEALTH_TIMEOUT_MS, password);
     if (probe.state === "ok") return { server: probe.server, unauthorizedBase };
     if (probe.state === "unauthorized" && unauthorizedBase === null) {
       unauthorizedBase = base;
@@ -249,9 +271,13 @@ export async function discoverOpencode(
 
 /** Builds the `Authorization: Basic …` header value for a password. */
 export function basicAuthHeader(password: string): string {
-  // opencode's server-password mode checks basic auth; the username is
-  // conventional ("opencode"), the password is the secret.
-  const token = typeof btoa === "function" ? btoa(`opencode:${password}`) : Buffer.from(`opencode:${password}`).toString("base64");
+  // Basic auth is UTF-8 on OpenCode servers; browser btoa accepts only bytes.
+  const bytes = new TextEncoder().encode(`opencode:${password}`);
+  let binary = "";
+  for (let offset = 0; offset < bytes.length; offset += 0x8000) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
+  }
+  const token = typeof btoa === "function" ? btoa(binary) : Buffer.from(bytes).toString("base64");
   return `Basic ${token}`;
 }
 
@@ -342,7 +368,7 @@ export class OpenCodeProvider implements AiProvider {
   readonly #fetch: FetchLike;
   /** Lazily built SDK client (rebuilt when the base URL changes). */
   #client: OpencodeClient | null = null;
-  #clientBase: string | null = null;
+  #clientKey: string | null = null;
   /** sessionKey → opencode session id (in-memory only). */
   readonly #sessions = new Map<string, string>();
 
@@ -370,7 +396,7 @@ export class OpenCodeProvider implements AiProvider {
   async #managedUrl(managed: ManagedServe): Promise<string> {
     const live = await managed.status().catch(() => null);
     if (live?.running && live.url) return live.url;
-    const started = await managed.start().catch(() => null);
+    const started = await managed.start(this.#options.directory?.()).catch(() => null);
     if (started?.running && started.url) return started.url;
     throw new AiError(
       "unavailable",
@@ -382,7 +408,8 @@ export class OpenCodeProvider implements AiProvider {
   /** Attach mode: strict autodiscovery over manual URL + default. */
   async #attachServer(): Promise<OpencodeServer> {
     const manual = this.#manualUrl();
-    const { server, unauthorizedBase } = await discoverOpencode(manual, this.#fetch);
+    const password = (await this.#options.password?.().catch(() => null)) ?? null;
+    const { server, unauthorizedBase } = await discoverOpencode(manual, this.#fetch, password);
     if (server) {
       if (server.kind === "v2") {
         throw new AiError(
@@ -431,7 +458,8 @@ export class OpenCodeProvider implements AiProvider {
         );
       }
       const url = await this.#managedUrl(managed);
-      const probe = await probeOpencodeServer(url, this.#fetch);
+      const password = (await this.#options.password?.().catch(() => null)) ?? null;
+      const probe = await probeOpencodeServer(url, this.#fetch, HEALTH_TIMEOUT_MS, password);
       if (probe.state === "ok") {
         if (probe.server.kind === "v2") {
           throw new AiError(
@@ -459,17 +487,19 @@ export class OpenCodeProvider implements AiProvider {
   }
 
   /** SDK client for a base URL (rebuilt when the URL changes). */
-  #clientFor(base: string): OpencodeClient {
-    if (this.#client && this.#clientBase === base) return this.#client;
+  #clientFor(base: string, directory?: string): OpencodeClient {
+    const clientKey = `${base}\0${directory ?? ""}`;
+    if (this.#client && this.#clientKey === clientKey) return this.#client;
     this.#client = createOpencodeClient({
       baseUrl: base,
+      ...(directory ? { directory } : {}),
       fetch: authedFetch(
         base,
         async () => (await this.#options.password?.()) ?? null,
         this.#fetch,
       ) as typeof fetch,
     });
-    this.#clientBase = base;
+    this.#clientKey = clientKey;
     return this.#client;
   }
 
@@ -516,7 +546,7 @@ export class OpenCodeProvider implements AiProvider {
   async listModels(): Promise<ModelInfo[]> {
     try {
       const base = await this.#resolveServer().then((s) => s.base);
-      const response = await this.#clientFor(base).config.providers();
+      const response = await this.#clientFor(base, this.#options.directory?.()).config.providers();
       if (response.error) {
         throw new AiError("bad-response", "opencode rejected the provider list request", {
           backend: "opencode",
@@ -550,15 +580,16 @@ export class OpenCodeProvider implements AiProvider {
   async generate(req: AiGenerateRequest): Promise<AiResult> {
     const started = Date.now();
     let client: OpencodeClient;
+    const directory = this.#options.directory?.(req.sessionKey);
     try {
       const base = await this.#resolveServer().then((s) => s.base);
-      client = this.#clientFor(base);
+      client = this.#clientFor(base, directory);
     } catch (err) {
       if (err instanceof AiError) throw err;
       throw toAiError(err);
     }
 
-    const key = req.sessionKey ?? "default";
+    const key = `${directory ?? ""}\0${req.sessionKey ?? "default"}`;
     const body: {
       parts: Array<{ type: "text"; text: string }>;
       system?: string;
@@ -623,7 +654,7 @@ export class OpenCodeProvider implements AiProvider {
   reset(): void {
     this.#sessions.clear();
     this.#client = null;
-    this.#clientBase = null;
+    this.#clientKey = null;
   }
 }
 

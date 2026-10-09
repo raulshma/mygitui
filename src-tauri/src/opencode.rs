@@ -6,7 +6,7 @@
 //! version. Misses are never cached: an opencode installed while mygitui
 //! runs is found on the next detect.
 //!
-//! Managed serve spawns `opencode serve --hostname 127.0.0.1 --port <free>`
+//! Managed serve spawns `opencode serve --hostname=127.0.0.1 --port=<free>`
 //! as a child owned by [`OpenCodeServerRegistry`]: readiness is confirmed by
 //! a TCP connect, the announced listening URL is parsed from the child's
 //! stdout when available, and the registry's `Drop` kills every remaining
@@ -18,8 +18,9 @@
 //! stays — opencode needs it to locate runtimes/shims; its config/auth under
 //! HOME/APPDATA/XDG_CONFIG_HOME passes through the same allowlist).
 
+use std::collections::VecDeque;
 use std::io::{BufRead, BufReader, Read};
-use std::net::{TcpListener, TcpStream, ToSocketAddrs};
+use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{mpsc, Arc};
@@ -39,6 +40,8 @@ const VERSION_TIMEOUT: Duration = Duration::from_secs(4);
 const SERVE_READY_TIMEOUT: Duration = Duration::from_secs(30);
 /// Poll interval for both waits.
 const POLL_INTERVAL: Duration = Duration::from_millis(100);
+const STARTUP_OUTPUT_LINES: usize = 4;
+const STARTUP_OUTPUT_LINE_CHARS: usize = 180;
 
 /// Result of probing the machine for a local opencode CLI.
 #[derive(Serialize, Clone, Debug)]
@@ -177,19 +180,25 @@ fn kill_child(child: &mut Child) {
 fn probe_version(binary: &Path) -> Option<(String, u32)> {
     let mut command = build_command(binary, &["--version"]);
     let mut child = command
+        .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .ok()?;
     let mut stdout = child.stdout.take()?;
     let mut stderr = child.stderr.take()?;
-    // Both pipes must stay drained or the child can block on write.
-    let (tx, rx) = mpsc::channel::<String>();
+    // Drain both streams independently or a full pipe can block the other.
+    let (stdout_tx, stdout_rx) = mpsc::channel::<String>();
     std::thread::spawn(move || {
         let mut text = String::new();
         let _ = stdout.read_to_string(&mut text);
+        let _ = stdout_tx.send(text);
+    });
+    let (stderr_tx, stderr_rx) = mpsc::channel::<String>();
+    std::thread::spawn(move || {
+        let mut text = String::new();
         let _ = stderr.read_to_string(&mut text);
-        let _ = tx.send(text);
+        let _ = stderr_tx.send(text);
     });
     let deadline = Instant::now() + VERSION_TIMEOUT;
     loop {
@@ -201,9 +210,9 @@ fn probe_version(binary: &Path) -> Option<(String, u32)> {
     }
     // Whether it exited or we timed out: kill + reap so the reader hits EOF.
     kill_child(&mut child);
-    let text = rx
-        .recv_timeout(VERSION_TIMEOUT)
-        .unwrap_or_default();
+    let stdout = stdout_rx.recv_timeout(VERSION_TIMEOUT).unwrap_or_default();
+    let stderr = stderr_rx.recv_timeout(VERSION_TIMEOUT).unwrap_or_default();
+    let text = format!("{stdout}{stderr}");
     parse_version(&text)
 }
 
@@ -251,12 +260,15 @@ struct ServeEntry {
 /// contract as the pty registry).
 pub struct OpenCodeServerRegistry {
     entry: Mutex<Option<ServeEntry>>,
+    /// Serializes full startup attempts while status/stop remain responsive.
+    starting: Mutex<()>,
 }
 
 impl Default for OpenCodeServerRegistry {
     fn default() -> Self {
         Self {
             entry: Mutex::new(None),
+            starting: Mutex::new(()),
         }
     }
 }
@@ -275,8 +287,72 @@ fn parse_listening_url(line: &str) -> Option<String> {
     Some(re.captures(line)?.get(1)?.as_str().to_string())
 }
 
+/// Extracts the port from OpenCode's announced URL.
 fn base_url_for(port: u16) -> String {
     format!("http://127.0.0.1:{port}")
+}
+
+fn record_startup_output(output: &Mutex<VecDeque<String>>, stream: &str, line: &str) {
+    let line = line.trim();
+    if line.is_empty() {
+        return;
+    }
+    let lower = line.to_ascii_lowercase();
+    let detail = if [
+        "password",
+        "authorization",
+        "api_key",
+        "api-key",
+        "token",
+        "secret",
+    ]
+    .iter()
+    .any(|term| lower.contains(term))
+    {
+        "[sensitive startup output redacted]".to_string()
+    } else {
+        line.chars().take(STARTUP_OUTPUT_LINE_CHARS).collect()
+    };
+    let mut output = output.lock();
+    output.push_back(format!("{stream}: {detail}"));
+    while output.len() > STARTUP_OUTPUT_LINES {
+        output.pop_front();
+    }
+}
+
+fn startup_error(message: String, output: &Mutex<VecDeque<String>>) -> String {
+    let details = output
+        .lock()
+        .iter()
+        .cloned()
+        .collect::<Vec<_>>()
+        .join(" | ");
+    if details.is_empty() {
+        message
+    } else {
+        format!("{message} — {details}")
+    }
+}
+
+/// Uses the requested project as OpenCode's workspace, or a private empty
+/// directory when startup is triggered before any repository is active.
+fn server_working_directory(cwd: Option<&Path>) -> Result<PathBuf, String> {
+    if let Some(cwd) = cwd {
+        let resolved = cwd
+            .canonicalize()
+            .map_err(|err| format!("could not resolve OpenCode workspace: {err}"))?;
+        if !resolved.is_dir() {
+            return Err("OpenCode workspace is not a directory".into());
+        }
+        return Ok(resolved);
+    }
+
+    let fallback = std::env::temp_dir().join("mygitui-opencode");
+    std::fs::create_dir_all(&fallback)
+        .map_err(|err| format!("could not prepare OpenCode workspace: {err}"))?;
+    fallback
+        .canonicalize()
+        .map_err(|err| format!("could not resolve OpenCode workspace: {err}"))
 }
 
 impl OpenCodeServerRegistry {
@@ -317,9 +393,13 @@ impl OpenCodeServerRegistry {
         }
     }
 
-    /// Starts the managed server (idempotent: returns the live one). Spawns
-    /// on a free 127.0.0.1 port and waits until the port accepts connects.
-    pub fn start(&self) -> OpencodeServeState {
+    /// Starts the managed server (idempotent: returns the live one). Lets
+    /// OpenCode choose a loopback port and waits until it accepts connects.
+    pub fn start(&self, cwd: Option<&Path>) -> OpencodeServeState {
+        // A settings refresh and a feature request can arrive together.
+        // Coalesce those starts here too, instead of briefly running two
+        // OpenCode servers and killing whichever loses the registry race.
+        let _starting = self.starting.lock();
         {
             let mut guard = self.entry.lock();
             Self::reap_dead(&mut guard);
@@ -338,6 +418,16 @@ impl OpenCodeServerRegistry {
             };
         };
 
+        let working_dir = match server_working_directory(cwd) {
+            Ok(path) => path,
+            Err(error) => {
+                return OpencodeServeState {
+                    error: Some(error),
+                    ..OpencodeServeState::default()
+                };
+            }
+        };
+
         let Ok(listener) = TcpListener::bind(("127.0.0.1", 0)) else {
             return OpencodeServeState {
                 error: Some("no free local port available".into()),
@@ -346,12 +436,15 @@ impl OpenCodeServerRegistry {
         };
         let port = listener.local_addr().map(|a| a.port()).unwrap_or(0);
         drop(listener);
+        let port_arg = format!("--port={port}");
 
         let mut command = build_command(
             Path::new(&binary),
-            &["serve", "--hostname", "127.0.0.1", "--port", &port.to_string()],
+            &["serve", "--hostname=127.0.0.1", &port_arg],
         );
+        command.current_dir(working_dir);
         let mut child = match command
+            .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
@@ -368,52 +461,57 @@ impl OpenCodeServerRegistry {
         // Reader threads: parse the listening URL from stdout, drain stderr
         // (a full pipe would block the child).
         let announced: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
+        let startup_output = Arc::new(Mutex::new(VecDeque::new()));
         if let Some(stdout) = child.stdout.take() {
             let sink = Arc::clone(&announced);
+            let output = Arc::clone(&startup_output);
             std::thread::spawn(move || {
                 for line in BufReader::new(stdout).lines().map_while(Result::ok) {
                     if let Some(url) = parse_listening_url(&line) {
                         *sink.lock() = url;
                     }
+                    record_startup_output(&output, "stdout", &line);
                 }
             });
         }
         if let Some(stderr) = child.stderr.take() {
+            let output = Arc::clone(&startup_output);
             std::thread::spawn(move || {
-                for _ in BufReader::new(stderr).lines() {}
+                for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+                    record_startup_output(&output, "stderr", &line);
+                }
             });
         }
 
-        // Ready = the child is alive and the port accepts TCP connects.
-        let Some(addr) = ("127.0.0.1", port)
-            .to_socket_addrs()
-            .ok()
-            .and_then(|mut addrs| addrs.next())
-        else {
-            kill_child(&mut child);
-            return OpencodeServeState {
-                error: Some("failed to resolve the loopback address".into()),
-                ..OpencodeServeState::default()
-            };
-        };
+        // Keep the port in sync with OpenCode 1.x, which treats `--port=0`
+        // as its default port rather than asking the OS for an ephemeral one.
         let deadline = Instant::now() + SERVE_READY_TIMEOUT;
         loop {
             match child.try_wait() {
                 Ok(Some(status)) => {
+                    std::thread::sleep(POLL_INTERVAL);
                     return OpencodeServeState {
-                        error: Some(format!("opencode serve exited immediately ({status})")),
+                        error: Some(startup_error(
+                            format!("opencode serve exited immediately ({status})"),
+                            &startup_output,
+                        )),
                         ..OpencodeServeState::default()
                     };
                 }
                 Err(err) => {
+                    kill_child(&mut child);
+                    std::thread::sleep(POLL_INTERVAL);
                     return OpencodeServeState {
-                        error: Some(format!("opencode serve wait failed: {err}")),
+                        error: Some(startup_error(
+                            format!("opencode serve wait failed: {err}"),
+                            &startup_output,
+                        )),
                         ..OpencodeServeState::default()
                     };
                 }
                 Ok(None) => {}
             }
-            if TcpStream::connect(addr).is_ok() {
+            if TcpStream::connect(("127.0.0.1", port)).is_ok() {
                 let mut guard = self.entry.lock();
                 // A racing start won the slot? Then tear our duplicate down.
                 if guard.is_some() {
@@ -432,10 +530,14 @@ impl OpenCodeServerRegistry {
             }
             if Instant::now() >= deadline {
                 kill_child(&mut child);
+                std::thread::sleep(POLL_INTERVAL);
                 return OpencodeServeState {
-                    error: Some(format!(
-                        "opencode server did not become ready within {}s",
-                        SERVE_READY_TIMEOUT.as_secs()
+                    error: Some(startup_error(
+                        format!(
+                            "opencode server did not become ready within {}s",
+                            SERVE_READY_TIMEOUT.as_secs()
+                        ),
+                        &startup_output,
                     )),
                     ..OpencodeServeState::default()
                 };
@@ -474,9 +576,10 @@ pub fn opencode_serve_status(
 /// Starts (or returns the running) managed opencode server.
 #[tauri::command(rename_all = "snake_case")]
 pub fn opencode_serve_start(
+    cwd: Option<String>,
     registry: tauri::State<'_, OpenCodeServerRegistry>,
 ) -> OpencodeServeState {
-    registry.start()
+    registry.start(cwd.as_deref().map(Path::new))
 }
 
 /// Stops the managed opencode server.
@@ -550,7 +653,11 @@ mod tests {
             dir.join("opencode.exe"),
             "EXE precedes CMD within a PATH entry (PATHEXT priority order)"
         );
-        assert_eq!(found[2], other.join("opencode.bat"), "second PATH entry last");
+        assert_eq!(
+            found[2],
+            other.join("opencode.bat"),
+            "second PATH entry last"
+        );
 
         // A missing binary yields nothing (misses are never cached anywhere).
         assert!(scan_candidates(&other.display().to_string(), ".EXE", "opencode").is_empty());
@@ -581,7 +688,7 @@ mod tests {
     #[ignore = "shells out to real opencode"]
     fn serve_start_status_stop_roundtrip() {
         let registry = OpenCodeServerRegistry::default();
-        let started = registry.start();
+        let started = registry.start(None);
         assert!(started.running, "start failed: {:?}", started.error);
         let url = started.url.expect("running server has a URL");
         assert!(url.starts_with("http://127.0.0.1:"));
@@ -593,7 +700,9 @@ mod tests {
         // The server actually speaks HTTP (health endpoint answers).
         let mut stream = TcpStream::connect(("127.0.0.1", status.port.unwrap())).unwrap();
         stream
-            .write_all(b"GET /global/health HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n")
+            .write_all(
+                b"GET /global/health HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n",
+            )
             .unwrap();
         let mut response = Vec::new();
         stream.read_to_end(&mut response).unwrap();

@@ -27,6 +27,7 @@ import {
   opencodeServeStop,
 } from "$lib/ipc/client";
 import { isTauri } from "$lib/entry/dragdrop";
+import { tabStore } from "$lib/stores/tabs.svelte";
 import { ConnectionSupervisor } from "./connection";
 import { subscribeOpencodeEvents, type OpencodeEventSession } from "./opencodeEvents";
 import type { SupervisorOptions } from "./connection";
@@ -55,8 +56,13 @@ export interface StorageLike {
  */
 const managedServeBridge: ManagedServe = {
   status: () => opencodeServeStatus(),
-  start: () => opencodeServeStart(),
+  start: (cwd) => opencodeServeStart(cwd ?? tabStore.active?.root),
 };
+
+function opencodeDirectory(sessionKey?: string): string | undefined {
+  if (!sessionKey) return tabStore.active?.root;
+  return tabStore.tabs.find((tab) => tab.id === sessionKey)?.root;
+}
 
 /** Per-repo state of a feature run. */
 export interface AiGenerateState {
@@ -160,6 +166,7 @@ export class AiStore {
           },
           url: () => this.config.opencodeUrl ?? undefined,
           managed: () => (isTauri() ? managedServeBridge : null),
+          directory: opencodeDirectory,
           password: () => secretsGet(SECRET_KEYS.opencodeServerPassword),
         }),
       openrouter: deps.providers?.openrouter ?? new OpenRouterProvider(),
@@ -257,7 +264,7 @@ export class AiStore {
     else this.config.opencodeEnabled = false;
     this.#persist();
     if (enabled) {
-      await this.supervisor.checkAll().catch(() => {});
+      await this.supervisor.check("opencode").catch(() => {});
     } else {
       await opencodeServeStop().catch(() => {});
       await this.supervisor.check("opencode").catch(() => {});

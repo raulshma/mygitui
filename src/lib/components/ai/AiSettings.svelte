@@ -71,17 +71,27 @@
   let statuses = $state(ai.supervisor.statuses);
   $effect(() => ai.supervisor.subscribe((next) => (statuses = next)));
 
-  /** Probes for the local CLI + managed server (best effort, never throws). */
+  /** Checks the connection, then refreshes local runtime details. */
   async function refreshInstall(): Promise<void> {
     checkingInstall = true;
     try {
-      [detection, serveState] = await Promise.all([
-        opencodeDetect().catch(() => null),
-        opencodeServeStatus().catch(() => null),
-      ]);
+      await ai.supervisor.check("opencode");
+      await readInstallState();
     } finally {
       checkingInstall = false;
     }
+  }
+
+  async function readInstallState(): Promise<void> {
+    if (!opencodeEnabled || opencodeModeChoice !== "managed") {
+      detection = null;
+      serveState = null;
+      return;
+    }
+    [detection, serveState] = await Promise.all([
+      opencodeDetect().catch(() => null),
+      opencodeServeStatus().catch(() => null),
+    ]);
   }
 
   // Hydrate the form whenever the dialog opens. Reads are untracked: the
@@ -105,14 +115,13 @@
     });
   });
 
-  // Load the model list for the selected backend (datalist suggestions).
+  // Model suggestions in this dialog are only used by OpenRouter.
   $effect(() => {
     if (!open) return;
-    void backendChoice;
-    const provider = ai.supervisor.provider(backendChoice);
     models = [];
     modelsError = null;
-    provider
+    ai.supervisor
+      .provider("openrouter")
       .listModels()
       .then((list) => {
         models = list;
@@ -123,45 +132,47 @@
       });
   });
 
-  const backendLabels: Record<AiBackend, string> = {
-    opencode: "opencode — local, auto-managed (recommended)",
-    openrouter: "OpenRouter — direct API (needs an API key)",
-  };
-
-  /** One-line summary of the local opencode install + managed server. */
+  /** One-line summary of the local OpenCode install and server. */
   function installLine(): string {
-    if (detection === null) return "checking for a local opencode install…";
-    if (!detection.installed) {
-      return "not found on PATH — install opencode, then Re-check";
+    if (!opencodeEnabled) return "OpenCode is disabled.";
+    if (opencodeModeChoice === "attach") {
+      const target = opencodeUrl.trim() || "http://127.0.0.1:4096";
+      const status = statuses.opencode;
+      if (status.status === "ok") return `Connected to ${target}`;
+      if (status.status === "checking") return `Checking ${target}…`;
+      if (status.status === "unauthenticated") return `The server at ${target} requires a password.`;
+      if (status.status === "down") {
+        return status.error ? `Could not reach ${target}: ${status.error}` : `Could not reach ${target}.`;
+      }
+      return `Ready to connect to ${target}.`;
     }
-    const version = detection.version ?? "unknown version";
+    if (detection === null) return "Checking for an OpenCode install…";
+    if (!detection.installed) return "OpenCode was not found on PATH. Install it, then check again.";
+    const version = detection.version ? `v${detection.version}` : "version unavailable";
     const at = detection.path ? ` (${detection.path})` : "";
     if (serveState?.running && serveState.url) {
-      return `v${version} — managed server running at ${serveState.url}`;
+      return `${version} — managed server running at ${serveState.url}`;
     }
-    if (opencodeModeChoice === "attach") {
-      return `v${version}${at} — attach mode: using a server you run`;
-    }
-    if (opencodeEnabled) {
-      return `v${version}${at} — will start automatically (managed)`;
-    }
-    return `v${version}${at} — disabled`;
+    return `${version}${at} — mygitui starts the server when needed`;
   }
 
-  /** Per-backend status line for the display under "Test connection". */
+  /** Short status copy shared by the provider cards and connection list. */
   function statusLine(backend: AiBackend): string {
     const status = statuses[backend];
-    if (status.status === "checking") return "checking…";
-    if (status.status === "unknown") return "not tested";
-    if (status.status === "ok") return `ok (${status.latencyMs ?? "?"} ms)`;
-    if (status.status === "unauthenticated") return "reachable but unauthorized";
-    return status.error ? `down — ${status.error}` : "down";
+    if (status.status === "checking") return "Checking…";
+    if (status.status === "unknown") return "Not checked yet";
+    if (status.status === "ok") return `Connected · ${status.latencyMs ?? "?"} ms`;
+    if (status.status === "unauthenticated") {
+      return backend === "opencode" ? "Server password required" : "API key required";
+    }
+    return status.error ? `Unavailable · ${status.error}` : "Unavailable";
   }
 
   async function testConnection(): Promise<void> {
     testing = true;
     try {
       await ai.supervisor.checkAll();
+      await readInstallState();
     } finally {
       testing = false;
     }
@@ -177,16 +188,16 @@
       ai.setOpencodeUrl(opencodeUrl);
       ai.setOpenrouterModel(openrouterModel);
       ai.setAllowFallback(allowFallback);
-      await ai.setOpencodeEnabled(opencodeEnabled);
       if (opencodePassword.trim().length > 0) {
         await ai.saveOpencodePassword(opencodePassword);
       }
       if (openrouterKey.trim().length > 0) {
         await ai.saveOpenrouterKey(openrouterKey);
       }
-      // Reflect the new config immediately (managed mode spawns here).
-      await ai.supervisor.checkAll().catch(() => {});
-      void refreshInstall();
+      // Check after writing secrets so the probe uses the newly saved password.
+      await ai.setOpencodeEnabled(opencodeEnabled);
+      await ai.supervisor.check("openrouter").catch(() => {});
+      void readInstallState();
       toast("AI settings saved", { kind: "success" });
       onclose?.();
     } catch (err) {
@@ -203,6 +214,7 @@
     opencodePassword = "";
     try {
       await ai.clearOpencodePassword();
+      await ai.supervisor.check("opencode");
       toast("opencode password removed from the keyring");
     } catch (err) {
       toast(
@@ -216,6 +228,7 @@
     openrouterKey = "";
     try {
       await ai.clearOpenrouterKey();
+      await ai.supervisor.check("openrouter");
       toast("OpenRouter API key removed from the keyring");
     } catch (err) {
       toast(
@@ -248,32 +261,46 @@
       role="dialog"
       aria-modal="true"
       aria-labelledby="ai-settings-title"
+      aria-describedby="ai-settings-description"
     >
-      <h2 id="ai-settings-title" class="title">AI settings</h2>
+      <header class="dialog-header">
+        <div>
+          <h2 id="ai-settings-title" class="title">AI settings</h2>
+          <p id="ai-settings-description" class="subtitle">Choose a provider and check its connection.</p>
+        </div>
+        <button class="icon-button" type="button" aria-label="Close AI settings" onclick={close}>
+          ×
+        </button>
+      </header>
 
       <form
+        class="form"
         onsubmit={(event) => {
           event.preventDefault();
           void save();
         }}
       >
         <fieldset class="group">
-          <legend class="legend">Backend</legend>
+          <legend class="legend">Preferred backend</legend>
           {#each AI_BACKENDS as option (option)}
-            <label class="radio">
+            <label class:chosen={backendChoice === option} class="backend-option">
               <input
                 type="radio"
                 name="ai-backend"
                 value={option}
                 bind:group={backendChoice}
               />
-              <span>{backendLabels[option]}</span>
+              <span class="backend-copy">
+                <strong>{option === "opencode" ? "OpenCode" : "OpenRouter"}</strong>
+                <span>{option === "opencode" ? "Local server, managed by mygitui" : "Direct API, requires an API key"}</span>
+              </span>
+              <span class="backend-status {statuses[option].status}">{statusLine(option)}</span>
             </label>
           {/each}
         </fieldset>
 
         <fieldset class="group">
-          <legend class="legend">opencode</legend>
+          <legend class="legend">OpenCode</legend>
           <p class="status-line" role="status">{installLine()}</p>
           <div class="row">
             <button
@@ -282,20 +309,19 @@
               disabled={checkingInstall}
               onclick={() => void refreshInstall()}
             >
-              {#if checkingInstall}Checking…{:else}Re-check{/if}
+              {#if checkingInstall}Checking…{:else}Check OpenCode{/if}
             </button>
             {#if detection?.installed && detection.major !== null && detection.major >= 2}
-              <span class="hint">opencode 2.x detected — this build targets 1.x servers</span>
+              <span class="hint">OpenCode 2.x detected — this build currently supports 1.x servers</span>
             {/if}
           </div>
           <label class="radio">
             <input type="checkbox" bind:checked={opencodeEnabled} />
-            <span>Enable opencode (the app starts and manages the server)</span>
+            <span>Enable OpenCode</span>
           </label>
           {#if !opencodeEnabled}
             <p class="hint warn">
-              opencode is off — nothing is probed or spawned and AI features
-              use OpenRouter only.
+              OpenCode is disabled. AI features can use OpenRouter when fallback is enabled.
             </p>
           {/if}
 
@@ -316,8 +342,8 @@
                   />
                   <span>
                     {modeOption === "managed"
-                      ? "Managed — mygitui spawns opencode serve itself (default)"
-                      : "Attach — connect to a server I run"}
+                      ? "Managed — mygitui starts OpenCode when needed"
+                      : "Attach — connect to an OpenCode server I run"}
                   </span>
                 </label>
               {/each}
@@ -333,12 +359,12 @@
                   />
                 </label>
                 <p class="hint">
-                  Leave empty to autodiscover the default (127.0.0.1:4096).
+                  Leave empty to check the default server at 127.0.0.1:4096.
                 </p>
               {/if}
             </fieldset>
             <label class="field">
-              <span class="field-label">Password (basic auth, optional)</span>
+              <span class="field-label">Server password (optional)</span>
               <input
                 class="input"
                 type="password"
@@ -411,7 +437,7 @@
 
         <div class="status" role="status">
           <button class="secondary" type="button" disabled={testing} onclick={() => void testConnection()}>
-            {#if testing}Testing…{:else}Test connection{/if}
+            {#if testing}Checking…{:else}Check connections{/if}
           </button>
           <ul class="status-list">
             {#each AI_BACKENDS as backend (backend)}
@@ -441,42 +467,142 @@
     display: flex;
     align-items: center;
     justify-content: center;
+    overflow-y: auto;
+    padding: 1rem;
     background: color-mix(in srgb, var(--m3-scrim, black) 40%, transparent);
   }
 
   .dialog {
-    width: min(30rem, calc(100vw - 2rem));
-    max-height: calc(100vh - 4rem);
+    width: min(42rem, 100%);
+    max-height: calc(100dvh - 2rem);
     overflow-y: auto;
+    box-sizing: border-box;
     background: var(--m3-surface-container-high, var(--m3-surface));
     color: var(--m3-on-surface);
     border-radius: var(--m3-shape-large, 16px);
-    padding: 1rem 1.25rem;
+    padding: 1.25rem;
     box-shadow: 0 8px 32px color-mix(in srgb, black 35%, transparent);
   }
 
+  .dialog-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 1rem;
+    margin-bottom: 1.125rem;
+  }
+
   .title {
-    margin: 0 0 0.5rem;
-    font-size: 1rem;
+    margin: 0;
+    font-size: 1.2rem;
     font-weight: 600;
+  }
+
+  .subtitle {
+    margin: 0.25rem 0 0;
+    color: var(--m3-on-surface-variant, var(--m3-on-surface));
+    font-size: 0.8125rem;
+  }
+
+  .icon-button {
+    display: grid;
+    flex: none;
+    place-items: center;
+    width: 2rem;
+    height: 2rem;
+    border: 0;
+    border-radius: 50%;
+    background: transparent;
+    color: var(--m3-on-surface-variant, var(--m3-on-surface));
+    font: inherit;
+    font-size: 1.35rem;
+    line-height: 1;
+    cursor: pointer;
+  }
+
+  .icon-button:hover {
+    background: var(--m3-surface-container-highest, var(--m3-surface));
+  }
+
+  .form {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
   }
 
   .group {
-    border: none;
-    margin: 0 0 0.75rem;
-    padding: 0;
+    min-width: 0;
+    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
+    border-radius: var(--m3-shape-medium, 12px);
+    margin: 0;
+    padding: 0.9rem 1rem 1rem;
     display: flex;
     flex-direction: column;
-    gap: 0.375rem;
+    gap: 0.625rem;
+    background: color-mix(in srgb, var(--m3-surface-container-low, var(--m3-surface)) 58%, transparent);
   }
 
   .legend {
-    font-size: 0.72rem;
+    padding: 0 0.35rem;
+    font-size: 0.75rem;
     font-weight: 600;
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
     color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    padding: 0;
+  }
+
+  .backend-option {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) minmax(8rem, auto);
+    align-items: center;
+    gap: 0.75rem;
+    min-height: 3.25rem;
+    padding: 0.65rem 0.75rem;
+    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
+    border-radius: var(--m3-shape-small, 8px);
+    cursor: pointer;
+  }
+
+  .backend-option.chosen {
+    border-color: var(--m3-primary);
+    background: color-mix(in srgb, var(--m3-primary) 7%, transparent);
+  }
+
+  .backend-option input {
+    accent-color: var(--m3-primary);
+    margin: 0;
+  }
+
+  .backend-copy,
+  .backend-status {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    gap: 0.15rem;
+  }
+
+  .backend-copy strong {
+    font-size: 0.875rem;
+    font-weight: 600;
+  }
+
+  .backend-copy span,
+  .backend-status {
+    color: var(--m3-on-surface-variant, var(--m3-on-surface));
+    font-size: 0.72rem;
+  }
+
+  .backend-status {
+    max-width: 14rem;
+    overflow-wrap: anywhere;
+    text-align: right;
+  }
+
+  .backend-status.ok {
+    color: var(--m3-primary);
+  }
+
+  .backend-status.down,
+  .backend-status.unauthenticated {
+    color: var(--m3-error, inherit);
   }
 
   .radio {
@@ -510,7 +636,7 @@
     background: var(--m3-surface-container-lowest, var(--m3-surface));
     border: 1px solid var(--m3-outline-variant, var(--m3-primary));
     border-radius: var(--m3-shape-extra-small, 4px);
-    padding: 0.3rem 0.5rem;
+    padding: 0.5rem 0.625rem;
   }
 
   .input:focus-visible {
@@ -532,12 +658,18 @@
     margin: 0;
     font-size: 0.8125rem;
     color: var(--m3-on-surface);
+    overflow-wrap: anywhere;
   }
 
   .group.inner {
     margin: 0.25rem 0 0 0.875rem;
     border-left: 1px solid var(--m3-outline-variant, var(--m3-primary));
     padding-left: 0.625rem;
+    border-top: 0;
+    border-right: 0;
+    border-bottom: 0;
+    border-radius: 0;
+    background: none;
   }
 
   .advanced-toggle {
@@ -551,6 +683,9 @@
 
   .row {
     display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.75rem;
   }
 
   .link {
@@ -566,9 +701,12 @@
 
   .status {
     display: flex;
-    align-items: flex-start;
+    align-items: center;
     gap: 0.75rem;
-    margin: 0.25rem 0 0.75rem;
+    margin: 0.25rem 0 0;
+    padding: 0.75rem 0;
+    border-top: 1px solid var(--m3-outline-variant, var(--m3-primary));
+    border-bottom: 1px solid var(--m3-outline-variant, var(--m3-primary));
   }
 
   .status-list {
@@ -621,8 +759,35 @@
 
   .primary:focus-visible,
   .secondary:focus-visible,
-  .link:focus-visible {
+  .link:focus-visible,
+  .icon-button:focus-visible {
     outline: 2px solid var(--m3-primary);
     outline-offset: 1px;
+  }
+
+  @media (max-width: 36rem) {
+    .scrim {
+      align-items: flex-start;
+      padding: 0.5rem;
+    }
+
+    .dialog {
+      max-height: calc(100dvh - 1rem);
+      padding: 1rem;
+    }
+
+    .backend-option {
+      grid-template-columns: auto minmax(0, 1fr);
+    }
+
+    .backend-status {
+      grid-column: 2;
+      text-align: left;
+    }
+
+    .status {
+      align-items: stretch;
+      flex-direction: column;
+    }
   }
 </style>

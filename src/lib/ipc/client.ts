@@ -1588,9 +1588,9 @@ export async function opencodeServeStatus(): Promise<OpencodeServeState> {
 }
 
 /** Starts (or returns the running) managed opencode server. */
-export async function opencodeServeStart(): Promise<OpencodeServeState> {
+export async function opencodeServeStart(cwd?: string): Promise<OpencodeServeState> {
   if (!isTauri()) return { running: false, url: null, port: null, error: null };
-  return call<OpencodeServeState>("opencode_serve_start", {});
+  return call<OpencodeServeState>("opencode_serve_start", { cwd: cwd ?? null });
 }
 
 /** Stops the managed opencode server (no-op when none is running). */

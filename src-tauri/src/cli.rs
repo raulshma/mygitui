@@ -52,8 +52,27 @@ pub(crate) fn sanitize_env<I>(vars: I) -> Vec<(String, String)>
 where
     I: IntoIterator<Item = (String, String)>,
 {
+    let windows = cfg!(windows);
     vars.into_iter()
-        .filter(|(key, _)| key.starts_with("GIT_") || ENV_ALLOWLIST.contains(&key.as_str()))
+        .filter(|(key, _)| {
+            // Windows environment names are case-insensitive, while
+            // std::env preserves the original spelling (for example
+            // `SystemRoot` and `ProgramFiles`). Keep those required entries.
+            let is_git = if windows {
+                key.get(..4)
+                    .is_some_and(|prefix| prefix.eq_ignore_ascii_case("GIT_"))
+            } else {
+                key.starts_with("GIT_")
+            };
+            let is_allowed = ENV_ALLOWLIST.iter().any(|allowed| {
+                if windows {
+                    allowed.eq_ignore_ascii_case(key)
+                } else {
+                    *allowed == key
+                }
+            });
+            is_git || is_allowed
+        })
         .collect()
 }
 
