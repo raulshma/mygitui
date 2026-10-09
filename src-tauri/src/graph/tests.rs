@@ -8,7 +8,10 @@
 //! * roots free their lane; freed lanes are reused before extending
 //! * paged layout with a shared `LaneState` is byte-identical to single-page
 //! * every distinct parent receives an edge ending on the parent's row lane
-//! * edges are unique, sorted, originate at the row's node lane, and every
+//! * every open lane carries an edge into the next row (pass-through
+//!   verticals), so branch lines never break on rows they pass by
+//! * edges are unique, sorted, originate at the row's node lane (pass-throughs
+//!   excepted: `from == to`), and every
 //!   lane they touch stays within `lane_count` from source row to target row
 //! * `lanes` vector never exceeds the peak number of concurrently open lanes
 
@@ -105,7 +108,9 @@ fn diamond_branch_and_merge() {
     assert_eq!(rows[0].lane_count, 2);
 
     assert_eq!(rows[1].lane, 0); // B keeps lane 0
-    assert_eq!(rows[1].edges, vec![e(0, 0)]);
+    // Lane 1 holds C (renders two rows down): straight pass-through keeps
+    // the branch line connected across B's row.
+    assert_eq!(rows[1].edges, vec![e(0, 0), e(1, 1)]);
     assert_eq!(rows[1].lane_count, 2); // C still passes through lane 1
 
     assert_eq!(rows[2].lane, 1); // C gets lane 1
@@ -208,6 +213,27 @@ fn two_heads_converge_onto_same_parent_lane() {
 }
 
 #[test]
+fn pass_through_bridges_rows_before_a_deferred_parent() {
+    // Sparse walk (file-history style): B is A's parent but an unrelated
+    // root X renders in between; lane 0 must stay connected until B appears.
+    let commits = vec![mk("A", &["B"]), mk("X", &[]), mk("B", &[])];
+    let mut state = LaneState::default();
+    let rows = layout_page(&commits, &mut state);
+
+    assert_eq!(rows[0].lane, 0); // A opens lane 0 for B
+    assert_eq!(rows[0].edges, vec![e(0, 0)]);
+
+    assert_eq!(rows[1].lane, 1); // X takes the next free lane
+    // Lane-0 pass-through carries B's line down through X's row. X itself is
+    // a root: its lane was freed, so its line ends at its own node.
+    assert_eq!(rows[1].edges, vec![e(0, 0)]);
+
+    assert_eq!(rows[2].lane, 0); // B lands where the line pointed
+    assert!(rows[2].edges.is_empty());
+    assert!(all_lanes_free(&state));
+}
+
+#[test]
 fn fuzz_random_dags_hold_all_invariants() {
     const DAGS: u64 = 200;
 
@@ -294,7 +320,12 @@ fn fuzz_random_dags_hold_all_invariants() {
                 assert!(pair[0] < pair[1], "dag {dag}: unsorted/duplicate edges");
             }
             for edge in &row.edges {
-                assert_eq!(edge.from, row.lane, "dag {dag}: edge from foreign lane");
+                // Wiring edges originate at the node lane; pass-throughs are
+                // pure verticals in the lane they keep alive.
+                assert!(
+                    edge.from == row.lane || edge.from == edge.to,
+                    "dag {dag}: edge from foreign lane"
+                );
                 assert!(
                     usize::from(edge.to) < usize::from(row.lane_count),
                     "dag {dag}: edge target exceeds lane_count"

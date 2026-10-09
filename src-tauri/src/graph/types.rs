@@ -15,6 +15,11 @@
 //!   bends (edge lane -> parent lane) and the commit's lane is freed.
 //! * Additional parents reuse an existing lane assignment for their sha or
 //!   open a new lane via the same lowest-free allocation.
+//! * Every lane that is still open after a row (a parent placed by an earlier
+//!   child that has not rendered yet) carries an edge into the next row: the
+//!   row's own wiring edges, plus a pass-through `(m, m)` vertical for each
+//!   open lane the wiring does not already target. Without pass-throughs a
+//!   branch line would break on every row it merely passes by.
 //! * A root commit (no parents) frees its lane. Lane indices are never
 //!   reassigned (no compaction), so layout is page-boundary independent:
 //!   feeding the same commits through any page split with a shared
@@ -115,6 +120,19 @@ pub fn layout_page(
                 }
             };
             edges.push(GraphEdge { from: lane, to });
+        }
+
+        // Pass-through lanes: any open lane the wiring above doesn't already
+        // target keeps its line running into the next row. Without this the
+        // canvas (which draws each edge exactly one row down) shows a break
+        // on every row a branch passes by before its commit renders.
+        for (m, slot) in state.lanes.iter().enumerate() {
+            if slot.is_some() {
+                let m = m as u16;
+                if !edges.iter().any(|edge| edge.to == m) {
+                    edges.push(GraphEdge { from: m, to: m });
+                }
+            }
         }
         edges.sort_unstable();
         edges.dedup();

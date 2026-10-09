@@ -225,7 +225,9 @@
   .confirm,
   .fail {
     position: absolute;
-    top: calc(100% + 0.25rem);
+    /* The commit bar is docked at the window's bottom edge: popups must
+       open UPWARD or they render off-screen (invisible first-use dialog). */
+    bottom: calc(100% + 0.25rem);
     right: 0;
     z-index: 30;
     width: max-content;

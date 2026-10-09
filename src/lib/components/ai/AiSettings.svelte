@@ -328,6 +328,7 @@
           void save();
         }}
       >
+        <div class="dialog-body">
         <fieldset class="group">
           <legend class="legend">Preferred backend</legend>
           {#each AI_BACKENDS as option (option)}
@@ -540,6 +541,7 @@
             {/each}
           </ul>
         </div>
+        </div>
 
         <div class="actions">
           <button class="primary" type="submit" disabled={saving}>
@@ -568,7 +570,8 @@
   .dialog {
     width: min(42rem, 100%);
     max-height: calc(100dvh - 2rem);
-    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
     box-sizing: border-box;
     background: var(--m3-surface-container-high, var(--m3-surface));
     color: var(--m3-on-surface);
@@ -582,6 +585,7 @@
     align-items: flex-start;
     justify-content: space-between;
     gap: 1rem;
+    flex: none;
     margin-bottom: 1.125rem;
   }
 
@@ -618,6 +622,18 @@
   }
 
   .form {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* Only this region scrolls — the header above and the actions row below
+     stay pinned regardless of how much settings content overflows. */
+  .dialog-body {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
     display: flex;
     flex-direction: column;
     gap: 0.75rem;
@@ -818,9 +834,11 @@
   }
 
   .actions {
+    flex: none;
     display: flex;
     justify-content: flex-end;
     gap: 0.5rem;
+    padding-top: 0.75rem;
   }
 
   .primary,

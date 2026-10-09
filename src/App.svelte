@@ -81,7 +81,16 @@
     refreshRepos();
   }
 
-  /** "+" button: real folder picker (@tauri-apps/plugin-dialog). */
+  /** Row ✕ button: drop one entry from the recent list (repo on disk untouched). */
+  function removeFromRecents(path: string): void {
+    recentRepos.remove(path);
+    refreshRepos();
+    toast(`Removed ${repoName(path)} from recent repositories`, {
+      kind: "info",
+    });
+  }
+
+  /** Home "Add existing repo…" / tab-strip "+": folder picker → open as tab. */
   async function openFromDisk(): Promise<void> {
     const path = await pickFolder();
     if (path) await openRepoTab(path);
@@ -232,20 +241,29 @@
       <section class="recent" aria-labelledby="recent-heading">
         <div class="recent-head">
           <h1 id="recent-heading" class="recent-heading">Recent repositories</h1>
-          <button
-            class="clone-btn"
-            type="button"
-            onclick={() => (cloneOpen = true)}
-          >
-            Clone repo…
-          </button>
+          <div class="head-actions">
+            <button
+              class="add-btn"
+              type="button"
+              onclick={() => void openFromDisk()}
+            >
+              Add existing repo…
+            </button>
+            <button
+              class="clone-btn"
+              type="button"
+              onclick={() => (cloneOpen = true)}
+            >
+              Clone repo…
+            </button>
+          </div>
         </div>
 
         {#if repos.length === 0}
           <p class="empty">
             No recent repositories yet. Drag a repository folder onto this
-            window, launch <code>mygitui .</code> from a terminal, or clone a
-            repository with the button above.
+            window, launch <code>mygitui .</code> from a terminal, add an
+            existing repository, or clone one with the buttons above.
           </p>
         {:else}
           <ul class="repo-list">
@@ -268,6 +286,15 @@
                   onclick={() => togglePin(repo.path)}
                 >
                   {repo.pinned ? "★" : "☆"}
+                </button>
+                <button
+                  class="remove"
+                  type="button"
+                  title="Remove from recent list"
+                  aria-label={`Remove ${repoName(repo.path)} from the recent list`}
+                  onclick={() => removeFromRecents(repo.path)}
+                >
+                  ✕
                 </button>
               </li>
             {/each}
@@ -357,6 +384,12 @@
     margin-bottom: 1rem;
   }
 
+  .head-actions {
+    display: flex;
+    flex: none;
+    gap: 0.5rem;
+  }
+
   .recent-head .recent-heading {
     margin: 0;
   }
@@ -379,6 +412,28 @@
   }
 
   .clone-btn:focus-visible {
+    outline: 2px solid var(--m3-primary);
+    outline-offset: 2px;
+  }
+
+  .add-btn {
+    flex: none;
+    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
+    border-radius: var(--m3-shape-full, 9999px);
+    background: none;
+    color: var(--m3-primary);
+    font: inherit;
+    font-size: 0.8125rem;
+    padding: 0.4rem 1rem;
+    cursor: pointer;
+  }
+
+  .add-btn:hover {
+    border-color: var(--m3-primary);
+    filter: brightness(1.1);
+  }
+
+  .add-btn:focus-visible {
     outline: 2px solid var(--m3-primary);
     outline-offset: 2px;
   }
@@ -470,11 +525,37 @@
     background: var(--m3-primary);
   }
 
-  /* M12: AI health chip parked bottom-left (toaster owns bottom-right). */
+  .remove {
+    flex: none;
+    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
+    border-radius: 0.75rem;
+    background: none;
+    color: var(--m3-on-surface-variant, var(--m3-on-surface));
+    width: 2.75rem;
+    cursor: pointer;
+    font-size: 0.875rem;
+  }
+
+  .remove:hover {
+    border-color: var(--m3-error);
+    color: var(--m3-error);
+  }
+
+  .remove:focus-visible {
+    outline: 2px solid var(--m3-primary);
+    outline-offset: 2px;
+  }
+
+  /* M12: AI health chip parked top-right (toaster owns bottom-right).
+     Opaque surface so it stays legible over the tab strip it overlaps. */
   .ai-chip-slot {
     position: fixed;
-    left: 0.75rem;
-    bottom: 0.75rem;
+    top: 0.75rem;
+    right: 0.75rem;
     z-index: 900;
+  }
+
+  .ai-chip-slot :global(.ai-health) {
+    background: var(--m3-surface-container, var(--m3-surface));
   }
 </style>
