@@ -36,15 +36,14 @@ pub async fn open_popout(
         .windows
         .iter()
         .find_map(|w| w.additional_browser_args.clone());
-    let mut builder =
-        WebviewWindowBuilder::new(&app, label, WebviewUrl::App(query.into()))
-            .title(title)
-            .inner_size(960.0, 680.0)
-            .min_inner_size(420.0, 300.0)
-            // Matches the main window + the index.html splash: the popout
-            // opens on the dark splash instead of flashing white while its
-            // webview is still loading.
-            .background_color(SPLASH_BACKGROUND);
+    let mut builder = WebviewWindowBuilder::new(&app, label, WebviewUrl::App(query.into()))
+        .title(title)
+        .inner_size(960.0, 680.0)
+        .min_inner_size(420.0, 300.0)
+        // Matches the main window + the index.html splash: the popout
+        // opens on the dark splash instead of flashing white while its
+        // webview is still loading.
+        .background_color(SPLASH_BACKGROUND);
     if let Some(args) = browser_args {
         builder = builder.additional_browser_args(&args);
     }

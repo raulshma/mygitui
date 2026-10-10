@@ -939,10 +939,7 @@ impl GitEngine for Libgit2Engine {
                     // merge-shaped WIP/index/untracked triples here derails
                     // the commit-graph lanes (their base commit is often
                     // weeks old, holding a lane open across the whole graph).
-                    if reference
-                        .name()
-                        .is_ok_and(|n| n.starts_with("refs/stash"))
-                    {
+                    if reference.name().is_ok_and(|n| n.starts_with("refs/stash")) {
                         continue;
                     }
                     if let Ok(commit) = reference.peel_to_commit() {
@@ -999,7 +996,7 @@ impl GitEngine for Libgit2Engine {
                 (when, *oid)
             })
             .collect();
-        ready_heads.sort_unstable_by(|a, b| b.0.cmp(&a.0));
+        ready_heads.sort_unstable_by_key(|&(when, _)| std::cmp::Reverse(when));
         let mut ready: Vec<Oid> = ready_heads
             .into_iter()
             .rev()

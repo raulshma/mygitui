@@ -366,7 +366,7 @@ fn server_working_directory(cwd: Option<&Path>) -> Result<PathBuf, String> {
         .map_err(|err| format!("could not prepare OpenCode workspace: {err}"))?;
     fallback
         .canonicalize()
-        .map(|resolved| strip_verbatim(resolved))
+        .map(strip_verbatim)
         .map_err(|err| format!("could not resolve OpenCode workspace: {err}"))
 }
 

@@ -108,13 +108,13 @@ fn diamond_branch_and_merge() {
     assert_eq!(rows[0].lane_count, 2);
 
     assert_eq!(rows[1].lane, 0); // B keeps lane 0
-    // Lane 1 holds C (renders two rows down): straight pass-through keeps
-    // the branch line connected across B's row.
+                                 // Lane 1 holds C (renders two rows down): straight pass-through keeps
+                                 // the branch line connected across B's row.
     assert_eq!(rows[1].edges, vec![e(0, 0), e(1, 1)]);
     assert_eq!(rows[1].lane_count, 2); // C still passes through lane 1
 
     assert_eq!(rows[2].lane, 1); // C gets lane 1
-    // C converges onto D's lane while B's existing line continues vertically.
+                                 // C converges onto D's lane while B's existing line continues vertically.
     assert_eq!(rows[2].edges, vec![e(0, 0), e(1, 0)]);
     assert_eq!(rows[2].lane_count, 2);
 
@@ -225,8 +225,8 @@ fn pass_through_bridges_rows_before_a_deferred_parent() {
     assert_eq!(rows[0].edges, vec![e(0, 0)]);
 
     assert_eq!(rows[1].lane, 1); // X takes the next free lane
-    // Lane-0 pass-through carries B's line down through X's row. X itself is
-    // a root: its lane was freed, so its line ends at its own node.
+                                 // Lane-0 pass-through carries B's line down through X's row. X itself is
+                                 // a root: its lane was freed, so its line ends at its own node.
     assert_eq!(rows[1].edges, vec![e(0, 0)]);
 
     assert_eq!(rows[2].lane, 0); // B lands where the line pointed
@@ -241,8 +241,8 @@ fn merge_rehomes_first_parent_claimed_by_a_side_lane() {
     // then emits, the base re-homes onto the mainline lane and the side
     // line bends in — the mainline stays straight below the merges.
     let commits = vec![
-        mk("M5", &["M4", "TIP"]), // opens lane 1 for TIP
-        mk("TIP", &["BASE"]),     // claims BASE in lane 1
+        mk("M5", &["M4", "TIP"]),  // opens lane 1 for TIP
+        mk("TIP", &["BASE"]),      // claims BASE in lane 1
         mk("M4", &["BASE", "EF"]), // first parent BASE sits right of lane 0
         mk("EF", &["BASE"]),
         mk("BASE", &[]),
