@@ -9,22 +9,18 @@
 import { expect, test, type Page } from "@playwright/test";
 import {
   installTauriMock,
+  RECENT_REPOS_KEY,
+  seedStorage,
   trackErrors,
   type TauriMockHandle,
 } from "./tauri-mock";
 
-const RECENT_REPOS_KEY = "mygitui.recent-repos";
-
 /** Boot the app with the Tauri mock (and optional pre-boot page setup). */
 async function boot(
   page: Page,
-  seedStorage: Record<string, string> = {},
+  seedEntries: Record<string, string> = {},
 ): Promise<TauriMockHandle> {
-  await page.addInitScript((seed) => {
-    for (const [key, value] of Object.entries(seed)) {
-      window.localStorage.setItem(key, value);
-    }
-  }, seedStorage);
+  await seedStorage(page, seedEntries);
   return installTauriMock(page);
 }
 

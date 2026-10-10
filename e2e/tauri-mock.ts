@@ -106,6 +106,100 @@ export function trackErrors(page: Page): {
   };
 }
 
+// -- shared fixtures (repo-open + history flows) ----------------------------
+
+/** localStorage key of the recent-repositories list. */
+export const RECENT_REPOS_KEY = "mygitui.recent-repos";
+
+/** Seeds localStorage entries before any app script runs (addInitScript). */
+export async function seedStorage(
+  page: Page,
+  entries: Record<string, string>,
+): Promise<void> {
+  await page.addInitScript((seed) => {
+    for (const [key, value] of Object.entries(seed)) {
+      window.localStorage.setItem(key, value);
+    }
+  }, entries);
+}
+
+/** localStorage seed listing `paths` as unpinned recent repos (in order). */
+export function recentRepos(paths: string[]): Record<string, string> {
+  return {
+    [RECENT_REPOS_KEY]: JSON.stringify(
+      paths.map((path, i) => ({ path, pinned: false, lastOpened: i + 1 })),
+    ),
+  };
+}
+
+/** A newest-first linear log of `count` commits + single-lane graph rows. */
+export function linearLog(count: number): {
+  commits: Array<Record<string, unknown>>;
+  rows: Array<Record<string, unknown>>;
+} {
+  const commits = Array.from({ length: count }, (_, i) => ({
+    sha: i.toString(16).padStart(40, "0"),
+    parents: i > 0 ? [(i - 1).toString(16).padStart(40, "0")] : [],
+    author: {
+      name: `Author ${i}`,
+      email: `a${i}@test.com`,
+      time: 1700000000 + i,
+      offset_minutes: 0,
+    },
+    committer: {
+      name: `Author ${i}`,
+      email: `a${i}@test.com`,
+      time: 1700000000 + i,
+      offset_minutes: 0,
+    },
+    message: `commit message ${i}\n\nFull description here`,
+    summary: `commit message ${i}`,
+    refs: i === 0 ? ["HEAD -> main"] : [],
+  }));
+  const rows = commits.map((c, i) => ({
+    sha: c.sha,
+    lane: 0,
+    edges: i < count - 1 ? [{ from: 0, to: 0 }] : [],
+    lane_count: 1,
+  }));
+  return { commits, rows };
+}
+
+/** Standard command overrides for a repo-open + history flow. */
+export function historyCommands(opts: {
+  commits: Array<Record<string, unknown>>;
+  rows: Array<Record<string, unknown>>;
+  /** `repo_diff` reply (default: no changed files). */
+  diff?: CommandMock;
+  describe?: string;
+  /** `commit_signature` reply (default: valid). */
+  signature?: CommandMock;
+}): Record<string, CommandMock> {
+  return {
+    repo_log_stream: {
+      commits: opts.commits,
+      rows: opts.rows,
+      next_cursor: null,
+      generation: 1,
+    },
+    repo_diff: opts.diff ?? [],
+    describe: opts.describe ?? "v1.0.0",
+    commit_signature: opts.signature ?? { state: "valid" },
+  };
+}
+
+/** Boots the home screen and opens the recent repo at `path`. */
+export async function openRecentRepo(page: Page, path = "/tmp/repo"): Promise<void> {
+  await page.goto("/");
+  const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const base = path.replace(/[\\/]+$/, "").split(/[\\/]/).pop() ?? path;
+  // The card's accessible name is "<folder name> <path>".
+  const card = page.getByRole("button", {
+    name: new RegExp(`${escape(base)}\\s*${escape(path)}`),
+  });
+  await card.click();
+}
+
 /** The init-script body — runs in the page BEFORE the app bundle. */
 function BOOTSTRAP(options: TauriMockOptions): void {
   const commandMocks: Record<string, CommandMock> = {

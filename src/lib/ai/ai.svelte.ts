@@ -351,6 +351,15 @@ export class AiStore {
     this.#persist();
   }
 
+  /**
+   * Run options for a post-consent run: carries the "Just once" consent
+   * (`{ oneShot: true }`) when the repo is not persisted-opted-in — only
+   * possible right after the dialog's consent — else `undefined`.
+   */
+  runOptsFor(repoId: string): AiRunOptions | undefined {
+    return this.isOptedIn(repoId) ? undefined : { oneShot: true };
+  }
+
   // -- feature runs -----------------------------------------------------------------
 
   /** Run state for `repoId` (creates a fresh entry on read). */

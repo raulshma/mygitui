@@ -1,7 +1,14 @@
 import { expect, test } from "@playwright/test";
-import { installTauriMock, trackErrors } from "./tauri-mock";
+import {
+  historyCommands,
+  installTauriMock,
+  linearLog,
+  openRecentRepo,
+  recentRepos,
+  seedStorage,
+  trackErrors,
+} from "./tauri-mock";
 
-const RECENT_REPOS_KEY = "mygitui.recent-repos";
 /** Per-repo layout overlay key: prefix + repo root. */
 const OVERLAY_KEY = "mygitui.layouts.overlay./tmp/repo";
 
@@ -17,41 +24,10 @@ const OVERLAY_KEY = "mygitui.layouts.overlay./tmp/repo";
  */
 test("switching panel tabs keeps history state alive", async ({ page }) => {
   const tracked = trackErrors(page);
+  const { commits, rows } = linearLog(50);
 
-  const mockCommits = Array.from({ length: 50 }, (_, i) => ({
-    sha: i.toString(16).padStart(40, "0"),
-    parents: i > 0 ? [(i - 1).toString(16).padStart(40, "0")] : [],
-    author: {
-      name: `Author ${i}`,
-      email: `a${i}@test.com`,
-      time: 1700000000 + i,
-      offset_minutes: 0,
-    },
-    committer: {
-      name: `Author ${i}`,
-      email: `a${i}@test.com`,
-      time: 1700000000 + i,
-      offset_minutes: 0,
-    },
-    message: `commit message ${i}\n\nFull description here`,
-    summary: `commit message ${i}`,
-    refs: i === 0 ? ["HEAD -> main"] : [],
-  }));
-  const mockRows = mockCommits.map((c, i) => ({
-    sha: c.sha,
-    lane: 0,
-    edges: i < 49 ? [{ from: 0, to: 0 }] : [],
-    lane_count: 1,
-  }));
-
-  await page.addInitScript((seed) => {
-    for (const [key, value] of Object.entries(seed)) {
-      window.localStorage.setItem(key, value);
-    }
-  }, {
-    [RECENT_REPOS_KEY]: JSON.stringify([
-      { path: "/tmp/repo", pinned: false, lastOpened: 1 },
-    ]),
+  await seedStorage(page, {
+    ...recentRepos(["/tmp/repo"]),
     [OVERLAY_KEY]: JSON.stringify({
       treeOverride: {
         kind: "split",
@@ -69,14 +45,10 @@ test("switching panel tabs keeps history state alive", async ({ page }) => {
   });
 
   const mock = await installTauriMock(page, {
-    commands: {
-      repo_log_stream: {
-        commits: mockCommits,
-        rows: mockRows,
-        next_cursor: null,
-        generation: 1,
-      },
-      repo_diff: [
+    commands: historyCommands({
+      commits,
+      rows,
+      diff: [
         {
           path: "src/file1.ts",
           old_path: null,
@@ -87,13 +59,10 @@ test("switching panel tabs keeps history state alive", async ({ page }) => {
           hunks: [],
         },
       ],
-      describe: "v1.0.0",
-      commit_signature: { state: "valid" },
-    },
+    }),
   });
 
-  await page.goto("/");
-  await page.getByRole("button", { name: /repo\s*\/tmp\/repo/ }).click();
+  await openRecentRepo(page);
   await expect(page.locator(".history .row").first()).toBeVisible();
 
   // Select commit 10 — the detail pane opens and the list moves into the

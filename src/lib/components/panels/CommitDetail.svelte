@@ -20,6 +20,7 @@
   import type { CommitInfo, FileDiff } from "$lib/ipc/types";
   import DiffViewer from "$lib/components/diff/DiffViewer.svelte";
   import BlameView from "$lib/components/panels/BlameView.svelte";
+  import type { CompareResult } from "$lib/components/panels/compare";
   import { openPanelPopout } from "$lib/layout/popout";
   import SplitPane from "$lib/components/layout/SplitPane.svelte";
   import SignatureBadge from "$lib/components/commit/SignatureBadge.svelte";
@@ -54,7 +55,7 @@
     repoId: string;
     info: CommitInfo | null;
     /** CompareBar results render in the same body (HistoryView only). */
-    compare?: { files: FileDiff[]; base: string; target: string } | null;
+    compare?: CompareResult | null;
     /** Worktree root (bookmark persistence key); empty hides the star. */
     root?: string;
     actionCount?: number;

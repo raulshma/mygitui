@@ -11,9 +11,13 @@
  */
 
 import { expect, test, type Page } from "@playwright/test";
-import { installTauriMock, type TauriMockHandle } from "./tauri-mock";
+import {
+  installTauriMock,
+  recentRepos,
+  seedStorage,
+  type TauriMockHandle,
+} from "./tauri-mock";
 
-const RECENT_REPOS_KEY = "mygitui.recent-repos";
 const AI_KEY = "mygitui.ai";
 
 const STAGED_DIFF: unknown[] = [
@@ -42,14 +46,10 @@ const STAGED_DIFF: unknown[] = [
 
 async function boot(
   page: Page,
-  seedStorage: Record<string, string>,
+  seedEntries: Record<string, string>,
   commands: Record<string, unknown> = {},
 ): Promise<TauriMockHandle> {
-  await page.addInitScript((seed) => {
-    for (const [key, value] of Object.entries(seed)) {
-      window.localStorage.setItem(key, value);
-    }
-  }, seedStorage);
+  await seedStorage(page, seedEntries);
   return installTauriMock(page, { commands });
 }
 
@@ -77,7 +77,7 @@ async function expectFullyInViewport(
 
 test("first use: opt-in dialog opens fully inside the viewport", async ({ page }) => {
   await boot(page, {
-    [RECENT_REPOS_KEY]: JSON.stringify([{ path: "/tmp/repo", pinned: false, lastOpened: 1 }]),
+    ...recentRepos(["/tmp/repo"]),
   });
   await openRepo(page);
 
@@ -94,7 +94,7 @@ test("opted-in, opencode down: failure toast + inline fail box visible", async (
   await boot(
     page,
     {
-      [RECENT_REPOS_KEY]: JSON.stringify([{ path: "/tmp/repo", pinned: false, lastOpened: 1 }]),
+      ...recentRepos(["/tmp/repo"]),
       [AI_KEY]: JSON.stringify({
         backend: "opencode",
         allowFallback: true,

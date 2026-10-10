@@ -1,5 +1,9 @@
 import { expect, test } from "@playwright/test";
-import { installTauriMock, trackErrors } from "./tauri-mock";
+import {
+  historyCommands,
+  installTauriMock,
+  trackErrors,
+} from "./tauri-mock";
 
 /**
  * FileHistoryView popout (`?panel=filehistory`): clicking a commit shows
@@ -48,17 +52,12 @@ const DIFF_FILES = [
 
 async function openPopout(page: import("@playwright/test").Page): Promise<void> {
   await installTauriMock(page, {
-    commands: {
-      repo_log_stream: {
-        commits: COMMITS,
-        rows: COMMITS.map((c) => ({ sha: c.sha, lane: 0, edges: [], lane_count: 1 })),
-        next_cursor: null,
-        generation: 1,
-      },
-      repo_diff: DIFF_FILES,
-      describe: "v1.0.0",
-      commit_signature: { state: "none" },
-    },
+    commands: historyCommands({
+      commits: COMMITS,
+      rows: COMMITS.map((c) => ({ sha: c.sha, lane: 0, edges: [], lane_count: 1 })),
+      diff: DIFF_FILES,
+      signature: { state: "none" },
+    }),
   });
   await page.goto("/?panel=filehistory&repo=mock-repo&path=src%2Fapp.ts");
   await expect(page.locator(".file-history .row").first()).toBeVisible();

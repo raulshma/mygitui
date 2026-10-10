@@ -492,3 +492,26 @@ export interface BranchTrashEntry {
   /** Unix seconds when it was deleted. */
   deleted_at: number;
 }
+
+// ---------- M12: AI managed opencode (Rust: src-tauri/src/opencode.rs) ----------
+
+/** Result of probing the machine for a local opencode CLI. */
+export interface OpencodeDetection {
+  installed: boolean;
+  /** Resolved binary path (first PATH hit), when installed. */
+  path: string | null;
+  /** `x.y.z` parsed from `--version` output, when parseable. */
+  version: string | null;
+  /** Major version (`1` for 1.x, `2` for 2.x), when parseable. */
+  major: number | null;
+}
+
+/** State of the app-managed `opencode serve` child. */
+export interface OpencodeServeState {
+  running: boolean;
+  /** Base URL of the managed server (`http://127.0.0.1:<port>`). */
+  url: string | null;
+  port: number | null;
+  /** Failure description when not running. */
+  error: string | null;
+}

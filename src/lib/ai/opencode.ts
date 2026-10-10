@@ -393,6 +393,39 @@ export function providersToModels(reply: unknown): ModelInfo[] {
 }
 
 /**
+ * Shared tail of attach/managed server resolution: accept a probed 1.x
+ * server, else throw the actionable `AiError` for the outcome. The copy
+ * thunks keep the attach ("where it probed") and managed ("try Re-check")
+ * wording site-specific and only evaluate on the failing branch.
+ */
+function requireV1Server(
+  outcome:
+    | { state: "ok"; server: OpencodeServer }
+    | { state: "unauthorized" }
+    | { state: "absent" },
+  copy: {
+    v2: (server: OpencodeServer) => string;
+    unauthorized: () => string;
+    absent: () => string;
+  },
+): OpencodeServer {
+  if (outcome.state === "ok") {
+    if (outcome.server.kind === "v2") {
+      throw new AiError("unavailable", copy.v2(outcome.server), {
+        backend: "opencode",
+      });
+    }
+    return outcome.server;
+  }
+  if (outcome.state === "unauthorized") {
+    throw new AiError("unauthenticated", copy.unauthorized(), {
+      backend: "opencode",
+    });
+  }
+  throw new AiError("unavailable", copy.absent(), { backend: "opencode" });
+}
+
+/**
  * opencode {@link AiProvider} implementation. One instance per app is
  * enough (URL/password are read through setters, sessions keyed per
  * `sessionKey`).
@@ -446,29 +479,22 @@ export class OpenCodeProvider implements AiProvider {
     const manual = this.#manualUrl();
     const password = (await this.#options.password?.().catch(() => null)) ?? null;
     const { server, unauthorizedBase } = await discoverOpencode(manual, this.#fetch, password);
-    if (server) {
-      if (server.kind === "v2") {
-        throw new AiError(
-          "unavailable",
-          `opencode server at ${server.base} speaks the 2.x API (v${server.version ?? "?"}) — this build supports 1.x servers`,
-          { backend: "opencode" },
-        );
-      }
-      return server;
-    }
-    if (unauthorizedBase) {
-      throw new AiError(
-        "unauthenticated",
-        `opencode server at ${unauthorizedBase} requires the basic-auth password (AI settings)`,
-        { backend: "opencode" },
-      );
-    }
-    throw new AiError(
-      "unavailable",
-      manual
-        ? `opencode server not reachable at ${manual} (health probe failed) — start it, clear the URL, or switch to Managed in AI settings`
-        : `no opencode server found (probed ${DEFAULT_OPENCODE_URL}) — start one or switch to Managed in AI settings`,
-      { backend: "opencode" },
+    return requireV1Server(
+      server
+        ? { state: "ok", server }
+        : unauthorizedBase !== null
+          ? { state: "unauthorized" }
+          : { state: "absent" },
+      {
+        v2: (s) =>
+          `opencode server at ${s.base} speaks the 2.x API (v${s.version ?? "?"}) — this build supports 1.x servers`,
+        unauthorized: () =>
+          `opencode server at ${unauthorizedBase} requires the basic-auth password (AI settings)`,
+        absent: () =>
+          manual
+            ? `opencode server not reachable at ${manual} (health probe failed) — start it, clear the URL, or switch to Managed in AI settings`
+            : `no opencode server found (probed ${DEFAULT_OPENCODE_URL}) — start one or switch to Managed in AI settings`,
+      },
     );
   }
 
@@ -496,27 +522,20 @@ export class OpenCodeProvider implements AiProvider {
       const url = await this.#managedUrl(managed);
       const password = (await this.#options.password?.().catch(() => null)) ?? null;
       const probe = await probeOpencodeServer(url, this.#fetch, HEALTH_TIMEOUT_MS, password);
-      if (probe.state === "ok") {
-        if (probe.server.kind === "v2") {
-          throw new AiError(
-            "unavailable",
-            `the managed opencode serves the 2.x API (v${probe.server.version ?? "?"}) — this build supports 1.x servers; install opencode 1.x`,
-            { backend: "opencode" },
-          );
-        }
-        return probe.server;
-      }
-      if (probe.state === "unauthorized") {
-        throw new AiError(
-          "unauthenticated",
-          "the managed opencode server rejected our request — clear or fix the stored password in AI settings",
-          { backend: "opencode" },
-        );
-      }
-      throw new AiError(
-        "unavailable",
-        "the managed opencode server did not answer a valid health probe — try Re-check in AI settings",
-        { backend: "opencode" },
+      return requireV1Server(
+        probe.state === "ok"
+          ? probe
+          : probe.state === "unauthorized"
+            ? { state: "unauthorized" }
+            : { state: "absent" },
+        {
+          v2: (s) =>
+            `the managed opencode serves the 2.x API (v${s.version ?? "?"}) — this build supports 1.x servers; install opencode 1.x`,
+          unauthorized: () =>
+            "the managed opencode server rejected our request — clear or fix the stored password in AI settings",
+          absent: () =>
+            "the managed opencode server did not answer a valid health probe — try Re-check in AI settings",
+        },
       );
     }
     return this.#attachServer();

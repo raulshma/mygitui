@@ -9,40 +9,35 @@
  */
 
 import { expect, test, type Page } from "@playwright/test";
-import { installTauriMock, trackErrors } from "./tauri-mock";
+import {
+  historyCommands,
+  installTauriMock,
+  recentRepos,
+  seedStorage,
+  trackErrors,
+} from "./tauri-mock";
 
-const RECENT_REPOS_KEY = "mygitui.recent-repos";
 const PARENT = "0000000000000000000000000000000000000001";
 const SHA = "0000000000000000000000000000000000000002";
 
 /** One-commit history whose detail diff carries `lineTexts` as added lines. */
 async function bootRepoWithDiff(page: Page, lineTexts: string[]) {
-  await page.addInitScript((seed) => {
-    for (const [key, value] of Object.entries(seed)) {
-      window.localStorage.setItem(key, value);
-    }
-  }, {
-    [RECENT_REPOS_KEY]: JSON.stringify([{ path: "/tmp/repo", pinned: false, lastOpened: 1 }]),
-  });
+  await seedStorage(page, recentRepos(["/tmp/repo"]));
   await installTauriMock(page, {
-    commands: {
-      repo_log_stream: {
-        commits: [
-          {
-            sha: SHA,
-            parents: [PARENT],
-            author: { name: "A", email: "a@t.co", time: 1700000000, offset_minutes: 0 },
-            committer: { name: "A", email: "a@t.co", time: 1700000000, offset_minutes: 0 },
-            message: "diff fixture\n",
-            summary: "diff fixture",
-            refs: ["HEAD -> main"],
-          },
-        ],
-        rows: [{ sha: SHA, lane: 0, edges: [], lane_count: 1 }],
-        next_cursor: null,
-        generation: 1,
-      },
-      repo_diff: [
+    commands: historyCommands({
+      commits: [
+        {
+          sha: SHA,
+          parents: [PARENT],
+          author: { name: "A", email: "a@t.co", time: 1700000000, offset_minutes: 0 },
+          committer: { name: "A", email: "a@t.co", time: 1700000000, offset_minutes: 0 },
+          message: "diff fixture\n",
+          summary: "diff fixture",
+          refs: ["HEAD -> main"],
+        },
+      ],
+      rows: [{ sha: SHA, lane: 0, edges: [], lane_count: 1 }],
+      diff: [
         {
           path: "src/file.ts",
           old_path: null,
@@ -65,9 +60,7 @@ async function bootRepoWithDiff(page: Page, lineTexts: string[]) {
           ],
         },
       ],
-      describe: "v1.0.0",
-      commit_signature: { state: "valid" },
-    },
+    }),
   });
 }
 

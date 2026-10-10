@@ -88,9 +88,7 @@
     running = true;
     error = null;
     try {
-      // Not persisted-opted-in here is only possible right after the
-      // dialog's consent ("Just once"): carry that consent on the run.
-      const opts = ai.isOptedIn(repoId) ? undefined : { oneShot: true };
+      const opts = ai.runOptsFor(repoId);
       const outcome = await run(opts);
       onResult?.(outcome);
     } catch (err) {

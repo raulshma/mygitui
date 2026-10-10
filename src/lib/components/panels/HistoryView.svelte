@@ -37,6 +37,7 @@
   import type { CommitInfo, FileDiff, MergeResult } from "$lib/ipc/types";
   import GraphCanvas from "$lib/components/graph/GraphCanvas.svelte";
   import CompareBar from "$lib/components/panels/CompareBar.svelte";
+  import type { CompareResult } from "$lib/components/panels/compare";
   import CommitDetail from "$lib/components/panels/CommitDetail.svelte";
   import RebasePlanner from "$lib/components/rebase/RebasePlanner.svelte";
   import { orderForCherryPick } from "$lib/components/rebase/plannerModel";
@@ -95,7 +96,7 @@
   let selectedInfo = $state<CommitInfo | null>(null);
   let detailOpen = $state(false);
   let showCompare = $state(false);
-  let compare = $state<{ files: FileDiff[]; base: string; target: string } | null>(null);
+  let compare = $state<CompareResult | null>(null);
 
   /** Live `CommitDetail` instance (palette blame toggle; null when closed). */
   let detailRef = $state<ReturnType<typeof CommitDetail> | null>(null);

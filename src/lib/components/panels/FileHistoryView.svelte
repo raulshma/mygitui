@@ -23,7 +23,8 @@
     hashHue,
   } from "$lib/stores/history-logic";
   import { repoDiff } from "$lib/ipc/client";
-  import type { CommitInfo, FileDiff } from "$lib/ipc/types";
+  import type { CommitInfo } from "$lib/ipc/types";
+  import type { CompareResult } from "$lib/components/panels/compare";
   import { toast } from "$lib/toast";
   import CommitDetail from "./CommitDetail.svelte";
   import SplitPane from "$lib/components/layout/SplitPane.svelte";
@@ -92,7 +93,7 @@
   let anchorIdx: number | null = null;
   let detailOpen = $state(false);
   /** Aggregate diff of the current range (null = show the single diff). */
-  let compare = $state<{ files: FileDiff[]; base: string; target: string } | null>(null);
+  let compare = $state<CompareResult | null>(null);
 
   /** List fraction of the split (detail takes the rest). */
   const DETAIL_RATIO_KEY = "filehistory-detail";

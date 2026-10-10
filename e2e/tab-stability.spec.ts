@@ -1,7 +1,12 @@
 import { expect, test } from "@playwright/test";
-import { installTauriMock, trackErrors } from "./tauri-mock";
-
-const RECENT_REPOS_KEY = "mygitui.recent-repos";
+import {
+  historyCommands,
+  installTauriMock,
+  openRecentRepo,
+  recentRepos,
+  seedStorage,
+  trackErrors,
+} from "./tauri-mock";
 
 /**
  * Layout-stability regression: selecting a tab must not change any tab's
@@ -13,39 +18,26 @@ test("selecting a panel tab keeps tab geometry stable", async ({ page }) => {
 
   const sha = "0000000000000000000000000000000000000001";
 
-  await page.addInitScript((seed) => {
-    for (const [key, value] of Object.entries(seed)) {
-      window.localStorage.setItem(key, value);
-    }
-  }, {
-    [RECENT_REPOS_KEY]: JSON.stringify([
-      { path: "/tmp/repo", pinned: false, lastOpened: 1 },
-    ]),
-  });
+  await seedStorage(page, recentRepos(["/tmp/repo"]));
 
   await installTauriMock(page, {
-    commands: {
-      repo_log_stream: {
-        commits: [
-          {
-            sha,
-            parents: [],
-            author: { name: "Alice", email: "a@test.com", time: 1700000000, offset_minutes: 0 },
-            committer: { name: "Alice", email: "a@test.com", time: 1700000000, offset_minutes: 0 },
-            message: "first commit",
-            summary: "first commit",
-            refs: ["HEAD -> main"],
-          },
-        ],
-        rows: [{ sha, lane: 0, edges: [], lane_count: 1 }],
-        next_cursor: null,
-        generation: 1,
-      },
-    },
+    commands: historyCommands({
+      commits: [
+        {
+          sha,
+          parents: [],
+          author: { name: "Alice", email: "a@test.com", time: 1700000000, offset_minutes: 0 },
+          committer: { name: "Alice", email: "a@test.com", time: 1700000000, offset_minutes: 0 },
+          message: "first commit",
+          summary: "first commit",
+          refs: ["HEAD -> main"],
+        },
+      ],
+      rows: [{ sha, lane: 0, edges: [], lane_count: 1 }],
+    }),
   });
 
-  await page.goto("/");
-  await page.getByRole("button", { name: /repo\s*\/tmp\/repo/ }).click();
+  await openRecentRepo(page);
 
   const tabs = page.locator(".panel-tab");
   await expect(tabs.first()).toBeVisible();

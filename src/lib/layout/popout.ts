@@ -22,8 +22,8 @@
  * cover the `popout-*` labels or IPC inside the window is denied.
  */
 
-import { invoke } from "@tauri-apps/api/core";
 import { isTauri } from "$lib/entry/dragdrop";
+import { openPopout } from "$lib/ipc/client";
 import { toast } from "$lib/toast";
 
 /** Panels that support popout windows. */
@@ -128,7 +128,7 @@ export async function openPanelPopout(
   }
   const label = popoutLabel(panel, repoId, options);
   try {
-    await invoke("open_popout", {
+    await openPopout({
       label,
       query: popoutQueryString(panel, repoId, options),
       title,

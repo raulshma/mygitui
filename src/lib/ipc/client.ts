@@ -50,6 +50,8 @@ import type {
   MergetoolResult,
   NetStats,
   OpProgress,
+  OpencodeDetection,
+  OpencodeServeState,
   PreviewInfo,
   PullOptions,
   PushOptions,
@@ -1554,26 +1556,10 @@ export async function osAccentColor(): Promise<string | null> {
 // inert defaults — the AI layer falls back to attach mode there.
 // ---------------------------------------------------------------------------
 
-/** Result of probing the machine for a local opencode CLI. */
-export interface OpencodeDetection {
-  installed: boolean;
-  /** Resolved binary path (first PATH hit), when installed. */
-  path: string | null;
-  /** `x.y.z` parsed from `--version` output, when parseable. */
-  version: string | null;
-  /** Major version (`1` for 1.x, `2` for 2.x), when parseable. */
-  major: number | null;
-}
-
-/** State of the app-managed `opencode serve` child. */
-export interface OpencodeServeState {
-  running: boolean;
-  /** Base URL of the managed server (`http://127.0.0.1:<port>`). */
-  url: string | null;
-  port: number | null;
-  /** Failure description when not running. */
-  error: string | null;
-}
+// Payload types (`OpencodeDetection`, `OpencodeServeState`) live in
+// ./types.ts per the contracts.md mirror rule; re-exported here so
+// call sites can keep importing them from the client.
+export type { OpencodeDetection, OpencodeServeState };
 
 /** Probes for a local opencode CLI (PATH scan + `--version`). */
 export async function opencodeDetect(): Promise<OpencodeDetection> {
@@ -1597,4 +1583,23 @@ export async function opencodeServeStart(cwd?: string): Promise<OpencodeServeSta
 export async function opencodeServeStop(): Promise<OpencodeServeState> {
   if (!isTauri()) return { running: false, url: null, port: null, error: null };
   return call<OpencodeServeState>("opencode_serve_stop", {});
+}
+
+// ---------------------------------------------------------------------------
+// Popout windows (Rust-created webview windows — src-tauri popout.rs).
+// ---------------------------------------------------------------------------
+
+/**
+ * Opens (or focuses) the popout webview window `label`. `query` is the
+ * window's own URL query (`?panel=…&repo=…`), joined onto the app origin
+ * Rust-side — the window is built there so the main window's
+ * `additionalBrowserArgs` are copied (Windows WebView2 shares one
+ * environment per user data folder).
+ */
+export function openPopout(args: {
+  label: string;
+  query: string;
+  title: string;
+}): Promise<void> {
+  return call<void>("open_popout", args);
 }

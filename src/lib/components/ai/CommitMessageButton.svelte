@@ -73,9 +73,7 @@
   async function run(): Promise<void> {
     error = null;
     try {
-      // Not persisted-opted-in here is only possible right after the
-      // dialog's consent ("Just once"): carry that consent on the run.
-      const opts = ai.isOptedIn(repoId) ? undefined : { oneShot: true };
+      const opts = ai.runOptsFor(repoId);
       const outcome = await ai.generateCommitMessage(repoId, undefined, opts);
       const message = outcome.message ?? { subject: outcome.result.text, body: "" };
       onResult?.({
