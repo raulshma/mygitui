@@ -1,7 +1,8 @@
 pub mod engine;
 pub mod graph;
 
-use tauri::{Emitter, Manager};
+use tauri::{Emitter, Manager, webview::PageLoadEvent};
+use tauri_plugin_window_state::StateFlags;
 
 mod actions;
 #[cfg(test)]
@@ -51,8 +52,21 @@ pub fn run() {
         // them in `src/lib/entry/deeplink.ts`.
         .plugin(tauri_plugin_deep_link::init())
         // Restores window position/size/maximized state across launches
-        // (state file under the app config dir; saved on close).
-        .plugin(tauri_plugin_window_state::Builder::default().build())
+        // (state file under the app config dir; saved on close). The
+        // VISIBLE flag is excluded on purpose: the windows below are
+        // created hidden (main: `"visible": false` in tauri.conf.json,
+        // popouts: `.visible(false)` in popout.rs) so the restore's
+        // position/size/maximize round-trip happens before the window is
+        // ever on screen — with the default flags the plugin would call
+        // `show()` mid-restore and the user would watch the webview
+        // repaint twice (the "UI doesn't fill the window width" twitch).
+        // The page-load hook at the bottom of this builder shows each
+        // window once its document has actually loaded.
+        .plugin(
+            tauri_plugin_window_state::Builder::default()
+                .with_state_flags(StateFlags::all() & !StateFlags::VISIBLE)
+                .build(),
+        )
         // Must be the last plugin registered: it decides whether this instance
         // runs or defers to the existing one.
         .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
@@ -71,6 +85,19 @@ pub fn run() {
         .setup(move |app| {
             auth::init(app.handle().clone());
             *app.state::<CliArgs>().0.lock().unwrap() = cli_args;
+            // Failsafe for the hidden-until-loaded windows: if the page
+            // never fires a load event (broken asset pipeline, webview
+            // error page without one), don't leave the user with an
+            // invisible main window.
+            let handle = app.handle().clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_secs(10));
+                if let Some(window) = handle.get_webview_window("main") {
+                    if !window.is_visible().unwrap_or(true) {
+                        let _ = window.show();
+                    }
+                }
+            });
             Ok(())
         })
         .manage(CliArgs::default())
@@ -203,6 +230,21 @@ pub fn run() {
             opencode::opencode_serve_stop,
             popout::open_popout,
         ])
+        // Windows are created hidden so the window-state plugin's restore
+        // (position/size/maximize) lands before anything is on screen; this
+        // shows each window — main and popouts alike — once its document
+        // has finished loading, at its final size. The main window also
+        // takes focus, replacing the focus grab the plugin's VISIBLE flag
+        // used to perform on restore.
+        .on_page_load(|webview, payload| {
+            if payload.event() == PageLoadEvent::Finished {
+                let window = webview.window();
+                let _ = window.show();
+                if window.label() == "main" {
+                    let _ = window.set_focus();
+                }
+            }
+        })
         // Tauri does NOT drop managed state on exit (verified live: the
         // pty registry's Drop comment notwithstanding) — kill the managed
         // opencode serve tree explicitly on the graceful-exit path.

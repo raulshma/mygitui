@@ -40,6 +40,12 @@ pub async fn open_popout(
         .title(title)
         .inner_size(960.0, 680.0)
         .min_inner_size(420.0, 300.0)
+        // Created hidden: the window-state plugin restores this window's
+        // saved size (1440×1020 in the state file vs 960×680 here) right
+        // after creation, and showing it before that restore lands lets
+        // the user watch the webview re-layout. lib.rs's page-load hook
+        // shows the popout once its document has loaded, at final size.
+        .visible(false)
         // Matches the main window + the index.html splash: the popout
         // opens on the dark splash instead of flashing white while its
         // webview is still loading.
