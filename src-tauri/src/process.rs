@@ -13,6 +13,8 @@ use std::process::Command;
 /// `Command::new(program)` with `CREATE_NO_WINDOW` set on Windows (no-op
 /// elsewhere).
 pub(crate) fn command(program: impl AsRef<std::ffi::OsStr>) -> Command {
+    // The `mut` is consumed only by the Windows block below.
+    #[cfg_attr(not(windows), allow(unused_mut))]
     let mut cmd = Command::new(program);
     #[cfg(windows)]
     {
