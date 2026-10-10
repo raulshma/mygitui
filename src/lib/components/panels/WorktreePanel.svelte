@@ -49,6 +49,8 @@
   let error = $state<string | null>(null);
   /** Any mutation in flight (buttons disabled while true). */
   let busy = $state(false);
+  /** Path of the worktree whose removal is in flight (per-row progress). */
+  let removingPath = $state<string | null>(null);
 
   // Per-row remove state (force checkbox for locked/prunable worktrees).
   let removeConfirmFor = $state<string | null>(null);
@@ -160,15 +162,19 @@
     if (!info) return;
     removeDialogFor = null;
     busy = true;
+    removingPath = info.path;
     try {
       await worktreeRemove(repoId, info.name, removeForce);
       removeConfirmFor = null;
       removeForce = false;
-      afterMutation("Remove worktree", info.name);
+      toast(`Removed worktree ${info.name}`, { kind: "success" });
+      void reload();
+      onMutated?.();
     } catch (err) {
       fail("Remove worktree", err);
     } finally {
       busy = false;
+      removingPath = null;
     }
   }
 
@@ -309,7 +315,7 @@
         </div>
       </li>
       {#each linked as info (info.path)}
-        <li class="card">
+        <li class="card" aria-busy={removingPath === info.path}>
           <div class="row">
             <span class="name">{info.name}</span>
             {#if info.is_main}
@@ -330,26 +336,32 @@
           </div>
           <div class="path" title={info.path}>{info.path}</div>
           <div class="actions">
-            <button
-              class="tb"
-              type="button"
-              disabled={busy}
-              aria-label={`Open worktree ${info.name} as a tab`}
-              onclick={() => void onOpen(info)}
-            >
-              Open
-            </button>
-            <button
-              class="tb danger"
-              type="button"
-              disabled={busy}
-              aria-label={`Remove worktree ${info.name}`}
-              onclick={() => onRemoveClick(info)}
-            >
-              Remove
-            </button>
+            {#if removingPath === info.path}
+              <!-- Removal in flight: row-level progress while the backend
+                   deletes the admin area + working tree. -->
+              <span class="removing" role="status">Removing…</span>
+            {:else}
+              <button
+                class="tb"
+                type="button"
+                disabled={busy}
+                aria-label={`Open worktree ${info.name} as a tab`}
+                onclick={() => void onOpen(info)}
+              >
+                Open
+              </button>
+              <button
+                class="tb danger"
+                type="button"
+                disabled={busy}
+                aria-label={`Remove worktree ${info.name}`}
+                onclick={() => onRemoveClick(info)}
+              >
+                Remove
+              </button>
+            {/if}
           </div>
-          {#if removeConfirmFor === info.path}
+          {#if removeConfirmFor === info.path && removingPath !== info.path}
             <div class="remove-confirm">
               {#if worktreeNeedsForce(info)}
                 <label class="toggle" title="Required while the worktree is locked or prunable">
@@ -558,6 +570,22 @@
     gap: 0.5rem;
     padding-top: 0.25rem;
     border-top: 1px dashed var(--m3-outline-variant, var(--m3-primary));
+  }
+
+  .removing {
+    font-size: 0.72rem;
+    color: var(--m3-on-surface-variant, var(--m3-on-surface));
+    animation: removing-pulse 1.2s ease-in-out infinite;
+  }
+
+  @keyframes removing-pulse {
+    0%,
+    100% {
+      opacity: 1;
+    }
+    50% {
+      opacity: 0.45;
+    }
   }
 
   .toggle {

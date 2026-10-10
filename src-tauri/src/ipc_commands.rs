@@ -2243,7 +2243,8 @@ pub async fn worktree_remove(
 ) -> Result<(), String> {
     let handle = get_handle(&state, &repo_id)?;
     let engine = handle.m3();
-    finish_op(enqueue_mutation(&handle, "worktree", move |_ctx, repo| {
+    finish_op(enqueue_mutation(&handle, "worktree", move |ctx, repo| {
+        ctx.emit_progress(&format!("removing worktree `{name}`"), None);
         engine.worktree_remove(repo, &name, force)
     }))
     .await

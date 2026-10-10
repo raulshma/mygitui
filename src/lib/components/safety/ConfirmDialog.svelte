@@ -38,8 +38,13 @@
   }
 
   function confirm(): void {
-    close();
+    // onConfirm runs BEFORE close(): close() writes the parent's bound
+    // variable synchronously, and confirm handlers read that variable to
+    // know what to act on (e.g. the pending worktree). Nulling first made
+    // every handler see `null` and silently no-op. Handlers null the state
+    // themselves; close() here is only the fallback for ones that don't.
     onConfirm();
+    close();
   }
 </script>
 

@@ -14,6 +14,11 @@ export default defineConfig({
     alias: {
       $lib: fileURLToPath(new URL("./src/lib", import.meta.url)),
     },
+    // Component tests mount real components (@testing-library/svelte);
+    // under vitest, Svelte must resolve to its client build or mount()
+    // hits the server runtime ("mount(...) is not available on the
+    // server"). Builds and the dev server are unaffected.
+    ...(process.env.VITEST ? { conditions: ["browser"] } : {}),
   },
 
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
