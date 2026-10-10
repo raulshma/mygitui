@@ -63,6 +63,9 @@ jobs:
         run: |
           cat > updater-overlay.json <<EOF
           {
+            "bundle": {
+              "createUpdaterArtifacts": true
+            },
             "plugins": {
               "updater": {
                 "pubkey": "${TAURI_UPDATER_PUBKEY}",
