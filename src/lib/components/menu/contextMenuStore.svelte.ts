@@ -8,9 +8,13 @@
  * arguments (closures capture context). Separators are `{ separator: true }`.
  */
 
+import type { IconifyIcon } from "@iconify/types";
+
 export interface MenuItem {
   id: string;
   label: string;
+  /** Optional leading icon (Iconify icon data, drawn at 16px). */
+  icon?: IconifyIcon;
   /** Renders in the danger color (destructive actions). */
   danger?: boolean;
   disabled?: boolean;

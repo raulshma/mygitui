@@ -3,9 +3,10 @@
    * Remote panel (M2) — remotes list + fetch/pull/push + remote management.
    *
    * Each remote card shows name, fetch URL and (when set) push URL, and
-   * carries the network actions: Fetch (prune checkbox), Pull (branch
-   * picker, ff-only default on, rebase checkbox) and Push (branch picker,
-   * force + set-upstream checkboxes). In-flight ops render inline progress
+   * carries the network actions as one labeled row per verb: Fetch (prune
+   * switch), Pull (branch picker, ff-only default on, rebase switch) and
+   * Push (force + set-upstream switches); boolean options are M3 switches
+   * right-aligned in a stable column. In-flight ops render inline progress
    * (message + pct bar) from the OpStore; completed ops toast their
    * NetStats (updated refs + objects). Add / remove / set-url forms manage
    * the remote config, and the footer selects the per-repo auto-fetch
@@ -33,6 +34,7 @@
   import { opsFor } from "$lib/stores/ops.svelte";
   import { autofetch } from "$lib/stores/autofetch.svelte";
   import { toast } from "$lib/toast";
+  import { Switch } from "$lib/components/m3";
   import ConfirmDialog from "$lib/components/safety/ConfirmDialog.svelte";
   import DiffViewer from "$lib/components/diff/DiffViewer.svelte";
 
@@ -497,32 +499,39 @@
               </div>
             {/if}
             <div class="card-actions">
-              <div class="opt-group">
-                <button
-                  class="act"
-                  type="button"
-                  disabled={netBusy}
-                  onclick={() => onToggleRemoteBranches(remote)}
-                >
-                  {expandedRemote === remote.name ? "Hide branches" : "Branches"}
-                </button>
-                <button
-                  class="act"
-                  type="button"
-                  disabled={netBusy}
-                  onclick={() => onFetch(remote)}
-                >
-                  Fetch
-                </button>
-                <label class="toggle" title="Delete remote-tracking branches that vanished upstream">
-                  <input type="checkbox" bind:checked={prune} />
-                  <span>prune</span>
-                </label>
+              <div class="action-row">
+                <span class="action-label">Fetch</span>
+                <div class="action-main">
+                  <button
+                    class="act"
+                    type="button"
+                    disabled={netBusy}
+                    onclick={() => onToggleRemoteBranches(remote)}
+                  >
+                    {expandedRemote === remote.name ? "Hide branches" : "Branches"}
+                  </button>
+                  <button
+                    class="act"
+                    type="button"
+                    disabled={netBusy}
+                    onclick={() => onFetch(remote)}
+                  >
+                    Fetch
+                  </button>
+                </div>
+                <div class="action-opts">
+                  <Switch
+                    bind:checked={prune}
+                    title="Delete remote-tracking branches that vanished upstream"
+                  >
+                    prune
+                  </Switch>
+                </div>
               </div>
 
-              <div class="opt-group">
-                <label class="toggle branch-pick">
-                  <span class="sr-only">Branch for pull and push</span>
+              <div class="action-row">
+                <span class="action-label">Pull</span>
+                <div class="action-main">
                   <select
                     aria-label={`Branch for pull and push on ${remote.name}`}
                     bind:value={branchPick[remote.name]}
@@ -533,42 +542,57 @@
                       </option>
                     {/each}
                   </select>
-                </label>
-                <button
-                  class="act"
-                  type="button"
-                  disabled={netBusy || !branchFor(remote)}
-                  onclick={() => onPull(remote)}
-                >
-                  Pull
-                </button>
-                <label class="toggle" title="Refuse when the merge would not be a fast-forward">
-                  <input type="checkbox" bind:checked={ffOnly} />
-                  <span>ff-only</span>
-                </label>
-                <label class="toggle" title="Rebase local commits on top of the fetched branch">
-                  <input type="checkbox" bind:checked={rebase} />
-                  <span>rebase</span>
-                </label>
+                  <button
+                    class="act"
+                    type="button"
+                    disabled={netBusy || !branchFor(remote)}
+                    onclick={() => onPull(remote)}
+                  >
+                    Pull
+                  </button>
+                </div>
+                <div class="action-opts">
+                  <Switch
+                    bind:checked={ffOnly}
+                    title="Refuse when the merge would not be a fast-forward"
+                  >
+                    ff-only
+                  </Switch>
+                  <Switch
+                    bind:checked={rebase}
+                    title="Rebase local commits on top of the fetched branch"
+                  >
+                    rebase
+                  </Switch>
+                </div>
               </div>
 
-              <div class="opt-group">
-                <button
-                  class="act push"
-                  type="button"
-                  disabled={netBusy || !branchFor(remote)}
-                  onclick={() => onPush(remote)}
-                >
-                  Push
-                </button>
-                <label class="toggle" title="Overwrite the remote branch (requires confirmation above)">
-                  <input type="checkbox" bind:checked={force} />
-                  <span>force</span>
-                </label>
-                <label class="toggle" title="Set this branch's upstream to this remote">
-                  <input type="checkbox" bind:checked={setUpstream} />
-                  <span>set-upstream</span>
-                </label>
+              <div class="action-row">
+                <span class="action-label">Push</span>
+                <div class="action-main">
+                  <button
+                    class="act push"
+                    type="button"
+                    disabled={netBusy || !branchFor(remote)}
+                    onclick={() => onPush(remote)}
+                  >
+                    Push
+                  </button>
+                </div>
+                <div class="action-opts">
+                  <Switch
+                    bind:checked={force}
+                    title="Overwrite the remote branch"
+                  >
+                    force
+                  </Switch>
+                  <Switch
+                    bind:checked={setUpstream}
+                    title="Set this branch's upstream to this remote"
+                  >
+                    set-upstream
+                  </Switch>
+                </div>
               </div>
             </div>
           {/if}
@@ -773,35 +797,48 @@
 
   .card-actions {
     display: flex;
-    flex-wrap: wrap;
-    gap: 0.5rem 1rem;
+    flex-direction: column;
     margin-top: 0.375rem;
   }
 
-  .opt-group {
+  /* One row per action: verb label — controls — option switches, with a
+     stable switch column so labels line up across rows. */
+  .action-row {
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    align-items: center;
+    gap: 0.625rem;
+    padding: 0.3rem 0;
+  }
+  .action-row + .action-row {
+    border-top: 1px solid var(--m3-outline-variant, var(--m3-primary));
+  }
+
+  .action-label {
+    min-width: 2.75rem;
+    font-size: 0.6875rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--m3-on-surface-variant, var(--m3-on-surface));
+  }
+
+  .action-main {
     display: flex;
     align-items: center;
     gap: 0.375rem;
+    min-width: 0;
     flex-wrap: wrap;
   }
+  .action-main select {
+    max-width: 9rem;
+  }
 
-  .toggle {
+  .action-opts {
     display: flex;
     align-items: center;
-    gap: 0.25rem;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    font-size: 0.6875rem;
-    cursor: pointer;
-    white-space: nowrap;
-  }
-
-  .toggle input {
-    accent-color: var(--m3-primary);
-    margin: 0;
-  }
-
-  .branch-pick select {
-    max-width: 9rem;
+    gap: 0.75rem;
+    flex: none;
   }
 
   .tb {
@@ -955,15 +992,6 @@
 
   .error {
     color: var(--m3-error, inherit);
-  }
-
-  .sr-only {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    overflow: hidden;
-    clip: rect(0 0 0 0);
-    white-space: nowrap;
   }
 
   /* M12: inline HEAD ↔ remote-branch compare block. */

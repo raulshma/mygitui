@@ -1,7 +1,9 @@
 /**
- * Diff viewer responsive layout (commit detail context): split halves share
- * the pane 50/50 and never grow a horizontal scrollbar; unified fills the
- * pane and scrolls only when the widest line genuinely overflows it.
+ * Diff viewer responsive layout (commit detail context): wrapping is ON by
+ * default — long lines fold inside the pane, never a horizontal scrollbar in
+ * either mode. With wrap toggled OFF, unified grows one horizontal scrollbar
+ * when the widest line genuinely overflows, and split grows ONE shared
+ * scrollbar serving both halves (halves stay column-aligned).
  *
  * Asserted on DOM geometry (scrollWidth/clientWidth/rects) against the
  * mocked Tauri backend — see tauri-mock.ts and history_click.spec.ts for
@@ -184,14 +186,69 @@ test("unified view scrolls only when the widest line genuinely overflows", async
   await page.getByRole("button", { name: "Switch to unified view" }).click();
   await expect(page.getByRole("button", { name: "Switch to split view" })).toBeVisible();
 
-  // The 110-char line really needs more than the pane: the viewer may grow
-  // a scrollbar, and content/rows must stretch across the full scroll
+  // Wrap is ON by default: the long line folds, no horizontal scrollbar.
+  let m = await diffMetrics(page);
+  expect(m.vpScroll).toBeLessThanOrEqual(m.vpClient);
+  const wrapped = await page.evaluate(() =>
+    [...document.querySelectorAll<HTMLElement>(".diff-viewer .row.line.single")]
+      .some((row) => row.offsetHeight > 20),
+  );
+  expect(wrapped).toBe(true);
+
+  // Wrap OFF: the widest line really needs more than the pane — the viewer
+  // grows a scrollbar, and content/rows must stretch across the full scroll
   // extent (no dead space, no early-cut backgrounds).
-  const m = await diffMetrics(page);
+  const wrapBtn = page.getByRole("button", { name: "Wrap long lines" });
+  await wrapBtn.click();
+  await expect(wrapBtn).toHaveAttribute("aria-pressed", "false");
+  m = await diffMetrics(page);
   expect(m.contentWidth).toBeGreaterThan(m.vpClient);
   expect(m.vpScroll).toBeGreaterThan(m.vpClient);
   expect(m.contentWidth).toBe(m.vpScroll);
   expect(m.rowWidth).toBe(m.vpScroll);
+
+  expect(tracked.errors).toEqual([]);
+});
+
+test("wrap off: split scrolls both halves on one shared scrollbar", async ({ page }) => {
+  const tracked = trackErrors(page);
+  await bootRepoWithDiff(page, ["context start", "z".repeat(110)]);
+  await page.setViewportSize({ width: 1400, height: 1000 });
+  await openCommitDiff(page, "context start");
+
+  // Default (wrap on): responsive, no horizontal overflow.
+  let m = await diffMetrics(page);
+  expect(m.vpScroll).toBeLessThanOrEqual(m.vpClient);
+
+  const wrapBtn = page.getByRole("button", { name: "Wrap long lines" });
+  await wrapBtn.click();
+  await expect(wrapBtn).toHaveAttribute("aria-pressed", "false");
+
+  // One shared horizontal scrollbar; both halves stretch across the full
+  // scroll extent and stay equal width (column-aligned).
+  m = await diffMetrics(page);
+  expect(m.vpScroll).toBeGreaterThan(m.vpClient);
+  expect(m.contentWidth).toBe(m.vpScroll);
+  expect(m.rowWidth).toBe(m.vpScroll);
+  expect(m.halfWidths.length).toBeGreaterThanOrEqual(2);
+  expect(Math.abs(m.halfWidths[0]! - m.halfWidths[1]!)).toBeLessThanOrEqual(2);
+  expect(m.halfWidths[0]!).toBeGreaterThan(m.vpClient / 2);
+
+  expect(tracked.errors).toEqual([]);
+});
+
+test("wrap persists across viewers (preference storage)", async ({ page }) => {
+  const tracked = trackErrors(page);
+  await bootRepoWithDiff(page, ["context start", "w".repeat(110)]);
+  await page.setViewportSize({ width: 1400, height: 1000 });
+  await openCommitDiff(page, "context start");
+
+  const wrapBtn = page.getByRole("button", { name: "Wrap long lines" });
+  await wrapBtn.click();
+  await expect(wrapBtn).toHaveAttribute("aria-pressed", "false");
+
+  const stored = await page.evaluate(() => localStorage.getItem("mygitui.diff.wrap"));
+  expect(JSON.parse(stored ?? "null")).toBe(false);
 
   expect(tracked.errors).toEqual([]);
 });

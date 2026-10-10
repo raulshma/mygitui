@@ -17,6 +17,7 @@ import {
   PREVIEW_FILE_CAP,
   previewSummaryLines,
   RESET_MODES,
+  resetIsDestructive,
   RESET_PREVIEW_KIND,
   sortNewestFirst,
 } from "./safetyModel";
@@ -217,11 +218,25 @@ describe("reset params", () => {
     expect(buildResetPreviewParams("feat")).toEqual({ to: "feat" });
   });
 
-  it("describes all three reset modes", () => {
-    expect(RESET_MODES.map((m) => m.kind)).toEqual(["soft", "mixed", "hard"]);
+  it("describes all five reset modes", () => {
+    expect(RESET_MODES.map((m) => m.kind)).toEqual([
+      "soft",
+      "mixed",
+      "keep",
+      "merge",
+      "hard",
+    ]);
     for (const mode of RESET_MODES) {
       expect(mode.label.length).toBeGreaterThan(0);
       expect(mode.description.length).toBeGreaterThan(0);
     }
+  });
+
+  it("classifies hard/keep/merge as destructive, soft/mixed as safe", () => {
+    expect(resetIsDestructive("hard")).toBe(true);
+    expect(resetIsDestructive("keep")).toBe(true);
+    expect(resetIsDestructive("merge")).toBe(true);
+    expect(resetIsDestructive("soft")).toBe(false);
+    expect(resetIsDestructive("mixed")).toBe(false);
   });
 });

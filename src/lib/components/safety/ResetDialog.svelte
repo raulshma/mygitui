@@ -2,14 +2,15 @@
   /**
    * Reset dialog (M3 safety) — move the current branch with a live preview.
    *
-   * Mode radio (soft / mixed / hard, plain-language), a target ref input
-   * with a datalist of branches + tags, and a live `ops_preview` of the
-   * hard reset (what would be discarded), refreshed on open and on target
-   * change (debounced 300ms, stale responses dropped).
+   * Mode radio (soft / mixed / keep / merge / hard, plain-language), a
+   * target ref input with a datalist of branches + tags, and a live
+   * `ops_preview` of the reset impact (what would change on disk), refreshed
+   * on open and on target change (debounced 300ms, stale responses dropped).
    *
    * Confirm flows:
-   *   - hard: `guard_checkpoint("pre-hard-reset")` → `reset` → success toast
-   *     quoting the checkpoint id ("undo available") → `onDone()`;
+   *   - hard/keep/merge (destructive): `guard_checkpoint("pre-<mode>-reset")`
+   *     → `reset` → success toast quoting the checkpoint id ("undo
+   *     available") → `onDone()`;
    *   - soft/mixed: single confirm, no checkpoint (recoverable via reflog)
    *     → `onDone()`.
    * Cancel / Escape → `onClose()`. The dialog never closes itself: the
@@ -30,6 +31,7 @@
     RESET_MODES,
     RESET_PREVIEW_KIND,
     previewSummaryLines,
+    resetIsDestructive,
   } from "./safetyModel";
 
   let {
@@ -131,11 +133,11 @@
     if (running || !target.trim()) return;
     running = true;
     try {
-      if (mode === "hard") {
-        const cp = await guardCheckpoint(repoId, "pre-hard-reset");
+      if (resetIsDestructive(mode)) {
+        const cp = await guardCheckpoint(repoId, `pre-${mode}-reset`);
         await resetRepo(repoId, ...resetArgs());
         toast(
-          `Hard reset to ${target} — undo available (checkpoint ${cp.id})`,
+          `${label(mode)} reset to ${target} — undo available (checkpoint ${cp.id})`,
           { kind: "success" },
         );
       } else {
@@ -225,7 +227,12 @@
             {:else}
               <p class="preview-empty">No file changes.</p>
             {/if}
-            {#if mode !== "hard"}
+            {#if mode === "keep" || mode === "merge"}
+              <p class="preview-note">
+                Preview shows the file impact; a {label(mode).toLowerCase()} reset
+                preserves uncommitted changes where it safely can.
+              </p>
+            {:else if mode !== "hard"}
               <p class="preview-note">
                 Preview shows the hard-reset impact; {label(mode).toLowerCase()} reset keeps your changes.
               </p>
@@ -234,10 +241,15 @@
         </div>
 
         <div class="actions">
-          {#if mode === "hard"}
+          {#if resetIsDestructive(mode)}
             <span class="guard-note">A checkpoint is created first (undo available).</span>
           {/if}
-          <button class="confirm" type="submit" disabled={running || !target.trim()}>
+          <button
+            class="confirm"
+            class:danger={resetIsDestructive(mode)}
+            type="submit"
+            disabled={running || !target.trim()}
+          >
             {running ? "Resetting…" : `Reset (${label(mode)})`}
           </button>
           <button class="cancel" type="button" disabled={running} onclick={onClose}>
@@ -431,6 +443,11 @@
   .confirm:disabled {
     cursor: not-allowed;
     opacity: 0.55;
+  }
+
+  .confirm.danger {
+    background: var(--m3-error, #b3261e);
+    color: var(--m3-on-error, #fff);
   }
 
   .cancel {

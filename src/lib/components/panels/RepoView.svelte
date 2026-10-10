@@ -44,6 +44,7 @@
   import AuthDialog from "$lib/components/AuthDialog.svelte";
   import CleanDialog from "$lib/components/actions/CleanDialog.svelte";
   import CommitMessageButton from "$lib/components/ai/CommitMessageButton.svelte";
+  import OpenWithButton from "$lib/components/header/OpenWithButton.svelte";
   // Startup: every panel that is not part of the first paint (status is the
   // default tab; diff and CommitBar are always visible) is dynamically
   // imported inside its snippet below — hidden panels (terminal/xterm,
@@ -577,6 +578,7 @@
       <span class="branch">{branchLabel(status)}</span>
       <span class="aheadbehind">↑{status.ahead} ↓{status.behind}</span>
     {/if}
+    <OpenWithButton {root} />
     <span class="layout-controls">
       <select
         class="preset-select"

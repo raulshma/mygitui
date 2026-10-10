@@ -7,6 +7,7 @@
   elsewhere closes. Position clamps to the viewport.
 -->
 <script lang="ts">
+  import Icon from "$lib/components/icons/Icon.svelte";
   import {
     contextMenu,
     isSeparator,
@@ -159,6 +160,11 @@
             if (!entry.disabled) active = index;
           }}
         >
+          {#if entry.icon}
+            <span class="icon" aria-hidden="true">
+              <Icon icon={entry.icon} />
+            </span>
+          {/if}
           {entry.label}
         </li>
       {/if}
@@ -183,6 +189,9 @@
   }
 
   .entry {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
     padding: 0.4rem 0.75rem;
     border-radius: var(--m3-shape-small, 8px);
     font: var(--m3-body-medium, 0.875rem/1.4 sans-serif);
@@ -190,6 +199,11 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+
+  .icon {
+    flex: none;
+    display: inline-flex;
   }
 
   .entry:focus-visible,

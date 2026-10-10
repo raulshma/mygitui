@@ -1,7 +1,7 @@
 pub mod engine;
 pub mod graph;
 
-use tauri::{Emitter, Manager, webview::PageLoadEvent};
+use tauri::{webview::PageLoadEvent, Emitter, Manager};
 use tauri_plugin_window_state::StateFlags;
 
 mod actions;
@@ -9,7 +9,9 @@ mod actions;
 mod actions_tests;
 mod auth;
 mod cli;
+mod credential_helper;
 mod diffcore;
+mod editors;
 mod forge;
 #[cfg(test)]
 mod forge_tests;
@@ -228,6 +230,8 @@ pub fn run() {
             opencode::opencode_serve_status,
             opencode::opencode_serve_start,
             opencode::opencode_serve_stop,
+            editors::detect_editors,
+            editors::open_with,
             popout::open_popout,
         ])
         // Windows are created hidden so the window-state plugin's restore

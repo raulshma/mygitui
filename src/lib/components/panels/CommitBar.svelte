@@ -2,15 +2,15 @@
   /**
    * Commit bar (M2) — sits at the bottom of the repo workspace.
    *
-   * Message textarea (Ctrl/Cmd+Enter commits), Amend checkbox, --no-verify
-   * toggle ("skip hooks"), signing badge (`signing_info`), per-hook badges
+   * Message textarea (Ctrl/Cmd+Enter commits), Amend switch, --no-verify
+   * switch ("skip hooks"), signing badge (`signing_info`), per-hook badges
    * (`hooks_list`, present + executable → "pre-commit will run"), an author
    * override disclosure, and the Commit button (spinner while a commit op
    * runs per the OpStore; disabled with no message unless amending).
    * The side column groups the controls into rows: status chips, then the
-   * option toggles (Amend / --no-verify / Author…), then the actions row
-   * (Fixup left; AI generate + Commit pinned bottom-right). The author
-   * override fields expand as a full-width row under the message row.
+   * option switches (Amend / --no-verify left, Author… right), then the
+   * actions row (Fixup left; AI generate + Commit pinned bottom-right). The
+   * author override fields expand as a full-width row under the message row.
    * Success clears the form, toasts the short sha and asks the owner to
    * refresh (`onCommitted` → RepoView refreshStatus). Failures render
    * inline next to the button. The AI button is a disabled ghost (M6).
@@ -26,6 +26,7 @@
   import { busy } from "$lib/stores/ops.svelte";
   import { tabStore } from "$lib/stores/tabs.svelte";
   import { toast } from "$lib/toast";
+  import { Switch } from "$lib/components/m3";
   import CommitMessageButton from "$lib/components/ai/CommitMessageButton.svelte";
   import { fixupMessage, hasStagedChanges, headCommitInPage } from "$lib/commit/commitBarModel";
 
@@ -230,17 +231,17 @@
       </div>
 
       <div class="options">
-        <label class="toggle" title="Amend the previous commit">
-          <input type="checkbox" bind:checked={amend} />
-          <span>Amend</span>
-        </label>
-        <label
-          class="toggle"
-          title="Skip the pre-commit and commit-msg hooks (--no-verify)"
-        >
-          <input type="checkbox" bind:checked={noVerify} />
-          <span>--no-verify</span>
-        </label>
+        <div class="opt-switches">
+          <Switch bind:checked={amend} title="Amend the previous commit">
+            Amend
+          </Switch>
+          <Switch
+            bind:checked={noVerify}
+            title="Skip the pre-commit and commit-msg hooks (--no-verify)"
+          >
+            --no-verify
+          </Switch>
+        </div>
         <button
           class="disclosure"
           type="button"
@@ -359,7 +360,7 @@ ${d.body}` : d.subject;
     display: flex;
     flex-direction: column;
     gap: 0.25rem;
-    width: 17rem;
+    width: 18.5rem;
   }
 
   .chips {
@@ -394,7 +395,17 @@ ${d.body}` : d.subject;
     display: flex;
     align-items: center;
     gap: 0.5rem;
-    flex-wrap: wrap;
+  }
+
+  .opt-switches {
+    display: flex;
+    align-items: center;
+    gap: 0.625rem;
+    min-width: 0;
+  }
+
+  .options .disclosure {
+    margin-left: auto;
   }
 
   .actions {
@@ -409,21 +420,6 @@ ${d.body}` : d.subject;
     display: inline-flex;
     align-items: center;
     gap: 0.375rem;
-  }
-
-  .toggle {
-    display: flex;
-    align-items: center;
-    gap: 0.25rem;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    font-size: 0.72rem;
-    cursor: pointer;
-    white-space: nowrap;
-  }
-
-  .toggle input {
-    accent-color: var(--m3-primary);
-    margin: 0;
   }
 
   .disclosure {

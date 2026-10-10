@@ -35,6 +35,12 @@ function measurer(): CanvasRenderingContext2D | null {
 
 const cache = new Map<string, number>();
 
+/** Cached advance of one monospace column ("0"), canvas-measured. */
+export function charWidth(): number {
+  const c = measurer();
+  return c ? c.measureText("0").width || FALLBACK_CH_PX : FALLBACK_CH_PX;
+}
+
 /** Rendered width of one diff line in px (tab stops included). */
 export function measureLineWidth(text: string): number {
   const hit = cache.get(text);

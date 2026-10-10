@@ -511,6 +511,14 @@ export const COMMANDS: Command[] = [
     when: (ctx) => ctx.repoId !== null,
     run: () => dispatch("diff-toggle-mode"),
   },
+  {
+    id: "diff.toggle-wrap",
+    title: "Toggle diff line wrapping",
+    section: "Diff",
+    keywords: ["wrap", "scroll", "long lines"],
+    when: (ctx) => ctx.repoId !== null,
+    run: () => dispatch("diff-toggle-wrap"),
+  },
 
   // -- Conflicts ------------------------------------------------------------
   {

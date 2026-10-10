@@ -297,7 +297,7 @@ export interface MergeResult {
   new_head: string | null;
 }
 
-export type ResetKind = "soft" | "mixed" | "hard";
+export type ResetKind = "soft" | "mixed" | "hard" | "keep" | "merge";
 
 export interface RebaseStep {
   sha: string;
@@ -514,4 +514,16 @@ export interface OpencodeServeState {
   port: number | null;
   /** Failure description when not running. */
   error: string | null;
+}
+
+// ---------- External apps (Rust: src-tauri/src/editors.rs) ----------
+
+/** One launchable app for the repo header's "Open with…" button. */
+export interface EditorApp {
+  /** Stable id (`explorer`, `vscode`, `cursor`, `idea`, …). */
+  id: string;
+  /** Display name ("VS Code", "IntelliJ IDEA", "Explorer", …). */
+  name: string;
+  /** Machine-verified executable (or app bundle) path. */
+  path: string;
 }

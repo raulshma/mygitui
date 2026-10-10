@@ -661,9 +661,29 @@ impl GitEngineM3 for Libgit2Engine {
     }
 
     fn reset(&self, repo: &Repository, kind: ResetKind, to: &str) -> EngineResult<()> {
-        let target = resolve_commit(repo, to)?;
-        // Workdir/index first, ref last: a failed checkout leaves the ref
+        // --keep/--merge have no libgit2 equivalent; the CLI implements their
+        // dirty-file safety rules, so they run as one atomic `git reset`
+        // (validation, workdir, index, ref). Everything else stays native:
+        // workdir/index first, ref last — a failed checkout leaves the ref
         // (and HEAD) untouched.
+        if matches!(kind, ResetKind::Keep | ResetKind::Merge) {
+            // Validate the target through the engine first so bad refs fail
+            // with the usual error before a subprocess runs.
+            resolve_commit(repo, to)?;
+            let workdir = repo
+                .workdir()
+                .ok_or_else(|| EngineError::Invalid("cannot reset a bare repository".into()))?;
+            let flag = if kind == ResetKind::Keep {
+                "--keep"
+            } else {
+                "--merge"
+            };
+            crate::maintenance::git_run(workdir, &["reset", flag, to])
+                .map_err(|e| EngineError::Invalid(format!("git reset {flag} failed: {e}")))?;
+            return Ok(());
+        }
+
+        let target = resolve_commit(repo, to)?;
         match kind {
             ResetKind::Soft => {}
             ResetKind::Mixed => {
@@ -676,6 +696,8 @@ impl GitEngineM3 for Libgit2Engine {
                 checkout.force();
                 repo.checkout_tree(target.tree()?.as_object(), Some(&mut checkout))?;
             }
+            // Handled above via the CLI.
+            ResetKind::Keep | ResetKind::Merge => unreachable!(),
         }
         move_head_ref(repo, target.id(), &format!("reset: moving to {to}"))?;
         Ok(())

@@ -175,8 +175,25 @@ export const RESET_MODES: Array<{
       "Move the branch and unstage — changes stay in the working copy.",
   },
   {
+    kind: "keep",
+    label: "Keep",
+    description:
+      "Move the branch and update changed files, keeping your local edits. Refuses if a changed file has uncommitted modifications.",
+  },
+  {
+    kind: "merge",
+    label: "Merge",
+    description:
+      "Move the branch, unstage, and update changed files — unrelated local edits survive. Aborts untouched on any conflict.",
+  },
+  {
     kind: "hard",
     label: "Hard",
     description: "Move the branch and discard ALL uncommitted changes.",
   },
 ];
+
+/** Reset modes that can destroy uncommitted work (checkpoint + strong confirm). */
+export function resetIsDestructive(kind: ResetKind): boolean {
+  return kind === "hard" || kind === "keep" || kind === "merge";
+}

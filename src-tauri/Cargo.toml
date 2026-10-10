@@ -30,7 +30,10 @@ tauri-plugin-single-instance = "2.5.2"
 keyring = { version = "4.2.0", features = ["apple-native-keyring-store"] }
 tauri-plugin-updater = "2.13.1"
 tauri-plugin-process = "2.4.0"
-git2 = "0.21.0"
+# `default = []` since git2 0.19: without `https`, libgit2 compiles with no
+# TLS backend and every push/pull fails with "there is no TLS stream
+# available"; `ssh` adds the libssh2 transport for ssh: remotes.
+git2 = { version = "0.21.0", features = ["https", "ssh"] }
 imara-diff = "0.2.0"
 regex = "1.11"
 notify = "8.2.0"

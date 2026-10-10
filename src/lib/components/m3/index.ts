@@ -12,6 +12,7 @@
  */
 export { default as Button } from "./Button.svelte";
 export { default as Chip } from "./Chip.svelte";
+export { default as Switch } from "./Switch.svelte";
 
 export type { ButtonVariant, ButtonSize, ButtonIconType } from "./Button.svelte";
 export type { ChipVariant } from "./Chip.svelte";

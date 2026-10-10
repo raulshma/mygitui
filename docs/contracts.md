@@ -90,7 +90,7 @@ Same op-queue + op-progress machinery as M2. All `#[tauri::command(rename_all = 
 | `cherry_pick` | `repo_id, shas: string[]` | `MergeResult` |
 | `revert` | `repo_id, shas: string[]` | `MergeResult` |
 | `sequencer_abort` | `repo_id` | `void` (aborts in-progress cherry-pick/revert state) |
-| `reset` | `repo_id, kind, to` | `void` (checkpoint auto-created before hard) |
+| `reset` | `repo_id, kind: "soft" \| "mixed" \| "hard" \| "keep" \| "merge", to` | `void` (no backend checkpoint — the destructive kinds hard/keep/merge are guarded by the ResetDialog's `guard_checkpoint` before invoking; keep/merge run via the git CLI) |
 | `rebase_start` | `repo_id, plan: RebaseStep[], onto?: string` | `RebaseState` |
 | `rebase_state` | `repo_id` | `RebaseState` |
 | `rebase_continue` / `rebase_abort` | `repo_id` | `RebaseState` / `void` |
@@ -554,6 +554,8 @@ Additive contracts only; all commands take `repo_id` unless noted.
 | `opencode_serve_status` | → `OpencodeServeState` | `{running, url, port, error}` of the app-managed `opencode serve` child; reaps a child that exited. Starts nothing. |
 | `opencode_serve_start` | `cwd?: string` → `OpencodeServeState` | Idempotent: returns the live server or spawns on a free 127.0.0.1 port (ready = TCP connect; ≤30s wait). `cwd` (the active repo root) becomes the server's working directory for project resolution. Error copy names the fix ("not found on PATH — install opencode…"). |
 | `opencode_serve_stop` | → `OpencodeServeState` | Kills (tree-kill on Windows) and reaps the managed server; no-op when none runs. |
+| `detect_editors` | → `EditorApp[]` | Probes PATH + well-known install locations for common editors (VS Code family, Cursor, Windsurf, Zed, Sublime, Notepad++, JetBrains via Toolbox/standalone scans). `EditorApp = {id, name, path}`; the platform file manager (`id: "explorer"`) is always first. No subprocesses; not cached. |
+| `open_with` | `repo_root`, `app_id` → `void` | Spawns the app id resolved through a fresh `detect_editors` probe (frontend-supplied paths are never spawned) with the repository root as the working folder; Notepad++ passes `-openFoldersAsWorkspace`, macOS goes through `open [-a <app>]`. Sanitized environment (same allowlist as git spawns — GUI apps keep SYSTEMROOT/USERPROFILE/APPDATA/LOCALAPPDATA/PATH/HOME/TMP). |
 | `open_popout` | `label`, `query`, `title` → `void` | Creates (or focuses, when `label` exists) a popout webview window: `query` is the window's own `?panel=…&repo=…` URL query joined onto the app origin. Built Rust-side instead of via core `create-webview-window` so the main window's `additionalBrowserArgs` are copied — WebView2 rejects a second webview environment on the same user data folder (0x8007139F). 960×680 (min 420×300), splash background; created hidden and shown by the app's page-load hook at final size (the window-state plugin restores the saved geometry right after creation, and showing before that would visibly re-layout); the capability set covers `popout-*` labels. |
 
 Shape changes (additive, mirrored in `src/lib/ipc/types.ts`):

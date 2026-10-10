@@ -10,9 +10,15 @@
 //!    OS keyring (`https:<host>:user` / `https:<host>:pass` entries under the
 //!    `mygitui` service, read through the keyring crate directly — not the
 //!    `secrets_*` IPC commands).
-//! 3. **FE round-trip** — emit `auth-request` `{op_id, repo_id, url, kind,
+//! 3. **git credential helpers** — `git credential fill` against whatever
+//!    `credential.helper` the user configured (Git Credential Manager, …);
+//!    non-interactive, so a miss falls through. Rejections call `git
+//!    credential reject`; "remember me" answers also call `approve` so cmd
+//!    git shares the credential. See `credential_helper.rs`.
+//! 4. **FE round-trip** — emit `auth-request` `{op_id, repo_id, url, kind,
 //!    prompt}` (contracts.md M2) and block on a tokio oneshot with a 60s
-//!    timeout. `store: true` answers persist back to the keyring + cache.
+//!    timeout. `store: true` answers persist back to the keyring + cache
+//!    (+ helpers via approve).
 //!
 //! libgit2 retries the callback after a rejected credential: attempt 2
 //! clears the host's cache and re-prompts once; attempt 3 fails the op.
@@ -29,7 +35,7 @@
 //! (net-op worker). The FE wait bridges the tokio oneshot through a bare
 //! std thread + `recv_timeout` so it works from any blocking context.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
@@ -37,6 +43,7 @@ use std::time::Duration;
 use parking_lot::{Mutex, RwLock};
 use serde::Serialize;
 
+use crate::credential_helper;
 use crate::engine::types::RepoId;
 
 /// `auth-request` event name (contracts.md, Events M2).
@@ -87,6 +94,12 @@ trait Prompter {
 /// Late-bound FE ask function (see [`FePrompter`]).
 type AskFn = Box<dyn Fn(&str, &str, String) -> Result<AuthAnswer, String> + Send + Sync>;
 
+/// Credential-helper lookup seam: production shells out to `git credential
+/// fill` ([`credential_helper::fill`]); tests inject fakes to stay
+/// hermetic (no git spawn, no host credential manager).
+type HelperFillFn =
+    Box<dyn Fn(&credential_helper::Query<'_>) -> Option<(String, String)> + Send + Sync>;
+
 /// The production prompter, late-bound: [`init`] installs the closure that
 /// performs the actual `auth-request` round-trip (`ask_fe`). Referencing
 /// `ask_fe` only from inside that closure — installed at app startup, never
@@ -114,20 +127,28 @@ impl Prompter for FePrompter {
 pub struct AuthBroker {
     /// url-host → (user, pass) cache filled from keyring or FE answers.
     cache: Mutex<HashMap<String, (String, String)>>,
+    /// Hosts whose most recently served credential came from git's helper
+    /// store (fill hit or approve): only those get `git credential reject`
+    /// when the remote refuses the credential.
+    helper_served: Mutex<HashSet<String>>,
     /// op_id → sender woken by `auth_respond`.
     pending: Mutex<HashMap<String, tokio::sync::oneshot::Sender<AuthAnswer>>>,
     /// Set by `init` from lib.rs setup; `None` in unit tests / headless.
     app: RwLock<Option<tauri::AppHandle>>,
     counter: AtomicU64,
+    /// `git credential fill` seam (see [`HelperFillFn`]).
+    helper_fill: HelperFillFn,
 }
 
 impl AuthBroker {
     fn new() -> Self {
         Self {
             cache: Mutex::new(HashMap::new()),
+            helper_served: Mutex::new(HashSet::new()),
             pending: Mutex::new(HashMap::new()),
             app: RwLock::new(None),
             counter: AtomicU64::new(0),
+            helper_fill: Box::new(credential_helper::fill),
         }
     }
 }
@@ -242,16 +263,28 @@ impl AuthBroker {
         allowed: git2::CredentialType,
         attempt_index: u32,
     ) -> Result<git2::Cred, git2::Error> {
-        let host = host_of(url);
+        let (protocol, host, path) = credential_helper::split_url(url);
         if attempt_index > MAX_ATTEMPTS {
             return Err(git2::Error::from_str(&format!(
                 "authentication failed for {host} ({MAX_ATTEMPTS} attempts)"
             )));
         }
+        let known_user = username.map(str::to_string);
         if attempt_index > 1 {
             // The previous credential was rejected: anything cached for
-            // this host is stale. Drop it so we re-prompt, not loop.
+            // this host is stale. Drop it so we re-prompt, not loop. If it
+            // came from git's helper store, erase it there too (what git
+            // itself does on a rejected credential) so a dead token cannot
+            // be served again.
             self.cache.lock().remove(&host);
+            if self.helper_served.lock().remove(&host) {
+                credential_helper::reject(&credential_helper::Query {
+                    protocol: &protocol,
+                    host: &host,
+                    path: path.as_deref(),
+                    username: known_user.as_deref(),
+                });
+            }
         }
 
         // Some servers ask for just a username (no password scheme).
@@ -264,7 +297,8 @@ impl AuthBroker {
             return git2::Cred::ssh_key_from_agent(username.unwrap_or("git"));
         }
 
-        // 2./3. HTTPS chain: in-process cache → keyring → FE round-trip.
+        // 2./3./4. HTTPS chain: in-process cache → keyring → git credential
+        // helpers → FE round-trip.
         if allowed.contains(git2::CredentialType::USER_PASS_PLAINTEXT) {
             if let Some((user, pass)) = self.cache.lock().get(&host).cloned() {
                 return git2::Cred::userpass_plaintext(&user, &pass);
@@ -275,15 +309,28 @@ impl AuthBroker {
                 if let Some((user, pass)) = self.keyring_lookup(&host) {
                     return git2::Cred::userpass_plaintext(&user, &pass);
                 }
+                // Same for the user's git credential helpers (GCM & co) —
+                // what cmd git would use. Non-interactive by design: a
+                // miss falls through to the FE prompt.
+                let query = credential_helper::Query {
+                    protocol: &protocol,
+                    host: &host,
+                    path: path.as_deref(),
+                    username: known_user.as_deref(),
+                };
+                if let Some((user, pass)) = (self.helper_fill)(&query) {
+                    self.helper_served.lock().insert(host.clone());
+                    self.cache.lock().insert(host.clone(), (user.clone(), pass.clone()));
+                    return git2::Cred::userpass_plaintext(&user, &pass);
+                }
             }
-            let known_user = username.map(str::to_string);
             let kind = https_prompt_kind(known_user.is_some());
             let prompt = build_prompt(kind, &host, known_user.as_deref());
             let answer = prompter
                 .ask(url, kind, prompt)
                 .map_err(|reason| git2::Error::from_str(&reason))?;
             let (user, pass) = resolve_https_answer(&answer, known_user.as_deref())?;
-            self.remember(&host, &user, &pass, answer.store);
+            self.remember(&protocol, &host, &user, &pass, answer.store);
             return git2::Cred::userpass_plaintext(&user, &pass);
         }
 
@@ -381,8 +428,10 @@ impl AuthBroker {
     }
 
     /// Store an answer: always the session cache, plus both keyring
-    /// entries when the user asked to persist.
-    fn remember(&self, host: &str, user: &str, pass: &str, store: bool) {
+    /// entries when the user asked to persist. Persisted credentials also
+    /// go through `git credential approve`, so the user's own git (cmd git,
+    /// IDEs) shares them.
+    fn remember(&self, protocol: &str, host: &str, user: &str, pass: &str, store: bool) {
         self.cache
             .lock()
             .insert(host.to_string(), (user.to_string(), pass.to_string()));
@@ -395,6 +444,16 @@ impl AuthBroker {
                 tracing::warn!(host, key = %key, error = %err, "storing credential in keyring failed");
             }
         }
+        credential_helper::approve(
+            &credential_helper::Query {
+                protocol,
+                host,
+                path: None,
+                username: Some(user),
+            },
+            pass,
+        );
+        self.helper_served.lock().insert(host.to_string());
     }
 }
 
@@ -481,27 +540,6 @@ pub(crate) fn resolve_https_answer(
     }
 }
 
-/// Host of a remote URL (pure string parsing — git2-rs 0.21 exposes no URL
-/// type). Handles scheme URLs with userinfo/ports and scp-like
-/// `git@host:path`.
-pub(crate) fn host_of(url: &str) -> String {
-    if let Some((_, rest)) = url.split_once("://") {
-        // Authority ends at the first path/query/fragment separator.
-        let authority = rest.split(['/', '?', '#']).next().unwrap_or(rest);
-        let hostport = authority.rsplit('@').next().unwrap_or(authority);
-        if let Some((host, port)) = hostport.rsplit_once(':') {
-            if !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit()) {
-                return host.to_string();
-            }
-        }
-        return hostport.to_string();
-    }
-    // scp-like `git@host:path` (or a bare host): the host ends at the first
-    // ':' or '/'.
-    let userhost = url.split([':', '/']).next().unwrap_or(url);
-    userhost.rsplit('@').next().unwrap_or(userhost).to_string()
-}
-
 /// First existing default ssh key, for the passphrase prompt path.
 fn default_ssh_key() -> Option<std::path::PathBuf> {
     let home = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME"))?;
@@ -518,7 +556,12 @@ mod tests {
     use std::collections::VecDeque;
 
     fn broker() -> AuthBroker {
-        AuthBroker::new()
+        let mut broker = AuthBroker::new();
+        // Hermetic default: the credential-helper seam never hits (no git
+        // spawn, no host credential manager). Helper-focused tests override
+        // `helper_fill` directly.
+        broker.helper_fill = Box::new(|_| None);
+        broker
     }
 
     /// `expect_err` for `Result<Cred, _>` (`Cred` is not `Debug`).
@@ -682,6 +725,103 @@ mod tests {
                 .map(|(u, p)| (u.as_str(), p.as_str())),
             Some(("ada", "pw1"))
         );
+    }
+
+    /// A `git credential fill` hit (GCM & co) serves the credential without
+    /// prompting and warms the session cache.
+    #[test]
+    fn helper_hit_serves_without_prompting() {
+        let mut broker = broker();
+        broker.helper_fill = Box::new(|q| {
+            assert_eq!(q.protocol, "https");
+            assert_eq!(q.host, "gcm.example.net");
+            assert_eq!(q.path, Some("o/r.git"));
+            Some(("gcm-user".to_string(), "gcm-pass".to_string()))
+        });
+        let prompter = FakePrompter::with(vec![]);
+
+        broker
+            .attempt(
+                &prompter,
+                "https://gcm.example.net/o/r.git",
+                None,
+                git2::CredentialType::USER_PASS_PLAINTEXT,
+                1,
+            )
+            .expect("helper credential served");
+        assert!(prompter.asks().is_empty(), "helper hit never prompts");
+        assert_eq!(
+            broker
+                .cache
+                .lock()
+                .get("gcm.example.net")
+                .map(|(u, p)| (u.as_str(), p.as_str())),
+            Some(("gcm-user", "gcm-pass"))
+        );
+        assert!(broker.helper_served.lock().contains("gcm.example.net"));
+    }
+
+    /// When the remote refuses a credential that came from the helper
+    /// store, the broker erases it there (`git credential reject`) so the
+    /// dead token cannot be served again.
+    #[test]
+    fn rejected_helper_credential_is_rejected_in_the_store() {
+        let mut broker = broker();
+        broker.helper_fill = Box::new(|_| Some(("stale".to_string(), "token".to_string())));
+        let prompter = FakePrompter::with(vec![]);
+
+        broker
+            .attempt(
+                &prompter,
+                "https://stale.example.net/r.git",
+                None,
+                git2::CredentialType::USER_PASS_PLAINTEXT,
+                1,
+            )
+            .expect("helper hit");
+        assert!(broker.helper_served.lock().contains("stale.example.net"));
+
+        // Attempt 2 = the remote refused it: the marker is consumed (and
+        // the store erase fired), then the attempt fails closed on the
+        // answer-less prompter.
+        assert!(broker
+            .attempt(
+                &prompter,
+                "https://stale.example.net/r.git",
+                None,
+                git2::CredentialType::USER_PASS_PLAINTEXT,
+                2,
+            )
+            .is_err());
+        assert!(
+            !broker.helper_served.lock().contains("stale.example.net"),
+            "the erase must consume the marker"
+        );
+    }
+
+    /// `remember` with `store: true` also routes the credential through
+    /// `git credential approve` (tracked via helper_served so a later
+    /// rejection can erase it); `store: false` must not.
+    #[test]
+    fn remember_with_store_marks_helper_store() {
+        let broker = broker();
+        let remember_host = "mygitui-remember.example.invalid";
+        let user_entry = keyring::Entry::new(SERVICE, &https_key_user(remember_host)).unwrap();
+        let pass_entry = keyring::Entry::new(SERVICE, &https_key_pass(remember_host)).unwrap();
+        let _ = user_entry.delete_credential();
+        let _ = pass_entry.delete_credential();
+
+        broker.remember("https", remember_host, "ada", "pw", true);
+        assert!(broker.helper_served.lock().contains(remember_host));
+
+        broker.remember("https", "mygitui-nostore.example.invalid", "ada", "pw", false);
+        assert!(!broker
+            .helper_served
+            .lock()
+            .contains("mygitui-nostore.example.invalid"));
+
+        let _ = user_entry.delete_credential();
+        let _ = pass_entry.delete_credential();
     }
 
     #[test]
@@ -910,21 +1050,6 @@ mod tests {
         };
         let (user, pass) = resolve_https_answer(&full, Some("known")).unwrap();
         assert_eq!((user.as_str(), pass.as_str()), ("override", "pw"));
-    }
-
-    #[test]
-    fn host_of_handles_urls_and_scp_like() {
-        assert_eq!(host_of("https://github.com/owner/repo.git"), "github.com");
-        assert_eq!(
-            host_of("https://user:token@example.com:8443/r.git"),
-            "example.com"
-        );
-        assert_eq!(host_of("git@github.com:owner/repo.git"), "github.com");
-        assert_eq!(
-            host_of("ssh://git@ssh.dev.azure.com/v3/x/y"),
-            "ssh.dev.azure.com"
-        );
-        assert_eq!(host_of(""), "");
     }
 
     #[test]

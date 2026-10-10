@@ -1130,4 +1130,19 @@ mod tests {
             other => panic!("expected Invalid(cancelled), got {other:?}"),
         }
     }
+
+    /// Canary for the git2 `https` feature: git2 0.19+ ships `default = []`,
+    /// and without `https` libgit2 compiles with no TLS backend, so every
+    /// fetch/push fails with "there is no TLS stream available". Connecting
+    /// to a public HTTPS remote is the cheapest full handshake.
+    #[test]
+    #[ignore = "network"]
+    fn https_transport_is_available() {
+        let repo = git2::Repository::discover(env!("CARGO_MANIFEST_DIR")).unwrap();
+        let mut remote = repo
+            .remote_anonymous("https://github.com/rust-lang/git2-rs")
+            .unwrap();
+        remote.connect(git2::Direction::Fetch).unwrap();
+        remote.disconnect().unwrap();
+    }
 }

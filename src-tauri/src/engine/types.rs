@@ -541,6 +541,14 @@ pub enum ResetKind {
     Soft,
     Mixed,
     Hard,
+    /// `git reset --keep` (CLI): move HEAD and update files that changed
+    /// between HEAD and the target, refusing to clobber uncommitted changes
+    /// to those files.
+    Keep,
+    /// `git reset --merge` (CLI): like mixed, plus update files changed
+    /// between HEAD and the target; unrelated local edits survive, a
+    /// conflicting dirty file aborts with no changes.
+    Merge,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

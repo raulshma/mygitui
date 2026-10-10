@@ -25,6 +25,8 @@ export interface UiEventMap {
   "history-select-commit": { sha: string; repoId?: string };
   /** Toggle split/unified diff mode. */
   "diff-toggle-mode": undefined;
+  /** Toggle diff line wrapping (persisted; every mounted viewer flips). */
+  "diff-toggle-wrap": undefined;
   /** Open the conflict editor. */
   "open-conflicts": undefined;
   /** Re-scan merge conflicts. */

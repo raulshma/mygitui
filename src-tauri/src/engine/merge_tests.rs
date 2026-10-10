@@ -1430,6 +1430,121 @@ fn reset_hard_on_unborn_head_seeds_branch() {
     assert_eq!(workdir_text(&repo, "seed.txt"), "seed\n");
 }
 
+// ---------------------------------------------------------------------------
+// reset --keep / --merge (CLI-backed; skipped without a git binary)
+// ---------------------------------------------------------------------------
+
+/// keep/merge delegate to the git CLI; skip cleanly when it is missing.
+fn git_cli_available() -> bool {
+    std::process::Command::new("git")
+        .arg("--version")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+/// base(a.txt, u.txt) -> second(a.txt); returns the base sha.
+fn reset_km_fixture(name: &str) -> (Fixture, String) {
+    let fx = init_fixture(name);
+    commit_file(&fx.repo, "a.txt", "base\n", "base");
+    commit_file(&fx.repo, "u.txt", "u\n", "base: unrelated");
+    commit_file(&fx.repo, "a.txt", "two\n", "second");
+    let base = fx
+        .repo
+        .head()
+        .expect("head")
+        .peel_to_commit()
+        .expect("commit")
+        .parent(0)
+        .expect("parent")
+        .id()
+        .to_string();
+    (fx, base)
+}
+
+#[test]
+fn reset_keep_updates_changed_files_preserves_unrelated() {
+    if !git_cli_available() {
+        return;
+    }
+    let (fx, base) = reset_km_fixture("reset-keep-keep");
+    // Dirty an unrelated tracked file.
+    write_file(&fx.repo, "u.txt", "u-local\n");
+
+    ENGINE
+        .reset(&fx.repo, ResetKind::Keep, &base)
+        .expect("keep reset");
+
+    assert_eq!(head_sha(&fx.repo), base);
+    // a.txt changed between HEAD and base → updated in the workdir; the
+    // unrelated dirty file keeps its local content.
+    assert_eq!(workdir_text(&fx.repo, "a.txt"), "base\n");
+    assert_eq!(workdir_text(&fx.repo, "u.txt"), "u-local\n");
+    let status = ENGINE.status(&fx.repo).expect("status");
+    assert!(
+        status.entries.iter().any(|e| e.path == "u.txt"),
+        "u.txt still shows as modified"
+    );
+}
+
+#[test]
+fn reset_keep_refuses_conflicting_dirty_file() {
+    if !git_cli_available() {
+        return;
+    }
+    let (fx, base) = reset_km_fixture("reset-keep-refuse");
+    // Dirty the file the reset would need to rewrite.
+    write_file(&fx.repo, "a.txt", "local\n");
+
+    let err = ENGINE
+        .reset(&fx.repo, ResetKind::Keep, &base)
+        .expect_err("keep reset must refuse");
+    assert_invalid(err);
+
+    // Nothing moved: HEAD and the dirty content are untouched.
+    assert_ne!(head_sha(&fx.repo), base);
+    assert_eq!(workdir_text(&fx.repo, "a.txt"), "local\n");
+}
+
+#[test]
+fn reset_merge_updates_changed_files_keeps_unrelated() {
+    if !git_cli_available() {
+        return;
+    }
+    let (fx, base) = reset_km_fixture("reset-merge-keep");
+    write_file(&fx.repo, "u.txt", "u-local\n");
+
+    ENGINE
+        .reset(&fx.repo, ResetKind::Merge, &base)
+        .expect("merge reset");
+
+    assert_eq!(head_sha(&fx.repo), base);
+    assert_eq!(workdir_text(&fx.repo, "a.txt"), "base\n");
+    assert_eq!(workdir_text(&fx.repo, "u.txt"), "u-local\n");
+    // Index := base tree, so the surviving local edit is unstaged.
+    assert_eq!(
+        staged_content(&fx.repo, "u.txt", 0).as_deref(),
+        Some(b"u\n".as_slice())
+    );
+}
+
+#[test]
+fn reset_merge_refuses_conflicting_dirty_file() {
+    if !git_cli_available() {
+        return;
+    }
+    let (fx, base) = reset_km_fixture("reset-merge-refuse");
+    write_file(&fx.repo, "a.txt", "local\n");
+
+    let err = ENGINE
+        .reset(&fx.repo, ResetKind::Merge, &base)
+        .expect_err("merge reset must refuse");
+    assert_invalid(err);
+
+    assert_ne!(head_sha(&fx.repo), base);
+    assert_eq!(workdir_text(&fx.repo, "a.txt"), "local\n");
+}
+
 /// `git merge`'s default subject uses the remote-tracking wording when the
 /// merged ref resolves under `refs/remotes/`.
 #[test]

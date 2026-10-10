@@ -25,11 +25,18 @@
   import {
     buildRowModel,
     rowHeights,
+    ROW_HEIGHTS,
     type DiffMode,
     type LoadImageFn,
   } from "$lib/components/diff/rowModel";
   import { buildLayout, visibleSlices } from "$lib/components/diff/virtualizer";
   import { measureLineWidth } from "$lib/components/diff/textWidth";
+  import {
+    GUTTER_PX,
+    wrappedHeights,
+    wrapMetrics,
+  } from "$lib/components/diff/wrapHeights";
+  import { readWrapPref, writeWrapPref } from "$lib/diff/wrapPref";
   import {
     beginSelection,
     extendSelection,
@@ -45,6 +52,7 @@
   let {
     files,
     mode = $bindable("split"),
+    wrap = $bindable(readWrapPref()),
     onLoadImage,
     repoId = undefined,
     /** Hunk-level actions: `stage` = stage hunks, `unstage` = unstage hunks. */
@@ -56,6 +64,8 @@
   }: {
     files: FileDiff[];
     mode?: DiffMode;
+    /** Wrap long lines (default from the persisted `mygitui.diff.wrap`). */
+    wrap?: boolean;
     onLoadImage?: LoadImageFn;
     /** Required for hunk actions (targets the IPC by repo id). */
     repoId?: string;
@@ -73,27 +83,112 @@
   let viewportEl: HTMLDivElement | undefined = $state();
   let scrollTop = $state(0);
   let viewportH = $state(0);
+  let viewportW = $state(0);
 
   const collapsedSet = $derived(new Set(Object.keys(collapsed).filter((p) => collapsed[p])));
   const model = $derived(buildRowModel(files, mode, collapsedSet));
-  const layout = $derived(buildLayout(rowHeights(model.rows)));
+
+  // -- wrap: estimated heights + measured corrections --------------------------
+
+  /** Measured (DOM-true) heights for rendered rows, keyed by row index. */
+  let heightOverrides = $state<Record<number, number>>({});
+
+  /** Wrap metrics for the current viewport width; null = wrap off. */
+  const wrapCtx = $derived(wrap ? wrapMetrics(viewportW, mode) : null);
+
+  const baseHeights = $derived(
+    wrapCtx ? wrappedHeights(model.rows, wrapCtx) : rowHeights(model.rows),
+  );
+
+  /** Layout heights: estimates corrected by measured rows where available. */
+  const heights = $derived.by(() => {
+    const entries = Object.entries(heightOverrides);
+    if (entries.length === 0) return baseHeights;
+    let patched = baseHeights;
+    for (const [index, height] of entries) {
+      const i = Number(index);
+      if (i < patched.length && patched[i] !== height) {
+        if (patched === baseHeights) patched = baseHeights.slice();
+        patched[i] = height;
+      }
+    }
+    return patched;
+  });
+
+  const layout = $derived(buildLayout(heights));
   const slices = $derived(visibleSlices(layout, scrollTop, viewportH, OVERSCAN_PX));
+
+  /**
+   * Rendered rows report their measured text height back (rAF-batched).
+   * Only divergences from the current layout height are recorded, so the
+   * estimate → measure → patch cycle converges instead of looping.
+   */
+  const pendingMeasurements = new Map<number, number>();
+  let measureRaf = 0;
+  function onRowMeasured(rowIndex: number, textHeight: number): void {
+    const snapped = Math.max(
+      ROW_HEIGHTS.line,
+      Math.round(textHeight / ROW_HEIGHTS.line) * ROW_HEIGHTS.line,
+    );
+    pendingMeasurements.set(rowIndex, snapped);
+    if (measureRaf) return;
+    measureRaf = requestAnimationFrame(() => {
+      measureRaf = 0;
+      let changed = false;
+      let next: Record<number, number> = heightOverrides;
+      let copied = false;
+      for (const [index, height] of pendingMeasurements) {
+        if (heights[index] !== height && heightOverrides[index] !== height) {
+          if (!copied) {
+            next = { ...heightOverrides };
+            copied = true;
+          }
+          next[index] = height;
+          changed = true;
+        }
+      }
+      pendingMeasurements.clear();
+      if (changed) heightOverrides = next;
+    });
+  }
+
+  // New rows (files/mode/wrap/width change) invalidate measured corrections.
+  $effect(() => {
+    void model;
+    void wrapCtx;
+    heightOverrides = {};
+  });
+
+  function toggleWrap(): void {
+    wrap = !wrap;
+    writeWrapPref(wrap);
+  }
+
+  // Palette command rides the bus; every mounted viewer flips its wrap.
+  $effect(() => onUiEvent("diff-toggle-wrap", toggleWrap));
 
   /**
    * Horizontal extent of the scroll content.
    *
-   * Split halves share the pane 50/50 and clip long lines — the layout is
-   * fully responsive and never grows a horizontal scrollbar. Unified fills
-   * the pane (`100%` floor) and scrolls only when the widest line genuinely
-   * exceeds it; the text width is measured in the rows' own monospace font
-   * (see textWidth.ts), and 8.75rem covers both gutters + the sign column +
-   * the text's right padding.
+   * Wrap on: fully responsive — rows wrap within the pane, never a
+   * horizontal scrollbar. Wrap off: lines keep their single visual row, so
+   * the content grows to the widest line and the viewport scrolls it — one
+   * shared horizontal scrollbar in unified mode, and one for BOTH split
+   * halves together (halves stay column-aligned; no per-row scrollbars).
+   * Widths are measured in the rows' own monospace font (textWidth.ts);
+   * the gutter constants come from wrapHeights.ts (kept in sync with
+   * DiffRow.svelte's CSS).
    */
-  const contentMinWidth = $derived(
-    mode === "unified"
-      ? `max(100%, calc(8.75rem + ${measureLineWidth(model.maxLineText)}px))`
-      : "100%",
-  );
+  const contentMinWidth = $derived.by(() => {
+    if (wrap) return "100%";
+    const widest = measureLineWidth(model.maxLineText);
+    if (mode === "unified") {
+      return `max(100%, calc(${GUTTER_PX.unified}px + ${widest}px))`;
+    }
+    // Both halves as wide as the widest line → the shared scrollbar serves
+    // either side.
+    return `max(100%, calc(${2 * GUTTER_PX.splitSide + 1}px + ${2 * widest}px))`;
+  });
 
   function toggleCollapse(path: string): void {
     collapsed[path] = !collapsed[path];
@@ -327,13 +422,15 @@
     viewportEl?.scrollTo(0, 0);
   });
 
-  // Viewport height via ResizeObserver (plus an immediate baseline read).
+  // Viewport size via ResizeObserver (plus an immediate baseline read).
   $effect(() => {
     const el = viewportEl;
     if (!el) return;
     viewportH = el.clientHeight;
+    viewportW = el.clientWidth;
     const ro = new ResizeObserver((entries) => {
       viewportH = entries[0]?.contentRect.height ?? el.clientHeight;
+      viewportW = entries[0]?.contentRect.width ?? el.clientWidth;
     });
     ro.observe(el);
     return () => ro.disconnect();
@@ -370,6 +467,17 @@
         aria-label={`Switch to ${mode === "split" ? "unified" : "split"} view`}
         title={`Current: ${mode} view — click to switch`}
       >{mode === "split" ? "Split" : "Unified"}</button>
+      <button
+        type="button"
+        class="mode-btn"
+        class:on={wrap}
+        aria-pressed={wrap}
+        onclick={toggleWrap}
+        aria-label="Wrap long lines"
+        title={wrap
+          ? "Long lines wrap — click to scroll instead"
+          : "Long lines scroll — click to wrap"}
+      >Wrap</button>
       <span class="stats">
         <span class="stat-files">{files.length} {files.length === 1 ? "file" : "files"}</span>
         <span class="stat-adds">+{model.totalAdditions}</span>
@@ -398,6 +506,10 @@
             {#each model.rows.slice(slice.firstRow, slice.firstRow + slice.count) as row, i (slice.firstRow + i)}
               <DiffRow
                 {row}
+                {wrap}
+                rowIndex={slice.firstRow + i}
+                heightPx={wrap ? heights[slice.firstRow + i] : undefined}
+                onMeasure={wrap ? onRowMeasured : undefined}
                 onToggleCollapse={toggleCollapse}
                 {onLoadImage}
                 onStageHunk={repoId && hunkStaging ? stageHunk : undefined}
@@ -477,6 +589,10 @@
   }
   .mode-btn:hover {
     background: var(--m3-surface-container-high, var(--m3-surface));
+  }
+  .mode-btn.on {
+    background: var(--m3-secondary-container, var(--m3-surface-container-high));
+    color: var(--m3-on-secondary-container, var(--m3-on-surface));
   }
   .mode-btn:focus-visible {
     outline: 2px solid var(--m3-primary);

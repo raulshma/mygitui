@@ -366,12 +366,6 @@ impl OpCtx {
     pub fn cancel_token(&self) -> Option<Arc<AtomicBool>> {
         self.cancel.clone()
     }
-
-    /// Repo + op identity (diagnostics, sub-wiring).
-    #[cfg_attr(not(test), allow(dead_code))]
-    pub fn ids(&self) -> (&str, &str) {
-        (&self.repo_id, &self.op_id)
-    }
 }
 
 /// Pure throttle decision: the first event always fires, subsequent ones

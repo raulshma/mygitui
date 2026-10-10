@@ -38,6 +38,7 @@ import type {
   ConflictFile,
   ConflictResolution,
   DiffSide,
+  EditorApp,
   FetchOptions,
   FileDiff,
   HookInfo,
@@ -1602,4 +1603,19 @@ export function openPopout(args: {
   title: string;
 }): Promise<void> {
   return call<void>("open_popout", args);
+}
+
+// ---------------------------------------------------------------------------
+// External apps ("Open with…" — src-tauri editors.rs).
+// ---------------------------------------------------------------------------
+
+/** Editors/apps available on this machine (Explorer/Finder always first). */
+export async function detectEditors(): Promise<EditorApp[]> {
+  if (!isTauri()) return [];
+  return call<EditorApp[]>("detect_editors", {});
+}
+
+/** Opens the repository root in the app with the given id. */
+export function openWith(repoRoot: string, appId: string): Promise<void> {
+  return call<void>("open_with", { repo_root: repoRoot, app_id: appId });
 }

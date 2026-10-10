@@ -1,8 +1,9 @@
 <script lang="ts">
   /**
    * One virtualized row of the diff (see rowModel.ts for the row kinds).
-   * Heights are inline from ROW_HEIGHTS so CSS can never disagree with the
-   * virtualizer's uniform-height buckets.
+   * Heights are inline — from ROW_HEIGHTS by default, or the viewer's
+   * wrap-aware estimate/correction via `heightPx` — so CSS can never
+   * disagree with the virtualizer's uniform-height buckets.
    *
    * Layout:
  *   split    [ old# | - | text ][ new# | + | text ]  (equal halves)
@@ -17,6 +18,13 @@
 
   let {
     row,
+    wrap = false,
+    /** Global row index (with `onMeasure`, for wrap-height correction). */
+    rowIndex = undefined,
+    /** Explicit row height (wrap mode); default = the fixed rowHeight(). */
+    heightPx = undefined,
+    /** Wrap mode: report this row's rendered text height (rAF-batched upstream). */
+    onMeasure = undefined,
     onToggleCollapse,
     onLoadImage,
     onStageHunk,
@@ -41,6 +49,10 @@
     onExplainHunk = undefined,
   }: {
     row: DiffRow;
+    wrap?: boolean;
+    rowIndex?: number;
+    heightPx?: number;
+    onMeasure?: (rowIndex: number, textHeight: number) => void;
     onToggleCollapse?: (path: string) => void;
     onLoadImage?: LoadImageFn;
     /** Stage/unstage this hunk. */
@@ -83,6 +95,28 @@
     if (lineIndex === null || !selectedAt) return false;
     if (row.kind !== "line" && row.kind !== "context" && row.kind !== "pair") return false;
     return selectedAt(row.fileIndex, row.hunkIndex, lineIndex);
+  }
+
+  /**
+   * Wrap-height correction: the row root's height is forced inline (the
+   * virtualizer's contract), so the natural height is the tallest `.txt`
+   * span. Reported upstream only in wrap mode (viewer gates the handler).
+   */
+  function measure(node: HTMLElement): { destroy: () => void } {
+    const report = (): void => {
+      // Re-checked per callback: the viewer passes undefined once wrap is
+      // off, but rows stay mounted and their observers keep firing.
+      if (!onMeasure || rowIndex === undefined) return;
+      let max = 0;
+      for (const el of node.querySelectorAll<HTMLElement>(".txt")) {
+        max = Math.max(max, el.offsetHeight);
+      }
+      if (max > 0) onMeasure(rowIndex, max);
+    };
+    const ro = new ResizeObserver(report);
+    ro.observe(node);
+    for (const el of node.querySelectorAll<HTMLElement>(".txt")) ro.observe(el);
+    return { destroy: () => ro.disconnect() };
   }
 </script>
 
@@ -192,7 +226,11 @@
        each side clips at the divider, so text never crosses into the other
        section. The empty sign spacer keeps text columns aligned with the
        pair rows directly above/below. -->
-  <div class="row line context" style:height={`${rowHeight(row)}px`}>
+  <div
+    class="row line context"
+    style:height={`${heightPx ?? rowHeight(row)}px`}
+    use:measure
+  >
     <div class="half" class:selected={selectedInRow(row.lineIndex)}>
       <button
         type="button"
@@ -205,7 +243,7 @@
         }}
       >{row.line.old_no ?? ""}</button>
       <span class="sign" aria-hidden="true"></span>
-      <span class="txt">{@render text(row.line)}</span>
+      <span class="txt" class:wrap>{@render text(row.line)}</span>
     </div>
     <div class="half right" class:selected={selectedInRow(row.lineIndex)}>
       <button
@@ -219,12 +257,16 @@
         }}
       >{row.line.new_no ?? ""}</button>
       <span class="sign" aria-hidden="true"></span>
-      <span class="txt">{@render text(row.line)}</span>
+      <span class="txt" class:wrap>{@render text(row.line)}</span>
     </div>
   </div>
 
 {:else if row.kind === "pair"}
-  <div class="row line pair" style:height={`${rowHeight(row)}px`}>
+  <div
+    class="row line pair"
+    style:height={`${heightPx ?? rowHeight(row)}px`}
+    use:measure
+  >
     <div
       class="half{row.left ? " del" : " filler"}"
       class:selected={row.left !== null && selectedInRow(row.leftIndex)}
@@ -241,7 +283,7 @@
           }}
         >{row.left.old_no ?? ""}</button>
         <span class="sign del" aria-hidden="true">−</span>
-        <span class="txt">{@render text(row.left)}</span>
+        <span class="txt" class:wrap>{@render text(row.left)}</span>
       {/if}
     </div>
     <div
@@ -260,7 +302,7 @@
           }}
         >{row.right.new_no ?? ""}</button>
         <span class="sign add" aria-hidden="true">+</span>
-        <span class="txt">{@render text(row.right)}</span>
+        <span class="txt" class:wrap>{@render text(row.right)}</span>
       {/if}
     </div>
   </div>
@@ -271,7 +313,8 @@
   <div
     class="row line single{isAdd ? " add" : isDel ? " del" : ""}"
     class:selected={selectedInRow(row.lineIndex)}
-    style:height={`${rowHeight(row)}px`}
+    style:height={`${heightPx ?? rowHeight(row)}px`}
+    use:measure
   >
     <button
       type="button"
@@ -294,7 +337,7 @@
       }}
     >{row.line.new_no ?? ""}</button>
     <span class="sign{isAdd ? " add" : isDel ? " del" : ""}" aria-hidden="true">{row.line.origin.trim()}</span>
-    <span class="txt">{@render text(row.line)}</span>
+    <span class="txt" class:wrap>{@render text(row.line)}</span>
   </div>
 
 {:else if row.kind === "binary"}
@@ -379,6 +422,14 @@
     min-width: 0;
     overflow: hidden;
     padding-right: 1rem;
+  }
+
+  /* Wrap mode (viewer's default): long lines fold inside the pane instead of
+     scrolling. break-all keeps the wrap estimate in wrapHeights.ts exact for
+     uniform-width glyphs (no word-boundary preference to diverge from it). */
+  .txt.wrap {
+    white-space: pre-wrap;
+    word-break: break-all;
   }
 
   /* ---- line coloring ------------------------------------------------------ */
