@@ -59,6 +59,7 @@ jobs:
       - name: Prepare updater config overlay
         id: updater-config
         if: env.TAURI_UPDATER_PUBKEY != ''
+        shell: bash
         run: |
           cat > updater-overlay.json <<EOF
           {
