@@ -71,6 +71,67 @@ describe("RecentRepoStore", () => {
     expect(list[0].lastOpened).toBe(clock.now());
   });
 
+  it("add() dedupes separator and case spellings of one Windows folder", () => {
+    const clock = fakeClock();
+    const store = new RecentRepoStore(memoryStorage(), clock.now);
+
+    store.add("C:/repos/Alpha");
+    const firstOpened = store.list()[0].lastOpened;
+    clock.tick();
+    store.add("C:\\repos\\alpha\\"); // same folder, dialog spelling
+
+    const list = store.list();
+    expect(list).toHaveLength(1);
+    expect(list[0].path).toBe("C:/repos/Alpha"); // first spelling is kept
+    expect(list[0].lastOpened).toBe(clock.now());
+    expect(list[0].lastOpened).toBeGreaterThan(firstOpened);
+  });
+
+  it("add() keeps POSIX paths case-sensitive", () => {
+    const clock = fakeClock();
+    const store = new RecentRepoStore(memoryStorage(), clock.now);
+
+    store.add("/repos/Alpha");
+    clock.tick();
+    store.add("/repos/alpha");
+
+    expect(paths(store.list())).toEqual(["/repos/alpha", "/repos/Alpha"]);
+  });
+
+  it("add() collapses \\\\?\\ canonical spellings", () => {
+    const store = new RecentRepoStore(memoryStorage(), fakeClock().now);
+
+    store.add("C:/repos/alpha");
+    store.add("\\\\?\\C:\\repos\\alpha");
+
+    expect(store.list()).toHaveLength(1);
+  });
+
+  it("remove() and togglePin() match canonical spellings", () => {
+    const store = new RecentRepoStore(memoryStorage(), fakeClock().now);
+    store.add("C:/repos/alpha");
+
+    store.togglePin("C:\\repos\\alpha");
+    expect(store.list()[0].pinned).toBe(true);
+
+    store.remove("C:\\repos\\alpha\\");
+    expect(store.list()).toEqual([]);
+  });
+
+  it("parse merges persisted separator duplicates, keeping newest spelling and pins", () => {
+    const polluted = memoryStorage({
+      [STORAGE_KEY]: JSON.stringify([
+        { path: "C:/repos/alpha", pinned: true, lastOpened: 100 },
+        { path: "C:\\repos\\alpha", pinned: false, lastOpened: 200 },
+      ]),
+    });
+    const store = new RecentRepoStore(polluted, fakeClock().now);
+
+    expect(store.list()).toEqual([
+      { path: "C:\\repos\\alpha", pinned: true, lastOpened: 200 },
+    ]);
+  });
+
   it("list() orders pinned entries first, then most recently opened", () => {
     const clock = fakeClock();
     const store = new RecentRepoStore(memoryStorage(), clock.now);
@@ -161,7 +222,7 @@ describe("RecentRepoStore", () => {
     });
     const store = new RecentRepoStore(partial);
     expect(paths(store.list())).toEqual(["C:/repos/ok", "C:/repos/dupe"]);
-    expect(store.list()[1].lastOpened).toBe(1);
+    expect(store.list()[1].lastOpened).toBe(2); // merged duplicate keeps newest
   });
 
   it("keeps working when no storage is available", () => {

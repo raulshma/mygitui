@@ -21,6 +21,23 @@ export interface StorageLike {
 
 const STORAGE_KEY = "mygitui.recent-repos";
 
+/**
+ * Canonical form used to compare repository paths. Windows lets the same
+ * folder arrive with different spellings — folder dialogs yield
+ * `C:\repos\alpha` while typed or dragged paths yield `C:/repos/alpha` —
+ * so comparison folds `\\?\` prefixes, backslashes and trailing
+ * separators, and lowercases Windows-shaped paths (drive letter or UNC),
+ * whose filesystems are case-insensitive. POSIX paths keep their case.
+ */
+function canonicalKey(path: string): string {
+  const windowsish = /^[a-z]:[\\/]/i.test(path) || path.startsWith("\\\\");
+  const stripped = path
+    .replace(/^\\\\\?\\/, "")
+    .replace(/[\\/]+$/, "")
+    .replace(/\\/g, "/");
+  return windowsish ? stripped.toLowerCase() : stripped;
+}
+
 /** Returns `localStorage` when available, else `null` (never throws). */
 function defaultStorage(): StorageLike | null {
   try {
@@ -44,20 +61,33 @@ function parseEntries(raw: string | null): RecentRepo[] {
   if (!Array.isArray(parsed)) return [];
 
   const entries: RecentRepo[] = [];
-  const seen = new Set<string>();
+  const byKey = new Map<string, RecentRepo>();
   for (const item of parsed) {
     if (typeof item !== "object" || item === null) continue;
     const { path, pinned, lastOpened } = item as Record<string, unknown>;
-    if (typeof path !== "string" || path === "" || seen.has(path)) continue;
-    seen.add(path);
-    entries.push({
+    if (typeof path !== "string" || path === "") continue;
+    const entry: RecentRepo = {
       path,
       pinned: pinned === true,
       lastOpened:
         typeof lastOpened === "number" && Number.isFinite(lastOpened)
           ? lastOpened
           : 0,
-    });
+    };
+    // Collapse separator/case variants of one folder that older builds
+    // stored side by side: keep the newest spelling, OR the pins.
+    const key = canonicalKey(path);
+    const merged = byKey.get(key);
+    if (merged === undefined) {
+      byKey.set(key, entry);
+      entries.push(entry);
+    } else {
+      merged.pinned = merged.pinned || entry.pinned;
+      if (entry.lastOpened > merged.lastOpened) {
+        merged.lastOpened = entry.lastOpened;
+        merged.path = entry.path;
+      }
+    }
   }
   return entries;
 }
@@ -76,10 +106,16 @@ export class RecentRepoStore {
     this.entries = parseEntries(storage?.getItem(STORAGE_KEY) ?? null);
   }
 
-  /** Adds (or re-touches) a repository path. Dedupes by path. */
+  /**
+   * Adds (or re-touches) a repository path. Dedupes by canonical path, so
+   * separator/case spellings of one folder stay a single entry.
+   */
   add(path: string): void {
     if (typeof path !== "string" || path === "") return;
-    const existing = this.entries.find((entry) => entry.path === path);
+    const key = canonicalKey(path);
+    const existing = this.entries.find(
+      (entry) => canonicalKey(entry.path) === key,
+    );
     if (existing) {
       existing.lastOpened = this.now();
     } else {
@@ -88,9 +124,12 @@ export class RecentRepoStore {
     this.persist();
   }
 
-  /** Removes a repository path from the list. */
+  /** Removes a repository path from the list (matched canonically). */
   remove(path: string): void {
-    this.entries = this.entries.filter((entry) => entry.path !== path);
+    const key = canonicalKey(path);
+    this.entries = this.entries.filter(
+      (entry) => canonicalKey(entry.path) !== key,
+    );
     this.persist();
   }
 
@@ -107,7 +146,8 @@ export class RecentRepoStore {
 
   /** Flips the pinned flag of a repository path (no-op when unknown). */
   togglePin(path: string): void {
-    const entry = this.entries.find((e) => e.path === path);
+    const key = canonicalKey(path);
+    const entry = this.entries.find((e) => canonicalKey(e.path) === key);
     if (!entry) return;
     entry.pinned = !entry.pinned;
     this.persist();
