@@ -1521,3 +1521,48 @@ fn diff_index_against_commit_shows_staged_vs_target() {
         .unwrap();
     assert!(diff.is_empty());
 }
+
+#[test]
+fn log_keeps_merged_branch_line_under_its_merge() {
+    // git --topo-order emits a merged branch's line directly under the
+    // merge, even when the first-parent line carries newer timestamps.
+    // libgit2's TIME|TOPOLOGICAL interleaved the lines (newest-ready pop
+    // first), which tangling the commit-graph lanes.
+    let temp = TempRepo::new("log-line-grouping");
+    let repo = &temp.repo;
+
+    let tree_oid = repo.index().expect("index").write_tree().expect("tree");
+    let tree = repo.find_tree(tree_oid).expect("find tree");
+    let commit_at = |message: &str, time: i64, parents: &[&git2::Commit]| {
+        let sig =
+            git2::Signature::new("T", "t@test.local", &git2::Time::new(time, 0)).expect("sig");
+        repo.commit(None, &sig, &sig, message, &tree, parents)
+            .expect("commit")
+    };
+    let find = |oid: &git2::Oid| repo.find_commit(*oid).expect("find commit");
+
+    let a = commit_at("base", 100, &[]);
+    let fix = commit_at("fix", 200, &[&find(&a)]);
+    // Newer than the fix branch: the trap that made libgit2 pop the
+    // mainline before the merged line.
+    let mainline = commit_at("main work", 300, &[&find(&a)]);
+    let merge = commit_at("merge", 400, &[&find(&mainline), &find(&fix)]);
+
+    let filter = LogFilter {
+        refs: vec![merge.to_string()],
+        ..Default::default()
+    };
+    let (page, next) = ENGINE.log(repo, &filter, 10, None).expect("log");
+    assert!(next.is_none());
+    let shas: Vec<String> = page.iter().map(|c| c.sha.clone()).collect();
+    assert_eq!(
+        shas,
+        vec![
+            merge.to_string(),
+            fix.to_string(),      // merged line directly under its merge
+            mainline.to_string(), // first-parent line resumes after
+            a.to_string(),
+        ],
+        "unexpected order: {shas:?}"
+    );
+}

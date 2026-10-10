@@ -4,10 +4,9 @@
 //! [`RepoManager`] owns one [`RepoHandle`] per open repo tab. A handle keeps
 //! the `git2::Repository` opened once (locked per engine call — git2's
 //! `Repository` is `Send` but not `Sync`), the engine instance, the bumpable
-//! generation counter the FS watcher advances, the graph [`LaneState`] used
-//! for log-stream continuation, and cancellation slots for the active
-//! log/file-history streams (a new stream for the same repo+kind cancels the
-//! previous one).
+//! generation counter the FS watcher advances, and cancellation slots for the
+//! active log/file-history streams (a new stream for the same repo+kind
+//! cancels the previous one).
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -20,7 +19,6 @@ use tauri::Emitter;
 
 use crate::engine::git_engine::{EngineError, EngineResult, GitEngine, GitEngineM12, GitEngineM3};
 use crate::engine::types::{RepoId, RepoInfo};
-use crate::graph::types::LaneState;
 use crate::ops::OpQueue;
 use crate::watcher::{self, RepoWatcher};
 
@@ -100,8 +98,6 @@ pub struct RepoHandle {
     /// M2: serial op queue for mutations/net ops (contracts.md M2). M1
     /// read commands bypass it and share the `repo` mutex instead.
     ops: OpQueue,
-    /// Graph lane layout state carried between log-stream pages.
-    pub lanes: Mutex<LaneState>,
     /// Active log stream; a new request cancels the previous.
     log_stream: Mutex<Option<Arc<StreamHandle>>>,
     /// Active file-history stream; independent of `log_stream`.
@@ -274,7 +270,6 @@ impl RepoManager {
             engine: default_engine(),
             m3: m3_engine(),
             m12: m12_engine(),
-            lanes: Mutex::new(LaneState::default()),
             log_stream: Mutex::new(None),
             history_stream: Mutex::new(None),
             closed: AtomicBool::new(false),

@@ -206,7 +206,7 @@ pub fn repo_log_stream(
     let token = handle.begin_log_stream();
     std::thread::Builder::new()
         .name(format!("log-stream-{}", repo_id.0))
-        .spawn(move || stream_log(handle, filter, on_page, token, false))
+        .spawn(move || stream_log(handle, filter, on_page, token))
         .map_err(|e| format!("failed to spawn log stream: {e}"))?;
     Ok(())
 }
@@ -228,7 +228,7 @@ pub fn repo_file_history(
     let token = handle.begin_history_stream();
     std::thread::Builder::new()
         .name(format!("history-stream-{}", repo_id.0))
-        .spawn(move || stream_log(handle, filter, on_page, token, true))
+        .spawn(move || stream_log(handle, filter, on_page, token))
         .map_err(|e| format!("failed to spawn history stream: {e}"))?;
     Ok(())
 }
@@ -241,13 +241,13 @@ fn stream_log(
     filter: LogFilter,
     on_page: Channel<LogPage>,
     token: Arc<StreamHandle>,
-    history: bool,
 ) {
     let start_generation = handle.generation();
     let mut cursor: Option<String> = None;
-    // File history is an independent view with its own lanes; the main log
-    // continues the repo's shared LaneState across pages.
-    let mut local_lanes = history.then(types::LaneState::default);
+    // Lane state belongs to this stream: preserve it across its pages, but
+    // never let a restarted or filtered stream inherit lanes from its
+    // predecessor.
+    let mut lanes = types::LaneState::default();
 
     loop {
         if token.is_cancelled() || handle.is_closed() {
@@ -275,13 +275,7 @@ fn stream_log(
         };
         let (commits, next_cursor) = page;
 
-        let rows = match local_lanes.as_mut() {
-            Some(lanes) => types::layout_page(&commits, lanes),
-            None => {
-                let mut lanes = handle.lanes.lock();
-                types::layout_page(&commits, &mut lanes)
-            }
-        };
+        let rows = types::layout_page(&commits, &mut lanes);
 
         let done = next_cursor.is_none();
         if on_page

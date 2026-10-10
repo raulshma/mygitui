@@ -10,7 +10,7 @@ use std::path::Path;
 
 use git2::{
     BlameOptions, Branch, Commit, Delta, Diff, DiffFindOptions, DiffOptions, Oid, Patch,
-    Repository, RepositoryState, Signature, Sort, StatusOptions,
+    Repository, RepositoryState, Signature, StatusOptions,
 };
 use imara_diff::{Algorithm, Diff as WordDiff, InternedInput, TokenSource};
 
@@ -916,48 +916,116 @@ impl GitEngine for Libgit2Engine {
             .transpose()?;
 
         let decos = decorations(repo)?;
-        let mut walk = repo.revwalk()?;
-        // Date-prioritized topological order (git `--topo-order`): children
-        // always precede parents, otherwise newest commits pop first. Plain
-        // TOPOLOGICAL lets stale branch tips surface above HEAD.
-        walk.set_sorting(Sort::TIME | Sort::TOPOLOGICAL)?;
 
-        let mut pushed: HashSet<Oid> = HashSet::new();
-        if filter.refs.is_empty() {
-            if let Ok(head) = repo.head() {
-                if let Some(oid) = head.target() {
-                    walk.push(oid)?;
-                    pushed.insert(oid);
+        // Collect the reachable DAG, then order it git `--topo-order` style
+        // below. libgit2's TOPOLOGICAL|TIME pops the newest ready commit,
+        // which interleaves history lines: a merged branch tip lands under
+        // the NEXT mainline commit instead of directly under its merge, and
+        // the commit-graph curves tangle. git keeps each line contiguous;
+        // we reproduce that with in-degree counting and a LIFO ready stack.
+        let mut heads: Vec<Oid> = Vec::new();
+        {
+            let mut pushed: HashSet<Oid> = HashSet::new();
+            if filter.refs.is_empty() {
+                if let Ok(head) = repo.head() {
+                    if let Some(oid) = head.target() {
+                        if pushed.insert(oid) {
+                            heads.push(oid);
+                        }
+                    }
                 }
-            }
-            for reference in repo.references()?.flatten() {
-                // Stash commits live in the Stash panel: interleaving the
-                // merge-shaped WIP/index/untracked triples here derails the
-                // commit-graph lanes (their base commit is often weeks old,
-                // holding a lane open across the whole graph).
-                if reference
-                    .name()
-                    .is_ok_and(|n| n.starts_with("refs/stash"))
-                {
-                    continue;
+                for reference in repo.references()?.flatten() {
+                    // Stash commits live in the Stash panel: interleaving the
+                    // merge-shaped WIP/index/untracked triples here derails
+                    // the commit-graph lanes (their base commit is often
+                    // weeks old, holding a lane open across the whole graph).
+                    if reference
+                        .name()
+                        .is_ok_and(|n| n.starts_with("refs/stash"))
+                    {
+                        continue;
+                    }
+                    if let Ok(commit) = reference.peel_to_commit() {
+                        let oid = commit.id();
+                        if pushed.insert(oid) {
+                            heads.push(oid);
+                        }
+                    }
                 }
-                if let Ok(commit) = reference.peel_to_commit() {
-                    let oid = commit.id();
+            } else {
+                for spec in &filter.refs {
+                    let oid = resolve_commit(repo, spec)?.id();
                     if pushed.insert(oid) {
-                        walk.push(oid)?;
+                        heads.push(oid);
                     }
                 }
             }
-        } else {
-            for spec in &filter.refs {
-                let oid = resolve_commit(repo, spec)?.id();
-                if pushed.insert(oid) {
-                    walk.push(oid)?;
-                }
+        }
+        if heads.is_empty() {
+            return Ok((Vec::new(), None));
+        }
+
+        let mut walk = repo.revwalk()?;
+        for oid in &heads {
+            walk.push(*oid)?;
+        }
+        let mut parents_of: HashMap<Oid, Box<[Oid]>> = HashMap::with_capacity(heads.len());
+        for oid in walk {
+            let oid = oid?;
+            let commit = repo.find_commit(oid)?;
+            parents_of.insert(oid, commit.parent_ids().collect());
+        }
+
+        // In-degree = number of unemitted children.
+        let mut indegree: HashMap<Oid, u32> = HashMap::with_capacity(parents_of.len());
+        for parents in parents_of.values() {
+            for parent in parents.iter() {
+                *indegree.entry(*parent).or_insert(0) += 1;
             }
         }
-        if pushed.is_empty() {
-            return Ok((Vec::new(), None));
+
+        // Seed the ready stack newest-first (heads unsorted would emit stale
+        // branch tips before HEAD). Sort heads by committer time descending,
+        // then push reversed so the newest sits on top. Heads that are
+        // ancestors of other heads are not ready yet; they enter through
+        // the in-degree path.
+        let mut ready_heads: Vec<(i64, Oid)> = heads
+            .iter()
+            .map(|oid| {
+                let when = repo
+                    .find_commit(*oid)
+                    .map(|c| c.committer().when().seconds())
+                    .unwrap_or(i64::MIN);
+                (when, *oid)
+            })
+            .collect();
+        ready_heads.sort_unstable_by(|a, b| b.0.cmp(&a.0));
+        let mut ready: Vec<Oid> = ready_heads
+            .into_iter()
+            .rev()
+            .map(|(_, oid)| oid)
+            .filter(|oid| indegree.get(oid).is_none_or(|d| *d == 0))
+            .collect();
+
+        let mut ordered: Vec<Oid> = Vec::with_capacity(parents_of.len());
+        while let Some(oid) = ready.pop() {
+            ordered.push(oid);
+            if let Some(parents) = parents_of.get(&oid) {
+                // Parents pushed in order: for a merge, the later parent
+                // (the merged branch tip) lands on top, so its line emits
+                // right under the merge before the first parent's line
+                // resumes — git's "keep lines together" behavior.
+                for parent in parents.iter() {
+                    let Some(degree) = indegree.get_mut(parent) else {
+                        continue;
+                    };
+                    *degree -= 1;
+                    if *degree == 0 {
+                        indegree.remove(parent);
+                        ready.push(*parent);
+                    }
+                }
+            }
         }
 
         let text = filter
@@ -985,8 +1053,7 @@ impl GitEngine for Libgit2Engine {
         // keeps streaming pages, so the budget applies per page request).
         let mut pickaxe_examined = 0usize;
 
-        for oid in walk.by_ref() {
-            let oid = oid?;
+        for oid in ordered {
             if !cursor_seen {
                 let hex = oid.to_string();
                 let matched = after

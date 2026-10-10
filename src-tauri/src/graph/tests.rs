@@ -8,12 +8,12 @@
 //! * roots free their lane; freed lanes are reused before extending
 //! * paged layout with a shared `LaneState` is byte-identical to single-page
 //! * every distinct parent receives an edge ending on the parent's row lane
-//! * every open lane carries an edge into the next row (pass-through
-//!   verticals), so branch lines never break on rows they pass by
+//! * every pre-existing open lane carries an edge through the row unless an
+//!   edge leaves that lane; new parent lanes are carried by their opening edge
 //! * edges are unique, sorted, originate at the row's node lane (pass-throughs
 //!   excepted: `from == to`), and every
 //!   lane they touch stays within `lane_count` from source row to target row
-//! * `lanes` vector never exceeds the peak number of concurrently open lanes
+//! * `lanes` vector never exceeds the peak graph width
 
 use std::collections::HashMap;
 
@@ -114,7 +114,8 @@ fn diamond_branch_and_merge() {
     assert_eq!(rows[1].lane_count, 2); // C still passes through lane 1
 
     assert_eq!(rows[2].lane, 1); // C gets lane 1
-    assert_eq!(rows[2].edges, vec![e(1, 0)]); // converges onto D's lane
+    // C converges onto D's lane while B's existing line continues vertically.
+    assert_eq!(rows[2].edges, vec![e(0, 0), e(1, 0)]);
     assert_eq!(rows[2].lane_count, 2);
 
     assert_eq!(rows[3].lane, 0); // D ends in lane 0
@@ -204,9 +205,9 @@ fn two_heads_converge_onto_same_parent_lane() {
     assert_eq!(rows[0].lane, 0);
     assert_eq!(rows[0].edges, vec![e(0, 0)]); // M -> P in lane 0
     assert_eq!(rows[1].lane, 1);
-    // N's row carries its own continuation (Q, lane 1) plus the convergence
-    // onto the parent lane P already occupies (lane 0).
-    assert_eq!(rows[1].edges, vec![e(1, 0), e(1, 1)]);
+    // N's row carries its own continuation (Q, lane 1), converges onto P's
+    // lane, and keeps M's existing P line running vertically.
+    assert_eq!(rows[1].edges, vec![e(0, 0), e(1, 0), e(1, 1)]);
     assert_eq!(rows[2].lane, 1); // Q inherits N's lane
     assert_eq!(rows[3].lane, 0); // P stays in M's lane
     assert!(all_lanes_free(&state));
@@ -230,6 +231,45 @@ fn pass_through_bridges_rows_before_a_deferred_parent() {
 
     assert_eq!(rows[2].lane, 0); // B lands where the line pointed
     assert!(rows[2].edges.is_empty());
+    assert!(all_lanes_free(&state));
+}
+
+#[test]
+fn merge_rehomes_first_parent_claimed_by_a_side_lane() {
+    // LensCast shape: the merged tip renders directly under its merge and
+    // claims the shared base one lane to the right; when the mainline merge
+    // then emits, the base re-homes onto the mainline lane and the side
+    // line bends in — the mainline stays straight below the merges.
+    let commits = vec![
+        mk("M5", &["M4", "TIP"]), // opens lane 1 for TIP
+        mk("TIP", &["BASE"]),     // claims BASE in lane 1
+        mk("M4", &["BASE", "EF"]), // first parent BASE sits right of lane 0
+        mk("EF", &["BASE"]),
+        mk("BASE", &[]),
+    ];
+    let mut state = LaneState::default();
+    let rows = layout_page(&commits, &mut state);
+
+    assert_eq!(rows[0].lane, 0);
+    assert_eq!(rows[0].edges, vec![e(0, 0), e(0, 1)]);
+
+    assert_eq!(rows[1].lane, 1);
+    // BASE pending in lane 1 plus the lane-0 pass-through (M4 waits below).
+    assert_eq!(rows[1].edges, vec![e(0, 0), e(1, 1)]);
+
+    // M4 keeps lane 0 for BASE (bending TIP's claim in). Lane 1 is reserved
+    // for that bend on this row, so EF opens lane 2 instead of crossing it.
+    assert_eq!(rows[2].lane, 0);
+    assert_eq!(rows[2].edges, vec![e(0, 0), e(0, 2), e(1, 0)]);
+    assert_eq!(rows[2].lane_count, 3);
+
+    assert_eq!(rows[3].lane, 2);
+    // BASE's mainline also remains live through EF's row, so both paths reach
+    // the BASE node on the following row.
+    assert_eq!(rows[3].edges, vec![e(0, 0), e(2, 0)]);
+
+    assert_eq!(rows[4].lane, 0); // mainline continues where it always was
+    assert!(rows[4].edges.is_empty());
     assert!(all_lanes_free(&state));
 }
 
@@ -321,14 +361,21 @@ fn fuzz_random_dags_hold_all_invariants() {
             }
             for edge in &row.edges {
                 // Wiring edges originate at the node lane; pass-throughs are
-                // pure verticals in the lane they keep alive.
+                // pure verticals in the lane they keep alive; re-home bends
+                // carry a side lane's claim leftward onto the node lane.
                 assert!(
-                    edge.from == row.lane || edge.from == edge.to,
+                    edge.from == row.lane
+                        || edge.from == edge.to
+                        || (edge.to == row.lane && edge.from > row.lane),
                     "dag {dag}: edge from foreign lane"
                 );
                 assert!(
                     usize::from(edge.to) < usize::from(row.lane_count),
                     "dag {dag}: edge target exceeds lane_count"
+                );
+                assert!(
+                    usize::from(edge.from) < usize::from(row.lane_count),
+                    "dag {dag}: edge source exceeds lane_count"
                 );
             }
 
@@ -342,20 +389,47 @@ fn fuzz_random_dags_hold_all_invariants() {
                     .get(parent)
                     .unwrap_or_else(|| panic!("dag {dag}: parent {parent} missing from walk"));
                 assert!(j > i, "dag {dag}: topo order violated");
-                let edge = e(row.lane, parent_lane);
+
+                // A line toward the parent must depart this row and stay
+                // traceable down to the parent's node. Track a candidate
+                // lane set: re-homes bend lines mid-flight, so a fixed edge
+                // (node lane -> parent lane) is not required. (Lane width
+                // along the way is already asserted per row above.)
+                let depart = |r: &GraphRow| {
+                    r.edges
+                        .iter()
+                        .filter(|edge| edge.from == r.lane)
+                        .map(|edge| edge.to)
+                        .collect::<Vec<_>>()
+                };
+                let mut live = depart(&rows_a[i]);
                 assert!(
-                    row.edges.contains(&edge),
-                    "dag {dag}: missing edge {edge:?}"
+                    !live.is_empty(),
+                    "dag {dag}: no line departs row {i} toward {parent}"
                 );
-                // The target lane must stay sized from this row to the
-                // parent's row (pass-throughs included).
-                for mid in &rows_a[i..=j] {
+                for (k, mid) in rows_a[i + 1..j].iter().enumerate() {
+                    // A live line survives any edge touching its lane: a
+                    // pass-through carries it (from == lane), a convergence
+                    // or re-home edge arrives into it (to == lane).
+                    let mut next: Vec<u16> = Vec::new();
+                    for edge in &mid.edges {
+                        if live.contains(&edge.from) || live.contains(&edge.to) {
+                            next.push(edge.to);
+                        }
+                    }
+                    next.sort_unstable();
+                    next.dedup();
+                    live = next;
                     assert!(
-                        usize::from(edge.to) < usize::from(mid.lane_count),
-                        "dag {dag}: lane {} undersized between rows {i}..{j}",
-                        edge.to
+                        !live.is_empty(),
+                        "dag {dag}: parent {parent} line lost at row {}",
+                        i + 1 + k
                     );
                 }
+                assert!(
+                    live.contains(&parent_lane),
+                    "dag {dag}: parent {parent} renders at lane {parent_lane}, line ends at {live:?}"
+                );
             }
         }
     }
