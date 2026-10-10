@@ -19,6 +19,7 @@ mod mergetool;
 mod opencode;
 mod ops;
 mod popout;
+mod process;
 #[cfg(test)]
 mod prop_tests;
 mod pty;

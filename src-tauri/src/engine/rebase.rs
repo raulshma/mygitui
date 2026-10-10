@@ -381,13 +381,13 @@ fn run_exec(repo: &Repository, command: &str) -> Result<(), String> {
         .ok_or_else(|| "bare repository has no workdir".to_owned())?;
     #[cfg(windows)]
     let mut cmd = {
-        let mut cmd = std::process::Command::new("cmd");
+        let mut cmd = crate::process::command("cmd");
         cmd.arg("/c").arg(command);
         cmd
     };
     #[cfg(not(windows))]
     let mut cmd = {
-        let mut cmd = std::process::Command::new("sh");
+        let mut cmd = crate::process::command("sh");
         cmd.arg("-c").arg(command);
         cmd
     };

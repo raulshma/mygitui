@@ -351,7 +351,7 @@ pub fn run_action(
 pub fn build_shell_command(command: &str) -> std::process::Command {
     #[cfg(windows)]
     {
-        let mut cmd = std::process::Command::new("cmd");
+        let mut cmd = crate::process::command("cmd");
         cmd.args(["/C", command]);
         cmd
     }

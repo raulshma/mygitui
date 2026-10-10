@@ -93,7 +93,7 @@ pub fn repo_health(workdir: &Path, git_dir: &Path) -> RepoHealth {
 
 /// Sanitized `git <args>` runner (shared rules with cli.rs).
 pub fn git_run(workdir: &Path, args: &[&str]) -> Result<String, String> {
-    let mut cmd = std::process::Command::new("git");
+    let mut cmd = crate::process::command("git");
     cmd.current_dir(workdir).args(args);
     crate::cli::apply_sanitized_env(&mut cmd);
     let Ok(output) = cmd.output() else {
@@ -197,7 +197,7 @@ pub fn read_fsck_cache(git_dir: &Path) -> Option<FsckCache> {
 /// arrive on either stream, so both are parsed; a run whose output carries
 /// no dangling lines still refreshes the cache (zero is an answer).
 pub fn fsck_run(workdir: &Path, git_dir: &Path) -> Result<(u64, Vec<String>), String> {
-    let mut cmd = std::process::Command::new("git");
+    let mut cmd = crate::process::command("git");
     cmd.current_dir(workdir).args(MaintenanceOp::Fsck.args());
     crate::cli::apply_sanitized_env(&mut cmd);
     let output = cmd

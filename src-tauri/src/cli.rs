@@ -117,7 +117,7 @@ pub(crate) fn build_commit_args(message_file: &str, opts: &CommitOptions) -> Vec
 /// returns trimmed stdout; failure returns stderr, falling back to stdout
 /// (some failures, e.g. "nothing to commit", print there).
 fn git(workdir: &Path, args: &[String]) -> Result<String, String> {
-    let mut cmd = Command::new("git");
+    let mut cmd = crate::process::command("git");
     cmd.current_dir(workdir).args(args);
     apply_sanitized_env(&mut cmd);
     let output = cmd

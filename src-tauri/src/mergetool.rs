@@ -10,7 +10,6 @@
 //! and offers to stage the workdir bytes via `conflict_resolve`.
 
 use std::path::Path;
-use std::process::Command;
 
 use git2::Repository;
 
@@ -65,7 +64,7 @@ pub fn mergetool_run(
     args.push("--".to_string());
     args.push(path.to_string());
 
-    let mut cmd = Command::new("git");
+    let mut cmd = crate::process::command("git");
     cmd.current_dir(workdir).args(&args);
     crate::cli::apply_sanitized_env(&mut cmd);
     let output = cmd
@@ -111,7 +110,7 @@ pub fn tag_sign_via_cli(
         if let Some(target) = target.filter(|t| !t.trim().is_empty()) {
             args.push(target.to_string());
         }
-        let mut cmd = Command::new("git");
+        let mut cmd = crate::process::command("git");
         cmd.current_dir(workdir).args(&args);
         crate::cli::apply_sanitized_env(&mut cmd);
         let output = cmd

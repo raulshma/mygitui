@@ -12,6 +12,7 @@
 //! here.
 
 use std::path::Path;
+#[cfg(test)]
 use std::process::Command;
 
 use git2::Repository;
@@ -163,7 +164,7 @@ fn run_git(repo: &Repository, args: &[String]) -> EngineResult<String> {
 /// Spawn variant that keeps both streams and the exit status: signature
 /// verification FAILS on purpose all the time (that is its data).
 fn run_git_captured(repo: &Repository, args: &[String]) -> (bool, String) {
-    let mut cmd = Command::new("git");
+    let mut cmd = crate::process::command("git");
     cmd.current_dir(workdir(repo).unwrap_or_else(|_| Path::new(".")));
     cmd.args(args);
     crate::cli::apply_sanitized_env(&mut cmd);

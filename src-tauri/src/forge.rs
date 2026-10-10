@@ -20,7 +20,7 @@
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
@@ -170,7 +170,7 @@ pub fn run_program(
     args: &[String],
     timeout: Duration,
 ) -> ProcOutcome {
-    let mut cmd = Command::new(program);
+    let mut cmd = crate::process::command(program);
     cmd.args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())

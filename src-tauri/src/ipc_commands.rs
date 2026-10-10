@@ -1828,17 +1828,15 @@ pub async fn os_accent_color() -> Result<Option<String>, String> {
 
 #[cfg(windows)]
 fn windows_accent_color() -> Option<String> {
-    use std::os::windows::process::CommandExt as _;
     // `reg query` output line: "    AccentColor    REG_DWORD    0xff9966dd"
     // The DWORD is 0xAABBGGRR — swizzle to #RRGGBB.
-    let output = std::process::Command::new("reg")
+    let output = crate::process::command("reg")
         .args([
             "query",
             r"HKCU\Software\Microsoft\Windows\DWM",
             "/v",
             "AccentColor",
         ])
-        .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
         .output()
         .ok()?;
     let text = String::from_utf8_lossy(&output.stdout);

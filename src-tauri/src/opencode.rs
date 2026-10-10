@@ -138,11 +138,11 @@ fn build_command(binary: &Path, args: &[&str]) -> Command {
             .extension()
             .is_some_and(|ext| ext.eq_ignore_ascii_case("bat") || ext.eq_ignore_ascii_case("cmd"));
     let mut command = if needs_shell {
-        let mut cmd = Command::new("cmd");
+        let mut cmd = crate::process::command("cmd");
         cmd.arg("/C").arg(binary);
         cmd
     } else {
-        Command::new(binary)
+        crate::process::command(binary)
     };
     command.args(args);
     apply_sanitized_env(&mut command);
@@ -166,7 +166,7 @@ fn kill_child(child: &mut Child) {
     #[cfg(windows)]
     {
         let pid = child.id();
-        let _ = Command::new("taskkill")
+        let _ = crate::process::command("taskkill")
             .args(["/PID", &pid.to_string(), "/T", "/F"])
             .stdout(Stdio::null())
             .stderr(Stdio::null())
