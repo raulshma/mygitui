@@ -7,7 +7,11 @@
 //! Cases are deliberately bounded (≤ 40 lines, ≤ 6 files) so the whole
 //! suite stays fast; strategies draw from small alphabets to force
 //! duplicate lines / repeated hunks, which is where line-number arithmetic
-//! tends to break.
+//! tends to break. Shared pools mean two draws CAN coincide (e.g. the new
+//! text equals the base text) — any property that only makes sense for
+//! distinct inputs must `prop_assume!` that up front. Failing cases append
+//! their shrunk seed to `proptest-regressions/` (committed), which every
+//! later run replays before novel cases.
 
 use std::path::{Path, PathBuf};
 use std::thread;

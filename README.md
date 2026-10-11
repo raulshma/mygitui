@@ -25,12 +25,35 @@ npm run tauri dev
 | `npm run check`            | Type check (svelte-check)                     |
 | `npm run build`            | Production frontend build                     |
 | `cargo fmt --check`        | Rust format check (run in `src-tauri/`)       |
-| `cargo clippy -- -D warnings` | Rust lint, warnings fatal (in `src-tauri/`) |
+| `cargo clippy --all-targets -- -D warnings` | Rust lint, warnings fatal (in `src-tauri/`) |
 | `cargo test`               | Rust tests (in `src-tauri/`)                  |
 
 CI (`.github/workflows/`) runs the frontend suite on Ubuntu and the Rust
 fmt/clippy/test suite across Ubuntu/Windows/macOS on every push to `main` and
-every PR.
+every PR. The `fast-checks` job runs fmt + clippy first so lint mistakes get
+one clear, fast failure; the 3-OS matrix covers tests (and per-OS clippy,
+since lints can be cfg-dependent). Linux tests run inside a private
+D-Bus session with an unlocked gnome-keyring so the Secret Service keyring
+path is exercised, not skipped.
+
+## Pre-push hook & test conventions
+
+`npm install` wires a `pre-push` git hook (`git config core.hooksPath hooks`)
+that runs the same checks as CI locally — fmt, clippy, cargo test,
+svelte-check, vitest — so failures surface in seconds instead of as a red
+run on `main`. Bypass in an emergency with `git push --no-verify`.
+
+Two conventions keep the 3-OS test matrix green:
+
+- **Tests touching a platform facility** (OS keyring, keychain, git
+  credential helpers) must degrade gracefully when it's absent — probe and
+  skip, never unwrap. See `backend_available()` in
+  `src-tauri/src/keyring_store.rs` for the pattern.
+- **Property tests**: strategies sharing a line pool can draw equal inputs
+  (no diff to stage, nothing to restore) — guard with `prop_assume!`. When a
+  property test fails anywhere, proptest appends the shrunk seed to
+  `src-tauri/proptest-regressions/`; that file is committed and every future
+  run replays those seeds, so a found bug stays caught.
 
 ## Test fixtures
 

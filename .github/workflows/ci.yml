@@ -46,8 +46,50 @@ jobs:
       - name: Playwright smoke
         run: npx playwright install --with-deps chromium && npm run test:e2e
 
+  # Cheap, platform-independent Rust checks on one runner, so fmt/lint
+  # mistakes surface in a single fast job with one clear log instead of
+  # three matrix runners each discovering the same failure.
+  fast-checks:
+    name: Rust (fmt + clippy)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: src-tauri
+    steps:
+      - uses: actions/checkout@v4
+
+      # Clippy compiles build scripts of the *-sys crates, which need the
+      # GTK/WebKit dev packages even for a check-only build.
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev librsvg2-dev libssl-dev pkg-config patchelf
+
+      - name: Setup Rust (stable + rustfmt + clippy)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: cargo-${{ runner.os }}-${{ hashFiles('src-tauri/Cargo.lock') }}
+
+      - name: Format check
+        run: cargo fmt --check
+
+      # `--all-targets` covers test/bench code too; `cargo test` compiling
+      # later would otherwise be where test-only lints surface.
+      - name: Lint (clippy, warnings are errors)
+        run: cargo clippy --all-targets -- -D warnings
+
   rust:
     name: Rust (${{ matrix.os }})
+    needs: fast-checks
     strategy:
       fail-fast: false
       matrix:
@@ -88,11 +130,13 @@ jobs:
             src-tauri/target
           key: cargo-${{ runner.os }}-${{ hashFiles('src-tauri/Cargo.lock') }}
 
-      - name: Format check
-        run: cargo fmt --check
-
+      # fmt lives in fast-checks (platform-independent); Linux clippy too.
+      # Windows/macOS clippy stays here: lints can be cfg-dependent (an
+      # unused import only on unix, or only on windows), so each OS must
+      # lint its own cfg expansion.
       - name: Lint (clippy, warnings are errors)
-        run: cargo clippy -- -D warnings
+        if: runner.os != 'Linux'
+        run: cargo clippy --all-targets -- -D warnings
 
       # Engine tests open fixture repos (fixtures/ is generated output, not
       # committed). The script sets a local git identity inside each fixture,
@@ -101,5 +145,19 @@ jobs:
         shell: bash
         run: bash ../scripts/make-fixtures.sh
 
+      # Headless Linux has no session D-Bus, so every Secret Service (keyring)
+      # test would skip and the Linux keyring path would ship untested. Run
+      # tests inside a private session bus with an unlocked gnome-keyring —
+      # the backend Linux users actually have.
+      - name: Set up session D-Bus + gnome-keyring
+        if: runner.os == 'Linux'
+        run: sudo apt-get install -y dbus gnome-keyring
+
       - name: Tests
-        run: cargo test
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            dbus-run-session -- bash -c 'eval "$(printf "" | gnome-keyring-daemon --unlock --components=secrets)"; cargo test'
+          else
+            cargo test
+          fi

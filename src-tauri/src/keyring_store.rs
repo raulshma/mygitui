@@ -69,6 +69,11 @@ mod tests {
     /// On Linux the Secret Service backend needs a session D-Bus plus a
     /// provider (gnome-keyring / KWallet), which headless CI images usually
     /// lack -- probe with a real roundtrip there and fall back to skipping.
+    ///
+    /// Convention: any test touching a real platform facility must gate on
+    /// a probe like this, never unwrap entry creation (CI's ubuntu job now
+    /// runs tests inside a D-Bus session with gnome-keyring, but local
+    /// environments vary).
     fn backend_available() -> bool {
         if cfg!(any(target_os = "windows", target_os = "macos")) {
             return true;

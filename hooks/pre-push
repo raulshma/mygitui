@@ -1,0 +1,25 @@
+#!/bin/sh
+# Pre-push: the same checks CI runs, so failures surface here first —
+# seconds, not a failed CI run on main. Bypass in an emergency:
+#   git push --no-verify
+#
+# This path is wired up by the `prepare` npm script (core.hooksPath=hooks),
+# so it activates on `npm install` for anyone cloning the repo.
+set -e
+
+echo "[pre-push] cargo fmt --check"
+(cd src-tauri && cargo fmt --check)
+
+echo "[pre-push] cargo clippy --all-targets (warnings are errors)"
+(cd src-tauri && cargo clippy --all-targets --quiet -- -D warnings)
+
+echo "[pre-push] cargo test"
+(cd src-tauri && cargo test --quiet)
+
+echo "[pre-push] svelte-check"
+npm run check
+
+echo "[pre-push] vitest"
+npm run test
+
+echo "[pre-push] all checks passed"
