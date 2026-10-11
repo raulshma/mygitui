@@ -195,6 +195,10 @@ proptest! {
     /// diff viewer relies on.
     #[test]
     fn diff_hunk_apply_reconstructs_new_text(a in nonempty_lines(), b in any_lines()) {
+        // The strategies draw from a shared pool with duplicates, so `b` can
+        // come out identical to `a`: then there is no mutation and no diff to
+        // stage. Reject that degenerate case instead of failing it.
+        prop_assume!(join_lines(&a) != join_lines(&b));
         let (repo, _dir) = prop_repo("diffapply");
         let path = "prop.txt";
         write_file(&repo, path, &join_lines(&a));

@@ -808,10 +808,17 @@ mod tests {
     fn remember_with_store_marks_helper_store() {
         let broker = broker();
         let remember_host = "mygitui-remember.example.invalid";
-        let user_entry = keyring::Entry::new(SERVICE, &https_key_user(remember_host)).unwrap();
-        let pass_entry = keyring::Entry::new(SERVICE, &https_key_pass(remember_host)).unwrap();
-        let _ = user_entry.delete_credential();
-        let _ = pass_entry.delete_credential();
+        // Best-effort cleanup around the real keyring: headless Linux CI has
+        // no keyring backend (`NoDefaultStore`), and the assertions below
+        // track helper_served, not the keyring contents.
+        let clean = |host: &str| {
+            for key in [https_key_user(host), https_key_pass(host)] {
+                if let Ok(entry) = keyring::Entry::new(SERVICE, &key) {
+                    let _ = entry.delete_credential();
+                }
+            }
+        };
+        clean(remember_host);
 
         broker.remember("https", remember_host, "ada", "pw", true);
         assert!(broker.helper_served.lock().contains(remember_host));
@@ -828,8 +835,7 @@ mod tests {
             .lock()
             .contains("mygitui-nostore.example.invalid"));
 
-        let _ = user_entry.delete_credential();
-        let _ = pass_entry.delete_credential();
+        clean(remember_host);
     }
 
     #[test]
