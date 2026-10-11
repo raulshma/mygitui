@@ -361,7 +361,7 @@
               {#if checkingInstall}Checking…{:else}Check OpenCode{/if}
             </button>
             {#if detection?.installed && detection.major !== null && detection.major >= 2}
-              <span class="hint">OpenCode 2.x detected — this build currently supports 1.x servers</span>
+              <span class="hint">OpenCode 2.x detected (v{detection.version}) — managed and attach modes both supported</span>
             {/if}
           </div>
           <label class="radio">

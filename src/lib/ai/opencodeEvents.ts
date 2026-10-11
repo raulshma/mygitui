@@ -66,10 +66,10 @@ export function decodeOpencodeEvent(
       "type" in parsed &&
       typeof (parsed as { type: unknown }).type === "string"
     ) {
-      const { type, properties } = parsed as {
-        type: string;
-        properties?: unknown;
-      };
+      const { type } = parsed as { type: string };
+      // v1 frames carry `properties`; v2 frames carry `data`.
+      const properties = (parsed as { properties?: unknown }).properties
+        ?? (parsed as { data?: unknown }).data;
       return { type, properties };
     }
     return null;
@@ -105,7 +105,11 @@ export function subscribeOpencodeEvents(
 
   void (async () => {
     // Strict discovery (JSON health/info), shared with the provider.
-    const { server } = await discoverOpencode(options.url, fetchImpl);
+    // The password is resolved once and used for both discovery and the
+    // stream: a password-gated 2.x server answers 401 without it, which
+    // would otherwise read as unreachable and never start the stream.
+    const password = (await options.password?.().catch(() => null)) ?? null;
+    const { server } = await discoverOpencode(options.url, fetchImpl, password);
     if (!server) {
       options.onUnreachable?.(
         options.url
@@ -122,7 +126,6 @@ export function subscribeOpencodeEvents(
     const headers: Record<string, string> = {
       Accept: "text/event-stream",
     };
-    const password = (await options.password?.()) ?? null;
     if (password) headers.Authorization = basicAuthHeader(password);
 
     try {

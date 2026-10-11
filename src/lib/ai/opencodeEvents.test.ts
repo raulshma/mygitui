@@ -52,6 +52,15 @@ describe("decodeOpencodeEvent", () => {
     });
   });
 
+  it("decodes v2 {type, data} payloads", () => {
+    expect(
+      decodeOpencodeEvent('{"type":"session.text.ended","data":{"sessionID":"s","text":"hi"}}'),
+    ).toEqual({
+      type: "session.text.ended",
+      properties: { sessionID: "s", text: "hi" },
+    });
+  });
+
   it("rejects non-objects and objects without a string type", () => {
     expect(decodeOpencodeEvent("[1]")).toBeNull();
     expect(decodeOpencodeEvent('{"nope":true}')).toBeNull();
@@ -223,7 +232,43 @@ describe("subscribeOpencodeEvents", () => {
       fetchImpl,
     });
     await vi.waitFor(() => expect(seen.length).toBe(3), { timeout: 5000 });
-    expect(seen[2]?.map((h) => h.toLowerCase())).toContain("authorization");
+    // Password is resolved once and sent on discovery probes and the stream.
+    for (const keys of seen) {
+      expect(keys.map((h) => h.toLowerCase())).toContain("authorization");
+    }
+    session.stop();
+  });
+
+  it("forwards the password to strict discovery (gated 2.x probes as ok)", async () => {
+    const authHeaders: (string | null)[] = [];
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      authHeaders.push(new Headers(init?.headers ?? {}).get("authorization"));
+      const url = String(input);
+      const authed = new Headers(init?.headers ?? {}).has("authorization");
+      // 401 without a password, 200 JSON with one — like a gated 2.x server.
+      if (url.endsWith("/api/info")) {
+        if (!authed) {
+          return new Response(JSON.stringify({ error: "unauthorized" }), {
+            status: 401,
+            headers: { "content-type": "application/json" },
+          });
+        }
+        return new Response('{"version":"2.0.18","pid":9}', {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return sseResponse(['data: {"type":"v2.event"}\n\n']);
+    }) as unknown as typeof fetch;
+    const seen: string[] = [];
+    const session = subscribeOpencodeEvents({
+      url: "http://127.0.0.1:4097",
+      password: () => Promise.resolve("sekrit"),
+      onEvent: (type) => seen.push(type),
+      fetchImpl,
+    });
+    await vi.waitFor(() => expect(seen.length).toBe(1), { timeout: 5000 });
+    expect(authHeaders[0]).toContain("Basic ");
     session.stop();
   });
 });

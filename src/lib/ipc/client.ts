@@ -1562,6 +1562,16 @@ export async function osAccentColor(): Promise<string | null> {
 // call sites can keep importing them from the client.
 export type { OpencodeDetection, OpencodeServeState };
 
+/** Inert managed-serve state for non-Tauri runtimes (no probe, no spawn). */
+function emptyServeState(): OpencodeServeState {
+  return { running: false, url: null, port: null, error: null, password: null };
+}
+
+/** Normalizes a serve-registry reply for old backends that omit `password`. */
+function withPasswordDefault(state: OpencodeServeState): OpencodeServeState {
+  return { password: null, ...state };
+}
+
 /** Probes for a local opencode CLI (PATH scan + `--version`). */
 export async function opencodeDetect(): Promise<OpencodeDetection> {
   if (!isTauri()) return { installed: false, path: null, version: null, major: null };
@@ -1570,20 +1580,23 @@ export async function opencodeDetect(): Promise<OpencodeDetection> {
 
 /** State of the managed opencode server (starts nothing). */
 export async function opencodeServeStatus(): Promise<OpencodeServeState> {
-  if (!isTauri()) return { running: false, url: null, port: null, error: null };
-  return call<OpencodeServeState>("opencode_serve_status", {});
+  if (!isTauri()) return emptyServeState();
+  const state = await call<OpencodeServeState>("opencode_serve_status", {});
+  return withPasswordDefault(state);
 }
 
 /** Starts (or returns the running) managed opencode server. */
 export async function opencodeServeStart(cwd?: string): Promise<OpencodeServeState> {
-  if (!isTauri()) return { running: false, url: null, port: null, error: null };
-  return call<OpencodeServeState>("opencode_serve_start", { cwd: cwd ?? null });
+  if (!isTauri()) return emptyServeState();
+  const state = await call<OpencodeServeState>("opencode_serve_start", { cwd: cwd ?? null });
+  return withPasswordDefault(state);
 }
 
 /** Stops the managed opencode server (no-op when none is running). */
 export async function opencodeServeStop(): Promise<OpencodeServeState> {
-  if (!isTauri()) return { running: false, url: null, port: null, error: null };
-  return call<OpencodeServeState>("opencode_serve_stop", {});
+  if (!isTauri()) return emptyServeState();
+  const state = await call<OpencodeServeState>("opencode_serve_stop", {});
+  return withPasswordDefault(state);
 }
 
 // ---------------------------------------------------------------------------

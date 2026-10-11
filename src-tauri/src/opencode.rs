@@ -23,7 +23,7 @@ use std::io::{BufRead, BufReader, Read};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::{mpsc, Arc};
+use std::sync::{mpsc, Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 use parking_lot::Mutex;
@@ -75,6 +75,9 @@ pub struct OpencodeServeState {
     pub port: Option<u16>,
     /// Failure description when not running (spawn error, child exit, …).
     pub error: Option<String>,
+    /// Generated `OPENCODE_PASSWORD` of a running managed 2.x server
+    /// (in-memory only, never persisted; `None` on 1.x servers).
+    pub password: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -123,7 +126,8 @@ pub(crate) fn scan_candidates(path_var: &str, pathext_var: &str, name: &str) -> 
 
 /// Extracts `x.y.z` + major from CLI output (`1.18.35`, `opencode v2.0.18`).
 fn parse_version(text: &str) -> Option<(String, u32)> {
-    let re = Regex::new(r"v?(\d+)\.(\d+)\.(\d+)").ok()?;
+    static RE: OnceLock<Regex> = OnceLock::new();
+    let re = RE.get_or_init(|| Regex::new(r"v?(\d+)\.(\d+)\.(\d+)").expect("version regex"));
     let caps = re.captures(text)?;
     let major: u32 = caps.get(1)?.as_str().parse().ok()?;
     let matched = caps.get(0)?.as_str();
@@ -249,11 +253,13 @@ pub(crate) fn detect_binary() -> OpencodeDetection {
 // ---------------------------------------------------------------------------
 
 /// One managed `opencode serve` child. The stdout reader thread fills `url`
-/// once the server announces its listening address.
+/// once the server announces its listening address (and `password` when a
+/// 2.x server without `OPENCODE_PASSWORD` prints the one it generated).
 struct ServeEntry {
     child: Child,
     port: u16,
     url: Arc<Mutex<String>>,
+    password: Arc<Mutex<Option<String>>>,
 }
 
 /// Owns the managed server child; `Drop` kills it (app-exit backstop, same
@@ -283,8 +289,41 @@ impl Drop for OpenCodeServerRegistry {
 
 /// The `… listening on http://…` announcement in opencode's serve output.
 fn parse_listening_url(line: &str) -> Option<String> {
-    let re = Regex::new(r"(?i)listening on\s+(https?://\S+)").ok()?;
+    static RE: OnceLock<Regex> = OnceLock::new();
+    let re = RE.get_or_init(|| {
+        Regex::new(r"(?i)listening on\s+(https?://\S+)").expect("listening-url regex")
+    });
     Some(re.captures(line)?.get(1)?.as_str().to_string())
+}
+
+/// The `server password <secret>` line a 2.x server prints when it was
+/// spawned without `OPENCODE_PASSWORD` (t3's `generatePassword` equivalent
+/// fallback: the managed server always requires one). Anchored to the
+/// secret at end-of-line so unrelated log lines mentioning those words
+/// cannot be captured as the managed password.
+fn parse_server_password(line: &str) -> Option<String> {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    let re = RE.get_or_init(|| {
+        Regex::new(r"(?i)server password\s*[:=]?\s+(\S+)\s*$").expect("server-password regex")
+    });
+    let password = re.captures(line)?.get(1)?.as_str().to_string();
+    if password.is_empty() {
+        None
+    } else {
+        Some(password)
+    }
+}
+
+/// Fresh password for a spawned 2.x server (t3's `generatePassword`): 2.x
+/// always requires one, so managed mode supplies its own and keeps it in
+/// memory. UUID hex is plenty for a loopback server secret and needs no
+/// new dependencies.
+fn generate_server_password() -> String {
+    format!(
+        "{}{}",
+        uuid::Uuid::new_v4().simple(),
+        uuid::Uuid::new_v4().simple()
+    )
 }
 
 /// Extracts the port from OpenCode's announced URL.
@@ -386,6 +425,7 @@ impl OpenCodeServerRegistry {
 
     fn state_of(entry: &ServeEntry) -> OpencodeServeState {
         let announced = entry.url.lock().clone();
+        let password = entry.password.lock().clone();
         OpencodeServeState {
             running: true,
             url: Some(if announced.is_empty() {
@@ -395,6 +435,7 @@ impl OpenCodeServerRegistry {
             }),
             port: Some(entry.port),
             error: None,
+            password,
         }
     }
 
@@ -458,6 +499,18 @@ impl OpenCodeServerRegistry {
             &["serve", "--hostname=127.0.0.1", &port_arg],
         );
         command.current_dir(working_dir);
+        // 2.x servers always require a password (`OPENCODE_PASSWORD`; t3's
+        // `serverEnvironment`). 1.x servers carry none and ignore this var,
+        // so only set it off the 1.x path. `build_command` already cleared
+        // the env — set it after, so sanitizing cannot wipe it.
+        let server_password: Option<String> = if detection.major == Some(1) {
+            None
+        } else {
+            Some(generate_server_password())
+        };
+        if let Some(password) = server_password.as_deref() {
+            command.env("OPENCODE_PASSWORD", password);
+        }
         let mut child = match command
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
@@ -476,14 +529,28 @@ impl OpenCodeServerRegistry {
         // Reader threads: parse the listening URL from stdout, drain stderr
         // (a full pipe would block the child).
         let announced: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
+        let managed_password: Arc<Mutex<Option<String>>> =
+            Arc::new(Mutex::new(server_password.clone()));
+        // 1.x servers carry no password: never capture one for them. Any
+        // other generation (2.x, or unknown when `--version` was
+        // unparseable) may print the secret it generated when the env var
+        // was missing or ignored — the announced secret is authoritative
+        // and overwrites the generated one.
+        let capture_password = detection.major != Some(1);
         let startup_output = Arc::new(Mutex::new(VecDeque::new()));
         if let Some(stdout) = child.stdout.take() {
             let sink = Arc::clone(&announced);
+            let password_sink = Arc::clone(&managed_password);
             let output = Arc::clone(&startup_output);
             std::thread::spawn(move || {
                 for line in BufReader::new(stdout).lines().map_while(Result::ok) {
                     if let Some(url) = parse_listening_url(&line) {
                         *sink.lock() = url;
+                    }
+                    if capture_password {
+                        if let Some(password) = parse_server_password(&line) {
+                            *password_sink.lock() = Some(password);
+                        }
                     }
                     record_startup_output(&output, "stdout", &line);
                 }
@@ -537,6 +604,7 @@ impl OpenCodeServerRegistry {
                         child,
                         port,
                         url: announced,
+                        password: managed_password,
                     });
                     drop(guard);
                     return self.status();
@@ -649,6 +717,45 @@ mod tests {
             Some("https://0.0.0.0:4096/".into())
         );
         assert_eq!(parse_listening_url("nothing to see"), None);
+    }
+
+    #[test]
+    fn parse_server_password_matches_2x_announcement() {
+        assert_eq!(
+            parse_server_password("server password u6GdkPCI93919PNQmECR6Eh1niZbTDiyP7te0Mdioy0"),
+            Some("u6GdkPCI93919PNQmECR6Eh1niZbTDiyP7te0Mdioy0".into())
+        );
+        assert_eq!(
+            parse_server_password("Server Password  abc123  "),
+            Some("abc123".into())
+        );
+        assert_eq!(
+            parse_server_password("server password: abc123"),
+            Some("abc123".into())
+        );
+        assert_eq!(
+            parse_server_password("server listening on http://127.0.0.1:4096"),
+            None
+        );
+        assert_eq!(parse_server_password("nothing to see"), None);
+        // Unrelated lines mentioning those words must not become the secret.
+        assert_eq!(
+            parse_server_password("my server password is abc123 today"),
+            None
+        );
+        assert_eq!(
+            parse_server_password("server password secret extra words"),
+            None
+        );
+    }
+
+    #[test]
+    fn generate_server_password_is_unique_hex() {
+        let first = generate_server_password();
+        let second = generate_server_password();
+        assert_eq!(first.len(), 64);
+        assert!(first.chars().all(|c| c.is_ascii_hexdigit()));
+        assert_ne!(first, second, "managed passwords must not repeat");
     }
 
     #[cfg(windows)]

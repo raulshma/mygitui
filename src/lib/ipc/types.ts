@@ -514,6 +514,12 @@ export interface OpencodeServeState {
   port: number | null;
   /** Failure description when not running. */
   error: string | null;
+  /**
+   * Generated `OPENCODE_PASSWORD` of a running managed 2.x server
+   * (in-memory only, never persisted). Absent/`null` on 1.x servers,
+   * which carry no password.
+   */
+  password?: string | null;
 }
 
 // ---------- External apps (Rust: src-tauri/src/editors.rs) ----------

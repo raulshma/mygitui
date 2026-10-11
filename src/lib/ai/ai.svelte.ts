@@ -222,12 +222,14 @@ export class AiStore {
   async #ensureEvents(): Promise<void> {
     if (this.#events) return;
     // Managed mode puts the server on a random port: resolve the base the
-    // same way the provider does (its health() probes managed status too).
-    const health = await this.#opencode?.health().catch(() => null);
-    if (!health?.base) return;
+    // same way the provider does (its connection() probes managed status
+    // too, and carries the managed 2.x password for the stream).
+    const conn = await this.#opencode?.connection().catch(() => null);
+    if (!conn?.base) return;
+    const password = conn.password;
     this.#events = subscribeOpencodeEvents({
-      url: health.base,
-      password: () => secretsGet(SECRET_KEYS.opencodeServerPassword),
+      url: conn.base,
+      password: async () => password,
       onEvent: () => this.#supervisor.noteTransportEvent("opencode"),
       onEnded: () => {
         this.#events = null;
