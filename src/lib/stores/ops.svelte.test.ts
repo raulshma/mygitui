@@ -8,6 +8,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { authRespond, onAuthRequest, onOpProgress } from "$lib/ipc/client";
 import type { AuthRequest, OpProgress } from "$lib/ipc/types";
+import { resetRepoEvents } from "$lib/events/repoEvents";
 import { getToasts } from "$lib/toast";
 import {
   authStore,
@@ -21,6 +22,13 @@ vi.mock("$lib/ipc/client", () => ({
   authRespond: vi.fn(),
   onAuthRequest: vi.fn(),
   onOpProgress: vi.fn(),
+  // $lib/events/repoEvents (imported by ops.svelte) pulls the other event
+  // seams in transitively; they are never called in this suite.
+  onRepoChanged: vi.fn(),
+  onCloneProgress: vi.fn(),
+  onActionOutput: vi.fn(),
+  onPtyOutput: vi.fn(),
+  onPtyExit: vi.fn(),
 }));
 
 const mockAuthRespond = vi.mocked(authRespond);
@@ -79,6 +87,7 @@ beforeEach(() => {
 afterEach(() => {
   opStore.stop();
   authStore.stop();
+  resetRepoEvents(); // drops the module-owned backend subscriptions
 });
 
 /** Flushes pending microtasks (subscription + respond chains). */
@@ -164,7 +173,7 @@ describe("OpStore", () => {
     ).toBe(true);
   });
 
-  it("stop unsubscribes and clears state", async () => {
+  it("stop deregisters the store and clears state; restart re-registers", async () => {
     const store = new OpStore();
     store.startOpsEvents();
     await flush();
@@ -172,15 +181,19 @@ describe("OpStore", () => {
 
     store.stop();
 
-    expect(unlistenSpy).toHaveBeenCalledTimes(1);
     expect(store.busy("repo-1")).toBe(false);
 
-    // Events after stop are not delivered through the subscription anymore
-    // (handler captured above would still work if invoked, but the real
-    // unlisten is gone); the store can be restarted.
+    // The module owns the backend subscription (stop() must not tear it
+    // down); the deregistered store simply stops receiving events.
+    opHandlers[0]!(progress({ op_id: "b", repo_id: "repo-1" }));
+    expect(store.busy("repo-1")).toBe(false);
+    expect(unlistenSpy).not.toHaveBeenCalled();
+
+    // The store can be restarted: it re-registers and events flow again.
     store.startOpsEvents();
     await flush();
-    expect(mockOnOpProgress).toHaveBeenCalledTimes(2);
+    opHandlers[0]!(progress({ op_id: "c", repo_id: "repo-1" }));
+    expect(store.busy("repo-1")).toBe(true);
     store.stop();
   });
 });

@@ -141,20 +141,17 @@
     }));
 
     // Palette "Clone repository…" opens the dialog App owns (real today).
-    const onOpenCloneDialog = (): void => {
-      cloneOpen = true;
-    };
-    document.addEventListener("open-clone-dialog", onOpenCloneDialog);
-    cleanups.push(() =>
-      document.removeEventListener("open-clone-dialog", onOpenCloneDialog),
+    cleanups.push(
+      onUiEvent("open-clone-dialog", () => {
+        cloneOpen = true;
+      }),
     );
 
-    // The palette command routes through an event (commands.ts must not
-    // import the palette store — that would be a registry cycle).
-    const onTogglePalette = (): void => togglePalette();
-    window.addEventListener("toggle-command-palette", onTogglePalette);
-    cleanups.push(() =>
-      window.removeEventListener("toggle-command-palette", onTogglePalette),
+    // The palette command routes through the typed UI bus (commands.ts must
+    // not import the palette store — that would be a registry cycle; the
+    // event map in palette/events.ts is pure types, so no cycle there).
+    cleanups.push(
+      onUiEvent("toggle-command-palette", () => togglePalette()),
     );
 
     void listenDragDrop((paths) => {

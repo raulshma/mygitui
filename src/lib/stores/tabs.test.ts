@@ -10,7 +10,8 @@ import {
   openRepo,
   repoStatus,
 } from "$lib/ipc/client";
-import type { RepoChangedEvent } from "$lib/ipc/client";
+import type { RepoChangedEvent } from "$lib/ipc/types";
+import { resetRepoEvents } from "$lib/events/repoEvents";
 import { RecentRepoStore, type StorageLike } from "$lib/entry/recentRepos";
 import {
   closeTab,
@@ -28,6 +29,14 @@ vi.mock("$lib/ipc/client", () => ({
   closeRepo: vi.fn(),
   repoStatus: vi.fn(),
   onRepoChanged: vi.fn(),
+  // $lib/events/repoEvents (imported by tabs.svelte) pulls the other event
+  // seams in transitively; they are never called in this suite.
+  onCloneProgress: vi.fn(),
+  onOpProgress: vi.fn(),
+  onAuthRequest: vi.fn(),
+  onActionOutput: vi.fn(),
+  onPtyOutput: vi.fn(),
+  onPtyExit: vi.fn(),
 }));
 
 const mockOpenRepo = vi.mocked(openRepo);
@@ -87,7 +96,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  resetTabStore();
+  resetTabStore(); // deregisters the store's listener
+  resetRepoEvents(); // drops the module-owned backend subscription
 });
 
 // ---------------------------------------------------------------------------

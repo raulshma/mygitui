@@ -18,7 +18,8 @@
  * `vi.mock` in tests); storage is injectable.
  */
 
-import { actionCancel, actionRun, onActionOutput } from "$lib/ipc/client";
+import { actionCancel, actionRun } from "$lib/ipc/client";
+import { onActionOutput } from "$lib/events/repoEvents";
 import type { ActionOutputEvent, RepoId } from "$lib/ipc/types";
 import { toast } from "$lib/toast";
 import {
@@ -143,8 +144,7 @@ export class ActionsStore {
 
   readonly #storage: StorageLike | null;
   readonly #lineCap: number;
-  #started = false;
-  #unlisten: (() => void) | null = null;
+  #unregister: (() => void) | null = null;
   #orderCounter = 0;
 
   constructor(
@@ -206,19 +206,13 @@ export class ActionsStore {
   // -- runs ----------------------------------------------------------------
 
   /**
-   * Subscribes to `action-output` events. Idempotent: safe to call from
-   * every panel mount.
+   * Subscribes to `action-output` events (registration is idempotent; the
+   * subscription lifecycle lives in `$lib/events/repoEvents`). Safe to call
+   * from every panel mount.
    */
   startActionsEvents(): void {
-    if (this.#started) return;
-    this.#started = true;
-    onActionOutput((event) => this.applyOutput(event))
-      .then((unlisten) => {
-        this.#unlisten = unlisten;
-      })
-      .catch((err: unknown) =>
-        console.error("[actions] action-output subscription failed:", err),
-      );
+    if (this.#unregister !== null) return;
+    this.#unregister = onActionOutput((event) => this.applyOutput(event));
   }
 
   /**
@@ -341,15 +335,10 @@ export class ActionsStore {
     }
   }
 
-  /** Unsubscribes and clears state (test helper / teardown). */
+  /** Deregisters and clears state (test helper / teardown). */
   stop(): void {
-    try {
-      this.#unlisten?.();
-    } catch {
-      // Ignore unlisten failures.
-    }
-    this.#unlisten = null;
-    this.#started = false;
+    this.#unregister?.();
+    this.#unregister = null;
     this.runs = [];
   }
 

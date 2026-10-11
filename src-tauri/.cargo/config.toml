@@ -13,3 +13,13 @@ rustflags = [
     "-C",
     "link-arg=/MANIFESTDEPENDENCY:type='win32' name='Microsoft.Windows.Common-Controls' version='6.0.0.0' publicKeyToken='6595b64144ccf1df' language='*' processorArchitecture='*'",
 ]
+
+# ts-rs binding exports (`cargo test export_bindings`, `npm run gen:types`):
+# the generated `.ts` files land in the repo's `src/lib/ipc/gen/`. The value
+# stays relative (resolved against the test binary's cwd, which cargo always
+# sets to this crate root), so the output path is machine-independent.
+[env]
+TS_RS_EXPORT_DIR = "../src/lib/ipc/gen"
+# 64-bit ints (unix seconds, byte counters) are `number` on the wire and in
+# the FE types — keep the generated bindings in `number`, not `bigint`.
+TS_RS_LARGE_INT = "number"

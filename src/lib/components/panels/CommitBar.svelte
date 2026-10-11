@@ -27,7 +27,8 @@
   import { tabStore } from "$lib/stores/tabs.svelte";
   import { toast } from "$lib/toast";
   import { Switch } from "$lib/components/m3";
-  import CommitMessageButton from "$lib/components/ai/CommitMessageButton.svelte";
+  import { ai } from "$lib/ai/ai.svelte";
+  import AiFeatureButton from "$lib/components/ai/AiFeatureButton.svelte";
   import { fixupMessage, hasStagedChanges, headCommitInPage } from "$lib/commit/commitBarModel";
 
   let {
@@ -265,13 +266,23 @@
         </button>
 
         <div class="primary">
-          <CommitMessageButton
+          <AiFeatureButton
             {repoId}
+            icon
+            popUp
+            label="Generate commit message"
+            title="Generate a commit message from the staged diff"
+            ariaLabel="Generate commit message with AI"
+            confirmText={"Send the staged diff to {backend} to draft a commit message?"}
+            errorPrefix="AI commit message failed"
+            successToast="Commit message generated — review before committing"
             disabled={commitBusy || committing}
-            onResult={(d) => {
-              message = d.body ? `${d.subject}
+            run={(opts) => ai.generateCommitMessage(repoId, undefined, opts)}
+            onResult={(outcome) => {
+              const m = outcome.message ?? { subject: outcome.result.text, body: "" };
+              message = m.body ? `${m.subject}
 
-${d.body}` : d.subject;
+${m.body}` : m.subject;
             }}
           />
 

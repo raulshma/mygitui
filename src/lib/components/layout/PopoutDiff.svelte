@@ -8,8 +8,9 @@
    * on mount, re-streams when the backend announces repo changes, and via
    * the Refresh button. Renders DiffViewer alone, filling the window.
    */
-  import { onRepoChanged, streamDiff } from "$lib/ipc/client";
+  import { streamDiff } from "$lib/ipc/client";
   import type { FileDiff, RepoId } from "$lib/ipc/types";
+  import { onRepoChange } from "$lib/events/repoEvents";
   import DiffViewer from "$lib/components/diff/DiffViewer.svelte";
 
   let { repoId }: { repoId: RepoId } = $props();
@@ -43,25 +44,17 @@
     };
   });
 
-  // The popout has no tab store; watch the backend directly.
+  // The popout has no tab store; register with the shared event module.
+  // Policy: this pane streams the whole worktree diff, so ANY backend change
+  // for this repo (workdir churn, head moves, resyncs) may alter it.
   $effect(() => {
     const id = repoId;
-    let unlisten: (() => void) | null = null;
-    let cancelled = false;
-    onRepoChanged((event) => {
-      if (event.repo_id === id) reload += 1;
-    })
-      .then((fn) => {
-        if (cancelled) fn();
-        else unlisten = fn;
-      })
-      .catch(() => {
-        // Popouts still work without the watcher; Refresh stays available.
-      });
-    return () => {
-      cancelled = true;
-      unlisten?.();
-    };
+    return onRepoChange({
+      filter: (change) => change.repo_id === id,
+      handle: () => {
+        reload += 1;
+      },
+    });
   });
 </script>
 

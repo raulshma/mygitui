@@ -13,6 +13,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
+    "gen:types": "cd src-tauri && cargo test export_bindings",
     "tauri": "tauri",
     "prepare": "git config core.hooksPath hooks"
   },

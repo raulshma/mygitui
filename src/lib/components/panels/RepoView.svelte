@@ -43,7 +43,6 @@
   import DiffViewer from "$lib/components/diff/DiffViewer.svelte";
   import AuthDialog from "$lib/components/AuthDialog.svelte";
   import CleanDialog from "$lib/components/actions/CleanDialog.svelte";
-  import CommitMessageButton from "$lib/components/ai/CommitMessageButton.svelte";
   import OpenWithButton from "$lib/components/header/OpenWithButton.svelte";
   // Startup: every panel that is not part of the first paint (status is the
   // default tab; diff and CommitBar are always visible) is dynamically
@@ -54,7 +53,7 @@
   import { ai } from "$lib/ai/ai.svelte";
   import SplitContainer from "$lib/components/layout/SplitContainer.svelte";
   import { conflictsStore } from "$lib/components/panels/conflictsStore.svelte";
-  import { onUiEvent } from "$lib/palette/events";
+  import { emitUiEvent, onUiEvent } from "$lib/palette/events";
   import {
     conflictAbortCommand,
     conflictSource,
@@ -251,39 +250,27 @@
 
   let cleanOpen = $state(false);
 
-  // H2's CreatePrDialog asks for AI generation via a window event; H1's
+  // H2's CreatePrDialog asks for AI generation via the typed UI bus; H1's
   // runFeature answers it. One bridge, registered once per workspace mount.
   $effect(() => {
-    const onGenerate = (event: Event) => {
-      const detail = (event as CustomEvent).detail as
-        | { repoId?: string }
-        | undefined;
-      const target = detail?.repoId ?? repoId;
+    return onUiEvent("ai-generate-pr", ({ repoId: target }) => {
       void (async () => {
         try {
           const { ai } = await import("$lib/ai/ai.svelte");
           const outcome = await ai.run("pr-title-body", { repoId: target });
-          window.dispatchEvent(
-            new CustomEvent("ai-pr-result", {
-              detail: {
-                subject: outcome.message?.subject ?? outcome.result.text,
-                body: outcome.message?.body ?? "",
-              },
-            }),
-          );
+          emitUiEvent("ai-pr-result", {
+            subject: outcome.message?.subject ?? outcome.result.text,
+            body: outcome.message?.body ?? "",
+          });
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
           toast(`AI PR description failed: ${message}`, { kind: "error" });
           // The dialog's "Waiting for AI…" only clears on events — tell it
           // the run failed so the user can retry or fill the fields manually.
-          window.dispatchEvent(
-            new CustomEvent("ai-pr-error", { detail: { message } }),
-          );
+          emitUiEvent("ai-pr-error", { message });
         }
       })();
-    };
-    window.addEventListener("ai-generate-pr", onGenerate);
-    return () => window.removeEventListener("ai-generate-pr", onGenerate);
+    });
   });
 
   // --- Conflict banner state ---------------------------------------------

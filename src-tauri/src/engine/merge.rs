@@ -56,7 +56,7 @@ use super::git_engine::{EngineError, EngineResult, GitEngineM3};
 use super::libgit2::Libgit2Engine;
 use super::types::{
     BisectMark, BisectState, ConflictFile, ConflictResolution, MergeFavor, MergeOptions,
-    MergeOutcome, MergeResult, ResetKind,
+    MergeOutcome, MergeResult, PreviewInfo, ResetKind,
 };
 use crate::engine::types::{
     CheckpointInfo, RebaseState, RebaseStep, ReflogEntry, StashInfo, WorktreeInfo,
@@ -775,6 +775,16 @@ impl GitEngineM3 for Libgit2Engine {
     }
     fn checkpoint_gc(&self, repo: &Repository, older_than_days: u32) -> EngineResult<u32> {
         self.checkpoint_gc_impl(repo, older_than_days)
+    }
+
+    // ---------- D4 dangerous-op preview forwarding ----------
+    fn ops_preview(
+        &self,
+        repo: &Repository,
+        kind: &str,
+        params: &serde_json::Value,
+    ) -> EngineResult<PreviewInfo> {
+        self.preview_impl(repo, kind, params)
     }
 
     // ---------- M10: bisect / describe / autosquash forwarding ----------

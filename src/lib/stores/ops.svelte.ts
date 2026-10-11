@@ -19,7 +19,8 @@
  * `vi.mock` in tests).
  */
 
-import { authRespond, onAuthRequest, onOpProgress } from "$lib/ipc/client";
+import { authRespond } from "$lib/ipc/client";
+import { onAuthRequest, onOpProgress } from "$lib/events/repoEvents";
 import type { AuthRequest, OpProgress, RepoId } from "$lib/ipc/types";
 import { toast } from "$lib/toast";
 
@@ -51,23 +52,16 @@ export class OpStore {
   /** Active ops per repo (repos with no ops have no entry). */
   ops: Record<RepoId, ActiveOp[]> = $state({});
 
-  #started = false;
-  #unlisten: (() => void) | null = null;
+  #unregister: (() => void) | null = null;
 
   /**
-   * Subscribes to `op-progress` events. Idempotent: safe to call from every
-   * RepoView mount.
+   * Subscribes to `op-progress` events (registration is idempotent; the
+   * subscription lifecycle lives in `$lib/events/repoEvents`). Safe to call
+   * from every RepoView mount.
    */
   startOpsEvents(): void {
-    if (this.#started) return;
-    this.#started = true;
-    onOpProgress((event) => this.applyProgress(event))
-      .then((unlisten) => {
-        this.#unlisten = unlisten;
-      })
-      .catch((err: unknown) =>
-        console.error("[ops] op-progress subscription failed:", err),
-      );
+    if (this.#unregister !== null) return;
+    this.#unregister = onOpProgress((event) => this.applyProgress(event));
   }
 
   /**
@@ -116,15 +110,10 @@ export class OpStore {
       : ops.some((op) => op.kind === kind);
   }
 
-  /** Unsubscribes and clears (test helper / teardown). */
+  /** Deregisters and clears (test helper / teardown). */
   stop(): void {
-    try {
-      this.#unlisten?.();
-    } catch {
-      // Ignore unlisten failures.
-    }
-    this.#unlisten = null;
-    this.#started = false;
+    this.#unregister?.();
+    this.#unregister = null;
     this.ops = {};
   }
 }
@@ -164,23 +153,16 @@ export class AuthStore {
 
   #queue: AuthRequest[] = [];
   #waiters = new Map<string, Array<(answer: AuthAnswerPayload | null) => void>>();
-  #started = false;
-  #unlisten: (() => void) | null = null;
+  #unregister: (() => void) | null = null;
 
   /**
-   * Subscribes to `auth-request` events. Idempotent: safe to call from
-   * every RepoView mount.
+   * Subscribes to `auth-request` events (registration is idempotent; the
+   * subscription lifecycle lives in `$lib/events/repoEvents`). Safe to call
+   * from every RepoView mount.
    */
   startAuthEvents(): void {
-    if (this.#started) return;
-    this.#started = true;
-    onAuthRequest((request) => this.handleRequest(request))
-      .then((unlisten) => {
-        this.#unlisten = unlisten;
-      })
-      .catch((err: unknown) =>
-        console.error("[auth] auth-request subscription failed:", err),
-      );
+    if (this.#unregister !== null) return;
+    this.#unregister = onAuthRequest((request) => this.handleRequest(request));
   }
 
   /**
@@ -229,15 +211,10 @@ export class AuthStore {
     this.#resolveWaiters(request.op_id, null);
   }
 
-  /** Unsubscribes and clears everything (test helper / teardown). */
+  /** Deregisters and clears everything (test helper / teardown). */
   stop(): void {
-    try {
-      this.#unlisten?.();
-    } catch {
-      // Ignore unlisten failures.
-    }
-    this.#unlisten = null;
-    this.#started = false;
+    this.#unregister?.();
+    this.#unregister = null;
     this.#queue = [];
     this.pending = null;
     this.#resolveWaitersAll(null);

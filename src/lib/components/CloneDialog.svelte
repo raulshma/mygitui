@@ -17,10 +17,10 @@
   import {
     cloneRepo,
     cloneBlobless,
-    onCloneProgress,
     pickFolder,
-    type CloneProgressEvent,
   } from "$lib/ipc/client";
+  import type { CloneProgressEvent } from "$lib/ipc/types";
+  import { onCloneProgress } from "$lib/events/repoEvents";
   import { openTab } from "$lib/stores/tabs.svelte";
   import { toast } from "$lib/toast";
 
@@ -45,13 +45,12 @@
   );
 
   // Progress events live for the component's lifetime (not just while the
-  // dialog is open) so background clones still complete visibly.
+  // dialog is open) so background clones still complete visibly. Registered
+  // through the shared event module; the in-flight URL filter stays here.
   onMount(() => {
-    let unlisten: (() => void) | undefined;
-    void onCloneProgress((event) => {
+    return onCloneProgress((event: CloneProgressEvent) => {
       if (activeUrl !== null && event.url === activeUrl) progress = event;
-    }).then((fn) => (unlisten = fn));
-    return () => unlisten?.();
+    });
   });
 
   $effect(() => {

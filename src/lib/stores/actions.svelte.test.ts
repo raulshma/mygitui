@@ -7,6 +7,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { actionCancel, actionRun, onActionOutput } from "$lib/ipc/client";
 import type { ActionOutputEvent } from "$lib/ipc/types";
+import { resetRepoEvents } from "$lib/events/repoEvents";
 import { getToasts } from "$lib/toast";
 import {
   ActionsStore,
@@ -21,6 +22,14 @@ vi.mock("$lib/ipc/client", () => ({
   actionRun: vi.fn(),
   actionCancel: vi.fn(),
   onActionOutput: vi.fn(),
+  // $lib/events/repoEvents (imported by actions.svelte) pulls the other
+  // event seams in transitively; they are never called in this suite.
+  onRepoChanged: vi.fn(),
+  onCloneProgress: vi.fn(),
+  onOpProgress: vi.fn(),
+  onAuthRequest: vi.fn(),
+  onPtyOutput: vi.fn(),
+  onPtyExit: vi.fn(),
 }));
 
 const mockActionRun = vi.mocked(actionRun);
@@ -78,6 +87,7 @@ beforeEach(() => {
 
 afterEach(() => {
   actionsStore.stop();
+  resetRepoEvents(); // drops the module-owned backend subscription
 });
 
 /** Flushes pending microtasks (subscription chain). */
@@ -267,19 +277,25 @@ describe("ActionsStore runs", () => {
     expect(getToasts().some((t) => t.message.includes("already finished"))).toBe(true);
   });
 
-  it("stop unsubscribes and clears runs; the store can restart", async () => {
+  it("stop deregisters the store and clears runs; the store can restart", async () => {
     const store = new ActionsStore(fakeStorage());
     store.startActionsEvents();
     await flush();
     store.applyOutput(outputEvent({ run_id: "r1" }));
 
     store.stop();
-    expect(unlistenSpy).toHaveBeenCalledTimes(1);
+    expect(store.runs).toEqual([]);
+    // The module owns the backend subscription (stop() must not tear it
+    // down); the deregistered store simply stops receiving events.
+    expect(unlistenSpy).not.toHaveBeenCalled();
+
+    outputHandlers[0]!(outputEvent({ run_id: "r2" }));
     expect(store.runs).toEqual([]);
 
     store.startActionsEvents();
     await flush();
-    expect(mockOnActionOutput).toHaveBeenCalledTimes(2);
+    outputHandlers[0]!(outputEvent({ run_id: "r3" }));
+    expect(store.runs.map((run) => run.run_id)).toContain("r3");
     store.stop();
   });
 

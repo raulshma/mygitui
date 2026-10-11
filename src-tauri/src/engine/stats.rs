@@ -31,6 +31,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use git2::{ErrorCode, Repository, Sort};
 use serde::Serialize;
+use ts_rs::TS;
 
 use super::git_engine::EngineResult;
 use super::libgit2::Libgit2Engine;
@@ -45,7 +46,8 @@ const DAY_SECS: i64 = 86_400;
 const EPOCH_SHIFT: i64 = 719_468;
 
 /// Commits per local day (`commit_activity` reply; contracts.md M7).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[ts(export)]
 pub struct DayCount {
     /// Committer local date, "YYYY-MM-DD".
     pub day: String,
@@ -54,7 +56,8 @@ pub struct DayCount {
 }
 
 /// One author identity aggregated over the window (`contributor_stats`).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[ts(export)]
 pub struct Contributor {
     /// Author name (verbatim from the commit signature).
     pub name: String,

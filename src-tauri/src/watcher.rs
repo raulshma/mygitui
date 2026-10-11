@@ -30,6 +30,7 @@ use std::time::{Duration, SystemTime};
 use ignore::gitignore::{Gitignore, GitignoreBuilder};
 use notify::{Event, RecommendedWatcher, RecursiveMode, Watcher as _};
 use serde::Serialize;
+use ts_rs::TS;
 
 use crate::engine::types::RepoId;
 
@@ -50,7 +51,8 @@ const RETRY_BACKOFF: [Duration; 3] = [
 /// Payload of the `repo-changed` event (registry: docs/contracts.md).
 ///
 /// JSON shape (exact): `{"repo_id": string, "paths": string[], "head_moved": bool, "full": bool}`.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export)]
 pub struct RepoChangedEvent {
     pub repo_id: RepoId,
     /// Repo-relative paths, forward slashes, deduplicated, sorted.

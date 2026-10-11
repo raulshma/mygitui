@@ -24,6 +24,7 @@ use std::process::Stdio;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
+use ts_rs::TS;
 
 /// The `gh` binary probed on PATH (production runner target).
 const GH: &str = "gh";
@@ -54,12 +55,13 @@ pub const PR_LIST_LIMIT: usize = 50;
 const MAX_ERROR_MESSAGE: usize = 400;
 
 // ---------------------------------------------------------------------------
-// Wire types (contracts.md "Commands (M6 forge)"; TS mirrors in
-// `src/lib/ipc/client.ts`)
+// Wire types (contracts.md "Commands (M6 forge)"; generated to
+// `src/lib/ipc/gen/` via ts-rs, re-exported by `src/lib/ipc/types.ts`)
 // ---------------------------------------------------------------------------
 
 /// Result of `forge_status`: is `gh` usable at all?
-#[derive(Debug, Clone, Serialize, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, Default, TS)]
+#[ts(export)]
 pub struct ForgeStatus {
     /// `gh` was found on PATH and ran.
     pub available: bool,
@@ -70,7 +72,8 @@ pub struct ForgeStatus {
 }
 
 /// Owner/repo/branch context of one open repository (forge_context).
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, TS)]
+#[ts(export)]
 pub struct ForgeContext {
     pub owner: String,
     pub repo: String,
@@ -81,14 +84,16 @@ pub struct ForgeContext {
 }
 
 /// `pr_create` success payload.
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, TS)]
+#[ts(export)]
 pub struct PrCreated {
     pub url: String,
     pub number: u64,
 }
 
 /// One PR of `pr_list`.
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, TS)]
+#[ts(export)]
 pub struct PrInfo {
     pub number: u64,
     pub title: String,
@@ -103,17 +108,26 @@ pub struct PrInfo {
 }
 
 /// One CI check of `pr_checks`.
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, TS)]
+#[ts(export)]
 pub struct CheckInfo {
     pub name: String,
-    /// Canonical: `"pass" | "fail" | "pending" | "skipping"`.
+    /// Canonical: `"pass" | "fail" | "pending" | "skipping"` (kept as a
+    /// string-literal union in the generated TS type — the FE narrows it
+    /// via `CheckState`).
+    #[ts(type = "\"pass\" | \"fail\" | \"pending\" | \"skipping\"")]
     pub state: String,
 }
 
-/// Structured `pr_create` failure (the command's rejection value).
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+/// Structured `pr_create` failure (the command's rejection value; FE name
+/// `ForgeFailure`).
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, TS)]
+#[ts(export)]
 pub struct ForgeError {
-    /// `NoGh` | `NotAuthed` | `AlreadyExists` | `Other`.
+    /// `NoGh` | `NotAuthed` | `AlreadyExists` | `Other` (kept as a
+    /// string-literal union in the generated TS type — the FE narrows it
+    /// via `ForgeFailureKind`; values are the `KIND_*` consts).
+    #[ts(type = "\"NoGh\" | \"NotAuthed\" | \"AlreadyExists\" | \"Other\"")]
     pub kind: String,
     pub message: String,
     /// For `AlreadyExists`: the existing PR's URL when parseable.

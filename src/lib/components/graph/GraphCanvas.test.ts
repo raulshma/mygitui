@@ -7,6 +7,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import { cleanup, fireEvent, render } from "@testing-library/svelte";
 import GraphCanvas from "$lib/components/graph/GraphCanvas.svelte";
+import Host from "$lib/components/graph/GraphCanvas.test.host.svelte";
 import type { LogPage } from "$lib/ipc/types";
 
 // The locked-down vite.config.js has no `resolve.conditions: ["browser"]` for
@@ -206,6 +207,21 @@ describe("GraphCanvas", () => {
     } | null;
     expect(typeof component?.scrollToRow).toBe("function");
     expect(() => component?.scrollToRow?.(5)).not.toThrow();
+  });
+
+  it("exposes its native scroll container via the bindable scrollEl prop", async () => {
+    // The declared interface for the parent's exact scrollTop sync — the
+    // replacement for querying the internal `.gc-scroll` class. Rendered
+    // through a host that binds it like HistoryView does (props are not
+    // reachable on the instance without `accessors`, exports are).
+    const rendered = render(Host, {
+      props: { pages: [pageOf(2)] },
+    });
+    await vi.waitFor(() => {
+      const scrollEl = rendered.component.getScrollEl();
+      expect(scrollEl).toBeInstanceOf(HTMLDivElement);
+      expect(scrollEl).toBe(rendered.container.querySelector(".gc-scroll"));
+    });
   });
 
   it("mounts without a 2D context (graceful no-draw, no crash)", () => {

@@ -31,7 +31,7 @@
     formatDateTime,
     formatRelativeTime,
     hashHue,
-  } from "$lib/stores/history-logic";
+  } from "$lib/git/format";
   import { ageBackground, ageRatios } from "./blameModel";
 
   let {

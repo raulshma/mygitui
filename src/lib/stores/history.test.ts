@@ -7,13 +7,24 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { onRepoChanged, streamLog } from "$lib/ipc/client";
-import type { RepoChangedEvent } from "$lib/ipc/client";
+import type { RepoChangedEvent } from "$lib/ipc/types";
+import { resetRepoEvents } from "$lib/events/repoEvents";
 import type { CommitInfo, GraphRow, LogFilter, LogPage } from "$lib/ipc/types";
+import { EMPTY_FILTER } from "./history-logic";
+import { HISTORY_PREFS_PREFIX } from "./historyPrefs";
 import { HistoryStore } from "$lib/stores/history.svelte";
 
 vi.mock("$lib/ipc/client", () => ({
   streamLog: vi.fn(),
   onRepoChanged: vi.fn(),
+  // $lib/events/repoEvents (imported by history.svelte) pulls the other
+  // event seams in transitively; they are never called in this suite.
+  onCloneProgress: vi.fn(),
+  onOpProgress: vi.fn(),
+  onAuthRequest: vi.fn(),
+  onActionOutput: vi.fn(),
+  onPtyOutput: vi.fn(),
+  onPtyExit: vi.fn(),
 }));
 
 const mockStreamLog = vi.mocked(streamLog);
@@ -84,6 +95,8 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.useRealTimers();
+  resetRepoEvents(); // drops the module-owned backend subscription
+  localStorage.clear(); // drop seeded per-root history prefs
 });
 
 /** Flushes pending microtasks (stream completion callbacks). */
@@ -378,7 +391,7 @@ describe("errors", () => {
 // ---------------------------------------------------------------------------
 
 describe("destroy", () => {
-  it("cancels everything: unsubscribes, invalidates pages/timers", async () => {
+  it("cancels everything: deregisters the watcher, invalidates pages/timers", async () => {
     vi.useFakeTimers();
     const store = new HistoryStore();
     store.start("repo-1");
@@ -389,9 +402,14 @@ describe("destroy", () => {
     store.setFilter({ text: "soon-destroyed" });
     store.destroy();
 
-    expect(unlistenSpy).toHaveBeenCalledTimes(1);
     expect(store.pages).toHaveLength(0);
     expect(store.repoId).toBeNull();
+
+    // The store's listener is gone: watcher events no longer restart it
+    // (the backend subscription itself is module-owned and stays).
+    watcherHandlers[0]!({ repo_id: "repo-1", paths: [], head_moved: true, full: false });
+    expect(calls).toHaveLength(1);
+    expect(unlistenSpy).not.toHaveBeenCalled();
 
     calls[0]!.deliver(makePage(90, 1, 0)); // stale stream → ignored
     calls[0]!.finish();
@@ -409,7 +427,123 @@ describe("destroy", () => {
     store.destroy();
     store.start("repo-1");
     await flush();
+    // The backend subscription is module-owned (one `listen` per event
+    // name); restarting only re-registers the store's listener.
+    expect(mockOnRepoChanged).toHaveBeenCalledTimes(1);
+
+    // ...and the re-registered store still restarts on significant events.
+    calls[1]!.deliver(makePage(0, 2, 1));
+    watcherHandlers[0]!({ repo_id: "repo-1", paths: [], head_moved: true, full: false });
+    expect(calls).toHaveLength(3);
+    expect(store.pages).toHaveLength(0); // fresh stream state
+  });
+});
+
+// ---------------------------------------------------------------------------
+// start() restore ordering (persisted per-root filter → first stream request)
+// ---------------------------------------------------------------------------
+
+describe("start() restore ordering", () => {
+  /** Seeds persisted prefs for a root, exactly as historyPrefs writes them. */
+  function seedPrefs(root: string, filter: Partial<typeof EMPTY_FILTER>): void {
+    localStorage.setItem(
+      HISTORY_PREFS_PREFIX + root,
+      JSON.stringify({ filter: { ...EMPTY_FILTER, ...filter }, selectedSha: null, detailOpen: false }),
+    );
+  }
+
+  it("applies the persisted filter BEFORE the first stream request", () => {
+    seedPrefs("/repo", { text: "fix", author: "Ann", path: "src/" });
+
+    const store = new HistoryStore();
+    store.start("repo-1", { root: "/repo" });
+
+    expect(calls).toHaveLength(1);
+    // The first repo_log_stream already carries the restored filter —
+    // code order inside start(), not view effect order.
+    expect(calls[0]!.filter.text).toBe("fix");
+    expect(calls[0]!.filter.author).toBe("Ann");
+    expect(calls[0]!.filter.path).toBe("src/");
+    // The filter bar state matches what was streamed (the view saves it back).
+    expect(store.filter.text).toBe("fix");
+    expect(store.filterActive).toBe(true);
+  });
+
+  it("starts with the empty filter for a root without persisted prefs", () => {
+    const store = new HistoryStore();
+    store.start("repo-1", { root: "/fresh" });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.filter).toEqual({
+      text: null,
+      regex: false,
+      author: null,
+      path: null,
+      after_unix: null,
+      before_unix: null,
+      refs: [],
+      follow: false,
+      pickaxe: null,
+    });
+  });
+
+  it("re-applies the OTHER root's persisted filter on repo switch", () => {
+    seedPrefs("/a", { text: "aa" });
+    seedPrefs("/b", { author: "Bee" });
+
+    const store = new HistoryStore();
+    store.start("repo-1", { root: "/a" });
+    store.start("repo-2", { root: "/b" });
+
     expect(calls).toHaveLength(2);
-    expect(mockOnRepoChanged).toHaveBeenCalledTimes(2);
+    expect(calls[1]!.filter.text).toBeNull();
+    expect(calls[1]!.filter.author).toBe("Bee");
+  });
+
+  it("keeps a caller-set filter when started without a root (file-history mode)", () => {
+    const store = new HistoryStore({ follow: true });
+    store.setFilter({ path: "src/x.ts" });
+    store.start("repo-1");
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.filter.path).toBe("src/x.ts");
+    expect(calls[0]!.filter.follow).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Restored-selection resolution (store wrapper over the pure logic)
+// ---------------------------------------------------------------------------
+
+describe("resolveRestoredSelection", () => {
+  it("releases buffered pages to resolve a sha beyond the loaded window", () => {
+    const store = new HistoryStore();
+    store.start("repo-1");
+    calls[0]!.deliver(makePage(0, 500, 0));
+    calls[0]!.deliver(makePage(500, 500, 0));
+    calls[0]!.deliver(makePage(1000, 500, 0)); // buffered (release cap 1000)
+
+    expect(store.resolveRestoredSelection(sha(1_200))).toEqual({
+      kind: "resolved",
+      index: 1_200,
+    });
+    expect(store.flat.commits).toHaveLength(1_500); // reveal released the rest
+  });
+
+  it("stays pending while the stream may still deliver the commit", () => {
+    const store = new HistoryStore();
+    store.start("repo-1");
+    calls[0]!.deliver(makePage(0, 2, 0));
+
+    // Stream still in flight (loading) and nothing buffered to reveal.
+    expect(store.resolveRestoredSelection(sha(99_999))).toEqual({ kind: "pending" });
+  });
+
+  it("drops a commit the exhausted stream never delivered", async () => {
+    const store = new HistoryStore();
+    store.start("repo-1");
+    calls[0]!.deliver(makePage(0, 2, 0));
+    calls[0]!.finish();
+    await flush(); // loading=false, buffer empty → stream exhausted
+
+    expect(store.resolveRestoredSelection(sha(99_999))).toEqual({ kind: "dropped" });
   });
 });

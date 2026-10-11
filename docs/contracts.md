@@ -2,7 +2,8 @@
 
 Source of truth for Tauri command names, payloads, channels, and events.
 Lane agents extend additively; breaking changes go through the orchestrator.
-Types: Rust `src-tauri/src/engine/types.rs` ↔ TS `src/lib/ipc/types.ts` (keep mirrored).
+Types: Rust `src-tauri/src/engine/types.rs` is the single source; TS shapes
+are GENERATED from it (see "Type single-sourcing" below).
 
 ## Commands (M1)
 
@@ -36,16 +37,40 @@ with same kind+repo replaces the prior stream.
 | `cli-args` | `string[]` | second instance launched with args (argv[0] = the executable's own path, stripped backend-side) |
 | `repo-changed` | `{ repo_id, paths: string[], head_moved: bool, full: bool }` | watcher fired; `full=true` → resync everything |
 
-## TS mirrors
+## Type single-sourcing (ts-rs)
 
-`src/lib/ipc/types.ts` exports the same shapes (camelCase fields, serde uses
-snake_case + `rename_all` where noted — mirror the Rust serde attributes).
-`src/lib/ipc/client.ts` provides typed wrappers; UI never calls `invoke` directly.
+Wire format is **snake_case end to end** (values pass through verbatim — no
+camelCase conversion anywhere). TS types are not hand-mirrored:
+
+1. Every serializable IPC type in Rust carries `derive(TS)` (ts-rs 12,
+   `serde-compat`). Sources: `src-tauri/src/engine/types.rs` (core model)
+   plus the payload types declared next to their commands/events
+   (`forge.rs`, `pty.rs`, `engine/stats.rs`, `ops.rs`, `auth.rs`,
+   `actions.rs`, `watcher.rs`, `editors.rs`, `opencode.rs`,
+   `graph/types.rs`, `ipc_commands.rs`).
+2. `cargo test export_bindings` (wrapped as `npm run gen:types`) regenerates
+   one file per type into `src/lib/ipc/gen/<RustTypeName>.ts` (destination
+   pinned by `TS_RS_EXPORT_DIR` in `src-tauri/.cargo/config.toml`; generated
+   files are committed by design).
+3. `src/lib/ipc/types.ts` is the stable FE import point: it re-exports the
+   generated files under the FE names (Rust `PtyOutput` → TS
+   `PtyOutputEvent`, `AppEntry` → `EditorApp`, `AuthRequestEvent` →
+   `AuthRequest`, `ActionOutput` → `ActionOutputEvent`,
+   `CloneProgress` → `CloneProgressEvent`, `ForgeError` → `ForgeFailure`)
+   and keeps only FE-only helper types below the re-exports, marked
+   `// FE-only:`.
+4. Gate: CI regenerates the bindings and fails on
+   `git diff -- src/lib/ipc/gen`; `hooks/pre-push` runs the same check.
+   `Option<T>` maps to `T | null` (required property); fields the FE omits
+   when constructing requests are annotated `#[ts(optional = nullable)]` in
+   Rust. `src/lib/ipc/client.ts` provides typed wrappers; UI never calls
+   `invoke` directly.
 
 ## Commands (M2 — mutations)
 
-All run through the per-repo serial op queue; progress streams on the
-`op-progress` event. Arg keys snake_case (commands use `rename_all`).
+All run through the per-repo serial op queue; mutations and net ops stream
+progress on the `op-progress` event (reads run silently — they emit no
+events). Arg keys snake_case (commands use `rename_all`).
 
 | Command | Args | Returns |
 |---|---|---|
@@ -74,7 +99,7 @@ All run through the per-repo serial op queue; progress streams on the
 
 | Event | Payload | Meaning |
 |---|---|---|
-| `op-progress` | `{ repo_id, op_id, kind, message, pct: number \| null, done: bool, error: string \| null }` | op queue progress; kinds: `stage`, `commit`, `branch`, `fetch`, `pull`, `push`, `clone` |
+| `op-progress` | `{ repo_id, op_id, kind, message, pct: number \| null, done: bool, error: string \| null }` | op-queue progress for mutations and net ops: throttled updates plus a final `done` event on success or failure (failures toast FE-side). Queue-dispatched reads (`status`, `refs`, `blame`, `diff`, …) emit nothing — their errors return through the command. Kinds: `stage`, `commit`, `branch`, `merge`, `rebase`, `bisect`, `stash`, `worktree`, `checkpoint`, `submodule`, `discard`, `clean`, `fetch`, `pull`, `push`, `maintenance`, `archive`, `sparse`, `lfs` (tags report as `branch`, remote config ops as `fetch`) |
 | `auth-request` | `{ op_id, repo_id, url, kind: "https-user" \| "https-pass" \| "ssh-passphrase", prompt }` | engine needs credentials; FE shows dialog, answers via `auth_respond` |
 
 ## Commands (M3 — power + safety)
@@ -195,7 +220,7 @@ no event stream). Logic: `src-tauri/src/forge.rs`; tests: `forge_tests.rs`.
 | `pr_list` | `repo_id` | `PrInfo[]` | `gh pr list --json number,title,headRefName,baseRefName,state,isDraft,url,createdAt --limit 50` |
 | `pr_checks` | `repo_id, number` | `CheckInfo[]` | `gh pr checks <n> --json name,state,bucket`; table fallback (✓/✗/- rows) for older gh |
 
-Types (TS mirrors in `src/lib/ipc/client.ts`):
+Types (generated to `src/lib/ipc/gen/`, re-exported by `src/lib/ipc/types.ts`):
 
 ```
 ForgeStatus  = { available: bool, version: string, authed: bool }
@@ -224,13 +249,15 @@ error and the FE panel explains the gh flow is unavailable.
   lane) + a `RepoView.svelte` snippet + `TREE_PANELS` membership.
 - **AI event contract** (CreatePrDialog prefill, independent of H1's
   commit-message contract — reconcile names if H1 shipped a different pair):
-  - dialog **emits** `ai-generate-pr` on `window`:
+  - dialog **emits** `ai-generate-pr` via the typed UI bus
+    (`$lib/palette/events`; document-scoped — was a raw `window`
+    CustomEvent):
     `detail = { repoId: string, commits: [{ sha, summary }] }` (up to 10
     recent commits, may be empty);
-  - dialog **listens** for `ai-pr-result` on `window`:
+  - dialog **listens** for `ai-pr-result` on the typed UI bus:
     `detail = { subject: string, body: string }` fills the title/body
     fields (user typing clears the pending state);
-  - RepoView **emits** `ai-pr-error` on `window` when the generation
+  - RepoView **emits** `ai-pr-error` on the typed UI bus when the generation
     fails (added post-M12): `detail = { message: string }` — the
     dialog clears its "Waiting for AI…" pending state and shows the
     message inline (retry / manual fill).
@@ -239,9 +266,10 @@ error and the FE panel explains the gh flow is unavailable.
 
 ## Commands (M7 — contribution statistics)
 
-Pure backend reads (repo mutex + `spawn_blocking`, no op queue, no generation
-bump). Logic: `src-tauri/src/engine/stats.rs` (inherent `*_impl` methods on
-`Libgit2Engine`, the M2-lane convention); tests: `engine/stats_tests.rs`.
+Queued reads on the per-repo op queue (`enqueue_read`, no generation bump).
+Logic: `src-tauri/src/engine/stats.rs` (inherent `*_impl` methods on
+`Libgit2Engine`, reached through the `GitEngineM12` forwarding hosted in
+`trash.rs`); tests: `engine/stats_tests.rs`.
 
 | Command | Args | Returns | Notes |
 |---|---|---|---|

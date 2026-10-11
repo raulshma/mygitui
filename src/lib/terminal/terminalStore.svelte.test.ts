@@ -15,6 +15,7 @@ import {
   ptyWrite,
 } from "$lib/ipc/client";
 import { isTauri } from "$lib/entry/dragdrop";
+import { resetRepoEvents } from "$lib/events/repoEvents";
 import { toast } from "$lib/toast";
 import {
   RESIZE_DEBOUNCE_MS,
@@ -30,6 +31,13 @@ vi.mock("$lib/ipc/client", () => ({
   ptyKill: vi.fn(),
   onPtyOutput: vi.fn(),
   onPtyExit: vi.fn(),
+  // $lib/events/repoEvents (imported by terminalStore) pulls the other
+  // event seams in transitively; they are never called in this suite.
+  onRepoChanged: vi.fn(),
+  onCloneProgress: vi.fn(),
+  onOpProgress: vi.fn(),
+  onAuthRequest: vi.fn(),
+  onActionOutput: vi.fn(),
 }));
 
 vi.mock("$lib/entry/dragdrop", () => ({
@@ -51,7 +59,7 @@ const mockToast = vi.mocked(toast);
 
 /** Event callbacks captured from the (mocked) tauri subscriptions. */
 let emitOutput: ((session_id: string, data: string) => void) | null = null;
-let emitExit: ((session_id: string, exit_code: number | null) => void) | null = null;
+let emitExit: ((session_id: string, code: number) => void) | null = null;
 
 /** Minimal TerminalLike double recording what the store does to it. */
 class FakeTerminal implements TerminalLike {
@@ -119,10 +127,11 @@ beforeEach(() => {
     return Promise.resolve(() => {});
   });
   mockOnPtyExit.mockImplementation((cb) => {
-    emitExit = (session_id, exit_code) => cb({ session_id, exit_code });
+    emitExit = (session_id, code) => cb({ session_id, code });
     return Promise.resolve(() => {});
   });
   mockIsTauri.mockReturnValue(true);
+  resetRepoEvents(); // fresh module-owned pty subscriptions per test
 });
 
 describe("TerminalStore.ensure", () => {
@@ -254,10 +263,10 @@ describe("TerminalStore data flow", () => {
     expect(again!.status).toBe("live");
   });
 
-  it("reports null exit codes in the toast", async () => {
+  it("reports the exit code in the toast", async () => {
     await setup();
-    emitExit!("pty-1", null);
-    expect(mockToast).toHaveBeenCalledWith("Terminal exited");
+    emitExit!("pty-1", 0);
+    expect(mockToast).toHaveBeenCalledWith("Terminal exited (code 0)");
   });
 
   it("ignores exit events for sessions that were replaced meanwhile", async () => {

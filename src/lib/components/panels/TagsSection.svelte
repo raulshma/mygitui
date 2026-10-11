@@ -20,7 +20,7 @@
   import type { RemoteInfo, TagInfo } from "$lib/ipc/types";
   import { toast } from "$lib/toast";
   import ConfirmDialog from "$lib/components/safety/ConfirmDialog.svelte";
-  import { formatRelativeTime } from "$lib/stores/history-logic";
+  import { formatRelativeTime } from "$lib/git/format";
 
   let {
     repoId,

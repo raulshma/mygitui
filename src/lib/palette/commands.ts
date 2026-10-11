@@ -44,6 +44,7 @@ import type {
   PushOptions,
 } from "$lib/ipc/types";
 import { toast } from "$lib/toast";
+import { emitUiEvent } from "$lib/palette/events";
 import {
   closeTab,
   openTab,
@@ -105,11 +106,6 @@ export function dispatchFocusPanel(
 /** Dispatches a named CustomEvent on `document` (no payload). */
 function dispatch(name: string): void {
   document.dispatchEvent(new CustomEvent(name));
-}
-
-/** Dispatches a named CustomEvent on `window` (no payload). */
-function dispatchWindow(name: string): void {
-  window.dispatchEvent(new CustomEvent(name));
 }
 
 // ---------------------------------------------------------------------------
@@ -261,7 +257,7 @@ export const COMMANDS: Command[] = [
     title: "Clone repository…",
     section: "Repo",
     keywords: ["download", "url"],
-    run: () => dispatch("open-clone-dialog"),
+    run: () => emitUiEvent("open-clone-dialog"),
   },
   {
     id: "repo.refresh",
@@ -607,7 +603,8 @@ export const COMMANDS: Command[] = [
     shortcut: "ctrl+shift+p",
     // Dispatched rather than imported: the palette store imports this
     // registry, and App.svelte owns the "toggle-command-palette" listener.
-    run: () => dispatchWindow("toggle-command-palette"),
+    // The typed bus (palette/events.ts) is pure types — no cycle.
+    run: () => emitUiEvent("toggle-command-palette"),
   },
   {
     // Getter (not a static string) so the palette label always reflects the

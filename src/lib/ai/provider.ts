@@ -1,14 +1,18 @@
 /**
- * AI provider adapter surface + selection (M6, lane H1).
+ * AI provider adapter surface (M6, lane H1).
  *
  * Every backend (opencode server, OpenRouter direct) implements
- * {@link AiProvider}. UI/feature code never touches backend SDKs — it goes
- * through the supervisor, which selects an adapter via
- * {@link selectProvider}.
+ * {@link AiProvider}. UI/feature code never touches backend SDKs — request
+ * routing lives in the connection supervisor (`ensureReady`), which picks
+ * the adapter from the configured backend + fallback.
+ *
+ * Capabilities are OPTIONAL methods ({@link AiProvider.connection},
+ * {@link AiProvider.subscribeLiveness}): a provider implements the ones it
+ * can serve, and callers feature-detect (`if (provider.subscribeLiveness)`).
+ * Absence is the capability signal — OpenRouter implements neither.
  */
 
-import { AiError } from "./types";
-import type { AiBackend, AiConfig, AiResult, ModelInfo } from "./types";
+import type { AiBackend, AiResult, ModelInfo } from "./types";
 
 /** One generation request (prompt builders own the text; this owns routing). */
 export interface AiGenerateRequest {
@@ -38,6 +42,23 @@ export interface AiProbeResult {
   error?: string;
 }
 
+/** Cancels a subscription (Svelte store contract `unsubscribe` shape). */
+export type Unsubscribe = () => void;
+
+/** A fully resolved opencode server connection, crossed whole. */
+export interface ResolvedConnection {
+  /** Server base URL (no stream path). */
+  baseUrl: string;
+  /**
+   * Built `Authorization: Basic …` header value, password included
+   * (`null` when the server needs none). Re-derived per resolution —
+   * never cached across a managed-server restart.
+   */
+  authHeader: string | null;
+  /** Server API generation (picks the SSE path: `/event` vs `/api/event`). */
+  serverKind: "v1" | "v2";
+}
+
 /** Backend-agnostic AI adapter. */
 export interface AiProvider {
   /** Which backend this adapter talks to. */
@@ -53,6 +74,23 @@ export interface AiProvider {
    * Optional — the supervisor falls back to {@link available}.
    */
   check?(): Promise<AiProbeResult>;
+  /**
+   * Resolves the whole server connection (base URL, built auth header
+   * incl. the current password, API generation) in one call. Optional
+   * capability — OpenRouter has nothing to resolve. Rejects when the
+   * backend is unusable; callers invoke it FRESH per (re)connection
+   * attempt so a rotated password is never captured stale.
+   */
+  connection?(): Promise<ResolvedConnection>;
+  /**
+   * Provider-owned SSE liveness subscription. The provider resolves the
+   * connection itself — fresh per subscription attempt, including the
+   * v1/v2 stream-path choice — and invokes `handler(false)` per decoded
+   * event (transport alive), `handler(true)` when the stream ends (the
+   * caller resubscribes on the next healthy transition). Optional
+   * capability — providers without a stream don't implement it.
+   */
+  subscribeLiveness?(handler: (down: boolean) => void): Unsubscribe;
   /** Models this backend currently offers (settings datalist). */
   listModels(): Promise<ModelInfo[]>;
   /** One-shot text generation. Throws {@link AiError}-shaped failures. */
@@ -70,32 +108,3 @@ export const DEFAULT_OPENROUTER_MODEL = "anthropic/claude-sonnet-4.5";
 
 /** Default opencode server base URL (autodiscovery target). */
 export const DEFAULT_OPENCODE_URL = "http://127.0.0.1:4096";
-
-/**
- * Picks the provider for a request: the configured backend when available,
- * otherwise (config `allowFallback` !== false) the other backend when *it*
- * is available. Availability is probed through the adapters (cached by the
- * supervisor; this helper probes directly and is only used outside the
- * supervisor's request path — tests).
- *
- * Throws `AiError("unavailable")` when nothing is usable; the error names
- * the configured backend so the UI can point at settings.
- */
-export async function selectProvider(
-  config: Pick<AiConfig, "backend" | "allowFallback">,
-  providers: ProviderSet,
-): Promise<AiProvider> {
-  const preferred = providers[config.backend];
-  if (await preferred.available()) return preferred;
-
-  const allowFallback = config.allowFallback !== false;
-  const other: AiProvider =
-    config.backend === "opencode" ? providers.openrouter : providers.opencode;
-  if (allowFallback && (await other.available())) return other;
-
-  throw new AiError(
-    "unavailable",
-    `AI backend "${config.backend}" is unavailable${allowFallback ? " (and fallback is unavailable)" : " (fallback disabled)"} — check AI settings`,
-    { backend: config.backend },
-  );
-}

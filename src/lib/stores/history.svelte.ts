@@ -5,10 +5,17 @@
  *
  * Lives in a `.svelte.ts` module because `$state` only compiles there.
  * `HistoryView` creates one instance per mounted view (one per repo tab) and
- * calls `start(repoId)` in an `$effect` / `destroy()` in its cleanup. All
- * backend access goes through `$lib/ipc/client` (mocked with `vi.mock` in
- * tests). Pure helpers (dedupe/flatten, filter serialization) live in
- * `./history-logic` and are tested there.
+ * calls `start(repoId, { root })` in an `$effect` / `destroy()` in its
+ * cleanup. All backend access goes through `$lib/ipc/client` (mocked with
+ * `vi.mock` in tests). Pure helpers (dedupe/flatten, filter serialization,
+ * restored-selection resolution) live in `./history-logic` and are tested
+ * there.
+ *
+ * Restore ordering: when started with a worktree `root`, `start()` applies
+ * the persisted per-root filter (`./historyPrefs`) BEFORE opening the
+ * stream, so the first `repo_log_stream` already carries it. The invariant
+ * used to live in HistoryView effect-creation order; it is plain code order
+ * inside `start()` now.
  *
  * Streaming model: the backend pushes `LogPage`s of up to 500 commits over
  * one channel until the log is exhausted; a new `repo_log_stream` for the
@@ -20,15 +27,18 @@
  * from handing the canvas/DOM list the entire history at once.
  */
 
-import { onRepoChanged, streamLog } from "$lib/ipc/client";
-import type { RepoChangedEvent } from "$lib/ipc/client";
+import { streamLog } from "$lib/ipc/client";
+import { isSignificant, onRepoChange } from "$lib/events/repoEvents";
 import type { LogPage, RepoId } from "$lib/ipc/types";
+import { loadHistoryPrefs } from "./historyPrefs";
 import {
   EMPTY_FILTER,
   LogIndex,
+  resolveRestoredSelection as classifyRestoredSelection,
   toLogFilter,
   type FlatLog,
   type HistoryFilterFields,
+  type RestoredSelection,
 } from "./history-logic";
 
 /** Debounce for filter edits before the stream restarts (ms). */
@@ -72,7 +82,7 @@ export class HistoryStore {
   #token = 0;
   #acceptedGen = 0;
   #debounceTimer: ReturnType<typeof setTimeout> | null = null;
-  #unlisten: (() => void) | null = null;
+  #unregisterWatcher: (() => void) | null = null;
 
   /**
    * `opts.follow` marks a file-history store: the walk follows the path in
@@ -107,8 +117,14 @@ export class HistoryStore {
    * repo; switching repos resets everything and restarts. Also subscribes the
    * repo-changed watcher that restarts the stream when the backend bumps its
    * generation.
+   *
+   * `opts.root` (the worktree root — the persistence identity) turns on
+   * per-root restore: the persisted filter (`./historyPrefs`) is applied
+   * BEFORE the first `repo_log_stream` of this start, so the request already
+   * carries it (order = code order here, not effect order in the view).
+   * Rootless starts (file-history mode) keep the caller's filter.
    */
-  start(repoId: RepoId): void {
+  start(repoId: RepoId, opts: { root?: string } = {}): void {
     if (this.#started && this.#repoId === repoId) return;
     if (this.#repoId !== repoId) {
       this.#acceptedGen = 0;
@@ -117,7 +133,8 @@ export class HistoryStore {
     }
     this.#started = true;
     this.#repoId = repoId;
-    void this.#subscribeWatcher();
+    this.#restorePersistedFilter(opts.root);
+    this.#subscribeWatcher();
     this.#beginStream();
   }
 
@@ -179,19 +196,33 @@ export class HistoryStore {
   }
 
   /**
-   * Stops the store: invalidates in-flight streams and timers, unsubscribes
-   * the watcher and clears all state. Safe to call repeatedly; `start` may be
-   * called again afterwards.
+   * Selection-restore resolution for a hydrated (persisted) sha: releases
+   * buffered pages while the commit may still sit beyond the loaded window,
+   * then classifies the outcome (see `resolveRestoredSelection` in
+   * `./history-logic`) — `{ kind: "resolved", index }` once the commit
+   * reached the log, `{ kind: "pending" }` while the stream may still
+   * deliver it, `{ kind: "dropped" }` once the stream exhausted without it
+   * (the view clears the phantom selection then).
+   */
+  resolveRestoredSelection(sha: string): RestoredSelection {
+    this.revealSha(sha);
+    return classifyRestoredSelection(
+      this.#index,
+      sha,
+      !this.loading && !this.hasMore,
+    );
+  }
+
+  /**
+   * Stops the store: invalidates in-flight streams and timers, deregisters
+   * the repo-changed listener and clears all state. Safe to call
+   * repeatedly; `start` may be called again afterwards.
    */
   destroy(): void {
     this.#token++;
     this.#clearDebounce();
-    try {
-      this.#unlisten?.();
-    } catch {
-      // Ignore unlisten failures.
-    }
-    this.#unlisten = null;
+    this.#unregisterWatcher?.();
+    this.#unregisterWatcher = null;
     this.#started = false;
     this.#repoId = null;
     this.#acceptedGen = 0;
@@ -200,6 +231,18 @@ export class HistoryStore {
   }
 
   // -- internals ------------------------------------------------------------
+
+  /**
+   * Applies the persisted per-root filter so the NEXT `#beginStream` (the
+   * one this `start` is about to open) carries it. No-op without a root —
+   * rootless stores (file-history mode) keep the caller's filter, and a
+   * root of "" (popouts) is display-only by convention.
+   */
+  #restorePersistedFilter(root: string | undefined): void {
+    if (!root) return;
+    const prefs = loadHistoryPrefs(root);
+    this.filter = { ...EMPTY_FILTER, ...(prefs?.filter ?? {}) };
+  }
 
   #beginStream(): void {
     const repoId = this.#repoId;
@@ -282,27 +325,20 @@ export class HistoryStore {
     }
   }
 
-  async #subscribeWatcher(): Promise<void> {
-    try {
-      this.#unlisten?.();
-    } catch {
-      // Ignore unlisten failures.
-    }
-    this.#unlisten = null;
-    const repoId = this.#repoId;
-    if (!repoId) return;
-    try {
-      this.#unlisten = await onRepoChanged((event: RepoChangedEvent) => {
-        if (!this.#started || event.repo_id !== this.#repoId) return;
-        // Index-only churn (stage/unstage) cannot change the commit graph;
-        // restart only when refs/HEAD moved or the watcher demands a resync.
-        if (!event.head_moved && !event.full) return;
+  #subscribeWatcher(): void {
+    this.#unregisterWatcher?.();
+    this.#unregisterWatcher = null;
+    if (!this.#repoId) return;
+    this.#unregisterWatcher = onRepoChange({
+      // Index-only churn (stage/unstage) cannot change the commit graph;
+      // restart only when refs/HEAD moved or the watcher demands a resync.
+      filter: isSignificant,
+      handle: (change) => {
+        if (!this.#started || change.repo_id !== this.#repoId) return;
         // Generation-bumped restart: fresh stream, stale pages ignored.
         this.#beginStream();
-      });
-    } catch {
-      this.#unlisten = null; // never fatal (non-Tauri envs no-op already)
-    }
+      },
+    });
   }
 
   #resetState(): void {

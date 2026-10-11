@@ -31,7 +31,6 @@ import {
 import { isTauri } from "$lib/entry/dragdrop";
 import { tabStore } from "$lib/stores/tabs.svelte";
 import { ConnectionSupervisor } from "./connection";
-import { subscribeOpencodeEvents, type OpencodeEventSession } from "./opencodeEvents";
 import type { SupervisorOptions } from "./connection";
 import { OpenCodeProvider } from "./opencode";
 import type { ManagedServe } from "./opencode";
@@ -40,7 +39,7 @@ import { runFeature } from "./features";
 import type { FeatureCtx, FeatureDeps, FeatureGitClient, FeatureOutcome } from "./features";
 import { defaultAiConfig, AiError, resolveOpencode } from "./types";
 import type { AiBackend, AiConfig, FeatureKind, OpencodeMode } from "./types";
-import type { ProviderSet } from "./provider";
+import type { ProviderSet, Unsubscribe } from "./provider";
 
 /** localStorage key for the non-secret AI config. */
 export const AI_STORAGE_KEY = "mygitui.ai";
@@ -103,6 +102,13 @@ export interface AiStoreDeps {
   supervisor?: Partial<Pick<SupervisorOptions, "now" | "scheduler" | "jitter">>;
   /** Set `false` to disable the opencode SSE liveness stream (tests). */
   events?: false;
+  /**
+   * Overrides the `isTauri()` desktop-environment check (tests). Gates the
+   * SSE liveness loop and the managed-mode wiring: `() => true` simulates
+   * the real app (liveness runs against whatever providers are wired),
+   * `() => false` forces the browser/test posture.
+   */
+  isTauri?: () => boolean;
 }
 
 /** Parses persisted config; drops malformed entries, fills defaults. */
@@ -168,6 +174,9 @@ export class AiStore {
   constructor(deps: AiStoreDeps = {}) {
     this.#storage = deps.storage === undefined ? defaultStorage() : deps.storage;
     this.config = parseAiConfig(this.#storage?.getItem(AI_STORAGE_KEY) ?? null);
+    // Injectable desktop check (tests): gates the liveness loop and the
+    // managed-mode wiring below.
+    const live = deps.isTauri ?? isTauri;
 
     const providers: ProviderSet = {
       opencode:
@@ -178,31 +187,35 @@ export class AiStore {
             const resolved = resolveOpencode(this.config);
             // Outside Tauri there is no serve registry: managed degrades
             // to the v1 attach autodiscovery (browser dev, tests).
-            return resolved === "managed" && !isTauri() ? "attach" : resolved;
+            return resolved === "managed" && !live() ? "attach" : resolved;
           },
           url: () => this.config.opencodeUrl ?? undefined,
           defaultModel: () => this.config.opencodeModel,
-          managed: () => (isTauri() ? managedServeBridge : null),
+          managed: () => (live() ? managedServeBridge : null),
           directory: opencodeDirectory,
           password: () => secretsGet(SECRET_KEYS.opencodeServerPassword),
         }),
       openrouter: deps.providers?.openrouter ?? new OpenRouterProvider(),
     };
-    if (!deps.providers?.opencode) this.#opencode = providers.opencode as OpenCodeProvider;
     this.#supervisor = new ConnectionSupervisor({
       providers,
       config: () => this.config,
       ...deps.supervisor,
     });
 
-    // M12: opencode SSE liveness — while the server streams /event, every
-    // decoded event refreshes transport freshness via the supervisor.
+    // M12: opencode SSE liveness — while the server streams its event
+    // endpoint, every decoded event refreshes transport freshness via the
+    // supervisor. The subscription is provider-owned
+    // (`subscribeLiveness`): the v1/v2 stream path and the auth header are
+    // resolved INSIDE the provider, fresh per (re)connection attempt, so
+    // a managed-server restart's rotated password is never captured stale.
     // Retry stays with the supervisor: the stream never reconnects itself;
-    // the next successful probe re-subscribes. Gated to the real Tauri app:
-    // tests/browser must not fetch or spawn anything at module import.
-    if (!deps.providers?.opencode && deps.events !== false && isTauri()) {
+    // the next successful probe re-subscribes. Gated to the real desktop
+    // app (injectable, see `live`): tests/browser must not fetch or spawn
+    // anything at module import.
+    if (deps.events !== false && live()) {
       this.#supervisor.subscribe((statuses) => {
-        if (statuses.opencode.status === "ok") void this.#ensureEvents();
+        if (statuses.opencode.status === "ok") this.#ensureEvents();
       });
       // M12: proactive startup probe (managed mode also spawns the server
       // here), so the health chip reflects reality immediately instead of
@@ -213,27 +226,27 @@ export class AiStore {
     }
   }
 
-  /** The real opencode provider when this store owns one (else `null`). */
-  #opencode: OpenCodeProvider | null = null;
+  /** Live SSE liveness subscription, when one is running (else `null`). */
+  #unsubLiveness: Unsubscribe | null = null;
 
-  #events: OpencodeEventSession | null = null;
-
-  /** Starts the SSE loop once per "opencode became ok" transition. */
-  async #ensureEvents(): Promise<void> {
-    if (this.#events) return;
-    // Managed mode puts the server on a random port: resolve the base the
-    // same way the provider does (its connection() probes managed status
-    // too, and carries the managed 2.x password for the stream).
-    const conn = await this.#opencode?.connection().catch(() => null);
-    if (!conn?.base) return;
-    const password = conn.password;
-    this.#events = subscribeOpencodeEvents({
-      url: conn.base,
-      password: async () => password,
-      onEvent: () => this.#supervisor.noteTransportEvent("opencode"),
-      onEnded: () => {
-        this.#events = null;
-      },
+  /** Starts the SSE liveness loop once per "opencode became ok" transition. */
+  #ensureEvents(): void {
+    if (this.#unsubLiveness) return;
+    // Capability-gated: providers without the liveness seam (OpenRouter,
+    // test doubles) simply never stream. The provider resolves the
+    // connection ITSELF — fresh per (re)connection attempt, auth header
+    // re-derived — so nothing secret is frozen into a closure here.
+    const provider = this.#supervisor.provider("opencode");
+    if (!provider.subscribeLiveness) return;
+    this.#unsubLiveness = provider.subscribeLiveness((down) => {
+      if (down) {
+        // Stream ended (or never opened): drop it; the next ok transition
+        // resubscribes — with a freshly resolved connection.
+        this.#unsubLiveness = null;
+      } else {
+        // Decoded event: transport alive → refresh supervisor freshness.
+        this.#supervisor.noteTransportEvent("opencode");
+      }
     });
   }
 

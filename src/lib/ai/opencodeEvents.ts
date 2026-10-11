@@ -1,12 +1,14 @@
 /**
- * opencode SSE event stream (M12) — plan §15 specified consuming the
- * server's `/event` stream; until now only the synchronous prompt round
- * trip existed.
+ * opencode SSE event stream (M12) — a fetch-based reader over the server's
+ * event stream (`EventSource` can't carry the basic-auth header opencode
+ * expects): `data: {json}\n\n` frames, one event per frame (`{type,
+ * properties}` per the 1.x server, `{type, data}` per 2.x).
  *
- * `EventSource` can't carry the basic-auth header opencode expects, so this
- * is a fetch-based reader over the response body: `data: {json}\n\n`
- * frames, one event per frame (`{type, properties}` per the opencode
- * server).
+ * The READY stream is handed in by the provider
+ * ({@link OpenCodeProvider.subscribeLiveness} resolves the connection —
+ * base URL, built auth header, and the generation-specific path
+ * `/event` vs `/api/event` — fresh per attempt); this module only does SSE
+ * framing. It never probes or discovers.
  *
  * Retry ownership stays with the connection supervisor (plan: "single
  * retry owner") — this module never reconnects. It consumes until the
@@ -14,7 +16,7 @@
  * restarts it after the next successful probe.
  */
 
-import { basicAuthHeader, discoverOpencode, type FetchLike } from "./opencode";
+import type { FetchLike } from "./opencode";
 
 /** Consumer of one decoded opencode event. */
 export type OpencodeEventHandler = (
@@ -23,16 +25,14 @@ export type OpencodeEventHandler = (
 ) => void;
 
 export interface OpencodeEventsOptions {
-  /** Manual base URL; autodiscovers 127.0.0.1:4096 when unset. */
-  url?: string;
-  /** Resolves the basic-auth password (keyring), when configured. */
-  password?: () => Promise<string | null>;
+  /** Ready stream URL (base + generation-specific path), pre-resolved. */
+  url: string;
+  /** Built `Authorization` header value; unset/`null` when none is needed. */
+  authHeader?: string | null;
   /** Decoded event callback (transport-level liveness + activity). */
   onEvent: OpencodeEventHandler;
-  /** Stream ended (server closed or read failed). Never reconnects. */
+  /** Stream ended (server closed, stream fetch failed, or read failed). Never reconnects. */
   onEnded?: (reason: "aborted" | "closed" | "error", detail?: string) => void;
-  /** Undiscoverable server — nothing to subscribe to. */
-  onUnreachable?: (detail: string) => void;
   fetchImpl?: FetchLike;
   now?: () => number;
 }
@@ -79,10 +79,10 @@ export function decodeOpencodeEvent(
 }
 
 /**
- * Subscribes to `GET {base}/event` (SSE) and invokes `onEvent` per decoded
- * event. Resolves the session immediately (discovery is async inside);
- * `onUnreachable` fires when no server answers. The returned `stop()`
- * aborts the underlying fetch.
+ * Subscribes to the ready SSE stream URL and invokes `onEvent` per decoded
+ * event. Resolves the session immediately (the fetch is async inside);
+ * `onEnded` fires when the stream fetch fails or ends. The returned
+ * `stop()` aborts the underlying fetch.
  */
 export function subscribeOpencodeEvents(
   options: OpencodeEventsOptions,
@@ -104,32 +104,13 @@ export function subscribeOpencodeEvents(
   };
 
   void (async () => {
-    // Strict discovery (JSON health/info), shared with the provider.
-    // The password is resolved once and used for both discovery and the
-    // stream: a password-gated 2.x server answers 401 without it, which
-    // would otherwise read as unreachable and never start the stream.
-    const password = (await options.password?.().catch(() => null)) ?? null;
-    const { server } = await discoverOpencode(options.url, fetchImpl, password);
-    if (!server) {
-      options.onUnreachable?.(
-        options.url
-          ? `no opencode server at ${options.url}`
-          : "no opencode server found",
-      );
-      return;
-    }
-    if (stopped) return;
-
-    // 1.x servers stream at /event; 2.x moved the stream to /api/event.
-    const eventPath = server.kind === "v2" ? "/api/event" : "/event";
-
     const headers: Record<string, string> = {
       Accept: "text/event-stream",
     };
-    if (password) headers.Authorization = basicAuthHeader(password);
+    if (options.authHeader) headers.Authorization = options.authHeader;
 
     try {
-      const response = await fetchImpl(new URL(eventPath, server.base), {
+      const response = await fetchImpl(new URL(options.url), {
         headers,
         signal: controller.signal,
       });

@@ -1098,11 +1098,24 @@ describe("OpenCodeProvider v2", () => {
     expect((err as AiError).kind).toBe("unauthenticated");
   });
 
-  it("connection() returns the base and password for event streams", async () => {
+  it("connection() returns the whole resolved server (base, built auth header, kind)", async () => {
     const conn = await makeV2Provider(healthFetch(200, { v2: true }), "pw").connection();
-    expect(conn).toEqual({ base: "http://127.0.0.1:4096", password: "pw" });
-    const down = await makeV2Provider(healthFetch(0, { fail: true })).connection();
-    expect(down).toEqual({ base: null, password: null });
+    expect(conn).toEqual({
+      baseUrl: "http://127.0.0.1:4096",
+      authHeader: `Basic ${btoa("opencode:pw")}`,
+      serverKind: "v2",
+    });
+    // v1 servers carry no header when no password is configured.
+    const v1 = await makeProvider(healthFetch(200)).connection();
+    expect(v1).toEqual({
+      baseUrl: "http://127.0.0.1:4096",
+      authHeader: null,
+      serverKind: "v1",
+    });
+    // Down: the AiError propagates (callers re-attempt per reconnection).
+    await expect(
+      makeV2Provider(healthFetch(0, { fail: true })).connection(),
+    ).rejects.toBeInstanceOf(AiError);
   });
 
   it("managed mode prefers the generated 2.x password over the keyring", async () => {
@@ -1121,6 +1134,140 @@ describe("OpenCodeProvider v2", () => {
       fetchImpl: healthFetch(200, { v2: true }),
     });
     const conn = await provider.connection();
-    expect(conn).toEqual({ base: "http://127.0.0.1:51998", password: "managed-pw" });
+    expect(conn).toEqual({
+      baseUrl: "http://127.0.0.1:51998",
+      authHeader: `Basic ${btoa("opencode:managed-pw")}`,
+      serverKind: "v2",
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Provider-owned SSE liveness (subscribeLiveness)
+// ---------------------------------------------------------------------------
+
+/** An abort-aware SSE response: the stream errors when the signal fires
+ * (what a real fetch's body does), so stop() surfaces as an ended stream. */
+function sseResponse(frames: string[], signal?: AbortSignal | null): Response {
+  const encoder = new TextEncoder();
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      for (const frame of frames) controller.enqueue(encoder.encode(frame));
+      signal?.addEventListener("abort", () =>
+        controller.error(new DOMException("aborted", "AbortError")),
+      );
+    },
+  });
+  return new Response(stream, { status: 200 });
+}
+
+describe("OpenCodeProvider.subscribeLiveness", () => {
+  it("streams a 1.x server at /event: handler(false) per event, handler(true) on stop", async () => {
+    let call = 0;
+    const urls: string[] = [];
+    const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      urls.push(String(input));
+      call += 1;
+      if (call <= 2) return jsonResponse(200, { healthy: true, version: "1.18.35" });
+      return sseResponse(
+        ['data: {"type":"session.updated","properties":{}}\n\n'],
+        init?.signal,
+      );
+    }) as unknown as FetchLike;
+
+    const signals: boolean[] = [];
+    const provider = new OpenCodeProvider({ fetchImpl });
+    const unsub = provider.subscribeLiveness((down) => signals.push(down));
+    await vi.waitFor(() => expect(signals).toEqual([false]));
+    // The path choice is the provider's: 1.x → /event.
+    expect(urls[urls.length - 1]).toBe("http://127.0.0.1:4096/event");
+    unsub();
+    await vi.waitFor(() => expect(signals).toEqual([false, true]));
+  });
+
+  it("streams a 2.x server at /api/event and carries the built auth header", async () => {
+    const inits: RequestInit[] = [];
+    let call = 0;
+    const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      void input;
+      inits.push(init ?? {});
+      call += 1;
+      if (call === 1) return jsonResponse(200, { version: "2.0.18", pid: 9 });
+      return sseResponse(['data: {"type":"v2.event","data":{}}\n\n'], init?.signal);
+    }) as unknown as FetchLike;
+
+    const signals: boolean[] = [];
+    const provider = new OpenCodeProvider({
+      fetchImpl,
+      password: async () => "sekrit",
+    });
+    const unsub = provider.subscribeLiveness((down) => signals.push(down));
+    await vi.waitFor(() => expect(signals).toEqual([false]));
+    // 2.x → /api/event, with the basic-auth header derived by the provider.
+    expect(inits.length).toBe(2);
+    expect(new Headers(inits[1].headers).get("Authorization")).toBe(
+      `Basic ${btoa("opencode:sekrit")}`,
+    );
+    unsub();
+  });
+
+  it("reports down when the connection cannot be resolved (no stream fetch)", async () => {
+    const fetchImpl = (async () => {
+      throw new TypeError("fetch failed");
+    }) as unknown as FetchLike;
+    const signals: boolean[] = [];
+    const provider = new OpenCodeProvider({ fetchImpl });
+    const unsub = provider.subscribeLiveness((down) => signals.push(down));
+    await vi.waitFor(() => expect(signals).toEqual([true]));
+    unsub();
+  });
+
+  it("resolves the connection FRESH per attempt (restart-rotated password re-derived)", async () => {
+    let registry = {
+      running: true,
+      url: "http://127.0.0.1:53001",
+      error: null as string | null,
+      password: "generated-one",
+    };
+    const serve = {
+      status: vi.fn(async () => registry),
+      start: vi.fn(async () => registry),
+    };
+    const streamAuth: string[] = [];
+    let call = 0;
+    const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      void input;
+      call += 1;
+      if (call % 2 === 1) {
+        // Probe /api/info → identifies a 2.x managed server.
+        return jsonResponse(200, { version: "2.0.18", pid: 9 });
+      }
+      streamAuth.push(new Headers(init?.headers).get("Authorization") ?? "");
+      return sseResponse([], init?.signal);
+    }) as unknown as FetchLike;
+
+    const provider = new OpenCodeProvider({
+      resolve: () => "managed",
+      managed: () => serve as never,
+      fetchImpl,
+    });
+
+    const first = provider.subscribeLiveness(() => {});
+    await vi.waitFor(() => expect(streamAuth.length).toBe(1));
+    first();
+
+    // Restart: new port + newly generated password in the serve registry.
+    registry = {
+      running: true,
+      url: "http://127.0.0.1:53002",
+      error: null,
+      password: "generated-two",
+    };
+    const second = provider.subscribeLiveness(() => {});
+    await vi.waitFor(() => expect(streamAuth.length).toBe(2));
+    second();
+
+    expect(streamAuth[0]).toBe(`Basic ${btoa("opencode:generated-one")}`);
+    expect(streamAuth[1]).toBe(`Basic ${btoa("opencode:generated-two")}`);
   });
 });

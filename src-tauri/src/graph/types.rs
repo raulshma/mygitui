@@ -31,15 +31,18 @@
 //!   `LaneState` yields byte-identical rows.
 
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
 /// Connection from one row to the row below (or within-row bends).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct GraphEdge {
     pub from: u16,
     pub to: u16,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct GraphRow {
     pub sha: String,
     /// Lane index of this commit's node.

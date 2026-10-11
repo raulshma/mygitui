@@ -32,7 +32,7 @@
     formatDateTime,
     formatRelativeTime,
     shortRefName,
-  } from "$lib/stores/history-logic";
+  } from "$lib/git/format";
   import { toast } from "$lib/toast";
 
   let {

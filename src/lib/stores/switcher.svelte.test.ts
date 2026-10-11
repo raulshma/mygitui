@@ -26,6 +26,14 @@ vi.mock("$lib/ipc/client", () => ({
   closeRepo: vi.fn(),
   repoStatus: vi.fn(),
   onRepoChanged: vi.fn(),
+  // $lib/events/repoEvents (imported by tabs.svelte) pulls the other event
+  // seams in transitively; they are never called in this suite.
+  onCloneProgress: vi.fn(),
+  onOpProgress: vi.fn(),
+  onAuthRequest: vi.fn(),
+  onActionOutput: vi.fn(),
+  onPtyOutput: vi.fn(),
+  onPtyExit: vi.fn(),
 }));
 
 const mockOpenRepo = vi.mocked(openRepo);

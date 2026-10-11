@@ -10,6 +10,7 @@ import type { FileDiff } from "$lib/ipc/types";
 import { AiStore, parseAiConfig, AI_STORAGE_KEY } from "./ai.svelte";
 import type { AiProbeResult, AiProvider, ProviderSet } from "./provider";
 import type { FeatureGitClient } from "./features";
+import { OpenCodeProvider } from "./opencode";
 import { AiError, defaultAiConfig, resolveOpencode, resolveOpencodeMode } from "./types";
 import type { AiBackend, AiResult } from "./types";
 
@@ -102,12 +103,18 @@ function makeHarness(opts?: {
   storage?: Storage;
   opencodeProbe?: AiProbeResult;
   openrouterProbe?: AiProbeResult;
+  /** Overrides the store's `isTauri()` desktop check (liveness tests). */
+  isTauri?: () => boolean;
 }): Harness {
   const storage = opts?.storage ?? memStorage();
   const opencode = mockProvider("opencode", opts?.opencodeProbe);
   const openrouter = mockProvider("openrouter", opts?.openrouterProbe);
   const providers: Partial<ProviderSet> = { opencode, openrouter };
-  const store = new AiStore({ storage, providers });
+  const store = new AiStore({
+    storage,
+    providers,
+    isTauri: opts?.isTauri,
+  });
   const git: FeatureGitClient = {
     repoDiff: vi.fn(async () => [FILE]),
     streamLog: vi.fn(async (_repoId, _filter, onPage) => {
@@ -356,5 +363,154 @@ describe("AiStore opt-in gating and run state", () => {
     const { store } = makeHarness();
     expect(store.supervisor.provider("opencode").id).toBe("opencode");
     expect(store.supervisor.provider("openrouter").id).toBe("openrouter");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// SSE liveness loop (provider-owned subscribeLiveness; injectable gate)
+// ---------------------------------------------------------------------------
+
+/** A scheduler whose timers never fire (hermetic: no hidden retries). */
+function deadScheduler(): { setTimeout: () => number; clearTimeout: () => void } {
+  return { setTimeout: () => 0, clearTimeout: () => {} };
+}
+
+function jsonResponse(status: number, body: unknown): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "content-type": "application/json" },
+  });
+}
+
+describe("AiStore SSE liveness loop", () => {
+  /** Mock opencode provider WITH the liveness capability. */
+  function liveMockProvider() {
+    const handlers: Array<(down: boolean) => void> = [];
+    const provider = {
+      ...mockProvider("opencode"),
+      subscribeLiveness: vi.fn((handler: (down: boolean) => void) => {
+        handlers.push(handler);
+        return () => {};
+      }),
+    };
+    return { provider, handlers };
+  }
+
+  it("runs only under the injectable desktop gate and never double-subscribes", async () => {
+    const { provider: off } = liveMockProvider();
+    // Browser/test posture (no override; isTauri() is false in vitest):
+    // the loop never wires even though the backend probes ok.
+    const offStore = new AiStore({
+      storage: memStorage(),
+      providers: { opencode: off, openrouter: mockProvider("openrouter") },
+    });
+    await offStore.supervisor.check("opencode");
+    expect(off.subscribeLiveness).not.toHaveBeenCalled();
+
+    // Desktop posture (injected): subscribes on the ok transition.
+    const { provider: on } = liveMockProvider();
+    const onStore = new AiStore({
+      storage: memStorage(),
+      providers: { opencode: on, openrouter: mockProvider("openrouter") },
+      isTauri: () => true,
+      supervisor: { scheduler: deadScheduler(), jitter: () => 0 },
+    });
+    await onStore.supervisor.check("opencode");
+    expect(on.subscribeLiveness).toHaveBeenCalledTimes(1);
+    // Further ok emissions while a subscription exists do not re-subscribe.
+    await onStore.supervisor.check("opencode");
+    expect(on.subscribeLiveness).toHaveBeenCalledTimes(1);
+  });
+
+  it("maps handler(false) to a freshness refresh and handler(true) to resubscription", async () => {
+    const { provider, handlers } = liveMockProvider();
+    const store = new AiStore({
+      storage: memStorage(),
+      providers: { opencode: provider, openrouter: mockProvider("openrouter") },
+      isTauri: () => true,
+      supervisor: { scheduler: deadScheduler(), jitter: () => 0 },
+    });
+    await store.supervisor.check("opencode");
+    expect(handlers.length).toBe(1);
+
+    // Decoded event → transport alive → supervisor freshness refreshed.
+    const before = store.supervisor.status("opencode").lastCheck ?? 0;
+    handlers[0]!(false);
+    expect(store.supervisor.status("opencode").lastCheck ?? 0).toBeGreaterThanOrEqual(before);
+
+    // Stream ended → dropped; the next ok transition resubscribes.
+    handlers[0]!(true);
+    await store.supervisor.check("opencode");
+    expect(provider.subscribeLiveness).toHaveBeenCalledTimes(2);
+  });
+
+  it("a managed-server restart rotates the password: the next stream attempt carries the new auth header", async () => {
+    // Serve registry: the generated password + port are regenerated per restart.
+    let registry = {
+      running: true,
+      url: "http://127.0.0.1:53011",
+      error: null as string | null,
+      password: "generated-one",
+    };
+    const serve = {
+      status: vi.fn(async () => registry),
+      start: vi.fn(async () => registry),
+    };
+    const streamAuth: string[] = [];
+    let streamController: ReadableStreamDefaultController<Uint8Array> | null = null;
+    const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/api/info")) {
+        // The managed server identifies as 2.x (JSON probe = app health).
+        return jsonResponse(200, { version: "2.0.18", pid: 9 });
+      }
+      // The event stream: record the auth header the provider just built.
+      streamAuth.push(new Headers(init?.headers).get("authorization") ?? "");
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          streamController = controller;
+          init?.signal?.addEventListener("abort", () =>
+            controller.error(new DOMException("aborted", "AbortError")),
+          );
+        },
+      });
+      return new Response(stream, { status: 200 });
+    }) as unknown as typeof fetch;
+
+    // The REAL OpenCodeProvider is wired in (fake fetch + fake serve
+    // bridge), so the whole path — resolution, header building, SSE
+    // subscription — runs for real against fakes.
+    const opencode = new OpenCodeProvider({
+      resolve: () => "managed",
+      managed: () => serve as never,
+      fetchImpl,
+    });
+    const store = new AiStore({
+      storage: memStorage(),
+      providers: { opencode, openrouter: mockProvider("openrouter") },
+      isTauri: () => true,
+      supervisor: { scheduler: deadScheduler(), jitter: () => 0 },
+    });
+
+    // Startup probe → ok → liveness subscribes with the CURRENT password.
+    await vi.waitFor(() => expect(streamAuth.length).toBe(1));
+    expect(streamAuth[0]).toBe(`Basic ${btoa("opencode:generated-one")}`);
+
+    // Restart: the server dies (stream errors) and comes back on a new
+    // port with a freshly generated password in the registry.
+    registry = {
+      running: true,
+      url: "http://127.0.0.1:53012",
+      error: null,
+      password: "generated-two",
+    };
+    streamController!.error(new Error("server went away"));
+
+    // The stream end reports down; the next ok transition resubscribes —
+    // through a FRESH connection(), so the rotated password is used
+    // instead of the one frozen into the previous subscription.
+    await store.supervisor.check("opencode");
+    await vi.waitFor(() => expect(streamAuth.length).toBe(2));
+    expect(streamAuth[1]).toBe(`Basic ${btoa("opencode:generated-two")}`);
   });
 });

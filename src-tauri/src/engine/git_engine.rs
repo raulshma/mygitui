@@ -237,7 +237,8 @@ pub struct PushProgress {
 
 use super::types::{
     BisectMark, BisectState, CheckpointInfo, ConflictFile, ConflictResolution, MergeOptions,
-    MergeResult, RebaseState, RebaseStep, ReflogEntry, ResetKind, StashInfo, WorktreeInfo,
+    MergeResult, PreviewInfo, RebaseState, RebaseStep, ReflogEntry, ResetKind, StashInfo,
+    WorktreeInfo,
 };
 
 /// Additional trait items live in an extension impl to keep M2 diff small.
@@ -371,6 +372,19 @@ pub trait GitEngineM3: Send + Sync {
         Err(EngineError::Unsupported("checkpoint_gc".into()))
     }
 
+    /// Pure preview of what a dangerous op would do (lane D4): `kind` is one
+    /// of "reset_hard" / "clean" / "checkout_force" / "branch_delete",
+    /// `params` carries the kind's arguments. Computed without touching the
+    /// workdir, index, or any ref.
+    fn ops_preview(
+        &self,
+        _repo: &Repository,
+        _kind: &str,
+        _params: &serde_json::Value,
+    ) -> EngineResult<PreviewInfo> {
+        Err(EngineError::Unsupported("ops_preview".into()))
+    }
+
     // ---------- M10: bisect / describe / autosquash ----------
 
     fn bisect_start(
@@ -409,7 +423,8 @@ pub trait GitEngineM3: Send + Sync {
 
 // ---------- M12: signature verify / branch trash / worktree prune ----------
 
-use super::types::{BisectLogEntry, BranchTrashEntry, CommitSignature};
+use super::stats::{Contributor, DayCount};
+use super::types::{BisectLogEntry, BranchTrashEntry, CommitSignature, SubmoduleInfo};
 
 /// M12 extension trait. Impls live in the owning modules (`signing.rs`,
 /// `trash.rs`, `stash.rs`) so lanes never share an impl block.
@@ -445,5 +460,55 @@ pub trait GitEngineM12: Send + Sync {
     /// Recorded mark history for a live bisect (empty when none).
     fn bisect_log(&self, _repo: &Repository) -> EngineResult<Vec<BisectLogEntry>> {
         Err(EngineError::Unsupported("bisect_log".into()))
+    }
+
+    // ---------- Earlier-milestone lane forwarding (M4 submodules, M7 stats) ----------
+    //
+    // These predate the M12 trait but had no trait method: their IPC handlers
+    // instantiated `Libgit2Engine` and called the inherent `*_impl` twins
+    // directly. Rust coherence allows one `impl GitEngineM12 for
+    // Libgit2Engine` (trash.rs), which is the crate's cross-lane forwarding
+    // point, so the one-line forwarding for the owning modules (`submodules.rs`,
+    // `stats.rs`) lives there — same pattern as `worktree_prune` → `stash.rs`.
+
+    /// List every submodule with checked-out vs recorded state. (M4)
+    fn submodules(&self, _repo: &Repository) -> EngineResult<Vec<SubmoduleInfo>> {
+        Err(EngineError::Unsupported("submodules".into()))
+    }
+
+    /// `git submodule update [--init] [--recursive]` for one submodule. (M4)
+    fn submodule_update(
+        &self,
+        _repo: &Repository,
+        _path: &str,
+        _init: bool,
+        _recursive: bool,
+    ) -> EngineResult<()> {
+        Err(EngineError::Unsupported("submodule_update".into()))
+    }
+
+    /// `git submodule sync [path]`: rewrite submodule URLs from
+    /// `.gitmodules` into the repository config. (M4)
+    fn submodule_sync(&self, _repo: &Repository, _path: Option<&str>) -> EngineResult<()> {
+        Err(EngineError::Unsupported("submodule_sync".into()))
+    }
+
+    /// Commits per local day inside the window, day ascending. (M7)
+    fn commit_activity(
+        &self,
+        _repo: &Repository,
+        _max_days: u32,
+        _author: Option<&str>,
+    ) -> EngineResult<Vec<DayCount>> {
+        Err(EngineError::Unsupported("commit_activity".into()))
+    }
+
+    /// Per-author rollups inside the window, count descending. (M7)
+    fn contributor_stats(
+        &self,
+        _repo: &Repository,
+        _max_days: u32,
+    ) -> EngineResult<Vec<Contributor>> {
+        Err(EngineError::Unsupported("contributor_stats".into()))
     }
 }

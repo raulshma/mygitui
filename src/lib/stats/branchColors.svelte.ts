@@ -21,7 +21,7 @@
  * `$effect`, mirroring the layouts store contract.
  */
 
-import { classifyRef, shortRefName } from "$lib/stores/history-logic";
+import { classifyRef, shortRefName } from "$lib/git/format";
 
 /** localStorage key for one repo root. */
 export function branchColorsKey(root: string): string {

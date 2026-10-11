@@ -32,6 +32,11 @@
  *                       resolved per drawn row against the row commit's ref
  *                       decorations; a hit recolors the row's node + edges
  *                       instead of the lane palette
+ *   scrollEl            [additive] the canvas's native scroll container,
+ *                       two-way bindable by the parent (`bind:scrollEl={el}`)
+ *                       for exact scrollTop sync — the DECLARED interface
+ *                       replacing `.gc-scroll` DOM scraping. Assigned when
+ *                       the container mounts, undefined before/unmounted.
    *
    * Imperative API (via bind:this):
    *   scrollToRow(index: number): void — centers row `index` in the viewport
@@ -64,6 +69,13 @@
     bookmarks?: ReadonlySet<string>;
     /** M7: refs decorations → branch color override (null = lane palette). */
     branchColors?: (refs: string[]) => string | null;
+    /**
+     * Native scroll container, two-way bindable by the parent
+     * (`bind:scrollEl={el}`) for exact scrollTop sync — the declared
+     * replacement for querying the internal `.gc-scroll` class. Assigned by
+     * `bind:this` on mount, undefined before/unmounted.
+     */
+    scrollEl?: HTMLDivElement | undefined;
   }
 
   let {
@@ -80,6 +92,7 @@
     reachEndThresholdRows = 500,
     bookmarks = undefined,
     branchColors = undefined,
+    scrollEl = $bindable(undefined),
   }: Props = $props();
 
   // ---------------------------------------------------------------------------
@@ -88,7 +101,6 @@
 
   const cache = new RowCache();
 
-  let scrollEl: HTMLDivElement | undefined = $state();
   let canvasEl: HTMLCanvasElement | undefined = $state();
   let viewport = $state({ w: 0, h: 0 });
   let dpr = $state(1);

@@ -47,6 +47,25 @@ export interface UiEventMap {
   "open-ai-settings": undefined;
   /** M12: open the accent-seed picker (App owns the dialog). */
   "open-seed-dialog": undefined;
+  /** Open the clone-repository dialog (App owns the dialog; palette command). */
+  "open-clone-dialog": undefined;
+  /**
+   * Toggle the command palette. Dispatched by `commands.ts` rather than
+   * importing the palette store directly (the store imports the registry —
+   * importing back would cycle); this map is types-only, so routing the
+   * event through here stays cycle-free. App owns the listener.
+   */
+  "toggle-command-palette": undefined;
+  /**
+   * Ask the mounted RepoView's AI bridge to generate a PR title/body
+   * (CreatePrDialog prefill): `{ repoId, commits }` — up to 10 recent
+   * commit summaries as context (may be empty).
+   */
+  "ai-generate-pr": { repoId: string; commits: { sha: string; summary: string }[] };
+  /** AI bridge answer: the generated PR title + body. */
+  "ai-pr-result": { subject: string; body: string };
+  /** AI bridge failure: human-readable reason (dialog clears its wait). */
+  "ai-pr-error": { message: string };
 }
 
 export type UiEventName = keyof UiEventMap;

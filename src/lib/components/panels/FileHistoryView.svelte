@@ -21,7 +21,7 @@
   import {
     formatRelativeTime,
     hashHue,
-  } from "$lib/stores/history-logic";
+  } from "$lib/git/format";
   import { repoDiff } from "$lib/ipc/client";
   import type { CommitInfo } from "$lib/ipc/types";
   import type { CompareResult } from "$lib/components/panels/compare";

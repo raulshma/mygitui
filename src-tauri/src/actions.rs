@@ -32,6 +32,7 @@ use std::time::Duration;
 
 use parking_lot::Mutex;
 use serde::Serialize;
+use ts_rs::TS;
 
 /// `action-output` event name (contracts.md, Events M4).
 pub const ACTION_OUTPUT_EVENT: &str = "action-output";
@@ -60,9 +61,10 @@ const WAIT_POLL_INTERVAL: Duration = Duration::from_millis(50);
 const READER_GRACE: Duration = Duration::from_secs(2);
 
 /// `action-output` payload — field names and shapes are fixed by
-/// docs/contracts.md and mirrored in `src/lib/ipc/types.ts`
-/// (`ActionOutputEvent`).
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+/// docs/contracts.md; generated to `src/lib/ipc/gen/` and re-exported
+/// under the FE name `ActionOutputEvent` by `src/lib/ipc/types.ts`.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, TS)]
+#[ts(export)]
 pub struct ActionOutput {
     pub run_id: String,
     pub repo_id: String,

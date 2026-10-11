@@ -1,16 +1,32 @@
 //! Core data model shared across the git engine, IPC boundary, and UI.
 //!
-//! CONTRACT: these types are mirrored in `src/lib/ipc/types.ts`. Changes here
-//! MUST be mirrored there in the same patch — additive changes only within a
-//! milestone; breaking changes go through the orchestrator.
+//! CONTRACT (types single-sourcing): this file is the SOURCE for the IPC type
+//! shapes. Every serializable type carries `derive(TS)` (ts-rs) and is
+//! exported by the `export_bindings*` tests to `src/lib/ipc/gen/<RustTypeName>.ts`
+//! (one file per type, named after the Rust type; the destination is the
+//! `TS_RS_EXPORT_DIR` entry in `src-tauri/.cargo/config.toml`, resolved
+//! relative to the crate root so the path is machine-independent).
+//! `src/lib/ipc/types.ts` re-exports those generated files under the stable
+//! FE names. Never hand-edit `gen/`: regenerate with `npm run gen:types`
+//! (or `cargo test export_bindings`) and commit; CI fails on drift. FE-only
+//! helper types (no Rust counterpart) live in `types.ts` below the
+//! re-exports, marked `// FE-only:`.
+//!
+//! Field optionality note: `Option<T>` generates `T | null` (required
+//! property), matching the wire format; the exceptions are annotated with
+//! `#[ts(optional)]` / `#[ts(optional = nullable)]` where the FE omits the
+//! field when constructing request payloads.
 
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
 /// Stable identifier for an open repo (one per app tab).
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct RepoId(pub String);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
 #[serde(rename_all = "snake_case")]
 pub enum ChangeKind {
     Unmodified,
@@ -24,7 +40,8 @@ pub enum ChangeKind {
     Ignored,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct StatusEntry {
     pub path: String,
     /// Previous path for renames.
@@ -35,7 +52,8 @@ pub struct StatusEntry {
     pub worktree: ChangeKind,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct RepoStatus {
     /// Current branch name; `None` when detached.
     pub branch: Option<String>,
@@ -53,7 +71,8 @@ pub struct RepoStatus {
 }
 
 /// One side of a diff comparison.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
 #[serde(rename_all = "snake_case")]
 pub enum DiffSide {
     /// Working directory.
@@ -66,7 +85,8 @@ pub enum DiffSide {
     Commit(String),
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct DiffLine {
     pub old_no: Option<u32>,
     pub new_no: Option<u32>,
@@ -78,14 +98,16 @@ pub struct DiffLine {
     pub highlights: Vec<(u32, u32)>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct DiffHunk {
     pub old_start: u32,
     pub new_start: u32,
     pub lines: Vec<DiffLine>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct FileDiff {
     pub path: String,
     pub old_path: Option<String>,
@@ -96,7 +118,8 @@ pub struct FileDiff {
     pub hunks: Vec<DiffHunk>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct GitSignature {
     pub name: String,
     pub email: String,
@@ -106,7 +129,8 @@ pub struct GitSignature {
     pub offset_minutes: i32,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct CommitInfo {
     pub sha: String,
     pub parents: Vec<String>,
@@ -120,14 +144,24 @@ pub struct CommitInfo {
     pub refs: Vec<String>,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct LogFilter {
+    /// All `Option` fields below are `#[ts(optional = nullable)]`: serde
+    /// deserializes a missing `Option` field as `None`, so the FE may omit
+    /// them (several call sites construct minimal filters), and the
+    /// generated TS type keeps them optional properties.
+    #[ts(optional = nullable)]
     pub text: Option<String>,
     /// When set, `text` is treated as a regex.
     pub regex: bool,
+    #[ts(optional = nullable)]
     pub author: Option<String>,
+    #[ts(optional = nullable)]
     pub path: Option<String>,
+    #[ts(optional = nullable)]
     pub after_unix: Option<i64>,
+    #[ts(optional = nullable)]
     pub before_unix: Option<i64>,
     /// Restrict the walk to these commit-ish roots; empty = all refs + HEAD.
     pub refs: Vec<String>,
@@ -136,14 +170,19 @@ pub struct LogFilter {
     /// Pickaxe `-S`: only commits whose patch adds or removes this string.
     /// (M10; cost is one tree-diff per candidate commit.)
     #[serde(default)]
+    #[ts(optional = nullable)]
     pub pickaxe: Option<String>,
     /// Pickaxe `-G`: only commits whose patch text matches this regex.
     /// (M12; same per-commit tree-diff cost, regex matched over the patch.)
+    /// The FE omits the field entirely when unset, so the generated TS type
+    /// keeps it an optional property.
     #[serde(default)]
+    #[ts(optional = nullable)]
     pub pickaxe_regex: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct BlameLine {
     pub line_no: u32,
     pub sha: String,
@@ -154,7 +193,8 @@ pub struct BlameLine {
     pub text: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct RepoInfo {
     pub repo_id: RepoId,
     /// Absolute workdir path.
@@ -170,13 +210,15 @@ pub struct RepoInfo {
 
 /// Which lines of a hunk to (un)stage: inclusive ranges over the NEW-side
 /// line numbers (matching what the diff viewer displays).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct LineRange {
     pub start: u32,
     pub end: u32,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
 #[serde(rename_all = "snake_case")]
 pub enum StageTarget {
     /// Whole file by path.
@@ -191,14 +233,16 @@ pub enum StageTarget {
     },
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct StageRequest {
     pub targets: Vec<StageTarget>,
     /// true = remove from index (restore from HEAD), false = add to index.
     pub unstage: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct CommitOptions {
     pub message: String,
     pub amend: bool,
@@ -208,7 +252,8 @@ pub struct CommitOptions {
     pub author: Option<GitSignature>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct SigningInfo {
     pub active: bool,
     /// "openpgp" | "ssh" | "x509" (git config gpg.format).
@@ -216,7 +261,8 @@ pub struct SigningInfo {
     pub key_id: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct HookInfo {
     /// "pre-commit", "commit-msg", "pre-push", ...
     pub kind: String,
@@ -224,7 +270,8 @@ pub struct HookInfo {
     pub executable: bool,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct FetchOptions {
     pub remote: String,
     pub prune: bool,
@@ -234,7 +281,8 @@ pub struct FetchOptions {
     pub depth: Option<u32>,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct PullOptions {
     pub remote: String,
     /// Branch to pull; empty = upstream of current branch.
@@ -245,7 +293,8 @@ pub struct PullOptions {
     pub rebase: bool,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct PushOptions {
     pub remote: String,
     /// Branch to push; empty = current. Ignored when `refs` is non-empty.
@@ -267,14 +316,16 @@ pub struct PushOptions {
     pub delete: bool,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct NetStats {
     pub received_bytes: u64,
     pub objects: u32,
     pub updated_refs: Vec<(String, String)>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct BranchInfo {
     pub name: String,
     pub sha: String,
@@ -285,7 +336,8 @@ pub struct BranchInfo {
     pub is_head: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct RemoteInfo {
     pub name: String,
     pub url: String,
@@ -293,7 +345,8 @@ pub struct RemoteInfo {
 }
 
 /// One tag with its metadata (annotated tags carry tagger + message).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct TagInfo {
     pub name: String,
     /// The tag ref's direct target (tag object for annotated, commit for
@@ -307,7 +360,8 @@ pub struct TagInfo {
 }
 
 /// One remote-tracking branch (`refs/remotes/<remote>/<name>`).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct RemoteBranchInfo {
     pub remote: String,
     /// Short name after `<remote>/`.
@@ -318,7 +372,8 @@ pub struct RemoteBranchInfo {
 }
 
 /// Configured external merge tools (read from git config).
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct MergetoolInfo {
     /// `merge.tool` — the CLI-preferred tool.
     pub tool: Option<String>,
@@ -333,7 +388,8 @@ pub struct MergetoolInfo {
 }
 
 /// Result of one `git mergetool` run.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct MergetoolResult {
     pub success: bool,
     /// Combined trimmed stdout+stderr (diagnostics for the FE dialog).
@@ -343,7 +399,8 @@ pub struct MergetoolResult {
 // ---------- M10: bisect / describe ----------
 
 /// `bisect_mark` argument.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
 #[serde(rename_all = "snake_case")]
 pub enum BisectMark {
     Good,
@@ -352,7 +409,8 @@ pub enum BisectMark {
 }
 
 /// Live bisect state (`active: false` = no bisect in progress).
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct BisectState {
     pub active: bool,
     /// Current bad tip (first-bad candidate while active; the answer when
@@ -374,7 +432,8 @@ pub struct BisectState {
 }
 
 /// One recorded mark in the bisect history (M12).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct BisectLogEntry {
     /// "good" | "bad" | "skip".
     pub mark: String,
@@ -386,7 +445,8 @@ pub struct BisectLogEntry {
 // ---------- M11: repo health / maintenance ----------
 
 /// Health snapshot for one repository (fs-only reads; no CLI).
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct RepoHealth {
     /// Size of the `.git` directory.
     pub git_size_bytes: u64,
@@ -413,7 +473,8 @@ pub struct RepoHealth {
 }
 
 /// Sparse-checkout state (`git sparse-checkout list`, cone mode flag).
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct SparseInfo {
     pub enabled: bool,
     pub cone: bool,
@@ -421,7 +482,8 @@ pub struct SparseInfo {
 }
 
 /// `git lfs` availability + what the repo tracks through it.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct LfsStatus {
     /// `git lfs version` succeeded.
     pub installed: bool,
@@ -433,7 +495,8 @@ pub struct LfsStatus {
 
 // ---------- M12: signature verification / branch trash ----------
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
 #[serde(rename_all = "snake_case")]
 pub enum SignatureKind {
     Gpg,
@@ -443,7 +506,8 @@ pub enum SignatureKind {
 /// Verification status of one commit's signature (M12). Signed commits are
 /// verified through the git CLI so gpg/ssh-agent behave exactly like the
 /// terminal (`verify-commit` honors `gpg.ssh.allowedSignersFile`).
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct CommitSignature {
     /// False = the commit object carries no signature at all.
     pub signed: bool,
@@ -456,7 +520,8 @@ pub struct CommitSignature {
 }
 
 /// One deleted branch preserved under `refs/mygitui/trash/*` (M12).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct BranchTrashEntry {
     /// Trash id: `<sanitized-branch-name>-<unix-millis>`.
     pub id: String,
@@ -470,7 +535,8 @@ pub struct BranchTrashEntry {
 
 // ---------- M3: power + safety model ----------
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
 #[serde(rename_all = "snake_case")]
 pub enum ConflictResolution {
     Ours,
@@ -479,7 +545,8 @@ pub enum ConflictResolution {
 }
 
 /// One conflicted path, with blob availability for the 3-way editor.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct ConflictFile {
     pub path: String,
     /// Base ("stage 1") content, when a merge base exists.
@@ -490,7 +557,8 @@ pub struct ConflictFile {
     pub source: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
 #[serde(rename_all = "snake_case")]
 pub enum MergeOutcome {
     FastForward,
@@ -506,7 +574,8 @@ pub enum MergeOutcome {
 }
 
 /// How conflicting hunks auto-resolve during a merge (`-X ours` / `-X theirs`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, TS)]
+#[ts(export)]
 #[serde(rename_all = "snake_case")]
 pub enum MergeFavor {
     #[default]
@@ -516,7 +585,8 @@ pub enum MergeFavor {
 }
 
 /// Options for `merge_branch` (mirrors the `git merge` flags mygitui exposes).
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct MergeOptions {
     /// Force a merge commit even when a fast-forward is possible (`--no-ff`).
     pub no_ff: bool,
@@ -528,14 +598,16 @@ pub struct MergeOptions {
     pub favor: MergeFavor,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct MergeResult {
     pub outcome: MergeOutcome,
     pub conflicts: Vec<ConflictFile>,
     pub new_head: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
 #[serde(rename_all = "snake_case")]
 pub enum ResetKind {
     Soft,
@@ -551,7 +623,8 @@ pub enum ResetKind {
     Merge,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct RebaseStep {
     /// Commit sha being rewritten.
     pub sha: String,
@@ -559,7 +632,8 @@ pub struct RebaseStep {
     pub new_message: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct RebaseState {
     pub active: bool,
     pub plan: Vec<RebaseStep>,
@@ -576,7 +650,8 @@ pub struct RebaseState {
     pub rewritten: Vec<(String, String)>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct StashInfo {
     pub index: u32,
     pub sha: String,
@@ -584,7 +659,8 @@ pub struct StashInfo {
     pub author: GitSignature,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct WorktreeInfo {
     pub path: String,
     pub name: String,
@@ -598,7 +674,8 @@ pub struct WorktreeInfo {
     pub is_main: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct ReflogEntry {
     pub old_sha: String,
     pub new_sha: String,
@@ -606,7 +683,8 @@ pub struct ReflogEntry {
     pub message: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct CheckpointInfo {
     pub id: String,
     pub reason: String,
@@ -621,7 +699,8 @@ pub struct CheckpointInfo {
 // ---------- M3: dangerous-op previews (lane D4) ----------
 
 /// One path a dangerous op would change.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct PreviewFile {
     pub path: String,
     /// "modified" | "added" | "deleted" (ops that list commits use the
@@ -631,7 +710,8 @@ pub struct PreviewFile {
 
 /// Pure preview of what a dangerous operation would do — computed without
 /// touching the workdir, index, or any ref.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct PreviewInfo {
     /// The previewed op kind ("reset_hard", "clean", "checkout_force",
     /// "branch_delete").
@@ -643,7 +723,8 @@ pub struct PreviewInfo {
 
 // ---------- M4: housekeeping ----------
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct SubmoduleInfo {
     pub path: String,
     pub name: String,

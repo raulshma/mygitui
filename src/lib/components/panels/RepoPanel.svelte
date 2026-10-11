@@ -22,7 +22,7 @@
   } from "$lib/ipc/client";
   import type { LfsStatus, RepoHealth, SparseInfo } from "$lib/ipc/types";
   import { toast } from "$lib/toast";
-  import { formatRelativeTime } from "$lib/stores/history-logic";
+  import { formatRelativeTime } from "$lib/git/format";
 
   let {
     repoId,

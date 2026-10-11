@@ -15,8 +15,9 @@
    * (no multi-selection without the list). The bookmark star stays hidden:
    * bookmarks persist per worktree root, which only the main window knows.
    */
-  import { cherryPick, revertCommits, streamLog, onRepoChanged } from "$lib/ipc/client";
+  import { cherryPick, revertCommits, streamLog } from "$lib/ipc/client";
   import type { CommitInfo, LogFilter, MergeResult, RepoId } from "$lib/ipc/types";
+  import { onRepoChange } from "$lib/events/repoEvents";
   import CommitDetail from "$lib/components/panels/CommitDetail.svelte";
   import RebasePlanner from "$lib/components/rebase/RebasePlanner.svelte";
   import { toast } from "$lib/toast";
@@ -76,25 +77,17 @@
       });
   });
 
-  // The popout has no tab store; watch the backend directly.
+  // The popout has no tab store; register with the shared event module.
+  // Policy: refs/describe/signature display refreshes on ANY backend change
+  // for this repo (workdir churn included — status-derived data shifts too).
   $effect(() => {
     const id = repoId;
-    let unlisten: (() => void) | null = null;
-    let cancelled = false;
-    onRepoChanged((event) => {
-      if (event.repo_id === id) reload += 1;
-    })
-      .then((fn) => {
-        if (cancelled) fn();
-        else unlisten = fn;
-      })
-      .catch(() => {
-        // Popouts still work without the watcher; the data is static then.
-      });
-    return () => {
-      cancelled = true;
-      unlisten?.();
-    };
+    return onRepoChange({
+      filter: (change) => change.repo_id === id,
+      handle: () => {
+        reload += 1;
+      },
+    });
   });
 
   // -- single-commit versions of the HistoryView actions -----------------------

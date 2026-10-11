@@ -14,6 +14,7 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use tauri::ipc::Channel;
 use tauri::State;
+use ts_rs::TS;
 
 use crate::engine::git_engine::EngineError;
 use crate::engine::types::{
@@ -32,7 +33,8 @@ const LOG_PAGE_SIZE: usize = 500;
 const DIFF_PAGE_SIZE: usize = 50;
 
 /// One page of streamed history (contracts.md: `LogPage`).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct LogPage {
     pub commits: Vec<CommitInfo>,
     pub rows: Vec<GraphRow>,
@@ -94,13 +96,10 @@ pub async fn repo_status(
 ) -> Result<RepoStatus, String> {
     let handle = get_handle(&state, &repo_id)?;
     let engine = handle.engine();
-    let repo = handle.repo();
-    tauri::async_runtime::spawn_blocking(move || {
-        let repo = repo.lock();
-        engine.status(&repo).map_err(engine_err)
-    })
+    finish_op(enqueue_read(&handle, "status", move |_ctx, repo| {
+        engine.status(repo)
+    }))
     .await
-    .map_err(|e| format!("status task failed: {e}"))?
 }
 
 /// Local + remote branches and tags: `(ref name, target sha)` pairs.
@@ -111,13 +110,10 @@ pub async fn repo_refs(
 ) -> Result<Vec<(String, String)>, String> {
     let handle = get_handle(&state, &repo_id)?;
     let engine = handle.engine();
-    let repo = handle.repo();
-    tauri::async_runtime::spawn_blocking(move || {
-        let repo = repo.lock();
-        engine.refs(&repo).map_err(engine_err)
-    })
+    finish_op(enqueue_read(&handle, "refs", move |_ctx, repo| {
+        engine.refs(repo)
+    }))
     .await
-    .map_err(|e| format!("refs task failed: {e}"))?
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -129,15 +125,10 @@ pub async fn repo_blame(
 ) -> Result<Vec<BlameLine>, String> {
     let handle = get_handle(&state, &repo_id)?;
     let engine = handle.engine();
-    let repo = handle.repo();
-    tauri::async_runtime::spawn_blocking(move || {
-        let repo = repo.lock();
-        engine
-            .blame(&repo, &path, from.as_deref())
-            .map_err(engine_err)
-    })
+    finish_op(enqueue_read(&handle, "blame", move |_ctx, repo| {
+        engine.blame(repo, &path, from.as_deref())
+    }))
     .await
-    .map_err(|e| format!("blame task failed: {e}"))?
 }
 
 /// One-shot diff for small/medium changes; large diffs use
@@ -152,15 +143,10 @@ pub async fn repo_diff(
 ) -> Result<Vec<FileDiff>, String> {
     let handle = get_handle(&state, &repo_id)?;
     let engine = handle.engine();
-    let repo = handle.repo();
-    tauri::async_runtime::spawn_blocking(move || {
-        let repo = repo.lock();
-        engine
-            .diff(&repo, &old, &new, paths.as_deref())
-            .map_err(engine_err)
-    })
+    finish_op(enqueue_read(&handle, "diff", move |_ctx, repo| {
+        engine.diff(repo, &old, &new, paths.as_deref())
+    }))
     .await
-    .map_err(|e| format!("diff task failed: {e}"))?
 }
 
 /// Stream a diff in pages of [`DIFF_PAGE_SIZE`] files over `on_page`.
@@ -339,8 +325,10 @@ mod tests {
 use parking_lot::Mutex;
 use tauri::Emitter;
 
-/// `clone-progress` event payload (mirrors the FE `CloneProgressEvent`).
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+/// `clone-progress` event payload (TS name `CloneProgressEvent`; generated
+/// to `src/lib/ipc/gen/` and re-exported under the FE name by types.ts).
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, TS)]
+#[ts(export)]
 pub struct CloneProgress {
     /// URL of the clone this progress belongs to (multi-clone discriminator).
     pub url: String,
@@ -552,18 +540,32 @@ mod clone_tests {
 
 // ---------------------------------------------------------------------------
 // M2 (lane C3): mutations, branches/tags, remotes, net ops, auth — all
-// routed through the per-repo serial op queue (contracts.md M2). M1 reads
-// stay outside the queue: they share the repo mutex, which already
-// serializes engine access, so concurrent reads never race a queued
-// mutation.
+// routed through the per-repo serial op queue (contracts.md M2).
 //
-// Progress: net ops forward engine callbacks to `OpCtx::emit_progress`
-// (throttled ≥80ms); the queue emits the final `done: true` event for every
-// op, success or error. Mutations bump the repo generation afterwards so
-// in-flight log streams abort and clients re-request (streaming rules).
+// DISPATCH RULE: `enqueue_mutation` / `enqueue_read` are the only sanctioned
+// paths for engine ops. Every handler that locks the repo and calls the
+// engine goes through one of them (mutations bump the generation, reads do
+// not). Deliberately off-queue: `stream_log` (its own cancellation loop and
+// stream tokens), `mergetool_run` (interactive, minutes-long — see its
+// comment), and the commands that never lock the repo (FS/CLI reads and
+// spawns: maintenance probes, forge, clone, actions, pty).
 //
-// Op kinds are the fixed set from contracts.md (`stage`, `commit`,
-// `branch`, `fetch`, `pull`, `push`, `clone`): tags report as `branch`
+// Progress: mutations and net ops stream `op-progress` (net ops forward
+// engine callbacks to `OpCtx::emit_progress`, throttled ≥80ms) and the
+// queue emits their final `done: true` event, success or error. Queue-
+// dispatched reads are silent (`enqueue_read` → `OpQueue::enqueue_silent`):
+// no progress, no done event — read failures surface only as command
+// errors, matching the pre-queue direct-call reads. Mutations bump the
+// repo generation afterwards so in-flight log streams abort and clients
+// re-request (streaming rules).
+//
+// Op kinds started as the fixed M2 set from contracts.md (`stage`, `commit`,
+// `branch`, `fetch`, `pull`, `push`, `clone`); later lanes added their own
+// (`merge`, `rebase`, `bisect`, `stash`, `worktree`, `checkpoint`,
+// `submodule`, `maintenance`, `archive`, `sparse`, `lfs`, `clean`). Queue-
+// dispatched reads carry the touched area as their queue kind (`status`,
+// `refs`, `blame`, `diff`, `preview`, `stats`, `reflog`, `describe`) but
+// emit no events (see Progress above). Tags report as `branch`
 // (ref-affecting), remote config ops as `fetch` (net category).
 // ---------------------------------------------------------------------------
 
@@ -603,8 +605,12 @@ where
     rx
 }
 
-/// Same as [`enqueue_mutation`] but without the generation bump (M2 read
-/// ops that still run on the queue: branches, remotes, hook/signing info).
+/// Enqueue a read-only engine op on the repo's serial queue: `f` runs with
+/// the repo lock held, without the mutation generation bump. Silent on the
+/// op-progress surface ([`OpQueue::enqueue_silent`]): reads emit no
+/// progress/done events, exactly like the pre-queue direct reads — their
+/// failures surface only through the command's error return. The kind
+/// remains useful for queue rejection messages and debugging.
 fn enqueue_read<T, F>(
     handle: &RepoHandle,
     kind: &'static str,
@@ -615,7 +621,7 @@ where
     F: FnOnce(OpCtx, &git2::Repository) -> Result<T, EngineError> + Send + 'static,
 {
     let repo = handle.repo();
-    let (_op_id, rx) = handle.ops().enqueue(kind, move |ctx| {
+    let (_op_id, rx) = handle.ops().enqueue_silent(kind, move |ctx| {
         let guard = repo.lock();
         f(ctx, &guard).map_err(engine_err)
     });
@@ -928,13 +934,10 @@ pub async fn mergetool_info(
     state: State<'_, RepoManager>,
 ) -> Result<MergetoolInfo, String> {
     let handle = get_handle(&state, &repo_id)?;
-    let repo = handle.repo();
-    tauri::async_runtime::spawn_blocking(move || {
-        let repo = repo.lock();
-        Ok(crate::mergetool::mergetool_info(&repo))
-    })
+    finish_op(enqueue_read(&handle, "merge", move |_ctx, repo| {
+        Ok(crate::mergetool::mergetool_info(repo))
+    }))
     .await
-    .map_err(|e| format!("mergetool_info task failed: {e}"))?
 }
 
 /// Launch `git mergetool` for one conflicted path. Deliberately NOT on the
@@ -1093,8 +1096,10 @@ pub async fn fetch(
         move |ctx, progress| {
             // Cancellation-aware ext path: `op_cancel` flips the ctx token
             // and the fetch polls it between phases and inside the transfer
-            // callbacks. The engine is stateless, so the concrete instance
-            // here matches how every other dispatch reaches libgit2.
+            // callbacks. DELIBERATE `Libgit2Engine` exception to the dispatch
+            // rule: the cancellation variants (`fetch_impl_ext`) take the
+            // cancel token and are not on a trait — the engine is stateless,
+            // so a fresh instance behaves identically to `handle.engine()`.
             let engine = crate::engine::libgit2::Libgit2Engine::new();
             let guard = repo.lock();
             engine.fetch_impl_ext(&guard, &options, progress, ctx.cancel_token().as_deref())
@@ -1143,7 +1148,9 @@ pub async fn push(
     let (_op_id, rx) = handle.ops().enqueue("push", move |ctx| {
         ctx.emit_progress(&opening, None);
         // Cancellation-aware ext path (see fetch): op_cancel flips the ctx
-        // token; push polls it between phases.
+        // token; push polls it between phases. Deliberate `Libgit2Engine`
+        // exception to the dispatch rule — `push_impl_ext` is not on a
+        // trait (same reason as fetch).
         let engine = crate::engine::libgit2::Libgit2Engine::new();
         let result = crate::auth::with_netop_context(&net_repo, || {
             let guard = repo.lock();
@@ -1254,6 +1261,58 @@ mod m2_tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// Reads stay invisible to the op-progress surface: `enqueue_read` runs
+    /// on the queue (serialization, no generation bump) but emits no events,
+    /// success or error — matching the pre-queue direct reads, whose
+    /// failures surface only through the command's error return.
+    #[test]
+    fn enqueue_read_emits_no_events_success_or_error() {
+        let dir = std::env::temp_dir().join(format!(
+            "mygitui-ipc-read-silent-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        git2::Repository::init(&dir).unwrap();
+
+        let manager = RepoManager::new();
+        let info = manager.open_unwatched(&dir).expect("open temp repo");
+        let handle = manager.get(&info.repo_id).unwrap();
+        let sink = crate::ops::test_sink::CollectorSink::shared();
+        handle.ops().set_sink(sink.clone());
+
+        let start_generation = handle.generation();
+        let ok = enqueue_read(&handle, "status", move |_ctx, _repo| {
+            Ok::<(), EngineError>(())
+        })
+        .blocking_recv()
+        .expect("queue alive");
+        assert!(ok.is_ok(), "read succeeds");
+        let failed = enqueue_read(&handle, "blame", move |_ctx, _repo| {
+            Err::<(), EngineError>(EngineError::Invalid("missing file".into()))
+        })
+        .blocking_recv()
+        .expect("queue alive");
+        assert!(failed.is_err(), "failing read reports through the command");
+        assert_eq!(
+            handle.generation(),
+            start_generation,
+            "reads never bump the generation"
+        );
+        assert!(
+            sink.snapshot().is_empty(),
+            "reads emit no op-progress events: {:?}",
+            sink.snapshot()
+        );
+
+        manager.close(&info.repo_id);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// The generation bump used by mutations: same counter the log streams
     /// snapshot (streaming rules in contracts.md).
     #[test]
@@ -1313,17 +1372,15 @@ mod m2_tests {
 // checkpoint regardless of age.
 //
 // Routing: create/restore/gc are mutations and go through the serial op
-// queue with the generation bump (`enqueue_mutation`, mirroring M2);
-// listing and `ops_preview` are pure reads on the M1 read path (repo mutex
-// + spawn_blocking, no queue, no generation bump).
-//
-// WIRING NOTE: these commands call the inherent `*_impl` twins on
-// `Libgit2Engine` directly because the single `impl GitEngineM3` block is
-// owned by merge.rs; the `GitEngineM3::checkpoint_*` forwarding lines land
-// there at integration (afterwards `handle.m3()` is equivalent).
+// queue with the generation bump (`enqueue_mutation`, mirroring M2); the
+// reads (`checkpoints`, `ops_preview`) use `enqueue_read`. The trait
+// forwarding lives in merge.rs (the crate's single `impl GitEngineM3`), so
+// every handler below reaches the engine through `handle.m3()` — no direct
+// `Libgit2Engine` instantiation (see the DISPATCH RULE atop the M2 section;
+// the test module at the bottom of this file still drives `*_impl` directly
+// and imports it itself).
 // ---------------------------------------------------------------------------
 
-use crate::engine::libgit2::Libgit2Engine;
 use crate::engine::types::PreviewInfo;
 
 #[tauri::command(rename_all = "snake_case")]
@@ -1333,11 +1390,11 @@ pub async fn checkpoint_create(
     state: State<'_, RepoManager>,
 ) -> Result<CheckpointInfo, String> {
     let handle = get_handle(&state, &repo_id)?;
-    let engine = Libgit2Engine::new();
+    let engine = handle.m3();
     finish_op(enqueue_mutation(
         &handle,
         "checkpoint",
-        move |_ctx, repo| engine.checkpoint_create_impl(repo, &reason),
+        move |_ctx, repo| engine.checkpoint_create(repo, &reason),
     ))
     .await
 }
@@ -1348,14 +1405,11 @@ pub async fn checkpoints(
     state: State<'_, RepoManager>,
 ) -> Result<Vec<CheckpointInfo>, String> {
     let handle = get_handle(&state, &repo_id)?;
-    let engine = Libgit2Engine::new();
-    let repo = handle.repo();
-    tauri::async_runtime::spawn_blocking(move || {
-        let repo = repo.lock();
-        engine.checkpoints_impl(&repo).map_err(engine_err)
-    })
+    let engine = handle.m3();
+    finish_op(enqueue_read(&handle, "checkpoint", move |_ctx, repo| {
+        engine.checkpoints(repo)
+    }))
     .await
-    .map_err(|e| format!("checkpoints task failed: {e}"))?
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -1365,11 +1419,11 @@ pub async fn checkpoint_restore(
     state: State<'_, RepoManager>,
 ) -> Result<(), String> {
     let handle = get_handle(&state, &repo_id)?;
-    let engine = Libgit2Engine::new();
+    let engine = handle.m3();
     finish_op(enqueue_mutation(
         &handle,
         "checkpoint",
-        move |_ctx, repo| engine.checkpoint_restore_impl(repo, &id),
+        move |_ctx, repo| engine.checkpoint_restore(repo, &id),
     ))
     .await
 }
@@ -1381,11 +1435,11 @@ pub async fn checkpoint_gc(
     state: State<'_, RepoManager>,
 ) -> Result<u32, String> {
     let handle = get_handle(&state, &repo_id)?;
-    let engine = Libgit2Engine::new();
+    let engine = handle.m3();
     finish_op(enqueue_mutation(
         &handle,
         "checkpoint",
-        move |_ctx, repo| engine.checkpoint_gc_impl(repo, older_than_days),
+        move |_ctx, repo| engine.checkpoint_gc(repo, older_than_days),
     ))
     .await
 }
@@ -1403,19 +1457,16 @@ pub async fn ops_preview(
     state: State<'_, RepoManager>,
 ) -> Result<PreviewInfo, String> {
     let handle = get_handle(&state, &repo_id)?;
-    let engine = Libgit2Engine::new();
-    let repo = handle.repo();
-    tauri::async_runtime::spawn_blocking(move || {
-        let repo = repo.lock();
-        engine
-            .preview_impl(&repo, &kind, &params)
-            .map_err(engine_err)
-    })
+    let engine = handle.m3();
+    finish_op(enqueue_read(&handle, "preview", move |_ctx, repo| {
+        engine.ops_preview(repo, &kind, &params)
+    }))
     .await
-    .map_err(|e| format!("preview task failed: {e}"))?
 }
 /// Snapshot current state as an undo point right before a dangerous op.
-/// FE flow: ops_preview → dialog → guard_checkpoint → confirm → op.
+/// FE flow: ops_preview → dialog → guard_checkpoint → confirm → op. It
+/// writes a checkpoint ref, so it is a queue mutation (serialized with the
+/// op it guards and generation-bumping like any other mutation).
 #[tauri::command(rename_all = "snake_case")]
 pub async fn guard_checkpoint(
     repo_id: RepoId,
@@ -1424,13 +1475,12 @@ pub async fn guard_checkpoint(
 ) -> Result<CheckpointInfo, String> {
     let handle = get_handle(&state, &repo_id)?;
     let engine = handle.m3();
-    let repo = handle.repo();
-    tauri::async_runtime::spawn_blocking(move || {
-        let repo = repo.lock();
-        engine.checkpoint_create(&repo, &reason).map_err(engine_err)
-    })
+    finish_op(enqueue_mutation(
+        &handle,
+        "checkpoint",
+        move |_ctx, repo| engine.checkpoint_create(repo, &reason),
+    ))
     .await
-    .map_err(|e| format!("guard checkpoint task failed: {e}"))?
 }
 
 // ---------------------------------------------------------------------------
@@ -1549,13 +1599,10 @@ pub async fn conflicts(
 ) -> Result<Vec<ConflictFile>, String> {
     let handle = get_handle(&state, &repo_id)?;
     let engine = handle.m3();
-    let repo = handle.repo();
-    tauri::async_runtime::spawn_blocking(move || {
-        let repo = repo.lock();
-        engine.conflicts(&repo).map_err(engine_err)
-    })
+    finish_op(enqueue_read(&handle, "merge", move |_ctx, repo| {
+        engine.conflicts(repo)
+    }))
     .await
-    .map_err(|e| format!("conflicts task failed: {e}"))?
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -1639,13 +1686,10 @@ pub async fn rebase_state(
 ) -> Result<RebaseState, String> {
     let handle = get_handle(&state, &repo_id)?;
     let engine = handle.m3();
-    let repo = handle.repo();
-    tauri::async_runtime::spawn_blocking(move || {
-        let repo = repo.lock();
-        engine.rebase_state(&repo).map_err(engine_err)
-    })
+    finish_op(enqueue_read(&handle, "rebase", move |_ctx, repo| {
+        engine.rebase_state(repo)
+    }))
     .await
-    .map_err(|e| format!("rebase state task failed: {e}"))?
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -1695,13 +1739,10 @@ pub async fn bisect_state(
 ) -> Result<BisectState, String> {
     let handle = get_handle(&state, &repo_id)?;
     let engine = handle.m3();
-    let repo = handle.repo();
-    tauri::async_runtime::spawn_blocking(move || {
-        let repo = repo.lock();
-        engine.bisect_state(&repo).map_err(engine_err)
-    })
+    finish_op(enqueue_read(&handle, "bisect", move |_ctx, repo| {
+        engine.bisect_state(repo)
+    }))
     .await
-    .map_err(|e| format!("bisect_state task failed: {e}"))?
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -1730,8 +1771,8 @@ pub async fn bisect_reset(repo_id: RepoId, state: State<'_, RepoManager>) -> Res
 
 // ---------- M12: signature verify / branch trash / prune / bisect log ----------
 
-/// Verification status of one commit's signature (read path; shares the
-/// repo mutex like the other read commands).
+/// Verification status of one commit's signature (queued read, like the
+/// other engine reads).
 #[tauri::command(rename_all = "snake_case")]
 pub async fn commit_signature(
     repo_id: RepoId,
@@ -1740,13 +1781,10 @@ pub async fn commit_signature(
 ) -> Result<CommitSignature, String> {
     let handle = get_handle(&state, &repo_id)?;
     let engine = handle.m12();
-    let repo = handle.repo();
-    tauri::async_runtime::spawn_blocking(move || {
-        let repo = repo.lock();
-        engine.commit_signature(&repo, &sha).map_err(engine_err)
-    })
+    finish_op(enqueue_read(&handle, "commit", move |_ctx, repo| {
+        engine.commit_signature(repo, &sha)
+    }))
     .await
-    .map_err(|e| format!("commit_signature task failed: {e}"))?
 }
 
 /// Branches preserved under `refs/mygitui/trash/*`, newest first (read).
@@ -1757,13 +1795,10 @@ pub async fn branch_trash_list(
 ) -> Result<Vec<BranchTrashEntry>, String> {
     let handle = get_handle(&state, &repo_id)?;
     let engine = handle.m12();
-    let repo = handle.repo();
-    tauri::async_runtime::spawn_blocking(move || {
-        let repo = repo.lock();
-        engine.branch_trash_list(&repo).map_err(engine_err)
-    })
+    finish_op(enqueue_read(&handle, "branch", move |_ctx, repo| {
+        engine.branch_trash_list(repo)
+    }))
     .await
-    .map_err(|e| format!("branch_trash_list task failed: {e}"))?
 }
 
 /// Restore a trashed branch (optionally renamed); returns the branch name.
@@ -1802,13 +1837,10 @@ pub async fn bisect_log(
 ) -> Result<Vec<BisectLogEntry>, String> {
     let handle = get_handle(&state, &repo_id)?;
     let engine = handle.m12();
-    let repo = handle.repo();
-    tauri::async_runtime::spawn_blocking(move || {
-        let repo = repo.lock();
-        engine.bisect_log(&repo).map_err(engine_err)
-    })
+    finish_op(enqueue_read(&handle, "bisect", move |_ctx, repo| {
+        engine.bisect_log(repo)
+    }))
     .await
-    .map_err(|e| format!("bisect_log task failed: {e}"))?
 }
 
 /// M12: OS accent color for the dynamic-color pipeline (Windows DWM
@@ -1870,13 +1902,10 @@ pub async fn describe(
 ) -> Result<String, String> {
     let handle = get_handle(&state, &repo_id)?;
     let engine = handle.m3();
-    let repo = handle.repo();
-    tauri::async_runtime::spawn_blocking(move || {
-        let repo = repo.lock();
-        engine.describe(&repo, &spec).map_err(engine_err)
-    })
+    finish_op(enqueue_read(&handle, "describe", move |_ctx, repo| {
+        engine.describe(repo, &spec)
+    }))
     .await
-    .map_err(|e| format!("describe task failed: {e}"))?
 }
 
 /// Builds an autosquash rebase plan for `base..HEAD` (feeds `rebase_start`).
@@ -1888,13 +1917,10 @@ pub async fn autosquash_plan(
 ) -> Result<Vec<RebaseStep>, String> {
     let handle = get_handle(&state, &repo_id)?;
     let engine = handle.m3();
-    let repo = handle.repo();
-    tauri::async_runtime::spawn_blocking(move || {
-        let repo = repo.lock();
-        engine.autosquash_plan(&repo, &base).map_err(engine_err)
-    })
+    finish_op(enqueue_read(&handle, "rebase", move |_ctx, repo| {
+        engine.autosquash_plan(repo, &base)
+    }))
     .await
-    .map_err(|e| format!("autosquash_plan task failed: {e}"))?
 }
 
 // ---------- M11: repo health / maintenance / sparse / LFS / archive ----------
@@ -2133,13 +2159,10 @@ pub async fn stash_list(
 ) -> Result<Vec<StashInfo>, String> {
     let handle = get_handle(&state, &repo_id)?;
     let engine = handle.m3();
-    let repo = handle.repo();
-    tauri::async_runtime::spawn_blocking(move || {
-        let repo = repo.lock();
-        engine.stash_list(&repo).map_err(engine_err)
-    })
+    finish_op(enqueue_read(&handle, "stash", move |_ctx, repo| {
+        engine.stash_list(repo)
+    }))
     .await
-    .map_err(|e| format!("stash list task failed: {e}"))?
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -2209,13 +2232,10 @@ pub async fn worktrees(
 ) -> Result<Vec<WorktreeInfo>, String> {
     let handle = get_handle(&state, &repo_id)?;
     let engine = handle.m3();
-    let repo = handle.repo();
-    tauri::async_runtime::spawn_blocking(move || {
-        let repo = repo.lock();
-        engine.worktrees(&repo).map_err(engine_err)
-    })
+    finish_op(enqueue_read(&handle, "worktree", move |_ctx, repo| {
+        engine.worktrees(repo)
+    }))
     .await
-    .map_err(|e| format!("worktrees task failed: {e}"))?
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -2258,13 +2278,10 @@ pub async fn reflog(
 ) -> Result<Vec<ReflogEntry>, String> {
     let handle = get_handle(&state, &repo_id)?;
     let engine = handle.m3();
-    let repo = handle.repo();
-    tauri::async_runtime::spawn_blocking(move || {
-        let repo = repo.lock();
-        engine.reflog(&repo, name.as_deref()).map_err(engine_err)
-    })
+    finish_op(enqueue_read(&handle, "reflog", move |_ctx, repo| {
+        engine.reflog(repo, name.as_deref())
+    }))
     .await
-    .map_err(|e| format!("reflog task failed: {e}"))?
 }
 
 // ---------------------------------------------------------------------------
@@ -2423,6 +2440,7 @@ pub fn action_cancel(run_id: String, runs: State<'_, ActionRegistry>) -> Result<
 #[cfg(test)]
 mod m4_clean_tests {
     use super::*;
+    use crate::engine::libgit2::Libgit2Engine;
 
     fn temp_repo(tag: &str) -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!(
@@ -2601,12 +2619,12 @@ mod m4_clean_tests {
 // ---------------------------------------------------------------------------
 // M4 (lane F3): submodule management + gitignore quick-add.
 //
-// `submodules` is a plain read (M1 read path: repo mutex + spawn_blocking);
-// `submodule_update` / `submodule_sync` are mutations on the serial op queue
-// (contracts.md M4: queue kind `submodule`); `gitignore_add` is a pure
-// workdir file write (no git objects touched — the FS-only twin of
-// `repo_read_file`'s no-mutex shortcut), and `gitignore_templates` is a
-// static builtin list with no repo involved.
+// `submodules` is a queued read (`enqueue_read`); `submodule_update` /
+// `submodule_sync` are mutations on the serial op queue (contracts.md M4:
+// queue kind `submodule`); `gitignore_add` is a pure workdir file write (no
+// git objects touched — the FS-only twin of `repo_read_file`'s no-mutex
+// shortcut), and `gitignore_templates` is a static builtin list with no
+// repo involved.
 // ---------------------------------------------------------------------------
 
 use crate::engine::types::SubmoduleInfo;
@@ -2615,7 +2633,8 @@ use crate::engine::types::SubmoduleInfo;
 /// mirroring the contracts.md shape `{name, description, patterns}`).
 /// `patterns` is ONE newline-joined `.gitignore` snippet (no trailing
 /// newline); the FE applies it line-by-line via `gitignore_add`.
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, TS)]
+#[ts(export)]
 pub struct GitignoreTemplate {
     pub name: String,
     pub description: String,
@@ -2873,14 +2892,11 @@ pub async fn submodules(
     state: State<'_, RepoManager>,
 ) -> Result<Vec<SubmoduleInfo>, String> {
     let handle = get_handle(&state, &repo_id)?;
-    let engine = Libgit2Engine::new();
-    let repo = handle.repo();
-    tauri::async_runtime::spawn_blocking(move || {
-        let repo = repo.lock();
-        engine.submodules_impl(&repo).map_err(engine_err)
-    })
+    let engine = handle.m12();
+    finish_op(enqueue_read(&handle, "submodule", move |_ctx, repo| {
+        engine.submodules(repo)
+    }))
     .await
-    .map_err(|e| format!("submodules task failed: {e}"))?
 }
 
 /// `git submodule update [--init] [--recursive] <path>` for one submodule.
@@ -2895,10 +2911,10 @@ pub async fn submodule_update(
     state: State<'_, RepoManager>,
 ) -> Result<(), String> {
     let handle = get_handle(&state, &repo_id)?;
-    let engine = Libgit2Engine::new();
+    let engine = handle.m12();
     finish_op(enqueue_mutation(&handle, "submodule", move |_ctx, repo| {
         crate::auth::with_netop_context(&repo_id, || {
-            engine.submodule_update_impl(repo, &path, init, recursive)
+            engine.submodule_update(repo, &path, init, recursive)
         })
     }))
     .await
@@ -2913,9 +2929,9 @@ pub async fn submodule_sync(
     state: State<'_, RepoManager>,
 ) -> Result<(), String> {
     let handle = get_handle(&state, &repo_id)?;
-    let engine = Libgit2Engine::new();
+    let engine = handle.m12();
     finish_op(enqueue_mutation(&handle, "submodule", move |_ctx, repo| {
-        engine.submodule_sync_impl(repo, path.as_deref())
+        engine.submodule_sync(repo, path.as_deref())
     }))
     .await
 }
@@ -3108,10 +3124,11 @@ pub async fn pr_checks(
 
 // ---------------------------------------------------------------------------
 // M7 (lane I1): contribution statistics — commit activity heatmap buckets +
-// contributor rollups (contracts.md "Commands (M7 stats)"). Pure reads on
-// the M1 read path (repo mutex + spawn_blocking, no op queue, no generation
-// bump); the logic lives in `engine/stats.rs` as inherent `*_impl` twins on
-// `Libgit2Engine` (the M2-lane convention).
+// contributor rollups (contracts.md "Commands (M7 stats)"). Queued reads on
+// the op queue (`enqueue_read`, no generation bump); the logic lives in
+// `engine/stats.rs` as inherent `*_impl` twins on `Libgit2Engine`, reached
+// through the `GitEngineM12` forwarding (trash.rs hosts the single impl
+// block).
 // ---------------------------------------------------------------------------
 
 use crate::engine::stats::{Contributor, DayCount};
@@ -3127,16 +3144,11 @@ pub async fn commit_activity(
     state: State<'_, RepoManager>,
 ) -> Result<Vec<DayCount>, String> {
     let handle = get_handle(&state, &repo_id)?;
-    let engine = Libgit2Engine::new();
-    let repo = handle.repo();
-    tauri::async_runtime::spawn_blocking(move || {
-        let repo = repo.lock();
-        engine
-            .commit_activity_impl(&repo, max_days, author.as_deref())
-            .map_err(engine_err)
-    })
+    let engine = handle.m12();
+    finish_op(enqueue_read(&handle, "stats", move |_ctx, repo| {
+        engine.commit_activity(repo, max_days, author.as_deref())
+    }))
     .await
-    .map_err(|e| format!("commit_activity task failed: {e}"))?
 }
 
 /// Per-author rollups (identity = exact name+email pair) inside the
@@ -3148,14 +3160,9 @@ pub async fn contributor_stats(
     state: State<'_, RepoManager>,
 ) -> Result<Vec<Contributor>, String> {
     let handle = get_handle(&state, &repo_id)?;
-    let engine = Libgit2Engine::new();
-    let repo = handle.repo();
-    tauri::async_runtime::spawn_blocking(move || {
-        let repo = repo.lock();
-        engine
-            .contributor_stats_impl(&repo, max_days)
-            .map_err(engine_err)
-    })
+    let engine = handle.m12();
+    finish_op(enqueue_read(&handle, "stats", move |_ctx, repo| {
+        engine.contributor_stats(repo, max_days)
+    }))
     .await
-    .map_err(|e| format!("contributor_stats task failed: {e}"))?
 }

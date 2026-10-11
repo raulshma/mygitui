@@ -4,13 +4,12 @@
    *
    * On open it resets, loads the base-branch options (`branches()`,
    * preferring remote-tracked branches) and up to 10 recent commits (first
-   * log page) as the AI hint. "Generate title/body" dispatches the
-   * documented `ai-generate-pr` CustomEvent on `window`
-   * (`detail = { repoId, commits: [{ sha, summary }] }`) and the dialog
-   * listens for `ai-pr-result` (`detail = { subject, body }`) to fill the
-   * fields — user typing clears the pending wait (docs/contracts.md "M6 FE
-   * contracts"; reconciled with H1's commit-message contract by the
-   * orchestrator).
+   * log page) as the AI hint. "Generate title/body" emits the typed
+   * `ai-generate-pr` UI event (`$lib/palette/events`; payload
+   * `{ repoId, commits: [{ sha, summary }] }`) and the dialog listens for
+   * `ai-pr-result` (`{ subject, body }`) to fill the fields — user typing
+   * clears the pending wait (docs/contracts.md "M6 FE contracts";
+   * reconciled with H1's commit-message contract by the orchestrator).
    *
    * Create runs `prCreate` (120 s backend timeout): success toasts, calls
    * `onCreated` (the owner refreshes context + PR list; the dialog stays
@@ -27,6 +26,7 @@
   } from "$lib/ipc/client";
   import type { BranchInfo } from "$lib/ipc/types";
   import { toast } from "$lib/toast";
+  import { emitUiEvent, onUiEvent } from "$lib/palette/events";
   import { openExternal } from "$lib/stores/forge.svelte";
   import { prNumberFromUrl } from "./forgeModel";
 
@@ -118,31 +118,22 @@
   // show the reason inline — without this the button sticks on "Waiting…".
   $effect(() => {
     if (!open) return;
-    const handler = (event: Event): void => {
-      const detail =
-        (event as CustomEvent<{ subject?: unknown; body?: unknown }>).detail ?? {};
-      if (typeof detail.subject === "string" && detail.subject.trim()) {
+    const unregisterResult = onUiEvent("ai-pr-result", (detail) => {
+      if (detail.subject.trim()) {
         title = detail.subject.trim();
       }
-      if (typeof detail.body === "string") {
-        body = detail.body;
-      }
+      body = detail.body;
       aiPending = false;
       aiError = null;
-    };
-    const errorHandler = (event: Event): void => {
-      const detail = (event as CustomEvent<{ message?: unknown }>).detail ?? {};
+    });
+    const unregisterError = onUiEvent("ai-pr-error", (detail) => {
       aiPending = false;
       aiError =
-        typeof detail.message === "string" && detail.message.length > 0
-          ? detail.message
-          : "AI generation failed";
-    };
-    window.addEventListener("ai-pr-result", handler);
-    window.addEventListener("ai-pr-error", errorHandler);
+        detail.message.length > 0 ? detail.message : "AI generation failed";
+    });
     return () => {
-      window.removeEventListener("ai-pr-result", handler);
-      window.removeEventListener("ai-pr-error", errorHandler);
+      unregisterResult();
+      unregisterError();
     };
   });
 
@@ -165,9 +156,7 @@
   function requestAi(): void {
     aiPending = true;
     aiError = null;
-    window.dispatchEvent(
-      new CustomEvent("ai-generate-pr", { detail: { repoId, commits } }),
-    );
+    emitUiEvent("ai-generate-pr", { repoId, commits });
   }
 
   function onKeydown(event: KeyboardEvent): void {

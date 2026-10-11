@@ -42,6 +42,7 @@ use std::time::Duration;
 
 use parking_lot::{Mutex, RwLock};
 use serde::Serialize;
+use ts_rs::TS;
 
 use crate::credential_helper;
 use crate::engine::types::RepoId;
@@ -75,12 +76,15 @@ pub struct AuthAnswer {
 }
 
 /// `auth-request` event payload (contracts.md M2).
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export)]
 pub struct AuthRequestEvent {
     pub op_id: String,
     pub repo_id: String,
     pub url: String,
-    /// "https-user" | "https-pass" | "ssh-passphrase".
+    /// "https-user" | "https-pass" | "ssh-passphrase" (kept as a
+    /// string-literal union in the generated TS type).
+    #[ts(type = "\"https-user\" | \"https-pass\" | \"ssh-passphrase\"")]
     pub kind: String,
     pub prompt: String,
 }

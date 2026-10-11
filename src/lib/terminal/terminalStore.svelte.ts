@@ -25,14 +25,13 @@
  */
 
 import {
-  onPtyExit,
-  onPtyOutput,
   ptyCreate,
   ptyKill,
   ptyResize,
   ptyWrite,
-  type PtyExitEvent,
 } from "$lib/ipc/client";
+import type { PtyExitEvent } from "$lib/ipc/types";
+import { onPtyExit, onPtyOutput } from "$lib/events/repoEvents";
 import { isTauri } from "$lib/entry/dragdrop";
 import { toast } from "$lib/toast";
 
@@ -120,8 +119,7 @@ export class TerminalStore {
   sessions: Record<string, TerminalSession> = $state({});
 
   #factory: TerminalFactory | null = null;
-  #started = false;
-  #unlisteners: (() => void)[] = [];
+  #unregisterEvents: (() => void) | null = null;
   /** pty session id → repoId (non-reactive dispatch index). */
   readonly #bySession = new Map<string, string>();
   /** repoId → freshness token; async `pty_create` continuations check it. */
@@ -190,17 +188,10 @@ export class TerminalStore {
     );
   }
 
-  /** Unsubscribes the pty events (test/teardown aid). */
+  /** Deregisters the pty events (test/teardown aid). */
   stop(): void {
-    for (const unlisten of this.#unlisteners) {
-      try {
-        unlisten();
-      } catch {
-        // Ignore.
-      }
-    }
-    this.#unlisteners = [];
-    this.#started = false;
+    this.#unregisterEvents?.();
+    this.#unregisterEvents = null;
   }
 
   // -- internals -------------------------------------------------------------
@@ -313,20 +304,24 @@ export class TerminalStore {
   }
 
   #startEvents(): void {
-    if (this.#started) return;
-    this.#started = true;
-    onPtyOutput((event) => this.#applyOutput(event.session_id, event.data))
-      .then((unlisten) => this.#unlisteners.push(unlisten))
-      .catch((err: unknown) =>
-        console.error("[terminal] pty-output subscription failed:", err),
-      );
-    onPtyExit((event: PtyExitEvent) =>
-      this.#applyExit(event.session_id, event.exit_code),
-    )
-      .then((unlisten) => this.#unlisteners.push(unlisten))
-      .catch((err: unknown) =>
-        console.error("[terminal] pty-exit subscription failed:", err),
-      );
+    if (this.#unregisterEvents !== null) return;
+    // Registered through the shared event module (when-first-needed: the
+    // backend subscriptions start with the first terminal creation); the
+    // per-session dispatch stays here.
+    const unregisterOutput = onPtyOutput((event) =>
+      this.#applyOutput(event.session_id, event.data),
+    );
+    const unregisterExit = onPtyExit((event: PtyExitEvent) =>
+      // The wire field is `code` (contracts.md M5; the type comes from
+      // $lib/ipc/types, generated from the Rust `PtyExit`). The old
+      // hand-written mirror said `exit_code`, a field the payload never
+      // carried — exit codes were silently `undefined` before.
+      this.#applyExit(event.session_id, event.code),
+    );
+    this.#unregisterEvents = () => {
+      unregisterOutput();
+      unregisterExit();
+    };
   }
 
   #applyOutput(sessionId: string, data: string): void {
@@ -335,7 +330,7 @@ export class TerminalStore {
     this.sessions[repoId]?.term?.write(data);
   }
 
-  #applyExit(sessionId: string, exitCode: number | null): void {
+  #applyExit(sessionId: string, code: number): void {
     const repoId = this.#bySession.get(sessionId);
     if (repoId === undefined) return;
     this.#bySession.delete(sessionId);
@@ -350,9 +345,7 @@ export class TerminalStore {
       entry.fit = null;
       entry.setTheme = null;
     }
-    toast(
-      exitCode === null ? "Terminal exited" : `Terminal exited (code ${exitCode})`,
-    );
+    toast(`Terminal exited (code ${code})`);
   }
 
   #cancelResize(repoId: string): void {

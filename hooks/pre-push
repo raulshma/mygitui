@@ -16,6 +16,9 @@ echo "[pre-push] cargo clippy --all-targets (warnings are errors)"
 echo "[pre-push] cargo test"
 (cd src-tauri && cargo test --quiet)
 
+echo "[pre-push] type bindings drift gate"
+git diff --exit-code -- src/lib/ipc/gen
+
 echo "[pre-push] svelte-check"
 npm run check
 

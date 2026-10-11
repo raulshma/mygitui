@@ -24,7 +24,7 @@
   import { refreshStatus } from "$lib/stores/tabs.svelte";
   import { loadUndo, safetyStore } from "$lib/stores/safety.svelte";
   import { toast } from "$lib/toast";
-  import { formatDateTime } from "$lib/stores/history-logic";
+  import { formatDateTime } from "$lib/git/format";
   import ConfirmDialog from "$lib/components/safety/ConfirmDialog.svelte";
   import PromptDialog from "$lib/components/safety/PromptDialog.svelte";
   import { checkpointTitle } from "./safetyModel";

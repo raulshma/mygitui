@@ -13,11 +13,11 @@
 
 import {
   closeRepo,
-  onRepoChanged,
   openRepo,
   repoStatus,
 } from "$lib/ipc/client";
 import type { RepoId, RepoStatus } from "$lib/ipc/types";
+import { onRepoChange } from "$lib/events/repoEvents";
 import { RecentRepoStore } from "$lib/entry/recentRepos";
 
 /** One open repository tab. */
@@ -305,39 +305,32 @@ export function refreshStatus(id: RepoId): Promise<void> {
 
 // -- repo-changed watcher wiring ------------------------------------------
 
-let eventsStarted = false;
-let eventsUnlisten: (() => void) | null = null;
+let unregisterEvents: (() => void) | null = null;
 
 /**
- * Subscribes the tab store to backend `repo-changed` events (any watcher
- * event for a known tab triggers a status refresh — `head_moved` and
- * `full` alike). Idempotent: safe to call from every entry point.
+ * Subscribes the tab store to backend `repo-changed` events through the
+ * shared event module (`$lib/events/repoEvents`). Policy, declared here:
+ * ANY watcher event for a known tab triggers a status refresh — `head_moved`
+ * and `full` alike, and index/workdir churn too — because the tab status
+ * covers the working copy as well as refs, so no event kind is skippable.
+ * Idempotent: safe to call from every entry point.
  */
 export function startTabEvents(): void {
-  if (eventsStarted) return;
-  eventsStarted = true;
-  onRepoChanged((event) => {
-    const tab = tabStore.tabs.find((t) => t.id === event.repo_id);
-    if (!tab) return;
-    void tabStore.refreshStatus(tab.id);
-  })
-    .then((unlisten) => {
-      eventsUnlisten = unlisten;
-    })
-    .catch((err) =>
-      console.error("[tabs] repo-changed subscription failed:", err),
-    );
+  if (unregisterEvents !== null) return;
+  unregisterEvents = onRepoChange({
+    filter: () => true,
+    handle: (change) => {
+      const tab = tabStore.tabs.find((t) => t.id === change.repo_id);
+      if (!tab) return;
+      void tabStore.refreshStatus(tab.id);
+    },
+  });
 }
 
 /** Stops the watcher subscription and clears the singleton (test helper). */
 export function resetTabStore(): void {
-  try {
-    eventsUnlisten?.();
-  } catch {
-    // Ignore.
-  }
-  eventsUnlisten = null;
-  eventsStarted = false;
+  unregisterEvents?.();
+  unregisterEvents = null;
   tabStore.tabs = [];
   tabStore.activeId = null;
 }

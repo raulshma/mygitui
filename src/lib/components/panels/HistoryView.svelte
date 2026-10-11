@@ -6,15 +6,18 @@
    *   1. filter bar (text / author / path / after / before; regex shown but
    *      disabled until M1.1) with an optional CompareBar strip,
    *   2. the log: DOM commit rows (left) beside GraphCanvas (right, 220px).
-   *      GraphCanvas owns its native scroll container (B2 contract), so the
-   *      two panes keep their scrollTops in lockstep instead of sharing one
-   *      scroller: the visible DOM-row window IS the canvas's reported
-   *      window (`onVisibleRowsChange`), the DOM pane hides its own gutter,
-   *      and the canvas's scrollbar effectively drives both. Wheel over
-   *      either pane, keyboard nav, and `scrollToRow`/`scrollToIndex` all
-   *      converge (equality-guarded pushes — no feedback loop). If B2's
-   *      internal `.gc-scroll` element can't be found, sync degrades to the
-   *      exported `scrollToRow(index)` + a locally computed window.
+   *      GraphCanvas owns its native scroll container (B2 contract), exposed
+   *      to this view via `bind:scrollEl`, so the two panes keep their
+   *      scrollTops in lockstep instead of sharing one scroller: the visible
+   *      DOM-row window IS the canvas's reported window
+   *      (`onVisibleRowsChange`), the DOM pane hides its own gutter, and the
+   *      canvas's scrollbar effectively drives both. Wheel over either pane,
+   *      keyboard nav, and `scrollToRow`/`scrollToIndex` all converge
+   *      (equality-guarded pushes — no feedback loop). The whole sync lives
+   *      in `$lib/stores/historyScrollSync` (unit-tested with fake
+   *      elements); this view only wires the real ports. Without the
+   *      canvas's scroll element it degrades to the exported
+   *      `scrollToRow(index)` + a locally computed window.
    *   3. commit detail pane (bottom, `CommitDetail`): full message,
    *      author/committer dates, clickable parents, and the commit's diff;
    *      per-file "Blame" swaps in a BlameView, and CompareBar results
@@ -22,18 +25,27 @@
    *      `SplitPane` (ratio persisted as a global pref, `splitPrefs`); the
    *      detail's own meta↔diff split lives inside `CommitDetail`.
    *
- * Data: one HistoryStore per mounted view (see `$lib/stores/history.svelte`)
- * started/destroyed in an `$effect` keyed on `repoId`. The view's filter,
- * selection and detail visibility persist per repo root (`historyPrefs`) —
- * restored on mount/re-target before the stream starts, saved on change.
+   * Data: one HistoryStore per mounted view (see `$lib/stores/history.svelte`)
+   * started/destroyed in an `$effect` keyed on `repoId`. The store applies
+   * the persisted per-root filter itself INSIDE `start()` before the first
+   * stream request (restore ordering is store-internal code order now); this
+   * view hydrates only the non-filter UI state (selection + detail
+   * visibility) on mount/re-target and saves everything on change
+   * (`historyPrefs`).
    *
    * Keyboard: the list is a role="listbox" — j/k or arrows move the
    * selection (g/G/Home/End jump), and aria-activedescendant tracks it.
    */
   import { untrack } from "svelte";
-  import { cherryPick, revertCommits } from "$lib/ipc/client";
-  import { describe, archiveSpec, pickSaveFile } from "$lib/ipc/client";
-  import { branchCreate, tagCreate } from "$lib/ipc/client";
+  import {
+    archiveSpec,
+    branchCreate,
+    cherryPick,
+    describe,
+    pickSaveFile,
+    revertCommits,
+    tagCreate,
+  } from "$lib/ipc/client";
   import type { CommitInfo, FileDiff, MergeResult } from "$lib/ipc/types";
   import GraphCanvas from "$lib/components/graph/GraphCanvas.svelte";
   import CompareBar from "$lib/components/panels/CompareBar.svelte";
@@ -42,6 +54,7 @@
   import RebasePlanner from "$lib/components/rebase/RebasePlanner.svelte";
   import { orderForCherryPick } from "$lib/components/rebase/plannerModel";
   import { HistoryStore } from "$lib/stores/history.svelte";
+  import { createHistoryScrollSync } from "$lib/stores/historyScrollSync";
   import { tabStore } from "$lib/stores/tabs.svelte";
   import {
     loadHistoryPrefs,
@@ -58,10 +71,9 @@
   import TagAtDialog from "$lib/components/panels/TagAtDialog.svelte";
   import {
     classifyRef,
-    EMPTY_FILTER,
     formatRelativeTime,
     shortRefName,
-  } from "$lib/stores/history-logic";
+  } from "$lib/git/format";
   import { toast } from "$lib/toast";
 
   let {
@@ -134,63 +146,52 @@
   // -- virtualizer + canvas scroll sync ------------------------------------------
 
   let scrollerEl = $state<HTMLDivElement | undefined>(undefined);
-  let graphColEl = $state<HTMLDivElement | undefined>(undefined);
-  let canvasRef = $state<unknown>(null);
-  /** B2's internal scroll element (`.gc-scroll`) — exact sync fast path. */
-  let canvasScrollEl: HTMLDivElement | null = null;
+  /** GraphCanvas's native scroll container (`bind:scrollEl`) — fast path. */
+  let canvasScrollEl = $state<HTMLDivElement | undefined>(undefined);
+  let canvasRef = $state<{ scrollToRow?: (i: number) => void } | null>(null);
+  /** Locally computed render window (degraded mode + fallback). */
   let ownRange = $state({ start: 0, end: 0 });
+  /** The canvas's reported drawn window (null until it reports one). */
   let canvasWindow = $state<{ first: number; last: number } | null>(null);
 
-  $effect(() => {
-    // Grab (or drop) the canvas's internal scroller when its column mounts.
-    canvasScrollEl = graphColEl
-      ? (graphColEl.querySelector<HTMLDivElement>(":scope .gc-scroll") ?? null)
-      : null;
+  /**
+   * Two-way list↔canvas scroll sync (see `$lib/stores/historyScrollSync`).
+   * The ports close over the bound elements; an absent element (null) is
+   * what selects the fallback (`scrollToRow`) / degraded (local window)
+   * strategies. Window state stays HERE as `$state` — read/written through
+   * the ports — so the derived render window below stays reactive.
+   */
+  const sync = createHistoryScrollSync({
+    list: {
+      getScrollTop: () => scrollerEl?.scrollTop ?? null,
+      setScrollTop: (top) => {
+        if (scrollerEl) scrollerEl.scrollTop = top;
+      },
+      getClientHeight: () => scrollerEl?.clientHeight ?? 0,
+    },
+    graph: {
+      getScrollTop: () => canvasScrollEl?.scrollTop ?? null,
+      setScrollTop: (top) => {
+        if (canvasScrollEl) canvasScrollEl.scrollTop = top;
+      },
+      getClientHeight: () => canvasScrollEl?.clientHeight ?? 0,
+      // Exported-handle fallback (B2 contract: `scrollToRow(index)` centers).
+      scrollToRow: (index) => canvasRef?.scrollToRow?.(index),
+    },
+    rowHeight: ROW_HEIGHT,
+    overscan: OVERSCAN,
+    totalRows: () => total,
+    ownRange: () => ownRange,
+    setOwnRange: (r) => (ownRange = r),
+    canvasWindow: () => canvasWindow,
+    setCanvasWindow: (w) => (canvasWindow = w),
   });
 
   /** Render window: the canvas's reported window when live, else our own. */
-  const range = $derived(
-    canvasWindow && canvasWindow.last > canvasWindow.first
-      ? { start: Math.max(0, canvasWindow.first), end: canvasWindow.last }
-      : ownRange,
-  );
-
-  function updateOwnRange(): void {
-    const el = scrollerEl;
-    if (!el || el.clientHeight === 0) return;
-    const first = Math.floor(el.scrollTop / ROW_HEIGHT);
-    const count = Math.ceil(el.clientHeight / ROW_HEIGHT);
-    const start = Math.max(0, first - OVERSCAN);
-    const end = Math.min(total, first + count + OVERSCAN);
-    if (start !== ownRange.start || end !== ownRange.end) ownRange = { start, end };
-  }
-
-  /** Exported-handle fallback (B2 contract: `scrollToRow(index)` centers). */
-  function syncCanvasToRow(index: number): void {
-    const exports = canvasRef as { scrollToRow?: (i: number) => void } | null;
-    if (exports && typeof exports.scrollToRow === "function") exports.scrollToRow(index);
-  }
-
-  /** Mirrors our scrollTop into the canvas (exact when possible). */
-  function pushScrollToCanvas(): void {
-    const mine = scrollerEl;
-    if (!mine) return;
-    if (
-      canvasScrollEl &&
-      Math.abs(canvasScrollEl.scrollTop - mine.scrollTop) >= 1
-    ) {
-      canvasScrollEl.scrollTop = mine.scrollTop;
-    } else if (!canvasScrollEl) {
-      syncCanvasToRow(
-        Math.floor((mine.scrollTop + mine.clientHeight / 2) / ROW_HEIGHT),
-      );
-    }
-  }
+  const range = $derived(sync.renderWindow());
 
   function onScroll(): void {
-    updateOwnRange();
-    pushScrollToCanvas();
-    if (range.end >= total) store.loadMore();
+    if (sync.onListScroll().end >= total) store.loadMore();
   }
 
   $effect(() => {
@@ -199,46 +200,17 @@
     // absent in some test environments).
     const el = scrollerEl;
     if (!el || typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver(() => updateOwnRange());
+    const observer = new ResizeObserver(() => sync.updateOwnRange());
     observer.observe(el);
     return () => observer.disconnect();
   });
 
-  /** Canvas reports its drawn window (incl. its overscan) — adopt + follow. */
-  function onCanvasVisible(first: number, last: number): void {
-    canvasWindow = { first, last };
-    const mine = scrollerEl;
-    if (
-      canvasScrollEl &&
-      mine &&
-      Math.abs(mine.scrollTop - canvasScrollEl.scrollTop) >= 1
-    ) {
-      // The user scrolled the canvas directly — follow it exactly. Our
-      // resulting scroll event pushes the same value back (no-op).
-      mine.scrollTop = canvasScrollEl.scrollTop;
-    }
-  }
-
   $effect(() => {
     // Fill the viewport when data first lands (or grows past the window).
     void total;
-    updateOwnRange();
-    if (range.end >= total && total > 0) store.loadMore();
+    sync.updateOwnRange();
+    if (sync.renderWindow().end >= total && total > 0) store.loadMore();
   });
-
-  function scrollToIndex(index: number): void {
-    const el = scrollerEl;
-    if (!el) {
-      syncCanvasToRow(index);
-      return;
-    }
-    const top = index * ROW_HEIGHT;
-    if (top < el.scrollTop) el.scrollTop = top;
-    else if (top + ROW_HEIGHT > el.scrollTop + el.clientHeight) {
-      el.scrollTop = top + ROW_HEIGHT - el.clientHeight;
-    }
-    pushScrollToCanvas();
-  }
 
   // -- lifecycle ------------------------------------------------------------------
 
@@ -246,12 +218,14 @@
   let restoreScroll = false;
 
   /**
-   * Repo re-targeting — MUST stay above the `store.start` effect (effects
-   * run in creation order): on mount and on every repo switch it applies
-   * the persisted per-root state (filter + selection + detail visibility)
-   * BEFORE the stream begins, so the first `repo_log_stream` carries the
-   * restored filter. Repo switches keep the pre-persistence reset of
-   * transient view state (dialogs, compare results, scroll/range).
+   * Repo re-targeting — on mount and on every repo switch it resets
+   * transient view state (dialogs, compare results, scroll/range) and
+   * hydrates the non-filter UI state (selection + detail visibility) from
+   * the persisted per-root prefs. The FILTER is deliberately not touched
+   * here: the store applies the persisted filter itself inside
+   * `start()` below, before the first stream request — the ordering
+   * invariant is store-internal code order, not effect order.
+   * Popouts (root === "") are display-only: nothing is restored or saved.
    */
   let lastTarget: string | null = null;
   $effect(() => {
@@ -268,15 +242,10 @@
         branchFromSha = null;
         tagAtSha = null;
         resetToSha = null;
-        ownRange = { start: 0, end: 0 };
-        canvasWindow = null;
-        if (scrollerEl) scrollerEl.scrollTop = 0;
-        if (canvasScrollEl) canvasScrollEl.scrollTop = 0;
+        sync.reset();
       });
     }
-    // Popouts (root === "") are display-only: nothing is restored or saved.
     const prefs = root === "" ? null : loadHistoryPrefs(root);
-    store.filter = { ...EMPTY_FILTER, ...(prefs?.filter ?? {}) };
     selectedSha = prefs?.selectedSha ?? null;
     selectedInfo = null; // the effect below resolves it once commits land
     detailOpen = prefs?.detailOpen ?? false;
@@ -284,33 +253,35 @@
   });
 
   $effect(() => {
-    store.start(repoId);
+    store.start(repoId, { root });
     return () => store.destroy();
   });
 
   /**
    * Resolves a hydrated selection once its commit reaches the loaded log:
    * fills `selectedInfo` (the detail pane renders from it), mirrors a
-   * click's multi-select bookkeeping, and scrolls to it once. A selection
-   * that never appears (outside the restored filter, gc'd, …) is dropped
-   * when the stream exhausts, so no phantom detail state lingers.
+   * click's multi-select bookkeeping, and scrolls to it once. The
+   * resolve/pending/drop decision itself lives in the store
+   * (`resolveRestoredSelection`, pure core in `history-logic`): a selection
+   * that never appears is dropped when the stream exhausts, so no phantom
+   * detail state lingers.
    */
   $effect(() => {
     const sha = selectedSha;
     if (!sha || selectedInfo) return;
     void store.flat; // re-run as pages release into the index
-    if (store.revealSha(sha)) {
-      const idx = store.indexOfSha(sha);
-      const commit = idx >= 0 ? commits[idx] : null;
+    const restored = store.resolveRestoredSelection(sha);
+    if (restored.kind === "resolved") {
+      const commit = commits[restored.index] ?? null;
       if (!commit) return;
       selectedInfo = commit;
-      multiIdx = [idx];
-      anchorIdx = idx;
+      multiIdx = [restored.index];
+      anchorIdx = restored.index;
       if (restoreScroll) {
         restoreScroll = false;
-        scrollToIndex(idx);
+        sync.scrollToIndex(restored.index);
       }
-    } else if (!store.loading && !store.hasMore) {
+    } else if (restored.kind === "dropped") {
       selectedSha = null;
       detailOpen = false;
       restoreScroll = false;
@@ -318,7 +289,7 @@
   });
 
   // Persist per-root history state on every change (debounced in the prefs
-  // module); the hydration above writes identical data back — harmless.
+  // module); the store's restore writes identical filter data back — harmless.
   $effect(() => {
     if (root === "") return;
     const filter = { ...store.filter };
@@ -381,7 +352,7 @@
       anchorIdx = idx >= 0 ? idx : null;
     }
     if (opts.open !== false) detailOpen = Boolean(selectedInfo);
-    if (opts.scroll && idx >= 0) scrollToIndex(idx);
+    if (opts.scroll && idx >= 0) sync.scrollToIndex(idx);
   }
 
   /**
@@ -858,15 +829,16 @@
           {/each}
         </div>
       </div>
-      <div class="graphcol" bind:this={graphColEl} style:width={`${GRAPH_WIDTH}px`}>
+      <div class="graphcol" style:width={`${GRAPH_WIDTH}px`}>
         <GraphCanvas
           pages={store.pages}
           rowHeight={ROW_HEIGHT}
           onCommitClick={(sha) => select(sha)}
           onReachEnd={() => store.loadMore()}
-          onVisibleRowsChange={onCanvasVisible}
+          onVisibleRowsChange={sync.onCanvasVisible}
           {bookmarks}
           {branchColors}
+          bind:scrollEl={canvasScrollEl}
           bind:this={canvasRef}
         />
       </div>

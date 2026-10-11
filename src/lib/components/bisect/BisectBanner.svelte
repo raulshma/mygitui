@@ -13,7 +13,7 @@
   import type { BisectLogEntry, BisectState } from "$lib/ipc/types";
   import { tabStore } from "$lib/stores/tabs.svelte";
   import { toast } from "$lib/toast";
-  import { formatDateTime } from "$lib/stores/history-logic";
+  import { formatDateTime } from "$lib/git/format";
   import { emitUiEvent, onUiEvent } from "$lib/palette/events";
 
   let { repoId }: { repoId: string } = $props();

@@ -14,8 +14,9 @@
 //!
 //! The contract lives in [`super::git_engine::GitEngineM12`]; this module
 //! owns the crate's single `impl GitEngineM12 for Libgit2Engine` block (Rust
-//! coherence allows only one) and forwards `worktree_prune` to its
-//! `*_impl` twin in [`super::stash`].
+//! coherence allows only one) and forwards to `*_impl` twins in their owning
+//! modules (`signing`, `bisect`, `stash`, and — for the earlier-milestone
+//! submodules/stats lanes — `submodules`/`stats`).
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -23,7 +24,8 @@ use git2::{BranchType, Oid, Repository};
 
 use super::git_engine::{EngineError, EngineResult, GitEngineM12};
 use super::libgit2::Libgit2Engine;
-use super::types::{BisectLogEntry, BranchTrashEntry, CommitSignature};
+use super::stats::{Contributor, DayCount};
+use super::types::{BisectLogEntry, BranchTrashEntry, CommitSignature, SubmoduleInfo};
 
 /// Namespace holding all trash refs.
 const TRASH_PREFIX: &str = "refs/mygitui/trash/";
@@ -217,6 +219,46 @@ impl GitEngineM12 for Libgit2Engine {
 
     fn bisect_log(&self, repo: &Repository) -> EngineResult<Vec<BisectLogEntry>> {
         self.bisect_log_impl(repo)
+    }
+
+    // ---------- Earlier-milestone lane forwarding (M4 submodules, M7 stats) ----------
+    //
+    // The impls live with their owning lanes (`submodules.rs`, `stats.rs`);
+    // this block is the crate's single `impl GitEngineM12` and thus the
+    // forwarding point (see the trait docs in git_engine.rs).
+    fn submodules(&self, repo: &Repository) -> EngineResult<Vec<SubmoduleInfo>> {
+        self.submodules_impl(repo)
+    }
+
+    fn submodule_update(
+        &self,
+        repo: &Repository,
+        path: &str,
+        init: bool,
+        recursive: bool,
+    ) -> EngineResult<()> {
+        self.submodule_update_impl(repo, path, init, recursive)
+    }
+
+    fn submodule_sync(&self, repo: &Repository, path: Option<&str>) -> EngineResult<()> {
+        self.submodule_sync_impl(repo, path)
+    }
+
+    fn commit_activity(
+        &self,
+        repo: &Repository,
+        max_days: u32,
+        author: Option<&str>,
+    ) -> EngineResult<Vec<DayCount>> {
+        self.commit_activity_impl(repo, max_days, author)
+    }
+
+    fn contributor_stats(
+        &self,
+        repo: &Repository,
+        max_days: u32,
+    ) -> EngineResult<Vec<Contributor>> {
+        self.contributor_stats_impl(repo, max_days)
     }
 }
 

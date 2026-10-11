@@ -30,6 +30,12 @@
  * registry) takes precedence over the keyring password; 1.x managed
  * servers carry no password and the keyring value is used as-is.
  *
+ * SSE liveness: the provider owns the event-stream subscription
+ * ({@link OpenCodeProvider.subscribeLiveness}) — it resolves the whole
+ * connection fresh per attempt (rotated managed passwords included) and
+ * picks the generation-specific stream path (`/event` v1, `/api/event`
+ * v2); `opencodeEvents.ts` only frames the SSE bytes.
+ *
  * Sessions: 1.x sessions are reused per `sessionKey` (features pass the
  * repoId), titled "mygitui". 2.x generations run in a temporary session
  * that is removed afterwards (free-tier-safe). Text generation on 1.x is
@@ -52,7 +58,14 @@
 import type { OpencodeClient } from "@opencode-ai/sdk/client";
 import type { OpenCode as OpenCodeV2Namespace } from "@opencode/client";
 import { DEFAULT_OPENCODE_URL } from "./provider";
-import type { AiGenerateRequest, AiProvider, AiProbeResult } from "./provider";
+import type {
+  AiGenerateRequest,
+  AiProvider,
+  AiProbeResult,
+  ResolvedConnection,
+  Unsubscribe,
+} from "./provider";
+import { subscribeOpencodeEvents, type OpencodeEventSession } from "./opencodeEvents";
 import { AiError } from "./types";
 import type { AiResult, ModelInfo, OpencodeResolve } from "./types";
 
@@ -764,34 +777,68 @@ export class OpenCodeProvider implements AiProvider {
   }
 
   /**
-   * Resolves the reachable server (never throws: `base` is `null` on any
-   * failure). Consumers (the SSE liveness loop) only need the base URL.
+   * Resolves the whole server connection — base URL, built auth header
+   * (password included), API generation — in one call. Rejects with the
+   * actionable `AiError` on any failure. Callers (the SSE liveness
+   * subscription) invoke it FRESH per (re)connection attempt: managed
+   * servers rotate their generated password on restart, so the header is
+   * re-derived from the current serve-registry/keyring state, never cached
+   * across a restart.
    */
-  async health(): Promise<{ base: string | null }> {
-    try {
-      return { base: (await this.#resolveServer()).server.base };
-    } catch {
-      return { base: null };
-    }
+  async connection(): Promise<ResolvedConnection> {
+    const resolved = await this.#resolveServer();
+    return {
+      baseUrl: resolved.server.base,
+      authHeader: resolved.password ? basicAuthHeader(resolved.password) : null,
+      serverKind: resolved.server.kind,
+    };
   }
 
   /**
-   * Resolves the reachable server plus its auth password (never throws:
-   * both are `null` on any failure). The SSE liveness loop uses this so
-   * managed 2.x streams authenticate with the generated password.
+   * Provider-owned SSE liveness ({@link AiProvider.subscribeLiveness}):
+   * resolves the connection fresh per subscription attempt (so a restart's
+   * rotated password is picked up), picks the stream path by server
+   * generation (1.x `/event`, 2.x `/api/event`), and maps transport
+   * signals onto `handler` — `false` per decoded event, `true` when the
+   * stream ends or the connection fails. Never reconnects itself: the
+   * store drops the subscription and re-subscribes on the supervisor's
+   * next ok transition.
    */
-  async connection(): Promise<{ base: string | null; password: string | null }> {
-    try {
-      const resolved = await this.#resolveServer();
-      return { base: resolved.server.base, password: resolved.password };
-    } catch {
-      return { base: null, password: null };
-    }
+  subscribeLiveness(handler: (down: boolean) => void): Unsubscribe {
+    let session: OpencodeEventSession | null = null;
+    let stopped = false;
+    void (async () => {
+      let conn: ResolvedConnection;
+      try {
+        conn = await this.connection();
+      } catch {
+        // Nothing to subscribe to (down/unauthenticated): report down; the
+        // store resubscribes after the next successful probe.
+        handler(true);
+        return;
+      }
+      if (stopped) return;
+      // 1.x servers stream at /event; 2.x moved the stream to /api/event.
+      const eventPath = conn.serverKind === "v2" ? "/api/event" : "/event";
+      session = subscribeOpencodeEvents({
+        url: new URL(eventPath, conn.baseUrl).toString(),
+        ...(conn.authHeader ? { authHeader: conn.authHeader } : {}),
+        onEvent: () => handler(false),
+        onEnded: () => handler(true),
+        fetchImpl: this.#fetch,
+      });
+      if (stopped) session.stop();
+    })();
+    return () => {
+      stopped = true;
+      session?.stop();
+    };
   }
 
   async available(): Promise<boolean> {
     try {
-      return (await this.health()).base !== null;
+      await this.#resolveServer();
+      return true;
     } catch {
       return false;
     }

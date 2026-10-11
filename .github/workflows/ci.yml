@@ -161,3 +161,16 @@ jobs:
           else
             cargo test
           fi
+
+      # Types are single-sourced: the ts-rs export tests (part of `cargo
+      # test`) regenerate `src/lib/ipc/gen/*.ts` from the Rust definitions.
+      # A diff here means the committed bindings are stale — run
+      # `npm run gen:types` and commit the result. Linux-only: the generated
+      # files are OS-independent, and Windows checkouts may carry CRLF line
+      # endings that would show up as phantom diffs.
+      - name: Type bindings drift gate
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          cargo test export_bindings
+          git diff --exit-code -- ../src/lib/ipc/gen

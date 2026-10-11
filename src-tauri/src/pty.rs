@@ -51,6 +51,7 @@ use std::time::{Duration, Instant};
 use parking_lot::Mutex;
 use portable_pty::{native_pty_system, Child, ChildKiller, CommandBuilder, MasterPty, PtySize};
 use serde::Serialize;
+use ts_rs::TS;
 
 use crate::engine::types::RepoId;
 use crate::repo::RepoManager;
@@ -93,17 +94,20 @@ const DEFAULT_ROWS: u16 = 24;
 const DEFAULT_COLS: u16 = 80;
 
 /// `pty-output` payload — field names and shapes are fixed by
-/// docs/contracts.md and mirrored in `src/lib/ipc/types.ts`
-/// (`PtyOutputEvent`).
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+/// docs/contracts.md; generated to `src/lib/ipc/gen/` and re-exported under
+/// the FE name `PtyOutputEvent` by `src/lib/ipc/types.ts`.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, TS)]
+#[ts(export)]
 pub struct PtyOutput {
     pub session_id: String,
     /// Lossy-UTF-8 decoded terminal bytes for one coalesced window.
     pub data: String,
 }
 
-/// `pty-exit` payload — the final event of a session.
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+/// `pty-exit` payload — the final event of a session (FE name
+/// `PtyExitEvent`).
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, TS)]
+#[ts(export)]
 pub struct PtyExit {
     pub session_id: String,
     /// Process exit code (`1` when the child died by signal / was killed).

@@ -29,6 +29,7 @@ use std::time::{Duration, Instant};
 use parking_lot::Mutex;
 use regex::Regex;
 use serde::Serialize;
+use ts_rs::TS;
 
 use crate::cli::apply_sanitized_env;
 
@@ -44,7 +45,8 @@ const STARTUP_OUTPUT_LINES: usize = 4;
 const STARTUP_OUTPUT_LINE_CHARS: usize = 180;
 
 /// Result of probing the machine for a local opencode CLI.
-#[derive(Serialize, Clone, Debug)]
+#[derive(Serialize, Clone, Debug, TS)]
+#[ts(export)]
 pub struct OpencodeDetection {
     pub installed: bool,
     /// Resolved binary path (first PATH hit), when installed.
@@ -67,7 +69,8 @@ impl OpencodeDetection {
 }
 
 /// Live state of the managed `opencode serve` child.
-#[derive(Serialize, Clone, Debug, Default)]
+#[derive(Serialize, Clone, Debug, Default, TS)]
+#[ts(export)]
 pub struct OpencodeServeState {
     pub running: bool,
     /// Base URL of the managed server (`http://127.0.0.1:<port>`).

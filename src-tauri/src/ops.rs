@@ -10,10 +10,11 @@
 //!
 //! Progress flows through [`OpCtx::emit_progress`], throttled to at most
 //! one event per [`THROTTLE_MS`] per op; the queue itself always emits a
-//! final `done: true` event when a job finishes (success or error). Events
-//! reach the frontend via the [`EventSink`] abstraction — [`TauriEventSink`]
-//! in production, a collector in tests — so the queue itself needs no
-//! `AppHandle` to compile or run headless.
+//! final `done: true` event when a job finishes (success or error) — except
+//! for silent enqueues ([`OpQueue::enqueue_silent`], used for reads), which
+//! emit nothing. Events reach the frontend via the [`EventSink`]
+//! abstraction — [`TauriEventSink`] in production, a collector in tests —
+//! so the queue itself needs no `AppHandle` to compile or run headless.
 //!
 //! Lifecycle: the worker thread is spawned lazily on the first `enqueue`
 //! and exits once [`OpQueue::shutdown`] runs (repo close) and the backlog
@@ -27,6 +28,7 @@ use std::time::Instant;
 
 use parking_lot::{Mutex, RwLock};
 use serde::Serialize;
+use ts_rs::TS;
 
 use crate::engine::types::RepoId;
 
@@ -38,8 +40,10 @@ pub const OP_PROGRESS_EVENT: &str = "op-progress";
 pub(crate) const THROTTLE_MS: u64 = 80;
 
 /// `op-progress` payload — field names and shapes are fixed by
-/// docs/contracts.md and mirrored in `src/lib/ipc/types.ts`.
-#[derive(Debug, Clone, Serialize, PartialEq)]
+/// docs/contracts.md; generated to `src/lib/ipc/gen/` via ts-rs and
+/// re-exported by `src/lib/ipc/types.ts`.
+#[derive(Debug, Clone, Serialize, PartialEq, TS)]
+#[ts(export)]
 pub struct OpProgress {
     pub repo_id: String,
     pub op_id: String,
@@ -173,6 +177,39 @@ impl OpQueue {
         T: Send + 'static,
         F: FnOnce(OpCtx) -> Result<T, String> + Send + 'static,
     {
+        self.enqueue_inner(kind, run, true)
+    }
+
+    /// Same as [`OpQueue::enqueue`] but silent: no `op-progress` events at
+    /// all — no throttled progress, no final done event, and a
+    /// cancelled-while-queued op is skipped without an event (the caller's
+    /// receiver still resolves with the "cancelled" error). Used for
+    /// queue-dispatched reads, which must stay invisible to the op-progress
+    /// surface exactly like the pre-queue direct reads: their failures
+    /// surface only through the command's error return. Serialization,
+    /// cancellation, and close semantics are identical to `enqueue`.
+    pub fn enqueue_silent<T, F>(
+        &self,
+        kind: &str,
+        run: F,
+    ) -> (String, tokio::sync::oneshot::Receiver<Result<T, String>>)
+    where
+        T: Send + 'static,
+        F: FnOnce(OpCtx) -> Result<T, String> + Send + 'static,
+    {
+        self.enqueue_inner(kind, run, false)
+    }
+
+    fn enqueue_inner<T, F>(
+        &self,
+        kind: &str,
+        run: F,
+        emits_progress: bool,
+    ) -> (String, tokio::sync::oneshot::Receiver<Result<T, String>>)
+    where
+        T: Send + 'static,
+        F: FnOnce(OpCtx) -> Result<T, String> + Send + 'static,
+    {
         let op_id = format!(
             "{}-op-{:x}",
             self.inner.repo_id.0,
@@ -187,7 +224,14 @@ impl OpQueue {
             return (op_id, rx);
         }
 
-        let sink = self.inner.sink.read().clone();
+        // A silent enqueue gets no sink, which suppresses every event path
+        // below (progress, done, cancelled-skip) in one place — the job
+        // closure and `OpCtx` already no-op without one.
+        let sink = if emits_progress {
+            self.inner.sink.read().clone()
+        } else {
+            None
+        };
         let repo_id = self.inner.repo_id.0.clone();
         let kind_owned = kind.to_string();
         let sender = self.ensure_worker();
@@ -548,6 +592,30 @@ mod tests {
         assert_eq!(last.pct, None);
     }
 
+    /// Silent enqueues (queue-dispatched reads) never touch the sink: no
+    /// throttled progress (even when the closure asks for it), no final
+    /// done event on success, none on failure.
+    #[test]
+    fn silent_enqueue_emits_no_events() {
+        let queue = queue();
+        let sink = CollectorSink::shared();
+        queue.set_sink(sink.clone());
+        let (_id, rx) = queue.enqueue_silent("status", move |ctx| {
+            ctx.emit_progress("halfway", Some(50.0));
+            Ok(())
+        });
+        recv(rx).expect("silent op completes");
+        let (_id, rx) =
+            queue.enqueue_silent("blame", |_ctx| Err::<(), String>("bad path".to_string()));
+        assert_eq!(recv(rx).unwrap_err(), "bad path");
+        assert!(
+            sink.snapshot().is_empty(),
+            "silent enqueues emit nothing: {:?}",
+            sink.snapshot()
+        );
+        queue.shutdown();
+    }
+
     #[test]
     fn rapid_progress_is_throttled_but_done_never_is() {
         let queue = queue();
@@ -677,19 +745,32 @@ mod tests {
     fn cancel_running_op_is_observed_by_ctx() {
         let queue = queue();
         const MAX_ITERS: u32 = 1000;
-        let (id, rx) = queue.enqueue("fetch", move |ctx| {
-            let mut iters = 0u32;
-            while iters < MAX_ITERS {
-                if ctx.cancelled() {
-                    break;
+        let entered = Arc::new(AtomicBool::new(false));
+        let (id, rx) = {
+            let entered = entered.clone();
+            queue.enqueue("fetch", move |ctx| {
+                entered.store(true, Ordering::SeqCst);
+                let mut iters = 0u32;
+                while iters < MAX_ITERS {
+                    if ctx.cancelled() {
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_millis(2));
+                    iters += 1;
                 }
-                std::thread::sleep(Duration::from_millis(2));
-                iters += 1;
-            }
-            Ok(iters)
-        });
-        // Give the worker a moment to enter the loop, then cancel.
-        std::thread::sleep(Duration::from_millis(30));
+                Ok(iters)
+            })
+        };
+        // Cancelling before the closure runs resolves the op as "cancelled"
+        // instead of handing it the token, so wait for actual entry first.
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while !entered.load(Ordering::SeqCst) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "op never entered its closure"
+            );
+            std::thread::sleep(Duration::from_millis(1));
+        }
         assert!(queue.cancel_op("test-repo", &id), "running op cancellable");
         let iters = recv(rx).unwrap();
         assert!(

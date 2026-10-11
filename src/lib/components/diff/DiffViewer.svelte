@@ -38,21 +38,18 @@
   } from "$lib/components/diff/wrapHeights";
   import { readWrapPref, writeWrapPref } from "$lib/diff/wrapPref";
   import {
-    beginSelection,
-    extendSelection,
     isLineSelected,
-    selectableAnchor,
     selectedSet as toSelectedSet,
     selectionRanges,
     type LineSelection,
   } from "$lib/components/diff/lineSelection";
+  import { selectionSegments, type Segment } from "$lib/components/diff/splitSelection";
   import {
-    segmentText,
-    selectionSegments,
-    wordSpanAt,
-    type Segment,
-    type SelPoint,
-  } from "$lib/components/diff/splitSelection";
+    createSelectionController,
+    type SplitSelection,
+  } from "$lib/diff/selectionController";
+  import { pointFromEvent, rangeForSegment } from "$lib/diff/selectionDom";
+  import { createWrapFeedback } from "$lib/diff/wrapFeedback";
   import DiffRow from "$lib/components/diff/DiffRow.svelte";
   import ExplainHunkPanel from "$lib/components/ai/ExplainHunkPanel.svelte";
 
@@ -126,44 +123,23 @@
   const slices = $derived(visibleSlices(layout, scrollTop, viewportH, OVERSCAN_PX));
 
   /**
-   * Rendered rows report their measured text height back (rAF-batched).
-   * Only divergences from the current layout height are recorded, so the
-   * estimate → measure → patch cycle converges instead of looping.
+   * Rendered rows report their measured text height back; diff/wrapFeedback.ts
+   * owns the rAF-batched estimate → measure → patch cycle (divergence-only
+   * recording, oscillation guard). The component keeps the reactive
+   * corrections record the layout is patched with.
    */
-  const pendingMeasurements = new Map<number, number>();
-  let measureRaf = 0;
-  function onRowMeasured(rowIndex: number, textHeight: number): void {
-    const snapped = Math.max(
-      ROW_HEIGHTS.line,
-      Math.round(textHeight / ROW_HEIGHTS.line) * ROW_HEIGHTS.line,
-    );
-    pendingMeasurements.set(rowIndex, snapped);
-    if (measureRaf) return;
-    measureRaf = requestAnimationFrame(() => {
-      measureRaf = 0;
-      let changed = false;
-      let next: Record<number, number> = heightOverrides;
-      let copied = false;
-      for (const [index, height] of pendingMeasurements) {
-        if (heights[index] !== height && heightOverrides[index] !== height) {
-          if (!copied) {
-            next = { ...heightOverrides };
-            copied = true;
-          }
-          next[index] = height;
-          changed = true;
-        }
-      }
-      pendingMeasurements.clear();
-      if (changed) heightOverrides = next;
-    });
-  }
+  const wrapFeedback = createWrapFeedback({
+    lineHeight: ROW_HEIGHTS.line,
+    heightAt: (index) => heights[index],
+    overrides: () => heightOverrides,
+    applyOverrides: (next) => (heightOverrides = next),
+  });
 
   // New rows (files/mode/wrap/width change) invalidate measured corrections.
   $effect(() => {
     void model;
     void wrapCtx;
-    heightOverrides = {};
+    wrapFeedback.invalidate();
   });
 
   function toggleWrap(): void {
@@ -290,28 +266,6 @@
     repoId !== undefined && (hunkStaging !== undefined || hunkDiscard),
   );
 
-  function onGutterClick(
-    fileIndex: number,
-    hunkIndex: number,
-    lineIndex: number,
-    extend: boolean,
-  ): void {
-    const hunkLines = files[fileIndex]?.hunks[hunkIndex]?.lines;
-    if (!hunkLines) return;
-    const anchor = selectableAnchor(hunkLines, lineIndex);
-    if (anchor === null) return;
-    if (
-      extend &&
-      selection &&
-      selection.fileIndex === fileIndex &&
-      selection.hunkIndex === hunkIndex
-    ) {
-      selection = extendSelection(selection, anchor, hunkLines);
-    } else {
-      selection = beginSelection(fileIndex, hunkIndex, anchor);
-    }
-  }
-
   /** O(1)-ish per-row membership check handed down to DiffRow. */
   function selectedAt(
     fileIndex: number,
@@ -353,7 +307,7 @@
       unstage,
     })
       .then(() => {
-        selection = null;
+        selectionCtl.clearLines();
         onMutated?.();
       })
       .catch((err: unknown) =>
@@ -378,7 +332,7 @@
       },
     ])
       .then(() => {
-        selection = null;
+        selectionCtl.clearLines();
         onMutated?.();
       })
       .catch((err: unknown) =>
@@ -388,31 +342,21 @@
 
   // Escape anywhere (and clicks elsewhere in the diff) clear the selection.
   // Ctrl+C with a split-view selection copies the selected side's text —
-  // the native copy path can't see it (no native selection exists).
+  // the native copy path can't see it (no native selection exists); the
+  // synthesis decision (native wins, nothing selected → no-op) lives in
+  // the controller, which reports whether it handled the key.
   $effect(() => {
     const onKey = (event: KeyboardEvent): void => {
       if (event.key === "Escape") {
-        selection = null;
-        segSel = null;
+        selectionCtl.clearAll();
         return;
       }
       if (
         (event.ctrlKey || event.metaKey) &&
         (event.key === "c" || event.key === "C") &&
-        segSel
+        selectionCtl.copy()
       ) {
-        const native = window.getSelection();
-        if (native && native.toString()) return; // a native selection wins
-        const side = segSel.side;
-        const segsNow = selectionSegments(segSel.anchor, segSel.focus, (row) => {
-          const t = halfText(row, side);
-          return t === null ? null : t.length;
-        });
-        const text = segmentText(segsNow, (row) => halfText(row, side) ?? "");
-        if (text) {
-          event.preventDefault();
-          navigator.clipboard?.writeText(text).catch(() => {});
-        }
+        event.preventDefault();
       }
     };
     document.addEventListener("keydown", onKey);
@@ -422,12 +366,8 @@
   function clearSelectionOnClick(): void {
     // The click fired right after a drag's mouseup belongs to that drag —
     // it must not erase the selection it just made.
-    if (dragJustMoved) {
-      dragJustMoved = false;
-      return;
-    }
-    selection = null;
-    segSel = null;
+    if (selectionCtl.consumeDragClick()) return;
+    selectionCtl.clearAll();
   }
 
   // -- split view: side-confined text selection -------------------------------
@@ -444,13 +384,13 @@
   // Highlight API. Ctrl+C copies the segments; the drag-ending mousedown is
   // preventDefault()ed so no native selection ever starts. Unified mode
   // keeps native selection (its rows have no halves).
-  interface SegState {
-    side: "left" | "right";
-    anchor: SelPoint;
-    focus: SelPoint;
-  }
+  // The state machine (drag lifecycle, same-side confinement, click-vs-drag
+  // disambiguation, word select, Ctrl+C synthesis, gutter shift-extend) lives
+  // in diff/selectionController.ts, unit-tested with fake deps; this component
+  // injects the real DOM adapters (diff/selectionDom.ts) and mirrors the
+  // selections into $state for rendering.
   const SELECTION_HL = "mygitui-diff-sel";
-  let segSel = $state<SegState | null>(null);
+  let segSel = $state<SplitSelection | null>(null);
 
   /** The half's line text on `side` (null = filler half / not a split row). */
   function halfText(row: number, side: "left" | "right"): string | null {
@@ -460,6 +400,28 @@
     if (r.kind === "pair") return (side === "left" ? r.left : r.right)?.text ?? null;
     return null;
   }
+
+  const selectionCtl = createSelectionController(
+    {
+      hitTest: pointFromEvent,
+      applySelection: (sel) => (segSel = sel),
+      halfText,
+      viewport: () => {
+        const vp = viewportEl;
+        if (!vp) return null;
+        return {
+          rect: vp.getBoundingClientRect(),
+          scrollBy: (dy: number) => {
+            vp.scrollTop += dy;
+          },
+        };
+      },
+      nativeSelectionText: () => window.getSelection()?.toString() ?? "",
+      hunkLines: (fileIndex, hunkIndex) =>
+        files[fileIndex]?.hunks[hunkIndex]?.lines ?? null,
+    },
+    { onLineSelection: (sel) => (selection = sel) },
+  );
 
   const segs = $derived.by(() => {
     if (!segSel) return [] as Segment[];
@@ -482,7 +444,7 @@
     if (list.length === 0 || !side || typeof Highlight === "undefined") return;
     const ranges: Range[] = [];
     for (const seg of list) {
-      const range = rangeForSegment(seg, side);
+      const range = rangeForSegment(viewportEl, seg, side);
       if (range) ranges.push(range);
     }
     if (ranges.length === 0) return;
@@ -492,137 +454,7 @@
     };
   });
 
-  /** A DOM range for one segment, or null when its row isn't mounted. */
-  function rangeForSegment(
-    seg: Segment,
-    side: "left" | "right",
-  ): Range | null {
-    const rowEl = viewportEl?.querySelector(`[data-row-index="${seg.row}"]`);
-    if (!rowEl) return null;
-    const half =
-      side === "left"
-        ? rowEl.querySelector(".half:not(.right)")
-        : rowEl.querySelector(".half.right");
-    const txt = half?.querySelector(".txt");
-    if (!txt) return null;
-    return textNodeRange(txt, seg.start, seg.end);
-  }
-
-  /** Range over the text inside `container` for char offsets [start, end). */
-  function textNodeRange(
-    container: Element,
-    start: number,
-    end: number,
-  ): Range | null {
-    const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT);
-    let pos = 0;
-    let startNode: Text | null = null;
-    let startOff = 0;
-    let endNode: Text | null = null;
-    let endOff = 0;
-    let node = walker.nextNode();
-    while (node) {
-      const len = (node as Text).data.length;
-      if (!startNode && pos + len > start) {
-        startNode = node as Text;
-        startOff = start - pos;
-      }
-      if (!endNode && pos + len >= end) {
-        endNode = node as Text;
-        endOff = end - pos;
-      }
-      if (startNode && endNode) break;
-      pos += len;
-      node = walker.nextNode();
-    }
-    if (!startNode || !endNode) return null;
-    const range = document.createRange();
-    range.setStart(startNode, startOff);
-    range.setEnd(endNode, endOff);
-    return range;
-  }
-
-  /**
-   * The selection point (row/side/char) under a mouse event, via the
-   * caret APIs. Null over filler halves / non-text zones — callers treat
-   * that as "no update".
-   */
-  function pointFromEvent(e: MouseEvent): (SelPoint & { side: "left" | "right" }) | null {
-    const doc = document as Document & {
-      caretPositionFromPoint?: (
-        x: number,
-        y: number,
-      ) => { offsetNode: Node; offset: number } | null;
-      caretRangeFromPoint?: (x: number, y: number) => Range | null;
-    };
-    let node: Node | null = null;
-    let offset = 0;
-    if (doc.caretPositionFromPoint) {
-      const p = doc.caretPositionFromPoint(e.clientX, e.clientY);
-      if (p) {
-        node = p.offsetNode;
-        offset = p.offset;
-      }
-    } else if (doc.caretRangeFromPoint) {
-      const r = doc.caretRangeFromPoint(e.clientX, e.clientY);
-      if (r) {
-        node = r.startContainer;
-        offset = r.startOffset;
-      }
-    }
-    if (!node) return null;
-    const el = node instanceof Element ? node : node.parentElement;
-    const half = el?.closest(".half");
-    if (!half) return null;
-    const rowEl = half.closest("[data-row-index]");
-    if (!rowEl) return null;
-    const row = Number(rowEl.getAttribute("data-row-index"));
-    if (!Number.isInteger(row)) return null;
-    const txt = half.querySelector(".txt");
-    if (!txt) return null; // filler half
-    // Logical char offset: sum the text-node lengths ahead of the caret.
-    const walker = document.createTreeWalker(txt, NodeFilter.SHOW_TEXT);
-    let char = 0;
-    let resolved = false;
-    let n = walker.nextNode();
-    while (n) {
-      if (n === node) {
-        char += offset;
-        resolved = true;
-        break;
-      }
-      char += (n as Text).data.length;
-      n = walker.nextNode();
-    }
-    if (!resolved && node === txt && typeof offset === "number") {
-      // Caret hit the .txt element itself: the offset is a child index —
-      // sum the text content of the children before it.
-      const children = txt.childNodes;
-      for (let i = 0; i < offset && i < children.length; i++) {
-        char += children[i]!.textContent?.length ?? 0;
-      }
-      resolved = true;
-    }
-    if (!resolved) {
-      // Caret landed on the sign/gutter side of the half: snap to the
-      // nearest end of the text.
-      const rect = txt.getBoundingClientRect();
-      char = e.clientX < rect.left ? 0 : char;
-      resolved = true;
-    }
-    return {
-      row,
-      char,
-      side: half.classList.contains("right") ? "right" : "left",
-    };
-  }
-
   let stopDrag: (() => void) | null = null;
-  /**
-   * Set when a drag actually moved the focus; the click that follows the
-   * mouseup must not then clear the selection it just made.
-   */
-  let dragJustMoved = false;
 
   function onContentMouseDown(event: MouseEvent): void {
     if (event.button !== 0 || mode !== "split") return;
@@ -632,49 +464,13 @@
     // No native selection may start in split mode — it can't represent a
     // side. (Clicks still dispatch; dblclick is handled below.)
     event.preventDefault();
-    const start = pointFromEvent(event);
-    if (!start) return;
-    dragJustMoved = false;
-    segSel = { side: start.side, anchor: start, focus: start };
-    const onMove = (ev: MouseEvent): void => {
-      if (!(ev.buttons & 1)) return;
-      // Autoscroll near the viewport edges (native drags get this for
-      // free; ours doesn't create a native selection).
-      const vp = viewportEl;
-      if (vp) {
-        const r = vp.getBoundingClientRect();
-        if (ev.clientY < r.top + 24) vp.scrollTop -= 14;
-        else if (ev.clientY > r.bottom - 24) vp.scrollTop += 14;
-      }
-      const p = pointFromEvent(ev);
-      if (!p || !segSel) return;
-      let focus: SelPoint = p;
-      if (p.side !== start.side) {
-        // Crossed the divider: only the SAME row may extend, and only to
-        // this row's edge on the dragging side (native-like: sweeping
-        // toward the other half grabs the rest of your own line, never
-        // the other half itself; crossing rows from the wrong column
-        // freezes the selection instead of growing it).
-        if (p.row !== segSel.focus.row) return;
-        if (start.side === "left") {
-          const t = halfText(p.row, "left");
-          if (t === null) return;
-          focus = { row: p.row, char: t.length };
-        } else {
-          const t = halfText(p.row, "right");
-          if (t === null) return;
-          focus = { row: p.row, char: 0 };
-        }
-      }
-      if (focus.row !== segSel.focus.row || focus.char !== segSel.focus.char) {
-        dragJustMoved = true;
-      }
-      segSel = { side: start.side, anchor: segSel.anchor, focus };
-    };
+    if (!selectionCtl.pointerDown(event)) return;
+    const onMove = (ev: MouseEvent): void => selectionCtl.pointerMove(ev);
     const onUp = (): void => {
       window.removeEventListener("mousemove", onMove);
       window.removeEventListener("mouseup", onUp);
       stopDrag = null;
+      selectionCtl.pointerUp();
     };
     stopDrag?.();
     window.addEventListener("mousemove", onMove);
@@ -689,22 +485,15 @@
       event.target instanceof Element ? event.target.closest(".half") : null;
     if (!half) return;
     event.preventDefault();
-    const pt = pointFromEvent(event);
-    if (!pt) return;
-    const line = halfText(pt.row, pt.side) ?? "";
-    const [start, end] = wordSpanAt(line, pt.char);
-    if (end > start) {
-      segSel = {
-        side: pt.side,
-        anchor: { row: pt.row, char: start },
-        focus: { row: pt.row, char: end },
-      };
-    }
+    selectionCtl.doubleClick(event);
   }
 
-  // Unmount mid-drag: drop the window listeners.
+  // Unmount mid-drag: drop the window listeners and the measure loop.
   $effect(() => {
-    return () => stopDrag?.();
+    return () => {
+      stopDrag?.();
+      wrapFeedback.dispose();
+    };
   });
 
   // -- M12 AI: explain-hunk (visible once the repo opted in) -------------------
@@ -733,7 +522,7 @@
   // resets the scroll position and any selection.
   $effect(() => {
     void files;
-    selection = null;
+    selectionCtl.clearLines();
     scrollTop = 0;
     viewportEl?.scrollTo(0, 0);
   });
@@ -741,7 +530,7 @@
   $effect(() => {
     void mode;
     void wrap;
-    segSel = null;
+    selectionCtl.clearSegments();
   });
 
   // Viewport size via ResizeObserver (plus an immediate baseline read).
@@ -831,7 +620,7 @@
                 {wrap}
                 rowIndex={slice.firstRow + i}
                 heightPx={wrap ? heights[slice.firstRow + i] : undefined}
-                onMeasure={wrap ? onRowMeasured : undefined}
+                onMeasure={wrap ? wrapFeedback.measure : undefined}
                 onToggleCollapse={toggleCollapse}
                 {onLoadImage}
                 onStageHunk={repoId && hunkStaging ? stageHunk : undefined}
@@ -841,7 +630,7 @@
                   ? (files[model.fileIndexes[slice.firstRow + i]]?.path ?? null)
                   : null}
                 selectedAt={selectionEnabled ? selectedAt : undefined}
-                onGutterClick={selectionEnabled ? onGutterClick : undefined}
+                onGutterClick={selectionEnabled ? selectionCtl.gutterClick : undefined}
                 selectionCount={row.kind === "hunk-header"
                   ? selectionCountFor(row.fileIndex, row.hunkIndex)
                   : 0}
