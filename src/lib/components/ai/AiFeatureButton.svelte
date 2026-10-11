@@ -47,6 +47,8 @@
     resultEvent = undefined,
     run,
     onResult = undefined,
+    /** Extra class(es) on the root span (e.g. a legacy hook for tests). */
+    rootClass = undefined,
   }: {
     repoId: string;
     /** Button text. */
@@ -76,6 +78,8 @@
     run: (opts?: AiRunOptions) => Promise<FeatureOutcome>;
     /** Called with the finished outcome (the caller owns the result UI). */
     onResult?: (outcome: FeatureOutcome) => void;
+    /** Extra class(es) on the root span (e.g. a legacy hook for tests). */
+    rootClass?: string | undefined;
   } = $props();
 
   let root = $state<HTMLSpanElement | undefined>(undefined);
@@ -130,7 +134,7 @@
 </script>
 
 {#if !gateVisibility || ai.isOptedIn(repoId)}
-  <span class="ai-feature" class:pop-up={popUp} bind:this={root}>
+  <span class="ai-feature {rootClass ?? ''}" class:pop-up={popUp} bind:this={root}>
     {#if icon}
       <button
         class="sparkle"

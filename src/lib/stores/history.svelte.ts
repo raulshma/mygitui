@@ -27,6 +27,7 @@
  * from handing the canvas/DOM list the entire history at once.
  */
 
+import { untrack } from "svelte";
 import { streamLog } from "$lib/ipc/client";
 import { isSignificant, onRepoChange } from "$lib/events/repoEvents";
 import type { LogPage, RepoId } from "$lib/ipc/types";
@@ -260,7 +261,15 @@ export class HistoryStore {
     this.pendingCount = 0;
 
     try {
-      streamLog(repoId, toLogFilter(this.filter, { follow: this.#follow }), (page) =>
+      // Snapshot the filter WITHOUT subscribing: `start()` runs inside a
+      // view `$effect` whose cleanup destroys this store, and `start()` also
+      // WRITES `filter` (persisted-filter restore). Reading it tracked would
+      // make the effect retrigger on its own write — cleanup destroys, the
+      // re-run restarts and writes again, forever (the view wedges and the
+      // renderer eventually OOMs). Filter edits restart through the explicit
+      // debounced `setFilter` path instead.
+      const snapshot = untrack(() => this.filter);
+      streamLog(repoId, toLogFilter(snapshot, { follow: this.#follow }), (page) =>
         this.#onPage(token, page),
       )
         .then(() => {
