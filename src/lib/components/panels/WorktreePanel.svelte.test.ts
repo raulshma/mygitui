@@ -50,44 +50,51 @@ function linkedWorktree(patch: Partial<WorktreeInfo> = {}): WorktreeInfo {
 }
 
 describe("WorktreePanel remove flow", () => {
-  it("invokes worktree_remove after the confirm dialog and toasts on success", async () => {
-    mocks.worktrees.mockResolvedValueOnce([linkedWorktree()]).mockResolvedValueOnce([]);
-    mocks.branches.mockResolvedValue([]);
-    mocks.worktreeRemove.mockResolvedValue(undefined);
+  it(
+    "invokes worktree_remove after the confirm dialog and toasts on success",
+    async () => {
+      mocks.worktrees.mockResolvedValueOnce([linkedWorktree()]).mockResolvedValueOnce([]);
+      mocks.branches.mockResolvedValue([]);
+      mocks.worktreeRemove.mockResolvedValue(undefined);
 
-    render(WorktreePanel, { repoId: "r1", root: "/tmp/repo" });
+      render(WorktreePanel, { repoId: "r1", root: "/tmp/repo" });
 
-    // List loaded: the linked worktree row is present.
-    await screen.findByText("wt-feature");
+      // List loaded: the linked worktree row is present.
+      await screen.findByText("wt-feature");
 
-    // Row remove → in-row confirm → ConfirmDialog confirm.
-    await fireEvent.click(
-      screen.getByRole("button", { name: "Remove worktree wt-feature" }),
-    );
-    await fireEvent.click(
-      screen.getByRole("button", { name: "Confirm remove" }),
-    );
-    await fireEvent.click(
-      screen.getByRole("button", { name: "Remove worktree" }),
-    );
+      // Row remove → in-row confirm → ConfirmDialog confirm.
+      await fireEvent.click(
+        screen.getByRole("button", { name: "Remove worktree wt-feature" }),
+      );
+      await fireEvent.click(
+        screen.getByRole("button", { name: "Confirm remove" }),
+      );
+      await fireEvent.click(
+        screen.getByRole("button", { name: "Remove worktree" }),
+      );
 
-    await waitFor(() =>
-      expect(mocks.worktreeRemove).toHaveBeenCalledWith(
-        "r1",
-        "wt-feature",
-        false,
-      ),
-    );
-    await waitFor(() =>
-      expect(toast).toHaveBeenCalledWith("Removed worktree wt-feature", {
-        kind: "success",
-      }),
-    );
-    // The panel reloaded and the removed worktree is gone from the list.
-    await waitFor(() =>
-      expect(screen.queryByText("wt-feature")).toBeNull(),
-    );
-  });
+      await waitFor(() =>
+        expect(mocks.worktreeRemove).toHaveBeenCalledWith(
+          "r1",
+          "wt-feature",
+          false,
+        ),
+      );
+      await waitFor(() =>
+        expect(toast).toHaveBeenCalledWith("Removed worktree wt-feature", {
+          kind: "success",
+        }),
+      );
+      // The panel reloaded and the removed worktree is gone from the list.
+      await waitFor(() =>
+        expect(screen.queryByText("wt-feature")).toBeNull(),
+      );
+    },
+    // UI round-trip through Svelte + jsdom flakes at the default 5s timeout
+    // under full-suite parallel load (observed ~6s). 15s still fails fast on
+    // real hangs while tolerating CI contention.
+    15_000,
+  );
 
   it("shows per-row removal progress while the backend op runs", async () => {
     mocks.worktrees.mockResolvedValue([linkedWorktree()]);
