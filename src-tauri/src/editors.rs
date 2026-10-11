@@ -526,6 +526,8 @@ mod tests {
     }
 
     /// Builds a fake install tree: `<root>/<rel>` as an empty file.
+    /// (Only the Windows-gated tests below install fake editors.)
+    #[cfg(windows)]
     fn fake_install(root: &Path, rel: &str) -> PathBuf {
         let path = root.join(rel);
         std::fs::create_dir_all(path.parent().unwrap()).expect("mkdir");
