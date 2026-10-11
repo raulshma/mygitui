@@ -36,10 +36,15 @@ jobs:
           key: nightly-cargo-${{ runner.os }}-${{ hashFiles('src-tauri/Cargo.lock') }}
 
       # Perf gates (plan §19) measured in release mode. Each run downloads
-      # the previous nightly's criterion baseline, compares against it, and
-      # saves the new one. `--baseline` fails the run when a benchmark
-      # regresses beyond criterion's default noise threshold; a missing
-      # previous artifact (first run / retention expiry) just saves fresh.
+      # the previous nightly's criterion data and saves the new results under
+      # the `nightly` named baseline. Criterion always diffs each benchmark
+      # against the `base` results from the downloaded data, so the previous
+      # nightly's numbers are what we compare to. A missing previous artifact
+      # (first run / retention expiry) just saves fresh. Note: criterion only
+      # *reports* regressions ("Performance has regressed."); it does not
+      # exit non-zero on them — check the report for regressions.
+      # `--baseline` cannot be combined with `--save-baseline` (clap
+      # conflict in criterion 0.8).
       - name: Download previous baseline
         uses: dawidd6/action-download-artifact@v6
         continue-on-error: true
@@ -51,7 +56,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Run benches
-        run: cargo bench --bench perf -- --baseline nightly --save-baseline nightly
+        run: cargo bench --bench perf -- --save-baseline nightly
 
       - name: Upload criterion reports
         uses: actions/upload-artifact@v4
