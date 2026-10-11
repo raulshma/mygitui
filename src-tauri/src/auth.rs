@@ -320,7 +320,9 @@ impl AuthBroker {
                 };
                 if let Some((user, pass)) = (self.helper_fill)(&query) {
                     self.helper_served.lock().insert(host.clone());
-                    self.cache.lock().insert(host.clone(), (user.clone(), pass.clone()));
+                    self.cache
+                        .lock()
+                        .insert(host.clone(), (user.clone(), pass.clone()));
                     return git2::Cred::userpass_plaintext(&user, &pass);
                 }
             }
@@ -814,7 +816,13 @@ mod tests {
         broker.remember("https", remember_host, "ada", "pw", true);
         assert!(broker.helper_served.lock().contains(remember_host));
 
-        broker.remember("https", "mygitui-nostore.example.invalid", "ada", "pw", false);
+        broker.remember(
+            "https",
+            "mygitui-nostore.example.invalid",
+            "ada",
+            "pw",
+            false,
+        );
         assert!(!broker
             .helper_served
             .lock()

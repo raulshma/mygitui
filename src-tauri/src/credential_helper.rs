@@ -46,7 +46,10 @@ pub(crate) fn fill(query: &Query<'_>) -> Option<(String, String)> {
     match parse_fill(&stdout) {
         Some(pair) => Some(pair),
         None => {
-            tracing::debug!(host = query.host, "credential helper returned no credential");
+            tracing::debug!(
+                host = query.host,
+                "credential helper returned no credential"
+            );
             None
         }
     }
@@ -85,7 +88,9 @@ fn run_credential(action: &str, attrs: &[String]) -> Result<String, String> {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
-    let mut child = cmd.spawn().map_err(|err| format!("spawn git credential {action}: {err}"))?;
+    let mut child = cmd
+        .spawn()
+        .map_err(|err| format!("spawn git credential {action}: {err}"))?;
     // The input is a few short lines, far below the pipe buffer, so writing
     // before reading cannot deadlock. Dropping stdin signals EOF.
     if let Some(mut stdin) = child.stdin.take() {
