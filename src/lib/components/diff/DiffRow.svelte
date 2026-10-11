@@ -225,9 +225,11 @@
   <!-- Context renders the line in BOTH halves (like GitHub/VS Code split):
        each side clips at the divider, so text never crosses into the other
        section. The empty sign spacer keeps text columns aligned with the
-       pair rows directly above/below. -->
+       pair rows directly above/below. `data-row-index` addresses the row
+       for the viewer's split-selection highlights. -->
   <div
     class="row line context"
+    data-row-index={rowIndex}
     style:height={`${heightPx ?? rowHeight(row)}px`}
     use:measure
   >
@@ -264,6 +266,7 @@
 {:else if row.kind === "pair"}
   <div
     class="row line pair"
+    data-row-index={rowIndex}
     style:height={`${heightPx ?? rowHeight(row)}px`}
     use:measure
   >
@@ -313,6 +316,7 @@
   <div
     class="row line single{isAdd ? " add" : isDel ? " del" : ""}"
     class:selected={selectedInRow(row.lineIndex)}
+    data-row-index={rowIndex}
     style:height={`${heightPx ?? rowHeight(row)}px`}
     use:measure
   >

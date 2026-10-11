@@ -294,6 +294,9 @@ export class HistoryStore {
     try {
       this.#unlisten = await onRepoChanged((event: RepoChangedEvent) => {
         if (!this.#started || event.repo_id !== this.#repoId) return;
+        // Index-only churn (stage/unstage) cannot change the commit graph;
+        // restart only when refs/HEAD moved or the watcher demands a resync.
+        if (!event.head_moved && !event.full) return;
         // Generation-bumped restart: fresh stream, stale pages ignored.
         this.#beginStream();
       });

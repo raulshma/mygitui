@@ -33,6 +33,8 @@
   import { showMenuAt, type MenuEntry } from "$lib/components/menu/contextMenuStore.svelte";
   import ConfirmDialog from "$lib/components/safety/ConfirmDialog.svelte";
   import GitignoreGallery from "$lib/components/panels/GitignoreGallery.svelte";
+  import Icon from "$lib/components/icons/Icon.svelte";
+  import { fileIconForPath } from "$lib/components/icons/fileIcons";
   import { openPanelPopout } from "$lib/layout/popout";
   import {
     buildStatusIndex,
@@ -481,6 +483,10 @@
                   <span class={`kind ${kindClass(row.kind)}`} aria-hidden="true">
                     {kindLetter(row.kind)}
                   </span>
+                  <Icon
+                    icon={fileIconForPath(row.entry.path)}
+                    size={14}
+                  />
                   <span class="path">
                     {#if row.entry.old_path && (row.kind === "renamed" || row.kind === "copied")}
                       <span class="old">{row.entry.old_path}</span>
@@ -717,6 +723,12 @@
     flex: none;
     margin: 0;
     accent-color: var(--m3-primary);
+  }
+
+  /* The row's file-type icon (currentColor glyphs pinned in fileIcons.ts). */
+  .row :global(svg) {
+    flex: none;
+    color: var(--m3-on-surface-variant, var(--m3-on-surface));
   }
 
   .kind {

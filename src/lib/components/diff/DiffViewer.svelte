@@ -46,6 +46,13 @@
     selectionRanges,
     type LineSelection,
   } from "$lib/components/diff/lineSelection";
+  import {
+    segmentText,
+    selectionSegments,
+    wordSpanAt,
+    type Segment,
+    type SelPoint,
+  } from "$lib/components/diff/splitSelection";
   import DiffRow from "$lib/components/diff/DiffRow.svelte";
   import ExplainHunkPanel from "$lib/components/ai/ExplainHunkPanel.svelte";
 
@@ -380,17 +387,325 @@
   }
 
   // Escape anywhere (and clicks elsewhere in the diff) clear the selection.
+  // Ctrl+C with a split-view selection copies the selected side's text —
+  // the native copy path can't see it (no native selection exists).
   $effect(() => {
     const onKey = (event: KeyboardEvent): void => {
-      if (event.key === "Escape") selection = null;
+      if (event.key === "Escape") {
+        selection = null;
+        segSel = null;
+        return;
+      }
+      if (
+        (event.ctrlKey || event.metaKey) &&
+        (event.key === "c" || event.key === "C") &&
+        segSel
+      ) {
+        const native = window.getSelection();
+        if (native && native.toString()) return; // a native selection wins
+        const side = segSel.side;
+        const segsNow = selectionSegments(segSel.anchor, segSel.focus, (row) => {
+          const t = halfText(row, side);
+          return t === null ? null : t.length;
+        });
+        const text = segmentText(segsNow, (row) => halfText(row, side) ?? "");
+        if (text) {
+          event.preventDefault();
+          navigator.clipboard?.writeText(text).catch(() => {});
+        }
+      }
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
   });
 
   function clearSelectionOnClick(): void {
+    // The click fired right after a drag's mouseup belongs to that drag —
+    // it must not erase the selection it just made.
+    if (dragJustMoved) {
+      dragJustMoved = false;
+      return;
+    }
     selection = null;
+    segSel = null;
   }
+
+  // -- split view: side-confined text selection -------------------------------
+  //
+  // Native selection cannot express "the left halves of rows 1–3": it is one
+  // contiguous DOM range, and split rows interleave their halves, so a
+  // multi-row drag on one side always spans the other side's copies in
+  // between (`user-select: contain` doesn't stop drags; `none` content is
+  // skipped, not walled; multi-range selection is unsupported). So split
+  // mode tracks the drag itself: mousedown inside a half anchors a point
+  // (model row + char, resolved with caretRangeFromPoint), mousemove moves
+  // the focus — moves onto the OPPOSITE side are ignored, which is the
+  // entire confinement — and the segments are painted with the CSS Custom
+  // Highlight API. Ctrl+C copies the segments; the drag-ending mousedown is
+  // preventDefault()ed so no native selection ever starts. Unified mode
+  // keeps native selection (its rows have no halves).
+  interface SegState {
+    side: "left" | "right";
+    anchor: SelPoint;
+    focus: SelPoint;
+  }
+  const SELECTION_HL = "mygitui-diff-sel";
+  let segSel = $state<SegState | null>(null);
+
+  /** The half's line text on `side` (null = filler half / not a split row). */
+  function halfText(row: number, side: "left" | "right"): string | null {
+    const r = model.rows[row];
+    if (!r) return null;
+    if (r.kind === "context") return r.line.text;
+    if (r.kind === "pair") return (side === "left" ? r.left : r.right)?.text ?? null;
+    return null;
+  }
+
+  const segs = $derived.by(() => {
+    if (!segSel) return [] as Segment[];
+    const side = segSel.side;
+    return selectionSegments(segSel.anchor, segSel.focus, (row) => {
+      const t = halfText(row, side);
+      return t === null ? null : t.length;
+    });
+  });
+
+  /**
+   * Paints the segments onto the mounted rows. Depends on `scrollTop`
+   * because scrolling remounts rows and their ranges must be rebuilt.
+   */
+  $effect(() => {
+    void scrollTop;
+    const list = segs;
+    const side = segSel?.side;
+    // jsdom (unit tests) has no Highlight API — guard at runtime.
+    if (list.length === 0 || !side || typeof Highlight === "undefined") return;
+    const ranges: Range[] = [];
+    for (const seg of list) {
+      const range = rangeForSegment(seg, side);
+      if (range) ranges.push(range);
+    }
+    if (ranges.length === 0) return;
+    CSS.highlights.set(SELECTION_HL, new Highlight(...ranges));
+    return () => {
+      CSS.highlights.delete(SELECTION_HL);
+    };
+  });
+
+  /** A DOM range for one segment, or null when its row isn't mounted. */
+  function rangeForSegment(
+    seg: Segment,
+    side: "left" | "right",
+  ): Range | null {
+    const rowEl = viewportEl?.querySelector(`[data-row-index="${seg.row}"]`);
+    if (!rowEl) return null;
+    const half =
+      side === "left"
+        ? rowEl.querySelector(".half:not(.right)")
+        : rowEl.querySelector(".half.right");
+    const txt = half?.querySelector(".txt");
+    if (!txt) return null;
+    return textNodeRange(txt, seg.start, seg.end);
+  }
+
+  /** Range over the text inside `container` for char offsets [start, end). */
+  function textNodeRange(
+    container: Element,
+    start: number,
+    end: number,
+  ): Range | null {
+    const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT);
+    let pos = 0;
+    let startNode: Text | null = null;
+    let startOff = 0;
+    let endNode: Text | null = null;
+    let endOff = 0;
+    let node = walker.nextNode();
+    while (node) {
+      const len = (node as Text).data.length;
+      if (!startNode && pos + len > start) {
+        startNode = node as Text;
+        startOff = start - pos;
+      }
+      if (!endNode && pos + len >= end) {
+        endNode = node as Text;
+        endOff = end - pos;
+      }
+      if (startNode && endNode) break;
+      pos += len;
+      node = walker.nextNode();
+    }
+    if (!startNode || !endNode) return null;
+    const range = document.createRange();
+    range.setStart(startNode, startOff);
+    range.setEnd(endNode, endOff);
+    return range;
+  }
+
+  /**
+   * The selection point (row/side/char) under a mouse event, via the
+   * caret APIs. Null over filler halves / non-text zones — callers treat
+   * that as "no update".
+   */
+  function pointFromEvent(e: MouseEvent): (SelPoint & { side: "left" | "right" }) | null {
+    const doc = document as Document & {
+      caretPositionFromPoint?: (
+        x: number,
+        y: number,
+      ) => { offsetNode: Node; offset: number } | null;
+      caretRangeFromPoint?: (x: number, y: number) => Range | null;
+    };
+    let node: Node | null = null;
+    let offset = 0;
+    if (doc.caretPositionFromPoint) {
+      const p = doc.caretPositionFromPoint(e.clientX, e.clientY);
+      if (p) {
+        node = p.offsetNode;
+        offset = p.offset;
+      }
+    } else if (doc.caretRangeFromPoint) {
+      const r = doc.caretRangeFromPoint(e.clientX, e.clientY);
+      if (r) {
+        node = r.startContainer;
+        offset = r.startOffset;
+      }
+    }
+    if (!node) return null;
+    const el = node instanceof Element ? node : node.parentElement;
+    const half = el?.closest(".half");
+    if (!half) return null;
+    const rowEl = half.closest("[data-row-index]");
+    if (!rowEl) return null;
+    const row = Number(rowEl.getAttribute("data-row-index"));
+    if (!Number.isInteger(row)) return null;
+    const txt = half.querySelector(".txt");
+    if (!txt) return null; // filler half
+    // Logical char offset: sum the text-node lengths ahead of the caret.
+    const walker = document.createTreeWalker(txt, NodeFilter.SHOW_TEXT);
+    let char = 0;
+    let resolved = false;
+    let n = walker.nextNode();
+    while (n) {
+      if (n === node) {
+        char += offset;
+        resolved = true;
+        break;
+      }
+      char += (n as Text).data.length;
+      n = walker.nextNode();
+    }
+    if (!resolved && node === txt && typeof offset === "number") {
+      // Caret hit the .txt element itself: the offset is a child index —
+      // sum the text content of the children before it.
+      const children = txt.childNodes;
+      for (let i = 0; i < offset && i < children.length; i++) {
+        char += children[i]!.textContent?.length ?? 0;
+      }
+      resolved = true;
+    }
+    if (!resolved) {
+      // Caret landed on the sign/gutter side of the half: snap to the
+      // nearest end of the text.
+      const rect = txt.getBoundingClientRect();
+      char = e.clientX < rect.left ? 0 : char;
+      resolved = true;
+    }
+    return {
+      row,
+      char,
+      side: half.classList.contains("right") ? "right" : "left",
+    };
+  }
+
+  let stopDrag: (() => void) | null = null;
+  /**
+   * Set when a drag actually moved the focus; the click that follows the
+   * mouseup must not then clear the selection it just made.
+   */
+  let dragJustMoved = false;
+
+  function onContentMouseDown(event: MouseEvent): void {
+    if (event.button !== 0 || mode !== "split") return;
+    const half =
+      event.target instanceof Element ? event.target.closest(".half") : null;
+    if (!half) return;
+    // No native selection may start in split mode — it can't represent a
+    // side. (Clicks still dispatch; dblclick is handled below.)
+    event.preventDefault();
+    const start = pointFromEvent(event);
+    if (!start) return;
+    dragJustMoved = false;
+    segSel = { side: start.side, anchor: start, focus: start };
+    const onMove = (ev: MouseEvent): void => {
+      if (!(ev.buttons & 1)) return;
+      // Autoscroll near the viewport edges (native drags get this for
+      // free; ours doesn't create a native selection).
+      const vp = viewportEl;
+      if (vp) {
+        const r = vp.getBoundingClientRect();
+        if (ev.clientY < r.top + 24) vp.scrollTop -= 14;
+        else if (ev.clientY > r.bottom - 24) vp.scrollTop += 14;
+      }
+      const p = pointFromEvent(ev);
+      if (!p || !segSel) return;
+      let focus: SelPoint = p;
+      if (p.side !== start.side) {
+        // Crossed the divider: only the SAME row may extend, and only to
+        // this row's edge on the dragging side (native-like: sweeping
+        // toward the other half grabs the rest of your own line, never
+        // the other half itself; crossing rows from the wrong column
+        // freezes the selection instead of growing it).
+        if (p.row !== segSel.focus.row) return;
+        if (start.side === "left") {
+          const t = halfText(p.row, "left");
+          if (t === null) return;
+          focus = { row: p.row, char: t.length };
+        } else {
+          const t = halfText(p.row, "right");
+          if (t === null) return;
+          focus = { row: p.row, char: 0 };
+        }
+      }
+      if (focus.row !== segSel.focus.row || focus.char !== segSel.focus.char) {
+        dragJustMoved = true;
+      }
+      segSel = { side: start.side, anchor: segSel.anchor, focus };
+    };
+    const onUp = (): void => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+      stopDrag = null;
+    };
+    stopDrag?.();
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    stopDrag = onUp;
+  }
+
+  /** Double-click selects the word under the caret (native one is blocked). */
+  function onContentDblClick(event: MouseEvent): void {
+    if (event.button !== 0 || mode !== "split") return;
+    const half =
+      event.target instanceof Element ? event.target.closest(".half") : null;
+    if (!half) return;
+    event.preventDefault();
+    const pt = pointFromEvent(event);
+    if (!pt) return;
+    const line = halfText(pt.row, pt.side) ?? "";
+    const [start, end] = wordSpanAt(line, pt.char);
+    if (end > start) {
+      segSel = {
+        side: pt.side,
+        anchor: { row: pt.row, char: start },
+        focus: { row: pt.row, char: end },
+      };
+    }
+  }
+
+  // Unmount mid-drag: drop the window listeners.
+  $effect(() => {
+    return () => stopDrag?.();
+  });
 
   // -- M12 AI: explain-hunk (visible once the repo opted in) -------------------
 
@@ -414,12 +729,19 @@
     };
   }
 
-  // A new diff resets the scroll position (and any line selection).
+  // A new diff (or a mode/wrap change — row indices and geometry shift)
+  // resets the scroll position and any selection.
   $effect(() => {
     void files;
     selection = null;
     scrollTop = 0;
     viewportEl?.scrollTo(0, 0);
+  });
+
+  $effect(() => {
+    void mode;
+    void wrap;
+    segSel = null;
   });
 
   // Viewport size via ResizeObserver (plus an immediate baseline read).
@@ -500,7 +822,7 @@
            line selection (those stop propagation). -->
       <!-- svelte-ignore a11y_click_events_have_key_events -->
       <!-- svelte-ignore a11y_no_static_element_interactions -->
-      <div class="content" onclick={clearSelectionOnClick} style="height: {layout.totalHeight}px; min-width: {contentMinWidth}">
+      <div class="content" onclick={clearSelectionOnClick} onmousedown={onContentMouseDown} ondblclick={onContentDblClick} style="height: {layout.totalHeight}px; min-width: {contentMinWidth}">
         {#each slices as slice (slice.bucketIndex)}
           <div class="slice" style="top: {slice.top}px">
             {#each model.rows.slice(slice.firstRow, slice.firstRow + slice.count) as row, i (slice.firstRow + i)}
@@ -631,6 +953,15 @@
     right: 0;
     overflow: hidden;
     contain: layout style;
+  }
+
+  /* Split-view selection paint (see the split view block in the script):
+     the segments are ranges registered in CSS.highlights. The Custom
+     Highlight API paints only color/background/text-decoration, which is
+     all a text selection needs. */
+  :global(::highlight(mygitui-diff-sel)) {
+    background-color: color-mix(in srgb, var(--m3-primary) 35%, transparent);
+    color: var(--m3-on-surface);
   }
 
   /* ---- empty state ---- */

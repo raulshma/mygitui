@@ -337,6 +337,24 @@ describe("repo-changed watcher", () => {
     watcherHandlers[0]!({ repo_id: "other", paths: [], head_moved: true, full: false });
     expect(calls).toHaveLength(2); // not our repo → no restart
   });
+
+  it("ignores index-only events (stage/unstage) but restarts on full resync", async () => {
+    const store = new HistoryStore();
+    store.start("repo-1");
+    await flush();
+    expect(watcherHandlers).toHaveLength(1);
+
+    calls[0]!.deliver(makePage(0, 2, 1));
+    expect(store.flat.commits).toHaveLength(2);
+
+    watcherHandlers[0]!({ repo_id: "repo-1", paths: [".git/index"], head_moved: false, full: false });
+    expect(calls).toHaveLength(1); // index churn → no restart
+    expect(store.pages).toHaveLength(1); // list untouched, no flash
+
+    watcherHandlers[0]!({ repo_id: "repo-1", paths: [], head_moved: false, full: true });
+    expect(calls).toHaveLength(2); // watcher resync → restart
+    expect(store.pages).toHaveLength(0);
+  });
 });
 
 // ---------------------------------------------------------------------------
