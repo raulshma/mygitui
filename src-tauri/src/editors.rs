@@ -14,6 +14,7 @@
 //! locate their config while git credentials/hooks env stays out.
 
 use serde::{Deserialize, Serialize};
+#[cfg(windows)]
 use std::collections::HashMap;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
