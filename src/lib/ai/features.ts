@@ -3,7 +3,8 @@
  *
  * Prompt builders are PURE (no IO) and heavily tested: they render git data
  * into prompts with a hard input cap (24k chars for diffs — larger inputs
- * are truncated with an explicit note so the model knows) and shared
+ * are budgeted per file by `./diffBudget` so every changed file stays
+ * represented, with explicit truncation/omission notes) and shared
  * guardrails (never emit secrets, never emit placeholders like TODO).
  *
  * Runners gather data through the injectable git client
@@ -13,6 +14,7 @@
  */
 
 import type { DiffHunk, FileDiff, LogFilter, LogPage, RepoId } from "$lib/ipc/types";
+import { budgetedDiffText, MAX_DIFF_CHARS } from "./diffBudget";
 import type { ConnectionSupervisor } from "./connection";
 import { AiError } from "./types";
 import type { AiResult, FeatureKind } from "./types";
@@ -21,8 +23,8 @@ import type { AiResult, FeatureKind } from "./types";
 // Shared prompt plumbing
 // ---------------------------------------------------------------------------
 
-/** Hard cap for diff input in prompts (characters). */
-export const MAX_DIFF_CHARS = 24_000;
+/** Hard cap for diff input in prompts (characters) — defined in {@link ./diffBudget}. */
+export { MAX_DIFF_CHARS };
 
 /** Guardrails appended to every system prompt. */
 export const GUARDRAILS = [
@@ -74,6 +76,7 @@ export function commitMessagePrompt(
         ];
   const system = [
     "You write git commit messages for a desktop Git client.",
+    "The input starts with a stat summary of ALL changed files; the diff content after it may be budgeted per file, so trust the summary when the change spans many files.",
     ...styleRules,
     "The body explains WHY the change was made, not WHAT changed mechanically (the diff already shows what) — omit the body entirely when there is nothing meaningful to add.",
     "Wrap body lines at about 72 characters.",
@@ -160,6 +163,7 @@ export function explainHunkPrompt(path: string, hunkText: string): { system: str
 export function reviewStagedPrompt(stagedDiff: string): { system: string; prompt: string } {
   const system = [
     "You are a careful code reviewer inside a desktop Git client.",
+    "The input starts with a stat summary of ALL changed files; the diff content after it may be budgeted per file. Review what is shown and note when the summary suggests more.",
     "Review the staged changes: correctness risks, edge cases, security issues and style problems. Be concrete and reference file paths. When everything looks fine, say so briefly.",
     GUARDRAILS,
   ].join("\n\n");
@@ -384,7 +388,19 @@ export async function runFeature(
   let built: { system: string; prompt: string };
   switch (kind) {
     case "commit-message": {
-      const diff = ctx.diff ?? (await gatherStagedDiff(deps.git, ctx.repoId));
+      // When gathering, budget the rendered diff across files (stat
+      // summary + fair per-file slices) so big changes keep every file
+      // represented; a pre-rendered `ctx.diff` is passed through as-is.
+      let diff: string;
+      if (ctx.diff !== undefined) {
+        diff = ctx.diff;
+      } else {
+        const files = await deps.git.repoDiff(ctx.repoId, "head", "index");
+        if (files.length === 0) {
+          throw new AiError("bad-response", "nothing is staged to write a commit message for", {});
+        }
+        diff = budgetedDiffText(files);
+      }
       if (diff.trim().length === 0) {
         throw new AiError("bad-response", "nothing is staged to write a commit message for", {});
       }
@@ -405,7 +421,16 @@ export async function runFeature(
       break;
     }
     case "review-staged": {
-      const diff = ctx.diff ?? (await gatherStagedDiff(deps.git, ctx.repoId));
+      let diff: string;
+      if (ctx.diff !== undefined) {
+        diff = ctx.diff;
+      } else {
+        const files = await deps.git.repoDiff(ctx.repoId, "head", "index");
+        if (files.length === 0) {
+          throw new AiError("bad-response", "nothing is staged to review", {});
+        }
+        diff = budgetedDiffText(files);
+      }
       if (diff.trim().length === 0) {
         throw new AiError("bad-response", "nothing is staged to review", {});
       }

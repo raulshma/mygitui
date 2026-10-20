@@ -115,7 +115,7 @@ describe("capDiff", () => {
     expect(capped.length).toBeLessThan(text.length);
   });
 
-  it("defaults the cap to MAX_DIFF_CHARS (24k)", () => {
+  it("defaults the cap to MAX_DIFF_CHARS (400k, ~128k-token context)", () => {
     const text = Array.from(
       { length: 10_000 },
       (_, i) => `line ${i} of a fairly long diff used for the default-cap test`,
