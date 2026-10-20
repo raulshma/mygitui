@@ -34,8 +34,13 @@
   import ConfirmDialog from "$lib/components/safety/ConfirmDialog.svelte";
   import GitignoreGallery from "$lib/components/panels/GitignoreGallery.svelte";
   import Icon from "$lib/components/icons/Icon.svelte";
+  import { IconButton } from "$lib/components/m3";
   import { fileIconForPath } from "$lib/components/icons/fileIcons";
   import { openPanelPopout } from "$lib/layout/popout";
+  import iconStageAll from "@ktibow/iconset-material-symbols/done-all";
+  import iconUnstageAll from "@ktibow/iconset-material-symbols/remove-done";
+  import iconTemplates from "@ktibow/iconset-material-symbols/description";
+  import iconIgnore from "@ktibow/iconset-material-symbols/visibility-off";
   import {
     buildStatusIndex,
     filterSections,
@@ -380,35 +385,30 @@
         bind:value={filterText}
         onkeydown={onFilterKeydown}
       />
-      <button
-        class="tb"
-        type="button"
-        disabled={!canMutate}
+      <IconButton
+        icon={iconStageAll}
+        label="Stage all files"
         title={repoId ? "Stage every change" : "No repository open"}
-        aria-label="Stage all files"
-        onclick={() => onStageAll(false)}
-      >
-        Stage all
-      </button>
-      <button
-        class="tb"
-        type="button"
+        variant="outlined"
         disabled={!canMutate}
+        onclick={() => onStageAll(false)}
+      />
+      <IconButton
+        icon={iconUnstageAll}
+        label="Unstage all files"
         title={repoId ? "Unstage everything (keep changes)" : "No repository open"}
-        aria-label="Unstage all files"
+        variant="outlined"
+        disabled={!canMutate}
         onclick={() => onStageAll(true)}
-      >
-        Unstage all
-      </button>
+      />
       {#if repoId}
-        <button
-          class="tb"
-          type="button"
+        <IconButton
+          icon={iconTemplates}
+          label="Ignore templates"
           title="Apply a builtin .gitignore template"
+          variant="outlined"
           onclick={() => (galleryOpen = true)}
-        >
-          Templates…
-        </button>
+        />
       {/if}
     </div>
 
@@ -497,21 +497,18 @@
                   </span>
                   {#if row.section === "untracked" && canMutate}
                     <span class="ignore-wrap">
-                      <button
-                        class="ignore-btn"
-                        type="button"
-                        disabled={mutating}
-                        aria-label={`Ignore ${row.entry.path}`}
-                        aria-expanded={ignoreFor === row.key}
+                      <IconButton
+                        icon={iconIgnore}
+                        label={`Ignore ${row.entry.path}`}
                         title="Add to .gitignore"
-                        tabindex={-1}
+                        dense
+                        disabled={mutating}
+                        aria-expanded={ignoreFor === row.key}
                         onclick={(event) => {
                           event.stopPropagation();
                           toggleIgnore(row);
                         }}
-                      >
-                        Ignore
-                      </button>
+                      />
                       {#if ignoreFor === row.key}
                         <span class="ignore-menu" role="menu" aria-label="Ignore pattern choices">
                           {#each ignoreChoices as choice (choice.pattern)}
@@ -595,32 +592,6 @@
     outline: 2px solid var(--m3-primary);
     outline-offset: -1px;
     border-color: transparent;
-  }
-
-  .tb {
-    flex: none;
-    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    border-radius: var(--m3-shape-extra-small, 4px);
-    background: none;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    font: inherit;
-    font-size: 0.75rem;
-    padding: 0.25rem 0.5rem;
-    cursor: pointer;
-  }
-
-  .tb:hover:not(:disabled) {
-    background: var(--m3-surface-container-high, var(--m3-surface));
-  }
-
-  .tb:focus-visible {
-    outline: 2px solid var(--m3-primary);
-    outline-offset: -1px;
-  }
-
-  .tb:disabled {
-    cursor: not-allowed;
-    opacity: 0.55;
   }
 
   .banners {
@@ -816,31 +787,15 @@
     margin-left: auto;
   }
 
-  .ignore-btn {
-    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    border-radius: var(--m3-shape-extra-small, 4px);
-    background: none;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    font: inherit;
-    font-size: 0.6875rem;
-    padding: 0.0625rem 0.375rem;
-    cursor: pointer;
+  .ignore-wrap :global(.icon-btn) {
     opacity: 0;
+    transition: opacity 0.12s ease;
   }
 
-  .row:hover .ignore-btn,
-  .ignore-btn:focus-visible,
-  .ignore-btn[aria-expanded="true"] {
+  .row:hover .ignore-wrap :global(.icon-btn),
+  .ignore-wrap :global(.icon-btn:focus-visible),
+  .ignore-wrap :global(.icon-btn[aria-expanded="true"]) {
     opacity: 1;
-  }
-
-  .ignore-btn:hover {
-    background: var(--m3-surface-container-high, var(--m3-surface));
-  }
-
-  .ignore-btn:focus-visible {
-    outline: 2px solid var(--m3-primary);
-    outline-offset: -1px;
   }
 
   .ignore-menu {

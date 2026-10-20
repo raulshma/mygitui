@@ -4,15 +4,14 @@
    * workspace's left column), so the commit message and button stay visible
    * while the changes list scrolls below.
    *
-   * Message textarea (Ctrl/Cmd+Enter commits), Amend switch, --no-verify
-   * switch ("skip hooks"), signing badge (`signing_info`), per-hook badges
-   * (`hooks_list`, present + executable → "pre-commit will run"), an author
-   * override disclosure, and the Commit button (spinner while a commit op
-   * runs per the OpStore; disabled with no message unless amending).
-   * The side column groups the controls into rows: status chips, then the
-   * option switches (Amend / --no-verify left, Author… right), then the
-   * actions row (Fixup left; AI generate + Commit pinned bottom-right). The
-   * author override fields expand as a full-width row under the message row.
+   * Message textarea (Ctrl/Cmd+Enter commits; starts one row tall and grows
+   * with the draft up to a cap, then scrolls), compact icon toggles for
+   * Amend / skip-hooks / author override, signing + hook status icons, a
+   * Fixup action, and the Commit button (spinner while a commit op runs per
+   * the OpStore; disabled with no message unless amending).
+   * Controls sit in one dense row under the message (wrapping only when the
+   * sidebar gets too narrow): options left, Fixup + AI + Commit right. The
+   * author override fields expand as a full-width row under that.
    * Success clears the form, toasts the short sha and asks the owner to
    * refresh (`onCommitted` → RepoView refreshStatus). Failures render
    * inline next to the button. The AI button is a disabled ghost (M6).
@@ -28,10 +27,18 @@
   import { busy } from "$lib/stores/ops.svelte";
   import { tabStore } from "$lib/stores/tabs.svelte";
   import { toast } from "$lib/toast";
-  import { Switch } from "$lib/components/m3";
+  import { IconButton } from "$lib/components/m3";
+  import Icon from "$lib/components/icons/Icon.svelte";
   import { ai } from "$lib/ai/ai.svelte";
   import AiFeatureButton from "$lib/components/ai/AiFeatureButton.svelte";
   import { fixupMessage, hasStagedChanges, headCommitInPage } from "$lib/commit/commitBarModel";
+  import iconAmend from "@ktibow/iconset-material-symbols/edit";
+  import iconSkipHooks from "@ktibow/iconset-material-symbols/block";
+  import iconAuthor from "@ktibow/iconset-material-symbols/person";
+  import iconFixup from "@ktibow/iconset-material-symbols/merge-type";
+  import iconProgress from "@ktibow/iconset-material-symbols/progress-activity";
+  import iconSigning from "@ktibow/iconset-material-symbols/verified";
+  import iconHook from "@ktibow/iconset-material-symbols/bolt";
 
   let {
     repoId,
@@ -43,6 +50,7 @@
   } = $props();
 
   let message = $state("");
+  let messageEl = $state<HTMLTextAreaElement | null>(null);
   let amend = $state(false);
   let noVerify = $state(false);
   let showAuthor = $state(false);
@@ -50,6 +58,24 @@
   let authorEmail = $state("");
   let error = $state<string | null>(null);
   let committing = $state(false);
+
+  /** Grows the message box from one row up to a readable cap. */
+  const MAX_MESSAGE_HEIGHT = 176;
+
+  function resizeMessage(): void {
+    const el = messageEl;
+    if (!el) return;
+    el.style.height = "auto";
+    const next = Math.min(el.scrollHeight, MAX_MESSAGE_HEIGHT);
+    el.style.height = `${next}px`;
+    el.style.overflowY = el.scrollHeight > MAX_MESSAGE_HEIGHT ? "auto" : "hidden";
+  }
+
+  $effect(() => {
+    // Re-measure whenever the draft changes (including programmatic AI fills).
+    void message;
+    resizeMessage();
+  });
 
   let signing = $state<SigningInfo | null>(null);
   let hooks = $state<HookInfo[]>([]);
@@ -210,64 +236,76 @@
       id="commit-message"
       class="message"
       placeholder="Commit message… (Ctrl+Enter to commit)"
-      rows="3"
+      rows="1"
+      bind:this={messageEl}
       bind:value={message}
       onkeydown={onMessageKeydown}
       disabled={commitBusy || committing}
     ></textarea>
 
-    <div class="side">
-      {#if signing?.active || runningHooks.length > 0}
-        <div class="chips" aria-hidden="false">
-          {#if signing?.active}
-            <span
-              class="chip chip-sign"
-              title={signing.key_id ? `Signing key ${signing.key_id}` : "Commits will be signed"}
-            >
-              signed: {signing.format}
-            </span>
-          {/if}
-          {#each runningHooks as hook (hook.kind)}
-            <span class="chip chip-hook" title="This hook is present and executable">
-              {hook.kind} will run
-            </span>
-          {/each}
-        </div>
-      {/if}
-
-      <div class="options">
-        <div class="opt-switches">
-          <Switch bind:checked={amend} title="Amend the previous commit">
-            Amend
-          </Switch>
-          <Switch
-            bind:checked={noVerify}
-            title="Skip the pre-commit and commit-msg hooks (--no-verify)"
-          >
-            --no-verify
-          </Switch>
-        </div>
-        <button
-          class="disclosure"
-          type="button"
-          aria-expanded={showAuthor}
+    <div class="controls">
+      <div class="opt-switches">
+        <IconButton
+          icon={iconAmend}
+          label="Amend"
+          title="Amend the previous commit"
+          pressed={amend}
+          onclick={() => (amend = !amend)}
+        />
+        <IconButton
+          icon={iconSkipHooks}
+          label="Skip hooks (--no-verify)"
+          title="Skip the pre-commit and commit-msg hooks (--no-verify)"
+          pressed={noVerify}
+          onclick={() => (noVerify = !noVerify)}
+        />
+        <IconButton
+          icon={iconAuthor}
+          label="Author override"
           title="Override the commit author"
+          pressed={showAuthor}
+          aria-expanded={showAuthor}
           onclick={() => (showAuthor = !showAuthor)}
-        >
-          Author…
-        </button>
+        />
+
+        {#if signing?.active || runningHooks.length > 0}
+          <span class="meta-icons">
+            {#if signing?.active}
+              <span
+                class="meta-icon sign"
+                role="img"
+                title={signing.key_id
+                  ? `Commits will be signed with ${signing.format} (key ${signing.key_id})`
+                  : `Commits will be signed (${signing.format})`}
+                aria-label={`Signing active: ${signing.format}`}
+              >
+                <Icon icon={iconSigning} size={14} />
+              </span>
+            {/if}
+            {#each runningHooks as hook (hook.kind)}
+              <span
+                class="meta-icon hook"
+                role="img"
+                title="{hook.kind} will run on commit"
+                aria-label={`${hook.kind} hook will run`}
+              >
+                <Icon icon={iconHook} size={14} />
+              </span>
+            {/each}
+          </span>
+        {/if}
       </div>
 
       <div class="actions">
-        <button
-          class="disclosure fixup"
-          type="button"
+        <IconButton
+          icon={fixing ? iconProgress : iconFixup}
+          class={fixing ? "fixup-spin" : ""}
+          label="Fixup into HEAD"
           title="Commit the staged changes as fixup! into HEAD (message not needed)"
+          tone="success"
           disabled={!canFixup}
           onclick={() => void doFixup()}
-        >
-          {fixing ? "Fixing…" : "Fixup into HEAD"}
-        </button>
+        />
 
         <div class="primary">
           <AiFeatureButton
@@ -341,8 +379,8 @@ ${m.body}` : m.subject;
     flex: none;
     display: flex;
     flex-direction: column;
-    gap: 0.35rem;
-    padding: 0.4rem 0.5rem;
+    gap: 0.3rem;
+    padding: 0.375rem 0.45rem;
     border-bottom: 1px solid var(--m3-outline-variant, var(--m3-primary));
     background: var(--m3-surface-container, var(--m3-surface));
     font-size: 0.8125rem;
@@ -359,7 +397,11 @@ ${m.body}` : m.subject;
     flex: none;
     width: 100%;
     min-width: 0;
-    resize: vertical;
+    min-height: 1.7rem;
+    max-height: 11rem;
+    resize: none;
+    overflow-y: hidden;
+    line-height: 1.35;
     font: inherit;
     font-family: ui-monospace, Consolas, monospace;
     font-size: 0.75rem;
@@ -367,7 +409,7 @@ ${m.body}` : m.subject;
     background: var(--m3-surface-container-lowest, var(--m3-surface));
     border: 1px solid var(--m3-outline-variant, var(--m3-primary));
     border-radius: var(--m3-shape-extra-small, 4px);
-    padding: 0.3rem 0.5rem;
+    padding: 0.28rem 0.5rem;
   }
 
   .message:focus-visible {
@@ -375,99 +417,65 @@ ${m.body}` : m.subject;
     outline-offset: -1px;
   }
 
-  .side {
-    display: flex;
-    flex-direction: column;
-    gap: 0.3rem;
-    width: 100%;
-    min-width: 0;
-  }
-
-  .chips {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.25rem;
-  }
-
-  .chip {
-    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    border-radius: var(--m3-shape-full, 9999px);
-    padding: 0.05rem 0.5rem;
-    font-size: 0.6875rem;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    white-space: nowrap;
-  }
-
-  .chip-sign {
-    color: var(--m3-on-secondary-container, var(--m3-on-surface));
-    background: var(--m3-secondary-container, transparent);
-    border-color: transparent;
-  }
-
-  .chip-hook {
-    color: var(--m3-on-tertiary-container, var(--m3-on-surface));
-    background: var(--m3-tertiary-container, transparent);
-    border-color: transparent;
-  }
-
-  .options {
+  .controls {
     display: flex;
     align-items: center;
     flex-wrap: wrap;
-    gap: 0.35rem 0.5rem;
+    gap: 0.25rem 0.375rem;
+    width: 100%;
+    min-width: 0;
   }
 
   .opt-switches {
     display: flex;
     align-items: center;
-    flex-wrap: wrap;
-    gap: 0.35rem 0.625rem;
+    gap: 0.125rem;
     min-width: 0;
   }
 
-  .options .disclosure {
-    margin-left: auto;
+  .meta-icons {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.125rem;
+    margin-left: 0.125rem;
+    padding-left: 0.25rem;
+    border-left: 1px solid var(--m3-outline-variant, var(--m3-primary));
+  }
+
+  .meta-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--m3-on-surface-variant, var(--m3-on-surface));
+    opacity: 0.9;
+  }
+
+  .meta-icon.sign {
+    color: var(--m3-tertiary, var(--m3-on-surface-variant));
+  }
+
+  .meta-icon.hook {
+    color: var(--m3-primary);
   }
 
   .actions {
+    margin-left: auto;
     display: flex;
     align-items: center;
     flex-wrap: wrap;
-    gap: 0.35rem;
+    gap: 0.25rem;
   }
 
   .primary {
-    margin-left: auto;
     display: inline-flex;
     align-items: center;
     gap: 0.375rem;
   }
 
-  .disclosure {
-    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    border-radius: var(--m3-shape-extra-small, 4px);
-    background: none;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    font: inherit;
-    font-size: 0.72rem;
-    padding: 0.15rem 0.5rem;
-    cursor: pointer;
+  :global(.fixup-spin svg) {
+    animation: spin 1s linear infinite;
   }
 
-  .disclosure[aria-expanded="true"] {
-    background: var(--m3-surface-container-high, var(--m3-surface));
-  }
-
-  .fixup {
-    color: var(--m3-tertiary, var(--m3-on-surface-variant, var(--m3-on-surface)));
-  }
-
-  .fixup:disabled {
-    cursor: not-allowed;
-    opacity: 0.55;
-  }
-
-  .disclosure:focus-visible,
   .go:focus-visible {
     outline: 2px solid var(--m3-primary);
     outline-offset: 1px;
@@ -477,8 +485,9 @@ ${m.body}` : m.subject;
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    gap: 0.375rem;
-    min-width: 6.5rem;
+    gap: 0.35rem;
+    min-width: 5.25rem;
+    height: 1.75rem;
     border: none;
     border-radius: var(--m3-shape-full, 9999px);
     background: var(--m3-primary);
@@ -486,7 +495,7 @@ ${m.body}` : m.subject;
     font: inherit;
     font-size: 0.75rem;
     font-weight: 500;
-    padding: 0.35rem 1.25rem;
+    padding: 0 1rem;
     cursor: pointer;
   }
 

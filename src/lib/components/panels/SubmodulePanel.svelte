@@ -19,6 +19,11 @@
   import type { SubmoduleInfo } from "$lib/ipc/types";
   import { openTab } from "$lib/stores/tabs.svelte";
   import { toast } from "$lib/toast";
+  import { IconButton } from "$lib/components/m3";
+  import iconRefresh from "@ktibow/iconset-material-symbols/refresh";
+  import iconUpdate from "@ktibow/iconset-material-symbols/download";
+  import iconSync from "@ktibow/iconset-material-symbols/sync";
+  import iconOpen from "@ktibow/iconset-material-symbols/open-in-new";
 
   let {
     repoId,
@@ -131,9 +136,14 @@
       <span>recursive</span>
     </label>
     <span class="spacer"></span>
-    <button class="tb" type="button" onclick={() => void reload()} disabled={loading}>
-      {loading ? "Loading…" : "Refresh"}
-    </button>
+    <IconButton
+      icon={iconRefresh}
+      label="Refresh submodules"
+      title={loading ? "Refreshing submodules…" : "Refresh submodules"}
+      variant="outlined"
+      disabled={loading}
+      onclick={() => void reload()}
+    />
   </div>
 
   {#if error}
@@ -167,35 +177,30 @@
             <span class="recorded">recorded {shortSha(info.recorded_sha)}</span>
           </div>
           <div class="actions">
-            <button
-              class="tb"
-              type="button"
-              disabled={busy}
-              aria-label={`Update submodule ${info.path}`}
+            <IconButton
+              icon={iconUpdate}
+              label={`Update submodule ${info.path}`}
               title="Check out the commit the superproject records"
-              onclick={() => void onUpdate(info)}
-            >
-              Update
-            </button>
-            <button
-              class="tb"
-              type="button"
+              dense
               disabled={busy}
-              aria-label={`Sync submodule ${info.path}`}
+              onclick={() => void onUpdate(info)}
+            />
+            <IconButton
+              icon={iconSync}
+              label={`Sync submodule ${info.path}`}
               title="Rewrite the URL from .gitmodules into the repo config"
+              dense
+              disabled={busy}
               onclick={() => void onSync(info)}
-            >
-              Sync
-            </button>
+            />
             {#if info.initialized}
-              <button
-                class="tb"
-                type="button"
-                aria-label={`Open submodule ${info.path} as a tab`}
+              <IconButton
+                icon={iconOpen}
+                label={`Open submodule ${info.path} as a tab`}
+                title="Open this submodule as a tab"
+                dense
                 onclick={() => void onOpen(info)}
-              >
-                Open
-              </button>
+              />
             {/if}
           </div>
         </li>
@@ -236,31 +241,6 @@
   .toggle input {
     accent-color: var(--m3-primary);
     margin: 0;
-  }
-
-  .tb {
-    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    border-radius: var(--m3-shape-extra-small, 4px);
-    background: none;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    font: inherit;
-    font-size: 0.75rem;
-    padding: 0.25rem 0.5rem;
-    cursor: pointer;
-  }
-
-  .tb:hover:not(:disabled) {
-    background: var(--m3-surface-container-high, var(--m3-surface));
-  }
-
-  .tb:focus-visible {
-    outline: 2px solid var(--m3-primary);
-    outline-offset: -1px;
-  }
-
-  .tb:disabled {
-    cursor: not-allowed;
-    opacity: 0.55;
   }
 
   .state {

@@ -23,6 +23,13 @@
   import { openTab } from "$lib/stores/tabs.svelte";
   import { toast } from "$lib/toast";
   import ConfirmDialog from "$lib/components/safety/ConfirmDialog.svelte";
+  import { IconButton } from "$lib/components/m3";
+  import iconAdd from "@ktibow/iconset-material-symbols/add";
+  import iconRefresh from "@ktibow/iconset-material-symbols/refresh";
+  import iconPrune from "@ktibow/iconset-material-symbols/delete-sweep";
+  import iconBrowse from "@ktibow/iconset-material-symbols/folder-open";
+  import iconOpen from "@ktibow/iconset-material-symbols/open-in-new";
+  import iconRemove from "@ktibow/iconset-material-symbols/delete";
   import {
     baseName,
     worktreeBadges,
@@ -212,22 +219,32 @@
 
 <aside class="worktree-panel" aria-label="Worktrees">
   <div class="toolbar">
-    <button class="act" type="button" onclick={() => (formOpen = !formOpen)} disabled={busy}>
-      {formOpen ? "Close form" : "Add worktree"}
-    </button>
-    <!-- M12: git worktree prune — drops stale admin dirs for deleted paths. -->
-    <button
-      class="act"
-      type="button"
+    <IconButton
+      icon={iconAdd}
+      label={formOpen ? "Close worktree form" : "Add worktree"}
+      title={formOpen ? "Close the add-worktree form" : "Add a linked worktree"}
+      variant="filled"
+      pressed={formOpen}
       disabled={busy}
+      onclick={() => (formOpen = !formOpen)}
+    />
+    <!-- M12: git worktree prune — drops stale admin dirs for deleted paths. -->
+    <IconButton
+      icon={iconPrune}
+      label="Prune stale worktrees"
       title="git worktree prune — remove administration entries for deleted worktree folders"
+      variant="outlined"
+      disabled={busy}
       onclick={() => void onPrune()}
-    >
-      Prune stale…
-    </button>
-    <button class="tb" type="button" onclick={() => void reload()} disabled={loading}>
-      {loading ? "Loading…" : "Refresh"}
-    </button>
+    />
+    <IconButton
+      icon={iconRefresh}
+      label="Refresh worktrees"
+      title={loading ? "Refreshing worktrees…" : "Refresh worktrees"}
+      variant="outlined"
+      disabled={loading}
+      onclick={() => void reload()}
+    />
   </div>
 
   {#if formOpen}
@@ -247,9 +264,21 @@
           aria-label="Worktree folder path"
           bind:value={addPath}
         />
-        <button class="tb" type="button" aria-label="Browse for worktree folder" onclick={() => void browse()}>
-          Browse…
-        </button>
+        <IconButton
+          icon={iconBrowse}
+          label="Browse for worktree folder"
+          title="Browse for a folder"
+          variant="outlined"
+          onclick={() => void browse()}
+        />
+        <IconButton
+          icon={iconAdd}
+          label="Create worktree"
+          title="Create the linked worktree"
+          variant="filled"
+          type="submit"
+          disabled={busy || !addPath.trim() || (addMode === "new" && !addNewBranch.trim())}
+        />
       </div>
       <div class="mode-row">
         <label class="mode">
@@ -278,13 +307,6 @@
           />
         {/if}
       </div>
-      <button
-        class="go"
-        type="submit"
-        disabled={busy || !addPath.trim() || (addMode === "new" && !addNewBranch.trim())}
-      >
-        Add worktree
-      </button>
     </form>
   {/if}
 
@@ -304,14 +326,13 @@
         </div>
         <div class="path" title={root}>{root}</div>
         <div class="actions">
-          <button
-            class="tb"
-            type="button"
-            aria-label="Focus this repository's tab"
+          <IconButton
+            icon={iconOpen}
+            label="Focus this repository's tab"
+            title="Open this repository's tab"
+            dense
             onclick={() => void onOpen({ name: baseName(root), path: root })}
-          >
-            Open
-          </button>
+          />
         </div>
       </li>
       {#each linked as info (info.path)}
@@ -341,24 +362,23 @@
                    deletes the admin area + working tree. -->
               <span class="removing" role="status">Removing…</span>
             {:else}
-              <button
-                class="tb"
-                type="button"
+              <IconButton
+                icon={iconOpen}
+                label={`Open worktree ${info.name} as a tab`}
+                title="Open this worktree as a tab"
+                dense
                 disabled={busy}
-                aria-label={`Open worktree ${info.name} as a tab`}
                 onclick={() => void onOpen(info)}
-              >
-                Open
-              </button>
-              <button
-                class="tb danger"
-                type="button"
+              />
+              <IconButton
+                icon={iconRemove}
+                label={`Remove worktree ${info.name}`}
+                title="Remove this worktree"
+                tone="danger"
+                dense
                 disabled={busy}
-                aria-label={`Remove worktree ${info.name}`}
                 onclick={() => onRemoveClick(info)}
-              >
-                Remove
-              </button>
+              />
             {/if}
           </div>
           {#if removeConfirmFor === info.path && removingPath !== info.path}
@@ -603,43 +623,9 @@
     margin: 0;
   }
 
-  .tb {
-    flex: none;
-    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    border-radius: var(--m3-shape-extra-small, 4px);
-    background: none;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    font: inherit;
-    font-size: 0.72rem;
-    padding: 0.15rem 0.5rem;
-    cursor: pointer;
-  }
-
-  .tb:hover:not(:disabled) {
-    background: var(--m3-surface-container-high, var(--m3-surface));
-  }
-
-  .tb:focus-visible,
-  .act:focus-visible,
   .go:focus-visible {
     outline: 2px solid var(--m3-primary);
     outline-offset: 1px;
-  }
-
-  .danger {
-    color: var(--m3-error, inherit);
-  }
-
-  .act {
-    flex: none;
-    border: none;
-    border-radius: var(--m3-shape-full, 9999px);
-    background: var(--m3-secondary-container, var(--m3-surface-container-high));
-    color: var(--m3-on-secondary-container, var(--m3-on-surface));
-    font: inherit;
-    font-size: 0.72rem;
-    padding: 0.2rem 0.75rem;
-    cursor: pointer;
   }
 
   .go {
@@ -659,8 +645,6 @@
     color: var(--m3-on-error, var(--m3-on-primary));
   }
 
-  .tb:disabled,
-  .act:disabled,
   .go:disabled {
     cursor: not-allowed;
     opacity: 0.55;

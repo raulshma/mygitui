@@ -49,6 +49,7 @@
   import PromptDialog from "$lib/components/safety/PromptDialog.svelte";
   import CommitBar from "$lib/components/panels/CommitBar.svelte";
   import EditorPane from "$lib/components/panels/EditorPane.svelte";
+  import { IconButton } from "$lib/components/m3";
   import type { CompareResult } from "$lib/components/panels/compare";
   import type { HistoryCommitActions } from "$lib/components/panels/historySidebar";
   import AuthDialog from "$lib/components/AuthDialog.svelte";
@@ -94,6 +95,12 @@
   import { startAuthEvents, startOpsEvents } from "$lib/stores/ops.svelte";
   import { autofetch } from "$lib/stores/autofetch.svelte";
   import { toast } from "$lib/toast";
+  import iconHistory from "@ktibow/iconset-material-symbols/history";
+  import iconBisect from "@ktibow/iconset-material-symbols/alt-route";
+  import iconSaveLayout from "@ktibow/iconset-material-symbols/save";
+  import iconTerminal from "@ktibow/iconset-material-symbols/terminal";
+  import iconClean from "@ktibow/iconset-material-symbols/cleaning-services";
+  import iconResetLayout from "@ktibow/iconset-material-symbols/restart-alt";
 
   let {
     repoId,
@@ -912,27 +919,32 @@
 
 <div class="repo-workspace">
   <header class="repo-header">
-    <span class="repo-name">{name}</span>
+    <span class="repo-name" title={name}>{name}</span>
     {#if status}
-      <span class="branch">{branchLabel(status)}</span>
+      <span class="branch" title="Current branch">{branchLabel(status)}</span>
       <span class="aheadbehind">↑{status.ahead} ↓{status.behind}</span>
     {/if}
+    <span class="repo-root" title={root}>{root}</span>
     <OpenWithButton {root} />
     <span class="layout-controls">
-      <button
-        class="layout-btn"
-        type="button"
-        aria-pressed={historyVisible}
-        disabled={historyVisible && !canHideHistory}
+      <IconButton
+        icon={iconHistory}
+        label={historyVisible ? "Hide history" : "Show history"}
         title={historyVisible
           ? canHideHistory
             ? "Hide the history sidebar"
             : "Expand the primary sidebar before hiding history"
           : "Show the history sidebar"}
+        pressed={historyVisible}
+        disabled={historyVisible && !canHideHistory}
         onclick={toggleHistory}
-      >
-        {historyVisible ? "Hide history" : "Show history"}
-      </button>
+      />
+      <IconButton
+        icon={iconBisect}
+        label="Bisect"
+        title="Binary-search history for the first bad commit"
+        onclick={() => emitUiEvent("bisect-open-start")}
+      />
       <select
         class="preset-select"
         aria-label="Layout preset"
@@ -944,42 +956,33 @@
           <option value={preset.id}>{preset.name}</option>
         {/each}
       </select>
-      <button
-        class="layout-btn"
-        type="button"
+      <IconButton
+        icon={iconSaveLayout}
+        label="Save layout"
         title="Save the current layout as a preset"
         onclick={onSaveLayout}
-      >
-        Save layout…
-      </button>
-      <button
-        class="layout-btn"
-        type="button"
+      />
+      <IconButton
+        icon={iconTerminal}
+        label="Terminal"
         title="Open (or focus) this repository's terminal panel"
         onclick={onNewTerminal}
-      >
-        ＋ Terminal
-      </button>
-      <button
-        class="layout-btn"
-        type="button"
+      />
+      <IconButton
+        icon={iconClean}
+        label="Clean untracked files"
         title="Clean untracked files (preview + undo checkpoint)"
         onclick={() => (cleanOpen = true)}
-      >
-        Clean…
-      </button>
+      />
       {#if resolved.hasOverlay}
-        <button
-          class="layout-btn"
-          type="button"
+        <IconButton
+          icon={iconResetLayout}
+          label="Reset layout"
           title="Reset this repository's layout to the preset"
           onclick={onResetLayout}
-        >
-          Reset
-        </button>
+        />
       {/if}
     </span>
-    <span class="repo-root" title={root}>{root}</span>
   </header>
 
   {#if opSource && conflictCount > 0}
@@ -1005,7 +1008,7 @@
     </div>
   {/if}
 
-  <BisectBanner {repoId} />
+  <BisectBanner {repoId} showLauncher={false} />
 
   <div class="main-area">
     <ActivityBar
@@ -1123,8 +1126,8 @@
   .repo-header {
     display: flex;
     align-items: center;
-    gap: 0.75rem;
-    padding: 0.375rem 0.75rem;
+    gap: 0.5rem;
+    padding: 0.3rem 0.6rem;
     border-bottom: 1px solid var(--m3-outline-variant, var(--m3-primary));
     background: var(--m3-surface-container, var(--m3-surface));
     font-size: 0.8125rem;
@@ -1154,11 +1157,11 @@
     flex: none;
     display: flex;
     align-items: center;
-    gap: 0.375rem;
+    gap: 0.25rem;
   }
 
   .preset-select {
-    max-width: 9rem;
+    max-width: 8.5rem;
     border: 1px solid var(--m3-outline-variant, var(--m3-primary));
     border-radius: var(--m3-shape-small, 8px);
     background: var(--m3-surface);
@@ -1168,30 +1171,6 @@
     padding: 0.1rem 0.25rem;
   }
 
-  .layout-btn {
-    flex: none;
-    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    border-radius: var(--m3-shape-small, 8px);
-    background: none;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    font: inherit;
-    font-size: 0.6875rem;
-    padding: 0.1rem 0.45rem;
-    cursor: pointer;
-    white-space: nowrap;
-  }
-
-  .layout-btn:hover:not(:disabled),
-  .layout-btn:focus-visible:not(:disabled) {
-    color: var(--m3-primary);
-    background: var(--m3-surface-container-high, var(--m3-surface));
-  }
-
-  .layout-btn:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-  }
-
   .repo-root {
     color: var(--m3-on-surface-variant, var(--m3-on-surface));
     font-family: ui-monospace, Consolas, monospace;
@@ -1199,9 +1178,8 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    flex: 0 1 auto;
+    flex: 1 1 auto;
     min-width: 0;
-    max-width: 22rem;
   }
 
   .missing-panel {

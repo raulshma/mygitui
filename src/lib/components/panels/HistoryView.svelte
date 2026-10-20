@@ -76,6 +76,13 @@
     shortRefName,
   } from "$lib/git/format";
   import { toast } from "$lib/toast";
+  import { IconButton } from "$lib/components/m3";
+  import iconPopout from "@ktibow/iconset-material-symbols/open-in-new";
+  import iconCollapse from "@ktibow/iconset-material-symbols/right-panel-close";
+  import iconFilters from "@ktibow/iconset-material-symbols/filter-list";
+  import iconClearFilters from "@ktibow/iconset-material-symbols/filter-list-off";
+  import iconCompare from "@ktibow/iconset-material-symbols/compare-arrows";
+  import iconRetry from "@ktibow/iconset-material-symbols/restart-alt";
 
   let {
     repoId,
@@ -782,26 +789,22 @@
     <header class="sidebar-head">
       <span class="sh-title">History</span>
       {#if onPopout}
-        <button
-          class="sh-btn"
-          type="button"
+        <IconButton
+          icon={iconPopout}
+          label="Pop out history"
           title="Pop out history"
-          aria-label="Pop out history"
+          dense
           onclick={onPopout}
-        >
-          ⧉
-        </button>
+        />
       {/if}
       {#if onCollapse}
-        <button
-          class="sh-btn sh-collapse"
-          type="button"
+        <IconButton
+          icon={iconCollapse}
+          label="Hide history sidebar"
           title="Hide the history sidebar"
-          aria-label="Hide history sidebar"
+          dense
           onclick={onCollapse}
-        >
-          ×
-        </button>
+        />
       {/if}
     </header>
   {/if}
@@ -819,15 +822,16 @@
     />
 
     {#if sidebar}
-      <button
-        class="compare-toggle filters-toggle"
-        type="button"
-        aria-expanded={showAdvanced}
+      <IconButton
+        icon={iconFilters}
+        label="More filters"
         title="More filters"
+        dense
+        pressed={showAdvanced}
+        aria-expanded={showAdvanced}
+        tone={filterActive ? "primary" : "default"}
         onclick={() => (showAdvanced = !showAdvanced)}
-      >
-        Filters{filterActive ? " •" : ""}
-      </button>
+      />
     {/if}
 
     {#if !sidebar || showAdvanced}
@@ -894,28 +898,46 @@
     {/if}
 
     {#if filterActive}
-      <button class="clear" onclick={() => store.clearFilter()}>Clear</button>
+      <IconButton
+        icon={iconClearFilters}
+        label="Clear filters"
+        title="Clear all filters"
+        dense
+        onclick={() => store.clearFilter()}
+      />
     {/if}
 
-    <button
-      class="compare-toggle"
+    <IconButton
+      icon={iconCompare}
+      label="Compare commits"
+      title="Compare commits"
+      dense
+      pressed={showCompare}
       aria-expanded={showCompare}
       onclick={() => (showCompare = !showCompare)}
-    >
-      Compare…
-    </button>
+    />
 
     {#if onPopout && !sidebar}
       <!-- M4 F1: pop the history out into its own window (desktop only). -->
-      <button class="compare-toggle" title="Pop out history" onclick={onPopout}>
-        Pop out
-      </button>
+      <IconButton
+        icon={iconPopout}
+        label="Pop out history"
+        title="Pop out history into its own window"
+        dense
+        onclick={onPopout}
+      />
     {/if}
 
     <span class="status" role="status" aria-live="polite">
       {#if store.error}
         <span class="err" role="alert">{store.error}</span>
-        <button class="retry" onclick={() => store.restart()}>Retry</button>
+        <IconButton
+          icon={iconRetry}
+          label="Retry loading history"
+          title="Retry loading history"
+          dense
+          onclick={() => store.restart()}
+        />
       {:else if store.loading}
         Streaming…
       {:else}
@@ -1119,36 +1141,6 @@
     color: var(--m3-on-surface-variant);
   }
 
-  .sh-btn {
-    flex: none;
-    width: 1.35rem;
-    height: 1.35rem;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    padding: 0;
-    border: none;
-    border-radius: var(--m3-shape-extra-small, 4px);
-    background: none;
-    color: var(--m3-on-surface-variant);
-    font: inherit;
-    font-size: 0.8125rem;
-    line-height: 1;
-    cursor: pointer;
-  }
-
-  .sh-btn:hover,
-  .sh-btn:focus-visible {
-    color: var(--m3-on-surface);
-    background: var(--m3-surface-container-high, var(--m3-surface));
-    outline: none;
-  }
-
-  .sh-btn:focus-visible {
-    outline: 2px solid var(--m3-primary);
-    outline-offset: -2px;
-  }
-
   /* Compact filter bar: search grows, advanced fields live behind Filters. */
   .filterbar.compact {
     gap: 0.25rem;
@@ -1239,21 +1231,6 @@
     white-space: nowrap;
   }
 
-  button.clear,
-  button.compare-toggle,
-  button.retry {
-    padding: 0.2rem 0.55rem;
-    font-size: 0.6875rem;
-    color: var(--m3-on-surface);
-    background: var(--m3-surface-container-high, var(--m3-surface));
-    border: 1px solid var(--m3-outline-variant);
-    border-radius: var(--m3-shape-extra-small, 4px);
-    cursor: pointer;
-  }
-
-  button.clear:focus-visible,
-  button.compare-toggle:focus-visible,
-  button.retry:focus-visible,
   .detail-open:focus-visible {
     outline: 2px solid var(--m3-primary);
     outline-offset: 1px;

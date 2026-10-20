@@ -16,7 +16,7 @@
   import { formatDateTime } from "$lib/git/format";
   import { emitUiEvent, onUiEvent } from "$lib/palette/events";
 
-  let { repoId }: { repoId: string } = $props();
+  let { repoId, showLauncher = true }: { repoId: string; showLauncher?: boolean } = $props();
 
   let bisect = $state<BisectState | null>(null);
   let starting = $state(false);
@@ -161,7 +161,7 @@
       Reset
     </button>
   </div>
-{:else}
+{:else if showLauncher}
   <button class="launcher" type="button" onclick={() => {
     badRef = status?.head ?? "";
     goodRef = "";

@@ -21,6 +21,10 @@
   import { toast } from "$lib/toast";
   import ConfirmDialog from "$lib/components/safety/ConfirmDialog.svelte";
   import { formatRelativeTime } from "$lib/git/format";
+  import { IconButton } from "$lib/components/m3";
+  import iconPushTags from "@ktibow/iconset-material-symbols/cloud-upload";
+  import iconExport from "@ktibow/iconset-material-symbols/archive";
+  import iconDelete from "@ktibow/iconset-material-symbols/delete";
 
   let {
     repoId,
@@ -193,9 +197,14 @@
       Tags {list.length > 0 ? `(${list.length})` : ""}
     </button>
     {#if open}
-      <button class="tb" type="button" onclick={() => void onPushTags()} disabled={pushing}>
-        {pushing ? "Pushing…" : "Push tags"}
-      </button>
+      <IconButton
+        icon={iconPushTags}
+        label="Push tags"
+        title="Push tags to the remote"
+        dense
+        disabled={pushing}
+        onclick={() => void onPushTags()}
+      />
     {/if}
   </div>
 
@@ -255,23 +264,21 @@
             {/if}
             <span class="sha">{tag.target.slice(0, 7)}</span>
             <span class="actions">
-              <button
-                class="tb"
-                type="button"
-                aria-label={`Export archive of tag ${tag.name}`}
+              <IconButton
+                icon={iconExport}
+                label={`Export archive of tag ${tag.name}`}
                 title="Export this tag's tree as a zip/tar archive"
+                dense
                 onclick={() => void onExportArchive(tag)}
-              >
-                Export…
-              </button>
-              <button
-                class="tb danger"
-                type="button"
-                aria-label={`Delete tag ${tag.name}`}
+              />
+              <IconButton
+                icon={iconDelete}
+                label={`Delete tag ${tag.name}`}
+                title="Delete this tag"
+                tone="danger"
+                dense
                 onclick={() => (deleting = tag)}
-              >
-                Delete
-              </button>
+              />
             </span>
           </li>
         {/each}
@@ -325,25 +332,6 @@
 
   .chev {
     color: var(--m3-on-surface-variant, var(--m3-on-surface));
-  }
-
-  .tb {
-    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    border-radius: var(--m3-shape-extra-small, 4px);
-    background: none;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    font: inherit;
-    font-size: 0.72rem;
-    padding: 0.15rem 0.5rem;
-    cursor: pointer;
-  }
-
-  .tb:hover:not(:disabled) {
-    background: var(--m3-surface-container-high, var(--m3-surface));
-  }
-
-  .tb.danger {
-    color: var(--m3-error, inherit);
   }
 
   .create {

@@ -18,6 +18,14 @@
   import { relativeAge, shortSha, stashRef } from "./panelModel";
   import ConfirmDialog from "$lib/components/safety/ConfirmDialog.svelte";
   import StashMessageButton from "$lib/components/ai/StashMessageButton.svelte";
+  import { IconButton } from "$lib/components/m3";
+  import iconAdd from "@ktibow/iconset-material-symbols/add";
+  import iconRefresh from "@ktibow/iconset-material-symbols/refresh";
+  import iconApply from "@ktibow/iconset-material-symbols/play-arrow";
+  import iconPop from "@ktibow/iconset-material-symbols/unarchive";
+  import iconBranch from "@ktibow/iconset-material-symbols/call-split";
+  import iconDrop from "@ktibow/iconset-material-symbols/delete";
+  import iconCheck from "@ktibow/iconset-material-symbols/check";
 
   let {
     repoId,
@@ -149,12 +157,23 @@
 
 <aside class="stash-panel" aria-label="Stashes">
   <div class="toolbar">
-    <button class="act" type="button" onclick={() => (formOpen = !formOpen)} disabled={busy}>
-      {formOpen ? "Close form" : "Stash changes"}
-    </button>
-    <button class="tb" type="button" onclick={() => void reload()} disabled={loading}>
-      {loading ? "Loading…" : "Refresh"}
-    </button>
+    <IconButton
+      icon={iconAdd}
+      label={formOpen ? "Close stash form" : "Stash changes"}
+      title={formOpen ? "Close the stash form" : "Stash the working-copy changes"}
+      variant="filled"
+      pressed={formOpen}
+      disabled={busy}
+      onclick={() => (formOpen = !formOpen)}
+    />
+    <IconButton
+      icon={iconRefresh}
+      label="Refresh stashes"
+      title={loading ? "Refreshing stashes…" : "Refresh stashes"}
+      variant="outlined"
+      disabled={loading}
+      onclick={() => void reload()}
+    />
   </div>
 
   {#if formOpen}
@@ -209,45 +228,42 @@
             <span class="age">{age(info)}</span>
           </div>
           <div class="actions">
-            <button
-              class="act"
-              type="button"
+            <IconButton
+              icon={iconApply}
+              label={`Apply ${stashRef(info)}`}
+              title="Apply this stash, keep it in the list"
+              dense
               disabled={busy}
-              aria-label={`Apply ${stashRef(info)}`}
               onclick={() => void onApply(info, false)}
-            >
-              Apply
-            </button>
-            <button
-              class="act"
-              type="button"
+            />
+            <IconButton
+              icon={iconPop}
+              label={`Pop ${stashRef(info)} (apply and drop)`}
+              title="Apply this stash and drop it"
+              dense
               disabled={busy}
-              aria-label={`Pop ${stashRef(info)} (apply and drop)`}
               onclick={() => void onApply(info, true)}
-            >
-              Pop
-            </button>
-            <button
-              class="tb"
-              type="button"
+            />
+            <IconButton
+              icon={iconBranch}
+              label={`Create a branch from ${stashRef(info)}`}
+              title="Create a branch from this stash"
+              dense
               disabled={busy}
-              aria-label={`Create a branch from ${stashRef(info)}`}
               onclick={() => {
                 branchFor = branchFor === info.index ? null : info.index;
                 branchName = "";
               }}
-            >
-              Branch…
-            </button>
-            <button
-              class="tb danger"
-              type="button"
+            />
+            <IconButton
+              icon={iconDrop}
+              label={`Drop ${stashRef(info)}`}
+              title="Drop this stash"
+              tone="danger"
+              dense
               disabled={busy}
-              aria-label={`Drop ${stashRef(info)}`}
               onclick={() => void onDrop(info)}
-            >
-              Drop
-            </button>
+            />
           </div>
           {#if branchFor === info.index}
             <form
@@ -268,9 +284,14 @@
                   if (e.key === "Escape") branchFor = null;
                 }}
               />
-              <button class="go" type="submit" disabled={busy || !branchName.trim()}>
-                Create branch
-              </button>
+              <IconButton
+                icon={iconCheck}
+                label="Create branch from stash"
+                title="Create the branch"
+                variant="filled"
+                type="submit"
+                disabled={busy || !branchName.trim()}
+              />
             </form>
           {/if}
         </li>
@@ -449,47 +470,11 @@
     outline-offset: -1px;
   }
 
-  .tb {
-    flex: none;
-    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    border-radius: var(--m3-shape-extra-small, 4px);
-    background: none;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    font: inherit;
-    font-size: 0.72rem;
-    padding: 0.15rem 0.5rem;
-    cursor: pointer;
-  }
-
-  .tb:hover:not(:disabled) {
-    background: var(--m3-surface-container-high, var(--m3-surface));
-  }
-
-  .tb:focus-visible,
-  .act:focus-visible,
   .go:focus-visible {
     outline: 2px solid var(--m3-primary);
     outline-offset: 1px;
   }
 
-  .danger {
-    color: var(--m3-error, inherit);
-  }
-
-  .act {
-    flex: none;
-    border: none;
-    border-radius: var(--m3-shape-full, 9999px);
-    background: var(--m3-secondary-container, var(--m3-surface-container-high));
-    color: var(--m3-on-secondary-container, var(--m3-on-surface));
-    font: inherit;
-    font-size: 0.72rem;
-    padding: 0.2rem 0.75rem;
-    cursor: pointer;
-  }
-
-  .act:disabled,
-  .tb:disabled,
   .go:disabled {
     cursor: not-allowed;
     opacity: 0.55;

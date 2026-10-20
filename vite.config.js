@@ -21,6 +21,15 @@ export default defineConfig({
     ...(process.env.VITEST ? { conditions: ["browser"] } : {}),
   },
 
+  // The Material Symbols icon set is consumed through deep default imports
+  // (`@ktibow/iconset-material-symbols/<name>`), each a tiny dependency the
+  // dev optimizer would otherwise discover lazily — re-optimizing mid
+  // session and 504-ing already-loaded pages ("Outdated Optimize Dep").
+  // Serving them raw keeps the dev server graph stable; they have no deps.
+  optimizeDeps: {
+    exclude: ["@ktibow/iconset-material-symbols"],
+  },
+
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   //
   // 1. prevent Vite from obscuring rust errors
@@ -46,6 +55,7 @@ export default defineConfig({
   test: {
     environment: "jsdom",
     include: ["src/**/*.{test,spec}.{js,ts}"],
+    setupFiles: ["./src/test-setup.ts"],
     server: {
       deps: {
         // @material/material-color-utilities@0.4.0 ships extensionless ESM

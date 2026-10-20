@@ -34,9 +34,22 @@
   import { opsFor } from "$lib/stores/ops.svelte";
   import { autofetch } from "$lib/stores/autofetch.svelte";
   import { toast } from "$lib/toast";
-  import { Switch } from "$lib/components/m3";
+  import { IconButton, Switch } from "$lib/components/m3";
   import ConfirmDialog from "$lib/components/safety/ConfirmDialog.svelte";
   import DiffViewer from "$lib/components/diff/DiffViewer.svelte";
+  import iconRefresh from "@ktibow/iconset-material-symbols/refresh";
+  import iconSetUrl from "@ktibow/iconset-material-symbols/link";
+  import iconSetPushUrl from "@ktibow/iconset-material-symbols/upload";
+  import iconRemove from "@ktibow/iconset-material-symbols/delete";
+  import iconCheck from "@ktibow/iconset-material-symbols/check";
+  import iconClose from "@ktibow/iconset-material-symbols/close";
+  import iconBranches from "@ktibow/iconset-material-symbols/account-tree";
+  import iconFetch from "@ktibow/iconset-material-symbols/cloud-download";
+  import iconPull from "@ktibow/iconset-material-symbols/arrow-downward";
+  import iconPush from "@ktibow/iconset-material-symbols/arrow-upward";
+  import iconCheckout from "@ktibow/iconset-material-symbols/fork-right";
+  import iconCompare from "@ktibow/iconset-material-symbols/compare-arrows";
+  import iconAdd from "@ktibow/iconset-material-symbols/add";
 
   let {
     repoId,
@@ -313,9 +326,14 @@
 
 <aside class="remote-panel" aria-label="Remotes">
   <div class="toolbar">
-    <button class="tb" type="button" onclick={() => void reload()} disabled={loading}>
-      {loading ? "Loading…" : "Refresh"}
-    </button>
+    <IconButton
+      icon={iconRefresh}
+      label="Refresh remotes"
+      title={loading ? "Refreshing remotes…" : "Refresh remotes"}
+      variant="outlined"
+      disabled={loading}
+      onclick={() => void reload()}
+    />
     <label class="autofetch" title="Fetch the default remote in the background while this repo is open">
       <span>auto-fetch</span>
       <select
@@ -381,8 +399,20 @@
                   }}
                 />
               </label>
-              <button class="go" type="submit">Save</button>
-              <button class="tb" type="button" onclick={() => (editing = null)}>Cancel</button>
+              <IconButton
+                icon={iconCheck}
+                label="Save remote URL"
+                title="Save URL"
+                variant="filled"
+                type="submit"
+              />
+              <IconButton
+                icon={iconClose}
+                label="Cancel URL edit"
+                title="Cancel"
+                variant="outlined"
+                onclick={() => (editing = null)}
+              />
             </form>
           {:else}
             <div class="card-head">
@@ -392,38 +422,36 @@
                 <span class="url push" title={remote.push_url}>push: {remote.push_url}</span>
               {/if}
               <span class="head-actions">
-                <button
-                  class="tb"
-                  type="button"
-                  aria-label={`Edit fetch URL for ${remote.name}`}
+                <IconButton
+                  icon={iconSetUrl}
+                  label={`Edit fetch URL for ${remote.name}`}
+                  title="Set the fetch URL"
+                  dense
                   onclick={() =>
                     (editing = { name: remote.name, field: "url", value: remote.url })}
-                >
-                  Set URL
-                </button>
+                />
                 {#if remote.push_url}
-                  <button
-                    class="tb"
-                    type="button"
-                    aria-label={`Edit push URL for ${remote.name}`}
+                  <IconButton
+                    icon={iconSetPushUrl}
+                    label={`Edit push URL for ${remote.name}`}
+                    title="Set the push URL"
+                    dense
                     onclick={() =>
                       (editing = {
                         name: remote.name,
                         field: "push_url",
                         value: remote.push_url ?? "",
                       })}
-                  >
-                    Set push URL
-                  </button>
+                  />
                 {/if}
-                <button
-                  class="tb danger"
-                  type="button"
-                  aria-label={`Remove remote ${remote.name}`}
+                <IconButton
+                  icon={iconRemove}
+                  label={`Remove remote ${remote.name}`}
+                  title="Remove this remote"
+                  tone="danger"
+                  dense
                   onclick={() => void onRemove(remote)}
-                >
-                  Remove
-                </button>
+                />
               </span>
             </div>
             {#if expandedRemote === remote.name}
@@ -440,33 +468,32 @@
                           {#if rb.tracked_by}<span class="rb-tracked">({rb.tracked_by})</span>{/if}
                         </span>
                         {#if rb.tracked_by === null}
-                          <button
-                            class="tb"
-                            type="button"
+                          <IconButton
+                            icon={iconCheckout}
+                            label={`Check out ${rb.remote}/${rb.name}`}
                             title="Create a local branch tracking {rb.remote}/{rb.name} and check it out"
+                            dense
                             onclick={() => void onCheckoutRemote(rb)}
-                          >
-                            Checkout
-                          </button>
+                          />
                         {/if}
                         <!-- M12: diff HEAD against this remote branch inline. -->
-                        <button
-                          class="tb"
-                          type="button"
-                          aria-expanded={compareKey === `${rb.remote}/${rb.name}`}
+                        <IconButton
+                          icon={iconCompare}
+                          label={`Compare HEAD with ${rb.remote}/${rb.name}`}
                           title="Diff HEAD against {rb.remote}/{rb.name}"
+                          dense
+                          pressed={compareKey === `${rb.remote}/${rb.name}`}
+                          aria-expanded={compareKey === `${rb.remote}/${rb.name}`}
                           onclick={() => void onCompareHead(rb)}
-                        >
-                          Compare with HEAD
-                        </button>
-                        <button
-                          class="tb danger"
-                          type="button"
+                        />
+                        <IconButton
+                          icon={iconRemove}
+                          label={`Delete remote branch ${rb.remote}/${rb.name}`}
                           title="Delete {rb.remote}/{rb.name} on the remote"
+                          tone="danger"
+                          dense
                           onclick={() => void onDeleteRemoteBranch(rb)}
-                        >
-                          Delete
-                        </button>
+                        />
                       </li>
                       {#if compareKey === `${rb.remote}/${rb.name}`}
                         <li class="rb-compare">
@@ -475,12 +502,13 @@
                               {#if compareFiles}({compareFiles.length}
                                 file{compareFiles.length === 1 ? "" : "s"}){/if}
                             </span>
-                            <button
-                              class="tb"
-                              type="button"
-                              aria-label="Close compare"
+                            <IconButton
+                              icon={iconClose}
+                              label="Close compare"
+                              title="Close compare"
+                              dense
                               onclick={() => (compareKey = null)}
-                            >×</button>
+                            />
                           </div>
                           {#if compareLoading}
                             <p class="rb-compare-state">Comparing…</p>
@@ -502,22 +530,23 @@
               <div class="action-row">
                 <span class="action-label">Fetch</span>
                 <div class="action-main">
-                  <button
-                    class="act"
-                    type="button"
+                  <IconButton
+                    icon={iconBranches}
+                    label={expandedRemote === remote.name ? `Hide branches for ${remote.name}` : `Show branches for ${remote.name}`}
+                    title={expandedRemote === remote.name ? "Hide remote branches" : "Show remote branches"}
+                    pressed={expandedRemote === remote.name}
+                    dense
                     disabled={netBusy}
                     onclick={() => onToggleRemoteBranches(remote)}
-                  >
-                    {expandedRemote === remote.name ? "Hide branches" : "Branches"}
-                  </button>
-                  <button
-                    class="act"
-                    type="button"
+                  />
+                  <IconButton
+                    icon={iconFetch}
+                    label={`Fetch from ${remote.name}`}
+                    title="Fetch from this remote"
+                    dense
                     disabled={netBusy}
                     onclick={() => onFetch(remote)}
-                  >
-                    Fetch
-                  </button>
+                  />
                 </div>
                 <div class="action-opts">
                   <Switch
@@ -542,14 +571,14 @@
                       </option>
                     {/each}
                   </select>
-                  <button
-                    class="act"
-                    type="button"
+                  <IconButton
+                    icon={iconPull}
+                    label={`Pull ${branchFor(remote) ?? ""} from ${remote.name}`}
+                    title="Pull the selected branch from this remote"
+                    dense
                     disabled={netBusy || !branchFor(remote)}
                     onclick={() => onPull(remote)}
-                  >
-                    Pull
-                  </button>
+                  />
                 </div>
                 <div class="action-opts">
                   <Switch
@@ -570,14 +599,15 @@
               <div class="action-row">
                 <span class="action-label">Push</span>
                 <div class="action-main">
-                  <button
-                    class="act push"
-                    type="button"
+                  <IconButton
+                    icon={iconPush}
+                    label={`Push ${branchFor(remote) ?? ""} to ${remote.name}`}
+                    title="Push the selected branch to this remote"
+                    variant="filled"
+                    dense
                     disabled={netBusy || !branchFor(remote)}
                     onclick={() => onPush(remote)}
-                  >
-                    Push
-                  </button>
+                  />
                 </div>
                 <div class="action-opts">
                   <Switch
@@ -623,9 +653,14 @@
       aria-label="New remote URL"
       bind:value={addUrl}
     />
-    <button class="go" type="submit" disabled={!addName.trim() || !addUrl.trim()}>
-      Add remote
-    </button>
+    <IconButton
+      icon={iconAdd}
+      label="Add remote"
+      title="Add a new remote"
+      variant="filled"
+      type="submit"
+      disabled={!addName.trim() || !addUrl.trim()}
+    />
   </form>
 </aside>
 
@@ -839,72 +874,6 @@
     align-items: center;
     gap: 0.75rem;
     flex: none;
-  }
-
-  .tb {
-    flex: none;
-    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    border-radius: var(--m3-shape-extra-small, 4px);
-    background: none;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    font: inherit;
-    font-size: 0.72rem;
-    padding: 0.15rem 0.5rem;
-    cursor: pointer;
-  }
-
-  .tb:hover:not(:disabled) {
-    background: var(--m3-surface-container-high, var(--m3-surface));
-  }
-
-  .tb:focus-visible,
-  .act:focus-visible,
-  .go:focus-visible {
-    outline: 2px solid var(--m3-primary);
-    outline-offset: 1px;
-  }
-
-  .danger {
-    color: var(--m3-error, inherit);
-  }
-
-  .act {
-    flex: none;
-    border: none;
-    border-radius: var(--m3-shape-full, 9999px);
-    background: var(--m3-secondary-container, var(--m3-surface-container-high));
-    color: var(--m3-on-secondary-container, var(--m3-on-surface));
-    font: inherit;
-    font-size: 0.72rem;
-    padding: 0.2rem 0.75rem;
-    cursor: pointer;
-  }
-
-  .act.push {
-    background: var(--m3-primary);
-    color: var(--m3-on-primary);
-  }
-
-  .act:disabled {
-    cursor: not-allowed;
-    opacity: 0.55;
-  }
-
-  .go {
-    flex: none;
-    border: none;
-    border-radius: var(--m3-shape-full, 9999px);
-    background: var(--m3-primary);
-    color: var(--m3-on-primary);
-    font: inherit;
-    font-size: 0.72rem;
-    padding: 0.2rem 0.75rem;
-    cursor: pointer;
-  }
-
-  .go:disabled {
-    cursor: not-allowed;
-    opacity: 0.55;
   }
 
   .edit-url {

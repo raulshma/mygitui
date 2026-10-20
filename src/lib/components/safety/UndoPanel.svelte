@@ -27,7 +27,12 @@
   import { formatDateTime } from "$lib/git/format";
   import ConfirmDialog from "$lib/components/safety/ConfirmDialog.svelte";
   import PromptDialog from "$lib/components/safety/PromptDialog.svelte";
+  import { IconButton } from "$lib/components/m3";
   import { checkpointTitle } from "./safetyModel";
+  import iconRefresh from "@ktibow/iconset-material-symbols/refresh";
+  import iconGc from "@ktibow/iconset-material-symbols/delete-sweep";
+  import iconRestore from "@ktibow/iconset-material-symbols/restore-page";
+  import iconTrashRestore from "@ktibow/iconset-material-symbols/undo";
 
   let {
     repoId,
@@ -166,12 +171,22 @@
 
 <section class="undo-panel" aria-label="Checkpoints and undo">
   <div class="toolbar">
-    <button class="tb" type="button" onclick={() => void reload()} disabled={undo.loading}>
-      {undo.loading ? "Loading…" : "Refresh"}
-    </button>
-    <button class="tb" type="button" onclick={() => void doGc()} disabled={gcBusy}>
-      {gcBusy ? "Cleaning…" : "Clean >30d"}
-    </button>
+    <IconButton
+      icon={iconRefresh}
+      label="Refresh checkpoints"
+      title={undo.loading ? "Refreshing checkpoints…" : "Refresh checkpoints"}
+      variant="outlined"
+      disabled={undo.loading}
+      onclick={() => void reload()}
+    />
+    <IconButton
+      icon={iconGc}
+      label="Clean old checkpoints"
+      title="Delete checkpoints older than 30 days"
+      variant="outlined"
+      disabled={gcBusy}
+      onclick={() => void doGc()}
+    />
     <span class="hint" title="Checkpoints are automatic snapshots created before dangerous operations">
       {undo.checkpoints.length} checkpoint{undo.checkpoints.length === 1 ? "" : "s"}
     </span>
@@ -235,15 +250,14 @@
               </span>
             </div>
             <span class="actions">
-              <button
-                class="tb"
-                type="button"
-                aria-label={`Restore checkpoint ${cp.id}`}
+              <IconButton
+                icon={iconRestore}
+                label={`Restore checkpoint ${cp.id}`}
+                title="Restore this checkpoint"
+                dense
                 disabled={busyId !== null}
                 onclick={() => askRestore(cp)}
-              >
-                Restore
-              </button>
+              />
             </span>
           {/if}
         </li>
@@ -255,9 +269,14 @@
   <section class="trash" aria-label="Deleted branches">
     <header class="trash-head">
       <h2 class="trash-title">Deleted branches</h2>
-      <button class="tb" type="button" onclick={() => void loadTrash()} disabled={trashLoading}>
-        {trashLoading ? "Loading…" : "Refresh"}
-      </button>
+      <IconButton
+        icon={iconRefresh}
+        label="Refresh deleted branches"
+        title={trashLoading ? "Refreshing deleted branches…" : "Refresh deleted branches"}
+        variant="outlined"
+        disabled={trashLoading}
+        onclick={() => void loadTrash()}
+      />
     </header>
 
     {#if trashError}
@@ -282,15 +301,14 @@
               </span>
             </div>
             <span class="actions">
-              <button
-                class="tb"
-                type="button"
-                aria-label={`Restore branch ${entry.name}`}
+              <IconButton
+                icon={iconTrashRestore}
+                label={`Restore branch ${entry.name}`}
+                title="Restore this deleted branch"
+                dense
                 disabled={restoreBusy}
                 onclick={() => (restoringTrash = entry)}
-              >
-                Restore
-              </button>
+              />
             </span>
           </li>
         {/each}

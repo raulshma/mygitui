@@ -43,6 +43,17 @@
   import MergeDialog from "$lib/components/merge/MergeDialog.svelte";
   import TagsSection from "$lib/components/panels/TagsSection.svelte";
   import { isMergedPreview } from "$lib/components/safety/safetyModel";
+  import { IconButton } from "$lib/components/m3";
+  import iconRefresh from "@ktibow/iconset-material-symbols/refresh";
+  import iconCleanup from "@ktibow/iconset-material-symbols/cleaning-services";
+  import iconSwitch from "@ktibow/iconset-material-symbols/swap-horiz";
+  import iconMerge from "@ktibow/iconset-material-symbols/call-merge";
+  import iconRename from "@ktibow/iconset-material-symbols/edit";
+  import iconReset from "@ktibow/iconset-material-symbols/restart-alt";
+  import iconDelete from "@ktibow/iconset-material-symbols/delete";
+  import iconCheck from "@ktibow/iconset-material-symbols/check";
+  import iconClose from "@ktibow/iconset-material-symbols/close";
+  import iconAdd from "@ktibow/iconset-material-symbols/add";
 
   let {
     repoId,
@@ -396,18 +407,6 @@
 
 <aside class="branch-panel" aria-label="Branches">
   <div class="toolbar">
-    <button class="tb" type="button" onclick={() => void reload()} disabled={loading}>
-      {loading ? "Loading…" : "Refresh"}
-    </button>
-    <button
-      class="tb"
-      type="button"
-      title="Delete every branch already merged into the current one"
-      onclick={() => void onCleanupStart()}
-      disabled={cleanupBusy}
-    >
-      Clean merged…
-    </button>
     <input
       class="filter"
       type="search"
@@ -415,6 +414,22 @@
       bind:value={filter}
       placeholder="Filter branches"
       aria-label="Filter branches"
+    />
+    <IconButton
+      icon={iconRefresh}
+      label="Refresh branches"
+      title={loading ? "Refreshing branches…" : "Refresh branches"}
+      variant="outlined"
+      disabled={loading}
+      onclick={() => void reload()}
+    />
+    <IconButton
+      icon={iconCleanup}
+      label="Clean merged branches"
+      title="Delete every branch already merged into the current one"
+      variant="outlined"
+      disabled={cleanupBusy}
+      onclick={() => void onCleanupStart()}
     />
     {#if branchBusy}<span class="busy" role="status">Branch op running…</span>{/if}
   </div>
@@ -427,14 +442,25 @@
       void onCreate();
     }}
   >
-    <input
-      class="name"
-      type="text"
-      placeholder="New branch name"
-      aria-label="New branch name"
-      bind:this={createNameEl}
-      bind:value={newName}
-    />
+    <div class="name-row">
+      <input
+        class="name"
+        type="text"
+        placeholder="New branch name"
+        aria-label="New branch name"
+        bind:this={createNameEl}
+        bind:value={newName}
+      />
+      <IconButton
+        icon={iconAdd}
+        label="Create branch"
+        title="Create the branch"
+        variant="filled"
+        dense
+        type="submit"
+        disabled={!newName.trim()}
+      />
+    </div>
     <label class="from">
       <span class="fl">from</span>
       <select bind:value={newFrom} aria-label="Create branch from">
@@ -448,9 +474,6 @@
       <input type="checkbox" bind:checked={newCheckout} />
       <span>checkout</span>
     </label>
-    <button class="go" type="submit" disabled={!newName.trim()}>
-      Create
-    </button>
   </form>
 
   {#if error}
@@ -483,10 +506,20 @@
                   if (e.key === "Escape") renaming = null;
                 }}
               />
-              <button class="go" type="submit">Save</button>
-              <button class="tb" type="button" onclick={() => (renaming = null)}>
-                Cancel
-              </button>
+              <IconButton
+                icon={iconCheck}
+                label="Save new branch name"
+                title="Save the new branch name"
+                variant="filled"
+                type="submit"
+              />
+              <IconButton
+                icon={iconClose}
+                label="Cancel rename"
+                title="Cancel rename"
+                variant="outlined"
+                onclick={() => (renaming = null)}
+              />
             </form>
           {:else}
             <span class="marker" aria-label="Current branch" title="Current branch">
@@ -505,48 +538,46 @@
             {/if}
             <span class="actions">
               {#if !branch.is_head}
-                <button class="tb" type="button" onclick={() => void onSwitch(branch)}>
-                  Switch
-                </button>
-                <button
-                  class="tb"
-                  type="button"
-                  aria-label={`Merge ${branch.name} into the current branch`}
+                <IconButton
+                  icon={iconSwitch}
+                  label={`Switch to ${branch.name}`}
+                  title={`Switch to ${branch.name}`}
+                  dense
+                  onclick={() => void onSwitch(branch)}
+                />
+                <IconButton
+                  icon={iconMerge}
+                  label={`Merge ${branch.name} into the current branch`}
                   title={`Merge ${branch.name} into ${headBranch?.name ?? "HEAD"}`}
+                  dense
                   onclick={() => (merging = branch.name)}
-                >
-                  Merge…
-                </button>
+                />
               {:else}
                 <span class="head-chip">HEAD</span>
               {/if}
-              <button
-                class="tb"
-                type="button"
-                aria-label={`Rename ${branch.name}`}
+              <IconButton
+                icon={iconRename}
+                label={`Rename ${branch.name}`}
+                title="Rename this branch"
+                dense
                 onclick={() => (renaming = { old: branch.name, value: branch.name })}
-              >
-                Rename
-              </button>
-              <button
-                class="tb"
-                type="button"
-                aria-label={`Reset current branch to ${branch.name}`}
-                title="Reset current branch to here ({branch.name})"
+              />
+              <IconButton
+                icon={iconReset}
+                label={`Reset current branch to ${branch.name}`}
+                title={`Reset current branch to ${branch.name}`}
+                dense
                 onclick={() => (resetTo = branch.name)}
-              >
-                Reset to…
-              </button>
-              <button
-                class="tb danger"
-                type="button"
-                aria-label={`Delete ${branch.name}`}
+              />
+              <IconButton
+                icon={iconDelete}
+                label={`Delete ${branch.name}`}
+                title={branch.is_head ? "Cannot delete the current branch" : "Delete this branch"}
+                tone="danger"
+                dense
                 disabled={branch.is_head}
-                title={branch.is_head ? "Cannot delete the current branch" : "Delete"}
                 onclick={() => void onDeleteStart(branch)}
-              >
-                Delete
-              </button>
+              />
             </span>
           {/if}
         </li>
@@ -769,6 +800,14 @@
     flex-wrap: wrap;
   }
 
+  .name-row {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+    flex: 1;
+    min-width: 6rem;
+  }
+
   .create .name,
   .rename .name {
     flex: 1;
@@ -825,56 +864,11 @@
     margin: 0;
   }
 
-  .tb {
-    flex: none;
-    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    border-radius: var(--m3-shape-extra-small, 4px);
-    background: none;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    font: inherit;
-    font-size: 0.72rem;
-    padding: 0.15rem 0.5rem;
-    cursor: pointer;
-  }
-
-  .tb:hover:not(:disabled) {
-    background: var(--m3-surface-container-high, var(--m3-surface));
-  }
-
-  .tb:focus-visible,
-  .go:focus-visible,
-  .danger:focus-visible,
   .primary:focus-visible,
   .secondary:focus-visible,
   .danger-btn:focus-visible {
     outline: 2px solid var(--m3-primary);
     outline-offset: 1px;
-  }
-
-  .tb:disabled {
-    cursor: not-allowed;
-    opacity: 0.55;
-  }
-
-  .go {
-    flex: none;
-    border: none;
-    border-radius: var(--m3-shape-full, 9999px);
-    background: var(--m3-primary);
-    color: var(--m3-on-primary);
-    font: inherit;
-    font-size: 0.72rem;
-    padding: 0.2rem 0.75rem;
-    cursor: pointer;
-  }
-
-  .go:disabled {
-    cursor: not-allowed;
-    opacity: 0.55;
-  }
-
-  .danger {
-    color: var(--m3-error, inherit);
   }
 
   .branches {

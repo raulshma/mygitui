@@ -17,6 +17,8 @@
   import { showMenuAt, type MenuEntry } from "$lib/components/menu/contextMenuStore.svelte";
   import ResetDialog from "$lib/components/safety/ResetDialog.svelte";
   import PromptDialog from "$lib/components/safety/PromptDialog.svelte";
+  import { IconButton } from "$lib/components/m3";
+  import iconRefresh from "@ktibow/iconset-material-symbols/refresh";
   import {
     groupReflogByDay,
     REFLOG_DISPLAY_CAP,
@@ -141,9 +143,14 @@
         {/each}
       </select>
     </label>
-    <button class="tb" type="button" onclick={() => void reload()} disabled={loading}>
-      {loading ? "Loading…" : "Refresh"}
-    </button>
+    <IconButton
+      icon={iconRefresh}
+      label="Refresh reflog"
+      title={loading ? "Refreshing reflog…" : "Refresh reflog"}
+      variant="outlined"
+      disabled={loading}
+      onclick={() => void reload()}
+    />
   </div>
 
   <p class="hint">
@@ -332,28 +339,6 @@
     margin: 0.5rem 0 0;
     font-size: 0.6875rem;
     color: var(--m3-on-surface-variant, var(--m3-on-surface));
-  }
-
-  .tb {
-    flex: none;
-    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    border-radius: var(--m3-shape-extra-small, 4px);
-    background: none;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    font: inherit;
-    font-size: 0.72rem;
-    padding: 0.15rem 0.5rem;
-    cursor: pointer;
-  }
-
-  .tb:disabled {
-    cursor: not-allowed;
-    opacity: 0.55;
-  }
-
-  .tb:focus-visible {
-    outline: 2px solid var(--m3-primary);
-    outline-offset: 1px;
   }
 
   .state {
