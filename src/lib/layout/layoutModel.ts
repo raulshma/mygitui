@@ -12,10 +12,11 @@
  *
  * A split divides its area horizontally: child `a` renders on the LEFT of
  * the divider, `b` on the RIGHT, and `ratio` is `a`'s width fraction
- * (clamped to RATIO_MIN–RATIO_MAX). Deeper vertical nesting is not needed
- * for v1 because the workspace root fixes the vertical arrangement (header
- * / main split tree / commit bar / diff pane) and tab groups absorb the
- * rest — see `WorkspaceLayout` + `DEFAULT_LAYOUT`.
+ * (clamped to RATIO_MIN–RATIO_MAX). The workspace fixes only the vertical
+ * frame (repo header above the tree); the tree itself is the VSCode-style
+ * three-column workspace — changes sidebar, editor, history sidebar — and
+ * tab groups absorb every additional panel. See `WorkspaceLayout` +
+ * `DEFAULT_LAYOUT`.
  *
  * Every node carries a unique string `id` so operations (move, hide, ratio
  * drag) can target nodes from UI events and ratio overlays can key by split
@@ -64,13 +65,11 @@ export const PANEL_IDS: readonly PanelId[] = [
 ];
 
 /**
- * Panels that may live in the splitter tree. `diff` is a fixed bottom pane
- * (with collapse + popout), never a tree leaf, but stays in the PanelId
- * union so the popout query contract and panel metadata stay uniform.
+ * Panels that may live in the splitter tree. Every registered panel is
+ * placeable, including `diff` — the workspace's main editor pane since the
+ * VSCode-style layout (status/changes left, diff center, history right).
  */
-export const TREE_PANELS: readonly PanelId[] = PANEL_IDS.filter(
-  (p) => p !== "diff",
-);
+export const TREE_PANELS: readonly PanelId[] = PANEL_IDS;
 
 export interface PanelMeta {
   /** Tab / menu label. */
@@ -191,11 +190,18 @@ export const MAX_DEPTH = 6;
 
 /** Whole-workspace layout: the fixed vertical frame plus the main tree. */
 export interface WorkspaceLayout {
-  /** Splitter tree between the repo header and the commit bar. */
+  /** The workspace splitter tree (everything below the repo header). */
   main: LayoutNode;
-  /** Diff pane height as a fraction of the workspace (when open). */
+  /**
+   * Legacy: fraction of the old fixed bottom diff pane. Kept in the schema
+   * so persisted overlays still parse; the diff is now a normal tree panel.
+   */
   diffRatio: number;
-  /** Zen flag: commit bar collapses to a slim auto-expanding strip. */
+  /**
+   * Legacy: collapsed the old bottom commit bar in Zen presets. The commit
+   * box now lives at the top of the changes sidebar; kept for overlay
+   * compatibility.
+   */
   autoHideCommitBar: boolean;
 }
 
@@ -262,6 +268,25 @@ export function findPanelNode(
   if (tree.kind === "leaf") return tree.panel === panel ? tree : null;
   if (tree.kind === "tabs") return tree.tabs.includes(panel) ? tree : null;
   return findPanelNode(tree.a, panel) ?? findPanelNode(tree.b, panel);
+}
+
+/**
+ * First sidebar holder in layout order: the leftmost leaf/tab group that
+ * shows at least one non-editor panel. Used by the activity bar to pick the
+ * primary sidebar without assuming a particular preset shape (`diff` by
+ * itself is the center editor, never the sidebar).
+ */
+export function firstSidebarHolder(
+  tree: LayoutNode,
+): LeafNode | TabsNode | null {
+  switch (tree.kind) {
+    case "leaf":
+      return tree.panel === "diff" ? null : tree;
+    case "tabs":
+      return tree.tabs.some((panel) => panel !== "diff") ? tree : null;
+    case "split":
+      return firstSidebarHolder(tree.a) ?? firstSidebarHolder(tree.b);
+  }
 }
 
 /** All panels present in the tree, in layout order (leaf → tabs entries). */
@@ -556,6 +581,26 @@ export function nodeContains(node: LayoutNode, panel: PanelId): boolean {
   return findPanelNode(node, panel) !== null;
 }
 
+/**
+ * Wraps the whole tree with `panel` as a new right-hand column. The
+ * collapsed state of a sidebar is "not in the tree"; re-opening it with
+ * this helper restores it on the right edge (VSCode-style secondary
+ * sidebar) regardless of how the rest of the workspace is arranged.
+ */
+export function wrapPanelRight(
+  tree: LayoutNode,
+  panel: PanelId,
+  ratio = 0.7,
+): LayoutNode {
+  return {
+    kind: "split",
+    id: freshId(tree, "split"),
+    ratio: clampRatio(ratio),
+    a: tree,
+    b: { kind: "leaf", id: freshId(tree, "leaf"), panel },
+  };
+}
+
 /** Merges the panel of `nodeId` into its right sibling group (or vice versa?). */
 export interface MergeOutcome {
   tree: LayoutNode;
@@ -623,9 +668,9 @@ export interface LayoutPreset {
   id: string;
   name: string;
   tree: LayoutNode;
-  /** Diff pane fraction (default 0.4). */
+  /** Legacy diff pane fraction (default 0.4; see `WorkspaceLayout`). */
   diffRatio?: number;
-  /** Zen flag (default false). */
+  /** Legacy Zen flag (default false; see `WorkspaceLayout`). */
   autoHideCommitBar?: boolean;
 }
 
@@ -654,17 +699,27 @@ const ALL_LEFT_TABS: PanelId[] = [
 ];
 
 /**
- * Mirrors the pre-M4 RepoView: a left tabbed stack (status / branches /
- * remotes / stashes / worktrees / reflog / undo / terminal) beside history,
- * with the diff as the fixed bottom pane at 40%.
+ * VSCode-style workspace: a narrow left sidebar (changes / branches / …)
+ * beside a main editor pane (working-copy diff or commit detail) and a
+ * secondary commit-history sidebar on the right. The activity bar switches
+ * the primary sidebar and either sidebar can collapse to a rail without
+ * leaving the tree (the layout store stores `leftCollapsed`/`rightCollapsed`
+ * and SplitContainer hides the pane while keeping it mounted). The commit box
+ * sits at the top of the status panel.
  */
 export const DEFAULT_LAYOUT: WorkspaceLayout = {
   main: {
     kind: "split",
     id: "split-main",
-    ratio: 0.28,
+    ratio: 0.24,
     a: { kind: "tabs", id: "tabs-left", tabs: [...ALL_LEFT_TABS], active: 0 },
-    b: { kind: "leaf", id: "leaf-history", panel: "history" },
+    b: {
+      kind: "split",
+      id: "split-main-right",
+      ratio: 0.68,
+      a: { kind: "leaf", id: "leaf-editor", panel: "diff" },
+      b: { kind: "leaf", id: "leaf-history", panel: "history" },
+    },
   },
   diffRatio: 0.4,
   autoHideCommitBar: false,
@@ -687,14 +742,20 @@ export const DEFAULT_PRESETS: LayoutPreset[] = [
       id: "split-hf",
       ratio: RATIO_MIN,
       a: { kind: "tabs", id: "tabs-hf", tabs: ["status"], active: 0 },
-      b: { kind: "leaf", id: "leaf-hf-history", panel: "history" },
+      b: {
+        kind: "split",
+        id: "split-hf-right",
+        ratio: 0.5,
+        a: { kind: "leaf", id: "leaf-hf-editor", panel: "diff" },
+        b: { kind: "leaf", id: "leaf-hf-history", panel: "history" },
+      },
     },
     diffRatio: 0.4,
   },
   {
     id: "zen",
     name: "Zen",
-    tree: { kind: "leaf", id: "leaf-zen-history", panel: "history" },
+    tree: { kind: "leaf", id: "leaf-zen-editor", panel: "diff" },
     diffRatio: 0.4,
     autoHideCommitBar: true,
   },
@@ -704,9 +765,15 @@ export const DEFAULT_PRESETS: LayoutPreset[] = [
     tree: {
       kind: "split",
       id: "split-review",
-      ratio: 0.32,
+      ratio: 0.22,
       a: { kind: "tabs", id: "tabs-review", tabs: [...ALL_LEFT_TABS], active: 0 },
-      b: { kind: "leaf", id: "leaf-review-history", panel: "history" },
+      b: {
+        kind: "split",
+        id: "split-review-right",
+        ratio: 0.72,
+        a: { kind: "leaf", id: "leaf-review-editor", panel: "diff" },
+        b: { kind: "leaf", id: "leaf-review-history", panel: "history" },
+      },
     },
     diffRatio: 0.6,
   },

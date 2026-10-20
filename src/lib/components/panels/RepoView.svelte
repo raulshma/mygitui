@@ -1,11 +1,14 @@
 <script lang="ts">
   /**
    * Per-tab repo workspace (M2, extended in M3, layout-configurable in M4):
-   * header facts + the configurable main splitter tree (SplitContainer) +
-   * the CommitBar fixed at the bottom + the diff pane as a fixed bottom
-   * pane (collapse / pop out). The AuthDialog is mounted once here;
-   * op/auth event subscriptions and the per-repo auto-fetch interval start
-   * on mount.
+   * header facts + the configurable main splitter tree (SplitContainer).
+   * The default tree is VSCode-like: a narrow source-control sidebar
+   * (CommitBar pinned above StatusPanel) on the left, the Diff panel as the
+   * center editor, and a collapsible History sidebar on the right. The
+   * VSCode-style activity bar at the far left switches primary-sidebar
+   * panels; collapsing either sidebar keeps it mounted and replaces it with
+   * a rail (the activity bar itself on the left, a vertical History tab on
+   * the right), so state survives and the center content grows.
    *
    * M4 layout: the main area renders the active layout tree from the
    * `layouts` store (per-repo overlay > preset > default). Panels are
@@ -15,6 +18,10 @@
    * header exposes the preset select, "Save layout as…", "Add panel" and
    * per-repo reset.
    *
+   * The center editor owns no state itself (the `diff` panel may be moved or
+   * re-parented): selection + streamed working-copy diff live here, and the
+   * history sidebar reports its commit selection upward.
+   *
    * M3 conflict flow (unchanged): while `repo_status` reports a merge /
    * rebase / sequencer operation in progress, the per-repo conflicts cache
    * polls `conflicts(repoId)`; when files come back, a banner across the
@@ -23,6 +30,7 @@
    */
   import type { Snippet } from "svelte";
   import type {
+    CommitInfo,
     ConflictFile,
     FileDiff,
     RepoStatus,
@@ -40,7 +48,9 @@
   import ConfirmDialog from "$lib/components/safety/ConfirmDialog.svelte";
   import PromptDialog from "$lib/components/safety/PromptDialog.svelte";
   import CommitBar from "$lib/components/panels/CommitBar.svelte";
-  import DiffViewer from "$lib/components/diff/DiffViewer.svelte";
+  import EditorPane from "$lib/components/panels/EditorPane.svelte";
+  import type { CompareResult } from "$lib/components/panels/compare";
+  import type { HistoryCommitActions } from "$lib/components/panels/historySidebar";
   import AuthDialog from "$lib/components/AuthDialog.svelte";
   import CleanDialog from "$lib/components/actions/CleanDialog.svelte";
   import OpenWithButton from "$lib/components/header/OpenWithButton.svelte";
@@ -52,6 +62,7 @@
   // small. Imports are cached, so later activations are synchronous-fast.
   import { ai } from "$lib/ai/ai.svelte";
   import SplitContainer from "$lib/components/layout/SplitContainer.svelte";
+  import ActivityBar from "$lib/components/layout/ActivityBar.svelte";
   import { conflictsStore } from "$lib/components/panels/conflictsStore.svelte";
   import { emitUiEvent, onUiEvent } from "$lib/palette/events";
   import {
@@ -62,8 +73,9 @@
   import {
     firstTabsId,
     findPanelNode,
+    firstSidebarHolder,
     moveToRightGroup,
-    panelLabel,
+    PANEL_META,
     rightSiblingOf,
     TREE_PANELS,
     visiblePanels,
@@ -96,9 +108,25 @@
   } = $props();
 
   let selected: string[] = $state([]);
+
+  // --- Center editor state -------------------------------------------------
+
+  /** Working-copy file whose diff is shown in the editor (null = none). */
+  let diffEntry = $state<StatusEntry | null>(null);
   let diffFiles: FileDiff[] = $state([]);
-  /** Diff pane body collapsed (header stays for restore/pop out). */
-  let diffCollapsed = $state(false);
+  let diffLoading = $state(false);
+  /** Hunk staging is only safe when the file has no staged changes. */
+  let diffHunkable = $state(false);
+  /** Commit selected in the history sidebar. */
+  let selectedCommit = $state<CommitInfo | null>(null);
+  /** Compare result selected in the history sidebar. */
+  let compareResult = $state<CompareResult | null>(null);
+  /** Multi-selection action toolbar state reported by the history sidebar. */
+  let historyActions = $state<HistoryCommitActions | null>(null);
+  /** Commit to reveal/select in history (parent navigation from the editor). */
+  let pendingHistorySha = $state<string | null>(null);
+  /** Guards the working-copy diff stream against stale pages. */
+  let diffToken = 0;
 
   // --- Layout ---------------------------------------------------------------
 
@@ -120,6 +148,211 @@
   /** Panels not currently placed (candidates for "Add panel" menus). */
   const hiddenPanels = $derived(
     TREE_PANELS.filter((p) => !visiblePanels(resolved.layout.main).includes(p)),
+  );
+
+  /**
+   * Primary sidebar holder: the leftmost leaf/tab group that is not just the
+   * center editor. The activity bar switches and toggles this group.
+   */
+  const activityGroup = $derived(firstSidebarHolder(resolved.layout.main));
+
+  /** Active panel in the activity-controlled sidebar. */
+  const activityPanel = $derived.by<PanelId | null>(() => {
+    const group = activityGroup;
+    if (!group) return null;
+    if (group.kind === "leaf") return group.panel;
+    return (
+      group.tabs[Math.min(Math.max(group.active, 0), group.tabs.length - 1)] ??
+      null
+    );
+  });
+
+  /** History holder (the right sidebar in the default layout). */
+  const historyNode = $derived(findPanelNode(resolved.layout.main, "history"));
+  /** Whether history lives in the activity-controlled (primary) sidebar. */
+  const historyInActivityGroup = $derived(
+    historyNode !== null &&
+      activityGroup !== null &&
+      historyNode.id === activityGroup.id,
+  );
+  /** History outside the primary sidebar (normally the right column). */
+  const historyInRightSidebar = $derived(
+    historyNode !== null && !historyInActivityGroup,
+  );
+  const activityGroupPanels = $derived(
+    activityGroup ? visiblePanels(activityGroup) : [],
+  );
+  const historyPanels = $derived(historyNode ? visiblePanels(historyNode) : []);
+
+  /**
+   * Effective sidebar collapse state. The persisted flags express intent, but
+   * a layout must never hide every pane: if both sidebars ask to collapse and
+   * only the other one would remain, history stays visible. Keeping this in
+   * one derived block avoids circular can-collapse checks.
+   */
+  const collapsed = $derived.by(() => {
+    const panels = visiblePanels(resolved.layout.main);
+    const leftPanels = activityGroupPanels;
+    const rightPanels =
+      historyInRightSidebar && historyNode ? historyPanels : [];
+    let left =
+      resolved.leftCollapsed &&
+      activityGroup !== null &&
+      panels.some((panel) => !leftPanels.includes(panel));
+    let right =
+      resolved.rightCollapsed &&
+      rightPanels.length > 0 &&
+      panels.some(
+        (panel) =>
+          !rightPanels.includes(panel) &&
+          !(left && leftPanels.includes(panel)),
+      );
+    if (left && right) {
+      const remaining = panels.some(
+        (panel) =>
+          !leftPanels.includes(panel) && !rightPanels.includes(panel),
+      );
+      // Keep the primary sidebar collapsed; history is the fallback content.
+      if (!remaining) right = false;
+    }
+    return { left, right };
+  });
+
+  /** Whether the history panel is actually on screen (not behind a rail/tab). */
+  const historyVisible = $derived.by(() => {
+    if (!historyNode) return false;
+    if (historyInActivityGroup) {
+      return !collapsed.left && activityPanel === "history";
+    }
+    if (collapsed.right) return false;
+    if (historyNode.kind === "tabs") {
+      const active = Math.min(
+        Math.max(historyNode.active, 0),
+        historyNode.tabs.length - 1,
+      );
+      return historyNode.tabs[active] === "history";
+    }
+    return true;
+  });
+  /** Right-edge rail shown when the right sidebar is collapsed or absent. */
+  const showHistoryRail = $derived(
+    !historyNode || (historyInRightSidebar && collapsed.right),
+  );
+
+  /**
+   * Can a sidebar collapse without emptying the workspace? Panels already
+   * hidden behind the other rail do not count as remaining content.
+   */
+  const canCollapseLeft = $derived.by(() => {
+    if (!activityGroup) return false;
+    return visiblePanels(resolved.layout.main).some(
+      (panel) =>
+        !activityGroupPanels.includes(panel) &&
+        !(collapsed.right && historyPanels.includes(panel)),
+    );
+  });
+
+  const canCollapseRight = $derived.by(() => {
+    if (!historyInRightSidebar || !historyNode) return false;
+    return visiblePanels(resolved.layout.main).some(
+      (panel) =>
+        !historyPanels.includes(panel) &&
+        !(collapsed.left && activityGroupPanels.includes(panel)),
+    );
+  });
+
+  /** Hiding history must not empty the workspace either. */
+  const canHideHistory = $derived(
+    historyInActivityGroup ? canCollapseLeft : canCollapseRight,
+  );
+
+  /** Pane ids hidden by the two sidebar rails; mounted, just out of layout. */
+  const collapsedIds = $derived.by(() => {
+    const ids: string[] = [];
+    if (collapsed.left && activityGroup) ids.push(activityGroup.id);
+    if (collapsed.right && historyNode && !ids.includes(historyNode.id)) {
+      ids.push(historyNode.id);
+    }
+    return ids;
+  });
+
+  /**
+   * Re-opens history (adding the panel for layouts that predate it) and
+   * brings it to the front of whichever holder it lives in.
+   */
+  function showHistory(): void {
+    if (!historyNode) {
+      layouts.showRightPanel(root, "history", 0.68);
+      layouts.setSidebarCollapsed(root, "right", false);
+      return;
+    }
+    if (historyInActivityGroup) {
+      layouts.setSidebarCollapsed(root, "left", false);
+    } else {
+      layouts.setSidebarCollapsed(root, "right", false);
+    }
+    if (historyNode.kind === "tabs") {
+      layouts.setActiveTab(
+        root,
+        historyNode.id,
+        historyNode.tabs.indexOf("history"),
+      );
+    }
+  }
+
+  function hideHistory(): void {
+    if (!historyNode) return;
+    if (historyInActivityGroup) {
+      if (canCollapseLeft) layouts.setSidebarCollapsed(root, "left", true);
+      return;
+    }
+    if (canCollapseRight) layouts.setSidebarCollapsed(root, "right", true);
+  }
+
+  function toggleHistory(): void {
+    if (historyVisible) hideHistory();
+    else showHistory();
+  }
+
+  /** Activity bar: activate a panel, adding it to the sidebar when hidden. */
+  function selectActivityPanel(panel: PanelId): void {
+    const group = activityGroup;
+    if (!collapsed.left && activityPanel === panel) {
+      if (canCollapseLeft) layouts.setSidebarCollapsed(root, "left", true);
+      return;
+    }
+    layouts.setSidebarCollapsed(root, "left", false);
+    const holder = findPanelNode(resolved.layout.main, panel);
+    if (holder) {
+      if (holder.kind === "tabs") {
+        layouts.setActiveTab(root, holder.id, holder.tabs.indexOf(panel));
+      }
+      return;
+    }
+    layouts.addPanel(root, panel, group?.id);
+  }
+
+  /** History rail: toggle the right sidebar (or activate it in-pane). */
+  function selectHistoryActivity(): void {
+    if (historyInActivityGroup) {
+      selectActivityPanel("history");
+      return;
+    }
+    if (historyVisible) hideHistory();
+    else showHistory();
+  }
+
+  function toggleLeftSidebar(): void {
+    if (collapsed.left) {
+      layouts.setSidebarCollapsed(root, "left", false);
+      return;
+    }
+    if (canCollapseLeft) layouts.setSidebarCollapsed(root, "left", true);
+  }
+
+  /** Panels with an activity-bar icon (diff is the center editor). */
+  const activityPanels = TREE_PANELS.filter(
+    (panel) => panel !== "diff" && panel !== "history",
   );
   /** Whether the tab group at `tabsId` has a group to its right. */
   function canMoveRightFor(tabsId: string): boolean {
@@ -184,29 +417,19 @@
     layouts.resetRepo(root);
   }
 
-  /** Header "＋ panel" select: adds into the first tab group (or wraps). */
-  function onHeaderAddPanel(event: Event): void {
-    const select = event.currentTarget as HTMLSelectElement;
-    const panel = select.value as PanelId;
-    select.value = "";
-    if (!TREE_PANELS.includes(panel)) return;
-    const target = firstTabsId(resolved.layout.main) ?? undefined;
-    layouts.addPanel(root, panel, target);
-  }
-
-  /**
-   * Header "＋ Terminal" button: focuses the terminal tab when the panel is
-   * already placed, otherwise adds it into the first tab group.
-   */
+  /** Header "＋ Terminal" button: focuses the terminal tab when the panel is
+   *  already placed, otherwise adds it into the primary sidebar. */
   function onNewTerminal(): void {
     const holder = findPanelNode(resolved.layout.main, "terminal");
     if (holder) {
+      layouts.setSidebarCollapsed(root, "left", false);
       if (holder.kind === "tabs") {
         layouts.setActiveTab(root, holder.id, holder.tabs.indexOf("terminal"));
       }
       return;
     }
-    layouts.addPanel(root, "terminal", firstTabsId(resolved.layout.main) ?? undefined);
+    layouts.setSidebarCollapsed(root, "left", false);
+    layouts.addPanel(root, "terminal", activityGroup?.id ?? firstTabsId(resolved.layout.main) ?? undefined);
   }
 
   // --- Panel registry (PanelId → snippet) -----------------------------------
@@ -233,6 +456,8 @@
         return undoPanel;
       case "history":
         return historyPanel;
+      case "diff":
+        return editorPanel;
       case "terminal":
         return terminalPanel;
       case "forge":
@@ -311,14 +536,24 @@
     const unlisteners = [
       onUiEvent("focus-panel", ({ panel, repoId: target }) => {
         if (target !== null && target !== repoId) return;
+        const targetPanel = panel as PanelId;
+        if (targetPanel === "history") showHistory();
         // Activate the panel where it lives; add it when hidden.
-        const holder = findPanelNode(resolved.layout.main, panel as PanelId);
+        const holder = findPanelNode(resolved.layout.main, targetPanel);
         if (holder) {
           if (holder.kind === "tabs") {
-            layouts.setActiveTab(root, holder.id, holder.tabs.indexOf(panel as PanelId));
+            layouts.setActiveTab(root, holder.id, holder.tabs.indexOf(targetPanel));
+          }
+          if (activityGroup && holder.id === activityGroup.id) {
+            layouts.setSidebarCollapsed(root, "left", false);
           }
         } else {
-          layouts.addPanel(root, panel as PanelId, firstTabsId(resolved.layout.main) ?? undefined);
+          layouts.setSidebarCollapsed(root, "left", false);
+          layouts.addPanel(
+            root,
+            targetPanel,
+            activityGroup?.id ?? firstTabsId(resolved.layout.main) ?? undefined,
+          );
         }
       }),
       onUiEvent("open-conflicts", () => {
@@ -377,31 +612,112 @@
   $effect(() => {
     void repoId;
     selected = [];
+    diffEntry = null;
     diffFiles = [];
-    diffCollapsed = false;
+    diffLoading = false;
+    diffHunkable = false;
+    selectedCommit = null;
+    compareResult = null;
+    historyActions = null;
+    pendingHistorySha = null;
     conflictEditorOpen = false;
   });
 
-  /**
-   * Whether the working-copy diff pane may offer hunk staging/discard: only
-   * when the shown file has NO staged changes, so the pane's head→worktree
-   * hunks coincide with the index→workdir hunks the backend stages against.
-   */
-  let diffHunkable = $state(false);
+  // Repos persisted before the editor existed may have no `diff` panel:
+  // insert it left of history (or as a new right column) once on mount.
+  $effect(() => {
+    void repoId;
+    layouts.showMainPanel(root);
+  });
 
+  // --- Center editor selection ------------------------------------------------
+
+  /** Working-copy row selected in the changes sidebar. */
   async function openDiff(entry: StatusEntry): Promise<void> {
+    const token = ++diffToken;
+    diffEntry = entry;
     diffFiles = [];
+    diffLoading = true;
+    // Only files with NO staged changes can use head→worktree hunks for
+    // staging: there the pane's hunks coincide with index→workdir.
     diffHunkable = entry.index === "unmodified";
+    selectedCommit = null;
+    compareResult = null;
     try {
-      await streamDiff(repoId, "head", "worktree", (page) => {
-        const match = page.filter(
-          (f) => f.path === entry.path || f.old_path === entry.path,
-        );
-        diffFiles = match;
-      }, [entry.path]);
+      await streamDiff(
+        repoId,
+        "head",
+        "worktree",
+        (page) => {
+          if (token !== diffToken) return;
+          diffFiles = page.filter(
+            (f) => f.path === entry.path || f.old_path === entry.path,
+          );
+        },
+        [entry.path],
+      );
     } catch {
-      diffFiles = [];
+      if (token === diffToken) diffFiles = [];
+    } finally {
+      if (token === diffToken) diffLoading = false;
     }
+  }
+
+  /** Clears the center editor (close button or the empty-state reset). */
+  function clearEditor(): void {
+    diffToken++;
+    diffEntry = null;
+    diffFiles = [];
+    diffLoading = false;
+    diffHunkable = false;
+    selectedCommit = null;
+    compareResult = null;
+  }
+
+  /** History sidebar: a commit row was selected (or restored on mount). */
+  function onHistorySelect(
+    info: CommitInfo | null,
+    source?: "restore",
+  ): void {
+    // A restored selection only opens when nothing is in the editor: after
+    // history is collapsed/reopened it must not replace an open file diff.
+    if (source === "restore" && (selectedCommit || diffEntry || compareResult)) {
+      return;
+    }
+    selectedCommit = info;
+    if (!info) return;
+    diffToken++;
+    diffEntry = null;
+    diffFiles = [];
+    diffLoading = false;
+    diffHunkable = false;
+    compareResult = null;
+  }
+
+  /** History sidebar: compare results open in the center editor. */
+  function onHistoryCompare(result: CompareResult): void {
+    compareResult = result;
+    selectedCommit = null;
+    diffToken++;
+    diffEntry = null;
+    diffFiles = [];
+    diffLoading = false;
+    diffHunkable = false;
+  }
+
+  function onHistoryActions(actions: HistoryCommitActions | null): void {
+    historyActions = actions;
+  }
+
+  /**
+   * Parent navigation from the commit detail: reveal + select the sha in
+   * the history sidebar, expanding the sidebar first when it is collapsed.
+   * The request travels as a prop (not the shared event bus) so a panel that
+   * mounts for the first time afterwards still receives it.
+   */
+  function revealHistoryCommit(sha: string): void {
+    pendingHistorySha = sha;
+    if (!historyVisible) showHistory();
   }
 
   // --- Popouts ---------------------------------------------------------------
@@ -414,11 +730,16 @@
     void openPanelPopout("history", repoId, `${name} — history`);
   }
 
-  // --- Diff pane ---------------------------------------------------------------
-
-  const diffHeightStyle = $derived(
-    diffCollapsed ? "auto" : `${Math.round(resolved.layout.diffRatio * 100)}%`,
-  );
+  function popOutCommit(): void {
+    const sha = selectedCommit?.sha;
+    if (!sha) return;
+    void openPanelPopout(
+      "commitdetail",
+      repoId,
+      `Commit ${sha.slice(0, 7)}`,
+      { sha },
+    );
+  }
 
   // --- Conflict banner actions -------------------------------------------
 
@@ -475,12 +796,36 @@
 </script>
 
 {#snippet statusPanel()}
-  <StatusPanel
-    {status}
+  <!-- VSCode-style source-control column: commit box pinned on top, the
+       working-copy list scrolls underneath. -->
+  <div class="changes-panel">
+    <CommitBar {repoId} onCommitted={refresh} />
+    <StatusPanel
+      {status}
+      {repoId}
+      onOpenDiff={(e) => void openDiff(e)}
+      onAfterMutation={refresh}
+      bind:selected
+    />
+  </div>
+{/snippet}
+{#snippet editorPanel()}
+  <EditorPane
     {repoId}
-    onOpenDiff={(e) => void openDiff(e)}
-    onAfterMutation={refresh}
-    bind:selected
+    {root}
+    commit={selectedCommit}
+    compare={compareResult}
+    entry={diffEntry}
+    diffFiles={diffFiles}
+    diffLoading={diffLoading}
+    diffHunkable={diffHunkable}
+    historyActions={historyActions}
+    onClose={clearEditor}
+    onCloseCompare={() => (compareResult = null)}
+    onSelectParent={revealHistoryCommit}
+    onPopoutCommit={selectedCommit ? popOutCommit : undefined}
+    onPopoutDiff={popOutDiff}
+    onMutated={refresh}
   />
 {/snippet}
 {#snippet branchesPanel()}
@@ -528,9 +873,16 @@
     <HistoryViewModule.default
       {repoId}
       {root}
+      variant="sidebar"
       onPopout={popOutHistory}
       bookmarks={bookmarks.shas(root)}
       branchColors={(refs) => branchColorForRefs(refs, branchColorStore.rules(root))}
+      onSelectCommit={onHistorySelect}
+      onCompareResult={onHistoryCompare}
+      onActionsChange={onHistoryActions}
+      onCollapse={canHideHistory ? hideHistory : undefined}
+      revealSha={pendingHistorySha}
+      onRevealHandled={() => (pendingHistorySha = null)}
     />
   {/await}
 {/snippet}
@@ -567,6 +919,20 @@
     {/if}
     <OpenWithButton {root} />
     <span class="layout-controls">
+      <button
+        class="layout-btn"
+        type="button"
+        aria-pressed={historyVisible}
+        disabled={historyVisible && !canHideHistory}
+        title={historyVisible
+          ? canHideHistory
+            ? "Hide the history sidebar"
+            : "Expand the primary sidebar before hiding history"
+          : "Show the history sidebar"}
+        onclick={toggleHistory}
+      >
+        {historyVisible ? "Hide history" : "Show history"}
+      </button>
       <select
         class="preset-select"
         aria-label="Layout preset"
@@ -602,20 +968,6 @@
       >
         Clean…
       </button>
-      {#if hiddenPanels.length > 0}
-        <select
-          class="preset-select"
-          aria-label="Add panel"
-          title="Add panel"
-          value=""
-          onchange={onHeaderAddPanel}
-        >
-          <option value="" disabled>＋ panel…</option>
-          {#each hiddenPanels as panel (panel)}
-            <option value={panel}>{panelLabel(panel)}</option>
-          {/each}
-        </select>
-      {/if}
       {#if resolved.hasOverlay}
         <button
           class="layout-btn"
@@ -656,64 +1008,55 @@
   <BisectBanner {repoId} />
 
   <div class="main-area">
-    <SplitContainer
-      node={resolved.layout.main}
-      renderPanel={renderPanel}
-      {hiddenPanels}
-      canMoveRightFor={canMoveRightFor}
-      onRatio={onRatio}
-      onActivateTab={onActivateTab}
-      onAddPanel={onAddPanel}
-      onPanelAction={onPanelAction}
+    <ActivityBar
+      panels={activityPanels}
+      active={activityPanel}
+      historyActive={historyVisible}
+      historyCanHide={canHideHistory}
+      collapsed={collapsed.left}
+      canCollapse={canCollapseLeft}
+      onSelect={selectActivityPanel}
+      onHistory={selectHistoryActivity}
+      onToggleCollapse={toggleLeftSidebar}
     />
-  </div>
-
-  <div class="commit-pane" class:zen={resolved.layout.autoHideCommitBar}>
-    <CommitBar {repoId} onCommitted={refresh} />
-  </div>
-
-  {#if diffFiles.length > 0}
-    <div class="diff-pane" style:height={diffHeightStyle}>
-      <header class="diff-head">
-        <span class="diff-title">Working copy diff</span>
-        <span class="diff-count">
-          {diffFiles.length} file{diffFiles.length === 1 ? "" : "s"}
-        </span>
-        <span class="diff-actions">
-          <button
-            class="layout-btn"
-            type="button"
-            onclick={() => (diffCollapsed = !diffCollapsed)}
-          >
-            {diffCollapsed ? "Show" : "Collapse"}
-          </button>
-          <button class="layout-btn" type="button" onclick={popOutDiff}>
-            Pop out
-          </button>
-          <button
-            class="layout-btn"
-            type="button"
-            aria-label="Close diff"
-            title="Close diff"
-            onclick={() => (diffFiles = [])}
-          >
-            ×
-          </button>
-        </span>
-      </header>
-      {#if !diffCollapsed}
-        <div class="diff-body">
-          <DiffViewer
-            files={diffFiles}
-            {repoId}
-            hunkStaging={diffHunkable ? "stage" : undefined}
-            hunkDiscard={diffHunkable}
-            onMutated={refresh}
-          />
-        </div>
-      {/if}
+    <div class="layout-area">
+      <SplitContainer
+        node={resolved.layout.main}
+        renderPanel={renderPanel}
+        {hiddenPanels}
+        {collapsedIds}
+        hideTabsFor={activityGroup?.id ?? null}
+        canMoveRightFor={canMoveRightFor}
+        onRatio={onRatio}
+        onActivateTab={onActivateTab}
+        onAddPanel={onAddPanel}
+        onPanelAction={onPanelAction}
+      />
     </div>
-  {/if}
+    {#if showHistoryRail}
+      <button
+        class="history-rail"
+        type="button"
+        aria-label="Show history sidebar"
+        title="Show history sidebar"
+        onclick={showHistory}
+      >
+        <svg
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          aria-hidden="true"
+        >
+          <path d={PANEL_META.history.icon} />
+        </svg>
+        <span class="history-rail-label">History</span>
+      </button>
+    {/if}
+  </div>
+
 </div>
 
 {#if conflictEditorOpen}
@@ -763,6 +1106,11 @@
   .repo-workspace {
     display: flex;
     flex-direction: column;
+    /* Fill the tab content area: without flex:1 this flex item shrink-wraps
+       to its content, so collapsing a sidebar would shrink the whole
+       workspace instead of handing the freed width to the center pane. */
+    flex: 1;
+    width: 100%;
     height: 100%;
     min-height: 0;
     /* Never wider than the tab area: without this the flex min-width:auto
@@ -833,10 +1181,15 @@
     white-space: nowrap;
   }
 
-  .layout-btn:hover,
-  .layout-btn:focus-visible {
+  .layout-btn:hover:not(:disabled),
+  .layout-btn:focus-visible:not(:disabled) {
     color: var(--m3-primary);
     background: var(--m3-surface-container-high, var(--m3-surface));
+  }
+
+  .layout-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
   }
 
   .repo-root {
@@ -939,65 +1292,71 @@
   .main-area {
     flex: 1;
     min-height: 0;
+    min-width: 0;
     display: flex;
   }
 
-  .commit-pane {
+  /* The tree owns all remaining width; collapsed sidebar panes are hidden
+   * inside it, so this area grows automatically. */
+  .layout-area {
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+    display: flex;
+  }
+
+  /* Visual Studio-style auto-hide tab for the collapsed history sidebar. */
+  .history-rail {
     flex: none;
-  }
-
-  /* Zen layouts collapse the commit bar to a slim strip; hovering the
-     area expands it again (no state — pure CSS). */
-  .commit-pane.zen {
-    height: 1.25rem;
-    overflow: hidden;
-  }
-
-  .commit-pane.zen:hover,
-  .commit-pane.zen:focus-within {
-    height: auto;
-  }
-
-  .diff-pane {
-    flex: none;
+    width: 1.75rem;
     display: flex;
     flex-direction: column;
-    min-height: 0;
-    border-top: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    overflow: hidden;
-  }
-
-  .diff-head {
-    flex: none;
-    display: flex;
     align-items: center;
     gap: 0.5rem;
-    padding: 0.2rem 0.75rem;
+    padding: 0.5rem 0;
+    border: none;
+    border-left: 1px solid var(--m3-outline-variant, var(--m3-primary));
     background: var(--m3-surface-container, var(--m3-surface));
-    border-bottom: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    font-size: 0.75rem;
-  }
-
-  .diff-title {
-    font-weight: 500;
-  }
-
-  .diff-count {
     color: var(--m3-on-surface-variant, var(--m3-on-surface));
+    cursor: pointer;
   }
 
-  .diff-actions {
-    margin-left: auto;
-    display: flex;
-    gap: 0.25rem;
+  .history-rail svg {
+    width: 1rem;
+    height: 1rem;
+    flex: none;
   }
 
-  .diff-body {
+  .history-rail-label {
+    writing-mode: vertical-rl;
+    transform: rotate(180deg);
+    font-size: 0.6875rem;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+
+  .history-rail:hover,
+  .history-rail:focus-visible {
+    color: var(--m3-primary);
+    background: var(--m3-surface-container-high, var(--m3-surface));
+  }
+
+  .history-rail:focus-visible {
+    outline: 2px solid var(--m3-primary);
+    outline-offset: -2px;
+  }
+
+  /* Source-control column: commit box + scrolling changes list. */
+  .changes-panel {
     flex: 1;
     min-height: 0;
     display: flex;
     flex-direction: column;
-    overflow: hidden;
+  }
+
+  .changes-panel > :global(aside) {
+    flex: 1;
+    min-height: 0;
   }
 
   .conflict-overlay {

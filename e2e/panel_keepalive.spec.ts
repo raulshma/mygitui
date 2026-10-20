@@ -13,14 +13,16 @@ import {
 const OVERLAY_KEY = "mygitui.layouts.overlay./tmp/repo";
 
 /**
- * TabGroup keep-alive mounting: switching panel tabs must not unmount the
- * hidden panel. The history panel keeps its selection, open commit detail,
- * scroll position and loaded stream across a switch to Status and back —
- * no re-stream, no scroll reset (what cross-restart prefs can't restore).
+ * Sidebar keep-alive mounting: switching panels from the activity bar must
+ * not unmount the hidden panel. The history panel keeps its selection, open
+ * commit detail, scroll position and loaded stream across a switch to Status
+ * and back — no re-stream, no scroll reset (what cross-restart prefs can't
+ * restore).
  *
  * The default layout puts history in a right-hand leaf, so the test seeds
  * a per-repo overlay that places history inside a tab group next to
- * Status — the arrangement "New group to the right" produces.
+ * Status — the arrangement "New group to the right" produces. The activity
+ * bar drives that group.
  */
 test("switching panel tabs keeps history state alive", async ({ page }) => {
   const tracked = trackErrors(page);
@@ -72,23 +74,30 @@ test("switching panel tabs keeps history state alive", async ({ page }) => {
   await expect(page.locator(".dsummary").first()).toHaveText("commit message 10");
 
   // Scroll well past the selection: the scroll position is state that
-  // cross-restart prefs cannot restore — only keep-alive can.
-  await page.locator("#commit-row-30").scrollIntoViewIfNeeded();
+  // cross-restart prefs cannot restore — only keep-alive can. Rows are
+  // virtualized, so scroll the container itself (a row beyond the render
+  // window is not in the DOM yet). Stop at row 20: row 10 stays inside the
+  // overscan, so its highlight can still be checked after the round-trip.
   const scroller = page.locator(".history .scroller");
+  await scroller.evaluate((el) => {
+    el.scrollTop = 20 * 24;
+  });
+  await expect(page.locator("#commit-row-20")).toBeVisible();
   const scrollTopBefore = await scroller.evaluate((el) => el.scrollTop);
   expect(scrollTopBefore).toBeGreaterThan(0);
 
   const streamsBefore = (await mock.callsOf("repo_log_stream")).length;
+  const activity = page.locator(".activity-bar");
 
   // Switch to Status: history must hide, not unmount.
-  await page.getByRole("tab", { name: "Status" }).click();
+  await activity.getByRole("button", { name: "Status" }).click();
   const historyWhileHidden = page.locator(".history");
   await expect(historyWhileHidden).toHaveCount(1);
   await expect(historyWhileHidden).not.toBeVisible();
   expect((await mock.callsOf("repo_log_stream")).length).toBe(streamsBefore);
 
   // Switch back: everything is exactly where we left it.
-  await page.getByRole("tab", { name: "History" }).click();
+  await activity.getByRole("button", { name: "History" }).click();
   await expect(page.locator(".history")).toBeVisible();
   await expect(page.locator(".detail")).toBeVisible();
   await expect(page.locator(".dsummary").first()).toHaveText("commit message 10");

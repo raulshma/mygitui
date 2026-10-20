@@ -1,6 +1,8 @@
 <script lang="ts">
   /**
-   * Commit bar (M2) — sits at the bottom of the repo workspace.
+   * Commit bar (M2) — sits at the top of the source-control sidebar (the
+   * workspace's left column), so the commit message and button stay visible
+   * while the changes list scrolls below.
    *
    * Message textarea (Ctrl/Cmd+Enter commits), Amend switch, --no-verify
    * switch ("skip hooks"), signing badge (`signing_info`), per-hook badges
@@ -208,28 +210,30 @@
       id="commit-message"
       class="message"
       placeholder="Commit message… (Ctrl+Enter to commit)"
-      rows="2"
+      rows="3"
       bind:value={message}
       onkeydown={onMessageKeydown}
       disabled={commitBusy || committing}
     ></textarea>
 
     <div class="side">
-      <div class="chips" aria-hidden="false">
-        {#if signing?.active}
-          <span
-            class="chip chip-sign"
-            title={signing.key_id ? `Signing key ${signing.key_id}` : "Commits will be signed"}
-          >
-            signed: {signing.format}
-          </span>
-        {/if}
-        {#each runningHooks as hook (hook.kind)}
-          <span class="chip chip-hook" title="This hook is present and executable">
-            {hook.kind} will run
-          </span>
-        {/each}
-      </div>
+      {#if signing?.active || runningHooks.length > 0}
+        <div class="chips" aria-hidden="false">
+          {#if signing?.active}
+            <span
+              class="chip chip-sign"
+              title={signing.key_id ? `Signing key ${signing.key_id}` : "Commits will be signed"}
+            >
+              signed: {signing.format}
+            </span>
+          {/if}
+          {#each runningHooks as hook (hook.kind)}
+            <span class="chip chip-hook" title="This hook is present and executable">
+              {hook.kind} will run
+            </span>
+          {/each}
+        </div>
+      {/if}
 
       <div class="options">
         <div class="opt-switches">
@@ -269,7 +273,6 @@
           <AiFeatureButton
             {repoId}
             icon
-            popUp
             gateVisibility={false}
             rootClass="ai-commit"
             label="Generate commit message"
@@ -332,27 +335,31 @@ ${m.body}` : m.subject;
 </form>
 
 <style>
+  /* Narrow source-control sidebar variant: everything stacks vertically
+     (the box lives at the top of the changes list, not in a bottom bar). */
   .commit-bar {
     flex: none;
     display: flex;
     flex-direction: column;
-    gap: 0.25rem;
-    padding: 0.375rem 0.5rem;
-    border-top: 1px solid var(--m3-outline-variant, var(--m3-primary));
+    gap: 0.35rem;
+    padding: 0.4rem 0.5rem;
+    border-bottom: 1px solid var(--m3-outline-variant, var(--m3-primary));
     background: var(--m3-surface-container, var(--m3-surface));
     font-size: 0.8125rem;
   }
 
   .row-main {
     display: flex;
-    gap: 0.5rem;
+    flex-direction: column;
+    gap: 0.3rem;
     min-height: 0;
   }
 
   .message {
-    flex: 1;
+    flex: none;
+    width: 100%;
     min-width: 0;
-    resize: none;
+    resize: vertical;
     font: inherit;
     font-family: ui-monospace, Consolas, monospace;
     font-size: 0.75rem;
@@ -369,18 +376,17 @@ ${m.body}` : m.subject;
   }
 
   .side {
-    flex: none;
     display: flex;
     flex-direction: column;
-    gap: 0.25rem;
-    width: 18.5rem;
+    gap: 0.3rem;
+    width: 100%;
+    min-width: 0;
   }
 
   .chips {
     display: flex;
     flex-wrap: wrap;
     gap: 0.25rem;
-    min-height: 1rem;
   }
 
   .chip {
@@ -407,13 +413,15 @@ ${m.body}` : m.subject;
   .options {
     display: flex;
     align-items: center;
-    gap: 0.5rem;
+    flex-wrap: wrap;
+    gap: 0.35rem 0.5rem;
   }
 
   .opt-switches {
     display: flex;
     align-items: center;
-    gap: 0.625rem;
+    flex-wrap: wrap;
+    gap: 0.35rem 0.625rem;
     min-width: 0;
   }
 
@@ -424,8 +432,8 @@ ${m.body}` : m.subject;
   .actions {
     display: flex;
     align-items: center;
-    gap: 0.375rem;
-    margin-top: auto;
+    flex-wrap: wrap;
+    gap: 0.35rem;
   }
 
   .primary {
@@ -504,7 +512,8 @@ ${m.body}` : m.subject;
 
   .author {
     display: flex;
-    gap: 0.5rem;
+    flex-direction: column;
+    gap: 0.3rem;
     padding-top: 0.125rem;
   }
 

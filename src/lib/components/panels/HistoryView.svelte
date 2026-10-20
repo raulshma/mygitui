@@ -69,6 +69,7 @@
   import PromptDialog from "$lib/components/safety/PromptDialog.svelte";
   import ResetDialog from "$lib/components/safety/ResetDialog.svelte";
   import TagAtDialog from "$lib/components/panels/TagAtDialog.svelte";
+  import type { HistoryCommitActions } from "$lib/components/panels/historySidebar";
   import {
     classifyRef,
     formatRelativeTime,
@@ -82,6 +83,13 @@
     onPopout,
     bookmarks,
     branchColors,
+    variant = "full",
+    onSelectCommit,
+    onCompareResult,
+    onActionsChange,
+    onCollapse,
+    revealSha = null,
+    onRevealHandled,
   }: {
     repoId: string;
     /** Worktree root (bookmark persistence key); empty in popouts. */
@@ -92,7 +100,37 @@
     bookmarks?: ReadonlySet<string>;
     /** M7: refs decorations → branch color override (optional). */
     branchColors?: (refs: string[]) => string | null;
+    /**
+     * `full` (popouts) renders the list and the detail pane exactly as
+     * before. `sidebar` is the workspace's collapsible history list: the
+     * detail opens in the main editor pane, so only the list is rendered.
+     */
+    variant?: "full" | "sidebar";
+    /**
+     * Sidebar variant: the selected commit is reported upward. `source` is
+     * `"restore"` for a persisted selection resolving on mount — the
+     * workspace only opens it when the editor is empty (it must not steal
+     * an open working-copy diff after history is collapsed and reopened).
+     */
+    onSelectCommit?: (info: CommitInfo | null, source?: "restore") => void;
+    /** Sidebar variant: compare results open in the main editor pane. */
+    onCompareResult?: (result: CompareResult) => void;
+    /** Sidebar variant: action toolbar state for the center commit detail. */
+    onActionsChange?: (actions: HistoryCommitActions | null) => void;
+    /** Sidebar variant: collapse control in the panel header. */
+    onCollapse?: () => void;
+    /**
+     * Sidebar variant: reveal + select this commit once it is loaded (parent
+     * navigation from the center editor, including when history was just
+     * re-opened and this view is mounting for the first time).
+     */
+    revealSha?: string | null;
+    /** Sidebar variant: called after `revealSha` was selected (owner clears it). */
+    onRevealHandled?: () => void;
   } = $props();
+
+  /** Sidebar mode owns no detail pane; the center editor does. */
+  const sidebar = $derived(variant === "sidebar");
 
   /** Must match the row height passed to (and defaulted by) GraphCanvas. */
   const ROW_HEIGHT = 24;
@@ -108,6 +146,8 @@
   let selectedInfo = $state<CommitInfo | null>(null);
   let detailOpen = $state(false);
   let showCompare = $state(false);
+  /** Sidebar variant: reveal author/path/date/pickaxe filters. */
+  let showAdvanced = $state(false);
   let compare = $state<CompareResult | null>(null);
 
   /** Live `CommitDetail` instance (palette blame toggle; null when closed). */
@@ -281,10 +321,13 @@
         restoreScroll = false;
         sync.scrollToIndex(restored.index);
       }
+      if (sidebar) onSelectCommit?.(commit, "restore");
     } else if (restored.kind === "dropped") {
       selectedSha = null;
       detailOpen = false;
       restoreScroll = false;
+      // The center editor may still show the vanished commit's detail.
+      if (sidebar) onSelectCommit?.(null);
     }
   });
 
@@ -351,9 +394,66 @@
       multiIdx = idx >= 0 ? [idx] : [];
       anchorIdx = idx >= 0 ? idx : null;
     }
-    if (opts.open !== false) detailOpen = Boolean(selectedInfo);
+    if (!sidebar && opts.open !== false) detailOpen = Boolean(selectedInfo);
     if (opts.scroll && idx >= 0) sync.scrollToIndex(idx);
+    // Report explicitly as well as through the effect below: re-clicking the
+    // already-selected row must reopen a detail the user closed in between
+    // (the effect only re-runs when `selectedInfo` changes).
+    if (sidebar) onSelectCommit?.(commit ?? null);
   }
+
+  // Sidebar variant: selection is reported by `select()` only — a restored
+  // selection (panel re-mounted after a collapse) updates the list highlight
+  // without stealing the editor away from an open working-copy diff.
+
+  // Sidebar variant: parent navigation from the center editor. The commit
+  // may still be beyond the released window (or the stream may not have
+  // reached it yet), so retry as pages land; a commit the active filter
+  // excludes is dropped with the usual explanation.
+  $effect(() => {
+    if (!sidebar) return;
+    const sha = revealSha;
+    if (!sha) return;
+    void store.flat;
+    const outcome = store.resolveRestoredSelection(sha);
+    if (outcome.kind === "resolved") {
+      select(sha, { scroll: true });
+      onRevealHandled?.();
+    } else if (outcome.kind === "dropped") {
+      onRevealHandled?.();
+      toast("Parent commit is not in the loaded history");
+    }
+  });
+
+  // Sidebar variant: expose the multi-selection action toolbar state. The
+  // functions close over this view's live selection, so the center detail's
+  // Cherry-pick / Revert / Rebase buttons keep operating on all selected
+  // commits.
+  // Sidebar variant: drop the center detail's action toolbar when this list
+  // unmounts (history collapsed) so it never calls into a destroyed store.
+  $effect(() => {
+    if (!sidebar) return;
+    return () => onActionsChange?.(null);
+  });
+
+  $effect(() => {
+    if (!sidebar) return;
+    const info = selectedInfo;
+    if (!info) {
+      onActionsChange?.(null);
+      return;
+    }
+    // Read the reactive inputs so the effect re-runs when they change.
+    void selectedShas;
+    void opBusy;
+    onActionsChange?.({
+      count: selectedShas.length,
+      busy: opBusy,
+      cherryPick: () => void doCherryPick(),
+      revert: () => void doRevert(),
+      rebaseFromHere,
+    });
+  });
 
   /**
    * List row click: plain click (re)selects one commit; shift-click extends
@@ -419,6 +519,12 @@
   // -- commit detail: diff/describe/blame live in CommitDetail ------------------
 
   function onCompare(files: FileDiff[], base: string, target: string): void {
+    if (sidebar) {
+      // The workspace renders the result in the center editor; this panel
+      // stays a pure list (no detail pane of its own).
+      onCompareResult?.({ files, base, target });
+      return;
+    }
     compare = { files, base, target };
     detailOpen = true;
   }
@@ -585,7 +691,8 @@
           toast("Select a commit with file changes to blame");
         }
       }),
-      onUiEvent("history-select-commit", ({ sha }) => {
+      onUiEvent("history-select-commit", ({ sha, repoId: target }) => {
+        if (target !== undefined && target !== repoId) return;
         if (store.revealSha(sha)) {
           select(sha, { scroll: true });
         }
@@ -668,11 +775,41 @@
   }
 </script>
 
-<section class="history" aria-label="Commit history">
-  <!-- 1. filter bar -->
-  <div class="filterbar" role="search" aria-label="Filter commits">
+<section class="history" class:sidebar aria-label="Commit history">
+  {#if sidebar}
+    <!-- 1a. sidebar header: the panel is a bare layout leaf, so it owns its
+         own title row (full mode lives in a tab/popout and has one). -->
+    <header class="sidebar-head">
+      <span class="sh-title">History</span>
+      {#if onPopout}
+        <button
+          class="sh-btn"
+          type="button"
+          title="Pop out history"
+          aria-label="Pop out history"
+          onclick={onPopout}
+        >
+          ⧉
+        </button>
+      {/if}
+      {#if onCollapse}
+        <button
+          class="sh-btn sh-collapse"
+          type="button"
+          title="Hide the history sidebar"
+          aria-label="Hide history sidebar"
+          onclick={onCollapse}
+        >
+          ×
+        </button>
+      {/if}
+    </header>
+  {/if}
+
+  <!-- 1b. filter bar (sidebar: search + a disclosure for the rest) -->
+  <div class="filterbar" class:compact={sidebar} role="search" aria-label="Filter commits">
     <input
-      class="f"
+      class="f search"
       bind:this={filterTextEl}
       type="search"
       placeholder="Search commits"
@@ -680,66 +817,81 @@
       value={store.filter.text}
       oninput={(e) => store.setFilter({ text: e.currentTarget.value })}
     />
-    <input
-      class="f"
-      placeholder="Author"
-      aria-label="Filter by author"
-      value={store.filter.author}
-      oninput={(e) => store.setFilter({ author: e.currentTarget.value })}
-    />
-    <input
-      class="f wide"
-      placeholder="Path"
-      aria-label="Filter by path"
-      value={store.filter.path}
-      oninput={(e) => store.setFilter({ path: e.currentTarget.value })}
-    />
-    <label class="date">
-      <span class="dl">after</span>
+
+    {#if sidebar}
+      <button
+        class="compare-toggle filters-toggle"
+        type="button"
+        aria-expanded={showAdvanced}
+        title="More filters"
+        onclick={() => (showAdvanced = !showAdvanced)}
+      >
+        Filters{filterActive ? " •" : ""}
+      </button>
+    {/if}
+
+    {#if !sidebar || showAdvanced}
       <input
-        type="date"
-        aria-label="Commits after this date"
-        value={store.filter.after}
-        onchange={(e) => store.setFilter({ after: e.currentTarget.value })}
+        class="f"
+        placeholder="Author"
+        aria-label="Filter by author"
+        value={store.filter.author}
+        oninput={(e) => store.setFilter({ author: e.currentTarget.value })}
       />
-    </label>
-    <label class="date">
-      <span class="dl">before</span>
       <input
-        type="date"
-        aria-label="Commits before this date"
-        value={store.filter.before}
-        onchange={(e) => store.setFilter({ before: e.currentTarget.value })}
+        class="f wide"
+        placeholder="Path"
+        aria-label="Filter by path"
+        value={store.filter.path}
+        oninput={(e) => store.setFilter({ path: e.currentTarget.value })}
       />
-    </label>
-    <!-- M9: regex mode is live (backend `LogFilter.regex`). -->
-    <label class="regex" title="Treat the search text as a regular expression">
+      <label class="date">
+        <span class="dl">after</span>
+        <input
+          type="date"
+          aria-label="Commits after this date"
+          value={store.filter.after}
+          onchange={(e) => store.setFilter({ after: e.currentTarget.value })}
+        />
+      </label>
+      <label class="date">
+        <span class="dl">before</span>
+        <input
+          type="date"
+          aria-label="Commits before this date"
+          value={store.filter.before}
+          onchange={(e) => store.setFilter({ before: e.currentTarget.value })}
+        />
+      </label>
+      <!-- M9: regex mode is live (backend `LogFilter.regex`). -->
+      <label class="regex" title="Treat the search text as a regular expression">
+        <input
+          type="checkbox"
+          checked={store.filter.regex}
+          onchange={(e) => store.setFilter({ regex: e.currentTarget.checked })}
+        />
+        <span>Regex</span>
+      </label>
+      <!-- M10: pickaxe -S — commits whose patch adds/removes the string. -->
       <input
-        type="checkbox"
-        checked={store.filter.regex}
-        onchange={(e) => store.setFilter({ regex: e.currentTarget.checked })}
+        class="f"
+        placeholder="Changes containing… (-S)"
+        aria-label="Pickaxe: patches adding or removing this string"
+        value={store.filter.pickaxe}
+        oninput={(e) => store.setFilter({ pickaxe: e.currentTarget.value })}
       />
-      <span>Regex</span>
-    </label>
-    <!-- M10: pickaxe -S — commits whose patch adds/removes the string. -->
-    <input
-      class="f"
-      placeholder="Changes containing… (-S)"
-      aria-label="Pickaxe: patches adding or removing this string"
-      value={store.filter.pickaxe}
-      oninput={(e) => store.setFilter({ pickaxe: e.currentTarget.value })}
-    />
-    <!-- M12: pickaxe -G — commits whose patch adds/removes lines matching
-         this regex. -S and -G may BOTH be set: the values are forwarded
-         verbatim and the backend intersects them (simplest contract — no
-         cross-clearing UI to get out of sync). -->
-    <input
-      class="f"
-      placeholder="patch regex (-G)"
-      aria-label="Pickaxe: patches adding or removing lines matching this regex"
-      value={store.filter.pickaxeRegex ?? ""}
-      oninput={(e) => store.setFilter({ pickaxeRegex: e.currentTarget.value })}
-    />
+      <!-- M12: pickaxe -G — commits whose patch adds/removes lines matching
+           this regex. -S and -G may BOTH be set: the values are forwarded
+           verbatim and the backend intersects them (simplest contract — no
+           cross-clearing UI to get out of sync). -->
+      <input
+        class="f"
+        placeholder="patch regex (-G)"
+        aria-label="Pickaxe: patches adding or removing lines matching this regex"
+        value={store.filter.pickaxeRegex ?? ""}
+        oninput={(e) => store.setFilter({ pickaxeRegex: e.currentTarget.value })}
+      />
+    {/if}
 
     {#if filterActive}
       <button class="clear" onclick={() => store.clearFilter()}>Clear</button>
@@ -753,7 +905,7 @@
       Compare…
     </button>
 
-    {#if onPopout}
+    {#if onPopout && !sidebar}
       <!-- M4 F1: pop the history out into its own window (desktop only). -->
       <button class="compare-toggle" title="Pop out history" onclick={onPopout}>
         Pop out
@@ -829,27 +981,30 @@
           {/each}
         </div>
       </div>
-      <div class="graphcol" style:width={`${GRAPH_WIDTH}px`}>
-        <GraphCanvas
-          pages={store.pages}
-          rowHeight={ROW_HEIGHT}
-          onCommitClick={(sha) => select(sha)}
-          onReachEnd={() => store.loadMore()}
-          onVisibleRowsChange={sync.onCanvasVisible}
-          {bookmarks}
-          {branchColors}
-          bind:scrollEl={canvasScrollEl}
-          bind:this={canvasRef}
-        />
-      </div>
+      {#if !sidebar}
+        <div class="graphcol" style:width={`${GRAPH_WIDTH}px`}>
+          <GraphCanvas
+            pages={store.pages}
+            rowHeight={ROW_HEIGHT}
+            onCommitClick={(sha) => select(sha)}
+            onReachEnd={() => store.loadMore()}
+            onVisibleRowsChange={sync.onCanvasVisible}
+            {bookmarks}
+            {branchColors}
+            bind:scrollEl={canvasScrollEl}
+            bind:this={canvasRef}
+          />
+        </div>
+      {/if}
     {/if}
   </div>
   {/snippet}
 
-  <!-- 3. commit detail — open: the log and the detail pane share a stacked
-       SplitPane (the list fraction is user-resizable + persisted); closed:
-       a slim reopen strip. -->
-  {#if detailOpen && (selectedInfo || compare)}
+  {#if sidebar}
+    <!-- 3. sidebar: list only — the selected commit opens in the workspace's
+         center editor (variant `full` keeps the inline detail below). -->
+    {@render logPane()}
+  {:else if detailOpen && (selectedInfo || compare)}
     <SplitPane
       axis="y"
       ratio={detailRatio}
@@ -937,6 +1092,78 @@
     height: 100%;
     min-height: 0;
     background: var(--m3-surface);
+  }
+
+  /* -- sidebar header (workspace history column) ----------------------------- */
+
+  .sidebar-head {
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+    padding: 0.3rem 0.4rem 0.3rem 0.6rem;
+    border-bottom: 1px solid var(--m3-outline-variant);
+    background: var(--m3-surface-container, var(--m3-surface));
+  }
+
+  .sh-title {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 0.6875rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--m3-on-surface-variant);
+  }
+
+  .sh-btn {
+    flex: none;
+    width: 1.35rem;
+    height: 1.35rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    border: none;
+    border-radius: var(--m3-shape-extra-small, 4px);
+    background: none;
+    color: var(--m3-on-surface-variant);
+    font: inherit;
+    font-size: 0.8125rem;
+    line-height: 1;
+    cursor: pointer;
+  }
+
+  .sh-btn:hover,
+  .sh-btn:focus-visible {
+    color: var(--m3-on-surface);
+    background: var(--m3-surface-container-high, var(--m3-surface));
+    outline: none;
+  }
+
+  .sh-btn:focus-visible {
+    outline: 2px solid var(--m3-primary);
+    outline-offset: -2px;
+  }
+
+  /* Compact filter bar: search grows, advanced fields live behind Filters. */
+  .filterbar.compact {
+    gap: 0.25rem;
+    padding: 0.3rem 0.4rem;
+  }
+
+  .filterbar.compact .search {
+    flex: 1 1 7rem;
+    width: auto;
+    min-width: 0;
+  }
+
+  .filterbar.compact .status {
+    flex-basis: 100%;
+    margin-left: 0;
   }
 
   /* The list ↔ detail SplitPane fills the rest of the panel (its divider
@@ -1060,16 +1287,36 @@
     font-size: 0.8125rem;
   }
 
-  /* Rows pane: hides its own gutter — the canvas's scrollbar drives both. */
+  /* Rows pane: in the full layout it hides its own gutter — the canvas's
+     scrollbar drives both. The sidebar has no graph, so it owns the gutter. */
   .scroller {
     flex: 1;
     min-width: 0;
     overflow-y: auto;
+  }
+
+  .history:not(.sidebar) .scroller {
     scrollbar-width: none;
   }
 
-  .scroller::-webkit-scrollbar {
+  .history:not(.sidebar) .scroller::-webkit-scrollbar {
     display: none;
+  }
+
+  /* Sidebar rows: narrower padding and no author/date (the summary, refs and
+     short sha carry the identification at this width). */
+  .history.sidebar .row {
+    gap: 0.3rem;
+    padding: 0 0.45rem 0 0.55rem;
+  }
+
+  .history.sidebar .row .author,
+  .history.sidebar .row .date {
+    display: none;
+  }
+
+  .history.sidebar .row .ref {
+    max-width: 6rem;
   }
 
   .scroller:focus-visible {

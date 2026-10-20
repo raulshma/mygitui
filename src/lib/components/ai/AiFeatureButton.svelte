@@ -9,9 +9,9 @@
    *     ask on click (the commit-message behaviour).
    *   - First use / revoked-mid-session shows the inline confirm
    *     ("Send … to <backend>?") with Always allow / Just once /
-   *     Configure… / Cancel. `popUp` anchors the overlays UPWARD (the
-   *     commit bar is docked at the window's bottom edge — downward
-   *     popups would render off-screen).
+   *     Configure… / Cancel. `popUp` anchors the overlays UPWARD for bars
+   *     docked at the window's bottom edge (downward popups would render
+   *     off-screen there).
    *   - Busy spinner while `run()` is in flight; failures toast + render
    *     an inline Retry/Dismiss; `AiError` kind "opt-in" re-arms the
    *     confirm instead. `successToast` fires on success (the commit
@@ -68,7 +68,7 @@
     compact?: boolean;
     /** Sparkle icon circle (commit-bar variant) instead of the text pill. */
     icon?: boolean;
-    /** Open the confirm/fail overlays UPWARD (docked-bottom bars). */
+    /** Open the confirm/fail overlays UPWARD (for docked-bottom bars). */
     popUp?: boolean;
     /** Success toast copy, when the feature wants one. */
     successToast?: string | undefined;

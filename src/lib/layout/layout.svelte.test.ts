@@ -66,7 +66,7 @@ describe("LayoutStore resolution", () => {
     store.applyPreset(ROOT, "zen");
     const resolved = store.active(ROOT);
     expect(resolved.presetId).toBe("zen");
-    expect(visiblePanels(resolved.layout.main)).toEqual(["history"]);
+    expect(visiblePanels(resolved.layout.main)).toEqual(["diff"]);
     expect(resolved.layout.autoHideCommitBar).toBe(true);
     expect(resolved.hasOverlay).toBe(true);
   });
@@ -83,12 +83,12 @@ describe("LayoutStore resolution", () => {
     expect(store.active(ROOT).presetId).toBe("default");
     // 2. an applied preset replaces the default.
     store.applyPreset(ROOT, "zen");
-    expect(visiblePanels(store.active(ROOT).layout.main)).toEqual(["history"]);
+    expect(visiblePanels(store.active(ROOT).layout.main)).toEqual(["diff"]);
     // 3. a structural change snapshots an override on top of the preset
     //    choice (presetId is kept for display; the tree comes from the
     //    override).
     store.updateTree(ROOT, (tree) => {
-      const id = findPanelNode(tree, "history")?.id;
+      const id = findPanelNode(tree, "diff")?.id;
       return id
         ? insertPanel(tree, "status", { kind: "tab", nodeId: id })
         : null;
@@ -96,7 +96,7 @@ describe("LayoutStore resolution", () => {
     const resolved = store.active(ROOT);
     expect(resolved.presetId).toBe("zen");
     expect(resolved.overridden).toBe(true);
-    expect(visiblePanels(resolved.layout.main)).toEqual(["history", "status"]);
+    expect(visiblePanels(resolved.layout.main)).toEqual(["diff", "status"]);
     // An unchanged/null mutator result never creates an override.
     const other = "C:/repos/other";
     store.updateTree(other, (tree) => tree);
@@ -149,6 +149,7 @@ describe("LayoutStore mutations", () => {
       "undo",
       "stats",
       "terminal",
+      "diff",
       "history",
       "status",
     ]);
@@ -191,15 +192,15 @@ describe("LayoutStore mutations", () => {
     store.addPanel(ROOT, "status");
     expect(visiblePanels(store.active(ROOT).layout.main)).toEqual([
       "status",
-      "history",
+      "diff",
     ]);
   });
 
   it("hidePanel never empties the workspace", () => {
     const store = new LayoutStore(memStorage());
     store.applyPreset(ROOT, "zen");
-    store.hidePanel(ROOT, "history");
-    expect(visiblePanels(store.active(ROOT).layout.main)).toEqual(["history"]);
+    store.hidePanel(ROOT, "diff");
+    expect(visiblePanels(store.active(ROOT).layout.main)).toEqual(["diff"]);
   });
 
   it("resetRepo drops the overlay entirely", () => {
@@ -231,6 +232,86 @@ describe("LayoutStore mutations", () => {
     expect(again?.id).not.toBe(preset?.id);
     // Blank names are refused.
     expect(store.saveAs(ROOT, "   ")).toBeNull();
+  });
+});
+
+describe("LayoutStore collapsible sidebars", () => {
+  it("showRightPanel wraps the tree in a new right column; hide removes it", () => {
+    const store = new LayoutStore(memStorage());
+    store.applyPreset(ROOT, "zen");
+    store.showRightPanel(ROOT, "history", 0.72);
+    const main = store.active(ROOT).layout.main;
+    expect(main.kind).toBe("split");
+    expect(main.kind === "split" ? main.ratio : null).toBe(0.72);
+    expect(visiblePanels(main)).toEqual(["diff", "history"]);
+
+    // Already visible: no structural change (same shape, no new split).
+    const before = JSON.stringify(store.active(ROOT).layout.main);
+    store.showRightPanel(ROOT, "history");
+    expect(JSON.stringify(store.active(ROOT).layout.main)).toBe(before);
+
+    store.hidePanel(ROOT, "history");
+    expect(visiblePanels(store.active(ROOT).layout.main)).toEqual(["diff"]);
+    store.showRightPanel(ROOT, "history");
+    expect(visiblePanels(store.active(ROOT).layout.main)).toEqual([
+      "diff",
+      "history",
+    ]);
+  });
+
+  it("collapses sidebars without touching the tree and persists the flags", () => {
+    const storage = memStorage();
+    const store = new LayoutStore(storage);
+    const before = JSON.stringify(store.active(ROOT).layout.main);
+    store.setSidebarCollapsed(ROOT, "left", true);
+    store.setSidebarCollapsed(ROOT, "right", true);
+    const resolved = store.active(ROOT);
+    expect(resolved.leftCollapsed).toBe(true);
+    expect(resolved.rightCollapsed).toBe(true);
+    // Panels stay mounted: the tree is byte-identical.
+    expect(JSON.stringify(resolved.layout.main)).toBe(before);
+
+    vi.advanceTimersByTime(PERSIST_DEBOUNCE_MS);
+    expect(
+      parseOverlay(storage.dump()[OVERLAY_STORAGE_PREFIX + ROOT]!),
+    ).toMatchObject({ leftCollapsed: true, rightCollapsed: true });
+
+    const restored = new LayoutStore(storage);
+    restored.ensureRepo(ROOT);
+    expect(restored.active(ROOT).leftCollapsed).toBe(true);
+    expect(restored.active(ROOT).rightCollapsed).toBe(true);
+    restored.setSidebarCollapsed(ROOT, "left", false);
+    expect(restored.active(ROOT).leftCollapsed).toBe(false);
+  });
+
+  it("showMainPanel inserts diff left of history for legacy layouts", () => {
+    const store = new LayoutStore(memStorage());
+    store.updateTree(ROOT, () => ({
+      kind: "leaf",
+      id: "old-history",
+      panel: "history",
+    }));
+    expect(visiblePanels(store.active(ROOT).layout.main)).toEqual(["history"]);
+    store.showMainPanel(ROOT);
+    expect(visiblePanels(store.active(ROOT).layout.main)).toEqual([
+      "diff",
+      "history",
+    ]);
+    // A tree without history gets the editor as a right column.
+    store.updateTree(ROOT, () => ({
+      kind: "leaf",
+      id: "old-status",
+      panel: "status",
+    }));
+    store.showMainPanel(ROOT);
+    expect(visiblePanels(store.active(ROOT).layout.main)).toEqual([
+      "status",
+      "diff",
+    ]);
+    // Already present: no-op.
+    const before = JSON.stringify(store.active(ROOT).layout.main);
+    store.showMainPanel(ROOT);
+    expect(JSON.stringify(store.active(ROOT).layout.main)).toBe(before);
   });
 });
 
@@ -340,6 +421,8 @@ describe("parseOverlay", () => {
         ratios: { a: 0.5, b: "nope" },
         activeTabs: { t: 2, u: 1.5 },
         diffRatio: 0.55,
+        leftCollapsed: true,
+        rightCollapsed: false,
       }),
     );
     expect(overlay.presetId).toBe("zen");
@@ -347,6 +430,8 @@ describe("parseOverlay", () => {
     expect(overlay.ratios).toEqual({ a: 0.5 });
     expect(overlay.activeTabs).toEqual({ t: 2 });
     expect(overlay.diffRatio).toBe(0.55);
+    expect(overlay.leftCollapsed).toBe(true);
+    expect(overlay.rightCollapsed).toBe(false);
   });
 
   it("rejects invalid override trees and junk input", () => {

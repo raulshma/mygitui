@@ -57,16 +57,19 @@ test("clicking commit in history shows commit detail and maintains scroll", asyn
   expect(tracked.errors).toEqual([]);
 });
 
-test("clicking commit node in graph canvas selects commit", async ({ page }) => {
+test("clicking commit node in the history popout graph selects commit", async ({
+  page,
+}) => {
   const tracked = trackErrors(page);
   const { commits, rows } = linearLog(1);
 
-  await seedStorage(page, recentRepos(["/tmp/repo"]));
   await installTauriMock(page, {
     commands: historyCommands({ commits, rows }),
   });
 
-  await openRecentRepo(page);
+  // The workspace history sidebar is list-only (the graph belongs to the
+  // full/popout variant), so exercise graph selection there.
+  await page.goto("/?panel=history&repo=mock-repo");
 
   await expect(page.locator(".history .row").first()).toBeVisible();
 

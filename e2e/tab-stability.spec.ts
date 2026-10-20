@@ -8,17 +8,46 @@ import {
   trackErrors,
 } from "./tauri-mock";
 
+/** Per-repo layout overlay key: prefix + repo root. */
+const OVERLAY_KEY = "mygitui.layouts.overlay./tmp/repo";
+
 /**
  * Layout-stability regression: selecting a tab must not change any tab's
  * geometry. A selected-state `font-weight` bump widens the selected label,
  * resizing that tab and shifting every sibling tab — a visible twitch.
+ *
+ * The activity-controlled group renders no tab strip (the activity bar owns
+ * it), so this seeds a second, ordinary tab group on the right. History is
+ * deliberately absent from the tree so the right-edge rail is a constant and
+ * cannot resize the layout mid-test.
  */
 test("selecting a panel tab keeps tab geometry stable", async ({ page }) => {
   const tracked = trackErrors(page);
 
   const sha = "0000000000000000000000000000000000000001";
 
-  await seedStorage(page, recentRepos(["/tmp/repo"]));
+  await seedStorage(page, {
+    ...recentRepos(["/tmp/repo"]),
+    [OVERLAY_KEY]: JSON.stringify({
+      treeOverride: {
+        kind: "split",
+        id: "split-main",
+        ratio: 0.45,
+        a: {
+          kind: "tabs",
+          id: "tabs-left",
+          tabs: ["status", "branches"],
+          active: 0,
+        },
+        b: {
+          kind: "tabs",
+          id: "tabs-right",
+          tabs: ["diff", "remotes", "stashes"],
+          active: 0,
+        },
+      },
+    }),
+  });
 
   await installTauriMock(page, {
     commands: historyCommands({
@@ -41,7 +70,7 @@ test("selecting a panel tab keeps tab geometry stable", async ({ page }) => {
 
   const tabs = page.locator(".panel-tab");
   await expect(tabs.first()).toBeVisible();
-  expect(await tabs.count()).toBeGreaterThanOrEqual(2);
+  expect(await tabs.count()).toBe(3);
 
   const boxes = () =>
     tabs.evaluateAll((els) =>

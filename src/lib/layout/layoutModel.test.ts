@@ -11,6 +11,7 @@ import {
   DEFAULT_LAYOUT,
   DEFAULT_PRESETS,
   DEFAULT_PRESET_ID,
+  firstSidebarHolder,
   firstTabsId,
   findPanelNode,
   freshId,
@@ -20,6 +21,7 @@ import {
   movePanel,
   moveToRightGroup,
   nodeById,
+  nodeIds,
   panelLabel,
   PANEL_IDS,
   parseTree,
@@ -35,6 +37,7 @@ import {
   validateLayout,
   validateTree,
   visiblePanels,
+  wrapPanelRight,
   type LayoutNode,
   type PanelId,
   type SplitNode,
@@ -112,7 +115,29 @@ describe("queries", () => {
     });
     const group = findPanelNode(tree, "status");
     expect(group?.kind).toBe("tabs");
-    expect(findPanelNode(tree, "diff")).toBeNull();
+    expect(findPanelNode(tree, "diff")).toEqual({
+      kind: "leaf",
+      id: "leaf-editor",
+      panel: "diff",
+    });
+  });
+
+  it("picks the leftmost non-editor holder for the activity sidebar", () => {
+    expect(firstSidebarHolder(DEFAULT_LAYOUT.main)?.id).toBe("tabs-left");
+    expect(firstSidebarHolder(HISTORY)?.id).toBe("n2");
+    // A diff-only tree has no sidebar holder.
+    expect(
+      firstSidebarHolder({ kind: "leaf", id: "d", panel: "diff" }),
+    ).toBeNull();
+    // A diff leaf followed by a status group skips the editor.
+    const tree = {
+      kind: "split" as const,
+      id: "s",
+      ratio: 0.5,
+      a: { kind: "leaf" as const, id: "d", panel: "diff" as const },
+      b: { kind: "leaf" as const, id: "st", panel: "status" as const },
+    };
+    expect(firstSidebarHolder(tree)?.id).toBe("st");
   });
 
   it("lists visible panels in layout order", () => {
@@ -126,13 +151,14 @@ describe("queries", () => {
       "undo",
       "stats",
       "terminal",
+      "diff",
       "history",
     ]);
   });
 
   it("computes depth, right siblings and the first tab group", () => {
     expect(treeDepth(STATUS)).toBe(1);
-    expect(treeDepth(DEFAULT_LAYOUT.main)).toBe(2);
+    expect(treeDepth(DEFAULT_LAYOUT.main)).toBe(3);
     expect(rightSiblingOf(SIMPLE, "n1")).toBe(SIMPLE.b);
     expect(rightSiblingOf(SIMPLE, "n2")).toBeNull();
     expect(firstTabsId(DEFAULT_LAYOUT.main)).toBe("tabs-left");
@@ -382,10 +408,35 @@ describe("moveToRightGroup", () => {
   });
 });
 
+// -- right-edge sidebar wrap ----------------------------------------------------
+
+describe("wrapPanelRight", () => {
+  it("wraps the whole tree with a new right column", () => {
+    const wrapped = wrapPanelRight(SIMPLE, "history", 0.72) as SplitNode;
+    expect(wrapped.ratio).toBe(0.72);
+    expect(wrapped.a).toBe(SIMPLE);
+    expect(wrapped.b).toEqual({
+      kind: "leaf",
+      id: expect.any(String),
+      panel: "history",
+    });
+    expect(visiblePanels(wrapped)).toEqual(["status", "branches", "history"]);
+    expect(validateTree(wrapped)).toEqual([]);
+  });
+
+  it("mints fresh node ids and clamps the ratio", () => {
+    const wrapped = wrapPanelRight(SIMPLE, "history", 5) as SplitNode;
+    expect(wrapped.ratio).toBe(RATIO_MAX);
+    expect(nodeById(wrapped, "s1")).toBe(SIMPLE);
+    const ids = nodeIds(wrapped);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+});
+
 // -- defaults + presets ---------------------------------------------------------
 
 describe("default layout + presets", () => {
-  it("default layout mirrors the pre-M4 RepoView", () => {
+  it("default layout is the VSCode-style editor workspace", () => {
     expect(DEFAULT_LAYOUT.main.kind).toBe("split");
     const root = DEFAULT_LAYOUT.main as SplitNode;
     expect(root.a.kind).toBe("tabs");
@@ -401,7 +452,13 @@ describe("default layout + presets", () => {
       "terminal",
     ]);
     expect((root.a as TabsNode).active).toBe(0);
-    expect(root.b).toEqual({ kind: "leaf", id: "leaf-history", panel: "history" });
+
+    // Center editor + right history sidebar.
+    const right = root.b as SplitNode;
+    expect(right.kind).toBe("split");
+    expect(right.a).toEqual({ kind: "leaf", id: "leaf-editor", panel: "diff" });
+    expect(right.b).toEqual({ kind: "leaf", id: "leaf-history", panel: "history" });
+
     expect(DEFAULT_LAYOUT.diffRatio).toBe(0.4);
     expect(DEFAULT_LAYOUT.autoHideCommitBar).toBe(false);
     expect(validateLayout(DEFAULT_LAYOUT)).toEqual([]);
@@ -422,18 +479,31 @@ describe("default layout + presets", () => {
   it("preset shapes match their names", () => {
     const byId = (id: string) => DEFAULT_PRESETS.find((p) => p.id === id)!;
 
-    // History Focus: history wide, left collapsed to status only.
+    // History Focus: editor + history wide, left collapsed to status only.
     const hf = byId("history-focus");
-    expect(visiblePanels(hf.tree)).toEqual(["status", "history"]);
+    expect(visiblePanels(hf.tree)).toEqual(["status", "diff", "history"]);
     expect((hf.tree as SplitNode).ratio).toBe(RATIO_MIN);
 
-    // Zen: history only + auto-hiding commit bar.
+    // Zen: editor only + auto-hiding (sidebar) commit box flag.
     const zen = byId("zen");
-    expect(visiblePanels(zen.tree)).toEqual(["history"]);
+    expect(visiblePanels(zen.tree)).toEqual(["diff"]);
     expect(zen.autoHideCommitBar).toBe(true);
 
-    // Review: diff pane at 60%.
+    // Review: diff pane at 60%, full three-column shape.
     const review = byId("review");
+    expect(visiblePanels(review.tree)).toEqual([
+      "status",
+      "branches",
+      "remotes",
+      "stashes",
+      "worktrees",
+      "reflog",
+      "undo",
+      "stats",
+      "terminal",
+      "diff",
+      "history",
+    ]);
     expect(review.diffRatio).toBe(0.6);
   });
 

@@ -6,6 +6,10 @@
    * and a right-click context menu per tab ("Move to right group" /
    * "New group to the right" / "Hide").
    *
+   * When `hideTabs` is set (the activity-bar-controlled primary sidebar),
+   * the horizontal strip is replaced by a compact view title + actions
+   * button; switching happens through `ActivityBar.svelte` instead.
+   *
    * Keep-alive mounting: every panel, once activated, stays mounted —
    * inactive bodies are hidden (`display: none` hosts), not unmounted —
    * so view state (history selection + open detail, scroll positions,
@@ -32,6 +36,7 @@
     node,
     renderPanel,
     hiddenPanels,
+    hideTabs = false,
     canMoveRight,
     onActivate,
     onAdd,
@@ -42,6 +47,8 @@
     renderPanel: (id: PanelId) => Snippet;
     /** Panels currently not in the tree (candidates for "+ Add panel"). */
     hiddenPanels: PanelId[];
+    /** Replace the tab strip with a compact title row (activity-bar group). */
+    hideTabs?: boolean;
     /** Whether the holder group has a group to its right. */
     canMoveRight: boolean;
     onActivate: (tabsId: string, index: number) => void;
@@ -161,27 +168,9 @@
 </script>
 
 <div class="tabgroup" bind:this={rootEl}>
-  <div
-    class="panel-tabs"
-    role="tablist"
-    aria-label="Panels"
-    tabindex="-1"
-    onkeydown={onTablistKeydown}
-    oncontextmenu={(e) => e.preventDefault()}
-  >
-    {#each node.tabs as panel, index (panel)}
-      <button
-        data-tab-index={index}
-        class="panel-tab"
-        type="button"
-        role="tab"
-        aria-selected={index === activeIndex}
-        aria-controls={`tabpanel-${node.id}`}
-        id={`tab-${node.id}-${panel}`}
-        tabindex={index === activeIndex ? 0 : -1}
-        onclick={() => onActivate(node.id, index)}
-        oncontextmenu={(e) => openContext(e, panel)}
-      >
+  {#if hideTabs}
+    {#if activePanel}
+      <div class="panel-head">
         <svg
           class="tab-icon"
           viewBox="0 0 24 24"
@@ -192,32 +181,82 @@
           stroke-linejoin="round"
           aria-hidden="true"
         >
-          <path d={PANEL_META[panel]?.icon ?? ""} />
+          <path d={PANEL_META[activePanel]?.icon ?? ""} />
         </svg>
-        {panelLabel(panel)}
-      </button>
-    {/each}
-
-    {#if hiddenPanels.length > 0}
-      <button
-        class="panel-add"
-        type="button"
-        aria-label="Add panel"
-        aria-haspopup="menu"
-        aria-expanded={menu?.kind === "add"}
-        title="Add panel"
-        onclick={openAdd}
-      >
-        +
-      </button>
+        <span class="panel-title">{panelLabel(activePanel)}</span>
+        <button
+          class="panel-menu"
+          type="button"
+          aria-label="Panel actions"
+          aria-haspopup="menu"
+          aria-expanded={menu?.kind === "context"}
+          title="Panel actions"
+          onclick={(e) => openContext(e, activePanel)}
+        >
+          ⋯
+        </button>
+      </div>
     {/if}
-  </div>
+  {:else}
+    <div
+      class="panel-tabs"
+      role="tablist"
+      aria-label="Panels"
+      tabindex="-1"
+      onkeydown={onTablistKeydown}
+      oncontextmenu={(e) => e.preventDefault()}
+    >
+      {#each node.tabs as panel, index (panel)}
+        <button
+          data-tab-index={index}
+          class="panel-tab"
+          type="button"
+          role="tab"
+          aria-selected={index === activeIndex}
+          aria-controls={`tabpanel-${node.id}`}
+          id={`tab-${node.id}-${panel}`}
+          tabindex={index === activeIndex ? 0 : -1}
+          onclick={() => onActivate(node.id, index)}
+          oncontextmenu={(e) => openContext(e, panel)}
+        >
+          <svg
+            class="tab-icon"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            aria-hidden="true"
+          >
+            <path d={PANEL_META[panel]?.icon ?? ""} />
+          </svg>
+          {panelLabel(panel)}
+        </button>
+      {/each}
+
+      {#if hiddenPanels.length > 0}
+        <button
+          class="panel-add"
+          type="button"
+          aria-label="Add panel"
+          aria-haspopup="menu"
+          aria-expanded={menu?.kind === "add"}
+          title="Add panel"
+          onclick={openAdd}
+        >
+          +
+        </button>
+      {/if}
+    </div>
+  {/if}
 
   <div
     class="panel-body"
     id={`tabpanel-${node.id}`}
     role="tabpanel"
-    aria-labelledby={activePanel ? `tab-${node.id}-${activePanel}` : undefined}
+    aria-label={hideTabs && activePanel ? panelLabel(activePanel) : undefined}
+    aria-labelledby={!hideTabs && activePanel ? `tab-${node.id}-${activePanel}` : undefined}
   >
     <!-- Keep-alive hosts: one per visited panel; inactive ones are hidden,
          not unmounted (see the script's keep-alive note). -->
@@ -299,17 +338,85 @@
     min-height: 0;
   }
 
+  /* Single scrollable strip: in the narrow source-control sidebar a wrapping
+     list of 9 tabs would eat most of the panel height. */
   .panel-tabs {
     flex: none;
     display: flex;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
     gap: 0.125rem;
     padding: 0.25rem 0.5rem 0;
     border-bottom: 1px solid var(--m3-outline-variant, var(--m3-primary));
     background: var(--m3-surface-container, var(--m3-surface));
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  /* Activity-controlled group: compact VSCode-style view title instead of
+   * the horizontal tab strip (the activity bar owns switching). */
+  .panel-head {
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.3rem 0.4rem 0.3rem 0.6rem;
+    border-bottom: 1px solid var(--m3-outline-variant, var(--m3-primary));
+    background: var(--m3-surface-container, var(--m3-surface));
+  }
+
+  .panel-head .tab-icon {
+    color: var(--m3-on-surface-variant, var(--m3-on-surface));
+  }
+
+  .panel-title {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 0.6875rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--m3-on-surface-variant, var(--m3-on-surface));
+  }
+
+  .panel-menu {
+    flex: none;
+    width: 1.35rem;
+    height: 1.35rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    border: none;
+    border-radius: var(--m3-shape-extra-small, 4px);
+    background: none;
+    color: var(--m3-on-surface-variant, var(--m3-on-surface));
+    font: inherit;
+    font-size: 0.875rem;
+    line-height: 1;
+    cursor: pointer;
+  }
+
+  .panel-menu:hover,
+  .panel-menu:focus-visible {
+    color: var(--m3-on-surface);
+    background: var(--m3-surface-container-high, var(--m3-surface));
+  }
+
+  .panel-menu:focus-visible {
+    outline: 2px solid var(--m3-primary);
+    outline-offset: -2px;
+  }
+
+  .panel-tabs::-webkit-scrollbar {
+    display: none;
   }
 
   .panel-tab {
+    flex: none;
+    white-space: nowrap;
     display: inline-flex;
     align-items: center;
     gap: 0.25rem;

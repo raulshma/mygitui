@@ -6,13 +6,16 @@
  * - `mygitui.layouts` — user-created presets (built-in DEFAULT_PRESETS live
  *   in code and always win id collisions, so upgrades can reshape them).
  * - `mygitui.layouts.overlay.<repoRoot>` — per-repo overlay:
- *   `{ presetId?, treeOverride?, ratios?, activeTabs?, diffRatio? }`.
+ *   `{ presetId?, treeOverride?, ratios?, activeTabs?, diffRatio?,
+ *   leftCollapsed?, rightCollapsed? }`.
  *
  * Active layout resolution: overlay.treeOverride > preset(+ratios/
  * activeTabs/diffRatio overlays) > the "default" preset > DEFAULT_LAYOUT.
  * Splitter drags only write `ratios`/`diffRatio` while the repo follows a
  * preset; any structural change (move/hide/add) snapshots the resolved tree
  * into `treeOverride`, detaching the repo from the preset until reset.
+ * Sidebar collapse is independent of the tree: `leftCollapsed`/
+ * `rightCollapsed` hide a pane with CSS while keeping its panels mounted.
  *
  * Lives in a `.svelte.ts` module because `$state` only compiles there.
  * Writes are persisted on a 150 ms debounce (per storage key); storage is
@@ -26,6 +29,7 @@ import {
   RATIO_MIN,
   applyRatios,
   cloneTree,
+  findPanelNode,
   freshId,
   insertPanel,
   movePanel,
@@ -37,6 +41,7 @@ import {
   setRatio as modelSetRatio,
   validateTree,
   visiblePanels,
+  wrapPanelRight,
   type LayoutNode,
   type LayoutPreset,
   type MoveTarget,
@@ -79,6 +84,10 @@ export interface RepoOverlay {
   activeTabs?: Record<string, number>;
   /** Diff pane fraction override. */
   diffRatio?: number;
+  /** Primary (activity-controlled) sidebar collapsed to its icon rail. */
+  leftCollapsed?: boolean;
+  /** Secondary history sidebar collapsed to its right-edge rail. */
+  rightCollapsed?: boolean;
 }
 
 /** The resolved layout a workspace renders. */
@@ -93,6 +102,10 @@ export interface ResolvedLayout {
   overridden: boolean;
   /** True when a per-repo overlay exists at all. */
   hasOverlay: boolean;
+  /** Primary sidebar hidden behind the activity rail. */
+  leftCollapsed: boolean;
+  /** History sidebar hidden behind the right-edge rail. */
+  rightCollapsed: boolean;
 }
 
 /** Parses a persisted overlay, dropping malformed fields. */
@@ -129,6 +142,8 @@ export function parseOverlay(raw: string | null): RepoOverlay {
   if (typeof v.diffRatio === "number" && Number.isFinite(v.diffRatio)) {
     overlay.diffRatio = v.diffRatio;
   }
+  if (typeof v.leftCollapsed === "boolean") overlay.leftCollapsed = v.leftCollapsed;
+  if (typeof v.rightCollapsed === "boolean") overlay.rightCollapsed = v.rightCollapsed;
   return overlay;
 }
 
@@ -355,6 +370,8 @@ export class LayoutStore {
         },
         overridden: true,
         hasOverlay: true,
+        leftCollapsed: overlay.leftCollapsed ?? false,
+        rightCollapsed: overlay.rightCollapsed ?? false,
       };
     }
 
@@ -375,6 +392,8 @@ export class LayoutStore {
       },
       overridden: false,
       hasOverlay: Object.keys(overlay).length > 0,
+      leftCollapsed: overlay.leftCollapsed ?? false,
+      rightCollapsed: overlay.rightCollapsed ?? false,
     };
   }
 
@@ -405,8 +424,8 @@ export class LayoutStore {
   /**
    * Splitter drag: while following a preset only the `ratios` map records
    * the drag (the preset stays authoritative); with an override the tree is
-   * updated in place. Also accepts `diff` as the split id to resize the
-   * diff pane.
+   * updated in place. The legacy `diff` pseudo-split still writes the old
+   * `diffRatio` field (persisted overlays keep parsing; nothing renders it).
    */
   setRatio(repoRoot: string, splitId: string, ratio: number): void {
     const overlay = this.#ensureOverlay(repoRoot);
@@ -455,6 +474,53 @@ export class LayoutStore {
       // Never empty the workspace: keep at least one panel.
       if (visiblePanels(tree).length <= 1) return null;
       return removePanel(tree, panel);
+    });
+  }
+
+  /**
+   * Re-opens a collapsible sidebar panel on the right edge of the workspace
+   * (a no-op when it is already visible). VSCode-style secondary sidebar:
+   * the rest of the tree keeps its arrangement and the panel gets a fresh
+   * right column.
+   */
+  showRightPanel(repoRoot: string, panel: PanelId, ratio = 0.68): void {
+    this.updateTree(repoRoot, (tree) => {
+      if (findPanelNode(tree, panel)) return null;
+      return wrapPanelRight(tree, panel, ratio);
+    });
+  }
+
+  /**
+   * Collapses/expands a sidebar without touching the tree: the panels stay
+   * mounted and the split panes are hidden by CSS, so state (commit drafts,
+   * history selection/scroll) survives the round-trip. Saved in the same
+   * per-repo overlay as the layout.
+   */
+  setSidebarCollapsed(
+    repoRoot: string,
+    side: "left" | "right",
+    collapsed: boolean,
+  ): void {
+    const overlay = this.#ensureOverlay(repoRoot);
+    const key = side === "left" ? "leftCollapsed" : "rightCollapsed";
+    if ((overlay[key] ?? false) === collapsed) return;
+    this.#setOverlay(repoRoot, { ...overlay, [key]: collapsed });
+  }
+
+  /**
+   * Makes sure the workspace's main editor panel is present. Existing repos
+   * whose persisted layout predates the editor pane get the panel inserted
+   * left of history (the desired diff | history arrangement); trees without
+   * history get it as a new right column.
+   */
+  showMainPanel(repoRoot: string, panel: PanelId = "diff"): void {
+    this.updateTree(repoRoot, (tree) => {
+      if (findPanelNode(tree, panel)) return null;
+      const history = findPanelNode(tree, "history");
+      if (history) {
+        return insertPanel(tree, panel, { kind: "before", nodeId: history.id });
+      }
+      return wrapPanelRight(tree, panel, 0.7);
     });
   }
 

@@ -5,37 +5,45 @@
  * tree for the "main" area:
  *
  * ```
- * ┌──────────────────────────────────────────────┐
- * │ repo header (fixed)                          │
- * ├───────────────┬──────────────────────────────┤
- * │ main = LayoutNode tree (SplitContainer)      │
- * │  ┌──────────┬─────────────────────────────┐  │
- * │  │ tabs:    │ history                     │  │
- * │  │ status   │  (leaf)                     │  │
- * │  │ branches │                             │  │
- * │  │ …        │                             │  │
- * │  └──────────┴─────────────────────────────┘  │
- * ├──────────────────────────────────────────────┤
- * │ CommitBar (fixed; Zen auto-hides it)         │
- * ├──────────────────────────────────────────────┤
- * │ diff pane (fixed bottom; collapse + popout)  │
- * └──────────────────────────────────────────────┘
+ * ┌───────────────────────────────────────────────────────────┐
+ * │ repo header (fixed)                                       │
+ * ├────┬──────────────┬───────────────────────┬───────────────┤
+ * │ A  │ primary      │ diff / commit editor  │ history       │
+ * │ c  │ sidebar      │  (leaf)               │  (leaf,       │
+ * │ t  │ (status,     │                       │  collapsible  │
+ * │ i  │ branches, …) │                       │  to a rail)   │
+ * │ v  │              │                       │               │
+ * ├────┴──────────────┴───────────────────────┴───────────────┤
+ * │ activity rail (left) and auto-hide tab (right edge)       │
+ * └───────────────────────────────────────────────────────────┘
  * ```
+ *
+ * The commit box lives at the top of the status (changes) panel. The
+ * VSCode-style activity bar stays visible and switches the primary-sidebar
+ * panel. Collapsing either sidebar does not remove panels from the tree:
+ * the pane is hidden with CSS (`collapsedIds`), its panels stay mounted
+ * (drafts, selections, scroll survive) and the remaining panes grow into the
+ * freed width. The right sidebar collapses to a vertical History rail;
+ * the primary sidebar collapses to the activity bar itself.
+ *
+ * Panels are removed from the tree only when the user explicitly hides one
+ * ("Hide" in a tab/panel menu); `showRightPanel` re-adds history for layouts
+ * that predate the secondary sidebar.
  *
  * ## PanelId registry
  *
- * Every placeable panel is an id in `layoutModel.ts`'s `PanelId` union —
- * `status | branches | remotes | stashes | worktrees | reflog | undo |
- * history | diff` — with labels/icons in `PANEL_META`. The id → component
+ * Every placeable panel is an id in `layoutModel.ts`'s `PanelId` union
+ * (`status`, `branches`, `remotes`, `stashes`, `worktrees`, `health`,
+ * `submodules`, `reflog`, `undo`, `history`, `diff`, `terminal`, `forge`,
+ * `actions`, `stats`) with labels/icons in `PANEL_META`. The id → component
  * mapping itself lives in `RepoView.svelte` (a `{#snippet}` per panel,
  * passed to `SplitContainer` as a `renderPanel` factory), because snippets
  * close over per-repo props and can only be declared in a component.
  * Adding a panel = add the id + `PANEL_META` entry + one snippet + (for
  * addable panels) membership in `TREE_PANELS`.
  *
- * `diff` is the registry's one non-tree panel: it stays the fixed bottom
- * pane (collapse + popout) but shares the union so popout queries and
- * metadata stay uniform.
+ * `diff` is the workspace's main editor pane (working-copy file diff,
+ * commit detail, or compare result); it is a normal tree panel.
  *
  * ## Module map
  *
@@ -51,17 +59,22 @@
  * - `splitPrefs.ts` — persisted ratios for panel-internal splitters
  *   (`SplitPane`: history list ↔ detail, detail meta ↔ diff).
  * - `../components/layout/SplitContainer.svelte` — recursive renderer for
- *   the tree (draggable + keyboard-accessible dividers).
+ *   the tree (draggable + keyboard-accessible dividers, collapsed-pane
+ *   hiding via `collapsedIds`).
+ * - `../components/layout/ActivityBar.svelte` — VSCode-style icon rail that
+ *   switches the primary sidebar and toggles it without unmounting.
  * - `../components/layout/SplitPane.svelte` — generic two-pane splitter for
  *   panel-internal resize handles (same divider UX, local ratio state).
  * - `../components/layout/TabGroup.svelte` — tab-group leaf renderer
- *   (tablist + tab context menu + "+ Add panel").
+ *   (tablist + tab context menu + "+ Add panel"; the activity-controlled
+ *   group shows a compact title row instead of a tab strip).
  *
  * ## Persistence keys
  *
  * - `mygitui.layouts` — user presets (`LayoutPreset[]`).
  * - `mygitui.layouts.overlay.<repoRoot>` — per-repo overlay
- *   (`{ presetId?, treeOverride?, ratios?, activeTabs?, diffRatio? }`).
+ *   (`{ presetId?, treeOverride?, ratios?, activeTabs?, diffRatio?,
+ *   leftCollapsed?, rightCollapsed? }`).
  * - `mygitui.split.<name>` — panel-internal splitter ratios (global prefs;
  *   see `splitPrefs.ts`).
  *

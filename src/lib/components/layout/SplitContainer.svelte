@@ -14,6 +14,12 @@
    *
    * All state changes flow out through `onRatio` (RepoView applies them to
    * the layout store); this component holds only transient drag state.
+   *
+   * Collapsed sidebars: ids in `collapsedIds` are removed from the flex
+   * layout (`display: none`) while their subtree stays mounted, so panel
+   * state survives and the sibling pane automatically fills the freed
+   * space. `hideTabsFor` replaces one group's tab strip with a compact title
+   * row (the activity-bar-controlled primary sidebar).
    */
   import type { Snippet } from "svelte";
   import {
@@ -35,6 +41,8 @@
     node,
     renderPanel,
     hiddenPanels = [],
+    collapsedIds = [],
+    hideTabsFor = null,
     canMoveRightFor,
     onRatio,
     onActivateTab,
@@ -47,6 +55,14 @@
     renderPanel: (id: PanelId) => Snippet;
     /** Panels not in the tree (for TabGroup's "+ Add panel" menu). */
     hiddenPanels?: PanelId[];
+    /**
+     * Node ids whose pane is currently collapsed. The subtree stays mounted
+     * (and keeps its state) but is removed from layout with `display: none`;
+     * its sibling then grows to fill the freed space.
+     */
+    collapsedIds?: string[];
+    /** Tab group whose tab strip is replaced by the activity bar. */
+    hideTabsFor?: string | null;
     /** Whether the tab group at `tabsId` has a group to its right. */
     canMoveRightFor?: (tabsId: string) => boolean;
     /** Splitter moved (already clamped by callers via the store). */
@@ -113,12 +129,19 @@
 </script>
 
 {#if node.kind === "split"}
-  <div class="split">
-    <div class="pane" style:flex={`0 0 ${node.ratio * 100}%`}>
+  {@const hideA = collapsedIds.includes(node.a.id)}
+  {@const hideB = collapsedIds.includes(node.b.id)}
+  <div class="split" class:hide-a={hideA} class:hide-b={hideB}>
+    <div
+      class="pane pane-a"
+      style:flex={hideB ? "1 1 0%" : `0 0 ${node.ratio * 100}%`}
+    >
       <SplitContainer
         node={node.a}
         {renderPanel}
         {hiddenPanels}
+        {collapsedIds}
+        {hideTabsFor}
         {canMoveRightFor}
         {onRatio}
         {onActivateTab}
@@ -146,11 +169,13 @@
       onpointercancel={dividerUp}
       onkeydown={(e) => dividerKey(e, node)}
     ></div>
-    <div class="pane grow">
+    <div class="pane pane-b grow">
       <SplitContainer
         node={node.b}
         {renderPanel}
         {hiddenPanels}
+        {collapsedIds}
+        {hideTabsFor}
         {canMoveRightFor}
         {onRatio}
         {onActivateTab}
@@ -164,6 +189,7 @@
     {node}
     {renderPanel}
     {hiddenPanels}
+    hideTabs={node.id === hideTabsFor}
     canMoveRight={groupCanMoveRight}
     onActivate={onActivateTab}
     onAdd={onAddPanel}
@@ -194,6 +220,15 @@
 
   .pane.grow {
     flex: 1 1 0%;
+  }
+
+  /* Collapsed sidebars keep their DOM (state) but leave the flex layout; the
+   * remaining pane automatically takes the freed width. */
+  .split.hide-a > .pane-a,
+  .split.hide-b > .pane-b,
+  .split.hide-a > .divider,
+  .split.hide-b > .divider {
+    display: none;
   }
 
   .pane > :global(*) {

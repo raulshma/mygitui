@@ -8,3 +8,6 @@ src-tauri/target
 # Playwright (M12 e2e smoke)
 test-results
 playwright-report
+
+# Vitest JSON reporter output (tooling)
+.vitest
