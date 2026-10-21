@@ -35,6 +35,8 @@
     startActionsEvents,
     type ActionDef,
   } from "$lib/stores/actions.svelte";
+  import { projectsStore } from "$lib/stores/projects.svelte";
+  import type { ProjectInfo, ProjectScript } from "$lib/ipc/types";
 
   let { repoId }: { repoId: string } = $props();
 
@@ -44,6 +46,17 @@
     void repoId;
     startActionsEvents();
   });
+
+  // Detected projects/scripts: cached per repo; re-scans only on refresh or
+  // first mount of a repo.
+  $effect(() => {
+    void repoId;
+    void projectsStore.ensure(repoId);
+  });
+
+  const projects = $derived(projectsStore.projectsFor(repoId));
+  const projectsLoading = $derived(projectsStore.loadingFor(repoId));
+  const projectsError = $derived(projectsStore.errorFor(repoId));
 
   // M12: global shortcut runner — ONE window keydown listener matching any
   // stored shortcut of this repo's actions (global + repo scopes) and
@@ -101,6 +114,72 @@
 
   function removeDef(id: string): void {
     actionsStore.removeDef(id);
+  }
+
+  // -- detected projects/scripts ---------------------------------------------
+
+  const PROJECT_KINDS: Record<string, string> = {
+    node: "JS/TS",
+    rust: "Rust",
+    python: "Python",
+    dotnet: ".NET",
+    android: "Android",
+    go: "Go",
+    ruby: "Ruby",
+    php: "PHP",
+    make: "Make",
+  };
+
+  const SCRIPT_KINDS: Record<string, string> = {
+    run: "run",
+    watch: "watch",
+    test: "test",
+    build: "build",
+    lint: "lint",
+    install: "install",
+  };
+
+  function projectKindLabel(kind: string): string {
+    return PROJECT_KINDS[kind] ?? kind;
+  }
+
+  function scriptKindLabel(kind: string): string {
+    return SCRIPT_KINDS[kind] ?? kind;
+  }
+
+  /** Run-list name for a detected script (also used for the running state). */
+  function scriptRunName(project: ProjectInfo, script: ProjectScript): string {
+    const scope = project.path === "." ? "" : ` (${project.path})`;
+    return `${project.name}${scope}: ${script.label}`;
+  }
+
+  /** Synthetic, non-persisted def fed to the existing action runner. */
+  function scriptDef(project: ProjectInfo, script: ProjectScript): ActionDef {
+    return {
+      id: `project:${project.kind}:${project.path}:${script.id}`,
+      name: scriptRunName(project, script),
+      command: script.command,
+      scope: "repo",
+      repoId,
+    };
+  }
+
+  function runScript(project: ProjectInfo, script: ProjectScript): void {
+    void actionsStore
+      .run(repoId, scriptDef(project, script))
+      .then((runId) => {
+        // Auto-open the output so first-time users see what the script does.
+        if (runId) expandedRunId = runId;
+      });
+  }
+
+  async function copyCommand(command: string): Promise<void> {
+    try {
+      await navigator.clipboard.writeText(command);
+      toast("Command copied to the clipboard", { kind: "success" });
+    } catch {
+      toast("Clipboard is not available", { kind: "error" });
+    }
   }
 
   // -- M12: shortcut capture -------------------------------------------------
@@ -173,14 +252,99 @@
   });
 </script>
 
-<section class="actions-panel" aria-label="Custom actions">
+<section class="actions-panel" aria-label="Detected projects and custom actions">
   <header class="section-head">
-    <h3 class="section-title">Actions</h3>
+    <h3 class="section-title">Detected projects</h3>
+    <span class="section-hint">Run or watch from the repo root</span>
+    <button
+      class="btn ghost"
+      type="button"
+      disabled={projectsLoading}
+      onclick={() => void projectsStore.refresh(repoId)}
+    >
+      {projectsLoading ? "Scanning…" : "Refresh"}
+    </button>
+  </header>
+
+  {#if projectsError}
+    <p class="empty error" role="alert">
+      Project detection failed: {projectsError}
+    </p>
+  {:else if projectsLoading && projects.length === 0}
+    <p class="empty">Detecting projects…</p>
+  {:else if projects.length === 0}
+    <p class="empty">
+      No project manifests found. Detected: Node, Rust, Python, .NET, Android,
+      Go, Ruby, PHP, and Make.
+    </p>
+  {:else}
+    <ul class="project-list" role="list">
+      {#each projects as project (project.kind + ":" + project.path)}
+        <li class="project-card">
+          <div class="project-head">
+            <span class="project-kind">{projectKindLabel(project.kind)}</span>
+            <span class="project-name" title={project.name}>{project.name}</span>
+            {#if project.path !== "."}
+              <span class="project-path" title={project.path}>{project.path}</span>
+            {/if}
+            <span
+              class="project-from"
+              title={`Detected from ${project.detected_from.join(", ")}`}
+            >
+              {project.detected_from.join(", ")}
+            </span>
+          </div>
+          {#if project.scripts.length === 0}
+            <p class="empty">No scripts detected.</p>
+          {:else}
+            <div class="script-grid">
+              {#each project.scripts as script (`${script.id}:${script.command}`)}
+                {@const runName = scriptRunName(project, script)}
+                {@const running = runningNames.has(runName)}
+                <div class="script">
+                  <button
+                    class="script-run"
+                    type="button"
+                    disabled={running}
+                    title={`${script.command}\n\n${script.watch ? "Long-running watcher" : "Runs to completion"}`}
+                    onclick={() => runScript(project, script)}
+                  >
+                    <span class="script-label">{script.label}</span>
+                    <span class="script-kind" class:watch={script.watch}>
+                      {script.watch ? "watch" : scriptKindLabel(script.kind)}
+                    </span>
+                    {#if running}
+                      <span class="script-state">running…</span>
+                    {/if}
+                  </button>
+                  <span class="script-command-row">
+                    <code class="script-command" title={script.command}>{script.command}</code>
+                    <button
+                      class="script-copy"
+                      type="button"
+                      aria-label={`Copy command for ${script.label}`}
+                      title="Copy command"
+                      onclick={() => void copyCommand(script.command)}
+                    >
+                      ⧉
+                    </button>
+                  </span>
+                </div>
+              {/each}
+            </div>
+          {/if}
+        </li>
+      {/each}
+    </ul>
+  {/if}
+
+  <header class="section-head actions-head">
+    <h3 class="section-title">Custom actions</h3>
     <span class="section-hint">Shell commands run in the repository root</span>
   </header>
 
   {#if defs.length === 0}
-    <p class="empty">No actions configured — add one below.</p>
+    <p class="empty">No custom actions yet — add one below.</p>
   {:else}
     <ul class="def-list" role="list">
       {#each defs as def (def.id)}
@@ -341,6 +505,7 @@
     display: flex;
     flex-direction: column;
     gap: 0.6rem;
+    padding: 0.5rem 0.75rem;
     font-size: 0.8125rem;
     color: var(--m3-on-surface);
   }
@@ -349,6 +514,15 @@
     display: flex;
     align-items: baseline;
     gap: 0.5rem;
+    flex-wrap: wrap;
+  }
+
+  .section-head .btn {
+    margin-left: auto;
+  }
+
+  .actions-head {
+    margin-top: 0.4rem;
   }
 
   .section-title {
@@ -370,6 +544,188 @@
     margin: 0;
     color: var(--m3-on-surface-variant);
     font-size: 0.75rem;
+  }
+
+  .empty.error {
+    color: var(--m3-error);
+  }
+
+  /* detected projects/scripts */
+  .project-list {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 0.45rem;
+  }
+
+  .project-card {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+    padding: 0.45rem 0.55rem;
+    border: 1px solid var(--m3-outline-variant);
+    border-radius: 8px;
+    background: var(--m3-surface-container-low, transparent);
+  }
+
+  .project-head {
+    display: flex;
+    align-items: baseline;
+    gap: 0.4rem;
+    min-width: 0;
+    flex-wrap: wrap;
+  }
+
+  .project-kind {
+    flex: none;
+    font-size: 0.625rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--m3-primary);
+  }
+
+  .project-name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 0.8rem;
+    font-weight: 600;
+  }
+
+  .project-path {
+    flex: none;
+    font-family: ui-monospace, Consolas, monospace;
+    font-size: 0.68rem;
+    color: var(--m3-on-surface-variant);
+  }
+
+  .project-from {
+    margin-left: auto;
+    max-width: 55%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 0.65rem;
+    color: var(--m3-on-surface-variant);
+    opacity: 0.75;
+  }
+
+  .script-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(13rem, 1fr));
+    gap: 0.35rem;
+  }
+
+  .script {
+    min-width: 0;
+    border: 1px solid var(--m3-outline-variant);
+    border-radius: 6px;
+    overflow: hidden;
+    background: var(--m3-surface-container-lowest, transparent);
+  }
+
+  .script-run {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    border: none;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    padding: 0.3rem 0.4rem;
+    cursor: pointer;
+    text-align: left;
+  }
+
+  .script-run:hover:not(:disabled) {
+    background: var(--m3-surface-container-high);
+  }
+
+  .script-run:focus-visible {
+    outline: 2px solid var(--m3-primary);
+    outline-offset: -2px;
+  }
+
+  .script-run:disabled {
+    cursor: progress;
+    opacity: 0.75;
+  }
+
+  .script-label {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 0.75rem;
+    font-weight: 500;
+  }
+
+  .script-kind {
+    flex: none;
+    border-radius: 9999px;
+    padding: 0.04rem 0.35rem;
+    background: var(--m3-surface-container-high);
+    color: var(--m3-on-surface-variant);
+    font-size: 0.625rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+  }
+
+  .script-kind.watch {
+    background: var(--m3-secondary-container);
+    color: var(--m3-on-secondary-container);
+  }
+
+  .script-state {
+    flex: none;
+    font-size: 0.62rem;
+    color: var(--m3-primary);
+  }
+
+  .script-command-row {
+    display: flex;
+    align-items: center;
+    gap: 0.2rem;
+    min-width: 0;
+    padding: 0.15rem 0.2rem 0.15rem 0.4rem;
+    border-top: 1px solid var(--m3-outline-variant);
+  }
+
+  .script-command {
+    flex: 1 1 auto;
+    min-width: 0;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    font-family: ui-monospace, Consolas, monospace;
+    font-size: 0.65rem;
+    line-height: 1.35;
+    color: var(--m3-on-surface-variant);
+  }
+
+  .script-copy {
+    flex: none;
+    border: none;
+    background: none;
+    color: var(--m3-on-surface-variant);
+    font-size: 0.8rem;
+    line-height: 1;
+    padding: 0.1rem 0.2rem;
+    border-radius: 4px;
+    cursor: pointer;
+    opacity: 0.55;
+  }
+
+  .script-copy:hover,
+  .script-copy:focus-visible {
+    opacity: 1;
+    background: var(--m3-surface-container-high);
   }
 
   .def-list,
@@ -479,6 +835,14 @@
     border: 1px solid var(--m3-outline-variant);
     color: var(--m3-on-surface-variant);
     padding: 0.2rem 0.5rem;
+  }
+
+  .btn.ghost {
+    background: none;
+    border: 1px solid var(--m3-outline-variant);
+    color: var(--m3-on-surface-variant);
+    padding: 0.18rem 0.6rem;
+    font-size: 0.7rem;
   }
 
   .btn.cancel {

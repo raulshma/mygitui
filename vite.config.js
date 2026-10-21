@@ -28,6 +28,24 @@ export default defineConfig({
   // Serving them raw keeps the dev server graph stable; they have no deps.
   optimizeDeps: {
     exclude: ["@ktibow/iconset-material-symbols"],
+    // Lazily imported deps are discovered only when their panel/AI provider
+    // first mounts. Without pre-bundling, Vite re-optimizes mid-session and
+    // forces a full page reload — the boot splash flashes over the app when
+    // opening Terminal, GitHub, Actions, or AI for the first time. Listing
+    // them here keeps the dev graph stable and those opens instant.
+    include: [
+      "@opencode-ai/sdk/client",
+      "@opencode/client",
+      "@openrouter/ai-sdk-provider",
+      "@tauri-apps/plugin-deep-link",
+      "@tauri-apps/plugin-dialog",
+      "@tauri-apps/plugin-opener",
+      "@xterm/addon-fit",
+      "@xterm/addon-web-links",
+      "@xterm/xterm",
+      "ai",
+      "shiki",
+    ],
   },
 
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`

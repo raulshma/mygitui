@@ -68,6 +68,7 @@ import type {
   PreviewInfo,
   PrCreated,
   PrInfo,
+  ProjectInfo,
   PtyExitEvent,
   PtyOutputEvent,
   PullOptions,
@@ -90,6 +91,10 @@ import type {
   StashInfo,
   SubmoduleInfo,
   TagInfo,
+  WorkflowInfo,
+  WorkflowInput,
+  WorkflowRun,
+  WorkflowRunDetail,
   WorktreeInfo,
 } from "./types";
 
@@ -109,9 +114,15 @@ export type {
   GitignoreTemplate,
   PrCreated,
   PrInfo,
+  ProjectInfo,
+  ProjectScript,
   PtyExitEvent,
   PtyOutputEvent,
   RepoChangedEvent,
+  WorkflowInfo,
+  WorkflowInput,
+  WorkflowRun,
+  WorkflowRunDetail,
 } from "./types";
 
 // ---------------------------------------------------------------------------
@@ -1310,14 +1321,235 @@ export function prCreate(
   });
 }
 
-/** Open PRs of the repo (`gh pr list --json … --limit 50`). */
-export function prList(repoId: RepoId): Promise<PrInfo[]> {
-  return call<PrInfo[]>("pr_list", { repo_id: repoId });
+/** PR list state filter (mirrors the backend `normalize_pr_state`). */
+export type PrStateFilter = "open" | "closed" | "merged" | "all";
+
+/** Merge strategies supported by `gh pr merge`. */
+export type PrMergeMethod = "merge" | "squash" | "rebase";
+
+/** Review actions supported by `gh pr review`. */
+export type PrReviewAction = "approve" | "request-changes" | "comment";
+
+/** PRs of the repo (`gh pr list --state <state> --json … --limit 50`). */
+export function prList(
+  repoId: RepoId,
+  state: PrStateFilter = "open",
+): Promise<PrInfo[]> {
+  return call<PrInfo[]>("pr_list", { repo_id: repoId, state_filter: state });
 }
 
 /** CI checks of one PR, states canonicalized to pass/fail/pending/skipping. */
 export function prChecks(repoId: RepoId, number: number): Promise<CheckInfo[]> {
   return call<CheckInfo[]>("pr_checks", { repo_id: repoId, number });
+}
+
+/** Merge a PR, optionally deleting its branch / enabling auto-merge. */
+export function prMerge(
+  repoId: RepoId,
+  number: number,
+  method: PrMergeMethod,
+  deleteBranch: boolean,
+  auto: boolean,
+): Promise<string> {
+  return callForge<string>("pr_merge", {
+    repo_id: repoId,
+    number,
+    method,
+    delete_branch: deleteBranch,
+    auto,
+  });
+}
+
+/** Close a PR, optionally leaving a comment. */
+export function prClose(
+  repoId: RepoId,
+  number: number,
+  comment: string | null = null,
+): Promise<string> {
+  return callForge<string>("pr_close", { repo_id: repoId, number, comment });
+}
+
+/** Reopen a closed PR, optionally leaving a comment. */
+export function prReopen(
+  repoId: RepoId,
+  number: number,
+  comment: string | null = null,
+): Promise<string> {
+  return callForge<string>("pr_reopen", { repo_id: repoId, number, comment });
+}
+
+/** Mark a PR ready for review (`ready = false` converts it to draft). */
+export function prReady(
+  repoId: RepoId,
+  number: number,
+  ready: boolean,
+): Promise<string> {
+  return callForge<string>("pr_ready", { repo_id: repoId, number, ready });
+}
+
+/** Check out a PR's head branch locally (`gh pr checkout`). */
+export function prCheckout(repoId: RepoId, number: number): Promise<string> {
+  return callForge<string>("pr_checkout", { repo_id: repoId, number });
+}
+
+/** Post a comment on a PR. */
+export function prComment(
+  repoId: RepoId,
+  number: number,
+  body: string,
+): Promise<string> {
+  return callForge<string>("pr_comment", { repo_id: repoId, number, body });
+}
+
+/** Submit a PR review (`approve` / `request-changes` / `comment`). */
+export function prReview(
+  repoId: RepoId,
+  number: number,
+  action: PrReviewAction,
+  body: string,
+): Promise<string> {
+  return callForge<string>("pr_review", {
+    repo_id: repoId,
+    number,
+    action,
+    body,
+  });
+}
+
+/** Run-list status filter (`gh run list --status`). */
+export type RunStatusFilter =
+  | ""
+  | "queued"
+  | "completed"
+  | "in_progress"
+  | "requested"
+  | "waiting"
+  | "pending"
+  | "action_required"
+  | "cancelled"
+  | "failure"
+  | "neutral"
+  | "skipped"
+  | "stale"
+  | "startup_failure"
+  | "success"
+  | "timed_out";
+
+/** Optional filters of {@link workflowRuns}. */
+export interface WorkflowRunFilters {
+  /** Max runs to fetch (clamped to 1–100 backend-side; default 30). */
+  limit?: number;
+  /** Head-branch filter (`""` = any branch). */
+  branch?: string;
+  status?: RunStatusFilter;
+  /** Workflow name, file name, or id (`""` = any workflow). */
+  workflow?: string;
+}
+
+/**
+ * Recent GitHub Actions runs, newest first (`gh run list --json …`),
+ * optionally filtered by branch/status/workflow.
+ */
+export function workflowRuns(
+  repoId: RepoId,
+  filters: WorkflowRunFilters = {},
+): Promise<WorkflowRun[]> {
+  return call<WorkflowRun[]>("workflow_runs", {
+    repo_id: repoId,
+    limit: filters.limit ?? 30,
+    branch: filters.branch ?? "",
+    status_filter: filters.status ?? "",
+    workflow: filters.workflow ?? "",
+  });
+}
+
+/** One run with its jobs and steps (`gh run view --json …jobs…`). */
+export function workflowRunDetail(
+  repoId: RepoId,
+  runId: number,
+): Promise<WorkflowRunDetail> {
+  return call<WorkflowRunDetail>("workflow_run_detail", {
+    repo_id: repoId,
+    run_id: runId,
+  });
+}
+
+/**
+ * Logs of a run or one job (`gh run view <id> [--job <id>] --log`).
+ * `failedOnly` requests only failed steps (`--log-failed`).
+ */
+export function workflowRunLogs(
+  repoId: RepoId,
+  runId: number,
+  jobId: number | null = null,
+  failedOnly = false,
+): Promise<string> {
+  return call<string>("workflow_run_logs", {
+    repo_id: repoId,
+    run_id: runId,
+    job_id: jobId,
+    failed_only: failedOnly,
+  });
+}
+
+/** Cancel a queued/running run (`gh run cancel`). */
+export function workflowRunCancel(
+  repoId: RepoId,
+  runId: number,
+): Promise<string> {
+  return callForge<string>("workflow_run_cancel", {
+    repo_id: repoId,
+    run_id: runId,
+  });
+}
+
+/** Rerun a completed run, or only its failed jobs (`--failed`). */
+export function workflowRunRerun(
+  repoId: RepoId,
+  runId: number,
+  failedOnly = false,
+): Promise<string> {
+  return callForge<string>("workflow_run_rerun", {
+    repo_id: repoId,
+    run_id: runId,
+    failed_only: failedOnly,
+  });
+}
+
+/**
+ * Trigger a `workflow_dispatch` run (`gh workflow run <workflow> --ref …`).
+ * `inputs` are raw string fields (`--raw-field key=value`).
+ */
+export function workflowDispatch(
+  repoId: RepoId,
+  workflow: string,
+  gitRef: string,
+  inputs: WorkflowInput[] = [],
+): Promise<string> {
+  return callForge<string>("workflow_dispatch", {
+    repo_id: repoId,
+    workflow,
+    git_ref: gitRef,
+    inputs,
+  });
+}
+
+/** Workflow files of the repo, including disabled ones. */
+export function workflowList(repoId: RepoId): Promise<WorkflowInfo[]> {
+  return call<WorkflowInfo[]>("workflow_list", { repo_id: repoId });
+}
+
+// ---------------------------------------------------------------------------
+// Project/script detection (Rust: src-tauri/src/projects.rs)
+// ---------------------------------------------------------------------------
+
+/**
+ * Detected project types and runnable scripts for one repository. The scan
+ * is bounded to the repo root plus immediate child directories; callers
+ * should cache the result (see `$lib/stores/projects.svelte`).
+ */
+export function projectDetect(repoId: RepoId): Promise<ProjectInfo[]> {
+  return call<ProjectInfo[]>("project_detect", { repo_id: repoId });
 }
 
 // ---------------------------------------------------------------------------

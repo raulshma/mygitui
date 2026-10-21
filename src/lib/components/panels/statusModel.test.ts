@@ -11,9 +11,13 @@ import {
   classifyEntry,
   filterSections,
   kindClass,
+  kindLabel,
   kindLetter,
+  SECTION_LABELS,
   SECTION_ORDER,
   splitPath,
+  submoduleDisplay,
+  submoduleNeedsAttention,
 } from "$lib/components/panels/statusModel";
 
 function entry(
@@ -117,6 +121,89 @@ describe("kindLetter / kindClass", () => {
     expect(kindClass("copied")).toBe("k-renamed");
     expect(kindClass("conflicted")).toBe("k-conflicted");
     expect(kindClass("untracked")).toBe("k-untracked");
+  });
+});
+
+describe("kindLabel", () => {
+  it("maps every kind to a human-readable label", () => {
+    expect(kindLabel("added")).toBe("Added");
+    expect(kindLabel("modified")).toBe("Modified");
+    expect(kindLabel("deleted")).toBe("Deleted");
+    expect(kindLabel("renamed")).toBe("Renamed");
+    expect(kindLabel("copied")).toBe("Copied");
+    expect(kindLabel("untracked")).toBe("Untracked");
+    expect(kindLabel("conflicted")).toBe("Conflicted");
+    expect(kindLabel("unmodified")).toBe("Unmodified");
+  });
+});
+
+describe("SECTION_LABELS", () => {
+  it("uses VSCode source-control wording", () => {
+    expect(SECTION_LABELS).toEqual({
+      conflicted: "Merge Changes",
+      staged: "Staged Changes",
+      unstaged: "Changes",
+      untracked: "Untracked Changes",
+    });
+  });
+});
+
+describe("submodule display helpers", () => {
+  it("prioritizes not-initialized over the engine's broken marker", () => {
+    expect(
+      submoduleDisplay({ initialized: false, status: "broken" }),
+    ).toEqual({
+      tag: "not initialized",
+      detail: "Submodule is not initialized",
+      tone: "danger",
+    });
+  });
+
+  it("shortens git's status wording for dense rows", () => {
+    expect(
+      submoduleDisplay({
+        initialized: true,
+        status: "new commits / modified content / untracked content",
+      }),
+    ).toEqual({
+      tag: "new commits · modified · untracked",
+      detail: "new commits / modified content / untracked content",
+      tone: "dirty",
+    });
+  });
+
+  it("trims trailing spaces from git's status joins", () => {
+    expect(
+      submoduleDisplay({
+        initialized: true,
+        status: "modified content ",
+      }),
+    ).toEqual({
+      tag: "modified",
+      detail: "modified content",
+      tone: "dirty",
+    });
+  });
+
+  it("reports clean and broken modules distinctly", () => {
+    expect(submoduleDisplay({ initialized: true, status: "" })).toEqual({
+      tag: "",
+      detail: "Up to date",
+      tone: "clean",
+    });
+    expect(submoduleDisplay({ initialized: true, status: "broken" })).toEqual({
+      tag: "broken",
+      detail: "Submodule cannot be opened",
+      tone: "danger",
+    });
+  });
+
+  it("flags only modules that need a source-control row", () => {
+    expect(submoduleNeedsAttention({ initialized: true, status: "" })).toBe(false);
+    expect(submoduleNeedsAttention({ initialized: true, status: "new commits" })).toBe(
+      true,
+    );
+    expect(submoduleNeedsAttention({ initialized: false, status: "" })).toBe(true);
   });
 });
 

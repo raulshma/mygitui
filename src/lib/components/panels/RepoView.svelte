@@ -75,6 +75,8 @@
     firstTabsId,
     findPanelNode,
     firstSidebarHolder,
+    leftSiblingOf,
+    moveToLeftGroup,
     moveToRightGroup,
     PANEL_META,
     rightSiblingOf,
@@ -361,6 +363,10 @@
   const activityPanels = TREE_PANELS.filter(
     (panel) => panel !== "diff" && panel !== "history",
   );
+  /** Whether the tab group at `tabsId` has a group to its left. */
+  function canMoveLeftFor(tabsId: string): boolean {
+    return leftSiblingOf(resolved.layout.main, tabsId) !== null;
+  }
   /** Whether the tab group at `tabsId` has a group to its right. */
   function canMoveRightFor(tabsId: string): boolean {
     return rightSiblingOf(resolved.layout.main, tabsId) !== null;
@@ -387,14 +393,23 @@
       layouts.hidePanel(root, panel);
       return;
     }
+    if (action === "new-group-left") {
+      layouts.movePanelTo(root, panel, { kind: "before", nodeId: tabsId });
+      return;
+    }
     if (action === "new-group-right") {
       layouts.movePanelTo(root, panel, { kind: "after", nodeId: tabsId });
       return;
     }
-    // move-right-group: merge into the sibling group right of the holder.
+    // move-left-group / move-right-group: merge into the adjacent sibling
+    // group. Both directions share the same failure handling.
+    const side = action === "move-left-group" ? "left" : "right";
     let failed: string | null = null;
     layouts.updateTree(root, (tree) => {
-      const outcome = moveToRightGroup(tree, panel);
+      const outcome =
+        side === "left"
+          ? moveToLeftGroup(tree, panel)
+          : moveToRightGroup(tree, panel);
       if (!outcome.ok) {
         failed = outcome.reason ?? "failed";
         return null;
@@ -402,9 +417,9 @@
       return outcome.tree;
     });
     if (failed === "sibling-not-a-group") {
-      toast("The area to the right is not a tab group");
+      toast(`The area to the ${side} is not a tab group`);
     } else if (failed !== null) {
-      toast("No group to the right");
+      toast(`No group to the ${side}`);
     }
   }
 
@@ -810,6 +825,7 @@
     <StatusPanel
       {status}
       {repoId}
+      {root}
       onOpenDiff={(e) => void openDiff(e)}
       onAfterMutation={refresh}
       bind:selected
@@ -1029,6 +1045,7 @@
         {hiddenPanels}
         {collapsedIds}
         hideTabsFor={activityGroup?.id ?? null}
+        canMoveLeftFor={canMoveLeftFor}
         canMoveRightFor={canMoveRightFor}
         onRatio={onRatio}
         onActivateTab={onActivateTab}

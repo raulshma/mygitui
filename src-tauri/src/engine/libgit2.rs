@@ -792,7 +792,9 @@ impl GitEngine for Libgit2Engine {
         opts.include_untracked(true)
             .recurse_untracked_dirs(true)
             .renames_head_to_index(true)
-            .exclude_submodules(true);
+            // Gitlinks show up in the working-copy list like VSCode does:
+            // a dirty/uninitialized submodule is a change to the superproject.
+            .exclude_submodules(false);
 
         let statuses = repo.statuses(Some(&mut opts))?;
         let mut entries = Vec::with_capacity(statuses.len());

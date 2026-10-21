@@ -23,6 +23,7 @@ mod opencode;
 mod ops;
 mod popout;
 mod process;
+mod projects;
 #[cfg(test)]
 mod prop_tests;
 mod pty;
@@ -224,6 +225,21 @@ pub fn run() {
             ipc_commands::pr_create,
             ipc_commands::pr_list,
             ipc_commands::pr_checks,
+            ipc_commands::pr_merge,
+            ipc_commands::pr_close,
+            ipc_commands::pr_reopen,
+            ipc_commands::pr_ready,
+            ipc_commands::pr_checkout,
+            ipc_commands::pr_comment,
+            ipc_commands::pr_review,
+            ipc_commands::workflow_runs,
+            ipc_commands::workflow_run_detail,
+            ipc_commands::workflow_run_logs,
+            ipc_commands::workflow_run_cancel,
+            ipc_commands::workflow_run_rerun,
+            ipc_commands::workflow_dispatch,
+            ipc_commands::workflow_list,
+            ipc_commands::project_detect,
             ipc_commands::commit_activity,
             ipc_commands::contributor_stats,
             opencode::opencode_detect,

@@ -208,17 +208,32 @@ All GitHub interaction shells out to the user's `gh` CLI (JSON mode) with the
 repo workdir as cwd — mygitui stores no GitHub tokens; `gh` brings its own
 auth. Processes run argv-array-only (no shell), streams drained concurrently,
 hard timeout with kill on exceed: `--version` 3 s, `auth status` 10 s,
-`pr list` 60 s, `pr checks` 30 s, `pr create` 120 s. Commands run on
-`spawn_blocking` (no op-queue membership — long ops with their own timeouts,
-no event stream). Logic: `src-tauri/src/forge.rs`; tests: `forge_tests.rs`.
+`pr list` / `run list` / `run view` 60 s, `pr checks` 30 s, `run logs` 120 s,
+and PR/workflow mutations 120 s. Commands run on `spawn_blocking` (no
+op-queue membership — long ops with their own timeouts, no event stream).
+Logic: `src-tauri/src/forge.rs`; tests: `forge_tests.rs`.
 
 | Command | Args | Returns | Notes |
 |---|---|---|---|
 | `forge_status` | — | `ForgeStatus` | `gh --version` + `gh auth status` |
 | `forge_context` | `repo_id` | `ForgeContext` | owner/repo from `origin` URL parse + current branch |
 | `pr_create` | `repo_id, base, title, body, draft: bool` | `PrCreated` | `gh pr create --base --title --body-file <tmp> [--draft]`; rejection is structured `ForgeError` |
-| `pr_list` | `repo_id` | `PrInfo[]` | `gh pr list --json number,title,headRefName,baseRefName,state,isDraft,url,createdAt --limit 50` |
+| `pr_list` | `repo_id, state_filter?: "open"\|"closed"\|"merged"\|"all"` | `PrInfo[]` | `gh pr list --state <state> --json … --limit 50`; blank → `open` |
 | `pr_checks` | `repo_id, number` | `CheckInfo[]` | `gh pr checks <n> --json name,state,bucket`; table fallback (✓/✗/- rows) for older gh |
+| `pr_merge` | `repo_id, number, method: "merge"\|"squash"\|"rebase", delete_branch, auto` | `string` | `gh pr merge <n> --<method> [--delete-branch] [--auto]`; rejection is `ForgeError` |
+| `pr_close` | `repo_id, number, comment: string \| null` | `string` | `gh pr close <n> [--comment …]` |
+| `pr_reopen` | `repo_id, number, comment: string \| null` | `string` | `gh pr reopen <n> [--comment …]` |
+| `pr_ready` | `repo_id, number, ready: bool` | `string` | `gh pr ready <n>`; `ready=false` adds `--undo` (draft) |
+| `pr_checkout` | `repo_id, number` | `string` | `gh pr checkout <n>` |
+| `pr_comment` | `repo_id, number, body` | `string` | `gh pr comment <n> --body-file <tmp>` |
+| `pr_review` | `repo_id, number, action: "approve"\|"request-changes"\|"comment", body` | `string` | `gh pr review <n> --approve\|--request-changes\|--comment [--body-file <tmp>]` |
+| `workflow_runs` | `repo_id, limit?: u32, branch?: string, status_filter?: string, workflow?: string` | `WorkflowRun[]` | `gh run list --json … --limit <1–100>` (default 30) + optional `--branch` / `--status` / `--workflow`; newest first |
+| `workflow_run_detail` | `repo_id, run_id: u64` | `WorkflowRunDetail` | `gh run view <id> --json …,jobs` |
+| `workflow_run_logs` | `repo_id, run_id: u64, job_id?: u64, failed_only: bool` | `string` | `gh run view <id> [--job <id>] --log`; `--log-failed` when `failed_only`; output capped at 1.5M chars |
+| `workflow_run_cancel` | `repo_id, run_id: u64` | `string` | `gh run cancel <id>` |
+| `workflow_run_rerun` | `repo_id, run_id: u64, failed_only: bool` | `string` | `gh run rerun <id> [--failed]` |
+| `workflow_dispatch` | `repo_id, workflow, git_ref, inputs: WorkflowInput[]` | `string` | `gh workflow run <workflow> --ref <git_ref> --raw-field key=value…` |
+| `workflow_list` | `repo_id` | `WorkflowInfo[]` | `gh workflow list --all --json id,name,path,state` (disabled workflows included) |
 
 Types (generated to `src/lib/ipc/gen/`, re-exported by `src/lib/ipc/types.ts`):
 
@@ -226,9 +241,24 @@ Types (generated to `src/lib/ipc/gen/`, re-exported by `src/lib/ipc/types.ts`):
 ForgeStatus  = { available: bool, version: string, authed: bool }
 ForgeContext = { owner, repo, branch, remote_url }
 PrCreated    = { url, number }
-PrInfo       = { number, title, head_ref_name, base_ref_name, state: "OPEN"|"MERGED"|"CLOSED",
-                 is_draft: bool, url, created_at: string | null }
+PrInfo       = { number, title, head_ref_name, base_ref_name,
+                 state: "OPEN"|"MERGED"|"CLOSED", is_draft: bool, url,
+                 created_at, updated_at, merged_at, closed_at: string | null,
+                 author, body, additions, deletions, changed_files,
+                 review_decision, mergeable, labels: string[] }
 CheckInfo    = { name, state: "pass"|"fail"|"pending"|"skipping" }
+WorkflowRun  = { database_id, number, name, display_title, event,
+                 head_branch, head_sha, status, conclusion, url,
+                 created_at, updated_at, started_at: string | null,
+                 attempt, workflow_database_id }
+WorkflowStep = { number, name, status, conclusion,
+                 started_at, completed_at: string | null }
+WorkflowJob  = { database_id, name, status, conclusion,
+                 started_at, completed_at: string | null, url,
+                 steps: WorkflowStep[] }
+WorkflowRunDetail = { run: WorkflowRun, jobs: WorkflowJob[] }
+WorkflowInfo = { id, name, path, state }
+WorkflowInput = { key, value }
 ForgeError   = { kind: "NoGh"|"NotAuthed"|"AlreadyExists"|"Other", message, url: string | null }
 ```
 
@@ -263,6 +293,43 @@ error and the FE panel explains the gh flow is unavailable.
     message inline (retry / manual fill).
 - **Open in browser** goes through `@tauri-apps/plugin-opener`'s JS API
   (`openUrl`), guarded outside Tauri — no Rust command needed.
+- **Actions tab**: the panel's "Pull requests" / "Actions" tab switch keeps
+  the gh banner/context gate; the Actions tab lazily loads `workflow_runs` +
+  `workflow_list` on first activation (and per repo). Run rows show state,
+  title, branch, event, attempt, age and duration; expanding a row loads
+  `workflow_run_detail` and renders jobs/steps. Logs open inline (whole run,
+  one job, or `--log-failed`) with copy/close. Active runs offer Cancel,
+  completed runs offer Rerun / Rerun failed, and dispatch is a
+  `workflow_dispatch` dialog with raw `key=value` inputs (blank lines and `#`
+  comments skipped; duplicate or `=`-less lines are rejected before invoking
+  gh). `workflow_list --all` feeds the filter and dialog; only `active`
+  workflows are dispatchable.
+
+## Commands (project/script detection)
+
+`project_detect` maps one open repository to its runnable scripts; the
+Actions panel caches the result per repo and runs the commands through the
+existing `action_run` stream. The scan is bounded (root + immediate children,
+plus declared Node/Cargo workspace members) and never walks vendor/build
+directories. Commands are written to run from the repository root using
+project flags (`--prefix`, `--project`, `--manifest-path`, `-C`) so the
+action runner's cwd does not need to change. Logic:
+`src-tauri/src/projects.rs`; tests are in the same module.
+
+| Command | Args | Returns | Notes |
+|---|---|---|---|
+| `project_detect` | `repo_id` | `ProjectInfo[]` | Detects Node/JS/TS, Rust, Python, .NET, Android/Gradle, Go, Ruby, PHP/Composer, and Makefile targets |
+
+```
+ProjectInfo   = { kind, name, path, detected_from: string[], scripts: ProjectScript[] }
+ProjectScript = { id, label, command, kind: "run"|"watch"|"test"|"build"|"lint"|"install",
+                  watch: bool }
+```
+
+`path` is repository-relative and `"."` for the root. `watch: true` marks a
+long-lived command (dev server / `--watch` / Gradle `--continuous`); the UI
+labels it as a watcher. Detection is best-effort: missing tools (`cargo
+watch`, `pytest`, …) are reported by the runner like any other action.
 
 ## Commands (M7 — contribution statistics)
 

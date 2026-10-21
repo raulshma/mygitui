@@ -515,10 +515,9 @@
 
   .legend-cell {
     display: inline-block;
-  }
-
-  .cell {
-    display: inline-block;
+    width: 11px;
+    height: 11px;
+    flex: none;
     border-radius: 2px;
   }
 

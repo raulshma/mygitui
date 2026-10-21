@@ -11,4 +11,37 @@ state: string, is_draft: boolean, url: string,
 /**
  * ISO-8601 creation timestamp (optional in tolerant parsing).
  */
-created_at: string | null, };
+created_at: string | null, 
+/**
+ * ISO-8601 last-update timestamp (optional in tolerant parsing).
+ */
+updated_at: string | null, 
+/**
+ * ISO-8601 merge timestamp (`None` while open/closed-unmerged).
+ */
+merged_at: string | null, 
+/**
+ * ISO-8601 close timestamp (`None` while open/merged).
+ */
+closed_at: string | null, 
+/**
+ * Author login (empty when gh omits it).
+ */
+author: string, 
+/**
+ * PR description (empty when gh omits it).
+ */
+body: string, additions: number, deletions: number, changed_files: number, 
+/**
+ * `APPROVED` | `CHANGES_REQUESTED` | `REVIEW_REQUIRED` (`""` when no
+ * review is required/known).
+ */
+review_decision: string, 
+/**
+ * `MERGEABLE` | `CONFLICTING` | `UNKNOWN` (`""` when absent).
+ */
+mergeable: string, 
+/**
+ * Label names, in gh order.
+ */
+labels: Array<string>, };

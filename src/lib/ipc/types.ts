@@ -112,6 +112,12 @@ export type { PrCreated } from "./gen/PrCreated";
 export type { PrInfo } from "./gen/PrInfo";
 export type { CheckInfo } from "./gen/CheckInfo";
 export type { ForgeError as ForgeFailure } from "./gen/ForgeError";
+export type { WorkflowRun } from "./gen/WorkflowRun";
+export type { WorkflowStep } from "./gen/WorkflowStep";
+export type { WorkflowJob } from "./gen/WorkflowJob";
+export type { WorkflowRunDetail } from "./gen/WorkflowRunDetail";
+export type { WorkflowInfo } from "./gen/WorkflowInfo";
+export type { WorkflowInput } from "./gen/WorkflowInput";
 
 // FE-only: alias of the generated `CheckInfo["state"]` string-literal union
 // (the canonical check states; see docs/contracts.md M6).
@@ -137,6 +143,13 @@ export type { MergetoolResult } from "./gen/MergetoolResult";
 export type { BisectMark } from "./gen/BisectMark";
 export type { BisectState } from "./gen/BisectState";
 export type { BisectLogEntry } from "./gen/BisectLogEntry";
+
+// ---------------------------------------------------------------------------
+// Project/script detection (Rust: src-tauri/src/projects.rs)
+// ---------------------------------------------------------------------------
+
+export type { ProjectInfo } from "./gen/ProjectInfo";
+export type { ProjectScript } from "./gen/ProjectScript";
 
 // ---------------------------------------------------------------------------
 // M11: repo health / maintenance

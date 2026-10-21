@@ -571,16 +571,27 @@
 {:else}
   <div class="diff-viewer">
     <div class="toolbar">
+      <div class="segmented" role="group" aria-label="Diff layout">
+        <button
+          type="button"
+          class="seg"
+          class:on={mode === "split"}
+          aria-pressed={mode === "split"}
+          onclick={() => (mode = "split")}
+          title="Show old and new side by side"
+        >Split</button>
+        <button
+          type="button"
+          class="seg"
+          class:on={mode === "unified"}
+          aria-pressed={mode === "unified"}
+          onclick={() => (mode = "unified")}
+          title="Show old and new in one column"
+        >Unified</button>
+      </div>
       <button
         type="button"
-        class="mode-btn"
-        onclick={cycleMode}
-        aria-label={`Switch to ${mode === "split" ? "unified" : "split"} view`}
-        title={`Current: ${mode} view — click to switch`}
-      >{mode === "split" ? "Split" : "Unified"}</button>
-      <button
-        type="button"
-        class="mode-btn"
+        class="tool-btn"
         class:on={wrap}
         aria-pressed={wrap}
         onclick={toggleWrap}
@@ -661,15 +672,21 @@
 
 <style>
   .diff-viewer {
-    /* Diff palette: static color-mix derivations of the M3 tokens — computed
-       once by the CSS engine, never in JS at runtime. */
-    --diff-add-bg: color-mix(in srgb, var(--m3-primary) 8%, transparent);
-    --diff-del-bg: color-mix(in srgb, var(--m3-error) 8%, transparent);
-    --diff-empty-bg: color-mix(in srgb, var(--m3-surface-variant) 40%, transparent);
-    --diff-hl-bg: var(--m3-tertiary-container);
+    /* Diff palette: status hues from the app tokens (green add / red delete),
+       mixed over the surrounding surface by the CSS engine — never in JS. */
+    --diff-add-bg: color-mix(in srgb, var(--app-added, var(--m3-tertiary)) 12%, transparent);
+    --diff-del-bg: color-mix(in srgb, var(--app-deleted, var(--m3-error)) 12%, transparent);
+    --diff-add-gutter: color-mix(in srgb, var(--app-added, var(--m3-tertiary)) 20%, transparent);
+    --diff-del-gutter: color-mix(in srgb, var(--app-deleted, var(--m3-error)) 20%, transparent);
+    --diff-empty-bg: color-mix(in srgb, var(--m3-surface-variant) 12%, transparent);
+    --diff-hl-bg: color-mix(in srgb, var(--app-modified, var(--m3-tertiary)) 32%, transparent);
     --diff-divider: var(--m3-outline-variant);
+    --diff-file-bg: var(--m3-surface-container, var(--m3-surface));
+    --diff-file-accent: color-mix(in srgb, var(--m3-primary) 55%, transparent);
+    --diff-hunk-bg: color-mix(in srgb, var(--m3-primary) 6%, var(--m3-surface-container, var(--m3-surface)));
+    --diff-hunk-accent: color-mix(in srgb, var(--m3-primary) 65%, transparent);
     /* M12 line selection highlight. */
-    --diff-sel-bg: color-mix(in srgb, var(--m3-primary) 22%, transparent);
+    --diff-sel-bg: color-mix(in srgb, var(--m3-primary) 24%, transparent);
 
     position: relative; /* anchors the docked explain panel */
     display: flex;
@@ -683,41 +700,92 @@
     flex: none;
     display: flex;
     align-items: center;
-    gap: 0.75rem;
-    padding: 0.25rem 0.75rem;
+    gap: 0.375rem;
+    min-height: 1.8rem;
+    padding: 0.2rem 0.6rem;
     border-bottom: 1px solid var(--diff-divider);
     background: var(--m3-surface-container, var(--m3-surface));
   }
 
-  .mode-btn {
+  /* Compact segmented layout switch. */
+  .segmented {
+    display: inline-flex;
+    flex: none;
     border: 1px solid var(--m3-outline-variant);
-    border-radius: 999px;
+    border-radius: var(--m3-shape-extra-small, 4px);
+    overflow: hidden;
+  }
+
+  .seg {
+    border: none;
     background: transparent;
     color: var(--m3-on-surface-variant);
-    font-size: 0.75rem;
-    padding: 0.25rem 0.875rem;
+    font: inherit;
+    font-size: 0.6875rem;
+    line-height: 1.5;
+    padding: 0 0.5rem;
     cursor: pointer;
   }
-  .mode-btn:hover {
-    background: var(--m3-surface-container-high, var(--m3-surface));
+
+  .seg + .seg {
+    border-left: 1px solid var(--m3-outline-variant);
   }
-  .mode-btn.on {
+
+  .seg:hover {
+    background: var(--app-hover, var(--m3-surface-container-high, var(--m3-surface)));
+    color: var(--m3-on-surface);
+  }
+
+  .seg.on {
+    background: var(--m3-secondary-container, var(--m3-surface-container-high));
+    color: var(--m3-on-secondary-container, var(--m3-on-surface));
+    font-weight: 600;
+  }
+
+  .tool-btn {
+    flex: none;
+    border: 1px solid var(--m3-outline-variant);
+    border-radius: var(--m3-shape-extra-small, 4px);
+    background: transparent;
+    color: var(--m3-on-surface-variant);
+    font: inherit;
+    font-size: 0.6875rem;
+    line-height: 1.5;
+    padding: 0 0.5rem;
+    cursor: pointer;
+  }
+
+  .tool-btn:hover {
+    background: var(--app-hover, var(--m3-surface-container-high, var(--m3-surface)));
+    color: var(--m3-on-surface);
+  }
+
+  .tool-btn.on {
     background: var(--m3-secondary-container, var(--m3-surface-container-high));
     color: var(--m3-on-secondary-container, var(--m3-on-surface));
   }
-  .mode-btn:focus-visible {
+
+  .seg:focus-visible,
+  .tool-btn:focus-visible {
     outline: 2px solid var(--m3-primary);
-    outline-offset: 1px;
+    outline-offset: -2px;
   }
 
   .stats {
     display: flex;
-    gap: 0.75rem;
-    font-size: 0.75rem;
+    align-items: center;
+    gap: 0.4rem;
+    margin-left: auto;
+    font-size: 0.6875rem;
     color: var(--m3-on-surface-variant);
+    font-variant-numeric: tabular-nums;
   }
-  .stat-adds { color: var(--m3-primary); font-variant-numeric: tabular-nums; }
-  .stat-dels { color: var(--m3-error); font-variant-numeric: tabular-nums; }
+  .stat-adds {
+    color: var(--app-added, var(--m3-primary));
+  }
+  .stat-dels {
+    color: var(--app-deleted, var(--m3-error));
+  }
 
   .viewport {
     flex: 1;

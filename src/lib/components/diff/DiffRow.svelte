@@ -12,7 +12,14 @@
    */
   import type { DiffLine } from "$lib/ipc/types";
   import { applyHighlights } from "$lib/components/diff/bytes";
-  import { rowHeight, type DiffRow, type LoadImageFn } from "$lib/components/diff/rowModel";
+  import {
+    fileChangeKind,
+    fileKindLabel,
+    fileKindLetter,
+    rowHeight,
+    type DiffRow,
+    type LoadImageFn,
+  } from "$lib/components/diff/rowModel";
   import { cachedTokens, type TokenSpan } from "$lib/diff/highlight";
   import ImageCompare from "$lib/components/diff/ImageCompare.svelte";
 
@@ -135,6 +142,7 @@
 {/snippet}
 
 {#if row.kind === "file-header"}
+  {@const change = fileChangeKind(row.file)}
   <div class="row file-header" style:height={`${rowHeight(row)}px`}>
     <button
       type="button"
@@ -143,6 +151,11 @@
       aria-label={row.collapsed ? `Expand ${row.file.path}` : `Collapse ${row.file.path}`}
       onclick={() => onToggleCollapse?.(row.file.path)}
     ><span class="chev" aria-hidden="true">{row.collapsed ? "▸" : "▾"}</span></button>
+    <span
+      class={`fkind fk-${change}`}
+      title={fileKindLabel(change)}
+      aria-label={fileKindLabel(change)}
+    >{fileKindLetter(change)}</span>
     <span class="path" title={row.file.path}>
       {#if row.file.old_path && row.file.old_path !== row.file.path}
         <span class="old-path">{row.file.old_path}</span><span class="arrow" aria-hidden="true"> → </span>{row.file.path}
@@ -428,6 +441,17 @@
     padding-right: 1rem;
   }
 
+  /* Gutter tint is a touch stronger than the line wash so the sign column
+     and line numbers stay legible against long runs of changed lines. */
+  .row.line.add > .no,
+  .half.add > .no {
+    background: var(--diff-add-gutter, var(--diff-add-bg));
+  }
+  .row.line.del > .no,
+  .half.del > .no {
+    background: var(--diff-del-gutter, var(--diff-del-bg));
+  }
+
   /* Wrap mode (viewer's default): long lines fold inside the pane instead of
      scrolling. break-all keeps the wrap estimate in wrapHeights.ts exact for
      uniform-width glyphs (no word-boundary preference to diverge from it). */
@@ -450,13 +474,13 @@
     background: var(--diff-empty-bg);
   }
 
-  .sign.del { color: var(--m3-error); font-weight: 600; }
-  .sign.add { color: var(--m3-primary); font-weight: 600; }
+  .sign.del { color: var(--app-deleted, var(--m3-error)); font-weight: 700; }
+  .sign.add { color: var(--app-added, var(--m3-primary)); font-weight: 700; }
 
-  /* Word-level highlight: <mark>-equivalent span, no UA <mark> surprises. */
+  /* Word-level highlight: <mark>-equivalent span, no UA <mark> surprises.
+     No text color — syntax tokens keep their hue on top of the wash. */
   .hl {
     background: var(--diff-hl-bg);
-    color: var(--m3-on-tertiary-container);
     border-radius: 2px;
   }
 
@@ -481,10 +505,42 @@
   /* ---- file header --------------------------------------------------------- */
   .row.file-header {
     align-items: center;
-    gap: 0.5rem;
+    gap: 0.4rem;
     padding: 0 0.75rem 0 0.25rem;
-    background: var(--m3-surface-container, var(--m3-surface));
+    background: var(--diff-file-bg, var(--m3-surface-container, var(--m3-surface)));
     border-block: 1px solid var(--diff-divider);
+    box-shadow: inset 3px 0 var(--diff-file-accent, transparent);
+  }
+
+  /* Change-kind badge (A/M/D/R) — same palette as the source-control list. */
+  .fkind {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.05rem;
+    height: 1.05rem;
+    border-radius: 3px;
+    font-family: var(--app-font-mono, ui-monospace, Consolas, monospace);
+    font-size: 0.625rem;
+    font-weight: 700;
+    line-height: 1;
+  }
+  .fk-added {
+    color: var(--app-added, var(--m3-primary));
+    background: var(--app-added-bg, transparent);
+  }
+  .fk-deleted {
+    color: var(--app-deleted, var(--m3-error));
+    background: var(--app-deleted-bg, transparent);
+  }
+  .fk-renamed {
+    color: var(--app-renamed, var(--m3-tertiary));
+    background: var(--app-renamed-bg, transparent);
+  }
+  .fk-modified {
+    color: var(--app-modified, var(--m3-secondary));
+    background: var(--app-modified-bg, transparent);
   }
 
   .collapse {
@@ -516,8 +572,8 @@
     text-overflow: ellipsis;
     white-space: nowrap;
     font-size: 0.8125rem;
-    font-weight: 500;
-    font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+    font-weight: 600;
+    font-family: var(--app-font-mono, ui-monospace, "Cascadia Mono", Consolas, monospace);
   }
   .old-path {
     color: var(--m3-on-surface-variant);
@@ -541,26 +597,44 @@
   .counts {
     flex: none;
     display: flex;
-    gap: 0.5rem;
-    font-family: ui-monospace, Consolas, monospace;
-    font-size: 0.75rem;
+    gap: 0.3rem;
+    font-family: var(--app-font-mono, ui-monospace, Consolas, monospace);
+    font-size: 0.6875rem;
+    font-variant-numeric: tabular-nums;
   }
-  .adds { color: var(--m3-primary); }
-  .dels { color: var(--m3-error); }
+  .adds,
+  .dels {
+    border-radius: 3px;
+    padding: 0 0.25rem;
+  }
+  .adds {
+    color: var(--app-added, var(--m3-primary));
+    background: var(--app-added-bg, transparent);
+  }
+  .dels {
+    color: var(--app-deleted, var(--m3-error));
+    background: var(--app-deleted-bg, transparent);
+  }
 
   /* ---- hunk header (focus stop) ------------------------------------------- */
   .row.hunk-header {
     align-items: center;
+    gap: 0.5rem;
     padding: 0 0.75rem;
-    background: var(--m3-surface-container-high, var(--m3-surface));
+    background: var(--diff-hunk-bg, var(--m3-surface-container-high, var(--m3-surface)));
     border-bottom: 1px solid var(--diff-divider);
+    box-shadow: inset 2px 0 var(--diff-hunk-accent, transparent);
   }
   .hh {
     font-size: 11px;
+    font-weight: 500;
     color: var(--m3-on-surface-variant);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+  .row.hunk-header:hover .hh {
+    color: var(--m3-on-surface);
   }
   .row.hunk-header:focus-visible {
     outline: 2px solid var(--m3-primary);

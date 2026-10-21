@@ -127,6 +127,63 @@ export function isContextLine(line: DiffLine): boolean {
   return line.origin === " " || line.origin === "=";
 }
 
+/** Change kind shown on a file header badge. */
+export type FileChangeKind = "added" | "deleted" | "modified" | "renamed";
+
+/**
+ * Best-effort change kind for a file header badge.
+ *
+ * `FileDiff` carries no status field, so infer from what the diff contains:
+ * a differing `old_path` means a rename/copy; all hunks with zero old lines
+ * means the file was added; all hunks with zero new lines means deleted.
+ * Files without hunks (binary/empty) fall back to the +/- counters.
+ */
+export function fileChangeKind(file: FileDiff): FileChangeKind {
+  if (file.old_path !== null && file.old_path !== file.path) return "renamed";
+  let oldLines = 0;
+  let newLines = 0;
+  for (const hunk of file.hunks) {
+    const { oldCount, newCount } = hunkCounts(hunk);
+    oldLines += oldCount;
+    newLines += newCount;
+  }
+  if (oldLines === 0 && newLines > 0) return "added";
+  if (newLines === 0 && oldLines > 0) return "deleted";
+  if (file.hunks.length === 0) {
+    if (file.additions > 0 && file.deletions === 0) return "added";
+    if (file.deletions > 0 && file.additions === 0) return "deleted";
+  }
+  return "modified";
+}
+
+/** One-letter badge for a file change kind. */
+export function fileKindLetter(kind: FileChangeKind): string {
+  switch (kind) {
+    case "added":
+      return "A";
+    case "deleted":
+      return "D";
+    case "renamed":
+      return "R";
+    default:
+      return "M";
+  }
+}
+
+/** Human-readable file change kind (file header tooltip). */
+export function fileKindLabel(kind: FileChangeKind): string {
+  switch (kind) {
+    case "added":
+      return "Added";
+    case "deleted":
+      return "Deleted";
+    case "renamed":
+      return "Renamed";
+    default:
+      return "Modified";
+  }
+}
+
 /** Line counts for the "@@ -oldStart,oldCount +newStart,newCount @@" header. */
 export function hunkCounts(hunk: DiffHunk): { oldCount: number; newCount: number } {
   let oldCount = 0;

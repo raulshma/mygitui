@@ -81,8 +81,10 @@ test("open-repo flow: recent card → status entries → stage → commit", asyn
     .poll(async () => (await mock.callsOf("repo_status")).length)
     .toBeGreaterThan(0);
 
-  // 3. Stage the modified file via its row checkbox.
-  await page.getByRole("checkbox", { name: "Stage src/app.ts" }).click();
+  // 3. Stage the modified file via the hover action on its row.
+  const statusRow = page.getByRole("treeitem", { name: "src/app.ts" });
+  await statusRow.hover();
+  await page.getByRole("button", { name: "Stage src/app.ts" }).click();
   const stageCalls = await mock.callsOf("stage");
   expect(stageCalls).toHaveLength(1);
   expect(stageCalls[0]).toMatchObject({

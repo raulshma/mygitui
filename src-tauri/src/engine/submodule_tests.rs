@@ -8,7 +8,9 @@
 
 use std::path::{Path, PathBuf};
 
+use super::git_engine::GitEngine;
 use super::libgit2::Libgit2Engine;
+use super::types::{ChangeKind, StageRequest, StageTarget};
 
 const ENGINE: Libgit2Engine = Libgit2Engine;
 
@@ -171,6 +173,59 @@ fn submodules_reports_new_commits() {
         "worktree HEAD moved to v2"
     );
     assert!(sub.status.contains("new commits"), "got: {}", sub.status);
+}
+
+#[test]
+fn status_reports_dirty_submodule_as_gitlink_change() {
+    let (sandbox, _child_head) = setup_with_submodule("status-dirty");
+    let parent_path = sandbox.parent();
+    // Commit the staged gitlink so the superproject starts clean.
+    run_git(&parent_path, &["commit", "-m", "add submodule"]);
+    let parent = open(&parent_path);
+
+    let clean = ENGINE.status(&parent).expect("status");
+    assert!(
+        clean.entries.iter().all(|e| e.path != "sub"),
+        "clean submodule stays out of status: {:?}",
+        clean.entries
+    );
+
+    // Moving the child's HEAD past the recorded gitlink is a worktree change
+    // in the superproject (same signal VSCode's source control shows).
+    commit_file(&parent_path.join("sub"), "lib.txt", "v2\n", "child v2");
+    let dirty = ENGINE.status(&parent).expect("status");
+    let entry = dirty
+        .entries
+        .iter()
+        .find(|e| e.path == "sub")
+        .expect("dirty submodule appears as a gitlink status entry");
+    assert_eq!(entry.index, ChangeKind::Unmodified);
+    assert_eq!(entry.worktree, ChangeKind::Modified);
+}
+
+#[test]
+fn stage_updates_submodule_gitlink() {
+    let (sandbox, _child_head) = setup_with_submodule("stage-gitlink");
+    let parent_path = sandbox.parent();
+    run_git(&parent_path, &["commit", "-m", "add submodule"]);
+    let sub_dir = parent_path.join("sub");
+    commit_file(&sub_dir, "lib.txt", "v2\n", "child v2");
+    let new_sha = head_sha(&sub_dir);
+
+    let parent = open(&parent_path);
+    ENGINE
+        .stage_impl(
+            &parent,
+            &StageRequest {
+                targets: vec![StageTarget::File("sub".into())],
+                unstage: false,
+            },
+        )
+        .expect("stage the gitlink");
+
+    let index = parent.index().expect("index");
+    let entry = index.get_path(Path::new("sub"), 0).expect("gitlink entry");
+    assert_eq!(entry.id.to_string(), new_sha, "index records the new HEAD");
 }
 
 #[test]

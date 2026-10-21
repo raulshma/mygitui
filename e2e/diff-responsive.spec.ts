@@ -311,8 +311,10 @@ test("unified view fills the pane when lines are short", async ({ page }) => {
   await page.setViewportSize({ width: 1400, height: 1000 });
   await openCommitDiff(page, "short context line");
 
-  await page.getByRole("button", { name: "Switch to unified view" }).click();
-  await expect(page.getByRole("button", { name: "Switch to split view" })).toBeVisible();
+  await page.getByRole("button", { name: "Unified", exact: true }).click();
+  await expect(
+    page.getByRole("button", { name: "Unified", exact: true }),
+  ).toHaveAttribute("aria-pressed", "true");
 
   const m = await diffMetrics(page);
   expect(m.vpScroll).toBeLessThanOrEqual(m.vpClient);
@@ -328,8 +330,10 @@ test("unified view scrolls only when the widest line genuinely overflows", async
   await page.setViewportSize({ width: 1400, height: 1000 });
   await openCommitDiff(page, "context start");
 
-  await page.getByRole("button", { name: "Switch to unified view" }).click();
-  await expect(page.getByRole("button", { name: "Switch to split view" })).toBeVisible();
+  await page.getByRole("button", { name: "Unified", exact: true }).click();
+  await expect(
+    page.getByRole("button", { name: "Unified", exact: true }),
+  ).toHaveAttribute("aria-pressed", "true");
 
   // Wrap is ON by default: the long line folds, no horizontal scrollbar.
   let m = await diffMetrics(page);

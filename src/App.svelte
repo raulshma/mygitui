@@ -109,6 +109,14 @@
   onMount(() => {
     const cleanups: Array<() => void> = [];
 
+    // Mark this webview session booted before hiding the splash: any later
+    // reload skips the full-screen overlay (index.html reads this flag).
+    try {
+      sessionStorage.setItem("mygitui.booted", "1");
+    } catch {
+      // Best-effort; the splash still fades out below.
+    }
+
     // Fade out the index.html splash (#app-splash) now that the app shell
     // has mounted; runs for the main window and popouts alike.
     const splash = document.getElementById("app-splash");

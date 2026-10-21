@@ -17,8 +17,10 @@ import {
   freshId,
   insertPanel,
   isLayoutNode,
+  leftSiblingOf,
   MAX_DEPTH,
   movePanel,
+  moveToLeftGroup,
   moveToRightGroup,
   nodeById,
   nodeIds,
@@ -161,6 +163,8 @@ describe("queries", () => {
     expect(treeDepth(DEFAULT_LAYOUT.main)).toBe(3);
     expect(rightSiblingOf(SIMPLE, "n1")).toBe(SIMPLE.b);
     expect(rightSiblingOf(SIMPLE, "n2")).toBeNull();
+    expect(leftSiblingOf(SIMPLE, "n2")).toBe(SIMPLE.a);
+    expect(leftSiblingOf(SIMPLE, "n1")).toBeNull();
     expect(firstTabsId(DEFAULT_LAYOUT.main)).toBe("tabs-left");
     expect(firstTabsId(HISTORY)).toBeNull();
   });
@@ -405,6 +409,59 @@ describe("moveToRightGroup", () => {
       split("inner", 0.5, leaf("n2", "branches"), leaf("n3", "history")),
     );
     expect(moveToRightGroup(nested, "status").reason).toBe("sibling-not-a-group");
+  });
+});
+
+// -- left-group merge (way back from the right group) ---------------------------
+
+describe("moveToLeftGroup", () => {
+  const TREE = split(
+    "s",
+    0.5,
+    tabs("t-left", ["status", "branches"]),
+    tabs("t-right", ["history", "terminal"], 0),
+  );
+
+  it("moves a panel into the left sibling group", () => {
+    const out = moveToLeftGroup(TREE, "history");
+    expect(out.ok).toBe(true);
+    expect(visiblePanels(out.tree)).toEqual(["status", "branches", "history", "terminal"]);
+    const left = nodeById(out.tree, "t-left") as TabsNode;
+    expect(left.tabs).toEqual(["status", "branches", "history"]);
+    expect(left.active).toBe(2);
+  });
+
+  it("joins a leaf sibling into a new tab group", () => {
+    const tree = split("s", 0.5, leaf("n1", "status"), leaf("n2", "history"));
+    const out = moveToLeftGroup(tree, "history");
+    expect(out.ok).toBe(true);
+    const merged = nodeById(out.tree, "n1") as TabsNode;
+    expect(merged.kind).toBe("tabs");
+    expect(merged.tabs).toEqual(["status", "history"]);
+  });
+
+  it("round-trips a panel moved right and back", () => {
+    const right = moveToRightGroup(TREE, "status");
+    expect(right.ok).toBe(true);
+    const back = moveToLeftGroup(right.tree, "status");
+    expect(back.ok).toBe(true);
+    const left = nodeById(back.tree, "t-left") as TabsNode;
+    const rightGroup = nodeById(back.tree, "t-right") as TabsNode;
+    expect(left.tabs).toEqual(["branches", "status"]);
+    expect(rightGroup.tabs).toEqual(["history", "terminal"]);
+  });
+
+  it("fails without a left sibling or when the sibling is a split", () => {
+    expect(moveToLeftGroup(TREE, "status").ok).toBe(false);
+    expect(moveToLeftGroup(SIMPLE, "status").ok).toBe(false);
+
+    const nested = split(
+      "s",
+      0.5,
+      split("inner", 0.5, leaf("n1", "status"), leaf("n2", "branches")),
+      leaf("n3", "history"),
+    );
+    expect(moveToLeftGroup(nested, "history").reason).toBe("sibling-not-a-group");
   });
 });
 

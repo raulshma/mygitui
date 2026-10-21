@@ -494,8 +494,12 @@ export type MoveTarget =
 
 /** Actions the tab-strip context menu can request (TabGroup → RepoView). */
 export type PanelGroupAction =
+  /** Move the panel into the group left of its current group. */
+  | "move-left-group"
   /** Move the panel into the group right of its current group. */
   | "move-right-group"
+  /** Split a brand-new single-panel group to the left of the panel. */
+  | "new-group-left"
   /** Split a brand-new single-panel group to the right of the panel. */
   | "new-group-right"
   /** Remove the panel from the tree (re-addable via "Add panel"). */
@@ -601,11 +605,37 @@ export function wrapPanelRight(
   };
 }
 
-/** Merges the panel of `nodeId` into its right sibling group (or vice versa?). */
+/** Result of moving a panel into an adjacent tab group. */
 export interface MergeOutcome {
   tree: LayoutNode;
   ok: boolean;
-  reason?: "no-right-sibling" | "sibling-not-a-group";
+  reason?: "no-left-sibling" | "no-right-sibling" | "sibling-not-a-group";
+}
+
+function moveToSiblingGroup(
+  tree: LayoutNode,
+  panel: PanelId,
+  side: "left" | "right",
+): MergeOutcome {
+  const reason = side === "left" ? "no-left-sibling" : "no-right-sibling";
+  const holder = findPanelNode(tree, panel);
+  if (!holder) return { tree, ok: false, reason };
+  const sibling =
+    side === "left"
+      ? leftSiblingOf(tree, holder.id)
+      : rightSiblingOf(tree, holder.id);
+  if (!sibling) return { tree, ok: false, reason };
+  if (sibling.kind === "split") {
+    return { tree, ok: false, reason: "sibling-not-a-group" };
+  }
+  const removed = removePanel(tree, panel);
+  if (removed === null || !nodeById(removed, sibling.id)) {
+    return { tree, ok: false, reason };
+  }
+  return {
+    tree: insertPanel(removed, panel, { kind: "tab", nodeId: sibling.id }),
+    ok: true,
+  };
 }
 
 /**
@@ -618,18 +648,18 @@ export function moveToRightGroup(
   tree: LayoutNode,
   panel: PanelId,
 ): MergeOutcome {
-  const holder = findPanelNode(tree, panel);
-  if (!holder) return { tree, ok: false, reason: "no-right-sibling" };
-  const sibling = rightSiblingOf(tree, holder.id);
-  if (!sibling) return { tree, ok: false, reason: "no-right-sibling" };
-  if (sibling.kind === "split") {
-    return { tree, ok: false, reason: "sibling-not-a-group" };
-  }
-  const removed = removePanel(tree, panel);
-  if (removed === null || !nodeById(removed, sibling.id)) {
-    return { tree, ok: false, reason: "no-right-sibling" };
-  }
-  return { tree: insertPanel(removed, panel, { kind: "tab", nodeId: sibling.id }), ok: true };
+  return moveToSiblingGroup(tree, panel, "right");
+}
+
+/**
+ * "Move to left group": mirror of {@link moveToRightGroup} for the sibling
+ * rendered left of the holder — the way back for a panel moved right.
+ */
+export function moveToLeftGroup(
+  tree: LayoutNode,
+  panel: PanelId,
+): MergeOutcome {
+  return moveToSiblingGroup(tree, panel, "left");
 }
 
 /**
@@ -643,6 +673,19 @@ export function rightSiblingOf(
   if (tree.kind !== "split") return null;
   if (tree.a.id === nodeId) return tree.b;
   return rightSiblingOf(tree.a, nodeId) ?? rightSiblingOf(tree.b, nodeId);
+}
+
+/**
+ * The sibling child that renders left of `nodeId`, or `null` when `nodeId`
+ * is the root or a left child.
+ */
+export function leftSiblingOf(
+  tree: LayoutNode,
+  nodeId: string,
+): LayoutNode | null {
+  if (tree.kind !== "split") return null;
+  if (tree.b.id === nodeId) return tree.a;
+  return leftSiblingOf(tree.a, nodeId) ?? leftSiblingOf(tree.b, nodeId);
 }
 
 /** First tab group in the tree (leftmost), or `null` when there is none. */

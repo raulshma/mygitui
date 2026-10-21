@@ -43,6 +43,7 @@
     hiddenPanels = [],
     collapsedIds = [],
     hideTabsFor = null,
+    canMoveLeftFor,
     canMoveRightFor,
     onRatio,
     onActivateTab,
@@ -63,6 +64,8 @@
     collapsedIds?: string[];
     /** Tab group whose tab strip is replaced by the activity bar. */
     hideTabsFor?: string | null;
+    /** Whether the tab group at `tabsId` has a group to its left. */
+    canMoveLeftFor?: (tabsId: string) => boolean;
     /** Whether the tab group at `tabsId` has a group to its right. */
     canMoveRightFor?: (tabsId: string) => boolean;
     /** Splitter moved (already clamped by callers via the store). */
@@ -123,6 +126,9 @@
     }
   }
 
+  const groupCanMoveLeft = $derived(
+    node.kind === "tabs" ? (canMoveLeftFor?.(node.id) ?? false) : false,
+  );
   const groupCanMoveRight = $derived(
     node.kind === "tabs" ? (canMoveRightFor?.(node.id) ?? false) : false,
   );
@@ -142,6 +148,7 @@
         {hiddenPanels}
         {collapsedIds}
         {hideTabsFor}
+        {canMoveLeftFor}
         {canMoveRightFor}
         {onRatio}
         {onActivateTab}
@@ -176,6 +183,7 @@
         {hiddenPanels}
         {collapsedIds}
         {hideTabsFor}
+        {canMoveLeftFor}
         {canMoveRightFor}
         {onRatio}
         {onActivateTab}
@@ -190,6 +198,7 @@
     {renderPanel}
     {hiddenPanels}
     hideTabs={node.id === hideTabsFor}
+    canMoveLeft={groupCanMoveLeft}
     canMoveRight={groupCanMoveRight}
     onActivate={onActivateTab}
     onAdd={onAddPanel}

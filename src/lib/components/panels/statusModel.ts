@@ -27,11 +27,12 @@ export const SECTION_ORDER: readonly SectionId[] = [
   "untracked",
 ];
 
+/** VSCode source-control wording. */
 export const SECTION_LABELS: Record<SectionId, string> = {
-  conflicted: "Conflicted",
-  staged: "Staged",
-  unstaged: "Unstaged",
-  untracked: "Untracked",
+  conflicted: "Merge Changes",
+  staged: "Staged Changes",
+  unstaged: "Changes",
+  untracked: "Untracked Changes",
 };
 
 /** Kinds that count as a change on a status side (drives Staged/Unstaged). */
@@ -140,6 +141,93 @@ export function kindClass(kind: ChangeKind): string {
     default:
       return "k-modified";
   }
+}
+
+/** Human-readable change-kind label (row tooltips / screen readers). */
+export function kindLabel(kind: ChangeKind): string {
+  switch (kind) {
+    case "added":
+      return "Added";
+    case "deleted":
+      return "Deleted";
+    case "modified":
+      return "Modified";
+    case "renamed":
+      return "Renamed";
+    case "copied":
+      return "Copied";
+    case "untracked":
+      return "Untracked";
+    case "conflicted":
+      return "Conflicted";
+    default:
+      return "Unmodified";
+  }
+}
+
+/** Minimal submodule shape the compact display helpers need. */
+export interface SubmoduleState {
+  initialized: boolean;
+  status: string;
+}
+
+/** How a submodule should read inside a dense source-control row. */
+export interface SubmoduleDisplay {
+  /** Compact tag ("" when clean). */
+  tag: string;
+  /** Full sentence for tooltips / the submodule panel. */
+  detail: string;
+  tone: "clean" | "dirty" | "danger";
+}
+
+/** Short, VSCode-like wording for git's submodule status string. */
+function shortenSubmoduleStatus(status: string): string {
+  return status
+    .split(" / ")
+    .map((part) => {
+      switch (part) {
+        case "modified content":
+          return "modified";
+        case "untracked content":
+          return "untracked";
+        default:
+          return part;
+      }
+    })
+    .join(" · ");
+}
+
+/**
+ * Maps a `SubmoduleInfo` to compact display text. Uninitialized modules are
+ * reported before `status`: `submodules_impl` cannot open them, so its
+ * "broken" marker would otherwise read as an error instead of "not
+ * initialized".
+ */
+export function submoduleDisplay(info: SubmoduleState): SubmoduleDisplay {
+  if (!info.initialized) {
+    return {
+      tag: "not initialized",
+      detail: "Submodule is not initialized",
+      tone: "danger",
+    };
+  }
+  const status = info.status.trim();
+  if (status === "broken") {
+    return { tag: "broken", detail: "Submodule cannot be opened", tone: "danger" };
+  }
+  if (status === "") {
+    return { tag: "", detail: "Up to date", tone: "clean" };
+  }
+  return {
+    tag: shortenSubmoduleStatus(status),
+    detail: status,
+    tone: "dirty",
+  };
+}
+
+/** Whether a submodule needs a row in the source-control list. */
+export function submoduleNeedsAttention(info: SubmoduleState): boolean {
+  return !info.initialized || info.status.trim() !== "";
 }
 
 /** Side kind that represents `entry` inside `section` (letter/color source). */

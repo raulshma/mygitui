@@ -8,6 +8,9 @@ import { describe, expect, it } from "vitest";
 import type { DiffHunk, DiffLine, FileDiff } from "$lib/ipc/types";
 import {
   buildRowModel,
+  fileChangeKind,
+  fileKindLabel,
+  fileKindLetter,
   hunkCounts,
   isContextLine,
   rowHeight,
@@ -78,6 +81,49 @@ describe("hunkCounts", () => {
     expect(hunkCounts(changeHunk())).toEqual({ oldCount: 4, newCount: 4 });
     expect(hunkCounts(hunk([line("+", "a", null, 1)]))).toEqual({ oldCount: 0, newCount: 1 });
     expect(hunkCounts(hunk([]))).toEqual({ oldCount: 0, newCount: 0 });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// File change kind (header badge)
+// ---------------------------------------------------------------------------
+
+describe("fileChangeKind", () => {
+  it("detects renames from a differing old_path", () => {
+    expect(fileChangeKind(file({ old_path: "src/old.txt" }))).toBe("renamed");
+    // Deleted files may carry an equal old_path; that is not a rename.
+    expect(fileChangeKind(file({ old_path: "src/a.txt" }))).toBe("modified");
+  });
+
+  it("detects added/deleted files from their hunk sides", () => {
+    const added = file({
+      additions: 2,
+      hunks: [hunk([line("+", "a", null, 1), line("+", "b", null, 2)])],
+    });
+    const deleted = file({
+      deletions: 1,
+      hunks: [hunk([line("-", "gone", 1, null)])],
+    });
+    expect(fileChangeKind(added)).toBe("added");
+    expect(fileChangeKind(deleted)).toBe("deleted");
+  });
+
+  it("treats a mixed hunk as modified", () => {
+    expect(fileChangeKind(file({ hunks: [changeHunk()] }))).toBe("modified");
+  });
+
+  it("falls back to counters for hunkless (binary/empty) files", () => {
+    expect(fileChangeKind(file({ additions: 3 }))).toBe("added");
+    expect(fileChangeKind(file({ deletions: 2 }))).toBe("deleted");
+    expect(fileChangeKind(file({ binary: true }))).toBe("modified");
+  });
+
+  it("maps kinds to compact letters and labels", () => {
+    expect(fileKindLetter("added")).toBe("A");
+    expect(fileKindLetter("deleted")).toBe("D");
+    expect(fileKindLetter("renamed")).toBe("R");
+    expect(fileKindLetter("modified")).toBe("M");
+    expect(fileKindLabel("renamed")).toBe("Renamed");
   });
 });
 

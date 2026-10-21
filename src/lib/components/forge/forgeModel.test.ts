@@ -7,16 +7,31 @@
 import { describe, expect, it } from "vitest";
 import type { CheckInfo, PrInfo } from "$lib/ipc/client";
 import {
+  activeWorkflows,
   checkIcon,
   checkSummaryLabel,
   isPrOpen,
+  parseWorkflowInputs,
   prAgeLabel,
   prForBranch,
+  prMergeBlockedReason,
   prNumberFromUrl,
   prStateClass,
   prStateLabel,
+  reviewDecisionLabel,
+  runCanRerun,
+  runDurationLabel,
+  runHasFailures,
+  runIsActive,
+  runStateClass,
+  runStateIcon,
+  runStateKind,
+  runStateLabel,
   statusBanner,
+  stepStateClass,
+  stepStateLabel,
   summarizeChecks,
+  workflowStateLabel,
   worstChipClass,
   type Banner,
   type CheckSummary,
@@ -35,6 +50,17 @@ function pr(patch: Partial<PrInfo> & { number: number }): PrInfo {
     is_draft: false,
     url: `https://github.com/acme/widget/pull/${patch.number}`,
     created_at: null,
+    updated_at: null,
+    merged_at: null,
+    closed_at: null,
+    author: "",
+    body: "",
+    additions: 0,
+    deletions: 0,
+    changed_files: 0,
+    review_decision: "",
+    mergeable: "MERGEABLE",
+    labels: [],
     ...patch,
   };
 }
@@ -117,6 +143,29 @@ describe("pr state presentation", () => {
   });
 });
 
+describe("pr mergeability + review decision", () => {
+  it("blocks merge for non-open, draft and conflicting PRs", () => {
+    expect(prMergeBlockedReason({ state: "OPEN", is_draft: false, mergeable: "MERGEABLE" })).toBeNull();
+    expect(prMergeBlockedReason({ state: "OPEN", is_draft: true, mergeable: "MERGEABLE" })).toContain(
+      "ready",
+    );
+    expect(
+      prMergeBlockedReason({ state: "OPEN", is_draft: false, mergeable: "CONFLICTING" }),
+    ).toContain("conflicts");
+    expect(prMergeBlockedReason({ state: "MERGED", is_draft: false, mergeable: "MERGEABLE" })).toContain(
+      "not open",
+    );
+  });
+
+  it("labels known review decisions and blanks unknown ones", () => {
+    expect(reviewDecisionLabel("APPROVED")).toBe("Approved");
+    expect(reviewDecisionLabel("CHANGES_REQUESTED")).toBe("Changes requested");
+    expect(reviewDecisionLabel("REVIEW_REQUIRED")).toBe("Review required");
+    expect(reviewDecisionLabel("")).toBe("");
+    expect(reviewDecisionLabel("SOMETHING_ELSE")).toBe("");
+  });
+});
+
 describe("prAgeLabel", () => {
   const NOW = Date.parse("2026-10-07T12:00:00Z");
 
@@ -166,5 +215,132 @@ describe("prNumberFromUrl", () => {
     expect(prNumberFromUrl("https://github.com/a/b/pull/")).toBeNull();
     expect(prNumberFromUrl("https://github.com/a/b/tree/main")).toBeNull();
     expect(prNumberFromUrl(null)).toBeNull();
+  });
+});
+
+describe("workflow run state", () => {
+  it("maps lifecycle statuses and conclusions onto buckets", () => {
+    expect(runStateKind({ status: "in_progress", conclusion: "" })).toBe("running");
+    expect(runStateKind({ status: "queued", conclusion: "" })).toBe("queued");
+    expect(runStateKind({ status: "waiting", conclusion: "" })).toBe("queued");
+    expect(runStateKind({ status: "completed", conclusion: "success" })).toBe(
+      "success",
+    );
+    expect(runStateKind({ status: "completed", conclusion: "failure" })).toBe(
+      "failure",
+    );
+    expect(runStateKind({ status: "completed", conclusion: "timed_out" })).toBe(
+      "failure",
+    );
+    expect(runStateKind({ status: "completed", conclusion: "cancelled" })).toBe(
+      "cancelled",
+    );
+    expect(runStateKind({ status: "completed", conclusion: "skipped" })).toBe(
+      "skipped",
+    );
+    expect(runStateKind({ status: "completed", conclusion: "" })).toBe("unknown");
+  });
+
+  it("labels and icons every bucket", () => {
+    expect(runStateLabel({ status: "in_progress", conclusion: "" })).toBe(
+      "Running",
+    );
+    expect(runStateLabel({ status: "queued", conclusion: "" })).toBe("Queued");
+    expect(runStateLabel({ status: "completed", conclusion: "failure" })).toBe(
+      "Failed",
+    );
+    expect(runStateLabel({ status: "completed", conclusion: "timed_out" })).toBe(
+      "Timed out",
+    );
+    expect(runStateLabel({ status: "completed", conclusion: "startup_failure" })).toBe(
+      "Startup failure",
+    );
+    expect(runStateLabel({ status: "completed", conclusion: "" })).toBe(
+      "Completed",
+    );
+    expect(runStateIcon("success")).toBe("✓");
+    expect(runStateIcon("failure")).toBe("✗");
+    expect(runStateIcon("running")).toBe("●");
+    expect(runStateClass("failure")).toBe("run-failure");
+  });
+
+  it("derives action availability", () => {
+    expect(runIsActive({ status: "in_progress" })).toBe(true);
+    expect(runIsActive({ status: "queued" })).toBe(true);
+    expect(runIsActive({ status: "completed" })).toBe(false);
+    expect(runIsActive({ status: "" })).toBe(false);
+    expect(runCanRerun({ status: "completed" })).toBe(true);
+    expect(runCanRerun({ status: "in_progress" })).toBe(false);
+    expect(runHasFailures({ conclusion: "failure" })).toBe(true);
+    expect(runHasFailures({ conclusion: "timed_out" })).toBe(true);
+    expect(runHasFailures({ conclusion: "success" })).toBe(false);
+  });
+
+  it("formats durations compactly", () => {
+    expect(
+      runDurationLabel("2026-10-20T02:00:00Z", "2026-10-20T02:00:45Z"),
+    ).toBe("45s");
+    expect(
+      runDurationLabel("2026-10-20T02:00:00Z", "2026-10-20T02:02:10Z"),
+    ).toBe("2m 10s");
+    expect(
+      runDurationLabel("2026-10-20T02:00:00Z", "2026-10-20T05:08:00Z"),
+    ).toBe("3h 8m");
+    expect(runDurationLabel(null, "2026-10-20T05:08:00Z")).toBeNull();
+    expect(
+      runDurationLabel("2026-10-20T05:08:00Z", "2026-10-20T02:00:00Z"),
+    ).toBeNull();
+  });
+});
+
+describe("workflow job/step labels", () => {
+  it("labels and classes conclusions", () => {
+    expect(stepStateLabel("failure")).toBe("Failed");
+    expect(stepStateLabel("success")).toBe("Success");
+    expect(stepStateLabel("", "in_progress")).toBe("Running");
+    expect(stepStateLabel("", "")).toBe("Pending");
+    expect(stepStateClass("failure")).toBe("run-failure");
+    expect(stepStateClass("skipped")).toBe("run-skipped");
+  });
+
+  it("labels workflow file states and filters active ones", () => {
+    expect(workflowStateLabel("active")).toBe("Active");
+    expect(workflowStateLabel("disabled_manually")).toBe("Disabled");
+    expect(
+      activeWorkflows([
+        { id: 1, name: "CI", path: "ci.yml", state: "active" },
+        {
+          id: 2,
+          name: "Old",
+          path: "old.yml",
+          state: "disabled_manually",
+        },
+      ]),
+    ).toEqual([{ id: 1, name: "CI", path: "ci.yml", state: "active" }]);
+  });
+});
+
+describe("parseWorkflowInputs", () => {
+  it("parses key=value lines, skipping blanks and comments", () => {
+    expect(parseWorkflowInputs("version=1.2.3\n\n# note\ndry_run = true\n")).toEqual({
+      inputs: [
+        { key: "version", value: "1.2.3" },
+        { key: "dry_run", value: "true" },
+      ],
+      error: null,
+    });
+  });
+
+  it("keeps '=' inside values", () => {
+    expect(parseWorkflowInputs("flags=--x=1")).toEqual({
+      inputs: [{ key: "flags", value: "--x=1" }],
+      error: null,
+    });
+  });
+
+  it("rejects malformed, empty, and duplicate keys", () => {
+    expect(parseWorkflowInputs("novalue").error).toContain("key=value");
+    expect(parseWorkflowInputs("=x").error).toContain("empty");
+    expect(parseWorkflowInputs("a=1\na=2").error).toContain("Duplicate");
   });
 });

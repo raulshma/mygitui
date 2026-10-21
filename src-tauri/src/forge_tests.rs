@@ -8,9 +8,12 @@
 use std::time::{Duration, Instant};
 
 use crate::forge::{
-    extract_pull_url, forge_failure, parse_github_remote, parse_pr_checks_json,
-    parse_pr_checks_table, parse_pr_list_json, pr_number_of, run_program, version_from_output,
-    ForgeError, KIND_ALREADY_EXISTS, KIND_NOT_AUTHED, KIND_NO_GH, KIND_OTHER,
+    cap_log, extract_pull_url, forge_failure, normalize_pr_state, normalize_run_status,
+    parse_github_remote, parse_pr_checks_json, parse_pr_checks_table, parse_pr_list_json,
+    parse_workflow_list_json, parse_workflow_run_detail_json, parse_workflow_runs_json,
+    pr_list_args, pr_merge_args, pr_number_of, run_program, version_from_output,
+    workflow_dispatch_args, workflow_runs_args, ForgeError, WorkflowInput, KIND_ALREADY_EXISTS,
+    KIND_NOT_AUTHED, KIND_NO_GH, KIND_OTHER, MAX_LOG_CHARS,
 };
 
 // ---------------------------------------------------------------------------
@@ -92,7 +95,16 @@ const PR_LIST_FIXTURE: &str = r#"[
     "state": "OPEN",
     "isDraft": true,
     "url": "https://github.com/acme/widget/pull/12",
-    "createdAt": "2026-10-01T10:00:00Z"
+    "createdAt": "2026-10-01T10:00:00Z",
+    "updatedAt": "2026-10-03T09:30:00Z",
+    "author": { "login": "octocat" },
+    "body": "Implements the forge panel.",
+    "additions": 240,
+    "deletions": 12,
+    "changedFiles": 8,
+    "reviewDecision": "APPROVED",
+    "mergeable": "MERGEABLE",
+    "labels": [{ "name": "feature", "color": "aabbcc" }, { "name": "ui" }]
   },
   {
     "number": 11,
@@ -118,12 +130,56 @@ fn pr_list_json_parses_fixture_tolerantly() {
     assert!(prs[0].is_draft);
     assert_eq!(prs[0].url, "https://github.com/acme/widget/pull/12");
     assert_eq!(prs[0].created_at.as_deref(), Some("2026-10-01T10:00:00Z"));
+    assert_eq!(prs[0].updated_at.as_deref(), Some("2026-10-03T09:30:00Z"));
+    assert_eq!(prs[0].author, "octocat");
+    assert_eq!(prs[0].body, "Implements the forge panel.");
+    assert_eq!(prs[0].additions, 240);
+    assert_eq!(prs[0].deletions, 12);
+    assert_eq!(prs[0].changed_files, 8);
+    assert_eq!(prs[0].review_decision, "APPROVED");
+    assert_eq!(prs[0].mergeable, "MERGEABLE");
+    assert_eq!(prs[0].labels, vec!["feature", "ui"]);
     assert_eq!(prs[1].state, "MERGED");
     assert!(!prs[1].is_draft);
     assert_eq!(
         prs[1].created_at, None,
         "missing createdAt tolerates to None"
     );
+    assert_eq!(prs[1].updated_at, None);
+    assert_eq!(prs[1].author, "");
+    assert_eq!(prs[1].additions, 0);
+    assert_eq!(prs[1].labels, Vec::<String>::new());
+}
+
+#[test]
+fn pr_state_filter_and_list_args_are_normalized() {
+    assert_eq!(normalize_pr_state("").unwrap(), "open");
+    assert_eq!(normalize_pr_state("OPEN").unwrap(), "open");
+    assert_eq!(normalize_pr_state(" closed ").unwrap(), "closed");
+    assert_eq!(normalize_pr_state("merged").unwrap(), "merged");
+    assert_eq!(normalize_pr_state("all").unwrap(), "all");
+    assert!(normalize_pr_state("draft").is_err());
+
+    let args = pr_list_args("all").unwrap();
+    assert_eq!(&args[..4], ["pr", "list", "--state", "all"]);
+    assert!(args.iter().any(|arg| arg.contains("reviewDecision")));
+}
+
+#[test]
+fn pr_merge_args_map_methods_and_flags() {
+    let plain = pr_merge_args(7, "squash", false, false).unwrap();
+    assert_eq!(&plain[..4], ["pr", "merge", "7", "--squash"]);
+    assert!(!plain.iter().any(|arg| arg == "--delete-branch"));
+
+    let full = pr_merge_args(9, "rebase", true, true).unwrap();
+    assert_eq!(
+        full,
+        vec!["pr", "merge", "9", "--rebase", "--delete-branch", "--auto"]
+    );
+
+    let err = pr_merge_args(1, "fast-forward", false, false).unwrap_err();
+    assert_eq!(err.kind, KIND_OTHER);
+    assert!(err.message.contains("unknown merge method"));
 }
 
 #[test]
@@ -187,6 +243,254 @@ plain word row pending
     assert_eq!(find("e2e").as_deref(), Some("fail"));
     assert_eq!(find("changelog").as_deref(), Some("skipping"));
     assert_eq!(find("waiting").as_deref(), Some("pending"));
+}
+
+// ---------------------------------------------------------------------------
+// GitHub Actions (run/workflow JSON parsing + args)
+// ---------------------------------------------------------------------------
+
+const RUN_LIST_FIXTURE: &str = r#"[
+  {
+    "attempt": 2,
+    "conclusion": "success",
+    "createdAt": "2026-10-20T02:00:43Z",
+    "databaseId": 39356574672,
+    "displayTitle": "chore(release): bump version",
+    "event": "push",
+    "headBranch": "main",
+    "headSha": "4c536ee0d05e83d0fbf3bfedd33f4cd6f6667313",
+    "name": "CI",
+    "number": 27,
+    "startedAt": "2026-10-20T02:15:26Z",
+    "status": "completed",
+    "updatedAt": "2026-10-20T02:19:39Z",
+    "url": "https://github.com/acme/widget/actions/runs/39356574672",
+    "workflowDatabaseId": 377963873,
+    "workflowName": "CI"
+  },
+  {
+    "attempt": 1,
+    "conclusion": null,
+    "databaseId": 39390637358,
+    "displayTitle": "Nightly",
+    "event": "schedule",
+    "headBranch": "main",
+    "headSha": "abc",
+    "name": "",
+    "number": 13,
+    "status": "in_progress",
+    "url": "https://github.com/acme/widget/actions/runs/39390637358",
+    "workflowName": "Nightly"
+  },
+  { "displayTitle": "no databaseId — skipped" }
+]"#;
+
+#[test]
+fn workflow_runs_json_parses_tolerantly() {
+    let runs = parse_workflow_runs_json(RUN_LIST_FIXTURE);
+    assert_eq!(runs.len(), 2, "entries without databaseId are skipped");
+    assert_eq!(runs[0].database_id, 39356574672);
+    assert_eq!(runs[0].number, 27);
+    assert_eq!(runs[0].name, "CI");
+    assert_eq!(runs[0].display_title, "chore(release): bump version");
+    assert_eq!(runs[0].event, "push");
+    assert_eq!(runs[0].head_branch, "main");
+    assert_eq!(runs[0].status, "completed");
+    assert_eq!(runs[0].conclusion, "success");
+    assert_eq!(runs[0].attempt, 2);
+    assert_eq!(runs[0].workflow_database_id, 377963873);
+    assert_eq!(runs[0].started_at.as_deref(), Some("2026-10-20T02:15:26Z"));
+    // Null conclusion + blank name fall back to the workflow name.
+    assert_eq!(runs[1].conclusion, "");
+    assert_eq!(runs[1].name, "Nightly");
+    assert_eq!(runs[1].status, "in_progress");
+    assert_eq!(runs[1].created_at, None);
+    assert_eq!(runs[1].attempt, 1);
+}
+
+#[test]
+fn workflow_runs_json_garbage_yields_empty() {
+    assert!(parse_workflow_runs_json("").is_empty());
+    assert!(parse_workflow_runs_json("{}").is_empty());
+    assert!(parse_workflow_runs_json("not json").is_empty());
+}
+
+const RUN_VIEW_FIXTURE: &str = r#"{
+  "attempt": 2,
+  "conclusion": "failure",
+  "databaseId": 101,
+  "displayTitle": "fix the build",
+  "event": "pull_request",
+  "headBranch": "feat",
+  "headSha": "abc",
+  "name": "CI",
+  "number": 7,
+  "status": "completed",
+  "url": "https://github.com/acme/widget/actions/runs/101",
+  "workflowDatabaseId": 9,
+  "jobs": [
+    {
+      "completedAt": "2026-10-20T02:10:00Z",
+      "conclusion": "failure",
+      "databaseId": 900,
+      "name": "build",
+      "startedAt": "2026-10-20T02:00:00Z",
+      "status": "completed",
+      "url": "https://github.com/acme/widget/actions/runs/101/job/900",
+      "steps": [
+        {
+          "completedAt": "2026-10-20T02:01:00Z",
+          "conclusion": "success",
+          "name": "Set up job",
+          "number": 1,
+          "startedAt": "2026-10-20T02:00:00Z",
+          "status": "completed"
+        },
+        {
+          "conclusion": "failure",
+          "name": "Tests",
+          "number": 2,
+          "status": "completed"
+        }
+      ]
+    },
+    { "name": "step-less / id-less job — skipped" }
+  ]
+}"#;
+
+#[test]
+fn workflow_run_detail_parses_jobs_and_steps() {
+    let detail = parse_workflow_run_detail_json(RUN_VIEW_FIXTURE).expect("valid detail");
+    assert_eq!(detail.run.database_id, 101);
+    assert_eq!(detail.run.conclusion, "failure");
+    assert_eq!(detail.jobs.len(), 1, "jobs without databaseId are skipped");
+    let job = &detail.jobs[0];
+    assert_eq!(job.database_id, 900);
+    assert_eq!(job.name, "build");
+    assert_eq!(job.conclusion, "failure");
+    assert_eq!(job.steps.len(), 2);
+    assert_eq!(job.steps[1].name, "Tests");
+    assert_eq!(job.steps[1].number, 2);
+    assert_eq!(job.steps[1].conclusion, "failure");
+    assert_eq!(job.steps[1].started_at, None);
+}
+
+#[test]
+fn workflow_run_detail_rejects_garbage() {
+    assert!(parse_workflow_run_detail_json("").is_none());
+    assert!(parse_workflow_run_detail_json("[]").is_none());
+    assert!(parse_workflow_run_detail_json("{}").is_none());
+    assert!(parse_workflow_run_detail_json(r#"{"databaseId": 5}"#).is_some());
+}
+
+#[test]
+fn workflow_list_json_parses() {
+    let list = parse_workflow_list_json(
+        r#"[
+          {"id": 1, "name": "CI", "path": ".github/workflows/ci.yml", "state": "active"},
+          {"id": 2, "name": "Release", "path": ".github/workflows/release.yml", "state": "disabled_manually"},
+          {"name": "no id — skipped"}
+        ]"#,
+    );
+    assert_eq!(list.len(), 2);
+    assert_eq!(list[0].id, 1);
+    assert_eq!(list[0].name, "CI");
+    assert_eq!(list[0].path, ".github/workflows/ci.yml");
+    assert_eq!(list[0].state, "active");
+    assert_eq!(list[1].state, "disabled_manually");
+    assert!(parse_workflow_list_json("{}").is_empty());
+}
+
+#[test]
+fn run_status_and_list_args_normalize() {
+    assert_eq!(normalize_run_status("").unwrap(), None);
+    assert_eq!(normalize_run_status("  ").unwrap(), None);
+    assert_eq!(normalize_run_status("FAILURE").unwrap(), Some("failure"));
+    assert_eq!(
+        normalize_run_status("in_progress").unwrap(),
+        Some("in_progress")
+    );
+    assert!(normalize_run_status("exploded").is_err());
+
+    let args = workflow_runs_args(500, " main ", "failure", " CI ").unwrap();
+    assert_eq!(&args[..2], ["run", "list"]);
+    assert!(args.iter().any(|arg| arg == "--json"));
+    let limit = args.iter().position(|arg| arg == "--limit").unwrap();
+    assert_eq!(args[limit + 1], "100", "limit is clamped");
+    assert_eq!(
+        &args[limit + 2..],
+        [
+            "--branch",
+            "main",
+            "--status",
+            "failure",
+            "--workflow",
+            "CI"
+        ]
+    );
+
+    let plain = workflow_runs_args(0, "", "", "").unwrap();
+    let limit = plain.iter().position(|arg| arg == "--limit").unwrap();
+    assert_eq!(plain[limit + 1], "1", "limit is clamped from below");
+    assert!(!plain.iter().any(|arg| arg == "--branch"));
+    assert!(!plain.iter().any(|arg| arg == "--status"));
+    assert!(!plain.iter().any(|arg| arg == "--workflow"));
+}
+
+#[test]
+fn workflow_dispatch_args_validate_and_format_inputs() {
+    let inputs = vec![
+        WorkflowInput {
+            key: "version".into(),
+            value: "1.2.3".into(),
+        },
+        WorkflowInput {
+            key: "dry_run".into(),
+            value: "true".into(),
+        },
+    ];
+    let args = workflow_dispatch_args("release.yml", "main", &inputs).unwrap();
+    assert_eq!(
+        args,
+        vec![
+            "workflow",
+            "run",
+            "release.yml",
+            "--ref",
+            "main",
+            "--raw-field",
+            "version=1.2.3",
+            "--raw-field",
+            "dry_run=true",
+        ]
+    );
+    // An empty ref lets gh use the repository default branch.
+    let args = workflow_dispatch_args("CI", "", &[]).unwrap();
+    assert_eq!(args, vec!["workflow", "run", "CI"]);
+
+    let err = workflow_dispatch_args("  ", "main", &[]).unwrap_err();
+    assert_eq!(err.kind, KIND_OTHER);
+    assert!(err.message.contains("workflow"));
+    let err = workflow_dispatch_args(
+        "CI",
+        "main",
+        &[WorkflowInput {
+            key: " ".into(),
+            value: "x".into(),
+        }],
+    )
+    .unwrap_err();
+    assert!(err.message.contains("input names"));
+}
+
+#[test]
+fn cap_log_bounds_large_output_without_panicking() {
+    let small = "hello\n".to_string();
+    assert_eq!(cap_log(small.clone()), small);
+    let huge = "é".repeat(MAX_LOG_CHARS + 10);
+    let capped = cap_log(huge);
+    assert!(capped.chars().count() < MAX_LOG_CHARS + 100);
+    assert!(capped.contains("log truncated"));
 }
 
 // ---------------------------------------------------------------------------

@@ -3049,7 +3049,10 @@ mod m4_gitignore_tests {
 // stream.
 // ---------------------------------------------------------------------------
 
-use crate::forge::{self, CheckInfo, ForgeContext, ForgeError, ForgeStatus, PrCreated, PrInfo};
+use crate::forge::{
+    self, CheckInfo, ForgeContext, ForgeError, ForgeStatus, PrCreated, PrInfo, WorkflowInfo,
+    WorkflowInput, WorkflowRun, WorkflowRunDetail,
+};
 
 /// Detect `gh` on PATH and whether the user is authenticated (no repo).
 #[tauri::command(rename_all = "snake_case")]
@@ -3095,14 +3098,16 @@ pub async fn pr_create(
     .map_err(|e| ForgeError::other(format!("pr_create task failed: {e}")))?
 }
 
-/// Open PRs of the repo (`gh pr list --json … --limit 50`).
+/// PRs of the repo (`gh pr list --state <state> --json … --limit 50`).
 #[tauri::command(rename_all = "snake_case")]
 pub async fn pr_list(
     repo_id: RepoId,
+    state_filter: Option<String>,
     state: State<'_, RepoManager>,
 ) -> Result<Vec<PrInfo>, String> {
     let root = get_handle(&state, &repo_id)?.root.clone();
-    tauri::async_runtime::spawn_blocking(move || forge::pr_list_sync(&root))
+    let filter = state_filter.unwrap_or_else(|| "open".to_string());
+    tauri::async_runtime::spawn_blocking(move || forge::pr_list_sync(&root, &filter))
         .await
         .map_err(|e| format!("pr_list task failed: {e}"))?
 }
@@ -3120,6 +3125,273 @@ pub async fn pr_checks(
     tauri::async_runtime::spawn_blocking(move || forge::pr_checks_sync(&root, number))
         .await
         .map_err(|e| format!("pr_checks task failed: {e}"))?
+}
+
+/// Merge a PR (`merge`/`squash`/`rebase`), optionally deleting the branch or
+/// enabling auto-merge.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn pr_merge(
+    repo_id: RepoId,
+    number: u64,
+    method: String,
+    delete_branch: bool,
+    auto: bool,
+    state: State<'_, RepoManager>,
+) -> Result<String, ForgeError> {
+    let root = get_handle(&state, &repo_id)
+        .map_err(ForgeError::other)?
+        .root
+        .clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        forge::pr_merge_sync(&root, number, &method, delete_branch, auto)
+    })
+    .await
+    .map_err(|e| ForgeError::other(format!("pr_merge task failed: {e}")))?
+}
+
+/// Close a PR with an optional comment.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn pr_close(
+    repo_id: RepoId,
+    number: u64,
+    comment: Option<String>,
+    state: State<'_, RepoManager>,
+) -> Result<String, ForgeError> {
+    let root = get_handle(&state, &repo_id)
+        .map_err(ForgeError::other)?
+        .root
+        .clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        forge::pr_close_sync(&root, number, comment.as_deref())
+    })
+    .await
+    .map_err(|e| ForgeError::other(format!("pr_close task failed: {e}")))?
+}
+
+/// Reopen a closed PR with an optional comment.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn pr_reopen(
+    repo_id: RepoId,
+    number: u64,
+    comment: Option<String>,
+    state: State<'_, RepoManager>,
+) -> Result<String, ForgeError> {
+    let root = get_handle(&state, &repo_id)
+        .map_err(ForgeError::other)?
+        .root
+        .clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        forge::pr_reopen_sync(&root, number, comment.as_deref())
+    })
+    .await
+    .map_err(|e| ForgeError::other(format!("pr_reopen task failed: {e}")))?
+}
+
+/// Mark a PR ready for review (`ready = true`) or convert it back to draft.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn pr_ready(
+    repo_id: RepoId,
+    number: u64,
+    ready: bool,
+    state: State<'_, RepoManager>,
+) -> Result<String, ForgeError> {
+    let root = get_handle(&state, &repo_id)
+        .map_err(ForgeError::other)?
+        .root
+        .clone();
+    tauri::async_runtime::spawn_blocking(move || forge::pr_ready_sync(&root, number, ready))
+        .await
+        .map_err(|e| ForgeError::other(format!("pr_ready task failed: {e}")))?
+}
+
+/// Check out a PR's head branch into the working tree (`gh pr checkout`).
+#[tauri::command(rename_all = "snake_case")]
+pub async fn pr_checkout(
+    repo_id: RepoId,
+    number: u64,
+    state: State<'_, RepoManager>,
+) -> Result<String, ForgeError> {
+    let root = get_handle(&state, &repo_id)
+        .map_err(ForgeError::other)?
+        .root
+        .clone();
+    tauri::async_runtime::spawn_blocking(move || forge::pr_checkout_sync(&root, number))
+        .await
+        .map_err(|e| ForgeError::other(format!("pr_checkout task failed: {e}")))?
+}
+
+/// Post a comment on a PR.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn pr_comment(
+    repo_id: RepoId,
+    number: u64,
+    body: String,
+    state: State<'_, RepoManager>,
+) -> Result<String, ForgeError> {
+    let root = get_handle(&state, &repo_id)
+        .map_err(ForgeError::other)?
+        .root
+        .clone();
+    tauri::async_runtime::spawn_blocking(move || forge::pr_comment_sync(&root, number, &body))
+        .await
+        .map_err(|e| ForgeError::other(format!("pr_comment task failed: {e}")))?
+}
+
+/// Submit a PR review: `approve`, `request-changes`, or `comment`.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn pr_review(
+    repo_id: RepoId,
+    number: u64,
+    action: String,
+    body: String,
+    state: State<'_, RepoManager>,
+) -> Result<String, ForgeError> {
+    let root = get_handle(&state, &repo_id)
+        .map_err(ForgeError::other)?
+        .root
+        .clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        forge::pr_review_sync(&root, number, &action, &body)
+    })
+    .await
+    .map_err(|e| ForgeError::other(format!("pr_review task failed: {e}")))?
+}
+
+// -- GitHub Actions ---------------------------------------------------------
+
+/// Recent workflow runs (`gh run list`), optionally filtered by branch,
+/// status, and workflow.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn workflow_runs(
+    repo_id: RepoId,
+    limit: Option<u32>,
+    branch: Option<String>,
+    status_filter: Option<String>,
+    workflow: Option<String>,
+    state: State<'_, RepoManager>,
+) -> Result<Vec<WorkflowRun>, String> {
+    let root = get_handle(&state, &repo_id)?.root.clone();
+    let limit = limit.unwrap_or(forge::RUN_LIST_LIMIT);
+    let branch = branch.unwrap_or_default();
+    let status = status_filter.unwrap_or_default();
+    let workflow = workflow.unwrap_or_default();
+    tauri::async_runtime::spawn_blocking(move || {
+        forge::workflow_runs_sync(&root, limit, &branch, &status, &workflow)
+    })
+    .await
+    .map_err(|e| format!("workflow_runs task failed: {e}"))?
+}
+
+/// One workflow run with its jobs and steps (`gh run view --json …jobs…`).
+#[tauri::command(rename_all = "snake_case")]
+pub async fn workflow_run_detail(
+    repo_id: RepoId,
+    run_id: u64,
+    state: State<'_, RepoManager>,
+) -> Result<WorkflowRunDetail, String> {
+    let root = get_handle(&state, &repo_id)?.root.clone();
+    tauri::async_runtime::spawn_blocking(move || forge::workflow_run_detail_sync(&root, run_id))
+        .await
+        .map_err(|e| format!("workflow_run_detail task failed: {e}"))?
+}
+
+/// Logs of a whole run or one job (`gh run view <id> [--job <id>] --log`);
+/// `failed_only` requests only failed steps (`--log-failed`).
+#[tauri::command(rename_all = "snake_case")]
+pub async fn workflow_run_logs(
+    repo_id: RepoId,
+    run_id: u64,
+    job_id: Option<u64>,
+    failed_only: bool,
+    state: State<'_, RepoManager>,
+) -> Result<String, String> {
+    let root = get_handle(&state, &repo_id)?.root.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        forge::workflow_run_logs_sync(&root, run_id, job_id, failed_only)
+    })
+    .await
+    .map_err(|e| format!("workflow_run_logs task failed: {e}"))?
+}
+
+/// Cancel a queued or running workflow run (`gh run cancel`).
+#[tauri::command(rename_all = "snake_case")]
+pub async fn workflow_run_cancel(
+    repo_id: RepoId,
+    run_id: u64,
+    state: State<'_, RepoManager>,
+) -> Result<String, ForgeError> {
+    let root = get_handle(&state, &repo_id)
+        .map_err(ForgeError::other)?
+        .root
+        .clone();
+    tauri::async_runtime::spawn_blocking(move || forge::workflow_run_cancel_sync(&root, run_id))
+        .await
+        .map_err(|e| ForgeError::other(format!("workflow_run_cancel task failed: {e}")))?
+}
+
+/// Rerun a completed run, or only its failed jobs (`--failed`).
+#[tauri::command(rename_all = "snake_case")]
+pub async fn workflow_run_rerun(
+    repo_id: RepoId,
+    run_id: u64,
+    failed_only: bool,
+    state: State<'_, RepoManager>,
+) -> Result<String, ForgeError> {
+    let root = get_handle(&state, &repo_id)
+        .map_err(ForgeError::other)?
+        .root
+        .clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        forge::workflow_run_rerun_sync(&root, run_id, failed_only)
+    })
+    .await
+    .map_err(|e| ForgeError::other(format!("workflow_run_rerun task failed: {e}")))?
+}
+
+/// Trigger a `workflow_dispatch` run (`gh workflow run <workflow> --ref …`).
+#[tauri::command(rename_all = "snake_case")]
+pub async fn workflow_dispatch(
+    repo_id: RepoId,
+    workflow: String,
+    git_ref: String,
+    inputs: Vec<WorkflowInput>,
+    state: State<'_, RepoManager>,
+) -> Result<String, ForgeError> {
+    let root = get_handle(&state, &repo_id)
+        .map_err(ForgeError::other)?
+        .root
+        .clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        forge::workflow_dispatch_sync(&root, &workflow, &git_ref, &inputs)
+    })
+    .await
+    .map_err(|e| ForgeError::other(format!("workflow_dispatch task failed: {e}")))?
+}
+
+/// Workflow files of the repo, including disabled ones
+/// (`gh workflow list --all --json id,name,path,state`).
+#[tauri::command(rename_all = "snake_case")]
+pub async fn workflow_list(
+    repo_id: RepoId,
+    state: State<'_, RepoManager>,
+) -> Result<Vec<WorkflowInfo>, String> {
+    let root = get_handle(&state, &repo_id)?.root.clone();
+    tauri::async_runtime::spawn_blocking(move || forge::workflow_list_sync(&root))
+        .await
+        .map_err(|e| format!("workflow_list task failed: {e}"))?
+}
+
+/// Detected project types + runnable scripts under one repository (bounded
+/// root + immediate-child scan; see `projects.rs`).
+#[tauri::command(rename_all = "snake_case")]
+pub async fn project_detect(
+    repo_id: RepoId,
+    state: State<'_, RepoManager>,
+) -> Result<Vec<crate::projects::ProjectInfo>, String> {
+    let root = get_handle(&state, &repo_id)?.root.clone();
+    tauri::async_runtime::spawn_blocking(move || crate::projects::detect_sync(&root))
+        .await
+        .map_err(|e| format!("project_detect task failed: {e}"))
 }
 
 // ---------------------------------------------------------------------------

@@ -37,6 +37,7 @@
     renderPanel,
     hiddenPanels,
     hideTabs = false,
+    canMoveLeft,
     canMoveRight,
     onActivate,
     onAdd,
@@ -49,6 +50,8 @@
     hiddenPanels: PanelId[];
     /** Replace the tab strip with a compact title row (activity-bar group). */
     hideTabs?: boolean;
+    /** Whether the holder group has a group to its left. */
+    canMoveLeft: boolean;
     /** Whether the holder group has a group to its right. */
     canMoveRight: boolean;
     onActivate: (tabsId: string, index: number) => void;
@@ -281,10 +284,27 @@
         class="menu-item"
         type="button"
         role="menuitem"
+        disabled={!canMoveLeft}
+        onclick={() => runAction("move-left-group")}
+      >
+        Move to left group
+      </button>
+      <button
+        class="menu-item"
+        type="button"
+        role="menuitem"
         disabled={!canMoveRight}
         onclick={() => runAction("move-right-group")}
       >
         Move to right group
+      </button>
+      <button
+        class="menu-item"
+        type="button"
+        role="menuitem"
+        onclick={() => runAction("new-group-left")}
+      >
+        New group to the left
       </button>
       <button
         class="menu-item"

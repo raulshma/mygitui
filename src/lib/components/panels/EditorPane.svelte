@@ -19,6 +19,8 @@
   import type { HistoryCommitActions } from "$lib/components/panels/historySidebar";
   import CommitDetail from "$lib/components/panels/CommitDetail.svelte";
   import DiffViewer from "$lib/components/diff/DiffViewer.svelte";
+  import Icon from "$lib/components/icons/Icon.svelte";
+  import iconTree from "@ktibow/iconset-material-symbols/account-tree";
 
   let {
     repoId,
@@ -94,7 +96,7 @@
         <span class="epath" title={entry.path}>
           {#if entry.old_path}{entry.old_path} → {/if}{entry.path}
         </span>
-        <span class="estate">working copy</span>
+        <span class="echip">working copy</span>
         {#if onPopoutDiff}
           <button
             class="ebtn"
@@ -135,7 +137,7 @@
     </div>
   {:else}
     <div class="welcome">
-      <span class="wicon" aria-hidden="true">⌘</span>
+      <span class="wicon" aria-hidden="true"><Icon icon={iconTree} size={22} /></span>
       <p class="wtitle">Nothing open</p>
       <p class="wtext">
         Select a change in the source-control sidebar to see its diff, or pick
@@ -172,10 +174,11 @@
     flex: none;
     display: flex;
     align-items: center;
-    gap: 0.5rem;
-    padding: 0.25rem 0.75rem;
+    gap: 0.4rem;
+    min-height: 1.9rem;
+    padding: 0.15rem 0.6rem;
     background: var(--m3-surface-container, var(--m3-surface));
-    border-bottom: 1px solid var(--m3-outline-variant);
+    border-bottom: 1px solid var(--app-border, var(--m3-outline-variant));
     font-size: 0.8125rem;
   }
 
@@ -185,8 +188,20 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    font-family: ui-monospace, Consolas, monospace;
+    font-family: var(--app-font-mono, ui-monospace, Consolas, monospace);
+    font-size: 0.78rem;
     color: var(--m3-on-surface);
+  }
+
+  .echip {
+    flex: none;
+    border-radius: var(--m3-shape-full, 9999px);
+    background: var(--app-active, var(--m3-surface-container-high));
+    color: var(--m3-on-surface-variant, var(--m3-on-surface));
+    font-size: 0.625rem;
+    line-height: 1.5;
+    padding: 0 0.45rem;
+    white-space: nowrap;
   }
 
   .ebody {
@@ -199,18 +214,20 @@
 
   .ebtn {
     flex: none;
-    padding: 0.1rem 0.4rem;
+    padding: 0.05rem 0.4rem;
     color: var(--m3-on-surface-variant);
     background: none;
-    border: 1px solid var(--m3-outline-variant);
+    border: 1px solid var(--app-border, var(--m3-outline-variant));
     border-radius: var(--m3-shape-extra-small, 4px);
     font: inherit;
-    font-size: 0.72rem;
+    font-size: 0.6875rem;
+    line-height: 1.5;
     cursor: pointer;
   }
 
   .ebtn:hover {
-    background: var(--m3-surface-container-high, var(--m3-surface));
+    background: var(--app-hover, var(--m3-surface-container-high, var(--m3-surface)));
+    color: var(--m3-on-surface);
   }
 
   .ebtn:focus-visible {
@@ -246,12 +263,12 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 2.5rem;
-    height: 2.5rem;
-    border: 1px solid var(--m3-outline-variant);
+    width: 2.75rem;
+    height: 2.75rem;
+    border: 1px solid var(--app-border, var(--m3-outline-variant));
     border-radius: var(--m3-shape-full, 9999px);
-    font-size: 1.1rem;
-    opacity: 0.7;
+    color: var(--m3-primary);
+    background: var(--m3-surface-container-low, var(--m3-surface));
   }
 
   .wtitle {

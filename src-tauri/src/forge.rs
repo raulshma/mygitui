@@ -23,7 +23,7 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 /// The `gh` binary probed on PATH (production runner target).
@@ -47,9 +47,57 @@ pub const CREATE_TIMEOUT: Duration = Duration::from_secs(120);
 pub const LIST_TIMEOUT: Duration = Duration::from_secs(60);
 /// `gh pr checks` budget (JSON attempt and table fallback each).
 pub const CHECKS_TIMEOUT: Duration = Duration::from_secs(30);
+/// Budget for mutating PR/action commands (merge/close/reopen/checkout/
+/// review/comment, run cancel/rerun, workflow dispatch).
+pub const ACTION_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// `--json` field list shared by `pr_list` (all optional fields parse
+/// tolerantly, so older gh versions still work).
+pub const PR_LIST_JSON_FIELDS: &str = "number,title,headRefName,baseRefName,state,isDraft,url,createdAt,updatedAt,mergedAt,closedAt,author,body,additions,deletions,changedFiles,reviewDecision,mergeable,labels";
 
 /// How many PRs `pr_list` requests (`gh pr list --limit`).
 pub const PR_LIST_LIMIT: usize = 50;
+
+/// `--json` field list of `workflow_runs` (`gh run list`).
+pub const RUN_LIST_JSON_FIELDS: &str = "attempt,conclusion,createdAt,databaseId,displayTitle,event,headBranch,headSha,name,number,startedAt,status,updatedAt,url,workflowDatabaseId,workflowName";
+
+/// `--json` field list of `workflow_run_detail` (`gh run view`).
+pub const RUN_VIEW_JSON_FIELDS: &str = "attempt,conclusion,createdAt,databaseId,displayTitle,event,headBranch,headSha,jobs,name,number,startedAt,status,updatedAt,url,workflowDatabaseId,workflowName";
+
+/// How many runs `workflow_runs` requests by default (`gh run list --limit`).
+pub const RUN_LIST_LIMIT: u32 = 30;
+
+/// Upper bound for a caller-supplied run-list limit.
+pub const RUN_LIST_LIMIT_MAX: u32 = 100;
+
+/// Budget for run list/detail reads.
+pub const RUNS_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// Budget for fetching run logs (gh may download a log archive first).
+pub const LOGS_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// Cap on returned log text; a chatty failing run can be tens of MB.
+pub const MAX_LOG_CHARS: usize = 1_500_000;
+
+/// Run statuses accepted by `gh run list --status` (the union of lifecycle
+/// states and conclusions gh documents).
+pub const RUN_STATUSES: [&str; 15] = [
+    "queued",
+    "completed",
+    "in_progress",
+    "requested",
+    "waiting",
+    "pending",
+    "action_required",
+    "cancelled",
+    "failure",
+    "neutral",
+    "skipped",
+    "stale",
+    "startup_failure",
+    "success",
+    "timed_out",
+];
 
 /// Cap on a classified error `message` (gh stderr can be a wall of text).
 const MAX_ERROR_MESSAGE: usize = 400;
@@ -105,6 +153,26 @@ pub struct PrInfo {
     pub url: String,
     /// ISO-8601 creation timestamp (optional in tolerant parsing).
     pub created_at: Option<String>,
+    /// ISO-8601 last-update timestamp (optional in tolerant parsing).
+    pub updated_at: Option<String>,
+    /// ISO-8601 merge timestamp (`None` while open/closed-unmerged).
+    pub merged_at: Option<String>,
+    /// ISO-8601 close timestamp (`None` while open/merged).
+    pub closed_at: Option<String>,
+    /// Author login (empty when gh omits it).
+    pub author: String,
+    /// PR description (empty when gh omits it).
+    pub body: String,
+    pub additions: u64,
+    pub deletions: u64,
+    pub changed_files: u64,
+    /// `APPROVED` | `CHANGES_REQUESTED` | `REVIEW_REQUIRED` (`""` when no
+    /// review is required/known).
+    pub review_decision: String,
+    /// `MERGEABLE` | `CONFLICTING` | `UNKNOWN` (`""` when absent).
+    pub mergeable: String,
+    /// Label names, in gh order.
+    pub labels: Vec<String>,
 }
 
 /// One CI check of `pr_checks`.
@@ -117,6 +185,88 @@ pub struct CheckInfo {
     /// via `CheckState`).
     #[ts(type = "\"pass\" | \"fail\" | \"pending\" | \"skipping\"")]
     pub state: String,
+}
+
+/// One GitHub Actions workflow run of `workflow_runs`.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, TS)]
+#[ts(export)]
+pub struct WorkflowRun {
+    /// GitHub's run id (`databaseId`; used by cancel/rerun/logs).
+    pub database_id: u64,
+    /// Per-workflow run number (`#27`).
+    pub number: u64,
+    /// Workflow name (`gh`'s `name`/`workflowName`).
+    pub name: String,
+    pub display_title: String,
+    /// Trigger event (`push`, `pull_request`, `workflow_dispatch`, `schedule`, …).
+    pub event: String,
+    pub head_branch: String,
+    pub head_sha: String,
+    /// `queued` | `in_progress` | `completed` | `waiting` | `requested` | …
+    pub status: String,
+    /// `success` | `failure` | `cancelled` | … (empty while running).
+    pub conclusion: String,
+    pub url: String,
+    pub created_at: Option<String>,
+    pub updated_at: Option<String>,
+    pub started_at: Option<String>,
+    pub attempt: u64,
+    pub workflow_database_id: u64,
+}
+
+/// One step inside a workflow job.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, TS)]
+#[ts(export)]
+pub struct WorkflowStep {
+    pub number: u64,
+    pub name: String,
+    pub status: String,
+    /// Empty while the step has not completed.
+    pub conclusion: String,
+    pub started_at: Option<String>,
+    pub completed_at: Option<String>,
+}
+
+/// One job of a workflow run.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, TS)]
+#[ts(export)]
+pub struct WorkflowJob {
+    pub database_id: u64,
+    pub name: String,
+    pub status: String,
+    pub conclusion: String,
+    pub started_at: Option<String>,
+    pub completed_at: Option<String>,
+    pub url: String,
+    pub steps: Vec<WorkflowStep>,
+}
+
+/// `workflow_run_detail`: the run plus its jobs/steps.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, TS)]
+#[ts(export)]
+pub struct WorkflowRunDetail {
+    pub run: WorkflowRun,
+    pub jobs: Vec<WorkflowJob>,
+}
+
+/// One workflow file of `workflow_list`.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, TS)]
+#[ts(export)]
+pub struct WorkflowInfo {
+    pub id: u64,
+    pub name: String,
+    /// Path in the repository (`.github/workflows/ci.yml`).
+    pub path: String,
+    /// `active` | `disabled_manually` | `disabled_inactivity` | …
+    pub state: String,
+}
+
+/// One `key=value` input of `workflow_dispatch`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
+#[ts(export)]
+pub struct WorkflowInput {
+    pub key: String,
+    pub value: String,
 }
 
 /// Structured `pr_create` failure (the command's rejection value; FE name
@@ -378,6 +528,16 @@ pub fn parse_pr_list_json(payload: &str) -> Vec<PrInfo> {
                     .unwrap_or_default()
                     .to_owned()
             };
+            let number_field = |key: &str| {
+                item.get(key)
+                    .and_then(serde_json::Value::as_u64)
+                    .unwrap_or(0)
+            };
+            let option_string = |key: &str| {
+                item.get(key)
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_owned)
+            };
             Some(PrInfo {
                 number,
                 title: string_field("title"),
@@ -389,10 +549,35 @@ pub fn parse_pr_list_json(payload: &str) -> Vec<PrInfo> {
                     .and_then(serde_json::Value::as_bool)
                     .unwrap_or(false),
                 url: string_field("url"),
-                created_at: item
-                    .get("createdAt")
+                created_at: option_string("createdAt"),
+                updated_at: option_string("updatedAt"),
+                merged_at: option_string("mergedAt"),
+                closed_at: option_string("closedAt"),
+                author: item
+                    .get("author")
+                    .and_then(|author| author.get("login"))
                     .and_then(serde_json::Value::as_str)
-                    .map(str::to_owned),
+                    .unwrap_or_default()
+                    .to_owned(),
+                body: string_field("body"),
+                additions: number_field("additions"),
+                deletions: number_field("deletions"),
+                changed_files: number_field("changedFiles"),
+                review_decision: string_field("reviewDecision"),
+                mergeable: string_field("mergeable"),
+                labels: item
+                    .get("labels")
+                    .and_then(serde_json::Value::as_array)
+                    .map(|labels| {
+                        labels
+                            .iter()
+                            .filter_map(|label| {
+                                label.get("name").and_then(serde_json::Value::as_str)
+                            })
+                            .map(str::to_owned)
+                            .collect()
+                    })
+                    .unwrap_or_default(),
             })
         })
         .collect()
@@ -425,6 +610,140 @@ pub fn parse_pr_checks_json(payload: &str) -> Vec<CheckInfo> {
                         .to_owned()
                 });
             Some(CheckInfo { name, state })
+        })
+        .collect()
+}
+
+/// String field of a gh JSON object (`""` when missing/null/non-string).
+fn json_string(item: &serde_json::Value, key: &str) -> String {
+    item.get(key)
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default()
+        .to_owned()
+}
+
+/// Optional string field of a gh JSON object.
+fn json_option_string(item: &serde_json::Value, key: &str) -> Option<String> {
+    item.get(key)
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_owned)
+}
+
+/// Unsigned field of a gh JSON object (0 when missing/null/non-number).
+fn json_u64(item: &serde_json::Value, key: &str) -> u64 {
+    item.get(key)
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0)
+}
+
+/// One gh run object → [`WorkflowRun`]; `None` when the run id is missing.
+fn parse_workflow_run(item: &serde_json::Value) -> Option<WorkflowRun> {
+    let database_id = item.get("databaseId")?.as_u64()?;
+    let mut name = json_string(item, "name");
+    if name.is_empty() {
+        name = json_string(item, "workflowName");
+    }
+    if name.is_empty() {
+        name = json_string(item, "displayTitle");
+    }
+    Some(WorkflowRun {
+        database_id,
+        number: json_u64(item, "number"),
+        name,
+        display_title: json_string(item, "displayTitle"),
+        event: json_string(item, "event"),
+        head_branch: json_string(item, "headBranch"),
+        head_sha: json_string(item, "headSha"),
+        status: json_string(item, "status"),
+        conclusion: json_string(item, "conclusion"),
+        url: json_string(item, "url"),
+        created_at: json_option_string(item, "createdAt"),
+        updated_at: json_option_string(item, "updatedAt"),
+        started_at: json_option_string(item, "startedAt"),
+        attempt: json_u64(item, "attempt").max(1),
+        workflow_database_id: json_u64(item, "workflowDatabaseId"),
+    })
+}
+
+/// Parse `gh run list --json …` output tolerantly: entries without a
+/// numeric `databaseId` are skipped, missing/null strings default empty.
+pub fn parse_workflow_runs_json(payload: &str) -> Vec<WorkflowRun> {
+    let Ok(items) = serde_json::from_str::<Vec<serde_json::Value>>(payload) else {
+        return Vec::new();
+    };
+    items
+        .into_iter()
+        .filter_map(|item| parse_workflow_run(&item))
+        .collect()
+}
+
+/// One gh job object → [`WorkflowJob`] (`None` without a `databaseId`).
+fn parse_workflow_job(item: &serde_json::Value) -> Option<WorkflowJob> {
+    let database_id = item.get("databaseId")?.as_u64()?;
+    let mut name = json_string(item, "name");
+    if name.is_empty() {
+        name = format!("job {database_id}");
+    }
+    let steps = item
+        .get("steps")
+        .and_then(serde_json::Value::as_array)
+        .map(|steps| {
+            steps
+                .iter()
+                .map(|step| WorkflowStep {
+                    number: json_u64(step, "number"),
+                    name: json_string(step, "name"),
+                    status: json_string(step, "status"),
+                    conclusion: json_string(step, "conclusion"),
+                    started_at: json_option_string(step, "startedAt"),
+                    completed_at: json_option_string(step, "completedAt"),
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    Some(WorkflowJob {
+        database_id,
+        name,
+        status: json_string(item, "status"),
+        conclusion: json_string(item, "conclusion"),
+        started_at: json_option_string(item, "startedAt"),
+        completed_at: json_option_string(item, "completedAt"),
+        url: json_string(item, "url"),
+        steps,
+    })
+}
+
+/// Parse `gh run view <id> --json …jobs…` output; `None` when the payload is
+/// not an object with a numeric run id.
+pub fn parse_workflow_run_detail_json(payload: &str) -> Option<WorkflowRunDetail> {
+    let item: serde_json::Value = serde_json::from_str(payload).ok()?;
+    if !item.is_object() {
+        return None;
+    }
+    let run = parse_workflow_run(&item)?;
+    let jobs = item
+        .get("jobs")
+        .and_then(serde_json::Value::as_array)
+        .map(|jobs| jobs.iter().filter_map(parse_workflow_job).collect())
+        .unwrap_or_default();
+    Some(WorkflowRunDetail { run, jobs })
+}
+
+/// Parse `gh workflow list --all --json id,name,path,state` output.
+pub fn parse_workflow_list_json(payload: &str) -> Vec<WorkflowInfo> {
+    let Ok(items) = serde_json::from_str::<Vec<serde_json::Value>>(payload) else {
+        return Vec::new();
+    };
+    items
+        .into_iter()
+        .filter_map(|item| {
+            let id = item.get("id")?.as_u64()?;
+            Some(WorkflowInfo {
+                id,
+                name: json_string(&item, "name"),
+                path: json_string(&item, "path"),
+                state: json_string(&item, "state"),
+            })
         })
         .collect()
 }
@@ -743,17 +1062,38 @@ pub fn pr_create_sync(
     Err(forge_failure(None, &combined))
 }
 
-/// Body of `pr_list`: `gh pr list --json number,title,headRefName,
-/// baseRefName,state,isDraft,url,createdAt --limit 50`.
-pub fn pr_list_sync(root: &Path) -> Result<Vec<PrInfo>, String> {
-    let args = vec![
+/// Normalize a PR-list state filter (`open`/`closed`/`merged`/`all`);
+/// blank means `open`.
+pub fn normalize_pr_state(state: &str) -> Result<&'static str, String> {
+    match state.trim().to_ascii_lowercase().as_str() {
+        "" | "open" => Ok("open"),
+        "closed" => Ok("closed"),
+        "merged" => Ok("merged"),
+        "all" => Ok("all"),
+        other => Err(format!(
+            "invalid PR state filter {other:?} — use open, closed, merged, or all"
+        )),
+    }
+}
+
+/// Arguments of `pr_list` (state filter normalized by the caller).
+pub fn pr_list_args(state: &str) -> Result<Vec<String>, String> {
+    let normalized = normalize_pr_state(state)?;
+    Ok(vec![
         "pr".to_string(),
         "list".to_string(),
+        "--state".to_string(),
+        normalized.to_string(),
         "--json".to_string(),
-        "number,title,headRefName,baseRefName,state,isDraft,url,createdAt".to_string(),
+        PR_LIST_JSON_FIELDS.to_string(),
         "--limit".to_string(),
         PR_LIST_LIMIT.to_string(),
-    ];
+    ])
+}
+
+/// Body of `pr_list`: `gh pr list --state <state> --json … --limit 50`.
+pub fn pr_list_sync(root: &Path, state: &str) -> Result<Vec<PrInfo>, String> {
+    let args = pr_list_args(state)?;
     let outcome = run_program(GH, Some(root), &args, LIST_TIMEOUT);
     if let Some(err) = &outcome.spawn_error {
         return Err(format!("gh CLI not found on PATH ({err})"));
@@ -763,6 +1103,188 @@ pub fn pr_list_sync(root: &Path) -> Result<Vec<PrInfo>, String> {
     }
     let combined = format!("{}\n{}", outcome.stderr, outcome.stdout);
     Err(trim_message(&combined))
+}
+
+/// Shared runner for mutating gh commands: classify spawn failures, timeouts
+/// and non-zero exits; return trimmed stdout on success.
+fn run_gh_action(
+    root: &Path,
+    args: Vec<String>,
+    label: &str,
+    timeout: Duration,
+) -> Result<String, ForgeError> {
+    let outcome = run_program(GH, Some(root), &args, timeout);
+    if let Some(err) = &outcome.spawn_error {
+        return Err(forge_failure(Some(err), ""));
+    }
+    let combined = format!("{}\n{}", outcome.stdout, outcome.stderr);
+    if outcome.code == Some(0) && !outcome.timed_out {
+        return Ok(outcome.stdout.trim().to_owned());
+    }
+    if outcome.timed_out {
+        return Err(ForgeError::other(format!(
+            "`gh {label}` timed out after {} s and was killed — check the result before retrying",
+            timeout.as_secs()
+        )));
+    }
+    Err(forge_failure(None, &combined))
+}
+
+/// [`run_gh_action`] with the shared mutating-command budget.
+fn run_pr_action(root: &Path, args: Vec<String>, label: &str) -> Result<String, ForgeError> {
+    run_gh_action(root, args, label, ACTION_TIMEOUT)
+}
+
+/// Arguments of `pr_merge`: method flag + optional `--delete-branch`/`--auto`.
+/// `method` is `merge`, `squash`, or `rebase`.
+pub fn pr_merge_args(
+    number: u64,
+    method: &str,
+    delete_branch: bool,
+    auto: bool,
+) -> Result<Vec<String>, ForgeError> {
+    let flag = match method.trim().to_ascii_lowercase().as_str() {
+        "merge" => "--merge",
+        "squash" => "--squash",
+        "rebase" => "--rebase",
+        other => {
+            return Err(ForgeError::other(format!(
+                "unknown merge method {other:?} — use merge, squash, or rebase"
+            )))
+        }
+    };
+    let mut args = vec![
+        "pr".to_string(),
+        "merge".to_string(),
+        number.to_string(),
+        flag.to_string(),
+    ];
+    if delete_branch {
+        args.push("--delete-branch".to_string());
+    }
+    if auto {
+        args.push("--auto".to_string());
+    }
+    Ok(args)
+}
+
+/// Body of `pr_merge`: merge/squash/rebase, optional branch deletion and
+/// auto-merge (merges once required checks pass).
+pub fn pr_merge_sync(
+    root: &Path,
+    number: u64,
+    method: &str,
+    delete_branch: bool,
+    auto: bool,
+) -> Result<String, ForgeError> {
+    let args = pr_merge_args(number, method, delete_branch, auto)?;
+    run_pr_action(root, args, "pr merge")
+}
+
+/// Body of `pr_close`: close a PR, optionally leaving a comment.
+pub fn pr_close_sync(
+    root: &Path,
+    number: u64,
+    comment: Option<&str>,
+) -> Result<String, ForgeError> {
+    let mut args = vec!["pr".to_string(), "close".to_string(), number.to_string()];
+    if let Some(comment) = comment.map(str::trim).filter(|c| !c.is_empty()) {
+        args.push("--comment".to_string());
+        args.push(comment.to_string());
+    }
+    run_pr_action(root, args, "pr close")
+}
+
+/// Body of `pr_reopen`: reopen a closed PR, optionally leaving a comment.
+pub fn pr_reopen_sync(
+    root: &Path,
+    number: u64,
+    comment: Option<&str>,
+) -> Result<String, ForgeError> {
+    let mut args = vec!["pr".to_string(), "reopen".to_string(), number.to_string()];
+    if let Some(comment) = comment.map(str::trim).filter(|c| !c.is_empty()) {
+        args.push("--comment".to_string());
+        args.push(comment.to_string());
+    }
+    run_pr_action(root, args, "pr reopen")
+}
+
+/// Body of `pr_ready`: mark ready for review, or convert back to draft
+/// (`gh pr ready --undo`).
+pub fn pr_ready_sync(root: &Path, number: u64, ready: bool) -> Result<String, ForgeError> {
+    let mut args = vec!["pr".to_string(), "ready".to_string(), number.to_string()];
+    if !ready {
+        args.push("--undo".to_string());
+    }
+    run_pr_action(root, args, "pr ready")
+}
+
+/// Body of `pr_checkout`: check out the PR's head branch locally.
+pub fn pr_checkout_sync(root: &Path, number: u64) -> Result<String, ForgeError> {
+    let args = vec!["pr".to_string(), "checkout".to_string(), number.to_string()];
+    run_pr_action(root, args, "pr checkout")
+}
+
+/// Body of `pr_comment`: post a comment (`gh pr comment --body-file`).
+pub fn pr_comment_sync(root: &Path, number: u64, body: &str) -> Result<String, ForgeError> {
+    let body = body.trim();
+    if body.is_empty() {
+        return Err(ForgeError::other("comment body must not be empty"));
+    }
+    let body_file = write_body_file(body)?;
+    let args = vec![
+        "pr".to_string(),
+        "comment".to_string(),
+        number.to_string(),
+        "--body-file".to_string(),
+        body_file.to_string_lossy().into_owned(),
+    ];
+    let result = run_pr_action(root, args, "pr comment");
+    let _ = std::fs::remove_file(&body_file);
+    result
+}
+
+/// Body of `pr_review`: approve, request changes, or leave a review comment.
+pub fn pr_review_sync(
+    root: &Path,
+    number: u64,
+    action: &str,
+    body: &str,
+) -> Result<String, ForgeError> {
+    let flag = match action.trim().to_ascii_lowercase().as_str() {
+        "approve" => "--approve",
+        "request-changes" => "--request-changes",
+        "comment" => "--comment",
+        other => {
+            return Err(ForgeError::other(format!(
+                "unknown review action {other:?} — use approve, request-changes, or comment"
+            )))
+        }
+    };
+    let body = body.trim();
+    if flag == "--comment" && body.is_empty() {
+        return Err(ForgeError::other("a review comment must not be empty"));
+    }
+    let mut args = vec![
+        "pr".to_string(),
+        "review".to_string(),
+        number.to_string(),
+        flag.to_string(),
+    ];
+    let body_file = if body.is_empty() {
+        None
+    } else {
+        Some(write_body_file(body)?)
+    };
+    if let Some(path) = &body_file {
+        args.push("--body-file".to_string());
+        args.push(path.to_string_lossy().into_owned());
+    }
+    let result = run_pr_action(root, args, "pr review");
+    if let Some(path) = body_file {
+        let _ = std::fs::remove_file(path);
+    }
+    result
 }
 
 /// Body of `pr_checks`: JSON mode first (`gh pr checks <n> --json
@@ -794,4 +1316,212 @@ pub fn pr_checks_sync(root: &Path, number: u64) -> Result<Vec<CheckInfo>, String
     }
     let combined = format!("{}\n{}", outcome.stderr, outcome.stdout);
     Err(trim_message(&combined))
+}
+
+// ---------------------------------------------------------------------------
+// GitHub Actions (browse runs/jobs/steps, logs, cancel/rerun, dispatch)
+// ---------------------------------------------------------------------------
+
+/// Normalize a `gh run list --status` filter; blank means no filter.
+pub fn normalize_run_status(status: &str) -> Result<Option<&'static str>, String> {
+    let status = status.trim().to_ascii_lowercase();
+    if status.is_empty() {
+        return Ok(None);
+    }
+    RUN_STATUSES
+        .iter()
+        .copied()
+        .find(|known| *known == status)
+        .map(Some)
+        .ok_or_else(|| format!("invalid run status filter {status:?}"))
+}
+
+/// Arguments of `workflow_runs` (`gh run list --json … --limit N` with the
+/// optional branch/status/workflow filters).
+pub fn workflow_runs_args(
+    limit: u32,
+    branch: &str,
+    status: &str,
+    workflow: &str,
+) -> Result<Vec<String>, String> {
+    let limit = limit.clamp(1, RUN_LIST_LIMIT_MAX);
+    let mut args = vec![
+        "run".to_string(),
+        "list".to_string(),
+        "--json".to_string(),
+        RUN_LIST_JSON_FIELDS.to_string(),
+        "--limit".to_string(),
+        limit.to_string(),
+    ];
+    let branch = branch.trim();
+    if !branch.is_empty() {
+        args.push("--branch".to_string());
+        args.push(branch.to_string());
+    }
+    if let Some(status) = normalize_run_status(status)? {
+        args.push("--status".to_string());
+        args.push(status.to_string());
+    }
+    let workflow = workflow.trim();
+    if !workflow.is_empty() {
+        args.push("--workflow".to_string());
+        args.push(workflow.to_string());
+    }
+    Ok(args)
+}
+
+/// Run one read-only gh command in the repo cwd; errors are trimmed and
+/// spawn failures say the CLI is missing.
+fn read_gh(root: &Path, args: &[String], timeout: Duration) -> Result<String, String> {
+    let outcome = run_program(GH, Some(root), args, timeout);
+    if let Some(err) = &outcome.spawn_error {
+        return Err(format!("gh CLI not found on PATH ({err})"));
+    }
+    if outcome.code == Some(0) && !outcome.timed_out {
+        return Ok(outcome.stdout);
+    }
+    if outcome.timed_out {
+        return Err(format!(
+            "gh timed out after {} s and was killed",
+            timeout.as_secs()
+        ));
+    }
+    let combined = format!("{}\n{}", outcome.stderr, outcome.stdout);
+    Err(trim_message(&combined))
+}
+
+/// Body of `workflow_runs`: recent Actions runs, newest first.
+pub fn workflow_runs_sync(
+    root: &Path,
+    limit: u32,
+    branch: &str,
+    status: &str,
+    workflow: &str,
+) -> Result<Vec<WorkflowRun>, String> {
+    let args = workflow_runs_args(limit, branch, status, workflow)?;
+    let output = read_gh(root, &args, RUNS_TIMEOUT)?;
+    Ok(parse_workflow_runs_json(&output))
+}
+
+/// Body of `workflow_run_detail`: one run with its jobs and steps.
+pub fn workflow_run_detail_sync(root: &Path, run_id: u64) -> Result<WorkflowRunDetail, String> {
+    let args = vec![
+        "run".to_string(),
+        "view".to_string(),
+        run_id.to_string(),
+        "--json".to_string(),
+        RUN_VIEW_JSON_FIELDS.to_string(),
+    ];
+    let output = read_gh(root, &args, RUNS_TIMEOUT)?;
+    parse_workflow_run_detail_json(&output)
+        .ok_or_else(|| "could not parse `gh run view --json` output".to_string())
+}
+
+/// Bound huge log payloads at a char boundary.
+pub(crate) fn cap_log(mut text: String) -> String {
+    if text.chars().count() <= MAX_LOG_CHARS {
+        return text;
+    }
+    let end = text
+        .char_indices()
+        .nth(MAX_LOG_CHARS)
+        .map(|(idx, _)| idx)
+        .unwrap_or(text.len());
+    text.truncate(end);
+    text.push_str("\n… log truncated by mygitui (too large) …\n");
+    text
+}
+
+/// Body of `workflow_run_logs`: full run log, one job's log, and/or only
+/// failed steps (`gh run view <id> [--job <id>] --log[-failed]`).
+pub fn workflow_run_logs_sync(
+    root: &Path,
+    run_id: u64,
+    job_id: Option<u64>,
+    failed_only: bool,
+) -> Result<String, String> {
+    let mut args = vec!["run".to_string(), "view".to_string(), run_id.to_string()];
+    if let Some(job_id) = job_id {
+        args.push("--job".to_string());
+        args.push(job_id.to_string());
+    }
+    args.push(if failed_only { "--log-failed" } else { "--log" }.to_string());
+    let output = read_gh(root, &args, LOGS_TIMEOUT)?;
+    Ok(cap_log(output))
+}
+
+/// Body of `workflow_run_cancel`: cancel a queued or running run.
+pub fn workflow_run_cancel_sync(root: &Path, run_id: u64) -> Result<String, ForgeError> {
+    let args = vec!["run".to_string(), "cancel".to_string(), run_id.to_string()];
+    run_gh_action(root, args, "run cancel", ACTION_TIMEOUT)
+}
+
+/// Body of `workflow_run_rerun`: rerun all jobs or only failed ones.
+pub fn workflow_run_rerun_sync(
+    root: &Path,
+    run_id: u64,
+    failed_only: bool,
+) -> Result<String, ForgeError> {
+    let mut args = vec!["run".to_string(), "rerun".to_string(), run_id.to_string()];
+    if failed_only {
+        args.push("--failed".to_string());
+    }
+    run_gh_action(root, args, "run rerun", ACTION_TIMEOUT)
+}
+
+/// Arguments of `workflow_dispatch`.
+pub fn workflow_dispatch_args(
+    workflow: &str,
+    git_ref: &str,
+    inputs: &[WorkflowInput],
+) -> Result<Vec<String>, ForgeError> {
+    let workflow = workflow.trim();
+    if workflow.is_empty() {
+        return Err(ForgeError::other("a workflow must be selected"));
+    }
+    let mut args = vec![
+        "workflow".to_string(),
+        "run".to_string(),
+        workflow.to_string(),
+    ];
+    let git_ref = git_ref.trim();
+    if !git_ref.is_empty() {
+        args.push("--ref".to_string());
+        args.push(git_ref.to_string());
+    }
+    for input in inputs {
+        let key = input.key.trim();
+        if key.is_empty() {
+            return Err(ForgeError::other("workflow input names must not be empty"));
+        }
+        args.push("--raw-field".to_string());
+        args.push(format!("{key}={}", input.value));
+    }
+    Ok(args)
+}
+
+/// Body of `workflow_dispatch`: trigger a `workflow_dispatch` run on a ref.
+pub fn workflow_dispatch_sync(
+    root: &Path,
+    workflow: &str,
+    git_ref: &str,
+    inputs: &[WorkflowInput],
+) -> Result<String, ForgeError> {
+    let args = workflow_dispatch_args(workflow, git_ref, inputs)?;
+    run_gh_action(root, args, "workflow run", ACTION_TIMEOUT)
+}
+
+/// Body of `workflow_list`: workflow files, including disabled ones.
+pub fn workflow_list_sync(root: &Path) -> Result<Vec<WorkflowInfo>, String> {
+    let args = vec![
+        "workflow".to_string(),
+        "list".to_string(),
+        "--all".to_string(),
+        "--json".to_string(),
+        "id,name,path,state".to_string(),
+        "--limit".to_string(),
+        "100".to_string(),
+    ];
+    let output = read_gh(root, &args, RUNS_TIMEOUT)?;
+    Ok(parse_workflow_list_json(&output))
 }

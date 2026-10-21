@@ -28,6 +28,8 @@
     pressed?: boolean;
     /** Tighter 1.35rem square for dense rows. */
     dense?: boolean;
+    /** Native tab order; `-1` for hover-revealed row actions. */
+    tabindex?: number;
     type?: "button" | "submit";
     onclick?: (event: MouseEvent) => void;
     "aria-expanded"?: boolean;
@@ -46,6 +48,7 @@
     disabled = false,
     pressed = undefined,
     dense = false,
+    tabindex = undefined,
     type = "button",
     onclick = undefined,
     "aria-expanded": ariaExpanded = undefined,
@@ -66,6 +69,7 @@
   aria-haspopup={ariaHasPopup}
   aria-controls={ariaControls}
   {disabled}
+  {tabindex}
   {onclick}
 >
   <Icon {icon} {size} />

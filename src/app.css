@@ -117,6 +117,30 @@
   --scrollbar-thumb: var(--m3-outline-variant);
   --scrollbar-thumb-hover: var(--m3-outline);
   --scrollbar-track: transparent;
+
+  /*
+   * App semantic tokens (source control + diff). Deliberately static like
+   * VSCode's git decorations: add/delete/conflict keep their conventional
+   * meaning regardless of the user's accent seed. Backgrounds derive from
+   * the foreground with color-mix so dark mode needs only the hue overrides
+   * below.
+   */
+  --app-added: #1a7f37;
+  --app-deleted: #cf222e;
+  --app-modified: #9a6700;
+  --app-renamed: #8250df;
+  --app-untracked: #1a7f37;
+  --app-conflicted: #cf222e;
+  --app-added-bg: color-mix(in srgb, var(--app-added) 13%, transparent);
+  --app-deleted-bg: color-mix(in srgb, var(--app-deleted) 13%, transparent);
+  --app-modified-bg: color-mix(in srgb, var(--app-modified) 14%, transparent);
+  --app-renamed-bg: color-mix(in srgb, var(--app-renamed) 13%, transparent);
+  --app-untracked-bg: color-mix(in srgb, var(--app-untracked) 12%, transparent);
+  --app-conflicted-bg: color-mix(in srgb, var(--app-conflicted) 16%, transparent);
+  --app-border: var(--m3-outline-variant);
+  --app-hover: color-mix(in srgb, var(--m3-on-surface) 5%, transparent);
+  --app-active: color-mix(in srgb, var(--m3-primary) 15%, transparent);
+  --app-font-mono: "Cascadia Mono", "SFMono-Regular", Consolas, "Liberation Mono", monospace;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -179,6 +203,14 @@
     --m3-outline-variant: #49454e;
     --m3-shadow: #000000;
     --m3-scrim: #000000;
+
+    /* Status hues tuned for dark surfaces (backgrounds derive above). */
+    --app-added: #3fb950;
+    --app-deleted: #f85149;
+    --app-modified: #d29922;
+    --app-renamed: #a371f7;
+    --app-untracked: #3fb950;
+    --app-conflicted: #f85149;
   }
 }
 
@@ -189,6 +221,13 @@ body {
   height: 100%;
   font-family: Roboto, "Segoe UI", system-ui, sans-serif;
   background: var(--m3-surface);
+  color: var(--m3-on-surface);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+::selection {
+  background: color-mix(in srgb, var(--m3-primary) 30%, transparent);
   color: var(--m3-on-surface);
 }
 
@@ -216,8 +255,8 @@ body {
 }
 
 ::-webkit-scrollbar {
-  width: 10px;
-  height: 10px;
+  width: 8px;
+  height: 8px;
 }
 
 ::-webkit-scrollbar-track {
@@ -226,7 +265,7 @@ body {
 
 ::-webkit-scrollbar-thumb {
   background: var(--scrollbar-thumb);
-  border-radius: 5px;
+  border-radius: 9999px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
