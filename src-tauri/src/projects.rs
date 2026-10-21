@@ -1545,6 +1545,7 @@ mod tests {
             "plugins { id(\"com.android.application\") }",
         );
         repo.write("gradlew.bat", "");
+        repo.write("gradlew", "");
         let projects = repo.detect();
         let android = project(&projects, "android");
         let wrapper = if cfg!(windows) {
