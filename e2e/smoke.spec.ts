@@ -16,6 +16,7 @@ import {
   trackErrors,
   type TauriMockHandle,
 } from "./tauri-mock";
+import { expectFullyVisible } from "./visible";
 
 const RECENT_REPOS_KEY = "mygitui.recent-repos";
 
@@ -102,6 +103,30 @@ test("open-repo flow: recent card → status entries → stage → commit", asyn
     repo_id: "r1",
     options: { message: "test: smoke commit" },
   });
+
+  expect(tracked.errors, tracked.errors.join("\n")).toEqual([]);
+  await tracked.attach(testInfo);
+});
+
+test("gitignore menu escapes the status list clipping", async ({ page }, testInfo) => {
+  const tracked = trackErrors(page);
+  await boot(page, {
+    [RECENT_REPOS_KEY]: JSON.stringify([
+      { path: "/tmp/repo", pinned: false, lastOpened: 1 },
+    ]),
+  });
+
+  await page.goto("/");
+  await page.getByRole("button", { name: /repo\s*\/tmp\/repo/ }).click();
+
+  const row = page.getByRole("treeitem", { name: "notes.md" });
+  await expect(row).toBeVisible();
+  await row.hover();
+  await page.getByRole("button", { name: "Ignore notes.md" }).click();
+
+  const menu = page.getByRole("menu", { name: "Ignore pattern choices" });
+  await expect(menu).toBeVisible();
+  await expectFullyVisible(page, menu);
 
   expect(tracked.errors, tracked.errors.join("\n")).toEqual([]);
   await tracked.attach(testInfo);

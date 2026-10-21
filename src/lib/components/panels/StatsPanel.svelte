@@ -23,6 +23,7 @@
    * behavior — the IPC layer rejects one-shot commands).
    */
   import { isTauri } from "$lib/entry/dragdrop";
+  import { floating } from "$lib/components/overlay/floating";
   import {
     branchColorStore,
     type BranchColorRule,
@@ -38,6 +39,8 @@
   let authorInput = $state("");
   /** Colors popover open? */
   let colorsOpen = $state(false);
+  /** Anchor for the (portaled) Colors popover. */
+  let colorsButton = $state<HTMLButtonElement>();
   /** New-rule draft (Colors popover). */
   let newPattern = $state("");
   let newColor = $state("");
@@ -153,6 +156,7 @@
       <button
         class="btn"
         type="button"
+        bind:this={colorsButton}
         aria-expanded={colorsOpen}
         title="Branch color rules (applied to the commit graph)"
         onclick={() => (colorsOpen = !colorsOpen)}
@@ -269,7 +273,12 @@
 
     {#if colorsOpen}
       <!-- Branch color rules editor (popover): pattern → color, first match wins. -->
-      <div class="colors-pop" role="dialog" aria-label="Branch color rules">
+      <div
+        class="colors-pop"
+        role="dialog"
+        aria-label="Branch color rules"
+        use:floating={{ anchor: colorsButton, alignEnd: true }}
+      >
         <div class="colors-head">
           <span>Branch color rules</span>
           <button
@@ -575,11 +584,15 @@
   }
 
   .colors-pop {
-    position: absolute;
-    top: 2.4rem;
-    right: 0.75rem;
-    z-index: 5;
-    width: min(22rem, calc(100% - 1.5rem));
+    /* Portaled to <body> by `floating`; top/left/visibility are set there. */
+    position: fixed;
+    top: 0;
+    left: 0;
+    visibility: hidden;
+    z-index: 40;
+    width: min(22rem, calc(100vw - 1rem));
+    max-height: calc(100vh - 1rem);
+    overflow-y: auto;
     display: flex;
     flex-direction: column;
     gap: 0.4rem;

@@ -17,6 +17,7 @@ import {
   seedStorage,
   type TauriMockHandle,
 } from "./tauri-mock";
+import { expectFullyVisible } from "./visible";
 
 const AI_KEY = "mygitui.ai";
 
@@ -61,20 +62,6 @@ async function openRepo(page: Page): Promise<void> {
   await expect(page.getByRole("treeitem", { name: "src/app.ts" }).first()).toBeVisible();
 }
 
-/** Fails when `box` extends past the viewport (clipped / off-screen). */
-async function expectFullyInViewport(
-  page: Page,
-  locator: Parameters<Page["locator"]>[0],
-): Promise<void> {
-  const box = await page.locator(locator).boundingBox();
-  expect(box, `${locator} has a bounding box`).not.toBeNull();
-  const vp = page.viewportSize() ?? { width: 0, height: 0 };
-  expect(box!.y, `${locator} top edge on screen`).toBeGreaterThanOrEqual(0);
-  expect(box!.x, `${locator} left edge on screen`).toBeGreaterThanOrEqual(0);
-  expect(box!.y + box!.height, `${locator} bottom edge on screen`).toBeLessThanOrEqual(vp.height);
-  expect(box!.x + box!.width, `${locator} right edge on screen`).toBeLessThanOrEqual(vp.width);
-}
-
 test("first use: opt-in dialog opens fully inside the viewport", async ({ page }) => {
   await boot(page, {
     ...recentRepos(["/tmp/repo"]),
@@ -87,7 +74,12 @@ test("first use: opt-in dialog opens fully inside the viewport", async ({ page }
 
   const dialog = page.getByRole("dialog", { name: "Allow AI for this repository" });
   await expect(dialog).toBeVisible();
-  await expectFullyInViewport(page, '[role="dialog"][aria-label="Allow AI for this repository"]');
+  await expectFullyVisible(page, dialog);
+
+  // The confirm is portaled out of the trigger's subtree; its actions must
+  // still work after the move.
+  await dialog.getByRole("button", { name: "Just once" }).click();
+  await expect(dialog).toHaveCount(0);
 });
 
 test("opted-in, opencode down: failure toast + inline fail box visible", async ({ page }) => {
@@ -117,7 +109,7 @@ test("opted-in, opencode down: failure toast + inline fail box visible", async (
   const toast = page.locator(".toaster .toast");
   await expect(toast).toContainText("AI commit message failed", { timeout: 30_000 });
 
-  const fail = page.locator(".ai-commit .fail");
+  const fail = page.locator(".fail[role=alert]");
   await expect(fail).toBeVisible();
-  await expectFullyInViewport(page, ".ai-commit .fail");
+  await expectFullyVisible(page, fail);
 });

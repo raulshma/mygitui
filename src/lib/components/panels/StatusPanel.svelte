@@ -35,6 +35,7 @@
   import { toast } from "$lib/toast";
   import { patternFor } from "./gitignore";
   import { showMenuAt, type MenuEntry } from "$lib/components/menu/contextMenuStore.svelte";
+  import { floating } from "$lib/components/overlay/floating";
   import ConfirmDialog from "$lib/components/safety/ConfirmDialog.svelte";
   import GitignoreGallery from "$lib/components/panels/GitignoreGallery.svelte";
   import Icon from "$lib/components/icons/Icon.svelte";
@@ -959,7 +960,12 @@
                           }}
                         />
                         {#if ignoreFor === row.key}
-                          <span class="ignore-menu" role="menu" aria-label="Ignore pattern choices">
+                          <span
+                            class="ignore-menu"
+                            role="menu"
+                            aria-label="Ignore pattern choices"
+                            use:floating={{ alignEnd: true }}
+                          >
                             {#each ignoreChoices as choice (choice.pattern)}
                               <button
                                 role="menuitem"
@@ -1611,13 +1617,18 @@
   }
 
   .ignore-menu {
-    position: absolute;
-    right: 0;
-    top: 100%;
-    z-index: 3;
+    /* Portaled to <body> by `floating`; top/left/visibility are set there. */
+    position: fixed;
+    top: 0;
+    left: 0;
+    visibility: hidden;
+    z-index: 40;
     display: flex;
     flex-direction: column;
     min-width: 12rem;
+    max-width: calc(100vw - 1rem);
+    max-height: calc(100vh - 1rem);
+    overflow-y: auto;
     background: var(--m3-surface-container-high, var(--m3-surface));
     border: 1px solid var(--app-border, var(--m3-outline-variant));
     border-radius: var(--m3-shape-small, 8px);

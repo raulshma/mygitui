@@ -6,6 +6,7 @@ import {
   seedStorage,
   trackErrors,
 } from "./tauri-mock";
+import { expectFullyVisible } from "./visible";
 
 /** 400 consecutive days of activity (more than the 53-week heatmap window). */
 function activity(): Array<{ day: string; count: number }> {
@@ -82,6 +83,12 @@ test("contribution heatmap lays out horizontally without a vertical scrollbar", 
   // 53 weeks overflow a side panel horizontally, not vertically.
   expect(layout.wrapScrollWidth).toBeGreaterThan(layout.wrapClientWidth);
   expect(layout.wrapScrollHeight).toBeLessThanOrEqual(layout.wrapClientHeight + 1);
+
+  // The Colors dialog must escape the panel's scroll clipping.
+  await page.getByRole("button", { name: "Colors…" }).click();
+  const colors = page.getByRole("dialog", { name: "Branch color rules" });
+  await expect(colors).toBeVisible();
+  await expectFullyVisible(page, colors);
 
   expect(tracked.errors).toEqual([]);
   await tracked.attach(test.info());

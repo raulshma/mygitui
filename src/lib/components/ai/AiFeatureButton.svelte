@@ -9,9 +9,10 @@
    *     ask on click (the commit-message behaviour).
    *   - First use / revoked-mid-session shows the inline confirm
    *     ("Send … to <backend>?") with Always allow / Just once /
-   *     Configure… / Cancel. `popUp` anchors the overlays UPWARD for bars
-   *     docked at the window's bottom edge (downward popups would render
-   *     off-screen there).
+   *     Configure… / Cancel. `popUp` prefers the upward side for bars
+   *     docked at the window's bottom edge. Overlays are portaled to <body>
+   *     and clamped to the viewport, so a clipping ancestor (SplitPane) can
+   *     never cut them off.
    *   - Busy spinner while `run()` is in flight; failures toast + render
    *     an inline Retry/Dismiss; `AiError` kind "opt-in" re-arms the
    *     confirm instead. `successToast` fires on success (the commit
@@ -29,6 +30,7 @@
   import { isAiError } from "$lib/ai/types";
   import type { FeatureOutcome } from "$lib/ai/features";
   import AiSettings from "./AiSettings.svelte";
+  import { floating } from "$lib/components/overlay/floating";
   import { toast } from "$lib/toast";
 
   let {
@@ -134,7 +136,7 @@
 </script>
 
 {#if !gateVisibility || ai.isOptedIn(repoId)}
-  <span class="ai-feature {rootClass ?? ''}" class:pop-up={popUp} bind:this={root}>
+  <span class="ai-feature {rootClass ?? ''}" bind:this={root}>
     {#if icon}
       <button
         class="sparkle"
@@ -182,7 +184,12 @@
     {/if}
 
     {#if confirmOpen}
-      <div class="confirm" role="dialog" aria-label="Allow AI for this repository">
+      <div
+        class="confirm"
+        role="dialog"
+        aria-label="Allow AI for this repository"
+        use:floating={{ anchor: root, above: popUp, alignEnd: icon }}
+      >
         <p class="confirm-text">{confirmText.replace("{backend}", backendLabel)}</p>
         <div class="confirm-actions">
           <button class="mini primary" type="button" onclick={() => void allowAndRun(true)}>
@@ -209,7 +216,11 @@
     {/if}
 
     {#if error && !confirmOpen}
-      <div class="fail" role="alert">
+      <div
+        class="fail"
+        role="alert"
+        use:floating={{ anchor: root, above: popUp, alignEnd: icon }}
+      >
         <span class="fail-text">{error}</span>
         <button class="mini" type="button" onclick={() => void doRun()}>Retry</button>
         <button class="mini" type="button" onclick={() => (error = null)}>Dismiss</button>
@@ -318,12 +329,16 @@
 
   .confirm,
   .fail {
-    position: absolute;
-    top: calc(100% + 0.25rem);
+    /* Portaled to <body> by `floating`; top/left/visibility are set there. */
+    position: fixed;
+    top: 0;
     left: 0;
+    visibility: hidden;
     z-index: 40;
     width: max-content;
-    max-width: 18rem;
+    max-width: min(18rem, calc(100vw - 1rem));
+    max-height: calc(100vh - 1rem);
+    overflow-y: auto;
     background: var(--m3-surface-container-high, var(--m3-surface));
     color: var(--m3-on-surface);
     border: 1px solid var(--m3-outline-variant, var(--m3-primary));
@@ -331,17 +346,6 @@
     padding: 0.5rem;
     box-shadow: 0 4px 16px color-mix(in srgb, black 30%, transparent);
     text-align: left;
-  }
-
-  /* Docked-bottom bars (commit bar): popups must open UPWARD or they
-     render off-screen (invisible first-use dialog). Anchored to the right
-     edge like the commit-bar sparkle it replaces. */
-  .pop-up .confirm,
-  .pop-up .fail {
-    top: auto;
-    bottom: calc(100% + 0.25rem);
-    left: auto;
-    right: 0;
   }
 
   .confirm-text {
