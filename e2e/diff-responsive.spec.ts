@@ -26,7 +26,7 @@ const SHA = "0000000000000000000000000000000000000002";
 async function bootRepoWithDiff(
   page: Page,
   lineTexts: string[],
-  opts: { allContext?: boolean; del?: string } = {},
+  opts: { allContext?: boolean; del?: string; added?: boolean } = {},
 ) {
   await seedStorage(page, recentRepos(["/tmp/repo"]));
   const lines: Array<{
@@ -38,12 +38,15 @@ async function bootRepoWithDiff(
   }> = [];
   // First line context, the rest additions — or all context. `opts.del`
   // inserts a deletion after the first line, pairing with the first
-  // addition (a split pair row with DIFFERENT text per side).
-  lines.push({ old_no: 1, new_no: 1, origin: " ", text: lineTexts[0]!, highlights: [] });
+  // addition (a split pair row with DIFFERENT text per side). `opts.added`
+  // drops the context line so the file has no previous content at all.
+  if (!opts.added) {
+    lines.push({ old_no: 1, new_no: 1, origin: " ", text: lineTexts[0]!, highlights: [] });
+  }
   if (opts.del) {
     lines.push({ old_no: 2, new_no: null, origin: "-", text: opts.del, highlights: [] });
   }
-  lineTexts.slice(1).forEach((text, i) => {
+  lineTexts.slice(opts.added ? 0 : 1).forEach((text) => {
     lines.push({
       old_no: opts.allContext ? lines.length + 1 : null,
       new_no: lines.length + 1,
@@ -70,10 +73,10 @@ async function bootRepoWithDiff(
         {
           path: "src/file.ts",
           old_path: null,
-          status: "modified",
+          status: opts.added ? "added" : "modified",
           binary: false,
           additions: lineTexts.length,
-          deletions: opts.del ? 2 : 1,
+          deletions: opts.added ? 0 : opts.del ? 2 : 1,
           hunks: [{ old_start: 1, new_start: 1, lines }],
         },
       ],
@@ -136,6 +139,40 @@ test("split view shares the pane and never scrolls horizontally", async ({ page 
   m = await diffMetrics(page);
   expect(m.vpScroll).toBeLessThanOrEqual(m.vpClient);
   expect(m.rowWidth).toBe(m.vpClient);
+
+  expect(tracked.errors).toEqual([]);
+});
+
+test("added file renders inline full width even in split mode", async ({ page }) => {
+  const tracked = trackErrors(page);
+  await bootRepoWithDiff(page, ["first added line", "second added line"], {
+    added: true,
+  });
+  await page.setViewportSize({ width: 1400, height: 1000 });
+  await openCommitDiff(page, "first added line");
+
+  const metrics = await page.evaluate(() => {
+    const vp = document.querySelector(".diff-viewer .viewport") as HTMLElement;
+    const row = document.querySelector(".diff-viewer .row.single") as HTMLElement;
+    return {
+      vpClient: vp.clientWidth,
+      vpScroll: vp.scrollWidth,
+      rowWidth: row ? Math.round(row.getBoundingClientRect().width) : 0,
+      singleCount: document.querySelectorAll(".diff-viewer .row.single").length,
+      pairCount: document.querySelectorAll(".diff-viewer .row.pair").length,
+      halfCount: document.querySelectorAll(".diff-viewer .half").length,
+      gutterCount: row?.querySelectorAll("button.no").length ?? 0,
+      gutterText: row?.querySelector("button.no")?.textContent ?? "",
+    };
+  });
+  // No previous content → one full-width inline column, not old|new halves.
+  expect(metrics.singleCount).toBe(2);
+  expect(metrics.pairCount).toBe(0);
+  expect(metrics.halfCount).toBe(0);
+  expect(metrics.gutterCount).toBe(1);
+  expect(metrics.gutterText).toBe("1");
+  expect(metrics.rowWidth).toBe(metrics.vpClient);
+  expect(metrics.vpScroll).toBeLessThanOrEqual(metrics.vpClient);
 
   expect(tracked.errors).toEqual([]);
 });

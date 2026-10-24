@@ -66,6 +66,11 @@ export interface UiEventMap {
   "ai-pr-result": { subject: string; body: string };
   /** AI bridge failure: human-readable reason (dialog clears its wait). */
   "ai-pr-error": { message: string };
+  /**
+   * Open a GitHub Actions run in the main editor:
+   * `{ repoId, runId }`. Emitted by the forge sidebar's Actions tab.
+   */
+  "workflow-run-open": { repoId: string; runId: number };
 }
 
 export type UiEventName = keyof UiEventMap;

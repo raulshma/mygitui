@@ -6,8 +6,9 @@
    * disagree with the virtualizer's uniform-height buckets.
    *
    * Layout:
- *   split    [ old# | - | text ][ new# | + | text ]  (equal halves)
- *   context  [ old# | text ][ new# | text ]  (same line, clipped per half)
+   *   split    [ old# | - | text ][ new# | + | text ]  (equal halves)
+   *   context  [ old# | text ][ new# | text ]  (same line, clipped per half)
+   *   single   [ line# | sign | text ]  (one-sided file, full width)
    *   unified  [ old# | new# | sign | text ]
    */
   import type { DiffLine } from "$lib/ipc/types";
@@ -100,7 +101,7 @@
   /** M12: membership check bound to this row's hunk. */
   function selectedInRow(lineIndex: number | null): boolean {
     if (lineIndex === null || !selectedAt) return false;
-    if (row.kind !== "line" && row.kind !== "context" && row.kind !== "pair") return false;
+    if (row.kind !== "line" && row.kind !== "single" && row.kind !== "context" && row.kind !== "pair") return false;
     return selectedAt(row.fileIndex, row.hunkIndex, lineIndex);
   }
 
@@ -321,6 +322,31 @@
         <span class="txt" class:wrap>{@render text(row.right)}</span>
       {/if}
     </div>
+  </div>
+
+{:else if row.kind === "single"}
+  {@const isAdd = row.line.origin === "+"}
+  {@const isDel = row.line.origin === "-"}
+  {@const lineNo = row.side === "old" ? row.line.old_no : row.line.new_no}
+  <div
+    class="row line single{isAdd ? " add" : isDel ? " del" : ""}"
+    class:selected={selectedInRow(row.lineIndex)}
+    data-row-index={rowIndex}
+    style:height={`${heightPx ?? rowHeight(row)}px`}
+    use:measure
+  >
+    <button
+      type="button"
+      class="no" class:click={onGutterClick !== undefined}
+      tabindex="-1"
+      aria-label="Select line {lineNo ?? ""}"
+      onclick={(e) => {
+        e.stopPropagation();
+        gutter(row.fileIndex, row.hunkIndex, row.lineIndex, e);
+      }}
+    >{lineNo ?? ""}</button>
+    <span class="sign{isAdd ? " add" : isDel ? " del" : ""}" aria-hidden="true">{row.line.origin.trim()}</span>
+    <span class="txt" class:wrap>{@render text(row.line)}</span>
   </div>
 
 {:else if row.kind === "line"}

@@ -24,6 +24,7 @@ const CHAR_W = 10;
 const METRICS = {
   splitTextWidth: 400, // 40 columns per half
   unifiedTextWidth: 800, // 80 columns per row
+  singleTextWidth: 900, // 90 columns for a one-sided full-width row
   charWidth: CHAR_W,
 };
 
@@ -61,6 +62,22 @@ describe("wrappedRowHeight", () => {
     const row = { kind: "line" as const, line: line("+", "x".repeat(81)), fileIndex: 0, hunkIndex: 0, lineIndex: 0 };
     // 81 cols at 80 cols/line → 2 lines × 20px.
     expect(wrappedRowHeight(row, METRICS)).toBe(40);
+  });
+
+  it("uses the full row width for one-sided lines", () => {
+    const fits = {
+      kind: "single" as const,
+      side: "new" as const,
+      // 85 cols: one line at 90 cols, two if the unified 80-col width were used.
+      line: line("+", "x".repeat(85)),
+      fileIndex: 0,
+      hunkIndex: 0,
+      lineIndex: 0,
+    };
+    expect(wrappedRowHeight(fits, METRICS)).toBe(20);
+
+    const wraps = { ...fits, line: line("+", "x".repeat(91)) };
+    expect(wrappedRowHeight(wraps, METRICS)).toBe(40);
   });
 
   it("uses split width for context rows", () => {
@@ -114,6 +131,7 @@ describe("wrappedHeights / wrapMetrics", () => {
     const split = wrapMetrics(1001, "split");
     expect(split.splitTextWidth).toBe(Math.floor((1001 - 1) / 2) - GUTTER_PX.splitSide);
     expect(split.unifiedTextWidth).toBe(1001 - GUTTER_PX.unified);
+    expect(split.singleTextWidth).toBe(1001 - GUTTER_PX.splitSide);
 
     const unified = wrapMetrics(1001, "unified");
     expect(unified.splitTextWidth).toBe(0 - GUTTER_PX.splitSide);

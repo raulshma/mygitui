@@ -5,10 +5,11 @@
  *
  * Query contract (the new window's own URL):
  *
- *   ?panel=diff|history|filehistory|commitdetail&repo=<repoId>
- *   [&path=<repo-relative path>][&sha=<commit sha>]
+ *   ?panel=diff|history|filehistory|commitdetail|workflowrun&repo=<repoId>
+ *   [&path=<repo-relative path>][&sha=<commit sha>][&run=<run id>]
  *
- * `path` is required for `filehistory`; `sha` for `commitdetail`.
+ * `path` is required for `filehistory`; `sha` for `commitdetail`; `run`
+ * (a positive integer) for `workflowrun`.
  * `App.svelte` reads it once at startup and renders the matching view alone
  * (each wires its own stores). Outside Tauri (browser / tests) opening a
  * popout toasts instead of throwing.
@@ -27,7 +28,12 @@ import { openPopout } from "$lib/ipc/client";
 import { toast } from "$lib/toast";
 
 /** Panels that support popout windows. */
-export type PopoutPanel = "diff" | "history" | "filehistory" | "commitdetail";
+export type PopoutPanel =
+  | "diff"
+  | "history"
+  | "filehistory"
+  | "commitdetail"
+  | "workflowrun";
 
 /** Options beyond the panel + repo (M9: file history path). */
 export interface PopoutOptions {
@@ -35,6 +41,8 @@ export interface PopoutOptions {
   path?: string;
   /** Full commit sha (required for `commitdetail`). */
   sha?: string;
+  /** GitHub Actions run id (required for `workflowrun`). */
+  runId?: number;
 }
 
 /** The popout window URL query for a panel + repo. */
@@ -50,6 +58,13 @@ export function popoutQueryString(
   if (options.sha !== undefined && options.sha !== "") {
     query += `&sha=${encodeURIComponent(options.sha)}`;
   }
+  if (
+    options.runId !== undefined &&
+    Number.isInteger(options.runId) &&
+    options.runId > 0
+  ) {
+    query += `&run=${options.runId}`;
+  }
   return query;
 }
 
@@ -58,6 +73,7 @@ export interface ParsedPopout {
   repoId: string;
   path: string | null;
   sha: string | null;
+  runId: number | null;
 }
 
 /** Parses `location.search`; `null` when this window is not a popout. */
@@ -74,14 +90,24 @@ export function parsePopoutQuery(search: string): ParsedPopout | null {
     (panel !== "diff" &&
       panel !== "history" &&
       panel !== "filehistory" &&
-      panel !== "commitdetail") ||
+      panel !== "commitdetail" &&
+      panel !== "workflowrun") ||
     !repoId
   ) {
     return null;
   }
   if (panel === "filehistory" && !params.get("path")) return null;
   if (panel === "commitdetail" && !params.get("sha")) return null;
-  return { panel, repoId, path: params.get("path"), sha: params.get("sha") };
+  const rawRun = params.get("run");
+  const runId = rawRun !== null && /^\d+$/.test(rawRun) ? Number(rawRun) : null;
+  if (panel === "workflowrun" && (runId === null || runId <= 0)) return null;
+  return {
+    panel,
+    repoId,
+    path: params.get("path"),
+    sha: params.get("sha"),
+    runId,
+  };
 }
 
 /** WebviewWindow labels allow `a-zA-Z0-9-/:_`; everything else is dropped. */
@@ -99,7 +125,11 @@ function popoutLabel(
     options.sha !== undefined && options.sha !== ""
       ? `-${options.sha.replace(/[^a-zA-Z0-9-/:_]/g, "").slice(0, 12)}`
       : "";
-  return `popout-${panel}-${safe || "repo"}${pathKey}${shaKey}`;
+  const runKey =
+    options.runId !== undefined && Number.isInteger(options.runId)
+      ? `-run${options.runId}`
+      : "";
+  return `popout-${panel}-${safe || "repo"}${pathKey}${shaKey}${runKey}`;
 }
 
 /**
@@ -124,6 +154,13 @@ export async function openPanelPopout(
   }
   if (panel === "commitdetail" && !options.sha) {
     toast("Commit detail needs a sha", { kind: "error" });
+    return;
+  }
+  if (
+    panel === "workflowrun" &&
+    (options.runId === undefined || !Number.isInteger(options.runId))
+  ) {
+    toast("Run details need a run id", { kind: "error" });
     return;
   }
   const label = popoutLabel(panel, repoId, options);

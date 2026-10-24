@@ -27,6 +27,7 @@
   } from "$lib/ipc/client";
   import { forgeStore, openExternal } from "$lib/stores/forge.svelte";
   import { refreshStatus } from "$lib/stores/tabs.svelte";
+  import { emitUiEvent } from "$lib/palette/events";
   import { toast } from "$lib/toast";
   import DialogShell from "$lib/components/safety/DialogShell.svelte";
   import CreatePrDialog from "./CreatePrDialog.svelte";
@@ -46,7 +47,7 @@
     prStateLabel,
     reviewDecisionLabel,
     runCanRerun,
-    runDurationLabel,
+    runElapsedLabel,
     runHasFailures,
     runIsActive,
     runStateClass,
@@ -54,9 +55,8 @@
     runStateKind,
     runStateLabel,
     statusBanner,
-    stepStateClass,
-    stepStateLabel,
     summarizeChecks,
+    workflowEventLabel,
     workflowStateLabel,
     worstChipClass,
   } from "./forgeModel";
@@ -76,17 +76,11 @@
 
   // Actions tab state.
   let runsEnsuredFor = $state<string | null>(null);
-  let expandedRunId = $state<number | null>(null);
   let branchFilter = $state("");
   let statusFilter = $state<RunStatusFilter>("");
   let workflowFilter = $state("");
-  /** Which log view is open (inline under the expanded run). */
-  let logView = $state<{
-    runId: number;
-    jobId: number | null;
-    failedOnly: boolean;
-  } | null>(null);
-  let logCopied = $state(false);
+  /** Ticks elapsed labels and powers the run-list auto refresh. */
+  let now = $state(Date.now());
   // Dispatch dialog.
   let dispatchOpen = $state(false);
   let dispatchWorkflow = $state("");
@@ -116,8 +110,6 @@
     expandedNumber = null;
     watching = [];
     runsEnsuredFor = null;
-    expandedRunId = null;
-    logView = null;
     branchFilter = "";
     statusFilter = "";
     workflowFilter = "";
@@ -169,6 +161,32 @@
   const workflowsError = $derived(forgeStore.workflowsErrorFor(repoId));
   const dispatchable = $derived(activeWorkflows(workflows));
   const dispatchBusy = $derived(forgeStore.isDispatchBusy(repoId));
+  const activeRunCount = $derived(runs.filter((run) => runIsActive(run)).length);
+
+  // Keep elapsed labels ticking and the list fresh while runs are active.
+  // The refresh is silent so the toolbar does not flash "Loading…" every
+  // few seconds.
+  $effect(() => {
+    if (tab !== "actions" || activeRunCount === 0) return;
+    const timer = setInterval(() => (now = Date.now()), 1_000);
+    return () => clearInterval(timer);
+  });
+
+  $effect(() => {
+    if (tab !== "actions" || activeRunCount === 0) return;
+    const targetRepo = repoId;
+    const filters = currentRunFilters();
+    const timer = setInterval(() => {
+      if (
+        typeof document !== "undefined" &&
+        document.visibilityState === "hidden"
+      ) {
+        return;
+      }
+      void forgeStore.refreshRuns(targetRepo, filters, true);
+    }, 10_000);
+    return () => clearInterval(timer);
+  });
 
   $effect(() => {
     if (!dispatchOpen || dispatchWorkflow) return;
@@ -259,8 +277,6 @@
   }
 
   function applyRunFilters(): void {
-    expandedRunId = null;
-    logView = null;
     void forgeStore.refreshRuns(repoId, currentRunFilters());
   }
 
@@ -269,52 +285,17 @@
     void forgeStore.refreshWorkflows(repoId);
   }
 
-  function toggleRun(run: WorkflowRun): void {
-    const next = expandedRunId === run.database_id ? null : run.database_id;
-    expandedRunId = next;
-    if (next === null) {
-      logView = null;
-      return;
-    }
-    if (logView?.runId !== next) logView = null;
-    void forgeStore.loadRunDetail(repoId, next);
-  }
-
-  function openRunLogs(
-    runId: number,
-    jobId: number | null = null,
-    failedOnly = false,
-  ): void {
-    expandedRunId = runId;
-    logView = { runId, jobId, failedOnly };
-    logCopied = false;
-    void forgeStore.loadRunDetail(repoId, runId);
-    void forgeStore.loadRunLogs(repoId, runId, jobId, failedOnly);
-  }
-
-  async function copyLogs(): Promise<void> {
-    const view = logView;
-    if (!view) return;
-    const text = forgeStore.logsFor(
+  /** Opens a run in the main editor (jobs + logs live there). */
+  function openRun(run: WorkflowRun): void {
+    emitUiEvent("workflow-run-open", {
       repoId,
-      view.runId,
-      view.jobId,
-      view.failedOnly,
-    );
-    if (text === null) return;
-    try {
-      await navigator.clipboard.writeText(text);
-      logCopied = true;
-      toast("Logs copied to the clipboard", { kind: "success" });
-    } catch {
-      toast("Clipboard is not available", { kind: "error" });
-    }
+      runId: run.database_id,
+    });
   }
 
   async function cancelRun(run: WorkflowRun): Promise<void> {
     try {
       await forgeStore.cancelRun(repoId, run.database_id);
-      logView = null;
       toast(`Cancelled run #${run.number}`, { kind: "success" });
     } catch (err) {
       toast(errorText(err), { kind: "error" });
@@ -324,7 +305,6 @@
   async function rerunRun(run: WorkflowRun, failedOnly: boolean): Promise<void> {
     try {
       await forgeStore.rerunRun(repoId, run.database_id, failedOnly);
-      logView = null;
       toast(
         failedOnly
           ? `Rerunning failed jobs of #${run.number}`
@@ -715,50 +695,6 @@
     </div>
   {/snippet}
 
-  {#snippet logBlock(runId: number)}
-    {#if logView && logView.runId === runId}
-      {@const view = logView}
-      {@const text = forgeStore.logsFor(repoId, runId, view.jobId, view.failedOnly)}
-      {@const loading = forgeStore.logsLoadingFor(repoId, runId, view.jobId, view.failedOnly)}
-      {@const error = forgeStore.logsErrorFor(repoId, runId, view.jobId, view.failedOnly)}
-      {@const jobName =
-        view.jobId === null
-          ? ""
-          : (forgeStore
-              .detailFor(repoId, runId)
-              ?.jobs.find((job) => job.database_id === view.jobId)?.name ??
-            `job ${view.jobId}`)}
-      <div class="wf-log" aria-label="Workflow log">
-        <div class="wf-log-head">
-          <span class="wf-log-title">
-            Logs{jobName ? ` · ${jobName}` : ""}{view.failedOnly ? " · failed steps" : ""}
-          </span>
-          <span class="spacer"></span>
-          <button
-            class="tb"
-            type="button"
-            disabled={text === null}
-            onclick={() => void copyLogs()}
-          >
-            {logCopied ? "Copied" : "Copy"}
-          </button>
-          <button class="tb" type="button" onclick={() => (logView = null)}>
-            Close
-          </button>
-        </div>
-        {#if loading}
-          <p class="muted" aria-live="polite">Loading logs…</p>
-        {:else if error}
-          <p class="error-inline" role="alert">{error}</p>
-        {:else if text !== null && text.trim()}
-          <pre class="wf-log-text">{text}</pre>
-        {:else if text !== null}
-          <p class="muted">No log output for this selection.</p>
-        {/if}
-      </div>
-    {/if}
-  {/snippet}
-
   <div class="toolbar">
     <div class="tabs" role="tablist" aria-label="GitHub panels">
       <button
@@ -901,7 +837,8 @@
         <div class="actions-summary">
           <h3 class="section-title">Recent runs</h3>
           <span class="muted" aria-live="polite">
-            {runs.length} run{runs.length === 1 ? "" : "s"}{runsLoading ? " · loading…" : ""}
+            {runs.length} run{runs.length === 1 ? "" : "s"}{#if activeRunCount > 0}
+              · {activeRunCount} active{/if}{runsLoading ? " · loading…" : ""}
           </span>
           {#if workflowsLoading}
             <span class="muted">Refreshing workflows…</span>
@@ -928,30 +865,19 @@
               {@const kind = runStateKind(run)}
               {@const active = runIsActive(run)}
               {@const busy = forgeStore.isRunBusy(repoId, run.database_id)}
-              {@const isExpanded = expandedRunId === run.database_id}
-              {@const detail = forgeStore.detailFor(repoId, run.database_id)}
-              {@const detailLoading = forgeStore.detailLoadingFor(repoId, run.database_id)}
-              {@const detailError = forgeStore.detailErrorFor(repoId, run.database_id)}
-              {@const age = prAgeLabel(run.created_at)}
-              {@const duration = runDurationLabel(
-                run.started_at,
-                run.status === "completed" ? run.updated_at : null,
-              )}
-              <li class="wf-run" class:expanded={isExpanded}>
+              {@const age = prAgeLabel(run.created_at, now)}
+              {@const duration = runElapsedLabel(run, now)}
+              <li class="wf-run">
                 <div class="wf-run-line">
-                  <span class="run-chip {runStateClass(kind)}">
-                    <span aria-hidden="true">{runStateIcon(kind)}</span>
-                    {runStateLabel(run)}
-                  </span>
                   <button
                     class="wf-run-main"
                     type="button"
-                    aria-expanded={isExpanded}
-                    title="Show jobs and steps"
-                    onclick={() => toggleRun(run)}
+                    title="Open run details, jobs and logs"
+                    onclick={() => openRun(run)}
                   >
-                    <span class="expand-icon" aria-hidden="true">
-                      {isExpanded ? "▾" : "▸"}
+                    <span class="run-chip {runStateClass(kind)}">
+                      <span aria-hidden="true">{runStateIcon(kind)}</span>
+                      {runStateLabel(run)}
                     </span>
                     <span class="wf-run-name" title={run.name}>{run.name}</span>
                     <span class="wf-run-title" title={run.display_title}>
@@ -962,7 +888,9 @@
                       {#if run.head_branch}
                         <code class="wf-branch" title="Head branch">{run.head_branch}</code>
                       {/if}
-                      <span class="wf-event" title="Trigger event">{run.event}</span>
+                      <span class="wf-event" title="Trigger event">
+                        {workflowEventLabel(run.event)}
+                      </span>
                       {#if run.attempt > 1}
                         <span class="wf-attempt">attempt {run.attempt}</span>
                       {/if}
@@ -1009,12 +937,12 @@
                       {/if}
                     {/if}
                     <button
-                      class="tb"
+                      class="tb primary"
                       type="button"
-                      title="Show the run log"
-                      onclick={() => openRunLogs(run.database_id)}
+                      title="Open run details, jobs and logs"
+                      onclick={() => openRun(run)}
                     >
-                      Logs
+                      Details
                     </button>
                     <button
                       class="tb"
@@ -1026,105 +954,6 @@
                     </button>
                   </span>
                 </div>
-
-                {#if isExpanded}
-                  <div class="wf-detail">
-                    {#if detailLoading && detail === null}
-                      <p class="muted" aria-live="polite">Loading jobs…</p>
-                    {:else if detailError && detail === null}
-                      <p class="error-inline" role="alert">{detailError}</p>
-                    {:else if detail}
-                      {#if detail.jobs.length === 0}
-                        <p class="muted">No jobs reported for this run.</p>
-                      {:else}
-                        <ul class="wf-jobs" role="list" aria-label="Workflow jobs">
-                          {#each detail.jobs as job (job.database_id)}
-                            {@const jobKind = runStateKind({
-                              status: job.status,
-                              conclusion: job.conclusion,
-                            })}
-                            {@const jobDuration = runDurationLabel(
-                              job.started_at,
-                              job.completed_at,
-                            )}
-                            <li class="wf-job">
-                              <div class="wf-job-head">
-                                <span
-                                  class="job-icon {stepStateClass(job.conclusion, job.status)}"
-                                  aria-hidden="true"
-                                >
-                                  {runStateIcon(jobKind)}
-                                </span>
-                                <span class="job-name" title={job.name}>{job.name}</span>
-                                <span class="job-state {stepStateClass(job.conclusion, job.status)}">
-                                  {stepStateLabel(job.conclusion, job.status)}
-                                </span>
-                                {#if jobDuration}
-                                  <span class="age">{jobDuration}</span>
-                                {/if}
-                                <span class="spacer"></span>
-                                <button
-                                  class="tb"
-                                  type="button"
-                                  title="Show this job's log"
-                                  onclick={() =>
-                                    openRunLogs(run.database_id, job.database_id)}
-                                >
-                                  Log
-                                </button>
-                                {#if job.conclusion === "failure"}
-                                  <button
-                                    class="tb"
-                                    type="button"
-                                    title="Show only failed steps"
-                                    onclick={() =>
-                                      openRunLogs(run.database_id, job.database_id, true)}
-                                  >
-                                    Failed log
-                                  </button>
-                                {/if}
-                                <button
-                                  class="tb"
-                                  type="button"
-                                  title="Open job on GitHub"
-                                  onclick={() => void openUrl(job.url)}
-                                >
-                                  Open
-                                </button>
-                              </div>
-                              {#if job.steps.length > 0}
-                                <ol class="wf-steps">
-                                  {#each job.steps as step (step.number)}
-                                    {@const stepKind = runStateKind({
-                                      status: step.status,
-                                      conclusion: step.conclusion,
-                                    })}
-                                    <li class="wf-step">
-                                      <span
-                                        class="step-icon {stepStateClass(
-                                          step.conclusion,
-                                          step.status,
-                                        )}"
-                                        aria-hidden="true"
-                                      >
-                                        {runStateIcon(stepKind)}
-                                      </span>
-                                      <span class="step-name" title={step.name}>{step.name}</span>
-                                      <span class="step-state">
-                                        {stepStateLabel(step.conclusion, step.status)}
-                                      </span>
-                                    </li>
-                                  {/each}
-                                </ol>
-                              {/if}
-                            </li>
-                          {/each}
-                        </ul>
-                      {/if}
-                    {/if}
-                    {@render logBlock(run.database_id)}
-                  </div>
-                {/if}
               </li>
             {/each}
           </ul>
@@ -1897,10 +1726,6 @@
     overflow: hidden;
   }
 
-  .wf-run.expanded {
-    border-color: var(--m3-primary);
-  }
-
   .wf-run-line {
     display: flex;
     align-items: flex-start;
@@ -2056,135 +1881,6 @@
     flex-wrap: wrap;
     gap: 0.2rem;
     margin-left: auto;
-  }
-
-  .wf-detail {
-    min-width: 0;
-    padding: 0.4rem 0.5rem 0.5rem;
-    border-top: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    background: var(--m3-surface-container, transparent);
-  }
-
-  .wf-jobs {
-    margin: 0;
-    padding: 0;
-    list-style: none;
-    display: flex;
-    flex-direction: column;
-    gap: 0.35rem;
-  }
-
-  .wf-job {
-    min-width: 0;
-    padding: 0.3rem 0.4rem;
-    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    border-radius: var(--m3-shape-extra-small, 4px);
-    background: var(--m3-surface-container-low, var(--m3-surface));
-  }
-
-  .wf-job-head {
-    display: flex;
-    align-items: center;
-    flex-wrap: wrap;
-    gap: 0.375rem;
-    min-width: 0;
-  }
-
-  .job-icon,
-  .step-icon {
-    flex: none;
-    width: 1em;
-    text-align: center;
-    font-weight: 700;
-  }
-
-  .job-name {
-    flex: 0 1 auto;
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    font-weight: 600;
-  }
-
-  .job-state {
-    flex: none;
-    font-size: 0.68rem;
-  }
-
-  .wf-steps {
-    margin: 0.25rem 0 0 0.35rem;
-    padding: 0.15rem 0 0 0.55rem;
-    list-style: none;
-    border-left: 1px dashed var(--m3-outline-variant, var(--m3-primary));
-    display: flex;
-    flex-direction: column;
-    gap: 0.15rem;
-  }
-
-  .wf-step {
-    display: flex;
-    align-items: baseline;
-    gap: 0.375rem;
-    min-width: 0;
-    font-size: 0.72rem;
-  }
-
-  .step-name {
-    flex: 1 1 auto;
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .step-state {
-    flex: none;
-    font-size: 0.6563rem;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-  }
-
-  .wf-log {
-    margin-top: 0.4rem;
-    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    border-radius: var(--m3-shape-extra-small, 4px);
-    background: var(--m3-surface-container-lowest, var(--m3-surface));
-    overflow: hidden;
-  }
-
-  .wf-log-head {
-    display: flex;
-    align-items: center;
-    gap: 0.35rem;
-    padding: 0.25rem 0.4rem;
-    border-bottom: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    background: var(--m3-surface-container, transparent);
-  }
-
-  .wf-log-title {
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    font-size: 0.7rem;
-    font-weight: 600;
-  }
-
-  .wf-log-text {
-    margin: 0;
-    padding: 0.5rem;
-    max-height: 18rem;
-    overflow: auto;
-    font-family: ui-monospace, Consolas, monospace;
-    font-size: 0.68rem;
-    line-height: 1.45;
-    white-space: pre;
-    tab-size: 4;
-  }
-
-  .wf-log > .muted,
-  .wf-log > .error-inline {
-    padding: 0 0.5rem;
   }
 
   .section-title {

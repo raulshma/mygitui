@@ -9,6 +9,9 @@
  *   file-header  one per file: path, +/- counts, collapse toggle, states
  *   hunk-header  "@@ -a,b +c,d @@" — also an a11y focus stop
  *   line         one row per DiffLine (unified mode; any origin)
+ *   single       split mode, one-sided file (added or deleted): the existing
+ *                side spans the whole row (VS Code's inline layout), because
+ *                the missing side would just be a blank half
  *   context      split mode: unchanged line rendered in both halves, each
  *                clipped at the divider
  *   pair         split mode: aligned (-line | +line) pair; shorter side padded
@@ -76,6 +79,19 @@ export interface RowContext {
   hunkIndex: number;
   lineIndex: number;
 }
+/**
+ * Split mode, one-sided file: only one side exists, so the line spans the
+ * whole row and shows that side's gutter (no empty filler half).
+ */
+export interface RowSingle {
+  kind: "single";
+  line: DiffLine;
+  fileIndex: number;
+  hunkIndex: number;
+  lineIndex: number;
+  /** Existing side — the only gutter this row renders. */
+  side: "old" | "new";
+}
 /** Split mode: aligned deletion/addition; `null` pads the shorter run. */
 export interface RowPair {
   kind: "pair";
@@ -101,6 +117,7 @@ export type DiffRow =
   | RowHunkHeader
   | RowLine
   | RowContext
+  | RowSingle
   | RowPair
   | RowBinary
   | RowImage;
@@ -109,6 +126,8 @@ export interface RowModel {
   rows: DiffRow[];
   /** Parallel to `rows`: owning file's index (syntax highlighting, M11). */
   fileIndexes: number[];
+  /** True when any row is a two-column split row (drives scroll width). */
+  hasSplitRows: boolean;
   /** Longest line text in JS chars (raw length stat). */
   maxTextChars: number;
   /**
@@ -203,6 +222,7 @@ export function rowHeight(row: DiffRow): number {
     case "hunk-header":
       return ROW_HEIGHTS.hunkHeader;
     case "line":
+    case "single":
     case "context":
     case "pair":
       return ROW_HEIGHTS.line;
@@ -272,6 +292,30 @@ function appendHunkBodySplit(
 }
 
 /**
+ * One-sided file body: the file has no content on the other side, so every
+ * line renders full-width with only its own gutter (VS Code's inline diff for
+ * added/deleted files) rather than as a half plus an empty filler half.
+ */
+function appendHunkBodySingle(
+  lines: readonly DiffLine[],
+  rows: DiffRow[],
+  fileIndex: number,
+  hunkIndex: number,
+  side: "old" | "new",
+): void {
+  for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
+    rows.push({
+      kind: "single",
+      line: lines[lineIndex],
+      fileIndex,
+      hunkIndex,
+      lineIndex,
+      side,
+    });
+  }
+}
+
+/**
  * Build the row list for the current mode. `collapsedPaths` (keyed by
  * FileDiff.path) replaces a file's body with just its header.
  */
@@ -283,6 +327,7 @@ export function buildRowModel(
   const rows: DiffRow[] = [];
   /** Parallel to `rows`: owning file's index (syntax highlighting, M11). */
   const fileIndexes: number[] = [];
+  let hasSplitRows = false;
   let maxTextChars = 0;
   let maxLineCols = 0;
   let maxLineText = "";
@@ -319,6 +364,11 @@ export function buildRowModel(
       fileIndexes.push(fileIndex);
       continue;
     }
+    // Added/deleted files have no content on one side: render them inline
+    // (full-width gutter + text) instead of a half paired with a blank filler.
+    const change = mode === "split" ? fileChangeKind(file) : null;
+    const singleSide =
+      change === "added" ? "new" : change === "deleted" ? "old" : null;
     for (let hunkIndex = 0; hunkIndex < file.hunks.length; hunkIndex++) {
       const hunk = file.hunks[hunkIndex];
       const { oldCount, newCount } = hunkCounts(hunk);
@@ -343,9 +393,14 @@ export function buildRowModel(
           });
           fileIndexes.push(fileIndex);
         }
+      } else if (singleSide !== null) {
+        const before = rows.length;
+        appendHunkBodySingle(hunk.lines, rows, fileIndex, hunkIndex, singleSide);
+        for (let i = before; i < rows.length; i++) fileIndexes.push(fileIndex);
       } else {
         const before = rows.length;
         appendHunkBodySplit(hunk.lines, rows, fileIndex, hunkIndex);
+        if (rows.length > before) hasSplitRows = true;
         for (let i = before; i < rows.length; i++) fileIndexes.push(fileIndex);
       }
     }
@@ -354,6 +409,7 @@ export function buildRowModel(
   return {
     rows,
     fileIndexes,
+    hasSplitRows,
     maxTextChars,
     maxLineText,
     totalAdditions,

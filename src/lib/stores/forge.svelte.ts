@@ -343,11 +343,12 @@ export class ForgeStore {
   async refreshRuns(
     repoId: RepoId,
     filters: WorkflowRunFilters = this.runFiltersFor(repoId),
+    silent = false,
   ): Promise<WorkflowRun[]> {
     const seq = (this.#runsSeqs.get(repoId) ?? 0) + 1;
     this.#runsSeqs.set(repoId, seq);
     this.runFilters = { ...this.runFilters, [repoId]: filters };
-    this.runsLoading = { ...this.runsLoading, [repoId]: true };
+    if (!silent) this.runsLoading = { ...this.runsLoading, [repoId]: true };
     try {
       const list = await workflowRuns(repoId, filters);
       if (seq === this.#runsSeqs.get(repoId)) {
@@ -403,6 +404,19 @@ export class ForgeStore {
     }
   }
 
+  /** Keeps the run list row in sync with a fresher detail payload. */
+  #mergeRun(repoId: RepoId, run: WorkflowRun): void {
+    const list = this.runs[repoId];
+    if (!list) return;
+    const index = list.findIndex(
+      (entry) => entry.database_id === run.database_id,
+    );
+    if (index === -1) return;
+    const next = list.slice();
+    next[index] = run;
+    this.runs = { ...this.runs, [repoId]: next };
+  }
+
   /** Lazily loads one run's jobs/steps (keyed per repo+run). */
   async loadRunDetail(
     repoId: RepoId,
@@ -416,6 +430,7 @@ export class ForgeStore {
       const detail = await workflowRunDetail(repoId, runId);
       if (seq === this.#detailsSeqs.get(key)) {
         this.details = { ...this.details, [key]: detail };
+        this.#mergeRun(repoId, detail.run);
         const errors = { ...this.detailsErrors };
         delete errors[key];
         this.detailsErrors = errors;

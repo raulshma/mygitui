@@ -205,8 +205,10 @@ describe("buildRowModel (split)", () => {
 
   it("pads the shorter run with null (more additions, none deleted)", () => {
     const h = hunk([
-      line("+", "a1", null, 1),
-      line("+", "a2", null, 2),
+      line(" ", "ctx", 1, 1),
+      line("-", "d1", 2, null),
+      line("+", "a1", null, 2),
+      line("+", "a2", null, 3),
     ]);
     const model = buildRowModel([file({ hunks: [h] })], "split", NO_COLLAPSE);
     const pairs = model.rows.filter((r) => r.kind === "pair") as Array<{
@@ -214,8 +216,60 @@ describe("buildRowModel (split)", () => {
       right: DiffLine | null;
     }>;
     expect(pairs).toHaveLength(2);
-    expect(pairs[0]).toMatchObject({ left: null, right: { text: "a1" } });
+    expect(pairs[0]).toMatchObject({ left: { text: "d1" }, right: { text: "a1" } });
     expect(pairs[1]).toMatchObject({ left: null, right: { text: "a2" } });
+  });
+
+  it("renders added files inline instead of a blank left half", () => {
+    const added = file({
+      additions: 2,
+      hunks: [hunk([line("+", "a", null, 1), line("+", "b", null, 2)])],
+    });
+    const model = buildRowModel([added], "split", NO_COLLAPSE);
+    expect(model.rows.map((r) => r.kind)).toEqual([
+      "file-header",
+      "hunk-header",
+      "single",
+      "single",
+    ]);
+    expect(model.rows[2]).toMatchObject({
+      kind: "single",
+      side: "new",
+      line: { old_no: null, new_no: 1, text: "a" },
+      fileIndex: 0,
+      hunkIndex: 0,
+      lineIndex: 0,
+    });
+    expect(model.hasSplitRows).toBe(false);
+  });
+
+  it("renders deleted files inline with the old gutter", () => {
+    const deleted = file({
+      deletions: 2,
+      hunks: [hunk([line("-", "a", 1, null), line("-", "b", 2, null)])],
+    });
+    const model = buildRowModel([deleted], "split", NO_COLLAPSE);
+    expect(model.rows.map((r) => r.kind)).toEqual([
+      "file-header",
+      "hunk-header",
+      "single",
+      "single",
+    ]);
+    for (const row of model.rows.filter((r) => r.kind === "single")) {
+      expect(row).toMatchObject({ side: "old" });
+    }
+    expect(model.hasSplitRows).toBe(false);
+  });
+
+  it("keeps two-column split rows for modified files in the same model", () => {
+    const files = [
+      file({ path: "added.txt", additions: 1, hunks: [hunk([line("+", "a", null, 1)])] }),
+      file({ path: "changed.txt", hunks: [changeHunk()] }),
+    ];
+    const model = buildRowModel(files, "split", NO_COLLAPSE);
+    expect(model.rows.some((r) => r.kind === "single")).toBe(true);
+    expect(model.rows.some((r) => r.kind === "context")).toBe(true);
+    expect(model.hasSplitRows).toBe(true);
   });
 
   it("pairs interleaved change blocks independently", () => {
@@ -303,7 +357,7 @@ describe("file sections and states", () => {
       "file-header", // a.txt, collapsed
       "file-header", // b.txt
       "hunk-header",
-      "pair",
+      "single", // b.txt has no previous content → inline row
     ]);
     expect(model.rows[0]).toMatchObject({ collapsed: true });
   });
@@ -387,6 +441,7 @@ describe("stats and heights", () => {
         "file-header": ROW_HEIGHTS.fileHeader,
         "hunk-header": ROW_HEIGHTS.hunkHeader,
         line: ROW_HEIGHTS.line,
+        single: ROW_HEIGHTS.line,
         context: ROW_HEIGHTS.line,
         pair: ROW_HEIGHTS.line,
         binary: ROW_HEIGHTS.binary,

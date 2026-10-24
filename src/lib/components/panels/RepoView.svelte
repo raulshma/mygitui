@@ -130,6 +130,8 @@
   let selectedCommit = $state<CommitInfo | null>(null);
   /** Compare result selected in the history sidebar. */
   let compareResult = $state<CompareResult | null>(null);
+  /** GitHub Actions run shown in the editor (from the forge sidebar). */
+  let workflowRunId = $state<number | null>(null);
   /** Multi-selection action toolbar state reported by the history sidebar. */
   let historyActions = $state<HistoryCommitActions | null>(null);
   /** Commit to reveal/select in history (parent navigation from the editor). */
@@ -554,29 +556,39 @@
 
   // --- M9 F1: palette event wiring -----------------------------------------
 
+  /**
+   * Reveals a panel in the layout: activates its tab, opens the matching
+   * sidebar, or adds the panel to the primary sidebar when hidden.
+   */
+  function focusPanel(targetPanel: PanelId): void {
+    if (targetPanel === "history") showHistory();
+    const holder = findPanelNode(resolved.layout.main, targetPanel);
+    if (holder) {
+      if (holder.kind === "tabs") {
+        layouts.setActiveTab(root, holder.id, holder.tabs.indexOf(targetPanel));
+      }
+      if (activityGroup && holder.id === activityGroup.id) {
+        layouts.setSidebarCollapsed(root, "left", false);
+      }
+      return;
+    }
+    layouts.setSidebarCollapsed(root, "left", false);
+    layouts.addPanel(
+      root,
+      targetPanel,
+      activityGroup?.id ?? firstTabsId(resolved.layout.main) ?? undefined,
+    );
+  }
+
   $effect(() => {
     const unlisteners = [
       onUiEvent("focus-panel", ({ panel, repoId: target }) => {
         if (target !== null && target !== repoId) return;
-        const targetPanel = panel as PanelId;
-        if (targetPanel === "history") showHistory();
-        // Activate the panel where it lives; add it when hidden.
-        const holder = findPanelNode(resolved.layout.main, targetPanel);
-        if (holder) {
-          if (holder.kind === "tabs") {
-            layouts.setActiveTab(root, holder.id, holder.tabs.indexOf(targetPanel));
-          }
-          if (activityGroup && holder.id === activityGroup.id) {
-            layouts.setSidebarCollapsed(root, "left", false);
-          }
-        } else {
-          layouts.setSidebarCollapsed(root, "left", false);
-          layouts.addPanel(
-            root,
-            targetPanel,
-            activityGroup?.id ?? firstTabsId(resolved.layout.main) ?? undefined,
-          );
-        }
+        focusPanel(panel as PanelId);
+      }),
+      onUiEvent("workflow-run-open", ({ repoId: target, runId }) => {
+        if (target !== repoId) return;
+        openWorkflowRun(runId);
       }),
       onUiEvent("open-conflicts", () => {
         if (opSource) conflictEditorOpen = true;
@@ -642,6 +654,7 @@
     compareResult = null;
     historyActions = null;
     pendingHistorySha = null;
+    workflowRunId = null;
     conflictEditorOpen = false;
   });
 
@@ -654,6 +667,19 @@
 
   // --- Center editor selection ------------------------------------------------
 
+  /** Opens a GitHub Actions run in the main editor (forge sidebar event). */
+  function openWorkflowRun(runId: number): void {
+    diffToken++;
+    diffEntry = null;
+    diffFiles = [];
+    diffLoading = false;
+    diffHunkable = false;
+    selectedCommit = null;
+    compareResult = null;
+    workflowRunId = runId;
+    focusPanel("diff");
+  }
+
   /** Working-copy row selected in the changes sidebar. */
   async function openDiff(entry: StatusEntry): Promise<void> {
     const token = ++diffToken;
@@ -665,6 +691,7 @@
     diffHunkable = entry.index === "unmodified";
     selectedCommit = null;
     compareResult = null;
+    workflowRunId = null;
     try {
       await streamDiff(
         repoId,
@@ -694,6 +721,7 @@
     diffHunkable = false;
     selectedCommit = null;
     compareResult = null;
+    workflowRunId = null;
   }
 
   /** History sidebar: a commit row was selected (or restored on mount). */
@@ -703,7 +731,10 @@
   ): void {
     // A restored selection only opens when nothing is in the editor: after
     // history is collapsed/reopened it must not replace an open file diff.
-    if (source === "restore" && (selectedCommit || diffEntry || compareResult)) {
+    if (
+      source === "restore" &&
+      (selectedCommit || diffEntry || compareResult || workflowRunId !== null)
+    ) {
       return;
     }
     selectedCommit = info;
@@ -714,12 +745,14 @@
     diffLoading = false;
     diffHunkable = false;
     compareResult = null;
+    workflowRunId = null;
   }
 
   /** History sidebar: compare results open in the center editor. */
   function onHistoryCompare(result: CompareResult): void {
     compareResult = result;
     selectedCommit = null;
+    workflowRunId = null;
     diffToken++;
     diffEntry = null;
     diffFiles = [];
@@ -760,6 +793,16 @@
       repoId,
       `Commit ${sha.slice(0, 7)}`,
       { sha },
+    );
+  }
+
+  function popOutWorkflowRun(): void {
+    if (workflowRunId === null) return;
+    void openPanelPopout(
+      "workflowrun",
+      repoId,
+      `${name} — run ${workflowRunId}`,
+      { runId: workflowRunId },
     );
   }
 
@@ -843,11 +886,14 @@
     diffLoading={diffLoading}
     diffHunkable={diffHunkable}
     historyActions={historyActions}
+    workflowRunId={workflowRunId}
     onClose={clearEditor}
     onCloseCompare={() => (compareResult = null)}
+    onCloseWorkflowRun={() => (workflowRunId = null)}
     onSelectParent={revealHistoryCommit}
     onPopoutCommit={selectedCommit ? popOutCommit : undefined}
     onPopoutDiff={popOutDiff}
+    onPopoutWorkflowRun={workflowRunId !== null ? popOutWorkflowRun : undefined}
     onMutated={refresh}
   />
 {/snippet}

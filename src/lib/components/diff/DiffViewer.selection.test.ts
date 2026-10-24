@@ -69,6 +69,27 @@ function fixture(): FileDiff[] {
   ];
 }
 
+/** A file with no previous content (added): all '+' lines, no old numbers. */
+function addedFixture(): FileDiff[] {
+  return [
+    {
+      path: "src/new.txt",
+      old_path: null,
+      binary: false,
+      is_image: false,
+      additions: 2,
+      deletions: 0,
+      hunks: [
+        {
+          old_start: 0,
+          new_start: 1,
+          lines: [line("+", "first", null, 1), line("+", "second", null, 2)],
+        },
+      ],
+    },
+  ];
+}
+
 /** Transport answering nothing; records every invocation. */
 function recordingTransport(): Transport {
   return () => Promise.resolve();
@@ -264,5 +285,28 @@ describe("DiffViewer line selection", () => {
     });
     await tick();
     expect(rendered.container.querySelector(".sel-count")).toBeNull();
+  });
+});
+
+describe("DiffViewer one-sided files", () => {
+  it("renders added files inline (one full-width gutter) even in split mode", async () => {
+    const { container } = render(DiffViewer, {
+      props: { files: addedFixture(), mode: "split" },
+    });
+    await tick();
+
+    expect(container.querySelectorAll(".row.pair")).toHaveLength(0);
+    expect(container.querySelectorAll(".row.context")).toHaveLength(0);
+    const rows = [...container.querySelectorAll<HTMLElement>(".row.single")];
+    expect(rows).toHaveLength(2);
+    // Exactly one gutter per row, showing the new-side line number.
+    expect(rows.map((row) => row.querySelector("button.no")?.textContent)).toEqual([
+      "1",
+      "2",
+    ]);
+    expect(rows.every((row) => row.querySelectorAll("button.no").length === 1)).toBe(
+      true,
+    );
+    expect(rows.every((row) => row.classList.contains("add"))).toBe(true);
   });
 });

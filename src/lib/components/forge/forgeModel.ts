@@ -414,6 +414,72 @@ export function runDurationLabel(
   return `${hours}h ${minutes % 60}m`;
 }
 
+/**
+ * Live duration of a run: finished runs use `updated_at`, active runs tick
+ * against `now`. Pure (`now` injectable).
+ */
+export function runElapsedLabel(
+  run: Pick<WorkflowRun, "started_at" | "status" | "updated_at">,
+  now = Date.now(),
+): string | null {
+  if (!run.started_at) return null;
+  const finishedAt =
+    run.status === "completed"
+      ? run.updated_at
+      : new Date(now).toISOString();
+  return runDurationLabel(run.started_at, finishedAt);
+}
+
+/**
+ * Live duration of a job/step: completed records use `completed_at`, active
+ * ones tick against `now`. Pure (`now` injectable).
+ */
+export function activityDurationLabel(
+  startedAt: string | null,
+  completedAt: string | null,
+  status: string,
+  now = Date.now(),
+): string | null {
+  if (!startedAt) return null;
+  const finishedAt =
+    completedAt ?? (status === "completed" ? null : new Date(now).toISOString());
+  return runDurationLabel(startedAt, finishedAt);
+}
+
+/** Friendly trigger-event label ("push" → "Push"). */
+export function workflowEventLabel(event: string): string {
+  switch (event) {
+    case "push":
+      return "Push";
+    case "pull_request":
+      return "Pull request";
+    case "pull_request_target":
+      return "Pull request target";
+    case "workflow_dispatch":
+      return "Manual";
+    case "workflow_call":
+      return "Reusable workflow";
+    case "schedule":
+      return "Schedule";
+    case "release":
+      return "Release";
+    case "merge_group":
+      return "Merge queue";
+    case "issue_comment":
+      return "Issue comment";
+    case "pull_request_review":
+      return "Pull request review";
+    case "pull_request_review_comment":
+      return "Review comment";
+    case "repository_dispatch":
+      return "Repository dispatch";
+    case "workflow_run":
+      return "Workflow run";
+    default:
+      return event || "Unknown";
+  }
+}
+
 /** Label of one job/step conclusion ("Success", "Failed", "Skipped", …). */
 export function stepStateLabel(conclusion: string, status = ""): string {
   if (conclusion === "failure") return "Failed";

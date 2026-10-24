@@ -158,6 +158,8 @@
    * the content grows to the widest line and the viewport scrolls it — one
    * shared horizontal scrollbar in unified mode, and one for BOTH split
    * halves together (halves stay column-aligned; no per-row scrollbars).
+   * One-sided files (added/deleted) render inline even in split mode, so a
+   * model with only those rows grows by a single gutter + text width.
    * Widths are measured in the rows' own monospace font (textWidth.ts);
    * the gutter constants come from wrapHeights.ts (kept in sync with
    * DiffRow.svelte's CSS).
@@ -167,6 +169,10 @@
     const widest = measureLineWidth(model.maxLineText);
     if (mode === "unified") {
       return `max(100%, calc(${GUTTER_PX.unified}px + ${widest}px))`;
+    }
+    if (!model.hasSplitRows) {
+      // Only one-sided files: rows span the pane with a single gutter.
+      return `max(100%, calc(${GUTTER_PX.splitSide}px + ${widest}px))`;
     }
     // Both halves as wide as the widest line → the shared scrollbar serves
     // either side.

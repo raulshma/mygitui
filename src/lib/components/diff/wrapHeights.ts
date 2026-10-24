@@ -27,6 +27,8 @@ export interface WrapMetrics {
   splitTextWidth: number;
   /** Usable text width of a unified row, px. */
   unifiedTextWidth: number;
+  /** Usable text width of a one-sided full-width row, px. */
+  singleTextWidth: number;
   /** Advance of one monospace column, px. */
   charWidth: number;
 }
@@ -40,6 +42,7 @@ export function wrapMetrics(
   return {
     splitTextWidth: halfWidth - GUTTER_PX.splitSide,
     unifiedTextWidth: viewportWidth - GUTTER_PX.unified,
+    singleTextWidth: viewportWidth - GUTTER_PX.splitSide,
     charWidth: charWidth(),
   };
 }
@@ -61,6 +64,11 @@ export function wrappedRowHeight(row: DiffRow, metrics: WrapMetrics): number {
     case "line":
       return (
         wrappedLineCount(row.line.text, metrics.unifiedTextWidth, metrics.charWidth) *
+        ROW_HEIGHTS.line
+      );
+    case "single":
+      return (
+        wrappedLineCount(row.line.text, metrics.singleTextWidth, metrics.charWidth) *
         ROW_HEIGHTS.line
       );
     case "context":

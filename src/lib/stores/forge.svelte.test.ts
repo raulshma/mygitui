@@ -372,6 +372,41 @@ describe("ForgeStore", () => {
     expect(store.logsLoadingFor("r1", 101, 900, true)).toBe(false);
   });
 
+  it("merges a fresher detail run back into the cached list", async () => {
+    const store = new ForgeStore();
+    await store.refreshRuns("r1");
+    expect(store.runsFor("r1")[0]!.conclusion).toBe("success");
+    mockRunDetail.mockResolvedValueOnce({
+      ...DETAIL,
+      run: run(101, { conclusion: "failure" }),
+    });
+    await store.loadRunDetail("r1", 101);
+    expect(store.runsFor("r1")[0]!.conclusion).toBe("failure");
+    expect(store.runsFor("r1")[1]!.database_id).toBe(102);
+
+    // Without a cached list there is nothing to merge and no phantom row.
+    const other = new ForgeStore();
+    await other.loadRunDetail("r1", 101);
+    expect(other.runsFor("r1")).toEqual([]);
+  });
+
+  it("silent run refreshes keep the loading flag untouched", async () => {
+    let resolveRuns: (value: WorkflowRun[]) => void = () => {};
+    mockRuns.mockImplementationOnce(
+      () =>
+        new Promise<WorkflowRun[]>((resolve) => {
+          resolveRuns = resolve;
+        }),
+    );
+    const store = new ForgeStore();
+    const pending = store.refreshRuns("r1", {}, true);
+    expect(store.runsLoadingFor("r1")).toBe(false);
+    resolveRuns([run(101)]);
+    await pending;
+    expect(store.runsFor("r1")).toHaveLength(1);
+    expect(store.runsLoadingFor("r1")).toBe(false);
+  });
+
   it("cancel and rerun refresh the list/detail and toggle busy", async () => {
     let resolveCancel: (value: string) => void = () => {};
     mockRunCancel.mockImplementationOnce(

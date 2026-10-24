@@ -8,6 +8,7 @@ import { describe, expect, it } from "vitest";
 import type { CheckInfo, PrInfo } from "$lib/ipc/client";
 import {
   activeWorkflows,
+  activityDurationLabel,
   checkIcon,
   checkSummaryLabel,
   isPrOpen,
@@ -21,6 +22,7 @@ import {
   reviewDecisionLabel,
   runCanRerun,
   runDurationLabel,
+  runElapsedLabel,
   runHasFailures,
   runIsActive,
   runStateClass,
@@ -31,6 +33,7 @@ import {
   stepStateClass,
   stepStateLabel,
   summarizeChecks,
+  workflowEventLabel,
   workflowStateLabel,
   worstChipClass,
   type Banner,
@@ -291,10 +294,72 @@ describe("workflow run state", () => {
       runDurationLabel("2026-10-20T05:08:00Z", "2026-10-20T02:00:00Z"),
     ).toBeNull();
   });
+
+  it("computes live elapsed labels for finished and active runs", () => {
+    const now = Date.parse("2026-10-20T02:01:30Z");
+    expect(
+      runElapsedLabel(
+        {
+          started_at: "2026-10-20T02:00:00Z",
+          status: "completed",
+          updated_at: "2026-10-20T02:05:00Z",
+        },
+        now,
+      ),
+    ).toBe("5m 0s");
+    expect(
+      runElapsedLabel(
+        {
+          started_at: "2026-10-20T02:00:00Z",
+          status: "in_progress",
+          updated_at: "2026-10-20T02:00:10Z",
+        },
+        now,
+      ),
+    ).toBe("1m 30s");
+    expect(
+      runElapsedLabel(
+        { started_at: null, status: "queued", updated_at: null },
+        now,
+      ),
+    ).toBeNull();
+  });
+
+  it("computes live elapsed labels for jobs and steps", () => {
+    const now = Date.parse("2026-10-20T02:00:30Z");
+    expect(
+      activityDurationLabel(
+        "2026-10-20T02:00:00Z",
+        "2026-10-20T02:00:45Z",
+        "completed",
+        now,
+      ),
+    ).toBe("45s");
+    expect(
+      activityDurationLabel(
+        "2026-10-20T02:00:00Z",
+        null,
+        "in_progress",
+        now,
+      ),
+    ).toBe("30s");
+    expect(
+      activityDurationLabel("2026-10-20T02:00:00Z", null, "completed", now),
+    ).toBeNull();
+    expect(activityDurationLabel(null, null, "queued", now)).toBeNull();
+  });
+
+  it("labels trigger events", () => {
+    expect(workflowEventLabel("push")).toBe("Push");
+    expect(workflowEventLabel("pull_request")).toBe("Pull request");
+    expect(workflowEventLabel("workflow_dispatch")).toBe("Manual");
+    expect(workflowEventLabel("schedule")).toBe("Schedule");
+    expect(workflowEventLabel("custom_event")).toBe("custom_event");
+    expect(workflowEventLabel("")).toBe("Unknown");
+  });
 });
 
-describe("workflow job/step labels", () => {
-  it("labels and classes conclusions", () => {
+describe("workflow job/step labels", () => {  it("labels and classes conclusions", () => {
     expect(stepStateLabel("failure")).toBe("Failed");
     expect(stepStateLabel("success")).toBe("Success");
     expect(stepStateLabel("", "in_progress")).toBe("Running");

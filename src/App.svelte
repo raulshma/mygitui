@@ -215,6 +215,13 @@
             path={popout.path ?? ""}
           />
         {/await}
+      {:else if popout.panel === "workflowrun"}
+        {#await import("$lib/components/forge/WorkflowRunView.svelte") then WorkflowRunViewModule}
+          <WorkflowRunViewModule.default
+            repoId={popout.repoId}
+            runId={popout.runId ?? 0}
+          />
+        {/await}
       {:else if popout.panel === "commitdetail"}
         {#await import("$lib/components/layout/PopoutCommitDetail.svelte") then PopoutCommitDetailModule}
           <PopoutCommitDetailModule.default

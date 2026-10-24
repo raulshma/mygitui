@@ -3,6 +3,7 @@
    * EditorPane — the workspace's center column (VSCode-style editor area).
    *
    * Renders exactly one of:
+   * - a GitHub Actions run (`WorkflowRunView`: status, jobs, live logs),
    * - a commit's detail (`CommitDetail`: metadata, changed files, diff),
    * - compare results (`CommitDetail` in compare mode — no commit info),
    * - a working-copy file's diff (`DiffViewer`, with hunk staging when the
@@ -32,11 +33,14 @@
     diffLoading = false,
     diffHunkable = false,
     historyActions = null,
+    workflowRunId = null,
     onClose = undefined,
     onCloseCompare = undefined,
+    onCloseWorkflowRun = undefined,
     onSelectParent = undefined,
     onPopoutCommit = undefined,
     onPopoutDiff = undefined,
+    onPopoutWorkflowRun = undefined,
     onMutated = undefined,
   }: {
     repoId: string;
@@ -55,19 +59,36 @@
     diffHunkable?: boolean;
     /** Multi-selection action toolbar state from the history sidebar. */
     historyActions?: HistoryCommitActions | null;
+    /** GitHub Actions run taking over the editor (highest precedence). */
+    workflowRunId?: number | null;
     /** Clears the editor (closes the current commit/diff). */
     onClose?: () => void;
     onCloseCompare?: () => void;
+    /** Closes the GitHub Actions run view. */
+    onCloseWorkflowRun?: () => void;
     onSelectParent?: (sha: string) => void;
     onPopoutCommit?: () => void;
     onPopoutDiff?: () => void;
+    /** Opens the run view in its own window. */
+    onPopoutWorkflowRun?: () => void;
     /** Called after a hunk stage/unstage/discard mutated the repo. */
     onMutated?: () => void;
   } = $props();
 </script>
 
 <div class="editor" aria-label="Editor">
-  {#if commit}
+  {#if workflowRunId !== null}
+    {#await import("$lib/components/forge/WorkflowRunView.svelte")}
+      <p class="estate" role="status">Loading run…</p>
+    {:then WorkflowRunViewModule}
+      <WorkflowRunViewModule.default
+        {repoId}
+        runId={workflowRunId}
+        onClose={onCloseWorkflowRun}
+        onPopout={onPopoutWorkflowRun}
+      />
+    {/await}
+  {:else if commit}
     <CommitDetail
       {repoId}
       {root}

@@ -33,20 +33,37 @@ describe("popoutQueryString", () => {
       "?panel=filehistory&repo=repo1&path=src%2Fa.ts",
     );
   });
+
+  it("appends the run id for workflowrun panels", () => {
+    expect(popoutQueryString("workflowrun", "repo1", { runId: 42 })).toBe(
+      "?panel=workflowrun&repo=repo1&run=42",
+    );
+    expect(popoutQueryString("workflowrun", "repo1", { runId: 0 })).toBe(
+      "?panel=workflowrun&repo=repo1",
+    );
+  });
 });
 
 describe("parsePopoutQuery", () => {
   it("round trips every panel kind", () => {
-    for (const panel of ["diff", "history", "filehistory", "commitdetail"] as const) {
+    for (const panel of [
+      "diff",
+      "history",
+      "filehistory",
+      "commitdetail",
+      "workflowrun",
+    ] as const) {
       const query = popoutQueryString(panel, "repo 1", {
         path: panel === "filehistory" ? "src/a b.ts" : undefined,
         sha: panel === "commitdetail" ? "deadbeef" : undefined,
+        runId: panel === "workflowrun" ? 42 : undefined,
       });
       expect(parsePopoutQuery(query)).toEqual({
         panel,
         repoId: "repo 1",
         path: panel === "filehistory" ? "src/a b.ts" : null,
         sha: panel === "commitdetail" ? "deadbeef" : null,
+        runId: panel === "workflowrun" ? 42 : null,
       });
     }
   });
@@ -70,6 +87,21 @@ describe("parsePopoutQuery", () => {
       repoId: "r",
       path: null,
       sha: "abc",
+      runId: null,
+    });
+  });
+
+  it("requires a positive integer run id for workflowrun", () => {
+    expect(parsePopoutQuery("?panel=workflowrun&repo=r")).toBeNull();
+    expect(parsePopoutQuery("?panel=workflowrun&repo=r&run=")).toBeNull();
+    expect(parsePopoutQuery("?panel=workflowrun&repo=r&run=0")).toBeNull();
+    expect(parsePopoutQuery("?panel=workflowrun&repo=r&run=abc")).toBeNull();
+    expect(parsePopoutQuery("?panel=workflowrun&repo=r&run=17")).toEqual({
+      panel: "workflowrun",
+      repoId: "r",
+      path: null,
+      sha: null,
+      runId: 17,
     });
   });
 
