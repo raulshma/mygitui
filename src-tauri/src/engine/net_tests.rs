@@ -823,6 +823,37 @@ fn push_with_pre_push_hook_routes_to_cli() {
     }
 }
 
+/// `core.hooksPath` relocates hook discovery out of `.git/hooks` (husky,
+/// pre-commit, repos keeping hooks in the worktree). Detection must follow
+/// it or the push silently skips the hook instead of routing to the CLI.
+#[test]
+fn push_with_pre_push_hook_via_hooks_path_routes_to_cli() {
+    let f = NetFixture::new("push-hook-hooks-path");
+    let hooks = f.a.workdir().unwrap().join("githooks");
+    std::fs::create_dir_all(&hooks).unwrap();
+    let hook = hooks.join("pre-push");
+    std::fs::write(&hook, "#!/bin/sh\nexit 0\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let mut config = f.a.config().unwrap();
+    config.set_str("core.hooksPath", "githooks").unwrap();
+
+    let opts = PushOptions {
+        remote: "origin".into(),
+        branch: "main".into(),
+        ..Default::default()
+    };
+    match ENGINE.push(&f.a, &opts, &mut |_| {}) {
+        Err(EngineError::Unsupported(msg)) => {
+            assert!(msg.contains("pre-push"), "reason names the hook: {msg}")
+        }
+        other => panic!("expected Unsupported(pre-push), got {other:?}"),
+    }
+}
+
 #[test]
 fn push_force_overwrites_non_fast_forward() {
     let f = NetFixture::new("push-force");

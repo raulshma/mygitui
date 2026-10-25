@@ -106,7 +106,9 @@ events). Arg keys snake_case (commands use `rename_all`).
 Commit and push route through the sanitized git CLI when hooks make libgit2
 unusable: any runnable `pre-commit` / `prepare-commit-msg` / `commit-msg`
 (or signing) for `commit`, and `pre-push` for `push`. Both stream the child's
-stdout/stderr lines on `op-log` so hooks are visible in the app.
+stdout/stderr lines on `op-log` so hooks are visible in the app. Hook
+discovery honors `core.hooksPath` (husky, pre-commit, worktree `hooks/`
+dirs); a relative path resolves against the worktree root, as git does.
 
 ## Commands (M3 — power + safety)
 

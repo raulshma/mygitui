@@ -50,9 +50,30 @@ fn head_commit_object(repo: &Repository) -> EngineResult<Option<git2::Object<'_>
     }
 }
 
-/// Path of a hook inside the repo's common git dir (linked worktrees share
-/// hooks with their main repo, hence `commondir`).
+/// Path of a hook, honoring `core.hooksPath` (husky, pre-commit, repos that
+/// keep hooks in the worktree). Without it, hooks live in the common git dir
+/// (linked worktrees share hooks with their main repo, hence `commondir`).
+/// A relative `core.hooksPath` resolves against the worktree root — git
+/// chdirs there before invoking hooks, so e.g. `hooksPath = hooks` means
+/// `<workdir>/hooks/<kind>`.
 fn hook_file(repo: &Repository, kind: &str) -> std::path::PathBuf {
+    let configured = repo
+        .config()
+        .ok()
+        .and_then(|config| config.get_string("core.hooksPath").ok());
+    if let Some(raw) = configured {
+        let base = match repo.workdir() {
+            Some(workdir) => workdir.to_path_buf(),
+            None => repo.path().to_path_buf(),
+        };
+        let root = Path::new(&raw);
+        let root = if root.is_absolute() {
+            root.to_path_buf()
+        } else {
+            base.join(root)
+        };
+        return root.join(kind);
+    }
     repo.commondir().join("hooks").join(kind)
 }
 
