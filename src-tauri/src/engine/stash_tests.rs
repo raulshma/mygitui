@@ -12,7 +12,7 @@ use git2::{IndexAddOption, Repository, RepositoryInitOptions};
 use super::git_engine::EngineError;
 use super::libgit2::Libgit2Engine;
 
-const ENGINE: Libgit2Engine = Libgit2Engine;
+static ENGINE: Libgit2Engine = Libgit2Engine::new();
 const ZERO_SHA: &str = "0000000000000000000000000000000000000000";
 
 // ---------------------------------------------------------------------------

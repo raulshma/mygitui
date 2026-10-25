@@ -9,7 +9,7 @@ use super::git_engine::{EngineError, GitEngine, GitEngineM12, GitEngineM3};
 use super::libgit2::Libgit2Engine;
 use super::types::{BisectLogEntry, BisectMark, RebaseStep};
 
-const ENGINE: Libgit2Engine = Libgit2Engine;
+static ENGINE: Libgit2Engine = Libgit2Engine::new();
 
 struct TempDir(PathBuf);
 

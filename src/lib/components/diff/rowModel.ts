@@ -156,8 +156,23 @@ export type FileChangeKind = "added" | "deleted" | "modified" | "renamed";
  * a differing `old_path` means a rename/copy; all hunks with zero old lines
  * means the file was added; all hunks with zero new lines means deleted.
  * Files without hunks (binary/empty) fall back to the +/- counters.
+ *
+ * Memoized by `FileDiff` identity: diff payloads are replaced wholesale when
+ * a new diff arrives (never mutated in place), and the header re-renders on
+ * every syntax-highlight tick — rescanning a 100k-line file there would be
+ * the dominant cost.
  */
+const changeKindCache = new WeakMap<FileDiff, FileChangeKind>();
+
 export function fileChangeKind(file: FileDiff): FileChangeKind {
+  const cached = changeKindCache.get(file);
+  if (cached !== undefined) return cached;
+  const kind = computeFileChangeKind(file);
+  changeKindCache.set(file, kind);
+  return kind;
+}
+
+function computeFileChangeKind(file: FileDiff): FileChangeKind {
   if (file.old_path !== null && file.old_path !== file.path) return "renamed";
   let oldLines = 0;
   let newLines = 0;

@@ -524,7 +524,7 @@ mod tests {
 
     use super::super::libgit2::Libgit2Engine;
 
-    const ENGINE: Libgit2Engine = Libgit2Engine;
+    static ENGINE: Libgit2Engine = Libgit2Engine::new();
 
     struct TempDir(PathBuf);
 

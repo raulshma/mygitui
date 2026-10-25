@@ -112,6 +112,12 @@ export class TabStore {
   readonly #recents: RecentRepoStore;
   readonly #sessionStorage: SessionStorage | null;
 
+  /** Per-repo status refresh cycle (coalesces event bursts). */
+  readonly #statusRefresh = new Map<
+    RepoId,
+    { again: boolean; promise: Promise<void> }
+  >();
+
   constructor(
     recents: RecentRepoStore = recentRepos,
     sessionStorage: SessionStorage | null = defaultSessionStorage(),
@@ -257,15 +263,40 @@ export class TabStore {
   /**
    * Refetches `repo_status` for a tab and swaps in the new status object
    * (fresh reference → rune reactivity). Never throws.
+   *
+   * Coalesced per repo: a burst of watcher events / post-mutation refreshes
+   * shares one fetch, plus at most one trailing fetch when another request
+   * arrived while it was running. Callers all resolve once the status they
+   * asked for is in (never while a pre-request fetch is still stale).
    */
   async refreshStatus(id: RepoId): Promise<void> {
-    const tab = this.tabs.find((t) => t.id === id);
-    if (!tab) return;
-    try {
-      tab.status = await repoStatus(id);
-    } catch (err) {
-      console.warn(`[tabs] repo_status failed for ${id}:`, err);
+    const running = this.#statusRefresh.get(id);
+    if (running) {
+      running.again = true;
+      return running.promise;
     }
+    const state: { again: boolean; promise: Promise<void> } = {
+      again: false,
+      promise: Promise.resolve(),
+    };
+    this.#statusRefresh.set(id, state);
+    state.promise = (async () => {
+      do {
+        state.again = false;
+        const tab = this.tabs.find((t) => t.id === id);
+        if (!tab) return;
+        try {
+          tab.status = await repoStatus(id);
+        } catch (err) {
+          console.warn(`[tabs] repo_status failed for ${id}:`, err);
+        }
+      } while (state.again);
+    })().finally(() => {
+      if (this.#statusRefresh.get(id) === state) {
+        this.#statusRefresh.delete(id);
+      }
+    });
+    return state.promise;
   }
 }
 

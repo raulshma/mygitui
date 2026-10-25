@@ -6,13 +6,15 @@
 //! module is what the M1 read path needs.
 
 use std::collections::{HashMap, HashSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use git2::{
     BlameOptions, Branch, Commit, Delta, Diff, DiffFindOptions, DiffOptions, Oid, Patch,
     Repository, RepositoryState, Signature, StatusOptions,
 };
 use imara_diff::{Algorithm, Diff as WordDiff, InternedInput, TokenSource};
+use parking_lot::Mutex;
 
 use super::git_engine::{EngineError, EngineResult, FetchProgress, GitEngine, PushProgress};
 use super::types::{
@@ -30,16 +32,92 @@ const WORD_DIFF_MAX_BYTES: usize = 1000;
 /// `after` pagination cursor before giving up.
 const LOG_CURSOR_SCAN_LIMIT: usize = 100_000;
 
+/// Largest topological order kept for cursor paging. Streaming walks the DAG
+/// once per head set instead of rebuilding it on every 500-commit page; the
+/// cap only bounds the cache footprint on enormous histories (20 bytes/commit:
+/// ~40 MB at the limit).
+const LOG_ORDER_CACHE_MAX_COMMITS: usize = 2_000_000;
+
 /// File extensions treated as images for diff rendering.
 const IMAGE_EXTENSIONS: [&str; 9] = [
     "png", "jpg", "jpeg", "gif", "webp", "bmp", "svg", "ico", "avif",
 ];
 
-pub struct Libgit2Engine;
+/// A topological order for one exact set of walk heads. The order is derived
+/// only from the reachable commits, so it stays valid until a head moves
+/// (commits are immutable). `last_cursor` lets the next page resume in O(1)
+/// instead of re-scanning from the newest commit.
+struct CachedLogOrder {
+    repo_path: PathBuf,
+    /// Heads in emission order (also the identity of this order).
+    heads: Vec<Oid>,
+    order: Arc<Vec<Oid>>,
+    last_cursor: Option<(Oid, usize)>,
+}
+
+struct LogOrderCache {
+    entry: Option<CachedLogOrder>,
+}
+
+/// Snapshot of a cache hit: the order clone (cheap, `Arc`) plus the cursor to
+/// resume from when the caller asked for the next page.
+struct LogOrderHit {
+    order: Arc<Vec<Oid>>,
+    last_cursor: Option<(Oid, usize)>,
+}
+
+impl LogOrderCache {
+    const fn new() -> Self {
+        Self { entry: None }
+    }
+}
+
+pub struct Libgit2Engine {
+    log_order: Mutex<LogOrderCache>,
+}
 
 impl Libgit2Engine {
-    pub fn new() -> Self {
-        Libgit2Engine
+    pub const fn new() -> Self {
+        Self {
+            log_order: Mutex::new(LogOrderCache::new()),
+        }
+    }
+
+    /// Cached order for `repo_path` + `heads`, when still valid.
+    fn cached_log_order(&self, repo_path: &Path, heads: &[Oid]) -> Option<LogOrderHit> {
+        let cache = self.log_order.lock();
+        let entry = cache.entry.as_ref()?;
+        if entry.repo_path != repo_path || entry.heads != heads {
+            return None;
+        }
+        Some(LogOrderHit {
+            order: entry.order.clone(),
+            last_cursor: entry.last_cursor,
+        })
+    }
+
+    /// Remember an order for subsequent pages of the same walk.
+    fn store_log_order(&self, repo_path: &Path, heads: &[Oid], order: Arc<Vec<Oid>>) {
+        if order.len() > LOG_ORDER_CACHE_MAX_COMMITS {
+            return;
+        }
+        self.log_order.lock().entry = Some(CachedLogOrder {
+            repo_path: repo_path.to_path_buf(),
+            heads: heads.to_vec(),
+            order,
+            last_cursor: None,
+        });
+    }
+
+    /// Record the last returned cursor on the still-current order (a
+    /// concurrent walk may have replaced it; then this is simply skipped).
+    fn remember_log_cursor(&self, order: &Arc<Vec<Oid>>, oid: Oid, index: usize) {
+        let mut cache = self.log_order.lock();
+        if let Some(entry) = cache.entry.as_mut() {
+            if Arc::ptr_eq(&entry.order, order) {
+                entry.last_cursor = Some((oid, index));
+            }
+        }
     }
 }
 
@@ -200,7 +278,10 @@ fn path_matches(path: &str, filter: &str) -> bool {
     if filter.is_empty() {
         return true;
     }
-    path == filter || path.starts_with(&format!("{filter}/"))
+    path == filter
+        || path
+            .strip_prefix(filter)
+            .is_some_and(|rest| rest.starts_with('/'))
 }
 
 fn paths_allow(path: Option<&str>, old_path: Option<&str>, paths: Option<&[String]>) -> bool {
@@ -566,18 +647,22 @@ fn diff_to_files(
 ) -> EngineResult<Vec<FileDiff>> {
     let mut files = Vec::new();
     for idx in 0..diff.deltas().len() {
-        // Build the patch first: this also populates binary detection flags.
-        let patch = Patch::from_diff(diff, idx)?;
         let Some(delta) = diff.get_delta(idx) else {
             continue;
         };
         let path = delta_path(&delta);
         let old_path = delta_old_path(&delta);
+        // Path filtering first: building a patch is the expensive part and a
+        // single-file request over a dirty repo would otherwise pay for every
+        // changed file.
         if !paths_allow(path.as_deref(), old_path.as_deref(), paths) {
             continue;
         }
         let path = path.unwrap_or_default();
 
+        // Build the patch before reading the delta flags: libgit2 populates
+        // the BINARY flag while loading the patch content.
+        let patch = Patch::from_diff(diff, idx)?;
         let mut binary = delta.flags().contains(git2::DiffFlags::BINARY);
         let is_image = is_image_path(&path);
         let mut hunks = Vec::new();
@@ -646,6 +731,53 @@ fn diff_to_files(
 // ---------------------------------------------------------------------------
 // log path filtering
 // ---------------------------------------------------------------------------
+
+/// Start index (exclusive) for an `after` cursor over `order`.
+///
+/// Frontend cursors are full lowercase SHAs, so the normal path is a direct
+/// `Oid` comparison (and, for the immediately preceding page, an O(1) hit on
+/// `last_cursor`). Abbreviated/opaque cursors keep the historical
+/// first-prefix-match semantics, including the scan budget.
+fn resume_index(
+    order: &[Oid],
+    after: &str,
+    last_cursor: Option<(Oid, usize)>,
+) -> EngineResult<usize> {
+    let is_full_sha = after.len() == 40
+        && after
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b));
+    if is_full_sha {
+        if let Ok(oid) = Oid::from_str(after) {
+            if let Some((last_oid, index)) = last_cursor {
+                if last_oid == oid && order.get(index) == Some(&oid) {
+                    return Ok(index + 1);
+                }
+            }
+            if let Some(index) = order.iter().position(|candidate| *candidate == oid) {
+                return Ok(index + 1);
+            }
+            return Err(cursor_not_found(after));
+        }
+    }
+
+    for (index, oid) in order.iter().enumerate() {
+        let hex = oid.to_string();
+        if hex == after || hex.starts_with(after) {
+            return Ok(index + 1);
+        }
+        if index >= LOG_CURSOR_SCAN_LIMIT {
+            break;
+        }
+    }
+    Err(cursor_not_found(after))
+}
+
+fn cursor_not_found(after: &str) -> EngineError {
+    EngineError::Invalid(format!(
+        "log cursor `{after}` not found within {LOG_CURSOR_SCAN_LIMIT} commits"
+    ))
+}
 
 /// Does `commit` change anything at `path` (plain pathspec diff)?
 fn commit_touches_path(repo: &Repository, commit: &Commit<'_>, path: &str) -> EngineResult<bool> {
@@ -785,6 +917,78 @@ fn commit_follows_path(repo: &Repository, commit: &Commit<'_>, current: &mut Str
 // ---------------------------------------------------------------------------
 // GitEngine
 // ---------------------------------------------------------------------------
+
+/// Collect the reachable DAG and order it git `--topo-order` style.
+/// libgit2's TOPOLOGICAL|TIME pops the newest ready commit, which interleaves
+/// history lines: a merged branch tip lands under the NEXT mainline commit
+/// instead of directly under its merge, and the commit-graph curves tangle.
+/// git keeps each line contiguous; in-degree counting with a LIFO ready stack
+/// reproduces that. The result is cached by the caller across log pages.
+fn topo_order(repo: &Repository, heads: &[Oid]) -> EngineResult<Vec<Oid>> {
+    let mut walk = repo.revwalk()?;
+    for oid in heads {
+        walk.push(*oid)?;
+    }
+    let mut parents_of: HashMap<Oid, Box<[Oid]>> = HashMap::with_capacity(heads.len());
+    for oid in walk {
+        let oid = oid?;
+        let commit = repo.find_commit(oid)?;
+        parents_of.insert(oid, commit.parent_ids().collect());
+    }
+
+    // In-degree = number of unemitted children.
+    let mut indegree: HashMap<Oid, u32> = HashMap::with_capacity(parents_of.len());
+    for parents in parents_of.values() {
+        for parent in parents.iter() {
+            *indegree.entry(*parent).or_insert(0) += 1;
+        }
+    }
+
+    // Seed the ready stack newest-first (heads unsorted would emit stale
+    // branch tips before HEAD). Sort heads by committer time descending,
+    // then push reversed so the newest sits on top. Heads that are
+    // ancestors of other heads are not ready yet; they enter through
+    // the in-degree path.
+    let mut ready_heads: Vec<(i64, Oid)> = heads
+        .iter()
+        .map(|oid| {
+            let when = repo
+                .find_commit(*oid)
+                .map(|c| c.committer().when().seconds())
+                .unwrap_or(i64::MIN);
+            (when, *oid)
+        })
+        .collect();
+    ready_heads.sort_unstable_by_key(|&(when, _)| std::cmp::Reverse(when));
+    let mut ready: Vec<Oid> = ready_heads
+        .into_iter()
+        .rev()
+        .map(|(_, oid)| oid)
+        .filter(|oid| indegree.get(oid).is_none_or(|d| *d == 0))
+        .collect();
+
+    let mut ordered: Vec<Oid> = Vec::with_capacity(parents_of.len());
+    while let Some(oid) = ready.pop() {
+        ordered.push(oid);
+        if let Some(parents) = parents_of.get(&oid) {
+            // Parents pushed in order: for a merge, the later parent
+            // (the merged branch tip) lands on top, so its line emits
+            // right under the merge before the first parent's line
+            // resumes — git's "keep lines together" behavior.
+            for parent in parents.iter() {
+                let Some(degree) = indegree.get_mut(parent) else {
+                    continue;
+                };
+                *degree -= 1;
+                if *degree == 0 {
+                    indegree.remove(parent);
+                    ready.push(*parent);
+                }
+            }
+        }
+    }
+    Ok(ordered)
+}
 
 impl GitEngine for Libgit2Engine {
     fn status(&self, repo: &Repository) -> EngineResult<RepoStatus> {
@@ -964,68 +1168,21 @@ impl GitEngine for Libgit2Engine {
             return Ok((Vec::new(), None));
         }
 
-        let mut walk = repo.revwalk()?;
-        for oid in &heads {
-            walk.push(*oid)?;
-        }
-        let mut parents_of: HashMap<Oid, Box<[Oid]>> = HashMap::with_capacity(heads.len());
-        for oid in walk {
-            let oid = oid?;
-            let commit = repo.find_commit(oid)?;
-            parents_of.insert(oid, commit.parent_ids().collect());
-        }
-
-        // In-degree = number of unemitted children.
-        let mut indegree: HashMap<Oid, u32> = HashMap::with_capacity(parents_of.len());
-        for parents in parents_of.values() {
-            for parent in parents.iter() {
-                *indegree.entry(*parent).or_insert(0) += 1;
+        // Pages of one stream share a head set, so the expensive DAG walk +
+        // topological order is built once and reused; only the (cheap) page
+        // cursor advances. A head change derives a new key and rebuilds.
+        let (order, cached_cursor) = match self.cached_log_order(repo.path(), &heads) {
+            Some(hit) => (hit.order, hit.last_cursor),
+            None => {
+                let order = Arc::new(topo_order(repo, &heads)?);
+                self.store_log_order(repo.path(), &heads, order.clone());
+                (order, None)
             }
-        }
-
-        // Seed the ready stack newest-first (heads unsorted would emit stale
-        // branch tips before HEAD). Sort heads by committer time descending,
-        // then push reversed so the newest sits on top. Heads that are
-        // ancestors of other heads are not ready yet; they enter through
-        // the in-degree path.
-        let mut ready_heads: Vec<(i64, Oid)> = heads
-            .iter()
-            .map(|oid| {
-                let when = repo
-                    .find_commit(*oid)
-                    .map(|c| c.committer().when().seconds())
-                    .unwrap_or(i64::MIN);
-                (when, *oid)
-            })
-            .collect();
-        ready_heads.sort_unstable_by_key(|&(when, _)| std::cmp::Reverse(when));
-        let mut ready: Vec<Oid> = ready_heads
-            .into_iter()
-            .rev()
-            .map(|(_, oid)| oid)
-            .filter(|oid| indegree.get(oid).is_none_or(|d| *d == 0))
-            .collect();
-
-        let mut ordered: Vec<Oid> = Vec::with_capacity(parents_of.len());
-        while let Some(oid) = ready.pop() {
-            ordered.push(oid);
-            if let Some(parents) = parents_of.get(&oid) {
-                // Parents pushed in order: for a merge, the later parent
-                // (the merged branch tip) lands on top, so its line emits
-                // right under the merge before the first parent's line
-                // resumes — git's "keep lines together" behavior.
-                for parent in parents.iter() {
-                    let Some(degree) = indegree.get_mut(parent) else {
-                        continue;
-                    };
-                    *degree -= 1;
-                    if *degree == 0 {
-                        indegree.remove(parent);
-                        ready.push(*parent);
-                    }
-                }
-            }
-        }
+        };
+        let start = match after {
+            Some(cursor) => resume_index(&order, cursor, cached_cursor)?,
+            None => 0,
+        };
 
         let text = filter
             .text
@@ -1044,34 +1201,13 @@ impl GitEngine for Libgit2Engine {
         };
 
         let mut commits: Vec<CommitInfo> = Vec::new();
-        let mut cursor_seen = after.is_none();
-        let mut skipped = 0usize;
         let mut next_cursor = None;
         // Pickaxe budget: a patch scan per candidate commit is ~2.6ms; cap
         // the examined count so huge-repo queries stay responsive (the FE
         // keeps streaming pages, so the budget applies per page request).
         let mut pickaxe_examined = 0usize;
 
-        for oid in ordered {
-            if !cursor_seen {
-                let hex = oid.to_string();
-                let matched = after
-                    .map(|a| hex == a || hex.starts_with(a))
-                    .unwrap_or(false);
-                if matched {
-                    cursor_seen = true;
-                    continue;
-                }
-                skipped += 1;
-                if skipped > LOG_CURSOR_SCAN_LIMIT {
-                    return Err(EngineError::Invalid(format!(
-                        "log cursor `{}` not found within {LOG_CURSOR_SCAN_LIMIT} commits",
-                        after.unwrap_or_default()
-                    )));
-                }
-                continue;
-            }
-
+        for (index, oid) in order.iter().copied().enumerate().skip(start) {
             let commit = repo.find_commit(oid)?;
 
             // Pickaxe (-S / -G): the commit's patch must add or remove the
@@ -1087,6 +1223,7 @@ impl GitEngine for Libgit2Engine {
                     // walk. The cursor advances every page, so this stays
                     // finite.
                     next_cursor = Some(commit.id().to_string());
+                    self.remember_log_cursor(&order, oid, index);
                     break;
                 }
                 pickaxe_examined += 1;
@@ -1161,6 +1298,7 @@ impl GitEngine for Libgit2Engine {
             commits.push(commit_info(&commit, &decos));
             if commits.len() >= limit {
                 next_cursor = Some(sha);
+                self.remember_log_cursor(&order, oid, index);
                 break;
             }
         }
@@ -1424,7 +1562,7 @@ mod m12_pickaxe_tests {
 
     use super::*;
 
-    const ENGINE: Libgit2Engine = Libgit2Engine;
+    static ENGINE: Libgit2Engine = Libgit2Engine::new();
 
     struct TempDir(PathBuf);
 

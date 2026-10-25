@@ -111,11 +111,15 @@ pub fn layout_page(
     state: &mut LaneState,
 ) -> Vec<GraphRow> {
     let mut rows = Vec::with_capacity(commits.len());
+    // Reused per row: the open-lane bitmap changes size with the graph width,
+    // but allocating a fresh Vec for every commit is avoidable.
+    let mut open_before: Vec<bool> = Vec::new();
 
     for commit in commits {
         // Existing lines may converge with a parent edge on this row, but
         // still need their own outgoing segment to reach that parent.
-        let open_before: Vec<bool> = state.lanes.iter().map(Option::is_some).collect();
+        open_before.clear();
+        open_before.extend(state.lanes.iter().map(Option::is_some));
 
         // 1. Resolve this commit's lane: an earlier child may have placed it.
         let lane = match state.lane_of(&commit.sha) {

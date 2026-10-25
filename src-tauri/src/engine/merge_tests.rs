@@ -13,7 +13,7 @@ use super::types::{
     CommitOptions, ConflictResolution, MergeFavor, MergeOptions, MergeOutcome, ResetKind,
 };
 
-const ENGINE: Libgit2Engine = Libgit2Engine;
+static ENGINE: Libgit2Engine = Libgit2Engine::new();
 
 // ---------------------------------------------------------------------------
 // temp scaffolding

@@ -193,7 +193,7 @@ mod tests {
     use super::*;
     use crate::engine::git_engine::GitEngineM12;
 
-    const ENGINE: Libgit2Engine = Libgit2Engine;
+    static ENGINE: Libgit2Engine = Libgit2Engine::new();
 
     struct TempDir(PathBuf);
 

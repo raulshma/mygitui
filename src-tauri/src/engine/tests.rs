@@ -13,7 +13,7 @@ use super::types::{
     StageTarget,
 };
 
-const ENGINE: Libgit2Engine = Libgit2Engine;
+static ENGINE: Libgit2Engine = Libgit2Engine::new();
 
 fn fixtures_dir() -> PathBuf {
     let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -218,6 +218,46 @@ fn log_paginates_full_history_with_decorations() {
         feature_tip.refs.iter().any(|r| r == "feature/login"),
         "{}",
         feature_tip.summary
+    );
+}
+
+#[test]
+fn log_cached_pages_match_a_single_walk() {
+    let repo = open_fixture("basic");
+    // One engine instance = the streaming path: pages after the first should
+    // reuse the cached topological order (and resume at the cached cursor).
+    let engine = Libgit2Engine::new();
+    let filter = LogFilter::default();
+    let (all, _) = engine.log(&repo, &filter, 10, None).expect("full walk");
+
+    let mut paged = Vec::new();
+    let mut cursor: Option<String> = None;
+    loop {
+        let (page, next) = engine
+            .log(&repo, &filter, 2, cursor.as_deref())
+            .expect("cached page");
+        if page.is_empty() {
+            assert!(next.is_none(), "empty terminal page must end the walk");
+            break;
+        }
+        paged.extend(page);
+        cursor = next;
+        if cursor.is_none() {
+            break;
+        }
+    }
+    let shas: Vec<&str> = paged.iter().map(|c| c.sha.as_str()).collect();
+    let expected: Vec<&str> = all.iter().map(|c| c.sha.as_str()).collect();
+    assert_eq!(shas, expected, "cache must not change page order");
+
+    // Abbreviated cursors keep their historical prefix semantics.
+    let short = &all[1].sha[..8];
+    let (page, _) = engine
+        .log(&repo, &filter, 10, Some(short))
+        .expect("prefix cursor");
+    assert_eq!(
+        page.first().map(|c| c.sha.as_str()),
+        Some(all[2].sha.as_str())
     );
 }
 

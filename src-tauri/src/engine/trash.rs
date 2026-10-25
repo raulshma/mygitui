@@ -342,7 +342,7 @@ mod tests {
         let repo = init_repo(&dir.0);
         let tip = commit_file(&repo, "a.txt", "one\n", "one");
 
-        let engine = Libgit2Engine;
+        let engine = Libgit2Engine::new();
         engine
             .branch_create_impl(&repo, "feature/foo.bar", None, false)
             .unwrap();
@@ -393,7 +393,7 @@ mod tests {
         // The branch is created from HEAD, so its tip is "two".
         let branch_tip = commit_file(&repo, "b.txt", "two\n", "two");
 
-        let engine = Libgit2Engine;
+        let engine = Libgit2Engine::new();
         engine
             .branch_create_impl(&repo, "topic", None, false)
             .unwrap();
@@ -427,7 +427,7 @@ mod tests {
         let repo = init_repo(&dir.0);
         commit_file(&repo, "a.txt", "one\n", "one");
 
-        let engine = Libgit2Engine;
+        let engine = Libgit2Engine::new();
         engine
             .branch_create_impl(&repo, "old-name", None, false)
             .unwrap();
@@ -449,7 +449,7 @@ mod tests {
         let tip = commit_file(&repo, "a.txt", "one\n", "one");
         commit_file(&repo, "b.txt", "two\n", "two");
 
-        let engine = Libgit2Engine;
+        let engine = Libgit2Engine::new();
         engine
             .branch_create_impl(&repo, "topic", None, false)
             .unwrap();

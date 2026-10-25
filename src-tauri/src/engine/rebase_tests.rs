@@ -10,7 +10,7 @@ use super::git_engine::EngineError;
 use super::libgit2::Libgit2Engine;
 use super::types::RebaseStep;
 
-const ENGINE: Libgit2Engine = Libgit2Engine;
+static ENGINE: Libgit2Engine = Libgit2Engine::new();
 
 // ---------------------------------------------------------------------------
 // fixtures

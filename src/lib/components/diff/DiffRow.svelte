@@ -22,6 +22,7 @@
     type LoadImageFn,
   } from "$lib/components/diff/rowModel";
   import { cachedTokens, type TokenSpan } from "$lib/diff/highlight";
+  import { observeRowMeasure } from "$lib/components/diff/rowMeasure";
   import ImageCompare from "$lib/components/diff/ImageCompare.svelte";
 
   let {
@@ -113,7 +114,7 @@
   function measure(node: HTMLElement): { destroy: () => void } {
     const report = (): void => {
       // Re-checked per callback: the viewer passes undefined once wrap is
-      // off, but rows stay mounted and their observers keep firing.
+      // off, but rows stay mounted and their observations keep firing.
       if (!onMeasure || rowIndex === undefined) return;
       let max = 0;
       for (const el of node.querySelectorAll<HTMLElement>(".txt")) {
@@ -121,10 +122,7 @@
       }
       if (max > 0) onMeasure(rowIndex, max);
     };
-    const ro = new ResizeObserver(report);
-    ro.observe(node);
-    for (const el of node.querySelectorAll<HTMLElement>(".txt")) ro.observe(el);
-    return { destroy: () => ro.disconnect() };
+    return { destroy: observeRowMeasure(node, report) };
   }
 </script>
 

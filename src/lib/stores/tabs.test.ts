@@ -317,6 +317,34 @@ describe("refreshStatus", () => {
     expect(store.tabs[0]?.status).toEqual(STATUS_1);
   });
 
+  it("coalesces a burst into one fetch plus one trailing fetch", async () => {
+    const store = freshStore();
+    mockOpenRepo.mockResolvedValue(ALPHA);
+    mockRepoStatus.mockResolvedValue(STATUS_1);
+    await store.openTab("C:/repos/alpha");
+    await vi.waitFor(() => {
+      expect(store.tabs[0]?.status).toEqual(STATUS_1);
+    });
+
+    let release!: (value: typeof STATUS_1) => void;
+    const first = new Promise<typeof STATUS_1>((resolve) => {
+      release = resolve;
+    });
+    mockRepoStatus.mockReset();
+    mockRepoStatus.mockReturnValueOnce(first).mockResolvedValue(STATUS_2);
+
+    const a = store.refreshStatus("repo-1");
+    const b = store.refreshStatus("repo-1");
+    const c = store.refreshStatus("repo-1");
+    expect(mockRepoStatus).toHaveBeenCalledTimes(1);
+
+    release(STATUS_1);
+    await Promise.all([a, b, c]);
+    // One running fetch + the trailing fetch queued by the burst.
+    expect(mockRepoStatus).toHaveBeenCalledTimes(2);
+    expect(store.tabs[0]?.status).toEqual(STATUS_2);
+  });
+
   it("is a no-op for unknown ids", async () => {
     const store = freshStore();
     await store.refreshStatus("missing");

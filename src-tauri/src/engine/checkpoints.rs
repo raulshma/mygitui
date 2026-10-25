@@ -250,7 +250,7 @@ fn auto_gc_inner(repo: &Repository) -> EngineResult<()> {
     if any.next().is_none() {
         return Ok(());
     }
-    let engine = Libgit2Engine;
+    let engine = Libgit2Engine::new();
     engine.checkpoint_gc_impl(repo, AUTO_GC_DAYS)?;
     // Marker written only after a run that actually happened.
     if let Some(parent) = marker.parent() {
@@ -602,7 +602,7 @@ mod tests {
     use super::maybe_auto_gc;
     use super::{AUTO_GC_MARKER, CHECKPOINT_PREFIX};
 
-    const ENGINE: Libgit2Engine = Libgit2Engine;
+    static ENGINE: Libgit2Engine = Libgit2Engine::new();
 
     struct TempDir(PathBuf);
 

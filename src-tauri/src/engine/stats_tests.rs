@@ -18,7 +18,7 @@ use git2::{IndexAddOption, Repository, RepositoryInitOptions, Signature, Time};
 use super::libgit2::Libgit2Engine;
 use super::stats::day_string;
 
-const ENGINE: Libgit2Engine = Libgit2Engine;
+static ENGINE: Libgit2Engine = Libgit2Engine::new();
 const DAY_SECS: i64 = 86_400;
 
 // ---------------------------------------------------------------------------

@@ -832,7 +832,7 @@ mod tests {
     use super::super::types::{FetchOptions, PushOptions};
     use super::parse_push_report;
 
-    const ENGINE: Libgit2Engine = Libgit2Engine;
+    static ENGINE: Libgit2Engine = Libgit2Engine::new();
 
     struct TempDir(PathBuf);
 

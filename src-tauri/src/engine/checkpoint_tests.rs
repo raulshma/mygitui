@@ -17,7 +17,7 @@ use git2::{
 use super::git_engine::EngineError;
 use super::libgit2::Libgit2Engine;
 
-const ENGINE: Libgit2Engine = Libgit2Engine;
+static ENGINE: Libgit2Engine = Libgit2Engine::new();
 const PREFIX: &str = "refs/mygitui/checkpoints/";
 const DAY_SECS: i64 = 86_400;
 

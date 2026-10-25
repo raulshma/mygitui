@@ -12,7 +12,7 @@ use super::git_engine::GitEngine;
 use super::libgit2::Libgit2Engine;
 use super::types::{ChangeKind, StageRequest, StageTarget};
 
-const ENGINE: Libgit2Engine = Libgit2Engine;
+static ENGINE: Libgit2Engine = Libgit2Engine::new();
 
 // ---------------------------------------------------------------------------
 // temp scaffolding

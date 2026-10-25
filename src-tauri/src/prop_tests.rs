@@ -26,7 +26,7 @@ use crate::engine::git_engine::{GitEngine, GitEngineM3};
 use crate::engine::libgit2::Libgit2Engine;
 use crate::engine::types::{CommitOptions, DiffSide};
 
-const ENGINE: Libgit2Engine = Libgit2Engine;
+static ENGINE: Libgit2Engine = Libgit2Engine::new();
 
 // ---------------------------------------------------------------------------
 // scaffolding (temp repos, mirrors the *_tests.rs pattern)

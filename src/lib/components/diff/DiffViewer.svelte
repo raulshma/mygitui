@@ -205,11 +205,10 @@
   });
 
   // Request parses for the visible window's lines (cheap: only uncached
-  // entries actually hit Shiki).
-  $effect(() => {
-    if (!syntaxEnabled) return;
-    void syntaxTick; // re-request after background parses land (next window)
-    void mode;
+  // entries actually hit Shiki). The per-file text lists are derived once per
+  // diff, not rebuilt for every token-landed tick.
+  const syntaxTexts = $derived.by(() => {
+    const out: Array<{ path: string; texts: string[] }> = [];
     for (const file of files) {
       if (file.binary || file.is_image) continue;
       const texts: string[] = [];
@@ -218,7 +217,16 @@
           texts.push(line.text);
         }
       }
-      requestTokens(file.path, texts);
+      out.push({ path: file.path, texts });
+    }
+    return out;
+  });
+
+  $effect(() => {
+    if (!syntaxEnabled) return;
+    void syntaxTick; // re-request after background parses land (next window)
+    for (const file of syntaxTexts) {
+      requestTokens(file.path, file.texts);
     }
   });
 
