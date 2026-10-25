@@ -84,7 +84,13 @@ fn hook_state(path: &Path) -> (bool, bool) {
 fn commit_hooks_active(repo: &Repository) -> bool {
     COMMIT_GATING_HOOKS
         .iter()
-        .any(|kind| matches!(hook_state(&hook_file(repo, kind)), (true, true)))
+        .any(|kind| hook_active(repo, kind))
+}
+
+/// Is `kind` present and runnable? `pre-push` gating lives in the push lane
+/// (netops), which cannot execute hooks through libgit2.
+pub(crate) fn hook_active(repo: &Repository, kind: &str) -> bool {
+    matches!(hook_state(&hook_file(repo, kind)), (true, true))
 }
 
 /// Whole-file stage/unstage.

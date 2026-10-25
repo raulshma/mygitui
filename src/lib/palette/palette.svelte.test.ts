@@ -70,6 +70,7 @@ vi.mock("$lib/ipc/client", () => ({
   // seams in transitively; they are never called in this suite.
   onCloneProgress: vi.fn(),
   onOpProgress: vi.fn(),
+  onOpLog: vi.fn(),
   onAuthRequest: vi.fn(),
   onActionOutput: vi.fn(),
   onPtyOutput: vi.fn(),

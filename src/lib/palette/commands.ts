@@ -28,21 +28,21 @@
 
 import {
   checkpointGc,
-  fetchRepo,
   pickFolder,
-  pullRepo,
-  pushRepo,
-  remotes,
   stashApply,
   stashList,
   stashPush,
   stageAll,
 } from "$lib/ipc/client";
-import type {
-  FetchOptions,
-  PullOptions,
-  PushOptions,
-} from "$lib/ipc/types";
+import {
+  fetchDefaultRemote,
+  pullCurrentBranch,
+  pushCurrentBranch,
+  syncSkipMessage,
+  syncSuccessMessage,
+  type SyncOutcome,
+  type SyncVerb,
+} from "$lib/git/sync";
 import { toast } from "$lib/toast";
 import { emitUiEvent } from "$lib/palette/events";
 import {
@@ -121,70 +121,40 @@ function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
-/** Picks the remote to network against: "origin" when configured, else first. */
-async function pickRemote(repoId: string): Promise<string | null> {
-  const list = await remotes(repoId);
-  if (list.length === 0) return null;
-  const origin = list.find((remote) => remote.name === "origin");
-  return (origin ?? list[0]!).name;
+/** Hides a precondition skip; otherwise toasts the completed sync. */
+function reportOutcome(
+  verb: SyncVerb,
+  outcome: SyncOutcome,
+  branch: string | null = null,
+): void {
+  if (outcome.kind === "skipped") {
+    toast(syncSkipMessage(outcome.reason, verb), { kind: "error" });
+    return;
+  }
+  ok(syncSuccessMessage(verb, outcome, branch));
 }
-
-const FETCH_DEFAULTS: Omit<FetchOptions, "remote" | "prune"> = {
-  refs: [],
-  depth: null,
-};
 
 /** Fetches the repo's primary remote (`prune` toggles --prune). */
 async function runFetch(ctx: CommandCtx, prune: boolean): Promise<void> {
   const repoId = ctx.repoId;
   if (repoId === null) return;
-  const remote = await pickRemote(repoId);
-  if (remote === null) {
-    toast("No remote configured for this repository", { kind: "error" });
-    return;
-  }
-  const options: FetchOptions = { remote, prune, ...FETCH_DEFAULTS };
-  const stats = await fetchRepo(repoId, options);
-  ok(`Fetched ${remote} (${stats.updated_refs.length} refs updated)`);
+  reportOutcome("fetch", await fetchDefaultRemote(repoId, prune));
 }
 
 /** Pulls (ff-only) the current branch from its default remote. */
 async function runPull(ctx: CommandCtx): Promise<void> {
   const repoId = ctx.repoId;
   if (repoId === null) return;
-  const branch = tabStore.active?.status?.branch ?? "";
-  if (branch === "") {
-    toast("No current branch to pull", { kind: "error" });
-    return;
-  }
-  const remote = (await pickRemote(repoId)) ?? "origin";
-  const options: PullOptions = { remote, branch, ff_only: true, rebase: false };
-  const stats = await pullRepo(repoId, options);
-  ok(`Pulled ${remote}/${branch} (${stats.updated_refs.length} refs updated)`);
+  const branch = tabStore.active?.status?.branch ?? null;
+  reportOutcome("pull", await pullCurrentBranch(repoId, branch), branch);
 }
 
 /** Pushes the current branch to its default remote. */
 async function runPush(ctx: CommandCtx): Promise<void> {
   const repoId = ctx.repoId;
   if (repoId === null) return;
-  const branch = tabStore.active?.status?.branch ?? "";
-  if (branch === "") {
-    toast("No current branch to push", { kind: "error" });
-    return;
-  }
-  const remote = (await pickRemote(repoId)) ?? "origin";
-  const options: PushOptions = {
-    remote,
-    branch,
-    force: false,
-    force_with_lease: false,
-    set_upstream: false,
-    refs: [],
-    tags: false,
-    delete: false,
-  };
-  const stats = await pushRepo(repoId, options);
-  ok(`Pushed ${branch} to ${remote} (${stats.updated_refs.length} refs updated)`);
+  const branch = tabStore.active?.status?.branch ?? null;
+  reportOutcome("push", await pushCurrentBranch(repoId, branch), branch);
 }
 
 /** Focuses a panel via the documented `focus-panel` event. */

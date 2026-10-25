@@ -62,6 +62,7 @@ import type {
   MergetoolInfo,
   MergetoolResult,
   NetStats,
+  OpLog,
   OpProgress,
   OpencodeDetection,
   OpencodeServeState,
@@ -721,6 +722,15 @@ export function onOpProgress(
   cb: (event: OpProgress) => void,
 ): Promise<() => void> {
   return subscribe("op-progress", cb);
+}
+
+/**
+ * Subscribes to `op-log` events: raw per-line output from hooks and CLI
+ * fallbacks for an in-flight op. Same contract as {@link onOpProgress}:
+ * never throws, no-op unlisten outside Tauri.
+ */
+export function onOpLog(cb: (event: OpLog) => void): Promise<() => void> {
+  return subscribe("op-log", cb);
 }
 
 /**

@@ -457,6 +457,14 @@ impl Libgit2Engine {
         if cancel.is_some_and(|c| c.load(Ordering::Acquire)) {
             return Err(cancelled_err());
         }
+        // libgit2 never executes hooks. Presence of a runnable pre-push
+        // hook routes the push through the CLI (ipc_commands) so the hook
+        // runs and its output can be streamed like commit hooks.
+        if super::mutations::hook_active(repo, "pre-push") {
+            return Err(EngineError::Unsupported(
+                "pre-push hook present: routed to CLI".into(),
+            ));
+        }
         let mut branch_name: Option<String> = None;
 
         // Resolve the refspecs for this push mode:
@@ -729,8 +737,8 @@ impl Libgit2Engine {
 /// that moved after our last fetch rejects the push with "stale info".
 ///
 /// Progress is a single final tick (the CLI exposes no per-object
-/// callbacks); `updated_refs` is parsed from git's stdout report, falling
-/// back to the local source targets when the format surprises us.
+/// callbacks); `updated_refs` is parsed from git's output, falling back to
+/// the local source targets when the format surprises us.
 fn cli_push_with_leases(
     repo: &Repository,
     remote: &str,
@@ -784,13 +792,34 @@ fn cli_push_with_leases(
     }
 }
 
-/// Best-effort parse of `git push`'s stdout report, one line per ref:
-/// `   1234567..89abcde  main -> main` or
-/// ` + 1234567...89abcde main -> main (forced update)`.
+/// Best-effort parse of `git push`'s output, one line per ref:
+/// `   1234567..89abcde  main -> main`,
+/// ` + 1111111...2222222 topic -> topic (forced update)`,
+/// ` * [new branch]      feat -> feat`,
+/// ` - [deleted]         old`.
+/// New and deleted refs carry no range, so their value is a sentinel; callers
+/// that need the new oid resolve it from the local ref instead.
 /// Returns (remote ref, new value) pairs.
-fn parse_push_report(report: &str) -> Vec<(String, String)> {
+pub(crate) fn parse_push_report(report: &str) -> Vec<(String, String)> {
     let mut updated = Vec::new();
     for line in report.lines() {
+        let trimmed = line.trim();
+        // Deletions have no `->`: ` - [deleted]         feature`.
+        if trimmed.contains("[deleted]") {
+            if let Some(name) = trimmed.split_whitespace().last() {
+                updated.push((name.to_owned(), "(deleted)".to_owned()));
+            }
+            continue;
+        }
+        // New refs have no `old..new` range: ` * [new branch]  feat -> feat`.
+        if trimmed.contains("[new branch]") || trimmed.contains("[new tag]") {
+            if let Some((_, right)) = trimmed.split_once("->") {
+                if let Some(dst) = right.split_whitespace().next() {
+                    updated.push((dst.to_owned(), "(new)".to_owned()));
+                }
+            }
+            continue;
+        }
         let Some((left, right)) = line.split_once("->") else {
             continue;
         };
@@ -1100,6 +1129,8 @@ mod tests {
             "   1234567..89abcde  main -> main\n",
             " + 1111111...2222222 topic -> topic (forced update)\n",
             " * [new branch]      feat -> feat\n",
+            " * [new tag]         v1 -> v1\n",
+            " - [deleted]         old\n",
         );
         let updated = parse_push_report(report);
         assert_eq!(
@@ -1107,8 +1138,11 @@ mod tests {
             vec![
                 ("main".to_owned(), "89abcde".to_owned()),
                 ("topic".to_owned(), "2222222".to_owned()),
+                ("feat".to_owned(), "(new)".to_owned()),
+                ("v1".to_owned(), "(new)".to_owned()),
+                ("old".to_owned(), "(deleted)".to_owned()),
             ],
-            "new-branch lines carry no range and are skipped: {updated:?}"
+            "new/deleted refs are kept with sentinel values: {updated:?}"
         );
     }
 

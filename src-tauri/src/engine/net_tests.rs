@@ -798,6 +798,32 @@ fn push_branch_sets_upstream_and_reports_progress() {
 }
 
 #[test]
+fn push_with_pre_push_hook_routes_to_cli() {
+    let f = NetFixture::new("push-hook");
+    let hooks = f.a.commondir().join("hooks");
+    std::fs::create_dir_all(&hooks).unwrap();
+    let hook = hooks.join("pre-push");
+    std::fs::write(&hook, "#!/bin/sh\nexit 0\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    let opts = PushOptions {
+        remote: "origin".into(),
+        branch: "main".into(),
+        ..Default::default()
+    };
+    match ENGINE.push(&f.a, &opts, &mut |_| {}) {
+        Err(EngineError::Unsupported(msg)) => {
+            assert!(msg.contains("pre-push"), "reason names the hook: {msg}")
+        }
+        other => panic!("expected Unsupported(pre-push), got {other:?}"),
+    }
+}
+
+#[test]
 fn push_force_overwrites_non_fast_forward() {
     let f = NetFixture::new("push-force");
     let first = commit_file(&f.a, "h.txt", "one\n", "one");

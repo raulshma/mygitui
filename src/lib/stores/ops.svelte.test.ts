@@ -6,8 +6,13 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { authRespond, onAuthRequest, onOpProgress } from "$lib/ipc/client";
-import type { AuthRequest, OpProgress } from "$lib/ipc/types";
+import {
+  authRespond,
+  onAuthRequest,
+  onOpLog,
+  onOpProgress,
+} from "$lib/ipc/client";
+import type { AuthRequest, OpLog, OpProgress } from "$lib/ipc/types";
 import { resetRepoEvents } from "$lib/events/repoEvents";
 import { getToasts } from "$lib/toast";
 import {
@@ -22,6 +27,7 @@ vi.mock("$lib/ipc/client", () => ({
   authRespond: vi.fn(),
   onAuthRequest: vi.fn(),
   onOpProgress: vi.fn(),
+  onOpLog: vi.fn(),
   // $lib/events/repoEvents (imported by ops.svelte) pulls the other event
   // seams in transitively; they are never called in this suite.
   onRepoChanged: vi.fn(),
@@ -34,6 +40,7 @@ vi.mock("$lib/ipc/client", () => ({
 const mockAuthRespond = vi.mocked(authRespond);
 const mockOnAuthRequest = vi.mocked(onAuthRequest);
 const mockOnOpProgress = vi.mocked(onOpProgress);
+const mockOnOpLog = vi.mocked(onOpLog);
 
 // ---------------------------------------------------------------------------
 // Fixtures + subscription harness
@@ -50,6 +57,16 @@ function progress(patch: Partial<OpProgress> & { op_id: string; repo_id: string 
   };
 }
 
+function logEntry(
+  patch: Partial<OpLog> & { op_id: string; repo_id: string },
+): OpLog {
+  return {
+    kind: "commit",
+    line: "hook output",
+    ...patch,
+  };
+}
+
 const AUTH_REQ: AuthRequest = {
   op_id: "op-1",
   repo_id: "repo-1",
@@ -59,15 +76,18 @@ const AUTH_REQ: AuthRequest = {
 };
 
 const opHandlers: Array<(event: OpProgress) => void> = [];
+const logHandlers: Array<(event: OpLog) => void> = [];
 const authHandlers: Array<(event: AuthRequest) => void> = [];
 const unlistenSpy = vi.fn();
 
 beforeEach(() => {
   opHandlers.length = 0;
+  logHandlers.length = 0;
   authHandlers.length = 0;
   unlistenSpy.mockReset();
   mockAuthRespond.mockReset();
   mockOnOpProgress.mockReset();
+  mockOnOpLog.mockReset();
   mockOnAuthRequest.mockReset();
   mockAuthRespond.mockResolvedValue(undefined);
   mockOnOpProgress.mockImplementation(
@@ -75,6 +95,12 @@ beforeEach(() => {
       opHandlers.push(cb);
       return Promise.resolve(unlistenSpy);
     }) as typeof onOpProgress,
+  );
+  mockOnOpLog.mockImplementation(
+    ((cb: (event: OpLog) => void) => {
+      logHandlers.push(cb);
+      return Promise.resolve(unlistenSpy);
+    }) as typeof onOpLog,
   );
   mockOnAuthRequest.mockImplementation(
     ((cb: (event: AuthRequest) => void) => {
@@ -156,6 +182,49 @@ describe("OpStore", () => {
     expect(store.opsFor("repo-1")).toEqual([]);
     expect(store.busy("repo-1")).toBe(false);
     expect(Object.keys(store.ops)).toEqual([]);
+  });
+
+  it("streams op-log lines per op and keeps them after completion", async () => {
+    const store = new OpStore();
+    store.startOpsEvents();
+    await flush();
+
+    expect(mockOnOpLog).toHaveBeenCalledTimes(1);
+    expect(logHandlers).toHaveLength(1);
+
+    logHandlers[0]!(logEntry({ op_id: "a", repo_id: "repo-1", line: "hook: lint" }));
+    logHandlers[0]!(logEntry({ op_id: "a", repo_id: "repo-1", line: "hook: tests" }));
+
+    expect(store.logsFor("repo-1")).toMatchObject({
+      op_id: "a",
+      kind: "commit",
+      lines: ["hook: lint", "hook: tests"],
+      done: false,
+      error: null,
+    });
+
+    store.applyProgress(progress({ op_id: "a", repo_id: "repo-1", kind: "commit", done: true }));
+
+    expect(store.logsFor("repo-1")).toMatchObject({ done: true, error: null });
+    expect(store.logsFor("repo-2")).toBeNull();
+    store.stop();
+  });
+
+  it("a new op of the same kind replaces stale output; clear dismisses it", () => {
+    const store = new OpStore();
+    store.applyLog(logEntry({ op_id: "a", repo_id: "repo-1", line: "old" }));
+    store.applyProgress(progress({ op_id: "a", repo_id: "repo-1", kind: "commit", done: true }));
+
+    store.applyProgress(
+      progress({ op_id: "b", repo_id: "repo-1", kind: "commit", message: "committing" }),
+    );
+    expect(store.logsFor("repo-1")).toBeNull();
+
+    store.applyLog(logEntry({ op_id: "b", repo_id: "repo-1", line: "new" }));
+    expect(store.logsFor("repo-1")?.lines).toEqual(["new"]);
+
+    store.clearLogs("repo-1");
+    expect(store.logsFor("repo-1")).toBeNull();
   });
 
   it("toasts an error when an op completes with an error", () => {

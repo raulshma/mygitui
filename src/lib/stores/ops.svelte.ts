@@ -5,7 +5,8 @@
  * events are upserted into a repo→ops map (fresh reference per update so
  * rune readers re-run), dropped when `done`, and failures surface as error
  * toasts. Panels drive spinners / inline progress off `busy()` /
- * `opsFor()`.
+ * `opsFor()`. Raw hook/CLI output arrives on `op-log` and is kept per repo
+ * in `logs` (rendered by `OpLogStrip`) so it survives the op finishing.
  *
  * `AuthStore` holds the pending `auth-request` for the modal dialog. The FE
  * flow is: backend pauses a network op and emits `auth-request` → dialog
@@ -20,8 +21,8 @@
  */
 
 import { authRespond } from "$lib/ipc/client";
-import { onAuthRequest, onOpProgress } from "$lib/events/repoEvents";
-import type { AuthRequest, OpProgress, RepoId } from "$lib/ipc/types";
+import { onAuthRequest, onOpLog, onOpProgress } from "$lib/events/repoEvents";
+import type { AuthRequest, OpLog, OpProgress, RepoId } from "$lib/ipc/types";
 import { toast } from "$lib/toast";
 
 /** One in-flight (not yet done) backend op. */
@@ -33,6 +34,18 @@ export interface ActiveOp {
   done: boolean;
   error: string | null;
 }
+
+/** Raw output of the latest logging op in a repo (hooks / CLI fallback). */
+export interface OpLogSession {
+  op_id: string;
+  kind: string;
+  lines: string[];
+  done: boolean;
+  error: string | null;
+}
+
+/** Keep the hook log bounded even when a chatty hook floods the pipe. */
+const MAX_LOG_LINES = 500;
 
 /** "fetch" → "Fetch" (fallback for kinds without a friendly label). */
 function kindLabel(kind: string): string {
@@ -52,16 +65,22 @@ export class OpStore {
   /** Active ops per repo (repos with no ops have no entry). */
   ops: Record<RepoId, ActiveOp[]> = $state({});
 
-  #unregister: (() => void) | null = null;
+  /** Latest op output per repo (hook/CLI lines), kept after completion. */
+  logs: Record<RepoId, OpLogSession> = $state({});
+
+  #unregister: Array<() => void> = [];
 
   /**
-   * Subscribes to `op-progress` events (registration is idempotent; the
-   * subscription lifecycle lives in `$lib/events/repoEvents`). Safe to call
-   * from every RepoView mount.
+   * Subscribes to `op-progress` + `op-log` events (registration is
+   * idempotent; the subscription lifecycle lives in
+   * `$lib/events/repoEvents`). Safe to call from every RepoView mount.
    */
   startOpsEvents(): void {
-    if (this.#unregister !== null) return;
-    this.#unregister = onOpProgress((event) => this.applyProgress(event));
+    if (this.#unregister.length > 0) return;
+    this.#unregister = [
+      onOpProgress((event) => this.applyProgress(event)),
+      onOpLog((event) => this.applyLog(event)),
+    ];
   }
 
   /**
@@ -69,18 +88,22 @@ export class OpStore {
    * toasts first). Public so tests / future code can inject progress.
    */
   applyProgress(p: OpProgress): void {
-    const list = this.ops[p.repo_id] ?? [];
     if (p.done) {
+      this.#finishLog(p);
       if (p.error) {
         toast(`${kindLabel(p.kind)} failed: ${p.error}`, { kind: "error" });
       }
-      const remaining = list.filter((op) => op.op_id !== p.op_id);
+      const remaining = this.ops[p.repo_id] ?? [];
+      const kept = remaining.filter((op) => op.op_id !== p.op_id);
       const ops = { ...this.ops };
-      if (remaining.length === 0) delete ops[p.repo_id];
-      else ops[p.repo_id] = remaining;
+      if (kept.length === 0) delete ops[p.repo_id];
+      else ops[p.repo_id] = kept;
       this.ops = ops;
       return;
     }
+
+    this.#clearStaleLog(p);
+    const list = this.ops[p.repo_id] ?? [];
     const entry: ActiveOp = {
       op_id: p.op_id,
       kind: p.kind,
@@ -95,6 +118,58 @@ export class OpStore {
         ? [...list, entry]
         : list.map((op, i) => (i === idx ? entry : op));
     this.ops = { ...this.ops, [p.repo_id]: next };
+  }
+
+  /**
+   * Appends one raw output line from a hook/CLI op. A line from a different
+   * op starts a fresh session (the strip always shows the newest output).
+   */
+  applyLog(l: OpLog): void {
+    const current = this.logs[l.repo_id];
+    const next: OpLogSession =
+      current && current.op_id === l.op_id
+        ? {
+            ...current,
+            lines: [...current.lines, l.line].slice(-MAX_LOG_LINES),
+          }
+        : {
+            op_id: l.op_id,
+            kind: l.kind,
+            lines: [l.line],
+            done: false,
+            error: null,
+          };
+    this.logs = { ...this.logs, [l.repo_id]: next };
+  }
+
+  /** Latest log session for a repo, or `null` when nothing logged yet. */
+  logsFor(repoId: RepoId): OpLogSession | null {
+    return this.logs[repoId] ?? null;
+  }
+
+  /** Dismiss the repo's log session (the next hook line starts a new one). */
+  clearLogs(repoId: RepoId): void {
+    if (this.logs[repoId] === undefined) return;
+    const logs = { ...this.logs };
+    delete logs[repoId];
+    this.logs = logs;
+  }
+
+  /** A new op of the same kind discards the previous run's stale output. */
+  #clearStaleLog(p: OpProgress): void {
+    const current = this.logs[p.repo_id];
+    if (!current || current.kind !== p.kind || current.op_id === p.op_id) return;
+    this.clearLogs(p.repo_id);
+  }
+
+  /** Marks the log session finished when its op completes. */
+  #finishLog(p: OpProgress): void {
+    const current = this.logs[p.repo_id];
+    if (!current || current.op_id !== p.op_id) return;
+    this.logs = {
+      ...this.logs,
+      [p.repo_id]: { ...current, done: true, error: p.error },
+    };
   }
 
   /** Active ops for a repo (empty array when none). */
@@ -112,9 +187,10 @@ export class OpStore {
 
   /** Deregisters and clears (test helper / teardown). */
   stop(): void {
-    this.#unregister?.();
-    this.#unregister = null;
+    for (const unregister of this.#unregister) unregister();
+    this.#unregister = [];
     this.ops = {};
+    this.logs = {};
   }
 }
 
@@ -133,6 +209,14 @@ export function opsFor(repoId: RepoId): ActiveOp[] {
 
 export function busy(repoId: RepoId, kind?: string): boolean {
   return opStore.busy(repoId, kind);
+}
+
+export function opLogsFor(repoId: RepoId): OpLogSession | null {
+  return opStore.logsFor(repoId);
+}
+
+export function clearOpLogs(repoId: RepoId): void {
+  opStore.clearLogs(repoId);
 }
 
 // ---------------------------------------------------------------------------

@@ -184,6 +184,16 @@
   );
   /** Staging controls need a repo and no in-flight mutation. */
   const canMutate = $derived(repoId !== null && !mutating);
+  /** At least one Worktree/Untracked row can be staged. */
+  const canStageAll = $derived(
+    canMutate &&
+      index !== null &&
+      index.bySection.unstaged.length + index.bySection.untracked.length > 0,
+  );
+  /** At least one index-side change can be unstaged. */
+  const canUnstageAll = $derived(
+    canMutate && index !== null && index.bySection.staged.length > 0,
+  );
   /** Filter text without surrounding whitespace. */
   const query = $derived(filterText.trim());
 
@@ -431,13 +441,43 @@
     });
   }
 
+  /**
+   * All-sections header action. Unstage goes through `stage_all` (index :=
+   * HEAD); stage targets every Worktree/Untracked row explicitly so
+   * conflicted files are never auto-resolved by `git add -A`.
+   */
   function onStageAll(unstage: boolean): void {
     if (!repoId) return;
-    void mutate(
-      unstage ? "Unstage all files" : "Stage all files",
-      () => stageAll(repoId, unstage),
+    if (unstage) {
+      void mutate("Unstage all files", () => stageAll(repoId, true)).then(
+        (ok) => {
+          if (ok && moduleList.length > 0) void reloadModules();
+        },
+      );
+      return;
+    }
+    const source = index;
+    if (source === null) return;
+    const conflicted = new Set(
+      source.bySection.conflicted.map((row) => row.entry.path),
+    );
+    const paths: string[] = [];
+    for (const row of [
+      ...source.bySection.unstaged,
+      ...source.bySection.untracked,
+    ]) {
+      const path = row.entry.path;
+      if (!conflicted.has(path) && !paths.includes(path)) paths.push(path);
+    }
+    if (paths.length === 0) return;
+    const hasModule = paths.some((path) => moduleByPath.has(path));
+    void mutate("Stage all files", () =>
+      stage(repoId, {
+        targets: paths.map((file) => ({ file })),
+        unstage: false,
+      }),
     ).then((ok) => {
-      if (ok && moduleList.length > 0) void reloadModules();
+      if (ok && hasModule) void reloadModules();
     });
   }
 
@@ -770,6 +810,22 @@
           </button>
         {/if}
       </span>
+      <IconButton
+        icon={iconStageAll}
+        label="Stage all files"
+        title="Stage every file in Changes and Untracked Changes (all sections)"
+        dense
+        disabled={!canStageAll}
+        onclick={() => onStageAll(false)}
+      />
+      <IconButton
+        icon={iconUnstageAll}
+        label="Unstage all files"
+        title="Unstage every file in Staged Changes (all sections)"
+        dense
+        disabled={!canUnstageAll}
+        onclick={() => onStageAll(true)}
+      />
       <IconButton
         icon={iconRefresh}
         label="Refresh changes"

@@ -1,7 +1,8 @@
 <script lang="ts">
   /**
    * Per-tab repo workspace (M2, extended in M3, layout-configurable in M4):
-   * header facts + the configurable main splitter tree (SplitContainer).
+   * header facts + sync quick actions + the configurable main splitter tree
+   * (SplitContainer).
    * The default tree is VSCode-like: a narrow source-control sidebar
    * (CommitBar pinned above StatusPanel) on the left, the Diff panel as the
    * center editor, and a collapsible History sidebar on the right. The
@@ -48,6 +49,7 @@
   import ConfirmDialog from "$lib/components/safety/ConfirmDialog.svelte";
   import PromptDialog from "$lib/components/safety/PromptDialog.svelte";
   import CommitBar from "$lib/components/panels/CommitBar.svelte";
+  import OpLogStrip from "$lib/components/panels/OpLogStrip.svelte";
   import EditorPane from "$lib/components/panels/EditorPane.svelte";
   import { IconButton } from "$lib/components/m3";
   import Icon from "$lib/components/icons/Icon.svelte";
@@ -56,6 +58,7 @@
   import AuthDialog from "$lib/components/AuthDialog.svelte";
   import CleanDialog from "$lib/components/actions/CleanDialog.svelte";
   import OpenWithButton from "$lib/components/header/OpenWithButton.svelte";
+  import RepoQuickActions from "$lib/components/header/RepoQuickActions.svelte";
   // Startup: every panel that is not part of the first paint (status is the
   // default tab; diff and CommitBar are always visible) is dynamically
   // imported inside its snippet below — hidden panels (terminal/xterm,
@@ -106,8 +109,6 @@
   import iconClean from "@ktibow/iconset-material-symbols/cleaning-services";
   import iconResetLayout from "@ktibow/iconset-material-symbols/restart-alt";
   import iconMore from "@ktibow/iconset-material-symbols/more-horiz";
-  import iconAhead from "@ktibow/iconset-material-symbols/arrow-upward";
-  import iconBehind from "@ktibow/iconset-material-symbols/arrow-downward";
   import iconBranch from "@ktibow/iconset-material-symbols/account-tree";
 
   let {
@@ -1034,29 +1035,8 @@
           <Icon icon={iconBranch} size={12} />
           <span class="branch-label">{branchLabel(status)}</span>
         </span>
-        {#if status.ahead > 0}
-          <span
-            class="sync-chip ahead"
-            role="img"
-            aria-label={`${status.ahead} ${status.ahead === 1 ? "commit" : "commits"} to push`}
-            title={`${status.ahead} ${status.ahead === 1 ? "commit" : "commits"} to push`}
-          >
-            <Icon icon={iconAhead} size={11} />
-            {status.ahead}
-          </span>
-        {/if}
-        {#if status.behind > 0}
-          <span
-            class="sync-chip behind"
-            role="img"
-            aria-label={`${status.behind} ${status.behind === 1 ? "commit" : "commits"} to pull`}
-            title={`${status.behind} ${status.behind === 1 ? "commit" : "commits"} to pull`}
-          >
-            <Icon icon={iconBehind} size={11} />
-            {status.behind}
-          </span>
-        {/if}
       {/if}
+      <RepoQuickActions {repoId} {status} onMutated={refresh} />
       <span class="repo-root" title={root}>{root}</span>
     </span>
     <span class="layout-controls">
@@ -1099,6 +1079,8 @@
       />
     </span>
   </header>
+
+  <OpLogStrip {repoId} />
 
   {#if opSource && conflictCount > 0}
     <div class="conflict-banner" role="alert">
@@ -1296,29 +1278,6 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-  }
-
-  .sync-chip {
-    flex: none;
-    display: inline-flex;
-    align-items: center;
-    gap: 0.15rem;
-    height: 1.05rem;
-    padding: 0 0.35rem;
-    border-radius: var(--m3-shape-full, 9999px);
-    font-size: 0.6875rem;
-    font-variant-numeric: tabular-nums;
-    white-space: nowrap;
-  }
-
-  .sync-chip.ahead {
-    background: var(--m3-primary-container, var(--m3-surface-container-high));
-    color: var(--m3-on-primary-container, var(--m3-primary));
-  }
-
-  .sync-chip.behind {
-    background: var(--m3-tertiary-container, var(--m3-surface-container-high));
-    color: var(--m3-on-tertiary-container, var(--m3-tertiary));
   }
 
   .layout-controls {

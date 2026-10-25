@@ -704,7 +704,8 @@ pub async fn commit(
             Ok(sha) => Ok(sha),
             Err(EngineError::Unsupported(reason)) => {
                 ctx.emit_progress(&format!("falling back to git CLI: {reason}"), None);
-                cli::commit_via_cli(&workdir, &options)
+                ctx.emit_log(&format!("using git CLI: {reason}"));
+                cli::commit_via_cli(&workdir, &options, &mut |line| ctx.emit_log(line))
             }
             Err(err) => Err(engine_err(err)),
         };
@@ -1138,6 +1139,7 @@ pub async fn push(
 ) -> Result<NetStats, String> {
     let handle = get_handle(&state, &repo_id)?;
     let repo = handle.repo();
+    let workdir = handle.root.clone();
     let generation = handle.generation_shared();
     let net_repo = handle.id.clone();
     let opening = if options.branch.is_empty() {
@@ -1153,15 +1155,27 @@ pub async fn push(
         // trait (same reason as fetch).
         let engine = crate::engine::libgit2::Libgit2Engine::new();
         let result = crate::auth::with_netop_context(&net_repo, || {
-            let guard = repo.lock();
-            engine.push_impl_ext(
-                &guard,
-                &options,
-                &mut |p| {
-                    emit_push_progress(&ctx, &p);
-                },
-                ctx.cancel_token().as_deref(),
-            )
+            let outcome = {
+                let guard = repo.lock();
+                engine.push_impl_ext(
+                    &guard,
+                    &options,
+                    &mut |p| {
+                        emit_push_progress(&ctx, &p);
+                    },
+                    ctx.cancel_token().as_deref(),
+                )
+            };
+            match outcome {
+                // libgit2 cannot run hooks: the engine asks for the CLI
+                // (pre-push present). Stream the hook output into op-log.
+                Err(EngineError::Unsupported(reason)) => {
+                    ctx.emit_log(&format!("using git CLI: {reason}"));
+                    cli::push_via_cli(&workdir, &options, &mut |line| ctx.emit_log(line))
+                        .map_err(EngineError::Invalid)
+                }
+                other => other,
+            }
         });
         generation.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         result.map_err(engine_err)

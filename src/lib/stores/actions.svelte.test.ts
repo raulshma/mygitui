@@ -27,6 +27,7 @@ vi.mock("$lib/ipc/client", () => ({
   onRepoChanged: vi.fn(),
   onCloneProgress: vi.fn(),
   onOpProgress: vi.fn(),
+  onOpLog: vi.fn(),
   onAuthRequest: vi.fn(),
   onPtyOutput: vi.fn(),
   onPtyExit: vi.fn(),

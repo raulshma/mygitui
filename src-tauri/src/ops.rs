@@ -35,6 +35,9 @@ use crate::engine::types::RepoId;
 /// `op-progress` event name (contracts.md, Events M2).
 pub const OP_PROGRESS_EVENT: &str = "op-progress";
 
+/// `op-log` event name: raw, per-line child output (hooks, CLI fallbacks).
+pub const OP_LOG_EVENT: &str = "op-log";
+
 /// Minimum interval between two throttled progress events for one op
 /// (mirrors the clone-progress throttle in ipc_commands).
 pub(crate) const THROTTLE_MS: u64 = 80;
@@ -57,12 +60,27 @@ pub struct OpProgress {
     pub error: Option<String>,
 }
 
+/// One line of raw op output (`op-log`). Hooks and CLI fallbacks stream
+/// their stdout/stderr through this; the FE renders it as a log panel.
+#[derive(Debug, Clone, Serialize, PartialEq, TS)]
+#[ts(export)]
+pub struct OpLog {
+    pub repo_id: String,
+    pub op_id: String,
+    pub kind: String,
+    pub line: String,
+}
+
 /// Where progress events go. Abstracted so the queue has no hard dependency
 /// on tauri: production installs a [`TauriEventSink`] via
 /// [`OpQueue::set_sink`] (see `RepoManager::open`), tests install a collector.
 /// Without a sink, events are silently dropped.
 pub trait EventSink: Send + Sync {
     fn emit(&self, event: &OpProgress);
+
+    /// Stream one raw output line for an op ([`OpLog`]). Optional: sinks
+    /// that only care about progress can leave the no-op default.
+    fn emit_log(&self, _event: &OpLog) {}
 }
 
 /// Production sink: emits [`OpProgress`] on the app handle.
@@ -85,6 +103,18 @@ impl EventSink for TauriEventSink {
                 op = %event.op_id,
                 error = %err,
                 "emit op-progress failed"
+            );
+        }
+    }
+
+    fn emit_log(&self, event: &OpLog) {
+        use tauri::Emitter;
+        if let Err(err) = self.app.emit(OP_LOG_EVENT, event) {
+            tracing::warn!(
+                repo = %event.repo_id,
+                op = %event.op_id,
+                error = %err,
+                "emit op-log failed"
             );
         }
     }
@@ -393,6 +423,19 @@ impl OpCtx {
         }
     }
 
+    /// Stream one raw output line (`op-log`, unthrottled). Used for hook
+    /// output and CLI fallbacks; no-ops without a sink.
+    pub fn emit_log(&self, line: &str) {
+        if let Some(sink) = &self.sink {
+            sink.emit_log(&OpLog {
+                repo_id: self.repo_id.clone(),
+                op_id: self.op_id.clone(),
+                kind: self.kind.clone(),
+                line: line.to_string(),
+            });
+        }
+    }
+
     /// True once [`OpQueue::cancel_op`] targeted this op. Long-running
     /// closures poll this between phases and bail out with an error (the
     /// queue still emits the final done event).
@@ -426,13 +469,14 @@ pub(crate) fn throttle_ready(elapsed_ms: Option<u64>) -> bool {
 pub(crate) mod test_sink {
     //! Test [`EventSink`] shared with other modules' unit tests.
 
-    use super::{EventSink, OpProgress};
+    use super::{EventSink, OpLog, OpProgress};
     use parking_lot::Mutex;
     use std::sync::Arc;
 
     #[derive(Default)]
     pub struct CollectorSink {
         pub events: Mutex<Vec<OpProgress>>,
+        pub logs: Mutex<Vec<OpLog>>,
     }
 
     impl CollectorSink {
@@ -443,11 +487,19 @@ pub(crate) mod test_sink {
         pub fn snapshot(&self) -> Vec<OpProgress> {
             self.events.lock().clone()
         }
+
+        pub fn log_snapshot(&self) -> Vec<OpLog> {
+            self.logs.lock().clone()
+        }
     }
 
     impl EventSink for CollectorSink {
         fn emit(&self, event: &OpProgress) {
             self.events.lock().push(event.clone());
+        }
+
+        fn emit_log(&self, event: &OpLog) {
+            self.logs.lock().push(event.clone());
         }
     }
 }
@@ -614,6 +666,25 @@ mod tests {
             sink.snapshot()
         );
         queue.shutdown();
+    }
+
+    #[test]
+    fn op_log_lines_stream_unthrottled_to_the_sink() {
+        let queue = queue();
+        let sink = CollectorSink::shared();
+        queue.set_sink(sink.clone());
+        let (_id, rx) = queue.enqueue("commit", move |ctx| {
+            for i in 0..5 {
+                ctx.emit_log(&format!("hook line {i}"));
+            }
+            Ok(())
+        });
+        recv(rx).expect("op completes");
+        let logs = sink.log_snapshot();
+        assert_eq!(logs.len(), 5, "every line is delivered: {logs:?}");
+        assert_eq!(logs[0].line, "hook line 0");
+        assert_eq!(logs[0].kind, "commit");
+        assert_eq!(logs[4].line, "hook line 4");
     }
 
     #[test]

@@ -100,7 +100,13 @@ events). Arg keys snake_case (commands use `rename_all`).
 | Event | Payload | Meaning |
 |---|---|---|
 | `op-progress` | `{ repo_id, op_id, kind, message, pct: number \| null, done: bool, error: string \| null }` | op-queue progress for mutations and net ops: throttled updates plus a final `done` event on success or failure (failures toast FE-side). Queue-dispatched reads (`status`, `refs`, `blame`, `diff`, …) emit nothing — their errors return through the command. Kinds: `stage`, `commit`, `branch`, `merge`, `rebase`, `bisect`, `stash`, `worktree`, `checkpoint`, `submodule`, `discard`, `clean`, `fetch`, `pull`, `push`, `maintenance`, `archive`, `sparse`, `lfs` (tags report as `branch`, remote config ops as `fetch`) |
+| `op-log` | `{ repo_id, op_id, kind, line }` | raw, unthrottled child output while an op runs; currently streams commit/signing hooks and the `push` CLI fallback (pre-push hook present). The FE keeps the newest session per repo and renders it in the workspace output strip. |
 | `auth-request` | `{ op_id, repo_id, url, kind: "https-user" \| "https-pass" \| "ssh-passphrase", prompt }` | engine needs credentials; FE shows dialog, answers via `auth_respond` |
+
+Commit and push route through the sanitized git CLI when hooks make libgit2
+unusable: any runnable `pre-commit` / `prepare-commit-msg` / `commit-msg`
+(or signing) for `commit`, and `pre-push` for `push`. Both stream the child's
+stdout/stderr lines on `op-log` so hooks are visible in the app.
 
 ## Commands (M3 — power + safety)
 

@@ -1,8 +1,9 @@
 /**
  * Backend push-event fan-out — one Tauri subscription per event name.
  *
- * Every backend push event (`repo-changed`, `op-progress`, `auth-request`,
- * `action-output`, `clone-progress`, `pty-output`, `pty-exit`) used to be
+ * Every backend push event (`repo-changed`, `op-progress`, `op-log`,
+ * `auth-request`, `action-output`, `clone-progress`, `pty-output`, `pty-exit`)
+ * used to be
  * subscribed by each consumer independently, and every one of them carried
  * its own copy of the idempotent-start flag + `#unlisten` + try/catch
  * lifecycle (tabs, ops ×2, actions, terminal, popouts, history instances).
@@ -31,6 +32,7 @@ import type {
   ActionOutputEvent,
   AuthRequest,
   CloneProgressEvent,
+  OpLog,
   OpProgress,
   PtyExitEvent,
   PtyOutputEvent,
@@ -188,6 +190,10 @@ const opProgressChannel = new EventChannel<OpProgress>(
   "op-progress",
   (forward) => client.onOpProgress(forward),
 );
+const opLogChannel = new EventChannel<OpLog>(
+  "op-log",
+  (forward) => client.onOpLog(forward),
+);
 const authRequestChannel = new EventChannel<AuthRequest>(
   "auth-request",
   (forward) => client.onAuthRequest(forward),
@@ -235,6 +241,11 @@ export function onOpProgress(handle: (event: OpProgress) => void): () => void {
   return opProgressChannel.register({ handle });
 }
 
+/** Subscribes to `op-log` (raw hook/CLI output); returns the unsubscribe. */
+export function onOpLog(handle: (event: OpLog) => void): () => void {
+  return opLogChannel.register({ handle });
+}
+
 /** Subscribes to `auth-request`; returns the synchronous unsubscribe. */
 export function onAuthRequest(handle: (event: AuthRequest) => void): () => void {
   return authRequestChannel.register({ handle });
@@ -274,6 +285,7 @@ export function onPtyExit(handle: (event: PtyExitEvent) => void): () => void {
 export function resetRepoEvents(): void {
   repoChannel.reset();
   opProgressChannel.reset();
+  opLogChannel.reset();
   authRequestChannel.reset();
   actionOutputChannel.reset();
   cloneProgressChannel.reset();

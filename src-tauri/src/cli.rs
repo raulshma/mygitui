@@ -13,11 +13,13 @@
 //! needs to run pass through ([`sanitize_env`]). The commit message always
 //! travels via `-F <temp file>` so no shell quoting is ever involved.
 
+use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
+use std::sync::mpsc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::engine::types::CommitOptions;
+use crate::engine::types::{CommitOptions, NetStats, PushOptions};
 
 /// Non-`GIT_*` environment keys passed through to the child git: enough for
 /// it to locate its config, crypto, and helpers on Windows and Unix.
@@ -113,6 +115,34 @@ pub(crate) fn build_commit_args(message_file: &str, opts: &CommitOptions) -> Vec
     args
 }
 
+/// Pure: argv for `git push`. Mirrors [`PushOptions`] 1:1; `--force-with-lease`
+/// is the real CLI flag (the libgit2 path approximates it).
+pub(crate) fn build_push_args(opts: &PushOptions) -> Vec<String> {
+    let mut args = vec!["push".to_string()];
+    if opts.delete {
+        args.push("--delete".to_string());
+    }
+    if opts.tags {
+        args.push("--tags".to_string());
+    }
+    if opts.force {
+        args.push("--force".to_string());
+    }
+    if opts.force_with_lease {
+        args.push("--force-with-lease".to_string());
+    }
+    if opts.set_upstream {
+        args.push("--set-upstream".to_string());
+    }
+    args.push(opts.remote.clone());
+    if !opts.refs.is_empty() {
+        args.extend(opts.refs.iter().cloned());
+    } else if !opts.branch.is_empty() {
+        args.push(opts.branch.clone());
+    }
+    args
+}
+
 /// Run `git <args>` in `workdir` with the sanitized environment; success
 /// returns trimmed stdout; failure returns stderr, falling back to stdout
 /// (some failures, e.g. "nothing to commit", print there).
@@ -134,17 +164,136 @@ fn git(workdir: &Path, args: &[String]) -> Result<String, String> {
     }
 }
 
+/// Captured output of a streamed child, split by stream.
+#[derive(Debug, Default)]
+struct StreamOutput {
+    stdout: String,
+    stderr: String,
+}
+
+/// Run `git <args>` while streaming stdout/stderr lines to `on_line`.
+/// Capturing both streams keeps the failure diagnostics identical to
+/// [`git`]; the callback is invoked on the calling thread so it may borrow
+/// the op context (it is not `Send`).
+fn git_stream(
+    workdir: &Path,
+    args: &[String],
+    on_line: &mut dyn FnMut(&str),
+) -> Result<StreamOutput, String> {
+    let mut cmd = crate::process::command("git");
+    cmd.current_dir(workdir)
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    apply_sanitized_env(&mut cmd);
+    let mut child = cmd
+        .spawn()
+        .map_err(|err| format!("failed to spawn git: {err}"))?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "failed to capture git stdout".to_string())?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| "failed to capture git stderr".to_string())?;
+
+    let (tx, rx) = mpsc::channel::<(bool, String)>();
+    let out_tx = tx.clone();
+    let out_reader = std::thread::spawn(move || read_stream_lines(stdout, true, out_tx));
+    let err_reader = std::thread::spawn(move || read_stream_lines(stderr, false, tx));
+
+    let mut stdout_text = String::new();
+    let mut stderr_text = String::new();
+    for (is_stdout, line) in rx {
+        if is_stdout {
+            stdout_text.push_str(&line);
+            stdout_text.push('\n');
+        } else {
+            stderr_text.push_str(&line);
+            stderr_text.push('\n');
+        }
+        if !line.trim().is_empty() {
+            on_line(&line);
+        }
+    }
+
+    let status = child
+        .wait()
+        .map_err(|err| format!("failed to wait for git: {err}"))?;
+    let _ = out_reader.join();
+    let _ = err_reader.join();
+
+    if status.success() {
+        Ok(StreamOutput {
+            stdout: stdout_text.trim().to_string(),
+            stderr: stderr_text.trim().to_string(),
+        })
+    } else {
+        let detail = if stderr_text.trim().is_empty() {
+            stdout_text.trim().to_string()
+        } else {
+            stderr_text.trim().to_string()
+        };
+        let head = args.first().map(String::as_str).unwrap_or_default();
+        Err(format!("git {head} failed: {detail}"))
+    }
+}
+
+/// Reads one child stream line by line (lossy UTF-8) into the channel.
+fn read_stream_lines<R: Read>(reader: R, is_stdout: bool, tx: mpsc::Sender<(bool, String)>) {
+    let mut reader = BufReader::new(reader);
+    let mut buf = Vec::new();
+    loop {
+        buf.clear();
+        match reader.read_until(b'\n', &mut buf) {
+            Ok(0) => break,
+            Ok(_) => {
+                let line = String::from_utf8_lossy(&buf);
+                let line = line.trim_end_matches(['\r', '\n']);
+                let _ = tx.send((is_stdout, line.to_string()));
+            }
+            Err(_) => break,
+        }
+    }
+}
+
 /// Commit via the git CLI (hooks + signing run for real). Returns the new
-/// HEAD sha (`git rev-parse HEAD` after committing).
-pub fn commit_via_cli(workdir: &Path, opts: &CommitOptions) -> Result<String, String> {
+/// HEAD sha (`git rev-parse HEAD` after committing). Every stdout/stderr line
+/// is handed to `on_line` while the command runs.
+pub fn commit_via_cli(
+    workdir: &Path,
+    opts: &CommitOptions,
+    on_line: &mut dyn FnMut(&str),
+) -> Result<String, String> {
     let file = write_message_file(&opts.message)?;
     let result = (|| {
         let args = build_commit_args(&file.to_string_lossy(), opts);
-        git(workdir, &args)?;
+        git_stream(workdir, &args, on_line)?;
         git(workdir, &["rev-parse".to_string(), "HEAD".to_string()])
     })();
     let _ = std::fs::remove_file(&file);
     result
+}
+
+/// Push via the git CLI so a `pre-push` hook really runs (and streams its
+/// output). Returns the refs reported by `git push`; the report is written to
+/// stderr alongside progress, so parse both streams.
+pub fn push_via_cli(
+    workdir: &Path,
+    opts: &PushOptions,
+    on_line: &mut dyn FnMut(&str),
+) -> Result<NetStats, String> {
+    let args = build_push_args(opts);
+    let output = git_stream(workdir, &args, on_line)?;
+    let report = format!("{}\n{}", output.stdout, output.stderr);
+    let updated_refs = crate::engine::netops::parse_push_report(&report);
+    Ok(NetStats {
+        received_bytes: 0,
+        objects: updated_refs.len() as u32,
+        updated_refs,
+    })
 }
 
 /// Unique temp file for the commit message (removed by the caller).
@@ -219,6 +368,44 @@ mod tests {
     }
 
     #[test]
+    fn push_args_default_branch_and_flags() {
+        let options = PushOptions {
+            remote: "origin".to_string(),
+            branch: "main".to_string(),
+            force: true,
+            force_with_lease: false,
+            set_upstream: true,
+            ..PushOptions::default()
+        };
+        assert_eq!(
+            build_push_args(&options),
+            vec!["push", "--force", "--set-upstream", "origin", "main"]
+        );
+    }
+
+    #[test]
+    fn push_args_refs_tags_and_delete() {
+        let mut options = PushOptions {
+            remote: "origin".to_string(),
+            refs: vec!["feature".to_string(), "v1".to_string()],
+            force_with_lease: true,
+            ..PushOptions::default()
+        };
+        assert_eq!(
+            build_push_args(&options),
+            vec!["push", "--force-with-lease", "origin", "feature", "v1"]
+        );
+
+        options.refs.clear();
+        options.delete = true;
+        options.tags = true;
+        assert_eq!(
+            build_push_args(&options),
+            vec!["push", "--delete", "--tags", "--force-with-lease", "origin"]
+        );
+    }
+
+    #[test]
     fn sanitize_env_keeps_git_and_allowlist_drops_rest() {
         let vars = vec![
             ("GIT_CONFIG_GLOBAL".to_string(), "/x/gitconfig".to_string()),
@@ -279,8 +466,14 @@ mod tests {
         // fallback commits the index as-is, so stage here too.
         git_init(&["add", "file.txt"]);
 
-        let sha = commit_via_cli(&dir, &opts()).expect("cli commit succeeds");
+        let mut seen: Vec<String> = Vec::new();
+        let sha = commit_via_cli(&dir, &opts(), &mut |line| seen.push(line.to_string()))
+            .expect("cli commit succeeds");
         assert_eq!(sha.len(), 40, "sha from rev-parse HEAD: {sha}");
+        assert!(
+            seen.iter().any(|line| line.contains("[")),
+            "git commit output was streamed: {seen:?}"
+        );
         let show = Command::new("git")
             .args(["log", "-1", "--pretty=%B"])
             .current_dir(&dir)
@@ -292,9 +485,78 @@ mod tests {
         let mut amended = opts();
         amended.amend = true;
         amended.message = "amended".to_string();
-        let sha2 = commit_via_cli(&dir, &amended).expect("amend succeeds");
+        let sha2 = commit_via_cli(&dir, &amended, &mut |_line| {}).expect("amend succeeds");
         assert_eq!(sha2.len(), 40);
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Real-git integration: push a new branch through the CLI fallback. The
+    /// ref report is written to stderr, which must still feed `updated_refs`
+    /// and stream to the user. Requires `git` on PATH — run with
+    /// `cargo test -- --ignored`.
+    #[test]
+    #[ignore = "shells out to real git in a temp repo"]
+    fn cli_push_streams_output_and_reports_new_refs() {
+        let root = std::env::temp_dir().join(format!(
+            "mygitui-cli-push-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let remote = root.join("remote.git");
+        let work = root.join("work");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&remote).unwrap();
+        std::fs::create_dir_all(&work).unwrap();
+        let run = |dir: &Path, args: &[&str]| {
+            let out = Command::new("git")
+                .args(args)
+                .current_dir(dir)
+                .output()
+                .expect("spawn git");
+            assert!(
+                out.status.success(),
+                "git {:?}: {}",
+                args,
+                String::from_utf8_lossy(&out.stderr)
+            );
+        };
+        run(&remote, &["init", "--bare", "-q"]);
+        run(&work, &["init", "-q"]);
+        run(&work, &["config", "user.email", "test@example.com"]);
+        run(&work, &["config", "user.name", "Test"]);
+        std::fs::write(work.join("file.txt"), b"one").unwrap();
+        run(&work, &["add", "file.txt"]);
+        run(&work, &["commit", "-q", "-m", "init"]);
+        run(&work, &["branch", "-M", "main"]);
+        let remote_url = remote.to_string_lossy().to_string();
+        run(&work, &["remote", "add", "origin", &remote_url]);
+
+        let mut seen: Vec<String> = Vec::new();
+        let stats = push_via_cli(
+            &work,
+            &PushOptions {
+                remote: "origin".to_string(),
+                branch: "main".to_string(),
+                set_upstream: true,
+                ..PushOptions::default()
+            },
+            &mut |line| seen.push(line.to_string()),
+        )
+        .expect("cli push succeeds");
+        assert_eq!(
+            stats.updated_refs,
+            vec![("main".to_string(), "(new)".to_string())],
+            "stderr ref report was parsed"
+        );
+        assert!(
+            seen.iter().any(|line| line.contains("[new branch]")),
+            "git push output was streamed: {seen:?}"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

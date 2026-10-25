@@ -58,6 +58,8 @@ export type { RemoteInfo } from "./gen/RemoteInfo";
 export type { TagInfo } from "./gen/TagInfo";
 export type { RemoteBranchInfo } from "./gen/RemoteBranchInfo";
 export type { OpProgress } from "./gen/OpProgress";
+/** `op-log` event payload: one raw output line (hooks / CLI fallbacks). */
+export type { OpLog } from "./gen/OpLog";
 /** `auth-request` event payload (Rust: `AuthRequestEvent`). */
 export type { AuthRequestEvent as AuthRequest } from "./gen/AuthRequestEvent";
 
