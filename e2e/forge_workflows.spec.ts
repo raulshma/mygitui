@@ -177,7 +177,8 @@ test("Actions tab lists runs, expands jobs/steps and opens logs", async ({ page 
   await expect(runs.nth(2).getByRole("button", { name: "Rerun", exact: true })).toBeVisible();
   await expect(runs.nth(2).getByRole("button", { name: "Rerun failed" })).toHaveCount(0);
 
-  // Expanding lazily loads jobs and steps.
+  // Opening a run shows its detail in the editor (WorkflowRunView): a jobs
+  // pane plus the combined log of every job.
   await runs.nth(0).locator(".wf-run-main").click();
   await expect
     .poll(async () => (await mock.callsOf("workflow_run_detail")).length)
@@ -186,26 +187,32 @@ test("Actions tab lists runs, expands jobs/steps and opens logs", async ({ page 
     repo_id: "r1",
     run_id: 101,
   });
-  const job = runs.nth(0).locator(".wf-job");
-  await expect(job).toHaveCount(1);
-  await expect(job).toContainText("build");
-  await expect(job).toContainText("Failed");
-  await expect(job.locator(".wf-step")).toHaveCount(2);
-  await expect(job).toContainText("Checkout");
-  await expect(job).toContainText("npm test");
+  const view = page.locator(".run-view");
+  await expect(view).toBeVisible();
+  await expect(view).toContainText("Fix flaky workflow test");
 
-  // Whole-run logs, then one job's log and its failed-steps-only variant.
-  await job.getByRole("button", { name: "Log", exact: true }).click();
-  const log = runs.nth(0).locator(".wf-log");
-  await expect(log.locator(".wf-log-text")).toContainText("npm ERR! test failed");
+  const job = view.locator(".job-row").filter({ hasText: "build" });
+  await expect(job).toHaveCount(1);
+  await expect(job).toContainText("Failed");
+
+  // The combined log loads with the view, before any job is selected.
+  await expect
+    .poll(async () => (await mock.callsOf("workflow_run_logs")).length)
+    .toBeGreaterThanOrEqual(1);
   expect((await mock.callsOf("workflow_run_logs"))[0]).toEqual({
     repo_id: "r1",
     run_id: 101,
-    job_id: 555,
+    job_id: null,
     failed_only: false,
   });
+  const log = view.locator(".log-viewer");
+  await expect(log).toContainText("npm ERR! test failed");
 
-  await job.getByRole("button", { name: "Failed log" }).click();
+  // Selecting the job reveals its steps and fetches that job's log.
+  await job.click();
+  await expect(view.locator(".step-row")).toHaveCount(2);
+  await expect(view.locator(".steps")).toContainText("Checkout");
+  await expect(view.locator(".steps")).toContainText("npm test");
   await expect
     .poll(async () => (await mock.callsOf("workflow_run_logs")).length)
     .toBe(2);
@@ -213,11 +220,25 @@ test("Actions tab lists runs, expands jobs/steps and opens logs", async ({ page 
     repo_id: "r1",
     run_id: 101,
     job_id: 555,
-    failed_only: true,
+    failed_only: false,
   });
 
-  await log.getByRole("button", { name: "Close" }).click();
-  await expect(runs.nth(0).locator(".wf-log")).toHaveCount(0);
+  // "Failed only" re-queries the log with the flag and scopes the pane.
+  await view.getByRole("button", { name: /Failed only/ }).click();
+  await expect
+    .poll(async () => (await mock.callsOf("workflow_run_logs")).length)
+    .toBe(3);
+  expect((await mock.callsOf("workflow_run_logs"))[2]).toEqual({
+    repo_id: "r1",
+    run_id: 101,
+    job_id: 555,
+    failed_only: true,
+  });
+  await expect(view.locator(".scope-chip")).toContainText("failed steps");
+
+  // Closing the run view returns to the plain editor.
+  await view.getByRole("button", { name: "Close run details" }).click();
+  await expect(view).toHaveCount(0);
 
   // Status filter re-queries gh with the selected status.
   await page.getByLabel("Run status filter").selectOption("failure");
