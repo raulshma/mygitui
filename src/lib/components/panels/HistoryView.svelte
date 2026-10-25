@@ -76,7 +76,7 @@
     shortRefName,
   } from "$lib/git/format";
   import { toast } from "$lib/toast";
-  import { IconButton } from "$lib/components/m3";
+  import { IconButton, Spinner } from "$lib/components/m3";
   import iconPopout from "@ktibow/iconset-material-symbols/open-in-new";
   import iconCollapse from "@ktibow/iconset-material-symbols/right-panel-close";
   import iconFilters from "@ktibow/iconset-material-symbols/filter-list";
@@ -939,6 +939,7 @@
           onclick={() => store.restart()}
         />
       {:else if store.loading}
+        <Spinner size={11} />
         Streaming…
       {:else}
         {total}
@@ -958,7 +959,12 @@
        virtualizer markup. -->
   {#snippet logPane()}
   <div class="listwrap">
-    {#if !store.loading && !store.error && total === 0}
+    {#if store.loading && total === 0}
+      <p class="empty empty-loading" role="status">
+        <Spinner size={14} />
+        Loading history…
+      </p>
+    {:else if !store.loading && !store.error && total === 0}
       <p class="empty">No commits match the current filters.</p>
     {:else}
       <div
@@ -1262,6 +1268,12 @@
     margin: auto;
     color: var(--m3-on-surface-variant);
     font-size: 0.8125rem;
+  }
+
+  .empty-loading {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
   }
 
   /* Rows pane: in the full layout it hides its own gutter — the canvas's

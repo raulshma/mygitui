@@ -15,12 +15,13 @@
    * sidebar history list reports the commit, the changes list reports the
    * file, and both funnel through here.
    */
-  import type { CommitInfo, FileDiff, StatusEntry } from "$lib/ipc/types";
+  import type { CommitInfo, FileDiff, RepoStatus, StatusEntry } from "$lib/ipc/types";
   import type { CompareResult } from "$lib/components/panels/compare";
   import type { HistoryCommitActions } from "$lib/components/panels/historySidebar";
   import CommitDetail from "$lib/components/panels/CommitDetail.svelte";
   import DiffViewer from "$lib/components/diff/DiffViewer.svelte";
   import Icon from "$lib/components/icons/Icon.svelte";
+  import { Spinner } from "$lib/components/m3";
   import iconTree from "@ktibow/iconset-material-symbols/account-tree";
 
   let {
@@ -29,6 +30,7 @@
     commit = null,
     compare = null,
     entry = null,
+    status = null,
     diffFiles = [],
     diffLoading = false,
     diffHunkable = false,
@@ -52,6 +54,8 @@
     compare?: CompareResult | null;
     /** Working-copy change selected in the status sidebar. */
     entry?: StatusEntry | null;
+    /** Latest repo status (welcome summary when nothing is open). */
+    status?: RepoStatus | null;
     /** Streamed diff for `entry`. */
     diffFiles?: FileDiff[];
     diffLoading?: boolean;
@@ -74,12 +78,23 @@
     /** Called after a hunk stage/unstage/discard mutated the repo. */
     onMutated?: () => void;
   } = $props();
+
+  /** Welcome summary: unique changed paths + upstream position. */
+  const changeCount = $derived(
+    status ? new Set(status.entries.map((e) => e.path)).size : 0,
+  );
+  const branchLabel = $derived(
+    status ? (status.branch ?? (status.detached ? "detached HEAD" : "unknown")) : "",
+  );
 </script>
 
 <div class="editor" aria-label="Editor">
   {#if workflowRunId !== null}
     {#await import("$lib/components/forge/WorkflowRunView.svelte")}
-      <p class="estate" role="status">Loading run…</p>
+      <p class="estate estate-loading" role="status">
+        <Spinner size={14} />
+        Loading run…
+      </p>
     {:then WorkflowRunViewModule}
       <WorkflowRunViewModule.default
         {repoId}
@@ -142,7 +157,10 @@
       </header>
       <div class="ebody">
         {#if diffLoading}
-          <p class="estate" role="status">Loading diff…</p>
+          <p class="estate estate-loading" role="status">
+            <Spinner size={14} />
+            Loading diff…
+          </p>
         {:else if diffFiles.length === 0}
           <p class="estate">No diff against HEAD for this file.</p>
         {:else}
@@ -160,10 +178,46 @@
     <div class="welcome">
       <span class="wicon" aria-hidden="true"><Icon icon={iconTree} size={22} /></span>
       <p class="wtitle">Nothing open</p>
+      {#if status}
+        <div class="wsummary" aria-label="Repository summary">
+          <span class="wchip wbranch">{branchLabel}</span>
+          <span class="wchip">
+            {changeCount === 0
+              ? "Clean working tree"
+              : `${changeCount} changed ${changeCount === 1 ? "file" : "files"}`}
+          </span>
+          {#if status.ahead > 0}
+            <span
+              class="wchip wahead"
+              title={`${status.ahead} ${status.ahead === 1 ? "commit" : "commits"} to push`}
+            >
+              ↑ {status.ahead} to push
+            </span>
+          {/if}
+          {#if status.behind > 0}
+            <span
+              class="wchip wbehind"
+              title={`${status.behind} ${status.behind === 1 ? "commit" : "commits"} to pull`}
+            >
+              ↓ {status.behind} to pull
+            </span>
+          {/if}
+        </div>
+      {:else}
+        <p class="wloading" role="status">
+          <Spinner size={13} />
+          Reading repository…
+        </p>
+      {/if}
       <p class="wtext">
         Select a change in the source-control sidebar to see its diff, or pick
         a commit in history to inspect it.
       </p>
+      <ul class="whints" aria-label="Keyboard shortcuts">
+        <li><kbd class="kbd">Ctrl</kbd>+<kbd class="kbd">Shift</kbd>+<kbd class="kbd">P</kbd><span>Command palette</span></li>
+        <li><kbd class="kbd">F5</kbd><span>Refresh repository</span></li>
+        <li><kbd class="kbd">Ctrl</kbd>+<kbd class="kbd">1</kbd><span>Focus source control</span></li>
+      </ul>
     </div>
   {/if}
 </div>
@@ -266,6 +320,12 @@
     font-size: 0.8125rem;
   }
 
+  p.estate-loading {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+  }
+
   .welcome {
     flex: 1;
     min-height: 0;
@@ -304,5 +364,76 @@
     max-width: 22rem;
     font-size: 0.75rem;
     line-height: 1.45;
+  }
+
+  .wsummary {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: center;
+    gap: 0.35rem;
+    margin-top: 0.15rem;
+  }
+
+  .wchip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.2rem;
+    padding: 0.1rem 0.5rem;
+    border: 1px solid var(--app-border, var(--m3-outline-variant));
+    border-radius: var(--m3-shape-full, 9999px);
+    font-size: 0.6875rem;
+    line-height: 1.4;
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .wbranch {
+    font-family: var(--app-font-mono, ui-monospace, Consolas, monospace);
+    color: var(--m3-primary);
+    border-color: color-mix(in srgb, var(--m3-primary) 35%, transparent);
+  }
+
+  .wahead {
+    background: var(--m3-primary-container, var(--m3-surface-container-high));
+    color: var(--m3-on-primary-container, var(--m3-primary));
+    border-color: transparent;
+  }
+
+  .wbehind {
+    background: var(--m3-tertiary-container, var(--m3-surface-container-high));
+    color: var(--m3-on-tertiary-container, var(--m3-tertiary));
+    border-color: transparent;
+  }
+
+  .wloading {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    margin: 0.15rem 0 0;
+    font-size: 0.6875rem;
+  }
+
+  .whints {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 0.4rem 1.1rem;
+    margin: 0.9rem 0 0;
+    padding: 0.7rem 0 0;
+    border-top: 1px solid var(--app-border, var(--m3-outline-variant));
+    list-style: none;
+    font-size: 0.6875rem;
+    color: var(--m3-on-surface-variant);
+  }
+
+  .whints li {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.15rem;
+  }
+
+  .whints li span {
+    margin-left: 0.4rem;
   }
 </style>

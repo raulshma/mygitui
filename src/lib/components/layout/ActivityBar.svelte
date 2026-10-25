@@ -21,6 +21,7 @@
     historyCanHide = true,
     collapsed = false,
     canCollapse = true,
+    badges = {},
     onSelect,
     onHistory,
     onToggleCollapse,
@@ -37,14 +38,22 @@
     collapsed?: boolean;
     /** Allow hiding the primary sidebar (false when it is the only pane). */
     canCollapse?: boolean;
+    /** Optional small count bubble per panel (e.g. changed files on Status). */
+    badges?: Partial<Record<PanelId, number>>;
     onSelect: (panel: PanelId) => void;
     onHistory: () => void;
     onToggleCollapse: () => void;
   } = $props();
+
+  /** Caps runaway counts; the full number stays in the title. */
+  function badgeText(count: number): string {
+    return count > 99 ? "99+" : String(count);
+  }
 </script>
 
 <div class="activity-bar" role="toolbar" aria-orientation="vertical" aria-label="Activity bar">
   {#each panels as panel (panel)}
+    {@const count = badges[panel] ?? 0}
     <button
       class="activity-btn"
       class:active={active === panel}
@@ -52,7 +61,9 @@
       data-activity-panel={panel}
       aria-label={panelLabel(panel)}
       aria-pressed={active === panel}
-      title={panelLabel(panel)}
+      title={count > 0
+        ? `${panelLabel(panel)} — ${count} ${count === 1 ? "item" : "items"}`
+        : panelLabel(panel)}
       onclick={() => onSelect(panel)}
     >
       <svg
@@ -66,6 +77,9 @@
       >
         <path d={PANEL_META[panel]?.icon ?? ""} />
       </svg>
+      {#if count > 0}
+        <span class="activity-badge" aria-hidden="true">{badgeText(count)}</span>
+      {/if}
     </button>
   {/each}
 
@@ -176,6 +190,31 @@
   .activity-btn.active {
     color: var(--m3-primary);
     background: var(--m3-surface-container-high, var(--m3-surface));
+  }
+
+  /* Changed-item count bubble (Status). Small, high-contrast, capped at 99+. */
+  .activity-badge {
+    position: absolute;
+    top: 0.1rem;
+    right: 0.05rem;
+    display: grid;
+    place-items: center;
+    min-width: 0.8rem;
+    height: 0.8rem;
+    padding: 0 0.14rem;
+    border: 2px solid var(--m3-surface-container, var(--m3-surface));
+    border-radius: var(--m3-shape-full, 9999px);
+    background: var(--m3-primary);
+    color: var(--m3-on-primary);
+    font-size: 0.5rem;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    line-height: 1;
+    letter-spacing: -0.02em;
+  }
+
+  .activity-btn.active .activity-badge {
+    border-color: var(--m3-surface-container-high, var(--m3-surface));
   }
 
   /* VSCode-style active marker on the rail edge. */

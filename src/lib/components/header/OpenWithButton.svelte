@@ -119,6 +119,8 @@
   >
     {#if current}
       <Icon icon={iconFor(current)} size={15} />
+    {:else}
+      <Icon icon={iconDescription} size={15} />
     {/if}
   </button>
   <button
@@ -154,7 +156,7 @@
   }
   button:disabled {
     cursor: default;
-    opacity: 0.5;
+    color: var(--app-disabled-fg, var(--m3-on-surface-variant));
   }
 
   .primary {

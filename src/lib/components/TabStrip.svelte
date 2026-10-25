@@ -1,8 +1,8 @@
 <script lang="ts">
   /**
    * Repository tab strip (M1). Bound to the global tab store — no props
-   * except `openFolder`, the "+" button callback (App wires it to the
-   * placeholder folder-picker toast until the dialog plugin lands in M1.1).
+   * except `openFolder` (the "+" button callback) and an optional `trailing`
+   * snippet for window-level utilities (AI health, theme toggle).
    *
  * Accessibility: the strip is a `tablist` with a roving tabindex — the
  * active tab is tab-reachable (tabindex 0), the rest are programmatic
@@ -16,9 +16,17 @@
  * "name — root" (label-in-name compliant) and the title tooltip shows the
  * root on hover.
  */
+  import type { Snippet } from "svelte";
   import { closeTab, setActive, tabStore } from "$lib/stores/tabs.svelte";
 
-  let { openFolder }: { openFolder?: () => void } = $props();
+  let {
+    openFolder,
+    trailing = undefined,
+  }: {
+    openFolder?: () => void;
+    /** Window-level controls rendered at the right edge of the strip. */
+    trailing?: Snippet;
+  } = $props();
 
   let strip: HTMLDivElement | undefined = $state();
 
@@ -60,65 +68,94 @@
   }
 </script>
 
-<div
-  class="tabstrip"
-  role="tablist"
-  aria-label="Open repositories"
-  tabindex="-1"
-  bind:this={strip}
-  onkeydown={onKeydown}
->
-  {#each tabStore.tabs as tab (tab.id)}
-    <div class="tab" class:active={tab.id === tabStore.activeId}>
-      <button
-        class="tab-main"
-        type="button"
-        role="tab"
-        aria-selected={tab.id === tabStore.activeId}
-        tabindex={tab.id === tabStore.activeId ? 0 : -1}
-        title={tab.root}
-        aria-label={`${tab.name} — ${tab.root}`}
-        onclick={() => setActive(tab.id)}
-        onauxclick={(event) => onAuxClick(event, tab.id)}
-        onmousedown={(event) => {
-          if (event.button === 1) event.preventDefault();
-        }}
-      >
-        <span class="name">{tab.name}</span>
-      </button>
-      <button
-        class="tab-close"
-        type="button"
-        aria-label="Close {tab.name}"
-        title="Close {tab.name}"
-        onclick={() => void closeTab(tab.id)}
-      >
-        ×
-      </button>
-    </div>
-  {/each}
-
-  <button
-    class="tab-new"
-    type="button"
-    aria-label="Open a repository"
-    title="Open a repository (folder picker lands in M1.1)"
-    onclick={() => openFolder?.()}
+<div class="tabbar">
+  <div
+    class="tabstrip"
+    role="tablist"
+    aria-label="Open repositories"
+    tabindex="-1"
+    bind:this={strip}
+    onkeydown={onKeydown}
   >
-    +
-  </button>
+    {#each tabStore.tabs as tab (tab.id)}
+      <div class="tab" class:active={tab.id === tabStore.activeId}>
+        <button
+          class="tab-main"
+          type="button"
+          role="tab"
+          aria-selected={tab.id === tabStore.activeId}
+          tabindex={tab.id === tabStore.activeId ? 0 : -1}
+          title={tab.root}
+          aria-label={`${tab.name} — ${tab.root}`}
+          onclick={() => setActive(tab.id)}
+          onauxclick={(event) => onAuxClick(event, tab.id)}
+          onmousedown={(event) => {
+            if (event.button === 1) event.preventDefault();
+          }}
+        >
+          <span class="name">{tab.name}</span>
+        </button>
+        <button
+          class="tab-close"
+          type="button"
+          aria-label="Close {tab.name}"
+          title="Close {tab.name}"
+          onclick={() => void closeTab(tab.id)}
+        >
+          ×
+        </button>
+      </div>
+    {/each}
+
+    <button
+      class="tab-new"
+      type="button"
+      aria-label="Open a repository"
+      title="Open a repository"
+      onclick={() => openFolder?.()}
+    >
+      +
+    </button>
+  </div>
+
+  {#if trailing}
+    <div class="tabbar-trailing">{@render trailing()}</div>
+  {/if}
 </div>
 
 <style>
+  .tabbar {
+    display: flex;
+    align-items: stretch;
+    flex: none;
+    min-width: 0;
+    background: var(--m3-surface-container, var(--m3-surface));
+    border-bottom: 1px solid var(--m3-outline-variant, var(--m3-primary));
+  }
+
   .tabstrip {
     display: flex;
     align-items: stretch;
     gap: 0.125rem;
     padding: 0.25rem 0.5rem 0;
-    background: var(--m3-surface-container, var(--m3-surface));
-    border-bottom: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    flex: none;
+    flex: 1;
     min-width: 0;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .tabstrip::-webkit-scrollbar {
+    display: none;
+  }
+
+  .tabbar-trailing {
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+    padding: 0 0.5rem;
+    margin: 0.25rem 0;
+    border-left: 1px solid var(--m3-outline-variant, var(--m3-primary));
   }
 
   .tab {

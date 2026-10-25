@@ -50,6 +50,7 @@
   import CommitBar from "$lib/components/panels/CommitBar.svelte";
   import EditorPane from "$lib/components/panels/EditorPane.svelte";
   import { IconButton } from "$lib/components/m3";
+  import Icon from "$lib/components/icons/Icon.svelte";
   import type { CompareResult } from "$lib/components/panels/compare";
   import type { HistoryCommitActions } from "$lib/components/panels/historySidebar";
   import AuthDialog from "$lib/components/AuthDialog.svelte";
@@ -97,12 +98,17 @@
   import { startAuthEvents, startOpsEvents } from "$lib/stores/ops.svelte";
   import { autofetch } from "$lib/stores/autofetch.svelte";
   import { toast } from "$lib/toast";
+  import { contextMenu, type MenuEntry } from "$lib/components/menu/contextMenuStore.svelte";
   import iconHistory from "@ktibow/iconset-material-symbols/history";
   import iconBisect from "@ktibow/iconset-material-symbols/alt-route";
   import iconSaveLayout from "@ktibow/iconset-material-symbols/save";
   import iconTerminal from "@ktibow/iconset-material-symbols/terminal";
   import iconClean from "@ktibow/iconset-material-symbols/cleaning-services";
   import iconResetLayout from "@ktibow/iconset-material-symbols/restart-alt";
+  import iconMore from "@ktibow/iconset-material-symbols/more-horiz";
+  import iconAhead from "@ktibow/iconset-material-symbols/arrow-upward";
+  import iconBehind from "@ktibow/iconset-material-symbols/arrow-downward";
+  import iconBranch from "@ktibow/iconset-material-symbols/account-tree";
 
   let {
     repoId,
@@ -608,6 +614,45 @@
     return s.detached ? "detached" : "unknown";
   }
 
+  /** Unique changed paths — a file staged *and* modified counts once. */
+  const changeCount = $derived(
+    status ? new Set(status.entries.map((entry) => entry.path)).size : 0,
+  );
+
+  /** Header overflow: low-frequency repository tools. */
+  function openHeaderMenu(event: MouseEvent): void {
+    const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
+    const entries: MenuEntry[] = [
+      {
+        id: "bisect",
+        label: "Start bisect…",
+        icon: iconBisect,
+        run: () => emitUiEvent("bisect-open-start"),
+      },
+      { separator: true },
+      {
+        id: "save-layout",
+        label: "Save layout as…",
+        icon: iconSaveLayout,
+        run: onSaveLayout,
+      },
+      {
+        id: "clean",
+        label: "Clean untracked files…",
+        icon: iconClean,
+        run: () => (cleanOpen = true),
+      },
+      {
+        id: "reset-layout",
+        label: "Reset layout to preset",
+        icon: iconResetLayout,
+        disabled: !resolved.hasOverlay,
+        run: onResetLayout,
+      },
+    ];
+    contextMenu.show(rect.right, rect.bottom, entries);
+  }
+
   /** Any mutation refreshed its repo: pull the fresh status into the tab. */
   function refresh(): void {
     void refreshStatus(repoId);
@@ -879,6 +924,7 @@
   <EditorPane
     {repoId}
     {root}
+    {status}
     commit={selectedCommit}
     compare={compareResult}
     entry={diffEntry}
@@ -981,14 +1027,40 @@
 
 <div class="repo-workspace">
   <header class="repo-header">
-    <span class="repo-name" title={name}>{name}</span>
-    {#if status}
-      <span class="branch" title="Current branch">{branchLabel(status)}</span>
-      <span class="aheadbehind">↑{status.ahead} ↓{status.behind}</span>
-    {/if}
-    <span class="repo-root" title={root}>{root}</span>
-    <OpenWithButton {root} />
+    <span class="repo-identity">
+      <span class="repo-name" title={name}>{name}</span>
+      {#if status}
+        <span class="branch-chip" title={`Current branch: ${branchLabel(status)}`}>
+          <Icon icon={iconBranch} size={12} />
+          <span class="branch-label">{branchLabel(status)}</span>
+        </span>
+        {#if status.ahead > 0}
+          <span
+            class="sync-chip ahead"
+            role="img"
+            aria-label={`${status.ahead} ${status.ahead === 1 ? "commit" : "commits"} to push`}
+            title={`${status.ahead} ${status.ahead === 1 ? "commit" : "commits"} to push`}
+          >
+            <Icon icon={iconAhead} size={11} />
+            {status.ahead}
+          </span>
+        {/if}
+        {#if status.behind > 0}
+          <span
+            class="sync-chip behind"
+            role="img"
+            aria-label={`${status.behind} ${status.behind === 1 ? "commit" : "commits"} to pull`}
+            title={`${status.behind} ${status.behind === 1 ? "commit" : "commits"} to pull`}
+          >
+            <Icon icon={iconBehind} size={11} />
+            {status.behind}
+          </span>
+        {/if}
+      {/if}
+      <span class="repo-root" title={root}>{root}</span>
+    </span>
     <span class="layout-controls">
+      <OpenWithButton {root} />
       <IconButton
         icon={iconHistory}
         label={historyVisible ? "Hide history" : "Show history"}
@@ -1000,12 +1072,6 @@
         pressed={historyVisible}
         disabled={historyVisible && !canHideHistory}
         onclick={toggleHistory}
-      />
-      <IconButton
-        icon={iconBisect}
-        label="Bisect"
-        title="Binary-search history for the first bad commit"
-        onclick={() => emitUiEvent("bisect-open-start")}
       />
       <select
         class="preset-select"
@@ -1019,31 +1085,18 @@
         {/each}
       </select>
       <IconButton
-        icon={iconSaveLayout}
-        label="Save layout"
-        title="Save the current layout as a preset"
-        onclick={onSaveLayout}
-      />
-      <IconButton
         icon={iconTerminal}
         label="Terminal"
         title="Open (or focus) this repository's terminal panel"
         onclick={onNewTerminal}
       />
       <IconButton
-        icon={iconClean}
-        label="Clean untracked files"
-        title="Clean untracked files (preview + undo checkpoint)"
-        onclick={() => (cleanOpen = true)}
+        icon={iconMore}
+        label="More repository actions"
+        title="More repository actions"
+        aria-haspopup="menu"
+        onclick={openHeaderMenu}
       />
-      {#if resolved.hasOverlay}
-        <IconButton
-          icon={iconResetLayout}
-          label="Reset layout"
-          title="Reset this repository's layout to the preset"
-          onclick={onResetLayout}
-        />
-      {/if}
     </span>
   </header>
 
@@ -1080,6 +1133,7 @@
       historyCanHide={canHideHistory}
       collapsed={collapsed.left}
       canCollapse={canCollapseLeft}
+      badges={{ status: changeCount }}
       onSelect={selectActivityPanel}
       onHistory={selectHistoryActivity}
       onToggleCollapse={toggleLeftSidebar}
@@ -1189,7 +1243,8 @@
   .repo-header {
     display: flex;
     align-items: center;
-    gap: 0.5rem;
+    flex-wrap: wrap;
+    gap: 0.35rem 0.5rem;
     padding: 0.3rem 0.6rem;
     border-bottom: 1px solid var(--m3-outline-variant, var(--m3-primary));
     background: var(--m3-surface-container, var(--m3-surface));
@@ -1198,21 +1253,71 @@
     min-width: 0;
   }
 
+  .repo-identity {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+  }
+
   .repo-name {
-    font-weight: 500;
+    flex: 0 1 auto;
+    min-width: 0;
+    max-width: 15rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-weight: 600;
+  }
+
+  .branch-chip {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    max-width: 16rem;
+    min-width: 0;
+    padding: 0.1rem 0.45rem;
+    border-radius: var(--m3-shape-full, 9999px);
+    background: var(--m3-secondary-container, var(--m3-surface-container-high));
+    color: var(--m3-on-secondary-container, var(--m3-secondary));
+    font-family: var(--app-font-mono, ui-monospace, Consolas, monospace);
+    font-size: 0.6875rem;
+  }
+
+  .branch-chip :global(svg) {
+    flex: none;
+  }
+
+  .branch-label {
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
 
-  .branch {
-    font-family: ui-monospace, Consolas, monospace;
-    color: var(--m3-primary);
+  .sync-chip {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.15rem;
+    height: 1.05rem;
+    padding: 0 0.35rem;
+    border-radius: var(--m3-shape-full, 9999px);
+    font-size: 0.6875rem;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
   }
 
-  .aheadbehind {
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
+  .sync-chip.ahead {
+    background: var(--m3-primary-container, var(--m3-surface-container-high));
+    color: var(--m3-on-primary-container, var(--m3-primary));
+  }
+
+  .sync-chip.behind {
+    background: var(--m3-tertiary-container, var(--m3-surface-container-high));
+    color: var(--m3-on-tertiary-container, var(--m3-tertiary));
   }
 
   .layout-controls {
@@ -1243,6 +1348,22 @@
     white-space: nowrap;
     flex: 1 1 auto;
     min-width: 0;
+  }
+
+  @media (max-width: 980px) {
+    .repo-root {
+      display: none;
+    }
+  }
+
+  @media (max-width: 760px) {
+    .preset-select {
+      display: none;
+    }
+
+    .branch-chip {
+      max-width: 9rem;
+    }
   }
 
   .missing-panel {

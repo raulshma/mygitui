@@ -50,6 +50,9 @@ export type ThemePreference = "system" | "light" | "dark";
 /** localStorage key holding the persisted {@link ThemePreference}. */
 export const THEME_STORAGE_KEY = "mygitui.theme";
 
+/** Window event dispatched whenever the preference changes (detail = value). */
+export const THEME_PREFERENCE_EVENT = "mygitui:theme-preference";
+
 const DARK_QUERY = "(prefers-color-scheme: dark)";
 
 // ---------------------------------------------------------------------------
@@ -81,6 +84,23 @@ function savePreference(value: ThemePreference): void {
 }
 
 /**
+ * Announces the current preference on `window` so theme controls elsewhere
+ * (tab strip, home header, palette) stay in sync. Best-effort.
+ */
+function notifyPreference(): void {
+  try {
+    if (typeof window === "undefined") return;
+    window.dispatchEvent(
+      new CustomEvent<ThemePreference>(THEME_PREFERENCE_EVENT, {
+        detail: preference,
+      }),
+    );
+  } catch {
+    // CustomEvent/window may be unavailable in tests; the state is set.
+  }
+}
+
+/**
  * Sets the theme preference and applies it immediately (when the theme is
  * initialized). "system" hands control back to `prefers-color-scheme`
  * (followed live); "light" / "dark" pin the scheme until reset. The choice
@@ -92,6 +112,7 @@ export function setThemePreference(value: ThemePreference): void {
     preference = value;
     savePreference(value);
     if (applied !== null) applyTokens(applied, resolveScheme());
+    notifyPreference();
   } catch {
     // A theming failure must never propagate to the caller.
   }
@@ -173,6 +194,7 @@ export async function initTheme(): Promise<void> {
     if (typeof document === "undefined") return;
 
     preference = loadPreference();
+    notifyPreference();
     const seed = (await resolveSeedColor()) ?? BASELINE_SEED;
     const theme: AppliedTheme = {
       light: tokensForScheme(schemeFromSeed(seed, false)),

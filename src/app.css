@@ -141,6 +141,14 @@
   --app-hover: color-mix(in srgb, var(--m3-on-surface) 5%, transparent);
   --app-active: color-mix(in srgb, var(--m3-primary) 15%, transparent);
   --app-font-mono: "Cascadia Mono", "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+
+  /*
+   * M3 disabled state: 12% on-surface container, 38% on-surface label.
+   * Derived from the palette so light/dark both stay legible (a plain
+   * opacity on a filled button washes the label out instead).
+   */
+  --app-disabled-bg: color-mix(in srgb, var(--m3-on-surface) 12%, transparent);
+  --app-disabled-fg: color-mix(in srgb, var(--m3-on-surface) 38%, transparent);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -222,6 +230,7 @@ body {
   font-family: Roboto, "Segoe UI", system-ui, sans-serif;
   background: var(--m3-surface);
   color: var(--m3-on-surface);
+  accent-color: var(--m3-primary);
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
 }
@@ -233,6 +242,42 @@ body {
 
 #app {
   height: 100%;
+}
+
+/* ---------------------------------------------------------------------------
+ * Shared primitives
+ * ------------------------------------------------------------------------- */
+
+/* Keyboard hint (used by the home screen, editor welcome and commit bar). */
+.kbd {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.15rem;
+  height: 1.15rem;
+  padding: 0 0.25rem;
+  border: 1px solid var(--m3-outline-variant);
+  border-bottom-width: 2px;
+  border-radius: var(--m3-shape-extra-small, 4px);
+  background: var(--m3-surface-container-lowest, var(--m3-surface));
+  color: var(--m3-on-surface-variant);
+  font-family: var(--app-font-mono, ui-monospace, Consolas, monospace);
+  font-size: 0.625rem;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+/* Visually hidden, still announced by screen readers. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 /* ---------------------------------------------------------------------------

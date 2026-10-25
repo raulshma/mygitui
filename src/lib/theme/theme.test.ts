@@ -36,6 +36,7 @@ const {
   currentScheme,
   getThemePreference,
   setThemePreference,
+  THEME_PREFERENCE_EVENT,
   THEME_STORAGE_KEY,
   TOKEN_NAMES,
 } = await import("./index");
@@ -335,5 +336,20 @@ describe("theme preference override (M7 I2)", () => {
     expect(() => setThemePreference("banana" as never)).not.toThrow();
     expect(getThemePreference()).toBe("system");
     expect(rootStyle().getPropertyValue("--m3-surface")).toBe(LIGHT.surface);
+  });
+
+  it("announces preference changes so mounted toggles stay in sync", () => {
+    const seen: string[] = [];
+    const onChange = (event: Event) => {
+      seen.push((event as CustomEvent<string>).detail);
+    };
+    window.addEventListener(THEME_PREFERENCE_EVENT, onChange);
+    try {
+      setThemePreference("dark");
+      setThemePreference("system");
+    } finally {
+      window.removeEventListener(THEME_PREFERENCE_EVENT, onChange);
+    }
+    expect(seen).toEqual(["dark", "system"]);
   });
 });

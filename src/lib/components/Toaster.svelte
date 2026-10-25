@@ -65,9 +65,10 @@
     gap: 0.5rem;
     padding: 0.625rem 0.75rem;
     border-radius: 0.5rem;
+    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
+    border-left-width: 3px;
     background: var(--m3-surface-container, var(--m3-surface));
     color: var(--m3-on-surface);
-    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
     box-shadow: 0 2px 8px rgb(0 0 0 / 0.25);
     animation: toast-in 150ms ease-out;
   }
@@ -86,8 +87,27 @@
     line-height: 1;
   }
 
+  /* Semantic accents: shape + glyph carry the meaning, color reinforces it. */
+  .toast[data-kind="success"] {
+    border-left-color: var(--m3-tertiary, var(--m3-primary));
+  }
+
+  .toast[data-kind="success"] .badge {
+    background: var(--m3-tertiary, var(--m3-primary));
+    color: var(--m3-on-tertiary, var(--m3-on-primary));
+  }
+
+  .toast[data-kind="error"] {
+    border-left-color: var(--m3-error, var(--m3-primary));
+  }
+
   .toast[data-kind="error"] .badge {
-    outline: 1px solid var(--m3-outline-variant, var(--m3-primary));
+    background: var(--m3-error, var(--m3-primary));
+    color: var(--m3-on-error, var(--m3-on-primary));
+  }
+
+  .toast[data-kind="info"] {
+    border-left-color: var(--m3-primary);
   }
 
   .message {

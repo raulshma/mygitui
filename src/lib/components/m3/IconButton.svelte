@@ -111,8 +111,14 @@
   }
 
   .icon-btn:disabled {
-    opacity: 0.45;
+    opacity: 1;
+    color: var(--app-disabled-fg, var(--m3-on-surface-variant));
     cursor: not-allowed;
+  }
+
+  .icon-btn.filled:disabled {
+    background: var(--app-disabled-bg);
+    color: var(--app-disabled-fg);
   }
 
   .icon-btn.dense {

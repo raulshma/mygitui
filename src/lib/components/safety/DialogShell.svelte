@@ -159,7 +159,14 @@
   }
 
   .sdlg-dialog :global(.sdlg-primary:disabled) {
-    opacity: 0.55;
+    background: var(--app-disabled-bg);
+    color: var(--app-disabled-fg);
+    cursor: not-allowed;
+  }
+
+  .sdlg-dialog :global(.sdlg-danger:disabled) {
+    background: var(--app-disabled-bg);
+    color: var(--app-disabled-fg);
     cursor: not-allowed;
   }
 

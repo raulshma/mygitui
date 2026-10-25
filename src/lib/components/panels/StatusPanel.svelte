@@ -39,7 +39,7 @@
   import ConfirmDialog from "$lib/components/safety/ConfirmDialog.svelte";
   import GitignoreGallery from "$lib/components/panels/GitignoreGallery.svelte";
   import Icon from "$lib/components/icons/Icon.svelte";
-  import { IconButton } from "$lib/components/m3";
+  import { IconButton, Spinner } from "$lib/components/m3";
   import { fileIconForPath } from "$lib/components/icons/fileIcons";
   import { openPanelPopout } from "$lib/layout/popout";
   import iconStage from "@ktibow/iconset-material-symbols/add";
@@ -58,6 +58,8 @@
   import iconUnstageAll from "@ktibow/iconset-material-symbols/remove-done";
   import iconTemplates from "@ktibow/iconset-material-symbols/description";
   import iconIgnore from "@ktibow/iconset-material-symbols/visibility-off";
+  import iconAhead from "@ktibow/iconset-material-symbols/arrow-upward";
+  import iconBehind from "@ktibow/iconset-material-symbols/arrow-downward";
   import {
     buildStatusIndex,
     filterSections,
@@ -792,9 +794,26 @@
         {#if status.rebasing}<span class="chip chip-state">Rebase in progress</span>{/if}
         {#if status.sequencer}<span class="chip chip-state">Cherry-pick / revert in progress</span>{/if}
         {#if status.detached}<span class="chip chip-state">Detached HEAD</span>{/if}
-        {#if status.ahead > 0 || status.behind > 0}
-          <span class="chip" title="Commits ahead / behind the upstream">
-            ↑{status.ahead} ↓{status.behind}
+        {#if status.ahead > 0}
+          <span
+            class="chip chip-ahead"
+            role="img"
+            aria-label={`${status.ahead} ${status.ahead === 1 ? "commit" : "commits"} to push`}
+            title={`${status.ahead} ${status.ahead === 1 ? "commit" : "commits"} to push`}
+          >
+            <Icon icon={iconAhead} size={11} />
+            {status.ahead} to push
+          </span>
+        {/if}
+        {#if status.behind > 0}
+          <span
+            class="chip chip-behind"
+            role="img"
+            aria-label={`${status.behind} ${status.behind === 1 ? "commit" : "commits"} to pull`}
+            title={`${status.behind} ${status.behind === 1 ? "commit" : "commits"} to pull`}
+          >
+            <Icon icon={iconBehind} size={11} />
+            {status.behind} to pull
           </span>
         {/if}
       </div>
@@ -1090,6 +1109,7 @@
     {/if}
   {:else}
     <div class="empty-state" role="status">
+      <Spinner size={18} />
       <p class="empty-title">Loading changes…</p>
     </div>
   {/if}
@@ -1222,12 +1242,29 @@
   }
 
   .chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.2rem;
     border: 1px solid var(--app-border, var(--m3-outline-variant));
     border-radius: var(--m3-shape-full, 9999px);
     padding: 0.0625rem 0.45rem;
     font-size: 0.6875rem;
     color: var(--m3-on-surface-variant, var(--m3-on-surface));
     white-space: nowrap;
+  }
+
+  .chip-ahead {
+    background: var(--m3-primary-container, var(--m3-surface-container-high));
+    color: var(--m3-on-primary-container, var(--m3-primary));
+    border-color: transparent;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .chip-behind {
+    background: var(--m3-tertiary-container, var(--m3-surface-container-high));
+    color: var(--m3-on-tertiary-container, var(--m3-tertiary));
+    border-color: transparent;
+    font-variant-numeric: tabular-nums;
   }
 
   .chip-state {

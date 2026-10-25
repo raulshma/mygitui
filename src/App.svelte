@@ -22,7 +22,17 @@
   import { toast } from "$lib/toast";
   import Toaster from "$lib/components/Toaster.svelte";
   import TabStrip from "$lib/components/TabStrip.svelte";
+  import ThemeToggle from "$lib/components/ThemeToggle.svelte";
+  import Icon from "$lib/components/icons/Icon.svelte";
   import RepoView from "$lib/components/panels/RepoView.svelte";
+  import { formatRelativeTime } from "$lib/git/format";
+  import iconBrand from "@ktibow/iconset-material-symbols/account-tree";
+  import iconAdd from "@ktibow/iconset-material-symbols/add";
+  import iconClone from "@ktibow/iconset-material-symbols/download";
+  import iconFolder from "@ktibow/iconset-material-symbols/folder-code";
+  import iconPin from "@ktibow/iconset-material-symbols/push-pin";
+  import iconClose from "@ktibow/iconset-material-symbols/close";
+  import iconSearch from "@ktibow/iconset-material-symbols/search";
   // Startup: the popout-only views below are dynamically imported inside
   // the popout branch — the main window never renders them, so their
   // module trees (history graph, file-history, popout panels) stay out of
@@ -54,6 +64,23 @@
 
   let repos = $state(recentRepos.list());
 
+  /** Home search text (shown once the list is long enough to scan). */
+  let repoFilter = $state("");
+
+  /** Repos matching the home filter (name or path, case-insensitive). */
+  const filteredRepos = $derived.by(() => {
+    const needle = repoFilter.trim().toLowerCase();
+    if (needle === "") return repos;
+    return repos.filter(
+      (repo) =>
+        repoName(repo.path).toLowerCase().includes(needle) ||
+        repo.path.toLowerCase().includes(needle),
+    );
+  });
+
+  /** Keep the search field visible while it holds a query. */
+  const showRepoFilter = $derived(repos.length > 3 || repoFilter.length > 0);
+
   /** Clone-dialog visibility (home view's "Clone repo…" button). */
   let cloneOpen = $state(false);
 
@@ -74,6 +101,20 @@
     const trimmed = path.replace(/[\\/]+$/, "");
     const segments = trimmed.split(/[\\/]/).filter(Boolean);
     return segments.length > 0 ? segments[segments.length - 1]! : path;
+  }
+
+  /**
+   * "Opened 2 days ago" for plausible timestamps. Recents are stored in
+   * milliseconds, but old/hand-seeded stores may carry seconds; values that
+   * cannot be a real recency are omitted instead of printing "56 years ago".
+   */
+  function lastOpenedLabel(timestamp: number): string | null {
+    if (!Number.isFinite(timestamp) || timestamp <= 0) return null;
+    const millis = timestamp > 1e12 ? timestamp : timestamp * 1000;
+    const age = Date.now() - millis;
+    const TEN_YEARS = 10 * 365 * 24 * 60 * 60 * 1000;
+    if (age < 0 || age > TEN_YEARS) return null;
+    return `Opened ${formatRelativeTime(Math.floor(millis / 1000))}`;
   }
 
   function togglePin(path: string): void {
@@ -236,7 +277,12 @@
       {/if}
     </main>
   {:else if tabStore.tabs.length > 0}
-    <TabStrip openFolder={openFromDisk} />
+    <TabStrip openFolder={openFromDisk}>
+      {#snippet trailing()}
+        <AiHealthChip compact />
+        <ThemeToggle />
+      {/snippet}
+    </TabStrip>
 
     <main class="repo-view">
       {#if active}
@@ -250,69 +296,209 @@
     </main>
   {:else}
     <main class="home">
-      <section class="recent" aria-labelledby="recent-heading">
-        <div class="recent-head">
-          <h1 id="recent-heading" class="recent-heading">Recent repositories</h1>
-          <div class="head-actions">
-            <button
-              class="add-btn"
-              type="button"
-              onclick={() => void openFromDisk()}
-            >
-              Add existing repo…
-            </button>
-            <button
-              class="clone-btn"
-              type="button"
-              onclick={() => (cloneOpen = true)}
-            >
-              Clone repo…
-            </button>
-          </div>
+      <header class="home-top">
+        <div class="brand">
+          <span class="brand-mark" aria-hidden="true">
+            <Icon icon={iconBrand} size={20} />
+          </span>
+          <span class="brand-text">
+            <span class="brand-name">mygitui</span>
+            <span class="brand-tag">your local git workspace</span>
+          </span>
         </div>
+        <div class="home-utilities">
+          <AiHealthChip />
+          <ThemeToggle />
+        </div>
+      </header>
 
-        {#if repos.length === 0}
-          <p class="empty">
-            No recent repositories yet. Drag a repository folder onto this
-            window, launch <code>mygitui .</code> from a terminal, add an
-            existing repository, or clone one with the buttons above.
-          </p>
-        {:else}
-          <ul class="repo-list">
-            {#each repos as repo (repo.path)}
-              <li class="repo-row-wrapper">
+      <div class="home-body">
+        <section class="recent" aria-labelledby="recent-heading">
+          <div class="recent-head">
+            <div class="recent-title">
+              <h1 id="recent-heading" class="recent-heading">
+                Recent repositories
+              </h1>
+              {#if repos.length > 0}
+                <p class="recent-sub">
+                  {#if repoFilter.trim()}
+                    {filteredRepos.length} of {repos.length} repositories
+                  {:else}
+                    {repos.length}
+                    {repos.length === 1 ? "repository" : "repositories"} ·
+                    pinned first
+                  {/if}
+                </p>
+              {/if}
+            </div>
+            {#if repos.length > 0}
+              <div class="head-actions">
                 <button
-                  class="repo-row"
+                  class="add-btn"
                   type="button"
-                  onclick={() => void openRepoTab(repo.path)}
+                  onclick={() => void openFromDisk()}
                 >
-                  <span class="repo-name">{repoName(repo.path)}</span>
-                  <span class="repo-path">{repo.path}</span>
+                  <Icon icon={iconAdd} size={14} />
+                  Add existing repo…
                 </button>
                 <button
-                  class="pin"
+                  class="clone-btn"
                   type="button"
-                  aria-pressed={repo.pinned}
-                  title={repo.pinned ? "Unpin repository" : "Pin repository"}
-                  aria-label={repo.pinned ? "Unpin repository" : "Pin repository"}
-                  onclick={() => togglePin(repo.path)}
+                  onclick={() => (cloneOpen = true)}
                 >
-                  {repo.pinned ? "★" : "☆"}
+                  <Icon icon={iconClone} size={14} />
+                  Clone repo…
+                </button>
+              </div>
+            {/if}
+          </div>
+
+          {#if showRepoFilter}
+            <label class="repo-search">
+              <span class="search-icon" aria-hidden="true">
+                <Icon icon={iconSearch} size={15} />
+              </span>
+              <input
+                type="text"
+                aria-label="Filter recent repositories"
+                placeholder="Filter repositories by name or path"
+                bind:value={repoFilter}
+              />
+              {#if repoFilter}
+                <button
+                  class="search-clear"
+                  type="button"
+                  aria-label="Clear repository filter"
+                  title="Clear filter"
+                  onclick={() => (repoFilter = "")}
+                >
+                  <Icon icon={iconClose} size={13} />
+                </button>
+              {/if}
+            </label>
+          {/if}
+
+          {#if repos.length === 0}
+            <div class="empty">
+              <span class="empty-icon" aria-hidden="true">
+                <Icon icon={iconFolder} size={30} />
+              </span>
+              <h2 class="empty-title">No repositories yet</h2>
+              <p class="empty-text">
+                Open a repository folder from disk, clone a remote, or drag a
+                folder onto this window to get started.
+              </p>
+              <div class="empty-actions">
+                <button
+                  class="add-btn"
+                  type="button"
+                  onclick={() => void openFromDisk()}
+                >
+                  <Icon icon={iconAdd} size={14} />
+                  Add existing repo…
                 </button>
                 <button
-                  class="remove"
+                  class="clone-btn"
                   type="button"
-                  title="Remove from recent list"
-                  aria-label={`Remove ${repoName(repo.path)} from the recent list`}
-                  onclick={() => removeFromRecents(repo.path)}
+                  onclick={() => (cloneOpen = true)}
                 >
-                  ✕
+                  <Icon icon={iconClone} size={14} />
+                  Clone repo…
                 </button>
-              </li>
-            {/each}
-          </ul>
-        {/if}
-      </section>
+              </div>
+              <div class="empty-hints">
+                <span class="hint">
+                  <kbd class="kbd">Ctrl</kbd><kbd class="kbd">K</kbd>
+                  quick switcher
+                </span>
+                <span class="hint">
+                  <kbd class="kbd">Ctrl</kbd><kbd class="kbd">Shift</kbd
+                  ><kbd class="kbd">P</kbd>
+                  command palette
+                </span>
+              </div>
+            </div>
+          {:else if filteredRepos.length === 0}
+            <div class="no-results">
+              <p class="empty-title">No repositories match “{repoFilter}”</p>
+              <button
+                class="clear-search"
+                type="button"
+                onclick={() => (repoFilter = "")}
+              >
+                Clear filter
+              </button>
+            </div>
+          {:else}
+            <ul class="repo-list">
+              {#each filteredRepos as repo (repo.path)}
+                {@const when = lastOpenedLabel(repo.lastOpened)}
+                <li class="repo-row-wrapper">
+                  <button
+                    class="repo-row"
+                    type="button"
+                    onclick={() => void openRepoTab(repo.path)}
+                  >
+                    <span class="repo-icon" aria-hidden="true">
+                      <Icon icon={iconFolder} size={20} />
+                    </span>
+                    <span class="repo-main">
+                      <span class="repo-title">
+                        <span class="repo-name">{repoName(repo.path)}</span>
+                        {#if repo.pinned}
+                          <span class="pin-mark" title="Pinned">
+                            <Icon icon={iconPin} size={13} />
+                          </span>
+                        {/if}
+                      </span>
+                      <span class="repo-path">{repo.path}</span>
+                    </span>
+                    {#if when}
+                      <span class="repo-when">{when}</span>
+                    {/if}
+                  </button>
+                  <span class="row-actions">
+                    <button
+                      class="row-action pin"
+                      class:pinned={repo.pinned}
+                      type="button"
+                      aria-pressed={repo.pinned}
+                      title={repo.pinned ? "Unpin repository" : "Pin repository"}
+                      aria-label={repo.pinned
+                        ? "Unpin repository"
+                        : "Pin repository"}
+                      onclick={() => togglePin(repo.path)}
+                    >
+                      <Icon icon={iconPin} size={15} />
+                    </button>
+                    <button
+                      class="row-action remove"
+                      type="button"
+                      title="Remove from recent list"
+                      aria-label={`Remove ${repoName(repo.path)} from the recent list`}
+                      onclick={() => removeFromRecents(repo.path)}
+                    >
+                      <Icon icon={iconClose} size={15} />
+                    </button>
+                  </span>
+                </li>
+              {/each}
+            </ul>
+          {/if}
+        </section>
+      </div>
+
+      <footer class="home-foot">
+        <span class="hint">
+          <kbd class="kbd">Ctrl</kbd><kbd class="kbd">K</kbd> quick switcher
+        </span>
+        <span class="hint">
+          <kbd class="kbd">Ctrl</kbd><kbd class="kbd">Shift</kbd
+          ><kbd class="kbd">P</kbd>
+          command palette
+        </span>
+        <span class="foot-note">Tip: drop a folder here to open it</span>
+      </footer>
     </main>
   {/if}
 </div>
@@ -323,12 +509,7 @@
 <CloneDialog bind:open={cloneOpen} />
 <ContextMenu />
 
-<!-- M12: persistent AI connection health; click opens the settings dialog. -->
-{#if !popout}
-  <div class="ai-chip-slot">
-    <AiHealthChip />
-  </div>
-{/if}
+<!-- M12: AI settings dialog (opened by the AI health chip / palette). -->
 <AiSettings bind:open={aiSettingsOpen} />
 
 {#if seedOpen}
@@ -377,96 +558,240 @@
   /* Home area (no tabs open) */
   .home {
     flex: 1;
+    min-height: 0;
     overflow-y: auto;
     display: flex;
-    justify-content: center;
-    padding: 3rem 1rem;
+    flex-direction: column;
+    background:
+      radial-gradient(
+        circle at 50% -12%,
+        color-mix(in srgb, var(--m3-primary) 8%, transparent),
+        transparent 46%
+      ),
+      var(--m3-surface);
   }
 
-  .recent {
-    width: 100%;
-    max-width: 40rem;
-  }
-
-  .recent-head {
+  .home-top {
+    flex: none;
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: 1rem;
+    padding: 0.75rem 1.25rem;
+    border-bottom: 1px solid var(--m3-outline-variant, var(--m3-primary));
+    background: color-mix(
+      in srgb,
+      var(--m3-surface-container-low, var(--m3-surface)) 82%,
+      transparent
+    );
+    backdrop-filter: blur(8px);
+  }
+
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: 0.625rem;
+    min-width: 0;
+  }
+
+  .brand-mark {
+    flex: none;
+    display: grid;
+    place-items: center;
+    width: 2.25rem;
+    height: 2.25rem;
+    border-radius: 0.65rem;
+    background: var(--m3-primary-container, var(--m3-surface-container));
+    color: var(--m3-on-primary-container, var(--m3-primary));
+    box-shadow: var(--m3-elevation-1);
+  }
+
+  .brand-text {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    line-height: 1.15;
+  }
+
+  .brand-name {
+    font-size: 1.0625rem;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+  }
+
+  .brand-tag {
+    color: var(--m3-on-surface-variant, var(--m3-on-surface));
+    font-size: 0.6875rem;
+  }
+
+  .home-utilities {
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: 0.375rem;
+  }
+
+  .home-body {
+    flex: 1;
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+    padding: 2.75rem 1.25rem 2rem;
+  }
+
+  .recent {
+    width: 100%;
+    max-width: 44rem;
+    min-width: 0;
+  }
+
+  .recent-head {
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 1rem;
     margin-bottom: 1rem;
+  }
+
+  .recent-title {
+    min-width: 0;
+  }
+
+  .recent-heading {
+    margin: 0;
+    font-size: 1.375rem;
+    font-weight: 500;
+    letter-spacing: -0.01em;
+    color: var(--m3-on-surface);
+  }
+
+  .recent-sub {
+    margin: 0.2rem 0 0;
+    color: var(--m3-on-surface-variant, var(--m3-on-surface));
+    font-size: 0.75rem;
   }
 
   .head-actions {
     display: flex;
     flex: none;
+    flex-wrap: wrap;
     gap: 0.5rem;
   }
 
-  .recent-head .recent-heading {
-    margin: 0;
-  }
-
-  .clone-btn {
-    flex: none;
-    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
+  .add-btn,
+  .clone-btn,
+  .clear-search {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
     border-radius: var(--m3-shape-full, 9999px);
-    background: var(--m3-primary);
-    color: var(--m3-on-primary);
     font: inherit;
-    font-size: 0.8125rem;
-    padding: 0.4rem 1rem;
-    cursor: pointer;
-  }
-
-  .clone-btn:hover,
-  .clone-btn:focus-visible {
-    filter: brightness(1.1);
-  }
-
-  .clone-btn:focus-visible {
-    outline: 2px solid var(--m3-primary);
-    outline-offset: 2px;
-  }
-
-  .add-btn {
-    flex: none;
-    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    border-radius: var(--m3-shape-full, 9999px);
-    background: none;
-    color: var(--m3-primary);
-    font: inherit;
-    font-size: 0.8125rem;
-    padding: 0.4rem 1rem;
-    cursor: pointer;
-  }
-
-  .add-btn:hover {
-    border-color: var(--m3-primary);
-    filter: brightness(1.1);
-  }
-
-  .add-btn:focus-visible {
-    outline: 2px solid var(--m3-primary);
-    outline-offset: 2px;
-  }
-
-  .recent-heading {
-    font-size: 1.25rem;
+    font-size: 0.75rem;
     font-weight: 500;
-    margin: 0 0 1rem;
+    padding: 0.4rem 0.9rem;
+    white-space: nowrap;
+    cursor: pointer;
+  }
+
+  .add-btn,
+  .clear-search {
+    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
+    background: none;
     color: var(--m3-on-surface);
   }
 
-  .empty {
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    border: 1px dashed var(--m3-outline-variant, var(--m3-primary));
-    border-radius: 0.75rem;
-    padding: 2.5rem 1.5rem;
-    text-align: center;
+  .add-btn:hover,
+  .clear-search:hover {
+    background: var(--m3-surface-container-high, var(--m3-surface));
+    border-color: var(--m3-outline, var(--m3-primary));
   }
 
-  .empty code {
-    font-family: ui-monospace, Consolas, monospace;
+  .clear-search {
+    margin-top: 0.75rem;
+    color: var(--m3-primary);
+  }
+
+  .clone-btn {
+    border: 1px solid transparent;
+    background: var(--m3-primary);
+    color: var(--m3-on-primary);
+  }
+
+  .clone-btn:hover {
+    filter: brightness(1.06);
+  }
+
+  .add-btn:focus-visible,
+  .clone-btn:focus-visible,
+  .clear-search:focus-visible {
+    outline: 2px solid var(--m3-primary);
+    outline-offset: 2px;
+  }
+
+  .repo-search {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    height: 2.1rem;
+    margin-bottom: 0.75rem;
+    padding: 0 0.6rem;
+    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
+    border-radius: var(--m3-shape-full, 9999px);
+    background: var(--m3-surface-container-lowest, var(--m3-surface));
+    color: var(--m3-on-surface-variant, var(--m3-on-surface));
+  }
+
+  .repo-search:focus-within {
+    border-color: var(--m3-primary);
+    box-shadow: 0 0 0 1px var(--m3-primary);
+  }
+
+  .search-icon {
+    display: inline-flex;
+    flex: none;
+    opacity: 0.8;
+  }
+
+  .repo-search input {
+    flex: 1;
+    min-width: 0;
+    border: none;
+    background: none;
+    color: var(--m3-on-surface);
+    font: inherit;
+    font-size: 0.8125rem;
+    outline: none;
+  }
+
+  .repo-search input::placeholder {
+    color: var(--m3-on-surface-variant, var(--m3-on-surface));
+    opacity: 0.8;
+  }
+
+  .search-clear {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.25rem;
+    height: 1.25rem;
+    padding: 0;
+    border: none;
+    border-radius: var(--m3-shape-full, 9999px);
+    background: transparent;
+    color: var(--m3-on-surface-variant, var(--m3-on-surface));
+    cursor: pointer;
+  }
+
+  .search-clear:hover {
+    background: var(--m3-surface-container-high, var(--m3-surface));
+    color: var(--m3-on-surface);
+  }
+
+  .search-clear:focus-visible {
+    outline: 2px solid var(--m3-primary);
+    outline-offset: -1px;
   }
 
   .repo-list {
@@ -480,94 +805,271 @@
 
   .repo-row-wrapper {
     display: flex;
-    align-items: stretch;
-    gap: 0.25rem;
+    align-items: center;
+    gap: 0.125rem;
+    padding-right: 0.35rem;
+    border: 1px solid transparent;
+    border-radius: var(--m3-shape-medium, 12px);
+    background: var(--m3-surface-container-low, var(--m3-surface));
+    transition:
+      background-color 0.12s ease,
+      border-color 0.12s ease;
+  }
+
+  .repo-row-wrapper:hover,
+  .repo-row-wrapper:focus-within {
+    border-color: var(--m3-outline-variant, var(--m3-primary));
+    background: var(--m3-surface-container, var(--m3-surface));
   }
 
   .repo-row {
     flex: 1;
     min-width: 0;
     display: flex;
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 0.125rem;
+    align-items: center;
+    gap: 0.75rem;
     text-align: left;
-    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    border-radius: 0.75rem;
-    background: var(--m3-surface-container, var(--m3-surface));
+    border: 1px solid transparent;
+    border-radius: var(--m3-shape-medium, 12px);
+    background: none;
     color: var(--m3-on-surface);
     font: inherit;
-    padding: 0.625rem 0.875rem;
+    padding: 0.55rem 0.7rem;
     cursor: pointer;
   }
 
-  .repo-row:hover,
+  .repo-row:hover {
+    border-color: transparent;
+    background: none;
+  }
+
   .repo-row:focus-visible {
-    border-color: var(--m3-primary);
+    outline: 2px solid var(--m3-primary);
+    outline-offset: 1px;
+  }
+
+  .repo-icon {
+    flex: none;
+    display: grid;
+    place-items: center;
+    width: 2.5rem;
+    height: 2.5rem;
+    border-radius: 0.625rem;
+    background: var(--m3-primary-container, var(--m3-surface-container-high));
+    color: var(--m3-on-primary-container, var(--m3-primary));
+  }
+
+  .repo-main {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.125rem;
+  }
+
+  .repo-title {
+    display: flex;
+    align-items: center;
+    gap: 0.3rem;
+    min-width: 0;
   }
 
   .repo-name {
-    font-weight: 500;
+    font-weight: 600;
     font-size: 0.9375rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .pin-mark {
+    flex: none;
+    display: inline-flex;
+    color: var(--m3-primary);
   }
 
   .repo-path {
     color: var(--m3-on-surface-variant, var(--m3-on-surface));
     font-size: 0.75rem;
-    font-family: ui-monospace, Consolas, monospace;
+    font-family: var(--app-font-mono, ui-monospace, Consolas, monospace);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
     max-width: 100%;
   }
 
-  .pin {
+  .repo-when {
     flex: none;
-    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    border-radius: 0.75rem;
+    color: var(--m3-on-surface-variant, var(--m3-on-surface));
+    font-size: 0.6875rem;
+    white-space: nowrap;
+  }
+
+  .row-actions {
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: 0.125rem;
+    opacity: 0.75;
+    transition: opacity 0.12s ease;
+  }
+
+  .repo-row-wrapper:hover .row-actions,
+  .repo-row-wrapper:focus-within .row-actions {
+    opacity: 1;
+  }
+
+  .row-action {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.9rem;
+    height: 1.9rem;
+    padding: 0;
+    border: none;
+    border-radius: var(--m3-shape-small, 8px);
     background: none;
     color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    width: 2.75rem;
+    opacity: 1;
     cursor: pointer;
-    font-size: 0.875rem;
+    transition:
+      background-color 0.12s ease,
+      color 0.12s ease,
+      opacity 0.12s ease;
   }
 
-  .pin[aria-pressed="true"] {
-    color: var(--m3-on-primary);
-    background: var(--m3-primary);
+  .row-action:hover,
+  .row-action:focus-visible {
+    background: var(--m3-surface-container-high, var(--m3-surface));
+    color: var(--m3-on-surface);
+    opacity: 1;
   }
 
-  .remove {
-    flex: none;
-    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    border-radius: 0.75rem;
-    background: none;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    width: 2.75rem;
-    cursor: pointer;
-    font-size: 0.875rem;
+  .row-action:focus-visible {
+    outline: 2px solid var(--m3-primary);
+    outline-offset: -1px;
   }
 
-  .remove:hover {
-    border-color: var(--m3-error);
+  .row-action.pinned {
+    color: var(--m3-primary);
+    opacity: 1;
+  }
+
+  .row-action.remove:hover {
+    background: var(--m3-error-container, var(--m3-surface-container-high));
     color: var(--m3-error);
   }
 
-  .remove:focus-visible {
-    outline: 2px solid var(--m3-primary);
-    outline-offset: 2px;
+  .no-results {
+    padding: 2rem 1rem;
+    border: 1px dashed var(--m3-outline-variant, var(--m3-primary));
+    border-radius: var(--m3-shape-large, 16px);
+    text-align: center;
+    color: var(--m3-on-surface-variant, var(--m3-on-surface));
   }
 
-  /* M12: AI health chip parked top-right (toaster owns bottom-right).
-     Opaque surface so it stays legible over the tab strip it overlaps. */
-  .ai-chip-slot {
-    position: fixed;
-    top: 0.75rem;
-    right: 0.75rem;
-    z-index: 900;
+  .no-results .empty-title {
+    margin-bottom: 0.5rem;
+    color: var(--m3-on-surface);
   }
 
-  .ai-chip-slot :global(.ai-health) {
-    background: var(--m3-surface-container, var(--m3-surface));
+  .empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 2.5rem 1.5rem;
+    border: 1px dashed var(--m3-outline-variant, var(--m3-primary));
+    border-radius: var(--m3-shape-extra-large, 28px);
+    background: color-mix(
+      in srgb,
+      var(--m3-surface-container-low, var(--m3-surface)) 65%,
+      transparent
+    );
+    text-align: center;
+  }
+
+  .empty-icon {
+    display: grid;
+    place-items: center;
+    width: 3.5rem;
+    height: 3.5rem;
+    margin-bottom: 0.35rem;
+    border-radius: 50%;
+    background: var(--m3-primary-container, var(--m3-surface-container-high));
+    color: var(--m3-on-primary-container, var(--m3-primary));
+  }
+
+  .empty-title {
+    margin: 0;
+    font-size: 1rem;
+    font-weight: 600;
+    color: var(--m3-on-surface);
+  }
+
+  .empty-text {
+    max-width: 26rem;
+    margin: 0;
+    color: var(--m3-on-surface-variant, var(--m3-on-surface));
+    font-size: 0.8125rem;
+    line-height: 1.5;
+  }
+
+  .empty-actions {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 0.5rem;
+    margin-top: 0.75rem;
+  }
+
+  .empty-hints {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 0.75rem 1rem;
+    margin-top: 1rem;
+    color: var(--m3-on-surface-variant, var(--m3-on-surface));
+    font-size: 0.6875rem;
+  }
+
+  .hint {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    white-space: nowrap;
+  }
+
+  .home-foot {
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: 1.25rem;
+    padding: 0.65rem 1.25rem;
+    border-top: 1px solid var(--m3-outline-variant, var(--m3-primary));
+    background: color-mix(
+      in srgb,
+      var(--m3-surface-container-low, var(--m3-surface)) 82%,
+      transparent
+    );
+    color: var(--m3-on-surface-variant, var(--m3-on-surface));
+    font-size: 0.6875rem;
+  }
+
+  .foot-note {
+    margin-left: auto;
+    opacity: 0.85;
+  }
+
+  @media (max-width: 720px) {
+    .brand-tag,
+    .foot-note,
+    .repo-when {
+      display: none;
+    }
+
+    .home-body {
+      padding-top: 1.75rem;
+    }
   }
 </style>

@@ -285,6 +285,82 @@ function BOOTSTRAP(options: TauriMockOptions): void {
 
   const EMPTY_LOG_PAGE = { commits: [], rows: [], next_cursor: null, generation: 0 };
 
+  /**
+   * Keeps `repo_status` in sync with `stage` / `stage_all` so the UI's
+   * staged-change gating behaves like the real backend (the smoke flow
+   * stages a file and then commits it).
+   */
+  const statusMock = commandMocks.repo_status as
+    | { entries?: Array<Record<string, unknown>> }
+    | null
+    | undefined;
+
+  function targetPath(target: unknown): string | null {
+    if (!target || typeof target !== "object") return null;
+    const t = target as {
+      file?: unknown;
+      hunk?: { path?: unknown };
+      lines?: { path?: unknown };
+    };
+    if (typeof t.file === "string") return t.file;
+    if (typeof t.hunk?.path === "string") return t.hunk.path;
+    if (typeof t.lines?.path === "string") return t.lines.path;
+    return null;
+  }
+
+  function applyStage(args: Record<string, unknown> | undefined): void {
+    const entries = statusMock?.entries;
+    if (!Array.isArray(entries)) return;
+    const request = args?.request as
+      | { unstage?: boolean; targets?: unknown[] }
+      | undefined;
+    const targets = Array.isArray(request?.targets) ? request.targets : [];
+    const paths = new Set(targets.map(targetPath).filter((p): p is string => p !== null));
+    const unstage = request?.unstage === true;
+    for (const entry of entries) {
+      const path = entry.path;
+      if (typeof path !== "string" || !paths.has(path)) continue;
+      const index = typeof entry.index === "string" ? entry.index : "unmodified";
+      const worktree =
+        typeof entry.worktree === "string" ? entry.worktree : "unmodified";
+      if (unstage) {
+        // Put the index state back into the working tree.
+        entry.index = "unmodified";
+        entry.worktree =
+          index === "unmodified"
+            ? worktree
+            : index === "added"
+              ? "untracked"
+              : index;
+      } else {
+        // Promote the working-tree state into the index.
+        entry.index = worktree === "untracked" ? "added" : worktree;
+        entry.worktree = "unmodified";
+      }
+    }
+  }
+
+  function applyStageAll(args: Record<string, unknown> | undefined): void {
+    const entries = statusMock?.entries;
+    if (!Array.isArray(entries)) return;
+    const unstage = args?.unstage === true;
+    for (const entry of entries) {
+      const index = typeof entry.index === "string" ? entry.index : "unmodified";
+      const worktree =
+        typeof entry.worktree === "string" ? entry.worktree : "unmodified";
+      if (unstage) {
+        if (index === "unmodified") continue;
+        entry.index = "unmodified";
+        entry.worktree =
+          index === "added" ? "untracked" : index;
+      } else {
+        if (worktree === "unmodified") continue;
+        entry.index = worktree === "untracked" ? "added" : worktree;
+        entry.worktree = "unmodified";
+      }
+    }
+  }
+
   const callbacks = new Map<number, (raw: unknown) => void>();
   const listeners = new Map<number, { event: string; handler: number }>();
   let nextCallbackId = 1;
@@ -350,6 +426,9 @@ function BOOTSTRAP(options: TauriMockOptions): void {
         deliverChannel((args as { on_page?: unknown })?.on_page, []);
         return Promise.resolve(null);
       }
+
+      if (cmd === "stage") applyStage(args);
+      if (cmd === "stage_all") applyStageAll(args);
 
       if (cmd in commandMocks) {
         const value = commandMocks[cmd];

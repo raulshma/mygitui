@@ -34,10 +34,13 @@
   const view = $derived(
     aiHealth(statuses, ai.config.backend, ai.config.allowFallback !== false),
   );
+
+  let { compact = false }: { compact?: boolean } = $props();
 </script>
 
 <button
   class="ai-health {view.tone}"
+  class:compact
   type="button"
   title={`AI: ${view.detail}`}
   aria-label={`AI connection: ${view.label} — open AI settings`}
@@ -70,6 +73,27 @@
   .ai-health:focus-visible {
     outline: 2px solid var(--m3-primary);
     outline-offset: 1px;
+  }
+
+  /*
+   * Compact mode (tab strip / phone-width headers): dot only, with the
+   * label kept in the accessibility tree so the chip still names its state.
+   */
+  .ai-health.compact {
+    width: 1.65rem;
+    height: 1.65rem;
+    justify-content: center;
+    gap: 0;
+    padding: 0;
+  }
+
+  .ai-health.compact .label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
   }
 
   .dot {

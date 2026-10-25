@@ -27,7 +27,7 @@
   import { busy } from "$lib/stores/ops.svelte";
   import { tabStore } from "$lib/stores/tabs.svelte";
   import { toast } from "$lib/toast";
-  import { IconButton } from "$lib/components/m3";
+  import { IconButton, Spinner } from "$lib/components/m3";
   import Icon from "$lib/components/icons/Icon.svelte";
   import { ai } from "$lib/ai/ai.svelte";
   import AiFeatureButton from "$lib/components/ai/AiFeatureButton.svelte";
@@ -87,7 +87,39 @@
   );
 
   const commitBusy = $derived(busy(repoId, "commit"));
-  const canCommit = $derived((amend || message.trim().length > 0) && !commitBusy && !committing);
+
+  /** The repo's latest status snapshot (staged detection + HEAD sha). */
+  const status = $derived(
+    tabStore.tabs.find((tab) => tab.id === repoId)?.status ?? null,
+  );
+  const staged = $derived(hasStagedChanges(status?.entries ?? []));
+
+  /**
+   * Normal commits need something in the index; amending may reuse HEAD's
+   * message. While the first status is still loading (`status === null`) we
+   * keep the button available rather than guessing.
+   */
+  const needsStaged = $derived(!amend && status !== null && !staged);
+  const hasMessage = $derived(message.trim().length > 0);
+  const canCommit = $derived(
+    (amend || hasMessage) && !needsStaged && !commitBusy && !committing,
+  );
+
+  /** Explains what the primary button will do (title/cursor affordance). */
+  const commitHint = $derived(
+    !hasMessage && !amend
+      ? "Write a commit message to enable Commit"
+      : needsStaged
+        ? "Stage a change before committing"
+        : amend
+          ? "Amend the previous commit (Ctrl+Enter)"
+          : "Commit staged changes (Ctrl+Enter)",
+  );
+
+  /** Only warn when there are changes to stage (a clean tree is self-evident). */
+  const showStagedHint = $derived(
+    needsStaged && status !== null && status.entries.length > 0,
+  );
 
   $effect(() => {
     // Load signing + hooks state (reloads when the repo switches).
@@ -163,11 +195,6 @@
 
   let fixing = $state(false);
 
-  /** The repo's latest status snapshot (staged detection + HEAD sha). */
-  const status = $derived(
-    tabStore.tabs.find((tab) => tab.id === repoId)?.status ?? null,
-  );
-  const staged = $derived(hasStagedChanges(status?.entries ?? []));
   const canFixup = $derived(
     Boolean(status?.head) && staged && !commitBusy && !committing && !fixing,
   );
@@ -235,7 +262,9 @@
     <textarea
       id="commit-message"
       class="message"
-      placeholder="Commit message… (Ctrl+Enter to commit)"
+      placeholder="Commit message… Ctrl+↵"
+      title="Commit message (Ctrl+Enter commits)"
+      aria-keyshortcuts="Control+Enter Meta+Enter"
       rows="1"
       bind:this={messageEl}
       bind:value={message}
@@ -329,9 +358,15 @@ ${m.body}` : m.subject;
             }}
           />
 
-          <button class="go" type="submit" disabled={!canCommit}>
+          <button
+            class="go"
+            type="submit"
+            title={commitHint}
+            aria-describedby={showStagedHint ? "commit-staged-hint" : undefined}
+            disabled={!canCommit}
+          >
             {#if commitBusy || committing}
-              <span class="spinner" aria-hidden="true"></span>
+              <Spinner size={12} />
               <span>Committing…</span>
             {:else}
               <span>Commit</span>
@@ -341,6 +376,12 @@ ${m.body}` : m.subject;
       </div>
     </div>
   </div>
+
+  {#if showStagedHint}
+    <p id="commit-staged-hint" class="staged-hint" role="status">
+      No staged changes yet — stage a file to commit.
+    </p>
+  {/if}
 
   {#if showAuthor}
     <div class="author">
@@ -476,6 +517,12 @@ ${m.body}` : m.subject;
     animation: spin 1s linear infinite;
   }
 
+  @keyframes spin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+
   .go:focus-visible {
     outline: 2px solid var(--m3-primary);
     outline-offset: 1px;
@@ -499,24 +546,18 @@ ${m.body}` : m.subject;
     cursor: pointer;
   }
 
+  /* M3 disabled: keep the label legible (no washed-out 55% opacity). */
   .go:disabled {
     cursor: not-allowed;
-    opacity: 0.55;
+    background: var(--app-disabled-bg);
+    color: var(--app-disabled-fg);
   }
 
-  .spinner {
-    width: 0.75rem;
-    height: 0.75rem;
-    border: 2px solid color-mix(in srgb, var(--m3-on-primary) 40%, transparent);
-    border-top-color: var(--m3-on-primary);
-    border-radius: 50%;
-    animation: spin 0.8s linear infinite;
-  }
-
-  @keyframes spin {
-    to {
-      transform: rotate(360deg);
-    }
+  .staged-hint {
+    margin: 0;
+    color: var(--m3-on-surface-variant, var(--m3-on-surface));
+    font-size: 0.6875rem;
+    line-height: 1.3;
   }
 
   .author {
@@ -562,14 +603,5 @@ ${m.body}` : m.subject;
     color: var(--m3-error, inherit);
     font-size: 0.72rem;
     overflow-wrap: anywhere;
-  }
-
-  .sr-only {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    overflow: hidden;
-    clip: rect(0 0 0 0);
-    white-space: nowrap;
   }
 </style>
