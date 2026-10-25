@@ -94,8 +94,13 @@ test("activity bar, sidebars and center editor share the workspace", async ({
   );
 
   // Hiding history keeps it mounted behind the right-edge rail; the editor
-  // expands and keeps the commit detail.
+  // expands and keeps the commit detail. The rail eats width from the tree,
+  // but only the rightmost pane may pay for it - the primary sidebar (and
+  // every other left-hand pane) must keep its exact size.
   const historyWidth = (await editor.boundingBox())!.width;
+  const sidebarWidthBeforeRail = (await page
+    .locator(".changes-panel")
+    .boundingBox())!.width;
   await page
     .getByRole("button", { name: "Hide history", exact: true })
     .click();
@@ -108,6 +113,14 @@ test("activity bar, sidebars and center editor share the workspace", async ({
   await expect
     .poll(async () => (await editor.boundingBox())?.width ?? 0)
     .toBeGreaterThan(historyWidth);
+  await expect
+    .poll(async () =>
+      Math.abs(
+        (await page.locator(".changes-panel").boundingBox())!.width -
+          sidebarWidthBeforeRail,
+      ),
+    )
+    .toBeLessThan(0.5);
   await expect(editor.locator(".dsummary").first()).toHaveText(
     "commit message 0",
   );

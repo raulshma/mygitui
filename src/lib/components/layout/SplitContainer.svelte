@@ -49,6 +49,13 @@
     onActivateTab,
     onAddPanel,
     onPanelAction,
+    /** Whether a collapsed-history rail sits at the right edge of the tree.
+     *  Split bases on the right spine are widened by the rail width: the
+     *  rail is a sibling of the whole tree, so without this every
+     *  percentage-sized pane would shrink slightly whenever history is
+     *  collapsed. Compensating here keeps every left-hand pane at its size
+     *  and lets the rail's width come out of the rightmost pane instead. */
+    rightRail = false,
   }: {
     /** The (sub)tree this instance renders. */
     node: LayoutNode;
@@ -73,6 +80,8 @@
     onActivateTab: (tabsId: string, index: number) => void;
     onAddPanel: (tabsId: string, panel: PanelId) => void;
     onPanelAction: (action: PanelGroupAction, tabsId: string, panel: PanelId) => void;
+    /** True while the history rail occupies the right edge (see destructure). */
+    rightRail?: boolean;
   } = $props();
 
   // -- divider dragging ------------------------------------------------------
@@ -137,10 +146,16 @@
 {#if node.kind === "split"}
   {@const hideA = collapsedIds.includes(node.a.id)}
   {@const hideB = collapsedIds.includes(node.b.id)}
+  <!-- The rail consumes width from the tree, not from the left panes: on
+       the right spine add the rail's share (ratio × rail width) back to `a`
+       so toggling history only resizes the rightmost pane. -->
+  {@const aBasis = rightRail
+    ? `calc(${node.ratio * 100}% + ${node.ratio} * var(--history-rail-width, 0px))`
+    : `${node.ratio * 100}%`}
   <div class="split" class:hide-a={hideA} class:hide-b={hideB}>
     <div
       class="pane pane-a"
-      style:flex={hideB ? "1 1 0%" : `0 0 ${node.ratio * 100}%`}
+      style:flex={hideB ? "1 1 0%" : `0 0 ${aBasis}`}
     >
       <SplitContainer
         node={node.a}
@@ -154,6 +169,7 @@
         {onActivateTab}
         {onAddPanel}
         {onPanelAction}
+        rightRail={false}
       />
     </div>
     <!-- A focusable separator is the ARIA-recommended pattern for split
@@ -189,6 +205,7 @@
         {onActivateTab}
         {onAddPanel}
         {onPanelAction}
+        {rightRail}
       />
     </div>
   </div>

@@ -1151,6 +1151,7 @@
         onActivateTab={onActivateTab}
         onAddPanel={onAddPanel}
         onPanelAction={onPanelAction}
+        rightRail={showHistoryRail}
       />
     </div>
     {#if showHistoryRail}
@@ -1456,6 +1457,10 @@
     min-height: 0;
     min-width: 0;
     display: flex;
+    /* Width of the collapsed-history rail. SplitContainer reads it to keep
+     * the left panes at their size while the rail is out (see its rightRail
+     * doc); the rail button itself uses the same variable. */
+    --history-rail-width: 1.75rem;
   }
 
   /* The tree owns all remaining width; collapsed sidebar panes are hidden
@@ -1470,7 +1475,7 @@
   /* Visual Studio-style auto-hide tab for the collapsed history sidebar. */
   .history-rail {
     flex: none;
-    width: 1.75rem;
+    width: var(--history-rail-width);
     display: flex;
     flex-direction: column;
     align-items: center;
