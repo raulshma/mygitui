@@ -14,7 +14,13 @@
    */
   import { tick, untrack } from "svelte";
   import { toast } from "$lib/toast";
-  import { runDurationLabel } from "./forgeModel";
+  import {
+    activityDurationLabel,
+    runDurationLabel,
+    runStateIcon,
+    runStateKind,
+    stepStateClass,
+  } from "./forgeModel";
   import {
     countLogMatches,
     filterParsedLog,
@@ -22,6 +28,7 @@
     formatLogTime,
     highlightText,
     parseWorkflowLog,
+    type KnownJobMeta,
     type LogJob,
     type LogLine,
     type LogSegment,
@@ -30,14 +37,20 @@
 
   let {
     text,
+    jobs = [],
     loading = false,
     error = null,
     emptyText = "No log output for this selection.",
     live = false,
+    liveConsole = false,
+    onOpenLive = undefined,
     windowSize = 2_000,
+    targetStepKey = null,
   }: {
     /** Raw `gh run view --log` text (`null` before the first fetch). */
     text: string | null;
+    /** Known jobs with their steps (from workflow run details) for step correlation. */
+    jobs?: KnownJobMeta[];
     /** A fetch is in flight (stale text stays visible). */
     loading?: boolean;
     /** Fetch error (`text` may still hold the previous payload). */
@@ -46,8 +59,14 @@
     emptyText?: string;
     /** Enable the live-tail affordance (active runs). */
     live?: boolean;
+    /** The run is still active, so a live console link is useful. */
+    liveConsole?: boolean;
+    /** Opens the run on GitHub (its live console while jobs are running). */
+    onOpenLive?: () => void;
     /** Lines rendered at once; the "Show more" footer adds another window. */
     windowSize?: number;
+    /** Target step key (`job\0step`) to expand and scroll into view. */
+    targetStepKey?: string | null;
   } = $props();
 
   // `windowSize` is overridable so tests (and compact embeds) can keep the
@@ -63,8 +82,9 @@
   let windowStart = $state(0);
   let copied = $state(false);
   let scrollEl = $state<HTMLDivElement | undefined>();
+  let highlightedStepKey = $state<string | null>(null);
 
-  const parsed = $derived(text !== null ? parseWorkflowLog(text) : null);
+  const parsed = $derived(text !== null ? parseWorkflowLog(text, jobs) : null);
   const filtered = $derived(parsed ? filterParsedLog(parsed, query) : null);
   const matches = $derived(parsed ? countLogMatches(parsed, query) : 0);
   const total = $derived(filtered?.lineCount ?? 0);
@@ -162,6 +182,62 @@
     }
     collapsed = next;
   }
+
+  function stepIcon(conclusion = "", status = ""): string {
+    const kind = runStateKind({
+      status: status || (conclusion ? "completed" : "in_progress"),
+      conclusion,
+    });
+    return runStateIcon(kind);
+  }
+
+  function jobIcon(job: LogJob): string {
+    return runStateIcon(
+      runStateKind({
+        status: job.status ?? (job.conclusion ? "completed" : "in_progress"),
+        conclusion: job.conclusion ?? "",
+      }),
+    );
+  }
+
+  function jobStateClass(job: LogJob): string {
+    return stepStateClass(job.conclusion ?? "", job.status ?? "");
+  }
+
+  /** "3/13 steps" for the job header (`null` when metadata has no steps). */
+  function jobStepProgress(job: LogJob): string | null {
+    if (job.steps.length === 0) return null;
+    const completed = job.steps.filter((step) => step.status === "completed").length;
+    return `${completed}/${job.steps.length} steps`;
+  }
+
+  $effect(() => {
+    const target = targetStepKey;
+    if (!target) return;
+    // Read the collapse map untracked: this effect must run only when the
+    // requested step changes, not every time it writes the expanded state.
+    collapsed = untrack(() => {
+      const next = { ...collapsed };
+      delete next[target];
+      const parts = target.split("\u0000");
+      if (parts[0]) delete next[parts[0]];
+      return next;
+    });
+
+    highlightedStepKey = target;
+    void tick().then(() => {
+      const el = scrollEl?.querySelector<HTMLElement>(
+        `[data-step-key="${CSS.escape(target)}"]`,
+      );
+      if (el) {
+        el.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      }
+    });
+    const timer = setTimeout(() => {
+      if (highlightedStepKey === target) highlightedStepKey = null;
+    }, 2_500);
+    return () => clearTimeout(timer);
+  });
 
   /** Ignore the scroll events our own scrolling produces. */
   let ignoreScroll = false;
@@ -389,6 +465,12 @@
         <span class="refreshing"> · refreshing…</span>
       {/if}
     </span>
+    {#if live}
+      <span class="live-badge" title="Following this run while GitHub publishes output">
+        <span class="live-dot" aria-hidden="true"></span>
+        Live
+      </span>
+    {/if}
     {#if firstError}
       <button
         class="tb"
@@ -400,6 +482,17 @@
       </button>
     {/if}
     <span class="spacer"></span>
+    {#if liveConsole && onOpenLive}
+      <button
+        class="tb live-console"
+        type="button"
+        title="Open GitHub's live console for this run"
+        onclick={onOpenLive}
+      >
+        <span class="live-dot" aria-hidden="true"></span>
+        Live console
+      </button>
+    {/if}
     <button
       class="tb"
       class:active={wrap}
@@ -482,6 +575,20 @@
       </div>
     {/if}
   {:else}
+    {#if live && total === 0 && query.trim() === ""}
+      <div class="live-note" role="status">
+        <span class="live-dot" aria-hidden="true"></span>
+        <span class="live-note-text">
+          GitHub publishes each job's log when it finishes. For output while a
+          job is still running, use the live console on GitHub.
+        </span>
+        {#if onOpenLive}
+          <button class="tb" type="button" onclick={onOpenLive}>
+            Open live console
+          </button>
+        {/if}
+      </div>
+    {/if}
     <!-- svelte-ignore a11y_no_noninteractive_tabindex (scrollable log region must be keyboard focusable) -->
     <div
       class="log-scroll"
@@ -492,7 +599,12 @@
       aria-label="Workflow logs"
     >
       {#each renderJobs as jobEntry (jobEntry.job.key)}
-        {#if overlaps(jobEntry.offset, jobEntry.job.lineCount)}
+        {#if jobEntry.job.lineCount === 0 || overlaps(jobEntry.offset, jobEntry.job.lineCount)}
+          {@const jobDuration = activityDurationLabel(
+            jobEntry.job.started_at ?? null,
+            jobEntry.job.completed_at ?? null,
+            jobEntry.job.status ?? (jobEntry.job.conclusion ? "completed" : ""),
+          )}
           <section class="log-job" aria-label={jobEntry.job.name}>
             <button
               class="log-job-head"
@@ -503,7 +615,17 @@
               <span class="caret" aria-hidden="true">
                 {collapsed[jobEntry.job.key] ? "▸" : "▾"}
               </span>
+              <span
+                class="step-status-icon {jobStateClass(jobEntry.job)}"
+                aria-hidden="true"
+              >
+                {jobIcon(jobEntry.job)}
+              </span>
               <span class="job-name">{jobEntry.job.name}</span>
+              <span class="spacer"></span>
+              {#if jobStepProgress(jobEntry.job)}
+                <span class="muted">{jobStepProgress(jobEntry.job)}</span>
+              {/if}
               <span class="muted">{lineLabel(jobEntry.job.lineCount)}</span>
               {#if jobEntry.job.errorCount > 0}
                 <span class="mini-chip chip-error">
@@ -517,40 +639,91 @@
                     : "s"}
                 </span>
               {/if}
+              {#if jobDuration}
+                <span class="muted job-duration">{jobDuration}</span>
+              {/if}
             </button>
 
             {#if !collapsed[jobEntry.job.key]}
               {#each jobEntry.steps as stepEntry (stepEntry.step.key)}
-                {#if overlaps(stepEntry.offset, stepEntry.step.lineCount)}
-                  {@const duration = runDurationLabel(
-                    stepEntry.step.firstTime,
-                    stepEntry.step.lastTime,
-                  )}
-                  <section class="log-step" aria-label={stepEntry.step.name}>
-                    <button
-                      class="log-step-head"
-                      type="button"
-                      aria-expanded={!collapsed[stepEntry.step.key]}
-                      onclick={() => toggle(stepEntry.step.key)}
+                {@const step = stepEntry.step}
+                {@const isStepCollapsed = !!collapsed[step.key]}
+                {@const duration =
+                  activityDurationLabel(
+                    step.started_at ?? null,
+                    step.completed_at ?? null,
+                    step.status ?? (step.conclusion ? "completed" : ""),
+                  ) ||
+                  runDurationLabel(step.firstTime, step.lastTime)}
+                <section
+                  class="log-step"
+                  class:step-failed={step.conclusion === "failure" || step.errorCount > 0}
+                  class:step-running={step.status === "in_progress"}
+                  class:highlighted={highlightedStepKey === step.key}
+                  data-step-key={step.key}
+                  aria-label={step.name}
+                >
+                  <button
+                    class="log-step-head"
+                    type="button"
+                    aria-expanded={!isStepCollapsed}
+                    onclick={() => toggle(step.key)}
+                  >
+                    <span class="caret" aria-hidden="true">
+                      {isStepCollapsed ? "▸" : "▾"}
+                    </span>
+                    <span
+                      class="step-status-icon {stepStateClass(step.conclusion ?? '', step.status ?? '')}"
+                      aria-hidden="true"
                     >
-                      <span class="caret" aria-hidden="true">
-                        {collapsed[stepEntry.step.key] ? "▸" : "▾"}
+                      {stepIcon(step.conclusion, step.status)}
+                    </span>
+                    <span class="step-name">{step.name}</span>
+                    <span class="spacer"></span>
+                    {#if step.lineCount > 0}
+                      <span class="muted step-lines">{lineLabel(step.lineCount)}</span>
+                    {/if}
+                    {#if step.errorCount > 0}
+                      <span class="mini-chip chip-error">
+                        {step.errorCount} error{step.errorCount === 1 ? "" : "s"}
                       </span>
-                      <span class="step-name">{stepEntry.step.name}</span>
-                      <span class="muted">{lineLabel(stepEntry.step.lineCount)}</span>
-                      {#if stepEntry.step.errorCount > 0}
-                        <span class="mini-chip chip-error">
-                          {stepEntry.step.errorCount} error{stepEntry.step.errorCount === 1
-                            ? ""
-                            : "s"}
-                        </span>
-                      {/if}
-                      {#if duration}
-                        <span class="muted step-time">{duration}</span>
-                      {/if}
-                    </button>
+                    {/if}
+                    {#if step.warningCount > 0}
+                      <span class="mini-chip chip-warning">
+                        {step.warningCount} warning{step.warningCount === 1 ? "" : "s"}
+                      </span>
+                    {/if}
+                    {#if step.conclusion === "skipped"}
+                      <span class="muted step-state-badge">Skipped</span>
+                    {/if}
+                    {#if duration}
+                      <span class="muted step-time">{duration}</span>
+                    {/if}
+                  </button>
 
-                    {#if !collapsed[stepEntry.step.key]}
+                  {#if !isStepCollapsed}
+                    {#if step.lineCount === 0}
+                      <div class="empty-step-notice">
+                        {#if step.conclusion === "skipped"}
+                          This step was skipped.
+                        {:else if step.status === "queued" || step.status === "in_progress"}
+                          <span class="state-spinner small" aria-hidden="true"></span>
+                          <span>
+                            {step.status === "in_progress"
+                              ? "Step is running — its log appears when the job finishes."
+                              : "Step is queued…"}
+                          </span>
+                        {:else if jobEntry.job.status !== "completed"}
+                          <span>
+                            {jobEntry.job.status === "queued"
+                              ? "Job is queued — logs appear once it starts."
+                              : "Logs for this step appear when the job finishes."}
+                          </span>
+                        {:else}
+                          No log output recorded for this step.
+                        {/if}
+                      </div>
+                    {:else}
                       {#each stepEntry.segments as segmentEntry (segmentEntry.segment.key)}
                         {#if overlaps(
                           segmentEntry.offset,
@@ -604,8 +777,8 @@
                         {/if}
                       {/each}
                     {/if}
-                  </section>
-                {/if}
+                  {/if}
+                </section>
               {/each}
             {/if}
           </section>
@@ -716,6 +889,41 @@
 
   .refreshing {
     font-style: italic;
+  }
+
+  .live-badge {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    font-size: 0.66rem;
+    font-weight: 600;
+    color: var(--m3-primary);
+    white-space: nowrap;
+  }
+
+  .live-console {
+    color: var(--m3-primary);
+    border-color: color-mix(in srgb, currentColor 40%, transparent);
+  }
+
+  .live-note {
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+    flex-wrap: wrap;
+    padding: 0.4rem 0.6rem;
+    border-bottom: 1px solid var(--app-border, var(--m3-outline-variant));
+    background: color-mix(in srgb, var(--m3-tertiary-container) 35%, transparent);
+    color: var(--m3-on-surface);
+    font-size: 0.7rem;
+    line-height: 1.4;
+  }
+
+  .live-note-text {
+    flex: 1 1 16rem;
+    min-width: 0;
   }
 
   .spacer {
@@ -840,12 +1048,19 @@
   }
 
   .state-spinner {
+    flex: none;
     width: 1.1rem;
     height: 1.1rem;
     border: 2px solid var(--m3-outline-variant);
     border-top-color: var(--m3-primary);
     border-radius: 50%;
     animation: spin 0.8s linear infinite;
+  }
+
+  .state-spinner.small {
+    width: 0.7rem;
+    height: 0.7rem;
+    border-width: 1.5px;
   }
 
   @keyframes spin {
@@ -918,10 +1133,73 @@
     outline-offset: -2px;
   }
 
+  .log-step {
+    border-top: 1px solid color-mix(in srgb, var(--m3-outline-variant) 40%, transparent);
+    transition: background-color 0.2s ease;
+  }
+
+  .log-step.highlighted {
+    background-color: color-mix(in srgb, var(--m3-primary) 14%, transparent);
+    outline: 1px solid var(--m3-primary);
+  }
+
+  .log-step.step-failed > .log-step-head {
+    border-left: 3px solid var(--m3-error);
+    background: color-mix(in srgb, var(--m3-error-container) 15%, transparent);
+  }
+
+  .log-step.step-running > .log-step-head {
+    border-left: 3px solid var(--m3-primary);
+  }
+
+  .step-status-icon {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1rem;
+    font-size: 0.72rem;
+    line-height: 1;
+    font-weight: 700;
+  }
+
+  .step-status-icon.run-success {
+    color: var(--m3-primary);
+  }
+
+  .step-status-icon.run-failure {
+    color: var(--m3-error);
+  }
+
+  .step-status-icon.run-running {
+    color: var(--m3-tertiary);
+  }
+
+  .step-status-icon.run-skipped {
+    color: var(--m3-on-surface-variant);
+    opacity: 0.6;
+  }
+
+  .step-lines,
+  .step-state-badge,
+  .job-duration {
+    margin-right: 0.35rem;
+  }
+
+  .empty-step-notice {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.45rem 1rem 0.45rem 2.6rem;
+    font-size: 0.68rem;
+    font-style: italic;
+    color: var(--m3-on-surface-variant);
+    opacity: 0.8;
+  }
+
   .log-step-head {
-    padding: 0.22rem 0.6rem 0.22rem 1.35rem;
+    padding: 0.24rem 0.6rem 0.24rem 1.1rem;
     background: var(--m3-surface-container-low, var(--m3-surface));
-    border-top: 1px solid color-mix(in srgb, var(--m3-outline-variant) 55%, transparent);
     font-size: 0.72rem;
   }
 

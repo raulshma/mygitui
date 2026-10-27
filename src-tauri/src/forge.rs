@@ -1432,8 +1432,58 @@ pub(crate) fn cap_log(mut text: String) -> String {
     text
 }
 
+/// `gh api …/jobs/<id>/logs` starts with a UTF-8 BOM; drop every BOM so the
+/// parser sees the first timestamp.
+pub(crate) fn strip_log_bom(text: &str) -> String {
+    text.replace('\u{feff}', "")
+}
+
+/// The REST job-log payload is plain text. Prefix each line with the job name
+/// in `gh run view --log`'s tab-separated shape so step correlation works.
+pub(crate) fn prefix_job_log(job_name: &str, text: &str) -> String {
+    let mut combined = String::new();
+    for line in text.lines() {
+        combined.push_str(job_name);
+        combined.push('\t');
+        combined.push('\t');
+        combined.push_str(line);
+        combined.push('\n');
+    }
+    combined
+}
+
+/// Fetch one completed job's log archive. `None` while GitHub has not
+/// published it yet (in-progress jobs return `404 BlobNotFound`).
+fn fetch_job_log(root: &Path, job_id: u64) -> Option<String> {
+    let api_args = vec![
+        "api".to_string(),
+        format!("repos/:owner/:repo/actions/jobs/{job_id}/logs"),
+    ];
+    let outcome = run_program(GH, Some(root), &api_args, Duration::from_secs(30));
+    if outcome.code == Some(0) && !outcome.stdout.trim().is_empty() {
+        Some(strip_log_bom(&outcome.stdout))
+    } else {
+        None
+    }
+}
+
+/// Conclusion values that count as a failed job for the failed-only filter.
+fn workflow_job_failed(job: &WorkflowJob) -> bool {
+    matches!(
+        job.conclusion.as_str(),
+        "failure" | "timed_out" | "cancelled" | "action_required" | "startup_failure"
+    )
+}
+
 /// Body of `workflow_run_logs`: full run log, one job's log, and/or only
 /// failed steps (`gh run view <id> [--job <id>] --log[-failed]`).
+///
+/// `gh run view --log` only serves the completed archive. While a run is in
+/// progress (or the archive is still being built), fall back to the per-job
+/// REST logs GitHub publishes as each job finishes. In-progress jobs have no
+/// log text through the API; the caller polls again and the UI links to the
+/// live console on GitHub. Empty output while the run is active is a normal
+/// state, not an error.
 pub fn workflow_run_logs_sync(
     root: &Path,
     run_id: u64,
@@ -1446,8 +1496,56 @@ pub fn workflow_run_logs_sync(
         args.push(job_id.to_string());
     }
     args.push(if failed_only { "--log-failed" } else { "--log" }.to_string());
-    let output = read_gh(root, &args, LOGS_TIMEOUT)?;
-    Ok(cap_log(output))
+    let output = read_gh(root, &args, LOGS_TIMEOUT);
+    if let Ok(out) = &output {
+        if !out.trim().is_empty() {
+            return Ok(cap_log(strip_log_bom(out)));
+        }
+    }
+
+    // Live logs fallback for in-progress runs / pending archives. The detail
+    // lookup also tells us whether an empty result is expected.
+    let detail = workflow_run_detail_sync(root, run_id).ok();
+    let run_active = detail
+        .as_ref()
+        .map(|detail| detail.run.status != "completed")
+        .unwrap_or(false);
+
+    if let Some(job_id) = job_id {
+        let job = detail
+            .as_ref()
+            .and_then(|detail| detail.jobs.iter().find(|job| job.database_id == job_id));
+        if let Some(log) = fetch_job_log(root, job_id) {
+            let name = job.map(|job| job.name.as_str()).unwrap_or("Logs");
+            return Ok(cap_log(prefix_job_log(name, &log)));
+        }
+        if run_active || job.map(|job| job.status != "completed").unwrap_or(false) {
+            return Ok(String::new());
+        }
+    } else if let Some(detail) = detail.as_ref() {
+        let mut combined = String::new();
+        for job in &detail.jobs {
+            // Only completed jobs have a log archive; the next poll picks up
+            // the jobs that finish in the meantime.
+            if job.status != "completed" {
+                continue;
+            }
+            if failed_only && !workflow_job_failed(job) {
+                continue;
+            }
+            if let Some(log) = fetch_job_log(root, job.database_id) {
+                combined.push_str(&prefix_job_log(&job.name, &log));
+            }
+        }
+        if !combined.is_empty() {
+            return Ok(cap_log(combined));
+        }
+        if run_active {
+            return Ok(String::new());
+        }
+    }
+
+    output.map(cap_log)
 }
 
 /// Body of `workflow_run_cancel`: cancel a queued or running run.

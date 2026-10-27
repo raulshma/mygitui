@@ -365,3 +365,348 @@ describe("firstErrorLine", () => {
     expect(firstErrorLine(parseWorkflowLog(""))).toBeNull();
   });
 });
+
+describe("step correlation with knownJobs", () => {
+  it("correlates UNKNOWN STEP lines into individual known steps by group and timestamp", () => {
+    const knownJobs = [
+      {
+        name: "test-job",
+        database_id: 101,
+        steps: [
+          {
+            name: "Set up job",
+            number: 1,
+            status: "completed",
+            conclusion: "success",
+            started_at: "2026-10-25T17:47:56Z",
+            completed_at: "2026-10-25T17:47:57Z",
+          },
+          {
+            name: "Checkout Repository",
+            number: 2,
+            status: "completed",
+            conclusion: "success",
+            started_at: "2026-10-25T17:47:57Z",
+            completed_at: "2026-10-25T17:47:58Z",
+          },
+          {
+            name: "Set up JDK 17",
+            number: 3,
+            status: "completed",
+            conclusion: "success",
+            started_at: "2026-10-25T17:47:58Z",
+            completed_at: "2026-10-25T17:48:00Z",
+          },
+          {
+            name: "Run tests",
+            number: 4,
+            status: "completed",
+            conclusion: "failure",
+            started_at: "2026-10-25T17:48:00Z",
+            completed_at: "2026-10-25T17:48:10Z",
+          },
+          {
+            name: "Post Cleanup",
+            number: 5,
+            status: "completed",
+            conclusion: "skipped",
+            started_at: null,
+            completed_at: null,
+          },
+        ],
+      },
+    ];
+
+    const rawLog = [
+      "test-job\tUNKNOWN STEP\t2026-10-25T17:47:56.100Z Setting up runner environment",
+      "test-job\tUNKNOWN STEP\t2026-10-25T17:47:56.500Z Complete job name: test-job",
+      "test-job\tUNKNOWN STEP\t2026-10-25T17:47:57.100Z ##[group]Run actions/checkout@v4",
+      "test-job\tUNKNOWN STEP\t2026-10-25T17:47:57.500Z Checking out commit abcdef",
+      "test-job\tUNKNOWN STEP\t2026-10-25T17:47:57.900Z ##[endgroup]",
+      "test-job\tUNKNOWN STEP\t2026-10-25T17:47:58.200Z ##[group]Run actions/setup-java@v4",
+      "test-job\tUNKNOWN STEP\t2026-10-25T17:47:59.000Z Installed JDK 17.0.2",
+      "test-job\tUNKNOWN STEP\t2026-10-25T17:47:59.500Z ##[endgroup]",
+      "test-job\tUNKNOWN STEP\t2026-10-25T17:48:00.100Z ##[group]Run ./gradlew test",
+      "test-job\tUNKNOWN STEP\t2026-10-25T17:48:05.000Z ##[error]Tests failed!",
+      "test-job\tUNKNOWN STEP\t2026-10-25T17:48:09.000Z ##[endgroup]",
+    ].join("\n");
+
+    const parsed = parseWorkflowLog(rawLog, knownJobs);
+    expect(parsed.jobs).toHaveLength(1);
+    const job = parsed.jobs[0]!;
+    expect(job.name).toBe("test-job");
+    expect(job.steps).toHaveLength(5);
+    expect(job.steps.map((s) => s.name)).toEqual([
+      "Set up job",
+      "Checkout Repository",
+      "Set up JDK 17",
+      "Run tests",
+      "Post Cleanup",
+    ]);
+
+    expect(job.steps[0]!.lineCount).toBe(2);
+    expect(job.steps[0]!.status).toBe("completed");
+    expect(job.steps[0]!.conclusion).toBe("success");
+
+    expect(job.steps[1]!.lineCount).toBe(1);
+    expect(job.steps[1]!.segments[0]?.kind).toBe("lines");
+
+    expect(job.steps[2]!.lineCount).toBe(1);
+
+    expect(job.steps[3]!.errorCount).toBe(1);
+    expect(job.steps[3]!.conclusion).toBe("failure");
+
+    expect(job.steps[4]!.lineCount).toBe(0);
+    expect(job.steps[4]!.conclusion).toBe("skipped");
+  });
+
+  it("strips a UTF-8 BOM before parsing the first record", () => {
+    const parsed = parseWorkflowLog(
+      `\uFEFFbuild\tBuild\t${TS} hello`,
+    );
+    expect(parsed.jobs).toHaveLength(1);
+    expect(parsed.jobs[0]!.name).toBe("build");
+    expect(parsed.jobs[0]!.steps[0]!.segments[0]!.lines[0]!.text).toBe("hello");
+  });
+
+  it("treats explicit log step names as authoritative and drops duplicate step headers", () => {
+    const knownJobs = [
+      {
+        name: "build",
+        steps: [
+          { name: "Checkout", number: 1, status: "completed", conclusion: "success" },
+          { name: "Build app", number: 2, status: "completed", conclusion: "success" },
+        ],
+      },
+    ];
+    const parsed = parseWorkflowLog(
+      [
+        line("build", "Checkout", TS, "##[group]Run actions/checkout@v4"),
+        line("build", "Checkout", TS, "fetching"),
+        line("build", "Checkout", TS, "##[endgroup]"),
+        line("build", "Build app", TS, "##[group]Run npm run build"),
+        line("build", "Build app", TS, "compiled"),
+        line("build", "Build app", TS, "##[endgroup]"),
+      ].join("\n"),
+      knownJobs,
+    );
+    const [checkout, build] = parsed.jobs[0]!.steps;
+    expect(checkout!.segments).toHaveLength(1);
+    expect(checkout!.segments[0]).toMatchObject({ kind: "lines" });
+    expect(checkout!.segments[0]!.lines.map((entry) => entry.text)).toEqual([
+      "fetching",
+    ]);
+    expect(build!.segments).toHaveLength(1);
+    expect(build!.segments[0]!.lines.map((entry) => entry.text)).toEqual([
+      "compiled",
+    ]);
+  });
+
+  it("ignores boundary-looking groups inside composite action blocks", () => {
+    const knownJobs = [
+      {
+        name: "build",
+        steps: [
+          {
+            name: "Set up job",
+            number: 1,
+            status: "completed",
+            conclusion: "success",
+            started_at: "2026-10-20T02:00:00Z",
+            completed_at: "2026-10-20T02:00:01Z",
+          },
+          {
+            name: "Run dtolnay/rust-toolchain@stable",
+            number: 2,
+            status: "completed",
+            conclusion: "success",
+            started_at: "2026-10-20T02:00:01Z",
+            completed_at: "2026-10-20T02:00:10Z",
+          },
+          {
+            name: "Run cargo build",
+            number: 3,
+            status: "completed",
+            conclusion: "success",
+            started_at: "2026-10-20T02:00:10Z",
+            completed_at: "2026-10-20T02:00:20Z",
+          },
+        ],
+      },
+    ];
+    const parsed = parseWorkflowLog(
+      [
+        line("build", "UNKNOWN STEP", "2026-10-20T02:00:01.100Z", "##[group]Run dtolnay/rust-toolchain@stable"),
+        line("build", "UNKNOWN STEP", "2026-10-20T02:00:01.200Z", "with:"),
+        line("build", "UNKNOWN STEP", "2026-10-20T02:00:01.300Z", "##[endgroup]"),
+        line("build", "UNKNOWN STEP", "2026-10-20T02:00:01.400Z", "##[start-action display=Parse;id=parse]"),
+        line("build", "UNKNOWN STEP", "2026-10-20T02:00:01.500Z", "##[group]Run if [[ -z $toolchain ]]; then"),
+        line("build", "UNKNOWN STEP", "2026-10-20T02:00:01.600Z", "echo hi"),
+        line("build", "UNKNOWN STEP", "2026-10-20T02:00:01.700Z", "##[endgroup]"),
+        line("build", "UNKNOWN STEP", "2026-10-20T02:00:01.800Z", "##[end-action id=parse]"),
+        line("build", "UNKNOWN STEP", "2026-10-20T02:00:10.100Z", "##[group]Run cargo build"),
+        line("build", "UNKNOWN STEP", "2026-10-20T02:00:11.000Z", "compiled"),
+        line("build", "UNKNOWN STEP", "2026-10-20T02:00:12.000Z", "##[endgroup]"),
+      ].join("\n"),
+      knownJobs,
+    );
+    const setup = parsed.jobs[0]!.steps[1]!;
+    expect(setup.name).toBe("Run dtolnay/rust-toolchain@stable");
+    expect(setup.lineCount).toBe(2);
+    expect(setup.segments.map((segment) => segment.kind)).toEqual([
+      "lines",
+      "group",
+    ]);
+    expect(setup.segments[1]).toMatchObject({
+      kind: "group",
+      title: "Run if [[ -z $toolchain ]]; then",
+      lines: [{ text: "echo hi" }],
+    });
+    const build = parsed.jobs[0]!.steps[2]!;
+    expect(build.lineCount).toBe(1);
+    expect(build.segments[0]!.lines[0]!.text).toBe("compiled");
+  });
+
+  it("advances through Post cleanup and Complete job sentinel lines", () => {
+    const knownJobs = [
+      {
+        name: "build",
+        steps: [
+          {
+            name: "Build",
+            number: 1,
+            status: "completed",
+            conclusion: "success",
+            started_at: "2026-10-20T02:00:00Z",
+            completed_at: "2026-10-20T02:00:09Z",
+          },
+          {
+            name: "Post Cache",
+            number: 2,
+            status: "completed",
+            conclusion: "success",
+            started_at: "2026-10-20T02:00:10Z",
+            completed_at: "2026-10-20T02:00:20Z",
+          },
+          {
+            name: "Post Checkout",
+            number: 3,
+            status: "completed",
+            conclusion: "success",
+            started_at: "2026-10-20T02:00:21Z",
+            completed_at: "2026-10-20T02:00:30Z",
+          },
+          {
+            name: "Complete job",
+            number: 4,
+            status: "completed",
+            conclusion: "success",
+            started_at: "2026-10-20T02:00:31Z",
+            completed_at: "2026-10-20T02:00:35Z",
+          },
+        ],
+      },
+    ];
+    const parsed = parseWorkflowLog(
+      [
+        line("build", "UNKNOWN STEP", "2026-10-20T02:00:00.100Z", "##[group]Run npm run build"),
+        line("build", "UNKNOWN STEP", "2026-10-20T02:00:01.000Z", "built"),
+        line("build", "UNKNOWN STEP", "2026-10-20T02:00:02.000Z", "##[endgroup]"),
+        line("build", "UNKNOWN STEP", "2026-10-20T02:00:10.100Z", "Post job cleanup."),
+        line("build", "UNKNOWN STEP", "2026-10-20T02:00:10.200Z", "##[group]Post Cache node_modules"),
+        line("build", "UNKNOWN STEP", "2026-10-20T02:00:11.000Z", "cache saved"),
+        line("build", "UNKNOWN STEP", "2026-10-20T02:00:12.000Z", "##[endgroup]"),
+        line("build", "UNKNOWN STEP", "2026-10-20T02:00:21.100Z", "##[group]Post Run actions/checkout@v4"),
+        line("build", "UNKNOWN STEP", "2026-10-20T02:00:22.000Z", "cleaned up"),
+        line("build", "UNKNOWN STEP", "2026-10-20T02:00:23.000Z", "##[endgroup]"),
+        line("build", "UNKNOWN STEP", "2026-10-20T02:00:31.100Z", "Cleaning up orphan processes"),
+        line("build", "UNKNOWN STEP", "2026-10-20T02:00:32.000Z", "done"),
+      ].join("\n"),
+      knownJobs,
+    );
+    const steps = parsed.jobs[0]!.steps;
+    expect(steps.map((step) => step.name)).toEqual([
+      "Build",
+      "Post Cache",
+      "Post Checkout",
+      "Complete job",
+    ]);
+    expect(steps[0]!.segments[0]!.lines.map((entry) => entry.text)).toEqual([
+      "built",
+    ]);
+    expect(steps[1]!.segments[0]!.lines.map((entry) => entry.text)).toEqual([
+      "Post job cleanup.",
+      "cache saved",
+    ]);
+    expect(steps[2]!.segments[0]!.lines.map((entry) => entry.text)).toEqual([
+      "cleaned up",
+    ]);
+    expect(steps[3]!.segments[0]!.lines.map((entry) => entry.text)).toEqual([
+      "Cleaning up orphan processes",
+      "done",
+    ]);
+  });
+});
+
+describe("dynamic step detection", () => {
+  it("creates steps from Run/Post/Complete job boundary groups", () => {
+    const parsed = parseWorkflowLog(
+      [
+        line("build", "UNKNOWN STEP", TS, "runner ready"),
+        line("build", "UNKNOWN STEP", TS, "##[group]Run actions/checkout@v4"),
+        line("build", "UNKNOWN STEP", TS, "fetching"),
+        line("build", "UNKNOWN STEP", TS, "##[endgroup]"),
+        line("build", "UNKNOWN STEP", TS, "##[group]Run npm test"),
+        line("build", "UNKNOWN STEP", TS, "ok"),
+        line("build", "UNKNOWN STEP", TS, "##[endgroup]"),
+        line("build", "UNKNOWN STEP", TS, "Post job cleanup."),
+        line("build", "UNKNOWN STEP", TS, "##[group]Post Cache node_modules"),
+        line("build", "UNKNOWN STEP", TS, "cache"),
+        line("build", "UNKNOWN STEP", TS, "##[endgroup]"),
+        line("build", "UNKNOWN STEP", TS, "Cleaning up orphan processes"),
+      ].join("\n"),
+    );
+    const steps = parsed.jobs[0]!.steps;
+    expect(steps.map((step) => step.name)).toEqual([
+      "Set up job",
+      "Run actions/checkout@v4",
+      "Run npm test",
+      "Post Cache node_modules",
+      "Complete job",
+    ]);
+    expect(steps.map((step) => step.lineCount)).toEqual([1, 1, 1, 2, 1]);
+    expect(steps[1]!.segments.map((segment) => segment.kind)).toEqual(["lines"]);
+    expect(steps[3]!.segments[0]!.lines.map((entry) => entry.text)).toEqual([
+      "Post job cleanup.",
+      "cache",
+    ]);
+  });
+
+  it("uses explicit log step names and does not duplicate their boundary headers", () => {
+    const parsed = parseWorkflowLog(
+      [
+        line("build", "Checkout", TS, "##[group]Run actions/checkout@v4"),
+        line("build", "Checkout", TS, "fetching"),
+        line("build", "Checkout", TS, "##[endgroup]"),
+        line("build", "Build app", TS, "##[group]Run npm run build"),
+        line("build", "Build app", TS, "compiled"),
+        line("build", "Build app", TS, "##[endgroup]"),
+      ].join("\n"),
+    );
+    const steps = parsed.jobs[0]!.steps;
+    expect(steps.map((step) => step.name)).toEqual(["Checkout", "Build app"]);
+    expect(steps[0]!.segments[0]).toMatchObject({
+      kind: "lines",
+      lines: [{ text: "fetching" }],
+    });
+    expect(steps[1]!.segments[0]).toMatchObject({
+      kind: "lines",
+      lines: [{ text: "compiled" }],
+    });
+  });
+
+  it("falls back to an Output step for unstructured input", () => {
+    const parsed = parseWorkflowLog("plain text");
+    expect(parsed.jobs[0]!.steps[0]!.name).toBe("Output");
+  });
+});

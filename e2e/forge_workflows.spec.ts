@@ -95,6 +95,49 @@ const FAILED_DETAIL = {
   ],
 };
 
+const RUNNING_DETAIL = {
+  run: RUNNING_RUN,
+  jobs: [
+    {
+      database_id: 556,
+      name: "build",
+      status: "in_progress",
+      conclusion: "",
+      started_at: "2026-10-20T09:00:30Z",
+      completed_at: null,
+      url: "https://github.com/acme/repo/actions/runs/102/job/556",
+      steps: [
+        {
+          number: 1,
+          name: "Checkout",
+          status: "completed",
+          conclusion: "success",
+          started_at: "2026-10-20T09:00:30Z",
+          completed_at: "2026-10-20T09:00:35Z",
+        },
+        {
+          number: 2,
+          name: "npm test",
+          status: "in_progress",
+          conclusion: "",
+          started_at: "2026-10-20T09:00:35Z",
+          completed_at: null,
+        },
+      ],
+    },
+    {
+      database_id: 557,
+      name: "deploy",
+      status: "queued",
+      conclusion: "",
+      started_at: null,
+      completed_at: null,
+      url: "https://github.com/acme/repo/actions/runs/102/job/557",
+      steps: [],
+    },
+  ],
+};
+
 const WORKFLOWS = [
   {
     id: 9001,
@@ -210,7 +253,7 @@ test("Actions tab lists runs, expands jobs/steps and opens logs", async ({ page 
 
   // Selecting the job reveals its steps and fetches that job's log.
   await job.click();
-  await expect(view.locator(".step-row")).toHaveCount(2);
+  await expect(view.locator(".step-row-btn")).toHaveCount(2);
   await expect(view.locator(".steps")).toContainText("Checkout");
   await expect(view.locator(".steps")).toContainText("npm test");
   await expect
@@ -222,6 +265,22 @@ test("Actions tab lists runs, expands jobs/steps and opens logs", async ({ page 
     job_id: 555,
     failed_only: false,
   });
+
+  // Every action step is its own collapsible log section.
+  const checkoutStep = log.locator(".log-step").filter({ hasText: "Checkout" });
+  const testStep = log.locator(".log-step").filter({ hasText: "npm test" });
+  await expect(checkoutStep).toHaveCount(1);
+  await expect(testStep).toHaveCount(1);
+  const checkoutLine = checkoutStep.locator(".log-line").filter({ hasText: "ok" });
+  await expect(checkoutLine).toBeVisible();
+  await expect(testStep).toContainText("FAILED");
+  await checkoutStep.locator(".log-step-head").click();
+  await expect(checkoutLine).toHaveCount(0);
+  await checkoutStep.locator(".log-step-head").click();
+  await expect(checkoutLine).toBeVisible();
+
+  // A completed run has no live console affordance.
+  await expect(log.getByRole("button", { name: "Live console" })).toHaveCount(0);
 
   // "Failed only" re-queries the log with the flag and scopes the pane.
   await view.getByRole("button", { name: /Failed only/ }).click();
@@ -245,6 +304,69 @@ test("Actions tab lists runs, expands jobs/steps and opens logs", async ({ page 
   await expect
     .poll(async () => (await mock.callsOf("workflow_runs")).at(-1)?.status_filter)
     .toBe("failure");
+
+  expect(tracked.errors).toEqual([]);
+  await tracked.attach(test.info());
+});
+
+test("an active run shows live status, job progress and the GitHub console link", async ({
+  page,
+}) => {
+  const tracked = trackErrors(page);
+  await seedStorage(page, recentRepos(["/tmp/repo"]));
+  await installTauriMock(page, {
+    commands: {
+      forge_status: { available: true, version: "2.95.0", authed: true },
+      forge_context: {
+        owner: "acme",
+        repo: "repo",
+        branch: "main",
+        remote_url: "git@github.com:acme/repo.git",
+      },
+      pr_list: [],
+      pr_checks: [],
+      workflow_runs: [RUNNING_RUN],
+      workflow_list: WORKFLOWS,
+      workflow_run_detail: RUNNING_DETAIL,
+      // GitHub publishes a job's log when it finishes; in-progress jobs have
+      // no text yet.
+      workflow_run_logs: "",
+      workflow_run_cancel: "cancelled run 102",
+    },
+  });
+  await openActionsTab(page);
+  await page.locator(".wf-run-main").click();
+
+  const view = page.locator(".run-view");
+  await expect(view).toBeVisible();
+  await expect(view.locator(".live-badge").first()).toContainText("Live");
+  await expect(view.locator(".job-progress-label")).toHaveText("0/2");
+  await expect(view.locator(".log-viewer .live-note")).toContainText(
+    "GitHub publishes each job's log when it finishes",
+  );
+
+  // The live console is the only place to watch output while jobs run.
+  const liveConsole = view.getByRole("button", {
+    name: "Live console",
+    exact: true,
+  });
+  await expect(liveConsole).toBeVisible();
+
+  // Selecting the running job targets its running step, which shows a
+  // spinner notice instead of pretending the empty log is complete.
+  const job = view.locator(".job-row").filter({ hasText: "build" });
+  await job.click();
+  const runningStep = view
+    .locator(".step-row-btn.active")
+    .filter({ hasText: "npm test" });
+  await expect(runningStep).toHaveCount(1);
+  const logStep = view
+    .locator(".log-step")
+    .filter({ hasText: "npm test" });
+  await expect(logStep).toContainText(
+    "Step is running — its log appears when the job finishes.",
+  );
+  await expect(logStep.locator(".state-spinner")).toBeVisible();
 
   expect(tracked.errors).toEqual([]);
   await tracked.attach(test.info());

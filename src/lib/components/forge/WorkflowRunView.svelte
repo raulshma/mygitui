@@ -14,7 +14,7 @@
    * list, so the Actions sidebar stays in sync.
    */
   import { untrack } from "svelte";
-  import type { WorkflowJob } from "$lib/ipc/types";
+  import type { WorkflowJob, WorkflowStep } from "$lib/ipc/types";
   import { forgeStore, openExternal } from "$lib/stores/forge.svelte";
   import { toast } from "$lib/toast";
   import WorkflowLogViewer from "./WorkflowLogViewer.svelte";
@@ -50,6 +50,8 @@
 
   /** `null` = combined log of every job. */
   let selectedJobId = $state<number | null>(null);
+  /** Selected or targeted step (`job\0step`) to highlight/scroll in the log viewer. */
+  let activeStepKey = $state<string | null>(null);
   /** Keep only failed jobs and failed steps in the log request. */
   let failedOnly = $state(false);
   /** Live polling (active runs only). */
@@ -58,6 +60,10 @@
   let now = $state(Date.now());
   /** Manual refresh only: background polling must not flicker the toolbar. */
   let manualRefresh = $state(false);
+
+  function jumpToStep(jobName: string, stepName: string): void {
+    activeStepKey = `${jobName}\u0000${stepName}`;
+  }
 
   const detail = $derived(forgeStore.detailFor(repoId, runId));
   const listRun = $derived(
@@ -101,9 +107,37 @@
     );
   }
 
+  function stepFailed(step: WorkflowStep): boolean {
+    return (
+      step.conclusion === "failure" ||
+      step.conclusion === "timed_out" ||
+      step.conclusion === "cancelled" ||
+      step.conclusion === "startup_failure"
+    );
+  }
+
+  /** Metadata handed to the log viewer must match the requested scope. */
+  function scopeJob(job: WorkflowJob): WorkflowJob {
+    return failedOnly ? { ...job, steps: job.steps.filter(stepFailed) } : job;
+  }
+
   const failedJobs = $derived(jobs.filter(jobFailed));
   const visibleJobs = $derived(
     failedOnly ? jobs.filter(jobFailed) : jobs,
+  );
+  /** The log viewer only receives metadata for the scope it is showing. */
+  const logJobs = $derived(
+    selectedJob
+      ? [scopeJob(selectedJob)]
+      : failedOnly
+        ? visibleJobs.map(scopeJob)
+        : jobs,
+  );
+  const jobsDone = $derived(
+    jobs.filter((job) => job.status === "completed").length,
+  );
+  const jobProgressPct = $derived(
+    jobs.length === 0 ? 0 : Math.round((jobsDone / jobs.length) * 100),
   );
   const emptyLogText = $derived(
     active
@@ -121,6 +155,7 @@
     if (key === viewKey) return;
     viewKey = key;
     selectedJobId = null;
+    activeStepKey = null;
     failedOnly = false;
     autoRefresh = true;
     manualRefresh = false;
@@ -161,7 +196,7 @@
       }
       void forgeStore.loadRunDetail(targetRepo, id);
       void forgeStore.loadRunLogs(targetRepo, id, jobId, onlyFailed);
-    }, 5_000);
+    }, 3_500);
     return () => clearInterval(timer);
   });
 
@@ -189,6 +224,7 @@
     const match = jobs.find((job) => job.database_id === selectedJobId);
     if (!match || (failedOnly && !jobFailed(match))) {
       selectedJobId = null;
+      activeStepKey = null;
     }
   });
 
@@ -207,10 +243,27 @@
 
   function selectJob(id: number | null): void {
     selectedJobId = id;
+    activeStepKey = null;
+    if (id === null) return;
+    const job = jobs.find((entry) => entry.database_id === id);
+    if (job) activeStepKey = stepToTarget(job);
+  }
+
+  /** The most useful step to reveal when a job is selected. */
+  function stepToTarget(job: WorkflowJob): string | null {
+    const steps = job.steps;
+    const running = steps.find((step) => step.status === "in_progress");
+    if (running) return `${job.name}\u0000${running.name}`;
+    const queued = steps.find((step) => step.status === "queued");
+    if (queued) return `${job.name}\u0000${queued.name}`;
+    const failed = steps.find(stepFailed);
+    if (failed) return `${job.name}\u0000${failed.name}`;
+    return null;
   }
 
   function toggleFailedOnly(): void {
     failedOnly = !failedOnly;
+    activeStepKey = null;
   }
 
   function toggleAutoRefresh(): void {
@@ -425,6 +478,17 @@
           Jobs
           {#if jobs.length > 0}<span class="pane-count">{jobs.length}</span>{/if}
         </h3>
+        {#if active && jobs.length > 0}
+          <span
+            class="job-progress"
+            title={`${jobsDone} of ${jobs.length} jobs finished`}
+          >
+            <span class="job-progress-track" aria-hidden="true">
+              <span class="job-progress-fill" style="width: {jobProgressPct}%"></span>
+            </span>
+            <span class="job-progress-label">{jobsDone}/{jobs.length}</span>
+          </span>
+        {/if}
         {#if failedJobs.length > 0 || failedOnly}
           <button
             class="tb"
@@ -537,18 +601,28 @@
                     step.status,
                     now,
                   )}
-                  <li class="step-row">
-                    <span
-                      class="step-icon {stepStateClass(step.conclusion, step.status)}"
-                      aria-hidden="true"
+                  {@const stepKeyStr = `${job.name}\u0000${step.name}`}
+                  <li class="step-item">
+                    <button
+                      class="step-row-btn"
+                      class:active={activeStepKey === stepKeyStr}
+                      type="button"
+                      title={`Jump to ${step.name} logs`}
+                      onclick={() => jumpToStep(job.name, step.name)}
                     >
-                      {runStateIcon(stepKind)}
-                    </span>
-                    <span class="step-name" title={step.name}>{step.name}</span>
-                    <span class="step-meta">
-                      {stepStateLabel(step.conclusion, step.status)}
-                      {#if stepDuration} · {stepDuration}{/if}
-                    </span>
+                      <span
+                        class="step-icon {stepStateClass(step.conclusion, step.status)}"
+                        aria-hidden="true"
+                      >
+                        {runStateIcon(stepKind)}
+                      </span>
+                      <span class="step-name" title={step.name}>{step.name}</span>
+                      <span class="step-meta">
+                        {stepStateLabel(step.conclusion, step.status)}
+                        {#if stepDuration} · {stepDuration}{/if}
+                      </span>
+                      <span class="step-jump-icon" aria-hidden="true">→</span>
+                    </button>
                   </li>
                 {/each}
               </ol>
@@ -591,10 +665,14 @@
         {#key `${repoId}:${runId}`}
           <WorkflowLogViewer
             text={logText}
+            jobs={logJobs}
             loading={logLoading}
             error={logError}
             live={live}
+            liveConsole={active}
+            onOpenLive={() => void openOnGitHub()}
             emptyText={emptyLogText}
+            targetStepKey={activeStepKey}
           />
         {/key}
       </div>
@@ -956,6 +1034,35 @@
     padding: 0 0.3rem;
   }
 
+  .job-progress {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    font-size: 0.62rem;
+    color: var(--m3-on-surface-variant);
+    white-space: nowrap;
+  }
+
+  .job-progress-track {
+    width: 3.2rem;
+    height: 0.3rem;
+    border-radius: var(--m3-shape-full, 9999px);
+    background: var(--m3-surface-container-highest, var(--m3-surface-container));
+    overflow: hidden;
+  }
+
+  .job-progress-fill {
+    display: block;
+    height: 100%;
+    border-radius: inherit;
+    background: var(--m3-primary);
+    transition: width 0.35s ease;
+  }
+
+  .job-progress-label {
+    font-variant-numeric: tabular-nums;
+  }
+
   .jobs-list {
     flex: 1;
     min-height: 0;
@@ -1071,24 +1178,70 @@
 
   .steps {
     list-style: none;
-    margin: 0 0 0.2rem;
-    padding: 0.1rem 0 0.1rem 1.9rem;
-    border-left: 1px solid var(--m3-outline-variant);
+    margin: 0.1rem 0 0.25rem 0.6rem;
+    padding: 0.1rem 0 0.1rem 0.5rem;
+    border-left: 2px solid var(--m3-outline-variant);
+    display: flex;
+    flex-direction: column;
+    gap: 0.1rem;
   }
 
-  .step-row {
+  .step-item {
+    margin: 0;
+    padding: 0;
+  }
+
+  .step-row-btn {
     display: flex;
-    align-items: baseline;
-    gap: 0.35rem;
-    min-width: 0;
-    padding: 0.12rem 0;
-    font-size: 0.66rem;
+    align-items: center;
+    gap: 0.4rem;
+    width: 100%;
+    border: 1px solid transparent;
+    border-radius: var(--m3-shape-extra-small, 4px);
+    background: none;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    padding: 0.2rem 0.45rem;
+    font-size: 0.68rem;
+    cursor: pointer;
+    transition: background 0.15s ease, border-color 0.15s ease;
+  }
+
+  .step-row-btn:hover {
+    background: var(--app-hover, var(--m3-surface-container-high));
+    border-color: var(--app-border, var(--m3-outline-variant));
+  }
+
+  .step-row-btn:focus-visible {
+    outline: 2px solid var(--m3-primary);
+    outline-offset: 1px;
+  }
+
+  .step-row-btn.active {
+    background: color-mix(in srgb, var(--m3-primary) 14%, transparent);
+    border-color: var(--m3-primary);
+    font-weight: 500;
+  }
+
+  .step-jump-icon {
+    flex: none;
+    font-size: 0.64rem;
+    color: var(--m3-on-surface-variant);
+    opacity: 0;
+    transition: opacity 0.15s ease, transform 0.15s ease;
+  }
+
+  .step-row-btn:hover .step-jump-icon,
+  .step-row-btn.active .step-jump-icon {
+    opacity: 0.8;
+    transform: translateX(2px);
   }
 
   .step-icon {
     flex: none;
-    font-size: 0.58rem;
-    width: 0.7rem;
+    font-size: 0.6rem;
+    width: 0.8rem;
     text-align: center;
   }
 
@@ -1098,7 +1251,7 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    color: var(--m3-on-surface-variant);
+    color: var(--m3-on-surface);
   }
 
   .step-meta {

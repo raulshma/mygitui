@@ -37,6 +37,12 @@ export interface LogStep {
   /** Stable id (`job\0step`) used for collapse state and scrolling. */
   key: string;
   name: string;
+  number?: number;
+  status?: string;
+  conclusion?: string;
+  started_at?: string | null;
+  completed_at?: string | null;
+  durationLabel?: string | null;
   segments: LogSegment[];
   lineCount: number;
   errorCount: number;
@@ -50,10 +56,37 @@ export interface LogStep {
 export interface LogJob {
   key: string;
   name: string;
+  databaseId?: number;
+  status?: string;
+  conclusion?: string;
+  started_at?: string | null;
+  completed_at?: string | null;
+  durationLabel?: string | null;
   steps: LogStep[];
   lineCount: number;
   errorCount: number;
   warningCount: number;
+}
+
+/** External metadata for a step used during parsing correlation. */
+export interface KnownStepMeta {
+  name: string;
+  number?: number;
+  status?: string;
+  conclusion?: string;
+  started_at?: string | null;
+  completed_at?: string | null;
+}
+
+/** External metadata for a job used during parsing correlation. */
+export interface KnownJobMeta {
+  name: string;
+  database_id?: number;
+  status?: string;
+  conclusion?: string;
+  started_at?: string | null;
+  completed_at?: string | null;
+  steps?: KnownStepMeta[];
 }
 
 /** A parsed run/job log with rolled-up counters. */
@@ -92,6 +125,8 @@ interface ParsedMessage {
   text: string;
   level: LogLineLevel;
   group: "start" | "end" | null;
+  /** Composite-action boundary markers (`##[start-action]` / `##[end-action]`). */
+  action: "start" | "end" | null;
 }
 
 function cleanMessage(raw: string): string {
@@ -108,9 +143,11 @@ function parseMessage(raw: string): ParsedMessage {
   let text = cleanMessage(withTime ? raw.slice(withTime[0].length) : raw);
   let level: LogLineLevel = "normal";
   let group: "start" | "end" | null = null;
+  let action: "start" | "end" | null = null;
 
-  // Classic workflow commands: `##[group]Title`, `##[error]Message`, …
-  const classic = /^##\[([a-zA-Z]+)\](.*)$/.exec(text);
+  // Classic workflow commands: `##[group]Title`, `##[error]Message`,
+  // `##[start-action display=…;id=…]`, …
+  const classic = /^##\[([a-zA-Z][a-zA-Z-]*)(?:\s+[^\]]*)?\](.*)$/.exec(text);
   if (classic) {
     const command = classic[1]!.toLowerCase();
     const rest = cleanMessage(classic[2] ?? "");
@@ -122,6 +159,14 @@ function parseMessage(raw: string): ParsedMessage {
       case "endgroup":
         text = "";
         group = "end";
+        break;
+      case "start-action":
+        text = "";
+        action = "start";
+        break;
+      case "end-action":
+        text = "";
+        action = "end";
         break;
       case "error":
         level = "error";
@@ -189,12 +234,17 @@ function parseMessage(raw: string): ParsedMessage {
     else if (/^warning\b/i.test(text)) level = "warning";
   }
 
-  return { time, text, level, group };
+  return { time, text, level, group, action };
 }
 
 interface MutableStep {
   key: string;
   name: string;
+  number?: number;
+  status?: string;
+  conclusion?: string;
+  started_at?: string | null;
+  completed_at?: string | null;
   segments: LogSegment[];
   activeGroup: Extract<LogSegment, { kind: "group" }> | null;
 }
@@ -202,6 +252,11 @@ interface MutableStep {
 interface MutableJob {
   key: string;
   name: string;
+  databaseId?: number;
+  status?: string;
+  conclusion?: string;
+  started_at?: string | null;
+  completed_at?: string | null;
   steps: Map<string, MutableStep>;
 }
 
@@ -256,7 +311,7 @@ function finalizeStep(step: MutableStep): LogStep {
   let lastTime: string | null = null;
   for (const segment of segments) {
     for (const line of segment.lines) {
-      if (line.text !== "" || line.time !== "") lineCount += 1;
+      lineCount += 1;
       if (line.level === "error") errorCount += 1;
       if (line.level === "warning") warningCount += 1;
       if (line.time !== "") {
@@ -268,6 +323,11 @@ function finalizeStep(step: MutableStep): LogStep {
   return {
     key: step.key,
     name: step.name,
+    number: step.number,
+    status: step.status,
+    conclusion: step.conclusion,
+    started_at: step.started_at,
+    completed_at: step.completed_at,
     segments,
     lineCount,
     errorCount,
@@ -287,22 +347,203 @@ function finalizeJob(job: MutableJob): LogJob {
     errorCount += step.errorCount;
     warningCount += step.warningCount;
   }
-  return { key: job.key, name: job.name, steps, lineCount, errorCount, warningCount };
+  return {
+    key: job.key,
+    name: job.name,
+    databaseId: job.databaseId,
+    status: job.status,
+    conclusion: job.conclusion,
+    started_at: job.started_at,
+    completed_at: job.completed_at,
+    steps,
+    lineCount,
+    errorCount,
+    warningCount,
+  };
+}
+
+/**
+ * GitHub prints each step as a `##[group]Run …` / `##[group]Post …` block.
+ * Those groups are step headers, not nested log groups.
+ */
+function isStepBoundaryTitle(title: string): boolean {
+  return (
+    /^run\s/i.test(title) ||
+    /^post\s/i.test(title) ||
+    /^complete job$/i.test(title)
+  );
+}
+
+/** Drops the `Run `/`Post ` prefix GitHub adds to step group titles. */
+function stripStepPrefix(name: string): string {
+  return name.replace(/^run\s+/i, "").replace(/^post\s+/i, "");
+}
+
+/**
+ * Similarity of a boundary group title to a known step name: 3 = same,
+ * 2 = prefix, 1.x = shared significant words, 0 = unrelated.
+ */
+function stepMatchScore(title: string, stepName: string): number {
+  const a = normalizeStepName(stripStepPrefix(title))
+    .replace(/^actions\//, "")
+    .replace(/@v?[\d.]+$/, "");
+  const b = normalizeStepName(stepName);
+  if (!a || !b) return 0;
+  if (a === b) return 3;
+  if (b.startsWith(a) || a.startsWith(b)) return 2;
+  const aWords = a.split(/[^a-z0-9]+/).filter((word) => word.length > 2);
+  const bWords = b.split(/[^a-z0-9]+/).filter((word) => word.length > 2);
+  let hits = 0;
+  for (const word of aWords) if (bWords.includes(word)) hits += 1;
+  return hits > 0 ? 1 + hits * 0.1 : 0;
+}
+
+/**
+ * Metadata timestamps are second-precision while group headers carry
+ * sub-second times; allow this much slack in either direction.
+ */
+const STEP_TIME_TOLERANCE_MS = 1_500;
+
+/**
+ * Picks the step a boundary group belongs to: best name match within the next
+ * few steps (time-gated), else the next non-skipped step that had already
+ * started when the group was emitted.
+ */
+function correlateBoundaryStep(
+  title: string,
+  timeMs: number | null,
+  steps: KnownStepMeta[],
+  current: number,
+): number {
+  let best = -1;
+  let bestScore = 0;
+  const end = Math.min(steps.length, current + 5);
+  for (let i = current; i < end; i += 1) {
+    const step = steps[i]!;
+    if (step.conclusion === "skipped") continue;
+    const startMs = step.started_at ? Date.parse(step.started_at) : NaN;
+    const endMs = step.completed_at ? Date.parse(step.completed_at) : NaN;
+    if (
+      timeMs !== null &&
+      !Number.isNaN(startMs) &&
+      timeMs < startMs - STEP_TIME_TOLERANCE_MS
+    ) {
+      continue;
+    }
+    if (
+      timeMs !== null &&
+      !Number.isNaN(endMs) &&
+      timeMs > endMs + STEP_TIME_TOLERANCE_MS
+    ) {
+      continue;
+    }
+    const score = stepMatchScore(title, step.name);
+    if (score > bestScore) {
+      bestScore = score;
+      best = i;
+    }
+  }
+  if (bestScore >= 1 && best > current) return best;
+
+  // No name match: advance only when the next step had started by the time
+  // the group header was printed. Buffered output can be timestamped late,
+  // so this stays conservative.
+  for (let i = current + 1; i < steps.length; i += 1) {
+    const step = steps[i]!;
+    if (step.conclusion === "skipped") continue;
+    const startMs = step.started_at ? Date.parse(step.started_at) : NaN;
+    if (Number.isNaN(startMs)) break;
+    if (timeMs !== null && startMs <= timeMs + STEP_TIME_TOLERANCE_MS) return i;
+    break;
+  }
+  return current;
+}
+
+/** Index of the next `Post …` step after `current` (or `current`). */
+function nextPostStep(steps: KnownStepMeta[], current: number): number {
+  for (let i = current + 1; i < steps.length; i += 1) {
+    const step = steps[i]!;
+    if (step.conclusion === "skipped") continue;
+    if (/^post\s/i.test(step.name)) return i;
+  }
+  return current;
+}
+
+/** Index of the next `Complete job` step after `current` (or `current`). */
+function nextCompleteJobStep(steps: KnownStepMeta[], current: number): number {
+  for (let i = current + 1; i < steps.length; i += 1) {
+    if (/^complete job$/i.test(steps[i]!.name)) return i;
+  }
+  return current;
 }
 
 /**
  * Parses one `gh run view --log` payload into jobs → steps → segments.
+ * When `knownJobs` is provided (from workflow run details), correlates logs
+ * with individual steps so each step's logs are separately collapsible.
  * Never throws: malformed lines become plain log lines. Empty input yields
  * an empty result.
  */
-export function parseWorkflowLog(text: string): ParsedRunLog {
-  const normalized = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+export function parseWorkflowLog(
+  text: string,
+  knownJobs?: KnownJobMeta[] | Record<string, KnownStepMeta[]> | KnownStepMeta[],
+): ParsedRunLog {
+  // `gh api …/jobs/<id>/logs` starts with a UTF-8 BOM; strip it wherever it
+  // appears so the first record is not mistaken for an unstructured line.
+  const normalized = text
+    .replace(/\uFEFF/g, "")
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n");
   const rawLines = normalized.split("\n");
   if (rawLines.length > 0 && rawLines[rawLines.length - 1] === "") rawLines.pop();
 
-  const jobs = new Map<string, MutableJob>();
+  // Normalize knownJobs input into Map<string, KnownJobMeta>
+  const jobMetaMap = new Map<string, KnownJobMeta>();
+  let singleKnownJob: KnownJobMeta | null = null;
+  if (Array.isArray(knownJobs)) {
+    if (knownJobs.length > 0) {
+      const first = knownJobs[0] as unknown as Record<string, unknown>;
+      if (
+        first &&
+        (Array.isArray(first["steps"]) ||
+          typeof first["database_id"] === "number" ||
+          typeof first["databaseId"] === "number")
+      ) {
+        for (const job of knownJobs as KnownJobMeta[]) {
+          jobMetaMap.set(job.name.toLowerCase().trim(), job);
+        }
+        if (knownJobs.length === 1) singleKnownJob = (knownJobs as KnownJobMeta[])[0] ?? null;
+      } else if (first && typeof first["name"] === "string") {
+        const synth: KnownJobMeta = {
+          name: "Logs",
+          steps: knownJobs as KnownStepMeta[],
+        };
+        jobMetaMap.set("logs", synth);
+        singleKnownJob = synth;
+      }
+    }
+  } else if (knownJobs && typeof knownJobs === "object") {
+    for (const [name, steps] of Object.entries(knownJobs)) {
+      const entry: KnownJobMeta = { name, steps: steps as KnownStepMeta[] };
+      jobMetaMap.set(name.toLowerCase().trim(), entry);
+    }
+    if (Object.keys(knownJobs).length === 1) {
+      singleKnownJob = [...jobMetaMap.values()][0] ?? null;
+    }
+  }
+
+  interface LineItem {
+    rawStepName: string;
+    parsed: ParsedMessage;
+  }
+  const jobLines = new Map<string, LineItem[]>();
+  const defaultJobName = singleKnownJob ? singleKnownJob.name : "Logs";
+
   for (const raw of rawLines) {
     const plain = stripAnsi(raw);
+    // A completely empty line carries no record; tab-separated records with
+    // an empty message are real output (multi-line command continuations).
+    if (plain === "") continue;
     const parts = plain.split("\t");
     let jobName: string;
     let stepName: string;
@@ -320,47 +561,267 @@ export function parseWorkflowLog(text: string): ParsedRunLog {
       stepName = "";
       message = plain;
     }
-    if (jobName === "") jobName = "Logs";
-    if (stepName === "" || /^unknown step$/i.test(stepName)) stepName = "Output";
+    if (jobName === "") jobName = defaultJobName;
 
     const parsed = parseMessage(message);
-    const jobKey = jobName;
-    let job = jobs.get(jobKey);
-    if (!job) {
-      job = { key: jobKey, name: jobName, steps: new Map() };
-      jobs.set(jobKey, job);
-    }
-    const key = stepKey(jobName, stepName);
-    let step = job.steps.get(key);
-    if (!step) {
-      step = { key, name: stepName, segments: [], activeGroup: null };
-      job.steps.set(key, step);
-    }
 
-    if (parsed.group === "start") {
-      startGroup(step, parsed.text);
-      continue;
+    let list = jobLines.get(jobName);
+    if (!list) {
+      list = [];
+      jobLines.set(jobName, list);
     }
-    if (parsed.group === "end") {
-      endGroup(step);
-      continue;
-    }
-    // Keep blank lines only when they carry a timestamp (real separators) so
-    // a trailing newline does not become an empty row.
-    if (parsed.text === "" && parsed.time === "") continue;
-    appendLine(step, { time: parsed.time, text: parsed.text, level: parsed.level });
+    list.push({ rawStepName: stepName, parsed });
   }
 
-  const finalized = [...jobs.values()].map(finalizeJob);
+  // Include known jobs with 0 log lines so they are not missing from the
+  // view, and keep metadata order first (the log archive is usually in the
+  // same order, but selected-job fallbacks are not).
+  const findJobName = (name: string): string | undefined =>
+    [...jobLines.keys()].find(
+      (candidate) => candidate.toLowerCase().trim() === name.toLowerCase().trim(),
+    );
+  for (const known of jobMetaMap.values()) {
+    if (findJobName(known.name) === undefined) jobLines.set(known.name, []);
+  }
+  const orderedJobNames: string[] = [];
+  for (const known of jobMetaMap.values()) {
+    const name = findJobName(known.name);
+    if (name !== undefined && !orderedJobNames.includes(name)) orderedJobNames.push(name);
+  }
+  for (const name of jobLines.keys()) {
+    if (!orderedJobNames.includes(name)) orderedJobNames.push(name);
+  }
+
+  const jobs: LogJob[] = [];
+  for (const jobName of orderedJobNames) {
+    const lines = jobLines.get(jobName) ?? [];
+    const knownJob =
+      jobMetaMap.get(jobName.toLowerCase().trim()) ??
+      (singleKnownJob?.name.toLowerCase().trim() === jobName.toLowerCase().trim()
+        ? singleKnownJob
+        : null);
+
+    const mutableJob: MutableJob = {
+      key: jobName,
+      name: jobName,
+      databaseId: knownJob?.database_id,
+      status: knownJob?.status,
+      conclusion: knownJob?.conclusion,
+      started_at: knownJob?.started_at,
+      completed_at: knownJob?.completed_at,
+      steps: new Map(),
+    };
+
+    if (knownJob?.steps && knownJob.steps.length > 0) {
+      const knownStepsList = knownJob.steps;
+      const knownStates = knownStepsList.map((ks, idx) => {
+        const key = stepKey(jobName, ks.name);
+        const step: MutableStep = {
+          key,
+          name: ks.name,
+          number: ks.number ?? (idx + 1),
+          status: ks.status,
+          conclusion: ks.conclusion,
+          started_at: ks.started_at,
+          completed_at: ks.completed_at,
+          segments: [],
+          activeGroup: null,
+        };
+        mutableJob.steps.set(key, step);
+        return step;
+      });
+
+      let currentStepIdx = 0;
+      let actionDepth = 0;
+      for (const { rawStepName, parsed } of lines) {
+        // Composite-action markers only delimit nested groups inside a step;
+        // they are not visible output.
+        if (parsed.action === "start") {
+          actionDepth += 1;
+          continue;
+        }
+        if (parsed.action === "end") {
+          actionDepth = Math.max(0, actionDepth - 1);
+          continue;
+        }
+
+        const explicit =
+          rawStepName !== "" && !/^unknown step$/i.test(rawStepName);
+        if (explicit) {
+          const matchIdx = knownStepsList.findIndex(
+            (step) => normalizeStepName(step.name) === normalizeStepName(rawStepName),
+          );
+          if (matchIdx !== -1) currentStepIdx = matchIdx;
+        }
+
+        if (parsed.group === "start") {
+          if (actionDepth === 0 && isStepBoundaryTitle(parsed.text)) {
+            // The group header *is* the step title; rendering it again would
+            // duplicate the step row. Explicit log step names win; otherwise
+            // correlate by title and time.
+            if (!explicit) {
+              const timeMs = parsed.time ? Date.parse(parsed.time) : NaN;
+              currentStepIdx = correlateBoundaryStep(
+                parsed.text,
+                Number.isNaN(timeMs) ? null : timeMs,
+                knownStepsList,
+                currentStepIdx,
+              );
+            }
+            knownStates[currentStepIdx]!.activeGroup = null;
+            continue;
+          }
+          startGroup(knownStates[currentStepIdx]!, parsed.text);
+          continue;
+        }
+        if (parsed.group === "end") {
+          endGroup(knownStates[currentStepIdx]!);
+          continue;
+        }
+
+        // `gh` does not emit a `Post …` group for the automatic cleanup step
+        // and uses a sentinel line for `Complete job`; advance on those so
+        // their output lands in the right collapsible section.
+        if (!explicit && parsed.text === "Post job cleanup.") {
+          currentStepIdx = nextPostStep(knownStepsList, currentStepIdx);
+          knownStates[currentStepIdx]!.activeGroup = null;
+        } else if (!explicit && parsed.text === "Cleaning up orphan processes") {
+          currentStepIdx = nextCompleteJobStep(knownStepsList, currentStepIdx);
+          knownStates[currentStepIdx]!.activeGroup = null;
+        }
+
+        appendLine(knownStates[currentStepIdx]!, {
+          time: parsed.time,
+          text: parsed.text,
+          level: parsed.level,
+        });
+      }
+    } else {
+      // No metadata: step names come from explicit log records when present,
+      // otherwise from the `Run …` / `Post …` / `Complete job` boundary groups.
+      const boundaryTitles: string[] = [];
+      {
+        let depth = 0;
+        for (const { parsed } of lines) {
+          if (parsed.action === "start") {
+            depth += 1;
+          } else if (parsed.action === "end") {
+            depth = Math.max(0, depth - 1);
+          } else if (
+            parsed.group === "start" &&
+            depth === 0 &&
+            isStepBoundaryTitle(parsed.text)
+          ) {
+            boundaryTitles.push(parsed.text);
+          }
+        }
+      }
+
+      const ensureStep = (name: string): MutableStep => {
+        const key = stepKey(jobName, name);
+        let step = mutableJob.steps.get(key);
+        if (!step) {
+          step = { key, name, segments: [], activeGroup: null };
+          mutableJob.steps.set(key, step);
+        }
+        return step;
+      };
+
+      const initialStepName = boundaryTitles.length > 0 ? "Set up job" : "Output";
+      let currentStep: MutableStep | null = null;
+      let currentName = "";
+      let actionDepth = 0;
+      let boundaryCursor = 0;
+
+      const switchTo = (name: string): MutableStep => {
+        currentName = name;
+        currentStep = ensureStep(name);
+        return currentStep;
+      };
+
+      const nextBoundaryTitle = (
+        predicate: (title: string) => boolean,
+      ): string | null => {
+        for (let i = boundaryCursor; i < boundaryTitles.length; i += 1) {
+          const title = boundaryTitles[i]!;
+          if (predicate(title)) return title;
+        }
+        return null;
+      };
+
+      for (const { rawStepName, parsed } of lines) {
+        if (parsed.action === "start") {
+          actionDepth += 1;
+          continue;
+        }
+        if (parsed.action === "end") {
+          actionDepth = Math.max(0, actionDepth - 1);
+          continue;
+        }
+
+        const explicit =
+          rawStepName !== "" && !/^unknown step$/i.test(rawStepName);
+        const boundaryGroup =
+          parsed.group === "start" &&
+          actionDepth === 0 &&
+          isStepBoundaryTitle(parsed.text);
+
+        if (boundaryGroup) {
+          boundaryCursor += 1;
+          if (explicit) {
+            if (currentName !== rawStepName) switchTo(rawStepName);
+          } else {
+            switchTo(parsed.text);
+          }
+          currentStep!.activeGroup = null;
+          continue;
+        }
+
+        if (explicit) {
+          if (currentName !== rawStepName) switchTo(rawStepName);
+        } else if (parsed.text === "Post job cleanup.") {
+          const title = nextBoundaryTitle((value) => /^post\s/i.test(value));
+          switchTo(title ?? "Post job cleanup.");
+          currentStep!.activeGroup = null;
+        } else if (parsed.text === "Cleaning up orphan processes") {
+          const title = nextBoundaryTitle((value) => /^complete job$/i.test(value));
+          switchTo(title ?? "Complete job");
+          currentStep!.activeGroup = null;
+        }
+
+        if (!currentStep) currentStep = switchTo(initialStepName);
+
+        if (parsed.group === "start") {
+          startGroup(currentStep, parsed.text);
+        } else if (parsed.group === "end") {
+          endGroup(currentStep);
+        } else {
+          appendLine(currentStep, {
+            time: parsed.time,
+            text: parsed.text,
+            level: parsed.level,
+          });
+        }
+      }
+
+      if (mutableJob.steps.size === 0) {
+        const key = stepKey(jobName, "Output");
+        mutableJob.steps.set(key, { key, name: "Output", segments: [], activeGroup: null });
+      }
+    }
+
+    jobs.push(finalizeJob(mutableJob));
+  }
+
   let lineCount = 0;
   let errorCount = 0;
   let warningCount = 0;
-  for (const job of finalized) {
+  for (const job of jobs) {
     lineCount += job.lineCount;
     errorCount += job.errorCount;
     warningCount += job.warningCount;
   }
-  return { jobs: finalized, lineCount, errorCount, warningCount };
+  return { jobs, lineCount, errorCount, warningCount };
 }
 
 function countSegments(segments: LogSegment[]): {
@@ -373,7 +834,7 @@ function countSegments(segments: LogSegment[]): {
   let warningCount = 0;
   for (const segment of segments) {
     for (const line of segment.lines) {
-      if (line.text !== "" || line.time !== "") lineCount += 1;
+      lineCount += 1;
       if (line.level === "error") errorCount += 1;
       if (line.level === "warning") warningCount += 1;
     }

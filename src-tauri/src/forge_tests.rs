@@ -11,9 +11,9 @@ use crate::forge::{
     cap_log, extract_pull_url, forge_failure, normalize_pr_state, normalize_run_status,
     parse_github_remote, parse_pr_checks_json, parse_pr_checks_table, parse_pr_list_json,
     parse_workflow_list_json, parse_workflow_run_detail_json, parse_workflow_runs_json,
-    pr_list_args, pr_merge_args, pr_number_of, run_program, version_from_output,
-    workflow_dispatch_args, workflow_runs_args, ForgeError, WorkflowInput, KIND_ALREADY_EXISTS,
-    KIND_NOT_AUTHED, KIND_NO_GH, KIND_OTHER, MAX_LOG_CHARS,
+    pr_list_args, pr_merge_args, pr_number_of, prefix_job_log, run_program, strip_log_bom,
+    version_from_output, workflow_dispatch_args, workflow_runs_args, ForgeError, WorkflowInput,
+    KIND_ALREADY_EXISTS, KIND_NOT_AUTHED, KIND_NO_GH, KIND_OTHER, MAX_LOG_CHARS,
 };
 
 // ---------------------------------------------------------------------------
@@ -491,6 +491,22 @@ fn cap_log_bounds_large_output_without_panicking() {
     let capped = cap_log(huge);
     assert!(capped.chars().count() < MAX_LOG_CHARS + 100);
     assert!(capped.contains("log truncated"));
+}
+
+#[test]
+fn job_log_fallback_strips_bom_and_prefixes_the_job_name() {
+    // `gh api …/jobs/<id>/logs` starts with a BOM and has no job column.
+    let payload = "\u{feff}2026-10-25T18:05:47.100Z hello\nsecond line\n";
+    assert_eq!(
+        strip_log_bom(payload),
+        "2026-10-25T18:05:47.100Z hello\nsecond line\n"
+    );
+    assert_eq!(
+        prefix_job_log("Frontend (test)", "first\nsecond\n"),
+        "Frontend (test)\t\tfirst\nFrontend (test)\t\tsecond\n"
+    );
+    // Empty payloads stay empty instead of producing a bare job prefix.
+    assert_eq!(prefix_job_log("job", ""), "");
 }
 
 // ---------------------------------------------------------------------------

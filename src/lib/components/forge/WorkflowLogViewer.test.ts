@@ -74,4 +74,33 @@ describe("WorkflowLogViewer", () => {
     expect(screen.getByText("No output for this job.")).toBeTruthy();
     expect(screen.queryByText(/No log lines match/)).toBeNull();
   });
+
+  it("renders individual steps as collapsible sections and allows toggling them", async () => {
+    const raw = [
+      "build\tSet up job\talpha",
+      "build\tCheckout\tbeta",
+    ].join("\n");
+    const { container } = render(WorkflowLogViewer, {
+      props: { text: raw, windowSize: WINDOW },
+    });
+    await tick();
+
+    const stepHeads = container.querySelectorAll(".log-step-head");
+    expect(stepHeads).toHaveLength(2);
+    expect(stepHeads[0]?.textContent).toContain("Set up job");
+    expect(stepHeads[1]?.textContent).toContain("Checkout");
+
+    await fireEvent.click(stepHeads[0]!);
+    await tick();
+    expect(stepHeads[0]?.getAttribute("aria-expanded")).toBe("false");
+
+    const stepLines = container.querySelectorAll(".log-line .lm");
+    expect([...stepLines].map((l) => l.textContent)).toEqual(["beta"]);
+
+    await fireEvent.click(stepHeads[0]!);
+    await tick();
+    expect(stepHeads[0]?.getAttribute("aria-expanded")).toBe("true");
+    const reExpandedLines = container.querySelectorAll(".log-line .lm");
+    expect([...reExpandedLines].map((l) => l.textContent)).toEqual(["alpha", "beta"]);
+  });
 });
