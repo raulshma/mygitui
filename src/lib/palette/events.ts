@@ -71,6 +71,12 @@ export interface UiEventMap {
    * `{ repoId, runId }`. Emitted by the forge sidebar's Actions tab.
    */
   "workflow-run-open": { repoId: string; runId: number };
+  /**
+   * Open a custom action run in the main editor:
+   * `{ repoId, runId }` (run ids are backend strings like `act-1f`).
+   * Emitted by the actions panel when a run starts or is selected.
+   */
+  "action-run-open": { repoId: string; runId: string };
 }
 
 export type UiEventName = keyof UiEventMap;

@@ -105,11 +105,11 @@
   }
 
   .ai-health.ok .dot {
-    background: #2e7d32; /* green */
+    background: var(--app-added, #2e7d32);
   }
 
   .ai-health.degraded .dot {
-    background: #f9a825; /* amber */
+    background: var(--app-modified, #f9a825);
   }
 
   .ai-health.down .dot {

@@ -244,12 +244,59 @@ describe("ActionsStore runs", () => {
       run_id: "run-x",
       repo_id: "repo-1",
       status: "running",
+      command: "echo hi",
     });
 
     // Events for the same run merge into the placeholder (no duplicate).
     store.applyOutput(outputEvent({ run_id: "run-x", line: "hi", done: true, exit_code: 0 }));
     expect(store.runs.filter((r) => r.run_id === "run-x")).toHaveLength(1);
     expect(store.runs[0].status).toBe("success");
+    // Merging an event keeps the command learned at launch.
+    expect(store.runs[0].command).toBe("echo hi");
+  });
+
+  it("run() patches the command onto a run its events created first", async () => {
+    const store = new ActionsStore(fakeStorage());
+    store.applyOutput(outputEvent({ run_id: "run-x", line: "early" }));
+    expect(store.runs[0].command).toBeUndefined();
+
+    await store.run("repo-1", DEF);
+    expect(store.runs).toHaveLength(1);
+    expect(store.runs[0].command).toBe("echo hi");
+  });
+
+  it("runFor looks runs up by id and returns null when unknown", async () => {
+    const store = new ActionsStore(fakeStorage());
+    expect(store.runFor("nope")).toBeNull();
+    store.applyOutput(outputEvent({ run_id: "r1" }));
+    expect(store.runFor("r1")?.run_id).toBe("r1");
+  });
+
+  it("hydrateRun seeds a snapshot once and live events stay authoritative", () => {
+    const store = new ActionsStore(fakeStorage());
+    const snapshot = {
+      run_id: "pop-1",
+      repo_id: "repo-1",
+      name: "Lint",
+      command: "npm run lint",
+      lines: ["one", "two"],
+      dropped: 0,
+      done: false,
+      exit_code: null,
+      order: 41,
+      status: "running" as const,
+    };
+    store.hydrateRun(snapshot);
+    expect(store.runFor("pop-1")).toMatchObject({ lines: ["one", "two"], command: "npm run lint" });
+
+    // Re-hydrating the same id never duplicates or overwrites the live copy.
+    store.hydrateRun({ ...snapshot, lines: ["stale"] });
+    expect(store.runsFor("repo-1")).toHaveLength(1);
+    expect(store.runFor("pop-1")?.lines).toEqual(["one", "two"]);
+
+    // New events sort ahead of the hydrated run (order counter carried over).
+    store.applyOutput(outputEvent({ run_id: "r2" }));
+    expect(store.runs.map((r) => r.run_id)).toEqual(["r2", "pop-1"]);
   });
 
   it("run() toasts instead of throwing on launch failure", async () => {

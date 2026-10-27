@@ -70,6 +70,8 @@ export interface ActionRun {
   run_id: string;
   repo_id: string;
   name: string;
+  /** Shell command that was launched (patched in by {@link ActionsStore.run}). */
+  command?: string;
   /** Output lines (capped at `RUN_LINE_CAP`, most recent kept). */
   lines: string[];
   /** Earlier lines dropped by the cap (truncation notice). */
@@ -271,6 +273,21 @@ export class ActionsStore {
     return this.runs.filter((run) => run.repo_id === repoId);
   }
 
+  /** One run by id (newest-first list; `null` when unknown). */
+  runFor(runId: string): ActionRun | null {
+    return this.runs.find((run) => run.run_id === runId) ?? null;
+  }
+
+  /**
+   * Inserts a run captured by another window (popout handoff) unless this
+   * window already observed it — live events always win over a snapshot.
+   */
+  hydrateRun(run: ActionRun): void {
+    if (this.runs.some((existing) => existing.run_id === run.run_id)) return;
+    this.#orderCounter = Math.max(this.#orderCounter, run.order);
+    this.runs = [run, ...this.runs].slice(0, MAX_RUNS);
+  }
+
   /** True while any action runs for the repo (optionally by def name). */
   busy(repoId: RepoId, name?: string): boolean {
     return this.runsFor(repoId).some(
@@ -290,13 +307,20 @@ export class ActionsStore {
     try {
       const runId = await actionRun(repoId, def.name, def.command);
       // A first output event may already have arrived; placeholder only if
-      // not (gives instant "running" state in the panel).
-      if (!this.runs.some((run) => run.run_id === runId)) {
+      // not (gives instant "running" state in the panel). Either way the
+      // command is known here and is not part of the event payload.
+      const existing = this.runs.find((run) => run.run_id === runId);
+      if (existing) {
+        this.runs = this.runs.map((run) =>
+          run.run_id === runId ? { ...run, command: def.command } : run,
+        );
+      } else {
         this.#orderCounter += 1;
         const placeholder: ActionRun = {
           run_id: runId,
           repo_id: String(repoId),
           name: def.name,
+          command: def.command,
           lines: [],
           dropped: 0,
           done: false,

@@ -37,6 +37,7 @@ const {
   getThemePreference,
   setThemePreference,
   THEME_PREFERENCE_EVENT,
+  THEME_SCHEME_EVENT,
   THEME_STORAGE_KEY,
   TOKEN_NAMES,
 } = await import("./index");
@@ -112,6 +113,7 @@ describe("initTheme", () => {
   beforeEach(() => {
     disposeTheme();
     rootStyle().cssText = "";
+    document.documentElement.removeAttribute("data-theme");
     localStorage.removeItem(THEME_STORAGE_KEY);
     setThemePreference("system");
     vi.unstubAllGlobals();
@@ -228,6 +230,7 @@ describe("theme preference override (M7 I2)", () => {
   beforeEach(() => {
     disposeTheme();
     rootStyle().cssText = "";
+    document.documentElement.removeAttribute("data-theme");
     localStorage.removeItem(THEME_STORAGE_KEY);
     setThemePreference("system");
     vi.unstubAllGlobals();
@@ -351,5 +354,56 @@ describe("theme preference override (M7 I2)", () => {
       window.removeEventListener(THEME_PREFERENCE_EVENT, onChange);
     }
     expect(seen).toEqual(["dark", "system"]);
+  });
+});
+
+describe("applied scheme stamp + announcement", () => {
+  beforeEach(() => {
+    disposeTheme();
+    rootStyle().cssText = "";
+    document.documentElement.removeAttribute("data-theme");
+    localStorage.removeItem(THEME_STORAGE_KEY);
+    setThemePreference("system");
+    vi.unstubAllGlobals();
+  });
+
+  it("stamps <html data-theme> and announces every applied scheme", async () => {
+    installMatchMediaStub(false);
+    const seen: string[] = [];
+    const onChange = (event: Event) => {
+      seen.push((event as CustomEvent<string>).detail);
+    };
+    window.addEventListener(THEME_SCHEME_EVENT, onChange);
+    try {
+      await initTheme();
+      expect(document.documentElement.dataset.theme).toBe("light");
+
+      setThemePreference("dark");
+      expect(document.documentElement.dataset.theme).toBe("dark");
+
+      setThemePreference("light");
+      expect(document.documentElement.dataset.theme).toBe("light");
+    } finally {
+      window.removeEventListener(THEME_SCHEME_EVENT, onChange);
+    }
+    expect(seen).toEqual(["light", "dark", "light"]);
+  });
+
+  it("announces OS-driven switches too (Shiki follows live)", async () => {
+    const media = installMatchMediaStub(false);
+    await initTheme();
+
+    const seen: string[] = [];
+    const onChange = (event: Event) => {
+      seen.push((event as CustomEvent<string>).detail);
+    };
+    window.addEventListener(THEME_SCHEME_EVENT, onChange);
+    try {
+      media.setDark(true);
+    } finally {
+      window.removeEventListener(THEME_SCHEME_EVENT, onChange);
+    }
+    expect(seen).toEqual(["dark"]);
+    expect(document.documentElement.dataset.theme).toBe("dark");
   });
 });

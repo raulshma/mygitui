@@ -10,7 +10,7 @@ import {
 /**
  * Actions panel: detected projects render their scripts (label + exact
  * command) and Run feeds a synthetic action definition through the existing
- * action runner (auto-expanding the output).
+ * action runner, opening the run log in the editor.
  */
 test("detected project scripts are visible and runnable", async ({ page }) => {
   const tracked = trackErrors(page);
@@ -82,7 +82,57 @@ test("detected project scripts are visible and runnable", async ({ page }) => {
     name: "web: test",
     command: "npm test",
   });
-  await expect(page.locator(".run-row.open")).toContainText("web: test");
+  const runView = page.locator(".action-run-view");
+  await expect(runView).toBeVisible();
+  await expect(runView.locator(".run-title")).toHaveText("web: test");
+  await expect(runView.locator(".command")).toHaveText("npm test");
+  await expect(runView.locator(".status-chip")).toHaveText("running");
+
+  expect(tracked.errors).toEqual([]);
+  await tracked.attach(test.info());
+});
+
+test("action run popout renders the stashed snapshot and follows live output", async ({
+  page,
+}) => {
+  const tracked = trackErrors(page);
+
+  const snapshot = {
+    run_id: "act-1",
+    repo_id: "r1",
+    name: "Lint",
+    command: "npm run lint",
+    lines: ["first line"],
+    dropped: 0,
+    done: false,
+    exit_code: null,
+    order: 3,
+    status: "running",
+  };
+  await seedStorage(page, {
+    "mygitui.action-run-popout.act-1": JSON.stringify(snapshot),
+  });
+  const mock = await installTauriMock(page);
+  await page.goto("/?panel=actionrun&repo=r1&actionRun=act-1");
+
+  const view = page.locator(".action-run-view");
+  await expect(view).toBeVisible();
+  await expect(view.locator(".run-title")).toHaveText("Lint");
+  await expect(view.locator(".command")).toHaveText("npm run lint");
+  await expect(view.locator(".status-chip")).toHaveText("running");
+  await expect(view.locator(".log-body")).toContainText("first line");
+
+  await mock.emit("action-output", {
+    run_id: "act-1",
+    repo_id: "r1",
+    name: "Lint",
+    line: "second line",
+    done: true,
+    exit_code: 0,
+  });
+  await expect(view.locator(".log-body")).toContainText("second line");
+  await expect(view.locator(".status-chip")).toHaveText("exit 0");
+  await expect(view.locator(".log-state")).toHaveText("Finished");
 
   expect(tracked.errors).toEqual([]);
   await tracked.attach(test.info());

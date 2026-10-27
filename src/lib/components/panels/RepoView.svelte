@@ -90,6 +90,8 @@
     type PanelId,
   } from "$lib/layout/layoutModel";
   import { layouts } from "$lib/layout/layout.svelte";
+  import { actionsStore } from "$lib/stores/actions.svelte";
+  import { stashActionRun } from "$lib/components/actions/runPopout";
   import { terminals } from "$lib/terminal/terminalStore.svelte";
   import { openPanelPopout } from "$lib/layout/popout";
   import { bookmarks } from "$lib/components/graph/bookmarks.svelte";
@@ -97,7 +99,10 @@
     branchColorForRefs,
     branchColorStore,
   } from "$lib/stats/branchColors.svelte";
-  import { refreshStatus } from "$lib/stores/tabs.svelte";
+  import {
+    refreshStatus,
+    showRecentRepos,
+  } from "$lib/stores/tabs.svelte";
   import { startAuthEvents, startOpsEvents } from "$lib/stores/ops.svelte";
   import { autofetch } from "$lib/stores/autofetch.svelte";
   import { toast } from "$lib/toast";
@@ -110,6 +115,7 @@
   import iconResetLayout from "@ktibow/iconset-material-symbols/restart-alt";
   import iconMore from "@ktibow/iconset-material-symbols/more-horiz";
   import iconBranch from "@ktibow/iconset-material-symbols/account-tree";
+  import iconHome from "@ktibow/iconset-material-symbols/home-rounded";
 
   let {
     repoId,
@@ -139,6 +145,8 @@
   let compareResult = $state<CompareResult | null>(null);
   /** GitHub Actions run shown in the editor (from the forge sidebar). */
   let workflowRunId = $state<number | null>(null);
+  /** Custom action run shown in the editor (from the actions panel). */
+  let actionRunId = $state<string | null>(null);
   /** Multi-selection action toolbar state reported by the history sidebar. */
   let historyActions = $state<HistoryCommitActions | null>(null);
   /** Commit to reveal/select in history (parent navigation from the editor). */
@@ -597,6 +605,10 @@
         if (target !== repoId) return;
         openWorkflowRun(runId);
       }),
+      onUiEvent("action-run-open", ({ repoId: target, runId }) => {
+        if (target !== repoId) return;
+        openActionRun(runId);
+      }),
       onUiEvent("open-conflicts", () => {
         if (opSource) conflictEditorOpen = true;
       }),
@@ -650,6 +662,13 @@
         disabled: !resolved.hasOverlay,
         run: onResetLayout,
       },
+      { separator: true },
+      {
+        id: "recent-repos",
+        label: "Recent repositories",
+        icon: iconHome,
+        run: showRecentRepos,
+      },
     ];
     contextMenu.show(rect.right, rect.bottom, entries);
   }
@@ -701,6 +720,7 @@
     historyActions = null;
     pendingHistorySha = null;
     workflowRunId = null;
+    actionRunId = null;
     conflictEditorOpen = false;
   });
 
@@ -722,7 +742,22 @@
     diffHunkable = false;
     selectedCommit = null;
     compareResult = null;
+    actionRunId = null;
     workflowRunId = runId;
+    focusPanel("diff");
+  }
+
+  /** Opens a custom action run in the main editor (actions panel event). */
+  function openActionRun(runId: string): void {
+    diffToken++;
+    diffEntry = null;
+    diffFiles = [];
+    diffLoading = false;
+    diffHunkable = false;
+    selectedCommit = null;
+    compareResult = null;
+    workflowRunId = null;
+    actionRunId = runId;
     focusPanel("diff");
   }
 
@@ -738,6 +773,7 @@
     selectedCommit = null;
     compareResult = null;
     workflowRunId = null;
+    actionRunId = null;
     try {
       await streamDiff(
         repoId,
@@ -768,6 +804,7 @@
     selectedCommit = null;
     compareResult = null;
     workflowRunId = null;
+    actionRunId = null;
   }
 
   /** History sidebar: a commit row was selected (or restored on mount). */
@@ -779,7 +816,11 @@
     // history is collapsed/reopened it must not replace an open file diff.
     if (
       source === "restore" &&
-      (selectedCommit || diffEntry || compareResult || workflowRunId !== null)
+      (selectedCommit ||
+        diffEntry ||
+        compareResult ||
+        workflowRunId !== null ||
+        actionRunId !== null)
     ) {
       return;
     }
@@ -792,6 +833,7 @@
     diffHunkable = false;
     compareResult = null;
     workflowRunId = null;
+    actionRunId = null;
   }
 
   /** History sidebar: compare results open in the center editor. */
@@ -799,6 +841,7 @@
     compareResult = result;
     selectedCommit = null;
     workflowRunId = null;
+    actionRunId = null;
     diffToken++;
     diffEntry = null;
     diffFiles = [];
@@ -849,6 +892,21 @@
       repoId,
       `${name} — run ${workflowRunId}`,
       { runId: workflowRunId },
+    );
+  }
+
+  function popOutActionRun(): void {
+    if (actionRunId === null) return;
+    const run = actionsStore.runFor(actionRunId);
+    if (!run) return;
+    // The popout window is a separate JS context: hand it the log so far,
+    // then it follows future `action-output` events itself.
+    stashActionRun(run);
+    void openPanelPopout(
+      "actionrun",
+      repoId,
+      `${run.name} — run log`,
+      { actionRunId: actionRunId },
     );
   }
 
@@ -934,13 +992,16 @@
     diffHunkable={diffHunkable}
     historyActions={historyActions}
     workflowRunId={workflowRunId}
+    actionRunId={actionRunId}
     onClose={clearEditor}
     onCloseCompare={() => (compareResult = null)}
     onCloseWorkflowRun={() => (workflowRunId = null)}
+    onCloseActionRun={() => (actionRunId = null)}
     onSelectParent={revealHistoryCommit}
     onPopoutCommit={selectedCommit ? popOutCommit : undefined}
     onPopoutDiff={popOutDiff}
     onPopoutWorkflowRun={workflowRunId !== null ? popOutWorkflowRun : undefined}
+    onPopoutActionRun={actionRunId !== null ? popOutActionRun : undefined}
     onMutated={refresh}
   />
 {/snippet}

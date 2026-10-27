@@ -13,6 +13,7 @@
    * perf-gated in diff/virtualizer.test.ts.
    */
   import type { FileDiff } from "$lib/ipc/types";
+  import { onMount } from "svelte";
   import { discard, stage } from "$lib/ipc/client";
   import { onUiEvent } from "$lib/palette/events";
   import { toast } from "$lib/toast";
@@ -21,7 +22,9 @@
   import {
     onTokensLanded,
     requestTokens,
+    setScheme as setSyntaxScheme,
   } from "$lib/diff/highlight";
+  import { currentScheme, THEME_SCHEME_EVENT } from "$lib/theme";
   import {
     buildRowModel,
     rowHeights,
@@ -202,6 +205,20 @@
   let syntaxTick = $state(0);
   $effect(() => {
     return onTokensLanded(() => syntaxTick++);
+  });
+
+  // Shiki bakes colors at parse time, so the highlighter must follow the
+  // applied scheme (github-light / github-dark). The initial async theme
+  // apply is caught by the event too; on mount the call only syncs when the
+  // default differs. A tick re-requests visible lines under the new theme.
+  onMount(() => {
+    const sync = (): void => {
+      setSyntaxScheme(currentScheme());
+      syntaxTick++;
+    };
+    sync();
+    window.addEventListener(THEME_SCHEME_EVENT, sync);
+    return () => window.removeEventListener(THEME_SCHEME_EVENT, sync);
   });
 
   // Request parses for the visible window's lines (cheap: only uncached
@@ -654,6 +671,7 @@
                 filePath={syntaxEnabled
                   ? (files[model.fileIndexes[slice.firstRow + i]]?.path ?? null)
                   : null}
+                syntaxRevision={syntaxTick}
                 selectedAt={selectionEnabled ? selectedAt : undefined}
                 onGutterClick={selectionEnabled ? selectionCtl.gutterClick : undefined}
                 selectionCount={row.kind === "hunk-header"
@@ -708,6 +726,22 @@
     height: 100%;
     min-height: 0;
     background: var(--m3-surface-container-lowest, var(--m3-surface));
+  }
+
+  /*
+   * Dark surfaces swallow the light-mode washes (12% over near-black is
+   * barely a tint). Strengthen row/gutter/highlight tints so changed blocks
+   * stay recognizable; the status hues themselves switch to their bright
+   * dark variants via app.css `data-theme`.
+   */
+  :global(:root[data-theme="dark"]) .diff-viewer {
+    --diff-add-bg: color-mix(in srgb, var(--app-added) 20%, transparent);
+    --diff-del-bg: color-mix(in srgb, var(--app-deleted) 20%, transparent);
+    --diff-add-gutter: color-mix(in srgb, var(--app-added) 34%, transparent);
+    --diff-del-gutter: color-mix(in srgb, var(--app-deleted) 34%, transparent);
+    --diff-empty-bg: color-mix(in srgb, var(--m3-surface-variant) 20%, transparent);
+    --diff-hl-bg: color-mix(in srgb, var(--app-modified) 42%, transparent);
+    --diff-sel-bg: color-mix(in srgb, var(--m3-primary) 30%, transparent);
   }
 
   .toolbar {

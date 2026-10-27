@@ -7,7 +7,9 @@
  *   2. derives light + dark M3 schemes from the seed,
  *   3. writes every token as `--m3-<name>` (plus `--m3c-<name>` aliases so
  *      wrapped m3-svelte components pick the exact same palette) onto
- *      document.documentElement, and
+ *      document.documentElement, stamps `<html data-theme="light|dark">`
+ *      (app.css keys its non-M3 dark tokens, e.g. `--app-added`, off it),
+ *      and announces the resolved scheme on {@link THEME_SCHEME_EVENT}, and
  *   4. follows `prefers-color-scheme` reactively via matchMedia — the token
  *      set is swapped in place when the OS switches, no reload — unless a
  *      manual override ("light" / "dark") is active, in which case the OS
@@ -52,6 +54,14 @@ export const THEME_STORAGE_KEY = "mygitui.theme";
 
 /** Window event dispatched whenever the preference changes (detail = value). */
 export const THEME_PREFERENCE_EVENT = "mygitui:theme-preference";
+
+/**
+ * Window event dispatched whenever the applied (resolved) scheme changes,
+ * including OS-driven switches and the initial async apply. Detail is the
+ * {@link ColorScheme}. Consumers that bake colors at runtime (Shiki) follow
+ * this instead of polling {@link currentScheme}.
+ */
+export const THEME_SCHEME_EVENT = "mygitui:theme-scheme";
 
 const DARK_QUERY = "(prefers-color-scheme: dark)";
 
@@ -179,7 +189,25 @@ function applyTokens(theme: AppliedTheme, scheme: ColorScheme): void {
     style.setProperty(`--m3c-${name}`, value);
   }
   style.setProperty("color-scheme", scheme);
+  try {
+    document.documentElement.dataset.theme = scheme;
+  } catch {
+    // No DOM (tests/workers): tokens are simply not written either.
+  }
   theme.scheme = scheme;
+  announceScheme(scheme);
+}
+
+/** Announces the applied scheme so runtime-colored surfaces can re-theme. */
+function announceScheme(scheme: ColorScheme): void {
+  try {
+    if (typeof window === "undefined") return;
+    window.dispatchEvent(
+      new CustomEvent<ColorScheme>(THEME_SCHEME_EVENT, { detail: scheme }),
+    );
+  } catch {
+    // CustomEvent/window may be unavailable in tests; the state is set.
+  }
 }
 
 /**

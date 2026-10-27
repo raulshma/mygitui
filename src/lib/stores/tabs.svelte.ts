@@ -108,6 +108,19 @@ export class TabStore {
   tabs: Tab[] = $state([]);
   /** `Tab.id` of the focused tab, or `null` when nothing is open. */
   activeId: string | null = $state(null);
+  /**
+   * True from construction until {@link restoreSession} settles. The shell
+   * uses it to hold the launch view instead of flashing the recents list
+   * while the stored repository is still opening.
+   */
+  restoring: boolean = $state(false);
+  /** First root the launch restore focuses (for the launch hint). */
+  restoreRoot: string | null = $state(null);
+  /**
+   * True while the recent-repositories home is shown even though tabs are
+   * open (the top-bar home button). Cleared by any tab activation.
+   */
+  recentsOpen: boolean = $state(false);
 
   readonly #recents: RecentRepoStore;
   readonly #sessionStorage: SessionStorage | null;
@@ -124,6 +137,13 @@ export class TabStore {
   ) {
     this.#recents = recents;
     this.#sessionStorage = sessionStorage;
+    // Decide before the first render (onMount runs after paint): a stored
+    // session means the shell starts in the launch view, not on home.
+    const stored = parseStoredSession(
+      this.#sessionStorage?.getItem(SESSION_STORAGE_KEY) ?? null,
+    );
+    this.restoring = stored.roots.length > 0;
+    this.restoreRoot = stored.activeRoot ?? stored.roots[0] ?? null;
   }
 
   /** The currently active tab, or `null`. */
@@ -158,24 +178,33 @@ export class TabStore {
     const session = parseStoredSession(
       this.#sessionStorage?.getItem(SESSION_STORAGE_KEY) ?? null,
     );
-    if (session.roots.length === 0) return;
-    await Promise.all(
-      session.roots.map((root, index) =>
-        this.openTab(root, { activate: false, index })
-          .then((tab) => {
-            if (tab.root === session.activeRoot) this.activeId = tab.id;
-          })
-          .catch(() => {
-            // Folder deleted/moved since the last run — skip it.
-          }),
-      ),
-    );
-    // The stored active root may not have come back (deleted/moved): fall
-    // back to the first restored tab instead of landing on the home view.
-    if (this.active === null && this.tabs.length > 0) {
-      this.activeId = this.tabs[0]!.id;
+    if (session.roots.length === 0) {
+      this.restoring = false;
+      return;
     }
-    this.#persistSession();
+    this.restoring = true;
+    try {
+      await Promise.all(
+        session.roots.map((root, index) =>
+          this.openTab(root, { activate: false, index })
+            .then((tab) => {
+              if (tab.root === session.activeRoot) this.activeId = tab.id;
+            })
+            .catch(() => {
+              // Folder deleted/moved since the last run — skip it.
+            }),
+        ),
+      );
+    } finally {
+      // The stored active root may not have come back (deleted/moved): fall
+      // back to the first restored tab instead of landing on the home view.
+      if (this.active === null && this.tabs.length > 0) {
+        this.activeId = this.tabs[0]!.id;
+      }
+      this.restoring = false;
+      this.restoreRoot = null;
+      this.#persistSession();
+    }
   }
 
   /**
@@ -194,7 +223,10 @@ export class TabStore {
     const activate = options.activate ?? true;
     const byPath = this.tabs.find((tab) => tab.root === path);
     if (byPath) {
-      if (activate) this.activeId = byPath.id;
+      if (activate) {
+        this.activeId = byPath.id;
+        this.recentsOpen = false;
+      }
       this.#recents.add(path);
       this.#persistSession();
       return byPath;
@@ -204,7 +236,10 @@ export class TabStore {
 
     const byRoot = this.tabs.find((tab) => tab.root === info.root);
     if (byRoot) {
-      if (activate) this.activeId = byRoot.id;
+      if (activate) {
+        this.activeId = byRoot.id;
+        this.recentsOpen = false;
+      }
       this.#recents.add(path);
       this.#persistSession();
       return byRoot;
@@ -219,7 +254,10 @@ export class TabStore {
     };
     const at = Math.min(options.index ?? this.tabs.length, this.tabs.length);
     this.tabs.splice(at, 0, tab);
-    if (activate) this.activeId = tab.id;
+    if (activate) {
+      this.activeId = tab.id;
+      this.recentsOpen = false;
+    }
     this.#recents.add(path);
     this.#persistSession();
 
@@ -252,12 +290,23 @@ export class TabStore {
     this.#persistSession();
   }
 
-  /** Activates a tab (no-op for unknown ids). */
+  /** Activates a tab (no-op for unknown ids). Leaves the recents home. */
   setActive(id: RepoId): void {
     if (this.tabs.some((tab) => tab.id === id)) {
       this.activeId = id;
+      this.recentsOpen = false;
       this.#persistSession();
     }
+  }
+
+  /** Shows the recents home above the open tabs (nothing is closed). */
+  showRecentRepos(): void {
+    this.recentsOpen = true;
+  }
+
+  /** Returns from the recents home to the active tab. */
+  hideRecentRepos(): void {
+    this.recentsOpen = false;
   }
 
   /**
@@ -325,6 +374,16 @@ export function setActive(id: RepoId): void {
   tabStore.setActive(id);
 }
 
+/** Shows the recents home without closing the open tabs. */
+export function showRecentRepos(): void {
+  tabStore.showRecentRepos();
+}
+
+/** Returns from the recents home to the active tab. */
+export function hideRecentRepos(): void {
+  tabStore.hideRecentRepos();
+}
+
 /** Reopens the last session's tabs (see {@link TabStore.restoreSession}). */
 export function restoreSession(): Promise<void> {
   return tabStore.restoreSession();
@@ -364,4 +423,7 @@ export function resetTabStore(): void {
   unregisterEvents = null;
   tabStore.tabs = [];
   tabStore.activeId = null;
+  tabStore.restoring = false;
+  tabStore.restoreRoot = null;
+  tabStore.recentsOpen = false;
 }

@@ -211,8 +211,16 @@
     --m3-outline-variant: #49454e;
     --m3-shadow: #000000;
     --m3-scrim: #000000;
+  }
 
-    /* Status hues tuned for dark surfaces (backgrounds derive above). */
+  /*
+   * Pre-init fallback only: once the theme engine runs it stamps
+   * data-theme, and the explicit rules below (which also cover a pinned
+   * dark theme on a light OS) take over. Keeping this behind
+   * `:not([data-theme])` prevents the dark hues leaking into a pinned
+   * light theme on a dark OS.
+   */
+  :root:not([data-theme]) {
     --app-added: #3fb950;
     --app-deleted: #f85149;
     --app-modified: #d29922;
@@ -220,6 +228,22 @@
     --app-untracked: #3fb950;
     --app-conflicted: #f85149;
   }
+}
+
+/*
+ * Status hues tuned for dark surfaces (backgrounds derive from the
+ * foregrounds above). Driven by the theme engine's `data-theme` stamp, not
+ * the media query alone: a user-pinned dark theme on a light OS must get
+ * these brighter hues too.
+ */
+:root[data-theme="dark"] {
+  --app-added: #3fb950;
+  --app-deleted: #f85149;
+  --app-modified: #d29922;
+  --app-renamed: #a371f7;
+  --app-untracked: #3fb950;
+  --app-conflicted: #f85149;
+  --app-hover: color-mix(in srgb, var(--m3-on-surface) 8%, transparent);
 }
 
 html,

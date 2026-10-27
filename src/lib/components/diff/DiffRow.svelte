@@ -40,6 +40,8 @@
     onDiscardHunk,
     /** Owning file path (syntax highlighting); null disables it. */
     filePath = null,
+    /** Token-cache revision: bumping it repaints rows once parses land. */
+    syntaxRevision = 0,
     /** Hunk-header staging button label ("Unstage hunk" when unstaging). */
     stageLabel = "Stage hunk",
     /** M12 line selection: O(1) membership check for a hunk line index. */
@@ -69,6 +71,7 @@
     /** Discard this hunk (workdir-only; checkpointed upstream). */
     onDiscardHunk?: (fileIndex: number, hunkIndex: number) => void;
     filePath?: string | null;
+    syntaxRevision?: number;
     stageLabel?: string;
     selectedAt?:
       | ((fileIndex: number, hunkIndex: number, lineIndex: number | null) => boolean)
@@ -89,6 +92,9 @@
    * awaits; DiffViewer schedules the background parse.
    */
   function syntax(line: DiffLine): TokenSpan[] | null {
+    // Render-time dependency on the token revision: background parses only
+    // land in the cache (non-reactive), so rows must be told to repaint.
+    void syntaxRevision;
     if (filePath === null) return null;
     return cachedTokens(line.text, filePath);
   }

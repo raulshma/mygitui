@@ -13,6 +13,7 @@
   import { initDeepLinks } from "$lib/entry/deeplink";
   import { pickFolder } from "$lib/ipc/client";
   import {
+    hideRecentRepos,
     openTab,
     recentRepos,
     restoreSession,
@@ -33,6 +34,7 @@
   import iconPin from "@ktibow/iconset-material-symbols/push-pin";
   import iconClose from "@ktibow/iconset-material-symbols/close";
   import iconSearch from "@ktibow/iconset-material-symbols/search";
+  import iconBack from "@ktibow/iconset-material-symbols/arrow-back-rounded";
   // Startup: the popout-only views below are dynamically imported inside
   // the popout branch — the main window never renders them, so their
   // module trees (history graph, file-history, popout panels) stay out of
@@ -90,8 +92,25 @@
   /** Accent-seed picker (opened by the palette seed commands, M12). */
   let seedOpen = $state(false);
 
-  /** The focused repository tab, or `null` when the home view is showing. */
+  /** The focused repository tab, or `null` when nothing is open. */
   const active = $derived(tabStore.active);
+
+  /** Tabs exist (workspace or the recents overlay above it). */
+  const tabsOpen = $derived(tabStore.tabs.length > 0);
+
+  /**
+   * Launch restore is still resolving the stored active tab: hold the launch
+   * view instead of painting the recents list (or a non-active tab) first.
+   */
+  const launching = $derived(tabStore.restoring && tabStore.activeId === null);
+
+  /** Recents overlay from the top bar; otherwise the tab's workspace. */
+  const showWorkspace = $derived(tabsOpen && !tabStore.recentsOpen);
+
+  /** Repository name shown while the last session reopens. */
+  const restoreName = $derived(
+    tabStore.restoreRoot ? repoName(tabStore.restoreRoot) : null,
+  );
 
   function refreshRepos(): void {
     repos = recentRepos.list();
@@ -263,6 +282,13 @@
             runId={popout.runId ?? 0}
           />
         {/await}
+      {:else if popout.panel === "actionrun"}
+        {#await import("$lib/components/actions/ActionRunView.svelte") then ActionRunViewModule}
+          <ActionRunViewModule.default
+            repoId={popout.repoId}
+            runId={popout.actionRunId ?? ""}
+          />
+        {/await}
       {:else if popout.panel === "commitdetail"}
         {#await import("$lib/components/layout/PopoutCommitDetail.svelte") then PopoutCommitDetailModule}
           <PopoutCommitDetailModule.default
@@ -276,41 +302,63 @@
         {/await}
       {/if}
     </main>
-  {:else if tabStore.tabs.length > 0}
-    <TabStrip openFolder={openFromDisk}>
-      {#snippet trailing()}
-        <AiHealthChip compact />
-        <ThemeToggle />
-      {/snippet}
-    </TabStrip>
-
-    <main class="repo-view">
-      {#if active}
-        <RepoView
-          repoId={active.id}
-          name={active.name}
-          root={active.root}
-          status={active.status}
-        />
-      {/if}
-    </main>
   {:else}
-    <main class="home">
-      <header class="home-top">
-        <div class="brand">
-          <span class="brand-mark" aria-hidden="true">
-            <Icon icon={iconBrand} size={20} />
-          </span>
-          <span class="brand-text">
-            <span class="brand-name">mygitui</span>
-            <span class="brand-tag">your local git workspace</span>
-          </span>
-        </div>
-        <div class="home-utilities">
-          <AiHealthChip />
+    {#if !launching && tabsOpen}
+      <TabStrip openFolder={openFromDisk}>
+        {#snippet trailing()}
+          <AiHealthChip compact />
           <ThemeToggle />
-        </div>
-      </header>
+        {/snippet}
+      </TabStrip>
+    {/if}
+
+    {#if launching}
+      <!-- Launch restore is still opening the stored repo: hold this frame
+           instead of flashing the recents list (or a non-active tab). -->
+      <main class="launch" aria-busy="true">
+        <span class="launch-mark" aria-hidden="true">
+          <Icon icon={iconBrand} size={26} />
+        </span>
+        <span class="launch-title">
+          Opening {restoreName ?? "your last workspace"}…
+        </span>
+        {#if tabStore.restoreRoot}
+          <span class="launch-sub" title={tabStore.restoreRoot}>
+            {tabStore.restoreRoot}
+          </span>
+        {/if}
+        <span class="launch-spinner" aria-hidden="true"></span>
+      </main>
+    {:else if showWorkspace}
+      <main class="repo-view">
+        {#if active}
+          <RepoView
+            repoId={active.id}
+            name={active.name}
+            root={active.root}
+            status={active.status}
+          />
+        {/if}
+      </main>
+    {:else}
+      <main class="home">
+        {#if !tabsOpen}
+          <header class="home-top">
+            <div class="brand">
+              <span class="brand-mark" aria-hidden="true">
+                <Icon icon={iconBrand} size={20} />
+              </span>
+              <span class="brand-text">
+                <span class="brand-name">mygitui</span>
+                <span class="brand-tag">your local git workspace</span>
+              </span>
+            </div>
+            <div class="home-utilities">
+              <AiHealthChip />
+              <ThemeToggle />
+            </div>
+          </header>
+        {/if}
 
       <div class="home-body">
         <section class="recent" aria-labelledby="recent-heading">
@@ -331,24 +379,36 @@
                 </p>
               {/if}
             </div>
-            {#if repos.length > 0}
+            {#if tabsOpen || repos.length > 0}
               <div class="head-actions">
-                <button
-                  class="add-btn"
-                  type="button"
-                  onclick={() => void openFromDisk()}
-                >
-                  <Icon icon={iconAdd} size={14} />
-                  Add existing repo…
-                </button>
-                <button
-                  class="clone-btn"
-                  type="button"
-                  onclick={() => (cloneOpen = true)}
-                >
-                  <Icon icon={iconClone} size={14} />
-                  Clone repo…
-                </button>
+                {#if tabsOpen}
+                  <button
+                    class="back-btn"
+                    type="button"
+                    onclick={hideRecentRepos}
+                  >
+                    <Icon icon={iconBack} size={14} />
+                    Back to {active?.name ?? "workspace"}
+                  </button>
+                {/if}
+                {#if repos.length > 0}
+                  <button
+                    class="add-btn"
+                    type="button"
+                    onclick={() => void openFromDisk()}
+                  >
+                    <Icon icon={iconAdd} size={14} />
+                    Add existing repo…
+                  </button>
+                  <button
+                    class="clone-btn"
+                    type="button"
+                    onclick={() => (cloneOpen = true)}
+                  >
+                    <Icon icon={iconClone} size={14} />
+                    Clone repo…
+                  </button>
+                {/if}
               </div>
             {/if}
           </div>
@@ -499,7 +559,8 @@
         </span>
         <span class="foot-note">Tip: drop a folder here to open it</span>
       </footer>
-    </main>
+      </main>
+    {/if}
   {/if}
 </div>
 
@@ -553,6 +614,69 @@
   .popout-view > :global(*) {
     flex: 1;
     min-height: 0;
+  }
+
+  /* Launch restore: same visual language as the pre-load splash. */
+  .launch {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0.65rem;
+    background:
+      radial-gradient(
+        circle at 50% -12%,
+        color-mix(in srgb, var(--m3-primary) 8%, transparent),
+        transparent 46%
+      ),
+      var(--m3-surface);
+    color: var(--m3-on-surface-variant, var(--m3-on-surface));
+  }
+
+  .launch-mark {
+    display: grid;
+    place-items: center;
+    width: 3.25rem;
+    height: 3.25rem;
+    margin-bottom: 0.35rem;
+    border-radius: 0.95rem;
+    background: var(--m3-primary-container, var(--m3-surface-container));
+    color: var(--m3-on-primary-container, var(--m3-primary));
+    box-shadow: var(--m3-elevation-1);
+  }
+
+  .launch-title {
+    color: var(--m3-on-surface);
+    font-size: 0.9375rem;
+    font-weight: 500;
+  }
+
+  .launch-sub {
+    max-width: min(32rem, 80vw);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-family: var(--app-font-mono, ui-monospace, Consolas, monospace);
+    font-size: 0.75rem;
+    opacity: 0.75;
+  }
+
+  .launch-spinner {
+    width: 1.4rem;
+    height: 1.4rem;
+    margin-top: 0.35rem;
+    border-radius: 50%;
+    border: 2.5px solid color-mix(in srgb, var(--m3-primary) 25%, transparent);
+    border-top-color: var(--m3-primary);
+    animation: launch-spin 0.8s linear infinite;
+  }
+
+  @keyframes launch-spin {
+    to {
+      transform: rotate(360deg);
+    }
   }
 
   /* Home area (no tabs open) */
@@ -681,6 +805,7 @@
 
   .add-btn,
   .clone-btn,
+  .back-btn,
   .clear-search {
     display: inline-flex;
     align-items: center;
@@ -695,6 +820,7 @@
   }
 
   .add-btn,
+  .back-btn,
   .clear-search {
     border: 1px solid var(--m3-outline-variant, var(--m3-primary));
     background: none;
@@ -702,9 +828,14 @@
   }
 
   .add-btn:hover,
+  .back-btn:hover,
   .clear-search:hover {
     background: var(--m3-surface-container-high, var(--m3-surface));
     border-color: var(--m3-outline, var(--m3-primary));
+  }
+
+  .back-btn {
+    background: var(--m3-surface-container-high, var(--m3-surface));
   }
 
   .clear-search {
@@ -724,6 +855,7 @@
 
   .add-btn:focus-visible,
   .clone-btn:focus-visible,
+  .back-btn:focus-visible,
   .clear-search:focus-visible {
     outline: 2px solid var(--m3-primary);
     outline-offset: 2px;

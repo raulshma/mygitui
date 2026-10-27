@@ -42,6 +42,15 @@ describe("popoutQueryString", () => {
       "?panel=workflowrun&repo=repo1",
     );
   });
+
+  it("appends the action run id for actionrun panels", () => {
+    expect(popoutQueryString("actionrun", "repo1", { actionRunId: "act-1f" })).toBe(
+      "?panel=actionrun&repo=repo1&actionRun=act-1f",
+    );
+    expect(popoutQueryString("actionrun", "repo1", { actionRunId: "" })).toBe(
+      "?panel=actionrun&repo=repo1",
+    );
+  });
 });
 
 describe("parsePopoutQuery", () => {
@@ -52,11 +61,13 @@ describe("parsePopoutQuery", () => {
       "filehistory",
       "commitdetail",
       "workflowrun",
+      "actionrun",
     ] as const) {
       const query = popoutQueryString(panel, "repo 1", {
         path: panel === "filehistory" ? "src/a b.ts" : undefined,
         sha: panel === "commitdetail" ? "deadbeef" : undefined,
         runId: panel === "workflowrun" ? 42 : undefined,
+        actionRunId: panel === "actionrun" ? "act-1f" : undefined,
       });
       expect(parsePopoutQuery(query)).toEqual({
         panel,
@@ -64,6 +75,7 @@ describe("parsePopoutQuery", () => {
         path: panel === "filehistory" ? "src/a b.ts" : null,
         sha: panel === "commitdetail" ? "deadbeef" : null,
         runId: panel === "workflowrun" ? 42 : null,
+        actionRunId: panel === "actionrun" ? "act-1f" : null,
       });
     }
   });
@@ -88,6 +100,7 @@ describe("parsePopoutQuery", () => {
       path: null,
       sha: "abc",
       runId: null,
+      actionRunId: null,
     });
   });
 
@@ -102,6 +115,20 @@ describe("parsePopoutQuery", () => {
       path: null,
       sha: null,
       runId: 17,
+      actionRunId: null,
+    });
+  });
+
+  it("requires an action run id for actionrun", () => {
+    expect(parsePopoutQuery("?panel=actionrun&repo=r")).toBeNull();
+    expect(parsePopoutQuery("?panel=actionrun&repo=r&actionRun=")).toBeNull();
+    expect(parsePopoutQuery("?panel=actionrun&repo=r&actionRun=act-1f")).toEqual({
+      panel: "actionrun",
+      repoId: "r",
+      path: null,
+      sha: null,
+      runId: null,
+      actionRunId: "act-1f",
     });
   });
 

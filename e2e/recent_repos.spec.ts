@@ -10,6 +10,7 @@ import { expect, test, type Page } from "@playwright/test";
 import {
   installTauriMock,
   RECENT_REPOS_KEY,
+  SESSION_KEY,
   seedStorage,
   trackErrors,
   type TauriMockHandle,
@@ -59,6 +60,79 @@ test("remove drops the repo from the recent list and storage", async ({
   expect(JSON.parse(stored ?? "[]")).toEqual([
     { path: "/tmp/beta", pinned: false, lastOpened: 2 },
   ]);
+
+  expect(tracked.errors, tracked.errors.join("\n")).toEqual([]);
+  await tracked.attach(testInfo);
+});
+
+test("launch restore opens the last repo without flashing recents", async ({
+  page,
+}, testInfo) => {
+  const tracked = trackErrors(page);
+  const session = { roots: ["/tmp/repo"], activeRoot: "/tmp/repo" };
+  await boot(page, {
+    [RECENT_REPOS_KEY]: JSON.stringify([
+      { path: "/tmp/repo", pinned: false, lastOpened: 1 },
+    ]),
+    [SESSION_KEY]: JSON.stringify(session),
+  });
+
+  await page.goto("/");
+
+  // Straight into the restored workspace: the recents home never renders.
+  await expect(page.getByRole("tab", { name: "repo — /tmp/repo" }))
+    .toBeVisible();
+  await expect(
+    page.getByRole("treeitem", { name: "src/app.ts" }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Recent repositories" }),
+  ).toHaveCount(0);
+
+  expect(tracked.errors, tracked.errors.join("\n")).toEqual([]);
+  await tracked.attach(testInfo);
+});
+
+test("top-bar home opens recents above open tabs; back returns", async ({
+  page,
+}, testInfo) => {
+  const tracked = trackErrors(page);
+  await boot(page, {
+    [RECENT_REPOS_KEY]: JSON.stringify([
+      { path: "/tmp/repo", pinned: false, lastOpened: 1 },
+    ]),
+    [SESSION_KEY]: JSON.stringify({
+      roots: ["/tmp/repo"],
+      activeRoot: "/tmp/repo",
+    }),
+  });
+
+  await page.goto("/");
+  const tab = page.getByRole("tab", { name: "repo — /tmp/repo" });
+  await expect(tab).toBeVisible();
+
+  await page.getByRole("button", { name: "Recent repositories" }).click();
+
+  // The overlay lists recents while the tab strip stays put.
+  await expect(
+    page.getByRole("heading", { name: "Recent repositories" }),
+  ).toBeVisible();
+  await expect(tab).toBeVisible();
+  await expect(
+    page.getByRole("treeitem", { name: "src/app.ts" }),
+  ).toHaveCount(0);
+
+  // Clicking the open tab returns to its workspace without reopening it.
+  await tab.click();
+  await expect(
+    page.getByRole("heading", { name: "Recent repositories" }),
+  ).toHaveCount(0);
+  await expect(
+    page.getByRole("treeitem", { name: "src/app.ts" }),
+  ).toBeVisible();
+  expect((await page.evaluate(() =>
+    window.localStorage.getItem("mygitui.session"))) ?? "")
+    .toContain("/tmp/repo");
 
   expect(tracked.errors, tracked.errors.join("\n")).toEqual([]);
   await tracked.attach(testInfo);

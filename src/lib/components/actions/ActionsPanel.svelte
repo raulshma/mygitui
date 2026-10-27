@@ -8,20 +8,15 @@
    *    inline (name, command, scope, optional shortcut) with Run and
    *    Delete; an add form appends new defs (persisted across sessions).
    *  - Runs: recent runs of this repo (newest first), each with a status
-   *    chip (running / exit N), an expandable terminal-style output view
-   *    (monospace, auto-scrolled to the bottom, display-capped) and a
-   *    Cancel button while running.
+   *    chip (running / exit N) and a Cancel button while running. Selecting
+   *    a run opens its full log in the center editor (`ActionRunView`),
+   *    where it can also be popped out into its own window.
    *
    * Backend access goes through `actionsStore` (which owns the
    * `action-output` subscription); palette integration calls
    * `runAction(repoId, def)` from `$lib/stores/actions.svelte` directly.
    */
-  import {
-    outputDisplayLines,
-    runStatusLabel,
-    truncateLines,
-    RUN_LINE_CAP,
-  } from "./actionsModel";
+  import { runStatusLabel } from "./actionsModel";
   import {
     comboFromKeyboardEvent,
     defForEvent,
@@ -36,6 +31,7 @@
     type ActionDef,
   } from "$lib/stores/actions.svelte";
   import { projectsStore } from "$lib/stores/projects.svelte";
+  import { emitUiEvent } from "$lib/palette/events";
   import type { ProjectInfo, ProjectScript } from "$lib/ipc/types";
 
   let { repoId }: { repoId: string } = $props();
@@ -71,7 +67,7 @@
       if (!def) return;
       event.preventDefault();
       event.stopPropagation();
-      void actionsStore.run(repoId, def);
+      runDef(def);
     };
     window.addEventListener("keydown", handler, true);
     return () => window.removeEventListener("keydown", handler, true);
@@ -90,9 +86,10 @@
   let addCommand = $state("");
   let addScope = $state<"global" | "repo">("repo");
 
-  // Expand state: which run's output is open (one at a time).
-  let expandedRunId = $state<string | null>(null);
-  let outputBody: HTMLDivElement | undefined = $state();
+  /** Opens a run's detail + log in the center editor. */
+  function openRun(runId: string): void {
+    emitUiEvent("action-run-open", { repoId, runId });
+  }
 
   function submitAdd(event: SubmitEvent): void {
     event.preventDefault();
@@ -109,7 +106,9 @@
   }
 
   function runDef(def: ActionDef): void {
-    void actionsStore.run(repoId, def);
+    void actionsStore.run(repoId, def).then((runId) => {
+      if (runId) openRun(runId);
+    });
   }
 
   function removeDef(id: string): void {
@@ -168,8 +167,8 @@
     void actionsStore
       .run(repoId, scriptDef(project, script))
       .then((runId) => {
-        // Auto-open the output so first-time users see what the script does.
-        if (runId) expandedRunId = runId;
+        // Open the run in the editor so first-time users see its output.
+        if (runId) openRun(runId);
       });
   }
 
@@ -229,27 +228,6 @@
     capturePreview = "";
   }
 
-  function toggleRun(runId: string): void {
-    expandedRunId = expandedRunId === runId ? null : runId;
-  }
-
-  // Display lines for a run: display-cap re-applied over the store buffer,
-  // with the store's cross-buffer dropped count folded into the notice.
-  function displayLines(run: (typeof runs)[number]): string[] {
-    const kept = truncateLines(run.lines, RUN_LINE_CAP);
-    return outputDisplayLines(kept.lines, run.dropped + kept.dropped, RUN_LINE_CAP);
-  }
-
-  // Auto-scroll the open output to the bottom as lines land.
-  $effect(() => {
-    if (!expandedRunId) return;
-    const run = runs.find((r) => r.run_id === expandedRunId);
-    void run?.lines.length;
-    void run?.done;
-    requestAnimationFrame(() => {
-      if (outputBody) outputBody.scrollTop = outputBody.scrollHeight;
-    });
-  });
 </script>
 
 <section class="actions-panel" aria-label="Detected projects and custom actions">
@@ -461,13 +439,13 @@
   {:else}
     <ul class="run-list" role="list">
       {#each runs as run (run.run_id)}
-        <li class="run-row" class:open={expandedRunId === run.run_id}>
+        <li class="run-row">
           <div class="run-head">
             <button
               class="run-toggle"
               type="button"
-              aria-expanded={expandedRunId === run.run_id}
-              onclick={() => toggleRun(run.run_id)}
+              title="Show this run's log in the editor"
+              onclick={() => openRun(run.run_id)}
             >
               <span class={`chip chip-${run.status}`}>
                 {runStatusLabel(run.status, run.exit_code)}
@@ -484,16 +462,6 @@
               </button>
             {/if}
           </div>
-          {#if expandedRunId === run.run_id}
-            <div class="term" bind:this={outputBody} aria-label={`Output of ${run.name}`}>
-              {#each displayLines(run) as line, i (i)}
-                <div class="term-line">{line}</div>
-              {/each}
-              {#if !run.done}
-                <div class="term-line term-live">▊</div>
-              {/if}
-            </div>
-          {/if}
         </li>
       {/each}
     </ul>
@@ -861,10 +829,13 @@
     border: 1px solid var(--m3-outline-variant);
     border-radius: 8px;
     overflow: hidden;
+    transition: border-color 0.12s ease, background-color 0.12s ease;
   }
 
-  .run-row.open {
+  .run-row:hover,
+  .run-row:focus-within {
     border-color: var(--m3-outline);
+    background: var(--app-hover, var(--m3-surface-container-high));
   }
 
   .run-head {
@@ -921,28 +892,5 @@
   .chip-failed {
     background: var(--m3-error-container);
     color: var(--m3-on-error-container);
-  }
-
-  .term {
-    margin: 0 0.55rem 0.55rem;
-    padding: 0.5rem;
-    max-height: 14rem;
-    overflow-y: auto;
-    background: var(--m3-surface-container-lowest, transparent);
-    border: 1px solid var(--m3-outline-variant);
-    border-radius: 4px;
-    font-family: ui-monospace, Consolas, monospace;
-    font-size: 0.72rem;
-    line-height: 1.45;
-    white-space: pre-wrap;
-    overflow-wrap: anywhere;
-  }
-
-  .term-line {
-    color: var(--m3-on-surface);
-  }
-
-  .term-live {
-    color: var(--m3-on-surface-variant);
   }
 </style>

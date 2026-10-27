@@ -3,6 +3,7 @@
    * EditorPane — the workspace's center column (VSCode-style editor area).
    *
    * Renders exactly one of:
+   * - a custom action run (`ActionRunView`: command, live output, popout),
    * - a GitHub Actions run (`WorkflowRunView`: status, jobs, live logs),
    * - a commit's detail (`CommitDetail`: metadata, changed files, diff),
    * - compare results (`CommitDetail` in compare mode — no commit info),
@@ -36,13 +37,16 @@
     diffHunkable = false,
     historyActions = null,
     workflowRunId = null,
+    actionRunId = null,
     onClose = undefined,
     onCloseCompare = undefined,
     onCloseWorkflowRun = undefined,
+    onCloseActionRun = undefined,
     onSelectParent = undefined,
     onPopoutCommit = undefined,
     onPopoutDiff = undefined,
     onPopoutWorkflowRun = undefined,
+    onPopoutActionRun = undefined,
     onMutated = undefined,
   }: {
     repoId: string;
@@ -63,18 +67,24 @@
     diffHunkable?: boolean;
     /** Multi-selection action toolbar state from the history sidebar. */
     historyActions?: HistoryCommitActions | null;
-    /** GitHub Actions run taking over the editor (highest precedence). */
+    /** Custom action run taking over the editor. */
+    actionRunId?: string | null;
+    /** GitHub Actions run taking over the editor. */
     workflowRunId?: number | null;
     /** Clears the editor (closes the current commit/diff). */
     onClose?: () => void;
     onCloseCompare?: () => void;
     /** Closes the GitHub Actions run view. */
     onCloseWorkflowRun?: () => void;
+    /** Closes the custom action run view. */
+    onCloseActionRun?: () => void;
     onSelectParent?: (sha: string) => void;
     onPopoutCommit?: () => void;
     onPopoutDiff?: () => void;
     /** Opens the run view in its own window. */
     onPopoutWorkflowRun?: () => void;
+    /** Opens the action run log in its own window. */
+    onPopoutActionRun?: () => void;
     /** Called after a hunk stage/unstage/discard mutated the repo. */
     onMutated?: () => void;
   } = $props();
@@ -89,7 +99,21 @@
 </script>
 
 <div class="editor" aria-label="Editor">
-  {#if workflowRunId !== null}
+  {#if actionRunId !== null}
+    {#await import("$lib/components/actions/ActionRunView.svelte")}
+      <p class="estate estate-loading" role="status">
+        <Spinner size={14} />
+        Loading action run…
+      </p>
+    {:then ActionRunViewModule}
+      <ActionRunViewModule.default
+        {repoId}
+        runId={actionRunId}
+        onClose={onCloseActionRun}
+        onPopout={onPopoutActionRun}
+      />
+    {/await}
+  {:else if workflowRunId !== null}
     {#await import("$lib/components/forge/WorkflowRunView.svelte")}
       <p class="estate estate-loading" role="status">
         <Spinner size={14} />

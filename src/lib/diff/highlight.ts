@@ -15,9 +15,10 @@
  * (no WASM, unsupported grammar) degrade to plain text permanently — never
  * throw into the render path.
  *
- * Color scheme: `setScheme("light" | "dark")` selects the theme; tokens are
- * re-requested by the owner on scheme change (cache is theme-keyed only via
- * a full reset — diffs re-request what is visible).
+ * Color scheme: `setScheme("light" | "dark")` selects the theme (a no-op
+ * when unchanged); tokens are re-requested by the owner on scheme change
+ * (cache is theme-keyed only via a full reset — diffs re-request what is
+ * visible).
  */
 
 let version = 0;
@@ -28,6 +29,7 @@ export function syntaxVersion(): number {
 }
 
 export function setScheme(scheme: "light" | "dark"): void {
+  if (scheme === currentScheme) return; // safe to call on every mount
   currentScheme = scheme;
   schemeGeneration++;
   cache.clear();

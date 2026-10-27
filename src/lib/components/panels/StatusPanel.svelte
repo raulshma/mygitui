@@ -58,6 +58,7 @@
   import iconUnstageAll from "@ktibow/iconset-material-symbols/remove-done";
   import iconTemplates from "@ktibow/iconset-material-symbols/description";
   import iconIgnore from "@ktibow/iconset-material-symbols/visibility-off";
+  import iconChevron from "@ktibow/iconset-material-symbols/chevron-right";
   import iconAhead from "@ktibow/iconset-material-symbols/arrow-upward";
   import iconBehind from "@ktibow/iconset-material-symbols/arrow-downward";
   import {
@@ -284,6 +285,11 @@
 
   function shortSha(sha: string | null): string {
     return sha === null || sha === "" ? "—" : sha.slice(0, 7);
+  }
+
+  /** `splitPath` keeps the separator; rows show the folder without it. */
+  function dirText(dir: string): string {
+    return dir.replace(/[\\/]+$/, "");
   }
 
   /** Absolute worktree path of a submodule (portable separator). */
@@ -901,7 +907,7 @@
       <div class="tree" role="tree" aria-label="Changed files" tabindex="-1">
         {#each sections as section (section.id)}
           <div class="section" role="group" aria-labelledby={`section-${section.id}`}>
-            <div class="section-header">
+            <div class="section-header" class:danger={section.id === "conflicted"}>
               <button
                 class="section-toggle"
                 type="button"
@@ -910,7 +916,9 @@
                 aria-label={`${section.label} (${section.rows.length}), ${collapsed[section.id] ? "expand" : "collapse"}`}
                 onclick={() => toggleSection(section.id)}
               >
-                <span class="chevron" class:closed={collapsed[section.id]}>▾</span>
+                <span class="chevron" class:closed={collapsed[section.id]}>
+                  <Icon icon={iconChevron} size={13} />
+                </span>
                 <span class="section-name">{section.label}</span>
                 <span class="count">{section.rows.length}</span>
               </button>
@@ -939,6 +947,7 @@
                   aria-keyshortcuts={row.section === "staged" ? "S" : row.section === "conflicted" ? undefined : "S D"}
                   tabindex={row.key === tabIndexKey ? 0 : -1}
                   data-row-key={row.key}
+                  data-kind={row.kind}
                   bind:this={rowEls[row.key]}
                   title={rowTitle(row, info)}
                   onkeydown={onTreeKeydown}
@@ -950,28 +959,28 @@
                       visibleRows.findIndex((r) => r.key === row.key),
                     )}
                 >
-                  <span class={`kind ${kindClass(row.kind)}`} aria-hidden="true">
-                    {kindLetter(row.kind)}
-                  </span>
                   <Icon
                     icon={info ? iconModule : fileIconForPath(row.entry.path)}
                     size={14}
                   />
                   <span class="path">
                     <span class="base" title={row.entry.path}>{row.base}</span>
-                    <span class="meta">
-                      {#if row.entry.old_path && (row.kind === "renamed" || row.kind === "copied")}
-                        <span class="old" title={`From ${row.entry.old_path}`}>{row.entry.old_path}</span>
-                        <span class="arrow" aria-hidden="true">→</span>
-                      {/if}
-                      {#if row.dir}<span class="dir" title={row.dir}>{row.dir}</span>{/if}
-                    </span>
+                    {#if row.dir}
+                      <span class="dir" title={dirText(row.dir)}>{dirText(row.dir)}</span>
+                    {/if}
                   </span>
                   {#if info && display && display.tag}
                     <span class={`module-tag ${display.tone}`} title={display.detail}>
                       {display.tag}
                     </span>
                   {/if}
+                  <span
+                    class={`kind ${kindClass(row.kind)}`}
+                    title={kindLabel(row.kind)}
+                    aria-hidden="true"
+                  >
+                    {kindLetter(row.kind)}
+                  </span>
                   <span class="row-actions">
                     {#if row.section === "staged"}
                       <IconButton
@@ -1075,7 +1084,9 @@
                 aria-label={`Submodules (${extraModules.length}), ${modulesCollapsed ? "expand" : "collapse"}`}
                 onclick={toggleModules}
               >
-                <span class="chevron" class:closed={modulesCollapsed}>▾</span>
+                <span class="chevron" class:closed={modulesCollapsed}>
+                  <Icon icon={iconChevron} size={13} />
+                </span>
                 <span class="section-name">Submodules</span>
                 <span class="count">{extraModules.length}</span>
               </button>
@@ -1104,7 +1115,6 @@
                   title={moduleTitle(info)}
                   oncontextmenu={(event) => submoduleMenu(event, info)}
                 >
-                  <span class="kind k-module" aria-hidden="true">S</span>
                   <Icon icon={iconModule} size={14} />
                   <button
                     class="module-open"
@@ -1114,9 +1124,9 @@
                   >
                     <span class="path">
                       <span class="base" title={info.path}>{parts.base}</span>
-                      <span class="meta">
-                        {#if parts.dir}<span class="dir" title={parts.dir}>{parts.dir}</span>{/if}
-                      </span>
+                      {#if parts.dir}
+                        <span class="dir" title={dirText(parts.dir)}>{dirText(parts.dir)}</span>
+                      {/if}
                     </span>
                     {#if display.tag}
                       <span class={`module-tag ${display.tone}`} title={display.detail}>
@@ -1124,6 +1134,7 @@
                       </span>
                     {/if}
                   </button>
+                  <span class="kind k-module" title="Submodule" aria-hidden="true">S</span>
                   <span class="row-actions">
                     <IconButton
                       icon={iconUpdate}
@@ -1360,6 +1371,21 @@
     width: 100%;
     background: var(--m3-surface-container, var(--m3-surface));
     border-bottom: 1px solid var(--app-border, var(--m3-outline-variant));
+    user-select: none;
+  }
+
+  /* A hairline between groups; the first group needs none. */
+  .section + .section .section-header {
+    border-top: 1px solid var(--app-border, var(--m3-outline-variant));
+  }
+
+  .section-header.danger .section-toggle {
+    color: var(--app-deleted, var(--m3-error));
+  }
+
+  .section-header.danger .count {
+    background: var(--app-conflicted-bg, var(--m3-error-container));
+    color: var(--app-deleted, var(--m3-error));
   }
 
   .section-toggle {
@@ -1367,18 +1393,23 @@
     min-width: 0;
     display: flex;
     align-items: center;
-    gap: 0.25rem;
-    height: 1.65rem;
+    gap: 0.3rem;
+    height: 1.85rem;
     border: none;
     background: transparent;
     color: var(--m3-on-surface-variant, var(--m3-on-surface));
     font: inherit;
     font-size: 0.6875rem;
-    font-weight: 600;
-    letter-spacing: 0.02em;
-    padding: 0 0.4rem;
+    font-weight: 700;
+    letter-spacing: 0.045em;
+    text-transform: uppercase;
+    padding: 0 0.5rem;
     cursor: pointer;
     text-align: left;
+  }
+
+  .section-toggle:hover {
+    color: var(--m3-on-surface);
   }
 
   .section-toggle:focus-visible {
@@ -1387,15 +1418,18 @@
   }
 
   .chevron {
-    display: inline-block;
-    width: 0.75rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1rem;
     flex: none;
-    font-size: 0.625rem;
-    transition: transform 0.1s ease;
+    opacity: 0.8;
+    transform: rotate(90deg);
+    transition: transform 0.12s ease;
   }
 
   .chevron.closed {
-    transform: rotate(-90deg);
+    transform: rotate(0deg);
   }
 
   .section-name {
@@ -1403,21 +1437,32 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    line-height: 1.2;
   }
 
   .count {
+    flex: none;
+    min-width: 1.15rem;
     margin-left: auto;
-    background: var(--m3-surface-container-high, var(--m3-surface));
+    padding: 0 0.375rem;
     border-radius: var(--m3-shape-full, 9999px);
-    padding: 0 0.4rem;
+    background: var(--m3-surface-container-high, var(--m3-surface));
+    color: var(--m3-on-surface-variant, var(--m3-on-surface));
     font-size: 0.625rem;
+    font-weight: 600;
+    line-height: 1.075rem;
+    text-align: center;
     font-variant-numeric: tabular-nums;
+    transition: opacity 0.1s ease;
   }
 
+  /* Hover action replaces the count instead of reserving a permanent gap. */
   .section-action {
-    flex: none;
+    position: absolute;
+    right: 0.3rem;
+    top: 50%;
+    transform: translateY(-50%);
     display: inline-flex;
-    padding-right: 0.25rem;
     opacity: 0;
     transition: opacity 0.1s ease;
   }
@@ -1427,17 +1472,22 @@
     opacity: 1;
   }
 
+  .section-header:hover .count,
+  .section-header:focus-within .count {
+    opacity: 0;
+  }
+
   .row {
     position: relative;
     display: flex;
     align-items: center;
-    gap: 0.3rem;
+    gap: 0.4rem;
     min-width: 0;
-    min-height: 1.5rem;
-    padding: 0 0.35rem 0 0.4rem;
+    min-height: 1.75rem;
+    padding: 0 0.45rem 0 0.5rem;
     cursor: pointer;
     content-visibility: auto;
-    contain-intrinsic-size: auto 1.5rem;
+    contain-intrinsic-size: auto 1.75rem;
   }
 
   .row:hover {
@@ -1458,74 +1508,78 @@
     color: var(--app-deleted, var(--m3-error));
   }
 
-  .row :global(svg) {
+  .row > :global(svg) {
     flex: none;
     color: var(--m3-on-surface-variant, var(--m3-on-surface));
+    opacity: 0.9;
   }
 
+  /*
+   * VSCode-style change letter: a fixed right-hand column. Hovering the row
+   * swaps it for the inline actions, so the path keeps the full width.
+   */
   .kind {
     flex: none;
-    width: 1.05rem;
-    height: 1.05rem;
+    width: 1rem;
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    border-radius: 3px;
-    font-size: 0.625rem;
+    font-size: 0.6875rem;
     font-weight: 700;
     font-family: var(--app-font-mono, ui-monospace, Consolas, monospace);
     line-height: 1;
+    transition: opacity 0.1s ease;
+  }
+
+  .row:hover .kind,
+  .row:focus-visible .kind,
+  .row:has(:focus-visible) .kind {
+    opacity: 0;
   }
 
   .k-added {
     color: var(--app-added, var(--m3-primary));
-    background: var(--app-added-bg, transparent);
   }
 
   .k-deleted {
     color: var(--app-deleted, var(--m3-error));
-    background: var(--app-deleted-bg, transparent);
   }
 
   .k-renamed {
     color: var(--app-renamed, var(--m3-tertiary));
-    background: var(--app-renamed-bg, transparent);
   }
 
   .k-modified {
     color: var(--app-modified, var(--m3-secondary));
-    background: var(--app-modified-bg, transparent);
   }
 
   .k-untracked {
     color: var(--app-untracked, var(--m3-on-surface-variant));
-    background: var(--app-untracked-bg, transparent);
   }
 
   .k-conflicted {
     color: var(--app-conflicted, var(--m3-error));
-    background: var(--app-conflicted-bg, transparent);
   }
 
   .k-module {
     color: var(--app-modified, var(--m3-tertiary));
-    background: var(--app-modified-bg, transparent);
   }
 
   .path {
-    flex: 1;
+    flex: 1 1 auto;
     min-width: 0;
     display: flex;
     align-items: baseline;
-    gap: 0.35rem;
+    gap: 0.4rem;
     overflow: hidden;
     font-family: var(--app-font-mono, ui-monospace, Consolas, monospace);
-    font-size: 0.75rem;
+    font-size: 0.78125rem;
+    line-height: 1.3;
   }
 
   .base {
     flex: 0 1 auto;
-    min-width: 0;
+    min-width: 2rem;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -1533,45 +1587,48 @@
     font-weight: 600;
   }
 
-  .meta {
-    flex: 0 1 auto;
-    min-width: 0;
-    margin-left: auto;
-    display: flex;
-    align-items: baseline;
-    gap: 0.25rem;
+  /* VSCode tints the label itself, so status reads without the letter. */
+  .row[data-kind="added"] .base {
+    color: var(--app-added, var(--m3-on-surface));
   }
 
-  .dir {
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    text-align: right;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    opacity: 0.78;
+  .row[data-kind="untracked"] .base {
+    color: var(--app-untracked, var(--m3-on-surface));
   }
 
-  .old {
-    flex: none;
-    max-width: 9rem;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    opacity: 0.7;
+  .row[data-kind="modified"] .base {
+    color: var(--app-modified, var(--m3-on-surface));
+  }
+
+  .row[data-kind="renamed"] .base,
+  .row[data-kind="copied"] .base {
+    color: var(--app-renamed, var(--m3-on-surface));
+  }
+
+  .row[data-kind="conflicted"] .base {
+    color: var(--app-conflicted, var(--m3-error));
+  }
+
+  .row[data-kind="deleted"] .base {
+    color: var(--app-deleted, var(--m3-error));
     text-decoration: line-through;
+    text-decoration-thickness: 1px;
   }
 
-  .arrow {
-    flex: none;
+  /* The directory yields all its space before the filename shrinks. */
+  .dir {
+    flex: 0 9999 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
     color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    padding: 0 0.15rem;
+    opacity: 0.85;
   }
 
   .module-tag {
     flex: none;
-    max-width: 8.5rem;
+    max-width: 6.5rem;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -1601,8 +1658,8 @@
   }
 
   .row:hover .row-actions,
-  .row:focus-within .row-actions,
-  .row.selected .row-actions {
+  .row:focus-visible .row-actions,
+  .row:has(:focus-visible) .row-actions {
     opacity: 1;
   }
 
@@ -1636,11 +1693,11 @@
   }
 
   .module-open {
-    flex: 1;
+    flex: 1 1 auto;
     min-width: 0;
     display: flex;
     align-items: center;
-    gap: 0.3rem;
+    gap: 0.4rem;
     border: none;
     background: transparent;
     color: inherit;
@@ -1654,10 +1711,6 @@
     outline: 2px solid var(--m3-primary);
     outline-offset: 1px;
     border-radius: 2px;
-  }
-
-  .module-row .path {
-    flex: 1;
   }
 
   .empty-state {
@@ -1765,6 +1818,24 @@
     }
 
     .row-actions::before {
+      display: none;
+    }
+
+    /* Actions sit in the flow, so the letter must stay put. */
+    .row:hover .kind,
+    .row:focus-visible .kind,
+    .row:has(:focus-visible) .kind {
+      opacity: 1;
+    }
+
+    .section-action {
+      position: static;
+      transform: none;
+      opacity: 1;
+      padding-right: 0.25rem;
+    }
+
+    .section-header .count {
       display: none;
     }
   }

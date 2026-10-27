@@ -536,6 +536,38 @@ describe("session persistence", () => {
     expect(store.activeId).toBe("repo-2");
   });
 
+  it("starts held in the launch state until the stored session settles", async () => {
+    const storage = memSessionStorage();
+    storage.data.set(
+      "mygitui.session",
+      JSON.stringify({ roots: [ALPHA.root], activeRoot: ALPHA.root }),
+    );
+    const store = new TabStore(new RecentRepoStore(noStorage), storage);
+    // Decided at construction so the first paint already shows the launch
+    // view instead of the recents home.
+    expect(store.restoring).toBe(true);
+    expect(store.restoreRoot).toBe(ALPHA.root);
+
+    let release!: (info: typeof ALPHA) => void;
+    mockOpenRepo.mockImplementation(
+      () => new Promise((resolve) => (release = resolve)),
+    );
+    const restored = store.restoreSession();
+    expect(store.restoring).toBe(true);
+    release(ALPHA);
+    await restored;
+
+    expect(store.restoring).toBe(false);
+    expect(store.restoreRoot).toBeNull();
+    expect(store.activeId).toBe("repo-1");
+  });
+
+  it("starts ready (no launch state) without a stored session", () => {
+    const store = new TabStore(new RecentRepoStore(noStorage), memSessionStorage());
+    expect(store.restoring).toBe(false);
+    expect(store.restoreRoot).toBeNull();
+  });
+
   it("restoreSession skips folders that no longer open and never throws", async () => {
     const storage = memSessionStorage();
     storage.data.set(
@@ -553,6 +585,35 @@ describe("session persistence", () => {
     // The stored active root (alpha) is gone — fall back to the first
     // restored tab instead of landing on the home view.
     expect(store.activeId).toBe("repo-2");
+  });
+});
+
+describe("recents overlay", () => {
+  it("keeps tabs open while showing recents; activating a tab returns", async () => {
+    const store = freshStore();
+    mockOpenRepo.mockResolvedValue(ALPHA);
+    await store.openTab(ALPHA.root);
+
+    store.showRecentRepos();
+    expect(store.recentsOpen).toBe(true);
+    expect(store.tabs).toHaveLength(1);
+
+    store.setActive("repo-1");
+    expect(store.recentsOpen).toBe(false);
+
+    store.showRecentRepos();
+    await store.openTab(ALPHA.root); // dedupes into the open tab
+    expect(store.recentsOpen).toBe(false);
+  });
+
+  it("hideRecentRepos closes the overlay without touching tabs", async () => {
+    const store = freshStore();
+    mockOpenRepo.mockResolvedValue(ALPHA);
+    await store.openTab(ALPHA.root);
+    store.showRecentRepos();
+    store.hideRecentRepos();
+    expect(store.recentsOpen).toBe(false);
+    expect(store.tabs).toHaveLength(1);
   });
 });
 

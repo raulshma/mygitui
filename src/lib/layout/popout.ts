@@ -5,11 +5,13 @@
  *
  * Query contract (the new window's own URL):
  *
- *   ?panel=diff|history|filehistory|commitdetail|workflowrun&repo=<repoId>
- *   [&path=<repo-relative path>][&sha=<commit sha>][&run=<run id>]
+ *   ?panel=diff|history|filehistory|commitdetail|workflowrun|actionrun
+ *   &repo=<repoId>[&path=<repo-relative path>][&sha=<commit sha>]
+ *   [&run=<run id>][&actionRun=<action run id>]
  *
  * `path` is required for `filehistory`; `sha` for `commitdetail`; `run`
- * (a positive integer) for `workflowrun`.
+ * (a positive integer) for `workflowrun`; `actionRun` (the backend's string
+ * run id, e.g. `act-1f`) for `actionrun`.
  * `App.svelte` reads it once at startup and renders the matching view alone
  * (each wires its own stores). Outside Tauri (browser / tests) opening a
  * popout toasts instead of throwing.
@@ -33,7 +35,8 @@ export type PopoutPanel =
   | "history"
   | "filehistory"
   | "commitdetail"
-  | "workflowrun";
+  | "workflowrun"
+  | "actionrun";
 
 /** Options beyond the panel + repo (M9: file history path). */
 export interface PopoutOptions {
@@ -43,6 +46,8 @@ export interface PopoutOptions {
   sha?: string;
   /** GitHub Actions run id (required for `workflowrun`). */
   runId?: number;
+  /** Custom action run id string (required for `actionrun`). */
+  actionRunId?: string;
 }
 
 /** The popout window URL query for a panel + repo. */
@@ -65,6 +70,9 @@ export function popoutQueryString(
   ) {
     query += `&run=${options.runId}`;
   }
+  if (options.actionRunId !== undefined && options.actionRunId !== "") {
+    query += `&actionRun=${encodeURIComponent(options.actionRunId)}`;
+  }
   return query;
 }
 
@@ -74,6 +82,7 @@ export interface ParsedPopout {
   path: string | null;
   sha: string | null;
   runId: number | null;
+  actionRunId: string | null;
 }
 
 /** Parses `location.search`; `null` when this window is not a popout. */
@@ -91,7 +100,8 @@ export function parsePopoutQuery(search: string): ParsedPopout | null {
       panel !== "history" &&
       panel !== "filehistory" &&
       panel !== "commitdetail" &&
-      panel !== "workflowrun") ||
+      panel !== "workflowrun" &&
+      panel !== "actionrun") ||
     !repoId
   ) {
     return null;
@@ -101,12 +111,15 @@ export function parsePopoutQuery(search: string): ParsedPopout | null {
   const rawRun = params.get("run");
   const runId = rawRun !== null && /^\d+$/.test(rawRun) ? Number(rawRun) : null;
   if (panel === "workflowrun" && (runId === null || runId <= 0)) return null;
+  const actionRunId = params.get("actionRun");
+  if (panel === "actionrun" && !actionRunId) return null;
   return {
     panel,
     repoId,
     path: params.get("path"),
     sha: params.get("sha"),
     runId,
+    actionRunId,
   };
 }
 
@@ -129,7 +142,11 @@ function popoutLabel(
     options.runId !== undefined && Number.isInteger(options.runId)
       ? `-run${options.runId}`
       : "";
-  return `popout-${panel}-${safe || "repo"}${pathKey}${shaKey}${runKey}`;
+  const actionKey =
+    options.actionRunId !== undefined && options.actionRunId !== ""
+      ? `-${options.actionRunId.replace(/[^a-zA-Z0-9-/:_]/g, "").slice(0, 24)}`
+      : "";
+  return `popout-${panel}-${safe || "repo"}${pathKey}${shaKey}${runKey}${actionKey}`;
 }
 
 /**
@@ -161,6 +178,10 @@ export async function openPanelPopout(
     (options.runId === undefined || !Number.isInteger(options.runId))
   ) {
     toast("Run details need a run id", { kind: "error" });
+    return;
+  }
+  if (panel === "actionrun" && !options.actionRunId) {
+    toast("Action run logs need a run id", { kind: "error" });
     return;
   }
   const label = popoutLabel(panel, repoId, options);

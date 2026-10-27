@@ -17,7 +17,14 @@
  * root on hover.
  */
   import type { Snippet } from "svelte";
-  import { closeTab, setActive, tabStore } from "$lib/stores/tabs.svelte";
+  import {
+    closeTab,
+    setActive,
+    showRecentRepos,
+    tabStore,
+  } from "$lib/stores/tabs.svelte";
+  import Icon from "$lib/components/icons/Icon.svelte";
+  import iconHome from "@ktibow/iconset-material-symbols/home-rounded";
 
   let {
     openFolder,
@@ -69,6 +76,17 @@
 </script>
 
 <div class="tabbar">
+  <button
+    class="tab-home"
+    class:active={tabStore.recentsOpen}
+    type="button"
+    aria-label="Recent repositories"
+    aria-pressed={tabStore.recentsOpen}
+    title="Recent repositories"
+    onclick={showRecentRepos}
+  >
+    <Icon icon={iconHome} size={17} />
+  </button>
   <div
     class="tabstrip"
     role="tablist"
@@ -131,6 +149,37 @@
     min-width: 0;
     background: var(--m3-surface-container, var(--m3-surface));
     border-bottom: 1px solid var(--m3-outline-variant, var(--m3-primary));
+  }
+
+  .tab-home {
+    flex: none;
+    align-self: center;
+    display: grid;
+    place-items: center;
+    width: 1.9rem;
+    height: 1.9rem;
+    margin-left: 0.5rem;
+    padding: 0;
+    border: none;
+    border-radius: 0.5rem;
+    background: none;
+    color: var(--m3-on-surface-variant, var(--m3-on-surface));
+    cursor: pointer;
+  }
+
+  .tab-home:hover {
+    background: var(--m3-surface-container-high, var(--m3-surface));
+    color: var(--m3-on-surface);
+  }
+
+  .tab-home.active {
+    background: var(--m3-secondary-container, var(--m3-surface-container-high));
+    color: var(--m3-on-secondary-container, var(--m3-primary));
+  }
+
+  .tab-home:focus-visible {
+    outline: 2px solid var(--m3-primary);
+    outline-offset: -2px;
   }
 
   .tabstrip {

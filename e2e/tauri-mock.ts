@@ -111,6 +111,9 @@ export function trackErrors(page: Page): {
 /** localStorage key of the recent-repositories list. */
 export const RECENT_REPOS_KEY = "mygitui.recent-repos";
 
+/** localStorage key of the last open-tab session (launch restore). */
+export const SESSION_KEY = "mygitui.session";
+
 /** Seeds localStorage entries before any app script runs (addInitScript). */
 export async function seedStorage(
   page: Page,
@@ -423,7 +426,8 @@ function BOOTSTRAP(options: TauriMockOptions): void {
         return Promise.resolve(null);
       }
       if (cmd === "repo_diff_stream") {
-        deliverChannel((args as { on_page?: unknown })?.on_page, []);
+        const page = cmd in commandMocks ? commandMocks[cmd] : [];
+        deliverChannel((args as { on_page?: unknown })?.on_page, page);
         return Promise.resolve(null);
       }
 

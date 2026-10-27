@@ -125,8 +125,8 @@
 
   .sig-badge.verified {
     border-color: transparent;
-    background: color-mix(in srgb, #2e7d32 18%, transparent);
-    color: #2e7d32;
+    background: var(--app-added-bg, color-mix(in srgb, var(--m3-primary) 18%, transparent));
+    color: var(--app-added, var(--m3-primary));
     font-weight: 600;
   }
 
@@ -139,8 +139,8 @@
 
   .sig-badge.unverifiable {
     border-color: transparent;
-    background: color-mix(in srgb, #b26a00 16%, transparent);
-    color: #b26a00;
+    background: var(--app-modified-bg, color-mix(in srgb, var(--m3-tertiary) 16%, transparent));
+    color: var(--app-modified, var(--m3-tertiary));
   }
 
   .sig-badge.neutral {
