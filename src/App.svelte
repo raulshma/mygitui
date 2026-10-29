@@ -25,7 +25,6 @@
   import TabStrip from "$lib/components/TabStrip.svelte";
   import ThemeToggle from "$lib/components/ThemeToggle.svelte";
   import Icon from "$lib/components/icons/Icon.svelte";
-  import RepoView from "$lib/components/panels/RepoView.svelte";
   import { formatRelativeTime } from "$lib/git/format";
   import iconBrand from "@ktibow/iconset-material-symbols/account-tree";
   import iconAdd from "@ktibow/iconset-material-symbols/add";
@@ -332,12 +331,23 @@
     {:else if showWorkspace}
       <main class="repo-view">
         {#if active}
-          <RepoView
-            repoId={active.id}
-            name={active.name}
-            root={active.root}
-            status={active.status}
-          />
+            {#await import("$lib/components/panels/RepoView.svelte")}
+              <div class="repo-loading" aria-busy="true">
+                <span class="launch-spinner" aria-hidden="true"></span>
+                <span>Loading workspace…</span>
+              </div>
+            {:then RepoViewModule}
+              <RepoViewModule.default
+                repoId={active.id}
+                name={active.name}
+                root={active.root}
+                status={active.status}
+              />
+            {:catch}
+              <p class="repo-load-error" role="alert">
+                The repository workspace could not be loaded. Restart the app to try again.
+              </p>
+            {/await}
         {/if}
       </main>
     {:else}
@@ -602,6 +612,21 @@
     min-width: 0;
     min-height: 0;
     display: flex;
+  }
+
+  .repo-loading {
+    flex: 1;
+    display: grid;
+    place-content: center;
+    justify-items: center;
+    gap: 0.6rem;
+    color: var(--m3-on-surface-variant, var(--m3-on-surface));
+    font-size: 0.875rem;
+  }
+
+  .repo-load-error {
+    margin: auto;
+    color: var(--m3-error, #b3261e);
   }
 
   /* M4 F1 popout window: one panel filling the window. */

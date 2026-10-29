@@ -46,6 +46,7 @@ import {
 } from "$lib/components/icons/fileIcons";
 import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.svelte";
   import { openPanelPopout } from "$lib/layout/popout";
+  import { visibleRange } from "$lib/components/graph/layout";
   import iconStage from "@ktibow/iconset-material-symbols/add";
   import iconUnstage from "@ktibow/iconset-material-symbols/remove";
   import iconDiscard from "@ktibow/iconset-material-symbols/undo";
@@ -117,6 +118,13 @@ import iconPalette from "@ktibow/iconset-material-symbols/palette";
   let anchorIndex = 0;
   /** Row elements by key (roving-tabindex focus targets). */
   const rowEls = $state<Record<string, HTMLElement | undefined>>({});
+  const STATUS_ROW_HEIGHT = 24;
+  const STATUS_SECTION_HEIGHT = 26;
+  const STATUS_ROW_OVERSCAN = 12;
+  const STATUS_VIRTUALIZE_THRESHOLD = 150;
+  let treeElement: HTMLDivElement | undefined = $state();
+  let treeScrollTop = $state(0);
+  let treeViewportHeight = $state(640);
   /** Staging mutation in flight (disables the controls momentarily). */
   let mutating = $state(false);
 
@@ -227,12 +235,61 @@ import iconPalette from "@ktibow/iconset-material-symbols/palette";
   const visibleRows = $derived(
     sections.filter((s) => !collapsed[s.id]).flatMap((s) => s.rows),
   );
+
+  /** Keep the full status model, but mount only the viewport for large lists. */
+  const sectionWindows = $derived.by(() => {
+    let sectionTop = 0;
+    return sections.map((section) => {
+      const isCollapsed = collapsed[section.id];
+      const rowsTop = sectionTop + STATUS_SECTION_HEIGHT;
+      let first = 0;
+      let last = isCollapsed ? 0 : section.rows.length;
+
+      if (!isCollapsed && section.rows.length > STATUS_VIRTUALIZE_THRESHOLD) {
+        const rowsBottom = rowsTop + section.rows.length * STATUS_ROW_HEIGHT;
+        const viewportBottom = treeScrollTop + treeViewportHeight;
+        if (rowsBottom <= treeScrollTop + STATUS_SECTION_HEIGHT) {
+          first = section.rows.length;
+          last = section.rows.length;
+        } else if (rowsTop >= viewportBottom) {
+          first = 0;
+          last = 0;
+        } else {
+          const range = visibleRange(
+            treeScrollTop - rowsTop,
+            treeViewportHeight,
+            section.rows.length,
+            STATUS_ROW_HEIGHT,
+            STATUS_ROW_OVERSCAN,
+          );
+          first = Math.min(section.rows.length, range.first);
+          last = Math.max(first, Math.min(section.rows.length, range.last));
+        }
+      }
+
+      sectionTop = rowsTop +
+        (isCollapsed
+          ? 0
+          : (section.rows.length + section.modules.length) * STATUS_ROW_HEIGHT);
+
+      return {
+        section,
+        first,
+        last,
+        rows:
+          first === 0 && last === section.rows.length
+            ? section.rows
+            : section.rows.slice(first, last),
+      };
+    });
+  });
+  const renderedRows = $derived(sectionWindows.flatMap((window) => window.rows));
   /** The single tab-reachable row (falls back to the first visible row when
    *  the focused one is filtered out or collapsed away). */
   const tabIndexKey = $derived(
-    focusKey !== null && visibleRows.some((r) => r.key === focusKey)
+    focusKey !== null && renderedRows.some((r) => r.key === focusKey)
       ? focusKey
-      : (visibleRows[0]?.key ?? null),
+      : (renderedRows[0]?.key ?? null),
   );
   /** Staging controls need a repo and no in-flight mutation. */
   const canMutate = $derived(repoId !== null && !mutating);
@@ -293,17 +350,68 @@ import iconPalette from "@ktibow/iconset-material-symbols/palette";
 
   function setRangeSelection(from: number, to: number): void {
     const [lo, hi] = from <= to ? [from, to] : [to, from];
-    const paths: string[] = [];
+    const paths = new Set<string>();
     for (let i = lo; i <= hi; i++) {
       const path = visibleRows[i]?.entry.path;
-      if (path !== undefined && !paths.includes(path)) paths.push(path);
+      if (path !== undefined) paths.add(path);
     }
-    selected = paths;
+    selected = [...paths];
   }
 
   function focusRow(key: string): void {
     focusKey = key;
-    rowEls[key]?.focus();
+    const mounted = rowEls[key];
+    if (mounted?.isConnected) {
+      mounted.focus();
+      return;
+    }
+
+    const element = treeElement;
+    if (!element) return;
+
+    let offset = 0;
+    let rowTop: number | null = null;
+    for (const section of sections) {
+      offset += STATUS_SECTION_HEIGHT;
+      if (collapsed[section.id]) continue;
+      const index = section.rows.findIndex((row) => row.key === key);
+      if (index !== -1) {
+        rowTop = offset + index * STATUS_ROW_HEIGHT;
+        break;
+      }
+      offset += (section.rows.length + section.modules.length) * STATUS_ROW_HEIGHT;
+    }
+    if (rowTop === null) return;
+
+    const stickyTop = element.scrollTop + STATUS_SECTION_HEIGHT;
+    const viewportBottom = element.scrollTop + element.clientHeight;
+    if (rowTop < stickyTop) {
+      element.scrollTop = Math.max(0, rowTop - STATUS_SECTION_HEIGHT);
+    } else if (rowTop + STATUS_ROW_HEIGHT > viewportBottom) {
+      element.scrollTop = rowTop + STATUS_ROW_HEIGHT - element.clientHeight;
+    }
+    treeScrollTop = element.scrollTop;
+    treeViewportHeight = Math.max(1, element.clientHeight);
+    requestAnimationFrame(() => rowEls[key]?.focus());
+  }
+
+  function trackTreeViewport(node: HTMLDivElement) {
+    treeElement = node;
+    const update = () => {
+      treeScrollTop = node.scrollTop;
+      treeViewportHeight = Math.max(1, node.clientHeight);
+    };
+    const observer = new ResizeObserver(update);
+    observer.observe(node);
+    node.addEventListener("scroll", update, { passive: true });
+    update();
+    return {
+      destroy() {
+        observer.disconnect();
+        node.removeEventListener("scroll", update);
+        if (treeElement === node) treeElement = undefined;
+      },
+    };
   }
 
   function shortSha(sha: string | null): string {
@@ -487,16 +595,17 @@ import iconPalette from "@ktibow/iconset-material-symbols/palette";
     }
     const source = index;
     if (source === null) return;
-    const paths: string[] = [];
+    const paths = new Set<string>();
     for (const row of source.bySection.changes) {
       const path = row.entry.path;
-      if (row.kind !== "conflicted" && !paths.includes(path)) paths.push(path);
+      if (row.kind !== "conflicted") paths.add(path);
     }
-    if (paths.length === 0) return;
-    const hasModule = paths.some((path) => moduleByPath.has(path));
+    if (paths.size === 0) return;
+    const files = [...paths];
+    const hasModule = files.some((path) => moduleByPath.has(path));
     void mutate("Stage all files", () =>
       stage(repoId, {
-        targets: paths.map((file) => ({ file })),
+        targets: files.map((file) => ({ file })),
         unstage: false,
       }),
     ).then((ok) => {
@@ -927,8 +1036,16 @@ import iconPalette from "@ktibow/iconset-material-symbols/palette";
         <p class="empty-hint">Nothing matches “{filterText}”.</p>
       </div>
     {:else}
-      <div class="tree" role="tree" aria-label="Changed files" tabindex="-1">
-        {#each sections as section (section.id)}
+      <div
+        class="tree"
+        role="tree"
+        aria-label="Changed files"
+        tabindex="-1"
+        bind:this={treeElement}
+        use:trackTreeViewport
+      >
+        {#each sectionWindows as window (window.section.id)}
+          {@const section = window.section}
           <div class="section" role="group" aria-labelledby={`section-${section.id}`}>
             <div class="section-header">
               <button
@@ -959,7 +1076,14 @@ import iconPalette from "@ktibow/iconset-material-symbols/palette";
               {/if}
             </div>
             {#if !collapsed[section.id]}
-              {#each section.rows as row (row.key)}
+              {#if window.first > 0}
+                <div
+                  class="row-spacer"
+                  aria-hidden="true"
+                  style:height={`${window.first * STATUS_ROW_HEIGHT}px`}
+                ></div>
+              {/if}
+              {#each window.rows as row, renderedIndex (row.key)}
                 {@const info = moduleByPath.get(row.entry.path)}
                 {@const display = info ? submoduleDisplay(info) : null}
                 <div
@@ -967,6 +1091,8 @@ import iconPalette from "@ktibow/iconset-material-symbols/palette";
                   class:selected={isSelected(row.entry.path)}
                   role="treeitem"
                   aria-selected={isSelected(row.entry.path)}
+                  aria-setsize={section.rows.length + section.modules.length}
+                  aria-posinset={window.first + renderedIndex + 1}
                   aria-label={rowAriaLabel(row, info)}
                   aria-keyshortcuts={row.section === "staged"
                     ? "S"
@@ -1106,8 +1232,15 @@ import iconPalette from "@ktibow/iconset-material-symbols/palette";
                   </span>
                 </div>
               {/each}
+              {#if window.last < section.rows.length}
+                <div
+                  class="row-spacer"
+                  aria-hidden="true"
+                  style:height={`${(section.rows.length - window.last) * STATUS_ROW_HEIGHT}px`}
+                ></div>
+              {/if}
 
-              {#each section.modules as info (info.path)}
+              {#each section.modules as info, moduleIndex (info.path)}
                 {@const display = submoduleDisplay(info)}
                 {@const parts = splitPath(info.path)}
                 <div
@@ -1115,6 +1248,8 @@ import iconPalette from "@ktibow/iconset-material-symbols/palette";
                   class:danger={display.tone === "danger"}
                   role="treeitem"
                   aria-selected="false"
+                  aria-setsize={section.rows.length + section.modules.length}
+                  aria-posinset={section.rows.length + moduleIndex + 1}
                   tabindex={-1}
                   aria-label={`${info.path}, submodule, ${display.detail}`}
                   title={moduleTitle(info)}
@@ -1381,6 +1516,8 @@ import iconPalette from "@ktibow/iconset-material-symbols/palette";
     display: flex;
     align-items: center;
     width: 100%;
+    height: 26px;
+    box-sizing: border-box;
     background: var(--m3-surface-container, var(--m3-surface));
     border-bottom: 1px solid var(--app-border, var(--m3-outline-variant));
     user-select: none;
@@ -1486,7 +1623,9 @@ import iconPalette from "@ktibow/iconset-material-symbols/palette";
     align-items: center;
     gap: 0.4rem;
     min-width: 0;
-    min-height: 1.375rem;
+    height: 1.5rem;
+    min-height: 1.5rem;
+    box-sizing: border-box;
     padding: 0 0.4rem 0 0.45rem;
     cursor: pointer;
     content-visibility: auto;
