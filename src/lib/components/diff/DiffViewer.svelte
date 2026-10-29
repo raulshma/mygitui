@@ -472,9 +472,13 @@
   /**
    * Paints the segments onto the mounted rows. Depends on `scrollTop`
    * because scrolling remounts rows and their ranges must be rebuilt.
+   * Depends on `syntaxTick` for the same reason: when background syntax
+   * parses land, rows swap their plain text nodes for token spans, and DOM
+   * mutations collapse any ranges painted against the old children.
    */
   $effect(() => {
     void scrollTop;
+    void syntaxTick;
     const list = segs;
     const side = segSel?.side;
     // jsdom (unit tests) has no Highlight API — guard at runtime.
