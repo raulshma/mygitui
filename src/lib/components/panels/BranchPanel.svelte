@@ -37,6 +37,7 @@
   import { toast } from "$lib/toast";
   import { onUiEvent } from "$lib/palette/events";
   import { showMenuAt, type MenuEntry } from "$lib/components/menu/contextMenuStore.svelte";
+  import { contextMenu } from "$lib/components/menu/contextMenuStore.svelte";
   import PreviewDialog from "$lib/components/safety/PreviewDialog.svelte";
   import ResetDialog from "$lib/components/safety/ResetDialog.svelte";
   import ConfirmDialog from "$lib/components/safety/ConfirmDialog.svelte";
@@ -47,13 +48,10 @@
   import iconRefresh from "@ktibow/iconset-material-symbols/refresh";
   import iconCleanup from "@ktibow/iconset-material-symbols/cleaning-services";
   import iconSwitch from "@ktibow/iconset-material-symbols/swap-horiz";
-  import iconMerge from "@ktibow/iconset-material-symbols/call-merge";
-  import iconRename from "@ktibow/iconset-material-symbols/edit";
-  import iconReset from "@ktibow/iconset-material-symbols/restart-alt";
-  import iconDelete from "@ktibow/iconset-material-symbols/delete";
   import iconCheck from "@ktibow/iconset-material-symbols/check";
   import iconClose from "@ktibow/iconset-material-symbols/close";
   import iconAdd from "@ktibow/iconset-material-symbols/add";
+  import iconMore from "@ktibow/iconset-material-symbols/more-vert";
 
   let {
     repoId,
@@ -545,38 +543,16 @@
                   dense
                   onclick={() => void onSwitch(branch)}
                 />
-                <IconButton
-                  icon={iconMerge}
-                  label={`Merge ${branch.name} into the current branch`}
-                  title={`Merge ${branch.name} into ${headBranch?.name ?? "HEAD"}`}
-                  dense
-                  onclick={() => (merging = branch.name)}
-                />
               {:else}
                 <span class="head-chip">HEAD</span>
               {/if}
               <IconButton
-                icon={iconRename}
-                label={`Rename ${branch.name}`}
-                title="Rename this branch"
+                icon={iconMore}
+                label={`More actions for ${branch.name}`}
+                title="Push, merge, rename, reset, or delete this branch"
                 dense
-                onclick={() => (renaming = { old: branch.name, value: branch.name })}
-              />
-              <IconButton
-                icon={iconReset}
-                label={`Reset current branch to ${branch.name}`}
-                title={`Reset current branch to ${branch.name}`}
-                dense
-                onclick={() => (resetTo = branch.name)}
-              />
-              <IconButton
-                icon={iconDelete}
-                label={`Delete ${branch.name}`}
-                title={branch.is_head ? "Cannot delete the current branch" : "Delete this branch"}
-                tone="danger"
-                dense
-                disabled={branch.is_head}
-                onclick={() => void onDeleteStart(branch)}
+                aria-haspopup="menu"
+                onclick={(event) => branchMenu(event, branch)}
               />
             </span>
           {/if}

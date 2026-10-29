@@ -49,7 +49,11 @@
   import iconBranch from "@ktibow/iconset-material-symbols/account-tree";
   import { toast } from "$lib/toast";
   import { patternFor } from "./gitignore";
-  import { showMenuAt, type MenuEntry } from "$lib/components/menu/contextMenuStore.svelte";
+  import {
+    contextMenu,
+    showMenuAt,
+    type MenuEntry,
+  } from "$lib/components/menu/contextMenuStore.svelte";
   import { floating } from "$lib/components/overlay/floating";
   import ConfirmDialog from "$lib/components/safety/ConfirmDialog.svelte";
   import GitignoreGallery from "$lib/components/panels/GitignoreGallery.svelte";
@@ -1102,26 +1106,25 @@ import iconPalette from "@ktibow/iconset-material-symbols/palette";
   }
 
   /**
-   * Row right-click: the file (or submodule) action menu. VS Code syncs the
-   * selection first — right-clicking an unselected row collapses the
-   * selection to that row — and every command then acts on the whole
-   * selection; per-file extras (ignore, history, submodule ops) stay
+   * Right-click, kebab button and Menu-key entry point share one menu. VS
+   * Code syncs the selection first — opening the menu on an unselected row
+   * collapses the selection to that row — and every command then acts on the
+   * whole selection; per-file extras (ignore, history, submodule ops) stay
    * single-selection only.
    */
-  function rowMenu(event: MouseEvent, row: StatusRow): void {
+  function syncRowSelection(row: StatusRow): void {
+    if (isSelected(row.key)) return;
+    selected = [row.key];
+    const at = visibleRows.findIndex((r) => r.key === row.key);
+    anchorIndex = at === -1 ? 0 : at;
+    focusKey = row.key;
+  }
+
+  function rowMenuEntries(row: StatusRow): MenuEntry[] {
     const rid = row.submodulePath
       ? submodulesMap[row.submodulePath]?.repoId
       : repoId;
-    if (!rid) {
-      showMenuAt(event, []);
-      return;
-    }
-    if (!isSelected(row.key)) {
-      selected = [row.key];
-      const at = visibleRows.findIndex((r) => r.key === row.key);
-      anchorIndex = at === -1 ? 0 : at;
-      focusKey = row.key;
-    }
+    if (!rid) return [];
     const targets = actionRows(row, selected, visibleRows);
     const actions = selectionActions(targets);
     const entries: MenuEntry[] = [];
@@ -1229,7 +1232,31 @@ import iconPalette from "@ktibow/iconset-material-symbols/palette";
         );
       }
     }
-    showMenuAt(event, entries);
+    return entries;
+  }
+
+  /** Context-menu event: sync the selection, then open beside the pointer. */
+  function rowMenu(event: MouseEvent, row: StatusRow): void {
+    syncRowSelection(row);
+    showMenuAt(event, rowMenuEntries(row));
+  }
+
+  /**
+   * Kebab button / Menu key: open the same menu anchored to the row.
+   * Keyboard users reach it with the Menu key (or Shift+F10) on a focused
+   * row — the hover buttons alone are not a keyboard path.
+   */
+  function openRowMenu(row: StatusRow): void {
+    syncRowSelection(row);
+    const entries = rowMenuEntries(row);
+    if (entries.length === 0) return;
+    const el = rowEls[row.key];
+    const rect = el?.getBoundingClientRect();
+    contextMenu.show(
+      rect ? rect.right : window.innerWidth / 2,
+      rect ? rect.bottom : window.innerHeight / 2,
+      entries,
+    );
   }
 
   /** Extra submodule row menu (modules not represented in git status). */
@@ -1391,6 +1418,9 @@ import iconPalette from "@ktibow/iconset-material-symbols/palette";
     } else if (event.key === "Enter") {
       event.preventDefault();
       openRow(row);
+    } else if (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10")) {
+      event.preventDefault();
+      openRowMenu(row);
     } else if (event.key === "s" || event.key === "S") {
       if (row.kind !== "conflicted") {
         event.preventDefault();
@@ -1680,6 +1710,20 @@ import iconPalette from "@ktibow/iconset-material-symbols/palette";
                 </span>
               {/if}
             </span>
+          {/if}
+          {#if targetRepoId}
+            <IconButton
+              icon={iconMore}
+              label={`More actions for ${row.entry.path}`}
+              title="More actions"
+              dense
+              tabindex={-1}
+              aria-haspopup="menu"
+              onclick={(event) => {
+                event.stopPropagation();
+                openRowMenu(row);
+              }}
+            />
           {/if}
         </span>
       </div>

@@ -92,3 +92,21 @@ export function showMenuAt(
   event.stopPropagation();
   contextMenu.show(event.clientX, event.clientY, entries);
 }
+
+/**
+ * Convenience for anchor buttons (kebabs, split-button chevrons): opens the
+ * menu below the element, aligned to its start (or end) edge; `above`
+ * anchors to the top edge instead (bottom-of-screen toolbars).
+ */
+export function showMenuAtElement(
+  anchor: Element,
+  entries: MenuEntry[],
+  opts: { align?: "start" | "end"; above?: boolean } = {},
+): void {
+  const rect = anchor.getBoundingClientRect();
+  contextMenu.show(
+    (opts.align ?? "start") === "end" ? rect.right : rect.left,
+    opts.above ? rect.top : rect.bottom,
+    entries,
+  );
+}

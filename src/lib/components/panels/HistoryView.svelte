@@ -140,7 +140,7 @@
   const sidebar = $derived(variant === "sidebar");
 
   /** Must match the row height passed to (and defaulted by) GraphCanvas. */
-  const ROW_HEIGHT = 24;
+  const ROW_HEIGHT = 28;
   const GRAPH_WIDTH = 220;
   const OVERSCAN = 10;
 
@@ -999,7 +999,7 @@
               }}
             >
               <span class="sha">{v.commit.sha.slice(0, 7)}</span>
-              {#each v.commit.refs as ref (ref)}
+              {#each v.commit.refs.slice(0, 3) as ref, i (`${v.commit.sha}:${i}:${ref}`)}
                 {@const kind = classifyRef(ref)}
                 {@const scope =
                   kind === "local"
@@ -1018,6 +1018,15 @@
                   <span class="ref-name">{shortRefName(ref)}</span>
                 </span>
               {/each}
+              {#if v.commit.refs.length > 3}
+                <span
+                  class="ref ref-more"
+                  title={v.commit.refs.slice(3).map(shortRefName).join(", ")}
+                  aria-label={`${v.commit.refs.length - 3} more refs`}
+                >
+                  +{v.commit.refs.length - 3}
+                </span>
+              {/if}
               <span class="summary" title={v.commit.summary}>{v.commit.summary}</span>
               <span class="author">{v.commit.author.name}</span>
               <span class="date">{formatRelativeTime(v.commit.author.time)}</span>
@@ -1308,20 +1317,29 @@
     display: none;
   }
 
-  /* Sidebar rows: narrower padding and no author/date (the summary, refs and
+  /* Sidebar rows: narrower padding, no author (the relative date + refs and
      short sha carry the identification at this width). */
   .history.sidebar .row {
     gap: 0.3rem;
     padding: 0 0.45rem 0 0.55rem;
   }
 
-  .history.sidebar .row .author,
-  .history.sidebar .row .date {
+  .history.sidebar .row .author {
     display: none;
+  }
+
+  .history.sidebar .row .date {
+    font-size: 0.65rem;
   }
 
   .history.sidebar .row .ref {
     max-width: 6rem;
+  }
+
+  /* Compact pills in the sidebar: the scope word goes, the tint carries the
+     kind (full view keeps it for scanability). */
+  .history.sidebar .row .ref .ref-scope {
+    display: none;
   }
 
   .scroller:focus-visible {
@@ -1341,7 +1359,7 @@
     align-items: center;
     gap: 0.4rem;
     padding: 0 0.6rem 0 0.75rem;
-    font-size: 0.75rem;
+    font-size: 0.8125rem;
     cursor: pointer;
     border-bottom: 1px solid color-mix(in srgb, var(--m3-outline-variant) 45%, transparent);
   }
@@ -1406,6 +1424,7 @@
     max-width: 9rem;
     white-space: nowrap;
     padding: 0 0.35rem;
+    border: 1px solid transparent;
     border-radius: var(--m3-shape-extra-small, 4px);
     font-size: 0.6875rem;
     line-height: 1.4;
@@ -1432,18 +1451,28 @@
   }
 
   .ref-remote {
+    color: var(--m3-on-surface-variant);
+    background: none;
+    border: 1px solid var(--m3-outline-variant);
+  }
+
+  .ref-tag {
     color: var(--m3-on-tertiary-container);
     background: var(--m3-tertiary-container);
   }
 
-  .ref-tag {
-    color: var(--m3-on-secondary-container);
-    background: var(--m3-secondary-container);
+  /* HEAD: primary-tinted with a solid border — distinct, but no louder than
+     the commit summary (the old near-black chip out-shouted every row). */
+  .ref-head {
+    color: var(--m3-on-primary-container);
+    background: var(--m3-primary-container);
+    border-color: var(--m3-primary);
   }
 
-  .ref-head {
-    color: var(--m3-inverse-on-surface);
-    background: var(--m3-inverse-surface);
+  .ref-more {
+    color: var(--m3-on-surface-variant);
+    background: var(--m3-surface-container-high, var(--m3-surface));
+    font-variant-numeric: tabular-nums;
   }
 
   .graphcol {

@@ -33,6 +33,7 @@
   } from "$lib/ipc/types";
   import { opsFor } from "$lib/stores/ops.svelte";
   import { autofetch } from "$lib/stores/autofetch.svelte";
+  import { tabStore } from "$lib/stores/tabs.svelte";
   import { toast } from "$lib/toast";
   import { IconButton, Switch } from "$lib/components/m3";
   import ConfirmDialog from "$lib/components/safety/ConfirmDialog.svelte";
@@ -182,6 +183,70 @@
         tags: false,
         delete: false,
       }), true);
+  }
+
+  // -- Repo-level sync bar (UI review P2 #11) ---------------------------------
+  //
+  // The common safe actions ride on the primary remote ("origin" when
+  // present) and the current branch with default options, so the panel leads
+  // with Fetch / Pull / Push instead of a wall of switches. The per-remote
+  // cards below keep the full control set; their option switches live under
+  // an Advanced disclosure.
+
+  /** This repo's live status (ahead/behind counts on the bar buttons). */
+  const repoStatus = $derived(
+    tabStore.tabs.find((tab) => tab.id === repoId)?.status ?? null,
+  );
+  const ahead = $derived(repoStatus?.ahead ?? 0);
+  const behind = $derived(repoStatus?.behind ?? 0);
+
+  /** The remote the bar acts on (origin preferred, else the first). */
+  const primaryRemote = $derived<RemoteInfo | null>(
+    list.find((r) => r.name === "origin") ?? list[0] ?? null,
+  );
+
+  function onBarFetch(): void {
+    if (primaryRemote) onFetch(primaryRemote);
+  }
+
+  /** Safe pull: current branch, fast-forward only, no rebase. */
+  function onBarPull(): void {
+    const remote = primaryRemote;
+    if (!remote || !currentBranch) return;
+    void runNet(
+      "pull",
+      remote,
+      () =>
+        pullRepo(repoId, {
+          remote: remote.name,
+          branch: currentBranch,
+          ff_only: true,
+          rebase: false,
+        }),
+      true,
+    );
+  }
+
+  /** Safe push: current branch, no force, no upstream change. */
+  function onBarPush(): void {
+    const remote = primaryRemote;
+    if (!remote || !currentBranch) return;
+    void runNet(
+      "push",
+      remote,
+      () =>
+        pushRepo(repoId, {
+          remote: remote.name,
+          branch: currentBranch,
+          force: false,
+          force_with_lease: false,
+          set_upstream: false,
+          refs: [],
+          tags: false,
+          delete: false,
+        }),
+      true,
+    );
   }
 
   async function onAdd(): Promise<void> {
@@ -350,6 +415,47 @@
     </label>
   </div>
 
+  {#if primaryRemote}
+    <div class="sync-bar" role="group" aria-label={`Repository sync with ${primaryRemote.name}`}>
+      <span class="sync-remote" title={`Primary remote: ${primaryRemote.url}`}>
+        {primaryRemote.name}
+      </span>
+      <button
+        class="sync-act"
+        type="button"
+        disabled={netBusy || !currentBranch}
+        title={currentBranch
+          ? `Pull ${currentBranch} from ${primaryRemote.name} (fast-forward only)`
+          : "Pull is unavailable without a current branch"}
+        onclick={onBarPull}
+      >
+        {#if behind > 0}<span class="sync-count behind">↓ {behind}</span>{/if}
+        Pull
+      </button>
+      <button
+        class="sync-act filled"
+        type="button"
+        disabled={netBusy || !currentBranch}
+        title={currentBranch
+          ? `Push ${currentBranch} to ${primaryRemote.name}`
+          : "Push is unavailable without a current branch"}
+        onclick={onBarPush}
+      >
+        {#if ahead > 0}<span class="sync-count ahead">↑ {ahead}</span>{/if}
+        Push
+      </button>
+      <button
+        class="sync-act"
+        type="button"
+        disabled={netBusy}
+        title={`Fetch from ${primaryRemote.name} (prune)`}
+        onclick={onBarFetch}
+      >
+        Fetch
+      </button>
+    </div>
+  {/if}
+
   {#if netOps.length > 0}
     <div class="progress" role="status" aria-live="polite">
       {#each netOps as op (op.op_id)}
@@ -416,7 +522,7 @@
             </form>
           {:else}
             <div class="card-head">
-              <span class="rname">{remote.name}</span>
+              <span class="rname" title={remote.name}>{remote.name}</span>
               <span class="url" title={remote.url}>{remote.url}</span>
               {#if remote.push_url}
                 <span class="url push" title={remote.push_url}>push: {remote.push_url}</span>
@@ -548,14 +654,6 @@
                     onclick={() => onFetch(remote)}
                   />
                 </div>
-                <div class="action-opts">
-                  <Switch
-                    bind:checked={prune}
-                    title="Delete remote-tracking branches that vanished upstream"
-                  >
-                    prune
-                  </Switch>
-                </div>
               </div>
 
               <div class="action-row">
@@ -580,20 +678,6 @@
                     onclick={() => onPull(remote)}
                   />
                 </div>
-                <div class="action-opts">
-                  <Switch
-                    bind:checked={ffOnly}
-                    title="Refuse when the merge would not be a fast-forward"
-                  >
-                    ff-only
-                  </Switch>
-                  <Switch
-                    bind:checked={rebase}
-                    title="Rebase local commits on top of the fetched branch"
-                  >
-                    rebase
-                  </Switch>
-                </div>
               </div>
 
               <div class="action-row">
@@ -609,21 +693,43 @@
                     onclick={() => onPush(remote)}
                   />
                 </div>
-                <div class="action-opts">
+              </div>
+
+              <details class="adv">
+                <summary>Advanced options</summary>
+                <div class="adv-opts">
+                  <Switch
+                    bind:checked={prune}
+                    title="Fetch: delete remote-tracking branches that vanished upstream"
+                  >
+                    prune on fetch
+                  </Switch>
+                  <Switch
+                    bind:checked={ffOnly}
+                    title="Pull: refuse when the merge would not be a fast-forward"
+                  >
+                    ff-only on pull
+                  </Switch>
+                  <Switch
+                    bind:checked={rebase}
+                    title="Pull: rebase local commits on top of the fetched branch"
+                  >
+                    rebase on pull
+                  </Switch>
                   <Switch
                     bind:checked={force}
-                    title="Overwrite the remote branch"
+                    title="Push: overwrite the remote branch"
                   >
-                    force
+                    force on push
                   </Switch>
                   <Switch
                     bind:checked={setUpstream}
-                    title="Set this branch's upstream to this remote"
+                    title="Push: set this branch's upstream to this remote"
                   >
-                    set-upstream
+                    set-upstream on push
                   </Switch>
                 </div>
-              </div>
+              </details>
             </div>
           {/if}
         </li>
@@ -807,6 +913,12 @@
     color: var(--m3-primary);
   }
 
+  .card-head .rname {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
   .url {
     flex: 1;
     min-width: 8rem;
@@ -830,17 +942,101 @@
     gap: 0.25rem;
   }
 
+  /* Repo-level sync bar: the common safe actions, primary remote first. */
+  .sync-bar {
+    display: flex;
+    align-items: center;
+    gap: 0.375rem;
+    padding: 0.375rem 0.5rem;
+    border-bottom: 1px solid var(--m3-outline-variant, var(--m3-primary));
+    flex: none;
+    flex-wrap: wrap;
+  }
+
+  .sync-remote {
+    flex: none;
+    max-width: 10rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-weight: 600;
+    font-size: 0.72rem;
+    color: var(--m3-on-surface-variant, var(--m3-on-surface));
+    margin-right: auto;
+  }
+
+  .sync-act {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    min-height: 1.75rem;
+    padding: 0 0.7rem;
+    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
+    border-radius: var(--m3-shape-full, 9999px);
+    background: none;
+    color: var(--m3-on-surface);
+    font: inherit;
+    font-size: 0.75rem;
+    cursor: pointer;
+  }
+
+  .sync-act:hover:not(:disabled) {
+    background: var(--m3-surface-container-high, var(--m3-surface));
+  }
+
+  .sync-act.filled {
+    background: var(--m3-primary);
+    border-color: transparent;
+    color: var(--m3-on-primary);
+  }
+
+  .sync-act.filled:hover:not(:disabled) {
+    background: var(--m3-primary);
+    filter: brightness(1.06);
+  }
+
+  .sync-act:focus-visible {
+    outline: 2px solid var(--m3-primary);
+    outline-offset: 1px;
+  }
+
+  .sync-act:disabled {
+    color: var(--app-disabled-fg, var(--m3-on-surface-variant));
+    cursor: not-allowed;
+  }
+
+  .sync-count {
+    display: inline-flex;
+    align-items: center;
+    padding: 0 0.35rem;
+    border-radius: var(--m3-shape-full, 9999px);
+    font-size: 0.65rem;
+    font-weight: 600;
+    line-height: 1.25;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .sync-count.ahead {
+    background: var(--m3-on-primary);
+    color: var(--m3-primary);
+  }
+
+  .sync-count.behind {
+    background: var(--m3-tertiary-container, var(--m3-surface-container-high));
+    color: var(--m3-on-tertiary-container, var(--m3-tertiary));
+  }
+
   .card-actions {
     display: flex;
     flex-direction: column;
     margin-top: 0.375rem;
   }
 
-  /* One row per action: verb label — controls — option switches, with a
-     stable switch column so labels line up across rows. */
+  /* One row per action: verb label — controls. Option switches live under
+     the Advanced disclosure below the rows. */
   .action-row {
     display: grid;
-    grid-template-columns: auto 1fr auto;
+    grid-template-columns: auto 1fr;
     align-items: center;
     gap: 0.625rem;
     padding: 0.3rem 0;
@@ -869,11 +1065,34 @@
     max-width: 9rem;
   }
 
-  .action-opts {
+  /* Advanced disclosure: the low-frequency option switches, one line of
+     explanation each (UI review P2 #11). */
+  .adv {
+    margin-top: 0.25rem;
+    font-size: 0.72rem;
+  }
+
+  .adv summary {
+    cursor: pointer;
+    color: var(--m3-on-surface-variant, var(--m3-on-surface));
+    user-select: none;
+    padding: 0.15rem 0;
+  }
+
+  .adv summary:hover {
+    color: var(--m3-on-surface);
+  }
+
+  .adv summary:focus-visible {
+    outline: 2px solid var(--m3-primary);
+    outline-offset: 1px;
+  }
+
+  .adv-opts {
     display: flex;
-    align-items: center;
-    gap: 0.75rem;
-    flex: none;
+    flex-direction: column;
+    gap: 0.25rem;
+    padding: 0.25rem 0 0.35rem;
   }
 
   .edit-url {

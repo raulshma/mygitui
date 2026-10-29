@@ -1,7 +1,9 @@
 /**
- * RepoQuickActions tests: accessible verb labels carry the ahead/behind
- * counts, success refreshes the owner, preconditions toast instead of
- * calling the network, and ops started elsewhere disable/spin the group.
+ * RepoQuickActions tests: the Sync split button runs the contextual verb
+ * (pull when behind, push when ahead, fetch otherwise) with its accessible
+ * name carrying branch + counts, success refreshes the owner, preconditions
+ * disable (never toast-and-run), and ops started elsewhere disable/spin the
+ * group.
  */
 
 import {
@@ -81,18 +83,19 @@ function button(name: string | RegExp): HTMLButtonElement {
 }
 
 describe("RepoQuickActions", () => {
-  it("renders fetch/pull/push with counts in their accessible names", () => {
+  it("renders one Sync split button; behind wins the contextual verb", () => {
     render(RepoQuickActions, { repoId: "r1", status: status() });
 
     expect(
       screen.getByRole("group", { name: "Git sync actions" }),
     ).not.toBeNull();
-    expect(button("Fetch from remote").disabled).toBe(false);
-    expect(button("Pull main, 1 behind").disabled).toBe(false);
-    expect(button("Push main, 2 ahead").disabled).toBe(false);
+    expect(
+      button("Sync with remote (pull main, 1 behind)").disabled,
+    ).toBe(false);
+    expect(button("More sync actions").disabled).toBe(false);
   });
 
-  it("runs push from the header and refreshes the repo on success", async () => {
+  it("runs the contextual push and refreshes the repo on success", async () => {
     mocks.pushCurrentBranch.mockResolvedValue({
       kind: "done",
       remote: "origin",
@@ -102,11 +105,11 @@ describe("RepoQuickActions", () => {
 
     render(RepoQuickActions, {
       repoId: "r1",
-      status: status(),
+      status: status({ behind: 0 }),
       onMutated,
     });
 
-    await fireEvent.click(button("Push main, 2 ahead"));
+    await fireEvent.click(button("Sync with remote (push main, 2 ahead)"));
 
     await waitFor(() =>
       expect(mocks.pushCurrentBranch).toHaveBeenCalledWith("r1", "main"),
@@ -128,11 +131,11 @@ describe("RepoQuickActions", () => {
 
     render(RepoQuickActions, {
       repoId: "r1",
-      status: status(),
+      status: status({ ahead: 0, behind: 0 }),
       onMutated,
     });
 
-    await fireEvent.click(button("Fetch from remote"));
+    await fireEvent.click(button("Sync with remote (fetch)"));
 
     await waitFor(() =>
       expect(toast).toHaveBeenCalledWith("skipped no-remote fetch", {
@@ -145,9 +148,12 @@ describe("RepoQuickActions", () => {
   it("toasts backend failures", async () => {
     mocks.fetchDefaultRemote.mockRejectedValue(new Error("boom"));
 
-    render(RepoQuickActions, { repoId: "r1", status: status() });
+    render(RepoQuickActions, {
+      repoId: "r1",
+      status: status({ ahead: 0, behind: 0 }),
+    });
 
-    await fireEvent.click(button("Fetch from remote"));
+    await fireEvent.click(button("Sync with remote (fetch)"));
 
     await waitFor(() =>
       expect(toast).toHaveBeenCalledWith("Fetch failed: boom", {
@@ -156,15 +162,25 @@ describe("RepoQuickActions", () => {
     );
   });
 
-  it("disables pull/push on a detached HEAD but keeps fetch available", () => {
+  it("keeps fetch (the contextual verb) available on a detached HEAD", () => {
     render(RepoQuickActions, {
       repoId: "r1",
       status: status({ branch: null, detached: true, ahead: 0, behind: 0 }),
     });
 
-    expect(button("Fetch from remote").disabled).toBe(false);
-    expect(button("Pull current branch").disabled).toBe(true);
-    expect(button("Push current branch").disabled).toBe(true);
+    expect(button("Sync with remote (fetch)").disabled).toBe(false);
+    expect(button("More sync actions").disabled).toBe(false);
+  });
+
+  it("disables the main segment when the contextual verb needs a branch", () => {
+    render(RepoQuickActions, {
+      repoId: "r1",
+      status: status({ branch: null, detached: true, ahead: 0, behind: 1 }),
+    });
+
+    expect(
+      button("Sync with remote (pull current branch, 1 behind)").disabled,
+    ).toBe(true);
   });
 
   it("disables the group while another surface's sync op runs", () => {
@@ -188,7 +204,10 @@ describe("RepoQuickActions", () => {
         .getByRole("group", { name: "Git sync actions" })
         .getAttribute("aria-busy"),
     ).toBe("true");
-    expect(button("Fetch from remote").disabled).toBe(true);
-    expect(button("Push main, 2 ahead").getAttribute("aria-busy")).toBe("true");
+    // The main segment announces the running verb while busy.
+    const main = button("Push in progress…");
+    expect(main.disabled).toBe(true);
+    expect(main.getAttribute("aria-busy")).toBe("true");
+    expect(button("More sync actions").disabled).toBe(true);
   });
 });

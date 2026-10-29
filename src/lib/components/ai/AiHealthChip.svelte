@@ -55,6 +55,7 @@
     display: inline-flex;
     align-items: center;
     gap: 0.3rem;
+    min-height: 1.75rem;
     border: 1px solid var(--m3-outline-variant, var(--m3-primary));
     border-radius: var(--m3-shape-full, 9999px);
     background: none;
@@ -80,8 +81,8 @@
    * label kept in the accessibility tree so the chip still names its state.
    */
   .ai-health.compact {
-    width: 1.65rem;
-    height: 1.65rem;
+    width: 1.75rem;
+    height: 1.75rem;
     justify-content: center;
     gap: 0;
     padding: 0;

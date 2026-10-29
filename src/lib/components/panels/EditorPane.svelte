@@ -22,8 +22,10 @@
   import CommitDetail from "$lib/components/panels/CommitDetail.svelte";
   import DiffViewer from "$lib/components/diff/DiffViewer.svelte";
   import Icon from "$lib/components/icons/Icon.svelte";
-  import { Spinner } from "$lib/components/m3";
+  import { IconButton, Spinner } from "$lib/components/m3";
   import iconTree from "@ktibow/iconset-material-symbols/account-tree";
+  import iconPrev from "@ktibow/iconset-material-symbols/arrow-upward";
+  import iconNext from "@ktibow/iconset-material-symbols/arrow-downward";
 
   let {
     repoId,
@@ -39,6 +41,8 @@
     historyActions = null,
     workflowRunId = null,
     actionRunId = null,
+    entryIndex = null,
+    entryCount = 0,
     onClose = undefined,
     onCloseCompare = undefined,
     onCloseWorkflowRun = undefined,
@@ -49,6 +53,12 @@
     onPopoutWorkflowRun = undefined,
     onPopoutActionRun = undefined,
     onMutated = undefined,
+    onPrevFile = undefined,
+    onNextFile = undefined,
+    onStageEntry = undefined,
+    onDiscardEntry = undefined,
+    onOpenFirstChange = undefined,
+    onBrowseHistory = undefined,
   }: {
     repoId: string;
     /** Worktree root (bookmark persistence); empty in popouts. */
@@ -74,6 +84,10 @@
     actionRunId?: string | null;
     /** GitHub Actions run taking over the editor. */
     workflowRunId?: number | null;
+    /** 0-based position of `entry` in the changed-file list (null = n/a). */
+    entryIndex?: number | null;
+    /** Total changed files (drives prev/next navigation availability). */
+    entryCount?: number;
     /** Clears the editor (closes the current commit/diff). */
     onClose?: () => void;
     onCloseCompare?: () => void;
@@ -90,6 +104,18 @@
     onPopoutActionRun?: () => void;
     /** Called after a hunk stage/unstage/discard mutated the repo. */
     onMutated?: () => void;
+    /** Steps to the previous changed file (wraps around). */
+    onPrevFile?: () => void;
+    /** Steps to the next changed file (wraps around). */
+    onNextFile?: () => void;
+    /** Stages (unstage=false) or unstages the open file. */
+    onStageEntry?: (unstage: boolean) => void;
+    /** Asks the owner to confirm discarding the open file's changes. */
+    onDiscardEntry?: () => void;
+    /** Welcome state: opens the first changed file. */
+    onOpenFirstChange?: () => void;
+    /** Welcome state: reveals the history sidebar. */
+    onBrowseHistory?: () => void;
   } = $props();
 
   /** Welcome summary: unique changed paths + upstream position. */
@@ -162,7 +188,72 @@
         {#if repoName}
           <span class="echip chip-repo" title={`Repository / Submodule: ${repoName}`}>{repoName}</span>
         {/if}
-        <span class="echip">working copy</span>
+        <span
+          class="echip"
+          class:chip-staged={entry.index !== "unmodified"}
+          title={entry.index !== "unmodified"
+            ? "This file has staged changes"
+            : "Changes are not staged"}
+        >
+          {entry.index !== "unmodified" ? "staged" : "unstaged"}
+        </span>
+        {#if entryCount > 1 && onPrevFile && onNextFile}
+          <span class="enav">
+            <IconButton
+              icon={iconPrev}
+              label="Previous changed file"
+              title="Previous changed file"
+              size={14}
+              disabled={entryIndex === null}
+              onclick={onPrevFile}
+            />
+            <span
+              class="epos"
+              aria-label={`File ${entryIndex === null ? "?" : entryIndex + 1} of ${entryCount}`}
+            >
+              {(entryIndex ?? 0) + 1} / {entryCount}
+            </span>
+            <IconButton
+              icon={iconNext}
+              label="Next changed file"
+              title="Next changed file"
+              size={14}
+              disabled={entryIndex === null}
+              onclick={onNextFile}
+            />
+          </span>
+        {/if}
+        {#if onStageEntry}
+          {#if entry.index === "unmodified"}
+            <button
+              class="ebtn"
+              type="button"
+              title="Stage this file (move its changes into the commit)"
+              onclick={() => onStageEntry?.(false)}
+            >
+              Stage
+            </button>
+          {:else}
+            <button
+              class="ebtn"
+              type="button"
+              title="Unstage this file (keep the worktree changes)"
+              onclick={() => onStageEntry?.(true)}
+            >
+              Unstage
+            </button>
+          {/if}
+        {/if}
+        {#if onDiscardEntry && entry.worktree !== "unmodified"}
+          <button
+            class="ebtn ebtn-danger"
+            type="button"
+            title="Discard this file's changes (a safety checkpoint is created first)"
+            onclick={onDiscardEntry}
+          >
+            Discard
+          </button>
+        {/if}
         {#if onPopoutDiff}
           <button
             class="ebtn"
@@ -243,6 +334,20 @@
         Select a change in the source-control sidebar to see its diff, or pick
         a commit in history to inspect it.
       </p>
+      {#if (changeCount > 0 && onOpenFirstChange) || onBrowseHistory}
+        <div class="wactions">
+          {#if changeCount > 0 && onOpenFirstChange}
+            <button class="wact wact-primary" type="button" onclick={onOpenFirstChange}>
+              Open first change
+            </button>
+          {/if}
+          {#if onBrowseHistory}
+            <button class="wact" type="button" onclick={onBrowseHistory}>
+              Browse history
+            </button>
+          {/if}
+        </div>
+      {/if}
       <ul class="whints" aria-label="Keyboard shortcuts">
         <li><kbd class="kbd">Ctrl</kbd>+<kbd class="kbd">Shift</kbd>+<kbd class="kbd">P</kbd><span>Command palette</span></li>
         <li><kbd class="kbd">F5</kbd><span>Refresh repository</span></li>
@@ -309,6 +414,29 @@
     white-space: nowrap;
   }
 
+  /* Staged state in the header (was only visible via row color). */
+  .echip.chip-staged {
+    background: var(--m3-primary-container, var(--m3-surface-container-high));
+    color: var(--m3-on-primary-container, var(--m3-primary));
+  }
+
+  /* Prev/next changed-file navigation. */
+  .enav {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.05rem;
+  }
+
+  .epos {
+    min-width: 3.2rem;
+    text-align: center;
+    font-size: 0.65rem;
+    font-variant-numeric: tabular-nums;
+    color: var(--m3-on-surface-variant, var(--m3-on-surface));
+    white-space: nowrap;
+  }
+
   .ebody {
     flex: 1;
     min-height: 0;
@@ -333,6 +461,15 @@
   .ebtn:hover {
     background: var(--app-hover, var(--m3-surface-container-high, var(--m3-surface)));
     color: var(--m3-on-surface);
+  }
+
+  .ebtn-danger {
+    color: var(--m3-error, var(--m3-on-surface-variant));
+  }
+
+  .ebtn-danger:hover {
+    color: var(--m3-error);
+    background: var(--m3-error-container, var(--m3-surface-container-high));
   }
 
   .ebtn:focus-visible {
@@ -442,6 +579,47 @@
     gap: 0.4rem;
     margin: 0.15rem 0 0;
     font-size: 0.6875rem;
+  }
+
+  /* Empty-state actions (UI review P2 #8): give the welcome pane something
+     to do instead of only pointing at the sidebars. */
+  .wactions {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 0.5rem;
+    margin-top: 0.5rem;
+  }
+
+  .wact {
+    padding: 0.3rem 0.9rem;
+    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
+    border-radius: var(--m3-shape-full, 9999px);
+    background: none;
+    color: var(--m3-on-surface);
+    font: inherit;
+    font-size: 0.8125rem;
+    cursor: pointer;
+  }
+
+  .wact:hover {
+    background: var(--m3-surface-container-high, var(--m3-surface));
+  }
+
+  .wact-primary {
+    background: var(--m3-primary);
+    border-color: transparent;
+    color: var(--m3-on-primary);
+  }
+
+  .wact-primary:hover {
+    background: var(--m3-primary);
+    filter: brightness(1.06);
+  }
+
+  .wact:focus-visible {
+    outline: 2px solid var(--m3-primary);
+    outline-offset: 1px;
   }
 
   .whints {

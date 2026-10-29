@@ -2,17 +2,33 @@
   /**
    * ActivityBar — the VSCode-style vertical rail at the far left.
    *
-   * One icon per workspace panel (status, branches, remotes, …): clicking
-   * activates that panel in the primary sidebar, opening the sidebar first
-   * when it is collapsed. The rail itself never collapses — it is what stays
-   * visible when the sidebar is hidden, and the bottom chevron toggles the
-   * sidebar without unmounting it (RepoView hides the pane, state survives).
+   * Only the core panels (`RAIL_PANELS`: status, branches, remotes, terminal)
+   * get rail buttons; every other panel lives behind the "More panels"
+   * overflow menu so the rail stays scannable without hovering each icon
+   * (UI review P1 #1). Hover/focus shows a small label flyout beside the
+   * rail — faster than a native tooltip and not clipped, because the rail
+   * no longer scrolls.
+   *
+   * Clicking any entry activates that panel in the primary sidebar, opening
+   * the sidebar first when it is collapsed. The rail itself never collapses
+   * — it is what stays visible when the sidebar is hidden, and the bottom
+   * chevron toggles the sidebar without unmounting it (RepoView hides the
+   * pane, state survives).
    *
    * History gets a separate bottom placement because the workspace keeps it
    * on the right edge; `onHistory` toggles that secondary sidebar instead of
    * switching the primary one.
    */
-  import { PANEL_META, panelLabel, type PanelId } from "$lib/layout/layoutModel";
+  import {
+    PANEL_META,
+    RAIL_PANELS,
+    panelIconData,
+    panelLabel,
+    type PanelId,
+  } from "$lib/layout/layoutModel";
+  import { showMenuAtElement } from "$lib/components/menu/contextMenuStore.svelte";
+  import Icon from "$lib/components/icons/Icon.svelte";
+  import iconMore from "@ktibow/iconset-material-symbols/more-horiz";
 
   let {
     panels,
@@ -26,7 +42,7 @@
     onHistory,
     onToggleCollapse,
   }: {
-    /** Panels shown as primary-sidebar icons, top to bottom. */
+    /** Panels the workspace can show in the primary sidebar. */
     panels: PanelId[];
     /** Currently active primary-sidebar panel (null = none). */
     active?: PanelId | null;
@@ -45,20 +61,56 @@
     onToggleCollapse: () => void;
   } = $props();
 
+  /** Rail buttons, registry order first: the core panels that are placed. */
+  const railPanels = $derived(
+    RAIL_PANELS.filter((panel) => panels.includes(panel)),
+  );
+  /** Everything else, behind the overflow menu (order = `panels`). */
+  const morePanels = $derived(
+    panels.filter((panel) => !RAIL_PANELS.includes(panel)),
+  );
+  const moreActive = $derived(active !== null && morePanels.includes(active));
+
+  /** Overflow panels with counts — the More button shows a small dot. */
+  const moreBadgeCount = $derived(
+    morePanels.reduce((sum, panel) => sum + (badges[panel] ?? 0), 0),
+  );
+
   /** Caps runaway counts; the full number stays in the title. */
   function badgeText(count: number): string {
     return count > 99 ? "99+" : String(count);
   }
+
+  /** Overflow menu: one labeled, icon-carrying entry per hidden panel. */
+  function openMoreMenu(event: MouseEvent): void {
+    showMenuAtElement(
+      event.currentTarget as HTMLElement,
+      morePanels.map((panel) => {
+        const count = badges[panel] ?? 0;
+        return {
+          id: `panel-${panel}`,
+          label:
+            count > 0
+              ? `${panelLabel(panel)} (${badgeText(count)})`
+              : panelLabel(panel),
+          icon: panelIconData(panel),
+          run: () => onSelect(panel),
+        };
+      }),
+      { align: "end", above: true },
+    );
+  }
 </script>
 
 <div class="activity-bar" role="toolbar" aria-orientation="vertical" aria-label="Activity bar">
-  {#each panels as panel (panel)}
+  {#each railPanels as panel (panel)}
     {@const count = badges[panel] ?? 0}
     <button
       class="activity-btn"
       class:active={active === panel}
       type="button"
       data-activity-panel={panel}
+      data-label={panelLabel(panel)}
       aria-label={panelLabel(panel)}
       aria-pressed={active === panel}
       title={count > 0
@@ -83,12 +135,32 @@
     </button>
   {/each}
 
+  {#if morePanels.length > 0}
+    <button
+      class="activity-btn"
+      class:active={moreActive}
+      type="button"
+      data-label="More panels"
+      aria-label="More panels"
+      aria-pressed={moreActive}
+      aria-haspopup="menu"
+      title="More panels"
+      onclick={openMoreMenu}
+    >
+      <Icon icon={iconMore} size={18} />
+      {#if moreBadgeCount > 0}
+        <span class="activity-badge dot" aria-hidden="true"></span>
+      {/if}
+    </button>
+  {/if}
+
   <div class="activity-bottom">
     <button
       class="activity-btn"
       class:active={historyActive}
       type="button"
       data-activity-panel="history"
+      data-label="History"
       aria-label="History"
       aria-pressed={historyActive}
       title="History"
@@ -110,6 +182,7 @@
     <button
       class="activity-btn collapse-btn"
       type="button"
+      data-label={collapsed ? "Show sidebar" : "Hide sidebar"}
       aria-label={collapsed ? "Show sidebar" : "Hide sidebar"}
       aria-pressed={collapsed}
       title={collapsed ? "Show sidebar" : "Hide sidebar"}
@@ -142,12 +215,6 @@
     padding: 0.25rem 0;
     background: var(--m3-surface-container, var(--m3-surface));
     border-right: 1px solid var(--m3-outline-variant);
-    overflow-y: auto;
-    scrollbar-width: none;
-  }
-
-  .activity-bar::-webkit-scrollbar {
-    display: none;
   }
 
   .activity-btn {
@@ -192,6 +259,35 @@
     background: var(--m3-surface-container-high, var(--m3-surface));
   }
 
+  /* Label flyout beside the rail (hover/focus) — quicker and more readable
+     than a native tooltip; the rail no longer scrolls, so nothing clips it. */
+  .activity-btn::after {
+    content: attr(data-label);
+    position: absolute;
+    left: calc(100% + 0.4rem);
+    top: 50%;
+    transform: translateY(-50%) translateX(-0.25rem);
+    padding: 0.25rem 0.55rem;
+    border-radius: var(--m3-shape-small, 8px);
+    background: var(--m3-inverse-surface, rgb(0 0 0 / 0.85));
+    color: var(--m3-inverse-on-surface, #fff);
+    font-size: 0.75rem;
+    line-height: 1.3;
+    white-space: nowrap;
+    opacity: 0;
+    pointer-events: none;
+    transition:
+      opacity 0.12s ease 0.3s,
+      transform 0.12s ease 0.3s;
+    z-index: 70;
+  }
+
+  .activity-btn:hover::after,
+  .activity-btn:focus-visible::after {
+    opacity: 1;
+    transform: translateY(-50%) translateX(0);
+  }
+
   /* Changed-item count bubble (Status). Small, high-contrast, capped at 99+. */
   .activity-badge {
     position: absolute;
@@ -211,6 +307,15 @@
     font-variant-numeric: tabular-nums;
     line-height: 1;
     letter-spacing: -0.02em;
+  }
+
+  /* Dot variant for the overflow button (aggregate, no number). */
+  .activity-badge.dot {
+    min-width: 0.45rem;
+    width: 0.45rem;
+    height: 0.45rem;
+    padding: 0;
+    border: none;
   }
 
   .activity-btn.active .activity-badge {

@@ -149,7 +149,7 @@
     });
   }
 
-  /** Home "Add existing repo…" / tab-strip "+": folder picker → open as tab. */
+  /** Home "Open repository…" / tab-strip "+": folder picker → open as tab. */
   async function openFromDisk(): Promise<void> {
     const path = await pickFolder();
     if (path) await openRepoTab(path);
@@ -375,7 +375,7 @@
           <div class="recent-head">
             <div class="recent-title">
               <h1 id="recent-heading" class="recent-heading">
-                Recent repositories
+                {repos.length === 0 ? "Repositories" : "Recent repositories"}
               </h1>
               {#if repos.length > 0}
                 <p class="recent-sub">
@@ -408,7 +408,7 @@
                     onclick={() => void openFromDisk()}
                   >
                     <Icon icon={iconAdd} size={14} />
-                    Add existing repo…
+                    Open repository…
                   </button>
                   <button
                     class="clone-btn"
@@ -416,7 +416,7 @@
                     onclick={() => (cloneOpen = true)}
                   >
                     <Icon icon={iconClone} size={14} />
-                    Clone repo…
+                    Clone repository…
                   </button>
                 {/if}
               </div>
@@ -453,10 +453,10 @@
               <span class="empty-icon" aria-hidden="true">
                 <Icon icon={iconFolder} size={30} />
               </span>
-              <h2 class="empty-title">No repositories yet</h2>
+              <h2 class="empty-title">Open your first repository</h2>
               <p class="empty-text">
-                Open a repository folder from disk, clone a remote, or drag a
-                folder onto this window to get started.
+                Choose a folder on disk, clone a remote, or drag a folder onto
+                this window to get started.
               </p>
               <div class="empty-actions">
                 <button
@@ -465,7 +465,7 @@
                   onclick={() => void openFromDisk()}
                 >
                   <Icon icon={iconAdd} size={14} />
-                  Add existing repo…
+                  Open repository…
                 </button>
                 <button
                   class="clone-btn"
@@ -473,19 +473,8 @@
                   onclick={() => (cloneOpen = true)}
                 >
                   <Icon icon={iconClone} size={14} />
-                  Clone repo…
+                  Clone repository…
                 </button>
-              </div>
-              <div class="empty-hints">
-                <span class="hint">
-                  <kbd class="kbd">Ctrl</kbd><kbd class="kbd">K</kbd>
-                  quick switcher
-                </span>
-                <span class="hint">
-                  <kbd class="kbd">Ctrl</kbd><kbd class="kbd">Shift</kbd
-                  ><kbd class="kbd">P</kbd>
-                  command palette
-                </span>
               </div>
             </div>
           {:else if filteredRepos.length === 0}
@@ -846,38 +835,38 @@
     cursor: pointer;
   }
 
-  .add-btn,
+  .add-btn {
+    border: 1px solid transparent;
+    background: var(--m3-primary);
+    color: var(--m3-on-primary);
+  }
+
+  .add-btn:hover {
+    filter: brightness(1.06);
+  }
+
   .back-btn,
-  .clear-search {
+  .clear-search,
+  .clone-btn {
     border: 1px solid var(--m3-outline-variant, var(--m3-primary));
     background: none;
     color: var(--m3-on-surface);
-  }
-
-  .add-btn:hover,
-  .back-btn:hover,
-  .clear-search:hover {
-    background: var(--m3-surface-container-high, var(--m3-surface));
-    border-color: var(--m3-outline, var(--m3-primary));
   }
 
   .back-btn {
     background: var(--m3-surface-container-high, var(--m3-surface));
   }
 
+  .back-btn:hover,
+  .clear-search:hover,
+  .clone-btn:hover {
+    background: var(--m3-surface-container-high, var(--m3-surface));
+    border-color: var(--m3-outline, var(--m3-primary));
+  }
+
   .clear-search {
     margin-top: 0.75rem;
     color: var(--m3-primary);
-  }
-
-  .clone-btn {
-    border: 1px solid transparent;
-    background: var(--m3-primary);
-    color: var(--m3-on-primary);
-  }
-
-  .clone-btn:hover {
-    filter: brightness(1.06);
   }
 
   .add-btn:focus-visible,
@@ -1180,23 +1169,6 @@
     justify-content: center;
     gap: 0.5rem;
     margin-top: 0.75rem;
-  }
-
-  .empty-hints {
-    display: flex;
-    flex-wrap: wrap;
-    justify-content: center;
-    gap: 0.75rem 1rem;
-    margin-top: 1rem;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    font-size: 0.6875rem;
-  }
-
-  .hint {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.25rem;
-    white-space: nowrap;
   }
 
   .home-foot {

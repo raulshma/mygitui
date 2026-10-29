@@ -1,19 +1,23 @@
 <script lang="ts" module>
   /**
-   * Header sync quick actions - Fetch / Pull / Push in one compact group.
+   * Header sync quick actions — one "Sync" split button.
    *
-   * Counts ride on the verbs themselves (behind on Pull, ahead on Push), so
-   * the header keeps one dense control instead of separate read-only chips.
-   * Clicking a verb runs the same shared operation as the command palette
-   * (`$lib/git/sync`), and busy state comes from the existing per-repo op
-   * store - including ops started from a panel or the palette.
+   * The main segment runs the contextual verb (pull when behind, push when
+   * ahead, fetch otherwise) and shows ahead/behind counts as `↓n ↑n`; the
+   * chevron opens an explicit Fetch / Pull / Push menu. Counts ride on the
+   * button itself, so the header keeps one compact control instead of three
+   * unlabeled icons. Clicking a verb runs the same shared operation as the
+   * command palette (`$lib/git/sync`), and busy state comes from the
+   * existing per-repo op store — including ops started from a panel or the
+   * palette.
    *
    * Feedback rules:
    * - a local in-flight flag gives instant disabled/spinner feedback before
    *   the backend's first op-progress event arrives and blocks double clicks;
    * - post-completion status refresh is delegated to the owner (`onMutated`);
-   * - only the active verb spins; the group is disabled while any fetch/
-   *   pull/push runs because the backend serializes them per repo anyway.
+   * - only the running verb is announced; the whole control is disabled
+   *   while any fetch/pull/push runs because the backend serializes them
+   *   per repo anyway.
    */
 
   import type { SyncVerb } from "$lib/git/sync";
@@ -51,11 +55,14 @@
   } from "$lib/git/sync";
   import { opsFor } from "$lib/stores/ops.svelte";
   import { toast } from "$lib/toast";
+  import { showMenuAtElement } from "$lib/components/menu/contextMenuStore.svelte";
   import Icon from "$lib/components/icons/Icon.svelte";
   import Spinner from "$lib/components/m3/Spinner.svelte";
   import iconFetch from "@ktibow/iconset-material-symbols/cloud-download";
   import iconPull from "@ktibow/iconset-material-symbols/arrow-downward";
   import iconPush from "@ktibow/iconset-material-symbols/arrow-upward";
+  import iconSync from "@ktibow/iconset-material-symbols/sync";
+  import iconChevronDown from "@ktibow/iconset-material-symbols/expand-more";
 
   let {
     repoId,
@@ -92,7 +99,16 @@
   const ahead = $derived(status?.ahead ?? 0);
   const behind = $derived(status?.behind ?? 0);
 
-  const fetchTitle = "Fetch from the primary remote (prune)";
+  /**
+   * The verb the main segment runs: the most needed action first — pull
+   * incoming commits, then push outgoing ones, otherwise refresh the
+   * remote state. The menu always offers all three explicitly.
+   */
+  const primaryVerb = $derived<SyncVerb>(
+    behind > 0 ? "pull" : ahead > 0 ? "push" : "fetch",
+  );
+
+  const fetchIdleTitle = "Fetch from the primary remote (prune)";
   const pullIdleTitle = $derived.by(() => {
     if (status === null) return "Waiting for repository status";
     if (!canUseBranch) return "Pull is unavailable without a current branch";
@@ -108,20 +124,22 @@
       : `Push ${branchLabel} to the remote`;
   });
 
-  const fetchLabel = "Fetch from remote";
-  const pullLabel = $derived(
-    `Pull ${branchLabel}${behind > 0 ? `, ${behind} behind` : ""}`,
-  );
-  const pushLabel = $derived(
-    `Push ${branchLabel}${ahead > 0 ? `, ${ahead} ahead` : ""}`,
-  );
-
-  /** Busy verbs explain the wait without changing the accessible name. */
-  function displayTitle(verb: SyncVerb, idle: string): string {
-    if (runningVerb === verb) return `${VERB_LABELS[verb]} in progress…`;
+  const primaryTitle = $derived.by(() => {
+    if (runningVerb !== null) {
+      return `${VERB_LABELS[runningVerb]} in progress…`;
+    }
     if (busy) return "Wait for the current git operation to finish";
-    return idle;
-  }
+    if (status === null) return "Waiting for repository status";
+    if (primaryVerb === "fetch") return fetchIdleTitle;
+    return primaryVerb === "pull" ? pullIdleTitle : pushIdleTitle;
+  });
+
+  const primaryAriaLabel = $derived.by(() => {
+    if (runningVerb !== null) return `${VERB_LABELS[runningVerb]} in progress…`;
+    if (primaryVerb === "fetch") return "Sync with remote (fetch)";
+    if (primaryVerb === "pull") return `Sync with remote (pull ${branchLabel}${behind > 0 ? `, ${behind} behind` : ""})`;
+    return `Sync with remote (push ${branchLabel}${ahead > 0 ? `, ${ahead} ahead` : ""})`;
+  });
 
   function actionFor(verb: SyncVerb): Promise<SyncOutcome> {
     switch (verb) {
@@ -156,6 +174,33 @@
       pending = null;
     }
   }
+
+  /** Chevron menu: the three verbs with their counts spelled out. */
+  function openSyncMenu(event: MouseEvent): void {
+    showMenuAtElement(event.currentTarget as HTMLElement, [
+      {
+        id: "fetch",
+        label: "Fetch",
+        icon: iconFetch,
+        disabled: busy,
+        run: () => void run("fetch"),
+      },
+      {
+        id: "pull",
+        label: behind > 0 ? `Pull (${behind} behind)` : "Pull",
+        icon: iconPull,
+        disabled: busy || !canUseBranch,
+        run: () => void run("pull"),
+      },
+      {
+        id: "push",
+        label: ahead > 0 ? `Push (${ahead} ahead)` : "Push",
+        icon: iconPush,
+        disabled: busy || !canUseBranch,
+        run: () => void run("push"),
+      },
+    ]);
+  }
 </script>
 
 <div
@@ -166,63 +211,46 @@
   aria-busy={busy}
 >
   <button
-    class="qa-btn"
+    class="sync-main"
     type="button"
-    aria-label={fetchLabel}
-    aria-busy={runningVerb === "fetch"}
-    title={displayTitle("fetch", fetchTitle)}
+    aria-label={primaryAriaLabel}
+    aria-busy={runningVerb !== null}
+    title={primaryTitle}
+    disabled={busy || (primaryVerb !== "fetch" && !canUseBranch)}
+    onclick={() => void run(primaryVerb)}
+  >
+    <span class="verb-icon">
+      {#if runningVerb !== null}
+        <Spinner size={14} />
+      {:else}
+        <Icon icon={iconSync} size={15} />
+      {/if}
+    </span>
+    <span class="sync-word">Sync</span>
+    {#if behind > 0 && runningVerb === null}
+      <span class="count behind" title={`${behind} behind`}>
+        <Icon icon={iconPull} size={10} />
+        {badgeCount(behind)}
+      </span>
+    {/if}
+    {#if ahead > 0 && runningVerb === null}
+      <span class="count ahead" title={`${ahead} ahead`}>
+        <Icon icon={iconPush} size={10} />
+        {badgeCount(ahead)}
+      </span>
+    {/if}
+  </button>
+
+  <button
+    class="sync-menu-btn"
+    type="button"
+    aria-label="More sync actions"
+    title="Fetch / Pull / Push"
+    aria-haspopup="menu"
     disabled={busy}
-    onclick={() => void run("fetch")}
+    onclick={openSyncMenu}
   >
-    <span class="verb-icon">
-      {#if runningVerb === "fetch"}
-        <Spinner size={14} />
-      {:else}
-        <Icon icon={iconFetch} size={15} />
-      {/if}
-    </span>
-  </button>
-
-  <button
-    class="qa-btn"
-    type="button"
-    aria-label={pullLabel}
-    aria-busy={runningVerb === "pull"}
-    title={displayTitle("pull", pullIdleTitle)}
-    disabled={busy || !canUseBranch}
-    onclick={() => void run("pull")}
-  >
-    <span class="verb-icon">
-      {#if runningVerb === "pull"}
-        <Spinner size={14} />
-      {:else}
-        <Icon icon={iconPull} size={15} />
-      {/if}
-    </span>
-    {#if behind > 0}
-      <span class="count behind" aria-hidden="true">{badgeCount(behind)}</span>
-    {/if}
-  </button>
-
-  <button
-    class="qa-btn"
-    type="button"
-    aria-label={pushLabel}
-    aria-busy={runningVerb === "push"}
-    title={displayTitle("push", pushIdleTitle)}
-    disabled={busy || !canUseBranch}
-    onclick={() => void run("push")}
-  >
-    <span class="verb-icon">
-      {#if runningVerb === "push"}
-        <Spinner size={14} />
-      {:else}
-        <Icon icon={iconPush} size={15} />
-      {/if}
-    </span>
-    {#if ahead > 0}
-      <span class="count ahead" aria-hidden="true">{badgeCount(ahead)}</span>
-    {/if}
+    <Icon icon={iconChevronDown} size={14} />
   </button>
 </div>
 
@@ -237,38 +265,49 @@
     background: var(--m3-surface-container, transparent);
   }
 
-  .qa-btn {
+  .sync-main,
+  .sync-menu-btn {
     display: inline-flex;
     align-items: center;
-    justify-content: center;
-    gap: 0.2rem;
-    min-width: 1.65rem;
-    height: 1.55rem;
-    padding: 0 0.3rem;
+    gap: 0.3rem;
+    min-height: 2rem;
+    padding: 0 0.5rem;
     border: none;
     background: none;
     color: var(--m3-on-surface-variant, var(--m3-on-surface));
+    font: inherit;
+    font-size: 0.75rem;
     cursor: pointer;
     transition:
       background-color 0.12s ease,
       color 0.12s ease;
   }
 
-  .qa-btn + .qa-btn {
+  .sync-main {
+    min-width: 2rem;
+  }
+
+  .sync-menu-btn {
+    flex: none;
+    min-width: 1.75rem;
+    padding: 0 0.2rem;
     border-left: 1px solid var(--m3-outline-variant, var(--m3-primary));
   }
 
-  .sync-actions:not(.busy) .qa-btn:hover:not(:disabled) {
+  .sync-actions:not(.busy) .sync-main:hover:not(:disabled),
+  .sync-actions:not(.busy) .sync-menu-btn:hover:not(:disabled) {
     background: var(--m3-surface-container-high, var(--m3-surface));
     color: var(--m3-on-surface);
   }
 
-  .qa-btn:focus-visible {
+  .sync-main:focus-visible,
+  .sync-menu-btn:focus-visible {
     outline: 2px solid var(--m3-primary);
     outline-offset: -2px;
   }
 
-  .qa-btn:disabled {
+  .sync-main:disabled,
+  .sync-menu-btn:disabled {
     color: var(--app-disabled-fg, var(--m3-on-surface-variant));
     cursor: not-allowed;
   }
@@ -282,14 +321,23 @@
     height: 14px;
   }
 
+  .sync-word {
+    flex: none;
+    font-weight: 500;
+    line-height: 1;
+  }
+
   .count {
     flex: none;
-    min-width: 0.85rem;
-    padding: 0 0.22rem;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.1rem;
+    min-width: 1rem;
+    padding: 0 0.25rem;
     border-radius: var(--m3-shape-full, 9999px);
-    font-size: 0.6rem;
+    font-size: 0.65rem;
     font-weight: 600;
-    line-height: 0.95rem;
+    line-height: 1.1;
     text-align: center;
     font-variant-numeric: tabular-nums;
   }
@@ -305,6 +353,10 @@
   }
 
   @media (max-width: 760px) {
+    .sync-word {
+      display: none;
+    }
+
     .count {
       display: none;
     }

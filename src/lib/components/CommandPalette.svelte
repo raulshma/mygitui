@@ -36,6 +36,8 @@ import {
   type PaletteSection,
   type RankedCommand,
 } from "$lib/palette/palette.svelte";
+import { commandIcon } from "$lib/palette/commandIcons";
+import Icon from "$lib/components/icons/Icon.svelte";
 
   const open = $derived(isPaletteOpen());
   const ctx = $derived(activeCtx());
@@ -186,6 +188,7 @@ import {
       <ul id="palette-list" class="list" role="listbox" aria-label="Commands">
         {#each flat as entry, i (entry.command.id)}
           {@const hits = titleHits(entry, query)}
+          {@const cmdIcon = commandIcon(entry.command)}
           {#if isFirstOfSection(i)}
             <li class="section" role="presentation">{sectionFor(i)?.name}</li>
           {/if}
@@ -204,6 +207,11 @@ import {
             }}
             onmouseenter={() => (activeIndex = i)}
           >
+            {#if cmdIcon}
+              <span class="cmd-icon" aria-hidden="true">
+                <Icon icon={cmdIcon} size={15} />
+              </span>
+            {/if}
             <span class="label">
               {#each entry.command.title as ch, j (j)}<span class:hl={hits.has(j)}>{ch}</span>{/each}
             </span>
@@ -302,6 +310,20 @@ import {
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+
+  .cmd-icon {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1rem;
+    height: 1rem;
+    color: var(--m3-on-surface-variant, var(--m3-on-surface));
+  }
+
+  .option.active .cmd-icon {
+    color: var(--m3-on-secondary-container, var(--m3-on-surface));
   }
 
   .label .hl {

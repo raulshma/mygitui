@@ -23,6 +23,8 @@
  * id. Ids are opaque; `freshId` mints unused ones.
  */
 
+import type { IconifyIcon } from "@iconify/types";
+
 // ---------------------------------------------------------------------------
 // Panel registry
 // ---------------------------------------------------------------------------
@@ -145,6 +147,32 @@ export const PANEL_META: Record<PanelId, PanelMeta> = {
 /** Human label for a panel (safe for unknown ids too). */
 export function panelLabel(panel: PanelId): string {
   return PANEL_META[panel]?.label ?? panel;
+}
+
+/**
+ * Panels pinned to the activity bar rail, in order. Everything else goes
+ * into the rail's "More panels" overflow menu so the rail stays scannable
+ * (UI review P1 #1). History is excluded — it keeps its own bottom button
+ * because it lives in the right sidebar.
+ */
+export const RAIL_PANELS: readonly PanelId[] = [
+  "status",
+  "branches",
+  "remotes",
+  "terminal",
+];
+
+/**
+ * `PANEL_META` stroke paths as Iconify icon data, so menus and the command
+ * palette can reuse the exact panel glyphs (stroke inherits currentColor).
+ */
+export function panelIconData(panel: PanelId): IconifyIcon {
+  const path = PANEL_META[panel]?.icon ?? "";
+  return {
+    width: 24,
+    height: 24,
+    body: `<path d="${path}" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>`,
+  };
 }
 
 // ---------------------------------------------------------------------------

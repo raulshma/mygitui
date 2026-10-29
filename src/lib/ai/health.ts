@@ -36,9 +36,9 @@ export function backendLine(backend: AiBackend, status: BackendStatus): string {
 
 /**
  * The chip state for the CURRENT supervisor snapshot. `preferred` is the
- * configured backend; when it is down/unknown and the fallback is
- * connected (and allowed), the chip shows amber "degraded (fallback)"
- * instead of red.
+ * configured backend; when it is down/unknown but the fallback is
+ * connected (and allowed), AI still works, so the chip stays green and
+ * says "via fallback" instead of showing a permanent warning.
  */
 export function aiHealth(
   statuses: BackendStatusMap,
@@ -57,14 +57,14 @@ export function aiHealth(
       return { tone: "degraded", label: "needs credentials", detail };
     case "down":
       if (allowFallback && statuses[other].status === "ok") {
-        return { tone: "degraded", label: "degraded (fallback)", detail };
+        return { tone: "ok", label: "via fallback", detail };
       }
       return { tone: "down", label: "down", detail };
     case "unknown":
       // Never probed: nothing has asked for AI yet. The chip stays gray
       // unless the fallback is known-good and may serve.
       if (allowFallback && statuses[other].status === "ok") {
-        return { tone: "degraded", label: "fallback ready", detail };
+        return { tone: "off", label: "via fallback", detail };
       }
       return { tone: "off", label: "not configured", detail };
   }

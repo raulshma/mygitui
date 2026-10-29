@@ -27,6 +27,7 @@
   import { busy } from "$lib/stores/ops.svelte";
   import { tabStore } from "$lib/stores/tabs.svelte";
   import { toast } from "$lib/toast";
+  import { showMenuAtElement } from "$lib/components/menu/contextMenuStore.svelte";
   import { IconButton, Spinner } from "$lib/components/m3";
   import Icon from "$lib/components/icons/Icon.svelte";
   import { ai } from "$lib/ai/ai.svelte";
@@ -39,6 +40,7 @@
   import iconProgress from "@ktibow/iconset-material-symbols/progress-activity";
   import iconSigning from "@ktibow/iconset-material-symbols/verified";
   import iconHook from "@ktibow/iconset-material-symbols/bolt";
+  import iconOptions from "@ktibow/iconset-material-symbols/tune";
 
   let {
     repoId,
@@ -196,6 +198,46 @@
     }
   }
 
+  // -- More commit options (UI review P2 #7) -----------------------------------
+  //
+  // Amend / skip-hooks / author were three unlabeled icon toggles with no
+  // visible state. They now live in one menu with checkmarks, and anything
+  // active shows as a text chip so the state survives a glance.
+
+  const anyOption = $derived(amend || noVerify || showAuthor);
+
+  const optionSummary = $derived.by(() => {
+    const parts: string[] = [];
+    if (amend) parts.push("Amend");
+    if (noVerify) parts.push("Hooks off");
+    if (showAuthor) parts.push("Author");
+    return parts.join(" · ");
+  });
+
+  /** Options menu: checkmark prefix shows the current toggle state. */
+  function openCommitOptions(event: MouseEvent): void {
+    showMenuAtElement(event.currentTarget as HTMLElement, [
+      {
+        id: "amend",
+        label: `${amend ? "✓ " : ""}Amend previous commit`,
+        icon: iconAmend,
+        run: () => (amend = !amend),
+      },
+      {
+        id: "no-verify",
+        label: `${noVerify ? "✓ " : ""}Skip hooks (--no-verify)`,
+        icon: iconSkipHooks,
+        run: () => (noVerify = !noVerify),
+      },
+      {
+        id: "author",
+        label: `${showAuthor ? "✓ " : ""}Author override…`,
+        icon: iconAuthor,
+        run: () => (showAuthor = !showAuthor),
+      },
+    ]);
+  }
+
   // -- M12: "Fixup into HEAD" quick action -------------------------------------
 
   let fixing = $state(false);
@@ -279,27 +321,18 @@
 
     <div class="controls">
       <div class="opt-switches">
+        {#if anyOption}
+          <span class="opt-summary" role="status" title="Active commit options">
+            {optionSummary}
+          </span>
+        {/if}
         <IconButton
-          icon={iconAmend}
-          label="Amend"
-          title="Amend the previous commit"
-          pressed={amend}
-          onclick={() => (amend = !amend)}
-        />
-        <IconButton
-          icon={iconSkipHooks}
-          label="Skip hooks (--no-verify)"
-          title="Skip the pre-commit and commit-msg hooks (--no-verify)"
-          pressed={noVerify}
-          onclick={() => (noVerify = !noVerify)}
-        />
-        <IconButton
-          icon={iconAuthor}
-          label="Author override"
-          title="Override the commit author"
-          pressed={showAuthor}
-          aria-expanded={showAuthor}
-          onclick={() => (showAuthor = !showAuthor)}
+          icon={iconOptions}
+          label="More commit options"
+          title="Amend, skip hooks, or override the author"
+          pressed={anyOption}
+          aria-haspopup="menu"
+          onclick={openCommitOptions}
         />
 
         {#if signing?.active || runningHooks.length > 0}
@@ -478,6 +511,22 @@ ${m.body}` : m.subject;
     align-items: center;
     gap: 0.125rem;
     min-width: 0;
+  }
+
+  /* Active-option state chip ("Amend · Hooks off") — the menu toggles are
+     invisible once closed, so the state stays readable (UI review P2 #7). */
+  .opt-summary {
+    flex: none;
+    max-width: 12rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    padding: 0.05rem 0.45rem;
+    border-radius: var(--m3-shape-full, 9999px);
+    background: var(--m3-secondary-container, var(--m3-surface-container-high));
+    color: var(--m3-on-secondary-container, var(--m3-secondary));
+    font-size: 0.65rem;
+    line-height: 1.5;
   }
 
   .meta-icons {

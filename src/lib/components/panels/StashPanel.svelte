@@ -18,6 +18,7 @@
   import { relativeAge, shortSha, stashRef } from "./panelModel";
   import ConfirmDialog from "$lib/components/safety/ConfirmDialog.svelte";
   import StashMessageButton from "$lib/components/ai/StashMessageButton.svelte";
+  import { showMenuAtElement } from "$lib/components/menu/contextMenuStore.svelte";
   import { IconButton } from "$lib/components/m3";
   import iconAdd from "@ktibow/iconset-material-symbols/add";
   import iconRefresh from "@ktibow/iconset-material-symbols/refresh";
@@ -26,6 +27,7 @@
   import iconBranch from "@ktibow/iconset-material-symbols/call-split";
   import iconDrop from "@ktibow/iconset-material-symbols/delete";
   import iconCheck from "@ktibow/iconset-material-symbols/check";
+  import iconMore from "@ktibow/iconset-material-symbols/more-vert";
 
   let {
     repoId,
@@ -153,6 +155,42 @@
   function age(info: StashInfo): string {
     return relativeAge(info.author.time);
   }
+
+  /**
+   * Row kebab menu (UI review P2 #11): Apply stays the one visible primary
+   * action; Pop / Branch / Drop get text labels here instead of unlabeled
+   * icon buttons.
+   */
+  function stashMenu(info: StashInfo, event: MouseEvent): void {
+    showMenuAtElement(event.currentTarget as HTMLElement, [
+      {
+        id: "pop",
+        label: "Pop (apply and drop)",
+        icon: iconPop,
+        disabled: busy,
+        run: () => void onApply(info, true),
+      },
+      {
+        id: "branch",
+        label: "Create branch…",
+        icon: iconBranch,
+        disabled: busy,
+        run: () => {
+          branchFor = info.index;
+          branchName = "";
+        },
+      },
+      { separator: true },
+      {
+        id: "drop",
+        label: "Drop…",
+        icon: iconDrop,
+        danger: true,
+        disabled: busy,
+        run: () => void onDrop(info),
+      },
+    ]);
+  }
 </script>
 
 <aside class="stash-panel" aria-label="Stashes">
@@ -237,32 +275,13 @@
               onclick={() => void onApply(info, false)}
             />
             <IconButton
-              icon={iconPop}
-              label={`Pop ${stashRef(info)} (apply and drop)`}
-              title="Apply this stash and drop it"
+              icon={iconMore}
+              label={`More actions for ${stashRef(info)}`}
+              title="Pop, branch, or drop this stash"
               dense
+              aria-haspopup="menu"
               disabled={busy}
-              onclick={() => void onApply(info, true)}
-            />
-            <IconButton
-              icon={iconBranch}
-              label={`Create a branch from ${stashRef(info)}`}
-              title="Create a branch from this stash"
-              dense
-              disabled={busy}
-              onclick={() => {
-                branchFor = branchFor === info.index ? null : info.index;
-                branchName = "";
-              }}
-            />
-            <IconButton
-              icon={iconDrop}
-              label={`Drop ${stashRef(info)}`}
-              title="Drop this stash"
-              tone="danger"
-              dense
-              disabled={busy}
-              onclick={() => void onDrop(info)}
+              onclick={(event) => stashMenu(info, event)}
             />
           </div>
           {#if branchFor === info.index}

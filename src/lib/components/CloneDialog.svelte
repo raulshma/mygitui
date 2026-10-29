@@ -23,6 +23,7 @@
   import { onCloneProgress } from "$lib/events/repoEvents";
   import { openTab } from "$lib/stores/tabs.svelte";
   import { toast } from "$lib/toast";
+  import { trapTab } from "$lib/components/safety/trapTab";
 
   let { open = $bindable(false) }: { open?: boolean } = $props();
 
@@ -36,6 +37,9 @@
   /** URL of the clone currently in flight (progress events are matched on it). */
   let activeUrl: string | null = null;
   let urlInput: HTMLInputElement | undefined = $state();
+  let dialogEl = $state<HTMLDivElement | undefined>();
+  /** Element focused before the dialog opened (focus returns there on close). */
+  let restoreTo: HTMLElement | null = null;
 
   const canClone = $derived(url.trim() !== "" && destination.trim() !== "" && !cloning);
   const percent = $derived(
@@ -55,10 +59,27 @@
 
   $effect(() => {
     if (open) {
+      restoreTo =
+        document.activeElement instanceof HTMLElement
+          ? document.activeElement
+          : null;
       error = "";
-      urlInput?.focus();
+      requestAnimationFrame(() => urlInput?.focus());
+    } else if (restoreTo !== null) {
+      restoreTo.focus();
+      restoreTo = null;
     }
   });
+
+  /** Escape closes; Tab stays inside the dialog (shared focus trap). */
+  function onDialogKeydown(event: KeyboardEvent): void {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      close();
+      return;
+    }
+    trapTab(dialogEl, event);
+  }
 
   function close(): void {
     if (cloning) {
@@ -122,14 +143,36 @@
 </script>
 
 {#if open}
-  <div class="scrim">
+  <!-- svelte-ignore a11y_click_events_have_key_events -->
+  <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+  <div
+    class="scrim"
+    role="presentation"
+    onclick={(event) => {
+      if (event.target === event.currentTarget) close();
+    }}
+  >
     <div
       class="dialog"
       role="dialog"
       aria-modal="true"
       aria-labelledby="clone-title"
+      tabindex="-1"
+      bind:this={dialogEl}
+      onkeydown={onDialogKeydown}
     >
-      <h2 id="clone-title" class="title">Clone repository</h2>
+      <div class="title-row">
+        <h2 id="clone-title" class="title">Clone repository</h2>
+        <button
+          class="close"
+          type="button"
+          aria-label="Close clone dialog"
+          title="Close"
+          onclick={close}
+        >
+          ×
+        </button>
+      </div>
 
       <form
         onsubmit={(event) => {
@@ -157,7 +200,7 @@
             <input
               class="input"
               type="text"
-              placeholder="C:\\path\\to\\folder"
+              placeholder="e.g. C:\Users\you\Projects\repo"
               autocomplete="off"
               spellcheck="false"
               bind:value={destination}
@@ -240,10 +283,48 @@
   }
 
   .title {
-    margin: 0 0.25rem 1rem;
+    margin: 0;
     font-size: 1.375rem;
     font-weight: 400;
     color: var(--m3-on-surface);
+  }
+
+  .title-row {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin: 0 0.25rem 1rem;
+  }
+
+  .title-row .title {
+    flex: 1;
+  }
+
+  .close {
+    flex: none;
+    width: 1.75rem;
+    height: 1.75rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: none;
+    border-radius: 50%;
+    background: none;
+    color: var(--m3-on-surface-variant);
+    font: inherit;
+    font-size: 1.25rem;
+    line-height: 1;
+    cursor: pointer;
+  }
+
+  .close:hover {
+    background: var(--m3-surface-container-highest);
+    color: var(--m3-on-surface);
+  }
+
+  .close:focus-visible {
+    outline: 2px solid var(--m3-primary);
+    outline-offset: 1px;
   }
 
   form {

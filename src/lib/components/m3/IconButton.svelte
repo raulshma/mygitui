@@ -26,7 +26,7 @@
     disabled?: boolean;
     /** Renders `aria-pressed` for toggle buttons. */
     pressed?: boolean;
-    /** Tighter 1.35rem square for dense rows. */
+    /** Tighter 1.5rem square for dense rows (hit area stays 32px). */
     dense?: boolean;
     /** Native tab order; `-1` for hover-revealed row actions. */
     tabindex?: number;
@@ -78,11 +78,12 @@
 <style>
   .icon-btn {
     flex: none;
+    position: relative;
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 1.65rem;
-    height: 1.65rem;
+    width: 1.75rem;
+    height: 1.75rem;
     padding: 0;
     border: 1px solid transparent;
     border-radius: var(--m3-shape-extra-small, 4px);
@@ -122,8 +123,16 @@
   }
 
   .icon-btn.dense {
-    width: 1.35rem;
-    height: 1.35rem;
+    width: 1.5rem;
+    height: 1.5rem;
+  }
+
+  /* Dense buttons stay visually small (24px in tight rows) but the clickable
+     area extends past the border to the 28px+ minimum hit target. */
+  .icon-btn.dense::after {
+    content: "";
+    position: absolute;
+    inset: -0.25rem;
   }
 
   .icon-btn.outlined {

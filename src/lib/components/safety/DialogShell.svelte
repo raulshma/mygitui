@@ -7,6 +7,7 @@
 -->
 <script lang="ts">
   import type { Snippet } from "svelte";
+  import { trapTab } from "./trapTab";
 
   let {
     open = $bindable(false),
@@ -65,6 +66,8 @@
       if (e.key === "Escape") {
         e.preventDefault();
         cancel();
+      } else {
+        trapTab(panelEl, e);
       }
     }}
   >

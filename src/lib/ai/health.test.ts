@@ -63,10 +63,10 @@ describe("aiHealth", () => {
     expect(view.label).toBe("needs credentials");
   });
 
-  it("preferred down + fallback ok + allowed → amber degraded (fallback)", () => {
+  it("preferred down + fallback ok + allowed → green via fallback", () => {
     const view = aiHealth(map("down", "ok"), "opencode", true);
-    expect(view.tone).toBe("degraded");
-    expect(view.label).toBe("degraded (fallback)");
+    expect(view.tone).toBe("ok");
+    expect(view.label).toBe("via fallback");
   });
 
   it("preferred down + fallback disallowed → red down", () => {
@@ -88,9 +88,9 @@ describe("aiHealth", () => {
 
   it("works for either preferred backend", () => {
     expect(aiHealth(map("down", "ok"), "openrouter", true).tone).toBe("ok");
-    // Preferred openrouter down, but opencode may serve: degraded, not down.
+    // Preferred openrouter down, but opencode may serve: still usable.
     expect(aiHealth(map("ok", "down"), "openrouter", true).label).toBe(
-      "degraded (fallback)",
+      "via fallback",
     );
   });
 

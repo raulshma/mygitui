@@ -29,7 +29,7 @@
    * top offers Resolve (ConflictEditor overlay) and Abort (rebase_abort /
    * merge_abort / sequencer_abort, chosen by the in-progress op).
    */
-  import type { Snippet } from "svelte";
+  import { untrack, type Snippet } from "svelte";
   import type {
     CommitInfo,
     ConflictFile,
@@ -38,9 +38,11 @@
     StatusEntry,
   } from "$lib/ipc/types";
   import {
+    discard,
     mergeAbort,
     rebaseAbort,
     sequencerAbort,
+    stage,
     streamDiff,
   } from "$lib/ipc/client";
   import StatusPanel from "$lib/components/panels/StatusPanel.svelte";
@@ -385,6 +387,41 @@
   const activityPanels = TREE_PANELS.filter(
     (panel) => panel !== "diff" && panel !== "history",
   );
+
+  // --- Narrow-viewport auto-collapse (UI review P1 #5) ----------------------
+  //
+  // Below 1200px the history sidebar would squeeze the diff into wrapping
+  // code lines, so it auto-collapses to the right-edge rail once. Widening
+  // never auto-expands and a manual reopen is respected for the rest of the
+  // session (the flag only resets while the workspace is wide, so the NEXT
+  // narrowing may auto-collapse again — never this one).
+  let narrowAutoCollapsed = $state(false);
+
+  $effect(() => {
+    const targetRoot = root;
+    const mq = window.matchMedia("(max-width: 1199px)");
+    const apply = (): void => {
+      if (mq.matches) {
+        if (
+          !narrowAutoCollapsed &&
+          !untrack(() => collapsed.right) &&
+          untrack(() => historyInRightSidebar) &&
+          untrack(() => canCollapseRight)
+        ) {
+          narrowAutoCollapsed = true;
+          layouts.setSidebarCollapsed(targetRoot, "right", true);
+        }
+        return;
+      }
+      // Wide again: only re-arm the one-shot; pane visibility stays as the
+      // user left it (manual overrides win for the session).
+      narrowAutoCollapsed = false;
+    };
+    apply();
+    mq.addEventListener("change", apply);
+    return () => mq.removeEventListener("change", apply);
+  });
+
   /** Whether the tab group at `tabsId` has a group to its left. */
   function canMoveLeftFor(tabsId: string): boolean {
     return leftSiblingOf(resolved.layout.main, tabsId) !== null;
@@ -822,6 +859,108 @@
     }
   }
 
+  // --- Center pane: first-change open + file actions (UI review P2 #8) ------
+
+  /** Changed files in status order — drives auto-open and prev/next. */
+  const changeEntries = $derived(status?.entries ?? []);
+
+  /** Auto-open the first change once per repo, when the editor is empty. */
+  let autoOpenedFor = $state<string | null>(null);
+  $effect(() => {
+    if (autoOpenedFor === repoId || status === null) return;
+    autoOpenedFor = repoId;
+    const first = status.entries[0];
+    if (
+      first &&
+      diffEntry === null &&
+      selectedCommit === null &&
+      compareResult === null &&
+      workflowRunId === null &&
+      actionRunId === null
+    ) {
+      void openDiff(first);
+    }
+  });
+
+  /** Keep the open diff's kinds (and hunk staging safety) in sync with the
+   *  refreshed status — staging from the header flips the entry state. */
+  $effect(() => {
+    const current = diffEntry;
+    if (!current || diffRepoId !== repoId || !status) return;
+    const fresh = status.entries.find((e) => e.path === current.path);
+    if (!fresh) return;
+    diffHunkable = fresh.index === "unmodified";
+    if (fresh.index !== current.index || fresh.worktree !== current.worktree) {
+      diffEntry = fresh;
+    }
+  });
+
+  /** Header ↑/↓: step through changed files (wraps around). Main-repo
+   *  diffs only — submodule panes have no entry in this status list. */
+  function openAdjacentChange(delta: 1 | -1): void {
+    const list = changeEntries;
+    if (!diffEntry || diffRepoId !== repoId || list.length < 2) return;
+    const at = list.findIndex((e) => e.path === diffEntry?.path);
+    const next = list[(Math.max(at, 0) + delta + list.length) % list.length]!;
+    void openDiff(next);
+  }
+
+  /** Welcome pane: open the first changed file. */
+  function openFirstChange(): void {
+    const first = changeEntries[0];
+    if (first) void openDiff(first);
+  }
+
+  /** Header Stage/Unstage for the open file. */
+  async function stageOpenEntry(unstage: boolean): Promise<void> {
+    const current = diffEntry;
+    if (!current || diffRepoId !== repoId) return;
+    try {
+      await stage(repoId, { targets: [{ file: current.path }], unstage });
+      refresh();
+      toast(
+        `${unstage ? "Unstaged" : "Staged"} ${current.path}`,
+        { kind: "success" },
+      );
+    } catch (err) {
+      toast(
+        `${unstage ? "Unstage" : "Stage"} failed: ${err instanceof Error ? err.message : String(err)}`,
+        { kind: "error" },
+      );
+    }
+  }
+
+  /** Discard confirmation for the open file (discard checkpoints upstream). */
+  let discardOpen = $state(false);
+
+  function requestDiscardOpenEntry(): void {
+    if (diffEntry !== null) discardOpen = true;
+  }
+
+  async function discardOpenEntry(): Promise<void> {
+    const current = diffEntry;
+    const targetRepoId = diffRepoId ?? repoId;
+    if (!current) return;
+    try {
+      await discard(targetRepoId, [{ file: current.path }]);
+      discardOpen = false;
+      toast(`Discarded changes in ${current.path}`, { kind: "success" });
+      refresh();
+      if (diffRepoId && diffRepoId !== repoId) void refreshStatus(diffRepoId);
+      void openDiff(
+        current,
+        diffRepoId ?? undefined,
+        diffRoot ?? undefined,
+        diffRepoName ?? undefined,
+      );
+    } catch (err) {
+      toast(
+        `Discard failed: ${err instanceof Error ? err.message : String(err)}`,
+        { kind: "error" },
+      );
+    }
+  }
+
   /** Clears the center editor (close button or the empty-state reset). */
   function clearEditor(): void {
     diffToken++;
@@ -1029,6 +1168,10 @@
     historyActions={historyActions}
     workflowRunId={workflowRunId}
     actionRunId={actionRunId}
+    entryIndex={diffEntry && diffRepoId === repoId
+      ? changeEntries.findIndex((e) => e.path === diffEntry?.path)
+      : null}
+    entryCount={diffRepoId === repoId ? changeEntries.length : 0}
     onClose={clearEditor}
     onCloseCompare={() => (compareResult = null)}
     onCloseWorkflowRun={() => (workflowRunId = null)}
@@ -1039,6 +1182,14 @@
     onPopoutWorkflowRun={workflowRunId !== null ? popOutWorkflowRun : undefined}
     onPopoutActionRun={actionRunId !== null ? popOutActionRun : undefined}
     onMutated={onEditorMutated}
+    onPrevFile={() => openAdjacentChange(-1)}
+    onNextFile={() => openAdjacentChange(1)}
+    onStageEntry={diffRepoId === repoId
+      ? (unstage) => void stageOpenEntry(unstage)
+      : undefined}
+    onDiscardEntry={diffRepoId === repoId ? requestDiscardOpenEntry : undefined}
+    onOpenFirstChange={openFirstChange}
+    onBrowseHistory={() => focusPanel("history")}
   />
 {/snippet}
 {#snippet branchesPanel()}
@@ -1300,6 +1451,17 @@
   confirmLabel="Abort operation"
   danger
   onConfirm={() => void onAbortConfirmed()}
+/>
+
+<ConfirmDialog
+  bind:open={discardOpen}
+  title="Discard changes?"
+  message={diffEntry
+    ? `All uncommitted changes in ${diffEntry.path} are discarded. A safety checkpoint is created first — restore it from the Undo panel.`
+    : "All uncommitted changes in this file are discarded."}
+  confirmLabel="Discard changes"
+  danger
+  onConfirm={() => void discardOpenEntry()}
 />
 
 <style>
