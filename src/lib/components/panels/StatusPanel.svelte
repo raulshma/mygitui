@@ -7,12 +7,20 @@
    * unstaged edits. The right-side status letter identifies added, modified,
    * deleted, untracked, or conflicted files.
    *
-   * Interaction: click opens the diff (Conflicted rows go to the optional
-   * conflict editor when provided), or opens the submodule as a repository
-   * tab when the path is a submodule. Ctrl-click toggles multi-selection;
-   * Shift-click extends. Row actions stage/unstage/discard through the same
-   * backend commands as before. Keyboard: arrows/Home/End move, Space
-   * toggles selection, Enter opens, `s` stages or unstages, `d` discards.
+   * Interaction is 1-1 with the VS Code source-control view. A row's
+   * selection identity is its key (`section:path`), so a path with staged
+   * and unstaged edits selects independently in each group. Plain click
+   * selects and opens the diff (Conflicted rows go to the optional conflict
+   * editor when provided; a submodule path opens as a repository tab);
+   * Ctrl-click toggles the row in the multi-selection; Shift-click extends
+   * the range from the anchor without opening. Keyboard: arrows / PageUp /
+   * PageDown / Home / End move the focus (Shift extends, no wraparound),
+   * Ctrl+A selects all, Space toggles the focused row, Enter opens, `s`
+   * stages or unstages and `d` discards the selection. Stage/unstage/
+   * discard — hover buttons, context menu and keys alike — apply to the
+   * whole selection when the target row is part of it, and right-clicking
+   * an unselected row collapses the selection to that row first. After a
+   * mutation the selection follows files across the group move on refresh.
    *
    * Submodules: `submodules(repoId)` supplies checked-out vs recorded state.
    * A submodule that the superproject's status already reports is enriched
@@ -81,6 +89,17 @@ import iconPalette from "@ktibow/iconset-material-symbols/palette";
     type StatusRow,
     type StatusSectionView,
   } from "./statusModel";
+  import {
+    actionRows,
+    allSelection,
+    countLabel,
+    pruneSelection,
+    rangeSelection,
+    remapSelection,
+    selectionActions,
+    toggleSelection,
+    type SelectionActions,
+  } from "./statusSelection";
 
   let {
     status,
@@ -93,6 +112,7 @@ import iconPalette from "@ktibow/iconset-material-symbols/palette";
   }: {
     status: RepoStatus | null;
     onOpenDiff: (entry: StatusEntry) => void;
+    /** Selected row keys (`section:path`), VS Code multi-select style. */
     selected: string[];
     /** Owning repository; staging controls disable while null. */
     repoId?: string | null;
@@ -338,25 +358,34 @@ import iconPalette from "@ktibow/iconset-material-symbols/palette";
     void reloadModules();
   }
 
-  function isSelected(path: string): boolean {
-    return selected.includes(path);
+  /** Whether the row (by key) is in the multi-selection. */
+  function isSelected(key: string): boolean {
+    return selected.includes(key);
   }
 
-  function toggleSelected(path: string): void {
-    selected = isSelected(path)
-      ? selected.filter((p) => p !== path)
-      : [...selected, path];
-  }
+  /**
+   * Stage/unstage remaps queued by mutations: once the refreshed status
+   * arrives, selected keys flip section (a staged file moves Changes →
+   * Staged Changes) so the selection follows the files, VS Code style.
+   */
+  let pendingRemaps: { paths: ReadonlySet<string>; unstage: boolean }[] = [];
 
-  function setRangeSelection(from: number, to: number): void {
-    const [lo, hi] = from <= to ? [from, to] : [to, from];
-    const paths = new Set<string>();
-    for (let i = lo; i <= hi; i++) {
-      const path = visibleRows[i]?.entry.path;
-      if (path !== undefined) paths.add(path);
+  // Runs on every status refresh: apply queued remaps, then drop keys whose
+  // rows vanished (discarded, committed elsewhere, filtered out upstream).
+  $effect(() => {
+    const idx = index;
+    if (idx === null) return;
+    let next = selected;
+    for (const remap of pendingRemaps) {
+      next = remapSelection(next, remap.paths, remap.unstage, idx.rows);
     }
-    selected = [...paths];
-  }
+    pendingRemaps = [];
+    next = pruneSelection(next, idx.rows);
+    const changed =
+      next.length !== selected.length ||
+      next.some((key, i) => key !== selected[i]);
+    if (changed) selected = next;
+  });
 
   function focusRow(key: string): void {
     focusKey = key;
@@ -508,7 +537,8 @@ import iconPalette from "@ktibow/iconset-material-symbols/palette";
 
   /**
    * Plain click: select + open (submodule tab, conflict editor, or diff).
-   * Ctrl: toggle. Shift: range.
+   * Ctrl: toggle in the selection (no open). Shift: extend the range from
+   * the anchor (no open). All VS Code list behaviors.
    */
   function openRow(row: StatusRow): void {
     const info = moduleByPath.get(row.entry.path);
@@ -529,33 +559,70 @@ import iconPalette from "@ktibow/iconset-material-symbols/palette";
     }
     focusKey = row.key;
     if (event.shiftKey) {
-      setRangeSelection(anchorIndex, rowIndex);
+      selected = rangeSelection(visibleRows, anchorIndex, rowIndex);
       return;
     }
     anchorIndex = rowIndex;
     if (event.ctrlKey || event.metaKey) {
-      toggleSelected(row.entry.path);
+      selected = toggleSelection(selected, row.key);
     } else {
-      selected = [row.entry.path];
+      selected = [row.key];
       openRow(row);
     }
   }
 
   /**
-   * Row action: Staged rows unstage; Changes rows stage. The visual
-   * state follows the refreshed status once the async mutation lands.
+   * Row action (hover button, context menu, `s`): Staged rows unstage,
+   * Changes rows stage. VS Code applies it to the whole selection when the
+   * target row is part of it — a selection spanning both groups stages and
+   * unstages in one go, each file in its own direction. The visual state
+   * follows the refreshed status once the async mutation lands.
    */
-  function stageRow(row: StatusRow, event?: MouseEvent): void {
+  function stageAction(row: StatusRow, event?: MouseEvent): void {
     event?.stopPropagation();
-    if (!repoId || row.kind === "conflicted") return;
-    const unstage = row.section === "staged";
-    const isModule = moduleByPath.has(row.entry.path);
+    if (!canMutate || row.kind === "conflicted") return;
+    const actions = selectionActions(actionRows(row, selected, visibleRows));
+    const paths = [...actions.unstage, ...actions.stage];
+    if (paths.length === 0) return;
+    if (actions.unstage.length > 0) {
+      pendingRemaps.push({ paths: new Set(actions.unstage), unstage: true });
+    }
+    if (actions.stage.length > 0) {
+      pendingRemaps.push({ paths: new Set(actions.stage), unstage: false });
+    }
+    const hasModule = paths.some((path) => moduleByPath.has(path));
     void mutate(
-      unstage ? `Unstage ${row.entry.path}` : `Stage ${row.entry.path}`,
-      () => stage(repoId, { targets: [{ file: row.entry.path }], unstage }),
+      stageLabel(actions),
+      () =>
+        Promise.all([
+          actions.unstage.length > 0
+            ? stage(repoId!, {
+                targets: actions.unstage.map((file) => ({ file })),
+                unstage: true,
+              })
+            : Promise.resolve(),
+          actions.stage.length > 0
+            ? stage(repoId!, {
+                targets: actions.stage.map((file) => ({ file })),
+                unstage: false,
+              })
+            : Promise.resolve(),
+        ]).then(() => undefined),
     ).then((ok) => {
-      if (ok && isModule) void reloadModules();
+      if (ok && hasModule) void reloadModules();
     });
+  }
+
+  /** Error-toast label: the verb plus the file count when it is not 1. */
+  function stageLabel(actions: SelectionActions): string {
+    const verbs: string[] = [];
+    if (actions.unstage.length > 0) {
+      verbs.push(countLabel("Unstage", actions.unstage.length));
+    }
+    if (actions.stage.length > 0) {
+      verbs.push(countLabel("Stage", actions.stage.length));
+    }
+    return verbs.join(" + ") || "Stage";
   }
 
   /** Section-header action: stage Changes or unstage Staged Changes. */
@@ -565,6 +632,10 @@ import iconPalette from "@ktibow/iconset-material-symbols/palette";
     const unstage = section.id === "staged";
     const rows = section.rows.filter((row) => row.kind !== "conflicted");
     if (rows.length === 0) return;
+    pendingRemaps.push({
+      paths: new Set(rows.map((row) => row.entry.path)),
+      unstage,
+    });
     const hasModule = rows.some((row) => moduleByPath.has(row.entry.path));
     void mutate(
       `${unstage ? "Unstage" : "Stage"} all in ${section.label}`,
@@ -586,6 +657,15 @@ import iconPalette from "@ktibow/iconset-material-symbols/palette";
   function onStageAll(unstage: boolean): void {
     if (!repoId) return;
     if (unstage) {
+      const source = index;
+      if (source !== null && source.bySection.staged.length > 0) {
+        pendingRemaps.push({
+          paths: new Set(
+            source.bySection.staged.map((row) => row.entry.path),
+          ),
+          unstage: true,
+        });
+      }
       void mutate("Unstage all files", () => stageAll(repoId, true)).then(
         (ok) => {
           if (ok && moduleList.length > 0) void reloadModules();
@@ -601,6 +681,7 @@ import iconPalette from "@ktibow/iconset-material-symbols/palette";
       if (row.kind !== "conflicted") paths.add(path);
     }
     if (paths.size === 0) return;
+    pendingRemaps.push({ paths, unstage: false });
     const files = [...paths];
     const hasModule = files.some((path) => moduleByPath.has(path));
     void mutate("Stage all files", () =>
@@ -679,108 +760,126 @@ import iconPalette from "@ktibow/iconset-material-symbols/palette";
     showMenuAt(event, entries);
   }
 
-  /** Row right-click: the file (or submodule) action menu. */
+  /**
+   * Row right-click: the file (or submodule) action menu. VS Code syncs the
+   * selection first — right-clicking an unselected row collapses the
+   * selection to that row — and every command then acts on the whole
+   * selection; per-file extras (ignore, history, submodule ops) stay
+   * single-selection only.
+   */
   function rowMenu(event: MouseEvent, row: StatusRow): void {
-    const path = row.entry.path;
-    const info = moduleByPath.get(path);
-    const entries: MenuEntry[] = [];
     if (!repoId) {
-      showMenuAt(event, entries);
+      showMenuAt(event, []);
       return;
     }
-
-    if (row.section !== "staged" && row.kind !== "conflicted") {
-      entries.push({
-        id: "stage",
-        label: "Stage",
-        run: () =>
-          void mutate(`Stage ${path}`, () =>
-            stage(repoId, { targets: [{ file: path }], unstage: false }),
-          ).then((ok) => {
-            if (ok && info) void reloadModules();
-          }),
-      });
+    if (!isSelected(row.key)) {
+      selected = [row.key];
+      const at = visibleRows.findIndex((r) => r.key === row.key);
+      anchorIndex = at === -1 ? 0 : at;
+      focusKey = row.key;
     }
-    if (row.section === "staged") {
+    const targets = actionRows(row, selected, visibleRows);
+    const actions = selectionActions(targets);
+    const entries: MenuEntry[] = [];
+
+    if (actions.unstage.length > 0) {
       entries.push({
         id: "unstage",
-        label: "Unstage",
-        run: () =>
-          void mutate(`Unstage ${path}`, () =>
-            stage(repoId, { targets: [{ file: path }], unstage: true }),
-          ).then((ok) => {
-            if (ok && info) void reloadModules();
-          }),
+        label: countLabel("Unstage", actions.unstage.length),
+        run: () => stageAction(row),
+      });
+    }
+    if (actions.stage.length > 0) {
+      entries.push({
+        id: "stage",
+        label: countLabel("Stage", actions.stage.length),
+        run: () => stageAction(row),
       });
     }
 
-    if (info) {
-      entries.push({ separator: true });
-      if (info.initialized) {
-        entries.push({
-          id: "module-open",
-          label: "Open submodule",
-          run: () => void openSubmodule(info),
-        });
-      }
-      entries.push(
-        {
-          id: "module-update",
-          label: info.initialized
-            ? "Update submodule"
-            : "Initialize and update submodule",
-          run: () => void updateSubmodule(info),
-        },
-        {
-          id: "module-sync",
-          label: "Sync submodule URL",
-          run: () => void syncSubmodule(info),
-        },
-        { separator: true },
-        {
-          id: "open-diff",
-          label: "Open gitlink diff",
-          run: () => onOpenDiff(row.entry),
-        },
-      );
-    } else {
-      if (row.kind !== "conflicted") {
-        entries.push({
-          id: "discard",
-          label: "Discard changes…",
-          danger: true,
-          run: () => (discardCandidate = row),
-        });
-      }
-      if (row.kind === "untracked") {
-        for (const choice of choicesFor(path)) {
+    const discardable = targets.filter(
+      (t) =>
+        t.section !== "staged" &&
+        t.kind !== "conflicted" &&
+        !moduleByPath.has(t.entry.path),
+    );
+    if (discardable.length > 0) {
+      entries.push({
+        id: "discard",
+        label: discardable.length > 1
+          ? `Discard changes in ${discardable.length} files…`
+          : "Discard changes…",
+        danger: true,
+        run: () => (discardCandidates = discardable),
+      });
+    }
+
+    const single = targets.length === 1 ? targets[0]! : null;
+    if (single !== null) {
+      const info = moduleByPath.get(single.entry.path);
+      if (info) {
+        entries.push({ separator: true });
+        if (info.initialized) {
           entries.push({
-            id: `ignore-${choice.label}`,
-            label: `Ignore ${choice.label} (${choice.pattern})`,
-            run: () => void onIgnore(choice),
+            id: "module-open",
+            label: "Open submodule",
+            run: () => void openSubmodule(info),
           });
         }
-        entries.push({
-          id: "ignore-templates",
-          label: "Ignore templates…",
-          run: () => (galleryOpen = true),
-        });
+        entries.push(
+          {
+            id: "module-update",
+            label: info.initialized
+              ? "Update submodule"
+              : "Initialize and update submodule",
+            run: () => void updateSubmodule(info),
+          },
+          {
+            id: "module-sync",
+            label: "Sync submodule URL",
+            run: () => void syncSubmodule(info),
+          },
+          { separator: true },
+          {
+            id: "open-diff",
+            label: "Open gitlink diff",
+            run: () => onOpenDiff(single.entry),
+          },
+        );
+      } else {
+        if (single.kind === "untracked") {
+          for (const choice of choicesFor(single.entry.path)) {
+            entries.push({
+              id: `ignore-${choice.label}`,
+              label: `Ignore ${choice.label} (${choice.pattern})`,
+              run: () => void onIgnore(choice),
+            });
+          }
+          entries.push({
+            id: "ignore-templates",
+            label: "Ignore templates…",
+            run: () => (galleryOpen = true),
+          });
+        }
+        entries.push(
+          {
+            id: "history",
+            label: "File history",
+            run: () =>
+              void openPanelPopout(
+                "filehistory",
+                repoId,
+                `History: ${single.entry.path}`,
+                { path: single.entry.path },
+              ),
+          },
+          {
+            id: "open",
+            label: "Open diff",
+            run: () => openRow(single),
+          },
+        );
       }
-      entries.push(
-        {
-          id: "history",
-          label: "File history",
-          run: () =>
-            void openPanelPopout("filehistory", repoId, `History: ${path}`, {
-              path,
-            }),
-        },
-        {
-          id: "open",
-          label: "Open diff",
-          run: () => openRow(row),
-        },
-      );
     }
     showMenuAt(event, entries);
   }
@@ -822,28 +921,52 @@ import iconPalette from "@ktibow/iconset-material-symbols/palette";
   // -- discard / ignore gallery ------------------------------------------------
 
   let galleryOpen = $state(false);
-  /** Row pending a discard confirmation (whole file; checkpointed upstream). */
-  let discardCandidate = $state<StatusRow | null>(null);
+  /** Rows pending a discard confirmation (whole files; checkpointed upstream). */
+  let discardCandidates = $state<StatusRow[]>([]);
 
+  /**
+   * Hover button / `d`: discard the selection when the target row is part
+   * of it, otherwise just the row. Staged, conflicted and submodule rows
+   * never discard (conflict resolution is an explicit edit).
+   */
   function requestDiscard(row: StatusRow, event?: MouseEvent): void {
     event?.stopPropagation();
     if (!canMutate || row.section === "staged" || row.kind === "conflicted") {
       return;
     }
     if (moduleByPath.has(row.entry.path)) return;
-    discardCandidate = row;
+    discardCandidates = actionRows(row, selected, visibleRows).filter(
+      (candidate) =>
+        candidate.section !== "staged" &&
+        candidate.kind !== "conflicted" &&
+        !moduleByPath.has(candidate.entry.path),
+    );
   }
 
   /** Discard confirmed: the backend snapshots a checkpoint first. */
   async function onDiscardConfirmed(): Promise<void> {
-    const row = discardCandidate;
-    if (!repoId || !row) return;
-    discardCandidate = null;
-    await mutate(`Discard ${row.entry.path}`, () =>
-      discard(repoId, [{ file: row.entry.path }]),
+    const candidates = discardCandidates;
+    if (!repoId || candidates.length === 0) return;
+    discardCandidates = [];
+    await mutate(
+      candidates.length > 1
+        ? `Discard ${candidates.length} files`
+        : `Discard ${candidates[0]!.entry.path}`,
+      () =>
+        discard(
+          repoId,
+          candidates.map((row) => ({ file: row.entry.path })),
+        ),
     );
   }
 
+  /**
+   * VS Code list keyboard model: plain movement replaces the selection and
+   * moves the anchor; Shift extends the range from the anchor; focus clamps
+   * at the ends (no wraparound). Ctrl+A selects all; Space toggles the
+   * focused row without disturbing the rest; Enter opens without touching
+   * the selection; `s` stages/unstages and `d` discards the selection.
+   */
   function onTreeKeydown(event: KeyboardEvent): void {
     // The Ignore quick-add controls handle their own keys (Enter/Space must
     // not bubble into row open/toggle).
@@ -851,25 +974,39 @@ import iconPalette from "@ktibow/iconset-material-symbols/palette";
     const rows = visibleRows;
     if (rows.length === 0) return;
     const current =
-      focusKey !== null ? rows.findIndex((r) => r.key === focusKey) : 0;
+      focusKey !== null ? rows.findIndex((r) => r.key === focusKey) : -1;
     const base = current === -1 ? 0 : current;
 
+    const pageRows = Math.max(
+      1,
+      Math.floor(treeViewportHeight / STATUS_ROW_HEIGHT) - 1,
+    );
     let next: number | null = null;
-    if (event.key === "ArrowDown") next = (base + 1) % rows.length;
-    else if (event.key === "ArrowUp") next = (base - 1 + rows.length) % rows.length;
-    else if (event.key === "Home") next = 0;
+    if (event.key === "ArrowDown") next = Math.min(base + 1, rows.length - 1);
+    else if (event.key === "ArrowUp") next = Math.max(base - 1, 0);
+    else if (event.key === "PageDown") {
+      next = Math.min(base + pageRows, rows.length - 1);
+    } else if (event.key === "PageUp") {
+      next = Math.max(base - pageRows, 0);
+    } else if (event.key === "Home") next = 0;
     else if (event.key === "End") next = rows.length - 1;
 
     if (next !== null) {
       event.preventDefault();
       const row = rows[next]!;
       if (event.shiftKey) {
-        setRangeSelection(anchorIndex, next);
-      } else if (!event.ctrlKey && !event.metaKey) {
-        selected = [row.entry.path];
+        selected = rangeSelection(rows, anchorIndex, next);
+      } else {
+        selected = [row.key];
         anchorIndex = next;
       }
       focusRow(row.key);
+      return;
+    }
+
+    if ((event.ctrlKey || event.metaKey) && event.key === "a") {
+      event.preventDefault();
+      selected = allSelection(rows);
       return;
     }
 
@@ -880,16 +1017,14 @@ import iconPalette from "@ktibow/iconset-material-symbols/palette";
     if (event.key === " ") {
       event.preventDefault();
       anchorIndex = base;
-      toggleSelected(row.entry.path);
+      selected = toggleSelection(selected, row.key);
     } else if (event.key === "Enter") {
       event.preventDefault();
-      anchorIndex = base;
-      selected = [row.entry.path];
       openRow(row);
     } else if (event.key === "s" || event.key === "S") {
       if (row.kind !== "conflicted") {
         event.preventDefault();
-        stageRow(row);
+        stageAction(row);
       }
     } else if (event.key === "d" || event.key === "D") {
       if (
@@ -903,11 +1038,14 @@ import iconPalette from "@ktibow/iconset-material-symbols/palette";
     }
   }
 
-  /** ArrowDown in the filter box drops into the first row. */
+  /** ArrowDown in the filter box selects and focuses the first row. */
   function onFilterKeydown(event: KeyboardEvent): void {
     if (event.key === "ArrowDown" && visibleRows.length > 0) {
       event.preventDefault();
-      focusRow(visibleRows[0]!.key);
+      const row = visibleRows[0]!;
+      selected = [row.key];
+      anchorIndex = 0;
+      focusRow(row.key);
     }
   }
 
@@ -1088,9 +1226,9 @@ import iconPalette from "@ktibow/iconset-material-symbols/palette";
                 {@const display = info ? submoduleDisplay(info) : null}
                 <div
                   class="row file-row"
-                  class:selected={isSelected(row.entry.path)}
+                  class:selected={isSelected(row.key)}
                   role="treeitem"
-                  aria-selected={isSelected(row.entry.path)}
+                  aria-selected={isSelected(row.key)}
                   aria-setsize={section.rows.length + section.modules.length}
                   aria-posinset={window.first + renderedIndex + 1}
                   aria-label={rowAriaLabel(row, info)}
@@ -1153,7 +1291,7 @@ import iconPalette from "@ktibow/iconset-material-symbols/palette";
                         dense
                         tabindex={-1}
                         disabled={!canMutate}
-                        onclick={(event) => stageRow(row, event)}
+                        onclick={(event) => stageAction(row, event)}
                       />
                     {:else if row.kind !== "conflicted"}
                       <IconButton
@@ -1163,7 +1301,7 @@ import iconPalette from "@ktibow/iconset-material-symbols/palette";
                         dense
                         tabindex={-1}
                         disabled={!canMutate}
-                        onclick={(event) => stageRow(row, event)}
+                        onclick={(event) => stageAction(row, event)}
                       />
                       {#if !info}
                         <IconButton
@@ -1330,13 +1468,19 @@ import iconPalette from "@ktibow/iconset-material-symbols/palette";
 
 <ConfirmDialog
   bind:open={
-    () => discardCandidate !== null,
+    () => discardCandidates.length > 0,
     (v) => {
-      if (!v) discardCandidate = null;
+      if (!v) discardCandidates = [];
     }
   }
-  title={discardCandidate ? `Discard changes to ${discardCandidate.entry.path}?` : ""}
-  message="Staged and unstaged changes to this file return to HEAD (untracked files are deleted). A checkpoint is created first — restorable from the Undo panel."
+  title={discardCandidates.length > 1
+    ? `Discard changes to ${discardCandidates.length} files?`
+    : discardCandidates[0]
+      ? `Discard changes to ${discardCandidates[0].entry.path}?`
+      : ""}
+  message={discardCandidates.length > 1
+    ? `Staged and unstaged changes to these ${discardCandidates.length} files return to HEAD (untracked files are deleted). A checkpoint is created first — restorable from the Undo panel.`
+    : "Staged and unstaged changes to this file return to HEAD (untracked files are deleted). A checkpoint is created first — restorable from the Undo panel."}
   confirmLabel="Discard changes"
   danger
   onConfirm={() => void onDiscardConfirmed()}
