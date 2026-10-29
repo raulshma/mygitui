@@ -102,6 +102,7 @@
   import {
     refreshStatus,
     showRecentRepos,
+    tabStore,
   } from "$lib/stores/tabs.svelte";
   import { startAuthEvents, startOpsEvents } from "$lib/stores/ops.svelte";
   import { autofetch } from "$lib/stores/autofetch.svelte";
@@ -130,11 +131,15 @@
   } = $props();
 
   let selected: string[] = $state([]);
+  let hasSubmodules = $state(false);
 
   // --- Center editor state -------------------------------------------------
 
   /** Working-copy file whose diff is shown in the editor (null = none). */
   let diffEntry = $state<StatusEntry | null>(null);
+  let diffRepoId = $state<string | null>(null);
+  let diffRoot = $state<string | null>(null);
+  let diffRepoName = $state<string | null>(null);
   let diffFiles: FileDiff[] = $state([]);
   let diffLoading = $state(false);
   /** Hunk staging is only safe when the file has no staged changes. */
@@ -762,7 +767,12 @@
   }
 
   /** Working-copy row selected in the changes sidebar. */
-  async function openDiff(entry: StatusEntry): Promise<void> {
+  async function openDiff(
+    entry: StatusEntry,
+    targetRepoId?: string,
+    targetRoot?: string,
+    targetRepoName?: string,
+  ): Promise<void> {
     const token = ++diffToken;
     diffEntry = entry;
     diffFiles = [];
@@ -774,9 +784,12 @@
     compareResult = null;
     workflowRunId = null;
     actionRunId = null;
+    diffRepoId = targetRepoId ?? repoId;
+    diffRoot = targetRoot ?? root;
+    diffRepoName = targetRepoName ?? "";
     try {
       await streamDiff(
-        repoId,
+        diffRepoId,
         "head",
         "worktree",
         (page) => {
@@ -794,6 +807,21 @@
     }
   }
 
+  function onEditorMutated(): void {
+    refresh();
+    if (diffRepoId && diffRepoId !== repoId) {
+      void refreshStatus(diffRepoId);
+    }
+    if (diffEntry) {
+      void openDiff(
+        diffEntry,
+        diffRepoId ?? undefined,
+        diffRoot ?? undefined,
+        diffRepoName ?? undefined,
+      );
+    }
+  }
+
   /** Clears the center editor (close button or the empty-state reset). */
   function clearEditor(): void {
     diffToken++;
@@ -805,6 +833,9 @@
     compareResult = null;
     workflowRunId = null;
     actionRunId = null;
+    diffRepoId = null;
+    diffRoot = null;
+    diffRepoName = null;
   }
 
   /** History sidebar: a commit row was selected (or restored on mount). */
@@ -867,7 +898,7 @@
   // --- Popouts ---------------------------------------------------------------
 
   function popOutDiff(): void {
-    void openPanelPopout("diff", repoId, `${name} — diff`);
+    void openPanelPopout("diff", diffRepoId ?? repoId, `${diffRepoName || name} — diff`);
   }
 
   function popOutHistory(): void {
@@ -972,18 +1003,23 @@
       {status}
       {repoId}
       {root}
-      onOpenDiff={(e) => void openDiff(e)}
+      repoName={name}
+      onOpenDiff={(e, subRepoId, subRoot, subName) => void openDiff(e, subRepoId, subRoot, subName)}
       onAfterMutation={refresh}
       bind:selected
+      bind:hasSubmodules
     />
-    <CommitBar {repoId} onCommitted={refresh} />
+    {#if !hasSubmodules}
+      <CommitBar {repoId} onCommitted={refresh} />
+    {/if}
   </div>
 {/snippet}
 {#snippet editorPanel()}
   <EditorPane
-    {repoId}
-    {root}
-    {status}
+    repoId={diffRepoId ?? repoId}
+    root={diffRoot ?? root}
+    repoName={diffRepoName ?? ""}
+    status={diffRepoId && diffRepoId !== repoId ? (tabStore.tabs.find((t) => t.id === diffRepoId)?.status ?? null) : status}
     commit={selectedCommit}
     compare={compareResult}
     entry={diffEntry}
@@ -1002,7 +1038,7 @@
     onPopoutDiff={popOutDiff}
     onPopoutWorkflowRun={workflowRunId !== null ? popOutWorkflowRun : undefined}
     onPopoutActionRun={actionRunId !== null ? popOutActionRun : undefined}
-    onMutated={refresh}
+    onMutated={onEditorMutated}
   />
 {/snippet}
 {#snippet branchesPanel()}
@@ -1536,14 +1572,20 @@
   /* Source-control column: scrolling changes list + bottom-pinned commit box. */
   .changes-panel {
     flex: 1;
+    height: 100%;
     min-height: 0;
+    min-width: 0;
     display: flex;
     flex-direction: column;
+    overflow: hidden;
   }
 
   .changes-panel > :global(aside) {
     flex: 1;
+    height: 100%;
     min-height: 0;
+    min-width: 0;
+    overflow: hidden;
   }
 
   .conflict-overlay {

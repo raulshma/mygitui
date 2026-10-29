@@ -602,6 +602,7 @@
     display: flex;
     flex-direction: column;
     height: 100%;
+    overflow: hidden;
     background: var(--m3-surface);
     color: var(--m3-on-surface);
   }
@@ -612,6 +613,7 @@
     min-width: 0;
     min-height: 0;
     display: flex;
+    overflow: hidden;
   }
 
   .repo-loading {

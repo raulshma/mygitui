@@ -28,6 +28,7 @@
   let {
     repoId,
     root = "",
+    repoName = "",
     commit = null,
     compare = null,
     entry = null,
@@ -52,6 +53,8 @@
     repoId: string;
     /** Worktree root (bookmark persistence); empty in popouts. */
     root?: string;
+    /** Submodule or repository display name (shown in diff header). */
+    repoName?: string;
     /** Selected commit (history sidebar). */
     commit?: CommitInfo | null;
     /** CompareBar result (history sidebar). */
@@ -156,6 +159,9 @@
         <span class="epath" title={entry.path}>
           {#if entry.old_path}{entry.old_path} → {/if}{entry.path}
         </span>
+        {#if repoName}
+          <span class="echip chip-repo" title={`Repository / Submodule: ${repoName}`}>{repoName}</span>
+        {/if}
         <span class="echip">working copy</span>
         {#if onPopoutDiff}
           <button

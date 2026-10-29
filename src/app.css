@@ -251,6 +251,7 @@ body {
   margin: 0;
   padding: 0;
   height: 100%;
+  overflow: hidden;
   font-family: Roboto, "Segoe UI", system-ui, sans-serif;
   background: var(--m3-surface);
   color: var(--m3-on-surface);
@@ -266,6 +267,7 @@ body {
 
 #app {
   height: 100%;
+  overflow: hidden;
 }
 
 /* ---------------------------------------------------------------------------
@@ -321,6 +323,10 @@ body {
 /* Scrollbars follow the theme tokens instead of the UA defaults. */
 * {
   scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
+}
+
+.tree {
+  scrollbar-gutter: stable;
 }
 
 ::-webkit-scrollbar {

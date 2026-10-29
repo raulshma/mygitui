@@ -502,7 +502,7 @@
     min-height: 0;
     display: flex;
     flex-direction: column;
-    overflow-y: auto;
+    overflow: hidden;
   }
 
   /* Keep-alive hosts: inactive panels stay mounted but out of layout and

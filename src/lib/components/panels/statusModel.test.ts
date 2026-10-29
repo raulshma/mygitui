@@ -16,6 +16,8 @@ import {
   SECTION_LABELS,
   SECTION_ORDER,
   splitPath,
+  submoduleBranchLabel,
+  submoduleChangeCounts,
   submoduleDisplay,
   submoduleNeedsAttention,
 } from "$lib/components/panels/statusModel";
@@ -369,5 +371,85 @@ describe("statusModel performance", () => {
       expect(classifyEntry(e).length).toBeGreaterThan(0);
     }
     expect(index.rows.length).toBe(index.total);
+  });
+
+  it("builds prefixed index for submodule files", () => {
+    const entries = [
+      entry("file1.txt", "modified", "unmodified"),
+      entry("file2.txt", "unmodified", "untracked"),
+    ];
+    const idx = buildStatusIndex(entries, "sub-a", "sub-a");
+    expect(idx.total).toBe(2);
+    expect(idx.rows[0]?.key).toBe("sub-a:staged:file1.txt");
+    expect(idx.rows[0]?.submodulePath).toBe("sub-a");
+    expect(idx.rows[1]?.key).toBe("sub-a:changes:file2.txt");
+    expect(idx.rows[1]?.submodulePath).toBe("sub-a");
+  });
+
+  it("computes submoduleChangeCounts correctly", () => {
+    expect(submoduleChangeCounts(null)).toEqual({ staged: 0, changes: 0, total: 0 });
+    const st: RepoStatus = {
+      branch: "main",
+      head: "abc1234",
+      detached: false,
+      ahead: 0,
+      behind: 0,
+      merging: false,
+      rebasing: false,
+      sequencer: false,
+      entries: [
+        entry("staged.txt", "added", "unmodified"),
+        entry("changes.txt", "unmodified", "modified"),
+        entry("both.txt", "modified", "modified"),
+      ],
+    };
+    expect(submoduleChangeCounts(st)).toEqual({ staged: 2, changes: 2, total: 4 });
+  });
+
+  it("computes submoduleBranchLabel correctly", () => {
+    const info = {
+      path: "libs/sub",
+      name: "sub",
+      url: "https://example.com/sub.git",
+      head_sha: "1234567890abcdef",
+      recorded_sha: "abcdef1234567890",
+      initialized: true,
+      status: "" as any,
+    };
+    expect(
+      submoduleBranchLabel(info, {
+        branch: "feature/test",
+        head: "1234567890",
+        detached: false,
+        ahead: 0,
+        behind: 0,
+        merging: false,
+        rebasing: false,
+        sequencer: false,
+        entries: [],
+      }),
+    ).toBe("feature/test");
+
+    expect(
+      submoduleBranchLabel(info, {
+        branch: null,
+        head: "1234567890",
+        detached: true,
+        ahead: 0,
+        behind: 0,
+        merging: false,
+        rebasing: false,
+        sequencer: false,
+        entries: [],
+      }),
+    ).toBe("detached at 1234567");
+
+    expect(submoduleBranchLabel(info, null)).toBe("1234567");
+    expect(
+      submoduleBranchLabel(
+        { ...info, initialized: false, head_sha: null, recorded_sha: "abcdef1234567890" },
+        null,
+      ),
+    ).toBe("not initialized");
   });
 });

@@ -12,7 +12,7 @@
  *              status side is conflicted.
  */
 
-import type { ChangeKind, StatusEntry } from "$lib/ipc/types";
+import type { ChangeKind, RepoStatus, StatusEntry, SubmoduleInfo } from "$lib/ipc/types";
 
 export type SectionId = "staged" | "changes";
 
@@ -36,7 +36,7 @@ const CHANGE_KINDS: ReadonlySet<ChangeKind> = new Set([
 
 /** One rendered row: an entry placed into one or both status sections. */
 export interface StatusRow {
-  /** `${section}:${path}` — unique when a path appears in both sections. */
+  /** `${section}:${path}` or `${prefix}:${section}:${path}` — unique. */
   key: string;
   section: SectionId;
   entry: StatusEntry;
@@ -48,6 +48,8 @@ export interface StatusRow {
   base: string;
   /** Lowercased `path` (+ `old_path`) — the prebuilt search index. */
   search: string;
+  /** Submodule path if this row belongs to a submodule. */
+  submodulePath?: string;
 }
 
 /** Search index built once per status snapshot (not per keystroke). */
@@ -222,6 +224,40 @@ export function submoduleNeedsAttention(info: SubmoduleState): boolean {
   return !info.initialized || info.status.trim() !== "";
 }
 
+/** Summarizes change counts for a repo/submodule. */
+export function submoduleChangeCounts(status: RepoStatus | null): {
+  staged: number;
+  changes: number;
+  total: number;
+} {
+  if (!status) return { staged: 0, changes: 0, total: 0 };
+  let staged = 0;
+  let changes = 0;
+  for (const entry of status.entries) {
+    const sections = classifyEntry(entry);
+    if (sections.includes("staged")) staged += 1;
+    if (sections.includes("changes")) changes += 1;
+  }
+  return { staged, changes, total: staged + changes };
+}
+
+/** Computes a human-readable branch/head label for a submodule. */
+export function submoduleBranchLabel(
+  info: SubmoduleInfo,
+  status: RepoStatus | null,
+): string {
+  if (!info.initialized) return "not initialized";
+  if (status?.branch) return status.branch;
+  if (status?.detached) {
+    const sha = status.head ?? info.head_sha ?? info.recorded_sha;
+    return sha ? `detached at ${sha.slice(0, 7)}` : "detached";
+  }
+  if (status?.head) return status.head.slice(0, 7);
+  if (info.head_sha) return info.head_sha.slice(0, 7);
+  if (info.recorded_sha) return info.recorded_sha.slice(0, 7);
+  return "clean";
+}
+
 /** Side kind that represents `entry` inside `section` (letter/color source). */
 function rowKind(entry: StatusEntry, section: SectionId): ChangeKind {
   if (section === "staged") return entry.index;
@@ -238,7 +274,11 @@ function rowKind(entry: StatusEntry, section: SectionId): ChangeKind {
  * Builds the per-status search index: one row per (entry, section) pair,
  * precomputing lowercase search text so filtering is a substring scan.
  */
-export function buildStatusIndex(entries: readonly StatusEntry[]): StatusIndex {
+export function buildStatusIndex(
+  entries: readonly StatusEntry[],
+  keyPrefix?: string,
+  submodulePath?: string,
+): StatusIndex {
   const bySection: Record<SectionId, StatusRow[]> = {
     staged: [],
     changes: [],
@@ -250,14 +290,18 @@ export function buildStatusIndex(entries: readonly StatusEntry[]): StatusIndex {
       entry.old_path ? `${entry.path} ${entry.old_path}` : entry.path
     ).toLowerCase();
     for (const section of classifyEntry(entry)) {
+      const key = keyPrefix
+        ? `${keyPrefix}:${section}:${entry.path}`
+        : `${section}:${entry.path}`;
       bySection[section].push({
-        key: `${section}:${entry.path}`,
+        key,
         section,
         entry,
         kind: rowKind(entry, section),
         dir,
         base,
         search,
+        submodulePath,
       });
       total += 1;
     }

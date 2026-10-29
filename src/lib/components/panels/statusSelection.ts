@@ -12,7 +12,7 @@
  * that row alone.
  */
 
-import type { StatusRow } from "./statusModel";
+import type { SectionId, StatusRow } from "./statusModel";
 
 /** Adds `key` to the selection, or removes it when already present. */
 export function toggleSelection(
@@ -50,6 +50,37 @@ export function pruneSelection(
   return selected.filter((key) => live.has(key));
 }
 
+/** Parses a status row key into its optional repo/submodule prefix, section, and path. */
+export function parseRowKey(
+  key: string,
+): { prefix: string; section: SectionId; path: string } | null {
+  const stagedMarker = ":staged:";
+  const changesMarker = ":changes:";
+  const stagedIdx = key.indexOf(stagedMarker);
+  if (stagedIdx !== -1) {
+    return {
+      prefix: key.slice(0, stagedIdx),
+      section: "staged",
+      path: key.slice(stagedIdx + stagedMarker.length),
+    };
+  }
+  const changesIdx = key.indexOf(changesMarker);
+  if (changesIdx !== -1) {
+    return {
+      prefix: key.slice(0, changesIdx),
+      section: "changes",
+      path: key.slice(changesIdx + changesMarker.length),
+    };
+  }
+  if (key.startsWith("staged:")) {
+    return { prefix: "", section: "staged", path: key.slice(7) };
+  }
+  if (key.startsWith("changes:")) {
+    return { prefix: "", section: "changes", path: key.slice(8) };
+  }
+  return null;
+}
+
 /**
  * Selection after a stage/unstage of `paths` lands. A mutated row moves
  * between the groups (staging moves Changes → Staged Changes, unstaging
@@ -64,13 +95,23 @@ export function remapSelection(
   paths: ReadonlySet<string>,
   unstage: boolean,
   rows: readonly StatusRow[],
+  prefix?: string,
 ): string[] {
   const live = new Set(rows.map((row) => row.key));
   const out: string[] = [];
   for (const key of selected) {
-    const path = key.slice(key.indexOf(":") + 1);
+    const parsed = parseRowKey(key);
+    const keyPrefix = parsed?.prefix ?? "";
+    if (prefix !== undefined && keyPrefix !== prefix) {
+      if (live.has(key)) out.push(key);
+      continue;
+    }
+    const path = parsed ? parsed.path : key.slice(key.indexOf(":") + 1);
     if (paths.has(path)) {
-      const moved = `${unstage ? "changes" : "staged"}:${path}`;
+      const nextSection: SectionId = unstage ? "changes" : "staged";
+      const moved = keyPrefix
+        ? `${keyPrefix}:${nextSection}:${path}`
+        : `${nextSection}:${path}`;
       out.push(live.has(moved) ? moved : key);
     } else if (live.has(key)) {
       out.push(key);

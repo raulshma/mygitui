@@ -12,6 +12,7 @@ import {
   actionRows,
   allSelection,
   countLabel,
+  parseRowKey,
   pruneSelection,
   rangeSelection,
   remapSelection,
@@ -130,6 +131,69 @@ describe("remapSelection", () => {
         afterUnstage,
       ),
     ).toEqual(["changes:c", "changes:a"]);
+  });
+  it("remaps submodule prefixed keys between changes and staged", () => {
+    const subRows = buildStatusIndex(
+      [both("foo.txt"), entry("bar.ts", "added", "unmodified")],
+      "sub-a",
+      "sub-a",
+    ).rows;
+    expect(
+      remapSelection(["sub-a:changes:foo.txt"], new Set(["foo.txt"]), false, subRows),
+    ).toEqual(["sub-a:staged:foo.txt"]);
+
+    expect(
+      remapSelection(["sub-a:staged:foo.txt"], new Set(["foo.txt"]), true, subRows),
+    ).toEqual(["sub-a:changes:foo.txt"]);
+  });
+
+  it("scopes remap to the specified prefix when multiple repos share paths", () => {
+    const combinedRows = [
+      ...rows([both("foo.txt")]),
+      ...buildStatusIndex([both("foo.txt")], "sub-a", "sub-a").rows,
+    ];
+    expect(
+      remapSelection(
+        ["changes:foo.txt", "sub-a:changes:foo.txt"],
+        new Set(["foo.txt"]),
+        false,
+        combinedRows,
+        "sub-a",
+      ),
+    ).toEqual(["changes:foo.txt", "sub-a:staged:foo.txt"]);
+  });
+});
+
+describe("parseRowKey", () => {
+  it("parses standard section:path keys", () => {
+    expect(parseRowKey("staged:src/foo.ts")).toEqual({
+      prefix: "",
+      section: "staged",
+      path: "src/foo.ts",
+    });
+    expect(parseRowKey("changes:README.md")).toEqual({
+      prefix: "",
+      section: "changes",
+      path: "README.md",
+    });
+  });
+
+  it("parses prefixed submodule keys", () => {
+    expect(parseRowKey("sub-a:staged:file.txt")).toEqual({
+      prefix: "sub-a",
+      section: "staged",
+      path: "file.txt",
+    });
+    expect(parseRowKey("nested/sub:changes:lib/mod.rs")).toEqual({
+      prefix: "nested/sub",
+      section: "changes",
+      path: "lib/mod.rs",
+    });
+  });
+
+  it("returns null for unrecognized keys", () => {
+    expect(parseRowKey("random-string")).toBeNull();
+    expect(parseRowKey("")).toBeNull();
   });
 });
 

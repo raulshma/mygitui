@@ -23,7 +23,7 @@
    * summary is fetched lazily through a one-page `stream_log`.
    */
   import { commit, hooksList, signingInfo, streamLog } from "$lib/ipc/client";
-  import type { GitSignature, HookInfo, LogFilter, SigningInfo } from "$lib/ipc/types";
+  import type { GitSignature, HookInfo, LogFilter, RepoStatus, SigningInfo } from "$lib/ipc/types";
   import { busy } from "$lib/stores/ops.svelte";
   import { tabStore } from "$lib/stores/tabs.svelte";
   import { toast } from "$lib/toast";
@@ -42,9 +42,12 @@
 
   let {
     repoId,
+    status = undefined,
     onCommitted = undefined,
   }: {
     repoId: string;
+    /** Explicit status snapshot (e.g. for submodules); falls back to tabStore. */
+    status?: RepoStatus | null;
     /** Called after a successful commit (RepoView refreshes the status). */
     onCommitted?: () => void;
   } = $props();
@@ -89,17 +92,19 @@
   const commitBusy = $derived(busy(repoId, "commit"));
 
   /** The repo's latest status snapshot (staged detection + HEAD sha). */
-  const status = $derived(
-    tabStore.tabs.find((tab) => tab.id === repoId)?.status ?? null,
+  const activeStatus = $derived(
+    status !== undefined
+      ? status
+      : (tabStore.tabs.find((tab) => tab.id === repoId)?.status ?? null),
   );
-  const staged = $derived(hasStagedChanges(status?.entries ?? []));
+  const staged = $derived(hasStagedChanges(activeStatus?.entries ?? []));
 
   /**
    * Normal commits need something in the index; amending may reuse HEAD's
    * message. While the first status is still loading (`status === null`) we
    * keep the button available rather than guessing.
    */
-  const needsStaged = $derived(!amend && status !== null && !staged);
+  const needsStaged = $derived(!amend && activeStatus !== null && !staged);
   const hasMessage = $derived(message.trim().length > 0);
   const canCommit = $derived(
     (amend || hasMessage) && !needsStaged && !commitBusy && !committing,
@@ -118,7 +123,7 @@
 
   /** Only warn when there are changes to stage (a clean tree is self-evident). */
   const showStagedHint = $derived(
-    needsStaged && status !== null && status.entries.length > 0,
+    needsStaged && activeStatus !== null && activeStatus.entries.length > 0,
   );
 
   $effect(() => {
@@ -196,7 +201,7 @@
   let fixing = $state(false);
 
   const canFixup = $derived(
-    Boolean(status?.head) && staged && !commitBusy && !committing && !fixing,
+    Boolean(activeStatus?.head) && staged && !commitBusy && !committing && !fixing,
   );
 
   const HEAD_LOG_FILTER: LogFilter = {
@@ -210,7 +215,7 @@
 
   /** HEAD's summary via a one-page log stream (shallow: stops at page 1). */
   async function fetchHeadSummary(): Promise<string | null> {
-    const headSha = status?.head ?? null;
+    const headSha = activeStatus?.head ?? null;
     if (!headSha) return null;
     return new Promise<string | null>((resolve) => {
       void streamLog(repoId, HEAD_LOG_FILTER, (page) => {
