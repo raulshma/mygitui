@@ -94,6 +94,11 @@ export interface UiEventMap {
   /** Save the active file in the file workspace (Ctrl+S / palette). */
   "files-save": undefined;
   /**
+   * Cycle the markdown preview layout (edit → split → preview) for the
+   * active file (Ctrl+Shift+V / palette; no-op when it isn't markdown).
+   */
+  "files-md-view": undefined;
+  /**
    * Open the working-copy diff for a workdir path: `{ repoId, path }`
    * (Files tree context menu + workspace "Diff" cross-link; the handler
    * no-ops when the path has no working-copy changes).

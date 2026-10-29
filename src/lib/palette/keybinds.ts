@@ -57,6 +57,7 @@ export const DEFAULT_BINDINGS: Record<string, string> = {
   "panel.focus-files": "ctrl+8",
   "files.quick-open": "ctrl+p",
   "files.save": "ctrl+s",
+  "files.markdown-view": "ctrl+shift+v",
 };
 
 // ---------------------------------------------------------------------------

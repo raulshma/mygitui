@@ -28,6 +28,7 @@
   import { showMenuAt, type MenuEntry } from "$lib/components/menu/contextMenuStore.svelte";
   import { onUiEvent } from "$lib/palette/events";
   import { editorPrefs } from "./editorPrefs.svelte";
+  import { isMarkdownPath } from "./markdownPath";
   import { toast } from "$lib/toast";
   import iconClose from "@ktibow/iconset-material-symbols/close";
   import iconDiff from "@ktibow/iconset-material-symbols/difference";
@@ -189,6 +190,30 @@
       if (editor) void editor.save();
     });
   });
+
+  // Ctrl+Shift+V / palette `files.markdown-view`: cycle the markdown
+  // preview layout (edit → split → preview), persisted via editorPrefs.
+  $effect(() => {
+    return onUiEvent("files-md-view", () => {
+      if (active === null || !isMarkdownPath(active)) return;
+      editorPrefs.cycleMdView();
+    });
+  });
+
+  const mdActive = $derived(active !== null && isMarkdownPath(active));
+
+  /** The editor's preview prop: markdown pref mapped, "edit" = no preview. */
+  function previewModeFor(path: string): "off" | "split" | "preview" {
+    if (!isMarkdownPath(path)) return "off";
+    const view = editorPrefs.mdView;
+    return view === "edit" ? "off" : view;
+  }
+
+  const MD_VIEW_SEGMENTS: Array<{ id: "edit" | "split" | "preview"; label: string; title: string }> = [
+    { id: "edit", label: "Edit", title: "Markdown source only" },
+    { id: "split", label: "Split", title: "Source and preview side by side" },
+    { id: "preview", label: "Preview", title: "Rendered preview only" },
+  ];
 </script>
 
 <div class="workspace" aria-label="File workspace">
@@ -240,6 +265,22 @@
     {/each}
     <span class="tspacer"></span>
     <div class="tactions">
+      {#if mdActive}
+        <div class="seg" role="group" aria-label="Markdown view">
+          {#each MD_VIEW_SEGMENTS as seg (seg.id)}
+            <button
+              type="button"
+              class="seg-btn"
+              class:tactive={editorPrefs.mdView === seg.id}
+              aria-pressed={editorPrefs.mdView === seg.id}
+              title={seg.title}
+              onclick={() => editorPrefs.setMdView(seg.id)}
+            >
+              {seg.label}
+            </button>
+          {/each}
+        </div>
+      {/if}
       <button
         type="button"
         class="tact"
@@ -285,6 +326,7 @@
             meta={file.meta}
             bind:dirty={file.dirty}
             onSaved={onMutated}
+            previewMode={previewModeFor(file.path)}
           />
         {:else}
           <FilePreview {repoId} {root} path={file.path} meta={file.meta} />
@@ -427,6 +469,34 @@
     gap: 0.2rem;
     padding: 0 0.4rem;
     flex: none;
+  }
+
+  .seg {
+    display: inline-flex;
+    align-items: center;
+    gap: 0;
+    padding: 0 0.25rem;
+    border: 1px solid var(--app-border, var(--m3-outline-variant));
+    border-radius: var(--m3-shape-full, 9999px);
+    flex: none;
+  }
+
+  .seg-btn {
+    padding: 0.1rem 0.55rem;
+    border: none;
+    border-radius: var(--m3-shape-full, 9999px);
+    background: none;
+    color: var(--m3-on-surface-variant);
+    font: inherit;
+    font-size: 0.6875rem;
+    cursor: pointer;
+  }
+
+  .seg-btn:hover { color: var(--m3-on-surface); }
+
+  .seg-btn.tactive {
+    color: var(--m3-on-primary);
+    background: var(--m3-primary);
   }
 
   .tact {

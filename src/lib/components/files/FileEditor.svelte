@@ -32,6 +32,7 @@
     meta,
     dirty = $bindable(false),
     onSaved = undefined,
+    previewMode = "off",
   }: {
     repoId: string;
     /** Workdir-relative path (forward slashes). */
@@ -41,11 +42,20 @@
     dirty?: boolean;
     /** After a successful save (workspace refreshes status). */
     onSaved?: () => void;
+    /** Markdown preview layout (parent decides; markdown files only). */
+    previewMode?: "off" | "split" | "preview";
   } = $props();
 
   let status = $state<"loading" | "ready" | "error">("loading");
   let errorText = $state("");
   let host: HTMLDivElement | undefined = $state();
+
+  /** Bumped on every doc change; drives the (debounced) markdown preview. */
+  let docVersion = $state(0);
+
+  const showPreview = $derived(previewMode !== "off" && status === "ready");
+  /** In "preview" mode the editor column hides but CM stays mounted. */
+  const editorHidden = $derived(previewMode === "preview");
 
   // Mutable editor plumbing (not reactive — the DOM is the source of truth).
   let view: unknown = null;
@@ -57,6 +67,14 @@
   let checkpointed = false;
   /** Guards the async load against rapid path changes. */
   let loadToken = 0;
+  /** Live markdown preview instance (split/preview modes). */
+  let previewRef = $state<PreviewApi | null>(null);
+  /** rAF coalescing for editor-scroll → preview sync. */
+  let scrollRaf = 0;
+
+  interface PreviewApi {
+    syncFromEditor(line: number, fallbackLineHeight: number): void;
+  }
 
   const decoder = new TextDecoder();
   const encoder = new TextEncoder();
@@ -187,15 +205,28 @@
           fontStyle: "italic",
         },
         { tag: [tags.function(tags.variableName), tags.function(tags.propertyName)], color: "var(--m3-secondary)" },
-        { tag: [tags.typeName, tags.className], color: "var(--m3-secondary)" },
-        { tag: [tags.variableName, tags.propertyName], color: "var(--m3-on-surface)" },
-        { tag: tags.heading, color: "var(--m3-primary)", fontWeight: "bold" },
-        { tag: tags.link, color: "var(--m3-tertiary)", textDecoration: "underline" },
-        { tag: tags.invalid, color: "var(--m3-error)" },
-      ]),
-    );
-    return [editorTheme, highlight];
-  }
+      { tag: [tags.typeName, tags.className], color: "var(--m3-secondary)" },
+      { tag: [tags.variableName, tags.propertyName], color: "var(--m3-on-surface)" },
+      { tag: tags.heading, color: "var(--m3-primary)", fontWeight: "bold" },
+      { tag: tags.link, color: "var(--m3-tertiary)", textDecoration: "underline" },
+      { tag: tags.invalid, color: "var(--m3-error)" },
+      // Markdown source + general coverage polish.
+      { tag: tags.strong, fontWeight: "600" },
+      { tag: tags.emphasis, fontStyle: "italic" },
+      { tag: tags.strikethrough, textDecoration: "line-through" },
+      { tag: tags.quote, color: "var(--m3-outline, var(--m3-on-surface-variant))", fontStyle: "italic" },
+      { tag: tags.contentSeparator, color: "var(--m3-primary)" },
+      { tag: tags.monospace, fontFamily: "var(--app-font-mono, ui-monospace, Consolas, monospace)" },
+      { tag: [tags.escape, tags.regexp], color: "var(--m3-tertiary)" },
+      { tag: [tags.atom, tags.bool, tags.null], color: "var(--m3-tertiary)" },
+      { tag: [tags.operator, tags.operatorKeyword], color: "var(--m3-on-surface-variant)" },
+      { tag: [tags.punctuation, tags.bracket], color: "var(--m3-on-surface-variant)" },
+      { tag: [tags.namespace, tags.labelName], color: "var(--m3-secondary)" },
+      { tag: tags.meta, color: "var(--m3-on-surface-variant)", fontStyle: "italic" },
+    ]),
+  );
+  return [editorTheme, highlight];
+}
 
   $effect(() => {
     // `host` is read synchronously so the template ref is a tracked
@@ -226,10 +257,69 @@
 
   function destroyView(): void {
     if (view) {
-      (view as { destroy(): void }).destroy();
+      const v = view as {
+        destroy(): void;
+        scrollDOM: HTMLElement;
+      };
+      v.scrollDOM.removeEventListener("scroll", onEditorScroll);
+      v.destroy();
       view = null;
     }
+    if (scrollRaf !== 0) {
+      cancelAnimationFrame(scrollRaf);
+      scrollRaf = 0;
+    }
   }
+
+  /** Editor scroll → preview follow (rAF-coalesced, preview may be absent). */
+  function onEditorScroll(): void {
+    if (scrollRaf !== 0) return;
+    scrollRaf = requestAnimationFrame(() => {
+      scrollRaf = 0;
+      const v = view as
+        | {
+            scrollDOM: { scrollTop: number };
+            lineBlockAtHeight(h: number): { from: number };
+            defaultLineHeight: number;
+            state: { doc: { lineAt(pos: number): { number: number } } };
+          }
+        | null;
+      if (!v || !previewRef) return;
+      const block = v.lineBlockAtHeight(v.scrollDOM.scrollTop);
+      const line = v.state.doc.lineAt(block.from).number;
+      previewRef.syncFromEditor(line - 1, v.defaultLineHeight);
+    });
+  }
+
+  /** Preview click → move the editor cursor to the block's source line. */
+  function jumpToLine(line: number): void {
+    const v = view as
+      | {
+          dispatch(e: unknown): void;
+          focus(): void;
+          state: { doc: { lines: number; line(n: number): { from: number } } };
+        }
+      | null;
+    if (!v) return;
+    const n = Math.max(1, Math.min(line + 1, v.state.doc.lines));
+    v.dispatch({ selection: { anchor: v.state.doc.line(n).from }, scrollIntoView: true });
+    v.focus();
+  }
+
+  /** Current editor text (read by the preview at render time). */
+  function getDocText(): string {
+    const v = view as { state: { doc: { toString(): string } } } | null;
+    return v === null ? "" : v.state.doc.toString();
+  }
+
+  // Re-measure CM when the preview toggle changes the editor column width
+  // (display:none → flex) so wrapping/gutters stay accurate.
+  $effect(() => {
+    void previewMode;
+    if (view) {
+      (view as { requestMeasure(): void }).requestMeasure();
+    }
+  });
 
   function mount(hostEl: HTMLDivElement | undefined, bytes: number[]): void {
     if (!hostEl || !cm) return;
@@ -243,7 +333,10 @@
       ...buildTheme(c),
       wrapCompartment.of(editorWrapExt()),
       c.EditorView.updateListener.of((update) => {
-        if (update.docChanged) dirty = true;
+        if (update.docChanged) {
+          dirty = true;
+          docVersion++;
+        }
       }),
       // In-editor fallback for contexts without the global keybinds.
       c.Prec.highest(
@@ -264,6 +357,7 @@
       state: c.EditorState.create({ doc, extensions }),
     });
     view = nextView;
+    nextView.scrollDOM.addEventListener("scroll", onEditorScroll);
     // Lazy per-language grammar (async, swapped into its compartment).
     const desc = c.LanguageDescription.matchFilename(c.languages, basename(path));
     if (desc) {
@@ -370,7 +464,7 @@
   }
 </script>
 
-<div class="editor">
+<div class="editor" class:split={showPreview}>
   <!-- The host exists for the whole component lifetime (mounting into a
        node that only appears later would oscillate: ready → host binds →
        effect re-runs → loading → host unbinds). Loading/error state is
@@ -380,7 +474,24 @@
   {:else if status === "error"}
     <p class="state state-error" role="alert">{errorText}</p>
   {/if}
-  <div class="cm-host" class:hidden={status !== "ready"} bind:this={host}></div>
+  <div
+    class="cm-host"
+    class:hidden={status !== "ready" || editorHidden}
+    bind:this={host}
+  ></div>
+  {#if showPreview}
+    <div class="preview-host" class:nodiv={editorHidden}>
+      {#await import("./MarkdownPreview.svelte") then { default: Preview }}
+        <Preview
+          bind:this={previewRef}
+          {path}
+          getDoc={getDocText}
+          version={docVersion}
+          onJumpToLine={jumpToLine}
+        />
+      {/await}
+    </div>
+  {/if}
 
   <ConfirmDialog
     bind:open={conflictOpen}
@@ -403,6 +514,27 @@
     background: var(--m3-surface);
   }
 
+  /* Split mode: editor column | divider | preview column. */
+  .editor.split {
+    flex-direction: row;
+  }
+
+  .editor.split > .cm-host {
+    min-width: 0;
+  }
+
+  .preview-host {
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+    border-left: 1px solid var(--app-border, var(--m3-outline-variant));
+  }
+
+  /* Preview-only: no divider when the editor column is hidden. */
+  .preview-host.nodiv {
+    border-left: none;
+  }
+
   .cm-host {
     flex: 1;
     min-height: 0;
@@ -411,6 +543,11 @@
 
   .cm-host.hidden {
     display: none;
+  }
+
+  /* Preview-only mode: let the preview column take everything. */
+  .editor.split > .preview-host {
+    flex: 1 1 50%;
   }
 
   .cm-host :global(.cm-editor) {

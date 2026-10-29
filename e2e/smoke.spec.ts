@@ -231,6 +231,63 @@ test("quick open (Ctrl+P): fuzzy pick opens the file", async ({
   await tracked.attach(testInfo);
 });
 
+test("markdown preview: split default, typing flows through, mode persists", async ({
+  page,
+}, testInfo) => {
+  // Reload + reopen + first-time lazy-chunk transforms need headroom.
+  test.setTimeout(90_000);
+  const tracked = trackErrors(page);
+  await boot(page, {
+    [RECENT_REPOS_KEY]: JSON.stringify([
+      { path: "/tmp/repo", pinned: false, lastOpened: 1 },
+    ]),
+  });
+
+  await page.goto("/");
+  await page.getByRole("button", { name: /repo\s*\/tmp\/repo/ }).click();
+
+  // Open the seeded markdown file from the Files panel.
+  await page.getByRole("button", { name: "Files", exact: true }).click();
+  const notesRow = page.getByRole("treeitem", { name: /notes\.md/ });
+  await expect(notesRow).toBeVisible({ timeout: 15_000 });
+  await notesRow.click();
+  await expect(page.getByRole("tab", { name: "notes.md" })).toBeVisible({
+    timeout: 30_000,
+  });
+
+  // Split is the default: the rendered preview sits beside the editor.
+  const preview = page.locator(".md");
+  // First open transforms the lazy markdown chunk on the dev server.
+  await expect(preview).toBeVisible({ timeout: 30_000 });
+  await expect(preview.locator("h1")).toHaveText(/notes/);
+
+  // Typing in the editor flows into the preview after the debounce window.
+  await page.locator(".cm-content").click();
+  await page.keyboard.press("Control+End");
+  await page.keyboard.type("\n\n## added section");
+  await expect(preview.locator("h2")).toHaveText(/added section/, {
+    timeout: 5_000,
+  });
+
+  // Switch to preview-only: the editor column hides (CM stays mounted).
+  await page.getByRole("button", { name: "Preview", exact: true }).click();
+  await expect(page.locator(".cm-content")).toBeHidden();
+  await expect(preview).toBeVisible();
+
+  // The mode choice is persisted (editorPrefs → localStorage).
+  expect(
+    await page.evaluate(() => localStorage.getItem("mygitui.files.md-view")),
+  ).toBe("preview");
+
+  // Back to source-only: the preview unmounts entirely.
+  await page.getByRole("button", { name: "Edit", exact: true }).click();
+  await expect(page.locator(".cm-content")).toBeVisible();
+  await expect(page.locator(".md")).toHaveCount(0);
+
+  expect(tracked.errors, tracked.errors.join("\n")).toEqual([]);
+  await tracked.attach(testInfo);
+});
+
 /** Recorded invokes for one command (helper over the page-side mock). */
 async function mockCalls(
   page: Page,

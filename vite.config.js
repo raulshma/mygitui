@@ -53,6 +53,8 @@ export default defineConfig({
       "@xterm/xterm",
       "ai",
       "codemirror",
+      "dompurify",
+      "markdown-it",
       "shiki",
     ],
   },

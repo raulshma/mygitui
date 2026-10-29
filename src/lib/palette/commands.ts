@@ -585,6 +585,15 @@ export const COMMANDS: Command[] = [
     when: (ctx) => ctx.repoId !== null,
     run: () => emitUiEvent("files-save"),
   },
+  {
+    id: "files.markdown-view",
+    title: "Markdown: cycle edit / split / preview",
+    section: "Files",
+    keywords: ["markdown", "preview", "render", "ctrl+shift+v"],
+    shortcut: "ctrl+shift+v",
+    when: (ctx) => ctx.repoId !== null,
+    run: () => emitUiEvent("files-md-view"),
+  },
 
   // -- App ------------------------------------------------------------------
   {
