@@ -94,7 +94,7 @@ fn entries_sort_dirs_first_then_natural() {
         kind,
         size: None,
     };
-    let mut entries = vec![
+    let mut entries = [
         entry("zebra.txt", DirEntryKind::File),
         entry("B", DirEntryKind::Dir),
         entry("a.txt", DirEntryKind::File),
