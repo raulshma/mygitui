@@ -2,6 +2,7 @@ import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
 import {
   installTauriMock,
+  openPanel,
   openRecentRepo,
   recentRepos,
   seedStorage,
@@ -186,10 +187,7 @@ async function setup(page: Page) {
 
 async function openActionsTab(page: Page): Promise<void> {
   await openRecentRepo(page);
-  await page
-    .locator(".activity-bar")
-    .getByRole("button", { name: "GitHub" })
-    .click();
+  await openPanel(page, "GitHub");
   await expect(page.locator(".panel-title")).toHaveText("GitHub");
   await page.getByRole("tab", { name: "Actions" }).click();
   await expect(page.locator(".wf-runs")).toBeVisible();

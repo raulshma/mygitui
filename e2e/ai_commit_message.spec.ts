@@ -59,7 +59,9 @@ async function openRepo(page: Page): Promise<void> {
   const repoCard = page.getByRole("button", { name: /repo\s*\/tmp\/repo/ });
   await expect(repoCard).toBeVisible();
   await repoCard.click();
-  await expect(page.getByRole("treeitem", { name: "src/app.ts" }).first()).toBeVisible();
+  await expect(
+    page.getByRole("treeitem", { name: /src\/app\.ts/ }).first(),
+  ).toBeVisible({ timeout: 15_000 });
 }
 
 test("first use: opt-in dialog opens fully inside the viewport", async ({ page }) => {

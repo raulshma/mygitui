@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test";
 import {
   installTauriMock,
+  openPanel,
   openRecentRepo,
   recentRepos,
   seedStorage,
@@ -53,10 +54,7 @@ test("PR metadata is visible and merge/review actions call gh commands", async (
   });
 
   await openRecentRepo(page);
-  await page
-    .locator(".activity-bar")
-    .getByRole("button", { name: "GitHub" })
-    .click();
+  await openPanel(page, "GitHub");
 
   await expect(page.locator(".panel-title")).toHaveText("GitHub");
   const card = page.locator(".card.current");

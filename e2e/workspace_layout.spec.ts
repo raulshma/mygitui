@@ -3,6 +3,7 @@ import {
   historyCommands,
   installTauriMock,
   linearLog,
+  openPanel,
   openRecentRepo,
   recentRepos,
   seedStorage,
@@ -40,7 +41,7 @@ test("activity bar, sidebars and center editor share the workspace", async ({
   await expect(page.locator(".panel-title")).toHaveText("Status");
   await expect(commitForm).toBeVisible();
   await expect(page.locator(".changes-panel .row").first()).toBeVisible();
-  await expect(page.getByText("Nothing open")).toBeVisible();
+  await expect(page.locator(".editor .file-editor .epath")).toHaveText("src/app.ts");
 
   // Switching views keeps Status mounted (its draft/scroll state survives).
   await activity.getByRole("button", { name: "Branches" }).click();
@@ -49,7 +50,7 @@ test("activity bar, sidebars and center editor share the workspace", async ({
   await expect(page.locator(".changes-panel")).toHaveCount(1);
 
   // A panel that is not in the layout yet is added on first click.
-  await activity.getByRole("button", { name: "Repo", exact: true }).click();
+  await openPanel(page, "Repo");
   await expect(page.locator(".panel-title")).toHaveText("Repo");
   await expect(commitForm).toBeHidden();
 
@@ -61,7 +62,7 @@ test("activity bar, sidebars and center editor share the workspace", async ({
   await expect(page.locator(".editor .file-editor .epath")).toHaveText(
     "src/app.ts",
   );
-  await expect(editor).toContainText("working copy");
+  await expect(editor).toContainText("unstaged");
   await expect(editor.locator(".detail")).toHaveCount(0);
 
   // Clicking a commit replaces that diff with the commit detail — in the

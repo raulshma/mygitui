@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test";
 import {
   installTauriMock,
+  openPanel,
   openRecentRepo,
   recentRepos,
   seedStorage,
@@ -47,10 +48,7 @@ test("detected project scripts are visible and runnable", async ({ page }) => {
   });
 
   await openRecentRepo(page);
-  await page
-    .locator(".activity-bar")
-    .getByRole("button", { name: "Actions" })
-    .click();
+  await openPanel(page, "Actions");
 
   await expect(page.locator(".panel-title")).toHaveText("Actions");
   const panelPadding = await page.locator(".actions-panel").evaluate((el) => {

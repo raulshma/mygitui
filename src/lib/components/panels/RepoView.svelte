@@ -106,6 +106,7 @@
     showRecentRepos,
     tabStore,
   } from "$lib/stores/tabs.svelte";
+  import { loadHistoryPrefs } from "$lib/stores/historyPrefs";
   import { startAuthEvents, startOpsEvents } from "$lib/stores/ops.svelte";
   import { autofetch } from "$lib/stores/autofetch.svelte";
   import { toast } from "$lib/toast";
@@ -869,6 +870,8 @@
   $effect(() => {
     if (autoOpenedFor === repoId || status === null) return;
     autoOpenedFor = repoId;
+    const prefs = root ? loadHistoryPrefs(root) : null;
+    if (prefs?.selectedSha) return;
     const first = status.entries[0];
     if (
       first &&

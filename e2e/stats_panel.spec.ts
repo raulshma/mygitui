@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test";
 import {
   installTauriMock,
+  openPanel,
   openRecentRepo,
   recentRepos,
   seedStorage,
@@ -43,10 +44,7 @@ test("contribution heatmap lays out horizontally without a vertical scrollbar", 
   });
 
   await openRecentRepo(page);
-  await page
-    .locator(".activity-bar")
-    .getByRole("button", { name: "Stats" })
-    .click();
+  await openPanel(page, "Stats");
 
   await expect(page.locator(".panel-title")).toHaveText("Stats");
   const table = page.locator(".heatmap");

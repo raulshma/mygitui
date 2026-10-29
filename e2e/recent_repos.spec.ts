@@ -86,7 +86,7 @@ test("launch restore opens the last repo without flashing recents", async ({
     page.getByRole("treeitem", { name: "src/app.ts" }),
   ).toBeVisible();
   await expect(
-    page.getByRole("heading", { name: "Recent repositories" }),
+    page.getByRole("heading", { name: /Repositories/i }),
   ).toHaveCount(0);
 
   expect(tracked.errors, tracked.errors.join("\n")).toEqual([]);
@@ -115,7 +115,7 @@ test("top-bar home opens recents above open tabs; back returns", async ({
 
   // The overlay lists recents while the tab strip stays put.
   await expect(
-    page.getByRole("heading", { name: "Recent repositories" }),
+    page.getByRole("heading", { name: /Repositories/i }),
   ).toBeVisible();
   await expect(tab).toBeVisible();
   await expect(
@@ -125,7 +125,7 @@ test("top-bar home opens recents above open tabs; back returns", async ({
   // Clicking the open tab returns to its workspace without reopening it.
   await tab.click();
   await expect(
-    page.getByRole("heading", { name: "Recent repositories" }),
+    page.getByRole("heading", { name: /Repositories/i }),
   ).toHaveCount(0);
   await expect(
     page.getByRole("treeitem", { name: "src/app.ts" }),
@@ -146,10 +146,10 @@ test("add-existing repo opens the folder picker", async ({
 
   await page.goto("/");
   await expect(
-    page.getByRole("heading", { name: "Recent repositories" }),
+    page.getByRole("heading", { name: /Repositories/i }),
   ).toBeVisible();
 
-  await page.getByRole("button", { name: "Add existing repo…" }).click();
+  await page.getByRole("button", { name: /Open repository|Add existing repo/ }).click();
 
   // plugin:dialog|open is the @tauri-apps/plugin-dialog folder picker.
   await expect

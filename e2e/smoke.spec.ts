@@ -43,7 +43,7 @@ test("app boots to the home/recent screen without console errors", async ({
 
   // Stable landmark: the home screen's recent-repositories heading.
   await expect(
-    page.getByRole("heading", { name: "Recent repositories" }),
+    page.getByRole("heading", { name: /Repositories/i }),
   ).toBeVisible();
 
   // The Tauri mock was consulted for first-launch argv (empty here).

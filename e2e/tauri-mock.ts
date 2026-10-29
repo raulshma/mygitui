@@ -203,6 +203,23 @@ export async function openRecentRepo(page: Page, path = "/tmp/repo"): Promise<vo
   await card.click();
 }
 
+/**
+ * Activates a panel from the activity bar. Pinned panels (Status, Branches,
+ * Remotes, Terminal) are clicked directly on the rail; panels in the
+ * "More panels" overflow menu (Actions, GitHub, Stats, Repo, etc.) are
+ * opened via the menu.
+ */
+export async function openPanel(page: Page, name: string): Promise<void> {
+  const railBtn = page.locator(".activity-bar").getByRole("button", { name, exact: true });
+  if (await railBtn.isVisible()) {
+    await railBtn.click();
+    return;
+  }
+  const moreBtn = page.locator(".activity-bar").getByRole("button", { name: "More panels" });
+  await moreBtn.click();
+  await page.getByRole("menuitem", { name: new RegExp(`^${name}`) }).click();
+}
+
 /** The init-script body — runs in the page BEFORE the app bundle. */
 function BOOTSTRAP(options: TauriMockOptions): void {
   const commandMocks: Record<string, CommandMock> = {

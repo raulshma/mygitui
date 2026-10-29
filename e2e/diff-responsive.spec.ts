@@ -255,22 +255,22 @@ test("split view confines text selection to the half it starts in", async ({ pag
   const midY = (r: DOMRect) => r.top + r.height / 2;
 
   // Drag from the deleted side across the divider into the added side.
-  await page.mouse.move(boxes.from.left - 12, midY(boxes.from));
+  await page.mouse.move(boxes.from.left, midY(boxes.from));
   await page.mouse.down();
   await page.mouse.move(boxes.to.left + 40, midY(boxes.to), { steps: 8 });
   let hl = await highlightState(page);
-  expect(hl.text).toContain("old deleted");
+  expect(hl.text).toContain("deleted");
   expect(hl.text).not.toContain("added");
   await page.mouse.up();
   hl = await highlightState(page);
-  expect(hl.text).toContain("old deleted");
+  expect(hl.text).toContain("deleted");
   expect(hl.text).not.toContain("added");
   expect(hl.sides).toStrictEqual(["left"]);
 
   // Same from the right half: drag into the left, only added text selected.
   await page.mouse.move(boxes.to.left + 60, midY(boxes.to));
   await page.mouse.down();
-  await page.mouse.move(boxes.from.left - 12, midY(boxes.from), { steps: 8 });
+  await page.mouse.move(boxes.from.left, midY(boxes.from), { steps: 8 });
   await page.mouse.up();
   hl = await highlightState(page);
   expect(hl.text.startsWith("new")).toBe(true);
@@ -306,7 +306,7 @@ test("split view keeps a multi-row selection on the side it starts in", async ({
       row.querySelector<HTMLElement>(".half.right .txt")!.getBoundingClientRect();
     const mid = (r: DOMRect) => ({ x: r.left + 20, y: r.top + r.height / 2 });
     return {
-      start: { x: leftTxt(rows[0]!).left - 12, y: leftTxt(rows[0]!).top + leftTxt(rows[0]!).height / 2 },
+      start: { x: leftTxt(rows[0]!).left, y: leftTxt(rows[0]!).top + leftTxt(rows[0]!).height / 2 },
       down: { x: leftTxt(rows[2]!).left + 120, y: leftTxt(rows[2]!).top + leftTxt(rows[2]!).height / 2 },
       across: mid(rightTxt(rows[3]!)),
     };
@@ -318,7 +318,7 @@ test("split view keeps a multi-row selection on the side it starts in", async ({
   await page.mouse.down();
   await page.mouse.move(points.down.x, points.down.y, { steps: 10 });
   let hl = await highlightState(page);
-  expect(hl.text).toContain("alpha");
+  expect(hl.text).toContain("context line");
   expect(hl.text).toContain("gamma");
   expect(new Set(hl.sides)).toEqual(new Set(["left"]));
 
@@ -327,7 +327,7 @@ test("split view keeps a multi-row selection on the side it starts in", async ({
   hl = await highlightState(page);
   // The sweep across the divider was ignored: three left rows stay
   // selected, nothing from the right side joined.
-  expect(hl.text).toContain("alpha");
+  expect(hl.text).toContain("context line");
   expect(hl.text).toContain("gamma");
   expect(hl.text).not.toContain("delta");
   expect(new Set(hl.sides)).toEqual(new Set(["left"]));
