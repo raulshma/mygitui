@@ -682,3 +682,45 @@ Quality gates:
 - `prop_tests.rs`: proptest roundtrips — hunk-apply selection and checkpoint restore over randomized worktree states.
 - Benches added: `cold/open_plus_status`, `diff/synthetic_10k_hunks`, `search/log_filter_regex_page`, `history/file_history_page`, `bisect/mark_step`.
 - Playwright smoke (SPA-level, mocked `__TAURI_INTERNALS__`): app boot → open repo → stage → commit dialog.
+
+## Commands (workspace files — file browser / viewer / editor)
+
+Workdir filesystem operations backing the Files panel, the file
+viewer/editor, and quick-open. Logic: `src-tauri/src/workspace.rs`; tests:
+`workspace_tests.rs`. Every `path` argument is workdir-relative with
+forward slashes and validated (absolute forms, `..` components, Windows
+prefixes, and anything escaping the root reject). Mutating commands run on
+the per-repo op queue (serialized, generation-bumping — the watcher-driven
+`repo-changed` → `refreshStatus` pipeline refreshes the UI for free) and
+refuse paths inside `.git`; `repo_delete_entry` additionally refuses
+submodule checkouts (dirs with their own `.git`) and snapshots a
+checkpoint BEFORE deleting (undoable from the Undo panel, same ordering
+rule as discard/repo_clean).
+
+| Command | Args | Returns | Notes |
+|---|---|---|---|
+| `repo_list_dir` | `repo_id, path, include_ignored: bool` | `DirListing` | One directory level. Bounded (`ignore::WalkBuilder` max_depth 1), gitignore-aware (`.gitignore` chain + `.git/info/exclude` + global excludes; the `include_ignored` toggle turns every filter off), dirs-first natural sort, `.git` never listed. Directories that are gitlink entries in the index surface as `kind: "submodule"`. Capped at 5000 entries with `truncated: true` (error-free truncation). |
+| `repo_stat_file` | `repo_id, path` | `FileMeta` | Size, content classification (`text` / `image` by extension list mirroring the diff engine / `binary` by NUL sniff of the first 8 KiB), `readonly`, and `mtime_ms` (epoch millis) — the FE decides how to open a file before transferring bytes, and the editor's save compares mtimes. |
+| `repo_write_file` | `repo_id, path, content: number[], expected_mtime: number \| null` | `FileMeta` | The editor's save. `expected_mtime` guard: when set, it must equal the file's current mtime (or the file must be missing with `0` = create), otherwise a "changed on disk" conflict error rejects the write and the FE offers reload/overwrite. Writes are atomic (temp file + rename in the same dir), parent dirs created on demand. `null` overwrites unconditionally (tooling only — the editor always sends an mtime). |
+| `repo_create_entry` | `repo_id, path, kind: "file"\|"dir"` | `void` | Creates with parent dirs; errors when the path exists. |
+| `repo_rename_entry` | `repo_id, path, new_path` | `void` | Renames/moves within the worktree; errors when source is missing or target exists. |
+| `repo_delete_entry` | `repo_id, path` | `CheckpointInfo` | Checkpoint first (reason `delete <path>`), then remove — file or directory tree. |
+| `repo_file_index` | `repo_id` | `FileIndex` | Flat gitignore-respecting parallel walk of the workdir for quick-open (Ctrl+P); `.git` skipped; capped at 50k entries with `truncated: true`. Sizes are not collected (paths only). |
+
+```
+DirEntryKind   = "file" | "dir" | "symlink" | "submodule"
+DirEntryInfo   = { name, path, kind: DirEntryKind, size: number | null }
+DirListing     = { path, entries: DirEntryInfo[], truncated: bool }
+FileContentKind = "text" | "image" | "binary"
+FileMeta       = { path, size, kind: FileContentKind, readonly: bool, mtime_ms }
+FileIndexEntry = { path, is_dir, size: number | null }   // size always null in V1
+FileIndex      = { entries: FileIndexEntry[], truncated: bool }
+NewEntryKind   = "file" | "dir"
+```
+
+Frontend (FE contracts): FilesPanel + FileWorkspace lazily imported as the
+`files` panel / center workspace; opening a file emits the typed UI event
+`files-open-path` (detail `{ repoId, path }`) handled by RepoView; the
+quick-open dialog (`files.quickOpen`, Ctrl+P) opens the same event. TS
+wrappers live in `src/lib/ipc/client.ts`; types regenerate via
+`npm run gen:types`.

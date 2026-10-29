@@ -31,6 +31,9 @@ mod pty;
 mod pty_tests;
 mod repo;
 mod watcher;
+mod workspace;
+#[cfg(test)]
+mod workspace_tests;
 
 /// Arguments captured at first launch (`mygitui <path>`), consumed once by
 /// the frontend via `cli_args_initial`. The single-instance plugin handles
@@ -207,6 +210,13 @@ pub fn run() {
             ipc_commands::worktree_remove,
             ipc_commands::reflog,
             ipc_commands::repo_read_file,
+            workspace::repo_list_dir,
+            workspace::repo_stat_file,
+            workspace::repo_write_file,
+            workspace::repo_create_entry,
+            workspace::repo_rename_entry,
+            workspace::repo_delete_entry,
+            workspace::repo_file_index,
             ipc_commands::submodules,
             ipc_commands::submodule_update,
             ipc_commands::submodule_sync,

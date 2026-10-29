@@ -54,6 +54,9 @@ export const DEFAULT_BINDINGS: Record<string, string> = {
   "panel.focus-worktrees": "ctrl+5",
   "panel.focus-reflog": "ctrl+6",
   "panel.focus-undo": "ctrl+7",
+  "panel.focus-files": "ctrl+8",
+  "files.quick-open": "ctrl+p",
+  "files.save": "ctrl+s",
 };
 
 // ---------------------------------------------------------------------------

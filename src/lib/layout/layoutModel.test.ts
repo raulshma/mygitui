@@ -144,6 +144,7 @@ describe("queries", () => {
 
   it("lists visible panels in layout order", () => {
     expect(visiblePanels(DEFAULT_LAYOUT.main)).toEqual([
+      "files",
       "status",
       "branches",
       "remotes",
@@ -498,6 +499,7 @@ describe("default layout + presets", () => {
     const root = DEFAULT_LAYOUT.main as SplitNode;
     expect(root.a.kind).toBe("tabs");
     expect((root.a as TabsNode).tabs).toEqual([
+      "files",
       "status",
       "branches",
       "remotes",
@@ -508,7 +510,8 @@ describe("default layout + presets", () => {
       "stats",
       "terminal",
     ]);
-    expect((root.a as TabsNode).active).toBe(0);
+    // The explorer leads the stack but status keeps the default focus.
+    expect((root.a as TabsNode).active).toBe(1);
 
     // Center editor + right history sidebar.
     const right = root.b as SplitNode;
@@ -549,6 +552,7 @@ describe("default layout + presets", () => {
     // Review: diff pane at 60%, full three-column shape.
     const review = byId("review");
     expect(visiblePanels(review.tree)).toEqual([
+      "files",
       "status",
       "branches",
       "remotes",

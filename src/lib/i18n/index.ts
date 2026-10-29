@@ -18,6 +18,7 @@ type Catalog = Record<string, string>;
 const catalogs: Record<Locale, Catalog> = {
   en: {
     // Panels
+    "panel.files": "Files",
     "panel.status": "Status",
     "panel.branches": "Branches",
     "panel.remotes": "Remotes",

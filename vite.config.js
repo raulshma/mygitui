@@ -34,6 +34,14 @@ export default defineConfig({
     // opening Terminal, GitHub, Actions, or AI for the first time. Listing
     // them here keeps the dev graph stable and those opens instant.
     include: [
+      "@codemirror/autocomplete",
+      "@codemirror/commands",
+      "@codemirror/language",
+      "@codemirror/language-data",
+      "@codemirror/search",
+      "@codemirror/state",
+      "@codemirror/view",
+      "@lezer/highlight",
       "@opencode-ai/sdk/client",
       "@opencode/client",
       "@openrouter/ai-sdk-provider",
@@ -44,6 +52,7 @@ export default defineConfig({
       "@xterm/addon-web-links",
       "@xterm/xterm",
       "ai",
+      "codemirror",
       "shiki",
     ],
   },

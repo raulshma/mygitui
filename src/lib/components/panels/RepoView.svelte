@@ -34,6 +34,7 @@
     CommitInfo,
     ConflictFile,
     FileDiff,
+    FileMeta,
     RepoStatus,
     StatusEntry,
   } from "$lib/ipc/types";
@@ -43,8 +44,10 @@
     rebaseAbort,
     sequencerAbort,
     stage,
+    statFile,
     streamDiff,
   } from "$lib/ipc/client";
+  import type { OpenFileInfo } from "$lib/components/files/FileWorkspace.svelte";
   import StatusPanel from "$lib/components/panels/StatusPanel.svelte";
   import ConflictEditor from "$lib/components/merge/ConflictEditor.svelte";
   import BisectBanner from "$lib/components/bisect/BisectBanner.svelte";
@@ -161,6 +164,70 @@
   let pendingHistorySha = $state<string | null>(null);
   /** Guards the working-copy diff stream against stale pages. */
   let diffToken = 0;
+
+  // --- File workspace state (open workdir files, VS Code-style) -------------
+
+  /** Open files: tab order = open order; each keeps its own dirty/meta. */
+  let openFiles = $state<OpenFileInfo[]>([]);
+  /** Active (visible) workspace tab. */
+  let activeFile = $state<string | null>(null);
+  /** Center shows the file workspace (vs the diff/commit views). */
+  let filesMode = $state(false);
+  /** Quick-open (Ctrl+P) overlay visibility. */
+  let quickOpenVisible = $state(false);
+
+  /** Open (or focus) a workdir file in the center workspace. */
+  async function openWorkdirFile(path: string): Promise<void> {
+    const existing = openFiles.find((f) => f.path === path);
+    if (existing) {
+      activeFile = path;
+      filesMode = true;
+      return;
+    }
+    const file: OpenFileInfo = { path, dirty: false, meta: null };
+    openFiles.push(file);
+    activeFile = path;
+    filesMode = true;
+    diffEntry = null;
+    selectedCommit = null;
+    compareResult = null;
+    workflowRunId = null;
+    actionRunId = null;
+    try {
+      const meta: FileMeta = await statFile(repoId, path);
+      // Write through the proxied array: the local `file` is the raw
+      // pre-push object, and mutating it fires no signals (the pane
+      // would stay on the "Reading…" spinner). Re-finding also skips
+      // the update when the tab was closed during the stat round-trip.
+      const target = openFiles.find((f) => f.path === path);
+      if (target) target.meta = meta;
+    } catch (err) {
+      toast(String(err), { kind: "error" });
+      closeWorkdirFile(path);
+    }
+  }
+
+  function closeWorkdirFile(path: string): void {
+    const idx = openFiles.findIndex((f) => f.path === path);
+    if (idx !== -1) openFiles.splice(idx, 1);
+    if (activeFile === path) {
+      activeFile =
+        openFiles[Math.min(idx, openFiles.length - 1)]?.path ?? null;
+    }
+    if (openFiles.length === 0) filesMode = false;
+  }
+
+  function workdirDiffFor(path: string): void {
+    const entry =
+      status?.entries.find((e) => e.path === path || e.old_path === path) ??
+      null;
+    if (!entry) {
+      toast(`No working-copy changes for ${path}`);
+      return;
+    }
+    filesMode = false;
+    void openDiff(entry);
+  }
 
   // --- Layout ---------------------------------------------------------------
 
@@ -514,10 +581,35 @@
     layouts.addPanel(root, "terminal", activityGroup?.id ?? firstTabsId(resolved.layout.main) ?? undefined);
   }
 
+  // --- Files panel + workspace + quick-open event wiring ---------------------
+
+  $effect(() => {
+    return onUiEvent("files-open-path", ({ repoId: target, path }) => {
+      if (target !== repoId) return;
+      void openWorkdirFile(path);
+    });
+  });
+
+  $effect(() => {
+    return onUiEvent("files-open-diff", ({ repoId: target, path }) => {
+      if (target !== repoId) return;
+      workdirDiffFor(path);
+    });
+  });
+
+  $effect(() => {
+    return onUiEvent("files-quick-open", () => {
+      if (repoId === null) return;
+      quickOpenVisible = true;
+    });
+  });
+
   // --- Panel registry (PanelId → snippet) -----------------------------------
 
   function renderPanel(id: PanelId): Snippet {
     switch (id) {
+      case "files":
+        return filesPanel;
       case "status":
         return statusPanel;
       case "branches":
@@ -822,6 +914,7 @@
     compareResult = null;
     workflowRunId = null;
     actionRunId = null;
+    filesMode = false;
     diffRepoId = targetRepoId ?? repoId;
     diffRoot = targetRoot ?? root;
     diffRepoName = targetRepoName ?? "";
@@ -1137,6 +1230,16 @@
   }
 </script>
 
+{#snippet filesPanel()}
+  {#await import("$lib/components/panels/FilesPanel.svelte") then FilesPanelModule}
+    <FilesPanelModule.default
+      {repoId}
+      {root}
+      {status}
+      activeFile={filesMode ? activeFile : null}
+    />
+  {/await}
+{/snippet}
 {#snippet statusPanel()}
   <!-- VSCode-style source-control column: changes scroll above the pinned
        commit box. -->
@@ -1175,6 +1278,9 @@
       ? changeEntries.findIndex((e) => e.path === diffEntry?.path)
       : null}
     entryCount={diffRepoId === repoId ? changeEntries.length : 0}
+    files={filesMode && openFiles.length > 0
+      ? { repoId, root, openFiles, active: activeFile }
+      : null}
     onClose={clearEditor}
     onCloseCompare={() => (compareResult = null)}
     onCloseWorkflowRun={() => (workflowRunId = null)}
@@ -1191,6 +1297,12 @@
       ? (unstage) => void stageOpenEntry(unstage)
       : undefined}
     onDiscardEntry={diffRepoId === repoId ? requestDiscardOpenEntry : undefined}
+    onEditEntry={diffRepoId === repoId && diffEntry
+      ? () => void openWorkdirFile(diffEntry!.path)
+      : undefined}
+    onActivateFile={(path) => (activeFile = path)}
+    onCloseFile={closeWorkdirFile}
+    onOpenDiffFile={workdirDiffFor}
     onOpenFirstChange={openFirstChange}
     onBrowseHistory={() => focusPanel("history")}
   />
@@ -1425,6 +1537,16 @@
       />
     </div>
   </div>
+{/if}
+
+{#if quickOpenVisible}
+  {#await import("$lib/components/files/QuickOpen.svelte") then QuickOpenModule}
+    <QuickOpenModule.default
+      {repoId}
+      onClose={() => (quickOpenVisible = false)}
+      onPick={(path) => void openWorkdirFile(path)}
+    />
+  {/await}
 {/if}
 
 <CleanDialog

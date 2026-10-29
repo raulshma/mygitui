@@ -141,6 +141,7 @@ describe("LayoutStore mutations", () => {
     const resolved = store.active(ROOT);
     expect(resolved.overridden).toBe(true);
     expect(visiblePanels(resolved.layout.main)).toEqual([
+      "files",
       "branches",
       "remotes",
       "stashes",

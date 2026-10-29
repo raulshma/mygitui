@@ -77,6 +77,28 @@ export interface UiEventMap {
    * Emitted by the actions panel when a run starts or is selected.
    */
   "action-run-open": { repoId: string; runId: string };
+  /**
+   * Open a workdir file in the file workspace: `{ repoId, path }`
+   * (workdir-relative, forward slashes). Emitted by the Files panel tree,
+   * quick-open, and diff "Edit" cross-links; RepoView owns the handler.
+   */
+  "files-open-path": { repoId: string; path: string };
+  /**
+   * Reveal + highlight a path in the Files tree: `{ repoId, path? }` —
+   * `path` omitted reveals the panel's own active file. Emitted by the
+   * palette command and status context menus.
+   */
+  "files-reveal-path": { repoId: string; path?: string };
+  /** Open the quick-open dialog (fuzzy file finder, Ctrl+P). */
+  "files-quick-open": undefined;
+  /** Save the active file in the file workspace (Ctrl+S / palette). */
+  "files-save": undefined;
+  /**
+   * Open the working-copy diff for a workdir path: `{ repoId, path }`
+   * (Files tree context menu + workspace "Diff" cross-link; the handler
+   * no-ops when the path has no working-copy changes).
+   */
+  "files-open-diff": { repoId: string; path: string };
 }
 
 export type UiEventName = keyof UiEventMap;

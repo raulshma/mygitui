@@ -9,6 +9,8 @@
    * - compare results (`CommitDetail` in compare mode — no commit info),
    * - a working-copy file's diff (`DiffViewer`, with hunk staging when the
    *   shown file has no staged changes),
+   * - the file workspace (`FileWorkspace`: open workdir files as tabs —
+   *   viewer/editor via CodeMirror, image/binary previews),
    * - an empty invitation to pick something in the sidebars.
    *
    * Selection state lives in `RepoView` (the layout panel is a normal tree
@@ -19,6 +21,7 @@
   import type { CommitInfo, FileDiff, RepoStatus, StatusEntry } from "$lib/ipc/types";
   import type { CompareResult } from "$lib/components/panels/compare";
   import type { HistoryCommitActions } from "$lib/components/panels/historySidebar";
+  import type { OpenFileInfo } from "$lib/components/files/FileWorkspace.svelte";
   import CommitDetail from "$lib/components/panels/CommitDetail.svelte";
   import DiffViewer from "$lib/components/diff/DiffViewer.svelte";
   import Icon from "$lib/components/icons/Icon.svelte";
@@ -43,6 +46,7 @@
     actionRunId = null,
     entryIndex = null,
     entryCount = 0,
+    files = null,
     onClose = undefined,
     onCloseCompare = undefined,
     onCloseWorkflowRun = undefined,
@@ -57,6 +61,10 @@
     onNextFile = undefined,
     onStageEntry = undefined,
     onDiscardEntry = undefined,
+    onEditEntry = undefined,
+    onActivateFile = undefined,
+    onCloseFile = undefined,
+    onOpenDiffFile = undefined,
     onOpenFirstChange = undefined,
     onBrowseHistory = undefined,
   }: {
@@ -88,6 +96,16 @@
     entryIndex?: number | null;
     /** Total changed files (drives prev/next navigation availability). */
     entryCount?: number;
+    /**
+     * File workspace state (open workdir files): renders the tabbed
+     * viewer/editor instead of the diff/commit views when set.
+     */
+    files?: {
+      repoId: string;
+      root: string;
+      openFiles: OpenFileInfo[];
+      active: string | null;
+    } | null;
     /** Clears the editor (closes the current commit/diff). */
     onClose?: () => void;
     onCloseCompare?: () => void;
@@ -112,6 +130,14 @@
     onStageEntry?: (unstage: boolean) => void;
     /** Asks the owner to confirm discarding the open file's changes. */
     onDiscardEntry?: () => void;
+    /** Opens the shown file in the file workspace (editor mode). */
+    onEditEntry?: () => void;
+    /** Activates (focuses) an open file tab. */
+    onActivateFile?: (path: string) => void;
+    /** Closes an open file tab (after any save guard). */
+    onCloseFile?: (path: string) => void;
+    /** Opens the working-copy diff for a file from the workspace. */
+    onOpenDiffFile?: (path: string) => void;
     /** Welcome state: opens the first changed file. */
     onOpenFirstChange?: () => void;
     /** Welcome state: reveals the history sidebar. */
@@ -179,6 +205,26 @@
       onClose={onClose}
       onCloseCompare={onCloseCompare}
     />
+  {:else if files && files.openFiles.length > 0}
+    {#await import("$lib/components/files/FileWorkspace.svelte")}
+      <p class="estate estate-loading" role="status">
+        <Spinner size={14} />
+        Loading workspace…
+      </p>
+    {:then FileWorkspaceModule}
+      <FileWorkspaceModule.default
+        repoId={files.repoId}
+        root={files.root}
+        openFiles={files.openFiles}
+        active={files.active}
+        onActivate={(path) => onActivateFile?.(path)}
+        onClose={(path) => onCloseFile?.(path)}
+        onMutated={onMutated}
+        onOpenDiff={(path) => onOpenDiffFile?.(path)}
+      />
+    {:catch err}
+      <p class="estate" role="alert">Failed to load the file workspace: {String(err)}</p>
+    {/await}
   {:else if entry}
     <div class="file-editor">
       <header class="ehead">
@@ -252,6 +298,16 @@
             onclick={onDiscardEntry}
           >
             Discard
+          </button>
+        {/if}
+        {#if onEditEntry}
+          <button
+            class="ebtn"
+            type="button"
+            title="Edit this file in the file workspace"
+            onclick={onEditEntry}
+          >
+            Edit
           </button>
         {/if}
         {#if onPopoutDiff}

@@ -131,3 +131,116 @@ test("gitignore menu escapes the status list clipping", async ({ page }, testInf
   expect(tracked.errors, tracked.errors.join("\n")).toEqual([]);
   await tracked.attach(testInfo);
 });
+
+test("files panel: browse tree, open a file in the workspace", async ({
+  page,
+}, testInfo) => {
+  const tracked = trackErrors(page);
+  await boot(page, {
+    [RECENT_REPOS_KEY]: JSON.stringify([
+      { path: "/tmp/repo", pinned: false, lastOpened: 1 },
+    ]),
+  });
+
+  await page.goto("/");
+  await page.getByRole("button", { name: /repo\s*\/tmp\/repo/ }).click();
+
+  // 1. Switch the primary sidebar to the Files panel (activity bar).
+  await page.getByRole("button", { name: "Files", exact: true }).click();
+
+  // 2. Root listing renders (dirs first, then files).
+  const readmeRow = page.getByRole("treeitem", { name: /README\.md/ });
+  await expect(readmeRow).toBeVisible({ timeout: 15_000 });
+
+  // 3. Expand the src dir (lazy list_dir invoke).
+  await page
+    .getByRole("button", { name: "Expand src" })
+    .click();
+  const appRow = page.getByRole("treeitem", { name: /^app\.ts/ });
+  await expect(appRow).toBeVisible({ timeout: 15_000 });
+  await expect
+    .poll(async () => (await mockCalls(page, "repo_list_dir")).length)
+    .toBeGreaterThan(0);
+
+  // 4. Open a file: the center workspace shows a tab + the CodeMirror doc.
+  await appRow.click();
+  const tab = page.getByRole("tab", { name: "app.ts" });
+  // First open transforms the lazy CodeMirror chunk on the dev server.
+  await expect(tab).toBeVisible({ timeout: 30_000 });
+  await expect(page.locator(".cm-content")).toContainText(
+    "export const app = 1;",
+    { timeout: 30_000 },
+  );
+  await expect
+    .poll(async () => (await mockCalls(page, "repo_read_file")).length)
+    .toBeGreaterThan(0);
+
+  // 4b. A second file opens alongside the first: its stat round-trip must
+  //     swap the "Reading…" spinner for an editor reactively (regression
+  //     guard: the meta swap used to mutate the raw, non-proxied object).
+  await readmeRow.click();
+  await expect(page.getByRole("tab", { name: "README.md" })).toBeVisible({
+    timeout: 30_000,
+  });
+  // Both panes stay mounted, so both editors exist in the DOM.
+  await expect(page.locator(".cm-content")).toHaveCount(2, { timeout: 30_000 });
+
+  // 5. Diff cross-link routes through the status entries. README (now
+  //    active) has no status entry, so reactivate the modified file first.
+  await page.getByRole("tab", { name: "app.ts" }).click();
+  await page.getByRole("button", { name: "Diff", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Edit", exact: true })).toBeVisible();
+
+  expect(tracked.errors, tracked.errors.join("\n")).toEqual([]);
+  await tracked.attach(testInfo);
+});
+
+test("quick open (Ctrl+P): fuzzy pick opens the file", async ({
+  page,
+}, testInfo) => {
+  const tracked = trackErrors(page);
+  await boot(page, {
+    [RECENT_REPOS_KEY]: JSON.stringify([
+      { path: "/tmp/repo", pinned: false, lastOpened: 1 },
+    ]),
+  });
+
+  await page.goto("/");
+  await page.getByRole("button", { name: /repo\s*\/tmp\/repo/ }).click();
+
+  await page.waitForTimeout(1500);
+  await page.keyboard.press("Control+p");
+  const dialog = page.getByRole("dialog", { name: "Go to file" });
+  // First open transforms the lazy QuickOpen chunk on the dev server.
+  await expect(dialog).toBeVisible({ timeout: 30_000 });
+
+  await page.getByRole("textbox", { name: "Go to file" }).fill("app");
+  const option = page.getByRole("option", { name: /app\.ts/ });
+  await expect(option).toBeVisible({ timeout: 15_000 });
+  await page.keyboard.press("Enter");
+
+  // The pick opened the file in the center workspace.
+  await expect(page.getByRole("tab", { name: "app.ts" })).toBeVisible({
+    timeout: 30_000,
+  });
+  await expect
+    .poll(async () => (await mockCalls(page, "repo_file_index")).length)
+    .toBeGreaterThan(0);
+
+  expect(tracked.errors, tracked.errors.join("\n")).toEqual([]);
+  await tracked.attach(testInfo);
+});
+
+/** Recorded invokes for one command (helper over the page-side mock). */
+async function mockCalls(
+  page: Page,
+  command: string,
+): Promise<Array<Record<string, unknown>>> {
+  return page.evaluate(
+    (cmd) =>
+      window.__TAURI_MOCK__.calls
+        .filter((c) => c.cmd === cmd)
+        .map((c) => c.args),
+    command,
+  );
+}

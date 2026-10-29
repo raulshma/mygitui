@@ -45,9 +45,12 @@ import type {
   Contributor,
   DayCount,
   DiffSide,
+  DirListing,
   EditorApp,
   FetchOptions,
   FileDiff,
+  FileIndex,
+  FileMeta,
   ForgeContext,
   ForgeFailure,
   ForgeFailureKind,
@@ -62,6 +65,7 @@ import type {
   MergetoolInfo,
   MergetoolResult,
   NetStats,
+  NewEntryKind,
   OpLog,
   OpProgress,
   OpencodeDetection,
@@ -1025,6 +1029,94 @@ export async function guardCheckpoint(repoId: string, reason: string): Promise<C
  */
 export function readFile(repoId: string, path: string): Promise<number[]> {
   return invokeTauri<number[]>("repo_read_file", { repo_id: repoId, path });
+}
+
+// ---------------------------------------------------------------------------
+// Workspace files — file browser / viewer / editor (Rust: workspace.rs,
+// docs/contracts.md "Commands (workspace files)")
+// ---------------------------------------------------------------------------
+
+/**
+ * One directory level of the working tree, gitignore-aware (dirs first,
+ * natural sort). `path` is workdir-relative with forward slashes; `""` is
+ * the workdir root. `include_ignored` bypasses every gitignore filter.
+ */
+export function listDir(
+  repoId: string,
+  path: string,
+  includeIgnored = false,
+): Promise<DirListing> {
+  return call<DirListing>("repo_list_dir", {
+    repo_id: repoId,
+    path,
+    include_ignored: includeIgnored,
+  });
+}
+
+/**
+ * Size / content classification (text|image|binary) / readonly / mtime for
+ * one file — the FE decides how to open a file before transferring bytes.
+ */
+export function statFile(repoId: string, path: string): Promise<FileMeta> {
+  return call<FileMeta>("repo_stat_file", { repo_id: repoId, path });
+}
+
+/**
+ * Writes file content to the worktree (the file editor's save).
+ * `expectedMtime` is the save-conflict guard: it must match the file's
+ * current mtime (`0` = create), otherwise a "changed on disk" error
+ * rejects the write.
+ */
+export function writeFile(
+  repoId: string,
+  path: string,
+  content: Uint8Array,
+  expectedMtime: number | null,
+): Promise<FileMeta> {
+  return call<FileMeta>("repo_write_file", {
+    repo_id: repoId,
+    path,
+    content: Array.from(content),
+    expected_mtime: expectedMtime,
+  });
+}
+
+/** Creates an empty file or a directory (with parents). */
+export function createEntry(
+  repoId: string,
+  path: string,
+  kind: NewEntryKind,
+): Promise<void> {
+  return call<void>("repo_create_entry", { repo_id: repoId, path, kind });
+}
+
+/** Renames/moves a file or directory within the worktree. */
+export function renameEntry(
+  repoId: string,
+  path: string,
+  newPath: string,
+): Promise<void> {
+  return call<void>("repo_rename_entry", {
+    repo_id: repoId,
+    path,
+    new_path: newPath,
+  });
+}
+
+/**
+ * Deletes a file or directory tree. A checkpoint is snapshotted first, so
+ * the delete is undoable from the Undo panel.
+ */
+export function deleteEntry(
+  repoId: string,
+  path: string,
+): Promise<CheckpointInfo> {
+  return call<CheckpointInfo>("repo_delete_entry", { repo_id: repoId, path });
+}
+
+/** Flat gitignore-respecting file index for quick-open (capped at 50k). */
+export function fileIndex(repoId: string): Promise<FileIndex> {
+  return call<FileIndex>("repo_file_index", { repo_id: repoId });
 }
 
 // ---------------------------------------------------------------------------

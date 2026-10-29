@@ -328,6 +328,168 @@ function BOOTSTRAP(options: TauriMockOptions): void {
     return null;
   }
 
+  // -- workspace (file browser) fake FS --------------------------------------
+  // Keys are repo-relative paths (forward slashes) → file bytes. Dirs are
+  // derived from the file keys, so create/rename/delete flows stay in sync.
+
+  const WORKSPACE_COMMANDS = new Set([
+    "repo_list_dir",
+    "repo_stat_file",
+    "repo_read_file",
+    "repo_write_file",
+    "repo_create_entry",
+    "repo_rename_entry",
+    "repo_delete_entry",
+    "repo_file_index",
+  ]);
+
+  const fakeFiles = new Map<string, number[]>([
+    ["README.md", Array.from(new TextEncoder().encode("hello world\n"))],
+    ["src/app.ts", Array.from(new TextEncoder().encode("export const app = 1;\n"))],
+    ["notes.md", Array.from(new TextEncoder().encode("# notes\n"))],
+  ]);
+  const fakeDirs = new Set<string>(["src"]);
+  const FAKE_MTIME = 1_700_000_000_000;
+
+  function fakeBasename(path: string): string {
+    const idx = path.lastIndexOf("/");
+    return idx === -1 ? path : path.slice(idx + 1);
+  }
+
+  function fakeKind(path: string): string {
+    return /\.(png|jpg|jpeg|gif|webp|bmp|svg|ico|avif)$/i.test(path)
+      ? "image"
+      : "text";
+  }
+
+  function fakeList(dir: string): Array<Record<string, unknown>> {
+    const names = new Map<string, string>(); // name → kind
+    if (dir === "") {
+      for (const d of fakeDirs) names.set(d, "dir");
+    }
+    for (const path of fakeFiles.keys()) {
+      if (dir === "") {
+        if (!path.includes("/")) names.set(path, "file");
+      } else if (path.startsWith(`${dir}/`)) {
+        const rest = path.slice(dir.length + 1);
+        if (!rest.includes("/")) names.set(rest, "file");
+      }
+    }
+    const entries = [...names.entries()].map(([name, kind]) => {
+      const path = dir === "" ? name : `${dir}/${name}`;
+      return {
+        name,
+        path,
+        kind,
+        size: kind === "file" ? (fakeFiles.get(path)?.length ?? 0) : null,
+      };
+    });
+    // Dirs first, then case-insensitive name order (mirrors the backend).
+    entries.sort((a, b) => {
+      const da = a.kind === "dir" ? 0 : 1;
+      const db = b.kind === "dir" ? 0 : 1;
+      if (da !== db) return da - db;
+      return String(a.name).localeCompare(String(b.name), undefined, {
+        sensitivity: "base",
+      });
+    });
+    return entries;
+  }
+
+  /** Handle one workspace command; `undefined` = not a workspace command. */
+  function applyWorkspace(
+    cmd: string,
+    args: Record<string, unknown>,
+  ): unknown {
+    const path = String(args.path ?? "");
+    switch (cmd) {
+      case "repo_list_dir":
+        if (path !== "" && !fakeDirs.has(path)) {
+          return { __error__: `\`${path}\` is not a directory` };
+        }
+        return {
+          path,
+          entries: fakeList(path),
+          truncated: false,
+        };
+      case "repo_stat_file": {
+        const bytes = fakeFiles.get(path);
+        if (!bytes) return { __error__: `\`${path}\`: not found` };
+        return {
+          path,
+          size: bytes.length,
+          kind: fakeKind(path),
+          readonly: false,
+          mtime_ms: FAKE_MTIME,
+        };
+      }
+      case "repo_read_file":
+        return fakeFiles.get(path) ?? [];
+      case "repo_write_file": {
+        if (!fakeFiles.has(path) && !fakeDirs.has(path)) {
+          const dir = path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "";
+          if (dir !== "") fakeDirs.add(dir);
+        }
+        const content = Array.isArray(args.content)
+          ? (args.content as number[])
+          : [];
+        fakeFiles.set(path, content);
+        return {
+          path,
+          size: content.length,
+          kind: fakeKind(path),
+          readonly: false,
+          mtime_ms: FAKE_MTIME + 1,
+        };
+      }
+      case "repo_create_entry": {
+        if (args.kind === "dir") {
+          fakeDirs.add(path);
+        } else {
+          fakeFiles.set(path, []);
+        }
+        return null;
+      }
+      case "repo_rename_entry": {
+        const to = String(args.new_path ?? "");
+        if (fakeFiles.has(path)) {
+          fakeFiles.set(to, fakeFiles.get(path)!);
+          fakeFiles.delete(path);
+        } else if (fakeDirs.has(path)) {
+          fakeDirs.delete(path);
+          fakeDirs.add(to);
+          for (const [key, value] of [...fakeFiles.entries()]) {
+            if (key.startsWith(`${path}/`)) {
+              fakeFiles.set(`${to}${key.slice(path.length)}`, value);
+              fakeFiles.delete(key);
+            }
+          }
+        }
+        return null;
+      }
+      case "repo_delete_entry": {
+        fakeFiles.delete(path);
+        fakeDirs.delete(path);
+        for (const key of [...fakeFiles.keys()]) {
+          if (key.startsWith(`${path}/`)) fakeFiles.delete(key);
+        }
+        return { id: "ckpt-1" };
+      }
+      case "repo_file_index": {
+        const entries: Array<Record<string, unknown>> = [];
+        for (const d of fakeDirs) {
+          if (d !== "") entries.push({ path: d, is_dir: true, size: null });
+        }
+        for (const f of fakeFiles.keys()) {
+          entries.push({ path: f, is_dir: false, size: null });
+        }
+        return { entries, truncated: false };
+      }
+      default:
+        return undefined;
+    }
+  }
+
   function applyStage(args: Record<string, unknown> | undefined): void {
     const entries = statusMock?.entries;
     if (!Array.isArray(entries)) return;
@@ -450,6 +612,13 @@ function BOOTSTRAP(options: TauriMockOptions): void {
 
       if (cmd === "stage") applyStage(args);
       if (cmd === "stage_all") applyStageAll(args);
+
+      // Workspace file-browser commands: a small mutable fake workdir so
+      // list/stat/read/write flows behave like the real backend.
+      if (cmd.startsWith("repo_list_dir") || WORKSPACE_COMMANDS.has(cmd)) {
+        const result = applyWorkspace(cmd, args ?? {});
+        if (result !== undefined) return Promise.resolve(result);
+      }
 
       if (cmd in commandMocks) {
         const value = commandMocks[cmd];

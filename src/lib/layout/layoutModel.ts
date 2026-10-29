@@ -31,6 +31,7 @@ import type { IconifyIcon } from "@iconify/types";
 
 /** Every panel the layout system can place. */
 export type PanelId =
+  | "files"
   | "status"
   | "branches"
   | "remotes"
@@ -47,8 +48,10 @@ export type PanelId =
   | "actions"
   | "stats";
 
-/** Registry order = default tab order (mirrors the pre-M4 RepoView stack). */
+/** Registry order = default tab order (mirrors the pre-M4 RepoView stack,
+ * with the file explorer first, VS Code-style). */
 export const PANEL_IDS: readonly PanelId[] = [
+  "files",
   "status",
   "branches",
   "remotes",
@@ -82,6 +85,10 @@ export interface PanelMeta {
 
 /** Label + icon registry; the only place that knows how panels look. */
 export const PANEL_META: Record<PanelId, PanelMeta> = {
+  files: {
+    label: "Files",
+    icon: "M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2zM2 10h20",
+  },
   status: {
     label: "Status",
     icon: "M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01",
@@ -156,6 +163,7 @@ export function panelLabel(panel: PanelId): string {
  * because it lives in the right sidebar.
  */
 export const RAIL_PANELS: readonly PanelId[] = [
+  "files",
   "status",
   "branches",
   "remotes",
@@ -758,6 +766,7 @@ export function presetToLayout(preset: LayoutPreset): WorkspaceLayout {
 // every earlier tab keeps its index. "stats" joined in M7 (lane I1), placed
 // before "terminal" per the M7 contracts section.
 const ALL_LEFT_TABS: PanelId[] = [
+  "files",
   "status",
   "branches",
   "remotes",
@@ -783,7 +792,7 @@ export const DEFAULT_LAYOUT: WorkspaceLayout = {
     kind: "split",
     id: "split-main",
     ratio: 0.24,
-    a: { kind: "tabs", id: "tabs-left", tabs: [...ALL_LEFT_TABS], active: 0 },
+    a: { kind: "tabs", id: "tabs-left", tabs: [...ALL_LEFT_TABS], active: 1 },
     b: {
       kind: "split",
       id: "split-main-right",
@@ -837,7 +846,7 @@ export const DEFAULT_PRESETS: LayoutPreset[] = [
       kind: "split",
       id: "split-review",
       ratio: 0.22,
-      a: { kind: "tabs", id: "tabs-review", tabs: [...ALL_LEFT_TABS], active: 0 },
+      a: { kind: "tabs", id: "tabs-review", tabs: [...ALL_LEFT_TABS], active: 1 },
       b: {
         kind: "split",
         id: "split-review-right",

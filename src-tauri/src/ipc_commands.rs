@@ -1522,50 +1522,16 @@ pub async fn repo_read_file(
         .map_err(|e| format!("read_file task failed: {e}"))?
 }
 
-/// Synchronous body of [`repo_read_file`] (validation + disk read).
+/// Synchronous body of [`repo_read_file`] (validation + disk read). Path
+/// validation is shared with the workspace file-browser commands
+/// (`workspace::validate_rel_path`).
 fn read_workdir_file(root: &Path, path: &str) -> Result<Vec<u8>, String> {
-    let relative = Path::new(path);
-    if path.is_empty() {
-        return Err("path is empty".into());
-    }
-    if relative.is_absolute() || has_windows_prefix(relative) {
-        return Err(format!("path must be workdir-relative: `{path}`"));
-    }
-    if relative
-        .components()
-        .any(|component| component == std::path::Component::ParentDir)
-    {
-        return Err(format!("path must not contain `..`: `{path}`"));
-    }
-    let full = root.join(relative);
-    // Belt and braces: a drive-relative form like `C:foo` slips past the
-    // absolute check but `join` replaces the base with it — the containment
-    // check catches every replacement case.
-    if full.strip_prefix(root).is_err() {
-        return Err(format!("path escapes the repository: `{path}`"));
-    }
+    let full = crate::workspace::validate_rel_path(root, path)?;
     match std::fs::metadata(&full) {
         // Missing file → empty content (documented "no preview written").
         Err(_) => Ok(Vec::new()),
         Ok(meta) if !meta.is_file() => Err(format!("`{path}` is not a regular file")),
         Ok(_) => std::fs::read(&full).map_err(|e| format!("reading `{path}` failed: {e}")),
-    }
-}
-
-/// True when `path` carries a Windows prefix (`C:\`, `\\?\C:\`, `\\server`).
-fn has_windows_prefix(path: &Path) -> bool {
-    #[cfg(windows)]
-    {
-        use std::path::Component;
-        matches!(
-            path.components().next(),
-            Some(Component::Prefix(_)) | Some(Component::RootDir)
-        )
-    }
-    #[cfg(not(windows))]
-    {
-        let _ = path;
-        false
     }
 }
 
@@ -2366,8 +2332,9 @@ fn clean_op(
 }
 
 /// Validation half of the clean deletion: every path must be
-/// workdir-relative, non-empty, free of `..` and resolve inside `root`.
-/// One bad path fails the whole op before anything is touched.
+/// workdir-relative, non-empty, free of `..` and resolve inside `root`
+/// (shared rules via `workspace::validate_rel_path`). One bad path fails
+/// the whole op before anything is touched.
 fn validate_clean_paths(root: &Path, paths: &[String]) -> Result<Vec<std::path::PathBuf>, String> {
     let mut resolved = Vec::with_capacity(paths.len());
     for path in paths {
@@ -2376,20 +2343,9 @@ fn validate_clean_paths(root: &Path, paths: &[String]) -> Result<Vec<std::path::
                 "clean path must be a non-empty workdir-relative path: `{path}`"
             ));
         }
-        let relative = Path::new(path);
-        if relative.is_absolute() || has_windows_prefix(relative) {
-            return Err(format!("clean path must be workdir-relative: `{path}`"));
-        }
-        if relative
-            .components()
-            .any(|component| component == std::path::Component::ParentDir)
-        {
-            return Err(format!("clean path must not contain `..`: `{path}`"));
-        }
-        let full = root.join(relative);
-        // Belt and braces (same containment rule as `read_workdir_file`),
-        // plus an explicit root guard: "." forms resolve onto the repo root.
-        if full.strip_prefix(root).is_err() || full == root {
+        let full = crate::workspace::validate_rel_path(root, path)?;
+        // Explicit root guard: "." forms resolve onto the repo root.
+        if full == root {
             return Err(format!("clean path escapes the repository: `{path}`"));
         }
         resolved.push(full);

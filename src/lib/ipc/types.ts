@@ -192,3 +192,16 @@ export type { CloneProgress as CloneProgressEvent } from "./gen/CloneProgress";
 
 /** `repo-changed` event payload. */
 export type { RepoChangedEvent } from "./gen/RepoChangedEvent";
+
+// ---------------------------------------------------------------------------
+// Workspace files — file browser / viewer / editor (Rust: workspace.rs)
+// ---------------------------------------------------------------------------
+
+export type { DirEntryKind } from "./gen/DirEntryKind";
+export type { DirEntryInfo } from "./gen/DirEntryInfo";
+export type { DirListing } from "./gen/DirListing";
+export type { FileContentKind } from "./gen/FileContentKind";
+export type { FileMeta } from "./gen/FileMeta";
+export type { FileIndexEntry } from "./gen/FileIndexEntry";
+export type { FileIndex } from "./gen/FileIndex";
+export type { NewEntryKind } from "./gen/NewEntryKind";

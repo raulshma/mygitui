@@ -546,6 +546,7 @@ export const COMMANDS: Command[] = [
       ["worktrees", "Worktrees"],
       ["reflog", "Reflog"],
       ["undo", "Undo"],
+      ["files", "Files"],
     ] as const
   ).map(([panel, label], index): Command => ({
     id: `panel.focus-${panel}`,
@@ -556,6 +557,34 @@ export const COMMANDS: Command[] = [
     shortcut: `ctrl+${index + 1}`,
     run: (ctx) => focusPanel(panel, ctx),
   })),
+
+  // -- Files (workdir browser / viewer / editor) -----------------------------
+  {
+    id: "files.quick-open",
+    title: "Go to file…",
+    section: "Files",
+    keywords: ["quick open", "fuzzy", "search file", "ctrl+p"],
+    shortcut: "ctrl+p",
+    when: (ctx) => ctx.repoId !== null,
+    run: () => emitUiEvent("files-quick-open"),
+  },
+  {
+    id: "files.reveal-active",
+    title: "Files: Reveal active file in tree",
+    section: "Files",
+    keywords: ["show", "locate", "scroll to"],
+    when: (ctx) => ctx.repoId !== null,
+    run: (ctx) => emitUiEvent("files-reveal-path", { repoId: ctx.repoId! }),
+  },
+  {
+    id: "files.save",
+    title: "Save file",
+    section: "Files",
+    keywords: ["write", "persist"],
+    shortcut: "ctrl+s",
+    when: (ctx) => ctx.repoId !== null,
+    run: () => emitUiEvent("files-save"),
+  },
 
   // -- App ------------------------------------------------------------------
   {
