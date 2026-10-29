@@ -1000,7 +1000,23 @@
             >
               <span class="sha">{v.commit.sha.slice(0, 7)}</span>
               {#each v.commit.refs as ref (ref)}
-                <span class="ref ref-{classifyRef(ref)}">{shortRefName(ref)}</span>
+                {@const kind = classifyRef(ref)}
+                {@const scope =
+                  kind === "local"
+                    ? "Local"
+                    : kind === "remote"
+                      ? "Remote"
+                      : kind === "tag"
+                        ? "Tag"
+                        : "HEAD"}
+                <span
+                  class="ref ref-{kind}"
+                  title={`${scope}: ${shortRefName(ref)}`}
+                  aria-label={`${scope}: ${shortRefName(ref)}`}
+                >
+                  <span class="ref-scope" aria-hidden="true">{scope}</span>
+                  <span class="ref-name">{shortRefName(ref)}</span>
+                </span>
               {/each}
               <span class="summary" title={v.commit.summary}>{v.commit.summary}</span>
               <span class="author">{v.commit.author.name}</span>
@@ -1384,14 +1400,30 @@
   /* ref chips (rows; CommitDetail carries its own copies) */
   .ref {
     flex: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
     max-width: 9rem;
-    overflow: hidden;
-    text-overflow: ellipsis;
     white-space: nowrap;
     padding: 0 0.35rem;
     border-radius: var(--m3-shape-extra-small, 4px);
     font-size: 0.6875rem;
     line-height: 1.4;
+  }
+
+  .ref-scope {
+    flex: none;
+    font-size: 0.55rem;
+    font-weight: 700;
+    letter-spacing: 0.025em;
+    text-transform: uppercase;
+    opacity: 0.8;
+  }
+
+  .ref-name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   .ref-local {
