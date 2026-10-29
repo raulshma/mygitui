@@ -239,9 +239,7 @@ pub(crate) fn natural_cmp(a: &str, b: &str) -> Ordering {
 }
 
 /// Consume the peeked digit run, returning it as a string.
-fn take_digits(
-    iter: &mut std::iter::Peekable<std::str::CharIndices<'_>>,
-) -> String {
+fn take_digits(iter: &mut std::iter::Peekable<std::str::CharIndices<'_>>) -> String {
     let mut out = String::new();
     while let Some((_, c)) = iter.peek().copied() {
         if !c.is_ascii_digit() {
@@ -257,7 +255,9 @@ fn take_digits(
 pub(crate) fn compare_entries(a: &DirEntryInfo, b: &DirEntryInfo) -> Ordering {
     let a_dir = matches!(a.kind, DirEntryKind::Dir | DirEntryKind::Submodule);
     let b_dir = matches!(b.kind, DirEntryKind::Dir | DirEntryKind::Submodule);
-    b_dir.cmp(&a_dir).then_with(|| natural_cmp(&a.name, &b.name))
+    b_dir
+        .cmp(&a_dir)
+        .then_with(|| natural_cmp(&a.name, &b.name))
 }
 
 // -- Reads -----------------------------------------------------------------------
@@ -348,7 +348,10 @@ pub(crate) fn list_dir_impl(
     builder.hidden(false);
     if include_ignored {
         // Show what git would hide: every filter off.
-        builder.git_ignore(false).git_exclude(false).git_global(false);
+        builder
+            .git_ignore(false)
+            .git_exclude(false)
+            .git_global(false);
         builder.ignore(false).parents(false).require_git(false);
     } else {
         // A repo is always a git repo here; requiring it keeps the
@@ -550,11 +553,7 @@ pub(crate) fn write_file_impl(
 }
 
 /// Synchronous body of [`repo_create_entry`].
-pub(crate) fn create_entry_impl(
-    root: &Path,
-    path: &str,
-    kind: NewEntryKind,
-) -> Result<(), String> {
+pub(crate) fn create_entry_impl(root: &Path, path: &str, kind: NewEntryKind) -> Result<(), String> {
     if contains_git_component(path) {
         return Err(format!("refusing to create inside `.git`: `{path}`"));
     }
@@ -566,19 +565,17 @@ pub(crate) fn create_entry_impl(
         std::fs::create_dir_all(parent).map_err(|e| format!("creating parent dirs: {e}"))?;
     }
     match kind {
-        NewEntryKind::File => std::fs::write(&full, b"")
-            .map_err(|e| format!("creating `{path}`: {e}")),
-        NewEntryKind::Dir => std::fs::create_dir(&full)
-            .map_err(|e| format!("creating `{path}`: {e}")),
+        NewEntryKind::File => {
+            std::fs::write(&full, b"").map_err(|e| format!("creating `{path}`: {e}"))
+        }
+        NewEntryKind::Dir => {
+            std::fs::create_dir(&full).map_err(|e| format!("creating `{path}`: {e}"))
+        }
     }
 }
 
 /// Synchronous body of [`repo_rename_entry`].
-pub(crate) fn rename_entry_impl(
-    root: &Path,
-    path: &str,
-    new_path: &str,
-) -> Result<(), String> {
+pub(crate) fn rename_entry_impl(root: &Path, path: &str, new_path: &str) -> Result<(), String> {
     if contains_git_component(path) || contains_git_component(new_path) {
         return Err("refusing to rename into or out of `.git`".into());
     }
@@ -667,7 +664,8 @@ pub async fn repo_list_dir(
         };
         list_dir_impl(&root, &path, include_ignored, &submodules, MAX_LIST_ENTRIES)
     });
-    rx.await.map_err(|_| "op queue closed before completion".to_string())?
+    rx.await
+        .map_err(|_| "op queue closed before completion".to_string())?
 }
 
 /// Size/content-classification/readonly/mtime for one file — lets the FE
@@ -779,5 +777,6 @@ pub async fn repo_file_index(
 
 /// Await an enqueued op's result (worker done or queue closed).
 async fn finish<T>(rx: tokio::sync::oneshot::Receiver<Result<T, String>>) -> Result<T, String> {
-    rx.await.map_err(|_| "op queue closed before completion".to_string())?
+    rx.await
+        .map_err(|_| "op queue closed before completion".to_string())?
 }

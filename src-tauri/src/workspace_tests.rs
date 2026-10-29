@@ -8,17 +8,13 @@ use std::path::Path;
 use crate::workspace::{
     compare_entries, create_entry_impl, delete_entry_impl, file_index_impl,
     file_index_impl_with_cap, list_dir_impl, natural_cmp, rename_entry_impl, stat_file_impl,
-    validate_rel_path, write_file_impl, DirEntryInfo, DirEntryKind, FileContentKind,
-    NewEntryKind,
+    validate_rel_path, write_file_impl, DirEntryInfo, DirEntryKind, FileContentKind, NewEntryKind,
 };
 
 /// Fresh, empty temp workdir with a `.git` marker dir (so helpers that
 /// look for a repo behave like real workdirs).
 fn temp_root(tag: &str) -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join(format!(
-        "mygitui-workspace-{}-{tag}",
-        std::process::id()
-    ));
+    let dir = std::env::temp_dir().join(format!("mygitui-workspace-{}-{tag}", std::process::id()));
     let _ = fs::remove_dir_all(&dir);
     fs::create_dir_all(dir.join(".git")).expect("mkdir root");
     dir
@@ -51,9 +47,21 @@ fn validate_rejects_escape_and_absolute_forms() {
         "",
         "../outside.txt",
         "src/../../outside.txt",
-        if cfg!(windows) { "C:\\abs.txt" } else { "/abs.txt" },
-        if cfg!(windows) { "C:drivrel.txt" } else { "/dev/null" },
-        if cfg!(windows) { "\\\\server\\share" } else { "/tmp" },
+        if cfg!(windows) {
+            "C:\\abs.txt"
+        } else {
+            "/abs.txt"
+        },
+        if cfg!(windows) {
+            "C:drivrel.txt"
+        } else {
+            "/dev/null"
+        },
+        if cfg!(windows) {
+            "\\\\server\\share"
+        } else {
+            "/tmp"
+        },
     ] {
         assert!(
             validate_rel_path(&root, bad).is_err(),
@@ -110,7 +118,11 @@ fn list_dir_respects_gitignore_until_included() {
 
     let listing = list_dir_impl(&root, "", false, &[], 100).expect("listing");
     let names: Vec<&str> = listing.entries.iter().map(|e| e.name.as_str()).collect();
-    assert_eq!(names, vec![".gitignore", "src.rs"], "gitignored entries hidden");
+    assert_eq!(
+        names,
+        vec![".gitignore", "src.rs"],
+        "gitignored entries hidden"
+    );
 
     let listing = list_dir_impl(&root, "", true, &[], 100).expect("listing");
     let names: Vec<&str> = listing.entries.iter().map(|e| e.name.as_str()).collect();
@@ -130,8 +142,8 @@ fn list_dir_marks_submodules_and_sizes() {
     touch(&root, "plain.txt", b"12345");
 
     // Root level: `vendor` is a plain dir; the submodule is one level down.
-    let root_listing = list_dir_impl(&root, "", false, &["vendor/lib".to_string()], 100)
-        .expect("listing");
+    let root_listing =
+        list_dir_impl(&root, "", false, &["vendor/lib".to_string()], 100).expect("listing");
     fn find<'a>(
         listing: &'a crate::workspace::DirListing,
         name: &str,
@@ -144,12 +156,15 @@ fn list_dir_marks_submodules_and_sizes() {
     }
     assert_eq!(find(&root_listing, "vendor").kind, DirEntryKind::Dir);
     assert_eq!(find(&root_listing, "plain.txt").size, Some(5));
-    assert_eq!(find(&root_listing, "vendor").size, None, "dirs carry no size");
+    assert_eq!(
+        find(&root_listing, "vendor").size,
+        None,
+        "dirs carry no size"
+    );
 
     // Listing `vendor` marks `lib` (rel path `vendor/lib`) as a submodule.
-    let vendor_listing =
-        list_dir_impl(&root, "vendor", false, &["vendor/lib".to_string()], 100)
-            .expect("vendor listing");
+    let vendor_listing = list_dir_impl(&root, "vendor", false, &["vendor/lib".to_string()], 100)
+        .expect("vendor listing");
     assert_eq!(find(&vendor_listing, "lib").kind, DirEntryKind::Submodule);
     let _ = fs::remove_dir_all(&root);
 }
@@ -168,7 +183,11 @@ fn list_dir_skips_git_and_reports_truncation() {
 
     let full = list_dir_impl(&root, "", false, &[], 100).expect("listing");
     assert!(!full.truncated);
-    assert_eq!(full.entries.len(), 9, "8 f-files + keep.txt (no .gitignore here)");
+    assert_eq!(
+        full.entries.len(),
+        9,
+        "8 f-files + keep.txt (no .gitignore here)"
+    );
     let _ = fs::remove_dir_all(&root);
 }
 
@@ -281,10 +300,7 @@ fn rename_entry_moves_and_validates() {
 
     rename_entry_impl(&root, "old.txt", "destdir/renamed.txt").unwrap();
     assert!(!root.join("old.txt").exists());
-    assert_eq!(
-        fs::read(root.join("destdir/renamed.txt")).unwrap(),
-        b"data"
-    );
+    assert_eq!(fs::read(root.join("destdir/renamed.txt")).unwrap(), b"data");
     assert!(rename_entry_impl(&root, "missing.txt", "x.txt").is_err());
     assert!(rename_entry_impl(&root, "destdir/renamed.txt", "destdir/taken.txt").is_err());
     assert!(rename_entry_impl(&root, "destdir", "../escape").is_err());
@@ -302,7 +318,10 @@ fn delete_entry_removes_files_and_trees() {
     assert!(!root.join("file.txt").exists());
     delete_entry_impl(&root, "tree").unwrap();
     assert!(!root.join("tree").exists());
-    assert!(delete_entry_impl(&root, "file.txt").is_err(), "gone already");
+    assert!(
+        delete_entry_impl(&root, "file.txt").is_err(),
+        "gone already"
+    );
     assert!(delete_entry_impl(&root, ".git").is_err(), ".git protected");
     let _ = fs::remove_dir_all(&root);
 }
