@@ -4,7 +4,7 @@
    * header facts + sync quick actions + the configurable main splitter tree
    * (SplitContainer).
    * The default tree is VSCode-like: a narrow source-control sidebar
-   * (CommitBar pinned above StatusPanel) on the left, the Diff panel as the
+   * (StatusPanel above a pinned CommitBar) on the left, the Diff panel as the
    * center editor, and a collapsible History sidebar on the right. The
    * VSCode-style activity bar at the far left switches primary-sidebar
    * panels; collapsing either sidebar keeps it mounted and replaces it with
@@ -965,10 +965,9 @@
 </script>
 
 {#snippet statusPanel()}
-  <!-- VSCode-style source-control column: commit box pinned on top, the
-       working-copy list scrolls underneath. -->
+  <!-- VSCode-style source-control column: changes scroll above the pinned
+       commit box. -->
   <div class="changes-panel">
-    <CommitBar {repoId} onCommitted={refresh} />
     <StatusPanel
       {status}
       {repoId}
@@ -977,6 +976,7 @@
       onAfterMutation={refresh}
       bind:selected
     />
+    <CommitBar {repoId} onCommitted={refresh} />
   </div>
 {/snippet}
 {#snippet editorPanel()}
@@ -1533,7 +1533,7 @@
     outline-offset: -2px;
   }
 
-  /* Source-control column: commit box + scrolling changes list. */
+  /* Source-control column: scrolling changes list + bottom-pinned commit box. */
   .changes-panel {
     flex: 1;
     min-height: 0;

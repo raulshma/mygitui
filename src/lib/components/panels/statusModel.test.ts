@@ -41,38 +41,37 @@ describe("classifyEntry", () => {
     );
   });
 
-  it("puts worktree-side changes in Unstaged", () => {
+  it("puts worktree-side changes in Changes", () => {
     expect(classifyEntry(entry("a.ts", UNMODIFIED, "modified"))).toEqual([
-      "unstaged",
+      "changes",
     ]);
     expect(classifyEntry(entry("a.ts", UNMODIFIED, "deleted"))).toEqual([
-      "unstaged",
+      "changes",
     ]);
   });
 
-  it("an entry with changes on both sides appears in Staged AND Unstaged", () => {
+  it("an entry with changes on both sides appears in Staged Changes AND Changes", () => {
     expect(
       classifyEntry(entry("a.ts", "modified", "modified")),
-    ).toEqual(["staged", "unstaged"]);
+    ).toEqual(["staged", "changes"]);
   });
 
-  it("untracked worktree files land in Untracked", () => {
+  it("untracked worktree files land in Changes", () => {
     expect(classifyEntry(entry("new.ts", UNMODIFIED, "untracked"))).toEqual([
-      "untracked",
+      "changes",
     ]);
   });
 
-  it("conflicted entries land in Conflicted (plus Unstaged when worktree changed)", () => {
+  it("conflicted entries remain in Changes with a conflict indicator", () => {
     expect(classifyEntry(entry("c.ts", "conflicted", UNMODIFIED))).toEqual([
-      "conflicted",
+      "changes",
     ]);
     expect(classifyEntry(entry("c.ts", "conflicted", "modified"))).toEqual([
-      "conflicted",
-      "unstaged",
+      "changes",
     ]);
     // Worktree-side conflict alone also counts.
     expect(classifyEntry(entry("c.ts", UNMODIFIED, "conflicted"))).toEqual([
-      "conflicted",
+      "changes",
     ]);
   });
 
@@ -140,10 +139,8 @@ describe("kindLabel", () => {
 describe("SECTION_LABELS", () => {
   it("uses VSCode source-control wording", () => {
     expect(SECTION_LABELS).toEqual({
-      conflicted: "Merge Changes",
       staged: "Staged Changes",
-      unstaged: "Changes",
-      untracked: "Untracked Changes",
+      changes: "Changes",
     });
   });
 });
@@ -220,33 +217,36 @@ describe("buildStatusIndex + filterSections", () => {
   const INDEX = buildStatusIndex(ENTRIES);
 
   it("builds rows per (entry, section) in SECTION_ORDER", () => {
-    expect(INDEX.total).toBe(8); // both.ts and conflict.ts count twice
+    expect(INDEX.total).toBe(7); // only paths changed on both sides count twice
     expect(
       INDEX.rows.map((row) => `${row.section}:${row.entry.path}`),
     ).toEqual([
-      "conflicted:conflict.ts",
       "staged:src/staged.ts",
       "staged:src/both.ts",
       "staged:moved.ts",
-      "unstaged:src/both.ts",
-      "unstaged:src/dirty.ts",
-      "unstaged:conflict.ts",
-      "untracked:notes/new.txt",
+      "changes:src/both.ts",
+      "changes:src/dirty.ts",
+      "changes:notes/new.txt",
+      "changes:conflict.ts",
     ]);
-    expect(INDEX.bySection.untracked).toHaveLength(1);
+    expect(INDEX.bySection.changes).toHaveLength(4);
   });
 
-  it("row kind reflects the section's side (staged→index, unstaged→worktree)", () => {
+  it("row kind reflects each section's status side", () => {
     const stagedBoth = INDEX.bySection.staged.find(
       (r) => r.entry.path === "src/both.ts",
     );
-    const unstagedBoth = INDEX.bySection.unstaged.find(
+    const changesBoth = INDEX.bySection.changes.find(
       (r) => r.entry.path === "src/both.ts",
     );
     expect(stagedBoth?.kind).toBe("modified");
-    expect(unstagedBoth?.kind).toBe("modified");
-    expect(INDEX.bySection.conflicted[0]?.kind).toBe("conflicted");
-    expect(INDEX.bySection.untracked[0]?.kind).toBe("untracked");
+    expect(changesBoth?.kind).toBe("modified");
+    expect(
+      INDEX.bySection.changes.find((r) => r.entry.path === "conflict.ts")?.kind,
+    ).toBe("conflicted");
+    expect(
+      INDEX.bySection.changes.find((r) => r.entry.path === "notes/new.txt")?.kind,
+    ).toBe("untracked");
   });
 
   it("precomputes dir/base and lowercase search text including old_path", () => {
@@ -259,7 +259,7 @@ describe("buildStatusIndex + filterSections", () => {
   it("empty needle returns every (non-empty) section in order", () => {
     const sections = filterSections(INDEX, "");
     expect(sections.map((s) => s.id)).toEqual([...SECTION_ORDER]);
-    expect(sections[0]?.rows).toHaveLength(1); // conflicted
+    expect(sections[0]?.rows).toHaveLength(3); // Staged Changes
   });
 
   it("filtering is case-insensitive over path and old_path", () => {

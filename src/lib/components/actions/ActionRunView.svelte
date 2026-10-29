@@ -21,6 +21,7 @@
     truncateLines,
     RUN_LINE_CAP,
   } from "./actionsModel";
+  import { actionLogSegments } from "./actionLog";
   import { readStashedActionRun } from "./runPopout";
 
   let {
@@ -233,8 +234,24 @@
           </p>
         {:else}
           {#each shown as line, i (i)}
+            {@const segments = actionLogSegments(line)}
             <div class="log-line" class:notice={i === 0 && run.dropped > 0}>
-              {line}
+              {#each segments as segment, segmentIndex (segmentIndex)}
+                <span
+                  style:color={segment.color}
+                  style:background-color={segment.background}
+                  style:font-weight={segment.bold ? "700" : undefined}
+                  style:opacity={segment.dim ? "0.7" : undefined}
+                  style:font-style={segment.italic ? "italic" : undefined}
+                  style:text-decoration-line={segment.underline && segment.strike
+                    ? "underline line-through"
+                    : segment.underline
+                      ? "underline"
+                      : segment.strike
+                        ? "line-through"
+                        : undefined}
+                >{segment.text}</span>
+              {/each}
             </div>
           {/each}
           {#if live}
@@ -477,6 +494,7 @@
   .log-pane {
     flex: 1;
     min-height: 0;
+    min-width: 0;
     display: flex;
     flex-direction: column;
     margin: 0.5rem;
@@ -521,6 +539,7 @@
   .log-body {
     flex: 1;
     min-height: 0;
+    min-width: 0;
     overflow: auto;
     padding: 0.5rem 0.65rem;
     background: var(--m3-surface-container-lowest, var(--m3-surface));
@@ -532,8 +551,9 @@
   }
 
   .log-line {
-    white-space: pre-wrap;
-    overflow-wrap: anywhere;
+    width: max-content;
+    min-width: 100%;
+    white-space: pre;
     min-height: 1.1em;
   }
 

@@ -2,11 +2,10 @@
   /**
    * Source-control sidebar — VSCode-style working-copy list.
    *
-   * Sections come from the pure model in `statusModel.ts` (Merge Changes /
-   * Staged Changes / Changes / Untracked Changes). One path can appear in
-   * Staged AND Changes, exactly like `git status`. Rows are compact: status
-   * letter, file icon, bold basename on the left, dimmed directory on the
-   * right, then hover actions.
+   * Sections come from the pure model in `statusModel.ts` (Staged Changes /
+   * Changes). One path can appear in both groups when it has staged and
+   * unstaged edits. The right-side status letter identifies added, modified,
+   * deleted, untracked, or conflicted files.
    *
    * Interaction: click opens the diff (Conflicted rows go to the optional
    * conflict editor when provided), or opens the submodule as a repository
@@ -18,8 +17,8 @@
    * Submodules: `submodules(repoId)` supplies checked-out vs recorded state.
    * A submodule that the superproject's status already reports is enriched
    * in place (folder icon + short "new commits"/"modified"/"untracked"
-   * tag); modules with no status entry (uninitialized, broken) get their own
-   * Submodules section so they can be initialized/updated from here.
+   * tag); modules with no status entry (uninitialized, broken) appear in the
+   * Changes group so they can be initialized/updated from here.
    */
   import type { RepoStatus, StatusEntry, SubmoduleInfo } from "$lib/ipc/types";
   import {
@@ -40,7 +39,12 @@
   import GitignoreGallery from "$lib/components/panels/GitignoreGallery.svelte";
   import Icon from "$lib/components/icons/Icon.svelte";
   import { IconButton, Spinner } from "$lib/components/m3";
-  import { fileIconForPath } from "$lib/components/icons/fileIcons";
+import {
+  fileIconColorForPath,
+  fileIconForPath,
+  FILE_ICON_THEMES,
+} from "$lib/components/icons/fileIcons";
+import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.svelte";
   import { openPanelPopout } from "$lib/layout/popout";
   import iconStage from "@ktibow/iconset-material-symbols/add";
   import iconUnstage from "@ktibow/iconset-material-symbols/remove";
@@ -61,6 +65,7 @@
   import iconChevron from "@ktibow/iconset-material-symbols/chevron-right";
   import iconAhead from "@ktibow/iconset-material-symbols/arrow-upward";
   import iconBehind from "@ktibow/iconset-material-symbols/arrow-downward";
+import iconPalette from "@ktibow/iconset-material-symbols/palette";
   import {
     buildStatusIndex,
     filterSections,
@@ -98,14 +103,13 @@
     onOpenConflict?: (entry: StatusEntry) => void;
   } = $props();
 
+  type DisplaySection = StatusSectionView & { modules: SubmoduleInfo[] };
+
   let filterText = $state("");
   let collapsed = $state<Record<SectionId, boolean>>({
-    conflicted: false,
     staged: false,
-    unstaged: false,
-    untracked: false,
+    changes: false,
   });
-  let modulesCollapsed = $state(false);
 
   /** Roving focus: key of the focused row (null → first visible row). */
   let focusKey: string | null = $state(null);
@@ -171,30 +175,6 @@
   const index: StatusIndex | null = $derived(
     status ? buildStatusIndex(status.entries) : null,
   );
-  const sections = $derived(index ? filterSections(index, filterText) : []);
-  /** Rows actually on screen (collapsed sections excluded) for key nav. */
-  const visibleRows = $derived(
-    sections.filter((s) => !collapsed[s.id]).flatMap((s) => s.rows),
-  );
-  /** The single tab-reachable row (falls back to the first visible row when
-   *  the focused one is filtered out or collapsed away). */
-  const tabIndexKey = $derived(
-    focusKey !== null && visibleRows.some((r) => r.key === focusKey)
-      ? focusKey
-      : (visibleRows[0]?.key ?? null),
-  );
-  /** Staging controls need a repo and no in-flight mutation. */
-  const canMutate = $derived(repoId !== null && !mutating);
-  /** At least one Worktree/Untracked row can be staged. */
-  const canStageAll = $derived(
-    canMutate &&
-      index !== null &&
-      index.bySection.unstaged.length + index.bySection.untracked.length > 0,
-  );
-  /** At least one index-side change can be unstaged. */
-  const canUnstageAll = $derived(
-    canMutate && index !== null && index.bySection.staged.length > 0,
-  );
   /** Filter text without surrounding whitespace. */
   const query = $derived(filterText.trim());
 
@@ -222,6 +202,49 @@
       )
       .sort((a, b) => a.path.localeCompare(b.path));
   });
+
+  /** Status sections with exceptional submodules folded into Changes. */
+  const sections = $derived.by<DisplaySection[]>(() => {
+    const filtered = index ? filterSections(index, filterText) : [];
+    const withModules = filtered.map((section) => ({
+      ...section,
+      modules: section.id === "changes" ? extraModules : [],
+    }));
+    if (extraModules.length === 0 || filtered.some((s) => s.id === "changes")) {
+      return withModules;
+    }
+    return [
+      ...withModules,
+      {
+        id: "changes",
+        label: "Changes",
+        rows: [],
+        modules: extraModules,
+      },
+    ];
+  });
+  /** Rows actually on screen (collapsed sections excluded) for key nav. */
+  const visibleRows = $derived(
+    sections.filter((s) => !collapsed[s.id]).flatMap((s) => s.rows),
+  );
+  /** The single tab-reachable row (falls back to the first visible row when
+   *  the focused one is filtered out or collapsed away). */
+  const tabIndexKey = $derived(
+    focusKey !== null && visibleRows.some((r) => r.key === focusKey)
+      ? focusKey
+      : (visibleRows[0]?.key ?? null),
+  );
+  /** Staging controls need a repo and no in-flight mutation. */
+  const canMutate = $derived(repoId !== null && !mutating);
+  /** At least one non-conflicted working-tree row can be staged. */
+  const canStageAll = $derived(
+    canMutate &&
+      (index?.bySection.changes.some((row) => row.kind !== "conflicted") ?? false),
+  );
+  /** At least one index-side change can be unstaged. */
+  const canUnstageAll = $derived(
+    canMutate && index !== null && index.bySection.staged.length > 0,
+  );
 
   async function reloadModules(): Promise<void> {
     if (!repoId) {
@@ -312,7 +335,7 @@
     if (row.entry.old_path) lines.push(`from ${row.entry.old_path}`);
     if (info) lines.push(`Submodule: ${submoduleDisplay(info).detail}`);
     if (row.section === "staged") lines.push("S unstage");
-    else if (row.section !== "conflicted") lines.push("S stage · D discard");
+    else if (row.kind !== "conflicted") lines.push("S stage · D discard");
     return lines.join("\n");
   }
 
@@ -385,7 +408,7 @@
       void openSubmodule(info);
       return;
     }
-    if (row.section === "conflicted" && onOpenConflict !== undefined) {
+    if (row.kind === "conflicted" && onOpenConflict !== undefined) {
       onOpenConflict(row.entry);
     } else {
       onOpenDiff(row.entry);
@@ -411,12 +434,12 @@
   }
 
   /**
-   * Row action: Staged rows unstage; everything else stages. The visual
+   * Row action: Staged rows unstage; Changes rows stage. The visual
    * state follows the refreshed status once the async mutation lands.
    */
   function stageRow(row: StatusRow, event?: MouseEvent): void {
     event?.stopPropagation();
-    if (!repoId || row.section === "conflicted") return;
+    if (!repoId || row.kind === "conflicted") return;
     const unstage = row.section === "staged";
     const isModule = moduleByPath.has(row.entry.path);
     void mutate(
@@ -427,12 +450,12 @@
     });
   }
 
-  /** Section-header action: stage everything in Changes/Untracked, unstage Staged. */
+  /** Section-header action: stage Changes or unstage Staged Changes. */
   function stageSection(section: StatusSectionView, event: MouseEvent): void {
     event.stopPropagation();
-    if (!repoId || section.id === "conflicted") return;
+    if (!repoId) return;
     const unstage = section.id === "staged";
-    const rows = section.rows.filter((row) => row.section !== "conflicted");
+    const rows = section.rows.filter((row) => row.kind !== "conflicted");
     if (rows.length === 0) return;
     const hasModule = rows.some((row) => moduleByPath.has(row.entry.path));
     void mutate(
@@ -448,9 +471,9 @@
   }
 
   /**
-   * All-sections header action. Unstage goes through `stage_all` (index :=
-   * HEAD); stage targets every Worktree/Untracked row explicitly so
-   * conflicted files are never auto-resolved by `git add -A`.
+   * Toolbar action. Unstage goes through `stage_all` (index := HEAD); stage
+   * targets every non-conflicted Changes row explicitly so conflicts are
+   * never auto-resolved by `git add -A`.
    */
   function onStageAll(unstage: boolean): void {
     if (!repoId) return;
@@ -464,16 +487,10 @@
     }
     const source = index;
     if (source === null) return;
-    const conflicted = new Set(
-      source.bySection.conflicted.map((row) => row.entry.path),
-    );
     const paths: string[] = [];
-    for (const row of [
-      ...source.bySection.unstaged,
-      ...source.bySection.untracked,
-    ]) {
+    for (const row of source.bySection.changes) {
       const path = row.entry.path;
-      if (!conflicted.has(path) && !paths.includes(path)) paths.push(path);
+      if (row.kind !== "conflicted" && !paths.includes(path)) paths.push(path);
     }
     if (paths.length === 0) return;
     const hasModule = paths.some((path) => moduleByPath.has(path));
@@ -513,14 +530,14 @@
         id: "stage-all",
         label: "Stage all changes",
         icon: iconStageAll,
-        disabled: !canMutate,
+        disabled: !canStageAll,
         run: () => onStageAll(false),
       },
       {
         id: "unstage-all",
         label: "Unstage all changes",
         icon: iconUnstageAll,
-        disabled: !canMutate,
+        disabled: !canUnstageAll,
         run: () => onStageAll(true),
       },
     ];
@@ -541,6 +558,15 @@
         },
       );
     }
+    entries.push({ separator: true });
+    for (const option of FILE_ICON_THEMES) {
+      entries.push({
+        id: `file-icons-${option.id}`,
+        label: `${fileIconPreferences.theme === option.id ? "✓ " : ""}${option.label} file icons`,
+        icon: iconPalette,
+        run: () => fileIconPreferences.setTheme(option.id),
+      });
+    }
     showMenuAt(event, entries);
   }
 
@@ -554,7 +580,7 @@
       return;
     }
 
-    if (row.section !== "staged" && row.section !== "conflicted") {
+    if (row.section !== "staged" && row.kind !== "conflicted") {
       entries.push({
         id: "stage",
         label: "Stage",
@@ -609,7 +635,7 @@
         },
       );
     } else {
-      if (row.section !== "conflicted") {
+      if (row.kind !== "conflicted") {
         entries.push({
           id: "discard",
           label: "Discard changes…",
@@ -617,7 +643,7 @@
           run: () => (discardCandidate = row),
         });
       }
-      if (row.section === "untracked") {
+      if (row.kind === "untracked") {
         for (const choice of choicesFor(path)) {
           entries.push({
             id: `ignore-${choice.label}`,
@@ -692,7 +718,7 @@
 
   function requestDiscard(row: StatusRow, event?: MouseEvent): void {
     event?.stopPropagation();
-    if (!canMutate || row.section === "staged" || row.section === "conflicted") {
+    if (!canMutate || row.section === "staged" || row.kind === "conflicted") {
       return;
     }
     if (moduleByPath.has(row.entry.path)) return;
@@ -752,14 +778,14 @@
       selected = [row.entry.path];
       openRow(row);
     } else if (event.key === "s" || event.key === "S") {
-      if (row.section !== "conflicted") {
+      if (row.kind !== "conflicted") {
         event.preventDefault();
         stageRow(row);
       }
     } else if (event.key === "d" || event.key === "D") {
       if (
         row.section !== "staged" &&
-        row.section !== "conflicted" &&
+        row.kind !== "conflicted" &&
         !moduleByPath.has(row.entry.path)
       ) {
         event.preventDefault();
@@ -780,9 +806,6 @@
     collapsed[id] = !collapsed[id];
   }
 
-  function toggleModules(): void {
-    modulesCollapsed = !modulesCollapsed;
-  }
 </script>
 
 <svelte:window
@@ -819,7 +842,7 @@
       <IconButton
         icon={iconStageAll}
         label="Stage all files"
-        title="Stage every file in Changes and Untracked Changes (all sections)"
+        title="Stage every file in Changes"
         dense
         disabled={!canStageAll}
         onclick={() => onStageAll(false)}
@@ -907,22 +930,23 @@
       <div class="tree" role="tree" aria-label="Changed files" tabindex="-1">
         {#each sections as section (section.id)}
           <div class="section" role="group" aria-labelledby={`section-${section.id}`}>
-            <div class="section-header" class:danger={section.id === "conflicted"}>
+            <div class="section-header">
               <button
                 class="section-toggle"
                 type="button"
                 id={`section-${section.id}`}
                 aria-expanded={!collapsed[section.id]}
-                aria-label={`${section.label} (${section.rows.length}), ${collapsed[section.id] ? "expand" : "collapse"}`}
+                aria-label={`${section.label} (${section.rows.length + section.modules.length}), ${collapsed[section.id] ? "expand" : "collapse"}`}
                 onclick={() => toggleSection(section.id)}
               >
                 <span class="chevron" class:closed={collapsed[section.id]}>
                   <Icon icon={iconChevron} size={13} />
                 </span>
                 <span class="section-name">{section.label}</span>
-                <span class="count">{section.rows.length}</span>
+                <span class="count">{section.rows.length + section.modules.length}</span>
               </button>
-              {#if canMutate && section.id !== "conflicted"}
+              {#if canMutate &&
+                (section.id === "staged" || section.rows.some((row) => row.kind !== "conflicted"))}
                 <span class="section-action">
                   <IconButton
                     icon={section.id === "staged" ? iconUnstage : iconStage}
@@ -944,7 +968,11 @@
                   role="treeitem"
                   aria-selected={isSelected(row.entry.path)}
                   aria-label={rowAriaLabel(row, info)}
-                  aria-keyshortcuts={row.section === "staged" ? "S" : row.section === "conflicted" ? undefined : "S D"}
+                  aria-keyshortcuts={row.section === "staged"
+                    ? "S"
+                    : row.kind === "conflicted"
+                      ? undefined
+                      : "S D"}
                   tabindex={row.key === tabIndexKey ? 0 : -1}
                   data-row-key={row.key}
                   data-kind={row.kind}
@@ -959,10 +987,19 @@
                       visibleRows.findIndex((r) => r.key === row.key),
                     )}
                 >
-                  <Icon
-                    icon={info ? iconModule : fileIconForPath(row.entry.path)}
-                    size={14}
-                  />
+                  {#if info}
+                    <Icon icon={iconModule} size={14} />
+                  {:else}
+                    <span
+                      class="file-icon"
+                      style:color={fileIconColorForPath(row.entry.path, fileIconPreferences.theme)}
+                    >
+                      <Icon
+                        icon={fileIconForPath(row.entry.path, fileIconPreferences.theme)}
+                        size={14}
+                      />
+                    </span>
+                  {/if}
                   <span class="path">
                     <span class="base" title={row.entry.path}>{row.base}</span>
                     {#if row.dir}
@@ -976,7 +1013,7 @@
                   {/if}
                   <span
                     class={`kind ${kindClass(row.kind)}`}
-                    title={kindLabel(row.kind)}
+                    title={`${row.entry.path} · ${kindLabel(row.kind)}`}
                     aria-hidden="true"
                   >
                     {kindLetter(row.kind)}
@@ -992,7 +1029,7 @@
                         disabled={!canMutate}
                         onclick={(event) => stageRow(row, event)}
                       />
-                    {:else if row.section !== "conflicted"}
+                    {:else if row.kind !== "conflicted"}
                       <IconButton
                         icon={iconStage}
                         label={`Stage ${row.entry.path}`}
@@ -1029,7 +1066,7 @@
                         }}
                       />
                     {/if}
-                    {#if row.section === "untracked" && !info && canMutate}
+                    {#if row.kind === "untracked" && !info && canMutate}
                       <span class="ignore-wrap">
                         <IconButton
                           icon={iconIgnore}
@@ -1069,40 +1106,8 @@
                   </span>
                 </div>
               {/each}
-            {/if}
-          </div>
-        {/each}
 
-        {#if extraModules.length > 0}
-          <div class="section module-section" role="group" aria-labelledby="section-submodules">
-            <div class="section-header">
-              <button
-                class="section-toggle"
-                type="button"
-                id="section-submodules"
-                aria-expanded={!modulesCollapsed}
-                aria-label={`Submodules (${extraModules.length}), ${modulesCollapsed ? "expand" : "collapse"}`}
-                onclick={toggleModules}
-              >
-                <span class="chevron" class:closed={modulesCollapsed}>
-                  <Icon icon={iconChevron} size={13} />
-                </span>
-                <span class="section-name">Submodules</span>
-                <span class="count">{extraModules.length}</span>
-              </button>
-              <span class="section-action">
-                <IconButton
-                  icon={iconRefresh}
-                  label="Refresh submodules"
-                  title={moduleLoading ? "Refreshing submodules…" : "Refresh submodules"}
-                  dense
-                  disabled={moduleLoading}
-                  onclick={() => void reloadModules()}
-                />
-              </span>
-            </div>
-            {#if !modulesCollapsed}
-              {#each extraModules as info (info.path)}
+              {#each section.modules as info (info.path)}
                 {@const display = submoduleDisplay(info)}
                 {@const parts = splitPath(info.path)}
                 <div
@@ -1134,7 +1139,13 @@
                       </span>
                     {/if}
                   </button>
-                  <span class="kind k-module" title="Submodule" aria-hidden="true">S</span>
+                  <span
+                    class="kind k-module"
+                    title={`${info.path} · ${display.detail}`}
+                    aria-hidden="true"
+                  >
+                    S
+                  </span>
                   <span class="row-actions">
                     <IconButton
                       icon={iconUpdate}
@@ -1171,7 +1182,7 @@
               {/each}
             {/if}
           </div>
-        {/if}
+        {/each}
       </div>
     {/if}
   {:else}
@@ -1209,6 +1220,7 @@
     display: flex;
     flex-direction: column;
     min-height: 0;
+    min-width: 0;
     font-size: 0.8125rem;
     background: var(--m3-surface-container-low, var(--m3-surface));
     color: var(--m3-on-surface);
@@ -1379,22 +1391,13 @@
     border-top: 1px solid var(--app-border, var(--m3-outline-variant));
   }
 
-  .section-header.danger .section-toggle {
-    color: var(--app-deleted, var(--m3-error));
-  }
-
-  .section-header.danger .count {
-    background: var(--app-conflicted-bg, var(--m3-error-container));
-    color: var(--app-deleted, var(--m3-error));
-  }
-
   .section-toggle {
     flex: 1;
     min-width: 0;
     display: flex;
     align-items: center;
     gap: 0.3rem;
-    height: 1.85rem;
+    height: 1.5rem;
     border: none;
     background: transparent;
     color: var(--m3-on-surface-variant, var(--m3-on-surface));
@@ -1483,11 +1486,11 @@
     align-items: center;
     gap: 0.4rem;
     min-width: 0;
-    min-height: 1.75rem;
-    padding: 0 0.45rem 0 0.5rem;
+    min-height: 1.375rem;
+    padding: 0 0.4rem 0 0.45rem;
     cursor: pointer;
     content-visibility: auto;
-    contain-intrinsic-size: auto 1.75rem;
+    contain-intrinsic-size: auto 1.375rem;
   }
 
   .row:hover {
@@ -1514,10 +1517,21 @@
     opacity: 0.9;
   }
 
-  /*
-   * VSCode-style change letter: a fixed right-hand column. Hovering the row
-   * swaps it for the inline actions, so the path keeps the full width.
-   */
+  .file-icon {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    line-height: 0;
+  }
+
+  .file-icon :global(svg) {
+    flex: none;
+    opacity: 1;
+  }
+
+  /* VSCode-style state letter: fixed at the right and independently
+     hoverable so its tooltip can identify the file and state. */
   .kind {
     flex: none;
     width: 1rem;
@@ -1528,13 +1542,9 @@
     font-weight: 700;
     font-family: var(--app-font-mono, ui-monospace, Consolas, monospace);
     line-height: 1;
-    transition: opacity 0.1s ease;
-  }
-
-  .row:hover .kind,
-  .row:focus-visible .kind,
-  .row:has(:focus-visible) .kind {
-    opacity: 0;
+    position: relative;
+    z-index: 1;
+    cursor: help;
   }
 
   .k-added {
@@ -1570,11 +1580,10 @@
     min-width: 0;
     display: flex;
     align-items: baseline;
-    gap: 0.4rem;
+    gap: 0.35rem;
     overflow: hidden;
-    font-family: var(--app-font-mono, ui-monospace, Consolas, monospace);
-    font-size: 0.78125rem;
-    line-height: 1.3;
+    font-size: 0.75rem;
+    line-height: 1.25;
   }
 
   .base {
@@ -1584,7 +1593,7 @@
     text-overflow: ellipsis;
     white-space: nowrap;
     color: var(--m3-on-surface);
-    font-weight: 600;
+    font-weight: 400;
   }
 
   /* VSCode tints the label itself, so status reads without the letter. */
@@ -1615,15 +1624,20 @@
     text-decoration-thickness: 1px;
   }
 
-  /* The directory yields all its space before the filename shrinks. */
+  /* Keep the basename at the left; align its muted directory suffix at the
+     right edge and truncate that suffix when the row gets narrow. */
   .dir {
     flex: 0 9999 auto;
     min-width: 0;
+    max-width: 48%;
+    margin-left: auto;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    text-align: right;
     color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    opacity: 0.85;
+    opacity: 0.72;
+    font-size: 0.6875rem;
   }
 
   .module-tag {
@@ -1647,7 +1661,7 @@
 
   .row-actions {
     position: absolute;
-    right: 0.2rem;
+    right: 1.35rem;
     top: 50%;
     transform: translateY(-50%);
     display: flex;
@@ -1819,13 +1833,6 @@
 
     .row-actions::before {
       display: none;
-    }
-
-    /* Actions sit in the flow, so the letter must stay put. */
-    .row:hover .kind,
-    .row:focus-visible .kind,
-    .row:has(:focus-visible) .kind {
-      opacity: 1;
     }
 
     .section-action {

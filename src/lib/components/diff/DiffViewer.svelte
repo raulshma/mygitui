@@ -40,6 +40,7 @@
     wrapMetrics,
   } from "$lib/components/diff/wrapHeights";
   import { readWrapPref, writeWrapPref } from "$lib/diff/wrapPref";
+  import { readDiffModePref, writeDiffModePref } from "$lib/diff/modePref";
   import {
     isLineSelected,
     selectedSet as toSelectedSet,
@@ -58,7 +59,7 @@
 
   let {
     files,
-    mode = $bindable("split"),
+    mode = $bindable(readDiffModePref()),
     wrap = $bindable(readWrapPref()),
     onLoadImage,
     repoId = undefined,
@@ -187,7 +188,12 @@
   }
 
   function cycleMode(): void {
-    mode = mode === "split" ? "unified" : "split";
+    setMode(mode === "split" ? "unified" : "split");
+  }
+
+  function setMode(next: DiffMode): void {
+    mode = next;
+    writeDiffModePref(next);
   }
 
   // Palette command rides the bus; every mounted viewer flips its mode.
@@ -608,7 +614,7 @@
           class="seg"
           class:on={mode === "split"}
           aria-pressed={mode === "split"}
-          onclick={() => (mode = "split")}
+          onclick={() => setMode("split")}
           title="Show old and new side by side"
         >Split</button>
         <button
@@ -616,7 +622,7 @@
           class="seg"
           class:on={mode === "unified"}
           aria-pressed={mode === "unified"}
-          onclick={() => (mode = "unified")}
+          onclick={() => setMode("unified")}
           title="Show old and new in one column"
         >Unified</button>
       </div>

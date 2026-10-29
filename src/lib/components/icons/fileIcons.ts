@@ -17,6 +17,17 @@
  */
 import type { IconifyIcon } from "@iconify/types";
 
+export type FileIconTheme = "colorful" | "material" | "minimal";
+
+export const FILE_ICON_THEMES: readonly {
+  id: FileIconTheme;
+  label: string;
+}[] = [
+  { id: "colorful", label: "Colorful" },
+  { id: "material", label: "Material" },
+  { id: "minimal", label: "Minimal" },
+];
+
 // Generic kinds — tree-shaken from the installed Material Symbols set.
 import iconDocument from "@ktibow/iconset-material-symbols/description";
 import iconImage from "@ktibow/iconset-material-symbols/image";
@@ -291,7 +302,92 @@ const extIcons: Record<string, IconifyIcon> = {
   lock: iconLock,
 };
 
-/** Memoized results keyed by lowercased basename (bounded by distinct names). */
+const materialLanguageExtensions = new Set([
+  "ts", "mts", "cts", "js", "mjs", "cjs", "jsx", "tsx", "py", "pyi",
+  "pyw", "rs", "go", "rb", "erb", "php", "swift", "kt", "kts", "java",
+  "coffee", "c", "h", "cpp", "cc", "cxx", "hpp", "hh", "hxx", "cs",
+  "dart", "scala", "sc", "lua", "hs", "ex", "exs", "erl", "hrl", "vue",
+  "svelte", "astro", "graphql", "gql", "scss", "sass", "xml", "xsl", "m",
+  "mm", "r", "jl", "nim", "zig", "cr", "tf",
+]);
+
+/** Generic Material Symbols for common file categories. */
+const materialCategoryIcons: Record<string, IconifyIcon> = {
+  html: iconHtml, htm: iconHtml, xhtml: iconHtml,
+  css: iconCss, less: iconCss,
+  md: iconMarkdown, markdown: iconMarkdown, mdown: iconMarkdown,
+  json: iconJson, jsonc: iconJson, json5: iconJson, webmanifest: iconJson,
+  yml: iconConfig, yaml: iconConfig, toml: iconConfig, ini: iconConfig,
+  cfg: iconConfig, conf: iconConfig, properties: iconConfig,
+  env: iconKey, pem: iconKey, key: iconKey, crt: iconKey, pub: iconKey,
+  sh: iconTerminal, bash: iconTerminal, zsh: iconTerminal, fish: iconTerminal,
+  ps1: iconTerminal, bat: iconTerminal, cmd: iconTerminal,
+  png: iconImage, jpg: iconImage, jpeg: iconImage, gif: iconImage,
+  webp: iconImage, bmp: iconImage, ico: iconImage, avif: iconImage,
+  tiff: iconImage, heic: iconImage, svg: iconImage,
+  mp4: iconVideo, mov: iconVideo, avi: iconVideo, mkv: iconVideo,
+  webm: iconVideo, wmv: iconVideo, flv: iconVideo,
+  mp3: iconAudio, wav: iconAudio, flac: iconAudio, ogg: iconAudio,
+  m4a: iconAudio, aac: iconAudio, opus: iconAudio,
+  zip: iconArchive, "7z": iconArchive, rar: iconArchive, tar: iconArchive,
+  gz: iconArchive, bz2: iconArchive, xz: iconArchive, zst: iconArchive,
+  jar: iconArchive, iso: iconArchive,
+  pdf: iconPdf,
+  sql: iconDatabase, db: iconDatabase, sqlite: iconDatabase, sqlite3: iconDatabase,
+  csv: iconTable, tsv: iconTable, xls: iconTable, xlsx: iconTable, ods: iconTable,
+  ppt: iconSlides, pptx: iconSlides, odp: iconSlides,
+  doc: iconDocument, docx: iconDocument, odt: iconDocument, rtf: iconDocument,
+  txt: iconDocument, log: iconDocument,
+  lock: iconLock,
+};
+
+const colorfulExtensionColors: Record<string, string> = {
+  ts: "#3178c6", mts: "#3178c6", cts: "#3178c6", tsx: "#3178c6",
+  js: "#f7df1e", mjs: "#f7df1e", cjs: "#f7df1e",
+  jsx: "#61dafb", py: "#3776ab", pyi: "#3776ab", pyw: "#3776ab",
+  rs: "#dea584", go: "#00add8", rb: "#cc342d", erb: "#cc342d",
+  php: "#777bb4", swift: "#f05138", kt: "#7f52ff", kts: "#7f52ff",
+  java: "#e76f00", coffee: "#f1d592", c: "#659ad2", h: "#659ad2",
+  cpp: "#00599c", cc: "#00599c", cxx: "#00599c", hpp: "#00599c",
+  cs: "#9b4f96", dart: "#0175c2", scala: "#dc322f", sc: "#dc322f",
+  lua: "#000080", hs: "#5e5086", ex: "#6e4a7e", exs: "#6e4a7e",
+  erl: "#a90533", hrl: "#a90533", vue: "#41b883", svelte: "#ff3e00",
+  astro: "#ff5d01", graphql: "#e10098", gql: "#e10098",
+  scss: "#cc6699", sass: "#cc6699", html: "#e34f26", htm: "#e34f26",
+  css: "#1572b6", less: "#1d365d", md: "#519aba", markdown: "#519aba",
+  json: "#dcb67a", jsonc: "#dcb67a", json5: "#dcb67a",
+  yml: "#cb171e", yaml: "#cb171e", toml: "#9c4221", ini: "#a6a6a6",
+  sh: "#89e051", bash: "#89e051", ps1: "#5391fe", sql: "#e38c00",
+  png: "#a074c4", jpg: "#a074c4", jpeg: "#a074c4", gif: "#a074c4",
+  svg: "#ffb13b", mp4: "#f44747", mov: "#f44747", mp3: "#c586c0",
+  wav: "#c586c0", zip: "#d7ba7d", gz: "#d7ba7d", pdf: "#f40f02",
+  db: "#4db6ac", sqlite: "#4db6ac", csv: "#89b14b", xlsx: "#217346",
+  pptx: "#d24726", docx: "#2b579a",
+};
+
+const materialExtensionColors: Record<string, string> = {
+  html: "#e34f26", htm: "#e34f26", css: "#42a5f5", less: "#42a5f5",
+  md: "#90a4ae", markdown: "#90a4ae", json: "#cba6f7", jsonc: "#cba6f7",
+  json5: "#cba6f7", yaml: "#cb171e", yml: "#cb171e", toml: "#a6a6a6",
+  env: "#f38ba8", pem: "#f38ba8", key: "#f38ba8", sh: "#89e051",
+  bash: "#89e051", ps1: "#5391fe", png: "#a6e3a1", jpg: "#a6e3a1",
+  jpeg: "#a6e3a1", svg: "#a6e3a1", mp4: "#f9e2af", mp3: "#cba6f7",
+  zip: "#fab387", pdf: "#f38ba8", sql: "#94e2d5", db: "#94e2d5",
+  csv: "#a6e3a1", xlsx: "#a6e3a1", pptx: "#fab387", docx: "#89b4fa",
+};
+
+const colorfulSpecialColors: Record<string, string> = {
+  ".git": "#f05032", ".gitignore": "#f05032", ".gitmodules": "#f05032",
+  ".gitattributes": "#f05032", ".gitconfig": "#f05032", ".gitkeep": "#f05032",
+  dockerfile: "#2496ed", "docker-compose.yml": "#2496ed",
+  "docker-compose.yaml": "#2496ed", "compose.yml": "#2496ed",
+  "compose.yaml": "#2496ed", "package.json": "#cb3837",
+  "package-lock.json": "#cb3837", "npm-shrinkwrap.json": "#cb3837",
+  "cargo.toml": "#dea584", "rust-toolchain.toml": "#dea584",
+  "go.mod": "#00add8", "go.sum": "#00add8", "go.work": "#00add8",
+};
+
+/** Memoized results keyed by theme + lowercased basename. */
 const cache = new Map<string, IconifyIcon>();
 
 /** Last path segment, on either separator (mirrors statusModel.splitPath). */
@@ -301,20 +397,60 @@ function basename(path: string): string {
 }
 
 /**
- * The icon for one file path. Resolution is exact filename → `.env*`
- * prefix → extension (all lowercased) → generic document, memoized per
- * basename so repeated row renders are a single Map lookup.
+ * The icon for one file path. Colorful uses language marks and exact filename
+ * matches; Material uses broad file categories; Minimal uses a document
+ * glyph for every path.
  */
-export function fileIconForPath(path: string): IconifyIcon {
+export function fileIconForPath(
+  path: string,
+  theme: FileIconTheme = "colorful",
+): IconifyIcon {
   const name = basename(path).toLowerCase();
-  const hit = cache.get(name);
+  const key = `${theme}:${name}`;
+  const hit = cache.get(key);
   if (hit) return hit;
-  const icon = specialNames[name]
-    ?? (name === ".env" || name.startsWith(".env.") ? iconKey : undefined)
-    ?? extIcons[extOf(name)]
-    ?? defaultFileIcon;
-  cache.set(name, icon);
+  let icon: IconifyIcon;
+  if (theme === "minimal") {
+    icon = defaultFileIcon;
+  } else if (theme === "material") {
+    const extension = extOf(name);
+    if (name.startsWith(".git") || name === ".editorconfig" || name === "cargo.toml" || name === "go.mod" || name === "go.sum" || name === "go.work") {
+      icon = iconConfig;
+    } else if (name.startsWith("docker") || name.startsWith("compose.") || name === "makefile") {
+      icon = iconTerminal;
+    } else if (name === "package.json" || name === "package-lock.json" || name === "npm-shrinkwrap.json") {
+      icon = iconJson;
+    } else if (name === ".env" || name.startsWith(".env.")) {
+      icon = iconKey;
+    } else if (materialLanguageExtensions.has(extension)) {
+      icon = iconCode;
+    } else {
+      icon = materialCategoryIcons[extension] ?? defaultFileIcon;
+    }
+  } else {
+    icon = specialNames[name]
+      ?? (name === ".env" || name.startsWith(".env.") ? iconKey : undefined)
+      ?? extIcons[extOf(name)]
+      ?? defaultFileIcon;
+  }
+  cache.set(key, icon);
   return icon;
+}
+
+/** Per-theme foreground color for the file icon. */
+export function fileIconColorForPath(
+  path: string,
+  theme: FileIconTheme = "colorful",
+): string {
+  if (theme === "minimal") {
+    return "var(--m3-on-surface-variant, #9aa0a6)";
+  }
+  const name = basename(path).toLowerCase();
+  const extension = extOf(name);
+  if (theme === "colorful") {
+    return colorfulSpecialColors[name] ?? colorfulExtensionColors[extension] ?? "#94a3b8";
+  }
+  return materialExtensionColors[extension] ?? "#89b4fa";
 }
 
 /** Text after the last dot of a basename ("" when there is none). */

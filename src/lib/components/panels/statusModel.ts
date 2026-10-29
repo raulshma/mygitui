@@ -2,40 +2,30 @@
  * Pure logic for the working-copy StatusPanel (no runes, no DOM).
  *
  * Everything testable about the panel lives here: the section classifier
- * (one entry can appear in several sections), the path splitter, the
+ * (one entry can appear in Staged Changes and Changes), the path splitter, the
  * change-kind letter/color map, the prebuilt search index and the
  * substring filter that must stay under a frame on 10k entries.
  *
- * Section semantics (mirrors git's two statuses per path):
- *   - Staged:     `index` side is a real change (added/deleted/modified/
- *                 renamed/copied).
- *   - Unstaged:   `worktree` side is a real change.
- *   - Untracked:  `worktree` (or `index`) is untracked.
- *   - Conflicted: either side is conflicted (the engine puts conflicts on
- *                 the index side; the worktree side may also carry a change).
+ * Section semantics (mirrors VS Code's two source-control groups):
+ *   - Staged Changes: `index` side is a real change.
+ *   - Changes: `worktree` side changed, the path is untracked, or either
+ *              status side is conflicted.
  */
 
 import type { ChangeKind, StatusEntry } from "$lib/ipc/types";
 
-export type SectionId = "conflicted" | "staged" | "unstaged" | "untracked";
+export type SectionId = "staged" | "changes";
 
-/** Display order: trouble first, then index → worktree → new files. */
-export const SECTION_ORDER: readonly SectionId[] = [
-  "conflicted",
-  "staged",
-  "unstaged",
-  "untracked",
-];
+/** VS Code displays the index group above the working tree group. */
+export const SECTION_ORDER: readonly SectionId[] = ["staged", "changes"];
 
 /** VSCode source-control wording. */
 export const SECTION_LABELS: Record<SectionId, string> = {
-  conflicted: "Merge Changes",
   staged: "Staged Changes",
-  unstaged: "Changes",
-  untracked: "Untracked Changes",
+  changes: "Changes",
 };
 
-/** Kinds that count as a change on a status side (drives Staged/Unstaged). */
+/** Kinds that count as a change on a status side (drives both groups). */
 const CHANGE_KINDS: ReadonlySet<ChangeKind> = new Set([
   "added",
   "deleted",
@@ -44,9 +34,9 @@ const CHANGE_KINDS: ReadonlySet<ChangeKind> = new Set([
   "copied",
 ]);
 
-/** One rendered row: an entry placed into exactly one section. */
+/** One rendered row: an entry placed into one or both status sections. */
 export interface StatusRow {
-  /** `${section}:${path}` — unique even when a path is in two sections. */
+  /** `${section}:${path}` — unique when a path appears in both sections. */
   key: string;
   section: SectionId;
   entry: StatusEntry;
@@ -83,13 +73,15 @@ export interface StatusSectionView {
 export function classifyEntry(entry: StatusEntry): SectionId[] {
   const sections: SectionId[] = [];
   const { index, worktree } = entry;
-  if (index === "conflicted" || worktree === "conflicted") {
-    sections.push("conflicted");
-  }
   if (CHANGE_KINDS.has(index)) sections.push("staged");
-  if (CHANGE_KINDS.has(worktree)) sections.push("unstaged");
-  if (index === "untracked" || worktree === "untracked") {
-    sections.push("untracked");
+  if (
+    index === "conflicted" ||
+    worktree === "conflicted" ||
+    CHANGE_KINDS.has(worktree) ||
+    index === "untracked" ||
+    worktree === "untracked"
+  ) {
+    sections.push("changes");
   }
   return sections;
 }
@@ -232,14 +224,14 @@ export function submoduleNeedsAttention(info: SubmoduleState): boolean {
 
 /** Side kind that represents `entry` inside `section` (letter/color source). */
 function rowKind(entry: StatusEntry, section: SectionId): ChangeKind {
-  switch (section) {
-    case "staged":
-      return entry.index;
-    case "conflicted":
-      return "conflicted";
-    default:
-      return entry.worktree;
+  if (section === "staged") return entry.index;
+  if (entry.index === "conflicted" || entry.worktree === "conflicted") {
+    return "conflicted";
   }
+  if (entry.worktree !== "unmodified" && entry.worktree !== "ignored") {
+    return entry.worktree;
+  }
+  return entry.index === "untracked" ? "untracked" : entry.worktree;
 }
 
 /**
@@ -248,10 +240,8 @@ function rowKind(entry: StatusEntry, section: SectionId): ChangeKind {
  */
 export function buildStatusIndex(entries: readonly StatusEntry[]): StatusIndex {
   const bySection: Record<SectionId, StatusRow[]> = {
-    conflicted: [],
     staged: [],
-    unstaged: [],
-    untracked: [],
+    changes: [],
   };
   let total = 0;
   for (const entry of entries) {

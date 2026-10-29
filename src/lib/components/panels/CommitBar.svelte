@@ -1,8 +1,8 @@
 <script lang="ts">
   /**
-   * Commit bar (M2) — sits at the top of the source-control sidebar (the
+   * Commit bar (M2) — sits at the bottom of the source-control sidebar (the
    * workspace's left column), so the commit message and button stay visible
-   * while the changes list scrolls below.
+   * while the changes list scrolls above.
    *
    * Message textarea (Ctrl/Cmd+Enter commits; starts one row tall and grows
    * with the draft up to a cap, then scrolls), compact icon toggles for
@@ -414,15 +414,15 @@ ${m.body}` : m.subject;
 </form>
 
 <style>
-  /* Narrow source-control sidebar variant: everything stacks vertically
-     (the box lives at the top of the changes list, not in a bottom bar). */
+  /* Narrow source-control sidebar variant: everything stacks vertically in
+     the bottom-pinned commit area. */
   .commit-bar {
     flex: none;
     display: flex;
     flex-direction: column;
     gap: 0.3rem;
     padding: 0.375rem 0.45rem;
-    border-bottom: 1px solid var(--m3-outline-variant, var(--m3-primary));
+    border-top: 1px solid var(--m3-outline-variant, var(--m3-primary));
     background: var(--m3-surface-container, var(--m3-surface));
     font-size: 0.8125rem;
   }
@@ -438,6 +438,7 @@ ${m.body}` : m.subject;
     flex: none;
     width: 100%;
     min-width: 0;
+    box-sizing: border-box;
     min-height: 1.7rem;
     max-height: 11rem;
     resize: none;
