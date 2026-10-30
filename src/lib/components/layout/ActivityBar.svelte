@@ -18,6 +18,11 @@
    * History gets a separate bottom placement because the workspace keeps it
    * on the right edge; `onHistory` toggles that secondary sidebar instead of
    * switching the primary one.
+   *
+   * Overflow panels can be pinned: with `onTogglePin` set, each "More
+   * panels" entry grows a pin action and pinned panels get their own rail
+   * button (right-click unpins). Pin state lives in the `railPins` store —
+   * this component only renders what it is given.
    */
   import {
     PANEL_META,
@@ -26,12 +31,17 @@
     panelLabel,
     type PanelId,
   } from "$lib/layout/layoutModel";
-  import { showMenuAtElement } from "$lib/components/menu/contextMenuStore.svelte";
+  import {
+    showMenuAt,
+    showMenuAtElement,
+  } from "$lib/components/menu/contextMenuStore.svelte";
   import Icon from "$lib/components/icons/Icon.svelte";
   import iconMore from "@ktibow/iconset-material-symbols/more-horiz";
+  import iconPin from "@ktibow/iconset-material-symbols/push-pin";
 
   let {
     panels,
+    pinned = [],
     active = null,
     historyActive = false,
     historyCanHide = true,
@@ -41,9 +51,12 @@
     onSelect,
     onHistory,
     onToggleCollapse,
+    onTogglePin = null,
   }: {
     /** Panels the workspace can show in the primary sidebar. */
     panels: PanelId[];
+    /** Overflow panels pinned to the rail (in pin order). */
+    pinned?: PanelId[];
     /** Currently active primary-sidebar panel (null = none). */
     active?: PanelId | null;
     /** Whether the right-hand history sidebar is visible/active. */
@@ -59,15 +72,25 @@
     onSelect: (panel: PanelId) => void;
     onHistory: () => void;
     onToggleCollapse: () => void;
+    /** Pin/unpin hook; the pin affordances render only when set. */
+    onTogglePin?: ((panel: PanelId) => void) | null;
   } = $props();
 
-  /** Rail buttons, registry order first: the core panels that are placed. */
-  const railPanels = $derived(
+  /** Default rail buttons (registry order first: the core panels). */
+  const defaultRail = $derived(
     RAIL_PANELS.filter((panel) => panels.includes(panel)),
   );
+  /** Pinned buttons after the defaults, in pin order. */
+  const pinnedRail = $derived(
+    pinned.filter(
+      (panel) => panels.includes(panel) && !RAIL_PANELS.includes(panel),
+    ),
+  );
+  /** Every button rendered on the rail (defaults, then pins). */
+  const railPanels = $derived([...defaultRail, ...pinnedRail]);
   /** Everything else, behind the overflow menu (order = `panels`). */
   const morePanels = $derived(
-    panels.filter((panel) => !RAIL_PANELS.includes(panel)),
+    panels.filter((panel) => !railPanels.includes(panel)),
   );
   const moreActive = $derived(active !== null && morePanels.includes(active));
 
@@ -94,11 +117,31 @@
               ? `${panelLabel(panel)} (${badgeText(count)})`
               : panelLabel(panel),
           icon: panelIconData(panel),
+          action: onTogglePin
+            ? {
+                label: "Pin to rail",
+                icon: iconPin,
+                run: () => onTogglePin(panel),
+              }
+            : undefined,
           run: () => onSelect(panel),
         };
       }),
       { align: "end", above: true },
     );
+  }
+
+  /** Right-click on a pinned button unpins it (defaults stay fixed). */
+  function onRailContext(event: MouseEvent, panel: PanelId): void {
+    if (!onTogglePin || !pinned.includes(panel)) return;
+    showMenuAt(event, [
+      {
+        id: `unpin-${panel}`,
+        label: "Unpin from rail",
+        icon: iconPin,
+        run: () => onTogglePin(panel),
+      },
+    ]);
   }
 </script>
 
@@ -117,6 +160,7 @@
         ? `${panelLabel(panel)} — ${count} ${count === 1 ? "item" : "items"}`
         : panelLabel(panel)}
       onclick={() => onSelect(panel)}
+      oncontextmenu={(event) => onRailContext(event, panel)}
     >
       <svg
         viewBox="0 0 24 24"

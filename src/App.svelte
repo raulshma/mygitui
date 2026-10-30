@@ -11,15 +11,22 @@
   import { initTheme } from "$lib/theme";
   import { isTauri, listenDragDrop } from "$lib/entry/dragdrop";
   import { initDeepLinks } from "$lib/entry/deeplink";
-  import { pickFolder } from "$lib/ipc/client";
+  import { pickFolder, remotePollSetPaused } from "$lib/ipc/client";
   import {
     hideRecentRepos,
     openTab,
     recentRepos,
     restoreSession,
+    retryRemoteTab,
     startTabEvents,
     tabStore,
   } from "$lib/stores/tabs.svelte";
+  import {
+    deviceInputFromProfile,
+    remoteDevices,
+    startRemoteDeviceEvents,
+    PROMPT_TIMEOUT_MS,
+  } from "$lib/stores/remoteDevices.svelte";
   import { toast } from "$lib/toast";
   import Toaster from "$lib/components/Toaster.svelte";
   import TabStrip from "$lib/components/TabStrip.svelte";
@@ -34,6 +41,8 @@
   import iconClose from "@ktibow/iconset-material-symbols/close";
   import iconSearch from "@ktibow/iconset-material-symbols/search";
   import iconBack from "@ktibow/iconset-material-symbols/arrow-back-rounded";
+  import iconDevices from "@ktibow/iconset-material-symbols/devices";
+  import iconEdit from "@ktibow/iconset-material-symbols/edit";
   // Startup: the popout-only views below are dynamically imported inside
   // the popout branch — the main window never renders them, so their
   // module trees (history graph, file-history, popout panels) stay out of
@@ -53,6 +62,14 @@
   import AiSettings from "$lib/components/ai/AiSettings.svelte";
   import SeedColorDialog from "$lib/components/SeedColorDialog.svelte";
   import { setUserSeedColor } from "$lib/theme/dynamic-color";
+  // Remote devices (SSH): home-view section + the connect-prompt dialogs
+  // (mounted app-wide, driven by the remote-devices store's pending queue).
+  import AddDeviceDialog from "$lib/components/AddDeviceDialog.svelte";
+  import DeviceAuthDialog from "$lib/components/DeviceAuthDialog.svelte";
+  import DeviceBrowser from "$lib/components/DeviceBrowser.svelte";
+  import HostKeyDialog from "$lib/components/HostKeyDialog.svelte";
+  import ConfirmDialog from "$lib/components/safety/ConfirmDialog.svelte";
+  import type { DeviceProfile } from "$lib/ipc/types";
 
   /**
    * M4 F1 popout contract: a window opened with
@@ -90,6 +107,81 @@
 
   /** Accent-seed picker (opened by the palette seed commands, M12). */
   let seedOpen = $state(false);
+
+  // --- Remote devices (SSH) -------------------------------------------------
+
+  /** The device whose detail view (browser + settings) the home shows. */
+  let deviceDetailId = $state<string | null>(null);
+  /** Add/edit-device dialog visibility + the device being edited. */
+  let addDeviceOpen = $state(false);
+  let editingDevice = $state<DeviceProfile | null>(null);
+  /** Delete-device confirmation. */
+  let removeDeviceOpen = $state(false);
+  /** Draft of the detail view's poll-interval field (seconds). */
+  let pollDraft = $state(5);
+
+  /** The focused device entry, or `null` when the list is shown. */
+  const deviceDetail = $derived(
+    deviceDetailId !== null ? remoteDevices.byId(deviceDetailId) : null,
+  );
+
+  function openDeviceDetail(deviceId: string): void {
+    deviceDetailId = deviceId;
+    pollDraft = remoteDevices.byId(deviceId)?.profile.poll_secs ?? 5;
+  }
+
+  function openAddDevice(): void {
+    editingDevice = null;
+    addDeviceOpen = true;
+  }
+
+  function openEditDevice(device: DeviceProfile): void {
+    editingDevice = device;
+    addDeviceOpen = true;
+  }
+
+  /** Persists the detail view's poll-interval draft via device_update. */
+  async function savePollInterval(): Promise<void> {
+    const profile = deviceDetail?.profile;
+    if (!profile) return;
+    const seconds = Math.max(1, Math.floor(pollDraft) || 1);
+    try {
+      await remoteDevices.update({
+        ...deviceInputFromProfile(profile),
+        poll_secs: seconds,
+      });
+      toast(`Poll interval for ${profile.name} set to ${seconds}s`, {
+        kind: "success",
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      toast(`Failed to update ${profile.name}: ${message}`, { kind: "error" });
+    }
+  }
+
+  async function forgetHostKey(): Promise<void> {
+    const profile = deviceDetail?.profile;
+    if (!profile) return;
+    const had = await remoteDevices.forgetHostKey(profile.id);
+    if (had) {
+      toast(`Host key for ${profile.name} forgotten — next connect re-prompts`);
+    } else {
+      toast(`${profile.name} has no pinned host key`);
+    }
+  }
+
+  async function removeDevice(): Promise<void> {
+    const profile = deviceDetail?.profile;
+    if (!profile) return;
+    try {
+      await remoteDevices.remove(profile.id);
+      deviceDetailId = null;
+      toast(`Removed device ${profile.name}`);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      toast(`Failed to remove ${profile.name}: ${message}`, { kind: "error" });
+    }
+  }
 
   /** The focused repository tab, or `null` when nothing is open. */
   const active = $derived(tabStore.active);
@@ -189,6 +281,31 @@
     );
 
     startTabEvents();
+
+    // Remote devices: registry + prompt/status event wiring (idempotent),
+    // plus pruning of prompts the backend already timed out (120 s).
+    startRemoteDeviceEvents();
+    void remoteDevices.load();
+    const pruneTimer = setInterval(
+      () => remoteDevices.pruneStale(),
+      Math.floor(PROMPT_TIMEOUT_MS / 4),
+    );
+    cleanups.push(() => clearInterval(pruneTimer));
+
+    // Remote status polling is "paused when tab hidden": mirror the
+    // document's visibility to the backend pollers (popouts render one
+    // panel only and never own this wiring).
+    if (!popout && isTauri()) {
+      const onVisibility = () => {
+        void remotePollSetPaused(document.visibilityState === "hidden");
+      };
+      document.addEventListener("visibilitychange", onVisibility);
+      cleanups.push(() => {
+        document.removeEventListener("visibilitychange", onVisibility);
+        // Leaving the page must never leave the pollers paused.
+        void remotePollSetPaused(false);
+      });
+    }
 
     // Relaunch polish: reopen the tabs (and the focused one) from the last
     // session. Runs before the CLI-arg/deep-link listeners below, so an
@@ -329,27 +446,49 @@
         <span class="launch-spinner" aria-hidden="true"></span>
       </main>
     {:else if showWorkspace}
-      <main class="repo-view">
-        {#if active}
-            {#await import("$lib/components/panels/RepoView.svelte")}
-              <div class="repo-loading" aria-busy="true">
-                <span class="launch-spinner" aria-hidden="true"></span>
-                <span>Loading workspace…</span>
-              </div>
-            {:then RepoViewModule}
-              <RepoViewModule.default
-                repoId={active.id}
-                name={active.name}
-                root={active.root}
-                status={active.status}
-              />
-            {:catch}
-              <p class="repo-load-error" role="alert">
-                The repository workspace could not be loaded. Restart the app to try again.
-              </p>
-            {/await}
-        {/if}
-      </main>
+      {#if active?.openError}
+        <!-- Remote tab whose device is unknown/offline (or whose path
+             vanished): keep the tab, offer a Retry of the open. -->
+        <main class="repo-offline">
+          <span class="offline-icon" aria-hidden="true">
+            <Icon icon={iconDevices} size={26} />
+          </span>
+          <h2 class="offline-title">{active.name} is not reachable</h2>
+          <span class="offline-path" title={active.root}>{active.root}</span>
+          <p class="offline-msg" role="alert">{active.openError}</p>
+          <button
+            class="add-btn"
+            type="button"
+            onclick={() => void retryRemoteTab(active.root)}
+          >
+            <Icon icon={iconAdd} size={14} />
+            Retry
+          </button>
+        </main>
+      {:else}
+        <main class="repo-view">
+          {#if active}
+              {#await import("$lib/components/panels/RepoView.svelte")}
+                <div class="repo-loading" aria-busy="true">
+                  <span class="launch-spinner" aria-hidden="true"></span>
+                  <span>Loading workspace…</span>
+                </div>
+              {:then RepoViewModule}
+                <RepoViewModule.default
+                  repoId={active.id}
+                  name={active.name}
+                  root={active.root}
+                  status={active.status}
+                  deviceId={active.deviceId}
+                />
+              {:catch}
+                <p class="repo-load-error" role="alert">
+                  The repository workspace could not be loaded. Restart the app to try again.
+                </p>
+              {/await}
+          {/if}
+        </main>
+      {/if}
     {:else}
       <main class="home">
         {#if !tabsOpen}
@@ -545,6 +684,172 @@
             </ul>
           {/if}
         </section>
+
+        <!-- Remote devices (SSH): list + detail (browser + settings). -->
+        <section class="devices" aria-labelledby="devices-heading">
+          <div class="recent-head">
+            <div class="recent-title">
+              <h2 id="devices-heading" class="recent-heading">
+                {deviceDetail ? "Device" : "Devices"}
+              </h2>
+              {#if !deviceDetail && (remoteDevices.devices?.length ?? 0) > 0}
+                <p class="recent-sub">
+                  {remoteDevices.devices.length}
+                  {remoteDevices.devices.length === 1 ? "machine" : "machines"}
+                  registered
+                </p>
+              {/if}
+            </div>
+            <div class="head-actions">
+              {#if deviceDetail}
+                <button
+                  class="back-btn"
+                  type="button"
+                  onclick={() => (deviceDetailId = null)}
+                >
+                  <Icon icon={iconBack} size={14} />
+                  All devices
+                </button>
+              {/if}
+              <button class="clone-btn" type="button" onclick={openAddDevice}>
+                <Icon icon={iconAdd} size={14} />
+                Add device…
+              </button>
+            </div>
+          </div>
+
+          {#if deviceDetail}
+            <div class="device-detail">
+              <div class="detail-head">
+                <span class="detail-icon" aria-hidden="true">
+                  <Icon icon={iconDevices} size={18} />
+                </span>
+                <span class="detail-main">
+                  <span class="detail-name">{deviceDetail.profile.name}</span>
+                  <span class="detail-host">
+                    {deviceDetail.profile.username}@{deviceDetail.profile.host}:{deviceDetail.profile.port}
+                  </span>
+                </span>
+                <span
+                  class="device-status"
+                  data-status={deviceDetail.status}
+                >
+                  <span class="status-dot" aria-hidden="true"></span>
+                  {deviceDetail.status}
+                </span>
+              </div>
+
+              <div class="detail-actions">
+                {#if deviceDetail.status === "connected"}
+                  <button
+                    class="detail-btn"
+                    type="button"
+                    onclick={() => void remoteDevices.disconnect(deviceDetail.profile.id)}
+                  >
+                    Disconnect
+                  </button>
+                {:else}
+                  <button
+                    class="detail-btn"
+                    type="button"
+                    disabled={deviceDetail.status === "connecting"}
+                    onclick={() => void remoteDevices.connect(deviceDetail.profile.id)}
+                  >
+                    {deviceDetail.status === "connecting" ? "Connecting…" : "Connect"}
+                  </button>
+                {/if}
+                <button
+                  class="detail-btn"
+                  type="button"
+                  onclick={() => openEditDevice(deviceDetail.profile)}
+                >
+                  <Icon icon={iconEdit} size={13} />
+                  Edit…
+                </button>
+              </div>
+
+              <div class="detail-settings">
+                <label class="poll-field">
+                  <span class="field-label">Poll interval (seconds)</span>
+                  <input
+                    class="poll-input"
+                    type="number"
+                    min="1"
+                    aria-label="Poll interval in seconds"
+                    bind:value={pollDraft}
+                  />
+                </label>
+                <button
+                  class="detail-btn"
+                  type="button"
+                  onclick={() => void savePollInterval()}
+                >
+                  Save
+                </button>
+                <button
+                  class="detail-btn"
+                  type="button"
+                  onclick={() => void forgetHostKey()}
+                >
+                  Forget host key
+                </button>
+                <button
+                  class="detail-btn danger"
+                  type="button"
+                  onclick={() => (removeDeviceOpen = true)}
+                >
+                  Delete device
+                </button>
+              </div>
+
+              <DeviceBrowser deviceId={deviceDetail.profile.id} />
+            </div>
+          {:else if (remoteDevices.devices?.length ?? 0) === 0}
+            <p class="devices-empty">
+              No devices yet. Register an SSH machine to browse and open its
+              repositories as projects.
+            </p>
+          {:else}
+            <ul class="repo-list">
+              {#each remoteDevices.devices ?? [] as device (device.profile.id)}
+                <li class="repo-row-wrapper">
+                  <button
+                    class="repo-row"
+                    type="button"
+                    onclick={() => openDeviceDetail(device.profile.id)}
+                  >
+                    <span class="repo-icon" aria-hidden="true">
+                      <Icon icon={iconDevices} size={20} />
+                    </span>
+                    <span class="repo-main">
+                      <span class="repo-title">
+                        <span class="repo-name">{device.profile.name}</span>
+                      </span>
+                      <span class="repo-path">
+                        {device.profile.username}@{device.profile.host}:{device.profile.port}
+                      </span>
+                    </span>
+                    <span class="device-status" data-status={device.status}>
+                      <span class="status-dot" aria-hidden="true"></span>
+                      {device.status}
+                    </span>
+                  </button>
+                  <span class="row-actions">
+                    <button
+                      class="row-action"
+                      type="button"
+                      title="Edit device"
+                      aria-label={`Edit device ${device.profile.name}`}
+                      onclick={() => openEditDevice(device.profile)}
+                    >
+                      <Icon icon={iconEdit} size={15} />
+                    </button>
+                  </span>
+                </li>
+              {/each}
+            </ul>
+          {/if}
+        </section>
       </div>
 
       <footer class="home-foot">
@@ -568,6 +873,21 @@
 <CommandPalette />
 <CloneDialog bind:open={cloneOpen} />
 <ContextMenu />
+
+<!-- Remote devices: add/edit dialog + the connect-prompt dialogs (driven
+     by the remote-devices store's pending queues, AuthDialog-style). -->
+<AddDeviceDialog bind:open={addDeviceOpen} edit={editingDevice} />
+<HostKeyDialog />
+<DeviceAuthDialog />
+
+<ConfirmDialog
+  bind:open={removeDeviceOpen}
+  title={`Delete device ${deviceDetail?.profile.name ?? ""}?`}
+  message="The device, its stored secrets and its pinned host key are removed. Projects you opened from it stay in the recent list as ssh:// entries."
+  confirmLabel="Delete device"
+  danger
+  onConfirm={() => void removeDevice()}
+/>
 
 <!-- M12: AI settings dialog (opened by the AI health chip / palette). -->
 <AiSettings bind:open={aiSettingsOpen} />
@@ -774,12 +1094,14 @@
   .home-body {
     flex: 1;
     display: flex;
-    align-items: flex-start;
-    justify-content: center;
+    flex-direction: column;
+    align-items: center;
     padding: 2.75rem 1.25rem 2rem;
+    gap: 2.25rem;
   }
 
-  .recent {
+  .recent,
+  .devices {
     width: 100%;
     max-width: 44rem;
     min-width: 0;
@@ -1114,6 +1436,234 @@
     border-radius: var(--m3-shape-large, 16px);
     text-align: center;
     color: var(--m3-on-surface-variant, var(--m3-on-surface));
+  }
+
+  /* --- Remote devices ---------------------------------------------------- */
+
+  .devices-empty {
+    margin: 0;
+    padding: 1.25rem 1.5rem;
+    border: 1px dashed var(--m3-outline-variant, var(--m3-primary));
+    border-radius: var(--m3-shape-large, 16px);
+    color: var(--m3-on-surface-variant, var(--m3-on-surface));
+    font-size: 0.8125rem;
+    line-height: 1.5;
+  }
+
+  .device-status {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.1rem 0.55rem;
+    border-radius: var(--m3-shape-full, 9999px);
+    background: var(--m3-surface-container-high, var(--m3-surface));
+    color: var(--m3-on-surface-variant, var(--m3-on-surface));
+    font-size: 0.6875rem;
+    white-space: nowrap;
+  }
+
+  .status-dot {
+    flex: none;
+    width: 0.45rem;
+    height: 0.45rem;
+    border-radius: 50%;
+    background: var(--m3-outline, var(--m3-on-surface-variant));
+  }
+
+  .device-status[data-status="connected"] {
+    color: var(--m3-on-surface);
+  }
+
+  .device-status[data-status="connected"] .status-dot {
+    background: var(--m3-primary);
+  }
+
+  .device-status[data-status="connecting"] .status-dot {
+    background: var(--m3-tertiary, var(--m3-primary));
+  }
+
+  .device-detail {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    padding: 1rem 1.1rem;
+    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
+    border-radius: var(--m3-shape-large, 16px);
+    background: var(--m3-surface-container-low, var(--m3-surface));
+  }
+
+  .detail-head {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    min-width: 0;
+  }
+
+  .detail-icon {
+    flex: none;
+    display: grid;
+    place-items: center;
+    width: 2.25rem;
+    height: 2.25rem;
+    border-radius: 0.6rem;
+    background: var(--m3-primary-container, var(--m3-surface-container-high));
+    color: var(--m3-on-primary-container, var(--m3-primary));
+  }
+
+  .detail-main {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.1rem;
+  }
+
+  .detail-name {
+    font-weight: 600;
+    font-size: 0.9375rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .detail-host {
+    color: var(--m3-on-surface-variant, var(--m3-on-surface));
+    font-family: var(--app-font-mono, ui-monospace, Consolas, monospace);
+    font-size: 0.75rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .detail-actions,
+  .detail-settings {
+    display: flex;
+    align-items: flex-end;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+  }
+
+  .detail-settings {
+    padding-top: 0.5rem;
+    border-top: 1px solid var(--m3-outline-variant, var(--m3-primary));
+  }
+
+  .detail-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
+    border-radius: var(--m3-shape-full, 9999px);
+    background: none;
+    color: var(--m3-on-surface);
+    font: inherit;
+    font-size: 0.75rem;
+    font-weight: 500;
+    padding: 0.35rem 0.85rem;
+    white-space: nowrap;
+    cursor: pointer;
+  }
+
+  .detail-btn:hover {
+    background: var(--m3-surface-container-high, var(--m3-surface));
+    border-color: var(--m3-outline, var(--m3-primary));
+  }
+
+  .detail-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  .detail-btn.danger {
+    color: var(--m3-error);
+  }
+
+  .detail-btn.danger:hover {
+    background: var(--m3-error-container, var(--m3-surface-container-high));
+    border-color: var(--m3-error);
+  }
+
+  .detail-btn:focus-visible {
+    outline: 2px solid var(--m3-primary);
+    outline-offset: 2px;
+  }
+
+  .poll-field {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+  }
+
+  .field-label {
+    color: var(--m3-on-surface-variant, var(--m3-on-surface));
+    font-size: 0.6875rem;
+  }
+
+  .poll-input {
+    width: 5.5rem;
+    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
+    border-radius: var(--m3-shape-extra-small, 4px);
+    background: var(--m3-surface-container-lowest, var(--m3-surface));
+    color: var(--m3-on-surface);
+    font: inherit;
+    font-size: 0.8125rem;
+    padding: 0.35rem 0.5rem;
+  }
+
+  .poll-input:focus-visible {
+    outline: 2px solid var(--m3-primary);
+    outline-offset: -1px;
+  }
+
+  /* Remote tab whose device is offline: keep the tab, offer a Retry. */
+  .repo-offline {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0.6rem;
+    padding: 2rem;
+    text-align: center;
+    color: var(--m3-on-surface-variant, var(--m3-on-surface));
+  }
+
+  .offline-icon {
+    display: grid;
+    place-items: center;
+    width: 3.25rem;
+    height: 3.25rem;
+    margin-bottom: 0.35rem;
+    border-radius: 0.95rem;
+    background: var(--m3-surface-container, var(--m3-surface-container-high));
+    color: var(--m3-on-surface-variant, var(--m3-on-surface));
+    box-shadow: var(--m3-elevation-1);
+  }
+
+  .offline-title {
+    margin: 0;
+    color: var(--m3-on-surface);
+    font-size: 1rem;
+    font-weight: 500;
+  }
+
+  .offline-path {
+    max-width: min(32rem, 80vw);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-family: var(--app-font-mono, ui-monospace, Consolas, monospace);
+    font-size: 0.75rem;
+    opacity: 0.75;
+  }
+
+  .offline-msg {
+    max-width: min(32rem, 80vw);
+    margin: 0 0 0.5rem;
+    font-size: 0.8125rem;
+    overflow-wrap: anywhere;
   }
 
   .no-results .empty-title {

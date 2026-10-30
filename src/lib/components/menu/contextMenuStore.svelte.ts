@@ -10,6 +10,14 @@
 
 import type { IconifyIcon } from "@iconify/types";
 
+/** Secondary affordance rendered as a small button on the entry's right. */
+export interface MenuEntryAction {
+  label: string;
+  /** Optional leading icon (Iconify icon data, drawn at 16px). */
+  icon?: IconifyIcon;
+  run: () => void;
+}
+
 export interface MenuItem {
   id: string;
   label: string;
@@ -18,6 +26,8 @@ export interface MenuItem {
   /** Renders in the danger color (destructive actions). */
   danger?: boolean;
   disabled?: boolean;
+  /** Optional trailing action (e.g. "Pin to rail" on a panel entry). */
+  action?: MenuEntryAction;
   run: () => void;
 }
 

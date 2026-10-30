@@ -6,14 +6,16 @@
  *   UI instance + the backend pty on the first panel mount; later calls
  *   return the same live session (hide/show of the panel does NOT restart
  *   the shell — the xterm element is simply re-parented by the panel).
- * - Input: `term.onData` → `ptyWrite`. Output: `pty-output` events are
- *   dispatched by session id → `term.write`. Exit: `pty-exit` → toast +
- *   cleanup; no auto-recreate (the user restarts from the panel).
+ *   Repositories on an SSH device pass `remote` and get a remote shell
+ *   (`rshell_create`) instead — identical session ids and events.
+ * - Input: `term.onData` → `ptyWrite` / `rshellWrite`. Output: `pty-output`
+ *   events are dispatched by session id → `term.write`. Exit: `pty-exit` →
+ *   toast + cleanup; no auto-recreate (the user restarts from the panel).
  * - `dispose(repoId)` (RepoView unmount = repo tab closed) kills the pty
  *   and drops the session. `restart` = kill + fresh create. `kill` = user
  *   stop button.
  * - Resize: the panel fits the terminal, then calls `resize` — debounced
- *   100 ms before reaching `pty_resize`.
+ *   100 ms before reaching `pty_resize` / `rshell_resize`.
  *
  * The xterm.js classes never appear here: the store only knows the
  * `TerminalLike` / `TerminalHandle` interfaces, and the real factory is
@@ -29,6 +31,10 @@ import {
   ptyKill,
   ptyResize,
   ptyWrite,
+  rshellCreate,
+  rshellKill,
+  rshellResize,
+  rshellWrite,
 } from "$lib/ipc/client";
 import type { PtyExitEvent } from "$lib/ipc/types";
 import { onPtyExit, onPtyOutput } from "$lib/events/repoEvents";
@@ -93,6 +99,11 @@ export interface TerminalSession {
   readonly repoId: string;
   /** Backend pty id; `null` until `pty_create` resolves (or after exit). */
   sessionId: string | null;
+  /**
+   * True for repositories on an SSH device: the session is a remote shell
+   * (`rshell_*` commands) instead of a local pty — same events, same ids.
+   */
+  remote: boolean;
   status: TerminalStatus;
   /** The terminal UI (null while starting-failed / after exit). */
   term: TerminalLike | null;
@@ -106,6 +117,7 @@ function unavailableSession(repoId: string, error: string | null): TerminalSessi
   return {
     repoId,
     sessionId: null,
+    remote: false,
     status: "unavailable",
     term: null,
     fit: null,
@@ -139,20 +151,21 @@ export class TerminalStore {
   /**
    * The repo's terminal session, creating it lazily (terminal UI + pty).
    * Safe to call from a mount `$effect`: the first call creates, later ones
-   * return the existing starting/live session unchanged.
+   * return the existing starting/live session unchanged. `remote` selects
+   * the remote-shell transport for repositories on an SSH device.
    */
-  ensure(repoId: string): TerminalSession | null {
+  ensure(repoId: string, remote = false): TerminalSession | null {
     const existing = this.sessions[repoId];
     if (existing && (existing.status === "starting" || existing.status === "live")) {
       return existing;
     }
-    return this.#create(repoId);
+    return this.#create(repoId, remote);
   }
 
   /** Kill + fresh session (the panel's Restart button). */
-  restart(repoId: string): TerminalSession | null {
+  restart(repoId: string, remote = false): TerminalSession | null {
     this.#teardown(repoId, { markExited: false, remove: false });
-    return this.#create(repoId);
+    return this.#create(repoId, remote);
   }
 
   /** User stop: kills the pty and marks the session exited. */
@@ -181,9 +194,9 @@ export class TerminalStore {
       repoId,
       setTimeout(() => {
         this.#resizeTimers.delete(repoId);
-        const sessionId = this.sessions[repoId]?.sessionId;
-        if (!sessionId) return;
-        void ptyResize(sessionId, rows, cols).catch(() => {});
+        const entry = this.sessions[repoId];
+        if (!entry?.sessionId) return;
+        void this.#resizeShell(entry.sessionId, rows, cols, entry.remote).catch(() => {});
       }, RESIZE_DEBOUNCE_MS),
     );
   }
@@ -196,7 +209,38 @@ export class TerminalStore {
 
   // -- internals -------------------------------------------------------------
 
-  #create(repoId: string): TerminalSession | null {
+  // Transport seam (local pty vs remote shell): both share the session-id
+  // shape and the `pty-output` / `pty-exit` events, so everything else in
+  // the store is transport-agnostic.
+  #createShell(
+    repoId: string,
+    remote: boolean,
+    rows?: number,
+    cols?: number,
+  ): Promise<string> {
+    return remote ? rshellCreate(repoId, rows, cols) : ptyCreate(repoId, rows, cols);
+  }
+
+  #writeShell(sessionId: string, data: string, remote: boolean): Promise<void> {
+    return remote ? rshellWrite(sessionId, data) : ptyWrite(sessionId, data);
+  }
+
+  #resizeShell(
+    sessionId: string,
+    rows: number,
+    cols: number,
+    remote: boolean,
+  ): Promise<void> {
+    return remote
+      ? rshellResize(sessionId, rows, cols)
+      : ptyResize(sessionId, rows, cols);
+  }
+
+  #killShell(sessionId: string, remote: boolean): Promise<void> {
+    return remote ? rshellKill(sessionId) : ptyKill(sessionId);
+  }
+
+  #create(repoId: string, remote = false): TerminalSession | null {
     if (!isTauri()) {
       this.sessions[repoId] = unavailableSession(repoId, null);
       return this.sessions[repoId];
@@ -215,6 +259,7 @@ export class TerminalStore {
       this.sessions[repoId] = {
         repoId,
         sessionId: null,
+        remote,
         status: "failed",
         term: null,
         fit: null,
@@ -227,6 +272,7 @@ export class TerminalStore {
     this.sessions[repoId] = {
       repoId,
       sessionId: null,
+      remote,
       status: "starting",
       term: handle.term,
       fit: handle.fit,
@@ -239,21 +285,21 @@ export class TerminalStore {
 
     // Keystrokes: drop silently until the pty id arrives (first ms only).
     entry.term?.onData((data) => {
-      const sessionId = this.sessions[repoId]?.sessionId;
-      if (!sessionId) return;
-      void ptyWrite(sessionId, data).catch(() => {});
+      const current = this.sessions[repoId];
+      if (!current?.sessionId) return;
+      void this.#writeShell(current.sessionId, data, current.remote).catch(() => {});
     });
 
-    ptyCreate(repoId, handle.term.rows, handle.term.cols)
+    this.#createShell(repoId, remote, handle.term.rows, handle.term.cols)
       .then((sessionId) => {
         if (this.#tokens.get(repoId) !== token) {
           // Session was torn down / replaced meanwhile: kill the orphan.
-          void ptyKill(sessionId).catch(() => {});
+          void this.#killShell(sessionId, remote).catch(() => {});
           return;
         }
         const current = this.sessions[repoId];
         if (!current || current.status !== "starting") {
-          void ptyKill(sessionId).catch(() => {});
+          void this.#killShell(sessionId, remote).catch(() => {});
           return;
         }
         current.sessionId = sessionId;
@@ -289,7 +335,7 @@ export class TerminalStore {
     if (!entry) return;
     if (entry.sessionId) {
       this.#bySession.delete(entry.sessionId);
-      void ptyKill(entry.sessionId).catch(() => {});
+      void this.#killShell(entry.sessionId, entry.remote).catch(() => {});
     }
     entry.term?.dispose();
     if (opts.remove) {

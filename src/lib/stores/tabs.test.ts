@@ -56,6 +56,7 @@ function repoInfo(repoId: string, root: string, name: string) {
     name,
     bare: false,
     git_dir: `${root}/.git`,
+    device_id: null,
   };
 }
 

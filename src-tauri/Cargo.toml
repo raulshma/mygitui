@@ -44,10 +44,13 @@ parking_lot = "0.12.5"
 tracing = "0.1.44"
 tauri-plugin-dialog = "2.8.1"
 tauri-plugin-window-state = "2"
-tokio = { version = "1.53.2", features = ["rt", "sync", "macros"] }
+tokio = { version = "1.53.2", features = ["rt", "sync", "macros", "net", "io-util", "time"] }
 portable-pty = "0.9.0"
 uuid = { version = "1.27.0", features = ["v4"] }
 ts-rs = { version = "12.0.1", features = ["serde-compat"] }
+russh-sftp = "3.0.1"
+russh = { version = "0.65.0", default-features = false, features = ["flate2", "ring", "rsa"] }
+futures-util = "0.3.34"
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
 [profile.release]

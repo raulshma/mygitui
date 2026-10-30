@@ -10,6 +10,14 @@
 //! the generation, so the existing watcher → `repo-changed` →
 //! `refreshStatus` pipeline refreshes the UI for free.
 //!
+//! Repos opened on an SSH device (`RepoHandle::remote()`) branch every
+//! command below to the SFTP-backed
+//! [`crate::remote::workspace::RemoteWorkspace`] before touching the local
+//! filesystem: same DTOs, same op-kind strings, enqueued on the same
+//! per-repo queue (silent reads, generation-bumping fs mutations) so the
+//! remote calls — which block on the network — serialize with remote git
+//! ops exactly like the local bodies do.
+//!
 //! Every path argument is workdir-relative and validated by
 //! [`validate_rel_path`] (rejects absolute forms, `..` components, Windows
 //! prefixes, and anything escaping the root — the same rules
@@ -647,6 +655,7 @@ fn get_handle(state: &RepoManager, repo_id: &RepoId) -> Result<Arc<RepoHandle>, 
 
 /// One directory level of the working tree (contracts.md). Queued read:
 /// the index walk for submodule marking shares the repo lock with other ops.
+/// Remote repos enqueue the SFTP listing silently on the same queue.
 #[tauri::command(rename_all = "snake_case")]
 pub async fn repo_list_dir(
     repo_id: RepoId,
@@ -655,8 +664,17 @@ pub async fn repo_list_dir(
     state: State<'_, RepoManager>,
 ) -> Result<DirListing, String> {
     let handle = get_handle(&state, &repo_id)?;
+    if let Some(remote) = handle.remote() {
+        // Remote read: same silent queue slot; the submodule marking comes
+        // from the device's index inside `list_dir` itself.
+        let ws = remote.workspace();
+        let (_op_id, rx) = handle
+            .ops()
+            .enqueue_silent("list_dir", move |_ctx| ws.list_dir(&path, include_ignored));
+        return finish(rx).await;
+    }
     let root = handle.root.clone();
-    let repo = handle.repo();
+    let repo = handle.repo()?;
     let (_op_id, rx) = handle.ops().enqueue_silent("list_dir", move |_ctx| {
         let submodules = {
             let guard = repo.lock();
@@ -677,6 +695,15 @@ pub async fn repo_stat_file(
     state: State<'_, RepoManager>,
 ) -> Result<FileMeta, String> {
     let handle = get_handle(&state, &repo_id)?;
+    if let Some(remote) = handle.remote() {
+        // Remote read: silent queue slot like `list_dir` (the SFTP stat
+        // blocks, so it must stay off the async runtime).
+        let ws = remote.workspace();
+        let (_op_id, rx) = handle
+            .ops()
+            .enqueue_silent("stat_file", move |_ctx| ws.stat_file(&path));
+        return finish(rx).await;
+    }
     let root = handle.root.clone();
     tauri::async_runtime::spawn_blocking(move || stat_file_impl(&root, &path))
         .await
@@ -685,7 +712,8 @@ pub async fn repo_stat_file(
 
 /// Write file content to the worktree (the file editor's save). Queued
 /// mutation: serialized with every other op, generation-bumped so the
-/// watcher refreshes status/diffs.
+/// watcher refreshes status/diffs. Remote repos run the same mtime-guarded
+/// write on the device over SFTP, queued as a mutation identically.
 #[tauri::command(rename_all = "snake_case")]
 pub async fn repo_write_file(
     repo_id: RepoId,
@@ -695,6 +723,15 @@ pub async fn repo_write_file(
     state: State<'_, RepoManager>,
 ) -> Result<FileMeta, String> {
     let handle = get_handle(&state, &repo_id)?;
+    if let Some(remote) = handle.remote() {
+        let remote = Arc::clone(remote);
+        return finish(enqueue_fs_mutation(&handle, "write_file", move || {
+            remote
+                .workspace()
+                .write_file(&path, &content, expected_mtime)
+        }))
+        .await;
+    }
     let root = handle.root.clone();
     finish(enqueue_fs_mutation(&handle, "write_file", move || {
         write_file_impl(&root, &path, &content, expected_mtime)
@@ -711,6 +748,13 @@ pub async fn repo_create_entry(
     state: State<'_, RepoManager>,
 ) -> Result<(), String> {
     let handle = get_handle(&state, &repo_id)?;
+    if let Some(remote) = handle.remote() {
+        let remote = Arc::clone(remote);
+        return finish(enqueue_fs_mutation(&handle, "create_entry", move || {
+            remote.workspace().create_entry(&path, kind)
+        }))
+        .await;
+    }
     let root = handle.root.clone();
     finish(enqueue_fs_mutation(&handle, "create_entry", move || {
         create_entry_impl(&root, &path, kind)
@@ -727,6 +771,13 @@ pub async fn repo_rename_entry(
     state: State<'_, RepoManager>,
 ) -> Result<(), String> {
     let handle = get_handle(&state, &repo_id)?;
+    if let Some(remote) = handle.remote() {
+        let remote = Arc::clone(remote);
+        return finish(enqueue_fs_mutation(&handle, "rename_entry", move || {
+            remote.workspace().rename_entry(&path, &new_path)
+        }))
+        .await;
+    }
     let root = handle.root.clone();
     finish(enqueue_fs_mutation(&handle, "rename_entry", move || {
         rename_entry_impl(&root, &path, &new_path)
@@ -736,7 +787,8 @@ pub async fn repo_rename_entry(
 
 /// Delete a file or directory tree. A checkpoint is snapshotted BEFORE the
 /// deletion (same ordering rule as discard/repo_clean) so the delete is
-/// undoable from the Undo panel.
+/// undoable from the Undo panel. Remote repos snapshot via the device's git
+/// engine inside the same queued mutation, before the SFTP delete.
 #[tauri::command(rename_all = "snake_case")]
 pub async fn repo_delete_entry(
     repo_id: RepoId,
@@ -744,9 +796,21 @@ pub async fn repo_delete_entry(
     state: State<'_, RepoManager>,
 ) -> Result<crate::engine::types::CheckpointInfo, String> {
     let handle = get_handle(&state, &repo_id)?;
+    if let Some(remote) = handle.remote() {
+        // Same ordering as local: checkpoint the pre-delete state first,
+        // then delete — a failed delete leaves the checkpoint behind but
+        // touches nothing else (exactly the local property mismatch).
+        let remote = Arc::clone(remote);
+        return finish(enqueue_fs_mutation(&handle, "delete_entry", move || {
+            let checkpoint = remote.git().checkpoint_create(&format!("delete {path}"))?;
+            remote.workspace().delete_entry(&path)?;
+            Ok(checkpoint)
+        }))
+        .await;
+    }
     let root = handle.root.clone();
     let engine = handle.m3();
-    let repo = handle.repo();
+    let repo = handle.repo()?;
     finish(enqueue_fs_mutation(&handle, "delete_entry", move || {
         // Guard first: a failed delete must leave the repo untouched, and
         // the checkpoint must capture the pre-delete state.
@@ -762,13 +826,22 @@ pub async fn repo_delete_entry(
     .await
 }
 
-/// Flat, gitignore-respecting file index for quick-open (Ctrl+P).
+/// Flat, gitignore-respecting file index for quick-open (Ctrl+P). Remote
+/// repos enqueue the device-side `git ls-files` walk silently like the
+/// other reads.
 #[tauri::command(rename_all = "snake_case")]
 pub async fn repo_file_index(
     repo_id: RepoId,
     state: State<'_, RepoManager>,
 ) -> Result<FileIndex, String> {
     let handle = get_handle(&state, &repo_id)?;
+    if let Some(remote) = handle.remote() {
+        let ws = remote.workspace();
+        let (_op_id, rx) = handle
+            .ops()
+            .enqueue_silent("file_index", move |_ctx| ws.file_index());
+        return finish(rx).await;
+    }
     let root = handle.root.clone();
     tauri::async_runtime::spawn_blocking(move || file_index_impl(&root))
         .await

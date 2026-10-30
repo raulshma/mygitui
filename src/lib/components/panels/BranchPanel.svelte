@@ -13,37 +13,25 @@
    * (`ops_preview`): merged branches get a ConfirmDialog; unmerged ones open
    * the PreviewDialog — type the branch name, optionally keep the undo
    * checkpoint (guard_checkpoint "pre-branch-delete"), then force-delete.
-   * "Reset to…" per row opens the ResetDialog (reset the current branch to
-   * that branch — gitk semantics). "Merge…" opens the MergeDialog (ff
-   * policy / squash / no-commit / -X favor). "Clean merged…" batch-deletes
-   * every branch already merged into HEAD behind one dialog. Every mutation
-   * reloads the list and notifies the owner (`onMutated` → RepoView
-   * refreshStatus).
+   * Those flows (and push/rename) live in the shared
+   * {@link branchOpsController} (also used by the header switcher); this
+   * panel renders their dialogs via BranchActionDialogs and keeps only what
+   * is panel-specific: the create form, the merged-cleanup wizard,
+   * "Reset to…" (ResetDialog, gitk semantics), "Merge…" (MergeDialog) and
+   * the row context menus. Every mutation reloads the list and notifies the
+   * owner (`onMutated` → RepoView refreshStatus).
    */
-  import {
-    branchCreate,
-    branchDelete,
-    branchIsMerged,
-    branchRename,
-    branchSwitch,
-    branches,
-    guardCheckpoint,
-    opsPreview,
-    stashPush,
-  } from "$lib/ipc/client";
-  import type { BranchInfo, PreviewInfo } from "$lib/ipc/types";
-  import { tabStore } from "$lib/stores/tabs.svelte";
-  import { busy } from "$lib/stores/ops.svelte";
+  import { branchCreate, branchDelete, branchIsMerged, branches } from "$lib/ipc/client";
+  import type { BranchInfo } from "$lib/ipc/types";
   import { toast } from "$lib/toast";
   import { onUiEvent } from "$lib/palette/events";
   import { showMenuAt, type MenuEntry } from "$lib/components/menu/contextMenuStore.svelte";
   import { contextMenu } from "$lib/components/menu/contextMenuStore.svelte";
-  import PreviewDialog from "$lib/components/safety/PreviewDialog.svelte";
   import ResetDialog from "$lib/components/safety/ResetDialog.svelte";
-  import ConfirmDialog from "$lib/components/safety/ConfirmDialog.svelte";
   import MergeDialog from "$lib/components/merge/MergeDialog.svelte";
   import TagsSection from "$lib/components/panels/TagsSection.svelte";
-  import { isMergedPreview } from "$lib/components/safety/safetyModel";
+  import BranchActionDialogs from "$lib/components/header/BranchActionDialogs.svelte";
+  import { branchOpsController } from "$lib/git/branchOps.svelte";
   import { IconButton } from "$lib/components/m3";
   import iconRefresh from "@ktibow/iconset-material-symbols/refresh";
   import iconCleanup from "@ktibow/iconset-material-symbols/cleaning-services";
@@ -79,10 +67,7 @@
   let renaming = $state<{ old: string; value: string } | null>(null);
 
   // M3 flows
-  let switchChoice = $state<{ name: string } | null>(null);
-  let previewDelete = $state<{ name: string; info: PreviewInfo } | null>(null);
   let resetTo = $state<string | null>(null);
-  let stashButton = $state<HTMLButtonElement | undefined>();
 
   // M9 flows
   let merging = $state<string | null>(null);
@@ -91,7 +76,14 @@
   let cleanupCandidates = $state<{ name: string; checked: boolean }[]>([]);
   let cleanupBusy = $state(false);
 
-  const branchBusy = $derived(busy(repoId, "branch"));
+  /**
+   * Branch mutation flows (switch/delete dialogs, push, rename), shared with
+   * the header switcher. The controller pins its repoId at construction, so
+   * it is recreated when the repo switches — discarding any open switch or
+   * delete dialog with it (the reset effect below re-wires reload).
+   */
+  const ops = $derived(branchOpsController(repoId, onMutated));
+
   const headBranch = $derived(list.find((b) => b.is_head) ?? null);
   const visibleBranches = $derived(
     filter.trim() === ""
@@ -99,19 +91,12 @@
       : list.filter((b) => b.name.toLowerCase().includes(filter.trim().toLowerCase())),
   );
 
-  // Focus the primary choice when the switch dialog appears.
   $effect(() => {
-    if (switchChoice) {
-      requestAnimationFrame(() => stashButton?.focus());
-    }
-  });
-
-  $effect(() => {
-    // Reload when the repo switches.
+    // Reload when the repo switches. Reading `ops` re-runs this when the
+    // controller was recreated above, pointing the new instance at reload.
     void repoId;
+    ops.setReload(reload);
     renaming = null;
-    switchChoice = null;
-    previewDelete = null;
     resetTo = null;
     merging = null;
     filter = "";
@@ -139,17 +124,12 @@
     error = null;
     try {
       list = await branches(repoId);
+      ops.setList(list);
     } catch (err) {
       error = err instanceof Error ? err.message : String(err);
     } finally {
       loading = false;
     }
-  }
-
-  /** True when the repo's working copy has entries (dirty). */
-  function dirtyWorktree(): boolean {
-    const tab = tabStore.tabs.find((t) => t.id === repoId);
-    return Boolean(tab?.status && tab.status.entries.length > 0);
   }
 
   function afterMutation(): void {
@@ -179,133 +159,13 @@
     newCheckout = true;
   }
 
-  async function onSwitch(branch: BranchInfo): Promise<void> {
-    if (dirtyWorktree()) {
-      // Real choice replaces the old "M3 adds auto-stash" hint.
-      switchChoice = { name: branch.name };
-      return;
-    }
-    await doSwitch(branch.name, false);
-  }
-
-  async function doSwitch(name: string, force: boolean): Promise<void> {
-    switchChoice = null;
-    await run(`Switch to ${name}`, () => branchSwitch(repoId, name, force));
-  }
-
-  /** "Stash changes": stash_push → clean switch. */
-  async function onSwitchStash(): Promise<void> {
-    if (!switchChoice) return;
-    const name = switchChoice.name;
-    switchChoice = null;
-    await run(`Switch to ${name}`, async () => {
-      await stashPush(repoId, `pre-switch stash (switching to ${name})`);
-      await branchSwitch(repoId, name, false);
-    });
-  }
-
-  /** "Proceed anyway": forced checkout (discards local modifications). */
-  async function onSwitchForce(): Promise<void> {
-    if (!switchChoice) return;
-    const name = switchChoice.name;
-    await doSwitch(name, true);
-  }
-
   async function onRename(): Promise<void> {
     if (!renaming) return;
     const value = renaming.value.trim();
-    if (!value || value === renaming.old) {
-      renaming = null;
-      return;
-    }
     const old = renaming.old;
     renaming = null;
-    await run(`Rename ${old} → ${value}`, () => branchRename(repoId, old, value));
-  }
-
-  /**
-   * Starts a delete: preview first. Merged → ConfirmDialog (safe delete);
-   * unmerged → PreviewDialog with type-the-name + undo checkpoint.
-   */
-  async function onDeleteStart(branch: BranchInfo): Promise<void> {
-    const into = headBranch?.name ?? "HEAD";
-    let info: PreviewInfo;
-    try {
-      info = await opsPreview(repoId, "branch_delete", {
-        name: branch.name,
-        into,
-      });
-    } catch (err) {
-      toast(
-        `Cannot preview delete of ${branch.name}: ${
-          err instanceof Error ? err.message : String(err)
-        }`,
-        { kind: "error" },
-      );
-      return;
-    }
-    if (isMergedPreview(info)) {
-      confirmDelete = { name: branch.name };
-      return;
-    }
-    previewDelete = { name: branch.name, info };
-  }
-
-  /** Merged-delete confirmation (ConfirmDialog state). */
-  let confirmDelete = $state<{ name: string } | null>(null);
-
-  async function onDeleteConfirmed(): Promise<void> {
-    const job = confirmDelete;
-    if (!job) return;
-    confirmDelete = null;
-    await run(`Delete ${job.name}`, () => branchDelete(repoId, job.name, false));
-  }
-
-  /** PreviewDialog confirmed: optional guard checkpoint, then force delete. */
-  async function onDeleteConfirm(createCheckpoint: boolean): Promise<void> {
-    const job = previewDelete;
-    if (!job) return;
-    previewDelete = null;
-    await run(`Force delete ${job.name}`, async () => {
-      if (createCheckpoint) {
-        const cp = await guardCheckpoint(repoId, "pre-branch-delete");
-        await branchDelete(repoId, job.name, true);
-        toast(
-          `Force deleted ${job.name} — undo available (checkpoint ${cp.id})`,
-          { kind: "success" },
-        );
-      } else {
-        await branchDelete(repoId, job.name, true);
-      }
-    });
-  }
-
-  /** Pushes one branch to its default remote (optionally setting upstream). */
-  async function onPush(branch: BranchInfo, setUpstream: boolean): Promise<void> {
-    await run(`Push ${branch.name}`, async () => {
-      const { pushRepo, remotes } = await import("$lib/ipc/client");
-      const remoteList = await remotes(repoId);
-      const remote =
-        remoteList.find((r) => r.name === "origin") ?? remoteList[0];
-      if (!remote) {
-        toast("No remote configured — cannot push", { kind: "error" });
-        return;
-      }
-      const stats = await pushRepo(repoId, {
-        remote: remote.name,
-        branch: branch.name,
-        force: false,
-        force_with_lease: false,
-        set_upstream: setUpstream,
-        refs: [],
-        tags: false,
-        delete: false,
-      });
-      toast(
-        `Pushed ${branch.name} (${stats.updated_refs.length} ref${stats.updated_refs.length === 1 ? "" : "s"} updated)`,
-        { kind: "success" },
-      );
-    });
+    // No-ops (no IPC, no toast) when the name is empty or unchanged.
+    await ops.rename(old, value);
   }
 
   // -- M9: merged-branch cleanup wizard --------------------------------------
@@ -368,13 +228,17 @@
     const entries: MenuEntry[] = [];
     if (!branch.is_head) {
       entries.push(
-        { id: "switch", label: "Switch", run: () => void onSwitch(branch) },
+        {
+          id: "switch",
+          label: "Switch",
+          run: () => void ops.requestSwitch(branch.name),
+        },
         { id: "merge", label: "Merge into current…", run: () => (merging = branch.name) },
       );
     }
     entries.push(
-      { id: "push", label: "Push", run: () => void onPush(branch, false) },
-      { id: "upstream", label: "Push and set upstream", run: () => void onPush(branch, true) },
+      { id: "push", label: "Push", run: () => void ops.push(branch, false) },
+      { id: "upstream", label: "Push and set upstream", run: () => void ops.push(branch, true) },
       {
         id: "rename",
         label: "Rename…",
@@ -392,7 +256,7 @@
         id: "delete",
         label: "Delete…",
         danger: true,
-        run: () => void onDeleteStart(branch),
+        run: () => void ops.requestDelete(branch),
       });
     }
     showMenuAt(event, entries);
@@ -429,7 +293,7 @@
       disabled={cleanupBusy}
       onclick={() => void onCleanupStart()}
     />
-    {#if branchBusy}<span class="busy" role="status">Branch op running…</span>{/if}
+    {#if ops.busy}<span class="busy" role="status">Branch op running…</span>{/if}
   </div>
 
   <form
@@ -541,7 +405,7 @@
                   label={`Switch to ${branch.name}`}
                   title={`Switch to ${branch.name}`}
                   dense
-                  onclick={() => void onSwitch(branch)}
+                  onclick={() => void ops.requestSwitch(branch.name)}
                 />
               {:else}
                 <span class="head-chip">HEAD</span>
@@ -626,73 +490,8 @@
     </div>
   {/if}
 
-  <ConfirmDialog
-    bind:open={
-      () => confirmDelete !== null,
-      (v) => {
-        if (!v) confirmDelete = null;
-      }
-    }
-    title={confirmDelete ? `Delete branch ${confirmDelete.name}?` : ""}
-    message="The branch is fully merged into the current branch — deleting it loses no commits."
-    confirmLabel="Delete branch"
-    danger
-    onConfirm={() => void onDeleteConfirmed()}
-  />
-
-  {#if switchChoice}
-    <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-    <div
-      class="scrim"
-      role="presentation"
-      onkeydown={(e) => {
-        if (e.key === "Escape") {
-          e.preventDefault();
-          switchChoice = null;
-        }
-      }}
-    >
-      <div
-        class="dialog"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="switch-choice-title"
-      >
-        <h2 id="switch-choice-title" class="title">Uncommitted changes</h2>
-        <p class="text">
-          You have uncommitted changes. What should happen to them when
-          switching to <strong>{switchChoice.name}</strong>?
-        </p>
-        <div class="actions">
-          <button
-            class="primary"
-            type="button"
-            bind:this={stashButton}
-            onclick={() => void onSwitchStash()}
-          >
-            Stash changes
-          </button>
-          <button class="danger-btn" type="button" onclick={() => void onSwitchForce()}>
-            Proceed anyway
-          </button>
-          <button class="secondary" type="button" onclick={() => (switchChoice = null)}>
-            Cancel
-          </button>
-        </div>
-      </div>
-    </div>
-  {/if}
-
-  {#if previewDelete}
-    <PreviewDialog
-      info={previewDelete.info}
-      danger
-      confirmPhrase={previewDelete.name}
-      title={`Force delete ${previewDelete.name}`}
-      onConfirm={(createCheckpoint) => void onDeleteConfirm(createCheckpoint)}
-      onCancel={() => (previewDelete = null)}
-    />
-  {/if}
+  <!-- Shared switch/delete dialogs (state lives on the ops controller). -->
+  <BranchActionDialogs controller={ops} />
 
   <ResetDialog
     {repoId}
@@ -841,8 +640,7 @@
   }
 
   .primary:focus-visible,
-  .secondary:focus-visible,
-  .danger-btn:focus-visible {
+  .secondary:focus-visible {
     outline: 2px solid var(--m3-primary);
     outline-offset: 1px;
   }
@@ -963,7 +761,7 @@
     color: var(--m3-error, inherit);
   }
 
-  /* Switch dirty-choice modal (same pattern as AuthDialog). */
+  /* Modal dialogs (cleanup wizard; switch/delete live in BranchActionDialogs). */
   .scrim {
     position: fixed;
     inset: 0;
@@ -1011,16 +809,6 @@
     font: inherit;
     font-weight: 500;
     padding: 0.45rem 1.25rem;
-    cursor: pointer;
-  }
-
-  .danger-btn {
-    border: none;
-    border-radius: var(--m3-shape-full, 9999px);
-    background: var(--m3-error, var(--m3-primary));
-    color: var(--m3-on-error, white);
-    font: inherit;
-    padding: 0.45rem 1rem;
     cursor: pointer;
   }
 

@@ -301,6 +301,8 @@ function BOOTSTRAP(options: TauriMockOptions): void {
     "contributor_stats",
     "bisect_log",
     "branch_trash_list",
+    "device_list",
+    "device_scan_repos",
   ]);
 
   const EMPTY_LOG_PAGE = { commits: [], rows: [], next_cursor: null, generation: 0 };

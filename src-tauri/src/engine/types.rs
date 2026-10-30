@@ -197,13 +197,16 @@ pub struct BlameLine {
 #[ts(export)]
 pub struct RepoInfo {
     pub repo_id: RepoId,
-    /// Absolute workdir path.
+    /// Absolute workdir path (POSIX path on the device for remote repos).
     pub root: String,
     /// Directory name (tab title).
     pub name: String,
     /// True when the repo is bare (no workdir).
     pub bare: bool,
     pub git_dir: String,
+    /// Device id when this is a remote (SSH) project; None for local repos.
+    #[serde(default)]
+    pub device_id: Option<String>,
 }
 
 // ---------- M2: mutation model ----------

@@ -44,6 +44,11 @@ import type {
   ConflictResolution,
   Contributor,
   DayCount,
+  DeviceAuthRequestEvent,
+  DeviceInfo,
+  DeviceInput,
+  DeviceRepoCandidate,
+  DeviceStatusEvent,
   DiffSide,
   DirListing,
   EditorApp,
@@ -57,6 +62,8 @@ import type {
   ForgeStatus,
   GitignoreTemplate,
   HookInfo,
+  HostKeyRequestEvent,
+  KnownHostKey,
   LfsStatus,
   LogFilter,
   LogPage,
@@ -1849,4 +1856,222 @@ export async function detectEditors(): Promise<EditorApp[]> {
 /** Opens the repository root in the app with the given id. */
 export function openWith(repoRoot: string, appId: string): Promise<void> {
   return call<void>("open_with", { repo_root: repoRoot, app_id: appId });
+}
+
+// ---------------------------------------------------------------------------
+// Remote devices (SSH) — device registry, connect/prompts, remote browsing
+// and the remote shell (Rust: src-tauri/src/remote/commands.rs +
+// remote/term.rs). Device payloads are ts-rs generated and re-exported from
+// ./types. Connect prompts pause the backend: it emits `hostkey-request` /
+// `device-auth-request` events (subscriptions below) and waits up to 120 s
+// for the matching `device_*_respond` answer. Remote shells reuse the
+// `pty-output` / `pty-exit` events, keyed by the `rshell_create` session id.
+// ---------------------------------------------------------------------------
+
+/** All registered devices with their current connection status. */
+export function deviceList(): Promise<DeviceInfo[]> {
+  return call<DeviceInfo[]>("device_list", {});
+}
+
+/** Registers a device (credentials land in the OS keyring). */
+export function deviceAdd(input: DeviceInput): Promise<DeviceInfo> {
+  return call<DeviceInfo>("device_add", { input });
+}
+
+/** Updates a registered device (`input.id` selects it). */
+export function deviceUpdate(input: DeviceInput): Promise<DeviceInfo> {
+  return call<DeviceInfo>("device_update", { input });
+}
+
+/** Deletes a device (and its stored secrets / pinned host key). */
+export function deviceRemove(deviceId: string): Promise<void> {
+  return call<void>("device_remove", { device_id: deviceId });
+}
+
+/**
+ * Connects to a device, surfacing host-key / auth prompts as events
+ * (answered via {@link deviceHostkeyRespond} / {@link deviceAuthRespond}).
+ * Resolves with a human-readable status string.
+ */
+export function deviceConnect(deviceId: string): Promise<string> {
+  return call<string>("device_connect", { device_id: deviceId });
+}
+
+/** Drops the connection (background operations may reconnect on demand). */
+export function deviceDisconnect(deviceId: string): Promise<void> {
+  return call<void>("device_disconnect", { device_id: deviceId });
+}
+
+/** One-shot connection status string for a device. */
+export function deviceStatus(deviceId: string): Promise<string> {
+  return call<string>("device_status", { device_id: deviceId });
+}
+
+/**
+ * Pauses/resumes remote repo change polling. App shell wires this to the
+ * document's `visibilitychange` (polling is "paused when tab hidden").
+ */
+export function remotePollSetPaused(paused: boolean): Promise<void> {
+  if (!isTauri()) return Promise.resolve();
+  return call<void>("remote_poll_set_paused", { paused });
+}
+
+/**
+ * Probe with the given credentials WITHOUT registering. Resolves with a
+ * status string; rejects (IpcError with the backend's error text) on any
+ * failure — the AddDeviceDialog surfaces it inline.
+ */
+export function deviceTest(input: DeviceInput): Promise<string> {
+  return call<string>("device_test", { input });
+}
+
+/** Answers a pending `hostkey-request` (`accept=false` aborts the connect). */
+export function deviceHostkeyRespond(
+  requestId: string,
+  accept: boolean,
+): Promise<void> {
+  return call<void>("device_hostkey_respond", {
+    request_id: requestId,
+    accept,
+  });
+}
+
+/**
+ * Answers a pending `device-auth-request`; `password: null` cancels and
+ * `store` persists the secret in the OS keyring.
+ */
+export function deviceAuthRespond(
+  requestId: string,
+  password: string | null,
+  store: boolean,
+): Promise<void> {
+  return call<void>("device_auth_respond", {
+    request_id: requestId,
+    password,
+    store,
+  });
+}
+
+/**
+ * Removes the device's pinned host key (`true` when one existed). The next
+ * connect re-runs the first-contact host-key prompt.
+ */
+export function deviceForgetHostKey(deviceId: string): Promise<boolean> {
+  return call<boolean>("device_forget_host_key", { device_id: deviceId });
+}
+
+/** The device's pinned host key, or `null` when none is pinned. */
+export function deviceHostKey(deviceId: string): Promise<KnownHostKey | null> {
+  return call<KnownHostKey | null>("device_host_key", {
+    device_id: deviceId,
+  });
+}
+
+/**
+ * One directory level on the device. `path` `""` (or `"~"`) is the home
+ * directory; the returned entries carry ABSOLUTE device paths.
+ */
+export function deviceBrowseDir(
+  deviceId: string,
+  path: string,
+): Promise<DirListing> {
+  return call<DirListing>("device_browse_dir", {
+    device_id: deviceId,
+    path,
+  });
+}
+
+/**
+ * Scans `root` (absolute device path; `null` = home) for git repositories.
+ */
+export function deviceScanRepos(
+  deviceId: string,
+  root: string | null,
+): Promise<DeviceRepoCandidate[]> {
+  return call<DeviceRepoCandidate[]>("device_scan_repos", {
+    device_id: deviceId,
+    root,
+  });
+}
+
+/** Opens a remote repository (registers it like `repo_open`). */
+export function remoteRepoOpen(
+  deviceId: string,
+  path: string,
+): Promise<RepoInfo> {
+  return call<RepoInfo>("remote_repo_open", {
+    device_id: deviceId,
+    path,
+  });
+}
+
+/**
+ * Spawns the remote shell for an OPENED remote repository, sized to
+ * `rows`×`cols` when given. Resolves with the new session id; output and
+ * exit stream back over the shared `pty-output` / `pty-exit` events.
+ */
+export function rshellCreate(
+  repoId: string,
+  rows?: number,
+  cols?: number,
+): Promise<string> {
+  const args: Record<string, unknown> = { repo_id: repoId };
+  if (rows !== undefined) args.rows = rows;
+  if (cols !== undefined) args.cols = cols;
+  return call<string>("rshell_create", args);
+}
+
+/** Writes raw keystroke bytes to a remote shell session. */
+export function rshellWrite(sessionId: string, data: string): Promise<void> {
+  return call<void>("rshell_write", { session_id: sessionId, data });
+}
+
+/** Notifies the backend that the remote terminal was resized. */
+export function rshellResize(
+  sessionId: string,
+  rows: number,
+  cols: number,
+): Promise<void> {
+  return call<void>("rshell_resize", { session_id: sessionId, rows, cols });
+}
+
+/**
+ * Kills a remote shell session. Best-effort, never an error when the
+ * session is already gone (same contract as {@link ptyKill}).
+ */
+export function rshellKill(sessionId: string): Promise<void> {
+  return call<void>("rshell_kill", { session_id: sessionId });
+}
+
+/**
+ * Subscribes to `hostkey-request` events (a connect needs a host-key
+ * decision; answer via {@link deviceHostkeyRespond}). Same contract as
+ * {@link onRepoChanged}: never throws, no-op unlisten outside Tauri.
+ */
+export function onHostkeyRequest(
+  cb: (event: HostKeyRequestEvent) => void,
+): Promise<() => void> {
+  return subscribe("hostkey-request", cb);
+}
+
+/**
+ * Subscribes to `device-auth-request` events (a connect needs SSH
+ * credentials; answer via {@link deviceAuthRespond}). Same contract as
+ * {@link onRepoChanged}: never throws, no-op unlisten outside Tauri.
+ */
+export function onDeviceAuthRequest(
+  cb: (event: DeviceAuthRequestEvent) => void,
+): Promise<() => void> {
+  return subscribe("device-auth-request", cb);
+}
+
+/**
+ * Subscribes to `device-status` events (connection lifecycle). Same
+ * contract as {@link onRepoChanged}: never throws, no-op unlisten outside
+ * Tauri.
+ */
+export function onDeviceStatus(
+  cb: (event: DeviceStatusEvent) => void,
+): Promise<() => void> {
+  return subscribe("device-status", cb);
 }

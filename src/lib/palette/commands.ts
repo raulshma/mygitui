@@ -17,10 +17,14 @@
  *      `focus-panel` `{panel, repoId}`, `diff-toggle-mode`,
  *      `open-conflicts`, `conflicts-recheck`, `history-focus-filter`,
  *      `history-clear-filter`, `history-refresh`, `history-toggle-blame`,
- *      `open-clone-dialog` (listened for by App.svelte today),
- *      `branches-focus-create` and `branches-focus-switch`.
+ *      `open-clone-dialog` (listened for by App.svelte today) and
+ *      `branch-switcher-open` `{repoId?, mode?}` (header BranchSwitcher).
  *      (The former `theme-toggle` window event is gone: the theme module
- *      gained a real API — commands call it directly now.)
+ *      gained a real API — commands call it directly now. The legacy
+ *      `branches-focus-create` / `branches-focus-switch` events remain in
+ *      the event map — BranchPanel still consumes them for panel-internal
+ *      focus — but the palette branch commands open the header switcher
+ *      instead of dispatching them.)
  *
  * The registry is plain data + closures (no runes) so it is unit-testable
  * without a component; `visibleCommands` applies the `when` filters.
@@ -356,21 +360,29 @@ export const COMMANDS: Command[] = [
     section: "Branches",
     keywords: ["new branch", "checkout -b"],
     when: (ctx) => ctx.repoId !== null,
-    run: (ctx) => {
-      focusPanel("branches", ctx);
-      dispatch("branches-focus-create");
-    },
+    // Opens the header BranchSwitcher popover; BranchPanel's panel-internal
+    // `branches-focus-create` listener is no longer driven from the palette.
+    // `null` maps to `undefined` = any-repo event (the switcher only
+    // ignores events carrying a concrete foreign id).
+    run: (ctx) =>
+      emitUiEvent("branch-switcher-open", {
+        repoId: ctx.repoId ?? undefined,
+        mode: "create",
+      }),
   },
   {
     id: "branches.switch",
     title: "Switch branch…",
     section: "Branches",
-    keywords: ["checkout"],
+    keywords: ["checkout", "switcher"],
     when: (ctx) => ctx.repoId !== null,
-    run: (ctx) => {
-      focusPanel("branches", ctx);
-      dispatch("branches-focus-switch");
-    },
+    // Opens the header BranchSwitcher popover; BranchPanel's panel-internal
+    // `branches-focus-switch` listener is no longer driven from the palette.
+    run: (ctx) =>
+      emitUiEvent("branch-switcher-open", {
+        repoId: ctx.repoId ?? undefined,
+        mode: "switch",
+      }),
   },
   {
     id: "branches.copy-current",

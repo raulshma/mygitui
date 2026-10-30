@@ -14,6 +14,7 @@
 import {
   closeRepo,
   openRepo,
+  remoteRepoOpen,
   repoStatus,
 } from "$lib/ipc/client";
 import type { RepoId, RepoStatus } from "$lib/ipc/types";
@@ -32,6 +33,51 @@ export interface Tab {
   status: RepoStatus | null;
   /** Watcher/stream generation, bumped when the repo changes under us. */
   generation: number;
+  /**
+   * Owning device for remote tabs (`RepoInfo.device_id`), `null` for local
+   * repositories.
+   */
+  deviceId: string | null;
+  /**
+   * Remote tabs only: why the last `remote_repo_open` failed. A tab with an
+   * `openError` has no backend repo yet (`id` is its `ssh://` URI) and the
+   * shell renders an offline view with a Retry affordance; `null` once open.
+   */
+  openError: string | null;
+}
+
+// -- ssh:// remote paths -----------------------------------------------------
+//
+// A repository on a device opens as a normal tab; everywhere a local tab is
+// keyed by its canonical path, a remote tab is keyed by the URI below (the
+// recents list and the persisted session therefore hold URIs too, and
+// restoreSession re-opens them through the same openTab entry point).
+
+/** URI scheme that prefixes remote tab roots / recents entries. */
+export const SSH_SCHEME = "ssh://";
+
+/** Builds the canonical `ssh://<device-id>/<absolute-path>` URI. */
+export function sshUri(deviceId: string, path: string): string {
+  return `${SSH_SCHEME}${deviceId}/${path.replace(/^\/+/, "")}`;
+}
+
+/** Parses an `ssh://` tab root; `null` for anything else. */
+export function parseSshUri(
+  uri: string,
+): { deviceId: string; path: string } | null {
+  if (!uri.startsWith(SSH_SCHEME)) return null;
+  const rest = uri.slice(SSH_SCHEME.length);
+  const slash = rest.indexOf("/");
+  if (slash <= 0) return null;
+  const deviceId = rest.slice(0, slash);
+  const path = rest.slice(slash);
+  return deviceId !== "" && path !== "" ? { deviceId, path } : null;
+}
+
+/** Last `/`-segment of a device path (remote tab display names). */
+function remoteRepoName(path: string): string {
+  const segments = path.split("/").filter(Boolean);
+  return segments.length > 0 ? segments[segments.length - 1]! : path;
 }
 
 /** Shared recent-repositories instance for the whole app (App.svelte's home
@@ -214,12 +260,17 @@ export class TabStore {
    * root the backend returns). Rejects (IpcError) when the backend refuses
    * the open.
    *
+   * `ssh://<device-id>/<path>` URIs (remote tabs, also what the recents
+   * list persists) route through {@link openRemoteTab}.
+   *
    * The first `repo_status` snapshot is fetched in the background: the tab
    * renders immediately with `status: null` and the snapshot swaps in via
    * reactivity (awaiting it here serialized session restore behind a full
    * working-copy scan per tab).
    */
   async openTab(path: string, options: OpenTabOptions = {}): Promise<Tab> {
+    const remote = parseSshUri(path);
+    if (remote) return this.openRemoteTab(remote.deviceId, remote.path, options);
     const activate = options.activate ?? true;
     const byPath = this.tabs.find((tab) => tab.root === path);
     if (byPath) {
@@ -251,6 +302,8 @@ export class TabStore {
       root: info.root,
       status: null,
       generation: 0,
+      deviceId: null,
+      openError: null,
     };
     const at = Math.min(options.index ?? this.tabs.length, this.tabs.length);
     this.tabs.splice(at, 0, tab);
@@ -265,6 +318,101 @@ export class TabStore {
     // (logged inside, and `refreshStatus` never throws).
     void this.refreshStatus(tab.id);
     return tab;
+  }
+
+  /**
+   * Opens a repository that lives on a device as a normal tab: calls
+   * `remote_repo_open` and mirrors {@link openTab} (dedupe, activate,
+   * recents). The tab is keyed by the `ssh://` URI (`root`), so the
+   * recents list and the persisted session round-trip it unchanged.
+   *
+   * Unlike {@link openTab} this NEVER throws for backend failures: an
+   * unknown/offline device (or a vanished path) opens the tab in an
+   * offline state (`openError` set, `id` = the URI) with the entry kept in
+   * the strip — {@link retryRemoteTab} re-runs the open from the Retry
+   * affordance the shell renders for it.
+   */
+  async openRemoteTab(
+    deviceId: string,
+    path: string,
+    options: OpenTabOptions = {},
+  ): Promise<Tab> {
+    const activate = options.activate ?? true;
+    const uri = sshUri(deviceId, path);
+    const byUri = this.tabs.find((tab) => tab.root === uri);
+    if (byUri && byUri.openError === null) {
+      if (activate) {
+        this.activeId = byUri.id;
+        this.recentsOpen = false;
+      }
+      this.#recents.add(uri);
+      this.#persistSession();
+      return byUri;
+    }
+
+    try {
+      const info = await remoteRepoOpen(deviceId, path);
+      const tab: Tab = {
+        id: info.repo_id,
+        name: info.name,
+        root: uri,
+        status: null,
+        generation: 0,
+        deviceId,
+        openError: null,
+      };
+      if (byUri) {
+        // Upgrade the offline tab in place: strip position is preserved.
+        this.tabs.splice(this.tabs.indexOf(byUri), 1, tab);
+      } else {
+        const at = Math.min(options.index ?? this.tabs.length, this.tabs.length);
+        this.tabs.splice(at, 0, tab);
+      }
+      if (activate) {
+        this.activeId = tab.id;
+        this.recentsOpen = false;
+      }
+      this.#recents.add(uri);
+      this.#persistSession();
+      void this.refreshStatus(tab.id);
+      return tab;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      const tab: Tab = {
+        id: uri,
+        name: remoteRepoName(path),
+        root: uri,
+        status: null,
+        generation: 0,
+        deviceId,
+        openError: message,
+      };
+      if (byUri) {
+        this.tabs.splice(this.tabs.indexOf(byUri), 1, tab);
+      } else {
+        const at = Math.min(options.index ?? this.tabs.length, this.tabs.length);
+        this.tabs.splice(at, 0, tab);
+      }
+      if (activate) {
+        this.activeId = tab.id;
+        this.recentsOpen = false;
+      }
+      this.#recents.add(uri);
+      this.#persistSession();
+      return tab;
+    }
+  }
+
+  /**
+   * Re-runs the remote open for an offline tab (`Retry` affordance).
+   * No-op for unknown or already-open roots.
+   */
+  async retryRemoteTab(uri: string): Promise<void> {
+    const parsed = parseSshUri(uri);
+    if (!parsed) return;
+    const tab = this.tabs.find((entry) => entry.root === uri);
+    if (!tab || tab.openError === null) return;
+    await this.openRemoteTab(parsed.deviceId, parsed.path);
   }
 
   /**
@@ -364,6 +512,20 @@ export function getActiveId(): string | null {
 
 export function openTab(path: string, options: OpenTabOptions = {}): Promise<Tab> {
   return tabStore.openTab(path, options);
+}
+
+/** Opens a repository on a device (see {@link TabStore.openRemoteTab}). */
+export function openRemoteTab(
+  deviceId: string,
+  path: string,
+  options: OpenTabOptions = {},
+): Promise<Tab> {
+  return tabStore.openRemoteTab(deviceId, path, options);
+}
+
+/** Re-runs a failed remote open (see {@link TabStore.retryRemoteTab}). */
+export function retryRemoteTab(uri: string): Promise<void> {
+  return tabStore.retryRemoteTab(uri);
 }
 
 export function closeTab(id: RepoId): Promise<void> {

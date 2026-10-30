@@ -2,8 +2,8 @@
  * Backend push-event fan-out — one Tauri subscription per event name.
  *
  * Every backend push event (`repo-changed`, `op-progress`, `op-log`,
- * `auth-request`, `action-output`, `clone-progress`, `pty-output`, `pty-exit`)
- * used to be
+ * `auth-request`, `action-output`, `clone-progress`, `pty-output`, `pty-exit`,
+ * `hostkey-request`, `device-auth-request`, `device-status`) used to be
  * subscribed by each consumer independently, and every one of them carried
  * its own copy of the idempotent-start flag + `#unlisten` + try/catch
  * lifecycle (tabs, ops ×2, actions, terminal, popouts, history instances).
@@ -32,6 +32,9 @@ import type {
   ActionOutputEvent,
   AuthRequest,
   CloneProgressEvent,
+  DeviceAuthRequestEvent,
+  DeviceStatusEvent,
+  HostKeyRequestEvent,
   OpLog,
   OpProgress,
   PtyExitEvent,
@@ -214,6 +217,18 @@ const ptyExitChannel = new EventChannel<PtyExitEvent>(
   "pty-exit",
   (forward) => client.onPtyExit(forward),
 );
+const hostkeyRequestChannel = new EventChannel<HostKeyRequestEvent>(
+  "hostkey-request",
+  (forward) => client.onHostkeyRequest(forward),
+);
+const deviceAuthRequestChannel = new EventChannel<DeviceAuthRequestEvent>(
+  "device-auth-request",
+  (forward) => client.onDeviceAuthRequest(forward),
+);
+const deviceStatusChannel = new EventChannel<DeviceStatusEvent>(
+  "device-status",
+  (forward) => client.onDeviceStatus(forward),
+);
 
 // ---------------------------------------------------------------------------
 // Public registrations (consumers import these; unsubscribe is synchronous)
@@ -277,6 +292,27 @@ export function onPtyExit(handle: (event: PtyExitEvent) => void): () => void {
   return ptyExitChannel.register({ handle });
 }
 
+/** Subscribes to `hostkey-request`; returns the synchronous unsubscribe. */
+export function onHostKeyRequest(
+  handle: (event: HostKeyRequestEvent) => void,
+): () => void {
+  return hostkeyRequestChannel.register({ handle });
+}
+
+/** Subscribes to `device-auth-request`; returns the synchronous unsubscribe. */
+export function onDeviceAuthRequest(
+  handle: (event: DeviceAuthRequestEvent) => void,
+): () => void {
+  return deviceAuthRequestChannel.register({ handle });
+}
+
+/** Subscribes to `device-status`; returns the synchronous unsubscribe. */
+export function onDeviceStatus(
+  handle: (event: DeviceStatusEvent) => void,
+): () => void {
+  return deviceStatusChannel.register({ handle });
+}
+
 /**
  * Test helper: drops every listener and unsubscribes every backend event,
  * so the next registration starts from a clean module (each event name
@@ -291,4 +327,7 @@ export function resetRepoEvents(): void {
   cloneProgressChannel.reset();
   ptyOutputChannel.reset();
   ptyExitChannel.reset();
+  hostkeyRequestChannel.reset();
+  deviceAuthRequestChannel.reset();
+  deviceStatusChannel.reset();
 }

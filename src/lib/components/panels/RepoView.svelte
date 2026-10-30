@@ -64,6 +64,7 @@
   import CleanDialog from "$lib/components/actions/CleanDialog.svelte";
   import OpenWithButton from "$lib/components/header/OpenWithButton.svelte";
   import RepoQuickActions from "$lib/components/header/RepoQuickActions.svelte";
+  import BranchSwitcher from "$lib/components/header/BranchSwitcher.svelte";
   // Startup: every panel that is not part of the first paint (status is the
   // default tab; diff and CommitBar are always visible) is dynamically
   // imported inside its snippet below — hidden panels (terminal/xterm,
@@ -110,8 +111,10 @@
     tabStore,
   } from "$lib/stores/tabs.svelte";
   import { loadHistoryPrefs } from "$lib/stores/historyPrefs";
+  import { railPins } from "$lib/stores/railPins.svelte";
   import { startAuthEvents, startOpsEvents } from "$lib/stores/ops.svelte";
   import { autofetch } from "$lib/stores/autofetch.svelte";
+  import { remoteDevices } from "$lib/stores/remoteDevices.svelte";
   import { toast } from "$lib/toast";
   import { contextMenu, type MenuEntry } from "$lib/components/menu/contextMenuStore.svelte";
   import iconHistory from "@ktibow/iconset-material-symbols/history";
@@ -121,7 +124,6 @@
   import iconClean from "@ktibow/iconset-material-symbols/cleaning-services";
   import iconResetLayout from "@ktibow/iconset-material-symbols/restart-alt";
   import iconMore from "@ktibow/iconset-material-symbols/more-horiz";
-  import iconBranch from "@ktibow/iconset-material-symbols/account-tree";
   import iconHome from "@ktibow/iconset-material-symbols/home-rounded";
 
   let {
@@ -129,11 +131,14 @@
     name,
     root,
     status,
+    deviceId = null,
   }: {
     repoId: string;
     name: string;
     root: string;
     status: RepoStatus | null;
+    /** Owning device for remote repositories (`null` = local). */
+    deviceId?: string | null;
   } = $props();
 
   let selected: string[] = $state([]);
@@ -756,15 +761,17 @@
     };
   });
 
-  function branchLabel(s: RepoStatus): string {
-    if (s.branch) return s.branch;
-    if (s.detached && s.head) return `detached @ ${s.head.slice(0, 7)}`;
-    return s.detached ? "detached" : "unknown";
-  }
-
   /** Unique changed paths — a file staged *and* modified counts once. */
   const changeCount = $derived(
     status ? new Set(status.entries.map((entry) => entry.path)).size : 0,
+  );
+
+  // Remote repositories (device_id set) show a connection chip fed by the
+  // remote-devices store (`device-status` events keep it live); the forge
+  // panel is unavailable there (it shells out to a local `gh`).
+  const isRemote = $derived(deviceId !== null);
+  const remoteStatus = $derived(
+    deviceId !== null ? remoteDevices.statusOf(deviceId) : null,
   );
 
   /** Header overflow: low-frequency repository tools. */
@@ -1367,13 +1374,19 @@
 {/snippet}
 {#snippet terminalPanel()}
   {#await import("$lib/components/terminal/TerminalPanel.svelte") then TerminalPanelModule}
-    <TerminalPanelModule.default {repoId} />
+    <TerminalPanelModule.default {repoId} remote={isRemote} />
   {/await}
 {/snippet}
 {#snippet forgePanel()}
-  {#await import("$lib/components/forge/ForgePanel.svelte") then ForgePanelModule}
-    <ForgePanelModule.default {repoId} />
-  {/await}
+  {#if isRemote}
+    <aside class="missing-panel" title="Not available for remote projects">
+      Not available for remote projects
+    </aside>
+  {:else}
+    {#await import("$lib/components/forge/ForgePanel.svelte") then ForgePanelModule}
+      <ForgePanelModule.default {repoId} />
+    {/await}
+  {/if}
 {/snippet}
 {#snippet actionsPanel()}
   {#await import("$lib/components/actions/ActionsPanel.svelte") then ActionsPanelModule}
@@ -1393,12 +1406,28 @@
   <header class="repo-header">
     <span class="repo-identity">
       <span class="repo-name" title={name}>{name}</span>
-      {#if status}
-        <span class="branch-chip" title={`Current branch: ${branchLabel(status)}`}>
-          <Icon icon={iconBranch} size={12} />
-          <span class="branch-label">{branchLabel(status)}</span>
+      {#if remoteStatus}
+        <!-- Remote repository: connection chip fed by the devices store. -->
+        <span
+          class="remote-chip"
+          data-status={remoteStatus}
+          title={remoteStatus === "connected"
+            ? "Device connected"
+            : remoteStatus === "connecting"
+              ? "Device connecting…"
+              : "Device offline"}
+        >
+          <span class="remote-dot" aria-hidden="true"></span>
+          <span class="remote-label">
+            {remoteStatus === "connected"
+              ? "connected"
+              : remoteStatus === "connecting"
+                ? "connecting…"
+                : "offline"}
+          </span>
         </span>
       {/if}
+      <BranchSwitcher {repoId} {status} onMutated={refresh} />
       <RepoQuickActions {repoId} {status} onMutated={refresh} />
       <span class="repo-root" title={root}>{root}</span>
     </span>
@@ -1473,6 +1502,7 @@
   <div class="main-area">
     <ActivityBar
       panels={activityPanels}
+      pinned={railPins.pins}
       active={activityPanel}
       historyActive={historyVisible}
       historyCanHide={canHideHistory}
@@ -1482,6 +1512,7 @@
       onSelect={selectActivityPanel}
       onHistory={selectHistoryActivity}
       onToggleCollapse={toggleLeftSidebar}
+      onTogglePin={(panel) => railPins.toggle(panel)}
     />
     <div class="layout-area">
       <SplitContainer
@@ -1638,30 +1669,38 @@
     font-weight: 600;
   }
 
-  .branch-chip {
+  /* Remote-repository connection chip (mirrors the header branch
+     switcher chip's shape; the chip itself lives in BranchSwitcher). */
+  .remote-chip {
     flex: none;
     display: inline-flex;
     align-items: center;
-    gap: 0.25rem;
-    max-width: 16rem;
-    min-width: 0;
+    gap: 0.3rem;
     padding: 0.1rem 0.45rem;
     border-radius: var(--m3-shape-full, 9999px);
-    background: var(--m3-secondary-container, var(--m3-surface-container-high));
-    color: var(--m3-on-secondary-container, var(--m3-secondary));
-    font-family: var(--app-font-mono, ui-monospace, Consolas, monospace);
+    background: var(--m3-surface-container-high, var(--m3-surface));
+    color: var(--m3-on-surface-variant, var(--m3-on-surface));
     font-size: 0.6875rem;
   }
 
-  .branch-chip :global(svg) {
+  .remote-dot {
     flex: none;
+    width: 0.45rem;
+    height: 0.45rem;
+    border-radius: 50%;
+    background: var(--m3-outline, var(--m3-on-surface-variant));
   }
 
-  .branch-label {
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+  .remote-chip[data-status="connected"] .remote-dot {
+    background: var(--m3-primary);
+  }
+
+  .remote-chip[data-status="connecting"] .remote-dot {
+    background: var(--m3-tertiary, var(--m3-primary));
+  }
+
+  .remote-chip[data-status="connected"] {
+    color: var(--m3-on-surface);
   }
 
   .layout-controls {
@@ -1703,10 +1742,6 @@
   @media (max-width: 760px) {
     .preset-select {
       display: none;
-    }
-
-    .branch-chip {
-      max-width: 9rem;
     }
   }
 

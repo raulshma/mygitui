@@ -37,6 +37,13 @@ export interface UiEventMap {
   "branches-focus-switch": undefined;
   /** Open the merged-branch cleanup wizard (BranchPanel). */
   "branches-cleanup": undefined;
+  /**
+   * Open the header branch switcher popover: `{ repoId?, mode? }` — the
+   * switcher ignores events carrying another repo's id; `mode: "create"`
+   * opens like a plain switch (the search input doubles as the create
+   * field, so it is already focused for typing).
+   */
+  "branch-switcher-open": { repoId?: string; mode?: "switch" | "create" };
   /** Open the bisect start form (BisectBanner). */
   "bisect-open-start": undefined;
   /** Open file history for a path: `{ path, repoId? }`. */

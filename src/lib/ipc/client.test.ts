@@ -83,6 +83,7 @@ const REPO_INFO: RepoInfo = {
   name: "mygitui",
   bare: false,
   git_dir: "C:/repos/mygitui/.git",
+  device_id: null,
 };
 
 const REPO_STATUS: RepoStatus = {
