@@ -64,6 +64,7 @@
   import CleanDialog from "$lib/components/actions/CleanDialog.svelte";
   import OpenWithButton from "$lib/components/header/OpenWithButton.svelte";
   import RepoQuickActions from "$lib/components/header/RepoQuickActions.svelte";
+  import BranchSwitcher from "$lib/components/header/BranchSwitcher.svelte";
   // Startup: every panel that is not part of the first paint (status is the
   // default tab; diff and CommitBar are always visible) is dynamically
   // imported inside its snippet below — hidden panels (terminal/xterm,
@@ -110,6 +111,7 @@
     tabStore,
   } from "$lib/stores/tabs.svelte";
   import { loadHistoryPrefs } from "$lib/stores/historyPrefs";
+  import { railPins } from "$lib/stores/railPins.svelte";
   import { startAuthEvents, startOpsEvents } from "$lib/stores/ops.svelte";
   import { autofetch } from "$lib/stores/autofetch.svelte";
   import { remoteDevices } from "$lib/stores/remoteDevices.svelte";
@@ -122,7 +124,6 @@
   import iconClean from "@ktibow/iconset-material-symbols/cleaning-services";
   import iconResetLayout from "@ktibow/iconset-material-symbols/restart-alt";
   import iconMore from "@ktibow/iconset-material-symbols/more-horiz";
-  import iconBranch from "@ktibow/iconset-material-symbols/account-tree";
   import iconHome from "@ktibow/iconset-material-symbols/home-rounded";
 
   let {
@@ -759,12 +760,6 @@
       for (const unlisten of unlisteners) unlisten();
     };
   });
-
-  function branchLabel(s: RepoStatus): string {
-    if (s.branch) return s.branch;
-    if (s.detached && s.head) return `detached @ ${s.head.slice(0, 7)}`;
-    return s.detached ? "detached" : "unknown";
-  }
 
   /** Unique changed paths — a file staged *and* modified counts once. */
   const changeCount = $derived(
@@ -1432,12 +1427,7 @@
           </span>
         </span>
       {/if}
-      {#if status}
-        <span class="branch-chip" title={`Current branch: ${branchLabel(status)}`}>
-          <Icon icon={iconBranch} size={12} />
-          <span class="branch-label">{branchLabel(status)}</span>
-        </span>
-      {/if}
+      <BranchSwitcher {repoId} {status} onMutated={refresh} />
       <RepoQuickActions {repoId} {status} onMutated={refresh} />
       <span class="repo-root" title={root}>{root}</span>
     </span>
@@ -1512,6 +1502,7 @@
   <div class="main-area">
     <ActivityBar
       panels={activityPanels}
+      pinned={railPins.pins}
       active={activityPanel}
       historyActive={historyVisible}
       historyCanHide={canHideHistory}
@@ -1521,6 +1512,7 @@
       onSelect={selectActivityPanel}
       onHistory={selectHistoryActivity}
       onToggleCollapse={toggleLeftSidebar}
+      onTogglePin={(panel) => railPins.toggle(panel)}
     />
     <div class="layout-area">
       <SplitContainer
@@ -1677,33 +1669,8 @@
     font-weight: 600;
   }
 
-  .branch-chip {
-    flex: none;
-    display: inline-flex;
-    align-items: center;
-    gap: 0.25rem;
-    max-width: 16rem;
-    min-width: 0;
-    padding: 0.1rem 0.45rem;
-    border-radius: var(--m3-shape-full, 9999px);
-    background: var(--m3-secondary-container, var(--m3-surface-container-high));
-    color: var(--m3-on-secondary-container, var(--m3-secondary));
-    font-family: var(--app-font-mono, ui-monospace, Consolas, monospace);
-    font-size: 0.6875rem;
-  }
-
-  .branch-chip :global(svg) {
-    flex: none;
-  }
-
-  .branch-label {
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  /* Remote-repository connection chip (mirrors .branch-chip's shape). */
+  /* Remote-repository connection chip (mirrors the header branch
+     switcher chip's shape; the chip itself lives in BranchSwitcher). */
   .remote-chip {
     flex: none;
     display: inline-flex;
@@ -1775,10 +1742,6 @@
   @media (max-width: 760px) {
     .preset-select {
       display: none;
-    }
-
-    .branch-chip {
-      max-width: 9rem;
     }
   }
 

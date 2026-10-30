@@ -6,7 +6,10 @@
    * ahead, fetch otherwise) and shows ahead/behind counts as `↓n ↑n`; the
    * chevron opens an explicit Fetch / Pull / Push menu. Counts ride on the
    * button itself, so the header keeps one compact control instead of three
-   * unlabeled icons. Clicking a verb runs the same shared operation as the
+   * unlabeled icons. Verbs pinned from the menu (the trailing pin action,
+   * stored app-wide in `headerPins`) get their own always-visible icon
+   * segments in the same group, so a favorite verb skips the menu entirely.
+   * Clicking a verb runs the same shared operation as the
    * command palette (`$lib/git/sync`), and busy state comes from the
    * existing per-repo op store — including ops started from a panel or the
    * palette.
@@ -54,8 +57,12 @@
     type SyncOutcome,
   } from "$lib/git/sync";
   import { opsFor } from "$lib/stores/ops.svelte";
+  import { headerPins } from "$lib/stores/headerPins.svelte";
   import { toast } from "$lib/toast";
-  import { showMenuAtElement } from "$lib/components/menu/contextMenuStore.svelte";
+  import {
+    showMenuAt,
+    showMenuAtElement,
+  } from "$lib/components/menu/contextMenuStore.svelte";
   import Icon from "$lib/components/icons/Icon.svelte";
   import Spinner from "$lib/components/m3/Spinner.svelte";
   import iconFetch from "@ktibow/iconset-material-symbols/cloud-download";
@@ -63,6 +70,7 @@
   import iconPush from "@ktibow/iconset-material-symbols/arrow-upward";
   import iconSync from "@ktibow/iconset-material-symbols/sync";
   import iconChevronDown from "@ktibow/iconset-material-symbols/expand-more";
+  import iconPin from "@ktibow/iconset-material-symbols/push-pin";
 
   let {
     repoId,
@@ -106,6 +114,16 @@
    */
   const primaryVerb = $derived<SyncVerb>(
     behind > 0 ? "pull" : ahead > 0 ? "push" : "fetch",
+  );
+
+  /**
+   * Pinned verbs in the menu's fixed order (fetch/pull/push) regardless of
+   * pin order, so the segment row never reshuffles when the list changes.
+   */
+  const pinnedVerbs = $derived(
+    (["fetch", "pull", "push"] as const).filter((verb) =>
+      headerPins.pins.includes(verb),
+    ),
   );
 
   const fetchIdleTitle = "Fetch from the primary remote (prune)";
@@ -184,6 +202,7 @@
         icon: iconFetch,
         disabled: busy,
         run: () => void run("fetch"),
+        action: pinAction("fetch"),
       },
       {
         id: "pull",
@@ -191,6 +210,7 @@
         icon: iconPull,
         disabled: busy || !canUseBranch,
         run: () => void run("pull"),
+        action: pinAction("pull"),
       },
       {
         id: "push",
@@ -198,8 +218,49 @@
         icon: iconPush,
         disabled: busy || !canUseBranch,
         run: () => void run("push"),
+        action: pinAction("push"),
       },
     ]);
+  }
+
+  /** Trailing menu affordance toggling the verb's pinned segment. */
+  function pinAction(verb: SyncVerb) {
+    return {
+      label: headerPins.has(verb) ? "Unpin from header" : "Pin to header",
+      icon: iconPin,
+      run: () => headerPins.toggle(verb),
+    };
+  }
+
+  /** Right-click on a pinned segment unpins it (mirrors the rail buttons). */
+  function openPinContext(event: MouseEvent, verb: SyncVerb): void {
+    showMenuAt(event, [
+      {
+        id: `unpin-${verb}`,
+        label: "Unpin from header",
+        icon: iconPin,
+        run: () => headerPins.unpin(verb),
+      },
+    ]);
+  }
+
+  function verbIcon(verb: SyncVerb) {
+    return verb === "fetch"
+      ? iconFetch
+      : verb === "pull"
+        ? iconPull
+        : iconPush;
+  }
+
+  /** Segment tooltip: running → progress, busy → wait, else the idle title. */
+  function pinTitle(verb: SyncVerb): string {
+    if (runningVerb === verb) return `${VERB_LABELS[verb]} in progress…`;
+    if (busy) return "Wait for the current git operation to finish";
+    return verb === "fetch"
+      ? fetchIdleTitle
+      : verb === "pull"
+        ? pullIdleTitle
+        : pushIdleTitle;
   }
 </script>
 
@@ -241,6 +302,28 @@
     {/if}
   </button>
 
+  {#each pinnedVerbs as verb (verb)}
+    <button
+      class="sync-pin-btn"
+      type="button"
+      data-sync-pin={verb}
+      aria-label={pinTitle(verb)}
+      aria-busy={runningVerb === verb}
+      title={pinTitle(verb)}
+      disabled={busy || (verb !== "fetch" && !canUseBranch)}
+      onclick={() => void run(verb)}
+      oncontextmenu={(event) => openPinContext(event, verb)}
+    >
+      <span class="verb-icon">
+        {#if runningVerb === verb}
+          <Spinner size={14} />
+        {:else}
+          <Icon icon={verbIcon(verb)} size={14} />
+        {/if}
+      </span>
+    </button>
+  {/each}
+
   <button
     class="sync-menu-btn"
     type="button"
@@ -266,6 +349,7 @@
   }
 
   .sync-main,
+  .sync-pin-btn,
   .sync-menu-btn {
     display: inline-flex;
     align-items: center;
@@ -287,6 +371,13 @@
     min-width: 2rem;
   }
 
+  .sync-pin-btn {
+    flex: none;
+    min-width: 1.75rem;
+    padding: 0 0.3rem;
+    border-left: 1px solid var(--m3-outline-variant, var(--m3-primary));
+  }
+
   .sync-menu-btn {
     flex: none;
     min-width: 1.75rem;
@@ -295,18 +386,21 @@
   }
 
   .sync-actions:not(.busy) .sync-main:hover:not(:disabled),
+  .sync-actions:not(.busy) .sync-pin-btn:hover:not(:disabled),
   .sync-actions:not(.busy) .sync-menu-btn:hover:not(:disabled) {
     background: var(--m3-surface-container-high, var(--m3-surface));
     color: var(--m3-on-surface);
   }
 
   .sync-main:focus-visible,
+  .sync-pin-btn:focus-visible,
   .sync-menu-btn:focus-visible {
     outline: 2px solid var(--m3-primary);
     outline-offset: -2px;
   }
 
   .sync-main:disabled,
+  .sync-pin-btn:disabled,
   .sync-menu-btn:disabled {
     color: var(--app-disabled-fg, var(--m3-on-surface-variant));
     cursor: not-allowed;

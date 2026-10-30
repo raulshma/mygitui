@@ -441,6 +441,71 @@ describe("open/close + execution", () => {
   });
 });
 
+describe("branch switcher wiring", () => {
+  const BRANCH_EVENTS = [
+    "branch-switcher-open",
+    "branches-focus-switch",
+    "branches-focus-create",
+  ] as const;
+
+  /** Spies on the switcher event + the legacy panel-focus events. */
+  function spyBranchEvents(): {
+    switcher: Array<{ repoId?: string; mode?: "switch" | "create" }>;
+    legacy: string[];
+    stop: () => void;
+  } {
+    const switcher: Array<{ repoId?: string; mode?: "switch" | "create" }> = [];
+    const legacy: string[] = [];
+    const listener = (event: Event): void => {
+      if (event.type === "branch-switcher-open") {
+        switcher.push((event as CustomEvent).detail);
+      } else {
+        legacy.push(event.type);
+      }
+    };
+    for (const type of BRANCH_EVENTS) {
+      document.addEventListener(type, listener);
+    }
+    return {
+      switcher,
+      legacy,
+      stop: () => {
+        for (const type of BRANCH_EVENTS) {
+          document.removeEventListener(type, listener);
+        }
+      },
+    };
+  }
+
+  it("branches.switch / branches.create open the header BranchSwitcher", async () => {
+    seedTab();
+    const spy = spyBranchEvents();
+    try {
+      await executeCommandById("branches.switch");
+      await executeCommandById("branches.create");
+    } finally {
+      spy.stop();
+    }
+    expect(spy.switcher).toEqual([
+      { repoId: "r1", mode: "switch" },
+      { repoId: "r1", mode: "create" },
+    ]);
+    expect(spy.legacy).toEqual([]); // no more branches-focus-* dispatches
+  });
+
+  it("passes a missing repo through as undefined (any-repo event)", async () => {
+    const spy = spyBranchEvents(); // no seeded tab: ctx.repoId is null
+    try {
+      await executeCommandById("branches.switch");
+    } finally {
+      spy.stop();
+    }
+    expect(spy.switcher.length).toBe(1);
+    expect(spy.switcher[0]!.mode).toBe("switch");
+    expect(spy.switcher[0]!.repoId).toBeUndefined();
+  });
+});
+
 describe("activeCtx", () => {
   it("mirrors the active tab, or nulls on the home view", () => {
     expect(activeCtx()).toEqual({ repoId: null, root: null });

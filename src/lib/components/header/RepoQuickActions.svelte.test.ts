@@ -3,7 +3,10 @@
  * (pull when behind, push when ahead, fetch otherwise) with its accessible
  * name carrying branch + counts, success refreshes the owner, preconditions
  * disable (never toast-and-run), and ops started elsewhere disable/spin the
- * group.
+ * group. The header pins: the chevron menu's trailing pin action pins/unpins
+ * verbs (via the shared context menu), pinned verbs render as icon segments
+ * in the group, clicking one runs the shared verb, right-click unpins, and
+ * segments disable without a current branch or while a sync runs.
  */
 
 import {
@@ -16,6 +19,9 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { NetStats, RepoStatus } from "$lib/ipc/types";
 import { opStore } from "$lib/stores/ops.svelte";
+import { contextMenu } from "$lib/components/menu/contextMenuStore.svelte";
+import ContextMenu from "$lib/components/menu/ContextMenu.svelte";
+import { headerPins } from "$lib/stores/headerPins.svelte";
 
 const mocks = vi.hoisted(() => ({
   fetchDefaultRemote: vi.fn(),
@@ -75,12 +81,140 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  contextMenu.hide();
+  headerPins.clear();
   opStore.ops = {};
 });
 
 function button(name: string | RegExp): HTMLButtonElement {
   return screen.getByRole("button", { name }) as HTMLButtonElement;
 }
+
+function pinButton(verb: string): HTMLButtonElement {
+  const found = document.querySelector<HTMLButtonElement>(
+    `[data-sync-pin="${verb}"]`,
+  );
+  expect(found).not.toBeNull();
+  return found!;
+}
+
+/** Opens the chevron menu (rendering ContextMenu alongside is required). */
+async function openMenu(): Promise<void> {
+  await fireEvent.click(button("More sync actions"));
+  expect(contextMenu.open).toBe(true);
+}
+
+describe("RepoQuickActions header pins", () => {
+  it("pins a verb from the menu's trailing pin action", async () => {
+    render(RepoQuickActions, { repoId: "r1", status: status() });
+    render(ContextMenu);
+
+    await openMenu();
+    // Entries render in fetch/pull/push order — the first pin action pins Fetch.
+    await fireEvent.click(screen.getAllByTitle("Pin to header")[0]!);
+    expect(headerPins.pins).toEqual(["fetch"]);
+    expect(contextMenu.open).toBe(false);
+    expect(pinButton("fetch")).not.toBeNull();
+  });
+
+  it("the menu action flips to Unpin for pinned verbs", async () => {
+    headerPins.pin("pull");
+    render(RepoQuickActions, { repoId: "r1", status: status() });
+    render(ContextMenu);
+
+    await openMenu();
+    expect(screen.getByTitle("Unpin from header")).not.toBeNull();
+    // The other two verbs still offer pinning.
+    expect(screen.getAllByTitle("Pin to header")).toHaveLength(2);
+  });
+
+  it("renders pinned verbs as segments in fetch/pull/push order", () => {
+    headerPins.pin("push");
+    headerPins.pin("fetch");
+    render(RepoQuickActions, { repoId: "r1", status: status() });
+
+    // Pin order is push→fetch, but the row never reshuffles.
+    const verbs = [
+      ...document.querySelectorAll("[data-sync-pin]"),
+    ].map((el) => el.getAttribute("data-sync-pin"));
+    expect(verbs).toEqual(["fetch", "push"]);
+  });
+
+  it("a pinned segment runs the verb and reports success", async () => {
+    mocks.pullCurrentBranch.mockResolvedValue({
+      kind: "done",
+      remote: "origin",
+      stats: STATS,
+    });
+    const onMutated = vi.fn();
+
+    headerPins.pin("pull");
+    render(RepoQuickActions, { repoId: "r1", status: status(), onMutated });
+    render(ContextMenu);
+
+    await fireEvent.click(pinButton("pull"));
+
+    await waitFor(() =>
+      expect(mocks.pullCurrentBranch).toHaveBeenCalledWith("r1", "main"),
+    );
+    await waitFor(() =>
+      expect(toast).toHaveBeenCalledWith("done pull origin main", {
+        kind: "success",
+      }),
+    );
+    expect(onMutated).toHaveBeenCalledTimes(1);
+  });
+
+  it("unpins via the pinned segment's right-click menu", async () => {
+    headerPins.pin("push");
+    render(RepoQuickActions, { repoId: "r1", status: status() });
+    render(ContextMenu);
+
+    await fireEvent.contextMenu(pinButton("push"));
+    expect(contextMenu.open).toBe(true);
+    await fireEvent.click(screen.getByText("Unpin from header"));
+    expect(headerPins.pins).toEqual([]);
+    expect(document.querySelector('[data-sync-pin="push"]')).toBeNull();
+  });
+
+  it("a pinned pull disables without a current branch; fetch stays", () => {
+    headerPins.pin("pull");
+    headerPins.pin("fetch");
+    render(RepoQuickActions, {
+      repoId: "r1",
+      status: status({ branch: null, detached: true, ahead: 0, behind: 0 }),
+    });
+
+    // Fetch works branchless; pull/push need a current branch.
+    expect(pinButton("fetch").disabled).toBe(false);
+    expect(pinButton("pull").disabled).toBe(true);
+  });
+
+  it("segments disable and announce progress while their verb runs", async () => {
+    let resolveFetch: (value: {
+      kind: "done";
+      remote: string;
+      stats: NetStats;
+    }) => void = () => {};
+    mocks.fetchDefaultRemote.mockReturnValue(
+      new Promise((resolve) => (resolveFetch = resolve)),
+    );
+
+    headerPins.pin("fetch");
+    render(RepoQuickActions, { repoId: "r1", status: status() });
+
+    await fireEvent.click(pinButton("fetch"));
+    // In-flight: busy + the segment announces the running verb.
+    expect(pinButton("fetch").disabled).toBe(true);
+    expect(pinButton("fetch").getAttribute("aria-busy")).toBe("true");
+
+    resolveFetch({ kind: "done", remote: "origin", stats: STATS });
+    await waitFor(() =>
+      expect(pinButton("fetch").getAttribute("aria-busy")).toBe("false"),
+    );
+    expect(pinButton("fetch").disabled).toBe(false);
+  });
+});
 
 describe("RepoQuickActions", () => {
   it("renders one Sync split button; behind wins the contextual verb", () => {

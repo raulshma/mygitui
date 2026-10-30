@@ -92,6 +92,15 @@
     if (!isSeparator(entry) && !entry.disabled) run(entry);
   }
 
+  /** Entry-local trailing action (e.g. pin); does not trigger the entry. */
+  function runAction(entry: MenuItem, event: Event): void {
+    event.preventDefault();
+    event.stopPropagation();
+    if (entry.disabled || !entry.action) return;
+    close();
+    entry.action.run();
+  }
+
   function focusActive(): void {
     const node = listEl?.querySelector<HTMLLIElement>(
       `[data-index="${active}"]`,
@@ -165,7 +174,27 @@
               <Icon icon={entry.icon} />
             </span>
           {/if}
-          {entry.label}
+          <span class="label">{entry.label}</span>
+          {#if entry.action}
+            <button
+              type="button"
+              class="entry-action"
+              title={entry.action.label}
+              aria-label={entry.action.label}
+              onclick={(event) => runAction(entry, event)}
+              onkeydown={(event) => {
+                if (event.key === "Enter" || event.key === " ") {
+                  runAction(entry, event);
+                }
+              }}
+            >
+              {#if entry.action.icon}
+                <Icon icon={entry.action.icon} />
+              {:else}
+                {entry.action.label}
+              {/if}
+            </button>
+          {/if}
         </li>
       {/if}
     {/each}
@@ -204,6 +233,50 @@
   .icon {
     flex: none;
     display: inline-flex;
+  }
+
+  .label {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  /* Trailing entry action (e.g. "Pin to rail"): quiet icon button that
+     takes over the row's hover highlight instead of stacking on it. */
+  .entry-action {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.5rem;
+    height: 1.5rem;
+    padding: 0;
+    margin-right: -0.35rem;
+    border: none;
+    border-radius: var(--m3-shape-small, 8px);
+    background: none;
+    color: inherit;
+    font: inherit;
+    font-size: 0.75rem;
+    cursor: pointer;
+    opacity: 0.65;
+  }
+
+  .entry-action:hover,
+  .entry-action:focus-visible {
+    opacity: 1;
+    background: var(--m3-surface-container-highest, rgb(0 0 0 / 0.08));
+  }
+
+  .entry-action:focus-visible {
+    outline: 2px solid var(--m3-primary);
+    outline-offset: -2px;
+  }
+
+  .entry.disabled .entry-action {
+    pointer-events: none;
+    opacity: 0.3;
   }
 
   .entry:focus-visible,
