@@ -309,6 +309,21 @@ fn status_counter() -> Arc<AtomicUsize> {
     counter
 }
 
+/// Route the keyring crate's one-time store selection to the in-memory mock
+/// instead of the OS secret service. The platform store (Secret Service on
+/// Linux) needs a desktop session that CI runners don't provide — storing a
+/// secret there fails with "SS error: result not returned from SS API".
+///
+/// Must run BEFORE the first `keyring::Entry::new`: that first call commits
+/// the process to the platform store (`LazyLock`, cached forever), so we
+/// trigger it with a warm-up entry and then replace the default. Only affects
+/// this test binary — each integration test is its own process.
+fn install_mock_keyring() {
+    let _ = keyring::Entry::new("mygitui-mock-warmup", "warmup");
+    let mock = keyring_core::mock::Store::new().expect("mock keyring store");
+    keyring_core::set_default_store(mock);
+}
+
 /// Shared setup: trusted key, stored password, connected session.
 /// `counter` must be installed (via [`status_counter`]) BEFORE this runs —
 /// the first dial's two events fire during `session_for`.
@@ -332,6 +347,7 @@ async fn connect_device(name: &str, port: u16, algo: &str, fingerprint: &str) ->
 /// both scenarios must share it — expectations below are DELTAS.
 #[tokio::test]
 async fn status_events_match_dials() {
+    install_mock_keyring();
     let counter = status_counter();
 
     // ---- Phase 1: healthy browse workload dials exactly once ------------

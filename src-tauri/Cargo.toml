@@ -67,3 +67,5 @@ git2 = "0.21.0"
 proptest = "1"
 sysinfo = "0.33"
 rand_core = "0.10"
+# Mock keyring store for integration tests (no OS secret service on CI).
+keyring-core = "1"

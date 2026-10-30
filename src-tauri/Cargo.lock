@@ -3208,6 +3208,7 @@ dependencies = [
  "ignore",
  "imara-diff",
  "keyring",
+ "keyring-core",
  "notify",
  "parking_lot",
  "portable-pty",
