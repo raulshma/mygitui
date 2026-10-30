@@ -29,6 +29,7 @@ mod prop_tests;
 mod pty;
 #[cfg(test)]
 mod pty_tests;
+pub mod remote;
 mod repo;
 mod watcher;
 mod workspace;
@@ -90,6 +91,13 @@ pub fn run() {
         // `.manage` hands out the RepoManager.
         .setup(move |app| {
             auth::init(app.handle().clone());
+            // Remote (SSH) devices: host-key confirms and secret asks reach
+            // the frontend as events through this emitter; must be installed
+            // before any device can connect.
+            let remote_app = app.handle().clone();
+            remote::prompts::init(move |event, payload| {
+                let _ = remote_app.emit(event, payload.clone());
+            });
             *app.state::<CliArgs>().0.lock().unwrap() = cli_args;
             // Failsafe for the hidden-until-loaded windows: if the page
             // never fires a load event (broken asset pipeline, webview
@@ -118,6 +126,11 @@ pub fn run() {
         // AI: the managed `opencode serve` child (opencode_serve_start/
         // status/stop); dropped on app exit, killing the server.
         .manage(opencode::OpenCodeServerRegistry::default())
+        // Remote (SSH) devices: live-session pool (`device_*` commands),
+        // remote shell sessions (`rshell_*`), and remote action runs.
+        .manage(remote::transport::DeviceRegistry::new())
+        .manage(remote::term::RemoteShellRegistry::default())
+        .manage(remote::actions::RemoteActionRegistry::default())
         .invoke_handler(tauri::generate_handler![
             keyring_store::secrets_get,
             keyring_store::secrets_set,
@@ -259,6 +272,26 @@ pub fn run() {
             editors::detect_editors,
             editors::open_with,
             popout::open_popout,
+            remote::commands::device_list,
+            remote::commands::device_add,
+            remote::commands::device_update,
+            remote::commands::device_remove,
+            remote::commands::device_connect,
+            remote::commands::device_disconnect,
+            remote::commands::device_status,
+            remote::commands::device_test,
+            remote::commands::device_hostkey_respond,
+            remote::commands::device_auth_respond,
+            remote::commands::device_forget_host_key,
+            remote::commands::device_host_key,
+            remote::commands::device_browse_dir,
+            remote::commands::device_scan_repos,
+            remote::commands::remote_repo_open,
+            remote::commands::remote_poll_set_paused,
+            remote::term::rshell_create,
+            remote::term::rshell_write,
+            remote::term::rshell_resize,
+            remote::term::rshell_kill,
         ])
         // Windows are created hidden so the window-state plugin's restore
         // (position/size/maximize) lands before anything is on screen; this

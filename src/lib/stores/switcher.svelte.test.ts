@@ -55,6 +55,8 @@ function tab(id: string, root: string) {
     root,
     status: null,
     generation: 0,
+    deviceId: null,
+    openError: null,
   };
 }
 
@@ -79,6 +81,7 @@ beforeEach(() => {
       name: repoBasename(path),
       bare: false,
       git_dir: `${path}/.git`,
+      device_id: null,
     }),
   );
   closeSwitcher();

@@ -205,3 +205,28 @@ export type { FileMeta } from "./gen/FileMeta";
 export type { FileIndexEntry } from "./gen/FileIndexEntry";
 export type { FileIndex } from "./gen/FileIndex";
 export type { NewEntryKind } from "./gen/NewEntryKind";
+
+// ---------------------------------------------------------------------------
+// Remote devices (SSH) — device registry / prompts (Rust:
+// src-tauri/src/remote/{commands,term}.rs; `term.rs` reuses the
+// workspace/pty payloads above).
+// ---------------------------------------------------------------------------
+
+/** SSH auth method of a device profile. */
+export type { AuthKind } from "./gen/AuthKind";
+export type { DeviceAuth } from "./gen/DeviceAuth";
+export type { DeviceProfile } from "./gen/DeviceProfile";
+/** One device as the FE sees it (profile + live status). */
+export type { DeviceInfo } from "./gen/DeviceInfo";
+/** Create/update payload for a device (secrets write-once to the keyring). */
+export type { DeviceInput } from "./gen/DeviceInput";
+/** One repository candidate found by `device_scan_repos`. */
+export type { DeviceRepoCandidate } from "./gen/DeviceRepoCandidate";
+/** `device-status` event payload. */
+export type { DeviceStatusEvent } from "./gen/DeviceStatusEvent";
+/** `hostkey-request` event payload. */
+export type { HostKeyRequestEvent } from "./gen/HostKeyRequestEvent";
+/** `device-auth-request` event payload. */
+export type { DeviceAuthRequestEvent } from "./gen/DeviceAuthRequestEvent";
+/** One pinned host key (JSON file entry). */
+export type { KnownHostKey } from "./gen/KnownHostKey";

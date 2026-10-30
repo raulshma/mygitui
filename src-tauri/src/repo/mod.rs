@@ -81,14 +81,19 @@ fn install_stream(slot: &Mutex<Option<Arc<StreamHandle>>>) -> Arc<StreamHandle> 
 /// Runtime state for one open repository.
 pub struct RepoHandle {
     pub id: RepoId,
-    /// Absolute workdir root (no trailing separator, no `\\?\` prefix).
+    /// Absolute workdir root (no trailing separator, no `\\?\` prefix;
+    /// POSIX path on the device for remote repos).
     pub root: PathBuf,
     /// Absolute `.git` directory.
     pub git_dir: PathBuf,
     /// Opened once at discovery; locked for the duration of every engine
-    /// call (`git2::Repository` is `Send` but not `Sync`).
-    pub repo: Arc<Mutex<git2::Repository>>,
-    /// Bumped on every watcher batch; clients discard stale stream pages.
+    /// call (`git2::Repository` is `Send` but not `Sync`). Only present
+    /// for [`RepoBackend::Local`].
+    pub repo: Option<Arc<Mutex<git2::Repository>>>,
+    /// Where this repo physically lives.
+    pub backend: RepoBackend,
+    /// Bumped on every watcher batch (or remote poll tick); clients discard
+    /// stale stream pages.
     generation: Arc<AtomicU64>,
     engine: Arc<dyn GitEngine>,
     /// M3 power/safety operations (merge, rebase, stash, checkpoints…).
@@ -104,6 +109,38 @@ pub struct RepoHandle {
     history_stream: Mutex<Option<Arc<StreamHandle>>>,
     closed: AtomicBool,
     watcher: Mutex<Option<RepoWatcher>>,
+}
+
+/// Where a repo lives: the local filesystem, or a remote device over SSH.
+#[derive(Clone)]
+pub enum RepoBackend {
+    Local,
+    Remote(Arc<RemoteHandle>),
+}
+
+/// Per-repo remote state: the device session plus the change poller.
+pub struct RemoteHandle {
+    pub device_id: String,
+    pub device_name: String,
+    /// Absolute POSIX workdir path on the device.
+    pub root: String,
+    pub session: Arc<crate::remote::transport::DeviceSession>,
+    /// Repo-change poller (replaces the local FS watcher).
+    pub poller: Mutex<Option<crate::remote::polling::RepoPoller>>,
+    /// Poll interval seconds (from the device profile).
+    pub poll_secs: u32,
+}
+
+impl RemoteHandle {
+    /// A git engine bound to this repo (cheap: Arc clones).
+    pub fn git(&self) -> crate::remote::engine::RemoteGitEngine {
+        crate::remote::engine::RemoteGitEngine::new(self.session.clone(), self.root.clone())
+    }
+
+    /// An SFTP workspace bound to this repo.
+    pub fn workspace(&self) -> crate::remote::workspace::RemoteWorkspace {
+        crate::remote::workspace::RemoteWorkspace::new(self.session.clone(), self.root.clone())
+    }
 }
 
 impl RepoHandle {
@@ -139,8 +176,28 @@ impl RepoHandle {
         &self.ops
     }
 
-    pub fn repo(&self) -> Arc<Mutex<git2::Repository>> {
-        self.repo.clone()
+    /// The local git2 repository (Err for remote repos).
+    pub fn repo(&self) -> Result<Arc<Mutex<git2::Repository>>, String> {
+        self.repo
+            .clone()
+            .ok_or_else(|| "this project lives on a remote device".to_string())
+    }
+
+    /// The remote backend, when this repo lives on a device.
+    pub fn remote(&self) -> Option<&Arc<RemoteHandle>> {
+        match &self.backend {
+            RepoBackend::Local => None,
+            RepoBackend::Remote(remote) => Some(remote),
+        }
+    }
+
+    pub fn is_remote(&self) -> bool {
+        self.remote().is_some()
+    }
+
+    /// The device id for remote repos (None for local).
+    pub fn device_id(&self) -> Option<String> {
+        self.remote().map(|r| r.device_id.clone())
     }
 
     pub fn is_closed(&self) -> bool {
@@ -157,7 +214,8 @@ impl RepoHandle {
         install_stream(&self.history_stream)
     }
 
-    /// Tear down: mark closed, cancel streams, stop the watcher. Idempotent.
+    /// Tear down: mark closed, cancel streams, stop the watcher (or the
+    /// remote poller). Idempotent.
     fn shutdown(&self) {
         self.closed.store(true, Ordering::SeqCst);
         if let Some(token) = self.log_stream.lock().take() {
@@ -169,7 +227,11 @@ impl RepoHandle {
         // M2 op queue: stop accepting new ops; the worker drains its
         // backlog (jobs still resolve) and then exits.
         self.ops.shutdown();
-        // Dropping the watcher joins its debounce thread.
+        // Dropping the watcher joins its debounce thread; dropping the
+        // remote poller stops its thread.
+        if let Some(remote) = self.remote() {
+            drop(remote.poller.lock().take());
+        }
         drop(self.watcher.lock().take());
     }
 }
@@ -265,7 +327,8 @@ impl RepoManager {
             ops: OpQueue::new(repo_id),
             root,
             git_dir,
-            repo: Arc::new(Mutex::new(repo)),
+            repo: Some(Arc::new(Mutex::new(repo))),
+            backend: RepoBackend::Local,
             generation: Arc::new(AtomicU64::new(0)),
             engine: default_engine(),
             m3: m3_engine(),
@@ -303,6 +366,82 @@ impl RepoManager {
             }
             None => false,
         }
+    }
+
+    /// Open (or reuse) a repo living on a remote device. `session` must be
+    /// connected; discovery (toplevel resolve, bare rejection) runs on the
+    /// device. Starts the change poller instead of an FS watcher.
+    #[allow(clippy::too_many_arguments)]
+    pub fn open_remote(
+        &self,
+        app: &tauri::AppHandle,
+        device_id: &str,
+        device_name: &str,
+        poll_secs: u32,
+        session: Arc<crate::remote::transport::DeviceSession>,
+        path: &str,
+    ) -> Result<RepoInfo, String> {
+        let (root, git_dir) = crate::remote::engine::RemoteGitEngine::discover(&session, path)?;
+
+        // Reuse an open handle for the same device+workdir (one poller per
+        // repo). Local dedupe keys on root only; remote roots are device-
+        // scoped, so compare the device first.
+        {
+            let repos = self.repos.lock();
+            for handle in repos.values() {
+                if let Some(remote) = handle.remote() {
+                    if remote.device_id == device_id && remote.root == root {
+                        let mut info = repo_info_of(handle);
+                        info.device_id = Some(device_id.to_string());
+                        return Ok(info);
+                    }
+                }
+            }
+        }
+
+        let repo_id = self.next_repo_id();
+        let remote = Arc::new(RemoteHandle {
+            device_id: device_id.to_string(),
+            device_name: device_name.to_string(),
+            root: root.clone(),
+            session,
+            poller: Mutex::new(None),
+            poll_secs,
+        });
+        let handle = Arc::new(RepoHandle {
+            id: repo_id.clone(),
+            ops: OpQueue::new(repo_id.clone()),
+            root: PathBuf::from(&root),
+            git_dir: PathBuf::from(&git_dir),
+            repo: None,
+            backend: RepoBackend::Remote(remote.clone()),
+            generation: Arc::new(AtomicU64::new(0)),
+            engine: default_engine(),
+            m3: m3_engine(),
+            m12: m12_engine(),
+            log_stream: Mutex::new(None),
+            history_stream: Mutex::new(None),
+            closed: AtomicBool::new(false),
+            watcher: Mutex::new(None),
+        });
+        let mut info = repo_info_of(&handle);
+        info.device_id = Some(device_id.to_string());
+        self.repos.lock().insert(handle.id.clone(), handle.clone());
+
+        // Progress events + the change poller (the remote watcher twin).
+        handle
+            .ops()
+            .set_sink(Arc::new(crate::ops::TauriEventSink::new(app.clone())));
+        let poller = crate::remote::polling::RepoPoller::start(
+            repo_id.clone(),
+            handle.generation_shared(),
+            Arc::new(remote.git()),
+            std::time::Duration::from_secs(poll_secs.max(1) as u64),
+            app.clone(),
+        )?;
+        *remote.poller.lock() = Some(poller);
+
+        Ok(info)
     }
 
     /// Unique repo id: timestamp + pid + counter, hex — no uuid dependency.
@@ -345,6 +484,7 @@ fn repo_info_of(handle: &RepoHandle) -> RepoInfo {
         name,
         bare: false,
         git_dir: handle.git_dir.to_string_lossy().into_owned(),
+        device_id: handle.device_id(),
     }
 }
 

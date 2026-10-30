@@ -112,6 +112,7 @@
   import { loadHistoryPrefs } from "$lib/stores/historyPrefs";
   import { startAuthEvents, startOpsEvents } from "$lib/stores/ops.svelte";
   import { autofetch } from "$lib/stores/autofetch.svelte";
+  import { remoteDevices } from "$lib/stores/remoteDevices.svelte";
   import { toast } from "$lib/toast";
   import { contextMenu, type MenuEntry } from "$lib/components/menu/contextMenuStore.svelte";
   import iconHistory from "@ktibow/iconset-material-symbols/history";
@@ -129,11 +130,14 @@
     name,
     root,
     status,
+    deviceId = null,
   }: {
     repoId: string;
     name: string;
     root: string;
     status: RepoStatus | null;
+    /** Owning device for remote repositories (`null` = local). */
+    deviceId?: string | null;
   } = $props();
 
   let selected: string[] = $state([]);
@@ -767,6 +771,14 @@
     status ? new Set(status.entries.map((entry) => entry.path)).size : 0,
   );
 
+  // Remote repositories (device_id set) show a connection chip fed by the
+  // remote-devices store (`device-status` events keep it live); the forge
+  // panel is unavailable there (it shells out to a local `gh`).
+  const isRemote = $derived(deviceId !== null);
+  const remoteStatus = $derived(
+    deviceId !== null ? remoteDevices.statusOf(deviceId) : null,
+  );
+
   /** Header overflow: low-frequency repository tools. */
   function openHeaderMenu(event: MouseEvent): void {
     const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
@@ -1367,13 +1379,19 @@
 {/snippet}
 {#snippet terminalPanel()}
   {#await import("$lib/components/terminal/TerminalPanel.svelte") then TerminalPanelModule}
-    <TerminalPanelModule.default {repoId} />
+    <TerminalPanelModule.default {repoId} remote={isRemote} />
   {/await}
 {/snippet}
 {#snippet forgePanel()}
-  {#await import("$lib/components/forge/ForgePanel.svelte") then ForgePanelModule}
-    <ForgePanelModule.default {repoId} />
-  {/await}
+  {#if isRemote}
+    <aside class="missing-panel" title="Not available for remote projects">
+      Not available for remote projects
+    </aside>
+  {:else}
+    {#await import("$lib/components/forge/ForgePanel.svelte") then ForgePanelModule}
+      <ForgePanelModule.default {repoId} />
+    {/await}
+  {/if}
 {/snippet}
 {#snippet actionsPanel()}
   {#await import("$lib/components/actions/ActionsPanel.svelte") then ActionsPanelModule}
@@ -1393,6 +1411,27 @@
   <header class="repo-header">
     <span class="repo-identity">
       <span class="repo-name" title={name}>{name}</span>
+      {#if remoteStatus}
+        <!-- Remote repository: connection chip fed by the devices store. -->
+        <span
+          class="remote-chip"
+          data-status={remoteStatus}
+          title={remoteStatus === "connected"
+            ? "Device connected"
+            : remoteStatus === "connecting"
+              ? "Device connecting…"
+              : "Device offline"}
+        >
+          <span class="remote-dot" aria-hidden="true"></span>
+          <span class="remote-label">
+            {remoteStatus === "connected"
+              ? "connected"
+              : remoteStatus === "connecting"
+                ? "connecting…"
+                : "offline"}
+          </span>
+        </span>
+      {/if}
       {#if status}
         <span class="branch-chip" title={`Current branch: ${branchLabel(status)}`}>
           <Icon icon={iconBranch} size={12} />
@@ -1662,6 +1701,39 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  /* Remote-repository connection chip (mirrors .branch-chip's shape). */
+  .remote-chip {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    padding: 0.1rem 0.45rem;
+    border-radius: var(--m3-shape-full, 9999px);
+    background: var(--m3-surface-container-high, var(--m3-surface));
+    color: var(--m3-on-surface-variant, var(--m3-on-surface));
+    font-size: 0.6875rem;
+  }
+
+  .remote-dot {
+    flex: none;
+    width: 0.45rem;
+    height: 0.45rem;
+    border-radius: 50%;
+    background: var(--m3-outline, var(--m3-on-surface-variant));
+  }
+
+  .remote-chip[data-status="connected"] .remote-dot {
+    background: var(--m3-primary);
+  }
+
+  .remote-chip[data-status="connecting"] .remote-dot {
+    background: var(--m3-tertiary, var(--m3-primary));
+  }
+
+  .remote-chip[data-status="connected"] {
+    color: var(--m3-on-surface);
   }
 
   .layout-controls {

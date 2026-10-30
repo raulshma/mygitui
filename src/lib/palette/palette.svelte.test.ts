@@ -121,6 +121,8 @@ function seedTab(id = "r1"): void {
     root: "/repos/r1",
     status: { branch: "main" } as never,
     generation: 0,
+    deviceId: null,
+    openError: null,
   });
   tabStore.activeId = id;
 }

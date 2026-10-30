@@ -3,7 +3,7 @@ import type { RepoId } from "./RepoId";
 
 export type RepoInfo = { repo_id: RepoId, 
 /**
- * Absolute workdir path.
+ * Absolute workdir path (POSIX path on the device for remote repos).
  */
 root: string, 
 /**
@@ -13,4 +13,8 @@ name: string,
 /**
  * True when the repo is bare (no workdir).
  */
-bare: boolean, git_dir: string, };
+bare: boolean, git_dir: string, 
+/**
+ * Device id when this is a remote (SSH) project; None for local repos.
+ */
+device_id: string | null, };

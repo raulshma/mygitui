@@ -31,6 +31,13 @@ use crate::repo::{RepoHandle, RepoManager, StreamHandle};
 const LOG_PAGE_SIZE: usize = 500;
 /// Files per `repo_diff_stream` page.
 const DIFF_PAGE_SIZE: usize = 50;
+/// Whole-walk cap for the remote log stream: the remote engine returns the
+/// log in one shot (no cursor paging), so the stream fetches once and pages
+/// locally. Generous bound protects device + host memory.
+const REMOTE_LOG_LIMIT: usize = 100_000;
+/// Entry cap for the remote reflog read (the remote engine has no local
+/// `name` argument; see the `reflog` command's remote branch).
+const REMOTE_REFLOG_LIMIT: usize = 500;
 
 /// One page of streamed history (contracts.md: `LogPage`).
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -95,8 +102,18 @@ pub async fn repo_status(
     state: State<'_, RepoManager>,
 ) -> Result<RepoStatus, String> {
     let handle = get_handle(&state, &repo_id)?;
+    if let Some(remote) = handle.remote() {
+        return finish_op(enqueue_remote_read(
+            &handle,
+            remote,
+            "status",
+            move |git, _ws| git.status(),
+        ))
+        .await;
+    }
     let engine = handle.engine();
-    finish_op(enqueue_read(&handle, "status", move |_ctx, repo| {
+    let repo = handle.repo()?;
+    finish_op(enqueue_read(&handle, &repo, "status", move |_ctx, repo| {
         engine.status(repo)
     }))
     .await
@@ -109,8 +126,18 @@ pub async fn repo_refs(
     state: State<'_, RepoManager>,
 ) -> Result<Vec<(String, String)>, String> {
     let handle = get_handle(&state, &repo_id)?;
+    if let Some(remote) = handle.remote() {
+        return finish_op(enqueue_remote_read(
+            &handle,
+            remote,
+            "refs",
+            move |git, _ws| git.refs(),
+        ))
+        .await;
+    }
     let engine = handle.engine();
-    finish_op(enqueue_read(&handle, "refs", move |_ctx, repo| {
+    let repo = handle.repo()?;
+    finish_op(enqueue_read(&handle, &repo, "refs", move |_ctx, repo| {
         engine.refs(repo)
     }))
     .await
@@ -124,8 +151,18 @@ pub async fn repo_blame(
     state: State<'_, RepoManager>,
 ) -> Result<Vec<BlameLine>, String> {
     let handle = get_handle(&state, &repo_id)?;
+    if let Some(remote) = handle.remote() {
+        return finish_op(enqueue_remote_read(
+            &handle,
+            remote,
+            "blame",
+            move |git, _ws| git.blame(&path, from.as_deref()),
+        ))
+        .await;
+    }
     let engine = handle.engine();
-    finish_op(enqueue_read(&handle, "blame", move |_ctx, repo| {
+    let repo = handle.repo()?;
+    finish_op(enqueue_read(&handle, &repo, "blame", move |_ctx, repo| {
         engine.blame(repo, &path, from.as_deref())
     }))
     .await
@@ -142,8 +179,18 @@ pub async fn repo_diff(
     state: State<'_, RepoManager>,
 ) -> Result<Vec<FileDiff>, String> {
     let handle = get_handle(&state, &repo_id)?;
+    if let Some(remote) = handle.remote() {
+        return finish_op(enqueue_remote_read(
+            &handle,
+            remote,
+            "diff",
+            move |git, _ws| git.diff(&old, &new, paths.as_deref()),
+        ))
+        .await;
+    }
     let engine = handle.engine();
-    finish_op(enqueue_read(&handle, "diff", move |_ctx, repo| {
+    let repo = handle.repo()?;
+    finish_op(enqueue_read(&handle, &repo, "diff", move |_ctx, repo| {
         engine.diff(repo, &old, &new, paths.as_deref())
     }))
     .await
@@ -161,8 +208,25 @@ pub async fn repo_diff_stream(
     state: State<'_, RepoManager>,
 ) -> Result<(), String> {
     let handle = get_handle(&state, &repo_id)?;
+    if let Some(remote) = handle.remote() {
+        // The remote engine returns the complete diff in one shot: one
+        // queued read, then page it out exactly like the local result.
+        let diffs = finish_op(enqueue_remote_read(
+            &handle,
+            remote,
+            "diff",
+            move |git, _ws| git.diff(&old, &new, paths.as_deref()),
+        ))
+        .await?;
+        for page in chunk_vec(diffs, DIFF_PAGE_SIZE) {
+            if on_page.send(page).is_err() {
+                break; // client dropped the channel
+            }
+        }
+        return Ok(());
+    }
     let engine = handle.engine();
-    let repo = handle.repo();
+    let repo = handle.repo()?;
     let diffs = tauri::async_runtime::spawn_blocking(move || {
         let repo = repo.lock();
         engine
@@ -228,6 +292,13 @@ fn stream_log(
     on_page: Channel<LogPage>,
     token: Arc<StreamHandle>,
 ) {
+    if let Some(remote) = handle.remote() {
+        stream_log_remote(&handle, remote.clone(), filter, on_page, token);
+        return;
+    }
+    let Ok(repo) = handle.repo() else {
+        return; // unreachable: remote repos took the branch above
+    };
     let start_generation = handle.generation();
     let mut cursor: Option<String> = None;
     // Lane state belongs to this stream: preserve it across its pages, but
@@ -245,7 +316,6 @@ fn stream_log(
 
         let page = {
             let engine = handle.engine();
-            let repo = handle.repo();
             let repo = repo.lock();
             match engine.log(&repo, &filter, LOG_PAGE_SIZE, cursor.as_deref()) {
                 Ok(page) => page,
@@ -279,6 +349,67 @@ fn stream_log(
             break;
         }
         cursor = next_cursor;
+    }
+}
+
+/// Remote twin of [`stream_log`]: the remote engine's `log` returns the
+/// whole (bounded) walk in one shot, so ONE queued read produces the full
+/// result and this loop only lays it out and pages it over the channel.
+/// Graph rows come from the same pure `graph::types::layout_page` with lane
+/// state carried across pages; abort checks mirror the local loop (stream
+/// cancelled/superseded, repo closed, or generation moved between sends).
+fn stream_log_remote(
+    handle: &Arc<RepoHandle>,
+    remote: Arc<crate::repo::RemoteHandle>,
+    filter: LogFilter,
+    on_page: Channel<LogPage>,
+    token: Arc<StreamHandle>,
+) {
+    let start_generation = handle.generation();
+    let rx = enqueue_remote_read(handle, &remote, "log", move |git, _ws| {
+        git.log(&filter, REMOTE_LOG_LIMIT, None)
+    });
+    let (commits, _next_cursor) = match rx.blocking_recv() {
+        Ok(Ok(result)) => result,
+        Ok(Err(err)) => {
+            tracing::warn!(
+                repo = %handle.id.0,
+                error = %err,
+                "remote log stream: engine error, aborting"
+            );
+            return;
+        }
+        Err(_) => return, // queue closed before completion
+    };
+
+    let pages = chunk_vec(commits, LOG_PAGE_SIZE);
+    let total = pages.len();
+    // Lane state belongs to this stream (same rule as the local loop).
+    let mut lanes = types::LaneState::default();
+    for (index, commits) in pages.into_iter().enumerate() {
+        if token.is_cancelled() || handle.is_closed() {
+            break;
+        }
+        if handle.generation() != start_generation {
+            break; // repo changed under us: abort, client re-requests
+        }
+        let next_cursor = if index + 1 < total {
+            commits.last().map(|c| c.sha.clone())
+        } else {
+            None
+        };
+        let rows = types::layout_page(&commits, &mut lanes);
+        if on_page
+            .send(LogPage {
+                commits,
+                rows,
+                next_cursor,
+                generation: start_generation,
+            })
+            .is_err()
+        {
+            break; // client dropped the channel
+        }
     }
 }
 
@@ -574,8 +705,8 @@ use tokio::sync::oneshot;
 use crate::cli;
 use crate::engine::git_engine::{FetchProgress, PushProgress};
 use crate::engine::types::{
-    BranchInfo, CommitOptions, FetchOptions, HookInfo, MergetoolInfo, MergetoolResult, NetStats,
-    PullOptions, PushOptions, RemoteInfo, SigningInfo, StageRequest, StageTarget,
+    BranchInfo, ChangeKind, CommitOptions, FetchOptions, HookInfo, MergetoolInfo, MergetoolResult,
+    NetStats, PullOptions, PushOptions, RemoteInfo, SigningInfo, StageRequest, StageTarget,
 };
 use crate::ops::OpCtx;
 
@@ -585,6 +716,7 @@ use crate::ops::OpCtx;
 /// command resolves through the returned receiver.
 fn enqueue_mutation<T, F>(
     handle: &RepoHandle,
+    repo: &Arc<Mutex<git2::Repository>>,
     kind: &'static str,
     f: F,
 ) -> oneshot::Receiver<Result<T, String>>
@@ -592,7 +724,7 @@ where
     T: Send + 'static,
     F: FnOnce(OpCtx, &git2::Repository) -> Result<T, EngineError> + Send + 'static,
 {
-    let repo = handle.repo();
+    let repo = repo.clone();
     let generation = handle.generation_shared();
     let (_op_id, rx) = handle.ops().enqueue(kind, move |ctx| {
         let result = {
@@ -613,6 +745,7 @@ where
 /// remains useful for queue rejection messages and debugging.
 fn enqueue_read<T, F>(
     handle: &RepoHandle,
+    repo: &Arc<Mutex<git2::Repository>>,
     kind: &'static str,
     f: F,
 ) -> oneshot::Receiver<Result<T, String>>
@@ -620,10 +753,61 @@ where
     T: Send + 'static,
     F: FnOnce(OpCtx, &git2::Repository) -> Result<T, EngineError> + Send + 'static,
 {
-    let repo = handle.repo();
+    let repo = repo.clone();
     let (_op_id, rx) = handle.ops().enqueue_silent(kind, move |ctx| {
         let guard = repo.lock();
         f(ctx, &guard).map_err(engine_err)
+    });
+    rx
+}
+
+/// Remote twin of [`enqueue_read`]: runs a remote-engine read on the repo's
+/// serial op queue (silent: no progress events) without the git2 lock.
+fn enqueue_remote_read<T, F>(
+    handle: &RepoHandle,
+    remote: &Arc<crate::repo::RemoteHandle>,
+    kind: &'static str,
+    f: F,
+) -> oneshot::Receiver<Result<T, String>>
+where
+    T: Send + 'static,
+    F: FnOnce(
+            &crate::remote::engine::RemoteGitEngine,
+            &crate::remote::workspace::RemoteWorkspace,
+        ) -> Result<T, String>
+        + Send
+        + 'static,
+{
+    let remote = Arc::clone(remote);
+    let (_op_id, rx) = handle
+        .ops()
+        .enqueue_silent(kind, move |_ctx| f(&remote.git(), &remote.workspace()));
+    rx
+}
+
+/// Remote twin of [`enqueue_mutation`]: serial queue + generation bump after
+/// (success or error) so watcher/poller clients resync.
+fn enqueue_remote_mutation<T, F>(
+    handle: &RepoHandle,
+    remote: &Arc<crate::repo::RemoteHandle>,
+    kind: &'static str,
+    f: F,
+) -> oneshot::Receiver<Result<T, String>>
+where
+    T: Send + 'static,
+    F: FnOnce(
+            &crate::remote::engine::RemoteGitEngine,
+            &crate::remote::workspace::RemoteWorkspace,
+        ) -> Result<T, String>
+        + Send
+        + 'static,
+{
+    let remote = Arc::clone(remote);
+    let generation = handle.generation_shared();
+    let (_op_id, rx) = handle.ops().enqueue(kind, move |_ctx| {
+        let result = f(&remote.git(), &remote.workspace());
+        generation.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        result
     });
     rx
 }
@@ -641,10 +825,23 @@ pub async fn stage(
     state: State<'_, RepoManager>,
 ) -> Result<(), String> {
     let handle = get_handle(&state, &repo_id)?;
+    if let Some(remote) = handle.remote() {
+        return finish_op(enqueue_remote_mutation(
+            &handle,
+            remote,
+            "stage",
+            move |git, _ws| git.stage(&request),
+        ))
+        .await;
+    }
     let engine = handle.engine();
-    finish_op(enqueue_mutation(&handle, "stage", move |_ctx, repo| {
-        engine.stage(repo, &request)
-    }))
+    let repo = handle.repo()?;
+    finish_op(enqueue_mutation(
+        &handle,
+        &repo,
+        "stage",
+        move |_ctx, repo| engine.stage(repo, &request),
+    ))
     .await
 }
 
@@ -655,10 +852,41 @@ pub async fn stage_all(
     state: State<'_, RepoManager>,
 ) -> Result<(), String> {
     let handle = get_handle(&state, &repo_id)?;
+    if let Some(remote) = handle.remote() {
+        // The remote engine has no stage-all primitive: mirror the local
+        // `add -A` / index-reset semantics through status + per-file stage
+        // targets (worktree-changed entries stage, index-changed unstage).
+        return finish_op(enqueue_remote_mutation(
+            &handle,
+            remote,
+            "stage",
+            move |git, _ws| {
+                let status = git.status()?;
+                let targets: Vec<StageTarget> = status
+                    .entries
+                    .iter()
+                    .filter(|entry| {
+                        if unstage {
+                            entry.index != ChangeKind::Unmodified
+                        } else {
+                            entry.worktree != ChangeKind::Unmodified
+                        }
+                    })
+                    .map(|entry| StageTarget::File(entry.path.clone()))
+                    .collect();
+                git.stage(&StageRequest { targets, unstage })
+            },
+        ))
+        .await;
+    }
     let engine = handle.engine();
-    finish_op(enqueue_mutation(&handle, "stage", move |_ctx, repo| {
-        engine.stage_all(repo, unstage)
-    }))
+    let repo = handle.repo()?;
+    finish_op(enqueue_mutation(
+        &handle,
+        &repo,
+        "stage",
+        move |_ctx, repo| engine.stage_all(repo, unstage),
+    ))
     .await
 }
 
@@ -672,12 +900,31 @@ pub async fn discard(
     state: State<'_, RepoManager>,
 ) -> Result<(), String> {
     let handle = get_handle(&state, &repo_id)?;
+    if let Some(remote) = handle.remote() {
+        // Same ordering rule as the local path: checkpoint BEFORE discard.
+        return finish_op(enqueue_remote_mutation(
+            &handle,
+            remote,
+            "discard",
+            move |git, _ws| {
+                git.checkpoint_create("discard changes")?;
+                git.discard(&targets)
+            },
+        ))
+        .await;
+    }
     let engine = handle.engine();
     let m3 = handle.m3();
-    finish_op(enqueue_mutation(&handle, "discard", move |_ctx, repo| {
-        m3.checkpoint_create(repo, "discard changes")?;
-        engine.discard(repo, &targets)
-    }))
+    let repo = handle.repo()?;
+    finish_op(enqueue_mutation(
+        &handle,
+        &repo,
+        "discard",
+        move |_ctx, repo| {
+            m3.checkpoint_create(repo, "discard changes")?;
+            engine.discard(repo, &targets)
+        },
+    ))
     .await
 }
 
@@ -691,8 +938,19 @@ pub async fn commit(
     state: State<'_, RepoManager>,
 ) -> Result<String, String> {
     let handle = get_handle(&state, &repo_id)?;
+    if let Some(remote) = handle.remote() {
+        // The device's git runs hooks and signing natively — no CLI
+        // fallback needed (the remote engine IS the git CLI there).
+        return finish_op(enqueue_remote_mutation(
+            &handle,
+            remote,
+            "commit",
+            move |git, _ws| git.commit(&options),
+        ))
+        .await;
+    }
     let engine = handle.engine();
-    let repo = handle.repo();
+    let repo = handle.repo()?;
     let workdir = handle.root.clone();
     let generation = handle.generation_shared();
     let (_op_id, rx) = handle.ops().enqueue("commit", move |ctx| {
@@ -721,8 +979,18 @@ pub async fn signing_info(
     state: State<'_, RepoManager>,
 ) -> Result<SigningInfo, String> {
     let handle = get_handle(&state, &repo_id)?;
+    if let Some(remote) = handle.remote() {
+        return finish_op(enqueue_remote_read(
+            &handle,
+            remote,
+            "commit",
+            move |git, _ws| git.signing_info(),
+        ))
+        .await;
+    }
     let engine = handle.engine();
-    finish_op(enqueue_read(&handle, "commit", move |_ctx, repo| {
+    let repo = handle.repo()?;
+    finish_op(enqueue_read(&handle, &repo, "commit", move |_ctx, repo| {
         engine.signing_info(repo)
     }))
     .await
@@ -734,8 +1002,18 @@ pub async fn hooks_list(
     state: State<'_, RepoManager>,
 ) -> Result<Vec<HookInfo>, String> {
     let handle = get_handle(&state, &repo_id)?;
+    if let Some(remote) = handle.remote() {
+        return finish_op(enqueue_remote_read(
+            &handle,
+            remote,
+            "commit",
+            move |git, _ws| git.hooks(),
+        ))
+        .await;
+    }
     let engine = handle.engine();
-    finish_op(enqueue_read(&handle, "commit", move |_ctx, repo| {
+    let repo = handle.repo()?;
+    finish_op(enqueue_read(&handle, &repo, "commit", move |_ctx, repo| {
         engine.hooks(repo)
     }))
     .await
@@ -747,8 +1025,18 @@ pub async fn branches(
     state: State<'_, RepoManager>,
 ) -> Result<Vec<BranchInfo>, String> {
     let handle = get_handle(&state, &repo_id)?;
+    if let Some(remote) = handle.remote() {
+        return finish_op(enqueue_remote_read(
+            &handle,
+            remote,
+            "branch",
+            move |git, _ws| git.branches(),
+        ))
+        .await;
+    }
     let engine = handle.engine();
-    finish_op(enqueue_read(&handle, "branch", move |_ctx, repo| {
+    let repo = handle.repo()?;
+    finish_op(enqueue_read(&handle, &repo, "branch", move |_ctx, repo| {
         engine.branches(repo)
     }))
     .await
@@ -763,10 +1051,23 @@ pub async fn branch_create(
     state: State<'_, RepoManager>,
 ) -> Result<(), String> {
     let handle = get_handle(&state, &repo_id)?;
+    if let Some(remote) = handle.remote() {
+        return finish_op(enqueue_remote_mutation(
+            &handle,
+            remote,
+            "branch",
+            move |git, _ws| git.branch_create(&name, from.as_deref(), checkout),
+        ))
+        .await;
+    }
     let engine = handle.engine();
-    finish_op(enqueue_mutation(&handle, "branch", move |_ctx, repo| {
-        engine.branch_create(repo, &name, from.as_deref(), checkout)
-    }))
+    let repo = handle.repo()?;
+    finish_op(enqueue_mutation(
+        &handle,
+        &repo,
+        "branch",
+        move |_ctx, repo| engine.branch_create(repo, &name, from.as_deref(), checkout),
+    ))
     .await
 }
 
@@ -778,10 +1079,23 @@ pub async fn branch_switch(
     state: State<'_, RepoManager>,
 ) -> Result<(), String> {
     let handle = get_handle(&state, &repo_id)?;
+    if let Some(remote) = handle.remote() {
+        return finish_op(enqueue_remote_mutation(
+            &handle,
+            remote,
+            "branch",
+            move |git, _ws| git.branch_switch(&name, force),
+        ))
+        .await;
+    }
     let engine = handle.engine();
-    finish_op(enqueue_mutation(&handle, "branch", move |_ctx, repo| {
-        engine.branch_switch(repo, &name, force)
-    }))
+    let repo = handle.repo()?;
+    finish_op(enqueue_mutation(
+        &handle,
+        &repo,
+        "branch",
+        move |_ctx, repo| engine.branch_switch(repo, &name, force),
+    ))
     .await
 }
 
@@ -794,8 +1108,18 @@ pub async fn branch_is_merged(
     state: State<'_, RepoManager>,
 ) -> Result<bool, String> {
     let handle = get_handle(&state, &repo_id)?;
+    if let Some(remote) = handle.remote() {
+        return finish_op(enqueue_remote_read(
+            &handle,
+            remote,
+            "branch",
+            move |git, _ws| git.branch_is_merged(&name, &r#into),
+        ))
+        .await;
+    }
     let engine = handle.engine();
-    finish_op(enqueue_read(&handle, "branch", move |_ctx, repo| {
+    let repo = handle.repo()?;
+    finish_op(enqueue_read(&handle, &repo, "branch", move |_ctx, repo| {
         engine.branch_is_merged(repo, &name, &r#into)
     }))
     .await
@@ -809,10 +1133,23 @@ pub async fn branch_delete(
     state: State<'_, RepoManager>,
 ) -> Result<(), String> {
     let handle = get_handle(&state, &repo_id)?;
+    if let Some(remote) = handle.remote() {
+        return finish_op(enqueue_remote_mutation(
+            &handle,
+            remote,
+            "branch",
+            move |git, _ws| git.branch_delete(&name, force),
+        ))
+        .await;
+    }
     let engine = handle.engine();
-    finish_op(enqueue_mutation(&handle, "branch", move |_ctx, repo| {
-        engine.branch_delete(repo, &name, force)
-    }))
+    let repo = handle.repo()?;
+    finish_op(enqueue_mutation(
+        &handle,
+        &repo,
+        "branch",
+        move |_ctx, repo| engine.branch_delete(repo, &name, force),
+    ))
     .await
 }
 
@@ -824,10 +1161,23 @@ pub async fn branch_rename(
     state: State<'_, RepoManager>,
 ) -> Result<(), String> {
     let handle = get_handle(&state, &repo_id)?;
+    if let Some(remote) = handle.remote() {
+        return finish_op(enqueue_remote_mutation(
+            &handle,
+            remote,
+            "branch",
+            move |git, _ws| git.branch_rename(&old, &new),
+        ))
+        .await;
+    }
     let engine = handle.engine();
-    finish_op(enqueue_mutation(&handle, "branch", move |_ctx, repo| {
-        engine.branch_rename(repo, &old, &new)
-    }))
+    let repo = handle.repo()?;
+    finish_op(enqueue_mutation(
+        &handle,
+        &repo,
+        "branch",
+        move |_ctx, repo| engine.branch_rename(repo, &old, &new),
+    ))
     .await
 }
 
@@ -840,10 +1190,23 @@ pub async fn tag_create(
     state: State<'_, RepoManager>,
 ) -> Result<(), String> {
     let handle = get_handle(&state, &repo_id)?;
+    if let Some(remote) = handle.remote() {
+        return finish_op(enqueue_remote_mutation(
+            &handle,
+            remote,
+            "branch",
+            move |git, _ws| git.tag_create(&name, target.as_deref(), message.as_deref()),
+        ))
+        .await;
+    }
     let engine = handle.engine();
-    finish_op(enqueue_mutation(&handle, "branch", move |_ctx, repo| {
-        engine.tag_create(repo, &name, target.as_deref(), message.as_deref())
-    }))
+    let repo = handle.repo()?;
+    finish_op(enqueue_mutation(
+        &handle,
+        &repo,
+        "branch",
+        move |_ctx, repo| engine.tag_create(repo, &name, target.as_deref(), message.as_deref()),
+    ))
     .await
 }
 
@@ -854,10 +1217,23 @@ pub async fn tag_delete(
     state: State<'_, RepoManager>,
 ) -> Result<(), String> {
     let handle = get_handle(&state, &repo_id)?;
+    if let Some(remote) = handle.remote() {
+        return finish_op(enqueue_remote_mutation(
+            &handle,
+            remote,
+            "branch",
+            move |git, _ws| git.tag_delete(&name),
+        ))
+        .await;
+    }
     let engine = handle.engine();
-    finish_op(enqueue_mutation(&handle, "branch", move |_ctx, repo| {
-        engine.tag_delete(repo, &name)
-    }))
+    let repo = handle.repo()?;
+    finish_op(enqueue_mutation(
+        &handle,
+        &repo,
+        "branch",
+        move |_ctx, repo| engine.tag_delete(repo, &name),
+    ))
     .await
 }
 
@@ -867,8 +1243,17 @@ pub async fn tag_list(
     state: State<'_, RepoManager>,
 ) -> Result<Vec<TagInfo>, String> {
     let handle = get_handle(&state, &repo_id)?;
+    if let Some(remote) = handle.remote() {
+        return finish_op(enqueue_remote_read(
+            &handle,
+            remote,
+            "branch",
+            move |git, _ws| git.tag_list(),
+        ))
+        .await;
+    }
     let engine = handle.engine();
-    let repo = handle.repo();
+    let repo = handle.repo()?;
     tauri::async_runtime::spawn_blocking(move || {
         let repo = repo.lock();
         engine.tag_list(&repo).map_err(engine_err)
@@ -883,8 +1268,17 @@ pub async fn remote_branches(
     state: State<'_, RepoManager>,
 ) -> Result<Vec<RemoteBranchInfo>, String> {
     let handle = get_handle(&state, &repo_id)?;
+    if let Some(remote) = handle.remote() {
+        return finish_op(enqueue_remote_read(
+            &handle,
+            remote,
+            "branch",
+            move |git, _ws| git.remote_branches(),
+        ))
+        .await;
+    }
     let engine = handle.engine();
-    let repo = handle.repo();
+    let repo = handle.repo()?;
     tauri::async_runtime::spawn_blocking(move || {
         let repo = repo.lock();
         engine.remote_branches(&repo).map_err(engine_err)
@@ -902,10 +1296,25 @@ pub async fn branch_checkout_remote(
     state: State<'_, RepoManager>,
 ) -> Result<String, String> {
     let handle = get_handle(&state, &repo_id)?;
+    if let Some(remote_handle) = handle.remote() {
+        // `remote` here is the IPC arg (the remote's config name), so the
+        // handle binding is `remote_handle`.
+        return finish_op(enqueue_remote_mutation(
+            &handle,
+            remote_handle,
+            "branch",
+            move |git, _ws| git.branch_checkout_remote(&remote, &name, new_local.as_deref()),
+        ))
+        .await;
+    }
     let engine = handle.engine();
-    finish_op(enqueue_mutation(&handle, "branch", move |_ctx, repo| {
-        engine.branch_checkout_remote(repo, &remote, &name, new_local.as_deref())
-    }))
+    let repo = handle.repo()?;
+    finish_op(enqueue_mutation(
+        &handle,
+        &repo,
+        "branch",
+        move |_ctx, repo| engine.branch_checkout_remote(repo, &remote, &name, new_local.as_deref()),
+    ))
     .await
 }
 
@@ -920,11 +1329,27 @@ pub async fn tag_create_signed(
     state: State<'_, RepoManager>,
 ) -> Result<(), String> {
     let handle = get_handle(&state, &repo_id)?;
+    if let Some(remote) = handle.remote() {
+        // The device's own git + gpg sign the tag (same CLI semantics).
+        return finish_op(enqueue_remote_mutation(
+            &handle,
+            remote,
+            "branch",
+            move |git, _ws| git.tag_create_signed(&name, target.as_deref(), &message),
+        ))
+        .await;
+    }
     let root = handle.root.clone();
-    finish_op(enqueue_mutation(&handle, "branch", move |_ctx, _repo| {
-        crate::mergetool::tag_sign_via_cli(&root, &name, target.as_deref(), &message)
-            .map_err(EngineError::Invalid)
-    }))
+    let repo = handle.repo()?;
+    finish_op(enqueue_mutation(
+        &handle,
+        &repo,
+        "branch",
+        move |_ctx, _repo| {
+            crate::mergetool::tag_sign_via_cli(&root, &name, target.as_deref(), &message)
+                .map_err(EngineError::Invalid)
+        },
+    ))
     .await
 }
 
@@ -935,7 +1360,11 @@ pub async fn mergetool_info(
     state: State<'_, RepoManager>,
 ) -> Result<MergetoolInfo, String> {
     let handle = get_handle(&state, &repo_id)?;
-    finish_op(enqueue_read(&handle, "merge", move |_ctx, repo| {
+    if handle.remote().is_some() {
+        return Err("mergetool_info is not supported for remote projects".into());
+    }
+    let repo = handle.repo()?;
+    finish_op(enqueue_read(&handle, &repo, "merge", move |_ctx, repo| {
         Ok(crate::mergetool::mergetool_info(repo))
     }))
     .await
@@ -953,6 +1382,12 @@ pub async fn mergetool_run(
     state: State<'_, RepoManager>,
 ) -> Result<MergetoolResult, String> {
     let handle = get_handle(&state, &repo_id)?;
+    if handle.remote().is_some() {
+        // An interactive local merge tool cannot run against a workdir on
+        // another device; refuse explicitly instead of failing on the
+        // nonexistent local path.
+        return Err("mergetool_run is not supported for remote projects".into());
+    }
     let workdir = handle.root.clone();
     tauri::async_runtime::spawn_blocking(move || {
         crate::mergetool::mergetool_run(&workdir, &path, tool.as_deref())
@@ -967,8 +1402,18 @@ pub async fn remotes(
     state: State<'_, RepoManager>,
 ) -> Result<Vec<RemoteInfo>, String> {
     let handle = get_handle(&state, &repo_id)?;
+    if let Some(remote) = handle.remote() {
+        return finish_op(enqueue_remote_read(
+            &handle,
+            remote,
+            "fetch",
+            move |git, _ws| git.remotes(),
+        ))
+        .await;
+    }
     let engine = handle.engine();
-    finish_op(enqueue_read(&handle, "fetch", move |_ctx, repo| {
+    let repo = handle.repo()?;
+    finish_op(enqueue_read(&handle, &repo, "fetch", move |_ctx, repo| {
         engine.remotes(repo)
     }))
     .await
@@ -982,10 +1427,23 @@ pub async fn remote_add(
     state: State<'_, RepoManager>,
 ) -> Result<(), String> {
     let handle = get_handle(&state, &repo_id)?;
+    if let Some(remote) = handle.remote() {
+        return finish_op(enqueue_remote_mutation(
+            &handle,
+            remote,
+            "fetch",
+            move |git, _ws| git.remote_add(&name, &url),
+        ))
+        .await;
+    }
     let engine = handle.engine();
-    finish_op(enqueue_mutation(&handle, "fetch", move |_ctx, repo| {
-        engine.remote_add(repo, &name, &url)
-    }))
+    let repo = handle.repo()?;
+    finish_op(enqueue_mutation(
+        &handle,
+        &repo,
+        "fetch",
+        move |_ctx, repo| engine.remote_add(repo, &name, &url),
+    ))
     .await
 }
 
@@ -996,10 +1454,23 @@ pub async fn remote_remove(
     state: State<'_, RepoManager>,
 ) -> Result<(), String> {
     let handle = get_handle(&state, &repo_id)?;
+    if let Some(remote) = handle.remote() {
+        return finish_op(enqueue_remote_mutation(
+            &handle,
+            remote,
+            "fetch",
+            move |git, _ws| git.remote_remove(&name),
+        ))
+        .await;
+    }
     let engine = handle.engine();
-    finish_op(enqueue_mutation(&handle, "fetch", move |_ctx, repo| {
-        engine.remote_remove(repo, &name)
-    }))
+    let repo = handle.repo()?;
+    finish_op(enqueue_mutation(
+        &handle,
+        &repo,
+        "fetch",
+        move |_ctx, repo| engine.remote_remove(repo, &name),
+    ))
     .await
 }
 
@@ -1012,10 +1483,23 @@ pub async fn remote_set_url(
     state: State<'_, RepoManager>,
 ) -> Result<(), String> {
     let handle = get_handle(&state, &repo_id)?;
+    if let Some(remote) = handle.remote() {
+        return finish_op(enqueue_remote_mutation(
+            &handle,
+            remote,
+            "fetch",
+            move |git, _ws| git.remote_set_url(&name, &url, push),
+        ))
+        .await;
+    }
     let engine = handle.engine();
-    finish_op(enqueue_mutation(&handle, "fetch", move |_ctx, repo| {
-        engine.remote_set_url(repo, &name, &url, push)
-    }))
+    let repo = handle.repo()?;
+    finish_op(enqueue_mutation(
+        &handle,
+        &repo,
+        "fetch",
+        move |_ctx, repo| engine.remote_set_url(repo, &name, &url, push),
+    ))
     .await
 }
 
@@ -1088,7 +1572,23 @@ pub async fn fetch(
     state: State<'_, RepoManager>,
 ) -> Result<NetStats, String> {
     let handle = get_handle(&state, &repo_id)?;
-    let repo = handle.repo();
+    if let Some(remote) = handle.remote() {
+        // Remote net op: same queue kind, opening line, and throttled
+        // progress forwarding as the local net op (via `OpCtx`); the device
+        // session brings its own SSH credentials, so no auth-broker context.
+        let remote = Arc::clone(remote);
+        let opening = format!("fetching {}", options.remote);
+        let generation = handle.generation_shared();
+        let (_op_id, rx) = handle.ops().enqueue("fetch", move |ctx| {
+            ctx.emit_progress(&opening, None);
+            let git = remote.git();
+            let result = git.fetch(&options, &mut |p| emit_fetch_progress(&ctx, &p));
+            generation.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            result
+        });
+        return finish_op(rx).await;
+    }
+    let repo = handle.repo()?;
     let opening = format!("fetching {}", options.remote);
     finish_op(enqueue_net_op(
         &handle,
@@ -1116,8 +1616,22 @@ pub async fn pull(
     state: State<'_, RepoManager>,
 ) -> Result<NetStats, String> {
     let handle = get_handle(&state, &repo_id)?;
+    if let Some(remote) = handle.remote() {
+        // Remote net op (see `fetch`): queue + progress forwarding.
+        let remote = Arc::clone(remote);
+        let opening = format!("pulling {}", options.remote);
+        let generation = handle.generation_shared();
+        let (_op_id, rx) = handle.ops().enqueue("pull", move |ctx| {
+            ctx.emit_progress(&opening, None);
+            let git = remote.git();
+            let result = git.pull(&options, &mut |p| emit_fetch_progress(&ctx, &p));
+            generation.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            result
+        });
+        return finish_op(rx).await;
+    }
     let engine = handle.engine();
-    let repo = handle.repo();
+    let repo = handle.repo()?;
     let opening = format!("pulling {}", options.remote);
     finish_op(enqueue_net_op(
         &handle,
@@ -1138,7 +1652,25 @@ pub async fn push(
     state: State<'_, RepoManager>,
 ) -> Result<NetStats, String> {
     let handle = get_handle(&state, &repo_id)?;
-    let repo = handle.repo();
+    if let Some(remote) = handle.remote() {
+        // Remote net op (see `fetch`): queue + progress forwarding.
+        let remote = Arc::clone(remote);
+        let opening = if options.branch.is_empty() {
+            format!("pushing to {}", options.remote)
+        } else {
+            format!("pushing {} to {}", options.branch, options.remote)
+        };
+        let generation = handle.generation_shared();
+        let (_op_id, rx) = handle.ops().enqueue("push", move |ctx| {
+            ctx.emit_progress(&opening, None);
+            let git = remote.git();
+            let result = git.push(&options, &mut |p| emit_push_progress(&ctx, &p));
+            generation.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            result
+        });
+        return finish_op(rx).await;
+    }
+    let repo = handle.repo()?;
     let workdir = handle.root.clone();
     let generation = handle.generation_shared();
     let net_repo = handle.id.clone();
@@ -1300,13 +1832,14 @@ mod m2_tests {
         handle.ops().set_sink(sink.clone());
 
         let start_generation = handle.generation();
-        let ok = enqueue_read(&handle, "status", move |_ctx, _repo| {
+        let repo = handle.repo().expect("local repo");
+        let ok = enqueue_read(&handle, &repo, "status", move |_ctx, _repo| {
             Ok::<(), EngineError>(())
         })
         .blocking_recv()
         .expect("queue alive");
         assert!(ok.is_ok(), "read succeeds");
-        let failed = enqueue_read(&handle, "blame", move |_ctx, _repo| {
+        let failed = enqueue_read(&handle, &repo, "blame", move |_ctx, _repo| {
             Err::<(), EngineError>(EngineError::Invalid("missing file".into()))
         })
         .blocking_recv()
@@ -1359,7 +1892,8 @@ mod m2_tests {
         };
         let rx = {
             let engine = handle.engine();
-            enqueue_mutation(&handle, "stage", move |_ctx, repo| {
+            let repo = handle.repo().expect("local repo");
+            enqueue_mutation(&handle, &repo, "stage", move |_ctx, repo| {
                 engine.stage(repo, &request)
             })
         };
@@ -1404,9 +1938,20 @@ pub async fn checkpoint_create(
     state: State<'_, RepoManager>,
 ) -> Result<CheckpointInfo, String> {
     let handle = get_handle(&state, &repo_id)?;
+    if let Some(remote) = handle.remote() {
+        return finish_op(enqueue_remote_mutation(
+            &handle,
+            remote,
+            "checkpoint",
+            move |git, _ws| git.checkpoint_create(&reason),
+        ))
+        .await;
+    }
     let engine = handle.m3();
+    let repo = handle.repo()?;
     finish_op(enqueue_mutation(
         &handle,
+        &repo,
         "checkpoint",
         move |_ctx, repo| engine.checkpoint_create(repo, &reason),
     ))
@@ -1419,10 +1964,23 @@ pub async fn checkpoints(
     state: State<'_, RepoManager>,
 ) -> Result<Vec<CheckpointInfo>, String> {
     let handle = get_handle(&state, &repo_id)?;
+    if let Some(remote) = handle.remote() {
+        return finish_op(enqueue_remote_read(
+            &handle,
+            remote,
+            "checkpoint",
+            move |git, _ws| git.checkpoints(),
+        ))
+        .await;
+    }
     let engine = handle.m3();
-    finish_op(enqueue_read(&handle, "checkpoint", move |_ctx, repo| {
-        engine.checkpoints(repo)
-    }))
+    let repo = handle.repo()?;
+    finish_op(enqueue_read(
+        &handle,
+        &repo,
+        "checkpoint",
+        move |_ctx, repo| engine.checkpoints(repo),
+    ))
     .await
 }
 
@@ -1433,9 +1991,20 @@ pub async fn checkpoint_restore(
     state: State<'_, RepoManager>,
 ) -> Result<(), String> {
     let handle = get_handle(&state, &repo_id)?;
+    if let Some(remote) = handle.remote() {
+        return finish_op(enqueue_remote_mutation(
+            &handle,
+            remote,
+            "checkpoint",
+            move |git, _ws| git.checkpoint_restore(&id),
+        ))
+        .await;
+    }
     let engine = handle.m3();
+    let repo = handle.repo()?;
     finish_op(enqueue_mutation(
         &handle,
+        &repo,
         "checkpoint",
         move |_ctx, repo| engine.checkpoint_restore(repo, &id),
     ))
@@ -1449,9 +2018,20 @@ pub async fn checkpoint_gc(
     state: State<'_, RepoManager>,
 ) -> Result<u32, String> {
     let handle = get_handle(&state, &repo_id)?;
+    if let Some(remote) = handle.remote() {
+        return finish_op(enqueue_remote_mutation(
+            &handle,
+            remote,
+            "checkpoint",
+            move |git, _ws| git.checkpoint_gc(older_than_days),
+        ))
+        .await;
+    }
     let engine = handle.m3();
+    let repo = handle.repo()?;
     finish_op(enqueue_mutation(
         &handle,
+        &repo,
         "checkpoint",
         move |_ctx, repo| engine.checkpoint_gc(repo, older_than_days),
     ))
@@ -1471,10 +2051,23 @@ pub async fn ops_preview(
     state: State<'_, RepoManager>,
 ) -> Result<PreviewInfo, String> {
     let handle = get_handle(&state, &repo_id)?;
+    if let Some(remote) = handle.remote() {
+        return finish_op(enqueue_remote_read(
+            &handle,
+            remote,
+            "preview",
+            move |git, _ws| git.ops_preview(&kind, &params),
+        ))
+        .await;
+    }
     let engine = handle.m3();
-    finish_op(enqueue_read(&handle, "preview", move |_ctx, repo| {
-        engine.ops_preview(repo, &kind, &params)
-    }))
+    let repo = handle.repo()?;
+    finish_op(enqueue_read(
+        &handle,
+        &repo,
+        "preview",
+        move |_ctx, repo| engine.ops_preview(repo, &kind, &params),
+    ))
     .await
 }
 /// Snapshot current state as an undo point right before a dangerous op.
@@ -1488,9 +2081,20 @@ pub async fn guard_checkpoint(
     state: State<'_, RepoManager>,
 ) -> Result<CheckpointInfo, String> {
     let handle = get_handle(&state, &repo_id)?;
+    if let Some(remote) = handle.remote() {
+        return finish_op(enqueue_remote_mutation(
+            &handle,
+            remote,
+            "checkpoint",
+            move |git, _ws| git.guard_checkpoint(&reason),
+        ))
+        .await;
+    }
     let engine = handle.m3();
+    let repo = handle.repo()?;
     finish_op(enqueue_mutation(
         &handle,
+        &repo,
         "checkpoint",
         move |_ctx, repo| engine.checkpoint_create(repo, &reason),
     ))
@@ -1516,6 +2120,24 @@ pub async fn repo_read_file(
     state: State<'_, RepoManager>,
 ) -> Result<Vec<u8>, String> {
     let handle = get_handle(&state, &repo_id)?;
+    if let Some(remote) = handle.remote() {
+        // Remote repos read the workdir over SFTP through the workspace
+        // (no engine call needed locally, none needed remotely either).
+        return finish_op(enqueue_remote_read(
+            &handle,
+            remote,
+            "read_file",
+            move |_git, ws| {
+                // Missing file → empty content (documented "no preview
+                // written"), mirroring the local fs path.
+                if !ws.exists(&path)? {
+                    return Ok(Vec::new());
+                }
+                ws.read_file(&path)
+            },
+        ))
+        .await;
+    }
     let root = handle.root.clone();
     tauri::async_runtime::spawn_blocking(move || read_workdir_file(&root, &path))
         .await
@@ -1545,30 +2167,69 @@ pub async fn merge_branch(
     state: State<'_, RepoManager>,
 ) -> Result<MergeResult, String> {
     let handle = get_handle(&state, &repo_id)?;
+    if let Some(remote) = handle.remote() {
+        return finish_op(enqueue_remote_mutation(
+            &handle,
+            remote,
+            "merge",
+            move |git, _ws| git.merge_branch(&ref_name, &opts),
+        ))
+        .await;
+    }
     let engine = handle.m3();
-    finish_op(enqueue_mutation(&handle, "merge", move |_ctx, repo| {
-        engine.merge_branch(repo, &ref_name, &opts)
-    }))
+    let repo = handle.repo()?;
+    finish_op(enqueue_mutation(
+        &handle,
+        &repo,
+        "merge",
+        move |_ctx, repo| engine.merge_branch(repo, &ref_name, &opts),
+    ))
     .await
 }
 
 #[tauri::command(rename_all = "snake_case")]
 pub async fn merge_abort(repo_id: RepoId, state: State<'_, RepoManager>) -> Result<(), String> {
     let handle = get_handle(&state, &repo_id)?;
+    if let Some(remote) = handle.remote() {
+        return finish_op(enqueue_remote_mutation(
+            &handle,
+            remote,
+            "merge",
+            move |git, _ws| git.merge_abort(),
+        ))
+        .await;
+    }
     let engine = handle.m3();
-    finish_op(enqueue_mutation(&handle, "merge", move |_ctx, repo| {
-        engine.merge_abort(repo)
-    }))
+    let repo = handle.repo()?;
+    finish_op(enqueue_mutation(
+        &handle,
+        &repo,
+        "merge",
+        move |_ctx, repo| engine.merge_abort(repo),
+    ))
     .await
 }
 
 #[tauri::command(rename_all = "snake_case")]
 pub async fn sequencer_abort(repo_id: RepoId, state: State<'_, RepoManager>) -> Result<(), String> {
     let handle = get_handle(&state, &repo_id)?;
+    if let Some(remote) = handle.remote() {
+        return finish_op(enqueue_remote_mutation(
+            &handle,
+            remote,
+            "merge",
+            move |git, _ws| git.sequencer_abort(),
+        ))
+        .await;
+    }
     let engine = handle.m3();
-    finish_op(enqueue_mutation(&handle, "merge", move |_ctx, repo| {
-        engine.sequencer_abort(repo)
-    }))
+    let repo = handle.repo()?;
+    finish_op(enqueue_mutation(
+        &handle,
+        &repo,
+        "merge",
+        move |_ctx, repo| engine.sequencer_abort(repo),
+    ))
     .await
 }
 
@@ -1578,8 +2239,18 @@ pub async fn conflicts(
     state: State<'_, RepoManager>,
 ) -> Result<Vec<ConflictFile>, String> {
     let handle = get_handle(&state, &repo_id)?;
+    if let Some(remote) = handle.remote() {
+        return finish_op(enqueue_remote_read(
+            &handle,
+            remote,
+            "merge",
+            move |git, _ws| git.conflicts(),
+        ))
+        .await;
+    }
     let engine = handle.m3();
-    finish_op(enqueue_read(&handle, "merge", move |_ctx, repo| {
+    let repo = handle.repo()?;
+    finish_op(enqueue_read(&handle, &repo, "merge", move |_ctx, repo| {
         engine.conflicts(repo)
     }))
     .await
@@ -1594,10 +2265,25 @@ pub async fn conflict_resolve(
     state: State<'_, RepoManager>,
 ) -> Result<(), String> {
     let handle = get_handle(&state, &repo_id)?;
+    if let Some(remote) = handle.remote() {
+        return finish_op(enqueue_remote_mutation(
+            &handle,
+            remote,
+            "merge",
+            move |git, _ws| git.conflict_resolve(&path, resolution, custom_content),
+        ))
+        .await;
+    }
     let engine = handle.m3();
-    finish_op(enqueue_mutation(&handle, "merge", move |_ctx, repo| {
-        engine.conflict_resolve(repo, &path, resolution, custom_content.as_deref())
-    }))
+    let repo = handle.repo()?;
+    finish_op(enqueue_mutation(
+        &handle,
+        &repo,
+        "merge",
+        move |_ctx, repo| {
+            engine.conflict_resolve(repo, &path, resolution, custom_content.as_deref())
+        },
+    ))
     .await
 }
 
@@ -1608,10 +2294,24 @@ pub async fn cherry_pick(
     state: State<'_, RepoManager>,
 ) -> Result<MergeResult, String> {
     let handle = get_handle(&state, &repo_id)?;
+    if let Some(remote) = handle.remote() {
+        // Local path commits as it goes; `no_commit: false` mirrors that.
+        return finish_op(enqueue_remote_mutation(
+            &handle,
+            remote,
+            "merge",
+            move |git, _ws| git.cherry_pick(&shas, false),
+        ))
+        .await;
+    }
     let engine = handle.m3();
-    finish_op(enqueue_mutation(&handle, "merge", move |_ctx, repo| {
-        engine.cherry_pick(repo, &shas)
-    }))
+    let repo = handle.repo()?;
+    finish_op(enqueue_mutation(
+        &handle,
+        &repo,
+        "merge",
+        move |_ctx, repo| engine.cherry_pick(repo, &shas),
+    ))
     .await
 }
 
@@ -1622,10 +2322,24 @@ pub async fn revert(
     state: State<'_, RepoManager>,
 ) -> Result<MergeResult, String> {
     let handle = get_handle(&state, &repo_id)?;
+    if let Some(remote) = handle.remote() {
+        // Local path commits as it goes; `no_commit: false` mirrors that.
+        return finish_op(enqueue_remote_mutation(
+            &handle,
+            remote,
+            "merge",
+            move |git, _ws| git.revert(&shas, false),
+        ))
+        .await;
+    }
     let engine = handle.m3();
-    finish_op(enqueue_mutation(&handle, "merge", move |_ctx, repo| {
-        engine.revert(repo, &shas)
-    }))
+    let repo = handle.repo()?;
+    finish_op(enqueue_mutation(
+        &handle,
+        &repo,
+        "merge",
+        move |_ctx, repo| engine.revert(repo, &shas),
+    ))
     .await
 }
 
@@ -1637,10 +2351,23 @@ pub async fn reset(
     state: State<'_, RepoManager>,
 ) -> Result<(), String> {
     let handle = get_handle(&state, &repo_id)?;
+    if let Some(remote) = handle.remote() {
+        return finish_op(enqueue_remote_mutation(
+            &handle,
+            remote,
+            "merge",
+            move |git, _ws| git.reset(kind, &to),
+        ))
+        .await;
+    }
     let engine = handle.m3();
-    finish_op(enqueue_mutation(&handle, "merge", move |_ctx, repo| {
-        engine.reset(repo, kind, &to)
-    }))
+    let repo = handle.repo()?;
+    finish_op(enqueue_mutation(
+        &handle,
+        &repo,
+        "merge",
+        move |_ctx, repo| engine.reset(repo, kind, &to),
+    ))
     .await
 }
 
@@ -1652,10 +2379,23 @@ pub async fn rebase_start(
     state: State<'_, RepoManager>,
 ) -> Result<RebaseState, String> {
     let handle = get_handle(&state, &repo_id)?;
+    if let Some(remote) = handle.remote() {
+        return finish_op(enqueue_remote_mutation(
+            &handle,
+            remote,
+            "rebase",
+            move |git, _ws| git.rebase_start(&plan, onto.as_deref()),
+        ))
+        .await;
+    }
     let engine = handle.m3();
-    finish_op(enqueue_mutation(&handle, "rebase", move |_ctx, repo| {
-        engine.rebase_start(repo, &plan, onto.as_deref())
-    }))
+    let repo = handle.repo()?;
+    finish_op(enqueue_mutation(
+        &handle,
+        &repo,
+        "rebase",
+        move |_ctx, repo| engine.rebase_start(repo, &plan, onto.as_deref()),
+    ))
     .await
 }
 
@@ -1665,8 +2405,18 @@ pub async fn rebase_state(
     state: State<'_, RepoManager>,
 ) -> Result<RebaseState, String> {
     let handle = get_handle(&state, &repo_id)?;
+    if let Some(remote) = handle.remote() {
+        return finish_op(enqueue_remote_read(
+            &handle,
+            remote,
+            "rebase",
+            move |git, _ws| git.rebase_state(),
+        ))
+        .await;
+    }
     let engine = handle.m3();
-    finish_op(enqueue_read(&handle, "rebase", move |_ctx, repo| {
+    let repo = handle.repo()?;
+    finish_op(enqueue_read(&handle, &repo, "rebase", move |_ctx, repo| {
         engine.rebase_state(repo)
     }))
     .await
@@ -1678,20 +2428,46 @@ pub async fn rebase_continue(
     state: State<'_, RepoManager>,
 ) -> Result<RebaseState, String> {
     let handle = get_handle(&state, &repo_id)?;
+    if let Some(remote) = handle.remote() {
+        return finish_op(enqueue_remote_mutation(
+            &handle,
+            remote,
+            "rebase",
+            move |git, _ws| git.rebase_continue(),
+        ))
+        .await;
+    }
     let engine = handle.m3();
-    finish_op(enqueue_mutation(&handle, "rebase", move |_ctx, repo| {
-        engine.rebase_continue(repo)
-    }))
+    let repo = handle.repo()?;
+    finish_op(enqueue_mutation(
+        &handle,
+        &repo,
+        "rebase",
+        move |_ctx, repo| engine.rebase_continue(repo),
+    ))
     .await
 }
 
 #[tauri::command(rename_all = "snake_case")]
 pub async fn rebase_abort(repo_id: RepoId, state: State<'_, RepoManager>) -> Result<(), String> {
     let handle = get_handle(&state, &repo_id)?;
+    if let Some(remote) = handle.remote() {
+        return finish_op(enqueue_remote_mutation(
+            &handle,
+            remote,
+            "rebase",
+            move |git, _ws| git.rebase_abort(),
+        ))
+        .await;
+    }
     let engine = handle.m3();
-    finish_op(enqueue_mutation(&handle, "rebase", move |_ctx, repo| {
-        engine.rebase_abort(repo)
-    }))
+    let repo = handle.repo()?;
+    finish_op(enqueue_mutation(
+        &handle,
+        &repo,
+        "rebase",
+        move |_ctx, repo| engine.rebase_abort(repo),
+    ))
     .await
 }
 
@@ -1705,10 +2481,23 @@ pub async fn bisect_start(
     state: State<'_, RepoManager>,
 ) -> Result<BisectState, String> {
     let handle = get_handle(&state, &repo_id)?;
+    if let Some(remote) = handle.remote() {
+        return finish_op(enqueue_remote_mutation(
+            &handle,
+            remote,
+            "bisect",
+            move |git, _ws| git.bisect_start(bad.as_deref(), good.as_deref()),
+        ))
+        .await;
+    }
     let engine = handle.m3();
-    finish_op(enqueue_mutation(&handle, "bisect", move |_ctx, repo| {
-        engine.bisect_start(repo, bad.as_deref(), good.as_deref())
-    }))
+    let repo = handle.repo()?;
+    finish_op(enqueue_mutation(
+        &handle,
+        &repo,
+        "bisect",
+        move |_ctx, repo| engine.bisect_start(repo, bad.as_deref(), good.as_deref()),
+    ))
     .await
 }
 
@@ -1718,8 +2507,18 @@ pub async fn bisect_state(
     state: State<'_, RepoManager>,
 ) -> Result<BisectState, String> {
     let handle = get_handle(&state, &repo_id)?;
+    if let Some(remote) = handle.remote() {
+        return finish_op(enqueue_remote_read(
+            &handle,
+            remote,
+            "bisect",
+            move |git, _ws| git.bisect_state(),
+        ))
+        .await;
+    }
     let engine = handle.m3();
-    finish_op(enqueue_read(&handle, "bisect", move |_ctx, repo| {
+    let repo = handle.repo()?;
+    finish_op(enqueue_read(&handle, &repo, "bisect", move |_ctx, repo| {
         engine.bisect_state(repo)
     }))
     .await
@@ -1732,20 +2531,47 @@ pub async fn bisect_mark(
     state: State<'_, RepoManager>,
 ) -> Result<BisectState, String> {
     let handle = get_handle(&state, &repo_id)?;
+    if let Some(remote) = handle.remote() {
+        // Local path marks HEAD; `rev: None` mirrors that.
+        return finish_op(enqueue_remote_mutation(
+            &handle,
+            remote,
+            "bisect",
+            move |git, _ws| git.bisect_mark(mark, None),
+        ))
+        .await;
+    }
     let engine = handle.m3();
-    finish_op(enqueue_mutation(&handle, "bisect", move |_ctx, repo| {
-        engine.bisect_mark(repo, mark)
-    }))
+    let repo = handle.repo()?;
+    finish_op(enqueue_mutation(
+        &handle,
+        &repo,
+        "bisect",
+        move |_ctx, repo| engine.bisect_mark(repo, mark),
+    ))
     .await
 }
 
 #[tauri::command(rename_all = "snake_case")]
 pub async fn bisect_reset(repo_id: RepoId, state: State<'_, RepoManager>) -> Result<(), String> {
     let handle = get_handle(&state, &repo_id)?;
+    if let Some(remote) = handle.remote() {
+        return finish_op(enqueue_remote_mutation(
+            &handle,
+            remote,
+            "bisect",
+            move |git, _ws| git.bisect_reset(),
+        ))
+        .await;
+    }
     let engine = handle.m3();
-    finish_op(enqueue_mutation(&handle, "bisect", move |_ctx, repo| {
-        engine.bisect_reset(repo)
-    }))
+    let repo = handle.repo()?;
+    finish_op(enqueue_mutation(
+        &handle,
+        &repo,
+        "bisect",
+        move |_ctx, repo| engine.bisect_reset(repo),
+    ))
     .await
 }
 
@@ -1760,8 +2586,18 @@ pub async fn commit_signature(
     state: State<'_, RepoManager>,
 ) -> Result<CommitSignature, String> {
     let handle = get_handle(&state, &repo_id)?;
+    if let Some(remote) = handle.remote() {
+        return finish_op(enqueue_remote_read(
+            &handle,
+            remote,
+            "commit",
+            move |git, _ws| git.commit_signature(&sha),
+        ))
+        .await;
+    }
     let engine = handle.m12();
-    finish_op(enqueue_read(&handle, "commit", move |_ctx, repo| {
+    let repo = handle.repo()?;
+    finish_op(enqueue_read(&handle, &repo, "commit", move |_ctx, repo| {
         engine.commit_signature(repo, &sha)
     }))
     .await
@@ -1774,8 +2610,18 @@ pub async fn branch_trash_list(
     state: State<'_, RepoManager>,
 ) -> Result<Vec<BranchTrashEntry>, String> {
     let handle = get_handle(&state, &repo_id)?;
+    if let Some(remote) = handle.remote() {
+        return finish_op(enqueue_remote_read(
+            &handle,
+            remote,
+            "branch",
+            move |git, _ws| git.branch_trash_list(),
+        ))
+        .await;
+    }
     let engine = handle.m12();
-    finish_op(enqueue_read(&handle, "branch", move |_ctx, repo| {
+    let repo = handle.repo()?;
+    finish_op(enqueue_read(&handle, &repo, "branch", move |_ctx, repo| {
         engine.branch_trash_list(repo)
     }))
     .await
@@ -1790,10 +2636,40 @@ pub async fn branch_trash_restore(
     state: State<'_, RepoManager>,
 ) -> Result<String, String> {
     let handle = get_handle(&state, &repo_id)?;
+    if let Some(remote) = handle.remote() {
+        // The remote engine's restore takes no rename; compose the rename
+        // from branch_rename. The entry id is `<name>-<timestamp>`, so the
+        // original name strips back from the numeric suffix (mirrors the
+        // engine's own `strip_trash_suffix`).
+        return finish_op(enqueue_remote_mutation(
+            &handle,
+            remote,
+            "branch",
+            move |git, _ws| {
+                git.branch_trash_restore(&id)?;
+                let name = id
+                    .trim_end_matches(|c: char| c.is_ascii_digit())
+                    .trim_end_matches('-')
+                    .to_string();
+                match new_name {
+                    Some(new) => {
+                        git.branch_rename(&name, &new)?;
+                        Ok(new)
+                    }
+                    None => Ok(name),
+                }
+            },
+        ))
+        .await;
+    }
     let engine = handle.m12();
-    finish_op(enqueue_mutation(&handle, "branch", move |_ctx, repo| {
-        engine.branch_trash_restore(repo, &id, new_name.as_deref())
-    }))
+    let repo = handle.repo()?;
+    finish_op(enqueue_mutation(
+        &handle,
+        &repo,
+        "branch",
+        move |_ctx, repo| engine.branch_trash_restore(repo, &id, new_name.as_deref()),
+    ))
     .await
 }
 
@@ -1801,10 +2677,27 @@ pub async fn branch_trash_restore(
 #[tauri::command(rename_all = "snake_case")]
 pub async fn worktree_prune(repo_id: RepoId, state: State<'_, RepoManager>) -> Result<u32, String> {
     let handle = get_handle(&state, &repo_id)?;
+    if let Some(remote) = handle.remote() {
+        return finish_op(enqueue_remote_mutation(
+            &handle,
+            remote,
+            "worktree",
+            move |git, _ws| {
+                // The remote engine prunes but reports no count; 0 = best-effort.
+                git.worktree_prune()?;
+                Ok(0)
+            },
+        ))
+        .await;
+    }
     let engine = handle.m12();
-    finish_op(enqueue_mutation(&handle, "worktree", move |_ctx, repo| {
-        engine.worktree_prune(repo)
-    }))
+    let repo = handle.repo()?;
+    finish_op(enqueue_mutation(
+        &handle,
+        &repo,
+        "worktree",
+        move |_ctx, repo| engine.worktree_prune(repo),
+    ))
     .await
 }
 
@@ -1816,8 +2709,18 @@ pub async fn bisect_log(
     state: State<'_, RepoManager>,
 ) -> Result<Vec<BisectLogEntry>, String> {
     let handle = get_handle(&state, &repo_id)?;
+    if let Some(remote) = handle.remote() {
+        return finish_op(enqueue_remote_read(
+            &handle,
+            remote,
+            "bisect",
+            move |git, _ws| git.bisect_log(),
+        ))
+        .await;
+    }
     let engine = handle.m12();
-    finish_op(enqueue_read(&handle, "bisect", move |_ctx, repo| {
+    let repo = handle.repo()?;
+    finish_op(enqueue_read(&handle, &repo, "bisect", move |_ctx, repo| {
         engine.bisect_log(repo)
     }))
     .await
@@ -1881,10 +2784,23 @@ pub async fn describe(
     state: State<'_, RepoManager>,
 ) -> Result<String, String> {
     let handle = get_handle(&state, &repo_id)?;
+    if let Some(remote) = handle.remote() {
+        return finish_op(enqueue_remote_read(
+            &handle,
+            remote,
+            "describe",
+            move |git, _ws| git.describe(&spec),
+        ))
+        .await;
+    }
     let engine = handle.m3();
-    finish_op(enqueue_read(&handle, "describe", move |_ctx, repo| {
-        engine.describe(repo, &spec)
-    }))
+    let repo = handle.repo()?;
+    finish_op(enqueue_read(
+        &handle,
+        &repo,
+        "describe",
+        move |_ctx, repo| engine.describe(repo, &spec),
+    ))
     .await
 }
 
@@ -1896,8 +2812,18 @@ pub async fn autosquash_plan(
     state: State<'_, RepoManager>,
 ) -> Result<Vec<RebaseStep>, String> {
     let handle = get_handle(&state, &repo_id)?;
+    if let Some(remote) = handle.remote() {
+        return finish_op(enqueue_remote_read(
+            &handle,
+            remote,
+            "rebase",
+            move |git, _ws| git.autosquash_plan(&base),
+        ))
+        .await;
+    }
     let engine = handle.m3();
-    finish_op(enqueue_read(&handle, "rebase", move |_ctx, repo| {
+    let repo = handle.repo()?;
+    finish_op(enqueue_read(&handle, &repo, "rebase", move |_ctx, repo| {
         engine.autosquash_plan(repo, &base)
     }))
     .await
@@ -1912,6 +2838,17 @@ pub async fn repo_health(
     state: State<'_, RepoManager>,
 ) -> Result<RepoHealth, String> {
     let handle = get_handle(&state, &repo_id)?;
+    if let Some(remote) = handle.remote() {
+        // The local probe walks the fs at `root`; remote repos probe on the
+        // device through the engine instead.
+        return finish_op(enqueue_remote_read(
+            &handle,
+            remote,
+            "health",
+            move |git, _ws| git.repo_health(),
+        ))
+        .await;
+    }
     let root = handle.root.clone();
     let git_dir = handle.git_dir.clone();
     tauri::async_runtime::spawn_blocking(move || {
@@ -1933,10 +2870,23 @@ pub async fn maintenance_run(
     state: State<'_, RepoManager>,
 ) -> Result<String, String> {
     let handle = get_handle(&state, &repo_id)?;
+    if let Some(remote) = handle.remote() {
+        // The remote engine supports `gc`/`prune`/`fsck`; other local ops
+        // come back as its "unknown maintenance op" error.
+        return finish_op(enqueue_remote_mutation(
+            &handle,
+            remote,
+            "maintenance",
+            move |git, _ws| git.maintenance_run(&op),
+        ))
+        .await;
+    }
     let root = handle.root.clone();
     let git_dir = handle.git_dir.clone();
+    let repo = handle.repo()?;
     finish_op(enqueue_mutation(
         &handle,
+        &repo,
         "maintenance",
         move |_ctx, _repo| {
             let workdir = std::path::Path::new(&root);
@@ -2025,15 +2975,33 @@ pub async fn archive(
         return Err("invalid archive arguments".into());
     }
     let handle = get_handle(&state, &repo_id)?;
+    if let Some(remote) = handle.remote() {
+        // Remote archive streams the bytes over SSH and writes the same
+        // local destination file on this machine.
+        let destination_path = std::path::PathBuf::from(&destination);
+        return finish_op(enqueue_remote_mutation(
+            &handle,
+            remote,
+            "archive",
+            move |git, _ws| git.archive(&spec, &format, &destination_path),
+        ))
+        .await;
+    }
     let root = handle.root.clone();
-    finish_op(enqueue_mutation(&handle, "archive", move |_ctx, _repo| {
-        crate::maintenance::git_run(
-            std::path::Path::new(&root),
-            &["archive", "--format", &format, &spec, "-o", &destination],
-        )
-        .map(|_| ())
-        .map_err(EngineError::Invalid)
-    }))
+    let repo = handle.repo()?;
+    finish_op(enqueue_mutation(
+        &handle,
+        &repo,
+        "archive",
+        move |_ctx, _repo| {
+            crate::maintenance::git_run(
+                std::path::Path::new(&root),
+                &["archive", "--format", &format, &spec, "-o", &destination],
+            )
+            .map(|_| ())
+            .map_err(EngineError::Invalid)
+        },
+    ))
     .await
 }
 
@@ -2044,6 +3012,16 @@ pub async fn sparse_info(
     state: State<'_, RepoManager>,
 ) -> Result<SparseInfo, String> {
     let handle = get_handle(&state, &repo_id)?;
+    if let Some(remote) = handle.remote() {
+        // The local probe reads the fs at `root`; remote repos ask the device.
+        return finish_op(enqueue_remote_read(
+            &handle,
+            remote,
+            "sparse",
+            move |git, _ws| git.sparse_info(),
+        ))
+        .await;
+    }
     let root = handle.root.clone();
     tauri::async_runtime::spawn_blocking(move || {
         Ok(crate::maintenance::sparse_info(std::path::Path::new(&root)))
@@ -2061,11 +3039,26 @@ pub async fn sparse_apply(
     state: State<'_, RepoManager>,
 ) -> Result<(), String> {
     let handle = get_handle(&state, &repo_id)?;
+    if let Some(remote) = handle.remote() {
+        return finish_op(enqueue_remote_mutation(
+            &handle,
+            remote,
+            "sparse",
+            move |git, _ws| git.sparse_apply(&patterns, add),
+        ))
+        .await;
+    }
     let root = handle.root.clone();
-    finish_op(enqueue_mutation(&handle, "sparse", move |_ctx, _repo| {
-        crate::maintenance::sparse_apply(std::path::Path::new(&root), &patterns, add)
-            .map_err(EngineError::Invalid)
-    }))
+    let repo = handle.repo()?;
+    finish_op(enqueue_mutation(
+        &handle,
+        &repo,
+        "sparse",
+        move |_ctx, _repo| {
+            crate::maintenance::sparse_apply(std::path::Path::new(&root), &patterns, add)
+                .map_err(EngineError::Invalid)
+        },
+    ))
     .await
 }
 
@@ -2076,6 +3069,16 @@ pub async fn lfs_status(
     state: State<'_, RepoManager>,
 ) -> Result<LfsStatus, String> {
     let handle = get_handle(&state, &repo_id)?;
+    if let Some(remote) = handle.remote() {
+        // The local probe reads the fs at `root`; remote repos ask the device.
+        return finish_op(enqueue_remote_read(
+            &handle,
+            remote,
+            "lfs",
+            move |git, _ws| git.lfs_status(),
+        ))
+        .await;
+    }
     let root = handle.root.clone();
     tauri::async_runtime::spawn_blocking(move || {
         Ok(crate::maintenance::lfs_status(std::path::Path::new(&root)))
@@ -2092,11 +3095,29 @@ pub async fn lfs_run(
     state: State<'_, RepoManager>,
 ) -> Result<String, String> {
     let handle = get_handle(&state, &repo_id)?;
+    if let Some(remote) = handle.remote() {
+        // The device's own git-lfs answers (it allows fetch/pull/push/
+        // checkout; `install` fails there with the engine's unsupported
+        // subcommand error).
+        return finish_op(enqueue_remote_mutation(
+            &handle,
+            remote,
+            "lfs",
+            move |git, _ws| git.lfs_run(&subcommand),
+        ))
+        .await;
+    }
     let root = handle.root.clone();
-    finish_op(enqueue_mutation(&handle, "lfs", move |_ctx, _repo| {
-        crate::maintenance::lfs_run(std::path::Path::new(&root), &subcommand)
-            .map_err(EngineError::Invalid)
-    }))
+    let repo = handle.repo()?;
+    finish_op(enqueue_mutation(
+        &handle,
+        &repo,
+        "lfs",
+        move |_ctx, _repo| {
+            crate::maintenance::lfs_run(std::path::Path::new(&root), &subcommand)
+                .map_err(EngineError::Invalid)
+        },
+    ))
     .await
 }
 
@@ -2138,8 +3159,18 @@ pub async fn stash_list(
     state: State<'_, RepoManager>,
 ) -> Result<Vec<StashInfo>, String> {
     let handle = get_handle(&state, &repo_id)?;
+    if let Some(remote) = handle.remote() {
+        return finish_op(enqueue_remote_read(
+            &handle,
+            remote,
+            "stash",
+            move |git, _ws| git.stash_list(),
+        ))
+        .await;
+    }
     let engine = handle.m3();
-    finish_op(enqueue_read(&handle, "stash", move |_ctx, repo| {
+    let repo = handle.repo()?;
+    finish_op(enqueue_read(&handle, &repo, "stash", move |_ctx, repo| {
         engine.stash_list(repo)
     }))
     .await
@@ -2154,10 +3185,25 @@ pub async fn stash_push(
     state: State<'_, RepoManager>,
 ) -> Result<(), String> {
     let handle = get_handle(&state, &repo_id)?;
+    if let Some(remote) = handle.remote() {
+        return finish_op(enqueue_remote_mutation(
+            &handle,
+            remote,
+            "stash",
+            move |git, _ws| git.stash_push(message.as_deref(), keep_index, include_untracked),
+        ))
+        .await;
+    }
     let engine = handle.m3();
-    finish_op(enqueue_mutation(&handle, "stash", move |_ctx, repo| {
-        engine.stash_push(repo, message.as_deref(), keep_index, include_untracked)
-    }))
+    let repo = handle.repo()?;
+    finish_op(enqueue_mutation(
+        &handle,
+        &repo,
+        "stash",
+        move |_ctx, repo| {
+            engine.stash_push(repo, message.as_deref(), keep_index, include_untracked)
+        },
+    ))
     .await
 }
 
@@ -2169,10 +3215,31 @@ pub async fn stash_apply(
     state: State<'_, RepoManager>,
 ) -> Result<(), String> {
     let handle = get_handle(&state, &repo_id)?;
+    if let Some(remote) = handle.remote() {
+        // Pop = apply + drop, and the drop only runs after a clean apply
+        // (same rule as the local engine's stash_apply_impl).
+        return finish_op(enqueue_remote_mutation(
+            &handle,
+            remote,
+            "stash",
+            move |git, _ws| {
+                git.stash_apply(index)?;
+                if pop {
+                    git.stash_drop(index)?;
+                }
+                Ok(())
+            },
+        ))
+        .await;
+    }
     let engine = handle.m3();
-    finish_op(enqueue_mutation(&handle, "stash", move |_ctx, repo| {
-        engine.stash_apply(repo, index, pop)
-    }))
+    let repo = handle.repo()?;
+    finish_op(enqueue_mutation(
+        &handle,
+        &repo,
+        "stash",
+        move |_ctx, repo| engine.stash_apply(repo, index, pop),
+    ))
     .await
 }
 
@@ -2183,10 +3250,23 @@ pub async fn stash_drop(
     state: State<'_, RepoManager>,
 ) -> Result<(), String> {
     let handle = get_handle(&state, &repo_id)?;
+    if let Some(remote) = handle.remote() {
+        return finish_op(enqueue_remote_mutation(
+            &handle,
+            remote,
+            "stash",
+            move |git, _ws| git.stash_drop(index),
+        ))
+        .await;
+    }
     let engine = handle.m3();
-    finish_op(enqueue_mutation(&handle, "stash", move |_ctx, repo| {
-        engine.stash_drop(repo, index)
-    }))
+    let repo = handle.repo()?;
+    finish_op(enqueue_mutation(
+        &handle,
+        &repo,
+        "stash",
+        move |_ctx, repo| engine.stash_drop(repo, index),
+    ))
     .await
 }
 
@@ -2198,10 +3278,23 @@ pub async fn stash_branch(
     state: State<'_, RepoManager>,
 ) -> Result<(), String> {
     let handle = get_handle(&state, &repo_id)?;
+    if let Some(remote) = handle.remote() {
+        return finish_op(enqueue_remote_mutation(
+            &handle,
+            remote,
+            "stash",
+            move |git, _ws| git.stash_branch(&name, index),
+        ))
+        .await;
+    }
     let engine = handle.m3();
-    finish_op(enqueue_mutation(&handle, "stash", move |_ctx, repo| {
-        engine.stash_branch(repo, &name, index)
-    }))
+    let repo = handle.repo()?;
+    finish_op(enqueue_mutation(
+        &handle,
+        &repo,
+        "stash",
+        move |_ctx, repo| engine.stash_branch(repo, &name, index),
+    ))
     .await
 }
 
@@ -2211,10 +3304,23 @@ pub async fn worktrees(
     state: State<'_, RepoManager>,
 ) -> Result<Vec<WorktreeInfo>, String> {
     let handle = get_handle(&state, &repo_id)?;
+    if let Some(remote) = handle.remote() {
+        return finish_op(enqueue_remote_read(
+            &handle,
+            remote,
+            "worktree",
+            move |git, _ws| git.worktrees(),
+        ))
+        .await;
+    }
     let engine = handle.m3();
-    finish_op(enqueue_read(&handle, "worktree", move |_ctx, repo| {
-        engine.worktrees(repo)
-    }))
+    let repo = handle.repo()?;
+    finish_op(enqueue_read(
+        &handle,
+        &repo,
+        "worktree",
+        move |_ctx, repo| engine.worktrees(repo),
+    ))
     .await
 }
 
@@ -2227,10 +3333,25 @@ pub async fn worktree_add(
     state: State<'_, RepoManager>,
 ) -> Result<(), String> {
     let handle = get_handle(&state, &repo_id)?;
+    if let Some(remote) = handle.remote() {
+        return finish_op(enqueue_remote_mutation(
+            &handle,
+            remote,
+            "worktree",
+            move |git, _ws| git.worktree_add(&path, branch.as_deref(), new_branch.as_deref()),
+        ))
+        .await;
+    }
     let engine = handle.m3();
-    finish_op(enqueue_mutation(&handle, "worktree", move |_ctx, repo| {
-        engine.worktree_add(repo, &path, branch.as_deref(), new_branch.as_deref())
-    }))
+    let repo = handle.repo()?;
+    finish_op(enqueue_mutation(
+        &handle,
+        &repo,
+        "worktree",
+        move |_ctx, repo| {
+            engine.worktree_add(repo, &path, branch.as_deref(), new_branch.as_deref())
+        },
+    ))
     .await
 }
 
@@ -2242,11 +3363,29 @@ pub async fn worktree_remove(
     state: State<'_, RepoManager>,
 ) -> Result<(), String> {
     let handle = get_handle(&state, &repo_id)?;
+    if let Some(remote) = handle.remote() {
+        // (The local path emits a one-line progress event; the silent
+        // remote read/mutation helpers carry no OpCtx, so the remote op
+        // relies on the queue's final done event instead.)
+        return finish_op(enqueue_remote_mutation(
+            &handle,
+            remote,
+            "worktree",
+            move |git, _ws| git.worktree_remove(&name, force),
+        ))
+        .await;
+    }
     let engine = handle.m3();
-    finish_op(enqueue_mutation(&handle, "worktree", move |ctx, repo| {
-        ctx.emit_progress(&format!("removing worktree `{name}`"), None);
-        engine.worktree_remove(repo, &name, force)
-    }))
+    let repo = handle.repo()?;
+    finish_op(enqueue_mutation(
+        &handle,
+        &repo,
+        "worktree",
+        move |ctx, repo| {
+            ctx.emit_progress(&format!("removing worktree `{name}`"), None);
+            engine.worktree_remove(repo, &name, force)
+        },
+    ))
     .await
 }
 
@@ -2257,8 +3396,27 @@ pub async fn reflog(
     state: State<'_, RepoManager>,
 ) -> Result<Vec<ReflogEntry>, String> {
     let handle = get_handle(&state, &repo_id)?;
+    if let Some(remote) = handle.remote() {
+        // The remote engine reads HEAD's reflog only; a specific ref gets a
+        // clear error instead of silently wrong data.
+        if name
+            .as_deref()
+            .map(str::trim)
+            .is_some_and(|n| !n.is_empty() && n != "HEAD")
+        {
+            return Err("reflog for a specific ref is not supported for remote projects".into());
+        }
+        return finish_op(enqueue_remote_read(
+            &handle,
+            remote,
+            "reflog",
+            move |git, _ws| git.reflog(REMOTE_REFLOG_LIMIT),
+        ))
+        .await;
+    }
     let engine = handle.m3();
-    finish_op(enqueue_read(&handle, "reflog", move |_ctx, repo| {
+    let repo = handle.repo()?;
+    finish_op(enqueue_read(&handle, &repo, "reflog", move |_ctx, repo| {
         engine.reflog(repo, name.as_deref())
     }))
     .await
@@ -2294,7 +3452,26 @@ pub async fn repo_clean(
     state: State<'_, RepoManager>,
 ) -> Result<u32, String> {
     let handle = get_handle(&state, &repo_id)?;
-    finish_op(clean_op(&handle, paths, checkpoint_reason)).await
+    if let Some(remote) = handle.remote() {
+        // Same ordering rule as the local clean: validate FIRST (purely
+        // lexical checks on the workdir-relative paths, so a rejected op
+        // has zero side effects — notably no checkpoint), then checkpoint,
+        // then delete. The device's `git clean` refuses pathspecs that
+        // escape the repository, mirroring the local resolve guard.
+        validate_clean_paths(&handle.root, &paths)?;
+        return finish_op(enqueue_remote_mutation(
+            &handle,
+            remote,
+            "clean",
+            move |git, _ws| {
+                git.checkpoint_create(&checkpoint_reason)?;
+                git.repo_clean(&paths)
+            },
+        ))
+        .await;
+    }
+    let repo = handle.repo()?;
+    finish_op(clean_op(&handle, repo, paths, checkpoint_reason)).await
 }
 
 /// Enqueued `clean` body (op-queue mutation with the generation bump, like
@@ -2302,11 +3479,11 @@ pub async fn repo_clean(
 /// through a real handle without `State`.
 fn clean_op(
     handle: &RepoHandle,
+    repo: Arc<Mutex<git2::Repository>>,
     paths: Vec<String>,
     checkpoint_reason: String,
 ) -> oneshot::Receiver<Result<u32, String>> {
     let engine = handle.m3();
-    let repo = handle.repo();
     let root = handle.root.clone();
     let generation = handle.generation_shared();
     let (_op_id, rx) = handle.ops().enqueue("clean", move |_ctx| {
@@ -2378,6 +3555,8 @@ fn remove_resolved(resolved: &[std::path::PathBuf]) -> Result<u32, String> {
 
 /// Run a user-defined shell action with cwd = repo root, streaming its
 /// output as `action-output` events. Returns the run id (cancel token).
+/// Remote repos run the action on the device over SSH exec through the
+/// remote registry (same `action-output` events, same Tauri sink).
 #[tauri::command(rename_all = "snake_case")]
 pub fn action_run(
     repo_id: RepoId,
@@ -2386,8 +3565,18 @@ pub fn action_run(
     app: tauri::AppHandle,
     state: State<'_, RepoManager>,
     runs: State<'_, ActionRegistry>,
+    remote_runs: State<'_, crate::remote::actions::RemoteActionRegistry>,
 ) -> Result<String, String> {
     let handle = get_handle(&state, &repo_id)?;
+    if let Some(remote) = handle.remote() {
+        return remote_runs.run(
+            &repo_id.0,
+            &name,
+            &command,
+            Arc::new(remote.git()),
+            Arc::new(TauriActionSink::new(app)),
+        );
+    }
     let launch = crate::actions::run_action(
         &runs,
         ActionSpec {
@@ -2402,9 +3591,19 @@ pub fn action_run(
 }
 
 /// Kill a running action; `false` when the run is unknown or already done.
+/// The command carries no repo id and run ids are disjoint (`act-` vs
+/// `ract-` prefixes), so local is tried first and the remote registry
+/// covers remote runs.
 #[tauri::command(rename_all = "snake_case")]
-pub fn action_cancel(run_id: String, runs: State<'_, ActionRegistry>) -> Result<bool, String> {
-    Ok(runs.cancel(&run_id))
+pub fn action_cancel(
+    run_id: String,
+    runs: State<'_, ActionRegistry>,
+    remote_runs: State<'_, crate::remote::actions::RemoteActionRegistry>,
+) -> Result<bool, String> {
+    if runs.cancel(&run_id) {
+        return Ok(true);
+    }
+    Ok(remote_runs.cancel(&run_id))
 }
 
 #[cfg(test)]
@@ -2522,6 +3721,7 @@ mod m4_clean_tests {
 
         let removed = clean_op(
             &handle,
+            handle.repo().expect("local repo"),
             vec!["junk.log".to_string()],
             "pre-clean".to_string(),
         )
@@ -2536,7 +3736,7 @@ mod m4_clean_tests {
         // The undo point exists and names the reason.
         let engine = Libgit2Engine::new();
         let checkpoints = {
-            let repo = handle.repo();
+            let repo = handle.repo().expect("local repo");
             let repo = repo.lock();
             engine.checkpoints_impl(&repo).unwrap()
         };
@@ -2560,6 +3760,7 @@ mod m4_clean_tests {
 
         let err = clean_op(
             &handle,
+            handle.repo().expect("local repo"),
             vec!["../evil".to_string()],
             "pre-clean".to_string(),
         )
@@ -2572,7 +3773,7 @@ mod m4_clean_tests {
         // No checkpoint was taken for the rejected op.
         let engine = Libgit2Engine::new();
         let checkpoints = {
-            let repo = handle.repo();
+            let repo = handle.repo().expect("local repo");
             let repo = repo.lock();
             engine.checkpoints_impl(&repo).unwrap()
         };
@@ -2816,6 +4017,31 @@ fn gitignore_add_sync(root: &Path, pattern: &str) -> Result<(), String> {
     std::fs::write(&file, updated).map_err(|e| format!("writing .gitignore failed: {e}"))
 }
 
+/// Append one pattern to the repo-root `.gitignore` (contracts.md M4
+/// quick-add). Pure workdir file write — no git objects touched, so like
+/// the other FS-only commands it does not take the op queue; the watcher /
+/// poller picks the change up. Remote repos write through the engine
+/// (idempotent exact-line dedupe, same rule).
+#[tauri::command(rename_all = "snake_case")]
+pub async fn gitignore_add(
+    repo_id: RepoId,
+    pattern: String,
+    state: State<'_, RepoManager>,
+) -> Result<(), String> {
+    let handle = get_handle(&state, &repo_id)?;
+    if let Some(remote) = handle.remote() {
+        return finish_op(enqueue_remote_mutation(
+            &handle,
+            remote,
+            "gitignore",
+            move |git, _ws| git.gitignore_add(&pattern),
+        ))
+        .await;
+    }
+    let root = handle.root.clone();
+    gitignore_add_sync(Path::new(&root), &pattern)
+}
+
 /// Applies a builtin gitignore template by name: appends every pattern
 /// (idempotent per line, same rule as `gitignore_add`) under a
 /// `# <name>` comment header in ONE write.
@@ -2826,11 +4052,23 @@ pub async fn gitignore_apply_template(
     state: State<'_, RepoManager>,
 ) -> Result<(), String> {
     let handle = get_handle(&state, &repo_id)?;
-    let root = handle.root.clone();
     let template = gitignore_templates_list()
         .into_iter()
         .find(|t| t.name.eq_ignore_ascii_case(&name))
         .ok_or_else(|| format!("no gitignore template named `{name}`"))?;
+    if let Some(remote) = handle.remote() {
+        // The remote engine dedupes per line (exact match), so re-applying
+        // a template is idempotent remotely too — header line included.
+        let block = format!("# {}\n{}", template.name, template.patterns);
+        return finish_op(enqueue_remote_mutation(
+            &handle,
+            remote,
+            "gitignore",
+            move |git, _ws| git.gitignore_append_block(&block),
+        ))
+        .await;
+    }
+    let root = handle.root.clone();
     let file = std::path::Path::new(&root).join(".gitignore");
     let existing = std::fs::read_to_string(&file).unwrap_or_default();
     let mut updated = existing.clone();
@@ -2862,10 +4100,23 @@ pub async fn submodules(
     state: State<'_, RepoManager>,
 ) -> Result<Vec<SubmoduleInfo>, String> {
     let handle = get_handle(&state, &repo_id)?;
+    if let Some(remote) = handle.remote() {
+        return finish_op(enqueue_remote_read(
+            &handle,
+            remote,
+            "submodule",
+            move |git, _ws| git.submodules(),
+        ))
+        .await;
+    }
     let engine = handle.m12();
-    finish_op(enqueue_read(&handle, "submodule", move |_ctx, repo| {
-        engine.submodules(repo)
-    }))
+    let repo = handle.repo()?;
+    finish_op(enqueue_read(
+        &handle,
+        &repo,
+        "submodule",
+        move |_ctx, repo| engine.submodules(repo),
+    ))
     .await
 }
 
@@ -2881,12 +4132,29 @@ pub async fn submodule_update(
     state: State<'_, RepoManager>,
 ) -> Result<(), String> {
     let handle = get_handle(&state, &repo_id)?;
+    if let Some(remote) = handle.remote() {
+        // The remote engine updates all submodules (no per-path argument);
+        // the device session brings its own credentials, so no auth broker.
+        return finish_op(enqueue_remote_mutation(
+            &handle,
+            remote,
+            "submodule",
+            move |git, _ws| git.submodule_update(init, recursive),
+        ))
+        .await;
+    }
     let engine = handle.m12();
-    finish_op(enqueue_mutation(&handle, "submodule", move |_ctx, repo| {
-        crate::auth::with_netop_context(&repo_id, || {
-            engine.submodule_update(repo, &path, init, recursive)
-        })
-    }))
+    let repo = handle.repo()?;
+    finish_op(enqueue_mutation(
+        &handle,
+        &repo,
+        "submodule",
+        move |_ctx, repo| {
+            crate::auth::with_netop_context(&repo_id, || {
+                engine.submodule_update(repo, &path, init, recursive)
+            })
+        },
+    ))
     .await
 }
 
@@ -2899,26 +4167,26 @@ pub async fn submodule_sync(
     state: State<'_, RepoManager>,
 ) -> Result<(), String> {
     let handle = get_handle(&state, &repo_id)?;
+    if let Some(remote) = handle.remote() {
+        // The remote engine syncs all submodules (no per-path argument);
+        // `recursive: false` mirrors the local non-recursive sync.
+        return finish_op(enqueue_remote_mutation(
+            &handle,
+            remote,
+            "submodule",
+            move |git, _ws| git.submodule_sync(false),
+        ))
+        .await;
+    }
     let engine = handle.m12();
-    finish_op(enqueue_mutation(&handle, "submodule", move |_ctx, repo| {
-        engine.submodule_sync(repo, path.as_deref())
-    }))
+    let repo = handle.repo()?;
+    finish_op(enqueue_mutation(
+        &handle,
+        &repo,
+        "submodule",
+        move |_ctx, repo| engine.submodule_sync(repo, path.as_deref()),
+    ))
     .await
-}
-
-/// Append one pattern to the repo-root `.gitignore` (created when missing).
-/// The watcher picks the change up; the FE refreshes status afterwards.
-#[tauri::command(rename_all = "snake_case")]
-pub async fn gitignore_add(
-    repo_id: RepoId,
-    pattern: String,
-    state: State<'_, RepoManager>,
-) -> Result<(), String> {
-    let handle = get_handle(&state, &repo_id)?;
-    let root = handle.root.clone();
-    tauri::async_runtime::spawn_blocking(move || gitignore_add_sync(&root, &pattern))
-        .await
-        .map_err(|e| format!("gitignore_add task failed: {e}"))?
 }
 
 /// The curated builtin gitignore templates (`{name, description, patterns}`).
@@ -3386,8 +4654,18 @@ pub async fn commit_activity(
     state: State<'_, RepoManager>,
 ) -> Result<Vec<DayCount>, String> {
     let handle = get_handle(&state, &repo_id)?;
+    if let Some(remote) = handle.remote() {
+        return finish_op(enqueue_remote_read(
+            &handle,
+            remote,
+            "stats",
+            move |git, _ws| git.commit_activity(max_days, author.as_deref()),
+        ))
+        .await;
+    }
     let engine = handle.m12();
-    finish_op(enqueue_read(&handle, "stats", move |_ctx, repo| {
+    let repo = handle.repo()?;
+    finish_op(enqueue_read(&handle, &repo, "stats", move |_ctx, repo| {
         engine.commit_activity(repo, max_days, author.as_deref())
     }))
     .await
@@ -3402,8 +4680,18 @@ pub async fn contributor_stats(
     state: State<'_, RepoManager>,
 ) -> Result<Vec<Contributor>, String> {
     let handle = get_handle(&state, &repo_id)?;
+    if let Some(remote) = handle.remote() {
+        return finish_op(enqueue_remote_read(
+            &handle,
+            remote,
+            "stats",
+            move |git, _ws| git.contributor_stats(max_days),
+        ))
+        .await;
+    }
     let engine = handle.m12();
-    finish_op(enqueue_read(&handle, "stats", move |_ctx, repo| {
+    let repo = handle.repo()?;
+    finish_op(enqueue_read(&handle, &repo, "stats", move |_ctx, repo| {
         engine.contributor_stats(repo, max_days)
     }))
     .await

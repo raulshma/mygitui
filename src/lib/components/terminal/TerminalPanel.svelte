@@ -7,6 +7,8 @@
    * the M3 CSS variables) with the terminal store singleton; the instance
    * script only talks to the store's `TerminalLike`/`TerminalHandle` API.
    * See `$lib/terminal/terminalStore.svelte.ts` for the session lifecycle.
+   * `remote` repositories (on an SSH device) get a remote shell instead of
+   * a local pty — same UI, the store branches the transport.
    */
   import "@xterm/xterm/css/xterm.css";
   import { Terminal } from "@xterm/xterm";
@@ -54,7 +56,7 @@
   import { onSchemeChange } from "$lib/terminal/terminalStore.svelte";
   import type { TerminalSession } from "$lib/terminal/terminalStore.svelte";
 
-  let { repoId }: { repoId: string } = $props();
+  let { repoId, remote = false }: { repoId: string; remote?: boolean } = $props();
 
   /** Terminal needs the pty backend: plain browser / test builds show a note. */
   const supported = isTauri();
@@ -88,7 +90,7 @@
     if (!supported) return;
     const host = hostEl;
     if (!host) return;
-    const term = terminals.ensure(repoId)?.term;
+    const term = terminals.ensure(repoId, remote)?.term;
     if (!term) return;
     const element = term.element;
     if (element) {
@@ -120,7 +122,7 @@
   }
 
   function onRestart(): void {
-    terminals.restart(repoId);
+    terminals.restart(repoId, remote);
   }
 
   function onKill(): void {

@@ -47,7 +47,8 @@ camelCase conversion anywhere). TS types are not hand-mirrored:
    plus the payload types declared next to their commands/events
    (`forge.rs`, `pty.rs`, `engine/stats.rs`, `ops.rs`, `auth.rs`,
    `actions.rs`, `watcher.rs`, `editors.rs`, `opencode.rs`,
-   `graph/types.rs`, `ipc_commands.rs`).
+   `graph/types.rs`, `ipc_commands.rs`, `remote/{actions,commands,prompts,
+   transport}.rs`).
 2. `cargo test export_bindings` (wrapped as `npm run gen:types`) regenerates
    one file per type into `src/lib/ipc/gen/<RustTypeName>.ts` (destination
    pinned by `TS_RS_EXPORT_DIR` in `src-tauri/.cargo/config.toml`; generated
@@ -724,3 +725,67 @@ Frontend (FE contracts): FilesPanel + FileWorkspace lazily imported as the
 quick-open dialog (`files.quickOpen`, Ctrl+P) opens the same event. TS
 wrappers live in `src/lib/ipc/client.ts`; types regenerate via
 `npm run gen:types`.
+
+---
+
+## Commands (remote devices — SSH projects)
+
+Remote (SSH) device registry, connection lifecycle, prompt answering,
+remote filesystem browsing, and the remote twin of `repo_open`. The remote
+machine is the source of truth: every read/write and git command executes
+on the device; nothing is synced locally. Logic:
+`src-tauri/src/remote/` (`commands.rs` device CRUD/prompts/browse,
+`transport.rs` russh session pool, `engine.rs` git-over-SSH,
+`workspace.rs` SFTP, `term.rs` remote shell, `actions.rs` remote action
+runs, `polling.rs` change polling). Secrets live only in the OS keyring;
+host keys are TOFU-pinned (`<app-data>/remote/known-hosts.json`) and a
+changed key blocks the connection until explicitly re-confirmed. Every
+interpolated path/ref passes the unit-tested POSIX quoting helper
+(`remote/quoting.rs`). Auth: password or key file (+passphrase).
+
+| Command | Args | Returns | Notes |
+|---|---|---|---|
+| `device_list` | — | `DeviceInfo[]` | registered devices + live status |
+| `device_add` | `input: DeviceInput` | `DeviceInfo` | registers; secrets write-once into the keyring |
+| `device_update` | `input: DeviceInput` (`input.id` selects) | `DeviceInfo` | `None` secrets = leave stored ones |
+| `device_remove` | `device_id` | `void` | drops session, deletes profile + keyring secrets |
+| `device_connect` | `device_id` | `string` (status) | dials + auths; surfacing host-key/auth prompts as events |
+| `device_disconnect` | `device_id` | `void` | idle; ops reconnect on demand |
+| `device_status` | `device_id` | `string` | one-shot status probe (`"disconnected" \| "connecting" \| "connected"`) |
+| `device_test` | `input: DeviceInput` | `string` (probe output) | Test-connection button; nothing persisted (unsaved ids clean their keyring entries up) |
+| `device_hostkey_respond` | `request_id, accept: bool` | `void` | answers a `hostkey-request` |
+| `device_auth_respond` | `request_id, password?, store: bool` | `void` | answers a `device-auth-request` |
+| `device_forget_host_key` | `device_id` | `bool` | unpins the host key (next connect re-prompts) |
+| `device_host_key` | `device_id` | `KnownHostKey \| null` | the pinned key for the detail view |
+| `device_browse_dir` | `device_id, path` (`""`/`"~"` = home) | `DirListing` | SFTP listing; entries carry absolute POSIX paths |
+| `device_scan_repos` | `device_id, root?` (default home) | `DeviceRepoCandidate[]` | depth-limited `.git` scan, dependency/build dirs skipped, capped 200 |
+| `remote_repo_open` | `device_id, path` | `RepoInfo` (`device_id` set) | opens the remote repo as a project tab; starts the poller |
+| `remote_poll_set_paused` | `paused: bool` | `void` | pause/resume every remote repo poller (FE mirrors `visibilitychange` — polling is "paused when tab hidden") |
+| `rshell_create` | `repo_id, rows?, cols?` | `session_id: string` | remote shell over a pty'd exec channel (remote project required) |
+| `rshell_write` | `session_id, data: string` | `void` | keystrokes/paste to the remote shell |
+| `rshell_resize` | `session_id, rows: u16, cols: u16` | `void` | pty window-change |
+| `rshell_kill` | `session_id` | `void` | closes the channel (remote shell dies) |
+
+`DeviceInfo = { profile: DeviceProfile, status: string }`,
+`DeviceRepoCandidate = { path, name }` — ts-rs generated to
+`src/lib/ipc/gen/`, re-exported by `src/lib/ipc/types.ts`.
+
+Remote repos share the local command surface (`repo_*`, M2–M4, workspace
+files, `action_run`) — commands dispatch per-handle to the remote engine
+over the same DTO types (`RepoInfo.device_id` marks a remote project).
+Remote network ops report `NetStats` from git's final transfer-progress
+line (the CLI prints no end-of-transfer summary). Raw output streams
+(`action-output`, op-log passthrough) redact credential-prompt-ish lines
+backend-side before emission.
+
+## Events (remote devices)
+
+| Event | Payload | Meaning |
+|---|---|---|
+| `device-status` | `{ device_id, status: "disconnected" \| "connecting" \| "connected" }` | connection transitions of one device (DeviceStatusEvent) |
+| `hostkey-request` | `{ request_id, device_id, host, port, algo, fingerprint, status: "unknown" \| "changed", pinned_fingerprint: string \| null }` | TOFU prompt; answered via `device_hostkey_respond`; `changed` blocks until explicit re-confirm |
+| `device-auth-request` | `{ request_id, device_id, kind: "device-password" \| "ssh-passphrase", prompt }` | missing credential prompt; answered via `device_auth_respond`; backend waits up to 120 s |
+
+`rshell_*` sessions reuse the local `pty-output` / `pty-exit` events,
+keyed by the `rshell_create` session id. Remote action runs reuse
+`action_run` / `action_cancel` and stream `action-output` (M4 contract).
