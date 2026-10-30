@@ -5,8 +5,9 @@
  * disable (never toast-and-run), and ops started elsewhere disable/spin the
  * group. The header pins: the chevron menu's trailing pin action pins/unpins
  * verbs (via the shared context menu), pinned verbs render as icon segments
- * in the group, clicking one runs the shared verb, right-click unpins, and
- * segments disable without a current branch or while a sync runs.
+ * in the group (pull/push carrying their behind/ahead count badges), clicking
+ * one runs the shared verb, right-click unpins, and segments disable without
+ * a current branch or while a sync runs.
  */
 
 import {
@@ -138,6 +139,44 @@ describe("RepoQuickActions header pins", () => {
       ...document.querySelectorAll("[data-sync-pin]"),
     ].map((el) => el.getAttribute("data-sync-pin"));
     expect(verbs).toEqual(["fetch", "push"]);
+  });
+
+  it("pinned pull/push segments carry their behind/ahead counts", () => {
+    headerPins.pin("fetch");
+    headerPins.pin("pull");
+    headerPins.pin("push");
+    render(RepoQuickActions, { repoId: "r1", status: status() }); // 2 ahead, 1 behind
+
+    const pull = pinButton("pull");
+    expect(pull.querySelector(".count.behind")?.textContent?.trim()).toBe("1");
+    const push = pinButton("push");
+    expect(push.querySelector(".count.ahead")?.textContent?.trim()).toBe("2");
+    // Fetch has no count; its tooltip stays the plain fetch title.
+    expect(pinButton("fetch").querySelector(".count")).toBeNull();
+    // Accessible names spell the counts out via the idle titles.
+    expect(pull.getAttribute("aria-label")).toBe("Pull 1 commit into main");
+    expect(push.getAttribute("aria-label")).toBe("Push 2 commits from main");
+  });
+
+  it("hides a pinned segment's count while its verb runs", async () => {
+    let resolvePull: (value: {
+      kind: "done";
+      remote: string;
+      stats: NetStats;
+    }) => void = () => {};
+    mocks.pullCurrentBranch.mockReturnValue(
+      new Promise((resolve) => (resolvePull = resolve)),
+    );
+    headerPins.pin("pull");
+    render(RepoQuickActions, { repoId: "r1", status: status() });
+
+    await fireEvent.click(pinButton("pull"));
+    expect(pinButton("pull").querySelector(".count")).toBeNull();
+
+    resolvePull({ kind: "done", remote: "origin", stats: STATS });
+    await waitFor(() =>
+      expect(pinButton("pull").querySelector(".count")).not.toBeNull(),
+    );
   });
 
   it("a pinned segment runs the verb and reports success", async () => {

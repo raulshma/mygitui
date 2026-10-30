@@ -8,7 +8,9 @@
    * button itself, so the header keeps one compact control instead of three
    * unlabeled icons. Verbs pinned from the menu (the trailing pin action,
    * stored app-wide in `headerPins`) get their own always-visible icon
-   * segments in the same group, so a favorite verb skips the menu entirely.
+   * segments in the same group, so a favorite verb skips the menu entirely;
+   * a pinned pull/push carries its incoming/outgoing count badge too, so
+   * work waiting on either side of the remote stays visible at a glance.
    * Clicking a verb runs the same shared operation as the
    * command palette (`$lib/git/sync`), and busy state comes from the
    * existing per-repo op store — including ops started from a panel or the
@@ -252,6 +254,18 @@
         : iconPush;
   }
 
+  /**
+   * The count a pinned segment carries: pull shows incoming (behind), push
+   * outgoing (ahead), fetch none. `null` when there is nothing to show.
+   */
+  function pinCount(
+    verb: SyncVerb,
+  ): { count: number; dir: "behind" | "ahead" } | null {
+    if (verb === "pull" && behind > 0) return { count: behind, dir: "behind" };
+    if (verb === "push" && ahead > 0) return { count: ahead, dir: "ahead" };
+    return null;
+  }
+
   /** Segment tooltip: running → progress, busy → wait, else the idle title. */
   function pinTitle(verb: SyncVerb): string {
     if (runningVerb === verb) return `${VERB_LABELS[verb]} in progress…`;
@@ -321,6 +335,12 @@
           <Icon icon={verbIcon(verb)} size={14} />
         {/if}
       </span>
+      {#if pinCount(verb) !== null && runningVerb === null}
+        {@const badge = pinCount(verb)!}
+        <span class={`count ${badge.dir}`} title={`${badge.count} ${badge.dir}`}>
+          {badgeCount(badge.count)}
+        </span>
+      {/if}
     </button>
   {/each}
 
