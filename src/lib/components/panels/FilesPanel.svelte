@@ -18,6 +18,7 @@
 -->
 <script lang="ts">
   import type { RepoStatus } from "$lib/ipc/types";
+  import { onRepoChange } from "$lib/events/repoEvents";
   import {
     createEntry,
     deleteEntry,
@@ -262,6 +263,30 @@
         await listInto(path, true);
       }
     })();
+  });
+
+  // External changes (backend watcher/poller): re-list the visible tree.
+  // Debounced — one mutation can surface as a burst of events, and each
+  // refresh costs one listing per expanded dir.
+  let repoChangeTimer: ReturnType<typeof setTimeout> | null = null;
+  $effect(() => {
+    const unregister = onRepoChange({
+      filter: (change) => change.repo_id === repoId,
+      handle: () => {
+        if (repoChangeTimer) clearTimeout(repoChangeTimer);
+        repoChangeTimer = setTimeout(() => {
+          repoChangeTimer = null;
+          void refreshTree();
+        }, 500);
+      },
+    });
+    return () => {
+      unregister();
+      if (repoChangeTimer) {
+        clearTimeout(repoChangeTimer);
+        repoChangeTimer = null;
+      }
+    };
   });
 
   function persistedExpanded(node: FileNode): string[] {

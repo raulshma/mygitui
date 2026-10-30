@@ -35,6 +35,7 @@
     discard,
     gitignoreAdd,
     openRepo,
+    remoteRepoOpen,
     repoStatus,
     stage,
     stageAll,
@@ -43,7 +44,7 @@
     submodules as listSubmodules,
   } from "$lib/ipc/client";
   import { onRepoChange } from "$lib/events/repoEvents";
-  import { openTab, tabStore } from "$lib/stores/tabs.svelte";
+  import { openTab, parseSshUri, tabStore } from "$lib/stores/tabs.svelte";
   import { normalizeRepoPath } from "$lib/stores/switcher.svelte";
   import CommitBar from "$lib/components/panels/CommitBar.svelte";
   import iconBranch from "@ktibow/iconset-material-symbols/account-tree";
@@ -440,7 +441,13 @@ import iconPalette from "@ktibow/iconset-material-symbols/palette";
         if (openTab) {
           subRepoId = openTab.id;
         } else {
-          const res = await openRepo(entry.root);
+          // Remote roots are `ssh://<device-id>/<path>` URIs: they must open
+          // through `remote_repo_open` — `repo_open` would run a local git2
+          // discover on the URI and fail with an OS path error.
+          const remote = parseSshUri(entry.root);
+          const res = remote
+            ? await remoteRepoOpen(remote.deviceId, remote.path)
+            : await openRepo(entry.root);
           subRepoId = res.repo_id;
           openedRepoIds.add(res.repo_id);
         }

@@ -302,8 +302,16 @@ pub async fn device_browse_dir(
         .session_for(&profile, &host_key_store(&app))
         .await?;
     let dir = resolve_browse_path(&session, &path).await?;
-    let workspace = crate::remote::workspace::RemoteWorkspace::new(session, dir.clone());
-    let mut listing = workspace.list_dir("", false)?;
+    // The workspace surface is synchronous and bridges into the async world
+    // with `block_on`, so it must run on a blocking thread: calling it here
+    // (inside a tokio task) panics with "Cannot start a runtime from within
+    // a runtime" and takes the app down (panic = "abort" in release).
+    let mut listing = {
+        let workspace = crate::remote::workspace::RemoteWorkspace::new(session, dir.clone());
+        tauri::async_runtime::spawn_blocking(move || workspace.list_dir("", false))
+            .await
+            .map_err(|e| format!("device browse failed: {e}"))??
+    };
     // Paths in a device browse are ABSOLUTE (unlike repo browsing).
     for entry in listing.entries.iter_mut() {
         entry.path = if dir == "/" {
@@ -414,7 +422,6 @@ pub async fn remote_repo_open(
     device_id: String,
     path: String,
     app: tauri::AppHandle,
-    repos: State<'_, RepoManager>,
     registry: State<'_, DeviceRegistry>,
 ) -> Result<crate::engine::types::RepoInfo, String> {
     let profile = device_store(&app)
@@ -423,12 +430,21 @@ pub async fn remote_repo_open(
     let session = registry
         .session_for(&profile, &host_key_store(&app))
         .await?;
-    repos.open_remote(
-        &app,
-        &profile.id,
-        &profile.name,
-        profile.poll_secs,
-        session,
-        &path,
-    )
+    // `open_remote` runs the synchronous engine (block_on bridges inside
+    // `discover`), so it must hop to a blocking thread: calling it here
+    // (inside a tokio task) panics, which kills the app in release builds
+    // and silently drops the IPC reply otherwise (the FE "Add" no-op).
+    tauri::async_runtime::spawn_blocking(move || {
+        let repos = app.state::<RepoManager>();
+        repos.open_remote(
+            &app,
+            &profile.id,
+            &profile.name,
+            profile.poll_secs,
+            session,
+            &path,
+        )
+    })
+    .await
+    .map_err(|e| format!("remote repo open failed: {e}"))?
 }

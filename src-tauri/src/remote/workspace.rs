@@ -89,12 +89,26 @@ impl RemoteWorkspace {
         tauri::async_runtime::block_on(fut)
     }
 
+    /// Run one SFTP-backed operation. A failure invalidates the device's
+    /// cached SFTP session — the shared channel may be dead — so the next
+    /// op re-opens instead of failing forever.
+    fn sftp_op<T>(
+        &self,
+        fut: impl std::future::Future<Output = Result<T, String>>,
+    ) -> Result<T, String> {
+        let result = self.block(fut);
+        if result.is_err() {
+            self.session.sftp_invalidate();
+        }
+        result
+    }
+
     // ---------- listing ----------
 
     pub fn list_dir(&self, path: &str, include_ignored: bool) -> Result<DirListing, String> {
         let rel = validate_rel_posix(path)?;
         let abs = join_abs(&self.root, &rel);
-        let entries = self.block(async {
+        let entries = self.sftp_op(async {
             let sftp = self.session.sftp().await?;
             let read_dir = sftp
                 .read_dir(&abs)
@@ -209,7 +223,7 @@ impl RemoteWorkspace {
     pub fn stat_file(&self, path: &str) -> Result<FileMeta, String> {
         let rel = validate_rel_posix(path)?;
         let abs = join_abs(&self.root, &rel);
-        let meta = self.block(async {
+        let meta = self.sftp_op(async {
             self.session
                 .sftp()
                 .await?
@@ -250,7 +264,7 @@ impl RemoteWorkspace {
 
     fn read_head(&self, rel: &str, cap: usize) -> Result<Vec<u8>, String> {
         let abs = join_abs(&self.root, rel);
-        self.block(async {
+        self.sftp_op(async {
             let sftp = self.session.sftp().await?;
             let mut file = sftp
                 .open(&abs)
@@ -270,7 +284,7 @@ impl RemoteWorkspace {
     pub fn read_file(&self, path: &str) -> Result<Vec<u8>, String> {
         let rel = validate_rel_posix(path)?;
         let abs = join_abs(&self.root, &rel);
-        self.block(async {
+        self.sftp_op(async {
             let sftp = self.session.sftp().await?;
             let mut file = sftp
                 .open(&abs)
@@ -324,7 +338,7 @@ impl RemoteWorkspace {
                 ));
             }
         }
-        self.block(async {
+        self.sftp_op(async {
             let sftp = self.session.sftp().await?;
             let mut file = sftp
                 .create(&abs)
@@ -355,7 +369,7 @@ impl RemoteWorkspace {
                 if self.exists(&rel)? {
                     return Err(format!("already exists: `{rel}`"));
                 }
-                self.block(async {
+                self.sftp_op(async {
                     let sftp = self.session.sftp().await?;
                     sftp.create(&abs)
                         .await
@@ -364,7 +378,7 @@ impl RemoteWorkspace {
                 })?;
             }
             NewEntryKind::Dir => {
-                self.block(async {
+                self.sftp_op(async {
                     let sftp = self.session.sftp().await?;
                     sftp.create_dir(&abs)
                         .await
@@ -387,7 +401,7 @@ impl RemoteWorkspace {
         }
         let abs = join_abs(&self.root, &rel);
         let new_abs = join_abs(&self.root, &new_rel);
-        self.block(async {
+        self.sftp_op(async {
             let sftp = self.session.sftp().await?;
             sftp.rename(&abs, &new_abs)
                 .await
@@ -410,7 +424,7 @@ impl RemoteWorkspace {
             ));
         }
         let abs = join_abs(&self.root, &rel);
-        self.block(async {
+        self.sftp_op(async {
             let sftp = self.session.sftp().await?;
             let meta = sftp
                 .metadata(&abs)
@@ -429,7 +443,7 @@ impl RemoteWorkspace {
 
     pub fn exists(&self, rel: &str) -> Result<bool, String> {
         let abs = join_abs(&self.root, rel);
-        self.block(async {
+        self.sftp_op(async {
             let sftp = self.session.sftp().await?;
             Ok::<_, String>(sftp.metadata(&abs).await.is_ok())
         })

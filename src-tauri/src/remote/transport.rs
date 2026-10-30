@@ -181,12 +181,36 @@ pub struct DeviceSession {
     /// dial + channel open (see module docs).
     handle: Mutex<Option<Handle<ClientHandler>>>,
     status: watch::Sender<DeviceStatus>,
+    /// One shared SFTP session (one channel per device, reused by every
+    /// file op — some servers refuse a burst of channel opens). Guarded by
+    /// [`Self::sftp_epoch`]: bumping it invalidates the cache.
+    sftp_cache: Mutex<Option<Arc<russh_sftp::client::SftpSession>>>,
+    sftp_epoch: std::sync::atomic::AtomicU64,
+    /// Single-flight gate for the SFTP open itself: without it, N callers
+    /// that all miss the (empty) cache at once each open their own channel
+    /// — a burst of opens that servers with a small per-connection session
+    /// limit refuse outright (observed: 13 concurrent opens → all
+    /// `ConnectFailed`). Holders wait, then re-check the cache.
+    sftp_open_lock: Mutex<()>,
+    /// Unix-millis deadline during which further SFTP opens fail fast after
+    /// the device refused twice in a row — one refusal must cost at most
+    /// two opens, not two per waiting caller. Cleared on success and on
+    /// [`Self::sftp_invalidate`].
+    sftp_fail_until: std::sync::atomic::AtomicU64,
+}
+
+/// Current time as unix millis (for the SFTP cooldown deadline).
+fn unix_millis() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
 }
 
 impl DeviceSession {
     fn new(profile: &DeviceProfile, host_key_store: Arc<HostKeyStore>) -> Arc<Self> {
         let (status, _rx) = watch::channel(DeviceStatus::Disconnected);
-        Arc::new(Self {
+        let session = Arc::new(Self {
             device_id: profile.id.clone(),
             device_name: profile.name.clone(),
             host: profile.host.clone(),
@@ -196,7 +220,39 @@ impl DeviceSession {
             host_key_store,
             handle: Mutex::new(None),
             status,
-        })
+            sftp_cache: Mutex::new(None),
+            sftp_epoch: std::sync::atomic::AtomicU64::new(0),
+            sftp_open_lock: Mutex::new(()),
+            sftp_fail_until: std::sync::atomic::AtomicU64::new(0),
+        });
+        session.spawn_liveness_watchdog();
+        session
+    }
+
+    /// Mirror a dead connection into the FE status: russh kills its
+    /// connection actor silently on keepalive/inactivity timeouts, and
+    /// without this the chip would keep saying "connected" while every
+    /// command quietly re-dials. Runs while anyone else holds the session;
+    /// exits when only the watchdog itself remains (throwaway probes).
+    fn spawn_liveness_watchdog(self: &Arc<Self>) {
+        let session = Arc::downgrade(self);
+        tauri::async_runtime::spawn(async move {
+            loop {
+                tokio::time::sleep(Duration::from_secs(5)).await;
+                let Some(session) = session.upgrade() else {
+                    break; // session dropped: nothing to watch
+                };
+                if Arc::strong_count(&session) <= 1 {
+                    break; // only the watchdog holds it (probe session)
+                }
+                let handle = session.handle.lock().await;
+                if let Some(handle) = handle.as_ref() {
+                    if handle.is_closed() {
+                        session.set_status(DeviceStatus::Disconnected);
+                    }
+                }
+            }
+        });
     }
 
     pub fn status(&self) -> DeviceStatus {
@@ -330,32 +386,78 @@ impl DeviceSession {
         Ok(())
     }
 
-    /// Connect when not already connected. No-op when live.
+    /// Connect when not already connected. No-op when live (a closed but
+    /// still-cached handle is re-dialed, not reported as connected).
     pub async fn ensure_connected(&self) -> Result<(), String> {
         let mut guard = self.handle.lock().await;
-        if guard.is_some() {
-            return Ok(());
+        if let Some(handle) = guard.as_ref() {
+            if !handle.is_closed() {
+                return Ok(());
+            }
+            tracing::info!(device = %self.device_id, "cached connection is closed; redialing");
         }
+        self.sftp_invalidate();
         let handle = self.establish().await?;
         *guard = Some(handle);
         Ok(())
     }
 
+    /// One attempt to open a session channel on `handle`, with a hard
+    /// timeout: a half-open TCP connection (network drop, laptop sleep)
+    /// would otherwise hang the open until the keepalive decay (up to a
+    /// minute) with no error at all.
+    const CHANNEL_OPEN_TIMEOUT: Duration = Duration::from_secs(10);
+
+    /// Pause between the two SFTP open attempts: a device that refuses
+    /// opens because its per-connection session cap is momentarily full
+    /// clears the cap once another channel closes; an instant retry
+    /// replays into the same refusal.
+    const SFTP_RETRY_DELAY: Duration = Duration::from_millis(300);
+
+    /// After a double refusal, SFTP opens fail fast for this long instead
+    /// of queueing behind the single-flight gate (the device is refusing
+    /// channel opens; waiting callers would each retry otherwise).
+    const SFTP_FAIL_COOLDOWN: Duration = Duration::from_secs(5);
+
+    async fn try_open_channel(
+        handle: &Handle<ClientHandler>,
+    ) -> Result<Channel<russh::client::Msg>, russh::Error> {
+        match tokio::time::timeout(Self::CHANNEL_OPEN_TIMEOUT, handle.channel_open_session()).await
+        {
+            Ok(result) => result,
+            Err(_) => Err(russh::Error::ConnectionTimeout),
+        }
+    }
+
     /// Open a fresh session channel, reconnecting transparently when the
-    /// cached handle is dead. The session lock is held only while opening.
+    /// cached handle is dead or half-open. The session lock is held only
+    /// while opening.
+    ///
+    /// A server REFUSAL (`ChannelOpenFailure` — the connection is alive and
+    /// the server actively rejected this channel, e.g. a session/process
+    /// limit) is NOT a dead connection: the handle stays cached and the
+    /// error is surfaced without re-dialing, so the FE status chip doesn't
+    /// churn through connecting/connected on every command.
     async fn open_session_channel(&self) -> Result<Channel<russh::client::Msg>, String> {
         // Fast path: live handle, channel opens (locks for milliseconds).
         {
             let guard = self.handle.lock().await;
             if let Some(handle) = guard.as_ref() {
-                match handle.channel_open_session().await {
-                    Ok(channel) => return Ok(channel),
-                    Err(err) => {
-                        tracing::warn!(
-                            device = %self.device_id,
-                            error = %err,
-                            "channel open failed; reconnecting"
-                        );
+                if handle.is_closed() {
+                    tracing::info!(device = %self.device_id, "cached connection is closed; reconnecting");
+                } else {
+                    match Self::try_open_channel(handle).await {
+                        Ok(channel) => return Ok(channel),
+                        Err(russh::Error::ChannelOpenFailure(reason)) => {
+                            return Err(format!("device refused the session channel ({reason:?})"));
+                        }
+                        Err(err) => {
+                            tracing::warn!(
+                                device = %self.device_id,
+                                error = %err,
+                                "channel open failed; reconnecting"
+                            );
+                        }
                     }
                 }
             }
@@ -364,14 +466,21 @@ impl DeviceSession {
         // re-dialed while we waited for the lock.
         let mut guard = self.handle.lock().await;
         if let Some(handle) = guard.as_ref() {
-            if let Ok(channel) = handle.channel_open_session().await {
-                return Ok(channel);
+            if !handle.is_closed() {
+                match Self::try_open_channel(handle).await {
+                    Ok(channel) => return Ok(channel),
+                    Err(russh::Error::ChannelOpenFailure(reason)) => {
+                        return Err(format!("device refused the session channel ({reason:?})"));
+                    }
+                    Err(_) => {}
+                }
             }
         }
         *guard = None;
+        // The old SFTP session (if any) rode on the dead connection.
+        self.sftp_invalidate();
         let handle = self.establish().await?;
-        let channel = handle
-            .channel_open_session()
+        let channel = Self::try_open_channel(&handle)
             .await
             .map_err(|e| format!("channel open failed after reconnect: {e}"))?;
         *guard = Some(handle);
@@ -385,6 +494,7 @@ impl DeviceSession {
                 .disconnect(Disconnect::ByApplication, "", "english")
                 .await;
         }
+        self.sftp_invalidate();
         self.set_status(DeviceStatus::Disconnected);
     }
 
@@ -555,8 +665,67 @@ impl DeviceSession {
         })
     }
 
-    /// Open an SFTP session over the connection (reconnecting as needed).
-    pub async fn sftp(&self) -> Result<russh_sftp::client::SftpSession, String> {
+    /// The device's shared SFTP session, opened once per connection epoch
+    /// and reused by every file op (each op used to open its own channel,
+    /// which some servers refuse under bursts). Returns a stale session
+    /// after [`Self::sftp_invalidate`] until the next call re-opens.
+    ///
+    /// Concurrent callers are single-flighted: one opens the channel while
+    /// the rest wait on [`Self::sftp_open_lock`] and then hit the cache.
+    /// After two consecutive refusals a short cooldown makes further calls
+    /// fail fast (the device has capped or wedged session channels; hammering
+    /// it only prolongs the wedge).
+    pub async fn sftp(&self) -> Result<Arc<russh_sftp::client::SftpSession>, String> {
+        let epoch = self.sftp_epoch.load(std::sync::atomic::Ordering::SeqCst);
+        {
+            let cache = self.sftp_cache.lock().await;
+            if cache.is_some() {
+                // Cached only while its epoch is current: read the epoch
+                // again after taking the lock so an invalidate racing the
+                // lock is still honored.
+                if self.sftp_epoch.load(std::sync::atomic::Ordering::SeqCst) == epoch {
+                    let sftp = cache.as_ref().unwrap().clone();
+                    return Ok(sftp);
+                }
+            }
+        }
+        // Cooldown: a recent double-refusal means the device is refusing
+        // channel opens — fail fast instead of queueing more opens behind
+        // the single-flight gate.
+        let now = unix_millis();
+        let fail_until = self
+            .sftp_fail_until
+            .load(std::sync::atomic::Ordering::SeqCst);
+        if now < fail_until {
+            return Err(format!(
+                "device is refusing sftp channels (retrying after {}s cooldown)",
+                Self::SFTP_FAIL_COOLDOWN.as_secs()
+            ));
+        }
+        let _open_gate = self.sftp_open_lock.lock().await;
+        // Re-check everything after the gate: a concurrent caller may have
+        // opened (or the session may have been invalidated) while we waited.
+        let epoch = self.sftp_epoch.load(std::sync::atomic::Ordering::SeqCst);
+        {
+            let cache = self.sftp_cache.lock().await;
+            if cache.is_some() && self.sftp_epoch.load(std::sync::atomic::Ordering::SeqCst) == epoch
+            {
+                let sftp = cache.as_ref().unwrap().clone();
+                return Ok(sftp);
+            }
+        }
+        // Second cooldown check: callers that queued on the gate must not
+        // each fire their own open when the winner just got refused twice.
+        if unix_millis()
+            < self
+                .sftp_fail_until
+                .load(std::sync::atomic::Ordering::SeqCst)
+        {
+            return Err(format!(
+                "device is refusing sftp channels (retrying after {}s cooldown)",
+                Self::SFTP_FAIL_COOLDOWN.as_secs()
+            ));
+        }
         let open = || async {
             let channel = self.open_session_channel().await?;
             channel
@@ -566,18 +735,51 @@ impl DeviceSession {
             russh_sftp::client::SftpSession::new(channel.into_stream())
                 .await
                 .map_err(|e| format!("sftp init failed: {e}"))
+                .map(Arc::new)
         };
-        match open().await {
-            Ok(sftp) => Ok(sftp),
+        let sftp = match open().await {
+            Ok(sftp) => sftp,
             Err(first) => {
                 tracing::warn!(
                     device = %self.device_id,
                     error = %first,
                     "sftp open failed; retrying once"
                 );
-                open().await
+                // Brief pause before the retry: refusals from a full
+                // per-connection session cap clear once another channel
+                // closes; an immediate retry just fails the same way.
+                tokio::time::sleep(Self::SFTP_RETRY_DELAY).await;
+                match open().await {
+                    Ok(sftp) => sftp,
+                    Err(second) => {
+                        self.sftp_fail_until.store(
+                            unix_millis() + Self::SFTP_FAIL_COOLDOWN.as_millis() as u64,
+                            std::sync::atomic::Ordering::SeqCst,
+                        );
+                        return Err(second);
+                    }
+                }
             }
+        };
+        self.sftp_fail_until
+            .store(0, std::sync::atomic::Ordering::SeqCst);
+        let mut cache = self.sftp_cache.lock().await;
+        // Store only when still current — a concurrent invalidate (or a
+        // fresher open) wins.
+        if self.sftp_epoch.load(std::sync::atomic::Ordering::SeqCst) == epoch {
+            *cache = Some(sftp.clone());
         }
+        Ok(sftp)
+    }
+
+    /// Drop the cached SFTP session (connection re-dialed, or a file op
+    /// failed — the cached channel may be dead). The next [`Self::sftp`]
+    /// opens a fresh one.
+    pub fn sftp_invalidate(&self) {
+        self.sftp_fail_until
+            .store(0, std::sync::atomic::Ordering::SeqCst);
+        self.sftp_epoch
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     }
 
     /// Open an interactive shell channel (terminal panel). The channel is

@@ -42,6 +42,7 @@ tauri-plugin-deep-link = "2"
 thiserror = "2.0.21"
 parking_lot = "0.12.5"
 tracing = "0.1.44"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tauri-plugin-dialog = "2.8.1"
 tauri-plugin-window-state = "2"
 tokio = { version = "1.53.2", features = ["rt", "sync", "macros", "net", "io-util", "time"] }
@@ -65,3 +66,4 @@ criterion = "0.8.2"
 git2 = "0.21.0"
 proptest = "1"
 sysinfo = "0.33"
+rand_core = "0.10"
