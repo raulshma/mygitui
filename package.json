@@ -1,7 +1,7 @@
 {
   "name": "mygitui",
   "private": true,
-  "version": "0.1.5",
+  "version": "0.1.7",
   "description": "Fast, configurable Git GUI with AI-assisted workflows",
   "type": "module",
   "scripts": {
