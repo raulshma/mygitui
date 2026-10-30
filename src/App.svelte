@@ -692,7 +692,7 @@
               <h2 id="devices-heading" class="recent-heading">
                 {deviceDetail ? "Device" : "Devices"}
               </h2>
-              {#if !deviceDetail && remoteDevices.devices.length > 0}
+              {#if !deviceDetail && (remoteDevices.devices?.length ?? 0) > 0}
                 <p class="recent-sub">
                   {remoteDevices.devices.length}
                   {remoteDevices.devices.length === 1 ? "machine" : "machines"}
@@ -804,14 +804,14 @@
 
               <DeviceBrowser deviceId={deviceDetail.profile.id} />
             </div>
-          {:else if remoteDevices.devices.length === 0}
+          {:else if (remoteDevices.devices?.length ?? 0) === 0}
             <p class="devices-empty">
               No devices yet. Register an SSH machine to browse and open its
               repositories as projects.
             </p>
           {:else}
             <ul class="repo-list">
-              {#each remoteDevices.devices as device (device.profile.id)}
+              {#each remoteDevices.devices ?? [] as device (device.profile.id)}
                 <li class="repo-row-wrapper">
                   <button
                     class="repo-row"

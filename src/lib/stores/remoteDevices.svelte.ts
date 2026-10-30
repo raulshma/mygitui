@@ -123,7 +123,8 @@ export class RemoteDeviceStore {
    */
   async load(): Promise<void> {
     try {
-      this.devices = await deviceList();
+      const list = await deviceList();
+      this.devices = Array.isArray(list) ? list : [];
     } catch (err) {
       console.warn("[devices] device_list failed:", err);
     }
