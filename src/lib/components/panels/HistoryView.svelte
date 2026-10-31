@@ -688,7 +688,9 @@
 
   // -- M9 F1: palette event wiring + context menus ---------------------------
 
-  let filterTextEl = $state<HTMLInputElement | undefined>(undefined);
+  // null, not undefined: bound via bind:ref on ui Input, whose ref prop has
+  // a fallback — Svelte throws props_invalid_value on a undefined binding.
+  let filterTextEl = $state<HTMLInputElement | null>(null);
 
   // Palette commands ride the typed event bus (palette/events.ts).
   $effect(() => {
