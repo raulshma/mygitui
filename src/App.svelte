@@ -85,14 +85,24 @@
    * One lazy overlay: its chunk is imported on first `chunk()` call (open
    * signal or warm-up) and cached, and `landed` stays true from then on so
    * a closed overlay stays mounted (close animations, instant reopen).
+   *
+   * `landed` flips from the chunk's resolution callback, never from inside
+   * `chunk()` itself: the template calls `chunk()` in its `{#await}`
+   * expression, and a state write there throws `state_unsafe_mutation`
+   * (Svelte forbids writes during template evaluation).
    */
   function lazyOverlay<T>(load: () => Promise<T>) {
     let promise: Promise<T> | null = null;
     let landed = $state(false);
     return {
       chunk: (): Promise<T> => {
-        landed = true;
-        return (promise ??= load());
+        if (!promise) {
+          promise = load();
+          void promise.then(() => {
+            landed = true;
+          });
+        }
+        return promise;
       },
       get landed(): boolean {
         return landed;
