@@ -33,16 +33,10 @@
   import BranchActionDialogs from "$lib/components/header/BranchActionDialogs.svelte";
   import { branchOpsController } from "$lib/git/branchOps.svelte";
   import Icon from "$lib/components/icons/Icon.svelte";
+  import { appIcon } from "$lib/components/icons/library.svelte";
   import { Button } from "$lib/components/ui/button/index.js";
   import DialogShell from "$lib/components/safety/DialogShell.svelte";
   import { Badge } from "$lib/components/ui/badge";
-  import iconRefresh from "@ktibow/iconset-material-symbols/refresh";
-  import iconCleanup from "@ktibow/iconset-material-symbols/cleaning-services";
-  import iconSwitch from "@ktibow/iconset-material-symbols/swap-horiz";
-  import iconCheck from "@ktibow/iconset-material-symbols/check";
-  import iconClose from "@ktibow/iconset-material-symbols/close";
-  import iconAdd from "@ktibow/iconset-material-symbols/add";
-  import iconMore from "@ktibow/iconset-material-symbols/more-vert";
 
   let {
     repoId,
@@ -52,6 +46,14 @@
     /** Called after a successful mutation (RepoView refreshes). */
     onMutated?: () => void;
   } = $props();
+
+  const iconRefresh = $derived(appIcon("refresh")!);
+  const iconCleanup = $derived(appIcon("cleaning-services")!);
+  const iconSwitch = $derived(appIcon("swap-horiz")!);
+  const iconCheck = $derived(appIcon("check")!);
+  const iconClose = $derived(appIcon("close")!);
+  const iconAdd = $derived(appIcon("add")!);
+  const iconMore = $derived(appIcon("more-vert")!);
 
   let list = $state<BranchInfo[]>([]);
   let loading = $state(false);

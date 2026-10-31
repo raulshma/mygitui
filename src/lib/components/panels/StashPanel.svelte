@@ -22,14 +22,7 @@
   import Icon from "$lib/components/icons/Icon.svelte";
   import { Button } from "$lib/components/ui/button/index.js";
   import { Input } from "$lib/components/ui/input/index.js";
-  import iconAdd from "@ktibow/iconset-material-symbols/add";
-  import iconRefresh from "@ktibow/iconset-material-symbols/refresh";
-  import iconApply from "@ktibow/iconset-material-symbols/play-arrow";
-  import iconPop from "@ktibow/iconset-material-symbols/unarchive";
-  import iconBranch from "@ktibow/iconset-material-symbols/call-split";
-  import iconDrop from "@ktibow/iconset-material-symbols/delete";
-  import iconCheck from "@ktibow/iconset-material-symbols/check";
-  import iconMore from "@ktibow/iconset-material-symbols/more-vert";
+  import { appIcon } from "$lib/components/icons/library.svelte";
 
   let {
     repoId,
@@ -39,6 +32,15 @@
     /** Called after a mutation that changes repo state (push/pop/apply/branch). */
     onMutated?: () => void;
   } = $props();
+
+  const iconAdd = $derived(appIcon("add")!);
+  const iconRefresh = $derived(appIcon("refresh")!);
+  const iconApply = $derived(appIcon("play-arrow")!);
+  const iconPop = $derived(appIcon("unarchive")!);
+  const iconBranch = $derived(appIcon("call-split")!);
+  const iconDrop = $derived(appIcon("delete")!);
+  const iconCheck = $derived(appIcon("check")!);
+  const iconMore = $derived(appIcon("more-vert")!);
 
   let list = $state<StashInfo[]>([]);
   let loading = $state(false);

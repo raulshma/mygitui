@@ -1,0 +1,553 @@
+{
+  "account-tree": {
+    "lucide": "git-branch",
+    "tabler": "sitemap",
+    "hugeicons": "git-branch",
+    "phosphor": "git-branch",
+    "ri": "node-tree"
+  },
+  "add": {
+    "lucide": "plus",
+    "tabler": "plus",
+    "hugeicons": "add-01",
+    "phosphor": "plus",
+    "ri": "add-line"
+  },
+  "alt-route": {
+    "lucide": "split",
+    "tabler": "arrows-split-2",
+    "hugeicons": "hierarchy-square-02",
+    "phosphor": "path",
+    "ri": "route-line"
+  },
+  "archive": {
+    "lucide": "archive",
+    "tabler": "archive",
+    "hugeicons": "archive",
+    "phosphor": "archive",
+    "ri": "archive-line"
+  },
+  "arrow-back-rounded": {
+    "lucide": "arrow-left",
+    "tabler": "arrow-left",
+    "hugeicons": "arrow-left-01",
+    "phosphor": "arrow-left",
+    "ri": "arrow-left-line"
+  },
+  "arrow-downward": {
+    "lucide": "arrow-down",
+    "tabler": "arrow-down",
+    "hugeicons": "arrow-down-01",
+    "phosphor": "arrow-down",
+    "ri": "arrow-down-line"
+  },
+  "arrow-upward": {
+    "lucide": "arrow-up",
+    "tabler": "arrow-up",
+    "hugeicons": "arrow-up-01",
+    "phosphor": "arrow-up",
+    "ri": "arrow-up-line"
+  },
+  "backup": {
+    "lucide": "database-backup",
+    "tabler": "database-export",
+    "hugeicons": "cloud-backup",
+    "phosphor": "database",
+    "ri": "database-2-line"
+  },
+  "bedtime": {
+    "lucide": "moon",
+    "tabler": "moon",
+    "hugeicons": "moon-02",
+    "phosphor": "moon",
+    "ri": "moon-line"
+  },
+  "block": {
+    "lucide": "ban",
+    "tabler": "ban",
+    "hugeicons": "blocked",
+    "phosphor": "prohibit",
+    "ri": "forbid-line"
+  },
+  "bolt": {
+    "lucide": "zap",
+    "tabler": "bolt",
+    "hugeicons": "bolt",
+    "phosphor": "lightning",
+    "ri": "flashlight-line"
+  },
+  "brightness-auto": {
+    "lucide": "sun-dim",
+    "tabler": "brightness-auto",
+    "hugeicons": "contrast",
+    "phosphor": "sun-dim",
+    "ri": "contrast-2-line"
+  },
+  "call-split": {
+    "lucide": "git-branch-plus",
+    "tabler": "arrow-fork",
+    "hugeicons": "git-branch-plus",
+    "phosphor": "arrows-split",
+    "ri": "git-branch-line"
+  },
+  "check": {
+    "lucide": "check",
+    "tabler": "check",
+    "hugeicons": "tick-02",
+    "phosphor": "check",
+    "ri": "check-line"
+  },
+  "check-circle": {
+    "lucide": "circle-check",
+    "tabler": "circle-check",
+    "hugeicons": "checkmark-circle-02",
+    "phosphor": "check-circle",
+    "ri": "checkbox-circle-line"
+  },
+  "chevron-down": {
+    "lucide": "chevron-down",
+    "tabler": "chevron-down",
+    "hugeicons": "chevron-down",
+    "phosphor": "caret-down",
+    "ri": "arrow-down-s-line",
+    "material-symbols": "expand-more"
+  },
+  "chevron-right": {
+    "lucide": "chevron-right",
+    "tabler": "chevron-right",
+    "hugeicons": "chevron-right",
+    "phosphor": "caret-right",
+    "ri": "arrow-right-s-line"
+  },
+  "chevron-up": {
+    "lucide": "chevron-up",
+    "tabler": "chevron-up",
+    "hugeicons": "chevron-up",
+    "phosphor": "caret-up",
+    "ri": "arrow-up-s-line",
+    "material-symbols": "expand-less"
+  },
+  "circle": {
+    "lucide": "circle",
+    "tabler": "circle",
+    "hugeicons": "circle",
+    "phosphor": "circle",
+    "ri": "checkbox-blank-circle-line"
+  },
+  "cleaning-services": {
+    "lucide": "broom",
+    "tabler": "brush",
+    "hugeicons": "clean",
+    "phosphor": "broom",
+    "ri": "brush-2-line"
+  },
+  "close": {
+    "lucide": "x",
+    "tabler": "x",
+    "hugeicons": "cancel-01",
+    "phosphor": "x",
+    "ri": "close-line"
+  },
+  "cloud-download": {
+    "lucide": "cloud-download",
+    "tabler": "cloud-download",
+    "hugeicons": "cloud-download",
+    "phosphor": "cloud-arrow-down",
+    "ri": "download-cloud-line"
+  },
+  "cloud-upload": {
+    "lucide": "cloud-upload",
+    "tabler": "cloud-upload",
+    "hugeicons": "cloud-upload",
+    "phosphor": "cloud-arrow-up",
+    "ri": "upload-cloud-line"
+  },
+  "compare-arrows": {
+    "lucide": "arrow-left-right",
+    "tabler": "arrows-left-right",
+    "hugeicons": "arrow-left-right",
+    "phosphor": "arrows-left-right",
+    "ri": "arrow-left-right-line"
+  },
+  "create-new-folder": {
+    "lucide": "folder-plus",
+    "tabler": "folder-plus",
+    "hugeicons": "folder-add",
+    "phosphor": "folder-plus",
+    "ri": "folder-add-line"
+  },
+  "dark-mode": {
+    "lucide": "moon-star",
+    "tabler": "moon-stars",
+    "hugeicons": "moon-star",
+    "phosphor": "moon-stars",
+    "ri": "moon-clear-line"
+  },
+  "delete": {
+    "lucide": "trash-2",
+    "tabler": "trash",
+    "hugeicons": "delete-02",
+    "phosphor": "trash",
+    "ri": "delete-bin-line"
+  },
+  "delete-sweep": {
+    "lucide": "eraser",
+    "tabler": "eraser",
+    "hugeicons": "eraser-01",
+    "phosphor": "eraser",
+    "ri": "eraser-line"
+  },
+  "description": {
+    "lucide": "file-text",
+    "tabler": "file-text",
+    "hugeicons": "file-02",
+    "phosphor": "file-text",
+    "ri": "file-text-line"
+  },
+  "devices": {
+    "lucide": "monitor-smartphone",
+    "tabler": "devices",
+    "hugeicons": "monitor",
+    "phosphor": "devices",
+    "ri": "device-line"
+  },
+  "difference": {
+    "lucide": "file-diff",
+    "tabler": "file-diff",
+    "hugeicons": "file-diff",
+    "phosphor": "git-diff"
+  },
+  "done-all": {
+    "lucide": "check-check",
+    "tabler": "checks",
+    "hugeicons": "check-check",
+    "phosphor": "checks",
+    "ri": "check-double-line"
+  },
+  "download": {
+    "lucide": "download",
+    "tabler": "download",
+    "hugeicons": "download-01",
+    "phosphor": "download-simple",
+    "ri": "download-line"
+  },
+  "edit": {
+    "lucide": "pencil",
+    "tabler": "pencil",
+    "hugeicons": "edit-02",
+    "phosphor": "pencil-simple",
+    "ri": "edit-line"
+  },
+  "error": {
+    "lucide": "circle-alert",
+    "tabler": "alert-circle",
+    "hugeicons": "alert-circle",
+    "phosphor": "warning-circle",
+    "ri": "error-warning-line"
+  },
+  "file-open": {
+    "lucide": "square-arrow-out-up-right",
+    "tabler": "folder-symlink",
+    "hugeicons": "folder-output"
+  },
+  "filter-list": {
+    "lucide": "list-filter",
+    "tabler": "filter",
+    "hugeicons": "list-filter",
+    "phosphor": "funnel-simple",
+    "ri": "filter-2-line"
+  },
+  "filter-list-off": {
+    "lucide": "list-x",
+    "tabler": "filter-off",
+    "hugeicons": "filter-remove",
+    "phosphor": "funnel-simple-x",
+    "ri": "filter-off-line"
+  },
+  "folder": {
+    "lucide": "folder",
+    "tabler": "folder",
+    "hugeicons": "folder-02",
+    "phosphor": "folder",
+    "ri": "folder-line"
+  },
+  "folder-code": {
+    "lucide": "folder-git-2",
+    "tabler": "folder-code",
+    "hugeicons": "folder-code",
+    "ri": "git-repository-line"
+  },
+  "folder-open": {
+    "lucide": "folder-open",
+    "tabler": "folder-open",
+    "hugeicons": "folder-open",
+    "phosphor": "folder-open",
+    "ri": "folder-open-line"
+  },
+  "folder-special": {
+    "lucide": "folder-symlink",
+    "tabler": "folder-star",
+    "hugeicons": "folder-favourite",
+    "phosphor": "folder-star",
+    "ri": "folder-shared-line"
+  },
+  "fork-right": {
+    "lucide": "git-fork",
+    "tabler": "git-fork",
+    "hugeicons": "git-fork",
+    "phosphor": "git-fork",
+    "ri": "git-fork-line"
+  },
+  "history": {
+    "lucide": "history",
+    "tabler": "history",
+    "hugeicons": "history",
+    "phosphor": "clock-counter-clockwise",
+    "ri": "history-line"
+  },
+  "home-rounded": {
+    "lucide": "house",
+    "tabler": "home",
+    "hugeicons": "home-03",
+    "phosphor": "house",
+    "ri": "home-5-line"
+  },
+  "info": {
+    "lucide": "info",
+    "tabler": "info-circle",
+    "hugeicons": "information-circle",
+    "phosphor": "info",
+    "ri": "information-line"
+  },
+  "inventory": {
+    "lucide": "package",
+    "tabler": "box",
+    "hugeicons": "box",
+    "phosphor": "package",
+    "ri": "box-3-line"
+  },
+  "link": {
+    "lucide": "link",
+    "tabler": "link",
+    "hugeicons": "link",
+    "phosphor": "link",
+    "ri": "link"
+  },
+  "merge-type": {
+    "lucide": "git-merge",
+    "tabler": "git-merge",
+    "hugeicons": "git-merge",
+    "phosphor": "git-merge",
+    "ri": "git-merge-line"
+  },
+  "more-horiz": {
+    "lucide": "ellipsis",
+    "tabler": "dots",
+    "hugeicons": "more-horizontal",
+    "phosphor": "dots-three",
+    "ri": "more-line"
+  },
+  "more-vert": {
+    "lucide": "ellipsis-vertical",
+    "tabler": "dots-vertical",
+    "hugeicons": "more-vertical",
+    "phosphor": "dots-three-vertical",
+    "ri": "more-2-line"
+  },
+  "octagon-x": {
+    "lucide": "octagon-x",
+    "tabler": "circle-x",
+    "hugeicons": "octagon-x",
+    "phosphor": "warning-octagon",
+    "ri": "spam-2-line"
+  },
+  "open-in-new": {
+    "lucide": "external-link",
+    "tabler": "external-link",
+    "hugeicons": "external-link",
+    "phosphor": "arrow-square-out",
+    "ri": "external-link-line"
+  },
+  "palette": {
+    "lucide": "palette",
+    "tabler": "palette",
+    "hugeicons": "palette",
+    "phosphor": "palette",
+    "ri": "palette-line"
+  },
+  "person": {
+    "lucide": "user",
+    "tabler": "user",
+    "hugeicons": "user",
+    "phosphor": "user",
+    "ri": "user-line"
+  },
+  "play-arrow": {
+    "lucide": "play",
+    "tabler": "player-play",
+    "hugeicons": "play",
+    "phosphor": "play",
+    "ri": "play-line"
+  },
+  "post-add": {
+    "lucide": "file-plus",
+    "tabler": "file-plus",
+    "hugeicons": "file-add",
+    "phosphor": "file-plus",
+    "ri": "file-add-line"
+  },
+  "progress-activity": {
+    "lucide": "loader-circle",
+    "tabler": "loader-2",
+    "hugeicons": "loading-03",
+    "phosphor": "circle-notch",
+    "ri": "loader-4-line"
+  },
+  "push-pin": {
+    "lucide": "pin",
+    "tabler": "pin",
+    "hugeicons": "pin",
+    "phosphor": "push-pin",
+    "ri": "pushpin-line"
+  },
+  "refresh": {
+    "lucide": "refresh-cw",
+    "tabler": "refresh",
+    "hugeicons": "refresh",
+    "phosphor": "arrows-clockwise",
+    "ri": "refresh-line"
+  },
+  "remove": {
+    "lucide": "minus",
+    "tabler": "minus",
+    "hugeicons": "minus-sign",
+    "phosphor": "minus",
+    "ri": "subtract-line"
+  },
+  "remove-done": {
+    "lucide": "list-minus",
+    "tabler": "playlist-x",
+    "hugeicons": "minus-sign-square",
+    "phosphor": "minus-circle",
+    "ri": "indeterminate-circle-line"
+  },
+  "restart-alt": {
+    "lucide": "rotate-ccw",
+    "tabler": "rotate-2",
+    "hugeicons": "refresh-ccw",
+    "phosphor": "arrows-counter-clockwise",
+    "ri": "restart-line"
+  },
+  "restore-page": {
+    "lucide": "file-clock",
+    "tabler": "restore",
+    "hugeicons": "arrow-turn-forward",
+    "phosphor": "arrow-u-down-left",
+    "ri": "file-history-line"
+  },
+  "right-panel-close": {
+    "lucide": "panel-right-close",
+    "tabler": "layout-sidebar-right-collapse",
+    "hugeicons": "menu-collapse",
+    "phosphor": "sidebar",
+    "ri": "layout-right-line"
+  },
+  "save": {
+    "lucide": "save",
+    "tabler": "device-floppy",
+    "hugeicons": "floppy-disk",
+    "phosphor": "floppy-disk",
+    "ri": "save-3-line"
+  },
+  "search": {
+    "lucide": "search",
+    "tabler": "search",
+    "hugeicons": "search-01",
+    "phosphor": "magnifying-glass",
+    "ri": "search-line"
+  },
+  "sunny": {
+    "lucide": "sun",
+    "tabler": "sun",
+    "hugeicons": "sun-03",
+    "phosphor": "sun",
+    "ri": "sun-line"
+  },
+  "swap-horiz": {
+    "lucide": "arrow-right-left",
+    "tabler": "arrows-exchange",
+    "hugeicons": "arrow-data-transfer-horizontal",
+    "phosphor": "arrows-horizontal",
+    "ri": "swap-line"
+  },
+  "sync": {
+    "lucide": "arrow-down-up",
+    "tabler": "arrows-up-down",
+    "hugeicons": "arrow-up-down",
+    "phosphor": "arrows-down-up",
+    "ri": "arrow-up-down-line"
+  },
+  "terminal": {
+    "lucide": "square-terminal",
+    "tabler": "terminal-2",
+    "hugeicons": "terminal",
+    "phosphor": "terminal-window",
+    "ri": "terminal-box-line"
+  },
+  "triangle-alert": {
+    "lucide": "triangle-alert",
+    "tabler": "alert-triangle",
+    "hugeicons": "triangle-alert",
+    "phosphor": "warning",
+    "ri": "alert-line",
+    "material-symbols": "warning"
+  },
+  "tune": {
+    "lucide": "sliders-horizontal",
+    "tabler": "adjustments-horizontal",
+    "hugeicons": "filter-horizontal",
+    "phosphor": "sliders-horizontal",
+    "ri": "equalizer-line"
+  },
+  "unarchive": {
+    "lucide": "archive-restore",
+    "tabler": "archive-restore",
+    "hugeicons": "archive-restore",
+    "phosphor": "archive-box",
+    "ri": "inbox-unarchive-line"
+  },
+  "undo": {
+    "lucide": "undo-2",
+    "tabler": "arrow-back",
+    "hugeicons": "arrow-turn-backward",
+    "phosphor": "arrow-u-up-left",
+    "ri": "arrow-go-back-line"
+  },
+  "upload": {
+    "lucide": "upload",
+    "tabler": "upload",
+    "hugeicons": "upload-01",
+    "phosphor": "upload-simple",
+    "ri": "upload-line"
+  },
+  "verified": {
+    "lucide": "badge-check",
+    "tabler": "rosette-discount-check",
+    "hugeicons": "checkmark-badge-01",
+    "phosphor": "seal-check",
+    "ri": "verified-badge-line"
+  },
+  "visibility-off": {
+    "lucide": "eye-off",
+    "tabler": "eye-off",
+    "hugeicons": "eye-off",
+    "phosphor": "eye-slash",
+    "ri": "eye-off-line"
+  },
+  "wrap-text": {
+    "lucide": "text-wrap",
+    "tabler": "text-wrap",
+    "hugeicons": "text-wrap",
+    "ri": "text-wrap"
+  }
+}

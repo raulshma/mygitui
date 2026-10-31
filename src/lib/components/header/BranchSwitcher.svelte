@@ -60,16 +60,9 @@
   import ConfirmDialog from "$lib/components/safety/ConfirmDialog.svelte";
   import PromptDialog from "$lib/components/safety/PromptDialog.svelte";
   import Icon from "$lib/components/icons/Icon.svelte";
+  import { appIcon } from "$lib/components/icons/library.svelte";
   import { Button } from "$lib/components/ui/button/index.js";
   import { Input } from "$lib/components/ui/input/index.js";
-  import iconBranch from "@ktibow/iconset-material-symbols/account-tree";
-  import iconChevronDown from "@ktibow/iconset-material-symbols/expand-more";
-  import iconSearch from "@ktibow/iconset-material-symbols/search";
-  import iconClose from "@ktibow/iconset-material-symbols/close";
-  import iconAdd from "@ktibow/iconset-material-symbols/add";
-  import iconMore from "@ktibow/iconset-material-symbols/more-vert";
-  import iconFetch from "@ktibow/iconset-material-symbols/cloud-download";
-  import iconRefresh from "@ktibow/iconset-material-symbols/refresh";
 
   let {
     repoId,
@@ -82,6 +75,15 @@
     /** Called after a mutation (RepoView refreshes the repo status). */
     onMutated?: () => void;
   } = $props();
+
+  const iconBranch = $derived(appIcon("account-tree")!);
+  const iconChevronDown = $derived(appIcon("chevron-down")!);
+  const iconSearch = $derived(appIcon("search")!);
+  const iconClose = $derived(appIcon("close")!);
+  const iconAdd = $derived(appIcon("add")!);
+  const iconMore = $derived(appIcon("more-vert")!);
+  const iconFetch = $derived(appIcon("cloud-download")!);
+  const iconRefresh = $derived(appIcon("refresh")!);
 
   /** One activatable row in the flat keyboard order. */
   type Row =

@@ -9,6 +9,9 @@
   import { onMount } from "svelte";
   import { listen } from "@tauri-apps/api/event";
   import { initTheme } from "$lib/theme";
+  import { appearance } from "$lib/theme/appearance.svelte";
+  import { startMenuColor } from "$lib/theme/menu-color";
+  import { startIconSets } from "$lib/components/icons/library.svelte";
   import { isTauri, listenDragDrop } from "$lib/entry/dragdrop";
   import { initDeepLinks } from "$lib/entry/deeplink";
   import { pickFolder, remotePollSetPaused } from "$lib/ipc/client";
@@ -50,25 +53,98 @@
   // the launch-critical graph.
   // M4 F1: panel popout query contract (?panel=diff|history&repo=<id>).
   import { parsePopoutQuery } from "$lib/layout/popout";
-  import QuickSwitcher from "$lib/components/QuickSwitcher.svelte";
-  import CloneDialog from "$lib/components/CloneDialog.svelte";
-  import CommandPalette from "$lib/components/CommandPalette.svelte";
-  // M9 F1: global context menu (opened by panels via contextMenu.show).
-  import ContextMenu from "$lib/components/menu/ContextMenu.svelte";
   // M4 F2: global keybind engine + palette execution entry point.
   import { startKeybinds } from "$lib/palette/keybinds";
-  import { executeCommandById, togglePalette } from "$lib/palette/palette.svelte";
+  import { executeCommandById, isPaletteOpen, togglePalette } from "$lib/palette/palette.svelte";
+  import { isSwitcherOpen } from "$lib/stores/switcher.svelte";
+  import { contextMenu } from "$lib/components/menu/contextMenuStore.svelte";
   import { onUiEvent } from "$lib/palette/events";
   import AiHealthChip from "$lib/components/ai/AiHealthChip.svelte";
-  import AiSettings from "$lib/components/ai/AiSettings.svelte";
-  // Remote devices (SSH): home-view section + the connect-prompt dialogs
-  // (mounted app-wide, driven by the remote-devices store's pending queue).
-  import AddDeviceDialog from "$lib/components/AddDeviceDialog.svelte";
-  import DeviceAuthDialog from "$lib/components/DeviceAuthDialog.svelte";
   import DeviceBrowser from "$lib/components/DeviceBrowser.svelte";
-  import HostKeyDialog from "$lib/components/HostKeyDialog.svelte";
-  import ConfirmDialog from "$lib/components/safety/ConfirmDialog.svelte";
   import type { DeviceProfile } from "$lib/ipc/types";
+
+  /**
+   * Overlay lazy-mounting: the dialogs below mount on first need instead of
+   * at launch, keeping the launch-critical module graph small. Each holds
+   * its own module-chunk promise; once an overlay has opened, it stays
+   * mounted (bind:open just toggles), so close animations keep playing and
+   * reopen is instant. Chunks warm one per idle slot after mount, so even
+   * the first open skips the fetch wait.
+   */
+
+  /** Runs cb when the main thread is idle (setTimeout everywhere else). */
+  function onIdle(cb: () => void, timeout = 2000): void {
+    if (typeof requestIdleCallback === "function") {
+      requestIdleCallback(() => cb(), { timeout });
+    } else {
+      setTimeout(cb, 1200);
+    }
+  }
+
+  /**
+   * One lazy overlay: its chunk is imported on first `chunk()` call (open
+   * signal or warm-up) and cached, and `landed` stays true from then on so
+   * a closed overlay stays mounted (close animations, instant reopen).
+   *
+   * `landed` flips from the chunk's resolution callback, never from inside
+   * `chunk()` itself: the template calls `chunk()` in its `{#await}`
+   * expression, and a state write there throws `state_unsafe_mutation`
+   * (Svelte forbids writes during template evaluation).
+   */
+  function lazyOverlay<T>(load: () => Promise<T>) {
+    let promise: Promise<T> | null = null;
+    let landed = $state(false);
+    return {
+      chunk: (): Promise<T> => {
+        if (!promise) {
+          promise = load();
+          void promise.then(() => {
+            landed = true;
+          });
+        }
+        return promise;
+      },
+      get landed(): boolean {
+        return landed;
+      },
+    };
+  }
+
+  const switcherOverlay = lazyOverlay(() => import("$lib/components/QuickSwitcher.svelte"));
+  const paletteOverlay = lazyOverlay(() => import("$lib/components/CommandPalette.svelte"));
+  const contextMenuOverlay = lazyOverlay(
+    () => import("$lib/components/menu/ContextMenu.svelte"),
+  );
+  const cloneOverlay = lazyOverlay(() => import("$lib/components/CloneDialog.svelte"));
+  const aiSettingsOverlay = lazyOverlay(() => import("$lib/components/ai/AiSettings.svelte"));
+  const addDeviceOverlay = lazyOverlay(() => import("$lib/components/AddDeviceDialog.svelte"));
+  const hostKeyOverlay = lazyOverlay(() => import("$lib/components/HostKeyDialog.svelte"));
+  const deviceAuthOverlay = lazyOverlay(() => import("$lib/components/DeviceAuthDialog.svelte"));
+  const confirmOverlay = lazyOverlay(() => import("$lib/components/safety/ConfirmDialog.svelte"));
+  const appearanceOverlay = lazyOverlay(
+    () => import("$lib/components/AppearanceDialog.svelte"),
+  );
+
+  /** Overlay chunks fetched one per idle slot, launch graph untouched. */
+  const overlayWarmers: Array<() => Promise<unknown>> = [
+    switcherOverlay.chunk,
+    paletteOverlay.chunk,
+    contextMenuOverlay.chunk,
+    cloneOverlay.chunk,
+    aiSettingsOverlay.chunk,
+    addDeviceOverlay.chunk,
+    hostKeyOverlay.chunk,
+    deviceAuthOverlay.chunk,
+    confirmOverlay.chunk,
+    appearanceOverlay.chunk,
+  ];
+  function warmNextOverlay(): void {
+    const next = overlayWarmers.shift();
+    if (!next) return;
+    void next()
+      .catch(() => {})
+      .then(() => onIdle(warmNextOverlay));
+  }
 
   /**
    * M4 F1 popout contract: a window opened with
@@ -78,6 +154,16 @@
   const popout = parsePopoutQuery(
     typeof location !== "undefined" ? location.search : "",
   );
+
+  // Customizer (shadcn style/base/theme/fonts/...): storage → DOM during
+  // component init — before any paint — so a persisted appearance never
+  // flashes the defaults. Must never break startup; failures log and move
+  // on. (Menu/icon wiring follows in onMount below.)
+  try {
+    appearance.init();
+  } catch (err) {
+    console.error("[mygitui] appearance init failed:", err);
+  }
 
   let repos = $state(recentRepos.list());
 
@@ -103,6 +189,9 @@
 
   /** AI settings dialog (opened by the AiHealthChip, M12). */
   let aiSettingsOpen = $state(false);
+
+  /** Appearance customizer (opened by the palette / ThemeToggle menu). */
+  let appearanceOpen = $state(false);
 
   // --- Remote devices (SSH) -------------------------------------------------
 
@@ -276,6 +365,15 @@
       console.error("[mygitui] theme init failed:", err),
     );
 
+    // Customizer followers: menu surfaces + the icon set resolver. (The
+    // config itself applied before paint; see the init above.)
+    try {
+      startMenuColor();
+      startIconSets();
+    } catch (err) {
+      console.error("[mygitui] appearance init failed:", err);
+    }
+
     startTabEvents();
 
     // Remote devices: registry + prompt/status event wiring (idempotent),
@@ -306,7 +404,12 @@
     // Relaunch polish: reopen the tabs (and the focused one) from the last
     // session. Runs before the CLI-arg/deep-link listeners below, so an
     // explicit `mygitui <path>` still wins the focus when it lands.
-    if (!popout) void restoreSession();
+    if (!popout) {
+      void restoreSession();
+      // Overlay dialogs mount lazily (see the lazy-mounting note); warm
+      // their chunks once the launch settles.
+      warmNextOverlay();
+    }
 
     // Popout windows render one panel only — no shell-level listeners.
     if (popout) {
@@ -357,6 +460,12 @@
     cleanups.push(
       onUiEvent("open-ai-settings", () => {
         aiSettingsOpen = true;
+      }),
+    );
+
+    cleanups.push(
+      onUiEvent("open-appearance", () => {
+        appearanceOpen = true;
       }),
     );
 
@@ -982,26 +1091,72 @@
 </div>
 
 <Toaster />
-<QuickSwitcher />
-<CommandPalette />
-<CloneDialog bind:open={cloneOpen} />
-<ContextMenu />
+
+<!-- Lazy-mounted overlays (see the lazy-mounting note in the script): each
+     mounts on its first open signal and stays mounted afterwards. -->
+{#if isSwitcherOpen() || switcherOverlay.landed}
+  {#await switcherOverlay.chunk() then QuickSwitcherModule}
+    <QuickSwitcherModule.default />
+  {/await}
+{/if}
+{#if isPaletteOpen() || paletteOverlay.landed}
+  {#await paletteOverlay.chunk() then CommandPaletteModule}
+    <CommandPaletteModule.default />
+  {/await}
+{/if}
+{#if cloneOpen || cloneOverlay.landed}
+  {#await cloneOverlay.chunk() then CloneDialogModule}
+    <CloneDialogModule.default bind:open={cloneOpen} />
+  {/await}
+{/if}
+{#if contextMenu.open || contextMenuOverlay.landed}
+  {#await contextMenuOverlay.chunk() then ContextMenuModule}
+    <ContextMenuModule.default />
+  {/await}
+{/if}
 
 <!-- Remote devices: add/edit dialog + the connect-prompt dialogs (driven
      by the remote-devices store's pending queues, AuthDialog-style). -->
-<AddDeviceDialog bind:open={addDeviceOpen} edit={editingDevice} />
-<HostKeyDialog />
-<DeviceAuthDialog />
+{#if addDeviceOpen || addDeviceOverlay.landed}
+  {#await addDeviceOverlay.chunk() then AddDeviceDialogModule}
+    <AddDeviceDialogModule.default bind:open={addDeviceOpen} edit={editingDevice} />
+  {/await}
+{/if}
+{#if remoteDevices.hostkeyPending || hostKeyOverlay.landed}
+  {#await hostKeyOverlay.chunk() then HostKeyDialogModule}
+    <HostKeyDialogModule.default />
+  {/await}
+{/if}
+{#if remoteDevices.authPending || deviceAuthOverlay.landed}
+  {#await deviceAuthOverlay.chunk() then DeviceAuthDialogModule}
+    <DeviceAuthDialogModule.default />
+  {/await}
+{/if}
 
-<ConfirmDialog
-  bind:open={removeDeviceOpen}
-  title={`Delete device ${deviceDetail?.profile.name ?? ""}?`}
-  message="The device, its stored secrets and its pinned host key are removed. Projects you opened from it stay in the recent list as ssh:// entries."
-  confirmLabel="Delete device"
-  danger
-  onConfirm={() => void removeDevice()}
-/>
+{#if removeDeviceOpen || confirmOverlay.landed}
+  {#await confirmOverlay.chunk() then ConfirmDialogModule}
+    <ConfirmDialogModule.default
+      bind:open={removeDeviceOpen}
+      title={`Delete device ${deviceDetail?.profile.name ?? ""}?`}
+      message="The device, its stored secrets and its pinned host key are removed. Projects you opened from it stay in the recent list as ssh:// entries."
+      confirmLabel="Delete device"
+      danger
+      onConfirm={() => void removeDevice()}
+    />
+  {/await}
+{/if}
 
 <!-- M12: AI settings dialog (opened by the AI health chip / palette). -->
-<AiSettings bind:open={aiSettingsOpen} />
+{#if aiSettingsOpen || aiSettingsOverlay.landed}
+  {#await aiSettingsOverlay.chunk() then AiSettingsModule}
+    <AiSettingsModule.default bind:open={aiSettingsOpen} />
+  {/await}
+{/if}
+
+<!-- Appearance customizer (opened by the palette; see $lib/theme). -->
+{#if appearanceOpen || appearanceOverlay.landed}
+  {#await appearanceOverlay.chunk() then AppearanceDialogModule}
+    <AppearanceDialogModule.default bind:open={appearanceOpen} />
+  {/await}
+{/if}
 

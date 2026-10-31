@@ -68,12 +68,7 @@
   } from "$lib/components/menu/contextMenuStore.svelte";
   import Icon from "$lib/components/icons/Icon.svelte";
   import { Spinner } from "$lib/components/ui/spinner/index.js";
-  import iconFetch from "@ktibow/iconset-material-symbols/cloud-download";
-  import iconPull from "@ktibow/iconset-material-symbols/arrow-downward";
-  import iconPush from "@ktibow/iconset-material-symbols/arrow-upward";
-  import iconSync from "@ktibow/iconset-material-symbols/sync";
-  import iconChevronDown from "@ktibow/iconset-material-symbols/expand-more";
-  import iconPin from "@ktibow/iconset-material-symbols/push-pin";
+  import { appIcon } from "$lib/components/icons/library.svelte";
 
   let {
     repoId,
@@ -86,6 +81,13 @@
     /** Called after a successful sync (RepoView refreshes the status). */
     onMutated?: () => void;
   } = $props();
+
+  const iconFetch = $derived(appIcon("cloud-download")!);
+  const iconPull = $derived(appIcon("arrow-downward")!);
+  const iconPush = $derived(appIcon("arrow-upward")!);
+  const iconSync = $derived(appIcon("sync")!);
+  const iconChevronDown = $derived(appIcon("chevron-down")!);
+  const iconPin = $derived(appIcon("push-pin")!);
 
   /** Set while this component's invoke is awaiting the backend. */
   let pending = $state<SyncVerb | null>(null);

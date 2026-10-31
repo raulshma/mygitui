@@ -20,12 +20,7 @@
   import { Button } from "$lib/components/ui/button/index.js";
   import Icon from "$lib/components/icons/Icon.svelte";
   import { splitPath, submoduleDisplay } from "./statusModel";
-  import iconRefresh from "@ktibow/iconset-material-symbols/refresh";
-  import iconUpdate from "@ktibow/iconset-material-symbols/download";
-  import iconSync from "@ktibow/iconset-material-symbols/sync";
-  import iconOpen from "@ktibow/iconset-material-symbols/open-in-new";
-  import iconModule from "@ktibow/iconset-material-symbols/folder-special";
-  import iconCheck from "@ktibow/iconset-material-symbols/check-circle";
+  import { appIcon } from "$lib/components/icons/library.svelte";
 
   let {
     repoId,
@@ -38,6 +33,13 @@
     /** Called after a mutation that changes repo state (update/sync). */
     onMutated?: () => void;
   } = $props();
+
+  const iconRefresh = $derived(appIcon("refresh")!);
+  const iconUpdate = $derived(appIcon("download")!);
+  const iconSync = $derived(appIcon("sync")!);
+  const iconOpen = $derived(appIcon("open-in-new")!);
+  const iconModule = $derived(appIcon("folder-special")!);
+  const iconCheck = $derived(appIcon("check-circle")!);
 
   let list = $state<SubmoduleInfo[]>([]);
   let loading = $state(false);

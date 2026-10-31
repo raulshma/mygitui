@@ -198,6 +198,8 @@ test("files panel: browse tree, open a file in the workspace", async ({
 test("quick open (Ctrl+P): fuzzy pick opens the file", async ({
   page,
 }, testInfo) => {
+  // First open transforms the lazy QuickOpen chunk on the dev server.
+  test.setTimeout(90_000);
   const tracked = trackErrors(page);
   await boot(page, {
     [RECENT_REPOS_KEY]: JSON.stringify([
@@ -208,7 +210,13 @@ test("quick open (Ctrl+P): fuzzy pick opens the file", async ({
   await page.goto("/");
   await page.getByRole("button", { name: /repo\s*\/tmp\/repo/ }).click();
 
-  await page.waitForTimeout(1500);
+  // Press the keybind only once the repo is fully open: under load a fixed
+  // wait could fire while the workspace is still initializing, and the
+  // quick-open event would be swallowed.
+  await expect(page.getByRole("treeitem", { name: "src/app.ts" })).toBeVisible({
+    timeout: 15_000,
+  });
+
   await page.keyboard.press("Control+p");
   const dialog = page.getByRole("dialog", { name: "Go to file" });
   // First open transforms the lazy QuickOpen chunk on the dev server.

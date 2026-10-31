@@ -25,12 +25,7 @@
   import ConfirmDialog from "$lib/components/safety/ConfirmDialog.svelte";
   import Icon from "$lib/components/icons/Icon.svelte";
   import { Button } from "$lib/components/ui/button/index.js";
-  import iconAdd from "@ktibow/iconset-material-symbols/add";
-  import iconRefresh from "@ktibow/iconset-material-symbols/refresh";
-  import iconPrune from "@ktibow/iconset-material-symbols/delete-sweep";
-  import iconBrowse from "@ktibow/iconset-material-symbols/folder-open";
-  import iconOpen from "@ktibow/iconset-material-symbols/open-in-new";
-  import iconRemove from "@ktibow/iconset-material-symbols/delete";
+  import { appIcon } from "$lib/components/icons/library.svelte";
   import {
     baseName,
     worktreeBadges,
@@ -50,6 +45,13 @@
     /** Called after a mutation that changes repo state (add/remove). */
     onMutated?: () => void;
   } = $props();
+
+  const iconAdd = $derived(appIcon("add")!);
+  const iconRefresh = $derived(appIcon("refresh")!);
+  const iconPrune = $derived(appIcon("delete-sweep")!);
+  const iconBrowse = $derived(appIcon("folder-open")!);
+  const iconOpen = $derived(appIcon("open-in-new")!);
+  const iconRemove = $derived(appIcon("delete")!);
 
   let list = $state<WorktreeInfo[]>([]);
   let allBranches = $state<BranchInfo[]>([]);

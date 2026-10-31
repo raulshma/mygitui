@@ -31,10 +31,7 @@
   import { Button } from "$lib/components/ui/button/index.js";
   import Icon from "$lib/components/icons/Icon.svelte";
   import { checkpointTitle } from "./safetyModel";
-  import iconRefresh from "@ktibow/iconset-material-symbols/refresh";
-  import iconGc from "@ktibow/iconset-material-symbols/delete-sweep";
-  import iconRestore from "@ktibow/iconset-material-symbols/restore-page";
-  import iconTrashRestore from "@ktibow/iconset-material-symbols/undo";
+  import { appIcon } from "$lib/components/icons/library.svelte";
 
   let {
     repoId,
@@ -44,6 +41,11 @@
     /** Called after restore/GC (owner refreshes; RepoView refreshStatus). */
     onMutated?: () => void;
   } = $props();
+
+  const iconRefresh = $derived(appIcon("refresh")!);
+  const iconGc = $derived(appIcon("delete-sweep")!);
+  const iconRestore = $derived(appIcon("restore-page")!);
+  const iconTrashRestore = $derived(appIcon("undo")!);
 
   // `state` re-reads the rune store on every access inside the template.
   const undo = $derived(safetyStore.stateFor(repoId));

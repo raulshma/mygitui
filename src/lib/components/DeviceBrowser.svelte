@@ -17,12 +17,14 @@
   import { openRemoteTab } from "$lib/stores/tabs.svelte";
   import { toast } from "$lib/toast";
   import Icon from "$lib/components/icons/Icon.svelte";
-  import iconDir from "@ktibow/iconset-material-symbols/folder";
-  import iconRepo from "@ktibow/iconset-material-symbols/folder-code";
+  import { appIcon } from "$lib/components/icons/library.svelte";
   import { Button } from "$lib/components/ui/button/index.js";
   import { Input } from "$lib/components/ui/input/index.js";
 
   let { deviceId }: { deviceId: string } = $props();
+
+  const iconDir = $derived(appIcon("folder")!);
+  const iconRepo = $derived(appIcon("folder-code")!);
 
   /** Current directory (absolute device path; `""` = home). */
   let path = $state("");

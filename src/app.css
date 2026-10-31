@@ -1,15 +1,46 @@
 /*
- * mygitui global styles — shadcn-svelte (vega preset, neutral base).
+ * mygitui global styles — shadcn-svelte.
  *
- * Theme tokens follow the shadcn/svelte `vega` style: semantic oklch vars in
- * :root (light) and .dark, exposed to Tailwind v4 via `@theme inline`. Dark
- * mode is class-based (`.dark` on <html>), driven by src/lib/theme.
+ * Theme tokens follow the shadcn/svelte semantic oklch convention in :root
+ * (light) and .dark, exposed to Tailwind v4 via `@theme inline`. Dark mode
+ * is class-based (`.dark` on <html>), driven by src/lib/theme.
+ *
+ * Runtime customization (src/lib/theme/appearance.svelte.ts) overrides the
+ * token blocks below with a single injected style element (base color,
+ * theme, chart color, radius, fonts) and selects one of the vendored style
+ * sheets with a `style-<name>` class on <html>. The static values here are
+ * the defaults (neutral base, nova style, Inter).
  */
 @import "tailwindcss";
 @import "tw-animate-css";
 @import "@fontsource-variable/inter";
 
+/* Vendored shadcn-svelte style sheets (component shapes per style), scoped
+ * under their `.style-<name>` root class and layered below utilities so
+ * call-site className overrides still win. The default (nova — the style
+ * the ui components were generated from) ships eagerly; the other seven
+ * load on demand via src/lib/theme/appearance.svelte.ts. */
+@import "./lib/theme/styles/style-nova.css" layer(components);
+
 @custom-variant dark (&:is(.dark *));
+
+/* Style-conditional utilities (matching the shadcn-svelte site setup). */
+@custom-variant style-vega (&:where(.style-vega *));
+@custom-variant style-nova (&:where(.style-nova *));
+@custom-variant style-maia (&:where(.style-maia *));
+@custom-variant style-lyra (&:where(.style-lyra *));
+@custom-variant style-mira (&:where(.style-mira *));
+@custom-variant style-luma (&:where(.style-luma *));
+@custom-variant style-sera (&:where(.style-sera *));
+@custom-variant style-rhea (&:where(.style-rhea *));
+
+/* Default font stacks; the appearance engine overrides --font-sans and
+ * --font-heading at runtime (mono stays static: terminal/diff faces). */
+:root {
+  --font-sans: "Inter Variable", Roboto, "Segoe UI", system-ui, sans-serif;
+  --font-heading: var(--font-sans);
+  --font-mono-static: "Cascadia Mono", "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+}
 
 :root {
   --background: oklch(1 0 0);
@@ -81,8 +112,10 @@
 }
 
 @theme inline {
-  --font-sans: "Inter Variable", Roboto, "Segoe UI", system-ui, sans-serif;
-  --font-mono: "Cascadia Mono", "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  /* Font utilities resolve against the runtime-overridable :root vars. */
+  --font-sans: var(--font-sans);
+  --font-heading: var(--font-heading);
+  --font-mono: var(--font-mono-static);
 
   --color-background: var(--background);
   --color-foreground: var(--foreground);
@@ -107,6 +140,14 @@
   --color-chart-3: var(--chart-3);
   --color-chart-4: var(--chart-4);
   --color-chart-5: var(--chart-5);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
 
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
@@ -155,6 +196,14 @@
   --app-untracked: #3fb950;
   --app-conflicted: #f85149;
   --app-hover: color-mix(in srgb, var(--foreground) 8%, transparent);
+}
+
+/* Hides scrollbars (style sheets use it for menu/command lists). */
+@utility no-scrollbar {
+  scrollbar-width: none;
+  &::-webkit-scrollbar {
+    display: none;
+  }
 }
 
 @layer base {

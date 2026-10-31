@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { Select as SelectPrimitive } from "bits-ui";
-	import ChevronUpIcon from '@lucide/svelte/icons/chevron-up';
+	import { appIcon } from "$lib/components/icons/library.svelte";
 	import { cn, type WithoutChildrenOrChild } from "$lib/utils.js";
 
 	let {
@@ -8,13 +8,22 @@
 		class: className,
 		...restProps
 	}: WithoutChildrenOrChild<SelectPrimitive.ScrollUpButtonProps> = $props();
+
+	const chevronUpIcon = $derived(appIcon("chevron-up"));
 </script>
 
 <SelectPrimitive.ScrollUpButton
 	bind:ref
 	data-slot="select-scroll-up-button"
-	class={cn("bg-popover z-10 flex cursor-default items-center justify-center py-1 [&_svg:not([class*='size-'])]:size-4", className)}
+	class={cn("cn-select-scroll-up-button", className)}
 	{...restProps}
 >
-	<ChevronUpIcon  />
+	{#if chevronUpIcon}
+		<svg
+			viewBox="{chevronUpIcon.left ?? 0} {chevronUpIcon.top ?? 0} {chevronUpIcon.width} {chevronUpIcon.height}"
+			width={chevronUpIcon.width}
+			height={chevronUpIcon.height}
+			aria-hidden="true"
+		>{@html chevronUpIcon.body}</svg>
+	{/if}
 </SelectPrimitive.ScrollUpButton>

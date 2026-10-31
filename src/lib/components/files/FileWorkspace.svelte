@@ -32,9 +32,7 @@
   import { editorPrefs } from "./editorPrefs.svelte";
   import { isMarkdownPath } from "./markdownPath";
   import { toast } from "$lib/toast";
-  import iconClose from "@ktibow/iconset-material-symbols/close";
-  import iconDiff from "@ktibow/iconset-material-symbols/difference";
-  import iconWrap from "@ktibow/iconset-material-symbols/wrap-text";
+  import { appIcon } from "$lib/components/icons/library.svelte";
 
   /** One open file (RepoView state). */
   export interface OpenFileInfo {
@@ -75,6 +73,10 @@
 
   /** Files above this size open as the preview card instead of CM. */
   const LARGE_FILE_LIMIT = 20 * 1024 * 1024;
+
+  const iconClose = $derived(appIcon("close")!);
+  const iconDiff = $derived(appIcon("difference")!);
+  const iconWrap = $derived(appIcon("wrap-text")!);
 
   let editorRefs: Record<string, EditorApi> = {};
   // Drop stale refs when files close (cleanup on each render pass).

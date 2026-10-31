@@ -12,7 +12,7 @@
   import { Spinner } from "$lib/components/ui/spinner/index.js";
   import { Button } from "$lib/components/ui/button/index.js";
   import Icon from "$lib/components/icons/Icon.svelte";
-  import iconOpen from "@ktibow/iconset-material-symbols/open-in-new";
+  import { appIcon } from "$lib/components/icons/library.svelte";
   import { toast } from "$lib/toast";
 
   let {
@@ -27,6 +27,8 @@
     path: string;
     meta: FileMeta;
   } = $props();
+
+  const iconOpen = $derived(appIcon("open-in-new")!);
 
   let phase = $state<"loading" | "ready" | "error">("loading");
   let errorText = $state("");

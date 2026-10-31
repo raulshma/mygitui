@@ -19,7 +19,7 @@
   import PromptDialog from "$lib/components/safety/PromptDialog.svelte";
   import Icon from "$lib/components/icons/Icon.svelte";
   import { Button } from "$lib/components/ui/button/index.js";
-  import iconRefresh from "@ktibow/iconset-material-symbols/refresh";
+  import { appIcon } from "$lib/components/icons/library.svelte";
   import {
     groupReflogByDay,
     REFLOG_DISPLAY_CAP,
@@ -32,6 +32,8 @@
   }: {
     repoId: string;
   } = $props();
+
+  const iconRefresh = $derived(appIcon("refresh")!);
 
   let branchList = $state<BranchInfo[]>([]);
   /** Selected ref: "HEAD" (default) or a local branch name. */

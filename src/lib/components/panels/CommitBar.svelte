@@ -36,14 +36,7 @@
   import { ai } from "$lib/ai/ai.svelte";
   import AiFeatureButton from "$lib/components/ai/AiFeatureButton.svelte";
   import { fixupMessage, hasStagedChanges, headCommitInPage } from "$lib/commit/commitBarModel";
-  import iconAmend from "@ktibow/iconset-material-symbols/edit";
-  import iconSkipHooks from "@ktibow/iconset-material-symbols/block";
-  import iconAuthor from "@ktibow/iconset-material-symbols/person";
-  import iconFixup from "@ktibow/iconset-material-symbols/merge-type";
-  import iconProgress from "@ktibow/iconset-material-symbols/progress-activity";
-  import iconSigning from "@ktibow/iconset-material-symbols/verified";
-  import iconHook from "@ktibow/iconset-material-symbols/bolt";
-  import iconOptions from "@ktibow/iconset-material-symbols/tune";
+  import { appIcon } from "$lib/components/icons/library.svelte";
 
   let {
     repoId,
@@ -56,6 +49,15 @@
     /** Called after a successful commit (RepoView refreshes the status). */
     onCommitted?: () => void;
   } = $props();
+
+  const iconAmend = $derived(appIcon("edit")!);
+  const iconSkipHooks = $derived(appIcon("block")!);
+  const iconAuthor = $derived(appIcon("person")!);
+  const iconFixup = $derived(appIcon("merge-type")!);
+  const iconProgress = $derived(appIcon("progress-activity")!);
+  const iconSigning = $derived(appIcon("verified")!);
+  const iconHook = $derived(appIcon("bolt")!);
+  const iconOptions = $derived(appIcon("tune")!);
 
   let message = $state("");
   let messageEl = $state<HTMLTextAreaElement | null>(null);

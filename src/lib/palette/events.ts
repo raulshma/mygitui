@@ -52,6 +52,8 @@ export interface UiEventMap {
   "commit-action": { sha: string; action: "cherry-pick" | "revert" | "bookmark" };
   /** Open the AI settings dialog (M12 AiHealthChip / anywhere). */
   "open-ai-settings": undefined;
+  /** Open the appearance customizer (App owns the dialog). */
+  "open-appearance": undefined;
   /** M12: open the accent-seed picker (App owns the dialog). */
   "open-seed-dialog": undefined;
   /** Open the clone-repository dialog (App owns the dialog; palette command). */
