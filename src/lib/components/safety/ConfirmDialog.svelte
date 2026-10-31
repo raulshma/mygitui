@@ -4,11 +4,13 @@
   Props: `open` (bindable), `title`, `message` (markup allowed via snippet
   slot), `confirmLabel`, `cancelLabel`, `danger` (error-colored confirm),
   `onConfirm`, `onCancel`. Focus lands on confirm; Enter confirms, Escape
-  cancels; focus is trapped by the scrim (single dialog). Restores focus to
-  the previously active element on close. Chrome lives in DialogShell.
+  cancels; focus is trapped by the dialog (single dialog). Focus is restored
+  to the previously active element on close. Chrome comes from the shadcn
+  ui/dialog primitives.
 -->
 <script lang="ts">
-  import DialogShell from "./DialogShell.svelte";
+  import * as Dialog from "$lib/components/ui/dialog/index.js";
+  import { Button } from "$lib/components/ui/button/index.js";
   import type { Snippet } from "svelte";
 
   let {
@@ -32,6 +34,16 @@
     onCancel?: () => void;
   } = $props();
 
+  let confirmButton = $state<HTMLElement | null>(null);
+
+  // Focus lands on confirm (the old data-autofocus convention) whenever
+  // the dialog opens.
+  $effect(() => {
+    if (open) {
+      requestAnimationFrame(() => confirmButton?.focus());
+    }
+  });
+
   function close(cancelOnly = false): void {
     open = false;
     if (cancelOnly) onCancel?.();
@@ -48,32 +60,54 @@
   }
 </script>
 
-<DialogShell
-  bind:open
-  labelledBy="confirm-title"
-  describedBy={message ? "confirm-message" : undefined}
-  role="alertdialog"
-  {onCancel}
->
-  {#snippet children()}
-    <h2 id="confirm-title" class="sdlg-title">{title}</h2>
+{#if open}
+  <!-- Gated so closed dialogs fully unmount (legacy DialogShell semantics);
+       bits-ui otherwise keeps Content mounted until the exit transition
+       ends, which never completes under jsdom. -->
+  <Dialog.Root bind:open>
+  <!-- svelte-ignore a11y_click_events_have_key_events -->
+  <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+  <Dialog.Overlay class="scrim bg-black/40" role="presentation" />
+  <Dialog.Content
+    class="dialog w-[26rem] max-w-none gap-0 rounded-lg bg-card px-6 py-5 text-sm text-popover-foreground shadow-xl sm:max-w-none"
+    role="alertdialog"
+    aria-modal="true"
+    aria-labelledby="confirm-title"
+    aria-describedby={message ? "confirm-message" : undefined}
+    showCloseButton={false}
+    escapeKeydownBehavior="ignore"
+    interactOutsideBehavior="ignore"
+    onkeydown={(e) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        close(true);
+      }
+    }}
+  >
+    <Dialog.Title id="confirm-title" class="m-0 mb-2 text-lg font-medium">{title}</Dialog.Title>
     {#if message}
-      <div id="confirm-message" class="sdlg-message">
+      <div id="confirm-message" class="m-0 mb-4 text-muted-foreground [overflow-wrap:anywhere]">
         {#if typeof message === "string"}{message}{:else}{@render message()}{/if}
       </div>
     {/if}
-  {/snippet}
-  {#snippet actions()}
-    <button class="sdlg-secondary" type="button" onclick={() => close(true)}>
-      {cancelLabel}
-    </button>
-    <button
-      class={danger ? "sdlg-danger" : "sdlg-primary"}
-      type="button"
-      data-autofocus
-      onclick={confirm}
-    >
-      {confirmLabel}
-    </button>
-  {/snippet}
-</DialogShell>
+    <div class="mt-4 flex flex-nowrap justify-end gap-2">
+      <Button
+        variant="outline"
+        class="text-muted-foreground"
+        type="button"
+        onclick={() => close(true)}
+      >
+        {cancelLabel}
+      </Button>
+      <Button
+        bind:ref={confirmButton}
+        variant={danger ? "destructive" : "default"}
+        type="button"
+        onclick={confirm}
+      >
+        {confirmLabel}
+      </Button>
+    </div>
+  </Dialog.Content>
+  </Dialog.Root>
+{/if}

@@ -17,6 +17,7 @@
   import { aiHealth } from "$lib/ai/health";
   import { isTauri } from "$lib/entry/dragdrop";
   import { emitUiEvent } from "$lib/palette/events";
+  import { Button } from "$lib/components/ui/button/index.js";
   import { onMount } from "svelte";
 
   // The supervisor is a plain Svelte-store-contract observable, not a
@@ -38,82 +39,25 @@
   let { compact = false }: { compact?: boolean } = $props();
 </script>
 
-<button
-  class="ai-health {view.tone}"
-  class:compact
+<Button
+  variant="outline"
+  size="xs"
+  class="ai-health {view.tone} h-auto min-h-7 gap-[0.3rem] rounded-full px-[0.55rem] py-[0.1rem] text-[0.6875rem] text-muted-foreground {compact
+    ? 'compact size-7 justify-center gap-0 p-0'
+    : ''}"
   type="button"
   title={`AI: ${view.detail}`}
   aria-label={`AI connection: ${view.label} — open AI settings`}
   onclick={() => emitUiEvent("open-ai-settings")}
 >
-  <span class="dot" aria-hidden="true"></span>
-  <span class="label">AI {view.label}</span>
-</button>
-
-<style>
-  .ai-health {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.3rem;
-    min-height: 1.75rem;
-    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    border-radius: var(--m3-shape-full, 9999px);
-    background: none;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    font: inherit;
-    font-size: 0.6875rem;
-    padding: 0.1rem 0.55rem;
-    cursor: pointer;
-    white-space: nowrap;
-  }
-
-  .ai-health:hover {
-    background: var(--m3-surface-container-high, var(--m3-surface));
-  }
-
-  .ai-health:focus-visible {
-    outline: 2px solid var(--m3-primary);
-    outline-offset: 1px;
-  }
-
-  /*
-   * Compact mode (tab strip / phone-width headers): dot only, with the
-   * label kept in the accessibility tree so the chip still names its state.
-   */
-  .ai-health.compact {
-    width: 1.75rem;
-    height: 1.75rem;
-    justify-content: center;
-    gap: 0;
-    padding: 0;
-  }
-
-  .ai-health.compact .label {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    overflow: hidden;
-    clip: rect(0 0 0 0);
-    white-space: nowrap;
-  }
-
-  .dot {
-    flex: none;
-    width: 0.5rem;
-    height: 0.5rem;
-    border-radius: 50%;
-    background: var(--m3-outline-variant, #9e9e9e); /* off / unknown */
-  }
-
-  .ai-health.ok .dot {
-    background: var(--app-added, #2e7d32);
-  }
-
-  .ai-health.degraded .dot {
-    background: var(--app-modified, #f9a825);
-  }
-
-  .ai-health.down .dot {
-    background: var(--m3-error, #ba1a1a); /* red */
-  }
-</style>
+  <span
+    class="dot flex-none size-2 rounded-full {view.tone === 'ok'
+      ? 'bg-[var(--app-added)]'
+      : view.tone === 'degraded'
+        ? 'bg-[var(--app-modified)]'
+        : view.tone === 'down'
+          ? 'bg-destructive'
+          : 'bg-muted-foreground'}"
+    aria-hidden="true"></span>
+  <span class="label {compact ? 'sr-only' : ''}">AI {view.label}</span>
+</Button>

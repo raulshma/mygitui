@@ -21,7 +21,9 @@
   import FileEditor from "./FileEditor.svelte";
   import FilePreview from "./FilePreview.svelte";
   import DialogShell from "$lib/components/safety/DialogShell.svelte";
-  import { Spinner } from "$lib/components/m3";
+  import { Button } from "$lib/components/ui/button/index.js";
+  import { Spinner } from "$lib/components/ui/spinner/index.js";
+  import { Toggle } from "$lib/components/ui/toggle/index.js";
   import Icon from "$lib/components/icons/Icon.svelte";
   import { fileIconForPath, fileIconColorForPath } from "$lib/components/icons/fileIcons";
   import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.svelte";
@@ -216,14 +218,20 @@
   ];
 </script>
 
-<div class="workspace" aria-label="File workspace">
-  <div class="strip" role="tablist" aria-label="Open files">
+<div class="workspace flex h-full min-h-0 min-w-0 flex-col bg-card" aria-label="File workspace">
+  <div
+    class="strip flex flex-none items-stretch gap-0 overflow-x-auto border-b border-border bg-card [scrollbar-width:thin]"
+    role="tablist"
+    aria-label="Open files"
+  >
     {#each openFiles as file (file.path)}
       {@const isActive = file.path === active}
       <!-- svelte-ignore a11y_click_events_have_key_events -- keyboard
            handling lives on the tab strip's focusable row buttons + menus -->
       <div
-        class="tab"
+        class="tab flex h-8 max-w-56 flex-none cursor-pointer items-center gap-[0.3rem] border-r border-border py-0 pl-[0.6rem] pr-[0.3rem] whitespace-nowrap select-none text-[0.78rem] {isActive
+          ? 'bg-card text-foreground shadow-[inset_0_2px_0_var(--primary)]'
+          : 'text-muted-foreground hover:bg-accent'}"
         class:active={isActive}
         role="tab"
         aria-selected={isActive}
@@ -236,7 +244,7 @@
         oncontextmenu={(event) => tabMenu(event, file.path)}
       >
         <span
-          class="ticon"
+          class="ticon inline-flex flex-none"
           style={`color:${fileIconColorForPath(file.path, fileIconPreferences.theme)}`}
         >
           <Icon
@@ -244,80 +252,86 @@
             size={13}
           />
         </span>
-        <span class="tname">{basename(file.path)}</span>
+        <span class="tname min-w-0 overflow-hidden text-ellipsis">{basename(file.path)}</span>
         {#if file.dirty}
-          <span class="dirty" title="Unsaved changes"></span>
+          <span class="dirty size-[7px] flex-none rounded-full bg-[var(--app-modified)]" title="Unsaved changes"></span>
         {/if}
-        <button
+        <Button
+          class="tclose size-[1.15rem] rounded-full text-muted-foreground opacity-65 hover:bg-accent hover:text-accent-foreground hover:opacity-100 [&_svg:not([class*='size-'])]:size-3"
+          variant="ghost"
+          size="icon-sm"
           type="button"
-          class="tclose"
-          tabindex="-1"
           aria-label={`Close ${basename(file.path)}`}
           title="Close (middle-click)"
+          tabindex={-1}
           onclick={(event) => {
             event.stopPropagation();
             requestClose(file.path);
           }}
         >
           <Icon icon={iconClose} size={12} />
-        </button>
+        </Button>
       </div>
     {/each}
-    <span class="tspacer"></span>
-    <div class="tactions">
+    <span class="tspacer flex-1"></span>
+    <div class="tactions flex flex-none items-center gap-0.5 px-1">
       {#if mdActive}
-        <div class="seg" role="group" aria-label="Markdown view">
+        <div class="seg inline-flex flex-none items-center gap-0 rounded-full border border-border px-1" role="group" aria-label="Markdown view">
           {#each MD_VIEW_SEGMENTS as seg (seg.id)}
-            <button
-              type="button"
-              class="seg-btn"
-              class:tactive={editorPrefs.mdView === seg.id}
-              aria-pressed={editorPrefs.mdView === seg.id}
+            <Toggle
+              class="h-auto rounded-full px-[0.55rem] py-[0.1rem] text-[0.6875rem] font-normal focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-primary focus-visible:ring-0 {editorPrefs.mdView === seg.id
+                ? 'bg-primary text-primary-foreground'
+                : 'text-muted-foreground hover:text-foreground'}"
+              pressed={editorPrefs.mdView === seg.id}
+              onPressedChange={(next) => next && editorPrefs.setMdView(seg.id)}
               title={seg.title}
-              onclick={() => editorPrefs.setMdView(seg.id)}
             >
               {seg.label}
-            </button>
+            </Toggle>
           {/each}
         </div>
       {/if}
-      <button
+      <Button
         type="button"
-        class="tact"
+        class="tact h-auto gap-1 rounded-sm px-[0.45rem] py-[0.1rem] text-[0.6875rem] font-normal disabled:cursor-default disabled:opacity-45"
+        variant="ghost"
         title="Open the working-copy diff for this file"
         disabled={active === null || onOpenDiff === undefined}
         onclick={() => active !== null && onOpenDiff?.(active)}
       >
         <Icon icon={iconDiff} size={14} />
         Diff
-      </button>
-      <button
+      </Button>
+      <Button
         type="button"
-        class="tact"
-        class:tactive={editorPrefs.wrap}
+        class="tact h-auto gap-1 rounded-sm px-[0.45rem] py-[0.1rem] text-[0.6875rem] font-normal {editorPrefs.wrap
+          ? 'bg-primary/10 text-primary'
+          : ''}"
+        variant="ghost"
         title={editorPrefs.wrap ? "Disable word wrap" : "Enable word wrap"}
         onclick={() => editorPrefs.setWrap(!editorPrefs.wrap)}
       >
         <Icon icon={iconWrap} size={14} />
         Wrap
-      </button>
-      <button
+      </Button>
+      <Button
         type="button"
-        class="tact"
+        class="tact h-auto gap-1 rounded-sm px-[0.45rem] py-[0.1rem] text-[0.6875rem] font-normal"
+        variant="ghost"
         title="Close all saved files"
         onclick={closeAll}
       >
         <Icon icon={iconClose} size={14} />
         Close all
-      </button>
+      </Button>
     </div>
   </div>
 
-  <div class="bodies">
+  <div class="bodies flex min-h-0 flex-1 flex-col">
     {#each openFiles as file (file.path)}
-      <div class="pane" class:hidden={file.path !== active}>
+      <div class="pane min-h-0 flex-1 [&>*]:h-full" class:hidden={file.path !== active}>
         {#if file.meta === null}
-          <p class="state" role="status"><Spinner size={14} /> Reading {file.path}…</p>
+          <p class="state m-auto inline-flex items-center gap-[0.4rem] text-[0.8125rem] text-muted-foreground" role="status"><Spinner class="size-[14px]" role="presentation" aria-hidden="true" /> Reading {file.path}…</p>
         {:else if usesEditor(file.meta)}
           <FileEditor
             bind:this={editorRefs[file.path]}
@@ -334,7 +348,7 @@
       </div>
     {/each}
     {#if activeFile === null && openFiles.length === 0}
-      <p class="state">No files open</p>
+      <p class="state m-auto inline-flex items-center gap-[0.4rem] text-[0.8125rem] text-muted-foreground">No files open</p>
     {/if}
   </div>
 
@@ -346,269 +360,38 @@
     onCancel={confirmCancel}
   >
     {#snippet children()}
-      <h3 class="dlg-title" id="fw-close-title">Unsaved changes</h3>
-      <p class="dlg-body" id="fw-close-body">
+      <h3 class="dlg-title m-0 mb-[0.4rem] text-[0.9375rem] font-medium text-foreground" id="fw-close-title">Unsaved changes</h3>
+      <p class="dlg-body m-0 break-all font-mono text-[0.8125rem] leading-[1.45] text-muted-foreground" id="fw-close-body">
         {confirmPath === null
           ? ""
           : `${confirmPath} has unsaved edits. Save before closing?`}
       </p>
     {/snippet}
     {#snippet actions()}
-      <button
-        class="dlg-btn dlg-primary"
+      <Button
+        class="dlg-btn dlg-primary h-auto rounded-full px-[0.85rem] py-[0.3rem] text-[0.78rem]"
         type="button"
         data-autofocus
         onclick={confirmSave}
       >
         Save
-      </button>
-      <button class="dlg-btn" type="button" onclick={confirmDiscard}>
+      </Button>
+      <Button
+        class="dlg-btn h-auto rounded-full px-[0.85rem] py-[0.3rem] text-[0.78rem] font-normal"
+        variant="outline"
+        type="button"
+        onclick={confirmDiscard}
+      >
         Don't save
-      </button>
-      <button class="dlg-btn" type="button" onclick={confirmCancel}>
+      </Button>
+      <Button
+        class="dlg-btn h-auto rounded-full px-[0.85rem] py-[0.3rem] text-[0.78rem] font-normal"
+        variant="outline"
+        type="button"
+        onclick={confirmCancel}
+      >
         Cancel
-      </button>
+      </Button>
     {/snippet}
   </DialogShell>
 </div>
-
-<style>
-  .workspace {
-    display: flex;
-    flex-direction: column;
-    height: 100%;
-    min-height: 0;
-    min-width: 0;
-    background: var(--m3-surface);
-  }
-
-  .strip {
-    flex: none;
-    display: flex;
-    align-items: stretch;
-    gap: 0;
-    overflow-x: auto;
-    border-bottom: 1px solid var(--app-border, var(--m3-outline-variant));
-    background: var(--m3-surface-container, var(--m3-surface));
-    scrollbar-width: thin;
-  }
-
-  .tab {
-    display: flex;
-    align-items: center;
-    gap: 0.3rem;
-    padding: 0 0.3rem 0 0.6rem;
-    height: 2rem;
-    max-width: 14rem;
-    cursor: pointer;
-    border-right: 1px solid var(--app-border, var(--m3-outline-variant));
-    color: var(--m3-on-surface-variant);
-    font-size: 0.78rem;
-    white-space: nowrap;
-    user-select: none;
-    flex: none;
-  }
-
-  .tab:hover {
-    background: var(--app-hover, var(--m3-surface-container-high));
-  }
-
-  .tab.active {
-    background: var(--m3-surface);
-    color: var(--m3-on-surface);
-    box-shadow: inset 0 2px 0 var(--m3-primary);
-  }
-
-  .ticon {
-    display: inline-flex;
-    flex: none;
-  }
-
-  .tname {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    min-width: 0;
-  }
-
-  .dirty {
-    flex: none;
-    width: 7px;
-    height: 7px;
-    border-radius: 9999px;
-    background: var(--app-modified, var(--m3-tertiary));
-  }
-
-  .tclose {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 1.15rem;
-    height: 1.15rem;
-    flex: none;
-    padding: 0;
-    border: none;
-    border-radius: var(--m3-shape-full, 9999px);
-    background: none;
-    color: inherit;
-    cursor: pointer;
-    opacity: 0.65;
-  }
-
-  .tclose:hover {
-    background: var(--app-hover, var(--m3-surface-container-high));
-    opacity: 1;
-  }
-
-  .tspacer {
-    flex: 1;
-  }
-
-  .tactions {
-    display: flex;
-    align-items: center;
-    gap: 0.2rem;
-    padding: 0 0.4rem;
-    flex: none;
-  }
-
-  .seg {
-    display: inline-flex;
-    align-items: center;
-    gap: 0;
-    padding: 0 0.25rem;
-    border: 1px solid var(--app-border, var(--m3-outline-variant));
-    border-radius: var(--m3-shape-full, 9999px);
-    flex: none;
-  }
-
-  .seg-btn {
-    padding: 0.1rem 0.55rem;
-    border: none;
-    border-radius: var(--m3-shape-full, 9999px);
-    background: none;
-    color: var(--m3-on-surface-variant);
-    font: inherit;
-    font-size: 0.6875rem;
-    cursor: pointer;
-  }
-
-  .seg-btn:hover { color: var(--m3-on-surface); }
-
-  .seg-btn.tactive {
-    color: var(--m3-on-primary);
-    background: var(--m3-primary);
-  }
-
-  .tact {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.25rem;
-    padding: 0.1rem 0.45rem;
-    border: none;
-    border-radius: var(--m3-shape-extra-small, 4px);
-    background: none;
-    color: var(--m3-on-surface-variant);
-    font: inherit;
-    font-size: 0.6875rem;
-    cursor: pointer;
-  }
-
-  .tact:hover:not(:disabled) {
-    background: var(--app-hover, var(--m3-surface-container-high));
-    color: var(--m3-on-surface);
-  }
-
-  .tact:disabled {
-    opacity: 0.45;
-    cursor: default;
-  }
-
-  .tact.tactive {
-    color: var(--m3-primary);
-    background: color-mix(in srgb, var(--m3-primary) 10%, transparent);
-  }
-
-  .tact:focus-visible {
-    outline: 2px solid var(--m3-primary);
-    outline-offset: 1px;
-  }
-
-  .bodies {
-    flex: 1;
-    min-height: 0;
-    display: flex;
-    flex-direction: column;
-  }
-
-  .pane {
-    flex: 1;
-    min-height: 0;
-  }
-
-  .pane.hidden {
-    display: none;
-  }
-
-  .pane > :global(*) {
-    height: 100%;
-  }
-
-  .state {
-    margin: auto;
-    color: var(--m3-on-surface-variant);
-    font-size: 0.8125rem;
-  }
-
-  p.state {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.4rem;
-  }
-
-  .dlg-title {
-    margin: 0 0 0.4rem;
-    font-size: 0.9375rem;
-    font-weight: 500;
-    color: var(--m3-on-surface);
-  }
-
-  .dlg-body {
-    margin: 0;
-    font-size: 0.8125rem;
-    line-height: 1.45;
-    color: var(--m3-on-surface-variant);
-    font-family: var(--app-font-mono, ui-monospace, Consolas, monospace);
-    word-break: break-all;
-  }
-
-  .dlg-btn {
-    padding: 0.3rem 0.85rem;
-    border: 1px solid var(--app-border, var(--m3-outline-variant));
-    border-radius: var(--m3-shape-full, 9999px);
-    background: none;
-    color: var(--m3-on-surface);
-    font: inherit;
-    font-size: 0.78rem;
-    cursor: pointer;
-  }
-
-  .dlg-btn:hover {
-    background: var(--m3-surface-container-high, var(--m3-surface));
-  }
-
-  .dlg-btn:focus-visible {
-    outline: 2px solid var(--m3-primary);
-    outline-offset: 1px;
-  }
-
-  .dlg-primary {
-    background: var(--m3-primary);
-    border-color: transparent;
-    color: var(--m3-on-primary);
-  }
-
-  .dlg-primary:hover {
-    background: var(--m3-primary);
-    filter: brightness(1.06);
-  }
-</style>

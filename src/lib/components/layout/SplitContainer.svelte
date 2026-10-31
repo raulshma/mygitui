@@ -152,9 +152,10 @@
   {@const aBasis = rightRail
     ? `calc(${node.ratio * 100}% + ${node.ratio} * var(--history-rail-width, 0px))`
     : `${node.ratio * 100}%`}
-  <div class="split" class:hide-a={hideA} class:hide-b={hideB}>
+  <div class="flex h-full w-full min-h-0 min-w-0">
     <div
-      class="pane pane-a"
+      class="flex min-h-0 min-w-0 flex-col overflow-hidden [&[hidden]]:hidden [&>*]:flex-1 [&>*]:min-h-0"
+      hidden={hideA}
       style:flex={hideB ? "1 1 0%" : `0 0 ${aBasis}`}
     >
       <SplitContainer
@@ -177,8 +178,11 @@
     <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
     <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
     <div
-      class="divider"
-      class:dragging={dragSplitId === node.id}
+      class="relative z-[1] mx-[-2px] w-[5px] shrink-0 cursor-col-resize touch-none focus-visible:outline-none {dragSplitId ===
+      node.id
+        ? "bg-[linear-gradient(to_right,transparent_1px,var(--primary)_1px,var(--primary)_4px,transparent_4px)]"
+        : "bg-[linear-gradient(to_right,transparent_2px,var(--border)_2px,var(--border)_3px,transparent_3px)] hover:bg-[linear-gradient(to_right,transparent_1px,var(--primary)_1px,var(--primary)_4px,transparent_4px)] focus-visible:bg-[linear-gradient(to_right,transparent_1px,var(--primary)_1px,var(--primary)_4px,transparent_4px)]"}"
+      hidden={hideA || hideB}
       role="separator"
       aria-orientation="vertical"
       aria-label="Resize panels"
@@ -192,7 +196,10 @@
       onpointercancel={dividerUp}
       onkeydown={(e) => dividerKey(e, node)}
     ></div>
-    <div class="pane pane-b grow">
+    <div
+      class="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden [&[hidden]]:hidden [&>*]:flex-1 [&>*]:min-h-0"
+      hidden={hideB}
+    >
       <SplitContainer
         node={node.b}
         {renderPanel}
@@ -222,91 +229,7 @@
     onAction={onPanelAction}
   />
 {:else}
-  <div class="leaf">
+  <div class="flex h-full w-full min-h-0 min-w-0 flex-col [&>*]:flex-1 [&>*]:min-h-0">
     {@render renderPanel(node.panel)()}
   </div>
 {/if}
-
-<style>
-  .split {
-    display: flex;
-    width: 100%;
-    height: 100%;
-    min-width: 0;
-    min-height: 0;
-  }
-
-  .pane {
-    min-width: 0;
-    min-height: 0;
-    display: flex;
-    flex-direction: column;
-    overflow: hidden;
-  }
-
-  .pane.grow {
-    flex: 1 1 0%;
-  }
-
-  /* Collapsed sidebars keep their DOM (state) but leave the flex layout; the
-   * remaining pane automatically takes the freed width. */
-  .split.hide-a > .pane-a,
-  .split.hide-b > .pane-b,
-  .split.hide-a > .divider,
-  .split.hide-b > .divider {
-    display: none;
-  }
-
-  .pane > :global(*) {
-    flex: 1;
-    min-height: 0;
-  }
-
-  .divider {
-    flex: none;
-    width: 5px;
-    margin: 0 -2px;
-    z-index: 1;
-    cursor: col-resize;
-    touch-action: none;
-    background:
-      linear-gradient(
-        to right,
-        transparent 2px,
-        var(--m3-outline-variant, var(--m3-primary)) 2px,
-        var(--m3-outline-variant, var(--m3-primary)) 3px,
-        transparent 3px
-      );
-  }
-
-  .divider:hover,
-  .divider:focus-visible,
-  .divider.dragging {
-    background:
-      linear-gradient(
-        to right,
-        transparent 1px,
-        var(--m3-primary) 1px,
-        var(--m3-primary) 4px,
-        transparent 4px
-      );
-  }
-
-  .divider:focus-visible {
-    outline: none;
-  }
-
-  .leaf {
-    display: flex;
-    flex-direction: column;
-    width: 100%;
-    height: 100%;
-    min-width: 0;
-    min-height: 0;
-  }
-
-  .leaf > :global(*) {
-    flex: 1;
-    min-height: 0;
-  }
-</style>

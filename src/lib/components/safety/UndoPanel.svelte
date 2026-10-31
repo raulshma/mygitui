@@ -27,7 +27,9 @@
   import { formatDateTime } from "$lib/git/format";
   import ConfirmDialog from "$lib/components/safety/ConfirmDialog.svelte";
   import PromptDialog from "$lib/components/safety/PromptDialog.svelte";
-  import { IconButton } from "$lib/components/m3";
+  import { Badge } from "$lib/components/ui/badge/index.js";
+  import { Button } from "$lib/components/ui/button/index.js";
+  import Icon from "$lib/components/icons/Icon.svelte";
   import { checkpointTitle } from "./safetyModel";
   import iconRefresh from "@ktibow/iconset-material-symbols/refresh";
   import iconGc from "@ktibow/iconset-material-symbols/delete-sweep";
@@ -169,35 +171,43 @@
   }
 </script>
 
-<section class="undo-panel" aria-label="Checkpoints and undo">
-  <div class="toolbar">
-    <IconButton
-      icon={iconRefresh}
-      label="Refresh checkpoints"
+<section class="undo-panel flex min-h-0 flex-col text-[0.8125rem]" aria-label="Checkpoints and undo">
+  <div class="toolbar flex shrink-0 items-center gap-2 px-2 py-[0.375rem]">
+    <Button
+      class="border-border text-muted-foreground hover:border-primary hover:bg-accent hover:text-accent-foreground"
+      variant="ghost"
+      size="icon-sm"
+      type="button"
+      aria-label="Refresh checkpoints"
       title={undo.loading ? "Refreshing checkpoints…" : "Refresh checkpoints"}
-      variant="outlined"
       disabled={undo.loading}
       onclick={() => void reload()}
-    />
-    <IconButton
-      icon={iconGc}
-      label="Clean old checkpoints"
+    >
+      <Icon icon={iconRefresh} size={16} />
+    </Button>
+    <Button
+      class="border-border text-muted-foreground hover:border-primary hover:bg-accent hover:text-accent-foreground"
+      variant="ghost"
+      size="icon-sm"
+      type="button"
+      aria-label="Clean old checkpoints"
       title="Delete checkpoints older than 30 days"
-      variant="outlined"
       disabled={gcBusy}
       onclick={() => void doGc()}
-    />
-    <span class="hint" title="Checkpoints are automatic snapshots created before dangerous operations">
+    >
+      <Icon icon={iconGc} size={16} />
+    </Button>
+    <span class="hint ml-auto text-[0.6875rem] text-muted-foreground" title="Checkpoints are automatic snapshots created before dangerous operations">
       {undo.checkpoints.length} checkpoint{undo.checkpoints.length === 1 ? "" : "s"}
     </span>
   </div>
 
   {#if undo.error}
-    <p class="state error" role="alert">{undo.error}</p>
+    <p class="state error m-0 px-3 py-4 text-[0.8125rem] text-destructive" role="alert">{undo.error}</p>
   {:else if !undo.loading && undo.checkpoints.length === 0}
-    <div class="empty">
-      <p class="empty-title">No checkpoints yet.</p>
-      <p class="empty-text">
+    <div class="empty px-3 py-4">
+      <p class="empty-title mb-[0.35rem] mt-0 font-semibold text-foreground">No checkpoints yet.</p>
+      <p class="empty-text m-0 text-xs leading-[1.45] text-muted-foreground">
         Checkpoints are automatic snapshots mygitui creates before dangerous
         operations (hard resets, force branch deletes, restores). Restoring a
         checkpoint returns the repository to that exact snapshot; the state at
@@ -206,58 +216,66 @@
       </p>
     </div>
   {:else}
-    <ul class="checkpoints" role="list" aria-label="Checkpoints, newest first">
+    <ul class="checkpoints m-0 min-h-0 grow list-none overflow-y-auto p-0 pb-3" role="list" aria-label="Checkpoints, newest first">
       {#each undo.checkpoints as cp (cp.id)}
-        <li class="row">
+        <li class="row flex min-w-0 items-center gap-[0.375rem] px-2 py-1 hover:bg-accent">
           {#if confirmingRestore === cp.id}
             <div
-              class="confirm-restore"
+              class="confirm-restore min-w-0 grow rounded-md border border-destructive px-2 py-[0.35rem]"
               role="alertdialog"
               aria-label={`Restore checkpoint ${cp.id}`}
             >
-              <p class="cr-text">
+              <p class="cr-text mb-[0.4rem] mt-0 text-[0.72rem] leading-[1.4] text-foreground">
                 Restore returns the repo to this snapshot: changes made since
                 are discarded and untracked files created after it are removed.
                 The current state is checkpointed first (pre-restore), so this
                 is undoable.
               </p>
-              <div class="cr-actions">
-                <button
-                  class="danger-btn"
+              <div class="cr-actions flex gap-[0.375rem]">
+                <Button
+                  variant="destructive"
+                  size="xs"
+                  class="rounded-full px-3"
                   type="button"
                   disabled={busyId === cp.id}
                   onclick={() => void doRestore(cp)}
                 >
                   {busyId === cp.id ? "Restoring…" : "Restore"}
-                </button>
-                <button
-                  class="tb"
+                </Button>
+                <Button
+                  variant="outline"
+                  size="xs"
+                  class="rounded-sm text-muted-foreground"
                   type="button"
                   onclick={() => (confirmingRestore = null)}
                 >
                   Cancel
-                </button>
+                </Button>
               </div>
             </div>
           {:else}
-            <div class="info">
-              <span class="title" title={cp.ref_name}>{checkpointTitle(cp, Math.floor(Date.now() / 1000))}</span>
-              <span class="chips">
-                {#if cp.branch}<span class="chip">{cp.branch}</span>{/if}
+            <div class="info flex min-w-0 grow flex-col gap-[0.15rem]">
+              <span class="title truncate text-xs text-foreground" title={cp.ref_name}>{checkpointTitle(cp, Math.floor(Date.now() / 1000))}</span>
+              <span class="chips flex flex-wrap gap-1">
+                {#if cp.branch}<Badge variant="outline" class="chip h-auto max-w-40 overflow-hidden rounded-full px-[0.4rem] py-0 text-[0.625rem] text-muted-foreground text-ellipsis whitespace-nowrap">{cp.branch}</Badge>{/if}
                 {#if cp.has_worktree_state}
-                  <span class="chip worktree" title="Snapshot includes working-copy + index state">worktree</span>
+                  <Badge variant="outline" class="chip worktree h-auto max-w-40 overflow-hidden rounded-full border-primary px-[0.4rem] py-0 text-[0.625rem] text-primary text-ellipsis whitespace-nowrap" title="Snapshot includes working-copy + index state">worktree</Badge>
                 {/if}
               </span>
             </div>
-            <span class="actions">
-              <IconButton
-                icon={iconRestore}
-                label={`Restore checkpoint ${cp.id}`}
+            <span class="actions ml-auto shrink-0">
+              <Button
+                class="relative text-muted-foreground after:absolute after:-inset-1 after:content-[''] hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-4"
+                variant="ghost"
+                size="icon-xs"
+                type="button"
+                aria-label={`Restore checkpoint ${cp.id}`}
                 title="Restore this checkpoint"
-                dense
                 disabled={busyId !== null}
                 onclick={() => askRestore(cp)}
-              />
+              >
+                <Icon icon={iconRestore} size={16} />
+              </Button>
             </span>
           {/if}
         </li>
@@ -266,49 +284,57 @@
   {/if}
 
   <!-- M12: force-deleted branches preserved under refs/mygitui/trash/* -->
-  <section class="trash" aria-label="Deleted branches">
-    <header class="trash-head">
-      <h2 class="trash-title">Deleted branches</h2>
-      <IconButton
-        icon={iconRefresh}
-        label="Refresh deleted branches"
+  <section class="trash mt-1 shrink-0 border-t border-border" aria-label="Deleted branches">
+    <header class="trash-head flex items-center justify-between gap-2 px-2 pb-[0.15rem] pt-[0.375rem]">
+      <h2 class="trash-title m-0 text-xs font-semibold text-foreground">Deleted branches</h2>
+      <Button
+        class="border-border text-muted-foreground hover:border-primary hover:bg-accent hover:text-accent-foreground"
+        variant="ghost"
+        size="icon-sm"
+        type="button"
+        aria-label="Refresh deleted branches"
         title={trashLoading ? "Refreshing deleted branches…" : "Refresh deleted branches"}
-        variant="outlined"
         disabled={trashLoading}
         onclick={() => void loadTrash()}
-      />
+      >
+        <Icon icon={iconRefresh} size={16} />
+      </Button>
     </header>
 
     {#if trashError}
-      <p class="state error" role="alert">{trashError}</p>
+      <p class="state error m-0 px-3 py-4 text-[0.8125rem] text-destructive" role="alert">{trashError}</p>
     {:else if !trashLoading && trash.length === 0}
-      <p class="trash-empty">
+      <p class="trash-empty m-0 px-2 pb-2 pt-[0.15rem] text-xs leading-[1.45] text-muted-foreground">
         No deleted branches. Force-deleted branches are kept here (under
-        <code>refs/mygitui/trash/*</code>) so their commits stay recoverable
+        <code class="font-mono text-[0.6875rem]">refs/mygitui/trash/*</code>) so their commits stay recoverable
         until checkpoint GC cleans them up.
       </p>
     {:else}
-      <ul class="trash-list" role="list" aria-label="Deleted branches, newest first">
+      <ul class="trash-list m-0 list-none p-0 pb-2" role="list" aria-label="Deleted branches, newest first">
         {#each trash as entry (entry.id)}
-          <li class="row">
-            <div class="info">
-              <span class="title" title={entry.name}>{entry.name}</span>
-              <span class="chips">
-                <span class="chip sha-chip" title={entry.sha}>{entry.sha.slice(0, 7)}</span>
-                <span class="chip" title="Deleted {formatDateTime(entry.deleted_at)}">
+          <li class="row flex min-w-0 items-center gap-[0.375rem] px-2 py-1 hover:bg-accent">
+            <div class="info flex min-w-0 grow flex-col gap-[0.15rem]">
+              <span class="title truncate text-xs text-foreground" title={entry.name}>{entry.name}</span>
+              <span class="chips flex flex-wrap gap-1">
+                <Badge variant="outline" class="chip sha-chip h-auto max-w-40 overflow-hidden rounded-full px-[0.4rem] py-0 font-mono text-[0.625rem] text-muted-foreground text-ellipsis whitespace-nowrap" title={entry.sha}>{entry.sha.slice(0, 7)}</Badge>
+                <Badge variant="outline" class="chip h-auto max-w-40 overflow-hidden rounded-full px-[0.4rem] py-0 text-[0.625rem] text-muted-foreground text-ellipsis whitespace-nowrap" title="Deleted {formatDateTime(entry.deleted_at)}">
                   deleted {formatDateTime(entry.deleted_at)}
-                </span>
+                </Badge>
               </span>
             </div>
-            <span class="actions">
-              <IconButton
-                icon={iconTrashRestore}
-                label={`Restore branch ${entry.name}`}
+            <span class="actions ml-auto shrink-0">
+              <Button
+                class="relative text-muted-foreground after:absolute after:-inset-1 after:content-[''] hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-4"
+                variant="ghost"
+                size="icon-xs"
+                type="button"
+                aria-label={`Restore branch ${entry.name}`}
                 title="Restore this deleted branch"
-                dense
                 disabled={restoreBusy}
                 onclick={() => (restoringTrash = entry)}
-              />
+              >
+                <Icon icon={iconTrashRestore} size={16} />
+              </Button>
             </span>
           </li>
         {/each}
@@ -336,228 +362,3 @@
     onCancel={() => (restoringTrash = null)}
   />
 {/if}
-
-<style>
-  .undo-panel {
-    display: flex;
-    flex-direction: column;
-    min-height: 0;
-    font-size: 0.8125rem;
-  }
-
-  .toolbar {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    padding: 0.375rem 0.5rem;
-    flex: none;
-  }
-
-  .tb {
-    flex: none;
-    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    border-radius: var(--m3-shape-extra-small, 4px);
-    background: none;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    font: inherit;
-    font-size: 0.72rem;
-    padding: 0.15rem 0.5rem;
-    cursor: pointer;
-  }
-
-  .tb:hover:not(:disabled) {
-    background: var(--m3-surface-container-high, var(--m3-surface));
-  }
-
-  .tb:disabled {
-    cursor: not-allowed;
-    opacity: 0.55;
-  }
-
-  .tb:focus-visible,
-  .danger-btn:focus-visible {
-    outline: 2px solid var(--m3-primary);
-    outline-offset: 1px;
-  }
-
-  .hint {
-    margin-left: auto;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    font-size: 0.6875rem;
-  }
-
-  .state {
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    padding: 1rem 0.75rem;
-    margin: 0;
-    font-size: 0.8125rem;
-  }
-
-  .error {
-    color: var(--m3-error, inherit);
-  }
-
-  .empty {
-    padding: 1rem 0.75rem;
-  }
-
-  .empty-title {
-    margin: 0 0 0.35rem;
-    font-weight: 600;
-    color: var(--m3-on-surface);
-  }
-
-  .empty-text {
-    margin: 0;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    font-size: 0.75rem;
-    line-height: 1.45;
-  }
-
-  .checkpoints {
-    flex: 1;
-    min-height: 0;
-    overflow-y: auto;
-    margin: 0;
-    padding: 0 0 0.75rem;
-    list-style: none;
-  }
-
-  .row {
-    display: flex;
-    align-items: center;
-    gap: 0.375rem;
-    padding: 0.25rem 0.5rem;
-    min-width: 0;
-  }
-
-  .row:hover {
-    background: var(--m3-surface-container-high, var(--m3-surface));
-  }
-
-  .info {
-    display: flex;
-    flex-direction: column;
-    gap: 0.15rem;
-    flex: 1;
-    min-width: 0;
-  }
-
-  .title {
-    font-size: 0.75rem;
-    color: var(--m3-on-surface);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .chips {
-    display: flex;
-    gap: 0.25rem;
-    flex-wrap: wrap;
-  }
-
-  .chip {
-    padding: 0 0.4rem;
-    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    border-radius: var(--m3-shape-full, 9999px);
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    font-size: 0.625rem;
-    max-width: 10rem;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .chip.worktree {
-    color: var(--m3-primary);
-    border-color: var(--m3-primary);
-  }
-
-  .actions {
-    margin-left: auto;
-    flex: none;
-  }
-
-  .confirm-restore {
-    flex: 1;
-    min-width: 0;
-    padding: 0.35rem 0.5rem;
-    border: 1px solid var(--m3-error, currentColor);
-    border-radius: var(--m3-shape-small, 8px);
-  }
-
-  .cr-text {
-    margin: 0 0 0.4rem;
-    color: var(--m3-on-surface);
-    font-size: 0.72rem;
-    line-height: 1.4;
-  }
-
-  .cr-actions {
-    display: flex;
-    gap: 0.375rem;
-  }
-
-  .danger-btn {
-    border: none;
-    border-radius: var(--m3-shape-full, 9999px);
-    background: var(--m3-error, var(--m3-primary));
-    color: var(--m3-on-error, white);
-    font: inherit;
-    font-size: 0.72rem;
-    padding: 0.2rem 0.75rem;
-    cursor: pointer;
-  }
-
-  .danger-btn:disabled {
-    cursor: not-allowed;
-    opacity: 0.55;
-  }
-
-  /* -- M12: deleted branches (trash) section ---------------------------------- */
-
-  .trash {
-    flex: none;
-    border-top: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    margin-top: 0.25rem;
-  }
-
-  .trash-head {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 0.5rem;
-    padding: 0.375rem 0.5rem 0.15rem;
-  }
-
-  .trash-title {
-    margin: 0;
-    font-size: 0.75rem;
-    font-weight: 600;
-    color: var(--m3-on-surface);
-  }
-
-  .trash-empty {
-    margin: 0;
-    padding: 0.15rem 0.5rem 0.5rem;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    font-size: 0.75rem;
-    line-height: 1.45;
-  }
-
-  .trash-empty code {
-    font-family: ui-monospace, Consolas, monospace;
-    font-size: 0.6875rem;
-  }
-
-  .trash-list {
-    margin: 0;
-    padding: 0 0 0.5rem;
-    list-style: none;
-  }
-
-  .sha-chip {
-    font-family: ui-monospace, Consolas, monospace;
-  }
-</style>

@@ -15,6 +15,9 @@
   import { toast } from "$lib/toast";
   import { formatDateTime } from "$lib/git/format";
   import { emitUiEvent, onUiEvent } from "$lib/palette/events";
+  import * as Dialog from "$lib/components/ui/dialog/index.js";
+  import { Button } from "$lib/components/ui/button/index.js";
+  import { Input } from "$lib/components/ui/input/index.js";
 
   let { repoId, showLauncher = true }: { repoId: string; showLauncher?: boolean } = $props();
 
@@ -135,349 +138,166 @@
 </script>
 
 {#if bisect?.active}
-  <div class="banner" class:done={bisect.remaining === 0} role="status">
+  <div
+    class={"banner flex flex-wrap items-center gap-2 border-b border-border px-3 py-1.5 text-[0.8125rem] " +
+      (bisect.remaining === 0
+        ? "done bg-primary/15 text-primary"
+        : "bg-secondary text-secondary-foreground")}
+    role="status"
+  >
     {#if bisect.remaining === 0}
-      <span class="title">Bisect complete</span>
-      <span class="detail">
-        First bad commit: <code>{bisect.bad.slice(0, 8)}</code>
+      <span class="title flex-none font-semibold">Bisect complete</span>
+      <span class="detail min-w-0 overflow-hidden text-ellipsis whitespace-nowrap">
+        First bad commit: <code class="font-mono">{bisect.bad.slice(0, 8)}</code>
       </span>
-      <button class="btn" type="button" onclick={() => emitUiEvent("history-select-commit", { sha: bisect?.bad ?? "" })}>
+      <Button variant="outline" size="xs" class="flex-none rounded-full px-2.5 text-[0.72rem]" type="button" onclick={() => emitUiEvent("history-select-commit", { sha: bisect?.bad ?? "" })}>
         Show in history
-      </button>
+      </Button>
     {:else}
-      <span class="title">Bisect</span>
-      <span class="detail">
-        testing <code>{(bisect.current ?? "").slice(0, 8)}</code>
+      <span class="title flex-none font-semibold">Bisect</span>
+      <span class="detail min-w-0 overflow-hidden text-ellipsis whitespace-nowrap">
+        testing <code class="font-mono">{(bisect.current ?? "").slice(0, 8)}</code>
         · {bisect.remaining} candidate{bisect.remaining === 1 ? "" : "s"} left
       </span>
-      <button class="btn good" type="button" disabled={marking} onclick={() => void onMark("good")}>Good</button>
-      <button class="btn bad" type="button" disabled={marking} onclick={() => void onMark("bad")}>Bad</button>
-      <button class="btn" type="button" disabled={marking} onclick={() => void onMark("skip")}>Skip</button>
+      <Button variant="default" size="xs" class="flex-none rounded-full px-2.5 text-[0.72rem]" type="button" disabled={marking} onclick={() => void onMark("good")}>Good</Button>
+      <Button variant="destructive" size="xs" class="flex-none rounded-full px-2.5 text-[0.72rem]" type="button" disabled={marking} onclick={() => void onMark("bad")}>Bad</Button>
+      <Button variant="outline" size="xs" class="flex-none rounded-full px-2.5 text-[0.72rem]" type="button" disabled={marking} onclick={() => void onMark("skip")}>Skip</Button>
     {/if}
-    <button class="btn subtle" type="button" disabled={marking} onclick={() => void onLog()}>
+    <Button variant="outline" size="xs" class="btn subtle ml-auto flex-none rounded-full px-2.5 text-[0.72rem]" type="button" disabled={marking} onclick={() => void onLog()}>
       Log…
-    </button>
-    <button class="btn subtle" type="button" disabled={marking} onclick={() => void onReset()}>
+    </Button>
+    <Button variant="outline" size="xs" class="btn subtle ml-auto flex-none rounded-full px-2.5 text-[0.72rem]" type="button" disabled={marking} onclick={() => void onReset()}>
       Reset
-    </button>
+    </Button>
   </div>
 {:else if showLauncher}
-  <button class="launcher" type="button" onclick={() => {
-    badRef = status?.head ?? "";
-    goodRef = "";
-    startOpen = true;
-  }}>
+  <Button
+    variant="outline"
+    size="xs"
+    class="launcher mx-2 my-1 self-start rounded-full px-2.5 text-[0.72rem] text-muted-foreground"
+    type="button"
+    onclick={() => {
+      badRef = status?.head ?? "";
+      goodRef = "";
+      startOpen = true;
+    }}
+  >
     Bisect…
-  </button>
+  </Button>
 {/if}
 
 {#if startOpen}
-  <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-  <div
-    class="scrim"
-    role="presentation"
-    onkeydown={(e) => {
-      if (e.key === "Escape") {
-        e.preventDefault();
-        startOpen = false;
-      }
-    }}
-  >
-    <!-- svelte-ignore a11y_no_noninteractive_element_to_interactive_role -->
-    <form
-      class="dialog"
+  <Dialog.Root open={true}>
+    <!-- svelte-ignore a11y_click_events_have_key_events -->
+    <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+    <Dialog.Overlay class="scrim bg-black/40" role="presentation" />
+    <Dialog.Content
+      class="dialog w-[min(24rem,calc(100vw-2rem))] max-w-none gap-0 rounded-2xl bg-card px-6 py-5 text-sm text-popover-foreground shadow-lg sm:max-w-none"
       role="dialog"
       aria-modal="true"
       aria-labelledby="bisect-title"
-      onsubmit={(e) => {
-        e.preventDefault();
-        void onStart();
+      showCloseButton={false}
+      escapeKeydownBehavior="ignore"
+      interactOutsideBehavior="ignore"
+      onkeydown={(e) => {
+        if (e.key === "Escape") {
+          e.preventDefault();
+          startOpen = false;
+        }
       }}
     >
-      <h2 id="bisect-title" class="title">Start bisect</h2>
-      <p class="text">
-        Binary-search history for the first bad commit. HEAD detaches onto
-        probes until you mark and reset.
-      </p>
-      <label class="field">
-        <span>Bad (search starts here)</span>
-        <input bind:value={badRef} placeholder="HEAD or ref" aria-label="Bad commit-ish" />
-      </label>
-      <label class="field">
-        <span>Good (last known-good, optional)</span>
-        <input bind:value={goodRef} placeholder="ref or sha" aria-label="Good commit-ish" />
-      </label>
-      <div class="actions">
-        <button class="secondary" type="button" onclick={() => (startOpen = false)}>
-          Cancel
-        </button>
-        <button class="primary" type="submit" disabled={starting || !badRef.trim()}>
-          {starting ? "Starting…" : "Start"}
-        </button>
-      </div>
-    </form>
-  </div>
+      <form
+        onsubmit={(e) => {
+          e.preventDefault();
+          void onStart();
+        }}
+      >
+        <Dialog.Title id="bisect-title" class="mb-2 text-lg font-medium text-foreground">Start bisect</Dialog.Title>
+        <p class="text mb-3 text-muted-foreground">
+          Binary-search history for the first bad commit. HEAD detaches onto
+          probes until you mark and reset.
+        </p>
+        <label class="field mb-2.5 flex flex-col gap-1 text-xs text-muted-foreground">
+          <span>Bad (search starts here)</span>
+          <Input
+            class="h-auto rounded-lg px-1.5 py-1 text-[0.8125rem] focus-visible:-outline-offset-1"
+            bind:value={badRef}
+            placeholder="HEAD or ref"
+            aria-label="Bad commit-ish"
+          />
+        </label>
+        <label class="field mb-2.5 flex flex-col gap-1 text-xs text-muted-foreground">
+          <span>Good (last known-good, optional)</span>
+          <Input
+            class="h-auto rounded-lg px-1.5 py-1 text-[0.8125rem] focus-visible:-outline-offset-1"
+            bind:value={goodRef}
+            placeholder="ref or sha"
+            aria-label="Good commit-ish"
+          />
+        </label>
+        <div class="actions mt-3 flex justify-end gap-2">
+          <Button variant="outline" class="text-muted-foreground" type="button" onclick={() => (startOpen = false)}>
+            Cancel
+          </Button>
+          <Button variant="default" type="submit" disabled={starting || !badRef.trim()}>
+            {starting ? "Starting…" : "Start"}
+          </Button>
+        </div>
+      </form>
+    </Dialog.Content>
+  </Dialog.Root>
 {/if}
 
 {#if logOpen}
   <!-- M12: bisect mark history (oldest first; empty state handled). -->
-  <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-  <div
-    class="scrim"
-    role="presentation"
-    onkeydown={(e) => {
-      if (e.key === "Escape") {
-        e.preventDefault();
-        logOpen = false;
-      }
-    }}
-  >
-    <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="bisect-log-title">
-      <h2 id="bisect-log-title" class="title">Bisect log</h2>
+  <Dialog.Root open={true}>
+    <!-- svelte-ignore a11y_click_events_have_key_events -->
+    <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+    <Dialog.Overlay class="scrim bg-black/40" role="presentation" />
+    <Dialog.Content
+      class="dialog w-[min(24rem,calc(100vw-2rem))] max-w-none gap-0 rounded-2xl bg-card px-6 py-5 text-sm text-popover-foreground shadow-lg sm:max-w-none"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="bisect-log-title"
+      showCloseButton={false}
+      escapeKeydownBehavior="ignore"
+      interactOutsideBehavior="ignore"
+      onkeydown={(e) => {
+        if (e.key === "Escape") {
+          e.preventDefault();
+          logOpen = false;
+        }
+      }}
+    >
+      <Dialog.Title id="bisect-log-title" class="mb-2 text-lg font-medium text-foreground">Bisect log</Dialog.Title>
       {#if logLoading}
-        <p class="text">Loading…</p>
+        <p class="text mb-3 text-muted-foreground">Loading…</p>
       {:else if logEntries === null || logEntries.length === 0}
-        <p class="text">No marks recorded yet — mark a probe Good, Bad or Skip first.</p>
+        <p class="text mb-3 text-muted-foreground">No marks recorded yet — mark a probe Good, Bad or Skip first.</p>
       {:else}
-        <ol class="log-list" aria-label="Marks, oldest first">
+        <ol class="log-list m-0 mb-1 max-h-64 list-none overflow-y-auto p-0 text-xs" aria-label="Marks, oldest first">
           {#each logEntries as entry, i (i)}
-            <li class="log-row">
-              <span class={`mark mark-${entry.mark}`}>{entry.mark}</span>
-              <code class="log-sha" title={entry.sha}>{entry.sha.slice(0, 8)}</code>
-              <span class="log-time">{formatDateTime(entry.at)}</span>
+            <li class="log-row flex items-center gap-2 py-0.5">
+              <span
+                class={"mark w-12 flex-none rounded-full px-1.5 text-center text-[0.625rem] font-semibold uppercase tracking-wide " +
+                  `mark-${entry.mark} ` +
+                  (entry.mark === "good"
+                    ? "bg-primary/15 text-primary"
+                    : entry.mark === "bad"
+                      ? "bg-destructive/10 text-destructive"
+                      : "bg-muted text-muted-foreground")}
+              >{entry.mark}</span>
+              <code class="log-sha font-mono text-primary" title={entry.sha}>{entry.sha.slice(0, 8)}</code>
+              <span class="log-time ml-auto text-[0.6875rem] text-muted-foreground">{formatDateTime(entry.at)}</span>
             </li>
           {/each}
         </ol>
       {/if}
-      <div class="actions">
-        <button class="secondary" type="button" onclick={() => (logOpen = false)}>
+      <div class="actions mt-3 flex justify-end gap-2">
+        <Button variant="outline" class="text-muted-foreground" type="button" onclick={() => (logOpen = false)}>
           Close
-        </button>
+        </Button>
       </div>
-    </div>
-  </div>
+    </Dialog.Content>
+  </Dialog.Root>
 {/if}
-
-<style>
-  .banner {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    flex-wrap: wrap;
-    padding: 0.375rem 0.75rem;
-    background: var(--m3-tertiary-container, var(--m3-surface-container));
-    color: var(--m3-on-tertiary-container, var(--m3-on-surface));
-    border-bottom: 1px solid var(--m3-outline-variant, transparent);
-    font-size: 0.8125rem;
-  }
-
-  .banner.done {
-    background: var(--m3-primary-container, var(--m3-surface-container));
-    color: var(--m3-on-primary-container, var(--m3-on-surface));
-  }
-
-  .title {
-    font-weight: 600;
-    flex: none;
-  }
-
-  .detail {
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  code {
-    font-family: ui-monospace, Consolas, monospace;
-  }
-
-  .btn {
-    flex: none;
-    border: 1px solid var(--m3-outline-variant, transparent);
-    border-radius: var(--m3-shape-full, 9999px);
-    background: var(--m3-surface, none);
-    color: var(--m3-on-surface);
-    font: inherit;
-    font-size: 0.72rem;
-    padding: 0.2rem 0.7rem;
-    cursor: pointer;
-  }
-
-  .btn.good {
-    background: var(--m3-primary);
-    color: var(--m3-on-primary);
-    border: none;
-  }
-
-  .btn.bad {
-    background: var(--m3-error);
-    color: var(--m3-on-error);
-    border: none;
-  }
-
-  .btn.subtle {
-    margin-left: auto;
-  }
-
-  .btn:disabled {
-    opacity: 0.55;
-    cursor: not-allowed;
-  }
-
-  .launcher {
-    align-self: flex-start;
-    margin: 0.25rem 0.5rem;
-    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    border-radius: var(--m3-shape-full, 9999px);
-    background: none;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    font: inherit;
-    font-size: 0.72rem;
-    padding: 0.15rem 0.7rem;
-    cursor: pointer;
-  }
-
-  .scrim {
-    position: fixed;
-    inset: 0;
-    z-index: 70;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: color-mix(in srgb, var(--m3-scrim, black) 40%, transparent);
-  }
-
-  .dialog {
-    width: min(24rem, calc(100vw - 2rem));
-    padding: 1.25rem 1.5rem;
-    border-radius: var(--m3-shape-large, 16px);
-    background: var(--m3-surface-container-high, var(--m3-surface));
-    color: var(--m3-on-surface);
-    box-shadow: var(--m3-elevation-3, 0 8px 24px rgba(0, 0, 0, 0.3));
-    font-size: 0.875rem;
-  }
-
-  .title {
-    margin: 0 0 0.5rem;
-    font-size: 1.125rem;
-    font-weight: 500;
-  }
-
-  .text {
-    margin: 0 0 0.75rem;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-  }
-
-  .field {
-    display: flex;
-    flex-direction: column;
-    gap: 0.25rem;
-    margin-bottom: 0.6rem;
-    font-size: 0.75rem;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-  }
-
-  .field input {
-    font: inherit;
-    font-size: 0.8125rem;
-    color: var(--m3-on-surface);
-    background: var(--m3-surface-container-lowest, var(--m3-surface));
-    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    border-radius: var(--m3-shape-small, 8px);
-    padding: 0.4rem 0.6rem;
-  }
-
-  .field input:focus-visible {
-    outline: 2px solid var(--m3-primary);
-    outline-offset: -1px;
-  }
-
-  .actions {
-    display: flex;
-    justify-content: flex-end;
-    gap: 0.5rem;
-    margin-top: 0.75rem;
-  }
-
-  /* M12: mark-history dialog rows. */
-  .log-list {
-    margin: 0 0 0.25rem;
-    padding: 0;
-    list-style: none;
-    max-height: 16rem;
-    overflow-y: auto;
-    font-size: 0.75rem;
-  }
-
-  .log-row {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    padding: 0.15rem 0;
-  }
-
-  .mark {
-    flex: none;
-    width: 3rem;
-    padding: 0 0.35rem;
-    border-radius: var(--m3-shape-full, 9999px);
-    font-size: 0.625rem;
-    text-align: center;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.03em;
-  }
-
-  .mark-good {
-    background: var(--m3-primary-container, transparent);
-    color: var(--m3-on-primary-container, inherit);
-  }
-
-  .mark-bad {
-    background: var(--m3-error-container, transparent);
-    color: var(--m3-on-error-container, inherit);
-  }
-
-  .mark-skip {
-    background: var(--m3-surface-container-highest, transparent);
-    color: var(--m3-on-surface-variant, inherit);
-  }
-
-  .log-sha {
-    font-family: ui-monospace, Consolas, monospace;
-    color: var(--m3-primary);
-  }
-
-  .log-time {
-    margin-left: auto;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    font-size: 0.6875rem;
-  }
-
-  .primary {
-    border: none;
-    border-radius: var(--m3-shape-full, 9999px);
-    background: var(--m3-primary);
-    color: var(--m3-on-primary);
-    font: inherit;
-    font-weight: 500;
-    padding: 0.45rem 1.25rem;
-    cursor: pointer;
-  }
-
-  .primary:disabled {
-    opacity: 0.55;
-    cursor: not-allowed;
-  }
-
-  .secondary {
-    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    border-radius: var(--m3-shape-full, 9999px);
-    background: none;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    font: inherit;
-    padding: 0.45rem 1rem;
-    cursor: pointer;
-  }
-</style>

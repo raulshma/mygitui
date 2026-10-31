@@ -23,6 +23,7 @@
   import type { LfsStatus, RepoHealth, SparseInfo } from "$lib/ipc/types";
   import { toast } from "$lib/toast";
   import { formatRelativeTime } from "$lib/git/format";
+  import { Button } from "$lib/components/ui/button/index.js";
 
   let {
     repoId,
@@ -182,80 +183,84 @@
   }
 </script>
 
-<aside class="repo-panel" aria-label="Repository health and maintenance">
-  <div class="toolbar">
-    <button class="tb" type="button" onclick={() => void reload()} disabled={running !== null}>
+<aside
+  class="repo-panel flex min-h-0 flex-col overflow-y-auto bg-background pb-3 text-[13px] text-foreground"
+  aria-label="Repository health and maintenance"
+>
+  <div class="toolbar flex shrink-0 items-center gap-2 px-2 py-1.5">
+    <Button class="h-auto rounded px-2 py-[3px] text-[11.5px] font-normal text-muted-foreground" variant="outline" type="button" onclick={() => void reload()} disabled={running !== null}>
       Refresh
-    </button>
-    {#if running}<span class="busy" role="status">{running} running…</span>{/if}
+    </Button>
+    {#if running}<span class="busy text-[11.5px] text-muted-foreground" role="status">{running} running…</span>{/if}
   </div>
 
   {#if error}
-    <p class="state error" role="alert">{error}</p>
+    <p class="state error mb-1.5 text-xs text-destructive" role="alert">{error}</p>
   {:else if health}
-    <section class="group" aria-label="Size and objects">
-      <h2 class="head">Health</h2>
-      <dl class="facts">
-        <dt>Git directory</dt>
-        <dd>{fmtSize(health.git_size_bytes)}</dd>
-        <dt>Worktree</dt>
-        <dd>{fmtSize(health.worktree_size_bytes)}</dd>
-        <dt>Loose objects</dt>
-        <dd>{health.loose_objects}</dd>
-        <dt>Pack files</dt>
-        <dd>{health.pack_files}</dd>
-        <dt>Commit-graph</dt>
-        <dd>
+    <section class="group border-t border-border px-2 py-1.5" aria-label="Size and objects">
+      <h2 class="head mb-1.5 text-xs font-semibold uppercase tracking-[0.05em] text-muted-foreground">Health</h2>
+      <dl class="facts mb-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-[2px] text-xs">
+        <dt class="text-muted-foreground">Git directory</dt>
+        <dd class="m-0 font-mono">{fmtSize(health.git_size_bytes)}</dd>
+        <dt class="text-muted-foreground">Worktree</dt>
+        <dd class="m-0 font-mono">{fmtSize(health.worktree_size_bytes)}</dd>
+        <dt class="text-muted-foreground">Loose objects</dt>
+        <dd class="m-0 font-mono">{health.loose_objects}</dd>
+        <dt class="text-muted-foreground">Pack files</dt>
+        <dd class="m-0 font-mono">{health.pack_files}</dd>
+        <dt class="text-muted-foreground">Commit-graph</dt>
+        <dd class="m-0 font-mono">
           {#if health.has_commit_graph}
             yes ({fmtSize(health.commit_graph_bytes)})
           {:else}
-            <span class="warn">none — write one for faster history walks</span>
+            <span class="warn text-amber-600 dark:text-amber-400">none — write one for faster history walks</span>
           {/if}
         </dd>
-        <dt>Packed refs</dt>
-        <dd>{health.packed_refs ? "yes" : "no"}</dd>
+        <dt class="text-muted-foreground">Packed refs</dt>
+        <dd class="m-0 font-mono">{health.packed_refs ? "yes" : "no"}</dd>
       </dl>
-      <div class="ops">
-        <button class="tb" type="button" disabled={running !== null} onclick={() => void run("count_objects", "Count objects")}>
+      <div class="ops flex flex-wrap gap-1.5">
+        <Button class="h-auto rounded px-2 py-[3px] text-[11.5px] font-normal text-muted-foreground" variant="outline" type="button" disabled={running !== null} onclick={() => void run("count_objects", "Count objects")}>
           Count objects
-        </button>
-        <button class="tb" type="button" disabled={running !== null} title="Write the commit-graph (faster log on big repos)" onclick={() => void run("commit_graph", "Commit-graph write")}>
+        </Button>
+        <Button class="h-auto rounded px-2 py-[3px] text-[11.5px] font-normal text-muted-foreground" variant="outline" type="button" disabled={running !== null} title="Write the commit-graph (faster log on big repos)" onclick={() => void run("commit_graph", "Commit-graph write")}>
           Write commit-graph
-        </button>
-        <button class="tb" type="button" disabled={running !== null} onclick={() => void run("pack_refs", "Pack refs")}>
+        </Button>
+        <Button class="h-auto rounded px-2 py-[3px] text-[11.5px] font-normal text-muted-foreground" variant="outline" type="button" disabled={running !== null} onclick={() => void run("pack_refs", "Pack refs")}>
           Pack refs
-        </button>
-        <button class="tb" type="button" disabled={running !== null} title="git prune — drops unreachable loose objects" onclick={() => void run("prune", "Prune")}>
+        </Button>
+        <Button class="h-auto rounded px-2 py-[3px] text-[11.5px] font-normal text-muted-foreground" variant="outline" type="button" disabled={running !== null} title="git prune — drops unreachable loose objects" onclick={() => void run("prune", "Prune")}>
           Prune
-        </button>
-        <button class="tb" type="button" disabled={running !== null} title="git gc --auto — pack, repack, and tidy" onclick={() => void run("gc", "GC")}>
+        </Button>
+        <Button class="h-auto rounded px-2 py-[3px] text-[11.5px] font-normal text-muted-foreground" variant="outline" type="button" disabled={running !== null} title="git gc --auto — pack, repack, and tidy" onclick={() => void run("gc", "GC")}>
           GC
-        </button>
+        </Button>
         <!-- M12: git fsck — object-store integrity + dangling-object census.
              The result block below stays hidden until the first run
              (fsck_dangling is null in a fresh RepoHealth). -->
-        <button class="tb" type="button" disabled={running !== null} title="git fsck — check object connectivity and list dangling objects" onclick={() => void run("fsck", "Check objects")}>
+        <Button class="h-auto rounded px-2 py-[3px] text-[11.5px] font-normal text-muted-foreground" variant="outline" type="button" disabled={running !== null} title="git fsck — check object connectivity and list dangling objects" onclick={() => void run("fsck", "Check objects")}>
           Check objects (fsck)
-        </button>
+        </Button>
       </div>
 
       {#if health.fsck_dangling !== null}
-        <div class="fsck" aria-label="Dangling objects">
-          <p class="state">
+        <div class="fsck mt-1.5" aria-label="Dangling objects">
+          <p class="state mb-1.5 text-xs text-muted-foreground">
             Dangling objects: {health.fsck_dangling}{#if fsckRanAt}
               (checked {formatRelativeTime(Math.floor(fsckRanAt / 1000))}){/if}
           </p>
           {#if health.fsck_samples.length > 0}
-            <div class="fsck-samples">
+            <div class="fsck-samples flex flex-wrap gap-1">
               {#each health.fsck_samples as sha (sha)}
-                <button
-                  class="sha"
+                <Button
+                  class="h-auto rounded px-[5px] py-[2px] font-mono text-[11px] font-normal text-muted-foreground"
+                  variant="outline"
                   type="button"
                   title="Copy {sha}"
                   onclick={() => void copySha(sha)}
                 >
                   {sha.slice(0, 12)}
-                </button>
+                </Button>
               {/each}
             </div>
           {/if}
@@ -263,275 +268,87 @@
       {/if}
     </section>
 
-    <section class="group" aria-label="Archive export">
-      <h2 class="head">Archive</h2>
-      <div class="row">
+    <section class="group border-t border-border px-2 py-1.5" aria-label="Archive export">
+      <h2 class="head mb-1.5 text-xs font-semibold uppercase tracking-[0.05em] text-muted-foreground">Archive</h2>
+      <div class="row flex items-center gap-1.5">
         <input
-          class="text"
+          class="text min-w-20 flex-1 rounded border border-border bg-background px-[7px] py-[3px] text-xs text-foreground"
           bind:value={archiveSpecText}
           placeholder="ref or sha"
           aria-label="Archive ref"
         />
-        <select bind:value={archiveFormat} aria-label="Archive format">
+        <select
+          class="rounded border border-border bg-background px-1 py-[2px] text-[11.5px] text-foreground"
+          bind:value={archiveFormat}
+          aria-label="Archive format"
+        >
           <option value="zip">zip</option>
           <option value="tar">tar</option>
           <option value="tar.gz">tar.gz</option>
         </select>
-        <button class="go" type="button" disabled={archiving || !archiveSpecText.trim()} onclick={() => void onArchive()}>
+        <Button
+          class="h-auto rounded-full px-3 py-[3px] text-[11.5px]"
+          type="button"
+          disabled={archiving || !archiveSpecText.trim()}
+          onclick={() => void onArchive()}
+        >
           {archiving ? "Exporting…" : "Export…"}
-        </button>
+        </Button>
       </div>
     </section>
 
-    <section class="group" aria-label="Sparse checkout">
-      <h2 class="head">Sparse checkout (cone mode)</h2>
+    <section class="group border-t border-border px-2 py-1.5" aria-label="Sparse checkout">
+      <h2 class="head mb-1.5 text-xs font-semibold uppercase tracking-[0.05em] text-muted-foreground">Sparse checkout (cone mode)</h2>
       {#if sparse}
-        <p class="state">
+        <p class="state mb-1.5 text-xs text-muted-foreground">
           {sparse.enabled
             ? `${sparse.patterns.length} pattern${sparse.patterns.length === 1 ? "" : "s"}${sparse.cone ? "" : " (non-cone)"}`
             : "Full checkout (sparse disabled)."}
         </p>
       {/if}
       <textarea
-        class="patterns"
+        class="patterns mb-1.5 w-full resize-y rounded border border-border bg-background px-[7px] py-1 font-mono text-xs text-foreground focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-ring"
         rows="4"
         bind:value={sparseText}
         placeholder="one directory pattern per line, e.g.&#10;src/&#10;docs/"
         aria-label="Sparse checkout patterns"
       ></textarea>
-      <div class="ops">
-        <button class="tb" type="button" disabled={sparseBusy} onclick={() => void onSparseApply(false)}>
+      <div class="ops flex flex-wrap gap-1.5">
+        <Button class="h-auto rounded px-2 py-[3px] text-[11.5px] font-normal text-muted-foreground" variant="outline" type="button" disabled={sparseBusy} onclick={() => void onSparseApply(false)}>
           Apply
-        </button>
-        <button class="tb" type="button" disabled={sparseBusy} onclick={() => void onSparseApply(true)}>
+        </Button>
+        <Button class="h-auto rounded px-2 py-[3px] text-[11.5px] font-normal text-muted-foreground" variant="outline" type="button" disabled={sparseBusy} onclick={() => void onSparseApply(true)}>
           Add
-        </button>
-        <button class="tb danger" type="button" disabled={sparseBusy} title="Back to a full checkout" onclick={() => { sparseText = ""; void onSparseApply(false); }}>
+        </Button>
+        <Button class="h-auto rounded px-2 py-[3px] text-[11.5px] font-normal" variant="destructive" type="button" disabled={sparseBusy} title="Back to a full checkout" onclick={() => { sparseText = ""; void onSparseApply(false); }}>
           Disable
-        </button>
+        </Button>
       </div>
     </section>
 
-    <section class="group" aria-label="Git LFS">
-      <h2 class="head">Git LFS</h2>
+    <section class="group border-t border-border px-2 py-1.5" aria-label="Git LFS">
+      <h2 class="head mb-1.5 text-xs font-semibold uppercase tracking-[0.05em] text-muted-foreground">Git LFS</h2>
       {#if lfs?.installed}
-        <p class="state">{lfs.version}</p>
+        <p class="state mb-1.5 text-xs text-muted-foreground">{lfs.version}</p>
         {#if lfs.tracked_patterns.length > 0}
-          <p class="state">Tracking: {lfs.tracked_patterns.join(", ")}</p>
+          <p class="state mb-1.5 text-xs text-muted-foreground">Tracking: {lfs.tracked_patterns.join(", ")}</p>
         {:else}
-          <p class="state">No filter=lfs patterns in tracked .gitattributes.</p>
+          <p class="state mb-1.5 text-xs text-muted-foreground">No filter=lfs patterns in tracked .gitattributes.</p>
         {/if}
-        <div class="ops">
-          <button class="tb" type="button" disabled={lfsBusy} onclick={() => void onLfs("pull")}>Pull</button>
-          <button class="tb" type="button" disabled={lfsBusy} onclick={() => void onLfs("push")}>Push</button>
-          <button class="tb" type="button" disabled={lfsBusy} onclick={() => void onLfs("fetch")}>Fetch</button>
+        <div class="ops flex flex-wrap gap-1.5">
+          <Button class="h-auto rounded px-2 py-[3px] text-[11.5px] font-normal text-muted-foreground" variant="outline" type="button" disabled={lfsBusy} onclick={() => void onLfs("pull")}>Pull</Button>
+          <Button class="h-auto rounded px-2 py-[3px] text-[11.5px] font-normal text-muted-foreground" variant="outline" type="button" disabled={lfsBusy} onclick={() => void onLfs("push")}>Push</Button>
+          <Button class="h-auto rounded px-2 py-[3px] text-[11.5px] font-normal text-muted-foreground" variant="outline" type="button" disabled={lfsBusy} onclick={() => void onLfs("fetch")}>Fetch</Button>
         </div>
       {:else if lfs}
-        <p class="state warn">
-          git lfs is not installed — install it from <code>git-lfs.com</code>, then re-run setup here.
+        <p class="state warn mb-1.5 text-xs text-amber-600 dark:text-amber-400">
+          git lfs is not installed — install it from <code class="font-mono">git-lfs.com</code>, then re-run setup here.
         </p>
       {:else}
-        <p class="state">Detecting…</p>
+        <p class="state mb-1.5 text-xs text-muted-foreground">Detecting…</p>
       {/if}
     </section>
   {:else}
-    <p class="state">Loading health…</p>
+    <p class="state mb-1.5 text-xs text-muted-foreground">Loading health…</p>
   {/if}
 </aside>
-
-<style>
-  .repo-panel {
-    display: flex;
-    flex-direction: column;
-    min-height: 0;
-    overflow-y: auto;
-    font-size: 0.8125rem;
-    padding-bottom: 0.75rem;
-  }
-
-  .toolbar {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    padding: 0.375rem 0.5rem;
-    flex: none;
-  }
-
-  .busy {
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    font-size: 0.72rem;
-  }
-
-  .group {
-    border-top: 1px solid var(--m3-outline-variant, transparent);
-    padding: 0.375rem 0.5rem;
-  }
-
-  .head {
-    margin: 0 0 0.375rem;
-    font-size: 0.75rem;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-  }
-
-  .facts {
-    margin: 0 0 0.5rem;
-    display: grid;
-    grid-template-columns: auto 1fr;
-    gap: 0.1rem 0.75rem;
-    font-size: 0.75rem;
-  }
-
-  .facts dt {
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-  }
-
-  .facts dd {
-    margin: 0;
-    font-family: ui-monospace, Consolas, monospace;
-  }
-
-  .ops {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.375rem;
-  }
-
-  .tb {
-    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    border-radius: var(--m3-shape-extra-small, 4px);
-    background: none;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    font: inherit;
-    font-size: 0.72rem;
-    padding: 0.15rem 0.5rem;
-    cursor: pointer;
-  }
-
-  .tb:hover:not(:disabled) {
-    background: var(--m3-surface-container-high, var(--m3-surface));
-  }
-
-  .tb:disabled {
-    opacity: 0.55;
-    cursor: not-allowed;
-  }
-
-  .tb.danger {
-    color: var(--m3-error, inherit);
-  }
-
-  .go {
-    border: none;
-    border-radius: var(--m3-shape-full, 9999px);
-    background: var(--m3-primary);
-    color: var(--m3-on-primary);
-    font: inherit;
-    font-size: 0.72rem;
-    padding: 0.2rem 0.75rem;
-    cursor: pointer;
-  }
-
-  .go:disabled {
-    opacity: 0.55;
-    cursor: not-allowed;
-  }
-
-  .row {
-    display: flex;
-    align-items: center;
-    gap: 0.375rem;
-  }
-
-  .text {
-    flex: 1;
-    min-width: 5rem;
-    font: inherit;
-    font-size: 0.75rem;
-    color: var(--m3-on-surface);
-    background: var(--m3-surface-container-lowest, var(--m3-surface));
-    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    border-radius: var(--m3-shape-extra-small, 4px);
-    padding: 0.2rem 0.45rem;
-  }
-
-  select {
-    font: inherit;
-    font-size: 0.72rem;
-    color: var(--m3-on-surface);
-    background: var(--m3-surface-container-lowest, var(--m3-surface));
-    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    border-radius: var(--m3-shape-extra-small, 4px);
-    padding: 0.15rem 0.3rem;
-  }
-
-  .patterns {
-    width: 100%;
-    box-sizing: border-box;
-    font: ui-monospace, Consolas, monospace;
-    font-size: 0.75rem;
-    color: var(--m3-on-surface);
-    background: var(--m3-surface-container-lowest, var(--m3-surface));
-    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    border-radius: var(--m3-shape-extra-small, 4px);
-    padding: 0.3rem 0.45rem;
-    margin-bottom: 0.375rem;
-    resize: vertical;
-  }
-
-  .patterns:focus-visible {
-    outline: 2px solid var(--m3-primary);
-    outline-offset: -1px;
-  }
-
-  .state {
-    margin: 0 0 0.375rem;
-    font-size: 0.75rem;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-  }
-
-  .warn {
-    color: var(--m3-tertiary, var(--m3-on-surface-variant));
-  }
-
-  code {
-    font-family: ui-monospace, Consolas, monospace;
-  }
-
-  /* M12: fsck dangling-objects block. */
-  .fsck {
-    margin-top: 0.375rem;
-  }
-
-  .fsck .state {
-    margin-bottom: 0.25rem;
-  }
-
-  .fsck-samples {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.25rem;
-  }
-
-  button.sha {
-    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    border-radius: var(--m3-shape-extra-small, 4px);
-    background: none;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    font-family: ui-monospace, Consolas, monospace;
-    font-size: 0.6875rem;
-    padding: 0.1rem 0.35rem;
-    cursor: pointer;
-  }
-
-  button.sha:hover {
-    background: var(--m3-surface-container-high, var(--m3-surface));
-  }
-
-  button.sha:focus-visible {
-    outline: 2px solid var(--m3-primary);
-    outline-offset: 1px;
-  }
-</style>

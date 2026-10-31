@@ -14,15 +14,9 @@
 </script>
 
 <svg
+  class="inline-block align-middle"
   viewBox="{icon.left ?? 0} {icon.top ?? 0} {icon.width} {icon.height}"
   width={size}
   height={size}
   aria-hidden="true"
 >{@html icon.body}</svg>
-
-<style>
-  svg {
-    display: inline-block;
-    vertical-align: middle;
-  }
-</style>

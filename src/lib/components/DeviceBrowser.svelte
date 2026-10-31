@@ -19,6 +19,8 @@
   import Icon from "$lib/components/icons/Icon.svelte";
   import iconDir from "@ktibow/iconset-material-symbols/folder";
   import iconRepo from "@ktibow/iconset-material-symbols/folder-code";
+  import { Button } from "$lib/components/ui/button/index.js";
+  import { Input } from "$lib/components/ui/input/index.js";
 
   let { deviceId }: { deviceId: string } = $props();
 
@@ -116,17 +118,25 @@
   });
 </script>
 
-<section class="browser" aria-label="Device files">
-  <nav class="crumbs" aria-label="Device path">
+<section class="browser flex min-w-0 flex-col gap-2.5" aria-label="Device files">
+  <nav
+    class="crumbs text-muted-foreground flex flex-wrap items-center gap-1 text-[0.8125rem]"
+    aria-label="Device path"
+  >
     {#each crumbs as crumb, index (crumb.target)}
       {#if index > 0}
-        <span class="crumb-sep" aria-hidden="true">/</span>
+        <span class="crumb-sep opacity-60" aria-hidden="true">/</span>
       {/if}
       {#if index === crumbs.length - 1}
-        <span class="crumb current" aria-current="location">{crumb.label}</span>
+        <span
+          class="crumb current cursor-default font-medium text-foreground"
+          aria-current="location"
+        >
+          {crumb.label}
+        </span>
       {:else}
         <button
-          class="crumb"
+          class="crumb focus-visible:outline-primary hover:bg-muted text-primary max-w-64 cursor-pointer truncate rounded-md border-0 bg-transparent px-1 py-0.5 text-[0.8125rem] outline-none focus-visible:outline-2"
           type="button"
           onclick={() => void browse(crumb.target)}
         >
@@ -136,16 +146,16 @@
     {/each}
   </nav>
 
-  <div class="toolbar">
+  <div class="toolbar flex flex-wrap items-center gap-2">
     <form
-      class="path-jump"
+      class="path-jump flex min-w-56 flex-1 gap-2"
       onsubmit={(event) => {
         event.preventDefault();
         onManualSubmit();
       }}
     >
-      <input
-        class="input"
+      <Input
+        class="input min-w-0 flex-1 font-mono text-[0.8125rem]"
         type="text"
         aria-label="Device path"
         placeholder="Absolute path (empty = home, ~ = home)"
@@ -153,301 +163,105 @@
         spellcheck="false"
         bind:value={manualPath}
       />
-      <button class="secondary" type="submit" disabled={loading}>
+      <Button class="secondary" variant="outline" size="xs" type="submit" disabled={loading}>
         Go
-      </button>
+      </Button>
     </form>
-    <button
+    <Button
       class="secondary"
+      variant="outline"
+      size="xs"
       type="button"
       disabled={scanning}
       onclick={() => void scanHome()}
     >
       {scanning ? "Scanning…" : "Scan home"}
-    </button>
+    </Button>
   </div>
 
   {#if error}
-    <p class="error" role="alert">{error}</p>
+    <p class="error text-destructive wrap-anywhere m-0 text-[0.8125rem]" role="alert">
+      {error}
+    </p>
   {:else if loading}
-    <p class="hint" aria-busy="true">Loading…</p>
+    <p class="hint text-muted-foreground m-0 text-[0.8125rem]" aria-busy="true">
+      Loading…
+    </p>
   {:else if listing}
-    <ul class="rows" aria-label="Directory contents">
+    <ul class="rows m-0 flex list-none flex-col gap-1 p-0" aria-label="Directory contents">
       {#each entries as entry (entry.path)}
-        <li class="row-wrapper">
+        <li class="row-wrapper hover:border-border flex items-center gap-1.5 rounded-xl border border-transparent bg-card">
           {#if entry.kind === "dir"}
             <button
-              class="row"
+              class="row text-foreground flex w-full min-w-0 flex-1 cursor-pointer items-center gap-2.5 border-0 bg-transparent px-2.5 py-1.5 text-left"
               type="button"
               onclick={() => void browse(entry.path)}
             >
-              <span class="row-icon" aria-hidden="true">
+              <span class="row-icon inline-flex flex-none text-primary" aria-hidden="true">
                 <Icon icon={iconDir} size={18} />
               </span>
-              <span class="row-name">{entry.name}</span>
+              <span class="row-name truncate min-w-0 text-sm">{entry.name}</span>
             </button>
           {:else}
-            <span class="row static">
-              <span class="row-icon muted" aria-hidden="true">
+            <span
+              class="row static flex w-full min-w-0 flex-1 items-center gap-2.5 px-2.5 py-1.5"
+            >
+              <span
+                class="row-icon muted text-muted-foreground inline-flex flex-none opacity-70"
+                aria-hidden="true"
+              >
                 <Icon icon={iconDir} size={18} />
               </span>
-              <span class="row-name">{entry.name}</span>
+              <span class="row-name truncate min-w-0 text-sm">{entry.name}</span>
             </span>
           {/if}
         </li>
       {:else}
-        <li class="hint">This directory is empty.</li>
+        <li class="hint text-muted-foreground text-[0.8125rem]">This directory is empty.</li>
       {/each}
     </ul>
     {#if listing.truncated}
-      <p class="hint">Listing truncated (too many entries).</p>
+      <p class="hint text-muted-foreground m-0 text-[0.8125rem]">
+        Listing truncated (too many entries).
+      </p>
     {/if}
   {/if}
 
   {#if candidates !== null}
-    <div class="scan">
-      <h3 class="scan-title">Repositories found</h3>
-      <ul class="rows" aria-label="Found repositories">
+    <div class="scan mt-2 flex flex-col gap-1.5">
+      <h3 class="scan-title m-0 text-sm font-medium text-foreground">
+        Repositories found
+      </h3>
+      <ul class="rows m-0 flex list-none flex-col gap-1 p-0" aria-label="Found repositories">
         {#each candidates as candidate (candidate.path)}
-          <li class="row-wrapper">
-            <span class="row static">
-              <span class="row-icon repo" aria-hidden="true">
+          <li class="row-wrapper hover:border-border flex items-center gap-1.5 rounded-xl border border-transparent bg-card">
+            <span class="row static flex w-full min-w-0 flex-1 items-center gap-2.5 px-2.5 py-1.5">
+              <span class="row-icon repo inline-flex flex-none text-primary" aria-hidden="true">
                 <Icon icon={iconRepo} size={18} />
               </span>
-              <span class="row-main">
-                <span class="row-name">{candidate.name}</span>
-                <span class="row-path">{candidate.path}</span>
+              <span class="row-main flex min-w-0 flex-1 flex-col">
+                <span class="row-name truncate min-w-0 text-sm">{candidate.name}</span>
+                <span class="row-path text-muted-foreground truncate min-w-0 font-mono text-[0.6875rem]">
+                  {candidate.path}
+                </span>
               </span>
             </span>
-            <button
-              class="secondary open"
+            <Button
+              class="secondary open mr-2"
+              variant="outline"
+              size="xs"
               type="button"
               onclick={() => void openProject(candidate.path)}
             >
               Open as project
-            </button>
+            </Button>
           </li>
         {:else}
-          <li class="hint">No repositories found under the home directory.</li>
+          <li class="hint text-muted-foreground text-[0.8125rem]">
+            No repositories found under the home directory.
+          </li>
         {/each}
       </ul>
     </div>
   {/if}
 </section>
-
-<style>
-  .browser {
-    display: flex;
-    flex-direction: column;
-    gap: 0.6rem;
-    min-width: 0;
-  }
-
-  .crumbs {
-    display: flex;
-    align-items: center;
-    flex-wrap: wrap;
-    gap: 0.2rem;
-    font-size: 0.8125rem;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-  }
-
-  .crumb {
-    border: none;
-    background: none;
-    color: var(--m3-primary);
-    font: inherit;
-    font-size: 0.8125rem;
-    padding: 0.1rem 0.25rem;
-    border-radius: var(--m3-shape-small, 8px);
-    cursor: pointer;
-    max-width: 16rem;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .crumb.current {
-    color: var(--m3-on-surface);
-    font-weight: 500;
-    cursor: default;
-  }
-
-  button.crumb:hover {
-    background: var(--m3-surface-container-high, var(--m3-surface));
-  }
-
-  .crumb:focus-visible {
-    outline: 2px solid var(--m3-primary);
-    outline-offset: 1px;
-  }
-
-  .crumb-sep {
-    opacity: 0.6;
-  }
-
-  .toolbar {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 0.5rem;
-  }
-
-  .path-jump {
-    flex: 1;
-    min-width: 14rem;
-    display: flex;
-    gap: 0.5rem;
-  }
-
-  .input {
-    flex: 1;
-    min-width: 0;
-    border: none;
-    border-radius: var(--m3-shape-extra-small, 4px);
-    background: var(--m3-surface-container-highest, var(--m3-surface));
-    color: var(--m3-on-surface);
-    font: inherit;
-    font-family: var(--app-font-mono, ui-monospace, Consolas, monospace);
-    font-size: 0.8125rem;
-    padding: 0.45rem 0.6rem;
-  }
-
-  .input:focus-visible {
-    outline: 2px solid var(--m3-primary);
-  }
-
-  .secondary {
-    flex: none;
-    border: 1px solid var(--m3-outline, var(--m3-primary));
-    background: none;
-    color: var(--m3-primary);
-    font: inherit;
-    font-size: 0.75rem;
-    padding: 0.35rem 0.8rem;
-    border-radius: var(--m3-shape-full, 9999px);
-    cursor: pointer;
-    white-space: nowrap;
-  }
-
-  .secondary:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-  }
-
-  .secondary:focus-visible {
-    outline: 2px solid var(--m3-primary);
-    outline-offset: 2px;
-  }
-
-  .rows {
-    list-style: none;
-    margin: 0;
-    padding: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 0.25rem;
-  }
-
-  .row-wrapper {
-    display: flex;
-    align-items: center;
-    gap: 0.35rem;
-    border: 1px solid transparent;
-    border-radius: var(--m3-shape-medium, 12px);
-    background: var(--m3-surface-container-low, var(--m3-surface));
-  }
-
-  .row-wrapper:hover {
-    border-color: var(--m3-outline-variant, var(--m3-primary));
-  }
-
-  .row {
-    flex: 1;
-    min-width: 0;
-    display: flex;
-    align-items: center;
-    gap: 0.6rem;
-    border: none;
-    background: none;
-    color: var(--m3-on-surface);
-    font: inherit;
-    text-align: left;
-    padding: 0.4rem 0.6rem;
-    cursor: pointer;
-  }
-
-  .row.static {
-    cursor: default;
-  }
-
-  .row-icon {
-    flex: none;
-    display: inline-flex;
-    color: var(--m3-primary);
-  }
-
-  .row-icon.muted {
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    opacity: 0.7;
-  }
-
-  .row-icon.repo {
-    color: var(--m3-tertiary, var(--m3-primary));
-  }
-
-  .row-main {
-    flex: 1;
-    min-width: 0;
-    display: flex;
-    flex-direction: column;
-  }
-
-  .row-name {
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    font-size: 0.875rem;
-  }
-
-  .row-path {
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    font-family: var(--app-font-mono, ui-monospace, Consolas, monospace);
-    font-size: 0.6875rem;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .open {
-    margin-right: 0.5rem;
-  }
-
-  .scan {
-    margin-top: 0.5rem;
-    display: flex;
-    flex-direction: column;
-    gap: 0.4rem;
-  }
-
-  .scan-title {
-    margin: 0;
-    font-size: 0.875rem;
-    font-weight: 500;
-    color: var(--m3-on-surface);
-  }
-
-  .error {
-    margin: 0;
-    color: var(--m3-error);
-    font-size: 0.8125rem;
-    overflow-wrap: anywhere;
-  }
-
-  .hint {
-    margin: 0;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    font-size: 0.8125rem;
-  }
-</style>

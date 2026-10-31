@@ -1,7 +1,9 @@
 /**
  * Shared dialog focus trap: keeps Tab (and Shift+Tab) cycling inside
- * `container` while a dialog is open. Used by DialogShell and CloneDialog —
- * keep the behavior identical when touching either.
+ * `container` while a dialog is open. Kept for AddDeviceDialog, which still
+ * renders a hand-rolled dialog; DialogShell and the other migrated dialogs
+ * get their focus trap from bits-ui instead — keep the behavior identical
+ * when touching either.
  */
 const FOCUSABLE =
   'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])';

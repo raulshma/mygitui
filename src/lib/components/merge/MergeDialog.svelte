@@ -17,6 +17,9 @@
   import { mergeBranch, repoStatus } from "$lib/ipc/client";
   import type { MergeOptions, MergeResult } from "$lib/ipc/types";
   import { toast } from "$lib/toast";
+  import * as Dialog from "$lib/components/ui/dialog/index.js";
+  import { Button } from "$lib/components/ui/button/index.js";
+  import { Checkbox } from "$lib/components/ui/checkbox/index.js";
   import { workingCopyDirty } from "./mergeModel";
 
   let {
@@ -110,199 +113,95 @@
 </script>
 
 {#if open}
-  <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-  <div
-    class="scrim"
-    role="presentation"
-    onkeydown={(e) => {
-      if (e.key === "Escape") {
-        e.preventDefault();
-        onClose();
-      }
-    }}
-  >
-    <!-- svelte-ignore a11y_no_noninteractive_element_to_interactive_role -->
-    <form
-      class="dialog"
+  <Dialog.Root {open}>
+    <!-- svelte-ignore a11y_click_events_have_key_events -->
+    <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+    <Dialog.Overlay class="scrim bg-black/40" role="presentation" />
+    <Dialog.Content
+      class="dialog max-h-[calc(100vh-4rem)] w-[min(28rem,calc(100vw-2rem))] max-w-none gap-0 overflow-y-auto rounded-2xl bg-card px-6 py-5 text-sm text-popover-foreground shadow-lg sm:max-w-none"
       role="dialog"
       aria-modal="true"
       aria-labelledby="merge-title"
-      onsubmit={(e) => {
-        e.preventDefault();
-        void run();
+      showCloseButton={false}
+      escapeKeydownBehavior="ignore"
+      interactOutsideBehavior="ignore"
+      onkeydown={(e) => {
+        if (e.key === "Escape") {
+          e.preventDefault();
+          onClose();
+        }
       }}
     >
-      <h2 id="merge-title" class="title">Merge “{branch}”</h2>
-      <p class="text">Into the current branch.</p>
+      <form
+        onsubmit={(e) => {
+          e.preventDefault();
+          void run();
+        }}
+      >
+        <Dialog.Title id="merge-title" class="mb-1 text-lg font-medium text-foreground">Merge “{branch}”</Dialog.Title>
+        <p class="text mb-3 text-muted-foreground">Into the current branch.</p>
 
-      {#if dirty}
-        <p class="dirty" role="alert">
-          Working copy has uncommitted changes — commit or stash first
-        </p>
-      {/if}
+        {#if dirty}
+          <p class="dirty mb-3 rounded-lg bg-destructive/10 px-2.5 py-1.5 text-[0.8125rem] text-destructive" role="alert">
+            Working copy has uncommitted changes — commit or stash first
+          </p>
+        {/if}
 
-      <fieldset class="group">
-        <legend>Fast-forward</legend>
-        <label>
-          <input type="radio" bind:group={ffMode} value="auto" />
-          <span>Allow fast-forward</span>
-        </label>
-        <label>
-          <input type="radio" bind:group={ffMode} value="no_ff" />
-          <span>Always create a merge commit (--no-ff)</span>
-        </label>
-      </fieldset>
+        <fieldset class="group mb-3 rounded-xl border border-border px-3 py-2">
+          <legend class="px-1 text-[0.72rem] text-muted-foreground">Fast-forward</legend>
+          <label class="flex cursor-pointer items-center gap-1.5 py-0.5">
+            <input class="m-0 accent-primary" type="radio" bind:group={ffMode} value="auto" />
+            <span>Allow fast-forward</span>
+          </label>
+          <label class="flex cursor-pointer items-center gap-1.5 py-0.5">
+            <input class="m-0 accent-primary" type="radio" bind:group={ffMode} value="no_ff" />
+            <span>Always create a merge commit (--no-ff)</span>
+          </label>
+        </fieldset>
 
-      <fieldset class="group">
-        <legend>Result</legend>
-        <label>
-          <input type="checkbox" bind:checked={squash} />
-          <span>Squash — stage the result, single-parent commit later</span>
-        </label>
-        <label>
-          <input type="checkbox" bind:checked={noCommit} />
-          <span>Stop before committing (--no-commit)</span>
-        </label>
-      </fieldset>
+        <fieldset class="group mb-3 rounded-xl border border-border px-3 py-2">
+          <legend class="px-1 text-[0.72rem] text-muted-foreground">Result</legend>
+          <label class="flex cursor-pointer items-center gap-1.5 py-0.5">
+            <Checkbox bind:checked={squash} />
+            <span>Squash — stage the result, single-parent commit later</span>
+          </label>
+          <label class="flex cursor-pointer items-center gap-1.5 py-0.5">
+            <Checkbox bind:checked={noCommit} />
+            <span>Stop before committing (--no-commit)</span>
+          </label>
+        </fieldset>
 
-      <fieldset class="group">
-        <legend>Conflicting hunks (-X)</legend>
-        <label>
-          <input type="radio" bind:group={favor} value="none" />
-          <span>Leave conflicts for me to resolve</span>
-        </label>
-        <label>
-          <input type="radio" bind:group={favor} value="ours" />
-          <span>Auto-resolve in favor of the current branch</span>
-        </label>
-        <label>
-          <input type="radio" bind:group={favor} value="theirs" />
-          <span>Auto-resolve in favor of “{branch}”</span>
-        </label>
-      </fieldset>
+        <fieldset class="group mb-3 rounded-xl border border-border px-3 py-2">
+          <legend class="px-1 text-[0.72rem] text-muted-foreground">Conflicting hunks (-X)</legend>
+          <label class="flex cursor-pointer items-center gap-1.5 py-0.5">
+            <input class="m-0 accent-primary" type="radio" bind:group={favor} value="none" />
+            <span>Leave conflicts for me to resolve</span>
+          </label>
+          <label class="flex cursor-pointer items-center gap-1.5 py-0.5">
+            <input class="m-0 accent-primary" type="radio" bind:group={favor} value="ours" />
+            <span>Auto-resolve in favor of the current branch</span>
+          </label>
+          <label class="flex cursor-pointer items-center gap-1.5 py-0.5">
+            <input class="m-0 accent-primary" type="radio" bind:group={favor} value="theirs" />
+            <span>Auto-resolve in favor of “{branch}”</span>
+          </label>
+        </fieldset>
 
-      <div class="actions">
-        <button
-          class="secondary"
-          type="button"
-          onclick={onClose}
-          disabled={busy}
-        >
-          Cancel
-        </button>
-        <button class="primary" type="submit" disabled={busy || dirty}>
-          {busy ? "Merging…" : "Merge"}
-        </button>
-      </div>
-    </form>
-  </div>
+        <div class="actions mt-1 flex justify-end gap-2">
+          <Button
+            variant="outline"
+            class="text-muted-foreground"
+            type="button"
+            onclick={onClose}
+            disabled={busy}
+          >
+            Cancel
+          </Button>
+          <Button type="submit" disabled={busy || dirty}>
+            {busy ? "Merging…" : "Merge"}
+          </Button>
+        </div>
+      </form>
+    </Dialog.Content>
+  </Dialog.Root>
 {/if}
-
-<style>
-  .scrim {
-    position: fixed;
-    inset: 0;
-    z-index: 70;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: color-mix(in srgb, var(--m3-scrim, black) 40%, transparent);
-  }
-
-  .dialog {
-    width: min(28rem, calc(100vw - 2rem));
-    max-height: calc(100vh - 4rem);
-    overflow-y: auto;
-    padding: 1.25rem 1.5rem;
-    border-radius: var(--m3-shape-large, 16px);
-    background: var(--m3-surface-container-high, var(--m3-surface));
-    color: var(--m3-on-surface);
-    box-shadow: var(--m3-elevation-3, 0 8px 24px rgba(0, 0, 0, 0.3));
-    font-size: 0.875rem;
-  }
-
-  .title {
-    margin: 0 0 0.25rem;
-    font-size: 1.125rem;
-    font-weight: 500;
-  }
-
-  .text {
-    margin: 0 0 0.75rem;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-  }
-
-  .dirty {
-    margin: 0 0 0.75rem;
-    padding: 0.4rem 0.6rem;
-    border-radius: var(--m3-shape-small, 8px);
-    background: color-mix(in srgb, var(--m3-error, #ba1a1a) 12%, transparent);
-    color: var(--m3-error, #ba1a1a);
-    font-size: 0.8125rem;
-  }
-
-  .group {
-    border: 1px solid var(--m3-outline-variant, transparent);
-    border-radius: var(--m3-shape-medium, 12px);
-    padding: 0.5rem 0.75rem;
-    margin: 0 0 0.75rem;
-  }
-
-  legend {
-    font-size: 0.72rem;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    padding: 0 0.3rem;
-  }
-
-  label {
-    display: flex;
-    align-items: center;
-    gap: 0.4rem;
-    padding: 0.15rem 0;
-    cursor: pointer;
-  }
-
-  label input {
-    accent-color: var(--m3-primary);
-    margin: 0;
-  }
-
-  .actions {
-    display: flex;
-    justify-content: flex-end;
-    gap: 0.5rem;
-    margin-top: 0.25rem;
-  }
-
-  .primary {
-    border: none;
-    border-radius: var(--m3-shape-full, 9999px);
-    background: var(--m3-primary);
-    color: var(--m3-on-primary);
-    font: inherit;
-    font-weight: 500;
-    padding: 0.45rem 1.25rem;
-    cursor: pointer;
-  }
-
-  .primary:disabled {
-    opacity: 0.55;
-    cursor: not-allowed;
-  }
-
-  .secondary {
-    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    border-radius: var(--m3-shape-full, 9999px);
-    background: none;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    font: inherit;
-    padding: 0.45rem 1rem;
-    cursor: pointer;
-  }
-
-  .primary:focus-visible,
-  .secondary:focus-visible {
-    outline: 2px solid var(--m3-primary);
-    outline-offset: 1px;
-  }
-</style>

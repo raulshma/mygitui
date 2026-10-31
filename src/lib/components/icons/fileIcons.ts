@@ -443,7 +443,7 @@ export function fileIconColorForPath(
   theme: FileIconTheme = "colorful",
 ): string {
   if (theme === "minimal") {
-    return "var(--m3-on-surface-variant, #9aa0a6)";
+    return "var(--muted-foreground, #9aa0a6)";
   }
   const name = basename(path).toLowerCase();
   const extension = extOf(name);

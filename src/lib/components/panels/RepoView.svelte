@@ -82,8 +82,10 @@ const QuickOpenImport = import("$lib/components/files/QuickOpen.svelte");
   import CommitBar from "$lib/components/panels/CommitBar.svelte";
   import OpLogStrip from "$lib/components/panels/OpLogStrip.svelte";
   import EditorPane from "$lib/components/panels/EditorPane.svelte";
-  import { IconButton } from "$lib/components/m3";
   import Icon from "$lib/components/icons/Icon.svelte";
+  import { Button } from "$lib/components/ui/button/index.js";
+  import { Badge } from "$lib/components/ui/badge/index.js";
+  import * as Select from "$lib/components/ui/select/index.js";
   import type { CompareResult } from "$lib/components/panels/compare";
   import type { HistoryCommitActions } from "$lib/components/panels/historySidebar";
   import AuthDialog from "$lib/components/AuthDialog.svelte";
@@ -579,10 +581,6 @@ const QuickOpenImport = import("$lib/components/files/QuickOpen.svelte");
     } else if (failed !== null) {
       toast(`No group to the ${side}`);
     }
-  }
-
-  function onPresetChange(event: Event): void {
-    layouts.applyPreset(root, (event.currentTarget as HTMLSelectElement).value);
   }
 
   /** Save-layout prompt + abort confirmation (M9 F9 dialog state). */
@@ -1276,7 +1274,9 @@ const QuickOpenImport = import("$lib/components/files/QuickOpen.svelte");
 {#snippet statusPanel()}
   <!-- VSCode-style source-control column: changes scroll above the pinned
        commit box. -->
-  <div class="changes-panel">
+  <div
+    class="changes-panel flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden"
+  >
     <StatusPanel
       {status}
       {repoId}
@@ -1405,7 +1405,10 @@ const QuickOpenImport = import("$lib/components/files/QuickOpen.svelte");
 {/snippet}
 {#snippet forgePanel()}
   {#if isRemote}
-    <aside class="missing-panel" title="Not available for remote projects">
+    <aside
+      class="missing-panel flex flex-1 items-center justify-center text-[0.8125rem] text-muted-foreground"
+      title="Not available for remote projects"
+    >
       Not available for remote projects
     </aside>
   {:else}
@@ -1425,17 +1428,31 @@ const QuickOpenImport = import("$lib/components/files/QuickOpen.svelte");
   {/await}
 {/snippet}
 {#snippet missingPanel()}
-  <aside class="missing-panel">This panel is not available.</aside>
+  <aside
+    class="missing-panel flex flex-1 items-center justify-center text-[0.8125rem] text-muted-foreground"
+  >This panel is not available.</aside>
 {/snippet}
 
-<div class="repo-workspace">
-  <header class="repo-header">
-    <span class="repo-identity">
-      <span class="repo-name" title={name}>{name}</span>
+<!-- Fills the tab content area: without flex-1 this flex item shrink-wraps to
+     its content, so collapsing a sidebar would shrink the whole workspace
+     instead of handing the freed width to the center pane. min-width:0 keeps
+     wide panel content from stretching the workspace past the window edge. -->
+<div
+  class="repo-workspace flex h-full w-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden"
+>
+  <header
+    class="repo-header flex min-w-0 flex-none flex-wrap items-center gap-x-2 gap-y-1.5 border-b border-border bg-popover px-[0.6rem] py-[0.3rem] text-[0.8125rem]"
+  >
+    <span class="repo-identity flex min-w-0 flex-1 items-center gap-[0.4rem]">
+      <span
+        class="repo-name max-w-[15rem] min-w-0 flex-[0_1_auto] overflow-hidden text-ellipsis whitespace-nowrap font-semibold"
+        title={name}
+      >{name}</span>
       {#if remoteStatus}
         <!-- Remote repository: connection chip fed by the devices store. -->
-        <span
-          class="remote-chip"
+        <Badge
+          variant="secondary"
+          class="remote-chip flex-none gap-[0.3rem] rounded-full bg-accent px-[0.45rem] py-[0.1rem] h-auto text-[0.6875rem] {remoteStatus === 'connected' ? 'text-foreground' : 'text-muted-foreground'}"
           data-status={remoteStatus}
           title={remoteStatus === "connected"
             ? "Device connected"
@@ -1443,7 +1460,10 @@ const QuickOpenImport = import("$lib/components/files/QuickOpen.svelte");
               ? "Device connecting…"
               : "Device offline"}
         >
-          <span class="remote-dot" aria-hidden="true"></span>
+          <span
+            class="remote-dot h-[0.45rem] w-[0.45rem] flex-none rounded-full {remoteStatus === 'connected' ? 'bg-primary' : remoteStatus === 'connecting' ? 'bg-muted-foreground' : 'bg-border'}"
+            aria-hidden="true"
+          ></span>
           <span class="remote-label">
             {remoteStatus === "connected"
               ? "connected"
@@ -1451,81 +1471,124 @@ const QuickOpenImport = import("$lib/components/files/QuickOpen.svelte");
                 ? "connecting…"
                 : "offline"}
           </span>
-        </span>
+        </Badge>
       {/if}
       <BranchSwitcher {repoId} {status} onMutated={refresh} />
       <RepoQuickActions {repoId} {status} onMutated={refresh} />
-      <span class="repo-root" title={root}>{root}</span>
+      <span
+        class="repo-root max-[980px]:hidden min-w-0 flex-[1_1_auto] overflow-hidden text-ellipsis whitespace-nowrap font-mono text-[0.6875rem] text-muted-foreground"
+        title={root}
+      >{root}</span>
     </span>
-    <span class="layout-controls">
+    <span class="layout-controls ml-auto flex flex-none items-center gap-1">
       <OpenWithButton {root} />
-      <IconButton
-        icon={iconHistory}
-        label={historyVisible ? "Hide history" : "Show history"}
+      <Button
+        class="text-muted-foreground hover:bg-accent hover:text-accent-foreground aria-pressed:bg-accent aria-pressed:text-accent-foreground"
+        variant="ghost"
+        size="icon-sm"
+        type="button"
+        aria-label={historyVisible ? "Hide history" : "Show history"}
+        aria-pressed={historyVisible}
         title={historyVisible
           ? canHideHistory
             ? "Hide the history sidebar"
             : "Expand the primary sidebar before hiding history"
           : "Show the history sidebar"}
-        pressed={historyVisible}
         disabled={historyVisible && !canHideHistory}
         onclick={toggleHistory}
-      />
-      <select
-        class="preset-select"
-        aria-label="Layout preset"
-        title="Layout preset"
-        value={resolved.presetId}
-        onchange={onPresetChange}
       >
-        {#each layouts.listPresets() as preset (preset.id)}
-          <option value={preset.id}>{preset.name}</option>
-        {/each}
-      </select>
-      <IconButton
-        icon={iconTerminal}
-        label="Terminal"
+        <Icon icon={iconHistory} size={16} />
+      </Button>
+      <Select.Root
+        type="single"
+        value={resolved.presetId}
+        onValueChange={(value) => layouts.applyPreset(root, value)}
+      >
+        <Select.Trigger
+          class="preset-select max-[760px]:hidden max-w-[8.5rem] h-[1.35rem] rounded-sm border-border bg-card dark:bg-card px-1 py-0 text-[0.6875rem] text-card-foreground gap-1"
+          aria-label="Layout preset"
+          title="Layout preset"
+        >
+          <Select.Value />
+        </Select.Trigger>
+        <Select.Content>
+          {#each layouts.listPresets() as preset (preset.id)}
+            <Select.Item value={preset.id} label={preset.name} class="text-[0.6875rem]" />
+          {/each}
+        </Select.Content>
+      </Select.Root>
+      <Button
+        class="text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+        variant="ghost"
+        size="icon-sm"
+        type="button"
+        aria-label="Terminal"
         title="Open (or focus) this repository's terminal panel"
         onclick={onNewTerminal}
-      />
-      <IconButton
-        icon={iconMore}
-        label="More repository actions"
+      >
+        <Icon icon={iconTerminal} size={16} />
+      </Button>
+      <Button
+        class="text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+        variant="ghost"
+        size="icon-sm"
+        type="button"
+        aria-label="More repository actions"
         title="More repository actions"
         aria-haspopup="menu"
         onclick={openHeaderMenu}
-      />
+      >
+        <Icon icon={iconMore} size={16} />
+      </Button>
     </span>
   </header>
 
   <OpLogStrip {repoId} />
 
   {#if opSource && conflictCount > 0}
-    <div class="conflict-banner" role="alert">
-      <span class="cb-icon" aria-hidden="true">!</span>
-      <span class="cb-text">
+    <div
+      class="conflict-banner flex flex-none items-center gap-2 border-b border-border bg-destructive/15 px-3 py-[0.3rem] text-[0.8125rem] text-destructive"
+      role="alert"
+    >
+      <span
+        class="cb-icon inline-flex h-[1.1rem] w-[1.1rem] flex-none items-center justify-center rounded-full border-[1.5px] border-current text-[0.6875rem] font-bold"
+        aria-hidden="true"
+      >!</span>
+      <span
+        class="cb-text min-w-0 overflow-hidden text-ellipsis whitespace-nowrap"
+      >
         {conflictSourceLabel(opSource)} in progress — {conflictCount}
         conflicted file{conflictCount === 1 ? "" : "s"}
       </span>
-      <span class="cb-actions">
-        <button class="cb-resolve" type="button" onclick={onResolve}>
+      <span class="cb-actions ml-auto flex flex-none gap-1.5">
+        <Button
+          class="cb-resolve rounded-full px-3 py-[0.15rem] h-auto bg-destructive text-white hover:bg-destructive hover:brightness-110 text-[0.72rem] font-normal"
+          type="button"
+          onclick={onResolve}
+        >
           Resolve
-        </button>
-        <button
-          class="cb-abort"
+        </Button>
+        <Button
+          variant="outline"
+          class="cb-abort rounded-full border-current px-3 py-[0.15rem] h-auto bg-transparent text-[0.72rem] font-normal text-inherit hover:bg-foreground/10 hover:text-inherit dark:bg-transparent dark:border-current dark:hover:bg-foreground/10 disabled:cursor-not-allowed disabled:opacity-55"
           type="button"
           disabled={aborting}
           onclick={() => void onAbort()}
         >
           {aborting ? "Aborting…" : "Abort"}
-        </button>
+        </Button>
       </span>
     </div>
   {/if}
 
   <BisectBanner {repoId} showLauncher={false} />
 
-  <div class="main-area">
+  <!-- Width of the collapsed-history rail. SplitContainer reads it to keep
+       the left panes at their size while the rail is out (see its rightRail
+       doc); the rail button itself uses the same variable. -->
+  <div
+    class="main-area flex min-h-0 min-w-0 flex-1 [--history-rail-width:1.75rem]"
+  >
     <ActivityBar
       panels={activityPanels}
       pinned={railPins.pins}
@@ -1540,7 +1603,7 @@ const QuickOpenImport = import("$lib/components/files/QuickOpen.svelte");
       onToggleCollapse={toggleLeftSidebar}
       onTogglePin={(panel) => railPins.toggle(panel)}
     />
-    <div class="layout-area">
+    <div class="layout-area flex min-h-0 min-w-0 flex-1">
       <SplitContainer
         node={resolved.layout.main}
         renderPanel={renderPanel}
@@ -1558,13 +1621,14 @@ const QuickOpenImport = import("$lib/components/files/QuickOpen.svelte");
     </div>
     {#if showHistoryRail}
       <button
-        class="history-rail"
+        class="history-rail flex w-[var(--history-rail-width)] flex-none cursor-pointer flex-col items-center gap-2 border-l border-border bg-popover py-2 text-muted-foreground hover:bg-accent hover:text-primary focus-visible:-outline-offset-2 focus-visible:outline-2 focus-visible:outline-primary"
         type="button"
         aria-label="Show history sidebar"
         title="Show history sidebar"
         onclick={showHistory}
       >
         <svg
+          class="h-4 w-4 flex-none"
           viewBox="0 0 24 24"
           fill="none"
           stroke="currentColor"
@@ -1575,7 +1639,9 @@ const QuickOpenImport = import("$lib/components/files/QuickOpen.svelte");
         >
           <path d={PANEL_META.history.icon} />
         </svg>
-        <span class="history-rail-label">History</span>
+        <span
+          class="history-rail-label rotate-180 text-[0.6875rem] uppercase tracking-[0.04em] [writing-mode:vertical-rl]"
+        >History</span>
       </button>
     {/if}
   </div>
@@ -1584,8 +1650,12 @@ const QuickOpenImport = import("$lib/components/files/QuickOpen.svelte");
 
 {#if conflictEditorOpen}
   <!-- Conflict resolution overlay: centered, large, above everything. -->
-  <div class="conflict-overlay">
-    <div class="conflict-dialog">
+  <div
+    class="conflict-overlay fixed inset-0 z-[60] flex items-center justify-center bg-black/45 p-8"
+  >
+    <div
+      class="conflict-dialog flex h-[min(48rem,100%)] w-[min(64rem,100%)] flex-col overflow-hidden rounded-lg bg-card text-card-foreground shadow-[0_1rem_3rem_rgba(0,0,0,0.35)] [&>*]:flex-1 [&>*]:min-h-0"
+    >
       <ConflictEditor
         {repoId}
         files={conflictFiles}
@@ -1645,322 +1715,3 @@ const QuickOpenImport = import("$lib/components/files/QuickOpen.svelte");
   danger
   onConfirm={() => void discardOpenEntry()}
 />
-
-<style>
-  .repo-workspace {
-    display: flex;
-    flex-direction: column;
-    /* Fill the tab content area: without flex:1 this flex item shrink-wraps
-       to its content, so collapsing a sidebar would shrink the whole
-       workspace instead of handing the freed width to the center pane. */
-    flex: 1;
-    width: 100%;
-    height: 100%;
-    min-height: 0;
-    /* Never wider than the tab area: without this the flex min-width:auto
-       floor lets panel content (wide history rows, tables) stretch the whole
-       workspace past the window edge. Panels clip/scroll inside their panes. */
-    min-width: 0;
-    overflow: hidden;
-  }
-
-  .repo-header {
-    display: flex;
-    align-items: center;
-    flex-wrap: wrap;
-    gap: 0.35rem 0.5rem;
-    padding: 0.3rem 0.6rem;
-    border-bottom: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    background: var(--m3-surface-container, var(--m3-surface));
-    font-size: 0.8125rem;
-    flex: none;
-    min-width: 0;
-  }
-
-  .repo-identity {
-    flex: 1;
-    min-width: 0;
-    display: flex;
-    align-items: center;
-    gap: 0.4rem;
-  }
-
-  .repo-name {
-    flex: 0 1 auto;
-    min-width: 0;
-    max-width: 15rem;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    font-weight: 600;
-  }
-
-  /* Remote-repository connection chip (mirrors the header branch
-     switcher chip's shape; the chip itself lives in BranchSwitcher). */
-  .remote-chip {
-    flex: none;
-    display: inline-flex;
-    align-items: center;
-    gap: 0.3rem;
-    padding: 0.1rem 0.45rem;
-    border-radius: var(--m3-shape-full, 9999px);
-    background: var(--m3-surface-container-high, var(--m3-surface));
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    font-size: 0.6875rem;
-  }
-
-  .remote-dot {
-    flex: none;
-    width: 0.45rem;
-    height: 0.45rem;
-    border-radius: 50%;
-    background: var(--m3-outline, var(--m3-on-surface-variant));
-  }
-
-  .remote-chip[data-status="connected"] .remote-dot {
-    background: var(--m3-primary);
-  }
-
-  .remote-chip[data-status="connecting"] .remote-dot {
-    background: var(--m3-tertiary, var(--m3-primary));
-  }
-
-  .remote-chip[data-status="connected"] {
-    color: var(--m3-on-surface);
-  }
-
-  .layout-controls {
-    margin-left: auto;
-    flex: none;
-    display: flex;
-    align-items: center;
-    gap: 0.25rem;
-  }
-
-  .preset-select {
-    max-width: 8.5rem;
-    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    border-radius: var(--m3-shape-small, 8px);
-    background: var(--m3-surface);
-    color: var(--m3-on-surface);
-    font: inherit;
-    font-size: 0.6875rem;
-    padding: 0.1rem 0.25rem;
-  }
-
-  .repo-root {
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    font-family: ui-monospace, Consolas, monospace;
-    font-size: 0.6875rem;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    flex: 1 1 auto;
-    min-width: 0;
-  }
-
-  @media (max-width: 980px) {
-    .repo-root {
-      display: none;
-    }
-  }
-
-  @media (max-width: 760px) {
-    .preset-select {
-      display: none;
-    }
-  }
-
-  .missing-panel {
-    flex: 1;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    font-size: 0.8125rem;
-  }
-
-  .conflict-banner {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    padding: 0.3rem 0.75rem;
-    background: var(--m3-error-container, var(--m3-error));
-    color: var(--m3-on-error-container, var(--m3-on-error));
-    border-bottom: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    font-size: 0.8125rem;
-    flex: none;
-  }
-
-  .cb-icon {
-    flex: none;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 1.1rem;
-    height: 1.1rem;
-    border-radius: 50%;
-    border: 1.5px solid currentColor;
-    font-size: 0.6875rem;
-    font-weight: 700;
-  }
-
-  .cb-text {
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .cb-actions {
-    margin-left: auto;
-    flex: none;
-    display: flex;
-    gap: 0.375rem;
-  }
-
-  .cb-resolve,
-  .cb-abort {
-    border: 1px solid currentColor;
-    border-radius: var(--m3-shape-full, 9999px);
-    background: none;
-    color: inherit;
-    font: inherit;
-    font-size: 0.72rem;
-    padding: 0.15rem 0.75rem;
-    cursor: pointer;
-  }
-
-  .cb-resolve {
-    background: var(--m3-error, var(--m3-primary));
-    color: var(--m3-on-error, var(--m3-on-primary));
-    border-color: transparent;
-  }
-
-  .cb-resolve:hover {
-    filter: brightness(1.08);
-  }
-
-  .cb-abort:hover:not(:disabled) {
-    background: rgb(0 0 0 / 0.08);
-  }
-
-  .cb-resolve:focus-visible,
-  .cb-abort:focus-visible {
-    outline: 2px solid currentColor;
-    outline-offset: 1px;
-  }
-
-  .cb-abort:disabled {
-    cursor: not-allowed;
-    opacity: 0.55;
-  }
-
-  .main-area {
-    flex: 1;
-    min-height: 0;
-    min-width: 0;
-    display: flex;
-    /* Width of the collapsed-history rail. SplitContainer reads it to keep
-     * the left panes at their size while the rail is out (see its rightRail
-     * doc); the rail button itself uses the same variable. */
-    --history-rail-width: 1.75rem;
-  }
-
-  /* The tree owns all remaining width; collapsed sidebar panes are hidden
-   * inside it, so this area grows automatically. */
-  .layout-area {
-    flex: 1;
-    min-width: 0;
-    min-height: 0;
-    display: flex;
-  }
-
-  /* Visual Studio-style auto-hide tab for the collapsed history sidebar. */
-  .history-rail {
-    flex: none;
-    width: var(--history-rail-width);
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 0.5rem;
-    padding: 0.5rem 0;
-    border: none;
-    border-left: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    background: var(--m3-surface-container, var(--m3-surface));
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    cursor: pointer;
-  }
-
-  .history-rail svg {
-    width: 1rem;
-    height: 1rem;
-    flex: none;
-  }
-
-  .history-rail-label {
-    writing-mode: vertical-rl;
-    transform: rotate(180deg);
-    font-size: 0.6875rem;
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
-  }
-
-  .history-rail:hover,
-  .history-rail:focus-visible {
-    color: var(--m3-primary);
-    background: var(--m3-surface-container-high, var(--m3-surface));
-  }
-
-  .history-rail:focus-visible {
-    outline: 2px solid var(--m3-primary);
-    outline-offset: -2px;
-  }
-
-  /* Source-control column: scrolling changes list + bottom-pinned commit box. */
-  .changes-panel {
-    flex: 1;
-    height: 100%;
-    min-height: 0;
-    min-width: 0;
-    display: flex;
-    flex-direction: column;
-    overflow: hidden;
-  }
-
-  .changes-panel > :global(aside) {
-    flex: 1;
-    height: 100%;
-    min-height: 0;
-    min-width: 0;
-    overflow: hidden;
-  }
-
-  .conflict-overlay {
-    position: fixed;
-    inset: 0;
-    z-index: 60;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: 2rem;
-    background: rgb(0 0 0 / 0.45);
-  }
-
-  .conflict-dialog {
-    display: flex;
-    flex-direction: column;
-    width: min(64rem, 100%);
-    height: min(48rem, 100%);
-    border-radius: var(--m3-shape-large, 16px);
-    background: var(--m3-surface);
-    color: var(--m3-on-surface);
-    box-shadow: 0 1rem 3rem rgb(0 0 0 / 0.35);
-    overflow: hidden;
-  }
-
-  .conflict-dialog > :global(*) {
-    flex: 1;
-    min-height: 0;
-  }
-</style>

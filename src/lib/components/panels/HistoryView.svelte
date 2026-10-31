@@ -76,7 +76,12 @@
     shortRefName,
   } from "$lib/git/format";
   import { toast } from "$lib/toast";
-  import { IconButton, Spinner } from "$lib/components/m3";
+  import Icon from "$lib/components/icons/Icon.svelte";
+  import { Button } from "$lib/components/ui/button/index.js";
+  import { Spinner } from "$lib/components/ui/spinner/index.js";
+  import { Checkbox } from "$lib/components/ui/checkbox/index.js";
+  import { Input } from "$lib/components/ui/input/index.js";
+  import iconSearch from "@ktibow/iconset-material-symbols/search";
   import iconPopout from "@ktibow/iconset-material-symbols/open-in-new";
   import iconCollapse from "@ktibow/iconset-material-symbols/right-panel-close";
   import iconFilters from "@ktibow/iconset-material-symbols/filter-list";
@@ -782,103 +787,132 @@
   }
 </script>
 
-<section class="history" class:sidebar aria-label="Commit history">
+<section
+  class="history flex h-full min-h-0 flex-col bg-card [&>.split]:flex-1 [&>.split]:min-h-0"
+  class:sidebar
+  aria-label="Commit history"
+>
   {#if sidebar}
     <!-- 1a. sidebar header: the panel is a bare layout leaf, so it owns its
          own title row (full mode lives in a tab/popout and has one). -->
-    <header class="sidebar-head">
-      <span class="sh-title">History</span>
+    <header class="sidebar-head flex flex-none items-center gap-1 border-b border-border bg-popover py-[0.3rem] pr-[0.4rem] pl-[0.6rem]">
+      <span class="sh-title min-w-0 flex-1 truncate text-[0.6875rem] font-semibold uppercase tracking-[0.04em] text-muted-foreground">History</span>
       {#if onPopout}
-        <IconButton
-          icon={iconPopout}
-          label="Pop out history"
+        <Button
+          class="relative text-muted-foreground after:absolute after:-inset-1 after:content-[''] hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-4"
+          variant="ghost"
+          size="icon-xs"
+          type="button"
+          aria-label="Pop out history"
           title="Pop out history"
-          dense
           onclick={onPopout}
-        />
+        >
+          <Icon icon={iconPopout} size={16} />
+        </Button>
       {/if}
       {#if onCollapse}
-        <IconButton
-          icon={iconCollapse}
-          label="Hide history sidebar"
+        <Button
+          class="relative text-muted-foreground after:absolute after:-inset-1 after:content-[''] hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-4"
+          variant="ghost"
+          size="icon-xs"
+          type="button"
+          aria-label="Hide history sidebar"
           title="Hide the history sidebar"
-          dense
           onclick={onCollapse}
-        />
+        >
+          <Icon icon={iconCollapse} size={16} />
+        </Button>
       {/if}
     </header>
   {/if}
 
   <!-- 1b. filter bar (sidebar: search + a disclosure for the rest) -->
-  <div class="filterbar" class:compact={sidebar} role="search" aria-label="Filter commits">
-    <input
-      class="f search"
-      bind:this={filterTextEl}
-      type="search"
-      placeholder="Search commits"
-      aria-label="Search commit text"
-      value={store.filter.text}
-      oninput={(e) => store.setFilter({ text: e.currentTarget.value })}
-    />
+  <div
+    class="filterbar flex flex-wrap items-center border-b border-border bg-popover text-xs {sidebar ? 'compact gap-1 px-1.5 py-[0.3rem]' : 'gap-1.5 px-3 py-1.5'}"
+    class:compact={sidebar}
+    role="search"
+    aria-label="Filter commits"
+  >
+    <span class="relative inline-flex items-center text-muted-foreground {sidebar ? 'w-auto min-w-0 flex-1 basis-28' : 'w-36'}">
+      <span class="absolute left-[0.45rem] inline-flex pointer-events-none opacity-75">
+        <Icon icon={iconSearch} size={12} />
+      </span>
+      <Input
+        class="f h-auto rounded-sm bg-card dark:bg-card px-[1.5rem] py-[0.2rem] text-xs md:text-xs placeholder:text-muted-foreground/80"
+        bind:ref={filterTextEl}
+        type="search"
+        placeholder="Search commits"
+        aria-label="Search commit text"
+        value={store.filter.text}
+        oninput={(e) => store.setFilter({ text: e.currentTarget.value })}
+      />
+    </span>
 
     {#if sidebar}
-      <IconButton
-        icon={iconFilters}
-        label="More filters"
-        title="More filters"
-        dense
-        pressed={showAdvanced}
+      <Button
+        class="relative after:absolute after:-inset-1 after:content-[''] hover:bg-accent hover:text-accent-foreground aria-pressed:bg-accent aria-pressed:text-accent-foreground {filterActive
+          ? 'text-primary'
+          : 'text-muted-foreground'} [&_svg:not([class*='size-'])]:size-4"
+        variant="ghost"
+        size="icon-xs"
+        type="button"
+        aria-label="More filters"
+        aria-pressed={showAdvanced}
         aria-expanded={showAdvanced}
-        tone={filterActive ? "primary" : "default"}
+        title="More filters"
         onclick={() => (showAdvanced = !showAdvanced)}
-      />
+      >
+        <Icon icon={iconFilters} size={16} />
+      </Button>
     {/if}
 
     {#if !sidebar || showAdvanced}
-      <input
-        class="f"
+      <Input
+        class="f h-auto w-36 rounded-sm bg-card dark:bg-card px-[0.45rem] py-[0.2rem] text-xs md:text-xs placeholder:text-muted-foreground/80"
         placeholder="Author"
         aria-label="Filter by author"
         value={store.filter.author}
         oninput={(e) => store.setFilter({ author: e.currentTarget.value })}
       />
-      <input
-        class="f wide"
+      <Input
+        class="f h-auto w-48 rounded-sm bg-card dark:bg-card px-[0.45rem] py-[0.2rem] text-xs md:text-xs placeholder:text-muted-foreground/80"
         placeholder="Path"
         aria-label="Filter by path"
         value={store.filter.path}
         oninput={(e) => store.setFilter({ path: e.currentTarget.value })}
       />
-      <label class="date">
+      <label class="date flex items-center gap-1 text-muted-foreground">
         <span class="dl">after</span>
-        <input
+        <Input
           type="date"
+          class="h-auto rounded-sm bg-card dark:bg-card px-[0.3rem] py-[0.15rem] text-[0.6875rem] md:text-[0.6875rem] placeholder:text-muted-foreground/80"
           aria-label="Commits after this date"
           value={store.filter.after}
           onchange={(e) => store.setFilter({ after: e.currentTarget.value })}
         />
       </label>
-      <label class="date">
+      <label class="date flex items-center gap-1 text-muted-foreground">
         <span class="dl">before</span>
-        <input
+        <Input
           type="date"
+          class="h-auto rounded-sm bg-card dark:bg-card px-[0.3rem] py-[0.15rem] text-[0.6875rem] md:text-[0.6875rem] placeholder:text-muted-foreground/80"
           aria-label="Commits before this date"
           value={store.filter.before}
           onchange={(e) => store.setFilter({ before: e.currentTarget.value })}
         />
       </label>
       <!-- M9: regex mode is live (backend `LogFilter.regex`). -->
-      <label class="regex" title="Treat the search text as a regular expression">
-        <input
-          type="checkbox"
+      <label class="regex flex items-center gap-1 text-muted-foreground" title="Treat the search text as a regular expression">
+        <Checkbox
           checked={store.filter.regex}
-          onchange={(e) => store.setFilter({ regex: e.currentTarget.checked })}
+          onCheckedChange={(checked) => store.setFilter({ regex: checked === true })}
+          aria-label="Treat the search text as a regular expression"
         />
         <span>Regex</span>
       </label>
       <!-- M10: pickaxe -S — commits whose patch adds/removes the string. -->
-      <input
-        class="f"
+      <Input
+        class="f h-auto w-36 rounded-sm bg-card dark:bg-card px-[0.45rem] py-[0.2rem] text-xs md:text-xs placeholder:text-muted-foreground/80"
         placeholder="Changes containing… (-S)"
         aria-label="Pickaxe: patches adding or removing this string"
         value={store.filter.pickaxe}
@@ -888,8 +922,8 @@
            this regex. -S and -G may BOTH be set: the values are forwarded
            verbatim and the backend intersects them (simplest contract — no
            cross-clearing UI to get out of sync). -->
-      <input
-        class="f"
+      <Input
+        class="f h-auto w-36 rounded-sm bg-card dark:bg-card px-[0.45rem] py-[0.2rem] text-xs md:text-xs placeholder:text-muted-foreground/80"
         placeholder="patch regex (-G)"
         aria-label="Pickaxe: patches adding or removing lines matching this regex"
         value={store.filter.pickaxeRegex ?? ""}
@@ -898,48 +932,68 @@
     {/if}
 
     {#if filterActive}
-      <IconButton
-        icon={iconClearFilters}
-        label="Clear filters"
+      <Button
+        class="relative text-muted-foreground after:absolute after:-inset-1 after:content-[''] hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-4"
+        variant="ghost"
+        size="icon-xs"
+        type="button"
+        aria-label="Clear filters"
         title="Clear all filters"
-        dense
         onclick={() => store.clearFilter()}
-      />
+      >
+        <Icon icon={iconClearFilters} size={16} />
+      </Button>
     {/if}
 
-    <IconButton
-      icon={iconCompare}
-      label="Compare commits"
-      title="Compare commits"
-      dense
-      pressed={showCompare}
+    <Button
+      class="relative text-muted-foreground after:absolute after:-inset-1 after:content-[''] hover:bg-accent hover:text-accent-foreground aria-pressed:bg-accent aria-pressed:text-accent-foreground [&_svg:not([class*='size-'])]:size-4"
+      variant="ghost"
+      size="icon-xs"
+      type="button"
+      aria-label="Compare commits"
+      aria-pressed={showCompare}
       aria-expanded={showCompare}
+      title="Compare commits"
       onclick={() => (showCompare = !showCompare)}
-    />
+    >
+      <Icon icon={iconCompare} size={16} />
+    </Button>
 
     {#if onPopout && !sidebar}
       <!-- M4 F1: pop the history out into its own window (desktop only). -->
-      <IconButton
-        icon={iconPopout}
-        label="Pop out history"
+      <Button
+        class="relative text-muted-foreground after:absolute after:-inset-1 after:content-[''] hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-4"
+        variant="ghost"
+        size="icon-xs"
+        type="button"
+        aria-label="Pop out history"
         title="Pop out history into its own window"
-        dense
         onclick={onPopout}
-      />
+      >
+        <Icon icon={iconPopout} size={16} />
+      </Button>
     {/if}
 
-    <span class="status" role="status" aria-live="polite">
+    <span
+      class="status flex items-center gap-1.5 text-[0.6875rem] text-muted-foreground {sidebar ? 'basis-full' : 'ml-auto'}"
+      role="status"
+      aria-live="polite"
+    >
       {#if store.error}
-        <span class="err" role="alert">{store.error}</span>
-        <IconButton
-          icon={iconRetry}
-          label="Retry loading history"
+        <span class="err text-destructive" role="alert">{store.error}</span>
+        <Button
+          class="relative text-muted-foreground after:absolute after:-inset-1 after:content-[''] hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-4"
+          variant="ghost"
+          size="icon-xs"
+          type="button"
+          aria-label="Retry loading history"
           title="Retry loading history"
-          dense
           onclick={() => store.restart()}
-        />
+        >
+          <Icon icon={iconRetry} size={16} />
+        </Button>
       {:else if store.loading}
-        <Spinner size={11} />
+        <Spinner class="size-[11px]" role="presentation" aria-hidden="true" />
         Streaming…
       {:else}
         {total}
@@ -958,17 +1012,21 @@
        pane `a` of the detail SplitPane (detail open) — one copy of the
        virtualizer markup. -->
   {#snippet logPane()}
-  <div class="listwrap">
+  <div class="listwrap relative flex min-h-0 flex-1">
     {#if store.loading && total === 0}
-      <p class="empty empty-loading" role="status">
-        <Spinner size={14} />
-        Loading history…
+      <p class="empty m-auto text-[0.8125rem] text-muted-foreground" role="status">
+        <span class="empty-loading inline-flex items-center gap-[0.4rem]">
+          <Spinner class="size-[14px]" role="presentation" aria-hidden="true" />
+          Loading history…
+        </span>
       </p>
     {:else if !store.loading && !store.error && total === 0}
-      <p class="empty">No commits match the current filters.</p>
+      <p class="empty m-auto text-[0.8125rem] text-muted-foreground">No commits match the current filters.</p>
     {:else}
       <div
-        class="scroller"
+        class="scroller min-w-0 flex-1 overflow-y-auto focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring {sidebar
+          ? ""
+          : "[scrollbar-width:none] [&::-webkit-scrollbar]:hidden"}"
         bind:this={scrollerEl}
         onscroll={onScroll}
         role="listbox"
@@ -977,11 +1035,15 @@
         aria-activedescendant={activeDescendant}
         onkeydown={onKeydown}
       >
-        <div class="spacer" style:height={`${total * ROW_HEIGHT}px`}>
+        <div class="spacer relative" style:height={`${total * ROW_HEIGHT}px`}>
           {#each visible as v (v.commit.sha)}
             <div
               id={`commit-row-${v.idx}`}
-              class="row"
+              class="row absolute inset-x-0 flex cursor-pointer items-center border-b border-border/45 py-0 text-[0.8125rem] {sidebar ? "gap-1 pr-[0.45rem] pl-[0.55rem]" : "gap-1.5 pr-[0.6rem] pl-[0.75rem]"} {v.idx === selectedIdx
+                ? "bg-secondary text-secondary-foreground"
+                : multiIdx.includes(v.idx)
+                  ? "bg-secondary/45 hover:bg-secondary/60"
+                  : "hover:bg-accent"}"
               class:selected={v.idx === selectedIdx}
               class:multisel={v.idx !== selectedIdx && multiIdx.includes(v.idx)}
               role="option"
@@ -998,7 +1060,7 @@
                 }
               }}
             >
-              <span class="sha">{v.commit.sha.slice(0, 7)}</span>
+              <span class="sha flex-none font-mono {v.idx === selectedIdx ? "" : "text-muted-foreground"}">{v.commit.sha.slice(0, 7)}</span>
               {#each v.commit.refs.slice(0, 3) as ref, i (`${v.commit.sha}:${i}:${ref}`)}
                 {@const kind = classifyRef(ref)}
                 {@const scope =
@@ -1009,33 +1071,41 @@
                       : kind === "tag"
                         ? "Tag"
                         : "HEAD"}
+                {@const refTint =
+                  kind === "local"
+                    ? "border-transparent bg-primary/10 text-primary"
+                    : kind === "remote"
+                      ? "border-border text-muted-foreground"
+                      : kind === "tag"
+                        ? "border-transparent bg-accent text-accent-foreground"
+                        : "border-primary bg-primary/10 text-primary"}
                 <span
-                  class="ref ref-{kind}"
+                  class="ref ref-{kind} inline-flex flex-none items-center gap-1 whitespace-nowrap rounded-sm border px-[0.35rem] text-[0.6875rem] leading-[1.4] {sidebar ? 'max-w-24' : 'max-w-36'} {refTint}"
                   title={`${scope}: ${shortRefName(ref)}`}
                   aria-label={`${scope}: ${shortRefName(ref)}`}
                 >
-                  <span class="ref-scope" aria-hidden="true">{scope}</span>
-                  <span class="ref-name">{shortRefName(ref)}</span>
+                  <span class="ref-scope flex-none text-[0.55rem] font-bold uppercase tracking-[0.025em] opacity-80 {sidebar ? 'hidden' : ''}" aria-hidden="true">{scope}</span>
+                  <span class="ref-name min-w-0 truncate">{shortRefName(ref)}</span>
                 </span>
               {/each}
               {#if v.commit.refs.length > 3}
                 <span
-                  class="ref ref-more"
+                  class="ref ref-more inline-flex flex-none items-center whitespace-nowrap rounded-sm border border-transparent bg-muted px-[0.35rem] text-[0.6875rem] leading-[1.4] tabular-nums text-muted-foreground"
                   title={v.commit.refs.slice(3).map(shortRefName).join(", ")}
                   aria-label={`${v.commit.refs.length - 3} more refs`}
                 >
                   +{v.commit.refs.length - 3}
                 </span>
               {/if}
-              <span class="summary" title={v.commit.summary}>{v.commit.summary}</span>
-              <span class="author">{v.commit.author.name}</span>
-              <span class="date">{formatRelativeTime(v.commit.author.time)}</span>
+              <span class="summary min-w-0 flex-1 truncate" title={v.commit.summary}>{v.commit.summary}</span>
+              <span class="author max-w-40 flex-none truncate {v.idx === selectedIdx ? "" : "text-muted-foreground"} {sidebar ? "hidden" : ""}">{v.commit.author.name}</span>
+              <span class="date flex-none text-muted-foreground {sidebar ? "text-[0.65rem]" : "text-[0.6875rem]"}">{formatRelativeTime(v.commit.author.time)}</span>
             </div>
           {/each}
         </div>
       </div>
       {#if !sidebar}
-        <div class="graphcol" style:width={`${GRAPH_WIDTH}px`}>
+        <div class="graphcol h-full min-h-0 flex-none border-l border-border bg-card" style:width={`${GRAPH_WIDTH}px`}>
           <GraphCanvas
             pages={store.pages}
             rowHeight={ROW_HEIGHT}
@@ -1089,9 +1159,14 @@
   {:else}
     {@render logPane()}
     {#if selectedInfo}
-      <button class="detail-open" onclick={() => (detailOpen = true)} aria-expanded="false">
+      <Button
+        variant="ghost"
+        class="detail-open flex-none h-auto w-full justify-start truncate rounded-none border-t border-border bg-popover px-3 py-1 text-left text-[0.72rem] font-normal text-primary hover:bg-accent hover:text-primary focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring dark:hover:bg-accent"
+        onclick={() => (detailOpen = true)}
+        aria-expanded="false"
+      >
         Show commit detail — {selectedInfo.summary}
-      </button>
+      </Button>
     {/if}
   {/if}
 
@@ -1137,366 +1212,3 @@
     />
   {/if}
 </section>
-
-<style>
-  .history {
-    display: flex;
-    flex-direction: column;
-    height: 100%;
-    min-height: 0;
-    background: var(--m3-surface);
-  }
-
-  /* -- sidebar header (workspace history column) ----------------------------- */
-
-  .sidebar-head {
-    flex: none;
-    display: flex;
-    align-items: center;
-    gap: 0.25rem;
-    padding: 0.3rem 0.4rem 0.3rem 0.6rem;
-    border-bottom: 1px solid var(--m3-outline-variant);
-    background: var(--m3-surface-container, var(--m3-surface));
-  }
-
-  .sh-title {
-    flex: 1;
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    font-size: 0.6875rem;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-    color: var(--m3-on-surface-variant);
-  }
-
-  /* Compact filter bar: search grows, advanced fields live behind Filters. */
-  .filterbar.compact {
-    gap: 0.25rem;
-    padding: 0.3rem 0.4rem;
-  }
-
-  .filterbar.compact .search {
-    flex: 1 1 7rem;
-    width: auto;
-    min-width: 0;
-  }
-
-  .filterbar.compact .status {
-    flex-basis: 100%;
-    margin-left: 0;
-  }
-
-  /* The list ↔ detail SplitPane fills the rest of the panel (its divider
-   * carries the user's ratio; the panes size both children). */
-  .history > :global(.split) {
-    flex: 1;
-    min-height: 0;
-  }
-
-  /* -- filter bar ------------------------------------------------------------ */
-
-  .filterbar {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 0.375rem;
-    padding: 0.375rem 0.75rem;
-    border-bottom: 1px solid var(--m3-outline-variant);
-    background: var(--m3-surface-container, var(--m3-surface));
-    font-size: 0.75rem;
-  }
-
-  input.f {
-    width: 9rem;
-    padding: 0.2rem 0.45rem;
-    font-size: 0.75rem;
-    color: var(--m3-on-surface);
-    background: var(--m3-surface);
-    border: 1px solid var(--m3-outline-variant);
-    border-radius: var(--m3-shape-extra-small, 4px);
-  }
-
-  input.f.wide {
-    width: 12rem;
-  }
-
-  input.f:focus-visible,
-  input[type="date"]:focus-visible {
-    outline: 2px solid var(--m3-primary);
-    outline-offset: -1px;
-  }
-
-  label.date {
-    display: flex;
-    align-items: center;
-    gap: 0.25rem;
-    color: var(--m3-on-surface-variant);
-  }
-
-  input[type="date"] {
-    padding: 0.15rem 0.3rem;
-    font-size: 0.6875rem;
-    color: var(--m3-on-surface);
-    background: var(--m3-surface);
-    border: 1px solid var(--m3-outline-variant);
-    border-radius: var(--m3-shape-extra-small, 4px);
-  }
-
-  label.regex {
-    display: flex;
-    align-items: center;
-    gap: 0.25rem;
-    color: var(--m3-on-surface-variant);
-    cursor: not-allowed;
-  }
-
-  .sr-only {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    overflow: hidden;
-    clip: rect(0 0 0 0);
-    white-space: nowrap;
-  }
-
-  .detail-open:focus-visible {
-    outline: 2px solid var(--m3-primary);
-    outline-offset: 1px;
-  }
-
-  .status {
-    margin-left: auto;
-    color: var(--m3-on-surface-variant);
-    font-size: 0.6875rem;
-    display: flex;
-    align-items: center;
-    gap: 0.375rem;
-  }
-
-  .status .err {
-    color: var(--m3-error);
-  }
-
-  /* -- log list + graph (scroll-synced panes) --------------------------------- */
-
-  .listwrap {
-    position: relative;
-    flex: 1;
-    min-height: 0;
-    display: flex;
-  }
-
-  .empty {
-    margin: auto;
-    color: var(--m3-on-surface-variant);
-    font-size: 0.8125rem;
-  }
-
-  .empty-loading {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.4rem;
-  }
-
-  /* Rows pane: in the full layout it hides its own gutter — the canvas's
-     scrollbar drives both. The sidebar has no graph, so it owns the gutter. */
-  .scroller {
-    flex: 1;
-    min-width: 0;
-    overflow-y: auto;
-  }
-
-  .history:not(.sidebar) .scroller {
-    scrollbar-width: none;
-  }
-
-  .history:not(.sidebar) .scroller::-webkit-scrollbar {
-    display: none;
-  }
-
-  /* Sidebar rows: narrower padding, no author (the relative date + refs and
-     short sha carry the identification at this width). */
-  .history.sidebar .row {
-    gap: 0.3rem;
-    padding: 0 0.45rem 0 0.55rem;
-  }
-
-  .history.sidebar .row .author {
-    display: none;
-  }
-
-  .history.sidebar .row .date {
-    font-size: 0.65rem;
-  }
-
-  .history.sidebar .row .ref {
-    max-width: 6rem;
-  }
-
-  /* Compact pills in the sidebar: the scope word goes, the tint carries the
-     kind (full view keeps it for scanability). */
-  .history.sidebar .row .ref .ref-scope {
-    display: none;
-  }
-
-  .scroller:focus-visible {
-    outline: 2px solid var(--m3-primary);
-    outline-offset: -2px;
-  }
-
-  .spacer {
-    position: relative;
-  }
-
-  .row {
-    position: absolute;
-    left: 0;
-    right: 0;
-    display: flex;
-    align-items: center;
-    gap: 0.4rem;
-    padding: 0 0.6rem 0 0.75rem;
-    font-size: 0.8125rem;
-    cursor: pointer;
-    border-bottom: 1px solid color-mix(in srgb, var(--m3-outline-variant) 45%, transparent);
-  }
-
-  .row:hover {
-    background: var(--m3-surface-container-low, var(--m3-surface));
-  }
-
-  .row.selected {
-    background: var(--m3-secondary-container);
-    color: var(--m3-on-secondary-container);
-  }
-
-  /* shift-click range members (primary selection stays `.selected`) */
-  .row.multisel {
-    background: color-mix(in srgb, var(--m3-secondary-container) 45%, var(--m3-surface));
-  }
-
-  .row .sha {
-    flex: none;
-    font-family: ui-monospace, Consolas, monospace;
-    color: var(--m3-on-surface-variant);
-  }
-
-  .row.selected .sha {
-    color: inherit;
-  }
-
-  .row .summary {
-    flex: 1;
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .row .author {
-    flex: none;
-    max-width: 10rem;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    color: var(--m3-on-surface-variant);
-  }
-
-  .row.selected .author {
-    color: inherit;
-  }
-
-  .row .date {
-    flex: none;
-    color: var(--m3-on-surface-variant);
-    font-size: 0.6875rem;
-  }
-
-  /* ref chips (rows; CommitDetail carries its own copies) */
-  .ref {
-    flex: none;
-    display: inline-flex;
-    align-items: center;
-    gap: 0.25rem;
-    max-width: 9rem;
-    white-space: nowrap;
-    padding: 0 0.35rem;
-    border: 1px solid transparent;
-    border-radius: var(--m3-shape-extra-small, 4px);
-    font-size: 0.6875rem;
-    line-height: 1.4;
-  }
-
-  .ref-scope {
-    flex: none;
-    font-size: 0.55rem;
-    font-weight: 700;
-    letter-spacing: 0.025em;
-    text-transform: uppercase;
-    opacity: 0.8;
-  }
-
-  .ref-name {
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
-  .ref-local {
-    color: var(--m3-on-primary-container);
-    background: var(--m3-primary-container);
-  }
-
-  .ref-remote {
-    color: var(--m3-on-surface-variant);
-    background: none;
-    border: 1px solid var(--m3-outline-variant);
-  }
-
-  .ref-tag {
-    color: var(--m3-on-tertiary-container);
-    background: var(--m3-tertiary-container);
-  }
-
-  /* HEAD: primary-tinted with a solid border — distinct, but no louder than
-     the commit summary (the old near-black chip out-shouted every row). */
-  .ref-head {
-    color: var(--m3-on-primary-container);
-    background: var(--m3-primary-container);
-    border-color: var(--m3-primary);
-  }
-
-  .ref-more {
-    color: var(--m3-on-surface-variant);
-    background: var(--m3-surface-container-high, var(--m3-surface));
-    font-variant-numeric: tabular-nums;
-  }
-
-  .graphcol {
-    flex: none;
-    height: 100%;
-    min-height: 0;
-    border-left: 1px solid var(--m3-outline-variant);
-    background: var(--m3-surface);
-  }
-
-  /* -- detail pane (CommitDetail owns its styles; the reopen strip stays) ---- */
-
-  .detail-open {
-    flex: none;
-    padding: 0.25rem 0.75rem;
-    text-align: left;
-    font-size: 0.72rem;
-    color: var(--m3-primary);
-    background: var(--m3-surface-container, var(--m3-surface));
-    border: none;
-    border-top: 1px solid var(--m3-outline-variant);
-    cursor: pointer;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-</style>

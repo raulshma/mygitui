@@ -13,6 +13,7 @@
    */
   import type { FileDiff } from "$lib/ipc/types";
   import type { LoadImageFn } from "$lib/components/diff/rowModel";
+  import { Toggle } from "$lib/components/ui/toggle/index.js";
 
   let {
     file,
@@ -66,242 +67,75 @@
   }
 </script>
 
-<div class="imgcmp">
-  <div class="controls">
-    <div class="seg" role="group" aria-label="Image compare mode">
-      <button
-        type="button"
-        class:active={!overlay}
-        aria-pressed={!overlay}
-        onclick={() => switchToOverlay(false)}
-      >Side by side</button>
-      <button
-        type="button"
-        class:active={overlay}
-        aria-pressed={overlay}
-        onclick={() => switchToOverlay(true)}
-      >Overlay</button>
+<div class="imgcmp flex h-full min-h-0 flex-col gap-2 px-3 py-2 box-border">
+  <div class="controls flex shrink-0 items-center gap-3">
+    <div class="seg flex overflow-hidden rounded-full border border-border" role="group" aria-label="Image compare mode">
+      <Toggle
+        class="h-auto rounded-none border-0 px-[0.6rem] py-[0.3rem] font-normal text-[0.6875rem] leading-none text-muted-foreground aria-pressed:text-foreground focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary focus-visible:ring-0"
+        pressed={!overlay}
+        onPressedChange={(next) => next && switchToOverlay(false)}
+      >Side by side</Toggle>
+      <Toggle
+        class="h-auto rounded-none border-0 px-[0.6rem] py-[0.3rem] font-normal text-[0.6875rem] leading-none text-muted-foreground aria-pressed:text-foreground focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary focus-visible:ring-0"
+        pressed={overlay}
+        onPressedChange={(next) => next && switchToOverlay(true)}
+      >Overlay</Toggle>
     </div>
-    <label class="slider">
-      <span class="lbl">Old</span>
+    <label class="slider flex min-w-0 flex-1 items-center gap-2">
+      <span class="lbl shrink-0 text-[0.6875rem] text-muted-foreground">Old</span>
       <input
         type="range"
         min="0"
         max="100"
         step="1"
+        class="min-w-16 flex-1 accent-primary"
         bind:value={opacityPct}
         disabled={!overlay || blink}
         aria-label="New image opacity (0 = old image, 100 = new image)"
       />
-      <span class="lbl">New</span>
+      <span class="lbl shrink-0 text-[0.6875rem] text-muted-foreground">New</span>
     </label>
-    <button
-      type="button"
-      class="blink-btn"
-      class:active={blink}
-      aria-pressed={blink}
+    <Toggle
+      class="h-auto shrink-0 rounded-full border border-border px-3 py-[0.3rem] font-normal text-[0.6875rem] text-muted-foreground aria-pressed:border-transparent aria-pressed:text-[var(--app-renamed)] aria-pressed:bg-[var(--app-renamed-bg)] disabled:cursor-default disabled:opacity-45 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary focus-visible:ring-0"
+      pressed={blink}
       disabled={!overlay}
-      onclick={() => (blink = !blink)}
-    >Blink</button>
+      onPressedChange={(next) => (blink = next)}
+    >Blink</Toggle>
   </div>
 
   {#if overlay}
-    <div class="stage stack" class:blink>
+    <div class="stage stack relative grid min-h-0 flex-1 place-items-center">
       {#if oldUrl}
-        <img class="base" src={oldUrl} alt={`Old version of ${file.path}`} />
+        <img class="base max-h-full max-w-full object-contain rounded border border-[var(--diff-divider)] bg-background [grid-area:1_/_1]" src={oldUrl} alt={`Old version of ${file.path}`} />
       {:else}
-        <div class="placeholder">{loading ? "Loading old image…" : "Old image unavailable"}</div>
+        <div class="placeholder grid h-full w-full min-h-12 place-items-center rounded border border-dashed border-border bg-muted text-xs text-muted-foreground [grid-area:1_/_1]">{loading ? "Loading old image…" : "Old image unavailable"}</div>
       {/if}
       {#if newUrl}
-        <img class="overlay" style:opacity={opacityPct / 100} src={newUrl} alt={`New version of ${file.path}`} />
+        <img class="overlay max-h-full max-w-full object-contain rounded border border-[var(--diff-divider)] bg-background [grid-area:1_/_1] {blink ? 'animate-[diff-blink_1s_step-end_infinite] motion-reduce:animate-none' : ''}" style:opacity={opacityPct / 100} src={newUrl} alt={`New version of ${file.path}`} />
       {:else}
-        <div class="placeholder overlay" style:opacity={opacityPct / 100}>
+        <div class="placeholder overlay grid h-full w-full min-h-12 place-items-center rounded border border-dashed border-border bg-muted text-xs text-muted-foreground [grid-area:1_/_1] {blink ? 'animate-[diff-blink_1s_step-end_infinite] motion-reduce:animate-none' : ''}" style:opacity={opacityPct / 100}>
           {loading ? "Loading new image…" : "New image unavailable"}
         </div>
       {/if}
     </div>
   {:else}
-    <div class="stage side">
-      <figure class="panel">
+    <div class="stage side flex min-h-0 flex-1 gap-3">
+      <figure class="panel m-0 flex min-w-0 flex-1 flex-col gap-1">
         {#if oldUrl}
-          <img src={oldUrl} alt={`Old version of ${file.path}`} />
+          <img class="min-h-0 w-full flex-1 object-contain rounded border border-[var(--diff-divider)] bg-background" src={oldUrl} alt={`Old version of ${file.path}`} />
         {:else}
-          <div class="placeholder">{loading ? "Loading old image…" : "Old image unavailable"}</div>
+          <div class="placeholder grid h-full w-full min-h-12 place-items-center rounded border border-dashed border-border bg-muted text-xs text-muted-foreground">{loading ? "Loading old image…" : "Old image unavailable"}</div>
         {/if}
-        <figcaption>Old — {file.old_path ?? file.path}</figcaption>
+        <figcaption class="shrink-0 overflow-hidden text-ellipsis whitespace-nowrap font-mono text-[0.6875rem] text-muted-foreground">Old — {file.old_path ?? file.path}</figcaption>
       </figure>
-      <figure class="panel">
+      <figure class="panel m-0 flex min-w-0 flex-1 flex-col gap-1">
         {#if newUrl}
-          <img src={newUrl} alt={`New version of ${file.path}`} />
+          <img class="min-h-0 w-full flex-1 object-contain rounded border border-[var(--diff-divider)] bg-background" src={newUrl} alt={`New version of ${file.path}`} />
         {:else}
-          <div class="placeholder">{loading ? "Loading new image…" : "New image unavailable"}</div>
+          <div class="placeholder grid h-full w-full min-h-12 place-items-center rounded border border-dashed border-border bg-muted text-xs text-muted-foreground">{loading ? "Loading new image…" : "New image unavailable"}</div>
         {/if}
-        <figcaption>New — {file.path}</figcaption>
+        <figcaption class="shrink-0 overflow-hidden text-ellipsis whitespace-nowrap font-mono text-[0.6875rem] text-muted-foreground">New — {file.path}</figcaption>
       </figure>
     </div>
   {/if}
 </div>
-
-<style>
-  .imgcmp {
-    display: flex;
-    flex-direction: column;
-    height: 100%;
-    min-height: 0;
-    padding: 0.5rem 0.75rem;
-    box-sizing: border-box;
-    gap: 0.5rem;
-  }
-
-  .controls {
-    flex: none;
-    display: flex;
-    align-items: center;
-    gap: 0.75rem;
-  }
-
-  .seg {
-    display: flex;
-    border: 1px solid var(--m3-outline-variant);
-    border-radius: 999px;
-    overflow: hidden;
-  }
-  .seg button {
-    border: none;
-    background: transparent;
-    color: var(--m3-on-surface-variant);
-    font-size: 0.6875rem;
-    line-height: 1;
-    padding: 0.3rem 0.6rem;
-    cursor: pointer;
-  }
-  .seg button.active {
-    background: var(--m3-secondary-container);
-    color: var(--m3-on-secondary-container);
-  }
-  .seg button:focus-visible,
-  .blink-btn:focus-visible {
-    outline: 2px solid var(--m3-primary);
-    outline-offset: 1px;
-  }
-
-  .slider {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    flex: 1;
-    min-width: 0;
-  }
-  .lbl {
-    flex: none;
-    font-size: 0.6875rem;
-    color: var(--m3-on-surface-variant);
-  }
-  .slider input[type="range"] {
-    flex: 1;
-    min-width: 4rem;
-    accent-color: var(--m3-primary);
-  }
-
-  .blink-btn {
-    flex: none;
-    border: 1px solid var(--m3-outline-variant);
-    border-radius: 999px;
-    background: transparent;
-    color: var(--m3-on-surface-variant);
-    font-size: 0.6875rem;
-    padding: 0.3rem 0.75rem;
-    cursor: pointer;
-  }
-  .blink-btn.active {
-    background: var(--m3-tertiary-container);
-    color: var(--m3-on-tertiary-container);
-    border-color: transparent;
-  }
-  .blink-btn:disabled {
-    opacity: 0.45;
-    cursor: default;
-  }
-
-  /* ---- side-by-side ---- */
-  .stage.side {
-    flex: 1;
-    min-height: 0;
-    display: flex;
-    gap: 0.75rem;
-  }
-  .panel {
-    flex: 1;
-    min-width: 0;
-    display: flex;
-    flex-direction: column;
-    margin: 0;
-    gap: 0.25rem;
-  }
-  .panel img {
-    flex: 1;
-    min-height: 0;
-    width: 100%;
-    object-fit: contain;
-    border: 1px solid var(--diff-divider);
-    border-radius: var(--m3-shape-extra-small, 4px);
-    background: var(--m3-surface-container-lowest, var(--m3-surface));
-  }
-  .panel figcaption {
-    flex: none;
-    font-size: 0.6875rem;
-    color: var(--m3-on-surface-variant);
-    font-family: ui-monospace, Consolas, monospace;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  /* ---- overlay compare ---- */
-  .stage.stack {
-    position: relative;
-    flex: 1;
-    min-height: 0;
-    display: grid;
-    place-items: center;
-  }
-  .stage.stack .base,
-  .stage.stack .overlay,
-  .stage.stack .placeholder {
-    grid-area: 1 / 1;
-  }
-  .stage.stack img {
-    max-width: 100%;
-    max-height: 100%;
-    object-fit: contain;
-    border: 1px solid var(--diff-divider);
-    border-radius: var(--m3-shape-extra-small, 4px);
-    background: var(--m3-surface-container-lowest, var(--m3-surface));
-  }
-
-  .placeholder {
-    display: grid;
-    place-items: center;
-    width: 100%;
-    height: 100%;
-    min-height: 3rem;
-    border: 1px dashed var(--m3-outline-variant);
-    border-radius: var(--m3-shape-extra-small, 4px);
-    color: var(--m3-on-surface-variant);
-    font-size: 0.75rem;
-    background: var(--m3-surface-container-low, var(--m3-surface));
-  }
-
-  .stage.blink .overlay {
-    animation: diff-blink 1s step-end infinite;
-  }
-  @keyframes diff-blink {
-    0% { opacity: 0; }
-    50% { opacity: 1; }
-  }
-  @media (prefers-reduced-motion: reduce) {
-    .stage.blink .overlay {
-      animation: none;
-    }
-  }
-</style>

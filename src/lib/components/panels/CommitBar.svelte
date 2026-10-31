@@ -28,7 +28,10 @@
   import { tabStore } from "$lib/stores/tabs.svelte";
   import { toast } from "$lib/toast";
   import { showMenuAtElement } from "$lib/components/menu/contextMenuStore.svelte";
-  import { IconButton, Spinner } from "$lib/components/m3";
+  import { Button } from "$lib/components/ui/button/index.js";
+  import { Spinner } from "$lib/components/ui/spinner/index.js";
+  import { Input } from "$lib/components/ui/input/index.js";
+  import { Textarea } from "$lib/components/ui/textarea/index.js";
   import Icon from "$lib/components/icons/Icon.svelte";
   import { ai } from "$lib/ai/ai.svelte";
   import AiFeatureButton from "$lib/components/ai/AiFeatureButton.svelte";
@@ -297,49 +300,54 @@
 </script>
 
 <form
-  class="commit-bar"
+  class="commit-bar flex-none flex flex-col gap-[0.3rem] px-[0.45rem] py-1.5 border-t border-border bg-card text-[0.8125rem]"
   aria-label="Create commit"
   onsubmit={(e) => {
     e.preventDefault();
     void doCommit();
   }}
 >
-  <div class="row-main">
+  <div class="row-main flex flex-col gap-[0.3rem] min-h-0">
     <label class="sr-only" for="commit-message">Commit message</label>
-    <textarea
+    <Textarea
       id="commit-message"
-      class="message"
+      class="message flex-none w-full min-w-0 box-border field-sizing-fixed min-h-[1.7rem] max-h-44 resize-none overflow-y-hidden rounded-sm px-2 py-[0.28rem] text-xs leading-[1.35] font-mono bg-background"
       placeholder="Commit message… Ctrl+↵"
       title="Commit message (Ctrl+Enter commits)"
       aria-keyshortcuts="Control+Enter Meta+Enter"
-      rows="1"
-      bind:this={messageEl}
+      rows={1}
+      bind:ref={messageEl}
       bind:value={message}
       onkeydown={onMessageKeydown}
       disabled={commitBusy || committing}
-    ></textarea>
+    />
 
-    <div class="controls">
-      <div class="opt-switches">
+    <div class="controls flex items-center flex-wrap gap-x-[0.375rem] gap-y-1 w-full min-w-0">
+      <div class="opt-switches flex items-center gap-0.5 min-w-0">
         {#if anyOption}
-          <span class="opt-summary" role="status" title="Active commit options">
+          <span class="opt-summary shrink-0 max-w-48 overflow-hidden text-ellipsis whitespace-nowrap px-[0.45rem] py-px rounded-full bg-muted text-muted-foreground text-[0.65rem] leading-normal" role="status" title="Active commit options">
             {optionSummary}
           </span>
         {/if}
-        <IconButton
-          icon={iconOptions}
-          label="More commit options"
-          title="Amend, skip hooks, or override the author"
-          pressed={anyOption}
+        <Button
+          class="text-muted-foreground hover:bg-accent hover:text-accent-foreground aria-pressed:bg-accent aria-pressed:text-accent-foreground"
+          variant="ghost"
+          size="icon-sm"
+          type="button"
+          aria-label="More commit options"
+          aria-pressed={anyOption}
           aria-haspopup="menu"
+          title="Amend, skip hooks, or override the author"
           onclick={openCommitOptions}
-        />
+        >
+          <Icon icon={iconOptions} size={16} />
+        </Button>
 
         {#if signing?.active || runningHooks.length > 0}
-          <span class="meta-icons">
+          <span class="meta-icons inline-flex items-center gap-0.5 ml-0.5 pl-1 border-l border-border">
             {#if signing?.active}
               <span
-                class="meta-icon sign"
+                class="meta-icon sign inline-flex items-center justify-center text-foreground/80 opacity-90"
                 role="img"
                 title={signing.key_id
                   ? `Commits will be signed with ${signing.format} (key ${signing.key_id})`
@@ -351,7 +359,7 @@
             {/if}
             {#each runningHooks as hook (hook.kind)}
               <span
-                class="meta-icon hook"
+                class="meta-icon hook inline-flex items-center justify-center text-primary opacity-90"
                 role="img"
                 title="{hook.kind} will run on commit"
                 aria-label={`${hook.kind} hook will run`}
@@ -363,18 +371,21 @@
         {/if}
       </div>
 
-      <div class="actions">
-        <IconButton
-          icon={fixing ? iconProgress : iconFixup}
-          class={fixing ? "fixup-spin" : ""}
-          label="Fixup into HEAD"
+      <div class="actions ml-auto flex items-center flex-wrap gap-1">
+        <Button
+          class={`text-[var(--app-added)] hover:bg-accent hover:text-accent-foreground ${fixing ? "[&_svg]:animate-spin" : ""}`}
+          variant="ghost"
+          size="icon-sm"
+          type="button"
+          aria-label="Fixup into HEAD"
           title="Commit the staged changes as fixup! into HEAD (message not needed)"
-          tone="success"
           disabled={!canFixup}
           onclick={() => void doFixup()}
-        />
+        >
+          <Icon icon={fixing ? iconProgress : iconFixup} size={16} />
+        </Button>
 
-        <div class="primary">
+        <div class="primary inline-flex items-center gap-[0.375rem]">
           <AiFeatureButton
             {repoId}
             icon
@@ -396,48 +407,48 @@ ${m.body}` : m.subject;
             }}
           />
 
-          <button
-            class="go"
+          <Button
+            class="h-7 min-w-[5.25rem] gap-[0.35rem] rounded-full px-4 text-xs"
             type="submit"
             title={commitHint}
             aria-describedby={showStagedHint ? "commit-staged-hint" : undefined}
             disabled={!canCommit}
           >
             {#if commitBusy || committing}
-              <Spinner size={12} />
+              <Spinner class="size-3" role="presentation" aria-hidden="true" />
               <span>Committing…</span>
             {:else}
               <span>Commit</span>
             {/if}
-          </button>
+          </Button>
         </div>
       </div>
     </div>
   </div>
 
   {#if showStagedHint}
-    <p id="commit-staged-hint" class="staged-hint" role="status">
+    <p id="commit-staged-hint" class="staged-hint m-0 text-muted-foreground text-[0.6875rem] leading-[1.3]" role="status">
       No staged changes yet — stage a file to commit.
     </p>
   {/if}
 
   {#if showAuthor}
-    <div class="author">
-      <label>
-        <span class="al">Name</span>
-        <input
+    <div class="author flex flex-col gap-[0.3rem] pt-0.5">
+      <label class="flex-1 flex items-center gap-[0.375rem] min-w-0">
+        <span class="al shrink-0 text-muted-foreground text-[0.6875rem]">Name</span>
+        <Input
           type="text"
-          class="ai-input"
+          class="h-auto flex-1 min-w-0 rounded-sm px-1.5 py-[0.15rem] text-[0.72rem]"
           placeholder="Ada Lovelace"
           bind:value={authorName}
           aria-label="Author name override"
         />
       </label>
-      <label>
-        <span class="al">Email</span>
-        <input
+      <label class="flex-1 flex items-center gap-[0.375rem] min-w-0">
+        <span class="al shrink-0 text-muted-foreground text-[0.6875rem]">Email</span>
+        <Input
           type="email"
-          class="ai-input"
+          class="h-auto flex-1 min-w-0 rounded-sm px-1.5 py-[0.15rem] text-[0.72rem]"
           placeholder="ada@example.com"
           bind:value={authorEmail}
           aria-label="Author email override"
@@ -447,216 +458,6 @@ ${m.body}` : m.subject;
   {/if}
 
   {#if error}
-    <p class="error" role="alert">{error}</p>
+    <p class="error m-0 text-destructive text-[0.72rem] [overflow-wrap:anywhere]" role="alert">{error}</p>
   {/if}
 </form>
-
-<style>
-  /* Narrow source-control sidebar variant: everything stacks vertically in
-     the bottom-pinned commit area. */
-  .commit-bar {
-    flex: none;
-    display: flex;
-    flex-direction: column;
-    gap: 0.3rem;
-    padding: 0.375rem 0.45rem;
-    border-top: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    background: var(--m3-surface-container, var(--m3-surface));
-    font-size: 0.8125rem;
-  }
-
-  .row-main {
-    display: flex;
-    flex-direction: column;
-    gap: 0.3rem;
-    min-height: 0;
-  }
-
-  .message {
-    flex: none;
-    width: 100%;
-    min-width: 0;
-    box-sizing: border-box;
-    min-height: 1.7rem;
-    max-height: 11rem;
-    resize: none;
-    overflow-y: hidden;
-    line-height: 1.35;
-    font: inherit;
-    font-family: ui-monospace, Consolas, monospace;
-    font-size: 0.75rem;
-    color: var(--m3-on-surface);
-    background: var(--m3-surface-container-lowest, var(--m3-surface));
-    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    border-radius: var(--m3-shape-extra-small, 4px);
-    padding: 0.28rem 0.5rem;
-  }
-
-  .message:focus-visible {
-    outline: 2px solid var(--m3-primary);
-    outline-offset: -1px;
-  }
-
-  .controls {
-    display: flex;
-    align-items: center;
-    flex-wrap: wrap;
-    gap: 0.25rem 0.375rem;
-    width: 100%;
-    min-width: 0;
-  }
-
-  .opt-switches {
-    display: flex;
-    align-items: center;
-    gap: 0.125rem;
-    min-width: 0;
-  }
-
-  /* Active-option state chip ("Amend · Hooks off") — the menu toggles are
-     invisible once closed, so the state stays readable (UI review P2 #7). */
-  .opt-summary {
-    flex: none;
-    max-width: 12rem;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    padding: 0.05rem 0.45rem;
-    border-radius: var(--m3-shape-full, 9999px);
-    background: var(--m3-secondary-container, var(--m3-surface-container-high));
-    color: var(--m3-on-secondary-container, var(--m3-secondary));
-    font-size: 0.65rem;
-    line-height: 1.5;
-  }
-
-  .meta-icons {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.125rem;
-    margin-left: 0.125rem;
-    padding-left: 0.25rem;
-    border-left: 1px solid var(--m3-outline-variant, var(--m3-primary));
-  }
-
-  .meta-icon {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    opacity: 0.9;
-  }
-
-  .meta-icon.sign {
-    color: var(--m3-tertiary, var(--m3-on-surface-variant));
-  }
-
-  .meta-icon.hook {
-    color: var(--m3-primary);
-  }
-
-  .actions {
-    margin-left: auto;
-    display: flex;
-    align-items: center;
-    flex-wrap: wrap;
-    gap: 0.25rem;
-  }
-
-  .primary {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.375rem;
-  }
-
-  :global(.fixup-spin svg) {
-    animation: spin 1s linear infinite;
-  }
-
-  @keyframes spin {
-    to {
-      transform: rotate(360deg);
-    }
-  }
-
-  .go:focus-visible {
-    outline: 2px solid var(--m3-primary);
-    outline-offset: 1px;
-  }
-
-  .go {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    gap: 0.35rem;
-    min-width: 5.25rem;
-    height: 1.75rem;
-    border: none;
-    border-radius: var(--m3-shape-full, 9999px);
-    background: var(--m3-primary);
-    color: var(--m3-on-primary);
-    font: inherit;
-    font-size: 0.75rem;
-    font-weight: 500;
-    padding: 0 1rem;
-    cursor: pointer;
-  }
-
-  /* M3 disabled: keep the label legible (no washed-out 55% opacity). */
-  .go:disabled {
-    cursor: not-allowed;
-    background: var(--app-disabled-bg);
-    color: var(--app-disabled-fg);
-  }
-
-  .staged-hint {
-    margin: 0;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    font-size: 0.6875rem;
-    line-height: 1.3;
-  }
-
-  .author {
-    display: flex;
-    flex-direction: column;
-    gap: 0.3rem;
-    padding-top: 0.125rem;
-  }
-
-  .author label {
-    flex: 1;
-    display: flex;
-    align-items: center;
-    gap: 0.375rem;
-    min-width: 0;
-  }
-
-  .al {
-    flex: none;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    font-size: 0.6875rem;
-  }
-
-  .ai-input {
-    flex: 1;
-    min-width: 0;
-    font: inherit;
-    font-size: 0.72rem;
-    color: var(--m3-on-surface);
-    background: var(--m3-surface-container-lowest, var(--m3-surface));
-    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    border-radius: var(--m3-shape-extra-small, 4px);
-    padding: 0.15rem 0.375rem;
-  }
-
-  .ai-input:focus-visible {
-    outline: 2px solid var(--m3-primary);
-    outline-offset: -1px;
-  }
-
-  .error {
-    margin: 0;
-    color: var(--m3-error, inherit);
-    font-size: 0.72rem;
-    overflow-wrap: anywhere;
-  }
-</style>

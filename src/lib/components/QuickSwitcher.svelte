@@ -22,12 +22,14 @@
     type RankedItem,
   } from "$lib/stores/switcher.svelte";
   import { toast } from "$lib/toast";
+  import { Input } from "$lib/components/ui/input/index.js";
+  import { Badge } from "$lib/components/ui/badge/index.js";
 
   const open = $derived(isSwitcherOpen());
 
   let query = $state("");
   let activeIndex = $state(0);
-  let inputEl: HTMLInputElement | undefined = $state();
+  let inputEl: HTMLInputElement | null = $state(null);
 
   // Snapshot recents/tabs while computing matches; tabs are rune state so
   // this stays fresh, and recents are re-read on every open (see effect).
@@ -128,9 +130,14 @@
 <svelte:window onkeydown={onGlobalKeydown} />
 
 {#if open}
-  <div class="scrim" role="presentation" onclick={close} onkeydown={onScrimKeydown}>
+  <div
+    class="scrim fixed inset-0 z-[60] flex justify-center items-start pt-[12vh] bg-black/50"
+    role="presentation"
+    onclick={close}
+    onkeydown={onScrimKeydown}
+  >
     <div
-      class="panel"
+      class="panel flex flex-col overflow-hidden w-[min(34rem,calc(100vw-2rem))] bg-popover text-popover-foreground rounded-xl shadow-lg"
       role="dialog"
       aria-modal="true"
       aria-label="Quick switcher"
@@ -138,8 +145,8 @@
       onclick={(event) => event.stopPropagation()}
       onkeydown={onPanelKeydown}
     >
-      <input
-        class="search"
+      <Input
+        class="search m-3 h-auto rounded-full border-0 bg-muted px-4 py-2.5 text-base shadow-none ring-0 focus-visible:border-0 focus-visible:ring-2 focus-visible:ring-ring md:text-base"
         type="text"
         role="combobox"
         aria-expanded="true"
@@ -149,16 +156,22 @@
         aria-autocomplete="list"
         placeholder="Search open tabs and recent repositories…"
         bind:value={query}
-        bind:this={inputEl}
+        bind:ref={inputEl}
         onkeydown={onInputKeydown}
       />
-      <ul id="switcher-list" class="list" role="listbox" aria-label="Repositories">
+      <ul
+        id="switcher-list"
+        class="list list-none m-0 px-2 pt-1 pb-2 max-h-[50vh] overflow-y-auto"
+        role="listbox"
+        aria-label="Repositories"
+      >
         {#each ranked as item, i (item.id)}
           {@const hits = labelHits(item)}
           <li
             id={`sw-opt-${i}`}
-            class="option"
+            class="option flex items-center gap-2 px-3 py-2 rounded-full cursor-pointer min-w-0"
             class:active={i === activeIndex}
+            class:bg-accent={i === activeIndex}
             role="option"
             aria-selected={i === activeIndex}
             onclick={() => void activate(item)}
@@ -170,132 +183,37 @@
             }}
             onmouseenter={() => (activeIndex = i)}
           >
-            <span class="label">
-              {#each item.label as ch, j (j)}<span class:hl={hits.has(j)}>{ch}</span>{/each}
+            <span class="label min-w-0 font-medium whitespace-nowrap overflow-hidden text-ellipsis">
+              {#each item.label as ch, j (j)}<span
+                  class:hl={hits.has(j)}
+                  class:text-primary={hits.has(j)}
+                  class:font-bold={hits.has(j)}
+                >{ch}</span>{/each}
             </span>
-            <span class="sub">{item.sub}</span>
+            <span
+              class="sub flex-1 min-w-0 text-muted-foreground font-mono text-[0.6875rem] whitespace-nowrap overflow-hidden text-ellipsis"
+            >{item.sub}</span>
             {#if item.kind === "tab"}
-              <span class="badge" aria-label="Open tab">open</span>
+              <Badge
+                class="badge h-auto shrink-0 rounded-full border-border px-2 py-0.5 text-[0.625rem] uppercase tracking-[0.05em] text-primary"
+                variant="outline"
+                aria-label="Open tab"
+              >open</Badge>
             {/if}
           </li>
         {/each}
         {#if ranked.length === 0}
-          <li class="none" role="option" aria-disabled="true" aria-selected="false">
+          <li
+            class="none px-3 py-4 text-muted-foreground text-[0.8125rem]"
+            role="option"
+            aria-disabled="true"
+            aria-selected="false"
+          >
             No matches for “{query}”
           </li>
         {/if}
       </ul>
-      <footer class="hint">↑↓ navigate · ↵ open · esc close · cmd/ctrl+K toggle</footer>
+      <footer class="hint px-4 pt-2 pb-3 border-t border-border text-muted-foreground text-[0.6875rem]">↑↓ navigate · ↵ open · esc close · cmd/ctrl+K toggle</footer>
     </div>
   </div>
 {/if}
-
-<style>
-  .scrim {
-    position: fixed;
-    inset: 0;
-    z-index: 60;
-    background: color-mix(in srgb, var(--m3-scrim, #000) 32%, transparent);
-    display: flex;
-    justify-content: center;
-    align-items: flex-start;
-    padding-top: 12vh;
-  }
-
-  .panel {
-    width: min(34rem, calc(100vw - 2rem));
-    background: var(--m3-surface-container-high, var(--m3-surface));
-    border-radius: var(--m3-shape-extra-large, 28px);
-    box-shadow: var(--m3-elevation-3, 0 4px 8px rgba(0, 0, 0, 0.3));
-    overflow: hidden;
-    display: flex;
-    flex-direction: column;
-  }
-
-  .search {
-    margin: 0.75rem;
-    padding: 0.625rem 1rem;
-    border: none;
-    border-radius: var(--m3-shape-full, 9999px);
-    background: var(--m3-surface-container-highest, var(--m3-surface));
-    color: var(--m3-on-surface);
-    font: inherit;
-  }
-
-  .search:focus-visible {
-    outline: 2px solid var(--m3-primary);
-  }
-
-  .search::placeholder {
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-  }
-
-  .list {
-    list-style: none;
-    margin: 0;
-    padding: 0.25rem 0.5rem 0.5rem;
-    max-height: 50vh;
-    overflow-y: auto;
-  }
-
-  .option {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    padding: 0.5rem 0.75rem;
-    border-radius: var(--m3-shape-full, 9999px);
-    cursor: pointer;
-    min-width: 0;
-  }
-
-  .option.active {
-    background: var(--m3-secondary-container, var(--m3-surface-container-highest));
-  }
-
-  .label {
-    font-weight: 500;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
-  .label .hl {
-    color: var(--m3-primary);
-    font-weight: 700;
-  }
-
-  .sub {
-    flex: 1;
-    min-width: 0;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    font-family: ui-monospace, Consolas, monospace;
-    font-size: 0.6875rem;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
-  .badge {
-    flex: none;
-    font-size: 0.625rem;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    color: var(--m3-primary);
-    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    border-radius: var(--m3-shape-full, 9999px);
-    padding: 0.0625rem 0.5rem;
-  }
-
-  .none {
-    padding: 1rem 0.75rem;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    font-size: 0.8125rem;
-  }
-
-  .hint {
-    padding: 0.5rem 1rem 0.75rem;
-    border-top: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    font-size: 0.6875rem;
-  }
-</style>

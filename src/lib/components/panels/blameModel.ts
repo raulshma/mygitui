@@ -6,7 +6,7 @@
  *
  * Computed ONCE per blame result (per unique sha), never per rendered row;
  * the color strings are static `color-mix` derivations of the theme's
- * `--m3-primary`, so dark/light themes adapt for free. No runes, no DOM.
+ * `--primary`, so dark/light themes adapt for free. No runes, no DOM.
  */
 
 /** Blame age scale: accent share at ratio 1 (newest). */
@@ -56,5 +56,5 @@ export function ageBackground(ratio: number): string {
   const clamped = Math.min(1, Math.max(0, ratio));
   const pct = Math.round(clamped * AGE_HEAT_MAX_PCT);
   if (pct <= 0) return "transparent";
-  return `color-mix(in srgb, var(--m3-primary) ${pct}%, transparent)`;
+  return `color-mix(in srgb, var(--primary) ${pct}%, transparent)`;
 }

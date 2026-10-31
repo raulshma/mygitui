@@ -9,7 +9,8 @@
   import { readFile } from "$lib/ipc/client";
   import { openPath } from "@tauri-apps/plugin-opener";
   import { isTauri } from "$lib/entry/dragdrop";
-  import { Spinner } from "$lib/components/m3";
+  import { Spinner } from "$lib/components/ui/spinner/index.js";
+  import { Button } from "$lib/components/ui/button/index.js";
   import Icon from "$lib/components/icons/Icon.svelte";
   import iconOpen from "@ktibow/iconset-material-symbols/open-in-new";
   import { toast } from "$lib/toast";
@@ -94,16 +95,16 @@
   }
 </script>
 
-<div class="preview" role="figure" aria-label="Preview of {path}">
+<div class="preview flex h-full min-h-0 flex-col items-center justify-center gap-[0.4rem] overflow-auto bg-card p-6" role="figure" aria-label="Preview of {path}">
   {#if isImage}
     {#if phase === "loading"}
-      <p class="state" role="status"><Spinner size={14} /> Loading image…</p>
+      <p class="state inline-flex items-center gap-[0.4rem] text-[0.8125rem] text-muted-foreground" role="status"><Spinner class="size-[14px]" role="presentation" aria-hidden="true" /> Loading image…</p>
     {:else if phase === "error"}
-      <p class="state state-error" role="alert">{errorText}</p>
+      <p class="state state-error inline-flex items-center gap-[0.4rem] text-[0.8125rem] text-destructive" role="alert">{errorText}</p>
     {:else if url !== null}
       <!-- svelte-ignore a11y_img_redundant_alt -->
       <img
-        class="image"
+        class="image max-h-full max-w-[min(100%,64rem)] border border-border rounded-sm bg-[repeating-conic-gradient(var(--muted)_0%_25%,var(--card)_0%_50%)] bg-[position:50%] bg-[size:16px_16px] object-contain"
         src={url}
         alt={path}
         onload={(event) => {
@@ -111,118 +112,25 @@
           naturalSize = { w: el.naturalWidth, h: el.naturalHeight };
         }}
       />
-      <p class="caption">
+      <p class="caption m-0 text-[0.6875rem] tabular-nums text-muted-foreground">
         {formatSize(meta.size)}{naturalSize ? ` · ${naturalSize.w}×${naturalSize.h}` : ""}
       </p>
     {/if}
   {:else}
-    <div class="card">
-      <p class="ctitle">{meta.kind === "binary" ? "Binary file" : "No inline preview"}</p>
-      <p class="ctext">
+    <div class="card flex flex-col items-center gap-[0.45rem] rounded-md border border-border bg-card px-[1.8rem] py-[1.4rem] text-center">
+      <p class="ctitle m-0 text-sm font-medium text-foreground">{meta.kind === "binary" ? "Binary file" : "No inline preview"}</p>
+      <p class="ctext m-0 font-mono text-xs text-muted-foreground">
         {path} · {formatSize(meta.size)}{meta.readonly ? " · read-only" : ""}
       </p>
-      <button class="cbtn" type="button" onclick={openExternally}>
+      <Button
+        class="cbtn mt-[0.3rem] h-auto gap-[0.35rem] rounded-full px-[0.85rem] py-[0.3rem] text-[0.78rem] font-normal"
+        variant="outline"
+        type="button"
+        onclick={openExternally}
+      >
         <Icon icon={iconOpen} size={14} />
         Open with system app
-      </button>
+      </Button>
     </div>
   {/if}
 </div>
-
-<style>
-  .preview {
-    height: 100%;
-    min-height: 0;
-    overflow: auto;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    gap: 0.4rem;
-    padding: 1.5rem;
-    background: var(--m3-surface);
-  }
-
-  .image {
-    max-width: min(100%, 64rem);
-    max-height: 100%;
-    object-fit: contain;
-    border: 1px solid var(--app-border, var(--m3-outline-variant));
-    border-radius: var(--m3-shape-small, 8px);
-    background:
-      repeating-conic-gradient(
-        var(--m3-surface-container) 0% 25%,
-        var(--m3-surface) 0% 50%
-      )
-      50% / 16px 16px;
-  }
-
-  .caption {
-    margin: 0;
-    font-size: 0.6875rem;
-    color: var(--m3-on-surface-variant);
-    font-variant-numeric: tabular-nums;
-  }
-
-  .card {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 0.45rem;
-    padding: 1.4rem 1.8rem;
-    border: 1px solid var(--app-border, var(--m3-outline-variant));
-    border-radius: var(--m3-shape-medium, 12px);
-    background: var(--m3-surface-container-low, var(--m3-surface));
-    text-align: center;
-  }
-
-  .ctitle {
-    margin: 0;
-    font-size: 0.875rem;
-    font-weight: 500;
-    color: var(--m3-on-surface);
-  }
-
-  .ctext {
-    margin: 0;
-    font-size: 0.75rem;
-    color: var(--m3-on-surface-variant);
-    font-family: var(--app-font-mono, ui-monospace, Consolas, monospace);
-  }
-
-  .cbtn {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.35rem;
-    margin-top: 0.3rem;
-    padding: 0.3rem 0.85rem;
-    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    border-radius: var(--m3-shape-full, 9999px);
-    background: none;
-    color: var(--m3-on-surface);
-    font: inherit;
-    font-size: 0.78rem;
-    cursor: pointer;
-  }
-
-  .cbtn:hover {
-    background: var(--m3-surface-container-high, var(--m3-surface));
-  }
-
-  .cbtn:focus-visible {
-    outline: 2px solid var(--m3-primary);
-    outline-offset: 1px;
-  }
-
-  .state {
-    color: var(--m3-on-surface-variant);
-    font-size: 0.8125rem;
-    display: inline-flex;
-    align-items: center;
-    gap: 0.4rem;
-  }
-
-  .state-error {
-    color: var(--m3-error);
-  }
-</style>

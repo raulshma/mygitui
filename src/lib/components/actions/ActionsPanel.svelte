@@ -32,6 +32,9 @@
   } from "$lib/stores/actions.svelte";
   import { projectsStore } from "$lib/stores/projects.svelte";
   import { emitUiEvent } from "$lib/palette/events";
+  import { Button } from "$lib/components/ui/button/index.js";
+  import { Badge } from "$lib/components/ui/badge/index.js";
+  import { Input } from "$lib/components/ui/input/index.js";
   import type { ProjectInfo, ProjectScript } from "$lib/ipc/types";
 
   let { repoId }: { repoId: string } = $props();
@@ -230,82 +233,93 @@
 
 </script>
 
-<section class="actions-panel" aria-label="Detected projects and custom actions">
-  <header class="section-head">
-    <h3 class="section-title">Detected projects</h3>
-    <span class="section-hint">Run or watch from the repo root</span>
-    <button
-      class="btn ghost"
+<section
+  class="actions-panel flex flex-col gap-[0.6rem] px-3 py-2 text-[0.8125rem] text-foreground"
+  aria-label="Detected projects and custom actions"
+>
+  <header class="section-head flex flex-wrap items-baseline gap-2">
+    <h3 class="section-title m-0 text-[0.9375rem] font-semibold">Detected projects</h3>
+    <span class="section-hint text-[0.7rem] text-muted-foreground">Run or watch from the repo root</span>
+    <Button
+      variant="outline"
+      size="xs"
+      class="btn ghost ml-auto rounded-full px-[0.6rem] text-[0.7rem] text-muted-foreground"
       type="button"
       disabled={projectsLoading}
       onclick={() => void projectsStore.refresh(repoId)}
     >
       {projectsLoading ? "Scanning…" : "Refresh"}
-    </button>
+    </Button>
   </header>
 
   {#if projectsError}
-    <p class="empty error" role="alert">
+    <p class="empty error m-0 text-xs text-destructive" role="alert">
       Project detection failed: {projectsError}
     </p>
   {:else if projectsLoading && projects.length === 0}
-    <p class="empty">Detecting projects…</p>
+    <p class="empty m-0 text-xs text-muted-foreground">Detecting projects…</p>
   {:else if projects.length === 0}
-    <p class="empty">
+    <p class="empty m-0 text-xs text-muted-foreground">
       No project manifests found. Detected: Node, Rust, Python, .NET, Android,
       Go, Ruby, PHP, and Make.
     </p>
   {:else}
-    <ul class="project-list" role="list">
+    <ul class="project-list m-0 flex list-none flex-col gap-[0.45rem] p-0" role="list">
       {#each projects as project (project.kind + ":" + project.path)}
-        <li class="project-card">
-          <div class="project-head">
-            <span class="project-kind">{projectKindLabel(project.kind)}</span>
-            <span class="project-name" title={project.name}>{project.name}</span>
+        <li class="project-card flex flex-col gap-[0.4rem] rounded-lg border border-border bg-card px-[0.55rem] py-[0.45rem]">
+          <div class="project-head flex min-w-0 flex-wrap items-baseline gap-[0.4rem]">
+            <span class="project-kind flex-none text-[0.625rem] font-bold uppercase tracking-[0.04em] text-primary">{projectKindLabel(project.kind)}</span>
+            <span class="project-name min-w-0 truncate text-[0.8rem] font-semibold" title={project.name}>{project.name}</span>
             {#if project.path !== "."}
-              <span class="project-path" title={project.path}>{project.path}</span>
+              <span class="project-path flex-none font-mono text-[0.68rem] text-muted-foreground" title={project.path}>{project.path}</span>
             {/if}
             <span
-              class="project-from"
+              class="project-from ml-auto max-w-[55%] truncate text-[0.65rem] text-muted-foreground opacity-75"
               title={`Detected from ${project.detected_from.join(", ")}`}
             >
               {project.detected_from.join(", ")}
             </span>
           </div>
           {#if project.scripts.length === 0}
-            <p class="empty">No scripts detected.</p>
+            <p class="empty m-0 text-xs text-muted-foreground">No scripts detected.</p>
           {:else}
-            <div class="script-grid">
+            <div class="script-grid grid grid-cols-[repeat(auto-fill,minmax(13rem,1fr))] gap-[0.35rem]">
               {#each project.scripts as script (`${script.id}:${script.command}`)}
                 {@const runName = scriptRunName(project, script)}
                 {@const running = runningNames.has(runName)}
-                <div class="script">
-                  <button
-                    class="script-run"
+                <div class="script min-w-0 overflow-hidden rounded-md border border-border bg-background">
+                  <Button
+                    variant="ghost"
+                    class="script-run flex w-full min-w-0 items-center justify-start gap-[0.35rem] rounded-none px-1 py-[0.3rem] text-left font-normal"
                     type="button"
                     disabled={running}
                     title={`${script.command}\n\n${script.watch ? "Long-running watcher" : "Runs to completion"}`}
                     onclick={() => runScript(project, script)}
                   >
-                    <span class="script-label">{script.label}</span>
-                    <span class="script-kind" class:watch={script.watch}>
+                    <span class="script-label min-w-0 flex-1 truncate text-xs font-medium">{script.label}</span>
+                    <Badge
+                      variant="outline"
+                      class={`script-kind ${script.watch ? "watch" : ""} h-auto flex-none rounded-full border-transparent px-[0.35rem] py-[0.04rem] text-[0.625rem] font-semibold uppercase tracking-[0.03em] ${script.watch ? "bg-secondary text-secondary-foreground" : "bg-muted text-muted-foreground"}`}
+                    >
                       {script.watch ? "watch" : scriptKindLabel(script.kind)}
-                    </span>
+                    </Badge>
                     {#if running}
-                      <span class="script-state">running…</span>
+                      <span class="script-state flex-none text-[0.62rem] text-primary">running…</span>
                     {/if}
-                  </button>
-                  <span class="script-command-row">
-                    <code class="script-command" title={script.command}>{script.command}</code>
-                    <button
-                      class="script-copy"
+                  </Button>
+                  <span class="script-command-row flex min-w-0 items-center gap-[0.2rem] border-t border-border pb-[0.15rem] pl-[0.4rem] pr-[0.2rem] pt-[0.15rem]">
+                    <code class="script-command min-w-0 flex-1 font-mono text-[0.65rem] leading-[1.35] text-muted-foreground [overflow-wrap:anywhere]" title={script.command}>{script.command}</code>
+                    <Button
+                      variant="ghost"
+                      size="icon-xs"
+                      class="script-copy flex-none text-[0.8rem] leading-none text-muted-foreground opacity-55 hover:opacity-100"
                       type="button"
                       aria-label={`Copy command for ${script.label}`}
                       title="Copy command"
                       onclick={() => void copyCommand(script.command)}
                     >
                       ⧉
-                    </button>
+                    </Button>
                   </span>
                 </div>
               {/each}
@@ -316,27 +330,27 @@
     </ul>
   {/if}
 
-  <header class="section-head actions-head">
-    <h3 class="section-title">Custom actions</h3>
-    <span class="section-hint">Shell commands run in the repository root</span>
+  <header class="section-head actions-head mt-[0.4rem] flex flex-wrap items-baseline gap-2">
+    <h3 class="section-title m-0 text-[0.9375rem] font-semibold">Custom actions</h3>
+    <span class="section-hint text-[0.7rem] text-muted-foreground">Shell commands run in the repository root</span>
   </header>
 
   {#if defs.length === 0}
-    <p class="empty">No custom actions yet — add one below.</p>
+    <p class="empty m-0 text-xs text-muted-foreground">No custom actions yet — add one below.</p>
   {:else}
-    <ul class="def-list" role="list">
+    <ul class="def-list m-0 flex list-none flex-col gap-1 p-0" role="list">
       {#each defs as def (def.id)}
-        <li class="def-row">
-          <div class="def-fields">
-            <input
-              class="def-name"
+        <li class="def-row flex flex-col gap-[0.3rem] rounded-lg border border-border bg-card px-[0.55rem] py-[0.45rem]">
+          <div class="def-fields flex gap-[0.4rem]">
+            <Input
+              class="def-name h-auto min-w-0 flex-[1_1_9rem] rounded px-[0.4rem] py-1 text-[0.78rem]"
               type="text"
               aria-label="Action name"
               value={def.name}
               onchange={(e) => actionsStore.updateDef(def.id, { name: e.currentTarget.value })}
             />
-            <input
-              class="def-command"
+            <Input
+              class="def-command h-auto min-w-0 flex-[2_1_14rem] rounded px-[0.4rem] py-1 font-mono text-[0.78rem]"
               type="text"
               spellcheck="false"
               aria-label="Action command"
@@ -345,9 +359,9 @@
                 actionsStore.updateDef(def.id, { command: e.currentTarget.value })}
             />
           </div>
-          <div class="def-controls">
+          <div class="def-controls flex items-center gap-[0.4rem]">
             <select
-              class="def-scope"
+              class="def-scope flex-none rounded border border-border bg-background px-[0.4rem] py-1 text-[0.78rem] text-foreground font-[inherit] focus-visible:-outline-offset-1 focus-visible:outline-2 focus-visible:outline-primary"
               aria-label="Action scope"
               value={def.scope}
               onchange={(e) => {
@@ -363,8 +377,8 @@
             </select>
             <!-- M12: shortcut capture — focus, press e.g. Ctrl+Shift+R;
                  Escape clears, blur cancels. -->
-            <input
-              class="def-shortcut"
+            <Input
+              class="def-shortcut h-auto flex-[0_0_7.5rem] cursor-pointer rounded px-[0.4rem] py-1 font-mono text-[0.7rem] text-primary"
               type="text"
               readonly
               data-shortcut-capture
@@ -380,86 +394,96 @@
               onblur={onCaptureBlur}
               onkeydown={(e) => onCaptureKeydown(e, def)}
             />
-            <button
-              class="btn run"
+            <Button
+              variant="default"
+              size="xs"
+              class="btn run rounded-full px-[0.85rem]"
               type="button"
               disabled={runningNames.has(def.name)}
               onclick={() => runDef(def)}
             >
               {runningNames.has(def.name) ? "Running…" : "Run"}
-            </button>
-            <button
-              class="btn remove"
+            </Button>
+            <Button
+              variant="outline"
+              size="xs"
+              class="btn remove rounded-full px-2 text-muted-foreground"
               type="button"
               aria-label={`Delete action ${def.name}`}
               onclick={() => removeDef(def.id)}
             >
               ✕
-            </button>
+            </Button>
           </div>
         </li>
       {/each}
     </ul>
   {/if}
 
-  <form class="add-form" onsubmit={submitAdd}>
-    <input
-      class="def-name"
+  <form class="add-form flex flex-wrap items-center gap-1" onsubmit={submitAdd}>
+    <Input
+      class="def-name h-auto min-w-0 flex-[1_1_9rem] rounded px-[0.4rem] py-1 text-[0.78rem]"
       type="text"
       placeholder="Name"
       aria-label="New action name"
       bind:value={addName}
     />
-    <input
-      class="def-command"
+    <Input
+      class="def-command h-auto min-w-0 flex-[2_1_14rem] rounded px-[0.4rem] py-1 font-mono text-[0.78rem]"
       type="text"
       placeholder="Command (e.g. npm test)"
       aria-label="New action command"
       spellcheck="false"
       bind:value={addCommand}
     />
-    <select class="def-scope" aria-label="New action scope" bind:value={addScope}>
+    <select class="def-scope flex-none rounded border border-border bg-background px-[0.4rem] py-1 text-[0.78rem] text-foreground focus-visible:-outline-offset-1 focus-visible:outline-2 focus-visible:outline-primary" aria-label="New action scope" bind:value={addScope}>
       <option value="repo">this repo</option>
       <option value="global">global</option>
     </select>
-    <button class="btn add" type="submit" disabled={!addName.trim() || !addCommand.trim()}>
+    <Button variant="default" size="xs" class="btn add flex-none rounded-full px-[0.85rem]" type="submit" disabled={!addName.trim() || !addCommand.trim()}>
       Add
-    </button>
+    </Button>
   </form>
 
-  <header class="section-head runs-head">
-    <h3 class="section-title">Runs</h3>
+  <header class="section-head runs-head mt-[0.4rem] flex flex-wrap items-baseline gap-2">
+    <h3 class="section-title m-0 text-[0.9375rem] font-semibold">Runs</h3>
     {#if runs.length > 0}
-      <span class="section-hint">{runs.length} recent</span>
+      <span class="section-hint text-[0.7rem] text-muted-foreground">{runs.length} recent</span>
     {/if}
   </header>
 
   {#if runs.length === 0}
-    <p class="empty">No runs yet — hit Run on an action above.</p>
+    <p class="empty m-0 text-xs text-muted-foreground">No runs yet — hit Run on an action above.</p>
   {:else}
-    <ul class="run-list" role="list">
+    <ul class="run-list m-0 flex list-none flex-col gap-1 p-0" role="list">
       {#each runs as run (run.run_id)}
-        <li class="run-row">
-          <div class="run-head">
-            <button
-              class="run-toggle"
+        <li class="run-row overflow-hidden rounded-lg border border-border transition-colors duration-100 hover:border-ring/60 hover:bg-muted/60 focus-within:border-ring/60 focus-within:bg-muted/60">
+          <div class="run-head flex items-center justify-between gap-1">
+            <Button
+              variant="ghost"
+              class="run-toggle flex min-w-0 flex-1 cursor-pointer items-center justify-start gap-2 rounded-none px-[0.55rem] py-[0.4rem] text-left font-normal"
               type="button"
               title="Show this run's log in the editor"
               onclick={() => openRun(run.run_id)}
             >
-              <span class={`chip chip-${run.status}`}>
+              <Badge
+                variant="outline"
+                class={`chip chip-${run.status} h-auto flex-none rounded-full border-transparent px-2 py-[0.1rem] text-[0.68rem] font-semibold ${run.status === "running" ? "bg-secondary text-secondary-foreground" : run.status === "success" ? "bg-primary/15 text-primary" : "bg-destructive/10 text-destructive"}`}
+              >
                 {runStatusLabel(run.status, run.exit_code)}
-              </span>
-              <span class="run-name">{run.name}</span>
-            </button>
+              </Badge>
+              <span class="run-name truncate">{run.name}</span>
+            </Button>
             {#if !run.done}
-              <button
-                class="btn cancel"
+              <Button
+                variant="destructive"
+                size="xs"
+                class="btn cancel rounded-full px-[0.85rem]"
                 type="button"
                 onclick={() => void actionsStore.cancel(run.run_id)}
               >
                 Cancel
-              </button>
+              </Button>
             {/if}
           </div>
         </li>
@@ -467,430 +491,3 @@
     </ul>
   {/if}
 </section>
-
-<style>
-  .actions-panel {
-    display: flex;
-    flex-direction: column;
-    gap: 0.6rem;
-    padding: 0.5rem 0.75rem;
-    font-size: 0.8125rem;
-    color: var(--m3-on-surface);
-  }
-
-  .section-head {
-    display: flex;
-    align-items: baseline;
-    gap: 0.5rem;
-    flex-wrap: wrap;
-  }
-
-  .section-head .btn {
-    margin-left: auto;
-  }
-
-  .actions-head {
-    margin-top: 0.4rem;
-  }
-
-  .section-title {
-    margin: 0;
-    font-size: 0.9375rem;
-    font-weight: 600;
-  }
-
-  .section-hint {
-    color: var(--m3-on-surface-variant);
-    font-size: 0.7rem;
-  }
-
-  .runs-head {
-    margin-top: 0.4rem;
-  }
-
-  .empty {
-    margin: 0;
-    color: var(--m3-on-surface-variant);
-    font-size: 0.75rem;
-  }
-
-  .empty.error {
-    color: var(--m3-error);
-  }
-
-  /* detected projects/scripts */
-  .project-list {
-    margin: 0;
-    padding: 0;
-    list-style: none;
-    display: flex;
-    flex-direction: column;
-    gap: 0.45rem;
-  }
-
-  .project-card {
-    display: flex;
-    flex-direction: column;
-    gap: 0.4rem;
-    padding: 0.45rem 0.55rem;
-    border: 1px solid var(--m3-outline-variant);
-    border-radius: 8px;
-    background: var(--m3-surface-container-low, transparent);
-  }
-
-  .project-head {
-    display: flex;
-    align-items: baseline;
-    gap: 0.4rem;
-    min-width: 0;
-    flex-wrap: wrap;
-  }
-
-  .project-kind {
-    flex: none;
-    font-size: 0.625rem;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-    color: var(--m3-primary);
-  }
-
-  .project-name {
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    font-size: 0.8rem;
-    font-weight: 600;
-  }
-
-  .project-path {
-    flex: none;
-    font-family: ui-monospace, Consolas, monospace;
-    font-size: 0.68rem;
-    color: var(--m3-on-surface-variant);
-  }
-
-  .project-from {
-    margin-left: auto;
-    max-width: 55%;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    font-size: 0.65rem;
-    color: var(--m3-on-surface-variant);
-    opacity: 0.75;
-  }
-
-  .script-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(13rem, 1fr));
-    gap: 0.35rem;
-  }
-
-  .script {
-    min-width: 0;
-    border: 1px solid var(--m3-outline-variant);
-    border-radius: 6px;
-    overflow: hidden;
-    background: var(--m3-surface-container-lowest, transparent);
-  }
-
-  .script-run {
-    width: 100%;
-    display: flex;
-    align-items: center;
-    gap: 0.35rem;
-    border: none;
-    background: transparent;
-    color: inherit;
-    font: inherit;
-    padding: 0.3rem 0.4rem;
-    cursor: pointer;
-    text-align: left;
-  }
-
-  .script-run:hover:not(:disabled) {
-    background: var(--m3-surface-container-high);
-  }
-
-  .script-run:focus-visible {
-    outline: 2px solid var(--m3-primary);
-    outline-offset: -2px;
-  }
-
-  .script-run:disabled {
-    cursor: progress;
-    opacity: 0.75;
-  }
-
-  .script-label {
-    flex: 1 1 auto;
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    font-size: 0.75rem;
-    font-weight: 500;
-  }
-
-  .script-kind {
-    flex: none;
-    border-radius: 9999px;
-    padding: 0.04rem 0.35rem;
-    background: var(--m3-surface-container-high);
-    color: var(--m3-on-surface-variant);
-    font-size: 0.625rem;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.03em;
-  }
-
-  .script-kind.watch {
-    background: var(--m3-secondary-container);
-    color: var(--m3-on-secondary-container);
-  }
-
-  .script-state {
-    flex: none;
-    font-size: 0.62rem;
-    color: var(--m3-primary);
-  }
-
-  .script-command-row {
-    display: flex;
-    align-items: center;
-    gap: 0.2rem;
-    min-width: 0;
-    padding: 0.15rem 0.2rem 0.15rem 0.4rem;
-    border-top: 1px solid var(--m3-outline-variant);
-  }
-
-  .script-command {
-    flex: 1 1 auto;
-    min-width: 0;
-    white-space: normal;
-    overflow-wrap: anywhere;
-    font-family: ui-monospace, Consolas, monospace;
-    font-size: 0.65rem;
-    line-height: 1.35;
-    color: var(--m3-on-surface-variant);
-  }
-
-  .script-copy {
-    flex: none;
-    border: none;
-    background: none;
-    color: var(--m3-on-surface-variant);
-    font-size: 0.8rem;
-    line-height: 1;
-    padding: 0.1rem 0.2rem;
-    border-radius: 4px;
-    cursor: pointer;
-    opacity: 0.55;
-  }
-
-  .script-copy:hover,
-  .script-copy:focus-visible {
-    opacity: 1;
-    background: var(--m3-surface-container-high);
-  }
-
-  .def-list,
-  .run-list {
-    margin: 0;
-    padding: 0;
-    list-style: none;
-    display: flex;
-    flex-direction: column;
-    gap: 0.4rem;
-  }
-
-  .def-row {
-    display: flex;
-    flex-direction: column;
-    gap: 0.3rem;
-    padding: 0.45rem 0.55rem;
-    border: 1px solid var(--m3-outline-variant);
-    border-radius: 8px;
-    background: var(--m3-surface-container-low, transparent);
-  }
-
-  .def-fields {
-    display: flex;
-    gap: 0.4rem;
-  }
-
-  input[type="text"],
-  select {
-    font: inherit;
-    font-size: 0.78rem;
-    color: var(--m3-on-surface);
-    background: var(--m3-surface-container-lowest, transparent);
-    border: 1px solid var(--m3-outline-variant);
-    border-radius: 4px;
-    padding: 0.25rem 0.4rem;
-    min-width: 0;
-  }
-
-  input[type="text"]:focus-visible,
-  select:focus-visible {
-    outline: 2px solid var(--m3-primary);
-    outline-offset: -1px;
-  }
-
-  .def-name {
-    flex: 1 1 9rem;
-  }
-
-  .def-command {
-    flex: 2 1 14rem;
-    font-family: ui-monospace, Consolas, monospace;
-  }
-
-  .def-controls {
-    display: flex;
-    align-items: center;
-    gap: 0.4rem;
-  }
-
-  .def-scope {
-    flex: 0 0 auto;
-  }
-
-  /* M12: shortcut capture field (monospace, captures the next combo). */
-  .def-shortcut {
-    flex: 0 0 7.5rem;
-    font-family: ui-monospace, Consolas, monospace;
-    font-size: 0.7rem;
-    color: var(--m3-primary);
-    cursor: pointer;
-  }
-
-  .btn {
-    font: inherit;
-    font-size: 0.75rem;
-    font-weight: 500;
-    border: none;
-    border-radius: 9999px;
-    padding: 0.28rem 0.85rem;
-    cursor: pointer;
-  }
-
-  .btn:disabled {
-    cursor: not-allowed;
-    opacity: 0.55;
-  }
-
-  .btn:focus-visible {
-    outline: 2px solid var(--m3-primary);
-    outline-offset: 2px;
-  }
-
-  .btn.run {
-    background: var(--m3-primary);
-    color: var(--m3-on-primary);
-  }
-
-  .btn.add {
-    background: var(--m3-primary);
-    color: var(--m3-on-primary);
-    flex: 0 0 auto;
-  }
-
-  .btn.remove {
-    background: none;
-    border: 1px solid var(--m3-outline-variant);
-    color: var(--m3-on-surface-variant);
-    padding: 0.2rem 0.5rem;
-  }
-
-  .btn.ghost {
-    background: none;
-    border: 1px solid var(--m3-outline-variant);
-    color: var(--m3-on-surface-variant);
-    padding: 0.18rem 0.6rem;
-    font-size: 0.7rem;
-  }
-
-  .btn.cancel {
-    background: var(--m3-error-container);
-    color: var(--m3-on-error-container);
-  }
-
-  .add-form {
-    display: flex;
-    gap: 0.4rem;
-    align-items: center;
-    flex-wrap: wrap;
-  }
-
-  .run-row {
-    border: 1px solid var(--m3-outline-variant);
-    border-radius: 8px;
-    overflow: hidden;
-    transition: border-color 0.12s ease, background-color 0.12s ease;
-  }
-
-  .run-row:hover,
-  .run-row:focus-within {
-    border-color: var(--m3-outline);
-    background: var(--app-hover, var(--m3-surface-container-high));
-  }
-
-  .run-head {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 0.4rem;
-  }
-
-  .run-toggle {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    flex: 1 1 auto;
-    min-width: 0;
-    background: none;
-    border: none;
-    font: inherit;
-    color: inherit;
-    padding: 0.4rem 0.55rem;
-    cursor: pointer;
-    text-align: left;
-  }
-
-  .run-toggle:focus-visible {
-    outline: 2px solid var(--m3-primary);
-    outline-offset: -2px;
-  }
-
-  .run-name {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .chip {
-    flex: 0 0 auto;
-    font-size: 0.68rem;
-    font-weight: 600;
-    border-radius: 9999px;
-    padding: 0.1rem 0.5rem;
-  }
-
-  .chip-running {
-    background: var(--m3-secondary-container);
-    color: var(--m3-on-secondary-container);
-  }
-
-  .chip-success {
-    background: var(--m3-primary-container);
-    color: var(--m3-on-primary-container);
-  }
-
-  .chip-failed {
-    background: var(--m3-error-container);
-    color: var(--m3-on-error-container);
-  }
-</style>

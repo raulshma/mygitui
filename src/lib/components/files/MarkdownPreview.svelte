@@ -17,7 +17,7 @@
 -->
 <script lang="ts">
   import { openUrl } from "@tauri-apps/plugin-opener";
-  import { Spinner } from "$lib/components/m3";
+  import { Spinner } from "$lib/components/ui/spinner/index.js";
   import {
     highlightFence,
     offsetForLine,
@@ -185,58 +185,21 @@
   }
 </script>
 
-<div class="preview" aria-label="Markdown preview of {path}">
+<div class="preview flex h-full min-h-0 min-w-0 flex-col bg-card" aria-label="Markdown preview of {path}">
   {#if !ready}
-    <p class="state" role="status"><Spinner size={14} /> Rendering preview…</p>
+    <p class="state absolute inset-0 inline-flex items-center justify-center gap-[0.4rem] text-[0.8125rem] text-muted-foreground" role="status"><Spinner class="size-[14px]" role="presentation" aria-hidden="true" /> Rendering preview…</p>
   {/if}
   <!-- svelte-ignore a11y_click_events_have_key_events -- the pane is a
        read-only render; the editor owns the keyboard, clicks are bonus
        navigation (links / jump-to-line) -->
   <!-- svelte-ignore a11y_no_static_element_interactions -- same rationale -->
-  <div class="scroll" bind:this={scrollEl} onclick={onClick}>
-    <div class="md" bind:this={host}></div>
+  <div class="scroll relative min-h-0 flex-1 overflow-y-auto" bind:this={scrollEl} onclick={onClick}>
+    <div class="md mx-auto max-w-[52rem] px-[1.75rem] pt-[1.25rem] pb-16 text-sm leading-[1.65] text-foreground [overflow-wrap:break-word]" bind:this={host}></div>
   </div>
 </div>
 
 <style>
-  .preview {
-    display: flex;
-    flex-direction: column;
-    height: 100%;
-    min-height: 0;
-    min-width: 0;
-    background: var(--m3-surface);
-  }
-
-  .scroll {
-    flex: 1;
-    min-height: 0;
-    overflow-y: auto;
-    position: relative; /* offsetParent for anchor measurement */
-  }
-
-  .state {
-    position: absolute;
-    inset: 0;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    gap: 0.4rem;
-    color: var(--m3-on-surface-variant);
-    font-size: 0.8125rem;
-  }
-
-  .md {
-    max-width: 52rem;
-    margin: 0 auto;
-    padding: 1.25rem 1.75rem 4rem;
-    color: var(--m3-on-surface);
-    font-size: 0.875rem;
-    line-height: 1.65;
-    overflow-wrap: break-word;
-  }
-
-  /* -- typography (M3-flavored) ------------------------------------------- */
+  /* -- typography ---------------------------------------------------------- */
 
   .md :global(h1),
   .md :global(h2),
@@ -244,7 +207,7 @@
   .md :global(h4),
   .md :global(h5),
   .md :global(h6) {
-    color: var(--m3-on-surface);
+    color: var(--foreground);
     font-weight: 600;
     line-height: 1.3;
     margin: 1.6em 0 0.6em;
@@ -256,15 +219,15 @@
   }
 
   .md :global(h1) { font-size: 1.55rem; }
-  .md :global(h2) { font-size: 1.25rem; padding-bottom: 0.25rem; border-bottom: 1px solid var(--app-border, var(--m3-outline-variant)); }
+  .md :global(h2) { font-size: 1.25rem; padding-bottom: 0.25rem; border-bottom: 1px solid var(--border); }
   .md :global(h3) { font-size: 1.05rem; }
   .md :global(h4) { font-size: 0.95rem; }
   .md :global(h5) { font-size: 0.875rem; }
-  .md :global(h6) { font-size: 0.8125rem; color: var(--m3-on-surface-variant); }
+  .md :global(h6) { font-size: 0.8125rem; color: var(--muted-foreground); }
 
   .md :global(p) { margin: 0.65em 0; }
 
-  .md :global(a) { color: var(--m3-primary); text-decoration: none; }
+  .md :global(a) { color: var(--primary); text-decoration: none; }
   .md :global(a:hover) { text-decoration: underline; }
 
   .md :global(ul),
@@ -275,13 +238,13 @@
   .md :global(blockquote) {
     margin: 0.8em 0;
     padding: 0.1em 1em;
-    border-left: 3px solid var(--app-border, var(--m3-outline-variant));
-    color: var(--m3-on-surface-variant);
+    border-left: 3px solid var(--border);
+    color: var(--muted-foreground);
   }
 
   .md :global(hr) {
     border: none;
-    border-top: 1px solid var(--app-border, var(--m3-outline-variant));
+    border-top: 1px solid var(--border);
     margin: 1.6em 0;
   }
 
@@ -292,15 +255,15 @@
 
   /* Inline code only (fenced blocks are inside pre). */
   .md :global(:not(pre) > code) {
-    background: var(--m3-surface-container, var(--m3-surface-variant));
-    border-radius: var(--m3-shape-extra-small, 6px);
+    background: var(--muted);
+    border-radius: var(--radius-sm);
     padding: 0.1em 0.35em;
   }
 
   .md :global(pre) {
-    background: var(--m3-surface-container-low, var(--m3-surface-container));
-    border: 1px solid var(--app-border, var(--m3-outline-variant));
-    border-radius: var(--m3-shape-small, 8px);
+    background: var(--muted);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
     padding: 0.75rem 1rem;
     overflow-x: auto;
     margin: 0.8em 0;
@@ -316,24 +279,24 @@
 
   .md :global(th),
   .md :global(td) {
-    border: 1px solid var(--app-border, var(--m3-outline-variant));
+    border: 1px solid var(--border);
     padding: 0.3em 0.7em;
     text-align: left;
   }
 
   .md :global(th) {
-    background: var(--m3-surface-container, var(--m3-surface-variant));
+    background: var(--muted);
     font-weight: 600;
   }
 
-  .md :global(img) { max-width: 100%; border-radius: var(--m3-shape-small, 8px); }
-  .md :global(input[type="checkbox"]) { accent-color: var(--m3-primary); margin-right: 0.35em; }
+  .md :global(img) { max-width: 100%; border-radius: var(--radius-sm); }
+  .md :global(input[type="checkbox"]) { accent-color: var(--primary); margin-right: 0.35em; }
 
-  /* -- Lezer token classes (mirrors the editor's M3 HighlightStyle) -------- */
+  /* -- Lezer token classes (mirrors the editor's HighlightStyle) ----------- */
 
   .md :global(.tok-keyword),
   .md :global(.tok-controlKeyword),
-  .md :global(.tok-moduleKeyword) { color: var(--m3-primary); }
+  .md :global(.tok-moduleKeyword) { color: var(--primary); }
 
   .md :global(.tok-string),
   .md :global(.tok-number),
@@ -341,37 +304,37 @@
   .md :global(.tok-atom),
   .md :global(.tok-null),
   .md :global(.tok-regexp),
-  .md :global(.tok-escape) { color: var(--m3-tertiary); }
+  .md :global(.tok-escape) { color: var(--muted); }
 
   .md :global(.tok-comment) {
-    color: var(--m3-outline, var(--m3-on-surface-variant));
+    color: var(--muted-foreground);
     font-style: italic;
   }
 
   .md :global(.tok-definition),
-  .md :global(.tok-function) { color: var(--m3-secondary); }
+  .md :global(.tok-function) { color: var(--secondary); }
 
   .md :global(.tok-typeName),
   .md :global(.tok-className),
-  .md :global(.tok-namespace) { color: var(--m3-secondary); }
+  .md :global(.tok-namespace) { color: var(--secondary); }
 
   .md :global(.tok-variableName),
   .md :global(.tok-propertyName),
-  .md :global(.tok-labelName) { color: var(--m3-on-surface); }
+  .md :global(.tok-labelName) { color: var(--foreground); }
 
   .md :global(.tok-operator),
   .md :global(.tok-punctuation),
   .md :global(.tok-bracket),
-  .md :global(.tok-separator) { color: var(--m3-on-surface-variant); }
+  .md :global(.tok-separator) { color: var(--muted-foreground); }
 
-  .md :global(.tok-meta) { color: var(--m3-on-surface-variant); font-style: italic; }
+  .md :global(.tok-meta) { color: var(--muted-foreground); font-style: italic; }
 
-  .md :global(.tok-heading) { color: var(--m3-primary); font-weight: 600; }
+  .md :global(.tok-heading) { color: var(--primary); font-weight: 600; }
   .md :global(.tok-strong) { font-weight: 600; }
   .md :global(.tok-emphasis) { font-style: italic; }
   .md :global(.tok-strikethrough) { text-decoration: line-through; }
   .md :global(.tok-link),
-  .md :global(.tok-url) { color: var(--m3-primary); text-decoration: underline; }
-  .md :global(.tok-quote) { color: var(--m3-on-surface-variant); font-style: italic; }
-  .md :global(.tok-invalid) { color: var(--m3-error); }
+  .md :global(.tok-url) { color: var(--primary); text-decoration: underline; }
+  .md :global(.tok-quote) { color: var(--muted-foreground); font-style: italic; }
+  .md :global(.tok-invalid) { color: var(--destructive); }
 </style>

@@ -2,7 +2,7 @@
  * Lane palette for the commit graph, derived from M3 design tokens.
  *
  * Lane color scheme (B2 contract): lane `n` picks from
- * `[--m3-primary, --m3-tertiary, --m3-secondary]` by `n % 3`. Tokens are read
+ * `[--primary, --muted, --secondary]` by `n % 3`. Tokens are read
  * ONCE per theme change via `getComputedStyle(documentElement)` (see
  * GraphCanvas' theme watcher) — never per frame. Canvas cannot resolve CSS
  * `var()` or `color-mix()`, so everything here works on plain hex/rgba strings.
@@ -101,9 +101,9 @@ export function readTheme(styles: StyleLike | null): ThemeColors {
   };
   const f = FALLBACK_THEME;
   return {
-    lanes: [pick("--m3-primary", f.lanes[0]), pick("--m3-tertiary", f.lanes[1]), pick("--m3-secondary", f.lanes[2])],
-    surface: pick("--m3-surface", f.surface),
-    outline: pick("--m3-outline", f.outline),
+    lanes: [pick("--primary", f.lanes[0]), pick("--muted", f.lanes[1]), pick("--secondary", f.lanes[2])],
+    surface: pick("--card", f.surface),
+    outline: pick("--border", f.outline),
   };
 }
 

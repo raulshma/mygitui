@@ -55,6 +55,7 @@
   import Icon from "$lib/components/icons/Icon.svelte";
   import { contextMenu, showMenuAt } from "$lib/components/menu/contextMenuStore.svelte";
   import { appIcons } from "./appIcons";
+  import { Button } from "$lib/components/ui/button/index.js";
 
   let { root }: { root: string } = $props();
 
@@ -108,9 +109,15 @@
   }
 </script>
 
-<div class="open-with" role="group" aria-label="Open repository with an app">
-  <button
-    class="primary"
+<div
+  class="open-with inline-flex flex-none items-stretch overflow-hidden rounded-sm border border-border"
+  role="group"
+  aria-label="Open repository with an app"
+>
+  <Button
+    class="primary h-[1.45rem] w-[1.65rem] rounded-none p-0 text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-2 focus-visible:outline-primary focus-visible:-outline-offset-2 focus-visible:ring-0"
+    variant="ghost"
+    size="icon-xs"
     type="button"
     disabled={!current || launching || contextMenu.open}
     title={current ? `Open with ${current.name}` : "Detecting apps…"}
@@ -122,9 +129,11 @@
     {:else}
       <Icon icon={iconDescription} size={15} />
     {/if}
-  </button>
-  <button
-    class="chev"
+  </Button>
+  <Button
+    class="chev h-auto w-[1.1rem] rounded-none border-l border-border p-0 text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-2 focus-visible:outline-primary focus-visible:-outline-offset-2 focus-visible:ring-0"
+    variant="ghost"
+    size="icon-xs"
     type="button"
     aria-label="Choose app to open the repository with"
     aria-haspopup="menu"
@@ -132,50 +141,5 @@
     onclick={openMenu}
   >
     <Icon icon={iconExpandMore} size={14} />
-  </button>
+  </Button>
 </div>
-
-<style>
-  .open-with {
-    display: inline-flex;
-    align-items: stretch;
-    flex: none;
-    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    border-radius: var(--m3-shape-extra-small, 4px);
-    overflow: hidden;
-  }
-
-  button {
-    display: grid;
-    place-items: center;
-    border: none;
-    background: none;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    cursor: pointer;
-    padding: 0;
-  }
-  button:disabled {
-    cursor: default;
-    color: var(--app-disabled-fg, var(--m3-on-surface-variant));
-  }
-
-  .primary {
-    width: 1.65rem;
-    height: 1.45rem;
-  }
-
-  .chev {
-    width: 1.1rem;
-    border-left: 1px solid var(--m3-outline-variant, var(--m3-primary));
-  }
-
-  .open-with:not(:has(button:disabled)) button:hover {
-    background: var(--m3-surface-container-high, var(--m3-surface));
-    color: var(--m3-on-surface);
-  }
-
-  button:focus-visible {
-    outline: 2px solid var(--m3-primary);
-    outline-offset: -2px;
-  }
-</style>

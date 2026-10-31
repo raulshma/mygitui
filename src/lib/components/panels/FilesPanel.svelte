@@ -43,7 +43,9 @@
   import { fileIconForPath, fileIconColorForPath } from "$lib/components/icons/fileIcons";
   import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.svelte";
   import Icon from "$lib/components/icons/Icon.svelte";
-  import { IconButton, Spinner } from "$lib/components/m3";
+  import { Spinner } from "$lib/components/ui/spinner/index.js";
+  import { Button } from "$lib/components/ui/button/index.js";
+  import { Input } from "$lib/components/ui/input/index.js";
   import { contextMenu, type MenuEntry } from "$lib/components/menu/contextMenuStore.svelte";
   import { showMenuAt } from "$lib/components/menu/contextMenuStore.svelte";
   import ConfirmDialog from "$lib/components/safety/ConfirmDialog.svelte";
@@ -694,47 +696,67 @@
 
   const activeFilePath = $derived(selectedPath);</script>
 
-<div class="files">
-  <div class="toolbar">
-    <IconButton
-      icon={iconAddFile}
-      label="New file"
+<div class="files flex h-full min-h-0 min-w-0 flex-col bg-background text-[13px] text-foreground">
+  <div class="toolbar flex shrink-0 items-center gap-[2px] border-b border-border bg-card px-1.5 py-1">
+    <Button
+      class="text-muted-foreground hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-[15px]"
+      variant="ghost"
+      size="icon-sm"
+      type="button"
+      aria-label="New file"
       title="New file"
-      size={15}
       onclick={() => startCreate("file")}
-    />
-    <IconButton
-      icon={iconAddFolder}
-      label="New folder"
+    >
+      <Icon icon={iconAddFile} size={15} />
+    </Button>
+    <Button
+      class="text-muted-foreground hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-[15px]"
+      variant="ghost"
+      size="icon-sm"
+      type="button"
+      aria-label="New folder"
       title="New folder"
-      size={15}
       onclick={() => startCreate("dir")}
-    />
-    <IconButton
-      icon={iconRefresh}
-      label="Refresh"
+    >
+      <Icon icon={iconAddFolder} size={15} />
+    </Button>
+    <Button
+      class="text-muted-foreground hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-[15px]"
+      variant="ghost"
+      size="icon-sm"
+      type="button"
+      aria-label="Refresh"
       title="Refresh tree"
-      size={15}
       onclick={() => void refreshTree()}
-    />
-    <IconButton
-      icon={iconReveal}
-      label="Reveal active file"
+    >
+      <Icon icon={iconRefresh} size={15} />
+    </Button>
+    <Button
+      class="text-muted-foreground hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-[15px]"
+      variant="ghost"
+      size="icon-sm"
+      type="button"
+      aria-label="Reveal active file"
       title="Reveal the open file in the tree"
-      size={15}
       disabled={activeFile === null}
       onclick={() => {
         if (activeFile !== null) {
           emitUiEvent("files-reveal-path", { repoId, path: activeFile });
         }
       }}
-    />
-    <span class="spacer"></span>
-    <div class="filter" role="search">
+    >
+      <Icon icon={iconReveal} size={15} />
+    </Button>
+    <span class="spacer flex-1"></span>
+    <div
+      class="filter flex min-w-16 max-w-56 flex-1 items-center gap-1 rounded-full border border-border bg-background px-1.5 py-[2px] text-muted-foreground"
+      role="search"
+    >
       <Icon icon={iconSearch} size={13} />
       <!-- svelte-ignore a11y_autofocus -->
-      <input
+      <Input
         type="text"
+        class="h-auto min-w-0 flex-1 rounded-none border-none bg-transparent px-0 py-0 text-xs md:text-xs text-foreground shadow-none outline-none focus-visible:ring-0 dark:bg-transparent placeholder:text-muted-foreground"
         placeholder="Filter files"
         bind:value={filter}
         aria-label="Filter files"
@@ -750,20 +772,24 @@
         }}
       />
       {#if filter !== ""}
-        <span class="fcount">{rows.length}</span>
+        <span class="fcount flex-none text-[10px] tabular-nums text-muted-foreground">{rows.length}</span>
       {/if}
     </div>
-    <IconButton
-      icon={iconMore}
-      label="More options"
+    <Button
+      class="text-muted-foreground hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-[15px]"
+      variant="ghost"
+      size="icon-sm"
+      type="button"
+      aria-label="More options"
       title="File icons and ignored files"
-      size={15}
       onclick={(event) => overflowMenu(event)}
-    />
+    >
+      <Icon icon={iconMore} size={15} />
+    </Button>
   </div>
 
   <div
-    class="tree"
+    class="tree min-h-0 flex-1 select-none overflow-auto pb-12 outline-none focus-visible:shadow-[inset_0_0_0_2px_var(--ring)]"
     role="tree"
     aria-label="Repository files"
     tabindex="0"
@@ -772,14 +798,14 @@
     onkeydown={onTreeKeydown}
   >
     {#if rootLoading && rows.length === 0}
-      <p class="state" role="status"><Spinner size={14} /> Reading files…</p>
+      <p class="state inline-flex items-center gap-1.5 p-4 text-xs text-muted-foreground" role="status"><Spinner class="size-[14px]" role="presentation" aria-hidden="true" /> Reading files…</p>
     {:else if loadError !== null && rows.length === 0}
-      <p class="state state-error" role="alert">{loadError}</p>
+      <p class="state state-error inline-flex items-center gap-1.5 p-4 text-xs text-destructive" role="alert">{loadError}</p>
     {:else if rows.length === 0}
-      <p class="state">{filter !== "" ? "No matches" : "Empty repository"}</p>
+      <p class="state inline-flex items-center gap-1.5 p-4 text-xs text-muted-foreground">{filter !== "" ? "No matches" : "Empty repository"}</p>
     {:else}
       {#if virtualized}
-        <div class="row-spacer" style={`height:${topSpacer}px`}></div>
+        <div class="row-spacer w-full" style={`height:${topSpacer}px`}></div>
       {/if}
       {#each visibleRows as row, i (row.node.path)}
         {@const index = first + i}
@@ -791,9 +817,8 @@
         <!-- aria-activedescendant tree: the container carries focus + keys -->
         <div
           id={`files-row-${index}`}
-          class="row"
+          class="row flex h-6 cursor-pointer items-center gap-1 whitespace-nowrap pr-2 text-foreground hover:bg-[color:var(--app-hover)] aria-selected:bg-[color:var(--app-active)] [&.disabled]:text-muted-foreground {node.path === revealHighlight ? 'animate-[files-flash_1.5s_ease-out]' : ''}"
           class:sel={node.path === selectedPath}
-          class:flash={node.path === revealHighlight}
           class:disabled={node.kind === "submodule"}
           role="treeitem"
           aria-selected={node.path === selectedPath}
@@ -804,12 +829,13 @@
           ondblclick={() => node.kind === "file" && openFile(node)}
           oncontextmenu={(event) => rowMenu(event, node)}
         >
-          <span class="chev">
+          <span class="chev inline-flex w-3.5 flex-none justify-center">
             {#if node.kind === "dir"}
-              <button
-                type="button"
-                class="chev-btn"
-                tabindex="-1"
+              <Button
+                variant="ghost"
+                size="icon-xs"
+                class="chev-btn size-3.5 rounded-none p-0 text-muted-foreground hover:bg-transparent hover:text-foreground dark:hover:bg-transparent [&_svg:not([class*='size-'])]:size-[13px]"
+                tabindex={-1}
                 aria-label={node.expanded ? `Collapse ${node.name}` : `Expand ${node.name}`}
                 onclick={(event) => {
                   event.stopPropagation();
@@ -817,28 +843,28 @@
                 }}
               >
                 <Icon icon={node.expanded ? iconChevronDown : iconChevronRight} size={13} />
-              </button>
+              </Button>
             {/if}
           </span>
           <span
-            class="ficon"
-            style={`color:${node.kind === "dir" || node.kind === "submodule" ? "var(--m3-primary)" : fileIconColorForPath(node.path, fileIconPreferences.theme)}`}
+            class="ficon inline-flex flex-none items-center"
+            style={`color:${node.kind === "dir" || node.kind === "submodule" ? "var(--primary)" : fileIconColorForPath(node.path, fileIconPreferences.theme)}`}
           >
             <Icon
               icon={node.kind === "dir" || node.kind === "submodule" ? (node.kind === "submodule" ? iconSubmodule : iconFolder) : fileIconForPath(node.path, fileIconPreferences.theme)}
               size={14}
             />
           </span>
-          <span class="name" title={node.path}>{node.name}</span>
+          <span class="name min-w-0 flex-1 overflow-hidden text-ellipsis" title={node.path}>{node.name}</span>
           {#if node.kind === "file" && node.size !== null && !isDir}
-            <span class="size">{formatSize(node.size)}</span>
+            <span class="size flex-none text-[10px] tabular-nums text-muted-foreground">{formatSize(node.size)}</span>
           {/if}
           {#if node.truncated}
-            <span class="trunc" title="Listing capped — some entries are missing">…</span>
+            <span class="trunc flex-none text-muted-foreground" title="Listing capped — some entries are missing">…</span>
           {/if}
           {#if badge}
             <span
-              class="badge"
+              class="badge h-[7px] w-[7px] flex-none rounded-full"
               title={`Git: ${badge}`}
               style={`background:${BADGE_VAR[badge]}`}
             ></span>
@@ -846,7 +872,7 @@
         </div>
       {/each}
       {#if virtualized}
-        <div class="row-spacer" style={`height:${bottomSpacer}px`}></div>
+        <div class="row-spacer w-full" style={`height:${bottomSpacer}px`}></div>
       {/if}
     {/if}
   </div>
@@ -870,179 +896,3 @@
   />
 </div>
 
-<style>
-  .files {
-    display: flex;
-    flex-direction: column;
-    height: 100%;
-    min-height: 0;
-    min-width: 0;
-    background: var(--m3-surface);
-    font-size: 0.8125rem;
-  }
-
-  .toolbar {
-    flex: none;
-    display: flex;
-    align-items: center;
-    gap: 0.15rem;
-    padding: 0.25rem 0.4rem;
-    border-bottom: 1px solid var(--app-border, var(--m3-outline-variant));
-    background: var(--m3-surface-container, var(--m3-surface));
-  }
-
-  .spacer {
-    flex: 1;
-  }
-
-  .filter {
-    display: flex;
-    align-items: center;
-    gap: 0.25rem;
-    flex: 1;
-    min-width: 4rem;
-    max-width: 14rem;
-    padding: 0.05rem 0.4rem;
-    border: 1px solid var(--app-border, var(--m3-outline-variant));
-    border-radius: var(--m3-shape-full, 9999px);
-    color: var(--m3-on-surface-variant);
-    background: var(--m3-surface);
-  }
-
-  .filter input {
-    flex: 1;
-    min-width: 0;
-    border: none;
-    background: none;
-    color: var(--m3-on-surface);
-    font: inherit;
-    font-size: 0.75rem;
-    outline: none;
-  }
-
-  .fcount {
-    flex: none;
-    font-size: 0.625rem;
-    color: var(--m3-on-surface-variant);
-    font-variant-numeric: tabular-nums;
-  }
-
-  .tree {
-    flex: 1;
-    min-height: 0;
-    overflow: auto;
-    outline: none;
-    user-select: none;
-    padding-bottom: 3rem;
-  }
-
-  .tree:focus-visible {
-    box-shadow: inset 0 0 0 2px var(--m3-primary);
-  }
-
-  .row-spacer {
-    width: 100%;
-  }
-
-  .row {
-    display: flex;
-    align-items: center;
-    gap: 0.25rem;
-    height: 24px;
-    padding-right: 0.5rem;
-    cursor: pointer;
-    white-space: nowrap;
-    color: var(--m3-on-surface);
-  }
-
-  .row:hover {
-    background: var(--app-hover, var(--m3-surface-container-high));
-  }
-
-  .row.sel {
-    background: var(--app-active, var(--m3-secondary-container, var(--m3-surface-container-highest)));
-  }
-
-  .row.flash {
-    animation: files-flash 1.5s ease-out;
-  }
-
-  @keyframes files-flash {
-    0%,
-    40% {
-      background: color-mix(in srgb, var(--m3-primary) 30%, transparent);
-    }
-    100% {
-      background: transparent;
-    }
-  }
-
-  .row.disabled {
-    color: var(--m3-on-surface-variant);
-  }
-
-  .chev {
-    flex: none;
-    width: 14px;
-    display: inline-flex;
-    justify-content: center;
-  }
-
-  .chev-btn {
-    display: inline-flex;
-    padding: 0;
-    border: none;
-    background: none;
-    color: var(--m3-on-surface-variant);
-    cursor: pointer;
-  }
-
-  .chev-btn:hover {
-    color: var(--m3-on-surface);
-  }
-
-  .ficon {
-    flex: none;
-    display: inline-flex;
-    align-items: center;
-  }
-
-  .name {
-    flex: 1;
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
-  .size {
-    flex: none;
-    font-size: 0.625rem;
-    color: var(--m3-on-surface-variant);
-    font-variant-numeric: tabular-nums;
-  }
-
-  .trunc {
-    flex: none;
-    color: var(--m3-on-surface-variant);
-  }
-
-  .badge {
-    flex: none;
-    width: 7px;
-    height: 7px;
-    border-radius: 9999px;
-  }
-
-  .state {
-    padding: 1rem;
-    color: var(--m3-on-surface-variant);
-    font-size: 0.75rem;
-    display: inline-flex;
-    align-items: center;
-    gap: 0.4rem;
-  }
-
-  .state-error {
-    color: var(--m3-error);
-  }
-</style>

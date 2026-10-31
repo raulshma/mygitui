@@ -32,6 +32,7 @@
   import TabStrip from "$lib/components/TabStrip.svelte";
   import ThemeToggle from "$lib/components/ThemeToggle.svelte";
   import Icon from "$lib/components/icons/Icon.svelte";
+  import { Input } from "$lib/components/ui/input/index.js";
   import { formatRelativeTime } from "$lib/git/format";
   import iconBrand from "@ktibow/iconset-material-symbols/account-tree";
   import iconAdd from "@ktibow/iconset-material-symbols/add";
@@ -60,8 +61,6 @@
   import { onUiEvent } from "$lib/palette/events";
   import AiHealthChip from "$lib/components/ai/AiHealthChip.svelte";
   import AiSettings from "$lib/components/ai/AiSettings.svelte";
-  import SeedColorDialog from "$lib/components/SeedColorDialog.svelte";
-  import { setUserSeedColor } from "$lib/theme/dynamic-color";
   // Remote devices (SSH): home-view section + the connect-prompt dialogs
   // (mounted app-wide, driven by the remote-devices store's pending queue).
   import AddDeviceDialog from "$lib/components/AddDeviceDialog.svelte";
@@ -104,9 +103,6 @@
 
   /** AI settings dialog (opened by the AiHealthChip, M12). */
   let aiSettingsOpen = $state(false);
-
-  /** Accent-seed picker (opened by the palette seed commands, M12). */
-  let seedOpen = $state(false);
 
   // --- Remote devices (SSH) -------------------------------------------------
 
@@ -357,16 +353,10 @@
     // path as the cli-args listener above (guarded against double-opens).
     void initDeepLinks((path) => openRepoTab(path));
 
-    // M12: the AI health chip opens the settings dialog; the palette seed
-    // command opens the accent picker.
+    // M12: the AI health chip opens the settings dialog.
     cleanups.push(
       onUiEvent("open-ai-settings", () => {
         aiSettingsOpen = true;
-      }),
-    );
-    cleanups.push(
-      onUiEvent("open-seed-dialog", () => {
-        seedOpen = true;
       }),
     );
 
@@ -376,10 +366,10 @@
   });
 </script>
 
-<div class="app-shell">
+<div class="app-shell flex h-full flex-col overflow-hidden bg-background text-foreground">
   {#if popout}
     <!-- M4 F1 popout window: exactly one panel, own store wiring. -->
-    <main class="popout-view">
+    <main class="popout-view flex min-h-0 flex-1 [&>*]:min-h-0 [&>*]:flex-1">
       {#if popout.panel === "history"}
         {#await import("$lib/components/panels/HistoryView.svelte") then HistoryViewModule}
           <HistoryViewModule.default repoId={popout.repoId} />
@@ -431,33 +421,60 @@
     {#if launching}
       <!-- Launch restore is still opening the stored repo: hold this frame
            instead of flashing the recents list (or a non-active tab). -->
-      <main class="launch" aria-busy="true">
-        <span class="launch-mark" aria-hidden="true">
+      <main
+        class="launch flex min-h-0 flex-1 flex-col items-center justify-center gap-[0.65rem] bg-[radial-gradient(circle_at_50%_-12%,color-mix(in_srgb,var(--primary)_8%,transparent),transparent_46%)] bg-background text-muted-foreground"
+        aria-busy="true"
+      >
+        <span
+          class="launch-mark mb-[0.35rem] grid size-[3.25rem] place-items-center rounded-[0.95rem] bg-primary/10 text-primary shadow-sm"
+          aria-hidden="true"
+        >
           <Icon icon={iconBrand} size={26} />
         </span>
-        <span class="launch-title">
+        <span class="launch-title text-[0.9375rem] font-medium text-foreground">
           Opening {restoreName ?? "your last workspace"}…
         </span>
         {#if tabStore.restoreRoot}
-          <span class="launch-sub" title={tabStore.restoreRoot}>
+          <span
+            class="launch-sub max-w-[min(32rem,80vw)] overflow-hidden text-ellipsis whitespace-nowrap font-mono text-xs opacity-75"
+            title={tabStore.restoreRoot}
+          >
             {tabStore.restoreRoot}
           </span>
         {/if}
-        <span class="launch-spinner" aria-hidden="true"></span>
+        <span
+          class="launch-spinner mt-[0.35rem] size-[1.4rem] animate-spin rounded-full border-[2.5px] border-primary/25 border-t-primary"
+          aria-hidden="true"
+        ></span>
       </main>
     {:else if showWorkspace}
       {#if active?.openError}
         <!-- Remote tab whose device is unknown/offline (or whose path
              vanished): keep the tab, offer a Retry of the open. -->
-        <main class="repo-offline">
-          <span class="offline-icon" aria-hidden="true">
+        <main
+          class="repo-offline flex min-h-0 flex-1 flex-col items-center justify-center gap-2.5 p-8 text-center text-muted-foreground"
+        >
+          <span
+            class="offline-icon mb-[0.35rem] grid size-[3.25rem] place-items-center rounded-[0.95rem] bg-muted text-muted-foreground shadow-sm"
+            aria-hidden="true"
+          >
             <Icon icon={iconDevices} size={26} />
           </span>
-          <h2 class="offline-title">{active.name} is not reachable</h2>
-          <span class="offline-path" title={active.root}>{active.root}</span>
-          <p class="offline-msg" role="alert">{active.openError}</p>
+          <h2 class="offline-title m-0 text-base font-medium text-foreground">
+            {active.name} is not reachable
+          </h2>
+          <span
+            class="offline-path max-w-[min(32rem,80vw)] overflow-hidden text-ellipsis whitespace-nowrap font-mono text-xs opacity-75"
+            title={active.root}>{active.root}</span
+          >
+          <p
+            class="offline-msg mb-2 max-w-[min(32rem,80vw)] text-[0.8125rem] [overflow-wrap:anywhere]"
+            role="alert"
+          >
+            {active.openError}
+          </p>
           <button
-            class="add-btn"
+            class="add-btn inline-flex cursor-pointer items-center gap-1.5 rounded-full border border-transparent bg-primary px-3.5 py-1.5 text-xs font-medium whitespace-nowrap text-primary-foreground hover:brightness-110 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
             type="button"
             onclick={() => void retryRemoteTab(active.root)}
           >
@@ -466,11 +483,17 @@
           </button>
         </main>
       {:else}
-        <main class="repo-view">
+        <main class="repo-view flex min-h-0 min-w-0 flex-1 overflow-hidden">
           {#if active}
               {#await import("$lib/components/panels/RepoView.svelte")}
-                <div class="repo-loading" aria-busy="true">
-                  <span class="launch-spinner" aria-hidden="true"></span>
+                <div
+                  class="repo-loading grid flex-1 place-content-center justify-items-center gap-2.5 text-sm text-muted-foreground"
+                  aria-busy="true"
+                >
+                  <span
+                    class="launch-spinner size-[1.4rem] animate-spin rounded-full border-[2.5px] border-primary/25 border-t-primary"
+                    aria-hidden="true"
+                  ></span>
                   <span>Loading workspace…</span>
                 </div>
               {:then RepoViewModule}
@@ -482,7 +505,10 @@
                   deviceId={active.deviceId}
                 />
               {:catch}
-                <p class="repo-load-error" role="alert">
+                <p
+                  class="repo-load-error m-auto text-destructive"
+                  role="alert"
+                >
                   The repository workspace could not be loaded. Restart the app to try again.
                 </p>
               {/await}
@@ -490,34 +516,52 @@
         </main>
       {/if}
     {:else}
-      <main class="home">
+      <main
+        class="home flex min-h-0 flex-1 flex-col overflow-y-auto bg-[radial-gradient(circle_at_50%_-12%,color-mix(in_srgb,var(--primary)_8%,transparent),transparent_46%)] bg-background"
+      >
         {#if !tabsOpen}
-          <header class="home-top">
-            <div class="brand">
-              <span class="brand-mark" aria-hidden="true">
+          <header
+            class="home-top flex flex-none items-center justify-between gap-4 border-b border-border bg-muted/80 px-5 py-3 backdrop-blur-[8px]"
+          >
+            <div class="brand flex min-w-0 items-center gap-2.5">
+              <span
+                class="brand-mark grid size-9 flex-none place-items-center rounded-[0.65rem] bg-primary/10 text-primary shadow-sm"
+                aria-hidden="true"
+              >
                 <Icon icon={iconBrand} size={20} />
               </span>
-              <span class="brand-text">
-                <span class="brand-name">mygitui</span>
-                <span class="brand-tag">your local git workspace</span>
+              <span class="brand-text flex min-w-0 flex-col leading-[1.15]">
+                <span
+                  class="brand-name text-[1.0625rem] font-semibold tracking-[-0.01em]"
+                  >mygitui</span
+                >
+                <span
+                  class="brand-tag max-[720px]:hidden text-[0.6875rem] text-muted-foreground"
+                  >your local git workspace</span
+                >
               </span>
             </div>
-            <div class="home-utilities">
+            <div class="home-utilities flex flex-none items-center gap-1.5">
               <AiHealthChip />
               <ThemeToggle />
             </div>
           </header>
         {/if}
 
-      <div class="home-body">
-        <section class="recent" aria-labelledby="recent-heading">
-          <div class="recent-head">
-            <div class="recent-title">
-              <h1 id="recent-heading" class="recent-heading">
+      <div
+        class="home-body flex flex-1 flex-col items-center gap-9 px-5 pb-8 pt-11 max-[720px]:pt-7"
+      >
+        <section
+          class="recent w-full min-w-0 max-w-[44rem]"
+          aria-labelledby="recent-heading"
+        >
+          <div class="recent-head mb-4 flex flex-wrap items-end justify-between gap-4">
+            <div class="recent-title min-w-0">
+              <h1 id="recent-heading" class="recent-heading m-0 text-[1.375rem] font-medium tracking-[-0.01em] text-foreground">
                 {repos.length === 0 ? "Repositories" : "Recent repositories"}
               </h1>
               {#if repos.length > 0}
-                <p class="recent-sub">
+                <p class="recent-sub mb-0 mt-0.5 text-xs text-muted-foreground">
                   {#if repoFilter.trim()}
                     {filteredRepos.length} of {repos.length} repositories
                   {:else}
@@ -529,10 +573,10 @@
               {/if}
             </div>
             {#if tabsOpen || repos.length > 0}
-              <div class="head-actions">
+              <div class="head-actions flex flex-none flex-wrap gap-2">
                 {#if tabsOpen}
                   <button
-                    class="back-btn"
+                    class="back-btn inline-flex cursor-pointer items-center gap-1.5 rounded-full border border-border bg-muted px-3.5 py-1.5 text-xs font-medium whitespace-nowrap text-foreground hover:border-input hover:bg-accent focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
                     type="button"
                     onclick={hideRecentRepos}
                   >
@@ -542,7 +586,7 @@
                 {/if}
                 {#if repos.length > 0}
                   <button
-                    class="add-btn"
+                    class="add-btn inline-flex cursor-pointer items-center gap-1.5 rounded-full border border-transparent bg-primary px-3.5 py-1.5 text-xs font-medium whitespace-nowrap text-primary-foreground hover:brightness-110 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
                     type="button"
                     onclick={() => void openFromDisk()}
                   >
@@ -550,7 +594,7 @@
                     Open repository…
                   </button>
                   <button
-                    class="clone-btn"
+                    class="clone-btn inline-flex cursor-pointer items-center gap-1.5 rounded-full border border-border bg-transparent px-3.5 py-1.5 text-xs font-medium whitespace-nowrap text-foreground hover:border-input hover:bg-accent focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
                     type="button"
                     onclick={() => (cloneOpen = true)}
                   >
@@ -563,11 +607,14 @@
           </div>
 
           {#if showRepoFilter}
-            <label class="repo-search">
-              <span class="search-icon" aria-hidden="true">
+            <label
+              class="repo-search mb-3 flex h-[2.1rem] items-center gap-1.5 rounded-full border border-border bg-card px-2.5 text-muted-foreground focus-within:border-primary focus-within:ring-1 focus-within:ring-primary"
+            >
+              <span class="search-icon inline-flex flex-none opacity-80" aria-hidden="true">
                 <Icon icon={iconSearch} size={15} />
               </span>
               <input
+                class="min-w-0 flex-1 border-0 bg-transparent text-[0.8125rem] text-foreground outline-none placeholder:text-muted-foreground placeholder:opacity-80"
                 type="text"
                 aria-label="Filter recent repositories"
                 placeholder="Filter repositories by name or path"
@@ -575,7 +622,7 @@
               />
               {#if repoFilter}
                 <button
-                  class="search-clear"
+                  class="search-clear inline-flex size-5 flex-none cursor-pointer items-center justify-center rounded-full border-0 bg-transparent p-0 text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-primary"
                   type="button"
                   aria-label="Clear repository filter"
                   title="Clear filter"
@@ -588,18 +635,29 @@
           {/if}
 
           {#if repos.length === 0}
-            <div class="empty">
-              <span class="empty-icon" aria-hidden="true">
+            <div
+              class="empty flex flex-col items-center gap-1.5 rounded-[28px] border border-dashed border-border bg-muted/30 px-6 py-10 text-center"
+            >
+              <span
+                class="empty-icon mb-[0.35rem] grid size-14 place-items-center rounded-full bg-primary/10 text-primary"
+                aria-hidden="true"
+              >
                 <Icon icon={iconFolder} size={30} />
               </span>
-              <h2 class="empty-title">Open your first repository</h2>
-              <p class="empty-text">
+              <h2
+                class="empty-title m-0 text-base font-semibold text-foreground"
+              >
+                Open your first repository
+              </h2>
+              <p
+                class="empty-text m-0 max-w-[26rem] text-[0.8125rem] leading-normal text-muted-foreground"
+              >
                 Choose a folder on disk, clone a remote, or drag a folder onto
                 this window to get started.
               </p>
-              <div class="empty-actions">
+              <div class="empty-actions mt-3 flex flex-wrap justify-center gap-2">
                 <button
-                  class="add-btn"
+                  class="add-btn inline-flex cursor-pointer items-center gap-1.5 rounded-full border border-transparent bg-primary px-3.5 py-1.5 text-xs font-medium whitespace-nowrap text-primary-foreground hover:brightness-110 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
                   type="button"
                   onclick={() => void openFromDisk()}
                 >
@@ -607,7 +665,7 @@
                   Open repository…
                 </button>
                 <button
-                  class="clone-btn"
+                  class="clone-btn inline-flex cursor-pointer items-center gap-1.5 rounded-full border border-border bg-transparent px-3.5 py-1.5 text-xs font-medium whitespace-nowrap text-foreground hover:border-input hover:bg-accent focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
                   type="button"
                   onclick={() => (cloneOpen = true)}
                 >
@@ -617,10 +675,16 @@
               </div>
             </div>
           {:else if filteredRepos.length === 0}
-            <div class="no-results">
-              <p class="empty-title">No repositories match “{repoFilter}”</p>
+            <div
+              class="no-results rounded-2xl border border-dashed border-border px-4 py-8 text-center text-muted-foreground"
+            >
+              <p
+                class="empty-title m-0 mb-2 text-base font-semibold text-foreground"
+              >
+                No repositories match “{repoFilter}”
+              </p>
               <button
-                class="clear-search"
+                class="clear-search mt-3 inline-flex cursor-pointer items-center gap-1.5 rounded-full border border-border bg-transparent px-3.5 py-1.5 text-xs font-medium whitespace-nowrap text-primary hover:border-input hover:bg-accent focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
                 type="button"
                 onclick={() => (repoFilter = "")}
               >
@@ -628,36 +692,42 @@
               </button>
             </div>
           {:else}
-            <ul class="repo-list">
+            <ul class="repo-list m-0 flex list-none flex-col gap-1.5 p-0">
               {#each filteredRepos as repo (repo.path)}
                 {@const when = lastOpenedLabel(repo.lastOpened)}
-                <li class="repo-row-wrapper">
+                <li class="repo-row-wrapper group/row flex items-center gap-0.5 rounded-xl border border-transparent bg-muted/40 pr-[0.35rem] transition-colors hover:border-border hover:bg-muted/70 focus-within:border-border focus-within:bg-muted/70">
                   <button
-                    class="repo-row"
+                    class="repo-row flex min-w-0 flex-1 cursor-pointer items-center gap-3 rounded-xl border border-transparent bg-transparent px-3 py-[0.55rem] text-left text-foreground hover:border-transparent hover:bg-transparent focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary"
                     type="button"
                     onclick={() => void openRepoTab(repo.path)}
                   >
-                    <span class="repo-icon" aria-hidden="true">
+                    <span class="repo-icon grid size-10 flex-none place-items-center rounded-[0.625rem] bg-primary/10 text-primary" aria-hidden="true">
                       <Icon icon={iconFolder} size={20} />
                     </span>
-                    <span class="repo-main">
-                      <span class="repo-title">
-                        <span class="repo-name">{repoName(repo.path)}</span>
+                    <span class="repo-main flex min-w-0 flex-1 flex-col gap-0.5">
+                      <span class="repo-title flex min-w-0 items-center gap-[0.3rem]">
+                        <span class="repo-name overflow-hidden text-ellipsis whitespace-nowrap text-[0.9375rem] font-semibold">{repoName(repo.path)}</span>
                         {#if repo.pinned}
-                          <span class="pin-mark" title="Pinned">
+                          <span
+                            class="pin-mark inline-flex flex-none text-primary"
+                            title="Pinned"
+                          >
                             <Icon icon={iconPin} size={13} />
                           </span>
                         {/if}
                       </span>
-                      <span class="repo-path">{repo.path}</span>
+                      <span class="repo-path max-w-full overflow-hidden text-ellipsis whitespace-nowrap font-mono text-xs text-muted-foreground">{repo.path}</span>
                     </span>
                     {#if when}
-                      <span class="repo-when">{when}</span>
+                      <span
+                        class="repo-when max-[720px]:hidden flex-none whitespace-nowrap text-[0.6875rem] text-muted-foreground"
+                        >{when}</span
+                      >
                     {/if}
                   </button>
-                  <span class="row-actions">
+                  <span class="row-actions flex flex-none items-center gap-0.5 opacity-75 transition-opacity group-hover/row:opacity-100 group-focus-within/row:opacity-100">
                     <button
-                      class="row-action pin"
+                      class="row-action pin inline-flex size-[1.9rem] cursor-pointer items-center justify-center rounded-lg border-0 bg-transparent p-0 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-primary {repo.pinned ? 'text-primary' : ''}"
                       class:pinned={repo.pinned}
                       type="button"
                       aria-pressed={repo.pinned}
@@ -670,7 +740,7 @@
                       <Icon icon={iconPin} size={15} />
                     </button>
                     <button
-                      class="row-action remove"
+                      class="row-action remove inline-flex size-[1.9rem] cursor-pointer items-center justify-center rounded-lg border-0 bg-transparent p-0 text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-primary"
                       type="button"
                       title="Remove from recent list"
                       aria-label={`Remove ${repoName(repo.path)} from the recent list`}
@@ -686,24 +756,27 @@
         </section>
 
         <!-- Remote devices (SSH): list + detail (browser + settings). -->
-        <section class="devices" aria-labelledby="devices-heading">
-          <div class="recent-head">
-            <div class="recent-title">
-              <h2 id="devices-heading" class="recent-heading">
+        <section
+          class="devices w-full min-w-0 max-w-[44rem]"
+          aria-labelledby="devices-heading"
+        >
+          <div class="recent-head mb-4 flex flex-wrap items-end justify-between gap-4">
+            <div class="recent-title min-w-0">
+              <h2 id="devices-heading" class="recent-heading m-0 text-[1.375rem] font-medium tracking-[-0.01em] text-foreground">
                 {deviceDetail ? "Device" : "Devices"}
               </h2>
               {#if !deviceDetail && (remoteDevices.devices?.length ?? 0) > 0}
-                <p class="recent-sub">
+                <p class="recent-sub mb-0 mt-0.5 text-xs text-muted-foreground">
                   {remoteDevices.devices.length}
                   {remoteDevices.devices.length === 1 ? "machine" : "machines"}
                   registered
                 </p>
               {/if}
             </div>
-            <div class="head-actions">
+            <div class="head-actions flex flex-none flex-wrap gap-2">
               {#if deviceDetail}
                 <button
-                  class="back-btn"
+                  class="back-btn inline-flex cursor-pointer items-center gap-1.5 rounded-full border border-border bg-muted px-3.5 py-1.5 text-xs font-medium whitespace-nowrap text-foreground hover:border-input hover:bg-accent focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
                   type="button"
                   onclick={() => (deviceDetailId = null)}
                 >
@@ -711,7 +784,7 @@
                   All devices
                 </button>
               {/if}
-              <button class="clone-btn" type="button" onclick={openAddDevice}>
+              <button class="clone-btn inline-flex cursor-pointer items-center gap-1.5 rounded-full border border-border bg-transparent px-3.5 py-1.5 text-xs font-medium whitespace-nowrap text-foreground hover:border-input hover:bg-accent focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary" type="button" onclick={openAddDevice}>
                 <Icon icon={iconAdd} size={14} />
                 Add device…
               </button>
@@ -719,30 +792,47 @@
           </div>
 
           {#if deviceDetail}
-            <div class="device-detail">
-              <div class="detail-head">
-                <span class="detail-icon" aria-hidden="true">
+            <div class="device-detail flex flex-col gap-3 rounded-2xl border border-border bg-muted/40 px-[1.1rem] py-4">
+              <div class="detail-head flex min-w-0 items-center gap-2.5">
+                <span
+                  class="detail-icon grid size-9 flex-none place-items-center rounded-lg bg-primary/10 text-primary"
+                  aria-hidden="true"
+                >
                   <Icon icon={iconDevices} size={18} />
                 </span>
-                <span class="detail-main">
-                  <span class="detail-name">{deviceDetail.profile.name}</span>
-                  <span class="detail-host">
+                <span class="detail-main flex min-w-0 flex-1 flex-col gap-0.5">
+                  <span
+                    class="detail-name overflow-hidden text-ellipsis whitespace-nowrap text-[0.9375rem] font-semibold"
+                    >{deviceDetail.profile.name}</span
+                  >
+                  <span
+                    class="detail-host overflow-hidden text-ellipsis whitespace-nowrap font-mono text-xs text-muted-foreground"
+                  >
                     {deviceDetail.profile.username}@{deviceDetail.profile.host}:{deviceDetail.profile.port}
                   </span>
                 </span>
                 <span
-                  class="device-status"
+                  class="device-status inline-flex flex-none items-center gap-1.5 whitespace-nowrap rounded-full bg-muted px-[0.55rem] py-[0.1rem] text-[0.6875rem] {deviceDetail.status === 'connected'
+                    ? 'text-foreground'
+                    : 'text-muted-foreground'}"
                   data-status={deviceDetail.status}
                 >
-                  <span class="status-dot" aria-hidden="true"></span>
+                  <span
+                    class="status-dot size-[0.45rem] flex-none rounded-full {deviceDetail.status === 'connected'
+                      ? 'bg-primary'
+                      : deviceDetail.status === 'connecting'
+                        ? 'bg-primary/40'
+                        : 'bg-muted-foreground/50'}"
+                    aria-hidden="true"
+                  ></span>
                   {deviceDetail.status}
                 </span>
               </div>
 
-              <div class="detail-actions">
+              <div class="detail-actions flex flex-wrap items-end gap-2">
                 {#if deviceDetail.status === "connected"}
                   <button
-                    class="detail-btn"
+                    class="detail-btn inline-flex cursor-pointer items-center gap-[0.3rem] rounded-full border border-border bg-transparent px-[0.85rem] py-[0.35rem] text-xs font-medium whitespace-nowrap text-foreground hover:border-input hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
                     type="button"
                     onclick={() => void remoteDevices.disconnect(deviceDetail.profile.id)}
                   >
@@ -750,7 +840,7 @@
                   </button>
                 {:else}
                   <button
-                    class="detail-btn"
+                    class="detail-btn inline-flex cursor-pointer items-center gap-[0.3rem] rounded-full border border-border bg-transparent px-[0.85rem] py-[0.35rem] text-xs font-medium whitespace-nowrap text-foreground hover:border-input hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
                     type="button"
                     disabled={deviceDetail.status === "connecting"}
                     onclick={() => void remoteDevices.connect(deviceDetail.profile.id)}
@@ -759,7 +849,7 @@
                   </button>
                 {/if}
                 <button
-                  class="detail-btn"
+                  class="detail-btn inline-flex cursor-pointer items-center gap-[0.3rem] rounded-full border border-border bg-transparent px-[0.85rem] py-[0.35rem] text-xs font-medium whitespace-nowrap text-foreground hover:border-input hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
                   type="button"
                   onclick={() => openEditDevice(deviceDetail.profile)}
                 >
@@ -768,11 +858,16 @@
                 </button>
               </div>
 
-              <div class="detail-settings">
-                <label class="poll-field">
-                  <span class="field-label">Poll interval (seconds)</span>
+              <div
+                class="detail-settings flex flex-wrap items-end gap-2 border-t border-border pt-2"
+              >
+                <label class="poll-field flex flex-col gap-0.5">
+                  <span
+                    class="field-label text-[0.6875rem] text-muted-foreground"
+                    >Poll interval (seconds)</span
+                  >
                   <input
-                    class="poll-input"
+                    class="poll-input w-[5.5rem] rounded border border-border bg-card px-2 py-[0.35rem] text-[0.8125rem] text-foreground focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-primary"
                     type="number"
                     min="1"
                     aria-label="Poll interval in seconds"
@@ -780,21 +875,21 @@
                   />
                 </label>
                 <button
-                  class="detail-btn"
+                  class="detail-btn inline-flex cursor-pointer items-center gap-[0.3rem] rounded-full border border-border bg-transparent px-[0.85rem] py-[0.35rem] text-xs font-medium whitespace-nowrap text-foreground hover:border-input hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
                   type="button"
                   onclick={() => void savePollInterval()}
                 >
                   Save
                 </button>
                 <button
-                  class="detail-btn"
+                  class="detail-btn inline-flex cursor-pointer items-center gap-[0.3rem] rounded-full border border-border bg-transparent px-[0.85rem] py-[0.35rem] text-xs font-medium whitespace-nowrap text-foreground hover:border-input hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
                   type="button"
                   onclick={() => void forgetHostKey()}
                 >
                   Forget host key
                 </button>
                 <button
-                  class="detail-btn danger"
+                  class="detail-btn danger inline-flex cursor-pointer items-center gap-[0.3rem] rounded-full border border-border bg-transparent px-[0.85rem] py-[0.35rem] text-xs font-medium whitespace-nowrap text-destructive hover:border-destructive hover:bg-destructive/10 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
                   type="button"
                   onclick={() => (removeDeviceOpen = true)}
                 >
@@ -805,38 +900,52 @@
               <DeviceBrowser deviceId={deviceDetail.profile.id} />
             </div>
           {:else if (remoteDevices.devices?.length ?? 0) === 0}
-            <p class="devices-empty">
+            <p
+              class="devices-empty m-0 rounded-2xl border border-dashed border-border px-6 py-5 text-[0.8125rem] leading-normal text-muted-foreground"
+            >
               No devices yet. Register an SSH machine to browse and open its
               repositories as projects.
             </p>
           {:else}
-            <ul class="repo-list">
+            <ul class="repo-list m-0 flex list-none flex-col gap-1.5 p-0">
               {#each remoteDevices.devices ?? [] as device (device.profile.id)}
-                <li class="repo-row-wrapper">
+                <li class="repo-row-wrapper group/row flex items-center gap-0.5 rounded-xl border border-transparent bg-muted/40 pr-[0.35rem] transition-colors hover:border-border hover:bg-muted/70 focus-within:border-border focus-within:bg-muted/70">
                   <button
-                    class="repo-row"
+                    class="repo-row flex min-w-0 flex-1 cursor-pointer items-center gap-3 rounded-xl border border-transparent bg-transparent px-3 py-[0.55rem] text-left text-foreground hover:border-transparent hover:bg-transparent focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary"
                     type="button"
                     onclick={() => openDeviceDetail(device.profile.id)}
                   >
-                    <span class="repo-icon" aria-hidden="true">
+                    <span class="repo-icon grid size-10 flex-none place-items-center rounded-[0.625rem] bg-primary/10 text-primary" aria-hidden="true">
                       <Icon icon={iconDevices} size={20} />
                     </span>
-                    <span class="repo-main">
-                      <span class="repo-title">
-                        <span class="repo-name">{device.profile.name}</span>
+                    <span class="repo-main flex min-w-0 flex-1 flex-col gap-0.5">
+                      <span class="repo-title flex min-w-0 items-center gap-[0.3rem]">
+                        <span class="repo-name overflow-hidden text-ellipsis whitespace-nowrap text-[0.9375rem] font-semibold">{device.profile.name}</span>
                       </span>
-                      <span class="repo-path">
+                      <span class="repo-path max-w-full overflow-hidden text-ellipsis whitespace-nowrap font-mono text-xs text-muted-foreground">
                         {device.profile.username}@{device.profile.host}:{device.profile.port}
                       </span>
                     </span>
-                    <span class="device-status" data-status={device.status}>
-                      <span class="status-dot" aria-hidden="true"></span>
+                    <span
+                      class="device-status inline-flex flex-none items-center gap-1.5 whitespace-nowrap rounded-full bg-muted px-[0.55rem] py-[0.1rem] text-[0.6875rem] {device.status === 'connected'
+                        ? 'text-foreground'
+                        : 'text-muted-foreground'}"
+                      data-status={device.status}
+                    >
+                      <span
+                        class="status-dot size-[0.45rem] flex-none rounded-full {device.status === 'connected'
+                          ? 'bg-primary'
+                          : device.status === 'connecting'
+                            ? 'bg-primary/40'
+                            : 'bg-muted-foreground/50'}"
+                        aria-hidden="true"
+                      ></span>
                       {device.status}
                     </span>
                   </button>
-                  <span class="row-actions">
+                  <span class="row-actions flex flex-none items-center gap-0.5 opacity-75 transition-opacity group-hover/row:opacity-100 group-focus-within/row:opacity-100">
                     <button
-                      class="row-action"
+                      class="row-action inline-flex size-[1.9rem] cursor-pointer items-center justify-center rounded-lg border-0 bg-transparent p-0 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-primary"
                       type="button"
                       title="Edit device"
                       aria-label={`Edit device ${device.profile.name}`}
@@ -852,7 +961,9 @@
         </section>
       </div>
 
-      <footer class="home-foot">
+      <footer
+        class="home-foot flex flex-none items-center gap-5 border-t border-border bg-muted/80 px-5 py-[0.65rem] text-[0.6875rem] text-muted-foreground"
+      >
         <span class="hint">
           <kbd class="kbd">Ctrl</kbd><kbd class="kbd">K</kbd> quick switcher
         </span>
@@ -861,7 +972,9 @@
           ><kbd class="kbd">P</kbd>
           command palette
         </span>
-        <span class="foot-note">Tip: drop a folder here to open it</span>
+        <span class="foot-note ml-auto opacity-85 max-[720px]:hidden"
+          >Tip: drop a folder here to open it</span
+        >
       </footer>
       </main>
     {/if}
@@ -892,865 +1005,3 @@
 <!-- M12: AI settings dialog (opened by the AI health chip / palette). -->
 <AiSettings bind:open={aiSettingsOpen} />
 
-{#if seedOpen}
-  <SeedColorDialog
-    onSubmit={(hex) => {
-      setUserSeedColor(hex);
-      void initTheme();
-    }}
-    onClear={() => {
-      setUserSeedColor(null);
-      void initTheme();
-    }}
-    onCancel={() => (seedOpen = false)}
-  />
-{/if}
-
-<style>
-  .app-shell {
-    display: flex;
-    flex-direction: column;
-    height: 100%;
-    overflow: hidden;
-    background: var(--m3-surface);
-    color: var(--m3-on-surface);
-  }
-
-  /* Per-tab content area */
-  .repo-view {
-    flex: 1;
-    min-width: 0;
-    min-height: 0;
-    display: flex;
-    overflow: hidden;
-  }
-
-  .repo-loading {
-    flex: 1;
-    display: grid;
-    place-content: center;
-    justify-items: center;
-    gap: 0.6rem;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    font-size: 0.875rem;
-  }
-
-  .repo-load-error {
-    margin: auto;
-    color: var(--m3-error, #b3261e);
-  }
-
-  /* M4 F1 popout window: one panel filling the window. */
-  .popout-view {
-    flex: 1;
-    min-height: 0;
-    display: flex;
-  }
-
-  .popout-view > :global(*) {
-    flex: 1;
-    min-height: 0;
-  }
-
-  /* Launch restore: same visual language as the pre-load splash. */
-  .launch {
-    flex: 1;
-    min-height: 0;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    gap: 0.65rem;
-    background:
-      radial-gradient(
-        circle at 50% -12%,
-        color-mix(in srgb, var(--m3-primary) 8%, transparent),
-        transparent 46%
-      ),
-      var(--m3-surface);
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-  }
-
-  .launch-mark {
-    display: grid;
-    place-items: center;
-    width: 3.25rem;
-    height: 3.25rem;
-    margin-bottom: 0.35rem;
-    border-radius: 0.95rem;
-    background: var(--m3-primary-container, var(--m3-surface-container));
-    color: var(--m3-on-primary-container, var(--m3-primary));
-    box-shadow: var(--m3-elevation-1);
-  }
-
-  .launch-title {
-    color: var(--m3-on-surface);
-    font-size: 0.9375rem;
-    font-weight: 500;
-  }
-
-  .launch-sub {
-    max-width: min(32rem, 80vw);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    font-family: var(--app-font-mono, ui-monospace, Consolas, monospace);
-    font-size: 0.75rem;
-    opacity: 0.75;
-  }
-
-  .launch-spinner {
-    width: 1.4rem;
-    height: 1.4rem;
-    margin-top: 0.35rem;
-    border-radius: 50%;
-    border: 2.5px solid color-mix(in srgb, var(--m3-primary) 25%, transparent);
-    border-top-color: var(--m3-primary);
-    animation: launch-spin 0.8s linear infinite;
-  }
-
-  @keyframes launch-spin {
-    to {
-      transform: rotate(360deg);
-    }
-  }
-
-  /* Home area (no tabs open) */
-  .home {
-    flex: 1;
-    min-height: 0;
-    overflow-y: auto;
-    display: flex;
-    flex-direction: column;
-    background:
-      radial-gradient(
-        circle at 50% -12%,
-        color-mix(in srgb, var(--m3-primary) 8%, transparent),
-        transparent 46%
-      ),
-      var(--m3-surface);
-  }
-
-  .home-top {
-    flex: none;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 1rem;
-    padding: 0.75rem 1.25rem;
-    border-bottom: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    background: color-mix(
-      in srgb,
-      var(--m3-surface-container-low, var(--m3-surface)) 82%,
-      transparent
-    );
-    backdrop-filter: blur(8px);
-  }
-
-  .brand {
-    display: flex;
-    align-items: center;
-    gap: 0.625rem;
-    min-width: 0;
-  }
-
-  .brand-mark {
-    flex: none;
-    display: grid;
-    place-items: center;
-    width: 2.25rem;
-    height: 2.25rem;
-    border-radius: 0.65rem;
-    background: var(--m3-primary-container, var(--m3-surface-container));
-    color: var(--m3-on-primary-container, var(--m3-primary));
-    box-shadow: var(--m3-elevation-1);
-  }
-
-  .brand-text {
-    display: flex;
-    flex-direction: column;
-    min-width: 0;
-    line-height: 1.15;
-  }
-
-  .brand-name {
-    font-size: 1.0625rem;
-    font-weight: 600;
-    letter-spacing: -0.01em;
-  }
-
-  .brand-tag {
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    font-size: 0.6875rem;
-  }
-
-  .home-utilities {
-    flex: none;
-    display: flex;
-    align-items: center;
-    gap: 0.375rem;
-  }
-
-  .home-body {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    padding: 2.75rem 1.25rem 2rem;
-    gap: 2.25rem;
-  }
-
-  .recent,
-  .devices {
-    width: 100%;
-    max-width: 44rem;
-    min-width: 0;
-  }
-
-  .recent-head {
-    display: flex;
-    align-items: flex-end;
-    justify-content: space-between;
-    flex-wrap: wrap;
-    gap: 1rem;
-    margin-bottom: 1rem;
-  }
-
-  .recent-title {
-    min-width: 0;
-  }
-
-  .recent-heading {
-    margin: 0;
-    font-size: 1.375rem;
-    font-weight: 500;
-    letter-spacing: -0.01em;
-    color: var(--m3-on-surface);
-  }
-
-  .recent-sub {
-    margin: 0.2rem 0 0;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    font-size: 0.75rem;
-  }
-
-  .head-actions {
-    display: flex;
-    flex: none;
-    flex-wrap: wrap;
-    gap: 0.5rem;
-  }
-
-  .add-btn,
-  .clone-btn,
-  .back-btn,
-  .clear-search {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.35rem;
-    border-radius: var(--m3-shape-full, 9999px);
-    font: inherit;
-    font-size: 0.75rem;
-    font-weight: 500;
-    padding: 0.4rem 0.9rem;
-    white-space: nowrap;
-    cursor: pointer;
-  }
-
-  .add-btn {
-    border: 1px solid transparent;
-    background: var(--m3-primary);
-    color: var(--m3-on-primary);
-  }
-
-  .add-btn:hover {
-    filter: brightness(1.06);
-  }
-
-  .back-btn,
-  .clear-search,
-  .clone-btn {
-    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    background: none;
-    color: var(--m3-on-surface);
-  }
-
-  .back-btn {
-    background: var(--m3-surface-container-high, var(--m3-surface));
-  }
-
-  .back-btn:hover,
-  .clear-search:hover,
-  .clone-btn:hover {
-    background: var(--m3-surface-container-high, var(--m3-surface));
-    border-color: var(--m3-outline, var(--m3-primary));
-  }
-
-  .clear-search {
-    margin-top: 0.75rem;
-    color: var(--m3-primary);
-  }
-
-  .add-btn:focus-visible,
-  .clone-btn:focus-visible,
-  .back-btn:focus-visible,
-  .clear-search:focus-visible {
-    outline: 2px solid var(--m3-primary);
-    outline-offset: 2px;
-  }
-
-  .repo-search {
-    display: flex;
-    align-items: center;
-    gap: 0.4rem;
-    height: 2.1rem;
-    margin-bottom: 0.75rem;
-    padding: 0 0.6rem;
-    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    border-radius: var(--m3-shape-full, 9999px);
-    background: var(--m3-surface-container-lowest, var(--m3-surface));
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-  }
-
-  .repo-search:focus-within {
-    border-color: var(--m3-primary);
-    box-shadow: 0 0 0 1px var(--m3-primary);
-  }
-
-  .search-icon {
-    display: inline-flex;
-    flex: none;
-    opacity: 0.8;
-  }
-
-  .repo-search input {
-    flex: 1;
-    min-width: 0;
-    border: none;
-    background: none;
-    color: var(--m3-on-surface);
-    font: inherit;
-    font-size: 0.8125rem;
-    outline: none;
-  }
-
-  .repo-search input::placeholder {
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    opacity: 0.8;
-  }
-
-  .search-clear {
-    flex: none;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 1.25rem;
-    height: 1.25rem;
-    padding: 0;
-    border: none;
-    border-radius: var(--m3-shape-full, 9999px);
-    background: transparent;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    cursor: pointer;
-  }
-
-  .search-clear:hover {
-    background: var(--m3-surface-container-high, var(--m3-surface));
-    color: var(--m3-on-surface);
-  }
-
-  .search-clear:focus-visible {
-    outline: 2px solid var(--m3-primary);
-    outline-offset: -1px;
-  }
-
-  .repo-list {
-    list-style: none;
-    margin: 0;
-    padding: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 0.375rem;
-  }
-
-  .repo-row-wrapper {
-    display: flex;
-    align-items: center;
-    gap: 0.125rem;
-    padding-right: 0.35rem;
-    border: 1px solid transparent;
-    border-radius: var(--m3-shape-medium, 12px);
-    background: var(--m3-surface-container-low, var(--m3-surface));
-    transition:
-      background-color 0.12s ease,
-      border-color 0.12s ease;
-  }
-
-  .repo-row-wrapper:hover,
-  .repo-row-wrapper:focus-within {
-    border-color: var(--m3-outline-variant, var(--m3-primary));
-    background: var(--m3-surface-container, var(--m3-surface));
-  }
-
-  .repo-row {
-    flex: 1;
-    min-width: 0;
-    display: flex;
-    align-items: center;
-    gap: 0.75rem;
-    text-align: left;
-    border: 1px solid transparent;
-    border-radius: var(--m3-shape-medium, 12px);
-    background: none;
-    color: var(--m3-on-surface);
-    font: inherit;
-    padding: 0.55rem 0.7rem;
-    cursor: pointer;
-  }
-
-  .repo-row:hover {
-    border-color: transparent;
-    background: none;
-  }
-
-  .repo-row:focus-visible {
-    outline: 2px solid var(--m3-primary);
-    outline-offset: 1px;
-  }
-
-  .repo-icon {
-    flex: none;
-    display: grid;
-    place-items: center;
-    width: 2.5rem;
-    height: 2.5rem;
-    border-radius: 0.625rem;
-    background: var(--m3-primary-container, var(--m3-surface-container-high));
-    color: var(--m3-on-primary-container, var(--m3-primary));
-  }
-
-  .repo-main {
-    flex: 1;
-    min-width: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 0.125rem;
-  }
-
-  .repo-title {
-    display: flex;
-    align-items: center;
-    gap: 0.3rem;
-    min-width: 0;
-  }
-
-  .repo-name {
-    font-weight: 600;
-    font-size: 0.9375rem;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .pin-mark {
-    flex: none;
-    display: inline-flex;
-    color: var(--m3-primary);
-  }
-
-  .repo-path {
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    font-size: 0.75rem;
-    font-family: var(--app-font-mono, ui-monospace, Consolas, monospace);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    max-width: 100%;
-  }
-
-  .repo-when {
-    flex: none;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    font-size: 0.6875rem;
-    white-space: nowrap;
-  }
-
-  .row-actions {
-    flex: none;
-    display: flex;
-    align-items: center;
-    gap: 0.125rem;
-    opacity: 0.75;
-    transition: opacity 0.12s ease;
-  }
-
-  .repo-row-wrapper:hover .row-actions,
-  .repo-row-wrapper:focus-within .row-actions {
-    opacity: 1;
-  }
-
-  .row-action {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 1.9rem;
-    height: 1.9rem;
-    padding: 0;
-    border: none;
-    border-radius: var(--m3-shape-small, 8px);
-    background: none;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    opacity: 1;
-    cursor: pointer;
-    transition:
-      background-color 0.12s ease,
-      color 0.12s ease,
-      opacity 0.12s ease;
-  }
-
-  .row-action:hover,
-  .row-action:focus-visible {
-    background: var(--m3-surface-container-high, var(--m3-surface));
-    color: var(--m3-on-surface);
-    opacity: 1;
-  }
-
-  .row-action:focus-visible {
-    outline: 2px solid var(--m3-primary);
-    outline-offset: -1px;
-  }
-
-  .row-action.pinned {
-    color: var(--m3-primary);
-    opacity: 1;
-  }
-
-  .row-action.remove:hover {
-    background: var(--m3-error-container, var(--m3-surface-container-high));
-    color: var(--m3-error);
-  }
-
-  .no-results {
-    padding: 2rem 1rem;
-    border: 1px dashed var(--m3-outline-variant, var(--m3-primary));
-    border-radius: var(--m3-shape-large, 16px);
-    text-align: center;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-  }
-
-  /* --- Remote devices ---------------------------------------------------- */
-
-  .devices-empty {
-    margin: 0;
-    padding: 1.25rem 1.5rem;
-    border: 1px dashed var(--m3-outline-variant, var(--m3-primary));
-    border-radius: var(--m3-shape-large, 16px);
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    font-size: 0.8125rem;
-    line-height: 1.5;
-  }
-
-  .device-status {
-    flex: none;
-    display: inline-flex;
-    align-items: center;
-    gap: 0.35rem;
-    padding: 0.1rem 0.55rem;
-    border-radius: var(--m3-shape-full, 9999px);
-    background: var(--m3-surface-container-high, var(--m3-surface));
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    font-size: 0.6875rem;
-    white-space: nowrap;
-  }
-
-  .status-dot {
-    flex: none;
-    width: 0.45rem;
-    height: 0.45rem;
-    border-radius: 50%;
-    background: var(--m3-outline, var(--m3-on-surface-variant));
-  }
-
-  .device-status[data-status="connected"] {
-    color: var(--m3-on-surface);
-  }
-
-  .device-status[data-status="connected"] .status-dot {
-    background: var(--m3-primary);
-  }
-
-  .device-status[data-status="connecting"] .status-dot {
-    background: var(--m3-tertiary, var(--m3-primary));
-  }
-
-  .device-detail {
-    display: flex;
-    flex-direction: column;
-    gap: 0.75rem;
-    padding: 1rem 1.1rem;
-    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    border-radius: var(--m3-shape-large, 16px);
-    background: var(--m3-surface-container-low, var(--m3-surface));
-  }
-
-  .detail-head {
-    display: flex;
-    align-items: center;
-    gap: 0.6rem;
-    min-width: 0;
-  }
-
-  .detail-icon {
-    flex: none;
-    display: grid;
-    place-items: center;
-    width: 2.25rem;
-    height: 2.25rem;
-    border-radius: 0.6rem;
-    background: var(--m3-primary-container, var(--m3-surface-container-high));
-    color: var(--m3-on-primary-container, var(--m3-primary));
-  }
-
-  .detail-main {
-    flex: 1;
-    min-width: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 0.1rem;
-  }
-
-  .detail-name {
-    font-weight: 600;
-    font-size: 0.9375rem;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .detail-host {
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    font-family: var(--app-font-mono, ui-monospace, Consolas, monospace);
-    font-size: 0.75rem;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .detail-actions,
-  .detail-settings {
-    display: flex;
-    align-items: flex-end;
-    flex-wrap: wrap;
-    gap: 0.5rem;
-  }
-
-  .detail-settings {
-    padding-top: 0.5rem;
-    border-top: 1px solid var(--m3-outline-variant, var(--m3-primary));
-  }
-
-  .detail-btn {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.3rem;
-    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    border-radius: var(--m3-shape-full, 9999px);
-    background: none;
-    color: var(--m3-on-surface);
-    font: inherit;
-    font-size: 0.75rem;
-    font-weight: 500;
-    padding: 0.35rem 0.85rem;
-    white-space: nowrap;
-    cursor: pointer;
-  }
-
-  .detail-btn:hover {
-    background: var(--m3-surface-container-high, var(--m3-surface));
-    border-color: var(--m3-outline, var(--m3-primary));
-  }
-
-  .detail-btn:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-  }
-
-  .detail-btn.danger {
-    color: var(--m3-error);
-  }
-
-  .detail-btn.danger:hover {
-    background: var(--m3-error-container, var(--m3-surface-container-high));
-    border-color: var(--m3-error);
-  }
-
-  .detail-btn:focus-visible {
-    outline: 2px solid var(--m3-primary);
-    outline-offset: 2px;
-  }
-
-  .poll-field {
-    display: flex;
-    flex-direction: column;
-    gap: 0.2rem;
-  }
-
-  .field-label {
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    font-size: 0.6875rem;
-  }
-
-  .poll-input {
-    width: 5.5rem;
-    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    border-radius: var(--m3-shape-extra-small, 4px);
-    background: var(--m3-surface-container-lowest, var(--m3-surface));
-    color: var(--m3-on-surface);
-    font: inherit;
-    font-size: 0.8125rem;
-    padding: 0.35rem 0.5rem;
-  }
-
-  .poll-input:focus-visible {
-    outline: 2px solid var(--m3-primary);
-    outline-offset: -1px;
-  }
-
-  /* Remote tab whose device is offline: keep the tab, offer a Retry. */
-  .repo-offline {
-    flex: 1;
-    min-height: 0;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    gap: 0.6rem;
-    padding: 2rem;
-    text-align: center;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-  }
-
-  .offline-icon {
-    display: grid;
-    place-items: center;
-    width: 3.25rem;
-    height: 3.25rem;
-    margin-bottom: 0.35rem;
-    border-radius: 0.95rem;
-    background: var(--m3-surface-container, var(--m3-surface-container-high));
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    box-shadow: var(--m3-elevation-1);
-  }
-
-  .offline-title {
-    margin: 0;
-    color: var(--m3-on-surface);
-    font-size: 1rem;
-    font-weight: 500;
-  }
-
-  .offline-path {
-    max-width: min(32rem, 80vw);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    font-family: var(--app-font-mono, ui-monospace, Consolas, monospace);
-    font-size: 0.75rem;
-    opacity: 0.75;
-  }
-
-  .offline-msg {
-    max-width: min(32rem, 80vw);
-    margin: 0 0 0.5rem;
-    font-size: 0.8125rem;
-    overflow-wrap: anywhere;
-  }
-
-  .no-results .empty-title {
-    margin-bottom: 0.5rem;
-    color: var(--m3-on-surface);
-  }
-
-  .empty {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 0.4rem;
-    padding: 2.5rem 1.5rem;
-    border: 1px dashed var(--m3-outline-variant, var(--m3-primary));
-    border-radius: var(--m3-shape-extra-large, 28px);
-    background: color-mix(
-      in srgb,
-      var(--m3-surface-container-low, var(--m3-surface)) 65%,
-      transparent
-    );
-    text-align: center;
-  }
-
-  .empty-icon {
-    display: grid;
-    place-items: center;
-    width: 3.5rem;
-    height: 3.5rem;
-    margin-bottom: 0.35rem;
-    border-radius: 50%;
-    background: var(--m3-primary-container, var(--m3-surface-container-high));
-    color: var(--m3-on-primary-container, var(--m3-primary));
-  }
-
-  .empty-title {
-    margin: 0;
-    font-size: 1rem;
-    font-weight: 600;
-    color: var(--m3-on-surface);
-  }
-
-  .empty-text {
-    max-width: 26rem;
-    margin: 0;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    font-size: 0.8125rem;
-    line-height: 1.5;
-  }
-
-  .empty-actions {
-    display: flex;
-    flex-wrap: wrap;
-    justify-content: center;
-    gap: 0.5rem;
-    margin-top: 0.75rem;
-  }
-
-  .home-foot {
-    flex: none;
-    display: flex;
-    align-items: center;
-    gap: 1.25rem;
-    padding: 0.65rem 1.25rem;
-    border-top: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    background: color-mix(
-      in srgb,
-      var(--m3-surface-container-low, var(--m3-surface)) 82%,
-      transparent
-    );
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    font-size: 0.6875rem;
-  }
-
-  .foot-note {
-    margin-left: auto;
-    opacity: 0.85;
-  }
-
-  @media (max-width: 720px) {
-    .brand-tag,
-    .foot-note,
-    .repo-when {
-      display: none;
-    }
-
-    .home-body {
-      padding-top: 1.75rem;
-    }
-  }
-</style>

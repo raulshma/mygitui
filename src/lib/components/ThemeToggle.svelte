@@ -7,6 +7,8 @@
    * keeps every mounted toggle in sync when another surface changes it.
    */
   import { onMount } from "svelte";
+  import { Button } from "$lib/components/ui/button/index.js";
+  import * as Tooltip from "$lib/components/ui/tooltip/index.js";
   import Icon from "$lib/components/icons/Icon.svelte";
   import {
     getThemePreference,
@@ -66,42 +68,24 @@
   }
 </script>
 
-<button
-  class="theme-toggle"
-  type="button"
-  title={`${LABELS[preference]} — click for ${LABELS[next].toLowerCase()}`}
-  aria-label={`${LABELS[preference]}. Switch to ${LABELS[next].toLowerCase()}`}
-  onclick={cycle}
->
-  <Icon icon={ICONS[preference]} size={16} />
-</button>
-
-<style>
-  .theme-toggle {
-    flex: none;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 1.65rem;
-    height: 1.65rem;
-    padding: 0;
-    border: 1px solid transparent;
-    border-radius: var(--m3-shape-extra-small, 4px);
-    background: none;
-    color: var(--m3-on-surface-variant);
-    cursor: pointer;
-    transition:
-      background-color 0.12s ease,
-      color 0.12s ease;
-  }
-
-  .theme-toggle:hover {
-    background: var(--m3-surface-container-high, var(--m3-surface));
-    color: var(--m3-on-surface);
-  }
-
-  .theme-toggle:focus-visible {
-    outline: 2px solid var(--m3-primary);
-    outline-offset: -1px;
-  }
-</style>
+<Tooltip.Provider>
+  <Tooltip.Root>
+    <Tooltip.Trigger aria-label={`${LABELS[preference]}. Switch to ${LABELS[next].toLowerCase()}`}>
+      {#snippet child({ props })}
+        <Button
+          {...props}
+          class="theme-toggle"
+          variant="ghost"
+          size="icon-sm"
+          type="button"
+          onclick={cycle}
+        >
+          <Icon icon={ICONS[preference]} size={16} />
+        </Button>
+      {/snippet}
+    </Tooltip.Trigger>
+    <Tooltip.Content>
+      {LABELS[preference]} — click for {LABELS[next].toLowerCase()}
+    </Tooltip.Content>
+  </Tooltip.Root>
+</Tooltip.Provider>

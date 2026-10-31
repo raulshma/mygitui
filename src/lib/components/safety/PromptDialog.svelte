@@ -4,10 +4,13 @@
   Props: `open` (bindable), `title`, `message`, `placeholder`, `initial`,
   `confirmLabel`, `cancelLabel`, `onSubmit(value)` (trimmed value;
   cancel = no call), `onCancel`. Input autofocuses with the initial value
-  selected; Enter submits, Escape cancels. Chrome lives in DialogShell.
+  selected; Enter submits, Escape cancels. Chrome comes from the shadcn
+  ui/dialog primitives.
 -->
 <script lang="ts">
-  import DialogShell from "./DialogShell.svelte";
+  import * as Dialog from "$lib/components/ui/dialog/index.js";
+  import { Button } from "$lib/components/ui/button/index.js";
+  import { Input } from "$lib/components/ui/input/index.js";
 
   let {
     open = $bindable(false),
@@ -32,10 +35,17 @@
   } = $props();
 
   let value = $state("");
+  let inputEl = $state<HTMLInputElement | null>(null);
 
   $effect(() => {
     if (open) {
       value = initial;
+      // Autofocus with the initial value selected (the old data-autofocus
+      // contract; select() also fires from the focus handler below).
+      requestAnimationFrame(() => {
+        inputEl?.focus();
+        inputEl?.select();
+      });
     }
   });
 
@@ -52,49 +62,55 @@
   }
 </script>
 
-<DialogShell
-  bind:open
-  labelledBy="prompt-title"
-  width="24rem"
-  {onCancel}
-  onsubmit={submit}
->
-  {#snippet children()}
-    <h2 id="prompt-title" class="sdlg-title">{title}</h2>
-    {#if message}<p class="sdlg-message">{message}</p>{/if}
-    <input
-      class="sdlg-input"
-      bind:value
-      {placeholder}
-      aria-label={title}
-      data-autofocus
-      onfocus={(e) => e.currentTarget.select()}
-    />
-  {/snippet}
-  {#snippet actions()}
-    <button class="sdlg-secondary" type="button" onclick={() => close(true)}>
-      {cancelLabel}
-    </button>
-    <button class="sdlg-primary" type="submit" disabled={!value.trim()}>
-      {confirmLabel}
-    </button>
-  {/snippet}
-</DialogShell>
-
-<style>
-  .sdlg-input {
-    width: 100%;
-    box-sizing: border-box;
-    font: inherit;
-    color: var(--m3-on-surface);
-    background: var(--m3-surface-container-lowest, var(--m3-surface));
-    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    border-radius: var(--m3-shape-small, 8px);
-    padding: 0.45rem 0.6rem;
-  }
-
-  .sdlg-input:focus-visible {
-    outline: 2px solid var(--m3-primary);
-    outline-offset: -1px;
-  }
-</style>
+<Dialog.Root bind:open>
+  <!-- svelte-ignore a11y_click_events_have_key_events -->
+  <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+  <Dialog.Overlay class="scrim bg-black/40" role="presentation" />
+  <Dialog.Content
+    class="dialog w-[24rem] max-w-none gap-0 rounded-lg bg-card px-6 py-5 text-sm text-popover-foreground shadow-xl sm:max-w-none"
+    role="dialog"
+    aria-modal="true"
+    aria-labelledby="prompt-title"
+    showCloseButton={false}
+    escapeKeydownBehavior="ignore"
+    interactOutsideBehavior="ignore"
+    onkeydown={(e) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        close(true);
+      }
+    }}
+  >
+    <form
+      onsubmit={(e) => {
+        e.preventDefault();
+        submit();
+      }}
+    >
+      <Dialog.Title id="prompt-title" class="m-0 mb-2 text-lg font-medium">{title}</Dialog.Title>
+      {#if message}<p class="m-0 mb-4 text-muted-foreground [overflow-wrap:anywhere]">{message}</p>{/if}
+      <Input
+        bind:ref={inputEl}
+        bind:value
+        class="h-auto rounded-sm px-[0.6rem] py-[0.45rem] text-sm focus-visible:-outline-offset-1 focus-visible:outline-2 focus-visible:outline-ring"
+        type="text"
+        {placeholder}
+        aria-label={title}
+        onfocus={(e) => e.currentTarget.select()}
+      />
+      <div class="mt-4 flex flex-nowrap justify-end gap-2">
+        <Button
+          variant="outline"
+          class="text-muted-foreground"
+          type="button"
+          onclick={() => close(true)}
+        >
+          {cancelLabel}
+        </Button>
+        <Button type="submit" disabled={!value.trim()}>
+          {confirmLabel}
+        </Button>
+      </div>
+    </form>
+  </Dialog.Content>
+</Dialog.Root>

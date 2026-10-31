@@ -134,11 +134,18 @@
   }
 </script>
 
-<section class="popout-commit" aria-label="Commit detail">
+<section
+  class="popout-commit flex h-screen min-h-0 flex-col bg-card text-card-foreground [&>.detail]:min-h-0 [&>.detail]:flex-1"
+  aria-label="Commit detail"
+>
   {#if error && !info}
-    <p class="state err" role="alert">{error}</p>
+    <p class="state err my-auto px-4 py-8 text-center text-destructive" role="alert">
+      {error}
+    </p>
   {:else if !info}
-    <p class="state" role="status">Loading commit…</p>
+    <p class="state my-auto px-4 py-8 text-center text-muted-foreground" role="status">
+      Loading commit…
+    </p>
   {:else}
     <CommitDetail
       {repoId}
@@ -161,30 +168,3 @@
     />
   {/if}
 </section>
-
-<style>
-  .popout-commit {
-    display: flex;
-    flex-direction: column;
-    height: 100vh;
-    min-height: 0;
-    background: var(--m3-surface);
-    color: var(--m3-on-surface);
-  }
-
-  .popout-commit > :global(.detail) {
-    flex: 1;
-    min-height: 0;
-  }
-
-  .state {
-    margin: auto;
-    padding: 2rem 1rem;
-    text-align: center;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-  }
-
-  .state.err {
-    color: var(--m3-error, red);
-  }
-</style>

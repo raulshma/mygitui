@@ -1,49 +1,21 @@
 /**
- * Theme foundation for mygitui.
+ * Theme foundation for mygitui (shadcn-svelte).
  *
  * `initTheme()` is called once by App.svelte at startup. It:
- *   1. resolves a seed color (baseline palette today; dynamic color is a
- *      best-effort probe that silently no-ops, see dynamic-color.ts),
- *   2. derives light + dark M3 schemes from the seed,
- *   3. writes every token as `--m3-<name>` (plus `--m3c-<name>` aliases so
- *      wrapped m3-svelte components pick the exact same palette) onto
- *      document.documentElement, stamps `<html data-theme="light|dark">`
- *      (app.css keys its non-M3 dark tokens, e.g. `--app-added`, off it),
- *      and announces the resolved scheme on {@link THEME_SCHEME_EVENT}, and
- *   4. follows `prefers-color-scheme` reactively via matchMedia — the token
- *      set is swapped in place when the OS switches, no reload — unless a
- *      manual override ("light" / "dark") is active, in which case the OS
- *      switch is ignored until the override returns to "system".
+ *   1. reads the persisted preference from localStorage "mygitui.theme"
+ *      ("system" | "light" | "dark", default "system"),
+ *   2. resolves the scheme (override wins, otherwise `prefers-color-scheme`),
+ *   3. toggles the `.dark` class on <html> — shadcn/Tailwind dark variants,
+ *      the oklch token sets in src/app.css and the `--app-*` dark hues all
+ *      key off it — also stamps `data-theme="light|dark"` (legacy consumers,
+ *      e2e) and `color-scheme`, and announces the resolved scheme on
+ *      {@link THEME_SCHEME_EVENT},
+ *   4. follows `prefers-color-scheme` reactively via matchMedia unless a
+ *      manual override is active, in which case the OS switch is ignored
+ *      until the preference returns to "system".
  *
- * Published CSS variables (light/dark pairs, hex values):
- *   --m3-primary, --m3-on-primary, --m3-primary-container,
- *   --m3-on-primary-container, --m3-inverse-primary, --m3-primary-fixed,
- *   --m3-primary-fixed-dim, --m3-on-primary-fixed,
- *   --m3-on-primary-fixed-variant, --m3-secondary, --m3-on-secondary,
- *   --m3-secondary-container, --m3-on-secondary-container,
- *   --m3-secondary-fixed, --m3-secondary-fixed-dim, --m3-on-secondary-fixed,
- *   --m3-on-secondary-fixed-variant, --m3-tertiary, --m3-on-tertiary,
- *   --m3-tertiary-container, --m3-on-tertiary-container, --m3-tertiary-fixed,
- *   --m3-tertiary-fixed-dim, --m3-on-tertiary-fixed,
- *   --m3-on-tertiary-fixed-variant, --m3-error, --m3-on-error,
- *   --m3-error-container, --m3-on-error-container, --m3-background,
- *   --m3-on-background, --m3-surface, --m3-on-surface, --m3-surface-variant,
- *   --m3-on-surface-variant, --m3-surface-dim, --m3-surface-bright,
- *   --m3-surface-container-lowest, --m3-surface-container-low,
- *   --m3-surface-container, --m3-surface-container-high,
- *   --m3-surface-container-highest, --m3-surface-tint, --m3-inverse-surface,
- *   --m3-inverse-on-surface, --m3-outline, --m3-outline-variant, --m3-shadow,
- *   --m3-scrim  (each also as --m3c-<name> for m3-svelte compatibility)
- *
- * Static, non-color M3 tokens (--m3-shape-*, --m3-elevation-*) live in
- * src/app.css. The manual theme preference persists to localStorage
- * "mygitui.theme" as `"system" | "light" | "dark"`.
+ * The manual theme preference persists to localStorage "mygitui.theme".
  */
-export { TOKEN_NAMES } from "./dynamic-color";
-export { setUserSeedColor, userSeedColor } from "./dynamic-color";
-
-import { BASELINE_SEED, resolveSeedColor, schemeFromSeed, tokensForScheme } from "./dynamic-color";
-
 export type ColorScheme = "light" | "dark";
 
 /** What the user asked the theme to do (persisted choice). */
@@ -57,9 +29,9 @@ export const THEME_PREFERENCE_EVENT = "mygitui:theme-preference";
 
 /**
  * Window event dispatched whenever the applied (resolved) scheme changes,
- * including OS-driven switches and the initial async apply. Detail is the
- * {@link ColorScheme}. Consumers that bake colors at runtime (Shiki) follow
- * this instead of polling {@link currentScheme}.
+ * including OS-driven switches. Detail is the {@link ColorScheme}. Consumers
+ * that bake colors at runtime (Shiki, the graph palette) follow this instead
+ * of polling {@link currentScheme}.
  */
 export const THEME_SCHEME_EVENT = "mygitui:theme-scheme";
 
@@ -121,7 +93,7 @@ export function setThemePreference(value: ThemePreference): void {
     if (value !== "system" && value !== "light" && value !== "dark") return;
     preference = value;
     savePreference(value);
-    if (applied !== null) applyTokens(applied, resolveScheme());
+    if (watching) applyScheme(resolveScheme());
     notifyPreference();
   } catch {
     // A theming failure must never propagate to the caller.
@@ -136,15 +108,6 @@ export function getThemePreference(): ThemePreference {
 /** The scheme to apply right now: override wins, system follows the OS. */
 function resolveScheme(): ColorScheme {
   return preference === "system" ? preferredScheme() : preference;
-}
-
-/** Inline styles of <html> — the single write target for runtime tokens. */
-function rootStyle(): CSSStyleDeclaration | null {
-  try {
-    return typeof document !== "undefined" ? document.documentElement.style : null;
-  } catch {
-    return null;
-  }
 }
 
 /** Resolve matchMedia without assuming it exists (jsdom, workers, ...). */
@@ -170,31 +133,22 @@ function preferredScheme(): ColorScheme {
   }
 }
 
-interface AppliedTheme {
-  light: Readonly<Record<string, string>>;
-  dark: Readonly<Record<string, string>>;
-  scheme: ColorScheme;
-  stopWatching: () => void;
-}
-
 /** Module state; initTheme re-runs cleanly by disposing the previous one. */
-let applied: AppliedTheme | null = null;
+let watching = false;
+let stopWatching = () => {};
 
-function applyTokens(theme: AppliedTheme, scheme: ColorScheme): void {
-  const style = rootStyle();
-  if (!style) return;
-  const tokens = scheme === "dark" ? theme.dark : theme.light;
-  for (const [name, value] of Object.entries(tokens)) {
-    style.setProperty(`--m3-${name}`, value);
-    style.setProperty(`--m3c-${name}`, value);
-  }
-  style.setProperty("color-scheme", scheme);
+/** Applies a scheme to the document root: `.dark` class + legacy stamps. */
+function applyScheme(scheme: ColorScheme): void {
+  current = scheme;
   try {
-    document.documentElement.dataset.theme = scheme;
+    if (typeof document === "undefined") return;
+    const root = document.documentElement;
+    root.classList.toggle("dark", scheme === "dark");
+    root.dataset.theme = scheme;
+    root.style.setProperty("color-scheme", scheme);
   } catch {
-    // No DOM (tests/workers): tokens are simply not written either.
+    // No DOM (tests/workers): the module state is still updated.
   }
-  theme.scheme = scheme;
   announceScheme(scheme);
 }
 
@@ -211,9 +165,8 @@ function announceScheme(scheme: ColorScheme): void {
 }
 
 /**
- * Initialize the M3 theme. Safe to call more than once (re-initializes);
- * must never throw or reject — theming failures fall back to the baseline
- * palette silently.
+ * Initialize the theme. Safe to call more than once (re-initializes); must
+ * never throw or reject — theming failures fall back silently to light.
  */
 export async function initTheme(): Promise<void> {
   try {
@@ -223,15 +176,7 @@ export async function initTheme(): Promise<void> {
 
     preference = loadPreference();
     notifyPreference();
-    const seed = (await resolveSeedColor()) ?? BASELINE_SEED;
-    const theme: AppliedTheme = {
-      light: tokensForScheme(schemeFromSeed(seed, false)),
-      dark: tokensForScheme(schemeFromSeed(seed, true)),
-      scheme: resolveScheme(),
-      stopWatching: () => {},
-    };
-
-    applyTokens(theme, theme.scheme);
+    applyScheme(resolveScheme());
 
     const mm = getMatchMedia();
     if (mm) {
@@ -240,22 +185,23 @@ export async function initTheme(): Promise<void> {
         const onChange = (event: MediaQueryListEvent) => {
           // The OS only drives the scheme while no override is pinned.
           if (preference !== "system") return;
-          applyTokens(theme, event.matches ? "dark" : "light");
+          applyScheme(event.matches ? "dark" : "light");
         };
         if (typeof query.addEventListener === "function") {
           query.addEventListener("change", onChange);
-          theme.stopWatching = () => query.removeEventListener("change", onChange);
+          stopWatching = () => query.removeEventListener("change", onChange);
         } else if (typeof (query as MediaQueryList).addListener === "function") {
           // Legacy Safari < 14.
           query.addListener(onChange as (event: MediaQueryListEvent) => void);
-          theme.stopWatching = () => query.removeListener(onChange as (event: MediaQueryListEvent) => void);
+          stopWatching = () =>
+            query.removeListener(onChange as (event: MediaQueryListEvent) => void);
         }
       } catch {
         // Watching is best-effort; the applied scheme stays correct.
       }
     }
 
-    applied = theme;
+    watching = true;
   } catch {
     // Swallow everything: a theme failure must never break app startup.
   }
@@ -264,14 +210,18 @@ export async function initTheme(): Promise<void> {
 /** Stop reacting to OS scheme changes and drop module state. Test helper. */
 export function disposeTheme(): void {
   try {
-    applied?.stopWatching();
+    stopWatching();
   } catch {
     // Ignore.
   }
-  applied = null;
+  watching = false;
+  stopWatching = () => {};
 }
+
+/** The scheme currently applied ("light" before init). */
+let current: ColorScheme = "light";
 
 /** The scheme whose tokens are currently applied ("light" before init). */
 export function currentScheme(): ColorScheme {
-  return applied?.scheme ?? "light";
+  return current;
 }

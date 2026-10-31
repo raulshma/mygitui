@@ -25,6 +25,9 @@
   } from "$lib/ipc/client";
   import type { PreviewInfo, ResetKind } from "$lib/ipc/types";
   import { toast } from "$lib/toast";
+  import * as Dialog from "$lib/components/ui/dialog/index.js";
+  import { Button } from "$lib/components/ui/button/index.js";
+  import { Input } from "$lib/components/ui/input/index.js";
   import {
     buildResetParams,
     buildResetPreviewParams,
@@ -58,7 +61,7 @@
   let previewError = $state<string | null>(null);
   let previewing = $state(false);
   let running = $state(false);
-  let targetField: HTMLInputElement | undefined = $state();
+  let targetField = $state<HTMLInputElement | null>(null);
 
   // Fresh state + focus + suggestion load on every open.
   $effect(() => {
@@ -122,13 +125,6 @@
 
   const lines = $derived(previewInfo ? previewSummaryLines(previewInfo) : []);
 
-  function onKeydown(event: KeyboardEvent): void {
-    if (event.key === "Escape" && !running) {
-      event.preventDefault();
-      onClose();
-    }
-  }
-
   async function confirm(): Promise<void> {
     if (running || !target.trim()) return;
     running = true;
@@ -165,15 +161,26 @@
 </script>
 
 {#if open}
-  <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-  <div class="scrim" role="presentation" onkeydown={onKeydown}>
-    <div
-      class="dialog"
+  <Dialog.Root {open}>
+    <!-- svelte-ignore a11y_click_events_have_key_events -->
+    <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+    <Dialog.Overlay class="scrim bg-black/40" role="presentation" />
+    <Dialog.Content
+      class="dialog max-h-[calc(100vh-4rem)] w-[min(30rem,calc(100vw-2rem))] max-w-none gap-0 overflow-y-auto rounded-lg bg-card px-6 py-5 text-sm text-popover-foreground shadow-xl sm:max-w-none"
       role="dialog"
       aria-modal="true"
       aria-labelledby="reset-title"
+      showCloseButton={false}
+      escapeKeydownBehavior="ignore"
+      interactOutsideBehavior="ignore"
+      onkeydown={(e) => {
+        if (e.key === "Escape" && !running) {
+          e.preventDefault();
+          onClose();
+        }
+      }}
     >
-      <h2 id="reset-title" class="title">Reset current branch</h2>
+      <Dialog.Title id="reset-title" class="m-0 mb-3 text-lg font-medium">Reset current branch</Dialog.Title>
 
       <form
         onsubmit={(event) => {
@@ -181,28 +188,29 @@
           void confirm();
         }}
       >
-        <fieldset class="modes">
+        <fieldset class="modes mb-[0.875rem] mt-0 flex flex-col gap-2 border-0 p-0">
           <legend class="sr-only">Reset mode</legend>
           {#each RESET_MODES as m (m.kind)}
-            <label class="mode">
-              <input type="radio" name="reset-mode" value={m.kind} bind:group={mode} />
-              <span class="mode-text">
-                <span class="mode-label">{m.label}</span>
-                <span class="mode-desc">{m.description}</span>
+            <label class="mode flex cursor-pointer items-start gap-2">
+              <input class="mt-[0.15rem] accent-primary" type="radio" name="reset-mode" value={m.kind} bind:group={mode} />
+              <span class="mode-text flex flex-col gap-[0.1rem]">
+                <span class="mode-label font-semibold">{m.label}</span>
+                <span class="mode-desc text-xs text-muted-foreground">{m.description}</span>
               </span>
             </label>
           {/each}
         </fieldset>
 
-        <label class="target">
-          <span class="field-label">Reset to (ref, branch, tag or sha)</span>
-          <input
+        <label class="target mb-3 flex flex-col gap-1">
+          <span class="field-label text-xs text-muted-foreground">Reset to (ref, branch, tag or sha)</span>
+          <Input
             type="text"
             spellcheck="false"
             autocomplete="off"
             list="reset-target-suggestions"
+            class="h-auto rounded-sm px-[0.6rem] py-[0.45rem] font-mono text-sm focus-visible:-outline-offset-1 focus-visible:outline-2 focus-visible:outline-ring"
             bind:value={target}
-            bind:this={targetField}
+            bind:ref={targetField}
           />
           <datalist id="reset-target-suggestions">
             {#each suggestions as name (name)}
@@ -211,263 +219,57 @@
           </datalist>
         </label>
 
-        <div class="preview" aria-live="polite">
+        <div class="preview mb-[0.875rem] min-h-[3.25rem] rounded-sm border border-border bg-background px-[0.6rem] py-2" aria-live="polite">
           {#if previewError}
-            <p class="preview-error" role="alert">Preview failed: {previewError}</p>
+            <p class="preview-error m-0 text-xs text-destructive [overflow-wrap:anywhere]" role="alert">Preview failed: {previewError}</p>
           {:else if previewing || !previewInfo}
-            <p class="preview-loading">Previewing…</p>
+            <p class="preview-loading m-0 text-xs text-muted-foreground">Previewing…</p>
           {:else}
-            <p class="preview-summary">{lines[0]}</p>
+            <p class="preview-summary mb-[0.35rem] mt-0 text-[0.78rem] text-foreground">{lines[0]}</p>
             {#if lines.length > 1}
-              <ul class="preview-files" role="list" aria-label="Files affected by a hard reset">
+              <ul class="preview-files m-0 max-h-36 list-none overflow-y-auto p-0 font-mono text-[0.7rem] text-muted-foreground" role="list" aria-label="Files affected by a hard reset">
                 {#each lines.slice(1) as line, i (i)}
-                  <li>{line}</li>
+                  <li class="py-[0.08rem] [overflow-wrap:anywhere]">{line}</li>
                 {/each}
               </ul>
             {:else}
-              <p class="preview-empty">No file changes.</p>
+              <p class="preview-empty m-0 text-xs text-muted-foreground">No file changes.</p>
             {/if}
             {#if mode === "keep" || mode === "merge"}
-              <p class="preview-note">
+              <p class="preview-note mb-0 mt-[0.4rem] text-[0.7rem] text-muted-foreground">
                 Preview shows the file impact; a {label(mode).toLowerCase()} reset
                 preserves uncommitted changes where it safely can.
               </p>
             {:else if mode !== "hard"}
-              <p class="preview-note">
+              <p class="preview-note mb-0 mt-[0.4rem] text-[0.7rem] text-muted-foreground">
                 Preview shows the hard-reset impact; {label(mode).toLowerCase()} reset keeps your changes.
               </p>
             {/if}
           {/if}
         </div>
 
-        <div class="actions">
+        <div class="actions flex items-center justify-end gap-2">
           {#if resetIsDestructive(mode)}
-            <span class="guard-note">A checkpoint is created first (undo available).</span>
+            <span class="guard-note mr-auto text-[0.7rem] text-muted-foreground">A checkpoint is created first (undo available).</span>
           {/if}
-          <button
-            class="confirm"
-            class:danger={resetIsDestructive(mode)}
+          <Button
+            variant={resetIsDestructive(mode) ? "destructive" : "default"}
             type="submit"
             disabled={running || !target.trim()}
           >
             {running ? "Resetting…" : `Reset (${label(mode)})`}
-          </button>
-          <button class="cancel" type="button" disabled={running} onclick={onClose}>
+          </Button>
+          <Button
+            variant="outline"
+            class="text-muted-foreground"
+            type="button"
+            disabled={running}
+            onclick={onClose}
+          >
             Cancel
-          </button>
+          </Button>
         </div>
       </form>
-    </div>
-  </div>
+    </Dialog.Content>
+  </Dialog.Root>
 {/if}
-
-<style>
-  .scrim {
-    position: fixed;
-    inset: 0;
-    z-index: 60;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: color-mix(in srgb, var(--m3-scrim, black) 40%, transparent);
-  }
-
-  .dialog {
-    width: min(30rem, calc(100vw - 2rem));
-    max-height: calc(100vh - 4rem);
-    overflow-y: auto;
-    padding: 1.25rem 1.5rem;
-    border-radius: var(--m3-shape-large, 16px);
-    background: var(--m3-surface-container-high, var(--m3-surface));
-    color: var(--m3-on-surface);
-    box-shadow: var(--m3-elevation-3, 0 8px 24px rgba(0, 0, 0, 0.3));
-    font-size: 0.875rem;
-  }
-
-  .title {
-    margin: 0 0 0.75rem;
-    font-size: 1.125rem;
-    font-weight: 500;
-  }
-
-  .sr-only {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    margin: -1px;
-    padding: 0;
-    overflow: hidden;
-    clip: rect(0 0 0 0);
-    white-space: nowrap;
-    border: 0;
-  }
-
-  .modes {
-    display: flex;
-    flex-direction: column;
-    gap: 0.5rem;
-    margin: 0 0 0.875rem;
-    padding: 0;
-    border: none;
-  }
-
-  .mode {
-    display: flex;
-    align-items: flex-start;
-    gap: 0.5rem;
-    cursor: pointer;
-  }
-
-  .mode input {
-    accent-color: var(--m3-primary);
-    margin: 0.15rem 0 0;
-  }
-
-  .mode-text {
-    display: flex;
-    flex-direction: column;
-    gap: 0.1rem;
-  }
-
-  .mode-label {
-    font-weight: 600;
-  }
-
-  .mode-desc {
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    font-size: 0.75rem;
-  }
-
-  .target {
-    display: flex;
-    flex-direction: column;
-    gap: 0.25rem;
-    margin: 0 0 0.75rem;
-  }
-
-  .field-label {
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    font-size: 0.75rem;
-  }
-
-  .target input {
-    font: inherit;
-    font-family: ui-monospace, Consolas, monospace;
-    color: var(--m3-on-surface);
-    background: var(--m3-surface-container-lowest, var(--m3-surface));
-    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    border-radius: var(--m3-shape-extra-small, 4px);
-    padding: 0.45rem 0.6rem;
-  }
-
-  .target input:focus-visible {
-    outline: 2px solid var(--m3-primary);
-    outline-offset: -1px;
-  }
-
-  .preview {
-    margin: 0 0 0.875rem;
-    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    border-radius: var(--m3-shape-extra-small, 4px);
-    background: var(--m3-surface-container-lowest, var(--m3-surface));
-    padding: 0.5rem 0.6rem;
-    min-height: 3.25rem;
-  }
-
-  .preview-loading,
-  .preview-empty {
-    margin: 0;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    font-size: 0.75rem;
-  }
-
-  .preview-summary {
-    margin: 0 0 0.35rem;
-    font-size: 0.78rem;
-    color: var(--m3-on-surface);
-  }
-
-  .preview-files {
-    margin: 0;
-    padding: 0;
-    max-height: 9rem;
-    overflow-y: auto;
-    list-style: none;
-    font-family: ui-monospace, Consolas, monospace;
-    font-size: 0.7rem;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-  }
-
-  .preview-files li {
-    padding: 0.08rem 0;
-    overflow-wrap: anywhere;
-  }
-
-  .preview-error {
-    margin: 0;
-    color: var(--m3-error, inherit);
-    font-size: 0.75rem;
-    overflow-wrap: anywhere;
-  }
-
-  .preview-note {
-    margin: 0.4rem 0 0;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    font-size: 0.7rem;
-  }
-
-  .actions {
-    display: flex;
-    align-items: center;
-    justify-content: flex-end;
-    gap: 0.5rem;
-  }
-
-  .guard-note {
-    margin-right: auto;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    font-size: 0.7rem;
-  }
-
-  .confirm {
-    border: none;
-    border-radius: var(--m3-shape-full, 9999px);
-    background: var(--m3-primary);
-    color: var(--m3-on-primary);
-    font: inherit;
-    font-weight: 500;
-    padding: 0.45rem 1.25rem;
-    cursor: pointer;
-  }
-
-  .confirm:disabled {
-    cursor: not-allowed;
-    opacity: 0.55;
-  }
-
-  .confirm.danger {
-    background: var(--m3-error, #b3261e);
-    color: var(--m3-on-error, #fff);
-  }
-
-  .cancel {
-    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    border-radius: var(--m3-shape-full, 9999px);
-    background: none;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    font: inherit;
-    padding: 0.45rem 1rem;
-    cursor: pointer;
-  }
-
-  .cancel:disabled {
-    cursor: not-allowed;
-    opacity: 0.55;
-  }
-
-  .confirm:focus-visible,
-  .cancel:focus-visible {
-    outline: 2px solid var(--m3-primary);
-    outline-offset: 2px;
-  }
-</style>

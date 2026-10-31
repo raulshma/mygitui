@@ -31,6 +31,7 @@
     type PanelId,
     type TabsNode,
   } from "$lib/layout/layoutModel";
+  import { Button } from "$lib/components/ui/button/index.js";
 
   let {
     node,
@@ -170,12 +171,14 @@
   }
 </script>
 
-<div class="tabgroup" bind:this={rootEl}>
+<div class="tabgroup flex h-full w-full min-h-0 flex-col" bind:this={rootEl}>
   {#if hideTabs}
     {#if activePanel}
-      <div class="panel-head">
+      <div
+        class="panel-head flex flex-none items-center gap-[0.35rem] border-b border-border bg-popover pt-[0.3rem] pb-[0.3rem] pr-[0.4rem] pl-[0.6rem]"
+      >
         <svg
-          class="tab-icon"
+          class="tab-icon h-3 w-3 flex-none text-muted-foreground"
           viewBox="0 0 24 24"
           fill="none"
           stroke="currentColor"
@@ -186,9 +189,14 @@
         >
           <path d={PANEL_META[activePanel]?.icon ?? ""} />
         </svg>
-        <span class="panel-title">{panelLabel(activePanel)}</span>
-        <button
-          class="panel-menu"
+        <span
+          class="panel-title min-w-0 flex-1 truncate text-[0.6875rem] font-semibold uppercase tracking-[0.04em] text-muted-foreground"
+          >{panelLabel(activePanel)}</span
+        >
+        <Button
+          class="panel-menu size-[1.35rem] flex-none rounded-sm p-0 text-sm leading-none focus-visible:outline-2 focus-visible:outline-primary focus-visible:-outline-offset-2 focus-visible:ring-0"
+          variant="ghost"
+          size="icon-xs"
           type="button"
           aria-label="Panel actions"
           aria-haspopup="menu"
@@ -197,12 +205,12 @@
           onclick={(e) => openContext(e, activePanel)}
         >
           ⋯
-        </button>
+        </Button>
       </div>
     {/if}
   {:else}
     <div
-      class="panel-tabs"
+      class="panel-tabs flex flex-none flex-nowrap gap-0.5 overflow-x-auto border-b border-border bg-popover px-2 pt-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
       role="tablist"
       aria-label="Panels"
       tabindex="-1"
@@ -212,7 +220,7 @@
       {#each node.tabs as panel, index (panel)}
         <button
           data-tab-index={index}
-          class="panel-tab"
+          class="panel-tab inline-flex flex-none cursor-pointer items-center gap-1 whitespace-nowrap rounded-t-sm border border-b-0 bg-transparent px-2 py-1 text-[0.6875rem] font-medium text-muted-foreground hover:bg-accent focus-visible:outline-2 focus-visible:outline-primary focus-visible:-outline-offset-2 aria-selected:-mb-px aria-selected:rounded-b-none aria-selected:bg-card aria-selected:pb-[calc(0.25rem+1px)] aria-selected:text-primary"
           type="button"
           role="tab"
           aria-selected={index === activeIndex}
@@ -223,7 +231,7 @@
           oncontextmenu={(e) => openContext(e, panel)}
         >
           <svg
-            class="tab-icon"
+            class="tab-icon h-3 w-3 flex-none"
             viewBox="0 0 24 24"
             fill="none"
             stroke="currentColor"
@@ -239,8 +247,10 @@
       {/each}
 
       {#if hiddenPanels.length > 0}
-        <button
-          class="panel-add"
+        <Button
+          class="panel-add h-auto flex-none rounded-b-none rounded-t-sm border-b border-b-transparent px-2 py-1 text-[0.8125rem] leading-none hover:text-primary focus-visible:bg-accent focus-visible:text-primary"
+          variant="ghost"
+          size="sm"
           type="button"
           aria-label="Add panel"
           aria-haspopup="menu"
@@ -249,13 +259,13 @@
           onclick={openAdd}
         >
           +
-        </button>
+        </Button>
       {/if}
     </div>
   {/if}
 
   <div
-    class="panel-body"
+    class="panel-body flex min-h-0 flex-1 flex-col overflow-hidden"
     id={`tabpanel-${node.id}`}
     role="tabpanel"
     aria-label={hideTabs && activePanel ? panelLabel(activePanel) : undefined}
@@ -264,7 +274,10 @@
     <!-- Keep-alive hosts: one per visited panel; inactive ones are hidden,
          not unmounted (see the script's keep-alive note). -->
     {#each shownPanels as panel (panel)}
-      <div class="panel-host" hidden={panel !== activePanel}>
+      <div
+        class="panel-host flex min-h-0 flex-1 flex-col [&[hidden]]:hidden [&>aside]:min-h-0 [&>aside]:flex-1 [&>section]:min-h-0 [&>section]:flex-1"
+        hidden={panel !== activePanel}
+      >
         {@render renderPanel(panel)()}
       </div>
     {/each}
@@ -273,7 +286,7 @@
 
 {#if menu}
   <div
-    class="menu"
+    class="menu fixed z-80 flex min-w-48 flex-col rounded-md border border-border bg-popover p-1 text-popover-foreground shadow-[0_0.5rem_1.5rem_rgb(0_0_0/0.3)]"
     role="menu"
     bind:this={menuEl}
     style:left={`${menu.x}px`}
@@ -281,7 +294,7 @@
   >
     {#if menu.kind === "context"}
       <button
-        class="menu-item"
+        class="menu-item inline-flex cursor-pointer items-center gap-1.5 whitespace-nowrap rounded-sm border-0 bg-transparent px-2 py-[0.35rem] text-left text-xs text-inherit enabled:hover:bg-accent focus-visible:bg-accent focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-45"
         type="button"
         role="menuitem"
         disabled={!canMoveLeft}
@@ -290,7 +303,7 @@
         Move to left group
       </button>
       <button
-        class="menu-item"
+        class="menu-item inline-flex cursor-pointer items-center gap-1.5 whitespace-nowrap rounded-sm border-0 bg-transparent px-2 py-[0.35rem] text-left text-xs text-inherit enabled:hover:bg-accent focus-visible:bg-accent focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-45"
         type="button"
         role="menuitem"
         disabled={!canMoveRight}
@@ -299,7 +312,7 @@
         Move to right group
       </button>
       <button
-        class="menu-item"
+        class="menu-item inline-flex cursor-pointer items-center gap-1.5 whitespace-nowrap rounded-sm border-0 bg-transparent px-2 py-[0.35rem] text-left text-xs text-inherit enabled:hover:bg-accent focus-visible:bg-accent focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-45"
         type="button"
         role="menuitem"
         onclick={() => runAction("new-group-left")}
@@ -307,7 +320,7 @@
         New group to the left
       </button>
       <button
-        class="menu-item"
+        class="menu-item inline-flex cursor-pointer items-center gap-1.5 whitespace-nowrap rounded-sm border-0 bg-transparent px-2 py-[0.35rem] text-left text-xs text-inherit enabled:hover:bg-accent focus-visible:bg-accent focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-45"
         type="button"
         role="menuitem"
         onclick={() => runAction("new-group-right")}
@@ -315,7 +328,7 @@
         New group to the right
       </button>
       <button
-        class="menu-item danger"
+        class="menu-item danger inline-flex cursor-pointer items-center gap-1.5 whitespace-nowrap rounded-sm border-0 bg-transparent px-2 py-[0.35rem] text-left text-xs text-inherit text-destructive enabled:hover:bg-accent focus-visible:bg-accent focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-45"
         type="button"
         role="menuitem"
         onclick={() => runAction("hide")}
@@ -325,13 +338,13 @@
     {:else}
       {#each hiddenPanels as panel (panel)}
         <button
-          class="menu-item"
+          class="menu-item inline-flex cursor-pointer items-center gap-1.5 whitespace-nowrap rounded-sm border-0 bg-transparent px-2 py-[0.35rem] text-left text-xs text-inherit enabled:hover:bg-accent focus-visible:bg-accent focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-45"
           type="button"
           role="menuitem"
           onclick={() => runAdd(panel)}
         >
           <svg
-            class="tab-icon"
+            class="tab-icon h-3 w-3 flex-none"
             viewBox="0 0 24 24"
             fill="none"
             stroke="currentColor"
@@ -348,225 +361,3 @@
     {/if}
   </div>
 {/if}
-
-<style>
-  .tabgroup {
-    display: flex;
-    flex-direction: column;
-    width: 100%;
-    height: 100%;
-    min-height: 0;
-  }
-
-  /* Single scrollable strip: in the narrow source-control sidebar a wrapping
-     list of 9 tabs would eat most of the panel height. */
-  .panel-tabs {
-    flex: none;
-    display: flex;
-    flex-wrap: nowrap;
-    gap: 0.125rem;
-    padding: 0.25rem 0.5rem 0;
-    border-bottom: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    background: var(--m3-surface-container, var(--m3-surface));
-    overflow-x: auto;
-    scrollbar-width: none;
-  }
-
-  /* Activity-controlled group: compact VSCode-style view title instead of
-   * the horizontal tab strip (the activity bar owns switching). */
-  .panel-head {
-    flex: none;
-    display: flex;
-    align-items: center;
-    gap: 0.35rem;
-    padding: 0.3rem 0.4rem 0.3rem 0.6rem;
-    border-bottom: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    background: var(--m3-surface-container, var(--m3-surface));
-  }
-
-  .panel-head .tab-icon {
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-  }
-
-  .panel-title {
-    flex: 1;
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    font-size: 0.6875rem;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-  }
-
-  .panel-menu {
-    flex: none;
-    width: 1.35rem;
-    height: 1.35rem;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    padding: 0;
-    border: none;
-    border-radius: var(--m3-shape-extra-small, 4px);
-    background: none;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    font: inherit;
-    font-size: 0.875rem;
-    line-height: 1;
-    cursor: pointer;
-  }
-
-  .panel-menu:hover,
-  .panel-menu:focus-visible {
-    color: var(--m3-on-surface);
-    background: var(--m3-surface-container-high, var(--m3-surface));
-  }
-
-  .panel-menu:focus-visible {
-    outline: 2px solid var(--m3-primary);
-    outline-offset: -2px;
-  }
-
-  .panel-tabs::-webkit-scrollbar {
-    display: none;
-  }
-
-  .panel-tab {
-    flex: none;
-    white-space: nowrap;
-    display: inline-flex;
-    align-items: center;
-    gap: 0.25rem;
-    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    border-bottom: none;
-    border-radius: var(--m3-shape-small, 8px) var(--m3-shape-small, 8px) 0 0;
-    background: none;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    font: inherit;
-    font-size: 0.6875rem;
-    /* Constant across selected/unselected: a selected-state weight bump
-       widens the label, resizing the tab and shifting every sibling tab. */
-    font-weight: 500;
-    padding: 0.25rem 0.5rem;
-    cursor: pointer;
-  }
-
-  .tab-icon {
-    width: 0.75rem;
-    height: 0.75rem;
-    flex: none;
-  }
-
-  .panel-tab:hover {
-    background: var(--m3-surface-container-high, var(--m3-surface));
-  }
-
-  .panel-tab:focus-visible {
-    outline: 2px solid var(--m3-primary);
-    outline-offset: -2px;
-  }
-
-  .panel-tab[aria-selected="true"] {
-    background: var(--m3-surface);
-    color: var(--m3-primary);
-    /* Visually merge with the panel body below. */
-    padding-bottom: calc(0.25rem + 1px);
-    margin-bottom: -1px;
-  }
-
-  .panel-add {
-    flex: none;
-    border: none;
-    border-bottom: 1px solid transparent;
-    background: none;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    font: inherit;
-    font-size: 0.8125rem;
-    line-height: 1;
-    padding: 0.25rem 0.5rem;
-    cursor: pointer;
-    border-radius: var(--m3-shape-small, 8px) var(--m3-shape-small, 8px) 0 0;
-  }
-
-  .panel-add:hover,
-  .panel-add:focus-visible {
-    color: var(--m3-primary);
-    background: var(--m3-surface-container-high, var(--m3-surface));
-  }
-
-  .panel-body {
-    flex: 1;
-    min-height: 0;
-    display: flex;
-    flex-direction: column;
-    overflow: hidden;
-  }
-
-  /* Keep-alive hosts: inactive panels stay mounted but out of layout and
-   * the a11y tree. `display: flex` would beat the UA's `[hidden]` rule,
-   * so the hidden state is explicit. */
-  .panel-host {
-    flex: 1;
-    min-height: 0;
-    display: flex;
-    flex-direction: column;
-  }
-
-  .panel-host[hidden] {
-    display: none;
-  }
-
-  .panel-host > :global(aside),
-  .panel-host > :global(section) {
-    flex: 1;
-    min-height: 0;
-  }
-
-  .menu {
-    position: fixed;
-    z-index: 80;
-    min-width: 12rem;
-    display: flex;
-    flex-direction: column;
-    padding: 0.25rem;
-    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    border-radius: var(--m3-shape-medium, 12px);
-    background: var(--m3-surface-container-high, var(--m3-surface));
-    color: var(--m3-on-surface);
-    box-shadow: 0 0.5rem 1.5rem rgb(0 0 0 / 0.3);
-  }
-
-  .menu-item {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.375rem;
-    border: none;
-    background: none;
-    color: inherit;
-    font: inherit;
-    font-size: 0.75rem;
-    text-align: left;
-    padding: 0.35rem 0.5rem;
-    border-radius: var(--m3-shape-small, 8px);
-    cursor: pointer;
-    white-space: nowrap;
-  }
-
-  .menu-item:hover:not(:disabled),
-  .menu-item:focus-visible {
-    background: var(--m3-surface-container-highest, var(--m3-surface));
-    outline: none;
-  }
-
-  .menu-item:disabled {
-    opacity: 0.45;
-    cursor: not-allowed;
-  }
-
-  .menu-item.danger {
-    color: var(--m3-error, red);
-  }
-</style>

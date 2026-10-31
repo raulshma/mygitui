@@ -21,7 +21,10 @@
   import { toast } from "$lib/toast";
   import ConfirmDialog from "$lib/components/safety/ConfirmDialog.svelte";
   import { formatRelativeTime } from "$lib/git/format";
-  import { IconButton } from "$lib/components/m3";
+  import Icon from "$lib/components/icons/Icon.svelte";
+  import { Badge } from "$lib/components/ui/badge";
+  import { Button } from "$lib/components/ui/button/index.js";
+  import { Input } from "$lib/components/ui/input/index.js";
   import iconPushTags from "@ktibow/iconset-material-symbols/cloud-upload";
   import iconExport from "@ktibow/iconset-material-symbols/archive";
   import iconDelete from "@ktibow/iconset-material-symbols/delete";
@@ -185,100 +188,138 @@
   }
 </script>
 
-<section class="tags" aria-label="Tags">
-  <div class="head">
-    <button
-      class="disclose"
+<section class="tags mt-1 shrink-0 border-t border-border" aria-label="Tags">
+  <div class="head flex items-center justify-between gap-2 px-2 py-1">
+    <Button
+      class="h-auto gap-[0.3rem] px-1 py-0.5 text-xs font-semibold dark:hover:bg-muted/50"
+      variant="ghost"
       type="button"
       aria-expanded={open}
       onclick={() => (open = !open)}
     >
-      <span class="chev" aria-hidden="true">{open ? "▾" : "▸"}</span>
+      <span class="chev text-muted-foreground" aria-hidden="true">{open ? "▾" : "▸"}</span>
       Tags {list.length > 0 ? `(${list.length})` : ""}
-    </button>
+    </Button>
     {#if open}
-      <IconButton
-        icon={iconPushTags}
-        label="Push tags"
+      <Button
+        class="relative text-muted-foreground after:absolute after:-inset-1 after:content-[''] hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-4"
+        variant="ghost"
+        size="icon-xs"
+        type="button"
+        aria-label="Push tags"
         title="Push tags to the remote"
-        dense
         disabled={pushing}
         onclick={() => void onPushTags()}
-      />
+      >
+        <Icon icon={iconPushTags} size={16} />
+      </Button>
     {/if}
   </div>
 
   {#if open}
     <form
-      class="create"
+      class="create flex flex-wrap items-center gap-1.5 px-2 pb-1.5"
       aria-label="Create tag"
       onsubmit={(e) => {
         e.preventDefault();
         void onCreate();
       }}
     >
-      <input
-        class="name"
+      <Input
+        class="h-auto w-32 rounded-md px-2 py-0.5 text-[0.72rem]"
         type="text"
         placeholder="New tag name"
         aria-label="New tag name"
         bind:value={newName}
       />
-      <label class="from">
+      <label class="from flex items-center gap-1 text-[0.6875rem] text-muted-foreground">
         <span class="fl">at</span>
-        <select bind:value={newTarget} aria-label="Tag target">
+        <select
+          class="max-w-32 rounded-md border border-input bg-background px-2 py-0.5 font-[inherit] text-[0.72rem] text-foreground"
+          bind:value={newTarget}
+          aria-label="Tag target"
+        >
           <option value="">HEAD</option>
           {#each targets as target (target)}
             <option value={target}>{target}</option>
           {/each}
         </select>
       </label>
-      <input
-        class="msg"
+      <Input
+        class="h-auto min-w-32 flex-1 rounded-md px-2 py-0.5 text-[0.72rem]"
         type="text"
         placeholder="Message (makes it annotated)"
         aria-label="Tag message"
         bind:value={newMessage}
       />
-      <label class="toggle" title="Create a signed tag (git tag -s; requires signing config)">
-        <input type="checkbox" bind:checked={newSigned} />
+      <label
+        class="toggle flex cursor-pointer items-center gap-1 text-[0.72rem] text-muted-foreground"
+        title="Create a signed tag (git tag -s; requires signing config)"
+      >
+        <input type="checkbox" class="m-0 accent-primary" bind:checked={newSigned} />
         <span>sign</span>
       </label>
-      <button class="go" type="submit" disabled={!newName.trim()}>Create</button>
+      <Button
+        class="h-auto rounded-full px-3 py-0.5 text-[0.72rem]"
+        type="submit"
+        disabled={!newName.trim()}
+      >
+        Create
+      </Button>
     </form>
 
     {#if error}
-      <p class="state error" role="alert">{error}</p>
+      <p class="state m-0 px-3 py-1 text-xs text-destructive" role="alert"
+        >{error}</p
+      >
     {:else if !loading && list.length === 0}
-      <p class="state">No tags.</p>
+      <p class="state m-0 px-3 py-1 text-xs text-muted-foreground">No tags.</p>
     {:else}
-      <ul class="list" role="list" aria-label="Tags">
+      <ul class="list m-0 list-none p-0 pb-2" role="list" aria-label="Tags">
         {#each list as tag (tag.name)}
-          <li class="row">
-            <span class="tname" title={tag.message ?? tag.name}>{tag.name}</span>
-            {#if tag.annotated}<span class="chip">annotated</span>{/if}
+          <li class="row flex items-center gap-1.5 px-2 py-0.5 text-[0.72rem] hover:bg-muted/60">
+            <span
+              class="tname overflow-hidden text-ellipsis whitespace-nowrap font-mono font-semibold text-foreground"
+              title={tag.message ?? tag.name}>{tag.name}</span
+            >
+            {#if tag.annotated}
+              <Badge variant="outline" class="chip h-auto shrink-0 rounded-full px-1.5 py-0 text-[0.625rem] text-muted-foreground"
+                >annotated</Badge
+              >
+            {/if}
             {#if tag.tagger}
-              <span class="meta" title={tag.message ?? ""}>
+              <span
+                class="meta min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap text-muted-foreground"
+                title={tag.message ?? ""}>
                 {tag.tagger.name} · {formatRelativeTime(tag.tagger.time)}
               </span>
             {/if}
-            <span class="sha">{tag.target.slice(0, 7)}</span>
-            <span class="actions">
-              <IconButton
-                icon={iconExport}
-                label={`Export archive of tag ${tag.name}`}
+            <span class="sha shrink-0 font-mono text-muted-foreground"
+              >{tag.target.slice(0, 7)}</span
+            >
+            <span class="actions shrink-0">
+              <Button
+                class="relative text-muted-foreground after:absolute after:-inset-1 after:content-[''] hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-4"
+                variant="ghost"
+                size="icon-xs"
+                type="button"
+                aria-label={`Export archive of tag ${tag.name}`}
                 title="Export this tag's tree as a zip/tar archive"
-                dense
                 onclick={() => void onExportArchive(tag)}
-              />
-              <IconButton
-                icon={iconDelete}
-                label={`Delete tag ${tag.name}`}
+              >
+                <Icon icon={iconExport} size={16} />
+              </Button>
+              <Button
+                class="relative text-destructive after:absolute after:-inset-1 after:content-[''] hover:bg-destructive/10 hover:text-destructive [&_svg:not([class*='size-'])]:size-4"
+                variant="ghost"
+                size="icon-xs"
+                type="button"
+                aria-label={`Delete tag ${tag.name}`}
                 title="Delete this tag"
-                tone="danger"
-                dense
                 onclick={() => (deleting = tag)}
-              />
+              >
+                <Icon icon={iconDelete} size={16} />
+              </Button>
             </span>
           </li>
         {/each}
@@ -301,172 +342,3 @@
   onConfirm={() => void onDelete()}
 />
 
-<style>
-  .tags {
-    border-top: 1px solid var(--m3-outline-variant, transparent);
-    margin-top: 0.25rem;
-    flex: none;
-  }
-
-  .head {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 0.5rem;
-    padding: 0.25rem 0.5rem;
-  }
-
-  .disclose {
-    display: flex;
-    align-items: center;
-    gap: 0.3rem;
-    border: none;
-    background: none;
-    color: var(--m3-on-surface);
-    font: inherit;
-    font-size: 0.75rem;
-    font-weight: 600;
-    cursor: pointer;
-    padding: 0.15rem 0.25rem;
-  }
-
-  .chev {
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-  }
-
-  .create {
-    display: flex;
-    align-items: center;
-    gap: 0.375rem;
-    padding: 0 0.5rem 0.375rem;
-    flex-wrap: wrap;
-  }
-
-  .create input,
-  select {
-    font: inherit;
-    font-size: 0.72rem;
-    color: var(--m3-on-surface);
-    background: var(--m3-surface-container-lowest, var(--m3-surface));
-    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    border-radius: var(--m3-shape-extra-small, 4px);
-    padding: 0.2rem 0.45rem;
-  }
-
-  .name {
-    width: 8rem;
-  }
-
-  .msg {
-    flex: 1;
-    min-width: 8rem;
-  }
-
-  .from {
-    display: flex;
-    align-items: center;
-    gap: 0.25rem;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    font-size: 0.6875rem;
-  }
-
-  select {
-    max-width: 8rem;
-  }
-
-  .toggle {
-    display: flex;
-    align-items: center;
-    gap: 0.25rem;
-    font-size: 0.72rem;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    cursor: pointer;
-  }
-
-  .toggle input {
-    accent-color: var(--m3-primary);
-    margin: 0;
-  }
-
-  .go {
-    border: none;
-    border-radius: var(--m3-shape-full, 9999px);
-    background: var(--m3-primary);
-    color: var(--m3-on-primary);
-    font: inherit;
-    font-size: 0.72rem;
-    padding: 0.2rem 0.75rem;
-    cursor: pointer;
-  }
-
-  .go:disabled {
-    opacity: 0.55;
-    cursor: not-allowed;
-  }
-
-  .state {
-    padding: 0.25rem 0.75rem;
-    margin: 0;
-    font-size: 0.75rem;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-  }
-
-  .error {
-    color: var(--m3-error, inherit);
-  }
-
-  .list {
-    margin: 0;
-    padding: 0 0 0.5rem;
-    list-style: none;
-  }
-
-  .row {
-    display: flex;
-    align-items: center;
-    gap: 0.375rem;
-    padding: 0.15rem 0.5rem;
-    font-size: 0.72rem;
-  }
-
-  .row:hover {
-    background: var(--m3-surface-container-high, var(--m3-surface));
-  }
-
-  .tname {
-    font-family: ui-monospace, Consolas, monospace;
-    font-weight: 600;
-    color: var(--m3-on-surface);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .chip {
-    flex: none;
-    padding: 0 0.35rem;
-    border: 1px solid var(--m3-outline-variant, currentColor);
-    border-radius: var(--m3-shape-full, 9999px);
-    font-size: 0.625rem;
-    color: var(--m3-on-surface-variant, inherit);
-  }
-
-  .meta {
-    flex: 1;
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-  }
-
-  .sha {
-    flex: none;
-    font-family: ui-monospace, Consolas, monospace;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-  }
-
-  .actions {
-    flex: none;
-  }
-</style>

@@ -1,4 +1,5 @@
 import { svelte } from "@sveltejs/vite-plugin-svelte";
+import tailwindcss from "@tailwindcss/vite";
 // @ts-expect-error type error without @types/node package
 import process from "node:process";
 import { defineConfig } from "vitest/config";
@@ -8,7 +9,7 @@ const host = process.env.TAURI_DEV_HOST;
 
 // https://vite.dev/config/
 export default defineConfig({
-  plugins: [svelte()],
+  plugins: [tailwindcss(), svelte()],
 
   resolve: {
     alias: {
@@ -91,13 +92,7 @@ export default defineConfig({
     include: ["src/**/*.{test,spec}.{js,ts}"],
     setupFiles: ["./src/test-setup.ts"],
     server: {
-      deps: {
-        // @material/material-color-utilities@0.4.0 ships extensionless ESM
-        // relative imports ("../dynamiccolor/dynamic_scheme") that Node's
-        // loader rejects when the package is externalized; inlining it lets
-        // Vite resolve them. Applies to all suites (added by entry UX lane).
-        inline: ["@material/material-color-utilities"],
-      },
+      deps: {},
     },
   },
 });

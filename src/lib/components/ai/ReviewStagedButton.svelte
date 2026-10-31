@@ -1,19 +1,20 @@
+<!--
+  ReviewStagedButton (M12, lane C) — "Review staged…" for the commit bar.
+
+  Visible only when the repo is opted in (same gating contract as the
+  explain-hunk button). Runs the review-staged runner (it gathers the
+  staged diff itself — features.ts) and presents the findings in a modal
+  (shadcn ui/dialog chrome, like the safety dialogs). An empty staging area
+  surfaces as the runner's "nothing is staged to review" error via the
+  shared AiFeatureButton's inline fail UI. Findings are advisory ONLY —
+  nothing is auto-applied.
+-->
 <script lang="ts">
-  /**
-   * ReviewStagedButton (M12, lane C) — "Review staged…" for the commit bar.
-   *
-   * Visible only when the repo is opted in (same gating contract as the
-   * explain-hunk button). Runs the review-staged runner (it gathers the
-   * staged diff itself — features.ts) and presents the findings in a modal
-   * (DialogShell chrome, like the safety dialogs). An empty staging area
-   * surfaces as the runner's "nothing is staged to review" error via the
-   * shared AiFeatureButton's inline fail UI. Findings are advisory ONLY —
-   * nothing is auto-applied.
-   */
   import { ai } from "$lib/ai/ai.svelte";
   import type { AiRunOptions } from "$lib/ai/ai.svelte";
   import type { FeatureOutcome } from "$lib/ai/features";
-  import DialogShell from "$lib/components/safety/DialogShell.svelte";
+  import * as Dialog from "$lib/components/ui/dialog/index.js";
+  import { Button } from "$lib/components/ui/button/index.js";
   import { toast } from "$lib/toast";
   import AiFeatureButton from "./AiFeatureButton.svelte";
 
@@ -21,6 +22,7 @@
 
   let findings = $state<string | null>(null);
   let open = $state(false);
+  let closeButton = $state<HTMLElement | null>(null);
 
   function run(opts?: AiRunOptions): Promise<FeatureOutcome> {
     return ai.run("review-staged", { repoId }, undefined, opts);
@@ -31,6 +33,13 @@
     open = true;
     toast("Staged-change review ready", { kind: "success" });
   }
+
+  // Focus lands on Close (the old data-autofocus convention) on open.
+  $effect(() => {
+    if (open) {
+      requestAnimationFrame(() => closeButton?.focus());
+    }
+  });
 
   async function copy(): Promise<void> {
     if (!findings) return;
@@ -53,92 +62,41 @@
   {onResult}
 />
 
-<DialogShell
-  bind:open
-  labelledBy="review-staged-title"
-  width="min(34rem, calc(100vw - 3rem))"
->
-  {#snippet children()}
-    <h2 id="review-staged-title" class="rs-title">Staged changes review</h2>
+<Dialog.Root bind:open>
+  <!-- svelte-ignore a11y_click_events_have_key_events -->
+  <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+  <Dialog.Overlay class="scrim bg-black/40" role="presentation" />
+  <Dialog.Content
+    class="dialog w-[min(34rem,calc(100vw-3rem))] max-w-none gap-0 rounded-lg bg-card px-6 py-5 text-sm text-popover-foreground shadow-xl sm:max-w-none"
+    role="dialog"
+    aria-modal="true"
+    aria-labelledby="review-staged-title"
+    showCloseButton={false}
+    escapeKeydownBehavior="ignore"
+    interactOutsideBehavior="ignore"
+    onkeydown={(e) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        open = false;
+      }
+    }}
+  >
+    <Dialog.Title id="review-staged-title" class="m-0 mb-2 text-[1.125rem] font-medium text-foreground">Staged changes review</Dialog.Title>
     {#if findings !== null}
-      <div class="rs-findings">
-        <p class="rs-text">{findings}</p>
+      <div class="rs-findings mb-3 max-h-[55vh] overflow-y-auto rounded-xl border border-border bg-muted/50 px-3 py-[0.625rem] focus-visible:-outline-offset-2 focus-visible:outline-2 focus-visible:outline-primary">
+        <p class="rs-text m-0 text-[0.8125rem] leading-[1.45] whitespace-pre-wrap [overflow-wrap:anywhere]">{findings}</p>
       </div>
-      <p class="rs-note">
+      <p class="rs-note m-0 mb-3 text-[0.6875rem] text-muted-foreground">
         Advisory only — nothing was changed. Verify findings before acting.
       </p>
     {/if}
-  {/snippet}
-  {#snippet actions()}
-    <button class="rs-secondary" type="button" onclick={() => void copy()}>
-      Copy
-    </button>
-    <button class="rs-primary" type="button" data-autofocus onclick={() => (open = false)}>
-      Close
-    </button>
-  {/snippet}
-</DialogShell>
-
-<style>
-  .rs-title {
-    margin: 0 0 0.5rem;
-    font-size: 1.125rem;
-    font-weight: 500;
-  }
-
-  .rs-findings {
-    max-height: 55vh;
-    overflow-y: auto;
-    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    border-radius: var(--m3-shape-medium, 12px);
-    background: var(--m3-surface-container-low, var(--m3-surface));
-    padding: 0.625rem 0.75rem;
-    margin-bottom: 0.75rem;
-  }
-
-  .rs-findings:focus-visible {
-    outline: 2px solid var(--m3-primary);
-    outline-offset: -2px;
-  }
-
-  .rs-text {
-    margin: 0;
-    white-space: pre-wrap;
-    overflow-wrap: anywhere;
-    line-height: 1.45;
-    font-size: 0.8125rem;
-  }
-
-  .rs-note {
-    margin: 0 0 0.75rem;
-    font-size: 0.6875rem;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-  }
-
-  .rs-primary {
-    border: none;
-    border-radius: var(--m3-shape-full, 9999px);
-    background: var(--m3-primary);
-    color: var(--m3-on-primary);
-    font: inherit;
-    font-weight: 500;
-    padding: 0.4rem 1.1rem;
-    cursor: pointer;
-  }
-
-  .rs-secondary {
-    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    border-radius: var(--m3-shape-full, 9999px);
-    background: none;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    font: inherit;
-    padding: 0.4rem 0.9rem;
-    cursor: pointer;
-  }
-
-  .rs-primary:focus-visible,
-  .rs-secondary:focus-visible {
-    outline: 2px solid var(--m3-primary);
-    outline-offset: 1px;
-  }
-</style>
+    <div class="mt-4 flex flex-wrap justify-end gap-2">
+      <Button variant="outline" class="text-muted-foreground" size="sm" type="button" onclick={() => void copy()}>
+        Copy
+      </Button>
+      <Button bind:ref={closeButton} size="sm" type="button" onclick={() => (open = false)}>
+        Close
+      </Button>
+    </div>
+  </Dialog.Content>
+</Dialog.Root>

@@ -32,7 +32,10 @@
   import TagsSection from "$lib/components/panels/TagsSection.svelte";
   import BranchActionDialogs from "$lib/components/header/BranchActionDialogs.svelte";
   import { branchOpsController } from "$lib/git/branchOps.svelte";
-  import { IconButton } from "$lib/components/m3";
+  import Icon from "$lib/components/icons/Icon.svelte";
+  import { Button } from "$lib/components/ui/button/index.js";
+  import DialogShell from "$lib/components/safety/DialogShell.svelte";
+  import { Badge } from "$lib/components/ui/badge";
   import iconRefresh from "@ktibow/iconset-material-symbols/refresh";
   import iconCleanup from "@ktibow/iconset-material-symbols/cleaning-services";
   import iconSwitch from "@ktibow/iconset-material-symbols/swap-horiz";
@@ -267,92 +270,109 @@
   }
 </script>
 
-<aside class="branch-panel" aria-label="Branches">
-  <div class="toolbar">
+<aside class="branch-panel flex min-h-0 flex-col text-[13px]" aria-label="Branches">
+  <div class="toolbar flex flex-none items-center gap-2 px-2 py-1.5">
     <input
-      class="filter"
+      class="filter min-w-20 flex-1 rounded border border-input bg-background px-2 py-0.5 text-[0.72rem] text-foreground focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-1"
       type="search"
       bind:this={filterEl}
       bind:value={filter}
       placeholder="Filter branches"
       aria-label="Filter branches"
     />
-    <IconButton
-      icon={iconRefresh}
-      label="Refresh branches"
+    <Button
+      class="border-border text-muted-foreground hover:border-primary hover:bg-accent hover:text-accent-foreground"
+      variant="ghost"
+      size="icon-sm"
+      type="button"
+      aria-label="Refresh branches"
       title={loading ? "Refreshing branches…" : "Refresh branches"}
-      variant="outlined"
       disabled={loading}
       onclick={() => void reload()}
-    />
-    <IconButton
-      icon={iconCleanup}
-      label="Clean merged branches"
+    >
+      <Icon icon={iconRefresh} size={16} />
+    </Button>
+    <Button
+      class="border-border text-muted-foreground hover:border-primary hover:bg-accent hover:text-accent-foreground"
+      variant="ghost"
+      size="icon-sm"
+      type="button"
+      aria-label="Clean merged branches"
       title="Delete every branch already merged into the current one"
-      variant="outlined"
       disabled={cleanupBusy}
       onclick={() => void onCleanupStart()}
-    />
-    {#if ops.busy}<span class="busy" role="status">Branch op running…</span>{/if}
+    >
+      <Icon icon={iconCleanup} size={16} />
+    </Button>
+    {#if ops.busy}<span class="busy text-[0.72rem] text-muted-foreground" role="status">Branch op running…</span>{/if}
   </div>
 
   <form
-    class="create"
+    class="create flex flex-none flex-wrap items-center gap-1.5 px-2 pb-1.5"
     aria-label="Create branch"
     onsubmit={(e) => {
       e.preventDefault();
       void onCreate();
     }}
   >
-    <div class="name-row">
+    <div class="name-row flex min-w-24 flex-1 items-center gap-1">
       <input
-        class="name"
+        class="name min-w-24 flex-1 rounded border border-input bg-background px-2 py-0.5 text-xs text-foreground focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-1"
         type="text"
         placeholder="New branch name"
         aria-label="New branch name"
         bind:this={createNameEl}
         bind:value={newName}
       />
-      <IconButton
-        icon={iconAdd}
-        label="Create branch"
-        title="Create the branch"
-        variant="filled"
-        dense
+      <Button
+        class="relative after:absolute after:-inset-1 after:content-[''] [&_svg:not([class*='size-'])]:size-4"
+        variant="default"
+        size="icon-xs"
         type="submit"
+        aria-label="Create branch"
+        title="Create the branch"
         disabled={!newName.trim()}
-      />
+      >
+        <Icon icon={iconAdd} size={16} />
+      </Button>
     </div>
-    <label class="from">
-      <span class="fl">from</span>
-      <select bind:value={newFrom} aria-label="Create branch from">
+    <label class="from flex items-center gap-1 text-muted-foreground">
+      <span class="fl text-[0.6875rem]">from</span>
+      <select
+        class="max-w-36 rounded border border-input bg-background px-2 py-0.5 text-[0.72rem] text-foreground focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-1"
+        bind:value={newFrom}
+        aria-label="Create branch from"
+      >
         <option value="">HEAD</option>
         {#each list as b (b.name)}
           <option value={b.name}>{b.name}</option>
         {/each}
       </select>
     </label>
-    <label class="toggle" title="Check out the new branch after creating it">
-      <input type="checkbox" bind:checked={newCheckout} />
+    <label
+      class="toggle flex cursor-pointer items-center gap-1 text-[0.72rem] text-muted-foreground"
+      title="Check out the new branch after creating it"
+    >
+      <input type="checkbox" class="m-0 accent-primary" bind:checked={newCheckout} />
       <span>checkout</span>
     </label>
   </form>
 
   {#if error}
-    <p class="state error" role="alert">{error}</p>
+    <p class="state py-4 px-3 text-[13px] text-destructive" role="alert">{error}</p>
   {:else if !loading && list.length === 0}
-    <p class="state">No branches.</p>
+    <p class="state py-4 px-3 text-[13px] text-muted-foreground">No branches.</p>
   {:else}
-    <ul class="branches" role="list" aria-label="Local branches">
+    <ul class="branches m-0 min-h-0 flex-1 list-none overflow-y-auto p-0 pb-3" role="list" aria-label="Local branches">
       {#each visibleBranches as branch (branch.name)}
         <li
-          class="row"
+          class="row flex min-w-0 flex-wrap items-center gap-1.5 py-0.5 pl-1 pr-2 {branch.is_head ? "bg-secondary/60" : "hover:bg-muted/60"}"
           class:head={branch.is_head}
           oncontextmenu={(e) => branchMenu(e, branch)}
         >
           {#if renaming?.old === branch.name}
             <form
-              class="rename"
+              class="rename flex min-w-0 flex-1 items-center gap-1.5"
               aria-label={`Rename ${branch.name}`}
               onsubmit={(e) => {
                 e.preventDefault();
@@ -360,7 +380,7 @@
               }}
             >
               <input
-                class="name"
+                class="name min-w-24 flex-1 rounded border border-input bg-background px-2 py-0.5 text-xs text-foreground focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-1"
                 type="text"
                 aria-label={`New name for ${branch.name}`}
                 bind:value={renaming.value}
@@ -368,56 +388,70 @@
                   if (e.key === "Escape") renaming = null;
                 }}
               />
-              <IconButton
-                icon={iconCheck}
-                label="Save new branch name"
-                title="Save the new branch name"
-                variant="filled"
+              <Button
+                variant="default"
+                size="icon-sm"
                 type="submit"
-              />
-              <IconButton
-                icon={iconClose}
-                label="Cancel rename"
+                aria-label="Save new branch name"
+                title="Save the new branch name"
+              >
+                <Icon icon={iconCheck} size={16} />
+              </Button>
+              <Button
+                class="border-border text-muted-foreground hover:border-primary hover:bg-accent hover:text-accent-foreground"
+                variant="ghost"
+                size="icon-sm"
+                type="button"
+                aria-label="Cancel rename"
                 title="Cancel rename"
-                variant="outlined"
                 onclick={() => (renaming = null)}
-              />
+              >
+                <Icon icon={iconClose} size={16} />
+              </Button>
             </form>
           {:else}
-            <span class="marker" aria-label="Current branch" title="Current branch">
+            <span class="marker w-3.5 shrink-0 text-center text-primary" aria-label="Current branch" title="Current branch">
               {branch.is_head ? "●" : ""}
             </span>
-            <span class="bname" title={branch.name}>{branch.name}</span>
-            <span class="sha">{shortSha(branch.sha)}</span>
+            <span class="bname min-w-12 max-w-44 shrink truncate font-mono text-xs font-semibold text-foreground" title={branch.name}>{branch.name}</span>
+            <span class="sha shrink-0 font-mono text-[0.6875rem] text-muted-foreground">{shortSha(branch.sha)}</span>
             {#if branch.upstream}
-              <span class="upstream" title={branch.upstream}>
+              <span class="upstream min-w-0 flex-1 truncate font-mono text-[0.6875rem] text-muted-foreground" title={branch.upstream}>
                 {branch.upstream}
                 {#if branch.ahead > 0 || branch.behind > 0}
-                  <span class="ab">↑{branch.ahead} ↓{branch.behind}</span>
+                  <span class="ab pl-1.5 text-primary">↑{branch.ahead} ↓{branch.behind}</span>
                 {/if}
-                {#if branch.gone}<span class="gone">gone</span>{/if}
+                {#if branch.gone}<Badge variant="outline" class="gone ml-1.5 h-auto shrink-0 rounded-full border-destructive px-1.5 py-0 text-[0.625rem] text-destructive">gone</Badge>{/if}
               </span>
             {/if}
-            <span class="actions">
+            <span class="actions ml-auto flex shrink-0 items-center gap-1">
               {#if !branch.is_head}
-                <IconButton
-                  icon={iconSwitch}
-                  label={`Switch to ${branch.name}`}
+                <Button
+                  class="relative text-muted-foreground after:absolute after:-inset-1 after:content-[''] hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-4"
+                  variant="ghost"
+                  size="icon-xs"
+                  type="button"
+                  aria-label={`Switch to ${branch.name}`}
                   title={`Switch to ${branch.name}`}
-                  dense
                   onclick={() => void ops.requestSwitch(branch.name)}
-                />
+                >
+                  <Icon icon={iconSwitch} size={16} />
+                </Button>
               {:else}
-                <span class="head-chip">HEAD</span>
+                <Badge variant="secondary" class="head-chip h-auto shrink-0 rounded-full bg-foreground px-1.5 py-0 text-[0.625rem] font-semibold tracking-[0.04em] text-background">HEAD</Badge>
               {/if}
-              <IconButton
-                icon={iconMore}
-                label={`More actions for ${branch.name}`}
+              <Button
+                class="relative text-muted-foreground after:absolute after:-inset-1 after:content-[''] hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-4"
+                variant="ghost"
+                size="icon-xs"
+                type="button"
+                aria-label={`More actions for ${branch.name}`}
                 title="Push, merge, rename, reset, or delete this branch"
-                dense
                 aria-haspopup="menu"
                 onclick={(event) => branchMenu(event, branch)}
-              />
+              >
+                <Icon icon={iconMore} size={16} />
+              </Button>
             </span>
           {/if}
         </li>
@@ -441,44 +475,35 @@
   {/if}
 
   {#if cleanupOpen}
-    <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-    <div
-      class="scrim"
-      role="presentation"
-      onkeydown={(e) => {
-        if (e.key === "Escape") {
-          e.preventDefault();
-          cleanupOpen = false;
-        }
-      }}
+    <DialogShell
+      bind:open={cleanupOpen}
+      labelledBy="cleanup-title"
+      width="24rem"
     >
-      <div
-        class="dialog"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="cleanup-title"
-      >
-        <h2 id="cleanup-title" class="title">Delete merged branches</h2>
-        <p class="text">
+      {#snippet children()}
+        <h2 id="cleanup-title" class="sdlg-title title">Delete merged branches</h2>
+        <p class="sdlg-message text">
           Fully merged into <strong>{headBranch?.name ?? "HEAD"}</strong> — no
           commits will be lost. Uncheck anything you want to keep.
         </p>
-        <ul class="cleanup-list">
+        <ul class="cleanup-list m-0 mb-3 max-h-56 list-none overflow-y-auto p-0">
           {#each cleanupCandidates as candidate (candidate.name)}
             <li>
-              <label>
-                <input type="checkbox" bind:checked={candidate.checked} />
+              <label class="flex cursor-pointer items-center gap-1.5 py-0.5 font-mono text-xs">
+                <input type="checkbox" class="m-0 accent-primary" bind:checked={candidate.checked} />
                 <span>{candidate.name}</span>
               </label>
             </li>
           {/each}
         </ul>
-        <div class="actions">
-          <button class="secondary" type="button" onclick={() => (cleanupOpen = false)}>
+      {/snippet}
+      {#snippet actions()}
+        <div class="actions flex flex-wrap justify-end gap-2">
+          <button class="secondary sdlg-secondary" type="button" onclick={() => (cleanupOpen = false)}>
             Cancel
           </button>
           <button
-            class="primary"
+            class="primary sdlg-primary"
             type="button"
             disabled={cleanupCandidates.every((c) => !c.checked)}
             onclick={() => void onCleanupRun()}
@@ -486,8 +511,8 @@
             Delete checked
           </button>
         </div>
-      </div>
-    </div>
+      {/snippet}
+    </DialogShell>
   {/if}
 
   <!-- Shared switch/delete dialogs (state lives on the ops controller). -->
@@ -504,321 +529,3 @@
     }}
   />
 </aside>
-
-<style>
-  .branch-panel {
-    display: flex;
-    flex-direction: column;
-    min-height: 0;
-    font-size: 0.8125rem;
-  }
-
-  .toolbar {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    padding: 0.375rem 0.5rem;
-    flex: none;
-  }
-
-  .filter {
-    flex: 1;
-    min-width: 5rem;
-    font: inherit;
-    font-size: 0.72rem;
-    color: var(--m3-on-surface);
-    background: var(--m3-surface-container-lowest, var(--m3-surface));
-    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    border-radius: var(--m3-shape-extra-small, 4px);
-    padding: 0.2rem 0.45rem;
-  }
-
-  .filter:focus-visible {
-    outline: 2px solid var(--m3-primary);
-    outline-offset: -1px;
-  }
-
-  .cleanup-list {
-    margin: 0 0 0.75rem;
-    padding: 0;
-    list-style: none;
-    max-height: 14rem;
-    overflow-y: auto;
-  }
-
-  .cleanup-list label {
-    display: flex;
-    align-items: center;
-    gap: 0.4rem;
-    padding: 0.15rem 0;
-    cursor: pointer;
-    font-family: ui-monospace, Consolas, monospace;
-    font-size: 0.75rem;
-  }
-
-  .cleanup-list input {
-    accent-color: var(--m3-primary);
-    margin: 0;
-  }
-
-  .busy {
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    font-size: 0.72rem;
-  }
-
-  .create {
-    display: flex;
-    align-items: center;
-    gap: 0.375rem;
-    padding: 0 0.5rem 0.375rem;
-    flex: none;
-    flex-wrap: wrap;
-  }
-
-  .name-row {
-    display: flex;
-    align-items: center;
-    gap: 0.25rem;
-    flex: 1;
-    min-width: 6rem;
-  }
-
-  .create .name,
-  .rename .name {
-    flex: 1;
-    min-width: 6rem;
-    font: inherit;
-    font-size: 0.75rem;
-    color: var(--m3-on-surface);
-    background: var(--m3-surface-container-lowest, var(--m3-surface));
-    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    border-radius: var(--m3-shape-extra-small, 4px);
-    padding: 0.2rem 0.45rem;
-  }
-
-  .create .name:focus-visible,
-  .rename .name:focus-visible,
-  select:focus-visible {
-    outline: 2px solid var(--m3-primary);
-    outline-offset: -1px;
-  }
-
-  .from {
-    display: flex;
-    align-items: center;
-    gap: 0.25rem;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-  }
-
-  .fl {
-    font-size: 0.6875rem;
-  }
-
-  select {
-    font: inherit;
-    font-size: 0.72rem;
-    color: var(--m3-on-surface);
-    background: var(--m3-surface-container-lowest, var(--m3-surface));
-    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    border-radius: var(--m3-shape-extra-small, 4px);
-    padding: 0.15rem 0.3rem;
-    max-width: 9rem;
-  }
-
-  .toggle {
-    display: flex;
-    align-items: center;
-    gap: 0.25rem;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    font-size: 0.72rem;
-    cursor: pointer;
-  }
-
-  .toggle input {
-    accent-color: var(--m3-primary);
-    margin: 0;
-  }
-
-  .primary:focus-visible,
-  .secondary:focus-visible {
-    outline: 2px solid var(--m3-primary);
-    outline-offset: 1px;
-  }
-
-  .branches {
-    flex: 1;
-    min-height: 0;
-    overflow-y: auto;
-    margin: 0;
-    padding: 0 0 0.75rem;
-    list-style: none;
-  }
-
-  .row {
-    display: flex;
-    align-items: center;
-    flex-wrap: wrap;
-    gap: 0.375rem;
-    padding: 0.2rem 0.5rem 0.2rem 0.25rem;
-    min-width: 0;
-  }
-
-  .row:hover {
-    background: var(--m3-surface-container-high, var(--m3-surface));
-  }
-
-  .row.head {
-    background: var(--m3-secondary-container, transparent);
-  }
-
-  .marker {
-    flex: none;
-    width: 0.875rem;
-    text-align: center;
-    color: var(--m3-primary);
-  }
-
-  .bname {
-    flex: 0 1 auto;
-    min-width: 3rem;
-    max-width: 11rem;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    font-family: ui-monospace, Consolas, monospace;
-    font-size: 0.75rem;
-    font-weight: 600;
-    color: var(--m3-on-surface);
-  }
-
-  .sha {
-    flex: none;
-    font-family: ui-monospace, Consolas, monospace;
-    font-size: 0.6875rem;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-  }
-
-  .upstream {
-    flex: 1;
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    font-size: 0.6875rem;
-    font-family: ui-monospace, Consolas, monospace;
-  }
-
-  .ab {
-    color: var(--m3-primary);
-    padding-left: 0.375rem;
-  }
-
-  .gone {
-    margin-left: 0.375rem;
-    padding: 0 0.35rem;
-    border: 1px solid var(--m3-error, currentColor);
-    border-radius: var(--m3-shape-full, 9999px);
-    color: var(--m3-error, inherit);
-    font-size: 0.625rem;
-  }
-
-  .head-chip {
-    flex: none;
-    padding: 0.05rem 0.45rem;
-    border-radius: var(--m3-shape-full, 9999px);
-    background: var(--m3-inverse-surface, var(--m3-surface-container-highest));
-    color: var(--m3-inverse-on-surface, var(--m3-on-surface));
-    font-size: 0.625rem;
-    font-weight: 600;
-    letter-spacing: 0.04em;
-  }
-
-  .actions {
-    margin-left: auto;
-    flex: none;
-    display: flex;
-    align-items: center;
-    gap: 0.25rem;
-  }
-
-  .rename {
-    display: flex;
-    align-items: center;
-    gap: 0.375rem;
-    flex: 1;
-    min-width: 0;
-  }
-
-  .state {
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    padding: 1rem 0.75rem;
-    margin: 0;
-    font-size: 0.8125rem;
-  }
-
-  .error {
-    color: var(--m3-error, inherit);
-  }
-
-  /* Modal dialogs (cleanup wizard; switch/delete live in BranchActionDialogs). */
-  .scrim {
-    position: fixed;
-    inset: 0;
-    z-index: 60;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: color-mix(in srgb, var(--m3-scrim, black) 40%, transparent);
-  }
-
-  .dialog {
-    width: min(24rem, calc(100vw - 2rem));
-    padding: 1.25rem 1.5rem;
-    border-radius: var(--m3-shape-large, 16px);
-    background: var(--m3-surface-container-high, var(--m3-surface));
-    color: var(--m3-on-surface);
-    box-shadow: var(--m3-elevation-3, 0 8px 24px rgba(0, 0, 0, 0.3));
-    font-size: 0.875rem;
-  }
-
-  .title {
-    margin: 0 0 0.5rem;
-    font-size: 1.125rem;
-    font-weight: 500;
-  }
-
-  .text {
-    margin: 0 0 1rem;
-    color: var(--m3-on-surface);
-    overflow-wrap: anywhere;
-  }
-
-  .actions {
-    display: flex;
-    justify-content: flex-end;
-    flex-wrap: wrap;
-    gap: 0.5rem;
-  }
-
-  .primary {
-    border: none;
-    border-radius: var(--m3-shape-full, 9999px);
-    background: var(--m3-primary);
-    color: var(--m3-on-primary);
-    font: inherit;
-    font-weight: 500;
-    padding: 0.45rem 1.25rem;
-    cursor: pointer;
-  }
-
-  .secondary {
-    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    border-radius: var(--m3-shape-full, 9999px);
-    background: none;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    font: inherit;
-    padding: 0.45rem 1rem;
-    cursor: pointer;
-  }
-</style>
