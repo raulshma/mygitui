@@ -50,14 +50,16 @@
 </script>
 
 <script lang="ts">
-  import iconDescription from "@ktibow/iconset-material-symbols/description";
-  import iconExpandMore from "@ktibow/iconset-material-symbols/expand-more";
   import Icon from "$lib/components/icons/Icon.svelte";
+  import { appIcon } from "$lib/components/icons/library.svelte";
   import { contextMenu, showMenuAt } from "$lib/components/menu/contextMenuStore.svelte";
   import { appIcons } from "./appIcons";
   import { Button } from "$lib/components/ui/button/index.js";
 
   let { root }: { root: string } = $props();
+
+  const iconDescription = $derived(appIcon("description")!);
+  const iconExpandMore = $derived(appIcon("chevron-down")!);
 
   let apps = $state<EditorApp[]>([]);
   let lastId = $state(readLast());

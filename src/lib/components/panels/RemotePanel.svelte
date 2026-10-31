@@ -44,19 +44,7 @@
   import * as Select from "$lib/components/ui/select/index.js";
   import ConfirmDialog from "$lib/components/safety/ConfirmDialog.svelte";
   import DiffViewer from "$lib/components/diff/DiffViewer.svelte";
-  import iconRefresh from "@ktibow/iconset-material-symbols/refresh";
-  import iconSetUrl from "@ktibow/iconset-material-symbols/link";
-  import iconSetPushUrl from "@ktibow/iconset-material-symbols/upload";
-  import iconRemove from "@ktibow/iconset-material-symbols/delete";
-  import iconCheck from "@ktibow/iconset-material-symbols/check";
-  import iconClose from "@ktibow/iconset-material-symbols/close";
-  import iconBranches from "@ktibow/iconset-material-symbols/account-tree";
-  import iconFetch from "@ktibow/iconset-material-symbols/cloud-download";
-  import iconPull from "@ktibow/iconset-material-symbols/arrow-downward";
-  import iconPush from "@ktibow/iconset-material-symbols/arrow-upward";
-  import iconCheckout from "@ktibow/iconset-material-symbols/fork-right";
-  import iconCompare from "@ktibow/iconset-material-symbols/compare-arrows";
-  import iconAdd from "@ktibow/iconset-material-symbols/add";
+  import { appIcon } from "$lib/components/icons/library.svelte";
 
   let {
     repoId,
@@ -66,6 +54,20 @@
     /** Called after a mutation that changes repo state (pull/push). */
     onMutated?: () => void;
   } = $props();
+
+  const iconRefresh = $derived(appIcon("refresh")!);
+  const iconSetUrl = $derived(appIcon("link")!);
+  const iconSetPushUrl = $derived(appIcon("upload")!);
+  const iconRemove = $derived(appIcon("delete")!);
+  const iconCheck = $derived(appIcon("check")!);
+  const iconClose = $derived(appIcon("close")!);
+  const iconBranches = $derived(appIcon("account-tree")!);
+  const iconFetch = $derived(appIcon("cloud-download")!);
+  const iconPull = $derived(appIcon("arrow-downward")!);
+  const iconPush = $derived(appIcon("arrow-upward")!);
+  const iconCheckout = $derived(appIcon("fork-right")!);
+  const iconCompare = $derived(appIcon("compare-arrows")!);
+  const iconAdd = $derived(appIcon("add")!);
 
   let list = $state<RemoteInfo[]>([]);
   let loading = $state(false);

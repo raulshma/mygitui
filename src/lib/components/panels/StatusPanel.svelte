@@ -56,7 +56,6 @@
   import { openTab, parseSshUri, tabStore } from "$lib/stores/tabs.svelte";
   import { normalizeRepoPath } from "$lib/stores/switcher.svelte";
   import CommitBar from "$lib/components/panels/CommitBar.svelte";
-  import iconBranch from "@ktibow/iconset-material-symbols/account-tree";
   import { toast } from "$lib/toast";
   import { patternFor } from "./gitignore";
   import {
@@ -76,26 +75,7 @@ import {
 import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.svelte";
   import { openPanelPopout } from "$lib/layout/popout";
   import { visibleRange } from "$lib/components/graph/layout";
-  import iconStage from "@ktibow/iconset-material-symbols/add";
-  import iconUnstage from "@ktibow/iconset-material-symbols/remove";
-  import iconDiscard from "@ktibow/iconset-material-symbols/undo";
-  import iconModule from "@ktibow/iconset-material-symbols/folder-special";
-  import iconOpen from "@ktibow/iconset-material-symbols/open-in-new";
-  import iconUpdate from "@ktibow/iconset-material-symbols/download";
-  import iconSync from "@ktibow/iconset-material-symbols/sync";
-  import iconRefresh from "@ktibow/iconset-material-symbols/refresh";
-  import iconMore from "@ktibow/iconset-material-symbols/more-vert";
-  import iconSearch from "@ktibow/iconset-material-symbols/search";
-  import iconClear from "@ktibow/iconset-material-symbols/close";
-  import iconCheck from "@ktibow/iconset-material-symbols/check-circle";
-  import iconStageAll from "@ktibow/iconset-material-symbols/done-all";
-  import iconUnstageAll from "@ktibow/iconset-material-symbols/remove-done";
-  import iconTemplates from "@ktibow/iconset-material-symbols/description";
-  import iconIgnore from "@ktibow/iconset-material-symbols/visibility-off";
-  import iconChevron from "@ktibow/iconset-material-symbols/chevron-right";
-  import iconAhead from "@ktibow/iconset-material-symbols/arrow-upward";
-  import iconBehind from "@ktibow/iconset-material-symbols/arrow-downward";
-import iconPalette from "@ktibow/iconset-material-symbols/palette";
+  import { appIcon } from "$lib/components/icons/library.svelte";
   import {
     buildStatusIndex,
     filterSections,
@@ -156,6 +136,28 @@ import iconPalette from "@ktibow/iconset-material-symbols/palette";
     /** Called instead of `onOpenDiff` for Conflicted rows (M3 editor). */
     onOpenConflict?: (entry: StatusEntry) => void;
   } = $props();
+
+  const iconBranch = $derived(appIcon("account-tree")!);
+  const iconStage = $derived(appIcon("add")!);
+  const iconUnstage = $derived(appIcon("remove")!);
+  const iconDiscard = $derived(appIcon("undo")!);
+  const iconModule = $derived(appIcon("folder-special")!);
+  const iconOpen = $derived(appIcon("open-in-new")!);
+  const iconUpdate = $derived(appIcon("download")!);
+  const iconSync = $derived(appIcon("sync")!);
+  const iconRefresh = $derived(appIcon("refresh")!);
+  const iconMore = $derived(appIcon("more-vert")!);
+  const iconSearch = $derived(appIcon("search")!);
+  const iconClear = $derived(appIcon("close")!);
+  const iconCheck = $derived(appIcon("check-circle")!);
+  const iconStageAll = $derived(appIcon("done-all")!);
+  const iconUnstageAll = $derived(appIcon("remove-done")!);
+  const iconTemplates = $derived(appIcon("description")!);
+  const iconIgnore = $derived(appIcon("visibility-off")!);
+  const iconChevron = $derived(appIcon("chevron-right")!);
+  const iconAhead = $derived(appIcon("arrow-upward")!);
+  const iconBehind = $derived(appIcon("arrow-downward")!);
+  const iconPalette = $derived(appIcon("palette")!);
 
   type DisplaySection = StatusSectionView & { modules: SubmoduleInfo[] };
 

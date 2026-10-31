@@ -12,13 +12,15 @@
   import Icon from "$lib/components/icons/Icon.svelte";
   import { Button } from "$lib/components/ui/button/index.js";
   import { Spinner } from "$lib/components/ui/spinner/index.js";
-  import iconOutput from "@ktibow/iconset-material-symbols/terminal";
-  import iconDone from "@ktibow/iconset-material-symbols/check-circle";
-  import iconError from "@ktibow/iconset-material-symbols/error";
-  import iconClose from "@ktibow/iconset-material-symbols/close";
-  import iconExpand from "@ktibow/iconset-material-symbols/expand-more";
+  import { appIcon } from "$lib/components/icons/library.svelte";
 
   let { repoId }: { repoId: string } = $props();
+
+  const iconOutput = $derived(appIcon("terminal")!);
+  const iconDone = $derived(appIcon("check-circle")!);
+  const iconError = $derived(appIcon("error")!);
+  const iconClose = $derived(appIcon("close")!);
+  const iconExpand = $derived(appIcon("chevron-down")!);
 
   const session = $derived(opLogsFor(repoId));
   let expanded = $state(true);

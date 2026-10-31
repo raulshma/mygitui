@@ -1,27 +1,36 @@
 <script module lang="ts">
   /**
-   * Dynamic panel imports cached at module scope. Inside a reactive snippet
-   * a fresh `import()` call creates a new promise on every evaluation, and
-   * the surrounding {#await} tears the panel down and remounts it — the
-   * file tree re-listed its directories on every status snapshot (each
-   * listing used to open a fresh SFTP channel on remote repos). A stable
-   * promise reference renders the await block once.
+   * Panel chunks load when their snippet first renders, not at module eval —
+   * a module-scope `import()` promise starts fetching every panel the moment
+   * the RepoView chunk lands, which defeats the split (terminal/xterm, the
+   * history graph and the forge would all load on first tab open).
+   *
+   * The cached-promise pattern stays: inside a reactive snippet a fresh
+   * `import()` call creates a new promise on every evaluation, and the
+   * surrounding {#await} tears the panel down and remounts it — the file
+   * tree re-listed its directories on every status snapshot (each listing
+   * used to open a fresh SFTP channel on remote repos). A stable promise
+   * reference renders the await block once.
    */
-const FilesPanelImport = import("$lib/components/panels/FilesPanel.svelte");
-const BranchPanelImport = import("$lib/components/panels/BranchPanel.svelte");
-const RemotePanelImport = import("$lib/components/panels/RemotePanel.svelte");
-const StashPanelImport = import("$lib/components/panels/StashPanel.svelte");
-const WorktreePanelImport = import("$lib/components/panels/WorktreePanel.svelte");
-const RepoPanelImport = import("$lib/components/panels/RepoPanel.svelte");
-const SubmodulePanelImport = import("$lib/components/panels/SubmodulePanel.svelte");
-const ReflogPanelImport = import("$lib/components/panels/ReflogPanel.svelte");
-const UndoPanelImport = import("$lib/components/safety/UndoPanel.svelte");
-const HistoryViewImport = import("$lib/components/panels/HistoryView.svelte");
-const TerminalPanelImport = import("$lib/components/terminal/TerminalPanel.svelte");
-const ForgePanelImport = import("$lib/components/forge/ForgePanel.svelte");
-const ActionsPanelImport = import("$lib/components/actions/ActionsPanel.svelte");
-const StatsPanelImport = import("$lib/components/panels/StatsPanel.svelte");
-const QuickOpenImport = import("$lib/components/files/QuickOpen.svelte");
+function lazyImport<T>(load: () => Promise<T>): () => Promise<T> {
+	let cached: Promise<T> | null = null;
+	return () => (cached ??= load());
+}
+const filesPanelImport = lazyImport(() => import("$lib/components/panels/FilesPanel.svelte"));
+const branchPanelImport = lazyImport(() => import("$lib/components/panels/BranchPanel.svelte"));
+const remotePanelImport = lazyImport(() => import("$lib/components/panels/RemotePanel.svelte"));
+const stashPanelImport = lazyImport(() => import("$lib/components/panels/StashPanel.svelte"));
+const worktreePanelImport = lazyImport(() => import("$lib/components/panels/WorktreePanel.svelte"));
+const repoPanelImport = lazyImport(() => import("$lib/components/panels/RepoPanel.svelte"));
+const submodulePanelImport = lazyImport(() => import("$lib/components/panels/SubmodulePanel.svelte"));
+const reflogPanelImport = lazyImport(() => import("$lib/components/panels/ReflogPanel.svelte"));
+const undoPanelImport = lazyImport(() => import("$lib/components/safety/UndoPanel.svelte"));
+const historyViewImport = lazyImport(() => import("$lib/components/panels/HistoryView.svelte"));
+const terminalPanelImport = lazyImport(() => import("$lib/components/terminal/TerminalPanel.svelte"));
+const forgePanelImport = lazyImport(() => import("$lib/components/forge/ForgePanel.svelte"));
+const actionsPanelImport = lazyImport(() => import("$lib/components/actions/ActionsPanel.svelte"));
+const statsPanelImport = lazyImport(() => import("$lib/components/panels/StatsPanel.svelte"));
+const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen.svelte"));
 </script>
 
 <script lang="ts">
@@ -145,14 +154,7 @@ const QuickOpenImport = import("$lib/components/files/QuickOpen.svelte");
   import { remoteDevices } from "$lib/stores/remoteDevices.svelte";
   import { toast } from "$lib/toast";
   import { contextMenu, type MenuEntry } from "$lib/components/menu/contextMenuStore.svelte";
-  import iconHistory from "@ktibow/iconset-material-symbols/history";
-  import iconBisect from "@ktibow/iconset-material-symbols/alt-route";
-  import iconSaveLayout from "@ktibow/iconset-material-symbols/save";
-  import iconTerminal from "@ktibow/iconset-material-symbols/terminal";
-  import iconClean from "@ktibow/iconset-material-symbols/cleaning-services";
-  import iconResetLayout from "@ktibow/iconset-material-symbols/restart-alt";
-  import iconMore from "@ktibow/iconset-material-symbols/more-horiz";
-  import iconHome from "@ktibow/iconset-material-symbols/home-rounded";
+  import { appIcon } from "$lib/components/icons/library.svelte";
 
   let {
     repoId,
@@ -168,6 +170,15 @@ const QuickOpenImport = import("$lib/components/files/QuickOpen.svelte");
     /** Owning device for remote repositories (`null` = local). */
     deviceId?: string | null;
   } = $props();
+
+  const iconHistory = $derived(appIcon("history")!);
+  const iconBisect = $derived(appIcon("alt-route")!);
+  const iconSaveLayout = $derived(appIcon("save")!);
+  const iconTerminal = $derived(appIcon("terminal")!);
+  const iconClean = $derived(appIcon("cleaning-services")!);
+  const iconResetLayout = $derived(appIcon("restart-alt")!);
+  const iconMore = $derived(appIcon("more-horiz")!);
+  const iconHome = $derived(appIcon("home-rounded")!);
 
   let selected: string[] = $state([]);
   let hasSubmodules = $state(false);
@@ -1262,7 +1273,7 @@ const QuickOpenImport = import("$lib/components/files/QuickOpen.svelte");
 </script>
 
 {#snippet filesPanel()}
-  {#await FilesPanelImport then FilesPanelModule}
+  {#await filesPanelImport() then FilesPanelModule}
     <FilesPanelModule.default
       {repoId}
       {root}
@@ -1341,47 +1352,47 @@ const QuickOpenImport = import("$lib/components/files/QuickOpen.svelte");
   />
 {/snippet}
 {#snippet branchesPanel()}
-  {#await BranchPanelImport then BranchPanelModule}
+  {#await branchPanelImport() then BranchPanelModule}
     <BranchPanelModule.default {repoId} onMutated={refresh} />
   {/await}
 {/snippet}
 {#snippet remotesPanel()}
-  {#await RemotePanelImport then RemotePanelModule}
+  {#await remotePanelImport() then RemotePanelModule}
     <RemotePanelModule.default {repoId} onMutated={refresh} />
   {/await}
 {/snippet}
 {#snippet stashesPanel()}
-  {#await StashPanelImport then StashPanelModule}
+  {#await stashPanelImport() then StashPanelModule}
     <StashPanelModule.default {repoId} onMutated={refresh} />
   {/await}
 {/snippet}
 {#snippet worktreesPanel()}
-  {#await WorktreePanelImport then WorktreePanelModule}
+  {#await worktreePanelImport() then WorktreePanelModule}
     <WorktreePanelModule.default {repoId} {root} onMutated={refresh} />
   {/await}
 {/snippet}
 {#snippet healthPanel()}
-  {#await RepoPanelImport then RepoPanelModule}
+  {#await repoPanelImport() then RepoPanelModule}
     <RepoPanelModule.default {repoId} onMutated={refresh} />
   {/await}
 {/snippet}
 {#snippet submodulesPanel()}
-  {#await SubmodulePanelImport then SubmodulePanelModule}
+  {#await submodulePanelImport() then SubmodulePanelModule}
     <SubmodulePanelModule.default {repoId} {root} onMutated={refresh} />
   {/await}
 {/snippet}
 {#snippet reflogPanel()}
-  {#await ReflogPanelImport then ReflogPanelModule}
+  {#await reflogPanelImport() then ReflogPanelModule}
     <ReflogPanelModule.default {repoId} />
   {/await}
 {/snippet}
 {#snippet undoPanel()}
-  {#await UndoPanelImport then UndoPanelModule}
+  {#await undoPanelImport() then UndoPanelModule}
     <UndoPanelModule.default {repoId} />
   {/await}
 {/snippet}
 {#snippet historyPanel()}
-  {#await HistoryViewImport then HistoryViewModule}
+  {#await historyViewImport() then HistoryViewModule}
     <HistoryViewModule.default
       {repoId}
       {root}
@@ -1399,7 +1410,7 @@ const QuickOpenImport = import("$lib/components/files/QuickOpen.svelte");
   {/await}
 {/snippet}
 {#snippet terminalPanel()}
-  {#await TerminalPanelImport then TerminalPanelModule}
+  {#await terminalPanelImport() then TerminalPanelModule}
     <TerminalPanelModule.default {repoId} remote={isRemote} />
   {/await}
 {/snippet}
@@ -1412,18 +1423,18 @@ const QuickOpenImport = import("$lib/components/files/QuickOpen.svelte");
       Not available for remote projects
     </aside>
   {:else}
-    {#await ForgePanelImport then ForgePanelModule}
+    {#await forgePanelImport() then ForgePanelModule}
       <ForgePanelModule.default {repoId} />
     {/await}
   {/if}
 {/snippet}
 {#snippet actionsPanel()}
-  {#await ActionsPanelImport then ActionsPanelModule}
+  {#await actionsPanelImport() then ActionsPanelModule}
     <ActionsPanelModule.default {repoId} />
   {/await}
 {/snippet}
 {#snippet statsPanel()}
-  {#await StatsPanelImport then StatsPanelModule}
+  {#await statsPanelImport() then StatsPanelModule}
     <StatsPanelModule.default {repoId} {root} />
   {/await}
 {/snippet}
@@ -1667,7 +1678,7 @@ const QuickOpenImport = import("$lib/components/files/QuickOpen.svelte");
 {/if}
 
 {#if quickOpenVisible}
-  {#await QuickOpenImport then QuickOpenModule}
+  {#await quickOpenImport() then QuickOpenModule}
     <QuickOpenModule.default
       {repoId}
       onClose={() => (quickOpenVisible = false)}

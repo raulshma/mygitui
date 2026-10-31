@@ -24,7 +24,7 @@
     tabStore,
   } from "$lib/stores/tabs.svelte";
   import Icon from "$lib/components/icons/Icon.svelte";
-  import iconHome from "@ktibow/iconset-material-symbols/home-rounded";
+  import { appIcon } from "$lib/components/icons/library.svelte";
   import { Button } from "$lib/components/ui/button/index.js";
 
   let {
@@ -35,6 +35,8 @@
     /** Window-level controls rendered at the right edge of the strip. */
     trailing?: Snippet;
   } = $props();
+
+  const iconHome = $derived(appIcon("home-rounded")!);
 
   let strip: HTMLDivElement | undefined = $state();
 

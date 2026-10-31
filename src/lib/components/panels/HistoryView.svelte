@@ -81,13 +81,15 @@
   import { Spinner } from "$lib/components/ui/spinner/index.js";
   import { Checkbox } from "$lib/components/ui/checkbox/index.js";
   import { Input } from "$lib/components/ui/input/index.js";
-  import iconSearch from "@ktibow/iconset-material-symbols/search";
-  import iconPopout from "@ktibow/iconset-material-symbols/open-in-new";
-  import iconCollapse from "@ktibow/iconset-material-symbols/right-panel-close";
-  import iconFilters from "@ktibow/iconset-material-symbols/filter-list";
-  import iconClearFilters from "@ktibow/iconset-material-symbols/filter-list-off";
-  import iconCompare from "@ktibow/iconset-material-symbols/compare-arrows";
-  import iconRetry from "@ktibow/iconset-material-symbols/restart-alt";
+  import { appIcon } from "$lib/components/icons/library.svelte";
+
+  const iconSearch = $derived(appIcon("search")!);
+  const iconPopout = $derived(appIcon("open-in-new")!);
+  const iconCollapse = $derived(appIcon("right-panel-close")!);
+  const iconFilters = $derived(appIcon("filter-list")!);
+  const iconClearFilters = $derived(appIcon("filter-list-off")!);
+  const iconCompare = $derived(appIcon("compare-arrows")!);
+  const iconRetry = $derived(appIcon("restart-alt")!);
 
   let {
     repoId,

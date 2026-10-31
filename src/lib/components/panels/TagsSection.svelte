@@ -25,9 +25,7 @@
   import { Badge } from "$lib/components/ui/badge";
   import { Button } from "$lib/components/ui/button/index.js";
   import { Input } from "$lib/components/ui/input/index.js";
-  import iconPushTags from "@ktibow/iconset-material-symbols/cloud-upload";
-  import iconExport from "@ktibow/iconset-material-symbols/archive";
-  import iconDelete from "@ktibow/iconset-material-symbols/delete";
+  import { appIcon } from "$lib/components/icons/library.svelte";
 
   let {
     repoId,
@@ -39,6 +37,10 @@
     targets?: string[];
     onMutated?: () => void;
   } = $props();
+
+  const iconPushTags = $derived(appIcon("cloud-upload")!);
+  const iconExport = $derived(appIcon("archive")!);
+  const iconDelete = $derived(appIcon("delete")!);
 
   let open = $state(false);
   let list = $state<TagInfo[]>([]);

@@ -1,13 +1,15 @@
 <script lang="ts">
 	import { mode } from "mode-watcher";
 	import { Toaster as Sonner, type ToasterProps as SonnerProps } from "svelte-sonner";
-	import Loader2Icon from '@lucide/svelte/icons/loader-2';
-	import CircleCheckIcon from '@lucide/svelte/icons/circle-check';
-	import OctagonXIcon from '@lucide/svelte/icons/octagon-x';
-	import InfoIcon from '@lucide/svelte/icons/info';
-	import TriangleAlertIcon from '@lucide/svelte/icons/triangle-alert';
+	import { appIcon } from "$lib/components/icons/library.svelte";
 
 	let { ...restProps }: SonnerProps = $props();
+
+	const progressIconData = $derived(appIcon("progress-activity"));
+	const checkCircleIconData = $derived(appIcon("check-circle"));
+	const octagonXIconData = $derived(appIcon("octagon-x"));
+	const infoIconData = $derived(appIcon("info"));
+	const triangleAlertIconData = $derived(appIcon("triangle-alert"));
 </script>
 
 <Sonner
@@ -22,18 +24,58 @@
 	{...restProps}
 >
 	{#snippet loadingIcon()}
-		<Loader2Icon class="size-4 animate-spin" />
+		{#if progressIconData}
+			<svg
+				class="size-4 animate-spin"
+				viewBox="{progressIconData.left ?? 0} {progressIconData.top ?? 0} {progressIconData.width} {progressIconData.height}"
+				width={progressIconData.width}
+				height={progressIconData.height}
+				aria-hidden="true"
+			>{@html progressIconData.body}</svg>
+		{/if}
 	{/snippet}
 	{#snippet successIcon()}
-		<CircleCheckIcon class="size-4" />
+		{#if checkCircleIconData}
+			<svg
+				class="size-4"
+				viewBox="{checkCircleIconData.left ?? 0} {checkCircleIconData.top ?? 0} {checkCircleIconData.width} {checkCircleIconData.height}"
+				width={checkCircleIconData.width}
+				height={checkCircleIconData.height}
+				aria-hidden="true"
+			>{@html checkCircleIconData.body}</svg>
+		{/if}
 	{/snippet}
 	{#snippet errorIcon()}
-		<OctagonXIcon class="size-4" />
+		{#if octagonXIconData}
+			<svg
+				class="size-4"
+				viewBox="{octagonXIconData.left ?? 0} {octagonXIconData.top ?? 0} {octagonXIconData.width} {octagonXIconData.height}"
+				width={octagonXIconData.width}
+				height={octagonXIconData.height}
+				aria-hidden="true"
+			>{@html octagonXIconData.body}</svg>
+		{/if}
 	{/snippet}
 	{#snippet infoIcon()}
-		<InfoIcon class="size-4" />
+		{#if infoIconData}
+			<svg
+				class="size-4"
+				viewBox="{infoIconData.left ?? 0} {infoIconData.top ?? 0} {infoIconData.width} {infoIconData.height}"
+				width={infoIconData.width}
+				height={infoIconData.height}
+				aria-hidden="true"
+			>{@html infoIconData.body}</svg>
+		{/if}
 	{/snippet}
 	{#snippet warningIcon()}
-		<TriangleAlertIcon class="size-4" />
+		{#if triangleAlertIconData}
+			<svg
+				class="size-4"
+				viewBox="{triangleAlertIconData.left ?? 0} {triangleAlertIconData.top ?? 0} {triangleAlertIconData.width} {triangleAlertIconData.height}"
+				width={triangleAlertIconData.width}
+				height={triangleAlertIconData.height}
+				aria-hidden="true"
+			>{@html triangleAlertIconData.body}</svg>
+		{/if}
 	{/snippet}
 </Sonner>

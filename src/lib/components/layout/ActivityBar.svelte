@@ -36,8 +36,7 @@
     showMenuAtElement,
   } from "$lib/components/menu/contextMenuStore.svelte";
   import Icon from "$lib/components/icons/Icon.svelte";
-  import iconMore from "@ktibow/iconset-material-symbols/more-horiz";
-  import iconPin from "@ktibow/iconset-material-symbols/push-pin";
+  import { appIcon } from "$lib/components/icons/library.svelte";
   import { Button } from "$lib/components/ui/button/index.js";
 
   let {
@@ -76,6 +75,9 @@
     /** Pin/unpin hook; the pin affordances render only when set. */
     onTogglePin?: ((panel: PanelId) => void) | null;
   } = $props();
+
+  const iconMore = $derived(appIcon("more-horiz")!);
+  const iconPin = $derived(appIcon("push-pin")!);
 
   /** Default rail buttons (registry order first: the core panels). */
   const defaultRail = $derived(

@@ -28,9 +28,11 @@
   import { Button } from "$lib/components/ui/button/index.js";
   import { Spinner } from "$lib/components/ui/spinner/index.js";
   import { Kbd } from "$lib/components/ui/kbd/index.js";
-  import iconTree from "@ktibow/iconset-material-symbols/account-tree";
-  import iconPrev from "@ktibow/iconset-material-symbols/arrow-upward";
-  import iconNext from "@ktibow/iconset-material-symbols/arrow-downward";
+  import { appIcon } from "$lib/components/icons/library.svelte";
+
+  const iconTree = $derived(appIcon("account-tree")!);
+  const iconPrev = $derived(appIcon("arrow-upward")!);
+  const iconNext = $derived(appIcon("arrow-downward")!);
 
   let {
     repoId,

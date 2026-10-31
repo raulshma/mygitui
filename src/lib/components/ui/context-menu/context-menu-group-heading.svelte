@@ -16,6 +16,6 @@
 	bind:ref
 	data-slot="context-menu-group-heading"
 	data-inset={inset}
-	class={cn("text-muted-foreground px-1.5 py-1 text-xs font-medium data-inset:pl-7", className)}
+	class={cn("cn-context-menu-label", className)}
 	{...restProps}
 />

@@ -10,6 +10,7 @@
   import { Button } from "$lib/components/ui/button/index.js";
   import * as Tooltip from "$lib/components/ui/tooltip/index.js";
   import Icon from "$lib/components/icons/Icon.svelte";
+  import { emitUiEvent } from "$lib/palette/events";
   import {
     getThemePreference,
     setThemePreference,
@@ -17,17 +18,15 @@
     THEME_STORAGE_KEY,
     type ThemePreference,
   } from "$lib/theme";
-  import iconSystem from "@ktibow/iconset-material-symbols/brightness-auto";
-  import iconLight from "@ktibow/iconset-material-symbols/sunny";
-  import iconDark from "@ktibow/iconset-material-symbols/bedtime";
+  import { appIcon } from "$lib/components/icons/library.svelte";
 
   const ORDER: readonly ThemePreference[] = ["system", "light", "dark"];
 
-  const ICONS = {
-    system: iconSystem,
-    light: iconLight,
-    dark: iconDark,
-  } as const;
+  const ICONS = $derived({
+    system: appIcon("brightness-auto")!,
+    light: appIcon("sunny")!,
+    dark: appIcon("bedtime")!,
+  });
 
   const LABELS: Record<ThemePreference, string> = {
     system: "System theme",
@@ -66,6 +65,12 @@
     setThemePreference(target);
     preference = target;
   }
+
+  /** Right-click opens the full appearance customizer. */
+  function openAppearance(event: MouseEvent): void {
+    event.preventDefault();
+    emitUiEvent("open-appearance");
+  }
 </script>
 
 <Tooltip.Provider>
@@ -79,13 +84,15 @@
           size="icon-sm"
           type="button"
           onclick={cycle}
+          oncontextmenu={openAppearance}
         >
           <Icon icon={ICONS[preference]} size={16} />
         </Button>
       {/snippet}
     </Tooltip.Trigger>
     <Tooltip.Content>
-      {LABELS[preference]} — click for {LABELS[next].toLowerCase()}
+      {LABELS[preference]} — click for {LABELS[next].toLowerCase()}; right-click to customize
+      appearance
     </Tooltip.Content>
   </Tooltip.Root>
 </Tooltip.Provider>

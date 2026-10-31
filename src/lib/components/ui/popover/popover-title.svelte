@@ -13,7 +13,7 @@
 <div
 	bind:this={ref}
 	data-slot="popover-title"
-	class={cn("font-medium", className)}
+	class={cn("cn-popover-title", className)}
 	{...restProps}
 >
 	{@render children?.()}

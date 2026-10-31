@@ -55,16 +55,7 @@
   import { isTauri } from "$lib/entry/dragdrop";
   import { openTab } from "$lib/stores/tabs.svelte";
   import { toast } from "$lib/toast";
-  import iconAddFile from "@ktibow/iconset-material-symbols/post-add";
-  import iconAddFolder from "@ktibow/iconset-material-symbols/create-new-folder";
-  import iconChevronDown from "@ktibow/iconset-material-symbols/keyboard-arrow-down";
-  import iconChevronRight from "@ktibow/iconset-material-symbols/chevron-right";
-  import iconFolder from "@ktibow/iconset-material-symbols/folder";
-  import iconMore from "@ktibow/iconset-material-symbols/more-horiz";
-  import iconRefresh from "@ktibow/iconset-material-symbols/refresh";
-  import iconReveal from "@ktibow/iconset-material-symbols/file-open";
-  import iconSearch from "@ktibow/iconset-material-symbols/search";
-  import iconSubmodule from "@ktibow/iconset-material-symbols/alt-route";
+  import { appIcon } from "$lib/components/icons/library.svelte";
 
   let {
     repoId,
@@ -79,6 +70,17 @@
     status?: RepoStatus | null;
     activeFile?: string | null;
   } = $props();
+
+  const iconAddFile = $derived(appIcon("post-add")!);
+  const iconAddFolder = $derived(appIcon("create-new-folder")!);
+  const iconChevronDown = $derived(appIcon("chevron-down")!);
+  const iconChevronRight = $derived(appIcon("chevron-right")!);
+  const iconFolder = $derived(appIcon("folder")!);
+  const iconMore = $derived(appIcon("more-horiz")!);
+  const iconRefresh = $derived(appIcon("refresh")!);
+  const iconReveal = $derived(appIcon("file-open")!);
+  const iconSearch = $derived(appIcon("search")!);
+  const iconSubmodule = $derived(appIcon("alt-route")!);
 
   // --- Tree state -----------------------------------------------------------
 

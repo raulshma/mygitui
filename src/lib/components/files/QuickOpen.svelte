@@ -20,7 +20,7 @@
   import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.svelte";
   import Icon from "$lib/components/icons/Icon.svelte";
   import { Spinner } from "$lib/components/ui/spinner/index.js";
-  import iconSearch from "@ktibow/iconset-material-symbols/search";
+  import { appIcon } from "$lib/components/icons/library.svelte";
 
   let {
     repoId,
@@ -32,6 +32,8 @@
     /** Picks a repository-relative path (opens it in the workspace). */
     onPick: (path: string) => void;
   } = $props();
+
+  const iconSearch = $derived(appIcon("search")!);
 
   /** Module-level per-repo index cache (survives dialog remounts). */
   const cache = new Map<
