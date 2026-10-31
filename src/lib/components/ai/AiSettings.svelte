@@ -33,6 +33,10 @@
     type OpencodeServeState,
   } from "$lib/ipc/client";
   import { toast } from "$lib/toast";
+  import * as Dialog from "$lib/components/ui/dialog/index.js";
+  import { Button } from "$lib/components/ui/button/index.js";
+  import { Input } from "$lib/components/ui/input/index.js";
+  import { Checkbox } from "$lib/components/ui/checkbox/index.js";
 
   let {
     open = $bindable(false),
@@ -302,76 +306,89 @@
 </script>
 
 {#if open}
-  <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-  <div class="scrim" role="presentation" onkeydown={onKeydown}>
-    <div
-      class="dialog"
+  <Dialog.Root bind:open>
+    <!-- svelte-ignore a11y_click_events_have_key_events -->
+    <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+    <Dialog.Overlay class="scrim bg-black/40" role="presentation" />
+    <Dialog.Content
+      class="dialog flex w-[42rem] max-w-none flex-col gap-0 overflow-y-auto rounded-2xl p-5 text-popover-foreground shadow-[0_8px_32px_rgba(0,0,0,0.35)] max-h-[calc(100dvh_-_2rem)] max-[36rem]:max-h-[calc(100dvh_-_1rem)] max-[36rem]:p-4 sm:max-w-none"
       role="dialog"
       aria-modal="true"
       aria-labelledby="ai-settings-title"
       aria-describedby="ai-settings-description"
+      showCloseButton={false}
+      escapeKeydownBehavior="ignore"
+      interactOutsideBehavior="ignore"
+      onkeydown={onKeydown}
     >
-      <header class="dialog-header">
+      <header class="dialog-header mb-[1.125rem] flex flex-none items-start justify-between gap-4">
         <div>
-          <h2 id="ai-settings-title" class="title">AI settings</h2>
-          <p id="ai-settings-description" class="subtitle">Choose a provider and check its connection.</p>
+          <Dialog.Title id="ai-settings-title" class="title m-0 text-[1.2rem] font-semibold text-foreground">AI settings</Dialog.Title>
+          <p id="ai-settings-description" class="subtitle mb-0 mt-1 text-[0.8125rem] text-muted-foreground">Choose a provider and check its connection.</p>
         </div>
-        <button class="icon-button" type="button" aria-label="Close AI settings" onclick={close}>
+        <Button variant="ghost" size="icon" class="icon-button flex-none rounded-full text-[1.35rem] leading-none text-muted-foreground" type="button" aria-label="Close AI settings" onclick={close}>
           ×
-        </button>
+        </Button>
       </header>
 
       <form
-        class="form"
+        class="form flex min-h-0 flex-1 flex-col"
         onsubmit={(event) => {
           event.preventDefault();
           void save();
         }}
       >
-        <div class="dialog-body">
-        <fieldset class="group">
-          <legend class="legend">Preferred backend</legend>
+        <div class="dialog-body flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto">
+        <fieldset class="group m-0 flex min-w-0 flex-col gap-[0.625rem] rounded-xl border border-border bg-muted/30 px-4 pb-4 pt-[0.9rem]">
+          <legend class="legend px-[0.35rem] text-xs font-semibold text-muted-foreground">Preferred backend</legend>
           {#each AI_BACKENDS as option (option)}
-            <label class:chosen={backendChoice === option} class="backend-option">
+            <label
+              class="backend-option grid min-h-[3.25rem] cursor-pointer grid-cols-[auto_minmax(0,1fr)_minmax(8rem,auto)] items-center gap-3 rounded-lg border px-3 py-[0.65rem] max-[36rem]:grid-cols-[auto_minmax(0,1fr)] {backendChoice === option
+                ? 'chosen border-primary bg-primary/[0.07]'
+                : 'border-border'}"
+            >
               <input
                 type="radio"
                 name="ai-backend"
                 value={option}
+                class="m-0 accent-primary"
                 bind:group={backendChoice}
               />
-              <span class="backend-copy">
-                <strong>{option === "opencode" ? "OpenCode" : "OpenRouter"}</strong>
-                <span>{option === "opencode" ? "Local server, managed by mygitui" : "Direct API, requires an API key"}</span>
+              <span class="backend-copy flex min-w-0 flex-col gap-[0.15rem]">
+                <strong class="text-sm font-semibold">{option === "opencode" ? "OpenCode" : "OpenRouter"}</strong>
+                <span class="text-[0.72rem] text-muted-foreground">{option === "opencode" ? "Local server, managed by mygitui" : "Direct API, requires an API key"}</span>
               </span>
-              <span class="backend-status {statuses[option].status}">{statusLine(option)}</span>
+              <span class="backend-status {statuses[option].status} flex min-w-0 flex-col gap-[0.15rem] text-right text-[0.72rem] [overflow-wrap:anywhere] max-w-56 max-[36rem]:col-start-2 max-[36rem]:text-left {statuses[option].status === 'ok' ? 'text-primary' : statuses[option].status === 'down' || statuses[option].status === 'unauthenticated' ? 'text-destructive' : 'text-muted-foreground'}">{statusLine(option)}</span>
             </label>
           {/each}
         </fieldset>
 
-        <fieldset class="group">
-          <legend class="legend">OpenCode</legend>
-          <p class="status-line" role="status">{installLine()}</p>
-          <div class="row">
-            <button
-              class="link"
+        <fieldset class="group m-0 flex min-w-0 flex-col gap-[0.625rem] rounded-xl border border-border bg-muted/30 px-4 pb-4 pt-[0.9rem]">
+          <legend class="legend px-[0.35rem] text-xs font-semibold text-muted-foreground">OpenCode</legend>
+          <p class="status-line m-0 text-[0.8125rem] text-foreground [overflow-wrap:anywhere]" role="status">{installLine()}</p>
+          <div class="row flex flex-wrap items-center gap-3">
+            <Button
+              variant="link"
+              size="sm"
+              class="link h-auto p-0 text-[0.72rem] underline"
               type="button"
               disabled={checkingInstall}
               onclick={() => void refreshInstall()}
             >
               {#if checkingInstall}Checking…{:else}Check OpenCode{/if}
-            </button>
+            </Button>
             {#if detection?.installed && detection.major !== null && detection.major >= 2}
-              <span class="hint">OpenCode 2.x detected (v{detection.version}) — managed and attach modes both supported</span>
+              <span class="hint m-0 text-[0.72rem] text-muted-foreground">OpenCode 2.x detected (v{detection.version}) — managed and attach modes both supported</span>
             {/if}
           </div>
-          <label class="radio">
-            <input type="checkbox" bind:checked={opencodeEnabled} />
+          <label class="radio flex cursor-pointer items-baseline gap-[0.375rem] text-[0.8125rem]">
+            <Checkbox bind:checked={opencodeEnabled} />
             <span>Enable OpenCode</span>
           </label>
-          <label class="field">
-            <span class="field-label">Search models</span>
-            <input
-              class="input"
+          <label class="field flex flex-col gap-[0.125rem]">
+            <span class="field-label text-[0.72rem] text-muted-foreground">Search models</span>
+            <Input
+              class="input h-auto rounded px-[0.625rem] py-2 text-[0.8125rem]"
               type="search"
               placeholder="Filter by model or provider"
               aria-label="Search OpenCode models"
@@ -379,9 +396,9 @@
               disabled={!opencodeEnabled}
             />
           </label>
-          <label class="field">
-            <span class="field-label">Default model</span>
-            <select class="input" bind:value={opencodeModel} disabled={!opencodeEnabled}>
+          <label class="field flex flex-col gap-[0.125rem]">
+            <span class="field-label text-[0.72rem] text-muted-foreground">Default model</span>
+            <select class="input rounded border border-border bg-background px-[0.625rem] py-2 text-[0.8125rem] text-foreground font-[inherit] focus-visible:-outline-offset-1 focus-visible:outline-2 focus-visible:outline-primary" bind:value={opencodeModel} disabled={!opencodeEnabled}>
               <option value="">Use OpenCode server default</option>
               {#if opencodeModel && !opencodeModelGroups.some(
                   (group) => group.models.some((model) => model.id === opencodeModel),
@@ -403,35 +420,36 @@
               {/each}
             </select>
           </label>
-          <p class="hint">
+          <p class="hint m-0 text-[0.72rem] text-muted-foreground">
             Used whenever an AI feature is routed to OpenCode. Leave on the server default to
             follow OpenCode’s own model setting.
           </p>
           {#if opencodeModelsLoading}
-            <p class="hint" role="status">Loading OpenCode models…</p>
+            <p class="hint m-0 text-[0.72rem] text-muted-foreground" role="status">Loading OpenCode models…</p>
           {/if}
           {#if opencodeModelsError}
-            <p class="hint error-text">OpenCode model list unavailable: {opencodeModelsError}</p>
+            <p class="hint error-text m-0 text-[0.72rem] text-destructive">OpenCode model list unavailable: {opencodeModelsError}</p>
           {/if}
           {#if !opencodeEnabled}
-            <p class="hint warn">
+            <p class="hint warn m-0 text-[0.72rem] text-destructive">
               OpenCode is disabled. AI features can use OpenRouter when fallback is enabled.
             </p>
           {/if}
 
-          <label class="radio advanced-toggle">
-            <input type="checkbox" bind:checked={showAdvanced} />
+          <label class="radio advanced-toggle mt-1 flex cursor-pointer items-baseline gap-[0.375rem] text-[0.8125rem] text-muted-foreground">
+            <Checkbox bind:checked={showAdvanced} />
             <span>Advanced</span>
           </label>
           {#if showAdvanced}
-            <fieldset class="group inner">
-              <legend class="legend">Server mode</legend>
+            <fieldset class="group inner m-0 ml-3.5 mt-0.5 flex min-w-0 flex-col gap-[0.625rem] rounded-none border-0 border-l border-border bg-transparent pb-0 pl-2.5 pr-0 pt-0">
+              <legend class="legend px-[0.35rem] text-xs font-semibold text-muted-foreground">Server mode</legend>
               {#each ["managed", "attach"] as modeOption (modeOption)}
-                <label class="radio">
+                <label class="radio flex cursor-pointer items-baseline gap-[0.375rem] text-[0.8125rem]">
                   <input
                     type="radio"
                     name="opencode-mode"
                     value={modeOption}
+                    class="m-0 accent-primary"
                     bind:group={opencodeModeChoice}
                   />
                   <span>
@@ -442,60 +460,60 @@
                 </label>
               {/each}
               {#if opencodeModeChoice === "attach"}
-                <label class="field">
-                  <span class="field-label">Server URL</span>
-                  <input
-                    class="input"
+                <label class="field flex flex-col gap-[0.125rem]">
+                  <span class="field-label text-[0.72rem] text-muted-foreground">Server URL</span>
+                  <Input
+                    class="input h-auto rounded px-[0.625rem] py-2 text-[0.8125rem]"
                     type="url"
                     placeholder="http://127.0.0.1:4096"
                     spellcheck="false"
                     bind:value={opencodeUrl}
                   />
                 </label>
-                <p class="hint">
+                <p class="hint m-0 text-[0.72rem] text-muted-foreground">
                   Leave empty to check the default server at 127.0.0.1:4096.
                 </p>
               {/if}
             </fieldset>
-            <label class="field">
-              <span class="field-label">Server password (optional)</span>
-              <input
-                class="input"
+            <label class="field flex flex-col gap-[0.125rem]">
+              <span class="field-label text-[0.72rem] text-muted-foreground">Server password (optional)</span>
+              <Input
+                class="input h-auto rounded px-[0.625rem] py-2 text-[0.8125rem]"
                 type="password"
                 autocomplete="off"
                 placeholder="stored in OS keyring (type to change)"
                 bind:value={opencodePassword}
               />
             </label>
-            <div class="row">
-              <button class="link" type="button" onclick={() => void clearOpencodePassword()}>
+            <div class="row flex flex-wrap items-center gap-3">
+              <Button variant="link" size="sm" class="link h-auto p-0 text-[0.72rem] underline" type="button" onclick={() => void clearOpencodePassword()}>
                 Remove stored password
-              </button>
+              </Button>
             </div>
           {/if}
         </fieldset>
 
-        <fieldset class="group">
-          <legend class="legend">OpenRouter</legend>
-          <label class="field">
-            <span class="field-label">API key</span>
-            <input
-              class="input"
+        <fieldset class="group m-0 flex min-w-0 flex-col gap-[0.625rem] rounded-xl border border-border bg-muted/30 px-4 pb-4 pt-[0.9rem]">
+          <legend class="legend px-[0.35rem] text-xs font-semibold text-muted-foreground">OpenRouter</legend>
+          <label class="field flex flex-col gap-[0.125rem]">
+            <span class="field-label text-[0.72rem] text-muted-foreground">API key</span>
+            <Input
+              class="input h-auto rounded px-[0.625rem] py-2 text-[0.8125rem]"
               type="password"
               autocomplete="off"
               placeholder="stored in OS keyring (type to change)"
               bind:value={openrouterKey}
             />
           </label>
-          <div class="row">
-            <button class="link" type="button" onclick={() => void clearOpenrouterKey()}>
+          <div class="row flex flex-wrap items-center gap-3">
+            <Button variant="link" size="sm" class="link h-auto p-0 text-[0.72rem] underline" type="button" onclick={() => void clearOpenrouterKey()}>
               Remove stored API key
-            </button>
+            </Button>
           </div>
-          <label class="field">
-            <span class="field-label">Default model</span>
-            <input
-              class="input"
+          <label class="field flex flex-col gap-[0.125rem]">
+            <span class="field-label text-[0.72rem] text-muted-foreground">Default model</span>
+            <Input
+              class="input h-auto rounded px-[0.625rem] py-2 text-[0.8125rem]"
               type="text"
               list="ai-openrouter-models"
               placeholder="anthropic/claude-sonnet-4.5"
@@ -509,396 +527,47 @@
             {/each}
           </datalist>
           {#if modelsError}
-            <p class="hint error-text">Model list unavailable: {modelsError}</p>
+            <p class="hint error-text m-0 text-[0.72rem] text-destructive">Model list unavailable: {modelsError}</p>
           {/if}
         </fieldset>
 
-        <fieldset class="group">
-          <legend class="legend">Behavior</legend>
-          <label class="radio">
-            <input type="checkbox" bind:checked={allowFallback} />
+        <fieldset class="group m-0 flex min-w-0 flex-col gap-[0.625rem] rounded-xl border border-border bg-muted/30 px-4 pb-4 pt-[0.9rem]">
+          <legend class="legend px-[0.35rem] text-xs font-semibold text-muted-foreground">Behavior</legend>
+          <label class="radio flex cursor-pointer items-baseline gap-[0.375rem] text-[0.8125rem]">
+            <Checkbox bind:checked={allowFallback} />
             <span>
               Fall back to the other backend when the preferred one is
               unavailable
             </span>
           </label>
-          <p class="hint">
+          <p class="hint m-0 text-[0.72rem] text-muted-foreground">
             Repositories opt in to AI features individually (asked on first
             use of an AI feature). Secrets live in the OS keyring; the rest
             stays in local app settings.
           </p>
         </fieldset>
 
-        <div class="status" role="status">
-          <button class="secondary" type="button" disabled={testing} onclick={() => void testConnection()}>
+        <div class="status mb-0 mt-1 flex items-center gap-3 border-b border-t border-border py-3 max-[36rem]:flex-col max-[36rem]:items-stretch" role="status">
+          <Button variant="outline" size="sm" class="secondary rounded-full px-4 text-primary" type="button" disabled={testing} onclick={() => void testConnection()}>
             {#if testing}Checking…{:else}Check connections{/if}
-          </button>
-          <ul class="status-list">
+          </Button>
+          <ul class="status-list m-0 flex list-none flex-col gap-[0.125rem] p-0 text-[0.72rem] text-muted-foreground">
             {#each AI_BACKENDS as backend (backend)}
               <li>
-                <span class="mono">{backend}</span>: {statusLine(backend)}
+                <span class="mono font-mono">{backend}</span>: {statusLine(backend)}
               </li>
             {/each}
           </ul>
         </div>
         </div>
 
-        <div class="actions">
-          <button class="primary" type="submit" disabled={saving}>
+        <div class="actions flex flex-none justify-end gap-2 pt-3">
+          <Button variant="default" size="sm" class="primary rounded-full px-4" type="submit" disabled={saving}>
             {#if saving}Saving…{:else}Save{/if}
-          </button>
-          <button class="secondary" type="button" onclick={close}>Cancel</button>
+          </Button>
+          <Button variant="outline" size="sm" class="secondary rounded-full px-4 text-primary" type="button" onclick={close}>Cancel</Button>
         </div>
       </form>
-    </div>
-  </div>
+    </Dialog.Content>
+  </Dialog.Root>
 {/if}
-
-<style>
-  .scrim {
-    position: fixed;
-    inset: 0;
-    z-index: 60;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    overflow-y: auto;
-    padding: 1rem;
-    background: color-mix(in srgb, var(--m3-scrim, black) 40%, transparent);
-  }
-
-  .dialog {
-    width: min(42rem, 100%);
-    max-height: calc(100dvh - 2rem);
-    display: flex;
-    flex-direction: column;
-    box-sizing: border-box;
-    background: var(--m3-surface-container-high, var(--m3-surface));
-    color: var(--m3-on-surface);
-    border-radius: var(--m3-shape-large, 16px);
-    padding: 1.25rem;
-    box-shadow: 0 8px 32px color-mix(in srgb, black 35%, transparent);
-  }
-
-  .dialog-header {
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 1rem;
-    flex: none;
-    margin-bottom: 1.125rem;
-  }
-
-  .title {
-    margin: 0;
-    font-size: 1.2rem;
-    font-weight: 600;
-  }
-
-  .subtitle {
-    margin: 0.25rem 0 0;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    font-size: 0.8125rem;
-  }
-
-  .icon-button {
-    display: grid;
-    flex: none;
-    place-items: center;
-    width: 2rem;
-    height: 2rem;
-    border: 0;
-    border-radius: 50%;
-    background: transparent;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    font: inherit;
-    font-size: 1.35rem;
-    line-height: 1;
-    cursor: pointer;
-  }
-
-  .icon-button:hover {
-    background: var(--m3-surface-container-highest, var(--m3-surface));
-  }
-
-  .form {
-    flex: 1;
-    min-height: 0;
-    display: flex;
-    flex-direction: column;
-  }
-
-  /* Only this region scrolls — the header above and the actions row below
-     stay pinned regardless of how much settings content overflows. */
-  .dialog-body {
-    flex: 1;
-    min-height: 0;
-    overflow-y: auto;
-    display: flex;
-    flex-direction: column;
-    gap: 0.75rem;
-  }
-
-  .group {
-    min-width: 0;
-    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    border-radius: var(--m3-shape-medium, 12px);
-    margin: 0;
-    padding: 0.9rem 1rem 1rem;
-    display: flex;
-    flex-direction: column;
-    gap: 0.625rem;
-    background: color-mix(in srgb, var(--m3-surface-container-low, var(--m3-surface)) 58%, transparent);
-  }
-
-  .legend {
-    padding: 0 0.35rem;
-    font-size: 0.75rem;
-    font-weight: 600;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-  }
-
-  .backend-option {
-    display: grid;
-    grid-template-columns: auto minmax(0, 1fr) minmax(8rem, auto);
-    align-items: center;
-    gap: 0.75rem;
-    min-height: 3.25rem;
-    padding: 0.65rem 0.75rem;
-    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    border-radius: var(--m3-shape-small, 8px);
-    cursor: pointer;
-  }
-
-  .backend-option.chosen {
-    border-color: var(--m3-primary);
-    background: color-mix(in srgb, var(--m3-primary) 7%, transparent);
-  }
-
-  .backend-option input {
-    accent-color: var(--m3-primary);
-    margin: 0;
-  }
-
-  .backend-copy,
-  .backend-status {
-    display: flex;
-    min-width: 0;
-    flex-direction: column;
-    gap: 0.15rem;
-  }
-
-  .backend-copy strong {
-    font-size: 0.875rem;
-    font-weight: 600;
-  }
-
-  .backend-copy span,
-  .backend-status {
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    font-size: 0.72rem;
-  }
-
-  .backend-status {
-    max-width: 14rem;
-    overflow-wrap: anywhere;
-    text-align: right;
-  }
-
-  .backend-status.ok {
-    color: var(--m3-primary);
-  }
-
-  .backend-status.down,
-  .backend-status.unauthenticated {
-    color: var(--m3-error, inherit);
-  }
-
-  .radio {
-    display: flex;
-    align-items: baseline;
-    gap: 0.375rem;
-    font-size: 0.8125rem;
-    cursor: pointer;
-  }
-
-  .radio input {
-    accent-color: var(--m3-primary);
-    margin: 0;
-  }
-
-  .field {
-    display: flex;
-    flex-direction: column;
-    gap: 0.125rem;
-  }
-
-  .field-label {
-    font-size: 0.72rem;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-  }
-
-  .input {
-    font: inherit;
-    font-size: 0.8125rem;
-    color: var(--m3-on-surface);
-    background: var(--m3-surface-container-lowest, var(--m3-surface));
-    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    border-radius: var(--m3-shape-extra-small, 4px);
-    padding: 0.5rem 0.625rem;
-  }
-
-  .input:focus-visible {
-    outline: 2px solid var(--m3-primary);
-    outline-offset: -1px;
-  }
-
-  .hint {
-    margin: 0;
-    font-size: 0.72rem;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-  }
-
-  .hint.warn {
-    color: var(--m3-error, inherit);
-  }
-
-  .status-line {
-    margin: 0;
-    font-size: 0.8125rem;
-    color: var(--m3-on-surface);
-    overflow-wrap: anywhere;
-  }
-
-  .group.inner {
-    margin: 0.25rem 0 0 0.875rem;
-    border-left: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    padding-left: 0.625rem;
-    border-top: 0;
-    border-right: 0;
-    border-bottom: 0;
-    border-radius: 0;
-    background: none;
-  }
-
-  .advanced-toggle {
-    margin-top: 0.25rem;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-  }
-
-  .error-text {
-    color: var(--m3-error, inherit);
-  }
-
-  .row {
-    display: flex;
-    align-items: center;
-    flex-wrap: wrap;
-    gap: 0.75rem;
-  }
-
-  .link {
-    border: none;
-    background: none;
-    color: var(--m3-primary);
-    font: inherit;
-    font-size: 0.72rem;
-    padding: 0;
-    cursor: pointer;
-    text-decoration: underline;
-  }
-
-  .status {
-    display: flex;
-    align-items: center;
-    gap: 0.75rem;
-    margin: 0.25rem 0 0;
-    padding: 0.75rem 0;
-    border-top: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    border-bottom: 1px solid var(--m3-outline-variant, var(--m3-primary));
-  }
-
-  .status-list {
-    margin: 0;
-    padding: 0;
-    list-style: none;
-    font-size: 0.72rem;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    display: flex;
-    flex-direction: column;
-    gap: 0.125rem;
-  }
-
-  .mono {
-    font-family: ui-monospace, Consolas, monospace;
-  }
-
-  .actions {
-    flex: none;
-    display: flex;
-    justify-content: flex-end;
-    gap: 0.5rem;
-    padding-top: 0.75rem;
-  }
-
-  .primary,
-  .secondary {
-    font: inherit;
-    font-size: 0.8125rem;
-    padding: 0.35rem 1rem;
-    border-radius: var(--m3-shape-full, 9999px);
-    cursor: pointer;
-    border: none;
-  }
-
-  .primary {
-    background: var(--m3-primary);
-    color: var(--m3-on-primary);
-  }
-
-  .primary:disabled,
-  .secondary:disabled {
-    cursor: not-allowed;
-    opacity: 0.55;
-  }
-
-  .secondary {
-    background: none;
-    color: var(--m3-primary);
-    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
-  }
-
-  .primary:focus-visible,
-  .secondary:focus-visible,
-  .link:focus-visible,
-  .icon-button:focus-visible {
-    outline: 2px solid var(--m3-primary);
-    outline-offset: 1px;
-  }
-
-  @media (max-width: 36rem) {
-    .scrim {
-      align-items: flex-start;
-      padding: 0.5rem;
-    }
-
-    .dialog {
-      max-height: calc(100dvh - 1rem);
-      padding: 1rem;
-    }
-
-    .backend-option {
-      grid-template-columns: auto minmax(0, 1fr);
-    }
-
-    .backend-status {
-      grid-column: 2;
-      text-align: left;
-    }
-
-    .status {
-      align-items: stretch;
-      flex-direction: column;
-    }
-  }
-</style>

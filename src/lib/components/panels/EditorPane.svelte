@@ -25,7 +25,9 @@
   import CommitDetail from "$lib/components/panels/CommitDetail.svelte";
   import DiffViewer from "$lib/components/diff/DiffViewer.svelte";
   import Icon from "$lib/components/icons/Icon.svelte";
-  import { IconButton, Spinner } from "$lib/components/m3";
+  import { Button } from "$lib/components/ui/button/index.js";
+  import { Spinner } from "$lib/components/ui/spinner/index.js";
+  import { Kbd } from "$lib/components/ui/kbd/index.js";
   import iconTree from "@ktibow/iconset-material-symbols/account-tree";
   import iconPrev from "@ktibow/iconset-material-symbols/arrow-upward";
   import iconNext from "@ktibow/iconset-material-symbols/arrow-downward";
@@ -153,11 +155,17 @@
   );
 </script>
 
-<div class="editor" aria-label="Editor">
+<div
+  class="editor flex h-full min-h-0 min-w-0 flex-col bg-card [&>*]:min-h-0 [&>*]:flex-1"
+  aria-label="Editor"
+>
   {#if actionRunId !== null}
     {#await import("$lib/components/actions/ActionRunView.svelte")}
-      <p class="estate estate-loading" role="status">
-        <Spinner size={14} />
+      <p
+        class="estate estate-loading m-auto inline-flex items-center gap-[0.4rem] text-[0.8125rem] text-muted-foreground"
+        role="status"
+      >
+        <Spinner class="size-[14px]" role="presentation" aria-hidden="true" />
         Loading action run…
       </p>
     {:then ActionRunViewModule}
@@ -170,8 +178,11 @@
     {/await}
   {:else if workflowRunId !== null}
     {#await import("$lib/components/forge/WorkflowRunView.svelte")}
-      <p class="estate estate-loading" role="status">
-        <Spinner size={14} />
+      <p
+        class="estate estate-loading m-auto inline-flex items-center gap-[0.4rem] text-[0.8125rem] text-muted-foreground"
+        role="status"
+      >
+        <Spinner class="size-[14px]" role="presentation" aria-hidden="true" />
         Loading run…
       </p>
     {:then WorkflowRunViewModule}
@@ -207,8 +218,11 @@
     />
   {:else if files && files.openFiles.length > 0}
     {#await import("$lib/components/files/FileWorkspace.svelte")}
-      <p class="estate estate-loading" role="status">
-        <Spinner size={14} />
+      <p
+        class="estate estate-loading m-auto inline-flex items-center gap-[0.4rem] text-[0.8125rem] text-muted-foreground"
+        role="status"
+      >
+        <Spinner class="size-[14px]" role="presentation" aria-hidden="true" />
         Loading workspace…
       </p>
     {:then FileWorkspaceModule}
@@ -223,20 +237,30 @@
         onOpenDiff={(path) => onOpenDiffFile?.(path)}
       />
     {:catch err}
-      <p class="estate" role="alert">Failed to load the file workspace: {String(err)}</p>
+      <p class="estate m-auto text-[0.8125rem] text-muted-foreground" role="alert">Failed to load the file workspace: {String(err)}</p>
     {/await}
   {:else if entry}
-    <div class="file-editor">
-      <header class="ehead">
-        <span class="epath" title={entry.path}>
+    <div class="file-editor flex min-h-0 min-w-0 flex-col">
+      <header
+        class="ehead flex min-h-[1.9rem] flex-none items-center gap-[0.4rem] border-b border-border bg-popover px-[0.6rem] py-[0.15rem] text-[0.8125rem]"
+      >
+        <span
+          class="epath min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap font-mono text-[0.78rem] text-foreground"
+          title={entry.path}
+        >
           {#if entry.old_path}{entry.old_path} → {/if}{entry.path}
         </span>
         {#if repoName}
-          <span class="echip chip-repo" title={`Repository / Submodule: ${repoName}`}>{repoName}</span>
+          <span
+            class="echip chip-repo flex-none whitespace-nowrap rounded-full bg-accent px-[0.45rem] text-[0.625rem] leading-[1.5] text-muted-foreground"
+            title={`Repository / Submodule: ${repoName}`}
+          >{repoName}</span>
         {/if}
         <span
-          class="echip"
-          class:chip-staged={entry.index !== "unmodified"}
+          class="echip flex-none whitespace-nowrap rounded-full bg-accent px-[0.45rem] text-[0.625rem] leading-[1.5] {entry.index !==
+          "unmodified"
+            ? "text-accent-foreground"
+            : "text-muted-foreground"}"
           title={entry.index !== "unmodified"
             ? "This file has staged changes"
             : "Changes are not staged"}
@@ -244,102 +268,119 @@
           {entry.index !== "unmodified" ? "staged" : "unstaged"}
         </span>
         {#if entryCount > 1 && onPrevFile && onNextFile}
-          <span class="enav">
-            <IconButton
-              icon={iconPrev}
-              label="Previous changed file"
+          <span class="enav inline-flex flex-none items-center gap-[0.05rem]">
+            <Button
+              class="text-muted-foreground hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-[14px]"
+              variant="ghost"
+              size="icon-sm"
+              type="button"
+              aria-label="Previous changed file"
               title="Previous changed file"
-              size={14}
               disabled={entryIndex === null}
               onclick={onPrevFile}
-            />
+            >
+              <Icon icon={iconPrev} size={14} />
+            </Button>
             <span
-              class="epos"
+              class="epos min-w-[3.2rem] whitespace-nowrap text-center text-[0.65rem] tabular-nums text-muted-foreground"
               aria-label={`File ${entryIndex === null ? "?" : entryIndex + 1} of ${entryCount}`}
             >
               {(entryIndex ?? 0) + 1} / {entryCount}
             </span>
-            <IconButton
-              icon={iconNext}
-              label="Next changed file"
+            <Button
+              class="text-muted-foreground hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-[14px]"
+              variant="ghost"
+              size="icon-sm"
+              type="button"
+              aria-label="Next changed file"
               title="Next changed file"
-              size={14}
               disabled={entryIndex === null}
               onclick={onNextFile}
-            />
+            >
+              <Icon icon={iconNext} size={14} />
+            </Button>
           </span>
         {/if}
         {#if onStageEntry}
           {#if entry.index === "unmodified"}
-            <button
-              class="ebtn"
+            <Button
+              class="h-[1.35rem] flex-none rounded-sm px-[0.4rem] text-[0.6875rem] leading-[1.5] font-normal"
+              variant="outline"
               type="button"
               title="Stage this file (move its changes into the commit)"
               onclick={() => onStageEntry?.(false)}
             >
               Stage
-            </button>
+            </Button>
           {:else}
-            <button
-              class="ebtn"
+            <Button
+              class="h-[1.35rem] flex-none rounded-sm px-[0.4rem] text-[0.6875rem] leading-[1.5] font-normal"
+              variant="outline"
               type="button"
               title="Unstage this file (keep the worktree changes)"
               onclick={() => onStageEntry?.(true)}
             >
               Unstage
-            </button>
+            </Button>
           {/if}
         {/if}
         {#if onDiscardEntry && entry.worktree !== "unmodified"}
-          <button
-            class="ebtn ebtn-danger"
+          <Button
+            class="h-[1.35rem] flex-none rounded-sm px-[0.4rem] text-[0.6875rem] leading-[1.5] font-normal"
+            variant="destructive"
             type="button"
             title="Discard this file's changes (a safety checkpoint is created first)"
             onclick={onDiscardEntry}
           >
             Discard
-          </button>
+          </Button>
         {/if}
         {#if onEditEntry}
-          <button
-            class="ebtn"
+          <Button
+            class="h-[1.35rem] flex-none rounded-sm px-[0.4rem] text-[0.6875rem] leading-[1.5] font-normal"
+            variant="outline"
             type="button"
             title="Edit this file in the file workspace"
             onclick={onEditEntry}
           >
             Edit
-          </button>
+          </Button>
         {/if}
         {#if onPopoutDiff}
-          <button
-            class="ebtn"
+          <Button
+            class="h-[1.35rem] flex-none rounded-sm px-[0.4rem] text-[0.6875rem] leading-[1.5] font-normal"
+            variant="outline"
             type="button"
             title="Open the diff panel in its own window"
             onclick={onPopoutDiff}
           >
             Pop out
-          </button>
+          </Button>
         {/if}
         {#if onClose}
-          <button
-            class="ebtn"
+          <Button
+            class="h-[1.35rem] flex-none rounded-sm px-[0.4rem] text-[0.6875rem] leading-[1.5] font-normal"
+            variant="outline"
             type="button"
             aria-label="Close diff"
             title="Close diff"
             onclick={onClose}
           >
             ×
-          </button>
+          </Button>
         {/if}
       </header>
-      <div class="ebody">
+      <div class="ebody flex min-h-0 flex-1 flex-col overflow-hidden">
         {#if diffLoading}
-          <p class="estate estate-loading" role="status">
-            <Spinner size={14} />
+          <p
+            class="estate estate-loading m-auto inline-flex items-center gap-[0.4rem] text-[0.8125rem] text-muted-foreground"
+            role="status"
+          >
+            <Spinner class="size-[14px]" role="presentation" aria-hidden="true" />
             Loading diff…
           </p>
         {:else if diffFiles.length === 0}
-          <p class="estate">No diff against HEAD for this file.</p>
+          <p class="estate m-auto text-[0.8125rem] text-muted-foreground">No diff against HEAD for this file.</p>
         {:else}
           <DiffViewer
             files={diffFiles}
@@ -352,20 +393,32 @@
       </div>
     </div>
   {:else}
-    <div class="welcome">
-      <span class="wicon" aria-hidden="true"><Icon icon={iconTree} size={22} /></span>
-      <p class="wtitle">Nothing open</p>
+    <div
+      class="welcome flex min-h-0 flex-1 select-none flex-col items-center justify-center gap-[0.4rem] p-8 text-center text-muted-foreground"
+    >
+      <span
+        class="wicon inline-flex h-[2.75rem] w-[2.75rem] items-center justify-center rounded-full border border-border bg-card text-primary"
+        aria-hidden="true"
+      ><Icon icon={iconTree} size={22} /></span>
+      <p class="wtitle m-0 text-sm font-medium text-foreground">Nothing open</p>
       {#if status}
-        <div class="wsummary" aria-label="Repository summary">
-          <span class="wchip wbranch">{branchLabel}</span>
-          <span class="wchip">
+        <div
+          class="wsummary mt-[0.15rem] flex flex-wrap items-center justify-center gap-[0.35rem]"
+          aria-label="Repository summary"
+        >
+          <span
+            class="wchip wbranch inline-flex items-center gap-[0.2rem] whitespace-nowrap rounded-full border border-primary/35 px-[0.5rem] py-[0.1rem] font-mono text-[0.6875rem] leading-[1.4] tabular-nums text-primary"
+          >{branchLabel}</span>
+          <span
+            class="wchip inline-flex items-center gap-[0.2rem] whitespace-nowrap rounded-full border border-border px-[0.5rem] py-[0.1rem] text-[0.6875rem] leading-[1.4] tabular-nums"
+          >
             {changeCount === 0
               ? "Clean working tree"
               : `${changeCount} changed ${changeCount === 1 ? "file" : "files"}`}
           </span>
           {#if status.ahead > 0}
             <span
-              class="wchip wahead"
+              class="wchip wahead inline-flex items-center gap-[0.2rem] whitespace-nowrap rounded-full border border-transparent bg-accent px-[0.5rem] py-[0.1rem] text-[0.6875rem] leading-[1.4] tabular-nums text-accent-foreground"
               title={`${status.ahead} ${status.ahead === 1 ? "commit" : "commits"} to push`}
             >
               ↑ {status.ahead} to push
@@ -373,7 +426,7 @@
           {/if}
           {#if status.behind > 0}
             <span
-              class="wchip wbehind"
+              class="wchip wbehind inline-flex items-center gap-[0.2rem] whitespace-nowrap rounded-full border border-transparent bg-muted px-[0.5rem] py-[0.1rem] text-[0.6875rem] leading-[1.4] tabular-nums text-muted-foreground"
               title={`${status.behind} ${status.behind === 1 ? "commit" : "commits"} to pull`}
             >
               ↓ {status.behind} to pull
@@ -381,323 +434,49 @@
           {/if}
         </div>
       {:else}
-        <p class="wloading" role="status">
-          <Spinner size={13} />
+        <p
+          class="wloading mt-[0.15rem] inline-flex items-center gap-[0.4rem] text-[0.6875rem]"
+          role="status"
+        >
+          <Spinner class="size-[13px]" role="presentation" aria-hidden="true" />
           Reading repository…
         </p>
       {/if}
-      <p class="wtext">
+      <p class="wtext m-0 max-w-[22rem] text-xs leading-[1.45]">
         Select a change in the source-control sidebar to see its diff, or pick
         a commit in history to inspect it.
       </p>
       {#if (changeCount > 0 && onOpenFirstChange) || onBrowseHistory}
-        <div class="wactions">
+        <div class="wactions mt-2 flex flex-wrap justify-center gap-2">
           {#if changeCount > 0 && onOpenFirstChange}
-            <button class="wact wact-primary" type="button" onclick={onOpenFirstChange}>
+            <Button
+              class="h-auto rounded-full px-[0.9rem] py-[0.3rem] text-[0.8125rem]"
+              type="button"
+              onclick={onOpenFirstChange}
+            >
               Open first change
-            </button>
+            </Button>
           {/if}
           {#if onBrowseHistory}
-            <button class="wact" type="button" onclick={onBrowseHistory}>
+            <Button
+              class="h-auto rounded-full px-[0.9rem] py-[0.3rem] text-[0.8125rem]"
+              variant="outline"
+              type="button"
+              onclick={onBrowseHistory}
+            >
               Browse history
-            </button>
+            </Button>
           {/if}
         </div>
       {/if}
-      <ul class="whints" aria-label="Keyboard shortcuts">
-        <li><kbd class="kbd">Ctrl</kbd>+<kbd class="kbd">Shift</kbd>+<kbd class="kbd">P</kbd><span>Command palette</span></li>
-        <li><kbd class="kbd">F5</kbd><span>Refresh repository</span></li>
-        <li><kbd class="kbd">Ctrl</kbd>+<kbd class="kbd">1</kbd><span>Focus source control</span></li>
+      <ul
+        class="whints mt-[0.9rem] flex list-none flex-wrap justify-center gap-x-[1.1rem] gap-y-[0.4rem] border-t border-border pt-[0.7rem] text-[0.6875rem] text-muted-foreground"
+        aria-label="Keyboard shortcuts"
+      >
+        <li class="inline-flex items-center gap-[0.15rem]"><Kbd>Ctrl</Kbd>+<Kbd>Shift</Kbd>+<Kbd>P</Kbd><span class="ml-[0.4rem]">Command palette</span></li>
+        <li class="inline-flex items-center gap-[0.15rem]"><Kbd>F5</Kbd><span class="ml-[0.4rem]">Refresh repository</span></li>
+        <li class="inline-flex items-center gap-[0.15rem]"><Kbd>Ctrl</Kbd>+<Kbd>1</Kbd><span class="ml-[0.4rem]">Focus source control</span></li>
       </ul>
     </div>
   {/if}
 </div>
-
-<style>
-  .editor {
-    display: flex;
-    flex-direction: column;
-    height: 100%;
-    min-height: 0;
-    min-width: 0;
-    background: var(--m3-surface);
-  }
-
-  /* CommitDetail / file editor fill the column. */
-  .editor > :global(*) {
-    flex: 1;
-    min-height: 0;
-  }
-
-  .file-editor {
-    display: flex;
-    flex-direction: column;
-    min-height: 0;
-    min-width: 0;
-  }
-
-  .ehead {
-    flex: none;
-    display: flex;
-    align-items: center;
-    gap: 0.4rem;
-    min-height: 1.9rem;
-    padding: 0.15rem 0.6rem;
-    background: var(--m3-surface-container, var(--m3-surface));
-    border-bottom: 1px solid var(--app-border, var(--m3-outline-variant));
-    font-size: 0.8125rem;
-  }
-
-  .epath {
-    flex: 1;
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    font-family: var(--app-font-mono, ui-monospace, Consolas, monospace);
-    font-size: 0.78rem;
-    color: var(--m3-on-surface);
-  }
-
-  .echip {
-    flex: none;
-    border-radius: var(--m3-shape-full, 9999px);
-    background: var(--app-active, var(--m3-surface-container-high));
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    font-size: 0.625rem;
-    line-height: 1.5;
-    padding: 0 0.45rem;
-    white-space: nowrap;
-  }
-
-  /* Staged state in the header (was only visible via row color). */
-  .echip.chip-staged {
-    background: var(--m3-primary-container, var(--m3-surface-container-high));
-    color: var(--m3-on-primary-container, var(--m3-primary));
-  }
-
-  /* Prev/next changed-file navigation. */
-  .enav {
-    flex: none;
-    display: inline-flex;
-    align-items: center;
-    gap: 0.05rem;
-  }
-
-  .epos {
-    min-width: 3.2rem;
-    text-align: center;
-    font-size: 0.65rem;
-    font-variant-numeric: tabular-nums;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    white-space: nowrap;
-  }
-
-  .ebody {
-    flex: 1;
-    min-height: 0;
-    display: flex;
-    flex-direction: column;
-    overflow: hidden;
-  }
-
-  .ebtn {
-    flex: none;
-    padding: 0.05rem 0.4rem;
-    color: var(--m3-on-surface-variant);
-    background: none;
-    border: 1px solid var(--app-border, var(--m3-outline-variant));
-    border-radius: var(--m3-shape-extra-small, 4px);
-    font: inherit;
-    font-size: 0.6875rem;
-    line-height: 1.5;
-    cursor: pointer;
-  }
-
-  .ebtn:hover {
-    background: var(--app-hover, var(--m3-surface-container-high, var(--m3-surface)));
-    color: var(--m3-on-surface);
-  }
-
-  .ebtn-danger {
-    color: var(--m3-error, var(--m3-on-surface-variant));
-  }
-
-  .ebtn-danger:hover {
-    color: var(--m3-error);
-    background: var(--m3-error-container, var(--m3-surface-container-high));
-  }
-
-  .ebtn:focus-visible {
-    outline: 2px solid var(--m3-primary);
-    outline-offset: 1px;
-  }
-
-  .estate {
-    color: var(--m3-on-surface-variant);
-    font-size: 0.75rem;
-  }
-
-  p.estate {
-    margin: auto;
-    font-size: 0.8125rem;
-  }
-
-  p.estate-loading {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.4rem;
-  }
-
-  .welcome {
-    flex: 1;
-    min-height: 0;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    gap: 0.4rem;
-    padding: 2rem;
-    text-align: center;
-    color: var(--m3-on-surface-variant);
-    user-select: none;
-  }
-
-  .wicon {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 2.75rem;
-    height: 2.75rem;
-    border: 1px solid var(--app-border, var(--m3-outline-variant));
-    border-radius: var(--m3-shape-full, 9999px);
-    color: var(--m3-primary);
-    background: var(--m3-surface-container-low, var(--m3-surface));
-  }
-
-  .wtitle {
-    margin: 0;
-    font-size: 0.875rem;
-    font-weight: 500;
-    color: var(--m3-on-surface);
-  }
-
-  .wtext {
-    margin: 0;
-    max-width: 22rem;
-    font-size: 0.75rem;
-    line-height: 1.45;
-  }
-
-  .wsummary {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    justify-content: center;
-    gap: 0.35rem;
-    margin-top: 0.15rem;
-  }
-
-  .wchip {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.2rem;
-    padding: 0.1rem 0.5rem;
-    border: 1px solid var(--app-border, var(--m3-outline-variant));
-    border-radius: var(--m3-shape-full, 9999px);
-    font-size: 0.6875rem;
-    line-height: 1.4;
-    white-space: nowrap;
-    font-variant-numeric: tabular-nums;
-  }
-
-  .wbranch {
-    font-family: var(--app-font-mono, ui-monospace, Consolas, monospace);
-    color: var(--m3-primary);
-    border-color: color-mix(in srgb, var(--m3-primary) 35%, transparent);
-  }
-
-  .wahead {
-    background: var(--m3-primary-container, var(--m3-surface-container-high));
-    color: var(--m3-on-primary-container, var(--m3-primary));
-    border-color: transparent;
-  }
-
-  .wbehind {
-    background: var(--m3-tertiary-container, var(--m3-surface-container-high));
-    color: var(--m3-on-tertiary-container, var(--m3-tertiary));
-    border-color: transparent;
-  }
-
-  .wloading {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.4rem;
-    margin: 0.15rem 0 0;
-    font-size: 0.6875rem;
-  }
-
-  /* Empty-state actions (UI review P2 #8): give the welcome pane something
-     to do instead of only pointing at the sidebars. */
-  .wactions {
-    display: flex;
-    flex-wrap: wrap;
-    justify-content: center;
-    gap: 0.5rem;
-    margin-top: 0.5rem;
-  }
-
-  .wact {
-    padding: 0.3rem 0.9rem;
-    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    border-radius: var(--m3-shape-full, 9999px);
-    background: none;
-    color: var(--m3-on-surface);
-    font: inherit;
-    font-size: 0.8125rem;
-    cursor: pointer;
-  }
-
-  .wact:hover {
-    background: var(--m3-surface-container-high, var(--m3-surface));
-  }
-
-  .wact-primary {
-    background: var(--m3-primary);
-    border-color: transparent;
-    color: var(--m3-on-primary);
-  }
-
-  .wact-primary:hover {
-    background: var(--m3-primary);
-    filter: brightness(1.06);
-  }
-
-  .wact:focus-visible {
-    outline: 2px solid var(--m3-primary);
-    outline-offset: 1px;
-  }
-
-  .whints {
-    display: flex;
-    flex-wrap: wrap;
-    justify-content: center;
-    gap: 0.4rem 1.1rem;
-    margin: 0.9rem 0 0;
-    padding: 0.7rem 0 0;
-    border-top: 1px solid var(--app-border, var(--m3-outline-variant));
-    list-style: none;
-    font-size: 0.6875rem;
-    color: var(--m3-on-surface-variant);
-  }
-
-  .whints li {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.15rem;
-  }
-
-  .whints li span {
-    margin-left: 0.4rem;
-  }
-</style>

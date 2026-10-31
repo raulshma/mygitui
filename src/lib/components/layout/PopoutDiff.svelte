@@ -12,6 +12,7 @@
   import type { FileDiff, RepoId } from "$lib/ipc/types";
   import { onRepoChange } from "$lib/events/repoEvents";
   import DiffViewer from "$lib/components/diff/DiffViewer.svelte";
+  import { Button } from "$lib/components/ui/button/index.js";
 
   let { repoId }: { repoId: RepoId } = $props();
 
@@ -58,100 +59,41 @@
   });
 </script>
 
-<section class="popout-diff">
-  <header class="bar">
-    <span class="title">Working tree diff</span>
-    <span class="spacer"></span>
+<section
+  class="popout-diff flex h-screen min-h-0 flex-col bg-card text-card-foreground"
+>
+  <header
+    class="bar flex flex-none items-center gap-2 border-b border-border bg-popover px-3 py-[0.3rem] text-[0.8125rem]"
+  >
+    <span class="title font-medium">Working tree diff</span>
+    <span class="spacer flex-1"></span>
     {#if loading}
-      <span class="state" role="status">Loading…</span>
+      <span class="state text-muted-foreground" role="status">Loading…</span>
     {:else if error}
-      <span class="state err" role="alert">{error}</span>
+      <span class="state err text-destructive" role="alert">{error}</span>
     {:else}
-      <span class="state" role="status">{files.length} file{files.length === 1 ? "" : "s"}</span>
+      <span class="state text-muted-foreground" role="status"
+        >{files.length} file{files.length === 1 ? "" : "s"}</span
+      >
     {/if}
-    <button class="refresh" type="button" onclick={() => (reload += 1)}>
+    <Button
+      class="refresh h-auto flex-none rounded-full px-[0.6rem] py-[0.1rem] text-[0.72rem] hover:bg-accent hover:text-card-foreground focus-visible:bg-accent focus-visible:outline-2 focus-visible:outline-primary focus-visible:-outline-offset-2 focus-visible:ring-0"
+      variant="outline"
+      size="sm"
+      type="button"
+      onclick={() => (reload += 1)}
+    >
       Refresh
-    </button>
+    </Button>
   </header>
 
   {#if error && files.length === 0}
-    <p class="empty">Could not load the diff.</p>
+    <p class="empty px-4 py-8 text-center text-muted-foreground">
+      Could not load the diff.
+    </p>
   {:else}
-    <div class="viewer">
+    <div class="viewer flex min-h-0 flex-1 flex-col [&>*]:min-h-0 [&>*]:flex-1">
       <DiffViewer {files} />
     </div>
   {/if}
 </section>
-
-<style>
-  .popout-diff {
-    display: flex;
-    flex-direction: column;
-    height: 100vh;
-    min-height: 0;
-    background: var(--m3-surface);
-    color: var(--m3-on-surface);
-  }
-
-  .bar {
-    flex: none;
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    padding: 0.3rem 0.75rem;
-    border-bottom: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    background: var(--m3-surface-container, var(--m3-surface));
-    font-size: 0.8125rem;
-  }
-
-  .title {
-    font-weight: 500;
-  }
-
-  .spacer {
-    flex: 1;
-  }
-
-  .state {
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-  }
-
-  .state.err {
-    color: var(--m3-error, red);
-  }
-
-  .refresh {
-    flex: none;
-    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    border-radius: var(--m3-shape-full, 9999px);
-    background: none;
-    color: var(--m3-on-surface, inherit);
-    font: inherit;
-    font-size: 0.72rem;
-    padding: 0.1rem 0.6rem;
-    cursor: pointer;
-  }
-
-  .refresh:hover,
-  .refresh:focus-visible {
-    background: var(--m3-surface-container-high, var(--m3-surface));
-  }
-
-  .empty {
-    padding: 2rem 1rem;
-    text-align: center;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-  }
-
-  .viewer {
-    flex: 1;
-    min-height: 0;
-    display: flex;
-    flex-direction: column;
-  }
-
-  .viewer > :global(*) {
-    flex: 1;
-    min-height: 0;
-  }
-</style>

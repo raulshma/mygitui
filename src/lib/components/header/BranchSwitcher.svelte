@@ -60,7 +60,8 @@
   import ConfirmDialog from "$lib/components/safety/ConfirmDialog.svelte";
   import PromptDialog from "$lib/components/safety/PromptDialog.svelte";
   import Icon from "$lib/components/icons/Icon.svelte";
-  import { IconButton } from "$lib/components/m3";
+  import { Button } from "$lib/components/ui/button/index.js";
+  import { Input } from "$lib/components/ui/input/index.js";
   import iconBranch from "@ktibow/iconset-material-symbols/account-tree";
   import iconChevronDown from "@ktibow/iconset-material-symbols/expand-more";
   import iconSearch from "@ktibow/iconset-material-symbols/search";
@@ -97,9 +98,9 @@
   let error = $state<string | null>(null);
   let fetchBusy = $state(false);
 
-  let triggerEl = $state<HTMLButtonElement | undefined>(undefined);
-  let inputEl = $state<HTMLInputElement | undefined>(undefined);
-  let popoverEl = $state<HTMLElement | undefined>(undefined);
+  let triggerEl = $state<HTMLButtonElement | null>(null);
+  let inputEl = $state<HTMLInputElement | null>(null);
+  let popoverEl = $state<HTMLElement | null>(null);
 
   /** Row-menu-driven rename (PromptDialog keyed on the branch's old name). */
   let renaming = $state<{ old: string } | null>(null);
@@ -478,9 +479,10 @@
   }
 </script>
 
-<button
-  bind:this={triggerEl}
-  class="branch-chip"
+<Button
+  bind:ref={triggerEl}
+  class="branch-chip h-auto max-w-64 min-w-0 flex-none gap-1 rounded-full px-[0.45rem] py-[0.1rem] font-mono text-[0.6875rem] focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-1 hover:brightness-[1.08] [&_svg]:flex-none"
+  variant="secondary"
   type="button"
   title="Switch branch"
   aria-label="Switch branch"
@@ -489,22 +491,24 @@
   onclick={toggle}
 >
   <Icon icon={iconBranch} size={12} />
-  <span class="branch-label">{chipLabel}</span>
+  <span class="branch-label min-w-0 truncate">{chipLabel}</span>
   <Icon icon={iconChevronDown} size={10} />
-</button>
+</Button>
 
 {#if open}
   <div
     bind:this={popoverEl}
-    class="popover"
+    class="popover fixed z-60 flex max-h-[min(32rem,calc(100vh-1.5rem))] w-[22rem] max-w-[calc(100vw-1rem)] flex-col overflow-hidden rounded-md border border-border bg-popover text-[0.8125rem] text-popover-foreground shadow-md"
     role="dialog"
     aria-label="Branch switcher"
-    use:floating={{ anchor: triggerEl, gap: 6 }}
+    use:floating={{ anchor: triggerEl ?? undefined, gap: 6 }}
   >
-    <div class="search-row">
+    <div
+      class="search-row flex flex-none items-center gap-[0.4rem] border-b border-border px-[0.7rem] py-[0.55rem] text-muted-foreground"
+    >
       <Icon icon={iconSearch} size={14} />
-      <input
-        class="search"
+      <Input
+        class="search h-auto min-w-0 flex-1 rounded-none border-0 bg-transparent px-0 text-[0.8125rem] shadow-none focus-visible:border-0 focus-visible:ring-0 md:text-[0.8125rem]"
         type="text"
         role="combobox"
         aria-expanded="true"
@@ -515,13 +519,15 @@
         aria-autocomplete="list"
         aria-label="Search or create branch"
         placeholder="Search or create branch"
-        bind:this={inputEl}
+        bind:ref={inputEl}
         bind:value={query}
         onkeydown={onInputKeydown}
       />
       {#if query !== ""}
-        <button
-          class="clear"
+        <Button
+          class="clear size-5 flex-none rounded-full"
+          variant="ghost"
+          size="icon-xs"
           type="button"
           aria-label="Clear search"
           title="Clear search"
@@ -531,34 +537,46 @@
           }}
         >
           <Icon icon={iconClose} size={12} />
-        </button>
+        </Button>
       {/if}
     </div>
 
     <ul
       id="branch-switcher-list"
-      class="rows"
+      class="rows m-0 min-h-0 flex-1 list-none overflow-y-auto px-0 pb-[0.4rem] pt-1 [&.busy]:pointer-events-none [&.busy_.row]:opacity-55"
       class:busy={controller.busy}
       role="listbox"
       aria-label="Branches"
     >
       {#if error}
-        <li class="state error" role="alert">
+        <li class="state error p-3 text-[0.8125rem] text-destructive" role="alert">
           {error} — use Refresh to retry.
         </li>
       {:else if loading && localList.length === 0 && remoteList.length === 0}
-        <li class="state" role="status">Loading branches…</li>
+        <li class="state p-3 text-[0.8125rem] text-muted-foreground" role="status">
+          Loading branches…
+        </li>
       {:else}
         {#each rows as row, i (rowKey(row))}
           {#if row.kind === "local" && rows[i - 1]?.kind !== "local"}
-            <li class="section" role="presentation">Local branches</li>
+            <li
+              class="section select-none px-3 pb-[0.2rem] pt-2 text-[0.6875rem] font-bold uppercase tracking-[0.08em] text-primary"
+              role="presentation"
+            >
+              Local branches
+            </li>
           {:else if row.kind === "remote" && rows[i - 1]?.kind !== "remote"}
-            <li class="section" role="presentation">Remote branches</li>
+            <li
+              class="section select-none px-3 pb-[0.2rem] pt-2 text-[0.6875rem] font-bold uppercase tracking-[0.08em] text-primary"
+              role="presentation"
+            >
+              Remote branches
+            </li>
           {/if}
           {#if row.kind === "create"}
             <li
               id={`branch-opt-${i}`}
-              class="row create-row"
+              class="row create-row mx-1 flex min-w-0 cursor-pointer flex-wrap items-center gap-[0.375rem] rounded-sm px-[0.4rem] py-1 text-primary hover:bg-accent [&.active]:bg-accent"
               class:active={i === activeIndex}
               role="option"
               aria-selected={i === activeIndex}
@@ -571,14 +589,19 @@
               }}
               onmouseenter={() => (activeIndex = i)}
             >
-              <span class="marker"></span>
-              <span class="create-icon"><Icon icon={iconAdd} size={14} /></span>
-              <span class="bname">Create branch "{row.name}"</span>
+              <span class="marker w-3.5 flex-none text-center text-primary"></span>
+              <span class="create-icon inline-flex flex-none items-center">
+                <Icon icon={iconAdd} size={14} />
+              </span>
+              <span
+                class="bname min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap font-mono text-xs font-medium text-primary"
+                >Create branch "{row.name}"</span
+              >
             </li>
           {:else if row.kind === "local"}
             <li
               id={`branch-opt-${i}`}
-              class="row"
+              class="row mx-1 flex min-w-0 cursor-pointer flex-wrap items-center gap-[0.375rem] rounded-sm px-[0.4rem] py-1 hover:bg-accent [&.head]:bg-secondary [&.head]:text-secondary-foreground [&.active]:bg-accent"
               class:head={row.branch.is_head}
               class:active={i === activeIndex}
               role="option"
@@ -594,41 +617,62 @@
               oncontextmenu={(event) => localMenu(event, row.branch)}
             >
               <span
-                class="marker"
+                class="marker w-3.5 flex-none text-center text-primary"
                 aria-label={row.branch.is_head ? "Current branch" : undefined}
                 title={row.branch.is_head ? "Current branch" : undefined}
               >
                 {row.branch.is_head ? "●" : ""}
               </span>
-              <span class="bname" title={row.branch.name}>{row.branch.name}</span>
-              <span class="sha">{row.branch.sha.slice(0, 7)}</span>
+              <span
+                class="bname max-w-44 min-w-12 flex-initial overflow-hidden text-ellipsis whitespace-nowrap font-mono text-xs font-semibold text-popover-foreground"
+                title={row.branch.name}
+              >
+                {row.branch.name}
+              </span>
+              <span class="sha flex-none font-mono text-[0.6875rem] text-muted-foreground">
+                {row.branch.sha.slice(0, 7)}
+              </span>
               {#if row.branch.upstream}
-                <span class="upstream" title={row.branch.upstream}>
+                <span
+                  class="upstream min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap font-mono text-[0.6875rem] text-muted-foreground"
+                  title={row.branch.upstream}
+                >
                   {row.branch.upstream}
                   {#if row.branch.ahead > 0 || row.branch.behind > 0}
-                    <span class="ab">↑{row.branch.ahead} ↓{row.branch.behind}</span>
+                    <span class="ab pl-1.5 text-primary"
+                      >↑{row.branch.ahead} ↓{row.branch.behind}</span
+                    >
                   {/if}
-                  {#if row.branch.gone}<span class="gone">gone</span>{/if}
+                  {#if row.branch.gone}
+                    <span
+                      class="gone ml-1.5 rounded-full border border-destructive px-[0.35rem] text-[0.625rem] text-destructive"
+                      >gone</span
+                    >
+                  {/if}
                 </span>
               {/if}
-              <span class="row-actions">
-                <IconButton
-                  icon={iconMore}
-                  label={`More actions for ${row.branch.name}`}
+              <span class="row-actions ml-auto flex flex-none items-center">
+                <Button
+                  class="relative size-6 after:absolute after:-inset-1 after:content-['']"
+                  variant="ghost"
+                  size="icon-xs"
+                  type="button"
+                  aria-label={`More actions for ${row.branch.name}`}
                   title="Switch, push, rename, or delete this branch"
-                  dense
                   aria-haspopup="menu"
                   onclick={(event) => {
                     event.stopPropagation();
                     localMenu(event, row.branch);
                   }}
-                />
+                >
+                  <Icon icon={iconMore} size={16} />
+                </Button>
               </span>
             </li>
           {:else}
             <li
               id={`branch-opt-${i}`}
-              class="row"
+              class="row mx-1 flex min-w-0 cursor-pointer flex-wrap items-center gap-[0.375rem] rounded-sm px-[0.4rem] py-1 hover:bg-accent [&.active]:bg-accent"
               class:active={i === activeIndex}
               role="option"
               aria-selected={i === activeIndex}
@@ -642,53 +686,81 @@
               onmouseenter={() => (activeIndex = i)}
               oncontextmenu={(event) => remoteMenu(event, row.rb)}
             >
-              <span class="marker" aria-hidden="true"></span>
-              <span class="bname" title="{row.rb.remote}/{row.rb.name}">
+              <span class="marker w-3.5 flex-none text-center text-primary" aria-hidden="true"></span>
+              <span
+                class="bname max-w-44 min-w-12 flex-initial overflow-hidden text-ellipsis whitespace-nowrap font-mono text-xs font-semibold text-popover-foreground"
+                title="{row.rb.remote}/{row.rb.name}"
+              >
                 {row.rb.remote}/{row.rb.name}
               </span>
-              <span class="sha">{row.rb.sha.slice(0, 7)}</span>
-              <span class="row-actions">
-                <IconButton
-                  icon={iconMore}
-                  label={`More actions for ${row.rb.remote}/${row.rb.name}`}
+              <span class="sha flex-none font-mono text-[0.6875rem] text-muted-foreground">
+                {row.rb.sha.slice(0, 7)}
+              </span>
+              <span class="row-actions ml-auto flex flex-none items-center">
+                <Button
+                  class="relative size-6 after:absolute after:-inset-1 after:content-['']"
+                  variant="ghost"
+                  size="icon-xs"
+                  type="button"
+                  aria-label={`More actions for ${row.rb.remote}/${row.rb.name}`}
                   title="Checkout, copy, or delete this remote branch"
-                  dense
                   aria-haspopup="menu"
                   onclick={(event) => {
                     event.stopPropagation();
                     remoteMenu(event, row.rb);
                   }}
-                />
+                >
+                  <Icon icon={iconMore} size={16} />
+                </Button>
               </span>
             </li>
           {/if}
         {/each}
         {#if rows.length === 0}
-          <li class="state" role="option" aria-selected="false" aria-disabled="true">
+          <li
+            class="state p-3 text-[0.8125rem] text-muted-foreground"
+            role="option"
+            aria-selected="false"
+            aria-disabled="true"
+          >
             No branches.
           </li>
         {/if}
       {/if}
     </ul>
 
-    <footer class="foot">
-      <button
-        class="foot-btn"
+    <footer class="foot flex flex-none items-center gap-1 border-t border-border px-2 py-[0.35rem]">
+      <Button
+        class="foot-btn h-auto gap-[0.3rem] rounded-full px-[0.55rem] py-1 text-[0.72rem] focus-visible:outline-2 focus-visible:outline-primary focus-visible:-outline-offset-2 focus-visible:ring-0"
+        variant="ghost"
+        size="sm"
         type="button"
         disabled={fetchBusy}
         onclick={() => void onFetch()}
       >
         <Icon icon={iconFetch} size={13} />
         Fetch
-      </button>
-      <button class="foot-btn" type="button" onclick={() => void reload()}>
+      </Button>
+      <Button
+        class="foot-btn h-auto gap-[0.3rem] rounded-full px-[0.55rem] py-1 text-[0.72rem] focus-visible:outline-2 focus-visible:outline-primary focus-visible:-outline-offset-2 focus-visible:ring-0"
+        variant="ghost"
+        size="sm"
+        type="button"
+        onclick={() => void reload()}
+      >
         <Icon icon={iconRefresh} size={13} />
         Refresh
-      </button>
-      <span class="foot-spacer"></span>
-      <button class="foot-btn manage" type="button" onclick={manageBranches}>
+      </Button>
+      <span class="foot-spacer flex-1"></span>
+      <Button
+        class="foot-btn manage h-auto gap-[0.3rem] rounded-full px-[0.55rem] py-1 text-[0.72rem] text-primary hover:text-primary focus-visible:outline-2 focus-visible:outline-primary focus-visible:-outline-offset-2 focus-visible:ring-0"
+        variant="ghost"
+        size="sm"
+        type="button"
+        onclick={manageBranches}
+      >
         Manage branches
-      </button>
+      </Button>
     </footer>
   </div>
 {/if}
@@ -731,291 +803,3 @@
   onConfirm={() => void deleteRemoteBranch()}
 />
 
-<style>
-  /* Trigger — the former read-only .branch-chip (RepoView) plus button
-     resets and the chevron affordance. */
-  .branch-chip {
-    flex: none;
-    display: inline-flex;
-    align-items: center;
-    gap: 0.25rem;
-    max-width: 16rem;
-    min-width: 0;
-    padding: 0.1rem 0.45rem;
-    border: none;
-    cursor: pointer;
-    border-radius: var(--m3-shape-full, 9999px);
-    background: var(--m3-secondary-container, var(--m3-surface-container-high));
-    color: var(--m3-on-secondary-container, var(--m3-secondary));
-    font-family: var(--app-font-mono, ui-monospace, Consolas, monospace);
-    font-size: 0.6875rem;
-  }
-
-  .branch-chip:hover {
-    filter: brightness(1.08);
-  }
-
-  .branch-chip:focus-visible {
-    outline: 2px solid var(--m3-primary);
-    outline-offset: 1px;
-  }
-
-  .branch-chip :global(svg) {
-    flex: none;
-  }
-
-  .branch-label {
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .popover {
-    position: fixed;
-    /* Below dialogs (70) and the context menu / toasts (1000). */
-    z-index: 60;
-    display: flex;
-    flex-direction: column;
-    width: 22rem;
-    max-width: calc(100vw - 1rem);
-    max-height: min(32rem, calc(100vh - 1.5rem));
-    overflow: hidden;
-    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    border-radius: var(--m3-shape-medium, 12px);
-    background: var(--m3-surface-container-high, var(--m3-surface));
-    color: var(--m3-on-surface);
-    box-shadow: var(--m3-elevation-3, 0 8px 24px rgba(0, 0, 0, 0.3));
-    font-size: 0.8125rem;
-  }
-
-  .search-row {
-    flex: none;
-    display: flex;
-    align-items: center;
-    gap: 0.4rem;
-    padding: 0.55rem 0.7rem;
-    border-bottom: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-  }
-
-  .search {
-    flex: 1;
-    min-width: 0;
-    border: none;
-    background: none;
-    color: var(--m3-on-surface);
-    font: inherit;
-    outline: none;
-  }
-
-  .search::placeholder {
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-  }
-
-  .clear {
-    flex: none;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 1.25rem;
-    height: 1.25rem;
-    border: none;
-    border-radius: 50%;
-    background: none;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    cursor: pointer;
-  }
-
-  .clear:hover {
-    background: var(--m3-surface-container-highest, var(--m3-surface));
-  }
-
-  .clear:focus-visible {
-    outline: 2px solid var(--m3-primary);
-    outline-offset: -2px;
-  }
-
-  .rows {
-    flex: 1 1 auto;
-    min-height: 0;
-    margin: 0;
-    padding: 0.25rem 0 0.4rem;
-    list-style: none;
-    overflow-y: auto;
-  }
-
-  /* While a branch op runs, rows are inert; the controller's dialogs
-     (outside this list) stay fully operable. */
-  .rows.busy {
-    pointer-events: none;
-  }
-
-  .rows.busy .row {
-    opacity: 0.55;
-  }
-
-  .section {
-    padding: 0.5rem 0.75rem 0.2rem;
-    font-size: 0.6875rem;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-    color: var(--m3-primary);
-    user-select: none;
-  }
-
-  .row {
-    display: flex;
-    align-items: center;
-    flex-wrap: wrap;
-    gap: 0.375rem;
-    margin: 0 0.25rem;
-    padding: 0.25rem 0.4rem;
-    border-radius: var(--m3-shape-small, 8px);
-    min-width: 0;
-    cursor: pointer;
-  }
-
-  .row:hover,
-  .row.active {
-    background: var(--m3-surface-container-highest, var(--m3-surface));
-  }
-
-  .row.head {
-    background: var(--m3-secondary-container, transparent);
-    color: var(--m3-on-secondary-container, inherit);
-  }
-
-  .marker {
-    flex: none;
-    width: 0.875rem;
-    text-align: center;
-    color: var(--m3-primary);
-  }
-
-  .bname {
-    flex: 0 1 auto;
-    min-width: 3rem;
-    max-width: 11rem;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    font-family: ui-monospace, Consolas, monospace;
-    font-size: 0.75rem;
-    font-weight: 600;
-    color: var(--m3-on-surface);
-  }
-
-  .create-row {
-    color: var(--m3-primary);
-  }
-
-  .create-row .bname {
-    max-width: none;
-    flex: 1 1 auto;
-    font-weight: 500;
-    color: var(--m3-primary);
-  }
-
-  .create-icon {
-    flex: none;
-    display: inline-flex;
-    align-items: center;
-  }
-
-  .sha {
-    flex: none;
-    font-family: ui-monospace, Consolas, monospace;
-    font-size: 0.6875rem;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-  }
-
-  .upstream {
-    flex: 1 1 auto;
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    font-size: 0.6875rem;
-    font-family: ui-monospace, Consolas, monospace;
-  }
-
-  .ab {
-    color: var(--m3-primary);
-    padding-left: 0.375rem;
-  }
-
-  .gone {
-    margin-left: 0.375rem;
-    padding: 0 0.35rem;
-    border: 1px solid var(--m3-error, currentColor);
-    border-radius: var(--m3-shape-full, 9999px);
-    color: var(--m3-error, inherit);
-    font-size: 0.625rem;
-  }
-
-  .row-actions {
-    margin-left: auto;
-    flex: none;
-    display: flex;
-    align-items: center;
-  }
-
-  .state {
-    padding: 0.75rem;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    font-size: 0.8125rem;
-  }
-
-  .error {
-    color: var(--m3-error, inherit);
-  }
-
-  .foot {
-    flex: none;
-    display: flex;
-    align-items: center;
-    gap: 0.25rem;
-    padding: 0.35rem 0.5rem;
-    border-top: 1px solid var(--m3-outline-variant, var(--m3-primary));
-  }
-
-  .foot-btn {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.3rem;
-    padding: 0.25rem 0.55rem;
-    border: none;
-    border-radius: var(--m3-shape-full, 9999px);
-    background: none;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    font: inherit;
-    font-size: 0.72rem;
-    cursor: pointer;
-  }
-
-  .foot-btn:hover:not(:disabled) {
-    background: var(--m3-surface-container-highest, var(--m3-surface));
-    color: var(--m3-on-surface);
-  }
-
-  .foot-btn:disabled {
-    color: var(--app-disabled-fg, var(--m3-on-surface-variant));
-    cursor: not-allowed;
-  }
-
-  .foot-btn:focus-visible {
-    outline: 2px solid var(--m3-primary);
-    outline-offset: -2px;
-  }
-
-  .foot-spacer {
-    flex: 1;
-  }
-
-  .foot-btn.manage {
-    color: var(--m3-primary);
-  }
-</style>

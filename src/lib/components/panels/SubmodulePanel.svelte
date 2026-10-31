@@ -17,7 +17,7 @@
   import type { SubmoduleInfo } from "$lib/ipc/types";
   import { openTab } from "$lib/stores/tabs.svelte";
   import { toast } from "$lib/toast";
-  import { IconButton } from "$lib/components/m3";
+  import { Button } from "$lib/components/ui/button/index.js";
   import Icon from "$lib/components/icons/Icon.svelte";
   import { splitPath, submoduleDisplay } from "./statusModel";
   import iconRefresh from "@ktibow/iconset-material-symbols/refresh";
@@ -152,108 +152,140 @@
   }
 </script>
 
-<aside class="submodule-panel" aria-label="Submodules">
-  <div class="toolbar">
-    <label class="toggle" title="Also initialize uninitialized submodules">
-      <input type="checkbox" bind:checked={init} />
+<aside class="submodule-panel flex min-h-0 flex-col bg-card text-[13px] text-foreground" aria-label="Submodules">
+  <div class="toolbar flex flex-none items-center gap-2 border-b border-border bg-muted px-1.5 py-1">
+    <label
+      class="toggle inline-flex cursor-pointer items-center gap-0.5 text-[0.6875rem] text-muted-foreground focus-within:text-foreground"
+      title="Also initialize uninitialized submodules"
+    >
+      <input type="checkbox" class="m-0 size-3.5 accent-primary" bind:checked={init} />
       <span>init</span>
     </label>
-    <label class="toggle" title="Update nested submodules too">
-      <input type="checkbox" bind:checked={recursive} />
+    <label
+      class="toggle inline-flex cursor-pointer items-center gap-0.5 text-[0.6875rem] text-muted-foreground focus-within:text-foreground"
+      title="Update nested submodules too"
+    >
+      <input type="checkbox" class="m-0 size-3.5 accent-primary" bind:checked={recursive} />
       <span>recursive</span>
     </label>
-    <span class="spacer"></span>
-    <span class="count" title="Submodules in this repository">{list.length}</span>
-    <IconButton
-      icon={iconRefresh}
-      label="Refresh submodules"
+    <span class="spacer flex-1"></span>
+    <span
+      class="count inline-flex h-auto shrink-0 items-center rounded-full border border-transparent bg-muted px-1.5 py-0 text-[0.625rem] font-medium tabular-nums text-muted-foreground"
+      title="Submodules in this repository"
+    >{list.length}</span>
+    <Button
+      class={`relative text-muted-foreground after:absolute after:-inset-1 after:content-[''] hover:bg-accent hover:text-accent-foreground ${loading ? "[&_svg]:animate-spin" : ""} [&_svg:not([class*='size-'])]:size-4`}
+      variant="ghost"
+      size="icon-xs"
+      type="button"
+      aria-label="Refresh submodules"
       title={loading ? "Refreshing submodules…" : "Refresh submodules"}
-      dense
-      class={loading ? "spin" : ""}
       disabled={loading}
       onclick={() => void reload()}
-    />
+    >
+      <Icon icon={iconRefresh} size={16} />
+    </Button>
   </div>
 
   {#if error}
-    <div class="state error" role="alert">
-      <p>{error}</p>
-      <button type="button" onclick={() => void reload()}>Retry</button>
+    <div class="state error flex flex-col items-start gap-1.5 py-4 px-3 text-[var(--app-deleted)]" role="alert">
+      <p class="m-0">{error}</p>
+      <Button
+        type="button"
+        variant="outline"
+        class="h-auto rounded border-[var(--app-deleted)] bg-[var(--app-deleted-bg)] px-2 py-0.5 text-[0.6875rem] font-normal text-[var(--app-deleted)] hover:bg-[var(--app-deleted-bg)] dark:bg-[var(--app-deleted-bg)] dark:text-[var(--app-deleted)] dark:hover:bg-[var(--app-deleted-bg)]"
+        onclick={() => void reload()}
+      >Retry</Button>
     </div>
   {:else if loading && list.length === 0}
-    <p class="state" role="status">Loading submodules…</p>
+    <p class="state py-4 px-3 text-xs text-muted-foreground" role="status">Loading submodules…</p>
   {:else if list.length === 0}
-    <div class="state empty" role="status">
-      <span class="empty-icon"><Icon icon={iconCheck} size={22} /></span>
-      <p class="empty-title">No submodules</p>
-      <p class="empty-hint">Add one with <code>git submodule add</code>.</p>
+    <div class="state empty flex flex-1 select-none flex-col items-center justify-center gap-1 px-4 py-8 text-center text-muted-foreground" role="status">
+      <span class="empty-icon mb-0.5 inline-flex size-10 items-center justify-center rounded-full border border-border text-[var(--app-added)]"><Icon icon={iconCheck} size={22} /></span>
+      <p class="empty-title m-0 text-[13px] font-medium text-foreground">No submodules</p>
+      <p class="empty-hint m-0 text-[0.72rem]">Add one with <code class="font-mono">git submodule add</code>.</p>
     </div>
   {:else}
-    <ul class="modules" role="list" aria-label="Submodule list" aria-busy={loading}>
+    <ul class="modules m-0 min-h-0 flex-1 list-none overflow-y-auto p-0 pb-2" role="list" aria-label="Submodule list" aria-busy={loading}>
       {#each list as info (info.path)}
         {@const display = submoduleDisplay(info)}
         {@const parts = splitPath(info.path)}
-        <li class="module" class:danger={display.tone === "danger"}>
-          <div class="line">
+        <li class="module group border-b border-border/55 px-1.5 py-1 hover:bg-muted/60" class:danger={display.tone === "danger"}>
+          <div class="line flex min-w-0 items-center gap-1 [&>svg]:shrink-0 [&>svg]:text-muted-foreground">
             <Icon icon={iconModule} size={14} />
             <button
-              class="open"
+              class="open flex min-w-0 flex-1 cursor-pointer items-center gap-1 border-0 bg-transparent p-0 text-left font-[inherit] text-inherit focus-visible:rounded-sm focus-visible:outline-2 focus-visible:outline-ring focus-visible:outline-offset-1"
               type="button"
               title={title(info)}
               onclick={() => void onOpen(info)}
             >
-              <span class="path">
-                {#if parts.dir}<span class="dir">{parts.dir}</span>{/if}
-                <span class="base">{parts.base}</span>
+              <span class="path min-w-0 truncate font-mono text-xs">
+                {#if parts.dir}<span class="dir text-muted-foreground opacity-80">{parts.dir}</span>{/if}
+                <span class="base font-semibold {display.tone === "danger" ? "text-[var(--app-deleted)]" : "text-foreground"}">{parts.base}</span>
               </span>
               {#if display.tag}
-                <span class={`tag ${display.tone}`} title={display.detail}>
+                <span
+                  class={`tag max-w-36 shrink-0 truncate text-[0.625rem] leading-[1.35] ${display.tone === "danger" ? "text-[var(--app-deleted)]" : display.tone === "dirty" ? "text-[var(--app-modified)]" : "text-muted-foreground"}`}
+                  title={display.detail}
+                >
                   {display.tag}
                 </span>
               {/if}
             </button>
-            <span class="actions">
-              <IconButton
-                icon={iconUpdate}
-                label={`${info.initialized ? "Update" : "Initialize"} submodule ${info.path}`}
+            <span class="actions inline-flex shrink-0 items-center gap-px opacity-0 transition-opacity duration-100 group-hover:opacity-100 group-focus-within:opacity-100 [@media(pointer:coarse)]:opacity-100">
+              <Button
+                class="relative text-muted-foreground after:absolute after:-inset-1 after:content-[''] hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-4"
+                variant="ghost"
+                size="icon-xs"
+                type="button"
+                aria-label={`${info.initialized ? "Update" : "Initialize"} submodule ${info.path}`}
                 title={info.initialized
                   ? "Check out the commit the superproject records"
                   : "Initialize and update this submodule"}
-                dense
                 tabindex={-1}
                 disabled={busy}
                 onclick={() => void onUpdate(info)}
-              />
-              <IconButton
-                icon={iconSync}
-                label={`Sync submodule ${info.path}`}
+              >
+                <Icon icon={iconUpdate} size={16} />
+              </Button>
+              <Button
+                class="relative text-muted-foreground after:absolute after:-inset-1 after:content-[''] hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-4"
+                variant="ghost"
+                size="icon-xs"
+                type="button"
+                aria-label={`Sync submodule ${info.path}`}
                 title="Rewrite the URL from .gitmodules into the repo config"
-                dense
                 tabindex={-1}
                 disabled={busy}
                 onclick={() => void onSync(info)}
-              />
+              >
+                <Icon icon={iconSync} size={16} />
+              </Button>
               {#if info.initialized}
-                <IconButton
-                  icon={iconOpen}
-                  label={`Open submodule ${info.path} as a tab`}
+                <Button
+                  class="relative text-muted-foreground after:absolute after:-inset-1 after:content-[''] hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-4"
+                  variant="ghost"
+                  size="icon-xs"
+                  type="button"
+                  aria-label={`Open submodule ${info.path} as a tab`}
                   title="Open this submodule as a tab"
-                  dense
                   tabindex={-1}
                   onclick={() => void onOpen(info)}
-                />
+                >
+                  <Icon icon={iconOpen} size={16} />
+                </Button>
               {/if}
             </span>
           </div>
-          <div class="meta" title="Checked-out HEAD vs recorded gitlink">
+          <div class="meta flex min-w-0 items-center gap-1 whitespace-nowrap pl-5 font-mono text-[0.625rem] text-muted-foreground opacity-85" title="Checked-out HEAD vs recorded gitlink">
             {#if updateAvailable(info)}
-              <span class="update">↓ update available</span>
+              <span class="update shrink-0 font-semibold text-[var(--app-modified)]">↓ update available</span>
             {/if}
-            <span class="head">HEAD {shortSha(info.head_sha)}</span>
-            <span class="sep">·</span>
+            <span class="head text-primary">HEAD {shortSha(info.head_sha)}</span>
+            <span class="sep opacity-50">·</span>
             <span>recorded {shortSha(info.recorded_sha)}</span>
             {#if info.url}
-              <span class="url" title={info.url}>{info.url}</span>
+              <span class="url min-w-0 flex-1 truncate text-right opacity-75" title={info.url}>{info.url}</span>
             {/if}
           </div>
         </li>
@@ -261,283 +293,3 @@
     </ul>
   {/if}
 </aside>
-
-<style>
-  .submodule-panel {
-    display: flex;
-    flex-direction: column;
-    min-height: 0;
-    font-size: 0.8125rem;
-    background: var(--m3-surface-container-low, var(--m3-surface));
-    color: var(--m3-on-surface);
-  }
-
-  .toolbar {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    padding: 0.25rem 0.4rem;
-    flex: none;
-    background: var(--m3-surface-container, var(--m3-surface));
-    border-bottom: 1px solid var(--app-border, var(--m3-outline-variant));
-  }
-
-  .spacer {
-    flex: 1;
-  }
-
-  .count {
-    font-size: 0.625rem;
-    font-variant-numeric: tabular-nums;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    background: var(--m3-surface-container-high, var(--m3-surface));
-    border-radius: var(--m3-shape-full, 9999px);
-    padding: 0 0.4rem;
-  }
-
-  :global(.spin svg) {
-    animation: spin 0.9s linear infinite;
-  }
-
-  @keyframes spin {
-    to {
-      transform: rotate(360deg);
-    }
-  }
-
-  .toggle {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.2rem;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    font-size: 0.6875rem;
-    cursor: pointer;
-  }
-
-  .toggle input {
-    accent-color: var(--m3-primary);
-    margin: 0;
-    width: 0.8rem;
-    height: 0.8rem;
-  }
-
-  .toggle:focus-within {
-    color: var(--m3-on-surface);
-  }
-
-  .state {
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    padding: 1rem 0.75rem;
-    margin: 0;
-    font-size: 0.75rem;
-  }
-
-  .state.error {
-    display: flex;
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 0.4rem;
-    color: var(--app-deleted, var(--m3-error));
-  }
-
-  .state.error p {
-    margin: 0;
-  }
-
-  .state.error button {
-    border: 1px solid var(--app-deleted, var(--m3-error));
-    border-radius: var(--m3-shape-extra-small, 4px);
-    background: var(--app-deleted-bg, transparent);
-    color: var(--app-deleted, var(--m3-error));
-    font: inherit;
-    font-size: 0.6875rem;
-    padding: 0.1rem 0.5rem;
-    cursor: pointer;
-  }
-
-  .state.empty {
-    display: flex;
-    flex: 1;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    gap: 0.25rem;
-    padding: 2rem 1rem;
-    text-align: center;
-    user-select: none;
-  }
-
-  .empty-icon {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 2.5rem;
-    height: 2.5rem;
-    margin-bottom: 0.2rem;
-    border: 1px solid var(--app-border, var(--m3-outline-variant));
-    border-radius: var(--m3-shape-full, 9999px);
-    color: var(--app-added, var(--m3-primary));
-  }
-
-  .empty-title {
-    margin: 0;
-    font-size: 0.8125rem;
-    font-weight: 500;
-    color: var(--m3-on-surface);
-  }
-
-  .empty-hint {
-    margin: 0;
-    font-size: 0.72rem;
-  }
-
-  .empty-hint code {
-    font-family: var(--app-font-mono, ui-monospace, Consolas, monospace);
-  }
-
-  .modules {
-    list-style: none;
-    margin: 0;
-    padding: 0 0 0.5rem;
-    overflow-y: auto;
-    min-height: 0;
-    flex: 1;
-  }
-
-  .module {
-    padding: 0.25rem 0.4rem;
-    border-bottom: 1px solid color-mix(in srgb, var(--app-border, var(--m3-outline-variant)) 55%, transparent);
-  }
-
-  .module:hover {
-    background: var(--app-hover, var(--m3-surface-container-high));
-  }
-
-  .line {
-    display: flex;
-    align-items: center;
-    gap: 0.3rem;
-    min-width: 0;
-  }
-
-  .line > :global(svg) {
-    flex: none;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-  }
-
-  .open {
-    flex: 1;
-    min-width: 0;
-    display: flex;
-    align-items: center;
-    gap: 0.3rem;
-    border: none;
-    background: transparent;
-    color: inherit;
-    font: inherit;
-    padding: 0;
-    text-align: left;
-    cursor: pointer;
-  }
-
-  .open:focus-visible {
-    outline: 2px solid var(--m3-primary);
-    outline-offset: 1px;
-    border-radius: 2px;
-  }
-
-  .path {
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    font-family: var(--app-font-mono, ui-monospace, Consolas, monospace);
-    font-size: 0.75rem;
-  }
-
-  .dir {
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    opacity: 0.78;
-  }
-
-  .base {
-    color: var(--m3-on-surface);
-    font-weight: 600;
-  }
-
-  .tag {
-    flex: none;
-    max-width: 9rem;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    font-size: 0.625rem;
-    line-height: 1.35;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-  }
-
-  .tag.dirty {
-    color: var(--app-modified, var(--m3-tertiary));
-  }
-
-  .tag.danger,
-  .module.danger .base {
-    color: var(--app-deleted, var(--m3-error));
-  }
-
-  .actions {
-    flex: none;
-    display: inline-flex;
-    align-items: center;
-    gap: 0.0625rem;
-    opacity: 0;
-    transition: opacity 0.1s ease;
-  }
-
-  .module:hover .actions,
-  .module:focus-within .actions {
-    opacity: 1;
-  }
-
-  .meta {
-    display: flex;
-    align-items: center;
-    gap: 0.3rem;
-    min-width: 0;
-    padding-left: 1.25rem;
-    font-family: var(--app-font-mono, ui-monospace, Consolas, monospace);
-    font-size: 0.625rem;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    opacity: 0.85;
-    white-space: nowrap;
-  }
-
-  .meta .head {
-    color: var(--m3-primary);
-  }
-
-  .meta .sep {
-    opacity: 0.5;
-  }
-
-  .meta .update {
-    flex: none;
-    color: var(--app-modified, var(--m3-tertiary));
-    font-weight: 600;
-  }
-
-  .meta .url {
-    flex: 1;
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    text-align: right;
-    opacity: 0.75;
-  }
-
-  @media (pointer: coarse) {
-    .actions {
-      opacity: 1;
-    }
-  }
-</style>

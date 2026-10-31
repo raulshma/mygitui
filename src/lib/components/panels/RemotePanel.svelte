@@ -35,7 +35,13 @@
   import { autofetch } from "$lib/stores/autofetch.svelte";
   import { tabStore } from "$lib/stores/tabs.svelte";
   import { toast } from "$lib/toast";
-  import { IconButton, Switch } from "$lib/components/m3";
+  import Icon from "$lib/components/icons/Icon.svelte";
+  import { Switch } from "$lib/components/ui/switch/index.js";
+  import { Progress } from "$lib/components/ui/progress";
+  import { Button } from "$lib/components/ui/button/index.js";
+  import { Badge } from "$lib/components/ui/badge/index.js";
+  import { Input } from "$lib/components/ui/input/index.js";
+  import * as Select from "$lib/components/ui/select/index.js";
   import ConfirmDialog from "$lib/components/safety/ConfirmDialog.svelte";
   import DiffViewer from "$lib/components/diff/DiffViewer.svelte";
   import iconRefresh from "@ktibow/iconset-material-symbols/refresh";
@@ -389,39 +395,60 @@
   }
 </script>
 
-<aside class="remote-panel" aria-label="Remotes">
-  <div class="toolbar">
-    <IconButton
-      icon={iconRefresh}
-      label="Refresh remotes"
+<aside class="remote-panel flex flex-col min-h-0 text-[13px]" aria-label="Remotes">
+  <div class="toolbar flex shrink-0 items-center gap-3 px-2 py-1.5">
+    <Button
+      class="border-border text-muted-foreground hover:border-primary hover:bg-accent hover:text-accent-foreground"
+      variant="ghost"
+      size="icon-sm"
+      type="button"
+      aria-label="Refresh remotes"
       title={loading ? "Refreshing remotes…" : "Refresh remotes"}
-      variant="outlined"
       disabled={loading}
       onclick={() => void reload()}
-    />
-    <label class="autofetch" title="Fetch the default remote in the background while this repo is open">
+    >
+      <Icon icon={iconRefresh} size={16} />
+    </Button>
+    <label
+      class="autofetch ml-auto flex items-center gap-1.5 text-xs text-muted-foreground"
+      title="Fetch the default remote in the background while this repo is open"
+    >
       <span>auto-fetch</span>
-      <select
-        aria-label="Auto-fetch interval in minutes"
-        value={autofetch.getInterval(repoId)}
-        onchange={(e) => autofetch.setInterval(repoId, Number(e.currentTarget.value))}
+      <Select.Root
+        type="single"
+        value={String(autofetch.getInterval(repoId))}
+        onValueChange={(value) => autofetch.setInterval(repoId, Number(value))}
       >
-        {#each INTERVALS as minutes (minutes)}
-          <option value={minutes}>
-            {minutes === 0 ? "off" : `${minutes} min`}
-          </option>
-        {/each}
-      </select>
+        <Select.Trigger
+          class="max-w-[12rem] h-[1.5rem] rounded border-border bg-background dark:bg-background px-1.5 py-0 text-xs text-foreground gap-1"
+          aria-label="Auto-fetch interval in minutes"
+        >
+          <Select.Value />
+        </Select.Trigger>
+        <Select.Content>
+          {#each INTERVALS as minutes (minutes)}
+            <Select.Item value={String(minutes)} label={minutes === 0 ? "off" : `${minutes} min`} class="text-xs" />
+          {/each}
+        </Select.Content>
+      </Select.Root>
     </label>
   </div>
 
   {#if primaryRemote}
-    <div class="sync-bar" role="group" aria-label={`Repository sync with ${primaryRemote.name}`}>
-      <span class="sync-remote" title={`Primary remote: ${primaryRemote.url}`}>
+    <div
+      class="sync-bar flex shrink-0 flex-wrap items-center gap-1.5 border-b border-border px-2 py-1.5"
+      role="group"
+      aria-label={`Repository sync with ${primaryRemote.name}`}
+    >
+      <span
+        class="sync-remote mr-auto max-w-[10rem] shrink-0 overflow-hidden text-ellipsis whitespace-nowrap text-xs font-semibold text-muted-foreground"
+        title={`Primary remote: ${primaryRemote.url}`}
+      >
         {primaryRemote.name}
       </span>
-      <button
-        class="sync-act"
+      <Button
+        variant="ghost"
+        class="sync-act min-h-7 gap-1.5 rounded-full border border-border bg-transparent px-2.5 text-xs text-foreground hover:bg-accent hover:text-foreground dark:hover:bg-accent"
         type="button"
         disabled={netBusy || !currentBranch}
         title={currentBranch
@@ -429,11 +456,12 @@
           : "Pull is unavailable without a current branch"}
         onclick={onBarPull}
       >
-        {#if behind > 0}<span class="sync-count behind">↓ {behind}</span>{/if}
+        {#if behind > 0}<Badge variant="secondary" class="sync-count behind rounded-full bg-muted px-1.5 h-auto py-0 text-[10px] font-semibold leading-tight tabular-nums text-muted-foreground">↓ {behind}</Badge>{/if}
         Pull
-      </button>
-      <button
-        class="sync-act filled"
+      </Button>
+      <Button
+        variant="default"
+        class="sync-act filled min-h-7 gap-1.5 rounded-full px-2.5 text-xs hover:bg-primary/90"
         type="button"
         disabled={netBusy || !currentBranch}
         title={currentBranch
@@ -441,34 +469,38 @@
           : "Push is unavailable without a current branch"}
         onclick={onBarPush}
       >
-        {#if ahead > 0}<span class="sync-count ahead">↑ {ahead}</span>{/if}
+        {#if ahead > 0}<Badge variant="secondary" class="sync-count ahead rounded-full bg-primary-foreground px-1.5 h-auto py-0 text-[10px] font-semibold leading-tight tabular-nums text-primary">↑ {ahead}</Badge>{/if}
         Push
-      </button>
-      <button
-        class="sync-act"
+      </Button>
+      <Button
+        variant="ghost"
+        class="sync-act min-h-7 gap-1.5 rounded-full border border-border bg-transparent px-2.5 text-xs text-foreground hover:bg-accent hover:text-foreground dark:hover:bg-accent"
         type="button"
         disabled={netBusy}
         title={`Fetch from ${primaryRemote.name} (prune)`}
         onclick={onBarFetch}
       >
         Fetch
-      </button>
+      </Button>
     </div>
   {/if}
 
   {#if netOps.length > 0}
-    <div class="progress" role="status" aria-live="polite">
+    <div class="progress flex shrink-0 flex-col gap-1 border-b border-border bg-muted/50 px-2 py-1" role="status" aria-live="polite">
       {#each netOps as op (op.op_id)}
-        <div class="pbar-wrap">
-          <span class="pmsg">{op.message}</span>
+        <div class="pbar-wrap flex items-center gap-2">
+          <span class="pmsg max-w-[45%] shrink-0 overflow-hidden text-ellipsis whitespace-nowrap text-xs text-muted-foreground">{op.message}</span>
           {#if op.pct !== null}
-            <span class="pbar" role="progressbar" aria-valuemin={0} aria-valuemax={100}
-              aria-valuenow={Math.round(op.pct)}>
-              <span class="pfill" style:width={`${Math.max(0, Math.min(100, op.pct))}%`}></span>
-            </span>
+            <Progress
+              class="pbar h-1.5 flex-1"
+              value={Math.round(Math.max(0, Math.min(100, op.pct)))}
+              aria-valuenow={Math.round(op.pct)}
+              aria-valuemin={0}
+              aria-valuemax={100}
+            />
           {:else}
-            <span class="pbar indeterminate" role="progressbar" aria-label="In progress">
-              <span class="pfill"></span>
+            <span class="pbar indeterminate h-1.5 flex-1 overflow-hidden rounded-full bg-muted" role="progressbar" aria-label="In progress">
+              <span class="pfill block h-full w-[35%] animate-[slide-wide_1.1s_ease-in-out_infinite] bg-primary"></span>
             </span>
           {/if}
         </div>
@@ -477,26 +509,26 @@
   {/if}
 
   {#if error}
-    <p class="state error" role="alert">{error}</p>
+    <p class="state error m-0 px-3 py-4 text-[13px] text-destructive" role="alert">{error}</p>
   {:else if !loading && list.length === 0}
-    <p class="state">No remotes configured.</p>
+    <p class="state m-0 px-3 py-4 text-[13px] text-muted-foreground">No remotes configured.</p>
   {:else}
-    <ul class="remotes" role="list" aria-label="Configured remotes">
+    <ul class="remotes m-0 flex min-h-0 flex-1 list-none flex-col gap-2 overflow-y-auto px-2 py-1.5" role="list" aria-label="Configured remotes">
       {#each list as remote (remote.name)}
-        <li class="card">
+        <li class="card rounded-lg border border-border bg-card px-2 py-1.5">
           {#if editing?.name === remote.name}
             <form
-              class="edit-url"
+              class="edit-url flex flex-wrap items-center gap-1.5"
               aria-label={`Set ${editing.field} for ${remote.name}`}
               onsubmit={(e) => {
                 e.preventDefault();
                 void onSetUrl();
               }}
             >
-              <label class="eu-label">
+              <label class="eu-label flex min-w-40 flex-1 items-center gap-1.5 text-[0.72rem] text-muted-foreground">
                 {editing.field === "url" ? "fetch URL" : "push URL"}:
-                <input
-                  class="eu-input"
+                <Input
+                  class="eu-input h-auto min-w-32 flex-1 rounded bg-background dark:bg-background px-1.5 py-0.5 font-mono text-[0.72rem] md:text-[0.72rem] text-foreground"
                   type="text"
                   aria-label={`${editing.field} for ${remote.name}`}
                   bind:value={editing.value}
@@ -505,59 +537,76 @@
                   }}
                 />
               </label>
-              <IconButton
-                icon={iconCheck}
-                label="Save remote URL"
-                title="Save URL"
-                variant="filled"
+              <Button
+                variant="default"
+                size="icon-sm"
                 type="submit"
-              />
-              <IconButton
-                icon={iconClose}
-                label="Cancel URL edit"
+                aria-label="Save remote URL"
+                title="Save URL"
+              >
+                <Icon icon={iconCheck} size={16} />
+              </Button>
+              <Button
+                class="border-border text-muted-foreground hover:border-primary hover:bg-accent hover:text-accent-foreground"
+                variant="ghost"
+                size="icon-sm"
+                type="button"
+                aria-label="Cancel URL edit"
                 title="Cancel"
-                variant="outlined"
                 onclick={() => (editing = null)}
-              />
+              >
+                <Icon icon={iconClose} size={16} />
+              </Button>
             </form>
           {:else}
-            <div class="card-head">
-              <span class="rname" title={remote.name}>{remote.name}</span>
-              <span class="url" title={remote.url}>{remote.url}</span>
+            <div class="card-head flex min-w-0 flex-wrap items-center gap-2">
+              <span class="rname shrink-0 overflow-hidden text-ellipsis whitespace-nowrap font-semibold text-primary" title={remote.name}>{remote.name}</span>
+              <span class="url min-w-32 flex-1 overflow-hidden text-ellipsis whitespace-nowrap font-mono text-[0.6875rem] text-muted-foreground" title={remote.url}>{remote.url}</span>
               {#if remote.push_url}
-                <span class="url push" title={remote.push_url}>push: {remote.push_url}</span>
+                <span class="url push max-w-[40%] shrink-0 overflow-hidden text-ellipsis whitespace-nowrap font-mono text-[0.6875rem] text-muted-foreground" title={remote.push_url}>push: {remote.push_url}</span>
               {/if}
-              <span class="head-actions">
-                <IconButton
-                  icon={iconSetUrl}
-                  label={`Edit fetch URL for ${remote.name}`}
+              <span class="head-actions ml-auto flex shrink-0 gap-1">
+                <Button
+                  class="relative text-muted-foreground after:absolute after:-inset-1 after:content-[''] hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-4"
+                  variant="ghost"
+                  size="icon-xs"
+                  type="button"
+                  aria-label={`Edit fetch URL for ${remote.name}`}
                   title="Set the fetch URL"
-                  dense
                   onclick={() =>
                     (editing = { name: remote.name, field: "url", value: remote.url })}
-                />
+                >
+                  <Icon icon={iconSetUrl} size={16} />
+                </Button>
                 {#if remote.push_url}
-                  <IconButton
-                    icon={iconSetPushUrl}
-                    label={`Edit push URL for ${remote.name}`}
+                  <Button
+                    class="relative text-muted-foreground after:absolute after:-inset-1 after:content-[''] hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-4"
+                    variant="ghost"
+                    size="icon-xs"
+                    type="button"
+                    aria-label={`Edit push URL for ${remote.name}`}
                     title="Set the push URL"
-                    dense
                     onclick={() =>
                       (editing = {
                         name: remote.name,
                         field: "push_url",
                         value: remote.push_url ?? "",
                       })}
-                  />
+                  >
+                    <Icon icon={iconSetPushUrl} size={16} />
+                  </Button>
                 {/if}
-                <IconButton
-                  icon={iconRemove}
-                  label={`Remove remote ${remote.name}`}
+                <Button
+                  class="relative text-destructive after:absolute after:-inset-1 after:content-[''] hover:bg-destructive/10 hover:text-destructive [&_svg:not([class*='size-'])]:size-4"
+                  variant="ghost"
+                  size="icon-xs"
+                  type="button"
+                  aria-label={`Remove remote ${remote.name}`}
                   title="Remove this remote"
-                  tone="danger"
-                  dense
                   onclick={() => void onRemove(remote)}
-                />
+                >
+                  <Icon icon={iconRemove} size={16} />
+                </Button>
               </span>
             </div>
             {#if expandedRemote === remote.name}
@@ -574,54 +623,69 @@
                           {#if rb.tracked_by}<span class="rb-tracked">({rb.tracked_by})</span>{/if}
                         </span>
                         {#if rb.tracked_by === null}
-                          <IconButton
-                            icon={iconCheckout}
-                            label={`Check out ${rb.remote}/${rb.name}`}
+                          <Button
+                            class="relative text-muted-foreground after:absolute after:-inset-1 after:content-[''] hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-4"
+                            variant="ghost"
+                            size="icon-xs"
+                            type="button"
+                            aria-label={`Check out ${rb.remote}/${rb.name}`}
                             title="Create a local branch tracking {rb.remote}/{rb.name} and check it out"
-                            dense
                             onclick={() => void onCheckoutRemote(rb)}
-                          />
+                          >
+                            <Icon icon={iconCheckout} size={16} />
+                          </Button>
                         {/if}
                         <!-- M12: diff HEAD against this remote branch inline. -->
-                        <IconButton
-                          icon={iconCompare}
-                          label={`Compare HEAD with ${rb.remote}/${rb.name}`}
-                          title="Diff HEAD against {rb.remote}/{rb.name}"
-                          dense
-                          pressed={compareKey === `${rb.remote}/${rb.name}`}
+                        <Button
+                          class="relative text-muted-foreground after:absolute after:-inset-1 after:content-[''] hover:bg-accent hover:text-accent-foreground aria-pressed:bg-accent aria-pressed:text-accent-foreground [&_svg:not([class*='size-'])]:size-4"
+                          variant="ghost"
+                          size="icon-xs"
+                          type="button"
+                          aria-label={`Compare HEAD with ${rb.remote}/${rb.name}`}
+                          aria-pressed={compareKey === `${rb.remote}/${rb.name}`}
                           aria-expanded={compareKey === `${rb.remote}/${rb.name}`}
+                          title="Diff HEAD against {rb.remote}/{rb.name}"
                           onclick={() => void onCompareHead(rb)}
-                        />
-                        <IconButton
-                          icon={iconRemove}
-                          label={`Delete remote branch ${rb.remote}/${rb.name}`}
+                        >
+                          <Icon icon={iconCompare} size={16} />
+                        </Button>
+                        <Button
+                          class="relative text-destructive after:absolute after:-inset-1 after:content-[''] hover:bg-destructive/10 hover:text-destructive [&_svg:not([class*='size-'])]:size-4"
+                          variant="ghost"
+                          size="icon-xs"
+                          type="button"
+                          aria-label={`Delete remote branch ${rb.remote}/${rb.name}`}
                           title="Delete {rb.remote}/{rb.name} on the remote"
-                          tone="danger"
-                          dense
                           onclick={() => void onDeleteRemoteBranch(rb)}
-                        />
+                        >
+                          <Icon icon={iconRemove} size={16} />
+                        </Button>
                       </li>
                       {#if compareKey === `${rb.remote}/${rb.name}`}
-                        <li class="rb-compare">
-                          <div class="rb-compare-head">
+                        <li class="rb-compare rounded-lg border border-border px-1.5 py-1">
+                          <div class="rb-compare-head flex items-center justify-between gap-2 font-mono text-[0.72rem] text-muted-foreground">
                             <span>HEAD ↔ {rb.remote}/{rb.name}
                               {#if compareFiles}({compareFiles.length}
                                 file{compareFiles.length === 1 ? "" : "s"}){/if}
                             </span>
-                            <IconButton
-                              icon={iconClose}
-                              label="Close compare"
+                            <Button
+                              class="relative text-muted-foreground after:absolute after:-inset-1 after:content-[''] hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-4"
+                              variant="ghost"
+                              size="icon-xs"
+                              type="button"
+                              aria-label="Close compare"
                               title="Close compare"
-                              dense
                               onclick={() => (compareKey = null)}
-                            />
+                            >
+                              <Icon icon={iconClose} size={16} />
+                            </Button>
                           </div>
                           {#if compareLoading}
-                            <p class="rb-compare-state">Comparing…</p>
+                            <p class="rb-compare-state mb-0 mt-1 text-[0.72rem] text-muted-foreground">Comparing…</p>
                           {:else if compareFiles !== null && compareFiles.length === 0}
-                            <p class="rb-compare-state">No differences.</p>
+                            <p class="rb-compare-state mb-0 mt-1 text-[0.72rem] text-muted-foreground">No differences.</p>
                           {:else if compareFiles}
-                            <div class="rb-compare-diff">
+                            <div class="rb-compare-diff mt-1 max-h-72 overflow-auto">
                               <DiffViewer files={compareFiles} />
                             </div>
                           {/if}
@@ -632,102 +696,133 @@
                 {/if}
               </div>
             {/if}
-            <div class="card-actions">
-              <div class="action-row">
-                <span class="action-label">Fetch</span>
-                <div class="action-main">
-                  <IconButton
-                    icon={iconBranches}
-                    label={expandedRemote === remote.name ? `Hide branches for ${remote.name}` : `Show branches for ${remote.name}`}
+            <div class="card-actions mt-1.5 flex flex-col">
+              <div class="action-row grid grid-cols-[auto_1fr] items-center gap-2.5 py-[0.3rem]">
+                <span class="action-label min-w-11 text-[0.6875rem] font-semibold uppercase tracking-[0.04em] text-muted-foreground">Fetch</span>
+                <div class="action-main flex min-w-0 flex-wrap items-center gap-1.5">
+                  <Button
+                    class="relative text-muted-foreground after:absolute after:-inset-1 after:content-[''] hover:bg-accent hover:text-accent-foreground aria-pressed:bg-accent aria-pressed:text-accent-foreground [&_svg:not([class*='size-'])]:size-4"
+                    variant="ghost"
+                    size="icon-xs"
+                    type="button"
+                    aria-label={expandedRemote === remote.name ? `Hide branches for ${remote.name}` : `Show branches for ${remote.name}`}
+                    aria-pressed={expandedRemote === remote.name}
                     title={expandedRemote === remote.name ? "Hide remote branches" : "Show remote branches"}
-                    pressed={expandedRemote === remote.name}
-                    dense
                     disabled={netBusy}
                     onclick={() => onToggleRemoteBranches(remote)}
-                  />
-                  <IconButton
-                    icon={iconFetch}
-                    label={`Fetch from ${remote.name}`}
+                  >
+                    <Icon icon={iconBranches} size={16} />
+                  </Button>
+                  <Button
+                    class="relative text-muted-foreground after:absolute after:-inset-1 after:content-[''] hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-4"
+                    variant="ghost"
+                    size="icon-xs"
+                    type="button"
+                    aria-label={`Fetch from ${remote.name}`}
                     title="Fetch from this remote"
-                    dense
                     disabled={netBusy}
                     onclick={() => onFetch(remote)}
-                  />
+                  >
+                    <Icon icon={iconFetch} size={16} />
+                  </Button>
                 </div>
               </div>
 
-              <div class="action-row">
-                <span class="action-label">Pull</span>
-                <div class="action-main">
-                  <select
-                    aria-label={`Branch for pull and push on ${remote.name}`}
-                    bind:value={branchPick[remote.name]}
+              <div class="action-row grid grid-cols-[auto_1fr] items-center gap-2.5 border-t border-border py-[0.3rem]">
+                <span class="action-label min-w-11 text-[0.6875rem] font-semibold uppercase tracking-[0.04em] text-muted-foreground">Pull</span>
+                <div class="action-main flex min-w-0 flex-wrap items-center gap-1.5">
+                  <Select.Root
+                    type="single"
+                    value={branchPick[remote.name] ?? branchNames[0] ?? ""}
+                    onValueChange={(value) => (branchPick[remote.name] = value)}
                   >
-                    {#each branchNames as name (name)}
-                      <option value={name}>
-                        {name}{name === currentBranch ? " (current)" : ""}
-                      </option>
-                    {/each}
-                  </select>
-                  <IconButton
-                    icon={iconPull}
-                    label={`Pull ${branchFor(remote) ?? ""} from ${remote.name}`}
+                    <Select.Trigger
+                      class="max-w-36 h-[1.35rem] rounded bg-background dark:bg-background px-2 py-0 text-[0.72rem] text-foreground gap-1"
+                      aria-label={`Branch for pull and push on ${remote.name}`}
+                    >
+                      <Select.Value />
+                    </Select.Trigger>
+                    <Select.Content>
+                      {#each branchNames as name (name)}
+                        <Select.Item
+                          value={name}
+                          label={`${name}${name === currentBranch ? " (current)" : ""}`}
+                          class="text-[0.72rem]"
+                        />
+                      {/each}
+                    </Select.Content>
+                  </Select.Root>
+                  <Button
+                    class="relative text-muted-foreground after:absolute after:-inset-1 after:content-[''] hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-4"
+                    variant="ghost"
+                    size="icon-xs"
+                    type="button"
+                    aria-label={`Pull ${branchFor(remote) ?? ""} from ${remote.name}`}
                     title="Pull the selected branch from this remote"
-                    dense
                     disabled={netBusy || !branchFor(remote)}
                     onclick={() => onPull(remote)}
-                  />
+                  >
+                    <Icon icon={iconPull} size={16} />
+                  </Button>
                 </div>
               </div>
 
-              <div class="action-row">
-                <span class="action-label">Push</span>
-                <div class="action-main">
-                  <IconButton
-                    icon={iconPush}
-                    label={`Push ${branchFor(remote) ?? ""} to ${remote.name}`}
+              <div class="action-row grid grid-cols-[auto_1fr] items-center gap-2.5 border-t border-border py-[0.3rem]">
+                <span class="action-label min-w-11 text-[0.6875rem] font-semibold uppercase tracking-[0.04em] text-muted-foreground">Push</span>
+                <div class="action-main flex min-w-0 flex-wrap items-center gap-1.5">
+                  <Button
+                    class="relative after:absolute after:-inset-1 after:content-[''] [&_svg:not([class*='size-'])]:size-4"
+                    variant="default"
+                    size="icon-xs"
+                    type="button"
+                    aria-label={`Push ${branchFor(remote) ?? ""} to ${remote.name}`}
                     title="Push the selected branch to this remote"
-                    variant="filled"
-                    dense
                     disabled={netBusy || !branchFor(remote)}
                     onclick={() => onPush(remote)}
-                  />
+                  >
+                    <Icon icon={iconPush} size={16} />
+                  </Button>
                 </div>
               </div>
 
-              <details class="adv">
-                <summary>Advanced options</summary>
-                <div class="adv-opts">
-                  <Switch
-                    bind:checked={prune}
+              <details class="adv mt-1 text-[0.72rem]">
+                <summary class="cursor-pointer select-none py-0.5 text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring focus-visible:outline-offset-1">Advanced options</summary>
+                <div class="adv-opts flex flex-col gap-1 pb-1.5 pt-1">
+                  <label
+                    class="inline-flex cursor-pointer select-none items-center gap-1.5 whitespace-nowrap text-sm"
                     title="Fetch: delete remote-tracking branches that vanished upstream"
                   >
-                    prune on fetch
-                  </Switch>
-                  <Switch
-                    bind:checked={ffOnly}
+                    <Switch bind:checked={prune} />
+                    <span class="text-muted-foreground text-xs">prune on fetch</span>
+                  </label>
+                  <label
+                    class="inline-flex cursor-pointer select-none items-center gap-1.5 whitespace-nowrap text-sm"
                     title="Pull: refuse when the merge would not be a fast-forward"
                   >
-                    ff-only on pull
-                  </Switch>
-                  <Switch
-                    bind:checked={rebase}
+                    <Switch bind:checked={ffOnly} />
+                    <span class="text-muted-foreground text-xs">ff-only on pull</span>
+                  </label>
+                  <label
+                    class="inline-flex cursor-pointer select-none items-center gap-1.5 whitespace-nowrap text-sm"
                     title="Pull: rebase local commits on top of the fetched branch"
                   >
-                    rebase on pull
-                  </Switch>
-                  <Switch
-                    bind:checked={force}
+                    <Switch bind:checked={rebase} />
+                    <span class="text-muted-foreground text-xs">rebase on pull</span>
+                  </label>
+                  <label
+                    class="inline-flex cursor-pointer select-none items-center gap-1.5 whitespace-nowrap text-sm"
                     title="Push: overwrite the remote branch"
                   >
-                    force on push
-                  </Switch>
-                  <Switch
-                    bind:checked={setUpstream}
+                    <Switch bind:checked={force} />
+                    <span class="text-muted-foreground text-xs">force on push</span>
+                  </label>
+                  <label
+                    class="inline-flex cursor-pointer select-none items-center gap-1.5 whitespace-nowrap text-sm"
                     title="Push: set this branch's upstream to this remote"
                   >
-                    set-upstream on push
-                  </Switch>
+                    <Switch bind:checked={setUpstream} />
+                    <span class="text-muted-foreground text-xs">set-upstream on push</span>
+                  </label>
                 </div>
               </details>
             </div>
@@ -738,35 +833,37 @@
   {/if}
 
   <form
-    class="add"
+    class="add flex flex-none flex-wrap items-center gap-1.5 border-t border-border px-2 py-1.5"
     aria-label="Add remote"
     onsubmit={(e) => {
       e.preventDefault();
       void onAdd();
     }}
   >
-    <input
-      class="name"
+    <Input
+      class="name h-auto w-32 shrink-0 rounded bg-background dark:bg-background px-2 py-0.5 text-xs md:text-xs text-foreground"
       type="text"
       placeholder="name"
       aria-label="New remote name"
       bind:value={addName}
     />
-    <input
-      class="url-input"
+    <Input
+      class="url-input h-auto min-w-40 flex-1 rounded bg-background dark:bg-background px-2 py-0.5 font-mono text-xs md:text-xs text-foreground"
       type="text"
       placeholder="https://host/repo.git"
       aria-label="New remote URL"
       bind:value={addUrl}
     />
-    <IconButton
-      icon={iconAdd}
-      label="Add remote"
-      title="Add a new remote"
-      variant="filled"
+    <Button
+      variant="default"
+      size="icon-sm"
       type="submit"
+      aria-label="Add remote"
+      title="Add a new remote"
       disabled={!addName.trim() || !addUrl.trim()}
-    />
+    >
+      <Icon icon={iconAdd} size={16} />
+    </Button>
   </form>
 </aside>
 
@@ -783,431 +880,3 @@
   danger
   onConfirm={() => void onRemoveConfirmed()}
 />
-
-<style>
-  .remote-panel {
-    display: flex;
-    flex-direction: column;
-    min-height: 0;
-    font-size: 0.8125rem;
-  }
-
-  .toolbar {
-    display: flex;
-    align-items: center;
-    gap: 0.75rem;
-    padding: 0.375rem 0.5rem;
-    flex: none;
-  }
-
-  .autofetch {
-    margin-left: auto;
-    display: flex;
-    align-items: center;
-    gap: 0.375rem;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    font-size: 0.72rem;
-  }
-
-  select {
-    font: inherit;
-    font-size: 0.72rem;
-    color: var(--m3-on-surface);
-    background: var(--m3-surface-container-lowest, var(--m3-surface));
-    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    border-radius: var(--m3-shape-extra-small, 4px);
-    padding: 0.15rem 0.3rem;
-    max-width: 12rem;
-  }
-
-  select:focus-visible {
-    outline: 2px solid var(--m3-primary);
-    outline-offset: -1px;
-  }
-
-  .progress {
-    display: flex;
-    flex-direction: column;
-    gap: 0.25rem;
-    padding: 0.25rem 0.5rem;
-    border-bottom: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    background: var(--m3-surface-container-low, var(--m3-surface));
-    flex: none;
-  }
-
-  .pbar-wrap {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-  }
-
-  .pmsg {
-    flex: none;
-    max-width: 45%;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    font-size: 0.72rem;
-  }
-
-  .pbar {
-    flex: 1;
-    height: 0.375rem;
-    border-radius: var(--m3-shape-full, 9999px);
-    background: var(--m3-surface-container-highest, var(--m3-surface-container));
-    overflow: hidden;
-  }
-
-  .pfill {
-    display: block;
-    height: 100%;
-    background: var(--m3-primary);
-    transition: width 0.2s ease;
-  }
-
-  .pbar.indeterminate .pfill {
-    width: 35%;
-    animation: slide 1.1s ease-in-out infinite;
-  }
-
-  @keyframes slide {
-    from {
-      transform: translateX(-100%);
-    }
-    to {
-      transform: translateX(300%);
-    }
-  }
-
-  .remotes {
-    flex: 1;
-    min-height: 0;
-    overflow-y: auto;
-    margin: 0;
-    padding: 0.375rem 0.5rem;
-    list-style: none;
-    display: flex;
-    flex-direction: column;
-    gap: 0.5rem;
-  }
-
-  .card {
-    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    border-radius: var(--m3-shape-small, 8px);
-    background: var(--m3-surface-container-low, var(--m3-surface));
-    padding: 0.375rem 0.5rem;
-  }
-
-  .card-head {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    min-width: 0;
-    flex-wrap: wrap;
-  }
-
-  .rname {
-    flex: none;
-    font-weight: 600;
-    color: var(--m3-primary);
-  }
-
-  .card-head .rname {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .url {
-    flex: 1;
-    min-width: 8rem;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    font-family: ui-monospace, Consolas, monospace;
-    font-size: 0.6875rem;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-  }
-
-  .url.push {
-    flex: none;
-    max-width: 40%;
-  }
-
-  .head-actions {
-    margin-left: auto;
-    flex: none;
-    display: flex;
-    gap: 0.25rem;
-  }
-
-  /* Repo-level sync bar: the common safe actions, primary remote first. */
-  .sync-bar {
-    display: flex;
-    align-items: center;
-    gap: 0.375rem;
-    padding: 0.375rem 0.5rem;
-    border-bottom: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    flex: none;
-    flex-wrap: wrap;
-  }
-
-  .sync-remote {
-    flex: none;
-    max-width: 10rem;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    font-weight: 600;
-    font-size: 0.72rem;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    margin-right: auto;
-  }
-
-  .sync-act {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.3rem;
-    min-height: 1.75rem;
-    padding: 0 0.7rem;
-    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    border-radius: var(--m3-shape-full, 9999px);
-    background: none;
-    color: var(--m3-on-surface);
-    font: inherit;
-    font-size: 0.75rem;
-    cursor: pointer;
-  }
-
-  .sync-act:hover:not(:disabled) {
-    background: var(--m3-surface-container-high, var(--m3-surface));
-  }
-
-  .sync-act.filled {
-    background: var(--m3-primary);
-    border-color: transparent;
-    color: var(--m3-on-primary);
-  }
-
-  .sync-act.filled:hover:not(:disabled) {
-    background: var(--m3-primary);
-    filter: brightness(1.06);
-  }
-
-  .sync-act:focus-visible {
-    outline: 2px solid var(--m3-primary);
-    outline-offset: 1px;
-  }
-
-  .sync-act:disabled {
-    color: var(--app-disabled-fg, var(--m3-on-surface-variant));
-    cursor: not-allowed;
-  }
-
-  .sync-count {
-    display: inline-flex;
-    align-items: center;
-    padding: 0 0.35rem;
-    border-radius: var(--m3-shape-full, 9999px);
-    font-size: 0.65rem;
-    font-weight: 600;
-    line-height: 1.25;
-    font-variant-numeric: tabular-nums;
-  }
-
-  .sync-count.ahead {
-    background: var(--m3-on-primary);
-    color: var(--m3-primary);
-  }
-
-  .sync-count.behind {
-    background: var(--m3-tertiary-container, var(--m3-surface-container-high));
-    color: var(--m3-on-tertiary-container, var(--m3-tertiary));
-  }
-
-  .card-actions {
-    display: flex;
-    flex-direction: column;
-    margin-top: 0.375rem;
-  }
-
-  /* One row per action: verb label — controls. Option switches live under
-     the Advanced disclosure below the rows. */
-  .action-row {
-    display: grid;
-    grid-template-columns: auto 1fr;
-    align-items: center;
-    gap: 0.625rem;
-    padding: 0.3rem 0;
-  }
-  .action-row + .action-row {
-    border-top: 1px solid var(--m3-outline-variant, var(--m3-primary));
-  }
-
-  .action-label {
-    min-width: 2.75rem;
-    font-size: 0.6875rem;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-  }
-
-  .action-main {
-    display: flex;
-    align-items: center;
-    gap: 0.375rem;
-    min-width: 0;
-    flex-wrap: wrap;
-  }
-  .action-main select {
-    max-width: 9rem;
-  }
-
-  /* Advanced disclosure: the low-frequency option switches, one line of
-     explanation each (UI review P2 #11). */
-  .adv {
-    margin-top: 0.25rem;
-    font-size: 0.72rem;
-  }
-
-  .adv summary {
-    cursor: pointer;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    user-select: none;
-    padding: 0.15rem 0;
-  }
-
-  .adv summary:hover {
-    color: var(--m3-on-surface);
-  }
-
-  .adv summary:focus-visible {
-    outline: 2px solid var(--m3-primary);
-    outline-offset: 1px;
-  }
-
-  .adv-opts {
-    display: flex;
-    flex-direction: column;
-    gap: 0.25rem;
-    padding: 0.25rem 0 0.35rem;
-  }
-
-  .edit-url {
-    display: flex;
-    align-items: center;
-    gap: 0.375rem;
-    flex-wrap: wrap;
-  }
-
-  .eu-label {
-    flex: 1;
-    min-width: 10rem;
-    display: flex;
-    align-items: center;
-    gap: 0.375rem;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    font-size: 0.72rem;
-  }
-
-  .eu-input {
-    flex: 1;
-    min-width: 8rem;
-    font: inherit;
-    font-size: 0.72rem;
-    font-family: ui-monospace, Consolas, monospace;
-    color: var(--m3-on-surface);
-    background: var(--m3-surface-container-lowest, var(--m3-surface));
-    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    border-radius: var(--m3-shape-extra-small, 4px);
-    padding: 0.15rem 0.375rem;
-  }
-
-  .eu-input:focus-visible {
-    outline: 2px solid var(--m3-primary);
-    outline-offset: -1px;
-  }
-
-  .add {
-    flex: none;
-    display: flex;
-    align-items: center;
-    gap: 0.375rem;
-    padding: 0.375rem 0.5rem;
-    border-top: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    flex-wrap: wrap;
-  }
-
-  .add .name {
-    flex: none;
-    width: 8rem;
-    font: inherit;
-    font-size: 0.75rem;
-    color: var(--m3-on-surface);
-    background: var(--m3-surface-container-lowest, var(--m3-surface));
-    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    border-radius: var(--m3-shape-extra-small, 4px);
-    padding: 0.2rem 0.45rem;
-  }
-
-  .add .url-input {
-    flex: 1;
-    min-width: 10rem;
-    font: inherit;
-    font-size: 0.75rem;
-    font-family: ui-monospace, Consolas, monospace;
-    color: var(--m3-on-surface);
-    background: var(--m3-surface-container-lowest, var(--m3-surface));
-    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    border-radius: var(--m3-shape-extra-small, 4px);
-    padding: 0.2rem 0.45rem;
-  }
-
-  .add .name:focus-visible,
-  .add .url-input:focus-visible {
-    outline: 2px solid var(--m3-primary);
-    outline-offset: -1px;
-  }
-
-  .state {
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    padding: 1rem 0.75rem;
-    margin: 0;
-    font-size: 0.8125rem;
-  }
-
-  .error {
-    color: var(--m3-error, inherit);
-  }
-
-  /* M12: inline HEAD ↔ remote-branch compare block. */
-  .rb-compare {
-    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    border-radius: var(--m3-shape-small, 8px);
-    padding: 0.3rem 0.4rem;
-  }
-
-  .rb-compare-head {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 0.5rem;
-    font-size: 0.72rem;
-    font-family: ui-monospace, Consolas, monospace;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-  }
-
-  .rb-compare-state {
-    margin: 0.25rem 0 0;
-    font-size: 0.72rem;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-  }
-
-  .rb-compare-diff {
-    margin-top: 0.25rem;
-    max-height: 18rem;
-    overflow: auto;
-  }
-</style>

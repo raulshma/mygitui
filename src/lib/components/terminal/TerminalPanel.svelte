@@ -55,6 +55,7 @@
   import { isTauri } from "$lib/entry/dragdrop";
   import { onSchemeChange } from "$lib/terminal/terminalStore.svelte";
   import type { TerminalSession } from "$lib/terminal/terminalStore.svelte";
+  import { Button } from "$lib/components/ui/button/index.js";
 
   let { repoId, remote = false }: { repoId: string; remote?: boolean } = $props();
 
@@ -130,150 +131,67 @@
   }
 </script>
 
-<section class="terminal-panel" aria-label="Terminal">
-  <header class="term-head">
-    <span class="term-title">Shell</span>
+<section class="terminal-panel flex h-full w-full min-h-0 min-w-0 flex-col bg-background text-foreground" aria-label="Terminal">
+  <header class="term-head flex flex-none items-center gap-2 border-b border-border bg-card px-3 py-[0.2rem] text-xs">
+    <span class="term-title font-medium">Shell</span>
     {#if statusLabel !== ""}
-      <span class="term-status">{statusLabel}</span>
+      <span class="term-status text-muted-foreground">{statusLabel}</span>
     {/if}
-    <span class="term-actions">
-      <button
-        class="term-btn"
+    <span class="term-actions ml-auto flex gap-1">
+      <Button
+        class="term-btn h-auto whitespace-nowrap px-[0.45rem] py-[0.1rem] text-[0.6875rem] hover:bg-accent hover:text-primary focus-visible:bg-accent focus-visible:text-primary"
+        variant="outline"
+        size="xs"
         type="button"
         title="Restart the shell (kill + start a new one)"
         disabled={!supported || entry?.status === "starting"}
         onclick={onRestart}
       >
         Restart
-      </button>
-      <button
-        class="term-btn danger"
+      </Button>
+      <Button
+        class="term-btn danger h-auto whitespace-nowrap px-[0.45rem] py-[0.1rem] text-[0.6875rem] text-destructive hover:bg-accent hover:text-destructive focus-visible:bg-accent focus-visible:text-destructive"
+        variant="outline"
+        size="xs"
         type="button"
         title="Kill the shell process"
         disabled={!supported || entry?.status !== "live"}
         onclick={onKill}
       >
         Kill
-      </button>
+      </Button>
     </span>
   </header>
 
   {#if !supported}
-    <div class="term-placeholder">Terminal requires the desktop app.</div>
+    <div class="term-placeholder flex flex-1 flex-col items-center justify-center gap-2 p-4 text-center text-[0.8125rem] text-muted-foreground">Terminal requires the desktop app.</div>
   {:else if entry?.status === "exited" || entry?.status === "failed"}
-    <div class="term-placeholder">
-      <p>
+    <div class="term-placeholder flex flex-1 flex-col items-center justify-center gap-2 p-4 text-center text-[0.8125rem] text-muted-foreground">
+      <p class="m-0">
         {entry?.status === "failed"
           ? `Could not start the terminal: ${entry?.error ?? "unknown error"}`
           : "The terminal session ended."}
       </p>
-      <button class="term-btn" type="button" onclick={onRestart}>
+      <Button
+        class="term-btn h-auto whitespace-nowrap px-[0.45rem] py-[0.1rem] text-[0.6875rem] hover:bg-accent hover:text-primary focus-visible:bg-accent focus-visible:text-primary"
+        variant="outline"
+        size="xs"
+        type="button"
+        onclick={onRestart}
+      >
         Start a new terminal
-      </button>
+      </Button>
     </div>
   {:else if entry?.status === "unavailable"}
-    <div class="term-placeholder">Terminal is not available.</div>
+    <div class="term-placeholder flex flex-1 flex-col items-center justify-center gap-2 p-4 text-center text-[0.8125rem] text-muted-foreground">Terminal is not available.</div>
   {:else}
     <!-- svelte-ignore a11y_click_events_have_key_events -->
     <!-- svelte-ignore a11y_no_static_element_interactions -->
     <div
-      class="term-host"
+      class="term-host min-h-0 flex-1 overflow-hidden p-1 [&_.xterm]:h-full"
       bind:this={hostEl}
       aria-label="Terminal"
       onclick={onHostClick}
     ></div>
   {/if}
 </section>
-
-<style>
-  .terminal-panel {
-    display: flex;
-    flex-direction: column;
-    width: 100%;
-    height: 100%;
-    min-width: 0;
-    min-height: 0;
-    background: var(--m3-surface);
-    color: var(--m3-on-surface);
-  }
-
-  .term-head {
-    flex: none;
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    padding: 0.2rem 0.75rem;
-    background: var(--m3-surface-container, var(--m3-surface));
-    border-bottom: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    font-size: 0.75rem;
-  }
-
-  .term-title {
-    font-weight: 500;
-  }
-
-  .term-status {
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-  }
-
-  .term-actions {
-    margin-left: auto;
-    display: flex;
-    gap: 0.25rem;
-  }
-
-  .term-btn {
-    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    border-radius: var(--m3-shape-small, 8px);
-    background: none;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    font: inherit;
-    font-size: 0.6875rem;
-    padding: 0.1rem 0.45rem;
-    cursor: pointer;
-    white-space: nowrap;
-  }
-
-  .term-btn:hover:not(:disabled),
-  .term-btn:focus-visible {
-    color: var(--m3-primary);
-    background: var(--m3-surface-container-high, var(--m3-surface));
-  }
-
-  .term-btn.danger {
-    color: var(--m3-error, var(--m3-primary));
-  }
-
-  .term-btn:disabled {
-    opacity: 0.45;
-    cursor: not-allowed;
-  }
-
-  .term-host {
-    flex: 1;
-    min-height: 0;
-    padding: 0.25rem;
-    overflow: hidden;
-  }
-
-  .term-host :global(.xterm) {
-    height: 100%;
-  }
-
-  .term-placeholder {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    gap: 0.5rem;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    font-size: 0.8125rem;
-    text-align: center;
-    padding: 1rem;
-  }
-
-  .term-placeholder p {
-    margin: 0;
-  }
-</style>

@@ -13,13 +13,19 @@
    * the store; App.svelte mounts one instance.
    */
   import { remoteDevices } from "$lib/stores/remoteDevices.svelte";
+  import * as Dialog from "$lib/components/ui/dialog/index.js";
+  import { Input } from "$lib/components/ui/input/index.js";
+  import { Label } from "$lib/components/ui/label/index.js";
+  import { Checkbox } from "$lib/components/ui/checkbox/index.js";
+  import { Button } from "$lib/components/ui/button/index.js";
 
   const request = $derived(remoteDevices.authPending);
   const isPassphrase = $derived(request?.kind === "ssh-passphrase");
+  const open = $derived(request !== null);
 
   let password = $state("");
   let store = $state(false);
-  let passField: HTMLInputElement | undefined = $state();
+  let passField = $state<HTMLElement | null>(null);
 
   // Reset the form and focus the password field whenever a request appears.
   $effect(() => {
@@ -39,171 +45,70 @@
     await remoteDevices.dismissAuth();
   }
 
-  function onKeydown(event: KeyboardEvent): void {
-    if (event.key === "Escape") {
-      event.preventDefault();
-      void cancel();
-    }
+  // Escape (the only close path besides the buttons) answers null.
+  function onOpenChange(next: boolean): void {
+    if (!next) void cancel();
   }
 </script>
 
-{#if request}
-  <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-  <div class="scrim" role="presentation" onkeydown={onKeydown}>
-    <div
-      class="dialog"
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="device-auth-title"
-      aria-describedby="device-auth-prompt"
-    >
-      <h2 id="device-auth-title" class="title">Device authentication</h2>
-      <p id="device-auth-prompt" class="prompt">{request.prompt}</p>
-
-      <form
-        onsubmit={(event) => {
-          event.preventDefault();
-          void submit();
-        }}
+<Dialog.Root {open} {onOpenChange}>
+  <Dialog.Content
+    class="sdlg-dialog dialog w-full gap-4 px-6 py-5 sm:max-w-[26rem]"
+    interactOutsideBehavior="ignore"
+    showCloseButton={false}
+    aria-describedby="device-auth-prompt"
+  >
+    <Dialog.Header>
+      <Dialog.Title id="device-auth-title" class="title text-lg font-medium">
+        Device authentication
+      </Dialog.Title>
+      <Dialog.Description
+        id="device-auth-prompt"
+        class="prompt wrap-anywhere"
       >
-        <label class="field">
-          <span class="field-label">
-            {isPassphrase ? "Key passphrase" : "Password"}
-          </span>
-          <input
-            class="input"
-            type="password"
-            autocomplete="current-password"
-            bind:value={password}
-            bind:this={passField}
-          />
-        </label>
+        {request?.prompt}
+      </Dialog.Description>
+    </Dialog.Header>
 
-        <label class="check">
-          <input type="checkbox" bind:checked={store} />
-          <span>Remember (store in keyring)</span>
-        </label>
+    <form
+      class="flex flex-col gap-3"
+      onsubmit={(event) => {
+        event.preventDefault();
+        void submit();
+      }}
+    >
+      <Label class="field flex flex-col items-start gap-1">
+        <span class="field-label text-muted-foreground text-xs">
+          {isPassphrase ? "Key passphrase" : "Password"}
+        </span>
+        <Input
+          class="input"
+          type="password"
+          autocomplete="current-password"
+          bind:value={password}
+          bind:ref={passField}
+        />
+      </Label>
 
-        <div class="actions">
-          <button class="primary" type="submit">
-            {isPassphrase ? "Unlock" : "Sign in"}
-          </button>
-          <button class="secondary" type="button" onclick={() => void cancel()}>
-            Cancel
-          </button>
-        </div>
-      </form>
-    </div>
-  </div>
-{/if}
+      <Label class="check text-muted-foreground flex cursor-pointer items-center gap-2">
+        <Checkbox bind:checked={store} />
+        <span>Remember (store in keyring)</span>
+      </Label>
 
-<style>
-  .scrim {
-    position: fixed;
-    inset: 0;
-    z-index: 60;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: color-mix(in srgb, var(--m3-scrim, black) 40%, transparent);
-  }
-
-  .dialog {
-    width: min(26rem, calc(100vw - 2rem));
-    padding: 1.25rem 1.5rem;
-    border-radius: var(--m3-shape-large, 16px);
-    background: var(--m3-surface-container-high, var(--m3-surface));
-    color: var(--m3-on-surface);
-    box-shadow: var(--m3-elevation-3, 0 8px 24px rgba(0, 0, 0, 0.3));
-    font-size: 0.875rem;
-  }
-
-  .title {
-    margin: 0 0 0.5rem;
-    font-size: 1.125rem;
-    font-weight: 500;
-  }
-
-  .prompt {
-    margin: 0 0 0.875rem;
-    color: var(--m3-on-surface);
-    overflow-wrap: anywhere;
-  }
-
-  form {
-    display: flex;
-    flex-direction: column;
-    gap: 0.75rem;
-  }
-
-  .field {
-    display: flex;
-    flex-direction: column;
-    gap: 0.25rem;
-  }
-
-  .field-label {
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    font-size: 0.75rem;
-  }
-
-  .input {
-    font: inherit;
-    color: var(--m3-on-surface);
-    background: var(--m3-surface-container-lowest, var(--m3-surface));
-    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    border-radius: var(--m3-shape-extra-small, 4px);
-    padding: 0.45rem 0.6rem;
-  }
-
-  .input:focus-visible {
-    outline: 2px solid var(--m3-primary);
-    outline-offset: -1px;
-  }
-
-  .check {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    cursor: pointer;
-  }
-
-  .check input {
-    accent-color: var(--m3-primary);
-  }
-
-  .actions {
-    display: flex;
-    justify-content: flex-end;
-    gap: 0.5rem;
-    margin-top: 0.25rem;
-  }
-
-  .primary {
-    border: none;
-    border-radius: var(--m3-shape-full, 9999px);
-    background: var(--m3-primary);
-    color: var(--m3-on-primary);
-    font: inherit;
-    font-weight: 500;
-    padding: 0.45rem 1.25rem;
-    cursor: pointer;
-  }
-
-  .secondary {
-    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    border-radius: var(--m3-shape-full, 9999px);
-    background: none;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    font: inherit;
-    padding: 0.45rem 1rem;
-    cursor: pointer;
-  }
-
-  .primary:focus-visible,
-  .secondary:focus-visible {
-    outline: 2px solid var(--m3-primary);
-    outline-offset: 2px;
-  }
-</style>
+      <div class="actions mt-1 flex justify-end gap-2">
+        <Button class="primary" size="sm" type="submit">
+          {isPassphrase ? "Unlock" : "Sign in"}
+        </Button>
+        <Button
+          class="secondary"
+          variant="outline"
+          size="sm"
+          type="button"
+          onclick={() => void cancel()}
+        >
+          Cancel
+        </Button>
+      </div>
+    </form>
+  </Dialog.Content>
+</Dialog.Root>

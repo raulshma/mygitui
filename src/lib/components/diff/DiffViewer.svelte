@@ -56,6 +56,7 @@
   import { createWrapFeedback } from "$lib/diff/wrapFeedback";
   import DiffRow from "$lib/components/diff/DiffRow.svelte";
   import ExplainHunkPanel from "$lib/components/ai/ExplainHunkPanel.svelte";
+  import { Toggle } from "$lib/components/ui/toggle/index.js";
 
   let {
     files,
@@ -605,46 +606,40 @@
 </script>
 
 {#if files.length === 0}
-  <div class="diff-viewer empty">
-    <p class="empty-title">No changes</p>
-    <p class="empty-hint">Select a file with differences to see its diff here.</p>
+  <div class="diff-viewer empty relative flex h-full min-h-0 flex-col items-center justify-center gap-1 bg-background text-muted-foreground">
+    <p class="empty-title m-0 text-[0.9375rem] font-medium text-foreground">No changes</p>
+    <p class="empty-hint m-0 text-xs">Select a file with differences to see its diff here.</p>
   </div>
 {:else}
-  <div class="diff-viewer">
-    <div class="toolbar">
-      <div class="segmented" role="group" aria-label="Diff layout">
-        <button
-          type="button"
-          class="seg"
-          class:on={mode === "split"}
-          aria-pressed={mode === "split"}
-          onclick={() => setMode("split")}
+  <div class="diff-viewer relative flex h-full min-h-0 flex-col bg-background">
+    <div class="toolbar flex min-h-[1.8rem] shrink-0 items-center gap-1.5 border-b border-[var(--diff-divider)] bg-card px-2.5 py-[0.2rem]">
+      <div class="segmented inline-flex shrink-0 overflow-hidden rounded border border-border" role="group" aria-label="Diff layout">
+        <Toggle
+          class="h-auto rounded-none border-0 px-2 py-0 text-[0.6875rem] leading-[1.5] font-normal text-muted-foreground aria-pressed:font-semibold aria-pressed:text-foreground focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary focus-visible:ring-0"
+          pressed={mode === "split"}
+          onPressedChange={(next) => next && setMode("split")}
           title="Show old and new side by side"
-        >Split</button>
-        <button
-          type="button"
-          class="seg"
-          class:on={mode === "unified"}
-          aria-pressed={mode === "unified"}
-          onclick={() => setMode("unified")}
+        >Split</Toggle>
+        <Toggle
+          class="h-auto rounded-none border-0 border-l border-l-border px-2 py-0 text-[0.6875rem] leading-[1.5] font-normal text-muted-foreground aria-pressed:font-semibold aria-pressed:text-foreground focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary focus-visible:ring-0"
+          pressed={mode === "unified"}
+          onPressedChange={(next) => next && setMode("unified")}
           title="Show old and new in one column"
-        >Unified</button>
+        >Unified</Toggle>
       </div>
-      <button
-        type="button"
-        class="tool-btn"
-        class:on={wrap}
-        aria-pressed={wrap}
-        onclick={toggleWrap}
+      <Toggle
+        class="h-auto shrink-0 rounded border border-border px-2 py-0 text-[0.6875rem] leading-[1.5] font-normal text-muted-foreground aria-pressed:text-foreground focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary focus-visible:ring-0"
+        pressed={wrap}
+        onPressedChange={() => toggleWrap()}
         aria-label="Wrap long lines"
         title={wrap
           ? "Long lines wrap — click to scroll instead"
           : "Long lines scroll — click to wrap"}
-      >Wrap</button>
-      <span class="stats">
+      >Wrap</Toggle>
+      <span class="stats ml-auto flex items-center gap-[0.4rem] text-[0.6875rem] text-muted-foreground tabular-nums">
         <span class="stat-files">{files.length} {files.length === 1 ? "file" : "files"}</span>
-        <span class="stat-adds">+{model.totalAdditions}</span>
-        <span class="stat-dels">−{model.totalDeletions}</span>
+        <span class="stat-adds text-[var(--app-added)]">+{model.totalAdditions}</span>
+        <span class="stat-dels text-[var(--app-deleted)]">−{model.totalDeletions}</span>
       </span>
     </div>
 
@@ -652,7 +647,7 @@
          region is noninteractive by design — the ignore is deliberate. -->
     <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
     <div
-      class="viewport"
+      class="viewport min-h-0 flex-1 overflow-auto outline-none focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary"
       bind:this={viewportEl}
       onscroll={onScroll}
       tabindex="0"
@@ -663,9 +658,9 @@
            line selection (those stop propagation). -->
       <!-- svelte-ignore a11y_click_events_have_key_events -->
       <!-- svelte-ignore a11y_no_static_element_interactions -->
-      <div class="content" onclick={clearSelectionOnClick} onmousedown={onContentMouseDown} ondblclick={onContentDblClick} style="height: {layout.totalHeight}px; min-width: {contentMinWidth}">
+      <div class="content relative w-max min-w-full" onclick={clearSelectionOnClick} onmousedown={onContentMouseDown} ondblclick={onContentDblClick} style="height: {layout.totalHeight}px; min-width: {contentMinWidth}">
         {#each slices as slice (slice.bucketIndex)}
-          <div class="slice" style="top: {slice.top}px">
+          <div class="slice absolute inset-x-0 overflow-hidden [contain:layout_style]" style="top: {slice.top}px">
             {#each model.rows.slice(slice.firstRow, slice.firstRow + slice.count) as row, i (slice.firstRow + i)}
               <DiffRow
                 {row}
@@ -713,161 +708,43 @@
 {/if}
 
 <style>
+  /*
+   * Diff palette: status hues from the app tokens (green add / red delete),
+   * mixed over the surrounding surface by the CSS engine — never in JS.
+   * These custom properties are consumed by DiffRow/ImageCompare via
+   * Tailwind arbitrary utilities (bg-[var(--diff-*)] etc.), so they must
+   * stay defined here on the viewer root.
+   */
   .diff-viewer {
-    /* Diff palette: status hues from the app tokens (green add / red delete),
-       mixed over the surrounding surface by the CSS engine — never in JS. */
-    --diff-add-bg: color-mix(in srgb, var(--app-added, var(--m3-tertiary)) 12%, transparent);
-    --diff-del-bg: color-mix(in srgb, var(--app-deleted, var(--m3-error)) 12%, transparent);
-    --diff-add-gutter: color-mix(in srgb, var(--app-added, var(--m3-tertiary)) 20%, transparent);
-    --diff-del-gutter: color-mix(in srgb, var(--app-deleted, var(--m3-error)) 20%, transparent);
-    --diff-empty-bg: color-mix(in srgb, var(--m3-surface-variant) 12%, transparent);
-    --diff-hl-bg: color-mix(in srgb, var(--app-modified, var(--m3-tertiary)) 32%, transparent);
-    --diff-divider: var(--m3-outline-variant);
-    --diff-file-bg: var(--m3-surface-container, var(--m3-surface));
-    --diff-file-accent: color-mix(in srgb, var(--m3-primary) 55%, transparent);
-    --diff-hunk-bg: color-mix(in srgb, var(--m3-primary) 6%, var(--m3-surface-container, var(--m3-surface)));
-    --diff-hunk-accent: color-mix(in srgb, var(--m3-primary) 65%, transparent);
+    --diff-add-bg: color-mix(in srgb, var(--app-added) 12%, transparent);
+    --diff-del-bg: color-mix(in srgb, var(--app-deleted) 12%, transparent);
+    --diff-add-gutter: color-mix(in srgb, var(--app-added) 20%, transparent);
+    --diff-del-gutter: color-mix(in srgb, var(--app-deleted) 20%, transparent);
+    --diff-empty-bg: color-mix(in srgb, var(--muted) 12%, transparent);
+    --diff-hl-bg: color-mix(in srgb, var(--app-modified) 32%, transparent);
+    --diff-divider: var(--border);
+    --diff-file-bg: var(--card);
+    --diff-file-accent: color-mix(in srgb, var(--primary) 55%, transparent);
+    --diff-hunk-bg: color-mix(in srgb, var(--primary) 6%, var(--card));
+    --diff-hunk-accent: color-mix(in srgb, var(--primary) 65%, transparent);
     /* M12 line selection highlight. */
-    --diff-sel-bg: color-mix(in srgb, var(--m3-primary) 24%, transparent);
-
-    position: relative; /* anchors the docked explain panel */
-    display: flex;
-    flex-direction: column;
-    height: 100%;
-    min-height: 0;
-    background: var(--m3-surface-container-lowest, var(--m3-surface));
+    --diff-sel-bg: color-mix(in srgb, var(--primary) 24%, transparent);
   }
 
   /*
    * Dark surfaces swallow the light-mode washes (12% over near-black is
    * barely a tint). Strengthen row/gutter/highlight tints so changed blocks
    * stay recognizable; the status hues themselves switch to their bright
-   * dark variants via app.css `data-theme`.
+   * dark variants via app.css `.dark`.
    */
-  :global(:root[data-theme="dark"]) .diff-viewer {
+  :global(.dark) .diff-viewer {
     --diff-add-bg: color-mix(in srgb, var(--app-added) 20%, transparent);
     --diff-del-bg: color-mix(in srgb, var(--app-deleted) 20%, transparent);
     --diff-add-gutter: color-mix(in srgb, var(--app-added) 34%, transparent);
     --diff-del-gutter: color-mix(in srgb, var(--app-deleted) 34%, transparent);
-    --diff-empty-bg: color-mix(in srgb, var(--m3-surface-variant) 20%, transparent);
+    --diff-empty-bg: color-mix(in srgb, var(--muted) 20%, transparent);
     --diff-hl-bg: color-mix(in srgb, var(--app-modified) 42%, transparent);
-    --diff-sel-bg: color-mix(in srgb, var(--m3-primary) 30%, transparent);
-  }
-
-  .toolbar {
-    flex: none;
-    display: flex;
-    align-items: center;
-    gap: 0.375rem;
-    min-height: 1.8rem;
-    padding: 0.2rem 0.6rem;
-    border-bottom: 1px solid var(--diff-divider);
-    background: var(--m3-surface-container, var(--m3-surface));
-  }
-
-  /* Compact segmented layout switch. */
-  .segmented {
-    display: inline-flex;
-    flex: none;
-    border: 1px solid var(--m3-outline-variant);
-    border-radius: var(--m3-shape-extra-small, 4px);
-    overflow: hidden;
-  }
-
-  .seg {
-    border: none;
-    background: transparent;
-    color: var(--m3-on-surface-variant);
-    font: inherit;
-    font-size: 0.6875rem;
-    line-height: 1.5;
-    padding: 0 0.5rem;
-    cursor: pointer;
-  }
-
-  .seg + .seg {
-    border-left: 1px solid var(--m3-outline-variant);
-  }
-
-  .seg:hover {
-    background: var(--app-hover, var(--m3-surface-container-high, var(--m3-surface)));
-    color: var(--m3-on-surface);
-  }
-
-  .seg.on {
-    background: var(--m3-secondary-container, var(--m3-surface-container-high));
-    color: var(--m3-on-secondary-container, var(--m3-on-surface));
-    font-weight: 600;
-  }
-
-  .tool-btn {
-    flex: none;
-    border: 1px solid var(--m3-outline-variant);
-    border-radius: var(--m3-shape-extra-small, 4px);
-    background: transparent;
-    color: var(--m3-on-surface-variant);
-    font: inherit;
-    font-size: 0.6875rem;
-    line-height: 1.5;
-    padding: 0 0.5rem;
-    cursor: pointer;
-  }
-
-  .tool-btn:hover {
-    background: var(--app-hover, var(--m3-surface-container-high, var(--m3-surface)));
-    color: var(--m3-on-surface);
-  }
-
-  .tool-btn.on {
-    background: var(--m3-secondary-container, var(--m3-surface-container-high));
-    color: var(--m3-on-secondary-container, var(--m3-on-surface));
-  }
-
-  .seg:focus-visible,
-  .tool-btn:focus-visible {
-    outline: 2px solid var(--m3-primary);
-    outline-offset: -2px;
-  }
-
-  .stats {
-    display: flex;
-    align-items: center;
-    gap: 0.4rem;
-    margin-left: auto;
-    font-size: 0.6875rem;
-    color: var(--m3-on-surface-variant);
-    font-variant-numeric: tabular-nums;
-  }
-  .stat-adds {
-    color: var(--app-added, var(--m3-primary));
-  }
-  .stat-dels {
-    color: var(--app-deleted, var(--m3-error));
-  }
-
-  .viewport {
-    flex: 1;
-    min-height: 0;
-    overflow: auto; /* wheel + native scrollbar; keyboard once focused */
-    outline: none;
-  }
-  .viewport:focus-visible {
-    outline: 2px solid var(--m3-primary);
-    outline-offset: -2px;
-  }
-
-  .content {
-    position: relative;
-    width: max-content;
-    min-width: 100%;
-  }
-
-  .slice {
-    position: absolute;
-    left: 0;
-    right: 0;
-    overflow: hidden;
-    contain: layout style;
+    --diff-sel-bg: color-mix(in srgb, var(--primary) 30%, transparent);
   }
 
   /* Split-view selection paint (see the split view block in the script):
@@ -875,27 +752,7 @@
      Highlight API paints only color/background/text-decoration, which is
      all a text selection needs. */
   :global(::highlight(mygitui-diff-sel)) {
-    background-color: color-mix(in srgb, var(--m3-primary) 35%, transparent);
-    color: var(--m3-on-surface);
-  }
-
-  /* ---- empty state ---- */
-  .diff-viewer.empty {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    gap: 0.25rem;
-    color: var(--m3-on-surface-variant);
-  }
-  .empty-title {
-    margin: 0;
-    font-size: 0.9375rem;
-    font-weight: 500;
-    color: var(--m3-on-surface);
-  }
-  .empty-hint {
-    margin: 0;
-    font-size: 0.75rem;
+    background-color: color-mix(in srgb, var(--primary) 35%, transparent);
+    color: var(--foreground);
   }
 </style>

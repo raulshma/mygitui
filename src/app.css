@@ -1,130 +1,126 @@
 /*
- * mygitui global styles.
+ * mygitui global styles — shadcn-svelte (vega preset, neutral base).
  *
- * Color tokens below are the STATIC FALLBACK set: exact output of the theme
- * engine (src/lib/theme) for the baseline seed #6750a4, TonalSpot variant.
- * At startup initTheme() writes the same token names (plus --m3c-* aliases
- * consumed by m3-svelte components) onto <html> inline style, which wins the
- * cascade and swaps reactively with prefers-color-scheme. Consumers should
- * only ever use var(--m3-<name>).
- *
- * Token families: primary/on-primary/primary-container/on-primary-container
- * (+fixed/-dim/-variant), secondary*, tertiary*, error*, background,
- * on-background, surface/on-surface/surface-variant/on-surface-variant,
- * surface-dim/surface-bright, surface-container-lowest/low/(none)/high/highest,
- * surface-tint, inverse-surface/inverse-on-surface/inverse-primary, outline,
- * outline-variant, shadow, scrim.
+ * Theme tokens follow the shadcn/svelte `vega` style: semantic oklch vars in
+ * :root (light) and .dark, exposed to Tailwind v4 via `@theme inline`. Dark
+ * mode is class-based (`.dark` on <html>), driven by src/lib/theme.
+ */
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "@fontsource-variable/inter";
+
+@custom-variant dark (&:is(.dark *));
+
+:root {
+  --background: oklch(1 0 0);
+  --foreground: oklch(0.145 0 0);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.145 0 0);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.145 0 0);
+  --primary: oklch(0.205 0 0);
+  --primary-foreground: oklch(0.985 0 0);
+  --secondary: oklch(0.97 0 0);
+  --secondary-foreground: oklch(0.205 0 0);
+  --muted: oklch(0.97 0 0);
+  --muted-foreground: oklch(0.556 0 0);
+  --accent: oklch(0.97 0 0);
+  --accent-foreground: oklch(0.205 0 0);
+  --destructive: oklch(0.577 0.245 27.325);
+  --border: oklch(0.922 0 0);
+  --input: oklch(0.922 0 0);
+  --ring: oklch(0.708 0 0);
+  --chart-1: oklch(0.87 0 0);
+  --chart-2: oklch(0.556 0 0);
+  --chart-3: oklch(0.439 0 0);
+  --chart-4: oklch(0.371 0 0);
+  --chart-5: oklch(0.269 0 0);
+  --radius: 0.625rem;
+  --sidebar: oklch(0.985 0 0);
+  --sidebar-foreground: oklch(0.145 0 0);
+  --sidebar-primary: oklch(0.205 0 0);
+  --sidebar-primary-foreground: oklch(0.985 0 0);
+  --sidebar-accent: oklch(0.97 0 0);
+  --sidebar-accent-foreground: oklch(0.205 0 0);
+  --sidebar-border: oklch(0.922 0 0);
+  --sidebar-ring: oklch(0.708 0 0);
+}
+
+.dark {
+  --background: oklch(0.145 0 0);
+  --foreground: oklch(0.985 0 0);
+  --card: oklch(0.205 0 0);
+  --card-foreground: oklch(0.985 0 0);
+  --popover: oklch(0.205 0 0);
+  --popover-foreground: oklch(0.985 0 0);
+  --primary: oklch(0.922 0 0);
+  --primary-foreground: oklch(0.205 0 0);
+  --secondary: oklch(0.269 0 0);
+  --secondary-foreground: oklch(0.985 0 0);
+  --muted: oklch(0.269 0 0);
+  --muted-foreground: oklch(0.708 0 0);
+  --accent: oklch(0.269 0 0);
+  --accent-foreground: oklch(0.985 0 0);
+  --destructive: oklch(0.704 0.191 22.216);
+  --border: oklch(1 0 0 / 10%);
+  --input: oklch(1 0 0 / 15%);
+  --ring: oklch(0.556 0 0);
+  --chart-1: oklch(0.87 0 0);
+  --chart-2: oklch(0.556 0 0);
+  --chart-3: oklch(0.439 0 0);
+  --chart-4: oklch(0.371 0 0);
+  --chart-5: oklch(0.269 0 0);
+  --sidebar: oklch(0.205 0 0);
+  --sidebar-foreground: oklch(0.985 0 0);
+  --sidebar-primary: oklch(0.488 0.243 264.376);
+  --sidebar-primary-foreground: oklch(0.985 0 0);
+  --sidebar-accent: oklch(0.269 0 0);
+  --sidebar-accent-foreground: oklch(0.985 0 0);
+  --sidebar-border: oklch(1 0 0 / 10%);
+  --sidebar-ring: oklch(0.556 0 0);
+}
+
+@theme inline {
+  --font-sans: "Inter Variable", Roboto, "Segoe UI", system-ui, sans-serif;
+  --font-mono: "Cascadia Mono", "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+}
+
+/*
+ * App semantic tokens (source control + diff). Deliberately static like
+ * VSCode's git decorations: add/delete/conflict keep their conventional
+ * meaning in both schemes. Backgrounds derive from the foreground with
+ * color-mix.
  */
 :root {
-  color-scheme: light dark;
-
-  /* Primary */
-  --m3-primary: #65558f;
-  --m3-on-primary: #ffffff;
-  --m3-primary-container: #e9ddff;
-  --m3-on-primary-container: #4d3d75;
-  --m3-inverse-primary: #cfbdfe;
-  --m3-primary-fixed: #e9ddff;
-  --m3-primary-fixed-dim: #cfbdfe;
-  --m3-on-primary-fixed: #201047;
-  --m3-on-primary-fixed-variant: #4d3d75;
-
-  /* Secondary */
-  --m3-secondary: #625b71;
-  --m3-on-secondary: #ffffff;
-  --m3-secondary-container: #e8def8;
-  --m3-on-secondary-container: #4a4458;
-  --m3-secondary-fixed: #e8def8;
-  --m3-secondary-fixed-dim: #cbc2db;
-  --m3-on-secondary-fixed: #1e192b;
-  --m3-on-secondary-fixed-variant: #4a4458;
-
-  /* Tertiary */
-  --m3-tertiary: #7e5260;
-  --m3-on-tertiary: #ffffff;
-  --m3-tertiary-container: #ffd9e3;
-  --m3-on-tertiary-container: #633b48;
-  --m3-tertiary-fixed: #ffd9e3;
-  --m3-tertiary-fixed-dim: #efb8c8;
-  --m3-on-tertiary-fixed: #31101d;
-  --m3-on-tertiary-fixed-variant: #633b48;
-
-  /* Error */
-  --m3-error: #ba1a1a;
-  --m3-on-error: #ffffff;
-  --m3-error-container: #ffdad6;
-  --m3-on-error-container: #93000a;
-
-  /* Neutral / surfaces */
-  --m3-background: #fdf7ff;
-  --m3-on-background: #1d1b20;
-  --m3-surface: #fdf7ff;
-  --m3-on-surface: #1d1b20;
-  --m3-surface-variant: #e7e0eb;
-  --m3-on-surface-variant: #49454e;
-  --m3-surface-dim: #ded8e0;
-  --m3-surface-bright: #fdf7ff;
-  --m3-surface-container-lowest: #ffffff;
-  --m3-surface-container-low: #f8f2fa;
-  --m3-surface-container: #f2ecf4;
-  --m3-surface-container-high: #ece6ee;
-  --m3-surface-container-highest: #e6e0e9;
-  --m3-surface-tint: #65558f;
-  --m3-inverse-surface: #322f35;
-  --m3-inverse-on-surface: #f5eff7;
-  --m3-outline: #7a757f;
-  --m3-outline-variant: #cac4cf;
-  --m3-shadow: #000000;
-  --m3-scrim: #000000;
-
-  /*
-   * Static (non-color) M3 tokens. Shape radii are the M3 spec defaults;
-   * elevation uses --m3-shadow so it follows the palette. These are consumed
-   * by m3-svelte components (which expect them from m3-svelte/etc/styles.css,
-   * not bundled here) and by future app styling.
-   */
-  --m3-shape-none: 0px;
-  --m3-shape-extra-small: 4px;
-  --m3-shape-small: 8px;
-  --m3-shape-medium: 12px;
-  --m3-shape-large: 16px;
-  --m3-shape-large-increased: 20px;
-  --m3-shape-extra-large: 28px;
-  --m3-shape-full: calc(infinity * 1px);
-
-  --m3-elevation-0: none;
-  --m3-elevation-1:
-    /* Spot */ 0px 1px 2px 0px color-mix(in srgb, var(--m3-shadow) 30%, transparent),
-    /* Ambient */ 0px 1px 3px 1px color-mix(in srgb, var(--m3-shadow) 15%, transparent);
-  --m3-elevation-2:
-    0px 1px 2px 0px color-mix(in srgb, var(--m3-shadow) 30%, transparent),
-    0px 2px 6px 2px color-mix(in srgb, var(--m3-shadow) 15%, transparent);
-  --m3-elevation-3:
-    0px 1px 3px 0px color-mix(in srgb, var(--m3-shadow) 30%, transparent),
-    0px 4px 8px 3px color-mix(in srgb, var(--m3-shadow) 15%, transparent);
-  --m3-elevation-4:
-    0px 2px 3px 0px color-mix(in srgb, var(--m3-shadow) 30%, transparent),
-    0px 6px 10px 4px color-mix(in srgb, var(--m3-shadow) 15%, transparent);
-  --m3-elevation-5:
-    0px 4px 4px 0px color-mix(in srgb, var(--m3-shadow) 30%, transparent),
-    0px 8px 12px 6px color-mix(in srgb, var(--m3-shadow) 15%, transparent);
-
-  /*
-   * Scrollbar tokens (M7 I2 a11y pass). Both engines follow the palette:
-   * `scrollbar-color` covers Firefox, the ::-webkit-* rules below cover
-   * WebView2/Chromium (Tauri's Windows webview).
-   */
-  --scrollbar-thumb: var(--m3-outline-variant);
-  --scrollbar-thumb-hover: var(--m3-outline);
-  --scrollbar-track: transparent;
-
-  /*
-   * App semantic tokens (source control + diff). Deliberately static like
-   * VSCode's git decorations: add/delete/conflict keep their conventional
-   * meaning regardless of the user's accent seed. Backgrounds derive from
-   * the foreground with color-mix so dark mode needs only the hue overrides
-   * below.
-   */
   --app-added: #1a7f37;
   --app-deleted: #cf222e;
   --app-modified: #9a6700;
@@ -137,161 +133,59 @@
   --app-renamed-bg: color-mix(in srgb, var(--app-renamed) 13%, transparent);
   --app-untracked-bg: color-mix(in srgb, var(--app-untracked) 12%, transparent);
   --app-conflicted-bg: color-mix(in srgb, var(--app-conflicted) 16%, transparent);
-  --app-border: var(--m3-outline-variant);
-  --app-hover: color-mix(in srgb, var(--m3-on-surface) 5%, transparent);
-  --app-active: color-mix(in srgb, var(--m3-primary) 15%, transparent);
+  --app-border: var(--border);
+  --app-hover: color-mix(in srgb, var(--foreground) 5%, transparent);
+  --app-active: color-mix(in srgb, var(--primary) 15%, transparent);
   --app-font-mono: "Cascadia Mono", "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  --app-disabled-bg: color-mix(in srgb, var(--foreground) 12%, transparent);
+  --app-disabled-fg: color-mix(in srgb, var(--foreground) 38%, transparent);
 
-  /*
-   * M3 disabled state: 12% on-surface container, 38% on-surface label.
-   * Derived from the palette so light/dark both stay legible (a plain
-   * opacity on a filled button washes the label out instead).
-   */
-  --app-disabled-bg: color-mix(in srgb, var(--m3-on-surface) 12%, transparent);
-  --app-disabled-fg: color-mix(in srgb, var(--m3-on-surface) 38%, transparent);
+  /* Scrollbar tokens: `scrollbar-color` covers Firefox, ::-webkit-* the
+   * WebView2/Chromium webview. */
+  --scrollbar-thumb: color-mix(in oklch, var(--foreground) 25%, transparent);
+  --scrollbar-thumb-hover: color-mix(in oklch, var(--foreground) 40%, transparent);
+  --scrollbar-track: transparent;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    /* Primary */
-    --m3-primary: #cfbdfe;
-    --m3-on-primary: #36275d;
-    --m3-primary-container: #4d3d75;
-    --m3-on-primary-container: #e9ddff;
-    --m3-inverse-primary: #65558f;
-    --m3-primary-fixed: #e9ddff;
-    --m3-primary-fixed-dim: #cfbdfe;
-    --m3-on-primary-fixed: #201047;
-    --m3-on-primary-fixed-variant: #4d3d75;
-
-    /* Secondary */
-    --m3-secondary: #cbc2db;
-    --m3-on-secondary: #332d41;
-    --m3-secondary-container: #4a4458;
-    --m3-on-secondary-container: #e8def8;
-    --m3-secondary-fixed: #e8def8;
-    --m3-secondary-fixed-dim: #cbc2db;
-    --m3-on-secondary-fixed: #1e192b;
-    --m3-on-secondary-fixed-variant: #4a4458;
-
-    /* Tertiary */
-    --m3-tertiary: #efb8c8;
-    --m3-on-tertiary: #4a2532;
-    --m3-tertiary-container: #633b48;
-    --m3-on-tertiary-container: #ffd9e3;
-    --m3-tertiary-fixed: #ffd9e3;
-    --m3-tertiary-fixed-dim: #efb8c8;
-    --m3-on-tertiary-fixed: #31101d;
-    --m3-on-tertiary-fixed-variant: #633b48;
-
-    /* Error */
-    --m3-error: #ffb4ab;
-    --m3-on-error: #690005;
-    --m3-error-container: #93000a;
-    --m3-on-error-container: #ffdad6;
-
-    /* Neutral / surfaces */
-    --m3-background: #141218;
-    --m3-on-background: #e6e0e9;
-    --m3-surface: #141218;
-    --m3-on-surface: #e6e0e9;
-    --m3-surface-variant: #49454e;
-    --m3-on-surface-variant: #cac4cf;
-    --m3-surface-dim: #141218;
-    --m3-surface-bright: #3b383e;
-    --m3-surface-container-lowest: #0f0d13;
-    --m3-surface-container-low: #1d1b20;
-    --m3-surface-container: #211f24;
-    --m3-surface-container-high: #2b292f;
-    --m3-surface-container-highest: #36343a;
-    --m3-surface-tint: #cfbdfe;
-    --m3-inverse-surface: #e6e0e9;
-    --m3-inverse-on-surface: #322f35;
-    --m3-outline: #948f99;
-    --m3-outline-variant: #49454e;
-    --m3-shadow: #000000;
-    --m3-scrim: #000000;
-  }
-
-  /*
-   * Pre-init fallback only: once the theme engine runs it stamps
-   * data-theme, and the explicit rules below (which also cover a pinned
-   * dark theme on a light OS) take over. Keeping this behind
-   * `:not([data-theme])` prevents the dark hues leaking into a pinned
-   * light theme on a dark OS.
-   */
-  :root:not([data-theme]) {
-    --app-added: #3fb950;
-    --app-deleted: #f85149;
-    --app-modified: #d29922;
-    --app-renamed: #a371f7;
-    --app-untracked: #3fb950;
-    --app-conflicted: #f85149;
-  }
-}
-
-/*
- * Status hues tuned for dark surfaces (backgrounds derive from the
- * foregrounds above). Driven by the theme engine's `data-theme` stamp, not
- * the media query alone: a user-pinned dark theme on a light OS must get
- * these brighter hues too.
- */
-:root[data-theme="dark"] {
+.dark {
   --app-added: #3fb950;
   --app-deleted: #f85149;
   --app-modified: #d29922;
   --app-renamed: #a371f7;
   --app-untracked: #3fb950;
   --app-conflicted: #f85149;
-  --app-hover: color-mix(in srgb, var(--m3-on-surface) 8%, transparent);
+  --app-hover: color-mix(in srgb, var(--foreground) 8%, transparent);
 }
 
-html,
-body {
-  margin: 0;
-  padding: 0;
-  height: 100%;
-  overflow: hidden;
-  font-family: Roboto, "Segoe UI", system-ui, sans-serif;
-  background: var(--m3-surface);
-  color: var(--m3-on-surface);
-  accent-color: var(--m3-primary);
-  -webkit-font-smoothing: antialiased;
-  text-rendering: optimizeLegibility;
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+
+  html,
+  body {
+    margin: 0;
+    padding: 0;
+    height: 100%;
+    overflow: hidden;
+    @apply bg-background text-foreground font-sans antialiased;
+    accent-color: var(--primary);
+    text-rendering: optimizeLegibility;
+  }
+
+  #app {
+    height: 100%;
+    overflow: hidden;
+  }
 }
 
 ::selection {
-  background: color-mix(in srgb, var(--m3-primary) 30%, transparent);
-  color: var(--m3-on-surface);
-}
-
-#app {
-  height: 100%;
-  overflow: hidden;
+  background: color-mix(in oklch, var(--primary) 30%, transparent);
 }
 
 /* ---------------------------------------------------------------------------
  * Shared primitives
  * ------------------------------------------------------------------------- */
-
-/* Keyboard hint (used by the home screen, editor welcome and commit bar). */
-.kbd {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 1.15rem;
-  height: 1.15rem;
-  padding: 0 0.25rem;
-  border: 1px solid var(--m3-outline-variant);
-  border-bottom-width: 2px;
-  border-radius: var(--m3-shape-extra-small, 4px);
-  background: var(--m3-surface-container-lowest, var(--m3-surface));
-  color: var(--m3-on-surface-variant);
-  font-family: var(--app-font-mono, ui-monospace, Consolas, monospace);
-  font-size: 0.625rem;
-  line-height: 1;
-  white-space: nowrap;
-}
 
 /* Visually hidden, still announced by screen readers. */
 .sr-only {
@@ -307,16 +201,74 @@ body {
 }
 
 /* ---------------------------------------------------------------------------
- * Accessibility (M7 I2)
+ * App keyframes
+ *
+ * Single definition site for the keyframes referenced by Tailwind arbitrary
+ * `animate-[name_…]` utilities across the app (an animation's name can't be
+ * declared from markup). The global prefers-reduced-motion rule above
+ * collapses all of these to ~zero duration.
  * ------------------------------------------------------------------------- */
 
+/* Log cursor (ActionRunView): 50% off step blink. */
+@keyframes blink {
+  50% {
+    opacity: 0;
+  }
+}
+
+/* Indeterminate progress sweep (CloneDialog): one viewport width. */
+@keyframes slide {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(100%);
+  }
+}
+
+/* Indeterminate fetch/push bar (RemotePanel): travels 3× the 35%-wide fill. */
+@keyframes slide-wide {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(300%);
+  }
+}
+
 /*
- * Global keyboard-focus ring. Components may refine it (e.g. TabStrip uses a
- * negative offset so the ring hugs inset tabs); anything more specific in a
- * scoped Svelte style wins the cascade over this baseline.
+ * Image-diff blink (ImageCompare): step-end hops between 0/1 — the animation
+ * origin outranks the overlay's inline opacity, so the blink wins while
+ * active. Applied with motion-reduce:animate-none at the call site.
  */
+@keyframes diff-blink {
+  0% {
+    opacity: 0;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+/* Reveal flash (FilesPanel): highlight a newly revealed row, then fade. */
+@keyframes files-flash {
+  0%,
+  40% {
+    background: color-mix(in srgb, var(--primary) 30%, transparent);
+  }
+  100% {
+    background: transparent;
+  }
+}
+
+/* ---------------------------------------------------------------------------
+ * Accessibility
+ * ------------------------------------------------------------------------- */
+
+/* Global keyboard-focus ring; component-specific rules still win the
+ * cascade over this baseline. */
 :focus-visible {
-  outline: 2px solid var(--m3-primary);
+  outline: 2px solid var(--ring);
   outline-offset: 1px;
 }
 
@@ -353,8 +305,7 @@ body {
 
 /*
  * Honor prefers-reduced-motion globally: collapse animations/transitions to
- * effectively-zero durations and stop smooth scrolling. Component-level
- * rules (e.g. Toaster's animation:none) remain compatible with this floor.
+ * effectively-zero durations and stop smooth scrolling.
  */
 @media (prefers-reduced-motion: reduce) {
   *,

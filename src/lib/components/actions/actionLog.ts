@@ -36,22 +36,22 @@ const DEFAULT_STYLE: AnsiStyle = {
 // common tool output readable in both light and dark themes; extended colors
 // still use the exact RGB value supplied by the process.
 const ANSI_COLORS = [
-  "var(--m3-on-surface-variant)",
-  "var(--m3-error)",
+  "var(--muted-foreground)",
+  "var(--destructive)",
   "var(--app-added)",
   "var(--app-modified)",
-  "var(--m3-primary)",
+  "var(--primary)",
   "var(--app-renamed)",
-  "var(--m3-secondary)",
-  "var(--m3-on-surface)",
-  "var(--m3-outline)",
-  "var(--m3-error)",
+  "var(--secondary)",
+  "var(--foreground)",
+  "var(--border)",
+  "var(--destructive)",
   "var(--app-added)",
   "var(--app-modified)",
-  "var(--m3-primary)",
+  "var(--primary)",
   "var(--app-renamed)",
-  "var(--m3-secondary)",
-  "var(--m3-on-surface)",
+  "var(--secondary)",
+  "var(--foreground)",
 ];
 
 /**
@@ -71,8 +71,8 @@ export function actionLogSegments(input: string): ActionLogSegment[] {
     let background = style.background;
     if (style.inverse) {
       [color, background] = [
-        background ?? "var(--m3-surface-container-highest)",
-        color ?? "var(--m3-on-surface)",
+        background ?? "var(--accent)",
+        color ?? "var(--foreground)",
       ];
     }
     if (style.conceal) color = "transparent";

@@ -29,7 +29,16 @@
    * Changes group so they can be initialized/updated from here.
    */
   import { untrack } from "svelte";
-  import type { RepoStatus, StatusEntry, SubmoduleInfo } from "$lib/ipc/types";
+  import type {
+    ChangeKind,
+    RepoStatus,
+    StatusEntry,
+    SubmoduleInfo,
+  } from "$lib/ipc/types";
+  import { Button } from "$lib/components/ui/button/index.js";
+  import { Badge } from "$lib/components/ui/badge/index.js";
+  import { Input } from "$lib/components/ui/input/index.js";
+  import * as DropdownMenu from "$lib/components/ui/dropdown-menu/index.js";
   import {
     closeRepo,
     discard,
@@ -55,11 +64,10 @@
     showMenuAt,
     type MenuEntry,
   } from "$lib/components/menu/contextMenuStore.svelte";
-  import { floating } from "$lib/components/overlay/floating";
   import ConfirmDialog from "$lib/components/safety/ConfirmDialog.svelte";
   import GitignoreGallery from "$lib/components/panels/GitignoreGallery.svelte";
   import Icon from "$lib/components/icons/Icon.svelte";
-  import { IconButton, Spinner } from "$lib/components/m3";
+  import { Spinner } from "$lib/components/ui/spinner/index.js";
 import {
   fileIconColorForPath,
   fileIconForPath,
@@ -91,7 +99,6 @@ import iconPalette from "@ktibow/iconset-material-symbols/palette";
   import {
     buildStatusIndex,
     filterSections,
-    kindClass,
     kindLabel,
     kindLetter,
     splitPath,
@@ -201,15 +208,6 @@ import iconPalette from "@ktibow/iconset-material-symbols/palette";
     if (opts.ext) out.push({ label: `all ${opts.ext}`, pattern: opts.ext });
     if (opts.dir) out.push({ label: `dir ${opts.dir}`, pattern: opts.dir });
     return out;
-  }
-
-  function toggleIgnore(row: StatusRow): void {
-    if (ignoreFor === row.key) {
-      ignoreFor = null;
-      return;
-    }
-    ignoreFor = row.key;
-    ignoreChoices = choicesFor(row.entry.path);
   }
 
   /** Adds the pattern to .gitignore and refreshes the status. */
@@ -683,6 +681,31 @@ import iconPalette from "@ktibow/iconset-material-symbols/palette";
   /** `splitPath` keeps the separator; rows show the folder without it. */
   function dirText(dir: string): string {
     return dir.replace(/[\\/]+$/, "");
+  }
+
+  /** Change-kind letter color, mapped straight to the app status tokens
+   *  (replaces the former `k-*` scoped classes). */
+  const KIND_COLOR: Record<string, string> = {
+    added: "text-[color:var(--app-added)]",
+    deleted: "text-[color:var(--app-deleted)]",
+    modified: "text-[color:var(--app-modified)]",
+    renamed: "text-[color:var(--app-renamed)]",
+    copied: "text-[color:var(--app-renamed)]",
+    untracked: "text-[color:var(--app-untracked)]",
+    conflicted: "text-[color:var(--app-conflicted)]",
+  };
+
+  function kindColorClass(kind: ChangeKind): string {
+    return KIND_COLOR[kind] ?? "text-[color:var(--app-modified)]";
+  }
+
+  /** Submodule tag tone color (`submoduleDisplay().tone` → status token). */
+  function toneColorClass(tone: "clean" | "dirty" | "danger"): string {
+    return tone === "dirty"
+      ? "text-[color:var(--app-modified)]"
+      : tone === "danger"
+        ? "text-[color:var(--app-deleted)]"
+        : "";
   }
 
   /** Absolute worktree path of a submodule (portable separator). */
@@ -1468,13 +1491,18 @@ import iconPalette from "@ktibow/iconset-material-symbols/palette";
   }}
 />
 
-<aside aria-label="Source control">
+<aside
+  aria-label="Source control"
+  class="flex flex-1 flex-col h-full min-h-0 min-w-0 overflow-hidden bg-background text-foreground text-[0.8125rem]"
+>
   {#if status}
-    <div class="toolbar">
-      <span class="filter-wrap">
-        <Icon icon={iconSearch} size={13} />
-        <input
-          class="filter"
+    <div class="toolbar flex items-center gap-0.5 px-[0.4rem] py-[0.3rem] flex-none bg-card border-b border-border">
+      <span class="relative flex-1 min-w-0 flex items-center text-muted-foreground">
+        <span class="absolute left-1.5 inline-flex pointer-events-none opacity-75">
+          <Icon icon={iconSearch} size={13} />
+        </span>
+        <Input
+          class="h-[1.6rem] rounded-sm bg-background dark:bg-background px-6 text-xs md:text-xs placeholder:text-muted-foreground/80"
           type="text"
           placeholder="Filter changes"
           aria-label="Filter changed files by path"
@@ -1482,91 +1510,110 @@ import iconPalette from "@ktibow/iconset-material-symbols/palette";
           onkeydown={onFilterKeydown}
         />
         {#if filterText}
-          <button
-            class="clear-filter"
+          <Button
+            class="absolute right-[0.2rem] size-[1.15rem] rounded-full p-0 text-muted-foreground hover:bg-accent hover:text-foreground"
+            variant="ghost"
+            size="icon-xs"
             type="button"
             aria-label="Clear filter"
             title="Clear filter"
             onclick={() => (filterText = "")}
           >
             <Icon icon={iconClear} size={12} />
-          </button>
+          </Button>
         {/if}
       </span>
-      <IconButton
-        icon={iconStageAll}
-        label="Stage all files"
+      <Button
+        class="relative text-muted-foreground after:absolute after:-inset-1 after:content-[''] hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-4"
+        variant="ghost"
+        size="icon-xs"
+        type="button"
+        aria-label="Stage all files"
         title="Stage every file in Changes"
-        dense
         disabled={!canStageAll}
         onclick={() => onStageAll(false)}
-      />
-      <IconButton
-        icon={iconUnstageAll}
-        label="Unstage all files"
+      >
+        <Icon icon={iconStageAll} size={16} />
+      </Button>
+      <Button
+        class="relative text-muted-foreground after:absolute after:-inset-1 after:content-[''] hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-4"
+        variant="ghost"
+        size="icon-xs"
+        type="button"
+        aria-label="Unstage all files"
         title="Unstage every file in Staged Changes (all sections)"
-        dense
         disabled={!canUnstageAll}
         onclick={() => onStageAll(true)}
-      />
-      <IconButton
-        icon={iconRefresh}
-        label="Refresh changes"
+      >
+        <Icon icon={iconUnstageAll} size={16} />
+      </Button>
+      <Button
+        class={`relative text-muted-foreground after:absolute after:-inset-1 after:content-[''] hover:bg-accent hover:text-accent-foreground ${mutating || moduleLoading ? "[&_svg]:animate-spin" : ""} [&_svg:not([class*='size-'])]:size-4`}
+        variant="ghost"
+        size="icon-xs"
+        type="button"
+        aria-label="Refresh changes"
         title="Refresh changes and submodule state"
-        dense
-        class={mutating || moduleLoading ? "spin" : ""}
         disabled={!repoId || mutating || moduleLoading}
         onclick={refreshAll}
-      />
-      <IconButton
-        icon={iconMore}
-        label="More source-control actions"
+      >
+        <Icon icon={iconRefresh} size={16} />
+      </Button>
+      <Button
+        class="relative text-muted-foreground after:absolute after:-inset-1 after:content-[''] hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-4"
+        variant="ghost"
+        size="icon-xs"
+        type="button"
+        aria-label="More source-control actions"
         title="More actions"
-        dense
         onclick={(event) => toolbarMenu(event)}
-      />
+      >
+        <Icon icon={iconMore} size={16} />
+      </Button>
     </div>
 
     {#if status.merging || status.rebasing || status.sequencer || status.detached || status.ahead > 0 || status.behind > 0}
-      <div class="banners">
-        {#if status.merging}<span class="chip chip-state">Merge in progress</span>{/if}
-        {#if status.rebasing}<span class="chip chip-state">Rebase in progress</span>{/if}
-        {#if status.sequencer}<span class="chip chip-state">Cherry-pick / revert in progress</span>{/if}
-        {#if status.detached}<span class="chip chip-state">Detached HEAD</span>{/if}
+      <div class="banners flex flex-wrap gap-1 px-[0.4rem] py-[0.3rem] flex-none">
+        {#if status.merging}<Badge variant="secondary" class="gap-[0.2rem] rounded-full px-[0.45rem] py-px h-auto text-[0.6875rem] bg-muted text-foreground">Merge in progress</Badge>{/if}
+        {#if status.rebasing}<Badge variant="secondary" class="gap-[0.2rem] rounded-full px-[0.45rem] py-px h-auto text-[0.6875rem] bg-muted text-foreground">Rebase in progress</Badge>{/if}
+        {#if status.sequencer}<Badge variant="secondary" class="gap-[0.2rem] rounded-full px-[0.45rem] py-px h-auto text-[0.6875rem] bg-muted text-foreground">Cherry-pick / revert in progress</Badge>{/if}
+        {#if status.detached}<Badge variant="secondary" class="gap-[0.2rem] rounded-full px-[0.45rem] py-px h-auto text-[0.6875rem] bg-muted text-foreground">Detached HEAD</Badge>{/if}
         {#if status.ahead > 0}
-          <span
-            class="chip chip-ahead"
+          <Badge
+            variant="secondary"
+            class="gap-[0.2rem] rounded-full px-[0.45rem] py-px h-auto text-[0.6875rem] bg-primary/10 text-primary tabular-nums"
             role="img"
             aria-label={`${status.ahead} ${status.ahead === 1 ? "commit" : "commits"} to push`}
             title={`${status.ahead} ${status.ahead === 1 ? "commit" : "commits"} to push`}
           >
             <Icon icon={iconAhead} size={11} />
             {status.ahead} to push
-          </span>
+          </Badge>
         {/if}
         {#if status.behind > 0}
-          <span
-            class="chip chip-behind"
+          <Badge
+            variant="secondary"
+            class="gap-[0.2rem] rounded-full px-[0.45rem] py-px h-auto text-[0.6875rem] bg-accent text-accent-foreground tabular-nums"
             role="img"
             aria-label={`${status.behind} ${status.behind === 1 ? "commit" : "commits"} to pull`}
             title={`${status.behind} ${status.behind === 1 ? "commit" : "commits"} to pull`}
           >
             <Icon icon={iconBehind} size={11} />
             {status.behind} to pull
-          </span>
+          </Badge>
         {/if}
       </div>
     {/if}
 
     {#if moduleError}
-      <button
-        class="module-error"
-        type="button"
+      <Button
+        variant="ghost"
+        class="mx-[0.4rem] mb-1 h-auto justify-start border border-[color:var(--app-deleted)] rounded-sm px-1 py-0.5 bg-[color:var(--app-conflicted-bg)] text-[color:var(--app-deleted)] text-left text-[0.6875rem] hover:bg-[color:var(--app-conflicted-bg)] hover:text-[color:var(--app-deleted)] dark:hover:bg-[color:var(--app-conflicted-bg)] dark:hover:text-[color:var(--app-deleted)]"
         title={moduleError}
         onclick={() => void reloadModules()}
       >
         Submodule status unavailable — retry
-      </button>
+      </Button>
     {/if}
 
     {#snippet renderRow(
@@ -1578,7 +1625,7 @@ import iconPalette from "@ktibow/iconset-material-symbols/palette";
       {@const info = !subPath ? moduleByPath.get(row.entry.path) : undefined}
       {@const display = info ? submoduleDisplay(info) : null}
       <div
-        class="row file-row"
+        class="row file-row group/row relative flex items-center gap-[0.4rem] min-w-0 h-6 min-h-6 box-border pl-[0.45rem] pr-[0.4rem] cursor-pointer [content-visibility:auto] [contain-intrinsic-size:auto_1.375rem] hover:bg-[color:var(--app-hover)] focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-2 [&.selected]:bg-[color:var(--app-active)] [&.selected]:shadow-[inset_2px_0_0_var(--primary)]"
         class:selected={isSelected(row.key)}
         role="treeitem"
         aria-selected={isSelected(row.key)}
@@ -1603,10 +1650,12 @@ import iconPalette from "@ktibow/iconset-material-symbols/palette";
           )}
       >
         {#if info}
-          <Icon icon={iconModule} size={14} />
+          <span class="shrink-0 inline-flex text-muted-foreground opacity-90">
+            <Icon icon={iconModule} size={14} />
+          </span>
         {:else}
           <span
-            class="file-icon"
+            class="file-icon shrink-0 inline-flex items-center justify-center leading-none"
             style:color={fileIconColorForPath(row.entry.path, fileIconPreferences.theme)}
           >
             <Icon
@@ -1615,122 +1664,156 @@ import iconPalette from "@ktibow/iconset-material-symbols/palette";
             />
           </span>
         {/if}
-        <span class="path">
-          <span class="base" title={row.entry.path}>{row.base}</span>
+        <span class="path flex-1 basis-auto min-w-0 flex items-baseline gap-[0.35rem] overflow-hidden text-xs leading-[1.25]">
+          <span
+            class="base min-w-8 overflow-hidden text-ellipsis whitespace-nowrap text-foreground font-normal group-data-[kind=added]/row:text-[color:var(--app-added)] group-data-[kind=untracked]/row:text-[color:var(--app-untracked)] group-data-[kind=modified]/row:text-[color:var(--app-modified)] group-data-[kind=renamed]/row:text-[color:var(--app-renamed)] group-data-[kind=copied]/row:text-[color:var(--app-renamed)] group-data-[kind=conflicted]/row:text-[color:var(--app-conflicted)] group-data-[kind=deleted]/row:text-[color:var(--app-deleted)] group-data-[kind=deleted]/row:line-through group-data-[kind=deleted]/row:decoration-1"
+            title={row.entry.path}
+          >{row.base}</span>
           {#if row.dir}
-            <span class="dir" title={dirText(row.dir)}>{dirText(row.dir)}</span>
+            <span
+              class="dir grow min-w-0 max-w-[48%] ml-auto overflow-hidden text-ellipsis whitespace-nowrap text-right text-muted-foreground opacity-70 text-[0.6875rem]"
+              title={dirText(row.dir)}
+            >{dirText(row.dir)}</span>
           {/if}
         </span>
         {#if info && display && display.tag}
-          <span class={`module-tag ${display.tone}`} title={display.detail}>
+          <span class={`module-tag shrink-0 max-w-[6.5rem] overflow-hidden text-ellipsis whitespace-nowrap text-[0.625rem] leading-[1.35] text-muted-foreground ${toneColorClass(display.tone)}`} title={display.detail}>
             {display.tag}
           </span>
         {/if}
         <span
-          class={`kind ${kindClass(row.kind)}`}
+          class={`kind shrink-0 w-4 inline-flex items-center justify-center text-[0.6875rem] font-bold font-mono leading-none relative z-[1] cursor-help ${kindColorClass(row.kind)}`}
           title={`${row.entry.path} · ${kindLabel(row.kind)}`}
           aria-hidden="true"
         >
           {kindLetter(row.kind)}
         </span>
-        <span class="row-actions">
+        <span class="row-actions absolute right-[1.35rem] top-1/2 -translate-y-1/2 flex items-center gap-px opacity-0 transition-opacity group-hover/row:opacity-100 group-focus-visible/row:opacity-100 group-has-[:focus-visible]/row:opacity-100 pointer-coarse:static pointer-coarse:transform-none pointer-coarse:opacity-100">
+          <span
+            aria-hidden="true"
+            class={`pointer-events-none absolute -left-[0.9rem] -top-[0.1rem] -bottom-[0.1rem] w-[0.9rem] pointer-coarse:hidden ${isSelected(row.key)
+              ? "bg-[linear-gradient(to_right,transparent,color-mix(in_srgb,var(--primary)_12%,var(--background)))]"
+              : "bg-[linear-gradient(to_right,transparent,var(--background))] group-hover/row:bg-[linear-gradient(to_right,transparent,color-mix(in_srgb,var(--foreground)_5%,var(--background)))]"}`}
+          ></span>
           {#if row.section === "staged"}
-            <IconButton
-              icon={iconUnstage}
-              label={`Unstage ${row.entry.path}`}
+            <Button
+              class="relative text-muted-foreground after:absolute after:-inset-1 after:content-[''] hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-4"
+              variant="ghost"
+              size="icon-xs"
+              type="button"
+              aria-label={`Unstage ${row.entry.path}`}
               title="Unstage this file (S)"
-              dense
               tabindex={-1}
               disabled={!targetRepoId || mutating}
               onclick={(event) => stageAction(row, event)}
-            />
+            >
+              <Icon icon={iconUnstage} size={16} />
+            </Button>
           {:else if row.kind !== "conflicted"}
-            <IconButton
-              icon={iconStage}
-              label={`Stage ${row.entry.path}`}
+            <Button
+              class="relative text-muted-foreground after:absolute after:-inset-1 after:content-[''] hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-4"
+              variant="ghost"
+              size="icon-xs"
+              type="button"
+              aria-label={`Stage ${row.entry.path}`}
               title="Stage this file (S)"
-              dense
               tabindex={-1}
               disabled={!targetRepoId || mutating}
               onclick={(event) => stageAction(row, event)}
-            />
+            >
+              <Icon icon={iconStage} size={16} />
+            </Button>
             {#if !info}
-              <IconButton
-                icon={iconDiscard}
-                label={`Discard changes to ${row.entry.path}`}
+              <Button
+                class="relative text-destructive after:absolute after:-inset-1 after:content-[''] hover:bg-destructive/10 hover:text-destructive [&_svg:not([class*='size-'])]:size-4"
+                variant="ghost"
+                size="icon-xs"
+                type="button"
+                aria-label={`Discard changes to ${row.entry.path}`}
                 title="Discard changes to this file (D)"
-                tone="danger"
-                dense
                 tabindex={-1}
                 disabled={!targetRepoId || mutating}
                 onclick={(event) => requestDiscard(row, event)}
-              />
+              >
+                <Icon icon={iconDiscard} size={16} />
+              </Button>
             {/if}
           {/if}
           {#if info}
-            <IconButton
-              icon={iconOpen}
-              label={`Open submodule ${row.entry.path}`}
+            <Button
+              class="relative text-muted-foreground after:absolute after:-inset-1 after:content-[''] hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-4"
+              variant="ghost"
+              size="icon-xs"
+              type="button"
+              aria-label={`Open submodule ${row.entry.path}`}
               title="Open this submodule as a tab"
-              dense
               tabindex={-1}
               disabled={!info.initialized}
               onclick={(event) => {
                 event.stopPropagation();
                 void openSubmodule(info);
               }}
-            />
+            >
+              <Icon icon={iconOpen} size={16} />
+            </Button>
           {/if}
           {#if row.kind === "untracked" && !info && targetRepoId && !mutating}
-            <span class="ignore-wrap">
-              <IconButton
-                icon={iconIgnore}
-                label={`Ignore ${row.entry.path}`}
-                title="Add to .gitignore"
-                dense
-                disabled={mutating}
-                aria-expanded={ignoreFor === row.key}
-                onclick={(event) => {
-                  event.stopPropagation();
-                  toggleIgnore(row);
+            <span class="ignore-wrap relative shrink-0 inline-flex">
+              <DropdownMenu.Root
+                open={ignoreFor === row.key}
+                onOpenChange={(open) => {
+                  if (open) {
+                    ignoreFor = row.key;
+                    ignoreChoices = choicesFor(row.entry.path);
+                  } else if (ignoreFor === row.key) {
+                    ignoreFor = null;
+                  }
                 }}
-              />
-              {#if ignoreFor === row.key}
-                <span
-                  class="ignore-menu"
-                  role="menu"
+              >
+                <DropdownMenu.Trigger
+                  class="relative inline-flex shrink-0 cursor-pointer items-center justify-center rounded-md border border-transparent bg-transparent p-0 text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-1 aria-expanded:bg-accent aria-expanded:text-accent-foreground size-6 disabled:cursor-not-allowed disabled:text-muted-foreground/50 disabled:hover:bg-transparent"
+                  title="Add to .gitignore"
+                  aria-label={`Ignore ${row.entry.path}`}
+                  disabled={mutating}
+                  tabindex={-1}
+                  onclick={(event) => event.stopPropagation()}
+                >
+                  <Icon icon={iconIgnore} size={16} />
+                </DropdownMenu.Trigger>
+                <DropdownMenu.Content
+                  class="min-w-48 max-w-[calc(100vw-1rem)] rounded-md p-0.5"
+                  align="end"
                   aria-label="Ignore pattern choices"
-                  use:floating={{ alignEnd: true }}
                 >
                   {#each ignoreChoices as choice (choice.pattern)}
-                    <button
-                      role="menuitem"
-                      type="button"
-                      onclick={(event) => {
-                        event.stopPropagation();
-                        void onIgnore(choice, row);
-                      }}
+                    <DropdownMenu.Item
+                      class="whitespace-nowrap rounded-sm px-2 py-1 text-xs"
+                      onSelect={() => void onIgnore(choice, row)}
                     >
-                      {choice.label}: <code>{choice.pattern}</code>
-                    </button>
+                      {choice.label}: <code class="font-mono text-[0.6875rem] text-muted-foreground">{choice.pattern}</code>
+                    </DropdownMenu.Item>
                   {/each}
-                </span>
-              {/if}
+                </DropdownMenu.Content>
+              </DropdownMenu.Root>
             </span>
           {/if}
           {#if targetRepoId}
-            <IconButton
-              icon={iconMore}
-              label={`More actions for ${row.entry.path}`}
+            <Button
+              class="relative text-muted-foreground after:absolute after:-inset-1 after:content-[''] hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-4"
+              variant="ghost"
+              size="icon-xs"
+              type="button"
+              aria-label={`More actions for ${row.entry.path}`}
               title="More actions"
-              dense
-              tabindex={-1}
               aria-haspopup="menu"
+              tabindex={-1}
               onclick={(event) => {
                 event.stopPropagation();
                 openRowMenu(row);
               }}
-            />
+            >
+              <Icon icon={iconMore} size={16} />
+            </Button>
           {/if}
         </span>
       </div>
@@ -1738,7 +1821,7 @@ import iconPalette from "@ktibow/iconset-material-symbols/palette";
 
     {#if hasSubmodules}
       <div
-        class="tree multi-repo-tree"
+        class="tree multi-repo-tree flex-1 min-h-0 overflow-y-auto [scrollbar-gutter:stable] pb-3 outline-none"
         role="tree"
         aria-label="Repositories and submodules"
         tabindex="-1"
@@ -1746,85 +1829,107 @@ import iconPalette from "@ktibow/iconset-material-symbols/palette";
         use:trackTreeViewport
       >
         <!-- Main repository accordion -->
-        <div class="repo-accordion">
-          <div class="repo-accordion-header">
+        <div class="repo-accordion border-b border-border">
+          <div class="repo-accordion-header group/acc flex items-center w-full min-h-7 px-1 py-[0.15rem] box-border bg-card border-y border-border select-none gap-1">
             <button
-              class="repo-accordion-toggle"
+              class="repo-accordion-toggle flex-1 min-w-0 flex items-center gap-[0.35rem] h-[1.6rem] bg-transparent border-0 text-foreground text-xs font-semibold px-[0.2rem] cursor-pointer text-left hover:text-primary focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-2"
               type="button"
               aria-expanded={!mainRepoCollapsed}
               onclick={() => (mainRepoCollapsed = !mainRepoCollapsed)}
             >
-              <span class="chevron" class:closed={mainRepoCollapsed}>
+              <span
+                class="chevron inline-flex items-center justify-center w-4 shrink-0 opacity-80 transition-transform {mainRepoCollapsed
+                  ? 'rotate-0'
+                  : 'rotate-90'}"
+                class:closed={mainRepoCollapsed}
+              >
                 <Icon icon={iconChevron} size={13} />
               </span>
-              <span class="repo-title">{repoName || "repository"}</span>
+              <span class="repo-title overflow-hidden text-ellipsis whitespace-nowrap">{repoName || "repository"}</span>
               {#if status}
-                <span class="branch-pill" title={`Branch: ${mainBranchLabel(status)}`}>
+                <span class="branch-pill shrink-0 inline-flex items-center gap-[0.2rem] px-[0.35rem] py-px rounded-full bg-muted text-muted-foreground text-[0.625rem] font-medium max-w-28 overflow-hidden text-ellipsis whitespace-nowrap" title={`Branch: ${mainBranchLabel(status)}`}>
                   <Icon icon={iconBranch} size={10} />
                   <span>{mainBranchLabel(status)}</span>
                 </span>
               {/if}
               {#if index && index.total > 0}
-                <span class="count-pill">{index.total}</span>
+                <span class="count-pill shrink-0 min-w-4 px-[0.35rem] rounded-full bg-muted text-muted-foreground text-[0.625rem] font-semibold leading-[1.05rem] text-center tabular-nums">{index.total}</span>
               {/if}
             </button>
-            <div class="header-actions">
-              <IconButton
-                icon={iconStageAll}
-                label="Stage all repository files"
+            <div class="header-actions flex items-center gap-[0.1rem] shrink-0 opacity-0 transition-opacity group-hover/acc:opacity-100 group-focus-within/acc:opacity-100">
+              <Button
+                class="relative text-muted-foreground after:absolute after:-inset-1 after:content-[''] hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-4"
+                variant="ghost"
+                size="icon-xs"
+                type="button"
+                aria-label="Stage all repository files"
                 title="Stage all repository files"
-                dense
                 disabled={!canStageAll}
                 onclick={() => onStageAll(false)}
-              />
-              <IconButton
-                icon={iconUnstageAll}
-                label="Unstage all repository files"
+              >
+                <Icon icon={iconStageAll} size={16} />
+              </Button>
+              <Button
+                class="relative text-muted-foreground after:absolute after:-inset-1 after:content-[''] hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-4"
+                variant="ghost"
+                size="icon-xs"
+                type="button"
+                aria-label="Unstage all repository files"
                 title="Unstage all repository files"
-                dense
                 disabled={!canUnstageAll}
                 onclick={() => onStageAll(true)}
-              />
+              >
+                <Icon icon={iconUnstageAll} size={16} />
+              </Button>
             </div>
           </div>
 
           {#if !mainRepoCollapsed}
             {#if repoId}
-              <div class="embedded-commit-bar">
+              <div class="embedded-commit-bar px-[0.4rem] pt-[0.3rem] pb-[0.4rem] bg-background border-b border-border">
                 <CommitBar {repoId} {status} onCommitted={refreshAll} />
               </div>
             {/if}
 
             {#if index && index.total === 0}
-              <div class="sub-clean-hint">No changes in main repository</div>
+              <div class="sub-clean-hint px-3 py-2 text-[0.72rem] text-muted-foreground italic">No changes in main repository</div>
             {:else if sections.length === 0 && filterText}
-              <div class="sub-clean-hint">No matching changes in main repository</div>
+              <div class="sub-clean-hint px-3 py-2 text-[0.72rem] text-muted-foreground italic">No matching changes in main repository</div>
             {:else}
-              {#each sections as section (section.id)}
+              {#each sections as section, sectionIndex (section.id)}
                 <div class="section" role="group" aria-labelledby={`main-section-${section.id}`}>
-                  <div class="section-header">
+                  <div class="section-header group/header sticky top-0 z-[2] flex items-center w-full h-[26px] box-border bg-card border-b border-border select-none" class:border-t={sectionIndex > 0}>
                     <button
-                      class="section-toggle"
+                      class="section-toggle flex-1 min-w-0 flex items-center gap-[0.3rem] h-6 bg-transparent border-0 text-muted-foreground text-[0.6875rem] font-bold tracking-[0.045em] uppercase px-2 cursor-pointer text-left hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-2"
                       type="button"
                       id={`main-section-${section.id}`}
                       aria-expanded={!collapsed[section.id]}
                       onclick={() => toggleSection(section.id)}
                     >
-                      <span class="chevron" class:closed={collapsed[section.id]}>
+                      <span
+                        class="chevron inline-flex items-center justify-center w-4 shrink-0 opacity-80 transition-transform {collapsed[section.id]
+                          ? 'rotate-0'
+                          : 'rotate-90'}"
+                        class:closed={collapsed[section.id]}
+                      >
                         <Icon icon={iconChevron} size={13} />
                       </span>
-                      <span class="section-name">{section.label}</span>
-                      <span class="count">{section.rows.length}</span>
+                      <span class="section-name min-w-0 overflow-hidden text-ellipsis whitespace-nowrap leading-[1.2]">{section.label}</span>
+                      <span class="count shrink-0 min-w-[1.15rem] ml-auto px-1.5 rounded-full bg-muted text-muted-foreground text-[0.625rem] font-semibold leading-[1.075rem] text-center tabular-nums transition-opacity group-hover/header:opacity-0 group-focus-within/header:opacity-0 pointer-coarse:hidden">{section.rows.length}</span>
                     </button>
                     {#if canMutate && (section.id === "staged" || section.rows.some((row) => row.kind !== "conflicted"))}
-                      <span class="section-action">
-                        <IconButton
-                          icon={section.id === "staged" ? iconUnstage : iconStage}
-                          label={`${section.id === "staged" ? "Unstage" : "Stage"} all in ${section.label}`}
+                      <span class="section-action absolute right-[0.3rem] top-1/2 -translate-y-1/2 inline-flex opacity-0 transition-opacity group-hover/header:opacity-100 group-focus-within/header:opacity-100 pointer-coarse:static pointer-coarse:transform-none pointer-coarse:opacity-100 pointer-coarse:pr-1">
+                        <Button
+                          class="relative text-muted-foreground after:absolute after:-inset-1 after:content-[''] hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-4"
+                          variant="ghost"
+                          size="icon-xs"
+                          type="button"
+                          aria-label={`${section.id === "staged" ? "Unstage" : "Stage"} all in ${section.label}`}
                           title={`${section.id === "staged" ? "Unstage" : "Stage"} all files in ${section.label}`}
-                          dense
                           onclick={(event) => stageSection(section, event)}
-                        />
+                        >
+                          <Icon icon={section.id === "staged" ? iconUnstage : iconStage} size={16} />
+                        </Button>
                       </span>
                     {/if}
                   </div>
@@ -1845,110 +1950,140 @@ import iconPalette from "@ktibow/iconset-material-symbols/palette";
           {@const isCollapsed = submoduleCollapsed[info.path] ?? false}
           {@const display = submoduleDisplay(info)}
           {@const counts = submoduleChangeCounts(sub?.status ?? null)}
-          <div class="repo-accordion submodule-accordion">
-            <div class="repo-accordion-header">
+          <div class="repo-accordion submodule-accordion border-b border-border">
+            <div class="repo-accordion-header group/acc flex items-center w-full min-h-7 px-1 py-[0.15rem] box-border bg-card border-y border-border select-none gap-1">
               <button
-                class="repo-accordion-toggle"
+                class="repo-accordion-toggle flex-1 min-w-0 flex items-center gap-[0.35rem] h-[1.6rem] bg-transparent border-0 text-foreground text-xs font-semibold px-[0.2rem] cursor-pointer text-left hover:text-primary focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-2"
                 type="button"
                 aria-expanded={!isCollapsed}
                 onclick={() => toggleSubmodule(info.path)}
               >
-                <span class="chevron" class:closed={isCollapsed}>
+                <span
+                  class="chevron inline-flex items-center justify-center w-4 shrink-0 opacity-80 transition-transform {isCollapsed
+                    ? 'rotate-0'
+                    : 'rotate-90'}"
+                  class:closed={isCollapsed}
+                >
                   <Icon icon={iconChevron} size={13} />
                 </span>
                 <Icon icon={iconModule} size={14} />
-                <span class="repo-title" title={info.path}>{info.path}</span>
-                <span class="branch-pill" title={`Branch: ${submoduleBranchLabel(info, sub?.status ?? null)}`}>
+                <span class="repo-title overflow-hidden text-ellipsis whitespace-nowrap" title={info.path}>{info.path}</span>
+                <span class="branch-pill shrink-0 inline-flex items-center gap-[0.2rem] px-[0.35rem] py-px rounded-full bg-muted text-muted-foreground text-[0.625rem] font-medium max-w-28 overflow-hidden text-ellipsis whitespace-nowrap" title={`Branch: ${submoduleBranchLabel(info, sub?.status ?? null)}`}>
                   <Icon icon={iconBranch} size={10} />
                   <span>{submoduleBranchLabel(info, sub?.status ?? null)}</span>
                 </span>
                 {#if display.tag}
-                  <span class={`module-tag ${display.tone}`} title={display.detail}>
+                  <span class={`module-tag shrink-0 max-w-[6.5rem] overflow-hidden text-ellipsis whitespace-nowrap text-[0.625rem] leading-[1.35] text-muted-foreground ${toneColorClass(display.tone)}`} title={display.detail}>
                     {display.tag}
                   </span>
                 {/if}
                 {#if info.initialized && counts.total > 0}
-                  <span class="count-pill">{counts.total}</span>
+                  <span class="count-pill shrink-0 min-w-4 px-[0.35rem] rounded-full bg-muted text-muted-foreground text-[0.625rem] font-semibold leading-[1.05rem] text-center tabular-nums">{counts.total}</span>
                 {/if}
               </button>
-              <div class="header-actions">
+              <div class="header-actions flex items-center gap-[0.1rem] shrink-0 opacity-0 transition-opacity group-hover/acc:opacity-100 group-focus-within/acc:opacity-100">
                 {#if !info.initialized}
-                  <IconButton
-                    icon={iconUpdate}
-                    label={`Initialize submodule ${info.path}`}
+                  <Button
+                    class="relative text-muted-foreground after:absolute after:-inset-1 after:content-[''] hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-4"
+                    variant="ghost"
+                    size="icon-xs"
+                    type="button"
+                    aria-label={`Initialize submodule ${info.path}`}
                     title="Initialize and update submodule"
-                    dense
                     disabled={moduleBusy !== null}
                     onclick={() => void updateSubmodule(info)}
-                  />
+                  >
+                    <Icon icon={iconUpdate} size={16} />
+                  </Button>
                 {:else}
-                  <IconButton
-                    icon={iconStageAll}
-                    label={`Stage all in ${info.path}`}
+                  <Button
+                    class="relative text-muted-foreground after:absolute after:-inset-1 after:content-[''] hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-4"
+                    variant="ghost"
+                    size="icon-xs"
+                    type="button"
+                    aria-label={`Stage all in ${info.path}`}
                     title="Stage all files in this submodule"
-                    dense
                     disabled={mutating || counts.changes === 0}
                     onclick={() => stageAllSubmodule(info.path, false)}
-                  />
-                  <IconButton
-                    icon={iconUnstageAll}
-                    label={`Unstage all in ${info.path}`}
+                  >
+                    <Icon icon={iconStageAll} size={16} />
+                  </Button>
+                  <Button
+                    class="relative text-muted-foreground after:absolute after:-inset-1 after:content-[''] hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-4"
+                    variant="ghost"
+                    size="icon-xs"
+                    type="button"
+                    aria-label={`Unstage all in ${info.path}`}
                     title="Unstage all files in this submodule"
-                    dense
                     disabled={mutating || counts.staged === 0}
                     onclick={() => stageAllSubmodule(info.path, true)}
-                  />
-                  <IconButton
-                    icon={iconUpdate}
-                    label={`Update submodule ${info.path}`}
+                  >
+                    <Icon icon={iconUnstageAll} size={16} />
+                  </Button>
+                  <Button
+                    class="relative text-muted-foreground after:absolute after:-inset-1 after:content-[''] hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-4"
+                    variant="ghost"
+                    size="icon-xs"
+                    type="button"
+                    aria-label={`Update submodule ${info.path}`}
                     title="Update submodule (git submodule update)"
-                    dense
                     disabled={moduleBusy !== null}
                     onclick={() => void updateSubmodule(info)}
-                  />
-                  <IconButton
-                    icon={iconSync}
-                    label={`Sync submodule ${info.path}`}
+                  >
+                    <Icon icon={iconUpdate} size={16} />
+                  </Button>
+                  <Button
+                    class="relative text-muted-foreground after:absolute after:-inset-1 after:content-[''] hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-4"
+                    variant="ghost"
+                    size="icon-xs"
+                    type="button"
+                    aria-label={`Sync submodule ${info.path}`}
                     title="Sync submodule URL"
-                    dense
                     disabled={moduleBusy !== null}
                     onclick={() => void syncSubmodule(info)}
-                  />
-                  <IconButton
-                    icon={iconOpen}
-                    label={`Open submodule ${info.path}`}
+                  >
+                    <Icon icon={iconSync} size={16} />
+                  </Button>
+                  <Button
+                    class="relative text-muted-foreground after:absolute after:-inset-1 after:content-[''] hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-4"
+                    variant="ghost"
+                    size="icon-xs"
+                    type="button"
+                    aria-label={`Open submodule ${info.path}`}
                     title="Open submodule as a tab"
-                    dense
                     onclick={() => void openSubmodule(info)}
-                  />
+                  >
+                    <Icon icon={iconOpen} size={16} />
+                  </Button>
                 {/if}
               </div>
             </div>
 
             {#if !isCollapsed}
               {#if !info.initialized}
-                <div class="uninitialized-banner">
-                  <p class="uninit-text">Submodule is not initialized.</p>
-                  <button
-                    class="uninit-btn"
-                    type="button"
+                <div class="uninitialized-banner flex flex-col items-center gap-[0.4rem] px-2 py-3 bg-background border-b border-border">
+                  <p class="uninit-text m-0 text-xs text-muted-foreground">Submodule is not initialized.</p>
+                  <Button
+                    variant="outline"
+                    size="xs"
+                    class="gap-[0.35rem] rounded-sm px-[0.6rem] py-1 bg-muted text-primary hover:bg-accent hover:text-primary text-[0.72rem] dark:bg-muted dark:hover:bg-accent [&_svg:not([class*='size-'])]:size-[13px]"
                     onclick={() => void updateSubmodule(info)}
                     disabled={moduleBusy !== null}
                   >
                     <Icon icon={iconUpdate} size={13} />
                     Initialize and update submodule
-                  </button>
+                  </Button>
                 </div>
               {:else if sub?.loading && !sub.status}
-                <div class="sub-clean-hint">
-                  <Spinner size={12} /> Loading submodule changes…
+                <div class="sub-clean-hint px-3 py-2 text-[0.72rem] text-muted-foreground italic">
+                  <Spinner class="size-3" role="presentation" aria-hidden="true" /> Loading submodule changes…
                 </div>
               {:else if sub?.error}
-                <div class="module-error" title={sub.error}>
+                <div class="module-error mx-[0.4rem] mb-1 px-1 py-0.5 border border-[color:var(--app-deleted)] rounded-sm bg-[color:var(--app-conflicted-bg)] text-[color:var(--app-deleted)] text-left text-[0.6875rem]" title={sub.error}>
                   Submodule error: {sub.error}
                 </div>
               {:else if sub?.status}
-                <div class="embedded-commit-bar">
+                <div class="embedded-commit-bar px-[0.4rem] pt-[0.3rem] pb-[0.4rem] bg-background border-b border-border">
                   <CommitBar
                     repoId={sub.repoId!}
                     status={sub.status}
@@ -1961,37 +2096,46 @@ import iconPalette from "@ktibow/iconset-material-symbols/palette";
 
                 {@const subFilteredSections = sub.index ? filterSections(sub.index, filterText) : []}
                 {#if counts.total === 0}
-                  <div class="sub-clean-hint">No changes in submodule</div>
+                  <div class="sub-clean-hint px-3 py-2 text-[0.72rem] text-muted-foreground italic">No changes in submodule</div>
                 {:else if subFilteredSections.length === 0 && filterText}
-                  <div class="sub-clean-hint">No matching changes in submodule</div>
+                  <div class="sub-clean-hint px-3 py-2 text-[0.72rem] text-muted-foreground italic">No matching changes in submodule</div>
                 {:else}
-                  {#each subFilteredSections as subSection (subSection.id)}
+                  {#each subFilteredSections as subSection, subSectionIndex (subSection.id)}
                     {@const subSecCollapsed = isSubSectionCollapsed(info.path, subSection.id)}
                     <div class="section" role="group" aria-labelledby={`sub-${info.path}-${subSection.id}`}>
-                      <div class="section-header">
+                      <div class="section-header group/header sticky top-0 z-[2] flex items-center w-full h-[26px] box-border bg-card border-b border-border select-none" class:border-t={subSectionIndex > 0}>
                         <button
-                          class="section-toggle"
+                          class="section-toggle flex-1 min-w-0 flex items-center gap-[0.3rem] h-6 bg-transparent border-0 text-muted-foreground text-[0.6875rem] font-bold tracking-[0.045em] uppercase px-2 cursor-pointer text-left hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-2"
                           type="button"
                           id={`sub-${info.path}-${subSection.id}`}
                           aria-expanded={!subSecCollapsed}
                           onclick={() => toggleSubSection(info.path, subSection.id)}
                         >
-                          <span class="chevron" class:closed={subSecCollapsed}>
+                          <span
+                            class="chevron inline-flex items-center justify-center w-4 shrink-0 opacity-80 transition-transform {subSecCollapsed
+                              ? 'rotate-0'
+                              : 'rotate-90'}"
+                            class:closed={subSecCollapsed}
+                          >
                             <Icon icon={iconChevron} size={13} />
                           </span>
-                          <span class="section-name">{subSection.label}</span>
-                          <span class="count">{subSection.rows.length}</span>
+                          <span class="section-name min-w-0 overflow-hidden text-ellipsis whitespace-nowrap leading-[1.2]">{subSection.label}</span>
+                          <span class="count shrink-0 min-w-[1.15rem] ml-auto px-1.5 rounded-full bg-muted text-muted-foreground text-[0.625rem] font-semibold leading-[1.075rem] text-center tabular-nums transition-opacity group-hover/header:opacity-0 group-focus-within/header:opacity-0 pointer-coarse:hidden">{subSection.rows.length}</span>
                         </button>
                         {#if sub.repoId && (subSection.id === "staged" || subSection.rows.some((row) => row.kind !== "conflicted"))}
-                          <span class="section-action">
-                            <IconButton
-                              icon={subSection.id === "staged" ? iconUnstage : iconStage}
-                              label={`${subSection.id === "staged" ? "Unstage" : "Stage"} all in ${subSection.label}`}
+                          <span class="section-action absolute right-[0.3rem] top-1/2 -translate-y-1/2 inline-flex opacity-0 transition-opacity group-hover/header:opacity-100 group-focus-within/header:opacity-100 pointer-coarse:static pointer-coarse:transform-none pointer-coarse:opacity-100 pointer-coarse:pr-1">
+                            <Button
+                              class="relative text-muted-foreground after:absolute after:-inset-1 after:content-[''] hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-4"
+                              variant="ghost"
+                              size="icon-xs"
+                              type="button"
+                              aria-label={`${subSection.id === "staged" ? "Unstage" : "Stage"} all in ${subSection.label}`}
                               title={`${subSection.id === "staged" ? "Unstage" : "Stage"} all files in ${subSection.label}`}
-                              dense
                               disabled={mutating}
                               onclick={(event) => stageSubmoduleSection(info.path, subSection.id, event)}
-                            />
+                            >
+                              <Icon icon={subSection.id === "staged" ? iconUnstage : iconStage} size={16} />
+                            </Button>
                           </span>
                         {/if}
                       </div>
@@ -2009,53 +2153,62 @@ import iconPalette from "@ktibow/iconset-material-symbols/palette";
         {/each}
       </div>
     {:else if index !== null && index.total === 0 && extraModules.length === 0}
-      <div class="empty-state" role="status">
-        <span class="empty-icon"><Icon icon={iconCheck} size={26} /></span>
-        <p class="empty-title">No changes</p>
-        <p class="empty-hint">Your working tree is clean.</p>
+      <div class="empty-state flex-1 min-h-0 flex flex-col items-center justify-center gap-[0.3rem] px-4 py-8 text-center text-muted-foreground select-none" role="status">
+        <span class="empty-icon inline-flex items-center justify-center size-11 mb-0.5 rounded-full border border-border text-[color:var(--app-added)] opacity-90"><Icon icon={iconCheck} size={26} /></span>
+        <p class="empty-title m-0 text-[0.8125rem] font-medium text-foreground">No changes</p>
+        <p class="empty-hint m-0 max-w-[15rem] text-[0.72rem] leading-[1.4]">Your working tree is clean.</p>
       </div>
     {:else if sections.length === 0 && extraModules.length === 0}
-      <div class="empty-state" role="status">
-        <p class="empty-title">No matching changes</p>
-        <p class="empty-hint">Nothing matches “{filterText}”.</p>
+      <div class="empty-state flex-1 min-h-0 flex flex-col items-center justify-center gap-[0.3rem] px-4 py-8 text-center text-muted-foreground select-none" role="status">
+        <p class="empty-title m-0 text-[0.8125rem] font-medium text-foreground">No matching changes</p>
+        <p class="empty-hint m-0 max-w-[15rem] text-[0.72rem] leading-[1.4]">Nothing matches “{filterText}”.</p>
       </div>
     {:else}
       <div
-        class="tree"
+        class="tree flex-1 min-h-0 overflow-y-auto [scrollbar-gutter:stable] pb-3 outline-none"
         role="tree"
         aria-label="Changed files"
         tabindex="-1"
         bind:this={treeElement}
         use:trackTreeViewport
       >
-        {#each sectionWindows as window (window.section.id)}
+        {#each sectionWindows as window, windowIndex (window.section.id)}
           {@const section = window.section}
           <div class="section" role="group" aria-labelledby={`section-${section.id}`}>
-            <div class="section-header">
+            <div class="section-header group/header sticky top-0 z-[2] flex items-center w-full h-[26px] box-border bg-card border-b border-border select-none" class:border-t={windowIndex > 0}>
               <button
-                class="section-toggle"
+                class="section-toggle flex-1 min-w-0 flex items-center gap-[0.3rem] h-6 bg-transparent border-0 text-muted-foreground text-[0.6875rem] font-bold tracking-[0.045em] uppercase px-2 cursor-pointer text-left hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-2"
                 type="button"
                 id={`section-${section.id}`}
                 aria-expanded={!collapsed[section.id]}
                 aria-label={`${section.label} (${section.rows.length + section.modules.length}), ${collapsed[section.id] ? "expand" : "collapse"}`}
                 onclick={() => toggleSection(section.id)}
               >
-                <span class="chevron" class:closed={collapsed[section.id]}>
+                <span
+                  class="chevron inline-flex items-center justify-center w-4 shrink-0 opacity-80 transition-transform {collapsed[section.id]
+                    ? 'rotate-0'
+                    : 'rotate-90'}"
+                  class:closed={collapsed[section.id]}
+                >
                   <Icon icon={iconChevron} size={13} />
                 </span>
-                <span class="section-name">{section.label}</span>
-                <span class="count">{section.rows.length + section.modules.length}</span>
+                <span class="section-name min-w-0 overflow-hidden text-ellipsis whitespace-nowrap leading-[1.2]">{section.label}</span>
+                <span class="count shrink-0 min-w-[1.15rem] ml-auto px-1.5 rounded-full bg-muted text-muted-foreground text-[0.625rem] font-semibold leading-[1.075rem] text-center tabular-nums transition-opacity group-hover/header:opacity-0 group-focus-within/header:opacity-0 pointer-coarse:hidden">{section.rows.length + section.modules.length}</span>
               </button>
               {#if canMutate &&
                 (section.id === "staged" || section.rows.some((row) => row.kind !== "conflicted"))}
-                <span class="section-action">
-                  <IconButton
-                    icon={section.id === "staged" ? iconUnstage : iconStage}
-                    label={`${section.id === "staged" ? "Unstage" : "Stage"} all in ${section.label}`}
+                <span class="section-action absolute right-[0.3rem] top-1/2 -translate-y-1/2 inline-flex opacity-0 transition-opacity group-hover/header:opacity-100 group-focus-within/header:opacity-100 pointer-coarse:static pointer-coarse:transform-none pointer-coarse:opacity-100 pointer-coarse:pr-1">
+                  <Button
+                    class="relative text-muted-foreground after:absolute after:-inset-1 after:content-[''] hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-4"
+                    variant="ghost"
+                    size="icon-xs"
+                    type="button"
+                    aria-label={`${section.id === "staged" ? "Unstage" : "Stage"} all in ${section.label}`}
                     title={`${section.id === "staged" ? "Unstage" : "Stage"} all files in ${section.label}`}
-                    dense
                     onclick={(event) => stageSection(section, event)}
-                  />
+                  >
+                    <Icon icon={section.id === "staged" ? iconUnstage : iconStage} size={16} />
+                  </Button>
                 </span>
               {/if}
             </div>
@@ -2082,8 +2235,7 @@ import iconPalette from "@ktibow/iconset-material-symbols/palette";
                 {@const display = submoduleDisplay(info)}
                 {@const parts = splitPath(info.path)}
                 <div
-                  class="row module-row"
-                  class:danger={display.tone === "danger"}
+                  class="row module-row group/row relative flex items-center gap-[0.4rem] min-w-0 h-6 min-h-6 box-border px-[0.4rem] cursor-pointer [content-visibility:auto] [contain-intrinsic-size:auto_1.375rem] hover:bg-[color:var(--app-hover)]"
                   role="treeitem"
                   aria-selected="false"
                   aria-setsize={section.rows.length + section.modules.length}
@@ -2095,61 +2247,77 @@ import iconPalette from "@ktibow/iconset-material-symbols/palette";
                 >
                   <Icon icon={iconModule} size={14} />
                   <button
-                    class="module-open"
+                    class="module-open flex-1 basis-auto min-w-0 flex items-center gap-[0.4rem] bg-transparent border-0 p-0 text-left text-inherit cursor-pointer rounded-xs focus-visible:outline-2 focus-visible:outline-ring focus-visible:outline-offset-1"
                     type="button"
                     title={moduleTitle(info)}
                     onclick={() => void openSubmodule(info)}
                   >
-                    <span class="path">
-                      <span class="base" title={info.path}>{parts.base}</span>
+                    <span class="path flex-1 basis-auto min-w-0 flex items-baseline gap-[0.35rem] overflow-hidden text-xs leading-[1.25]">
+                      <span class={`base min-w-8 overflow-hidden text-ellipsis whitespace-nowrap font-normal ${display.tone === "danger" ? "text-[color:var(--app-deleted)]" : "text-foreground"}`} title={info.path}>{parts.base}</span>
                       {#if parts.dir}
-                        <span class="dir" title={dirText(parts.dir)}>{dirText(parts.dir)}</span>
+                        <span class="dir grow min-w-0 max-w-[48%] ml-auto overflow-hidden text-ellipsis whitespace-nowrap text-right text-muted-foreground opacity-70 text-[0.6875rem]" title={dirText(parts.dir)}>{dirText(parts.dir)}</span>
                       {/if}
                     </span>
                     {#if display.tag}
-                      <span class={`module-tag ${display.tone}`} title={display.detail}>
+                      <span class={`module-tag shrink-0 max-w-[6.5rem] overflow-hidden text-ellipsis whitespace-nowrap text-[0.625rem] leading-[1.35] text-muted-foreground ${toneColorClass(display.tone)}`} title={display.detail}>
                         {display.tag}
                       </span>
                     {/if}
                   </button>
                   <span
-                    class="kind k-module"
+                    class="kind shrink-0 w-4 inline-flex items-center justify-center text-[0.6875rem] font-bold font-mono leading-none relative z-[1] cursor-help text-[color:var(--app-modified)]"
                     title={`${info.path} · ${display.detail}`}
                     aria-hidden="true"
                   >
                     S
                   </span>
-                  <span class="row-actions">
-                    <IconButton
-                      icon={iconUpdate}
-                      label={`${info.initialized ? "Update" : "Initialize"} submodule ${info.path}`}
+                  <span class="row-actions absolute right-[1.35rem] top-1/2 -translate-y-1/2 flex items-center gap-px opacity-0 transition-opacity group-hover/row:opacity-100 group-focus-visible/row:opacity-100 group-has-[:focus-visible]/row:opacity-100 pointer-coarse:static pointer-coarse:transform-none pointer-coarse:opacity-100">
+                    <span
+                      aria-hidden="true"
+                      class="pointer-events-none absolute -left-[0.9rem] -top-[0.1rem] -bottom-[0.1rem] w-[0.9rem] pointer-coarse:hidden bg-[linear-gradient(to_right,transparent,var(--background))] group-hover/row:bg-[linear-gradient(to_right,transparent,color-mix(in_srgb,var(--foreground)_5%,var(--background)))]"
+                    ></span>
+                    <Button
+                      class="relative text-muted-foreground after:absolute after:-inset-1 after:content-[''] hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-4"
+                      variant="ghost"
+                      size="icon-xs"
+                      type="button"
+                      aria-label={`${info.initialized ? "Update" : "Initialize"} submodule ${info.path}`}
                       title={info.initialized
                         ? "Check out the commit the superproject records"
                         : "Initialize and update this submodule"}
-                      dense
                       tabindex={-1}
                       disabled={moduleBusy !== null}
                       onclick={() => void updateSubmodule(info)}
-                    />
+                    >
+                      <Icon icon={iconUpdate} size={16} />
+                    </Button>
                     {#if info.initialized}
-                      <IconButton
-                        icon={iconOpen}
-                        label={`Open submodule ${info.path}`}
+                      <Button
+                        class="relative text-muted-foreground after:absolute after:-inset-1 after:content-[''] hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-4"
+                        variant="ghost"
+                        size="icon-xs"
+                        type="button"
+                        aria-label={`Open submodule ${info.path}`}
                         title="Open this submodule as a tab"
-                        dense
                         tabindex={-1}
                         onclick={() => void openSubmodule(info)}
-                      />
+                      >
+                        <Icon icon={iconOpen} size={16} />
+                      </Button>
                     {/if}
-                    <IconButton
-                      icon={iconSync}
-                      label={`Sync submodule ${info.path}`}
+                    <Button
+                      class="relative text-muted-foreground after:absolute after:-inset-1 after:content-[''] hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-4"
+                      variant="ghost"
+                      size="icon-xs"
+                      type="button"
+                      aria-label={`Sync submodule ${info.path}`}
                       title="Rewrite the URL from .gitmodules into the repo config"
-                      dense
                       tabindex={-1}
                       disabled={moduleBusy !== null}
                       onclick={() => void syncSubmodule(info)}
-                    />
+                    >
+                      <Icon icon={iconSync} size={16} />
+                    </Button>
                   </span>
                 </div>
               {/each}
@@ -2159,9 +2327,9 @@ import iconPalette from "@ktibow/iconset-material-symbols/palette";
       </div>
     {/if}
   {:else}
-    <div class="empty-state" role="status">
-      <Spinner size={18} />
-      <p class="empty-title">Loading changes…</p>
+    <div class="empty-state flex-1 min-h-0 flex flex-col items-center justify-center gap-[0.3rem] px-4 py-8 text-center text-muted-foreground select-none" role="status">
+      <Spinner class="size-[18px]" role="presentation" aria-hidden="true" />
+      <p class="empty-title m-0 text-[0.8125rem] font-medium text-foreground">Loading changes…</p>
     </div>
   {/if}
 </aside>
@@ -2194,792 +2362,3 @@ import iconPalette from "@ktibow/iconset-material-symbols/palette";
   />
 {/if}
 
-<style>
-  aside {
-    display: flex;
-    flex-direction: column;
-    height: 100%;
-    min-height: 0;
-    min-width: 0;
-    overflow: hidden;
-    font-size: 0.8125rem;
-    background: var(--m3-surface-container-low, var(--m3-surface));
-    color: var(--m3-on-surface);
-  }
-
-  .toolbar {
-    display: flex;
-    align-items: center;
-    gap: 0.125rem;
-    padding: 0.3rem 0.4rem;
-    flex: none;
-    background: var(--m3-surface-container, var(--m3-surface));
-    border-bottom: 1px solid var(--app-border, var(--m3-outline-variant));
-  }
-
-  .filter-wrap {
-    position: relative;
-    flex: 1;
-    min-width: 0;
-    display: flex;
-    align-items: center;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-  }
-
-  .filter-wrap > :global(svg) {
-    position: absolute;
-    left: 0.4rem;
-    pointer-events: none;
-    opacity: 0.75;
-  }
-
-  .filter {
-    width: 100%;
-    min-width: 0;
-    height: 1.6rem;
-    border: 1px solid var(--app-border, var(--m3-outline-variant));
-    border-radius: var(--m3-shape-extra-small, 4px);
-    background: var(--m3-surface-container-lowest, var(--m3-surface));
-    color: var(--m3-on-surface);
-    font: inherit;
-    font-size: 0.75rem;
-    padding: 0 1.5rem;
-  }
-
-  .filter::placeholder {
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    opacity: 0.8;
-  }
-
-  .filter:focus-visible {
-    outline: 2px solid var(--m3-primary);
-    outline-offset: -1px;
-    border-color: transparent;
-  }
-
-  .clear-filter {
-    position: absolute;
-    right: 0.2rem;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 1.15rem;
-    height: 1.15rem;
-    padding: 0;
-    border: none;
-    border-radius: var(--m3-shape-full, 9999px);
-    background: transparent;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    cursor: pointer;
-  }
-
-  .clear-filter:hover {
-    background: var(--m3-surface-container-high, var(--m3-surface));
-    color: var(--m3-on-surface);
-  }
-
-  .clear-filter:focus-visible {
-    outline: 2px solid var(--m3-primary);
-    outline-offset: -1px;
-  }
-
-  :global(.spin svg) {
-    animation: spin 0.9s linear infinite;
-  }
-
-  @keyframes spin {
-    to {
-      transform: rotate(360deg);
-    }
-  }
-
-  .banners {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.25rem;
-    padding: 0.3rem 0.4rem;
-    flex: none;
-  }
-
-  .chip {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.2rem;
-    border: 1px solid var(--app-border, var(--m3-outline-variant));
-    border-radius: var(--m3-shape-full, 9999px);
-    padding: 0.0625rem 0.45rem;
-    font-size: 0.6875rem;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    white-space: nowrap;
-  }
-
-  .chip-ahead {
-    background: var(--m3-primary-container, var(--m3-surface-container-high));
-    color: var(--m3-on-primary-container, var(--m3-primary));
-    border-color: transparent;
-    font-variant-numeric: tabular-nums;
-  }
-
-  .chip-behind {
-    background: var(--m3-tertiary-container, var(--m3-surface-container-high));
-    color: var(--m3-on-tertiary-container, var(--m3-tertiary));
-    border-color: transparent;
-    font-variant-numeric: tabular-nums;
-  }
-
-  .chip-state {
-    background: var(--m3-tertiary-container, var(--m3-surface));
-    color: var(--m3-on-tertiary-container, var(--m3-on-surface));
-    border-color: transparent;
-    font-weight: 500;
-  }
-
-  .module-error {
-    margin: 0 0.4rem 0.25rem;
-    padding: 0.2rem 0.4rem;
-    border: 1px solid var(--app-deleted, var(--m3-error));
-    border-radius: var(--m3-shape-extra-small, 4px);
-    background: var(--app-conflicted-bg, var(--m3-error-container));
-    color: var(--app-deleted, var(--m3-error));
-    font: inherit;
-    font-size: 0.6875rem;
-    text-align: left;
-    cursor: pointer;
-  }
-
-  .tree {
-    flex: 1;
-    min-height: 0;
-    overflow-y: auto;
-    scrollbar-gutter: stable;
-    padding-bottom: 0.75rem;
-    outline: none;
-  }
-
-  .section-header {
-    position: sticky;
-    top: 0;
-    z-index: 2;
-    display: flex;
-    align-items: center;
-    width: 100%;
-    height: 26px;
-    box-sizing: border-box;
-    background: var(--m3-surface-container, var(--m3-surface));
-    border-bottom: 1px solid var(--app-border, var(--m3-outline-variant));
-    user-select: none;
-  }
-
-  /* A hairline between groups; the first group needs none. */
-  .section + .section .section-header {
-    border-top: 1px solid var(--app-border, var(--m3-outline-variant));
-  }
-
-  .section-toggle {
-    flex: 1;
-    min-width: 0;
-    display: flex;
-    align-items: center;
-    gap: 0.3rem;
-    height: 1.5rem;
-    border: none;
-    background: transparent;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    font: inherit;
-    font-size: 0.6875rem;
-    font-weight: 700;
-    letter-spacing: 0.045em;
-    text-transform: uppercase;
-    padding: 0 0.5rem;
-    cursor: pointer;
-    text-align: left;
-  }
-
-  .section-toggle:hover {
-    color: var(--m3-on-surface);
-  }
-
-  .section-toggle:focus-visible {
-    outline: 2px solid var(--m3-primary);
-    outline-offset: -2px;
-  }
-
-  .chevron {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 1rem;
-    flex: none;
-    opacity: 0.8;
-    transform: rotate(90deg);
-    transition: transform 0.12s ease;
-  }
-
-  .chevron.closed {
-    transform: rotate(0deg);
-  }
-
-  .section-name {
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    line-height: 1.2;
-  }
-
-  .count {
-    flex: none;
-    min-width: 1.15rem;
-    margin-left: auto;
-    padding: 0 0.375rem;
-    border-radius: var(--m3-shape-full, 9999px);
-    background: var(--m3-surface-container-high, var(--m3-surface));
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    font-size: 0.625rem;
-    font-weight: 600;
-    line-height: 1.075rem;
-    text-align: center;
-    font-variant-numeric: tabular-nums;
-    transition: opacity 0.1s ease;
-  }
-
-  /* Hover action replaces the count instead of reserving a permanent gap. */
-  .section-action {
-    position: absolute;
-    right: 0.3rem;
-    top: 50%;
-    transform: translateY(-50%);
-    display: inline-flex;
-    opacity: 0;
-    transition: opacity 0.1s ease;
-  }
-
-  .section-header:hover .section-action,
-  .section-header:focus-within .section-action {
-    opacity: 1;
-  }
-
-  .section-header:hover .count,
-  .section-header:focus-within .count {
-    opacity: 0;
-  }
-
-  .row {
-    position: relative;
-    display: flex;
-    align-items: center;
-    gap: 0.4rem;
-    min-width: 0;
-    height: 1.5rem;
-    min-height: 1.5rem;
-    box-sizing: border-box;
-    padding: 0 0.4rem 0 0.45rem;
-    cursor: pointer;
-    content-visibility: auto;
-    contain-intrinsic-size: auto 1.375rem;
-  }
-
-  .row:hover {
-    background: var(--app-hover, var(--m3-surface-container-high));
-  }
-
-  .row:focus-visible {
-    outline: 2px solid var(--m3-primary);
-    outline-offset: -2px;
-  }
-
-  .row.selected {
-    background: var(--app-active, var(--m3-secondary-container));
-    box-shadow: inset 2px 0 var(--m3-primary);
-  }
-
-  .row.danger .base {
-    color: var(--app-deleted, var(--m3-error));
-  }
-
-  .row > :global(svg) {
-    flex: none;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    opacity: 0.9;
-  }
-
-  .file-icon {
-    flex: none;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    line-height: 0;
-  }
-
-  .file-icon :global(svg) {
-    flex: none;
-    opacity: 1;
-  }
-
-  /* VSCode-style state letter: fixed at the right and independently
-     hoverable so its tooltip can identify the file and state. */
-  .kind {
-    flex: none;
-    width: 1rem;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 0.6875rem;
-    font-weight: 700;
-    font-family: var(--app-font-mono, ui-monospace, Consolas, monospace);
-    line-height: 1;
-    position: relative;
-    z-index: 1;
-    cursor: help;
-  }
-
-  .k-added {
-    color: var(--app-added, var(--m3-primary));
-  }
-
-  .k-deleted {
-    color: var(--app-deleted, var(--m3-error));
-  }
-
-  .k-renamed {
-    color: var(--app-renamed, var(--m3-tertiary));
-  }
-
-  .k-modified {
-    color: var(--app-modified, var(--m3-secondary));
-  }
-
-  .k-untracked {
-    color: var(--app-untracked, var(--m3-on-surface-variant));
-  }
-
-  .k-conflicted {
-    color: var(--app-conflicted, var(--m3-error));
-  }
-
-  .k-module {
-    color: var(--app-modified, var(--m3-tertiary));
-  }
-
-  .path {
-    flex: 1 1 auto;
-    min-width: 0;
-    display: flex;
-    align-items: baseline;
-    gap: 0.35rem;
-    overflow: hidden;
-    font-size: 0.75rem;
-    line-height: 1.25;
-  }
-
-  .base {
-    flex: 0 1 auto;
-    min-width: 2rem;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    color: var(--m3-on-surface);
-    font-weight: 400;
-  }
-
-  /* VSCode tints the label itself, so status reads without the letter. */
-  .row[data-kind="added"] .base {
-    color: var(--app-added, var(--m3-on-surface));
-  }
-
-  .row[data-kind="untracked"] .base {
-    color: var(--app-untracked, var(--m3-on-surface));
-  }
-
-  .row[data-kind="modified"] .base {
-    color: var(--app-modified, var(--m3-on-surface));
-  }
-
-  .row[data-kind="renamed"] .base,
-  .row[data-kind="copied"] .base {
-    color: var(--app-renamed, var(--m3-on-surface));
-  }
-
-  .row[data-kind="conflicted"] .base {
-    color: var(--app-conflicted, var(--m3-error));
-  }
-
-  .row[data-kind="deleted"] .base {
-    color: var(--app-deleted, var(--m3-error));
-    text-decoration: line-through;
-    text-decoration-thickness: 1px;
-  }
-
-  /* Keep the basename at the left; align its muted directory suffix at the
-     right edge and truncate that suffix when the row gets narrow. */
-  .dir {
-    flex: 0 9999 auto;
-    min-width: 0;
-    max-width: 48%;
-    margin-left: auto;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    text-align: right;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    opacity: 0.72;
-    font-size: 0.6875rem;
-  }
-
-  .module-tag {
-    flex: none;
-    max-width: 6.5rem;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    font-size: 0.625rem;
-    line-height: 1.35;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-  }
-
-  .module-tag.dirty {
-    color: var(--app-modified, var(--m3-tertiary));
-  }
-
-  .module-tag.danger {
-    color: var(--app-deleted, var(--m3-error));
-  }
-
-  .row-actions {
-    position: absolute;
-    right: 1.35rem;
-    top: 50%;
-    transform: translateY(-50%);
-    display: flex;
-    align-items: center;
-    gap: 0.0625rem;
-    opacity: 0;
-    transition: opacity 0.1s ease;
-  }
-
-  .row:hover .row-actions,
-  .row:focus-visible .row-actions,
-  .row:has(:focus-visible) .row-actions {
-    opacity: 1;
-  }
-
-  .row-actions::before {
-    content: "";
-    position: absolute;
-    inset: -0.1rem auto -0.1rem -0.9rem;
-    width: 0.9rem;
-    background: linear-gradient(
-      to right,
-      transparent,
-      var(--m3-surface-container-low, var(--m3-surface))
-    );
-    pointer-events: none;
-  }
-
-  .row:hover .row-actions::before {
-    background: linear-gradient(
-      to right,
-      transparent,
-      color-mix(in srgb, var(--m3-on-surface) 5%, var(--m3-surface-container-low, var(--m3-surface)))
-    );
-  }
-
-  .row.selected .row-actions::before {
-    background: linear-gradient(
-      to right,
-      transparent,
-      color-mix(in srgb, var(--m3-primary) 12%, var(--m3-surface-container-low, var(--m3-surface)))
-    );
-  }
-
-  .module-open {
-    flex: 1 1 auto;
-    min-width: 0;
-    display: flex;
-    align-items: center;
-    gap: 0.4rem;
-    border: none;
-    background: transparent;
-    color: inherit;
-    font: inherit;
-    padding: 0;
-    text-align: left;
-    cursor: pointer;
-  }
-
-  .module-open:focus-visible {
-    outline: 2px solid var(--m3-primary);
-    outline-offset: 1px;
-    border-radius: 2px;
-  }
-
-  .empty-state {
-    flex: 1;
-    min-height: 0;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    gap: 0.3rem;
-    padding: 2rem 1rem;
-    text-align: center;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    user-select: none;
-  }
-
-  .empty-icon {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 2.75rem;
-    height: 2.75rem;
-    margin-bottom: 0.2rem;
-    border: 1px solid var(--app-border, var(--m3-outline-variant));
-    border-radius: var(--m3-shape-full, 9999px);
-    color: var(--app-added, var(--m3-primary));
-    opacity: 0.9;
-  }
-
-  .empty-title {
-    margin: 0;
-    font-size: 0.8125rem;
-    font-weight: 500;
-    color: var(--m3-on-surface);
-  }
-
-  .empty-hint {
-    margin: 0;
-    max-width: 15rem;
-    font-size: 0.72rem;
-    line-height: 1.4;
-  }
-
-  /* --- gitignore quick-add (M4): hover-revealed action + pattern menu --- */
-
-  .ignore-wrap {
-    position: relative;
-    flex: none;
-    display: inline-flex;
-  }
-
-  .ignore-menu {
-    /* Portaled to <body> by `floating`; top/left/visibility are set there. */
-    position: fixed;
-    top: 0;
-    left: 0;
-    visibility: hidden;
-    z-index: 40;
-    display: flex;
-    flex-direction: column;
-    min-width: 12rem;
-    max-width: calc(100vw - 1rem);
-    max-height: calc(100vh - 1rem);
-    overflow-y: auto;
-    background: var(--m3-surface-container-high, var(--m3-surface));
-    border: 1px solid var(--app-border, var(--m3-outline-variant));
-    border-radius: var(--m3-shape-small, 8px);
-    box-shadow: var(--m3-elevation-2);
-    padding: 0.125rem;
-  }
-
-  .ignore-menu button {
-    border: none;
-    background: none;
-    color: var(--m3-on-surface);
-    font: inherit;
-    font-size: 0.75rem;
-    text-align: left;
-    padding: 0.25rem 0.5rem;
-    cursor: pointer;
-    border-radius: var(--m3-shape-extra-small, 4px);
-    white-space: nowrap;
-  }
-
-  .ignore-menu button:hover {
-    background: var(--m3-surface-container-highest, var(--m3-surface));
-  }
-
-  .ignore-menu button:focus-visible {
-    outline: 2px solid var(--m3-primary);
-    outline-offset: -2px;
-  }
-
-  .ignore-menu code {
-    font-family: var(--app-font-mono, ui-monospace, Consolas, monospace);
-    font-size: 0.6875rem;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-  }
-
-  @media (pointer: coarse) {
-    .row-actions {
-      position: static;
-      transform: none;
-      opacity: 1;
-    }
-
-    .row-actions::before {
-      display: none;
-    }
-
-    .section-action {
-      position: static;
-      transform: none;
-      opacity: 1;
-      padding-right: 0.25rem;
-    }
-
-    .section-header .count {
-      display: none;
-    }
-  }
-
-  /* --- Multi-repo & submodule accordion styles --- */
-
-  .multi-repo-tree {
-    gap: 0;
-  }
-
-  .repo-accordion {
-    border-bottom: 1px solid var(--app-border, var(--m3-outline-variant));
-  }
-
-  .repo-accordion-header {
-    display: flex;
-    align-items: center;
-    width: 100%;
-    min-height: 28px;
-    padding: 0.15rem 0.4rem;
-    box-sizing: border-box;
-    background: var(--m3-surface-container, var(--m3-surface));
-    border-top: 1px solid var(--app-border, var(--m3-outline-variant));
-    border-bottom: 1px solid var(--app-border, var(--m3-outline-variant));
-    user-select: none;
-    gap: 0.25rem;
-  }
-
-  .repo-accordion-toggle {
-    flex: 1;
-    min-width: 0;
-    display: flex;
-    align-items: center;
-    gap: 0.35rem;
-    height: 1.6rem;
-    border: none;
-    background: transparent;
-    color: var(--m3-on-surface);
-    font: inherit;
-    font-size: 0.75rem;
-    font-weight: 600;
-    padding: 0 0.2rem;
-    cursor: pointer;
-    text-align: left;
-  }
-
-  .repo-accordion-toggle:hover {
-    color: var(--m3-primary);
-  }
-
-  .repo-accordion-toggle:focus-visible {
-    outline: 2px solid var(--m3-primary);
-    outline-offset: -2px;
-  }
-
-  .repo-title {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .branch-pill {
-    flex: none;
-    display: inline-flex;
-    align-items: center;
-    gap: 0.2rem;
-    padding: 0.05rem 0.35rem;
-    border-radius: var(--m3-shape-full, 9999px);
-    background: var(--m3-surface-container-high, var(--m3-surface));
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    font-size: 0.625rem;
-    font-weight: 500;
-    max-width: 7rem;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .count-pill {
-    flex: none;
-    min-width: 1rem;
-    padding: 0 0.35rem;
-    border-radius: var(--m3-shape-full, 9999px);
-    background: var(--m3-surface-container-high, var(--m3-surface));
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    font-size: 0.625rem;
-    font-weight: 600;
-    line-height: 1.05rem;
-    text-align: center;
-    font-variant-numeric: tabular-nums;
-  }
-
-  .header-actions {
-    display: flex;
-    align-items: center;
-    gap: 0.1rem;
-    flex: none;
-    opacity: 0;
-    transition: opacity 0.1s ease;
-  }
-
-  .repo-accordion-header:hover .header-actions,
-  .repo-accordion-header:focus-within .header-actions {
-    opacity: 1;
-  }
-
-  .embedded-commit-bar {
-    padding: 0.3rem 0.4rem 0.4rem;
-    background: var(--m3-surface-container-lowest, var(--m3-surface));
-    border-bottom: 1px solid var(--app-border, var(--m3-outline-variant));
-  }
-
-  .uninitialized-banner {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 0.4rem;
-    padding: 0.75rem 0.5rem;
-    background: var(--m3-surface-container-lowest, var(--m3-surface));
-    border-bottom: 1px solid var(--app-border, var(--m3-outline-variant));
-  }
-
-  .uninit-text {
-    margin: 0;
-    font-size: 0.75rem;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-  }
-
-  .uninit-btn {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.35rem;
-    padding: 0.25rem 0.6rem;
-    border: 1px solid var(--app-border, var(--m3-outline-variant));
-    border-radius: var(--m3-shape-extra-small, 4px);
-    background: var(--m3-surface-container-high, var(--m3-surface));
-    color: var(--m3-primary);
-    font: inherit;
-    font-size: 0.72rem;
-    font-weight: 500;
-    cursor: pointer;
-  }
-
-  .uninit-btn:hover {
-    background: var(--m3-surface-container-highest, var(--m3-surface));
-  }
-
-  .sub-clean-hint {
-    padding: 0.5rem 0.75rem;
-    font-size: 0.72rem;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    font-style: italic;
-  }
-</style>

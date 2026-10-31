@@ -17,7 +17,8 @@
   import { showMenuAt, type MenuEntry } from "$lib/components/menu/contextMenuStore.svelte";
   import ResetDialog from "$lib/components/safety/ResetDialog.svelte";
   import PromptDialog from "$lib/components/safety/PromptDialog.svelte";
-  import { IconButton } from "$lib/components/m3";
+  import Icon from "$lib/components/icons/Icon.svelte";
+  import { Button } from "$lib/components/ui/button/index.js";
   import iconRefresh from "@ktibow/iconset-material-symbols/refresh";
   import {
     groupReflogByDay,
@@ -128,11 +129,12 @@
   }
 </script>
 
-<aside class="reflog-panel" aria-label="Reflog">
-  <div class="toolbar">
-    <label class="ref-pick">
+<aside class="reflog-panel flex min-h-0 flex-col text-[0.8125rem]" aria-label="Reflog">
+  <div class="toolbar flex shrink-0 items-center gap-1.5 px-2 py-1.5">
+    <label class="ref-pick flex items-center gap-1.5">
       <span class="sr-only">Reflog ref</span>
       <select
+        class="max-w-56 rounded-md border border-input bg-background px-1.5 py-0.5 font-[inherit] text-xs text-foreground focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-primary"
         aria-label="Reflog ref"
         bind:value={selectedRef}
         onchange={onSelectRef}
@@ -143,42 +145,62 @@
         {/each}
       </select>
     </label>
-    <IconButton
-      icon={iconRefresh}
-      label="Refresh reflog"
+    <Button
+      class="border-border text-muted-foreground hover:border-primary hover:bg-accent hover:text-accent-foreground"
+      variant="ghost"
+      size="icon-sm"
+      type="button"
+      aria-label="Refresh reflog"
       title={loading ? "Refreshing reflog…" : "Refresh reflog"}
-      variant="outlined"
       disabled={loading}
       onclick={() => void reload()}
-    />
+    >
+      <Icon icon={iconRefresh} size={16} />
+    </Button>
   </div>
 
-  <p class="hint">
+  <p
+    class="hint m-0 shrink-0 border-b border-border bg-primary/10 px-2 py-[0.3rem] text-[0.72rem] text-foreground"
+  >
     Lost commits? Find them here — every HEAD move is recorded.
   </p>
 
   {#if error}
-    <p class="state error" role="alert">{error}</p>
+    <p class="state m-0 px-3 py-4 text-[0.8125rem] text-destructive" role="alert"
+      >{error}</p
+    >
   {:else if !loading && entries.length === 0}
-    <p class="state">No reflog entries for this ref.</p>
+    <p class="state m-0 px-3 py-4 text-[0.8125rem] text-muted-foreground">
+      No reflog entries for this ref.</p
+    >
   {:else}
-    <div class="log" role="list" aria-label="Reflog entries">
+    <div class="log min-h-0 flex-1 overflow-y-auto px-2 pb-2 pt-1" role="list" aria-label="Reflog entries">
       {#each visibleGroups as group (group.label + group.entries[0].new_sha)}
-        <h3 class="day">{group.label}</h3>
-        <ul class="entries" role="list" aria-label={`Reflog entries for ${group.label}`}>
+        <h3
+          class="day mb-1 mt-2 text-[0.6875rem] font-semibold uppercase tracking-[0.05em] text-muted-foreground"
+        >
+          {group.label}
+        </h3>
+        <ul class="entries m-0 flex list-none flex-col p-0" role="list" aria-label={`Reflog entries for ${group.label}`}>
           {#each group.entries as entry, i (`${entry.new_sha}:${i}`)}
             <li>
               <button
-                class="entry"
+                class="entry flex w-full cursor-pointer items-baseline gap-2 rounded-sm border-0 bg-transparent px-1.5 py-1 text-left font-[inherit] text-foreground hover:bg-muted/60 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary"
                 type="button"
                 title={`${entry.message} — click to copy ${shortSha(entry.new_sha)}`}
                 onclick={() => copySha(entry)}
                 oncontextmenu={(e) => entryMenu(e, entry)}
               >
-                <span class="sha">{shortSha(entry.new_sha)}</span>
-                <span class="what">
-                  <span class="message">{entry.message}</span>
-                  <span class="meta">{entry.signature.name} · {relativeAge(entry.signature.time)}</span>
+                <span class="sha shrink-0 font-mono text-[0.72rem] text-primary"
+                  >{shortSha(entry.new_sha)}</span
+                >
+                <span class="what flex min-w-0 flex-col">
+                  <span class="message overflow-hidden text-ellipsis whitespace-nowrap"
+                    >{entry.message}</span
+                  >
+                  <span class="meta text-[0.6875rem] text-muted-foreground"
+                    >{entry.signature.name} · {relativeAge(entry.signature.time)}</span
+                  >
                 </span>
               </button>
             </li>
@@ -186,7 +208,7 @@
         </ul>
       {/each}
       {#if entries.length > REFLOG_DISPLAY_CAP}
-        <p class="cap" role="note">
+        <p class="cap mb-0 mt-2 text-[0.6875rem] text-muted-foreground" role="note">
           Showing the {REFLOG_DISPLAY_CAP} most recent of {entries.length} entries.
         </p>
       {/if}
@@ -215,149 +237,3 @@
   onSubmit={(name) => void onCreateBranch(name)}
 />
 
-<style>
-  .reflog-panel {
-    display: flex;
-    flex-direction: column;
-    min-height: 0;
-    font-size: 0.8125rem;
-  }
-
-  .toolbar {
-    display: flex;
-    align-items: center;
-    gap: 0.375rem;
-    padding: 0.375rem 0.5rem;
-    flex: none;
-  }
-
-  .ref-pick {
-    display: flex;
-    align-items: center;
-    gap: 0.375rem;
-  }
-
-  select {
-    font: inherit;
-    font-size: 0.75rem;
-    color: var(--m3-on-surface);
-    background: var(--m3-surface-container-lowest, var(--m3-surface));
-    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    border-radius: var(--m3-shape-extra-small, 4px);
-    padding: 0.15rem 0.3rem;
-    max-width: 14rem;
-  }
-
-  select:focus-visible {
-    outline: 2px solid var(--m3-primary);
-    outline-offset: -1px;
-  }
-
-  .hint {
-    flex: none;
-    margin: 0;
-    padding: 0.3rem 0.5rem;
-    font-size: 0.72rem;
-    color: var(--m3-on-secondary-container, var(--m3-on-surface));
-    background: var(--m3-secondary-container, var(--m3-surface-container-low));
-    border-bottom: 1px solid var(--m3-outline-variant, var(--m3-primary));
-  }
-
-  .log {
-    flex: 1;
-    min-height: 0;
-    overflow-y: auto;
-    padding: 0.25rem 0.5rem 0.5rem;
-  }
-
-  .day {
-    margin: 0.5rem 0 0.25rem;
-    font-size: 0.6875rem;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-  }
-
-  .entries {
-    margin: 0;
-    padding: 0;
-    list-style: none;
-    display: flex;
-    flex-direction: column;
-  }
-
-  .entry {
-    display: flex;
-    align-items: baseline;
-    gap: 0.5rem;
-    width: 100%;
-    text-align: left;
-    border: none;
-    background: none;
-    font: inherit;
-    color: var(--m3-on-surface);
-    padding: 0.25rem 0.375rem;
-    border-radius: var(--m3-shape-extra-small, 4px);
-    cursor: pointer;
-  }
-
-  .entry:hover {
-    background: var(--m3-surface-container-high, var(--m3-surface));
-  }
-
-  .entry:focus-visible {
-    outline: 2px solid var(--m3-primary);
-    outline-offset: -2px;
-  }
-
-  .sha {
-    flex: none;
-    font-family: ui-monospace, Consolas, monospace;
-    font-size: 0.72rem;
-    color: var(--m3-primary);
-  }
-
-  .what {
-    min-width: 0;
-    display: flex;
-    flex-direction: column;
-  }
-
-  .message {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .meta {
-    font-size: 0.6875rem;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-  }
-
-  .cap {
-    margin: 0.5rem 0 0;
-    font-size: 0.6875rem;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-  }
-
-  .state {
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    padding: 1rem 0.75rem;
-    margin: 0;
-    font-size: 0.8125rem;
-  }
-
-  .error {
-    color: var(--m3-error, inherit);
-  }
-
-  .sr-only {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    overflow: hidden;
-    clip: rect(0 0 0 0);
-    white-space: nowrap;
-  }
-</style>

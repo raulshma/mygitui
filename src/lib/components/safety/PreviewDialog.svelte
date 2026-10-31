@@ -16,6 +16,10 @@
    * AuthDialog's conditional render).
    */
   import type { PreviewInfo } from "$lib/ipc/types";
+  import * as Dialog from "$lib/components/ui/dialog/index.js";
+  import { Button } from "$lib/components/ui/button/index.js";
+  import { Input } from "$lib/components/ui/input/index.js";
+  import { Checkbox } from "$lib/components/ui/checkbox/index.js";
   import {
     classifyDanger,
     previewSummaryLines,
@@ -48,8 +52,8 @@
   const lines = $derived(previewSummaryLines(info));
   let phrase = $state("");
   let checkpoint = $state(true);
-  let phraseInput: HTMLInputElement | undefined = $state();
-  let confirmButton: HTMLButtonElement | undefined = $state();
+  let phraseInput = $state<HTMLInputElement | null>(null);
+  let confirmButton = $state<HTMLElement | null>(null);
 
   const phraseOk = $derived(
     confirmPhrase === undefined || phrase === confirmPhrase,
@@ -65,229 +69,91 @@
     });
   });
 
-  function onKeydown(event: KeyboardEvent): void {
-    if (event.key === "Escape") {
-      event.preventDefault();
-      onCancel();
-    }
-  }
-
   function confirm(): void {
     if (!phraseOk) return;
     onConfirm(danger && checkpoint);
   }
 </script>
 
-<!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-<div class="scrim" role="presentation" onkeydown={onKeydown}>
-  <div
-    class="dialog"
+<Dialog.Root open={true}>
+  <!-- svelte-ignore a11y_click_events_have_key_events -->
+  <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+  <Dialog.Overlay class="scrim bg-black/40" role="presentation" />
+  <Dialog.Content
+    class="dialog flex max-h-[calc(100vh-4rem)] w-[min(30rem,calc(100vw-2rem))] max-w-none flex-col gap-0 rounded-lg bg-card px-6 py-5 text-sm text-popover-foreground shadow-xl sm:max-w-none"
     role="dialog"
     aria-modal="true"
     aria-labelledby="preview-title"
     aria-describedby="preview-summary"
+    showCloseButton={false}
+    escapeKeydownBehavior="ignore"
+    interactOutsideBehavior="ignore"
+    onkeydown={(e) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        onCancel();
+      }
+    }}
   >
-    <h2 id="preview-title" class="title" class:danger={dangerInfo.level === "danger"}>
+    <Dialog.Title
+      id="preview-title"
+      class={"mb-2 mt-0 text-lg font-medium " +
+        (dangerInfo.level === "danger" ? "danger text-destructive" : "")}
+    >
       {title ?? `${dangerInfo.verb} — preview`}
-    </h2>
+    </Dialog.Title>
 
-    <p id="preview-summary" class="summary">{info.summary}</p>
+    <p id="preview-summary" class="mb-2 mt-0 whitespace-pre-line text-foreground [overflow-wrap:anywhere]">{info.summary}</p>
 
     {#if lines.length > 1}
-      <ul class="files" role="list" aria-label="Affected files">
+      <ul class="mb-3 mt-0 max-h-48 list-none overflow-y-auto rounded-sm border border-border bg-background px-[0.6rem] py-[0.35rem] font-mono text-[0.72rem] text-muted-foreground" role="list" aria-label="Affected files">
         {#each lines.slice(1) as line, i (i)}
-          <li>{line}</li>
+          <li class="py-[0.1rem] [overflow-wrap:anywhere]">{line}</li>
         {/each}
       </ul>
     {/if}
 
     {#if danger}
-      <label class="check">
-        <input type="checkbox" bind:checked={checkpoint} />
+      <label class="check mb-3 flex cursor-pointer items-center gap-2 text-muted-foreground">
+        <Checkbox bind:checked={checkpoint} />
         <span>Create undo checkpoint (snapshot first)</span>
       </label>
     {/if}
 
     {#if confirmPhrase !== undefined}
-      <label class="phrase">
-        <span class="phrase-label">
-          Type <code>{confirmPhrase}</code> to confirm
+      <label class="phrase mb-3 flex flex-col gap-1">
+        <span class="phrase-label text-xs text-muted-foreground">
+          Type <code class="font-mono font-semibold text-destructive">{confirmPhrase}</code> to confirm
         </span>
-        <input
+        <Input
           type="text"
           spellcheck="false"
           autocomplete="off"
           aria-label={`Type ${confirmPhrase} to confirm`}
           placeholder={confirmPhrase}
+          class="h-auto rounded-sm px-[0.6rem] py-[0.45rem] font-mono text-sm focus-visible:-outline-offset-1 focus-visible:outline-2 focus-visible:outline-ring"
           bind:value={phrase}
-          bind:this={phraseInput}
+          bind:ref={phraseInput}
         />
       </label>
     {/if}
 
-    <div class="actions">
-      <button
-        class="confirm"
-        class:danger-btn={dangerInfo.level === "danger"}
+    <div class="actions mt-1 flex justify-end gap-2">
+      <Button
+        variant={dangerInfo.level === "danger" ? "destructive" : "default"}
         type="button"
         disabled={!phraseOk}
-        bind:this={confirmButton}
+        bind:ref={confirmButton}
         onclick={confirm}
       >
         {dangerInfo.verb}
-      </button>
-      <button class="cancel" type="button" onclick={onCancel}>Cancel</button>
+      </Button>
+      <Button
+        variant="outline"
+        class="text-muted-foreground"
+        type="button"
+        onclick={onCancel}
+      >Cancel</Button>
     </div>
-  </div>
-</div>
-
-<style>
-  .scrim {
-    position: fixed;
-    inset: 0;
-    z-index: 60;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: color-mix(in srgb, var(--m3-scrim, black) 40%, transparent);
-  }
-
-  .dialog {
-    width: min(30rem, calc(100vw - 2rem));
-    max-height: calc(100vh - 4rem);
-    display: flex;
-    flex-direction: column;
-    padding: 1.25rem 1.5rem;
-    border-radius: var(--m3-shape-large, 16px);
-    background: var(--m3-surface-container-high, var(--m3-surface));
-    color: var(--m3-on-surface);
-    box-shadow: var(--m3-elevation-3, 0 8px 24px rgba(0, 0, 0, 0.3));
-    font-size: 0.875rem;
-  }
-
-  .title {
-    margin: 0 0 0.5rem;
-    font-size: 1.125rem;
-    font-weight: 500;
-  }
-
-  .title.danger {
-    color: var(--m3-error, inherit);
-  }
-
-  .summary {
-    margin: 0 0 0.5rem;
-    color: var(--m3-on-surface);
-    overflow-wrap: anywhere;
-    white-space: pre-line;
-  }
-
-  .files {
-    margin: 0 0 0.75rem;
-    padding: 0.35rem 0.6rem;
-    max-height: 12rem;
-    overflow-y: auto;
-    list-style: none;
-    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    border-radius: var(--m3-shape-extra-small, 4px);
-    background: var(--m3-surface-container-lowest, var(--m3-surface));
-    font-family: ui-monospace, Consolas, monospace;
-    font-size: 0.72rem;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-  }
-
-  .files li {
-    padding: 0.1rem 0;
-    overflow-wrap: anywhere;
-  }
-
-  .check {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    margin: 0 0 0.75rem;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    cursor: pointer;
-  }
-
-  .check input {
-    accent-color: var(--m3-primary);
-  }
-
-  .phrase {
-    display: flex;
-    flex-direction: column;
-    gap: 0.25rem;
-    margin: 0 0 0.75rem;
-  }
-
-  .phrase-label {
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    font-size: 0.75rem;
-  }
-
-  .phrase code {
-    font-family: ui-monospace, Consolas, monospace;
-    color: var(--m3-error, inherit);
-    font-weight: 600;
-  }
-
-  .phrase input {
-    font: inherit;
-    font-family: ui-monospace, Consolas, monospace;
-    color: var(--m3-on-surface);
-    background: var(--m3-surface-container-lowest, var(--m3-surface));
-    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    border-radius: var(--m3-shape-extra-small, 4px);
-    padding: 0.45rem 0.6rem;
-  }
-
-  .phrase input:focus-visible {
-    outline: 2px solid var(--m3-primary);
-    outline-offset: -1px;
-  }
-
-  .actions {
-    display: flex;
-    justify-content: flex-end;
-    gap: 0.5rem;
-    margin-top: 0.25rem;
-  }
-
-  .confirm {
-    border: none;
-    border-radius: var(--m3-shape-full, 9999px);
-    background: var(--m3-primary);
-    color: var(--m3-on-primary);
-    font: inherit;
-    font-weight: 500;
-    padding: 0.45rem 1.25rem;
-    cursor: pointer;
-  }
-
-  .confirm:disabled {
-    cursor: not-allowed;
-    opacity: 0.55;
-  }
-
-  .confirm.danger-btn {
-    background: var(--m3-error, var(--m3-primary));
-    color: var(--m3-on-error, white);
-  }
-
-  .cancel {
-    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    border-radius: var(--m3-shape-full, 9999px);
-    background: none;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    font: inherit;
-    padding: 0.45rem 1rem;
-    cursor: pointer;
-  }
-
-  .confirm:focus-visible,
-  .cancel:focus-visible {
-    outline: 2px solid var(--m3-primary);
-    outline-offset: 2px;
-  }
-</style>
+  </Dialog.Content>
+</Dialog.Root>

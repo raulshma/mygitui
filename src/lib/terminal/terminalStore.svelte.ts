@@ -449,7 +449,7 @@ function parseColor(raw: string): Rgb | null {
       };
     }
     if (/^[0-9a-f]{8}$/i.test(hex)) {
-      // #AARRGGBB (material-color-utilities shape) — alpha is dropped here.
+      // #AARRGGBB hex from the backend — alpha is dropped here.
       return {
         r: tuple(hex.slice(2, 4)),
         g: tuple(hex.slice(4, 6)),
@@ -503,34 +503,34 @@ function mixColors(rawBase: string, rawOver: string, amount: number): string {
  * fixed variants). Each entry: [xterm key, CSS var, fallback hex].
  */
 const ANSI16: readonly (readonly [string, string, string])[] = [
-  ["black", "--m3-surface-variant", "#49454f"],
-  ["red", "--m3-error", "#f2b8b5"],
-  ["green", "--m3-tertiary", "#efb8c8"],
-  ["yellow", "--m3-secondary", "#ccc2dc"],
-  ["blue", "--m3-primary", "#d0bcff"],
-  ["magenta", "--m3-inverse-primary", "#6750a4"],
-  ["cyan", "--m3-secondary-fixed", "#e8def8"],
-  ["white", "--m3-outline", "#938f99"],
-  ["brightBlack", "--m3-outline-variant", "#4a4458"],
-  ["brightRed", "--m3-on-error-container", "#f9dedc"],
-  ["brightGreen", "--m3-on-tertiary-container", "#31111d"],
-  ["brightYellow", "--m3-on-secondary-container", "#1d192b"],
-  ["brightBlue", "--m3-on-primary-container", "#4f378b"],
-  ["brightMagenta", "--m3-primary-fixed", "#eaddff"],
-  ["brightCyan", "--m3-tertiary-fixed", "#ffd8e4"],
-  ["brightWhite", "--m3-on-surface", "#e6e0e9"],
+  ["black", "--card-variant", "#49454f"],
+  ["red", "--destructive", "#f2b8b5"],
+  ["green", "--muted", "#efb8c8"],
+  ["yellow", "--secondary", "#ccc2dc"],
+  ["blue", "--primary", "#d0bcff"],
+  ["magenta", "--primary", "#6750a4"],
+  ["cyan", "--secondary-fixed", "#e8def8"],
+  ["white", "--border", "#938f99"],
+  ["brightBlack", "--border", "#4a4458"],
+  ["brightRed", "--destructive", "#f9dedc"],
+  ["brightGreen", "--muted-foreground", "#31111d"],
+  ["brightYellow", "--secondary-foreground", "#1d192b"],
+  ["brightBlue", "--accent-foreground", "#4f378b"],
+  ["brightMagenta", "--primary-fixed", "#eaddff"],
+  ["brightCyan", "--muted-fixed", "#ffd8e4"],
+  ["brightWhite", "--foreground", "#e6e0e9"],
 ];
 
 /** Builds an xterm theme from the current M3 scheme (dark/light aware). */
 export function terminalTheme(): TerminalTheme {
-  const background = cssVar("--m3-surface", "#141218");
-  const foreground = cssVar("--m3-on-surface", "#e6e0e9");
-  const primary = cssVar("--m3-primary", "#d0bcff");
+  const background = cssVar("--card", "#141218");
+  const foreground = cssVar("--foreground", "#e6e0e9");
+  const primary = cssVar("--primary", "#d0bcff");
   const theme: TerminalTheme = {
     background,
     foreground,
     cursor: primary,
-    cursorAccent: cssVar("--m3-on-primary", "#381e72"),
+    cursorAccent: cssVar("--primary-foreground", "#381e72"),
     // Precomputed color-mix(in srgb, primary N%, surface) so xterm never
     // has to parse modern CSS color syntax.
     selectionBackground: mixColors(background, primary, 0.35),

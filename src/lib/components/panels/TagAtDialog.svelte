@@ -9,7 +9,9 @@
    * the owner performs `tagCreate` in `onSubmit(name, annotated, message)`
    * and closes by clearing its state.
    */
-  import DialogShell from "$lib/components/safety/DialogShell.svelte";
+  import * as Dialog from "$lib/components/ui/dialog/index.js";
+  import { Button } from "$lib/components/ui/button/index.js";
+  import { Input } from "$lib/components/ui/input/index.js";
 
   let {
     sha,
@@ -27,6 +29,11 @@
   let annotated = $state(false);
   let message = $state("");
 
+  let nameEl = $state<HTMLInputElement | null>(null);
+  $effect(() => {
+    nameEl?.focus();
+  });
+
   function submit(): void {
     const trimmed = name.trim();
     if (!trimmed || (annotated && !message.trim())) return;
@@ -34,112 +41,64 @@
   }
 </script>
 
-<DialogShell
-  open={true}
-  labelledBy="tag-at-title"
-  width="24rem"
-  {onCancel}
-  onsubmit={submit}
+<Dialog.Root
+  open
+  onOpenChange={(o) => {
+    if (!o) onCancel?.();
+  }}
 >
-  {#snippet children()}
-    <h2 id="tag-at-title" class="tagat-title">New tag at {sha.slice(0, 7)}</h2>
-    <input
-      class="tagat-input"
-      placeholder="Tag name"
-      aria-label="Tag name"
-      bind:value={name}
-      data-autofocus
-      onfocus={(e) => e.currentTarget.select()}
-    />
-    <label class="tagat-toggle" title="Annotated tags carry a message, tagger and date">
-      <input type="checkbox" bind:checked={annotated} />
-      <span>annotated</span>
-    </label>
-    {#if annotated}
-      <input
-        class="tagat-input"
-        placeholder="Message (makes the tag annotated)"
-        aria-label="Tag message"
-        bind:value={message}
-      />
-    {/if}
-  {/snippet}
-  {#snippet actions()}
-    <button class="tagat-secondary" type="button" onclick={() => onCancel?.()}>
-      Cancel
-    </button>
-    <button
-      class="tagat-primary"
-      type="submit"
-      disabled={!name.trim() || (annotated && !message.trim())}
+  <Dialog.Content class="w-96 sm:max-w-none">
+    <form
+      class="grid gap-3"
+      onsubmit={(e) => {
+        e.preventDefault();
+        submit();
+      }}
     >
-      Create tag
-    </button>
-  {/snippet}
-</DialogShell>
-
-<style>
-  .tagat-title {
-    margin: 0 0 0.75rem;
-    font-size: 1.125rem;
-    font-weight: 500;
-    color: var(--m3-on-surface);
-  }
-
-  .tagat-input {
-    width: 100%;
-    box-sizing: border-box;
-    font: inherit;
-    color: var(--m3-on-surface);
-    background: var(--m3-surface-container-lowest, var(--m3-surface));
-    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    border-radius: var(--m3-shape-small, 8px);
-    padding: 0.45rem 0.6rem;
-    margin-bottom: 0.6rem;
-  }
-
-  .tagat-input:focus-visible {
-    outline: 2px solid var(--m3-primary);
-    outline-offset: -1px;
-  }
-
-  .tagat-toggle {
-    display: flex;
-    align-items: center;
-    gap: 0.4rem;
-    font-size: 0.8125rem;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    cursor: pointer;
-  }
-
-  .tagat-toggle input {
-    accent-color: var(--m3-primary);
-    margin: 0;
-  }
-
-  .tagat-primary {
-    border: none;
-    border-radius: var(--m3-shape-full, 9999px);
-    background: var(--m3-primary);
-    color: var(--m3-on-primary);
-    font: inherit;
-    font-weight: 500;
-    padding: 0.45rem 1.25rem;
-    cursor: pointer;
-  }
-
-  .tagat-primary:disabled {
-    opacity: 0.55;
-    cursor: not-allowed;
-  }
-
-  .tagat-secondary {
-    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    border-radius: var(--m3-shape-full, 9999px);
-    background: none;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    font: inherit;
-    padding: 0.45rem 1rem;
-    cursor: pointer;
-  }
-</style>
+      <Dialog.Title id="tag-at-title" class="tagat-title m-0 text-lg font-medium text-foreground">
+        New tag at {sha.slice(0, 7)}
+      </Dialog.Title>
+      <Input
+        class="rounded-lg"
+        placeholder="Tag name"
+        aria-label="Tag name"
+        bind:value={name}
+        bind:ref={nameEl}
+        data-autofocus
+        onfocus={(e) => e.currentTarget.select()}
+      />
+      <label
+        class="tagat-toggle flex cursor-pointer items-center gap-1.5 text-[0.8125rem] text-muted-foreground"
+        title="Annotated tags carry a message, tagger and date"
+      >
+        <input type="checkbox" class="m-0 accent-primary" bind:checked={annotated} />
+        <span>annotated</span>
+      </label>
+      {#if annotated}
+        <Input
+          class="rounded-lg"
+          placeholder="Message (makes the tag annotated)"
+          aria-label="Tag message"
+          bind:value={message}
+        />
+      {/if}
+      <div class="mt-1 flex justify-end gap-2">
+        <Button
+          class="rounded-full"
+          variant="outline"
+          type="button"
+          onclick={() => onCancel?.()}
+        >
+          Cancel
+        </Button>
+        <Button
+          class="rounded-full px-5"
+          type="submit"
+          disabled={!name.trim() || (annotated && !message.trim())}
+        >
+          Create tag
+        </Button>
+      </div>
+    </form>
+  </Dialog.Content>
+</Dialog.Root>

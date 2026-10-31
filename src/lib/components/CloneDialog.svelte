@@ -23,7 +23,11 @@
   import { onCloneProgress } from "$lib/events/repoEvents";
   import { openTab } from "$lib/stores/tabs.svelte";
   import { toast } from "$lib/toast";
-  import { trapTab } from "$lib/components/safety/trapTab";
+  import * as Dialog from "$lib/components/ui/dialog/index.js";
+  import { Input } from "$lib/components/ui/input/index.js";
+  import { Label } from "$lib/components/ui/label/index.js";
+  import { Checkbox } from "$lib/components/ui/checkbox/index.js";
+  import { Button } from "$lib/components/ui/button/index.js";
 
   let { open = $bindable(false) }: { open?: boolean } = $props();
 
@@ -36,8 +40,7 @@
   let progress = $state<CloneProgressEvent | null>(null);
   /** URL of the clone currently in flight (progress events are matched on it). */
   let activeUrl: string | null = null;
-  let urlInput: HTMLInputElement | undefined = $state();
-  let dialogEl = $state<HTMLDivElement | undefined>();
+  let urlInput = $state<HTMLInputElement | null>(null);
   /** Element focused before the dialog opened (focus returns there on close). */
   let restoreTo: HTMLElement | null = null;
 
@@ -71,14 +74,16 @@
     }
   });
 
-  /** Escape closes; Tab stays inside the dialog (shared focus trap). */
+  /**
+   * Escape closes through close() so the in-flight-clone guard still runs
+   * (bits-ui's own dismissal is disabled below). Tab is looped inside the
+   * dialog by bits-ui's focus scope, replacing the shared trapTab helper.
+   */
   function onDialogKeydown(event: KeyboardEvent): void {
     if (event.key === "Escape") {
       event.preventDefault();
       close();
-      return;
     }
-    trapTab(dialogEl, event);
   }
 
   function close(): void {
@@ -143,36 +148,42 @@
 </script>
 
 {#if open}
-  <!-- svelte-ignore a11y_click_events_have_key_events -->
-  <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-  <div
-    class="scrim"
-    role="presentation"
-    onclick={(event) => {
-      if (event.target === event.currentTarget) close();
-    }}
-  >
-    <div
-      class="dialog"
+  <Dialog.Root bind:open>
+    <!-- svelte-ignore a11y_click_events_have_key_events -->
+    <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+    <Dialog.Overlay
+      class="scrim bg-black/50"
+      role="presentation"
+      onclick={(event) => {
+        if (event.target === event.currentTarget) close();
+      }}
+    />
+    <Dialog.Content
+      class="dialog w-[min(32rem,calc(100vw-2rem))] max-w-none sm:max-w-none left-1/2 top-[12vh] -translate-x-1/2 translate-y-0"
       role="dialog"
       aria-modal="true"
       aria-labelledby="clone-title"
-      tabindex="-1"
-      bind:this={dialogEl}
+      showCloseButton={false}
+      escapeKeydownBehavior="ignore"
+      interactOutsideBehavior="ignore"
+      onOpenAutoFocus={(event) => event.preventDefault()}
+      onCloseAutoFocus={(event) => event.preventDefault()}
       onkeydown={onDialogKeydown}
     >
-      <div class="title-row">
-        <h2 id="clone-title" class="title">Clone repository</h2>
-        <button
-          class="close"
+      <Dialog.Header class="title-row flex-row items-center gap-2">
+        <Dialog.Title id="clone-title" class="title flex-1">Clone repository</Dialog.Title>
+        <Button
+          class="close rounded-full text-lg leading-none text-muted-foreground hover:text-foreground"
+          variant="ghost"
+          size="icon-sm"
           type="button"
           aria-label="Close clone dialog"
           title="Close"
           onclick={close}
         >
           ×
-        </button>
-      </div>
+        </Button>
+      </Dialog.Header>
 
       <form
         onsubmit={(event) => {
@@ -180,25 +191,25 @@
           void startClone();
         }}
       >
-        <label class="field">
-          <span class="field-label">Repository URL</span>
-          <input
-            class="input"
+        <Label class="field flex-col items-stretch gap-1">
+          <span class="field-label text-xs font-medium text-muted-foreground">Repository URL</span>
+          <Input
+            class="input flex-1 min-w-0 h-auto py-2.5 px-3 font-mono text-sm md:text-sm"
             type="text"
             placeholder="https://github.com/user/repo.git"
             autocomplete="off"
             spellcheck="false"
             bind:value={url}
-            bind:this={urlInput}
+            bind:ref={urlInput}
             disabled={cloning}
           />
-        </label>
+        </Label>
 
-        <label class="field">
-          <span class="field-label">Destination folder</span>
-          <span class="dest-row">
-            <input
-              class="input"
+        <Label class="field flex-col items-stretch gap-1">
+          <span class="field-label text-xs font-medium text-muted-foreground">Destination folder</span>
+          <span class="dest-row flex gap-2">
+            <Input
+              class="input flex-1 min-w-0 h-auto py-2.5 px-3 font-mono text-sm md:text-sm"
               type="text"
               placeholder="e.g. C:\Users\you\Projects\repo"
               autocomplete="off"
@@ -206,269 +217,64 @@
               bind:value={destination}
               disabled={cloning}
             />
-            <button
-              class="secondary"
+            <Button
+              class="secondary shrink-0"
+              variant="outline"
               type="button"
               disabled={cloning}
               onclick={() => void browse()}
             >
               Browse…
-            </button>
+            </Button>
           </span>
-        </label>
+        </Label>
 
-        <label class="check">
-          <input type="checkbox" bind:checked={shallow} disabled={cloning} />
-          <span>Shallow clone (<code>--depth 1</code>)</span>
-        </label>
+        <Label class="check flex cursor-pointer items-center gap-2 text-sm font-normal">
+          <Checkbox bind:checked={shallow} disabled={cloning} />
+          <span>Shallow clone (<code class="font-mono text-muted-foreground">--depth 1</code>)</span>
+        </Label>
 
-        <label class="check">
-          <input type="checkbox" bind:checked={blobless} disabled={cloning} />
-          <span>Blobless clone (<code>--filter=blob:none</code>, fetches file contents on demand)</span>
-        </label>
+        <Label class="check flex cursor-pointer items-center gap-2 text-sm font-normal">
+          <Checkbox bind:checked={blobless} disabled={cloning} />
+          <span>Blobless clone (<code class="font-mono text-muted-foreground">--filter=blob:none</code>, fetches file contents on demand)</span>
+        </Label>
 
         {#if error}
-          <p class="error" role="alert">{error}</p>
+          <p class="error text-destructive text-sm" role="alert">{error}</p>
         {/if}
 
         {#if cloning && progress}
           <div
-            class="progress"
+            class="progress h-2 rounded-full bg-muted overflow-hidden"
             role="progressbar"
             aria-label="Clone progress"
             aria-valuemin={0}
             aria-valuemax={100}
             aria-valuenow={percent ?? undefined}
           >
-            <div class="bar" style:width={percent !== null ? `${percent}%` : "100%"} class:indeterminate={percent === null}></div>
+            <div
+              class="bar h-full rounded-full bg-primary transition-[width] duration-150 {percent === null ? 'animate-[slide_1.1s_ease-in-out_infinite]' : ''}"
+              style:width={percent !== null ? `${percent}%` : "100%"}
+              class:indeterminate={percent === null}
+            ></div>
           </div>
-          <p class="stats">
+          <p class="stats text-xs text-muted-foreground tabular-nums">
             {percent !== null ? `${percent}% · ` : ""}{progress.objects}/{progress.total} objects · {fmtBytes(progress.received)}
           </p>
         {:else if cloning}
-          <p class="stats">Contacting remote…</p>
+          <p class="stats text-xs text-muted-foreground tabular-nums">Contacting remote…</p>
         {/if}
 
-        <div class="actions">
-          <button class="secondary" type="button" onclick={close}>
+        <div class="actions flex justify-end gap-2">
+          <Button class="secondary" variant="outline" type="button" onclick={close}>
             {cloning ? "Hide" : "Cancel"}
-          </button>
-          <button class="primary" type="submit" disabled={!canClone}>
+          </Button>
+          <Button class="primary" type="submit" disabled={!canClone}>
             {cloning ? "Cloning…" : "Clone"}
-          </button>
+          </Button>
         </div>
       </form>
-    </div>
-  </div>
+    </Dialog.Content>
+  </Dialog.Root>
 {/if}
 
-<style>
-  .scrim {
-    position: fixed;
-    inset: 0;
-    z-index: 50;
-    background: color-mix(in srgb, var(--m3-scrim, #000) 32%, transparent);
-    display: flex;
-    justify-content: center;
-    align-items: flex-start;
-    padding-top: 12vh;
-  }
-
-  .dialog {
-    width: min(32rem, calc(100vw - 2rem));
-    background: var(--m3-surface-container-high, var(--m3-surface));
-    border-radius: var(--m3-shape-extra-large, 28px);
-    box-shadow: var(--m3-elevation-3, 0 4px 8px rgba(0, 0, 0, 0.3));
-    padding: 1.5rem;
-  }
-
-  .title {
-    margin: 0;
-    font-size: 1.375rem;
-    font-weight: 400;
-    color: var(--m3-on-surface);
-  }
-
-  .title-row {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    margin: 0 0.25rem 1rem;
-  }
-
-  .title-row .title {
-    flex: 1;
-  }
-
-  .close {
-    flex: none;
-    width: 1.75rem;
-    height: 1.75rem;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    border: none;
-    border-radius: 50%;
-    background: none;
-    color: var(--m3-on-surface-variant);
-    font: inherit;
-    font-size: 1.25rem;
-    line-height: 1;
-    cursor: pointer;
-  }
-
-  .close:hover {
-    background: var(--m3-surface-container-highest);
-    color: var(--m3-on-surface);
-  }
-
-  .close:focus-visible {
-    outline: 2px solid var(--m3-primary);
-    outline-offset: 1px;
-  }
-
-  form {
-    display: flex;
-    flex-direction: column;
-    gap: 1rem;
-  }
-
-  .field {
-    display: flex;
-    flex-direction: column;
-    gap: 0.25rem;
-  }
-
-  .field-label {
-    font-size: 0.75rem;
-    font-weight: 500;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-  }
-
-  .dest-row {
-    display: flex;
-    gap: 0.5rem;
-  }
-
-  .input {
-    flex: 1;
-    min-width: 0;
-    border: none;
-    border-radius: var(--m3-shape-extra-small, 4px);
-    background: var(--m3-surface-container-highest, var(--m3-surface));
-    color: var(--m3-on-surface);
-    font: inherit;
-    font-family: ui-monospace, Consolas, monospace;
-    font-size: 0.8125rem;
-    padding: 0.625rem 0.75rem;
-  }
-
-  .input:focus-visible {
-    outline: 2px solid var(--m3-primary);
-  }
-
-  .input:disabled {
-    opacity: 0.6;
-  }
-
-  .check {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    font-size: 0.8125rem;
-    color: var(--m3-on-surface);
-  }
-
-  .check input {
-    accent-color: var(--m3-primary);
-  }
-
-  .check code {
-    font-family: ui-monospace, Consolas, monospace;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-  }
-
-  .error {
-    margin: 0;
-    color: var(--m3-error);
-    font-size: 0.8125rem;
-  }
-
-  .progress {
-    height: 0.5rem;
-    border-radius: var(--m3-shape-full, 9999px);
-    background: var(--m3-surface-container-highest, var(--m3-surface));
-    overflow: hidden;
-  }
-
-  .bar {
-    height: 100%;
-    background: var(--m3-primary);
-    border-radius: inherit;
-    transition: width 0.15s ease;
-  }
-
-  .bar.indeterminate {
-    animation: slide 1.1s ease-in-out infinite;
-  }
-
-  @keyframes slide {
-    from {
-      transform: translateX(-100%);
-    }
-    to {
-      transform: translateX(100%);
-    }
-  }
-
-  .stats {
-    margin: 0;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    font-size: 0.75rem;
-    font-variant-numeric: tabular-nums;
-  }
-
-  .actions {
-    display: flex;
-    justify-content: flex-end;
-    gap: 0.5rem;
-  }
-
-  .primary,
-  .secondary {
-    font: inherit;
-    font-size: 0.875rem;
-    padding: 0.5rem 1.25rem;
-    border-radius: var(--m3-shape-full, 9999px);
-    cursor: pointer;
-  }
-
-  .primary {
-    border: none;
-    background: var(--m3-primary);
-    color: var(--m3-on-primary);
-  }
-
-  .primary:disabled {
-    background: color-mix(in srgb, var(--m3-on-surface) 12%, transparent);
-    color: color-mix(in srgb, var(--m3-on-surface) 38%, transparent);
-    cursor: not-allowed;
-  }
-
-  .secondary {
-    border: 1px solid var(--m3-outline, var(--m3-primary));
-    background: none;
-    color: var(--m3-primary);
-  }
-
-  .secondary:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-  }
-
-  .primary:focus-visible,
-  .secondary:focus-visible {
-    outline: 2px solid var(--m3-primary);
-    outline-offset: 2px;
-  }
-</style>

@@ -33,6 +33,7 @@
     hashHue,
   } from "$lib/git/format";
   import { ageBackground, ageRatios } from "./blameModel";
+  import { Button } from "$lib/components/ui/button/index.js";
 
   let {
     repoId,
@@ -230,15 +231,24 @@
   }
 </script>
 
-<div class="blame" aria-label={"Blame for " + path}>
-  <header class="bhead">
-    <span class="bpath" title={path}>{path}</span>
+<div
+  class="blame flex h-full min-h-0 flex-col bg-background"
+  aria-label={"Blame for " + path}
+>
+  <header class="bhead flex items-baseline gap-2 border-b border-border bg-muted/50 px-3 py-1 text-xs">
+    <span
+      class="bpath overflow-hidden text-ellipsis whitespace-nowrap font-mono text-foreground"
+      title={path}>{path}</span
+    >
     {#if effectiveFrom}
-      <span class="bfrom">@ {effectiveFrom.slice(0, 8)}</span>
+      <span class="bfrom shrink-0 font-mono text-muted-foreground"
+        >@ {effectiveFrom.slice(0, 8)}</span
+      >
     {/if}
     {#if blameFrom.length > 0}
-      <button
-        class="bback"
+      <Button
+        class="h-auto shrink-0 whitespace-nowrap rounded-full px-2 py-0 text-[0.6875rem] font-normal text-muted-foreground"
+        variant="outline"
         type="button"
         title={blameFrom.length > 1
           ? `Back to ${blameFrom[blameFrom.length - 2].slice(0, 8)}`
@@ -246,50 +256,72 @@
         onclick={reblameBack}
       >
         ← Back
-      </button>
+      </Button>
       {#if blameFrom.length > 1}
-        <span class="bdepth">{blameFrom.length} steps</span>
+        <span class="bdepth shrink-0 text-[0.6875rem] text-muted-foreground"
+          >{blameFrom.length} steps</span
+        >
       {/if}
     {/if}
     {#if loading}
-      <span class="bstate" role="status">Loading blame…</span>
+      <span class="bstate ml-auto text-muted-foreground" role="status"
+        >Loading blame…</span
+      >
     {:else if error}
-      <span class="bstate berror" role="alert">{error}</span>
+      <span class="bstate berror ml-auto text-destructive" role="alert"
+        >{error}</span
+      >
     {:else if rows.length === 0}
-      <span class="bstate">No blame data</span>
+      <span class="bstate ml-auto text-muted-foreground">No blame data</span>
     {/if}
   </header>
 
   {#if reblame}
-    <div class="breblame" role="status">
-      <span class="breblame-text">
+    <div
+      class="breblame flex shrink-0 items-center gap-2 border-b border-border bg-muted/50 px-3 py-1 text-xs"
+      role="status"
+    >
+      <span
+        class="breblame-text min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap text-muted-foreground"
+      >
         Blame from <strong>{reblame.sha.slice(0, 8)}</strong>'s parent
         ({reblame.parent.slice(0, 8)})
       </span>
-      <button class="bgo" type="button" onclick={doReblame}>
+      <Button
+        class="h-auto shrink-0 whitespace-nowrap rounded-full px-2.5 py-0.5 text-[0.6875rem]"
+        type="button"
+        onclick={doReblame}
+      >
         Blame from {reblame.parent.slice(0, 8)}
-      </button>
-      <button
-        class="bback"
+      </Button>
+      <Button
+        class="h-auto shrink-0 whitespace-nowrap rounded-full px-2 py-0 text-[0.6875rem] font-normal text-muted-foreground"
+        variant="outline"
         type="button"
         aria-label="Dismiss re-blame"
         onclick={() => (reblame = null)}
       >
         ×
-      </button>
+      </Button>
     </div>
   {/if}
 
   {#if loading}
-    <p class="empty" role="status">Loading blame for {path}…</p>
+    <p class="empty m-auto text-[0.8125rem] text-muted-foreground" role="status">
+      Loading blame for {path}…</p
+    >
   {:else if error}
-    <p class="empty" role="alert">Blame failed: {error}</p>
+    <p class="empty m-auto text-[0.8125rem] text-muted-foreground" role="alert">
+      Blame failed: {error}</p
+    >
   {:else if rows.length === 0}
-    <p class="empty">No blame lines for {path}.</p>
+    <p class="empty m-auto text-[0.8125rem] text-muted-foreground">
+      No blame lines for {path}.</p
+    >
   {:else}
-    <div class="bscroll" bind:this={scrollerEl} onscroll={onScroll}>
+    <div class="bscroll min-h-0 flex-1 overflow-auto" bind:this={scrollerEl} onscroll={onScroll}>
       <div
-        class="bspacer"
+        class="bspacer relative w-max min-w-full"
         role="list"
         aria-label={"Blame lines for " + path}
         style:height={`${rows.length * ROW_HEIGHT}px`}
@@ -297,29 +329,33 @@
         {#each visible as v (v.idx)}
           {#if v.row.kind === "group"}
             <div
-              class="bgroup"
+              class="bgroup absolute inset-x-0 flex items-center gap-2 bg-muted/70 py-0 pl-2 pr-3 text-xs text-muted-foreground whitespace-pre"
               style:top={`${v.idx * ROW_HEIGHT}px`}
               style:height={`${ROW_HEIGHT}px`}
             >
               <button
-                class="bsha"
+                class="bsha shrink-0 cursor-pointer border-0 bg-transparent px-1 font-mono text-xs hover:underline focus-visible:rounded-xs focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary"
                 style:color={shaColor(v.row.sha)}
                 title="Show this commit in history"
                 onclick={() => shaClick(v.row.sha)}
               >
                 {v.row.sha.slice(0, 8)}
               </button>
-              <span class="bauthor">{v.row.line?.signature.name ?? ""}</span>
-              <span class="bdate">
+              <span class="bauthor max-w-48 shrink-0 overflow-hidden text-ellipsis text-foreground"
+                >{v.row.line?.signature.name ?? ""}</span
+              >
+              <span class="bdate shrink-0 text-muted-foreground">
                 {v.row.line ? formatRelativeTime(v.row.line.signature.time) : ""}
               </span>
-              <span class="bcount">{v.row.count} {v.row.count === 1 ? "line" : "lines"}</span>
+              <span class="bcount ml-auto shrink-0 text-muted-foreground"
+                >{v.row.count} {v.row.count === 1 ? "line" : "lines"}</span
+              >
             </div>
           {:else}
             <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
             <!-- svelte-ignore a11y_click_events_have_key_events -->
             <div
-              class="bline"
+              class="bline group/bline absolute inset-x-0 flex cursor-pointer items-center gap-2 py-0 pl-2 pr-3 text-xs text-foreground whitespace-pre"
               role="listitem"
               style:top={`${v.idx * ROW_HEIGHT}px`}
               style:height={`${ROW_HEIGHT}px`}
@@ -329,8 +365,14 @@
                 : ""}
               onclick={() => lineClick(v.row.sha)}
             >
-              <span class="bno">{v.row.line?.line_no}</span>
-              <span class="btext">{v.row.line?.text ?? ""}</span>
+              <span
+                class="bno w-12 shrink-0 select-none text-right font-mono text-muted-foreground"
+                >{v.row.line?.line_no}</span
+              >
+              <span
+                class="btext font-mono [tab-size:4] group-hover/bline:underline group-hover/bline:decoration-dotted group-hover/bline:underline-offset-3"
+                >{v.row.line?.text ?? ""}</span
+              >
             </div>
           {/if}
         {/each}
@@ -338,211 +380,3 @@
     </div>
   {/if}
 </div>
-
-<style>
-  .blame {
-    display: flex;
-    flex-direction: column;
-    height: 100%;
-    min-height: 0;
-    background: var(--m3-surface);
-  }
-
-  .bhead {
-    display: flex;
-    align-items: baseline;
-    gap: 0.5rem;
-    padding: 0.25rem 0.75rem;
-    border-bottom: 1px solid var(--m3-outline-variant);
-    background: var(--m3-surface-container, var(--m3-surface));
-    font-size: 0.75rem;
-  }
-
-  .bpath {
-    font-family: ui-monospace, Consolas, monospace;
-    color: var(--m3-on-surface);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .bfrom {
-    flex: none;
-    font-family: ui-monospace, Consolas, monospace;
-    color: var(--m3-on-surface-variant);
-  }
-
-  .bback {
-    flex: none;
-    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    border-radius: var(--m3-shape-full, 9999px);
-    background: none;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    font: inherit;
-    font-size: 0.6875rem;
-    padding: 0 0.5rem;
-    cursor: pointer;
-    white-space: nowrap;
-  }
-
-  .bback:hover {
-    background: var(--m3-surface-container-high, var(--m3-surface));
-  }
-
-  .bback:focus-visible {
-    outline: 2px solid var(--m3-primary);
-    outline-offset: 1px;
-  }
-
-  .bdepth {
-    flex: none;
-    color: var(--m3-on-surface-variant);
-    font-size: 0.6875rem;
-  }
-
-  .breblame {
-    flex: none;
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    padding: 0.25rem 0.75rem;
-    border-bottom: 1px solid var(--m3-outline-variant);
-    background: var(--m3-surface-container, var(--m3-surface));
-    font-size: 0.75rem;
-  }
-
-  .breblame-text {
-    flex: 1;
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-  }
-
-  .bgo {
-    flex: none;
-    border: none;
-    border-radius: var(--m3-shape-full, 9999px);
-    background: var(--m3-primary);
-    color: var(--m3-on-primary);
-    font: inherit;
-    font-size: 0.6875rem;
-    padding: 0.15rem 0.6rem;
-    cursor: pointer;
-    white-space: nowrap;
-  }
-
-  .bgo:focus-visible {
-    outline: 2px solid var(--m3-primary);
-    outline-offset: 1px;
-  }
-
-  .bstate {
-    margin-left: auto;
-    color: var(--m3-on-surface-variant);
-  }
-
-  .bstate.berror {
-    color: var(--m3-error);
-  }
-
-  .empty {
-    margin: auto;
-    color: var(--m3-on-surface-variant);
-    font-size: 0.8125rem;
-  }
-
-  .bscroll {
-    flex: 1;
-    min-height: 0;
-    overflow: auto;
-  }
-
-  .bspacer {
-    position: relative;
-    min-width: 100%;
-    width: max-content;
-  }
-
-  .bgroup,
-  .bline {
-    position: absolute;
-    left: 0;
-    right: 0;
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    padding: 0 0.75rem 0 0.5rem;
-    font-size: 0.75rem;
-    white-space: pre;
-  }
-
-  .bgroup {
-    background: var(--m3-surface-container-high, var(--m3-surface));
-    border-bottom: 1px solid var(--m3-outline-variant);
-    color: var(--m3-on-surface-variant);
-  }
-
-  .bsha {
-    flex: none;
-    padding: 0 0.25rem;
-    font-family: ui-monospace, Consolas, monospace;
-    font-size: 0.75rem;
-    background: none;
-    border: none;
-    cursor: pointer;
-  }
-
-  .bsha:hover {
-    text-decoration: underline;
-  }
-
-  .bsha:focus-visible {
-    outline: 2px solid var(--m3-primary);
-    outline-offset: 1px;
-    border-radius: 2px;
-  }
-
-  .bauthor {
-    flex: none;
-    max-width: 12rem;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    color: var(--m3-on-surface);
-  }
-
-  .bdate,
-  .bcount {
-    flex: none;
-    color: var(--m3-on-surface-variant);
-  }
-
-  .bcount {
-    margin-left: auto;
-  }
-
-  .bline {
-    color: var(--m3-on-surface);
-    cursor: pointer; /* click = offer re-blame from this line's commit */
-  }
-
-  .bline:hover .btext {
-    text-decoration: underline dotted;
-    text-underline-offset: 3px;
-  }
-
-  .bno {
-    flex: none;
-    width: 3rem;
-    text-align: right;
-    color: var(--m3-on-surface-variant);
-    font-family: ui-monospace, Consolas, monospace;
-    user-select: none;
-  }
-
-  .btext {
-    font-family: ui-monospace, Consolas, monospace;
-    tab-size: 4;
-  }
-</style>

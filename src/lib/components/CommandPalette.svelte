@@ -38,13 +38,15 @@ import {
 } from "$lib/palette/palette.svelte";
 import { commandIcon } from "$lib/palette/commandIcons";
 import Icon from "$lib/components/icons/Icon.svelte";
+import { Input } from "$lib/components/ui/input/index.js";
+import { Kbd } from "$lib/components/ui/kbd/index.js";
 
   const open = $derived(isPaletteOpen());
   const ctx = $derived(activeCtx());
 
   let query = $state("");
   let activeIndex = $state(0);
-  let inputEl: HTMLInputElement | undefined = $state();
+  let inputEl: HTMLInputElement | null = $state(null);
   /** Element focused before the palette opened; focus returns there on close. */
   let triggerEl: HTMLElement | null = null;
 
@@ -161,9 +163,13 @@ import Icon from "$lib/components/icons/Icon.svelte";
 <svelte:window onkeydown={onScrimKeydown} />
 
 {#if open}
-  <div class="scrim" role="presentation" onclick={close}>
+  <div
+    class="scrim fixed inset-0 z-[70] flex justify-center items-start pt-[10vh] bg-black/50"
+    role="presentation"
+    onclick={close}
+  >
     <div
-      class="panel"
+      class="panel flex flex-col overflow-hidden w-[min(36rem,calc(100vw-2rem))] bg-popover text-popover-foreground rounded-xl shadow-lg"
       role="dialog"
       aria-modal="true"
       aria-label="Command palette"
@@ -171,8 +177,8 @@ import Icon from "$lib/components/icons/Icon.svelte";
       onclick={(event) => event.stopPropagation()}
       onkeydown={onPanelKeydown}
     >
-      <input
-        class="search"
+      <Input
+        class="search m-3 h-auto rounded-full border-0 bg-muted px-4 py-2.5 text-base shadow-none ring-0 focus-visible:border-0 focus-visible:ring-2 focus-visible:ring-ring md:text-base"
         type="text"
         role="combobox"
         aria-expanded="true"
@@ -182,20 +188,29 @@ import Icon from "$lib/components/icons/Icon.svelte";
         aria-autocomplete="list"
         placeholder="Type a command… ({tabStore.tabs.length > 0 ? tabStore.active?.name : 'no repository'})"
         bind:value={query}
-        bind:this={inputEl}
+        bind:ref={inputEl}
         onkeydown={onInputKeydown}
       />
-      <ul id="palette-list" class="list" role="listbox" aria-label="Commands">
+      <ul
+        id="palette-list"
+        class="list list-none m-0 px-2 pb-2 max-h-[55vh] overflow-y-auto"
+        role="listbox"
+        aria-label="Commands"
+      >
         {#each flat as entry, i (entry.command.id)}
           {@const hits = titleHits(entry, query)}
           {@const cmdIcon = commandIcon(entry.command)}
           {#if isFirstOfSection(i)}
-            <li class="section" role="presentation">{sectionFor(i)?.name}</li>
+            <li
+              class="section px-3 pt-2.5 pb-1 text-[0.6875rem] font-bold uppercase tracking-[0.08em] text-primary select-none"
+              role="presentation"
+            >{sectionFor(i)?.name}</li>
           {/if}
           <li
             id={optionId(i)}
-            class="option"
+            class="option flex items-center gap-2 px-3 py-2 rounded-full cursor-pointer min-w-0"
             class:active={i === activeIndex}
+            class:bg-accent={i === activeIndex}
             role="option"
             aria-selected={i === activeIndex}
             onclick={() => run(entry)}
@@ -208,149 +223,40 @@ import Icon from "$lib/components/icons/Icon.svelte";
             onmouseenter={() => (activeIndex = i)}
           >
             {#if cmdIcon}
-              <span class="cmd-icon" aria-hidden="true">
+              <span
+                class="cmd-icon shrink-0 inline-flex items-center justify-center size-4 text-muted-foreground"
+                class:text-accent-foreground={i === activeIndex}
+                aria-hidden="true"
+              >
                 <Icon icon={cmdIcon} size={15} />
               </span>
             {/if}
-            <span class="label">
-              {#each entry.command.title as ch, j (j)}<span class:hl={hits.has(j)}>{ch}</span>{/each}
+            <span class="label flex-1 min-w-0 font-medium whitespace-nowrap overflow-hidden text-ellipsis">
+              {#each entry.command.title as ch, j (j)}<span
+                  class:hl={hits.has(j)}
+                  class:text-primary={hits.has(j)}
+                  class:font-bold={hits.has(j)}
+                >{ch}</span>{/each}
             </span>
             {#if hint(entry.command) !== null}
-              <kbd class="shortcut">{hint(entry.command)}</kbd>
+              <Kbd
+                class="shortcut h-auto shrink-0 rounded-md border border-border px-1.5 py-0.5 font-mono text-[0.6875rem]"
+              >{hint(entry.command)}</Kbd>
             {/if}
           </li>
         {/each}
         {#if flat.length === 0}
-          <li class="none" role="option" aria-disabled="true" aria-selected="false">
+          <li
+            class="none px-3 py-4 text-muted-foreground text-[0.8125rem]"
+            role="option"
+            aria-disabled="true"
+            aria-selected="false"
+          >
             No commands match “{query}”
           </li>
         {/if}
       </ul>
-      <footer class="hintbar">↑↓ navigate · ↵ run · esc close</footer>
+      <footer class="hintbar px-4 pt-2 pb-3 border-t border-border text-muted-foreground text-[0.6875rem]">↑↓ navigate · ↵ run · esc close</footer>
     </div>
   </div>
 {/if}
-
-<style>
-  .scrim {
-    position: fixed;
-    inset: 0;
-    z-index: 70;
-    background: color-mix(in srgb, var(--m3-scrim, #000) 32%, transparent);
-    display: flex;
-    justify-content: center;
-    align-items: flex-start;
-    padding-top: 10vh;
-  }
-
-  .panel {
-    width: min(36rem, calc(100vw - 2rem));
-    background: var(--m3-surface-container-high, var(--m3-surface));
-    border-radius: var(--m3-shape-extra-large, 28px);
-    box-shadow: var(--m3-elevation-3, 0 4px 8px rgba(0, 0, 0, 0.3));
-    overflow: hidden;
-    display: flex;
-    flex-direction: column;
-  }
-
-  .search {
-    margin: 0.75rem;
-    padding: 0.625rem 1rem;
-    border: none;
-    border-radius: var(--m3-shape-full, 9999px);
-    background: var(--m3-surface-container-highest, var(--m3-surface));
-    color: var(--m3-on-surface);
-    font: inherit;
-  }
-
-  .search:focus-visible {
-    outline: 2px solid var(--m3-primary);
-  }
-
-  .search::placeholder {
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-  }
-
-  .list {
-    list-style: none;
-    margin: 0;
-    padding: 0 0.5rem 0.5rem;
-    max-height: 55vh;
-    overflow-y: auto;
-  }
-
-  .section {
-    padding: 0.625rem 0.75rem 0.25rem;
-    font-size: 0.6875rem;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-    color: var(--m3-primary);
-    user-select: none;
-  }
-
-  .option {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    padding: 0.5rem 0.75rem;
-    border-radius: var(--m3-shape-full, 9999px);
-    cursor: pointer;
-    min-width: 0;
-  }
-
-  .option.active {
-    background: var(--m3-secondary-container, var(--m3-surface-container-highest));
-  }
-
-  .label {
-    flex: 1;
-    min-width: 0;
-    font-weight: 500;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
-  .cmd-icon {
-    flex: none;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 1rem;
-    height: 1rem;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-  }
-
-  .option.active .cmd-icon {
-    color: var(--m3-on-secondary-container, var(--m3-on-surface));
-  }
-
-  .label .hl {
-    color: var(--m3-primary);
-    font-weight: 700;
-  }
-
-  .shortcut {
-    flex: none;
-    font-family: ui-monospace, Consolas, monospace;
-    font-size: 0.6875rem;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    border-radius: 0.375rem;
-    padding: 0.0625rem 0.375rem;
-  }
-
-  .none {
-    padding: 1rem 0.75rem;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    font-size: 0.8125rem;
-  }
-
-  .hintbar {
-    padding: 0.5rem 1rem 0.75rem;
-    border-top: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    font-size: 0.6875rem;
-  }
-</style>

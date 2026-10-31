@@ -34,6 +34,8 @@
     rangeIndices,
   } from "./fileHistoryModel";
   import BlameView from "./BlameView.svelte";
+  import { Badge } from "$lib/components/ui/badge";
+  import { Button } from "$lib/components/ui/button/index.js";
 
   let { repoId, path }: { repoId: string; path: string } = $props();
 
@@ -168,50 +170,75 @@
   }
 </script>
 
-<section class="file-history" aria-label="File history for {path}">
-  <header class="head">
-    <h1 class="title" title={path}>{path}</h1>
-    <span class="count"
+<section
+  class="file-history flex h-full min-h-0 flex-col [&>.split]:min-h-0 [&>.split]:flex-1"
+  aria-label="File history for {path}"
+>
+  <header class="head flex items-center gap-3 border-b border-border px-4 py-2.5">
+    <h1
+      class="title m-0 min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap font-mono text-[0.9375rem] font-medium"
+      title={path}
+    >
+      {path}
+    </h1>
+    <span class="count shrink-0 text-xs text-muted-foreground"
       >{history.flat.commits.length} commit{history.flat.commits.length === 1 ? "" : "s"}</span
     >
-    <button class="action" type="button" onclick={() => (blameOpen = !blameOpen)}>
+    <Button
+      class="shrink-0 rounded-lg px-2.5 py-1 text-xs font-normal"
+      variant="outline"
+      type="button"
+      onclick={() => (blameOpen = !blameOpen)}
+    >
       {blameOpen ? "Hide blame" : "Blame this file"}
-    </button>
+    </Button>
   </header>
 
   {#if history.error}
-    <p class="error" role="alert">
+    <p class="error m-0 px-4 py-3 text-[0.8125rem] text-destructive" role="alert">
       {history.error}
-      <button class="action" type="button" onclick={() => history.restart()}>
+      <Button
+        class="shrink-0 rounded-lg px-2.5 py-1 text-xs font-normal"
+        variant="outline"
+        type="button"
+        onclick={() => history.restart()}
+      >
         Retry
-      </button>
+      </Button>
     </p>
   {:else if history.flat.commits.length === 0 && history.loading}
-    <p class="note">Loading history…</p>
+    <p class="note m-0 px-4 py-3 text-[0.8125rem] text-muted-foreground">Loading history…</p>
   {:else if history.flat.commits.length === 0}
-    <p class="note">No commits touch this file.</p>
+    <p class="note m-0 px-4 py-3 text-[0.8125rem] text-muted-foreground">
+      No commits touch this file.</p
+    >
   {/if}
 
   {#if blameOpen}
-    <div class="blame">
+    <div class="blame max-h-[40%] overflow-auto border-b border-border">
       <BlameView {repoId} {path} />
     </div>
   {/if}
 
   {#snippet listPane()}
     <div
-      class="rows"
+      class="rows relative min-h-0 flex-1 overflow-y-auto focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary"
       onscroll={onScroll}
       role="listbox"
       aria-label="Commits touching {path}"
       tabindex="0"
     >
       <div style:height="{commits.length * ROW_HEIGHT}px"></div>
-      <ul class="list" style:top="{firstVisible * ROW_HEIGHT}px">
+      <ul class="list absolute inset-x-0 m-0 list-none px-4 py-0" style:top="{firstVisible * ROW_HEIGHT}px">
         {#each commits.slice(firstVisible, firstVisible + visibleCount) as commit, i (commit.sha)}
           {@const idx = firstVisible + i}
           <li
-            class="row"
+            class="row flex cursor-pointer select-none items-center justify-between gap-4 border-b border-border py-0.5 {commit.sha ===
+            selectedSha
+              ? 'bg-primary/15 text-foreground'
+              : multiIdx.includes(idx)
+                ? 'bg-primary/5'
+                : 'hover:bg-muted/50'}"
             class:selected={commit.sha === selectedSha}
             class:multisel={commit.sha !== selectedSha && multiIdx.includes(idx)}
             style:height="{ROW_HEIGHT}px"
@@ -221,24 +248,32 @@
             onclick={(e) => onRowClick(commit, idx, e)}
             onkeydown={(e) => onRowKeydown(commit, idx, e)}
           >
-            <div class="main">
-              <span class="summary" title={commit.message}>{commit.summary}</span>
-              <span class="meta"
+            <div class="main flex min-w-0 flex-col">
+              <span class="summary overflow-hidden text-ellipsis whitespace-nowrap text-sm" title={commit.message}
+                >{commit.summary}</span
+              >
+              <span
+                class="meta text-xs {commit.sha === selectedSha ? 'text-inherit' : 'text-muted-foreground'}"
                 >{commit.author.name}
                 · {formatRelativeTime(commit.committer.time)}</span
               >
             </div>
-            <div class="side">
+            <div class="side flex shrink-0 items-center gap-1.5">
               {#each commit.refs.slice(0, 2) as ref (ref)}
-                <span
-                  class="ref"
-                  style:background="hsl({hashHue(ref)} 45% 88%)"
-                  >{ref}</span
+                <Badge
+                  variant="outline"
+                  class="ref h-auto rounded-full px-1.5 py-px whitespace-nowrap text-[0.6875rem]"
+                  style="background: hsl({hashHue(ref)} 45% 88%)"
+                  >{ref}</Badge
                 >
               {/each}
-              <span class="sha">{commit.sha.slice(0, 8)}</span>
-              <button
-                class="action"
+              <span
+                class="sha font-mono text-xs {commit.sha === selectedSha ? 'text-inherit' : 'text-muted-foreground'}"
+                >{commit.sha.slice(0, 8)}</span
+              >
+              <Button
+                class="shrink-0 rounded-lg px-2.5 py-1 text-xs font-normal"
+                variant="outline"
                 type="button"
                 aria-label="Copy sha {commit.sha.slice(0, 8)}"
                 onclick={(e) => {
@@ -247,7 +282,7 @@
                 }}
               >
                 Copy
-              </button>
+              </Button>
             </div>
           </li>
         {/each}
@@ -280,172 +315,3 @@
     {@render listPane()}
   {/if}
 </section>
-
-<style>
-  .file-history {
-    display: flex;
-    flex-direction: column;
-    height: 100%;
-    min-height: 0;
-  }
-
-  /* The list ↔ detail SplitPane fills the rest of the panel. */
-  .file-history > :global(.split) {
-    flex: 1;
-    min-height: 0;
-  }
-
-  .head {
-    display: flex;
-    align-items: center;
-    gap: 0.75rem;
-    padding: 0.625rem 1rem;
-    border-bottom: 1px solid var(--m3-outline-variant, transparent);
-  }
-
-  .title {
-    margin: 0;
-    font-size: 0.9375rem;
-    font-weight: 500;
-    font-family: ui-monospace, Consolas, monospace;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    flex: 1;
-    min-width: 0;
-  }
-
-  .count {
-    color: var(--m3-on-surface-variant, inherit);
-    font-size: 0.75rem;
-    flex: none;
-  }
-
-  .action {
-    flex: none;
-    border: 1px solid var(--m3-outline-variant, transparent);
-    border-radius: var(--m3-shape-small, 8px);
-    background: none;
-    color: var(--m3-on-surface);
-    font: inherit;
-    font-size: 0.75rem;
-    padding: 0.25rem 0.625rem;
-    cursor: pointer;
-  }
-
-  .action:hover,
-  .action:focus-visible {
-    background: var(--m3-surface-container-high, inherit);
-  }
-
-  .error,
-  .note {
-    margin: 0;
-    padding: 0.75rem 1rem;
-    color: var(--m3-on-surface-variant, inherit);
-    font-size: 0.8125rem;
-  }
-
-  .error {
-    color: var(--m3-error);
-  }
-
-  .blame {
-    max-height: 40%;
-    overflow: auto;
-    border-bottom: 1px solid var(--m3-outline-variant, transparent);
-  }
-
-  .rows {
-    position: relative;
-    flex: 1;
-    min-height: 0;
-    overflow-y: auto;
-  }
-
-  .rows:focus-visible {
-    outline: 2px solid var(--m3-primary);
-    outline-offset: -2px;
-  }
-
-  .list {
-    position: absolute;
-    left: 0;
-    right: 0;
-    margin: 0;
-    padding: 0 1rem;
-    list-style: none;
-  }
-
-  .row {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 1rem;
-    padding: 0.25rem 0;
-    border-bottom: 1px solid var(--m3-outline-variant, transparent);
-    cursor: pointer;
-    /* shift-click extends the selection, not a text selection */
-    user-select: none;
-  }
-
-  .row:hover {
-    background: var(--m3-surface-container-low, var(--m3-surface));
-  }
-
-  .row.selected {
-    background: var(--m3-secondary-container);
-    color: var(--m3-on-secondary-container);
-  }
-
-  /* shift-click range members (the clicked commit stays `.selected`) */
-  .row.multisel {
-    background: color-mix(in srgb, var(--m3-secondary-container) 45%, var(--m3-surface));
-  }
-
-  .main {
-    display: flex;
-    flex-direction: column;
-    min-width: 0;
-  }
-
-  .summary {
-    font-size: 0.875rem;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .meta {
-    color: var(--m3-on-surface-variant, inherit);
-    font-size: 0.75rem;
-  }
-
-  .row.selected .meta {
-    color: inherit;
-  }
-
-  .side {
-    display: flex;
-    align-items: center;
-    gap: 0.375rem;
-    flex: none;
-  }
-
-  .ref {
-    font-size: 0.6875rem;
-    padding: 0.0625rem 0.4rem;
-    border-radius: var(--m3-shape-full, 9999px);
-    white-space: nowrap;
-  }
-
-  .sha {
-    font-family: ui-monospace, Consolas, monospace;
-    font-size: 0.75rem;
-    color: var(--m3-on-surface-variant, inherit);
-  }
-
-  .row.selected .sha {
-    color: inherit;
-  }
-</style>

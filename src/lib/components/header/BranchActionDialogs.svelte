@@ -16,10 +16,11 @@
   import type { BranchOpsController } from "$lib/git/branchOps.svelte";
   import ConfirmDialog from "$lib/components/safety/ConfirmDialog.svelte";
   import PreviewDialog from "$lib/components/safety/PreviewDialog.svelte";
+  import { Button } from "$lib/components/ui/button/index.js";
 
   let { controller }: { controller: BranchOpsController } = $props();
 
-  let stashButton = $state<HTMLButtonElement | undefined>();
+  let stashButton = $state<HTMLButtonElement | null>(null);
 
   // Focus the primary choice when the switch dialog appears.
   $effect(() => {
@@ -48,7 +49,7 @@
 {#if controller.switchChoice}
   <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
   <div
-    class="scrim"
+    class="scrim fixed inset-0 z-60 flex items-center justify-center bg-black/40"
     role="presentation"
     onkeydown={(e) => {
       if (e.key === "Escape") {
@@ -58,39 +59,40 @@
     }}
   >
     <div
-      class="dialog"
+      class="dialog w-[min(24rem,calc(100vw-2rem))] rounded-lg bg-card px-6 py-5 text-sm text-card-foreground shadow-md"
       role="dialog"
       aria-modal="true"
       aria-labelledby="switch-choice-title"
     >
-      <h2 id="switch-choice-title" class="title">Uncommitted changes</h2>
-      <p class="text">
+      <h2 id="switch-choice-title" class="title mb-2 mt-0 text-lg font-medium">
+        Uncommitted changes
+      </h2>
+      <p class="text mb-4 mt-0 text-card-foreground [overflow-wrap:anywhere]">
         You have uncommitted changes. What should happen to them when
         switching to <strong>{controller.switchChoice.name}</strong>?
       </p>
-      <div class="actions">
-        <button
-          class="primary"
-          type="button"
-          bind:this={stashButton}
+      <div class="actions flex flex-wrap justify-end gap-2">
+        <Button
+          class="primary rounded-full px-5 py-[0.45rem] text-[0.875rem] focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-1"
+          bind:ref={stashButton}
           onclick={() => void controller.chooseStash()}
         >
           Stash changes
-        </button>
-        <button
-          class="danger-btn"
-          type="button"
+        </Button>
+        <Button
+          class="danger-btn rounded-full bg-destructive px-4 py-[0.45rem] text-[0.875rem] text-white hover:bg-destructive/90 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-1 focus-visible:ring-0"
+          variant="destructive"
           onclick={() => void controller.chooseForce()}
         >
           Proceed anyway
-        </button>
-        <button
-          class="secondary"
-          type="button"
+        </Button>
+        <Button
+          class="secondary rounded-full border-border px-4 py-[0.45rem] text-[0.875rem] text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-1 focus-visible:ring-0"
+          variant="outline"
           onclick={() => controller.cancelChoice()}
         >
           Cancel
-        </button>
+        </Button>
       </div>
     </div>
   </div>
@@ -107,83 +109,3 @@
     onCancel={() => controller.cancelDelete()}
   />
 {/if}
-
-<style>
-  /* Dirty-switch modal (same pattern as AuthDialog). */
-  .scrim {
-    position: fixed;
-    inset: 0;
-    z-index: 60;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: color-mix(in srgb, var(--m3-scrim, black) 40%, transparent);
-  }
-
-  .dialog {
-    width: min(24rem, calc(100vw - 2rem));
-    padding: 1.25rem 1.5rem;
-    border-radius: var(--m3-shape-large, 16px);
-    background: var(--m3-surface-container-high, var(--m3-surface));
-    color: var(--m3-on-surface);
-    box-shadow: var(--m3-elevation-3, 0 8px 24px rgba(0, 0, 0, 0.3));
-    font-size: 0.875rem;
-  }
-
-  .title {
-    margin: 0 0 0.5rem;
-    font-size: 1.125rem;
-    font-weight: 500;
-  }
-
-  .text {
-    margin: 0 0 1rem;
-    color: var(--m3-on-surface);
-    overflow-wrap: anywhere;
-  }
-
-  .actions {
-    display: flex;
-    justify-content: flex-end;
-    flex-wrap: wrap;
-    gap: 0.5rem;
-  }
-
-  .primary {
-    border: none;
-    border-radius: var(--m3-shape-full, 9999px);
-    background: var(--m3-primary);
-    color: var(--m3-on-primary);
-    font: inherit;
-    font-weight: 500;
-    padding: 0.45rem 1.25rem;
-    cursor: pointer;
-  }
-
-  .danger-btn {
-    border: none;
-    border-radius: var(--m3-shape-full, 9999px);
-    background: var(--m3-error, var(--m3-primary));
-    color: var(--m3-on-error, white);
-    font: inherit;
-    padding: 0.45rem 1rem;
-    cursor: pointer;
-  }
-
-  .secondary {
-    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    border-radius: var(--m3-shape-full, 9999px);
-    background: none;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    font: inherit;
-    padding: 0.45rem 1rem;
-    cursor: pointer;
-  }
-
-  .primary:focus-visible,
-  .secondary:focus-visible,
-  .danger-btn:focus-visible {
-    outline: 2px solid var(--m3-primary);
-    outline-offset: 1px;
-  }
-</style>

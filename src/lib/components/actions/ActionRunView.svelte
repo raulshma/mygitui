@@ -11,6 +11,9 @@
    */
   import { untrack } from "svelte";
   import { toast } from "$lib/toast";
+  import { Button } from "$lib/components/ui/button/index.js";
+  import { Badge } from "$lib/components/ui/badge/index.js";
+  import { Toggle } from "$lib/components/ui/toggle/index.js";
   import {
     actionsStore,
     startActionsEvents,
@@ -92,10 +95,11 @@
     follow = distance < 24;
   }
 
-  function toggleFollow(): void {
-    follow = !follow;
+  // Re-enable follow via the Follow toggle (bits-ui flips `follow` through
+  // bind:pressed): jump back to the tail.
+  $effect(() => {
     if (follow) scrollToBottom();
-  }
+  });
 
   async function copyLog(): Promise<void> {
     if (!run) return;
@@ -113,115 +117,126 @@
   }
 </script>
 
-<div class="action-run-view">
-  <header class="run-head">
-    <div class="head-top">
-      <span class="crumbs">
-        <span class="crumb-muted">Actions</span>
-        <span class="crumb-sep" aria-hidden="true">/</span>
-        <span class="crumb-current" title={run?.name ?? "Action run"}>
+<div class="action-run-view @container flex h-full min-h-0 min-w-0 flex-col bg-background">
+  <header class="run-head flex-none flex flex-col gap-[0.35rem] border-b border-border bg-card px-[0.7rem] pb-[0.55rem] pt-[0.4rem] @max-[38rem]:px-2 @max-[38rem]:pb-[0.45rem] @max-[38rem]:pt-[0.35rem]">
+    <div class="head-top flex min-w-0 items-center gap-[0.4rem]">
+      <span class="crumbs flex min-w-0 items-baseline gap-[0.35rem] text-[0.72rem] text-muted-foreground">
+        <span class="crumb-muted flex-none opacity-80">Actions</span>
+        <span class="crumb-sep flex-none opacity-80" aria-hidden="true">/</span>
+        <span class="crumb-current min-w-0 truncate font-medium text-foreground" title={run?.name ?? "Action run"}>
           {run?.name ?? "Action run"}
         </span>
-        {#if run}<span class="run-id">{run.run_id}</span>{/if}
+        {#if run}<span class="run-id flex-none font-mono text-[0.66rem] text-muted-foreground opacity-85">{run.run_id}</span>{/if}
       </span>
-      <span class="spacer"></span>
+      <span class="spacer ml-auto"></span>
       {#if onPopout}
-        <button
-          class="tb"
+        <Button
+          variant="outline"
+          size="xs"
+          class="tb flex-none rounded-full px-[0.6rem] text-[0.68rem] leading-[1.4] text-muted-foreground @max-[38rem]:px-[0.45rem] @max-[38rem]:text-[0.64rem]"
           type="button"
           title="Open this run log in its own window"
           onclick={onPopout}
         >
           Pop out
-        </button>
+        </Button>
       {/if}
       {#if onClose}
-        <button
-          class="tb close"
+        <Button
+          variant="outline"
+          size="xs"
+          class="tb close flex-none rounded-full px-[0.4rem] text-[0.9rem] leading-none text-muted-foreground"
           type="button"
           aria-label="Close run log"
           title="Close run log"
           onclick={onClose}
         >
           ×
-        </button>
+        </Button>
       {/if}
     </div>
 
     {#if run}
-      <div class="title-row">
-        <span class="status-chip chip-{run.status}">
+      <div class="title-row flex min-w-0 flex-wrap items-center gap-[0.45rem]">
+        <Badge
+          variant="outline"
+          class={`status-chip chip-${run.status} h-auto flex-none items-center whitespace-nowrap rounded-full border-transparent px-2 py-[0.05rem] text-[0.66rem] font-semibold ${run.status === "running" ? "bg-secondary text-secondary-foreground" : run.status === "success" ? "bg-primary/15 text-primary" : run.status === "failed" ? "bg-destructive/10 text-destructive" : "bg-muted text-muted-foreground"}`}
+        >
           {runStatusLabel(run.status, run.exit_code)}
-        </span>
+        </Badge>
         {#if live}
-          <span class="live-badge">
-            <span class="live-dot" aria-hidden="true"></span>
+          <span class="live-badge flex-none inline-flex items-center gap-[0.3rem] text-[0.66rem] font-semibold text-primary">
+            <span class="live-dot size-[0.42rem] rounded-full bg-current animate-pulse" aria-hidden="true"></span>
             Running
           </span>
         {/if}
-        <h2 class="run-title">{run.name}</h2>
+        <h2 class="run-title m-0 min-w-0 text-[0.95rem] font-semibold leading-[1.25] text-foreground [overflow-wrap:anywhere]">{run.name}</h2>
       </div>
       {#if run.command}
-        <code class="command" title={run.command}>{run.command}</code>
+        <code class="command max-w-full self-start truncate rounded border border-border bg-muted px-[0.45rem] py-[0.12rem] font-mono text-[0.7rem] text-foreground" title={run.command}>{run.command}</code>
       {/if}
-      <div class="meta">
-        <span class="meta-item">
-          <span class="meta-label">Output</span>
+      <div class="meta flex flex-wrap items-center gap-x-3 gap-y-[0.35rem] text-[0.68rem] text-muted-foreground">
+        <span class="meta-item inline-flex items-baseline gap-1 whitespace-nowrap">
+          <span class="meta-label opacity-75">Output</span>
           {run.lines.length}
           {run.lines.length === 1 ? "line" : "lines"}
           {#if run.dropped > 0}({run.dropped} earlier dropped){/if}
         </span>
         {#if run.done && run.exit_code !== null}
-          <span class="meta-item">
-            <span class="meta-label">Exit code</span>
+          <span class="meta-item inline-flex items-baseline gap-1 whitespace-nowrap">
+            <span class="meta-label opacity-75">Exit code</span>
             {run.exit_code}
           </span>
         {/if}
       </div>
     {:else}
-      <div class="title-row">
-        <h2 class="run-title">Run {runId}</h2>
+      <div class="title-row flex min-w-0 flex-wrap items-center gap-[0.45rem]">
+        <h2 class="run-title m-0 min-w-0 text-[0.95rem] font-semibold leading-[1.25] text-foreground [overflow-wrap:anywhere]">Run {runId}</h2>
       </div>
     {/if}
   </header>
 
   {#if run}
-    <section class="log-pane" aria-label="Action output">
-      <div class="log-head">
-        <h3 class="pane-title">Output</h3>
-        <span class="log-state" class:live>
+    <section class="log-pane m-2 flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-lg border border-border bg-card" aria-label="Action output">
+      <div class="log-head flex-none flex flex-wrap items-center gap-[0.4rem] border-b border-border bg-muted/50 px-2 py-[0.35rem]">
+        <h3 class="pane-title m-0 text-xs font-semibold text-foreground">Output</h3>
+        <Badge
+          variant="outline"
+          class={`log-state ${live ? "live" : ""} h-auto flex-none rounded-full border-transparent px-[0.45rem] py-px text-[0.62rem] ${live ? "bg-secondary text-secondary-foreground" : "bg-muted text-muted-foreground"}`}
+        >
           {live ? "Live" : "Finished"}
-        </span>
-        <span class="spacer"></span>
-        <button
-          class="tb"
-          class:active={follow}
-          type="button"
-          aria-pressed={follow}
+        </Badge>
+        <span class="spacer ml-auto"></span>
+        <Toggle
+          variant="outline"
+          size="sm"
+          class="tb flex-none whitespace-nowrap rounded-full border-border px-[0.6rem] text-[0.68rem] leading-[1.4] text-muted-foreground aria-pressed:border-transparent aria-pressed:bg-primary/15 aria-pressed:text-primary @max-[38rem]:px-[0.45rem] @max-[38rem]:text-[0.64rem]"
+          bind:pressed={follow}
           title={follow
             ? "Pause auto-scroll (scroll up to pause too)"
             : "Follow new output"}
-          onclick={toggleFollow}
         >
           {follow ? "Following" : "Follow"}
-        </button>
-        <button class="tb" type="button" onclick={() => void copyLog()}>
+        </Toggle>
+        <Button variant="outline" size="xs" class="tb flex-none rounded-full px-[0.6rem] text-[0.68rem] leading-[1.4] text-muted-foreground @max-[38rem]:px-[0.45rem] @max-[38rem]:text-[0.64rem]" type="button" onclick={() => void copyLog()}>
           Copy log
-        </button>
+        </Button>
         {#if live}
-          <button
-            class="tb danger"
+          <Button
+            variant="destructive"
+            size="xs"
+            class="tb danger flex-none rounded-full px-[0.6rem] text-[0.68rem] leading-[1.4] @max-[38rem]:px-[0.45rem] @max-[38rem]:text-[0.64rem]"
             type="button"
             title="Cancel this action"
             onclick={cancelRun}
           >
             Cancel
-          </button>
+          </Button>
         {/if}
       </div>
 
       <div
-        class="log-body"
+        class="log-body min-h-0 min-w-0 flex-1 overflow-auto bg-background px-[0.65rem] py-2 font-mono text-[0.74rem] leading-[1.5] text-foreground select-text"
         bind:this={logEl}
         onscroll={onScroll}
         role="log"
@@ -229,13 +244,13 @@
         aria-label={`Output of ${run.name}`}
       >
         {#if shown.length === 0}
-          <p class="log-empty">
+          <p class="log-empty m-0 font-[inherit] text-muted-foreground">
             {live ? "Waiting for output…" : "This run produced no output."}
           </p>
         {:else}
           {#each shown as line, i (i)}
             {@const segments = actionLogSegments(line)}
-            <div class="log-line" class:notice={i === 0 && run.dropped > 0}>
+            <div class="log-line w-max min-h-[1.1em] min-w-full whitespace-pre {i === 0 && run.dropped > 0 ? 'notice italic text-muted-foreground' : ''}" class:notice={i === 0 && run.dropped > 0}>
               {#each segments as segment, segmentIndex (segmentIndex)}
                 <span
                   style:color={segment.color}
@@ -255,365 +270,22 @@
             </div>
           {/each}
           {#if live}
-            <div class="log-line log-live" aria-hidden="true">▊</div>
+            <div class="log-line log-live w-max min-h-[1.1em] min-w-full whitespace-pre animate-[blink_1s_step-end_infinite] text-primary" aria-hidden="true">▊</div>
           {/if}
         {/if}
       </div>
     </section>
   {:else}
-    <div class="run-state" role="status">
-      <p class="state-title">This run is no longer available.</p>
-      <p class="state-hint">
+    <div class="run-state flex min-h-0 flex-1 flex-col items-center justify-center gap-2 p-8 text-center" role="status">
+      <p class="state-title m-0 text-[0.9rem] font-semibold text-foreground">This run is no longer available.</p>
+      <p class="state-hint m-0 max-w-96 text-xs leading-[1.45] text-muted-foreground">
         Its output was not kept, or the run ended before this window loaded.
         Run the action again to see fresh output.
       </p>
       {#if onClose}
-        <button class="tb" type="button" onclick={onClose}>Close</button>
+        <Button variant="outline" size="xs" class="tb flex-none rounded-full px-[0.6rem] text-[0.68rem] leading-[1.4] text-muted-foreground" type="button" onclick={onClose}>Close</Button>
       {/if}
     </div>
   {/if}
 </div>
 
-<style>
-  .action-run-view {
-    display: flex;
-    flex-direction: column;
-    height: 100%;
-    min-height: 0;
-    min-width: 0;
-    background: var(--m3-surface);
-    container-type: inline-size;
-  }
-
-  .run-head {
-    flex: none;
-    display: flex;
-    flex-direction: column;
-    gap: 0.35rem;
-    padding: 0.4rem 0.7rem 0.55rem;
-    border-bottom: 1px solid var(--app-border, var(--m3-outline-variant));
-    background: var(--m3-surface-container, var(--m3-surface));
-  }
-
-  .head-top {
-    display: flex;
-    align-items: center;
-    gap: 0.4rem;
-    min-width: 0;
-  }
-
-  .crumbs {
-    display: flex;
-    align-items: baseline;
-    gap: 0.35rem;
-    min-width: 0;
-    font-size: 0.72rem;
-    color: var(--m3-on-surface-variant);
-  }
-
-  .crumb-muted,
-  .crumb-sep {
-    flex: none;
-    opacity: 0.8;
-  }
-
-  .crumb-current {
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    color: var(--m3-on-surface);
-    font-weight: 500;
-  }
-
-  .run-id {
-    flex: none;
-    font-family: var(--app-font-mono, ui-monospace, Consolas, monospace);
-    font-size: 0.66rem;
-    color: var(--m3-on-surface-variant);
-    opacity: 0.85;
-  }
-
-  .spacer {
-    margin-left: auto;
-  }
-
-  .title-row {
-    display: flex;
-    align-items: center;
-    gap: 0.45rem;
-    flex-wrap: wrap;
-    min-width: 0;
-  }
-
-  .run-title {
-    margin: 0;
-    min-width: 0;
-    font-size: 0.95rem;
-    font-weight: 600;
-    line-height: 1.25;
-    color: var(--m3-on-surface);
-    overflow-wrap: anywhere;
-  }
-
-  .status-chip {
-    flex: none;
-    display: inline-flex;
-    align-items: center;
-    border-radius: var(--m3-shape-full, 9999px);
-    padding: 0.05rem 0.5rem;
-    font-size: 0.66rem;
-    font-weight: 600;
-    white-space: nowrap;
-    background: var(--m3-surface-container-highest, var(--m3-surface-container));
-    color: var(--m3-on-surface-variant);
-  }
-
-  .status-chip.chip-running {
-    background: var(--m3-tertiary-container);
-    color: var(--m3-on-tertiary-container);
-  }
-
-  .status-chip.chip-success {
-    background: var(--m3-primary-container);
-    color: var(--m3-on-primary-container);
-  }
-
-  .status-chip.chip-failed {
-    background: var(--m3-error-container);
-    color: var(--m3-on-error-container);
-  }
-
-  .live-badge {
-    flex: none;
-    display: inline-flex;
-    align-items: center;
-    gap: 0.3rem;
-    font-size: 0.66rem;
-    font-weight: 600;
-    color: var(--m3-primary);
-  }
-
-  .live-dot {
-    width: 0.42rem;
-    height: 0.42rem;
-    border-radius: 50%;
-    background: currentColor;
-    animation: pulse 1.4s ease-in-out infinite;
-  }
-
-  @keyframes pulse {
-    0%,
-    100% {
-      opacity: 1;
-    }
-    50% {
-      opacity: 0.25;
-    }
-  }
-
-  .command {
-    align-self: flex-start;
-    max-width: 100%;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    padding: 0.12rem 0.45rem;
-    border: 1px solid var(--app-border, var(--m3-outline-variant));
-    border-radius: var(--m3-shape-extra-small, 4px);
-    background: var(--m3-surface-container-low, var(--m3-surface));
-    color: var(--m3-on-surface);
-    font-family: var(--app-font-mono, ui-monospace, Consolas, monospace);
-    font-size: 0.7rem;
-  }
-
-  .meta {
-    display: flex;
-    align-items: center;
-    gap: 0.35rem 0.75rem;
-    flex-wrap: wrap;
-    font-size: 0.68rem;
-    color: var(--m3-on-surface-variant);
-  }
-
-  .meta-item {
-    display: inline-flex;
-    align-items: baseline;
-    gap: 0.25rem;
-    white-space: nowrap;
-  }
-
-  .meta-label {
-    opacity: 0.75;
-  }
-
-  .tb {
-    flex: none;
-    display: inline-flex;
-    align-items: center;
-    gap: 0.25rem;
-    border: 1px solid var(--app-border, var(--m3-outline-variant));
-    border-radius: var(--m3-shape-full, 9999px);
-    background: none;
-    color: var(--m3-on-surface-variant);
-    font: inherit;
-    font-size: 0.68rem;
-    line-height: 1.4;
-    padding: 0.1rem 0.6rem;
-    cursor: pointer;
-    white-space: nowrap;
-  }
-
-  .tb:hover {
-    background: var(--app-hover, var(--m3-surface-container-high));
-    color: var(--m3-on-surface);
-  }
-
-  .tb:focus-visible {
-    outline: 2px solid var(--m3-primary);
-    outline-offset: 1px;
-  }
-
-  .tb.active {
-    background: var(--m3-primary-container);
-    border-color: transparent;
-    color: var(--m3-on-primary-container);
-  }
-
-  .tb.danger {
-    color: var(--m3-error, var(--app-deleted));
-    border-color: color-mix(in srgb, currentColor 45%, transparent);
-  }
-
-  .tb.close {
-    font-size: 0.9rem;
-    line-height: 1;
-    padding: 0.05rem 0.4rem;
-  }
-
-  .log-pane {
-    flex: 1;
-    min-height: 0;
-    min-width: 0;
-    display: flex;
-    flex-direction: column;
-    margin: 0.5rem;
-    border: 1px solid var(--app-border, var(--m3-outline-variant));
-    border-radius: var(--m3-shape-small, 8px);
-    background: var(--m3-surface-container-low, var(--m3-surface));
-    overflow: hidden;
-  }
-
-  .log-head {
-    flex: none;
-    display: flex;
-    align-items: center;
-    gap: 0.4rem;
-    flex-wrap: wrap;
-    padding: 0.35rem 0.5rem;
-    border-bottom: 1px solid var(--app-border, var(--m3-outline-variant));
-    background: var(--m3-surface-container, var(--m3-surface));
-  }
-
-  .pane-title {
-    margin: 0;
-    font-size: 0.75rem;
-    font-weight: 600;
-    color: var(--m3-on-surface);
-  }
-
-  .log-state {
-    flex: none;
-    border-radius: var(--m3-shape-full, 9999px);
-    padding: 0 0.45rem;
-    font-size: 0.62rem;
-    background: var(--m3-surface-container-highest);
-    color: var(--m3-on-surface-variant);
-  }
-
-  .log-state.live {
-    background: var(--m3-tertiary-container);
-    color: var(--m3-on-tertiary-container);
-  }
-
-  .log-body {
-    flex: 1;
-    min-height: 0;
-    min-width: 0;
-    overflow: auto;
-    padding: 0.5rem 0.65rem;
-    background: var(--m3-surface-container-lowest, var(--m3-surface));
-    font-family: var(--app-font-mono, ui-monospace, Consolas, monospace);
-    font-size: 0.74rem;
-    line-height: 1.5;
-    color: var(--m3-on-surface);
-    user-select: text;
-  }
-
-  .log-line {
-    width: max-content;
-    min-width: 100%;
-    white-space: pre;
-    min-height: 1.1em;
-  }
-
-  .log-line.notice {
-    color: var(--m3-on-surface-variant);
-    font-style: italic;
-  }
-
-  .log-live {
-    color: var(--m3-primary);
-    animation: blink 1s step-end infinite;
-  }
-
-  @keyframes blink {
-    50% {
-      opacity: 0;
-    }
-  }
-
-  .log-empty {
-    margin: 0;
-    color: var(--m3-on-surface-variant);
-    font-family: inherit;
-  }
-
-  .run-state {
-    flex: 1;
-    min-height: 0;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    gap: 0.5rem;
-    padding: 2rem;
-    text-align: center;
-  }
-
-  .state-title {
-    margin: 0;
-    font-size: 0.9rem;
-    font-weight: 600;
-    color: var(--m3-on-surface);
-  }
-
-  .state-hint {
-    margin: 0;
-    max-width: 24rem;
-    font-size: 0.75rem;
-    line-height: 1.45;
-    color: var(--m3-on-surface-variant);
-  }
-
-  @container (max-width: 38rem) {
-    .run-head {
-      padding: 0.35rem 0.5rem 0.45rem;
-    }
-
-    .tb {
-      padding: 0.08rem 0.45rem;
-      font-size: 0.64rem;
-    }
-  }
-</style>

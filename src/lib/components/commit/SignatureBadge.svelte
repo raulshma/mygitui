@@ -20,6 +20,7 @@
    */
   import { commitSignature } from "$lib/ipc/client";
   import type { CommitSignature } from "$lib/ipc/types";
+  import { Badge } from "$lib/components/ui/badge/index.js";
 
   let {
     repoId,
@@ -58,6 +59,15 @@
     label: string;
     title: string;
   } | null;
+
+  /** Tone → restyling utilities (status colors keep the `--app-*` tokens). */
+  const TONE_CLASS: Record<Exclude<BadgeView, null>["tone"], string> = {
+    verified:
+      "border-transparent bg-[var(--app-added-bg)] font-semibold text-[var(--app-added)]",
+    bad: "border-transparent bg-[color-mix(in_srgb,var(--destructive)_15%,transparent)] font-semibold text-destructive",
+    unverifiable: "border-transparent bg-[var(--app-modified-bg)] text-[var(--app-modified)]",
+    neutral: "border-border text-muted-foreground",
+  };
 
   const view = $derived.by((): BadgeView => {
     return badgeView(sig, failed, hideUnsigned);
@@ -100,50 +110,11 @@
 </script>
 
 {#if view}
-  <span
-    class="sig-badge {view.tone}"
+  <Badge
+    variant="outline"
+    class={"sig-badge " + view.tone + " " + TONE_CLASS[view.tone] +
+      " h-auto flex-none items-center gap-1 rounded-full px-[0.45rem] text-[0.625rem] leading-[1.5] tracking-[0.02em] whitespace-nowrap select-none"}
     title={view.title}
     data-sha={sha}
-  >{view.label}</span>
+  >{view.label}</Badge>
 {/if}
-
-<style>
-  .sig-badge {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.25rem;
-    flex: none;
-    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    border-radius: var(--m3-shape-full, 9999px);
-    padding: 0 0.45rem;
-    font-size: 0.625rem;
-    line-height: 1.5;
-    letter-spacing: 0.02em;
-    white-space: nowrap;
-    user-select: none;
-  }
-
-  .sig-badge.verified {
-    border-color: transparent;
-    background: var(--app-added-bg, color-mix(in srgb, var(--m3-primary) 18%, transparent));
-    color: var(--app-added, var(--m3-primary));
-    font-weight: 600;
-  }
-
-  .sig-badge.bad {
-    border-color: transparent;
-    background: color-mix(in srgb, var(--m3-error, #ba1a1a) 15%, transparent);
-    color: var(--m3-error, #ba1a1a);
-    font-weight: 600;
-  }
-
-  .sig-badge.unverifiable {
-    border-color: transparent;
-    background: var(--app-modified-bg, color-mix(in srgb, var(--m3-tertiary) 16%, transparent));
-    color: var(--app-modified, var(--m3-tertiary));
-  }
-
-  .sig-badge.neutral {
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-  }
-</style>

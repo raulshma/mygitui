@@ -2,9 +2,9 @@ import { expect, test } from "@playwright/test";
 import { installTauriMock, seedStorage, trackErrors } from "./tauri-mock";
 
 /**
- * Theme application: a pinned dark preference must restyle every dark token
- * even when the OS reports a light color scheme (the stylesheet's
- * prefers-color-scheme fallback alone leaves `--app-*` hues light).
+ * Theme application: a pinned dark preference must apply the `.dark` class
+ * (and with it the dark oklch token set + dark `--app-*` hues) even when the
+ * OS reports a light color scheme.
  */
 test.use({ colorScheme: "light" });
 
@@ -25,16 +25,19 @@ test("pinned dark theme applies dark status tokens on a light OS", async ({
     .toBe("dark");
 
   const tokens = await page.evaluate(() => {
-    const style = getComputedStyle(document.documentElement);
+    const root = document.documentElement;
+    const style = getComputedStyle(root);
     return {
-      surface: style.getPropertyValue("--m3-surface").trim(),
+      darkClass: root.classList.contains("dark"),
+      background: style.getPropertyValue("--background").trim(),
       added: style.getPropertyValue("--app-added").trim(),
       deleted: style.getPropertyValue("--app-deleted").trim(),
       modified: style.getPropertyValue("--app-modified").trim(),
       colorScheme: style.getPropertyValue("color-scheme").trim(),
     };
   });
-  expect(tokens.surface).toBe("#141218");
+  expect(tokens.darkClass).toBe(true);
+  expect(tokens.background).toBe("oklch(0.145 0 0)");
   expect(tokens.added).toBe("#3fb950");
   expect(tokens.deleted).toBe("#f85149");
   expect(tokens.modified).toBe("#d29922");
@@ -62,14 +65,17 @@ test("pinned light theme keeps light status tokens on a dark OS", async ({
     .toBe("light");
 
   const tokens = await page.evaluate(() => {
-    const style = getComputedStyle(document.documentElement);
+    const root = document.documentElement;
+    const style = getComputedStyle(root);
     return {
-      surface: style.getPropertyValue("--m3-surface").trim(),
+      darkClass: root.classList.contains("dark"),
+      background: style.getPropertyValue("--background").trim(),
       added: style.getPropertyValue("--app-added").trim(),
       colorScheme: style.getPropertyValue("color-scheme").trim(),
     };
   });
-  expect(tokens.surface).toBe("#fdf7ff");
+  expect(tokens.darkClass).toBe(false);
+  expect(tokens.background).toBe("oklch(1 0 0)");
   expect(tokens.added).toBe("#1a7f37");
   expect(tokens.colorScheme).toBe("light");
 

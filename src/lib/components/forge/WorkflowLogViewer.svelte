@@ -34,6 +34,9 @@
     type LogSegment,
     type LogStep,
   } from "./runLogModel";
+  import { Button } from "$lib/components/ui/button/index.js";
+  import { Input } from "$lib/components/ui/input/index.js";
+  import { Toggle } from "$lib/components/ui/toggle/index.js";
 
   let {
     text,
@@ -68,6 +71,22 @@
     /** Target step key (`job\0step`) to expand and scroll into view. */
     targetStepKey?: string | null;
   } = $props();
+
+  // Tailwind replacements for the removed scoped styles: one tone per
+  // run-state class, plus the shared toolbar-button utilities.
+  const runTone: Record<string, string> = {
+    "run-success": "text-[var(--app-added)]",
+    "run-failure": "text-[var(--app-deleted)]",
+    "run-running": "text-primary",
+    "run-queued": "text-muted-foreground",
+    "run-cancelled": "text-muted-foreground",
+    "run-skipped": "text-muted-foreground opacity-60",
+    "run-unknown": "text-muted-foreground",
+  };
+  // Pill geometry/type only — border, background, hover and disabled chrome
+  // come from the ui Button/Toggle primitives this is passed to as `class`.
+  const tb =
+    "flex-none gap-1 whitespace-nowrap rounded-full px-[0.55rem] py-[0.08rem] text-[0.68rem] leading-[1.4] font-normal text-muted-foreground max-[44rem]:px-[0.4rem]";
 
   // `windowSize` is overridable so tests (and compact embeds) can keep the
   // DOM small while exercising the same windowing logic.
@@ -412,30 +431,46 @@
   isFirstError: boolean,
 )}
   <div
-    class="log-line"
+    class="log-line flex min-w-full items-start gap-2 border-l-2 border-transparent pr-[0.7rem] hover:bg-foreground/5 {wrap
+      ? "w-full"
+      : "w-max"} {line.level === "error" ? "border-l-destructive bg-destructive/10" : ""} {line.level ===
+    "warning"
+      ? "border-l-muted-foreground bg-muted/50"
+      : ""}"
     class:level-error={line.level === "error"}
     class:level-warning={line.level === "warning"}
     class:level-meta={line.level === "command" || line.level === "debug"}
     data-first-error={isFirstError ? "true" : undefined}
   >
-    <span class="ln" aria-hidden="true">{number}</span>
+    <span class="ln w-12 flex-none select-none pr-[0.15rem] text-right text-[0.66rem] leading-[inherit] text-muted-foreground opacity-55" aria-hidden="true">{number}</span>
     {#if hasTimes}
-      <span class="lt" aria-hidden="true">{formatLogTime(line.time)}</span>
+      <span class="lt flex-none select-none text-[0.66rem] text-muted-foreground opacity-70" aria-hidden="true">{formatLogTime(line.time)}</span>
     {/if}
-    <span class="lm"
+    <span
+      class="lm min-w-0 flex-1 {wrap
+        ? "whitespace-pre-wrap [overflow-wrap:anywhere]"
+        : "whitespace-pre"} {line.level === "error"
+        ? "text-destructive"
+        : ""} {line.level === "command" || line.level === "debug"
+        ? "text-muted-foreground opacity-85"
+        : ""}"
       >{#each highlightText(line.text, query) as part, index (index)}{#if part.match}<mark
+            class="rounded-[2px] bg-accent text-accent-foreground"
             >{part.text}</mark
           >{:else}{part.text}{/if}{/each}</span
     >
   </div>
 {/snippet}
 
-<div class="log-viewer" class:wrap>
-  <div class="log-toolbar" role="toolbar" aria-label="Log controls">
-    <div class="log-search">
-      <span class="search-icon" aria-hidden="true">⌕</span>
-      <input
-        class="log-search-input"
+<div
+  class="log-viewer flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-sm border border-border bg-background"
+  class:wrap
+>
+  <div class="log-toolbar flex-none flex flex-wrap items-center gap-[0.3rem] border-b border-border bg-popover px-2 py-[0.35rem]" role="toolbar" aria-label="Log controls">
+    <div class="log-search relative flex min-w-32 flex-[1_1_11rem] max-w-[22rem] items-center">
+      <span class="search-icon pointer-events-none absolute left-[0.45rem] text-[0.9rem] text-muted-foreground" aria-hidden="true">⌕</span>
+      <Input
+        class="log-search-input h-auto w-full rounded-full py-[0.16rem] pl-[1.65rem] pr-[1.5rem] text-[0.72rem] [&::-webkit-search-cancel-button]:hidden"
         type="search"
         aria-label="Search logs"
         placeholder="Find in logs…"
@@ -444,154 +479,155 @@
         onkeydown={onSearchKeydown}
       />
       {#if query.trim()}
-        <button
-          class="clear-search"
+        <Button
+          class="clear-search absolute right-[0.3rem] h-auto px-[0.2rem] py-0 text-[0.9rem] leading-none font-normal text-muted-foreground hover:text-foreground dark:hover:bg-transparent"
+          variant="ghost"
           type="button"
           aria-label="Clear log search"
           title="Clear search"
           onclick={clearSearch}
         >
           ×
-        </button>
+        </Button>
       {/if}
     </div>
-    <span class="log-count" aria-live="polite">
+    <span class="log-count flex-none whitespace-nowrap text-[0.68rem] text-muted-foreground max-[44rem]:order-2" aria-live="polite">
       {#if query.trim()}
         {matches} hit{matches === 1 ? "" : "s"} · {lineLabel(total)}
       {:else}
         {lineLabel(total)}
       {/if}
       {#if loading && text !== null}
-        <span class="refreshing"> · refreshing…</span>
+        <span class="refreshing italic"> · refreshing…</span>
       {/if}
     </span>
     {#if live}
-      <span class="live-badge" title="Following this run while GitHub publishes output">
-        <span class="live-dot" aria-hidden="true"></span>
+      <span class="live-badge flex-none inline-flex items-center gap-1 whitespace-nowrap text-[0.66rem] font-semibold text-primary" title="Following this run while GitHub publishes output">
+        <span class="live-dot size-[0.42rem] animate-pulse rounded-full bg-primary" aria-hidden="true"></span>
         Live
       </span>
     {/if}
     {#if firstError}
-      <button
-        class="tb"
+      <Button
+        class={tb}
+        variant="outline"
         type="button"
         title="Jump to the first error line"
         onclick={jumpToFirstError}
       >
         First error
-      </button>
+      </Button>
     {/if}
-    <span class="spacer"></span>
+    <span class="spacer ml-auto max-[44rem]:hidden"></span>
     {#if liveConsole && onOpenLive}
-      <button
-        class="tb live-console"
+      <Button
+        class="live-console {tb} border-current/40 text-primary"
+        variant="outline"
         type="button"
         title="Open GitHub's live console for this run"
         onclick={onOpenLive}
       >
-        <span class="live-dot" aria-hidden="true"></span>
+        <span class="live-dot size-[0.42rem] animate-pulse rounded-full bg-primary" aria-hidden="true"></span>
         Live console
-      </button>
+      </Button>
     {/if}
-    <button
-      class="tb"
-      class:active={wrap}
-      type="button"
-      aria-pressed={wrap}
+    <Toggle
+      class="{tb} {wrap ? "border-transparent bg-accent text-accent-foreground" : ""} focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary focus-visible:ring-0"
+      pressed={wrap}
+      onPressedChange={() => (wrap = !wrap)}
       title="Wrap long log lines"
-      onclick={() => (wrap = !wrap)}
     >
       Wrap
-    </button>
-    <button
-      class="tb"
-      class:active={follow}
-      type="button"
-      aria-pressed={follow}
+    </Toggle>
+    <Toggle
+      class="{tb} {follow ? "border-transparent bg-accent text-accent-foreground" : ""} focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary focus-visible:ring-0"
+      pressed={follow}
+      onPressedChange={() => toggleFollow()}
       title={follow ? "Stop following new output" : "Follow new output"}
-      onclick={toggleFollow}
     >
-      {#if live}<span class="live-dot" aria-hidden="true"></span>{/if}
+      {#if live}<span class="live-dot size-[0.42rem] animate-pulse rounded-full bg-primary" aria-hidden="true"></span>{/if}
       {follow ? "Following" : "Tail"}
-    </button>
-    <button class="tb" type="button" title="Expand all sections" onclick={expandAll}>
+    </Toggle>
+    <Button class={tb} variant="outline" type="button" title="Expand all sections" onclick={expandAll}>
       Expand
-    </button>
-    <button
-      class="tb"
+    </Button>
+    <Button
+      class={tb}
+      variant="outline"
       type="button"
       title="Collapse all sections"
       onclick={collapseAll}
     >
       Collapse
-    </button>
-    <button
-      class="tb"
+    </Button>
+    <Button
+      class={tb}
+      variant="outline"
       type="button"
       title="Copy the raw log to the clipboard"
       disabled={text === null}
       onclick={() => void copyLog()}
     >
       {copied ? "Copied" : "Copy"}
-    </button>
+    </Button>
   </div>
 
   {#if error}
-    <div class="log-error" role="alert">
-      <span class="err-mark" aria-hidden="true">!</span>
-      <span class="err-text">{error}</span>
+    <div class="log-error flex-none flex flex-wrap items-baseline gap-[0.4rem] border-b border-current/25 bg-destructive/15 px-[0.6rem] py-[0.35rem] text-xs text-destructive" role="alert">
+      <span class="err-mark flex-none inline-flex size-4 items-center justify-center rounded-full border border-current text-[0.625rem] font-bold" aria-hidden="true">!</span>
+      <span class="err-text min-w-0 [overflow-wrap:anywhere]">{error}</span>
       {#if text !== null}
-        <span class="err-hint">Showing the last available output.</span>
+        <span class="err-hint text-[0.66rem] opacity-75">Showing the last available output.</span>
       {/if}
     </div>
   {/if}
 
   {#if text === null}
-    <div class="log-state" aria-live="polite">
+    <div class="log-state flex min-h-0 flex-1 flex-col items-center justify-center gap-[0.45rem] p-6 text-center text-[0.78rem] text-muted-foreground" aria-live="polite">
       {#if loading}
-        <span class="state-spinner" aria-hidden="true"></span>
-        <p>Loading logs…</p>
-        <p class="state-hint">
+        <span class="state-spinner flex-none size-[1.1rem] animate-spin rounded-full border-2 border-border border-t-primary" aria-hidden="true"></span>
+        <p class="m-0">Loading logs…</p>
+        <p class="state-hint m-0 max-w-[26rem] text-[0.7rem] leading-[1.45] opacity-85">
           GitHub may take a moment to make logs available while jobs are queued.
         </p>
       {:else if error}
-        <p>Logs are not available yet.</p>
-        <p class="state-hint">
+        <p class="m-0">Logs are not available yet.</p>
+        <p class="state-hint m-0 max-w-[26rem] text-[0.7rem] leading-[1.45] opacity-85">
           Retry in a moment, or open the run on GitHub for the live console.
         </p>
       {:else}
-        <p>{emptyText}</p>
+        <p class="m-0">{emptyText}</p>
       {/if}
     </div>
   {:else if filtered && filtered.jobs.length === 0}
     {#if query.trim()}
-      <div class="log-state">
-        <p>No log lines match “{query.trim()}”.</p>
-        <button class="tb" type="button" onclick={clearSearch}>Clear search</button>
+      <div class="log-state flex min-h-0 flex-1 flex-col items-center justify-center gap-[0.45rem] p-6 text-center text-[0.78rem] text-muted-foreground">
+        <p class="m-0">No log lines match “{query.trim()}”.</p>
+        <Button class={tb} variant="outline" type="button" onclick={clearSearch}>Clear search</Button>
       </div>
     {:else}
-      <div class="log-state">
-        <p>{emptyText}</p>
+      <div class="log-state flex min-h-0 flex-1 flex-col items-center justify-center gap-[0.45rem] p-6 text-center text-[0.78rem] text-muted-foreground">
+        <p class="m-0">{emptyText}</p>
       </div>
     {/if}
   {:else}
     {#if live && total === 0 && query.trim() === ""}
-      <div class="live-note" role="status">
-        <span class="live-dot" aria-hidden="true"></span>
-        <span class="live-note-text">
+      <div class="live-note flex-none flex flex-wrap items-center gap-[0.45rem] border-b border-border bg-muted/35 px-[0.6rem] py-[0.4rem] text-xs leading-[1.4] text-foreground" role="status">
+        <span class="live-dot size-[0.42rem] animate-pulse rounded-full bg-primary" aria-hidden="true"></span>
+        <span class="live-note-text min-w-0 flex-[1_1_16rem]">
           GitHub publishes each job's log when it finishes. For output while a
           job is still running, use the live console on GitHub.
         </span>
         {#if onOpenLive}
-          <button class="tb" type="button" onclick={onOpenLive}>
+          <Button class={tb} variant="outline" type="button" onclick={onOpenLive}>
             Open live console
-          </button>
+          </Button>
         {/if}
       </div>
     {/if}
     <!-- svelte-ignore a11y_no_noninteractive_tabindex (scrollable log region must be keyboard focusable) -->
     <div
-      class="log-scroll"
+      class="log-scroll min-h-0 flex-1 overflow-auto bg-background pb-[0.6rem] pt-[0.35rem] font-mono text-[0.725rem] leading-[1.55] text-foreground focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary"
       bind:this={scrollEl}
       onscroll={onScroll}
       tabindex="0"
@@ -605,42 +641,42 @@
             jobEntry.job.completed_at ?? null,
             jobEntry.job.status ?? (jobEntry.job.conclusion ? "completed" : ""),
           )}
-          <section class="log-job" aria-label={jobEntry.job.name}>
+          <section class="log-job border-b border-border last:border-none" aria-label={jobEntry.job.name}>
             <button
-              class="log-job-head"
+              class="log-job-head sticky top-0 z-[2] flex w-full min-w-0 cursor-pointer items-center gap-[0.4rem] border-none bg-popover px-[0.6rem] py-[0.3rem] text-left text-[0.76rem] font-semibold text-inherit hover:bg-accent focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary"
               type="button"
               aria-expanded={!collapsed[jobEntry.job.key]}
               onclick={() => toggle(jobEntry.job.key)}
             >
-              <span class="caret" aria-hidden="true">
+              <span class="caret w-[0.8rem] flex-none text-[0.66rem] text-muted-foreground" aria-hidden="true">
                 {collapsed[jobEntry.job.key] ? "▸" : "▾"}
               </span>
               <span
-                class="step-status-icon {jobStateClass(jobEntry.job)}"
+                class="step-status-icon flex-none inline-flex w-4 items-center justify-center text-[0.72rem] leading-none font-bold {jobStateClass(jobEntry.job)} {runTone[jobStateClass(jobEntry.job)] ?? "text-muted-foreground"}"
                 aria-hidden="true"
               >
                 {jobIcon(jobEntry.job)}
               </span>
-              <span class="job-name">{jobEntry.job.name}</span>
-              <span class="spacer"></span>
+              <span class="job-name min-w-0 truncate font-semibold">{jobEntry.job.name}</span>
+              <span class="spacer ml-auto"></span>
               {#if jobStepProgress(jobEntry.job)}
-                <span class="muted">{jobStepProgress(jobEntry.job)}</span>
+                <span class="muted text-[0.66rem] font-normal text-muted-foreground">{jobStepProgress(jobEntry.job)}</span>
               {/if}
-              <span class="muted">{lineLabel(jobEntry.job.lineCount)}</span>
+              <span class="muted text-[0.66rem] font-normal text-muted-foreground">{lineLabel(jobEntry.job.lineCount)}</span>
               {#if jobEntry.job.errorCount > 0}
-                <span class="mini-chip chip-error">
+                <span class="mini-chip flex-none rounded-full bg-destructive/15 px-[0.4rem] text-[0.62rem] leading-[1.5] font-medium text-destructive">
                   {jobEntry.job.errorCount} error{jobEntry.job.errorCount === 1 ? "" : "s"}
                 </span>
               {/if}
               {#if jobEntry.job.warningCount > 0}
-                <span class="mini-chip chip-warning">
+                <span class="mini-chip flex-none rounded-full bg-muted px-[0.4rem] text-[0.62rem] leading-[1.5] font-medium text-muted-foreground">
                   {jobEntry.job.warningCount} warning{jobEntry.job.warningCount === 1
                     ? ""
                     : "s"}
                 </span>
               {/if}
               {#if jobDuration}
-                <span class="muted job-duration">{jobDuration}</span>
+                <span class="muted job-duration mr-[0.35rem] text-[0.66rem] font-normal text-muted-foreground">{jobDuration}</span>
               {/if}
             </button>
 
@@ -656,7 +692,9 @@
                   ) ||
                   runDurationLabel(step.firstTime, step.lastTime)}
                 <section
-                  class="log-step"
+                  class="log-step border-t border-border/40 transition-colors duration-200 {highlightedStepKey === step.key
+                    ? "bg-primary/[0.14] outline-1 outline-primary"
+                    : ""}"
                   class:step-failed={step.conclusion === "failure" || step.errorCount > 0}
                   class:step-running={step.status === "in_progress"}
                   class:highlighted={highlightedStepKey === step.key}
@@ -664,50 +702,55 @@
                   aria-label={step.name}
                 >
                   <button
-                    class="log-step-head"
+                    class="log-step-head flex w-full min-w-0 cursor-pointer items-center gap-[0.4rem] border-none px-[0.6rem] py-[0.24rem] pl-[1.1rem] text-left text-[0.72rem] text-inherit hover:bg-accent focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary {step.conclusion === "failure" ||
+                    step.errorCount > 0
+                      ? "border-l-[3px] border-l-destructive bg-destructive/15"
+                      : step.status === "in_progress"
+                        ? "border-l-[3px] border-l-primary bg-card"
+                        : "bg-card"}"
                     type="button"
                     aria-expanded={!isStepCollapsed}
                     onclick={() => toggle(step.key)}
                   >
-                    <span class="caret" aria-hidden="true">
+                    <span class="caret w-[0.8rem] flex-none text-[0.66rem] text-muted-foreground" aria-hidden="true">
                       {isStepCollapsed ? "▸" : "▾"}
                     </span>
                     <span
-                      class="step-status-icon {stepStateClass(step.conclusion ?? '', step.status ?? '')}"
+                      class="step-status-icon flex-none inline-flex w-4 items-center justify-center text-[0.72rem] leading-none font-bold {stepStateClass(step.conclusion ?? "", step.status ?? "")} {runTone[stepStateClass(step.conclusion ?? "", step.status ?? "")] ?? "text-muted-foreground"}"
                       aria-hidden="true"
                     >
                       {stepIcon(step.conclusion, step.status)}
                     </span>
-                    <span class="step-name">{step.name}</span>
-                    <span class="spacer"></span>
+                    <span class="step-name min-w-0 truncate">{step.name}</span>
+                    <span class="spacer ml-auto"></span>
                     {#if step.lineCount > 0}
-                      <span class="muted step-lines">{lineLabel(step.lineCount)}</span>
+                      <span class="muted step-lines mr-[0.35rem] text-[0.66rem] font-normal text-muted-foreground">{lineLabel(step.lineCount)}</span>
                     {/if}
                     {#if step.errorCount > 0}
-                      <span class="mini-chip chip-error">
+                      <span class="mini-chip flex-none rounded-full bg-destructive/15 px-[0.4rem] text-[0.62rem] leading-[1.5] font-medium text-destructive">
                         {step.errorCount} error{step.errorCount === 1 ? "" : "s"}
                       </span>
                     {/if}
                     {#if step.warningCount > 0}
-                      <span class="mini-chip chip-warning">
+                      <span class="mini-chip flex-none rounded-full bg-muted px-[0.4rem] text-[0.62rem] leading-[1.5] font-medium text-muted-foreground">
                         {step.warningCount} warning{step.warningCount === 1 ? "" : "s"}
                       </span>
                     {/if}
                     {#if step.conclusion === "skipped"}
-                      <span class="muted step-state-badge">Skipped</span>
+                      <span class="muted step-state-badge mr-[0.35rem] text-[0.66rem] font-normal text-muted-foreground">Skipped</span>
                     {/if}
                     {#if duration}
-                      <span class="muted step-time">{duration}</span>
+                      <span class="muted step-time ml-auto text-[0.66rem] font-normal text-muted-foreground">{duration}</span>
                     {/if}
                   </button>
 
                   {#if !isStepCollapsed}
                     {#if step.lineCount === 0}
-                      <div class="empty-step-notice">
+                      <div class="empty-step-notice flex items-center gap-[0.4rem] py-[0.45rem] pr-4 pl-[2.6rem] text-[0.68rem] italic text-muted-foreground opacity-80">
                         {#if step.conclusion === "skipped"}
                           This step was skipped.
                         {:else if step.status === "queued" || step.status === "in_progress"}
-                          <span class="state-spinner small" aria-hidden="true"></span>
+                          <span class="state-spinner small flex-none size-[0.7rem] animate-spin rounded-full border-[1.5px] border-border border-t-primary" aria-hidden="true"></span>
                           <span>
                             {step.status === "in_progress"
                               ? "Step is running — its log appears when the job finishes."
@@ -730,25 +773,25 @@
                           segmentEntry.segment.lines.length,
                         )}
                           {#if segmentEntry.segment.kind === "group"}
-                            <div class="log-group">
+                            <div class="log-group m-0">
                               <button
-                                class="log-group-head"
+                                class="log-group-head flex w-full min-w-0 cursor-pointer items-center gap-[0.4rem] border-none bg-transparent px-[0.6rem] py-[0.18rem] pl-[2.1rem] text-left text-[0.7rem] text-muted-foreground hover:bg-accent focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary"
                                 type="button"
                                 aria-expanded={!collapsed[segmentEntry.segment.key]}
                                 onclick={() => toggle(segmentEntry.segment.key)}
                               >
-                                <span class="caret" aria-hidden="true">
+                                <span class="caret w-[0.8rem] flex-none text-[0.66rem] text-muted-foreground" aria-hidden="true">
                                   {collapsed[segmentEntry.segment.key] ? "▸" : "▾"}
                                 </span>
-                                <span class="group-title">
+                                <span class="group-title min-w-0 truncate italic">
                                   {segmentEntry.segment.title}
                                 </span>
-                                <span class="muted">
+                                <span class="muted text-[0.66rem] font-normal text-muted-foreground">
                                   {lineLabel(segmentEntry.segment.lines.length)}
                                 </span>
                               </button>
                               {#if !collapsed[segmentEntry.segment.key]}
-                                <div class="group-body">
+                                <div class="group-body ml-[2.4rem] border-l-2 border-border">
                                   {#each segmentEntry.segment.lines as line, index (index)}
                                     {@const offset = segmentEntry.offset + index}
                                     {#if offset >= renderFrom && offset < renderEnd}
@@ -787,587 +830,19 @@
     </div>
 
     {#if total > shown}
-      <div class="log-more">
+      <div class="log-more flex-none flex flex-wrap items-center justify-center gap-[0.6rem] border-t border-border bg-card px-[0.6rem] py-[0.3rem] text-[0.68rem] text-muted-foreground">
         <span>
           Showing lines {renderFrom + 1}–{renderEnd} of {total}
         </span>
-        <button
-          class="tb"
+        <Button
+          class={tb}
+          variant="outline"
           type="button"
           onclick={() => (limit += pageSize)}
         >
           Show {Math.min(pageSize, total - shown)} more
-        </button>
+        </Button>
       </div>
     {/if}
   {/if}
 </div>
-
-<style>
-  .log-viewer {
-    display: flex;
-    flex-direction: column;
-    height: 100%;
-    min-height: 0;
-    min-width: 0;
-    background: var(--m3-surface-container-lowest, var(--m3-surface));
-    border: 1px solid var(--app-border, var(--m3-outline-variant));
-    border-radius: var(--m3-shape-small, 8px);
-    overflow: hidden;
-  }
-
-  .log-toolbar {
-    flex: none;
-    display: flex;
-    align-items: center;
-    gap: 0.3rem;
-    flex-wrap: wrap;
-    padding: 0.35rem 0.5rem;
-    border-bottom: 1px solid var(--app-border, var(--m3-outline-variant));
-    background: var(--m3-surface-container, var(--m3-surface));
-  }
-
-  .log-search {
-    position: relative;
-    display: flex;
-    align-items: center;
-    flex: 1 1 11rem;
-    max-width: 22rem;
-    min-width: 8rem;
-  }
-
-  .search-icon {
-    position: absolute;
-    left: 0.45rem;
-    color: var(--m3-on-surface-variant);
-    font-size: 0.9rem;
-    pointer-events: none;
-  }
-
-  .log-search-input {
-    width: 100%;
-    border: 1px solid var(--app-border, var(--m3-outline-variant));
-    border-radius: var(--m3-shape-full, 9999px);
-    background: var(--m3-surface-container-lowest, var(--m3-surface));
-    color: var(--m3-on-surface);
-    font: inherit;
-    font-size: 0.72rem;
-    padding: 0.16rem 1.5rem 0.16rem 1.65rem;
-  }
-
-  .log-search-input:focus-visible {
-    outline: 2px solid var(--m3-primary);
-    outline-offset: 1px;
-  }
-
-  .log-search-input::-webkit-search-cancel-button {
-    display: none;
-  }
-
-  .clear-search {
-    position: absolute;
-    right: 0.3rem;
-    border: none;
-    background: none;
-    color: var(--m3-on-surface-variant);
-    font-size: 0.9rem;
-    line-height: 1;
-    cursor: pointer;
-    padding: 0 0.2rem;
-  }
-
-  .clear-search:hover {
-    color: var(--m3-on-surface);
-  }
-
-  .log-count {
-    flex: none;
-    font-size: 0.68rem;
-    color: var(--m3-on-surface-variant);
-    white-space: nowrap;
-  }
-
-  .refreshing {
-    font-style: italic;
-  }
-
-  .live-badge {
-    flex: none;
-    display: inline-flex;
-    align-items: center;
-    gap: 0.25rem;
-    font-size: 0.66rem;
-    font-weight: 600;
-    color: var(--m3-primary);
-    white-space: nowrap;
-  }
-
-  .live-console {
-    color: var(--m3-primary);
-    border-color: color-mix(in srgb, currentColor 40%, transparent);
-  }
-
-  .live-note {
-    flex: none;
-    display: flex;
-    align-items: center;
-    gap: 0.45rem;
-    flex-wrap: wrap;
-    padding: 0.4rem 0.6rem;
-    border-bottom: 1px solid var(--app-border, var(--m3-outline-variant));
-    background: color-mix(in srgb, var(--m3-tertiary-container) 35%, transparent);
-    color: var(--m3-on-surface);
-    font-size: 0.7rem;
-    line-height: 1.4;
-  }
-
-  .live-note-text {
-    flex: 1 1 16rem;
-    min-width: 0;
-  }
-
-  .spacer {
-    margin-left: auto;
-  }
-
-  .tb {
-    flex: none;
-    display: inline-flex;
-    align-items: center;
-    gap: 0.25rem;
-    border: 1px solid var(--app-border, var(--m3-outline-variant));
-    border-radius: var(--m3-shape-full, 9999px);
-    background: none;
-    color: var(--m3-on-surface-variant);
-    font: inherit;
-    font-size: 0.68rem;
-    line-height: 1.4;
-    padding: 0.08rem 0.55rem;
-    cursor: pointer;
-    white-space: nowrap;
-  }
-
-  .tb:hover:not(:disabled) {
-    background: var(--app-hover, var(--m3-surface-container-high));
-    color: var(--m3-on-surface);
-  }
-
-  .tb:focus-visible {
-    outline: 2px solid var(--m3-primary);
-    outline-offset: 1px;
-  }
-
-  .tb:disabled {
-    opacity: 0.5;
-    cursor: default;
-  }
-
-  .tb.active {
-    background: var(--m3-primary-container);
-    border-color: transparent;
-    color: var(--m3-on-primary-container);
-  }
-
-  .live-dot {
-    width: 0.42rem;
-    height: 0.42rem;
-    border-radius: 50%;
-    background: var(--m3-primary);
-    animation: pulse 1.4s ease-in-out infinite;
-  }
-
-  @keyframes pulse {
-    0%,
-    100% {
-      opacity: 1;
-    }
-    50% {
-      opacity: 0.25;
-    }
-  }
-
-  .log-error {
-    flex: none;
-    display: flex;
-    align-items: baseline;
-    gap: 0.4rem;
-    flex-wrap: wrap;
-    padding: 0.35rem 0.6rem;
-    background: var(--m3-error-container);
-    color: var(--m3-on-error-container);
-    font-size: 0.72rem;
-    border-bottom: 1px solid color-mix(in srgb, currentColor 25%, transparent);
-  }
-
-  .err-mark {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 1rem;
-    height: 1rem;
-    border: 1px solid currentColor;
-    border-radius: 50%;
-    font-size: 0.625rem;
-    font-weight: 700;
-    flex: none;
-  }
-
-  .err-text {
-    min-width: 0;
-    overflow-wrap: anywhere;
-  }
-
-  .err-hint {
-    opacity: 0.75;
-    font-size: 0.66rem;
-  }
-
-  .log-state {
-    flex: 1;
-    min-height: 0;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    gap: 0.45rem;
-    padding: 1.5rem;
-    text-align: center;
-    color: var(--m3-on-surface-variant);
-    font-size: 0.78rem;
-  }
-
-  .log-state p {
-    margin: 0;
-  }
-
-  .state-hint {
-    max-width: 26rem;
-    font-size: 0.7rem;
-    line-height: 1.45;
-    opacity: 0.85;
-  }
-
-  .state-spinner {
-    flex: none;
-    width: 1.1rem;
-    height: 1.1rem;
-    border: 2px solid var(--m3-outline-variant);
-    border-top-color: var(--m3-primary);
-    border-radius: 50%;
-    animation: spin 0.8s linear infinite;
-  }
-
-  .state-spinner.small {
-    width: 0.7rem;
-    height: 0.7rem;
-    border-width: 1.5px;
-  }
-
-  @keyframes spin {
-    to {
-      transform: rotate(360deg);
-    }
-  }
-
-  .log-scroll {
-    flex: 1;
-    min-height: 0;
-    overflow: auto;
-    padding: 0.35rem 0 0.6rem;
-    font-family: var(--app-font-mono, ui-monospace, Consolas, monospace);
-    font-size: 0.725rem;
-    line-height: 1.55;
-    color: var(--m3-on-surface);
-    background: var(--m3-surface-container-lowest, var(--m3-surface));
-  }
-
-  .log-scroll:focus-visible {
-    outline: 2px solid var(--m3-primary);
-    outline-offset: -2px;
-  }
-
-  .log-job {
-    border-bottom: 1px solid var(--m3-outline-variant);
-  }
-
-  .log-job:last-child {
-    border-bottom: none;
-  }
-
-  .log-job-head,
-  .log-step-head,
-  .log-group-head {
-    display: flex;
-    align-items: center;
-    gap: 0.4rem;
-    width: 100%;
-    border: none;
-    background: none;
-    color: inherit;
-    font: inherit;
-    text-align: left;
-    cursor: pointer;
-    min-width: 0;
-  }
-
-  .log-job-head {
-    position: sticky;
-    top: 0;
-    z-index: 2;
-    padding: 0.3rem 0.6rem;
-    background: var(--m3-surface-container);
-    font-size: 0.76rem;
-    font-weight: 600;
-  }
-
-  .log-job-head:hover,
-  .log-step-head:hover,
-  .log-group-head:hover {
-    background: var(--m3-surface-container-high, var(--m3-surface-container));
-  }
-
-  .log-job-head:focus-visible,
-  .log-step-head:focus-visible,
-  .log-group-head:focus-visible {
-    outline: 2px solid var(--m3-primary);
-    outline-offset: -2px;
-  }
-
-  .log-step {
-    border-top: 1px solid color-mix(in srgb, var(--m3-outline-variant) 40%, transparent);
-    transition: background-color 0.2s ease;
-  }
-
-  .log-step.highlighted {
-    background-color: color-mix(in srgb, var(--m3-primary) 14%, transparent);
-    outline: 1px solid var(--m3-primary);
-  }
-
-  .log-step.step-failed > .log-step-head {
-    border-left: 3px solid var(--m3-error);
-    background: color-mix(in srgb, var(--m3-error-container) 15%, transparent);
-  }
-
-  .log-step.step-running > .log-step-head {
-    border-left: 3px solid var(--m3-primary);
-  }
-
-  .step-status-icon {
-    flex: none;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 1rem;
-    font-size: 0.72rem;
-    line-height: 1;
-    font-weight: 700;
-  }
-
-  .step-status-icon.run-success {
-    color: var(--m3-primary);
-  }
-
-  .step-status-icon.run-failure {
-    color: var(--m3-error);
-  }
-
-  .step-status-icon.run-running {
-    color: var(--m3-tertiary);
-  }
-
-  .step-status-icon.run-skipped {
-    color: var(--m3-on-surface-variant);
-    opacity: 0.6;
-  }
-
-  .step-lines,
-  .step-state-badge,
-  .job-duration {
-    margin-right: 0.35rem;
-  }
-
-  .empty-step-notice {
-    display: flex;
-    align-items: center;
-    gap: 0.4rem;
-    padding: 0.45rem 1rem 0.45rem 2.6rem;
-    font-size: 0.68rem;
-    font-style: italic;
-    color: var(--m3-on-surface-variant);
-    opacity: 0.8;
-  }
-
-  .log-step-head {
-    padding: 0.24rem 0.6rem 0.24rem 1.1rem;
-    background: var(--m3-surface-container-low, var(--m3-surface));
-    font-size: 0.72rem;
-  }
-
-  .log-group-head {
-    padding: 0.18rem 0.6rem 0.18rem 2.1rem;
-    color: var(--m3-on-surface-variant);
-    font-size: 0.7rem;
-  }
-
-  .caret {
-    flex: none;
-    width: 0.8rem;
-    color: var(--m3-on-surface-variant);
-    font-size: 0.66rem;
-  }
-
-  .job-name,
-  .step-name,
-  .group-title {
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .job-name {
-    font-weight: 600;
-  }
-
-  .group-title {
-    font-style: italic;
-  }
-
-  .step-time {
-    margin-left: auto;
-  }
-
-  .muted {
-    color: var(--m3-on-surface-variant);
-    font-size: 0.66rem;
-    font-weight: 400;
-  }
-
-  .mini-chip {
-    flex: none;
-    border-radius: var(--m3-shape-full, 9999px);
-    font-size: 0.62rem;
-    line-height: 1.5;
-    padding: 0 0.4rem;
-    font-weight: 500;
-  }
-
-  .chip-error {
-    background: var(--m3-error-container);
-    color: var(--m3-on-error-container);
-  }
-
-  .chip-warning {
-    background: var(--m3-tertiary-container);
-    color: var(--m3-on-tertiary-container);
-  }
-
-  .log-group {
-    margin: 0;
-  }
-
-  .group-body {
-    border-left: 2px solid var(--m3-outline-variant);
-    margin-left: 2.4rem;
-  }
-
-  .log-line {
-    display: flex;
-    align-items: flex-start;
-    gap: 0.5rem;
-    width: max-content;
-    min-width: 100%;
-    padding: 0 0.7rem 0 0;
-    border-left: 2px solid transparent;
-  }
-
-  .wrap .log-line {
-    width: 100%;
-  }
-
-  .log-line:hover {
-    background: color-mix(in srgb, var(--m3-on-surface) 5%, transparent);
-  }
-
-  .ln {
-    flex: none;
-    width: 3rem;
-    padding-right: 0.15rem;
-    text-align: right;
-    color: var(--m3-on-surface-variant);
-    opacity: 0.55;
-    user-select: none;
-    font-size: 0.66rem;
-    line-height: inherit;
-  }
-
-  .lt {
-    flex: none;
-    color: var(--m3-on-surface-variant);
-    opacity: 0.7;
-    font-size: 0.66rem;
-    user-select: none;
-  }
-
-  .lm {
-    flex: 1;
-    min-width: 0;
-    white-space: pre;
-  }
-
-  .wrap .lm {
-    white-space: pre-wrap;
-    overflow-wrap: anywhere;
-  }
-
-  .level-error {
-    background: color-mix(in srgb, var(--m3-error-container) 55%, transparent);
-    border-left-color: var(--m3-error);
-  }
-
-  .level-error .lm {
-    color: var(--m3-on-error-container);
-  }
-
-  .level-warning {
-    background: color-mix(in srgb, var(--m3-tertiary-container) 55%, transparent);
-    border-left-color: var(--m3-tertiary);
-  }
-
-  .level-meta .lm {
-    color: var(--m3-on-surface-variant);
-    opacity: 0.85;
-  }
-
-  mark {
-    background: var(--m3-primary-container);
-    color: var(--m3-on-primary-container);
-    border-radius: 2px;
-  }
-
-  .log-more {
-    flex: none;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 0.6rem;
-    flex-wrap: wrap;
-    padding: 0.3rem 0.6rem;
-    border-top: 1px solid var(--app-border, var(--m3-outline-variant));
-    background: var(--m3-surface-container-low, var(--m3-surface));
-    color: var(--m3-on-surface-variant);
-    font-size: 0.68rem;
-  }
-
-  @media (max-width: 44rem) {
-    .log-count {
-      order: 2;
-    }
-    .spacer {
-      display: none;
-    }
-    .tb {
-      padding: 0.08rem 0.4rem;
-    }
-  }
-</style>

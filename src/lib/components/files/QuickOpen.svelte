@@ -19,7 +19,7 @@
   import { fileIconForPath, fileIconColorForPath } from "$lib/components/icons/fileIcons";
   import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.svelte";
   import Icon from "$lib/components/icons/Icon.svelte";
-  import { Spinner } from "$lib/components/m3";
+  import { Spinner } from "$lib/components/ui/spinner/index.js";
   import iconSearch from "@ktibow/iconset-material-symbols/search";
 
   let {
@@ -135,9 +135,24 @@
   }
 </script>
 
-<div class="scrim" role="presentation" onclick={onScrimClick}>
-  <div class="panel" role="dialog" aria-modal="true" aria-label="Go to file">
-    <div class="inputrow" role="combobox" aria-expanded={hits.length > 0} aria-controls="quick-open-list" aria-haspopup="listbox">
+<div
+  class="scrim fixed inset-0 z-[90] flex items-start justify-center bg-black/32 px-4 pt-[10vh] pb-4"
+  role="presentation"
+  onclick={onScrimClick}
+>
+  <div
+    class="panel flex max-h-[60vh] w-[min(34rem,100%)] flex-col overflow-hidden rounded-md border border-border bg-popover shadow-[0_12px_40px_rgb(0_0_0/0.35)]"
+    role="dialog"
+    aria-modal="true"
+    aria-label="Go to file"
+  >
+    <div
+      class="inputrow flex flex-none items-center gap-[0.45rem] border-b border-border px-3 py-[0.55rem] text-muted-foreground"
+      role="combobox"
+      aria-expanded={hits.length > 0}
+      aria-controls="quick-open-list"
+      aria-haspopup="listbox"
+    >
       <Icon icon={iconSearch} size={15} />
       <input
         bind:this={inputEl}
@@ -148,19 +163,20 @@
         aria-label="Go to file"
         autocomplete="off"
         spellcheck="false"
+        class="min-w-0 flex-1 border-0 bg-transparent font-sans text-sm text-foreground outline-none"
       />
       {#if loading}
-        <Spinner size={13} />
+        <Spinner class="size-[13px]" role="presentation" aria-hidden="true" />
       {/if}
     </div>
 
     {#if errorText !== ""}
-      <p class="state state-error" role="alert">{errorText}</p>
+      <p class="state state-error p-[0.9rem] text-center text-[0.8125rem] text-destructive" role="alert">{errorText}</p>
     {:else if !loading && hits.length === 0}
-      <p class="state">No matching files</p>
+      <p class="state p-[0.9rem] text-center text-[0.8125rem] text-muted-foreground">No matching files</p>
     {:else if visible.length > 0}
       <ul
-        class="list"
+        class="list m-0 min-h-0 flex-1 list-none overflow-y-auto p-1"
         id="quick-open-list"
         role="listbox"
         aria-label="Matching files"
@@ -169,7 +185,9 @@
           <!-- svelte-ignore a11y_click_events_have_key_events -- the
                input owns all keyboard navigation (combobox pattern) -->
           <li
-            class="row"
+            class="row flex cursor-pointer items-center gap-[0.45rem] rounded-sm px-2 py-[0.28rem] text-[0.8125rem] text-foreground {i === safeSelected
+              ? 'bg-primary/15'
+              : ''}"
             class:sel={i === safeSelected}
             role="option"
             aria-selected={i === safeSelected}
@@ -177,7 +195,7 @@
             onpointerenter={() => (selectedIndex = i)}
           >
             <span
-              class="ficon"
+              class="ficon inline-flex flex-none"
               style={`color:${fileIconColorForPath(hit.path, fileIconPreferences.theme)}`}
             >
               <Icon
@@ -185,131 +203,15 @@
                 size={14}
               />
             </span>
-            <span class="path">
-              {#each pathTokens(hit.path, query) as token, ti (ti)}{#if token.separator}<span class="sep">{token.text}</span>{:else if token.marked}<mark>{token.text}</mark>{:else}{token.text}{/if}{/each}
+            <span class="path min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap font-mono text-xs">
+              {#each pathTokens(hit.path, query) as token, ti (ti)}{#if token.separator}<span class="sep text-muted-foreground">{token.text}</span>{:else if token.marked}<mark class="bg-transparent font-semibold text-primary">{token.text}</mark>{:else}{token.text}{/if}{/each}
             </span>
           </li>
         {/each}
       </ul>
       {#if hits.length > visible.length}
-        <p class="more">{hits.length} matches — keep typing to narrow</p>
+        <p class="more m-0 flex-none border-t border-border px-3 py-[0.3rem] text-center text-[0.6875rem] text-muted-foreground">{hits.length} matches — keep typing to narrow</p>
       {/if}
     {/if}
   </div>
 </div>
-
-<style>
-  .scrim {
-    position: fixed;
-    inset: 0;
-    z-index: 90;
-    background: color-mix(in srgb, black 32%, transparent);
-    display: flex;
-    align-items: flex-start;
-    justify-content: center;
-    padding: 10vh 1rem 1rem;
-  }
-
-  .panel {
-    width: min(34rem, 100%);
-    max-height: 60vh;
-    display: flex;
-    flex-direction: column;
-    background: var(--m3-surface-container, var(--m3-surface));
-    border: 1px solid var(--app-border, var(--m3-outline-variant));
-    border-radius: var(--m3-shape-medium, 12px);
-    box-shadow: 0 12px 40px color-mix(in srgb, black 35%, transparent);
-    overflow: hidden;
-  }
-
-  .inputrow {
-    flex: none;
-    display: flex;
-    align-items: center;
-    gap: 0.45rem;
-    padding: 0.55rem 0.75rem;
-    border-bottom: 1px solid var(--app-border, var(--m3-outline-variant));
-    color: var(--m3-on-surface-variant);
-  }
-
-  .inputrow input {
-    flex: 1;
-    min-width: 0;
-    border: none;
-    background: none;
-    outline: none;
-    color: var(--m3-on-surface);
-    font: inherit;
-    font-size: 0.875rem;
-  }
-
-  .list {
-    margin: 0;
-    padding: 0.25rem;
-    list-style: none;
-    overflow-y: auto;
-    flex: 1;
-    min-height: 0;
-  }
-
-  .row {
-    display: flex;
-    align-items: center;
-    gap: 0.45rem;
-    padding: 0.28rem 0.5rem;
-    border-radius: var(--m3-shape-extra-small, 6px);
-    cursor: pointer;
-    font-size: 0.8125rem;
-    color: var(--m3-on-surface);
-  }
-
-  .row.sel {
-    background: var(--app-active, var(--m3-secondary-container, var(--m3-surface-container-highest)));
-  }
-
-  .ficon {
-    flex: none;
-    display: inline-flex;
-  }
-
-  .path {
-    flex: 1;
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    font-family: var(--app-font-mono, ui-monospace, Consolas, monospace);
-    font-size: 0.75rem;
-  }
-
-  .sep {
-    color: var(--m3-outline, var(--m3-on-surface-variant));
-  }
-
-  mark {
-    background: none;
-    color: var(--m3-primary);
-    font-weight: 600;
-  }
-
-  .state {
-    padding: 0.9rem;
-    color: var(--m3-on-surface-variant);
-    font-size: 0.8125rem;
-    text-align: center;
-  }
-
-  .state-error {
-    color: var(--m3-error);
-  }
-
-  .more {
-    flex: none;
-    margin: 0;
-    padding: 0.3rem 0.75rem;
-    border-top: 1px solid var(--app-border, var(--m3-outline-variant));
-    color: var(--m3-on-surface-variant);
-    font-size: 0.6875rem;
-    text-align: center;
-  }
-</style>

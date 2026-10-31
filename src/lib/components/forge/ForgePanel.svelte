@@ -30,6 +30,7 @@
   import { emitUiEvent } from "$lib/palette/events";
   import { toast } from "$lib/toast";
   import DialogShell from "$lib/components/safety/DialogShell.svelte";
+  import { Button } from "$lib/components/ui/button/index.js";
   import CreatePrDialog from "./CreatePrDialog.svelte";
   import {
     GH_AUTH_COMMAND,
@@ -62,6 +63,34 @@
   } from "./forgeModel";
 
   let { repoId }: { repoId: string } = $props();
+
+  // Tailwind replacements for the removed scoped styles: chip/icon tones per
+  // state class plus the shared toolbar-button utilities.
+  // Geometry/type only — border, background, hover and disabled chrome come
+  // from the ui Button primitive this is passed to as `class`.
+  const tb =
+    "flex-none gap-1 whitespace-nowrap rounded-sm px-2 py-[0.15rem] text-[0.72rem] leading-[1.4] font-normal text-muted-foreground";
+  const chipTone: Record<string, string> = {
+    "chip-pass": "bg-primary/15 text-primary",
+    "chip-fail": "bg-destructive/15 text-destructive",
+    "chip-pending": "bg-accent text-muted-foreground",
+    "chip-skipping": "bg-accent text-muted-foreground",
+    "chip-none": "bg-muted text-muted-foreground",
+    "chip-pr-open": "bg-primary/15 text-primary",
+    "chip-pr-merged": "bg-primary/10 text-primary",
+    "chip-pr-closed": "bg-accent text-muted-foreground",
+    "check-pass": "text-primary",
+    "check-fail": "text-destructive font-bold",
+    "check-pending": "text-muted-foreground",
+    "check-skipping": "text-muted-foreground",
+    "run-success": "bg-[var(--app-added-bg)] text-[var(--app-added)]",
+    "run-failure": "bg-[var(--app-deleted-bg)] text-[var(--app-deleted)]",
+    "run-running": "bg-primary/10 text-primary",
+    "run-queued": "bg-accent text-muted-foreground",
+    "run-cancelled": "bg-accent text-muted-foreground",
+    "run-skipped": "bg-accent text-muted-foreground",
+    "run-unknown": "bg-accent text-muted-foreground",
+  };
 
   type ForgeTab = "prs" | "actions";
   let tab = $state<ForgeTab>("prs");
@@ -505,33 +534,33 @@
   }
 </script>
 
-<aside class="forge-panel" aria-label="Pull requests">
+<aside class="forge-panel flex min-h-0 flex-col overflow-y-auto text-[0.8125rem]" aria-label="Pull requests">
   {#snippet prMeta(pr: PrInfo)}
     {@const review = reviewDecisionLabel(pr.review_decision)}
-    <div class="pr-meta">
+    <div class="pr-meta mt-[0.3rem] flex flex-wrap items-center gap-[0.375rem] text-[0.68rem] text-muted-foreground">
       {#if pr.author}
-        <span class="author" title="Author">by {pr.author}</span>
+        <span class="author flex-none" title="Author">by {pr.author}</span>
       {/if}
       {#if pr.additions || pr.deletions || pr.changed_files}
         <span
-          class="stats"
+          class="stats inline-flex flex-none items-baseline gap-[0.2rem] font-mono tabular-nums"
           title={`${pr.additions} additions, ${pr.deletions} deletions, ${pr.changed_files} changed files`}
         >
-          <span class="add">+{pr.additions}</span>
-          <span class="del">−{pr.deletions}</span>
-          <span class="files">{pr.changed_files} file{pr.changed_files === 1 ? "" : "s"}</span>
+          <span class="add text-[var(--app-added)]">+{pr.additions}</span>
+          <span class="del text-[var(--app-deleted)]">−{pr.deletions}</span>
+          <span class="files ml-[0.15rem]">{pr.changed_files} file{pr.changed_files === 1 ? "" : "s"}</span>
         </span>
       {/if}
       {#if review}
-        <span class="review">{review}</span>
+        <span class="review flex-none rounded-full bg-accent px-[0.4rem] py-[0.02rem] text-foreground">{review}</span>
       {/if}
       {#if pr.mergeable === "CONFLICTING"}
-        <span class="warn">Merge conflicts</span>
+        <span class="warn flex-none rounded-full bg-destructive/15 px-[0.4rem] py-[0.02rem] font-semibold text-destructive">Merge conflicts</span>
       {/if}
       {#if pr.labels.length > 0}
-        <span class="labels">
+        <span class="labels inline-flex min-w-0 flex-wrap gap-[0.2rem]">
           {#each pr.labels as label (label)}
-            <span class="label">{label}</span>
+            <span class="label max-w-36 truncate rounded-full border border-border px-[0.4rem] py-[0.02rem] text-[0.6563rem]">{label}</span>
           {/each}
         </span>
       {/if}
@@ -540,9 +569,9 @@
 
   {#snippet prBody(pr: PrInfo)}
     {#if pr.body.trim()}
-      <details class="pr-body">
-        <summary>Description</summary>
-        <div class="pr-body-text">{pr.body}</div>
+      <details class="pr-body mt-[0.35rem] text-[0.72rem] text-muted-foreground">
+        <summary class="w-fit cursor-pointer text-[0.7rem] text-primary">Description</summary>
+        <div class="pr-body-text mt-[0.3rem] max-h-64 overflow-auto whitespace-pre-wrap rounded-r-sm border-l-2 border-border bg-muted/40 px-[0.5rem] py-[0.4rem] leading-[1.45] [overflow-wrap:anywhere]">{pr.body}</div>
       </details>
     {/if}
   {/snippet}
@@ -550,97 +579,88 @@
   {#snippet actionsBlock(pr: PrInfo)}
     {@const busy = forgeStore.isBusy(repoId, pr.number)}
     {@const blocked = prMergeBlockedReason(pr)}
-    <div class="pr-actions" aria-label={`Actions for pull request ${pr.number}`}>
+    <div class="pr-actions mt-[0.45rem] flex flex-wrap items-center gap-1" aria-label={`Actions for pull request ${pr.number}`}>
       {#if isPrOpen(pr.state)}
-        <button
-          class="tb primary"
+        <Button class="{tb} border-primary bg-primary font-semibold text-primary-foreground hover:not-disabled:bg-primary hover:not-disabled:brightness-[1.06]" variant="outline"
           type="button"
           title={blocked ?? "Merge pull request"}
           disabled={busy || blocked !== null}
           onclick={() => openMerge(pr)}
         >
           Merge
-        </button>
-        <button
-          class="tb"
+        </Button>
+        <Button class={tb} variant="outline"
           type="button"
           title={pr.is_draft ? "Mark ready for review" : "Convert back to draft"}
           disabled={busy}
           onclick={() => void toggleDraft(pr)}
         >
           {pr.is_draft ? "Ready" : "Draft"}
-        </button>
-        <button
-          class="tb"
+        </Button>
+        <Button class={tb} variant="outline"
           type="button"
           title="Check out this branch locally"
           disabled={busy}
           onclick={() => void checkout(pr)}
         >
           Checkout
-        </button>
-        <button
-          class="tb"
+        </Button>
+        <Button class={tb} variant="outline"
           type="button"
           title="Approve this pull request"
           disabled={busy}
           onclick={() => openText("approve", pr)}
         >
           Approve
-        </button>
-        <button
-          class="tb"
+        </Button>
+        <Button class={tb} variant="outline"
           type="button"
           title="Request changes"
           disabled={busy}
           onclick={() => openText("changes", pr)}
         >
           Request changes
-        </button>
-        <button
-          class="tb"
+        </Button>
+        <Button class={tb} variant="outline"
           type="button"
           title="Add a comment"
           disabled={busy}
           onclick={() => openText("comment", pr)}
         >
           Comment
-        </button>
-        <button
-          class="tb danger"
+        </Button>
+        <Button class="{tb} danger border-current/45 text-[var(--app-deleted)]" variant="outline"
           type="button"
           title="Close without merging"
           disabled={busy}
           onclick={() => openText("close", pr)}
         >
           Close
-        </button>
+        </Button>
       {:else}
         {#if pr.state === "CLOSED"}
-          <button
-            class="tb"
+          <Button class={tb} variant="outline"
             type="button"
             disabled={busy}
             onclick={() => openText("reopen", pr)}
           >
             Reopen
-          </button>
+          </Button>
         {/if}
-        <button
-          class="tb"
+        <Button class={tb} variant="outline"
           type="button"
           title="Check out this branch locally"
           disabled={busy}
           onclick={() => void checkout(pr)}
         >
           Checkout
-        </button>
+        </Button>
       {/if}
-      <button class="tb" type="button" onclick={() => void openUrl(pr.url)}>
+      <Button class={tb} variant="outline" type="button" onclick={() => void openUrl(pr.url)}>
         Open
-      </button>
+      </Button>
       {#if busy}
-        <span class="busy" aria-live="polite">Working…</span>
+        <span class="busy text-[0.68rem] text-muted-foreground" aria-live="polite">Working…</span>
       {/if}
     </div>
   {/snippet}
@@ -650,44 +670,48 @@
     {@const loading = forgeStore.checksLoadingFor(repoId, pr.number)}
     {@const summary = summarizeChecks(checks ?? [])}
     {@const isWatching = watching.includes(pr.number)}
-    <div class="checks">
-      <div class="checks-head">
-        <span class="chip {worstChipClass(summary.worst)}">
+    <div class="checks mt-2 border-t border-border pt-[0.375rem]">
+      <div class="checks-head flex items-center gap-[0.375rem]">
+        <span
+          class="chip {worstChipClass(summary.worst)} {chipTone[worstChipClass(summary.worst)] ?? "bg-accent text-foreground"} flex-none rounded-full px-2 py-[0.05rem] text-[0.6563rem] font-semibold"
+        >
           {checkSummaryLabel(summary)}
         </span>
-        <span class="spacer"></span>
-        <button
-          class="tb"
+        <span class="spacer ml-auto"></span>
+        <Button
+          class="{tb} watching {isWatching ? "border-primary text-primary" : ""}"
+          variant="outline"
           type="button"
-          class:watching={isWatching}
           title={isWatching
             ? "Stop auto-refreshing checks"
             : "Auto-refresh checks every 10 seconds"}
           onclick={() => toggleWatch(pr.number)}
         >
           {isWatching ? "Watching" : "Watch"}
-        </button>
-        <button
-          class="tb"
+        </Button>
+        <Button class={tb} variant="outline"
           type="button"
           disabled={loading}
           onclick={() => void forgeStore.refreshChecks(repoId, pr.number)}
         >
           {loading ? "Loading…" : "Refresh checks"}
-        </button>
+        </Button>
       </div>
       {#if checks === null}
-        <p class="muted" aria-live="polite">Loading checks…</p>
+        <p class="muted my-1 text-[0.75rem] text-muted-foreground" aria-live="polite">Loading checks…</p>
       {:else if checks.length === 0}
-        <p class="muted">No checks reported for this PR.</p>
+        <p class="muted my-1 text-[0.75rem] text-muted-foreground">No checks reported for this PR.</p>
       {:else}
-        <ul class="check-list" role="list" aria-label="CI checks">
+        <ul class="check-list m-0 mt-1 flex list-none flex-col gap-[0.125rem] p-0" role="list" aria-label="CI checks">
           {#each checks as check (check.name)}
-            <li class="check">
-              <span class="check-icon {checkStateClass(check.state)}" aria-hidden="true">
+            <li class="check flex min-w-0 items-center gap-[0.375rem]">
+              <span
+                class="check-icon {checkStateClass(check.state)} {chipTone[checkStateClass(check.state)] ?? "text-muted-foreground"} w-[1em] flex-none text-center"
+                aria-hidden="true"
+              >
                 {checkIcon(check.state)}
               </span>
-              <span class="check-name" title={check.name}>{check.name}</span>
+              <span class="check-name truncate text-foreground" title={check.name}>{check.name}</span>
             </li>
           {/each}
         </ul>
@@ -695,10 +719,16 @@
     </div>
   {/snippet}
 
-  <div class="toolbar">
-    <div class="tabs" role="tablist" aria-label="GitHub panels">
+  <div class="toolbar sticky top-0 z-[1] flex flex-none flex-wrap items-center gap-[0.375rem] bg-background px-2 py-[0.375rem]">
+    <div
+      class="tabs inline-flex flex-none gap-[0.125rem] rounded-full border border-border p-[0.1rem]"
+      role="tablist"
+      aria-label="GitHub panels"
+    >
       <button
-        class="tab"
+        class="tab cursor-pointer rounded-full border-none bg-transparent px-[0.6rem] py-[0.12rem] text-[0.72rem] {tab === "prs"
+          ? "bg-accent font-semibold text-accent-foreground"
+          : "text-muted-foreground"}"
         class:active={tab === "prs"}
         type="button"
         role="tab"
@@ -708,7 +738,9 @@
         Pull requests
       </button>
       <button
-        class="tab"
+        class="tab cursor-pointer rounded-full border-none bg-transparent px-[0.6rem] py-[0.12rem] text-[0.72rem] {tab === "actions"
+          ? "bg-accent font-semibold text-accent-foreground"
+          : "text-muted-foreground"}"
         class:active={tab === "actions"}
         type="button"
         role="tab"
@@ -719,12 +751,12 @@
       </button>
     </div>
     {#if forgeStore.status?.available}
-      <span class="gh-meta" title="GitHub CLI version">gh {forgeStore.status.version}</span>
+      <span class="gh-meta text-[0.6875rem] text-muted-foreground" title="GitHub CLI version">gh {forgeStore.status.version}</span>
     {/if}
-    <span class="spacer"></span>
+    <span class="spacer ml-auto"></span>
     {#if tab === "prs"}
       <select
-        class="filter"
+        class="filter flex-none rounded-sm border border-border bg-background px-[0.25rem] py-[0.1rem] text-[0.72rem] text-foreground"
         aria-label="Pull request state filter"
         value={filter}
         onchange={(event) => setFilter(event.currentTarget.value)}
@@ -734,30 +766,34 @@
         <option value="merged">Merged</option>
         <option value="all">All</option>
       </select>
-      <button
-        class="tb"
+      <Button class={tb} variant="outline"
         type="button"
         onclick={() => void forgeStore.refreshStatus()}
         disabled={forgeStore.statusLoading}
       >
         {forgeStore.statusLoading ? "Checking…" : "Re-check gh"}
-      </button>
-      <button class="tb" type="button" onclick={refresh} disabled={prsLoading}>
+      </Button>
+      <Button class={tb} variant="outline" type="button" onclick={refresh} disabled={prsLoading}>
         {prsLoading ? "Loading…" : "Refresh"}
-      </button>
-      <button class="act" type="button" disabled={!canCreate} onclick={() => (dialogOpen = true)}>
+      </Button>
+      <Button
+        class="act h-auto flex-none rounded-full px-3 py-[0.2rem] text-[0.72rem]"
+        type="button"
+        disabled={!canCreate}
+        onclick={() => (dialogOpen = true)}
+      >
         Create PR
-      </button>
+      </Button>
     {:else}
       <input
-        class="filter branch-filter"
+        class="filter branch-filter w-[8.5rem] flex-none rounded-sm border border-border bg-background px-[0.25rem] py-[0.1rem] text-[0.72rem] text-foreground"
         aria-label="Run branch filter"
         placeholder="Branch (any)"
         bind:value={branchFilter}
         onchange={applyRunFilters}
       />
       <select
-        class="filter"
+        class="filter flex-none rounded-sm border border-border bg-background px-[0.25rem] py-[0.1rem] text-[0.72rem] text-foreground"
         aria-label="Run status filter"
         bind:value={statusFilter}
         onchange={applyRunFilters}
@@ -774,7 +810,7 @@
         <option value="action_required">Action required</option>
       </select>
       <select
-        class="filter workflow-filter"
+        class="filter workflow-filter max-w-[11rem] flex-none rounded-sm border border-border bg-background px-[0.25rem] py-[0.1rem] text-[0.72rem] text-foreground"
         aria-label="Workflow filter"
         bind:value={workflowFilter}
         onchange={applyRunFilters}
@@ -786,73 +822,71 @@
           </option>
         {/each}
       </select>
-      <button
-        class="tb"
+      <Button class={tb} variant="outline"
         type="button"
         onclick={() => void forgeStore.refreshStatus()}
         disabled={forgeStore.statusLoading}
       >
         {forgeStore.statusLoading ? "Checking…" : "Re-check gh"}
-      </button>
-      <button
-        class="tb"
+      </Button>
+      <Button class={tb} variant="outline"
         type="button"
         onclick={refreshActions}
         disabled={runsLoading || workflowsLoading}
       >
         {runsLoading ? "Loading…" : "Refresh"}
-      </button>
-      <button
-        class="act"
+      </Button>
+      <Button
+        class="act h-auto flex-none rounded-full px-3 py-[0.2rem] text-[0.72rem]"
         type="button"
         disabled={!context || dispatchBusy}
         onclick={openDispatchDialog}
       >
         Run workflow
-      </button>
+      </Button>
     {/if}
   </div>
 
   {#if banner.kind !== "ready"}
-    <div class="banner {banner.kind}" role="status">
-      <p class="banner-text">{banner.text}</p>
+    <div class="banner {banner.kind} mx-2 my-1 flex flex-wrap items-center gap-2 rounded-lg border border-border bg-muted/40 px-[0.625rem] py-2" role="status">
+      <p class="banner-text m-0 min-w-[12rem] flex-1 text-muted-foreground">{banner.text}</p>
       {#if banner.kind === "missing"}
-        <button class="tb" type="button" onclick={() => void openUrl(GH_INSTALL_DOCS_URL)}>
+        <Button class={tb} variant="outline" type="button" onclick={() => void openUrl(GH_INSTALL_DOCS_URL)}>
           Install guide
-        </button>
+        </Button>
       {:else if banner.kind === "unauthed"}
-        <code class="cmd">{GH_AUTH_COMMAND}</code>
-        <button class="tb" type="button" onclick={() => void copyAuthCommand()}>Copy</button>
+        <code class="cmd rounded-sm bg-accent px-[0.4rem] py-[0.1rem] font-mono text-xs text-foreground">{GH_AUTH_COMMAND}</code>
+        <Button class={tb} variant="outline" type="button" onclick={() => void copyAuthCommand()}>Copy</Button>
       {/if}
     </div>
   {:else if contextError}
-    <div class="banner missing" role="status">
-      <p class="banner-text">
+    <div class="banner missing mx-2 my-1 flex flex-wrap items-center gap-2 rounded-lg border border-border bg-muted/40 px-[0.625rem] py-2" role="status">
+      <p class="banner-text m-0 min-w-[12rem] flex-1 text-muted-foreground">
         The gh flow is unavailable for this repository: {contextError}
       </p>
     </div>
   {:else if tab === "actions"}
     {#if context}
-      <div class="section actions-section">
-        <div class="actions-summary">
-          <h3 class="section-title">Recent runs</h3>
-          <span class="muted" aria-live="polite">
+      <div class="section actions-section mx-2 mb-3 mt-2 flex flex-col gap-[0.35rem]">
+        <div class="actions-summary flex flex-wrap items-baseline gap-2">
+          <h3 class="section-title m-0 text-[0.72rem] font-semibold uppercase tracking-[0.04em] text-muted-foreground">Recent runs</h3>
+          <span class="muted m-0 text-[0.75rem] text-muted-foreground" aria-live="polite">
             {runs.length} run{runs.length === 1 ? "" : "s"}{#if activeRunCount > 0}
               · {activeRunCount} active{/if}{runsLoading ? " · loading…" : ""}
           </span>
           {#if workflowsLoading}
-            <span class="muted">Refreshing workflows…</span>
+            <span class="muted m-0 text-[0.75rem] text-muted-foreground">Refreshing workflows…</span>
           {/if}
         </div>
         {#if runsError}
-          <p class="error-inline" role="alert">{runsError}</p>
+          <p class="error-inline my-[0.15rem] text-xs text-destructive [overflow-wrap:anywhere]" role="alert">{runsError}</p>
         {/if}
         {#if workflowsError}
-          <p class="error-inline" role="alert">Workflows: {workflowsError}</p>
+          <p class="error-inline my-[0.15rem] text-xs text-destructive [overflow-wrap:anywhere]" role="alert">Workflows: {workflowsError}</p>
         {/if}
 
         {#if runs.length === 0}
-          <p class="muted">
+          <p class="muted my-1 text-[0.75rem] text-muted-foreground">
             {runsLoading
               ? "Loading workflow runs…"
               : runsError
@@ -860,98 +894,95 @@
                 : "No workflow runs match these filters."}
           </p>
         {:else}
-          <ul class="wf-runs" role="list" aria-label="Workflow runs">
+          <ul class="wf-runs m-0 flex list-none flex-col gap-1 p-0" role="list" aria-label="Workflow runs">
             {#each runs as run (run.database_id)}
               {@const kind = runStateKind(run)}
               {@const active = runIsActive(run)}
               {@const busy = forgeStore.isRunBusy(repoId, run.database_id)}
               {@const age = prAgeLabel(run.created_at, now)}
               {@const duration = runElapsedLabel(run, now)}
-              <li class="wf-run">
-                <div class="wf-run-line">
+              <li class="wf-run min-w-0 overflow-hidden rounded-lg border border-border bg-card">
+                <div class="wf-run-line flex min-w-0 flex-wrap items-start gap-[0.375rem] px-2 py-[0.375rem]">
                   <button
-                    class="wf-run-main"
+                    class="wf-run-main group flex min-w-0 flex-[1_1_12rem] cursor-pointer flex-wrap items-baseline gap-x-[0.375rem] gap-y-[0.15rem] rounded-sm border-none bg-transparent p-0 text-left text-[0.7813rem] text-inherit focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary"
                     type="button"
                     title="Open run details, jobs and logs"
                     onclick={() => openRun(run)}
                   >
-                    <span class="run-chip {runStateClass(kind)}">
+                    <span
+                      class="run-chip {runStateClass(kind)} {chipTone[runStateClass(kind)] ?? "bg-accent text-foreground"} mt-[0.05rem] inline-flex flex-none items-center gap-[0.15rem] whitespace-nowrap rounded-full px-[0.45rem] py-[0.05rem] text-[0.6563rem] font-semibold"
+                    >
                       <span aria-hidden="true">{runStateIcon(kind)}</span>
                       {runStateLabel(run)}
                     </span>
-                    <span class="wf-run-name" title={run.name}>{run.name}</span>
-                    <span class="wf-run-title" title={run.display_title}>
+                    <span class="wf-run-name max-w-[40%] flex-[0_1_auto] truncate font-semibold group-hover:underline" title={run.name}>{run.name}</span>
+                    <span class="wf-run-title min-w-0 flex-[1_1_8rem] truncate text-muted-foreground" title={run.display_title}>
                       {run.display_title}
                     </span>
-                    <span class="wf-run-meta">
-                      <span class="pr-no">#{run.number}</span>
+                    <span class="wf-run-meta flex min-w-0 flex-[1_1_100%] flex-wrap items-center gap-[0.375rem] text-[0.68rem] text-muted-foreground">
+                      <span class="pr-no flex-none font-mono text-[0.72rem] text-muted-foreground">#{run.number}</span>
                       {#if run.head_branch}
-                        <code class="wf-branch" title="Head branch">{run.head_branch}</code>
+                        <code class="wf-branch max-w-56 truncate font-mono text-[0.68rem] text-muted-foreground" title="Head branch">{run.head_branch}</code>
                       {/if}
-                      <span class="wf-event" title="Trigger event">
+                      <span class="wf-event whitespace-nowrap rounded-full border border-border px-[0.35rem] text-[0.6375rem]" title="Trigger event">
                         {workflowEventLabel(run.event)}
                       </span>
                       {#if run.attempt > 1}
-                        <span class="wf-attempt">attempt {run.attempt}</span>
+                        <span class="wf-attempt whitespace-nowrap tabular-nums">attempt {run.attempt}</span>
                       {/if}
                       {#if age}
-                        <span class="age">{age} ago</span>
+                        <span class="age text-[0.6875rem] text-muted-foreground">{age} ago</span>
                       {/if}
                       {#if duration}
-                        <span class="wf-duration">{duration}</span>
+                        <span class="wf-duration whitespace-nowrap tabular-nums">{duration}</span>
                       {/if}
                     </span>
                   </button>
-                  <span class="wf-run-actions">
+                  <span class="wf-run-actions ml-auto flex flex-none flex-wrap items-center justify-end gap-[0.2rem]">
                     {#if active}
-                      <button
-                        class="tb danger"
+                      <Button class="{tb} danger border-current/45 text-[var(--app-deleted)]" variant="outline"
                         type="button"
                         title="Cancel this run"
                         disabled={busy}
                         onclick={() => void cancelRun(run)}
                       >
                         {busy ? "Cancelling…" : "Cancel"}
-                      </button>
+                      </Button>
                     {/if}
                     {#if runCanRerun(run)}
-                      <button
-                        class="tb"
+                      <Button class={tb} variant="outline"
                         type="button"
                         title="Rerun all jobs"
                         disabled={busy}
                         onclick={() => void rerunRun(run, false)}
                       >
                         {busy ? "Working…" : "Rerun"}
-                      </button>
+                      </Button>
                       {#if runHasFailures(run)}
-                        <button
-                          class="tb"
+                        <Button class={tb} variant="outline"
                           type="button"
                           title="Rerun only failed jobs"
                           disabled={busy}
                           onclick={() => void rerunRun(run, true)}
                         >
                           Rerun failed
-                        </button>
+                        </Button>
                       {/if}
                     {/if}
-                    <button
-                      class="tb primary"
+                    <Button class="{tb} primary border-primary bg-primary font-semibold text-primary-foreground hover:not-disabled:bg-primary hover:not-disabled:brightness-[1.06]" variant="outline"
                       type="button"
                       title="Open run details, jobs and logs"
                       onclick={() => openRun(run)}
                     >
                       Details
-                    </button>
-                    <button
-                      class="tb"
+                    </Button>
+                    <Button class={tb} variant="outline"
                       type="button"
                       title="Open run on GitHub"
                       onclick={() => void openUrl(run.url)}
                     >
                       Open
-                    </button>
+                    </Button>
                   </span>
                 </div>
               </li>
@@ -962,19 +993,21 @@
     {/if}
   {:else if context}
     {#if branchPr}
-      <div class="card current">
-        <div class="card-head">
-          <span class="chip {prStateClass(branchPr.state)}">{prStateLabel(branchPr.state)}</span>
+      <div class="card current mx-2 my-1 rounded-lg border border-border bg-card px-[0.625rem] py-2">
+        <div class="card-head flex min-w-0 flex-wrap items-center gap-[0.375rem]">
+          <span
+            class="chip {prStateClass(branchPr.state)} {chipTone[prStateClass(branchPr.state)] ?? "bg-accent text-foreground"} flex-none rounded-full px-2 py-[0.05rem] text-[0.6563rem] font-semibold"
+          >{prStateLabel(branchPr.state)}</span>
           {#if branchPr.is_draft}
-            <span class="chip chip-draft">Draft</span>
+            <span class="chip chip-draft flex-none rounded-full border border-border bg-transparent px-2 py-[0.05rem] text-[0.6563rem] font-semibold text-muted-foreground">Draft</span>
           {/if}
-          <span class="pr-title" title={branchPr.title}>{branchPr.title}</span>
-          <span class="pr-no">#{branchPr.number}</span>
+          <span class="pr-title min-w-0 truncate font-semibold text-foreground" title={branchPr.title}>{branchPr.title}</span>
+          <span class="pr-no flex-none font-mono text-[0.72rem] text-muted-foreground">#{branchPr.number}</span>
         </div>
-        <div class="card-sub">
-          <span class="refs">{branchPr.head_ref_name} → {branchPr.base_ref_name}</span>
+        <div class="card-sub mt-[0.375rem] flex flex-wrap items-center gap-2">
+          <span class="refs font-mono text-[0.72rem] text-muted-foreground">{branchPr.head_ref_name} → {branchPr.base_ref_name}</span>
           {#if branchAge}
-            <span class="age" title="Opened"
+            <span class="age text-[0.6875rem] text-muted-foreground" title="Opened"
               >opened {branchAge === "just now" ? "just now" : `${branchAge} ago`}</span
             >
           {/if}
@@ -987,16 +1020,20 @@
         {/if}
       </div>
     {:else}
-      <div class="card empty">
-        <p>
+      <div class="card empty mx-2 my-1 flex flex-wrap items-center gap-3 rounded-lg border border-border bg-card px-[0.625rem] py-2">
+        <p class="m-0 text-muted-foreground">
           No pull request for branch <code>{context.branch}</code> yet.
         </p>
-        <button class="act" type="button" onclick={() => (dialogOpen = true)}>Create PR</button>
+        <Button
+          class="act h-auto flex-none rounded-full px-3 py-[0.2rem] text-[0.72rem]"
+          type="button"
+          onclick={() => (dialogOpen = true)}
+        >Create PR</Button>
       </div>
     {/if}
 
-    <div class="section">
-      <h3 class="section-title">
+    <div class="section mx-2 mb-3 mt-2">
+      <h3 class="section-title mb-[0.25rem] mt-0 text-[0.72rem] font-semibold uppercase tracking-[0.04em] text-muted-foreground">
         {filter === "open"
           ? "Open pull requests"
           : filter === "all"
@@ -1004,44 +1041,45 @@
             : `${filter[0]?.toUpperCase() ?? ""}${filter.slice(1)} pull requests`}
       </h3>
       {#if listedPrs.length === 0}
-        <p class="muted">{emptyLabel}</p>
+        <p class="muted my-1 text-[0.75rem] text-muted-foreground">{emptyLabel}</p>
       {:else}
-        <ul class="prs" role="list" aria-label="Pull requests">
+        <ul class="prs m-0 flex list-none flex-col gap-1 p-0" role="list" aria-label="Pull requests">
           {#each listedPrs as pr (pr.number)}
             <li>
-              <div class="pr-line">
+              <div class="pr-line flex min-w-0 items-start gap-1">
                 <button
-                  class="pr-row"
+                  class="pr-row flex-1 flex w-full min-w-0 cursor-pointer items-center gap-[0.375rem] rounded-lg border border-border bg-card px-2 py-[0.375rem] text-left text-[0.7813rem] text-foreground hover:bg-accent focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary"
                   type="button"
                   aria-expanded={expandedNumber === pr.number}
                   title="Show checks and actions"
                   onclick={() => toggleExpanded(pr.number)}
                 >
-                  <span class="expand-icon" aria-hidden="true">
+                  <span class="expand-icon w-[1em] flex-none text-center text-muted-foreground" aria-hidden="true">
                     {expandedNumber === pr.number ? "▾" : "▸"}
                   </span>
-                  <span class="chip {prStateClass(pr.state)}">{prStateLabel(pr.state)}</span>
+                  <span
+                    class="chip {prStateClass(pr.state)} {chipTone[prStateClass(pr.state)] ?? "bg-accent text-foreground"} flex-none rounded-full px-2 py-[0.05rem] text-[0.6563rem] font-semibold"
+                  >{prStateLabel(pr.state)}</span>
                   {#if pr.is_draft}
-                    <span class="chip chip-draft">Draft</span>
+                    <span class="chip chip-draft flex-none rounded-full border border-border bg-transparent px-2 py-[0.05rem] text-[0.6563rem] font-semibold text-muted-foreground">Draft</span>
                   {/if}
-                  <span class="pr-title" title={pr.title}>{pr.title}</span>
-                  <span class="pr-no">#{pr.number}</span>
-                  <span class="refs">{pr.head_ref_name} → {pr.base_ref_name}</span>
+                  <span class="pr-title min-w-0 truncate font-semibold text-foreground" title={pr.title}>{pr.title}</span>
+                  <span class="pr-no flex-none font-mono text-[0.72rem] text-muted-foreground">#{pr.number}</span>
+                  <span class="refs ml-auto max-w-[40%] flex-none truncate font-mono text-[0.72rem] text-muted-foreground">{pr.head_ref_name} → {pr.base_ref_name}</span>
                 </button>
-                <button
-                  class="tb"
+                <Button class="{tb} mt-[0.375rem]" variant="outline"
                   type="button"
                   title="Open on GitHub"
                   onclick={() => void openUrl(pr.url)}
                 >
                   Open
-                </button>
+                </Button>
               </div>
-              <div class="pr-sub">
+              <div class="pr-sub pb-[0.2rem] pl-[1.5rem] pr-2 pt-[0.15rem]">
                 {@render prMeta(pr)}
               </div>
               {#if expandedNumber === pr.number}
-                <div class="expand">
+                <div class="expand mb-1 ml-[1.5rem] mt-1">
                   {@render prBody(pr)}
                   {@render actionsBlock(pr)}
                   {#if isPrOpen(pr.state)}
@@ -1069,9 +1107,12 @@
     <p class="sdlg-message">
       Trigger a <code>workflow_dispatch</code> run on a branch or tag.
     </p>
-    <label class="dialog-field">
+    <label class="dialog-field mt-2 flex items-center gap-2 text-[0.8125rem]">
       <span>Workflow</span>
-      <select bind:value={dispatchWorkflow}>
+      <select
+        class="flex-1 rounded-sm border border-border bg-background px-[0.35rem] py-[0.25rem] text-foreground"
+        bind:value={dispatchWorkflow}
+      >
         {#if dispatchable.length === 0}
           <option value="">No active workflows</option>
         {/if}
@@ -1080,19 +1121,19 @@
         {/each}
       </select>
     </label>
-    <label class="dialog-field">
+    <label class="dialog-field mt-2 flex items-center gap-2 text-[0.8125rem]">
       <span>Ref</span>
       <input
-        class="dialog-text"
+        class="dialog-text mt-0 w-auto min-w-0 flex-1 rounded-sm border border-border bg-background p-2 text-[0.8125rem] text-foreground"
         aria-label="Branch or tag to run on"
         placeholder={context?.branch ?? "main"}
         bind:value={dispatchRef}
       />
     </label>
-    <label class="dialog-field dialog-field-top">
-      <span>Inputs</span>
+    <label class="dialog-field dialog-field-top mt-2 flex items-start gap-2 text-[0.8125rem]">
+      <span class="pt-[0.35rem]">Inputs</span>
       <textarea
-        class="dialog-text"
+        class="dialog-text mt-0 w-auto min-w-0 flex-1 resize-y rounded-sm border border-border bg-background p-2 text-[0.8125rem] text-foreground"
         aria-label="Workflow inputs"
         rows="4"
         placeholder={"One key=value per line\nversion=1.2.3\ndry_run=true"}
@@ -1100,7 +1141,7 @@
       ></textarea>
     </label>
     {#if dispatchError}
-      <p class="dialog-error" role="alert">{dispatchError}</p>
+      <p class="dialog-error m-0 mt-[0.6rem] text-xs text-destructive" role="alert">{dispatchError}</p>
     {/if}
     {#snippet actions()}
       <button
@@ -1131,24 +1172,27 @@
     <p class="sdlg-message">
       #{mergeTarget?.number} {mergeTarget?.title ?? ""}
     </p>
-    <label class="dialog-field">
+    <label class="dialog-field mt-2 flex items-center gap-2 text-[0.8125rem]">
       <span>Method</span>
-      <select bind:value={mergeMethod}>
+      <select
+        class="flex-1 rounded-sm border border-border bg-background px-[0.35rem] py-[0.25rem] text-foreground"
+        bind:value={mergeMethod}
+      >
         <option value="squash">Squash and merge</option>
         <option value="merge">Create a merge commit</option>
         <option value="rebase">Rebase and merge</option>
       </select>
     </label>
-    <label class="dialog-check">
+    <label class="dialog-check mt-2 flex items-center gap-2 text-[0.8125rem] text-muted-foreground">
       <input type="checkbox" bind:checked={deleteBranch} />
       Delete the branch after merging
     </label>
-    <label class="dialog-check">
+    <label class="dialog-check mt-2 flex items-center gap-2 text-[0.8125rem] text-muted-foreground">
       <input type="checkbox" bind:checked={autoMerge} />
       Enable auto-merge (merge when required checks pass)
     </label>
     {#if mergeError}
-      <p class="dialog-error" role="alert">{mergeError}</p>
+      <p class="dialog-error m-0 mt-[0.6rem] text-xs text-destructive" role="alert">{mergeError}</p>
     {/if}
     {#snippet actions()}
       <button
@@ -1181,7 +1225,7 @@
       {textBodyRequired ? " — a message is required." : " — optional message."}
     </p>
     <textarea
-      class="dialog-text"
+      class="dialog-text mt-1 w-full resize-y rounded-sm border border-border bg-background p-2 text-[0.8125rem] text-foreground"
       rows="5"
       bind:value={textBody}
       placeholder={textAction === "close"
@@ -1192,7 +1236,7 @@
       data-autofocus
     ></textarea>
     {#if textError}
-      <p class="dialog-error" role="alert">{textError}</p>
+      <p class="dialog-error m-0 mt-[0.6rem] text-xs text-destructive" role="alert">{textError}</p>
     {/if}
     {#snippet actions()}
       <button
@@ -1216,807 +1260,3 @@
     {/snippet}
   </DialogShell>
 </aside>
-
-<style>
-  .forge-panel {
-    display: flex;
-    flex-direction: column;
-    min-height: 0;
-    overflow-y: auto;
-    font-size: 0.8125rem;
-  }
-
-  .toolbar {
-    display: flex;
-    align-items: center;
-    gap: 0.375rem;
-    flex-wrap: wrap;
-    padding: 0.375rem 0.5rem;
-    flex: none;
-    position: sticky;
-    top: 0;
-    background: var(--m3-surface, inherit);
-    z-index: 1;
-  }
-
-  .tabs {
-    flex: none;
-    display: inline-flex;
-    gap: 0.125rem;
-    padding: 0.1rem;
-    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    border-radius: var(--m3-shape-full, 9999px);
-  }
-
-  .tab {
-    border: none;
-    border-radius: var(--m3-shape-full, 9999px);
-    background: none;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    font: inherit;
-    font-size: 0.72rem;
-    padding: 0.12rem 0.6rem;
-    cursor: pointer;
-  }
-
-  .tab.active {
-    background: var(--m3-primary-container, var(--m3-surface-container-high));
-    color: var(--m3-on-primary-container, var(--m3-on-surface));
-    font-weight: 600;
-  }
-
-  .filter {
-    flex: none;
-    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    border-radius: var(--m3-shape-extra-small, 4px);
-    background: var(--m3-surface-container-low, var(--m3-surface));
-    color: var(--m3-on-surface);
-    font: inherit;
-    font-size: 0.72rem;
-    padding: 0.1rem 0.25rem;
-  }
-
-  .branch-filter {
-    width: 8.5rem;
-  }
-
-  .workflow-filter {
-    max-width: 11rem;
-  }
-
-  .gh-meta {
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    font-size: 0.6875rem;
-  }
-
-  .spacer {
-    margin-left: auto;
-  }
-
-  .banner {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    flex-wrap: wrap;
-    margin: 0.25rem 0.5rem;
-    padding: 0.5rem 0.625rem;
-    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    border-radius: var(--m3-shape-small, 8px);
-    background: var(--m3-surface-container-low, var(--m3-surface));
-  }
-
-  .banner-text {
-    margin: 0;
-    flex: 1;
-    min-width: 12rem;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-  }
-
-  .cmd {
-    font-family: ui-monospace, Consolas, monospace;
-    font-size: 0.75rem;
-    padding: 0.1rem 0.4rem;
-    border-radius: var(--m3-shape-extra-small, 4px);
-    background: var(--m3-surface-container-highest, var(--m3-surface-container));
-    color: var(--m3-on-surface);
-  }
-
-  .card {
-    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    border-radius: var(--m3-shape-small, 8px);
-    background: var(--m3-surface-container-low, var(--m3-surface));
-    padding: 0.5rem 0.625rem;
-    margin: 0.25rem 0.5rem;
-  }
-
-  .card-head {
-    display: flex;
-    align-items: center;
-    gap: 0.375rem;
-    flex-wrap: wrap;
-    min-width: 0;
-  }
-
-  .pr-title {
-    font-weight: 600;
-    color: var(--m3-on-surface);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    min-width: 0;
-  }
-
-  .pr-no {
-    flex: none;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    font-family: ui-monospace, Consolas, monospace;
-    font-size: 0.72rem;
-  }
-
-  .card-sub {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    margin-top: 0.375rem;
-    flex-wrap: wrap;
-  }
-
-  .refs {
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    font-size: 0.72rem;
-    font-family: ui-monospace, Consolas, monospace;
-  }
-
-  .age {
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    font-size: 0.6875rem;
-  }
-
-  .pr-meta {
-    display: flex;
-    align-items: center;
-    gap: 0.375rem;
-    flex-wrap: wrap;
-    margin-top: 0.3rem;
-    font-size: 0.68rem;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-  }
-
-  .pr-body {
-    margin-top: 0.35rem;
-    font-size: 0.72rem;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-  }
-
-  .pr-body summary {
-    cursor: pointer;
-    color: var(--m3-primary);
-    font-size: 0.7rem;
-    width: fit-content;
-  }
-
-  .pr-body-text {
-    margin-top: 0.3rem;
-    max-height: 16rem;
-    overflow: auto;
-    white-space: pre-wrap;
-    overflow-wrap: anywhere;
-    line-height: 1.45;
-    padding: 0.4rem 0.5rem;
-    border-left: 2px solid var(--m3-outline-variant, var(--m3-primary));
-    background: var(--m3-surface-container-low, transparent);
-    border-radius: 0 var(--m3-shape-extra-small, 4px)
-      var(--m3-shape-extra-small, 4px) 0;
-  }
-
-  .author {
-    flex: none;
-  }
-
-  .stats {
-    flex: none;
-    display: inline-flex;
-    align-items: baseline;
-    gap: 0.2rem;
-    font-family: ui-monospace, Consolas, monospace;
-    font-variant-numeric: tabular-nums;
-  }
-
-  .stats .add {
-    color: var(--app-added, var(--m3-primary));
-  }
-
-  .stats .del {
-    color: var(--app-deleted, var(--m3-error));
-  }
-
-  .stats .files {
-    margin-left: 0.15rem;
-  }
-
-  .review {
-    flex: none;
-    border-radius: var(--m3-shape-full, 9999px);
-    padding: 0.02rem 0.4rem;
-    background: var(--m3-surface-container-highest, var(--m3-surface-container));
-    color: var(--m3-on-surface);
-  }
-
-  .warn {
-    flex: none;
-    border-radius: var(--m3-shape-full, 9999px);
-    padding: 0.02rem 0.4rem;
-    background: var(--m3-error-container, var(--m3-error));
-    color: var(--m3-on-error-container, var(--m3-on-error));
-    font-weight: 600;
-  }
-
-  .labels {
-    display: inline-flex;
-    flex-wrap: wrap;
-    gap: 0.2rem;
-    min-width: 0;
-  }
-
-  .label {
-    max-width: 9rem;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    border-radius: var(--m3-shape-full, 9999px);
-    padding: 0.02rem 0.4rem;
-    font-size: 0.6563rem;
-  }
-
-  .pr-sub {
-    padding: 0.15rem 0.5rem 0.2rem 1.5rem;
-  }
-
-  .pr-actions {
-    display: flex;
-    align-items: center;
-    gap: 0.25rem;
-    flex-wrap: wrap;
-    margin-top: 0.45rem;
-  }
-
-  .busy {
-    font-size: 0.68rem;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-  }
-
-  .tb.primary {
-    border-color: var(--m3-primary);
-    background: var(--m3-primary);
-    color: var(--m3-on-primary);
-    font-weight: 600;
-  }
-
-  .tb.primary:hover:not(:disabled) {
-    background: var(--m3-primary);
-    filter: brightness(1.06);
-  }
-
-  .tb.danger {
-    border-color: var(--m3-error, var(--m3-primary));
-    color: var(--m3-error, var(--m3-primary));
-  }
-
-  .tb.watching {
-    border-color: var(--m3-primary);
-    color: var(--m3-primary);
-  }
-
-  .dialog-field {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    margin-top: 0.5rem;
-    font-size: 0.8125rem;
-  }
-
-  .dialog-field select {
-    flex: 1;
-    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    border-radius: var(--m3-shape-extra-small, 4px);
-    background: var(--m3-surface-container-low, var(--m3-surface));
-    color: var(--m3-on-surface);
-    font: inherit;
-    padding: 0.25rem 0.35rem;
-  }
-
-  .dialog-field-top {
-    align-items: flex-start;
-  }
-
-  .dialog-field-top > span {
-    padding-top: 0.35rem;
-  }
-
-  .dialog-field .dialog-text {
-    flex: 1;
-    width: auto;
-    min-width: 0;
-    margin-top: 0;
-  }
-
-  .dialog-check {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    margin-top: 0.5rem;
-    font-size: 0.8125rem;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-  }
-
-  .dialog-text {
-    width: 100%;
-    box-sizing: border-box;
-    margin-top: 0.25rem;
-    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    border-radius: var(--m3-shape-extra-small, 4px);
-    background: var(--m3-surface-container-low, var(--m3-surface));
-    color: var(--m3-on-surface);
-    font: inherit;
-    font-size: 0.8125rem;
-    padding: 0.5rem;
-    resize: vertical;
-  }
-
-  .dialog-error {
-    margin: 0.6rem 0 0;
-    color: var(--m3-error, var(--m3-primary));
-    font-size: 0.75rem;
-  }
-
-  .checks {
-    margin-top: 0.5rem;
-    border-top: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    padding-top: 0.375rem;
-  }
-
-  .checks-head {
-    display: flex;
-    align-items: center;
-    gap: 0.375rem;
-  }
-
-  .check-list {
-    margin: 0.25rem 0 0;
-    padding: 0;
-    list-style: none;
-    display: flex;
-    flex-direction: column;
-    gap: 0.125rem;
-  }
-
-  .check {
-    display: flex;
-    align-items: center;
-    gap: 0.375rem;
-    min-width: 0;
-  }
-
-  .check-icon {
-    flex: none;
-    width: 1em;
-    text-align: center;
-  }
-
-  .check-pass {
-    color: var(--m3-primary, inherit);
-  }
-
-  .check-fail {
-    color: var(--m3-error, inherit);
-    font-weight: 700;
-  }
-
-  .check-pending {
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-  }
-
-  .check-skipping {
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-  }
-
-  .check-name {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    color: var(--m3-on-surface);
-  }
-
-  .chip {
-    flex: none;
-    border-radius: var(--m3-shape-full, 9999px);
-    padding: 0.05rem 0.5rem;
-    font-size: 0.6563rem;
-    font-weight: 600;
-    background: var(--m3-surface-container-highest, var(--m3-surface-container));
-    color: var(--m3-on-surface);
-  }
-
-  .chip-pass {
-    background: var(--m3-primary-container, var(--m3-surface-container-high));
-    color: var(--m3-on-primary-container, var(--m3-on-surface));
-  }
-
-  .chip-fail {
-    background: var(--m3-error-container, var(--m3-error));
-    color: var(--m3-on-error-container, var(--m3-on-error));
-  }
-
-  .chip-pending,
-  .chip-skipping {
-    background: var(--m3-surface-container-highest, var(--m3-surface-container));
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-  }
-
-  .chip-none {
-    background: var(--m3-surface-container, var(--m3-surface-container-low));
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-  }
-
-  .chip-pr-open {
-    background: var(--m3-primary-container, var(--m3-surface-container-high));
-    color: var(--m3-on-primary-container, var(--m3-on-surface));
-  }
-
-  .chip-pr-merged {
-    background: var(--m3-tertiary-container, var(--m3-surface-container-high));
-    color: var(--m3-on-tertiary-container, var(--m3-on-surface));
-  }
-
-  .chip-pr-closed {
-    background: var(--m3-surface-container-highest, var(--m3-surface-container));
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-  }
-
-  .chip-draft {
-    background: none;
-    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-  }
-
-  .section {
-    margin: 0.5rem 0.5rem 0.75rem;
-  }
-
-  .actions-section {
-    display: flex;
-    flex-direction: column;
-    gap: 0.35rem;
-  }
-
-  .actions-summary {
-    display: flex;
-    align-items: baseline;
-    gap: 0.5rem;
-    flex-wrap: wrap;
-  }
-
-  .actions-summary .section-title,
-  .actions-summary .muted {
-    margin: 0;
-  }
-
-  .error-inline {
-    margin: 0.15rem 0;
-    color: var(--m3-error, var(--m3-primary));
-    font-size: 0.75rem;
-    overflow-wrap: anywhere;
-  }
-
-  .wf-runs {
-    margin: 0;
-    padding: 0;
-    list-style: none;
-    display: flex;
-    flex-direction: column;
-    gap: 0.25rem;
-  }
-
-  .wf-run {
-    min-width: 0;
-    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    border-radius: var(--m3-shape-small, 8px);
-    background: var(--m3-surface-container-low, var(--m3-surface));
-    overflow: hidden;
-  }
-
-  .wf-run-line {
-    display: flex;
-    align-items: flex-start;
-    flex-wrap: wrap;
-    gap: 0.375rem;
-    padding: 0.375rem 0.5rem;
-    min-width: 0;
-  }
-
-  .run-chip {
-    flex: none;
-    display: inline-flex;
-    align-items: center;
-    gap: 0.15rem;
-    margin-top: 0.05rem;
-    border-radius: var(--m3-shape-full, 9999px);
-    padding: 0.05rem 0.45rem;
-    font-size: 0.6563rem;
-    font-weight: 600;
-    white-space: nowrap;
-    background: var(--m3-surface-container-highest, var(--m3-surface-container));
-    color: var(--m3-on-surface);
-  }
-
-  .run-chip.run-success {
-    background: var(--m3-primary-container, var(--m3-surface-container-high));
-    color: var(--m3-on-primary-container, var(--m3-on-surface));
-  }
-
-  .run-chip.run-failure {
-    background: var(--m3-error-container, var(--m3-error));
-    color: var(--m3-on-error-container, var(--m3-on-error));
-  }
-
-  .run-chip.run-running {
-    background: var(--m3-tertiary-container, var(--m3-primary-container));
-    color: var(--m3-on-tertiary-container, var(--m3-on-primary-container));
-  }
-
-  .run-chip.run-queued,
-  .run-chip.run-cancelled,
-  .run-chip.run-skipped,
-  .run-chip.run-unknown {
-    background: var(--m3-surface-container-highest, var(--m3-surface-container));
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-  }
-
-  .run-success {
-    color: var(--app-added, var(--m3-primary));
-  }
-
-  .run-failure {
-    color: var(--m3-error, var(--app-deleted));
-  }
-
-  .run-running {
-    color: var(--m3-primary);
-  }
-
-  .run-queued,
-  .run-cancelled,
-  .run-skipped,
-  .run-unknown {
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-  }
-
-  .wf-run-main {
-    flex: 1 1 12rem;
-    min-width: 0;
-    display: flex;
-    align-items: baseline;
-    flex-wrap: wrap;
-    gap: 0.15rem 0.375rem;
-    margin: 0;
-    padding: 0;
-    border: none;
-    background: none;
-    color: inherit;
-    font: inherit;
-    font-size: 0.7813rem;
-    text-align: left;
-    cursor: pointer;
-  }
-
-  .wf-run-main:hover .wf-run-name {
-    text-decoration: underline;
-  }
-
-  .wf-run-main:focus-visible {
-    outline: 2px solid var(--m3-primary);
-    outline-offset: 1px;
-    border-radius: var(--m3-shape-extra-small, 4px);
-  }
-
-  .wf-run-name {
-    flex: 0 1 auto;
-    max-width: 40%;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    font-weight: 600;
-  }
-
-  .wf-run-title {
-    flex: 1 1 8rem;
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-  }
-
-  .wf-run-meta {
-    flex: 1 1 100%;
-    min-width: 0;
-    display: flex;
-    align-items: center;
-    flex-wrap: wrap;
-    gap: 0.375rem;
-    font-size: 0.68rem;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-  }
-
-  .wf-branch {
-    max-width: 14rem;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    font-family: ui-monospace, Consolas, monospace;
-    font-size: 0.68rem;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-  }
-
-  .wf-event {
-    padding: 0 0.35rem;
-    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    border-radius: var(--m3-shape-full, 9999px);
-    font-size: 0.6375rem;
-    white-space: nowrap;
-  }
-
-  .wf-attempt,
-  .wf-duration {
-    font-variant-numeric: tabular-nums;
-    white-space: nowrap;
-  }
-
-  .wf-run-actions {
-    flex: none;
-    display: flex;
-    align-items: center;
-    justify-content: flex-end;
-    flex-wrap: wrap;
-    gap: 0.2rem;
-    margin-left: auto;
-  }
-
-  .section-title {
-    margin: 0 0 0.25rem;
-    font-size: 0.72rem;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-  }
-
-  .prs {
-    margin: 0;
-    padding: 0;
-    list-style: none;
-    display: flex;
-    flex-direction: column;
-    gap: 0.25rem;
-  }
-
-  .pr-row {
-    display: flex;
-    align-items: center;
-    gap: 0.375rem;
-    width: 100%;
-    text-align: left;
-    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    border-radius: var(--m3-shape-small, 8px);
-    background: var(--m3-surface-container-low, var(--m3-surface));
-    color: var(--m3-on-surface);
-    font: inherit;
-    font-size: 0.7813rem;
-    padding: 0.375rem 0.5rem;
-    cursor: pointer;
-    min-width: 0;
-  }
-
-  .pr-line {
-    display: flex;
-    align-items: flex-start;
-    gap: 0.25rem;
-    min-width: 0;
-  }
-
-  .pr-line .pr-row {
-    flex: 1;
-  }
-
-  .pr-line .tb {
-    margin-top: 0.375rem;
-  }
-
-  .expand {
-    margin: 0.25rem 0 0.25rem 1.5rem;
-  }
-
-  .expand-icon {
-    flex: none;
-    width: 1em;
-    text-align: center;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-  }
-
-  .pr-row:hover {
-    background: var(--m3-surface-container-high, var(--m3-surface));
-  }
-
-  .pr-row .pr-title {
-    flex: 0 1 auto;
-  }
-
-  .pr-row .refs {
-    margin-left: auto;
-    flex: none;
-    max-width: 40%;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .card.empty {
-    display: flex;
-    align-items: center;
-    gap: 0.75rem;
-    flex-wrap: wrap;
-  }
-
-  .card.empty p {
-    margin: 0;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-  }
-
-  .muted {
-    margin: 0.25rem 0;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    font-size: 0.75rem;
-  }
-
-  .tb {
-    flex: none;
-    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    border-radius: var(--m3-shape-extra-small, 4px);
-    background: none;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    font: inherit;
-    font-size: 0.72rem;
-    padding: 0.15rem 0.5rem;
-    cursor: pointer;
-  }
-
-  .tb:hover:not(:disabled) {
-    background: var(--m3-surface-container-high, var(--m3-surface));
-  }
-
-  .act {
-    flex: none;
-    border: none;
-    border-radius: var(--m3-shape-full, 9999px);
-    background: var(--m3-primary);
-    color: var(--m3-on-primary);
-    font: inherit;
-    font-size: 0.72rem;
-    padding: 0.2rem 0.75rem;
-    cursor: pointer;
-  }
-
-  .tb:focus-visible,
-  .act:focus-visible,
-  .pr-row:focus-visible {
-    outline: 2px solid var(--m3-primary);
-    outline-offset: 1px;
-  }
-
-  .tb:disabled,
-  .act:disabled {
-    cursor: not-allowed;
-    opacity: 0.55;
-  }
-</style>

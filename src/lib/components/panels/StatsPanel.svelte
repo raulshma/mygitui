@@ -12,7 +12,7 @@
    *   3. the contribution heatmap: a GitHub-style 53-week grid (weeks as
    *      columns, Sun..Sat rows) rendered as a real <table> for screen
    *      readers, one aria-label per cell ("N commits on DATE"), month
-   *      labels along the top, intensity via --m3-primary color-mix
+   *      labels along the top, intensity via primary color-mix
    *      buckets, horizontally scrollable when narrow,
    *   4. the contributor list: name, commit-count bar and active range.
    *
@@ -24,6 +24,7 @@
    */
   import { isTauri } from "$lib/entry/dragdrop";
   import { floating } from "$lib/components/overlay/floating";
+  import { Button } from "$lib/components/ui/button/index.js";
   import {
     branchColorStore,
     type BranchColorRule,
@@ -40,7 +41,7 @@
   /** Colors popover open? */
   let colorsOpen = $state(false);
   /** Anchor for the (portaled) Colors popover. */
-  let colorsButton = $state<HTMLButtonElement>();
+  let colorsButton = $state<HTMLButtonElement | null>(null);
   /** New-rule draft (Colors popover). */
   let newPattern = $state("");
   let newColor = $state("");
@@ -104,15 +105,15 @@
   function levelBackground(level: number): string {
     switch (level) {
       case 1:
-        return "color-mix(in srgb, var(--m3-primary) 25%, transparent)";
+        return "color-mix(in srgb, var(--primary) 25%, transparent)";
       case 2:
-        return "color-mix(in srgb, var(--m3-primary) 50%, transparent)";
+        return "color-mix(in srgb, var(--primary) 50%, transparent)";
       case 3:
-        return "color-mix(in srgb, var(--m3-primary) 75%, transparent)";
+        return "color-mix(in srgb, var(--primary) 75%, transparent)";
       case 4:
-        return "var(--m3-primary)";
+        return "var(--primary)";
       default:
-        return "var(--m3-surface-container-high, var(--m3-surface))";
+        return "var(--muted)";
     }
   }
 
@@ -124,16 +125,19 @@
   }
 </script>
 
-<section class="stats" aria-label="Contribution statistics">
+<section
+  class="stats relative flex min-h-0 flex-1 flex-col gap-2 overflow-x-hidden overflow-y-auto bg-background px-3 py-2 text-xs text-foreground"
+  aria-label="Contribution statistics"
+>
   {#if !supported}
-    <p class="note" role="note">
+    <p class="note m-0 flex-none text-muted-foreground" role="note">
       Contribution stats need the mygitui desktop app (IPC unavailable here).
     </p>
   {:else}
-    <header class="stats-head">
-      <span class="title">Contribution stats</span>
+    <header class="stats-head flex min-w-0 flex-none flex-wrap items-center gap-1.5">
+      <span class="title mr-1 min-w-0 overflow-hidden text-ellipsis whitespace-nowrap font-medium">Contribution stats</span>
       <input
-        class="author"
+        class="author w-44 min-w-20 flex-[0_1_auto] rounded-sm border border-border bg-background px-[7px] py-[2px] text-[11.5px] text-foreground focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-ring"
         type="search"
         placeholder="Filter by author"
         aria-label="Filter stats by author"
@@ -144,78 +148,81 @@
           if (e.key === "Enter") applyAuthorFilter();
         }}
       />
-      <button
-        class="btn"
+      <Button
+        class="h-auto whitespace-nowrap rounded-sm px-2 py-[2px] text-[11px] font-normal"
+        variant="secondary"
         type="button"
         title="Clear the author filter"
         onclick={clearAuthorFilter}
       >
         All authors
-      </button>
-      <span class="spacer"></span>
-      <button
-        class="btn"
+      </Button>
+      <span class="spacer flex-1"></span>
+      <Button
+        class="h-auto whitespace-nowrap rounded-sm px-2 py-[2px] text-[11px] font-normal"
+        variant="secondary"
         type="button"
-        bind:this={colorsButton}
+        bind:ref={colorsButton}
         aria-expanded={colorsOpen}
         title="Branch color rules (applied to the commit graph)"
         onclick={() => (colorsOpen = !colorsOpen)}
       >
         Colors…
-      </button>
-      <button
-        class="btn"
+      </Button>
+      <Button
+        class="h-auto whitespace-nowrap rounded-sm px-2 py-[2px] text-[11px] font-normal"
+        variant="secondary"
         type="button"
         title="Refresh stats"
         onclick={refresh}
       >
         ↻
-      </button>
+      </Button>
     </header>
 
     {#if error}
-      <p class="error" role="alert">
+      <p class="error m-0 flex flex-none items-center gap-2 rounded-md bg-destructive/10 px-2 py-1 text-destructive" role="alert">
         {error}
-        <button class="btn" type="button" onclick={refresh}>Retry</button>
+        <Button class="h-auto whitespace-nowrap rounded-sm px-2 py-[2px] text-[11px] font-normal" variant="secondary" type="button" onclick={refresh}>Retry</Button>
       </p>
     {/if}
 
     {#if loading && activity.length === 0 && contributors.length === 0}
-      <p class="note" role="status">Loading stats…</p>
+      <p class="note m-0 flex-none text-muted-foreground" role="status">Loading stats…</p>
     {:else}
       <!-- 2. summary cards -->
-      <div class="cards">
-        <div class="card">
-          <span class="card-value">{summary.commits}</span>
-          <span class="card-label">commits</span>
+      <div class="cards flex flex-none flex-wrap gap-1.5">
+        <div class="card flex min-w-[4.5rem] flex-col gap-[1px] rounded-md border border-border bg-card px-2.5 py-[5px]">
+          <span class="card-value text-[15px] font-semibold tabular-nums">{summary.commits}</span>
+          <span class="card-label text-[10px] uppercase tracking-[0.03em] text-muted-foreground">commits</span>
         </div>
-        <div class="card">
-          <span class="card-value">{summary.activeDays}</span>
-          <span class="card-label">active days</span>
+        <div class="card flex min-w-[4.5rem] flex-col gap-[1px] rounded-md border border-border bg-card px-2.5 py-[5px]">
+          <span class="card-value text-[15px] font-semibold tabular-nums">{summary.activeDays}</span>
+          <span class="card-label text-[10px] uppercase tracking-[0.03em] text-muted-foreground">active days</span>
         </div>
-        <div class="card">
-          <span class="card-value">{summary.avgPerDay}</span>
-          <span class="card-label">avg / active day</span>
+        <div class="card flex min-w-[4.5rem] flex-col gap-[1px] rounded-md border border-border bg-card px-2.5 py-[5px]">
+          <span class="card-value text-[15px] font-semibold tabular-nums">{summary.avgPerDay}</span>
+          <span class="card-label text-[10px] uppercase tracking-[0.03em] text-muted-foreground">avg / active day</span>
         </div>
-        <div class="card">
-          <span class="card-value">{streakSummary.current}</span>
-          <span class="card-label">current streak</span>
+        <div class="card flex min-w-[4.5rem] flex-col gap-[1px] rounded-md border border-border bg-card px-2.5 py-[5px]">
+          <span class="card-value text-[15px] font-semibold tabular-nums">{streakSummary.current}</span>
+          <span class="card-label text-[10px] uppercase tracking-[0.03em] text-muted-foreground">current streak</span>
         </div>
-        <div class="card">
-          <span class="card-value">{streakSummary.longest}</span>
-          <span class="card-label">longest streak</span>
+        <div class="card flex min-w-[4.5rem] flex-col gap-[1px] rounded-md border border-border bg-card px-2.5 py-[5px]">
+          <span class="card-value text-[15px] font-semibold tabular-nums">{streakSummary.longest}</span>
+          <span class="card-label text-[10px] uppercase tracking-[0.03em] text-muted-foreground">longest streak</span>
         </div>
       </div>
 
       <!-- 3. heatmap (table semantics; weeks are columns, rows Sun..Sat).
            tabindex makes the scrollable region keyboard-scrollable. -->
       <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
-      <div class="heatmap-wrap" role="region" aria-label="Contribution heatmap" tabindex="0">
-        <table class="heatmap">
+      <div class="heatmap-wrap flex-none overflow-x-auto pb-[2px]" role="region" aria-label="Contribution heatmap" tabindex="0">
+        <table class="heatmap border-separate border-spacing-[2px] text-[10px] text-muted-foreground">
           <thead>
             <tr>
               {#each grid.weeks as _, week (week)}
-                <th scope="col">
+                <th class="min-w-[11px] whitespace-nowrap pb-[2px] text-left font-normal" scope="col">
                   {grid.monthLabels.find((m) => m.week === week)?.label ?? ""}
                 </th>
               {/each}
@@ -227,7 +234,7 @@
                 {#each grid.weeks as column, week (week)}
                   {@const cell = column[dow]}
                   <td
-                    class="cell"
+                    class="cell h-[11px] w-[11px] min-w-[11px] rounded-[2px]"
                     aria-label={cell ? cellLabel(cell.day, cell.count) : "No commits"}
                     title={cell ? cellLabel(cell.day, cell.count) : ""}
                     style:background={cell ? levelBackground(cell.level) : "transparent"}
@@ -237,10 +244,10 @@
             {/each}
           </tbody>
         </table>
-        <div class="legend" aria-hidden="true">
+        <div class="legend mt-1 flex items-center gap-[3px] text-[10px] text-muted-foreground" aria-hidden="true">
           <span>Less</span>
           {#each [0, 1, 2, 3, 4] as level (level)}
-            <span class="cell legend-cell" style:background={levelBackground(level)}></span>
+            <span class="cell legend-cell inline-block h-[11px] w-[11px] flex-none rounded-[2px]" style:background={levelBackground(level)}></span>
           {/each}
           <span>More</span>
         </div>
@@ -248,22 +255,22 @@
 
       <!-- 4. contributors -->
       <section class="contributors" aria-label="Contributors">
-        <h3 class="section-title">Contributors</h3>
+        <h3 class="section-title mb-[2px] mt-1 text-[11.5px] font-medium">Contributors</h3>
         {#if contributors.length === 0}
-          <p class="note">No commits in the last {entry.maxDays} days.</p>
+          <p class="note m-0 flex-none text-muted-foreground">No commits in the last {entry.maxDays} days.</p>
         {:else}
-          <ul class="contributor-list">
+          <ul class="contributor-list m-0 flex list-none flex-col gap-[3px] p-0">
             {#each contributors as c (c.name + c.email)}
-              <li class="contributor">
-                <span class="cname" title={c.email}>{c.name}</span>
-                <span class="cbar-wrap" aria-hidden="true">
+              <li class="contributor grid grid-cols-[minmax(6rem,10rem)_1fr_2.5rem_auto] items-center gap-2">
+                <span class="cname overflow-hidden text-ellipsis whitespace-nowrap" title={c.email}>{c.name}</span>
+                <span class="cbar-wrap h-2 overflow-hidden rounded bg-muted" aria-hidden="true">
                   <span
-                    class="cbar"
+                    class="cbar block h-full rounded bg-primary"
                     style:width={`${maxCount === 0 ? 0 : Math.round((c.count / maxCount) * 100)}%`}
                   ></span>
                 </span>
-                <span class="ccount">{c.count}</span>
-                <span class="crange">{c.first_day} → {c.last_day}</span>
+                <span class="ccount text-right tabular-nums">{c.count}</span>
+                <span class="crange whitespace-nowrap text-[10.5px] text-muted-foreground">{c.first_day} → {c.last_day}</span>
               </li>
             {/each}
           </ul>
@@ -274,15 +281,15 @@
     {#if colorsOpen}
       <!-- Branch color rules editor (popover): pattern → color, first match wins. -->
       <div
-        class="colors-pop"
+        class="colors-pop invisible fixed left-0 top-0 z-40 flex max-h-[calc(100vh-1rem)] w-[min(22rem,calc(100vw-1rem))] flex-col gap-1.5 overflow-y-auto rounded-lg border border-border bg-popover px-2.5 py-2 shadow-[0_0.35rem_1.25rem_rgb(0_0_0/0.25)]"
         role="dialog"
         aria-label="Branch color rules"
-        use:floating={{ anchor: colorsButton, alignEnd: true }}
+        use:floating={{ anchor: colorsButton ?? undefined, alignEnd: true }}
       >
-        <div class="colors-head">
+        <div class="colors-head flex items-center justify-between font-medium">
           <span>Branch color rules</span>
           <button
-            class="btn"
+            class="btn cursor-pointer whitespace-nowrap rounded-sm border border-border bg-muted px-2 py-[2px] text-[11px] text-foreground hover:bg-accent focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-ring"
             type="button"
             aria-label="Close branch color rules"
             onclick={() => (colorsOpen = false)}
@@ -290,21 +297,21 @@
             ×
           </button>
         </div>
-        <p class="colors-hint">
-          Patterns match branch names on graph rows: <code>feature/*</code>
-          (prefix), <code>*-hotfix</code> (suffix), <code>main</code>
-          (exact), <code>*</code> (all). First match wins; matching rows are
+        <p class="colors-hint m-0 text-[10.5px] text-muted-foreground">
+          Patterns match branch names on graph rows: <code class="font-mono">feature/*</code>
+          (prefix), <code class="font-mono">*-hotfix</code> (suffix), <code class="font-mono">main</code>
+          (exact), <code class="font-mono">*</code> (all). First match wins; matching rows are
           recolored in the commit graph.
         </p>
         {#if rules.length === 0}
-          <p class="note">No rules yet.</p>
+          <p class="note m-0 flex-none text-muted-foreground">No rules yet.</p>
         {:else}
-          <ul class="rule-list">
+          <ul class="rule-list m-0 flex list-none flex-col gap-1 p-0">
             {#each rules as rule, index (index)}
-              <li class="rule">
-                <span class="swatch" style:background={rule.color}></span>
+              <li class="rule flex items-center gap-1.5">
+                <span class="swatch h-3.5 w-3.5 flex-none rounded-[3px] border border-border" style:background={rule.color}></span>
                 <input
-                  class="rule-pattern"
+                  class="rule-pattern min-w-0 flex-1 rounded-sm border border-border bg-background px-[5px] py-[2px] font-mono text-[11px] text-foreground focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-ring"
                   aria-label={`Pattern ${index + 1}`}
                   value={rule.pattern}
                   onchange={(e) =>
@@ -313,7 +320,7 @@
                     })}
                 />
                 <input
-                  class="rule-color"
+                  class="rule-color h-6 w-8 flex-none cursor-pointer rounded-sm border border-border bg-background p-0"
                   type="color"
                   aria-label={`Color ${index + 1}`}
                   value={/^#[0-9a-fA-F]{6}$/.test(rule.color) ? rule.color : "#6750a4"}
@@ -322,40 +329,41 @@
                       color: (e.currentTarget as HTMLInputElement).value,
                     })}
                 />
-                <button
-                  class="btn"
+                <Button
+                  class="h-auto whitespace-nowrap rounded-sm px-2 py-[2px] text-[11px] font-normal"
+                  variant="secondary"
                   type="button"
                   aria-label={`Remove rule ${rule.pattern}`}
                   onclick={() => removeRule(rule)}
                 >
                   ×
-                </button>
+                </Button>
               </li>
             {/each}
           </ul>
         {/if}
         <form
-          class="rule-add"
+          class="rule-add flex items-center gap-1.5 border-t border-border pt-1"
           onsubmit={(e) => {
             e.preventDefault();
             addRule();
           }}
         >
           <input
-            class="rule-pattern"
+            class="rule-pattern min-w-0 flex-1 rounded-sm border border-border bg-background px-[5px] py-[2px] font-mono text-[11px] text-foreground focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-ring"
             placeholder="Pattern (feature/*)"
             aria-label="New rule pattern"
             value={newPattern}
             oninput={(e) => (newPattern = (e.currentTarget as HTMLInputElement).value)}
           />
           <input
-            class="rule-color"
+            class="rule-color h-6 w-8 flex-none cursor-pointer rounded-sm border border-border bg-background p-0"
             type="color"
             aria-label="New rule color"
             value="#6750a4"
             oninput={(e) => (newColor = (e.currentTarget as HTMLInputElement).value)}
           />
-          <button class="btn" type="submit">Add</button>
+          <Button class="h-auto whitespace-nowrap rounded-sm px-2 py-[2px] text-[11px] font-normal" variant="secondary" type="submit">Add</Button>
         </form>
       </div>
     {/if}
@@ -367,308 +375,3 @@
     </datalist>
   {/if}
 </section>
-
-<style>
-  .stats {
-    position: relative;
-    flex: 1;
-    min-height: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 0.5rem;
-    padding: 0.5rem 0.75rem;
-    overflow-y: auto;
-    overflow-x: hidden;
-    font-size: 0.75rem;
-    background: var(--m3-surface);
-    color: var(--m3-on-surface);
-  }
-
-  .stats-head {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 0.375rem;
-    flex: none;
-    min-width: 0;
-  }
-
-  .title {
-    font-weight: 500;
-    margin-right: 0.25rem;
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .spacer {
-    flex: 1;
-  }
-
-  input.author {
-    width: 11rem;
-    min-width: 5rem;
-    flex: 0 1 auto;
-    padding: 0.15rem 0.45rem;
-    font-size: 0.72rem;
-    color: var(--m3-on-surface);
-    background: var(--m3-surface);
-    border: 1px solid var(--m3-outline-variant);
-    border-radius: var(--m3-shape-extra-small, 4px);
-  }
-
-  .btn {
-    padding: 0.12rem 0.5rem;
-    font-size: 0.7rem;
-    color: var(--m3-on-surface);
-    background: var(--m3-surface-container-high, var(--m3-surface));
-    border: 1px solid var(--m3-outline-variant);
-    border-radius: var(--m3-shape-extra-small, 4px);
-    cursor: pointer;
-    white-space: nowrap;
-  }
-
-  .btn:hover,
-  .btn:focus-visible,
-  input.author:focus-visible {
-    outline: 2px solid var(--m3-primary);
-    outline-offset: -1px;
-  }
-
-  .error {
-    margin: 0;
-    padding: 0.25rem 0.5rem;
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    color: var(--m3-on-error-container, var(--m3-error));
-    background: var(--m3-error-container, transparent);
-    border-radius: var(--m3-shape-small, 8px);
-    flex: none;
-  }
-
-  .note {
-    margin: 0;
-    color: var(--m3-on-surface-variant);
-    flex: none;
-  }
-
-  .cards {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.375rem;
-    flex: none;
-  }
-
-  .card {
-    display: flex;
-    flex-direction: column;
-    gap: 0.05rem;
-    padding: 0.35rem 0.65rem;
-    border: 1px solid var(--m3-outline-variant);
-    border-radius: var(--m3-shape-small, 8px);
-    background: var(--m3-surface-container-low, var(--m3-surface));
-    min-width: 4.5rem;
-  }
-
-  .card-value {
-    font-size: 0.95rem;
-    font-weight: 600;
-    font-variant-numeric: tabular-nums;
-  }
-
-  .card-label {
-    font-size: 0.625rem;
-    color: var(--m3-on-surface-variant);
-    text-transform: uppercase;
-    letter-spacing: 0.03em;
-  }
-
-  .heatmap-wrap {
-    flex: none;
-    overflow-x: auto;
-    padding-bottom: 0.15rem;
-  }
-
-  .heatmap {
-    border-collapse: separate;
-    border-spacing: 2px;
-    font-size: 0.625rem;
-    color: var(--m3-on-surface-variant);
-  }
-
-  .heatmap th {
-    font-weight: 400;
-    text-align: left;
-    padding: 0 0 0.15rem;
-    min-width: 11px;
-    white-space: nowrap;
-  }
-
-  .heatmap td {
-    width: 11px;
-    height: 11px;
-    min-width: 11px;
-    border-radius: 2px;
-  }
-
-  .legend {
-    display: flex;
-    align-items: center;
-    gap: 3px;
-    margin-top: 0.25rem;
-    color: var(--m3-on-surface-variant);
-    font-size: 0.625rem;
-  }
-
-  .legend-cell {
-    display: inline-block;
-    width: 11px;
-    height: 11px;
-    flex: none;
-    border-radius: 2px;
-  }
-
-  .section-title {
-    margin: 0.25rem 0 0.15rem;
-    font-size: 0.72rem;
-    font-weight: 500;
-  }
-
-  .contributor-list {
-    margin: 0;
-    padding: 0;
-    list-style: none;
-    display: flex;
-    flex-direction: column;
-    gap: 0.2rem;
-  }
-
-  .contributor {
-    display: grid;
-    grid-template-columns: minmax(6rem, 10rem) 1fr 2.5rem auto;
-    align-items: center;
-    gap: 0.5rem;
-  }
-
-  .cname {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .cbar-wrap {
-    height: 8px;
-    background: var(--m3-surface-container-high, var(--m3-surface));
-    border-radius: 4px;
-    overflow: hidden;
-  }
-
-  .cbar {
-    display: block;
-    height: 100%;
-    background: var(--m3-primary);
-    border-radius: 4px;
-  }
-
-  .ccount {
-    font-variant-numeric: tabular-nums;
-    text-align: right;
-  }
-
-  .crange {
-    color: var(--m3-on-surface-variant);
-    font-size: 0.65rem;
-    white-space: nowrap;
-  }
-
-  .colors-pop {
-    /* Portaled to <body> by `floating`; top/left/visibility are set there. */
-    position: fixed;
-    top: 0;
-    left: 0;
-    visibility: hidden;
-    z-index: 40;
-    width: min(22rem, calc(100vw - 1rem));
-    max-height: calc(100vh - 1rem);
-    overflow-y: auto;
-    display: flex;
-    flex-direction: column;
-    gap: 0.4rem;
-    padding: 0.5rem 0.65rem;
-    border: 1px solid var(--m3-outline-variant);
-    border-radius: var(--m3-shape-medium, 12px);
-    background: var(--m3-surface-container, var(--m3-surface));
-    box-shadow: 0 0.35rem 1.25rem rgb(0 0 0 / 0.25);
-  }
-
-  .colors-head {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    font-weight: 500;
-  }
-
-  .colors-hint {
-    margin: 0;
-    color: var(--m3-on-surface-variant);
-    font-size: 0.65rem;
-  }
-
-  .colors-hint code {
-    font-family: ui-monospace, Consolas, monospace;
-  }
-
-  .rule-list {
-    margin: 0;
-    padding: 0;
-    list-style: none;
-    display: flex;
-    flex-direction: column;
-    gap: 0.25rem;
-  }
-
-  .rule,
-  .rule-add {
-    display: flex;
-    align-items: center;
-    gap: 0.375rem;
-  }
-
-  .rule-add {
-    padding-top: 0.25rem;
-    border-top: 1px solid var(--m3-outline-variant);
-  }
-
-  .swatch {
-    flex: none;
-    width: 14px;
-    height: 14px;
-    border-radius: 3px;
-    border: 1px solid var(--m3-outline-variant);
-  }
-
-  .rule-pattern {
-    flex: 1;
-    min-width: 0;
-    padding: 0.12rem 0.35rem;
-    font-family: ui-monospace, Consolas, monospace;
-    font-size: 0.68rem;
-    color: var(--m3-on-surface);
-    background: var(--m3-surface);
-    border: 1px solid var(--m3-outline-variant);
-    border-radius: var(--m3-shape-extra-small, 4px);
-  }
-
-  .rule-color {
-    flex: none;
-    width: 2rem;
-    height: 1.4rem;
-    padding: 0;
-    border: 1px solid var(--m3-outline-variant);
-    border-radius: var(--m3-shape-extra-small, 4px);
-    background: var(--m3-surface);
-    cursor: pointer;
-  }
-</style>

@@ -9,6 +9,7 @@
   import { gitignoreApplyTemplate, gitignoreTemplates } from "$lib/ipc/client";
   import type { GitignoreTemplate } from "$lib/ipc/client";
   import { toast } from "$lib/toast";
+  import { Button } from "$lib/components/ui/button/index.js";
 
   let {
     open = $bindable(false),
@@ -69,7 +70,7 @@
 {#if open}
   <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
   <div
-    class="scrim"
+    class="scrim fixed inset-0 z-[70] flex items-center justify-center bg-black/40"
     role="presentation"
     onkeydown={(e) => {
       if (e.key === "Escape") {
@@ -78,163 +79,46 @@
       }
     }}
   >
-    <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="gi-title">
-      <h2 id="gi-title" class="title">.gitignore templates</h2>
+    <div class="dialog flex max-h-[min(30rem,calc(100vh-4rem))] w-[min(26rem,calc(100vw-2rem))] flex-col rounded-lg border border-border bg-card px-6 py-5 text-sm text-foreground shadow-xl" role="dialog" aria-modal="true" aria-labelledby="gi-title">
+      <h2 id="gi-title" class="title m-0 mb-3 text-lg font-medium">.gitignore templates</h2>
       <input
-        class="search"
+        class="search mb-2 rounded-md border border-border bg-background px-2.5 py-1.5 text-foreground focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-ring"
         type="search"
         bind:value={query}
         placeholder="Search templates"
         aria-label="Search gitignore templates"
       />
       {#if loading}
-        <p class="state" role="status">Loading templates…</p>
+        <p class="state m-0 py-2 text-muted-foreground" role="status">Loading templates…</p>
       {:else if error}
-        <p class="state error" role="alert">{error}</p>
+        <p class="state error m-0 py-2 text-destructive" role="alert">{error}</p>
       {:else if filtered.length === 0}
-        <p class="state">No template matches “{query}”.</p>
+        <p class="state m-0 py-2 text-muted-foreground">No template matches “{query}”.</p>
       {:else}
-        <ul class="list">
+        <ul class="list m-0 min-h-0 list-none overflow-y-auto p-0">
           {#each filtered as template (template.name)}
             <li>
-              <button
-                class="row"
+              <Button
+                class="w-full cursor-pointer items-baseline justify-start gap-2 rounded-md px-2 py-1.5 text-left font-normal enabled:hover:bg-accent focus-visible:bg-accent focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring disabled:cursor-default disabled:opacity-100"
+                variant="ghost"
                 type="button"
                 disabled={applying !== null}
                 title={template.description}
                 onclick={() => void apply(template)}
               >
-                <span class="name">{template.name}</span>
-                <span class="desc">{template.description}</span>
-                {#if applying === template.name}<span class="desc">applying…</span>{/if}
-              </button>
+                <span class="name flex-none font-semibold">{template.name}</span>
+                <span class="desc overflow-hidden text-ellipsis whitespace-nowrap text-xs text-muted-foreground">{template.description}</span>
+                {#if applying === template.name}<span class="desc overflow-hidden text-ellipsis whitespace-nowrap text-xs text-muted-foreground">applying…</span>{/if}
+              </Button>
             </li>
           {/each}
         </ul>
       {/if}
-      <div class="actions">
-        <button class="secondary" type="button" onclick={() => (open = false)}>
+      <div class="actions flex justify-end pt-3">
+        <Button class="rounded-full px-4 py-[7px]" variant="outline" type="button" onclick={() => (open = false)}>
           Close
-        </button>
+        </Button>
       </div>
     </div>
   </div>
 {/if}
-
-<style>
-  .scrim {
-    position: fixed;
-    inset: 0;
-    z-index: 70;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: color-mix(in srgb, var(--m3-scrim, black) 40%, transparent);
-  }
-
-  .dialog {
-    display: flex;
-    flex-direction: column;
-    width: min(26rem, calc(100vw - 2rem));
-    max-height: min(30rem, calc(100vh - 4rem));
-    padding: 1.25rem 1.5rem;
-    border-radius: var(--m3-shape-large, 16px);
-    background: var(--m3-surface-container-high, var(--m3-surface));
-    color: var(--m3-on-surface);
-    box-shadow: var(--m3-elevation-3, 0 8px 24px rgba(0, 0, 0, 0.3));
-    font-size: 0.875rem;
-  }
-
-  .title {
-    margin: 0 0 0.75rem;
-    font-size: 1.125rem;
-    font-weight: 500;
-  }
-
-  .search {
-    font: inherit;
-    color: var(--m3-on-surface);
-    background: var(--m3-surface-container-lowest, var(--m3-surface));
-    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    border-radius: var(--m3-shape-small, 8px);
-    padding: 0.4rem 0.6rem;
-    margin-bottom: 0.5rem;
-  }
-
-  .search:focus-visible {
-    outline: 2px solid var(--m3-primary);
-    outline-offset: -1px;
-  }
-
-  .state {
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    padding: 0.5rem 0;
-    margin: 0;
-  }
-
-  .error {
-    color: var(--m3-error, inherit);
-  }
-
-  .list {
-    margin: 0;
-    padding: 0;
-    list-style: none;
-    overflow-y: auto;
-    min-height: 0;
-  }
-
-  .row {
-    display: flex;
-    align-items: baseline;
-    gap: 0.5rem;
-    width: 100%;
-    text-align: left;
-    border: none;
-    background: none;
-    font: inherit;
-    color: var(--m3-on-surface);
-    padding: 0.4rem 0.5rem;
-    border-radius: var(--m3-shape-small, 8px);
-    cursor: pointer;
-  }
-
-  .row:hover:not(:disabled),
-  .row:focus-visible {
-    background: var(--m3-surface-container-highest, var(--m3-surface));
-  }
-
-  .row:focus-visible {
-    outline: 2px solid var(--m3-primary);
-    outline-offset: -2px;
-  }
-
-  .name {
-    font-weight: 600;
-    flex: none;
-  }
-
-  .desc {
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    font-size: 0.75rem;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .actions {
-    display: flex;
-    justify-content: flex-end;
-    padding-top: 0.75rem;
-  }
-
-  .secondary {
-    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    border-radius: var(--m3-shape-full, 9999px);
-    background: none;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    font: inherit;
-    padding: 0.45rem 1rem;
-    cursor: pointer;
-  }
-</style>

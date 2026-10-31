@@ -27,6 +27,7 @@
   import { bookmarks as bookmarkStore } from "$lib/components/graph/bookmarks.svelte";
   import { showMenuAt, type MenuEntry } from "$lib/components/menu/contextMenuStore.svelte";
   import { readSplitRatio, writeSplitRatio } from "$lib/layout/splitPrefs";
+  import { Button } from "$lib/components/ui/button/index.js";
   import {
     classifyRef,
     formatDateTime,
@@ -205,15 +206,18 @@
   }
 </script>
 
-<div class="detail" aria-label="Commit detail">
-  <header class="dhead">
+<div class="detail flex min-h-0 flex-col bg-card" aria-label="Commit detail">
+  <header class="dhead flex items-center gap-2 border-b border-border bg-popover px-3 py-1 text-[0.8125rem]">
     {#if info}
-      <span class="dsha">{info.sha.slice(0, 7)}</span>
-      <span class="dsummary" title={info.summary}>{info.summary}</span>
+      <span class="dsha font-mono text-primary">{info.sha.slice(0, 7)}</span>
+      <span class="dsummary min-w-0 flex-1 truncate font-medium text-foreground" title={info.summary}>{info.summary}</span>
       {#if root !== ""}
         <!-- M12: bookmark star (same store mutation as the menu item). -->
-        <button
-          class="star"
+        <Button
+          class="h-auto flex-none rounded-sm px-[0.45rem] py-[0.05rem] text-[0.8125rem] leading-[1.3] font-normal {bookmarked
+            ? 'border-primary bg-transparent text-primary'
+            : 'border-border bg-transparent text-muted-foreground'}"
+          variant="outline"
           aria-pressed={bookmarked}
           aria-label={bookmarked
             ? "Remove bookmark from this commit"
@@ -226,117 +230,123 @@
           }}
         >
           {bookmarked ? "★" : "☆"}
-        </button>
+        </Button>
       {/if}
       {#if onPopout}
-        <button
-          class="dpop"
+        <Button
+          class="h-auto rounded-sm px-[0.4rem] py-[0.1rem] text-[0.72rem] font-normal text-muted-foreground"
+          variant="outline"
           title="Open this commit's detail in its own window"
           onclick={onPopout}
         >
           Pop out
-        </button>
+        </Button>
       {/if}
     {:else}
-      <span class="dsha">diff</span>
-      <span class="dsummary">{compare?.base} → {compare?.target}</span>
+      <span class="dsha font-mono text-primary">diff</span>
+      <span class="dsummary min-w-0 flex-1 truncate font-medium text-foreground">{compare?.base} → {compare?.target}</span>
     {/if}
     {#if onClose}
-      <button class="dclose" onclick={onClose} aria-label="Close detail">
+      <Button class="h-auto rounded-sm px-[0.4rem] py-[0.1rem] text-[0.72rem] font-normal text-muted-foreground" variant="outline" onclick={onClose} aria-label="Close detail">
         ×
-      </button>
+      </Button>
     {/if}
   </header>
   {#if info}
-    <div class="cactions" role="toolbar" aria-label="Commit actions">
+    <div class="cactions flex flex-none flex-wrap items-center gap-1.5 border-b border-border bg-muted/50 px-3 py-1 text-[0.72rem]" role="toolbar" aria-label="Commit actions">
       {#if onCherryPick}
-        <button class="act" onclick={onCherryPick} disabled={actionBusy}>
+        <Button class="h-auto rounded-full px-2.5 py-[0.18rem] text-[0.72rem] font-normal" variant="secondary" onclick={onCherryPick} disabled={actionBusy}>
           Cherry-pick{actionCount > 1 ? ` (${actionCount})` : ""}
-        </button>
+        </Button>
       {/if}
       {#if onRevert}
-        <button class="act" onclick={onRevert} disabled={actionBusy}>
+        <Button class="h-auto rounded-full px-2.5 py-[0.18rem] text-[0.72rem] font-normal" variant="secondary" onclick={onRevert} disabled={actionBusy}>
           Revert{actionCount > 1 ? ` (${actionCount})` : ""}
-        </button>
+        </Button>
       {/if}
       {#if onRebaseFromHere}
-        <button
-          class="act"
+        <Button
+          class="h-auto rounded-full px-2.5 py-[0.18rem] text-[0.72rem] font-normal"
+          variant="secondary"
           onclick={onRebaseFromHere}
           disabled={actionBusy}
           title={`Rebase HEAD..${info.sha.slice(0, 7)} (selected commit is the exclusive base)`}
         >
           Rebase from here
-        </button>
+        </Button>
       {/if}
-      <button class="act" onclick={copySha}>Copy sha</button>
-      <span class="cinfo" role="status">
+      <Button class="h-auto rounded-full px-2.5 py-[0.18rem] text-[0.72rem] font-normal" variant="secondary" onclick={copySha}>Copy sha</Button>
+      <span class="cinfo ml-auto text-[0.6875rem] text-muted-foreground" role="status">
         {#if actionCount > 1}
           {actionCount} commits selected (shift-click to extend)
         {/if}
       </span>
     </div>
   {/if}
-  <div class="dbody">
+  <div class="dbody flex min-h-0 flex-1 [&>*]:min-w-0 [&>*]:flex-1">
     {#snippet filesPane()}
-    <div class="dfiles">
+    <div class="dfiles flex min-w-0 flex-1 flex-col">
       {#if blameTarget}
-        <div class="dtab">
-          <span>Blame: {blameTarget.path}</span>
-          <button
+        <div class="dtab flex flex-none items-center gap-2 border-b border-border bg-muted py-0.5 pr-2 pl-3 text-[0.72rem] text-foreground">
+          <span class="min-w-0 flex-1 truncate font-mono">Blame: {blameTarget.path}</span>
+          <Button
+            class="h-auto rounded-sm px-[0.4rem] py-[0.1rem] text-[0.72rem] font-normal text-muted-foreground"
+            variant="outline"
             onclick={() => (blameTarget = null)}
             aria-label="Close blame">×
-          </button>
+          </Button>
         </div>
-        <div class="dtabbody">
+        <div class="dtabbody flex min-h-0 flex-1 flex-col">
           <BlameView {repoId} path={blameTarget.path} from={blameTarget.from} />
         </div>
       {:else if compare}
-        <div class="dtab">
-          <span>Compare: {compare.base} → {compare.target} ({compare.files.length} files)</span>
+        <div class="dtab flex flex-none items-center gap-2 border-b border-border bg-muted py-0.5 pr-2 pl-3 text-[0.72rem] text-foreground">
+          <span class="min-w-0 flex-1 truncate font-mono">Compare: {compare.base} → {compare.target} ({compare.files.length} files)</span>
           {#if onCloseCompare}
-            <button onclick={onCloseCompare} aria-label="Close compare">×</button>
+            <Button class="h-auto rounded-sm px-[0.4rem] py-[0.1rem] text-[0.72rem] font-normal text-muted-foreground" variant="outline" onclick={onCloseCompare} aria-label="Close compare">×</Button>
           {/if}
         </div>
-        <div class="dtabbody">
+        <div class="dtabbody flex min-h-0 flex-1 flex-col">
           <DiffViewer files={compare.files} />
         </div>
       {:else if detailLoading}
-        <p class="dstate" role="status">Loading diff…</p>
+        <p class="dstate m-auto text-[0.8125rem] text-muted-foreground" role="status">Loading diff…</p>
       {:else if !info || info.parents.length === 0}
-        <p class="dstate">Root commit — nothing to diff against.</p>
+        <p class="dstate m-auto text-[0.8125rem] text-muted-foreground">Root commit — nothing to diff against.</p>
       {:else if detailFiles === null}
-        <p class="dstate">Diff unavailable.</p>
+        <p class="dstate m-auto text-[0.8125rem] text-muted-foreground">Diff unavailable.</p>
       {:else if detailFiles.length === 0}
-        <p class="dstate">No changes against first parent.</p>
+        <p class="dstate m-auto text-[0.8125rem] text-muted-foreground">No changes against first parent.</p>
       {:else}
-        <ul class="filelist" aria-label="Changed files">
+        <ul class="filelist m-0 max-h-[30%] flex-none list-none overflow-y-auto border-b border-border py-0.5 text-[0.72rem]" aria-label="Changed files">
           {#each detailFiles as file (file.path)}
             <li
+              class="flex items-center gap-2 px-3 py-0.5"
               oncontextmenu={(e) => fileMenu(e, file.path)}
             >
-              <span class="fpath" title={file.path}>
+              <span class="fpath min-w-0 flex-1 truncate font-mono text-foreground" title={file.path}>
                 {#if file.old_path}{file.old_path} → {/if}{file.path}
               </span>
-              <span class="stats">
+              <span class="stats flex-none font-mono">
                 {#if !file.binary}
-                  <span class="add">+{file.additions}</span>
-                  <span class="del">−{file.deletions}</span>
+                  <span class="add text-[color:var(--app-added)]">+{file.additions}</span>
+                  <span class="del text-[color:var(--app-deleted)]">−{file.deletions}</span>
                 {:else}
-                  <span class="muted">binary</span>
+                  <span class="muted text-muted-foreground">binary</span>
                 {/if}
               </span>
-              <button class="blame" onclick={() => openBlame(file.path)}>Blame</button>
-              <button
-                class="blame"
+              <Button class="h-auto rounded-sm px-[0.4rem] py-[0.1rem] text-[0.72rem] font-normal text-muted-foreground" variant="outline" onclick={() => openBlame(file.path)}>Blame</Button>
+              <Button
+                class="h-auto rounded-sm px-[0.4rem] py-[0.1rem] text-[0.72rem] font-normal text-muted-foreground"
+                variant="outline"
                 title="History of {file.path} (popout)"
                 onclick={() =>
                   void openPanelPopout("filehistory", repoId, `History: ${file.path}`, { path: file.path })}
-              >History</button>
+              >History</Button>
             </li>
           {/each}
         </ul>
-        <div class="ddiff">
+        <div class="ddiff min-h-0 flex-1 overflow-auto">
           <DiffViewer files={detailFiles} />
         </div>
       {/if}
@@ -355,59 +365,67 @@
           <!-- Snippet bodies don't inherit the outer {#if info}
                narrowing — re-guard here (renders only while active). -->
           {#if info}
-        <aside class="dmeta">
-            <dl>
-              <dt>Author</dt>
-              <dd>
+        <aside class="dmeta min-w-0 flex-1 overflow-y-auto px-3 py-2 text-xs">
+            <dl class="m-0 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
+              <dt class="pt-0.5 text-[0.6875rem] uppercase tracking-[0.02em] text-muted-foreground">Author</dt>
+              <dd class="m-0 text-foreground">
                 {info.author.name}
-                <span class="muted">&lt;{info.author.email}&gt;</span><br />
+                <span class="muted text-muted-foreground">&lt;{info.author.email}&gt;</span><br />
                 {formatDateTime(info.author.time)}
-                <span class="muted">({formatRelativeTime(info.author.time)})</span>
+                <span class="muted text-muted-foreground">({formatRelativeTime(info.author.time)})</span>
               </dd>
-              <dt>Committer</dt>
-              <dd>
+              <dt class="pt-0.5 text-[0.6875rem] uppercase tracking-[0.02em] text-muted-foreground">Committer</dt>
+              <dd class="m-0 text-foreground">
                 {info.committer.name}<br />
                 {formatDateTime(info.committer.time)}
-                <span class="muted">({formatRelativeTime(info.committer.time)})</span>
+                <span class="muted text-muted-foreground">({formatRelativeTime(info.committer.time)})</span>
               </dd>
-              <dt>Parents</dt>
-              <dd>
+              <dt class="pt-0.5 text-[0.6875rem] uppercase tracking-[0.02em] text-muted-foreground">Parents</dt>
+              <dd class="m-0 text-foreground">
                 {#if info.parents.length === 0}
                   <em>root</em>
                 {:else}
                   {#each info.parents as p (p)}
-                    <button
-                      class="parent"
+                    <Button
+                      class="mr-1 h-auto rounded-sm px-[0.3rem] py-[0.05rem] font-mono text-[0.6875rem] font-normal"
+                      variant="outline"
                       onclick={() => onSelectParent?.(p)}
                       disabled={!onSelectParent}
                       title={"Go to " + p}
                     >
                       {p.slice(0, 7)}
-                    </button>
+                    </Button>
                   {/each}
                 {/if}
               </dd>
-              <dt>Describe</dt>
-              <dd>
+              <dt class="pt-0.5 text-[0.6875rem] uppercase tracking-[0.02em] text-muted-foreground">Describe</dt>
+              <dd class="m-0 text-foreground">
                 {#if describeText}
                   <code>{describeText}</code>
                 {:else}
-                  <span class="muted">…</span>
+                  <span class="muted text-muted-foreground">…</span>
                 {/if}
               </dd>
               <!-- M12: commit-signature verification badge. -->
-              <dt>Signature</dt>
-              <dd><SignatureBadge {repoId} sha={info.sha} /></dd>
+              <dt class="pt-0.5 text-[0.6875rem] uppercase tracking-[0.02em] text-muted-foreground">Signature</dt>
+              <dd class="m-0 text-foreground"><SignatureBadge {repoId} sha={info.sha} /></dd>
               {#if info.refs.length > 0}
-                <dt>Refs</dt>
-                <dd class="drefs">
+                <dt class="pt-0.5 text-[0.6875rem] uppercase tracking-[0.02em] text-muted-foreground">Refs</dt>
+                <dd class="drefs m-0 flex flex-wrap gap-1 text-foreground">
                   {#each info.refs as ref (ref)}
-                    <span class="ref ref-{classifyRef(ref)}">{shortRefName(ref)}</span>
+                    {@const kind = classifyRef(ref)}
+                    <span class="ref ref-{kind} inline-flex max-w-36 items-center overflow-hidden whitespace-nowrap rounded-sm border px-[0.35rem] text-[0.6875rem] leading-[1.4] text-ellipsis {kind === "local"
+                      ? "border-transparent bg-primary/10 text-primary"
+                      : kind === "remote"
+                        ? "border-border text-muted-foreground"
+                        : kind === "tag"
+                          ? "border-transparent bg-accent text-accent-foreground"
+                          : "border-primary bg-primary/10 text-primary"}">{shortRefName(ref)}</span>
                   {/each}
                 </dd>
               {/if}
             </dl>
-            <pre class="msg">{info.message}</pre>
+            <pre class="msg mt-2 whitespace-pre-wrap rounded-sm border border-border bg-muted p-2 font-mono text-[0.72rem] text-foreground [overflow-wrap:anywhere]">{info.message}</pre>
           </aside>
           {/if}
             {/snippet}
@@ -420,329 +438,3 @@
         {/if}
   </div>
 </div>
-
-<style>
-  .detail {
-    display: flex;
-    flex-direction: column;
-    min-height: 0;
-    background: var(--m3-surface);
-  }
-
-  .dhead {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    padding: 0.25rem 0.75rem;
-    background: var(--m3-surface-container, var(--m3-surface));
-    border-bottom: 1px solid var(--m3-outline-variant);
-    font-size: 0.8125rem;
-  }
-
-  .dsha {
-    font-family: ui-monospace, Consolas, monospace;
-    color: var(--m3-primary);
-  }
-
-  .dsummary {
-    flex: 1;
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    font-weight: 500;
-    color: var(--m3-on-surface);
-  }
-
-  .dclose,
-  .dpop,
-  .dtab button,
-  button.blame {
-    padding: 0.1rem 0.4rem;
-    color: var(--m3-on-surface-variant);
-    background: none;
-    border: 1px solid var(--m3-outline-variant);
-    border-radius: var(--m3-shape-extra-small, 4px);
-    cursor: pointer;
-    font-size: 0.72rem;
-  }
-
-  .dclose:focus-visible,
-  .dpop:focus-visible,
-  .dtab button:focus-visible,
-  button.blame:focus-visible,
-  button.parent:focus-visible {
-    outline: 2px solid var(--m3-primary);
-    outline-offset: 1px;
-  }
-
-  /* M12: bookmark star in the detail header. */
-  button.star {
-    flex: none;
-    padding: 0.05rem 0.45rem;
-    color: var(--m3-on-surface-variant);
-    background: none;
-    border: 1px solid var(--m3-outline-variant);
-    border-radius: var(--m3-shape-extra-small, 4px);
-    cursor: pointer;
-    font-size: 0.8125rem;
-    line-height: 1.3;
-  }
-
-  button.star[aria-pressed="true"] {
-    color: var(--m3-primary);
-    border-color: var(--m3-primary);
-  }
-
-  button.star:focus-visible {
-    outline: 2px solid var(--m3-primary);
-    outline-offset: 1px;
-  }
-
-  .dbody {
-    flex: 1;
-    display: flex;
-    min-height: 0;
-  }
-
-  /* SplitPane (meta ↔ files) or the bare files pane fills the body; the
-   * child needs :global — the splitter owns its own scope. */
-  .dbody > :global(*) {
-    flex: 1;
-    min-width: 0;
-  }
-
-  /* -- commit action bar (M3 E2) ------------------------------------------------ */
-
-  .cactions {
-    flex: none;
-    display: flex;
-    align-items: center;
-    flex-wrap: wrap;
-    gap: 0.35rem;
-    padding: 0.25rem 0.75rem;
-    border-bottom: 1px solid var(--m3-outline-variant);
-    background: var(--m3-surface-container-low, var(--m3-surface));
-    font-size: 0.72rem;
-  }
-
-  button.act {
-    padding: 0.18rem 0.6rem;
-    font-size: 0.72rem;
-    color: var(--m3-on-surface);
-    background: var(--m3-surface-container-high, var(--m3-surface));
-    border: 1px solid var(--m3-outline-variant);
-    border-radius: var(--m3-shape-full, 9999px);
-    cursor: pointer;
-  }
-
-  button.act:hover:not(:disabled) {
-    background: var(--m3-secondary-container);
-    color: var(--m3-on-secondary-container);
-  }
-
-  button.act:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-  }
-
-  button.act:focus-visible {
-    outline: 2px solid var(--m3-primary);
-    outline-offset: 1px;
-  }
-
-  .cinfo {
-    margin-left: auto;
-    color: var(--m3-on-surface-variant);
-    font-size: 0.6875rem;
-  }
-
-  .dmeta {
-    flex: 1;
-    min-width: 0;
-    overflow-y: auto;
-    padding: 0.5rem 0.75rem;
-    font-size: 0.75rem;
-  }
-
-  .dmeta dl {
-    margin: 0;
-    display: grid;
-    grid-template-columns: auto 1fr;
-    gap: 0.25rem 0.75rem;
-  }
-
-  .dmeta dt {
-    color: var(--m3-on-surface-variant);
-    font-size: 0.6875rem;
-    text-transform: uppercase;
-    letter-spacing: 0.02em;
-    padding-top: 0.1rem;
-  }
-
-  .dmeta dd {
-    margin: 0;
-    color: var(--m3-on-surface);
-  }
-
-  .muted {
-    color: var(--m3-on-surface-variant);
-  }
-
-  button.parent {
-    margin-right: 0.25rem;
-    padding: 0.05rem 0.3rem;
-    font-family: ui-monospace, Consolas, monospace;
-    font-size: 0.6875rem;
-    color: var(--m3-primary);
-    background: none;
-    border: 1px solid var(--m3-outline-variant);
-    border-radius: var(--m3-shape-extra-small, 4px);
-    cursor: pointer;
-  }
-
-  button.parent:disabled {
-    opacity: 0.5;
-    cursor: default;
-  }
-
-  /* ref chips (shared shape with the history rows' own copies) */
-  .ref {
-    flex: none;
-    max-width: 9rem;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    padding: 0 0.35rem;
-    border-radius: var(--m3-shape-extra-small, 4px);
-    font-size: 0.6875rem;
-    line-height: 1.4;
-  }
-
-  .ref-local {
-    color: var(--m3-on-primary-container);
-    background: var(--m3-primary-container);
-  }
-
-  .ref-remote {
-    color: var(--m3-on-tertiary-container);
-    background: var(--m3-tertiary-container);
-  }
-
-  .ref-tag {
-    color: var(--m3-on-secondary-container);
-    background: var(--m3-secondary-container);
-  }
-
-  .ref-head {
-    color: var(--m3-inverse-on-surface);
-    background: var(--m3-inverse-surface);
-  }
-
-  .drefs {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.25rem;
-  }
-
-  .msg {
-    margin: 0.5rem 0 0;
-    padding: 0.5rem;
-    white-space: pre-wrap;
-    overflow-wrap: anywhere;
-    font-family: ui-monospace, Consolas, monospace;
-    font-size: 0.72rem;
-    color: var(--m3-on-surface);
-    background: var(--m3-surface-container-low, var(--m3-surface));
-    border: 1px solid var(--m3-outline-variant);
-    border-radius: var(--m3-shape-extra-small, 4px);
-  }
-
-  .dfiles {
-    flex: 1;
-    min-width: 0;
-    display: flex;
-    flex-direction: column;
-  }
-
-  .dtab {
-    flex: none;
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    padding: 0.2rem 0.5rem 0.2rem 0.75rem;
-    font-size: 0.72rem;
-    color: var(--m3-on-surface);
-    background: var(--m3-surface-container-low, var(--m3-surface));
-    border-bottom: 1px solid var(--m3-outline-variant);
-  }
-
-  .dtab span {
-    flex: 1;
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    font-family: ui-monospace, Consolas, monospace;
-  }
-
-  .dtabbody {
-    flex: 1;
-    min-height: 0;
-    display: flex;
-    flex-direction: column;
-  }
-
-  .dstate {
-    margin: auto;
-    color: var(--m3-on-surface-variant);
-    font-size: 0.8125rem;
-  }
-
-  .filelist {
-    flex: none;
-    max-height: 30%;
-    margin: 0;
-    padding: 0.15rem 0;
-    list-style: none;
-    overflow-y: auto;
-    border-bottom: 1px solid var(--m3-outline-variant);
-    font-size: 0.72rem;
-  }
-
-  .filelist li {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    padding: 0.05rem 0.75rem;
-  }
-
-  .fpath {
-    flex: 1;
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    font-family: ui-monospace, Consolas, monospace;
-    color: var(--m3-on-surface);
-  }
-
-  .stats {
-    flex: none;
-    font-family: ui-monospace, Consolas, monospace;
-  }
-
-  .add {
-    color: var(--m3-tertiary);
-  }
-
-  .del {
-    color: var(--m3-error);
-  }
-
-  .ddiff {
-    flex: 1;
-    min-height: 0;
-    overflow: auto;
-  }
-</style>

@@ -444,16 +444,17 @@
   });
 </script>
 
-<div class="gc-root">
-  <div bind:this={scrollEl} class="gc-scroll" onscroll={onScroll}>
+<div class="gc-root relative block h-full min-h-0 overflow-hidden">
+  <div bind:this={scrollEl} class="gc-scroll h-full overflow-x-hidden overflow-y-auto" onscroll={onScroll}>
     <!-- Tall spacer drives the native scrollbar; height = rows × rowHeight. -->
-    <div class="gc-spacer" style:height="{totalHeight}px">
+    <div class="gc-spacer relative min-h-full" style:height="{totalHeight}px">
       <!-- Sticky viewport: stays pinned while the spacer scrolls past. -->
-      <div class="gc-sticky" style:height="{viewport.h}px">
+      <div class="gc-sticky sticky top-0 overflow-hidden" style:height="{viewport.h}px">
         <!-- svelte-ignore a11y_no_interactive_element_to_noninteractive_role -->
+        <!-- focus is drawn on-canvas as a row ring (outline-none) -->
         <canvas
           bind:this={canvasEl}
-          class="gc-canvas"
+          class="gc-canvas block outline-none"
           role="img"
           aria-label={"Commit graph, " + rowCount + (rowCount === 1 ? " commit" : " commits")}
           tabindex="0"
@@ -468,73 +469,17 @@
           onblur={() => (hasFocus = false)}
         ></canvas>
         {#if tip}
-          <div class="gc-tip" role="tooltip" style:left="{tip.x}px" style:top="{tip.y}px">
-            <span class="gc-tip-summary">{tip.summary}</span>
-            <span class="gc-tip-sha">{tip.sha}</span>
+          <div
+            class="gc-tip pointer-events-none absolute z-[1] flex max-w-[260px] flex-col gap-[2px] rounded-sm bg-primary px-2 py-1 text-xs leading-[1.35] text-primary-foreground shadow-md"
+            role="tooltip"
+            style:left="{tip.x}px"
+            style:top="{tip.y}px"
+          >
+            <span class="gc-tip-summary overflow-hidden text-ellipsis whitespace-nowrap">{tip.summary}</span>
+            <span class="gc-tip-sha font-mono opacity-80">{tip.sha}</span>
           </div>
         {/if}
       </div>
     </div>
   </div>
 </div>
-
-<style>
-  .gc-root {
-    position: relative;
-    display: block;
-    height: 100%;
-    min-height: 0;
-    overflow: hidden;
-  }
-
-  /* Native scrolling: wheel, drag, touch and the scrollbar come for free. */
-  .gc-scroll {
-    height: 100%;
-    overflow-y: auto;
-    overflow-x: hidden;
-  }
-
-  .gc-spacer {
-    position: relative;
-    min-height: 100%;
-  }
-
-  .gc-sticky {
-    position: sticky;
-    top: 0;
-    overflow: hidden;
-  }
-
-  .gc-canvas {
-    display: block;
-    outline: none; /* focus is drawn on-canvas as a row ring */
-  }
-
-  .gc-tip {
-    position: absolute;
-    z-index: 1;
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-    max-width: 260px;
-    padding: 4px 8px;
-    border-radius: var(--m3-shape-extra-small, 4px);
-    background: var(--m3-inverse-surface, #322f35);
-    color: var(--m3-inverse-on-surface, #f5eff7);
-    font-size: 12px;
-    line-height: 1.35;
-    box-shadow: var(--m3-elevation-1, none);
-    pointer-events: none;
-  }
-
-  .gc-tip-summary {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .gc-tip-sha {
-    font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
-    opacity: 0.8;
-  }
-</style>

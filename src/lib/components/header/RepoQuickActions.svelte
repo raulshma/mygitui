@@ -61,12 +61,13 @@
   import { opsFor } from "$lib/stores/ops.svelte";
   import { headerPins } from "$lib/stores/headerPins.svelte";
   import { toast } from "$lib/toast";
+  import { Button } from "$lib/components/ui/button/index.js";
   import {
     showMenuAt,
     showMenuAtElement,
   } from "$lib/components/menu/contextMenuStore.svelte";
   import Icon from "$lib/components/icons/Icon.svelte";
-  import Spinner from "$lib/components/m3/Spinner.svelte";
+  import { Spinner } from "$lib/components/ui/spinner/index.js";
   import iconFetch from "@ktibow/iconset-material-symbols/cloud-download";
   import iconPull from "@ktibow/iconset-material-symbols/arrow-downward";
   import iconPush from "@ktibow/iconset-material-symbols/arrow-upward";
@@ -279,47 +280,53 @@
 </script>
 
 <div
-  class="sync-actions"
+  class="sync-actions inline-flex flex-none items-stretch overflow-hidden rounded-sm border border-border bg-popover"
   class:busy
   role="group"
   aria-label="Git sync actions"
   aria-busy={busy}
 >
-  <button
-    class="sync-main"
-    type="button"
+  <Button
+    class="sync-main min-w-8 gap-[0.3rem] rounded-none border-0 px-2 text-xs transition-colors duration-[120ms] hover:bg-accent hover:text-foreground focus-visible:outline-2 focus-visible:outline-primary focus-visible:-outline-offset-2 focus-visible:ring-0"
+    variant="ghost"
     aria-label={primaryAriaLabel}
     aria-busy={runningVerb !== null}
     title={primaryTitle}
     disabled={busy || (primaryVerb !== "fetch" && !canUseBranch)}
     onclick={() => void run(primaryVerb)}
   >
-    <span class="verb-icon">
+    <span class="verb-icon inline-flex h-3.5 w-3.5 flex-none items-center justify-center">
       {#if runningVerb !== null}
-        <Spinner size={14} />
+        <Spinner class="size-3.5" role="presentation" aria-hidden="true" />
       {:else}
         <Icon icon={iconSync} size={15} />
       {/if}
     </span>
-    <span class="sync-word">Sync</span>
+    <span class="sync-word flex-none font-medium leading-none max-[760px]:hidden">Sync</span>
     {#if behind > 0 && runningVerb === null}
-      <span class="count behind" title={`${behind} behind`}>
+      <span
+        class="count behind inline-flex h-auto min-w-4 flex-none items-center gap-[0.1rem] rounded-full bg-muted px-1 text-[0.65rem] font-semibold leading-[1.1] text-center tabular-nums text-muted-foreground max-[760px]:hidden"
+        title={`${behind} behind`}
+      >
         <Icon icon={iconPull} size={10} />
         {badgeCount(behind)}
       </span>
     {/if}
     {#if ahead > 0 && runningVerb === null}
-      <span class="count ahead" title={`${ahead} ahead`}>
+      <span
+        class="count ahead inline-flex h-auto min-w-4 flex-none items-center gap-[0.1rem] rounded-full bg-accent px-1 text-[0.65rem] font-semibold leading-[1.1] text-center tabular-nums text-accent-foreground max-[760px]:hidden"
+        title={`${ahead} ahead`}
+      >
         <Icon icon={iconPush} size={10} />
         {badgeCount(ahead)}
       </span>
     {/if}
-  </button>
+  </Button>
 
   {#each pinnedVerbs as verb (verb)}
-    <button
-      class="sync-pin-btn"
-      type="button"
+    <Button
+      class="sync-pin-btn min-w-7 flex-none gap-[0.3rem] rounded-none border-0 border-l border-border px-[0.3rem] text-xs transition-colors duration-[120ms] hover:bg-accent hover:text-foreground focus-visible:outline-2 focus-visible:outline-primary focus-visible:-outline-offset-2 focus-visible:ring-0"
+      variant="ghost"
       data-sync-pin={verb}
       aria-label={pinTitle(verb)}
       aria-busy={runningVerb === verb}
@@ -328,25 +335,28 @@
       onclick={() => void run(verb)}
       oncontextmenu={(event) => openPinContext(event, verb)}
     >
-      <span class="verb-icon">
+      <span class="verb-icon inline-flex h-3.5 w-3.5 flex-none items-center justify-center">
         {#if runningVerb === verb}
-          <Spinner size={14} />
+          <Spinner class="size-3.5" role="presentation" aria-hidden="true" />
         {:else}
           <Icon icon={verbIcon(verb)} size={14} />
         {/if}
       </span>
       {#if pinCount(verb) !== null && runningVerb === null}
         {@const badge = pinCount(verb)!}
-        <span class={`count ${badge.dir}`} title={`${badge.count} ${badge.dir}`}>
+        <span
+          class={`count ${badge.dir} inline-flex h-auto min-w-4 flex-none items-center gap-[0.1rem] rounded-full px-1 text-[0.65rem] font-semibold leading-[1.1] text-center tabular-nums max-[760px]:hidden ${badge.dir === "ahead" ? "bg-accent text-accent-foreground" : "bg-muted text-muted-foreground"}`}
+          title={`${badge.count} ${badge.dir}`}
+        >
           {badgeCount(badge.count)}
         </span>
       {/if}
-    </button>
+    </Button>
   {/each}
 
-  <button
-    class="sync-menu-btn"
-    type="button"
+  <Button
+    class="sync-menu-btn min-w-7 flex-none gap-[0.3rem] rounded-none border-0 border-l border-border px-[0.2rem] text-xs transition-colors duration-[120ms] hover:bg-accent hover:text-foreground focus-visible:outline-2 focus-visible:outline-primary focus-visible:-outline-offset-2 focus-visible:ring-0"
+    variant="ghost"
     aria-label="More sync actions"
     title="Fetch / Pull / Push"
     aria-haspopup="menu"
@@ -354,125 +364,5 @@
     onclick={openSyncMenu}
   >
     <Icon icon={iconChevronDown} size={14} />
-  </button>
+  </Button>
 </div>
-
-<style>
-  .sync-actions {
-    display: inline-flex;
-    align-items: stretch;
-    flex: none;
-    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    border-radius: var(--m3-shape-extra-small, 4px);
-    overflow: hidden;
-    background: var(--m3-surface-container, transparent);
-  }
-
-  .sync-main,
-  .sync-pin-btn,
-  .sync-menu-btn {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.3rem;
-    min-height: 2rem;
-    padding: 0 0.5rem;
-    border: none;
-    background: none;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    font: inherit;
-    font-size: 0.75rem;
-    cursor: pointer;
-    transition:
-      background-color 0.12s ease,
-      color 0.12s ease;
-  }
-
-  .sync-main {
-    min-width: 2rem;
-  }
-
-  .sync-pin-btn {
-    flex: none;
-    min-width: 1.75rem;
-    padding: 0 0.3rem;
-    border-left: 1px solid var(--m3-outline-variant, var(--m3-primary));
-  }
-
-  .sync-menu-btn {
-    flex: none;
-    min-width: 1.75rem;
-    padding: 0 0.2rem;
-    border-left: 1px solid var(--m3-outline-variant, var(--m3-primary));
-  }
-
-  .sync-actions:not(.busy) .sync-main:hover:not(:disabled),
-  .sync-actions:not(.busy) .sync-pin-btn:hover:not(:disabled),
-  .sync-actions:not(.busy) .sync-menu-btn:hover:not(:disabled) {
-    background: var(--m3-surface-container-high, var(--m3-surface));
-    color: var(--m3-on-surface);
-  }
-
-  .sync-main:focus-visible,
-  .sync-pin-btn:focus-visible,
-  .sync-menu-btn:focus-visible {
-    outline: 2px solid var(--m3-primary);
-    outline-offset: -2px;
-  }
-
-  .sync-main:disabled,
-  .sync-pin-btn:disabled,
-  .sync-menu-btn:disabled {
-    color: var(--app-disabled-fg, var(--m3-on-surface-variant));
-    cursor: not-allowed;
-  }
-
-  .verb-icon {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    flex: none;
-    width: 14px;
-    height: 14px;
-  }
-
-  .sync-word {
-    flex: none;
-    font-weight: 500;
-    line-height: 1;
-  }
-
-  .count {
-    flex: none;
-    display: inline-flex;
-    align-items: center;
-    gap: 0.1rem;
-    min-width: 1rem;
-    padding: 0 0.25rem;
-    border-radius: var(--m3-shape-full, 9999px);
-    font-size: 0.65rem;
-    font-weight: 600;
-    line-height: 1.1;
-    text-align: center;
-    font-variant-numeric: tabular-nums;
-  }
-
-  .count.ahead {
-    background: var(--m3-primary-container, var(--m3-surface-container-high));
-    color: var(--m3-on-primary-container, var(--m3-primary));
-  }
-
-  .count.behind {
-    background: var(--m3-tertiary-container, var(--m3-surface-container-high));
-    color: var(--m3-on-tertiary-container, var(--m3-tertiary));
-  }
-
-  @media (max-width: 760px) {
-    .sync-word {
-      display: none;
-    }
-
-    .count {
-      display: none;
-    }
-  }
-</style>

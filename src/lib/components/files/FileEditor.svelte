@@ -14,14 +14,14 @@
   - "Changed on disk" (external modification while editing) surfaces a
     Reload / Keep-mine dialog; Keep-mine overwrites unconditionally.
   - The per-language grammar loads lazily via @codemirror/language-data;
-    the M3 theme is built from `--m3-*` CSS variables so it follows the
-    app's dynamic color scheme automatically.
+    the editor theme is built from the app's theme CSS variables so it
+    follows the color scheme automatically.
 -->
 <script lang="ts">
   import type { FileMeta } from "$lib/ipc/types";
   import { checkpointCreate, readFile, writeFile } from "$lib/ipc/client";
   import ConfirmDialog from "$lib/components/safety/ConfirmDialog.svelte";
-  import { Spinner } from "$lib/components/m3";
+  import { Spinner } from "$lib/components/ui/spinner/index.js";
   import { toast } from "$lib/toast";
   import { tags } from "@lezer/highlight";
   import { editorPrefs } from "./editorPrefs.svelte";
@@ -125,16 +125,16 @@
     };
   }
 
-  /** M3-flavored editor + syntax theme (CSS variables → follows theme). */
+  /** App-themed editor + syntax theme (CSS variables → follows theme). */
   function buildTheme(c: Cm) {
     const editorTheme = c.EditorView.theme({
       "&": {
-        color: "var(--m3-on-surface)",
-        backgroundColor: "var(--m3-surface)",
+        color: "var(--foreground)",
+        backgroundColor: "var(--card)",
         fontSize: "0.8125rem",
       },
       ".cm-content": {
-        caretColor: "var(--m3-primary)",
+        caretColor: "var(--primary)",
         fontFamily: "var(--app-font-mono, ui-monospace, Consolas, monospace)",
       },
       ".cm-scroller": {
@@ -142,87 +142,87 @@
         lineHeight: "1.5",
       },
       ".cm-gutters": {
-        backgroundColor: "var(--m3-surface-container, var(--m3-surface))",
-        color: "var(--m3-outline, var(--m3-on-surface-variant))",
+        backgroundColor: "var(--muted)",
+        color: "var(--muted-foreground)",
         border: "none",
-        borderRight: "1px solid var(--app-border, var(--m3-outline-variant))",
+        borderRight: "1px solid var(--border)",
       },
       ".cm-activeLine": {
         backgroundColor:
-          "color-mix(in srgb, var(--m3-primary) 7%, transparent)",
+          "color-mix(in srgb, var(--primary) 7%, transparent)",
       },
       ".cm-activeLineGutter": {
         backgroundColor:
-          "color-mix(in srgb, var(--m3-primary) 12%, transparent)",
-        color: "var(--m3-on-surface)",
+          "color-mix(in srgb, var(--primary) 12%, transparent)",
+        color: "var(--foreground)",
       },
       "&.cm-focused .cm-selectionBackground, .cm-selectionBackground":
         {
           backgroundColor:
-            "color-mix(in srgb, var(--m3-primary) 22%, transparent) !important",
+            "color-mix(in srgb, var(--primary) 22%, transparent) !important",
         },
       ".cm-selectionMatch": {
         backgroundColor:
-          "color-mix(in srgb, var(--m3-tertiary) 25%, transparent)",
+          "color-mix(in srgb, var(--muted) 25%, transparent)",
       },
       ".cm-searchMatch": {
         backgroundColor:
-          "color-mix(in srgb, var(--m3-tertiary) 30%, transparent)",
-        outline: "1px solid var(--m3-tertiary)",
+          "color-mix(in srgb, var(--muted) 30%, transparent)",
+        outline: "1px solid var(--muted)",
       },
       ".cm-searchMatch-selected": {
         backgroundColor:
-          "color-mix(in srgb, var(--m3-primary) 35%, transparent)",
+          "color-mix(in srgb, var(--primary) 35%, transparent)",
       },
       ".cm-panels": {
-        backgroundColor: "var(--m3-surface-container, var(--m3-surface))",
-        color: "var(--m3-on-surface)",
-        borderBottom: "1px solid var(--app-border, var(--m3-outline-variant))",
+        backgroundColor: "var(--muted)",
+        color: "var(--foreground)",
+        borderBottom: "1px solid var(--border)",
       },
       ".cm-panel.cm-search input, .cm-panel.cm-search button": {
-        background: "var(--m3-surface)",
-        color: "var(--m3-on-surface)",
-        border: "1px solid var(--app-border, var(--m3-outline-variant))",
+        background: "var(--card)",
+        color: "var(--foreground)",
+        border: "1px solid var(--border)",
         borderRadius: "4px",
         font: "inherit",
         padding: "0.05rem 0.3rem",
       },
       ".cm-tooltip": {
-        backgroundColor: "var(--m3-surface-container-high)",
-        color: "var(--m3-on-surface)",
-        border: "1px solid var(--app-border, var(--m3-outline-variant))",
+        backgroundColor: "var(--accent)",
+        color: "var(--foreground)",
+        border: "1px solid var(--border)",
       },
     });
     const highlight = c.syntaxHighlighting(
       c.HighlightStyle.define([
-        { tag: tags.keyword, color: "var(--m3-primary)" },
-        { tag: [tags.controlKeyword, tags.moduleKeyword], color: "var(--m3-primary)" },
-        { tag: tags.string, color: "var(--m3-tertiary)" },
-        { tag: tags.number, color: "var(--m3-tertiary)" },
+        { tag: tags.keyword, color: "var(--primary)" },
+        { tag: [tags.controlKeyword, tags.moduleKeyword], color: "var(--primary)" },
+        { tag: tags.string, color: "var(--muted)" },
+        { tag: tags.number, color: "var(--muted)" },
         {
           tag: tags.comment,
-          color: "var(--m3-outline, var(--m3-on-surface-variant))",
+          color: "var(--muted-foreground)",
           fontStyle: "italic",
         },
-        { tag: [tags.function(tags.variableName), tags.function(tags.propertyName)], color: "var(--m3-secondary)" },
-      { tag: [tags.typeName, tags.className], color: "var(--m3-secondary)" },
-      { tag: [tags.variableName, tags.propertyName], color: "var(--m3-on-surface)" },
-      { tag: tags.heading, color: "var(--m3-primary)", fontWeight: "bold" },
-      { tag: tags.link, color: "var(--m3-tertiary)", textDecoration: "underline" },
-      { tag: tags.invalid, color: "var(--m3-error)" },
+        { tag: [tags.function(tags.variableName), tags.function(tags.propertyName)], color: "var(--secondary)" },
+      { tag: [tags.typeName, tags.className], color: "var(--secondary)" },
+      { tag: [tags.variableName, tags.propertyName], color: "var(--foreground)" },
+      { tag: tags.heading, color: "var(--primary)", fontWeight: "bold" },
+      { tag: tags.link, color: "var(--muted)", textDecoration: "underline" },
+      { tag: tags.invalid, color: "var(--destructive)" },
       // Markdown source + general coverage polish.
       { tag: tags.strong, fontWeight: "600" },
       { tag: tags.emphasis, fontStyle: "italic" },
       { tag: tags.strikethrough, textDecoration: "line-through" },
-      { tag: tags.quote, color: "var(--m3-outline, var(--m3-on-surface-variant))", fontStyle: "italic" },
-      { tag: tags.contentSeparator, color: "var(--m3-primary)" },
+      { tag: tags.quote, color: "var(--muted-foreground)", fontStyle: "italic" },
+      { tag: tags.contentSeparator, color: "var(--primary)" },
       { tag: tags.monospace, fontFamily: "var(--app-font-mono, ui-monospace, Consolas, monospace)" },
-      { tag: [tags.escape, tags.regexp], color: "var(--m3-tertiary)" },
-      { tag: [tags.atom, tags.bool, tags.null], color: "var(--m3-tertiary)" },
-      { tag: [tags.operator, tags.operatorKeyword], color: "var(--m3-on-surface-variant)" },
-      { tag: [tags.punctuation, tags.bracket], color: "var(--m3-on-surface-variant)" },
-      { tag: [tags.namespace, tags.labelName], color: "var(--m3-secondary)" },
-      { tag: tags.meta, color: "var(--m3-on-surface-variant)", fontStyle: "italic" },
+      { tag: [tags.escape, tags.regexp], color: "var(--muted)" },
+      { tag: [tags.atom, tags.bool, tags.null], color: "var(--muted)" },
+      { tag: [tags.operator, tags.operatorKeyword], color: "var(--muted-foreground)" },
+      { tag: [tags.punctuation, tags.bracket], color: "var(--muted-foreground)" },
+      { tag: [tags.namespace, tags.labelName], color: "var(--secondary)" },
+      { tag: tags.meta, color: "var(--muted-foreground)", fontStyle: "italic" },
     ]),
   );
   return [editorTheme, highlight];
@@ -464,23 +464,22 @@
   }
 </script>
 
-<div class="editor" class:split={showPreview}>
+<div class="editor flex h-full min-h-0 min-w-0 flex-col bg-card {showPreview ? 'flex-row' : ''}">
   <!-- The host exists for the whole component lifetime (mounting into a
        node that only appears later would oscillate: ready → host binds →
        effect re-runs → loading → host unbinds). Loading/error state is
        an overlay on top of the (hidden) host instead. -->
   {#if status === "loading"}
-    <p class="state" role="status"><Spinner size={14} /> Loading {path}…</p>
+    <p class="state m-auto inline-flex items-center gap-[0.4rem] text-[0.8125rem] text-muted-foreground" role="status"><Spinner class="size-[14px]" role="presentation" aria-hidden="true" /> Loading {path}…</p>
   {:else if status === "error"}
-    <p class="state state-error" role="alert">{errorText}</p>
+    <p class="state m-auto inline-flex items-center gap-[0.4rem] text-[0.8125rem] text-destructive" role="alert">{errorText}</p>
   {/if}
   <div
-    class="cm-host"
-    class:hidden={status !== "ready" || editorHidden}
+    class="cm-host flex-1 min-h-0 overflow-hidden {showPreview ? 'min-w-0' : ''} {status !== "ready" || editorHidden ? 'hidden' : ''}"
     bind:this={host}
   ></div>
   {#if showPreview}
-    <div class="preview-host" class:nodiv={editorHidden}>
+    <div class="preview-host flex-[1_1_50%] min-w-0 min-h-0 border-l border-border {editorHidden ? 'border-l-0' : ''}">
       {#await import("./MarkdownPreview.svelte") then { default: Preview }}
         <Preview
           bind:this={previewRef}
@@ -505,69 +504,16 @@
 </div>
 
 <style>
-  .editor {
-    display: flex;
-    flex-direction: column;
-    height: 100%;
-    min-height: 0;
-    min-width: 0;
-    background: var(--m3-surface);
-  }
-
-  /* Split mode: editor column | divider | preview column. */
-  .editor.split {
-    flex-direction: row;
-  }
-
-  .editor.split > .cm-host {
-    min-width: 0;
-  }
-
-  .preview-host {
-    flex: 1;
-    min-width: 0;
-    min-height: 0;
-    border-left: 1px solid var(--app-border, var(--m3-outline-variant));
-  }
-
-  /* Preview-only: no divider when the editor column is hidden. */
-  .preview-host.nodiv {
-    border-left: none;
-  }
-
-  .cm-host {
-    flex: 1;
-    min-height: 0;
-    overflow: hidden;
-  }
-
-  .cm-host.hidden {
-    display: none;
-  }
-
-  /* Preview-only mode: let the preview column take everything. */
-  .editor.split > .preview-host {
-    flex: 1 1 50%;
-  }
-
+  /*
+   * Deliberate residual CSS: CodeMirror-generated DOM (`.cm-editor` is
+   * created by the CM view, not this template), so the rules can't live in
+   * markup utilities. Everything else in this component is Tailwind.
+   */
   .cm-host :global(.cm-editor) {
     height: 100%;
   }
 
   .cm-host :global(.cm-editor.cm-focused) {
     outline: none;
-  }
-
-  .state {
-    margin: auto;
-    color: var(--m3-on-surface-variant);
-    font-size: 0.8125rem;
-    display: inline-flex;
-    align-items: center;
-    gap: 0.4rem;
-  }
-
-  .state-error {
-    color: var(--m3-error);
   }
 </style>

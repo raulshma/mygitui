@@ -15,7 +15,7 @@
  * Fence highlighting (`highlightFence`) deliberately reuses the CodeMirror
  * grammar set (@codemirror/language-data) that the open file's editor
  * already loaded: zero extra highlighter bytes, and `tok-*` classes theme
- * via `--m3-*` CSS variables so the preview follows the dynamic color
+ * via the theme's CSS variables so the preview follows the active theme
  * scheme (shiki's fixed github themes — used by diffs — do not).
  */
 

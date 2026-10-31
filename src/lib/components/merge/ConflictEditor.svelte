@@ -34,6 +34,8 @@
   import { conflictResolve, mergeAbort, readFile } from "$lib/ipc/client";
   import type { ConflictFile } from "$lib/ipc/types";
   import { toast } from "$lib/toast";
+  import { Button } from "$lib/components/ui/button/index.js";
+  import { Badge } from "$lib/components/ui/badge/index.js";
   import {
     applyResolutions,
     countConflicts,
@@ -384,6 +386,10 @@
       busyPath = null;
     }
   }
+
+  /** Classes for the small toolbar buttons (idle vs tonal emphasis). */
+  const tbIdle = "text-muted-foreground";
+  const tbTonal = "bg-primary/15 font-semibold text-primary hover:bg-primary/25";
 </script>
 
 <!-- Shortcuts work anywhere while the editor is mounted (including inside
@@ -391,133 +397,171 @@
      unresolved conflict. -->
 <svelte:window onkeydown={onKeydown} />
 
-<div class="root">
-  <header class="topbar">
-    <span class="chip source" title="Operation that produced these conflicts">
+<div class="root flex h-full min-h-0 flex-col rounded-lg border border-border bg-background text-foreground text-[0.8125rem]">
+  <header class="topbar flex flex-none items-center gap-2 border-b border-border px-2 py-1.5">
+    <Badge
+      variant="outline"
+      class="source h-auto whitespace-nowrap rounded-full border-transparent bg-primary/10 px-2 py-0.5 text-[0.6875rem] font-semibold uppercase tracking-wider text-primary"
+      title="Operation that produced these conflicts"
+    >
       {files[0]?.source ?? "merge"}
-    </span>
-    <span class="progress" aria-live="polite">
+    </Badge>
+    <span
+      class="progress overflow-hidden text-ellipsis whitespace-nowrap text-xs tabular-nums text-muted-foreground"
+      aria-live="polite"
+    >
       Resolved: {resolvedFiles} of {files.length} file{files.length === 1 ? "" : "s"}
       {#if selected}
         · {total - unresolved.length}/{total} conflicts in {selected.path}
       {/if}
     </span>
-    <span class="spacer"></span>
-    <button
-      class="tb abort"
+    <span class="spacer flex-1"></span>
+    <Button
+      variant={abortArmed ? "destructive" : "outline"}
+      class={abortArmed ? "" : tbIdle}
+      size="xs"
       type="button"
-      class:armed={abortArmed}
       disabled={busy}
       onclick={() => void abortMerge()}
     >
       {abortArmed ? "Confirm abort?" : "Abort merge"}
-    </button>
-    <button
-      class="tb done"
+    </Button>
+    <Button
+      variant={!allResolved || busy ? "outline" : "ghost"}
+      class={!allResolved || busy ? tbIdle : tbTonal}
+      size="xs"
       type="button"
       disabled={!allResolved || busy}
       title={allResolved ? "Finish: every file is resolved and staged" : "Mark every file resolved first"}
       onclick={() => onResolved()}
     >
       Done
-    </button>
-    <button class="tb" type="button" aria-label="Close conflict editor" onclick={() => onClose()}>
+    </Button>
+    <Button variant="outline" class={tbIdle} size="xs" type="button" aria-label="Close conflict editor" onclick={() => onClose()}>
       Close
-    </button>
+    </Button>
   </header>
 
-  <div class="body">
-    <aside class="files" aria-label="Conflicted files">
+  <div class="body flex min-h-0 flex-1">
+    <aside
+      class="files flex w-56 flex-none flex-col gap-px overflow-y-auto border-r border-border py-1"
+      aria-label="Conflicted files"
+    >
       {#each files as file (file.path)}
-        <button
-          class="file"
+        <Button
+          variant="ghost"
+          class={"file flex w-full min-w-0 justify-start gap-1.5 rounded-none px-2 py-1 text-left font-mono text-xs font-normal" +
+            (file.path === selected?.path ? " bg-accent text-accent-foreground" : "") +
+            (marked[file.path] ? " marked" : "")}
           type="button"
-          class:active={file.path === selected?.path}
-          class:marked={marked[file.path]}
           aria-current={file.path === selected?.path ? "true" : undefined}
           onclick={() => {
             selectedPath = file.path;
             cursor = 0;
           }}
         >
-          <span class="mark" aria-hidden="true">
+          <span
+            class={"mark w-3.5 flex-none text-center font-bold " +
+              (marked[file.path] ? "text-[var(--app-added)]" : "text-primary")}
+            aria-hidden="true"
+          >
             {#if busyPath === file.path}…{:else if marked[file.path]}✓{:else if fileDirty(file.path)}•{/if}
           </span>
-          <span class="filepath">{file.path}</span>
+          <span
+            class={"filepath min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap" +
+              (marked[file.path] ? " line-through opacity-70" : "")}
+          >{file.path}</span>
           {#if fileConflictTotal(file.path) !== null}
-            <span class="count">{fileConflictTotal(file.path)}</span>
+            <Badge variant="secondary" class="count h-auto flex-none rounded-full bg-muted px-1.5 text-[0.6875rem] tabular-nums">{fileConflictTotal(file.path)}</Badge>
           {/if}
-        </button>
+        </Button>
       {/each}
     </aside>
 
-    <section class="main" aria-label="Conflict editor">
+    <section class="main flex min-h-0 min-w-0 flex-1 flex-col" aria-label="Conflict editor">
       {#if selected === null}
-        <p class="empty">No conflicted files.</p>
+        <p class="empty p-4 text-muted-foreground">No conflicted files.</p>
       {:else if loadErrors[selected.path] !== undefined}
-        <div class="loaderror" role="alert">
-          <p>Could not load {selected.path}: {loadErrors[selected.path]}</p>
-          <button class="tb" type="button" onclick={() => retryLoad(selected!.path)}>Retry</button>
+        <div class="loaderror p-4 text-muted-foreground" role="alert">
+          <p class="mb-2 text-destructive">Could not load {selected.path}: {loadErrors[selected.path]}</p>
+          <Button variant="outline" class={tbIdle} size="xs" type="button" onclick={() => retryLoad(selected!.path)}>Retry</Button>
         </div>
       {:else if text === null}
-        <p class="empty">Loading {selected.path}…</p>
+        <p class="empty p-4 text-muted-foreground">Loading {selected.path}…</p>
       {:else}
         {#if !selected.has_base}
-          <p class="hint" role="note">
+          <p class="hint flex-none bg-primary/10 px-2.5 py-1 text-[0.6875rem] text-primary" role="note">
             Base unavailable (rename/add conflict) — showing ours vs theirs only.
           </p>
         {/if}
-        <div class="content">
+        <div class="content min-h-0 flex-1 overflow-auto p-2.5 font-mono text-xs leading-[1.35]">
           {#each renderItems as item (item.key)}
             {#if item.kind === "line"}
-              <pre class="ctx">{item.segment.text}</pre>
+              <pre class="ctx m-0 whitespace-pre-wrap break-words text-muted-foreground">{item.segment.text}</pre>
             {:else}
               {@const index = item.ordinal}
               {@const conflict = item.segment}
+              {@const st = conflictStatus(index)}
               <div
-                class="conflict"
-                class:active={index === cursor}
-                class:done={isResolved(index)}
+                class={"conflict my-1.5 overflow-hidden rounded-md border " +
+                  (isResolved(index) ? "done border-[var(--app-added)]" : "border-border") +
+                  (index === cursor ? " active outline-2 outline-primary" : "")}
                 bind:this={blockEls[index]}
               >
-                <div class="head">
-                  <span class="idx">#{index + 1}</span>
-                  <span class="status {conflictStatus(index)}">{conflictStatus(index)}</span>
-                  <span class="head-spacer"></span>
-                  <button
-                    class="tb"
+                <div class="head flex flex-wrap items-center gap-1.5 border-b border-border bg-muted px-1.5 py-1">
+                  <span class="idx tabular-nums text-muted-foreground">#{index + 1}</span>
+                  <Badge
+                    variant="outline"
+                    class={"status h-auto rounded-full border-transparent px-1.5 uppercase tracking-wider " +
+                      (st === "unresolved"
+                        ? "bg-destructive/10 text-destructive"
+                        : st === "edited"
+                          ? "bg-secondary text-secondary-foreground"
+                          : "bg-primary/15 text-primary")}
+                  >{st}</Badge>
+                  <span class="head-spacer flex-1"></span>
+                  <Button
+                    variant="outline"
+                    class={tbIdle}
+                    size="xs"
                     type="button"
                     disabled={busyPath === selected.path}
                     aria-label={`Choose ours for conflict ${index + 1}`}
-                    onclick={() => choose(index, "ours")}>Choose ours</button
+                    onclick={() => choose(index, "ours")}>Choose ours</Button
                   >
-                  <button
-                    class="tb"
+                  <Button
+                    variant="outline"
+                    class={tbIdle}
+                    size="xs"
                     type="button"
                     disabled={busyPath === selected.path}
                     aria-label={`Choose theirs for conflict ${index + 1}`}
-                    onclick={() => choose(index, "theirs")}>Choose theirs</button
+                    onclick={() => choose(index, "theirs")}>Choose theirs</Button
                   >
                   {#if isEditing(index)}
-                    <button
-                      class="tb"
+                    <Button
+                      variant="outline"
+                      class={tbIdle}
+                      size="xs"
                       type="button"
                       disabled={busyPath === selected.path}
-                      onclick={stopEdit}>Done editing</button
+                      onclick={stopEdit}>Done editing</Button
                     >
                   {:else}
-                    <button
-                      class="tb"
+                    <Button
+                      variant="outline"
+                      class={tbIdle}
+                      size="xs"
                       type="button"
                       disabled={busyPath === selected.path}
                       aria-label={`Edit conflict ${index + 1}`}
-                      onclick={() => startEdit(index)}>Edit</button
+                      onclick={() => startEdit(index)}>Edit</Button
                     >
                   {/if}
                 </div>
                 {#if isEditing(index)}
                   <textarea
-                    class="custom"
+                    class="custom block w-full box-border min-h-12 resize-y border-0 border-t border-border bg-card px-1.5 py-1 font-mono text-xs leading-[1.35] text-foreground focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-2"
                     aria-label={`Custom resolution for conflict ${index + 1}`}
                     rows={Math.max(3, (customMap.get(index) ?? "").split("\n").length)}
                     value={draftFor(index)}
@@ -525,11 +569,15 @@
                     oninput={(event) => setCustom(index, event.currentTarget.value)}
                   ></textarea>
                 {:else}
-                  <div class="panes">
-                    <pre class="pane ours" class:picked={choiceMap.get(index) === "ours"}
+                  <div class="panes grid grid-cols-2">
+                    <pre
+                      class={"pane ours m-0 min-w-0 whitespace-pre-wrap break-words border-r border-border bg-[var(--app-added-bg)] px-1.5 py-1" +
+                        (choiceMap.get(index) === "ours" ? " picked shadow-[inset_0_0_0_2px_var(--primary)]" : "")}
                       >{conflict.ours}</pre
                     >
-                    <pre class="pane theirs" class:picked={choiceMap.get(index) === "theirs"}
+                    <pre
+                      class={"pane theirs m-0 min-w-0 whitespace-pre-wrap break-words bg-[var(--app-modified-bg)] px-1.5 py-1" +
+                        (choiceMap.get(index) === "theirs" ? " picked shadow-[inset_0_0_0_2px_var(--primary)]" : "")}
                       >{conflict.theirs}</pre
                     >
                   </div>
@@ -539,39 +587,51 @@
           {/each}
         </div>
 
-        <footer class="filebar">
-          <button class="tb" type="button" disabled={total === 0} onclick={() => void prevConflict()}>
+        <footer class="filebar flex flex-none flex-wrap items-center gap-1.5 border-t border-border px-2 py-1.5">
+          <Button variant="outline" class={tbIdle} size="xs" type="button" disabled={total === 0} onclick={() => void prevConflict()}>
             ‹ Prev
-          </button>
-          <button
-            class="tb"
+          </Button>
+          <Button
+            variant="outline"
+            class={tbIdle}
+            size="xs"
             type="button"
             disabled={total === 0}
-            onclick={() => void nextUnresolved()}>Next unresolved (F3)</button
+            onclick={() => void nextUnresolved()}>Next unresolved (F3)</Button
           >
-          <span class="head-spacer"></span>
-          <button
-            class="tb"
+          <span class="head-spacer flex-1"></span>
+          <Button
+            variant="outline"
+            class={tbIdle}
+            size="xs"
             type="button"
             disabled={total === 0 || busyPath === selected.path}
             title="Resolve every conflict in this file with our side"
-            onclick={() => resolveAll("ours")}>Resolve all ours</button
+            onclick={() => resolveAll("ours")}>Resolve all ours</Button
           >
-          <button
-            class="tb"
+          <Button
+            variant="outline"
+            class={tbIdle}
+            size="xs"
             type="button"
             disabled={total === 0 || busyPath === selected.path}
             title="Resolve every conflict in this file with their side"
-            onclick={() => resolveAll("theirs")}>Resolve all theirs</button
+            onclick={() => resolveAll("theirs")}>Resolve all theirs</Button
           >
-          <span class="head-spacer"></span>
+          <span class="head-spacer flex-1"></span>
           {#if dirty}
-            <span class="unsaved" title="Choices not written yet — mark the file resolved to persist">
+            <Badge
+              variant="outline"
+              class="unsaved h-auto rounded-full border-transparent bg-primary/10 px-2 py-0.5 text-[0.6875rem] text-primary"
+              title="Choices not written yet — mark the file resolved to persist"
+            >
               unsaved
-            </span>
+            </Badge>
           {/if}
-          <button
-            class="tb primary"
+          <Button
+            variant={busyPath === selected.path || text === null || unresolved.length > 0 ? "outline" : "ghost"}
+            class={"primary " + (busyPath === selected.path || text === null || unresolved.length > 0 ? tbIdle : tbTonal)}
+            size="xs"
             type="button"
             disabled={busyPath === selected.path || text === null || unresolved.length > 0}
             title={
@@ -579,350 +639,10 @@
                 ? `${unresolved.length} conflict(s) still unresolved`
                 : "Write the resolved content, stage and clear the conflict"
             }
-            onclick={() => void markResolved()}>Mark resolved (Ctrl+Enter)</button
+            onclick={() => void markResolved()}>Mark resolved (Ctrl+Enter)</Button
           >
         </footer>
       {/if}
     </section>
   </div>
 </div>
-
-<style>
-  .root {
-    display: flex;
-    flex-direction: column;
-    height: 100%;
-    min-height: 0;
-    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    border-radius: var(--m3-shape-small, 8px);
-    background: var(--m3-surface, canvas);
-    color: var(--m3-on-surface);
-    font-size: 0.8125rem;
-  }
-
-  .topbar {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    padding: 0.375rem 0.5rem;
-    border-bottom: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    flex: none;
-  }
-
-  .chip {
-    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    border-radius: var(--m3-shape-full, 9999px);
-    padding: 0.0625rem 0.5rem;
-    font-size: 0.6875rem;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    white-space: nowrap;
-  }
-
-  .chip.source {
-    background: var(--m3-tertiary-container, transparent);
-    color: var(--m3-on-tertiary-container, var(--m3-on-surface));
-    border-color: transparent;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-  }
-
-  .progress {
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    font-size: 0.75rem;
-    font-variant-numeric: tabular-nums;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .spacer,
-  .head-spacer {
-    flex: 1;
-  }
-
-  .tb {
-    flex: none;
-    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    border-radius: var(--m3-shape-extra-small, 4px);
-    background: none;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    font: inherit;
-    font-size: 0.75rem;
-    padding: 0.25rem 0.5rem;
-    cursor: pointer;
-    white-space: nowrap;
-  }
-
-  .tb:hover:not(:disabled) {
-    background: var(--m3-surface-container-high, var(--m3-surface));
-  }
-
-  .tb:focus-visible {
-    outline: 2px solid var(--m3-primary);
-    outline-offset: -1px;
-  }
-
-  .tb:disabled {
-    cursor: not-allowed;
-    opacity: 0.55;
-  }
-
-  .tb.abort.armed {
-    background: var(--m3-error-container, transparent);
-    color: var(--m3-on-error-container, var(--m3-error));
-    border-color: var(--m3-error);
-    font-weight: 600;
-  }
-
-  .tb.done:not(:disabled),
-  .tb.primary:not(:disabled) {
-    background: var(--m3-primary-container, transparent);
-    color: var(--m3-on-primary-container, var(--m3-primary));
-    border-color: transparent;
-    font-weight: 600;
-  }
-
-  .body {
-    display: flex;
-    flex: 1;
-    min-height: 0;
-  }
-
-  .files {
-    width: 14rem;
-    flex: none;
-    overflow-y: auto;
-    border-right: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    padding: 0.25rem 0;
-    display: flex;
-    flex-direction: column;
-    gap: 0.0625rem;
-  }
-
-  .file {
-    display: flex;
-    align-items: center;
-    gap: 0.375rem;
-    width: 100%;
-    border: none;
-    background: none;
-    color: inherit;
-    font: inherit;
-    font-family: ui-monospace, Consolas, monospace;
-    font-size: 0.75rem;
-    text-align: left;
-    padding: 0.25rem 0.5rem;
-    cursor: pointer;
-    min-width: 0;
-  }
-
-  .file:hover {
-    background: var(--m3-surface-container-high, var(--m3-surface));
-  }
-
-  .file:focus-visible {
-    outline: 2px solid var(--m3-primary);
-    outline-offset: -2px;
-  }
-
-  .file.active {
-    background: var(--m3-secondary-container, var(--m3-surface-container-high));
-  }
-
-  .file.marked .filepath {
-    text-decoration: line-through;
-    opacity: 0.7;
-  }
-
-  .mark {
-    flex: none;
-    width: 0.875rem;
-    color: var(--m3-primary);
-    font-weight: 700;
-    text-align: center;
-  }
-
-  .file.marked .mark {
-    color: var(--m3-tertiary, var(--m3-primary));
-  }
-
-  .filepath {
-    flex: 1;
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .count {
-    flex: none;
-    background: var(--m3-surface-container-high, var(--m3-surface));
-    border-radius: var(--m3-shape-full, 9999px);
-    padding: 0 0.4rem;
-    font-size: 0.6875rem;
-    font-variant-numeric: tabular-nums;
-  }
-
-  .main {
-    flex: 1;
-    min-width: 0;
-    display: flex;
-    flex-direction: column;
-    min-height: 0;
-  }
-
-  .hint {
-    margin: 0;
-    padding: 0.25rem 0.625rem;
-    font-size: 0.6875rem;
-    color: var(--m3-on-tertiary-container, var(--m3-tertiary));
-    background: var(--m3-tertiary-container, transparent);
-    flex: none;
-  }
-
-  .content {
-    flex: 1;
-    min-height: 0;
-    overflow: auto;
-    padding: 0.375rem 0.625rem;
-    font-family: ui-monospace, Consolas, monospace;
-    font-size: 0.75rem;
-    line-height: 1.35;
-  }
-
-  .ctx {
-    margin: 0;
-    white-space: pre-wrap;
-    word-break: break-word;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-  }
-
-  .conflict {
-    margin: 0.375rem 0;
-    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    border-radius: var(--m3-shape-extra-small, 4px);
-    overflow: hidden;
-  }
-
-  .conflict.active {
-    outline: 2px solid var(--m3-primary);
-    outline-offset: 0;
-  }
-
-  .conflict.done {
-    border-color: var(--m3-tertiary, var(--m3-outline-variant));
-  }
-
-  .head {
-    display: flex;
-    align-items: center;
-    gap: 0.375rem;
-    padding: 0.25rem 0.375rem;
-    background: var(--m3-surface-container, var(--m3-surface));
-    border-bottom: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    flex-wrap: wrap;
-  }
-
-  .idx {
-    font-variant-numeric: tabular-nums;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-  }
-
-  .status {
-    font-size: 0.6875rem;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-    padding: 0 0.375rem;
-    border-radius: var(--m3-shape-full, 9999px);
-    background: var(--m3-error-container, transparent);
-    color: var(--m3-on-error-container, var(--m3-error));
-  }
-
-  .status.ours,
-  .status.theirs {
-    background: var(--m3-primary-container, transparent);
-    color: var(--m3-on-primary-container, var(--m3-primary));
-  }
-
-  .status.edited {
-    background: var(--m3-secondary-container, transparent);
-    color: var(--m3-on-secondary-container, var(--m3-on-surface));
-  }
-
-  .panes {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-  }
-
-  .pane {
-    margin: 0;
-    padding: 0.25rem 0.375rem;
-    white-space: pre-wrap;
-    word-break: break-word;
-    min-width: 0;
-  }
-
-  .pane.ours {
-    background: color-mix(in srgb, var(--m3-primary-container, transparent) 45%, transparent);
-    border-right: 1px solid var(--m3-outline-variant, var(--m3-primary));
-  }
-
-  .pane.theirs {
-    background: color-mix(in srgb, var(--m3-tertiary-container, transparent) 45%, transparent);
-  }
-
-  .pane.picked {
-    box-shadow: inset 0 0 0 2px var(--m3-primary);
-  }
-
-  .custom {
-    display: block;
-    width: 100%;
-    box-sizing: border-box;
-    border: none;
-    border-top: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    background: var(--m3-surface-container-lowest, var(--m3-surface));
-    color: inherit;
-    font: inherit;
-    font-family: inherit;
-    line-height: inherit;
-    padding: 0.25rem 0.375rem;
-    resize: vertical;
-    min-height: 3rem;
-  }
-
-  .custom:focus-visible {
-    outline: 2px solid var(--m3-primary);
-    outline-offset: -2px;
-  }
-
-  .filebar {
-    display: flex;
-    align-items: center;
-    gap: 0.375rem;
-    padding: 0.375rem 0.5rem;
-    border-top: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    flex: none;
-    flex-wrap: wrap;
-  }
-
-  .unsaved {
-    font-size: 0.6875rem;
-    color: var(--m3-on-tertiary-container, var(--m3-tertiary));
-    background: var(--m3-tertiary-container, transparent);
-    border-radius: var(--m3-shape-full, 9999px);
-    padding: 0.0625rem 0.5rem;
-  }
-
-  .empty,
-  .loaderror {
-    padding: 1rem;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-  }
-
-  .loaderror p {
-    margin: 0 0 0.5rem;
-    color: var(--m3-on-error-container, var(--m3-error));
-  }
-</style>

@@ -92,8 +92,11 @@
   }
 </script>
 
-<div class="split" class:y={axis === "y"}>
-  <div class="pane" style:flex={`0 0 ${ratio * 100}%`}>
+<div class="flex h-full w-full min-h-0 min-w-0 {axis === 'y' ? 'flex-col' : ''}">
+  <div
+    class="flex min-h-0 min-w-0 flex-col overflow-hidden [&>*]:flex-1 [&>*]:min-h-0"
+    style:flex={`0 0 ${ratio * 100}%`}
+  >
     {@render a()}
   </div>
   <!-- A focusable separator is the ARIA-recommended pattern for split
@@ -101,8 +104,13 @@
   <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
   <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
   <div
-    class="divider"
-    class:dragging
+    class="relative z-[1] shrink-0 touch-none outline-none {axis === 'x'
+      ? 'mx-[-2px] w-[5px] cursor-col-resize'
+      : 'my-[-2px] h-[5px] w-auto cursor-row-resize'} {dragging
+      ? 'bg-primary'
+      : axis === 'x'
+        ? 'bg-[linear-gradient(to_right,transparent_2px,var(--border)_2px,var(--border)_3px,transparent_3px)]'
+        : 'bg-[linear-gradient(to_bottom,transparent_2px,var(--border)_2px,var(--border)_3px,transparent_3px)]'} hover:bg-primary focus-visible:bg-primary"
     role="separator"
     aria-orientation={axis === "x" ? "vertical" : "horizontal"}
     aria-label={label}
@@ -116,81 +124,7 @@
     onpointercancel={dividerUp}
     onkeydown={dividerKey}
   ></div>
-  <div class="pane grow">
+  <div class="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden [&>*]:flex-1 [&>*]:min-h-0">
     {@render b()}
   </div>
 </div>
-
-<style>
-  .split {
-    display: flex;
-    width: 100%;
-    height: 100%;
-    min-width: 0;
-    min-height: 0;
-  }
-
-  /* Stacked panes: the divider runs horizontally. */
-  .split.y {
-    flex-direction: column;
-  }
-
-  .pane {
-    min-width: 0;
-    min-height: 0;
-    display: flex;
-    flex-direction: column;
-    overflow: hidden;
-  }
-
-  .pane.grow {
-    flex: 1 1 0%;
-  }
-
-  .pane > :global(*) {
-    flex: 1;
-    min-height: 0;
-  }
-
-  .divider {
-    flex: none;
-    width: 5px;
-    margin: 0 -2px;
-    z-index: 1;
-    cursor: col-resize;
-    touch-action: none;
-    background:
-      linear-gradient(
-        to right,
-        transparent 2px,
-        var(--m3-outline-variant, var(--m3-primary)) 2px,
-        var(--m3-outline-variant, var(--m3-primary)) 3px,
-        transparent 3px
-      );
-  }
-
-  .split.y .divider {
-    width: auto;
-    height: 5px;
-    margin: -2px 0;
-    cursor: row-resize;
-    background:
-      linear-gradient(
-        to bottom,
-        transparent 2px,
-        var(--m3-outline-variant, var(--m3-primary)) 2px,
-        var(--m3-outline-variant, var(--m3-primary)) 3px,
-        transparent 3px
-      );
-  }
-
-  .divider:hover,
-  .divider:focus-visible,
-  .divider.dragging {
-    background: var(--m3-primary);
-  }
-
-  .divider:focus-visible {
-    outline: none;
-  }
-</style>

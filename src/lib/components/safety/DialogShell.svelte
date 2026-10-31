@@ -1,13 +1,18 @@
 <!--
-  DialogShell — shared chrome for the safety dialogs: scrim, focus
-  restore on close, Escape-to-cancel, panel box, and the action-button
-  styles. Body and actions are snippets; the shell marks the element
+  DialogShell — shared chrome for the safety dialogs: scrim, panel box, and
+  the action row. Body and actions are snippets; the shell marks the element
   carrying `data-autofocus` for initial focus. Classes are prefixed
   `sdlg-` because they style snippet content rendered in the caller.
+
+  P1 migration: now a thin wrapper over the shadcn ui/dialog primitives —
+  the scrim, focus trap, focus restore, and Escape dismissal come from
+  bits-ui. The legacy `sdlg-*` snippet styling hooks live on as Tailwind
+  arbitrary-variant utilities on the content box until every caller
+  (FileWorkspace, ForgePanel, panels/BranchPanel) renders ui/dialog itself.
 -->
 <script lang="ts">
   import type { Snippet } from "svelte";
-  import { trapTab } from "./trapTab";
+  import * as Dialog from "$lib/components/ui/dialog/index.js";
 
   let {
     open = $bindable(false),
@@ -34,20 +39,15 @@
     actions: Snippet;
   } = $props();
 
-  let panelEl = $state<HTMLElement | undefined>();
-  let restoreTo: Element | null = null;
+  let contentEl = $state<HTMLElement | null>(null);
 
+  // bits-ui focuses the first focusable element on open; callers' snippets
+  // mark the intended target with `data-autofocus` — re-apply after that.
   $effect(() => {
     if (open) {
-      restoreTo = document.activeElement;
       requestAnimationFrame(() => {
-        panelEl
-          ?.querySelector<HTMLElement>("[data-autofocus]")
-          ?.focus();
+        contentEl?.querySelector<HTMLElement>("[data-autofocus]")?.focus();
       });
-    } else if (restoreTo instanceof HTMLElement) {
-      restoreTo.focus();
-      restoreTo = null;
     }
   });
 
@@ -57,146 +57,41 @@
   }
 </script>
 
-{#if open}
+<Dialog.Root bind:open>
+  <!-- svelte-ignore a11y_click_events_have_key_events -->
   <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-  <div
-    class="sdlg-scrim"
-    role="presentation"
+  <Dialog.Overlay class="scrim bg-black/40" role="presentation" />
+  <Dialog.Content
+    bind:ref={contentEl}
+    class="sdlg-dialog max-w-none gap-0 rounded-lg bg-card px-6 py-5 text-sm text-card-foreground shadow-xl sm:max-w-none [&_.sdlg-danger]:cursor-pointer [&_.sdlg-danger]:rounded-full [&_.sdlg-danger]:border-0 [&_.sdlg-danger]:bg-destructive [&_.sdlg-danger]:px-4 [&_.sdlg-danger]:py-[0.45rem] [&_.sdlg-danger]:text-white [&_.sdlg-message]:m-0 [&_.sdlg-message]:mb-4 [&_.sdlg-message]:text-muted-foreground [&_.sdlg-message]:[overflow-wrap:anywhere] [&_.sdlg-primary]:cursor-pointer [&_.sdlg-primary]:rounded-full [&_.sdlg-primary]:border-0 [&_.sdlg-primary]:bg-primary [&_.sdlg-primary]:px-5 [&_.sdlg-primary]:py-[0.45rem] [&_.sdlg-primary]:font-medium [&_.sdlg-primary]:text-primary-foreground [&_.sdlg-secondary]:cursor-pointer [&_.sdlg-secondary]:rounded-full [&_.sdlg-secondary]:border [&_.sdlg-secondary]:border-border [&_.sdlg-secondary]:bg-transparent [&_.sdlg-secondary]:px-4 [&_.sdlg-secondary]:py-[0.45rem] [&_.sdlg-secondary]:text-muted-foreground [&_.sdlg-title]:m-0 [&_.sdlg-title]:mb-2 [&_.sdlg-title]:text-lg [&_.sdlg-title]:font-medium [&_button:disabled]:cursor-not-allowed [&_button:disabled]:bg-[var(--app-disabled-bg)] [&_button:disabled]:text-[var(--app-disabled-fg)] [&_button:focus-visible]:outline-2 [&_button:focus-visible]:-outline-offset-1 [&_button:focus-visible]:outline-ring"
+    style="width:{width}"
+    role={role}
+    aria-modal="true"
+    aria-labelledby={labelledBy}
+    aria-describedby={describedBy}
+    showCloseButton={false}
+    escapeKeydownBehavior="ignore"
+    interactOutsideBehavior="ignore"
     onkeydown={(e) => {
       if (e.key === "Escape") {
         e.preventDefault();
         cancel();
-      } else {
-        trapTab(panelEl, e);
       }
     }}
   >
     {#if onsubmit}
-      <!-- svelte-ignore a11y_no_noninteractive_element_to_interactive_role -->
       <form
-        bind:this={panelEl}
-        class="sdlg-dialog"
-        style:width
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby={labelledBy}
-        aria-describedby={describedBy}
         onsubmit={(e) => {
           e.preventDefault();
           onsubmit();
         }}
       >
         {@render children()}
-        <div class="sdlg-actions">{@render actions()}</div>
+        <div class="sdlg-actions mt-4 flex flex-nowrap justify-end gap-2">{@render actions()}</div>
       </form>
     {:else}
-      <div
-        bind:this={panelEl}
-        class="sdlg-dialog"
-        style:width
-        role={role}
-        aria-modal="true"
-        aria-labelledby={labelledBy}
-        aria-describedby={describedBy}
-      >
-        {@render children()}
-        <div class="sdlg-actions">{@render actions()}</div>
-      </div>
+      {@render children()}
+      <div class="sdlg-actions mt-4 flex flex-wrap justify-end gap-2">{@render actions()}</div>
     {/if}
-  </div>
-{/if}
-
-<style>
-  .sdlg-scrim {
-    position: fixed;
-    inset: 0;
-    z-index: 70;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: color-mix(in srgb, var(--m3-scrim, black) 40%, transparent);
-  }
-
-  .sdlg-dialog {
-    padding: 1.25rem 1.5rem;
-    border-radius: var(--m3-shape-large, 16px);
-    background: var(--m3-surface-container-high, var(--m3-surface));
-    color: var(--m3-on-surface);
-    box-shadow: var(--m3-elevation-3, 0 8px 24px rgba(0, 0, 0, 0.3));
-    font-size: 0.875rem;
-  }
-
-  .sdlg-dialog :global(.sdlg-title) {
-    margin: 0 0 0.5rem;
-    font-size: 1.125rem;
-    font-weight: 500;
-  }
-
-  .sdlg-dialog :global(.sdlg-message) {
-    margin: 0 0 1rem;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    overflow-wrap: anywhere;
-  }
-
-  .sdlg-actions {
-    display: flex;
-    justify-content: flex-end;
-    flex-wrap: wrap;
-    gap: 0.5rem;
-  }
-
-  form.sdlg-dialog .sdlg-actions {
-    margin-top: 1rem;
-    flex-wrap: nowrap;
-  }
-
-  .sdlg-dialog :global(.sdlg-primary) {
-    border: none;
-    border-radius: var(--m3-shape-full, 9999px);
-    background: var(--m3-primary);
-    color: var(--m3-on-primary);
-    font: inherit;
-    font-weight: 500;
-    padding: 0.45rem 1.25rem;
-    cursor: pointer;
-  }
-
-  .sdlg-dialog :global(.sdlg-primary:disabled) {
-    background: var(--app-disabled-bg);
-    color: var(--app-disabled-fg);
-    cursor: not-allowed;
-  }
-
-  .sdlg-dialog :global(.sdlg-danger:disabled) {
-    background: var(--app-disabled-bg);
-    color: var(--app-disabled-fg);
-    cursor: not-allowed;
-  }
-
-  .sdlg-dialog :global(.sdlg-danger) {
-    border: none;
-    border-radius: var(--m3-shape-full, 9999px);
-    background: var(--m3-error, var(--m3-primary));
-    color: var(--m3-on-error, white);
-    font: inherit;
-    padding: 0.45rem 1rem;
-    cursor: pointer;
-  }
-
-  .sdlg-dialog :global(.sdlg-secondary) {
-    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    border-radius: var(--m3-shape-full, 9999px);
-    background: none;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    font: inherit;
-    padding: 0.45rem 1rem;
-    cursor: pointer;
-  }
-
-  .sdlg-dialog :global(.sdlg-primary:focus-visible),
-  .sdlg-dialog :global(.sdlg-danger:focus-visible),
-  .sdlg-dialog :global(.sdlg-secondary:focus-visible) {
-    outline: 2px solid var(--m3-primary);
-    outline-offset: 1px;
-  }
-</style>
+  </Dialog.Content>
+</Dialog.Root>

@@ -37,7 +37,7 @@ describe("withAlpha / mixHex", () => {
   });
 
   it("withAlpha passes non-hex colors through untouched", () => {
-    expect(withAlpha("var(--m3-primary)", 0.5)).toBe("var(--m3-primary)");
+    expect(withAlpha("var(--primary)", 0.5)).toBe("var(--primary)");
   });
 
   it("mixHex interpolates and clamps t", () => {
@@ -65,11 +65,11 @@ describe("readTheme", () => {
     const styles: StyleLike = {
       getPropertyValue: (name: string) =>
         ({
-          "--m3-primary": "#111111",
-          "--m3-secondary": "#333333",
-          "--m3-tertiary": "#222222",
-          "--m3-surface": "#f0f0f0",
-          "--m3-outline": "#999999",
+          "--primary": "#111111",
+          "--secondary": "#333333",
+          "--muted": "#222222",
+          "--card": "#f0f0f0",
+          "--border": "#999999",
         })[name] ?? "",
     };
     expect(readTheme(styles)).toEqual({

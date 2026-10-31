@@ -21,6 +21,7 @@
   import { repoDiff, repoRefs } from "$lib/ipc/client";
   import { toast } from "$lib/toast";
   import type { FileDiff } from "$lib/ipc/types";
+  import { Button } from "$lib/components/ui/button/index.js";
 
   let {
     repoId,
@@ -85,9 +86,14 @@
   }
 </script>
 
-<div class="comparebar" role="group" aria-label="Compare two refs" aria-busy={loading}>
+<div
+  class="comparebar flex items-center gap-1.5 border-b border-border bg-card px-2 py-1"
+  role="group"
+  aria-label="Compare two refs"
+  aria-busy={loading}
+>
   <input
-    class="ref"
+    class="ref min-w-40 flex-1 rounded-sm border border-border bg-background px-2 py-1 font-mono text-xs text-foreground focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-ring disabled:opacity-60"
     list={listId}
     placeholder="base (e.g. main)"
     aria-label="Base ref"
@@ -95,11 +101,18 @@
     onkeydown={onKeydown}
     disabled={loading}
   />
-  <button class="swap" onclick={swap} aria-label="Swap base and target" title="Swap" disabled={loading}>
+  <Button
+    class="flex-none rounded-sm px-2.5 py-1 text-sm leading-none font-normal"
+    variant="secondary"
+    onclick={swap}
+    aria-label="Swap base and target"
+    title="Swap"
+    disabled={loading}
+  >
     ⇄
-  </button>
+  </Button>
   <input
-    class="ref"
+    class="ref min-w-40 flex-1 rounded-sm border border-border bg-background px-2 py-1 font-mono text-xs text-foreground focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-ring disabled:opacity-60"
     list={listId}
     placeholder="target (e.g. HEAD~3)"
     aria-label="Target ref"
@@ -107,77 +120,16 @@
     onkeydown={onKeydown}
     disabled={loading}
   />
-  <button class="go" onclick={() => void run()} disabled={loading}>
+  <Button
+    class="rounded-sm px-2.5 py-1 text-xs"
+    onclick={() => void run()}
+    disabled={loading}
+  >
     {loading ? "Comparing…" : "Compare"}
-  </button>
+  </Button>
   <datalist id={listId}>
     {#each refNames as name (name)}
       <option value={name}></option>
     {/each}
   </datalist>
 </div>
-
-<style>
-  .comparebar {
-    display: flex;
-    align-items: center;
-    gap: 0.375rem;
-    padding: 0.25rem 0.5rem;
-    border-bottom: 1px solid var(--m3-outline-variant);
-    background: var(--m3-surface-container-low, var(--m3-surface));
-  }
-
-  input.ref {
-    min-width: 10rem;
-    flex: 1;
-    padding: 0.25rem 0.5rem;
-    font-family: ui-monospace, Consolas, monospace;
-    font-size: 0.75rem;
-    color: var(--m3-on-surface);
-    background: var(--m3-surface);
-    border: 1px solid var(--m3-outline-variant);
-    border-radius: var(--m3-shape-extra-small, 4px);
-  }
-
-  input.ref:focus-visible {
-    outline: 2px solid var(--m3-primary);
-    outline-offset: -1px;
-  }
-
-  input.ref:disabled {
-    opacity: 0.6;
-  }
-
-  button {
-    padding: 0.25rem 0.625rem;
-    font-size: 0.75rem;
-    color: var(--m3-on-surface);
-    background: var(--m3-surface-container-high, var(--m3-surface));
-    border: 1px solid var(--m3-outline-variant);
-    border-radius: var(--m3-shape-extra-small, 4px);
-    cursor: pointer;
-  }
-
-  button:focus-visible {
-    outline: 2px solid var(--m3-primary);
-    outline-offset: 1px;
-  }
-
-  button:disabled {
-    opacity: 0.6;
-    cursor: default;
-  }
-
-  button.go {
-    color: var(--m3-on-primary);
-    background: var(--m3-primary);
-    border-color: var(--m3-primary);
-    font-weight: 500;
-  }
-
-  button.swap {
-    flex: none;
-    font-size: 0.875rem;
-    line-height: 1;
-  }
-</style>

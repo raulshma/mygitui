@@ -1,22 +1,22 @@
+<!--
+  Create-PR dialog (M6 forge) — AI-prefillable PR creation.
+
+  On open it resets, loads the base-branch options (`branches()`,
+  preferring remote-tracked branches) and up to 10 recent commits (first
+  log page) as the AI hint. "Generate title/body" emits the typed
+  `ai-generate-pr` UI event (`$lib/palette/events`; payload
+  `{ repoId, commits: [{ sha, summary }] }`) and the dialog listens for
+  `ai-pr-result` (`{ subject, body }`) to fill the fields — user typing
+  clears the pending wait (docs/contracts.md "M6 FE contracts";
+  reconciled with H1's commit-message contract by the orchestrator).
+
+  Create runs `prCreate` (120 s backend timeout): success toasts, calls
+  `onCreated` (the owner refreshes context + PR list; the dialog stays
+  open showing the URL + "Open on GitHub" until Done), `AlreadyExists`
+  offers the existing PR's URL instead. Cancel / Escape / Done →
+  `onClose()`; the owner flips `open`.
+-->
 <script lang="ts">
-  /**
-   * Create-PR dialog (M6 forge) — AI-prefillable PR creation.
-   *
-   * On open it resets, loads the base-branch options (`branches()`,
-   * preferring remote-tracked branches) and up to 10 recent commits (first
-   * log page) as the AI hint. "Generate title/body" emits the typed
-   * `ai-generate-pr` UI event (`$lib/palette/events`; payload
-   * `{ repoId, commits: [{ sha, summary }] }`) and the dialog listens for
-   * `ai-pr-result` (`{ subject, body }`) to fill the fields — user typing
-   * clears the pending wait (docs/contracts.md "M6 FE contracts";
-   * reconciled with H1's commit-message contract by the orchestrator).
-   *
-   * Create runs `prCreate` (120 s backend timeout): success toasts, calls
-   * `onCreated` (the owner refreshes context + PR list; the dialog stays
-   * open showing the URL + "Open on GitHub" until Done), `AlreadyExists`
-   * offers the existing PR's URL instead. Cancel / Escape / Done →
-   * `onClose()`; the owner flips `open`.
-   */
   import {
     branches,
     ForgeIpcError,
@@ -28,6 +28,11 @@
   import { toast } from "$lib/toast";
   import { emitUiEvent, onUiEvent } from "$lib/palette/events";
   import { openExternal } from "$lib/stores/forge.svelte";
+  import * as Dialog from "$lib/components/ui/dialog/index.js";
+  import { Button } from "$lib/components/ui/button/index.js";
+  import { Input } from "$lib/components/ui/input/index.js";
+  import { Textarea } from "$lib/components/ui/textarea/index.js";
+  import { Checkbox } from "$lib/components/ui/checkbox/index.js";
   import { prNumberFromUrl } from "./forgeModel";
 
   let {
@@ -203,60 +208,120 @@
 </script>
 
 {#if open}
-  <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-  <div class="scrim" role="presentation" onkeydown={onKeydown}>
-    <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="create-pr-title">
-      <h2 id="create-pr-title" class="dialog-title">Create pull request</h2>
+  <Dialog.Root {open}>
+    <!-- svelte-ignore a11y_click_events_have_key_events -->
+    <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+    <Dialog.Overlay class="scrim bg-black/45" role="presentation" />
+    <Dialog.Content
+      class="dialog flex max-h-[calc(100vh-4rem)] w-[min(34rem,calc(100vw-3rem))] max-w-none gap-2.5 overflow-y-auto rounded-lg border border-border bg-card px-5 py-4 text-popover-foreground shadow-xl sm:max-w-none"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="create-pr-title"
+      showCloseButton={false}
+      escapeKeydownBehavior="ignore"
+      interactOutsideBehavior="ignore"
+      onkeydown={onKeydown}
+    >
+      <Dialog.Title id="create-pr-title" class="m-0 text-base font-semibold">
+        Create pull request
+      </Dialog.Title>
 
       {#if created}
         {@const done = created}
-        <p class="created-line" aria-live="polite">
+        <p class="created-line m-0 font-semibold" aria-live="polite">
           PR #{done.number} created successfully.
         </p>
-        <p class="created-url" title={done.url}>{done.url}</p>
-        <div class="actions">
-          <button class="confirm" type="button" onclick={() => void openCreated(done.url)}>
+        <p class="created-url m-0 truncate font-mono text-[0.72rem] text-muted-foreground" title={done.url}>
+          {done.url}
+        </p>
+        <div class="actions mt-1 flex flex-wrap items-center gap-2">
+          <Button
+            size="sm"
+            class="confirm flex-none rounded-full px-4 text-[0.7813rem]"
+            type="button"
+            onclick={() => void openCreated(done.url)}
+          >
             Open PR
-          </button>
-          <button class="cancel" type="button" onclick={onClose}>Done</button>
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            class="cancel flex-none rounded-full px-4 text-[0.7813rem] text-muted-foreground"
+            type="button"
+            onclick={onClose}
+          >
+            Done
+          </Button>
         </div>
       {:else if existingUrl !== null}
         {@const url = existingUrl}
-        <p class="created-line" role="alert">
+        <p class="created-line m-0 font-semibold" role="alert">
           A pull request already exists for this branch
           {existingNumber !== null ? `(#{existingNumber})` : ""}.
         </p>
-        <p class="created-url" title={url}>{url}</p>
-        <div class="actions">
-          <button class="confirm" type="button" onclick={() => void openCreated(url)}>
+        <p class="created-url m-0 truncate font-mono text-[0.72rem] text-muted-foreground" title={url}>
+          {url}
+        </p>
+        <div class="actions mt-1 flex flex-wrap items-center gap-2">
+          <Button
+            size="sm"
+            class="confirm flex-none rounded-full px-4 text-[0.7813rem]"
+            type="button"
+            onclick={() => void openCreated(url)}
+          >
             Open PR
-          </button>
-          <button class="cancel" type="button" onclick={onClose}>Close</button>
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            class="cancel flex-none rounded-full px-4 text-[0.7813rem] text-muted-foreground"
+            type="button"
+            onclick={onClose}
+          >
+            Close
+          </Button>
         </div>
       {:else}
-        <label class="field">
-          <span class="label">Base branch</span>
-          <select bind:value={base} disabled={loading || baseOptions.length === 0}>
+        <label class="field flex flex-col gap-1">
+          <span class="label text-[0.72rem] text-muted-foreground">Base branch</span>
+          <select
+            class="rounded-sm border border-border bg-background px-[0.45rem] py-[0.3rem] text-[0.8125rem] text-foreground focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-primary"
+            bind:value={base}
+            disabled={loading || baseOptions.length === 0}
+          >
             {#each baseOptions as name (name)}
               <option value={name}>{name}</option>
             {/each}
           </select>
         </label>
 
-        <div class="ai-row">
-          <button class="tb" type="button" onclick={requestAi} disabled={loading || aiPending}>
+        <div class="ai-row flex flex-wrap items-center gap-2">
+          <Button
+            variant="secondary"
+            size="xs"
+            class="tb self-start rounded-full px-3 text-[0.72rem]"
+            type="button"
+            onclick={requestAi}
+            disabled={loading || aiPending}
+          >
             {aiPending ? "Waiting for AI…" : "Generate title/body"}
-          </button>
+          </Button>
           {#if aiPending}
-            <span class="ai-hint">Waiting for the AI layer — type to fill manually.</span>
+            <span class="ai-hint text-[0.6875rem] text-muted-foreground [overflow-wrap:anywhere]">
+              Waiting for the AI layer — type to fill manually.
+            </span>
           {:else if aiError}
-            <span class="ai-hint ai-fail" role="alert">{aiError}</span>
+            <span
+              class="ai-hint ai-fail text-[0.6875rem] text-destructive [overflow-wrap:anywhere]"
+              role="alert"
+            >{aiError}</span>
           {/if}
         </div>
 
-        <label class="field">
-          <span class="label">Title</span>
-          <input
+        <label class="field flex flex-col gap-1">
+          <span class="label text-[0.72rem] text-muted-foreground">Title</span>
+          <Input
+            class="h-auto rounded-sm px-[0.45rem] py-[0.3rem] text-[0.8125rem] focus-visible:-outline-offset-1"
             type="text"
             bind:value={title}
             placeholder="PR title"
@@ -264,225 +329,54 @@
           />
         </label>
 
-        <label class="field">
-          <span class="label">Description</span>
-          <textarea
-            rows="7"
+        <label class="field flex flex-col gap-1">
+          <span class="label text-[0.72rem] text-muted-foreground">Description</span>
+          <Textarea
+            class="h-auto min-h-0 resize-y rounded-sm px-[0.45rem] py-[0.3rem] text-[0.8125rem] focus-visible:-outline-offset-1 md:text-[0.8125rem]"
+            rows={7}
             bind:value={body}
             placeholder="What does this PR change?"
             oninput={() => (aiPending = false)}
-          ></textarea>
+          ></Textarea>
         </label>
 
-        <label class="draft" title="Open the PR as a draft (no reviewers requested)">
-          <input type="checkbox" bind:checked={draft} />
+        <label
+          class="draft flex cursor-pointer items-center gap-1.5 text-xs text-muted-foreground"
+          title="Open the PR as a draft (no reviewers requested)"
+        >
+          <Checkbox bind:checked={draft} />
           <span>Draft</span>
         </label>
 
         {#if error}
-          <p class="error" role="alert">{error}</p>
+          <p class="error m-0 text-xs text-destructive" role="alert">{error}</p>
         {/if}
 
-        <div class="actions">
-          <span class="hint">Runs `gh pr create` with your gh credentials.</span>
-          <button
-            class="confirm"
+        <div class="actions mt-1 flex flex-wrap items-center gap-2">
+          <span class="hint min-w-[10rem] flex-1 text-[0.6875rem] text-muted-foreground">
+            Runs `gh pr create` with your gh credentials.
+          </span>
+          <Button
+            size="sm"
+            class="confirm flex-none rounded-full px-4 text-[0.7813rem]"
             type="button"
             disabled={!canCreate}
             onclick={() => void create()}
           >
             {creating ? "Creating…" : "Create PR"}
-          </button>
-          <button class="cancel" type="button" disabled={creating} onclick={onClose}>
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            class="cancel flex-none rounded-full px-4 text-[0.7813rem] text-muted-foreground"
+            type="button"
+            disabled={creating}
+            onclick={onClose}
+          >
             Cancel
-          </button>
+          </Button>
         </div>
       {/if}
-    </div>
-  </div>
+    </Dialog.Content>
+  </Dialog.Root>
 {/if}
-
-<style>
-  .scrim {
-    position: fixed;
-    inset: 0;
-    background: rgb(0 0 0 / 45%);
-    display: grid;
-    place-items: center;
-    z-index: 60;
-  }
-
-  .dialog {
-    width: min(34rem, calc(100vw - 3rem));
-    max-height: calc(100vh - 4rem);
-    overflow-y: auto;
-    background: var(--m3-surface-container, var(--m3-surface));
-    color: var(--m3-on-surface);
-    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    border-radius: var(--m3-shape-large, 16px);
-    padding: 1rem 1.25rem;
-    display: flex;
-    flex-direction: column;
-    gap: 0.625rem;
-  }
-
-  .dialog-title {
-    margin: 0;
-    font-size: 1rem;
-    font-weight: 600;
-  }
-
-  .field {
-    display: flex;
-    flex-direction: column;
-    gap: 0.25rem;
-  }
-
-  .label {
-    font-size: 0.72rem;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-  }
-
-  select,
-  input[type="text"],
-  textarea {
-    font: inherit;
-    font-size: 0.8125rem;
-    color: var(--m3-on-surface);
-    background: var(--m3-surface-container-lowest, var(--m3-surface));
-    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    border-radius: var(--m3-shape-extra-small, 4px);
-    padding: 0.3rem 0.45rem;
-    resize: vertical;
-  }
-
-  select:focus-visible,
-  input:focus-visible,
-  textarea:focus-visible {
-    outline: 2px solid var(--m3-primary);
-    outline-offset: -1px;
-  }
-
-  .ai-row {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    flex-wrap: wrap;
-  }
-
-  .ai-hint {
-    font-size: 0.6875rem;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    overflow-wrap: anywhere;
-  }
-
-  .ai-hint.ai-fail {
-    color: var(--m3-error, inherit);
-  }
-
-  .tb {
-    align-self: flex-start;
-    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    border-radius: var(--m3-shape-full, 9999px);
-    background: var(--m3-secondary-container, var(--m3-surface-container-high));
-    color: var(--m3-on-secondary-container, var(--m3-on-surface));
-    font: inherit;
-    font-size: 0.72rem;
-    padding: 0.2rem 0.75rem;
-    cursor: pointer;
-  }
-
-  .tb:hover:not(:disabled) {
-    background: var(--m3-surface-container-high, var(--m3-surface));
-  }
-
-  .tb:disabled {
-    cursor: not-allowed;
-    opacity: 0.55;
-  }
-
-  .draft {
-    display: flex;
-    align-items: center;
-    gap: 0.375rem;
-    font-size: 0.75rem;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    cursor: pointer;
-  }
-
-  .draft input {
-    accent-color: var(--m3-primary);
-    margin: 0;
-  }
-
-  .error {
-    margin: 0;
-    color: var(--m3-error, inherit);
-    font-size: 0.75rem;
-  }
-
-  .created-line {
-    margin: 0;
-    font-weight: 600;
-  }
-
-  .created-url {
-    margin: 0;
-    font-family: ui-monospace, Consolas, monospace;
-    font-size: 0.72rem;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .actions {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    margin-top: 0.25rem;
-    flex-wrap: wrap;
-  }
-
-  .hint {
-    flex: 1;
-    min-width: 10rem;
-    font-size: 0.6875rem;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-  }
-
-  .confirm {
-    flex: none;
-    border: none;
-    border-radius: var(--m3-shape-full, 9999px);
-    background: var(--m3-primary);
-    color: var(--m3-on-primary);
-    font: inherit;
-    font-size: 0.7813rem;
-    padding: 0.3rem 1rem;
-    cursor: pointer;
-  }
-
-  .confirm:disabled {
-    cursor: not-allowed;
-    opacity: 0.55;
-  }
-
-  .cancel {
-    flex: none;
-    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    border-radius: var(--m3-shape-full, 9999px);
-    background: none;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    font: inherit;
-    font-size: 0.7813rem;
-    padding: 0.3rem 1rem;
-    cursor: pointer;
-  }
-
-  .confirm:focus-visible,
-  .cancel:focus-visible {
-    outline: 2px solid var(--m3-primary);
-    outline-offset: 1px;
-  }
-</style>

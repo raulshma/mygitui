@@ -31,6 +31,8 @@
   import type { FeatureOutcome } from "$lib/ai/features";
   import AiSettings from "./AiSettings.svelte";
   import { floating } from "$lib/components/overlay/floating";
+  import { Button } from "$lib/components/ui/button/index.js";
+  import { Spinner } from "$lib/components/ui/spinner/index.js";
   import { toast } from "$lib/toast";
 
   let {
@@ -136,10 +138,12 @@
 </script>
 
 {#if !gateVisibility || ai.isOptedIn(repoId)}
-  <span class="ai-feature {rootClass ?? ''}" bind:this={root}>
+  <span class="ai-feature relative inline-flex {rootClass ?? ''}" bind:this={root}>
     {#if icon}
-      <button
-        class="sparkle"
+      <Button
+        variant="outline"
+        size="icon"
+        class="sparkle size-7 rounded-full text-primary"
         type="button"
         {disabled}
         aria-label={ariaLabel ?? title ?? label}
@@ -147,9 +151,9 @@
         title={title ?? label}
         onclick={openAction}
       >
-        <span class="icon-box" class:busy>
+        <span class="icon-box relative block" class:busy>
           <svg
-            class="icon"
+            class="icon block {busy ? 'opacity-25' : ''}"
             aria-hidden="true"
             width="14"
             height="14"
@@ -162,14 +166,17 @@
             <path d="M19 15l1.18 3.32L23.5 19.5l-3.32 1.18L19 24l-1.18-3.32L14.5 19.5l3.32-1.18L19 15z" />
           </svg>
           {#if busy}
-            <span class="spinner icon-spinner" aria-hidden="true"></span>
+            <Spinner class="icon-spinner absolute inset-0 m-auto size-[0.9rem] text-primary" aria-hidden="true" />
           {/if}
         </span>
-      </button>
+      </Button>
     {:else}
-      <button
-        class="feature-btn"
-        class:compact
+      <Button
+        variant="outline"
+        size="xs"
+        class="feature-btn h-auto gap-[0.3rem] rounded-full px-[0.6rem] py-[0.15rem] text-[0.72rem] text-muted-foreground {compact
+          ? 'compact px-2 py-[0.05rem] text-[0.6875rem]'
+          : ''}"
         type="button"
         {disabled}
         aria-label={ariaLabel ?? title ?? label}
@@ -177,29 +184,31 @@
         onclick={openAction}
       >
         {#if busy}
-          <span class="spinner" aria-hidden="true"></span>
+          <Spinner class="size-[0.65rem] text-primary" aria-hidden="true" />
         {/if}
         {label}
-      </button>
+      </Button>
     {/if}
 
     {#if confirmOpen}
       <div
-        class="confirm"
+        class="confirm invisible fixed left-0 top-0 z-40 max-h-[calc(100vh_-_1rem)] w-max max-w-[min(18rem,calc(100vw_-_1rem))] overflow-y-auto rounded-lg border border-border bg-popover p-2 text-left text-popover-foreground shadow-[0_4px_16px_rgba(0,0,0,0.3)]"
         role="dialog"
         aria-label="Allow AI for this repository"
         use:floating={{ anchor: root, above: popUp, alignEnd: icon }}
       >
-        <p class="confirm-text">{confirmText.replace("{backend}", backendLabel)}</p>
-        <div class="confirm-actions">
-          <button class="mini primary" type="button" onclick={() => void allowAndRun(true)}>
+        <p class="confirm-text m-0 mb-[0.375rem] text-xs">{confirmText.replace("{backend}", backendLabel)}</p>
+        <div class="confirm-actions flex flex-row flex-wrap gap-1">
+          <Button variant="default" size="xs" class="mini h-auto rounded-full px-2 py-[0.15rem] text-[0.72rem]" type="button" onclick={() => void allowAndRun(true)}>
             Always allow
-          </button>
-          <button class="mini" type="button" onclick={() => void allowAndRun(false)}>
+          </Button>
+          <Button variant="outline" size="xs" class="mini h-auto rounded-full px-2 py-[0.15rem] text-[0.72rem]" type="button" onclick={() => void allowAndRun(false)}>
             Just once
-          </button>
-          <button
-            class="mini"
+          </Button>
+          <Button
+            variant="outline"
+            size="xs"
+            class="mini h-auto rounded-full px-2 py-[0.15rem] text-[0.72rem]"
             type="button"
             onclick={() => {
               confirmOpen = false;
@@ -207,192 +216,26 @@
             }}
           >
             Configure…
-          </button>
-          <button class="mini" type="button" onclick={() => (confirmOpen = false)}>
+          </Button>
+          <Button variant="outline" size="xs" class="mini h-auto rounded-full px-2 py-[0.15rem] text-[0.72rem]" type="button" onclick={() => (confirmOpen = false)}>
             Cancel
-          </button>
+          </Button>
         </div>
       </div>
     {/if}
 
     {#if error && !confirmOpen}
       <div
-        class="fail"
+        class="fail invisible fixed left-0 top-0 z-40 flex max-h-[calc(100vh_-_1rem)] w-max max-w-[min(18rem,calc(100vw_-_1rem))] flex-row flex-wrap items-center gap-[0.375rem] overflow-y-auto rounded-lg border border-border bg-popover p-2 text-left text-popover-foreground shadow-[0_4px_16px_rgba(0,0,0,0.3)]"
         role="alert"
         use:floating={{ anchor: root, above: popUp, alignEnd: icon }}
       >
-        <span class="fail-text">{error}</span>
-        <button class="mini" type="button" onclick={() => void doRun()}>Retry</button>
-        <button class="mini" type="button" onclick={() => (error = null)}>Dismiss</button>
+        <span class="fail-text text-[0.72rem] text-destructive [overflow-wrap:anywhere]">{error}</span>
+        <Button variant="outline" size="xs" class="mini h-auto rounded-full px-2 py-[0.15rem] text-[0.72rem]" type="button" onclick={() => void doRun()}>Retry</Button>
+        <Button variant="outline" size="xs" class="mini h-auto rounded-full px-2 py-[0.15rem] text-[0.72rem]" type="button" onclick={() => (error = null)}>Dismiss</Button>
       </div>
     {/if}
   </span>
 {/if}
 
 <AiSettings bind:open={settingsOpen} />
-
-<style>
-  .ai-feature {
-    position: relative;
-    display: inline-flex;
-  }
-
-  .feature-btn {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.3rem;
-    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    border-radius: var(--m3-shape-full, 9999px);
-    background: none;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    font: inherit;
-    font-size: 0.72rem;
-    padding: 0.15rem 0.6rem;
-    cursor: pointer;
-    white-space: nowrap;
-  }
-  .feature-btn.compact {
-    font-size: 0.6875rem;
-    padding: 0.05rem 0.5rem;
-  }
-  .feature-btn:hover:not(:disabled) {
-    background: var(--m3-surface-container-high, var(--m3-surface));
-  }
-  .feature-btn:disabled {
-    cursor: not-allowed;
-    opacity: 0.55;
-  }
-  .feature-btn:focus-visible {
-    outline: 2px solid var(--m3-primary);
-    outline-offset: 1px;
-  }
-
-  /* Icon variant (commit-bar sparkle): a compact circular icon button. */
-  .sparkle {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 1.75rem;
-    height: 1.75rem;
-    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    border-radius: var(--m3-shape-full, 9999px);
-    background: none;
-    color: var(--m3-primary);
-    cursor: pointer;
-  }
-
-  .sparkle:disabled {
-    cursor: not-allowed;
-    opacity: 0.55;
-  }
-
-  .sparkle:focus-visible {
-    outline: 2px solid var(--m3-primary);
-    outline-offset: 1px;
-  }
-
-  .icon-box {
-    position: relative;
-    display: block;
-  }
-
-  .icon-box.busy .icon {
-    opacity: 0.25;
-  }
-
-  .icon {
-    display: block;
-  }
-
-  /* Overlays the sparkle while a generation is in flight. */
-  .icon-spinner {
-    position: absolute;
-    inset: 0;
-    margin: auto;
-    width: 0.9rem;
-    height: 0.9rem;
-  }
-
-  .spinner {
-    width: 0.65rem;
-    height: 0.65rem;
-    border: 2px solid color-mix(in srgb, var(--m3-primary) 35%, transparent);
-    border-top-color: var(--m3-primary);
-    border-radius: 50%;
-    animation: spin 0.8s linear infinite;
-  }
-  @keyframes spin {
-    to {
-      transform: rotate(360deg);
-    }
-  }
-
-  .confirm,
-  .fail {
-    /* Portaled to <body> by `floating`; top/left/visibility are set there. */
-    position: fixed;
-    top: 0;
-    left: 0;
-    visibility: hidden;
-    z-index: 40;
-    width: max-content;
-    max-width: min(18rem, calc(100vw - 1rem));
-    max-height: calc(100vh - 1rem);
-    overflow-y: auto;
-    background: var(--m3-surface-container-high, var(--m3-surface));
-    color: var(--m3-on-surface);
-    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    border-radius: var(--m3-shape-medium, 8px);
-    padding: 0.5rem;
-    box-shadow: 0 4px 16px color-mix(in srgb, black 30%, transparent);
-    text-align: left;
-  }
-
-  .confirm-text {
-    margin: 0 0 0.375rem;
-    font-size: 0.75rem;
-  }
-
-  .confirm-actions {
-    display: flex;
-    flex-direction: row;
-    flex-wrap: wrap;
-    gap: 0.25rem;
-  }
-
-  .fail {
-    display: flex;
-    flex-direction: row;
-    align-items: center;
-    flex-wrap: wrap;
-    gap: 0.375rem;
-  }
-
-  .fail-text {
-    font-size: 0.72rem;
-    color: var(--m3-error, inherit);
-    overflow-wrap: anywhere;
-  }
-
-  .mini {
-    font: inherit;
-    font-size: 0.72rem;
-    padding: 0.15rem 0.5rem;
-    border-radius: var(--m3-shape-full, 9999px);
-    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    background: none;
-    color: var(--m3-on-surface);
-    cursor: pointer;
-  }
-
-  .mini.primary {
-    background: var(--m3-primary);
-    color: var(--m3-on-primary);
-    border-color: transparent;
-  }
-
-  .mini:focus-visible {
-    outline: 2px solid var(--m3-primary);
-    outline-offset: 1px;
-  }
-</style>

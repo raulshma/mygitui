@@ -23,7 +23,8 @@
   import { openTab } from "$lib/stores/tabs.svelte";
   import { toast } from "$lib/toast";
   import ConfirmDialog from "$lib/components/safety/ConfirmDialog.svelte";
-  import { IconButton } from "$lib/components/m3";
+  import Icon from "$lib/components/icons/Icon.svelte";
+  import { Button } from "$lib/components/ui/button/index.js";
   import iconAdd from "@ktibow/iconset-material-symbols/add";
   import iconRefresh from "@ktibow/iconset-material-symbols/refresh";
   import iconPrune from "@ktibow/iconset-material-symbols/delete-sweep";
@@ -217,73 +218,92 @@
   }
 </script>
 
-<aside class="worktree-panel" aria-label="Worktrees">
-  <div class="toolbar">
-    <IconButton
-      icon={iconAdd}
-      label={formOpen ? "Close worktree form" : "Add worktree"}
+<aside class="worktree-panel flex min-h-0 flex-col text-[13px]" aria-label="Worktrees">
+  <div class="toolbar flex flex-none items-center gap-1.5 px-2 py-1.5">
+    <Button
+      class="aria-pressed:bg-accent aria-pressed:text-accent-foreground"
+      variant="default"
+      size="icon-sm"
+      type="button"
+      aria-label={formOpen ? "Close worktree form" : "Add worktree"}
+      aria-pressed={formOpen}
       title={formOpen ? "Close the add-worktree form" : "Add a linked worktree"}
-      variant="filled"
-      pressed={formOpen}
       disabled={busy}
       onclick={() => (formOpen = !formOpen)}
-    />
+    >
+      <Icon icon={iconAdd} size={16} />
+    </Button>
     <!-- M12: git worktree prune — drops stale admin dirs for deleted paths. -->
-    <IconButton
-      icon={iconPrune}
-      label="Prune stale worktrees"
+    <Button
+      class="border-border text-muted-foreground hover:border-primary hover:bg-accent hover:text-accent-foreground"
+      variant="ghost"
+      size="icon-sm"
+      type="button"
+      aria-label="Prune stale worktrees"
       title="git worktree prune — remove administration entries for deleted worktree folders"
-      variant="outlined"
       disabled={busy}
       onclick={() => void onPrune()}
-    />
-    <IconButton
-      icon={iconRefresh}
-      label="Refresh worktrees"
+    >
+      <Icon icon={iconPrune} size={16} />
+    </Button>
+    <Button
+      class="border-border text-muted-foreground hover:border-primary hover:bg-accent hover:text-accent-foreground"
+      variant="ghost"
+      size="icon-sm"
+      type="button"
+      aria-label="Refresh worktrees"
       title={loading ? "Refreshing worktrees…" : "Refresh worktrees"}
-      variant="outlined"
       disabled={loading}
       onclick={() => void reload()}
-    />
+    >
+      <Icon icon={iconRefresh} size={16} />
+    </Button>
   </div>
 
   {#if formOpen}
     <form
-      class="add-form"
+      class="add-form flex flex-none flex-col gap-1.5 border-b border-border px-2 py-1.5"
       aria-label="Add worktree"
       onsubmit={(e) => {
         e.preventDefault();
         void onAdd();
       }}
     >
-      <div class="path-row">
+      <div class="path-row flex flex-wrap items-center gap-1.5">
         <input
-          class="path"
+          class="path min-w-40 flex-1 rounded border border-input bg-background px-2 py-0.5 font-mono text-[0.72rem] text-foreground focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-1"
           type="text"
           placeholder="Worktree folder path"
           aria-label="Worktree folder path"
           bind:value={addPath}
         />
-        <IconButton
-          icon={iconBrowse}
-          label="Browse for worktree folder"
+        <Button
+          class="border-border text-muted-foreground hover:border-primary hover:bg-accent hover:text-accent-foreground"
+          variant="ghost"
+          size="icon-sm"
+          type="button"
+          aria-label="Browse for worktree folder"
           title="Browse for a folder"
-          variant="outlined"
           onclick={() => void browse()}
-        />
-        <IconButton
-          icon={iconAdd}
-          label="Create worktree"
-          title="Create the linked worktree"
-          variant="filled"
+        >
+          <Icon icon={iconBrowse} size={16} />
+        </Button>
+        <Button
+          variant="default"
+          size="icon-sm"
           type="submit"
+          aria-label="Create worktree"
+          title="Create the linked worktree"
           disabled={busy || !addPath.trim() || (addMode === "new" && !addNewBranch.trim())}
-        />
+        >
+          <Icon icon={iconAdd} size={16} />
+        </Button>
       </div>
-      <div class="mode-row">
-        <label class="mode">
+      <div class="mode-row flex flex-wrap items-center gap-1.5">
+        <label class="mode flex items-center gap-1.5 text-[0.72rem] text-muted-foreground">
           <span class="mode-label">Branch</span>
           <select
+            class="max-w-56 rounded border border-input bg-background px-2 py-0.5 text-[0.72rem] text-foreground focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-1"
             aria-label="Worktree branch mode"
             bind:value={addMode}
           >
@@ -292,14 +312,18 @@
           </select>
         </label>
         {#if addMode === "existing"}
-          <select aria-label="Existing branch for the worktree" bind:value={addBranch}>
+          <select
+            class="max-w-56 rounded border border-input bg-background px-2 py-0.5 text-[0.72rem] text-foreground focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-1"
+            aria-label="Existing branch for the worktree"
+            bind:value={addBranch}
+          >
             {#each candidates as branch (branch.name)}
               <option value={branch.name}>{branch.name}</option>
             {/each}
           </select>
         {:else}
           <input
-            class="new-branch"
+            class="new-branch min-w-32 flex-1 rounded border border-input bg-background px-2 py-0.5 font-mono text-[0.72rem] text-foreground focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-1"
             type="text"
             placeholder="new branch name"
             aria-label="New branch name for the worktree"
@@ -311,92 +335,107 @@
   {/if}
 
   {#if error}
-    <p class="state error" role="alert">{error}</p>
+    <p class="state error py-4 px-3 text-[13px] text-destructive" role="alert">{error}</p>
   {:else if !loading && list.length === 0}
-    <p class="state">No linked worktrees.</p>
+    <p class="state py-4 px-3 text-[13px] text-muted-foreground">No linked worktrees.</p>
   {:else}
-    <ul class="worktrees" role="list" aria-label="Worktree list">
+    <ul class="worktrees m-0 flex min-h-0 flex-1 list-none flex-col gap-2 overflow-y-auto px-2 py-1.5" role="list" aria-label="Worktree list">
       <!-- Main entry: the backend lists linked worktrees only, so this
            repository's own root comes from the `root` prop. -->
-      <li class="card main">
-        <div class="row">
-          <span class="name">{baseName(root)}</span>
-          <span class="badge main-badge">main</span>
-          <span class="ref">this repository</span>
+      <li class="card main flex flex-col gap-1 rounded-lg border border-dashed border-border bg-card px-2 py-1.5">
+        <div class="row flex min-w-0 flex-wrap items-center gap-1.5">
+          <span class="name font-semibold text-primary">{baseName(root)}</span>
+          <span class="badge main-badge inline-flex h-auto shrink-0 items-center rounded-full border border-transparent bg-secondary px-1.5 py-0 text-[0.625rem] font-medium text-secondary-foreground">main</span>
+          <span class="ref ml-auto truncate text-[0.72rem] text-muted-foreground">this repository</span>
         </div>
-        <div class="path" title={root}>{root}</div>
-        <div class="actions">
-          <IconButton
-            icon={iconOpen}
-            label="Focus this repository's tab"
+        <div class="path truncate font-mono text-[0.6875rem] text-muted-foreground" title={root}>{root}</div>
+        <div class="actions flex items-center gap-1">
+          <Button
+            class="relative text-muted-foreground after:absolute after:-inset-1 after:content-[''] hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-4"
+            variant="ghost"
+            size="icon-xs"
+            type="button"
+            aria-label="Focus this repository's tab"
             title="Open this repository's tab"
-            dense
             onclick={() => void onOpen({ name: baseName(root), path: root })}
-          />
+          >
+            <Icon icon={iconOpen} size={16} />
+          </Button>
         </div>
       </li>
       {#each linked as info (info.path)}
-        <li class="card" aria-busy={removingPath === info.path}>
-          <div class="row">
-            <span class="name">{info.name}</span>
+        <li class="card flex flex-col gap-1 rounded-lg border border-border bg-card px-2 py-1.5" aria-busy={removingPath === info.path}>
+          <div class="row flex min-w-0 flex-wrap items-center gap-1.5">
+            <span class="name font-semibold text-primary">{info.name}</span>
             {#if info.is_main}
               <!-- M12: marks the repository's true main worktree (this tab is
                    itself a linked one). -->
-              <span class="badge main-badge" title="The repository's main worktree">main</span>
+              <span class="badge main-badge inline-flex h-auto shrink-0 items-center rounded-full border border-transparent bg-secondary px-1.5 py-0 text-[0.625rem] font-medium text-secondary-foreground" title="The repository's main worktree">main</span>
             {/if}
             {#each worktreeBadges(info) as badge (badge.label)}
               <span
-                class="badge"
+                class="badge inline-flex h-auto shrink-0 items-center rounded-full border border-transparent bg-muted px-1.5 py-0 text-[0.625rem] font-medium {badge.danger ? "bg-destructive/10 text-destructive" : "text-muted-foreground"}"
                 class:danger={badge.danger}
                 title={badge.title}
               >
                 {badge.label}
               </span>
             {/each}
-            <span class="ref">{worktreeRefLabel(info)}</span>
+            <span class="ref ml-auto truncate text-[0.72rem] text-muted-foreground">{worktreeRefLabel(info)}</span>
           </div>
-          <div class="path" title={info.path}>{info.path}</div>
-          <div class="actions">
+          <div class="path truncate font-mono text-[0.6875rem] text-muted-foreground" title={info.path}>{info.path}</div>
+          <div class="actions flex items-center gap-1">
             {#if removingPath === info.path}
               <!-- Removal in flight: row-level progress while the backend
                    deletes the admin area + working tree. -->
-              <span class="removing" role="status">Removing…</span>
+              <span class="removing animate-pulse text-[0.72rem] text-muted-foreground" role="status">Removing…</span>
             {:else}
-              <IconButton
-                icon={iconOpen}
-                label={`Open worktree ${info.name} as a tab`}
+              <Button
+                class="relative text-muted-foreground after:absolute after:-inset-1 after:content-[''] hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-4"
+                variant="ghost"
+                size="icon-xs"
+                type="button"
+                aria-label={`Open worktree ${info.name} as a tab`}
                 title="Open this worktree as a tab"
-                dense
                 disabled={busy}
                 onclick={() => void onOpen(info)}
-              />
-              <IconButton
-                icon={iconRemove}
-                label={`Remove worktree ${info.name}`}
+              >
+                <Icon icon={iconOpen} size={16} />
+              </Button>
+              <Button
+                class="relative text-destructive after:absolute after:-inset-1 after:content-[''] hover:bg-destructive/10 hover:text-destructive [&_svg:not([class*='size-'])]:size-4"
+                variant="ghost"
+                size="icon-xs"
+                type="button"
+                aria-label={`Remove worktree ${info.name}`}
                 title="Remove this worktree"
-                tone="danger"
-                dense
                 disabled={busy}
                 onclick={() => onRemoveClick(info)}
-              />
+              >
+                <Icon icon={iconRemove} size={16} />
+              </Button>
             {/if}
           </div>
           {#if removeConfirmFor === info.path && removingPath !== info.path}
-            <div class="remove-confirm">
+            <div class="remove-confirm flex items-center gap-2 border-t border-dashed border-border pt-1">
               {#if worktreeNeedsForce(info)}
-                <label class="toggle" title="Required while the worktree is locked or prunable">
-                  <input type="checkbox" bind:checked={removeForce} />
+                <label
+                  class="toggle flex cursor-pointer items-center gap-1 whitespace-nowrap text-[0.6875rem] text-muted-foreground"
+                  title="Required while the worktree is locked or prunable"
+                >
+                  <input type="checkbox" class="m-0 accent-primary" bind:checked={removeForce} />
                   <span>force</span>
                 </label>
               {/if}
-              <button
-                class="go danger-go"
+              <Button
+                class="h-auto shrink-0 rounded-full px-3 py-0.5 text-[0.72rem]"
+                variant="destructive"
                 type="button"
                 disabled={busy}
                 onclick={() => void onRemove(info)}
               >
                 Confirm remove
-              </button>
+              </Button>
             </div>
           {/if}
         </li>
@@ -420,244 +459,3 @@
   danger
   onConfirm={() => void onRemoveConfirmed()}
 />
-
-<style>
-  .worktree-panel {
-    display: flex;
-    flex-direction: column;
-    min-height: 0;
-    font-size: 0.8125rem;
-  }
-
-  .toolbar {
-    display: flex;
-    align-items: center;
-    gap: 0.375rem;
-    padding: 0.375rem 0.5rem;
-    flex: none;
-  }
-
-  .add-form {
-    display: flex;
-    flex-direction: column;
-    gap: 0.375rem;
-    padding: 0.375rem 0.5rem;
-    border-bottom: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    flex: none;
-  }
-
-  .path-row,
-  .mode-row {
-    display: flex;
-    align-items: center;
-    gap: 0.375rem;
-    flex-wrap: wrap;
-  }
-
-  .path,
-  .new-branch {
-    flex: 1;
-    min-width: 10rem;
-    font: inherit;
-    font-size: 0.72rem;
-    font-family: ui-monospace, Consolas, monospace;
-    color: var(--m3-on-surface);
-    background: var(--m3-surface-container-lowest, var(--m3-surface));
-    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    border-radius: var(--m3-shape-extra-small, 4px);
-    padding: 0.2rem 0.45rem;
-  }
-
-  .new-branch {
-    min-width: 8rem;
-  }
-
-  .path:focus-visible,
-  .new-branch:focus-visible {
-    outline: 2px solid var(--m3-primary);
-    outline-offset: -1px;
-  }
-
-  .mode {
-    display: flex;
-    align-items: center;
-    gap: 0.375rem;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    font-size: 0.72rem;
-  }
-
-  select {
-    font: inherit;
-    font-size: 0.72rem;
-    color: var(--m3-on-surface);
-    background: var(--m3-surface-container-lowest, var(--m3-surface));
-    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    border-radius: var(--m3-shape-extra-small, 4px);
-    padding: 0.15rem 0.3rem;
-    max-width: 14rem;
-  }
-
-  select:focus-visible {
-    outline: 2px solid var(--m3-primary);
-    outline-offset: -1px;
-  }
-
-  .worktrees {
-    flex: 1;
-    min-height: 0;
-    overflow-y: auto;
-    margin: 0;
-    padding: 0.375rem 0.5rem;
-    list-style: none;
-    display: flex;
-    flex-direction: column;
-    gap: 0.5rem;
-  }
-
-  .card {
-    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    border-radius: var(--m3-shape-small, 8px);
-    background: var(--m3-surface-container-low, var(--m3-surface));
-    padding: 0.375rem 0.5rem;
-    display: flex;
-    flex-direction: column;
-    gap: 0.25rem;
-  }
-
-  .card.main {
-    border-style: dashed;
-  }
-
-  .row {
-    display: flex;
-    align-items: center;
-    gap: 0.375rem;
-    min-width: 0;
-    flex-wrap: wrap;
-  }
-
-  .name {
-    font-weight: 600;
-    color: var(--m3-primary);
-  }
-
-  .badge {
-    flex: none;
-    border-radius: var(--m3-shape-full, 9999px);
-    background: var(--m3-surface-container-highest, var(--m3-surface-container));
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    font-size: 0.625rem;
-    padding: 0.05rem 0.45rem;
-  }
-
-  .badge.main-badge {
-    background: var(--m3-secondary-container, var(--m3-surface-container-high));
-    color: var(--m3-on-secondary-container, var(--m3-on-surface));
-  }
-
-  .badge.danger {
-    background: var(--m3-error-container, var(--m3-surface-container-highest));
-    color: var(--m3-on-error-container, var(--m3-on-surface));
-  }
-
-  .ref {
-    margin-left: auto;
-    font-size: 0.72rem;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .path {
-    font-family: ui-monospace, Consolas, monospace;
-    font-size: 0.6875rem;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .actions {
-    display: flex;
-    align-items: center;
-    gap: 0.25rem;
-  }
-
-  .remove-confirm {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    padding-top: 0.25rem;
-    border-top: 1px dashed var(--m3-outline-variant, var(--m3-primary));
-  }
-
-  .removing {
-    font-size: 0.72rem;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    animation: removing-pulse 1.2s ease-in-out infinite;
-  }
-
-  @keyframes removing-pulse {
-    0%,
-    100% {
-      opacity: 1;
-    }
-    50% {
-      opacity: 0.45;
-    }
-  }
-
-  .toggle {
-    display: flex;
-    align-items: center;
-    gap: 0.25rem;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    font-size: 0.6875rem;
-    cursor: pointer;
-    white-space: nowrap;
-  }
-
-  .toggle input {
-    accent-color: var(--m3-primary);
-    margin: 0;
-  }
-
-  .go:focus-visible {
-    outline: 2px solid var(--m3-primary);
-    outline-offset: 1px;
-  }
-
-  .go {
-    flex: none;
-    border: none;
-    border-radius: var(--m3-shape-full, 9999px);
-    background: var(--m3-primary);
-    color: var(--m3-on-primary);
-    font: inherit;
-    font-size: 0.72rem;
-    padding: 0.2rem 0.75rem;
-    cursor: pointer;
-  }
-
-  .go.danger-go {
-    background: var(--m3-error, var(--m3-primary));
-    color: var(--m3-on-error, var(--m3-on-primary));
-  }
-
-  .go:disabled {
-    cursor: not-allowed;
-    opacity: 0.55;
-  }
-
-  .state {
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    padding: 1rem 0.75rem;
-    margin: 0;
-    font-size: 0.8125rem;
-  }
-
-  .error {
-    color: var(--m3-error, inherit);
-  }
-</style>

@@ -10,7 +10,8 @@
    */
   import { clearOpLogs, opLogsFor } from "$lib/stores/ops.svelte";
   import Icon from "$lib/components/icons/Icon.svelte";
-  import { Spinner } from "$lib/components/m3";
+  import { Button } from "$lib/components/ui/button/index.js";
+  import { Spinner } from "$lib/components/ui/spinner/index.js";
   import iconOutput from "@ktibow/iconset-material-symbols/terminal";
   import iconDone from "@ktibow/iconset-material-symbols/check-circle";
   import iconError from "@ktibow/iconset-material-symbols/error";
@@ -44,16 +45,23 @@
 
 {#if session}
   <section
-    class="op-log"
+    class="op-log flex min-w-0 shrink-0 flex-col border-b border-border bg-muted/40 text-xs text-foreground"
     class:done={session.done}
     class:failed={session.done && session.error !== null}
+    class:border-destructive={session.done && session.error !== null}
     aria-label={title}
     aria-busy={!session.done}
   >
-    <div class="head">
-      <span class="status" aria-hidden="true">
+    <div class="head flex h-[1.6rem] min-w-0 items-center gap-[0.3rem] pl-2 pr-1 text-muted-foreground">
+      <span
+        class="status inline-flex size-3.5 shrink-0 items-center justify-center {session.done &&
+        session.error === null
+          ? 'text-primary'
+          : ''} {session.done && session.error !== null ? 'text-destructive' : ''}"
+        aria-hidden="true"
+      >
         {#if !session.done}
-          <Spinner size={12} />
+          <Spinner class="size-3" role="presentation" aria-hidden="true" />
         {:else if session.error}
           <Icon icon={iconError} size={13} />
         {:else}
@@ -61,152 +69,46 @@
         {/if}
       </span>
       <Icon icon={iconOutput} size={13} />
-      <span class="title">{title}</span>
-      <span class="meta">{countLabel}</span>
-      <span class="grow"></span>
-      <button
-        class="head-btn"
+      <span class="title shrink-0 font-semibold text-foreground">{title}</span>
+      <span class="meta shrink-0 text-[0.6875rem] text-muted-foreground tabular-nums"
+        >{countLabel}</span
+      >
+      <span class="grow min-w-0 flex-1"></span>
+      <Button
+        class={`size-[1.35rem] rounded-full text-muted-foreground hover:bg-accent hover:text-accent-foreground aria-expanded:bg-accent aria-expanded:text-accent-foreground [&_svg]:transition-transform [&_svg]:duration-100 ${expanded
+          ? ""
+          : "[&_svg]:-rotate-90"} [&_svg:not([class*='size-'])]:size-[14px]`}
+        variant="ghost"
+        size="icon-sm"
         type="button"
         aria-label={expanded ? "Collapse output" : "Expand output"}
-        title={expanded ? "Collapse output" : "Expand output"}
         aria-expanded={expanded}
+        title={expanded ? "Collapse output" : "Expand output"}
         onclick={() => (expanded = !expanded)}
       >
-        <span class="chevron" class:closed={!expanded}>
-          <Icon icon={iconExpand} size={14} />
-        </span>
-      </button>
-      <button
-        class="head-btn"
+        <Icon icon={iconExpand} size={14} />
+      </Button>
+      <Button
+        class="size-[1.35rem] rounded-full text-muted-foreground hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-[13px]"
+        variant="ghost"
+        size="icon-sm"
         type="button"
         aria-label="Dismiss output"
         title="Dismiss output"
         onclick={() => clearOpLogs(repoId)}
       >
         <Icon icon={iconClose} size={13} />
-      </button>
+      </Button>
     </div>
     {#if expanded}
       <!-- Scrollable region: focusable so keyboard users can reach the log. -->
       <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
-      <pre class="lines" bind:this={linesEl} tabindex="0" aria-label={`${title} lines`}>{session.lines.join("\n")}</pre>
+      <pre
+        class="lines m-0 max-h-40 overflow-auto border-t border-border bg-background px-2 pb-1.5 pt-1 font-mono text-[0.72rem] leading-[1.4] text-muted-foreground [overflow-wrap:anywhere] whitespace-pre-wrap outline-none focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary"
+        bind:this={linesEl}
+        tabindex="0"
+        aria-label={`${title} lines`}>{session.lines.join("\n")}</pre
+      >
     {/if}
   </section>
 {/if}
-
-<style>
-  .op-log {
-    flex: none;
-    display: flex;
-    flex-direction: column;
-    min-width: 0;
-    border-bottom: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    background: var(--m3-surface-container-low, var(--m3-surface));
-    color: var(--m3-on-surface);
-    font-size: 0.75rem;
-  }
-
-  .op-log.failed {
-    border-bottom-color: var(--m3-error, var(--app-deleted));
-  }
-
-  .head {
-    display: flex;
-    align-items: center;
-    gap: 0.3rem;
-    min-width: 0;
-    height: 1.6rem;
-    padding: 0 0.35rem 0 0.5rem;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-  }
-
-  .status {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    flex: none;
-    width: 14px;
-    height: 14px;
-  }
-
-  .op-log.done:not(.failed) .status {
-    color: var(--m3-primary);
-  }
-
-  .op-log.failed .status {
-    color: var(--m3-error, var(--app-deleted));
-  }
-
-  .title {
-    flex: none;
-    font-weight: 600;
-    color: var(--m3-on-surface);
-  }
-
-  .meta {
-    flex: none;
-    font-size: 0.6875rem;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    font-variant-numeric: tabular-nums;
-  }
-
-  .grow {
-    flex: 1;
-    min-width: 0;
-  }
-
-  .head-btn {
-    flex: none;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 1.35rem;
-    height: 1.35rem;
-    padding: 0;
-    border: none;
-    border-radius: var(--m3-shape-full, 9999px);
-    background: transparent;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    cursor: pointer;
-  }
-
-  .head-btn:hover {
-    background: var(--m3-surface-container-high, var(--m3-surface));
-    color: var(--m3-on-surface);
-  }
-
-  .head-btn:focus-visible {
-    outline: 2px solid var(--m3-primary);
-    outline-offset: -1px;
-  }
-
-  .chevron {
-    display: inline-flex;
-    transition: transform 0.12s ease;
-  }
-
-  .chevron.closed {
-    transform: rotate(-90deg);
-  }
-
-  .lines {
-    margin: 0;
-    max-height: 10rem;
-    overflow: auto;
-    padding: 0.25rem 0.5rem 0.4rem;
-    border-top: 1px solid var(--app-border, var(--m3-outline-variant));
-    background: var(--m3-surface-container-lowest, var(--m3-surface));
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    font-family: var(--app-font-mono, ui-monospace, Consolas, monospace);
-    font-size: 0.72rem;
-    line-height: 1.4;
-    white-space: pre-wrap;
-    overflow-wrap: anywhere;
-    outline: none;
-  }
-
-  .lines:focus-visible {
-    outline: 2px solid var(--m3-primary);
-    outline-offset: -2px;
-  }
-</style>

@@ -4,18 +4,18 @@
    * except `openFolder` (the "+" button callback) and an optional `trailing`
    * snippet for window-level utilities (AI health, theme toggle).
    *
- * Accessibility: the strip is a `tablist` with a roving tabindex — the
- * active tab is tab-reachable (tabindex 0), the rest are programmatic
- * (tabindex -1). Arrow/Home/End keys move focus; Enter/Space activate the
- * focused tab (native button behavior routes through `setActive`).
- * Middle-click (auxclick button 1) closes a tab, as does its × button.
- *
- * Focus order is sane: each × close button follows its tab in DOM order, so
- * Tab runs tab → its close → next reachable control. Overflowed (ellipsis-
- * truncated) names announce in full: each tab's accessible name is
- * "name — root" (label-in-name compliant) and the title tooltip shows the
- * root on hover.
- */
+   * Accessibility: the strip is a `tablist` with a roving tabindex — the
+   * active tab is tab-reachable (tabindex 0), the rest are programmatic
+   * (tabindex -1). Arrow/Home/End keys move focus; Enter/Space activate the
+   * focused tab (native button behavior routes through `setActive`).
+   * Middle-click (auxclick button 1) closes a tab, as does its × button.
+   *
+   * Focus order is sane: each × close button follows its tab in DOM order, so
+   * Tab runs tab → its close → next reachable control. Overflowed (ellipsis-
+   * truncated) names announce in full: each tab's accessible name is
+   * "name — root" (label-in-name compliant) and the title tooltip shows the
+   * root on hover.
+   */
   import type { Snippet } from "svelte";
   import {
     closeTab,
@@ -25,6 +25,7 @@
   } from "$lib/stores/tabs.svelte";
   import Icon from "$lib/components/icons/Icon.svelte";
   import iconHome from "@ktibow/iconset-material-symbols/home-rounded";
+  import { Button } from "$lib/components/ui/button/index.js";
 
   let {
     openFolder,
@@ -68,17 +69,18 @@
 
   function onAuxClick(event: MouseEvent, tabId: string): void {
     if (event.button === 1) {
-      // Middle-click closes; prevent the browser's autoscroll affordance.
+      // Middle click closes; prevent the browser's autoscroll affordance.
       event.preventDefault();
       void closeTab(tabId);
     }
   }
 </script>
 
-<div class="tabbar">
-  <button
-    class="tab-home"
-    class:active={tabStore.recentsOpen}
+<div class="tabbar flex min-w-0 flex-none items-stretch border-b border-border bg-card">
+  <Button
+    class="tab-home ml-2 size-[1.9rem] flex-none self-center rounded-lg aria-[pressed=true]:bg-secondary aria-[pressed=true]:text-secondary-foreground focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring focus-visible:ring-0"
+    variant="ghost"
+    size="icon-sm"
     type="button"
     aria-label="Recent repositories"
     aria-pressed={tabStore.recentsOpen}
@@ -86,9 +88,9 @@
     onclick={showRecentRepos}
   >
     <Icon icon={iconHome} size={17} />
-  </button>
+  </Button>
   <div
-    class="tabstrip"
+    class="tabstrip flex min-w-0 flex-1 items-stretch gap-0.5 overflow-x-auto px-2 pt-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
     role="tablist"
     aria-label="Open repositories"
     tabindex="-1"
@@ -96,13 +98,23 @@
     onkeydown={onKeydown}
   >
     {#each tabStore.tabs as tab (tab.id)}
-      <div class="tab" class:active={tab.id === tabStore.activeId}>
+      {@const isActive = tab.id === tabStore.activeId}
+      <div
+        class="tab flex min-w-0 max-w-64 items-stretch rounded-t-lg border-b-2 border-transparent transition-colors"
+        class:active={isActive}
+        class:bg-accent={isActive}
+        class:border-b-primary={isActive}
+      >
+        <!-- font-weight stays constant across active/inactive: a
+             selected-state weight bump widens the label, resizing the tab
+             and shifting every sibling tab. -->
         <button
-          class="tab-main"
+          class="tab-main min-w-0 cursor-pointer select-none overflow-hidden text-ellipsis whitespace-nowrap rounded-t-lg border-0 bg-transparent py-2 pl-3.5 pr-1 text-sm font-medium text-muted-foreground outline-none focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring"
+          class:text-primary={isActive}
           type="button"
           role="tab"
-          aria-selected={tab.id === tabStore.activeId}
-          tabindex={tab.id === tabStore.activeId ? 0 : -1}
+          aria-selected={isActive}
+          tabindex={isActive ? 0 : -1}
           title={tab.root}
           aria-label={`${tab.name} — ${tab.root}`}
           onclick={() => setActive(tab.id)}
@@ -111,184 +123,36 @@
             if (event.button === 1) event.preventDefault();
           }}
         >
-          <span class="name">{tab.name}</span>
+          <span class="name block overflow-hidden text-ellipsis whitespace-nowrap">{tab.name}</span>
         </button>
-        <button
-          class="tab-close"
+        <Button
+          class="tab-close ml-0.5 h-auto flex-none rounded-tr-lg px-2 text-base leading-none focus-visible:bg-accent focus-visible:text-foreground"
+          variant="ghost"
+          size="icon-xs"
           type="button"
           aria-label="Close {tab.name}"
           title="Close {tab.name}"
           onclick={() => void closeTab(tab.id)}
         >
           ×
-        </button>
+        </Button>
       </div>
     {/each}
 
-    <button
-      class="tab-new"
+    <Button
+      class="tab-new my-0.5 h-auto flex-none px-3 text-base leading-none hover:text-primary focus-visible:bg-accent focus-visible:text-primary"
+      variant="ghost"
+      size="sm"
       type="button"
       aria-label="Open a repository"
       title="Open a repository"
       onclick={() => openFolder?.()}
     >
       +
-    </button>
+    </Button>
   </div>
 
   {#if trailing}
-    <div class="tabbar-trailing">{@render trailing()}</div>
+    <div class="tabbar-trailing m-1 flex flex-none items-center gap-1 border-l border-border px-2">{@render trailing()}</div>
   {/if}
 </div>
-
-<style>
-  .tabbar {
-    display: flex;
-    align-items: stretch;
-    flex: none;
-    min-width: 0;
-    background: var(--m3-surface-container, var(--m3-surface));
-    border-bottom: 1px solid var(--m3-outline-variant, var(--m3-primary));
-  }
-
-  .tab-home {
-    flex: none;
-    align-self: center;
-    display: grid;
-    place-items: center;
-    width: 1.9rem;
-    height: 1.9rem;
-    margin-left: 0.5rem;
-    padding: 0;
-    border: none;
-    border-radius: 0.5rem;
-    background: none;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    cursor: pointer;
-  }
-
-  .tab-home:hover {
-    background: var(--m3-surface-container-high, var(--m3-surface));
-    color: var(--m3-on-surface);
-  }
-
-  .tab-home.active {
-    background: var(--m3-secondary-container, var(--m3-surface-container-high));
-    color: var(--m3-on-secondary-container, var(--m3-primary));
-  }
-
-  .tab-home:focus-visible {
-    outline: 2px solid var(--m3-primary);
-    outline-offset: -2px;
-  }
-
-  .tabstrip {
-    display: flex;
-    align-items: stretch;
-    gap: 0.125rem;
-    padding: 0.25rem 0.5rem 0;
-    flex: 1;
-    min-width: 0;
-    overflow-x: auto;
-    scrollbar-width: none;
-  }
-
-  .tabstrip::-webkit-scrollbar {
-    display: none;
-  }
-
-  .tabbar-trailing {
-    flex: none;
-    display: flex;
-    align-items: center;
-    gap: 0.25rem;
-    padding: 0 0.5rem;
-    margin: 0.25rem 0;
-    border-left: 1px solid var(--m3-outline-variant, var(--m3-primary));
-  }
-
-  .tab {
-    display: flex;
-    align-items: stretch;
-    min-width: 0;
-    max-width: 16rem;
-    border-bottom: 2px solid transparent;
-    border-radius: 0.5rem 0.5rem 0 0;
-  }
-
-  .tab.active {
-    border-bottom-color: var(--m3-primary);
-    background: var(--m3-surface-container-high, var(--m3-surface));
-  }
-
-  .tab-main {
-    min-width: 0;
-    border: none;
-    background: none;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    font: inherit;
-    font-size: 0.875rem;
-    /* Constant across active/inactive: a selected-state weight bump widens
-       the label, resizing the tab and shifting every sibling tab. */
-    font-weight: 500;
-    padding: 0.5rem 0.25rem 0.5rem 0.875rem;
-    cursor: pointer;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .tab.active .tab-main {
-    color: var(--m3-primary);
-  }
-
-  .tab-main:focus-visible {
-    outline: 2px solid var(--m3-primary);
-    outline-offset: -2px;
-    border-radius: 0.5rem 0.5rem 0 0;
-  }
-
-  .name {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .tab-close {
-    flex: none;
-    border: none;
-    background: none;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    padding: 0 0.5rem;
-    margin-left: 0.125rem;
-    font-size: 1rem;
-    line-height: 1;
-    cursor: pointer;
-    border-radius: 0 0.5rem 0 0;
-  }
-
-  .tab-close:hover,
-  .tab-close:focus-visible {
-    color: var(--m3-on-surface);
-    background: var(--m3-surface-container-highest, var(--m3-surface));
-  }
-
-  .tab-new {
-    flex: none;
-    border: none;
-    background: none;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    font-size: 1rem;
-    line-height: 1;
-    padding: 0.5rem 0.75rem;
-    cursor: pointer;
-    border-radius: 0.5rem;
-    margin: 0.125rem 0;
-  }
-
-  .tab-new:hover,
-  .tab-new:focus-visible {
-    color: var(--m3-primary);
-    background: var(--m3-surface-container-high, var(--m3-surface));
-  }
-</style>

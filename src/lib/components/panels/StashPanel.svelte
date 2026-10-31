@@ -19,7 +19,9 @@
   import ConfirmDialog from "$lib/components/safety/ConfirmDialog.svelte";
   import StashMessageButton from "$lib/components/ai/StashMessageButton.svelte";
   import { showMenuAtElement } from "$lib/components/menu/contextMenuStore.svelte";
-  import { IconButton } from "$lib/components/m3";
+  import Icon from "$lib/components/icons/Icon.svelte";
+  import { Button } from "$lib/components/ui/button/index.js";
+  import { Input } from "$lib/components/ui/input/index.js";
   import iconAdd from "@ktibow/iconset-material-symbols/add";
   import iconRefresh from "@ktibow/iconset-material-symbols/refresh";
   import iconApply from "@ktibow/iconset-material-symbols/play-arrow";
@@ -193,38 +195,46 @@
   }
 </script>
 
-<aside class="stash-panel" aria-label="Stashes">
-  <div class="toolbar">
-    <IconButton
-      icon={iconAdd}
-      label={formOpen ? "Close stash form" : "Stash changes"}
+<aside class="stash-panel flex min-h-0 flex-col text-[13px]" aria-label="Stashes">
+  <div class="toolbar flex flex-none items-center gap-1.5 px-2 py-1.5">
+    <Button
+      class="aria-pressed:bg-accent aria-pressed:text-accent-foreground"
+      variant="default"
+      size="icon-sm"
+      type="button"
+      aria-label={formOpen ? "Close stash form" : "Stash changes"}
+      aria-pressed={formOpen}
       title={formOpen ? "Close the stash form" : "Stash the working-copy changes"}
-      variant="filled"
-      pressed={formOpen}
       disabled={busy}
       onclick={() => (formOpen = !formOpen)}
-    />
-    <IconButton
-      icon={iconRefresh}
-      label="Refresh stashes"
+    >
+      <Icon icon={iconAdd} size={16} />
+    </Button>
+    <Button
+      class="border-border text-muted-foreground hover:border-primary hover:bg-accent hover:text-accent-foreground"
+      variant="ghost"
+      size="icon-sm"
+      type="button"
+      aria-label="Refresh stashes"
       title={loading ? "Refreshing stashes…" : "Refresh stashes"}
-      variant="outlined"
       disabled={loading}
       onclick={() => void reload()}
-    />
+    >
+      <Icon icon={iconRefresh} size={16} />
+    </Button>
   </div>
 
   {#if formOpen}
     <form
-      class="push-form"
+      class="push-form flex flex-none flex-wrap items-center gap-1.5 border-b border-border px-2 py-1.5"
       aria-label="Stash changes"
       onsubmit={(e) => {
         e.preventDefault();
         void onPush();
       }}
     >
-      <input
-        class="msg"
+      <Input
+        class="h-auto min-w-40 flex-1 rounded px-2 py-0.5 text-xs"
         type="text"
         placeholder="Stash message (optional)"
         aria-label="Stash message"
@@ -234,67 +244,85 @@
         {repoId}
         onMessage={(suggested) => (message = suggested)}
       />
-      <div class="opts">
-        <label class="toggle" title="Keep changes already staged in the index">
-          <input type="checkbox" bind:checked={keepIndex} />
+      <div class="opts flex items-center gap-2.5">
+        <label
+          class="toggle flex cursor-pointer items-center gap-1 whitespace-nowrap text-[0.6875rem] text-muted-foreground"
+          title="Keep changes already staged in the index"
+        >
+          <input type="checkbox" class="m-0 accent-primary" bind:checked={keepIndex} />
           <span>keep-index</span>
         </label>
-        <label class="toggle" title="Also stash untracked files">
-          <input type="checkbox" bind:checked={includeUntracked} />
+        <label
+          class="toggle flex cursor-pointer items-center gap-1 whitespace-nowrap text-[0.6875rem] text-muted-foreground"
+          title="Also stash untracked files"
+        >
+          <input type="checkbox" class="m-0 accent-primary" bind:checked={includeUntracked} />
           <span>include-untracked</span>
         </label>
       </div>
-      <button class="go" type="submit" disabled={busy}>Stash</button>
+      <Button
+        class="h-auto shrink-0 rounded-full px-3 py-0.5 text-[0.72rem]"
+        type="submit"
+        disabled={busy}
+      >Stash</Button>
     </form>
   {/if}
 
   {#if error}
-    <p class="state error" role="alert">{error}</p>
+    <p class="state error py-4 px-3 text-[13px] text-destructive" role="alert">{error}</p>
   {:else if !loading && list.length === 0}
-    <p class="state">No stashes. Use "Stash changes" to park your work.</p>
+    <p class="state py-4 px-3 text-[13px] text-muted-foreground">No stashes. Use "Stash changes" to park your work.</p>
   {:else}
-    <ul class="stashes" role="list" aria-label="Stash list">
+    <ul class="stashes m-0 flex min-h-0 flex-1 list-none flex-col gap-2 overflow-y-auto px-2 py-1.5" role="list" aria-label="Stash list">
       {#each list as info (info.index)}
-        <li class="card">
-          <div class="row">
-            <span class="ref">{stashRef(info)}</span>
-            <span class="msg" title={info.message}>{info.message}</span>
+        <li class="card flex flex-col gap-1 rounded-lg border border-border bg-card px-2 py-1.5">
+          <div class="row flex min-w-0 items-baseline gap-2">
+            <span class="ref shrink-0 font-mono text-[0.6875rem] font-semibold text-primary">{stashRef(info)}</span>
+            <span class="msg min-w-0 flex-1 truncate" title={info.message}>{info.message}</span>
           </div>
-          <div class="meta">
-            <span class="sha">{shortSha(info.sha)}</span>
+          <div class="meta flex items-center gap-2.5 text-[0.6875rem] text-muted-foreground">
+            <span class="sha font-mono">{shortSha(info.sha)}</span>
             <span class="author">{info.author.name}</span>
             <span class="age">{age(info)}</span>
           </div>
-          <div class="actions">
-            <IconButton
-              icon={iconApply}
-              label={`Apply ${stashRef(info)}`}
+          <div class="actions flex flex-wrap items-center gap-1">
+            <Button
+              class="relative text-muted-foreground after:absolute after:-inset-1 after:content-[''] hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-4"
+              variant="ghost"
+              size="icon-xs"
+              type="button"
+              aria-label={`Apply ${stashRef(info)}`}
               title="Apply this stash, keep it in the list"
-              dense
               disabled={busy}
               onclick={() => void onApply(info, false)}
-            />
-            <IconButton
-              icon={iconMore}
-              label={`More actions for ${stashRef(info)}`}
+            >
+              <Icon icon={iconApply} size={16} />
+            </Button>
+            <Button
+              class="relative text-muted-foreground after:absolute after:-inset-1 after:content-[''] hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-4"
+              variant="ghost"
+              size="icon-xs"
+              type="button"
+              aria-label={`More actions for ${stashRef(info)}`}
               title="Pop, branch, or drop this stash"
-              dense
               aria-haspopup="menu"
               disabled={busy}
               onclick={(event) => stashMenu(info, event)}
-            />
+            >
+              <Icon icon={iconMore} size={16} />
+            </Button>
           </div>
           {#if branchFor === info.index}
             <form
-              class="branch-form"
+              class="branch-form flex items-center gap-1.5 border-t border-dashed border-border pt-1"
               aria-label={`Branch name for ${stashRef(info)}`}
               onsubmit={(e) => {
                 e.preventDefault();
                 void onBranch(info);
               }}
             >
-              <input
-                class="bname"
+              <Input
+                class="h-auto min-w-32 flex-1 rounded px-1.5 py-0.5 font-mono text-[0.72rem]"
                 type="text"
                 placeholder="new branch name"
                 aria-label="New branch name"
@@ -303,14 +331,16 @@
                   if (e.key === "Escape") branchFor = null;
                 }}
               />
-              <IconButton
-                icon={iconCheck}
-                label="Create branch from stash"
-                title="Create the branch"
-                variant="filled"
+              <Button
+                variant="default"
+                size="icon-sm"
                 type="submit"
+                aria-label="Create branch from stash"
+                title="Create the branch"
                 disabled={busy || !branchName.trim()}
-              />
+              >
+                <Icon icon={iconCheck} size={16} />
+              </Button>
             </form>
           {/if}
         </li>
@@ -334,191 +364,3 @@
   danger
   onConfirm={() => void onDropConfirmed()}
 />
-
-<style>
-  .stash-panel {
-    display: flex;
-    flex-direction: column;
-    min-height: 0;
-    font-size: 0.8125rem;
-  }
-
-  .toolbar {
-    display: flex;
-    align-items: center;
-    gap: 0.375rem;
-    padding: 0.375rem 0.5rem;
-    flex: none;
-  }
-
-  .push-form {
-    display: flex;
-    align-items: center;
-    gap: 0.375rem;
-    flex-wrap: wrap;
-    padding: 0.375rem 0.5rem;
-    border-bottom: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    flex: none;
-  }
-
-  .push-form .msg {
-    flex: 1;
-    min-width: 10rem;
-    font: inherit;
-    font-size: 0.75rem;
-    color: var(--m3-on-surface);
-    background: var(--m3-surface-container-lowest, var(--m3-surface));
-    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    border-radius: var(--m3-shape-extra-small, 4px);
-    padding: 0.2rem 0.45rem;
-  }
-
-  .push-form .msg:focus-visible {
-    outline: 2px solid var(--m3-primary);
-    outline-offset: -1px;
-  }
-
-  .opts {
-    display: flex;
-    align-items: center;
-    gap: 0.625rem;
-  }
-
-  .toggle {
-    display: flex;
-    align-items: center;
-    gap: 0.25rem;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    font-size: 0.6875rem;
-    cursor: pointer;
-    white-space: nowrap;
-  }
-
-  .toggle input {
-    accent-color: var(--m3-primary);
-    margin: 0;
-  }
-
-  .stashes {
-    flex: 1;
-    min-height: 0;
-    overflow-y: auto;
-    margin: 0;
-    padding: 0.375rem 0.5rem;
-    list-style: none;
-    display: flex;
-    flex-direction: column;
-    gap: 0.5rem;
-  }
-
-  .card {
-    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    border-radius: var(--m3-shape-small, 8px);
-    background: var(--m3-surface-container-low, var(--m3-surface));
-    padding: 0.375rem 0.5rem;
-    display: flex;
-    flex-direction: column;
-    gap: 0.25rem;
-  }
-
-  .row {
-    display: flex;
-    align-items: baseline;
-    gap: 0.5rem;
-    min-width: 0;
-  }
-
-  .ref {
-    flex: none;
-    font-family: ui-monospace, Consolas, monospace;
-    font-size: 0.6875rem;
-    font-weight: 600;
-    color: var(--m3-primary);
-  }
-
-  .msg {
-    flex: 1;
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .meta {
-    display: flex;
-    align-items: center;
-    gap: 0.625rem;
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    font-size: 0.6875rem;
-  }
-
-  .meta .sha {
-    font-family: ui-monospace, Consolas, monospace;
-  }
-
-  .actions {
-    display: flex;
-    align-items: center;
-    gap: 0.25rem;
-    flex-wrap: wrap;
-  }
-
-  .branch-form {
-    display: flex;
-    align-items: center;
-    gap: 0.375rem;
-    padding-top: 0.25rem;
-    border-top: 1px dashed var(--m3-outline-variant, var(--m3-primary));
-  }
-
-  .branch-form .bname {
-    flex: 1;
-    min-width: 8rem;
-    font: inherit;
-    font-size: 0.72rem;
-    font-family: ui-monospace, Consolas, monospace;
-    color: var(--m3-on-surface);
-    background: var(--m3-surface-container-lowest, var(--m3-surface));
-    border: 1px solid var(--m3-outline-variant, var(--m3-primary));
-    border-radius: var(--m3-shape-extra-small, 4px);
-    padding: 0.15rem 0.375rem;
-  }
-
-  .branch-form .bname:focus-visible {
-    outline: 2px solid var(--m3-primary);
-    outline-offset: -1px;
-  }
-
-  .go:focus-visible {
-    outline: 2px solid var(--m3-primary);
-    outline-offset: 1px;
-  }
-
-  .go:disabled {
-    cursor: not-allowed;
-    opacity: 0.55;
-  }
-
-  .go {
-    flex: none;
-    border: none;
-    border-radius: var(--m3-shape-full, 9999px);
-    background: var(--m3-primary);
-    color: var(--m3-on-primary);
-    font: inherit;
-    font-size: 0.72rem;
-    padding: 0.2rem 0.75rem;
-    cursor: pointer;
-  }
-
-  .state {
-    color: var(--m3-on-surface-variant, var(--m3-on-surface));
-    padding: 1rem 0.75rem;
-    margin: 0;
-    font-size: 0.8125rem;
-  }
-
-  .error {
-    color: var(--m3-error, inherit);
-  }
-</style>

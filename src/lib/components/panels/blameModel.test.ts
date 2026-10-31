@@ -77,6 +77,6 @@ describe("ageBackground", () => {
   });
 
   it("derives from the theme primary (color-mix)", () => {
-    expect(ageBackground(1)).toMatch(/^color-mix\(in srgb, var\(--m3-primary\)/);
+    expect(ageBackground(1)).toMatch(/^color-mix\(in srgb, var\(--primary\)/);
   });
 });

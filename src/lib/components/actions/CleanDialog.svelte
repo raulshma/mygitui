@@ -17,6 +17,7 @@
   import { opsPreview, repoClean } from "$lib/ipc/client";
   import type { PreviewFile } from "$lib/ipc/types";
   import { toast } from "$lib/toast";
+  import * as Dialog from "$lib/components/ui/dialog/index.js";
   import {
     CLEAN_CONFIRM_WORD,
     cleanSelectionSummary,
@@ -118,41 +119,46 @@
 </script>
 
 {#if open}
-  <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-  <div class="scrim" role="presentation" onkeydown={onKeydown}>
-    <div
-      class="dialog"
-      class:danger={selectedPaths.length > 0}
+  <Dialog.Root {open}>
+    <!-- svelte-ignore a11y_click_events_have_key_events -->
+    <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+    <Dialog.Overlay class="scrim bg-black/40" role="presentation" />
+    <Dialog.Content
+      class={"dialog w-[min(32rem,calc(100vw_-_2rem))] max-w-none gap-0 overflow-y-auto rounded-2xl px-6 py-5 text-sm text-popover-foreground shadow-[0_8px_24px_rgba(0,0,0,0.3)] sm:max-w-none " + (selectedPaths.length > 0 ? "danger" : "")}
       role="dialog"
       aria-modal="true"
       aria-labelledby="clean-title"
+      showCloseButton={false}
+      escapeKeydownBehavior="ignore"
+      interactOutsideBehavior="ignore"
+      onkeydown={onKeydown}
     >
-      <h2 id="clean-title" class="title">Clean untracked paths</h2>
+      <Dialog.Title id="clean-title" class="title m-0 mb-3 text-[1.125rem] font-medium text-destructive">Clean untracked paths</Dialog.Title>
 
       {#if loading}
-        <p class="status" aria-live="polite">Previewing untracked paths…</p>
+        <p class="status m-0 mb-3 text-muted-foreground" aria-live="polite">Previewing untracked paths…</p>
       {:else if error}
-        <p class="status error" role="alert">Preview failed: {error}</p>
+        <p class="status error m-0 mb-3 text-destructive [overflow-wrap:anywhere]" role="alert">Preview failed: {error}</p>
       {:else if files.length === 0}
-        <p class="status" aria-live="polite">Nothing to clean — no untracked paths.</p>
+        <p class="status m-0 mb-3 text-muted-foreground" aria-live="polite">Nothing to clean — no untracked paths.</p>
       {:else}
-        <p class="summary" aria-live="polite">
+        <p class="summary m-0 mb-[0.4rem] font-medium" aria-live="polite">
           {cleanSelectionSummary(selectedPaths.length, files.length)}
         </p>
 
-        <div class="bulk">
-          <button class="link" type="button" onclick={() => setAll(true)}>Select all</button>
-          <button class="link" type="button" onclick={() => setAll(false)}>Select none</button>
+        <div class="bulk mb-[0.4rem] flex gap-3">
+          <button class="link cursor-pointer border-0 bg-transparent p-0 text-xs font-[inherit] text-primary underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary" type="button" onclick={() => setAll(true)}>Select all</button>
+          <button class="link cursor-pointer border-0 bg-transparent p-0 text-xs font-[inherit] text-primary underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary" type="button" onclick={() => setAll(false)}>Select none</button>
         </div>
 
-        <div class="file-list" role="list" aria-label="Untracked paths to delete">
+        <div class="file-list mb-3 max-h-64 overflow-y-auto rounded border border-border bg-background p-[0.5rem_0.6rem]" role="list" aria-label="Untracked paths to delete">
           {#each groups as group (group.dir)}
-            <div class="group">
-              <div class="group-label">{groupLabel(group)}</div>
+            <div class="group mb-[0.4rem] last:mb-0">
+              <div class="group-label mb-[0.1rem] font-mono text-[0.7rem] font-semibold text-muted-foreground">{groupLabel(group)}</div>
               {#each group.files as file (file.path)}
-                <label class="file">
-                  <input type="checkbox" bind:checked={checked[file.path]} />
-                  <span class="path">{file.path}</span>
+                <label class="file flex cursor-pointer items-baseline gap-[0.4rem] py-[0.06rem]">
+                  <input type="checkbox" class="m-0 accent-destructive" bind:checked={checked[file.path]} />
+                  <span class="path font-mono text-[0.72rem] [overflow-wrap:anywhere]">{file.path}</span>
                 </label>
               {/each}
             </div>
@@ -160,8 +166,8 @@
         </div>
 
         {#if typeConfirmNeeded}
-          <label class="confirm-field">
-            <span class="confirm-hint">
+          <label class="confirm-field mb-3 flex flex-col gap-1">
+            <span class="confirm-hint text-xs text-destructive">
               This deletes {selectedPaths.length} paths — type “{CLEAN_CONFIRM_WORD}” to confirm
             </span>
             <input
@@ -169,16 +175,17 @@
               spellcheck="false"
               autocomplete="off"
               placeholder={CLEAN_CONFIRM_WORD}
+              class="rounded border border-destructive bg-background px-[0.6rem] py-[0.4rem] font-[inherit] text-foreground focus-visible:-outline-offset-1 focus-visible:outline-2 focus-visible:outline-destructive"
               bind:value={confirmText}
             />
           </label>
         {/if}
       {/if}
 
-      <div class="actions">
-        <span class="guard-note">A checkpoint is created first (undo available).</span>
+      <div class="actions flex items-center justify-end gap-2">
+        <span class="guard-note mr-auto text-[0.7rem] text-muted-foreground">A checkpoint is created first (undo available).</span>
         <button
-          class="confirm"
+          class="confirm rounded-full border-0 bg-destructive px-5 py-[0.45rem] font-[inherit] font-medium text-destructive-foreground cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-destructive disabled:cursor-not-allowed disabled:opacity-55"
           type="button"
           disabled={confirmBlocked || loading || files.length === 0}
           onclick={() => void confirm()}
@@ -187,199 +194,10 @@
             ? "Cleaning…"
             : `Delete ${selectedPaths.length} path${selectedPaths.length === 1 ? "" : "s"}`}
         </button>
-        <button class="cancel" type="button" disabled={running} onclick={onClose}>
+        <button class="cancel rounded-full border border-border bg-transparent px-4 py-[0.45rem] font-[inherit] text-muted-foreground cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-destructive disabled:cursor-not-allowed disabled:opacity-55" type="button" disabled={running} onclick={onClose}>
           Cancel
         </button>
       </div>
-    </div>
-  </div>
+    </Dialog.Content>
+  </Dialog.Root>
 {/if}
-
-<style>
-  .scrim {
-    position: fixed;
-    inset: 0;
-    z-index: 60;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: color-mix(in srgb, var(--m3-scrim, black) 40%, transparent);
-  }
-
-  .dialog {
-    width: min(32rem, calc(100vw - 2rem));
-    max-height: calc(100vh - 4rem);
-    overflow-y: auto;
-    padding: 1.25rem 1.5rem;
-    border-radius: 16px;
-    background: var(--m3-surface-container-high, var(--m3-background));
-    color: var(--m3-on-surface);
-    box-shadow: var(--m3-elevation-3, 0 8px 24px rgba(0, 0, 0, 0.3));
-    font-size: 0.875rem;
-  }
-
-  .title {
-    margin: 0 0 0.75rem;
-    font-size: 1.125rem;
-    font-weight: 500;
-    color: var(--m3-error);
-  }
-
-  .status {
-    margin: 0 0 0.75rem;
-    color: var(--m3-on-surface-variant);
-  }
-
-  .status.error {
-    color: var(--m3-error);
-    overflow-wrap: anywhere;
-  }
-
-  .summary {
-    margin: 0 0 0.4rem;
-    font-weight: 500;
-  }
-
-  .bulk {
-    display: flex;
-    gap: 0.75rem;
-    margin: 0 0 0.4rem;
-  }
-
-  .link {
-    background: none;
-    border: none;
-    padding: 0;
-    font: inherit;
-    font-size: 0.75rem;
-    color: var(--m3-primary);
-    cursor: pointer;
-    text-decoration: underline;
-  }
-
-  .link:focus-visible {
-    outline: 2px solid var(--m3-primary);
-    outline-offset: 2px;
-  }
-
-  .file-list {
-    margin: 0 0 0.75rem;
-    border: 1px solid var(--m3-outline-variant);
-    border-radius: 4px;
-    background: var(--m3-surface-container-lowest, transparent);
-    padding: 0.5rem 0.6rem;
-    max-height: 16rem;
-    overflow-y: auto;
-  }
-
-  .group {
-    margin: 0 0 0.4rem;
-  }
-
-  .group:last-child {
-    margin-bottom: 0;
-  }
-
-  .group-label {
-    color: var(--m3-on-surface-variant);
-    font-size: 0.7rem;
-    font-weight: 600;
-    font-family: ui-monospace, Consolas, monospace;
-    margin-bottom: 0.1rem;
-  }
-
-  .file {
-    display: flex;
-    align-items: baseline;
-    gap: 0.4rem;
-    cursor: pointer;
-    padding: 0.06rem 0;
-  }
-
-  .file input {
-    accent-color: var(--m3-error);
-    margin: 0;
-  }
-
-  .path {
-    font-family: ui-monospace, Consolas, monospace;
-    font-size: 0.72rem;
-    overflow-wrap: anywhere;
-  }
-
-  .confirm-field {
-    display: flex;
-    flex-direction: column;
-    gap: 0.25rem;
-    margin: 0 0 0.75rem;
-  }
-
-  .confirm-hint {
-    color: var(--m3-error);
-    font-size: 0.75rem;
-  }
-
-  .confirm-field input {
-    font: inherit;
-    color: var(--m3-on-surface);
-    background: var(--m3-surface-container-lowest, transparent);
-    border: 1px solid var(--m3-error);
-    border-radius: 4px;
-    padding: 0.4rem 0.6rem;
-  }
-
-  .confirm-field input:focus-visible {
-    outline: 2px solid var(--m3-error);
-    outline-offset: -1px;
-  }
-
-  .actions {
-    display: flex;
-    align-items: center;
-    justify-content: flex-end;
-    gap: 0.5rem;
-  }
-
-  .guard-note {
-    margin-right: auto;
-    color: var(--m3-on-surface-variant);
-    font-size: 0.7rem;
-  }
-
-  .confirm {
-    border: none;
-    border-radius: 9999px;
-    background: var(--m3-error);
-    color: var(--m3-on-error);
-    font: inherit;
-    font-weight: 500;
-    padding: 0.45rem 1.25rem;
-    cursor: pointer;
-  }
-
-  .confirm:disabled {
-    cursor: not-allowed;
-    opacity: 0.55;
-  }
-
-  .cancel {
-    border: 1px solid var(--m3-outline-variant);
-    border-radius: 9999px;
-    background: none;
-    color: var(--m3-on-surface-variant);
-    font: inherit;
-    padding: 0.45rem 1rem;
-    cursor: pointer;
-  }
-
-  .cancel:disabled {
-    cursor: not-allowed;
-    opacity: 0.55;
-  }
-
-  .confirm:focus-visible,
-  .cancel:focus-visible {
-    outline: 2px solid var(--m3-error);
-    outline-offset: 2px;
-  }
-</style>
