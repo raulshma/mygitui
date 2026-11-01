@@ -31,11 +31,11 @@ use crate::engine::stats::{Contributor, DayCount};
 use crate::engine::types::{
     BisectLogEntry, BisectMark, BisectState, BlameLine, BranchInfo, BranchTrashEntry,
     CheckpointInfo, CommitInfo, CommitOptions, CommitSignature, ConflictFile, ConflictResolution,
-    DiffSide, FetchOptions, FileDiff, HookInfo, LfsStatus, LogFilter, MergeFavor, MergeOptions,
-    MergeOutcome, MergeResult, NetStats, PreviewFile, PreviewInfo, PullOptions, PushOptions,
-    RebaseState, RebaseStep, ReflogEntry, RemoteBranchInfo, RemoteInfo, RepoHealth, RepoStatus,
-    ResetKind, SigningInfo, SparseInfo, StageRequest, StageTarget, StashInfo, SubmoduleInfo,
-    TagInfo, WorktreeInfo,
+    DiffHunk, DiffLine, DiffSide, FetchOptions, FileDiff, HookInfo, LfsStatus, LogFilter,
+    MergeFavor, MergeOptions, MergeOutcome, MergeResult, NetStats, PreviewFile, PreviewInfo,
+    PullOptions, PushOptions, RebaseState, RebaseStep, ReflogEntry, RemoteBranchInfo, RemoteInfo,
+    RepoHealth, RepoStatus, ResetKind, SigningInfo, SparseInfo, StageRequest, StageTarget,
+    StashInfo, SubmoduleInfo, TagInfo, WorktreeInfo,
 };
 
 /// Hook kinds surfaced by the hooks panel (mirrors `engine/mutations.rs`).
@@ -57,6 +57,10 @@ const TRASH_PREFIX: &str = "refs/mygitui/trash/";
 /// `git archive` responses bigger than this fail (protects host memory;
 /// effectively 256 MiB — the transport's exec output cap fires first).
 const ARCHIVE_CAP: usize = 512 * 1024 * 1024;
+
+/// Untracked-file diff synthesis cap (mirrors the local engine's
+/// `UNTRACKED_SYNTH_LIMIT`): bigger files show no hunks.
+const UNTRACKED_SYNTH_LIMIT: usize = 1024 * 1024;
 
 /// The engine for one open remote repo: a live device session + the repo's
 /// absolute POSIX path on that device.
@@ -203,7 +207,9 @@ impl RemoteGitEngine {
     }
 
     pub fn status(&self) -> Result<RepoStatus, String> {
-        let raw = self.git_out("status --porcelain=v2 -z --branch")?;
+        // -uall matches the local engine: untracked directories are listed
+        // as individual files, not collapsed to `dir/`.
+        let raw = self.git_out("status --porcelain=v2 -z --branch -uall")?;
         let (header, entries) = parse_status(&raw);
         let states = self.state_probe()?;
         Ok(RepoStatus {
@@ -224,7 +230,7 @@ impl RemoteGitEngine {
     /// Cheap change-detection snapshot for the poller: HEAD sha + a hash of
     /// the porcelain status (string; the caller compares).
     pub fn change_fingerprint(&self) -> Result<Option<(String, String)>, String> {
-        let status = self.git_out("status --porcelain=v2 --branch")?;
+        let status = self.git_out("status --porcelain=v2 --branch -uall")?;
         let head = self.head_sha()?;
         Ok(Some((head.unwrap_or_default(), status)))
     }
@@ -233,7 +239,7 @@ impl RemoteGitEngine {
 
     pub fn refs(&self) -> Result<Vec<(String, String)>, String> {
         let mut out =
-            parse_ref_pairs(&self.git_out("for-each-ref --format=%(refname)%09%(objectname)")?);
+            parse_ref_pairs(&self.git_out("for-each-ref --format='%(refname)%09%(objectname)'")?);
         if let Some(head) = self.head_sha()? {
             out.push(("HEAD".to_string(), head));
         }
@@ -285,11 +291,13 @@ impl RemoteGitEngine {
         // 1) stats via numstat (authoritative counts + renames + binary).
         let stats_raw = self.git_out(&format!("diff --numstat -z {range}{pathspec}"))?;
         let rows = parse_numstat(&stats_raw);
-        // 2) hunks via unified patch.
+        // 2) hunks via unified patch. Standard a/ b/ prefixes are kept:
+        // split_patch keys patches by their b-side, and `git apply` strips
+        // the prefix when staging hunks. quotePath=false keeps non-ASCII
+        // paths byte-identical to the numstat/status paths.
         let patch_raw = self.git_out(&format!(
-            "diff --no-color --no-ext-diff -U3 --no-prefix {range}{pathspec}"
+            "-c core.quotePath=false diff --no-color --no-ext-diff -U3 {range}{pathspec}"
         ))?;
-        // --no-prefix makes a/ b/ plain paths (simpler header parsing).
         let patches = split_patch(&patch_raw);
         let mut out = Vec::new();
         for row in &rows {
@@ -312,7 +320,100 @@ impl RemoteGitEngine {
                 hunks,
             });
         }
+        // `git diff` never emits untracked files; the local engine includes
+        // them (as all-added hunks) in every worktree diff, so mirror that.
+        if matches!(new, DiffSide::Worktree) {
+            self.append_untracked_diffs(&mut out, paths)?;
+        }
         Ok(out)
+    }
+
+    /// List untracked (non-ignored) files and append a synthesized
+    /// all-added [`FileDiff`] for each, reading content over SFTP.
+    fn append_untracked_diffs(
+        &self,
+        out: &mut Vec<FileDiff>,
+        paths: Option<&[String]>,
+    ) -> Result<(), String> {
+        let raw = self.git_out(&format!(
+            "ls-files --others --exclude-standard -z{pathspec}",
+            pathspec = path_spec(paths)
+        ))?;
+        for path in raw.split('\0').filter(|p| !p.is_empty()) {
+            if out.iter().any(|f| f.path == path) {
+                continue;
+            }
+            out.push(self.untracked_diff(path));
+        }
+        Ok(())
+    }
+
+    /// All-added hunks from the device file, mirroring the local engine's
+    /// `untracked_file_hunk`: binary detection by NUL byte, 1 MiB cap.
+    fn untracked_diff(&self, path: &str) -> FileDiff {
+        let mut file = FileDiff {
+            path: path.to_string(),
+            old_path: None,
+            binary: false,
+            is_image: is_image_path(path),
+            additions: 0,
+            deletions: 0,
+            hunks: Vec::new(),
+        };
+        let Some(bytes) = self.read_worktree_file(path) else {
+            return file;
+        };
+        if bytes.len() > UNTRACKED_SYNTH_LIMIT {
+            return file;
+        }
+        if bytes.contains(&0) {
+            file.binary = true;
+            return file;
+        }
+        let text = String::from_utf8_lossy(&bytes);
+        let mut split: Vec<&str> = text.split('\n').collect();
+        if text.ends_with('\n') {
+            split.pop();
+        }
+        let lines: Vec<DiffLine> = split
+            .iter()
+            .enumerate()
+            .map(|(i, line)| DiffLine {
+                old_no: None,
+                new_no: Some(i as u32 + 1),
+                origin: '+',
+                text: line.trim_end_matches('\r').to_owned(),
+                highlights: Vec::new(),
+            })
+            .collect();
+        file.additions = lines.len() as u32;
+        file.hunks = vec![DiffHunk {
+            old_start: 0,
+            new_start: 1,
+            lines,
+        }];
+        file
+    }
+
+    /// Read a workdir file over SFTP, capped one chunk past the synth limit
+    /// so the caller can detect oversize files.
+    fn read_worktree_file(&self, rel: &str) -> Option<Vec<u8>> {
+        let abs = format!("{}/{}", self.root, rel);
+        self.block(async {
+            use tokio::io::AsyncReadExt;
+            let sftp = self.session.sftp().await.ok()?;
+            let mut file = sftp.open(&abs).await.ok()?;
+            let mut buf = Vec::with_capacity(UNTRACKED_SYNTH_LIMIT);
+            let mut chunk = [0u8; 8192];
+            while buf.len() <= UNTRACKED_SYNTH_LIMIT {
+                let n = file.read(&mut chunk).await.ok()?;
+                if n == 0 {
+                    break;
+                }
+                buf.extend_from_slice(&chunk[..n]);
+            }
+            Some(buf)
+        })
     }
 
     // ---------- staging / discard / commit ----------
@@ -336,7 +437,9 @@ impl RemoteGitEngine {
             }
         }
         if !add_paths.is_empty() {
-            self.git_checked(&format!("add -q --{}", quoted_paths(&add_paths)), "stage")?;
+            // No `-q`: `git add` has no --quiet (unknown switch → usage,
+            // exit 129).
+            self.git_checked(&format!("add --{}", quoted_paths(&add_paths)), "stage")?;
         }
         if !reset_paths.is_empty() {
             self.git_checked(
@@ -362,7 +465,7 @@ impl RemoteGitEngine {
         // indices: (hunk index within the file's unstaged diff, optional
         // new-side line ranges).
         let patch_raw = self.git_out(&format!(
-            "diff --no-color --no-ext-diff -U3 --no-prefix -- {}",
+            "-c core.quotePath=false diff --no-color --no-ext-diff -U3 -- {}",
             shell_quote(path)
         ))?;
         let files = split_patch(&patch_raw);
@@ -497,7 +600,7 @@ impl RemoteGitEngine {
 
     pub fn branches(&self) -> Result<Vec<BranchInfo>, String> {
         Ok(parse_branches(&self.git_out(
-            "for-each-ref refs/heads --format=%(refname:short)%09%(objectname)%09%(HEAD)%09%(upstream:short)%09%(upstream:track)",
+            "for-each-ref refs/heads --format='%(refname:short)%09%(objectname)%09%(HEAD)%09%(upstream:short)%09%(upstream:track)'",
         )?))
     }
 
@@ -595,7 +698,7 @@ impl RemoteGitEngine {
 
     pub fn remote_branches(&self) -> Result<Vec<RemoteBranchInfo>, String> {
         let mut out: Vec<RemoteBranchInfo> = parse_remote_branches(
-            &self.git_out("for-each-ref refs/remotes --format=%(refname)%09%(objectname)")?,
+            &self.git_out("for-each-ref refs/remotes --format='%(refname)%09%(objectname)'")?,
         )
         .into_iter()
         .map(|(remote, name, sha)| RemoteBranchInfo {
@@ -670,7 +773,7 @@ impl RemoteGitEngine {
 
     pub fn tag_list(&self) -> Result<Vec<TagInfo>, String> {
         Ok(parse_tags(&self.git_out(
-            "for-each-ref refs/tags --format=%(refname:short)%09%(objectname)%09%(objecttype)%09%(*objectname)%09%(taggername)\u{1f}%(taggeremail)\u{1f}%(taggerdate:unix)\u{1f}%(taggerdate:iso-strict-local)\u{1f}%(contents:subject)",
+            "for-each-ref refs/tags --format='%(refname:short)%09%(objectname)%09%(objecttype)%09%(*objectname)%09%(taggername)\u{1f}%(taggeremail)\u{1f}%(taggerdate:unix)\u{1f}%(taggerdate:iso-strict-local)\u{1f}%(contents:subject)'",
         )?))
     }
 
@@ -880,7 +983,7 @@ impl RemoteGitEngine {
     // ---------- stash ----------
 
     pub fn stash_list(&self) -> Result<Vec<StashInfo>, String> {
-        let raw = self.git_out("stash list --format=%gd%x09%H%x09%an%x09%ae%x09%at%x09%gs")?;
+        let raw = self.git_out("stash list --format='%gd%x09%H%x09%an%x09%ae%x09%at%x09%gs'")?;
         Ok(parse_stash_list(&raw)
             .into_iter()
             .map(|(index, sha, message, author)| StashInfo {
@@ -1103,7 +1206,7 @@ impl RemoteGitEngine {
                 ConflictResolution::Theirs => "--theirs",
                 // "both": keep the conflict-marker file as the user sees it.
                 ConflictResolution::Both => {
-                    self.git_checked(&format!("add -q --{}", shell_quote(path)), "resolve")?;
+                    self.git_checked(&format!("add --{}", shell_quote(path)), "resolve")?;
                     return Ok(());
                 }
             };
@@ -1112,7 +1215,7 @@ impl RemoteGitEngine {
                 "resolve",
             )?;
         }
-        self.git_checked(&format!("add -q --{}", shell_quote(path)), "resolve")?;
+        self.git_checked(&format!("add --{}", shell_quote(path)), "resolve")?;
         Ok(())
     }
 
@@ -1130,7 +1233,8 @@ impl RemoteGitEngine {
         shas: &[String],
         no_commit: bool,
     ) -> Result<MergeResult, String> {
-        let mut args = format!("{cmd} -q");
+        // No `-q`: neither cherry-pick nor revert takes --quiet.
+        let mut args = cmd.to_string();
         if no_commit {
             args.push_str(" --no-commit");
         }
@@ -1484,7 +1588,8 @@ impl RemoteGitEngine {
 
     pub fn checkpoints(&self) -> Result<Vec<CheckpointInfo>, String> {
         let raw = self.git_out(&format!(
-            "for-each-ref {CHECKPOINT_PREFIX}* --format=%(refname)%09%(objectname)%09%(committerdate:unix)%09%(contents)",
+            "for-each-ref {} --format='%(refname)%09%(objectname)%09%(committerdate:unix)%09%(contents)'",
+            shell_quote(&format!("{CHECKPOINT_PREFIX}*")),
         ))?;
         let mut out: Vec<CheckpointInfo> = raw
             .lines()
@@ -1605,7 +1710,7 @@ impl RemoteGitEngine {
                 let into = param("into").unwrap_or_else(|| "HEAD".to_string());
                 let raw = self
                     .git_out(&format!(
-                        "log --format=%s {}..{}",
+                        "log --format='%s' {}..{}",
                         shell_quote(&into),
                         shell_quote(&branch)
                     ))?
@@ -1920,7 +2025,7 @@ impl RemoteGitEngine {
 
     pub fn reflog(&self, limit: usize) -> Result<Vec<ReflogEntry>, String> {
         let raw = self.git_out(&format!(
-            "reflog --format=%H%x09%at%x09%an%x09%ae%x09%gs -n {limit}"
+            "reflog --format='%H%x09%at%x09%an%x09%ae%x09%gs' -n {limit}"
         ))?;
         Ok(parse_reflog(&raw)
             .into_iter()
@@ -1935,7 +2040,8 @@ impl RemoteGitEngine {
 
     pub fn branch_trash_list(&self) -> Result<Vec<BranchTrashEntry>, String> {
         let raw = self.git_out(&format!(
-            "for-each-ref {TRASH_PREFIX}* --format=%(refname)%09%(objectname)%09%(committerdate:unix)"
+            "for-each-ref {} --format='%(refname)%09%(objectname)%09%(committerdate:unix)'",
+            shell_quote(&format!("{TRASH_PREFIX}*")),
         ))?;
         Ok(raw
             .lines()
@@ -1988,7 +2094,7 @@ impl RemoteGitEngine {
         // `--date=short` (device timezone, matching the local engine's
         // committer-tz bucketing closely enough for the activity chart).
         let raw = self.git_out(&format!(
-            "log --all --since={max_days}.days.ago --date=short --format=%cd%x09%an%x09%ae"
+            "log --all --since={max_days}.days.ago --date=short --format='%cd%x09%an%x09%ae'"
         ))?;
         let needle = author.map(|a| a.to_ascii_lowercase());
         let mut days: Vec<(String, u32)> = Vec::new();
@@ -2017,7 +2123,7 @@ impl RemoteGitEngine {
 
     pub fn contributor_stats(&self, max_days: u32) -> Result<Vec<Contributor>, String> {
         let raw = self.git_out(&format!(
-            "log --all --since={max_days}.days.ago --date=short --format=%an%x09%ae%x09%cd"
+            "log --all --since={max_days}.days.ago --date=short --format='%an%x09%ae%x09%cd'"
         ))?;
         let mut out: Vec<Contributor> = Vec::new();
         for line in raw.lines() {
@@ -2066,7 +2172,7 @@ impl RemoteGitEngine {
 
     pub fn autosquash_plan(&self, base: &str) -> Result<Vec<RebaseStep>, String> {
         let raw = self.git_out(&format!(
-            "log --reverse --format=%H%x09%s {}..HEAD",
+            "log --reverse --format='%H%x09%s' {}..HEAD",
             shell_quote(base)
         ))?;
         Ok(raw
@@ -2308,7 +2414,7 @@ pub fn diff_range(old: &DiffSide, new: &DiffSide) -> Result<String, String> {
 /// last sha of the previous page).
 pub fn log_args(filter: &LogFilter, limit: usize, after: Option<&str>) -> String {
     let mut args = String::from(
-        "log --format=%H%x00%P%x00%an%x00%ae%x00%at%x00%ai%x00%cn%x00%ce%x00%ct%x00%ci%x00%D%x00%B%x01",
+        "log --format='%H%x00%P%x00%an%x00%ae%x00%at%x00%ai%x00%cn%x00%ce%x00%ct%x00%ci%x00%D%x00%B%x01'",
     );
     if filter.regex {
         args.push_str(" -E");

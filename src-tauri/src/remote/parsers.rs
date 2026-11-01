@@ -176,9 +176,12 @@ pub struct NumStatRow {
     pub deletions: u32,
 }
 
-/// Parse `git diff --numstat -z` output. Layout: `add<TAB>del<TAB>status`
-/// followed by the path as its own NUL field; renames carry TWO path fields
-/// (origPath, then path).
+/// Parse `git diff --numstat -z` output.
+///
+/// Normal records are `add<TAB>del<TAB>path` with the path in the SAME NUL
+/// field (verbatim, so tabs inside the name survive). Rename/copy records
+/// leave the path empty and carry the two paths as the NEXT NUL fields:
+/// `add<TAB>del<TAB>` `old` `new`.
 pub fn parse_numstat(raw: &str) -> Vec<NumStatRow> {
     let fields: Vec<&str> = raw.split('\0').collect();
     let mut rows = Vec::new();
@@ -190,41 +193,32 @@ pub fn parse_numstat(raw: &str) -> Vec<NumStatRow> {
             continue;
         }
         let mut parts = meta.splitn(3, '\t');
-        let first = parts.next().unwrap_or("");
-        let second = parts.next();
-        // Rename/copy records carry ONLY the status in the meta field
-        // ("R100"); normal records carry "add<TAB>del<TAB>status".
-        let status = match second {
-            None => first,
-            Some(_) => parts.next().unwrap_or("A"),
+        let add = parts.next().unwrap_or("");
+        let del = parts.next().unwrap_or("");
+        let path = parts.next().unwrap_or("");
+        let (additions, deletions) = match (add.parse::<u32>(), del.parse::<u32>()) {
+            (Ok(a), Ok(b)) => (Some(a), Some(b)),
+            _ => (None, None), // "-" — binary
         };
-        let (add, del) = match second {
-            None => (None, None),
-            Some(d) => match (first.parse::<u32>(), d.parse::<u32>()) {
-                (Ok(a), Ok(b)) => (Some(a), Some(b)),
-                _ => (None, None), // "-" — binary
-            },
-        };
-        if status.starts_with('R') || status.starts_with('C') {
+        if path.is_empty() {
             let old = fields.get(i + 1).copied().unwrap_or("");
             let new = fields.get(i + 2).copied().unwrap_or("");
             i += 3;
             rows.push(NumStatRow {
                 path: new.to_string(),
                 old_path: Some(old.to_string()),
-                binary: add.is_none(),
-                additions: add.unwrap_or(0),
-                deletions: del.unwrap_or(0),
+                binary: additions.is_none(),
+                additions: additions.unwrap_or(0),
+                deletions: deletions.unwrap_or(0),
             });
         } else {
-            let path = fields.get(i + 1).copied().unwrap_or("");
-            i += 2;
+            i += 1;
             rows.push(NumStatRow {
                 path: path.to_string(),
                 old_path: None,
-                binary: add.is_none(),
-                additions: add.unwrap_or(0),
-                deletions: del.unwrap_or(0),
+                binary: additions.is_none(),
+                additions: additions.unwrap_or(0),
+                deletions: deletions.unwrap_or(0),
             });
         }
     }
@@ -1053,7 +1047,7 @@ u UU UUU 0 0 0 0 0 0 conflicted.txt\u{0}\
 
     #[test]
     fn numstat_parses_binary_and_renames() {
-        let raw = "3\t1\tM\u{0}README.md\u{0}-\t-\t-\u{0}assets/logo.png\u{0}R100\u{0}old.rs\u{0}new.rs\u{0}";
+        let raw = "3\t1\tREADME.md\u{0}-\t-\tassets/logo.png\u{0}0\t0\t\u{0}old.rs\u{0}new.rs\u{0}";
         let rows = parse_numstat(raw);
         assert_eq!(rows.len(), 3);
         assert_eq!(rows[0].path, "README.md");
