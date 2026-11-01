@@ -1781,9 +1781,20 @@ impl RemoteGitEngine {
     }
 
     pub fn maintenance_run(&self, op: &str) -> Result<String, String> {
+        // Mirrors the local engine's summary for the Health panel.
+        if op == "count_objects" {
+            let raw = self.git_out("count-objects -v")?;
+            let (loose, _loose_bytes, _packs, pack_bytes, _in_pack) = parse_count_objects(&raw);
+            return Ok(format!(
+                "loose objects: {loose}, packed size: {} KiB",
+                pack_bytes / 1024
+            ));
+        }
         let args = match op {
             "gc" => "gc --quiet",
             "prune" => "prune --verbose",
+            "commit_graph" => "commit-graph write --reachable --split=replace",
+            "pack_refs" => "pack-refs --all --prune",
             "fsck" => "fsck --no-progress",
             other => return Err(format!("unknown maintenance op `{other}`")),
         };

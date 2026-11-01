@@ -773,6 +773,11 @@ interpolated path/ref passes the unit-tested POSIX quoting helper
 Remote repos share the local command surface (`repo_*`, M2–M4, workspace
 files, `action_run`) — commands dispatch per-handle to the remote engine
 over the same DTO types (`RepoInfo.device_id` marks a remote project).
+Filesystem-scan commands run on the device too: `project_detect` takes one
+bounded `find` snapshot over exec plus manifest reads over SFTP and feeds
+the same detectors as local repos (`remote/projects.rs`), and
+`maintenance_run` covers the same op set (`gc`, `prune`, `commit_graph`,
+`pack_refs`, `count_objects`, `fsck`) with matching summaries.
 Remote network ops report `NetStats` from git's final transfer-progress
 line (the CLI prints no end-of-transfer summary). Raw output streams
 (`action-output`, op-log passthrough) redact credential-prompt-ish lines

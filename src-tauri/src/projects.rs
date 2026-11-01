@@ -80,23 +80,76 @@ const SKIP_DIRS: [&str; 18] = [
 /// huge monorepos; the root is always included).
 const MAX_CHILD_DIRS: usize = 64;
 
+/// Filesystem surface used by detection. Local repos read the real fs;
+/// remote repos serve these calls from a bounded snapshot taken on the
+/// device, so the detection rules stay in one place.
+pub(crate) trait ProjectFs {
+    /// `(path, is_dir)` for each entry (symlinks report their target kind
+    /// only via the follow-up `is_*` calls).
+    fn read_dir(&self, dir: &Path) -> Vec<(PathBuf, bool)>;
+    fn read_file(&self, path: &Path) -> Option<String>;
+    fn is_file(&self, path: &Path) -> bool;
+    fn is_dir(&self, path: &Path) -> bool;
+    fn exists(&self, path: &Path) -> bool {
+        self.is_file(path) || self.is_dir(path)
+    }
+    /// Windows hosts use `gradlew.bat`; POSIX devices use `./gradlew`.
+    fn windows(&self) -> bool {
+        cfg!(windows)
+    }
+}
+
+pub(crate) struct LocalProjectFs;
+
+impl ProjectFs for LocalProjectFs {
+    fn read_dir(&self, dir: &Path) -> Vec<(PathBuf, bool)> {
+        let Ok(entries) = fs::read_dir(dir) else {
+            return Vec::new();
+        };
+        entries
+            .flatten()
+            .map(|entry| {
+                let is_dir = entry.file_type().map(|kind| kind.is_dir()).unwrap_or(false);
+                (entry.path(), is_dir)
+            })
+            .collect()
+    }
+
+    fn read_file(&self, path: &Path) -> Option<String> {
+        fs::read_to_string(path).ok()
+    }
+
+    fn is_file(&self, path: &Path) -> bool {
+        path.is_file()
+    }
+
+    fn is_dir(&self, path: &Path) -> bool {
+        path.is_dir()
+    }
+}
+
 /// Detect projects/scripts under `root` (root + immediate children).
 pub fn detect_sync(root: &Path) -> Vec<ProjectInfo> {
-    let dirs = candidate_dirs(root);
+    detect_with(&LocalProjectFs, root)
+}
+
+/// Detection entry point shared by local repos and remote snapshots.
+pub(crate) fn detect_with(fs: &dyn ProjectFs, root: &Path) -> Vec<ProjectInfo> {
+    let dirs = candidate_dirs(fs, root);
     let mut out = Vec::new();
 
     for dir in &dirs {
-        detect_node(root, dir, &mut out);
-        detect_rust(root, dir, &mut out);
-        detect_go(root, dir, &mut out);
+        detect_node(fs, root, dir, &mut out);
+        detect_rust(fs, root, dir, &mut out);
+        detect_go(fs, root, dir, &mut out);
     }
     // Root-only ecosystems (their manifests describe the whole repo).
-    detect_python(root, &mut out);
-    detect_dotnet(root, &mut out);
-    detect_android(root, &mut out);
-    detect_ruby(root, &mut out);
-    detect_php(root, &mut out);
-    detect_make(root, &mut out);
+    detect_python(fs, root, &mut out);
+    detect_dotnet(fs, root, &mut out);
+    detect_android(fs, root, &mut out);
+    detect_ruby(fs, root, &mut out);
+    detect_php(fs, root, &mut out);
+    detect_make(fs, root, &mut out);
 
     out.sort_by(|a, b| {
         let a_root = a.path == ".";
@@ -109,31 +162,26 @@ pub fn detect_sync(root: &Path) -> Vec<ProjectInfo> {
     out
 }
 
-fn candidate_dirs(root: &Path) -> Vec<PathBuf> {
+fn candidate_dirs(fs: &dyn ProjectFs, root: &Path) -> Vec<PathBuf> {
     let mut dirs = vec![root.to_path_buf()];
-    if let Ok(entries) = fs::read_dir(root) {
-        let mut children: Vec<PathBuf> = entries
-            .flatten()
-            .filter_map(|entry| {
-                let path = entry.path();
-                if !entry.file_type().ok()?.is_dir() {
-                    return None;
-                }
-                let name = entry.file_name().to_string_lossy().to_string();
-                if SKIP_DIRS.contains(&name.as_str()) {
-                    return None;
-                }
-                Some(path)
-            })
-            .collect();
-        children.sort();
-        dirs.extend(children.into_iter().take(MAX_CHILD_DIRS));
-    }
+    let mut children: Vec<PathBuf> = fs
+        .read_dir(root)
+        .into_iter()
+        .filter_map(|(path, is_dir)| {
+            if !is_dir {
+                return None;
+            }
+            let name = path.file_name()?.to_string_lossy().to_string();
+            (!SKIP_DIRS.contains(&name.as_str())).then_some(path)
+        })
+        .collect();
+    children.sort();
+    dirs.extend(children.into_iter().take(MAX_CHILD_DIRS));
 
     // Monorepo workspace members (`packages/web`, `apps/api`, …) live one
     // level below the immediate children. Root manifests tell us where to
     // look without walking the tree.
-    for member in workspace_dirs(root) {
+    for member in workspace_dirs(fs, root) {
         if !dirs.contains(&member) && dirs.len() < MAX_CHILD_DIRS + 32 {
             dirs.push(member);
         }
@@ -143,9 +191,9 @@ fn candidate_dirs(root: &Path) -> Vec<PathBuf> {
 
 /// Workspace member directories declared by `package.json` `workspaces` or
 /// `pnpm-workspace.yaml` (glob expansion is one directory level).
-fn workspace_dirs(root: &Path) -> Vec<PathBuf> {
+fn workspace_dirs(fs: &dyn ProjectFs, root: &Path) -> Vec<PathBuf> {
     let mut patterns: Vec<String> = Vec::new();
-    if let Ok(text) = fs::read_to_string(root.join("package.json")) {
+    if let Some(text) = fs.read_file(&root.join("package.json")) {
         if let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) {
             let workspaces = json.get("workspaces");
             let list = workspaces
@@ -166,7 +214,7 @@ fn workspace_dirs(root: &Path) -> Vec<PathBuf> {
     }
     // Cargo workspace members (`crates/*`/explicit paths). The simple line
     // scanner handles the usual one-entry-per-line and inline-array forms.
-    if let Ok(text) = fs::read_to_string(root.join("Cargo.toml")) {
+    if let Some(text) = fs.read_file(&root.join("Cargo.toml")) {
         let mut in_workspace = false;
         let mut in_members = false;
         for line in text.lines() {
@@ -198,7 +246,7 @@ fn workspace_dirs(root: &Path) -> Vec<PathBuf> {
             }
         }
     }
-    if let Ok(text) = fs::read_to_string(root.join("pnpm-workspace.yaml")) {
+    if let Some(text) = fs.read_file(&root.join("pnpm-workspace.yaml")) {
         let mut in_packages = false;
         for line in text.lines() {
             let trimmed = line.trim();
@@ -236,17 +284,14 @@ fn workspace_dirs(root: &Path) -> Vec<PathBuf> {
             if base.is_empty() {
                 continue;
             }
-            let Ok(entries) = fs::read_dir(root.join(base)) else {
-                continue;
-            };
-            let mut members: Vec<PathBuf> = entries
-                .flatten()
-                .filter_map(|entry| {
-                    let path = entry.path();
-                    if !entry.file_type().ok()?.is_dir() {
+            let mut members: Vec<PathBuf> = fs
+                .read_dir(&root.join(base))
+                .into_iter()
+                .filter_map(|(path, is_dir)| {
+                    if !is_dir {
                         return None;
                     }
-                    let name = entry.file_name().to_string_lossy().to_string();
+                    let name = path.file_name()?.to_string_lossy().to_string();
                     (!SKIP_DIRS.contains(&name.as_str())).then_some(path)
                 })
                 .collect();
@@ -254,7 +299,7 @@ fn workspace_dirs(root: &Path) -> Vec<PathBuf> {
             out.extend(members);
         } else {
             let dir = root.join(pattern);
-            if dir.is_dir() {
+            if fs.is_dir(&dir) {
                 out.push(dir);
             }
         }
@@ -269,18 +314,18 @@ fn workspace_dirs(root: &Path) -> Vec<PathBuf> {
 // Node / JavaScript / TypeScript
 // ---------------------------------------------------------------------------
 
-fn detect_node(root: &Path, dir: &Path, out: &mut Vec<ProjectInfo>) {
+fn detect_node(fs: &dyn ProjectFs, root: &Path, dir: &Path, out: &mut Vec<ProjectInfo>) {
     let manifest = dir.join("package.json");
-    if !manifest.is_file() {
+    if !fs.is_file(&manifest) {
         return;
     }
-    let Ok(text) = fs::read_to_string(&manifest) else {
+    let Some(text) = fs.read_file(&manifest) else {
         return;
     };
     let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) else {
         return;
     };
-    let manager = package_manager(root, dir);
+    let manager = package_manager(fs, root, dir);
     let project_path = rel_path(root, dir);
     let name = json
         .get("name")
@@ -326,22 +371,22 @@ fn detect_node(root: &Path, dir: &Path, out: &mut Vec<ProjectInfo>) {
     });
 }
 
-fn package_manager(root: &Path, dir: &Path) -> &'static str {
-    if find_up(root, dir, "pnpm-lock.yaml") || find_up(root, dir, "pnpm-workspace.yaml") {
+fn package_manager(fs: &dyn ProjectFs, root: &Path, dir: &Path) -> &'static str {
+    if find_up(fs, root, dir, "pnpm-lock.yaml") || find_up(fs, root, dir, "pnpm-workspace.yaml") {
         "pnpm"
-    } else if find_up(root, dir, "yarn.lock") {
+    } else if find_up(fs, root, dir, "yarn.lock") {
         "yarn"
-    } else if find_up(root, dir, "bun.lockb") || find_up(root, dir, "bun.lock") {
+    } else if find_up(fs, root, dir, "bun.lockb") || find_up(fs, root, dir, "bun.lock") {
         "bun"
     } else {
         "npm"
     }
 }
 
-fn find_up(root: &Path, start: &Path, name: &str) -> bool {
+fn find_up(fs: &dyn ProjectFs, root: &Path, start: &Path, name: &str) -> bool {
     let mut dir = Some(start);
     while let Some(current) = dir {
-        if current.join(name).exists() {
+        if fs.exists(&current.join(name)) {
             return true;
         }
         if current == root {
@@ -411,19 +456,19 @@ fn node_script_watch(name: &str, command: &str) -> bool {
 // Rust / Cargo
 // ---------------------------------------------------------------------------
 
-fn detect_rust(root: &Path, dir: &Path, out: &mut Vec<ProjectInfo>) {
+fn detect_rust(fs: &dyn ProjectFs, root: &Path, dir: &Path, out: &mut Vec<ProjectInfo>) {
     let manifest = dir.join("Cargo.toml");
-    if !manifest.is_file() {
+    if !fs.is_file(&manifest) {
         return;
     }
-    let Ok(text) = fs::read_to_string(&manifest) else {
+    let Some(text) = fs.read_file(&manifest) else {
         return;
     };
     let project_path = rel_path(root, dir);
     let name = cargo_package_name(&text).unwrap_or_else(|| dir_name(dir));
     let manifest_arg = quoted_path(&project_path_with_file(&project_path, "Cargo.toml"));
     let project_id = format!("rust:{project_path}");
-    let has_main = dir.join("src").join("main.rs").is_file();
+    let has_main = fs.is_file(&dir.join("src").join("main.rs"));
     let is_workspace = text.lines().any(|line| line.trim() == "[workspace]");
     let mut scripts = Vec::new();
 
@@ -507,7 +552,7 @@ fn cargo_package_name(text: &str) -> Option<String> {
 // Python
 // ---------------------------------------------------------------------------
 
-fn detect_python(root: &Path, out: &mut Vec<ProjectInfo>) {
+fn detect_python(fs: &dyn ProjectFs, root: &Path, out: &mut Vec<ProjectInfo>) {
     let signals = [
         "pyproject.toml",
         "requirements.txt",
@@ -519,7 +564,7 @@ fn detect_python(root: &Path, out: &mut Vec<ProjectInfo>) {
     ];
     let mut detected_from = Vec::new();
     for signal in signals {
-        if root.join(signal).is_file() {
+        if fs.is_file(&root.join(signal)) {
             detected_from.push(signal.to_string());
         }
     }
@@ -527,24 +572,25 @@ fn detect_python(root: &Path, out: &mut Vec<ProjectInfo>) {
         return;
     }
 
-    let name = read_toml_name(&root.join("pyproject.toml"))
+    let name = read_toml_name(fs, &root.join("pyproject.toml"))
         .or_else(|| {
-            fs::read_to_string(root.join("setup.py"))
-                .ok()
+            fs.read_file(&root.join("setup.py"))
                 .and_then(|text| quoted_value_after(&text, "name="))
         })
         .unwrap_or_else(|| dir_name(root));
     let project_id = "python:.";
     let mut scripts = Vec::new();
-    let has_manage = root.join("manage.py").is_file();
-    let has_main = root.join("main.py").is_file();
-    let has_app = root.join("app.py").is_file();
-    let has_pyproject = root.join("pyproject.toml").is_file();
-    let has_tests = root.join("tests").is_dir() || root.join("test").is_dir();
-    let manifest_hint = fs::read_to_string(root.join("pyproject.toml"))
+    let has_manage = fs.is_file(&root.join("manage.py"));
+    let has_main = fs.is_file(&root.join("main.py"));
+    let has_app = fs.is_file(&root.join("app.py"));
+    let has_pyproject = fs.is_file(&root.join("pyproject.toml"));
+    let has_tests = fs.is_dir(&root.join("tests")) || fs.is_dir(&root.join("test"));
+    let manifest_hint = fs
+        .read_file(&root.join("pyproject.toml"))
         .unwrap_or_default()
         .to_ascii_lowercase()
-        + &fs::read_to_string(root.join("requirements.txt"))
+        + &fs
+            .read_file(&root.join("requirements.txt"))
             .unwrap_or_default()
             .to_ascii_lowercase();
 
@@ -603,13 +649,13 @@ fn detect_python(root: &Path, out: &mut Vec<ProjectInfo>) {
         ));
     }
 
-    let install = if root.join("uv.lock").is_file() {
+    let install = if fs.is_file(&root.join("uv.lock")) {
         Some("uv sync")
-    } else if root.join("poetry.lock").is_file() {
+    } else if fs.is_file(&root.join("poetry.lock")) {
         Some("poetry install")
-    } else if root.join("Pipfile").is_file() {
+    } else if fs.is_file(&root.join("Pipfile")) {
         Some("pipenv install")
-    } else if root.join("requirements.txt").is_file() {
+    } else if fs.is_file(&root.join("requirements.txt")) {
         Some("pip install -r requirements.txt")
     } else if has_pyproject {
         Some("pip install -e .")
@@ -635,8 +681,8 @@ fn detect_python(root: &Path, out: &mut Vec<ProjectInfo>) {
     });
 }
 
-fn read_toml_name(path: &Path) -> Option<String> {
-    let text = fs::read_to_string(path).ok()?;
+fn read_toml_name(fs: &dyn ProjectFs, path: &Path) -> Option<String> {
+    let text = fs.read_file(path)?;
     let mut in_name_section = false;
     for line in text.lines() {
         let line = line.trim();
@@ -669,12 +715,17 @@ fn quoted_value_after(text: &str, needle: &str) -> Option<String> {
 // .NET
 // ---------------------------------------------------------------------------
 
-fn dotnet_entry_project(root: &Path, projects: &[PathBuf], solution: &Path) -> Option<String> {
+fn dotnet_entry_project(
+    fs: &dyn ProjectFs,
+    root: &Path,
+    projects: &[PathBuf],
+    solution: &Path,
+) -> Option<String> {
     let stem = file_stem(solution);
     let by_name = projects.iter().find(|path| file_stem(path) == stem);
     let executable = || {
         projects.iter().find(|path| {
-            fs::read_to_string(path)
+            fs.read_file(path)
                 .map(|text| {
                     text.contains("<OutputType>Exe") || text.contains("Microsoft.NET.Sdk.Web")
                 })
@@ -687,16 +738,18 @@ fn dotnet_entry_project(root: &Path, projects: &[PathBuf], solution: &Path) -> O
         .map(|path| rel_path(root, path))
 }
 
-fn detect_dotnet(root: &Path, out: &mut Vec<ProjectInfo>) {
-    let solution = manifest_files(root, &["sln", "slnx"]).into_iter().next();
+fn detect_dotnet(fs: &dyn ProjectFs, root: &Path, out: &mut Vec<ProjectInfo>) {
+    let solution = manifest_files(fs, root, &["sln", "slnx"])
+        .into_iter()
+        .next();
     // .NET solutions usually keep projects under `src/<Project>/`; scan a
     // bounded depth instead of only the immediate children.
-    let projects = find_manifests_bounded(root, &["csproj", "fsproj", "vbproj"], 3, 64);
+    let projects = find_manifests_bounded(fs, root, &["csproj", "fsproj", "vbproj"], 3, 64);
 
     if let Some(solution) = solution {
         let project_path = rel_path(root, &solution);
         let solution_arg = q(&project_path);
-        let project = dotnet_entry_project(root, &projects, &solution);
+        let project = dotnet_entry_project(fs, root, &projects, &solution);
         let project_id = format!("dotnet:{project_path}");
         let mut scripts = Vec::new();
         if let Some(project) = &project {
@@ -803,7 +856,7 @@ fn android_marker(text: &str) -> bool {
         || (text.contains("android {") && text.contains("compileSdk"))
 }
 
-fn detect_android(root: &Path, out: &mut Vec<ProjectInfo>) {
+fn detect_android(fs: &dyn ProjectFs, root: &Path, out: &mut Vec<ProjectInfo>) {
     // Settings/root scripts plus the usual `app/` module and any immediate
     // child module (version catalogs often declare Android outside `app/`).
     let mut gradle_files: Vec<PathBuf> = [
@@ -814,27 +867,28 @@ fn detect_android(root: &Path, out: &mut Vec<ProjectInfo>) {
     ]
     .iter()
     .map(|rel| root.join(rel))
-    .filter(|path| path.is_file())
+    .filter(|path| fs.is_file(path))
     .collect();
-    if let Ok(entries) = fs::read_dir(root) {
-        let mut visited_dirs = 0usize;
-        for entry in entries.flatten() {
-            if !entry.file_type().ok().is_some_and(|kind| kind.is_dir()) {
-                continue;
-            }
-            let name = entry.file_name().to_string_lossy().to_string();
-            if SKIP_DIRS.contains(&name.as_str()) {
-                continue;
-            }
-            visited_dirs += 1;
-            if visited_dirs > MAX_CHILD_DIRS {
-                break;
-            }
-            for manifest in ["build.gradle", "build.gradle.kts"] {
-                let path = entry.path().join(manifest);
-                if path.is_file() {
-                    gradle_files.push(path);
-                }
+    let mut visited_dirs = 0usize;
+    for (path, is_dir) in fs.read_dir(root) {
+        if !is_dir {
+            continue;
+        }
+        let name = path.file_name().map(|n| n.to_string_lossy().to_string());
+        if name
+            .as_deref()
+            .is_some_and(|name| SKIP_DIRS.contains(&name))
+        {
+            continue;
+        }
+        visited_dirs += 1;
+        if visited_dirs > MAX_CHILD_DIRS {
+            break;
+        }
+        for manifest in ["build.gradle", "build.gradle.kts"] {
+            let manifest = path.join(manifest);
+            if fs.is_file(&manifest) {
+                gradle_files.push(manifest);
             }
         }
     }
@@ -844,7 +898,7 @@ fn detect_android(root: &Path, out: &mut Vec<ProjectInfo>) {
     let android_files: Vec<PathBuf> = gradle_files
         .into_iter()
         .filter(|path| {
-            fs::read_to_string(path)
+            fs.read_file(path)
                 .map(|text| android_marker(&text))
                 .unwrap_or(false)
         })
@@ -855,9 +909,9 @@ fn detect_android(root: &Path, out: &mut Vec<ProjectInfo>) {
         return;
     }
 
-    let wrapper = if cfg!(windows) && root.join("gradlew.bat").is_file() {
+    let wrapper = if fs.windows() && fs.is_file(&root.join("gradlew.bat")) {
         "gradlew.bat"
-    } else if root.join("gradlew").is_file() {
+    } else if fs.is_file(&root.join("gradlew")) {
         "./gradlew"
     } else {
         "gradle"
@@ -868,7 +922,7 @@ fn detect_android(root: &Path, out: &mut Vec<ProjectInfo>) {
         detected_from.push(rel_path(root, path));
     }
     for rel in ["settings.gradle", "settings.gradle.kts"] {
-        if root.join(rel).is_file() {
+        if fs.is_file(&root.join(rel)) {
             detected_from.push(rel.to_string());
         }
     }
@@ -925,12 +979,12 @@ fn detect_android(root: &Path, out: &mut Vec<ProjectInfo>) {
 // Go
 // ---------------------------------------------------------------------------
 
-fn detect_go(root: &Path, dir: &Path, out: &mut Vec<ProjectInfo>) {
+fn detect_go(fs: &dyn ProjectFs, root: &Path, dir: &Path, out: &mut Vec<ProjectInfo>) {
     let manifest = dir.join("go.mod");
-    if !manifest.is_file() {
+    if !fs.is_file(&manifest) {
         return;
     }
-    let Ok(text) = fs::read_to_string(&manifest) else {
+    let Some(text) = fs.read_file(&manifest) else {
         return;
     };
     let project_path = rel_path(root, dir);
@@ -984,14 +1038,14 @@ fn detect_go(root: &Path, dir: &Path, out: &mut Vec<ProjectInfo>) {
 // Ruby
 // ---------------------------------------------------------------------------
 
-fn detect_ruby(root: &Path, out: &mut Vec<ProjectInfo>) {
+fn detect_ruby(fs: &dyn ProjectFs, root: &Path, out: &mut Vec<ProjectInfo>) {
     let gemfile = root.join("Gemfile");
-    if !gemfile.is_file() {
+    if !fs.is_file(&gemfile) {
         return;
     }
     let project_id = "ruby:.";
-    let rails = root.join("bin").join("rails").is_file();
-    let rspec = root.join("spec").is_dir();
+    let rails = fs.is_file(&root.join("bin").join("rails"));
+    let rspec = fs.is_dir(&root.join("spec"));
     let mut scripts = Vec::new();
     if rails {
         scripts.push(make_script(
@@ -1016,7 +1070,7 @@ fn detect_ruby(root: &Path, out: &mut Vec<ProjectInfo>) {
             "test",
             false,
         ));
-    } else if root.join("Rakefile").is_file() {
+    } else if fs.is_file(&root.join("Rakefile")) {
         scripts.push(make_script(
             project_id,
             "Rake",
@@ -1045,12 +1099,12 @@ fn detect_ruby(root: &Path, out: &mut Vec<ProjectInfo>) {
 // PHP / Composer
 // ---------------------------------------------------------------------------
 
-fn detect_php(root: &Path, out: &mut Vec<ProjectInfo>) {
+fn detect_php(fs: &dyn ProjectFs, root: &Path, out: &mut Vec<ProjectInfo>) {
     let manifest = root.join("composer.json");
-    if !manifest.is_file() {
+    if !fs.is_file(&manifest) {
         return;
     }
-    let Ok(text) = fs::read_to_string(&manifest) else {
+    let Some(text) = fs.read_file(&manifest) else {
         return;
     };
     let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) else {
@@ -1101,15 +1155,15 @@ fn detect_php(root: &Path, out: &mut Vec<ProjectInfo>) {
 // Makefile (generic fallback)
 // ---------------------------------------------------------------------------
 
-fn detect_make(root: &Path, out: &mut Vec<ProjectInfo>) {
+fn detect_make(fs: &dyn ProjectFs, root: &Path, out: &mut Vec<ProjectInfo>) {
     let makefile = ["Makefile", "makefile", "GNUmakefile"]
         .iter()
         .map(|name| root.join(name))
-        .find(|path| path.is_file());
+        .find(|path| fs.is_file(path));
     let Some(makefile) = makefile else {
         return;
     };
-    let Ok(text) = fs::read_to_string(&makefile) else {
+    let Some(text) = fs.read_file(&makefile) else {
         return;
     };
     let project_id = "make:.";
@@ -1259,15 +1313,12 @@ fn file_stem(path: &Path) -> String {
         .unwrap_or_else(|| dir_name(path))
 }
 
-fn manifest_files(dir: &Path, extensions: &[&str]) -> Vec<PathBuf> {
-    let Ok(entries) = fs::read_dir(dir) else {
-        return Vec::new();
-    };
-    let mut paths: Vec<PathBuf> = entries
-        .flatten()
-        .filter_map(|entry| {
-            let path = entry.path();
-            if !path.is_file() {
+fn manifest_files(fs: &dyn ProjectFs, dir: &Path, extensions: &[&str]) -> Vec<PathBuf> {
+    let mut paths: Vec<PathBuf> = fs
+        .read_dir(dir)
+        .into_iter()
+        .filter_map(|(path, is_dir)| {
+            if is_dir || !fs.is_file(&path) {
                 return None;
             }
             let ext = path.extension()?.to_string_lossy().to_ascii_lowercase();
@@ -1282,6 +1333,7 @@ fn manifest_files(dir: &Path, extensions: &[&str]) -> Vec<PathBuf> {
 /// norm). Skips vendor/build directories and caps both visited directories
 /// and returned manifests.
 fn find_manifests_bounded(
+    fs: &dyn ProjectFs,
     root: &Path,
     extensions: &[&str],
     max_depth: usize,
@@ -1295,21 +1347,18 @@ fn find_manifests_bounded(
             break;
         }
         visited += 1;
-        out.extend(manifest_files(&dir, extensions));
+        out.extend(manifest_files(fs, &dir, extensions));
         if depth >= max_depth {
             continue;
         }
-        let Ok(entries) = fs::read_dir(&dir) else {
-            continue;
-        };
-        let mut children: Vec<PathBuf> = entries
-            .flatten()
-            .filter_map(|entry| {
-                let path = entry.path();
-                if !entry.file_type().ok()?.is_dir() {
+        let mut children: Vec<PathBuf> = fs
+            .read_dir(&dir)
+            .into_iter()
+            .filter_map(|(path, is_dir)| {
+                if !is_dir {
                     return None;
                 }
-                let name = entry.file_name().to_string_lossy().to_string();
+                let name = path.file_name()?.to_string_lossy().to_string();
                 if SKIP_DIRS.contains(&name.as_str()) {
                     return None;
                 }

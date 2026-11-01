@@ -21,6 +21,7 @@ pub mod hostkeys;
 pub mod parsers;
 pub mod polling;
 pub mod profiles;
+pub mod projects;
 pub mod prompts;
 pub mod quoting;
 pub mod term;

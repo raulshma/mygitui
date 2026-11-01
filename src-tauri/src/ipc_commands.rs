@@ -2871,8 +2871,8 @@ pub async fn maintenance_run(
 ) -> Result<String, String> {
     let handle = get_handle(&state, &repo_id)?;
     if let Some(remote) = handle.remote() {
-        // The remote engine supports `gc`/`prune`/`fsck`; other local ops
-        // come back as its "unknown maintenance op" error.
+        // Same op set as local; the remote engine runs each one on the
+        // device and returns a matching summary string.
         return finish_op(enqueue_remote_mutation(
             &handle,
             remote,
@@ -4626,7 +4626,19 @@ pub async fn project_detect(
     repo_id: RepoId,
     state: State<'_, RepoManager>,
 ) -> Result<Vec<crate::projects::ProjectInfo>, String> {
-    let root = get_handle(&state, &repo_id)?.root.clone();
+    let handle = get_handle(&state, &repo_id)?;
+    if let Some(remote) = handle.remote() {
+        // A local fs scan cannot see the device's POSIX paths; snapshot the
+        // tree over SSH and run the same detectors on it.
+        return finish_op(enqueue_remote_read(
+            &handle,
+            remote,
+            "projects",
+            move |git, _ws| crate::remote::projects::detect(&git.session, &git.root),
+        ))
+        .await;
+    }
+    let root = handle.root.clone();
     tauri::async_runtime::spawn_blocking(move || crate::projects::detect_sync(&root))
         .await
         .map_err(|e| format!("project_detect task failed: {e}"))

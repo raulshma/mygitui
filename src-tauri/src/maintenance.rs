@@ -156,7 +156,7 @@ pub fn count_objects(workdir: &Path) -> Result<(u64, u64), String> {
     for line in out.lines() {
         if let Some(v) = line.strip_prefix("count: ") {
             count = v.trim().parse().unwrap_or(0);
-        } else if let Some(v) = line.strip_prefix("size_pack: ") {
+        } else if let Some(v) = line.strip_prefix("size-pack: ") {
             size = v.trim().parse().unwrap_or(0);
         }
     }
