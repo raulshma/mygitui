@@ -14,6 +14,7 @@
 //! helpers, page chunking) and re-exports every service fn so UI call sites
 //! can import from one place.
 
+pub mod ai;
 pub mod app_services;
 pub mod branches;
 pub mod diff;
@@ -39,6 +40,7 @@ use crate::engine::types::RepoId;
 use crate::ops::OpCtx;
 use crate::repo::{RepoHandle, RepoManager};
 
+pub use ai::*;
 pub use app_services::AppServices;
 pub use branches::*;
 pub use diff::*;

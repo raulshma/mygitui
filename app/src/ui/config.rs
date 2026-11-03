@@ -5,6 +5,7 @@
 //! older/newer builds can share the file. Saves are atomic (temp + rename)
 //! and surface I/O errors to the UI.
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -21,6 +22,9 @@ pub struct Config {
     /// Minutes between background fetches (0 = off).
     pub auto_fetch_minutes: u32,
     pub recent_repos: Vec<RecentRepo>,
+    /// AI assist settings (default off; secrets live in the OS keyring,
+    /// never in this file).
+    pub ai: AiSettings,
 }
 
 /// Auto-fetch cadence choices cycled by the header button (minutes; 0 = off).
@@ -55,7 +59,63 @@ impl Default for Config {
             diff_wrap: false,
             auto_fetch_minutes: 0,
             recent_repos: Vec::new(),
+            ai: AiSettings::default(),
         }
+    }
+}
+
+/// Which AI backend serves generation requests (`ai::AiProvider` on the
+/// wire-level; duplicated here because config must not depend on the
+/// provider layer).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AiProviderChoice {
+    /// A local opencode server (managed by the app's serve registry, or an
+    /// attached user-run server when `opencode_url` is set).
+    #[default]
+    Opencode,
+    /// Direct OpenRouter API access with the user's key.
+    OpenRouter,
+}
+
+/// AI assist settings (`config.json` `ai` section). Everything defaults so
+/// pre-AI config files keep loading; the master switch is OFF and each
+/// repository opts in separately — AI stays dark until the user allows it.
+/// Secrets (OpenRouter API key, opencode server password) are NEVER stored
+/// here — they live in the OS keyring.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct AiSettings {
+    /// Master switch: AI features stay off until enabled.
+    pub enabled: bool,
+    /// Preferred backend for AI requests.
+    pub provider: AiProviderChoice,
+    /// Attach mode: manual opencode server base URL. Unset = managed (the
+    /// app spawns/owns the server through its serve registry).
+    pub opencode_url: Option<String>,
+    /// opencode model id (`provider/model`); unset uses the server default.
+    pub opencode_model: Option<String>,
+    /// OpenRouter model slug; backend default when unset.
+    pub openrouter_model: Option<String>,
+    /// Per-repository opt-in keyed by canonical repo path: AI features stay
+    /// off per repo until the user allows them (`true` entries only matter;
+    /// absent/`false` = off).
+    pub repo_opt_in: BTreeMap<String, bool>,
+}
+
+impl AiSettings {
+    /// Whether AI may run for the repo at `path`: master switch AND
+    /// per-repo opt-in (keys are [`canonical_key`] spellings).
+    // Backend lands with the AI settings panel; service/ai.rs mirrors the
+    // read side until the panel wires this (see its module docs).
+    #[allow(dead_code)]
+    pub fn enabled_for(&self, path: &str) -> bool {
+        self.enabled
+            && self
+                .repo_opt_in
+                .get(&canonical_key(path))
+                .copied()
+                .unwrap_or(false)
     }
 }
 
@@ -136,6 +196,26 @@ impl Config {
                 .then_with(|| b.last_opened.cmp(&a.last_opened))
         });
         entries
+    }
+
+    /// Whether AI features may run for the repo at `path` (master switch
+    /// plus per-repo opt-in; see [`AiSettings::enabled_for`]).
+    // Backend lands with the AI settings panel.
+    #[allow(dead_code)]
+    pub fn ai_enabled_for(&self, path: &str) -> bool {
+        self.ai.enabled_for(path)
+    }
+
+    /// Sets per-repo AI opt-in for the repo at `path`.
+    // Backend lands with the AI settings panel.
+    #[allow(dead_code)]
+    pub fn set_ai_opt_in(&mut self, path: &str, enabled: bool) {
+        let key = canonical_key(path);
+        if enabled {
+            self.ai.repo_opt_in.insert(key, true);
+        } else {
+            self.ai.repo_opt_in.remove(&key);
+        }
     }
 }
 
@@ -263,5 +343,63 @@ mod tests {
             .map(|entry| entry.path)
             .collect();
         assert_eq!(order, vec!["/a", "/b", "/c"]);
+    }
+
+    #[test]
+    fn ai_defaults_to_off_and_old_configs_load_without_the_section() {
+        // Missing section (pre-AI config file): everything defaults, master
+        // switch off, no repo opted in.
+        let dir = temp_dir("ai-default");
+        std::fs::write(
+            dir.join("config.json"),
+            r#"{"theme": "Dark", "recent_repos": []}"#,
+        )
+        .unwrap();
+        let loaded = Config::load(&dir);
+        assert_eq!(loaded.ai, AiSettings::default());
+        assert!(!loaded.ai_enabled_for("/any/repo"));
+        assert_eq!(loaded.ai.provider, AiProviderChoice::Opencode);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn ai_opt_in_needs_master_switch_and_is_canonical_per_repo() {
+        let mut config = Config::default();
+        config.ai.enabled = true;
+        config.set_ai_opt_in("/repos/Demo/", true);
+        // Canonical key: separator/trailing-slash variants resolve to it.
+        assert!(config.ai_enabled_for("/repos/Demo"));
+        assert!(config.ai_enabled_for("/repos/Demo/"));
+        assert!(!config.ai_enabled_for("/repos/other"));
+        // Windows-shaped paths canonicalize the same way they do for
+        // recent repos (drive-letter casing + separators fold).
+        config.set_ai_opt_in(r"C:\Repos\Alpha\", true);
+        assert!(config.ai_enabled_for(r"C:\Repos\Alpha"));
+        assert!(config.ai_enabled_for("c:/repos/alpha"));
+        // Unsetting removes the entry instead of storing `false`.
+        config.set_ai_opt_in("/repos/demo", false);
+        assert!(!config.ai_enabled_for("/repos/demo"));
+        assert!(!config.ai.repo_opt_in.contains_key("/repos/demo"));
+        // Master switch off: even opted-in repos stay dark.
+        config.set_ai_opt_in("/repos/demo", true);
+        config.ai.enabled = false;
+        assert!(!config.ai_enabled_for("/repos/demo"));
+    }
+
+    #[test]
+    fn ai_settings_round_trip_through_disk() {
+        let dir = temp_dir("ai-roundtrip");
+        let mut config = Config::default();
+        config.ai.enabled = true;
+        config.ai.provider = AiProviderChoice::OpenRouter;
+        config.ai.opencode_url = Some("http://127.0.0.1:4096".into());
+        config.ai.opencode_model = Some("anthropic/claude-sonnet".into());
+        config.ai.openrouter_model = Some("vendor/model".into());
+        config.set_ai_opt_in("/repos/alpha", true);
+        config.save(&dir).expect("save");
+        let loaded = Config::load(&dir);
+        assert_eq!(loaded.ai, config.ai);
+        assert!(loaded.ai_enabled_for("/repos/alpha"));
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

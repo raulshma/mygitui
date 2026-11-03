@@ -1,3 +1,4 @@
+pub mod ai;
 pub mod engine;
 pub mod graph;
 
@@ -75,9 +76,9 @@ pub fn run() -> iced::Result {
         .map(|rt| rt.block_on(instance::bind_or_forward(&cli_args)));
     let listener: instance::SharedListener = match role {
         Some(instance::Role::Forwarded) => return Ok(()),
-        Some(instance::Role::Primary(listener)) => std::sync::Arc::new(std::sync::Mutex::new(
-            listener,
-        )),
+        Some(instance::Role::Primary(listener)) => {
+            std::sync::Arc::new(std::sync::Mutex::new(listener))
+        }
         None => std::sync::Arc::new(std::sync::Mutex::new(None)),
     };
 
