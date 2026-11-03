@@ -14,7 +14,7 @@ use iced::widget::{button, column, container, row, text, text_editor, Space};
 use iced::{window, Alignment, Element, Length, Subscription, Task};
 
 use crate::engine::types::{
-    CommitOptions, DiffSide, FileDiff, LineRange, LogFilter, RepoId, RepoInfo, RepoStatus,
+    BranchInfo, CommitOptions, DiffSide, FileDiff, LineRange, RepoId, RepoInfo, RepoStatus,
     StageRequest, StageTarget,
 };
 use crate::service::events::BackendEvent;
@@ -23,6 +23,7 @@ use crate::service::AppServices;
 use super::bus;
 use super::config::{self, Config, RecentRepo};
 use super::diff_view::{DiffPane, DiffSlot};
+use super::history_model::{to_log_filter, FilterFields, HistoryFilterField};
 use super::home;
 use super::repo_view::{self, Load, PendingRemap, Tab};
 use super::status_model::{count_label, filter_sections, SectionId, StatusRow};
@@ -174,6 +175,36 @@ pub enum Message {
         viewport: f32,
     },
     RefreshLog(RepoId),
+    HistoryFilterToggle,
+    HistoryFilterChanged {
+        field: HistoryFilterField,
+        value: String,
+    },
+    HistoryFilterRegex(bool),
+    HistoryFilterFollow(bool),
+    HistoryFilterPickaxeRegex(bool),
+    HistoryFilterApply,
+    HistoryFilterClear,
+
+    ToggleBranchPanel,
+    RefreshBranches,
+    BranchesLoaded {
+        repo_id: RepoId,
+        result: Result<Vec<BranchInfo>, String>,
+    },
+    BranchCreateNameChanged(String),
+    BranchCreate,
+    BranchSwitch(String),
+    BranchDeleteRequested(String),
+    BranchDeleteConfirmed,
+    BranchDone {
+        repo_id: RepoId,
+        label: String,
+        result: Result<(), String>,
+    },
+
+    ConfirmDiscard,
+    CancelDialog,
 }
 
 impl App {
@@ -369,16 +400,38 @@ impl App {
         tab.history.begin(request_id);
         tab.history.selected = selected;
 
-        let result = crate::service::log::repo_log_stream(
-            &self.services,
-            repo_id,
-            LogFilter::default(),
-            request_id,
-        );
+        let filter = to_log_filter(&tab.history_filter);
+        let result =
+            crate::service::log::repo_log_stream(&self.services, repo_id, filter, request_id);
         if let Err(err) = result {
             self.notice = Some(Notice::error(format!("Could not load history: {err}")));
         }
         Task::none()
+    }
+
+    fn load_branches(&self, repo_id: RepoId) -> Task<Message> {
+        let services = self.services.clone();
+        Task::perform(
+            async move {
+                let result = crate::service::branches::branches(&services, repo_id.clone()).await;
+                Message::BranchesLoaded { repo_id, result }
+            },
+            std::convert::identity,
+        )
+    }
+
+    /// Restart the log with the edited filter (or with every field cleared).
+    fn apply_history_filter(&mut self, clear: bool) -> Task<Message> {
+        let Some(tab) = self.tabs.get_mut(self.active) else {
+            return Task::none();
+        };
+        if clear {
+            tab.history_filter = FilterFields::default();
+        }
+        tab.history.selected = None;
+        tab.detail_open = false;
+        let repo_id = tab.repo.repo_id.clone();
+        self.start_log(repo_id)
     }
 
     fn spawn_stage(&self, repo_id: RepoId, request: StageRequest, label: String) -> Task<Message> {
@@ -514,11 +567,23 @@ impl App {
                 self.ensure_working_diff(index)
             }
             Message::Refresh(repo_id) => {
+                let branches_open = repo_view::tab_index(&self.tabs, &repo_id)
+                    .is_some_and(|index| self.tabs[index].branches.open);
                 if let Some(index) = repo_view::tab_index(&self.tabs, &repo_id) {
                     self.tabs[index].status = Load::Loading;
                     self.tabs[index].reload_diff = true;
+                    if branches_open {
+                        self.tabs[index].branches.loading = true;
+                    }
                 }
-                Task::batch([self.refresh(repo_id.clone()), self.start_log(repo_id)])
+                let mut tasks = vec![
+                    self.refresh(repo_id.clone()),
+                    self.start_log(repo_id.clone()),
+                ];
+                if branches_open {
+                    tasks.push(self.load_branches(repo_id));
+                }
+                Task::batch(tasks)
             }
             Message::SelectTab(index) => {
                 if index < self.tabs.len() {
@@ -739,7 +804,17 @@ impl App {
                 if paths.is_empty() {
                     return Task::none();
                 }
+                // Destructive and unrecoverable: confirm before touching disk.
+                if let Some(tab) = self.tabs.get_mut(self.active) {
+                    tab.pending_discard = Some(paths);
+                }
+                Task::none()
+            }
+            Message::ConfirmDiscard => {
                 let Some(tab) = self.tabs.get_mut(self.active) else {
+                    return Task::none();
+                };
+                let Some(paths) = tab.pending_discard.take() else {
                     return Task::none();
                 };
                 tab.reload_diff = true;
@@ -747,6 +822,13 @@ impl App {
                 let repo_id = tab.repo.repo_id.clone();
                 let targets = paths.into_iter().map(StageTarget::File).collect();
                 self.spawn_discard(repo_id, targets)
+            }
+            Message::CancelDialog => {
+                if let Some(tab) = self.tabs.get_mut(self.active) {
+                    tab.pending_discard = None;
+                    tab.pending_branch_delete = None;
+                }
+                Task::none()
             }
             Message::MutationDone {
                 repo_id,
@@ -942,18 +1024,224 @@ impl App {
                 Task::none()
             }
             Message::RefreshLog(repo_id) => self.start_log(repo_id),
+            Message::HistoryFilterToggle => {
+                if let Some(tab) = self.tabs.get_mut(self.active) {
+                    tab.history_filter_open = !tab.history_filter_open;
+                }
+                Task::none()
+            }
+            Message::HistoryFilterChanged { field, value } => {
+                if let Some(tab) = self.tabs.get_mut(self.active) {
+                    match field {
+                        HistoryFilterField::Pickaxe => tab.history_filter.set_pickaxe(value),
+                        _ => *tab.history_filter.field_mut(field) = value,
+                    }
+                }
+                Task::none()
+            }
+            Message::HistoryFilterRegex(value) => {
+                if let Some(tab) = self.tabs.get_mut(self.active) {
+                    tab.history_filter.regex = value;
+                }
+                Task::none()
+            }
+            Message::HistoryFilterFollow(value) => {
+                if let Some(tab) = self.tabs.get_mut(self.active) {
+                    tab.history_filter.follow = value;
+                }
+                Task::none()
+            }
+            Message::HistoryFilterPickaxeRegex(value) => {
+                if let Some(tab) = self.tabs.get_mut(self.active) {
+                    tab.history_filter.set_pickaxe_regex(value);
+                }
+                Task::none()
+            }
+            Message::HistoryFilterApply => self.apply_history_filter(false),
+            Message::HistoryFilterClear => self.apply_history_filter(true),
+            Message::ToggleBranchPanel => {
+                let Some(tab) = self.tabs.get_mut(self.active) else {
+                    return Task::none();
+                };
+                tab.branches.open = !tab.branches.open;
+                if !tab.branches.open {
+                    return Task::none();
+                }
+                tab.branches.loading = true;
+                tab.branches.error = None;
+                let repo_id = tab.repo.repo_id.clone();
+                self.load_branches(repo_id)
+            }
+            Message::RefreshBranches => {
+                let Some(tab) = self.tabs.get_mut(self.active) else {
+                    return Task::none();
+                };
+                tab.branches.loading = true;
+                tab.branches.error = None;
+                let repo_id = tab.repo.repo_id.clone();
+                self.load_branches(repo_id)
+            }
+            Message::BranchesLoaded { repo_id, result } => {
+                let Some(index) = repo_view::tab_index(&self.tabs, &repo_id) else {
+                    return Task::none();
+                };
+                let branches = &mut self.tabs[index].branches;
+                branches.loading = false;
+                match result {
+                    Ok(list) => {
+                        branches.list = Some(list);
+                        branches.error = None;
+                    }
+                    Err(err) => branches.error = Some(err),
+                }
+                Task::none()
+            }
+            Message::BranchCreateNameChanged(value) => {
+                if let Some(tab) = self.tabs.get_mut(self.active) {
+                    tab.branches.create_name = value;
+                }
+                Task::none()
+            }
+            Message::BranchCreate => {
+                let Some(tab) = self.tabs.get_mut(self.active) else {
+                    return Task::none();
+                };
+                let name = tab.branches.create_name.trim().to_string();
+                if name.is_empty() {
+                    return Task::none();
+                }
+                let repo_id = tab.repo.repo_id.clone();
+                let label = format!("Create branch {name}");
+                let services = self.services.clone();
+                Task::perform(
+                    async move {
+                        let result = crate::service::branches::branch_create(
+                            &services,
+                            repo_id.clone(),
+                            name,
+                            None,
+                            true,
+                        )
+                        .await;
+                        Message::BranchDone {
+                            repo_id,
+                            label,
+                            result,
+                        }
+                    },
+                    std::convert::identity,
+                )
+            }
+            Message::BranchSwitch(name) => {
+                let Some(tab) = self.tabs.get_mut(self.active) else {
+                    return Task::none();
+                };
+                let repo_id = tab.repo.repo_id.clone();
+                let label = format!("Switch to {name}");
+                let services = self.services.clone();
+                Task::perform(
+                    async move {
+                        let result = crate::service::branches::branch_switch(
+                            &services,
+                            repo_id.clone(),
+                            name,
+                            false,
+                        )
+                        .await;
+                        Message::BranchDone {
+                            repo_id,
+                            label,
+                            result,
+                        }
+                    },
+                    std::convert::identity,
+                )
+            }
+            Message::BranchDeleteRequested(name) => {
+                if let Some(tab) = self.tabs.get_mut(self.active) {
+                    tab.pending_branch_delete = Some(name);
+                }
+                Task::none()
+            }
+            Message::BranchDeleteConfirmed => {
+                let Some(tab) = self.tabs.get_mut(self.active) else {
+                    return Task::none();
+                };
+                let Some(name) = tab.pending_branch_delete.take() else {
+                    return Task::none();
+                };
+                let repo_id = tab.repo.repo_id.clone();
+                let label = format!("Delete branch {name}");
+                let services = self.services.clone();
+                Task::perform(
+                    async move {
+                        let result = crate::service::branches::branch_delete(
+                            &services,
+                            repo_id.clone(),
+                            name,
+                            false,
+                        )
+                        .await;
+                        Message::BranchDone {
+                            repo_id,
+                            label,
+                            result,
+                        }
+                    },
+                    std::convert::identity,
+                )
+            }
+            Message::BranchDone {
+                repo_id,
+                label,
+                result,
+            } => {
+                let Some(index) = repo_view::tab_index(&self.tabs, &repo_id) else {
+                    return Task::none();
+                };
+                match result {
+                    Ok(()) => {
+                        self.last_op = Some(format!("{label} done"));
+                        self.notice = None;
+                        let tab = &mut self.tabs[index];
+                        tab.history.selected = None;
+                        tab.detail_open = false;
+                        tab.commit_diff = DiffPane::default();
+                        tab.reload_diff = true;
+                        tab.branches.create_name.clear();
+                        tab.branches.loading = true;
+                        Task::batch([
+                            self.refresh(repo_id.clone()),
+                            self.start_log(repo_id.clone()),
+                            self.load_branches(repo_id),
+                        ])
+                    }
+                    Err(err) => {
+                        self.notice = Some(Notice::error(format!("{label} failed: {err}")));
+                        Task::none()
+                    }
+                }
+            }
         }
     }
 
     fn backend(&mut self, event: BackendEvent) -> Task<Message> {
         match event {
             BackendEvent::RepoChanged(changed) => {
+                let branches_open = repo_view::tab_index(&self.tabs, &changed.repo_id)
+                    .is_some_and(|index| self.tabs[index].branches.open);
                 if let Some(index) = repo_view::tab_index(&self.tabs, &changed.repo_id) {
                     self.tabs[index].reload_diff = true;
+                    if branches_open && (changed.head_moved || changed.full) {
+                        self.tabs[index].branches.loading = true;
+                    }
                 }
                 let mut tasks = vec![self.refresh(changed.repo_id.clone())];
                 if changed.head_moved || changed.full {
                     tasks.push(self.start_log(changed.repo_id.clone()));
+                    if branches_open {
+                        tasks.push(self.load_branches(changed.repo_id.clone()));
+                    }
                 }
                 Task::batch(tasks)
             }

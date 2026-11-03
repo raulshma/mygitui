@@ -12,10 +12,12 @@ use iced::{Alignment, Color, Element, Length};
 use crate::engine::types::{ChangeKind, RepoId, RepoInfo, RepoStatus};
 
 use super::app::Message;
+use super::branch_panel::{self, BranchesState};
 use super::commit_bar;
 use super::commit_detail;
+use super::dialog;
 use super::diff_view::{self, DiffPane, DiffSlot, PaneMode};
-use super::history_model::HistoryState;
+use super::history_model::{FilterFields, HistoryState};
 use super::history_panel;
 use super::status_model::{
     build_status_index, has_staged_changes, remap_selection, SectionId, StatusIndex, StatusRow,
@@ -78,6 +80,14 @@ pub struct Tab {
 
     pub history: HistoryState,
     pub history_open: bool,
+    pub history_filter: FilterFields,
+    pub history_filter_open: bool,
+
+    pub branches: BranchesState,
+    /// Paths awaiting the discard confirmation dialog.
+    pub pending_discard: Option<Vec<String>>,
+    /// Branch awaiting the delete confirmation dialog.
+    pub pending_branch_delete: Option<String>,
 
     pub diff_seq: u64,
     pub commit_diff_seq: u64,
@@ -107,6 +117,11 @@ impl Tab {
             commit_error: None,
             history: HistoryState::default(),
             history_open: true,
+            history_filter: FilterFields::default(),
+            history_filter_open: false,
+            branches: BranchesState::default(),
+            pending_discard: None,
+            pending_branch_delete: None,
             diff_seq: 0,
             commit_diff_seq: 0,
         }
@@ -250,14 +265,70 @@ pub fn view<'a>(tabs: &'a [Tab], active: usize, tokens: Tokens) -> Element<'a, M
         return Space::new().into();
     };
 
-    column![
+    let page = column![
         tab_strip(tabs, active, tokens),
         repo_header(tab, tokens),
         workspace(tab, tokens),
-    ]
-    .width(Length::Fill)
-    .height(Length::Fill)
-    .into()
+    ];
+
+    let base: Element<'a, Message> = page.width(Length::Fill).height(Length::Fill).into();
+    match dialog_overlay(tab, tokens) {
+        Some(overlay) => iced::widget::stack![base, overlay]
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into(),
+        None => base,
+    }
+}
+
+/// The modal dialog a tab currently asks for, if any.
+fn dialog_overlay<'a>(tab: &'a Tab, tokens: Tokens) -> Option<Element<'a, Message>> {
+    if let Some(paths) = &tab.pending_discard {
+        let mut detail = paths
+            .iter()
+            .take(6)
+            .map(|path| path.clone())
+            .collect::<Vec<_>>()
+            .join("\n");
+        if paths.len() > 6 {
+            detail.push_str(&format!("\n… and {} more", paths.len() - 6));
+        }
+        let spec = dialog::Confirm {
+            title: "Discard changes".to_string(),
+            body: format!(
+                "Discard uncommitted changes in {} file{}? This cannot be undone.",
+                paths.len(),
+                if paths.len() == 1 { "" } else { "s" }
+            ),
+            detail: Some(detail),
+            confirm_label: "Discard".to_string(),
+            danger: true,
+        };
+        return Some(dialog::confirm(
+            tokens,
+            &spec,
+            Message::CancelDialog,
+            Message::ConfirmDiscard,
+        ));
+    }
+
+    if let Some(name) = &tab.pending_branch_delete {
+        let spec = dialog::Confirm {
+            title: "Delete branch".to_string(),
+            body: format!("Delete the branch “{name}”? This cannot be undone."),
+            detail: None,
+            confirm_label: "Delete".to_string(),
+            danger: true,
+        };
+        return Some(dialog::confirm(
+            tokens,
+            &spec,
+            Message::CancelDialog,
+            Message::BranchDeleteConfirmed,
+        ));
+    }
+
+    None
 }
 
 fn tab_strip<'a>(tabs: &'a [Tab], active: usize, tokens: Tokens) -> Element<'a, Message> {
@@ -356,7 +427,18 @@ fn repo_header<'a>(tab: &'a Tab, tokens: Tokens) -> Element<'a, Message> {
             ]
             .spacing(1),
             Space::new().width(12),
-            chip(branch, tokens.muted_foreground),
+            button(
+                text(format!("{branch} ▾"))
+                    .size(11)
+                    .color(if tab.branches.open {
+                        tokens.primary
+                    } else {
+                        tokens.muted_foreground
+                    }),
+            )
+            .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
+            .padding([3, 8])
+            .on_press(Message::ToggleBranchPanel),
             sync,
             Space::new().width(Length::Fill),
             button(text(history_label).size(11))
@@ -444,11 +526,29 @@ fn workspace<'a>(tab: &'a Tab, tokens: Tokens) -> Element<'a, Message> {
         );
     }
 
-    container(body)
+    let surface = container(body)
         .width(Length::Fill)
         .height(Length::Fill)
-        .style(theme::surface_style(tokens))
-        .into()
+        .style(theme::surface_style(tokens));
+
+    if tab.branches.open {
+        // Dropdown: overlaid on the workspace top-left so opening it never
+        // reflows the panes underneath.
+        let overlay =
+            container(container(branch_panel::view(tab, tokens)).width(Length::Fixed(320.0)))
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .align_x(Alignment::Start)
+                .align_y(Alignment::Start)
+                .padding([6, 8]);
+
+        iced::widget::stack![surface, overlay]
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into()
+    } else {
+        surface.into()
+    }
 }
 
 pub fn chip<'a>(label: impl Into<String>, color: Color) -> Element<'a, Message> {

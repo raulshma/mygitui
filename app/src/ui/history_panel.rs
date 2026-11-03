@@ -6,13 +6,14 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use iced::widget::{
-    button, canvas, column, container, row, scrollable, text, text::Wrapping, Id, Space,
+    button, canvas, checkbox, column, container, row, scrollable, text, text::Wrapping, text_input,
+    Id, Space,
 };
 use iced::{Alignment, Background, Border, Element, Length};
 
 use super::app::Message;
 use super::graph_canvas::{graph_width, GraphCell, ROW_HEIGHT};
-use super::history_model::{relative_age, short_summary};
+use super::history_model::{relative_age, short_summary, HistoryFilterField};
 use super::repo_view::{short_sha, Tab, HISTORY_WIDTH};
 use super::theme::{self, Tokens};
 
@@ -21,6 +22,7 @@ const OVERSCAN: usize = 20;
 
 pub fn view<'a>(tab: &'a Tab, tokens: Tokens) -> Element<'a, Message> {
     let history = &tab.history;
+    let filter_active = tab.history_filter.is_active();
 
     let status = if history.loading {
         format!("{} · loading…", history.len())
@@ -35,7 +37,20 @@ pub fn view<'a>(tab: &'a Tab, tokens: Tokens) -> Element<'a, Message> {
             text("History").size(12).font(theme::semibold()),
             Space::new().width(Length::Fill),
             text(status).size(10).color(tokens.muted_foreground),
-            Space::new().width(6),
+            Space::new().width(4),
+            button(text("Filter").size(10))
+                .style(theme::button_style(
+                    tokens,
+                    if tab.history_filter_open {
+                        theme::ButtonKind::Secondary
+                    } else if filter_active {
+                        theme::ButtonKind::Primary
+                    } else {
+                        theme::ButtonKind::Ghost
+                    },
+                ))
+                .padding([2, 6])
+                .on_press(Message::HistoryFilterToggle),
             button(text("⟳").size(11))
                 .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
                 .padding([2, 6])
@@ -48,6 +63,8 @@ pub fn view<'a>(tab: &'a Tab, tokens: Tokens) -> Element<'a, Message> {
     let body: Element<'a, Message> = if history.commits.is_empty() {
         let note = if history.loading {
             "Loading history…"
+        } else if filter_active {
+            "No commits match the filter."
         } else if !matches!(tab.status, super::repo_view::Load::Loading) {
             "No commits."
         } else {
@@ -60,9 +77,101 @@ pub fn view<'a>(tab: &'a Tab, tokens: Tokens) -> Element<'a, Message> {
         list(tab, tokens)
     };
 
-    column![header, body]
+    let mut panel = column![header];
+    if tab.history_filter_open {
+        panel = panel.push(filter_panel(tab, tokens));
+    }
+    panel
+        .push(body)
         .width(Length::Fill)
         .height(Length::Fill)
+        .into()
+}
+
+fn filter_panel<'a>(tab: &'a Tab, tokens: Tokens) -> Element<'a, Message> {
+    let fields = &tab.history_filter;
+
+    let input = |placeholder: &'a str, value: &'a str, field: HistoryFilterField| {
+        text_input(placeholder, value)
+            .on_input(move |value| Message::HistoryFilterChanged { field, value })
+            .size(10)
+            .padding([4, 6])
+            .width(Length::Fill)
+    };
+    let toggle = |label: &'a str, value: bool, message: fn(bool) -> Message| {
+        checkbox(value)
+            .label(label)
+            .size(12)
+            .text_size(10)
+            .spacing(4)
+            .on_toggle(message)
+    };
+
+    let content = column![
+        row![
+            input("Message text", &fields.text, HistoryFilterField::Text),
+            toggle("Regex", fields.regex, Message::HistoryFilterRegex),
+        ]
+        .spacing(6)
+        .align_y(Alignment::Center),
+        input("Author", &fields.author, HistoryFilterField::Author),
+        row![
+            input("Path", &fields.path, HistoryFilterField::Path),
+            toggle("Follow", fields.follow, Message::HistoryFilterFollow),
+        ]
+        .spacing(6)
+        .align_y(Alignment::Center),
+        row![
+            input("After YYYY-MM-DD", &fields.after, HistoryFilterField::After),
+            input(
+                "Before YYYY-MM-DD",
+                &fields.before,
+                HistoryFilterField::Before
+            ),
+        ]
+        .spacing(6),
+        row![
+            input(
+                "Pickaxe -S text",
+                fields.pickaxe_value(),
+                HistoryFilterField::Pickaxe
+            ),
+            toggle(
+                "Regex",
+                fields.pickaxe_regex_enabled(),
+                Message::HistoryFilterPickaxeRegex
+            ),
+        ]
+        .spacing(6)
+        .align_y(Alignment::Center),
+        row![
+            button(text("Apply").size(10))
+                .style(theme::button_style(tokens, theme::ButtonKind::Primary))
+                .padding([3, 10])
+                .on_press(Message::HistoryFilterApply),
+            button(text("Clear").size(10))
+                .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
+                .padding([3, 10])
+                .on_press(Message::HistoryFilterClear),
+            Space::new().width(Length::Fill),
+        ]
+        .spacing(4)
+        .align_y(Alignment::Center),
+    ]
+    .spacing(5);
+
+    container(content)
+        .padding([6, 10])
+        .width(Length::Fill)
+        .style(move |_theme| container::Style {
+            background: Some(Background::Color(tokens.card)),
+            border: Border {
+                color: tokens.border,
+                width: 1.0,
+                radius: 0.0.into(),
+            },
+            ..container::Style::default()
+        })
         .into()
 }
 

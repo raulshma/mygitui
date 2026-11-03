@@ -149,7 +149,67 @@ pub struct FilterFields {
     pub follow: bool,
 }
 
+/// One editable filter field (routes `FilterFields` updates).
+#[derive(Debug, Clone, Copy)]
+pub enum HistoryFilterField {
+    Text,
+    Author,
+    Path,
+    After,
+    Before,
+    Pickaxe,
+    PickaxeRegex,
+}
+
 impl FilterFields {
+    pub fn field_mut(&mut self, field: HistoryFilterField) -> &mut String {
+        match field {
+            HistoryFilterField::Text => &mut self.text,
+            HistoryFilterField::Author => &mut self.author,
+            HistoryFilterField::Path => &mut self.path,
+            HistoryFilterField::After => &mut self.after,
+            HistoryFilterField::Before => &mut self.before,
+            HistoryFilterField::Pickaxe => &mut self.pickaxe,
+            HistoryFilterField::PickaxeRegex => &mut self.pickaxe_regex,
+        }
+    }
+
+    /// The active pickaxe pattern, whichever mode it is in.
+    pub fn pickaxe_value(&self) -> &str {
+        if self.pickaxe_regex.is_empty() {
+            &self.pickaxe
+        } else {
+            &self.pickaxe_regex
+        }
+    }
+
+    pub fn set_pickaxe(&mut self, value: String) {
+        if self.pickaxe_regex.is_empty() {
+            self.pickaxe = value;
+        } else {
+            self.pickaxe_regex = value;
+        }
+    }
+
+    pub fn pickaxe_regex_enabled(&self) -> bool {
+        !self.pickaxe_regex.is_empty()
+    }
+
+    /// Switch the pickaxe input between literal and regex storage.
+    pub fn set_pickaxe_regex(&mut self, regex: bool) {
+        if regex {
+            if self.pickaxe_regex.is_empty() {
+                self.pickaxe_regex = std::mem::take(&mut self.pickaxe);
+            }
+        } else if !self.pickaxe_regex.is_empty() {
+            if self.pickaxe.is_empty() {
+                self.pickaxe = std::mem::take(&mut self.pickaxe_regex);
+            } else {
+                self.pickaxe_regex.clear();
+            }
+        }
+    }
+
     /// True when any field is set; `regex` alone does not count.
     pub fn is_active(&self) -> bool {
         !self.text.trim().is_empty()

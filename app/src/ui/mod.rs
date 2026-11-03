@@ -16,12 +16,16 @@
 //! - [`history_panel`] — commit list with the graph lane column
 //! - [`graph_canvas`] — per-row lane canvas renderer
 //! - [`commit_detail`] — selected commit metadata and file diff
+//! - [`branch_panel`] — branch picker strip under the repo header
+//! - [`dialog`] — modal confirmation overlay
 
 mod app;
+mod branch_panel;
 mod bus;
 mod commit_bar;
 mod commit_detail;
 mod config;
+mod dialog;
 mod diff_model;
 mod diff_view;
 mod graph_canvas;
