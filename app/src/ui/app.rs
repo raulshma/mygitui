@@ -33,6 +33,7 @@ use super::context_menu;
 use super::dialog::{self, ResetRequest};
 use super::diff_view::{DiffPane, DiffSlot};
 use super::forge_panel;
+use super::health_panel;
 use super::history_model::{to_log_filter, FilterFields, HistoryFilterField};
 use super::home;
 use super::palette;
@@ -477,6 +478,8 @@ pub enum Message {
     AiBranchNameDone(Result<String, String>),
     /// Reflog panel (routed to the active tab).
     Reflog(reflog_panel::Msg),
+    /// Repo health/maintenance panel (routed to the active tab).
+    Health(health_panel::Msg),
     /// Right-click on a status row (row key).
     StatusRowMenu {
         key: String,
@@ -818,6 +821,13 @@ impl App {
             None,
         );
         register(
+            "health.toggle",
+            "Toggle repo health panel",
+            "View",
+            repo_id.is_some(),
+            None,
+        );
+        register(
             "terminal.restart",
             "Restart terminal",
             "View",
@@ -1003,6 +1013,7 @@ impl App {
             "view.toggle_forge" => self.update(Message::Forge(forge_panel::Msg::ToggleOpen)),
             "bisect.toggle" => self.update(Message::Bisect(bisect_panel::Msg::ToggleOpen)),
             "reflog.toggle" => self.update(Message::Reflog(reflog_panel::Msg::ToggleOpen)),
+            "health.toggle" => self.update(Message::Health(health_panel::Msg::ToggleOpen)),
             "terminal.restart" => self.update(Message::Terminal(terminal::Msg::RestartPressed)),
             "network.fetch" => {
                 let remotes: Vec<String> = self
@@ -1532,6 +1543,134 @@ impl App {
                     tab.branches.open = true;
                 }
                 Task::none()
+            }
+        }
+    }
+
+    /// Executes a health-panel action against `service::maintenance`.
+    /// Reads are fire-and-forget loads; mutations report through the
+    /// panel's `*Done` messages (the footer shows op progress via the
+    /// existing `BackendEvent::OpProgress` handling). Archive opens a
+    /// native save dialog first.
+    fn run_health_action(
+        &mut self,
+        repo_id: RepoId,
+        action: Option<health_panel::Action>,
+    ) -> Task<Message> {
+        let Some(action) = action else {
+            return Task::none();
+        };
+        match action {
+            health_panel::Action::Refresh => {
+                let services = self.services.clone();
+                let services2 = self.services.clone();
+                let services3 = self.services.clone();
+                let repo_id2 = repo_id.clone();
+                let repo_id3 = repo_id.clone();
+                Task::batch([
+                    Task::perform(
+                        async move {
+                            Message::Health(health_panel::Msg::HealthLoaded(
+                                crate::service::maintenance::repo_health(&services, repo_id2).await,
+                            ))
+                        },
+                        std::convert::identity,
+                    ),
+                    Task::perform(
+                        async move {
+                            Message::Health(health_panel::Msg::SparseLoaded(
+                                crate::service::maintenance::sparse_info(&services2, repo_id3)
+                                    .await,
+                            ))
+                        },
+                        std::convert::identity,
+                    ),
+                    Task::perform(
+                        async move {
+                            Message::Health(health_panel::Msg::LfsLoaded(
+                                crate::service::maintenance::lfs_status(&services3, repo_id).await,
+                            ))
+                        },
+                        std::convert::identity,
+                    ),
+                ])
+            }
+            health_panel::Action::RunOp { op, .. } => {
+                let services = self.services.clone();
+                Task::perform(
+                    async move {
+                        Message::Health(health_panel::Msg::OpDone(
+                            crate::service::maintenance::maintenance_run(&services, repo_id, op)
+                                .await,
+                        ))
+                    },
+                    std::convert::identity,
+                )
+            }
+            health_panel::Action::Archive { spec, format } => {
+                let services = self.services.clone();
+                let repo_id2 = repo_id.clone();
+                Task::perform(
+                    async move {
+                        // Native save dialog (blocking; off the UI thread).
+                        let extension = match format.as_str() {
+                            "tar.gz" => "tar.gz",
+                            "tar" => "tar",
+                            _ => "zip",
+                        };
+                        let default_name = format!("archive-{spec}.{extension}");
+                        let destination = tokio::task::spawn_blocking(move || {
+                            rfd::FileDialog::new()
+                                .set_file_name(&default_name)
+                                .save_file()
+                        })
+                        .await
+                        .ok()
+                        .flatten();
+                        let Some(destination) = destination else {
+                            return Message::Health(health_panel::Msg::ArchiveDone(Err(
+                                "archive canceled".to_string(),
+                            )));
+                        };
+                        Message::Health(health_panel::Msg::ArchiveDone(
+                            crate::service::maintenance::archive(
+                                &services,
+                                repo_id2,
+                                spec,
+                                format.as_str().to_string(),
+                                destination.to_string_lossy().into_owned(),
+                            )
+                            .await,
+                        ))
+                    },
+                    std::convert::identity,
+                )
+            }
+            health_panel::Action::SparseApply { patterns, add } => {
+                let services = self.services.clone();
+                Task::perform(
+                    async move {
+                        Message::Health(health_panel::Msg::SparseDone(
+                            crate::service::maintenance::sparse_apply(
+                                &services, repo_id, patterns, add,
+                            )
+                            .await,
+                        ))
+                    },
+                    std::convert::identity,
+                )
+            }
+            health_panel::Action::LfsRun { subcommand } => {
+                let services = self.services.clone();
+                Task::perform(
+                    async move {
+                        Message::Health(health_panel::Msg::LfsDone(
+                            crate::service::maintenance::lfs_run(&services, repo_id, subcommand)
+                                .await,
+                        ))
+                    },
+                    std::convert::identity,
+                )
             }
         }
     }
@@ -4181,6 +4320,14 @@ impl App {
                     Task::none()
                 }
             },
+            Message::Health(msg) => {
+                let Some(tab) = self.tabs.get_mut(self.active) else {
+                    return Task::none();
+                };
+                let action = tab.health.update(msg);
+                let repo_id = tab.repo.repo_id.clone();
+                self.run_health_action(repo_id, action)
+            }
             Message::StatusRowMenu { key } => {
                 let menu = self
                     .tabs

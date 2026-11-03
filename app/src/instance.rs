@@ -116,4 +116,3 @@ pub async fn serve(listener: InstanceListener) {
         }
     }
 }
-

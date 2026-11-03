@@ -19,6 +19,7 @@ use super::commit_detail;
 use super::dialog::{self, ResetRequest};
 use super::diff_view::{self, DiffPane, DiffSlot, PaneMode};
 use super::forge_panel::{self, ForgeCtx};
+use super::health_panel;
 use super::history_model::{FilterFields, HistoryState};
 use super::history_panel;
 use super::reflog_panel;
@@ -103,6 +104,8 @@ pub struct Tab {
     /// browser (dropdown, like the remotes panel).
     pub bisect: bisect_panel::BisectPanel,
     pub reflog: reflog_panel::ReflogPanel,
+    /// Repo health / maintenance / archive / sparse / LFS panel.
+    pub health: health_panel::HealthPanel,
     /// GitHub PR/CI panel state (dropdown, like the remotes panel). The
     /// context lives beside it so the panel's `'a` borrows come from the
     /// tab, not per-frame locals; the shell refreshes it on status/branch
@@ -166,6 +169,7 @@ impl Tab {
             forge_ctx: ForgeCtx::default(),
             bisect: bisect_panel::BisectPanel::default(),
             reflog: reflog_panel::ReflogPanel::default(),
+            health: health_panel::HealthPanel::default(),
             terminal_open: false,
             pending_discard: None,
             pending_branch_delete: None,
@@ -658,6 +662,14 @@ fn repo_header<'a>(tab: &'a Tab, tokens: Tokens) -> Element<'a, Message> {
             .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
             .padding([6, 10])
             .on_press(Message::Bisect(bisect_panel::Msg::ToggleOpen)),
+            button(text("Health").size(11).color(if tab.health.open {
+                tokens.primary
+            } else {
+                tokens.foreground
+            }))
+            .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
+            .padding([6, 10])
+            .on_press(Message::Health(health_panel::Msg::ToggleOpen)),
             button(text("Reflog").size(11).color(if tab.reflog.open {
                 tokens.primary
             } else {
@@ -765,6 +777,7 @@ fn workspace<'a>(tab: &'a Tab, tokens: Tokens) -> Element<'a, Message> {
         || tab.remotes.open
         || tab.forge.open
         || tab.reflog.open
+        || tab.health.open
     {
         // Dropdowns: overlaid on the workspace so opening them never
         // reflows the panes underneath. The branch picker anchors top-left,
@@ -803,6 +816,20 @@ fn workspace<'a>(tab: &'a Tab, tokens: Tokens) -> Element<'a, Message> {
                     .align_y(Alignment::Start)
                     .padding([6, 8])
                     .into(),
+            );
+        }
+        if tab.health.open {
+            layers.push(
+                container(
+                    container(tab.health.view(tokens).map(Message::Health))
+                        .width(Length::Fixed(520.0)),
+                )
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .align_x(Alignment::End)
+                .align_y(Alignment::Start)
+                .padding([6, 8])
+                .into(),
             );
         }
         if tab.reflog.open {

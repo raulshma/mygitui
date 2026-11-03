@@ -26,6 +26,8 @@
 //! - [`quick_switcher`] — repo quick-switcher overlay (ctrl/cmd+K)
 //! - [`terminal`] — embedded PTY terminal pane (monitor with input)
 //! - [`forge_panel`] — GitHub PRs, CI checks and workflow runs (gh CLI)
+//! - [`health_panel`] — repo health census, maintenance ops, archive,
+//!   sparse checkout and LFS
 //! - [`bisect_panel`] — bisect stepper banner (start/mark/log/reset)
 //! - [`reflog_panel`] — reflog browser with reset/branch-from intents
 
@@ -42,6 +44,7 @@ mod diff_model;
 mod diff_view;
 mod forge_panel;
 mod graph_canvas;
+mod health_panel;
 mod history_model;
 mod history_panel;
 mod home;
