@@ -5,6 +5,8 @@
 //! gamma-encoded sRGB. Widgets take [`Tokens`] and build their styles from
 //! it, so light/dark switching needs no stylesheet.
 
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+
 use iced::font::{Family, Font, Weight};
 use iced::widget::button;
 use iced::{Background, Border, Color, Shadow, Theme};
@@ -185,11 +187,11 @@ impl Tokens {
     };
 
     pub fn for_scheme(dark: bool) -> Self {
-        if dark {
-            Self::DARK
-        } else {
-            Self::LIGHT
+        let mut tokens = if dark { Self::DARK } else { Self::LIGHT };
+        if accent_enabled() {
+            apply_accent(&mut tokens, os_accent());
         }
+        tokens
     }
 
     pub fn added_bg(&self) -> Color {
@@ -223,6 +225,96 @@ impl Tokens {
 
 pub fn with_alpha(color: Color, a: f32) -> Color {
     Color { a, ..color }
+}
+
+// ---------------------------------------------------------------------------
+// OS accent tint
+// ---------------------------------------------------------------------------
+
+/// OS accent color as `0x00RRGGBB`; `0` = none set (`service::misc
+/// ::os_accent_color` returns `None` off Windows, and a pure-black accent is
+/// not worth distinguishing from "no accent").
+static OS_ACCENT_RGB: AtomicU32 = AtomicU32::new(0);
+/// Whether [`Tokens::for_scheme`] applies the OS accent (`Config::accent`,
+/// serde-default true — hence the atomic starts on).
+static ACCENT_ENABLED: AtomicBool = AtomicBool::new(true);
+
+/// Store the OS accent (RGB; alpha is ignored). The shell fetches
+/// `service::misc::os_accent_color` at boot and on theme change and calls
+/// this once with the parsed `#rrggbb` (or [`set_os_accent_hex`]).
+// Unwired lane: the shell's one-line boot wiring lands later.
+#[allow(dead_code)]
+pub fn set_os_accent(rgb: u32) {
+    OS_ACCENT_RGB.store(rgb & 0xff_ffff, Ordering::Relaxed);
+}
+
+/// Hex-string convenience for [`set_os_accent`]: accepts `#rrggbb`,
+/// `rrggbb` and uppercase variants. Returns whether the string parsed.
+// Unwired lane: the shell's one-line boot wiring lands later.
+#[allow(dead_code)]
+pub fn set_os_accent_hex(hex: &str) -> bool {
+    let trimmed = hex.trim().trim_start_matches('#');
+    match u32::from_str_radix(trimmed, 16) {
+        Ok(rgb) if trimmed.len() == 6 => {
+            set_os_accent(rgb);
+            true
+        }
+        _ => false,
+    }
+}
+
+/// Clear the stored OS accent (no tint until the next [`set_os_accent`]).
+// Unwired lane (tests + future shell use only).
+#[allow(dead_code)]
+pub fn clear_os_accent() {
+    OS_ACCENT_RGB.store(0, Ordering::Relaxed);
+}
+
+/// The stored OS accent, if any.
+pub fn os_accent() -> Option<Color> {
+    let value = OS_ACCENT_RGB.load(Ordering::Relaxed);
+    if value == 0 {
+        None
+    } else {
+        Some(rgb(value))
+    }
+}
+
+/// Config gate for the tint ([`Tokens::for_scheme`] consults it); wired
+/// from `Config::accent` in one line by the shell.
+// Unwired lane: the atomic defaults to on (the serde default), so the
+// accent applies as soon as `set_os_accent` is wired even without this.
+#[allow(dead_code)]
+pub fn set_accent_enabled(enabled: bool) {
+    ACCENT_ENABLED.store(enabled, Ordering::Relaxed);
+}
+
+fn accent_enabled() -> bool {
+    ACCENT_ENABLED.load(Ordering::Relaxed)
+}
+
+/// Black-or-white foreground that keeps contrast on `background`
+/// (rec. 709 luma, gamma-space — good enough for two candidate colors).
+pub fn contrast_foreground(background: Color) -> Color {
+    const LIGHT: Color = rgb(0xfafafa);
+    const DARK: Color = rgb(0x171717);
+    let luma = 0.2126 * background.r + 0.7152 * background.g + 0.0722 * background.b;
+    if luma > 0.55 {
+        DARK
+    } else {
+        LIGHT
+    }
+}
+
+/// Override a palette's primary accent: `primary`/`ring` take the OS color
+/// and `primary_foreground` is re-derived for contrast. `None` is a no-op.
+pub fn apply_accent(tokens: &mut Tokens, accent: Option<Color>) {
+    let Some(accent) = accent else {
+        return;
+    };
+    tokens.primary = accent;
+    tokens.primary_foreground = contrast_foreground(accent);
+    tokens.ring = accent;
 }
 
 /// Linear sRGB interpolation; used for hover/pressed shades.
@@ -365,5 +457,73 @@ pub fn surface_style(tokens: Tokens) -> impl Fn(&Theme) -> iced::widget::contain
         border: Border::default(),
         shadow: Shadow::default(),
         snap: true,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn contrast_foreground_follows_luma() {
+        // Light backgrounds take the near-black foreground…
+        assert_eq!(contrast_foreground(rgb(0xffd700)), rgb(0x171717));
+        assert_eq!(contrast_foreground(Color::WHITE), rgb(0x171717));
+        // …dark ones the near-white one.
+        assert_eq!(contrast_foreground(rgb(0x1447e6)), rgb(0xfafafa));
+        assert_eq!(contrast_foreground(Color::BLACK), rgb(0xfafafa));
+    }
+
+    #[test]
+    fn apply_accent_overrides_primary_and_derives_contrast() {
+        for mut tokens in [Tokens::LIGHT, Tokens::DARK] {
+            let before = tokens;
+            apply_accent(&mut tokens, None);
+            assert_eq!(tokens.primary, before.primary, "None is a no-op");
+
+            let accent = Color::from_rgb8(0xff, 0xd7, 0x00);
+            apply_accent(&mut tokens, Some(accent));
+            assert_eq!(tokens.primary, accent);
+            assert_eq!(tokens.ring, accent);
+            assert_eq!(tokens.primary_foreground, rgb(0x171717));
+            // Unrelated tokens stay untouched.
+            assert_eq!(tokens.added, before.added);
+            assert_eq!(tokens.background, before.background);
+            assert_eq!(tokens.dark, before.dark);
+        }
+    }
+
+    // One test body for everything touching the global accent statics —
+    // parallel test threads would otherwise race on them.
+    #[test]
+    fn os_accent_statics_and_for_scheme_gate() {
+        clear_os_accent();
+        assert_eq!(os_accent(), None);
+
+        assert!(set_os_accent_hex("#a1b2c3"));
+        assert_eq!(os_accent(), Some(rgb(0xa1b2c3)));
+        assert!(set_os_accent_hex("FFEEDD"));
+        assert_eq!(os_accent(), Some(rgb(0xffeedd)));
+        // Alpha high bits set by callers are masked off.
+        set_os_accent(0xff112233);
+        assert_eq!(os_accent(), Some(rgb(0x112233)));
+
+        assert!(!set_os_accent_hex("nope"));
+        assert!(!set_os_accent_hex("#12345"));
+        assert!(!set_os_accent_hex("#1234567"));
+
+        // The gate atomic defaults to on (Config::accent's serde default):
+        // as soon as an accent is stored, `for_scheme` tints with it.
+        set_os_accent(0x8a2be2);
+        let dark = Tokens::for_scheme(true);
+        assert_eq!(dark.primary, rgb(0x8a2be2));
+        assert_eq!(dark.primary_foreground, rgb(0xfafafa));
+        // Toggling the gate restores the stock palette.
+        set_accent_enabled(false);
+        assert_eq!(Tokens::for_scheme(true).primary, Tokens::DARK.primary);
+        set_accent_enabled(true);
+        clear_os_accent();
+        assert_eq!(Tokens::for_scheme(true).primary, Tokens::DARK.primary);
+        assert_eq!(Tokens::for_scheme(false).primary, Tokens::LIGHT.primary);
     }
 }

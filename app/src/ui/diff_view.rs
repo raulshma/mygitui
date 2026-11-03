@@ -5,7 +5,7 @@
 use std::collections::{HashMap, HashSet};
 
 use iced::widget::{
-    button, column, container, image, mouse_area, row, scrollable, text, Id, Space,
+    button, column, container, image, mouse_area, rich_text, row, scrollable, text, Id, Space,
 };
 use iced::{Alignment, Background, Border, Color, Element, Length};
 
@@ -18,6 +18,13 @@ use super::diff_model::{
 };
 use super::status_model::kind_label;
 use super::theme::{self, Tokens};
+
+// Syntax-highlighted diff rows (syntect). The module lives in
+// `ui/highlight.rs` and is declared here with an explicit path so
+// `ui/mod.rs` stays untouched; the orchestrator may move the declaration
+// up (as `pub mod highlight;`) when wiring the config flag.
+#[path = "highlight.rs"]
+pub mod highlight;
 
 /// Which pane owns a diff (working copy vs selected commit).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -630,6 +637,7 @@ fn unified_line<'a>(
     };
     let background = line_background(tokens, diff_line.origin);
     let gutter = line_gutter(pane, slot, tokens, file, hunk, diff_line, mode);
+    let path = files.get(file).map_or("", |f| f.path.as_str());
 
     let content = row![
         gutter,
@@ -651,11 +659,7 @@ fn unified_line<'a>(
             .font(theme::mono())
             .color(origin_color(tokens, diff_line.origin))
             .width(Length::Fixed(14.0)),
-        text(diff_line.text.as_str())
-            .size(12)
-            .font(theme::mono())
-            .color(tokens.foreground)
-            .width(Length::Fill),
+        line_body(tokens, path, diff_line),
     ]
     .spacing(0)
     .align_y(Alignment::Center)
@@ -729,8 +733,10 @@ fn pair_side<'a>(
     let left_background = left_line.and_then(|line| line_background(tokens, line.origin));
     let right_background = right_line.and_then(|line| line_background(tokens, line.origin));
 
+    let path = files.get(file).map_or("", |f| f.path.as_str());
     let left_cell = split_cell(
         tokens,
+        path,
         left_line,
         left_background,
         false,
@@ -745,6 +751,7 @@ fn pair_side<'a>(
         .is_some_and(|new_no| pane.lines.contains(file, hunk, new_no));
     let right_cell = split_cell(
         tokens,
+        path,
         right_line,
         right_background,
         true,
@@ -771,7 +778,8 @@ fn pair_side<'a>(
 #[allow(clippy::too_many_arguments)]
 fn split_cell<'a>(
     tokens: Tokens,
-    line: Option<&DiffLine>,
+    path: &str,
+    line: Option<&'a DiffLine>,
     background: Option<Color>,
     new_side: bool,
     selected: bool,
@@ -780,13 +788,12 @@ fn split_cell<'a>(
     hunk: usize,
     mode: PaneMode,
 ) -> Element<'a, Message> {
-    let (line_number, origin, body) = match line {
+    let (line_number, origin) = match line {
         Some(line) => (
             if new_side { line.new_no } else { line.old_no },
             line.origin,
-            line.text.as_str(),
         ),
-        None => (None, ' ', ""),
+        None => (None, ' '),
     };
     let marker = if is_context(origin) {
         " ".to_string()
@@ -838,13 +845,15 @@ fn split_cell<'a>(
             .color(origin_color(tokens, origin))
             .width(Length::Fixed(12.0)),
     );
-    content = content.push(
-        text(body.to_string())
+    content = content.push(match line {
+        Some(diff_line) => line_body(tokens, path, diff_line),
+        None => text(String::new())
             .size(12)
             .font(theme::mono())
             .color(tokens.foreground)
-            .width(Length::Fill),
-    );
+            .width(Length::Fill)
+            .into(),
+    });
 
     container(content)
         .width(Length::Fill)
@@ -853,6 +862,41 @@ fn split_cell<'a>(
             background: background.map(Background::Color),
             ..container::Style::default()
         })
+        .into()
+}
+
+/// Line content: syntax-highlighted rich text when the feature is on, the
+/// plain monochrome `text` otherwise. Hunk-metadata lines (`origin '='`)
+/// and empty lines always render plain. Word-diff ranges keep the existing
+/// +/- tints as an emphasis background on top of the syntax colors.
+fn line_body<'a>(tokens: Tokens, path: &str, line: &'a DiffLine) -> Element<'a, Message> {
+    if !highlight::enabled() || line.origin == '=' || line.text.is_empty() {
+        return text(line.text.as_str())
+            .size(12)
+            .font(theme::mono())
+            .color(tokens.foreground)
+            .width(Length::Fill)
+            .into();
+    }
+    let runs = highlight::for_mode(tokens.dark).highlight_line(path, &line.text, tokens.foreground);
+    if runs.is_empty() {
+        return text(line.text.as_str())
+            .size(12)
+            .font(theme::mono())
+            .color(tokens.foreground)
+            .width(Length::Fill)
+            .into();
+    }
+    let emphasis = match line.origin {
+        '+' => Some(theme::with_alpha(tokens.added, 0.35)),
+        '-' => Some(theme::with_alpha(tokens.deleted, 0.35)),
+        _ => None,
+    };
+    let spans = highlight::to_spans(runs, &line.highlights, emphasis);
+    rich_text(spans)
+        .size(12)
+        .font(theme::mono())
+        .width(Length::Fill)
         .into()
 }
 

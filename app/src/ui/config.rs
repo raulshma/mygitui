@@ -22,6 +22,10 @@ pub struct Config {
     /// Minutes between background fetches (0 = off).
     pub auto_fetch_minutes: u32,
     pub recent_repos: Vec<RecentRepo>,
+    /// Tint controls with the OS accent colour when the OS provides one.
+    pub accent: bool,
+    /// Syntax-highlight diff rows (syntect; off renders plain monochrome).
+    pub highlight: bool,
     /// AI assist settings (default off; secrets live in the OS keyring,
     /// never in this file).
     pub ai: AiSettings,
@@ -59,6 +63,8 @@ impl Default for Config {
             diff_wrap: false,
             auto_fetch_minutes: 0,
             recent_repos: Vec::new(),
+            accent: true,
+            highlight: true,
             ai: AiSettings::default(),
         }
     }
@@ -275,6 +281,8 @@ mod tests {
             theme: theme::Mode::Dark,
             diff_wrap: true,
             auto_fetch_minutes: 5,
+            accent: false,
+            highlight: false,
             ..Default::default()
         };
         config.note_recent("C:\\repos\\alpha", 7);
@@ -283,8 +291,27 @@ mod tests {
         assert_eq!(loaded.theme, theme::Mode::Dark);
         assert!(loaded.diff_wrap);
         assert_eq!(loaded.auto_fetch_minutes, 5);
+        assert!(!loaded.accent);
+        assert!(!loaded.highlight);
         assert_eq!(loaded.recent_repos.len(), 1);
         assert_eq!(loaded.recent_repos[0].path, "C:\\repos\\alpha");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn accent_and_highlight_default_on_for_older_config_files() {
+        // Pre-accent/highlight config files keep loading with both on.
+        let dir = temp_dir("accent-highlight-default");
+        std::fs::write(
+            dir.join("config.json"),
+            r#"{"theme": "Dark", "recent_repos": []}"#,
+        )
+        .unwrap();
+        let loaded = Config::load(&dir);
+        assert!(loaded.accent);
+        assert!(loaded.highlight);
+        assert!(Config::default().accent);
+        assert!(Config::default().highlight);
         let _ = std::fs::remove_dir_all(dir);
     }
 
