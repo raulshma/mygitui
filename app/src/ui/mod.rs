@@ -26,6 +26,8 @@
 //! - [`quick_switcher`] — repo quick-switcher overlay (ctrl/cmd+K)
 //! - [`terminal`] — embedded PTY terminal pane (monitor with input)
 //! - [`forge_panel`] — GitHub PRs, CI checks and workflow runs (gh CLI)
+//! - [`worktree_panel`] / [`submodule_panel`] / [`tags_panel`] —
+//!   worktree management, submodule sync and tag management dropdowns
 //! - [`health_panel`] — repo health census, maintenance ops, archive,
 //!   sparse checkout and LFS
 //! - [`bisect_panel`] — bisect stepper banner (start/mark/log/reset)
@@ -57,7 +59,10 @@ mod repo_view;
 mod stash_panel;
 mod status_model;
 mod status_panel;
+mod submodule_panel;
+mod tags_panel;
 mod terminal;
 mod theme;
+mod worktree_panel;
 
 pub use app::run;

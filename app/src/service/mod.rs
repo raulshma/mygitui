@@ -28,6 +28,7 @@ pub mod misc;
 pub mod network;
 pub mod repo;
 pub mod stash;
+pub mod tags;
 pub mod worktree;
 
 use std::sync::Arc;
@@ -53,6 +54,7 @@ pub use misc::*;
 pub use network::*;
 pub use repo::*;
 pub use stash::*;
+pub use tags::{tag_create, tag_delete, tag_list};
 // Intentionally empty for now (see the module docs): keeps the per-module
 // re-export pattern uniform.
 #[allow(unused_imports)]

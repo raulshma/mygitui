@@ -43,8 +43,11 @@ use super::reflog_panel;
 use super::remote_panel::net_summary;
 use super::repo_view::{self, Load, PendingRebase, PendingRemap, Tab};
 use super::status_model::{count_label, filter_sections, SectionId, StatusRow};
+use super::submodule_panel;
+use super::tags_panel;
 use super::terminal;
 use super::theme::{self, Mode, Tokens};
+use super::worktree_panel;
 
 pub fn run(
     cli_args: Vec<String>,
@@ -480,6 +483,12 @@ pub enum Message {
     Reflog(reflog_panel::Msg),
     /// Repo health/maintenance panel (routed to the active tab).
     Health(health_panel::Msg),
+    /// Worktree/submodule/tag panels (routed to the active tab).
+    Worktree(worktree_panel::Msg),
+    Submodule(submodule_panel::Msg),
+    Tags(tags_panel::Msg),
+    /// Open the ⋯ header menu (worktrees/submodules/tags toggles).
+    MoreMenu,
     /// Right-click on a status row (row key).
     StatusRowMenu {
         key: String,
@@ -1014,6 +1023,9 @@ impl App {
             "bisect.toggle" => self.update(Message::Bisect(bisect_panel::Msg::ToggleOpen)),
             "reflog.toggle" => self.update(Message::Reflog(reflog_panel::Msg::ToggleOpen)),
             "health.toggle" => self.update(Message::Health(health_panel::Msg::ToggleOpen)),
+            "panel.worktrees" => self.update(Message::Worktree(worktree_panel::Msg::ToggleOpen)),
+            "panel.submodules" => self.update(Message::Submodule(submodule_panel::Msg::ToggleOpen)),
+            "panel.tags" => self.update(Message::Tags(tags_panel::Msg::ToggleOpen)),
             "terminal.restart" => self.update(Message::Terminal(terminal::Msg::RestartPressed)),
             "network.fetch" => {
                 let remotes: Vec<String> = self
@@ -1672,6 +1684,185 @@ impl App {
                     std::convert::identity,
                 )
             }
+        }
+    }
+
+    /// Executes a worktree panel action against the service layer.
+    fn run_worktree_action(
+        &mut self,
+        repo_id: RepoId,
+        action: Option<worktree_panel::Action>,
+    ) -> Task<Message> {
+        let Some(action) = action else {
+            return Task::none();
+        };
+        let services = self.services.clone();
+        match action {
+            worktree_panel::Action::Refresh => Task::perform(
+                async move {
+                    Message::Worktree(worktree_panel::Msg::ListLoaded(
+                        crate::service::worktrees(&services, repo_id).await,
+                    ))
+                },
+                std::convert::identity,
+            ),
+            worktree_panel::Action::Add { name, path } => Task::perform(
+                async move {
+                    let result = crate::service::worktree::worktree_add_named(
+                        &services,
+                        repo_id.clone(),
+                        name,
+                        path,
+                    )
+                    .await;
+                    let list = match &result {
+                        Ok(()) => crate::service::worktrees(&services, repo_id).await,
+                        Err(err) => Err(err.clone()),
+                    };
+                    Message::Worktree(worktree_panel::Msg::ListLoaded(list))
+                },
+                std::convert::identity,
+            ),
+            worktree_panel::Action::Remove { name, force } => Task::perform(
+                async move {
+                    let result = crate::service::worktree::worktree_remove(
+                        &services,
+                        repo_id.clone(),
+                        name,
+                        force,
+                    )
+                    .await;
+                    let list = match &result {
+                        Ok(()) => crate::service::worktrees(&services, repo_id).await,
+                        Err(err) => Err(err.clone()),
+                    };
+                    Message::Worktree(worktree_panel::Msg::ListLoaded(list))
+                },
+                std::convert::identity,
+            ),
+            worktree_panel::Action::Prune => Task::perform(
+                async move {
+                    let result = crate::service::worktree::worktree_prune(&services, repo_id).await;
+                    Message::Worktree(worktree_panel::Msg::PruneDone(result.unwrap_or(0)))
+                },
+                std::convert::identity,
+            ),
+        }
+    }
+
+    /// Executes a submodule panel action (service::files surface).
+    fn run_submodule_action(
+        &mut self,
+        repo_id: RepoId,
+        action: Option<submodule_panel::Action>,
+    ) -> Task<Message> {
+        let Some(action) = action else {
+            return Task::none();
+        };
+        let services = self.services.clone();
+        let repo_id2 = repo_id.clone();
+        match action {
+            submodule_panel::Action::Refresh => Task::perform(
+                async move {
+                    Message::Submodule(submodule_panel::Msg::ListLoaded(
+                        crate::service::files::submodules(&services, repo_id).await,
+                    ))
+                },
+                std::convert::identity,
+            ),
+            submodule_panel::Action::Update { path } => Task::perform(
+                async move {
+                    Message::Submodule(submodule_panel::Msg::OpDone(
+                        crate::service::files::submodule_update(
+                            &services, repo_id2, path, true, true,
+                        )
+                        .await,
+                    ))
+                },
+                std::convert::identity,
+            ),
+            submodule_panel::Action::UpdateAll => {
+                // The engine updates one submodule per call; fan out over
+                // the loaded list (the op queue serializes the mutations).
+                let paths: Vec<String> = self
+                    .tabs
+                    .get(self.active)
+                    .and_then(|tab| tab.submodule.list.as_ref())
+                    .map(|list| list.iter().map(|sub| sub.path.clone()).collect())
+                    .unwrap_or_default();
+                let mut tasks = Vec::new();
+                for path in paths {
+                    let services = self.services.clone();
+                    let repo_id2 = repo_id.clone();
+                    tasks.push(Task::perform(
+                        async move {
+                            Message::Submodule(submodule_panel::Msg::OpDone(
+                                crate::service::files::submodule_update(
+                                    &services, repo_id2, path, true, true,
+                                )
+                                .await,
+                            ))
+                        },
+                        std::convert::identity,
+                    ));
+                }
+                Task::batch(tasks)
+            }
+            submodule_panel::Action::Sync { path } => Task::perform(
+                async move {
+                    Message::Submodule(submodule_panel::Msg::OpDone(
+                        crate::service::files::submodule_sync(&services, repo_id, path).await,
+                    ))
+                },
+                std::convert::identity,
+            ),
+        }
+    }
+
+    /// Executes a tag panel action (service::tags).
+    fn run_tags_action(
+        &mut self,
+        repo_id: RepoId,
+        action: Option<tags_panel::Action>,
+    ) -> Task<Message> {
+        let Some(action) = action else {
+            return Task::none();
+        };
+        let services = self.services.clone();
+        let repo_id2 = repo_id.clone();
+        match action {
+            tags_panel::Action::Refresh => Task::perform(
+                async move {
+                    Message::Tags(tags_panel::Msg::ListLoaded(
+                        crate::service::tags::tag_list(&services, repo_id).await,
+                    ))
+                },
+                std::convert::identity,
+            ),
+            tags_panel::Action::Create {
+                name,
+                target,
+                message,
+                annotated,
+            } => Task::perform(
+                async move {
+                    Message::Tags(tags_panel::Msg::CreateDone(
+                        crate::service::tags::tag_create(
+                            &services, repo_id2, name, target, message, annotated,
+                        )
+                        .await,
+                    ))
+                },
+                std::convert::identity,
+            ),
+            tags_panel::Action::Delete { name } => Task::perform(
+                async move {
+                    Message::Tags(tags_panel::Msg::DeleteDone(
+                        crate::service::tags::tag_delete(&services, repo_id, name).await,
+                    ))
+                },
+                std::convert::identity,
+            ),
         }
     }
 
@@ -4327,6 +4518,39 @@ impl App {
                 let action = tab.health.update(msg);
                 let repo_id = tab.repo.repo_id.clone();
                 self.run_health_action(repo_id, action)
+            }
+            Message::Worktree(msg) => {
+                let Some(tab) = self.tabs.get_mut(self.active) else {
+                    return Task::none();
+                };
+                let action = tab.worktree.update(msg);
+                let repo_id = tab.repo.repo_id.clone();
+                self.run_worktree_action(repo_id, action)
+            }
+            Message::Submodule(msg) => {
+                let Some(tab) = self.tabs.get_mut(self.active) else {
+                    return Task::none();
+                };
+                let action = tab.submodule.update(msg);
+                let repo_id = tab.repo.repo_id.clone();
+                self.run_submodule_action(repo_id, action)
+            }
+            Message::Tags(msg) => {
+                let Some(tab) = self.tabs.get_mut(self.active) else {
+                    return Task::none();
+                };
+                let action = tab.tags.update(msg);
+                let repo_id = tab.repo.repo_id.clone();
+                self.run_tags_action(repo_id, action)
+            }
+            Message::MoreMenu => {
+                let menu = context_menu::Menu::new()
+                    .header("Manage")
+                    .command("panel.worktrees", "Worktrees…")
+                    .command("panel.submodules", "Submodules…")
+                    .command("panel.tags", "Tags…");
+                self.ctx_menu.open_at(self.cursor, menu);
+                Task::none()
             }
             Message::StatusRowMenu { key } => {
                 let menu = self
