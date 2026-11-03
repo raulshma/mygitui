@@ -65,9 +65,18 @@ pub struct App {
     show_home: bool,
     notice: Option<Notice>,
     last_op: Option<String>,
+    /// Op currently reporting progress, for the footer cancel button.
+    active_op: Option<ActiveOp>,
     auth_prompts: std::collections::VecDeque<AuthPromptState>,
     host_key_prompts: std::collections::VecDeque<HostKeyPromptState>,
     device_secret_prompts: std::collections::VecDeque<DeviceSecretPromptState>,
+}
+
+/// The op whose progress the footer is showing (cancelable via `op_cancel`).
+struct ActiveOp {
+    repo_id: RepoId,
+    op_id: String,
+    kind: String,
 }
 
 struct Notice {
@@ -130,6 +139,11 @@ pub enum Message {
     AutoFetched {
         repo_id: RepoId,
         result: Result<Option<NetStats>, String>,
+    },
+    CancelOp,
+    OpCanceled {
+        kind: String,
+        result: Result<bool, String>,
     },
     TogglePin(String),
     RemoveRecent(String),
@@ -388,6 +402,7 @@ impl App {
             show_home: true,
             notice: None,
             last_op: None,
+            active_op: None,
             auth_prompts: std::collections::VecDeque::new(),
             host_key_prompts: std::collections::VecDeque::new(),
             device_secret_prompts: std::collections::VecDeque::new(),
@@ -891,6 +906,36 @@ impl App {
                     }
                 }
             }
+            Message::CancelOp => {
+                let Some(active) = self.active_op.take() else {
+                    return Task::none();
+                };
+                let ActiveOp {
+                    repo_id,
+                    op_id,
+                    kind,
+                } = active;
+                let services = self.services.clone();
+                Task::perform(
+                    async move {
+                        let result =
+                            crate::service::misc::op_cancel(&services, repo_id, op_id).await;
+                        (kind, result)
+                    },
+                    |(kind, result)| Message::OpCanceled { kind, result },
+                )
+            }
+            Message::OpCanceled { kind, result } => match result {
+                Ok(true) => {
+                    self.last_op = Some(format!("cancel requested: {kind}"));
+                    Task::none()
+                }
+                Ok(false) => Task::none(),
+                Err(err) => {
+                    self.notice = Some(Notice::error(format!("Cancel failed: {err}")));
+                    Task::none()
+                }
+            },
             Message::TogglePin(path) => {
                 self.config.toggle_pin(&path);
                 self.reindex_recent();
@@ -2478,13 +2523,20 @@ impl App {
                     .map(|pct| format!(" · {pct:.0}%"))
                     .unwrap_or_default();
                 self.last_op = Some(format!("{}: {}{pct}", progress.kind, progress.message));
-                if !progress.done {
-                    return Task::none();
+                if progress.done {
+                    self.active_op = None;
+                    if let Some(err) = progress.error.as_deref() {
+                        self.notice =
+                            Some(Notice::error(format!("{} failed: {err}", progress.kind)));
+                    }
+                    return self.refresh(RepoId(progress.repo_id));
                 }
-                if let Some(err) = progress.error.as_deref() {
-                    self.notice = Some(Notice::error(format!("{} failed: {err}", progress.kind)));
-                }
-                self.refresh(RepoId(progress.repo_id))
+                self.active_op = Some(ActiveOp {
+                    repo_id: RepoId(progress.repo_id),
+                    op_id: progress.op_id,
+                    kind: progress.kind,
+                });
+                Task::none()
             }
             BackendEvent::OpLog(line) => {
                 self.last_op = Some(line.line);
@@ -2663,6 +2715,15 @@ impl App {
         ]
         .align_y(Alignment::Center)
         .padding([4, 10]);
+
+        if self.active_op.is_some() {
+            bar = bar.push(
+                button(text("Cancel").size(11))
+                    .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
+                    .padding([2, 8])
+                    .on_press(Message::CancelOp),
+            );
+        }
 
         if self.notice.is_some() {
             bar = bar.push(
