@@ -6,34 +6,26 @@ on:
     tags:
       - 'v*'
 
+# Packaging (installers, updater artifacts) is rebuilt separately after the
+# iced migration; until then a release publishes the raw release binary per
+# platform as a tar.gz so day-to-day builds have a downloadable artifact.
 jobs:
   build-and-draft-release:
     permissions:
       contents: write
-    env:
-      # Empty by default (secrets unset) — both updater steps then no-op.
-      TAURI_UPDATER_PUBKEY: ${{ secrets.TAURI_UPDATER_PUBKEY }}
+    runs-on: ${{ matrix.platform }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          # windows -> NSIS installer (.exe)
           - platform: windows-latest
-            args: ''
-          # linux  -> AppImage + .deb
+            binary: mygitui.exe
           - platform: ubuntu-22.04
-            args: ''
-          # macos  -> .dmg
+            binary: mygitui
           - platform: macos-latest
-            args: ''
-    runs-on: ${{ matrix.platform }}
+            binary: mygitui
     steps:
       - uses: actions/checkout@v4
-
-      - name: Setup Node 22
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
 
       - name: Setup Rust (stable)
         uses: dtolnay/rust-toolchain@stable
@@ -41,59 +33,32 @@ jobs:
       - name: Rust cache
         uses: swatinem/rust-cache@v2
         with:
-          workspaces: src-tauri
+          workspaces: app
 
       - name: Install Linux build dependencies
         if: matrix.platform == 'ubuntu-22.04'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev librsvg2-dev libssl-dev pkg-config patchelf
+          sudo apt-get install -y libssl-dev pkg-config libxkbcommon-dev libwayland-dev
 
-      - name: Install frontend dependencies
-        run: npm ci
+      - name: Build (release)
+        working-directory: app
+        run: cargo build --release --bin mygitui
 
-      # Updater endpoint: when a pubkey is configured (TAURI_UPDATER_PUBKEY
-      # secret), overlay tauri.conf.json so the bundled updater polls the
-      # latest.json artifact this release publishes. Empty secret = no
-      # overlay (updater stays inert, exactly as shipped today).
-      - name: Prepare updater config overlay
-        id: updater-config
-        if: env.TAURI_UPDATER_PUBKEY != ''
+      - name: Package
         shell: bash
         run: |
-          cat > updater-overlay.json <<EOF
-          {
-            "bundle": {
-              "createUpdaterArtifacts": true
-            },
-            "plugins": {
-              "updater": {
-                "pubkey": "${TAURI_UPDATER_PUBKEY}",
-                "endpoints": [
-                  "https://github.com/${{ github.repository }}/releases/latest/download/latest.json"
-                ]
-              }
-            }
-          }
-          EOF
-          echo "args=--config updater-overlay.json" >> "$GITHUB_OUTPUT"
+          set -euo pipefail
+          mkdir -p dist
+          out="mygitui-${{ github.ref_name }}-${{ runner.os }}"
+          tar -czf "dist/${out}.tar.gz" -C app/target/release "${{ matrix.binary }}"
 
-      # Tauri updater signing (M12 wiring). Secrets are NOT invented here:
-      # generate a keypair with `cargo tauri signer generate -w ~/.tauri/`,
-      # store the private key + password as the two repo secrets below and
-      # the minisign pubkey in tauri.conf.json `plugins.updater.pubkey`.
-      # When the secrets are absent the env vars resolve empty and
-      # tauri-action skips signing (releases still build, just unsigned).
-      - name: Build and draft release (tauri-action)
-        uses: tauri-apps/tauri-action@v0
-        env:
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Upload to draft release
+        uses: softprops/action-gh-release@v2
         with:
-          tagName: ${{ github.ref_name }}
-          releaseName: 'mygitui ${{ github.ref_name }}'
-          releaseBody: 'Draft release built from tag ${{ github.ref_name }}. Download the artifact for your platform from the assets below.'
-          releaseDraft: true
+          tag_name: ${{ github.ref_name }}
+          name: 'mygitui ${{ github.ref_name }}'
+          body: 'Draft release built from tag ${{ github.ref_name }}. Raw release binaries per platform; installers are rebuilt after the native-UI migration.'
+          draft: true
           prerelease: false
-          args: ${{ matrix.args }} ${{ steps.updater-config.outputs.args }}
+          files: dist/*.tar.gz

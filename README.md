@@ -1,58 +1,67 @@
 # mygitui
 
-A fast, configurable Git GUI for daily use on Windows, Linux, and macOS. Native
-performance via **Tauri v2** (Rust backend) with a **Svelte 5** SPA frontend,
-git operations on a **git2-rs** core, Material 3 dynamic theming, and opt-in AI
-assist via **opencode** (default when connected) or **OpenRouter**.
+A fast, configurable Git GUI for daily use on Windows, Linux, and macOS. One
+native process: an **iced 0.14** UI on top of a **git2-rs** engine, SSH remote
+support (russh), forge integration, and opt-in AI assist via **opencode**
+(default when connected) or **OpenRouter**.
+
+The UI is being rebuilt natively on iced (branch `feat/iced-ui`): the Svelte
+webview shell is gone, and the backend runs in-process behind the
+`service::*` functions and the typed `BackendEvent` bus. Packaging,
+auto-update, deep links, single-instance forwarding, and the embedded
+terminal UI are intentionally deferred until after the daily-driver UI lands.
 
 ## Quickstart
 
-Prerequisites: [Node 22+](https://nodejs.org), [Rust stable](https://rustup.rs)
-(with `rustfmt` + `clippy`), and `git`.
+Prerequisites: [Rust stable](https://rustup.rs) (with `rustfmt` + `clippy`)
+and `git`. On Linux install the windowing/SSL headers:
+`libxkbcommon-dev libwayland-dev libssl-dev pkg-config`.
 
 ```bash
-npm install
-npm run tauri dev
+cd app
+cargo run --release
 ```
 
 ## Commands
 
 | Command                    | What it does                                  |
 | -------------------------- | --------------------------------------------- |
-| `npm run dev`              | Frontend only (Vite dev server)               |
-| `npm run tauri dev`        | Full app: Rust backend + frontend, hot reload |
-| `npm run test`             | Frontend unit tests (vitest)                  |
-| `npm run check`            | Type check (svelte-check)                     |
-| `npm run build`            | Production frontend build                     |
-| `cargo fmt --check`        | Rust format check (run in `src-tauri/`)       |
-| `cargo clippy --all-targets -- -D warnings` | Rust lint, warnings fatal (in `src-tauri/`) |
-| `cargo test`               | Rust tests (in `src-tauri/`)                  |
+| `cargo run`                | Build and run the app (in `app/`)             |
+| `cargo fmt --check`        | Rust format check (run in `app/`)             |
+| `cargo clippy --all-targets -- -D warnings` | Rust lint, warnings fatal (in `app/`) |
+| `cargo test`               | Rust tests (in `app/`)                        |
+| `cargo bench --bench perf` | Criterion benchmarks (in `app/`)              |
 
-CI (`.github/workflows/`) runs the frontend suite on Ubuntu and the Rust
-fmt/clippy/test suite across Ubuntu/Windows/macOS on every push to `main` and
-every PR. The `fast-checks` job runs fmt + clippy first so lint mistakes get
-one clear, fast failure; the 3-OS matrix covers tests (and per-OS clippy,
-since lints can be cfg-dependent). Linux tests run inside a private
-D-Bus session with an unlocked gnome-keyring so the Secret Service keyring
-path is exercised, not skipped.
+CI (`.github/workflows/`) runs the Rust fmt/clippy/test suite across
+Ubuntu/Windows/macOS on every push to `main` and every PR. The `fast-checks`
+job runs fmt + clippy first so lint mistakes get one clear, fast failure; the
+3-OS matrix covers tests (and per-OS clippy, since lints can be
+cfg-dependent). Linux tests run inside a private D-Bus session with an
+unlocked gnome-keyring so the Secret Service keyring path is exercised, not
+skipped.
 
 ## Pre-push hook & test conventions
 
-`npm install` wires a `pre-push` git hook (`git config core.hooksPath hooks`)
-that runs the same checks as CI locally — fmt, clippy, cargo test,
-svelte-check, vitest — so failures surface in seconds instead of as a red
-run on `main`. Bypass in an emergency with `git push --no-verify`.
+Enable the `pre-push` git hook once per clone:
+
+```bash
+git config core.hooksPath hooks
+```
+
+It runs the same checks as CI locally — fmt, clippy, cargo test — so failures
+surface in seconds instead of as a red run on `main`. Bypass in an emergency
+with `git push --no-verify`.
 
 Two conventions keep the 3-OS test matrix green:
 
 - **Tests touching a platform facility** (OS keyring, keychain, git
   credential helpers) must degrade gracefully when it's absent — probe and
   skip, never unwrap. See `backend_available()` in
-  `src-tauri/src/keyring_store.rs` for the pattern.
+  `app/src/keyring_store.rs` for the pattern.
 - **Property tests**: strategies sharing a line pool can draw equal inputs
   (no diff to stage, nothing to restore) — guard with `prop_assume!`. When a
   property test fails anywhere, proptest appends the shrunk seed to
-  `src-tauri/proptest-regressions/`; that file is committed and every future
+  `app/proptest-regressions/`; that file is committed and every future
   run replays those seeds, so a found bug stays caught.
 
 ## Test fixtures
@@ -97,19 +106,19 @@ generated output — do not commit it.
   LFS status + pull/push
 - **Verification**: commit signature badges (GPG/SSH via
   `git verify-commit`), signed fixture repos
-- **Platform**: embedded terminal, custom shell actions **with keyboard
-  shortcuts**, GitHub PRs + CI checks (`gh` CLI), configurable layouts
-  with popouts and split panes, command palette + keybinds + context
-  menus, M3 theming (accent-seed dynamic color + OS accent), syntax
-  highlighting in diffs (Shiki), a11y throughout
+- **Platform**: custom shell actions **with keyboard shortcuts**, GitHub PRs
+  + CI checks (`gh` CLI), split panes, command palette + keybinds + context
+  menus, shadcn-derived light/dark theming, syntax-highlighted diffs, a11y
+  throughout (terminal UI, popouts, and OS-accent theming return after the
+  iced UI migration)
 - **AI assist (opt-in per repo)**: commit message, PR title/desc,
   explain-hunk, staged-diff review, stash message, branch-name
   suggestion; connection health chip
 - **Diff workflow**: line-granular stage/unstage/discard (gutter
   selection), blame with age heat and re-blame-at-parent
 - **Quality gates**: proptest roundtrips (hunk apply, checkpoint
-  restore), Playwright smoke flows, criterion benches with nightly
-  baseline comparison, watcher soak with RSS gate, 3-OS CI matrix
+  restore), criterion benches with nightly baseline comparison, watcher
+  soak with RSS gate, 3-OS CI matrix
 
 ## Roadmap
 
@@ -127,8 +136,9 @@ clone, LFS, syntax highlighting, i18n groundwork) →
 fsck census, op cancellation, gitignore-aware watcher, auto checkpoint
 GC, signature badges, pickaxe `-G`, bisect log, line staging, blame
 heat + re-blame, all six AI features, deep links, first-launch argv,
-proptests + soak + baseline-compare gates, Playwright smoke). See
-`docs/contracts.md` for the per-milestone IPC contracts.
+proptests + soak + baseline-compare gates) →
+**M13–M14 native UI** (iced 0.14 cutover: in-process service bus, native
+shell, status/commit/diff/history panels, remote + safety surfaces).
 
 
 ## License

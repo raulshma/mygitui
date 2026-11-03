@@ -1,0 +1,78 @@
+[package]
+name = "mygitui"
+version = "0.1.11"
+description = "Fast, configurable Git GUI with AI-assisted workflows"
+authors = ["raulshma"]
+edition = "2021"
+
+[lib]
+# The `_lib` suffix may seem redundant but it is necessary
+# to make the lib name unique and wouldn't conflict with the bin name.
+# This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
+name = "mygitui_lib"
+
+[[bench]]
+name = "perf"
+harness = false
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+keyring = { version = "4.2.0", features = ["apple-native-keyring-store"] }
+# `default = []` since git2 0.19: without `https`, libgit2 compiles with no
+# TLS backend and every push/pull fails with "there is no TLS stream
+# available"; `ssh` adds the libssh2 transport for ssh: remotes.
+git2 = { version = "0.21.0", features = ["https", "ssh"] }
+imara-diff = "0.2.0"
+regex = "1.11"
+notify = "8.2.0"
+ignore = "0.4"
+thiserror = "2.0.21"
+parking_lot = "0.12.5"
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tokio = { version = "1.53.2", features = ["rt", "rt-multi-thread", "sync", "macros", "net", "io-util", "time"] }
+dirs = "7"
+portable-pty = "0.9.0"
+uuid = { version = "1.27.0", features = ["v4"] }
+russh-sftp = "3.0.1"
+russh = { version = "0.65.0", default-features = false, features = ["flate2", "ring", "rsa"] }
+futures-util = "0.3.34"
+# Native UI. tiny-skia (CPU rasterizer) instead of the default wgpu backend:
+# the UI is virtualized text + a canvas graph, so GPU acceleration buys
+# nothing, and the software path builds faster, ships smaller, and works on
+# machines/CI without a usable GPU adapter. `canvas` drives the commit graph,
+# `tokio` wires iced subscriptions to the shared backend runtime, and `image`
+# decodes image-diff previews.
+iced = { version = "0.14.0", default-features = false, features = [
+    "tiny-skia",
+    "crisp",
+    "web-colors",
+    "thread-pool",
+    "x11",
+    "wayland",
+    "tokio",
+    "canvas",
+    "image",
+] }
+# Native file/folder pickers (replaces the Tauri dialog plugin).
+rfd = "0.16.0"
+# Open paths/URLs in the OS default handler (replaces the Tauri opener plugin).
+open = "5.4.4"
+
+# Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = 3
+panic = "abort"
+strip = true
+
+[dev-dependencies]
+criterion = "0.8.2"
+git2 = "0.21.0"
+proptest = "1"
+sysinfo = "0.33"
+rand_core = "0.10"
+# Mock keyring store for integration tests (no OS secret service on CI).
+keyring-core = "1"

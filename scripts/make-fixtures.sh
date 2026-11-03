@@ -37,8 +37,8 @@ ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 FIXTURES="$ROOT/fixtures"
 
 # Safety: never rm -rf outside a recognizable mygitui checkout.
-if [[ ! -f "$ROOT/package.json" || ! -d "$ROOT/src-tauri" ]]; then
-  echo "ERROR: $ROOT does not look like the mygitui project root (package.json / src-tauri missing)." >&2
+if [[ ! -f "$ROOT/app/Cargo.toml" ]]; then
+  echo "ERROR: $ROOT does not look like the mygitui project root (app/Cargo.toml missing)." >&2
   echo "Refusing to touch anything." >&2
   exit 1
 fi
