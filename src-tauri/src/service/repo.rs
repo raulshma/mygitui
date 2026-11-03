@@ -2,36 +2,25 @@ use std::path::Path;
 
 use parking_lot::Mutex;
 use serde::Serialize;
-use tauri::Emitter;
-use tauri::State;
 use ts_rs::TS;
 
 use crate::engine::types::{BlameLine, RepoId, RepoInfo, RepoStatus};
-use crate::repo::RepoManager;
+use crate::service::events::{global, BackendEvent};
+use crate::service::AppServices;
 use crate::service::{engine_err, enqueue_read, enqueue_remote_read, finish_op, get_handle};
 
 /// Open (or reuse) the repository at/above `path` and start its watcher.
-#[tauri::command(rename_all = "snake_case")]
-pub async fn repo_open(
-    path: String,
-    app: tauri::AppHandle,
-    state: State<'_, RepoManager>,
-) -> Result<RepoInfo, String> {
-    state.open(&app, Path::new(&path)).map_err(engine_err)
+pub async fn repo_open(services: &AppServices, path: String) -> Result<RepoInfo, String> {
+    services.repos.open(Path::new(&path)).map_err(engine_err)
 }
 
 /// Close a repository: stop its watcher, cancel its streams, drop caches.
-#[tauri::command(rename_all = "snake_case")]
-pub fn repo_close(repo_id: RepoId, state: State<'_, RepoManager>) {
-    state.close(&repo_id);
+pub fn repo_close(services: &AppServices, repo_id: RepoId) {
+    services.repos.close(&repo_id);
 }
 
-#[tauri::command(rename_all = "snake_case")]
-pub async fn repo_status(
-    repo_id: RepoId,
-    state: State<'_, RepoManager>,
-) -> Result<RepoStatus, String> {
-    let handle = get_handle(&state, &repo_id)?;
+pub async fn repo_status(services: &AppServices, repo_id: RepoId) -> Result<RepoStatus, String> {
+    let handle = get_handle(&services.repos, &repo_id)?;
     if let Some(remote) = handle.remote() {
         return finish_op(enqueue_remote_read(
             &handle,
@@ -50,12 +39,11 @@ pub async fn repo_status(
 }
 
 /// Local + remote branches and tags: `(ref name, target sha)` pairs.
-#[tauri::command(rename_all = "snake_case")]
 pub async fn repo_refs(
+    services: &AppServices,
     repo_id: RepoId,
-    state: State<'_, RepoManager>,
 ) -> Result<Vec<(String, String)>, String> {
-    let handle = get_handle(&state, &repo_id)?;
+    let handle = get_handle(&services.repos, &repo_id)?;
     if let Some(remote) = handle.remote() {
         return finish_op(enqueue_remote_read(
             &handle,
@@ -73,14 +61,13 @@ pub async fn repo_refs(
     .await
 }
 
-#[tauri::command(rename_all = "snake_case")]
 pub async fn repo_blame(
+    services: &AppServices,
     repo_id: RepoId,
     path: String,
     from: Option<String>,
-    state: State<'_, RepoManager>,
 ) -> Result<Vec<BlameLine>, String> {
-    let handle = get_handle(&state, &repo_id)?;
+    let handle = get_handle(&services.repos, &repo_id)?;
     if let Some(remote) = handle.remote() {
         return finish_op(enqueue_remote_read(
             &handle,
@@ -189,25 +176,19 @@ fn validate_clone_destination(path: &Path) -> Result<(), String> {
 }
 
 /// Clone `url` into `destination` (missing or empty), optionally shallow
-/// (`depth`), emitting `clone-progress` events. Resolves with the path.
-#[tauri::command(rename_all = "snake_case")]
+/// (`depth`), publishing `clone-progress` events. Resolves with the path.
 pub async fn repo_clone(
+    _services: &AppServices,
     url: String,
     destination: String,
     depth: Option<u32>,
-    app: tauri::AppHandle,
 ) -> Result<String, String> {
-    tauri::async_runtime::spawn_blocking(move || clone_sync(&url, &destination, depth, &app))
+    crate::rt::spawn_blocking(move || clone_sync(&url, &destination, depth))
         .await
         .map_err(|e| format!("clone task failed: {e}"))?
 }
 
-fn clone_sync(
-    url: &str,
-    destination: &str,
-    depth: Option<u32>,
-    app: &tauri::AppHandle,
-) -> Result<String, String> {
+fn clone_sync(url: &str, destination: &str, depth: Option<u32>) -> Result<String, String> {
     if url.trim().is_empty() {
         return Err("clone url must not be empty".to_string());
     }
@@ -220,7 +201,6 @@ fn clone_sync(
     let mut callbacks = git2::RemoteCallbacks::new();
     let event_url = url.to_string();
     let last_emit = Mutex::new(std::time::Instant::now());
-    let emitter = app.clone();
     callbacks.transfer_progress(move |stats| {
         let stats = CloneStats::from(&stats);
         let done = stats.total_objects > 0 && stats.received_objects >= stats.total_objects;
@@ -234,13 +214,7 @@ fn clone_sync(
         };
         if ready {
             let payload = clone_progress_event(&event_url, &stats);
-            if let Err(err) = emitter.emit("clone-progress", &payload) {
-                tracing::warn!(
-                    url = %event_url,
-                    error = %err,
-                    "emit clone-progress failed"
-                );
-            }
+            global().publish(BackendEvent::CloneProgress(payload));
         }
         true
     });

@@ -31,7 +31,8 @@ mod pty;
 mod pty_tests;
 pub mod remote;
 mod repo;
-mod service;
+mod rt;
+pub mod service;
 mod watcher;
 mod workspace;
 #[cfg(test)]
@@ -98,18 +99,10 @@ pub fn run() {
                 let _ = window.set_focus();
             }
         }))
-        // M2: the auth broker emits `auth-request` events through this
-        // handle; must be registered before the first net op, hence before
-        // `.manage` hands out the RepoManager.
+        // M2: the auth broker publishes `auth-request` events on the backend
+        // event bus; must be registered before the first net op.
         .setup(move |app| {
-            auth::init(app.handle().clone());
-            // Remote (SSH) devices: host-key confirms and secret asks reach
-            // the frontend as events through this emitter; must be installed
-            // before any device can connect.
-            let remote_app = app.handle().clone();
-            remote::prompts::init(move |event, payload| {
-                let _ = remote_app.emit(event, payload.clone());
-            });
+            auth::init();
             *app.state::<CliArgs>().0.lock().unwrap() = cli_args;
             // Failsafe for the hidden-until-loaded windows: if the page
             // never fires a load event (broken asset pipeline, webview
@@ -143,168 +136,6 @@ pub fn run() {
         .manage(remote::transport::DeviceRegistry::new())
         .manage(remote::term::RemoteShellRegistry::default())
         .manage(remote::actions::RemoteActionRegistry::default())
-        .invoke_handler(tauri::generate_handler![
-            keyring_store::secrets_get,
-            keyring_store::secrets_set,
-            keyring_store::secrets_delete,
-            ipc_commands::repo_open,
-            ipc_commands::cli_args_initial,
-            ipc_commands::os_accent_color,
-            ipc_commands::repo_close,
-            ipc_commands::repo_status,
-            ipc_commands::repo_refs,
-            ipc_commands::repo_blame,
-            ipc_commands::repo_diff,
-            ipc_commands::repo_diff_stream,
-            ipc_commands::repo_log_stream,
-            ipc_commands::repo_file_history,
-            ipc_commands::repo_clone,
-            ipc_commands::stage,
-            ipc_commands::stage_all,
-            ipc_commands::commit,
-            ipc_commands::signing_info,
-            ipc_commands::hooks_list,
-            ipc_commands::branches,
-            ipc_commands::branch_create,
-            ipc_commands::branch_switch,
-            ipc_commands::branch_is_merged,
-            ipc_commands::branch_delete,
-            ipc_commands::branch_rename,
-            ipc_commands::tag_create,
-            ipc_commands::tag_delete,
-            ipc_commands::tag_list,
-            ipc_commands::tag_create_signed,
-            ipc_commands::mergetool_info,
-            ipc_commands::mergetool_run,
-            ipc_commands::discard,
-            ipc_commands::remote_branches,
-            ipc_commands::branch_checkout_remote,
-            ipc_commands::remotes,
-            ipc_commands::remote_add,
-            ipc_commands::remote_remove,
-            ipc_commands::remote_set_url,
-            ipc_commands::fetch,
-            ipc_commands::pull,
-            ipc_commands::push,
-            ipc_commands::auth_respond,
-            ipc_commands::checkpoint_create,
-            ipc_commands::checkpoints,
-            ipc_commands::checkpoint_restore,
-            ipc_commands::checkpoint_gc,
-            ipc_commands::ops_preview,
-            ipc_commands::guard_checkpoint,
-            ipc_commands::merge_branch,
-            ipc_commands::merge_abort,
-            ipc_commands::sequencer_abort,
-            ipc_commands::conflicts,
-            ipc_commands::conflict_resolve,
-            ipc_commands::cherry_pick,
-            ipc_commands::revert,
-            ipc_commands::reset,
-            ipc_commands::rebase_start,
-            ipc_commands::rebase_state,
-            ipc_commands::rebase_continue,
-            ipc_commands::rebase_abort,
-            ipc_commands::bisect_start,
-            ipc_commands::bisect_state,
-            ipc_commands::bisect_mark,
-            ipc_commands::bisect_reset,
-            ipc_commands::bisect_log,
-            ipc_commands::describe,
-            ipc_commands::autosquash_plan,
-            ipc_commands::commit_signature,
-            ipc_commands::branch_trash_list,
-            ipc_commands::branch_trash_restore,
-            ipc_commands::worktree_prune,
-            ipc_commands::op_cancel,
-            ipc_commands::repo_health,
-            ipc_commands::maintenance_run,
-            ipc_commands::archive,
-            ipc_commands::sparse_info,
-            ipc_commands::sparse_apply,
-            ipc_commands::lfs_status,
-            ipc_commands::lfs_run,
-            ipc_commands::clone_blobless,
-            ipc_commands::stash_list,
-            ipc_commands::stash_push,
-            ipc_commands::stash_apply,
-            ipc_commands::stash_drop,
-            ipc_commands::stash_branch,
-            ipc_commands::worktrees,
-            ipc_commands::worktree_add,
-            ipc_commands::worktree_remove,
-            ipc_commands::reflog,
-            ipc_commands::repo_read_file,
-            workspace::repo_list_dir,
-            workspace::repo_stat_file,
-            workspace::repo_write_file,
-            workspace::repo_create_entry,
-            workspace::repo_rename_entry,
-            workspace::repo_delete_entry,
-            workspace::repo_file_index,
-            ipc_commands::submodules,
-            ipc_commands::submodule_update,
-            ipc_commands::submodule_sync,
-            ipc_commands::gitignore_add,
-            ipc_commands::gitignore_templates,
-            ipc_commands::gitignore_apply_template,
-            ipc_commands::repo_clean,
-            ipc_commands::action_run,
-            ipc_commands::action_cancel,
-            pty::pty_create,
-            pty::pty_write,
-            pty::pty_resize,
-            pty::pty_kill,
-            ipc_commands::forge_status,
-            ipc_commands::forge_context,
-            ipc_commands::pr_create,
-            ipc_commands::pr_list,
-            ipc_commands::pr_checks,
-            ipc_commands::pr_merge,
-            ipc_commands::pr_close,
-            ipc_commands::pr_reopen,
-            ipc_commands::pr_ready,
-            ipc_commands::pr_checkout,
-            ipc_commands::pr_comment,
-            ipc_commands::pr_review,
-            ipc_commands::workflow_runs,
-            ipc_commands::workflow_run_detail,
-            ipc_commands::workflow_run_logs,
-            ipc_commands::workflow_run_cancel,
-            ipc_commands::workflow_run_rerun,
-            ipc_commands::workflow_dispatch,
-            ipc_commands::workflow_list,
-            ipc_commands::project_detect,
-            ipc_commands::commit_activity,
-            ipc_commands::contributor_stats,
-            opencode::opencode_detect,
-            opencode::opencode_serve_status,
-            opencode::opencode_serve_start,
-            opencode::opencode_serve_stop,
-            editors::detect_editors,
-            editors::open_with,
-            popout::open_popout,
-            remote::commands::device_list,
-            remote::commands::device_add,
-            remote::commands::device_update,
-            remote::commands::device_remove,
-            remote::commands::device_connect,
-            remote::commands::device_disconnect,
-            remote::commands::device_status,
-            remote::commands::device_test,
-            remote::commands::device_hostkey_respond,
-            remote::commands::device_auth_respond,
-            remote::commands::device_forget_host_key,
-            remote::commands::device_host_key,
-            remote::commands::device_browse_dir,
-            remote::commands::device_scan_repos,
-            remote::commands::remote_repo_open,
-            remote::commands::remote_poll_set_paused,
-            remote::term::rshell_create,
-            remote::term::rshell_write,
-            remote::term::rshell_resize,
-            remote::term::rshell_kill,
-        ])
         // Windows are created hidden so the window-state plugin's restore
         // (position/size/maximize) lands before anything is on screen; this
         // shows each window — main and popouts alike — once its document

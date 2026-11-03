@@ -15,12 +15,12 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use parking_lot::Mutex;
-use tauri::Emitter;
 
 use crate::engine::git_engine::{EngineError, EngineResult, GitEngine, GitEngineM12, GitEngineM3};
 use crate::engine::types::{RepoId, RepoInfo};
-use crate::ops::OpQueue;
-use crate::watcher::{self, RepoWatcher};
+use crate::ops::{BusEventSink, OpQueue};
+use crate::service::events::{global, BackendEvent};
+use crate::watcher::RepoWatcher;
 
 /// Construct the engine used for newly opened repositories.
 ///
@@ -261,28 +261,21 @@ impl RepoManager {
     }
 
     /// Open (or reuse) the repo at/above `path` and start its FS watcher.
-    /// IPC entry point for `repo_open`.
-    pub fn open(&self, app: &tauri::AppHandle, path: &Path) -> EngineResult<RepoInfo> {
+    /// Service entry point for `repo_open`.
+    pub fn open(&self, path: &Path) -> EngineResult<RepoInfo> {
         let info = self.open_unwatched(path)?;
         if let Some(handle) = self.get(&info.repo_id) {
-            // M2: op-progress events flow over the app emitter.
-            handle
-                .ops()
-                .set_sink(Arc::new(crate::ops::TauriEventSink::new(app.clone())));
+            // Op-progress events flow over the backend event bus.
+            handle.ops().set_sink(Arc::new(BusEventSink));
             let mut slot = handle.watcher.lock();
             if slot.is_none() {
-                let app = app.clone();
                 *slot = Some(RepoWatcher::start(
                     handle.id.clone(),
                     handle.root.clone(),
                     handle.generation_shared(),
                     move |batch| {
-                        if let Err(err) = app.emit(watcher::REPO_CHANGED_EVENT, &batch) {
-                            tracing::warn!(
-                                repo = %batch.repo_id.0,
-                                error = %err,
-                                "emit repo-changed failed"
-                            );
+                        if !global().publish(BackendEvent::RepoChanged(batch)) {
+                            tracing::debug!("repo-changed dropped: no UI subscriber");
                         }
                     },
                 ));
@@ -374,7 +367,6 @@ impl RepoManager {
     #[allow(clippy::too_many_arguments)]
     pub fn open_remote(
         &self,
-        app: &tauri::AppHandle,
         device_id: &str,
         device_name: &str,
         poll_secs: u32,
@@ -429,15 +421,12 @@ impl RepoManager {
         self.repos.lock().insert(handle.id.clone(), handle.clone());
 
         // Progress events + the change poller (the remote watcher twin).
-        handle
-            .ops()
-            .set_sink(Arc::new(crate::ops::TauriEventSink::new(app.clone())));
+        handle.ops().set_sink(Arc::new(BusEventSink));
         let poller = crate::remote::polling::RepoPoller::start(
             repo_id.clone(),
             handle.generation_shared(),
             Arc::new(remote.git()),
             std::time::Duration::from_secs(poll_secs.max(1) as u64),
-            app.clone(),
         )?;
         *remote.poller.lock() = Some(poller);
 

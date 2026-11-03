@@ -1,14 +1,13 @@
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
-use tauri::ipc::Channel;
-use tauri::State;
 use ts_rs::TS;
 
 use crate::engine::types::{CommitInfo, LogFilter, RepoId};
 use crate::graph::types::{self, GraphRow};
-use crate::repo::{RepoHandle, RepoManager, StreamHandle};
-use crate::service::{chunk_vec, enqueue_remote_read, get_handle};
+use crate::repo::{RepoHandle, StreamHandle};
+use crate::service::events::{global, BackendEvent};
+use crate::service::{chunk_vec, enqueue_remote_read, get_handle, AppServices};
 
 /// Commits per `repo_log_stream` / `repo_file_history` page.
 const LOG_PAGE_SIZE: usize = 500;
@@ -27,33 +26,33 @@ pub struct LogPage {
     pub generation: u64,
 }
 
-/// Stream the commit log in [`LOG_PAGE_SIZE`] pages over `on_page`. A new
-/// call for the same repo replaces (cancels) the previous stream.
-#[tauri::command(rename_all = "snake_case")]
+/// Stream the commit log in [`LOG_PAGE_SIZE`] pages as
+/// [`BackendEvent::LogPage`]s tagged with `request_id`. A new call for the
+/// same repo replaces (cancels) the previous stream.
 pub fn repo_log_stream(
+    services: &AppServices,
     repo_id: RepoId,
     filter: LogFilter,
-    on_page: Channel<LogPage>,
-    state: State<'_, RepoManager>,
+    request_id: u64,
 ) -> Result<(), String> {
-    let handle = get_handle(&state, &repo_id)?;
+    let handle = get_handle(&services.repos, &repo_id)?;
     let token = handle.begin_log_stream();
     std::thread::Builder::new()
         .name(format!("log-stream-{}", repo_id.0))
-        .spawn(move || stream_log(handle, filter, on_page, token))
+        .spawn(move || stream_log(handle, filter, request_id, token))
         .map_err(|e| format!("failed to spawn log stream: {e}"))?;
     Ok(())
 }
 
-/// Stream one file's history (follows renames) as [`LogPage`]s over `on_page`.
-#[tauri::command(rename_all = "snake_case")]
+/// Stream one file's history (follows renames) as [`LogPage`]s tagged with
+/// `request_id`.
 pub fn repo_file_history(
+    services: &AppServices,
     repo_id: RepoId,
     path: String,
-    on_page: Channel<LogPage>,
-    state: State<'_, RepoManager>,
+    request_id: u64,
 ) -> Result<(), String> {
-    let handle = get_handle(&state, &repo_id)?;
+    let handle = get_handle(&services.repos, &repo_id)?;
     let filter = LogFilter {
         path: Some(path),
         follow: true,
@@ -62,22 +61,27 @@ pub fn repo_file_history(
     let token = handle.begin_history_stream();
     std::thread::Builder::new()
         .name(format!("history-stream-{}", repo_id.0))
-        .spawn(move || stream_log(handle, filter, on_page, token))
+        .spawn(move || stream_log(handle, filter, request_id, token))
         .map_err(|e| format!("failed to spawn history stream: {e}"))?;
     Ok(())
 }
 
+/// Publish one page; `false` means no UI is subscribed (stream cancelled).
+fn send_page(request_id: u64, page: LogPage) -> bool {
+    global().publish(BackendEvent::LogPage { request_id, page })
+}
+
 /// Shared log/file-history streaming loop. Ends when the walk is exhausted,
-/// the stream is cancelled/superseded, the client drops the channel, or the
-/// repo generation moved (stale; the client re-requests).
+/// the stream is cancelled/superseded, the UI goes away, or the repo
+/// generation moved (stale; the client re-requests).
 fn stream_log(
     handle: Arc<RepoHandle>,
     filter: LogFilter,
-    on_page: Channel<LogPage>,
+    request_id: u64,
     token: Arc<StreamHandle>,
 ) {
     if let Some(remote) = handle.remote() {
-        stream_log_remote(&handle, remote.clone(), filter, on_page, token);
+        stream_log_remote(&handle, remote.clone(), filter, request_id, token);
         return;
     }
     let Ok(repo) = handle.repo() else {
@@ -118,16 +122,16 @@ fn stream_log(
         let rows = types::layout_page(&commits, &mut lanes);
 
         let done = next_cursor.is_none();
-        if on_page
-            .send(LogPage {
+        if !send_page(
+            request_id,
+            LogPage {
                 commits,
                 rows,
                 next_cursor: next_cursor.clone(),
                 generation: start_generation,
-            })
-            .is_err()
-        {
-            break; // client dropped the channel
+            },
+        ) {
+            break; // UI gone
         }
         if done {
             break;
@@ -138,7 +142,7 @@ fn stream_log(
 
 /// Remote twin of [`stream_log`]: the remote engine's `log` returns the
 /// whole (bounded) walk in one shot, so ONE queued read produces the full
-/// result and this loop only lays it out and pages it over the channel.
+/// result and this loop only lays it out and pages it over the bus.
 /// Graph rows come from the same pure `graph::types::layout_page` with lane
 /// state carried across pages; abort checks mirror the local loop (stream
 /// cancelled/superseded, repo closed, or generation moved between sends).
@@ -146,7 +150,7 @@ fn stream_log_remote(
     handle: &Arc<RepoHandle>,
     remote: Arc<crate::repo::RemoteHandle>,
     filter: LogFilter,
-    on_page: Channel<LogPage>,
+    request_id: u64,
     token: Arc<StreamHandle>,
 ) {
     let start_generation = handle.generation();
@@ -183,16 +187,16 @@ fn stream_log_remote(
             None
         };
         let rows = types::layout_page(&commits, &mut lanes);
-        if on_page
-            .send(LogPage {
+        if !send_page(
+            request_id,
+            LogPage {
                 commits,
                 rows,
                 next_cursor,
                 generation: start_generation,
-            })
-            .is_err()
-        {
-            break; // client dropped the channel
+            },
+        ) {
+            break; // UI gone
         }
     }
 }

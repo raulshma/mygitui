@@ -437,7 +437,6 @@ pub async fn remote_repo_open(
     tauri::async_runtime::spawn_blocking(move || {
         let repos = app.state::<RepoManager>();
         repos.open_remote(
-            &app,
             &profile.id,
             &profile.name,
             profile.poll_secs,

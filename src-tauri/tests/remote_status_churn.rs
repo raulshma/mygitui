@@ -20,9 +20,9 @@ use tokio::sync::Mutex;
 
 use mygitui_lib::remote::hostkeys::HostKeyStore;
 use mygitui_lib::remote::profiles::{self, AuthKind, DeviceAuth, DeviceProfile};
-use mygitui_lib::remote::prompts;
 use mygitui_lib::remote::transport::{DeviceRegistry, DEFAULT_EXEC_TIMEOUT};
 use mygitui_lib::remote::workspace::RemoteWorkspace;
+use mygitui_lib::service::events::{global, BackendEvent};
 
 const DEVICE_ID: &str = "churn-test-device";
 const HOME: &str = "/home/tester";
@@ -298,15 +298,42 @@ fn test_profile(port: u16) -> DeviceProfile {
 }
 
 /// Counted `device-status` emissions (the events the FE chip reacts to).
-fn status_counter() -> Arc<AtomicUsize> {
-    let counter = Arc::new(AtomicUsize::new(0));
-    let seen = counter.clone();
-    prompts::init(move |event, _payload| {
-        if event == "device-status" {
-            seen.fetch_add(1, Ordering::SeqCst);
+/// Events are drained synchronously on demand: publishing is synchronous in
+/// the producer, so every event emitted before an awaited call resolves is
+/// already buffered when `count()` runs — no timing sleeps needed.
+struct StatusCounter {
+    rx: std::sync::Mutex<tokio::sync::broadcast::Receiver<BackendEvent>>,
+    seen: AtomicUsize,
+}
+
+impl StatusCounter {
+    fn new() -> Self {
+        Self {
+            rx: std::sync::Mutex::new(global().subscribe()),
+            seen: AtomicUsize::new(0),
         }
-    });
-    counter
+    }
+
+    fn count(&self) -> usize {
+        let mut rx = self.rx.lock().unwrap();
+        loop {
+            match rx.try_recv() {
+                Ok(event) => {
+                    if matches!(event, BackendEvent::DeviceStatus(_)) {
+                        self.seen.fetch_add(1, Ordering::SeqCst);
+                    }
+                }
+                Err(tokio::sync::broadcast::error::TryRecvError::Empty) => break,
+                Err(tokio::sync::broadcast::error::TryRecvError::Closed) => break,
+                Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_)) => continue,
+            }
+        }
+        self.seen.load(Ordering::SeqCst)
+    }
+}
+
+fn status_counter() -> Arc<StatusCounter> {
+    Arc::new(StatusCounter::new())
 }
 
 /// Route the keyring crate's one-time store selection to the in-memory mock
@@ -343,8 +370,8 @@ async fn connect_device(name: &str, port: u16, algo: &str, fingerprint: &str) ->
     registry
 }
 
-/// One test (not two): the event emitter is a process-global OnceLock, so
-/// both scenarios must share it — expectations below are DELTAS.
+/// One test (not two): the event bus is process-global, so both scenarios
+/// share it — expectations below are DELTAS.
 #[tokio::test]
 async fn status_events_match_dials() {
     install_mock_keyring();
@@ -354,11 +381,7 @@ async fn status_events_match_dials() {
     let (port, algo, fingerprint, execs, opens, _refuse_all) =
         spawn_server(usize::MAX, usize::MAX).await;
     let registry = connect_device("browse", port, &algo, &fingerprint).await;
-    assert_eq!(
-        counter.load(Ordering::SeqCst),
-        2,
-        "dial = connecting + connected"
-    );
+    assert_eq!(counter.count(), 2, "dial = connecting + connected");
 
     let session = registry.peek(DEVICE_ID).unwrap();
 
@@ -371,7 +394,7 @@ async fn status_events_match_dials() {
     }
     assert_eq!(execs.load(Ordering::SeqCst), 5);
     assert_eq!(
-        counter.load(Ordering::SeqCst),
+        counter.count(),
         2,
         "sequential execs must not re-dial (this is the flicker)"
     );
@@ -389,7 +412,7 @@ async fn status_events_match_dials() {
         assert_eq!(listing.entries.len(), 2, "round {round}");
     }
     assert_eq!(
-        counter.load(Ordering::SeqCst),
+        counter.count(),
         2,
         "SFTP browsing must not re-dial (this is the flicker)"
     );
@@ -409,7 +432,7 @@ async fn status_events_match_dials() {
         result.unwrap().stdout_str();
     }
     assert_eq!(
-        counter.load(Ordering::SeqCst),
+        counter.count(),
         2,
         "concurrent execs must not re-dial either"
     );
@@ -433,7 +456,7 @@ async fn status_events_match_dials() {
     // Server kills the connection on the 2nd session-channel open.
     let (port, algo, fingerprint, _execs, _opens, _refuse_all) = spawn_server(1, usize::MAX).await;
     let registry = connect_device("drop", port, &algo, &fingerprint).await;
-    assert_eq!(counter.load(Ordering::SeqCst), 4, "second dial adds 2");
+    assert_eq!(counter.count(), 4, "second dial adds 2");
 
     let session = registry.peek(DEVICE_ID).unwrap();
     // First exec opens channel #1 — fine.
@@ -441,7 +464,7 @@ async fn status_events_match_dials() {
         .exec("echo one", DEFAULT_EXEC_TIMEOUT)
         .await
         .expect("first exec");
-    assert_eq!(counter.load(Ordering::SeqCst), 4, "no churn while healthy");
+    assert_eq!(counter.count(), 4, "no churn while healthy");
 
     // Connection is dead now; the next command must re-dial ONCE (2 more
     // events) and then stay quiet for all following commands.
@@ -450,7 +473,7 @@ async fn status_events_match_dials() {
         .await
         .expect("exec after drop");
     assert_eq!(
-        counter.load(Ordering::SeqCst),
+        counter.count(),
         6,
         "a dropped connection costs exactly one re-dial pair"
     );
@@ -458,21 +481,21 @@ async fn status_events_match_dials() {
         .exec("echo three", DEFAULT_EXEC_TIMEOUT)
         .await
         .expect("exec after redial");
-    assert_eq!(counter.load(Ordering::SeqCst), 6, "quiet after re-dial");
+    assert_eq!(counter.count(), 6, "quiet after re-dial");
 
     // ---- Phase 3: the server REFUSES one channel (session limit) --------
     // Connection stays alive; the client must NOT re-dial (no status
     // churn) and the cached handle must survive for the next command.
     let (port, algo, fingerprint, _execs, _opens, _refuse_all) = spawn_server(usize::MAX, 2).await;
     let registry = connect_device("refuse", port, &algo, &fingerprint).await;
-    assert_eq!(counter.load(Ordering::SeqCst), 8, "third dial adds 2");
+    assert_eq!(counter.count(), 8, "third dial adds 2");
 
     let session = registry.peek(DEVICE_ID).unwrap();
     session
         .exec("echo one", DEFAULT_EXEC_TIMEOUT)
         .await
         .expect("exec before refusal");
-    assert_eq!(counter.load(Ordering::SeqCst), 8);
+    assert_eq!(counter.count(), 8);
 
     let err = session
         .exec("echo refused", DEFAULT_EXEC_TIMEOUT)
@@ -483,7 +506,7 @@ async fn status_events_match_dials() {
         "unexpected error: {err}"
     );
     assert_eq!(
-        counter.load(Ordering::SeqCst),
+        counter.count(),
         8,
         "a channel refusal must NOT re-dial (this is the flicker)"
     );
@@ -493,7 +516,7 @@ async fn status_events_match_dials() {
         .exec("echo three", DEFAULT_EXEC_TIMEOUT)
         .await
         .expect("exec after refusal");
-    assert_eq!(counter.load(Ordering::SeqCst), 8, "quiet after refusal");
+    assert_eq!(counter.count(), 8, "quiet after refusal");
 
     let _ = profiles::delete_secrets(DEVICE_ID);
 
@@ -504,7 +527,7 @@ async fn status_events_match_dials() {
     let (port, algo, fingerprint, _execs, opens, _refuse_all) =
         spawn_server(usize::MAX, usize::MAX).await;
     let registry = connect_device("herd", port, &algo, &fingerprint).await;
-    assert_eq!(counter.load(Ordering::SeqCst), 10, "fourth dial adds 2");
+    assert_eq!(counter.count(), 10, "fourth dial adds 2");
     assert_eq!(opens.load(Ordering::SeqCst), 0, "dial opens no channels");
 
     let session = registry.peek(DEVICE_ID).unwrap();
@@ -533,7 +556,7 @@ async fn status_events_match_dials() {
         spawn_server(usize::MAX, usize::MAX).await;
     refuse_all.store(true, Ordering::SeqCst);
     let registry = connect_device("cooldown", port, &algo, &fingerprint).await;
-    assert_eq!(counter.load(Ordering::SeqCst), 12, "fifth dial adds 2");
+    assert_eq!(counter.count(), 12, "fifth dial adds 2");
 
     let session = registry.peek(DEVICE_ID).unwrap();
     let mut herd = tokio::task::JoinSet::new();

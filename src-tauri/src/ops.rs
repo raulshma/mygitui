@@ -13,8 +13,9 @@
 //! final `done: true` event when a job finishes (success or error) — except
 //! for silent enqueues ([`OpQueue::enqueue_silent`], used for reads), which
 //! emit nothing. Events reach the frontend via the [`EventSink`]
-//! abstraction — [`TauriEventSink`] in production, a collector in tests —
-//! so the queue itself needs no `AppHandle` to compile or run headless.
+//! abstraction — [`BusEventSink`] in production (backend event bus), a
+//! collector in tests — so the queue itself needs no UI handle to compile
+//! or run headless.
 //!
 //! Lifecycle: the worker thread is spawned lazily on the first `enqueue`
 //! and exits once [`OpQueue::shutdown`] runs (repo close) and the backlog
@@ -72,7 +73,7 @@ pub struct OpLog {
 }
 
 /// Where progress events go. Abstracted so the queue has no hard dependency
-/// on tauri: production installs a [`TauriEventSink`] via
+/// on the UI: production installs a [`BusEventSink`] via
 /// [`OpQueue::set_sink`] (see `RepoManager::open`), tests install a collector.
 /// Without a sink, events are silently dropped.
 pub trait EventSink: Send + Sync {
@@ -83,40 +84,19 @@ pub trait EventSink: Send + Sync {
     fn emit_log(&self, _event: &OpLog) {}
 }
 
-/// Production sink: emits [`OpProgress`] on the app handle.
-pub struct TauriEventSink {
-    app: tauri::AppHandle,
-}
+/// Production sink: publishes on the process-wide backend event bus.
+pub struct BusEventSink;
 
-impl TauriEventSink {
-    pub fn new(app: tauri::AppHandle) -> Self {
-        Self { app }
-    }
-}
-
-impl EventSink for TauriEventSink {
+impl EventSink for BusEventSink {
     fn emit(&self, event: &OpProgress) {
-        use tauri::Emitter;
-        if let Err(err) = self.app.emit(OP_PROGRESS_EVENT, event) {
-            tracing::warn!(
-                repo = %event.repo_id,
-                op = %event.op_id,
-                error = %err,
-                "emit op-progress failed"
-            );
-        }
+        crate::service::events::global().publish(crate::service::events::BackendEvent::OpProgress(
+            event.clone(),
+        ));
     }
 
     fn emit_log(&self, event: &OpLog) {
-        use tauri::Emitter;
-        if let Err(err) = self.app.emit(OP_LOG_EVENT, event) {
-            tracing::warn!(
-                repo = %event.repo_id,
-                op = %event.op_id,
-                error = %err,
-                "emit op-log failed"
-            );
-        }
+        crate::service::events::global()
+            .publish(crate::service::events::BackendEvent::OpLog(event.clone()));
     }
 }
 
@@ -190,7 +170,8 @@ impl OpQueue {
     }
 
     /// Install (or replace) the progress sink. Called by `RepoManager::open`
-    /// once an `AppHandle` exists; headless callers (tests) skip it.
+    /// when a repo gains a UI-facing watcher; headless callers (tests) may
+    /// install a collector or skip it.
     pub fn set_sink(&self, sink: Arc<dyn EventSink>) {
         *self.inner.sink.write() = Some(sink);
     }

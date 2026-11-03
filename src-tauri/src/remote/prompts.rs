@@ -1,15 +1,13 @@
 //! Frontend prompt round-trips for the remote layer: host-key confirmation
 //! and SSH credential (passphrase/password) prompts.
 //!
-//! Same shape as `auth.rs`: the production emitter is installed once at
-//! startup via [`init`] (keeps `Emitter for AppHandle` monomorphization out
-//! of test binaries), requests are parked on a tokio oneshot under a
-//! request id, and the FE answers through `device_hostkey_respond` /
-//! `device_auth_respond`. Everything times out — a prompt never wedges a
-//! connection attempt forever.
+//! Same shape as `auth.rs`: requests are parked on a tokio oneshot under a
+//! request id and published on the backend event bus; the UI answers through
+//! `device_hostkey_respond` / `device_auth_respond`. Everything times out —
+//! a prompt never wedges a connection attempt forever.
 
 use std::collections::HashMap;
-use std::sync::{LazyLock, OnceLock};
+use std::sync::LazyLock;
 use std::time::Duration;
 
 use parking_lot::Mutex;
@@ -78,29 +76,11 @@ enum Pending {
 static PENDING: LazyLock<Mutex<HashMap<String, Pending>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
-/// Emitter seam: production installs a closure that emits a serde payload
-/// as a Tauri event on the main window.
-type EmitFn = Box<dyn Fn(&'static str, &serde_json::Value) + Send + Sync>;
-static EMIT: OnceLock<EmitFn> = OnceLock::new();
-
-/// Install the production event emitter. Called from `lib.rs` setup.
-pub fn init<F>(emit: F)
-where
-    F: Fn(&'static str, &serde_json::Value) + Send + Sync + 'static,
-{
-    let _ = EMIT.set(Box::new(emit));
-}
-
-fn emit_event(event: &'static str, payload: &impl Serialize) {
-    if let Some(emit) = EMIT.get() {
-        let value = serde_json::to_value(payload).unwrap_or(serde_json::Value::Null);
-        emit(event, &value);
-    }
-}
-
 /// Broadcast a device status transition (`device-status` event).
 pub(crate) fn emit_status(payload: &super::transport::DeviceStatusEvent) {
-    emit_event("device-status", payload);
+    crate::service::events::global().publish(crate::service::events::BackendEvent::DeviceStatus(
+        payload.clone(),
+    ));
 }
 
 /// Ask the user to confirm a host key during the SSH handshake. Resolves
@@ -111,7 +91,12 @@ pub async fn ask_host_key(event: HostKeyRequestEvent) -> Result<bool, String> {
     PENDING
         .lock()
         .insert(request_id.clone(), Pending::HostKey(tx));
-    emit_event(HOSTKEY_REQUEST_EVENT, &event);
+    if !crate::service::events::global()
+        .publish(crate::service::events::BackendEvent::HostKeyRequest(event))
+    {
+        PENDING.lock().remove(&request_id);
+        return Err("host key prompt unavailable: no UI connected".to_string());
+    }
     match tokio::time::timeout(PROMPT_TIMEOUT, rx).await {
         Ok(Ok(answer)) => Ok(answer),
         Ok(Err(_)) => Err("host key prompt was cancelled".to_string()),
@@ -130,7 +115,12 @@ pub async fn ask_secret(event: DeviceAuthRequestEvent) -> Result<Option<SecretAn
     PENDING
         .lock()
         .insert(request_id.clone(), Pending::Secret(tx));
-    emit_event(DEVICE_AUTH_REQUEST_EVENT, &event);
+    if !crate::service::events::global().publish(
+        crate::service::events::BackendEvent::DeviceAuthRequest(event),
+    ) {
+        PENDING.lock().remove(&request_id);
+        return Err("credential prompt unavailable: no UI connected".to_string());
+    }
     match tokio::time::timeout(PROMPT_TIMEOUT, rx).await {
         Ok(Ok(answer)) => Ok(answer),
         Ok(Err(_)) => Err("credential prompt was cancelled".to_string()),

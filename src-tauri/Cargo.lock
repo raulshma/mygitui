@@ -3203,6 +3203,7 @@ name = "mygitui"
 version = "0.1.11"
 dependencies = [
  "criterion",
+ "dirs",
  "futures-util",
  "git2",
  "ignore",

@@ -12,11 +12,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use tauri::Emitter;
-
 use crate::engine::types::RepoId;
 use crate::remote::engine::RemoteGitEngine;
-use crate::watcher::{self, RepoChangedEvent};
+use crate::service::events::{global, BackendEvent};
+use crate::watcher::RepoChangedEvent;
 
 /// Global pause flag: the FE flips it on `visibilitychange` (spec: polling
 /// is "paused when tab hidden"). Paused pollers skip the probe execs but
@@ -41,7 +40,6 @@ impl RepoPoller {
         generation: Arc<std::sync::atomic::AtomicU64>,
         engine: Arc<RemoteGitEngine>,
         interval: Duration,
-        app: tauri::AppHandle,
     ) -> Result<Self, String> {
         let stop = Arc::new(AtomicBool::new(false));
         let stop_flag = stop.clone();
@@ -87,8 +85,11 @@ impl RepoPoller {
                                     head_moved,
                                     full: true,
                                 };
-                                if let Err(err) = app.emit(watcher::REPO_CHANGED_EVENT, &batch) {
-                                    tracing::warn!(error = %err, "emit repo-changed failed");
+                                if !global().publish(BackendEvent::RepoChanged(batch)) {
+                                    tracing::debug!(
+                                        repo = %repo_id.0,
+                                        "repo-changed dropped: no UI subscriber"
+                                    );
                                 }
                             }
                             last = Some(current);

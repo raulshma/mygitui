@@ -1,20 +1,22 @@
 //! M1 IPC command surface (names/shapes fixed by docs/contracts.md).
 //!
-//! Engine calls run on the blocking pool (`tauri::async_runtime`) because
-//! git2 is synchronous; `EngineError`s surface as strings. The two stream
-//! commands push pages over `tauri::ipc::Channel`s: diff pages of
-//! [`DIFF_PAGE_SIZE`] files, log pages of [`LOG_PAGE_SIZE`] commits laid out
-//! by the graph module. Streams stop early when the channel send fails
-//! (client gone) or the stream was superseded/cancelled; log streams abort
-//! when the repo generation moves (the client re-requests).
+//! Engine calls run on the process-wide tokio runtime (`crate::rt`) because
+//! git2 is synchronous; `EngineError`s surface as strings. Stream commands
+//! push pages over the backend event bus ([`events::BackendEvent`]): log
+//! pages of [`LOG_PAGE_SIZE`] commits laid out by the graph module, tagged
+//! with a UI-minted request id. Streams stop early when nobody is
+//! subscribed (UI gone) or the stream was superseded/cancelled; log streams
+//! abort when the repo generation moves (the client re-requests).
 //!
-//! The handlers themselves live in the per-domain submodules below; this
-//! module owns the cross-cutting plumbing (handle lookup, serial-queue
-//! enqueue helpers, page chunking) and re-exports every command so the
+//! The command bodies live in the per-domain submodules below; this module
+//! owns the cross-cutting plumbing (handle lookup, serial-queue enqueue
+//! helpers, page chunking) and re-exports every service fn so the
 //! `ipc_commands` facade stays a single glob.
 
+pub mod app_services;
 pub mod branches;
 pub mod diff;
+pub mod events;
 pub mod files;
 pub mod forge;
 pub mod log;
@@ -36,6 +38,7 @@ use crate::engine::types::RepoId;
 use crate::ops::OpCtx;
 use crate::repo::{RepoHandle, RepoManager};
 
+pub use app_services::AppServices;
 pub use branches::*;
 pub use diff::*;
 pub use files::*;

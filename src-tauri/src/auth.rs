@@ -24,12 +24,9 @@
 //! clears the host's cache and re-prompts once; attempt 3 fails the op.
 //!
 //! Interactive prompting sits behind the [`Prompter`] seam: production uses
-//! [`FePrompter`] (emit + block), unit tests inject a fake. Besides
-//! testability this keeps tauri's `Emitter for AppHandle<Wry>`
-//! monomorphization — and with it the tao/muda window code whose
-//! `TaskDialogIndirect` import needs the comctl32 v6 SxS manifest that app
-//! binaries embed but bare test exes lack (STATUS_ENTRYPOINT_NOT_FOUND on
-//! Windows) — out of the test binary.
+//! [`FePrompter`], which publishes `auth-request` on the backend event bus
+//! and blocks; unit tests inject a fake. Keeping the bus out of the tests
+//! also keeps them hermetic (no subscriber, no timing).
 //!
 //! The credentials callback runs synchronously on a blocking thread
 //! (net-op worker). The FE wait bridges the tokio oneshot through a bare
@@ -40,7 +37,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
-use parking_lot::{Mutex, RwLock};
+use parking_lot::Mutex;
 use serde::Serialize;
 use ts_rs::TS;
 
@@ -107,10 +104,7 @@ type HelperFillFn =
 /// The production prompter, late-bound: [`init`] installs the closure that
 /// performs the actual `auth-request` round-trip (`ask_fe`). Referencing
 /// `ask_fe` only from inside that closure — installed at app startup, never
-/// from tests — keeps tauri's `Emitter for AppHandle<Wry>` monomorphization
-/// (and the tao/muda window code it links, whose `TaskDialogIndirect`
-/// import needs the comctl32 v6 SxS manifest that bare test exes lack)
-/// garbage-collected out of test binaries.
+/// from tests — keeps the bus round-trip out of the test binary.
 static FE_ASK: OnceLock<AskFn> = OnceLock::new();
 
 /// Production prompter: delegates to the [`FE_ASK`] hook.
@@ -137,8 +131,6 @@ pub struct AuthBroker {
     helper_served: Mutex<HashSet<String>>,
     /// op_id → sender woken by `auth_respond`.
     pending: Mutex<HashMap<String, tokio::sync::oneshot::Sender<AuthAnswer>>>,
-    /// Set by `init` from lib.rs setup; `None` in unit tests / headless.
-    app: RwLock<Option<tauri::AppHandle>>,
     counter: AtomicU64,
     /// `git credential fill` seam (see [`HelperFillFn`]).
     helper_fill: HelperFillFn,
@@ -150,7 +142,6 @@ impl AuthBroker {
             cache: Mutex::new(HashMap::new()),
             helper_served: Mutex::new(HashSet::new()),
             pending: Mutex::new(HashMap::new()),
-            app: RwLock::new(None),
             counter: AtomicU64::new(0),
             helper_fill: Box::new(credential_helper::fill),
         }
@@ -164,12 +155,10 @@ pub fn broker() -> &'static Arc<AuthBroker> {
     BROKER.get_or_init(|| Arc::new(AuthBroker::new()))
 }
 
-/// Give the broker the app handle used to emit `auth-request` events and
-/// install the FE prompting hook. Called from lib.rs `.setup(...)`; never
-/// from tests/headless (prompting then fails gracefully with "auth::init
-/// not called").
-pub fn init(app: tauri::AppHandle) {
-    *broker().app.write() = Some(app);
+/// Install the FE prompting hook (publishes `auth-request` on the backend
+/// event bus). Called once at startup; never from tests/headless (prompting
+/// then fails gracefully with "auth::init not called").
+pub fn init() {
     let _ = FE_ASK.set(Box::new(|url: &str, kind: &str, prompt: String| {
         broker().ask_fe(url, kind, prompt)
     }));
@@ -365,26 +354,18 @@ impl AuthBroker {
         )))
     }
 
-    /// Emit `auth-request` and block for `auth_respond`
+    /// Publish an `auth-request` event and block for `auth_respond`
     /// (≤ [`AUTH_TIMEOUT`]). Referenced only by the [`FE_ASK`] closure that
     /// [`init`] installs — never from unit tests (see module docs on
     /// linkage).
     fn ask_fe(&self, url: &str, kind: &str, prompt: String) -> Result<AuthAnswer, String> {
-        let app = self.app.read().clone();
-        let Some(app) = app else {
-            return Err(
-                "interactive authentication unavailable: no app handle (auth::init not called)"
-                    .to_string(),
-            );
-        };
-        use tauri::Emitter;
-
         let op_id = format!(
             "auth-{:x}-{:x}",
             std::process::id(),
             self.counter.fetch_add(1, Ordering::Relaxed)
         );
-        // Register before emitting: an instant FE answer must find a waiter.
+        // Register before publishing: an instant UI answer must find a
+        // waiter.
         let rx = self
             .register_pending(op_id.clone())
             .expect("register_pending always returns a receiver");
@@ -395,9 +376,14 @@ impl AuthBroker {
             kind: kind.to_string(),
             prompt,
         };
-        if let Err(err) = app.emit(AUTH_REQUEST_EVENT, &payload) {
+        let delivered = crate::service::events::global()
+            .publish(crate::service::events::BackendEvent::AuthRequest(payload));
+        if !delivered {
             self.cancel_pending(&op_id);
-            return Err(format!("failed to emit auth-request: {err}"));
+            return Err(
+                "interactive authentication unavailable: no UI connected (auth::init not called)"
+                    .to_string(),
+            );
         }
         self.wait_for_answer(&op_id, rx)
     }
@@ -579,9 +565,8 @@ mod tests {
     }
 
     /// Fake FE prompter: hands out canned answers, records what was asked.
-    /// Keeping tests off [`FePrompter`] keeps tauri's Emitter-for-Wry
-    /// monomorphization (and the windowing stack it links) out of the
-    /// test binary — see module docs.
+    /// Keeping tests off [`FePrompter`] keeps the bus round-trip (and its
+    /// timing) out of the test binary — see module docs.
     struct FakePrompter {
         canned: Mutex<VecDeque<Result<AuthAnswer, String>>>,
         asked: Mutex<Vec<(String, String, String)>>,
