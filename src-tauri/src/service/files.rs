@@ -1,14 +1,12 @@
 use std::path::Path;
 
 use serde::Serialize;
-use tauri::State;
 use ts_rs::TS;
 
 use crate::engine::types::{RepoId, SubmoduleInfo};
-use crate::repo::RepoManager;
 use crate::service::{
     enqueue_mutation, enqueue_read, enqueue_remote_mutation, enqueue_remote_read, finish_op,
-    get_handle,
+    get_handle, AppServices,
 };
 
 // ---------------------------------------------------------------------------
@@ -23,13 +21,12 @@ use crate::service::{
 /// not exist resolves to an empty vec (the editor treats that as "no
 /// marker preview written yet"). Workdir reads need no engine call, so the
 /// repo mutex is not taken.
-#[tauri::command(rename_all = "snake_case")]
 pub async fn repo_read_file(
+    services: &AppServices,
     repo_id: RepoId,
     path: String,
-    state: State<'_, RepoManager>,
 ) -> Result<Vec<u8>, String> {
-    let handle = get_handle(&state, &repo_id)?;
+    let handle = get_handle(&services.repos, &repo_id)?;
     if let Some(remote) = handle.remote() {
         // Remote repos read the workdir over SFTP through the workspace
         // (no engine call needed locally, none needed remotely either).
@@ -49,7 +46,7 @@ pub async fn repo_read_file(
         .await;
     }
     let root = handle.root.clone();
-    tauri::async_runtime::spawn_blocking(move || read_workdir_file(&root, &path))
+    crate::rt::spawn_blocking(move || read_workdir_file(&root, &path))
         .await
         .map_err(|e| format!("read_file task failed: {e}"))?
 }
@@ -300,13 +297,12 @@ fn gitignore_add_sync(root: &Path, pattern: &str) -> Result<(), String> {
 /// the other FS-only commands it does not take the op queue; the watcher /
 /// poller picks the change up. Remote repos write through the engine
 /// (idempotent exact-line dedupe, same rule).
-#[tauri::command(rename_all = "snake_case")]
 pub async fn gitignore_add(
+    services: &AppServices,
     repo_id: RepoId,
     pattern: String,
-    state: State<'_, RepoManager>,
 ) -> Result<(), String> {
-    let handle = get_handle(&state, &repo_id)?;
+    let handle = get_handle(&services.repos, &repo_id)?;
     if let Some(remote) = handle.remote() {
         return finish_op(enqueue_remote_mutation(
             &handle,
@@ -323,13 +319,12 @@ pub async fn gitignore_add(
 /// Applies a builtin gitignore template by name: appends every pattern
 /// (idempotent per line, same rule as `gitignore_add`) under a
 /// `# <name>` comment header in ONE write.
-#[tauri::command(rename_all = "snake_case")]
 pub async fn gitignore_apply_template(
+    services: &AppServices,
     repo_id: RepoId,
     name: String,
-    state: State<'_, RepoManager>,
 ) -> Result<(), String> {
-    let handle = get_handle(&state, &repo_id)?;
+    let handle = get_handle(&services.repos, &repo_id)?;
     let template = gitignore_templates_list()
         .into_iter()
         .find(|t| t.name.eq_ignore_ascii_case(&name))
@@ -372,12 +367,11 @@ pub async fn gitignore_apply_template(
 
 /// List every submodule with checked-out vs recorded state (contracts.md:
 /// `SubmoduleInfo[]`; status strings mirror `git status` submodule wording).
-#[tauri::command(rename_all = "snake_case")]
 pub async fn submodules(
+    services: &AppServices,
     repo_id: RepoId,
-    state: State<'_, RepoManager>,
 ) -> Result<Vec<SubmoduleInfo>, String> {
-    let handle = get_handle(&state, &repo_id)?;
+    let handle = get_handle(&services.repos, &repo_id)?;
     if let Some(remote) = handle.remote() {
         return finish_op(enqueue_remote_read(
             &handle,
@@ -401,15 +395,14 @@ pub async fn submodules(
 /// `git submodule update [--init] [--recursive] <path>` for one submodule.
 /// Network fetches (missing clone / missing target commit) route credential
 /// prompts through the auth broker attributed to this repo.
-#[tauri::command(rename_all = "snake_case")]
 pub async fn submodule_update(
+    services: &AppServices,
     repo_id: RepoId,
     path: String,
     init: bool,
     recursive: bool,
-    state: State<'_, RepoManager>,
 ) -> Result<(), String> {
-    let handle = get_handle(&state, &repo_id)?;
+    let handle = get_handle(&services.repos, &repo_id)?;
     if let Some(remote) = handle.remote() {
         // The remote engine updates all submodules (no per-path argument);
         // the device session brings its own credentials, so no auth broker.
@@ -438,13 +431,12 @@ pub async fn submodule_update(
 
 /// `git submodule sync [path]`: rewrite the submodule URL from `.gitmodules`
 /// into the repository config. `None`/empty `path` syncs all submodules.
-#[tauri::command(rename_all = "snake_case")]
 pub async fn submodule_sync(
+    services: &AppServices,
     repo_id: RepoId,
     path: Option<String>,
-    state: State<'_, RepoManager>,
 ) -> Result<(), String> {
-    let handle = get_handle(&state, &repo_id)?;
+    let handle = get_handle(&services.repos, &repo_id)?;
     if let Some(remote) = handle.remote() {
         // The remote engine syncs all submodules (no per-path argument);
         // `recursive: false` mirrors the local non-recursive sync.
@@ -468,8 +460,7 @@ pub async fn submodule_sync(
 }
 
 /// The curated builtin gitignore templates (`{name, description, patterns}`).
-#[tauri::command(rename_all = "snake_case")]
-pub fn gitignore_templates() -> Vec<GitignoreTemplate> {
+pub fn gitignore_templates(_services: &AppServices) -> Vec<GitignoreTemplate> {
     gitignore_templates_list()
 }
 

@@ -1,25 +1,21 @@
-use tauri::State;
-
 use crate::engine::types::{
     BisectLogEntry, BisectMark, BisectState, ConflictFile, ConflictResolution, MergeOptions,
     MergeResult, RebaseState, RebaseStep, RepoId, ResetKind,
 };
-use crate::repo::RepoManager;
 use crate::service::{
     enqueue_mutation, enqueue_read, enqueue_remote_mutation, enqueue_remote_read, finish_op,
-    get_handle,
+    get_handle, AppServices,
 };
 
 // ---------- M3: power + safety commands ----------
 
-#[tauri::command(rename_all = "snake_case")]
 pub async fn merge_branch(
+    services: &AppServices,
     repo_id: RepoId,
     ref_name: String,
     opts: MergeOptions,
-    state: State<'_, RepoManager>,
 ) -> Result<MergeResult, String> {
-    let handle = get_handle(&state, &repo_id)?;
+    let handle = get_handle(&services.repos, &repo_id)?;
     if let Some(remote) = handle.remote() {
         return finish_op(enqueue_remote_mutation(
             &handle,
@@ -40,9 +36,8 @@ pub async fn merge_branch(
     .await
 }
 
-#[tauri::command(rename_all = "snake_case")]
-pub async fn merge_abort(repo_id: RepoId, state: State<'_, RepoManager>) -> Result<(), String> {
-    let handle = get_handle(&state, &repo_id)?;
+pub async fn merge_abort(services: &AppServices, repo_id: RepoId) -> Result<(), String> {
+    let handle = get_handle(&services.repos, &repo_id)?;
     if let Some(remote) = handle.remote() {
         return finish_op(enqueue_remote_mutation(
             &handle,
@@ -63,9 +58,8 @@ pub async fn merge_abort(repo_id: RepoId, state: State<'_, RepoManager>) -> Resu
     .await
 }
 
-#[tauri::command(rename_all = "snake_case")]
-pub async fn sequencer_abort(repo_id: RepoId, state: State<'_, RepoManager>) -> Result<(), String> {
-    let handle = get_handle(&state, &repo_id)?;
+pub async fn sequencer_abort(services: &AppServices, repo_id: RepoId) -> Result<(), String> {
+    let handle = get_handle(&services.repos, &repo_id)?;
     if let Some(remote) = handle.remote() {
         return finish_op(enqueue_remote_mutation(
             &handle,
@@ -86,12 +80,11 @@ pub async fn sequencer_abort(repo_id: RepoId, state: State<'_, RepoManager>) -> 
     .await
 }
 
-#[tauri::command(rename_all = "snake_case")]
 pub async fn conflicts(
+    services: &AppServices,
     repo_id: RepoId,
-    state: State<'_, RepoManager>,
 ) -> Result<Vec<ConflictFile>, String> {
-    let handle = get_handle(&state, &repo_id)?;
+    let handle = get_handle(&services.repos, &repo_id)?;
     if let Some(remote) = handle.remote() {
         return finish_op(enqueue_remote_read(
             &handle,
@@ -109,15 +102,14 @@ pub async fn conflicts(
     .await
 }
 
-#[tauri::command(rename_all = "snake_case")]
 pub async fn conflict_resolve(
+    services: &AppServices,
     repo_id: RepoId,
     path: String,
     resolution: ConflictResolution,
     custom_content: Option<Vec<u8>>,
-    state: State<'_, RepoManager>,
 ) -> Result<(), String> {
-    let handle = get_handle(&state, &repo_id)?;
+    let handle = get_handle(&services.repos, &repo_id)?;
     if let Some(remote) = handle.remote() {
         return finish_op(enqueue_remote_mutation(
             &handle,
@@ -140,13 +132,12 @@ pub async fn conflict_resolve(
     .await
 }
 
-#[tauri::command(rename_all = "snake_case")]
 pub async fn cherry_pick(
+    services: &AppServices,
     repo_id: RepoId,
     shas: Vec<String>,
-    state: State<'_, RepoManager>,
 ) -> Result<MergeResult, String> {
-    let handle = get_handle(&state, &repo_id)?;
+    let handle = get_handle(&services.repos, &repo_id)?;
     if let Some(remote) = handle.remote() {
         // Local path commits as it goes; `no_commit: false` mirrors that.
         return finish_op(enqueue_remote_mutation(
@@ -168,13 +159,12 @@ pub async fn cherry_pick(
     .await
 }
 
-#[tauri::command(rename_all = "snake_case")]
 pub async fn revert(
+    services: &AppServices,
     repo_id: RepoId,
     shas: Vec<String>,
-    state: State<'_, RepoManager>,
 ) -> Result<MergeResult, String> {
-    let handle = get_handle(&state, &repo_id)?;
+    let handle = get_handle(&services.repos, &repo_id)?;
     if let Some(remote) = handle.remote() {
         // Local path commits as it goes; `no_commit: false` mirrors that.
         return finish_op(enqueue_remote_mutation(
@@ -196,14 +186,13 @@ pub async fn revert(
     .await
 }
 
-#[tauri::command(rename_all = "snake_case")]
 pub async fn reset(
+    services: &AppServices,
     repo_id: RepoId,
     kind: ResetKind,
     to: String,
-    state: State<'_, RepoManager>,
 ) -> Result<(), String> {
-    let handle = get_handle(&state, &repo_id)?;
+    let handle = get_handle(&services.repos, &repo_id)?;
     if let Some(remote) = handle.remote() {
         return finish_op(enqueue_remote_mutation(
             &handle,
@@ -224,14 +213,13 @@ pub async fn reset(
     .await
 }
 
-#[tauri::command(rename_all = "snake_case")]
 pub async fn rebase_start(
+    services: &AppServices,
     repo_id: RepoId,
     plan: Vec<RebaseStep>,
     onto: Option<String>,
-    state: State<'_, RepoManager>,
 ) -> Result<RebaseState, String> {
-    let handle = get_handle(&state, &repo_id)?;
+    let handle = get_handle(&services.repos, &repo_id)?;
     if let Some(remote) = handle.remote() {
         return finish_op(enqueue_remote_mutation(
             &handle,
@@ -252,12 +240,8 @@ pub async fn rebase_start(
     .await
 }
 
-#[tauri::command(rename_all = "snake_case")]
-pub async fn rebase_state(
-    repo_id: RepoId,
-    state: State<'_, RepoManager>,
-) -> Result<RebaseState, String> {
-    let handle = get_handle(&state, &repo_id)?;
+pub async fn rebase_state(services: &AppServices, repo_id: RepoId) -> Result<RebaseState, String> {
+    let handle = get_handle(&services.repos, &repo_id)?;
     if let Some(remote) = handle.remote() {
         return finish_op(enqueue_remote_read(
             &handle,
@@ -275,12 +259,11 @@ pub async fn rebase_state(
     .await
 }
 
-#[tauri::command(rename_all = "snake_case")]
 pub async fn rebase_continue(
+    services: &AppServices,
     repo_id: RepoId,
-    state: State<'_, RepoManager>,
 ) -> Result<RebaseState, String> {
-    let handle = get_handle(&state, &repo_id)?;
+    let handle = get_handle(&services.repos, &repo_id)?;
     if let Some(remote) = handle.remote() {
         return finish_op(enqueue_remote_mutation(
             &handle,
@@ -301,9 +284,8 @@ pub async fn rebase_continue(
     .await
 }
 
-#[tauri::command(rename_all = "snake_case")]
-pub async fn rebase_abort(repo_id: RepoId, state: State<'_, RepoManager>) -> Result<(), String> {
-    let handle = get_handle(&state, &repo_id)?;
+pub async fn rebase_abort(services: &AppServices, repo_id: RepoId) -> Result<(), String> {
+    let handle = get_handle(&services.repos, &repo_id)?;
     if let Some(remote) = handle.remote() {
         return finish_op(enqueue_remote_mutation(
             &handle,
@@ -326,14 +308,13 @@ pub async fn rebase_abort(repo_id: RepoId, state: State<'_, RepoManager>) -> Res
 
 // ---------- M10: bisect / describe / autosquash ----------
 
-#[tauri::command(rename_all = "snake_case")]
 pub async fn bisect_start(
+    services: &AppServices,
     repo_id: RepoId,
     bad: Option<String>,
     good: Option<String>,
-    state: State<'_, RepoManager>,
 ) -> Result<BisectState, String> {
-    let handle = get_handle(&state, &repo_id)?;
+    let handle = get_handle(&services.repos, &repo_id)?;
     if let Some(remote) = handle.remote() {
         return finish_op(enqueue_remote_mutation(
             &handle,
@@ -354,12 +335,8 @@ pub async fn bisect_start(
     .await
 }
 
-#[tauri::command(rename_all = "snake_case")]
-pub async fn bisect_state(
-    repo_id: RepoId,
-    state: State<'_, RepoManager>,
-) -> Result<BisectState, String> {
-    let handle = get_handle(&state, &repo_id)?;
+pub async fn bisect_state(services: &AppServices, repo_id: RepoId) -> Result<BisectState, String> {
+    let handle = get_handle(&services.repos, &repo_id)?;
     if let Some(remote) = handle.remote() {
         return finish_op(enqueue_remote_read(
             &handle,
@@ -377,13 +354,12 @@ pub async fn bisect_state(
     .await
 }
 
-#[tauri::command(rename_all = "snake_case")]
 pub async fn bisect_mark(
+    services: &AppServices,
     repo_id: RepoId,
     mark: BisectMark,
-    state: State<'_, RepoManager>,
 ) -> Result<BisectState, String> {
-    let handle = get_handle(&state, &repo_id)?;
+    let handle = get_handle(&services.repos, &repo_id)?;
     if let Some(remote) = handle.remote() {
         // Local path marks HEAD; `rev: None` mirrors that.
         return finish_op(enqueue_remote_mutation(
@@ -405,9 +381,8 @@ pub async fn bisect_mark(
     .await
 }
 
-#[tauri::command(rename_all = "snake_case")]
-pub async fn bisect_reset(repo_id: RepoId, state: State<'_, RepoManager>) -> Result<(), String> {
-    let handle = get_handle(&state, &repo_id)?;
+pub async fn bisect_reset(services: &AppServices, repo_id: RepoId) -> Result<(), String> {
+    let handle = get_handle(&services.repos, &repo_id)?;
     if let Some(remote) = handle.remote() {
         return finish_op(enqueue_remote_mutation(
             &handle,
@@ -429,9 +404,8 @@ pub async fn bisect_reset(repo_id: RepoId, state: State<'_, RepoManager>) -> Res
 }
 
 /// `git worktree prune`; returns the number of pruned worktrees.
-#[tauri::command(rename_all = "snake_case")]
-pub async fn worktree_prune(repo_id: RepoId, state: State<'_, RepoManager>) -> Result<u32, String> {
-    let handle = get_handle(&state, &repo_id)?;
+pub async fn worktree_prune(services: &AppServices, repo_id: RepoId) -> Result<u32, String> {
+    let handle = get_handle(&services.repos, &repo_id)?;
     if let Some(remote) = handle.remote() {
         return finish_op(enqueue_remote_mutation(
             &handle,
@@ -458,12 +432,11 @@ pub async fn worktree_prune(repo_id: RepoId, state: State<'_, RepoManager>) -> R
 
 /// Recorded mark history for a bisect: the live run's log, else the last
 /// archived run (read).
-#[tauri::command(rename_all = "snake_case")]
 pub async fn bisect_log(
+    services: &AppServices,
     repo_id: RepoId,
-    state: State<'_, RepoManager>,
 ) -> Result<Vec<BisectLogEntry>, String> {
-    let handle = get_handle(&state, &repo_id)?;
+    let handle = get_handle(&services.repos, &repo_id)?;
     if let Some(remote) = handle.remote() {
         return finish_op(enqueue_remote_read(
             &handle,

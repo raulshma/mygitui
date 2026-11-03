@@ -1,26 +1,19 @@
-use tauri::State;
-
 use crate::engine::git_engine::EngineError;
 use crate::engine::types::{
     BranchInfo, BranchTrashEntry, CommitSignature, MergetoolInfo, MergetoolResult, RebaseStep,
     ReflogEntry, RemoteBranchInfo, RepoId, TagInfo,
 };
-use crate::repo::RepoManager;
 use crate::service::{
     engine_err, enqueue_mutation, enqueue_read, enqueue_remote_mutation, enqueue_remote_read,
-    finish_op, get_handle,
+    finish_op, get_handle, AppServices,
 };
 
 /// Entry cap for the remote reflog read (the remote engine has no local
 /// `name` argument; see the `reflog` command's remote branch).
 const REMOTE_REFLOG_LIMIT: usize = 500;
 
-#[tauri::command(rename_all = "snake_case")]
-pub async fn branches(
-    repo_id: RepoId,
-    state: State<'_, RepoManager>,
-) -> Result<Vec<BranchInfo>, String> {
-    let handle = get_handle(&state, &repo_id)?;
+pub async fn branches(services: &AppServices, repo_id: RepoId) -> Result<Vec<BranchInfo>, String> {
+    let handle = get_handle(&services.repos, &repo_id)?;
     if let Some(remote) = handle.remote() {
         return finish_op(enqueue_remote_read(
             &handle,
@@ -38,15 +31,14 @@ pub async fn branches(
     .await
 }
 
-#[tauri::command(rename_all = "snake_case")]
 pub async fn branch_create(
+    services: &AppServices,
     repo_id: RepoId,
     name: String,
     from: Option<String>,
     checkout: bool,
-    state: State<'_, RepoManager>,
 ) -> Result<(), String> {
-    let handle = get_handle(&state, &repo_id)?;
+    let handle = get_handle(&services.repos, &repo_id)?;
     if let Some(remote) = handle.remote() {
         return finish_op(enqueue_remote_mutation(
             &handle,
@@ -67,14 +59,13 @@ pub async fn branch_create(
     .await
 }
 
-#[tauri::command(rename_all = "snake_case")]
 pub async fn branch_switch(
+    services: &AppServices,
     repo_id: RepoId,
     name: String,
     force: bool,
-    state: State<'_, RepoManager>,
 ) -> Result<(), String> {
-    let handle = get_handle(&state, &repo_id)?;
+    let handle = get_handle(&services.repos, &repo_id)?;
     if let Some(remote) = handle.remote() {
         return finish_op(enqueue_remote_mutation(
             &handle,
@@ -96,14 +87,13 @@ pub async fn branch_switch(
 }
 
 /// `r#into` unraws to the IPC arg key `into` (contracts.md M2).
-#[tauri::command(rename_all = "snake_case")]
 pub async fn branch_is_merged(
+    services: &AppServices,
     repo_id: RepoId,
     name: String,
     r#into: String,
-    state: State<'_, RepoManager>,
 ) -> Result<bool, String> {
-    let handle = get_handle(&state, &repo_id)?;
+    let handle = get_handle(&services.repos, &repo_id)?;
     if let Some(remote) = handle.remote() {
         return finish_op(enqueue_remote_read(
             &handle,
@@ -121,14 +111,13 @@ pub async fn branch_is_merged(
     .await
 }
 
-#[tauri::command(rename_all = "snake_case")]
 pub async fn branch_delete(
+    services: &AppServices,
     repo_id: RepoId,
     name: String,
     force: bool,
-    state: State<'_, RepoManager>,
 ) -> Result<(), String> {
-    let handle = get_handle(&state, &repo_id)?;
+    let handle = get_handle(&services.repos, &repo_id)?;
     if let Some(remote) = handle.remote() {
         return finish_op(enqueue_remote_mutation(
             &handle,
@@ -149,14 +138,13 @@ pub async fn branch_delete(
     .await
 }
 
-#[tauri::command(rename_all = "snake_case")]
 pub async fn branch_rename(
+    services: &AppServices,
     repo_id: RepoId,
     old: String,
     new: String,
-    state: State<'_, RepoManager>,
 ) -> Result<(), String> {
-    let handle = get_handle(&state, &repo_id)?;
+    let handle = get_handle(&services.repos, &repo_id)?;
     if let Some(remote) = handle.remote() {
         return finish_op(enqueue_remote_mutation(
             &handle,
@@ -177,15 +165,14 @@ pub async fn branch_rename(
     .await
 }
 
-#[tauri::command(rename_all = "snake_case")]
 pub async fn tag_create(
+    services: &AppServices,
     repo_id: RepoId,
     name: String,
     target: Option<String>,
     message: Option<String>,
-    state: State<'_, RepoManager>,
 ) -> Result<(), String> {
-    let handle = get_handle(&state, &repo_id)?;
+    let handle = get_handle(&services.repos, &repo_id)?;
     if let Some(remote) = handle.remote() {
         return finish_op(enqueue_remote_mutation(
             &handle,
@@ -206,13 +193,12 @@ pub async fn tag_create(
     .await
 }
 
-#[tauri::command(rename_all = "snake_case")]
 pub async fn tag_delete(
+    services: &AppServices,
     repo_id: RepoId,
     name: String,
-    state: State<'_, RepoManager>,
 ) -> Result<(), String> {
-    let handle = get_handle(&state, &repo_id)?;
+    let handle = get_handle(&services.repos, &repo_id)?;
     if let Some(remote) = handle.remote() {
         return finish_op(enqueue_remote_mutation(
             &handle,
@@ -233,12 +219,8 @@ pub async fn tag_delete(
     .await
 }
 
-#[tauri::command(rename_all = "snake_case")]
-pub async fn tag_list(
-    repo_id: RepoId,
-    state: State<'_, RepoManager>,
-) -> Result<Vec<TagInfo>, String> {
-    let handle = get_handle(&state, &repo_id)?;
+pub async fn tag_list(services: &AppServices, repo_id: RepoId) -> Result<Vec<TagInfo>, String> {
+    let handle = get_handle(&services.repos, &repo_id)?;
     if let Some(remote) = handle.remote() {
         return finish_op(enqueue_remote_read(
             &handle,
@@ -250,7 +232,7 @@ pub async fn tag_list(
     }
     let engine = handle.engine();
     let repo = handle.repo()?;
-    tauri::async_runtime::spawn_blocking(move || {
+    crate::rt::spawn_blocking(move || {
         let repo = repo.lock();
         engine.tag_list(&repo).map_err(engine_err)
     })
@@ -258,12 +240,11 @@ pub async fn tag_list(
     .map_err(|e| format!("tag_list task failed: {e}"))?
 }
 
-#[tauri::command(rename_all = "snake_case")]
 pub async fn remote_branches(
+    services: &AppServices,
     repo_id: RepoId,
-    state: State<'_, RepoManager>,
 ) -> Result<Vec<RemoteBranchInfo>, String> {
-    let handle = get_handle(&state, &repo_id)?;
+    let handle = get_handle(&services.repos, &repo_id)?;
     if let Some(remote) = handle.remote() {
         return finish_op(enqueue_remote_read(
             &handle,
@@ -275,7 +256,7 @@ pub async fn remote_branches(
     }
     let engine = handle.engine();
     let repo = handle.repo()?;
-    tauri::async_runtime::spawn_blocking(move || {
+    crate::rt::spawn_blocking(move || {
         let repo = repo.lock();
         engine.remote_branches(&repo).map_err(engine_err)
     })
@@ -283,15 +264,14 @@ pub async fn remote_branches(
     .map_err(|e| format!("remote_branches task failed: {e}"))?
 }
 
-#[tauri::command(rename_all = "snake_case")]
 pub async fn branch_checkout_remote(
+    services: &AppServices,
     repo_id: RepoId,
     remote: String,
     name: String,
     new_local: Option<String>,
-    state: State<'_, RepoManager>,
 ) -> Result<String, String> {
-    let handle = get_handle(&state, &repo_id)?;
+    let handle = get_handle(&services.repos, &repo_id)?;
     if let Some(remote_handle) = handle.remote() {
         // `remote` here is the IPC arg (the remote's config name), so the
         // handle binding is `remote_handle`.
@@ -316,15 +296,14 @@ pub async fn branch_checkout_remote(
 
 /// Create a signed annotated tag via the git CLI (`git tag -s`; libgit2
 /// cannot sign). Runs hooks/GPG natively.
-#[tauri::command(rename_all = "snake_case")]
 pub async fn tag_create_signed(
+    services: &AppServices,
     repo_id: RepoId,
     name: String,
     target: Option<String>,
     message: String,
-    state: State<'_, RepoManager>,
 ) -> Result<(), String> {
-    let handle = get_handle(&state, &repo_id)?;
+    let handle = get_handle(&services.repos, &repo_id)?;
     if let Some(remote) = handle.remote() {
         // The device's own git + gpg sign the tag (same CLI semantics).
         return finish_op(enqueue_remote_mutation(
@@ -350,12 +329,11 @@ pub async fn tag_create_signed(
 }
 
 /// Configured external merge tools (pure config read).
-#[tauri::command(rename_all = "snake_case")]
 pub async fn mergetool_info(
+    services: &AppServices,
     repo_id: RepoId,
-    state: State<'_, RepoManager>,
 ) -> Result<MergetoolInfo, String> {
-    let handle = get_handle(&state, &repo_id)?;
+    let handle = get_handle(&services.repos, &repo_id)?;
     if handle.remote().is_some() {
         return Err("mergetool_info is not supported for remote projects".into());
     }
@@ -370,14 +348,13 @@ pub async fn mergetool_info(
 /// op queue: the external tool runs interactively for minutes, and blocking
 /// every repo op behind it would freeze the app (watcher events still fire
 /// when the tool writes files).
-#[tauri::command(rename_all = "snake_case")]
 pub async fn mergetool_run(
+    services: &AppServices,
     repo_id: RepoId,
     path: String,
     tool: Option<String>,
-    state: State<'_, RepoManager>,
 ) -> Result<MergetoolResult, String> {
-    let handle = get_handle(&state, &repo_id)?;
+    let handle = get_handle(&services.repos, &repo_id)?;
     if handle.remote().is_some() {
         // An interactive local merge tool cannot run against a workdir on
         // another device; refuse explicitly instead of failing on the
@@ -385,7 +362,7 @@ pub async fn mergetool_run(
         return Err("mergetool_run is not supported for remote projects".into());
     }
     let workdir = handle.root.clone();
-    tauri::async_runtime::spawn_blocking(move || {
+    crate::rt::spawn_blocking(move || {
         crate::mergetool::mergetool_run(&workdir, &path, tool.as_deref())
     })
     .await
@@ -396,13 +373,12 @@ pub async fn mergetool_run(
 
 /// Verification status of one commit's signature (queued read, like the
 /// other engine reads).
-#[tauri::command(rename_all = "snake_case")]
 pub async fn commit_signature(
+    services: &AppServices,
     repo_id: RepoId,
     sha: String,
-    state: State<'_, RepoManager>,
 ) -> Result<CommitSignature, String> {
-    let handle = get_handle(&state, &repo_id)?;
+    let handle = get_handle(&services.repos, &repo_id)?;
     if let Some(remote) = handle.remote() {
         return finish_op(enqueue_remote_read(
             &handle,
@@ -421,12 +397,11 @@ pub async fn commit_signature(
 }
 
 /// Branches preserved under `refs/mygitui/trash/*`, newest first (read).
-#[tauri::command(rename_all = "snake_case")]
 pub async fn branch_trash_list(
+    services: &AppServices,
     repo_id: RepoId,
-    state: State<'_, RepoManager>,
 ) -> Result<Vec<BranchTrashEntry>, String> {
-    let handle = get_handle(&state, &repo_id)?;
+    let handle = get_handle(&services.repos, &repo_id)?;
     if let Some(remote) = handle.remote() {
         return finish_op(enqueue_remote_read(
             &handle,
@@ -445,14 +420,13 @@ pub async fn branch_trash_list(
 }
 
 /// Restore a trashed branch (optionally renamed); returns the branch name.
-#[tauri::command(rename_all = "snake_case")]
 pub async fn branch_trash_restore(
+    services: &AppServices,
     repo_id: RepoId,
     id: String,
     new_name: Option<String>,
-    state: State<'_, RepoManager>,
 ) -> Result<String, String> {
-    let handle = get_handle(&state, &repo_id)?;
+    let handle = get_handle(&services.repos, &repo_id)?;
     if let Some(remote) = handle.remote() {
         // The remote engine's restore takes no rename; compose the rename
         // from branch_rename. The entry id is `<name>-<timestamp>`, so the
@@ -490,13 +464,12 @@ pub async fn branch_trash_restore(
     .await
 }
 
-#[tauri::command(rename_all = "snake_case")]
 pub async fn reflog(
+    services: &AppServices,
     repo_id: RepoId,
     name: Option<String>,
-    state: State<'_, RepoManager>,
 ) -> Result<Vec<ReflogEntry>, String> {
-    let handle = get_handle(&state, &repo_id)?;
+    let handle = get_handle(&services.repos, &repo_id)?;
     if let Some(remote) = handle.remote() {
         // The remote engine reads HEAD's reflog only; a specific ref gets a
         // clear error instead of silently wrong data.
@@ -524,13 +497,12 @@ pub async fn reflog(
 }
 
 /// `git describe --tags` for a commit-ish.
-#[tauri::command(rename_all = "snake_case")]
 pub async fn describe(
+    services: &AppServices,
     repo_id: RepoId,
     spec: String,
-    state: State<'_, RepoManager>,
 ) -> Result<String, String> {
-    let handle = get_handle(&state, &repo_id)?;
+    let handle = get_handle(&services.repos, &repo_id)?;
     if let Some(remote) = handle.remote() {
         return finish_op(enqueue_remote_read(
             &handle,
@@ -552,13 +524,12 @@ pub async fn describe(
 }
 
 /// Builds an autosquash rebase plan for `base..HEAD` (feeds `rebase_start`).
-#[tauri::command(rename_all = "snake_case")]
 pub async fn autosquash_plan(
+    services: &AppServices,
     repo_id: RepoId,
     base: String,
-    state: State<'_, RepoManager>,
 ) -> Result<Vec<RebaseStep>, String> {
-    let handle = get_handle(&state, &repo_id)?;
+    let handle = get_handle(&services.repos, &repo_id)?;
     if let Some(remote) = handle.remote() {
         return finish_op(enqueue_remote_read(
             &handle,

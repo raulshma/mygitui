@@ -13,6 +13,8 @@
 
 use keyring::Entry;
 
+use crate::service::AppServices;
+
 /// Service name under which every mygitui secret is stored.
 const SERVICE: &str = "mygitui";
 
@@ -27,8 +29,7 @@ fn entry(key: &str) -> Result<Entry, String> {
 /// Read a secret from the OS keyring.
 ///
 /// Returns `Ok(None)` when no entry exists for `key` (never set, or deleted).
-#[tauri::command]
-pub fn secrets_get(key: String) -> Result<Option<String>, String> {
+pub fn secrets_get(_services: &AppServices, key: String) -> Result<Option<String>, String> {
     match entry(&key)?.get_password() {
         Ok(value) => Ok(Some(value)),
         Err(keyring::Error::NoEntry) => Ok(None),
@@ -37,8 +38,7 @@ pub fn secrets_get(key: String) -> Result<Option<String>, String> {
 }
 
 /// Store (create or overwrite) a secret in the OS keyring.
-#[tauri::command]
-pub fn secrets_set(key: String, value: String) -> Result<(), String> {
+pub fn secrets_set(_services: &AppServices, key: String, value: String) -> Result<(), String> {
     entry(&key)?
         .set_password(&value)
         .map_err(|e| format!("failed to store secret: {e}"))
@@ -47,8 +47,7 @@ pub fn secrets_set(key: String, value: String) -> Result<(), String> {
 /// Delete a secret from the OS keyring.
 ///
 /// Idempotent: deleting a key that does not exist is `Ok(())`.
-#[tauri::command]
-pub fn secrets_delete(key: String) -> Result<(), String> {
+pub fn secrets_delete(_services: &AppServices, key: String) -> Result<(), String> {
     match entry(&key)?.delete_credential() {
         Ok(()) => Ok(()),
         Err(keyring::Error::NoEntry) => Ok(()),
@@ -62,6 +61,14 @@ mod tests {
 
     /// Reserved throwaway key used to probe backend availability.
     const PROBE_KEY: &str = "test/__backend_probe__";
+
+    /// Service bag rooted in one temp dir (the keyring path uses none of
+    /// its registries; the uniform call shape still needs one).
+    fn test_services() -> AppServices {
+        AppServices::in_dir(
+            &std::env::temp_dir().join(format!("mygitui-keyring-{}", std::process::id())),
+        )
+    }
 
     /// Whether this environment has a usable OS keyring backend.
     ///
@@ -102,13 +109,15 @@ mod tests {
         if skip_without_backend() {
             return;
         }
+        let services = test_services();
         let key = "test/roundtrip".to_string();
-        secrets_set(key.clone(), "s3cret-valu3".to_string()).expect("set should succeed");
+        secrets_set(&services, key.clone(), "s3cret-valu3".to_string())
+            .expect("set should succeed");
         assert_eq!(
-            secrets_get(key.clone()).expect("get after set should succeed"),
+            secrets_get(&services, key.clone()).expect("get after set should succeed"),
             Some("s3cret-valu3".to_string())
         );
-        secrets_delete(key).expect("cleanup delete should succeed");
+        secrets_delete(&services, key).expect("cleanup delete should succeed");
     }
 
     #[test]
@@ -116,11 +125,12 @@ mod tests {
         if skip_without_backend() {
             return;
         }
+        let services = test_services();
         let key = "test/never_set".to_string();
         // Ensure it is absent even if a previous run left it behind.
-        secrets_delete(key.clone()).expect("pre-clean delete should succeed");
+        secrets_delete(&services, key.clone()).expect("pre-clean delete should succeed");
         assert_eq!(
-            secrets_get(key).expect("get of missing secret should succeed"),
+            secrets_get(&services, key).expect("get of missing secret should succeed"),
             None
         );
     }
@@ -130,14 +140,15 @@ mod tests {
         if skip_without_backend() {
             return;
         }
+        let services = test_services();
         let key = "test/delete".to_string();
-        secrets_set(key.clone(), "doomed".to_string()).expect("set should succeed");
-        secrets_delete(key.clone()).expect("delete should succeed");
+        secrets_set(&services, key.clone(), "doomed".to_string()).expect("set should succeed");
+        secrets_delete(&services, key.clone()).expect("delete should succeed");
         assert_eq!(
-            secrets_get(key.clone()).expect("get after delete should succeed"),
+            secrets_get(&services, key.clone()).expect("get after delete should succeed"),
             None
         );
         // Deleting again is idempotent, not an error.
-        secrets_delete(key).expect("delete of missing secret should succeed");
+        secrets_delete(&services, key).expect("delete of missing secret should succeed");
     }
 }

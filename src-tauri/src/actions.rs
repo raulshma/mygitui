@@ -9,10 +9,11 @@
 //! only the emission stops (one truncation marker is emitted at the cap).
 //!
 //! Design mirrors `ops.rs`: the emitter is abstracted behind the
-//! [`ActionSink`] trait ([`TauriActionSink`] in production, a collector in
-//! tests), so the runner compiles and tests headless without an
-//! `AppHandle`. A process-global [`ActionRegistry`] (tauri-managed state)
-//! tracks live children for cancellation; run ids are `<counter in hex>`.
+//! [`ActionSink`] trait ([`BusActionSink`] in production, a collector in
+//! tests), so the runner compiles and tests headless without a UI handle.
+//! A process-global [`ActionRegistry`] (owned by
+//! [`crate::service::AppServices`]) tracks live children for cancellation;
+//! run ids are `<counter in hex>`.
 //!
 //! Concurrency: at most [`MAX_CONCURRENT_PER_REPO`] actions per repository
 //! (the command rejects with an error past that). Each action runs on its
@@ -34,7 +35,12 @@ use parking_lot::Mutex;
 use serde::Serialize;
 use ts_rs::TS;
 
-/// `action-output` event name (contracts.md, Events M4).
+use crate::service::events::{global, BackendEvent};
+
+/// `action-output` event name (contracts.md, Events M4). The payload is
+/// delivered as [`BackendEvent::ActionOutput`]; the name documents the
+/// contracts.md shape the bus variant stands for.
+#[allow(dead_code)]
 pub const ACTION_OUTPUT_EVENT: &str = "action-output";
 
 /// Max actions running at once per repository (further `action_run` calls
@@ -86,27 +92,13 @@ pub trait ActionSink: Send + Sync {
     fn emit(&self, event: &ActionOutput);
 }
 
-/// Production sink: emits [`ActionOutput`] on the app handle.
-pub struct TauriActionSink {
-    app: tauri::AppHandle,
-}
+/// Production sink: publishes [`ActionOutput`] on the process-wide backend
+/// event bus.
+pub struct BusActionSink;
 
-impl TauriActionSink {
-    pub fn new(app: tauri::AppHandle) -> Self {
-        Self { app }
-    }
-}
-
-impl ActionSink for TauriActionSink {
+impl ActionSink for BusActionSink {
     fn emit(&self, event: &ActionOutput) {
-        use tauri::Emitter;
-        if let Err(err) = self.app.emit(ACTION_OUTPUT_EVENT, event) {
-            tracing::warn!(
-                run = %event.run_id,
-                error = %err,
-                "emit action-output failed"
-            );
-        }
+        global().publish(BackendEvent::ActionOutput(event.clone()));
     }
 }
 
@@ -162,8 +154,9 @@ struct RunEntry {
     done: bool,
 }
 
-/// Process-global registry of action runs (tauri-managed state): run id
-/// allocation, cancellation, per-repo concurrency accounting.
+/// Process-global registry of action runs (owned by
+/// [`crate::service::AppServices`]): run id allocation, cancellation,
+/// per-repo concurrency accounting.
 #[derive(Default)]
 pub struct ActionRegistry {
     inner: Arc<RegistryInner>,

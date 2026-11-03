@@ -11,7 +11,7 @@
 //!
 //! Sync surface: like libgit2, all methods are synchronous and run on
 //! blocking threads (op queue workers); each bridges into the async russh
-//! world with `tauri::async_runtime::block_on`.
+//! world with `crate::rt::block_on`.
 
 use std::sync::Arc;
 
@@ -88,7 +88,7 @@ impl RemoteGitEngine {
              printf '%s\\n%s\\n%s\\n' \"$top\" \"$bare\" \"$gdir\"",
             q = quoted
         );
-        let out = tauri::async_runtime::block_on(session.exec(&cmd, DEFAULT_EXEC_TIMEOUT))?;
+        let out = crate::rt::block_on(session.exec(&cmd, DEFAULT_EXEC_TIMEOUT))?;
         if out.exit_code == 64 {
             return Err(format!("path not found on device: {path}"));
         }
@@ -112,7 +112,7 @@ impl RemoteGitEngine {
     // ---------- exec helpers (sync bridge) ----------
 
     fn block<T>(&self, fut: impl std::future::Future<Output = T>) -> T {
-        tauri::async_runtime::block_on(fut)
+        crate::rt::block_on(fut)
     }
 
     /// Build a `git` command line rooted at the repo.

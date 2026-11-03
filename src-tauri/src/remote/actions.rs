@@ -1,6 +1,6 @@
 //! Remote action runs: execute project scripts on the device over SSH exec,
-//! streaming output through the same `action-output` events the local
-//! Actions panel consumes.
+//! streaming output through the same `ActionOutput` events the local Actions
+//! panel consumes.
 //!
 //! Cancellation: flipping the run's flag makes the streaming loop drop the
 //! exec channel; the remote process gets the connection-closed SIGHUP the
@@ -18,7 +18,8 @@ use crate::remote::engine::RemoteGitEngine;
 use crate::remote::parsers::redact_prompt;
 use crate::remote::quoting::shell_quote;
 
-/// Process-global registry of remote action runs (tauri-managed state).
+/// Process-global registry of remote action runs (owned by
+/// [`AppServices::remote_actions`](crate::service::AppServices)).
 #[derive(Default)]
 pub struct RemoteActionRegistry {
     inner: Arc<RegistryInner>,
@@ -64,7 +65,7 @@ impl RemoteActionRegistry {
                 // Same trust model as local actions: the command comes from
                 // the user's own action config; the workdir is quoted.
                 let cmd = format!("cd {} && ({})", shell_quote(&git.root), command);
-                let result = tauri::async_runtime::block_on(git.session.exec_stream(
+                let result = crate::rt::block_on(git.session.exec_stream(
                     &cmd,
                     std::time::Duration::from_secs(60 * 60),
                     |_is_stderr, line| {

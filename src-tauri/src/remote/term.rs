@@ -1,6 +1,6 @@
 //! Remote terminal sessions: SSH shell channels wired to the same
-//! `pty-output` / `pty-exit` events the local PTY panel consumes, so
-//! `TerminalPanel.svelte` works unchanged against a device shell.
+//! `PtyOutput` / `PtyExit` events the local PTY panel consumes, so the
+//! terminal panel works unchanged against a device shell.
 //!
 //! Each session splits the russh channel into read/write halves: the reader
 //! task streams decoded output chunks (16 ms coalesce window like the local
@@ -21,7 +21,8 @@ use ts_rs::TS;
 
 use crate::engine::types::RepoId;
 use crate::pty::{PtyExit, PtyOutput};
-use crate::repo::RepoManager;
+use crate::service::events::{global, BackendEvent};
+use crate::service::AppServices;
 
 /// Max live remote shells (mirrors `pty::MAX_SESSIONS`).
 pub const MAX_SESSIONS: usize = 8;
@@ -32,33 +33,24 @@ const COALESCE_WINDOW: Duration = Duration::from_millis(16);
 /// Max bytes in one output event.
 const MAX_EVENT_BYTES: usize = 256 * 1024;
 
-/// Emitter seam (same pattern as `pty::PtySink`) — keeps the tauri emitter
-/// out of unit tests.
+/// Emitter seam (same pattern as `pty::PtySink`) — keeps the event bus out
+/// of unit tests.
 pub trait ShellSink: Send + Sync {
     fn emit_output(&self, event: &PtyOutput);
     fn emit_exit(&self, event: &PtyExit);
 }
 
-/// Production sink on the app handle.
-pub struct TauriShellSink {
-    app: tauri::AppHandle,
-}
+/// Production sink: publishes [`PtyOutput`] / [`PtyExit`] on the
+/// process-wide backend event bus.
+pub struct BusShellSink;
 
-impl TauriShellSink {
-    pub fn new(app: tauri::AppHandle) -> Self {
-        Self { app }
-    }
-}
-
-impl ShellSink for TauriShellSink {
+impl ShellSink for BusShellSink {
     fn emit_output(&self, event: &PtyOutput) {
-        use tauri::Emitter;
-        let _ = self.app.emit(crate::pty::PTY_OUTPUT_EVENT, event);
+        global().publish(BackendEvent::PtyOutput(event.clone()));
     }
 
     fn emit_exit(&self, event: &PtyExit) {
-        use tauri::Emitter;
-        let _ = self.app.emit(crate::pty::PTY_EXIT_EVENT, event);
+        global().publish(BackendEvent::PtyExit(event.clone()));
     }
 }
 
@@ -71,7 +63,7 @@ struct ShellSession {
 impl ShellSession {
     fn write_bytes(&self, data: &str) -> Result<(), String> {
         let write = self.write.lock();
-        tauri::async_runtime::block_on(async {
+        crate::rt::block_on(async {
             write
                 .data(data.as_bytes())
                 .await
@@ -81,7 +73,7 @@ impl ShellSession {
 
     fn resize(&self, rows: u32, cols: u32) -> Result<(), String> {
         let write = self.write.lock();
-        tauri::async_runtime::block_on(async {
+        crate::rt::block_on(async {
             write
                 .window_change(cols, rows, 0, 0)
                 .await
@@ -92,7 +84,7 @@ impl ShellSession {
     fn close(&self) {
         self.closed.store(true, Ordering::SeqCst);
         let write = self.write.lock();
-        let _ = tauri::async_runtime::block_on(async { write.close().await });
+        let _ = crate::rt::block_on(async { write.close().await });
     }
 }
 
@@ -102,11 +94,12 @@ impl Drop for ShellSession {
         // write.close() best-effort; the reader also ends on EOF/Close from
         // the server side.
         let write = self.write.lock();
-        let _ = tauri::async_runtime::block_on(async { write.close().await });
+        let _ = crate::rt::block_on(async { write.close().await });
     }
 }
 
-/// Process-global registry of remote shell sessions (tauri-managed state).
+/// Process-global registry of remote shell sessions (owned by
+/// [`AppServices::remote_shells`](crate::service::AppServices)).
 #[derive(Default)]
 pub struct RemoteShellRegistry {
     inner: Arc<RegistryInner>,
@@ -135,7 +128,7 @@ impl RemoteShellRegistry {
                 return Err(format!("too many terminal sessions (max {MAX_SESSIONS})"));
             }
         }
-        let channel = tauri::async_runtime::block_on(
+        let channel = crate::rt::block_on(
             remote
                 .git()
                 .session
@@ -167,7 +160,7 @@ impl RemoteShellRegistry {
                     if closed.load(Ordering::SeqCst) {
                         break;
                     }
-                    let msg = tauri::async_runtime::block_on(async {
+                    let msg = crate::rt::block_on(async {
                         tokio::time::timeout(Duration::from_millis(200), read_half.wait()).await
                     });
                     match msg {
@@ -267,61 +260,53 @@ fn flush_pending(
     });
 }
 
-// ---------- IPC commands ----------
+// ---------- service entry points ----------
 
 /// Open a remote shell for `repo_id` (must be a remote project).
-#[tauri::command(rename_all = "snake_case")]
 pub fn rshell_create(
+    services: &AppServices,
     repo_id: RepoId,
     rows: Option<u16>,
     cols: Option<u16>,
-    app: tauri::AppHandle,
-    repos: tauri::State<'_, RepoManager>,
-    registry: tauri::State<'_, RemoteShellRegistry>,
 ) -> Result<String, String> {
-    let handle = repos
+    let handle = services
+        .repos
         .get(&repo_id)
         .ok_or_else(|| format!("repo not open: {}", repo_id.0))?;
     let remote = handle
         .remote()
         .ok_or_else(|| "terminal over SSH requires a remote project".to_string())?;
-    registry.create(
+    services.remote_shells.create(
         &repo_id,
         remote,
         rows.unwrap_or(24),
         cols.unwrap_or(80),
-        Arc::new(TauriShellSink::new(app)),
+        Arc::new(BusShellSink),
     )
 }
 
 /// Send frontend input (keystrokes, paste) to the remote shell.
-#[tauri::command(rename_all = "snake_case")]
 pub fn rshell_write(
+    services: &AppServices,
     session_id: String,
     data: String,
-    registry: tauri::State<'_, RemoteShellRegistry>,
 ) -> Result<(), String> {
-    registry.write(&session_id, &data)
+    services.remote_shells.write(&session_id, &data)
 }
 
 /// Resize the remote shell's pty.
-#[tauri::command(rename_all = "snake_case")]
 pub fn rshell_resize(
+    services: &AppServices,
     session_id: String,
     rows: u16,
     cols: u16,
-    registry: tauri::State<'_, RemoteShellRegistry>,
 ) -> Result<(), String> {
-    registry.resize(&session_id, rows, cols)
+    services.remote_shells.resize(&session_id, rows, cols)
 }
 
 /// Kill the remote shell session.
-#[tauri::command(rename_all = "snake_case")]
-pub fn rshell_kill(
-    session_id: String,
-    registry: tauri::State<'_, RemoteShellRegistry>,
-) -> Result<(), String> {
-    registry.kill(&session_id);
+pub fn rshell_kill(services: &AppServices, session_id: String) -> Result<(), String> {
+    services.remote_shells.kill(&session_id);
     Ok(())
 }
 

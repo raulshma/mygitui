@@ -32,6 +32,7 @@ use serde::Serialize;
 use ts_rs::TS;
 
 use crate::cli::apply_sanitized_env;
+use crate::service::AppServices;
 
 /// How long `opencode --version` may take before we declare it broken.
 const VERSION_TIMEOUT: Duration = Duration::from_secs(4);
@@ -642,38 +643,27 @@ impl OpenCodeServerRegistry {
 }
 
 // ---------------------------------------------------------------------------
-// Tauri commands
+// Service entry points
 // ---------------------------------------------------------------------------
 
 /// Probes for a local opencode CLI (PATH scan + `--version`).
-#[tauri::command(rename_all = "snake_case")]
-pub fn opencode_detect() -> OpencodeDetection {
+pub fn opencode_detect(_services: &AppServices) -> OpencodeDetection {
     detect_binary()
 }
 
 /// State of the managed opencode server (starts nothing).
-#[tauri::command(rename_all = "snake_case")]
-pub fn opencode_serve_status(
-    registry: tauri::State<'_, OpenCodeServerRegistry>,
-) -> OpencodeServeState {
-    registry.status()
+pub fn opencode_serve_status(services: &AppServices) -> OpencodeServeState {
+    services.opencode.status()
 }
 
 /// Starts (or returns the running) managed opencode server.
-#[tauri::command(rename_all = "snake_case")]
-pub fn opencode_serve_start(
-    cwd: Option<String>,
-    registry: tauri::State<'_, OpenCodeServerRegistry>,
-) -> OpencodeServeState {
-    registry.start(cwd.as_deref().map(Path::new))
+pub fn opencode_serve_start(services: &AppServices, cwd: Option<String>) -> OpencodeServeState {
+    services.opencode.start(cwd.as_deref().map(Path::new))
 }
 
 /// Stops the managed opencode server.
-#[tauri::command(rename_all = "snake_case")]
-pub fn opencode_serve_stop(
-    registry: tauri::State<'_, OpenCodeServerRegistry>,
-) -> OpencodeServeState {
-    registry.stop()
+pub fn opencode_serve_stop(services: &AppServices) -> OpencodeServeState {
+    services.opencode.stop()
 }
 
 #[cfg(test)]

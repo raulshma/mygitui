@@ -1,34 +1,32 @@
 use std::sync::Arc;
 
-use tauri::State;
-
-use crate::actions::{ActionRegistry, ActionSpec, TauriActionSink};
+use crate::actions::{ActionSpec, BusActionSink};
 use crate::cli;
 use crate::engine::git_engine::EngineError;
 use crate::engine::types::{
     ChangeKind, CheckpointInfo, CommitOptions, HookInfo, PreviewInfo, RepoId, SigningInfo,
     StageRequest, StageTarget,
 };
-use crate::repo::RepoManager;
 use crate::service::{
     engine_err, enqueue_mutation, enqueue_read, enqueue_remote_mutation, enqueue_remote_read,
-    finish_op, get_handle,
+    finish_op, get_handle, AppServices,
 };
 
 /// M12: argv captured at first launch (`mygitui <path>`); consumed once.
-/// Second-launch arguments arrive via the `cli-args` event instead.
-#[tauri::command(rename_all = "snake_case")]
-pub async fn cli_args_initial(state: State<'_, crate::CliArgs>) -> Result<Vec<String>, String> {
-    Ok(std::mem::take(&mut state.0.lock().unwrap()))
+/// Second-launch arguments arrive as [`crate::service::events::BackendEvent::CliArgs`].
+pub async fn cli_args_initial(
+    _services: &AppServices,
+    args: &crate::CliArgs,
+) -> Result<Vec<String>, String> {
+    Ok(std::mem::take(&mut args.0.lock().unwrap()))
 }
 
-#[tauri::command(rename_all = "snake_case")]
 pub async fn stage(
+    services: &AppServices,
     repo_id: RepoId,
     request: StageRequest,
-    state: State<'_, RepoManager>,
 ) -> Result<(), String> {
-    let handle = get_handle(&state, &repo_id)?;
+    let handle = get_handle(&services.repos, &repo_id)?;
     if let Some(remote) = handle.remote() {
         return finish_op(enqueue_remote_mutation(
             &handle,
@@ -49,13 +47,12 @@ pub async fn stage(
     .await
 }
 
-#[tauri::command(rename_all = "snake_case")]
 pub async fn stage_all(
+    services: &AppServices,
     repo_id: RepoId,
     unstage: bool,
-    state: State<'_, RepoManager>,
 ) -> Result<(), String> {
-    let handle = get_handle(&state, &repo_id)?;
+    let handle = get_handle(&services.repos, &repo_id)?;
     if let Some(remote) = handle.remote() {
         // The remote engine has no stage-all primitive: mirror the local
         // `add -A` / index-reset semantics through status + per-file stage
@@ -97,13 +94,12 @@ pub async fn stage_all(
 /// Discard local changes (files or hunks). A checkpoint is snapshotted
 /// BEFORE any side effect — a failed discard leaves the repo untouched
 /// (same ordering rule as repo_clean).
-#[tauri::command(rename_all = "snake_case")]
 pub async fn discard(
+    services: &AppServices,
     repo_id: RepoId,
     targets: Vec<StageTarget>,
-    state: State<'_, RepoManager>,
 ) -> Result<(), String> {
-    let handle = get_handle(&state, &repo_id)?;
+    let handle = get_handle(&services.repos, &repo_id)?;
     if let Some(remote) = handle.remote() {
         // Same ordering rule as the local path: checkpoint BEFORE discard.
         return finish_op(enqueue_remote_mutation(
@@ -135,13 +131,12 @@ pub async fn discard(
 /// Commit: engine first; `EngineError::Unsupported` (active hooks/signing
 /// per C1's routing) falls back to the git CLI (cli.rs) so hooks and
 /// signing actually run. Returns the new sha.
-#[tauri::command(rename_all = "snake_case")]
 pub async fn commit(
+    services: &AppServices,
     repo_id: RepoId,
     options: CommitOptions,
-    state: State<'_, RepoManager>,
 ) -> Result<String, String> {
-    let handle = get_handle(&state, &repo_id)?;
+    let handle = get_handle(&services.repos, &repo_id)?;
     if let Some(remote) = handle.remote() {
         // The device's git runs hooks and signing natively — no CLI
         // fallback needed (the remote engine IS the git CLI there).
@@ -177,12 +172,8 @@ pub async fn commit(
     finish_op(rx).await
 }
 
-#[tauri::command(rename_all = "snake_case")]
-pub async fn signing_info(
-    repo_id: RepoId,
-    state: State<'_, RepoManager>,
-) -> Result<SigningInfo, String> {
-    let handle = get_handle(&state, &repo_id)?;
+pub async fn signing_info(services: &AppServices, repo_id: RepoId) -> Result<SigningInfo, String> {
+    let handle = get_handle(&services.repos, &repo_id)?;
     if let Some(remote) = handle.remote() {
         return finish_op(enqueue_remote_read(
             &handle,
@@ -200,12 +191,8 @@ pub async fn signing_info(
     .await
 }
 
-#[tauri::command(rename_all = "snake_case")]
-pub async fn hooks_list(
-    repo_id: RepoId,
-    state: State<'_, RepoManager>,
-) -> Result<Vec<HookInfo>, String> {
-    let handle = get_handle(&state, &repo_id)?;
+pub async fn hooks_list(services: &AppServices, repo_id: RepoId) -> Result<Vec<HookInfo>, String> {
+    let handle = get_handle(&services.repos, &repo_id)?;
     if let Some(remote) = handle.remote() {
         return finish_op(enqueue_remote_read(
             &handle,
@@ -243,13 +230,12 @@ pub async fn hooks_list(
 // and imports it itself).
 // ---------------------------------------------------------------------------
 
-#[tauri::command(rename_all = "snake_case")]
 pub async fn checkpoint_create(
+    services: &AppServices,
     repo_id: RepoId,
     reason: String,
-    state: State<'_, RepoManager>,
 ) -> Result<CheckpointInfo, String> {
-    let handle = get_handle(&state, &repo_id)?;
+    let handle = get_handle(&services.repos, &repo_id)?;
     if let Some(remote) = handle.remote() {
         return finish_op(enqueue_remote_mutation(
             &handle,
@@ -270,12 +256,11 @@ pub async fn checkpoint_create(
     .await
 }
 
-#[tauri::command(rename_all = "snake_case")]
 pub async fn checkpoints(
+    services: &AppServices,
     repo_id: RepoId,
-    state: State<'_, RepoManager>,
 ) -> Result<Vec<CheckpointInfo>, String> {
-    let handle = get_handle(&state, &repo_id)?;
+    let handle = get_handle(&services.repos, &repo_id)?;
     if let Some(remote) = handle.remote() {
         return finish_op(enqueue_remote_read(
             &handle,
@@ -296,13 +281,12 @@ pub async fn checkpoints(
     .await
 }
 
-#[tauri::command(rename_all = "snake_case")]
 pub async fn checkpoint_restore(
+    services: &AppServices,
     repo_id: RepoId,
     id: String,
-    state: State<'_, RepoManager>,
 ) -> Result<(), String> {
-    let handle = get_handle(&state, &repo_id)?;
+    let handle = get_handle(&services.repos, &repo_id)?;
     if let Some(remote) = handle.remote() {
         return finish_op(enqueue_remote_mutation(
             &handle,
@@ -323,13 +307,12 @@ pub async fn checkpoint_restore(
     .await
 }
 
-#[tauri::command(rename_all = "snake_case")]
 pub async fn checkpoint_gc(
+    services: &AppServices,
     repo_id: RepoId,
     older_than_days: u32,
-    state: State<'_, RepoManager>,
 ) -> Result<u32, String> {
-    let handle = get_handle(&state, &repo_id)?;
+    let handle = get_handle(&services.repos, &repo_id)?;
     if let Some(remote) = handle.remote() {
         return finish_op(enqueue_remote_mutation(
             &handle,
@@ -355,14 +338,13 @@ pub async fn checkpoint_gc(
 /// "branch_delete", `params` carries the kind's arguments (e.g.
 /// `{"to": "<commit-ish>"}`, `{"dirs": bool}`, `{"name": "...",
 /// "into": "..."}`).
-#[tauri::command(rename_all = "snake_case")]
 pub async fn ops_preview(
+    services: &AppServices,
     repo_id: RepoId,
     kind: String,
     params: serde_json::Value,
-    state: State<'_, RepoManager>,
 ) -> Result<PreviewInfo, String> {
-    let handle = get_handle(&state, &repo_id)?;
+    let handle = get_handle(&services.repos, &repo_id)?;
     if let Some(remote) = handle.remote() {
         return finish_op(enqueue_remote_read(
             &handle,
@@ -386,13 +368,12 @@ pub async fn ops_preview(
 /// FE flow: ops_preview → dialog → guard_checkpoint → confirm → op. It
 /// writes a checkpoint ref, so it is a queue mutation (serialized with the
 /// op it guards and generation-bumping like any other mutation).
-#[tauri::command(rename_all = "snake_case")]
 pub async fn guard_checkpoint(
+    services: &AppServices,
     repo_id: RepoId,
     reason: String,
-    state: State<'_, RepoManager>,
 ) -> Result<CheckpointInfo, String> {
-    let handle = get_handle(&state, &repo_id)?;
+    let handle = get_handle(&services.repos, &repo_id)?;
     if let Some(remote) = handle.remote() {
         return finish_op(enqueue_remote_mutation(
             &handle,
@@ -416,8 +397,7 @@ pub async fn guard_checkpoint(
 /// M12: OS accent color for the dynamic-color pipeline (Windows DWM
 /// registry read; null on other platforms). Frontend probes it once at
 /// theme init.
-#[tauri::command(rename_all = "snake_case")]
-pub async fn os_accent_color() -> Result<Option<String>, String> {
+pub async fn os_accent_color(_services: &AppServices) -> Result<Option<String>, String> {
     #[cfg(windows)]
     {
         Ok(windows_accent_color())
@@ -453,49 +433,44 @@ fn windows_accent_color() -> Option<String> {
 
 /// Best-effort cancel of a queued/running mutation op. Cheap (atomics only)
 /// so it runs inline, off the repo mutex.
-#[tauri::command(rename_all = "snake_case")]
 pub async fn op_cancel(
+    services: &AppServices,
     repo_id: RepoId,
     op_id: String,
-    state: State<'_, RepoManager>,
 ) -> Result<bool, String> {
-    let handle = get_handle(&state, &repo_id)?;
+    let handle = get_handle(&services.repos, &repo_id)?;
     Ok(handle.ops().cancel_op(repo_id.0.as_str(), &op_id))
 }
 
 /// Run a user-defined shell action with cwd = repo root, streaming its
 /// output as `action-output` events. Returns the run id (cancel token).
 /// Remote repos run the action on the device over SSH exec through the
-/// remote registry (same `action-output` events, same Tauri sink).
-#[tauri::command(rename_all = "snake_case")]
+/// remote registry (same `action-output` events, same bus sink).
 pub fn action_run(
+    services: &AppServices,
     repo_id: RepoId,
     name: String,
     command: String,
-    app: tauri::AppHandle,
-    state: State<'_, RepoManager>,
-    runs: State<'_, ActionRegistry>,
-    remote_runs: State<'_, crate::remote::actions::RemoteActionRegistry>,
 ) -> Result<String, String> {
-    let handle = get_handle(&state, &repo_id)?;
+    let handle = get_handle(&services.repos, &repo_id)?;
     if let Some(remote) = handle.remote() {
-        return remote_runs.run(
+        return services.remote_actions.run(
             &repo_id.0,
             &name,
             &command,
             Arc::new(remote.git()),
-            Arc::new(TauriActionSink::new(app)),
+            Arc::new(BusActionSink),
         );
     }
     let launch = crate::actions::run_action(
-        &runs,
+        &services.actions,
         ActionSpec {
             repo_id: repo_id.0,
             name,
             command,
             cwd: handle.root.clone(),
         },
-        Arc::new(TauriActionSink::new(app)),
+        Arc::new(BusActionSink),
     )?;
     Ok(launch.run_id)
 }
@@ -504,14 +479,9 @@ pub fn action_run(
 /// The command carries no repo id and run ids are disjoint (`act-` vs
 /// `ract-` prefixes), so local is tried first and the remote registry
 /// covers remote runs.
-#[tauri::command(rename_all = "snake_case")]
-pub fn action_cancel(
-    run_id: String,
-    runs: State<'_, ActionRegistry>,
-    remote_runs: State<'_, crate::remote::actions::RemoteActionRegistry>,
-) -> Result<bool, String> {
-    if runs.cancel(&run_id) {
+pub fn action_cancel(services: &AppServices, run_id: String) -> Result<bool, String> {
+    if services.actions.cancel(&run_id) {
         return Ok(true);
     }
-    Ok(remote_runs.cancel(&run_id))
+    Ok(services.remote_actions.cancel(&run_id))
 }

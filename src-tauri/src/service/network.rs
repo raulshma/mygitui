@@ -1,24 +1,19 @@
 use std::sync::Arc;
 
-use tauri::State;
 use tokio::sync::oneshot;
 
 use crate::cli;
 use crate::engine::git_engine::{EngineError, FetchProgress, PushProgress};
 use crate::engine::types::{FetchOptions, NetStats, PullOptions, PushOptions, RemoteInfo, RepoId};
 use crate::ops::OpCtx;
-use crate::repo::{RepoHandle, RepoManager};
+use crate::repo::RepoHandle;
 use crate::service::{
     engine_err, enqueue_mutation, enqueue_read, enqueue_remote_mutation, enqueue_remote_read,
-    finish_op, get_handle,
+    finish_op, get_handle, AppServices,
 };
 
-#[tauri::command(rename_all = "snake_case")]
-pub async fn remotes(
-    repo_id: RepoId,
-    state: State<'_, RepoManager>,
-) -> Result<Vec<RemoteInfo>, String> {
-    let handle = get_handle(&state, &repo_id)?;
+pub async fn remotes(services: &AppServices, repo_id: RepoId) -> Result<Vec<RemoteInfo>, String> {
+    let handle = get_handle(&services.repos, &repo_id)?;
     if let Some(remote) = handle.remote() {
         return finish_op(enqueue_remote_read(
             &handle,
@@ -36,14 +31,13 @@ pub async fn remotes(
     .await
 }
 
-#[tauri::command(rename_all = "snake_case")]
 pub async fn remote_add(
+    services: &AppServices,
     repo_id: RepoId,
     name: String,
     url: String,
-    state: State<'_, RepoManager>,
 ) -> Result<(), String> {
-    let handle = get_handle(&state, &repo_id)?;
+    let handle = get_handle(&services.repos, &repo_id)?;
     if let Some(remote) = handle.remote() {
         return finish_op(enqueue_remote_mutation(
             &handle,
@@ -64,13 +58,12 @@ pub async fn remote_add(
     .await
 }
 
-#[tauri::command(rename_all = "snake_case")]
 pub async fn remote_remove(
+    services: &AppServices,
     repo_id: RepoId,
     name: String,
-    state: State<'_, RepoManager>,
 ) -> Result<(), String> {
-    let handle = get_handle(&state, &repo_id)?;
+    let handle = get_handle(&services.repos, &repo_id)?;
     if let Some(remote) = handle.remote() {
         return finish_op(enqueue_remote_mutation(
             &handle,
@@ -91,15 +84,14 @@ pub async fn remote_remove(
     .await
 }
 
-#[tauri::command(rename_all = "snake_case")]
 pub async fn remote_set_url(
+    services: &AppServices,
     repo_id: RepoId,
     name: String,
     url: String,
     push: bool,
-    state: State<'_, RepoManager>,
 ) -> Result<(), String> {
-    let handle = get_handle(&state, &repo_id)?;
+    let handle = get_handle(&services.repos, &repo_id)?;
     if let Some(remote) = handle.remote() {
         return finish_op(enqueue_remote_mutation(
             &handle,
@@ -182,13 +174,12 @@ where
     rx
 }
 
-#[tauri::command(rename_all = "snake_case")]
 pub async fn fetch(
+    services: &AppServices,
     repo_id: RepoId,
     options: FetchOptions,
-    state: State<'_, RepoManager>,
 ) -> Result<NetStats, String> {
-    let handle = get_handle(&state, &repo_id)?;
+    let handle = get_handle(&services.repos, &repo_id)?;
     if let Some(remote) = handle.remote() {
         // Remote net op: same queue kind, opening line, and throttled
         // progress forwarding as the local net op (via `OpCtx`); the device
@@ -226,13 +217,12 @@ pub async fn fetch(
     .await
 }
 
-#[tauri::command(rename_all = "snake_case")]
 pub async fn pull(
+    services: &AppServices,
     repo_id: RepoId,
     options: PullOptions,
-    state: State<'_, RepoManager>,
 ) -> Result<NetStats, String> {
-    let handle = get_handle(&state, &repo_id)?;
+    let handle = get_handle(&services.repos, &repo_id)?;
     if let Some(remote) = handle.remote() {
         // Remote net op (see `fetch`): queue + progress forwarding.
         let remote = Arc::clone(remote);
@@ -262,13 +252,12 @@ pub async fn pull(
     .await
 }
 
-#[tauri::command(rename_all = "snake_case")]
 pub async fn push(
+    services: &AppServices,
     repo_id: RepoId,
     options: PushOptions,
-    state: State<'_, RepoManager>,
 ) -> Result<NetStats, String> {
-    let handle = get_handle(&state, &repo_id)?;
+    let handle = get_handle(&services.repos, &repo_id)?;
     if let Some(remote) = handle.remote() {
         // Remote net op (see `fetch`): queue + progress forwarding.
         let remote = Arc::clone(remote);
@@ -334,8 +323,8 @@ pub async fn push(
 
 /// FE answer to an `auth-request` event: routes `(username, password,
 /// store)` to the blocked credentials callback (auth broker).
-#[tauri::command(rename_all = "snake_case")]
 pub fn auth_respond(
+    _services: &AppServices,
     op_id: String,
     username: Option<String>,
     password: Option<String>,
@@ -360,6 +349,7 @@ pub fn auth_respond(
 mod m2_tests {
     use super::*;
     use crate::engine::types::StageRequest;
+    use crate::repo::RepoManager;
 
     #[test]
     fn fetch_pct_null_until_total_known() {

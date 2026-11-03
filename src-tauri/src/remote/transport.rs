@@ -4,7 +4,7 @@
 //! Threading model: the backend engines are synchronous (they run on
 //! blocking threads under the per-repo op queue, exactly like the git2
 //! engine) and bridge into the async russh world with
-//! `tauri::async_runtime::block_on`.
+//! `crate::rt::block_on`.
 //!
 //! Concurrency: a russh `Handle` is not `Clone`, so the session's handle
 //! lives behind an async mutex — but the lock is held only for the
@@ -236,7 +236,7 @@ impl DeviceSession {
     /// exits when only the watchdog itself remains (throwaway probes).
     fn spawn_liveness_watchdog(self: &Arc<Self>) {
         let session = Arc::downgrade(self);
-        tauri::async_runtime::spawn(async move {
+        crate::rt::spawn(async move {
             loop {
                 tokio::time::sleep(Duration::from_secs(5)).await;
                 let Some(session) = session.upgrade() else {

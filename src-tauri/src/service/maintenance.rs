@@ -2,26 +2,21 @@ use std::path::Path;
 use std::sync::Arc;
 
 use parking_lot::Mutex;
-use tauri::State;
 use tokio::sync::oneshot;
 
 use crate::engine::git_engine::EngineError;
 use crate::engine::types::{LfsStatus, RepoHealth, RepoId, SparseInfo};
-use crate::repo::{RepoHandle, RepoManager};
+use crate::repo::RepoHandle;
 use crate::service::{
     engine_err, enqueue_mutation, enqueue_remote_mutation, enqueue_remote_read, finish_op,
-    get_handle,
+    get_handle, AppServices,
 };
 
 // ---------- M11: repo health / maintenance / sparse / LFS / archive ----------
 
 /// Health snapshot (fs-only, fast; safe to poll from a panel).
-#[tauri::command(rename_all = "snake_case")]
-pub async fn repo_health(
-    repo_id: RepoId,
-    state: State<'_, RepoManager>,
-) -> Result<RepoHealth, String> {
-    let handle = get_handle(&state, &repo_id)?;
+pub async fn repo_health(services: &AppServices, repo_id: RepoId) -> Result<RepoHealth, String> {
+    let handle = get_handle(&services.repos, &repo_id)?;
     if let Some(remote) = handle.remote() {
         // The local probe walks the fs at `root`; remote repos probe on the
         // device through the engine instead.
@@ -35,7 +30,7 @@ pub async fn repo_health(
     }
     let root = handle.root.clone();
     let git_dir = handle.git_dir.clone();
-    tauri::async_runtime::spawn_blocking(move || {
+    crate::rt::spawn_blocking(move || {
         Ok(crate::maintenance::repo_health(
             std::path::Path::new(&root),
             std::path::Path::new(&git_dir),
@@ -47,13 +42,12 @@ pub async fn repo_health(
 
 /// Runs one maintenance op on the op queue (`gc`, `prune`, `commit_graph`,
 /// `pack_refs`, `count_objects`); resolves with the command output.
-#[tauri::command(rename_all = "snake_case")]
 pub async fn maintenance_run(
+    services: &AppServices,
     repo_id: RepoId,
     op: String,
-    state: State<'_, RepoManager>,
 ) -> Result<String, String> {
-    let handle = get_handle(&state, &repo_id)?;
+    let handle = get_handle(&services.repos, &repo_id)?;
     if let Some(remote) = handle.remote() {
         // Same op set as local; the remote engine runs each one on the
         // device and returns a matching summary string.
@@ -144,13 +138,12 @@ fn archive_arg_ok(value: &str) -> bool {
 }
 
 /// `git archive --format <zip|tar|tar.gz> <ref> -o <destination>`.
-#[tauri::command(rename_all = "snake_case")]
 pub async fn archive(
+    services: &AppServices,
     repo_id: RepoId,
     spec: String,
     format: String,
     destination: String,
-    state: State<'_, RepoManager>,
 ) -> Result<(), String> {
     if !["zip", "tar", "tar.gz"].contains(&format.as_str()) {
         return Err(format!("unsupported archive format `{format}`"));
@@ -158,7 +151,7 @@ pub async fn archive(
     if !archive_arg_ok(&spec) || !archive_arg_ok(&destination) {
         return Err("invalid archive arguments".into());
     }
-    let handle = get_handle(&state, &repo_id)?;
+    let handle = get_handle(&services.repos, &repo_id)?;
     if let Some(remote) = handle.remote() {
         // Remote archive streams the bytes over SSH and writes the same
         // local destination file on this machine.
@@ -190,12 +183,8 @@ pub async fn archive(
 }
 
 /// Sparse-checkout state.
-#[tauri::command(rename_all = "snake_case")]
-pub async fn sparse_info(
-    repo_id: RepoId,
-    state: State<'_, RepoManager>,
-) -> Result<SparseInfo, String> {
-    let handle = get_handle(&state, &repo_id)?;
+pub async fn sparse_info(services: &AppServices, repo_id: RepoId) -> Result<SparseInfo, String> {
+    let handle = get_handle(&services.repos, &repo_id)?;
     if let Some(remote) = handle.remote() {
         // The local probe reads the fs at `root`; remote repos ask the device.
         return finish_op(enqueue_remote_read(
@@ -207,7 +196,7 @@ pub async fn sparse_info(
         .await;
     }
     let root = handle.root.clone();
-    tauri::async_runtime::spawn_blocking(move || {
+    crate::rt::spawn_blocking(move || {
         Ok(crate::maintenance::sparse_info(std::path::Path::new(&root)))
     })
     .await
@@ -215,14 +204,13 @@ pub async fn sparse_info(
 }
 
 /// Applies sparse-checkout patterns (cone mode; empty = full checkout).
-#[tauri::command(rename_all = "snake_case")]
 pub async fn sparse_apply(
+    services: &AppServices,
     repo_id: RepoId,
     patterns: Vec<String>,
     add: bool,
-    state: State<'_, RepoManager>,
 ) -> Result<(), String> {
-    let handle = get_handle(&state, &repo_id)?;
+    let handle = get_handle(&services.repos, &repo_id)?;
     if let Some(remote) = handle.remote() {
         return finish_op(enqueue_remote_mutation(
             &handle,
@@ -247,12 +235,8 @@ pub async fn sparse_apply(
 }
 
 /// `git lfs` availability + tracked patterns.
-#[tauri::command(rename_all = "snake_case")]
-pub async fn lfs_status(
-    repo_id: RepoId,
-    state: State<'_, RepoManager>,
-) -> Result<LfsStatus, String> {
-    let handle = get_handle(&state, &repo_id)?;
+pub async fn lfs_status(services: &AppServices, repo_id: RepoId) -> Result<LfsStatus, String> {
+    let handle = get_handle(&services.repos, &repo_id)?;
     if let Some(remote) = handle.remote() {
         // The local probe reads the fs at `root`; remote repos ask the device.
         return finish_op(enqueue_remote_read(
@@ -264,7 +248,7 @@ pub async fn lfs_status(
         .await;
     }
     let root = handle.root.clone();
-    tauri::async_runtime::spawn_blocking(move || {
+    crate::rt::spawn_blocking(move || {
         Ok(crate::maintenance::lfs_status(std::path::Path::new(&root)))
     })
     .await
@@ -272,13 +256,12 @@ pub async fn lfs_status(
 }
 
 /// Runs `git lfs pull|push|install|fetch`.
-#[tauri::command(rename_all = "snake_case")]
 pub async fn lfs_run(
+    services: &AppServices,
     repo_id: RepoId,
     subcommand: String,
-    state: State<'_, RepoManager>,
 ) -> Result<String, String> {
-    let handle = get_handle(&state, &repo_id)?;
+    let handle = get_handle(&services.repos, &repo_id)?;
     if let Some(remote) = handle.remote() {
         // The device's own git-lfs answers (it allows fetch/pull/push/
         // checkout; `install` fails there with the engine's unsupported
@@ -306,8 +289,8 @@ pub async fn lfs_run(
 }
 
 /// Blobless (partial) clone via the git CLI: `git clone --filter=blob:none`.
-#[tauri::command(rename_all = "snake_case")]
 pub async fn clone_blobless(
+    _services: &AppServices,
     url: String,
     destination: String,
     depth: Option<u32>,
@@ -319,7 +302,7 @@ pub async fn clone_blobless(
         .parent()
         .map(|p| p.to_path_buf())
         .unwrap_or_else(std::env::temp_dir);
-    tauri::async_runtime::spawn_blocking(move || {
+    crate::rt::spawn_blocking(move || {
         let mut args: Vec<String> = vec![
             "clone".into(),
             "--filter=blob:none".into(),
@@ -357,14 +340,13 @@ pub async fn clone_blobless(
 
 /// git clean execution: checkpoint first, then delete each validated path.
 /// Returns the number of paths removed.
-#[tauri::command(rename_all = "snake_case")]
 pub async fn repo_clean(
+    services: &AppServices,
     repo_id: RepoId,
     paths: Vec<String>,
     checkpoint_reason: String,
-    state: State<'_, RepoManager>,
 ) -> Result<u32, String> {
-    let handle = get_handle(&state, &repo_id)?;
+    let handle = get_handle(&services.repos, &repo_id)?;
     if let Some(remote) = handle.remote() {
         // Same ordering rule as the local clean: validate FIRST (purely
         // lexical checks on the workdir-relative paths, so a rejected op
@@ -470,6 +452,7 @@ fn remove_resolved(resolved: &[std::path::PathBuf]) -> Result<u32, String> {
 mod m4_clean_tests {
     use super::*;
     use crate::engine::libgit2::Libgit2Engine;
+    use crate::repo::RepoManager;
 
     fn temp_repo(tag: &str) -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!(

@@ -32,11 +32,11 @@ use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
 use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
-use tauri::State;
 use ts_rs::TS;
 
 use crate::engine::types::RepoId;
-use crate::repo::{RepoHandle, RepoManager};
+use crate::repo::RepoHandle;
+use crate::service::{get_handle, AppServices};
 
 /// Entries per `repo_list_dir` response (contracts.md).
 const MAX_LIST_ENTRIES: usize = 5000;
@@ -645,25 +645,18 @@ where
     rx
 }
 
-fn get_handle(state: &RepoManager, repo_id: &RepoId) -> Result<Arc<RepoHandle>, String> {
-    state
-        .get(repo_id)
-        .ok_or_else(|| format!("repo not open: {}", repo_id.0))
-}
-
-// -- Tauri commands ---------------------------------------------------------------
+// -- Service entry points ---------------------------------------------------------
 
 /// One directory level of the working tree (contracts.md). Queued read:
 /// the index walk for submodule marking shares the repo lock with other ops.
 /// Remote repos enqueue the SFTP listing silently on the same queue.
-#[tauri::command(rename_all = "snake_case")]
 pub async fn repo_list_dir(
+    services: &AppServices,
     repo_id: RepoId,
     path: String,
     include_ignored: bool,
-    state: State<'_, RepoManager>,
 ) -> Result<DirListing, String> {
-    let handle = get_handle(&state, &repo_id)?;
+    let handle = get_handle(&services.repos, &repo_id)?;
     if let Some(remote) = handle.remote() {
         // Remote read: same silent queue slot; the submodule marking comes
         // from the device's index inside `list_dir` itself.
@@ -686,15 +679,14 @@ pub async fn repo_list_dir(
         .map_err(|_| "op queue closed before completion".to_string())?
 }
 
-/// Size/content-classification/readonly/mtime for one file — lets the FE
+/// Size/content-classification/readonly/mtime for one file — lets the UI
 /// decide how to open a file before transferring any bytes.
-#[tauri::command(rename_all = "snake_case")]
 pub async fn repo_stat_file(
+    services: &AppServices,
     repo_id: RepoId,
     path: String,
-    state: State<'_, RepoManager>,
 ) -> Result<FileMeta, String> {
-    let handle = get_handle(&state, &repo_id)?;
+    let handle = get_handle(&services.repos, &repo_id)?;
     if let Some(remote) = handle.remote() {
         // Remote read: silent queue slot like `list_dir` (the SFTP stat
         // blocks, so it must stay off the async runtime).
@@ -705,7 +697,7 @@ pub async fn repo_stat_file(
         return finish(rx).await;
     }
     let root = handle.root.clone();
-    tauri::async_runtime::spawn_blocking(move || stat_file_impl(&root, &path))
+    crate::rt::spawn_blocking(move || stat_file_impl(&root, &path))
         .await
         .map_err(|e| format!("stat_file task failed: {e}"))?
 }
@@ -714,15 +706,14 @@ pub async fn repo_stat_file(
 /// mutation: serialized with every other op, generation-bumped so the
 /// watcher refreshes status/diffs. Remote repos run the same mtime-guarded
 /// write on the device over SFTP, queued as a mutation identically.
-#[tauri::command(rename_all = "snake_case")]
 pub async fn repo_write_file(
+    services: &AppServices,
     repo_id: RepoId,
     path: String,
     content: Vec<u8>,
     expected_mtime: Option<u128>,
-    state: State<'_, RepoManager>,
 ) -> Result<FileMeta, String> {
-    let handle = get_handle(&state, &repo_id)?;
+    let handle = get_handle(&services.repos, &repo_id)?;
     if let Some(remote) = handle.remote() {
         let remote = Arc::clone(remote);
         return finish(enqueue_fs_mutation(&handle, "write_file", move || {
@@ -740,14 +731,13 @@ pub async fn repo_write_file(
 }
 
 /// Create an empty file or a directory (with parents).
-#[tauri::command(rename_all = "snake_case")]
 pub async fn repo_create_entry(
+    services: &AppServices,
     repo_id: RepoId,
     path: String,
     kind: NewEntryKind,
-    state: State<'_, RepoManager>,
 ) -> Result<(), String> {
-    let handle = get_handle(&state, &repo_id)?;
+    let handle = get_handle(&services.repos, &repo_id)?;
     if let Some(remote) = handle.remote() {
         let remote = Arc::clone(remote);
         return finish(enqueue_fs_mutation(&handle, "create_entry", move || {
@@ -763,14 +753,13 @@ pub async fn repo_create_entry(
 }
 
 /// Rename/move a file or directory within the worktree.
-#[tauri::command(rename_all = "snake_case")]
 pub async fn repo_rename_entry(
+    services: &AppServices,
     repo_id: RepoId,
     path: String,
     new_path: String,
-    state: State<'_, RepoManager>,
 ) -> Result<(), String> {
-    let handle = get_handle(&state, &repo_id)?;
+    let handle = get_handle(&services.repos, &repo_id)?;
     if let Some(remote) = handle.remote() {
         let remote = Arc::clone(remote);
         return finish(enqueue_fs_mutation(&handle, "rename_entry", move || {
@@ -789,13 +778,12 @@ pub async fn repo_rename_entry(
 /// deletion (same ordering rule as discard/repo_clean) so the delete is
 /// undoable from the Undo panel. Remote repos snapshot via the device's git
 /// engine inside the same queued mutation, before the SFTP delete.
-#[tauri::command(rename_all = "snake_case")]
 pub async fn repo_delete_entry(
+    services: &AppServices,
     repo_id: RepoId,
     path: String,
-    state: State<'_, RepoManager>,
 ) -> Result<crate::engine::types::CheckpointInfo, String> {
-    let handle = get_handle(&state, &repo_id)?;
+    let handle = get_handle(&services.repos, &repo_id)?;
     if let Some(remote) = handle.remote() {
         // Same ordering as local: checkpoint the pre-delete state first,
         // then delete — a failed delete leaves the checkpoint behind but
@@ -829,12 +817,8 @@ pub async fn repo_delete_entry(
 /// Flat, gitignore-respecting file index for quick-open (Ctrl+P). Remote
 /// repos enqueue the device-side `git ls-files` walk silently like the
 /// other reads.
-#[tauri::command(rename_all = "snake_case")]
-pub async fn repo_file_index(
-    repo_id: RepoId,
-    state: State<'_, RepoManager>,
-) -> Result<FileIndex, String> {
-    let handle = get_handle(&state, &repo_id)?;
+pub async fn repo_file_index(services: &AppServices, repo_id: RepoId) -> Result<FileIndex, String> {
+    let handle = get_handle(&services.repos, &repo_id)?;
     if let Some(remote) = handle.remote() {
         let ws = remote.workspace();
         let (_op_id, rx) = handle
@@ -843,7 +827,7 @@ pub async fn repo_file_index(
         return finish(rx).await;
     }
     let root = handle.root.clone();
-    tauri::async_runtime::spawn_blocking(move || file_index_impl(&root))
+    crate::rt::spawn_blocking(move || file_index_impl(&root))
         .await
         .map_err(|e| format!("file_index task failed: {e}"))?
 }

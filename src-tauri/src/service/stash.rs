@@ -1,18 +1,11 @@
-use tauri::State;
-
 use crate::engine::types::{RepoId, StashInfo, WorktreeInfo};
-use crate::repo::RepoManager;
 use crate::service::{
     enqueue_mutation, enqueue_read, enqueue_remote_mutation, enqueue_remote_read, finish_op,
-    get_handle,
+    get_handle, AppServices,
 };
 
-#[tauri::command(rename_all = "snake_case")]
-pub async fn stash_list(
-    repo_id: RepoId,
-    state: State<'_, RepoManager>,
-) -> Result<Vec<StashInfo>, String> {
-    let handle = get_handle(&state, &repo_id)?;
+pub async fn stash_list(services: &AppServices, repo_id: RepoId) -> Result<Vec<StashInfo>, String> {
+    let handle = get_handle(&services.repos, &repo_id)?;
     if let Some(remote) = handle.remote() {
         return finish_op(enqueue_remote_read(
             &handle,
@@ -30,15 +23,14 @@ pub async fn stash_list(
     .await
 }
 
-#[tauri::command(rename_all = "snake_case")]
 pub async fn stash_push(
+    services: &AppServices,
     repo_id: RepoId,
     message: Option<String>,
     keep_index: bool,
     include_untracked: bool,
-    state: State<'_, RepoManager>,
 ) -> Result<(), String> {
-    let handle = get_handle(&state, &repo_id)?;
+    let handle = get_handle(&services.repos, &repo_id)?;
     if let Some(remote) = handle.remote() {
         return finish_op(enqueue_remote_mutation(
             &handle,
@@ -61,14 +53,13 @@ pub async fn stash_push(
     .await
 }
 
-#[tauri::command(rename_all = "snake_case")]
 pub async fn stash_apply(
+    services: &AppServices,
     repo_id: RepoId,
     index: u32,
     pop: bool,
-    state: State<'_, RepoManager>,
 ) -> Result<(), String> {
-    let handle = get_handle(&state, &repo_id)?;
+    let handle = get_handle(&services.repos, &repo_id)?;
     if let Some(remote) = handle.remote() {
         // Pop = apply + drop, and the drop only runs after a clean apply
         // (same rule as the local engine's stash_apply_impl).
@@ -97,13 +88,8 @@ pub async fn stash_apply(
     .await
 }
 
-#[tauri::command(rename_all = "snake_case")]
-pub async fn stash_drop(
-    repo_id: RepoId,
-    index: u32,
-    state: State<'_, RepoManager>,
-) -> Result<(), String> {
-    let handle = get_handle(&state, &repo_id)?;
+pub async fn stash_drop(services: &AppServices, repo_id: RepoId, index: u32) -> Result<(), String> {
+    let handle = get_handle(&services.repos, &repo_id)?;
     if let Some(remote) = handle.remote() {
         return finish_op(enqueue_remote_mutation(
             &handle,
@@ -124,14 +110,13 @@ pub async fn stash_drop(
     .await
 }
 
-#[tauri::command(rename_all = "snake_case")]
 pub async fn stash_branch(
+    services: &AppServices,
     repo_id: RepoId,
     name: String,
     index: u32,
-    state: State<'_, RepoManager>,
 ) -> Result<(), String> {
-    let handle = get_handle(&state, &repo_id)?;
+    let handle = get_handle(&services.repos, &repo_id)?;
     if let Some(remote) = handle.remote() {
         return finish_op(enqueue_remote_mutation(
             &handle,
@@ -152,12 +137,11 @@ pub async fn stash_branch(
     .await
 }
 
-#[tauri::command(rename_all = "snake_case")]
 pub async fn worktrees(
+    services: &AppServices,
     repo_id: RepoId,
-    state: State<'_, RepoManager>,
 ) -> Result<Vec<WorktreeInfo>, String> {
-    let handle = get_handle(&state, &repo_id)?;
+    let handle = get_handle(&services.repos, &repo_id)?;
     if let Some(remote) = handle.remote() {
         return finish_op(enqueue_remote_read(
             &handle,
@@ -178,15 +162,14 @@ pub async fn worktrees(
     .await
 }
 
-#[tauri::command(rename_all = "snake_case")]
 pub async fn worktree_add(
+    services: &AppServices,
     repo_id: RepoId,
     path: String,
     branch: Option<String>,
     new_branch: Option<String>,
-    state: State<'_, RepoManager>,
 ) -> Result<(), String> {
-    let handle = get_handle(&state, &repo_id)?;
+    let handle = get_handle(&services.repos, &repo_id)?;
     if let Some(remote) = handle.remote() {
         return finish_op(enqueue_remote_mutation(
             &handle,
@@ -209,14 +192,13 @@ pub async fn worktree_add(
     .await
 }
 
-#[tauri::command(rename_all = "snake_case")]
 pub async fn worktree_remove(
+    services: &AppServices,
     repo_id: RepoId,
     name: String,
     force: bool,
-    state: State<'_, RepoManager>,
 ) -> Result<(), String> {
-    let handle = get_handle(&state, &repo_id)?;
+    let handle = get_handle(&services.repos, &repo_id)?;
     if let Some(remote) = handle.remote() {
         // (The local path emits a one-line progress event; the silent
         // remote read/mutation helpers carry no OpCtx, so the remote op

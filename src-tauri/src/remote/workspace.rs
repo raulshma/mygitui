@@ -86,7 +86,7 @@ impl RemoteWorkspace {
     }
 
     fn block<T>(&self, fut: impl std::future::Future<Output = T>) -> T {
-        tauri::async_runtime::block_on(fut)
+        crate::rt::block_on(fut)
     }
 
     /// Run one SFTP-backed operation. A failure invalidates the device's

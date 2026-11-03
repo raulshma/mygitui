@@ -1,41 +1,20 @@
-//! Device IPC commands: profile CRUD, connect/test, host-key + credential
-//! prompt answers, remote filesystem browsing, repo scanning, and
+//! Device service functions: profile CRUD, connect/test, host-key +
+//! credential prompt answers, remote filesystem browsing, repo scanning, and
 //! `remote_repo_open` (the remote twin of `repo_open`).
 //!
-//! Secrets never appear in command parameters that get logged: the FE sends
-//! them once over IPC, they go straight into the OS keyring, and are never
-//! stored in the profile file or included in error strings.
-
-use std::sync::Arc;
+//! Secrets never appear in parameters that get logged: the UI sends them
+//! once, they go straight into the OS keyring, and are never stored in the
+//! profile file or included in error strings.
 
 use serde::{Deserialize, Serialize};
-use tauri::{Manager, State};
 use ts_rs::TS;
 
-use super::hostkeys::HostKeyStore;
 use super::profiles::{
-    self, delete_secrets, sanitize_profile, AuthKind, DeviceAuth, DeviceProfile, DeviceStore,
+    self, delete_secrets, sanitize_profile, AuthKind, DeviceAuth, DeviceProfile,
 };
 use super::prompts;
 use super::transport::{test_connect, DeviceRegistry};
-use crate::repo::RepoManager;
-
-/// `<app-data>/remote/…` stores rooted at the app data dir.
-pub fn device_store(app: &tauri::AppHandle) -> DeviceStore {
-    let dir = app
-        .path()
-        .app_data_dir()
-        .unwrap_or_else(|_| std::path::PathBuf::from("."));
-    DeviceStore::under_dir(&dir)
-}
-
-pub fn host_key_store(app: &tauri::AppHandle) -> Arc<HostKeyStore> {
-    let dir = app
-        .path()
-        .app_data_dir()
-        .unwrap_or_else(|_| std::path::PathBuf::from("."));
-    Arc::new(HostKeyStore::under_dir(&dir))
-}
+use crate::service::AppServices;
 
 /// One device as the FE sees it: the profile plus live connection status.
 #[derive(Debug, Clone, Serialize, TS)]
@@ -66,15 +45,12 @@ fn device_info(registry: &DeviceRegistry, profile: DeviceProfile) -> DeviceInfo 
 
 // ---------- profile CRUD ----------
 
-#[tauri::command(rename_all = "snake_case")]
-pub fn device_list(
-    app: tauri::AppHandle,
-    registry: State<'_, DeviceRegistry>,
-) -> Result<Vec<DeviceInfo>, String> {
-    Ok(device_store(&app)
+pub fn device_list(services: &AppServices) -> Result<Vec<DeviceInfo>, String> {
+    Ok(services
+        .device_store()
         .list()
         .into_iter()
-        .map(|p| device_info(&registry, p))
+        .map(|p| device_info(&services.devices, p))
         .collect())
 }
 
@@ -128,96 +104,75 @@ fn store_secrets(id: &str, input: &DeviceInput) -> Result<(), String> {
     Ok(())
 }
 
-#[tauri::command(rename_all = "snake_case")]
-pub async fn device_add(
-    input: DeviceInput,
-    app: tauri::AppHandle,
-    registry: State<'_, DeviceRegistry>,
-) -> Result<DeviceInfo, String> {
+pub async fn device_add(services: &AppServices, input: DeviceInput) -> Result<DeviceInfo, String> {
     let id = profiles::new_device_id();
     let profile = profile_from_input(&input, id.clone());
     store_secrets(&id, &input)?;
-    device_store(&app).upsert(profile.clone())?;
-    Ok(device_info(&registry, profile))
+    services.device_store().upsert(profile.clone())?;
+    Ok(device_info(&services.devices, profile))
 }
 
-#[tauri::command(rename_all = "snake_case")]
 pub async fn device_update(
+    services: &AppServices,
     input: DeviceInput,
-    app: tauri::AppHandle,
-    registry: State<'_, DeviceRegistry>,
 ) -> Result<DeviceInfo, String> {
     let id = input
         .id
         .clone()
         .ok_or_else(|| "device id is required for updates".to_string())?;
-    let store = device_store(&app);
+    let store = services.device_store();
     if store.get(&id).is_none() {
         return Err(format!("unknown device: {id}"));
     }
     let profile = profile_from_input(&input, id.clone());
     store_secrets(&id, &input)?;
     store.upsert(profile.clone())?;
-    Ok(device_info(&registry, profile))
+    Ok(device_info(&services.devices, profile))
 }
 
-#[tauri::command(rename_all = "snake_case")]
-pub async fn device_remove(
-    device_id: String,
-    app: tauri::AppHandle,
-    registry: State<'_, DeviceRegistry>,
-) -> Result<(), String> {
+pub async fn device_remove(services: &AppServices, device_id: String) -> Result<(), String> {
     // Drop the live session first (it keys on the device id).
-    if let Some(session) = registry.remove(&device_id) {
+    if let Some(session) = services.devices.remove(&device_id) {
         session.disconnect().await;
     }
-    device_store(&app).remove(&device_id)?;
+    services.device_store().remove(&device_id)?;
     delete_secrets(&device_id)?;
     Ok(())
 }
 
 // ---------- connection lifecycle ----------
 
-#[tauri::command(rename_all = "snake_case")]
-pub async fn device_connect(
-    device_id: String,
-    app: tauri::AppHandle,
-    registry: State<'_, DeviceRegistry>,
-) -> Result<String, String> {
-    let profile = device_store(&app)
+pub async fn device_connect(services: &AppServices, device_id: String) -> Result<String, String> {
+    let profile = services
+        .device_store()
         .get(&device_id)
         .ok_or_else(|| format!("unknown device: {device_id}"))?;
-    let session = registry
-        .session_for(&profile, &host_key_store(&app))
+    let session = services
+        .devices
+        .session_for(&profile, &services.host_key_store())
         .await?;
     Ok(session.status().as_str().to_string())
 }
 
-#[tauri::command(rename_all = "snake_case")]
-pub async fn device_disconnect(
-    device_id: String,
-    registry: State<'_, DeviceRegistry>,
-) -> Result<(), String> {
-    if let Some(session) = registry.peek(&device_id) {
+pub async fn device_disconnect(services: &AppServices, device_id: String) -> Result<(), String> {
+    if let Some(session) = services.devices.peek(&device_id) {
         session.disconnect().await;
     }
     Ok(())
 }
 
-#[tauri::command(rename_all = "snake_case")]
-pub fn device_status(device_id: String, registry: State<'_, DeviceRegistry>) -> String {
-    registry.status(&device_id).as_str().to_string()
+pub fn device_status(services: &AppServices, device_id: String) -> String {
+    services.devices.status(&device_id).as_str().to_string()
 }
 
 /// Probe-only connect (Test connection button). Nothing is persisted.
-#[tauri::command(rename_all = "snake_case")]
-pub async fn device_test(input: DeviceInput, app: tauri::AppHandle) -> Result<String, String> {
+pub async fn device_test(services: &AppServices, input: DeviceInput) -> Result<String, String> {
     let id = input.id.clone().unwrap_or_else(profiles::new_device_id);
     let profile = profile_from_input(&input, id);
     // Secrets for an unsaved device: use what the FE just typed (same
     // store rules as add/update; probe failures ignore write errors).
     let _ = store_secrets(&profile.id, &input);
-    let result = test_connect(&profile, &host_key_store(&app)).await;
+    let result = test_connect(&profile, &services.host_key_store()).await;
     if input.id.is_none() {
         // Probe-only device: the throwaway id's secrets must not linger in
         // the keyring — the real add stores them under its own id.
@@ -230,8 +185,7 @@ pub async fn device_test(input: DeviceInput, app: tauri::AppHandle) -> Result<St
 
 /// Pause/resume remote repo change polling. The FE flips this with the
 /// window's `visibilitychange` (spec: polling is "paused when tab hidden").
-#[tauri::command(rename_all = "snake_case")]
-pub fn remote_poll_set_paused(paused: bool) -> Result<(), String> {
+pub fn remote_poll_set_paused(_services: &AppServices, paused: bool) -> Result<(), String> {
     super::polling::set_paused(paused);
     Ok(())
 }
@@ -239,8 +193,11 @@ pub fn remote_poll_set_paused(paused: bool) -> Result<(), String> {
 // ---------- prompt answers ----------
 
 /// FE answer for a `hostkey-request` event.
-#[tauri::command(rename_all = "snake_case")]
-pub fn device_hostkey_respond(request_id: String, accept: bool) -> Result<(), String> {
+pub fn device_hostkey_respond(
+    _services: &AppServices,
+    request_id: String,
+    accept: bool,
+) -> Result<(), String> {
     if prompts::respond_host_key(&request_id, accept) {
         Ok(())
     } else {
@@ -249,8 +206,8 @@ pub fn device_hostkey_respond(request_id: String, accept: bool) -> Result<(), St
 }
 
 /// FE answer for a `device-auth-request` event.
-#[tauri::command(rename_all = "snake_case")]
 pub fn device_auth_respond(
+    _services: &AppServices,
     request_id: String,
     password: Option<String>,
     store: bool,
@@ -264,42 +221,42 @@ pub fn device_auth_respond(
 }
 
 /// Drop the pinned host key for a device (device settings).
-#[tauri::command(rename_all = "snake_case")]
-pub fn device_forget_host_key(device_id: String, app: tauri::AppHandle) -> Result<bool, String> {
-    let profile = device_store(&app)
+pub fn device_forget_host_key(services: &AppServices, device_id: String) -> Result<bool, String> {
+    let profile = services
+        .device_store()
         .get(&device_id)
         .ok_or_else(|| format!("unknown device: {device_id}"))?;
-    host_key_store(&app).forget(&profile.host_port())
+    services.host_key_store().forget(&profile.host_port())
 }
 
 /// The pinned host key for a device (device detail view), if any.
-#[tauri::command(rename_all = "snake_case")]
 pub fn device_host_key(
+    services: &AppServices,
     device_id: String,
-    app: tauri::AppHandle,
 ) -> Result<Option<super::hostkeys::KnownHostKey>, String> {
-    let profile = device_store(&app)
+    let profile = services
+        .device_store()
         .get(&device_id)
         .ok_or_else(|| format!("unknown device: {device_id}"))?;
-    Ok(host_key_store(&app).known(&profile.host_port()))
+    Ok(services.host_key_store().known(&profile.host_port()))
 }
 
 // ---------- remote filesystem ----------
 
 /// List a directory anywhere on the device (absolute POSIX path, "" or "~"
 /// for the home directory).
-#[tauri::command(rename_all = "snake_case")]
 pub async fn device_browse_dir(
+    services: &AppServices,
     device_id: String,
     path: String,
-    app: tauri::AppHandle,
-    registry: State<'_, DeviceRegistry>,
 ) -> Result<crate::workspace::DirListing, String> {
-    let profile = device_store(&app)
+    let profile = services
+        .device_store()
         .get(&device_id)
         .ok_or_else(|| format!("unknown device: {device_id}"))?;
-    let session = registry
-        .session_for(&profile, &host_key_store(&app))
+    let session = services
+        .devices
+        .session_for(&profile, &services.host_key_store())
         .await?;
     let dir = resolve_browse_path(&session, &path).await?;
     // The workspace surface is synchronous and bridges into the async world
@@ -308,7 +265,7 @@ pub async fn device_browse_dir(
     // a runtime" and takes the app down (panic = "abort" in release).
     let mut listing = {
         let workspace = crate::remote::workspace::RemoteWorkspace::new(session, dir.clone());
-        tauri::async_runtime::spawn_blocking(move || workspace.list_dir("", false))
+        crate::rt::spawn_blocking(move || workspace.list_dir("", false))
             .await
             .map_err(|e| format!("device browse failed: {e}"))??
     };
@@ -361,18 +318,18 @@ async fn resolve_browse_path(
 
 /// Find git repositories under `path` (default: home), depth-limited,
 /// skipping dependency/build dirs. Returns up to 200 candidates.
-#[tauri::command(rename_all = "snake_case")]
 pub async fn device_scan_repos(
+    services: &AppServices,
     device_id: String,
     root: Option<String>,
-    app: tauri::AppHandle,
-    registry: State<'_, DeviceRegistry>,
 ) -> Result<Vec<DeviceRepoCandidate>, String> {
-    let profile = device_store(&app)
+    let profile = services
+        .device_store()
         .get(&device_id)
         .ok_or_else(|| format!("unknown device: {device_id}"))?;
-    let session = registry
-        .session_for(&profile, &host_key_store(&app))
+    let session = services
+        .devices
+        .session_for(&profile, &services.host_key_store())
         .await?;
     let base = match root.as_deref() {
         Some(r) if !r.trim().is_empty() => r.trim().to_string(),
@@ -417,33 +374,40 @@ pub async fn device_scan_repos(
 
 /// Open a repository that lives on a device (the remote twin of
 /// `repo_open`).
-#[tauri::command(rename_all = "snake_case")]
 pub async fn remote_repo_open(
+    services: &AppServices,
     device_id: String,
     path: String,
-    app: tauri::AppHandle,
-    registry: State<'_, DeviceRegistry>,
 ) -> Result<crate::engine::types::RepoInfo, String> {
-    let profile = device_store(&app)
+    let profile = services
+        .device_store()
         .get(&device_id)
         .ok_or_else(|| format!("unknown device: {device_id}"))?;
-    let session = registry
-        .session_for(&profile, &host_key_store(&app))
+    let session = services
+        .devices
+        .session_for(&profile, &services.host_key_store())
         .await?;
     // `open_remote` runs the synchronous engine (block_on bridges inside
-    // `discover`), so it must hop to a blocking thread: calling it here
+    // `discover`), so it must hop off the async worker: calling it here
     // (inside a tokio task) panics, which kills the app in release builds
-    // and silently drops the IPC reply otherwise (the FE "Add" no-op).
-    tauri::async_runtime::spawn_blocking(move || {
-        let repos = app.state::<RepoManager>();
-        repos.open_remote(
-            &profile.id,
-            &profile.name,
-            profile.poll_secs,
-            session,
-            &path,
-        )
+    // and silently drops the reply otherwise (the FE "Add" no-op).
+    //
+    // `RepoManager` is neither `Clone` nor `'static`, so it cannot be moved
+    // into `rt::spawn_blocking`; a scoped thread owned by this call gives
+    // the same guarantee (discovery never runs on an async worker) while
+    // borrowing the services bag.
+    std::thread::scope(|scope| {
+        scope
+            .spawn(move || {
+                services.repos.open_remote(
+                    &profile.id,
+                    &profile.name,
+                    profile.poll_secs,
+                    session,
+                    &path,
+                )
+            })
+            .join()
+            .map_err(|_| "remote repo open failed: discovery thread panicked".to_string())?
     })
-    .await
-    .map_err(|e| format!("remote repo open failed: {e}"))?
 }

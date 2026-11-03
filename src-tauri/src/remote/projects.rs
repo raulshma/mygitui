@@ -62,7 +62,7 @@ pub fn detect(session: &Arc<DeviceSession>, root: &str) -> Result<Vec<ProjectInf
          exit 0",
         shell_quote(root)
     );
-    let out = tauri::async_runtime::block_on(session.exec(&cmd, DEFAULT_EXEC_TIMEOUT))?;
+    let out = crate::rt::block_on(session.exec(&cmd, DEFAULT_EXEC_TIMEOUT))?;
     if out.exit_code == 64 {
         return Err(format!("repository path not found on device: {root}"));
     }
@@ -85,7 +85,7 @@ fn fetch_contents(
     if paths.is_empty() {
         return Ok(BTreeMap::new());
     }
-    let sftp = tauri::async_runtime::block_on(session.sftp())?;
+    let sftp = crate::rt::block_on(session.sftp())?;
     let reads = paths.iter().map(|rel| {
         let sftp = sftp.clone();
         let abs = format!("{}/{rel}", root.trim_end_matches('/'));
@@ -101,7 +101,7 @@ fn fetch_contents(
     });
     let mut out = BTreeMap::new();
     let mut total = 0usize;
-    for result in tauri::async_runtime::block_on(join_all(reads)) {
+    for result in crate::rt::block_on(join_all(reads)) {
         let Some((rel, text)) = result else {
             continue;
         };

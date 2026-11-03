@@ -23,8 +23,9 @@
 //! (cursor home) and strips the probe from the forwarded stream — the FE
 //! never sees it and must not reply to it (see [`CURSOR_PROBE`]).
 //!
-//! Registry: a process-global [`PtyRegistry`] (tauri-managed state) owns
-//! every live session, ids are `pty-<counter hex>`, and at most
+//! Registry: a process-global [`PtyRegistry`] (owned by
+//! [`crate::service::AppServices`]) owns every live session, ids are
+//! `pty-<counter hex>`, and at most
 //! [`MAX_SESSIONS`] run at once (further `pty_create` rejects). Sessions
 //! are NOT tied to the repo lifecycle backend-side: closing a repo tab is
 //! the frontend's job to `pty_kill` its terminal panels; as a backstop the
@@ -37,9 +38,9 @@
 //! `pty_kill` never needs to reach into that thread. The reader, coalescer
 //! and waiter threads all exit on their own once the child dies (EOF /
 //! wait returns). Design mirrors `actions.rs`: the emitter is abstracted
-//! behind the [`PtySink`] trait ([`TauriPtySink`] in production, a
-//! collector in tests), so the manager compiles and tests headless without
-//! an `AppHandle`.
+//! behind the [`PtySink`] trait ([`BusPtySink`] in production, a collector
+//! in tests), so the manager compiles and tests headless without a UI
+//! handle.
 
 use std::collections::HashMap;
 use std::io::{Read, Write};
@@ -54,7 +55,8 @@ use serde::Serialize;
 use ts_rs::TS;
 
 use crate::engine::types::RepoId;
-use crate::repo::RepoManager;
+use crate::service::events::{global, BackendEvent};
+use crate::service::AppServices;
 
 /// `pty-output` event name (contracts.md, Events M5).
 pub const PTY_OUTPUT_EVENT: &str = "pty-output";
@@ -121,38 +123,17 @@ pub trait PtySink: Send + Sync {
     fn emit_exit(&self, event: &PtyExit);
 }
 
-/// Production sink: emits both events on the app handle.
-pub struct TauriPtySink {
-    app: tauri::AppHandle,
-}
+/// Production sink: publishes both events on the process-wide backend event
+/// bus.
+pub struct BusPtySink;
 
-impl TauriPtySink {
-    pub fn new(app: tauri::AppHandle) -> Self {
-        Self { app }
-    }
-}
-
-impl PtySink for TauriPtySink {
+impl PtySink for BusPtySink {
     fn emit_output(&self, event: &PtyOutput) {
-        use tauri::Emitter;
-        if let Err(err) = self.app.emit(PTY_OUTPUT_EVENT, event) {
-            tracing::warn!(
-                session = %event.session_id,
-                error = %err,
-                "emit pty-output failed"
-            );
-        }
+        global().publish(BackendEvent::PtyOutput(event.clone()));
     }
 
     fn emit_exit(&self, event: &PtyExit) {
-        use tauri::Emitter;
-        if let Err(err) = self.app.emit(PTY_EXIT_EVENT, event) {
-            tracing::warn!(
-                session = %event.session_id,
-                error = %err,
-                "emit pty-exit failed"
-            );
-        }
+        global().publish(BackendEvent::PtyExit(event.clone()));
     }
 }
 
@@ -168,7 +149,7 @@ pub(crate) struct Session {
     /// the waiter thread holds the child in `wait`.
     killer: Mutex<Box<dyn ChildKiller + Send + Sync>>,
     /// Master end: kept for `pty_resize` (mutex-wrapped so `Session` is
-    /// `Sync` — tauri-managed state requires it — not for write
+    /// `Sync` — the registry is shared across threads — not for write
     /// concurrency: resize is the only caller).
     master: Mutex<Box<dyn MasterPty + Send>>,
 }
@@ -208,8 +189,9 @@ impl Drop for Session {
     }
 }
 
-/// Process-global registry of terminal sessions (tauri-managed state): id
-/// allocation, lookup, the concurrency cap and app-exit cleanup.
+/// Process-global registry of terminal sessions (owned by
+/// [`crate::service::AppServices`]): id allocation, lookup, the concurrency
+/// cap and app-exit cleanup.
 #[derive(Default)]
 pub struct PtyRegistry {
     inner: Arc<RegistryInner>,
@@ -534,45 +516,39 @@ pub(crate) fn default_shell_command() -> CommandBuilder {
 }
 
 // ---------------------------------------------------------------------------
-// IPC commands (contracts.md M5). Names/shapes fixed by docs/contracts.md.
+// Service entry points (contracts.md M5). Names/shapes fixed by
+// docs/contracts.md.
 // ---------------------------------------------------------------------------
 
 /// Spawn a shell in a fresh pty at the repo root. Returns the session id
-/// the frontend uses for write/resize/kill and receives in the events.
-#[tauri::command(rename_all = "snake_case")]
+/// the UI uses for write/resize/kill and receives in the events.
 pub fn pty_create(
+    services: &AppServices,
     repo_id: RepoId,
     rows: Option<u16>,
     cols: Option<u16>,
-    app: tauri::AppHandle,
-    repos: tauri::State<'_, RepoManager>,
-    registry: tauri::State<'_, PtyRegistry>,
 ) -> Result<String, String> {
     // An open repo is required: the terminal is always rooted at a
     // repository (no app-cwd sessions).
-    let handle = repos
+    let handle = services
+        .repos
         .get(&repo_id)
         .ok_or_else(|| format!("repo not open: {}", repo_id.0))?;
     spawn_session(
-        &registry,
+        &services.pty,
         SessionSpec {
             cwd: handle.root.clone(),
             rows: rows.unwrap_or(DEFAULT_ROWS),
             cols: cols.unwrap_or(DEFAULT_COLS),
             command: None,
         },
-        Arc::new(TauriPtySink::new(app)),
+        Arc::new(BusPtySink),
     )
 }
 
-/// Send frontend input (keystrokes, paste) to the session's shell.
-#[tauri::command(rename_all = "snake_case")]
-pub fn pty_write(
-    session_id: String,
-    data: String,
-    registry: tauri::State<'_, PtyRegistry>,
-) -> Result<(), String> {
-    write_to_session(&registry, &session_id, &data)
+/// Send UI input (keystrokes, paste) to the session's shell.
+pub fn pty_write(services: &AppServices, session_id: String, data: String) -> Result<(), String> {
+    write_to_session(&services.pty, &session_id, &data)
 }
 
 /// Command body of [`pty_write`], split so tests can drive a registry
@@ -588,15 +564,14 @@ pub(crate) fn write_to_session(
     session.write(data)
 }
 
-/// Resize the session's terminal (frontend panel size changed).
-#[tauri::command(rename_all = "snake_case")]
+/// Resize the session's terminal (UI panel size changed).
 pub fn pty_resize(
+    services: &AppServices,
     session_id: String,
     rows: u16,
     cols: u16,
-    registry: tauri::State<'_, PtyRegistry>,
 ) -> Result<(), String> {
-    resize_session(&registry, &session_id, rows, cols)
+    resize_session(&services.pty, &session_id, rows, cols)
 }
 
 /// Command body of [`pty_resize`] (see [`write_to_session`]).
@@ -615,9 +590,8 @@ pub(crate) fn resize_session(
 /// Kill a session's shell and clean up the registry entry. The `pty-exit`
 /// event still fires (from the exit waiter, with the real code). Returns
 /// an error when the session is unknown or already gone.
-#[tauri::command(rename_all = "snake_case")]
-pub fn pty_kill(session_id: String, registry: tauri::State<'_, PtyRegistry>) -> Result<(), String> {
-    kill_session(&registry, &session_id)
+pub fn pty_kill(services: &AppServices, session_id: String) -> Result<(), String> {
+    kill_session(&services.pty, &session_id)
 }
 
 /// Command body of [`pty_kill`] (see [`write_to_session`]).

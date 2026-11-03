@@ -10,7 +10,8 @@
 //! are never written to disk or logs.
 //!
 //! The store is plain-JSON on explicit paths so it round-trips in unit tests
-//! without a Tauri app; the IPC layer supplies the real app-data dir.
+//! without an app shell; [`crate::service::AppServices::device_store`] roots
+//! it at the real data dir.
 
 use std::path::{Path, PathBuf};
 

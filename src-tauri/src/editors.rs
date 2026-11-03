@@ -20,6 +20,8 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use ts_rs::TS;
 
+use crate::service::AppServices;
+
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct AppEntry {
@@ -436,8 +438,8 @@ fn to_native_path(path: &Path) -> PathBuf {
 }
 
 /// Spawns `app` with the repository root. The app entry must come from
-/// [`detect_apps`] (the Tauri command re-detects to enforce that), so the
-/// spawned path is machine-verified, not frontend input.
+/// [`detect_apps`] (the `open_with` service fn re-detects to enforce that),
+/// so the spawned path is machine-verified, not UI input.
 pub fn open_path_with(app: &AppEntry, root: &Path) -> Result<(), String> {
     let mut cmd = if cfg!(target_os = "macos") {
         // `open [-a <app>] <dir>`: Finder needs no -a.
@@ -469,21 +471,23 @@ pub fn open_path_with(app: &AppEntry, root: &Path) -> Result<(), String> {
         .map_err(|e| format!("failed to launch {}: {e}", app.name))
 }
 
-// -- Tauri commands -----------------------------------------------------------
+// -- Service entry points -----------------------------------------------------
 
 /// Editors available on this machine (Explorer/Finder always first).
-#[tauri::command(rename_all = "snake_case")]
-pub async fn detect_editors() -> Result<Vec<AppEntry>, String> {
-    tauri::async_runtime::spawn_blocking(detect_apps)
+pub async fn detect_editors(_services: &AppServices) -> Result<Vec<AppEntry>, String> {
+    crate::rt::spawn_blocking(detect_apps)
         .await
         .map_err(|e| format!("editor detection failed: {e}"))
 }
 
 /// Opens the repository root in the app with the given id. The id must
 /// resolve through a fresh detection (so only machine-verified paths spawn).
-#[tauri::command(rename_all = "snake_case")]
-pub async fn open_with(repo_root: String, app_id: String) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || {
+pub async fn open_with(
+    _services: &AppServices,
+    repo_root: String,
+    app_id: String,
+) -> Result<(), String> {
+    crate::rt::spawn_blocking(move || {
         let app = detect_apps()
             .into_iter()
             .find(|a| a.id == app_id)
