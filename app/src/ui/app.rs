@@ -9,15 +9,16 @@
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 use iced::widget::{button, column, container, row, text, text_editor, Space};
 use iced::{window, Alignment, Element, Length, Subscription, Task};
 
 use crate::engine::types::{
     BranchInfo, ChangeKind, CheckpointInfo, CommitOptions, ConflictResolution, DiffSide,
-    FetchOptions, FileDiff, LineRange, MergeOptions, MergeOutcome, MergeResult, PullOptions,
-    PushOptions, RemoteInfo, RepoId, RepoInfo, RepoStatus, ResetKind, StageRequest, StageTarget,
-    StashInfo,
+    FetchOptions, FileDiff, LineRange, MergeOptions, MergeOutcome, MergeResult, NetStats,
+    PullOptions, PushOptions, RemoteInfo, RepoId, RepoInfo, RepoStatus, ResetKind, StageRequest,
+    StageTarget, StashInfo,
 };
 use crate::remote::prompts::SecretAnswer;
 use crate::service::events::BackendEvent;
@@ -124,6 +125,12 @@ pub enum Message {
     CloseTab(RepoId),
     GoHome,
     CycleTheme,
+    CycleAutoFetch,
+    AutoFetchTick(RepoId),
+    AutoFetched {
+        repo_id: RepoId,
+        result: Result<Option<NetStats>, String>,
+    },
     TogglePin(String),
     RemoveRecent(String),
     DismissNotice,
@@ -327,6 +334,35 @@ pub enum Message {
 
     ConfirmDiscard,
     CancelDialog,
+}
+
+/// One background auto-fetch cycle for a repo: pick the default remote
+/// (`origin`, else the first configured) and fetch with prune. `Ok(None)`
+/// means nothing to do (no remotes) and is never surfaced as an error.
+async fn auto_fetch_once(
+    services: &AppServices,
+    repo_id: &RepoId,
+) -> Result<Option<NetStats>, String> {
+    let remotes = crate::service::network::remotes(services, repo_id.clone()).await?;
+    let remote = remotes
+        .iter()
+        .find(|remote| remote.name == "origin")
+        .or_else(|| remotes.first())
+        .map(|remote| remote.name.clone());
+    let Some(remote) = remote else {
+        return Ok(None);
+    };
+    crate::service::network::fetch(
+        services,
+        repo_id.clone(),
+        FetchOptions {
+            remote,
+            prune: true,
+            ..FetchOptions::default()
+        },
+    )
+    .await
+    .map(Some)
 }
 
 impl App {
@@ -802,6 +838,54 @@ impl App {
                 self.config.theme = self.config.theme.next();
                 self.persist_config();
                 Task::none()
+            }
+            Message::CycleAutoFetch => {
+                self.config.auto_fetch_minutes =
+                    Config::next_auto_fetch(self.config.auto_fetch_minutes);
+                self.persist_config();
+                Task::none()
+            }
+            Message::AutoFetchTick(repo_id) => {
+                if self.config.auto_fetch_minutes == 0
+                    || repo_view::tab_index(&self.tabs, &repo_id).is_none()
+                {
+                    return Task::none();
+                }
+                let services = self.services.clone();
+                Task::perform(
+                    async move {
+                        let result = auto_fetch_once(&services, &repo_id).await;
+                        Message::AutoFetched { repo_id, result }
+                    },
+                    std::convert::identity,
+                )
+            }
+            Message::AutoFetched { repo_id, result } => {
+                let Some(index) = repo_view::tab_index(&self.tabs, &repo_id) else {
+                    return Task::none();
+                };
+                match result {
+                    Ok(Some(stats)) => {
+                        if !stats.updated_refs.is_empty() {
+                            // Silent when up to date (old auto-fetch store
+                            // behavior); only moved refs surface.
+                            self.last_op = Some(format!(
+                                "auto-fetch: {} ref(s) updated",
+                                stats.updated_refs.len()
+                            ));
+                        }
+                        if self.tabs[index].branches.open {
+                            self.tabs[index].branches.loading = true;
+                            return self.load_branches(repo_id);
+                        }
+                        Task::none()
+                    }
+                    Ok(None) => Task::none(),
+                    Err(err) => {
+                        self.notice = Some(Notice::error(format!("Auto-fetch failed: {err}")));
+                        Task::none()
+                    }
+                }
             }
             Message::TogglePin(path) => {
                 self.config.toggle_pin(&path);
@@ -2393,7 +2477,32 @@ impl App {
             Subscription::run(bus::stream).map(Message::Backend),
             iced::system::theme_changes().map(Message::SystemTheme),
             iced::event::listen_with(modifiers_changed),
+            self.auto_fetch_subscription(),
         ])
+    }
+
+    /// Per-repo auto-fetch timer: fires [`Message::AutoFetchTick`] on the
+    /// configured cadence while a tab is open. Keyed by (repo, cadence) so
+    /// changing the cadence restarts the clock; `0` disables it entirely.
+    fn auto_fetch_subscription(&self) -> Subscription<Message> {
+        let minutes = self.config.auto_fetch_minutes;
+        if minutes == 0 {
+            return Subscription::none();
+        }
+        Subscription::batch(self.tabs.iter().map(|tab| {
+            let repo_id = tab.repo.repo_id.clone();
+            Subscription::run_with((repo_id.0.clone(), minutes), |(_, minutes)| {
+                let interval = Duration::from_secs(60 * u64::from(*minutes));
+                futures_util::stream::unfold((), move |_| async move {
+                    tokio::time::sleep(interval).await;
+                    Some(((), ()))
+                })
+            })
+            // `with` carries the repo id into the stream identity and items;
+            // `map` closures must be non-capturing in iced 0.14.
+            .with(repo_id)
+            .map(|(repo_id, _tick)| Message::AutoFetchTick(repo_id))
+        }))
     }
 
     fn view(&self) -> Element<'_, Message> {
@@ -2458,6 +2567,13 @@ impl App {
                 .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
                 .padding([5, 10])
                 .on_press(Message::CycleTheme),
+        );
+
+        actions = actions.push(
+            button(text(Config::auto_fetch_label(self.config.auto_fetch_minutes)).size(12))
+                .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
+                .padding([5, 10])
+                .on_press(Message::CycleAutoFetch),
         );
 
         container(

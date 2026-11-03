@@ -18,7 +18,34 @@ use crate::ui::theme;
 pub struct Config {
     pub theme: theme::Mode,
     pub diff_wrap: bool,
+    /// Minutes between background fetches (0 = off).
+    pub auto_fetch_minutes: u32,
     pub recent_repos: Vec<RecentRepo>,
+}
+
+/// Auto-fetch cadence choices cycled by the header button (minutes; 0 = off).
+pub const AUTO_FETCH_CHOICES: [u32; 5] = [0, 1, 5, 10, 30];
+
+impl Config {
+    /// Next auto-fetch cadence after `current` in [`AUTO_FETCH_CHOICES`].
+    pub fn next_auto_fetch(current: u32) -> u32 {
+        let position = AUTO_FETCH_CHOICES
+            .iter()
+            .position(|choice| *choice == current)
+            .map_or(0, |position| (position + 1) % AUTO_FETCH_CHOICES.len());
+        AUTO_FETCH_CHOICES[position]
+    }
+
+    /// Header label for the auto-fetch cadence.
+    pub fn auto_fetch_label(minutes: u32) -> String {
+        if minutes == 0 {
+            "Auto-fetch: Off".to_string()
+        } else if minutes == 1 {
+            "Auto-fetch: 1m".to_string()
+        } else {
+            format!("Auto-fetch: {minutes}m")
+        }
+    }
 }
 
 impl Default for Config {
@@ -26,6 +53,7 @@ impl Default for Config {
         Self {
             theme: theme::Mode::System,
             diff_wrap: false,
+            auto_fetch_minutes: 0,
             recent_repos: Vec::new(),
         }
     }
@@ -166,13 +194,40 @@ mod tests {
         let mut config = Config::default();
         config.theme = theme::Mode::Dark;
         config.diff_wrap = true;
+        config.auto_fetch_minutes = 5;
         config.note_recent("C:\\repos\\alpha", 7);
         config.save(&dir).expect("save");
         let loaded = Config::load(&dir);
         assert_eq!(loaded.theme, theme::Mode::Dark);
         assert!(loaded.diff_wrap);
+        assert_eq!(loaded.auto_fetch_minutes, 5);
         assert_eq!(loaded.recent_repos.len(), 1);
         assert_eq!(loaded.recent_repos[0].path, "C:\\repos\\alpha");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn auto_fetch_cadence_cycles_and_labels() {
+        let mut minutes = 0;
+        for expected in [1, 5, 10, 30, 0] {
+            minutes = Config::next_auto_fetch(minutes);
+            assert_eq!(minutes, expected);
+        }
+        assert_eq!(Config::auto_fetch_label(0), "Auto-fetch: Off");
+        assert_eq!(Config::auto_fetch_label(1), "Auto-fetch: 1m");
+        assert_eq!(Config::auto_fetch_label(30), "Auto-fetch: 30m");
+    }
+
+    #[test]
+    fn missing_auto_fetch_setting_defaults_to_off() {
+        let dir = temp_dir("autofetch-default");
+        std::fs::write(
+            dir.join("config.json"),
+            r#"{"theme": "Light", "recent_repos": []}"#,
+        )
+        .unwrap();
+        let loaded = Config::load(&dir);
+        assert_eq!(loaded.auto_fetch_minutes, 0);
         let _ = std::fs::remove_dir_all(dir);
     }
 
