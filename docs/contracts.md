@@ -2,7 +2,7 @@
 
 Source of truth for Tauri command names, payloads, channels, and events.
 Lane agents extend additively; breaking changes go through the orchestrator.
-Types: Rust `src-tauri/src/engine/types.rs` is the single source; TS shapes
+Types: Rust `app/src/engine/types.rs` is the single source; TS shapes
 are GENERATED from it (see "Type single-sourcing" below).
 
 ## Commands (M1)
@@ -43,7 +43,7 @@ Wire format is **snake_case end to end** (values pass through verbatim — no
 camelCase conversion anywhere). TS types are not hand-mirrored:
 
 1. Every serializable IPC type in Rust carries `derive(TS)` (ts-rs 12,
-   `serde-compat`). Sources: `src-tauri/src/engine/types.rs` (core model)
+   `serde-compat`). Sources: `app/src/engine/types.rs` (core model)
    plus the payload types declared next to their commands/events
    (`forge.rs`, `pty.rs`, `engine/stats.rs`, `ops.rs`, `auth.rs`,
    `actions.rs`, `watcher.rs`, `editors.rs`, `opencode.rs`,
@@ -51,7 +51,7 @@ camelCase conversion anywhere). TS types are not hand-mirrored:
    transport}.rs`).
 2. `cargo test export_bindings` (wrapped as `npm run gen:types`) regenerates
    one file per type into `src/lib/ipc/gen/<RustTypeName>.ts` (destination
-   pinned by `TS_RS_EXPORT_DIR` in `src-tauri/.cargo/config.toml`; generated
+   pinned by `TS_RS_EXPORT_DIR` in `app/.cargo/config.toml`; generated
    files are committed by design).
 3. `src/lib/ipc/types.ts` is the stable FE import point: it re-exports the
    generated files under the FE names (Rust `PtyOutput` → TS
@@ -178,7 +178,7 @@ append at the repo root; single-line patterns only).
 
 ## Commands (M5 — embedded terminal)
 
-Backend: `src-tauri/src/pty.rs` (portable-pty; ConPTY on Windows). One
+Backend: `app/src/pty.rs` (portable-pty; ConPTY on Windows). One
 process-global `PtyRegistry` (tauri-managed state) owns every session; ids
 are `pty-<counter hex>`.
 
@@ -220,7 +220,7 @@ hard timeout with kill on exceed: `--version` 3 s, `auth status` 10 s,
 `pr list` / `run list` / `run view` 60 s, `pr checks` 30 s, `run logs` 120 s,
 and PR/workflow mutations 120 s. Commands run on `spawn_blocking` (no
 op-queue membership — long ops with their own timeouts, no event stream).
-Logic: `src-tauri/src/forge.rs`; tests: `forge_tests.rs`.
+Logic: `app/src/forge.rs`; tests: `forge_tests.rs`.
 
 | Command | Args | Returns | Notes |
 |---|---|---|---|
@@ -323,7 +323,7 @@ plus declared Node/Cargo workspace members) and never walks vendor/build
 directories. Commands are written to run from the repository root using
 project flags (`--prefix`, `--project`, `--manifest-path`, `-C`) so the
 action runner's cwd does not need to change. Logic:
-`src-tauri/src/projects.rs`; tests are in the same module.
+`app/src/projects.rs`; tests are in the same module.
 
 | Command | Args | Returns | Notes |
 |---|---|---|---|
@@ -343,7 +343,7 @@ watch`, `pytest`, …) are reported by the runner like any other action.
 ## Commands (M7 — contribution statistics)
 
 Queued reads on the per-repo op queue (`enqueue_read`, no generation bump).
-Logic: `src-tauri/src/engine/stats.rs` (inherent `*_impl` methods on
+Logic: `app/src/engine/stats.rs` (inherent `*_impl` methods on
 `Libgit2Engine`, reached through the `GitEngineM12` forwarding hosted in
 `trash.rs`); tests: `engine/stats_tests.rs`.
 
@@ -587,7 +587,7 @@ walk midpoint, known-bad tip excluded)
 
 ## M11 (cont.) — maintenance/sparse/LFS/archive, syntax highlighting, i18n
 
-### Backend (`src-tauri/src/maintenance.rs`; sanitized CLI layer)
+### Backend (`app/src/maintenance.rs`; sanitized CLI layer)
 
 - **`repo_health(repo_id)`** → `RepoHealth` `{ git_size_bytes,
   worktree_size_bytes, loose_objects, packed_objects?, pack_files,
@@ -687,7 +687,7 @@ Quality gates:
 ## Commands (workspace files — file browser / viewer / editor)
 
 Workdir filesystem operations backing the Files panel, the file
-viewer/editor, and quick-open. Logic: `src-tauri/src/workspace.rs`; tests:
+viewer/editor, and quick-open. Logic: `app/src/workspace.rs`; tests:
 `workspace_tests.rs`. Every `path` argument is workdir-relative with
 forward slashes and validated (absolute forms, `..` components, Windows
 prefixes, and anything escaping the root reject). Mutating commands run on
@@ -734,7 +734,7 @@ Remote (SSH) device registry, connection lifecycle, prompt answering,
 remote filesystem browsing, and the remote twin of `repo_open`. The remote
 machine is the source of truth: every read/write and git command executes
 on the device; nothing is synced locally. Logic:
-`src-tauri/src/remote/` (`commands.rs` device CRUD/prompts/browse,
+`app/src/remote/` (`commands.rs` device CRUD/prompts/browse,
 `transport.rs` russh session pool, `engine.rs` git-over-SSH,
 `workspace.rs` SFTP, `term.rs` remote shell, `actions.rs` remote action
 runs, `polling.rs` change polling). Secrets live only in the OS keyring;

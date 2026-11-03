@@ -12,16 +12,16 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: src-tauri
+        working-directory: app
     steps:
       - uses: actions/checkout@v4
 
-      # Tauri's Linux backend links against GTK/WebKit (see ci.yml).
+      # iced/winit need xkbcommon + wayland headers (see ci.yml).
       - name: Install Linux build dependencies
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev librsvg2-dev libssl-dev pkg-config patchelf
+          sudo apt-get install -y libssl-dev pkg-config libxkbcommon-dev libwayland-dev
 
       - name: Setup Rust (stable)
         uses: dtolnay/rust-toolchain@stable
@@ -32,8 +32,8 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            src-tauri/target
-          key: nightly-cargo-${{ runner.os }}-${{ hashFiles('src-tauri/Cargo.lock') }}
+            app/target
+          key: nightly-cargo-${{ runner.os }}-${{ hashFiles('app/Cargo.lock') }}
 
       # Perf gates (plan §19) measured in release mode. Each run downloads
       # the previous nightly's criterion data and saves the new results under
@@ -51,7 +51,7 @@ jobs:
         with:
           workflow: nightly.yml
           name: criterion-baseline
-          path: src-tauri/target/criterion
+          path: app/target/criterion
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -62,14 +62,14 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: criterion-${{ github.run_id }}
-          path: src-tauri/target/criterion
+          path: app/target/criterion
           retention-days: 14
 
       - name: Upload baseline for next run
         uses: actions/upload-artifact@v4
         with:
           name: criterion-baseline
-          path: src-tauri/target/criterion
+          path: app/target/criterion
           retention-days: 90
           overwrite: true
 
@@ -79,16 +79,16 @@ jobs:
     timeout-minutes: 600
     defaults:
       run:
-        working-directory: src-tauri
+        working-directory: app
     steps:
       - uses: actions/checkout@v4
 
       - name: Setup Rust (stable)
         uses: dtolnay/rust-toolchain@stable
 
-      # git for the test suite's real-repo fixtures; GTK/WebKit for the Tauri build.
+      # git for the test suite's real-repo fixtures; xkbcommon/wayland for iced.
       - name: Install system packages
-        run: sudo apt-get update && sudo apt-get install -y git libgtk-3-dev libwebkit2gtk-4.1-dev librsvg2-dev libssl-dev pkg-config patchelf
+        run: sudo apt-get update && sudo apt-get install -y git libssl-dev pkg-config libxkbcommon-dev libwayland-dev
 
       - name: Cache cargo
         uses: actions/cache@v4
@@ -96,8 +96,8 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            src-tauri/target
-          key: soak-cargo-${{ runner.os }}-${{ hashFiles('src-tauri/Cargo.lock') }}
+            app/target
+          key: soak-cargo-${{ runner.os }}-${{ hashFiles('app/Cargo.lock') }}
 
       - name: Generate test fixtures
         shell: bash
