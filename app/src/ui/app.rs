@@ -395,6 +395,16 @@ pub enum Message {
     BranchRowMenu {
         name: String,
     },
+    /// Right-click on a history commit row (sha).
+    CommitRowMenu {
+        sha: String,
+    },
+    /// Copy a commit SHA to the clipboard (commit context menu).
+    CopySha(String),
+    /// Cherry-pick a commit onto the current branch.
+    CherryPick(String),
+    /// Revert a commit on the current branch.
+    RevertCommit(String),
     /// Append a path pattern to `.gitignore` (status-row context menu).
     IgnorePath(String),
     /// `.gitignore` append finished.
@@ -838,6 +848,18 @@ impl App {
             other if other.starts_with("branch.delete:") => self.update(
                 Message::BranchDeleteRequested(other["branch.delete:".len()..].to_string()),
             ),
+            other if other.starts_with("commit.copy:") => {
+                self.update(Message::CopySha(other["commit.copy:".len()..].to_string()))
+            }
+            other if other.starts_with("commit.cherry_pick:") => self.update(Message::CherryPick(
+                other["commit.cherry_pick:".len()..].to_string(),
+            )),
+            other if other.starts_with("commit.revert:") => self.update(Message::RevertCommit(
+                other["commit.revert:".len()..].to_string(),
+            )),
+            other if other.starts_with("commit.reset:") => self.update(Message::ResetRequested(
+                other["commit.reset:".len()..].to_string(),
+            )),
             other => {
                 self.notice = Some(Notice::error(format!("Unknown command: {other}")));
                 Task::none()
@@ -3205,6 +3227,64 @@ impl App {
                 }
                 Task::none()
             }
+            Message::CommitRowMenu { sha } => {
+                let known = self
+                    .tabs
+                    .get(self.active)
+                    .is_some_and(|tab| tab.history.commits.iter().any(|c| c.sha == sha));
+                if known {
+                    self.ctx_menu.open_at(self.cursor, commit_row_menu(&sha));
+                }
+                Task::none()
+            }
+            Message::CopySha(sha) => {
+                let short = repo_view::short_sha(&sha);
+                self.last_op = Some(format!("Copied {short}"));
+                iced::clipboard::write::<Message>(sha)
+            }
+            Message::CherryPick(sha) => {
+                let Some(tab) = self.tabs.get(self.active) else {
+                    return Task::none();
+                };
+                let repo_id = tab.repo.repo_id.clone();
+                let services = self.services.clone();
+                Task::perform(
+                    async move {
+                        let result = crate::service::merge::cherry_pick(
+                            &services,
+                            repo_id.clone(),
+                            vec![sha],
+                        )
+                        .await;
+                        Message::MergeDone {
+                            repo_id,
+                            label: "Cherry-pick".to_string(),
+                            result,
+                        }
+                    },
+                    std::convert::identity,
+                )
+            }
+            Message::RevertCommit(sha) => {
+                let Some(tab) = self.tabs.get(self.active) else {
+                    return Task::none();
+                };
+                let repo_id = tab.repo.repo_id.clone();
+                let services = self.services.clone();
+                Task::perform(
+                    async move {
+                        let result =
+                            crate::service::merge::revert(&services, repo_id.clone(), vec![sha])
+                                .await;
+                        Message::MergeDone {
+                            repo_id,
+                            label: "Revert".to_string(),
+                            result,
+                        }
+                    },
+                    std::convert::identity,
+                )
+            }
             Message::IgnorePath(pattern) => {
                 let Some(tab) = self.tabs.get(self.active) else {
                     return Task::none();
@@ -3631,6 +3711,17 @@ fn branch_row_menu(name: &str) -> context_menu::Menu {
     menu = menu.separator();
     menu = menu.command(format!("branch.delete:{name}"), format!("Delete “{name}”"));
     menu
+}
+
+/// Context menu for a history commit row (right-click).
+fn commit_row_menu(sha: &str) -> context_menu::Menu {
+    let short = repo_view::short_sha(sha);
+    context_menu::Menu::new()
+        .command(format!("commit.copy:{sha}"), format!("Copy SHA ({short})"))
+        .separator()
+        .command(format!("commit.cherry_pick:{sha}"), "Cherry-pick onto HEAD")
+        .command(format!("commit.revert:{sha}"), "Revert")
+        .command(format!("commit.reset:{sha}"), "Reset branch to here…")
 }
 
 /// First non-flag argument; used for `mygitui <path>` first launch.

@@ -6,8 +6,8 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use iced::widget::{
-    button, canvas, checkbox, column, container, row, scrollable, text, text::Wrapping, text_input,
-    Id, Space,
+    button, canvas, checkbox, column, container, mouse_area, row, scrollable, text, text::Wrapping,
+    text_input, Id, Space,
 };
 use iced::{Alignment, Background, Border, Element, Length};
 
@@ -296,24 +296,29 @@ fn commit_row<'a>(
         tokens.sidebar
     };
 
-    button(container(line).width(Length::Fill).padding([0, 4]))
-        .style(move |_theme, status| {
-            let bg = match status {
-                button::Status::Hovered => theme::mix(background, tokens.hover, 0.5),
-                _ => background,
-            };
-            button::Style {
-                background: Some(Background::Color(bg)),
-                text_color: tokens.foreground,
-                border: Border::default(),
-                shadow: iced::Shadow::default(),
-                snap: true,
-            }
-        })
-        .padding(0)
-        .width(Length::Fill)
-        .on_press(Message::SelectCommit(commit.sha.clone()))
-        .into()
+    mouse_area(
+        button(container(line).width(Length::Fill).padding([0, 4]))
+            .style(move |_theme, status| {
+                let bg = match status {
+                    button::Status::Hovered => theme::mix(background, tokens.hover, 0.5),
+                    _ => background,
+                };
+                button::Style {
+                    background: Some(Background::Color(bg)),
+                    text_color: tokens.foreground,
+                    border: Border::default(),
+                    shadow: iced::Shadow::default(),
+                    snap: true,
+                }
+            })
+            .padding(0)
+            .width(Length::Fill)
+            .on_press(Message::SelectCommit(commit.sha.clone())),
+    )
+    .on_right_press(Message::CommitRowMenu {
+        sha: commit.sha.clone(),
+    })
+    .into()
 }
 
 fn now_seconds() -> i64 {
