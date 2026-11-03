@@ -9,7 +9,7 @@ use std::collections::HashSet;
 use iced::widget::{button, column, container, row, scrollable, text, text_editor, Space};
 use iced::{Alignment, Color, Element, Length};
 
-use crate::engine::types::{ChangeKind, RepoId, RepoInfo, RepoStatus};
+use crate::engine::types::{ChangeKind, RebaseStep, RepoId, RepoInfo, RepoStatus};
 
 use super::app::{InProgressAction, Message};
 use super::branch_panel::{self, BranchesState};
@@ -52,6 +52,13 @@ impl<T> Load<T> {
 pub struct PendingRemap {
     pub paths: HashSet<String>,
     pub unstage: bool,
+}
+
+/// A rebase request waiting for confirmation: the current branch's commits
+/// (the loaded pick plan) rewritten on top of `onto`.
+pub struct PendingRebase {
+    pub onto: String,
+    pub plan: Vec<RebaseStep>,
 }
 
 /// One open repository (a tab).
@@ -100,6 +107,8 @@ pub struct Tab {
     pub pending_reset: Option<ResetRequest>,
     /// Remote awaiting the remove confirmation dialog.
     pub pending_remote_remove: Option<String>,
+    /// Rebase (target branch + pick plan) awaiting the confirmation dialog.
+    pub pending_rebase: Option<PendingRebase>,
 
     pub diff_seq: u64,
     pub commit_diff_seq: u64,
@@ -140,6 +149,7 @@ impl Tab {
             pending_checkpoint_restore: None,
             pending_reset: None,
             pending_remote_remove: None,
+            pending_rebase: None,
             diff_seq: 0,
             commit_diff_seq: 0,
         }
@@ -400,6 +410,37 @@ fn dialog_overlay<'a>(tab: &'a Tab, tokens: Tokens) -> Option<Element<'a, Messag
 
     if let Some(request) = &tab.pending_reset {
         return Some(dialog::reset(tokens, request));
+    }
+
+    if let Some(rebase) = &tab.pending_rebase {
+        let mut detail = rebase
+            .plan
+            .iter()
+            .take(6)
+            .map(|step| short_sha(&step.sha))
+            .collect::<Vec<_>>()
+            .join("\n");
+        if rebase.plan.len() > 6 {
+            detail.push_str(&format!("\n… and {} more", rebase.plan.len() - 6));
+        }
+        let spec = dialog::Confirm {
+            title: format!("Rebase onto {}", rebase.onto),
+            body: format!(
+                "Rewrite {} commit{} of the current branch on top of “{}”? This changes their commit ids.",
+                rebase.plan.len(),
+                if rebase.plan.len() == 1 { "" } else { "s" },
+                rebase.onto
+            ),
+            detail: Some(detail),
+            confirm_label: "Rebase".to_string(),
+            danger: true,
+        };
+        return Some(dialog::confirm(
+            tokens,
+            &spec,
+            Message::CancelDialog,
+            Message::RebaseConfirmed,
+        ));
     }
 
     None

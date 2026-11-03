@@ -17,8 +17,8 @@ use iced::{window, Alignment, Element, Length, Subscription, Task};
 use crate::engine::types::{
     BranchInfo, ChangeKind, CheckpointInfo, CommitOptions, ConflictResolution, DiffSide,
     FetchOptions, FileDiff, LineRange, MergeOptions, MergeOutcome, MergeResult, NetStats,
-    PreviewInfo, PullOptions, PushOptions, RemoteInfo, RepoId, RepoInfo, RepoStatus, ResetKind,
-    StageRequest, StageTarget, StashInfo,
+    PreviewInfo, PullOptions, PushOptions, RebaseState, RebaseStep, RemoteInfo, RepoId, RepoInfo,
+    RepoStatus, ResetKind, StageRequest, StageTarget, StashInfo,
 };
 use crate::remote::prompts::SecretAnswer;
 use crate::service::events::BackendEvent;
@@ -32,7 +32,7 @@ use super::history_model::{to_log_filter, FilterFields, HistoryFilterField};
 use super::home;
 use super::prompts::{self, AuthPromptState, DeviceSecretPromptState, HostKeyPromptState};
 use super::remote_panel::net_summary;
-use super::repo_view::{self, Load, PendingRemap, Tab};
+use super::repo_view::{self, Load, PendingRebase, PendingRemap, Tab};
 use super::status_model::{count_label, filter_sections, SectionId, StatusRow};
 use super::theme::{self, Mode, Tokens};
 
@@ -326,6 +326,17 @@ pub enum Message {
         repo_id: RepoId,
         label: String,
         result: Result<MergeResult, String>,
+    },
+    RebaseOntoRequested(String),
+    RebasePlanLoaded {
+        repo_id: RepoId,
+        onto: String,
+        result: Result<Vec<RebaseStep>, String>,
+    },
+    RebaseConfirmed,
+    RebaseDone {
+        repo_id: RepoId,
+        result: Result<RebaseState, String>,
     },
     InProgress(InProgressAction),
     ConflictResolve {
@@ -1148,6 +1159,7 @@ impl App {
                     tab.pending_checkpoint_restore = None;
                     tab.pending_reset = None;
                     tab.pending_remote_remove = None;
+                    tab.pending_rebase = None;
                 }
                 Task::none()
             }
@@ -2260,6 +2272,122 @@ impl App {
                     }
                     Err(err) => {
                         self.notice = Some(Notice::error(format!("{label} failed: {err}")));
+                        Task::none()
+                    }
+                }
+            }
+            Message::RebaseOntoRequested(onto) => {
+                let Some(tab) = self.tabs.get_mut(self.active) else {
+                    return Task::none();
+                };
+                let repo_id = tab.repo.repo_id.clone();
+                let services = self.services.clone();
+                Task::perform(
+                    async move {
+                        let result = crate::service::merge::rebase_plan(
+                            &services,
+                            repo_id.clone(),
+                            onto.clone(),
+                        )
+                        .await;
+                        Message::RebasePlanLoaded {
+                            repo_id,
+                            onto,
+                            result,
+                        }
+                    },
+                    std::convert::identity,
+                )
+            }
+            Message::RebasePlanLoaded {
+                repo_id,
+                onto,
+                result,
+            } => {
+                let Some(index) = repo_view::tab_index(&self.tabs, &repo_id) else {
+                    return Task::none();
+                };
+                match result {
+                    Ok(plan) if plan.is_empty() => {
+                        self.notice = Some(Notice::error(format!(
+                            "Nothing to rebase: the current branch has no commits past {onto}"
+                        )));
+                        Task::none()
+                    }
+                    Ok(plan) => {
+                        self.tabs[index].pending_rebase = Some(PendingRebase { onto, plan });
+                        Task::none()
+                    }
+                    Err(err) => {
+                        self.notice = Some(Notice::error(format!(
+                            "Could not plan rebase onto {onto}: {err}"
+                        )));
+                        Task::none()
+                    }
+                }
+            }
+            Message::RebaseConfirmed => {
+                let Some(tab) = self.tabs.get_mut(self.active) else {
+                    return Task::none();
+                };
+                let Some(rebase) = tab.pending_rebase.take() else {
+                    return Task::none();
+                };
+                let repo_id = tab.repo.repo_id.clone();
+                let services = self.services.clone();
+                Task::perform(
+                    async move {
+                        let result = crate::service::merge::rebase_start(
+                            &services,
+                            repo_id.clone(),
+                            rebase.plan,
+                            Some(rebase.onto),
+                        )
+                        .await;
+                        Message::RebaseDone { repo_id, result }
+                    },
+                    std::convert::identity,
+                )
+            }
+            Message::RebaseDone { repo_id, result } => {
+                let Some(index) = repo_view::tab_index(&self.tabs, &repo_id) else {
+                    return Task::none();
+                };
+                match result {
+                    Ok(state) => {
+                        let detail = if state.active {
+                            format!(
+                                "paused at step {} — resolve conflicts, then continue",
+                                state.current + 1
+                            )
+                        } else {
+                            "done".to_string()
+                        };
+                        self.last_op = Some(format!("Rebase {detail}"));
+                        self.notice = None;
+                        let branches_open = self.tabs[index].branches.open;
+                        {
+                            let tab = &mut self.tabs[index];
+                            tab.history.selected = None;
+                            tab.detail_open = false;
+                            tab.commit_diff = DiffPane::default();
+                            tab.reload_diff = true;
+                            tab.status = Load::Loading;
+                            if branches_open {
+                                tab.branches.loading = true;
+                            }
+                        }
+                        let mut tasks = vec![
+                            self.refresh(repo_id.clone()),
+                            self.start_log(repo_id.clone()),
+                        ];
+                        if branches_open {
+                            tasks.push(self.load_branches(repo_id));
+                        }
+                        Task::batch(tasks)
+                    }
+                    Err(err) => {
+                        self.notice = Some(Notice::error(format!("Rebase failed: {err}")));
                         Task::none()
                     }
                 }
