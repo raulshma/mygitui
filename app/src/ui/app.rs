@@ -11,7 +11,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use iced::widget::{button, column, container, row, text, text_editor, Space};
+use iced::widget::{
+    button, column, container, mouse_area, row, scrollable, text, text_editor, Space,
+};
 use iced::{window, Alignment, Element, Length, Subscription, Task};
 
 use crate::engine::types::{
@@ -43,22 +45,25 @@ use super::status_model::{count_label, filter_sections, SectionId, StatusRow};
 use super::terminal;
 use super::theme::{self, Mode, Tokens};
 
-pub fn run(cli_args: Vec<String>, instance_listener: crate::instance::SharedListener) -> iced::Result {
+pub fn run(
+    cli_args: Vec<String>,
+    instance_listener: crate::instance::SharedListener,
+) -> iced::Result {
     iced::application(
         move || App::boot(cli_args.clone(), instance_listener.clone()),
         App::update,
         App::view,
     )
-        .title("mygitui")
-        .theme(App::theme)
-        .subscription(App::subscription)
-        .window(window::Settings {
-            size: iced::Size::new(1152.0, 720.0),
-            min_size: Some(iced::Size::new(900.0, 600.0)),
-            icon: window::icon::from_file_data(include_bytes!("../../icons/64x64.png"), None).ok(),
-            ..window::Settings::default()
-        })
-        .run()
+    .title("mygitui")
+    .theme(App::theme)
+    .subscription(App::subscription)
+    .window(window::Settings {
+        size: iced::Size::new(1152.0, 720.0),
+        min_size: Some(iced::Size::new(900.0, 600.0)),
+        icon: window::icon::from_file_data(include_bytes!("../../icons/64x64.png"), None).ok(),
+        ..window::Settings::default()
+    })
+    .run()
 }
 
 pub struct App {
@@ -80,6 +85,8 @@ pub struct App {
     active_op: Option<ActiveOp>,
     /// Single-instance accept loop handle, moved into its task at boot.
     instance_listener: Option<crate::instance::InstanceListener>,
+    /// Open AI result dialog (review/explain/branch-name output).
+    ai_result: Option<AiResult>,
     auth_prompts: std::collections::VecDeque<AuthPromptState>,
     host_key_prompts: std::collections::VecDeque<HostKeyPromptState>,
     device_secret_prompts: std::collections::VecDeque<DeviceSecretPromptState>,
@@ -127,12 +134,37 @@ impl InProgressAction {
 }
 
 impl Notice {
+    fn plain(text: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            error: false,
+        }
+    }
+
     fn error(text: impl Into<String>) -> Self {
         Self {
             text: text.into(),
             error: true,
         }
     }
+}
+
+/// The AI affordances the shell exposes; each maps to one
+/// `service::ai` generation.
+/// Content of the AI result dialog.
+#[derive(Debug, Clone)]
+pub struct AiResult {
+    pub title: String,
+    pub body: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AiAction {
+    CommitMessage,
+    ReviewStaged,
+    StashMessage,
+    PrTitleBody,
+    BranchName,
 }
 
 #[derive(Debug, Clone)]
@@ -400,6 +432,31 @@ pub enum Message {
     Forge(forge_panel::Msg),
     /// Bisect stepper (routed to the active tab).
     Bisect(bisect_panel::Msg),
+    /// Run an AI generation for the active tab.
+    AiGenerate(AiAction),
+    /// Explain one hunk (context text assembled by the diff view).
+    AiExplainHunk {
+        path: String,
+        hunk: String,
+    },
+    /// AI result dialog closing.
+    AiResultClose,
+    /// Copy arbitrary text (AI results) to the clipboard.
+    CopyText(String),
+    /// Toggle the AI master switch (palette).
+    AiToggleEnabled,
+    /// Toggle opt-in for the active repo (palette).
+    AiToggleRepoOptIn,
+    /// Generation completions.
+    AiCommitMessageDone(Result<String, String>),
+    AiReviewDone(Result<String, String>),
+    AiExplainDone {
+        path: String,
+        result: Result<String, String>,
+    },
+    AiStashMessageDone(Result<String, String>),
+    AiPrTextDone(Result<String, String>),
+    AiBranchNameDone(Result<String, String>),
     /// Reflog panel (routed to the active tab).
     Reflog(reflog_panel::Msg),
     /// Right-click on a status row (row key).
@@ -498,6 +555,7 @@ impl App {
             ctx_menu: context_menu::State::default(),
             switcher: quick_switcher::State::default(),
             cursor: iced::Point::ORIGIN,
+            ai_result: None,
         };
 
         let instance_listener = crate::instance::take_listener(&instance_listener);
@@ -781,6 +839,55 @@ impl App {
             None,
         );
 
+        register(
+            "ai.commit_message",
+            "AI: generate commit message",
+            "AI",
+            repo_id.is_some(),
+            None,
+        );
+        register(
+            "ai.review_staged",
+            "AI: review staged changes",
+            "AI",
+            repo_id.is_some(),
+            None,
+        );
+        register(
+            "ai.stash_message",
+            "AI: suggest stash message",
+            "AI",
+            repo_id.is_some(),
+            None,
+        );
+        register(
+            "ai.pr_text",
+            "AI: PR title & description",
+            "AI",
+            repo_id.is_some(),
+            None,
+        );
+        register(
+            "ai.branch_name",
+            "AI: suggest branch name",
+            "AI",
+            repo_id.is_some(),
+            None,
+        );
+        register(
+            "ai.toggle_enabled",
+            "AI: toggle master switch",
+            "AI",
+            true,
+            None,
+        );
+        register(
+            "ai.toggle_repo_opt_in",
+            "AI: toggle opt-in for this repo",
+            "AI",
+            repo_id.is_some(),
+            None,
+        );
         register("view.cycle_theme", "Cycle theme", "Settings", true, None);
         register(
             "view.cycle_autofetch",
@@ -890,6 +997,13 @@ impl App {
             "stash.push" => self.update(Message::StashPush),
             "checkpoints.create" => self.update(Message::CheckpointCreate),
             "ops.cancel" => self.update(Message::CancelOp),
+            "ai.commit_message" => self.update(Message::AiGenerate(AiAction::CommitMessage)),
+            "ai.review_staged" => self.update(Message::AiGenerate(AiAction::ReviewStaged)),
+            "ai.stash_message" => self.update(Message::AiGenerate(AiAction::StashMessage)),
+            "ai.pr_text" => self.update(Message::AiGenerate(AiAction::PrTitleBody)),
+            "ai.branch_name" => self.update(Message::AiGenerate(AiAction::BranchName)),
+            "ai.toggle_enabled" => self.update(Message::AiToggleEnabled),
+            "ai.toggle_repo_opt_in" => self.update(Message::AiToggleRepoOptIn),
             "view.cycle_theme" => self.update(Message::CycleTheme),
             "view.cycle_autofetch" => self.update(Message::CycleAutoFetch),
             // Context-menu commands carry their target after a `:` prefix.
@@ -3803,6 +3917,213 @@ impl App {
                 let repo_id = tab.repo.repo_id.clone();
                 self.run_reflog_action(repo_id, action)
             }
+            Message::AiGenerate(action) => {
+                let Some(tab) = self.tabs.get(self.active) else {
+                    return Task::none();
+                };
+                let repo_id = tab.repo.repo_id.clone();
+                let services = self.services.clone();
+                let task = match action {
+                    AiAction::CommitMessage => Task::perform(
+                        async move {
+                            Message::AiCommitMessageDone(
+                                crate::service::ai::ai_commit_message(&services, repo_id).await,
+                            )
+                        },
+                        std::convert::identity,
+                    ),
+                    AiAction::ReviewStaged => Task::perform(
+                        async move {
+                            Message::AiReviewDone(
+                                crate::service::ai::ai_review_staged(&services, repo_id).await,
+                            )
+                        },
+                        std::convert::identity,
+                    ),
+                    AiAction::StashMessage => Task::perform(
+                        async move {
+                            Message::AiStashMessageDone(
+                                crate::service::ai::ai_stash_message(&services, repo_id).await,
+                            )
+                        },
+                        std::convert::identity,
+                    ),
+                    AiAction::PrTitleBody => Task::perform(
+                        async move {
+                            Message::AiPrTextDone(
+                                crate::service::ai::ai_pr_title_body(&services, repo_id).await,
+                            )
+                        },
+                        std::convert::identity,
+                    ),
+                    AiAction::BranchName => {
+                        let description = tab.message.text().trim().to_string();
+                        if description.is_empty() {
+                            self.notice = Some(Notice::error(
+                                "Type a description first, then ask for a branch name",
+                            ));
+                            return Task::none();
+                        }
+                        Task::perform(
+                            async move {
+                                Message::AiBranchNameDone(
+                                    crate::service::ai::ai_branch_name(
+                                        &services,
+                                        repo_id,
+                                        description,
+                                    )
+                                    .await,
+                                )
+                            },
+                            std::convert::identity,
+                        )
+                    }
+                };
+                self.last_op = Some("AI: generating…".to_string());
+                task
+            }
+            Message::AiExplainHunk { path, hunk } => {
+                let Some(tab) = self.tabs.get(self.active) else {
+                    return Task::none();
+                };
+                let repo_id = tab.repo.repo_id.clone();
+                let services = self.services.clone();
+                self.last_op = Some("AI: generating…".to_string());
+                Task::perform(
+                    async move {
+                        let result = crate::service::ai::ai_explain_hunk(
+                            &services,
+                            repo_id,
+                            path.clone(),
+                            hunk,
+                        )
+                        .await;
+                        Message::AiExplainDone { path, result }
+                    },
+                    std::convert::identity,
+                )
+            }
+            Message::AiResultClose => {
+                self.ai_result = None;
+                Task::none()
+            }
+            Message::CopyText(text) => {
+                self.last_op = Some("Copied".to_string());
+                iced::clipboard::write::<Message>(text)
+            }
+            Message::AiToggleEnabled => {
+                self.config.ai.enabled = !self.config.ai.enabled;
+                let enabled = self.config.ai.enabled;
+                self.persist_config();
+                self.notice = Some(Notice::plain(format!(
+                    "AI assist {}",
+                    if enabled { "enabled" } else { "disabled" }
+                )));
+                Task::none()
+            }
+            Message::AiToggleRepoOptIn => {
+                let Some(tab) = self.tabs.get(self.active) else {
+                    return Task::none();
+                };
+                let path = tab.repo.root.clone();
+                let enabled = !self.config.ai_enabled_for(&path);
+                self.config.set_ai_opt_in(&path, enabled);
+                self.persist_config();
+                self.notice = Some(Notice::plain(format!(
+                    "AI assist {} for this repo",
+                    if enabled { "opted in" } else { "disabled" }
+                )));
+                Task::none()
+            }
+            Message::AiCommitMessageDone(result) => match result {
+                Ok(message) => {
+                    let Some(tab) = self.tabs.get_mut(self.active) else {
+                        return Task::none();
+                    };
+                    tab.message = text_editor::Content::with_text(&message);
+                    self.last_op = Some("AI: commit message ready".to_string());
+                    Task::none()
+                }
+                Err(err) => {
+                    self.notice = Some(Notice::error(format!("AI: {err}")));
+                    Task::none()
+                }
+            },
+            Message::AiReviewDone(result) => match result {
+                Ok(body) => {
+                    self.ai_result = Some(AiResult {
+                        title: "AI review of staged changes".to_string(),
+                        body,
+                    });
+                    Task::none()
+                }
+                Err(err) => {
+                    self.notice = Some(Notice::error(format!("AI: {err}")));
+                    Task::none()
+                }
+            },
+            Message::AiExplainDone { path, result } => match result {
+                Ok(body) => {
+                    self.ai_result = Some(AiResult {
+                        title: format!("AI explanation — {path}"),
+                        body,
+                    });
+                    Task::none()
+                }
+                Err(err) => {
+                    self.notice = Some(Notice::error(format!("AI: {err}")));
+                    Task::none()
+                }
+            },
+            Message::AiStashMessageDone(result) => match result {
+                Ok(message) => {
+                    let Some(tab) = self.tabs.get_mut(self.active) else {
+                        return Task::none();
+                    };
+                    tab.stashes.message = message;
+                    self.last_op = Some("AI: stash message ready".to_string());
+                    Task::none()
+                }
+                Err(err) => {
+                    self.notice = Some(Notice::error(format!("AI: {err}")));
+                    Task::none()
+                }
+            },
+            Message::AiPrTextDone(result) => match result {
+                Ok(text) => {
+                    // The service returns "title\n\nbody" (parse rules in
+                    // ai::prompts); feed the forge create form.
+                    let (title, body) = match text.split_once("\n\n") {
+                        Some((title, body)) => (title.to_string(), body.to_string()),
+                        None => (text.clone(), text),
+                    };
+                    self.ai_result = Some(AiResult {
+                        title: "AI PR title & description".to_string(),
+                        body: format!("{title}\n\n{body}"),
+                    });
+                    Task::batch([
+                        self.update(Message::Forge(forge_panel::Msg::CreateTitleChanged(title))),
+                        self.update(Message::Forge(forge_panel::Msg::CreateBodySet(body))),
+                    ])
+                }
+                Err(err) => {
+                    self.notice = Some(Notice::error(format!("AI: {err}")));
+                    Task::none()
+                }
+            },
+            Message::AiBranchNameDone(result) => match result {
+                Ok(name) => {
+                    self.ai_result = Some(AiResult {
+                        title: "AI branch name suggestion".to_string(),
+                        body: name,
+                    });
+                    Task::none()
+                }
+                Err(err) => {
+                    self.notice = Some(Notice::error(format!("AI: {err}")));
+                    Task::none()
+                }
+            },
             Message::StatusRowMenu { key } => {
                 let menu = self
                     .tabs
@@ -4142,6 +4463,9 @@ impl App {
         if self.ctx_menu.open {
             layers.push(context_menu::view(&self.ctx_menu, &tokens).map(Message::ContextMenu));
         }
+        if let Some(result) = &self.ai_result {
+            layers.push(ai_result_overlay(result, tokens));
+        }
         if let Some(overlay) = prompts::overlay(
             tokens,
             self.auth_prompts.front(),
@@ -4349,6 +4673,70 @@ fn branch_row_menu(name: &str) -> context_menu::Menu {
     menu = menu.separator();
     menu = menu.command(format!("branch.delete:{name}"), format!("Delete “{name}”"));
     menu
+}
+
+/// Centered modal showing an AI generation (review/explain/branch name)
+/// with copy + close; the body scrolls for long reviews.
+fn ai_result_overlay<'a>(result: &'a AiResult, tokens: Tokens) -> Element<'a, Message> {
+    let title = row![
+        text(result.title.as_str())
+            .size(12)
+            .font(theme::semibold())
+            .width(Length::Fill),
+        button(text("Copy").size(11))
+            .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
+            .padding([3, 8])
+            .on_press(Message::CopyText(result.body.clone())),
+        Space::new().width(6),
+        button(text("×").size(12))
+            .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
+            .padding([3, 8])
+            .on_press(Message::AiResultClose),
+    ]
+    .align_y(Alignment::Center);
+
+    let card = container(
+        column![
+            title,
+            Space::new().height(8),
+            scrollable(
+                container(text(result.body.as_str()).size(11).font(theme::mono()))
+                    .width(Length::Fill)
+            )
+            .height(Length::Fixed(380.0)),
+        ]
+        .spacing(4)
+        .width(Length::Fill),
+    )
+    .width(Length::Fixed(640.0))
+    .padding(12)
+    .style(move |_theme| container::Style {
+        background: Some(iced::Background::Color(tokens.card)),
+        border: iced::Border {
+            color: tokens.border,
+            width: 1.0,
+            radius: 8.0.into(),
+        },
+        ..container::Style::default()
+    });
+
+    // Dimmed backdrop closes on click, like the other overlays.
+    mouse_area(
+        container(card)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .align_x(Alignment::Center)
+            .align_y(Alignment::Center)
+            .style(move |_theme| container::Style {
+                background: Some(iced::Background::Color(theme::with_alpha(
+                    tokens.muted,
+                    0.35,
+                ))),
+                ..container::Style::default()
+            }),
+    )
+    .on_press(Message::AiResultClose)
+    .into()
 }
 
 /// Context menu for a history commit row (right-click).

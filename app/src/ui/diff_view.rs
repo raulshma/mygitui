@@ -365,16 +365,9 @@ fn render_row<'a>(
         DiffRow::FileHeader { file, collapsed } => {
             file_header(tokens, slot, file, collapsed, mode, files)
         }
-        DiffRow::HunkHeader {
-            file,
-            hunk,
-            old_start,
-            old_count,
-            new_start,
-            new_count,
-        } => hunk_header(
-            tokens, slot, file, hunk, old_start, old_count, new_start, new_count, mode,
-        ),
+        DiffRow::HunkHeader { file, hunk, .. } => {
+            hunk_header(files, tokens, slot, file, hunk, mode)
+        }
         DiffRow::Line { file, hunk, line } => {
             unified_line(pane, slot, tokens, file, hunk, line, mode, files)
         }
@@ -513,17 +506,51 @@ fn file_header<'a>(
         .into()
 }
 #[allow(clippy::too_many_arguments)]
+/// Reconstructs a hunk's text (header + line contents) for the AI
+/// explain-hunk context.
+fn hunk_text(files: &[FileDiff], file: usize, hunk: usize) -> Option<String> {
+    let hunk = files.get(file)?.hunks.get(hunk)?;
+    let old_count = hunk
+        .lines
+        .iter()
+        .filter(|line| line.old_no.is_some())
+        .count();
+    let new_count = hunk
+        .lines
+        .iter()
+        .filter(|line| line.new_no.is_some())
+        .count();
+    let mut out = format!(
+        "@@ -{},{} +{},{} @@\n",
+        hunk.old_start, old_count, hunk.new_start, new_count
+    );
+    for line in &hunk.lines {
+        out.push(line.origin);
+        out.push(' ');
+        out.push_str(line.text.trim_end_matches('\r'));
+        out.push('\n');
+    }
+    Some(out)
+}
+
 fn hunk_header<'a>(
+    files: &[FileDiff],
     tokens: Tokens,
     slot: DiffSlot,
     file: usize,
     hunk: usize,
-    old_start: u32,
-    old_count: u32,
-    new_start: u32,
-    new_count: u32,
     mode: PaneMode,
 ) -> Element<'a, Message> {
+    // Start/count come from the hunk itself (same derivation as the row
+    // model's `hunk_counts`), so the header and its ✨ payload agree.
+    let Some(diff_file) = files.get(file) else {
+        return Space::new().width(0).into();
+    };
+    let Some(diff_hunk) = diff_file.hunks.get(hunk) else {
+        return Space::new().width(0).into();
+    };
+    let (old_count, new_count) = super::diff_model::hunk_counts(diff_hunk);
+    let (old_start, new_start) = (diff_hunk.old_start, diff_hunk.new_start);
     let mut content = row![text(format!(
         "@@ -{old_start},{old_count} +{new_start},{new_count} @@"
     ))
@@ -534,6 +561,17 @@ fn hunk_header<'a>(
     .align_y(Alignment::Center)
     .padding([0, 8]);
 
+    if let Some(hunk_payload) = hunk_text(files, file, hunk) {
+        content = content.push(
+            button(text("✨").size(10))
+                .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
+                .padding([2, 6])
+                .on_press(Message::AiExplainHunk {
+                    path: files[file].path.clone(),
+                    hunk: hunk_payload,
+                }),
+        );
+    }
     if mode.line_actions {
         content = content.push(
             button(

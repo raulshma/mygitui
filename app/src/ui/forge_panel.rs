@@ -370,6 +370,9 @@ pub enum Msg {
     CreateHeadChanged(String),
     CreateTitleChanged(String),
     CreateBodyChanged(text_editor::Action),
+    /// Replace the whole body (AI prefill) — `CreateBodyChanged` handles
+    /// keystrokes, this sets programmatic content.
+    CreateBodySet(String),
     CreatePressed,
     /// `pr_create` result.
     PrCreated(Result<PrCreated, ForgeError>),
@@ -736,6 +739,10 @@ pub fn update(state: &mut ForgeState, msg: Msg) -> Option<Action> {
         }
         Msg::CreateTitleChanged(title) => {
             state.create_title = title;
+            None
+        }
+        Msg::CreateBodySet(text) => {
+            state.create_body = text_editor::Content::with_text(&text);
             None
         }
         Msg::CreateBodyChanged(action) => {

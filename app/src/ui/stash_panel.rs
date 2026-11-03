@@ -68,6 +68,10 @@ pub fn view<'a>(tab: &'a Tab, tokens: Tokens) -> Element<'a, Message> {
             .size(11)
             .padding([4, 6])
             .width(Length::Fill),
+        button(text("✨").size(10))
+            .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
+            .padding([2, 6])
+            .on_press(Message::AiGenerate(super::app::AiAction::StashMessage)),
         checkbox(state.include_untracked)
             .label("untracked")
             .size(12)

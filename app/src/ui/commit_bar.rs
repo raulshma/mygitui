@@ -89,6 +89,15 @@ pub fn view<'a>(tab: &'a Tab, tokens: Tokens) -> Element<'a, Message> {
             text("Commit").size(12).font(theme::semibold()),
             Space::new().width(Length::Fill),
             text(staged_label).size(10).color(tokens.muted_foreground),
+            Space::new().width(8),
+            button(text("✨ Msg").size(10))
+                .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
+                .padding([2, 6])
+                .on_press(Message::AiGenerate(super::app::AiAction::CommitMessage)),
+            button(text("✨ Review").size(10))
+                .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
+                .padding([2, 6])
+                .on_press(Message::AiGenerate(super::app::AiAction::ReviewStaged)),
         ]
         .align_y(Alignment::Center),
         Space::new().height(4),
