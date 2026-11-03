@@ -17,6 +17,7 @@ mod editors;
 mod forge;
 #[cfg(test)]
 mod forge_tests;
+mod instance;
 #[allow(dead_code)]
 mod keyring_store;
 mod maintenance;
@@ -44,9 +45,9 @@ mod workspace;
 mod workspace_tests;
 
 /// Arguments captured at first launch (`mygitui <path>`), consumed once by
-/// the UI to open the requested repository. Second-launch arguments arrive as
-/// [`service::events::BackendEvent::CliArgs`] once single-instance forwarding
-/// is restored.
+/// the UI to open the requested repository. Second-launch arguments arrive
+/// as [`service::events::BackendEvent::CliArgs`] via single-instance
+/// forwarding (see [`instance`]).
 #[derive(Default)]
 pub struct CliArgs(pub std::sync::Mutex<Vec<String>>);
 
@@ -63,5 +64,22 @@ pub fn run() -> iced::Result {
         .try_init()
         .ok();
     let cli_args: Vec<String> = std::env::args().skip(1).collect();
-    ui::run(cli_args)
+
+    // Single-instance handoff: a live primary receives this launch's argv
+    // and we exit before starting any UI. Decided on a throwaway runtime —
+    // the accept loop (if primary) runs on iced's tokio executor.
+    let role = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .ok()
+        .map(|rt| rt.block_on(instance::bind_or_forward(&cli_args)));
+    let listener: instance::SharedListener = match role {
+        Some(instance::Role::Forwarded) => return Ok(()),
+        Some(instance::Role::Primary(listener)) => std::sync::Arc::new(std::sync::Mutex::new(
+            listener,
+        )),
+        None => std::sync::Arc::new(std::sync::Mutex::new(None)),
+    };
+
+    ui::run(cli_args, listener)
 }

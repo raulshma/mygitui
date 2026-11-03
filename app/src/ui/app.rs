@@ -43,8 +43,12 @@ use super::status_model::{count_label, filter_sections, SectionId, StatusRow};
 use super::terminal;
 use super::theme::{self, Mode, Tokens};
 
-pub fn run(cli_args: Vec<String>) -> iced::Result {
-    iced::application(move || App::boot(cli_args.clone()), App::update, App::view)
+pub fn run(cli_args: Vec<String>, instance_listener: crate::instance::SharedListener) -> iced::Result {
+    iced::application(
+        move || App::boot(cli_args.clone(), instance_listener.clone()),
+        App::update,
+        App::view,
+    )
         .title("mygitui")
         .theme(App::theme)
         .subscription(App::subscription)
@@ -74,6 +78,8 @@ pub struct App {
     last_op: Option<String>,
     /// Op currently reporting progress, for the footer cancel button.
     active_op: Option<ActiveOp>,
+    /// Single-instance accept loop handle, moved into its task at boot.
+    instance_listener: Option<crate::instance::InstanceListener>,
     auth_prompts: std::collections::VecDeque<AuthPromptState>,
     host_key_prompts: std::collections::VecDeque<HostKeyPromptState>,
     device_secret_prompts: std::collections::VecDeque<DeviceSecretPromptState>,
@@ -462,7 +468,10 @@ async fn auto_fetch_once(
 }
 
 impl App {
-    fn boot(cli_args: Vec<String>) -> (Self, Task<Message>) {
+    fn boot(
+        cli_args: Vec<String>,
+        instance_listener: crate::instance::SharedListener,
+    ) -> (Self, Task<Message>) {
         crate::auth::init();
         let services = Arc::new(AppServices::new());
         let config = Config::load(&services.config_dir);
@@ -481,6 +490,7 @@ impl App {
             notice: None,
             last_op: None,
             active_op: None,
+            instance_listener: None,
             auth_prompts: std::collections::VecDeque::new(),
             host_key_prompts: std::collections::VecDeque::new(),
             device_secret_prompts: std::collections::VecDeque::new(),
@@ -490,9 +500,22 @@ impl App {
             cursor: iced::Point::ORIGIN,
         };
 
+        let instance_listener = crate::instance::take_listener(&instance_listener);
+        app.instance_listener = instance_listener;
         let mut tasks = vec![iced::system::theme().map(Message::SystemTheme)];
         if let Some(path) = first_repo_arg(&cli_args) {
             tasks.push(app.open_repo(path));
+        }
+        if let Some(listener) = app.instance_listener.take() {
+            // Never-ending accept loop; forwarded argv arrives as
+            // BackendEvent::CliArgs through the bus subscription.
+            tasks.push(Task::perform(
+                async move {
+                    crate::instance::serve(listener).await;
+                    Message::Noop
+                },
+                std::convert::identity,
+            ));
         }
         (app, Task::batch(tasks))
     }
@@ -3927,6 +3950,14 @@ impl App {
 
     fn backend(&mut self, event: BackendEvent) -> Task<Message> {
         match event {
+            BackendEvent::CliArgs(args) => {
+                // Second-launch forwarding: open whatever path was passed
+                // (flags ignored, same rule as first launch).
+                match first_repo_arg(&args) {
+                    Some(path) => self.open_repo(path),
+                    None => Task::none(),
+                }
+            }
             BackendEvent::RepoChanged(changed) => {
                 let branches_open = repo_view::tab_index(&self.tabs, &changed.repo_id)
                     .is_some_and(|index| self.tabs[index].branches.open);
