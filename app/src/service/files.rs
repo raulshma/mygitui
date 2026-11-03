@@ -63,6 +63,45 @@ fn read_workdir_file(root: &Path, path: &str) -> Result<Vec<u8>, String> {
     }
 }
 
+/// Raw bytes of one file at a revision (`git show <rev>:<path>`), backing
+/// the image-diff preview (and any future blob viewer). `revision` is any
+/// commit-ish the engine accepts ("HEAD", a sha, a branch). A missing path
+/// at that revision resolves to an empty vec (new file on that side).
+/// Remote repos reject for now: their SFTP workspace only exposes the
+/// workdir, not object content — the image preview degrades to the
+/// placeholder there.
+pub async fn repo_read_blob_at(
+    services: &AppServices,
+    repo_id: RepoId,
+    revision: String,
+    path: String,
+) -> Result<Vec<u8>, String> {
+    let handle = get_handle(&services.repos, &repo_id)?;
+    if handle.remote().is_some() {
+        return Err("blob reads are not supported for remote repos".to_string());
+    }
+    let repo = handle.repo()?;
+    crate::rt::spawn_blocking(move || {
+        let repo = repo.lock();
+        let commit = repo
+            .revparse_single(&revision)
+            .map_err(|e| format!("unknown revision `{revision}`: {e}"))?
+            .peel_to_commit()
+            .map_err(|e| format!("`{revision}` is not a commit: {e}"))?;
+        let entry = commit
+            .tree()
+            .map_err(|e| format!("reading tree of `{revision}` failed: {e}"))?
+            .get_path(Path::new(&path))
+            .map_err(|_| format!("`{path}` not found in `{revision}`"))?;
+        let blob = repo
+            .find_blob(entry.id())
+            .map_err(|e| format!("reading blob of `{path}` failed: {e}"))?;
+        Ok(blob.content().to_vec())
+    })
+    .await
+    .map_err(|e| format!("read_blob task failed: {e}"))?
+}
+
 // ---------------------------------------------------------------------------
 // M4 (lane F3): submodule management + gitignore quick-add.
 //

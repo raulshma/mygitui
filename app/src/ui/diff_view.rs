@@ -2,9 +2,11 @@
 //! scrollable area renders only the visible slices (spacers preserve the
 //! total height) unless word wrap is on, in which case rows flow naturally.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
-use iced::widget::{button, column, container, mouse_area, row, scrollable, text, Id, Space};
+use iced::widget::{
+    button, column, container, image, mouse_area, row, scrollable, text, Id, Space,
+};
 use iced::{Alignment, Background, Border, Color, Element, Length};
 
 use crate::engine::types::{DiffLine, FileDiff};
@@ -42,6 +44,15 @@ impl DiffContent {
     }
 }
 
+/// Decoded image previews for one binary-image file, keyed by path on the
+/// pane. A side is `None` when that side has no content (added/deleted) or
+/// its bytes failed to load — the row renders a placeholder there.
+#[derive(Debug, Clone, Default)]
+pub struct DiffImages {
+    pub old: Option<image::Handle>,
+    pub new: Option<image::Handle>,
+}
+
 /// Per-pane diff state: payload, derived rows and view-only options.
 #[derive(Debug, Default)]
 pub struct DiffPane {
@@ -56,6 +67,9 @@ pub struct DiffPane {
     pub key: Option<String>,
     /// Guards asynchronous loads against stale results.
     pub seq: u64,
+    /// Decoded image previews keyed by file path (cleared when the diff
+    /// identity changes; the shell populates via async blob reads).
+    pub images: HashMap<String, DiffImages>,
 }
 
 impl DiffPane {
@@ -88,6 +102,7 @@ impl DiffPane {
 
     pub fn set_ready(&mut self, files: Vec<FileDiff>, split: bool) {
         self.content = DiffContent::Ready(files);
+        self.images.clear();
         self.rebuild(split);
         self.lines.clear();
     }
@@ -387,7 +402,10 @@ fn render_row<'a>(
             right,
         } => pair_side(pane, slot, tokens, file, hunk, left, right, mode, files),
         DiffRow::Binary { file } => binary_row(tokens, files.get(file)),
-        DiffRow::Image { file } => image_row(tokens, files.get(file)),
+        DiffRow::Image { file } => {
+            let preview = files.get(file).and_then(|f| pane.images.get(&f.path));
+            image_row(tokens, files.get(file), preview)
+        }
     }
 }
 
@@ -807,28 +825,57 @@ fn binary_row<'a>(tokens: Tokens, file: Option<&FileDiff>) -> Element<'a, Messag
     note(tokens, label.as_str())
 }
 
-fn image_row<'a>(tokens: Tokens, file: Option<&FileDiff>) -> Element<'a, Message> {
+/// Side-by-side image preview. Handles arrive asynchronously from the shell
+/// (workdir reads + `git show <rev>:<path>` blob reads); a missing side
+/// renders a placeholder, so added/deleted/failed sides degrade cleanly.
+fn image_row<'a>(
+    tokens: Tokens,
+    file: Option<&FileDiff>,
+    preview: Option<&DiffImages>,
+) -> Element<'a, Message> {
     let label = file
-        .map(|file| {
-            format!(
-                "Image diff — {} (preview arrives with the file panel)",
-                file.path
-            )
-        })
+        .map(|file| format!("Image diff — {}", file.path))
         .unwrap_or_else(|| "Image diff".to_string());
-    container(
-        column![text(label)
-            .size(12)
-            .color(tokens.muted_foreground)
-            .width(Length::Fill)
-            .align_x(Alignment::Center),]
+    let (old, new) = preview
+        .map(|p| (p.old.clone(), p.new.clone()))
+        .unwrap_or((None, None));
+
+    let side = |title: &'a str, handle: Option<image::Handle>| -> Element<'a, Message> {
+        let body: Element<'a, Message> = match handle {
+            Some(handle) => image(handle)
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .into(),
+            None => text("no preview")
+                .size(11)
+                .color(tokens.muted_foreground)
+                .width(Length::Fill)
+                .align_x(Alignment::Center)
+                .into(),
+        };
+        column![
+            text(title).size(10).color(tokens.muted_foreground),
+            container(body)
+                .width(Length::Fill)
+                .height(Length::Fixed(220.0))
+                .style(theme::surface_style(tokens)),
+        ]
+        .spacing(4)
         .width(Length::Fill)
-        .height(Length::Fill)
-        .align_x(Alignment::Center)
-        .padding(20),
+        .into()
+    };
+
+    container(
+        column![
+            text(label).size(12).color(tokens.muted_foreground),
+            row![side("Before", old), side("After", new)].spacing(8),
+        ]
+        .spacing(8)
+        .width(Length::Fill)
+        .padding(12),
     )
     .width(Length::Fill)
-    .height(Length::Fill)
+    .height(Length::Shrink)
     .style(theme::surface_style(tokens))
     .into()
 }
