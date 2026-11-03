@@ -37,6 +37,7 @@ use super::quick_switcher;
 use super::remote_panel::net_summary;
 use super::repo_view::{self, Load, PendingRebase, PendingRemap, Tab};
 use super::status_model::{count_label, filter_sections, SectionId, StatusRow};
+use super::terminal;
 use super::theme::{self, Mode, Tokens};
 
 pub fn run(cli_args: Vec<String>) -> iced::Result {
@@ -382,6 +383,10 @@ pub enum Message {
     Switcher(quick_switcher::Msg),
     /// Track the cursor so right-press menus can be positioned.
     CursorMoved(iced::Point),
+    /// Embedded terminal pane (routed to the active tab).
+    Terminal(terminal::Msg),
+    /// Show/hide the terminal dock.
+    ToggleTerminal,
     /// Right-click on a status row (row key).
     StatusRowMenu {
         key: String,
@@ -657,6 +662,20 @@ impl App {
             repo_id.is_some(),
             None,
         );
+        register(
+            "view.toggle_terminal",
+            "Toggle terminal panel",
+            "View",
+            repo_id.is_some(),
+            None,
+        );
+        register(
+            "terminal.restart",
+            "Restart terminal",
+            "View",
+            repo_id.is_some(),
+            None,
+        );
 
         register(
             "network.fetch",
@@ -776,6 +795,8 @@ impl App {
             "branches.toggle" => self.update(Message::ToggleBranchPanel),
             "stash.toggle" => self.update(Message::ToggleStashPanel),
             "remotes.toggle" => self.update(Message::ToggleRemotePanel),
+            "view.toggle_terminal" => self.update(Message::ToggleTerminal),
+            "terminal.restart" => self.update(Message::Terminal(terminal::Msg::RestartPressed)),
             "network.fetch" => {
                 let remotes: Vec<String> = self
                     .tabs
@@ -836,6 +857,89 @@ impl App {
         {
             Some(name) => self.update(make(name)),
             None => Task::none(),
+        }
+    }
+
+    /// Executes a terminal pane action against the PTY backend. All PTY
+    /// calls are cheap and synchronous; errors mean the session is already
+    /// gone and are dropped at debug level.
+    fn run_terminal_action(&mut self, action: Option<terminal::Action>) -> Task<Message> {
+        let Some(action) = action else {
+            return Task::none();
+        };
+        match action {
+            terminal::Action::Spawn { repo_root } => self.spawn_terminal(repo_root),
+            terminal::Action::Restart {
+                old_session,
+                repo_root,
+            } => {
+                if let Some(old) = old_session {
+                    if let Err(err) = crate::pty::pty_kill(&self.services, old) {
+                        tracing::debug!(err, "terminal restart: old session kill failed");
+                    }
+                }
+                self.spawn_terminal(repo_root)
+            }
+            terminal::Action::Write { session, data } => {
+                if let Err(err) = crate::pty::pty_write(&self.services, session, data) {
+                    tracing::debug!(err, "pty write failed");
+                }
+                Task::none()
+            }
+            terminal::Action::Resize {
+                session,
+                cols,
+                rows,
+            } => {
+                if let Err(err) = crate::pty::pty_resize(&self.services, session, rows, cols) {
+                    tracing::debug!(err, "pty resize failed");
+                }
+                Task::none()
+            }
+            terminal::Action::Kill { session } => {
+                if let Err(err) = crate::pty::pty_kill(&self.services, session) {
+                    tracing::debug!(err, "pty kill failed");
+                }
+                Task::none()
+            }
+            terminal::Action::FollowScroll { id } => {
+                terminal::snap_to_bottom(id).map(Message::Terminal)
+            }
+        }
+    }
+
+    /// Spawns the shell session for the tab whose root matches (the active
+    /// tab in practice) and feeds the returned session id back to its pane.
+    fn spawn_terminal(&mut self, repo_root: PathBuf) -> Task<Message> {
+        let Some(index) = self
+            .tabs
+            .iter()
+            .position(|tab| tab.repo.root == repo_root.to_string_lossy())
+        else {
+            return Task::none();
+        };
+        let (cols, rows) = self.tabs[index].terminal.dims();
+        let repo_id = self.tabs[index].repo.repo_id.clone();
+        match crate::pty::pty_create(&self.services, repo_id, Some(rows), Some(cols)) {
+            Ok(session) => {
+                let follow = terminal::update(
+                    &mut self.tabs[index].terminal,
+                    terminal::Msg::Opened(session),
+                );
+                self.run_terminal_action(follow)
+            }
+            Err(err) => {
+                self.notice = Some(Notice::error(format!("Could not start terminal: {err}")));
+                Task::none()
+            }
+        }
+    }
+
+    /// Releases terminal keyboard focus everywhere (another typing surface
+    /// took over: tab switch, commit editor, filter inputs…).
+    fn blur_terminals(&mut self) {
+        for tab in &mut self.tabs {
+            tab.terminal.blur();
         }
     }
 
@@ -1109,6 +1213,21 @@ impl App {
     }
 
     fn update(&mut self, message: Message) -> Task<Message> {
+        // Typing surfaces take the keyboard back from a focused terminal:
+        // any of these messages means the user is interacting elsewhere.
+        if matches!(
+            message,
+            Message::SelectTab(_)
+                | Message::GoHome
+                | Message::CommitMessageChanged(_)
+                | Message::StatusFilterChanged(_)
+                | Message::BranchCreateNameChanged(_)
+                | Message::StashMessageChanged(_)
+                | Message::RemoteNameChanged(_)
+                | Message::HistoryFilterChanged { .. }
+        ) {
+            self.blur_terminals();
+        }
         match message {
             Message::Backend(event) => self.backend(event),
             Message::SystemTheme(mode) => {
@@ -1235,6 +1354,11 @@ impl App {
             }
             Message::CloseTab(repo_id) => {
                 if let Some(index) = repo_view::tab_index(&self.tabs, &repo_id) {
+                    if let Some(session) = self.tabs[index].terminal.session().map(str::to_owned) {
+                        if let Err(err) = crate::pty::pty_kill(&self.services, session) {
+                            tracing::debug!(err, "tab close: pty kill failed");
+                        }
+                    }
                     crate::service::repo::repo_close(&self.services, repo_id);
                     self.tabs.remove(index);
                     if self.tabs.is_empty() {
@@ -3028,6 +3152,37 @@ impl App {
                 self.cursor = position;
                 Task::none()
             }
+            Message::ToggleTerminal => {
+                let Some(tab) = self.tabs.get_mut(self.active) else {
+                    return Task::none();
+                };
+                tab.terminal_open = !tab.terminal_open;
+                if tab.terminal_open && !tab.terminal.has_session() {
+                    let action = terminal::update(&mut tab.terminal, terminal::Msg::SpawnRequested);
+                    self.run_terminal_action(action)
+                } else {
+                    if !tab.terminal_open {
+                        tab.terminal.blur();
+                    }
+                    Task::none()
+                }
+            }
+            Message::Terminal(msg) => {
+                // The pane ignores modifier combos, so intercept paste here:
+                // read the clipboard and deliver it as Msg::Paste.
+                if let terminal::Msg::Key(iced::keyboard::Key::Character(c), modifiers) = &msg {
+                    if c.eq_ignore_ascii_case("v") && (modifiers.command() || modifiers.control()) {
+                        return iced::clipboard::read().map(|text| {
+                            Message::Terminal(terminal::Msg::Paste(text.unwrap_or_default()))
+                        });
+                    }
+                }
+                let Some(tab) = self.tabs.get_mut(self.active) else {
+                    return Task::none();
+                };
+                let action = terminal::update(&mut tab.terminal, msg);
+                self.run_terminal_action(action)
+            }
             Message::StatusRowMenu { key } => {
                 let menu = self
                     .tabs
@@ -3171,7 +3326,7 @@ impl App {
     }
 
     fn subscription(&self) -> Subscription<Message> {
-        Subscription::batch([
+        let mut subs = vec![
             Subscription::run(bus::stream).map(Message::Backend),
             iced::system::theme_changes().map(Message::SystemTheme),
             iced::event::listen_with(modifiers_changed),
@@ -3187,7 +3342,33 @@ impl App {
                 quick_switcher::event_to_msg(event, status, window).map(Message::Switcher)
             }),
             self.auto_fetch_subscription(),
-        ])
+        ];
+        // Terminal panes: PTY output per live session (every tab, so
+        // background panes keep accumulating output).
+        for tab in &self.tabs {
+            if let Some(session) = tab.terminal.session() {
+                subs.push(terminal::subscription(session).map(Message::Terminal));
+            }
+        }
+        // While the focused terminal holds keyboard focus, route key presses
+        // to it; returning Some consumes them so other widgets never see a
+        // keystroke meant for the shell. Shortcut combos (ctrl/cmd) are
+        // ignored by the pane itself, so shell hotkeys keep working.
+        if let Some(tab) = self.tabs.get(self.active) {
+            if tab.terminal_open && tab.terminal.is_focused() {
+                subs.push(iced::event::listen_with(
+                    |event, _status, _window| match event {
+                        iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
+                            key,
+                            modifiers,
+                            ..
+                        }) => Some(Message::Terminal(terminal::Msg::Key(key, modifiers))),
+                        _ => None,
+                    },
+                ));
+            }
+        }
+        Subscription::batch(subs)
     }
 
     /// Per-repo auto-fetch timer: fires [`Message::AutoFetchTick`] on the

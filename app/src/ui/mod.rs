@@ -24,6 +24,7 @@
 //! - [`palette`] — command palette overlay (ranked command registry)
 //! - [`context_menu`] — reusable right-click menu component
 //! - [`quick_switcher`] — repo quick-switcher overlay (ctrl/cmd+K)
+//! - [`terminal`] — embedded PTY terminal pane (monitor with input)
 
 mod app;
 mod branch_panel;
@@ -47,6 +48,7 @@ mod repo_view;
 mod stash_panel;
 mod status_model;
 mod status_panel;
+mod terminal;
 mod theme;
 
 pub use app::run;

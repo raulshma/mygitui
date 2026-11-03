@@ -26,6 +26,7 @@ use super::status_model::{
     StatusSelection,
 };
 use super::status_panel;
+use super::terminal;
 use super::theme::{self, Tokens};
 
 pub const SIDEBAR_WIDTH: f32 = 320.0;
@@ -95,6 +96,9 @@ pub struct Tab {
     pub branches: BranchesState,
     pub stashes: StashesState,
     pub remotes: RemotesState,
+    /// Embedded PTY terminal pane and its visibility toggle.
+    pub terminal: terminal::State,
+    pub terminal_open: bool,
     /// Paths awaiting the discard confirmation dialog.
     pub pending_discard: Option<Vec<String>>,
     /// Branch awaiting the delete confirmation dialog.
@@ -116,8 +120,10 @@ pub struct Tab {
 
 impl Tab {
     pub fn new(repo: RepoInfo) -> Self {
+        let terminal = terminal::State::new(Some(repo.root.clone().into()));
         Self {
             repo,
+            terminal,
             status: Load::Loading,
             status_index: StatusIndex::default(),
             selection: StatusSelection::default(),
@@ -143,6 +149,7 @@ impl Tab {
             branches: BranchesState::default(),
             stashes: StashesState::default(),
             remotes: RemotesState::default(),
+            terminal_open: false,
             pending_discard: None,
             pending_branch_delete: None,
             pending_stash_drop: None,
@@ -614,6 +621,14 @@ fn repo_header<'a>(tab: &'a Tab, tokens: Tokens) -> Element<'a, Message> {
                 .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
                 .padding([6, 10])
                 .on_press(Message::ToggleHistory),
+            button(text("Terminal").size(11).color(if tab.terminal_open {
+                tokens.primary
+            } else {
+                tokens.foreground
+            }))
+            .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
+            .padding([6, 10])
+            .on_press(Message::ToggleTerminal),
             button(text("Refresh").size(11))
                 .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
                 .padding([6, 10])
@@ -700,7 +715,7 @@ fn workspace<'a>(tab: &'a Tab, tokens: Tokens) -> Element<'a, Message> {
         .height(Length::Fill)
         .style(theme::surface_style(tokens));
 
-    if tab.branches.open || tab.stashes.open || tab.remotes.open {
+    let main: Element<'a, Message> = if tab.branches.open || tab.stashes.open || tab.remotes.open {
         // Dropdowns: overlaid on the workspace so opening them never
         // reflows the panes underneath. The branch picker anchors top-left,
         // the stash/checkpoint and remote panels top-right (opening one
@@ -747,8 +762,35 @@ fn workspace<'a>(tab: &'a Tab, tokens: Tokens) -> Element<'a, Message> {
             .into()
     } else {
         surface.into()
+    };
+
+    if tab.terminal_open {
+        // Bottom dock: overlays above still cover the whole workspace; the
+        // terminal shrinks the panes above it.
+        column![
+            main,
+            container(terminal::view(&tab.terminal, tokens).map(Message::Terminal))
+                .width(Length::Fill)
+                .height(Length::Fixed(TERMINAL_HEIGHT))
+                .style(move |_theme| container::Style {
+                    border: iced::Border {
+                        color: tokens.border,
+                        width: 1.0,
+                        radius: 0.0.into(),
+                    },
+                    ..container::Style::default()
+                }),
+        ]
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .into()
+    } else {
+        main
     }
 }
+
+/// Height of the docked terminal pane.
+const TERMINAL_HEIGHT: f32 = 280.0;
 
 fn control_button<'a>(
     tokens: Tokens,
