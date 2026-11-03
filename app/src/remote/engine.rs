@@ -2456,7 +2456,9 @@ pub fn log_args(filter: &LogFilter, limit: usize, after: Option<&str>) -> String
             args.push_str(&shell_quote(r));
         }
     } else {
-        args.push_str(" --all");
+        // Match the local walk: stash and checkpoint refs stay out of the
+        // history graph (--exclude must precede --all).
+        args.push_str(" --exclude=refs/stash --exclude=refs/mygitui/* --all");
     }
     if let Some(cursor) = after {
         args.push_str(&format!(" ^{}", shell_quote(cursor)));
@@ -2674,4 +2676,34 @@ fn parse_checkpoint_message(message: &str) -> (String, Option<String>) {
         }
     }
     (reason, branch)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::log_args;
+    use crate::engine::types::LogFilter;
+
+    #[test]
+    fn default_log_args_exclude_internal_refs() {
+        let args = log_args(&LogFilter::default(), 50, None);
+        assert!(
+            args.contains("--exclude=refs/stash --exclude=refs/mygitui/* --all"),
+            "{args}"
+        );
+        let stash_at = args.find("--exclude=refs/stash").expect("exclude present");
+        let all_at = args.find("--all").expect("--all present");
+        assert!(stash_at < all_at, "--exclude must precede --all: {args}");
+    }
+
+    #[test]
+    fn explicit_refs_log_args_skip_all_and_excludes() {
+        let filter = LogFilter {
+            refs: vec!["main".into()],
+            ..LogFilter::default()
+        };
+        let args = log_args(&filter, 50, None);
+        assert!(!args.contains("--all"), "{args}");
+        assert!(!args.contains("--exclude"), "{args}");
+        assert!(args.contains("'main'"), "{args}");
+    }
 }

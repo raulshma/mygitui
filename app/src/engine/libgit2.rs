@@ -1145,7 +1145,11 @@ impl GitEngine for Libgit2Engine {
                     // merge-shaped WIP/index/untracked triples here derails
                     // the commit-graph lanes (their base commit is often
                     // weeks old, holding a lane open across the whole graph).
-                    if reference.name().is_ok_and(|n| n.starts_with("refs/stash")) {
+                    // Internal checkpoint refs are safety snapshots, not
+                    // history the user asked to see.
+                    if reference.name().is_ok_and(|n| {
+                        n.starts_with("refs/stash") || n.starts_with("refs/mygitui/")
+                    }) {
                         continue;
                     }
                     if let Ok(commit) = reference.peel_to_commit() {

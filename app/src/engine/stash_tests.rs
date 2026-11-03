@@ -570,7 +570,7 @@ fn reflog_head_chain_after_commits() {
 }
 
 #[test]
-fn log_walk_excludes_stash_commits_and_starts_at_head() {
+fn log_walk_excludes_stash_and_checkpoint_commits() {
     use super::git_engine::GitEngine;
     use super::types::LogFilter;
 
@@ -585,6 +585,13 @@ fn log_walk_excludes_stash_commits_and_starts_at_head() {
     let stashes = ENGINE.stash_list_impl(&repo).expect("stash list");
     assert_eq!(stashes.len(), 1);
 
+    // Checkpoint snapshots (refs/mygitui/*) are internal safety refs, not
+    // user history: their commits must not leak into the graph either.
+    write_file(&repo, "a.txt", "three\n");
+    ENGINE
+        .checkpoint_create_impl(&repo, "log-exclude")
+        .expect("checkpoint");
+
     let (page, next) = ENGINE
         .log(&repo, &LogFilter::default(), 10, None)
         .expect("log");
@@ -598,6 +605,7 @@ fn log_walk_excludes_stash_commits_and_starts_at_head() {
         );
     }
     let head = repo.head().expect("head").target().expect("target");
+    assert_eq!(page.len(), 1, "only real history: {page:?}");
     assert_eq!(page[0].sha, head.to_string(), "HEAD pops first");
     assert_eq!(page[0].summary, "base");
 }
