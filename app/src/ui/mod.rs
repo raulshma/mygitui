@@ -1,10 +1,18 @@
-//! Native iced user interface.
+//! Native iced UI.
 //!
-//! `app` owns the application state, [`Message`](app::Message) enum, and the
-//! subscription wiring to the backend event bus. Wave 3 expands this module
-//! into the full shell (tabs, panes, theme); the entry point already owns the
-//! single [`AppServices`](crate::service::AppServices) bag.
+//! Module map:
+//! - [`app`] — shell state, message routing, header/footer, subscriptions
+//! - [`theme`] — shadcn token port (light/dark) and widget styles
+//! - [`config`] — JSON-persisted user settings (`config.json`)
+//! - [`bus`] — iced subscription over the backend event bus
+//! - [`home`] — repository switcher / recent list
+//! - [`repo_view`] — tab strip, repo header and working-copy status
 
 mod app;
+mod bus;
+mod config;
+mod home;
+mod repo_view;
+mod theme;
 
 pub use app::run;
