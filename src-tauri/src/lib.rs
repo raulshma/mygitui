@@ -31,6 +31,7 @@ mod pty;
 mod pty_tests;
 pub mod remote;
 mod repo;
+mod service;
 mod watcher;
 mod workspace;
 #[cfg(test)]
