@@ -22,6 +22,9 @@ pub struct BranchesState {
     pub list: Option<Vec<BranchInfo>>,
     pub error: Option<String>,
     pub create_name: String,
+    /// Start point for the pending create (set by "branch from here"
+    /// intents); `None` = HEAD.
+    pub create_from: Option<String>,
 }
 
 pub fn view<'a>(tab: &'a Tab, tokens: Tokens) -> Element<'a, Message> {

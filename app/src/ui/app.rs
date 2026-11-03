@@ -24,6 +24,7 @@ use crate::remote::prompts::SecretAnswer;
 use crate::service::events::BackendEvent;
 use crate::service::AppServices;
 
+use super::bisect_panel;
 use super::bus;
 use super::config::{self, Config, RecentRepo};
 use super::context_menu;
@@ -35,6 +36,7 @@ use super::home;
 use super::palette;
 use super::prompts::{self, AuthPromptState, DeviceSecretPromptState, HostKeyPromptState};
 use super::quick_switcher;
+use super::reflog_panel;
 use super::remote_panel::net_summary;
 use super::repo_view::{self, Load, PendingRebase, PendingRemap, Tab};
 use super::status_model::{count_label, filter_sections, SectionId, StatusRow};
@@ -390,6 +392,10 @@ pub enum Message {
     ToggleTerminal,
     /// GitHub PR/CI panel (routed to the active tab).
     Forge(forge_panel::Msg),
+    /// Bisect stepper (routed to the active tab).
+    Bisect(bisect_panel::Msg),
+    /// Reflog panel (routed to the active tab).
+    Reflog(reflog_panel::Msg),
     /// Right-click on a status row (row key).
     StatusRowMenu {
         key: String,
@@ -699,6 +705,20 @@ impl App {
             None,
         );
         register(
+            "bisect.toggle",
+            "Toggle bisect stepper",
+            "View",
+            repo_id.is_some(),
+            None,
+        );
+        register(
+            "reflog.toggle",
+            "Toggle reflog panel",
+            "View",
+            repo_id.is_some(),
+            None,
+        );
+        register(
             "terminal.restart",
             "Restart terminal",
             "View",
@@ -826,6 +846,8 @@ impl App {
             "remotes.toggle" => self.update(Message::ToggleRemotePanel),
             "view.toggle_terminal" => self.update(Message::ToggleTerminal),
             "view.toggle_forge" => self.update(Message::Forge(forge_panel::Msg::ToggleOpen)),
+            "bisect.toggle" => self.update(Message::Bisect(bisect_panel::Msg::ToggleOpen)),
+            "reflog.toggle" => self.update(Message::Reflog(reflog_panel::Msg::ToggleOpen)),
             "terminal.restart" => self.update(Message::Terminal(terminal::Msg::RestartPressed)),
             "network.fetch" => {
                 let remotes: Vec<String> = self
@@ -1206,6 +1228,139 @@ impl App {
                     },
                     std::convert::identity,
                 )
+            }
+        }
+    }
+
+    /// Fetches the repo's bisect state (cheap JSON read) into the panel.
+    fn load_bisect_state(&self, repo_id: RepoId) -> Task<Message> {
+        let services = self.services.clone();
+        Task::perform(
+            async move {
+                Message::Bisect(bisect_panel::Msg::StateLoaded(
+                    crate::service::merge::bisect_state(&services, repo_id).await,
+                ))
+            },
+            std::convert::identity,
+        )
+    }
+
+    /// Fetches the bisect mark-history log into the panel.
+    fn load_bisect_log(&self, repo_id: RepoId) -> Task<Message> {
+        let services = self.services.clone();
+        Task::perform(
+            async move {
+                Message::Bisect(bisect_panel::Msg::LogLoaded(
+                    crate::service::merge::bisect_log(&services, repo_id)
+                        .await
+                        .unwrap_or_default(),
+                ))
+            },
+            std::convert::identity,
+        )
+    }
+
+    /// Executes a bisect panel action against `service::merge`.
+    fn run_bisect_action(
+        &mut self,
+        repo_id: RepoId,
+        action: Option<bisect_panel::Action>,
+    ) -> Task<Message> {
+        let Some(action) = action else {
+            return Task::none();
+        };
+        match action {
+            bisect_panel::Action::Refresh => self.load_bisect_state(repo_id),
+            bisect_panel::Action::Start { bad, good } => {
+                let services = self.services.clone();
+                let repo_id2 = repo_id.clone();
+                let start = Task::perform(
+                    async move {
+                        Message::Bisect(bisect_panel::Msg::StateLoaded(
+                            crate::service::merge::bisect_start(
+                                &services,
+                                repo_id2,
+                                (!bad.trim().is_empty()).then_some(bad),
+                                good,
+                            )
+                            .await,
+                        ))
+                    },
+                    std::convert::identity,
+                );
+                let log = self.load_bisect_log(repo_id);
+                start.chain(log)
+            }
+            bisect_panel::Action::Mark(mark) => {
+                let services = self.services.clone();
+                let repo_id2 = repo_id.clone();
+                let mark = Task::perform(
+                    async move {
+                        Message::Bisect(bisect_panel::Msg::StateLoaded(
+                            crate::service::merge::bisect_mark(&services, repo_id2, mark).await,
+                        ))
+                    },
+                    std::convert::identity,
+                );
+                let log = self.load_bisect_log(repo_id);
+                mark.chain(log)
+            }
+            bisect_panel::Action::Reset => {
+                let services = self.services.clone();
+                let services2 = self.services.clone();
+                let repo_id2 = repo_id.clone();
+                let repo_id3 = repo_id.clone();
+                let reset = Task::perform(
+                    async move {
+                        Message::Bisect(bisect_panel::Msg::StateLoaded(
+                            match crate::service::merge::bisect_reset(&services, repo_id2).await {
+                                Ok(()) => {
+                                    crate::service::merge::bisect_state(&services2, repo_id3).await
+                                }
+                                Err(err) => Err(err),
+                            },
+                        ))
+                    },
+                    std::convert::identity,
+                );
+                let log = self.load_bisect_log(repo_id);
+                reset.chain(log)
+            }
+            bisect_panel::Action::LoadLog => self.load_bisect_log(repo_id),
+        }
+    }
+
+    /// Executes a reflog panel action: refresh reads through the service
+    /// layer, row intents reuse the shell's copy-sha / reset-confirm /
+    /// branch-create flows.
+    fn run_reflog_action(
+        &mut self,
+        repo_id: RepoId,
+        action: Option<reflog_panel::Action>,
+    ) -> Task<Message> {
+        let Some(action) = action else {
+            return Task::none();
+        };
+        match action {
+            reflog_panel::Action::Refresh { ref_name } => {
+                let services = self.services.clone();
+                Task::perform(
+                    async move {
+                        Message::Reflog(reflog_panel::Msg::EntriesLoaded(
+                            crate::service::branches::reflog(&services, repo_id, ref_name).await,
+                        ))
+                    },
+                    std::convert::identity,
+                )
+            }
+            reflog_panel::Action::CopySha(sha) => self.update(Message::CopySha(sha)),
+            reflog_panel::Action::ResetTo { sha } => self.update(Message::ResetRequested(sha)),
+            reflog_panel::Action::BranchFrom { sha } => {
+                if let Some(tab) = self.tabs.get_mut(self.active) {
+                    tab.branches.create_from = Some(sha);
+                    tab.branches.open = true;
+                }
+                Task::none()
             }
         }
     }
@@ -1670,7 +1825,11 @@ impl App {
                             }
                         }
                         self.show_home = false;
-                        Task::batch([self.refresh(repo_id.clone()), self.start_log(repo_id)])
+                        Task::batch([
+                            self.refresh(repo_id.clone()),
+                            self.start_log(repo_id.clone()),
+                            self.load_bisect_state(repo_id),
+                        ])
                     }
                     Err(err) => {
                         self.notice = Some(Notice::error(format!("Could not open {path}: {err}")));
@@ -2351,6 +2510,7 @@ impl App {
                 if name.is_empty() {
                     return Task::none();
                 }
+                let from = tab.branches.create_from.take();
                 let repo_id = tab.repo.repo_id.clone();
                 let label = format!("Create branch {name}");
                 let services = self.services.clone();
@@ -2360,7 +2520,7 @@ impl App {
                             &services,
                             repo_id.clone(),
                             name,
-                            None,
+                            from,
                             true,
                         )
                         .await;
@@ -3595,6 +3755,22 @@ impl App {
                 let action = forge_panel::update(&mut tab.forge, msg);
                 let repo_id = tab.repo.repo_id.clone();
                 self.run_forge_action(repo_id, action)
+            }
+            Message::Bisect(msg) => {
+                let Some(tab) = self.tabs.get_mut(self.active) else {
+                    return Task::none();
+                };
+                let action = tab.bisect.update(msg);
+                let repo_id = tab.repo.repo_id.clone();
+                self.run_bisect_action(repo_id, action)
+            }
+            Message::Reflog(msg) => {
+                let Some(tab) = self.tabs.get_mut(self.active) else {
+                    return Task::none();
+                };
+                let action = tab.reflog.update(msg);
+                let repo_id = tab.repo.repo_id.clone();
+                self.run_reflog_action(repo_id, action)
             }
             Message::StatusRowMenu { key } => {
                 let menu = self

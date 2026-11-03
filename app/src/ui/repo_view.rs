@@ -12,6 +12,7 @@ use iced::{Alignment, Color, Element, Length};
 use crate::engine::types::{ChangeKind, RebaseStep, RepoId, RepoInfo, RepoStatus};
 
 use super::app::{InProgressAction, Message};
+use super::bisect_panel;
 use super::branch_panel::{self, BranchesState};
 use super::commit_bar;
 use super::commit_detail;
@@ -20,6 +21,7 @@ use super::diff_view::{self, DiffPane, DiffSlot, PaneMode};
 use super::forge_panel::{self, ForgeCtx};
 use super::history_model::{FilterFields, HistoryState};
 use super::history_panel;
+use super::reflog_panel;
 use super::remote_panel::{self, RemotesState};
 use super::stash_panel::{self, StashesState};
 use super::status_model::{
@@ -97,6 +99,10 @@ pub struct Tab {
     pub branches: BranchesState,
     pub stashes: StashesState,
     pub remotes: RemotesState,
+    /// Bisect stepper state (banner above the workspace) and the reflog
+    /// browser (dropdown, like the remotes panel).
+    pub bisect: bisect_panel::BisectPanel,
+    pub reflog: reflog_panel::ReflogPanel,
     /// GitHub PR/CI panel state (dropdown, like the remotes panel). The
     /// context lives beside it so the panel's `'a` borrows come from the
     /// tab, not per-frame locals; the shell refreshes it on status/branch
@@ -158,6 +164,8 @@ impl Tab {
             remotes: RemotesState::default(),
             forge: forge_panel::ForgeState::default(),
             forge_ctx: ForgeCtx::default(),
+            bisect: bisect_panel::BisectPanel::default(),
+            reflog: reflog_panel::ReflogPanel::default(),
             terminal_open: false,
             pending_discard: None,
             pending_branch_delete: None,
@@ -638,6 +646,26 @@ fn repo_header<'a>(tab: &'a Tab, tokens: Tokens) -> Element<'a, Message> {
             .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
             .padding([6, 10])
             .on_press(Message::Forge(forge_panel::Msg::ToggleOpen)),
+            button(
+                text("Bisect")
+                    .size(11)
+                    .color(if tab.bisect.open || tab.bisect.is_active() {
+                        tokens.primary
+                    } else {
+                        tokens.foreground
+                    })
+            )
+            .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
+            .padding([6, 10])
+            .on_press(Message::Bisect(bisect_panel::Msg::ToggleOpen)),
+            button(text("Reflog").size(11).color(if tab.reflog.open {
+                tokens.primary
+            } else {
+                tokens.foreground
+            }))
+            .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
+            .padding([6, 10])
+            .on_press(Message::Reflog(reflog_panel::Msg::ToggleOpen)),
             button(text("Terminal").size(11).color(if tab.terminal_open {
                 tokens.primary
             } else {
@@ -736,6 +764,7 @@ fn workspace<'a>(tab: &'a Tab, tokens: Tokens) -> Element<'a, Message> {
         || tab.stashes.open
         || tab.remotes.open
         || tab.forge.open
+        || tab.reflog.open
     {
         // Dropdowns: overlaid on the workspace so opening them never
         // reflows the panes underneath. The branch picker anchors top-left,
@@ -776,6 +805,19 @@ fn workspace<'a>(tab: &'a Tab, tokens: Tokens) -> Element<'a, Message> {
                     .into(),
             );
         }
+        if tab.reflog.open {
+            if let Some(panel) = tab.reflog.view(tokens) {
+                layers.push(
+                    container(container(panel.map(Message::Reflog)).width(Length::Fixed(520.0)))
+                        .width(Length::Fill)
+                        .height(Length::Fill)
+                        .align_x(Alignment::End)
+                        .align_y(Alignment::Start)
+                        .padding([6, 8])
+                        .into(),
+                );
+            }
+        }
         if tab.forge.open {
             layers.push(
                 container(
@@ -799,6 +841,14 @@ fn workspace<'a>(tab: &'a Tab, tokens: Tokens) -> Element<'a, Message> {
             .into()
     } else {
         surface.into()
+    };
+
+    let main: Element<'a, Message> = match tab.bisect.view(tokens) {
+        Some(banner) => column![banner.map(Message::Bisect), main]
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into(),
+        None => main,
     };
 
     if tab.terminal_open {

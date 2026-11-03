@@ -26,8 +26,11 @@
 //! - [`quick_switcher`] — repo quick-switcher overlay (ctrl/cmd+K)
 //! - [`terminal`] — embedded PTY terminal pane (monitor with input)
 //! - [`forge_panel`] — GitHub PRs, CI checks and workflow runs (gh CLI)
+//! - [`bisect_panel`] — bisect stepper banner (start/mark/log/reset)
+//! - [`reflog_panel`] — reflog browser with reset/branch-from intents
 
 mod app;
+mod bisect_panel;
 mod branch_panel;
 mod bus;
 mod commit_bar;
@@ -45,6 +48,7 @@ mod home;
 mod palette;
 mod prompts;
 mod quick_switcher;
+mod reflog_panel;
 mod remote_panel;
 mod repo_view;
 mod stash_panel;
