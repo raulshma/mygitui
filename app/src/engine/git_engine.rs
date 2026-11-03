@@ -419,6 +419,12 @@ pub trait GitEngineM3: Send + Sync {
     fn autosquash_plan(&self, _repo: &Repository, _base: &str) -> EngineResult<Vec<RebaseStep>> {
         Err(EngineError::Unsupported("autosquash_plan".into()))
     }
+
+    /// Plain rebase plan: every commit in `base..HEAD` (oldest first) as a
+    /// `pick` step, feeding `rebase_start`.
+    fn rebase_plan(&self, _repo: &Repository, _base: &str) -> EngineResult<Vec<RebaseStep>> {
+        Err(EngineError::Unsupported("rebase_plan".into()))
+    }
 }
 
 // ---------- M12: signature verify / branch trash / worktree prune ----------

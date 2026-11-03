@@ -240,6 +240,32 @@ pub async fn rebase_start(
     .await
 }
 
+/// Plain rebase plan for "rebase HEAD onto `base`": every commit in
+/// `base..HEAD` (oldest first) as a `pick` step. An empty plan means HEAD
+/// is already on top of `base` (nothing to rebase).
+pub async fn rebase_plan(
+    services: &AppServices,
+    repo_id: RepoId,
+    base: String,
+) -> Result<Vec<RebaseStep>, String> {
+    let handle = get_handle(&services.repos, &repo_id)?;
+    if let Some(remote) = handle.remote() {
+        return finish_op(enqueue_remote_read(
+            &handle,
+            remote,
+            "rebase",
+            move |git, _ws| git.rebase_plan(&base),
+        ))
+        .await;
+    }
+    let engine = handle.m3();
+    let repo = handle.repo()?;
+    finish_op(enqueue_read(&handle, &repo, "rebase", move |_ctx, repo| {
+        engine.rebase_plan(repo, &base)
+    }))
+    .await
+}
+
 pub async fn rebase_state(services: &AppServices, repo_id: RepoId) -> Result<RebaseState, String> {
     let handle = get_handle(&services.repos, &repo_id)?;
     if let Some(remote) = handle.remote() {

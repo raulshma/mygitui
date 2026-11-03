@@ -2206,6 +2206,23 @@ impl RemoteGitEngine {
             .collect())
     }
 
+    /// Plain rebase plan for `base..HEAD` (oldest first), all `pick` steps.
+    pub fn rebase_plan(&self, base: &str) -> Result<Vec<RebaseStep>, String> {
+        let raw = self.git_out(&format!(
+            "log --reverse --format='%H' {}..HEAD",
+            shell_quote(base)
+        ))?;
+        Ok(raw
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .map(|sha| RebaseStep {
+                sha: sha.trim().to_string(),
+                action: "pick".to_string(),
+                new_message: None,
+            })
+            .collect())
+    }
+
     pub fn commit_signature(&self, sha: &str) -> Result<CommitSignature, String> {
         let raw = self
             .git_out(&format!("cat-file commit {}", shell_quote(sha)))?

@@ -811,4 +811,7 @@ impl GitEngineM3 for Libgit2Engine {
     fn autosquash_plan(&self, repo: &Repository, base: &str) -> EngineResult<Vec<RebaseStep>> {
         self.autosquash_plan_impl(repo, base)
     }
+    fn rebase_plan(&self, repo: &Repository, base: &str) -> EngineResult<Vec<RebaseStep>> {
+        self.rebase_plan_impl(repo, base)
+    }
 }

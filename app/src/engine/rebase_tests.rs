@@ -653,3 +653,47 @@ fn state_reports_inactive_without_rebase() {
         other => panic!("expected Invalid for stray continue, got: {other:?}"),
     }
 }
+
+// ---------------------------------------------------------------------------
+// plain plan
+// ---------------------------------------------------------------------------
+
+#[test]
+fn rebase_plan_lists_base_to_head_as_picks() {
+    let (temp, c1, c2, c3) = chain_of_three("plain-plan");
+    let base = temp
+        .repo
+        .find_commit(oid(&c1))
+        .expect("first commit")
+        .parent(0)
+        .expect("base parent")
+        .id()
+        .to_string();
+
+    let plan = ENGINE.rebase_plan_impl(&temp.repo, &base).expect("plan");
+    let shas: Vec<&str> = plan.iter().map(|entry| entry.sha.as_str()).collect();
+    assert_eq!(shas, vec![c1.as_str(), c2.as_str(), c3.as_str()]);
+    assert!(
+        plan.iter()
+            .all(|entry| entry.action == "pick" && entry.new_message.is_none()),
+        "plain plan is all picks: {plan:?}"
+    );
+
+    // The plan feeds `rebase_start` unchanged: replaying it onto the base
+    // reproduces the same history.
+    let state = ENGINE
+        .rebase_start_impl(&temp, &plan, Some(&base))
+        .expect("run");
+    assert!(!state.active);
+    assert_eq!(
+        first_parent_summaries(&temp.repo),
+        vec!["three", "two", "one", "base"]
+    );
+}
+
+#[test]
+fn rebase_plan_is_empty_when_head_is_on_base() {
+    let (temp, _c1, _c2, c3) = chain_of_three("plain-plan-empty");
+    let plan = ENGINE.rebase_plan_impl(&temp.repo, &c3).expect("plan");
+    assert!(plan.is_empty());
+}

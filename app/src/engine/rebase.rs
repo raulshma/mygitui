@@ -702,6 +702,30 @@ impl Libgit2Engine {
             .collect())
     }
 
+    /// Plain rebase plan: every commit in `base..HEAD` (oldest first) as a
+    /// `pick` step, feeding `rebase_start` for "rebase onto `<base>`".
+    pub(crate) fn rebase_plan_impl(
+        &self,
+        repo: &Repository,
+        base: &str,
+    ) -> EngineResult<Vec<RebaseStep>> {
+        let base_commit = resolve_commitish(repo, base)?;
+        let mut walk = repo.revwalk()?;
+        walk.push(repo.head()?.peel_to_commit()?.id())?;
+        walk.hide(base_commit.id())?;
+        walk.set_sorting(git2::Sort::REVERSE | git2::Sort::TOPOLOGICAL)?;
+
+        walk.filter_map(Result::ok)
+            .map(|oid| {
+                Ok(RebaseStep {
+                    sha: oid.to_string(),
+                    action: "pick".to_owned(),
+                    new_message: None,
+                })
+            })
+            .collect()
+    }
+
     /// `git describe --tags` for a commit-ish (annotated tags preferred by
     /// libgit2's default options); errors fall back to the short sha.
     pub(crate) fn describe_impl(&self, repo: &Repository, spec: &str) -> EngineResult<String> {
