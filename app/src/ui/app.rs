@@ -902,6 +902,14 @@ impl App {
             other if other.starts_with("commit.reset:") => self.update(Message::ResetRequested(
                 other["commit.reset:".len()..].to_string(),
             )),
+            other if other.starts_with("commit.branch:") => {
+                let sha = other["commit.branch:".len()..].to_string();
+                if let Some(tab) = self.tabs.get_mut(self.active) {
+                    tab.branches.create_from = Some(sha);
+                    tab.branches.open = true;
+                }
+                Task::none()
+            }
             other => {
                 self.notice = Some(Notice::error(format!("Unknown command: {other}")));
                 Task::none()
@@ -4321,6 +4329,10 @@ fn commit_row_menu(sha: &str) -> context_menu::Menu {
         .command(format!("commit.cherry_pick:{sha}"), "Cherry-pick onto HEAD")
         .command(format!("commit.revert:{sha}"), "Revert")
         .command(format!("commit.reset:{sha}"), "Reset branch to here…")
+        .command(
+            format!("commit.branch:{sha}"),
+            format!("Create branch here (from {short})"),
+        )
 }
 
 /// First non-flag argument; used for `mygitui <path>` first launch.
