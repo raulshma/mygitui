@@ -174,6 +174,13 @@ fn branch_row<'a>(branch: &'a BranchInfo, tokens: Tokens) -> Element<'a, Message
         // Explicit width: a Shrink button beside the Fill row button resolves
         // to a zero-width hit area inside the scrollable row.
         line = line.push(
+            button(text("Merge").size(9))
+                .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
+                .padding([2, 6])
+                .width(Length::Fixed(46.0))
+                .on_press(Message::MergeBranch(branch.name.clone())),
+        );
+        line = line.push(
             button(text("Delete").size(9))
                 .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
                 .padding([2, 6])

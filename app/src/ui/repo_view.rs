@@ -11,14 +11,16 @@ use iced::{Alignment, Color, Element, Length};
 
 use crate::engine::types::{ChangeKind, RepoId, RepoInfo, RepoStatus};
 
-use super::app::Message;
+use super::app::{InProgressAction, Message};
 use super::branch_panel::{self, BranchesState};
 use super::commit_bar;
 use super::commit_detail;
-use super::dialog;
+use super::dialog::{self, ResetRequest};
 use super::diff_view::{self, DiffPane, DiffSlot, PaneMode};
 use super::history_model::{FilterFields, HistoryState};
 use super::history_panel;
+use super::remote_panel::{self, RemotesState};
+use super::stash_panel::{self, StashesState};
 use super::status_model::{
     build_status_index, has_staged_changes, remap_selection, SectionId, StatusIndex, StatusRow,
     StatusSelection,
@@ -84,10 +86,20 @@ pub struct Tab {
     pub history_filter_open: bool,
 
     pub branches: BranchesState,
+    pub stashes: StashesState,
+    pub remotes: RemotesState,
     /// Paths awaiting the discard confirmation dialog.
     pub pending_discard: Option<Vec<String>>,
     /// Branch awaiting the delete confirmation dialog.
     pub pending_branch_delete: Option<String>,
+    /// Stash (index, message) awaiting the drop confirmation dialog.
+    pub pending_stash_drop: Option<(u32, String)>,
+    /// Checkpoint (id, reason) awaiting the restore confirmation dialog.
+    pub pending_checkpoint_restore: Option<(String, String)>,
+    /// Commit and mode awaiting the reset confirmation dialog.
+    pub pending_reset: Option<ResetRequest>,
+    /// Remote awaiting the remove confirmation dialog.
+    pub pending_remote_remove: Option<String>,
 
     pub diff_seq: u64,
     pub commit_diff_seq: u64,
@@ -120,8 +132,14 @@ impl Tab {
             history_filter: FilterFields::default(),
             history_filter_open: false,
             branches: BranchesState::default(),
+            stashes: StashesState::default(),
+            remotes: RemotesState::default(),
             pending_discard: None,
             pending_branch_delete: None,
+            pending_stash_drop: None,
+            pending_checkpoint_restore: None,
+            pending_reset: None,
+            pending_remote_remove: None,
             diff_seq: 0,
             commit_diff_seq: 0,
         }
@@ -328,6 +346,62 @@ fn dialog_overlay<'a>(tab: &'a Tab, tokens: Tokens) -> Option<Element<'a, Messag
         ));
     }
 
+    if let Some(name) = &tab.pending_remote_remove {
+        let spec = dialog::Confirm {
+            title: "Remove remote".to_string(),
+            body: format!(
+                "Remove the remote “{name}”? Its tracking branches and configuration are deleted; the remote repository is untouched."
+            ),
+            detail: None,
+            confirm_label: "Remove".to_string(),
+            danger: true,
+        };
+        return Some(dialog::confirm(
+            tokens,
+            &spec,
+            Message::CancelDialog,
+            Message::RemoteRemoveConfirmed,
+        ));
+    }
+
+    if let Some((index, message)) = &tab.pending_stash_drop {
+        let spec = dialog::Confirm {
+            title: "Drop stash".to_string(),
+            body: format!("Drop stash@{{{index}}}? This cannot be undone."),
+            detail: (!message.trim().is_empty()).then(|| message.clone()),
+            confirm_label: "Drop".to_string(),
+            danger: true,
+        };
+        return Some(dialog::confirm(
+            tokens,
+            &spec,
+            Message::CancelDialog,
+            Message::StashDropConfirmed,
+        ));
+    }
+
+    if let Some((id, reason)) = &tab.pending_checkpoint_restore {
+        let spec = dialog::Confirm {
+            title: "Restore checkpoint".to_string(),
+            body: format!(
+                "Restore the worktree to “{reason}”? The current state is snapshotted first."
+            ),
+            detail: Some(id.clone()),
+            confirm_label: "Restore".to_string(),
+            danger: false,
+        };
+        return Some(dialog::confirm(
+            tokens,
+            &spec,
+            Message::CancelDialog,
+            Message::CheckpointRestoreConfirmed,
+        ));
+    }
+
+    if let Some(request) = &tab.pending_reset {
+        return Some(dialog::reset(tokens, request));
+    }
+
     None
 }
 
@@ -407,12 +481,55 @@ fn repo_header<'a>(tab: &'a Tab, tokens: Tokens) -> Element<'a, Message> {
         if status.sequencer {
             sync = sync.push(chip("sequencer", tokens.deleted));
         }
+        // Finish or back out of an in-progress operation without leaving the
+        // app for a terminal.
+        if status.merging {
+            sync = sync.push(control_button(
+                tokens,
+                "Abort merge",
+                theme::ButtonKind::Danger,
+                Message::InProgress(InProgressAction::AbortMerge),
+            ));
+        }
+        if status.rebasing {
+            if !status.sequencer {
+                sync = sync.push(control_button(
+                    tokens,
+                    "Continue",
+                    theme::ButtonKind::Secondary,
+                    Message::InProgress(InProgressAction::ContinueRebase),
+                ));
+            }
+            sync = sync.push(control_button(
+                tokens,
+                "Abort",
+                theme::ButtonKind::Danger,
+                Message::InProgress(InProgressAction::AbortRebase),
+            ));
+        } else if status.sequencer && !status.merging {
+            sync = sync.push(control_button(
+                tokens,
+                "Abort",
+                theme::ButtonKind::Danger,
+                Message::InProgress(InProgressAction::AbortSequencer),
+            ));
+        }
     }
 
     let history_label = if tab.history_open {
         "Hide history"
     } else {
         "History"
+    };
+    let stash_label = if tab.stashes.open {
+        "Hide stash"
+    } else {
+        "Stash"
+    };
+    let remote_label = if tab.remotes.open {
+        "Hide remote"
+    } else {
+        "Remote"
     };
 
     container(
@@ -441,6 +558,22 @@ fn repo_header<'a>(tab: &'a Tab, tokens: Tokens) -> Element<'a, Message> {
             .on_press(Message::ToggleBranchPanel),
             sync,
             Space::new().width(Length::Fill),
+            button(text(remote_label).size(11).color(if tab.remotes.open {
+                tokens.primary
+            } else {
+                tokens.muted_foreground
+            }),)
+            .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
+            .padding([6, 10])
+            .on_press(Message::ToggleRemotePanel),
+            button(text(stash_label).size(11).color(if tab.stashes.open {
+                tokens.primary
+            } else {
+                tokens.muted_foreground
+            }),)
+            .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
+            .padding([6, 10])
+            .on_press(Message::ToggleStashPanel),
             button(text(history_label).size(11))
                 .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
                 .padding([6, 10])
@@ -531,24 +664,67 @@ fn workspace<'a>(tab: &'a Tab, tokens: Tokens) -> Element<'a, Message> {
         .height(Length::Fill)
         .style(theme::surface_style(tokens));
 
-    if tab.branches.open {
-        // Dropdown: overlaid on the workspace top-left so opening it never
-        // reflows the panes underneath.
-        let overlay =
-            container(container(branch_panel::view(tab, tokens)).width(Length::Fixed(320.0)))
-                .width(Length::Fill)
-                .height(Length::Fill)
-                .align_x(Alignment::Start)
-                .align_y(Alignment::Start)
-                .padding([6, 8]);
+    if tab.branches.open || tab.stashes.open || tab.remotes.open {
+        // Dropdowns: overlaid on the workspace so opening them never
+        // reflows the panes underneath. The branch picker anchors top-left,
+        // the stash/checkpoint and remote panels top-right (opening one
+        // closes the others).
+        let mut layers: Vec<Element<'a, Message>> = vec![surface.into()];
 
-        iced::widget::stack![surface, overlay]
+        if tab.branches.open {
+            layers.push(
+                container(container(branch_panel::view(tab, tokens)).width(Length::Fixed(320.0)))
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .align_x(Alignment::Start)
+                    .align_y(Alignment::Start)
+                    .padding([6, 8])
+                    .into(),
+            );
+        }
+        if tab.stashes.open {
+            layers.push(
+                container(container(stash_panel::view(tab, tokens)).width(Length::Fixed(420.0)))
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .align_x(Alignment::End)
+                    .align_y(Alignment::Start)
+                    .padding([6, 8])
+                    .into(),
+            );
+        }
+        if tab.remotes.open {
+            layers.push(
+                container(container(remote_panel::view(tab, tokens)).width(Length::Fixed(460.0)))
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .align_x(Alignment::End)
+                    .align_y(Alignment::Start)
+                    .padding([6, 8])
+                    .into(),
+            );
+        }
+
+        iced::widget::stack(layers)
             .width(Length::Fill)
             .height(Length::Fill)
             .into()
     } else {
         surface.into()
     }
+}
+
+fn control_button<'a>(
+    tokens: Tokens,
+    label: &'a str,
+    kind: theme::ButtonKind,
+    message: Message,
+) -> Element<'a, Message> {
+    button(text(label).size(10))
+        .style(theme::button_style(tokens, kind))
+        .padding([2, 8])
+        .on_press(message)
+        .into()
 }
 
 pub fn chip<'a>(label: impl Into<String>, color: Color) -> Element<'a, Message> {

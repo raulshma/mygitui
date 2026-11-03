@@ -75,6 +75,10 @@ pub fn view<'a>(tab: &'a Tab, tokens: Tokens) -> Element<'a, Message> {
             .size(14)
             .font(theme::semibold())
             .width(Length::Fill),
+        button(text("Reset…").size(11))
+            .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
+            .padding([3, 10])
+            .on_press(Message::ResetRequested(commit.sha.clone())),
         button(text("Close").size(11))
             .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
             .padding([3, 10])

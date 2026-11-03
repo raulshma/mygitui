@@ -16,7 +16,10 @@
 //! - [`history_panel`] — commit list with the graph lane column
 //! - [`graph_canvas`] — per-row lane canvas renderer
 //! - [`commit_detail`] — selected commit metadata and file diff
-//! - [`branch_panel`] — branch picker strip under the repo header
+//! - [`branch_panel`] — branch picker overlay
+//! - [`stash_panel`] — stash stack and checkpoint snapshots overlay
+//! - [`remote_panel`] — remotes, fetch/pull/push controls
+//! - [`prompts`] — credential, host-key and device-secret modals
 //! - [`dialog`] — modal confirmation overlay
 
 mod app;
@@ -32,7 +35,10 @@ mod graph_canvas;
 mod history_model;
 mod history_panel;
 mod home;
+mod prompts;
+mod remote_panel;
 mod repo_view;
+mod stash_panel;
 mod status_model;
 mod status_panel;
 mod theme;

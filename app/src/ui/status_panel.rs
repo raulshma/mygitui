@@ -6,7 +6,7 @@
 use iced::widget::{button, column, container, row, scrollable, text, text_input, Space};
 use iced::{Alignment, Background, Border, Color, Element, Length};
 
-use crate::engine::types::ChangeKind;
+use crate::engine::types::{ChangeKind, ConflictResolution};
 
 use super::app::Message;
 use super::repo_view::{Load, Tab};
@@ -295,6 +295,33 @@ fn selection_bar<'a>(tab: &'a Tab, tokens: Tokens) -> Element<'a, Message> {
                 .on_press(Message::DiscardPaths(actions.discard)),
         );
     }
+
+    let conflicts: Vec<String> = rows
+        .iter()
+        .filter(|row| {
+            matches!(row.index, ChangeKind::Conflicted)
+                || matches!(row.worktree, ChangeKind::Conflicted)
+        })
+        .map(|row| row.path.clone())
+        .collect();
+    if !conflicts.is_empty() {
+        for (label, resolution) in [
+            ("Ours", ConflictResolution::Ours),
+            ("Theirs", ConflictResolution::Theirs),
+            ("Both", ConflictResolution::Both),
+        ] {
+            bar = bar.push(
+                button(text(label).size(10).color(tokens.conflicted))
+                    .style(theme::button_style(tokens, theme::ButtonKind::Secondary))
+                    .padding([2, 6])
+                    .on_press(Message::ConflictResolve {
+                        paths: conflicts.clone(),
+                        resolution,
+                    }),
+            );
+        }
+    }
+
     bar = bar.push(Space::new().width(Length::Fill));
     bar = bar.push(
         button(text("✕").size(10))

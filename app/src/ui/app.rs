@@ -14,17 +14,23 @@ use iced::widget::{button, column, container, row, text, text_editor, Space};
 use iced::{window, Alignment, Element, Length, Subscription, Task};
 
 use crate::engine::types::{
-    BranchInfo, CommitOptions, DiffSide, FileDiff, LineRange, RepoId, RepoInfo, RepoStatus,
-    StageRequest, StageTarget,
+    BranchInfo, ChangeKind, CheckpointInfo, CommitOptions, ConflictResolution, DiffSide,
+    FetchOptions, FileDiff, LineRange, MergeOptions, MergeOutcome, MergeResult, PullOptions,
+    PushOptions, RemoteInfo, RepoId, RepoInfo, RepoStatus, ResetKind, StageRequest, StageTarget,
+    StashInfo,
 };
+use crate::remote::prompts::SecretAnswer;
 use crate::service::events::BackendEvent;
 use crate::service::AppServices;
 
 use super::bus;
 use super::config::{self, Config, RecentRepo};
+use super::dialog::{self, ResetRequest};
 use super::diff_view::{DiffPane, DiffSlot};
 use super::history_model::{to_log_filter, FilterFields, HistoryFilterField};
 use super::home;
+use super::prompts::{self, AuthPromptState, DeviceSecretPromptState, HostKeyPromptState};
+use super::remote_panel::net_summary;
 use super::repo_view::{self, Load, PendingRemap, Tab};
 use super::status_model::{count_label, filter_sections, SectionId, StatusRow};
 use super::theme::{self, Mode, Tokens};
@@ -58,11 +64,34 @@ pub struct App {
     show_home: bool,
     notice: Option<Notice>,
     last_op: Option<String>,
+    auth_prompts: std::collections::VecDeque<AuthPromptState>,
+    host_key_prompts: std::collections::VecDeque<HostKeyPromptState>,
+    device_secret_prompts: std::collections::VecDeque<DeviceSecretPromptState>,
 }
 
 struct Notice {
     text: String,
     error: bool,
+}
+
+/// In-progress merge/rebase/sequencer control pressed in the repo header.
+#[derive(Debug, Clone, Copy)]
+pub enum InProgressAction {
+    AbortMerge,
+    ContinueRebase,
+    AbortRebase,
+    AbortSequencer,
+}
+
+impl InProgressAction {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::AbortMerge => "Abort merge",
+            Self::ContinueRebase => "Continue rebase",
+            Self::AbortRebase => "Abort rebase",
+            Self::AbortSequencer => "Abort sequencer",
+        }
+    }
 }
 
 impl Notice {
@@ -203,6 +232,99 @@ pub enum Message {
         result: Result<(), String>,
     },
 
+    ToggleStashPanel,
+    RefreshStashes,
+    StashesLoaded {
+        repo_id: RepoId,
+        result: Result<Vec<StashInfo>, String>,
+    },
+    StashMessageChanged(String),
+    StashIncludeUntracked(bool),
+    StashPush,
+    StashApply {
+        index: u32,
+        pop: bool,
+    },
+    StashDropRequested(u32),
+    StashDropConfirmed,
+    StashesDone {
+        repo_id: RepoId,
+        label: String,
+        result: Result<(), String>,
+    },
+    CheckpointsLoaded {
+        repo_id: RepoId,
+        result: Result<Vec<CheckpointInfo>, String>,
+    },
+    CheckpointCreate,
+    CheckpointRestoreRequested {
+        id: String,
+        reason: String,
+    },
+    CheckpointRestoreConfirmed,
+    CheckpointsDone {
+        repo_id: RepoId,
+        label: String,
+        result: Result<(), String>,
+    },
+    ResetRequested(String),
+    ResetKindSelected(ResetKind),
+    ResetConfirmed,
+    ResetDone {
+        repo_id: RepoId,
+        label: String,
+        result: Result<(), String>,
+    },
+
+    ToggleRemotePanel,
+    RefreshRemotes,
+    RemotesLoaded {
+        repo_id: RepoId,
+        result: Result<Vec<RemoteInfo>, String>,
+    },
+    RemoteNameChanged(String),
+    RemoteUrlChanged(String),
+    RemoteAdd,
+    FetchRemote(String),
+    PullRemote(String),
+    PushRemote(String),
+    RemoteRemoveRequested(String),
+    RemoteRemoveConfirmed,
+    RemotesDone {
+        repo_id: RepoId,
+        label: String,
+        result: Result<String, String>,
+    },
+
+    MergeBranch(String),
+    MergeDone {
+        repo_id: RepoId,
+        label: String,
+        result: Result<MergeResult, String>,
+    },
+    InProgress(InProgressAction),
+    ConflictResolve {
+        paths: Vec<String>,
+        resolution: ConflictResolution,
+    },
+    RepoActionDone {
+        repo_id: RepoId,
+        label: String,
+        result: Result<(), String>,
+    },
+
+    AuthUsernameChanged(String),
+    AuthPasswordChanged(String),
+    AuthStoreToggled(bool),
+    AuthPromptSubmit,
+    AuthPromptCancel,
+    HostKeyAnswer(bool),
+    DeviceSecretChanged(String),
+    DeviceSecretStoreToggled(bool),
+    DeviceSecretSubmit,
+    DeviceSecretCancel,
+    Noop,
+
     ConfirmDiscard,
     CancelDialog,
 }
@@ -226,6 +348,9 @@ impl App {
             show_home: true,
             notice: None,
             last_op: None,
+            auth_prompts: std::collections::VecDeque::new(),
+            host_key_prompts: std::collections::VecDeque::new(),
+            device_secret_prompts: std::collections::VecDeque::new(),
         };
 
         let mut tasks = vec![iced::system::theme().map(Message::SystemTheme)];
@@ -308,9 +433,17 @@ impl App {
             return Task::none();
         };
         let paths = tab.diff_paths();
-        let (old, new) = match row.section {
-            SectionId::Staged => (DiffSide::Head, DiffSide::Index),
-            SectionId::Changes => (DiffSide::Index, DiffSide::Worktree),
+        let conflicted = matches!(row.index, ChangeKind::Conflicted)
+            || matches!(row.worktree, ChangeKind::Conflicted);
+        // Unmerged paths have no index entry, so an index↔worktree diff comes
+        // back empty; diffing HEAD→worktree shows the conflict markers.
+        let (old, new) = if conflicted {
+            (DiffSide::Head, DiffSide::Worktree)
+        } else {
+            match row.section {
+                SectionId::Staged => (DiffSide::Head, DiffSide::Index),
+                SectionId::Changes => (DiffSide::Index, DiffSide::Worktree),
+            }
         };
 
         tab.diff_seq += 1;
@@ -415,6 +548,39 @@ impl App {
             async move {
                 let result = crate::service::branches::branches(&services, repo_id.clone()).await;
                 Message::BranchesLoaded { repo_id, result }
+            },
+            std::convert::identity,
+        )
+    }
+
+    fn load_stashes(&self, repo_id: RepoId) -> Task<Message> {
+        let services = self.services.clone();
+        Task::perform(
+            async move {
+                let result = crate::service::stash::stash_list(&services, repo_id.clone()).await;
+                Message::StashesLoaded { repo_id, result }
+            },
+            std::convert::identity,
+        )
+    }
+
+    fn load_checkpoints(&self, repo_id: RepoId) -> Task<Message> {
+        let services = self.services.clone();
+        Task::perform(
+            async move {
+                let result = crate::service::misc::checkpoints(&services, repo_id.clone()).await;
+                Message::CheckpointsLoaded { repo_id, result }
+            },
+            std::convert::identity,
+        )
+    }
+
+    fn load_remotes(&self, repo_id: RepoId) -> Task<Message> {
+        let services = self.services.clone();
+        Task::perform(
+            async move {
+                let result = crate::service::network::remotes(&services, repo_id.clone()).await;
+                Message::RemotesLoaded { repo_id, result }
             },
             std::convert::identity,
         )
@@ -569,11 +735,22 @@ impl App {
             Message::Refresh(repo_id) => {
                 let branches_open = repo_view::tab_index(&self.tabs, &repo_id)
                     .is_some_and(|index| self.tabs[index].branches.open);
+                let stashes_open = repo_view::tab_index(&self.tabs, &repo_id)
+                    .is_some_and(|index| self.tabs[index].stashes.open);
+                let remotes_open = repo_view::tab_index(&self.tabs, &repo_id)
+                    .is_some_and(|index| self.tabs[index].remotes.open);
                 if let Some(index) = repo_view::tab_index(&self.tabs, &repo_id) {
                     self.tabs[index].status = Load::Loading;
                     self.tabs[index].reload_diff = true;
                     if branches_open {
                         self.tabs[index].branches.loading = true;
+                    }
+                    if stashes_open {
+                        self.tabs[index].stashes.loading = true;
+                        self.tabs[index].stashes.checkpoints_loading = true;
+                    }
+                    if remotes_open {
+                        self.tabs[index].remotes.loading = true;
                     }
                 }
                 let mut tasks = vec![
@@ -581,7 +758,14 @@ impl App {
                     self.start_log(repo_id.clone()),
                 ];
                 if branches_open {
-                    tasks.push(self.load_branches(repo_id));
+                    tasks.push(self.load_branches(repo_id.clone()));
+                }
+                if stashes_open {
+                    tasks.push(self.load_stashes(repo_id.clone()));
+                    tasks.push(self.load_checkpoints(repo_id.clone()));
+                }
+                if remotes_open {
+                    tasks.push(self.load_remotes(repo_id));
                 }
                 Task::batch(tasks)
             }
@@ -827,6 +1011,10 @@ impl App {
                 if let Some(tab) = self.tabs.get_mut(self.active) {
                     tab.pending_discard = None;
                     tab.pending_branch_delete = None;
+                    tab.pending_stash_drop = None;
+                    tab.pending_checkpoint_restore = None;
+                    tab.pending_reset = None;
+                    tab.pending_remote_remove = None;
                 }
                 Task::none()
             }
@@ -1067,6 +1255,8 @@ impl App {
                 if !tab.branches.open {
                     return Task::none();
                 }
+                tab.stashes.open = false;
+                tab.remotes.open = false;
                 tab.branches.loading = true;
                 tab.branches.error = None;
                 let repo_id = tab.repo.repo_id.clone();
@@ -1222,6 +1412,899 @@ impl App {
                     }
                 }
             }
+            Message::ToggleStashPanel => {
+                let Some(tab) = self.tabs.get_mut(self.active) else {
+                    return Task::none();
+                };
+                tab.stashes.open = !tab.stashes.open;
+                if !tab.stashes.open {
+                    return Task::none();
+                }
+                tab.branches.open = false;
+                tab.remotes.open = false;
+                tab.stashes.loading = true;
+                tab.stashes.checkpoints_loading = true;
+                tab.stashes.error = None;
+                tab.stashes.checkpoints_error = None;
+                let repo_id = tab.repo.repo_id.clone();
+                Task::batch([
+                    self.load_stashes(repo_id.clone()),
+                    self.load_checkpoints(repo_id),
+                ])
+            }
+            Message::RefreshStashes => {
+                let Some(tab) = self.tabs.get_mut(self.active) else {
+                    return Task::none();
+                };
+                tab.stashes.loading = true;
+                tab.stashes.checkpoints_loading = true;
+                tab.stashes.error = None;
+                tab.stashes.checkpoints_error = None;
+                let repo_id = tab.repo.repo_id.clone();
+                Task::batch([
+                    self.load_stashes(repo_id.clone()),
+                    self.load_checkpoints(repo_id),
+                ])
+            }
+            Message::StashesLoaded { repo_id, result } => {
+                let Some(index) = repo_view::tab_index(&self.tabs, &repo_id) else {
+                    return Task::none();
+                };
+                let stashes = &mut self.tabs[index].stashes;
+                stashes.loading = false;
+                match result {
+                    Ok(list) => {
+                        stashes.list = Some(list);
+                        stashes.error = None;
+                    }
+                    Err(err) => stashes.error = Some(err),
+                }
+                Task::none()
+            }
+            Message::CheckpointsLoaded { repo_id, result } => {
+                let Some(index) = repo_view::tab_index(&self.tabs, &repo_id) else {
+                    return Task::none();
+                };
+                let stashes = &mut self.tabs[index].stashes;
+                stashes.checkpoints_loading = false;
+                match result {
+                    Ok(list) => {
+                        stashes.checkpoints = Some(list);
+                        stashes.checkpoints_error = None;
+                    }
+                    Err(err) => stashes.checkpoints_error = Some(err),
+                }
+                Task::none()
+            }
+            Message::StashMessageChanged(value) => {
+                if let Some(tab) = self.tabs.get_mut(self.active) {
+                    tab.stashes.message = value;
+                }
+                Task::none()
+            }
+            Message::StashIncludeUntracked(value) => {
+                if let Some(tab) = self.tabs.get_mut(self.active) {
+                    tab.stashes.include_untracked = value;
+                }
+                Task::none()
+            }
+            Message::StashPush => {
+                let Some(tab) = self.tabs.get_mut(self.active) else {
+                    return Task::none();
+                };
+                let message = tab.stashes.message.trim().to_string();
+                let include_untracked = tab.stashes.include_untracked;
+                let repo_id = tab.repo.repo_id.clone();
+                let services = self.services.clone();
+                Task::perform(
+                    async move {
+                        let result = crate::service::stash::stash_push(
+                            &services,
+                            repo_id.clone(),
+                            (!message.is_empty()).then_some(message),
+                            false,
+                            include_untracked,
+                        )
+                        .await;
+                        Message::StashesDone {
+                            repo_id,
+                            label: "Stash".to_string(),
+                            result,
+                        }
+                    },
+                    std::convert::identity,
+                )
+            }
+            Message::StashApply { index, pop } => {
+                let Some(tab) = self.tabs.get_mut(self.active) else {
+                    return Task::none();
+                };
+                let repo_id = tab.repo.repo_id.clone();
+                let label = format!("{} stash@{{{index}}}", if pop { "Pop" } else { "Apply" });
+                let services = self.services.clone();
+                Task::perform(
+                    async move {
+                        let result = crate::service::stash::stash_apply(
+                            &services,
+                            repo_id.clone(),
+                            index,
+                            pop,
+                        )
+                        .await;
+                        Message::StashesDone {
+                            repo_id,
+                            label,
+                            result,
+                        }
+                    },
+                    std::convert::identity,
+                )
+            }
+            Message::StashDropRequested(index) => {
+                if let Some(tab) = self.tabs.get_mut(self.active) {
+                    let message = tab
+                        .stashes
+                        .list
+                        .as_ref()
+                        .and_then(|list| list.iter().find(|stash| stash.index == index))
+                        .map(|stash| stash.message.clone())
+                        .unwrap_or_default();
+                    tab.pending_stash_drop = Some((index, message));
+                }
+                Task::none()
+            }
+            Message::StashDropConfirmed => {
+                let Some(tab) = self.tabs.get_mut(self.active) else {
+                    return Task::none();
+                };
+                let Some((index, _)) = tab.pending_stash_drop.take() else {
+                    return Task::none();
+                };
+                let repo_id = tab.repo.repo_id.clone();
+                let label = format!("Drop stash@{{{index}}}");
+                let services = self.services.clone();
+                Task::perform(
+                    async move {
+                        let result =
+                            crate::service::stash::stash_drop(&services, repo_id.clone(), index)
+                                .await;
+                        Message::StashesDone {
+                            repo_id,
+                            label,
+                            result,
+                        }
+                    },
+                    std::convert::identity,
+                )
+            }
+            Message::StashesDone {
+                repo_id,
+                label,
+                result,
+            } => {
+                let Some(index) = repo_view::tab_index(&self.tabs, &repo_id) else {
+                    return Task::none();
+                };
+                match result {
+                    Ok(()) => {
+                        self.last_op = Some(format!("{label} done"));
+                        self.notice = None;
+                        let tab = &mut self.tabs[index];
+                        if label == "Stash" {
+                            tab.stashes.message.clear();
+                        }
+                        tab.stashes.loading = true;
+                        tab.reload_diff = true;
+                        tab.status = Load::Loading;
+                        Task::batch([self.refresh(repo_id.clone()), self.load_stashes(repo_id)])
+                    }
+                    Err(err) => {
+                        self.notice = Some(Notice::error(format!("{label} failed: {err}")));
+                        Task::none()
+                    }
+                }
+            }
+            Message::CheckpointCreate => {
+                let Some(tab) = self.tabs.get_mut(self.active) else {
+                    return Task::none();
+                };
+                let repo_id = tab.repo.repo_id.clone();
+                let services = self.services.clone();
+                Task::perform(
+                    async move {
+                        let result = crate::service::misc::checkpoint_create(
+                            &services,
+                            repo_id.clone(),
+                            "manual".to_string(),
+                        )
+                        .await
+                        .map(|_| ());
+                        Message::CheckpointsDone {
+                            repo_id,
+                            label: "Checkpoint".to_string(),
+                            result,
+                        }
+                    },
+                    std::convert::identity,
+                )
+            }
+            Message::CheckpointRestoreRequested { id, reason } => {
+                if let Some(tab) = self.tabs.get_mut(self.active) {
+                    tab.pending_checkpoint_restore = Some((id, reason));
+                }
+                Task::none()
+            }
+            Message::CheckpointRestoreConfirmed => {
+                let Some(tab) = self.tabs.get_mut(self.active) else {
+                    return Task::none();
+                };
+                let Some((id, _)) = tab.pending_checkpoint_restore.take() else {
+                    return Task::none();
+                };
+                let repo_id = tab.repo.repo_id.clone();
+                let label = "Restore checkpoint".to_string();
+                let services = self.services.clone();
+                Task::perform(
+                    async move {
+                        let result = crate::service::misc::checkpoint_restore(
+                            &services,
+                            repo_id.clone(),
+                            id,
+                        )
+                        .await;
+                        Message::CheckpointsDone {
+                            repo_id,
+                            label,
+                            result,
+                        }
+                    },
+                    std::convert::identity,
+                )
+            }
+            Message::CheckpointsDone {
+                repo_id,
+                label,
+                result,
+            } => {
+                let Some(index) = repo_view::tab_index(&self.tabs, &repo_id) else {
+                    return Task::none();
+                };
+                match result {
+                    Ok(()) => {
+                        self.last_op = Some(format!("{label} done"));
+                        self.notice = None;
+                        self.tabs[index].stashes.checkpoints_loading = true;
+                        self.tabs[index].reload_diff = true;
+                        Task::batch([
+                            self.refresh(repo_id.clone()),
+                            self.load_checkpoints(repo_id),
+                        ])
+                    }
+                    Err(err) => {
+                        self.notice = Some(Notice::error(format!("{label} failed: {err}")));
+                        Task::none()
+                    }
+                }
+            }
+            Message::ResetRequested(sha) => {
+                let Some(tab) = self.tabs.get_mut(self.active) else {
+                    return Task::none();
+                };
+                let summary = tab
+                    .history
+                    .selected_commit()
+                    .map(|commit| commit.summary.clone())
+                    .unwrap_or_default();
+                tab.pending_reset = Some(ResetRequest {
+                    sha,
+                    summary,
+                    kind: ResetKind::Mixed,
+                });
+                Task::none()
+            }
+            Message::ResetKindSelected(kind) => {
+                if let Some(tab) = self.tabs.get_mut(self.active) {
+                    if let Some(request) = &mut tab.pending_reset {
+                        request.kind = kind;
+                    }
+                }
+                Task::none()
+            }
+            Message::ResetConfirmed => {
+                let Some(tab) = self.tabs.get_mut(self.active) else {
+                    return Task::none();
+                };
+                let Some(request) = tab.pending_reset.take() else {
+                    return Task::none();
+                };
+                let repo_id = tab.repo.repo_id.clone();
+                let label = format!(
+                    "Reset ({}) to {}",
+                    dialog::reset_kind_label(request.kind),
+                    repo_view::short_sha(&request.sha)
+                );
+                let services = self.services.clone();
+                Task::perform(
+                    async move {
+                        let guarded = crate::service::misc::guard_checkpoint(
+                            &services,
+                            repo_id.clone(),
+                            "pre-reset".to_string(),
+                        )
+                        .await;
+                        let result = match guarded {
+                            Ok(_) => {
+                                crate::service::merge::reset(
+                                    &services,
+                                    repo_id.clone(),
+                                    request.kind,
+                                    request.sha,
+                                )
+                                .await
+                            }
+                            Err(err) => Err(err),
+                        };
+                        Message::ResetDone {
+                            repo_id,
+                            label,
+                            result,
+                        }
+                    },
+                    std::convert::identity,
+                )
+            }
+            Message::ResetDone {
+                repo_id,
+                label,
+                result,
+            } => {
+                let Some(index) = repo_view::tab_index(&self.tabs, &repo_id) else {
+                    return Task::none();
+                };
+                match result {
+                    Ok(()) => {
+                        self.last_op = Some(format!("{label} done"));
+                        self.notice = None;
+                        let tab = &mut self.tabs[index];
+                        tab.history.selected = None;
+                        tab.detail_open = false;
+                        tab.commit_diff = DiffPane::default();
+                        tab.reload_diff = true;
+                        Task::batch([self.refresh(repo_id.clone()), self.start_log(repo_id)])
+                    }
+                    Err(err) => {
+                        self.notice = Some(Notice::error(format!("{label} failed: {err}")));
+                        Task::none()
+                    }
+                }
+            }
+            Message::ToggleRemotePanel => {
+                let Some(tab) = self.tabs.get_mut(self.active) else {
+                    return Task::none();
+                };
+                tab.remotes.open = !tab.remotes.open;
+                if !tab.remotes.open {
+                    return Task::none();
+                }
+                tab.branches.open = false;
+                tab.stashes.open = false;
+                tab.remotes.loading = true;
+                tab.remotes.error = None;
+                let repo_id = tab.repo.repo_id.clone();
+                self.load_remotes(repo_id)
+            }
+            Message::RefreshRemotes => {
+                let Some(tab) = self.tabs.get_mut(self.active) else {
+                    return Task::none();
+                };
+                tab.remotes.loading = true;
+                tab.remotes.error = None;
+                let repo_id = tab.repo.repo_id.clone();
+                self.load_remotes(repo_id)
+            }
+            Message::RemotesLoaded { repo_id, result } => {
+                let Some(index) = repo_view::tab_index(&self.tabs, &repo_id) else {
+                    return Task::none();
+                };
+                let remotes = &mut self.tabs[index].remotes;
+                remotes.loading = false;
+                match result {
+                    Ok(list) => {
+                        remotes.list = Some(list);
+                        remotes.error = None;
+                    }
+                    Err(err) => remotes.error = Some(err),
+                }
+                Task::none()
+            }
+            Message::RemoteNameChanged(value) => {
+                if let Some(tab) = self.tabs.get_mut(self.active) {
+                    tab.remotes.add_name = value;
+                }
+                Task::none()
+            }
+            Message::RemoteUrlChanged(value) => {
+                if let Some(tab) = self.tabs.get_mut(self.active) {
+                    tab.remotes.add_url = value;
+                }
+                Task::none()
+            }
+            Message::RemoteAdd => {
+                let Some(tab) = self.tabs.get_mut(self.active) else {
+                    return Task::none();
+                };
+                let name = tab.remotes.add_name.trim().to_string();
+                let url = tab.remotes.add_url.trim().to_string();
+                if name.is_empty() || url.is_empty() {
+                    return Task::none();
+                }
+                let repo_id = tab.repo.repo_id.clone();
+                let label = format!("Add remote {name}");
+                let summary = format!("{label} done");
+                let services = self.services.clone();
+                Task::perform(
+                    async move {
+                        let result = crate::service::network::remote_add(
+                            &services,
+                            repo_id.clone(),
+                            name,
+                            url,
+                        )
+                        .await
+                        .map(|_| summary);
+                        Message::RemotesDone {
+                            repo_id,
+                            label,
+                            result,
+                        }
+                    },
+                    std::convert::identity,
+                )
+            }
+            Message::FetchRemote(remote) => {
+                let Some(tab) = self.tabs.get_mut(self.active) else {
+                    return Task::none();
+                };
+                let repo_id = tab.repo.repo_id.clone();
+                let label = format!("fetch {remote}");
+                let summary_label = label.clone();
+                let services = self.services.clone();
+                Task::perform(
+                    async move {
+                        let result = crate::service::network::fetch(
+                            &services,
+                            repo_id.clone(),
+                            FetchOptions {
+                                remote,
+                                prune: false,
+                                refs: Vec::new(),
+                                depth: None,
+                            },
+                        )
+                        .await
+                        .map(|stats| net_summary(&summary_label, &stats));
+                        Message::RemotesDone {
+                            repo_id,
+                            label,
+                            result,
+                        }
+                    },
+                    std::convert::identity,
+                )
+            }
+            Message::PullRemote(remote) => {
+                let Some(tab) = self.tabs.get_mut(self.active) else {
+                    return Task::none();
+                };
+                let repo_id = tab.repo.repo_id.clone();
+                let label = format!("pull {remote}");
+                let summary_label = label.clone();
+                let services = self.services.clone();
+                Task::perform(
+                    async move {
+                        let result = crate::service::network::pull(
+                            &services,
+                            repo_id.clone(),
+                            PullOptions {
+                                remote,
+                                branch: String::new(),
+                                ff_only: false,
+                                rebase: false,
+                            },
+                        )
+                        .await
+                        .map(|stats| net_summary(&summary_label, &stats));
+                        Message::RemotesDone {
+                            repo_id,
+                            label,
+                            result,
+                        }
+                    },
+                    std::convert::identity,
+                )
+            }
+            Message::PushRemote(remote) => {
+                let Some(tab) = self.tabs.get_mut(self.active) else {
+                    return Task::none();
+                };
+                let repo_id = tab.repo.repo_id.clone();
+                let label = format!("push {remote}");
+                let summary_label = label.clone();
+                let services = self.services.clone();
+                Task::perform(
+                    async move {
+                        let result = crate::service::network::push(
+                            &services,
+                            repo_id.clone(),
+                            PushOptions {
+                                remote,
+                                branch: String::new(),
+                                force: false,
+                                force_with_lease: false,
+                                set_upstream: true,
+                                refs: Vec::new(),
+                                tags: false,
+                                delete: false,
+                            },
+                        )
+                        .await
+                        .map(|stats| net_summary(&summary_label, &stats));
+                        Message::RemotesDone {
+                            repo_id,
+                            label,
+                            result,
+                        }
+                    },
+                    std::convert::identity,
+                )
+            }
+            Message::RemoteRemoveRequested(name) => {
+                if let Some(tab) = self.tabs.get_mut(self.active) {
+                    tab.pending_remote_remove = Some(name);
+                }
+                Task::none()
+            }
+            Message::RemoteRemoveConfirmed => {
+                let Some(tab) = self.tabs.get_mut(self.active) else {
+                    return Task::none();
+                };
+                let Some(name) = tab.pending_remote_remove.take() else {
+                    return Task::none();
+                };
+                let repo_id = tab.repo.repo_id.clone();
+                let label = format!("Remove remote {name}");
+                let summary = format!("{label} done");
+                let services = self.services.clone();
+                Task::perform(
+                    async move {
+                        let result = crate::service::network::remote_remove(
+                            &services,
+                            repo_id.clone(),
+                            name,
+                        )
+                        .await
+                        .map(|_| summary);
+                        Message::RemotesDone {
+                            repo_id,
+                            label,
+                            result,
+                        }
+                    },
+                    std::convert::identity,
+                )
+            }
+            Message::RemotesDone {
+                repo_id,
+                label,
+                result,
+            } => {
+                let Some(index) = repo_view::tab_index(&self.tabs, &repo_id) else {
+                    return Task::none();
+                };
+                match result {
+                    Ok(summary) => {
+                        self.last_op = Some(summary);
+                        self.notice = None;
+                        let tab = &mut self.tabs[index];
+                        if label.starts_with("Add remote") {
+                            tab.remotes.add_name.clear();
+                            tab.remotes.add_url.clear();
+                        }
+                        tab.remotes.loading = true;
+                        Task::batch([
+                            self.refresh(repo_id.clone()),
+                            self.start_log(repo_id.clone()),
+                            self.load_remotes(repo_id),
+                        ])
+                    }
+                    Err(err) => {
+                        self.notice = Some(Notice::error(format!("{label} failed: {err}")));
+                        Task::none()
+                    }
+                }
+            }
+            Message::MergeBranch(name) => {
+                let Some(tab) = self.tabs.get_mut(self.active) else {
+                    return Task::none();
+                };
+                let repo_id = tab.repo.repo_id.clone();
+                let label = format!("Merge {name}");
+                let services = self.services.clone();
+                Task::perform(
+                    async move {
+                        let result = crate::service::merge::merge_branch(
+                            &services,
+                            repo_id.clone(),
+                            name,
+                            MergeOptions::default(),
+                        )
+                        .await;
+                        Message::MergeDone {
+                            repo_id,
+                            label,
+                            result,
+                        }
+                    },
+                    std::convert::identity,
+                )
+            }
+            Message::MergeDone {
+                repo_id,
+                label,
+                result,
+            } => {
+                let Some(index) = repo_view::tab_index(&self.tabs, &repo_id) else {
+                    return Task::none();
+                };
+                match result {
+                    Ok(merge) => {
+                        let detail = match merge.outcome {
+                            MergeOutcome::FastForward => merge
+                                .new_head
+                                .as_deref()
+                                .map(|sha| {
+                                    format!("fast-forwarded to {}", repo_view::short_sha(sha))
+                                })
+                                .unwrap_or_else(|| "fast-forwarded".to_string()),
+                            MergeOutcome::Merged => "merge commit created".to_string(),
+                            MergeOutcome::UpToDate => "already up to date".to_string(),
+                            MergeOutcome::Conflicted => format!(
+                                "{} conflicts — resolve them, then commit",
+                                merge.conflicts.len()
+                            ),
+                            MergeOutcome::Squashed => "squashed into the index".to_string(),
+                            MergeOutcome::NoCommit => "merged, not committed".to_string(),
+                        };
+                        self.last_op = Some(format!("{label}: {detail}"));
+                        self.notice = None;
+                        let branches_open = self.tabs[index].branches.open;
+                        self.tabs[index].reload_diff = true;
+                        let mut tasks = vec![
+                            self.refresh(repo_id.clone()),
+                            self.start_log(repo_id.clone()),
+                        ];
+                        if branches_open {
+                            self.tabs[index].branches.loading = true;
+                            tasks.push(self.load_branches(repo_id));
+                        }
+                        Task::batch(tasks)
+                    }
+                    Err(err) => {
+                        self.notice = Some(Notice::error(format!("{label} failed: {err}")));
+                        Task::none()
+                    }
+                }
+            }
+            Message::InProgress(action) => {
+                let Some(tab) = self.tabs.get_mut(self.active) else {
+                    return Task::none();
+                };
+                let repo_id = tab.repo.repo_id.clone();
+                let label = action.label().to_string();
+                let services = self.services.clone();
+                Task::perform(
+                    async move {
+                        let result = match action {
+                            InProgressAction::AbortMerge => {
+                                crate::service::merge::merge_abort(&services, repo_id.clone()).await
+                            }
+                            InProgressAction::ContinueRebase => {
+                                crate::service::merge::rebase_continue(&services, repo_id.clone())
+                                    .await
+                                    .map(|_| ())
+                            }
+                            InProgressAction::AbortRebase => {
+                                crate::service::merge::rebase_abort(&services, repo_id.clone())
+                                    .await
+                            }
+                            InProgressAction::AbortSequencer => {
+                                crate::service::merge::sequencer_abort(&services, repo_id.clone())
+                                    .await
+                            }
+                        };
+                        Message::RepoActionDone {
+                            repo_id,
+                            label,
+                            result,
+                        }
+                    },
+                    std::convert::identity,
+                )
+            }
+            Message::ConflictResolve { paths, resolution } => {
+                if paths.is_empty() {
+                    return Task::none();
+                }
+                let Some(tab) = self.tabs.get_mut(self.active) else {
+                    return Task::none();
+                };
+                let repo_id = tab.repo.repo_id.clone();
+                let mode = match resolution {
+                    ConflictResolution::Ours => "ours",
+                    ConflictResolution::Theirs => "theirs",
+                    ConflictResolution::Both => "both",
+                };
+                let label = format!("Resolve {} conflicts ({mode})", paths.len());
+                let services = self.services.clone();
+                Task::perform(
+                    async move {
+                        let mut result = Ok(());
+                        for path in paths {
+                            if let Err(err) = crate::service::merge::conflict_resolve(
+                                &services,
+                                repo_id.clone(),
+                                path,
+                                resolution,
+                                None,
+                            )
+                            .await
+                            {
+                                result = Err(err);
+                                break;
+                            }
+                        }
+                        Message::RepoActionDone {
+                            repo_id,
+                            label,
+                            result,
+                        }
+                    },
+                    std::convert::identity,
+                )
+            }
+            Message::RepoActionDone {
+                repo_id,
+                label,
+                result,
+            } => {
+                let Some(index) = repo_view::tab_index(&self.tabs, &repo_id) else {
+                    return Task::none();
+                };
+                match result {
+                    Ok(()) => {
+                        self.last_op = Some(format!("{label} done"));
+                        self.notice = None;
+                        let branches_open = self.tabs[index].branches.open;
+                        {
+                            let tab = &mut self.tabs[index];
+                            tab.reload_diff = true;
+                            tab.status = Load::Loading;
+                            if branches_open {
+                                tab.branches.loading = true;
+                            }
+                        }
+                        let mut tasks = vec![
+                            self.refresh(repo_id.clone()),
+                            self.start_log(repo_id.clone()),
+                        ];
+                        if branches_open {
+                            tasks.push(self.load_branches(repo_id));
+                        }
+                        Task::batch(tasks)
+                    }
+                    Err(err) => {
+                        self.notice = Some(Notice::error(format!("{label} failed: {err}")));
+                        Task::none()
+                    }
+                }
+            }
+            Message::AuthUsernameChanged(value) => {
+                if let Some(prompt) = self.auth_prompts.front_mut() {
+                    prompt.username = value;
+                }
+                Task::none()
+            }
+            Message::AuthPasswordChanged(value) => {
+                if let Some(prompt) = self.auth_prompts.front_mut() {
+                    prompt.password = value;
+                }
+                Task::none()
+            }
+            Message::AuthStoreToggled(value) => {
+                if let Some(prompt) = self.auth_prompts.front_mut() {
+                    prompt.store = value;
+                }
+                Task::none()
+            }
+            Message::AuthPromptSubmit => {
+                let Some(prompt) = self.auth_prompts.front() else {
+                    return Task::none();
+                };
+                if !prompt.can_submit() {
+                    return Task::none();
+                }
+                let prompt = self.auth_prompts.pop_front().expect("front checked above");
+                let username = prompt.username.trim();
+                let username = (!username.is_empty()).then(|| username.to_string());
+                let password = (!prompt.password.is_empty()).then(|| prompt.password.clone());
+                if let Err(err) = crate::service::network::auth_respond(
+                    &self.services,
+                    prompt.request.op_id,
+                    username,
+                    password,
+                    prompt.store,
+                ) {
+                    self.notice = Some(Notice::error(format!("Could not answer prompt: {err}")));
+                }
+                Task::none()
+            }
+            Message::AuthPromptCancel => {
+                let Some(prompt) = self.auth_prompts.pop_front() else {
+                    return Task::none();
+                };
+                let _ = crate::service::network::auth_respond(
+                    &self.services,
+                    prompt.request.op_id,
+                    None,
+                    None,
+                    false,
+                );
+                Task::none()
+            }
+            Message::HostKeyAnswer(accept) => {
+                let Some(prompt) = self.host_key_prompts.pop_front() else {
+                    return Task::none();
+                };
+                if !crate::remote::prompts::respond_host_key(&prompt.request.request_id, accept) {
+                    self.notice = Some(Notice::error("The host key prompt expired."));
+                }
+                Task::none()
+            }
+            Message::DeviceSecretChanged(value) => {
+                if let Some(prompt) = self.device_secret_prompts.front_mut() {
+                    prompt.password = value;
+                }
+                Task::none()
+            }
+            Message::DeviceSecretStoreToggled(value) => {
+                if let Some(prompt) = self.device_secret_prompts.front_mut() {
+                    prompt.store = value;
+                }
+                Task::none()
+            }
+            Message::DeviceSecretSubmit => {
+                let Some(prompt) = self.device_secret_prompts.pop_front() else {
+                    return Task::none();
+                };
+                if !crate::remote::prompts::respond_secret(
+                    &prompt.request.request_id,
+                    Some(SecretAnswer {
+                        password: prompt.password,
+                        store: prompt.store,
+                    }),
+                ) {
+                    self.notice = Some(Notice::error("The secret prompt expired."));
+                }
+                Task::none()
+            }
+            Message::DeviceSecretCancel => {
+                let Some(prompt) = self.device_secret_prompts.pop_front() else {
+                    return Task::none();
+                };
+                let _ = crate::remote::prompts::respond_secret(&prompt.request.request_id, None);
+                Task::none()
+            }
+            Message::Noop => Task::none(),
         }
     }
 
@@ -1230,10 +2313,16 @@ impl App {
             BackendEvent::RepoChanged(changed) => {
                 let branches_open = repo_view::tab_index(&self.tabs, &changed.repo_id)
                     .is_some_and(|index| self.tabs[index].branches.open);
+                let stashes_open = repo_view::tab_index(&self.tabs, &changed.repo_id)
+                    .is_some_and(|index| self.tabs[index].stashes.open);
                 if let Some(index) = repo_view::tab_index(&self.tabs, &changed.repo_id) {
                     self.tabs[index].reload_diff = true;
                     if branches_open && (changed.head_moved || changed.full) {
                         self.tabs[index].branches.loading = true;
+                    }
+                    if stashes_open && changed.full {
+                        self.tabs[index].stashes.loading = true;
+                        self.tabs[index].stashes.checkpoints_loading = true;
                     }
                 }
                 let mut tasks = vec![self.refresh(changed.repo_id.clone())];
@@ -1241,6 +2330,10 @@ impl App {
                     tasks.push(self.start_log(changed.repo_id.clone()));
                     if branches_open {
                         tasks.push(self.load_branches(changed.repo_id.clone()));
+                    }
+                    if stashes_open {
+                        tasks.push(self.load_stashes(changed.repo_id.clone()));
+                        tasks.push(self.load_checkpoints(changed.repo_id.clone()));
                     }
                 }
                 Task::batch(tasks)
@@ -1273,6 +2366,24 @@ impl App {
                 self.last_op = Some(line.line);
                 Task::none()
             }
+            BackendEvent::AuthRequest(request) => {
+                self.auth_prompts.push_back(AuthPromptState::new(request));
+                Task::none()
+            }
+            BackendEvent::HostKeyRequest(request) => {
+                self.host_key_prompts
+                    .push_back(HostKeyPromptState { request });
+                Task::none()
+            }
+            BackendEvent::DeviceAuthRequest(request) => {
+                self.device_secret_prompts
+                    .push_back(DeviceSecretPromptState {
+                        request,
+                        password: String::new(),
+                        store: false,
+                    });
+                Task::none()
+            }
             _ => Task::none(),
         }
     }
@@ -1298,10 +2409,23 @@ impl App {
             repo_view::view(&self.tabs, self.active, tokens)
         };
 
-        column![self.header(tokens), body, self.footer(tokens)]
+        let page: Element<'_, Message> = column![self.header(tokens), body, self.footer(tokens)]
             .width(Length::Fill)
             .height(Length::Fill)
-            .into()
+            .into();
+
+        match prompts::overlay(
+            tokens,
+            self.auth_prompts.front(),
+            self.host_key_prompts.front(),
+            self.device_secret_prompts.front(),
+        ) {
+            Some(overlay) => iced::widget::stack![page, overlay]
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .into(),
+            None => page,
+        }
     }
 
     fn header(&self, tokens: Tokens) -> Element<'_, Message> {
