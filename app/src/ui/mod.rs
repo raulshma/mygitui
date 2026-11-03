@@ -26,6 +26,11 @@
 //! - [`quick_switcher`] — repo quick-switcher overlay (ctrl/cmd+K)
 //! - [`terminal`] — embedded PTY terminal pane (monitor with input)
 //! - [`forge_panel`] — GitHub PRs, CI checks and workflow runs (gh CLI)
+//! - [`stats_panel`] — contribution heatmap and contributor leaderboard
+//! - [`actions_panel`] / [`output_panel`] / [`editor_view`] — custom
+//!   shell actions with live output, and the in-app file editor
+//! - [`blame_view`] / [`file_history_view`] / [`compare_view`] —
+//!   center-pane read views (blame rows, per-file history, two-ref diff)
 //! - [`worktree_panel`] / [`submodule_panel`] / [`tags_panel`] —
 //!   worktree management, submodule sync and tag management dropdowns
 //! - [`health_panel`] — repo health census, maintenance ops, archive,
@@ -33,23 +38,29 @@
 //! - [`bisect_panel`] — bisect stepper banner (start/mark/log/reset)
 //! - [`reflog_panel`] — reflog browser with reset/branch-from intents
 
+mod actions_panel;
 mod app;
 mod bisect_panel;
+mod blame_view;
 mod branch_panel;
 mod bus;
 mod commit_bar;
 mod commit_detail;
+mod compare_view;
 mod config;
 mod context_menu;
 mod dialog;
 mod diff_model;
 mod diff_view;
+mod editor_view;
+mod file_history_view;
 mod forge_panel;
 mod graph_canvas;
 mod health_panel;
 mod history_model;
 mod history_panel;
 mod home;
+mod output_panel;
 mod palette;
 mod prompts;
 mod quick_switcher;
@@ -57,6 +68,7 @@ mod reflog_panel;
 mod remote_panel;
 mod repo_view;
 mod stash_panel;
+mod stats_panel;
 mod status_model;
 mod status_panel;
 mod submodule_panel;

@@ -26,22 +26,29 @@ use crate::remote::prompts::SecretAnswer;
 use crate::service::events::BackendEvent;
 use crate::service::AppServices;
 
+use super::actions_panel;
 use super::bisect_panel;
+use super::blame_view;
 use super::bus;
+use super::compare_view;
 use super::config::{self, Config, RecentRepo};
 use super::context_menu;
 use super::dialog::{self, ResetRequest};
 use super::diff_view::{DiffPane, DiffSlot};
+use super::editor_view;
+use super::file_history_view;
 use super::forge_panel;
 use super::health_panel;
 use super::history_model::{to_log_filter, FilterFields, HistoryFilterField};
 use super::home;
+use super::output_panel;
 use super::palette;
 use super::prompts::{self, AuthPromptState, DeviceSecretPromptState, HostKeyPromptState};
 use super::quick_switcher;
 use super::reflog_panel;
 use super::remote_panel::net_summary;
 use super::repo_view::{self, Load, PendingRebase, PendingRemap, Tab};
+use super::stats_panel;
 use super::status_model::{count_label, filter_sections, SectionId, StatusRow};
 use super::submodule_panel;
 use super::tags_panel;
@@ -80,6 +87,8 @@ pub struct App {
     modifiers: iced::keyboard::Modifiers,
     /// Monotonic request id for log streams (discards superseded pages).
     log_seq: u64,
+    /// Monotonic request id for file-history streams (bus routing).
+    file_history_seq: u64,
     tabs: Vec<Tab>,
     active: usize,
     show_home: bool,
@@ -91,6 +100,10 @@ pub struct App {
     instance_listener: Option<crate::instance::InstanceListener>,
     /// Open AI result dialog (review/explain/branch-name output).
     ai_result: Option<AiResult>,
+    /// User-configured custom shell actions (persisted as `actions.json`
+    /// next to `config.json`; separate file so schema evolution stays
+    /// independent).
+    custom_actions: Vec<actions_panel::ActionEntry>,
     auth_prompts: std::collections::VecDeque<AuthPromptState>,
     host_key_prompts: std::collections::VecDeque<HostKeyPromptState>,
     device_secret_prompts: std::collections::VecDeque<DeviceSecretPromptState>,
@@ -485,6 +498,30 @@ pub enum Message {
     Health(health_panel::Msg),
     /// Worktree/submodule/tag panels (routed to the active tab).
     Worktree(worktree_panel::Msg),
+    /// Contribution stats panel (routed to the active tab).
+    Stats(stats_panel::Msg),
+    /// OS accent colour fetched (boot + theme changes).
+    AccentLoaded(Option<String>),
+    /// Custom actions / output / editor (routed to the active tab).
+    Actions(actions_panel::Msg),
+    /// A custom action started; feeds the panels and opens the output.
+    ActionStarted {
+        name: String,
+        run_id: String,
+    },
+    /// Set the footer notice from an arbitrary task.
+    Notice(String),
+    Output(output_panel::Msg),
+    Editor(editor_view::Msg),
+    /// Center-pane read views (routed to the active tab).
+    Blame(blame_view::Msg),
+    /// One compare file's diff finished loading.
+    CompareFileDiffLoaded {
+        slot: DiffSlot,
+        result: Result<Vec<FileDiff>, String>,
+    },
+    FileHistory(file_history_view::Msg),
+    Compare(compare_view::Msg),
     Submodule(submodule_panel::Msg),
     Tags(tags_panel::Msg),
     /// Open the ⋯ header menu (worktrees/submodules/tags toggles).
@@ -562,6 +599,9 @@ impl App {
         crate::auth::init();
         let services = Arc::new(AppServices::new());
         let config = Config::load(&services.config_dir);
+        let highlight_enabled = config.highlight;
+        let accent_enabled = config.accent;
+        let services_boot = services.clone();
         let recent = config.recent_sorted();
         let mut app = Self {
             services,
@@ -571,6 +611,7 @@ impl App {
             system_mode: iced::theme::Mode::None,
             modifiers: iced::keyboard::Modifiers::default(),
             log_seq: 0,
+            file_history_seq: 0,
             tabs: Vec::new(),
             active: 0,
             show_home: true,
@@ -586,14 +627,27 @@ impl App {
             switcher: quick_switcher::State::default(),
             cursor: iced::Point::ORIGIN,
             ai_result: None,
+            custom_actions: Vec::new(),
         };
+        app.custom_actions = app.load_custom_actions();
 
         let instance_listener = crate::instance::take_listener(&instance_listener);
         app.instance_listener = instance_listener;
+        // Polish toggles from config (highlight defaults on; the accent
+        // colour itself arrives async via AccentLoaded).
+        super::diff_view::highlight::set_enabled(highlight_enabled);
+        theme::set_accent_enabled(accent_enabled);
         let mut tasks = vec![iced::system::theme().map(Message::SystemTheme)];
         if let Some(path) = first_repo_arg(&cli_args) {
             tasks.push(app.open_repo(path));
         }
+        tasks.push(Task::perform(
+            async move {
+                let accent = crate::service::misc::os_accent_color(&services_boot).await;
+                Message::AccentLoaded(accent.unwrap_or(None))
+            },
+            std::convert::identity,
+        ));
         if let Some(listener) = app.instance_listener.take() {
             // Never-ending accept loop; forwarded argv arrives as
             // BackendEvent::CliArgs through the bus subscription.
@@ -618,6 +672,51 @@ impl App {
 
     fn tokens(&self) -> Tokens {
         Tokens::for_scheme(self.is_dark())
+    }
+
+    /// Reads `actions.json` (custom shell actions); missing or malformed
+    /// files fall back to an empty list.
+    fn load_custom_actions(&self) -> Vec<actions_panel::ActionEntry> {
+        #[derive(serde::Serialize, serde::Deserialize)]
+        struct Entry {
+            name: String,
+            command: String,
+        }
+        let path = self.services.config_dir.join("actions.json");
+        let Ok(text) = std::fs::read_to_string(path) else {
+            return Vec::new();
+        };
+        serde_json::from_str::<Vec<Entry>>(&text)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|entry| actions_panel::ActionEntry::new(entry.name, entry.command))
+            .collect()
+    }
+
+    /// Writes `actions.json` atomically (temp file + rename, matching the
+    /// config save discipline).
+    fn persist_custom_actions(&self) {
+        #[derive(serde::Serialize)]
+        struct Entry {
+            name: String,
+            command: String,
+        }
+        let entries: Vec<Entry> = self
+            .custom_actions
+            .iter()
+            .map(|action| Entry {
+                name: action.name.clone(),
+                command: action.command.clone(),
+            })
+            .collect();
+        let path = self.services.config_dir.join("actions.json");
+        let Ok(json) = serde_json::to_string_pretty(&entries) else {
+            return;
+        };
+        let tmp = path.with_extension("json.tmp");
+        if std::fs::write(&tmp, json).is_ok() {
+            let _ = std::fs::rename(&tmp, &path);
+        }
     }
 
     fn persist_config(&mut self) {
@@ -837,6 +936,34 @@ impl App {
             None,
         );
         register(
+            "view.compare",
+            "Compare two refs",
+            "View",
+            repo_id.is_some(),
+            None,
+        );
+        register(
+            "panel.actions",
+            "Toggle custom actions panel",
+            "View",
+            repo_id.is_some(),
+            None,
+        );
+        register(
+            "panel.output",
+            "Toggle action output panel",
+            "View",
+            repo_id.is_some(),
+            None,
+        );
+        register(
+            "panel.stats",
+            "Toggle contribution stats",
+            "View",
+            repo_id.is_some(),
+            None,
+        );
+        register(
             "terminal.restart",
             "Restart terminal",
             "View",
@@ -1026,6 +1153,18 @@ impl App {
             "panel.worktrees" => self.update(Message::Worktree(worktree_panel::Msg::ToggleOpen)),
             "panel.submodules" => self.update(Message::Submodule(submodule_panel::Msg::ToggleOpen)),
             "panel.tags" => self.update(Message::Tags(tags_panel::Msg::ToggleOpen)),
+            "panel.actions" => self.update(Message::Actions(actions_panel::Msg::ToggleOpen)),
+            "panel.output" => self.update(Message::Output(output_panel::Msg::ToggleOpen)),
+            "panel.stats" => self.update(Message::Stats(stats_panel::Msg::ToggleOpen)),
+            "view.compare" => {
+                if let Some(tab) = self.tabs.get_mut(self.active) {
+                    tab.detail_open = false;
+                    tab.blame.open = false;
+                    tab.file_history.open = false;
+                    tab.compare.open = true;
+                }
+                Task::none()
+            }
             "terminal.restart" => self.update(Message::Terminal(terminal::Msg::RestartPressed)),
             "network.fetch" => {
                 let remotes: Vec<String> = self
@@ -1070,6 +1209,36 @@ impl App {
             other if other.starts_with("status.ignore:") => self.update(Message::IgnorePath(
                 other["status.ignore:".len()..].to_string(),
             )),
+            other if other.starts_with("status.edit:") => {
+                let path = other["status.edit:".len()..].to_string();
+                if let Some(tab) = self.tabs.get_mut(self.active) {
+                    tab.detail_open = false;
+                    tab.blame.open = false;
+                    tab.file_history.open = false;
+                    tab.compare.open = false;
+                }
+                self.update(Message::Editor(editor_view::Msg::OpenRequested(path)))
+            }
+            other if other.starts_with("status.file_history:") => {
+                let path = other["status.file_history:".len()..].to_string();
+                if let Some(tab) = self.tabs.get_mut(self.active) {
+                    tab.detail_open = false;
+                    tab.blame.open = false;
+                    tab.compare.open = false;
+                }
+                self.update(Message::FileHistory(file_history_view::Msg::Opened {
+                    path,
+                }))
+            }
+            other if other.starts_with("status.blame:") => {
+                let path = other["status.blame:".len()..].to_string();
+                if let Some(tab) = self.tabs.get_mut(self.active) {
+                    tab.detail_open = false;
+                    tab.file_history.open = false;
+                    tab.compare.open = false;
+                }
+                self.update(Message::Blame(blame_view::Msg::Opened { path }))
+            }
             other if other.starts_with("branch.switch:") => self.update(Message::BranchSwitch(
                 other["branch.switch:".len()..].to_string(),
             )),
@@ -1866,6 +2035,322 @@ impl App {
         }
     }
 
+    /// Executes a blame view action (service::repo::repo_blame).
+    fn run_blame_action(
+        &mut self,
+        repo_id: RepoId,
+        action: Option<blame_view::Action>,
+    ) -> Task<Message> {
+        let Some(action) = action else {
+            return Task::none();
+        };
+        match action {
+            blame_view::Action::Load { path } => {
+                let services = self.services.clone();
+                Task::perform(
+                    async move {
+                        Message::Blame(blame_view::Msg::LinesLoaded(
+                            crate::service::repo::repo_blame(
+                                &services,
+                                repo_id,
+                                path.clone(),
+                                None,
+                            )
+                            .await,
+                        ))
+                    },
+                    std::convert::identity,
+                )
+            }
+            blame_view::Action::CopySha(sha) => self.update(Message::CopyText(sha)),
+            blame_view::Action::SelectCommit(sha) => self.update(Message::SelectCommit(sha)),
+        }
+    }
+
+    /// Executes a file-history view action. The stream itself arrives as
+    /// `BackendEvent::LogPage`s routed by the per-tab request id.
+    fn run_file_history_action(
+        &mut self,
+        repo_id: RepoId,
+        action: Option<file_history_view::Action>,
+    ) -> Task<Message> {
+        let Some(action) = action else {
+            return Task::none();
+        };
+        match action {
+            file_history_view::Action::Load { path } => {
+                self.file_history_seq += 1;
+                let request_id = self.file_history_seq;
+                let Some(tab) = self.tabs.get_mut(self.active) else {
+                    return Task::none();
+                };
+                tab.file_history_seq = request_id;
+                let result = crate::service::log::repo_file_history(
+                    &self.services,
+                    repo_id,
+                    path,
+                    request_id,
+                );
+                if let Err(err) = result {
+                    self.notice = Some(Notice::error(format!("File history failed: {err}")));
+                    if let Some(tab) = self.tabs.get_mut(self.active) {
+                        tab.file_history.update(file_history_view::Msg::Failed(err));
+                    }
+                }
+                Task::none()
+            }
+            // The stream pages itself to completion; LoadMore is a no-op.
+            file_history_view::Action::LoadMore => Task::none(),
+            file_history_view::Action::SelectCommit(sha) => self.update(Message::SelectCommit(sha)),
+            file_history_view::Action::OpenDiff { sha, .. } => {
+                self.update(Message::SelectCommit(sha))
+            }
+        }
+    }
+
+    /// Executes a compare view action (two `DiffSide::Commit` sides).
+    fn run_compare_action(
+        &mut self,
+        repo_id: RepoId,
+        action: Option<compare_view::Action>,
+    ) -> Task<Message> {
+        let Some(action) = action else {
+            return Task::none();
+        };
+        match action {
+            compare_view::Action::Load { old_ref, new_ref } => {
+                let services = self.services.clone();
+                Task::perform(
+                    async move {
+                        Message::Compare(compare_view::Msg::Loaded(
+                            crate::service::diff::repo_diff(
+                                &services,
+                                repo_id,
+                                DiffSide::Commit(old_ref.clone()),
+                                DiffSide::Commit(new_ref),
+                                None,
+                            )
+                            .await,
+                        ))
+                    },
+                    std::convert::identity,
+                )
+            }
+            compare_view::Action::OpenFileDiff { path } => {
+                let Some(tab) = self.tabs.get(self.active) else {
+                    return Task::none();
+                };
+                let (old_ref, new_ref) = (tab.compare.old_ref.clone(), tab.compare.new_ref.clone());
+                let services = self.services.clone();
+                Task::perform(
+                    async move {
+                        let result = crate::service::diff::repo_diff(
+                            &services,
+                            repo_id,
+                            DiffSide::Commit(old_ref),
+                            DiffSide::Commit(new_ref),
+                            Some(vec![path]),
+                        )
+                        .await;
+                        (result, DiffSlot::Commit)
+                    },
+                    |(result, slot)| Message::CompareFileDiffLoaded { slot, result },
+                )
+            }
+        }
+    }
+
+    /// Executes a custom-actions panel action.
+    fn run_actions_action(
+        &mut self,
+        repo_id: RepoId,
+        action: Option<actions_panel::Action>,
+    ) -> Task<Message> {
+        let Some(action) = action else {
+            return Task::none();
+        };
+        match action {
+            actions_panel::Action::Refresh => Task::none(), // set_actions at arm entry
+            actions_panel::Action::Add { name, command } => {
+                self.custom_actions
+                    .push(actions_panel::ActionEntry::new(name, command));
+                self.persist_custom_actions();
+                if let Some(tab) = self.tabs.get_mut(self.active) {
+                    tab.actions.update(actions_panel::Msg::Added);
+                }
+                Task::none()
+            }
+            actions_panel::Action::Delete { name } => {
+                self.custom_actions.retain(|entry| entry.name != name);
+                self.persist_custom_actions();
+                if let Some(tab) = self.tabs.get_mut(self.active) {
+                    tab.actions.update(actions_panel::Msg::Deleted);
+                }
+                Task::none()
+            }
+            actions_panel::Action::Run { name, command } => {
+                let services = self.services.clone();
+                let repo_id2 = repo_id.clone();
+                Task::perform(
+                    async move {
+                        match crate::service::misc::action_run(
+                            &services,
+                            repo_id2,
+                            name.clone(),
+                            command,
+                        ) {
+                            Ok(run_id) => Message::ActionStarted { name, run_id },
+                            Err(err) => Message::Notice(format!("Action failed: {err}")),
+                        }
+                    },
+                    std::convert::identity,
+                )
+            }
+            actions_panel::Action::Cancel { run_id } => {
+                let services = self.services.clone();
+                Task::perform(
+                    async move {
+                        let _ = crate::service::misc::action_cancel(&services, run_id);
+                        Message::Noop
+                    },
+                    std::convert::identity,
+                )
+            }
+        }
+    }
+
+    /// Executes an editor action: stat+read on open (a write landing in
+    /// between fails closed as a conflict, never silently clobbers), the
+    /// mtime-guarded write on save, external launch on demand.
+    fn run_editor_action(
+        &mut self,
+        repo_id: RepoId,
+        action: Option<editor_view::Action>,
+    ) -> Task<Message> {
+        let Some(action) = action else {
+            return Task::none();
+        };
+        match action {
+            editor_view::Action::Load { path } | editor_view::Action::Reload { path } => {
+                let services = self.services.clone();
+                let repo_id2 = repo_id.clone();
+                let path2 = path.clone();
+                Task::perform(
+                    async move {
+                        let meta = crate::service::editor::repo_stat_file(
+                            &services,
+                            repo_id2.clone(),
+                            path2.clone(),
+                        )
+                        .await;
+                        match meta {
+                            Ok(meta)
+                                if !matches!(
+                                    meta.kind,
+                                    crate::workspace::FileContentKind::Text
+                                ) =>
+                            {
+                                Message::Editor(editor_view::Msg::Opened {
+                                    path: path2,
+                                    content: String::new(),
+                                    mtime: meta.mtime_ms,
+                                })
+                            }
+                            Ok(meta) => {
+                                let content = crate::service::files::repo_read_file(
+                                    &services,
+                                    repo_id2,
+                                    path2.clone(),
+                                )
+                                .await
+                                .map(|bytes| String::from_utf8_lossy(&bytes).into_owned());
+                                match content {
+                                    Ok(content) => Message::Editor(editor_view::Msg::Opened {
+                                        path: path2,
+                                        content,
+                                        mtime: meta.mtime_ms,
+                                    }),
+                                    Err(err) => Message::Notice(format!("Open failed: {err}")),
+                                }
+                            }
+                            Err(err) => Message::Notice(format!("Open failed: {err}")),
+                        }
+                    },
+                    std::convert::identity,
+                )
+            }
+            editor_view::Action::Save {
+                path,
+                content,
+                expected_mtime,
+            } => {
+                let services = self.services.clone();
+                Task::perform(
+                    async move {
+                        Message::Editor(editor_view::Msg::Saved(
+                            crate::service::editor::repo_write_file(
+                                &services,
+                                repo_id,
+                                path,
+                                content.into_bytes(),
+                                expected_mtime,
+                            )
+                            .await,
+                        ))
+                    },
+                    std::convert::identity,
+                )
+            }
+            editor_view::Action::OpenExternal { path, app_id } => {
+                let result = crate::service::editor::open_in_editor(
+                    &self.services,
+                    &repo_id,
+                    &app_id,
+                    &path,
+                );
+                if let Err(err) = result {
+                    self.notice = Some(Notice::error(format!("Open externally failed: {err}")));
+                }
+                Task::none()
+            }
+        }
+    }
+
+    /// Executes a stats panel action (service::forge stats fns).
+    fn run_stats_action(
+        &mut self,
+        repo_id: RepoId,
+        action: Option<stats_panel::Action>,
+    ) -> Task<Message> {
+        let Some(action) = action else {
+            return Task::none();
+        };
+        let stats_panel::Action::Refresh { window } = action;
+        let services = self.services.clone();
+        let services2 = self.services.clone();
+        let repo_id2 = repo_id.clone();
+        Task::batch([
+            Task::perform(
+                async move {
+                    Message::Stats(stats_panel::Msg::ActivityLoaded(
+                        crate::service::forge::commit_activity(&services, repo_id, window, None)
+                            .await,
+                    ))
+                },
+                std::convert::identity,
+            ),
+            Task::perform(
+                async move {
+                    Message::Stats(stats_panel::Msg::ContributorsLoaded(
+                        crate::service::forge::contributor_stats(&services2, repo_id2, window)
+                            .await,
+                    ))
+                },
+                std::convert::identity,
+            ),
+        ])
+    }
+
     /// Kicks off blob/workdir reads for every image file of a freshly
     /// loaded diff so [`diff_view::image_row`] can render previews. Slots
     /// are reserved up-front so watcher refreshes don't retrigger loads.
@@ -2279,7 +2764,14 @@ impl App {
             Message::Backend(event) => self.backend(event),
             Message::SystemTheme(mode) => {
                 self.system_mode = mode;
-                Task::none()
+                let services = self.services.clone();
+                Task::perform(
+                    async move {
+                        let accent = crate::service::misc::os_accent_color(&services).await;
+                        Message::AccentLoaded(accent.unwrap_or(None))
+                    },
+                    std::convert::identity,
+                )
             }
             Message::Modifiers(modifiers) => {
                 self.modifiers = modifiers;
@@ -4548,9 +5040,132 @@ impl App {
                     .header("Manage")
                     .command("panel.worktrees", "Worktrees…")
                     .command("panel.submodules", "Submodules…")
-                    .command("panel.tags", "Tags…");
+                    .command("panel.tags", "Tags…")
+                    .command("panel.stats", "Contribution stats…");
                 self.ctx_menu.open_at(self.cursor, menu);
                 Task::none()
+            }
+            Message::Blame(msg) => {
+                let Some(tab) = self.tabs.get_mut(self.active) else {
+                    return Task::none();
+                };
+                let action = tab.blame.update(msg);
+                let repo_id = tab.repo.repo_id.clone();
+                self.run_blame_action(repo_id, action)
+            }
+            Message::FileHistory(msg) => {
+                let Some(tab) = self.tabs.get_mut(self.active) else {
+                    return Task::none();
+                };
+                let action = tab.file_history.update(msg);
+                let repo_id = tab.repo.repo_id.clone();
+                self.run_file_history_action(repo_id, action)
+            }
+            Message::Compare(msg) => {
+                let Some(tab) = self.tabs.get_mut(self.active) else {
+                    return Task::none();
+                };
+                let action = tab.compare.update(msg);
+                let repo_id = tab.repo.repo_id.clone();
+                self.run_compare_action(repo_id, action)
+            }
+            Message::CompareFileDiffLoaded { slot, result } => {
+                let Some(tab) = self.tabs.get_mut(self.active) else {
+                    return Task::none();
+                };
+                let pane = &mut tab.compare_diff;
+                pane.seq += 1;
+                match result {
+                    Ok(files) => pane.set_ready(files, false),
+                    Err(err) => pane.set_failed(err),
+                }
+                let _ = slot;
+                Task::none()
+            }
+            Message::Actions(msg) => {
+                let Some(tab) = self.tabs.get_mut(self.active) else {
+                    return Task::none();
+                };
+                if matches!(
+                    msg,
+                    actions_panel::Msg::ToggleOpen | actions_panel::Msg::RefreshPressed
+                ) {
+                    let actions = self.custom_actions.clone();
+                    tab.actions.set_actions(actions);
+                }
+                let action = tab.actions.update(msg);
+                let repo_id = tab.repo.repo_id.clone();
+                self.run_actions_action(repo_id, action)
+            }
+            Message::Output(msg) => {
+                let Some(tab) = self.tabs.get_mut(self.active) else {
+                    return Task::none();
+                };
+                let action = output_panel::update(&mut tab.output, msg);
+                match action {
+                    Some(output_panel::Action::Cancel { run_id }) => {
+                        let services = self.services.clone();
+                        Task::perform(
+                            async move {
+                                let _ = crate::service::misc::action_cancel(&services, run_id);
+                                Message::Noop
+                            },
+                            std::convert::identity,
+                        )
+                    }
+                    Some(output_panel::Action::FollowScroll { id }) => {
+                        output_panel::snap_to_bottom(id).map(Message::Output)
+                    }
+                    None => Task::none(),
+                }
+            }
+            Message::Editor(msg) => {
+                let Some(tab) = self.tabs.get_mut(self.active) else {
+                    return Task::none();
+                };
+                if matches!(msg, editor_view::Msg::OpenRequested(_)) {
+                    let apps = crate::service::editor::detect_editors();
+                    tab.editor.update(editor_view::Msg::AppsLoaded(apps));
+                }
+                let action = tab.editor.update(msg);
+                let repo_id = tab.repo.repo_id.clone();
+                self.run_editor_action(repo_id, action)
+            }
+            Message::ActionStarted { name, run_id } => {
+                self.last_op = Some(format!("Action {name} started"));
+                if let Some(tab) = self.tabs.get_mut(self.active) {
+                    tab.actions.update(actions_panel::Msg::RunStarted {
+                        name: name.clone(),
+                        run_id: run_id.clone(),
+                    });
+                    output_panel::update(
+                        &mut tab.output,
+                        output_panel::Msg::RunOpened { run_id, name },
+                    );
+                    tab.output.open = true;
+                }
+                Task::none()
+            }
+            Message::AccentLoaded(hex) => {
+                match hex.as_deref().map(theme::set_os_accent_hex) {
+                    Some(true) | None => {}
+                    Some(false) => {
+                        tracing::debug!("OS accent colour unparsable; ignoring");
+                    }
+                }
+                Task::none()
+            }
+            Message::Notice(text) => {
+                self.notice = Some(Notice::plain(text));
+                Task::none()
+            }
+            Message::Stats(msg) => {
+                let Some(tab) = self.tabs.get_mut(self.active) else {
+                    return Task::none();
+                };
+                let action = tab.stats.update(msg);
+                let repo_id = tab.repo.repo_id.clone();
+                self.run_stats_action(repo_id, action)
             }
             Message::StatusRowMenu { key } => {
                 let menu = self
@@ -4742,6 +5357,45 @@ impl App {
                     .find(|tab| tab.history.request_id == request_id)
                 {
                     tab.history.accept(page);
+                } else if let Some(tab) = self
+                    .tabs
+                    .iter_mut()
+                    .find(|tab| tab.file_history.open && tab.file_history_seq == request_id)
+                {
+                    let _ = tab.file_history.update(file_history_view::Msg::PageLoaded {
+                        commits: page.commits,
+                        rows: page.rows,
+                        next_cursor: page.next_cursor,
+                    });
+                }
+                Task::none()
+            }
+            BackendEvent::ActionOutput(payload) => {
+                if let Some(tab) = self
+                    .tabs
+                    .iter_mut()
+                    .find(|tab| tab.repo.repo_id.0 == payload.repo_id)
+                {
+                    if payload.done {
+                        output_panel::update(
+                            &mut tab.output,
+                            output_panel::Msg::Exit {
+                                run_id: payload.run_id.clone(),
+                                code: payload.exit_code,
+                            },
+                        );
+                        tab.actions.update(actions_panel::Msg::RunFinished {
+                            run_id: payload.run_id,
+                        });
+                    } else {
+                        output_panel::update(
+                            &mut tab.output,
+                            output_panel::Msg::Output {
+                                run_id: payload.run_id,
+                                line: payload.line,
+                            },
+                        );
+                    }
                 }
                 Task::none()
             }
@@ -5096,6 +5750,9 @@ fn status_row_menu(item: &StatusRow) -> context_menu::Menu {
             format!("Ignore “{}”", item.base),
         );
     }
+    menu = menu.separator();
+    menu = menu.command(format!("status.file_history:{}", item.path), "File history");
+    menu = menu.command(format!("status.blame:{}", item.path), "Blame");
     menu
 }
 

@@ -18,6 +18,7 @@ pub mod ai;
 pub mod app_services;
 pub mod branches;
 pub mod diff;
+pub mod editor;
 pub mod events;
 pub mod files;
 pub mod forge;

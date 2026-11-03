@@ -11,20 +11,27 @@ use iced::{Alignment, Color, Element, Length};
 
 use crate::engine::types::{ChangeKind, RebaseStep, RepoId, RepoInfo, RepoStatus};
 
+use super::actions_panel;
 use super::app::{InProgressAction, Message};
 use super::bisect_panel;
+use super::blame_view;
 use super::branch_panel::{self, BranchesState};
 use super::commit_bar;
 use super::commit_detail;
+use super::compare_view;
 use super::dialog::{self, ResetRequest};
 use super::diff_view::{self, DiffPane, DiffSlot, PaneMode};
+use super::editor_view;
+use super::file_history_view;
 use super::forge_panel::{self, ForgeCtx};
 use super::health_panel;
 use super::history_model::{FilterFields, HistoryState};
 use super::history_panel;
+use super::output_panel;
 use super::reflog_panel;
 use super::remote_panel::{self, RemotesState};
 use super::stash_panel::{self, StashesState};
+use super::stats_panel;
 use super::status_model::{
     build_status_index, has_staged_changes, remap_selection, SectionId, StatusIndex, StatusRow,
     StatusSelection,
@@ -114,6 +121,21 @@ pub struct Tab {
     pub worktree: worktree_panel::WorktreePanel,
     pub submodule: submodule_panel::SubmodulePanel,
     pub tags: tags_panel::TagsPanel,
+    /// Center-pane read views: blame rows, one file's history and the
+    /// two-ref compare. Opening one closes the other center modes.
+    pub blame: blame_view::BlameView,
+    pub file_history: file_history_view::FileHistoryView,
+    pub compare: compare_view::CompareView,
+    /// Custom shell actions, their live output, and the in-app editor.
+    pub actions: actions_panel::ActionsPanel,
+    pub output: output_panel::OutputPanel,
+    pub editor: editor_view::EditorView,
+    /// Contribution stats (heatmap + leaderboard).
+    pub stats: stats_panel::StatsPanel,
+    /// The selected compare file's diff (rendered via the diff viewer).
+    pub compare_diff: DiffPane,
+    /// Request id for the file-history stream (bus routing).
+    pub file_history_seq: u64,
     /// GitHub PR/CI panel state (dropdown, like the remotes panel). The
     /// context lives beside it so the panel's `'a` borrows come from the
     /// tab, not per-frame locals; the shell refreshes it on status/branch
@@ -181,6 +203,15 @@ impl Tab {
             worktree: worktree_panel::WorktreePanel::default(),
             submodule: submodule_panel::SubmodulePanel::default(),
             tags: tags_panel::TagsPanel::default(),
+            blame: blame_view::BlameView::default(),
+            file_history: file_history_view::FileHistoryView::default(),
+            compare: compare_view::CompareView::default(),
+            actions: actions_panel::ActionsPanel::default(),
+            output: output_panel::OutputPanel::default(),
+            editor: editor_view::EditorView::default(),
+            stats: stats_panel::StatsPanel::default(),
+            compare_diff: DiffPane::default(),
+            file_history_seq: 0,
             terminal_open: false,
             pending_discard: None,
             pending_branch_delete: None,
@@ -744,8 +775,52 @@ fn workspace<'a>(tab: &'a Tab, tokens: Tokens) -> Element<'a, Message> {
         ..container::Style::default()
     });
 
-    let center: Element<'a, Message> = if tab.detail_open {
+    let center: Element<'a, Message> = if tab.editor.open {
+        container(tab.editor.view(tokens).map(Message::Editor))
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into()
+    } else if tab.detail_open {
         commit_detail::view(tab, tokens)
+    } else if let Some(view) = tab.blame.view(tokens) {
+        view.map(Message::Blame)
+    } else if let Some(view) = tab.file_history.view(tokens) {
+        view.map(Message::FileHistory)
+    } else if tab.compare.open {
+        // Selected compare file: file list beside its diff; otherwise the
+        // list alone.
+        let list: Element<'a, Message> = container(
+            tab.compare
+                .view(tokens)
+                .map(|element| element.map(Message::Compare)),
+        )
+        .width(Length::Fixed(320.0))
+        .height(Length::Fill)
+        .into();
+        if tab.compare_diff.is_ready() {
+            let file_diff = diff_view::view(
+                &tab.compare_diff,
+                DiffSlot::Commit,
+                tokens,
+                false,
+                false,
+                PaneMode::default(),
+            );
+            row![
+                list,
+                container(file_diff)
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+            ]
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into()
+        } else {
+            container(list)
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .into()
+        }
     } else {
         diff_view::view(
             &tab.diff,
@@ -796,6 +871,7 @@ fn workspace<'a>(tab: &'a Tab, tokens: Tokens) -> Element<'a, Message> {
         || tab.worktree.open
         || tab.submodule.open
         || tab.tags.open
+        || tab.stats.open
     {
         // Dropdowns: overlaid on the workspace so opening them never
         // reflows the panes underneath. The branch picker anchors top-left,
@@ -834,6 +910,20 @@ fn workspace<'a>(tab: &'a Tab, tokens: Tokens) -> Element<'a, Message> {
                     .align_y(Alignment::Start)
                     .padding([6, 8])
                     .into(),
+            );
+        }
+        if tab.stats.open {
+            layers.push(
+                container(
+                    container(tab.stats.view(tokens).map(Message::Stats))
+                        .width(Length::Fixed(520.0)),
+                )
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .align_x(Alignment::End)
+                .align_y(Alignment::Start)
+                .padding([6, 8])
+                .into(),
             );
         }
         if tab.worktree.open {
