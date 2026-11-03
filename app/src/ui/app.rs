@@ -3,23 +3,29 @@
 //! One [`AppServices`] bag is shared through `Arc`; async service bodies run
 //! as `Task::perform` futures on the iced (tokio) executor and report back
 //! through messages. Push-style signals (watcher batches, op progress,
-//! clones, prompts) arrive over the [`BackendEvent`](crate::service::events)
-//! bus subscription.
+//! log pages, clones, prompts) arrive over the
+//! [`BackendEvent`](crate::service::events) bus subscription.
 
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use iced::widget::{button, column, container, row, text, Space};
+use iced::widget::{button, column, container, row, text, text_editor, Space};
 use iced::{window, Alignment, Element, Length, Subscription, Task};
 
-use crate::engine::types::{RepoId, RepoInfo, RepoStatus};
+use crate::engine::types::{
+    CommitOptions, DiffSide, FileDiff, LineRange, LogFilter, RepoId, RepoInfo, RepoStatus,
+    StageRequest, StageTarget,
+};
 use crate::service::events::BackendEvent;
 use crate::service::AppServices;
 
 use super::bus;
 use super::config::{self, Config, RecentRepo};
+use super::diff_view::{DiffPane, DiffSlot};
 use super::home;
-use super::repo_view::{self, Load, Tab};
+use super::repo_view::{self, Load, PendingRemap, Tab};
+use super::status_model::{count_label, filter_sections, SectionId, StatusRow};
 use super::theme::{self, Mode, Tokens};
 
 pub fn run(cli_args: Vec<String>) -> iced::Result {
@@ -43,6 +49,9 @@ pub struct App {
     recent: Vec<RecentRepo>,
     open_in_flight: bool,
     system_mode: iced::theme::Mode,
+    modifiers: iced::keyboard::Modifiers,
+    /// Monotonic request id for log streams (discards superseded pages).
+    log_seq: u64,
     tabs: Vec<Tab>,
     active: usize,
     show_home: bool,
@@ -68,6 +77,7 @@ impl Notice {
 pub enum Message {
     Backend(BackendEvent),
     SystemTheme(iced::theme::Mode),
+    Modifiers(iced::keyboard::Modifiers),
     OpenDialog,
     OpenPicked(Option<PathBuf>),
     OpenPath(String),
@@ -82,12 +92,88 @@ pub enum Message {
     Refresh(RepoId),
     SelectTab(usize),
     CloseTab(RepoId),
-    SelectFile(String),
     GoHome,
     CycleTheme,
     TogglePin(String),
     RemoveRecent(String),
     DismissNotice,
+
+    StatusFilterChanged(String),
+    StatusSelect {
+        key: String,
+    },
+    StatusSelectAll,
+    StatusSelectNone,
+    ToggleSection(SectionId),
+    StagePaths {
+        paths: Vec<String>,
+        unstage: bool,
+    },
+    StageFile {
+        path: String,
+        unstage: bool,
+    },
+    StageHunk {
+        slot: DiffSlot,
+        file: usize,
+        hunk: usize,
+    },
+    StageSelectedLines {
+        slot: DiffSlot,
+    },
+    ClearLineSelection {
+        slot: DiffSlot,
+    },
+    DiscardPath(String),
+    DiscardPaths(Vec<String>),
+    MutationDone {
+        repo_id: RepoId,
+        label: String,
+        result: Result<(), String>,
+    },
+
+    DiffToggleSplit,
+    DiffToggleWrap,
+    DiffToggleFile {
+        slot: DiffSlot,
+        file: usize,
+    },
+    DiffToggleLine {
+        slot: DiffSlot,
+        file: usize,
+        hunk: usize,
+        new_no: u32,
+    },
+    DiffScrolled {
+        slot: DiffSlot,
+        y: f32,
+        viewport: f32,
+    },
+    DiffLoaded {
+        repo_id: RepoId,
+        slot: DiffSlot,
+        key: String,
+        seq: u64,
+        result: Result<Vec<FileDiff>, String>,
+    },
+
+    CommitMessageChanged(text_editor::Action),
+    CommitAmend(bool),
+    CommitNoVerify(bool),
+    CommitPressed,
+    Committed {
+        repo_id: RepoId,
+        result: Result<String, String>,
+    },
+
+    SelectCommit(String),
+    CloseDetail,
+    ToggleHistory,
+    HistoryScrolled {
+        y: f32,
+        viewport: f32,
+    },
+    RefreshLog(RepoId),
 }
 
 impl App {
@@ -102,6 +188,8 @@ impl App {
             recent,
             open_in_flight: false,
             system_mode: iced::theme::Mode::None,
+            modifiers: iced::keyboard::Modifiers::default(),
+            log_seq: 0,
             tabs: Vec::new(),
             active: 0,
             show_home: true,
@@ -172,14 +260,176 @@ impl App {
         )
     }
 
-    fn set_status(&mut self, repo_id: &RepoId, result: Result<RepoStatus, String>) {
-        let Some(index) = repo_view::tab_index(&self.tabs, repo_id) else {
-            return;
+    /// Fetch the working-copy diff for the selected status row when the
+    /// pane's identity changed (or a mutation invalidated it).
+    fn ensure_working_diff(&mut self, index: usize) -> Task<Message> {
+        let Some(tab) = self.tabs.get_mut(index) else {
+            return Task::none();
         };
-        self.tabs[index].status = match result {
-            Ok(status) => Load::Ready(status),
-            Err(err) => Load::Failed(err),
+        if !tab.diff_is_stale() {
+            return Task::none();
+        }
+        let Some(row) = tab.selected_status_row() else {
+            tab.diff = DiffPane::default();
+            return Task::none();
         };
+        let Some(key) = tab.working_diff_key() else {
+            return Task::none();
+        };
+        let paths = tab.diff_paths();
+        let (old, new) = match row.section {
+            SectionId::Staged => (DiffSide::Head, DiffSide::Index),
+            SectionId::Changes => (DiffSide::Index, DiffSide::Worktree),
+        };
+
+        tab.diff_seq += 1;
+        let seq = tab.diff_seq;
+        tab.diff.set_loading(key.clone());
+        tab.diff.seq = seq;
+        tab.reload_diff = false;
+
+        let repo_id = tab.repo.repo_id.clone();
+        let services = self.services.clone();
+        Task::perform(
+            async move {
+                let result =
+                    crate::service::diff::repo_diff(&services, repo_id.clone(), old, new, paths)
+                        .await;
+                Message::DiffLoaded {
+                    repo_id,
+                    slot: DiffSlot::Working,
+                    key,
+                    seq,
+                    result,
+                }
+            },
+            std::convert::identity,
+        )
+    }
+
+    /// Fetch the selected commit's diff against its first parent.
+    fn ensure_commit_diff(&mut self, index: usize) -> Task<Message> {
+        let Some(tab) = self.tabs.get_mut(index) else {
+            return Task::none();
+        };
+        let (sha, parent) = match tab.history.selected_commit() {
+            Some(commit) => (commit.sha.clone(), commit.parents.first().cloned()),
+            None => return Task::none(),
+        };
+        let key = format!("commit:{sha}");
+        if tab.commit_diff.key.as_deref() == Some(key.as_str()) && tab.commit_diff.is_ready() {
+            return Task::none();
+        }
+
+        let Some(parent) = parent else {
+            // Root commit: nothing to diff against.
+            tab.commit_diff_seq += 1;
+            tab.commit_diff = DiffPane::default();
+            return Task::none();
+        };
+
+        tab.commit_diff_seq += 1;
+        let seq = tab.commit_diff_seq;
+        tab.commit_diff.set_loading(key.clone());
+        tab.commit_diff.seq = seq;
+
+        let repo_id = tab.repo.repo_id.clone();
+        let services = self.services.clone();
+        Task::perform(
+            async move {
+                let result = crate::service::diff::repo_diff(
+                    &services,
+                    repo_id.clone(),
+                    DiffSide::Commit(parent),
+                    DiffSide::Commit(sha),
+                    None,
+                )
+                .await;
+                Message::DiffLoaded {
+                    repo_id,
+                    slot: DiffSlot::Commit,
+                    key,
+                    seq,
+                    result,
+                }
+            },
+            std::convert::identity,
+        )
+    }
+
+    /// Restart the commit-log stream for a repo (cancels the previous one).
+    fn start_log(&mut self, repo_id: RepoId) -> Task<Message> {
+        let Some(index) = repo_view::tab_index(&self.tabs, &repo_id) else {
+            return Task::none();
+        };
+        self.log_seq += 1;
+        let request_id = self.log_seq;
+        let tab = &mut self.tabs[index];
+        let selected = tab.history.selected.take();
+        tab.history.begin(request_id);
+        tab.history.selected = selected;
+
+        let result = crate::service::log::repo_log_stream(
+            &self.services,
+            repo_id,
+            LogFilter::default(),
+            request_id,
+        );
+        if let Err(err) = result {
+            self.notice = Some(Notice::error(format!("Could not load history: {err}")));
+        }
+        Task::none()
+    }
+
+    fn spawn_stage(&self, repo_id: RepoId, request: StageRequest, label: String) -> Task<Message> {
+        let services = self.services.clone();
+        Task::perform(
+            async move {
+                let result = crate::service::misc::stage(&services, repo_id.clone(), request).await;
+                Message::MutationDone {
+                    repo_id,
+                    label,
+                    result,
+                }
+            },
+            std::convert::identity,
+        )
+    }
+
+    fn spawn_discard(&self, repo_id: RepoId, targets: Vec<StageTarget>) -> Task<Message> {
+        let services = self.services.clone();
+        let label = count_label("Discard", targets.len());
+        Task::perform(
+            async move {
+                let result =
+                    crate::service::misc::discard(&services, repo_id.clone(), targets).await;
+                Message::MutationDone {
+                    repo_id,
+                    label,
+                    result,
+                }
+            },
+            std::convert::identity,
+        )
+    }
+
+    fn spawn_commit(&self, repo_id: RepoId, options: CommitOptions) -> Task<Message> {
+        let services = self.services.clone();
+        Task::perform(
+            async move {
+                let result =
+                    crate::service::misc::commit(&services, repo_id.clone(), options).await;
+                Message::Committed { repo_id, result }
+            },
+            std::convert::identity,
+        )
+    }
+
+    fn visible_rows<'a>(tab: &'a Tab) -> Vec<&'a StatusRow> {
+        filter_sections(&tab.status_index, &tab.filter)
+            .into_iter()
+            .flat_map(|section| section.rows)
+            .collect()
     }
 
     fn update(&mut self, message: Message) -> Task<Message> {
@@ -187,6 +437,10 @@ impl App {
             Message::Backend(event) => self.backend(event),
             Message::SystemTheme(mode) => {
                 self.system_mode = mode;
+                Task::none()
+            }
+            Message::Modifiers(modifiers) => {
+                self.modifiers = modifiers;
                 Task::none()
             }
             Message::OpenDialog => {
@@ -230,7 +484,7 @@ impl App {
                             }
                         }
                         self.show_home = false;
-                        self.refresh(repo_id)
+                        Task::batch([self.refresh(repo_id.clone()), self.start_log(repo_id)])
                     }
                     Err(err) => {
                         self.notice = Some(Notice::error(format!("Could not open {path}: {err}")));
@@ -239,14 +493,32 @@ impl App {
                 }
             }
             Message::StatusLoaded { repo_id, result } => {
-                self.set_status(&repo_id, result);
-                Task::none()
+                let Some(index) = repo_view::tab_index(&self.tabs, &repo_id) else {
+                    return Task::none();
+                };
+                match result {
+                    Ok(status) => {
+                        let tab = &mut self.tabs[index];
+                        tab.apply_status(status);
+                        if tab.selected_row.is_none() {
+                            if let Some(row) = tab.status_index.rows.first() {
+                                tab.selected_row = Some(row.key.clone());
+                            }
+                        }
+                    }
+                    Err(err) => {
+                        self.tabs[index].status = Load::Failed(err);
+                        return Task::none();
+                    }
+                }
+                self.ensure_working_diff(index)
             }
             Message::Refresh(repo_id) => {
                 if let Some(index) = repo_view::tab_index(&self.tabs, &repo_id) {
                     self.tabs[index].status = Load::Loading;
+                    self.tabs[index].reload_diff = true;
                 }
-                self.refresh(repo_id)
+                Task::batch([self.refresh(repo_id.clone()), self.start_log(repo_id)])
             }
             Message::SelectTab(index) => {
                 if index < self.tabs.len() {
@@ -270,12 +542,6 @@ impl App {
                             self.active = self.tabs.len() - 1;
                         }
                     }
-                }
-                Task::none()
-            }
-            Message::SelectFile(path) => {
-                if let Some(tab) = self.tabs.get_mut(self.active) {
-                    tab.selected = Some(path);
                 }
                 Task::none()
             }
@@ -304,12 +570,403 @@ impl App {
                 self.notice = None;
                 Task::none()
             }
+            Message::StatusFilterChanged(value) => {
+                if let Some(tab) = self.tabs.get_mut(self.active) {
+                    tab.filter = value;
+                }
+                Task::none()
+            }
+            Message::StatusSelect { key } => {
+                let toggle = self.modifiers.control() || self.modifiers.logo();
+                let extend = self.modifiers.shift();
+                let Some(tab) = self.tabs.get_mut(self.active) else {
+                    return Task::none();
+                };
+                let rows: Vec<StatusRow> = Self::visible_rows(tab).into_iter().cloned().collect();
+                let refs: Vec<&StatusRow> = rows.iter().collect();
+                tab.selection.click(&key, &refs, toggle, extend);
+                tab.selected_row = Some(key);
+                tab.detail_open = false;
+                let index = self.active;
+                self.ensure_working_diff(index)
+            }
+            Message::StatusSelectAll => {
+                if let Some(tab) = self.tabs.get_mut(self.active) {
+                    let rows: Vec<StatusRow> =
+                        Self::visible_rows(tab).into_iter().cloned().collect();
+                    let refs: Vec<&StatusRow> = rows.iter().collect();
+                    tab.selection.select_all(&refs);
+                }
+                Task::none()
+            }
+            Message::StatusSelectNone => {
+                if let Some(tab) = self.tabs.get_mut(self.active) {
+                    tab.selection.select_none();
+                }
+                Task::none()
+            }
+            Message::ToggleSection(section) => {
+                if let Some(tab) = self.tabs.get_mut(self.active) {
+                    tab.toggle_section(section);
+                }
+                Task::none()
+            }
+            Message::StagePaths { paths, unstage } => {
+                if paths.is_empty() {
+                    return Task::none();
+                }
+                let label = count_label(if unstage { "Unstage" } else { "Stage" }, paths.len());
+                let Some(tab) = self.tabs.get_mut(self.active) else {
+                    return Task::none();
+                };
+                tab.pending_remap = Some(PendingRemap {
+                    paths: paths.iter().cloned().collect::<HashSet<String>>(),
+                    unstage,
+                });
+                tab.reload_diff = true;
+                tab.diff.lines.clear();
+                let repo_id = tab.repo.repo_id.clone();
+                let request = StageRequest {
+                    targets: paths
+                        .iter()
+                        .map(|path| StageTarget::File(path.clone()))
+                        .collect(),
+                    unstage,
+                };
+                self.spawn_stage(repo_id, request, label)
+            }
+            Message::StageFile { path, unstage } => self.update(Message::StagePaths {
+                paths: vec![path],
+                unstage,
+            }),
+            Message::StageHunk { slot, file, hunk } => {
+                if slot != DiffSlot::Working {
+                    return Task::none();
+                }
+                let Some(tab) = self.tabs.get_mut(self.active) else {
+                    return Task::none();
+                };
+                let mode = tab.working_mode();
+                if !mode.line_actions {
+                    return Task::none();
+                }
+                let Some(file_diff) = tab.diff.files().get(file) else {
+                    return Task::none();
+                };
+                let path = file_diff.path.clone();
+                let unstage = mode.unstage;
+                tab.pending_remap = Some(PendingRemap {
+                    paths: HashSet::from([path.clone()]),
+                    unstage,
+                });
+                tab.reload_diff = true;
+                tab.diff.lines.clear();
+                let repo_id = tab.repo.repo_id.clone();
+                let request = StageRequest {
+                    targets: vec![StageTarget::Hunk {
+                        path,
+                        hunk: hunk as u32,
+                    }],
+                    unstage,
+                };
+                let label = if unstage {
+                    "Unstage hunk"
+                } else {
+                    "Stage hunk"
+                };
+                self.spawn_stage(repo_id, request, label.to_string())
+            }
+            Message::StageSelectedLines { slot } => {
+                if slot != DiffSlot::Working {
+                    return Task::none();
+                }
+                let Some(tab) = self.tabs.get_mut(self.active) else {
+                    return Task::none();
+                };
+                let mode = tab.working_mode();
+                if !mode.line_actions {
+                    return Task::none();
+                }
+                let mut targets = Vec::new();
+                let mut paths = HashSet::new();
+                for (file_index, file) in tab.diff.files().iter().enumerate() {
+                    for hunk_index in 0..file.hunks.len() {
+                        let ranges = tab.diff.lines.ranges(file_index, hunk_index);
+                        if ranges.is_empty() {
+                            continue;
+                        }
+                        paths.insert(file.path.clone());
+                        targets.push(StageTarget::Lines {
+                            path: file.path.clone(),
+                            hunk: hunk_index as u32,
+                            ranges: ranges
+                                .into_iter()
+                                .map(|(start, end)| LineRange { start, end })
+                                .collect(),
+                        });
+                    }
+                }
+                if targets.is_empty() {
+                    return Task::none();
+                }
+                let unstage = mode.unstage;
+                tab.pending_remap = Some(PendingRemap { paths, unstage });
+                tab.reload_diff = true;
+                tab.diff.lines.clear();
+                let repo_id = tab.repo.repo_id.clone();
+                let label = if unstage {
+                    "Unstage lines"
+                } else {
+                    "Stage lines"
+                };
+                self.spawn_stage(
+                    repo_id,
+                    StageRequest { targets, unstage },
+                    label.to_string(),
+                )
+            }
+            Message::ClearLineSelection { slot } => {
+                if let Some(tab) = self.tabs.get_mut(self.active) {
+                    match slot {
+                        DiffSlot::Working => tab.diff.lines.clear(),
+                        DiffSlot::Commit => tab.commit_diff.lines.clear(),
+                    }
+                }
+                Task::none()
+            }
+            Message::DiscardPath(path) => self.update(Message::DiscardPaths(vec![path])),
+            Message::DiscardPaths(paths) => {
+                if paths.is_empty() {
+                    return Task::none();
+                }
+                let Some(tab) = self.tabs.get_mut(self.active) else {
+                    return Task::none();
+                };
+                tab.reload_diff = true;
+                tab.diff.lines.clear();
+                let repo_id = tab.repo.repo_id.clone();
+                let targets = paths.into_iter().map(StageTarget::File).collect();
+                self.spawn_discard(repo_id, targets)
+            }
+            Message::MutationDone {
+                repo_id,
+                label,
+                result,
+            } => {
+                match &result {
+                    Ok(()) => self.last_op = Some(format!("{label} done")),
+                    Err(err) => {
+                        self.notice = Some(Notice::error(format!("{label} failed: {err}")));
+                    }
+                }
+                self.refresh(repo_id)
+            }
+            Message::DiffToggleSplit => {
+                if let Some(tab) = self.tabs.get_mut(self.active) {
+                    tab.diff_split = !tab.diff_split;
+                    tab.diff.rebuild(tab.diff_split);
+                    tab.commit_diff.rebuild(tab.diff_split);
+                }
+                Task::none()
+            }
+            Message::DiffToggleWrap => {
+                if let Some(tab) = self.tabs.get_mut(self.active) {
+                    tab.diff_wrap = !tab.diff_wrap;
+                }
+                Task::none()
+            }
+            Message::DiffToggleFile { slot, file } => {
+                if let Some(tab) = self.tabs.get_mut(self.active) {
+                    let split = tab.diff_split;
+                    match slot {
+                        DiffSlot::Working => tab.diff.toggle_file(file, split),
+                        DiffSlot::Commit => tab.commit_diff.toggle_file(file, split),
+                    }
+                }
+                Task::none()
+            }
+            Message::DiffToggleLine {
+                slot,
+                file,
+                hunk,
+                new_no,
+            } => {
+                let extend = self.modifiers.shift();
+                if let Some(tab) = self.tabs.get_mut(self.active) {
+                    match slot {
+                        DiffSlot::Working => tab.diff.lines.toggle(file, hunk, new_no, extend),
+                        DiffSlot::Commit => {
+                            tab.commit_diff.lines.toggle(file, hunk, new_no, extend)
+                        }
+                    }
+                }
+                Task::none()
+            }
+            Message::DiffScrolled { slot, y, viewport } => {
+                if let Some(tab) = self.tabs.get_mut(self.active) {
+                    let pane = match slot {
+                        DiffSlot::Working => &mut tab.diff,
+                        DiffSlot::Commit => &mut tab.commit_diff,
+                    };
+                    pane.scroll = y;
+                    pane.viewport = viewport;
+                }
+                Task::none()
+            }
+            Message::DiffLoaded {
+                repo_id,
+                slot,
+                key,
+                seq,
+                result,
+            } => {
+                let Some(index) = repo_view::tab_index(&self.tabs, &repo_id) else {
+                    return Task::none();
+                };
+                let tab = &mut self.tabs[index];
+                let split = tab.diff_split;
+                let pane = match slot {
+                    DiffSlot::Working => &mut tab.diff,
+                    DiffSlot::Commit => &mut tab.commit_diff,
+                };
+                if pane.seq != seq || pane.key.as_deref() != Some(key.as_str()) {
+                    return Task::none();
+                }
+                match result {
+                    Ok(files) => pane.set_ready(files, split),
+                    Err(err) => pane.set_failed(err),
+                }
+                Task::none()
+            }
+            Message::CommitMessageChanged(action) => {
+                if let Some(tab) = self.tabs.get_mut(self.active) {
+                    tab.message.perform(action);
+                    tab.commit_error = None;
+                }
+                Task::none()
+            }
+            Message::CommitAmend(value) => {
+                if let Some(tab) = self.tabs.get_mut(self.active) {
+                    tab.amend = value;
+                }
+                Task::none()
+            }
+            Message::CommitNoVerify(value) => {
+                if let Some(tab) = self.tabs.get_mut(self.active) {
+                    tab.no_verify = value;
+                }
+                Task::none()
+            }
+            Message::CommitPressed => {
+                let Some(tab) = self.tabs.get_mut(self.active) else {
+                    return Task::none();
+                };
+                if !tab.can_commit() {
+                    return Task::none();
+                }
+                let options = CommitOptions {
+                    message: tab.message.text(),
+                    amend: tab.amend,
+                    no_verify: tab.no_verify,
+                    allow_empty: tab.amend,
+                    author: None,
+                };
+                tab.committing = true;
+                tab.commit_error = None;
+                let repo_id = tab.repo.repo_id.clone();
+                self.spawn_commit(repo_id, options)
+            }
+            Message::Committed { repo_id, result } => {
+                let Some(index) = repo_view::tab_index(&self.tabs, &repo_id) else {
+                    return Task::none();
+                };
+                match result {
+                    Ok(sha) => {
+                        {
+                            let tab = &mut self.tabs[index];
+                            tab.committing = false;
+                            tab.commit_error = None;
+                            tab.message = text_editor::Content::with_text("");
+                            tab.amend = false;
+                            tab.no_verify = false;
+                            tab.reload_diff = true;
+                            tab.diff.lines.clear();
+                            tab.pending_remap = None;
+                        }
+                        self.last_op = Some(format!("Committed {}", repo_view::short_sha(&sha)));
+                        self.notice = None;
+                        Task::batch([self.refresh(repo_id.clone()), self.start_log(repo_id)])
+                    }
+                    Err(err) => {
+                        let tab = &mut self.tabs[index];
+                        tab.committing = false;
+                        tab.commit_error = Some(err);
+                        Task::none()
+                    }
+                }
+            }
+            Message::SelectCommit(sha) => {
+                let Some(tab) = self.tabs.get_mut(self.active) else {
+                    return Task::none();
+                };
+                tab.history.selected = Some(sha);
+                tab.detail_open = true;
+                let index = self.active;
+                self.ensure_commit_diff(index)
+            }
+            Message::CloseDetail => {
+                if let Some(tab) = self.tabs.get_mut(self.active) {
+                    tab.detail_open = false;
+                }
+                let index = self.active;
+                self.ensure_working_diff(index)
+            }
+            Message::ToggleHistory => {
+                let mut start = None;
+                if let Some(tab) = self.tabs.get_mut(self.active) {
+                    tab.history_open = !tab.history_open;
+                    if tab.history_open && tab.history.is_empty() && !tab.history.loading {
+                        start = Some(tab.repo.repo_id.clone());
+                    }
+                }
+                match start {
+                    Some(repo_id) => self.start_log(repo_id),
+                    None => Task::none(),
+                }
+            }
+            Message::HistoryScrolled { y, viewport } => {
+                if let Some(tab) = self.tabs.get_mut(self.active) {
+                    tab.history.scroll = y;
+                    tab.history.viewport = viewport;
+                }
+                Task::none()
+            }
+            Message::RefreshLog(repo_id) => self.start_log(repo_id),
         }
     }
 
     fn backend(&mut self, event: BackendEvent) -> Task<Message> {
         match event {
-            BackendEvent::RepoChanged(changed) => self.refresh(changed.repo_id),
+            BackendEvent::RepoChanged(changed) => {
+                if let Some(index) = repo_view::tab_index(&self.tabs, &changed.repo_id) {
+                    self.tabs[index].reload_diff = true;
+                }
+                let mut tasks = vec![self.refresh(changed.repo_id.clone())];
+                if changed.head_moved || changed.full {
+                    tasks.push(self.start_log(changed.repo_id.clone()));
+                }
+                Task::batch(tasks)
+            }
+            BackendEvent::LogPage { request_id, page } => {
+                if let Some(tab) = self
+                    .tabs
+                    .iter_mut()
+                    .find(|tab| tab.history.request_id == request_id)
+                {
+                    tab.history.accept(page);
+                }
+                Task::none()
+            }
             BackendEvent::OpProgress(progress) => {
                 let pct = progress
                     .pct
@@ -336,6 +993,7 @@ impl App {
         Subscription::batch([
             Subscription::run(bus::stream).map(Message::Backend),
             iced::system::theme_changes().map(Message::SystemTheme),
+            iced::event::listen_with(modifiers_changed),
         ])
     }
 
@@ -463,6 +1121,19 @@ impl App {
 
     fn theme(&self) -> iced::Theme {
         theme::app_theme(self.tokens())
+    }
+}
+
+fn modifiers_changed(
+    event: iced::Event,
+    _status: iced::event::Status,
+    _window: window::Id,
+) -> Option<Message> {
+    match event {
+        iced::Event::Keyboard(iced::keyboard::Event::ModifiersChanged(modifiers)) => {
+            Some(Message::Modifiers(modifiers))
+        }
+        _ => None,
     }
 }
 

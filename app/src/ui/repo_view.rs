@@ -1,19 +1,33 @@
-//! Repository screen: tab strip, repo header and the working-copy status list.
+//! Repository workspace: tab strip, repo header and the three-column body
+//! (status + commit form, diff/commit detail, history graph).
 //!
-//! The diff viewer, history graph and the remaining panels land in the next
-//! wave; this screen already exercises the full service/bus path (open →
-//! status → watcher refresh).
+//! All state that outlives a single frame lives on [`Tab`]; the panel
+//! modules render it and emit [`Message`]s.
 
-use iced::widget::{button, column, container, row, scrollable, text, Space};
+use std::collections::HashSet;
+
+use iced::widget::{button, column, container, row, scrollable, text, text_editor, Space};
 use iced::{Alignment, Color, Element, Length};
 
-use crate::engine::types::{ChangeKind, RepoId, RepoInfo, RepoStatus, StatusEntry};
+use crate::engine::types::{ChangeKind, RepoId, RepoInfo, RepoStatus};
 
 use super::app::Message;
+use super::commit_bar;
+use super::commit_detail;
+use super::diff_view::{self, DiffPane, DiffSlot, PaneMode};
+use super::history_model::HistoryState;
+use super::history_panel;
+use super::status_model::{
+    build_status_index, has_staged_changes, remap_selection, SectionId, StatusIndex, StatusRow,
+    StatusSelection,
+};
+use super::status_panel;
 use super::theme::{self, Tokens};
 
+pub const SIDEBAR_WIDTH: f32 = 320.0;
+pub const HISTORY_WIDTH: f32 = 340.0;
+
 /// Load state for data fetched through the service layer.
-#[derive(Debug, Clone)]
 pub enum Load<T> {
     Loading,
     Ready(T),
@@ -29,12 +43,44 @@ impl<T> Load<T> {
     }
 }
 
+/// Selection movement requested by the last mutation, applied when the
+/// following status load lands: keys that now live in `section` move there.
+pub struct PendingRemap {
+    pub paths: HashSet<String>,
+    pub unstage: bool,
+}
+
 /// One open repository (a tab).
-#[derive(Debug, Clone)]
 pub struct Tab {
     pub repo: RepoInfo,
     pub status: Load<RepoStatus>,
-    pub selected: Option<String>,
+    pub status_index: StatusIndex,
+    pub selection: StatusSelection,
+    /// Key of the row shown in the diff pane.
+    pub selected_row: Option<String>,
+    pub filter: String,
+    pub collapsed_sections: [bool; 2],
+    pub pending_remap: Option<PendingRemap>,
+    /// Force a diff reload on the next status refresh (hunk/line staging).
+    pub reload_diff: bool,
+
+    pub diff: DiffPane,
+    pub commit_diff: DiffPane,
+    pub diff_split: bool,
+    pub diff_wrap: bool,
+    pub detail_open: bool,
+
+    pub message: text_editor::Content,
+    pub amend: bool,
+    pub no_verify: bool,
+    pub committing: bool,
+    pub commit_error: Option<String>,
+
+    pub history: HistoryState,
+    pub history_open: bool,
+
+    pub diff_seq: u64,
+    pub commit_diff_seq: u64,
 }
 
 impl Tab {
@@ -42,8 +88,160 @@ impl Tab {
         Self {
             repo,
             status: Load::Loading,
-            selected: None,
+            status_index: StatusIndex::default(),
+            selection: StatusSelection::default(),
+            selected_row: None,
+            filter: String::new(),
+            collapsed_sections: [false, false],
+            pending_remap: None,
+            reload_diff: true,
+            diff: DiffPane::default(),
+            commit_diff: DiffPane::default(),
+            diff_split: false,
+            diff_wrap: false,
+            detail_open: false,
+            message: text_editor::Content::with_text(""),
+            amend: false,
+            no_verify: false,
+            committing: false,
+            commit_error: None,
+            history: HistoryState::default(),
+            history_open: true,
+            diff_seq: 0,
+            commit_diff_seq: 0,
         }
+    }
+
+    pub fn selected_status_row(&self) -> Option<&StatusRow> {
+        self.selected_row
+            .as_deref()
+            .and_then(|key| self.status_index.row(key))
+    }
+
+    /// Which staging controls are safe for the selected row.
+    pub fn working_mode(&self) -> PaneMode {
+        let Some(row) = self.selected_status_row() else {
+            return PaneMode::default();
+        };
+        if matches!(row.index, ChangeKind::Conflicted)
+            || matches!(row.worktree, ChangeKind::Conflicted)
+        {
+            return PaneMode::default();
+        }
+        match row.section {
+            SectionId::Staged => {
+                let clean = matches!(row.worktree, ChangeKind::Unmodified | ChangeKind::Ignored);
+                PaneMode {
+                    file_actions: true,
+                    line_actions: clean,
+                    unstage: true,
+                }
+            }
+            SectionId::Changes => {
+                let clean = matches!(row.index, ChangeKind::Unmodified | ChangeKind::Ignored);
+                PaneMode {
+                    file_actions: true,
+                    line_actions: clean,
+                    unstage: false,
+                }
+            }
+        }
+    }
+
+    /// Paths to include in the diff request (old path first for renames).
+    pub fn diff_paths(&self) -> Option<Vec<String>> {
+        let row = self.selected_status_row()?;
+        let mut paths = Vec::new();
+        if let Some(old_path) = &row.old_path {
+            if old_path != &row.path {
+                paths.push(old_path.clone());
+            }
+        }
+        paths.push(row.path.clone());
+        Some(paths)
+    }
+
+    pub fn section_collapsed(&self, section: SectionId) -> bool {
+        self.collapsed_sections[section.index()]
+    }
+
+    pub fn toggle_section(&mut self, section: SectionId) {
+        let slot = &mut self.collapsed_sections[section.index()];
+        *slot = !*slot;
+    }
+
+    pub fn can_commit(&self) -> bool {
+        if self.committing {
+            return false;
+        }
+        if self.amend {
+            return true;
+        }
+        let message = self.message.text();
+        !message.trim().is_empty()
+            && self
+                .status
+                .ready()
+                .map(|status| has_staged_changes(&status.entries))
+                .unwrap_or(false)
+    }
+
+    /// Rebuild the row index from a fresh status and reconcile selection.
+    pub fn apply_status(&mut self, status: RepoStatus) {
+        let previous = self.selected_status_row().cloned();
+        self.status_index = build_status_index(&status.entries, None);
+        let live = self.status_index.live_keys();
+
+        let pending = self.pending_remap.take();
+        if let Some(pending) = &pending {
+            self.selection.selected = remap_selection(
+                &self.selection.selected,
+                &pending.paths,
+                pending.unstage,
+                &self.status_index.rows,
+                None,
+            );
+        }
+        self.selection.prune(&live);
+
+        if let Some(key) = self.selected_row.clone() {
+            if !live.contains(&key) {
+                let moved = pending.as_ref().and_then(|pending| {
+                    let row = previous.as_ref()?;
+                    if !pending.paths.contains(&row.path) {
+                        return None;
+                    }
+                    let target = if pending.unstage {
+                        SectionId::Changes
+                    } else {
+                        SectionId::Staged
+                    };
+                    let candidate = format!("{}:{}", target.as_str(), row.path);
+                    live.contains(&candidate).then_some(candidate)
+                });
+                self.selected_row = moved;
+                if self.selected_row.is_none() {
+                    self.detail_open = false;
+                }
+            }
+        }
+
+        self.status = Load::Ready(status);
+    }
+
+    /// Whether the selected working diff should be re-fetched.
+    pub fn diff_is_stale(&self) -> bool {
+        self.reload_diff
+            || self
+                .working_diff_key()
+                .map(|key| self.diff.key.as_deref() != Some(key.as_str()))
+                .unwrap_or(false)
+    }
+
+    /// Identity key of the working diff for the selected row.
+    pub fn working_diff_key(&self) -> Option<String> {
+        let row = self.selected_status_row()?;
+        Some(format!("{:?}:{}", row.section, row.key))
     }
 }
 
@@ -55,7 +253,7 @@ pub fn view<'a>(tabs: &'a [Tab], active: usize, tokens: Tokens) -> Element<'a, M
     column![
         tab_strip(tabs, active, tokens),
         repo_header(tab, tokens),
-        repo_body(tab, tokens),
+        workspace(tab, tokens),
     ]
     .width(Length::Fill)
     .height(Length::Fill)
@@ -110,8 +308,16 @@ fn repo_header<'a>(tab: &'a Tab, tokens: Tokens) -> Element<'a, Message> {
     let status = tab.status.ready();
 
     let branch = status
-        .and_then(|status| status.branch.as_deref())
-        .unwrap_or(if tab.repo.bare { "bare" } else { "detached" });
+        .and_then(|status| status.branch.clone())
+        .unwrap_or_else(|| {
+            if tab.repo.bare {
+                "bare".to_string()
+            } else if let Some(head) = status.and_then(|status| status.head.as_deref()) {
+                format!("detached @ {}", short_sha(head))
+            } else {
+                "no commits".to_string()
+            }
+        });
 
     let mut sync = row![].spacing(6).align_y(Alignment::Center);
     if let Some(status) = status {
@@ -121,12 +327,22 @@ fn repo_header<'a>(tab: &'a Tab, tokens: Tokens) -> Element<'a, Message> {
         if status.behind > 0 {
             sync = sync.push(chip(format!("↓{}", status.behind), tokens.renamed));
         }
+        if status.merging {
+            sync = sync.push(chip("merging", tokens.modified));
+        }
+        if status.rebasing {
+            sync = sync.push(chip("rebasing", tokens.modified));
+        }
+        if status.sequencer {
+            sync = sync.push(chip("sequencer", tokens.deleted));
+        }
     }
 
-    let refresh = button(text("Refresh").size(11))
-        .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
-        .padding([6, 10])
-        .on_press(Message::Refresh(tab.repo.repo_id.clone()));
+    let history_label = if tab.history_open {
+        "Hide history"
+    } else {
+        "History"
+    };
 
     container(
         row![
@@ -143,7 +359,14 @@ fn repo_header<'a>(tab: &'a Tab, tokens: Tokens) -> Element<'a, Message> {
             chip(branch, tokens.muted_foreground),
             sync,
             Space::new().width(Length::Fill),
-            refresh,
+            button(text(history_label).size(11))
+                .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
+                .padding([6, 10])
+                .on_press(Message::ToggleHistory),
+            button(text("Refresh").size(11))
+                .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
+                .padding([6, 10])
+                .on_press(Message::Refresh(tab.repo.repo_id.clone())),
         ]
         .align_y(Alignment::Center)
         .padding([8, 12]),
@@ -161,164 +384,74 @@ fn repo_header<'a>(tab: &'a Tab, tokens: Tokens) -> Element<'a, Message> {
     .into()
 }
 
-fn repo_body<'a>(tab: &'a Tab, tokens: Tokens) -> Element<'a, Message> {
-    row![status_panel(tab, tokens), detail_panel(tab, tokens),]
-        .spacing(0)
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .into()
-}
-
-fn status_panel<'a>(tab: &'a Tab, tokens: Tokens) -> Element<'a, Message> {
-    let body: Element<'a, Message> = match &tab.status {
-        Load::Loading => padded_note(tokens, "Loading status…"),
-        Load::Failed(err) => padded_note(tokens, err),
-        Load::Ready(status) if status.entries.is_empty() => {
-            padded_note(tokens, "Working tree clean.")
-        }
-        Load::Ready(status) => {
-            let mut list = column![].spacing(1).width(Length::Fill);
-            for entry in &status.entries {
-                list = list.push(status_row(tokens, entry, tab.selected.as_deref()));
-            }
-            scrollable(list)
+fn workspace<'a>(tab: &'a Tab, tokens: Tokens) -> Element<'a, Message> {
+    let sidebar = container(
+        column![
+            container(status_panel::view(tab, tokens))
                 .width(Length::Fill)
-                .height(Length::Fill)
-                .into()
-        }
-    };
-
-    let header = container(
-        row![
-            text("Changes").size(12).font(theme::semibold()),
-            Space::new().width(Length::Fill),
-            text(counts_label(tab.status.ready()))
-                .size(11)
-                .color(tokens.muted_foreground),
+                .height(Length::Fill),
+            commit_bar::view(tab, tokens),
         ]
-        .align_y(Alignment::Center)
-        .padding([8, 10]),
-    );
-
-    container(column![header, body].height(Length::Fill))
-        .width(380.0)
-        .height(Length::Fill)
-        .style(move |_theme| container::Style {
-            background: Some(iced::Background::Color(tokens.sidebar)),
-            border: iced::Border {
-                color: tokens.sidebar_border,
-                width: 1.0,
-                radius: 0.0.into(),
-            },
-            ..container::Style::default()
-        })
-        .into()
-}
-
-fn status_row<'a>(
-    tokens: Tokens,
-    entry: &'a StatusEntry,
-    selected: Option<&str>,
-) -> Element<'a, Message> {
-    let is_selected = selected == Some(entry.path.as_str());
-    let path = match &entry.old_path {
-        Some(old) => format!("{old} → {}", entry.path),
-        None => entry.path.clone(),
-    };
-
-    let content = row![
-        badge(tokens, entry.index, true),
-        badge(tokens, entry.worktree, false),
-        text(path)
-            .size(12)
-            .font(theme::mono())
-            .color(tokens.foreground)
-            .width(Length::Fill),
-    ]
-    .spacing(4)
-    .align_y(Alignment::Center)
-    .width(Length::Fill);
-
-    button(
-        container(content)
-            .width(Length::Fill)
-            .align_x(Alignment::Start),
+        .height(Length::Fill),
     )
-    .style(theme::button_style(
-        tokens,
-        if is_selected {
-            theme::ButtonKind::Secondary
-        } else {
-            theme::ButtonKind::Ghost
+    .width(Length::Fixed(SIDEBAR_WIDTH))
+    .height(Length::Fill)
+    .style(move |_theme| container::Style {
+        background: Some(iced::Background::Color(tokens.sidebar)),
+        border: iced::Border {
+            color: tokens.sidebar_border,
+            width: 1.0,
+            radius: 0.0.into(),
         },
-    ))
-    .padding([4, 8])
+        ..container::Style::default()
+    });
+
+    let center: Element<'a, Message> = if tab.detail_open {
+        commit_detail::view(tab, tokens)
+    } else {
+        diff_view::view(
+            &tab.diff,
+            DiffSlot::Working,
+            tokens,
+            tab.diff_split,
+            tab.diff_wrap,
+            tab.working_mode(),
+        )
+    };
+
+    let mut body = row![
+        sidebar,
+        container(center).width(Length::Fill).height(Length::Fill),
+    ]
+    .spacing(0)
     .width(Length::Fill)
-    .on_press(Message::SelectFile(entry.path.clone()))
-    .into()
-}
+    .height(Length::Fill);
 
-fn detail_panel<'a>(tab: &'a Tab, tokens: Tokens) -> Element<'a, Message> {
-    let entry = match (&tab.status, &tab.selected) {
-        (Load::Ready(status), Some(path)) => {
-            status.entries.iter().find(|entry| &entry.path == path)
-        }
-        _ => None,
-    };
+    if tab.history_open {
+        body = body.push(
+            container(history_panel::view(tab, tokens))
+                .width(Length::Fixed(HISTORY_WIDTH))
+                .height(Length::Fill)
+                .style(move |_theme| container::Style {
+                    background: Some(iced::Background::Color(tokens.sidebar)),
+                    border: iced::Border {
+                        color: tokens.sidebar_border,
+                        width: 1.0,
+                        radius: 0.0.into(),
+                    },
+                    ..container::Style::default()
+                }),
+        );
+    }
 
-    let content: Element<'a, Message> = match (tab.selected.as_deref(), entry) {
-        (Some(path), Some(entry)) => column![
-            text(path).size(13).font(theme::mono()),
-            Space::new().height(6),
-            text(format!(
-                "index: {}   ·   worktree: {}",
-                kind_label(entry.index),
-                kind_label(entry.worktree)
-            ))
-            .size(11)
-            .color(tokens.muted_foreground),
-            Space::new().height(24),
-            text("The line-granular diff viewer arrives with the next wave.")
-                .size(12)
-                .color(tokens.muted_foreground),
-        ]
-        .into(),
-        (Some(path), None) => column![
-            text(path).size(13).font(theme::mono()),
-            Space::new().height(8),
-            text("This path is no longer present in the working tree.")
-                .size(12)
-                .color(tokens.muted_foreground),
-        ]
-        .into(),
-        _ => column![
-            text("Select a file").size(13).font(theme::semibold()),
-            Space::new().height(6),
-            text("Changed files appear on the left. The diff, staging controls, history graph and remote panels land in the next waves.")
-                .size(12)
-                .color(tokens.muted_foreground),
-        ]
-        .into(),
-    };
-
-    container(content)
-        .padding(20)
+    container(body)
         .width(Length::Fill)
         .height(Length::Fill)
-        .style(move |_theme| container::Style {
-            background: Some(iced::Background::Color(tokens.background)),
-            ..container::Style::default()
-        })
+        .style(theme::surface_style(tokens))
         .into()
 }
 
-fn padded_note<'a>(tokens: Tokens, note: &'a str) -> Element<'a, Message> {
-    container(text(note).size(12).color(tokens.muted_foreground))
-        .padding([16, 12])
-        .into()
-}
-
-fn chip<'a>(label: impl Into<String>, color: Color) -> Element<'a, Message> {
+pub fn chip<'a>(label: impl Into<String>, color: Color) -> Element<'a, Message> {
     container(text(label.into()).size(11).color(color))
         .padding([2, 7])
         .style(move |_theme| container::Style {
@@ -333,78 +466,8 @@ fn chip<'a>(label: impl Into<String>, color: Color) -> Element<'a, Message> {
         .into()
 }
 
-fn badge<'a>(tokens: Tokens, kind: ChangeKind, staged: bool) -> Element<'a, Message> {
-    let letter = kind_letter(kind);
-    let color = if letter.is_empty() {
-        tokens.muted_foreground
-    } else {
-        kind_color(tokens, kind, staged)
-    };
-    container(text(letter).size(10).font(theme::mono()).color(color))
-        .width(14)
-        .align_x(Alignment::Center)
-        .into()
-}
-
-fn kind_letter(kind: ChangeKind) -> &'static str {
-    match kind {
-        ChangeKind::Unmodified | ChangeKind::Ignored => "",
-        ChangeKind::Added => "A",
-        ChangeKind::Deleted => "D",
-        ChangeKind::Modified => "M",
-        ChangeKind::Renamed => "R",
-        ChangeKind::Copied => "C",
-        ChangeKind::Untracked => "U",
-        ChangeKind::Conflicted => "!",
-    }
-}
-
-fn kind_label(kind: ChangeKind) -> &'static str {
-    match kind {
-        ChangeKind::Unmodified => "unmodified",
-        ChangeKind::Added => "added",
-        ChangeKind::Deleted => "deleted",
-        ChangeKind::Modified => "modified",
-        ChangeKind::Renamed => "renamed",
-        ChangeKind::Copied => "copied",
-        ChangeKind::Untracked => "untracked",
-        ChangeKind::Conflicted => "conflicted",
-        ChangeKind::Ignored => "ignored",
-    }
-}
-
-fn kind_color(tokens: Tokens, kind: ChangeKind, staged: bool) -> Color {
-    match kind {
-        ChangeKind::Added if staged => tokens.added,
-        ChangeKind::Added => tokens.untracked,
-        ChangeKind::Untracked => tokens.untracked,
-        ChangeKind::Deleted => tokens.deleted,
-        ChangeKind::Modified => tokens.modified,
-        ChangeKind::Renamed | ChangeKind::Copied => tokens.renamed,
-        ChangeKind::Conflicted => tokens.conflicted,
-        ChangeKind::Unmodified | ChangeKind::Ignored => tokens.muted_foreground,
-    }
-}
-
-fn counts_label(status: Option<&RepoStatus>) -> String {
-    let Some(status) = status else {
-        return String::new();
-    };
-    let staged = status
-        .entries
-        .iter()
-        .filter(|entry| changed(entry.index))
-        .count();
-    let unstaged = status
-        .entries
-        .iter()
-        .filter(|entry| changed(entry.worktree))
-        .count();
-    format!("{staged} staged · {unstaged} unstaged")
-}
-
-fn changed(kind: ChangeKind) -> bool {
-    !matches!(kind, ChangeKind::Unmodified | ChangeKind::Ignored)
+pub fn short_sha(sha: &str) -> &str {
+    sha.get(..7).unwrap_or(sha)
 }
 
 /// Exposed for the tab strip: finds a tab by repo id.

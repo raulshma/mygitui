@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use parking_lot::Mutex;
 use serde::Serialize;
@@ -10,7 +10,11 @@ use crate::service::{engine_err, enqueue_read, enqueue_remote_read, finish_op, g
 
 /// Open (or reuse) the repository at/above `path` and start its watcher.
 pub async fn repo_open(services: &AppServices, path: String) -> Result<RepoInfo, String> {
-    services.repos.open(Path::new(&path)).map_err(engine_err)
+    // Recents persist the reported root: resolve it now so entries stay
+    // valid when the app is launched from a different cwd (or via a
+    // relative path). `discover` reports workdir relative to its input.
+    let resolved = std::fs::canonicalize(&path).unwrap_or_else(|_| PathBuf::from(&path));
+    services.repos.open(&resolved).map_err(engine_err)
 }
 
 /// Close a repository: stop its watcher, cancel its streams, drop caches.
