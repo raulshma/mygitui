@@ -710,7 +710,7 @@ impl App {
         )
     }
 
-    fn visible_rows<'a>(tab: &'a Tab) -> Vec<&'a StatusRow> {
+    fn visible_rows(tab: &Tab) -> Vec<&StatusRow> {
         filter_sections(&tab.status_index, &tab.filter)
             .into_iter()
             .flat_map(|section| section.rows)

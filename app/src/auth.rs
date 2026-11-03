@@ -43,9 +43,6 @@ use serde::Serialize;
 use crate::credential_helper;
 use crate::engine::types::RepoId;
 
-/// `auth-request` event name (contracts.md, Events M2).
-pub const AUTH_REQUEST_EVENT: &str = "auth-request";
-
 /// How long the credentials callback waits for `auth_respond` before
 /// giving up (the op fails with a timeout error; nothing stays wedged).
 const AUTH_TIMEOUT: Duration = Duration::from_secs(60);

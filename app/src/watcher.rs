@@ -36,9 +36,6 @@ use crate::engine::types::RepoId;
 /// Debounce window: a batch is emitted after this much FS quiet time.
 pub const DEBOUNCE: Duration = Duration::from_millis(200);
 
-/// Tauri event name for emitted batches (registry: docs/contracts.md).
-pub const REPO_CHANGED_EVENT: &str = "repo-changed";
-
 /// Backoff schedule for watcher restarts; the thread dies after these are
 /// exhausted without a successful restart (the repo must be reopened).
 const RETRY_BACKOFF: [Duration; 3] = [

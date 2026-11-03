@@ -171,18 +171,6 @@ pub fn kind_label(kind: ChangeKind) -> &'static str {
     }
 }
 
-/// Row-key friendly classification used for CSS-like classes.
-pub fn kind_class(kind: ChangeKind) -> &'static str {
-    match kind {
-        ChangeKind::Added => "added",
-        ChangeKind::Deleted => "deleted",
-        ChangeKind::Renamed | ChangeKind::Copied => "renamed",
-        ChangeKind::Untracked => "untracked",
-        ChangeKind::Conflicted => "conflicted",
-        _ => "modified",
-    }
-}
-
 /// Build the two-section index. `key_prefix` scopes keys for submodules.
 pub fn build_status_index(entries: &[StatusEntry], key_prefix: Option<&str>) -> StatusIndex {
     let mut index = StatusIndex::default();
@@ -380,21 +368,6 @@ pub fn remap_selection(
     next
 }
 
-/// Rows an action applies to: the clicked row alone, or the whole selection
-/// when the clicked row is part of it (document order).
-pub fn action_rows<'a>(
-    target: &'a StatusRow,
-    selected: &HashSet<String>,
-    rows: &'a [StatusRow],
-) -> Vec<&'a StatusRow> {
-    if !selected.contains(&target.key) {
-        return vec![target];
-    }
-    rows.iter()
-        .filter(|row| selected.contains(&row.key))
-        .collect()
-}
-
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SelectionActions {
     pub unstage: Vec<String>,
@@ -442,10 +415,6 @@ pub fn count_label(verb: &str, count: usize) -> String {
 /// True when the index holds anything a commit would pick up.
 pub fn has_staged_changes(entries: &[StatusEntry]) -> bool {
     entries.iter().any(|entry| is_change_kind(entry.index))
-}
-
-pub fn fixup_message(summary: &str) -> String {
-    format!("fixup! {}", summary.split('\n').next().unwrap_or("").trim())
 }
 
 #[cfg(test)]
@@ -620,15 +589,13 @@ mod tests {
     }
 
     #[test]
-    fn staged_detection_and_fixup() {
+    fn staged_detection() {
         let entries = vec![
             entry("a", ChangeKind::Added, ChangeKind::Unmodified),
             entry("b", ChangeKind::Unmodified, ChangeKind::Untracked),
         ];
         assert!(has_staged_changes(&entries));
         assert!(!has_staged_changes(&entries[1..]));
-        assert_eq!(fixup_message("Fix parser\n\nbody"), "fixup! Fix parser");
-        assert_eq!(fixup_message(""), "fixup! ");
     }
 
     #[test]

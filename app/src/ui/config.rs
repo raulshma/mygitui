@@ -191,10 +191,12 @@ mod tests {
     #[test]
     fn config_round_trips_through_disk() {
         let dir = temp_dir("roundtrip");
-        let mut config = Config::default();
-        config.theme = theme::Mode::Dark;
-        config.diff_wrap = true;
-        config.auto_fetch_minutes = 5;
+        let mut config = Config {
+            theme: theme::Mode::Dark,
+            diff_wrap: true,
+            auto_fetch_minutes: 5,
+            ..Default::default()
+        };
         config.note_recent("C:\\repos\\alpha", 7);
         config.save(&dir).expect("save");
         let loaded = Config::load(&dir);

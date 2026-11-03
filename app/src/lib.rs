@@ -8,19 +8,27 @@ mod auth;
 mod cli;
 mod credential_helper;
 mod diffcore;
+// Backend modules below are retained for panels that land in later
+// milestones (terminal, file tree, open-in-editor, AI/opencode, secrets
+// settings) and are dead until their iced wiring arrives. Drop each allow
+// as the matching panel starts using its backend.
+#[allow(dead_code)]
 mod editors;
 mod forge;
 #[cfg(test)]
 mod forge_tests;
+#[allow(dead_code)]
 mod keyring_store;
 mod maintenance;
 mod mergetool;
+#[allow(dead_code)]
 mod opencode;
 mod ops;
 mod process;
 mod projects;
 #[cfg(test)]
 mod prop_tests;
+#[allow(dead_code)]
 mod pty;
 #[cfg(test)]
 mod pty_tests;
@@ -30,6 +38,7 @@ mod rt;
 pub mod service;
 mod ui;
 mod watcher;
+#[allow(dead_code)]
 mod workspace;
 #[cfg(test)]
 mod workspace_tests;

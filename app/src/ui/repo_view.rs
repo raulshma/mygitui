@@ -312,12 +312,7 @@ pub fn view<'a>(tabs: &'a [Tab], active: usize, tokens: Tokens) -> Element<'a, M
 /// The modal dialog a tab currently asks for, if any.
 fn dialog_overlay<'a>(tab: &'a Tab, tokens: Tokens) -> Option<Element<'a, Message>> {
     if let Some(paths) = &tab.pending_discard {
-        let mut detail = paths
-            .iter()
-            .take(6)
-            .map(|path| path.clone())
-            .collect::<Vec<_>>()
-            .join("\n");
+        let mut detail = paths.iter().take(6).cloned().collect::<Vec<_>>().join("\n");
         if paths.len() > 6 {
             detail.push_str(&format!("\n… and {} more", paths.len() - 6));
         }

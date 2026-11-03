@@ -32,12 +32,6 @@ use serde::Serialize;
 
 use crate::engine::types::RepoId;
 
-/// `op-progress` event name (contracts.md, Events M2).
-pub const OP_PROGRESS_EVENT: &str = "op-progress";
-
-/// `op-log` event name: raw, per-line child output (hooks, CLI fallbacks).
-pub const OP_LOG_EVENT: &str = "op-log";
-
 /// Minimum interval between two throttled progress events for one op
 /// (mirrors the clone-progress throttle in service::repo).
 pub(crate) const THROTTLE_MS: u64 = 80;

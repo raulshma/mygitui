@@ -57,6 +57,9 @@ const fn rgba(hex: u32, a: f32) -> Color {
 }
 
 /// One resolved palette. Every field maps to a token the old CSS exposed.
+/// The port is intentionally complete; tokens panels have not adopted yet
+/// (sidebar, popover, input, ring) stay so the palette does not regress.
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy)]
 pub struct Tokens {
     pub dark: bool,
@@ -197,18 +200,22 @@ impl Tokens {
         with_alpha(self.deleted, 0.13)
     }
 
+    #[allow(dead_code)]
     pub fn modified_bg(&self) -> Color {
         with_alpha(self.modified, 0.14)
     }
 
+    #[allow(dead_code)]
     pub fn renamed_bg(&self) -> Color {
         with_alpha(self.renamed, 0.13)
     }
 
+    #[allow(dead_code)]
     pub fn untracked_bg(&self) -> Color {
         with_alpha(self.untracked, 0.12)
     }
 
+    #[allow(dead_code)]
     pub fn conflicted_bg(&self) -> Color {
         with_alpha(self.conflicted, 0.16)
     }
@@ -359,9 +366,4 @@ pub fn surface_style(tokens: Tokens) -> impl Fn(&Theme) -> iced::widget::contain
         shadow: Shadow::default(),
         snap: true,
     }
-}
-
-/// Separator rule colour.
-pub fn rule_color(tokens: Tokens) -> Color {
-    tokens.border
 }

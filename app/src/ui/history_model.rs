@@ -37,13 +37,6 @@ impl HistoryState {
         };
     }
 
-    pub fn reset(&mut self) {
-        let request_id = self.request_id;
-        let selected = self.selected.take();
-        self.begin(request_id);
-        self.selected = selected;
-    }
-
     /// Append one page. Returns false for stale generations.
     pub fn accept(&mut self, page: LogPage) -> bool {
         if page.generation < self.generation {
@@ -80,10 +73,6 @@ impl HistoryState {
         self.loading = page.next_cursor.is_some();
         self.complete = page.next_cursor.is_none();
         true
-    }
-
-    pub fn find(&self, sha: &str) -> Option<usize> {
-        self.commits.iter().position(|commit| commit.sha == sha)
     }
 
     pub fn selected_commit(&self) -> Option<&CommitInfo> {
@@ -158,7 +147,6 @@ pub enum HistoryFilterField {
     After,
     Before,
     Pickaxe,
-    PickaxeRegex,
 }
 
 impl FilterFields {
@@ -170,7 +158,6 @@ impl FilterFields {
             HistoryFilterField::After => &mut self.after,
             HistoryFilterField::Before => &mut self.before,
             HistoryFilterField::Pickaxe => &mut self.pickaxe,
-            HistoryFilterField::PickaxeRegex => &mut self.pickaxe_regex,
         }
     }
 
@@ -352,7 +339,6 @@ mod tests {
         assert!(!state.loading);
         assert!(state.complete);
         assert_eq!(state.len(), 3);
-        assert_eq!(state.find("b"), Some(1));
         assert_eq!(state.selected_commit().map(|c| c.sha.as_str()), None);
         state.selected = Some("c".to_string());
         assert_eq!(state.selected_commit().unwrap().sha, "c");

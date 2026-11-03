@@ -195,7 +195,7 @@ impl ActionRegistry {
 
     /// Register a freshly spawned child under `run_id`. Prunes finished
     /// entries when the map outgrows [`MAX_TRACKED_RUNS`].
-    pub fn register(
+    pub(crate) fn register(
         &self,
         run_id: &str,
         repo_id: &str,

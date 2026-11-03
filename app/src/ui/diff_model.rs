@@ -11,7 +11,6 @@ pub const HUNK_HEADER_HEIGHT: f32 = 26.0;
 pub const LINE_HEIGHT: f32 = 20.0;
 pub const BINARY_HEIGHT: f32 = 56.0;
 pub const IMAGE_HEIGHT: f32 = 384.0;
-pub const TAB_SIZE: usize = 8;
 
 pub fn is_context(origin: char) -> bool {
     origin == ' ' || origin == '='
@@ -69,18 +68,6 @@ impl DiffRow {
             Self::Image { .. } => IMAGE_HEIGHT,
         }
     }
-
-    pub fn file(self) -> usize {
-        match self {
-            Self::FileHeader { file, .. }
-            | Self::HunkHeader { file, .. }
-            | Self::Line { file, .. }
-            | Self::Context { file, .. }
-            | Self::Pair { file, .. }
-            | Self::Binary { file }
-            | Self::Image { file } => file,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -91,12 +78,6 @@ pub struct DiffRowModel {
     pub max_text_chars: usize,
     pub total_additions: u32,
     pub total_deletions: u32,
-}
-
-impl DiffRowModel {
-    pub fn row_count(&self) -> usize {
-        self.rows.len()
-    }
 }
 
 /// `(old, new)` line counts of one hunk.
@@ -163,28 +144,6 @@ pub fn file_kind_letter(kind: ChangeKind) -> &'static str {
         ChangeKind::Renamed => "R",
         _ => "M",
     }
-}
-
-pub fn file_kind_label(kind: ChangeKind) -> &'static str {
-    match kind {
-        ChangeKind::Added => "Added",
-        ChangeKind::Deleted => "Deleted",
-        ChangeKind::Renamed => "Renamed",
-        _ => "Modified",
-    }
-}
-
-/// Display width with eight-column tab stops.
-pub fn visual_columns(text: &str) -> usize {
-    let mut column = 0;
-    for ch in text.chars() {
-        if ch == '\t' {
-            column += TAB_SIZE - (column % TAB_SIZE);
-        } else {
-            column += 1;
-        }
-    }
-    column
 }
 
 /// Build the flat row list. `collapsed` holds file indices whose bodies are
@@ -312,20 +271,10 @@ pub struct Bucket {
 pub struct RowLayout {
     pub buckets: Vec<Bucket>,
     pub total_height: f32,
-    pub row_count: usize,
-}
-
-impl RowLayout {
-    pub fn is_empty(&self) -> bool {
-        self.row_count == 0
-    }
 }
 
 pub fn build_layout(rows: &[DiffRow]) -> RowLayout {
-    let mut layout = RowLayout {
-        row_count: rows.len(),
-        ..RowLayout::default()
-    };
+    let mut layout = RowLayout::default();
     let mut top = 0.0;
     let mut start = 0usize;
     while start < rows.len() {
@@ -397,20 +346,6 @@ pub fn visible_slices(
     slices
 }
 
-/// Absolute y of one row.
-pub fn row_top(layout: &RowLayout, row: usize) -> f32 {
-    if layout.buckets.is_empty() {
-        return 0.0;
-    }
-    let row = row.min(layout.row_count.saturating_sub(1));
-    let index = layout
-        .buckets
-        .partition_point(|bucket| bucket.first_row <= row)
-        .saturating_sub(1);
-    let bucket = &layout.buckets[index];
-    bucket.top + (row - bucket.first_row) as f32 * bucket.row_height
-}
-
 /// New-side line selection for line-granular staging. Identity is
 /// `(file, hunk, new_no)`; only lines with a new-side number are selectable.
 #[derive(Debug, Clone, Default)]
@@ -478,13 +413,6 @@ impl LineSelection {
             }
         }
         ranges
-    }
-
-    pub fn count_for(&self, file: usize, hunk: usize) -> usize {
-        self.lines
-            .iter()
-            .filter(|(f, h, _)| *f == file && *h == hunk)
-            .count()
     }
 }
 
@@ -672,8 +600,6 @@ mod tests {
         let slices = visible_slices(&layout, 70.0, 40.0, 0.0);
         assert_eq!(slices[0].first_row, 2);
         assert_eq!(slices[0].top, 66.0);
-        assert_eq!(row_top(&layout, 3), 86.0);
-        assert_eq!(row_top(&layout, 99), 106.0);
     }
 
     #[test]
@@ -705,21 +631,12 @@ mod tests {
     }
 
     #[test]
-    fn visual_columns_expand_tabs() {
-        assert_eq!(visual_columns("abc"), 3);
-        assert_eq!(visual_columns("\tx"), 9);
-        assert_eq!(visual_columns("a\tb"), 9);
-        assert_eq!(visual_columns("12345678\tx"), 17);
-    }
-
-    #[test]
     fn line_selection_merges_ranges_and_extends() {
         let mut selection = LineSelection::default();
         selection.toggle(0, 0, 3, false);
         selection.toggle(0, 0, 5, false);
         selection.toggle(0, 0, 4, false);
         assert_eq!(selection.ranges(0, 0), vec![(3, 5)]);
-        assert_eq!(selection.count_for(0, 0), 3);
 
         let mut selection = LineSelection::default();
         selection.toggle(0, 0, 2, false);
