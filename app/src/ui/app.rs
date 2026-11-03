@@ -111,6 +111,8 @@ struct ActiveOp {
 struct Notice {
     text: String,
     error: bool,
+    /// Optional URL rendered as an `Open` footer button (release links).
+    link: Option<String>,
 }
 
 /// In-progress merge/rebase/sequencer control pressed in the repo header.
@@ -138,6 +140,7 @@ impl Notice {
         Self {
             text: text.into(),
             error: false,
+            link: None,
         }
     }
 
@@ -145,6 +148,15 @@ impl Notice {
         Self {
             text: text.into(),
             error: true,
+            link: None,
+        }
+    }
+
+    fn with_link(text: impl Into<String>, link: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            error: false,
+            link: Some(link.into()),
         }
     }
 }
@@ -443,6 +455,12 @@ pub enum Message {
     AiResultClose,
     /// Copy arbitrary text (AI results) to the clipboard.
     CopyText(String),
+    /// Palette: query the latest GitHub release.
+    CheckUpdates,
+    /// Update-check completion.
+    UpdateChecked(Result<crate::update_check::Update, String>),
+    /// Open a URL in the OS default handler (update check, docs links).
+    OpenUrl(String),
     /// Toggle the AI master switch (palette).
     AiToggleEnabled,
     /// Toggle opt-in for the active repo (palette).
@@ -888,6 +906,13 @@ impl App {
             repo_id.is_some(),
             None,
         );
+        register(
+            "app.check_updates",
+            "Check for updates",
+            "Settings",
+            true,
+            None,
+        );
         register("view.cycle_theme", "Cycle theme", "Settings", true, None);
         register(
             "view.cycle_autofetch",
@@ -1004,6 +1029,7 @@ impl App {
             "ai.branch_name" => self.update(Message::AiGenerate(AiAction::BranchName)),
             "ai.toggle_enabled" => self.update(Message::AiToggleEnabled),
             "ai.toggle_repo_opt_in" => self.update(Message::AiToggleRepoOptIn),
+            "app.check_updates" => self.update(Message::CheckUpdates),
             "view.cycle_theme" => self.update(Message::CycleTheme),
             "view.cycle_autofetch" => self.update(Message::CycleAutoFetch),
             // Context-menu commands carry their target after a `:` prefix.
@@ -4003,6 +4029,37 @@ impl App {
                     std::convert::identity,
                 )
             }
+            Message::CheckUpdates => {
+                self.last_op = Some("Checking for updates…".to_string());
+                Task::perform(
+                    async move { Message::UpdateChecked(crate::update_check::check().await) },
+                    std::convert::identity,
+                )
+            }
+            Message::UpdateChecked(result) => match result {
+                Ok(update) => {
+                    self.notice = Some(match update {
+                        crate::update_check::Update::UpToDate(version) => {
+                            Notice::plain(format!("Up to date (v{version})"))
+                        }
+                        crate::update_check::Update::Available(tag, url) => {
+                            Notice::with_link(format!("New release {tag} available"), url)
+                        }
+                    });
+                    Task::none()
+                }
+                Err(err) => {
+                    self.notice = Some(Notice::error(format!("Update check failed: {err}")));
+                    Task::none()
+                }
+            },
+            Message::OpenUrl(url) => Task::perform(
+                async move {
+                    let _ = tokio::task::spawn_blocking(move || open::that_detached(&url)).await;
+                    Message::Noop
+                },
+                std::convert::identity,
+            ),
             Message::AiResultClose => {
                 self.ai_result = None;
                 Task::none()
@@ -4576,6 +4633,14 @@ impl App {
             );
         }
 
+        if let Some(link) = self.notice.as_ref().and_then(|notice| notice.link.clone()) {
+            bar = bar.push(
+                button(text("Open").size(11))
+                    .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
+                    .padding([2, 8])
+                    .on_press(Message::OpenUrl(link)),
+            );
+        }
         if self.notice.is_some() {
             bar = bar.push(
                 button(text("Dismiss").size(11))
@@ -4755,8 +4820,60 @@ fn commit_row_menu(sha: &str) -> context_menu::Menu {
 }
 
 /// First non-flag argument; used for `mygitui <path>` first launch.
+/// First usable launch argument: a plain repository path (non-flag), or a
+/// `mygitui://open?path=…` deep link. Flags are skipped; unparseable deep
+/// links are too (later args still get a chance).
 fn first_repo_arg(args: &[String]) -> Option<String> {
-    args.iter().find(|arg| !arg.starts_with('-')).cloned()
+    args.iter()
+        .filter(|arg| !arg.starts_with('-'))
+        .find_map(|arg| {
+            if let Some(rest) = arg.strip_prefix("mygitui://open") {
+                let query = rest.trim_start_matches('/');
+                let query = query.strip_prefix('?').unwrap_or(query);
+                query.split('&').find_map(|pair| {
+                    pair.strip_prefix("path=")
+                        .map(percent_decode)
+                        .filter(|path| !path.is_empty())
+                })
+            } else {
+                Some(arg.clone())
+            }
+        })
+}
+
+/// Minimal percent-decoding for deep-link query values (`%XX` and `+`).
+fn percent_decode(input: &str) -> String {
+    let bytes = input.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'+' => {
+                out.push(b' ');
+                i += 1;
+            }
+            b'%' if i + 2 < bytes.len() => {
+                match std::str::from_utf8(&bytes[i + 1..i + 3])
+                    .ok()
+                    .and_then(|hex| u8::from_str_radix(hex, 16).ok())
+                {
+                    Some(byte) => {
+                        out.push(byte);
+                        i += 3;
+                    }
+                    None => {
+                        out.push(b'%');
+                        i += 1;
+                    }
+                }
+            }
+            byte => {
+                out.push(byte);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 #[cfg(test)]
@@ -4769,5 +4886,25 @@ mod tests {
         assert_eq!(first_repo_arg(&args).as_deref(), Some("C:\\repo"));
         assert_eq!(first_repo_arg(&[]), None);
         assert_eq!(first_repo_arg(&["-v".to_string()]), None);
+    }
+
+    #[test]
+    fn first_repo_arg_decodes_deep_links() {
+        assert_eq!(
+            first_repo_arg(&["mygitui://open?path=%2Fhome%2Fme%2Fmy+repo".to_string()]),
+            Some("/home/me/my repo".to_string())
+        );
+        assert_eq!(
+            first_repo_arg(&["mygitui://open/?path=/repos/demo".to_string()]),
+            Some("/repos/demo".to_string())
+        );
+        assert_eq!(
+            first_repo_arg(&["--flag".to_string(), "mygitui://open".to_string()]),
+            None
+        );
+        assert_eq!(
+            first_repo_arg(&["mygitui://bogus".to_string()]),
+            Some("mygitui://bogus".to_string())
+        );
     }
 }
