@@ -17,8 +17,8 @@ use iced::{window, Alignment, Element, Length, Subscription, Task};
 use crate::engine::types::{
     BranchInfo, ChangeKind, CheckpointInfo, CommitOptions, ConflictResolution, DiffSide,
     FetchOptions, FileDiff, LineRange, MergeOptions, MergeOutcome, MergeResult, NetStats,
-    PullOptions, PushOptions, RemoteInfo, RepoId, RepoInfo, RepoStatus, ResetKind, StageRequest,
-    StageTarget, StashInfo,
+    PreviewInfo, PullOptions, PushOptions, RemoteInfo, RepoId, RepoInfo, RepoStatus, ResetKind,
+    StageRequest, StageTarget, StashInfo,
 };
 use crate::remote::prompts::SecretAnswer;
 use crate::service::events::BackendEvent;
@@ -276,6 +276,10 @@ pub enum Message {
     },
     ResetRequested(String),
     ResetKindSelected(ResetKind),
+    ResetPreviewLoaded {
+        repo_id: RepoId,
+        result: Result<PreviewInfo, String>,
+    },
     ResetConfirmed,
     ResetDone {
         repo_id: RepoId,
@@ -1783,14 +1787,50 @@ impl App {
                     sha,
                     summary,
                     kind: ResetKind::Mixed,
+                    preview: None,
                 });
                 Task::none()
             }
             Message::ResetKindSelected(kind) => {
+                let mut task = Task::none();
                 if let Some(tab) = self.tabs.get_mut(self.active) {
                     if let Some(request) = &mut tab.pending_reset {
                         request.kind = kind;
+                        request.preview = None;
+                        if dialog::reset_kind_discards_worktree(kind) {
+                            let repo_id = tab.repo.repo_id.clone();
+                            let sha = request.sha.clone();
+                            let services = self.services.clone();
+                            task = Task::perform(
+                                async move {
+                                    // Both param spellings: the libgit2
+                                    // engine reads "to", the remote engine
+                                    // "target".
+                                    let params = serde_json::json!({ "to": sha, "target": sha });
+                                    let result = crate::service::misc::ops_preview(
+                                        &services,
+                                        repo_id.clone(),
+                                        "reset_hard".to_string(),
+                                        params,
+                                    )
+                                    .await;
+                                    Message::ResetPreviewLoaded { repo_id, result }
+                                },
+                                std::convert::identity,
+                            );
+                        }
                     }
+                }
+                task
+            }
+            Message::ResetPreviewLoaded { repo_id, result } => {
+                let Some(index) = repo_view::tab_index(&self.tabs, &repo_id) else {
+                    return Task::none();
+                };
+                // Advisory only: a failed preview just leaves the note out.
+                if let (Ok(preview), Some(request)) = (result, &mut self.tabs[index].pending_reset)
+                {
+                    request.preview = Some(preview);
                 }
                 Task::none()
             }

@@ -6,7 +6,7 @@
 use iced::widget::{button, column, container, mouse_area, row, text, Space};
 use iced::{Alignment, Background, Border, Element, Length};
 
-use crate::engine::types::ResetKind;
+use crate::engine::types::{PreviewInfo, ResetKind};
 
 use super::app::Message;
 use super::theme::{self, Tokens};
@@ -27,6 +27,27 @@ pub struct ResetRequest {
     pub sha: String,
     pub summary: String,
     pub kind: ResetKind,
+    /// `ops_preview` result for worktree-discarding kinds (loaded async;
+    /// `None` while loading or when the mode keeps the files).
+    pub preview: Option<PreviewInfo>,
+}
+
+/// Reset modes that discard worktree changes (and therefore get a preview).
+pub fn reset_kind_discards_worktree(kind: ResetKind) -> bool {
+    matches!(kind, ResetKind::Hard | ResetKind::Keep | ResetKind::Merge)
+}
+
+/// Detail box content for a destructive-op preview: the op summary plus up
+/// to `max` affected paths (with an "and N more" tail).
+pub fn preview_detail(preview: &PreviewInfo, max: usize) -> String {
+    let mut lines = vec![preview.summary.clone()];
+    for file in preview.files.iter().take(max) {
+        lines.push(format!("{}  {}", file.change, file.path));
+    }
+    if preview.files.len() > max {
+        lines.push(format!("… and {} more", preview.files.len() - max));
+    }
+    lines.join("\n")
 }
 
 const RESET_KINDS: [(ResetKind, &str, &str); 5] = [
@@ -108,7 +129,7 @@ pub fn reset<'a>(tokens: Tokens, request: &ResetRequest) -> Element<'a, Message>
         );
     }
 
-    let body = column![
+    let mut body = column![
         text(format!("Reset to {}", request.summary))
             .size(14)
             .font(theme::semibold()),
@@ -123,6 +144,43 @@ pub fn reset<'a>(tokens: Tokens, request: &ResetRequest) -> Element<'a, Message>
         options,
     ]
     .spacing(2);
+
+    if reset_kind_discards_worktree(request.kind) {
+        match &request.preview {
+            Some(preview) => {
+                body = body.push(
+                    container(
+                        text(preview_detail(preview, 5))
+                            .size(11)
+                            .font(theme::mono())
+                            .color(if preview.files.is_empty() {
+                                tokens.muted_foreground
+                            } else {
+                                tokens.deleted
+                            }),
+                    )
+                    .padding([6, 8])
+                    .width(Length::Fill)
+                    .style(move |_theme| container::Style {
+                        background: Some(Background::Color(tokens.muted)),
+                        border: Border {
+                            color: tokens.border,
+                            width: 1.0,
+                            radius: 4.0.into(),
+                        },
+                        ..container::Style::default()
+                    }),
+                );
+            }
+            None => {
+                body = body.push(
+                    text("Checking what would be discarded…")
+                        .size(11)
+                        .color(tokens.muted_foreground),
+                );
+            }
+        }
+    }
 
     let confirm_label = match request.kind {
         ResetKind::Soft => "Reset (soft)",
@@ -269,4 +327,43 @@ pub fn confirm<'a>(
         });
 
     mouse_area(scrim).on_press(cancel).into()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn preview(files: &[&str]) -> PreviewInfo {
+        PreviewInfo {
+            kind: "reset_hard".to_string(),
+            summary: "Hard reset to abc1234".to_string(),
+            files: files
+                .iter()
+                .map(|path| crate::engine::types::PreviewFile {
+                    path: (*path).to_string(),
+                    change: "modified".to_string(),
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn preview_detail_lists_files_and_caps() {
+        let info = preview(&["a.txt", "b.txt"]);
+        assert_eq!(
+            preview_detail(&info, 5),
+            "Hard reset to abc1234\nmodified  a.txt\nmodified  b.txt"
+        );
+        let info = preview(&["a.txt", "b.txt", "c.txt"]);
+        assert!(preview_detail(&info, 2).ends_with("… and 1 more"));
+    }
+
+    #[test]
+    fn only_worktree_discarding_reset_kinds_get_a_preview() {
+        assert!(reset_kind_discards_worktree(ResetKind::Hard));
+        assert!(reset_kind_discards_worktree(ResetKind::Keep));
+        assert!(reset_kind_discards_worktree(ResetKind::Merge));
+        assert!(!reset_kind_discards_worktree(ResetKind::Soft));
+        assert!(!reset_kind_discards_worktree(ResetKind::Mixed));
+    }
 }
