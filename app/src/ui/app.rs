@@ -29,6 +29,7 @@ use super::config::{self, Config, RecentRepo};
 use super::context_menu;
 use super::dialog::{self, ResetRequest};
 use super::diff_view::{DiffPane, DiffSlot};
+use super::forge_panel;
 use super::history_model::{to_log_filter, FilterFields, HistoryFilterField};
 use super::home;
 use super::palette;
@@ -387,6 +388,8 @@ pub enum Message {
     Terminal(terminal::Msg),
     /// Show/hide the terminal dock.
     ToggleTerminal,
+    /// GitHub PR/CI panel (routed to the active tab).
+    Forge(forge_panel::Msg),
     /// Right-click on a status row (row key).
     StatusRowMenu {
         key: String,
@@ -405,6 +408,15 @@ pub enum Message {
     CherryPick(String),
     /// Revert a commit on the current branch.
     RevertCommit(String),
+    /// One image-diff side finished loading (blob or workdir read).
+    ImageLoaded {
+        repo_id: RepoId,
+        slot: DiffSlot,
+        path: String,
+        old: bool,
+        seq: u64,
+        result: Result<Vec<u8>, String>,
+    },
     /// Append a path pattern to `.gitignore` (status-row context menu).
     IgnorePath(String),
     /// `.gitignore` append finished.
@@ -680,6 +692,13 @@ impl App {
             None,
         );
         register(
+            "view.toggle_forge",
+            "Toggle forge panel",
+            "View",
+            repo_id.is_some(),
+            None,
+        );
+        register(
             "terminal.restart",
             "Restart terminal",
             "View",
@@ -806,6 +825,7 @@ impl App {
             "stash.toggle" => self.update(Message::ToggleStashPanel),
             "remotes.toggle" => self.update(Message::ToggleRemotePanel),
             "view.toggle_terminal" => self.update(Message::ToggleTerminal),
+            "view.toggle_forge" => self.update(Message::Forge(forge_panel::Msg::ToggleOpen)),
             "terminal.restart" => self.update(Message::Terminal(terminal::Msg::RestartPressed)),
             "network.fetch" => {
                 let remotes: Vec<String> = self
@@ -963,6 +983,355 @@ impl App {
         for tab in &mut self.tabs {
             tab.terminal.blur();
         }
+    }
+
+    /// Executes a forge panel action against `service::forge`. Results are
+    /// reported back through the panel's own `*Loaded` / `ActionDone`
+    /// messages; checkout and merge additionally refresh the repo (branch
+    /// changed / branch deleted).
+    fn run_forge_action(
+        &mut self,
+        repo_id: RepoId,
+        action: Option<forge_panel::Action>,
+    ) -> Task<Message> {
+        let Some(action) = action else {
+            return Task::none();
+        };
+        match action {
+            forge_panel::Action::Refresh { pr_state } => {
+                let services = self.services.clone();
+                let services2 = self.services.clone();
+                let services3 = self.services.clone();
+                let repo_id2 = repo_id.clone();
+                let repo_id3 = repo_id.clone();
+                Task::batch([
+                    Task::perform(
+                        async move {
+                            Message::Forge(forge_panel::Msg::StatusLoaded(
+                                crate::service::forge::forge_status(&services).await,
+                            ))
+                        },
+                        std::convert::identity,
+                    ),
+                    Task::perform(
+                        async move {
+                            Message::Forge(forge_panel::Msg::ContextLoaded(
+                                crate::service::forge::forge_context(&services2, repo_id2).await,
+                            ))
+                        },
+                        std::convert::identity,
+                    ),
+                    Task::perform(
+                        async move {
+                            Message::Forge(forge_panel::Msg::PrsLoaded {
+                                result: crate::service::forge::pr_list(
+                                    &services3, repo_id3, pr_state,
+                                )
+                                .await,
+                            })
+                        },
+                        std::convert::identity,
+                    ),
+                ])
+            }
+            forge_panel::Action::LoadPrDetails {
+                number,
+                head_branch,
+            } => {
+                let services = self.services.clone();
+                let services2 = self.services.clone();
+                let repo_id2 = repo_id.clone();
+                let repo_id3 = repo_id.clone();
+                Task::batch([
+                    Task::perform(
+                        async move {
+                            Message::Forge(forge_panel::Msg::ChecksLoaded {
+                                number,
+                                result: crate::service::forge::pr_checks(
+                                    &services, repo_id2, number,
+                                )
+                                .await,
+                            })
+                        },
+                        std::convert::identity,
+                    ),
+                    Task::perform(
+                        async move {
+                            let result = crate::service::forge::workflow_runs(
+                                &services2,
+                                repo_id3,
+                                None,
+                                (!head_branch.is_empty()).then_some(head_branch),
+                                None,
+                                None,
+                            )
+                            .await;
+                            Message::Forge(forge_panel::Msg::RunsLoaded { result })
+                        },
+                        std::convert::identity,
+                    ),
+                ])
+            }
+            forge_panel::Action::OpenUrl(url) => Task::perform(
+                async move {
+                    let _ = tokio::task::spawn_blocking(move || open::that_detached(&url)).await;
+                    Message::Noop
+                },
+                std::convert::identity,
+            ),
+            forge_panel::Action::CheckoutPr { number } => {
+                let services = self.services.clone();
+                let repo_id2 = repo_id.clone();
+                let checkout = Task::perform(
+                    async move {
+                        Message::Forge(forge_panel::Msg::ActionDone {
+                            number: Some(number),
+                            label: "Checkout".to_string(),
+                            result: crate::service::forge::pr_checkout(&services, repo_id2, number)
+                                .await,
+                        })
+                    },
+                    std::convert::identity,
+                );
+                let refresh = self.refresh(repo_id);
+                checkout.chain(refresh)
+            }
+            forge_panel::Action::MergePr {
+                number,
+                method,
+                delete_branch,
+            } => {
+                let services = self.services.clone();
+                let repo_id2 = repo_id.clone();
+                let merge = Task::perform(
+                    async move {
+                        Message::Forge(forge_panel::Msg::ActionDone {
+                            number: Some(number),
+                            label: "Merge".to_string(),
+                            result: crate::service::forge::pr_merge(
+                                &services,
+                                repo_id2,
+                                number,
+                                method.as_str().to_string(),
+                                delete_branch,
+                                false,
+                            )
+                            .await,
+                        })
+                    },
+                    std::convert::identity,
+                );
+                let refresh = self.refresh(repo_id);
+                merge.chain(refresh)
+            }
+            forge_panel::Action::ClosePr { number } => {
+                let services = self.services.clone();
+                Task::perform(
+                    async move {
+                        Message::Forge(forge_panel::Msg::ActionDone {
+                            number: Some(number),
+                            label: "Close".to_string(),
+                            result: crate::service::forge::pr_close(
+                                &services, repo_id, number, None,
+                            )
+                            .await,
+                        })
+                    },
+                    std::convert::identity,
+                )
+            }
+            forge_panel::Action::ReopenPr { number } => {
+                let services = self.services.clone();
+                Task::perform(
+                    async move {
+                        Message::Forge(forge_panel::Msg::ActionDone {
+                            number: Some(number),
+                            label: "Reopen".to_string(),
+                            result: crate::service::forge::pr_reopen(
+                                &services, repo_id, number, None,
+                            )
+                            .await,
+                        })
+                    },
+                    std::convert::identity,
+                )
+            }
+            forge_panel::Action::MarkReady { number, ready } => {
+                let services = self.services.clone();
+                Task::perform(
+                    async move {
+                        Message::Forge(forge_panel::Msg::ActionDone {
+                            number: Some(number),
+                            label: "Mark ready".to_string(),
+                            result: crate::service::forge::pr_ready(
+                                &services, repo_id, number, ready,
+                            )
+                            .await,
+                        })
+                    },
+                    std::convert::identity,
+                )
+            }
+            forge_panel::Action::CreatePr {
+                base,
+                head,
+                title,
+                body,
+            } => {
+                // `gh pr create` always uses the checked-out branch as head;
+                // refuse anything else instead of silently ignoring it.
+                let current = self
+                    .tabs
+                    .get(self.active)
+                    .and_then(|tab| match &tab.status {
+                        Load::Ready(status) => status.branch.clone(),
+                        _ => None,
+                    })
+                    .unwrap_or_default();
+                if !head.is_empty() && head != current {
+                    self.notice = Some(Notice::error(format!(
+                        "PR head must be the checked-out branch ({current})"
+                    )));
+                    return Task::none();
+                }
+                let services = self.services.clone();
+                Task::perform(
+                    async move {
+                        Message::Forge(forge_panel::Msg::PrCreated(
+                            crate::service::forge::pr_create(
+                                &services, repo_id, base, title, body, false,
+                            )
+                            .await,
+                        ))
+                    },
+                    std::convert::identity,
+                )
+            }
+        }
+    }
+
+    /// Kicks off blob/workdir reads for every image file of a freshly
+    /// loaded diff so [`diff_view::image_row`] can render previews. Slots
+    /// are reserved up-front so watcher refreshes don't retrigger loads.
+    fn ensure_images(&mut self, index: usize, slot: DiffSlot) -> Task<Message> {
+        let Some(tab) = self.tabs.get(index) else {
+            return Task::none();
+        };
+        let pane = match slot {
+            DiffSlot::Working => &tab.diff,
+            DiffSlot::Commit => &tab.commit_diff,
+        };
+        let paths: Vec<String> = pane
+            .files()
+            .iter()
+            .filter(|file| file.is_image)
+            .map(|file| file.path.clone())
+            .filter(|path| !pane.images.contains_key(path))
+            .collect();
+        if paths.is_empty() {
+            return Task::none();
+        }
+        let repo_id = tab.repo.repo_id.clone();
+        let seq = pane.seq;
+        let (commit_sha, parent_sha) = match slot {
+            DiffSlot::Working => (None, None),
+            DiffSlot::Commit => tab
+                .history
+                .selected_commit()
+                .map(|commit| (Some(commit.sha.clone()), commit.parents.first().cloned()))
+                .unwrap_or((None, None)),
+        };
+        {
+            let pane = match slot {
+                DiffSlot::Working => &mut self.tabs[index].diff,
+                DiffSlot::Commit => &mut self.tabs[index].commit_diff,
+            };
+            for path in &paths {
+                pane.images.entry(path.clone()).or_default();
+            }
+        }
+
+        let mut tasks = Vec::new();
+        for path in paths {
+            let old_rev = match slot {
+                DiffSlot::Working => Some("HEAD".to_string()),
+                DiffSlot::Commit => parent_sha.clone(),
+            };
+            if let Some(revision) = old_rev {
+                let services = self.services.clone();
+                let repo_id = repo_id.clone();
+                let path = path.clone();
+                tasks.push(Task::perform(
+                    async move {
+                        let result = crate::service::files::repo_read_blob_at(
+                            &services,
+                            repo_id.clone(),
+                            revision,
+                            path.clone(),
+                        )
+                        .await;
+                        Message::ImageLoaded {
+                            repo_id,
+                            slot,
+                            path,
+                            old: true,
+                            seq,
+                            result,
+                        }
+                    },
+                    std::convert::identity,
+                ));
+            }
+            let services = self.services.clone();
+            let repo_id = repo_id.clone();
+            let path = path.clone();
+            match slot {
+                DiffSlot::Working => tasks.push(Task::perform(
+                    async move {
+                        let result = crate::service::files::repo_read_file(
+                            &services,
+                            repo_id.clone(),
+                            path.clone(),
+                        )
+                        .await;
+                        Message::ImageLoaded {
+                            repo_id,
+                            slot,
+                            path,
+                            old: false,
+                            seq,
+                            result,
+                        }
+                    },
+                    std::convert::identity,
+                )),
+                DiffSlot::Commit => {
+                    if let Some(sha) = commit_sha.clone() {
+                        tasks.push(Task::perform(
+                            async move {
+                                let result = crate::service::files::repo_read_blob_at(
+                                    &services,
+                                    repo_id.clone(),
+                                    sha,
+                                    path.clone(),
+                                )
+                                .await;
+                                Message::ImageLoaded {
+                                    repo_id,
+                                    slot,
+                                    path,
+                                    old: false,
+                                    seq,
+                                    result,
+                                }
+                            },
+                            std::convert::identity,
+                        ));
+                    }
+                }
+            }
+        }
+        Task::batch(tasks)
     }
 
     fn open_repo(&mut self, path: String) -> Task<Message> {
@@ -1788,7 +2157,7 @@ impl App {
                     Ok(files) => pane.set_ready(files, split),
                     Err(err) => pane.set_failed(err),
                 }
-                Task::none()
+                self.ensure_images(index, slot)
             }
             Message::CommitMessageChanged(action) => {
                 if let Some(tab) = self.tabs.get_mut(self.active) {
@@ -3205,6 +3574,28 @@ impl App {
                 let action = terminal::update(&mut tab.terminal, msg);
                 self.run_terminal_action(action)
             }
+            Message::Forge(msg) => {
+                let Some(tab) = self.tabs.get_mut(self.active) else {
+                    return Task::none();
+                };
+                // Mirror the per-frame inputs the pure update half cannot
+                // see (its own state copy + the persistent view context).
+                if let Load::Ready(status) = &tab.status {
+                    if let Some(branch) = &status.branch {
+                        tab.forge.current_branch = branch.clone();
+                    }
+                    tab.forge_ctx.branch = status.branch.clone().unwrap_or_default();
+                    tab.forge_ctx.head_sha = status.head.clone().unwrap_or_default();
+                }
+                if let Some(list) = &tab.branches.list {
+                    let names: Vec<String> = list.iter().map(|b| b.name.clone()).collect();
+                    tab.forge.base_branches = names.clone();
+                    tab.forge_ctx.base_branches = names;
+                }
+                let action = forge_panel::update(&mut tab.forge, msg);
+                let repo_id = tab.repo.repo_id.clone();
+                self.run_forge_action(repo_id, action)
+            }
             Message::StatusRowMenu { key } => {
                 let menu = self
                     .tabs
@@ -3284,6 +3675,38 @@ impl App {
                     },
                     std::convert::identity,
                 )
+            }
+            Message::ImageLoaded {
+                repo_id,
+                slot,
+                path,
+                old,
+                seq,
+                result,
+            } => {
+                let Some(index) = repo_view::tab_index(&self.tabs, &repo_id) else {
+                    return Task::none();
+                };
+                let tab = &mut self.tabs[index];
+                let pane = match slot {
+                    DiffSlot::Working => &mut tab.diff,
+                    DiffSlot::Commit => &mut tab.commit_diff,
+                };
+                if pane.seq != seq {
+                    return Task::none();
+                }
+                if let Ok(bytes) = result {
+                    if !bytes.is_empty() {
+                        let handle = iced::widget::image::Handle::from_bytes(bytes);
+                        let entry = pane.images.entry(path).or_default();
+                        if old {
+                            entry.old = Some(handle);
+                        } else {
+                            entry.new = Some(handle);
+                        }
+                    }
+                }
+                Task::none()
             }
             Message::IgnorePath(pattern) => {
                 let Some(tab) = self.tabs.get(self.active) else {

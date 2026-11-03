@@ -17,6 +17,7 @@ use super::commit_bar;
 use super::commit_detail;
 use super::dialog::{self, ResetRequest};
 use super::diff_view::{self, DiffPane, DiffSlot, PaneMode};
+use super::forge_panel::{self, ForgeCtx};
 use super::history_model::{FilterFields, HistoryState};
 use super::history_panel;
 use super::remote_panel::{self, RemotesState};
@@ -96,6 +97,12 @@ pub struct Tab {
     pub branches: BranchesState,
     pub stashes: StashesState,
     pub remotes: RemotesState,
+    /// GitHub PR/CI panel state (dropdown, like the remotes panel). The
+    /// context lives beside it so the panel's `'a` borrows come from the
+    /// tab, not per-frame locals; the shell refreshes it on status/branch
+    /// loads and on every forge message.
+    pub forge: forge_panel::ForgeState,
+    pub forge_ctx: ForgeCtx,
     /// Embedded PTY terminal pane and its visibility toggle.
     pub terminal: terminal::State,
     pub terminal_open: bool,
@@ -149,6 +156,8 @@ impl Tab {
             branches: BranchesState::default(),
             stashes: StashesState::default(),
             remotes: RemotesState::default(),
+            forge: forge_panel::ForgeState::default(),
+            forge_ctx: ForgeCtx::default(),
             terminal_open: false,
             pending_discard: None,
             pending_branch_delete: None,
@@ -621,6 +630,14 @@ fn repo_header<'a>(tab: &'a Tab, tokens: Tokens) -> Element<'a, Message> {
                 .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
                 .padding([6, 10])
                 .on_press(Message::ToggleHistory),
+            button(text("Forge").size(11).color(if tab.forge.open {
+                tokens.primary
+            } else {
+                tokens.foreground
+            }))
+            .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
+            .padding([6, 10])
+            .on_press(Message::Forge(forge_panel::Msg::ToggleOpen)),
             button(text("Terminal").size(11).color(if tab.terminal_open {
                 tokens.primary
             } else {
@@ -715,7 +732,11 @@ fn workspace<'a>(tab: &'a Tab, tokens: Tokens) -> Element<'a, Message> {
         .height(Length::Fill)
         .style(theme::surface_style(tokens));
 
-    let main: Element<'a, Message> = if tab.branches.open || tab.stashes.open || tab.remotes.open {
+    let main: Element<'a, Message> = if tab.branches.open
+        || tab.stashes.open
+        || tab.remotes.open
+        || tab.forge.open
+    {
         // Dropdowns: overlaid on the workspace so opening them never
         // reflows the panes underneath. The branch picker anchors top-left,
         // the stash/checkpoint and remote panels top-right (opening one
@@ -753,6 +774,22 @@ fn workspace<'a>(tab: &'a Tab, tokens: Tokens) -> Element<'a, Message> {
                     .align_y(Alignment::Start)
                     .padding([6, 8])
                     .into(),
+            );
+        }
+        if tab.forge.open {
+            layers.push(
+                container(
+                    container(
+                        forge_panel::view(&tab.forge, tokens, &tab.forge_ctx).map(Message::Forge),
+                    )
+                    .width(Length::Fixed(520.0)),
+                )
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .align_x(Alignment::End)
+                .align_y(Alignment::Start)
+                .padding([6, 8])
+                .into(),
             );
         }
 

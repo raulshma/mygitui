@@ -25,6 +25,7 @@
 //! - [`context_menu`] — reusable right-click menu component
 //! - [`quick_switcher`] — repo quick-switcher overlay (ctrl/cmd+K)
 //! - [`terminal`] — embedded PTY terminal pane (monitor with input)
+//! - [`forge_panel`] — GitHub PRs, CI checks and workflow runs (gh CLI)
 
 mod app;
 mod branch_panel;
@@ -36,6 +37,7 @@ mod context_menu;
 mod dialog;
 mod diff_model;
 mod diff_view;
+mod forge_panel;
 mod graph_canvas;
 mod history_model;
 mod history_panel;
