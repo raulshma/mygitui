@@ -21,6 +21,9 @@
 //! - [`remote_panel`] — remotes, fetch/pull/push controls
 //! - [`prompts`] — credential, host-key and device-secret modals
 //! - [`dialog`] — modal confirmation overlay
+//! - [`palette`] — command palette overlay (ranked command registry)
+//! - [`context_menu`] — reusable right-click menu component
+//! - [`quick_switcher`] — repo quick-switcher overlay (ctrl/cmd+K)
 
 mod app;
 mod branch_panel;
@@ -28,6 +31,7 @@ mod bus;
 mod commit_bar;
 mod commit_detail;
 mod config;
+mod context_menu;
 mod dialog;
 mod diff_model;
 mod diff_view;
@@ -35,7 +39,9 @@ mod graph_canvas;
 mod history_model;
 mod history_panel;
 mod home;
+mod palette;
 mod prompts;
+mod quick_switcher;
 mod remote_panel;
 mod repo_view;
 mod stash_panel;

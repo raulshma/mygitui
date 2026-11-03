@@ -3,7 +3,9 @@
 //! Rendered as an expanding strip under the repo header (no overlay); the
 //! header branch chip toggles it.
 
-use iced::widget::{button, column, container, row, scrollable, text, text_input, Space};
+use iced::widget::{
+    button, column, container, mouse_area, row, scrollable, text, text_input, Space,
+};
 use iced::{Alignment, Background, Border, Element, Length};
 
 use crate::engine::types::BranchInfo;
@@ -196,15 +198,20 @@ fn branch_row<'a>(branch: &'a BranchInfo, tokens: Tokens) -> Element<'a, Message
         );
     }
 
-    container(line)
-        .width(Length::Fill)
-        .style(move |_theme| container::Style {
-            background: Some(Background::Color(if branch.is_head {
-                theme::with_alpha(tokens.primary, 0.08)
-            } else {
-                theme::with_alpha(tokens.muted, 0.0)
-            })),
-            ..container::Style::default()
-        })
-        .into()
+    mouse_area(
+        container(line)
+            .width(Length::Fill)
+            .style(move |_theme| container::Style {
+                background: Some(Background::Color(if branch.is_head {
+                    theme::with_alpha(tokens.primary, 0.08)
+                } else {
+                    theme::with_alpha(tokens.muted, 0.0)
+                })),
+                ..container::Style::default()
+            }),
+    )
+    .on_right_press(Message::BranchRowMenu {
+        name: branch.name.clone(),
+    })
+    .into()
 }

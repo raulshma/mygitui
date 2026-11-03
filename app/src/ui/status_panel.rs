@@ -3,7 +3,9 @@
 //! Rows come from [`status_model`]; selection and section collapsing live on
 //! [`Tab`], so this module only renders and emits messages.
 
-use iced::widget::{button, column, container, row, scrollable, text, text_input, Space};
+use iced::widget::{
+    button, column, container, mouse_area, row, scrollable, text, text_input, Space,
+};
 use iced::{Alignment, Background, Border, Color, Element, Length};
 
 use crate::engine::types::{ChangeKind, ConflictResolution};
@@ -183,26 +185,31 @@ fn row_view<'a>(tab: &'a Tab, tokens: Tokens, item: &'a StatusRow) -> Element<'a
         tokens.sidebar
     };
 
-    button(container(content).padding([3, 6]).width(Length::Fill))
-        .style(move |_theme, status| {
-            let bg = match status {
-                button::Status::Hovered => theme::mix(background, tokens.hover, 0.5),
-                _ => background,
-            };
-            button::Style {
-                background: Some(Background::Color(bg)),
-                text_color: tokens.foreground,
-                border: Border::default(),
-                shadow: iced::Shadow::default(),
-                snap: true,
-            }
-        })
-        .padding(0)
-        .width(Length::Fill)
-        .on_press(Message::StatusSelect {
-            key: item.key.clone(),
-        })
-        .into()
+    mouse_area(
+        button(container(content).padding([3, 6]).width(Length::Fill))
+            .style(move |_theme, status| {
+                let bg = match status {
+                    button::Status::Hovered => theme::mix(background, tokens.hover, 0.5),
+                    _ => background,
+                };
+                button::Style {
+                    background: Some(Background::Color(bg)),
+                    text_color: tokens.foreground,
+                    border: Border::default(),
+                    shadow: iced::Shadow::default(),
+                    snap: true,
+                }
+            })
+            .padding(0)
+            .width(Length::Fill)
+            .on_press(Message::StatusSelect {
+                key: item.key.clone(),
+            }),
+    )
+    .on_right_press(Message::StatusRowMenu {
+        key: item.key.clone(),
+    })
+    .into()
 }
 
 fn row_actions<'a>(tokens: Tokens, item: &'a StatusRow) -> Element<'a, Message> {

@@ -26,11 +26,14 @@ use crate::service::AppServices;
 
 use super::bus;
 use super::config::{self, Config, RecentRepo};
+use super::context_menu;
 use super::dialog::{self, ResetRequest};
 use super::diff_view::{DiffPane, DiffSlot};
 use super::history_model::{to_log_filter, FilterFields, HistoryFilterField};
 use super::home;
+use super::palette;
 use super::prompts::{self, AuthPromptState, DeviceSecretPromptState, HostKeyPromptState};
+use super::quick_switcher;
 use super::remote_panel::net_summary;
 use super::repo_view::{self, Load, PendingRebase, PendingRemap, Tab};
 use super::status_model::{count_label, filter_sections, SectionId, StatusRow};
@@ -70,6 +73,15 @@ pub struct App {
     auth_prompts: std::collections::VecDeque<AuthPromptState>,
     host_key_prompts: std::collections::VecDeque<HostKeyPromptState>,
     device_secret_prompts: std::collections::VecDeque<DeviceSecretPromptState>,
+    /// Command palette overlay state (`ctrl/cmd+shift+p`).
+    palette: palette::State,
+    /// Right-click context menu state (one menu at a time).
+    ctx_menu: context_menu::State,
+    /// Repo quick-switcher overlay state (`ctrl/cmd+k`).
+    switcher: quick_switcher::State,
+    /// Last known cursor position, used to anchor context menus opened via
+    /// `mouse_area` right-presses (which do not carry coordinates).
+    cursor: iced::Point,
 }
 
 /// The op whose progress the footer is showing (cancelable via `op_cancel`).
@@ -363,6 +375,28 @@ pub enum Message {
 
     ConfirmDiscard,
     CancelDialog,
+
+    // Interaction overlays: command palette, context menu, quick-switcher.
+    Palette(palette::Msg),
+    ContextMenu(context_menu::Msg),
+    Switcher(quick_switcher::Msg),
+    /// Track the cursor so right-press menus can be positioned.
+    CursorMoved(iced::Point),
+    /// Right-click on a status row (row key).
+    StatusRowMenu {
+        key: String,
+    },
+    /// Right-click on a local branch row.
+    BranchRowMenu {
+        name: String,
+    },
+    /// Append a path pattern to `.gitignore` (status-row context menu).
+    IgnorePath(String),
+    /// `.gitignore` append finished.
+    Ignored {
+        repo_id: RepoId,
+        result: Result<(), String>,
+    },
 }
 
 /// One background auto-fetch cycle for a repo: pick the default remote
@@ -417,6 +451,10 @@ impl App {
             auth_prompts: std::collections::VecDeque::new(),
             host_key_prompts: std::collections::VecDeque::new(),
             device_secret_prompts: std::collections::VecDeque::new(),
+            palette: palette::State::default(),
+            ctx_menu: context_menu::State::default(),
+            switcher: quick_switcher::State::default(),
+            cursor: iced::Point::ORIGIN,
         };
 
         let mut tasks = vec![iced::system::theme().map(Message::SystemTheme)];
@@ -446,6 +484,359 @@ impl App {
 
     fn reindex_recent(&mut self) {
         self.recent = self.config.recent_sorted();
+    }
+
+    /// Palette command registry, rebuilt whenever the palette opens so
+    /// availability reflects the current shell state.
+    fn commands(&self) -> palette::CommandSet {
+        let tab = self.tabs.get(self.active);
+        let repo_id = tab.map(|tab| tab.repo.repo_id.clone());
+        let staged: Vec<String> = tab
+            .map(|tab| {
+                Self::visible_rows(tab)
+                    .into_iter()
+                    .filter(|row| row.section == SectionId::Staged)
+                    .map(|row| row.path.clone())
+                    .collect()
+            })
+            .unwrap_or_default();
+        let changes: Vec<String> = tab
+            .map(|tab| {
+                Self::visible_rows(tab)
+                    .into_iter()
+                    .filter(|row| row.section == SectionId::Changes)
+                    .map(|row| row.path.clone())
+                    .collect()
+            })
+            .unwrap_or_default();
+        let remotes: Vec<String> = tab
+            .and_then(|tab| tab.remotes.list.as_ref())
+            .map(|list| list.iter().map(|remote| remote.name.clone()).collect())
+            .unwrap_or_default();
+
+        let mut set = palette::CommandSet::new();
+        let mut register =
+            |id: &str, label: &str, section: &str, enabled: bool, keybind: Option<&str>| {
+                let mut command =
+                    palette::Command::new(id.to_string(), label.to_string(), section.to_string());
+                if let Some(keybind) = keybind {
+                    command = command.keybind(keybind);
+                }
+                if !enabled {
+                    command = command.disabled();
+                }
+                set.register(command);
+            };
+
+        register(
+            "repo.open",
+            "Open repository…",
+            "Repository",
+            true,
+            Some("Ctrl+O"),
+        );
+        register(
+            "repo.quick_switch",
+            "Quick-switch repository…",
+            "Repository",
+            true,
+            Some("Ctrl+K"),
+        );
+        register(
+            "repo.home",
+            "Go home",
+            "Repository",
+            !self.tabs.is_empty(),
+            None,
+        );
+        register(
+            "repo.close_tab",
+            "Close repository tab",
+            "Repository",
+            repo_id.is_some(),
+            None,
+        );
+        register(
+            "repo.refresh",
+            "Refresh status",
+            "Repository",
+            repo_id.is_some(),
+            None,
+        );
+
+        register(
+            "status.stage_all",
+            "Stage all changes",
+            "Working copy",
+            !changes.is_empty(),
+            None,
+        );
+        register(
+            "status.unstage_all",
+            "Unstage all changes",
+            "Working copy",
+            !staged.is_empty(),
+            None,
+        );
+        register(
+            "status.select_all",
+            "Select all files",
+            "Working copy",
+            repo_id.is_some(),
+            None,
+        );
+        register(
+            "status.select_none",
+            "Clear file selection",
+            "Working copy",
+            repo_id.is_some(),
+            None,
+        );
+
+        register(
+            "commit.commit",
+            "Commit staged changes",
+            "Commit",
+            repo_id.is_some(),
+            None,
+        );
+
+        register(
+            "diff.toggle_split",
+            "Toggle split diff",
+            "View",
+            repo_id.is_some(),
+            None,
+        );
+        register(
+            "diff.toggle_wrap",
+            "Toggle diff line wrap",
+            "View",
+            repo_id.is_some(),
+            None,
+        );
+        register(
+            "history.toggle",
+            "Toggle history panel",
+            "View",
+            repo_id.is_some(),
+            None,
+        );
+        register(
+            "history.filter",
+            "Toggle history filters",
+            "View",
+            repo_id.is_some(),
+            None,
+        );
+        register(
+            "history.refresh",
+            "Refresh history",
+            "View",
+            repo_id.is_some(),
+            None,
+        );
+        register(
+            "branches.toggle",
+            "Toggle branches panel",
+            "View",
+            repo_id.is_some(),
+            None,
+        );
+        register(
+            "stash.toggle",
+            "Toggle stashes panel",
+            "View",
+            repo_id.is_some(),
+            None,
+        );
+        register(
+            "remotes.toggle",
+            "Toggle remotes panel",
+            "View",
+            repo_id.is_some(),
+            None,
+        );
+
+        register(
+            "network.fetch",
+            "Fetch all remotes",
+            "Network",
+            !remotes.is_empty(),
+            None,
+        );
+        register("network.pull", "Pull", "Network", remotes.len() == 1, None);
+        register("network.push", "Push", "Network", remotes.len() == 1, None);
+
+        register(
+            "stash.push",
+            "Stash changes",
+            "Safety net",
+            repo_id.is_some(),
+            None,
+        );
+        register(
+            "checkpoints.create",
+            "Create checkpoint",
+            "Safety net",
+            repo_id.is_some(),
+            None,
+        );
+        register(
+            "ops.cancel",
+            "Cancel running operation",
+            "Safety net",
+            self.active_op.is_some(),
+            None,
+        );
+
+        register("view.cycle_theme", "Cycle theme", "Settings", true, None);
+        register(
+            "view.cycle_autofetch",
+            "Cycle auto-fetch interval",
+            "Settings",
+            true,
+            None,
+        );
+
+        set
+    }
+
+    /// Quick-switcher entries from the persisted recent/pinned repo list.
+    fn switcher_entries(&self) -> Vec<quick_switcher::Entry> {
+        self.recent
+            .iter()
+            .map(|recent| {
+                quick_switcher::Entry::new(recent.path.clone())
+                    .pinned(recent.pinned)
+                    .last_opened((recent.last_opened != 0).then_some(recent.last_opened))
+            })
+            .collect()
+    }
+
+    /// Executes a command by registry id (palette or context-menu origin).
+    fn run_command(&mut self, id: &str) -> Task<Message> {
+        match id {
+            "repo.open" => self.update(Message::OpenDialog),
+            "repo.quick_switch" => self.update(Message::Switcher(quick_switcher::Msg::Open)),
+            "repo.home" => self.update(Message::GoHome),
+            "repo.close_tab" => match self.tabs.get(self.active) {
+                Some(tab) => self.update(Message::CloseTab(tab.repo.repo_id.clone())),
+                None => Task::none(),
+            },
+            "repo.refresh" => match self.tabs.get(self.active) {
+                Some(tab) => self.update(Message::Refresh(tab.repo.repo_id.clone())),
+                None => Task::none(),
+            },
+            "status.stage_all" => {
+                let paths = self
+                    .tabs
+                    .get(self.active)
+                    .map(|tab| {
+                        Self::visible_rows(tab)
+                            .into_iter()
+                            .filter(|row| row.section == SectionId::Changes)
+                            .map(|row| row.path.clone())
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                self.update(Message::StagePaths {
+                    paths,
+                    unstage: false,
+                })
+            }
+            "status.unstage_all" => {
+                let paths = self
+                    .tabs
+                    .get(self.active)
+                    .map(|tab| {
+                        Self::visible_rows(tab)
+                            .into_iter()
+                            .filter(|row| row.section == SectionId::Staged)
+                            .map(|row| row.path.clone())
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                self.update(Message::StagePaths {
+                    paths,
+                    unstage: true,
+                })
+            }
+            "status.select_all" => self.update(Message::StatusSelectAll),
+            "status.select_none" => self.update(Message::StatusSelectNone),
+            "commit.commit" => self.update(Message::CommitPressed),
+            "diff.toggle_split" => self.update(Message::DiffToggleSplit),
+            "diff.toggle_wrap" => self.update(Message::DiffToggleWrap),
+            "history.toggle" => self.update(Message::ToggleHistory),
+            "history.filter" => self.update(Message::HistoryFilterToggle),
+            "history.refresh" => match self.tabs.get(self.active) {
+                Some(tab) => self.update(Message::RefreshLog(tab.repo.repo_id.clone())),
+                None => Task::none(),
+            },
+            "branches.toggle" => self.update(Message::ToggleBranchPanel),
+            "stash.toggle" => self.update(Message::ToggleStashPanel),
+            "remotes.toggle" => self.update(Message::ToggleRemotePanel),
+            "network.fetch" => {
+                let remotes: Vec<String> = self
+                    .tabs
+                    .get(self.active)
+                    .and_then(|tab| tab.remotes.list.as_ref())
+                    .map(|list| list.iter().map(|remote| remote.name.clone()).collect())
+                    .unwrap_or_default();
+                let mut tasks = Vec::new();
+                for name in remotes {
+                    tasks.push(self.update(Message::FetchRemote(name)));
+                }
+                Task::batch(tasks)
+            }
+            "network.pull" => self.first_remote_task(Message::PullRemote),
+            "network.push" => self.first_remote_task(Message::PushRemote),
+            "stash.push" => self.update(Message::StashPush),
+            "checkpoints.create" => self.update(Message::CheckpointCreate),
+            "ops.cancel" => self.update(Message::CancelOp),
+            "view.cycle_theme" => self.update(Message::CycleTheme),
+            "view.cycle_autofetch" => self.update(Message::CycleAutoFetch),
+            // Context-menu commands carry their target after a `:` prefix.
+            other if other.starts_with("status.stage:") => self.update(Message::StagePaths {
+                paths: vec![other["status.stage:".len()..].to_string()],
+                unstage: false,
+            }),
+            other if other.starts_with("status.unstage:") => self.update(Message::StagePaths {
+                paths: vec![other["status.unstage:".len()..].to_string()],
+                unstage: true,
+            }),
+            other if other.starts_with("status.discard:") => self.update(Message::DiscardPath(
+                other["status.discard:".len()..].to_string(),
+            )),
+            other if other.starts_with("status.ignore:") => self.update(Message::IgnorePath(
+                other["status.ignore:".len()..].to_string(),
+            )),
+            other if other.starts_with("branch.switch:") => self.update(Message::BranchSwitch(
+                other["branch.switch:".len()..].to_string(),
+            )),
+            other if other.starts_with("branch.delete:") => self.update(
+                Message::BranchDeleteRequested(other["branch.delete:".len()..].to_string()),
+            ),
+            other => {
+                self.notice = Some(Notice::error(format!("Unknown command: {other}")));
+                Task::none()
+            }
+        }
+    }
+
+    /// Dispatches a per-remote network message for the sole configured
+    /// remote (pull/push are single-upstream operations in this UI).
+    fn first_remote_task(&mut self, make: impl Fn(String) -> Message) -> Task<Message> {
+        match self
+            .tabs
+            .get(self.active)
+            .and_then(|tab| tab.remotes.list.as_ref())
+            .and_then(|list| list.first())
+            .map(|remote| remote.name.clone())
+        {
+            Some(name) => self.update(make(name)),
+            None => Task::none(),
+        }
     }
 
     fn open_repo(&mut self, path: String) -> Task<Message> {
@@ -2601,6 +2992,93 @@ impl App {
                 let _ = crate::remote::prompts::respond_secret(&prompt.request.request_id, None);
                 Task::none()
             }
+            // --- interaction overlays -------------------------------------
+            Message::Palette(msg) => {
+                let opening = matches!(msg, palette::Msg::Open)
+                    || matches!(msg, palette::Msg::Toggle) && !self.palette.open;
+                if opening {
+                    self.palette.commands = self.commands();
+                }
+                match palette::update(&mut self.palette, msg) {
+                    Some(palette::Action::RunCommand(id)) => return self.run_command(&id),
+                    Some(palette::Action::Close) | None => {}
+                }
+                Task::none()
+            }
+            Message::ContextMenu(msg) => match context_menu::update(&mut self.ctx_menu, msg) {
+                Some(context_menu::Action::Command(id)) => self.run_command(&id),
+                _ => Task::none(),
+            },
+            Message::Switcher(msg) => {
+                let opening = matches!(msg, quick_switcher::Msg::Open)
+                    || matches!(msg, quick_switcher::Msg::Toggle) && !self.switcher.open;
+                if opening {
+                    self.switcher.entries = self.switcher_entries();
+                }
+                match quick_switcher::update(&mut self.switcher, msg) {
+                    Some(quick_switcher::Action::Open(path)) => {
+                        self.switcher.close();
+                        return self.open_repo(path.to_string_lossy().into_owned());
+                    }
+                    Some(quick_switcher::Action::Close) | None => {}
+                }
+                Task::none()
+            }
+            Message::CursorMoved(position) => {
+                self.cursor = position;
+                Task::none()
+            }
+            Message::StatusRowMenu { key } => {
+                let menu = self
+                    .tabs
+                    .get(self.active)
+                    .and_then(|tab| tab.status_index.row(&key))
+                    .map(status_row_menu);
+                if let Some(menu) = menu {
+                    self.ctx_menu.open_at(self.cursor, menu);
+                }
+                Task::none()
+            }
+            Message::BranchRowMenu { name } => {
+                let known = self
+                    .tabs
+                    .get(self.active)
+                    .and_then(|tab| tab.branches.list.as_ref())
+                    .is_some_and(|list| list.iter().any(|b| b.name == name));
+                if known {
+                    self.ctx_menu.open_at(self.cursor, branch_row_menu(&name));
+                }
+                Task::none()
+            }
+            Message::IgnorePath(pattern) => {
+                let Some(tab) = self.tabs.get(self.active) else {
+                    return Task::none();
+                };
+                let repo_id = tab.repo.repo_id.clone();
+                let services = self.services.clone();
+                let pattern_copy = pattern.clone();
+                Task::perform(
+                    async move {
+                        let result = crate::service::files::gitignore_add(
+                            &services,
+                            repo_id.clone(),
+                            pattern_copy,
+                        )
+                        .await;
+                        Message::Ignored { repo_id, result }
+                    },
+                    std::convert::identity,
+                )
+            }
+            Message::Ignored { repo_id, result } => {
+                match &result {
+                    Ok(()) => self.last_op = Some("Ignore pattern done".to_string()),
+                    Err(err) => {
+                        self.notice = Some(Notice::error(format!("Ignore pattern failed: {err}")));
+                    }
+                }
+                self.refresh(repo_id)
+            }
             Message::Noop => Task::none(),
         }
     }
@@ -2697,6 +3175,17 @@ impl App {
             Subscription::run(bus::stream).map(Message::Backend),
             iced::system::theme_changes().map(Message::SystemTheme),
             iced::event::listen_with(modifiers_changed),
+            // Overlay components own their key/backdrop handling; each mapper
+            // is a no-op while its overlay is closed.
+            iced::event::listen_with(|event, status, window| {
+                palette::event_to_msg(event, status, window).map(Message::Palette)
+            }),
+            iced::event::listen_with(|event, status, window| {
+                context_menu::event_to_msg(event, status, window).map(Message::ContextMenu)
+            }),
+            iced::event::listen_with(|event, status, window| {
+                quick_switcher::event_to_msg(event, status, window).map(Message::Switcher)
+            }),
             self.auto_fetch_subscription(),
         ])
     }
@@ -2743,18 +3232,29 @@ impl App {
             .height(Length::Fill)
             .into();
 
-        match prompts::overlay(
+        // Overlays stack above the page; prompts stay topmost.
+        let mut layers: Vec<Element<'_, Message>> = vec![page];
+        if self.palette.open {
+            layers.push(palette::view(&self.palette, &tokens).map(Message::Palette));
+        }
+        if self.switcher.open {
+            layers.push(quick_switcher::view(&self.switcher, &tokens).map(Message::Switcher));
+        }
+        if self.ctx_menu.open {
+            layers.push(context_menu::view(&self.ctx_menu, &tokens).map(Message::ContextMenu));
+        }
+        if let Some(overlay) = prompts::overlay(
             tokens,
             self.auth_prompts.front(),
             self.host_key_prompts.front(),
             self.device_secret_prompts.front(),
         ) {
-            Some(overlay) => iced::widget::stack![page, overlay]
-                .width(Length::Fill)
-                .height(Length::Fill)
-                .into(),
-            None => page,
+            layers.push(overlay);
         }
+        iced::widget::stack(layers)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into()
     }
 
     fn header(&self, tokens: Tokens) -> Element<'_, Message> {
@@ -2890,8 +3390,66 @@ fn modifiers_changed(
         iced::Event::Keyboard(iced::keyboard::Event::ModifiersChanged(modifiers)) => {
             Some(Message::Modifiers(modifiers))
         }
+        iced::Event::Mouse(iced::mouse::Event::CursorMoved { position }) => {
+            Some(Message::CursorMoved(position))
+        }
+        iced::Event::Keyboard(iced::keyboard::Event::KeyPressed { key, modifiers, .. }) => {
+            let cmd = modifiers.logo() || (modifiers.control() && !cfg!(target_os = "macos"));
+            match &key {
+                iced::keyboard::Key::Character(c) if cmd && modifiers.shift() && c == "P" => {
+                    Some(Message::Palette(palette::Msg::Toggle))
+                }
+                iced::keyboard::Key::Character(c) if cmd && c == "k" => {
+                    Some(Message::Switcher(quick_switcher::Msg::Toggle))
+                }
+                _ => None,
+            }
+        }
         _ => None,
     }
+}
+
+/// Context menu for a status row (right-click).
+fn status_row_menu(item: &StatusRow) -> context_menu::Menu {
+    let mut menu = context_menu::Menu::new();
+    match item.section {
+        SectionId::Staged => {
+            menu = menu.command(
+                format!("status.unstage:{}", item.path),
+                format!("Unstage “{}”", item.base),
+            );
+        }
+        SectionId::Changes => {
+            menu = menu.command(
+                format!("status.stage:{}", item.path),
+                format!("Stage “{}”", item.base),
+            );
+            menu = menu.command(
+                format!("status.discard:{}", item.path),
+                format!("Discard changes in “{}”", item.base),
+            );
+        }
+    }
+    if item.index != ChangeKind::Conflicted && item.worktree != ChangeKind::Conflicted {
+        menu = menu.separator();
+        menu = menu.command(
+            format!("status.ignore:{}", item.path),
+            format!("Ignore “{}”", item.base),
+        );
+    }
+    menu
+}
+
+/// Context menu for a local branch row (right-click).
+fn branch_row_menu(name: &str) -> context_menu::Menu {
+    let mut menu = context_menu::Menu::new();
+    menu = menu.command(
+        format!("branch.switch:{name}"),
+        format!("Switch to “{name}”"),
+    );
+    menu = menu.separator();
+    menu = menu.command(format!("branch.delete:{name}"), format!("Delete “{name}”"));
+    menu
 }
 
 /// First non-flag argument; used for `mygitui <path>` first launch.
