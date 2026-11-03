@@ -580,7 +580,10 @@ fn build_diff<'r>(repo: &'r Repository, old: &DiffSide, new: &DiffSide) -> Engin
         }
         (_, DiffSide::Worktree) => {
             let old_tree = side_tree(repo, old)?;
-            repo.diff_tree_to_workdir_with_index(old_tree.as_ref(), Some(&mut opts))?
+            // Plain tree→workdir: the index-aware variant reports unmerged
+            // paths as `Conflicted` but emits no hunks, so conflict markers
+            // would never reach the diff pane.
+            repo.diff_tree_to_workdir(old_tree.as_ref(), Some(&mut opts))?
         }
         (_, DiffSide::Commit(_) | DiffSide::Head) => {
             let old_tree = side_tree(repo, old)?;

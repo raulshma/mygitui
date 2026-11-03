@@ -417,13 +417,20 @@ fn conflicted_status_shows_merge_state() {
         .expect("conflicted app.txt");
     assert_eq!(app.index, ChangeKind::Conflicted);
 
-    // The conflict must also be visible as a diffable side pair.
+    // The conflict must also be visible as a diffable side pair, with the
+    // marker text present (the index-aware diff returns a hunkless delta).
     let files = ENGINE
         .diff(&repo, &DiffSide::Head, &DiffSide::Worktree, None)
         .expect("diff in conflicted repo");
+    let app = files
+        .iter()
+        .find(|f| f.path == "app.txt")
+        .unwrap_or_else(|| panic!("app.txt in workdir diff: {files:?}"));
     assert!(
-        files.iter().any(|f| f.path == "app.txt"),
-        "app.txt in workdir diff: {files:?}"
+        app.hunks
+            .iter()
+            .any(|hunk| hunk.lines.iter().any(|line| line.text.contains("<<<<<<<"))),
+        "conflict markers in diff: {app:?}"
     );
 }
 
