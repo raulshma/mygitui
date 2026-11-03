@@ -4,8 +4,8 @@
 //! unchanged against a remote repo.
 //!
 //! Command construction rules (SECURITY):
-//! - fixed literals + values from typed IPC structs only;
-//! - every FE/device-supplied string passes through
+//! - fixed literals + values from typed service structs only;
+//! - every UI/device-supplied string passes through
 //!   [`crate::remote::quoting::shell_quote`] before interpolation;
 //! - no `sh -c` wrappers, no `eval`, no secrets on command lines.
 //!
@@ -1731,7 +1731,7 @@ impl RemoteGitEngine {
         }
     }
 
-    /// Checkpoint safety guard used by destructive IPC commands.
+    /// Checkpoint safety guard used by destructive remote ops.
     pub fn guard_checkpoint(&self, reason: &str) -> Result<CheckpointInfo, String> {
         self.checkpoint_create(reason)
     }
@@ -2259,7 +2259,7 @@ impl RemoteGitEngine {
         })
     }
 
-    // ---------- files (SFTP-backed primitives used by IPC + actions) ----------
+    // ---------- files (SFTP-backed primitives used by service ops + actions) ----------
 
     /// Replace a workdir file's content over SFTP (create/truncate + write).
     /// The path is untrusted (FE-supplied, e.g. the conflict editor), so the

@@ -1,18 +1,17 @@
-//! Per-repo serial op queue with `op-progress` events (contracts.md M2).
+//! Per-repo serial op queue with `op-progress` events.
 //!
-//! M1 read commands call the engine directly under the repo mutex —
-//! concurrent reads are safe because `git2::Repository` access is fully
-//! serialized by that lock. Every M2 mutation and network op instead goes
-//! through [`OpQueue`] (one per [`crate::repo::RepoHandle`]): a single
-//! worker thread per repo executes enqueued jobs in FIFO order, so a push
-//! never races a stage and one repo's slow fetch never blocks another's
-//! commit.
+//! Reads run on the op queue too (silent — see `enqueue_silent`) under the
+//! repo mutex: `git2::Repository` access is fully serialized by that lock.
+//! Every mutation and network op goes through [`OpQueue`] (one per
+//! [`crate::repo::RepoHandle`]): a single worker thread per repo executes
+//! enqueued jobs in FIFO order, so a push never races a stage and one
+//! repo's slow fetch never blocks another's commit.
 //!
 //! Progress flows through [`OpCtx::emit_progress`], throttled to at most
 //! one event per [`THROTTLE_MS`] per op; the queue itself always emits a
 //! final `done: true` event when a job finishes (success or error) — except
 //! for silent enqueues ([`OpQueue::enqueue_silent`], used for reads), which
-//! emit nothing. Events reach the frontend via the [`EventSink`]
+//! emit nothing. Events reach the UI via the [`EventSink`]
 //! abstraction — [`BusEventSink`] in production (backend event bus), a
 //! collector in tests — so the queue itself needs no UI handle to compile
 //! or run headless.
@@ -36,9 +35,7 @@ use crate::engine::types::RepoId;
 /// (mirrors the clone-progress throttle in service::repo).
 pub(crate) const THROTTLE_MS: u64 = 80;
 
-/// `op-progress` payload — field names and shapes are fixed by
-/// docs/contracts.md; generated to `src/lib/ipc/gen/` via ts-rs and
-/// re-exported by `src/lib/ipc/types.ts`.
+/// `BackendEvent::OpProgress` payload (documented in docs/contracts.md).
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct OpProgress {
     pub repo_id: String,

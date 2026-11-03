@@ -32,8 +32,8 @@ pub enum EngineError {
 
 /// Read operations for one open repository.
 ///
-/// All methods are synchronous: git2 is not async. IPC commands wrap them in
-/// `tauri::async_runtime::spawn_blocking`.
+/// All methods are synchronous: git2 is not async. The service layer runs
+/// them on the op queue's blocking workers.
 pub trait GitEngine: Send + Sync {
     fn status(&self, repo: &Repository) -> EngineResult<RepoStatus>;
 
@@ -470,7 +470,7 @@ pub trait GitEngineM12: Send + Sync {
 
     // ---------- Earlier-milestone lane forwarding (M4 submodules, M7 stats) ----------
     //
-    // These predate the M12 trait but had no trait method: their IPC handlers
+    // These predate the M12 trait but had no trait method: the service layer
     // instantiated `Libgit2Engine` and called the inherent `*_impl` twins
     // directly. Rust coherence allows one `impl GitEngineM12 for
     // Libgit2Engine` (trash.rs), which is the crate's cross-lane forwarding

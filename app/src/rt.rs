@@ -1,8 +1,10 @@
 //! Process-wide tokio runtime.
 //!
-//! Replaces `tauri::async_runtime`: every async service body (`service::*`)
-//! and spawn_blocking hop runs here, independent of the UI event loop. Built
-//! lazily on first use so unit tests never pay for an unused runtime.
+//! Every async service body (`service::*`) and spawn_blocking hop runs
+//! here, independent of the UI event loop (iced drives its own executor for
+//! `Task::perform`; op-queue workers and blocking engine hops run on this
+//! runtime). Built lazily on first use so unit tests never pay for an
+//! unused runtime.
 
 use std::future::Future;
 use std::sync::OnceLock;

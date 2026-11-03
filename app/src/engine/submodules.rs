@@ -1,8 +1,8 @@
 //! Submodule inspection and management — M4 lane F3.
 //!
 //! Implementations live as inherent `*_impl` methods on `Libgit2Engine`
-//! (the lane convention; the IPC commands call them directly, like the M3
-//! checkpoint/merge commands do).
+//! (the lane convention; the submodule service fns call them directly, like
+//! the checkpoint/merge service fns do).
 //!
 //! Semantics notes:
 //! - `submodules_impl` walks `repo.submodules()`. For every submodule:

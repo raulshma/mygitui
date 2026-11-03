@@ -4,7 +4,7 @@
 //! the system `git` CLI against throwaway repositories under
 //! `std::env::temp_dir()` (same pattern as stash_tests.rs / net_tests.rs).
 //! The methods under test are the inherent `*_impl` twins called directly by
-//! the M4 IPC commands.
+//! the submodule service fns.
 
 use std::path::{Path, PathBuf};
 

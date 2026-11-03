@@ -1,14 +1,15 @@
-//! M1 IPC command surface (names/shapes fixed by docs/contracts.md).
+//! Service surface: the functions the iced UI calls in-process (contract in
+//! docs/contracts.md).
 //!
 //! Engine calls run on the process-wide tokio runtime (`crate::rt`) because
-//! git2 is synchronous; `EngineError`s surface as strings. Stream commands
-//! push pages over the backend event bus ([`events::BackendEvent`]): log
-//! pages of [`LOG_PAGE_SIZE`] commits laid out by the graph module, tagged
-//! with a UI-minted request id. Streams stop early when nobody is
-//! subscribed (UI gone) or the stream was superseded/cancelled; log streams
-//! abort when the repo generation moves (the client re-requests).
+//! git2 is synchronous; `EngineError`s surface as strings. Streams push
+//! pages over the backend event bus ([`events::BackendEvent`]): log pages
+//! of [`LOG_PAGE_SIZE`] commits laid out by the graph module, tagged with a
+//! UI-minted request id. Streams stop early when nobody is subscribed (UI
+//! gone) or the stream was superseded/cancelled; log streams abort when the
+//! repo generation moves (the client re-requests).
 //!
-//! The command bodies live in the per-domain submodules below; this module
+//! The function bodies live in the per-domain submodules below; this module
 //! owns the cross-cutting plumbing (handle lookup, serial-queue enqueue
 //! helpers, page chunking) and re-exports every service fn so UI call sites
 //! can import from one place.
@@ -80,34 +81,33 @@ pub fn chunk_vec<T>(items: Vec<T>, size: usize) -> Vec<Vec<T>> {
 }
 
 // ---------------------------------------------------------------------------
-// M2 (lane C3): mutations, branches/tags, remotes, net ops, auth — all
-// routed through the per-repo serial op queue (contracts.md M2).
+// Mutations, branches/tags, remotes, net ops, auth — all routed through the
+// per-repo serial op queue.
 //
 // DISPATCH RULE: `enqueue_mutation` / `enqueue_read` are the only sanctioned
-// paths for engine ops. Every handler that locks the repo and calls the
+// paths for engine ops. Every service fn that locks the repo and calls the
 // engine goes through one of them (mutations bump the generation, reads do
 // not). Deliberately off-queue: `stream_log` (its own cancellation loop and
 // stream tokens), `mergetool_run` (interactive, minutes-long — see its
-// comment), and the commands that never lock the repo (FS/CLI reads and
-// spawns: maintenance probes, forge, clone, actions, pty).
+// comment), and the fns that never lock the repo (FS/CLI reads and spawns:
+// maintenance probes, forge, clone, actions, pty).
 //
 // Progress: mutations and net ops stream `op-progress` (net ops forward
 // engine callbacks to `OpCtx::emit_progress`, throttled ≥80ms) and the
 // queue emits their final `done: true` event, success or error. Queue-
 // dispatched reads are silent (`enqueue_read` → `OpQueue::enqueue_silent`):
-// no progress, no done event — read failures surface only as command
-// errors, matching the pre-queue direct-call reads. Mutations bump the
-// repo generation afterwards so in-flight log streams abort and clients
-// re-request (streaming rules).
+// no progress, no done event — read failures surface only as the call's
+// error return. Mutations bump the repo generation afterwards so in-flight
+// log streams abort and clients re-request (streaming rules).
 //
-// Op kinds started as the fixed M2 set from contracts.md (`stage`, `commit`,
-// `branch`, `fetch`, `pull`, `push`, `clone`); later lanes added their own
-// (`merge`, `rebase`, `bisect`, `stash`, `worktree`, `checkpoint`,
-// `submodule`, `maintenance`, `archive`, `sparse`, `lfs`, `clean`). Queue-
-// dispatched reads carry the touched area as their queue kind (`status`,
-// `refs`, `blame`, `diff`, `preview`, `stats`, `reflog`, `describe`) but
-// emit no events (see Progress above). Tags report as `branch`
-// (ref-affecting), remote config ops as `fetch` (net category).
+// Op kinds (`stage`, `commit`, `branch`, `fetch`, `pull`, `push`, `clone`,
+// `merge`, `rebase`, `bisect`, `stash`, `worktree`, `checkpoint`,
+// `submodule`, `maintenance`, `archive`, `sparse`, `lfs`, `clean`) label the
+// progress events. Queue-dispatched reads carry the touched area as their
+// queue kind (`status`, `refs`, `blame`, `diff`, `preview`, `stats`,
+// `reflog`, `describe`) but emit no events (see Progress above). Tags
+// report as `branch` (ref-affecting), remote config ops as `fetch` (net
+// category).
 // ---------------------------------------------------------------------------
 
 /// Enqueue a mutating engine op on the repo's serial queue: `f` runs with

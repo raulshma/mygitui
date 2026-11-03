@@ -1,8 +1,8 @@
 //! M12 lane B: property-based roundtrips (diff hunk-apply / checkpoint
 //! restore), exercised through the crate's public engine APIs only:
 //! `GitEngine` (diff, stage_all, commit), `GitEngineM3` (checkpoint_*), and
-//! the diffcore staging core (`apply_selection` — the same entry the IPC
-//! stage command uses).
+//! the diffcore staging core (`apply_selection` — the same entry the stage
+//! service fn uses).
 //!
 //! Cases are deliberately bounded (≤ 40 lines, ≤ 6 files) so the whole
 //! suite stays fast; strategies draw from small alphabets to force

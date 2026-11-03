@@ -1,796 +1,426 @@
-# IPC Contract Registry
+# Native Contract Reference
 
-Source of truth for Tauri command names, payloads, channels, and events.
-Lane agents extend additively; breaking changes go through the orchestrator.
-Types: Rust `app/src/engine/types.rs` is the single source; TS shapes
-are GENERATED from it (see "Type single-sourcing" below).
+mygitui is one process: an **iced 0.14** UI on top of a service layer and a
+git2-rs engine. There is no IPC, no webview, and no generated type mirror —
+the UI calls the `service::*` functions in-process and receives
+[`BackendEvent`](../../app/src/service/events.rs)s over an in-process
+broadcast bus.
 
-## Commands (M1)
+```
+iced UI (app/src/ui/)  ⇄  service layer (app/src/service/*)  ⇄  engine (app/src/engine/*)
+        ▲                            │                             │
+        └──── BackendEvent bus ──────┘                    git2-rs (primary) │ git CLI (fallback)
+                                                          remote SSH engine (app/src/remote/)
+```
 
-| Command | Args | Returns | Notes |
-|---|---|---|---|
-| `repo_open` | `path: string` | `RepoInfo` | opens repo, starts watcher, new tab |
-| `repo_close` | `repo_id: string` | `void` | stops watcher, drops caches |
-| `repo_status` | `repo_id: string` | `RepoStatus` | |
-| `repo_diff` | `repo_id, old: DiffSide, new: DiffSide, paths?: string[]` | `FileDiff[]` | small/medium diffs |
-| `repo_diff_stream` | `repo_id, old, new, paths?, channel: Channel<FileDiff[]>` | `void` | pages of ~50 files |
-| `repo_log_stream` | `repo_id, filter: LogFilter, channel: Channel<LogPage>` | `void` | pages of 500; see LogPage |
-| `repo_blame` | `repo_id, path: string, from?: string` | `BlameLine[]` | |
-| `repo_refs` | `repo_id` | `[string, string][]` | ref name → sha |
-| `repo_file_history` | `repo_id, path: string, channel: Channel<LogPage>` | `void` | follow renames |
+Rust types in `app/src/engine/types.rs` are the single source of truth; the
+same structs are shared by both sides of every call. `serde` derives exist
+only where data actually crosses a file boundary (config, bisect/fsck state
+files) or is serialized into events for logging — never for a wire format.
 
-`LogPage = { commits: CommitInfo[]; rows: GraphRow[]; next_cursor: string | null; generation: number }`
+Layer rules:
 
-Streaming rules: every stream carries a `generation` number; when repo state
-changes the backend bumps the generation and clients discard stale pages.
-Cancel = drop the channel (backend detects closed channel) or next request
-with same kind+repo replaces the prior stream.
+- **UI** (`ui/`) holds no git state of its own: it renders payloads from
+  service calls and events, and dispatches every mutation through a service
+  fn.
+- **Service** (`service/*`) is a thin per-domain function surface. Every
+  body takes `&AppServices` and returns `Result<T, String>`; engine calls
+  run on the per-repo serial op queue (see "UI ⇄ service contract").
+- **Engine** (`engine/*`) is synchronous git2-rs work plus a sanitized CLI
+  layer for what libgit2 cannot do (hooks, signing, gc/repack, `git tag -s`,
+  fsck, sparse-checkout, LFS). The remote twin (`remote/engine.rs`) runs
+  `git` on an SSH device and parses porcelain output into the same DTO
+  types.
 
-## Commands (M0, already live)
+## Service surface
 
-`secrets_get(key) -> Option<string>`, `secrets_set(key, value)`, `secrets_delete(key)`
+Every function below is a public `service::*` (or root-backend-module) fn
+whose signature/doc comment in code is authoritative. All async fns take
+`&AppServices` as the first argument; `repo_id: RepoId` selects the open
+repo tab and errors with `"repo not open: …"` when absent. Local and remote
+(SSH device) repos share one surface: when the handle carries a remote
+backend the same fn enqueues the remote twin on the same serial queue.
 
-## Events (backend → frontend)
+### Repo lifecycle — `service/repo.rs`
 
-| Event | Payload | Meaning |
-|---|---|---|
-| `cli-args` | `string[]` | second instance launched with args (argv[0] = the executable's own path, stripped backend-side) |
-| `repo-changed` | `{ repo_id, paths: string[], head_moved: bool, full: bool }` | watcher fired; `full=true` → resync everything |
-
-## Type single-sourcing (ts-rs)
-
-Wire format is **snake_case end to end** (values pass through verbatim — no
-camelCase conversion anywhere). TS types are not hand-mirrored:
-
-1. Every serializable IPC type in Rust carries `derive(TS)` (ts-rs 12,
-   `serde-compat`). Sources: `app/src/engine/types.rs` (core model)
-   plus the payload types declared next to their commands/events
-   (`forge.rs`, `pty.rs`, `engine/stats.rs`, `ops.rs`, `auth.rs`,
-   `actions.rs`, `watcher.rs`, `editors.rs`, `opencode.rs`,
-   `graph/types.rs`, `ipc_commands.rs`, `remote/{actions,commands,prompts,
-   transport}.rs`).
-2. `cargo test export_bindings` (wrapped as `npm run gen:types`) regenerates
-   one file per type into `src/lib/ipc/gen/<RustTypeName>.ts` (destination
-   pinned by `TS_RS_EXPORT_DIR` in `app/.cargo/config.toml`; generated
-   files are committed by design).
-3. `src/lib/ipc/types.ts` is the stable FE import point: it re-exports the
-   generated files under the FE names (Rust `PtyOutput` → TS
-   `PtyOutputEvent`, `AppEntry` → `EditorApp`, `AuthRequestEvent` →
-   `AuthRequest`, `ActionOutput` → `ActionOutputEvent`,
-   `CloneProgress` → `CloneProgressEvent`, `ForgeError` → `ForgeFailure`)
-   and keeps only FE-only helper types below the re-exports, marked
-   `// FE-only:`.
-4. Gate: CI regenerates the bindings and fails on
-   `git diff -- src/lib/ipc/gen`; `hooks/pre-push` runs the same check.
-   `Option<T>` maps to `T | null` (required property); fields the FE omits
-   when constructing requests are annotated `#[ts(optional = nullable)]` in
-   Rust. `src/lib/ipc/client.ts` provides typed wrappers; UI never calls
-   `invoke` directly.
-
-## Commands (M2 — mutations)
-
-All run through the per-repo serial op queue; mutations and net ops stream
-progress on the `op-progress` event (reads run silently — they emit no
-events). Arg keys snake_case (commands use `rename_all`).
-
-| Command | Args | Returns |
-|---|---|---|
-| `stage` | `repo_id, request: StageRequest` | `void` |
-| `stage_all` | `repo_id, unstage: bool` | `void` |
-| `commit` | `repo_id, options: CommitOptions` | `String` (new sha) |
-| `signing_info` | `repo_id` | `SigningInfo` |
-| `hooks_list` | `repo_id` | `HookInfo[]` |
-| `branches` | `repo_id` | `BranchInfo[]` |
-| `branch_create` | `repo_id, name, from?, checkout: bool` | `void` |
-| `branch_switch` | `repo_id, name, force: bool` | `void` |
-| `branch_is_merged` | `repo_id, name, into` | `bool` |
-| `branch_delete` | `repo_id, name, force: bool` | `void` |
-| `branch_rename` | `repo_id, old, new` | `void` |
-| `tag_create` | `repo_id, name, target?, message?` | `void` |
-| `tag_delete` | `repo_id, name` | `void` |
-| `remotes` | `repo_id` | `RemoteInfo[]` |
-| `remote_add` / `remote_remove` | `repo_id, name [, url]` | `void` |
-| `remote_set_url` | `repo_id, name, url, push: bool` | `void` |
-| `fetch` | `repo_id, options: FetchOptions` | `NetStats` |
-| `pull` | `repo_id, options: PullOptions` | `NetStats` |
-| `push` | `repo_id, options: PushOptions` | `NetStats` |
-| `auth_respond` | `op_id: string, username?, password?, store: bool` | `void` |
-
-## Events (M2)
-
-| Event | Payload | Meaning |
-|---|---|---|
-| `op-progress` | `{ repo_id, op_id, kind, message, pct: number \| null, done: bool, error: string \| null }` | op-queue progress for mutations and net ops: throttled updates plus a final `done` event on success or failure (failures toast FE-side). Queue-dispatched reads (`status`, `refs`, `blame`, `diff`, …) emit nothing — their errors return through the command. Kinds: `stage`, `commit`, `branch`, `merge`, `rebase`, `bisect`, `stash`, `worktree`, `checkpoint`, `submodule`, `discard`, `clean`, `fetch`, `pull`, `push`, `maintenance`, `archive`, `sparse`, `lfs` (tags report as `branch`, remote config ops as `fetch`) |
-| `op-log` | `{ repo_id, op_id, kind, line }` | raw, unthrottled child output while an op runs; currently streams commit/signing hooks and the `push` CLI fallback (pre-push hook present). The FE keeps the newest session per repo and renders it in the workspace output strip. |
-| `auth-request` | `{ op_id, repo_id, url, kind: "https-user" \| "https-pass" \| "ssh-passphrase", prompt }` | engine needs credentials; FE shows dialog, answers via `auth_respond` |
-
-Commit and push route through the sanitized git CLI when hooks make libgit2
-unusable: any runnable `pre-commit` / `prepare-commit-msg` / `commit-msg`
-(or signing) for `commit`, and `pre-push` for `push`. Both stream the child's
-stdout/stderr lines on `op-log` so hooks are visible in the app. Hook
-discovery honors `core.hooksPath` (husky, pre-commit, worktree `hooks/`
-dirs); a relative path resolves against the worktree root, as git does.
-
-## Commands (M3 — power + safety)
-
-Same op-queue + op-progress machinery as M2. All `#[tauri::command(rename_all = "snake_case")]`.
-
-| Command | Args | Returns |
-|---|---|---|
-| `merge_branch` | `repo_id, ref_name, no_ff: bool` | `MergeResult` |
-| `merge_abort` | `repo_id` | `void` |
-| `conflicts` | `repo_id` | `ConflictFile[]` |
-| `conflict_resolve` | `repo_id, path, resolution, custom_content?: number[] (bytes)` | `void` |
-| `cherry_pick` | `repo_id, shas: string[]` | `MergeResult` |
-| `revert` | `repo_id, shas: string[]` | `MergeResult` |
-| `sequencer_abort` | `repo_id` | `void` (aborts in-progress cherry-pick/revert state) |
-| `reset` | `repo_id, kind: "soft" \| "mixed" \| "hard" \| "keep" \| "merge", to` | `void` (no backend checkpoint — the destructive kinds hard/keep/merge are guarded by the ResetDialog's `guard_checkpoint` before invoking; keep/merge run via the git CLI) |
-| `rebase_start` | `repo_id, plan: RebaseStep[], onto?: string` | `RebaseState` |
-| `rebase_state` | `repo_id` | `RebaseState` |
-| `rebase_continue` / `rebase_abort` | `repo_id` | `RebaseState` / `void` |
-| `stash_list` | `repo_id` | `StashInfo[]` |
-| `stash_push` | `repo_id, message?, keep_index, include_untracked` | `void` |
-| `stash_apply` / `stash_drop` | `repo_id, index` (+`pop: bool` for apply) | `void` |
-| `stash_branch` | `repo_id, name, index` | `void` |
-| `worktrees` | `repo_id` | `WorktreeInfo[]` |
-| `worktree_add` | `repo_id, path, branch?, new_branch?` | `void` |
-| `worktree_remove` | `repo_id, name, force` | `void` |
-| `reflog` | `repo_id, name?` | `ReflogEntry[]` |
-| `checkpoint_create` | `repo_id, reason` | `CheckpointInfo` |
-| `checkpoints` | `repo_id` | `CheckpointInfo[]` |
-| `checkpoint_restore` | `repo_id, id` | `void` (new checkpoint of current state first) |
-| `checkpoint_gc` | `repo_id, older_than_days` | `u32` (count removed) |
-| `ops_preview` | `repo_id, kind: "reset_hard" \| "clean" \| "checkout_force" \| "branch_delete", params` | `PreviewInfo` |
-
-`PreviewInfo = { kind: string; summary: string; files: { path: string; change: string }[] }`
-(dangerous ops: FE calls `ops_preview` → dialog → `guard_checkpoint` → confirm → op).
-
-Checkpoints live at `refs/mygitui/checkpoints/<ts>-<reason>`; worktree state is a stash-style
-2-parent commit; GC default 30 days; restore = reset soft to checkpoint + apply worktree blob.
-
-## Commands (M4 — housekeeping)
-
-| Command | Args | Returns |
-|---|---|---|
-| `submodules` | `repo_id` | `SubmoduleInfo[]` |
-| `submodule_update` | `repo_id, path, init: bool, recursive: bool` | `void` (op queue, kind `submodule`) |
-| `submodule_sync` | `repo_id, path?` (empty = all) | `void` |
-| `gitignore_add` | `repo_id, pattern` | `void` (appends to .gitignore, creates if missing) |
-| `gitignore_templates` | — | `{name, description, patterns: string}[]` (curated builtin list) |
-| `repo_clean` | `repo_id, paths: string[], checkpoint_reason: string` | `u32` (count removed; checkpoint auto-created first) |
-| `action_run` | `repo_id, name, command` | `run_id: string` (streams `action-output` events) |
-| `action_cancel` | `run_id` | `void` |
-
-## Events (M4)
-
-| Event | Payload |
+| Fn | Semantics |
 |---|---|
-| `action-output` | `{ run_id, repo_id, name, line, done: bool, exit_code: number \| null }` |
+| `repo_open(path)` | Discovers the repo at/above `path` (canonicalized first so recents survive cwd changes), opens it once, starts its FS watcher; returns `RepoInfo`. Reuses the existing handle for an already-open root. |
+| `repo_close(repo_id)` | Stops the watcher, cancels the repo's log/file-history streams, shuts the op queue down (drain semantics), drops caches. |
+| `repo_status(repo_id)` | Full status snapshot (entries by change kind, branch, ahead/behind). |
+| `repo_refs(repo_id)` | Local + remote branches and tags as `(ref name, target sha)` pairs. |
+| `repo_blame(repo_id, path, from?)` | Per-line blame; `from` re-blames at a parent commit. |
+| `repo_clone(url, destination, depth?)` | Clones into a missing-or-empty directory (optionally shallow), publishing `BackendEvent::CloneProgress`; resolves with `CloneStats`. |
 
-Custom actions config lives FE-side (localStorage `mygitui.actions`), scope global or per-repo.
-Layout presets FE-side (localStorage `mygitui.layouts` + per-repo overlay `mygitui.layouts.<root>`).
+### Status / diff — `service/diff.rs`
 
-Gitignore quick-add: `gitignore_templates` ships a curated builtin list (Node,
-Rust, Python, C++, Go, Java, macOS, Windows, VS Code, JetBrains, Svelte, Vite,
-Terraform, Unreal, Unity); `patterns` is one newline-joined `.gitignore`
-snippet, applied line-by-line via `gitignore_add` (idempotent exact-line
-append at the repo root; single-line patterns only).
+| Fn | Semantics |
+|---|---|
+| `repo_diff(repo_id, old: DiffSide, new: DiffSide, paths?)` | One-shot diff returning `Vec<FileDiff>`; `paths` prefix-restricts the diff. Large diffs are rendered virtually by the UI from this same payload — there is no paged variant. |
 
-## Commands (M5 — embedded terminal)
+### History / search — `service/log.rs`, `service/branches.rs`
 
-Backend: `app/src/pty.rs` (portable-pty; ConPTY on Windows). One
-process-global `PtyRegistry` (tauri-managed state) owns every session; ids
-are `pty-<counter hex>`.
+| Fn | Semantics |
+|---|---|
+| `repo_log_stream(repo_id, filter, request_id)` | Streams the commit log in 500-commit pages as `BackendEvent::LogPage`s (commits + pre-laid-out `GraphRow`s + `next_cursor` + `generation`). A new call for the same repo replaces (cancels) the previous stream; streams abort when the repo generation moves and the UI re-requests. |
+| `repo_file_history(repo_id, path, request_id)` | Same paging for one file's history, following renames. |
+| `reflog(repo_id, kind?, name?)` | Reflog entries for HEAD or a branch/remote-ref. |
+| `describe(repo_id, commitish?)` | `git describe --tags` for a commit-ish. |
 
-ConPTY handshake: conhost opens every session with a cursor-position probe
-(`ESC[6n`) and withholds child output until it is answered. The backend
-answers the probe and strips it from `pty-output` — the FE never sees it
-and must NOT reply to it (a stray cursor report would pollute shell input).
+### Staging / commit / safety net — `service/misc.rs`
 
-| Command | Args | Returns | Notes |
-|---|---|---|---|
-| `pty_create` | `repo_id, rows?: u16, cols?: u16` | `session_id: string` | spawns an interactive shell in a fresh pty with cwd = repo root (rows/cols default 24/80; open repo required — no app-cwd sessions) |
-| `pty_write` | `session_id, data: string` | `void` | frontend keystrokes/paste to the shell |
-| `pty_resize` | `session_id, rows: u16, cols: u16` | `void` | panel size changed; informs the kernel winsize |
-| `pty_kill` | `session_id` | `void` (error if unknown/gone) | kills the shell, unregisters; `pty-exit` still fires |
+| Fn | Semantics |
+|---|---|
+| `stage(repo_id, req)` | Stage paths / whole files / hunks / line ranges (`StageTarget`); hunk+line granularity is built by `diffcore` as minimal `git apply --cached` patches. |
+| `stage_all(repo_id)` | Stage everything (tracked + untracked). |
+| `discard(repo_id, targets)` | Discard files or hunks. A checkpoint is snapshotted BEFORE any side effect — a failed discard leaves the repo untouched. |
+| `commit(repo_id, opts)` | Commit via the engine; when hooks or signing are active (`EngineError::Unsupported`) it falls back to the git CLI (`cli::commit_via_cli`) so hooks and GPG/SSH signing actually run. Returns the new sha. |
+| `signing_info(repo_id)` | Whether GPG/SSH commit signing is configured (`user.signingkey` etc.). |
+| `hooks_list(repo_id)` | Active repo hooks for the commit-bar badges. |
+| `checkpoint_create(repo_id, reason)` | Snapshot index+workdir to a hidden ref `refs/mygitui/checkpoints/<unix_millis>-<reason>`. |
+| `checkpoints(repo_id)` | List checkpoints, newest first. |
+| `checkpoint_restore(repo_id, id)` | Restore index+workdir from a checkpoint (HEAD/refs/reflog untouched). A pre-restore checkpoint is snapshotted first. |
+| `checkpoint_gc(repo_id)` | Delete checkpoint refs older than the cutoff, always keeping the newest (safety floor). |
+| `ops_preview(repo_id, kind, params)` | Pure what-if preview of a dangerous op (`reset_hard` / `clean` / `checkout_force` / `branch_delete`) — no mutation, no checkpoint. |
+| `guard_checkpoint(repo_id, reason)` | Snapshot an undo point right before a dangerous op (queue mutation, serialized with the op it guards). UI flow: `ops_preview` → dialog → `guard_checkpoint` → op. |
+| `os_accent_color()` | OS accent color for the dynamic-color pipeline (Windows DWM registry read; `None` elsewhere). |
+| `op_cancel(repo_id, op_id)` | Best-effort cancel of a queued/running op (atomics only, never touches the repo mutex). Queued-not-started ops are skipped; running ops observe the flag cooperatively (netops fetch/push). |
+| `action_run(repo_id, spec)` | Spawn a user-defined shell action with cwd = repo root, streaming `BackendEvent::ActionOutput`; returns the run id (cancel token). Remote repos run the action on the device over SSH exec through the same sink. |
+| `action_cancel(run_id)` | Kill a running action; `false` when unknown/finished (never an error). |
+| `cli_args_initial()` | argv captured at first launch (`mygitui <path>`), consumed once. Second-launch args arrive as `BackendEvent::CliArgs`. |
 
-Shell discovery: Windows prefers `pwsh.exe` → `powershell.exe` → `cmd.exe`
-(PATH probe); unix uses `$SHELL` → `bash` → `/bin/sh`, spawned with
-`TERM=xterm-256color` on top of the inherited env.
+### Branches / tags — `service/branches.rs`
 
-## Events (M5)
+| Fn | Semantics |
+|---|---|
+| `branches(repo_id)` | Local branches with tracking/ahead/behind info. |
+| `branch_create(repo_id, name, start?, checkout?)` | Create (optionally from a start point, optionally switch). |
+| `branch_switch(repo_id, name)` | Switch; the UI resolves dirty-workdir choices via the dialog first. |
+| `branch_is_merged(repo_id, name, into)` | Merged-guard preview: is `name` fully merged into `into`? |
+| `branch_delete(repo_id, name)` | Delete after the merged-guard; the branch is preserved under `refs/mygitui/trash/<id>` first (deleted-branch trash). |
+| `branch_rename(repo_id, name, new_name)` | Rename a branch. |
+| `tag_create(repo_id, name, target?, message?)` | Lightweight or annotated tag. |
+| `tag_create_signed(repo_id, name, target?, message?)` | Signed annotated tag via `git tag -s` (libgit2 cannot sign); message travels via `-F` temp file. |
+| `tag_delete(repo_id, name)` / `tag_list(repo_id)` | Delete / list tags. |
+| `remote_branches(repo_id)` | Remote tracking branches (`refs/remotes/*`). |
+| `branch_checkout_remote(repo_id, remote, name, new_local?)` | Check out a remote branch into a local branch. |
+| `branch_trash_list(repo_id)` | Branches preserved under `refs/mygitui/trash/*`, newest first. |
+| `branch_trash_restore(repo_id, id, new_name?)` | Restore a trashed branch (optionally renamed); returns the branch name. |
+| `commit_signature(repo_id, sha)` | Verification status of one commit's signature (queued read). |
+| `autosquash_plan(repo_id, base)` | Autosquash rebase plan for `base..HEAD` (feeds `rebase_start`). |
 
-| Event | Payload | Meaning |
+### Network — `service/network.rs`
+
+| Fn | Semantics |
+|---|---|
+| `remotes(repo_id)` | Configured remotes with URLs. |
+| `remote_add` / `remote_remove` / `remote_set_url` | Remote config mutations. |
+| `fetch(repo_id, opts)` | Fetch with prune/depth options; streams throttled progress and forwards engine callbacks to `OpCtx::emit_progress`. |
+| `pull(repo_id, opts)` | Pull with ff / merge / rebase policy. |
+| `push(repo_id, opts)` | Push with force, force-with-lease (real expected-sha checking), tags, multi-ref, remote ref deletion; the hook path routes through `cli::push_via_cli` so `pre-push` really runs and streams output. |
+| `auth_respond(op_id, answer)` | UI answer to an `BackendEvent::AuthRequest`; routes `(username, password, store)` to the blocked credentials callback. |
+
+### Stash / worktrees — `service/stash.rs`
+
+| Fn | Semantics |
+|---|---|
+| `stash_list(repo_id)` | Stashes, newest first. |
+| `stash_push(repo_id, message?, keep_index?)` | Stash current changes. |
+| `stash_apply(repo_id, index)` / `stash_drop(repo_id, index)` | Apply (without dropping) / drop one stash. |
+| `stash_branch(repo_id, index, name)` | Apply a stash onto a new branch. |
+| `worktrees(repo_id)` | Registered worktrees with main-entry marking. |
+| `worktree_add(repo_id, path, branch?)` / `worktree_remove(repo_id, path)` | Add / remove a worktree. |
+| `worktree_prune(repo_id)` (in `service/merge.rs`) | `git worktree prune`; returns the number pruned. |
+
+### Merge / rebase / bisect — `service/merge.rs`
+
+| Fn | Semantics |
+|---|---|
+| `merge_branch(repo_id, opts)` | Merge with ff policy / squash / `--no-commit` / `-X ours|theirs`. |
+| `merge_abort(repo_id)` / `sequencer_abort(repo_id)` | Abort an in-progress merge / cherry-pick-revert sequence. |
+| `conflicts(repo_id)` | Current conflict list with marker previews. |
+| `conflict_resolve(repo_id, path, resolution)` | Resolve one conflict (ours/theirs/both/manual content). |
+| `cherry_pick(repo_id, sha)` / `revert(repo_id, sha)` | Cherry-pick / revert (sequences surface through `rebase_state`). |
+| `reset(repo_id, kind, to?)` | Reset soft/mixed/hard to a commit-ish. |
+| `rebase_start(repo_id, base, steps?)` | Start an interactive rebase with an explicit step list (reorder, squash/fixup/drop/edit/reword, `exec`). |
+| `rebase_plan(repo_id, base)` | Plain plan: every commit in `base..HEAD` oldest first; empty means nothing to rebase. |
+| `rebase_state(repo_id)` | Progress + remaining steps + conflicts of the running rebase. |
+| `rebase_continue(repo_id)` / `rebase_abort(repo_id)` | Continue (resolving conflicts first) / abort. |
+| `bisect_start(repo_id, good, bad?)` | Begin a bisect (`<gitdir>/mygitui/bisect.json` is the state file). |
+| `bisect_state(repo_id)` | Current run: commits left, marks, probe. |
+| `bisect_mark(repo_id, mark)` | Good/Bad/Skip on the current probe. |
+| `bisect_reset(repo_id)` | End the bisect, restore the original HEAD. |
+| `bisect_log(repo_id)` | The live run's mark history, else the last archived run. |
+
+### Maintenance / health — `service/maintenance.rs`
+
+| Fn | Semantics |
+|---|---|
+| `repo_health(repo_id)` | Fast FS-only snapshot (repo + gitdir sizes, object counts, cached fsck dangling census). |
+| `maintenance_run(repo_id, op)` | One of `gc` / `prune` / `commit_graph` / `pack_refs` / `count_objects` on the op queue; resolves with the command output. |
+| `archive(repo_id, spec, destination)` | `git archive --format <zip\|tar\|tar.gz> <ref> -o <destination>`; spec/destination are metacharacter-guarded. |
+| `repo_clean(repo_id, paths, dirs?)` | Checkpoint first, then delete each validated path; returns the number removed. |
+| `sparse_info(repo_id)` / `sparse_apply(repo_id, patterns, add?)` | Sparse-checkout state / apply (cone mode; empty = full checkout). |
+| `lfs_status(repo_id)` / `lfs_run(repo_id, subcommand)` | `git lfs` availability + tracked patterns / run `pull`\|`push`\|`install`\|`fetch`. |
+| `clone_blobless(url, destination, depth?)` | Blobless (partial) clone via `git clone --filter=blob:none`. |
+
+### Files / editor — `service/files.rs`, `workspace.rs`, `editors.rs`
+
+Every `path` argument is workdir-relative with forward slashes and
+validated: absolute forms, `..` components, Windows prefixes, and anything
+escaping the root reject; writers additionally refuse paths inside `.git`,
+and mutating workspace ops run on the op queue (serialized,
+generation-bumping) so the watcher → `RepoChanged` → refresh pipeline
+updates the UI for free.
+
+| Fn | Semantics |
+|---|---|
+| `repo_list_dir(repo_id, path, include_ignored)` | One directory level (bounded walk, gitignore-aware unless `include_ignored`, dirs-first natural sort, `.git` never listed, index gitlinks surface as `submodule`, capped at 5000 entries with `truncated: true`). |
+| `repo_stat_file(repo_id, path)` | Size, content class (`text`/`image`/`binary` by extension + NUL sniff of the first 8 KiB), `readonly`, `mtime_ms` — lets the UI decide how to open a file before transferring bytes. |
+| `repo_read_file(repo_id, path)` | Raw bytes of one workdir file (backs the conflict editor's marker preview). Missing file resolves to an empty vec; escaping paths reject. Workdir read: no repo mutex. |
+| `repo_write_file(repo_id, path, content, expected_mtime)` | The file editor's save. `expected_mtime` guard rejects a "changed on disk" write (the UI offers reload/overwrite); writes are atomic (temp + rename in the same dir). |
+| `repo_create_entry(repo_id, path, kind)` | Create an empty file or a directory (with parents); errors when the path exists. |
+| `repo_rename_entry(repo_id, path, new_path)` | Rename/move within the worktree; errors on missing source or existing target. |
+| `repo_delete_entry(repo_id, path)` | Checkpoint first (reason `delete <path>`), then delete file or directory tree; refuses submodule checkouts. |
+| `repo_file_index(repo_id)` | Flat gitignore-respecting walk for quick-open (Ctrl+P); capped at 50k entries with `truncated: true`. |
+| `gitignore_add(repo_id, pattern)` | Append one pattern to the repo-root `.gitignore` (exact-line dedupe). Pure workdir write — no op queue; the watcher picks it up. |
+| `gitignore_apply_template(repo_id, name)` | Apply a builtin template: every pattern appended under a `# <name>` header in ONE write. |
+| `gitignore_templates_list()` / `gitignore_templates(services)` | The curated builtin template list (`{name, description, patterns}`). |
+| `submodules(repo_id)` | Every submodule with checked-out vs recorded state. |
+| `submodule_update(repo_id, path, init?, recursive?)` | `git submodule update` for one submodule; network fetches route credential prompts through the auth broker. |
+| `submodule_sync(repo_id, path?)` | Rewrite submodule URLs from `.gitmodules` into repo config (`None` = all). |
+| `detect_editors(services)` / `open_with(services, app_id)` | Probe installed editors / open the repo root in one. The id must resolve through a fresh detection, so only machine-verified paths spawn. |
+
+### Terminal / PTY — `pty.rs`
+
+| Fn | Semantics |
+|---|---|
+| `pty_create(services, repo_id, rows, cols)` | Spawn a shell in a fresh pty at the repo root; returns the session id used by write/resize/kill. Output arrives as `BackendEvent::PtyOutput` (coalesced windows), exit as `BackendEvent::PtyExit`. Capped at `MAX_SESSIONS` live sessions. |
+| `pty_write(services, session_id, data)` | Send UI input (keystrokes, paste). |
+| `pty_resize(services, session_id, rows, cols)` | Resize (UI panel size changed). |
+| `pty_kill(services, session_id)` | Kill the shell and clean the registry entry; the `PtyExit` event still fires from the exit waiter with the real code. |
+
+### Forge / GitHub — `service/forge.rs` (via `forge.rs`)
+
+All gh-backed fns run `gh` through `run_program` (argv, no shell, hard
+timeout) and classify failures into the structured `ForgeError`
+(`NotFound` / `AuthRequired` / `Timeout` / `AlreadyExists` / `Other`).
+`project_detect` / `commit_activity` / `contributor_stats` are engine reads,
+not gh calls.
+
+| Fn | Semantics |
+|---|---|
+| `forge_status()` | `gh` on PATH + authenticated probe (no repo). |
+| `forge_context(repo_id)` | Owner/repo/branch derived from the `origin` remote + HEAD. |
+| `pr_create(...)` / `pr_list(...)` | Create a PR (base/title/body/draft) / list PRs by state (limit 50). `AlreadyExists` carries the existing PR URL when parseable. |
+| `pr_checks(repo_id, number)` | CI checks of one PR; states canonicalized to pass/fail/pending/skipping (JSON first, table fallback for older gh). |
+| `pr_merge(...)` / `pr_close` / `pr_reopen` / `pr_ready` | Merge (`merge`/`squash`/`rebase`, optional `--delete-branch`/`--auto`) / close / reopen / draft-readiness flips. |
+| `pr_checkout(repo_id, number)` | Check out the PR head branch locally. |
+| `pr_comment` / `pr_review` | Comment / submit a review (`approve`, `request-changes`, or plain comment). |
+| `workflow_runs(...)` / `workflow_run_detail(...)` | Recent Actions runs (branch/status/workflow filters) / one run with jobs and steps. |
+| `workflow_run_logs(...)` | Logs of a run or one job (`--log` / `--log-failed`); falls back to per-job REST logs while a run is in progress — empty output while active is normal, not an error. |
+| `workflow_run_cancel` / `workflow_run_rerun` / `workflow_dispatch` | Cancel a queued/running run / rerun all or failed jobs / trigger a `workflow_dispatch` on a ref. |
+| `workflow_list(repo_id)` | Workflow files of the repo, including disabled ones. |
+| `project_detect(root)` | Detected project types + runnable scripts under one repository (bounded root + immediate-child scan, `projects.rs`). |
+| `commit_activity(repo_id, max_days, author?)` | Commits per local day, day ascending; `author` is a case-insensitive substring of name OR email. |
+| `contributor_stats(repo_id, max_days)` | Per-author rollups (exact name+email identity), count descending. |
+
+### AI / opencode — `opencode.rs`
+
+| Fn | Semantics |
+|---|---|
+| `opencode_detect(services)` | Probe for a local opencode CLI (PATH scan + `--version`). |
+| `opencode_serve_status(services)` | State of the managed `opencode serve` child (starts nothing). |
+| `opencode_serve_start(services, cwd?)` | Start (idempotent) the managed server: opencode picks a loopback port; start resolves once it accepts connects. The registry kills the child on drop (app-exit backstop). |
+| `opencode_serve_stop(services)` | Stop the managed server. |
+
+### Secrets — `keyring_store.rs`
+
+| Fn | Semantics |
+|---|---|
+| `secrets_get(services, key)` | Read a secret from the OS keyring (`Ok(None)` when unset). |
+| `secrets_set(services, key, value)` | Create/overwrite a secret. |
+| `secrets_delete(services, key)` | Delete a secret (idempotent). |
+
+All keyring entries live under the service name `mygitui`. The same service
+name is used directly (via the keyring crate, bypassing these generic fns)
+by the auth broker for `https:<host>:user` / `https:<host>:pass` entries and
+by the remote device store for device secrets — see "Persistence".
+
+### Remote devices — `remote/commands.rs`
+
+The remote machine is the source of truth: every read/write and git command
+executes on the device; nothing is synced locally. Secrets never appear in
+logged parameters: they go once into the OS keyring and are never stored in
+the profile file or error strings. Host keys are trust-on-first-use
+(`<data>/remote/known_hosts.json`); a changed key blocks the connection
+until explicitly re-confirmed. Every user-controlled value interpolated
+into a remote command passes the unit-tested POSIX quoting helper
+(`remote/quoting.rs`).
+
+| Fn | Semantics |
+|---|---|
+| `device_list(services)` | Registered devices + live connection status. |
+| `device_add` / `device_update` / `device_remove` | Profile CRUD; secrets write once into the keyring (`device_update` with `None` secrets keeps stored ones); remove drops the session and deletes profile + secrets. |
+| `device_connect` / `device_disconnect` / `device_status` | Dial + auth (surfacing host-key/auth prompts as events) / idle (ops reconnect on demand) / one-shot status probe. |
+| `device_test(input)` | Test-connection probe; nothing persisted (unsaved ids clean their keyring entries up). |
+| `device_hostkey_respond(request_id, accept)` | Answer a `BackendEvent::HostKeyRequest`. |
+| `device_auth_respond(request_id, password?, store)` | Answer a `BackendEvent::DeviceAuthRequest`. |
+| `device_forget_host_key(device_id)` / `device_host_key(device_id)` | Unpin the host key (next connect re-prompts) / read the pinned key. |
+| `remote_poll_set_paused(paused)` | Pause/resume the remote change pollers. |
+| `device_browse_dir(device_id, path)` | SFTP listing (entries carry absolute POSIX paths; `""`/`"~"` = home). |
+| `device_scan_repos(device_id, path?)` | Find git repositories on the device as candidates. |
+| `remote_repo_open(services, device_id, path)` | The remote twin of `repo_open`: opens a device repo as a first-class tab. |
+
+### Cross-cutting backend modules (not called directly by the UI)
+
+- `ops.rs` — per-repo serial `OpQueue`, `OpCtx` (throttled progress, log
+  lines, cancellation token), `EventSink` abstraction (`BusEventSink` in
+  production, collector in tests).
+- `rt.rs` — process-wide tokio runtime (`spawn`, `spawn_blocking`,
+  `block_on`) used by op-queue workers and sync entry points.
+- `actions.rs` — action registry (run ids, per-repo concurrency budget,
+  cancel), platform shell wrapping (`cmd /C` vs `sh -c`).
+- `auth.rs` — global `AuthBroker`: git2 credential callback chain
+  (ssh-agent → keyring/cache → git credential helpers → UI prompt
+  round-trip with 60 s timeout), per-URL attempt counting so a rejected
+  credential re-prompts once, then fails the op.
+- `credential_helper.rs` — `git credential fill/approve/reject` plumbing.
+- `cli.rs` — `commit_via_cli` / `push_via_cli` (hooks + signing run for
+  real; stdout/stderr lines stream to `OpCtx::emit_log`).
+- `process.rs` — sanitized `Command` builder shared by the CLI layers.
+- `maintenance.rs` — sanitized `git <args>` runner + health/fsck/sparse/LFS
+  implementations (CLI-only work libgit2 cannot do).
+- `mergetool.rs` — `mergetool_info` (pure config read, gui-first resolution)
+  and `mergetool_run` (`git mergetool -t <tool>`, interactive).
+- `diffcore.rs` — hunk/line selection → minimal `git apply --cached`
+  patches (`apply_selection`) and reverse-apply (`discard_selection`).
+- `graph/` — pure, git2-free lane layout for the canvas commit graph:
+  consumes `CommitInfo` pages in walk order, produces render-ready
+  `GraphRow`s; page-boundary independent (same commits through any page
+  split with a shared `LaneState` yield identical rows).
+- `watcher.rs` — debounced (200 ms), gitignore-aware recursive workdir
+  watcher; emits `RepoChangedEvent` batches, bumps the repo generation on
+  every batch, restarts with backoff on errors (full-resync batch first).
+- `editors.rs` / `projects.rs` — editor detection/spawn and project/script
+  detection (pure scans).
+
+## Event bus
+
+`service/events.rs` defines one `BackendEvent` enum broadcast over a
+process-wide tokio broadcast channel (`events::global()`, capacity 4096).
+Every producer publishes through `EventBus::publish`; delivery is
+best-effort — with no live subscriber the event is dropped (`publish`
+returns `false`), and slow consumers lose the oldest events (they must
+recover from a `Lagged` error, which the UI does by re-fetching on the next
+event or the explicit refresh path).
+
+| Variant | Payload | Producer |
 |---|---|---|
-| `pty-output` | `{ session_id, data: string }` | terminal bytes, lossy UTF-8, coalesced into ≤1 event per 16 ms window (256 KiB/event cap, surplus split across consecutive events — never dropped) |
-| `pty-exit` | `{ session_id, code: number }` | final event of a session; `code` is the real exit code (`1` on signal/kill); the session is unregistered before it fires |
+| `RepoChanged` | `{ repo_id, paths, head_moved, full }` | FS watcher batch (`watcher.rs`, debounced + filtered) or remote poll tick (`remote/polling.rs`). Drives every panel refresh; `full: true` → resync everything. |
+| `OpProgress` | `{ repo_id, op_id, kind, message, pct?, done, error? }` | Op queue (`ops.rs`): ops emit throttled progress (`OpCtx::emit_progress`, ≥80 ms apart), the queue emits the final `done: true` event (never throttled) success or error. Queue-dispatched reads are silent. |
+| `OpLog` | `{ repo_id, op_id, line }` | `OpCtx::emit_log` — raw hook/CLI output lines (unthrottled). |
+| `AuthRequest` | `{ op_id, repo_id, url, kind, prompt }` | Auth broker credential callback (`auth.rs`) when keyring, cache, and credential helpers all miss. Answer via `network::auth_respond`. |
+| `HostKeyRequest` | `{ request_id, device_id, host, key, … }` | Remote transport (`remote/transport.rs`) on first contact or a changed host key. Answer via `remote::commands::device_hostkey_respond`. |
+| `DeviceAuthRequest` | `{ request_id, device_id, kind, prompt }` | Remote transport secret prompt (key passphrase / device password). Answer via `device_auth_respond`. |
+| `DeviceStatus` | `{ device_id, status }` | Remote transport on connection state transitions. |
+| `CloneProgress` | `{ url, received, total, objects }` | `service::repo::repo_clone` (throttled ≥80 ms; `received` counts bytes, `total`/`objects` count git objects — the bar fills by objects). |
+| `LogPage` | `{ request_id, page: { commits, rows, next_cursor, generation } }` | `service::log` streams (`repo_log_stream`, `repo_file_history`). `request_id` is minted by the UI per request so superseded streams can be discarded; `generation` lets clients detect stale pages. |
+| `ActionOutput` | `{ run_id, repo_id, name, line, done }` | Custom action runner (`actions.rs`); empty `line` on the final event. |
+| `PtyOutput` | `{ session_id, data }` | PTY sink (`pty.rs`) — lossy-UTF-8 decoded terminal bytes for one coalesced window. |
+| `PtyExit` | `{ session_id, code }` | PTY exit waiter. |
+| `CliArgs` | `Vec<String>` | Second-launch CLI args forwarded by the single-instance guard (forwarding itself is deferred; the variant and the consumed-once `CliArgs` first-launch store already exist). |
 
-Lifecycle: at most 8 concurrent sessions (`pty_create` rejects past the
-cap); a session that exits on its own unregisters itself. Sessions are NOT
-killed backend-side on repo close — the FE must `pty_kill` each terminal
-panel's session when its tab closes; as a backstop the registry's `Drop`
-kills every remaining shell on app exit.
+## UI ⇄ service contract
 
-## Commands (M6 — forge / gh-assisted GitHub flow)
+### Call path
 
-All GitHub interaction shells out to the user's `gh` CLI (JSON mode) with the
-repo workdir as cwd — mygitui stores no GitHub tokens; `gh` brings its own
-auth. Processes run argv-array-only (no shell), streams drained concurrently,
-hard timeout with kill on exceed: `--version` 3 s, `auth status` 10 s,
-`pr list` / `run list` / `run view` 60 s, `pr checks` 30 s, `run logs` 120 s,
-and PR/workflow mutations 120 s. Commands run on `spawn_blocking` (no
-op-queue membership — long ops with their own timeouts, no event stream).
-Logic: `app/src/forge.rs`; tests: `forge_tests.rs`.
+`ui/app.rs` owns one `Arc<AppServices>` built at boot (`AppServices::new()`
+— platform data/config dirs under the `com.raulshma.mygitui` suffix; tests
+use `with_dirs`/`in_dir`). The struct is `Send + Sync` (pinned by a
+dedicated test) so it can be cloned into every `Task::perform` closure.
+Async service bodies run on the iced (tokio) executor; inside them the
+engine work is enqueued on the repo's serial op queue, whose worker thread
+locks the shared `git2::Repository` per call, and the awaited result comes
+back through a oneshot receiver.
 
-| Command | Args | Returns | Notes |
-|---|---|---|---|
-| `forge_status` | — | `ForgeStatus` | `gh --version` + `gh auth status` |
-| `forge_context` | `repo_id` | `ForgeContext` | owner/repo from `origin` URL parse + current branch |
-| `pr_create` | `repo_id, base, title, body, draft: bool` | `PrCreated` | `gh pr create --base --title --body-file <tmp> [--draft]`; rejection is structured `ForgeError` |
-| `pr_list` | `repo_id, state_filter?: "open"\|"closed"\|"merged"\|"all"` | `PrInfo[]` | `gh pr list --state <state> --json … --limit 50`; blank → `open` |
-| `pr_checks` | `repo_id, number` | `CheckInfo[]` | `gh pr checks <n> --json name,state,bucket`; table fallback (✓/✗/- rows) for older gh |
-| `pr_merge` | `repo_id, number, method: "merge"\|"squash"\|"rebase", delete_branch, auto` | `string` | `gh pr merge <n> --<method> [--delete-branch] [--auto]`; rejection is `ForgeError` |
-| `pr_close` | `repo_id, number, comment: string \| null` | `string` | `gh pr close <n> [--comment …]` |
-| `pr_reopen` | `repo_id, number, comment: string \| null` | `string` | `gh pr reopen <n> [--comment …]` |
-| `pr_ready` | `repo_id, number, ready: bool` | `string` | `gh pr ready <n>`; `ready=false` adds `--undo` (draft) |
-| `pr_checkout` | `repo_id, number` | `string` | `gh pr checkout <n>` |
-| `pr_comment` | `repo_id, number, body` | `string` | `gh pr comment <n> --body-file <tmp>` |
-| `pr_review` | `repo_id, number, action: "approve"\|"request-changes"\|"comment", body` | `string` | `gh pr review <n> --approve\|--request-changes\|--comment [--body-file <tmp>]` |
-| `workflow_runs` | `repo_id, limit?: u32, branch?: string, status_filter?: string, workflow?: string` | `WorkflowRun[]` | `gh run list --json … --limit <1–100>` (default 30) + optional `--branch` / `--status` / `--workflow`; newest first |
-| `workflow_run_detail` | `repo_id, run_id: u64` | `WorkflowRunDetail` | `gh run view <id> --json …,jobs` |
-| `workflow_run_logs` | `repo_id, run_id: u64, job_id?: u64, failed_only: bool` | `string` | `gh run view <id> [--job <id>] --log`; `--log-failed` when `failed_only`; output capped at 1.5M chars |
-| `workflow_run_cancel` | `repo_id, run_id: u64` | `string` | `gh run cancel <id>` |
-| `workflow_run_rerun` | `repo_id, run_id: u64, failed_only: bool` | `string` | `gh run rerun <id> [--failed]` |
-| `workflow_dispatch` | `repo_id, workflow, git_ref, inputs: WorkflowInput[]` | `string` | `gh workflow run <workflow> --ref <git_ref> --raw-field key=value…` |
-| `workflow_list` | `repo_id` | `WorkflowInfo[]` | `gh workflow list --all --json id,name,path,state` (disabled workflows included) |
+### Dispatch rules (the queue)
 
-Types (generated to `src/lib/ipc/gen/`, re-exported by `src/lib/ipc/types.ts`):
+`service::enqueue_mutation` / `enqueue_read` (and their `enqueue_remote_*`
+twins) are the only sanctioned paths for engine ops:
 
-```
-ForgeStatus  = { available: bool, version: string, authed: bool }
-ForgeContext = { owner, repo, branch, remote_url }
-PrCreated    = { url, number }
-PrInfo       = { number, title, head_ref_name, base_ref_name,
-                 state: "OPEN"|"MERGED"|"CLOSED", is_draft: bool, url,
-                 created_at, updated_at, merged_at, closed_at: string | null,
-                 author, body, additions, deletions, changed_files,
-                 review_decision, mergeable, labels: string[] }
-CheckInfo    = { name, state: "pass"|"fail"|"pending"|"skipping" }
-WorkflowRun  = { database_id, number, name, display_title, event,
-                 head_branch, head_sha, status, conclusion, url,
-                 created_at, updated_at, started_at: string | null,
-                 attempt, workflow_database_id }
-WorkflowStep = { number, name, status, conclusion,
-                 started_at, completed_at: string | null }
-WorkflowJob  = { database_id, name, status, conclusion,
-                 started_at, completed_at: string | null, url,
-                 steps: WorkflowStep[] }
-WorkflowRunDetail = { run: WorkflowRun, jobs: WorkflowJob[] }
-WorkflowInfo = { id, name, path, state }
-WorkflowInput = { key, value }
-ForgeError   = { kind: "NoGh"|"NotAuthed"|"AlreadyExists"|"Other", message, url: string | null }
-```
+- **Mutations** run with the repo lock held and bump the repo generation
+  afterwards (success or error — hooks may have touched state even on
+  failure), so in-flight log streams abort and clients re-request.
+- **Reads** run with the lock held but stay silent on the op-progress
+  surface: no progress, no done event; failures surface only as the call's
+  `Err(String)`.
+- **Deliberately off-queue**: `repo_log_stream` / `repo_file_history`
+  (their own cancellation loop and stream tokens on a dedicated thread),
+  `mergetool_run` (interactive, minutes-long — blocking the queue would
+  freeze the repo while the external tool writes files), and the
+  never-locks-the-repo commands (FS/CLI reads and spawns: maintenance
+  probes, forge, clone, actions, pty, secrets, editors).
 
-`pr_create` rejects with `ForgeError` (serialized object, not a string):
-`NoGh` = gh missing from PATH; `NotAuthed` = auth markers in gh output
-(run `gh auth login`); `AlreadyExists` = a PR exists for the branch —
-`url` carries the existing PR's URL when one is parseable. Remote URL
-parsing accepts `https://github.com/o/r(.git)`, `git@github.com:o/r.git`,
-`ssh|git://…github.com/o/r(.git)` (host matched case-insensitively, `www.`
-stripped); non-GitHub remotes fail `forge_context` with an explanatory
-error and the FE panel explains the gh flow is unavailable.
+Op kinds double as progress labels: `stage`, `commit`, `branch` (tags
+report here), `fetch` (remote config ops report here), `pull`, `push`,
+`clone`, `merge`, `rebase`, `bisect`, `stash`, `worktree`, `checkpoint`,
+`submodule`, `maintenance`, `archive`, `sparse`, `lfs`, `clean`; queue
+dispatched reads use `status`, `refs`, `blame`, `diff`, `preview`, `stats`,
+`reflog`, `describe` but emit no events.
 
-### M6 FE contracts (orchestrator notes)
+### Progress / cancellation
 
-- **Mounting**: `ForgePanel.svelte` takes `{ repoId }` and needs a
-  `PanelId` registry entry to be placeable — add `"forge"` to the `PanelId`
-  union + `PANEL_META` (`src/lib/layout/layoutModel.ts`, read-only for this
-  lane) + a `RepoView.svelte` snippet + `TREE_PANELS` membership.
-- **AI event contract** (CreatePrDialog prefill, independent of H1's
-  commit-message contract — reconcile names if H1 shipped a different pair):
-  - dialog **emits** `ai-generate-pr` via the typed UI bus
-    (`$lib/palette/events`; document-scoped — was a raw `window`
-    CustomEvent):
-    `detail = { repoId: string, commits: [{ sha, summary }] }` (up to 10
-    recent commits, may be empty);
-  - dialog **listens** for `ai-pr-result` on the typed UI bus:
-    `detail = { subject: string, body: string }` fills the title/body
-    fields (user typing clears the pending state);
-  - RepoView **emits** `ai-pr-error` on the typed UI bus when the generation
-    fails (added post-M12): `detail = { message: string }` — the
-    dialog clears its "Waiting for AI…" pending state and shows the
-    message inline (retry / manual fill).
-- **Open in browser** goes through `@tauri-apps/plugin-opener`'s JS API
-  (`openUrl`), guarded outside Tauri — no Rust command needed.
-- **Actions tab**: the panel's "Pull requests" / "Actions" tab switch keeps
-  the gh banner/context gate; the Actions tab lazily loads `workflow_runs` +
-  `workflow_list` on first activation (and per repo). Run rows show state,
-  title, branch, event, attempt, age and duration; expanding a row loads
-  `workflow_run_detail` and renders jobs/steps. Logs open inline (whole run,
-  one job, or `--log-failed`) with copy/close. Active runs offer Cancel,
-  completed runs offer Rerun / Rerun failed, and dispatch is a
-  `workflow_dispatch` dialog with raw `key=value` inputs (blank lines and `#`
-  comments skipped; duplicate or `=`-less lines are rejected before invoking
-  gh). `workflow_list --all` feeds the filter and dialog; only `active`
-  workflows are dispatchable.
+The footer tracks the latest `OpProgress`; while one is outstanding the UI
+keeps an `ActiveOp { repo_id, op_id, kind }` and offers Cancel, which calls
+`misc::op_cancel`. Cancellation is cooperative: queued-not-started ops are
+skipped entirely (the job resolves with a "cancelled" error), running ops
+observe the atomic flag through `OpCtx::cancelled` / `OpCtx::cancel_token`
+(netops fetch/push check between chunks). A `done: true` progress event
+always arrives for queued mutations/net ops — success or error — and clears
+`ActiveOp` plus triggers a refresh. Reads are silent by design (see above).
 
-## Commands (project/script detection)
+### Event → UI bridging
 
-`project_detect` maps one open repository to its runnable scripts; the
-Actions panel caches the result per repo and runs the commands through the
-existing `action_run` stream. The scan is bounded (root + immediate children,
-plus declared Node/Cargo workspace members) and never walks vendor/build
-directories. Commands are written to run from the repository root using
-project flags (`--prefix`, `--project`, `--manifest-path`, `-C`) so the
-action runner's cwd does not need to change. Logic:
-`app/src/projects.rs`; tests are in the same module.
+`ui/bus.rs` wraps the bus in one iced `Subscription`
+(`Subscription::run(bus::stream).map(Message::Backend)`); `Lagged` gaps are
+logged and skipped. The app batches the bus subscription with the system
+theme-change subscription, the keyboard listener, and the per-tab auto-fetch
+timer (keyed by repo + cadence; `0` disables). Each `BackendEvent` variant
+maps to a UI behavior: `RepoChanged` → targeted panel refreshes,
+`LogPage` → history model accept (matched by `request_id`), `OpProgress` →
+footer/ActiveOp, prompts (`AuthRequest` / `HostKeyRequest` /
+`DeviceAuthRequest`) → queued overlay dialogs, `PtyOutput`/`PtyExit` →
+terminal panel, `ActionOutput` → action run view.
 
-| Command | Args | Returns | Notes |
-|---|---|---|---|
-| `project_detect` | `repo_id` | `ProjectInfo[]` | Detects Node/JS/TS, Rust, Python, .NET, Android/Gradle, Go, Ruby, PHP/Composer, and Makefile targets |
+## Persistence
 
-```
-ProjectInfo   = { kind, name, path, detected_from: string[], scripts: ProjectScript[] }
-ProjectScript = { id, label, command, kind: "run"|"watch"|"test"|"build"|"lint"|"install",
-                  watch: bool }
-```
-
-`path` is repository-relative and `"."` for the root. `watch: true` marks a
-long-lived command (dev server / `--watch` / Gradle `--continuous`); the UI
-labels it as a watcher. Detection is best-effort: missing tools (`cargo
-watch`, `pytest`, …) are reported by the runner like any other action.
-
-## Commands (M7 — contribution statistics)
-
-Queued reads on the per-repo op queue (`enqueue_read`, no generation bump).
-Logic: `app/src/engine/stats.rs` (inherent `*_impl` methods on
-`Libgit2Engine`, reached through the `GitEngineM12` forwarding hosted in
-`trash.rs`); tests: `engine/stats_tests.rs`.
-
-| Command | Args | Returns | Notes |
-|---|---|---|---|
-| `commit_activity` | `repo_id, max_days: u32, author?: string` | `DayCount[]` | commits per local day, day ascending; zero days omitted |
-| `contributor_stats` | `repo_id, max_days: u32` | `Contributor[]` | per-author rollups, count descending |
-
-```
-DayCount    = { day: string,        // "YYYY-MM-DD", committer local date
-                count: number }
-Contributor = { name, email, count: number,
-                first_day: string,      // "YYYY-MM-DD"
-                last_day: string }
-```
-
-Walk semantics (both commands): every commit reachable from
-`refs/heads/*`, `refs/remotes/*`, `refs/tags/*` or HEAD (revwalk-deduped —
-shared history counts once). Internal `refs/mygitui/*` namespaces
-(checkpoint snapshots) are deliberately NOT pushed and never count as
-activity. Window is committer time in `[now - max_days, now]`; buckets use
-the committer timestamp plus its recorded UTC offset ("local date").
-`author` on `commit_activity` is a case-insensitive substring matched
-against the author name OR email (blank/None = no filter). Contributor
-identity is the exact `(name, email)` pair. The walk caps at 100k commits
-per call. TS mirrors live in `src/lib/ipc/client.ts` (`DayCount`,
-`Contributor`, `commitActivity`, `contributorStats`).
-
-### M7 FE contracts (lane I1)
-
-- **Stats panel**: `PanelId "stats"` (registry + `PANEL_META` + default
-  left tab group, placed before `terminal`); `StatsPanel.svelte` takes
-  `{ repoId, root }` and hosts:
-  - the heatmap grid (GitHub-style: weeks × 7 weekday rows, 53 columns,
-    last column ends today; a real `<table>` with per-cell
-    `aria-label="N commits on DATE"`, intensity via `--m3-primary`
-    `color-mix` buckets over quartile thresholds of the nonzero counts),
-  - summary cards (commits, active days, avg per active day, current +
-    longest streaks — an idle today defers the current streak to
-    yesterday, GitHub semantics),
-  - an author filter (datalist from the contributor rollups → re-fetch
-    `commit_activity` with the author substring),
-  - the contributor list (name, count bar, active range),
-  - the **"Colors…" popover** — the editor for branch color rules. It was
-    placed in StatsPanel by design (simplest single home for M7's
-    settings-ish UI).
-- **Branch color rules**: per-repo localStorage
-  `mygitui.branchcolors.<root>` = `[{ pattern, color }]` (array order =
-  match priority). Pattern grammar: `feature/*` prefix, `*-hotfix` suffix,
-  `main` exact, `*` catch-all; case-sensitive. `branchColorForRefs(refs,
-  rules)` matches SHORT ref decoration names ("main", "origin/main");
-  `HEAD -> …` decorations never match; first matching rule wins. Store +
-  pure matcher: `src/lib/stats/branchColors.svelte.ts`.
-- **Commit bookmarks**: per-repo localStorage
-  `mygitui.bookmarks.<root>` = `[{ sha, label }]`. Store:
-  `src/lib/components/graph/bookmarks.svelte.ts`
-  (`add`/`remove`/`list`/`toggle`/`shas`; injectable storage). M7 ships
-  the store + graph display only — creation UI is intentionally out of
-  scope (display-only decorations).
-- **GraphCanvas additive props** (beyond the B2 contract):
-  `bookmarks?: ReadonlySet<string>` (shas → small dashed ring marker on
-  the node, same geometry as the HEAD ring but dashed) and
-  `branchColors?: (refs: string[]) => string | null` (resolved per drawn
-  row against the row commit's `refs`; a hit recolors that row's node +
-  outgoing edges instead of the lane palette). `render.ts` threads both
-  through `DrawParams` as the additive optional fields
-  `bookmarks` / `colorOverrides` (`Map<rowIndex, color>`).
-- **Wiring**: `RepoView` hydrates both per-root stores in an `$effect`
-  (never inside `$derived`, like the layout overlays) and passes
-  `bookmarks`/`branchColors` into `HistoryView` (additive optional props)
-  → `GraphCanvas`. Popout history windows omit the props (safe:
-  decorations are optional).
-
----
-
-## M9 — Complete git core (engine + UI)
-
-### Engine additions (all mirrored in `src/lib/ipc/types.ts`)
-
-- **`MergeOptions`** `{ no_ff, squash, no_commit, favor }` — `favor` is
-  `none | ours | theirs` (git `-X` file favor). `merge_branch(repo_id,
-  ref_name, opts)` replaces the old `no_ff: bool` arg. New
-  `MergeOutcome` values: `squashed` (result staged + `SQUASH_MSG`
-  written, NO merge state — the next commit is a normal 1-parent
-  commit, also when the squash merge conflicted) and `no_commit`
-  (clean merge, MERGE_HEAD stays — the finishing commit goes through
-  the normal commit path).
-- **Commit during a merge**: the finishing commit now takes MERGE_HEAD
-  as its second parent and consumes the merge state
-  (MERGE_HEAD/MERGE_MSG/MERGE_MODE via `cleanup_state`).
-  `RepoStatus::merging` drops. Amend during a merge is rejected.
-- **Pull `--rebase` (diverged)**: replays the local-only commits onto
-  the fetched tip through the custom rebase engine. A conflict pauses
-  in rebase state — `RepoStatus::rebasing` (the custom rebase state
-  file is now visible to status + conflict-source detection) and the
-  FE rebase monitor/conflict editor drive it; abort restores the
-  pre-pull state.
-- **`PushOptions`** gains `force_with_lease` (refuses without a
-  tracking ref — the tracking ref IS the lease value), `refs: string[]`
-  (explicit refs, bare names allowed; multi-ref push), `tags: true`
-  (`--tags`), `delete: true` (delete the remote refs named in `refs`;
-  `NetStats.updated_refs` reports `"(deleted)"` as the new value).
-- **`tag_list`** → `TagInfo[]` `{ name, sha, target, annotated, tagger?,
-  message? }` (`sha` = the ref's direct target: the tag object for
-  annotated, the commit for lightweight). **`tag_create_signed`**
-  creates signed annotated tags via the git CLI (`git tag -s`,
-  sanitized env, message via `-F` file).
-- **`remote_branches`** → `RemoteBranchInfo[]` `{ remote, name, sha,
-  tracked_by? }` (HEAD refs skipped). **`branch_checkout_remote`**
-  creates + checks out a local branch tracking `<remote>/<name>`
-  with upstream configured; returns the local name; errors when it
-  already exists.
-- **`discard`** `{ targets: StageTarget[] }` — `git checkout --` on
-  steroids: whole file = index+workdir back to HEAD (or deleted when
-  not in HEAD); hunk/line targets = workdir-only line surgery (the
-  index is untouched; libgit2 `apply(WorkDir)` cannot be used because
-  its preimage is the index). A checkpoint is created BEFORE any side
-  effect (same ordering rule as `repo_clean`).
-- **Regex log filter**: `LogFilter.regex` is live (Rust `regex` crate,
-  compiled once per query; invalid patterns → `Invalid`).
-- **Diff Index→Commit** side pair is implemented (index materialized
-  to a throwaway tree; old side = Index).
-- **`mergetool_info`** → `MergetoolInfo` `{ tool?, gui_tool? }` (git
-  config); **`mergetool_run(repo_id, path, tool?)`** launches
-  `git mergetool --no-prompt` for one path — deliberately NOT on the
-  op queue (interactive, minutes-long; watcher still fires). The
-  built-in 3-way editor stays the default.
-- **`gitignore_apply_template(repo_id, name)`** — appends a builtin
-  template's patterns (idempotent per line) under a `# <name>` header
-  in one write.
-
-### Frontend
-
-- **Typed event bus**: `src/lib/palette/events.ts` (`emitUiEvent` /
-  `onUiEvent`) — replaces the dead CustomEvent wiring hints. Panels
-  subscribe in `$effect`s: RepoView (`focus-panel`, `open-conflicts`,
-  `conflicts-recheck`), HistoryView (`history-*`,
-  `history-select-commit`, `commit-action`), BranchPanel
-  (`branches-focus-*`, `branches-cleanup`), DiffViewer
-  (`diff-toggle-mode`).
-- **Global context menu**: `src/lib/components/menu/contextMenu.svelte.ts`
-  (`show`/`hide`/`move`, keyboard-accessible) + `ContextMenu.svelte`
-  (mounted once in App.svelte). Menus: history commits (cherry-pick,
-  revert, rebase-from-here, bookmark, copy), changed files (file
-  history, blame), status rows (stage/unstage/discard/ignore/file
-  history/open diff), branches (switch/merge/push/upstream/rename/
-  reset/delete/copy), reflog entries (copy/show/reset/branch).
-- **MergeDialog** (`src/lib/components/merge/`) — ff policy, squash,
-  --no-commit, -X favor; wired from BranchPanel rows + context menu.
-- **TagsSection** (in BranchPanel) — list/create (lightweight,
-  annotated, signed)/delete/push-tags.
-- **SubmodulePanel is registered** (PanelId `submodules`).
-- **FileHistoryView** — popout `?panel=filehistory&repo=<id>&path=`
-  (rename-following walk via `HistoryStore({ follow: true })`);
-  opened from changed-file menus/buttons.
-- **CommitDetail** (`src/lib/components/panels/CommitDetail.svelte`) —
-  the commit detail pane shared by HistoryView and its own popout
-  `?panel=commitdetail&repo=<id>&sha=<full sha>` ("Pop out" in the
-  detail header; `PopoutCommitDetail` self-wires the `CommitInfo`
-  fetch via a one-root log walk, parent clicks retarget the window;
-  the bookmark star stays hidden in popouts — bookmarks persist per
-  worktree root, which only the main window knows).
-- **Hunk actions in DiffViewer** — optional `repoId` +
-  `hunkStaging` ("stage"|"unstage") + `hunkDiscard` props; RepoView's
-  working-copy pane enables them only when the shown file has no
-  staged changes (head→worktree hunks must coincide with the
-  index→workdir hunks the backend targets).
-- **Branch cleanup wizard** — "Clean merged…" scans
-  `branch_is_merged` into HEAD, checkbox list, batch delete.
-- **Reflog recovery** — reset-to (ResetDialog) / branch-from-here
-  (PromptDialog) / show-in-history; BlameView sha-click selects the
-  commit in history (stale M2 toast removed).
-- **Bookmark UI** — context-menu toggle on history commits
-  (`mygitui.bookmarks.<root>`); the M7 "display-only" note is
-  obsolete.
-- **Regex filter checkbox is live** in the history filter bar
-  (`HistoryFilterFields.regex`).
-- **ConfirmDialog / PromptDialog**
-  (`src/lib/components/safety/`) replace every `window.confirm` /
-  `window.prompt` (stash drop, remote/worktree removal, layout
-  save-as, aborts, GC, merged-delete).
-- **GitignoreGallery** — template gallery dialog from the StatusPanel
-  toolbar ("Templates…").
-- Palette: `branches.clean-merged` command added; PopoutPanel
-  extended with `filehistory`.
-
----
-
-## M10 — Power git (bisect, describe, autosquash, exec, pickaxe, remote branches)
-
-### Engine (`<gitdir>/mygitui/bisect.json` persistence; probe = first-parent
-walk midpoint, known-bad tip excluded)
-
-- **`bisect_start(repo_id, bad?, good?)`** → `BisectState` — HEAD detaches
-  onto the first probe (bad defaults to HEAD; guards: same good/bad,
-  unknown refs, double start). **`bisect_state`** → `BisectState`
-  (`active: false` singleton when none). **`bisect_mark(mark)`**
-  (`good|bad|skip`) → next `BisectState` — moves the good/bad bound or
-  adds to `skipped`, checks out the next midpoint; when
-  `remaining === 0` the `bad` tip IS the first bad commit (the bisect
-  stays active until `bisect_reset` for inspection).
-  **`bisect_reset`** restores the original branch/HEAD and removes the
-  state file. `BisectState` = `{ active, bad, good?, current?, remaining,
-  skipped[], orig_head, orig_branch? }`.
-- **`describe(repo_id, spec)`** — `git describe --tags` (libgit2
-  `Object::describe`); falls back to the 7-char sha when no tag is
-  reachable.
-- **`autosquash_plan(repo_id, base)`** → `RebaseStep[]` — `fixup!` /
-  `squash!` commits in `base..HEAD` moved right after their (subject-
-  matched) targets, as `fixup`/`squash` steps; everything else `pick`.
-  Feeds `rebase_start` unchanged.
-- **Rebase `exec` action** — `RebaseStep { action: "exec", new_message:
-  <command> }` runs in the workdir (`sh -c` / `cmd /c`, sanitized env).
-  A failing exec pauses the rebase: `RebaseState.paused_for_exec` +
-  `exec_error` (new additive fields); `rebase_continue` RE-RUNS the
-  failed step (git semantics); validation demands a non-empty command;
-  plans of only exec steps require `onto`.
-- **Pickaxe**: `LogFilter.pickaxe` (optional) — `-S` semantics: a commit
-  matches when its first-parent patch adds or removes the string
-  (per-hunk patch line scan, rename detection on). Mirrored:
-  `HistoryFilterFields.pickaxe` + the History filter-bar
-  "Changes containing… (-S)" input.
-
-### Frontend
-
-- **BisectBanner** (`src/lib/components/bisect/`) — mounted in RepoView
-  under the conflict banner. Inactive: "Bisect…" launcher → start form
-  (bad prefills HEAD). Active: probe sha, remaining count, Good/Bad/Skip
-  marks, Reset; on completion the bad tip gets "Show in history" (typed
-  bus). Palette: `bisect.start` → `bisect-open-start` event.
-- **Describe** line in the history commit-detail meta (lazy per
-  selection, decorative failures swallowed).
-- **RebasePlanner "Autosquash" button** (visible when a base is set) —
-  replaces the plan rows with `autosquash_plan` output, summaries
-  preserved by sha lookup.
-- **RemotePanel "Branches" toggle per remote** — lists
-  `remote_branches()` with per-branch Checkout (tracking local branch;
-  hidden when already tracked) and Delete (push `:refs/heads/<name>`).
-
----
-
-## M11 (cont.) — maintenance/sparse/LFS/archive, syntax highlighting, i18n
-
-### Backend (`app/src/maintenance.rs`; sanitized CLI layer)
-
-- **`repo_health(repo_id)`** → `RepoHealth` `{ git_size_bytes,
-  worktree_size_bytes, loose_objects, packed_objects?, pack_files,
-  has_commit_graph, commit_graph_bytes, packed_refs, last_gc? }` — pure fs
-  walk (bounded depth 3). `last_gc` is the mtime of `<gitdir>/gc.log`
-  (git writes it only on gc warnings) — null for cleanly maintained
-  repos, not a true "last gc ran" timestamp.
-- **`maintenance_run(repo_id, op)`** — op queue; `gc` (`git gc --auto`),
-  `prune`, `commit_graph` (`git commit-graph write --reachable
-  --split=replace` — revwalk acceleration; the Health panel surfaces a
-  "none — write one" hint when absent), `pack_refs` (`--all --prune`),
-  `count_objects` (parses `count-objects -v`).
-- **`archive(repo_id, spec, format, destination)`** — `git archive`;
-  formats `zip|tar|tar.gz`; metacharacter guard on spec/destination.
-- **`sparse_info` / `sparse_apply(repo_id, patterns, add)`** — cone-mode
-  `git sparse-checkout`; empty pattern list = `disable` (full checkout).
-- **`lfs_status`** → `LfsStatus` `{ installed, version?, tracked_patterns }`
-  (`git lfs version` probe + `filter=lfs` patterns from tracked
-  `.gitattributes`); **`lfs_run(subcommand)`** — `pull|push|fetch|install`
-  only (allowlist).
-- **`clone_blobless(url, destination, depth?)`** — `git clone
-  --filter=blob:none` CLI path (libgit2 cannot filter-promote).
-- **Pickaxe budget**: `-S` page requests scan at most
-  `LOG_CURSOR_SCAN_LIMIT` (100k) commits per page (~2.6 ms/commit measured
-  on the bench fixture — `git log -S` is inherently expensive; the budget
-  keeps huge repos responsive and the stream cancellable). On exhaustion a
-  page returns the last examined commit as `next_cursor`, so the stream
-  resumes in a fresh page — nothing beyond the budget is silently dropped.
-
-### Frontend
-
-- **RepoPanel** (PanelId `health`, label "Repo") — health facts grid +
-  maintenance buttons + archive export (save-file picker) + sparse pattern
-  editor + LFS section (install guidance when the binary is absent).
-- **HistoryView commit context menu**: "Export archive…".
-- **CloneDialog**: blobless (`--filter=blob:none`) checkbox.
-- **Syntax highlighting** (`src/lib/diff/highlight.ts`, Shiki, lazy
-  singleton + on-demand grammars): the virtualized render path never
-  awaits — `cachedTokens` is synchronous; background parses bump a version
-  counter (`onTokensLanded`) that repaints the visible window. Line cache
-  keyed (scheme, lang, text), capped 20k entries, 800-char line cap,
-  permanent plain-text degrade on any failure. Replaces word-level
-  highlights for tokenized lines. `rowModel` gained a parallel
-  `fileIndexes` array (row → owning file) — additive, no row shape change.
-- **i18n groundwork** (`src/lib/i18n/`): `t(key, vars)` with `{placeholder}`
-  interpolation, English catalog seeded (panels/actions/dialogs/toasts/
-  states), fallback chain active→English→key, `setLocale` with unknown-
-  locale guard. Applying more strings is mechanical; `Intl` keeps owning
-  dates/numbers.
-- **Benches** (`refs` group): `tag_list_500_commits` ≈ 1.75 ms,
-  `describe_head` ≈ 3.7 ms, `log_pickaxe_substring` ≈ 1.3 s/500-commit
-  full walk (budgeted as above).
-
-## M12 — gap closure: safety, verification, infra gates
-
-Additive contracts only; all commands take `repo_id` unless noted.
-
-| Command | Args → Result | Notes |
-| --- | --- | --- |
-| `commit_signature` | `sha` → `CommitSignature` | `{signed, kind: "gpg"\|"ssh"\|null, valid: bool\|null, detail}`. Verified via `git verify-commit` (CLI route) so gpg/ssh-agent match terminal behavior; `valid: null` = signed but no key / no `gpg.ssh.allowedSignersFile`. |
-| `branch_trash_list` | → `[BranchTrashEntry]` | Entries from `refs/mygitui/trash/*`, newest first: `{id, name, sha, deleted_at}`. `branch_delete` now snapshots the tip here before deleting. |
-| `branch_trash_restore` | `id`, `new_name?` → `string` | Recreates the branch (optionally renamed) at the trashed sha; returns the branch name. Errors when the name exists and no `new_name`. Trash entries are cleaned by checkpoint GC (30d). |
-| `worktree_prune` | → `u32` | `git worktree prune`; returns pruned count. `worktrees` now also lists the main worktree (`is_main: true`) and prune stale admin files itself. |
-| `bisect_log` | → `[BisectLogEntry]` | `{mark, sha, at}` oldest first; also mirrored into `BisectState.log`. |
-| `op_cancel` | `op_id` → `bool` | Best-effort cancel of a queued/running mutation. Queued → dropped; running → stops at the next cooperative checkpoint (long libgit2 ops check between steps). Returns false when already finished. |
-| `cli_args_initial` | → `[string]` | argv captured at first launch (`mygitui <path>`), consumed once; second-launch args keep arriving via the `cli-args` event. |
-| `opencode_detect` | → `OpencodeDetection` | `{installed, path, version, major}` — PATH × PATHEXT scan (never cached) + `opencode --version` (4s timeout, sanitized env). |
-| `opencode_serve_status` | → `OpencodeServeState` | `{running, url, port, error, password?}` of the app-managed `opencode serve` child; reaps a child that exited. Starts nothing. `password` is the generated `OPENCODE_PASSWORD` of a running 2.x server (`null`/absent on 1.x). |
-| `opencode_serve_start` | `cwd?: string` → `OpencodeServeState` | Idempotent: returns the live server or spawns on a free 127.0.0.1 port (ready = TCP connect; ≤30s wait). `cwd` (the active repo root) becomes the server's working directory for project resolution. Non-1.x CLIs get a generated `OPENCODE_PASSWORD` (1.x carries none); a 2.x `server password <secret>` stdout line (secret at end-of-line) overwrites it as fallback — the announced secret is authoritative when the server ignored the env var. Error copy names the fix ("not found on PATH — install opencode…"). |
-| `opencode_serve_stop` | → `OpencodeServeState` | Kills (tree-kill on Windows) and reaps the managed server; no-op when none runs. |
-| `detect_editors` | → `EditorApp[]` | Probes PATH + well-known install locations for common editors (VS Code family, Cursor, Windsurf, Zed, Sublime, Notepad++, JetBrains via Toolbox/standalone scans). `EditorApp = {id, name, path}`; the platform file manager (`id: "explorer"`) is always first. No subprocesses; not cached. |
-| `open_with` | `repo_root`, `app_id` → `void` | Spawns the app id resolved through a fresh `detect_editors` probe (frontend-supplied paths are never spawned) with the repository root as the working folder; Notepad++ passes `-openFoldersAsWorkspace`, macOS goes through `open [-a <app>]`. Sanitized environment (same allowlist as git spawns — GUI apps keep SYSTEMROOT/USERPROFILE/APPDATA/LOCALAPPDATA/PATH/HOME/TMP). |
-| `open_popout` | `label`, `query`, `title` → `void` | Creates (or focuses, when `label` exists) a popout webview window: `query` is the window's own `?panel=…&repo=…` URL query joined onto the app origin. Built Rust-side instead of via core `create-webview-window` so the main window's `additionalBrowserArgs` are copied — WebView2 rejects a second webview environment on the same user data folder (0x8007139F). 960×680 (min 420×300), splash background; created hidden and shown by the app's page-load hook at final size (the window-state plugin restores the saved geometry right after creation, and showing before that would visibly re-layout); the capability set covers `popout-*` labels. |
-
-Shape changes (additive, mirrored in `src/lib/ipc/types.ts`):
-- `LogFilter.pickaxe_regex` — pickaxe `-G` (patch regex) alongside `-S`.
-- `RepoHealth.fsck_dangling` / `fsck_samples` — filled from the `<gitdir>/mygitui/fsck.json` cache written by `maintenance_run(op: "fsck")` (the op parses `git fsck --no-progress --dangling` on both streams and caches count + up to 10 sample shas).
-- `WorktreeInfo.is_main`; `MergetoolInfo.path` / `cmd` (mergetool.<tool> introspection).
-- `CommitSignature`, `SignatureKind`, `BranchTrashEntry`, `BisectLogEntry` (new types).
-
-Platform:
-- Dynamic color: `os_accent_color` (Windows DWM registry accent → seed) + `mygitui.seed` localStorage override (palette: "Appearance: Set/Reset accent seed color…"); resolution order override → OS accent → baseline.
-- opencode managed serve (M12): `opencode_detect` (PATH × PATHEXT scan, never cached — misses re-scan so fresh installs are found; `--version` probe → `{installed, path, version, major}`), `opencode_serve_status/start/stop` over the `OpenCodeServerRegistry` (one app-owned `opencode serve --hostname 127.0.0.1 --port <free>` child; ready = TCP connect succeeds; stdout `… listening on http://…` parsed when announced; `run()`'s `RunEvent::Exit` handler calls `registry.stop()` → `taskkill /T` tree-kill — Tauri does NOT drop managed state on exit, a registry `Drop` alone would not fire). Frontend resolution (`resolveOpencode`): `opencodeEnabled === false` → disabled (no probe, no spawn), else `opencodeMode` — managed (default; attach when a legacy manual `opencodeUrl` exists and no mode is set) → provider asks the registry for the URL and lazily starts the server; attach keeps strict autodiscovery (manual URL → `127.0.0.1:4096`, either generation; a 401/403 counts as `unauthorized` only with a JSON body, otherwise the candidate is skipped). Both server generations are supported (t3-style probe routing: `/api/info` JSON `{version, pid}` → v2 via `@opencode/client` temp-session prompt + `/api/event` wait with ask-then-reject tool permissions, 3-min generation timeout with session interrupt, and session removal afterwards; `model.list` + bounded `provider.list` catalog; `/global/health` JSON `{healthy, version}` → v1 via `@opencode-ai/sdk` sync prompt with per-repo reused sessions). Outside Tauri managed degrades to attach.
-- AI startup probe: the `AiStore` singleton runs `supervisor.checkAll()` once at construction (real app only, not tests/browser) — the health chip reflects reality immediately; managed mode spawns the server through that probe.
-- opencode SSE: `subscribeOpencodeEvents` resolves the auth password once and uses it for both strict discovery and the stream — `GET /event` (1.x) or `/api/event` (2.x) (fetch-based, basic-auth with the managed 2.x password when managed) and feeds the supervisor's `noteTransportEvent` — transport liveness refreshes `lastCheck`; a down backend re-probes instead of trusting the stream. Retry stays with the supervisor. The base URL resolves through the provider's `connection()` so managed-mode random ports work.
-- Deep links: `mygitui://open?path=<abs>` — `tauri-plugin-deep-link`, schemes in `tauri.conf.json`, frontend router `src/lib/entry/deeplink.ts` (same open-repo-tab path as `cli-args`).
-- First-launch argv: `CliArgs` state captured in `run()`, served by `cli_args_initial`.
-- Updater: release workflow overlays `plugins.updater` (pubkey + GitHub latest.json endpoint) only when the `TAURI_UPDATER_PUBKEY` secret exists; signing env vars always wired (`TAURI_SIGNING_PRIVATE_KEY[_PASSWORD]`).
-- Nightly: criterion `--baseline nightly` compare (fails on regression) + `examples/soak.rs` real RSS soak (250MB gate, monotonic-growth detector, `SOAK_MINUTES`).
-- Fixtures: `signed` (ssh-keygen + `gpg.format=ssh` signed commits + allowed_signers), `detached` (detached HEAD mid-history), `files-100k` (`--files N` scale knob).
-
-Quality gates:
-- `prop_tests.rs`: proptest roundtrips — hunk-apply selection and checkpoint restore over randomized worktree states.
-- Benches added: `cold/open_plus_status`, `diff/synthetic_10k_hunks`, `search/log_filter_regex_page`, `history/file_history_page`, `bisect/mark_step`.
-- Playwright smoke (SPA-level, mocked `__TAURI_INTERNALS__`): app boot → open repo → stage → commit dialog.
-
-## Commands (workspace files — file browser / viewer / editor)
-
-Workdir filesystem operations backing the Files panel, the file
-viewer/editor, and quick-open. Logic: `app/src/workspace.rs`; tests:
-`workspace_tests.rs`. Every `path` argument is workdir-relative with
-forward slashes and validated (absolute forms, `..` components, Windows
-prefixes, and anything escaping the root reject). Mutating commands run on
-the per-repo op queue (serialized, generation-bumping — the watcher-driven
-`repo-changed` → `refreshStatus` pipeline refreshes the UI for free) and
-refuse paths inside `.git`; `repo_delete_entry` additionally refuses
-submodule checkouts (dirs with their own `.git`) and snapshots a
-checkpoint BEFORE deleting (undoable from the Undo panel, same ordering
-rule as discard/repo_clean).
-
-| Command | Args | Returns | Notes |
-|---|---|---|---|
-| `repo_list_dir` | `repo_id, path, include_ignored: bool` | `DirListing` | One directory level. Bounded (`ignore::WalkBuilder` max_depth 1), gitignore-aware (`.gitignore` chain + `.git/info/exclude` + global excludes; the `include_ignored` toggle turns every filter off), dirs-first natural sort, `.git` never listed. Directories that are gitlink entries in the index surface as `kind: "submodule"`. Capped at 5000 entries with `truncated: true` (error-free truncation). |
-| `repo_stat_file` | `repo_id, path` | `FileMeta` | Size, content classification (`text` / `image` by extension list mirroring the diff engine / `binary` by NUL sniff of the first 8 KiB), `readonly`, and `mtime_ms` (epoch millis) — the FE decides how to open a file before transferring bytes, and the editor's save compares mtimes. |
-| `repo_write_file` | `repo_id, path, content: number[], expected_mtime: number \| null` | `FileMeta` | The editor's save. `expected_mtime` guard: when set, it must equal the file's current mtime (or the file must be missing with `0` = create), otherwise a "changed on disk" conflict error rejects the write and the FE offers reload/overwrite. Writes are atomic (temp file + rename in the same dir), parent dirs created on demand. `null` overwrites unconditionally (tooling only — the editor always sends an mtime). |
-| `repo_create_entry` | `repo_id, path, kind: "file"\|"dir"` | `void` | Creates with parent dirs; errors when the path exists. |
-| `repo_rename_entry` | `repo_id, path, new_path` | `void` | Renames/moves within the worktree; errors when source is missing or target exists. |
-| `repo_delete_entry` | `repo_id, path` | `CheckpointInfo` | Checkpoint first (reason `delete <path>`), then remove — file or directory tree. |
-| `repo_file_index` | `repo_id` | `FileIndex` | Flat gitignore-respecting parallel walk of the workdir for quick-open (Ctrl+P); `.git` skipped; capped at 50k entries with `truncated: true`. Sizes are not collected (paths only). |
-
-```
-DirEntryKind   = "file" | "dir" | "symlink" | "submodule"
-DirEntryInfo   = { name, path, kind: DirEntryKind, size: number | null }
-DirListing     = { path, entries: DirEntryInfo[], truncated: bool }
-FileContentKind = "text" | "image" | "binary"
-FileMeta       = { path, size, kind: FileContentKind, readonly: bool, mtime_ms }
-FileIndexEntry = { path, is_dir, size: number | null }   // size always null in V1
-FileIndex      = { entries: FileIndexEntry[], truncated: bool }
-NewEntryKind   = "file" | "dir"
-```
-
-Frontend (FE contracts): FilesPanel + FileWorkspace lazily imported as the
-`files` panel / center workspace; opening a file emits the typed UI event
-`files-open-path` (detail `{ repoId, path }`) handled by RepoView; the
-quick-open dialog (`files.quickOpen`, Ctrl+P) opens the same event. TS
-wrappers live in `src/lib/ipc/client.ts`; types regenerate via
-`npm run gen:types`.
-
----
-
-## Commands (remote devices — SSH projects)
-
-Remote (SSH) device registry, connection lifecycle, prompt answering,
-remote filesystem browsing, and the remote twin of `repo_open`. The remote
-machine is the source of truth: every read/write and git command executes
-on the device; nothing is synced locally. Logic:
-`app/src/remote/` (`commands.rs` device CRUD/prompts/browse,
-`transport.rs` russh session pool, `engine.rs` git-over-SSH,
-`workspace.rs` SFTP, `term.rs` remote shell, `actions.rs` remote action
-runs, `polling.rs` change polling). Secrets live only in the OS keyring;
-host keys are TOFU-pinned (`<app-data>/remote/known-hosts.json`) and a
-changed key blocks the connection until explicitly re-confirmed. Every
-interpolated path/ref passes the unit-tested POSIX quoting helper
-(`remote/quoting.rs`). Auth: password or key file (+passphrase).
-
-| Command | Args | Returns | Notes |
-|---|---|---|---|
-| `device_list` | — | `DeviceInfo[]` | registered devices + live status |
-| `device_add` | `input: DeviceInput` | `DeviceInfo` | registers; secrets write-once into the keyring |
-| `device_update` | `input: DeviceInput` (`input.id` selects) | `DeviceInfo` | `None` secrets = leave stored ones |
-| `device_remove` | `device_id` | `void` | drops session, deletes profile + keyring secrets |
-| `device_connect` | `device_id` | `string` (status) | dials + auths; surfacing host-key/auth prompts as events |
-| `device_disconnect` | `device_id` | `void` | idle; ops reconnect on demand |
-| `device_status` | `device_id` | `string` | one-shot status probe (`"disconnected" \| "connecting" \| "connected"`) |
-| `device_test` | `input: DeviceInput` | `string` (probe output) | Test-connection button; nothing persisted (unsaved ids clean their keyring entries up) |
-| `device_hostkey_respond` | `request_id, accept: bool` | `void` | answers a `hostkey-request` |
-| `device_auth_respond` | `request_id, password?, store: bool` | `void` | answers a `device-auth-request` |
-| `device_forget_host_key` | `device_id` | `bool` | unpins the host key (next connect re-prompts) |
-| `device_host_key` | `device_id` | `KnownHostKey \| null` | the pinned key for the detail view |
-| `device_browse_dir` | `device_id, path` (`""`/`"~"` = home) | `DirListing` | SFTP listing; entries carry absolute POSIX paths |
-| `device_scan_repos` | `device_id, root?` (default home) | `DeviceRepoCandidate[]` | depth-limited `.git` scan, dependency/build dirs skipped, capped 200 |
-| `remote_repo_open` | `device_id, path` | `RepoInfo` (`device_id` set) | opens the remote repo as a project tab; starts the poller |
-| `remote_poll_set_paused` | `paused: bool` | `void` | pause/resume every remote repo poller (FE mirrors `visibilitychange` — polling is "paused when tab hidden") |
-| `rshell_create` | `repo_id, rows?, cols?` | `session_id: string` | remote shell over a pty'd exec channel (remote project required) |
-| `rshell_write` | `session_id, data: string` | `void` | keystrokes/paste to the remote shell |
-| `rshell_resize` | `session_id, rows: u16, cols: u16` | `void` | pty window-change |
-| `rshell_kill` | `session_id` | `void` | closes the channel (remote shell dies) |
-
-`DeviceInfo = { profile: DeviceProfile, status: string }`,
-`DeviceRepoCandidate = { path, name }` — ts-rs generated to
-`src/lib/ipc/gen/`, re-exported by `src/lib/ipc/types.ts`.
-
-Remote repos share the local command surface (`repo_*`, M2–M4, workspace
-files, `action_run`) — commands dispatch per-handle to the remote engine
-over the same DTO types (`RepoInfo.device_id` marks a remote project).
-Filesystem-scan commands run on the device too: `project_detect` takes one
-bounded `find` snapshot over exec plus manifest reads over SFTP and feeds
-the same detectors as local repos (`remote/projects.rs`), and
-`maintenance_run` covers the same op set (`gc`, `prune`, `commit_graph`,
-`pack_refs`, `count_objects`, `fsck`) with matching summaries.
-Remote network ops report `NetStats` from git's final transfer-progress
-line (the CLI prints no end-of-transfer summary). Raw output streams
-(`action-output`, op-log passthrough) redact credential-prompt-ish lines
-backend-side before emission.
-
-## Events (remote devices)
-
-| Event | Payload | Meaning |
-|---|---|---|
-| `device-status` | `{ device_id, status: "disconnected" \| "connecting" \| "connected" }` | connection transitions of one device (DeviceStatusEvent) |
-| `hostkey-request` | `{ request_id, device_id, host, port, algo, fingerprint, status: "unknown" \| "changed", pinned_fingerprint: string \| null }` | TOFU prompt; answered via `device_hostkey_respond`; `changed` blocks until explicit re-confirm |
-| `device-auth-request` | `{ request_id, device_id, kind: "device-password" \| "ssh-passphrase", prompt }` | missing credential prompt; answered via `device_auth_respond`; backend waits up to 120 s |
-
-`rshell_*` sessions reuse the local `pty-output` / `pty-exit` events,
-keyed by the `rshell_create` session id. Remote action runs reuse
-`action_run` / `action_cancel` and stream `action-output` (M4 contract).
+- **User config** — `<config_dir>/com.raulshma.mygitui/config.json`
+  (`ui/config.rs`): `{ theme: "system"|"light"|"dark", diff_wrap: bool,
+  auto_fetch_minutes: u32, recent_repos: [{ path, pinned, last_opened }] }`.
+  Loading never fails (missing/corrupt → defaults, unknown keys ignored);
+  saves are atomic (temp + rename) and surface I/O errors to the UI.
+  Recents dedupe separator/case variants.
+- **Data dir** — `<data_dir>/com.raulshma.mygitui/` (`AppServices::data_dir`):
+  `remote/devices.json` (device profiles, secrets excluded — they live in
+  the keyring) and `remote/known_hosts.json` (TOFU-pinned host keys). The
+  suffix is inherited from the pre-iced app-data layout so existing state
+  files keep being found.
+- **Per-repo state** — inside each repo's gitdir under `mygitui/`:
+  `bisect.json` (an active bisect's state; its presence = bisect in
+  progress) and `fsck.json` (last fsck dangling census + sample shas,
+  rendered by the health panel).
+- **Checkpoints** — hidden refs `refs/mygitui/checkpoints/<unix_millis>-<reason>`
+  capturing index + workdir; restore rewrites only index/workdir (HEAD,
+  branch refs, reflog untouched); GC keeps the newest checkpoint regardless
+  of age.
+- **Deleted-branch trash** — deleted (merged-guard-checked) branches are
+  preserved as `refs/mygitui/trash/<id>` before the branch ref goes away;
+  restore re-creates the branch (optionally renamed). `refs/mygitui/*` are
+  internal namespaces: excluded from branch listings, stats, and push
+  refspecs.
+- **OS keyring** — service name `mygitui`: generic secrets via
+  `secrets_get/set/delete`, `https:<host>:user` / `https:<host>:pass`
+  entries warmed/read by the auth broker, device secrets (password, key
+  passphrase) written once by the device store. Tests degrade gracefully
+  when no keyring backend is available (probe-and-skip).

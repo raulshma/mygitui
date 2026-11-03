@@ -50,7 +50,7 @@ const IMAGE_EXTENSIONS: &[&str] = &[
     "png", "jpg", "jpeg", "gif", "webp", "bmp", "svg", "ico", "avif",
 ];
 
-// -- IPC types (contracts.md "Commands (workspace files)") --------------------
+// -- Workspace service types (docs/contracts.md "Files / editor") -------------
 
 /// One row of a directory listing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

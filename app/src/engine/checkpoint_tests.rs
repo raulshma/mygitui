@@ -3,8 +3,8 @@
 //! Everything runs against throwaway repositories under
 //! `std::env::temp_dir()` (no fixtures/) so parallel lanes' files stay
 //! untouched. The methods under test are the inherent `*_impl` twins of the
-//! `GitEngineM3` checkpoint methods plus the shared `preview_impl` the IPC
-//! `ops_preview` command factors through.
+//! `GitEngineM3` checkpoint methods plus the shared `preview_impl` behind
+//! the `ops_preview` service fn.
 
 use std::path::{Path, PathBuf};
 use std::thread;

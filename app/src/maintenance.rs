@@ -2,8 +2,9 @@
 //! `git` maintenance commands, all through the sanitized CLI layer
 //! (libgit2 has no gc/repack/commit-graph write).
 //!
-//! Every runner takes the repo workdir and returns combined output; the IPC
-//! layer op-queues them (long-running) and toasts the summary. `git gc`
+//! Every runner takes the repo workdir and returns combined output; the
+//! service layer op-queues them (long-running) and the UI toasts the
+//! summary. `git gc`
 //! writes the commit-graph + packs refs — the "blazingly fast" win on huge
 //! repos (libgit2's revwalk reads the commit-graph).
 

@@ -5,9 +5,9 @@ native process: an **iced 0.14** UI on top of a **git2-rs** engine, SSH remote
 support (russh), forge integration, and opt-in AI assist via **opencode**
 (default when connected) or **OpenRouter**.
 
-The UI is being rebuilt natively on iced (branch `feat/iced-ui`): the Svelte
-webview shell is gone, and the backend runs in-process behind the
-`service::*` functions and the typed `BackendEvent` bus. Packaging,
+The shell is the native **iced 0.14** UI: the former Svelte webview is gone,
+and the backend runs in-process behind the `service::*` functions and the
+typed `BackendEvent` bus (see `docs/contracts.md`). Packaging,
 auto-update, deep links, single-instance forwarding, and the embedded
 terminal UI are intentionally deferred until after the daily-driver UI lands.
 
@@ -109,8 +109,8 @@ generated output — do not commit it.
 - **Platform**: custom shell actions **with keyboard shortcuts**, GitHub PRs
   + CI checks (`gh` CLI), split panes, command palette + keybinds + context
   menus, shadcn-derived light/dark theming, syntax-highlighted diffs, a11y
-  throughout (terminal UI, popouts, and OS-accent theming return after the
-  iced UI migration)
+  throughout (terminal UI, popouts, and OS-accent theming are being restored
+  in the native UI)
 - **AI assist (opt-in per repo)**: commit message, PR title/desc,
   explain-hunk, staged-diff review, stash message, branch-name
   suggestion; connection health chip
@@ -139,6 +139,9 @@ heat + re-blame, all six AI features, deep links, first-launch argv,
 proptests + soak + baseline-compare gates) →
 **M13–M14 native UI** (iced 0.14 cutover: in-process service bus, native
 shell, status/commit/diff/history panels, remote + safety surfaces).
+
+M13–M14 are landed on `main` — the iced cutover is done — and remaining work
+is polish.
 
 
 ## License

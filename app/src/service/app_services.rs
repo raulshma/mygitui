@@ -1,10 +1,11 @@
 //! Shared application services: the single value every `service::*` body
-//! takes instead of Tauri's `State<'_, T>` / `AppHandle`.
+//! takes.
 //!
 //! Built once by the UI at startup (tests construct their own with explicit
-//! directories), then borrowed by service functions running on the global
-//! runtime. Registries are the same Arc/Mutex-based types the Tauri shell
-//! used to manage; no global state is required beyond the event bus.
+//! directories), then cloned (Arc) into `Task::perform` closures and
+//! borrowed by service functions running on the global runtime. The
+//! registries are plain Arc/Mutex-based types; no global state is required
+//! beyond the event bus.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -19,8 +20,8 @@ use crate::remote::term::RemoteShellRegistry;
 use crate::remote::transport::DeviceRegistry;
 use crate::repo::RepoManager;
 
-/// Tauri's app-data directory suffix; reused so existing `devices.json`,
-/// `known_hosts.json` and state files keep being found after the cutover.
+/// App-data directory suffix, unchanged since the pre-iced app so existing
+/// `devices.json`, `known_hosts.json` and state files keep being found.
 const APP_DIR: &str = "com.raulshma.mygitui";
 
 pub struct AppServices {

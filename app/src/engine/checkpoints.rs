@@ -24,11 +24,11 @@
 //! GC deletes snapshot refs older than the cutoff but always keeps the most
 //! recent checkpoint (safety floor), whatever its age.
 //!
-//! WIRING NOTE (M2-lane convention): `Libgit2Engine` may carry only one
+//! WIRING NOTE (lane convention): `Libgit2Engine` may carry only one
 //! `impl GitEngineM3` (Rust coherence) and lane D1 owns it, so the four
 //! checkpoint entry points and the preview factor live here as inherent
 //! `*_impl` methods. Integration forwards `GitEngineM3::checkpoint_*` to
-//! these; the IPC commands call them directly in the meantime.
+//! these, and the checkpoint service fns call them directly the same way.
 
 use std::time::{SystemTime, UNIX_EPOCH};
 

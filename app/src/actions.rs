@@ -65,9 +65,7 @@ const WAIT_POLL_INTERVAL: Duration = Duration::from_millis(50);
 /// that (late output is dropped via the cancelled flag).
 const READER_GRACE: Duration = Duration::from_secs(2);
 
-/// `action-output` payload — field names and shapes are fixed by
-/// docs/contracts.md; generated to `src/lib/ipc/gen/` and re-exported
-/// under the FE name `ActionOutputEvent` by `src/lib/ipc/types.ts`.
+/// `BackendEvent::ActionOutput` payload (documented in docs/contracts.md).
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct ActionOutput {
     pub run_id: String,

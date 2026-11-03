@@ -14,7 +14,8 @@
 //! `forge_tests` can exercise the timeout kill and spawn-failure paths with
 //! `ping`/`sleep` instead of `gh`; everything else here is either a pure
 //! function (remote-URL parsing, gh output parsing — fixture-tested) or a
-//! thin `_sync` orchestrator the IPC commands wrap in `spawn_blocking`
+//! thin `_sync` orchestrator the async service fns run through
+//! `spawn_blocking`
 //! (no op-queue membership: these are spec'd long ops with their own
 //! timeouts, no event stream needed).
 
@@ -102,8 +103,7 @@ pub const RUN_STATUSES: [&str; 15] = [
 const MAX_ERROR_MESSAGE: usize = 400;
 
 // ---------------------------------------------------------------------------
-// Wire types (contracts.md "Commands (M6 forge)"; generated to
-// `src/lib/ipc/gen/` via ts-rs, re-exported by `src/lib/ipc/types.ts`)
+// Forge result types (shared with the service layer and the UI)
 // ---------------------------------------------------------------------------
 
 /// Result of `forge_status`: is `gh` usable at all?
@@ -919,7 +919,7 @@ fn trim_message(text: &str) -> String {
 }
 
 // ---------------------------------------------------------------------------
-// Sync orchestrators (IPC commands wrap these in spawn_blocking)
+// Sync orchestrators (the async service fns run these via spawn_blocking)
 // ---------------------------------------------------------------------------
 
 /// Body of `forge_status` (no repository needed): PATH probe + auth check.

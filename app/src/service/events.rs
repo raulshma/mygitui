@@ -1,15 +1,14 @@
 //! Backend → UI event bus.
 //!
 //! Every asynchronous signal the engine, watcher, op queue, auth broker,
-//! remote layer, PTY and action runners used to push through Tauri
-//! `emit`/`Channel` now goes through one in-process broadcast channel. The
-//! iced app subscribes once (`ui::subscription`) and routes each event into
-//! its `Message` enum; tests and headless callers can subscribe too.
+//! remote layer, PTY and action runners produce goes through one in-process
+//! broadcast channel. The iced app subscribes once (`ui::subscription`) and
+//! routes each event into its `Message` enum; tests and headless callers can
+//! subscribe too.
 //!
 //! Delivery is best-effort: with no live subscriber the event is dropped
-//! (`publish` reports `false`), which matches the old webview emitter when
-//! no window was listening. Streams that must stop when the consumer goes
-//! away (log pages) treat a no-subscriber publish as cancellation.
+//! (`publish` reports `false`). Streams that must stop when the consumer
+//! goes away (log pages) treat a no-subscriber publish as cancellation.
 
 use std::sync::OnceLock;
 
@@ -30,8 +29,8 @@ use crate::watcher::RepoChangedEvent;
 /// consumer must be able to recover from a `Lagged` error.
 pub const BUS_CAPACITY: usize = 4096;
 
-/// One backend event. Payload shapes stay identical to the IPC contracts;
-/// only the transport changed.
+/// One backend event, published by every async backend surface (queues,
+/// watchers, brokers, streams, PTY and action runners).
 #[derive(Debug, Clone)]
 pub enum BackendEvent {
     /// FS watcher batch or remote poll tick (drives every panel refresh).

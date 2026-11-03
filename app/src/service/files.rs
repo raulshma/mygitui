@@ -290,7 +290,7 @@ fn gitignore_add_sync(root: &Path, pattern: &str) -> Result<(), String> {
     std::fs::write(&file, updated).map_err(|e| format!("writing .gitignore failed: {e}"))
 }
 
-/// Append one pattern to the repo-root `.gitignore` (contracts.md M4
+/// Append one pattern to the repo-root `.gitignore` (the status panel's
 /// quick-add). Pure workdir file write — no git objects touched, so like
 /// the other FS-only commands it does not take the op queue; the watcher /
 /// poller picks the change up. Remote repos write through the engine

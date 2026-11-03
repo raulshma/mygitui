@@ -1,7 +1,7 @@
 //! Tests for the custom action runner (`actions.rs`): registry lifecycle,
-//! spawn + streamed output capture (through the collector sink, no tauri),
-//! cancellation of long-running children, per-repo concurrency cap and the
-//! line budget. Cross-platform: `cmd /C` vs `sh -c` behind
+//! spawn + streamed output capture (through the collector sink, not the
+//! event bus), cancellation of long-running children, per-repo concurrency
+//! cap and the line budget. Cross-platform: `cmd /C` vs `sh -c` behind
 //! [`ActionRegistry`] + `build_shell_command`.
 
 use std::path::PathBuf;

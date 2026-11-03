@@ -111,7 +111,7 @@ pub async fn maintenance_run(
 }
 
 /// Arguments reach `git archive` as argv entries (never a shell), but the
-/// IPC contract promises a metacharacter guard on `spec`/`destination`:
+/// service layer still applies a metacharacter guard on `spec`/`destination`:
 /// reject shell metacharacters, control characters, and option-shaped
 /// values (a leading `-` would be parsed as a flag).
 fn archive_arg_ok(value: &str) -> bool {

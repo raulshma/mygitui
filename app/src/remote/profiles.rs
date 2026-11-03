@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 
 /// Keyring service — same value as `keyring_store` / `auth` (duplicated
 /// there for the same reason: entries are read via the keyring crate
-/// directly, not through the `secrets_*` IPC commands).
+/// directly, not through the generic `secrets_*` service fns).
 const SERVICE: &str = "mygitui";
 
 /// Default repo-change poll interval for remote repos (seconds).

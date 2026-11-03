@@ -86,7 +86,7 @@ pub async fn branch_switch(
     .await
 }
 
-/// `r#into` unraws to the IPC arg key `into` (contracts.md M2).
+/// `into` is a Rust keyword, hence the raw identifier `r#into`.
 pub async fn branch_is_merged(
     services: &AppServices,
     repo_id: RepoId,
@@ -273,7 +273,7 @@ pub async fn branch_checkout_remote(
 ) -> Result<String, String> {
     let handle = get_handle(&services.repos, &repo_id)?;
     if let Some(remote_handle) = handle.remote() {
-        // `remote` here is the IPC arg (the remote's config name), so the
+        // `remote` here is the remote's config name (the fn arg), so the
         // handle binding is `remote_handle`.
         return finish_op(enqueue_remote_mutation(
             &handle,

@@ -94,9 +94,7 @@ pub(crate) const CURSOR_PROBE_REPLY: &[u8] = b"\x1b[1;1R";
 const DEFAULT_ROWS: u16 = 24;
 const DEFAULT_COLS: u16 = 80;
 
-/// `pty-output` payload — field names and shapes are fixed by
-/// docs/contracts.md; generated to `src/lib/ipc/gen/` and re-exported under
-/// the FE name `PtyOutputEvent` by `src/lib/ipc/types.ts`.
+/// `BackendEvent::PtyOutput` payload.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct PtyOutput {
     pub session_id: String,
@@ -104,8 +102,7 @@ pub struct PtyOutput {
     pub data: String,
 }
 
-/// `pty-exit` payload — the final event of a session (FE name
-/// `PtyExitEvent`).
+/// `BackendEvent::PtyExit` payload — the final event of a session.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct PtyExit {
     pub session_id: String,

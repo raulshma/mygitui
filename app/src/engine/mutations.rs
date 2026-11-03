@@ -6,7 +6,7 @@
 //!
 //! ARCHITECTURE NOTE (CLI routing): git2/libgit2 cannot execute hooks or
 //! produce signed commits. When either is in play the engine returns
-//! `EngineError::Unsupported` and the IPC layer (lane C3) falls back to
+//! `EngineError::Unsupported` and the service layer falls back to
 //! running system `git commit`, which runs hooks and GPG/SSH signing natively.
 
 use std::path::Path;
@@ -221,7 +221,7 @@ impl Libgit2Engine {
     /// * hunk/line selections — reverse-applied onto the workdir only
     ///   (the index is untouched).
     ///
-    /// The IPC layer snapshots a checkpoint before calling this.
+    /// The service layer snapshots a checkpoint before calling this.
     pub(crate) fn discard_impl(
         &self,
         repo: &Repository,
@@ -287,7 +287,7 @@ impl Libgit2Engine {
         opts: &CommitOptions,
     ) -> EngineResult<String> {
         // CLI routing (see module note): signing and commit hooks need the
-        // real git binary; the IPC layer catches Unsupported and shells out.
+        // real git binary; the service layer catches Unsupported and shells out.
         if self.signing_info_impl(repo)?.active {
             return Err(EngineError::Unsupported(
                 "signing active: routed to CLI".into(),

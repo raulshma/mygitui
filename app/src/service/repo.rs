@@ -101,8 +101,7 @@ pub async fn repo_blame(
 // without touching the network.
 // ---------------------------------------------------------------------------
 
-/// `clone-progress` event payload (TS name `CloneProgressEvent`; generated
-/// to `src/lib/ipc/gen/` and re-exported under the FE name by types.ts).
+/// `BackendEvent::CloneProgress` payload.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct CloneProgress {
     /// URL of the clone this progress belongs to (multi-clone discriminator).
@@ -116,7 +115,7 @@ pub struct CloneProgress {
 }
 
 /// Minimum interval between two `clone-progress` events; the libgit2
-/// callback fires per network chunk and would flood the IPC bridge.
+/// callback fires per network chunk and would flood the event bus.
 const CLONE_EMIT_INTERVAL_MS: u64 = 80;
 
 /// Throttle decision: emit when the interval elapsed or the transfer is

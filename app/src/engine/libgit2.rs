@@ -1,9 +1,9 @@
 //! `Libgit2Engine`: the primary `GitEngine` implementation, backed by git2-rs.
 //!
-//! All operations are synchronous (git2 is not async); IPC commands wrap them
-//! in `tauri::async_runtime::spawn_blocking`. `CliEngine` (system git) exists
+//! All operations are synchronous (git2 is not async); the service layer runs
+//! them on the op queue's blocking workers. The git CLI exists
 //! as a fallback for capabilities libgit2 cannot reach — everything in this
-//! module is what the M1 read path needs.
+//! module is what the read path needs.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};

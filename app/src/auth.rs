@@ -1,6 +1,6 @@
 //! Credential broker: bridges git2 credential callbacks to the keyring and,
-//! when missing, to the frontend via the `auth-request` event +
-//! `auth_respond` command round-trip. Lane C3 owns this file; netops calls
+//! when missing, to the UI via the `BackendEvent::AuthRequest` event +
+//! `service::network::auth_respond` round-trip. netops calls
 //! `broker().credentials()`.
 //!
 //! Callback chain per git2 invocation (per-URL attempt counter):
@@ -8,23 +8,24 @@
 //! 1. **ssh-agent** — `Cred::ssh_key_from_agent`, never interactive.
 //! 2. **HTTPS cache/keyring** — in-process per-host cache, filled from the
 //!    OS keyring (`https:<host>:user` / `https:<host>:pass` entries under the
-//!    `mygitui` service, read through the keyring crate directly — not the
-//!    `secrets_*` IPC commands).
+//!    `mygitui` service, read through the keyring crate directly — the
+//!    generic `secrets_*` service fns are not involved).
 //! 3. **git credential helpers** — `git credential fill` against whatever
 //!    `credential.helper` the user configured (Git Credential Manager, …);
 //!    non-interactive, so a miss falls through. Rejections call `git
 //!    credential reject`; "remember me" answers also call `approve` so cmd
 //!    git shares the credential. See `credential_helper.rs`.
-//! 4. **FE round-trip** — emit `auth-request` `{op_id, repo_id, url, kind,
-//!    prompt}` (contracts.md M2) and block on a tokio oneshot with a 60s
-//!    timeout. `store: true` answers persist back to the keyring + cache
-//!    (+ helpers via approve).
+//! 4. **UI round-trip** — emit `BackendEvent::AuthRequest`
+//!    `{op_id, repo_id, url, kind, prompt}` and block on a tokio oneshot
+//!    with a 60s timeout. `store: true` answers persist back to the keyring
+//!    + cache (+ helpers via approve).
 //!
 //! libgit2 retries the callback after a rejected credential: attempt 2
 //! clears the host's cache and re-prompts once; attempt 3 fails the op.
 //!
 //! Interactive prompting sits behind the [`Prompter`] seam: production uses
-//! [`FePrompter`], which publishes `auth-request` on the backend event bus
+//! [`FePrompter`], which publishes `BackendEvent::AuthRequest` on the
+//! backend event bus
 //! and blocks; unit tests inject a fake. Keeping the bus out of the tests
 //! also keeps them hermetic (no subscriber, no timing).
 //!
@@ -68,14 +69,14 @@ pub struct AuthAnswer {
     pub store: bool,
 }
 
-/// `auth-request` event payload (contracts.md M2).
+/// `BackendEvent::AuthRequest` payload.
 #[derive(Debug, Clone, Serialize)]
 pub struct AuthRequestEvent {
     pub op_id: String,
     pub repo_id: String,
     pub url: String,
-    /// "https-user" | "https-pass" | "ssh-passphrase" (kept as a
-    /// string-literal union in the generated TS type).
+    /// "https-user" | "https-pass" | "ssh-passphrase" (decides which field
+    /// the UI prompt edits).
     pub kind: String,
     pub prompt: String,
 }

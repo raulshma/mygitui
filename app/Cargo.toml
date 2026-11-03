@@ -55,12 +55,13 @@ iced = { version = "0.14.0", default-features = false, features = [
     "canvas",
     "image",
 ] }
-# Native file/folder pickers (replaces the Tauri dialog plugin).
+# Native file/folder pickers.
 rfd = "0.16.0"
-# Open paths/URLs in the OS default handler (replaces the Tauri opener plugin).
+# Open paths/URLs in the OS default handler.
 open = "5.4.4"
 
-# Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
+# Release profile tuned for a small, fast native binary (single codegen unit,
+# fat LTO, stripped symbols; abort on panic so no landing-pad overhead).
 [profile.release]
 codegen-units = 1
 lto = true
