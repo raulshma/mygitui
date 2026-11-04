@@ -52,7 +52,7 @@ use super::reflog_panel;
 use super::remote_panel::net_summary;
 use super::repo_view::{self, Load, PendingRebase, PendingRemap, Tab};
 use super::stats_panel;
-use super::status_model::{count_label, filter_sections, SectionId, StatusRow};
+use super::status_model::{count_label, filter_sections, ignore_variants, SectionId, StatusRow};
 use super::submodule_panel;
 use super::tags_panel;
 use super::terminal;
@@ -6643,10 +6643,17 @@ fn status_row_menu(item: &StatusRow) -> context_menu::Menu {
     }
     if item.index != ChangeKind::Conflicted && item.worktree != ChangeKind::Conflicted {
         menu = menu.separator();
+        let variants = ignore_variants(&item.path);
         menu = menu.command(
-            format!("status.ignore:{}", item.path),
+            format!("status.ignore:{}", variants.exact),
             format!("Ignore “{}”", item.base),
         );
+        if let Some(glob) = &variants.extension {
+            menu = menu.command(format!("status.ignore:{glob}"), format!("Ignore “{glob}”"));
+        }
+        if let Some(dir) = &variants.directory {
+            menu = menu.command(format!("status.ignore:{dir}"), format!("Ignore “{dir}”"));
+        }
     }
     menu = menu.separator();
     menu = menu.command(format!("status.file_history:{}", item.path), "File history");
