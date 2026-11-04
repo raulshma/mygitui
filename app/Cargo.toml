@@ -4,6 +4,16 @@ version = "0.1.12"
 description = "Fast, configurable Git GUI with AI-assisted workflows"
 authors = ["raulshma"]
 edition = "2021"
+license = "MIT"
+repository = "https://github.com/raulshma/mygitui"
+
+# Stable MSI identities for the dist-generated Windows installer (upgrade
+# code must never change across releases, or upgrades stack copies).
+[package.metadata.wix]
+upgrade-guid = "dd1bf415-a065-44be-a7f6-4e09f1af140c"
+path-guid = "c1fbba9a-cfd8-4413-afe4-4b2acc5d768e"
+license = false
+eula = false
 
 [lib]
 # The `_lib` suffix may seem redundant but it is necessary
@@ -81,6 +91,18 @@ lto = true
 opt-level = 3
 panic = "abort"
 strip = true
+
+# The profile that 'dist' will build with (full settings inherited from
+# [profile.release] so shipped binaries match the tuned local release build).
+[profile.dist]
+inherits = "release"
+
+# Vendor OpenSSL on Linux only: libgit2's TLS on macOS/Windows uses the OS
+# stack and reqwest falls back to those too, but on Linux openssl-sys needs
+# libssl-dev at build time and the .so at run time — vendoring makes CI
+# builds self-contained and the shipped AppImage portable.
+[target.'cfg(target_os = "linux")'.dependencies]
+openssl = { version = "0.10", features = ["vendored"] }
 
 [dev-dependencies]
 criterion = "0.8.2"

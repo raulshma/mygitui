@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=mygitui
+GenericName=Git GUI
+Comment=Fast, configurable Git GUI with AI-assisted workflows
+Exec=mygitui
+Icon=mygitui
+Categories=Development;RevisionControl;
+Terminal=false
+StartupWMClass=mygitui
