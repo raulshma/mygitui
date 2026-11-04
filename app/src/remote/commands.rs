@@ -52,7 +52,7 @@ pub fn device_list(services: &AppServices) -> Result<Vec<DeviceInfo>, String> {
 
 /// Parameters for creating/updating a device. Secrets are optional and
 /// write-once into the keyring (`None` = leave whatever is stored).
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct DeviceInput {
     pub id: Option<String>,
     pub name: String,

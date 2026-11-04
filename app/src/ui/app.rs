@@ -34,6 +34,7 @@ use super::clone_dialog;
 use super::compare_view;
 use super::config::{self, Config, RecentRepo};
 use super::context_menu;
+use super::devices;
 use super::dialog::{self, ResetRequest};
 use super::diff_view::{self, DiffPane, DiffSlot, PaneMode};
 use super::editor_view;
@@ -129,6 +130,8 @@ pub struct App {
     switcher: quick_switcher::State,
     /// Clone-repository dialog state (Home button / `repo.clone` palette).
     clone: clone_dialog::State,
+    /// SSH device management (Home section, add/edit dialog, device browser).
+    devices: devices::State,
     /// Quick Open overlay state (`ctrl/cmd+P`).
     quick_open: quick_open::State,
     /// Last known cursor position, used to anchor context menus opened via
@@ -495,6 +498,26 @@ pub enum Message {
     },
     /// Clone-repository dialog (fields, folder pick, submit).
     Clone(clone_dialog::Msg),
+    /// SSH device management (Home section, add/edit dialog, device browser;
+    /// routed through `devices::update` → `devices::Action`).
+    Devices(devices::Msg),
+    /// A device connect/disconnect finished (footer notice + status events
+    /// update the Home rows).
+    DeviceConnectDone {
+        device_id: String,
+        result: Result<String, String>,
+    },
+    /// A device forget (profile + secrets delete) finished.
+    DeviceForgetDone {
+        device_id: String,
+        result: Result<(), String>,
+    },
+    /// `remote_repo_open` finished: on success the device repo opens as a
+    /// tab (the device browser overlay closes).
+    DeviceRepoOpened {
+        path: String,
+        result: Result<RepoInfo, String>,
+    },
     /// Native folder-picker result for the clone destination (None =
     /// canceled).
     ClonePicked(Option<PathBuf>),
@@ -712,6 +735,7 @@ impl App {
             ctx_menu: context_menu::State::default(),
             switcher: quick_switcher::State::default(),
             clone: clone_dialog::State::default(),
+            devices: devices::State::default(),
             quick_open: quick_open::State::default(),
             cursor: iced::Point::ORIGIN,
             ai_result: None,
@@ -735,6 +759,7 @@ impl App {
         if let Some(path) = first_repo_arg(&cli_args) {
             tasks.push(app.open_repo(path));
         }
+        tasks.push(app.refresh_devices());
         tasks.push(Task::perform(
             async move {
                 let accent = crate::service::misc::os_accent_color(&services_boot).await;
@@ -879,6 +904,20 @@ impl App {
             Some("Ctrl+O"),
         );
         register("repo.clone", "Clone repository…", "Repository", true, None);
+        register(
+            "repo.add_device",
+            "Add SSH device…",
+            "Repository",
+            true,
+            None,
+        );
+        register(
+            "repo.devices",
+            "Manage SSH devices…",
+            "Repository",
+            true,
+            None,
+        );
         register(
             "repo.quick_switch",
             "Quick-switch repository…",
@@ -1224,6 +1263,13 @@ impl App {
         match id {
             "repo.open" => self.update(Message::OpenDialog),
             "repo.clone" => self.update(Message::Clone(clone_dialog::Msg::Open)),
+            "repo.add_device" => self.update(Message::Devices(devices::Msg::AddDevice)),
+            "repo.devices" => {
+                // Focus the Home devices section: expand it, switch to Home
+                // and refresh so the connection statuses are current.
+                self.devices.expanded = true;
+                Task::batch([self.update(Message::GoHome), self.refresh_devices()])
+            }
             "repo.quick_switch" => self.update(Message::Switcher(quick_switcher::Msg::Open)),
             "repo.home" => self.update(Message::GoHome),
             "repo.close_tab" => match self.tabs.get(self.active) {
@@ -2884,6 +2930,171 @@ impl App {
         )
     }
 
+    /// Reloads the SSH device list for the Home section (`device_list`).
+    fn refresh_devices(&self) -> Task<Message> {
+        let services = self.services.clone();
+        Task::perform(
+            async move {
+                let result = crate::remote::commands::device_list(&services);
+                Message::Devices(devices::Msg::Loaded(result))
+            },
+            std::convert::identity,
+        )
+    }
+
+    /// Opens (or focuses) the tab for an opened repo and kicks off its
+    /// initial loads — shared by the local `RepoOpened` flow and the device
+    /// browser's `DeviceRepoOpened` flow.
+    fn activate_repo(&mut self, info: RepoInfo) -> Task<Message> {
+        let repo_id = info.repo_id.clone();
+        match repo_view::tab_index(&self.tabs, &repo_id) {
+            Some(index) => self.active = index,
+            None => {
+                // Seed the tab's diff layout from the saved
+                // prefs so split/wrap survive restarts.
+                let (diff_split, diff_wrap) = (self.config.diff_split, self.config.diff_wrap);
+                self.tabs.push(Tab::new(info, diff_split, diff_wrap));
+                self.active = self.tabs.len() - 1;
+            }
+        }
+        self.show_home = false;
+        Task::batch([
+            self.refresh(repo_id.clone()),
+            self.start_log(repo_id.clone()),
+            self.load_bisect_state(repo_id),
+        ])
+    }
+
+    /// Routes a devices message through the pure module, translating any
+    /// returned intent into the matching `remote::commands` task.
+    fn update_devices(&mut self, msg: devices::Msg) -> Task<Message> {
+        // The row-level probe result also reads as a footer op line.
+        if let devices::Msg::TestDone(Ok(output)) = &msg {
+            self.last_op = Some(format!("Device test ok: {output}"));
+        }
+        let Some(action) = devices::update(&mut self.devices, msg) else {
+            return Task::none();
+        };
+        match action {
+            devices::Action::RefreshList => self.refresh_devices(),
+            devices::Action::Connect { device_id } => {
+                let services = self.services.clone();
+                Task::perform(
+                    async move {
+                        let result =
+                            crate::remote::commands::device_connect(&services, device_id.clone())
+                                .await;
+                        Message::DeviceConnectDone { device_id, result }
+                    },
+                    std::convert::identity,
+                )
+            }
+            devices::Action::Disconnect { device_id } => {
+                let services = self.services.clone();
+                Task::perform(
+                    async move {
+                        let result = crate::remote::commands::device_disconnect(
+                            &services,
+                            device_id.clone(),
+                        )
+                        .await
+                        .map(|_| "disconnected".to_string());
+                        Message::DeviceConnectDone { device_id, result }
+                    },
+                    std::convert::identity,
+                )
+            }
+            devices::Action::Forget { device_id } => {
+                let services = self.services.clone();
+                Task::perform(
+                    async move {
+                        let result =
+                            crate::remote::commands::device_remove(&services, device_id.clone())
+                                .await;
+                        Message::DeviceForgetDone { device_id, result }
+                    },
+                    std::convert::identity,
+                )
+            }
+            devices::Action::Save { input, is_new } => {
+                let services = self.services.clone();
+                Task::perform(
+                    async move {
+                        let result = if is_new {
+                            crate::remote::commands::device_add(&services, input).await
+                        } else {
+                            crate::remote::commands::device_update(&services, input).await
+                        };
+                        Message::Devices(devices::Msg::SaveDone(result))
+                    },
+                    std::convert::identity,
+                )
+            }
+            devices::Action::Test { input } => {
+                let services = self.services.clone();
+                Task::perform(
+                    async move {
+                        let result = crate::remote::commands::device_test(&services, input).await;
+                        Message::Devices(devices::Msg::TestDone(result))
+                    },
+                    std::convert::identity,
+                )
+            }
+            devices::Action::BrowseDir { device_id, path } => {
+                let services = self.services.clone();
+                Task::perform(
+                    async move {
+                        let result = crate::remote::commands::device_browse_dir(
+                            &services,
+                            device_id.clone(),
+                            path.clone(),
+                        )
+                        .await;
+                        Message::Devices(devices::Msg::Browse(devices::BrowseMsg::DirLoaded {
+                            device_id,
+                            path,
+                            result,
+                        }))
+                    },
+                    std::convert::identity,
+                )
+            }
+            devices::Action::Scan { device_id, root } => {
+                let services = self.services.clone();
+                Task::perform(
+                    async move {
+                        let result = crate::remote::commands::device_scan_repos(
+                            &services,
+                            device_id.clone(),
+                            root,
+                        )
+                        .await;
+                        Message::Devices(devices::Msg::Browse(devices::BrowseMsg::ScanDone {
+                            device_id,
+                            result,
+                        }))
+                    },
+                    std::convert::identity,
+                )
+            }
+            devices::Action::OpenRepo { device_id, path } => {
+                let services = self.services.clone();
+                Task::perform(
+                    async move {
+                        let result = crate::remote::commands::remote_repo_open(
+                            &services,
+                            device_id.clone(),
+                            path.clone(),
+                        )
+                        .await;
+                        Message::DeviceRepoOpened { path, result }
+                    },
+                    std::convert::identity,
+                )
+            }
+        }
+    }
+
     fn refresh(&self, repo_id: RepoId) -> Task<Message> {
         if repo_view::tab_index(&self.tabs, &repo_id).is_none() {
             return Task::none();
@@ -3202,24 +3413,7 @@ impl App {
                             self.reindex_recent();
                             self.persist_config();
                         }
-                        let repo_id = info.repo_id.clone();
-                        match repo_view::tab_index(&self.tabs, &repo_id) {
-                            Some(index) => self.active = index,
-                            None => {
-                                // Seed the tab's diff layout from the saved
-                                // prefs so split/wrap survive restarts.
-                                let (diff_split, diff_wrap) =
-                                    (self.config.diff_split, self.config.diff_wrap);
-                                self.tabs.push(Tab::new(info, diff_split, diff_wrap));
-                                self.active = self.tabs.len() - 1;
-                            }
-                        }
-                        self.show_home = false;
-                        Task::batch([
-                            self.refresh(repo_id.clone()),
-                            self.start_log(repo_id.clone()),
-                            self.load_bisect_state(repo_id),
-                        ])
+                        self.activate_repo(info)
                     }
                     Err(err) => {
                         self.notice = Some(Notice::error(format!("Could not open {path}: {err}")));
@@ -3317,7 +3511,9 @@ impl App {
             }
             Message::GoHome => {
                 self.show_home = true;
-                Task::none()
+                // The Home screen shows the SSH devices section; statuses can
+                // drift while away, so refresh on the way back.
+                self.refresh_devices()
             }
             Message::CycleTheme => {
                 self.config.theme = self.config.theme.next();
@@ -3620,6 +3816,7 @@ impl App {
                     tab.pending_pull = None;
                     tab.pending_push = None;
                 }
+                self.devices.pending_forget = None;
                 Task::none()
             }
             Message::MutationDone {
@@ -5388,6 +5585,53 @@ impl App {
                     }
                 }
             }
+            Message::Devices(msg) => self.update_devices(msg),
+            Message::DeviceConnectDone { device_id, result } => {
+                match result {
+                    Ok(status) => {
+                        let name = self
+                            .devices
+                            .rows
+                            .iter()
+                            .find(|row| row.profile.id == device_id)
+                            .map(|row| row.profile.name.as_str())
+                            .unwrap_or(device_id.as_str());
+                        self.last_op = Some(format!("{name}: {status}"));
+                    }
+                    Err(err) => {
+                        self.notice = Some(Notice::error(format!("Device connect failed: {err}")));
+                    }
+                }
+                Task::none()
+            }
+            Message::DeviceForgetDone { device_id, result } => match result {
+                Ok(()) => {
+                    let name = self
+                        .devices
+                        .rows
+                        .iter()
+                        .find(|row| row.profile.id == device_id)
+                        .map(|row| row.profile.name.clone())
+                        .unwrap_or_else(|| device_id.clone());
+                    self.last_op = Some(format!("Forgot device {name}"));
+                    self.refresh_devices()
+                }
+                Err(err) => {
+                    self.notice = Some(Notice::error(format!("Could not forget device: {err}")));
+                    Task::none()
+                }
+            },
+            Message::DeviceRepoOpened { path, result } => match result {
+                Ok(info) => {
+                    self.devices.browse.close();
+                    self.activate_repo(info)
+                }
+                Err(err) => {
+                    self.devices.browse.opening = None;
+                    self.notice = Some(Notice::error(format!("Could not open {path}: {err}")));
+                    Task::none()
+                }
+            },
             Message::CursorMoved(position) => {
                 self.cursor = position;
                 Task::none()
@@ -6287,6 +6531,12 @@ impl App {
                     });
                 Task::none()
             }
+            BackendEvent::DeviceStatus(event) => {
+                self.update(Message::Devices(devices::Msg::StatusChanged {
+                    device_id: event.device_id,
+                    status: event.status,
+                }))
+            }
             BackendEvent::CloneProgress(progress) => {
                 // Streamed into the clone dialog's progress bar while its own
                 // clone is running; unrelated clones only tick the footer.
@@ -6401,6 +6651,7 @@ impl App {
                 &self.recent,
                 self.open_in_flight,
                 config::now_millis(),
+                &self.devices,
             )
         } else {
             repo_view::view(&self.tabs, self.active, tokens)
@@ -6424,6 +6675,39 @@ impl App {
         }
         if self.clone.open {
             layers.push(clone_dialog::view(&self.clone, &tokens).map(Message::Clone));
+        }
+        // SSH devices: the add/edit dialog and the device file browser are
+        // global overlays (reachable from Home and the palette); the forget
+        // confirmation renders while a device id is pending.
+        if self.devices.dialog.open {
+            layers.push(devices::dialog_view(&self.devices, &tokens).map(Message::Devices));
+        }
+        if self.devices.browse.open {
+            layers.push(devices::browse_view(&self.devices, &tokens).map(Message::Devices));
+        }
+        if let Some(id) = self.devices.pending_forget.clone() {
+            let name = self
+                .devices
+                .rows
+                .iter()
+                .find(|row| row.profile.id == id)
+                .map(|row| row.profile.name.clone())
+                .unwrap_or_else(|| id.clone());
+            let spec = dialog::Confirm {
+                title: "Forget device".to_string(),
+                body: format!(
+                    "Forget “{name}”? The profile and its stored secrets (OS keyring) are removed and the device is disconnected."
+                ),
+                detail: None,
+                confirm_label: "Forget".to_string(),
+                danger: true,
+            };
+            layers.push(dialog::confirm(
+                tokens,
+                &spec,
+                Message::CancelDialog,
+                Message::Devices(devices::Msg::ForgetConfirmed),
+            ));
         }
         if self.ctx_menu.open {
             layers.push(context_menu::view(&self.ctx_menu, &tokens).map(Message::ContextMenu));

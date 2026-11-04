@@ -6,6 +6,7 @@ use iced::{Alignment, Element, Length};
 use super::app::Message;
 use super::clone_dialog;
 use super::config::RecentRepo;
+use super::devices;
 use super::theme::{self, Tokens};
 
 pub fn view<'a>(
@@ -13,6 +14,7 @@ pub fn view<'a>(
     recent: &'a [RecentRepo],
     busy: bool,
     now_ms: u64,
+    devices: &'a devices::State,
 ) -> Element<'a, Message> {
     let mut list = column![].spacing(2).width(Length::Fill);
 
@@ -59,6 +61,8 @@ pub fn view<'a>(
             text("Recent repositories").size(12).font(theme::semibold()),
             Space::new().height(4),
             list,
+            Space::new().height(24),
+            devices::home_section(devices, tokens),
         ]
         .width(Length::Fill),
     )

@@ -5,7 +5,9 @@
 //! - [`theme`] — shadcn token port (light/dark) and widget styles
 //! - [`config`] — JSON-persisted user settings (`config.json`)
 //! - [`bus`] — iced subscription over the backend event bus
-//! - [`home`] — repository switcher / recent list
+//! - [`home`] — repository switcher / recent list + SSH devices section
+//! - [`devices`] — SSH device management (Home section, add/edit dialog,
+//!   device file browser / repo scanner)
 //! - [`repo_view`] — tab strip, repo header and three-column workspace
 //! - [`status_model`] — pure status sections, rows, selection and actions
 //! - [`diff_model`] — pure diff row model, split pairing and virtualizer
@@ -56,6 +58,7 @@ mod commit_detail;
 mod compare_view;
 mod config;
 mod context_menu;
+mod devices;
 mod dialog;
 mod diff_model;
 mod diff_view;
