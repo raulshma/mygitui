@@ -5879,6 +5879,7 @@ fn modifiers_changed(
                 iced::keyboard::Key::Character(c) if cmd && modifiers.shift() && c == "P" => {
                     Some(Message::Palette(palette::Msg::Toggle))
                 }
+                iced::keyboard::Key::Character(c) if cmd && c == "o" => Some(Message::OpenDialog),
                 iced::keyboard::Key::Character(c) if cmd && c == "k" => {
                     Some(Message::Switcher(quick_switcher::Msg::Toggle))
                 }
