@@ -170,6 +170,8 @@ pub struct Tab {
     pub pending_pull: Option<dialog::PullRequest>,
     /// Remote + options awaiting the push options dialog.
     pub pending_push: Option<dialog::PushRequest>,
+    /// Gitignore template gallery (search filter state).
+    pub pending_ignore_templates: Option<dialog::IgnoreTemplates>,
 
     pub diff_seq: u64,
     pub commit_diff_seq: u64,
@@ -236,6 +238,7 @@ impl Tab {
             pending_merge: None,
             pending_pull: None,
             pending_push: None,
+            pending_ignore_templates: None,
             diff_seq: 0,
             commit_diff_seq: 0,
         }
@@ -575,6 +578,10 @@ fn dialog_overlay<'a>(tab: &'a Tab, tokens: Tokens) -> Option<Element<'a, Messag
 
     if let Some(request) = &tab.pending_push {
         return Some(dialog::push(tokens, request));
+    }
+
+    if let Some(state) = &tab.pending_ignore_templates {
+        return Some(dialog::templates(tokens, state));
     }
 
     None

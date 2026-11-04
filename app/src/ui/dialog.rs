@@ -3,10 +3,13 @@
 //! The scrim is a [`mouse_area`], so presses outside the card dismiss the
 //! dialog and never reach the workspace underneath.
 
-use iced::widget::{button, checkbox, column, container, mouse_area, row, text, text_input, Space};
+use iced::widget::{
+    button, checkbox, column, container, mouse_area, row, scrollable, text, text_input, Space,
+};
 use iced::{Alignment, Background, Border, Element, Length};
 
 use crate::engine::types::{MergeFavor, MergeOptions, PreviewInfo, ResetKind};
+use crate::service::files::GitignoreTemplate;
 
 use super::app::Message;
 use super::theme::{self, Tokens};
@@ -670,9 +673,124 @@ pub fn push<'a>(tokens: Tokens, request: &PushRequest) -> Element<'a, Message> {
     )
 }
 
+// ---------------------------------------------------------------------------
+// Gitignore template gallery
+// ---------------------------------------------------------------------------
+
+/// Pending gitignore template gallery: the search filter over the builtin
+/// list. Applying stays open so several templates can land in one pass.
+#[derive(Debug, Clone, Default)]
+pub struct IgnoreTemplates {
+    pub filter: String,
+}
+
+/// Case-insensitive substring filter over template name + description.
+pub fn filter_templates<'a>(
+    list: &'a [GitignoreTemplate],
+    needle: &str,
+) -> Vec<&'a GitignoreTemplate> {
+    let needle = needle.trim().to_lowercase();
+    list.iter()
+        .filter(|template| {
+            needle.is_empty()
+                || template.name.to_lowercase().contains(&needle)
+                || template.description.to_lowercase().contains(&needle)
+        })
+        .collect()
+}
+
+/// Centered modal gallery of the builtin gitignore templates: a search box
+/// over name + description and one Apply row per template.
+pub fn templates<'a>(tokens: Tokens, state: &IgnoreTemplates) -> Element<'a, Message> {
+    let list = crate::service::files::gitignore_templates_list();
+    let matches = filter_templates(&list, &state.filter);
+
+    let mut rows = column![].spacing(2).width(Length::Fill);
+    for template in &matches {
+        // The gallery is rebuilt per frame, so row labels clone out of the
+        // local list (matching the other dialogs' owned-string discipline).
+        rows = rows.push(
+            row![
+                column![
+                    text(template.name.clone()).size(11).font(theme::semibold()),
+                    text(template.description.clone())
+                        .size(10)
+                        .color(tokens.muted_foreground),
+                ]
+                .spacing(1)
+                .width(Length::Fill),
+                button(text("Apply").size(10))
+                    .style(theme::button_style(tokens, theme::ButtonKind::Secondary))
+                    .padding([3, 8])
+                    .on_press(Message::IgnoreTemplateApplied(template.name.clone())),
+            ]
+            .spacing(6)
+            .align_y(Alignment::Center)
+            .width(Length::Fill),
+        );
+    }
+
+    let body = column![
+        text("Ignore templates").size(14).font(theme::semibold()),
+        Space::new().height(4),
+        text(
+            "Applying appends a template's patterns under a `# <name>` header \
+             to the repo-root .gitignore."
+        )
+        .size(12)
+        .color(tokens.muted_foreground),
+        text_input("Search templates", state.filter.as_str())
+            .on_input(Message::IgnoreTemplatesFilterChanged)
+            .size(11)
+            .padding([4, 6]),
+        if matches.is_empty() {
+            Element::<Message>::from(
+                text("No templates match.")
+                    .size(11)
+                    .color(tokens.muted_foreground),
+            )
+        } else {
+            scrollable(rows)
+                .height(Length::Fixed(320.0))
+                .width(Length::Fill)
+                .into()
+        },
+    ]
+    .spacing(6);
+
+    let actions: Element<'a, Message> = row![
+        Space::new().width(Length::Fill),
+        button(text("Close").size(11))
+            .style(theme::button_style(tokens, theme::ButtonKind::Secondary))
+            .padding([4, 12])
+            .on_press(Message::CancelDialog),
+    ]
+    .spacing(6)
+    .align_y(Alignment::Center)
+    .into();
+
+    modal(tokens, 460.0, body.into(), actions)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn template_filter_matches_name_or_description_case_insensitively() {
+        let list = crate::service::files::gitignore_templates_list();
+        assert_eq!(filter_templates(&list, "").len(), list.len());
+        assert_eq!(filter_templates(&list, "  ").len(), list.len());
+        let rust = filter_templates(&list, "rust");
+        assert_eq!(rust.len(), 1);
+        assert_eq!(rust[0].name, "Rust");
+        assert_eq!(filter_templates(&list, "NODE").len(), 1);
+        // Descriptions match too ("Finder metadata" → macOS).
+        let macos = filter_templates(&list, "finder metadata");
+        assert_eq!(macos.len(), 1);
+        assert_eq!(macos[0].name, "macOS");
+        assert!(filter_templates(&list, "zzz-no-match").is_empty());
+    }
 
     fn preview(files: &[&str]) -> PreviewInfo {
         PreviewInfo {

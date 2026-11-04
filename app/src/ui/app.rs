@@ -646,6 +646,17 @@ pub enum Message {
         repo_id: RepoId,
         result: Result<(), String>,
     },
+    /// Open the gitignore template gallery (status panel + palette).
+    IgnoreTemplatesRequested,
+    /// Gallery search box changed.
+    IgnoreTemplatesFilterChanged(String),
+    /// Apply one builtin template by name (gallery row).
+    IgnoreTemplateApplied(String),
+    /// Template apply finished (the gallery stays open).
+    TemplateApplied {
+        repo_id: RepoId,
+        result: Result<(), String>,
+    },
 }
 
 /// One background auto-fetch cycle for a repo: pick the default remote
@@ -932,6 +943,13 @@ impl App {
         register(
             "status.select_none",
             "Clear file selection",
+            "Working copy",
+            repo_id.is_some(),
+            None,
+        );
+        register(
+            "status.ignore_templates",
+            "Ignore templates…",
             "Working copy",
             repo_id.is_some(),
             None,
@@ -1270,6 +1288,7 @@ impl App {
             }
             "status.select_all" => self.update(Message::StatusSelectAll),
             "status.select_none" => self.update(Message::StatusSelectNone),
+            "status.ignore_templates" => self.update(Message::IgnoreTemplatesRequested),
             "commit.commit" => self.update(Message::CommitPressed),
             "diff.toggle_split" => self.update(Message::DiffToggleSplit),
             "diff.toggle_wrap" => self.update(Message::DiffToggleWrap),
@@ -3619,6 +3638,7 @@ impl App {
                     tab.pending_merge = None;
                     tab.pending_pull = None;
                     tab.pending_push = None;
+                    tab.pending_ignore_templates = None;
                 }
                 Task::none()
             }
@@ -6139,6 +6159,48 @@ impl App {
                     Ok(()) => self.last_op = Some("Ignore pattern done".to_string()),
                     Err(err) => {
                         self.notice = Some(Notice::error(format!("Ignore pattern failed: {err}")));
+                    }
+                }
+                self.refresh(repo_id)
+            }
+            Message::IgnoreTemplatesRequested => {
+                if let Some(tab) = self.tabs.get_mut(self.active) {
+                    tab.pending_ignore_templates = Some(dialog::IgnoreTemplates::default());
+                }
+                Task::none()
+            }
+            Message::IgnoreTemplatesFilterChanged(value) => {
+                if let Some(tab) = self.tabs.get_mut(self.active) {
+                    if let Some(state) = &mut tab.pending_ignore_templates {
+                        state.filter = value;
+                    }
+                }
+                Task::none()
+            }
+            Message::IgnoreTemplateApplied(name) => {
+                let Some(tab) = self.tabs.get(self.active) else {
+                    return Task::none();
+                };
+                let repo_id = tab.repo.repo_id.clone();
+                let services = self.services.clone();
+                Task::perform(
+                    async move {
+                        let result = crate::service::files::gitignore_apply_template(
+                            &services,
+                            repo_id.clone(),
+                            name,
+                        )
+                        .await;
+                        Message::TemplateApplied { repo_id, result }
+                    },
+                    std::convert::identity,
+                )
+            }
+            Message::TemplateApplied { repo_id, result } => {
+                match &result {
+                    Ok(()) => self.last_op = Some("Ignore template applied".to_string()),
+                    Err(err) => {
+                        self.notice = Some(Notice::error(format!("Apply template failed: {err}")));
                     }
                 }
                 self.refresh(repo_id)

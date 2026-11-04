@@ -33,6 +33,8 @@ pub fn view<'a>(tab: &'a Tab, tokens: Tokens) -> Element<'a, Message> {
             text("Source Control").size(12).font(theme::semibold()),
             Space::new().width(Length::Fill),
             text(summary).size(10).color(tokens.muted_foreground),
+            mini(tokens, "Templates", "Ignore templates…")
+                .on_press(Message::IgnoreTemplatesRequested),
         ]
         .align_y(Alignment::Center)
         .padding([8, 10]),
