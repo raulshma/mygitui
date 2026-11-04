@@ -23,6 +23,7 @@ use super::dialog::{self, ResetRequest};
 use super::diff_view::{self, DiffPane, DiffSlot, PaneMode};
 use super::editor_view;
 use super::file_history_view;
+use super::files_panel;
 use super::forge_panel::{self, ForgeCtx};
 use super::health_panel;
 use super::history_model::{FilterFields, HistoryState};
@@ -126,6 +127,8 @@ pub struct Tab {
     pub blame: blame_view::BlameView,
     pub file_history: file_history_view::FileHistoryView,
     pub compare: compare_view::CompareView,
+    /// Files panel (lazy working-tree browser, also a center mode).
+    pub files: files_panel::FilesPanel,
     /// Custom shell actions, their live output, and the in-app editor.
     pub actions: actions_panel::ActionsPanel,
     pub output: output_panel::OutputPanel,
@@ -157,6 +160,8 @@ pub struct Tab {
     pub pending_reset: Option<ResetRequest>,
     /// Remote awaiting the remove confirmation dialog.
     pub pending_remote_remove: Option<String>,
+    /// Files-panel path awaiting the delete confirmation dialog.
+    pub pending_files_delete: Option<String>,
     /// Rebase (target branch + pick plan) awaiting the confirmation dialog.
     pub pending_rebase: Option<PendingRebase>,
     /// Branch + options awaiting the merge confirmation dialog.
@@ -212,6 +217,7 @@ impl Tab {
             blame: blame_view::BlameView::default(),
             file_history: file_history_view::FileHistoryView::default(),
             compare: compare_view::CompareView::default(),
+            files: files_panel::FilesPanel::default(),
             actions: actions_panel::ActionsPanel::default(),
             output: output_panel::OutputPanel::default(),
             editor: editor_view::EditorView::default(),
@@ -225,6 +231,7 @@ impl Tab {
             pending_checkpoint_restore: None,
             pending_reset: None,
             pending_remote_remove: None,
+            pending_files_delete: None,
             pending_rebase: None,
             pending_merge: None,
             pending_pull: None,
@@ -497,6 +504,24 @@ fn dialog_overlay<'a>(tab: &'a Tab, tokens: Tokens) -> Option<Element<'a, Messag
             &spec,
             Message::CancelDialog,
             Message::CheckpointRestoreConfirmed,
+        ));
+    }
+
+    if let Some(path) = &tab.pending_files_delete {
+        let spec = dialog::Confirm {
+            title: "Delete file".to_string(),
+            body: format!(
+                "Delete “{path}”? A checkpoint of the current state is saved first, so this can be undone from the checkpoints panel."
+            ),
+            detail: None,
+            confirm_label: "Delete".to_string(),
+            danger: true,
+        };
+        return Some(dialog::confirm(
+            tokens,
+            &spec,
+            Message::CancelDialog,
+            Message::FilesDeleteConfirmed,
         ));
     }
 
@@ -830,6 +855,15 @@ fn workspace<'a>(tab: &'a Tab, tokens: Tokens) -> Element<'a, Message> {
         view.map(Message::Blame)
     } else if let Some(view) = tab.file_history.view(tokens) {
         view.map(Message::FileHistory)
+    } else if tab.files.open {
+        container(files_panel::view(
+            &tab.files,
+            &tab.status_index.rows,
+            tokens,
+        ))
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .into()
     } else if tab.compare.open {
         // Selected compare file: file list beside its diff; otherwise the
         // list alone.

@@ -50,7 +50,7 @@ backend the same fn enqueues the remote twin on the same serial queue.
 | `repo_status(repo_id)` | Full status snapshot (entries by change kind, branch, ahead/behind). |
 | `repo_refs(repo_id)` | Local + remote branches and tags as `(ref name, target sha)` pairs. |
 | `repo_blame(repo_id, path, from?)` | Per-line blame; `from` re-blames at a parent commit. |
-| `repo_clone(url, destination, depth?)` | Clones into a missing-or-empty directory (optionally shallow), publishing `BackendEvent::CloneProgress`; resolves with `CloneStats`. |
+| `repo_clone(url, destination, depth?)` | Clones into a missing-or-empty directory (optionally shallow), publishing `BackendEvent::CloneProgress`; resolves with the destination path. |
 
 ### Status / diff — `service/diff.rs`
 
@@ -392,14 +392,40 @@ logged and skipped. The app runs under `iced::daemon` (multi-window): the
 primary window hosts the shell and diffs can pop out into secondary windows
 (`App::popout`, per-window `view`/`theme`/`title`, cleanup via
 `window::close_events`). The subscription batch adds the system theme-change
-subscription, the keyboard listener (palette/switcher chords), the
-`window::close_events` stream, and the per-tab auto-fetch timer (keyed by
-repo + cadence; `0` disables). Each `BackendEvent` variant
-maps to a UI behavior: `RepoChanged` → targeted panel refreshes,
-`LogPage` → history model accept (matched by `request_id`), `OpProgress` →
-footer/ActiveOp, prompts (`AuthRequest` / `HostKeyRequest` /
-`DeviceAuthRequest`) → queued overlay dialogs, `PtyOutput`/`PtyExit` →
-terminal panel, `ActionOutput` → action run view.
+subscription, the keyboard listener (palette / quick-switcher / quick-open
+chords), the `window::close_events` stream, and the per-tab auto-fetch timer
+(keyed by repo + cadence; `0` disables). Each `BackendEvent` variant
+maps to a UI behavior: `RepoChanged` → targeted panel refreshes (including
+dropping the files panel's listing cache and re-fetching its visible
+directories), `LogPage` → history model accept (matched by `request_id`),
+`OpProgress` → footer/ActiveOp, `CloneProgress` → the clone dialog's
+progress bar (matched by `url`), prompts (`AuthRequest` /
+`HostKeyRequest` / `DeviceAuthRequest`) → queued overlay dialogs,
+`PtyOutput`/`PtyExit` → terminal panel, `ActionOutput` → action run view.
+
+### Shell surfaces (clone / files / quick-open)
+
+- **Clone dialog** (`ui/clone_dialog.rs`, global overlay): Home-screen
+  button or palette `repo.clone`. Fields: URL, destination (typed or the
+  native folder picker, auto-joined with the repo name derived from the
+  URL), shallow + depth, blobless. Submit runs `repo_clone` (blobless →
+  `maintenance::clone_blobless`) through the spawn pattern; `CloneProgress`
+  events matching the in-flight URL fill the object-count bar; success
+  closes the dialog and opens the destination via the ordinary repo-open
+  flow; failures surface as footer notices.
+- **Files panel** (`ui/files_panel.rs`, center mode; ⋯ menu "Files…" or
+  palette `view.files`): lazy `repo_list_dir` tree (root first, expand on
+  demand, cached per directory, invalidated + re-fetched on `RepoChanged`),
+  git-state dots from the live status snapshot (dirs aggregate the strongest
+  state below them), and a right-click context menu: Open (in-app editor),
+  File history, Copy path, Open in external editor, New file…/New folder…
+  (inline prompt), Rename… (inline prompt), Delete (checkpoint-backed
+  confirm; `repo_create_entry` / `repo_rename_entry` / `repo_delete_entry`).
+- **Quick Open** (`ui/quick_open.rs`, global overlay, ctrl/cmd+P or palette
+  `files.quick_open`): fuzzy-ranked list over `repo_file_index` (re-fetched
+  on every open, files only); Enter opens the selection in the in-app
+  editor; navigation mirrors the quick switcher. The hotkey is inert with
+  no repository tab open; stale index results are dropped.
 
 ## Persistence
 
