@@ -19,8 +19,10 @@ hosting = "github"
 # The generated release workflow carries hand-added packaging jobs (Linux
 # AppImage, macOS .app bundles — installers dist 0.28 no longer emits);
 # without this, every dist command demands a regeneration that would drop
-# them.
-allow-dirty = ["ci"]
+# them. "msi" does the same for the hand-edited wix/main.wxs (Start Menu +
+# Desktop shortcut features, product icon) that dist would otherwise
+# regenerate back to the stock template.
+allow-dirty = ["ci", "msi"]
 # Path that installers should place binaries in
 install-path = "CARGO_HOME"
 # Whether to install an updater program
