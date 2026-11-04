@@ -83,6 +83,9 @@ syntect = { version = "5", default-features = false, features = [
     "regex-fancy",
 ] }
 
+# Updater: SHA-256 verification of release artifacts (all platforms).
+sha2 = "0.10"
+
 # Release profile tuned for a small, fast native binary (single codegen unit,
 # fat LTO, stripped symbols; abort on panic so no landing-pad overhead).
 [profile.release]
@@ -108,10 +111,7 @@ inherits = "release"
 [target.'cfg(not(target_os = "windows"))'.dependencies]
 openssl = { version = "0.10", features = ["vendored"] }
 
-# Updater: SHA-256 verification of release artifacts (all platforms), and
-# the macOS `.app` bundle tarball extraction (macOS only).
-sha2 = "0.10"
-
+# macOS `.app` bundle tarball extraction for the updater.
 [target.'cfg(target_os = "macos")'.dependencies]
 tar = "0.4"
 flate2 = "1"

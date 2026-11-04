@@ -93,6 +93,7 @@ pub async fn bind_or_forward(_args: &[String]) -> Role {
 /// Accept loop for the primary: each connection carries one JSON argv line;
 /// forward it to the UI through the backend event bus. Runs forever; the
 /// process exits elsewhere.
+#[cfg(unix)]
 pub async fn serve(listener: InstanceListener) {
     use tokio::io::AsyncBufReadExt;
     loop {
@@ -116,3 +117,8 @@ pub async fn serve(listener: InstanceListener) {
         }
     }
 }
+
+/// Windows placeholder: no forwarding yet, so there is nothing to accept.
+/// The boot task resolves immediately; second launches run standalone.
+#[cfg(not(unix))]
+pub async fn serve(_listener: InstanceListener) {}
