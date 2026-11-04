@@ -368,14 +368,32 @@ jobs:
       - name: Create GitHub Release
         env:
           PRERELEASE_FLAG: "${{ fromJson(steps.host.outputs.manifest).announcement_is_prerelease && '--prerelease' || '' }}"
+          PRERELEASE: "${{ fromJson(steps.host.outputs.manifest).announcement_is_prerelease }}"
           ANNOUNCEMENT_TITLE: "${{ fromJson(steps.host.outputs.manifest).announcement_title }}"
           ANNOUNCEMENT_BODY: "${{ fromJson(steps.host.outputs.manifest).announcement_github_body }}"
           RELEASE_COMMIT: "${{ github.sha }}"
+          TAG: "${{ needs.plan.outputs.tag }}"
         run: |
           # Write and read notes from a file to avoid quoting breaking things
           echo "$ANNOUNCEMENT_BODY" > $RUNNER_TEMP/notes.txt
 
-          gh release create "${{ needs.plan.outputs.tag }}" --target "$RELEASE_COMMIT" $PRERELEASE_FLAG --title "$ANNOUNCEMENT_TITLE" --notes-file "$RUNNER_TEMP/notes.txt" artifacts/*
+          # dist 0.28's upload step walks target/distrib — which holds every
+          # artifacts-* download, our AppImage/.app extras included — and puts
+          # them all on a draft release. Re-uploading via `gh release create`
+          # collides on duplicate asset names (HTTP 422), so publish the
+          # dist-created draft in place; only fall back to `gh release
+          # create` when no release for the tag exists yet.
+          RELEASE_ID="$(gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
+            --jq "map(select(.tag_name == \"$TAG\")) | first | .id // empty")"
+          if [ -n "$RELEASE_ID" ]; then
+            gh api -X PATCH "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" \
+              -F draft=false -F prerelease="$PRERELEASE" \
+              -f name="$ANNOUNCEMENT_TITLE" \
+              -f body="$(cat "$RUNNER_TEMP/notes.txt")"
+            echo "published existing release $RELEASE_ID for $TAG"
+          else
+            gh release create "$TAG" --target "$RELEASE_COMMIT" $PRERELEASE_FLAG --title "$ANNOUNCEMENT_TITLE" --notes-file "$RUNNER_TEMP/notes.txt" artifacts/*
+          fi
 
   announce:
     needs:
