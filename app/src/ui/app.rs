@@ -38,6 +38,7 @@ use super::dialog::{self, ResetRequest};
 use super::diff_view::{self, DiffPane, DiffSlot, PaneMode};
 use super::editor_view;
 use super::file_history_view;
+use super::files_panel;
 use super::forge_panel;
 use super::health_panel;
 use super::history_model::{to_log_filter, FilterFields, HistoryFilterField};
@@ -559,6 +560,27 @@ pub enum Message {
     },
     FileHistory(file_history_view::Msg),
     Compare(compare_view::Msg),
+    /// Files panel (routed to the active tab).
+    Files(files_panel::Msg),
+    /// One directory listing finished loading.
+    FilesDirLoaded {
+        repo_id: RepoId,
+        dir: String,
+        result: Result<crate::workspace::DirListing, String>,
+    },
+    /// A files-panel mutation (create/rename/delete) finished.
+    FilesEntryDone {
+        repo_id: RepoId,
+        label: String,
+        result: Result<(), String>,
+    },
+    /// Right-click on a Files panel row (repository-relative path).
+    FilesRowMenu {
+        path: String,
+        is_dir: bool,
+    },
+    /// Confirmed files-panel delete (dialog).
+    FilesDeleteConfirmed,
     Submodule(submodule_panel::Msg),
     Tags(tags_panel::Msg),
     /// Open the ⋯ header menu (worktrees/submodules/tags toggles).
@@ -987,6 +1009,13 @@ impl App {
             None,
         );
         register(
+            "view.files",
+            "Toggle files panel",
+            "View",
+            repo_id.is_some(),
+            None,
+        );
+        register(
             "view.compare",
             "Compare two refs",
             "View",
@@ -1230,6 +1259,7 @@ impl App {
             "panel.output" => self.update(Message::Output(output_panel::Msg::ToggleOpen)),
             "panel.stats" => self.update(Message::Stats(stats_panel::Msg::ToggleOpen)),
             "view.popout_diff" => self.update(Message::PopoutDiff),
+            "view.files" => self.update(Message::Files(files_panel::Msg::Toggle)),
             "view.compare" => {
                 if let Some(tab) = self.tabs.get_mut(self.active) {
                     tab.detail_open = false;
@@ -1314,6 +1344,84 @@ impl App {
                     tab.compare.open = false;
                 }
                 self.update(Message::Blame(blame_view::Msg::Opened { path }))
+            }
+            other if other.starts_with("files.open:") => {
+                let path = other["files.open:".len()..].to_string();
+                match self.tabs.get(self.active) {
+                    Some(tab) => self.run_files_action(
+                        tab.repo.repo_id.clone(),
+                        Some(files_panel::Action::OpenEditor { path }),
+                    ),
+                    None => Task::none(),
+                }
+            }
+            other if other.starts_with("files.history:") => {
+                let path = other["files.history:".len()..].to_string();
+                match self.tabs.get(self.active) {
+                    Some(tab) => self.run_files_action(
+                        tab.repo.repo_id.clone(),
+                        Some(files_panel::Action::OpenHistory { path }),
+                    ),
+                    None => Task::none(),
+                }
+            }
+            other if other.starts_with("files.copy:") => {
+                let rel = other["files.copy:".len()..].to_string();
+                let abs = self
+                    .tabs
+                    .get(self.active)
+                    .map(|tab| std::path::Path::new(&tab.repo.root).join(&rel));
+                match abs {
+                    Some(abs) => {
+                        self.last_op = Some(format!("Copied path to {rel}"));
+                        iced::clipboard::write::<Message>(abs.to_string_lossy().into_owned())
+                    }
+                    None => Task::none(),
+                }
+            }
+            other if other.starts_with("files.external:") => {
+                let path = other["files.external:".len()..].to_string();
+                self.open_file_external(&path)
+            }
+            other if other.starts_with("files.new_file:") => {
+                let dir = other["files.new_file:".len()..].to_string();
+                if let Some(tab) = self.tabs.get_mut(self.active) {
+                    files_panel::update(
+                        &mut tab.files,
+                        files_panel::Msg::PromptOpen(files_panel::PromptKind::NewFile { dir }),
+                    );
+                }
+                Task::none()
+            }
+            other if other.starts_with("files.new_folder:") => {
+                let dir = other["files.new_folder:".len()..].to_string();
+                if let Some(tab) = self.tabs.get_mut(self.active) {
+                    files_panel::update(
+                        &mut tab.files,
+                        files_panel::Msg::PromptOpen(files_panel::PromptKind::NewFolder { dir }),
+                    );
+                }
+                Task::none()
+            }
+            other if other.starts_with("files.rename:") => {
+                let path = other["files.rename:".len()..].to_string();
+                if let Some(tab) = self.tabs.get_mut(self.active) {
+                    files_panel::update(
+                        &mut tab.files,
+                        files_panel::Msg::PromptOpen(files_panel::PromptKind::Rename { path }),
+                    );
+                }
+                Task::none()
+            }
+            other if other.starts_with("files.delete:") => {
+                let path = other["files.delete:".len()..].to_string();
+                match self.tabs.get(self.active) {
+                    Some(tab) => self.run_files_action(
+                        tab.repo.repo_id.clone(),
+                        Some(files_panel::Action::DeleteEntry { path }),
+                    ),
+                    None => Task::none(),
+                }
             }
             other if other.starts_with("branch.switch:") => self.update(Message::BranchSwitch(
                 other["branch.switch:".len()..].to_string(),
@@ -2232,6 +2340,179 @@ impl App {
                     },
                     |(result, slot)| Message::CompareFileDiffLoaded { slot, result },
                 )
+            }
+        }
+    }
+
+    /// Executes a files-panel action: directory loads (lazy, per level),
+    /// editor/history opens (same flow as the status-row commands) and the
+    /// worktree mutations (`repo_create_entry` / `repo_rename_entry`;
+    /// deletes go through the tab's confirmation dialog first).
+    fn run_files_action(
+        &mut self,
+        repo_id: RepoId,
+        action: Option<files_panel::Action>,
+    ) -> Task<Message> {
+        let Some(action) = action else {
+            return Task::none();
+        };
+        match action {
+            files_panel::Action::Opened => {
+                // Center-mode exclusivity: opening Files closes the others
+                // (the editor stays — it wins the center chain).
+                if let Some(tab) = self.tabs.get_mut(self.active) {
+                    tab.detail_open = false;
+                    tab.blame.open = false;
+                    tab.file_history.open = false;
+                    tab.compare.open = false;
+                }
+                Task::none()
+            }
+            files_panel::Action::LoadDir { dir } => self.load_files_dir(repo_id, dir),
+            files_panel::Action::Reload => self.refresh_files(repo_id),
+            files_panel::Action::OpenEditor { path } => {
+                if let Some(tab) = self.tabs.get_mut(self.active) {
+                    tab.detail_open = false;
+                    tab.blame.open = false;
+                    tab.file_history.open = false;
+                    tab.compare.open = false;
+                    tab.files.open = false;
+                }
+                self.update(Message::Editor(editor_view::Msg::OpenRequested(path)))
+            }
+            files_panel::Action::OpenHistory { path } => {
+                if let Some(tab) = self.tabs.get_mut(self.active) {
+                    tab.detail_open = false;
+                    tab.blame.open = false;
+                    tab.compare.open = false;
+                    tab.files.open = false;
+                }
+                self.update(Message::FileHistory(file_history_view::Msg::Opened {
+                    path,
+                }))
+            }
+            files_panel::Action::CreateEntry { path, kind } => {
+                let label = match kind {
+                    crate::workspace::NewEntryKind::File => "Create file".to_string(),
+                    crate::workspace::NewEntryKind::Dir => "Create folder".to_string(),
+                };
+                let services = self.services.clone();
+                Task::perform(
+                    async move {
+                        let result = crate::workspace::repo_create_entry(
+                            &services,
+                            repo_id.clone(),
+                            path,
+                            kind,
+                        )
+                        .await;
+                        Message::FilesEntryDone {
+                            repo_id,
+                            label,
+                            result,
+                        }
+                    },
+                    std::convert::identity,
+                )
+            }
+            files_panel::Action::RenameEntry { from, to } => {
+                let services = self.services.clone();
+                Task::perform(
+                    async move {
+                        let result = crate::workspace::repo_rename_entry(
+                            &services,
+                            repo_id.clone(),
+                            from,
+                            to,
+                        )
+                        .await;
+                        Message::FilesEntryDone {
+                            repo_id,
+                            label: "Rename".to_string(),
+                            result,
+                        }
+                    },
+                    std::convert::identity,
+                )
+            }
+            files_panel::Action::DeleteEntry { path } => {
+                if let Some(tab) = self.tabs.get_mut(self.active) {
+                    tab.pending_files_delete = Some(path);
+                }
+                Task::none()
+            }
+        }
+    }
+
+    /// Issues a lazy load for one files-panel directory ("" = root); cached
+    /// listings and in-flight loads are skipped.
+    fn load_files_dir(&mut self, repo_id: RepoId, dir: String) -> Task<Message> {
+        let Some(index) = repo_view::tab_index(&self.tabs, &repo_id) else {
+            return Task::none();
+        };
+        if !self.tabs[index].files.needs_load(&dir) {
+            return Task::none();
+        }
+        self.tabs[index].files.loading.insert(dir.clone());
+        let services = self.services.clone();
+        Task::perform(
+            async move {
+                let result =
+                    crate::workspace::repo_list_dir(&services, repo_id.clone(), dir.clone(), false)
+                        .await;
+                Message::FilesDirLoaded {
+                    repo_id,
+                    dir,
+                    result,
+                }
+            },
+            std::convert::identity,
+        )
+    }
+
+    /// Reloads the files panel for `repo_id`: root plus every expanded
+    /// directory (after `invalidate()` this re-fetches what is visible).
+    fn refresh_files(&mut self, repo_id: RepoId) -> Task<Message> {
+        let Some(index) = repo_view::tab_index(&self.tabs, &repo_id) else {
+            return Task::none();
+        };
+        if !self.tabs[index].files.open {
+            return Task::none();
+        }
+        let expanded: Vec<String> = self.tabs[index]
+            .files
+            .expanded
+            .iter()
+            .filter(|dir| !dir.is_empty())
+            .cloned()
+            .collect();
+        let mut tasks = vec![self.load_files_dir(repo_id.clone(), String::new())];
+        for dir in expanded {
+            tasks.push(self.load_files_dir(repo_id.clone(), dir));
+        }
+        Task::batch(tasks)
+    }
+
+    /// Opens a worktree file (repository-relative) in the first detected
+    /// external editor; a missing editor surfaces as a footer notice.
+    fn open_file_external(&mut self, path: &str) -> Task<Message> {
+        let Some(tab) = self.tabs.get(self.active) else {
+            return Task::none();
+        };
+        let repo_id = tab.repo.repo_id.clone();
+        let apps = crate::service::editor::detect_editors();
+        let Some(app) = apps.first() else {
+            self.notice = Some(Notice::error("No external editor detected."));
+            return Task::none();
+        };
+        match crate::service::editor::open_in_editor(&self.services, &repo_id, &app.id, path) {
+            Ok(()) => {
+                self.last_op = Some(format!("Opened {path} in {}", app.name));
+                Task::none()
+            }
+            Err(err) => {
+                self.notice = Some(Notice::error(format!("External editor failed: {err}")));
+                Task::none()
             }
         }
     }
@@ -3293,6 +3574,7 @@ impl App {
                     tab.pending_checkpoint_restore = None;
                     tab.pending_reset = None;
                     tab.pending_remote_remove = None;
+                    tab.pending_files_delete = None;
                     tab.pending_rebase = None;
                 }
                 Task::none()
@@ -5227,6 +5509,7 @@ impl App {
             Message::MoreMenu => {
                 let menu = context_menu::Menu::new()
                     .header("Manage")
+                    .command("view.files", "Files…")
                     .command("panel.worktrees", "Worktrees…")
                     .command("panel.submodules", "Submodules…")
                     .command("panel.tags", "Tags…")
@@ -5258,6 +5541,69 @@ impl App {
                 let action = tab.compare.update(msg);
                 let repo_id = tab.repo.repo_id.clone();
                 self.run_compare_action(repo_id, action)
+            }
+            Message::Files(msg) => {
+                let Some(tab) = self.tabs.get_mut(self.active) else {
+                    return Task::none();
+                };
+                let action = files_panel::update(&mut tab.files, msg);
+                let repo_id = tab.repo.repo_id.clone();
+                self.run_files_action(repo_id, action)
+            }
+            Message::FilesDirLoaded {
+                repo_id,
+                dir,
+                result,
+            } => {
+                let Some(index) = repo_view::tab_index(&self.tabs, &repo_id) else {
+                    return Task::none();
+                };
+                self.tabs[index].files.accept_dir(&dir, result);
+                Task::none()
+            }
+            Message::FilesEntryDone {
+                repo_id,
+                label,
+                result,
+            } => {
+                match &result {
+                    Ok(()) => self.last_op = Some(format!("{label} done")),
+                    Err(err) => {
+                        self.notice = Some(Notice::error(format!("{label} failed: {err}")));
+                    }
+                }
+                if let Some(index) = repo_view::tab_index(&self.tabs, &repo_id) {
+                    self.tabs[index].files.invalidate();
+                }
+                Task::batch([self.refresh(repo_id.clone()), self.refresh_files(repo_id)])
+            }
+            Message::FilesRowMenu { path, is_dir } => {
+                self.ctx_menu
+                    .open_at(self.cursor, files_row_menu(&path, is_dir));
+                Task::none()
+            }
+            Message::FilesDeleteConfirmed => {
+                let Some(tab) = self.tabs.get_mut(self.active) else {
+                    return Task::none();
+                };
+                let Some(path) = tab.pending_files_delete.take() else {
+                    return Task::none();
+                };
+                let repo_id = tab.repo.repo_id.clone();
+                let services = self.services.clone();
+                Task::perform(
+                    async move {
+                        let result =
+                            crate::workspace::repo_delete_entry(&services, repo_id.clone(), path)
+                                .await;
+                        Message::FilesEntryDone {
+                            repo_id,
+                            label: "Delete".to_string(),
+                            result: result.map(|_| ()),
+                        }
+                    },
+                    std::convert::identity,
+                )
             }
             Message::CompareFileDiffLoaded { slot, result } => {
                 let Some(tab) = self.tabs.get_mut(self.active) else {
@@ -5554,6 +5900,8 @@ impl App {
                     .is_some_and(|index| self.tabs[index].branches.open);
                 let stashes_open = repo_view::tab_index(&self.tabs, &changed.repo_id)
                     .is_some_and(|index| self.tabs[index].stashes.open);
+                let files_open = repo_view::tab_index(&self.tabs, &changed.repo_id)
+                    .is_some_and(|index| self.tabs[index].files.open);
                 if let Some(index) = repo_view::tab_index(&self.tabs, &changed.repo_id) {
                     self.tabs[index].reload_diff = true;
                     if branches_open && (changed.head_moved || changed.full) {
@@ -5563,8 +5911,16 @@ impl App {
                         self.tabs[index].stashes.loading = true;
                         self.tabs[index].stashes.checkpoints_loading = true;
                     }
+                    if files_open {
+                        // The tree cache is per-listing; drop it and let the
+                        // refresh below re-fetch root + expanded directories.
+                        self.tabs[index].files.invalidate();
+                    }
                 }
                 let mut tasks = vec![self.refresh(changed.repo_id.clone())];
+                if files_open {
+                    tasks.push(self.refresh_files(changed.repo_id.clone()));
+                }
                 if changed.head_moved || changed.full {
                     tasks.push(self.start_log(changed.repo_id.clone()));
                     if branches_open {
@@ -6023,6 +6379,41 @@ fn status_row_menu(item: &StatusRow) -> context_menu::Menu {
     menu = menu.separator();
     menu = menu.command(format!("status.file_history:{}", item.path), "File history");
     menu = menu.command(format!("status.blame:{}", item.path), "Blame");
+    menu
+}
+
+/// Context menu for a Files panel row (right-click). `path` is
+/// repository-relative with forward slashes; directories (and the worktree
+/// root, via the header buttons) get create/rename/delete entries, files get
+/// open/history/copy/external-editor ones.
+fn files_row_menu(path: &str, is_dir: bool) -> context_menu::Menu {
+    let mut menu = context_menu::Menu::new();
+    if path.is_empty() {
+        menu = menu.header("Working tree");
+    } else {
+        menu = menu.header(files_panel::base_name(path).to_string());
+    }
+    if is_dir {
+        menu = menu
+            .command(format!("files.new_file:{path}"), "New file…")
+            .command(format!("files.new_folder:{path}"), "New folder…");
+        if !path.is_empty() {
+            menu = menu
+                .separator()
+                .command(format!("files.rename:{path}"), "Rename…")
+                .command(format!("files.delete:{path}"), "Delete");
+        }
+    } else {
+        menu = menu
+            .command(format!("files.open:{path}"), "Open")
+            .command(format!("files.history:{path}"), "File history")
+            .separator()
+            .command(format!("files.copy:{path}"), "Copy path")
+            .command(format!("files.external:{path}"), "Open in external editor")
+            .separator()
+            .command(format!("files.rename:{path}"), "Rename…")
+            .command(format!("files.delete:{path}"), "Delete");
+    }
     menu
 }
 
