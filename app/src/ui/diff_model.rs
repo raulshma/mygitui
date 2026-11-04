@@ -416,6 +416,26 @@ impl LineSelection {
     }
 }
 
+/// Raw text of the selected lines, in diff order (files → hunks → lines).
+/// Selection identity is the new-side number, so the copy carries added and
+/// context lines — the same set line-granular staging would take.
+pub fn selected_line_texts(files: &[FileDiff], selection: &LineSelection) -> Vec<String> {
+    let mut texts = Vec::new();
+    for (file_index, file) in files.iter().enumerate() {
+        for (hunk_index, hunk) in file.hunks.iter().enumerate() {
+            for line in &hunk.lines {
+                let Some(new_no) = line.new_no else {
+                    continue;
+                };
+                if selection.contains(file_index, hunk_index, new_no) {
+                    texts.push(line.text.clone());
+                }
+            }
+        }
+    }
+    texts
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -643,5 +663,32 @@ mod tests {
         selection.toggle(0, 0, 5, true);
         assert_eq!(selection.ranges(0, 0), vec![(2, 5)]);
         assert_eq!(selection.ranges(0, 1), Vec::<(u32, u32)>::new());
+    }
+
+    #[test]
+    fn selected_line_texts_copies_in_diff_order() {
+        let files = vec![file(
+            "a.txt",
+            vec![hunk(
+                1,
+                1,
+                vec![
+                    line(' ', Some(1), Some(1), "ctx"),
+                    line('-', Some(2), None, "old"),
+                    line('+', None, Some(2), "new"),
+                    line(' ', Some(3), Some(3), "ctx2"),
+                ],
+            )],
+        )];
+        let mut selection = LineSelection::default();
+        selection.toggle(0, 0, 1, false);
+        selection.toggle(0, 0, 2, false);
+        // Removed lines have no new-side number and can never be selected.
+        assert_eq!(
+            selected_line_texts(&files, &selection),
+            vec!["ctx".to_string(), "new".to_string()]
+        );
+        // Empty selection copies nothing.
+        assert!(selected_line_texts(&files, &LineSelection::default()).is_empty());
     }
 }

@@ -403,6 +403,52 @@ fn push_unique(list: &mut Vec<String>, path: &str) {
     }
 }
 
+/// The `.gitignore` patterns offered for one status row (the context
+/// menu's "Ignore" variants): the exact path, a `*.<ext>` glob that only
+/// matches files, and a `<dir>/` glob that only matches directories.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IgnoreVariants {
+    /// The row path as-is (directory entries keep their trailing `/`, which
+    /// git reads as "this directory").
+    pub exact: String,
+    /// `*.<ext>` for a file row with a real extension (hidden files like
+    /// `.gitignore` have none); `None` for directory rows.
+    pub extension: Option<String>,
+    /// The containing directory glob `dir/` for nested rows; `None` for
+    /// root-level files (the repo root cannot be ignored) and directory
+    /// rows (their exact path is already the `<dir>/` glob).
+    pub directory: Option<String>,
+}
+
+/// Build the ignore variants for one row path (repository-relative).
+pub fn ignore_variants(path: &str) -> IgnoreVariants {
+    let exact = path.to_string();
+    if path.ends_with('/') {
+        return IgnoreVariants {
+            exact,
+            extension: None,
+            directory: None,
+        };
+    }
+    let (dir, base) = split_path(path);
+    IgnoreVariants {
+        extension: extension_glob(base),
+        directory: (!dir.is_empty()).then(|| dir.to_string()),
+        exact,
+    }
+}
+
+/// `*.<ext>` for one file name; a lone leading dot is a hidden file, not an
+/// extension.
+fn extension_glob(base: &str) -> Option<String> {
+    let dot = base.rfind('.')?;
+    if dot == 0 {
+        return None;
+    }
+    let ext = &base[dot + 1..];
+    (!ext.is_empty()).then(|| format!("*.{ext}"))
+}
+
 /// "Stage" / "Stage 3 files" style labels.
 pub fn count_label(verb: &str, count: usize) -> String {
     if count > 1 {
@@ -643,5 +689,33 @@ mod tests {
     fn count_labels() {
         assert_eq!(count_label("Stage", 1), "Stage");
         assert_eq!(count_label("Stage", 3), "Stage 3 files");
+    }
+
+    #[test]
+    fn ignore_variants_cover_exact_extension_and_directory() {
+        let nested = ignore_variants("src/ui/app.rs");
+        assert_eq!(nested.exact, "src/ui/app.rs");
+        assert_eq!(nested.extension.as_deref(), Some("*.rs"));
+        assert_eq!(nested.directory.as_deref(), Some("src/ui/"));
+
+        // Root-level files have no directory glob (the root is never
+        // ignored).
+        let root = ignore_variants("README.md");
+        assert_eq!(root.exact, "README.md");
+        assert_eq!(root.extension.as_deref(), Some("*.md"));
+        assert_eq!(root.directory, None);
+
+        // Hidden files have no extension glob.
+        let hidden = ignore_variants(".gitignore");
+        assert_eq!(hidden.extension, None);
+        assert_eq!(hidden.directory, None);
+
+        // Trailing-dot names and directory rows.
+        let dotted = ignore_variants("weird.");
+        assert_eq!(dotted.extension, None);
+        let dir = ignore_variants("build/");
+        assert_eq!(dir.exact, "build/");
+        assert_eq!(dir.extension, None, "directories carry no ext glob");
+        assert_eq!(dir.directory, None, "the exact path is already a dir glob");
     }
 }

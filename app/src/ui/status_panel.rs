@@ -28,11 +28,26 @@ pub fn view<'a>(tab: &'a Tab, tokens: Tokens) -> Element<'a, Message> {
         }
     };
 
+    let untracked = tab
+        .status_index
+        .rows
+        .iter()
+        .filter(|row| row.section == SectionId::Changes && row.kind == ChangeKind::Untracked)
+        .count();
+    let clean_button = if untracked > 0 {
+        mini(tokens, "Clean…", "Delete untracked files").on_press(Message::CleanDialogRequested)
+    } else {
+        mini(tokens, "Clean…", "No untracked files")
+    };
+
     let header = container(
         row![
             text("Source Control").size(12).font(theme::semibold()),
             Space::new().width(Length::Fill),
             text(summary).size(10).color(tokens.muted_foreground),
+            mini(tokens, "Templates", "Ignore templates…")
+                .on_press(Message::IgnoreTemplatesRequested),
+            clean_button,
         ]
         .align_y(Alignment::Center)
         .padding([8, 10]),

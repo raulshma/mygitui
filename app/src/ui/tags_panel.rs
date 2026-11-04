@@ -5,8 +5,10 @@
 //! `crate::service::tags::{tag_list, tag_create, tag_delete}` calls. Pushing
 //! tags is out of scope here (network lane). The create form follows the
 //! engine's rules (see `service/tags.rs`): a non-empty message makes an
-//! annotated tag, so the annotated toggle requires one; the target defaults
-//! to HEAD when left empty. Create/delete confirm completion through
+//! annotated tag, so the annotated toggle requires one; `signed` creates a
+//! signed annotated tag via the git CLI and therefore also requires a
+//! message (turning it on implies `annotated`); the target defaults to HEAD
+//! when left empty. Create/delete confirm completion through
 //! [`Msg::CreateDone`] / [`Msg::DeleteDone`] which clear [`TagsPanel::busy`].
 
 use iced::widget::{button, checkbox, column, container, row, scrollable, text, text_input, Space};
@@ -28,6 +30,8 @@ pub struct TagsPanel {
     pub create_target: String,
     pub create_message: String,
     pub create_annotated: bool,
+    /// `git tag -s` (signed annotated tag via the git CLI).
+    pub create_signed: bool,
     /// The tag name awaiting delete confirmation (inline, per-row).
     pub pending_delete: Option<String>,
     pub busy: bool,
@@ -43,6 +47,7 @@ pub enum Msg {
     CreateTargetChanged(String),
     CreateMessageChanged(String),
     CreateAnnotatedToggled(bool),
+    CreateSignedToggled(bool),
     CreatePressed,
     /// Shell reports the finished create (form cleared on success).
     CreateDone(Result<(), String>),
@@ -59,12 +64,13 @@ pub enum Msg {
 pub enum Action {
     Refresh,
     /// Create a tag; `target`/`message` are already normalized (trimmed,
-    /// `None` = HEAD / lightweight).
+    /// `None` = HEAD / lightweight); `signed` maps to the service's `sign`.
     Create {
         name: String,
         target: Option<String>,
         message: Option<String>,
         annotated: bool,
+        signed: bool,
     },
     Delete {
         name: String,
@@ -112,6 +118,18 @@ impl TagsPanel {
             }
             Msg::CreateAnnotatedToggled(annotated) => {
                 self.create_annotated = annotated;
+                if !annotated {
+                    // A signed tag is annotated by definition; dropping the
+                    // message gate would silently break signing.
+                    self.create_signed = false;
+                }
+                None
+            }
+            Msg::CreateSignedToggled(signed) => {
+                self.create_signed = signed;
+                if signed {
+                    self.create_annotated = true;
+                }
                 None
             }
             Msg::CreatePressed => {
@@ -119,6 +137,7 @@ impl TagsPanel {
                     return None; // busy, or the form violates the engine rules
                 }
                 let annotated = self.create_annotated;
+                let signed = self.create_signed;
                 let name = self.create_name.trim().to_owned();
                 let target = non_empty(self.create_target.trim());
                 let message = if annotated {
@@ -132,6 +151,7 @@ impl TagsPanel {
                     target,
                     message,
                     annotated,
+                    signed,
                 })
             }
             Msg::CreateDone(result) => {
@@ -142,6 +162,7 @@ impl TagsPanel {
                         self.create_target.clear();
                         self.create_message.clear();
                         self.create_annotated = false;
+                        self.create_signed = false;
                     }
                     Err(error) => self.error = Some(error),
                 }
@@ -225,6 +246,12 @@ impl TagsPanel {
                 .text_size(10)
                 .spacing(4)
                 .on_toggle(Msg::CreateAnnotatedToggled),
+            checkbox(self.create_signed)
+                .label("signed")
+                .size(12)
+                .text_size(10)
+                .spacing(4)
+                .on_toggle(Msg::CreateSignedToggled),
             button(text("Create").size(10))
                 .style(theme::button_style(tokens, theme::ButtonKind::Primary))
                 .padding([4, 10])
@@ -287,8 +314,9 @@ impl TagsPanel {
 }
 
 /// Form validation against the engine's rules (unit-tested): a name is
-/// required, and `annotated` requires a message (the engine maps
-/// message → annotated tag; a blank message would silently stay lightweight).
+/// required, and `annotated` (implied by `signed`) requires a message (the
+/// engine maps message → annotated tag; a blank message would silently stay
+/// lightweight, and a signed tag is annotated by definition).
 pub(crate) fn create_error(panel: &TagsPanel) -> Option<&'static str> {
     if panel.create_name.trim().is_empty() {
         return Some("a tag name is required");
@@ -467,7 +495,8 @@ mod tests {
                 name: "v1.0".into(),
                 target: None,
                 message: None,
-                annotated: false
+                annotated: false,
+                signed: false
             })
         );
         assert!(panel.busy);
@@ -493,7 +522,47 @@ mod tests {
                 name: "v1.0".into(),
                 target: None,
                 message: Some("release".into()),
-                annotated: true
+                annotated: true,
+                signed: false
+            })
+        );
+    }
+
+    #[test]
+    fn signed_implies_annotated_and_needs_a_message() {
+        let mut panel = TagsPanel::default();
+        panel.update(Msg::CreateNameChanged("v1.0".into()));
+        // Turning `signed` on implies `annotated` (a signed tag is always
+        // annotated), so the message gate applies immediately.
+        panel.update(Msg::CreateSignedToggled(true));
+        assert!(panel.create_annotated && panel.create_signed);
+        assert_eq!(panel.update(Msg::CreatePressed), None);
+        panel.update(Msg::CreateMessageChanged("signed release".into()));
+        assert_eq!(
+            panel.update(Msg::CreatePressed),
+            Some(Action::Create {
+                name: "v1.0".into(),
+                target: None,
+                message: Some("signed release".into()),
+                annotated: true,
+                signed: true
+            })
+        );
+        // Unchecking `annotated` drops `signed` too (a fresh form: the
+        // previous create left the panel busy).
+        panel.update(Msg::CreateDone(Ok(())));
+        panel.update(Msg::CreateNameChanged("v1.0".into()));
+        panel.update(Msg::CreateAnnotatedToggled(false));
+        assert!(!panel.create_signed);
+        panel.update(Msg::CreateMessageChanged("ignored".into()));
+        assert_eq!(
+            panel.update(Msg::CreatePressed),
+            Some(Action::Create {
+                name: "v1.0".into(),
+                target: None,
+                message: None,
+                annotated: false,
+                signed: false
             })
         );
     }
@@ -508,7 +577,8 @@ mod tests {
                 name: "v2.0".into(),
                 target: Some("HEAD~2".into()),
                 message: Some("second release".into()),
-                annotated: true
+                annotated: true,
+                signed: false
             })
         );
         // Unannotated tags never carry a message (the engine would turn any
@@ -525,7 +595,8 @@ mod tests {
                 name: "lw".into(),
                 target: None,
                 message: None,
-                annotated: false
+                annotated: false,
+                signed: false
             })
         );
     }

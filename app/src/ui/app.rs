@@ -17,10 +17,10 @@ use iced::widget::{
 use iced::{window, Alignment, Element, Length, Subscription, Task};
 
 use crate::engine::types::{
-    BranchInfo, ChangeKind, CheckpointInfo, CommitOptions, ConflictResolution, DiffSide,
-    FetchOptions, FileDiff, LineRange, MergeFavor, MergeOutcome, MergeResult, NetStats,
-    PreviewInfo, PullOptions, PushOptions, RebaseState, RebaseStep, RemoteInfo, RepoId, RepoInfo,
-    RepoStatus, ResetKind, StageRequest, StageTarget, StashInfo,
+    BranchInfo, BranchTrashEntry, ChangeKind, CheckpointInfo, CommitOptions, ConflictResolution,
+    DiffSide, FetchOptions, FileDiff, LineRange, MergeFavor, MergeOutcome, MergeResult, NetStats,
+    PreviewInfo, PullOptions, PushOptions, RebaseState, RebaseStep, RemoteBranchInfo, RemoteInfo,
+    RepoId, RepoInfo, RepoStatus, ResetKind, StageRequest, StageTarget, StashInfo,
 };
 use crate::remote::prompts::SecretAnswer;
 use crate::service::events::BackendEvent;
@@ -36,6 +36,7 @@ use super::config::{self, Config, RecentRepo};
 use super::context_menu;
 use super::devices;
 use super::dialog::{self, ResetRequest};
+use super::diff_model;
 use super::diff_view::{self, DiffPane, DiffSlot, PaneMode};
 use super::editor_view;
 use super::file_history_view;
@@ -53,7 +54,7 @@ use super::reflog_panel;
 use super::remote_panel::net_summary;
 use super::repo_view::{self, Load, PendingRebase, PendingRemap, Tab};
 use super::stats_panel;
-use super::status_model::{count_label, filter_sections, SectionId, StatusRow};
+use super::status_model::{count_label, filter_sections, ignore_variants, SectionId, StatusRow};
 use super::submodule_panel;
 use super::tags_panel;
 use super::terminal;
@@ -395,6 +396,28 @@ pub enum Message {
         label: String,
         result: Result<(), String>,
     },
+    /// Palette/stash-panel: delete checkpoints older than 30 days.
+    CheckpointGc,
+    /// Checkpoint GC finished with the number of deleted checkpoints.
+    CheckpointsGcDone {
+        repo_id: RepoId,
+        result: Result<u32, String>,
+    },
+    /// Refresh the deleted-branch trash list (stash panel open/refresh).
+    RefreshTrash,
+    /// Trash list loaded.
+    TrashLoaded {
+        repo_id: RepoId,
+        result: Result<Vec<BranchTrashEntry>, String>,
+    },
+    /// Restore one trashed branch by id.
+    TrashRestore(String),
+    /// Trash restore finished with the restored branch name (a name
+    /// conflict surfaces as an error here).
+    TrashRestoreDone {
+        repo_id: RepoId,
+        result: Result<String, String>,
+    },
     ResetRequested(String),
     ResetKindSelected(ResetKind),
     ResetPreviewLoaded {
@@ -678,6 +701,88 @@ pub enum Message {
         repo_id: RepoId,
         result: Result<(), String>,
     },
+    /// Open the gitignore template gallery (status panel + palette).
+    IgnoreTemplatesRequested,
+    /// Gallery search box changed.
+    IgnoreTemplatesFilterChanged(String),
+    /// Apply one builtin template by name (gallery row).
+    IgnoreTemplateApplied(String),
+    /// Template apply finished (the gallery stays open).
+    TemplateApplied {
+        repo_id: RepoId,
+        result: Result<(), String>,
+    },
+    /// Open the clean-untracked dialog (status panel + palette).
+    CleanDialogRequested,
+    /// Toggle one path's checkbox in the clean dialog.
+    CleanToggled(String),
+    /// The clean dialog's typed confirmation changed.
+    CleanConfirmChanged(String),
+    /// Run the confirmed clean (checkpointed by the service).
+    CleanConfirmed,
+    /// Clean finished with the number of removed paths.
+    CleanDone {
+        repo_id: RepoId,
+        result: Result<u32, String>,
+    },
+    /// Open the branch rename dialog (branch row context menu).
+    BranchRenameRequested(String),
+    /// The rename dialog's target name changed.
+    BranchRenameChanged(String),
+    /// Run the confirmed rename.
+    BranchRenameConfirmed,
+    /// Remote-tracking branch list loaded (branch panel).
+    RemoteBranchesLoaded {
+        repo_id: RepoId,
+        result: Result<Vec<RemoteBranchInfo>, String>,
+    },
+    /// Check out a remote branch into a local one (confirms when the
+    /// working tree is dirty).
+    RemoteBranchCheckout {
+        remote: String,
+        name: String,
+    },
+    /// The dirty-checkout confirm was accepted.
+    RemoteBranchCheckoutConfirmed,
+    /// Remote checkout finished with the checked-out local branch.
+    RemoteCheckoutDone {
+        repo_id: RepoId,
+        result: Result<String, String>,
+    },
+    /// Delete a remote branch (push delete; confirmed by a dialog).
+    RemoteBranchDeleteRequested {
+        remote: String,
+        name: String,
+    },
+    /// The delete confirm was accepted.
+    RemoteBranchDeleteConfirmed,
+    /// Remote branch deletion finished.
+    RemoteBranchDeleteDone {
+        repo_id: RepoId,
+        result: Result<NetStats, String>,
+    },
+    /// Open the "tag here" dialog for a commit (commit row context menu).
+    TagAtRequested(String),
+    /// Tag-at-commit form fields.
+    TagAtNameChanged(String),
+    TagAtAnnotatedToggled(bool),
+    TagAtMessageChanged(String),
+    /// Run the confirmed tag create at the dialog's commit.
+    TagAtConfirmed,
+    /// Tag creation finished.
+    TagAtDone {
+        repo_id: RepoId,
+        name: String,
+        result: Result<(), String>,
+    },
+    /// Copy the raw text of the diff pane's selected lines.
+    CopySelectedLines {
+        slot: DiffSlot,
+    },
+    /// Copy `git describe --tags` for a commit (commit context menu).
+    CopyDescribe(String),
+    /// Describe finished; on success the result lands on the clipboard.
+    DescribeCopied(Result<String, String>),
 }
 
 /// Terminal sessions carry their kind in the id: `pty-*` is a local PTY,
@@ -895,6 +1000,18 @@ impl App {
                     .collect()
             })
             .unwrap_or_default();
+        let untracked: Vec<String> = tab
+            .map(|tab| {
+                Self::visible_rows(tab)
+                    .into_iter()
+                    .filter(|row| {
+                        row.section == SectionId::Changes && row.kind == ChangeKind::Untracked
+                    })
+                    .map(|row| row.path.clone())
+                    .collect()
+            })
+            .unwrap_or_default();
+        let head_branch: Option<String> = tab.and_then(|tab| tab.head_branch().map(str::to_string));
         let remotes: Vec<String> = tab
             .and_then(|tab| tab.remotes.list.as_ref())
             .map(|list| list.iter().map(|remote| remote.name.clone()).collect())
@@ -993,6 +1110,20 @@ impl App {
             repo_id.is_some(),
             None,
         );
+        register(
+            "status.ignore_templates",
+            "Ignore templates…",
+            "Working copy",
+            repo_id.is_some(),
+            None,
+        );
+        register(
+            "status.clean",
+            "Clean untracked files…",
+            "Working copy",
+            !untracked.is_empty(),
+            None,
+        );
 
         register(
             "commit.commit",
@@ -1042,6 +1173,13 @@ impl App {
             "Toggle branches panel",
             "View",
             repo_id.is_some(),
+            None,
+        );
+        register(
+            "branches.copy_current",
+            "Copy current branch name",
+            "Repository",
+            head_branch.is_some(),
             None,
         );
         register(
@@ -1170,6 +1308,13 @@ impl App {
         register(
             "checkpoints.create",
             "Create checkpoint",
+            "Safety net",
+            repo_id.is_some(),
+            None,
+        );
+        register(
+            "checkpoints.gc",
+            "GC checkpoints (older than 30 days)",
             "Safety net",
             repo_id.is_some(),
             None,
@@ -1334,6 +1479,8 @@ impl App {
             }
             "status.select_all" => self.update(Message::StatusSelectAll),
             "status.select_none" => self.update(Message::StatusSelectNone),
+            "status.ignore_templates" => self.update(Message::IgnoreTemplatesRequested),
+            "status.clean" => self.update(Message::CleanDialogRequested),
             "commit.commit" => self.update(Message::CommitPressed),
             "diff.toggle_split" => self.update(Message::DiffToggleSplit),
             "diff.toggle_wrap" => self.update(Message::DiffToggleWrap),
@@ -1344,6 +1491,12 @@ impl App {
                 None => Task::none(),
             },
             "branches.toggle" => self.update(Message::ToggleBranchPanel),
+            "branches.copy_current" => {
+                match self.tabs.get(self.active).and_then(|tab| tab.head_branch()) {
+                    Some(name) => self.update(Message::CopyText(name.to_string())),
+                    None => Task::none(),
+                }
+            }
             "stash.toggle" => self.update(Message::ToggleStashPanel),
             "remotes.toggle" => self.update(Message::ToggleRemotePanel),
             "view.toggle_terminal" => self.update(Message::ToggleTerminal),
@@ -1387,6 +1540,7 @@ impl App {
             "network.push" => self.first_remote_task(Message::PushRemote),
             "stash.push" => self.update(Message::StashPush),
             "checkpoints.create" => self.update(Message::CheckpointCreate),
+            "checkpoints.gc" => self.update(Message::CheckpointGc),
             "ops.cancel" => self.update(Message::CancelOp),
             "ai.commit_message" => self.update(Message::AiGenerate(AiAction::CommitMessage)),
             "ai.review_staged" => self.update(Message::AiGenerate(AiAction::ReviewStaged)),
@@ -1526,12 +1680,21 @@ impl App {
             other if other.starts_with("branch.switch:") => self.update(Message::BranchSwitch(
                 other["branch.switch:".len()..].to_string(),
             )),
+            other if other.starts_with("branch.rename:") => self.update(
+                Message::BranchRenameRequested(other["branch.rename:".len()..].to_string()),
+            ),
             other if other.starts_with("branch.delete:") => self.update(
                 Message::BranchDeleteRequested(other["branch.delete:".len()..].to_string()),
             ),
             other if other.starts_with("commit.copy:") => {
                 self.update(Message::CopySha(other["commit.copy:".len()..].to_string()))
             }
+            other if other.starts_with("commit.copy_describe:") => self.update(
+                Message::CopyDescribe(other["commit.copy_describe:".len()..].to_string()),
+            ),
+            other if other.starts_with("commit.tag:") => self.update(Message::TagAtRequested(
+                other["commit.tag:".len()..].to_string(),
+            )),
             other if other.starts_with("commit.cherry_pick:") => self.update(Message::CherryPick(
                 other["commit.cherry_pick:".len()..].to_string(),
             )),
@@ -2328,12 +2491,15 @@ impl App {
                 name,
                 target,
                 message,
-                annotated,
+                annotated: _,
+                signed,
             } => Task::perform(
                 async move {
                     Message::Tags(tags_panel::Msg::CreateDone(
+                        // `signed` maps to the service's `sign` flag; the
+                        // message already carries the annotated-ness.
                         crate::service::tags::tag_create(
-                            &services, repo_id2, name, target, message, annotated,
+                            &services, repo_id2, name, target, message, signed,
                         )
                         .await,
                     ))
@@ -3300,6 +3466,43 @@ impl App {
         )
     }
 
+    fn load_remote_branches(&self, repo_id: RepoId) -> Task<Message> {
+        let services = self.services.clone();
+        Task::perform(
+            async move {
+                let result =
+                    crate::service::branches::remote_branches(&services, repo_id.clone()).await;
+                Message::RemoteBranchesLoaded { repo_id, result }
+            },
+            std::convert::identity,
+        )
+    }
+
+    /// Runs the remote checkout (the dirty-tree guard already decided this
+    /// is safe to go straight in).
+    fn checkout_remote_branch(
+        &mut self,
+        repo_id: RepoId,
+        remote: String,
+        name: String,
+    ) -> Task<Message> {
+        let services = self.services.clone();
+        Task::perform(
+            async move {
+                let result = crate::service::branches::branch_checkout_remote(
+                    &services,
+                    repo_id.clone(),
+                    remote,
+                    name,
+                    None,
+                )
+                .await;
+                Message::RemoteCheckoutDone { repo_id, result }
+            },
+            std::convert::identity,
+        )
+    }
+
     fn load_stashes(&self, repo_id: RepoId) -> Task<Message> {
         let services = self.services.clone();
         Task::perform(
@@ -3317,6 +3520,18 @@ impl App {
             async move {
                 let result = crate::service::misc::checkpoints(&services, repo_id.clone()).await;
                 Message::CheckpointsLoaded { repo_id, result }
+            },
+            std::convert::identity,
+        )
+    }
+
+    fn load_trash(&self, repo_id: RepoId) -> Task<Message> {
+        let services = self.services.clone();
+        Task::perform(
+            async move {
+                let result =
+                    crate::service::branches::branch_trash_list(&services, repo_id.clone()).await;
+                Message::TrashLoaded { repo_id, result }
             },
             std::convert::identity,
         )
@@ -3865,6 +4080,12 @@ impl App {
                     tab.pending_merge = None;
                     tab.pending_pull = None;
                     tab.pending_push = None;
+                    tab.pending_ignore_templates = None;
+                    tab.pending_clean = None;
+                    tab.pending_branch_rename = None;
+                    tab.pending_remote_checkout = None;
+                    tab.pending_remote_branch_delete = None;
+                    tab.pending_tag_at = None;
                 }
                 self.devices.pending_forget = None;
                 Task::none()
@@ -4114,8 +4335,13 @@ impl App {
                 tab.remotes.open = false;
                 tab.branches.loading = true;
                 tab.branches.error = None;
+                tab.branches.remote_loading = true;
+                tab.branches.remote_error = None;
                 let repo_id = tab.repo.repo_id.clone();
-                self.load_branches(repo_id)
+                Task::batch([
+                    self.load_branches(repo_id.clone()),
+                    self.load_remote_branches(repo_id),
+                ])
             }
             Message::RefreshBranches => {
                 let Some(tab) = self.tabs.get_mut(self.active) else {
@@ -4123,8 +4349,13 @@ impl App {
                 };
                 tab.branches.loading = true;
                 tab.branches.error = None;
+                tab.branches.remote_loading = true;
+                tab.branches.remote_error = None;
                 let repo_id = tab.repo.repo_id.clone();
-                self.load_branches(repo_id)
+                Task::batch([
+                    self.load_branches(repo_id.clone()),
+                    self.load_remote_branches(repo_id),
+                ])
             }
             Message::BranchesLoaded { repo_id, result } => {
                 let Some(index) = repo_view::tab_index(&self.tabs, &repo_id) else {
@@ -4138,6 +4369,21 @@ impl App {
                         branches.error = None;
                     }
                     Err(err) => branches.error = Some(err),
+                }
+                Task::none()
+            }
+            Message::RemoteBranchesLoaded { repo_id, result } => {
+                let Some(index) = repo_view::tab_index(&self.tabs, &repo_id) else {
+                    return Task::none();
+                };
+                let branches = &mut self.tabs[index].branches;
+                branches.remote_loading = false;
+                match result {
+                    Ok(list) => {
+                        branches.remote_list = Some(list);
+                        branches.remote_error = None;
+                    }
+                    Err(err) => branches.remote_error = Some(err),
                 }
                 Task::none()
             }
@@ -4178,6 +4424,230 @@ impl App {
                     std::convert::identity,
                 )
             }
+            Message::RemoteBranchCheckout { remote, name } => {
+                let Some(tab) = self.tabs.get_mut(self.active) else {
+                    return Task::none();
+                };
+                // Dirty working tree: confirm first (uncommitted changes can
+                // block or bleed into the checkout).
+                if tab.working_tree_dirty() {
+                    tab.pending_remote_checkout = Some((remote, name));
+                    return Task::none();
+                }
+                let repo_id = tab.repo.repo_id.clone();
+                self.checkout_remote_branch(repo_id, remote, name)
+            }
+            Message::RemoteBranchCheckoutConfirmed => {
+                let Some(tab) = self.tabs.get_mut(self.active) else {
+                    return Task::none();
+                };
+                let Some((remote, name)) = tab.pending_remote_checkout.take() else {
+                    return Task::none();
+                };
+                let repo_id = tab.repo.repo_id.clone();
+                self.checkout_remote_branch(repo_id, remote, name)
+            }
+            Message::RemoteCheckoutDone { repo_id, result } => {
+                match &result {
+                    Ok(branch) => {
+                        self.notice = Some(Notice::plain(format!("Checked out {branch}")));
+                    }
+                    Err(err) => {
+                        self.notice = Some(Notice::error(format!("Remote checkout failed: {err}")));
+                    }
+                }
+                if let Some(index) = repo_view::tab_index(&self.tabs, &repo_id) {
+                    let tab = &mut self.tabs[index];
+                    tab.history.selected = None;
+                    tab.detail_open = false;
+                    tab.commit_diff = DiffPane::default();
+                    tab.reload_diff = true;
+                    tab.branches.loading = true;
+                }
+                Task::batch([
+                    self.refresh(repo_id.clone()),
+                    self.start_log(repo_id.clone()),
+                    self.load_branches(repo_id.clone()),
+                    self.load_remote_branches(repo_id),
+                ])
+            }
+            Message::RemoteBranchDeleteRequested { remote, name } => {
+                if let Some(tab) = self.tabs.get_mut(self.active) {
+                    tab.pending_remote_branch_delete = Some((remote, name));
+                }
+                Task::none()
+            }
+            Message::RemoteBranchDeleteConfirmed => {
+                let Some(tab) = self.tabs.get_mut(self.active) else {
+                    return Task::none();
+                };
+                let Some((remote, name)) = tab.pending_remote_branch_delete.take() else {
+                    return Task::none();
+                };
+                let repo_id = tab.repo.repo_id.clone();
+                let services = self.services.clone();
+                Task::perform(
+                    async move {
+                        // `PushOptions.delete` with the branch's full ref
+                        // name removes it on the remote.
+                        let options = PushOptions {
+                            remote,
+                            refs: vec![format!("refs/heads/{name}")],
+                            delete: true,
+                            ..PushOptions::default()
+                        };
+                        let result =
+                            crate::service::network::push(&services, repo_id.clone(), options)
+                                .await;
+                        Message::RemoteBranchDeleteDone { repo_id, result }
+                    },
+                    std::convert::identity,
+                )
+            }
+            Message::RemoteBranchDeleteDone { repo_id, result } => {
+                match &result {
+                    Ok(_) => self.last_op = Some("Deleted remote branch".to_string()),
+                    Err(err) => {
+                        self.notice =
+                            Some(Notice::error(format!("Remote branch delete failed: {err}")));
+                    }
+                }
+                if let Some(index) = repo_view::tab_index(&self.tabs, &repo_id) {
+                    self.tabs[index].branches.remote_loading = true;
+                    self.tabs[index].branches.loading = true;
+                }
+                Task::batch([
+                    self.refresh(repo_id.clone()),
+                    self.load_branches(repo_id.clone()),
+                    self.load_remote_branches(repo_id),
+                ])
+            }
+            Message::TagAtRequested(sha) => {
+                if let Some(tab) = self.tabs.get_mut(self.active) {
+                    tab.pending_tag_at = Some(dialog::TagAtRequest {
+                        sha,
+                        ..dialog::TagAtRequest::default()
+                    });
+                }
+                Task::none()
+            }
+            Message::TagAtNameChanged(value) => {
+                if let Some(tab) = self.tabs.get_mut(self.active) {
+                    if let Some(request) = &mut tab.pending_tag_at {
+                        request.name = value;
+                    }
+                }
+                Task::none()
+            }
+            Message::TagAtAnnotatedToggled(value) => {
+                if let Some(tab) = self.tabs.get_mut(self.active) {
+                    if let Some(request) = &mut tab.pending_tag_at {
+                        request.annotated = value;
+                    }
+                }
+                Task::none()
+            }
+            Message::TagAtMessageChanged(value) => {
+                if let Some(tab) = self.tabs.get_mut(self.active) {
+                    if let Some(request) = &mut tab.pending_tag_at {
+                        request.message = value;
+                    }
+                }
+                Task::none()
+            }
+            Message::TagAtConfirmed => {
+                let Some(tab) = self.tabs.get_mut(self.active) else {
+                    return Task::none();
+                };
+                let Some(request) = tab.pending_tag_at.take() else {
+                    return Task::none();
+                };
+                let (name, message) = request.service_args();
+                if name.is_empty() {
+                    return Task::none();
+                }
+                let repo_id = tab.repo.repo_id.clone();
+                let sha = request.sha;
+                let services = self.services.clone();
+                Task::perform(
+                    async move {
+                        let result = crate::service::tags::tag_create(
+                            &services,
+                            repo_id.clone(),
+                            name.clone(),
+                            Some(sha),
+                            message,
+                            false,
+                        )
+                        .await;
+                        Message::TagAtDone {
+                            repo_id,
+                            name,
+                            result,
+                        }
+                    },
+                    std::convert::identity,
+                )
+            }
+            Message::TagAtDone {
+                repo_id,
+                name,
+                result,
+            } => {
+                match &result {
+                    Ok(()) => self.last_op = Some(format!("Created tag {name}")),
+                    Err(err) => self.notice = Some(Notice::error(format!("Tag failed: {err}"))),
+                }
+                let mut task = self.refresh(repo_id);
+                // Keep the tags panel current when it is open.
+                if self.tabs.get(self.active).is_some_and(|tab| tab.tags.open) {
+                    task = Task::batch([
+                        task,
+                        self.update(Message::Tags(tags_panel::Msg::RefreshPressed)),
+                    ]);
+                }
+                task
+            }
+            Message::CopySelectedLines { slot } => {
+                let Some(tab) = self.tabs.get(self.active) else {
+                    return Task::none();
+                };
+                let pane = match slot {
+                    DiffSlot::Working => &tab.diff,
+                    DiffSlot::Commit => &tab.commit_diff,
+                };
+                let texts = diff_model::selected_line_texts(pane.files(), &pane.lines);
+                if texts.is_empty() {
+                    return Task::none();
+                }
+                let text = texts.join("\n");
+                self.update(Message::CopyText(text))
+            }
+            Message::CopyDescribe(sha) => {
+                let Some(tab) = self.tabs.get(self.active) else {
+                    return Task::none();
+                };
+                let repo_id = tab.repo.repo_id.clone();
+                let services = self.services.clone();
+                Task::perform(
+                    async move {
+                        Message::DescribeCopied(
+                            crate::service::branches::describe(&services, repo_id, sha).await,
+                        )
+                    },
+                    std::convert::identity,
+                )
+            }
+            Message::DescribeCopied(result) => match result {
+                Ok(describe) => {
+                    self.last_op = Some("Copied describe".to_string());
+                    iced::clipboard::write::<Message>(describe)
+                }
+                Err(err) => {
+                    self.notice = Some(Notice::error(format!("Describe failed: {err}")));
+                    Task::none()
+                }
+            },
             Message::BranchSwitch(name) => {
                 let Some(tab) = self.tabs.get_mut(self.active) else {
                     return Task::none();
@@ -4256,11 +4726,18 @@ impl App {
                         tab.reload_diff = true;
                         tab.branches.create_name.clear();
                         tab.branches.loading = true;
-                        Task::batch([
+                        let mut tasks = vec![
                             self.refresh(repo_id.clone()),
                             self.start_log(repo_id.clone()),
-                            self.load_branches(repo_id),
-                        ])
+                            self.load_branches(repo_id.clone()),
+                        ];
+                        // A deleted branch just moved into the trash; keep
+                        // the stash panel's trash section current.
+                        if self.tabs[index].stashes.open {
+                            self.tabs[index].stashes.trash_loading = true;
+                            tasks.push(self.load_trash(repo_id));
+                        }
+                        Task::batch(tasks)
                     }
                     Err(err) => {
                         self.notice = Some(Notice::error(format!("{label} failed: {err}")));
@@ -4280,12 +4757,15 @@ impl App {
                 tab.remotes.open = false;
                 tab.stashes.loading = true;
                 tab.stashes.checkpoints_loading = true;
+                tab.stashes.trash_loading = true;
                 tab.stashes.error = None;
                 tab.stashes.checkpoints_error = None;
+                tab.stashes.trash_error = None;
                 let repo_id = tab.repo.repo_id.clone();
                 Task::batch([
                     self.load_stashes(repo_id.clone()),
-                    self.load_checkpoints(repo_id),
+                    self.load_checkpoints(repo_id.clone()),
+                    self.load_trash(repo_id),
                 ])
             }
             Message::RefreshStashes => {
@@ -4294,12 +4774,15 @@ impl App {
                 };
                 tab.stashes.loading = true;
                 tab.stashes.checkpoints_loading = true;
+                tab.stashes.trash_loading = true;
                 tab.stashes.error = None;
                 tab.stashes.checkpoints_error = None;
+                tab.stashes.trash_error = None;
                 let repo_id = tab.repo.repo_id.clone();
                 Task::batch([
                     self.load_stashes(repo_id.clone()),
-                    self.load_checkpoints(repo_id),
+                    self.load_checkpoints(repo_id.clone()),
+                    self.load_trash(repo_id),
                 ])
             }
             Message::StashesLoaded { repo_id, result } => {
@@ -4331,6 +4814,67 @@ impl App {
                     Err(err) => stashes.checkpoints_error = Some(err),
                 }
                 Task::none()
+            }
+            Message::RefreshTrash => {
+                let Some(tab) = self.tabs.get_mut(self.active) else {
+                    return Task::none();
+                };
+                tab.stashes.trash_loading = true;
+                tab.stashes.trash_error = None;
+                let repo_id = tab.repo.repo_id.clone();
+                self.load_trash(repo_id)
+            }
+            Message::TrashLoaded { repo_id, result } => {
+                let Some(index) = repo_view::tab_index(&self.tabs, &repo_id) else {
+                    return Task::none();
+                };
+                let stashes = &mut self.tabs[index].stashes;
+                stashes.trash_loading = false;
+                match result {
+                    Ok(list) => {
+                        stashes.trash = Some(list);
+                        stashes.trash_error = None;
+                    }
+                    Err(err) => stashes.trash_error = Some(err),
+                }
+                Task::none()
+            }
+            Message::TrashRestore(id) => {
+                let Some(tab) = self.tabs.get(self.active) else {
+                    return Task::none();
+                };
+                let repo_id = tab.repo.repo_id.clone();
+                let services = self.services.clone();
+                Task::perform(
+                    async move {
+                        let result = crate::service::branches::branch_trash_restore(
+                            &services,
+                            repo_id.clone(),
+                            id,
+                            None,
+                        )
+                        .await;
+                        Message::TrashRestoreDone { repo_id, result }
+                    },
+                    std::convert::identity,
+                )
+            }
+            Message::TrashRestoreDone { repo_id, result } => {
+                match &result {
+                    Ok(name) => {
+                        self.notice = Some(Notice::plain(format!("Restored branch {name}")))
+                    }
+                    Err(err) => self.notice = Some(Notice::error(format!("Restore failed: {err}"))),
+                }
+                if let Some(index) = repo_view::tab_index(&self.tabs, &repo_id) {
+                    self.tabs[index].stashes.trash_loading = true;
+                    self.tabs[index].branches.loading = true;
+                }
+                Task::batch([
+                    self.refresh(repo_id.clone()),
+                    self.load_trash(repo_id.clone()),
+                    self.load_branches(repo_id),
+                ])
             }
             Message::StashMessageChanged(value) => {
                 if let Some(tab) = self.tabs.get_mut(self.active) {
@@ -4548,6 +5092,39 @@ impl App {
                         Task::none()
                     }
                 }
+            }
+            Message::CheckpointGc => {
+                let Some(tab) = self.tabs.get(self.active) else {
+                    return Task::none();
+                };
+                let repo_id = tab.repo.repo_id.clone();
+                let services = self.services.clone();
+                Task::perform(
+                    async move {
+                        let result =
+                            crate::service::misc::checkpoint_gc(&services, repo_id.clone(), 30)
+                                .await;
+                        Message::CheckpointsGcDone { repo_id, result }
+                    },
+                    std::convert::identity,
+                )
+            }
+            Message::CheckpointsGcDone { repo_id, result } => {
+                match result {
+                    Ok(freed) => {
+                        self.notice = Some(Notice::plain(format!(
+                            "GC freed {freed} checkpoint{} (older than 30 days)",
+                            if freed == 1 { "" } else { "s" }
+                        )));
+                    }
+                    Err(err) => {
+                        self.notice = Some(Notice::error(format!("Checkpoint GC failed: {err}")));
+                    }
+                }
+                if let Some(index) = repo_view::tab_index(&self.tabs, &repo_id) {
+                    self.tabs[index].stashes.checkpoints_loading = true;
+                }
+                self.load_checkpoints(repo_id)
             }
             Message::ResetRequested(sha) => {
                 let Some(tab) = self.tabs.get_mut(self.active) else {
@@ -6447,6 +7024,176 @@ impl App {
                 }
                 self.refresh(repo_id)
             }
+            Message::IgnoreTemplatesRequested => {
+                if let Some(tab) = self.tabs.get_mut(self.active) {
+                    tab.pending_ignore_templates = Some(dialog::IgnoreTemplates::default());
+                }
+                Task::none()
+            }
+            Message::IgnoreTemplatesFilterChanged(value) => {
+                if let Some(tab) = self.tabs.get_mut(self.active) {
+                    if let Some(state) = &mut tab.pending_ignore_templates {
+                        state.filter = value;
+                    }
+                }
+                Task::none()
+            }
+            Message::IgnoreTemplateApplied(name) => {
+                let Some(tab) = self.tabs.get(self.active) else {
+                    return Task::none();
+                };
+                let repo_id = tab.repo.repo_id.clone();
+                let services = self.services.clone();
+                Task::perform(
+                    async move {
+                        let result = crate::service::files::gitignore_apply_template(
+                            &services,
+                            repo_id.clone(),
+                            name,
+                        )
+                        .await;
+                        Message::TemplateApplied { repo_id, result }
+                    },
+                    std::convert::identity,
+                )
+            }
+            Message::TemplateApplied { repo_id, result } => {
+                match &result {
+                    Ok(()) => self.last_op = Some("Ignore template applied".to_string()),
+                    Err(err) => {
+                        self.notice = Some(Notice::error(format!("Apply template failed: {err}")));
+                    }
+                }
+                self.refresh(repo_id)
+            }
+            Message::CleanDialogRequested => {
+                let Some(tab) = self.tabs.get_mut(self.active) else {
+                    return Task::none();
+                };
+                let paths: Vec<String> = tab
+                    .status_index
+                    .rows
+                    .iter()
+                    .filter(|row| {
+                        row.section == SectionId::Changes && row.kind == ChangeKind::Untracked
+                    })
+                    .map(|row| row.path.clone())
+                    .collect();
+                if paths.is_empty() {
+                    return Task::none();
+                }
+                tab.pending_clean = Some(dialog::CleanRequest::new(paths));
+                Task::none()
+            }
+            Message::CleanToggled(path) => {
+                if let Some(tab) = self.tabs.get_mut(self.active) {
+                    if let Some(request) = &mut tab.pending_clean {
+                        request.toggle(&path);
+                    }
+                }
+                Task::none()
+            }
+            Message::CleanConfirmChanged(value) => {
+                if let Some(tab) = self.tabs.get_mut(self.active) {
+                    if let Some(request) = &mut tab.pending_clean {
+                        request.confirm_text = value;
+                    }
+                }
+                Task::none()
+            }
+            Message::CleanConfirmed => {
+                let Some(tab) = self.tabs.get_mut(self.active) else {
+                    return Task::none();
+                };
+                let Some(request) = tab.pending_clean.take() else {
+                    return Task::none();
+                };
+                let paths = request.selected();
+                if paths.is_empty() {
+                    return Task::none();
+                }
+                tab.reload_diff = true;
+                let repo_id = tab.repo.repo_id.clone();
+                let services = self.services.clone();
+                Task::perform(
+                    async move {
+                        // repo_clean validates, snapshots a "pre-clean"
+                        // checkpoint, then deletes — the safety chain is the
+                        // service's, the dialog only gates it.
+                        let result = crate::service::maintenance::repo_clean(
+                            &services,
+                            repo_id.clone(),
+                            paths,
+                            "pre-clean".to_string(),
+                        )
+                        .await;
+                        Message::CleanDone { repo_id, result }
+                    },
+                    std::convert::identity,
+                )
+            }
+            Message::CleanDone { repo_id, result } => {
+                match result {
+                    Ok(removed) => {
+                        self.notice = Some(Notice::plain(format!(
+                            "Cleaned {removed} untracked path{}",
+                            if removed == 1 { "" } else { "s" }
+                        )))
+                    }
+                    Err(err) => self.notice = Some(Notice::error(format!("Clean failed: {err}"))),
+                }
+                self.refresh(repo_id)
+            }
+            Message::BranchRenameRequested(name) => {
+                if let Some(tab) = self.tabs.get_mut(self.active) {
+                    tab.pending_branch_rename = Some(dialog::RenameRequest {
+                        old: name.clone(),
+                        new: name,
+                    });
+                }
+                Task::none()
+            }
+            Message::BranchRenameChanged(value) => {
+                if let Some(tab) = self.tabs.get_mut(self.active) {
+                    if let Some(request) = &mut tab.pending_branch_rename {
+                        request.new = value;
+                    }
+                }
+                Task::none()
+            }
+            Message::BranchRenameConfirmed => {
+                let Some(tab) = self.tabs.get_mut(self.active) else {
+                    return Task::none();
+                };
+                let Some(request) = tab.pending_branch_rename.take() else {
+                    return Task::none();
+                };
+                let new = request.new.trim().to_string();
+                if new.is_empty() || new == request.old {
+                    return Task::none();
+                }
+                let repo_id = tab.repo.repo_id.clone();
+                let label = format!("Rename {} to {new}", request.old);
+                let old = request.old;
+                let services = self.services.clone();
+                Task::perform(
+                    async move {
+                        let result = crate::service::branches::branch_rename(
+                            &services,
+                            repo_id.clone(),
+                            old,
+                            new,
+                        )
+                        .await;
+                        Message::BranchDone {
+                            repo_id,
+                            label,
+                            result,
+                        }
+                    },
+                    std::convert::identity,
+                )
+            }
             Message::Noop => Task::none(),
         }
     }
@@ -6476,6 +7223,7 @@ impl App {
                     if stashes_open && changed.full {
                         self.tabs[index].stashes.loading = true;
                         self.tabs[index].stashes.checkpoints_loading = true;
+                        self.tabs[index].stashes.trash_loading = true;
                     }
                     if files_open {
                         // The tree cache is per-listing; drop it and let the
@@ -6495,6 +7243,7 @@ impl App {
                     if stashes_open {
                         tasks.push(self.load_stashes(changed.repo_id.clone()));
                         tasks.push(self.load_checkpoints(changed.repo_id.clone()));
+                        tasks.push(self.load_trash(changed.repo_id.clone()));
                     }
                 }
                 Task::batch(tasks)
@@ -7009,10 +7758,17 @@ fn status_row_menu(item: &StatusRow) -> context_menu::Menu {
     }
     if item.index != ChangeKind::Conflicted && item.worktree != ChangeKind::Conflicted {
         menu = menu.separator();
+        let variants = ignore_variants(&item.path);
         menu = menu.command(
-            format!("status.ignore:{}", item.path),
+            format!("status.ignore:{}", variants.exact),
             format!("Ignore “{}”", item.base),
         );
+        if let Some(glob) = &variants.extension {
+            menu = menu.command(format!("status.ignore:{glob}"), format!("Ignore “{glob}”"));
+        }
+        if let Some(dir) = &variants.directory {
+            menu = menu.command(format!("status.ignore:{dir}"), format!("Ignore “{dir}”"));
+        }
     }
     menu = menu.separator();
     menu = menu.command(format!("status.file_history:{}", item.path), "File history");
@@ -7063,6 +7819,7 @@ fn branch_row_menu(name: &str) -> context_menu::Menu {
         format!("Switch to “{name}”"),
     );
     menu = menu.separator();
+    menu = menu.command(format!("branch.rename:{name}"), "Rename…");
     menu = menu.command(format!("branch.delete:{name}"), format!("Delete “{name}”"));
     menu
 }
@@ -7136,7 +7893,9 @@ fn commit_row_menu(sha: &str) -> context_menu::Menu {
     let short = repo_view::short_sha(sha);
     context_menu::Menu::new()
         .command(format!("commit.copy:{sha}"), format!("Copy SHA ({short})"))
+        .command(format!("commit.copy_describe:{sha}"), "Copy describe")
         .separator()
+        .command(format!("commit.tag:{sha}"), "Tag here…")
         .command(format!("commit.cherry_pick:{sha}"), "Cherry-pick onto HEAD")
         .command(format!("commit.revert:{sha}"), "Revert")
         .command(format!("commit.reset:{sha}"), "Reset branch to here…")
