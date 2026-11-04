@@ -773,6 +773,85 @@ pub fn templates<'a>(tokens: Tokens, state: &IgnoreTemplates) -> Element<'a, Mes
 }
 
 // ---------------------------------------------------------------------------
+// Tag at commit
+// ---------------------------------------------------------------------------
+
+/// Pending "tag this commit" dialog: the target sha plus the create form.
+#[derive(Debug, Clone, Default)]
+pub struct TagAtRequest {
+    pub sha: String,
+    pub name: String,
+    pub annotated: bool,
+    pub message: String,
+}
+
+impl TagAtRequest {
+    /// Same rules as the tags panel: a name is required and an annotated
+    /// tag needs a message.
+    pub fn confirm_ready(&self) -> bool {
+        if self.name.trim().is_empty() {
+            return false;
+        }
+        !self.annotated || !self.message.trim().is_empty()
+    }
+
+    /// `(target, message)` as the service call wants them.
+    pub fn service_args(&self) -> (String, Option<String>) {
+        let message = if self.annotated {
+            Some(self.message.trim().to_string())
+        } else {
+            None
+        };
+        (self.name.trim().to_string(), message)
+    }
+}
+
+/// Centered modal creating a tag at a commit (name, annotated toggle +
+/// message; the target is fixed to the sha the menu was opened on).
+pub fn tag_at<'a>(tokens: Tokens, request: &TagAtRequest) -> Element<'a, Message> {
+    let mut body = column![
+        text(format!("Tag {}", super::repo_view::short_sha(&request.sha)))
+            .size(14)
+            .font(theme::semibold()),
+        Space::new().height(4),
+        text("Create a tag pointing at this commit.")
+            .size(12)
+            .color(tokens.muted_foreground),
+        text_input("Tag name", request.name.as_str())
+            .on_input(Message::TagAtNameChanged)
+            .size(11)
+            .padding([4, 6]),
+        checkbox(request.annotated)
+            .label("Annotated")
+            .size(12)
+            .text_size(11)
+            .spacing(4)
+            .on_toggle(Message::TagAtAnnotatedToggled),
+    ]
+    .spacing(6);
+
+    if request.annotated {
+        body = body.push(
+            text_input("Tag message", request.message.as_str())
+                .on_input(Message::TagAtMessageChanged)
+                .size(11)
+                .padding([4, 6]),
+        );
+    }
+
+    modal(
+        tokens,
+        400.0,
+        body.into(),
+        action_row(
+            tokens,
+            "Create tag",
+            request.confirm_ready().then_some(Message::TagAtConfirmed),
+        ),
+    )
+}
+
+// ---------------------------------------------------------------------------
 // Branch rename
 // ---------------------------------------------------------------------------
 

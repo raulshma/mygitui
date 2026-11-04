@@ -180,6 +180,8 @@ pub struct Tab {
     pub pending_remote_checkout: Option<(String, String)>,
     /// (remote, name) awaiting the remote-branch delete confirm.
     pub pending_remote_branch_delete: Option<(String, String)>,
+    /// "Tag here…" dialog state (target commit + create form).
+    pub pending_tag_at: Option<dialog::TagAtRequest>,
 
     pub diff_seq: u64,
     pub commit_diff_seq: u64,
@@ -251,6 +253,7 @@ impl Tab {
             pending_branch_rename: None,
             pending_remote_checkout: None,
             pending_remote_branch_delete: None,
+            pending_tag_at: None,
             diff_seq: 0,
             commit_diff_seq: 0,
         }
@@ -636,6 +639,10 @@ fn dialog_overlay<'a>(tab: &'a Tab, tokens: Tokens) -> Option<Element<'a, Messag
             Message::CancelDialog,
             Message::RemoteBranchDeleteConfirmed,
         ));
+    }
+
+    if let Some(request) = &tab.pending_tag_at {
+        return Some(dialog::tag_at(tokens, request));
     }
 
     None

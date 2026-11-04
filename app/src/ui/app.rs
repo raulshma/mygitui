@@ -728,6 +728,20 @@ pub enum Message {
         repo_id: RepoId,
         result: Result<NetStats, String>,
     },
+    /// Open the "tag here" dialog for a commit (commit row context menu).
+    TagAtRequested(String),
+    /// Tag-at-commit form fields.
+    TagAtNameChanged(String),
+    TagAtAnnotatedToggled(bool),
+    TagAtMessageChanged(String),
+    /// Run the confirmed tag create at the dialog's commit.
+    TagAtConfirmed,
+    /// Tag creation finished.
+    TagAtDone {
+        repo_id: RepoId,
+        name: String,
+        result: Result<(), String>,
+    },
 }
 
 /// One background auto-fetch cycle for a repo: pick the default remote
@@ -1588,6 +1602,9 @@ impl App {
             other if other.starts_with("commit.copy:") => {
                 self.update(Message::CopySha(other["commit.copy:".len()..].to_string()))
             }
+            other if other.starts_with("commit.tag:") => self.update(Message::TagAtRequested(
+                other["commit.tag:".len()..].to_string(),
+            )),
             other if other.starts_with("commit.cherry_pick:") => self.update(Message::CherryPick(
                 other["commit.cherry_pick:".len()..].to_string(),
             )),
@@ -3796,6 +3813,7 @@ impl App {
                     tab.pending_branch_rename = None;
                     tab.pending_remote_checkout = None;
                     tab.pending_remote_branch_delete = None;
+                    tab.pending_tag_at = None;
                 }
                 Task::none()
             }
@@ -4230,6 +4248,92 @@ impl App {
                     self.load_branches(repo_id.clone()),
                     self.load_remote_branches(repo_id),
                 ])
+            }
+            Message::TagAtRequested(sha) => {
+                if let Some(tab) = self.tabs.get_mut(self.active) {
+                    tab.pending_tag_at = Some(dialog::TagAtRequest {
+                        sha,
+                        ..dialog::TagAtRequest::default()
+                    });
+                }
+                Task::none()
+            }
+            Message::TagAtNameChanged(value) => {
+                if let Some(tab) = self.tabs.get_mut(self.active) {
+                    if let Some(request) = &mut tab.pending_tag_at {
+                        request.name = value;
+                    }
+                }
+                Task::none()
+            }
+            Message::TagAtAnnotatedToggled(value) => {
+                if let Some(tab) = self.tabs.get_mut(self.active) {
+                    if let Some(request) = &mut tab.pending_tag_at {
+                        request.annotated = value;
+                    }
+                }
+                Task::none()
+            }
+            Message::TagAtMessageChanged(value) => {
+                if let Some(tab) = self.tabs.get_mut(self.active) {
+                    if let Some(request) = &mut tab.pending_tag_at {
+                        request.message = value;
+                    }
+                }
+                Task::none()
+            }
+            Message::TagAtConfirmed => {
+                let Some(tab) = self.tabs.get_mut(self.active) else {
+                    return Task::none();
+                };
+                let Some(request) = tab.pending_tag_at.take() else {
+                    return Task::none();
+                };
+                let (name, message) = request.service_args();
+                if name.is_empty() {
+                    return Task::none();
+                }
+                let repo_id = tab.repo.repo_id.clone();
+                let sha = request.sha;
+                let services = self.services.clone();
+                Task::perform(
+                    async move {
+                        let result = crate::service::tags::tag_create(
+                            &services,
+                            repo_id.clone(),
+                            name.clone(),
+                            Some(sha),
+                            message,
+                            false,
+                        )
+                        .await;
+                        Message::TagAtDone {
+                            repo_id,
+                            name,
+                            result,
+                        }
+                    },
+                    std::convert::identity,
+                )
+            }
+            Message::TagAtDone {
+                repo_id,
+                name,
+                result,
+            } => {
+                match &result {
+                    Ok(()) => self.last_op = Some(format!("Created tag {name}")),
+                    Err(err) => self.notice = Some(Notice::error(format!("Tag failed: {err}"))),
+                }
+                let mut task = self.refresh(repo_id);
+                // Keep the tags panel current when it is open.
+                if self.tabs.get(self.active).is_some_and(|tab| tab.tags.open) {
+                    task = Task::batch([
+                        task,
+                        self.update(Message::Tags(tags_panel::Msg::RefreshPressed)),
+                    ]);
+                }
+                task
             }
             Message::BranchSwitch(name) => {
                 let Some(tab) = self.tabs.get_mut(self.active) else {
@@ -7358,6 +7462,7 @@ fn commit_row_menu(sha: &str) -> context_menu::Menu {
     context_menu::Menu::new()
         .command(format!("commit.copy:{sha}"), format!("Copy SHA ({short})"))
         .separator()
+        .command(format!("commit.tag:{sha}"), "Tag here…")
         .command(format!("commit.cherry_pick:{sha}"), "Cherry-pick onto HEAD")
         .command(format!("commit.revert:{sha}"), "Revert")
         .command(format!("commit.reset:{sha}"), "Reset branch to here…")
