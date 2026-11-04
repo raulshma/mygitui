@@ -288,6 +288,10 @@ pub struct ForgeState {
     pub submitting: bool,
     pub create_error: Option<String>,
 
+    // Comment/review form (selected PR; one shared body field).
+    pub comment: text_editor::Content,
+    pub comment_error: Option<String>,
+
     // Merge options + action feedback.
     pub merge_delete_branch: bool,
     pub busy: Option<Busy>,
@@ -364,6 +368,18 @@ pub enum Msg {
         ready: bool,
     },
 
+    // Comment/review form (selected PR).
+    /// Keystrokes into the shared comment/review body field.
+    CommentChanged(text_editor::Action),
+    /// Post the body as a top-level PR comment (`pr_comment`).
+    CommentPressed(u64),
+    /// Submit a review (`pr_review`): approve, request-changes, or a
+    /// comment-only review — all carrying the shared body field.
+    ReviewPressed {
+        number: u64,
+        action: ReviewAction,
+    },
+
     // Create-PR form.
     ToggleCreate,
     CreateBaseChanged(String),
@@ -418,6 +434,36 @@ impl MergeMethod {
     }
 }
 
+/// Review kinds accepted by `service::forge::pr_review` (`gh pr review`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReviewAction {
+    Approve,
+    RequestChanges,
+    /// A review whose only content is the written body (distinct from a
+    /// top-level [`Action::CommentPr`], which needs no review verdict).
+    Comment,
+}
+
+impl ReviewAction {
+    /// Value passed straight to `pr_review`'s `action` argument.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Approve => "approve",
+            Self::RequestChanges => "request-changes",
+            Self::Comment => "comment",
+        }
+    }
+
+    /// Button / busy label.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Approve => "Approve",
+            Self::RequestChanges => "Request changes",
+            Self::Comment => "Comment-only review",
+        }
+    }
+}
+
 /// Intents the shell executes against the service layer (see wiring docs
 /// for the exact service mapping).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -452,6 +498,15 @@ pub enum Action {
     MarkReady {
         number: u64,
         ready: bool,
+    },
+    CommentPr {
+        number: u64,
+        body: String,
+    },
+    ReviewPr {
+        number: u64,
+        action: ReviewAction,
+        body: String,
     },
     CreatePr {
         base: String,
@@ -515,6 +570,27 @@ pub fn is_busy(state: &ForgeState, number: u64) -> bool {
         .busy
         .as_ref()
         .is_some_and(|busy| busy.number == Some(number))
+}
+
+/// Inline review validation: request-changes (and a comment-only review)
+/// carry a verdict gh cannot submit without written feedback; approving is
+/// fine without text. `None` = the review may be submitted.
+pub fn review_body_error(action: ReviewAction, body: &str) -> Option<&'static str> {
+    let empty = body.trim().is_empty();
+    match action {
+        ReviewAction::RequestChanges if empty => {
+            Some("Request changes needs a comment body — write what to fix.")
+        }
+        ReviewAction::Comment if empty => {
+            Some("A comment-only review needs a body — use Comment for a plain PR comment.")
+        }
+        _ => None,
+    }
+}
+
+/// The trimmed comment/review body as the service wants it.
+pub fn comment_body(state: &ForgeState) -> String {
+    state.comment.text().trim().to_string()
 }
 
 /// Guidance text for a structured [`ForgeError`] (install/auth hints for
@@ -719,6 +795,38 @@ pub fn update(state: &mut ForgeState, msg: Msg) -> Option<Action> {
             }
             state.lock(number, if ready { "Mark ready" } else { "Draft" });
             Some(Action::MarkReady { number, ready })
+        }
+
+        Msg::CommentChanged(action) => {
+            state.comment.perform(action);
+            state.comment_error = None;
+            None
+        }
+        Msg::CommentPressed(number) => {
+            let body = comment_body(state);
+            if body.is_empty() || is_busy(state, number) {
+                return None;
+            }
+            state.comment_error = None;
+            state.lock(number, "Comment");
+            Some(Action::CommentPr { number, body })
+        }
+        Msg::ReviewPressed { number, action } => {
+            if is_busy(state, number) {
+                return None;
+            }
+            let body = comment_body(state);
+            if let Some(error) = review_body_error(action, &body) {
+                state.comment_error = Some(error.to_string());
+                return None;
+            }
+            state.comment_error = None;
+            state.lock(number, action.label());
+            Some(Action::ReviewPr {
+                number,
+                action,
+                body,
+            })
         }
 
         Msg::ToggleCreate => {
@@ -1203,6 +1311,7 @@ fn detail_section<'a>(state: &'a ForgeState, tokens: Tokens) -> Option<Element<'
     }
 
     detail = detail.push(pr_actions(pr, state, tokens));
+    detail = detail.push(comment_section(state, tokens));
     detail = detail.push(checks_section(pr, state, tokens));
     detail = detail.push(runs_section(state, tokens));
 
@@ -1320,6 +1429,68 @@ fn pr_actions<'a>(pr: &'a PrRow, state: &'a ForgeState, tokens: Tokens) -> Eleme
         );
     }
     actions.into()
+}
+
+/// Comment/review form for the selected PR: one shared body field with a
+/// top-level `Comment` button (pr_comment) and the three `pr_review`
+/// verdicts. Request-changes/comment-only require a written body (validated
+/// inline, see [`review_body_error`]).
+fn comment_section<'a>(state: &'a ForgeState, tokens: Tokens) -> Element<'a, Msg> {
+    let Some(number) = state.selected else {
+        return column![].into();
+    };
+    let busy = is_busy(state, number);
+    let body = comment_body(state);
+    let body_written = !body.is_empty();
+
+    let mut actions = row![].spacing(4).align_y(Alignment::Center);
+    actions = actions.push(action_button(
+        "Comment",
+        theme::ButtonKind::Secondary,
+        !busy && body_written,
+        Msg::CommentPressed(number),
+        tokens,
+    ));
+    for action in [
+        ReviewAction::Approve,
+        ReviewAction::RequestChanges,
+        ReviewAction::Comment,
+    ] {
+        // Approve may go out without text; the other verdicts need a body.
+        let enabled = !busy
+            && match action {
+                ReviewAction::Approve => true,
+                _ => body_written,
+            };
+        actions = actions.push(action_button(
+            action.label(),
+            theme::ButtonKind::Ghost,
+            enabled,
+            Msg::ReviewPressed { number, action },
+            tokens,
+        ));
+    }
+
+    let mut section = column![].spacing(2).width(Length::Fill);
+    section = section.push(
+        text("Comment / review")
+            .size(10)
+            .color(tokens.muted_foreground),
+    );
+    section = section.push(
+        text_editor(&state.comment)
+            .placeholder("Comment body (request changes needs one)…")
+            .on_action(Msg::CommentChanged)
+            .size(11)
+            .padding(6)
+            .height(Length::Fixed(56.0)),
+    );
+    section = section.push(actions);
+    if let Some(error) = &state.comment_error {
+        section = section.push(text(error.clone()).size(10).color(tokens.deleted));
+    }
+
+    section.into()
 }
 
 fn checks_section<'a>(pr: &'a PrRow, state: &'a ForgeState, tokens: Tokens) -> Element<'a, Msg> {
@@ -2313,6 +2484,119 @@ mod tests {
             state.error.as_deref(),
             Some("Merge failed: gh is not authenticated — run `gh auth login`")
         );
+    }
+
+    // -- comment / review form ------------------------------------------------------
+
+    #[test]
+    fn review_body_error_requires_written_verdicts() {
+        assert!(review_body_error(ReviewAction::Approve, "").is_none());
+        assert!(review_body_error(ReviewAction::Approve, "  ").is_none());
+        assert!(review_body_error(ReviewAction::RequestChanges, "fix the leak").is_none());
+        assert!(review_body_error(ReviewAction::RequestChanges, "").is_some());
+        assert!(review_body_error(ReviewAction::RequestChanges, "   ").is_some());
+        assert!(review_body_error(ReviewAction::Comment, "").is_some());
+        assert!(review_body_error(ReviewAction::Comment, "nit: typo").is_none());
+    }
+
+    #[test]
+    fn review_action_strings_match_the_service() {
+        assert_eq!(ReviewAction::Approve.as_str(), "approve");
+        assert_eq!(ReviewAction::RequestChanges.as_str(), "request-changes");
+        assert_eq!(ReviewAction::Comment.as_str(), "comment");
+    }
+
+    #[test]
+    fn comment_press_maps_trimmed_body_and_locks() {
+        let mut state = state_with(|s| {
+            s.comment = text_editor::Content::with_text("  looks good to me  ");
+        });
+        assert_eq!(
+            update(&mut state, Msg::CommentPressed(7)),
+            Some(Action::CommentPr {
+                number: 7,
+                body: "looks good to me".into(),
+            })
+        );
+        assert_eq!(state.busy.as_ref().unwrap().number, Some(7));
+
+        // Empty body never submits.
+        let mut state = ForgeState::default();
+        assert_eq!(update(&mut state, Msg::CommentPressed(7)), None);
+        // While busy, the press is ignored.
+        let mut state = state_with(|s| {
+            s.comment = text_editor::Content::with_text("hi");
+            s.busy = Some(Busy {
+                number: Some(7),
+                label: "Merge".into(),
+            });
+        });
+        assert_eq!(update(&mut state, Msg::CommentPressed(7)), None);
+    }
+
+    #[test]
+    fn review_press_validates_inline_before_submitting() {
+        let mut state = ForgeState::default();
+        assert_eq!(
+            update(
+                &mut state,
+                Msg::ReviewPressed {
+                    number: 7,
+                    action: ReviewAction::RequestChanges,
+                }
+            ),
+            None,
+            "request-changes without a body is rejected inline"
+        );
+        assert!(state.comment_error.is_some());
+        assert_eq!(state.busy, None, "nothing locked on a rejected submit");
+
+        state.comment = text_editor::Content::with_text(" the error path leaks the fd ");
+        assert_eq!(
+            update(
+                &mut state,
+                Msg::ReviewPressed {
+                    number: 7,
+                    action: ReviewAction::RequestChanges,
+                }
+            ),
+            Some(Action::ReviewPr {
+                number: 7,
+                action: ReviewAction::RequestChanges,
+                body: "the error path leaks the fd".into(),
+            })
+        );
+        assert_eq!(state.comment_error, None, "a valid submit clears the error");
+        assert_eq!(state.busy.as_ref().unwrap().label, "Request changes");
+    }
+
+    #[test]
+    fn approve_may_go_out_without_a_body() {
+        let mut state = ForgeState::default();
+        assert_eq!(
+            update(
+                &mut state,
+                Msg::ReviewPressed {
+                    number: 7,
+                    action: ReviewAction::Approve,
+                }
+            ),
+            Some(Action::ReviewPr {
+                number: 7,
+                action: ReviewAction::Approve,
+                body: String::new(),
+            })
+        );
+    }
+
+    #[test]
+    fn comment_typing_clears_the_inline_error() {
+        let mut state = state_with(|s| s.comment_error = Some("stale".into()));
+        update(
+            &mut state,
+            Msg::CommentChanged(text_editor::Action::Edit(text_editor::Edit::Insert('x'))),
+        );
+        assert_eq!(state.comment_error, None);
     }
 
     // -- status / context ------------------------------------------------------------

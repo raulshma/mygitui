@@ -2036,6 +2036,46 @@ impl App {
                     std::convert::identity,
                 )
             }
+            forge_panel::Action::CommentPr { number, body } => {
+                let services = self.services.clone();
+                Task::perform(
+                    async move {
+                        Message::Forge(forge_panel::Msg::ActionDone {
+                            number: Some(number),
+                            label: "Comment".to_string(),
+                            result: crate::service::forge::pr_comment(
+                                &services, repo_id, number, body,
+                            )
+                            .await,
+                        })
+                    },
+                    std::convert::identity,
+                )
+            }
+            forge_panel::Action::ReviewPr {
+                number,
+                action,
+                body,
+            } => {
+                let services = self.services.clone();
+                Task::perform(
+                    async move {
+                        Message::Forge(forge_panel::Msg::ActionDone {
+                            number: Some(number),
+                            label: action.label().to_string(),
+                            result: crate::service::forge::pr_review(
+                                &services,
+                                repo_id,
+                                number,
+                                action.as_str().to_string(),
+                                body,
+                            )
+                            .await,
+                        })
+                    },
+                    std::convert::identity,
+                )
+            }
             forge_panel::Action::CreatePr {
                 base,
                 head,
@@ -6321,6 +6361,26 @@ impl App {
                     let names: Vec<String> = list.iter().map(|b| b.name.clone()).collect();
                     tab.forge.base_branches = names.clone();
                     tab.forge_ctx.base_branches = names;
+                }
+                // Action outcomes land in the global footer notice too: the
+                // panel is a dropdown that may not be open when they arrive.
+                // (The panel banner keeps its own copy for in-panel reading.)
+                if let forge_panel::Msg::ActionDone { label, result, .. } = &msg {
+                    match result {
+                        Ok(output) => {
+                            self.notice = Some(Notice::plain(if output.trim().is_empty() {
+                                format!("{label} ok")
+                            } else {
+                                format!("{label}: {output}")
+                            }));
+                        }
+                        Err(err) => {
+                            self.notice = Some(Notice::error(format!(
+                                "{label} failed: {}",
+                                forge_panel::forge_error_text(err)
+                            )));
+                        }
+                    }
                 }
                 let action = forge_panel::update(&mut tab.forge, msg);
                 let repo_id = tab.repo.repo_id.clone();
