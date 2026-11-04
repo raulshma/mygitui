@@ -29,6 +29,7 @@ use super::health_panel;
 use super::history_model::{FilterFields, HistoryState};
 use super::history_panel;
 use super::output_panel;
+use super::rebase_planner;
 use super::reflog_panel;
 use super::remote_panel::{self, RemotesState};
 use super::stash_panel::{self, StashesState};
@@ -182,6 +183,9 @@ pub struct Tab {
     pub pending_remote_branch_delete: Option<(String, String)>,
     /// "Tag here…" dialog state (target commit + create form).
     pub pending_tag_at: Option<dialog::TagAtRequest>,
+    /// Interactive rebase planner (commit row context menu) awaiting its
+    /// dialog: the onto commit plus the editable plan rows.
+    pub pending_rebase_planner: Option<rebase_planner::Planner>,
 
     pub diff_seq: u64,
     pub commit_diff_seq: u64,
@@ -254,6 +258,7 @@ impl Tab {
             pending_remote_checkout: None,
             pending_remote_branch_delete: None,
             pending_tag_at: None,
+            pending_rebase_planner: None,
             diff_seq: 0,
             commit_diff_seq: 0,
         }
@@ -643,6 +648,14 @@ fn dialog_overlay<'a>(tab: &'a Tab, tokens: Tokens) -> Option<Element<'a, Messag
 
     if let Some(request) = &tab.pending_tag_at {
         return Some(dialog::tag_at(tokens, request));
+    }
+
+    if let Some(planner) = &tab.pending_rebase_planner {
+        return Some(rebase_planner::dialog(
+            tokens,
+            planner,
+            tab.working_tree_dirty(),
+        ));
     }
 
     None

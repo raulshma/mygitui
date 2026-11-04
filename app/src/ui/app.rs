@@ -50,6 +50,7 @@ use super::palette;
 use super::prompts::{self, AuthPromptState, DeviceSecretPromptState, HostKeyPromptState};
 use super::quick_open;
 use super::quick_switcher;
+use super::rebase_planner;
 use super::reflog_panel;
 use super::remote_panel::net_summary;
 use super::repo_view::{self, Load, PendingRebase, PendingRemap, Tab};
@@ -484,6 +485,24 @@ pub enum Message {
         repo_id: RepoId,
         result: Result<RebaseState, String>,
     },
+    /// Open the interactive rebase planner for rebasing onto a commit
+    /// (commit row context menu).
+    RebasePlannerRequested(String),
+    /// The planner's initial pick plan (`rebase_plan(onto..HEAD)`) loaded.
+    RebasePlannerPlanLoaded {
+        repo_id: RepoId,
+        onto: String,
+        result: Result<Vec<RebaseStep>, String>,
+    },
+    /// The planner's autosquash rebuild (`autosquash_plan(onto..HEAD)`)
+    /// loaded; replaces the authored rows.
+    RebasePlannerAutosquashLoaded {
+        repo_id: RepoId,
+        onto: String,
+        result: Result<Vec<RebaseStep>, String>,
+    },
+    /// Planner dialog interactions (routed into `rebase_planner::Planner`).
+    RebasePlanner(rebase_planner::Msg),
     InProgress(InProgressAction),
     ConflictResolve {
         paths: Vec<String>,
@@ -1704,6 +1723,9 @@ impl App {
             other if other.starts_with("commit.reset:") => self.update(Message::ResetRequested(
                 other["commit.reset:".len()..].to_string(),
             )),
+            other if other.starts_with("commit.rebase:") => self.update(
+                Message::RebasePlannerRequested(other["commit.rebase:".len()..].to_string()),
+            ),
             other if other.starts_with("commit.branch:") => {
                 let sha = other["commit.branch:".len()..].to_string();
                 if let Some(tab) = self.tabs.get_mut(self.active) {
@@ -4086,6 +4108,7 @@ impl App {
                     tab.pending_remote_checkout = None;
                     tab.pending_remote_branch_delete = None;
                     tab.pending_tag_at = None;
+                    tab.pending_rebase_planner = None;
                 }
                 self.devices.pending_forget = None;
                 Task::none()
@@ -5825,6 +5848,178 @@ impl App {
                     Err(err) => {
                         self.notice = Some(Notice::error(format!("Rebase failed: {err}")));
                         Task::none()
+                    }
+                }
+            }
+            Message::RebasePlannerRequested(onto) => {
+                // A running rebase owns the worktree; planning a second one
+                // would race it.
+                let rebasing = self
+                    .tabs
+                    .get(self.active)
+                    .is_some_and(|tab| tab.status.ready().is_some_and(|status| status.rebasing));
+                if rebasing {
+                    self.notice = Some(Notice::error(
+                        "A rebase is already in progress — continue or abort it first".to_string(),
+                    ));
+                    return Task::none();
+                }
+                let Some(tab) = self.tabs.get_mut(self.active) else {
+                    return Task::none();
+                };
+                let onto_summary = tab
+                    .history
+                    .commits
+                    .iter()
+                    .find(|commit| commit.sha == onto)
+                    .map(|commit| commit.summary.clone())
+                    .unwrap_or_default();
+                tab.pending_rebase_planner =
+                    Some(rebase_planner::Planner::new(onto.clone(), onto_summary));
+                let repo_id = tab.repo.repo_id.clone();
+                let services = self.services.clone();
+                Task::perform(
+                    async move {
+                        let result = crate::service::merge::rebase_plan(
+                            &services,
+                            repo_id.clone(),
+                            onto.clone(),
+                        )
+                        .await;
+                        Message::RebasePlannerPlanLoaded {
+                            repo_id,
+                            onto,
+                            result,
+                        }
+                    },
+                    std::convert::identity,
+                )
+            }
+            Message::RebasePlannerPlanLoaded {
+                repo_id,
+                onto,
+                result,
+            } => {
+                let Some(index) = repo_view::tab_index(&self.tabs, &repo_id) else {
+                    return Task::none();
+                };
+                // Stale load (the planner was closed or reopened on another
+                // commit): drop.
+                let Some(planner) = self.tabs[index].pending_rebase_planner.as_mut() else {
+                    return Task::none();
+                };
+                if planner.onto != onto {
+                    return Task::none();
+                }
+                match result {
+                    Ok(plan) if plan.is_empty() => {
+                        self.tabs[index].pending_rebase_planner = None;
+                        self.notice = Some(Notice::error(format!(
+                            "Nothing to rebase: the current branch has no commits past {onto}"
+                        )));
+                    }
+                    Ok(plan) => {
+                        load_planner_plan(&mut self.tabs[index], &onto, plan);
+                    }
+                    Err(err) => {
+                        let Some(planner) = self.tabs[index].pending_rebase_planner.as_mut() else {
+                            return Task::none();
+                        };
+                        if planner.onto == onto {
+                            planner.loading = false;
+                            planner.error = Some(err);
+                        }
+                    }
+                }
+                Task::none()
+            }
+            Message::RebasePlannerAutosquashLoaded {
+                repo_id,
+                onto,
+                result,
+            } => {
+                let Some(index) = repo_view::tab_index(&self.tabs, &repo_id) else {
+                    return Task::none();
+                };
+                match result {
+                    Ok(plan) => {
+                        load_planner_plan(&mut self.tabs[index], &onto, plan);
+                    }
+                    Err(err) => {
+                        // Keep the authored rows; surface why the rebuild
+                        // failed.
+                        let Some(planner) = self.tabs[index].pending_rebase_planner.as_mut() else {
+                            return Task::none();
+                        };
+                        if planner.onto == onto {
+                            planner.loading = false;
+                            planner.error = Some(err);
+                        }
+                    }
+                }
+                Task::none()
+            }
+            Message::RebasePlanner(msg) => {
+                let Some(tab) = self.tabs.get_mut(self.active) else {
+                    return Task::none();
+                };
+                let Some(action) = tab
+                    .pending_rebase_planner
+                    .as_mut()
+                    .and_then(|planner| planner.update(msg))
+                else {
+                    return Task::none();
+                };
+                match action {
+                    rebase_planner::Action::Autosquash => {
+                        let Some(onto) = tab
+                            .pending_rebase_planner
+                            .as_ref()
+                            .map(|planner| planner.onto.clone())
+                        else {
+                            return Task::none();
+                        };
+                        let repo_id = tab.repo.repo_id.clone();
+                        let services = self.services.clone();
+                        Task::perform(
+                            async move {
+                                let result = crate::service::branches::autosquash_plan(
+                                    &services,
+                                    repo_id.clone(),
+                                    onto.clone(),
+                                )
+                                .await;
+                                Message::RebasePlannerAutosquashLoaded {
+                                    repo_id,
+                                    onto,
+                                    result,
+                                }
+                            },
+                            std::convert::identity,
+                        )
+                    }
+                    rebase_planner::Action::Start { onto, steps } => {
+                        // The dialog disables Start while the tree is dirty;
+                        // the guard here keeps a stale press from running.
+                        if tab.working_tree_dirty() {
+                            return Task::none();
+                        }
+                        tab.pending_rebase_planner = None;
+                        let repo_id = tab.repo.repo_id.clone();
+                        let services = self.services.clone();
+                        Task::perform(
+                            async move {
+                                let result = crate::service::merge::rebase_start(
+                                    &services,
+                                    repo_id.clone(),
+                                    steps,
+                                    Some(onto),
+                                )
+                                .await;
+                                Message::RebaseDone { repo_id, result }
+                            },
+                            std::convert::identity,
+                        )
                     }
                 }
             }
@@ -7888,6 +8083,40 @@ fn ai_result_overlay<'a>(result: &'a AiResult, tokens: Tokens) -> Element<'a, Me
     .into()
 }
 
+/// Feeds a loaded plan (the planner's initial pick list or an autosquash
+/// rebuild) into the tab's open planner, enriching the rows with commit
+/// subjects from the streamed history. A stale load (planner closed, or
+/// reopened on another commit) is dropped.
+fn load_planner_plan(tab: &mut Tab, onto: &str, plan: Vec<RebaseStep>) {
+    // Snapshot the subjects first: the planner and the history both live on
+    // the tab, so the two borrows cannot overlap.
+    let summaries: Vec<(String, Option<String>)> = {
+        let commits = &tab.history.commits;
+        plan.iter()
+            .map(|step| {
+                let summary = commits
+                    .iter()
+                    .find(|commit| commit.sha == step.sha)
+                    .map(|commit| commit.summary.clone());
+                (step.sha.clone(), summary)
+            })
+            .collect()
+    };
+    let Some(planner) = tab.pending_rebase_planner.as_mut() else {
+        return;
+    };
+    if planner.onto != onto {
+        return;
+    }
+    planner.plan_loaded(plan);
+    rebase_planner::fill_summaries(&mut planner.rows, |sha| {
+        summaries
+            .iter()
+            .find(|(key, _)| key == sha)
+            .and_then(|(_, summary)| summary.clone())
+    });
+}
+
 /// Context menu for a history commit row (right-click).
 fn commit_row_menu(sha: &str) -> context_menu::Menu {
     let short = repo_view::short_sha(sha);
@@ -7899,6 +8128,7 @@ fn commit_row_menu(sha: &str) -> context_menu::Menu {
         .command(format!("commit.cherry_pick:{sha}"), "Cherry-pick onto HEAD")
         .command(format!("commit.revert:{sha}"), "Revert")
         .command(format!("commit.reset:{sha}"), "Reset branch to here…")
+        .command(format!("commit.rebase:{sha}"), "Rebase from here…")
         .command(
             format!("commit.branch:{sha}"),
             format!("Create branch here (from {short})"),

@@ -397,7 +397,7 @@ pub fn confirm<'a>(
 
 /// Shared modal scaffold for the option cards below: a centered card over a
 /// dimmed scrim; pressing outside the card dispatches [`Message::CancelDialog`].
-fn modal<'a>(
+pub(crate) fn modal<'a>(
     tokens: Tokens,
     width: f32,
     body: Element<'a, Message>,
@@ -471,7 +471,7 @@ fn option_line<'a>(
 
 /// Card action row: spacer + Cancel + the primary confirm button. The
 /// confirm press is optional (the merge card drops it while dirty).
-fn action_row<'a>(
+pub(crate) fn action_row<'a>(
     tokens: Tokens,
     confirm_label: &str,
     on_confirm: Option<Message>,

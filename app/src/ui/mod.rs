@@ -45,6 +45,8 @@
 //!   sparse checkout and LFS
 //! - [`bisect_panel`] — bisect stepper banner (start/mark/log/reset)
 //! - [`reflog_panel`] — reflog browser with reset/branch-from intents
+//! - [`rebase_planner`] — interactive rebase planner dialog (per-commit
+//!   pick/squash/fixup/drop/edit/reword actions, reorder, autosquash)
 
 mod actions_panel;
 mod app;
@@ -76,6 +78,7 @@ mod palette;
 mod prompts;
 mod quick_open;
 mod quick_switcher;
+mod rebase_planner;
 mod reflog_panel;
 mod remote_panel;
 mod repo_view;
