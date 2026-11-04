@@ -35,6 +35,7 @@ use super::compare_view;
 use super::config::{self, Config, RecentRepo};
 use super::context_menu;
 use super::dialog::{self, ResetRequest};
+use super::diff_model;
 use super::diff_view::{self, DiffPane, DiffSlot, PaneMode};
 use super::editor_view;
 use super::file_history_view;
@@ -742,6 +743,14 @@ pub enum Message {
         name: String,
         result: Result<(), String>,
     },
+    /// Copy the raw text of the diff pane's selected lines.
+    CopySelectedLines {
+        slot: DiffSlot,
+    },
+    /// Copy `git describe --tags` for a commit (commit context menu).
+    CopyDescribe(String),
+    /// Describe finished; on success the result lands on the clipboard.
+    DescribeCopied(Result<String, String>),
 }
 
 /// One background auto-fetch cycle for a repo: pick the default remote
@@ -959,6 +968,7 @@ impl App {
                     .collect()
             })
             .unwrap_or_default();
+        let head_branch: Option<String> = tab.and_then(|tab| tab.head_branch().map(str::to_string));
         let remotes: Vec<String> = tab
             .and_then(|tab| tab.remotes.list.as_ref())
             .map(|list| list.iter().map(|remote| remote.name.clone()).collect())
@@ -1106,6 +1116,13 @@ impl App {
             "Toggle branches panel",
             "View",
             repo_id.is_some(),
+            None,
+        );
+        register(
+            "branches.copy_current",
+            "Copy current branch name",
+            "Repository",
+            head_branch.is_some(),
             None,
         );
         register(
@@ -1410,6 +1427,12 @@ impl App {
                 None => Task::none(),
             },
             "branches.toggle" => self.update(Message::ToggleBranchPanel),
+            "branches.copy_current" => {
+                match self.tabs.get(self.active).and_then(|tab| tab.head_branch()) {
+                    Some(name) => self.update(Message::CopyText(name.to_string())),
+                    None => Task::none(),
+                }
+            }
             "stash.toggle" => self.update(Message::ToggleStashPanel),
             "remotes.toggle" => self.update(Message::ToggleRemotePanel),
             "view.toggle_terminal" => self.update(Message::ToggleTerminal),
@@ -1602,6 +1625,9 @@ impl App {
             other if other.starts_with("commit.copy:") => {
                 self.update(Message::CopySha(other["commit.copy:".len()..].to_string()))
             }
+            other if other.starts_with("commit.copy_describe:") => self.update(
+                Message::CopyDescribe(other["commit.copy_describe:".len()..].to_string()),
+            ),
             other if other.starts_with("commit.tag:") => self.update(Message::TagAtRequested(
                 other["commit.tag:".len()..].to_string(),
             )),
@@ -4335,6 +4361,46 @@ impl App {
                 }
                 task
             }
+            Message::CopySelectedLines { slot } => {
+                let Some(tab) = self.tabs.get(self.active) else {
+                    return Task::none();
+                };
+                let pane = match slot {
+                    DiffSlot::Working => &tab.diff,
+                    DiffSlot::Commit => &tab.commit_diff,
+                };
+                let texts = diff_model::selected_line_texts(pane.files(), &pane.lines);
+                if texts.is_empty() {
+                    return Task::none();
+                }
+                let text = texts.join("\n");
+                self.update(Message::CopyText(text))
+            }
+            Message::CopyDescribe(sha) => {
+                let Some(tab) = self.tabs.get(self.active) else {
+                    return Task::none();
+                };
+                let repo_id = tab.repo.repo_id.clone();
+                let services = self.services.clone();
+                Task::perform(
+                    async move {
+                        Message::DescribeCopied(
+                            crate::service::branches::describe(&services, repo_id, sha).await,
+                        )
+                    },
+                    std::convert::identity,
+                )
+            }
+            Message::DescribeCopied(result) => match result {
+                Ok(describe) => {
+                    self.last_op = Some("Copied describe".to_string());
+                    iced::clipboard::write::<Message>(describe)
+                }
+                Err(err) => {
+                    self.notice = Some(Notice::error(format!("Describe failed: {err}")));
+                    Task::none()
+                }
+            },
             Message::BranchSwitch(name) => {
                 let Some(tab) = self.tabs.get_mut(self.active) else {
                     return Task::none();
@@ -7461,6 +7527,7 @@ fn commit_row_menu(sha: &str) -> context_menu::Menu {
     let short = repo_view::short_sha(sha);
     context_menu::Menu::new()
         .command(format!("commit.copy:{sha}"), format!("Copy SHA ({short})"))
+        .command(format!("commit.copy_describe:{sha}"), "Copy describe")
         .separator()
         .command(format!("commit.tag:{sha}"), "Tag here…")
         .command(format!("commit.cherry_pick:{sha}"), "Cherry-pick onto HEAD")

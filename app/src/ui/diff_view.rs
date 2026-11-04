@@ -200,6 +200,14 @@ fn toolbar<'a>(
     );
 
     let mut actions = row![].spacing(4).align_y(Alignment::Center);
+    if !pane.lines.is_empty() {
+        actions = actions.push(
+            button(text(format!("Copy {}", pane.lines.len())).size(11))
+                .style(theme::button_style(tokens, theme::ButtonKind::Secondary))
+                .padding([3, 8])
+                .on_press(Message::CopySelectedLines { slot }),
+        );
+    }
     if mode.line_actions && !pane.lines.is_empty() {
         actions = actions.push(
             button(
