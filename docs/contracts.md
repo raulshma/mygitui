@@ -393,17 +393,20 @@ primary window hosts the shell and diffs can pop out into secondary windows
 (`App::popout`, per-window `view`/`theme`/`title`, cleanup via
 `window::close_events`). The subscription batch adds the system theme-change
 subscription, the keyboard listener (palette / quick-switcher / quick-open
-chords), the `window::close_events` stream, and the per-tab auto-fetch timer
-(keyed by repo + cadence; `0` disables). Each `BackendEvent` variant
+chords), the `window::close_events` stream, the main-window focus listener
+(focus/unfocus pauses/resumes the remote change pollers), and the per-tab
+auto-fetch timer (keyed by repo + cadence; `0` disables). Each
+`BackendEvent` variant
 maps to a UI behavior: `RepoChanged` → targeted panel refreshes (including
 dropping the files panel's listing cache and re-fetching its visible
 directories), `LogPage` → history model accept (matched by `request_id`),
 `OpProgress` → footer/ActiveOp, `CloneProgress` → the clone dialog's
-progress bar (matched by `url`), prompts (`AuthRequest` /
+progress bar (matched by `url`), `DeviceStatus` → the Home devices
+section's status dots, prompts (`AuthRequest` /
 `HostKeyRequest` / `DeviceAuthRequest`) → queued overlay dialogs,
 `PtyOutput`/`PtyExit` → terminal panel, `ActionOutput` → action run view.
 
-### Shell surfaces (clone / files / quick-open)
+### Shell surfaces (clone / files / quick-open / SSH devices)
 
 - **Clone dialog** (`ui/clone_dialog.rs`, global overlay): Home-screen
   button or palette `repo.clone`. Fields: URL, destination (typed or the
@@ -426,6 +429,34 @@ progress bar (matched by `url`), prompts (`AuthRequest` /
   on every open, files only); Enter opens the selection in the in-app
   editor; navigation mirrors the quick switcher. The hotkey is inert with
   no repository tab open; stale index results are dropped.
+- **SSH devices** (`ui/devices.rs`, pure UI + intent module wired like the
+  clone dialog): the Home card carries a collapsible "SSH devices" section
+  (refreshed on boot, GoHome, expand and after every mutation) listing the
+  `device_list` rows with a status dot driven by `BackendEvent::DeviceStatus`
+  transitions and per-row Connect/Disconnect, Browse… (connected only),
+  Test (offline only — a probe on a connected device dials a throwaway
+  session under the same id whose status events would fight the live one's),
+  Edit… and Forget (dialog::confirm; `device_remove` also disconnects and
+  deletes the keyring secrets). The add/edit dialog (palette
+  `repo.add_device` or "Add device…") covers name, host, port, username,
+  key-file vs password auth (key path, optional passphrase; empty secret
+  fields keep the stored keyring ones), the poll interval and an in-dialog
+  Test connection probe (`device_test`, nothing persisted). The device
+  browser (per-row "Browse…" while connected) navigates `device_browse_dir`
+  from the device home (Up + jump-to path field, stale listings dropped by
+  the in-flight request), scans `device_scan_repos` for the current
+  directory and opens a discovered repo through `remote_repo_open`, which
+  reuses the ordinary repo-open flow (`DeviceRepoOpened` → same tab
+  activation as `RepoOpened`; remote repos keep their distinct backend, so
+  recents stay local-only and every engine call runs on the device).
+  Palette `repo.devices` expands the section and switches to Home.
+- **Remote terminal + polling** — the embedded terminal spawns an SSH shell
+  (`remote::term::rshell_create`) for device repos instead of a local PTY;
+  routing keys off the session id (`rshell-*` vs `pty-*`), and Restart
+  re-spawns the SSH shell. The main window's focus/unfocus transitions
+  pause/resume the remote change pollers (`remote_poll_set_paused`), so
+  devices are only dialed while the app is looked at; diff popouts do not
+  affect this.
 
 ## Persistence
 
