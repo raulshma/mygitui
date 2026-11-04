@@ -405,11 +405,13 @@ terminal panel, `ActionOutput` → action run view.
 
 - **User config** — `<config_dir>/com.raulshma.mygitui/config.json`
   (`ui/config.rs`): `{ theme: "system"|"light"|"dark", diff_wrap: bool,
-  auto_fetch_minutes: u32, recent_repos: [{ path, pinned, last_opened }],
+  diff_split: bool, auto_fetch_minutes: u32,
+  recent_repos: [{ path, pinned, last_opened }],
   accent: bool, highlight: bool, update_check_on_start: bool,
   ai: { enabled, provider, opencode_url,
   opencode_model, openrouter_model, repo_opt_in } }` (AI secrets live in
-  the OS keyring, never here).
+  the OS keyring, never here). The diff prefs seed every new tab and are
+  re-persisted when the diff toolbar toggles split/wrap.
   Loading never fails (missing/corrupt → defaults, unknown keys ignored);
   saves are atomic (temp + rename) and surface I/O errors to the UI.
   Recents dedupe separator/case variants.

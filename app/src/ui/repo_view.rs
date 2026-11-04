@@ -165,7 +165,7 @@ pub struct Tab {
 }
 
 impl Tab {
-    pub fn new(repo: RepoInfo) -> Self {
+    pub fn new(repo: RepoInfo, diff_split: bool, diff_wrap: bool) -> Self {
         let terminal = terminal::State::new(Some(repo.root.clone().into()));
         Self {
             repo,
@@ -180,8 +180,8 @@ impl Tab {
             reload_diff: true,
             diff: DiffPane::default(),
             commit_diff: DiffPane::default(),
-            diff_split: false,
-            diff_wrap: false,
+            diff_split,
+            diff_wrap,
             detail_open: false,
             message: text_editor::Content::with_text(""),
             amend: false,

@@ -19,6 +19,9 @@ use crate::ui::theme;
 pub struct Config {
     pub theme: theme::Mode,
     pub diff_wrap: bool,
+    /// Side-by-side diff layout (`false` = unified); seeds new tabs and is
+    /// re-persisted whenever the diff toolbar toggles it.
+    pub diff_split: bool,
     /// Minutes between background fetches (0 = off).
     pub auto_fetch_minutes: u32,
     pub recent_repos: Vec<RecentRepo>,
@@ -64,6 +67,7 @@ impl Default for Config {
         Self {
             theme: theme::Mode::System,
             diff_wrap: false,
+            diff_split: false,
             auto_fetch_minutes: 0,
             recent_repos: Vec::new(),
             accent: true,
@@ -284,6 +288,7 @@ mod tests {
         let mut config = Config {
             theme: theme::Mode::Dark,
             diff_wrap: true,
+            diff_split: true,
             auto_fetch_minutes: 5,
             accent: false,
             highlight: false,
@@ -294,11 +299,27 @@ mod tests {
         let loaded = Config::load(&dir);
         assert_eq!(loaded.theme, theme::Mode::Dark);
         assert!(loaded.diff_wrap);
+        assert!(loaded.diff_split);
         assert_eq!(loaded.auto_fetch_minutes, 5);
         assert!(!loaded.accent);
         assert!(!loaded.highlight);
         assert_eq!(loaded.recent_repos.len(), 1);
         assert_eq!(loaded.recent_repos[0].path, "C:\\repos\\alpha");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn diff_prefs_default_for_older_config_files() {
+        // Pre-diff-split config files keep loading with both prefs off.
+        let dir = temp_dir("diff-prefs-default");
+        std::fs::write(
+            dir.join("config.json"),
+            r#"{"theme": "Dark", "recent_repos": []}"#,
+        )
+        .unwrap();
+        let loaded = Config::load(&dir);
+        assert!(!loaded.diff_split);
+        assert!(!loaded.diff_wrap);
         let _ = std::fs::remove_dir_all(dir);
     }
 

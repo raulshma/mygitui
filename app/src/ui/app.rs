@@ -2873,7 +2873,11 @@ impl App {
                         match repo_view::tab_index(&self.tabs, &repo_id) {
                             Some(index) => self.active = index,
                             None => {
-                                self.tabs.push(Tab::new(info));
+                                // Seed the tab's diff layout from the saved
+                                // prefs so split/wrap survive restarts.
+                                let (diff_split, diff_wrap) =
+                                    (self.config.diff_split, self.config.diff_wrap);
+                                self.tabs.push(Tab::new(info, diff_split, diff_wrap));
                                 self.active = self.tabs.len() - 1;
                             }
                         }
@@ -3299,13 +3303,17 @@ impl App {
                     tab.diff_split = !tab.diff_split;
                     tab.diff.rebuild(tab.diff_split);
                     tab.commit_diff.rebuild(tab.diff_split);
+                    self.config.diff_split = tab.diff_split;
                 }
+                self.persist_config();
                 Task::none()
             }
             Message::DiffToggleWrap => {
                 if let Some(tab) = self.tabs.get_mut(self.active) {
                     tab.diff_wrap = !tab.diff_wrap;
+                    self.config.diff_wrap = tab.diff_wrap;
                 }
+                self.persist_config();
                 Task::none()
             }
             Message::DiffToggleFile { slot, file } => {
