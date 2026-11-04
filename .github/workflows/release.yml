@@ -238,6 +238,10 @@ jobs:
           mv scratch/mygitui-x86_64-unknown-linux-gnu/mygitui AppDir/usr/bin/mygitui
           chmod +x AppDir/usr/bin/mygitui
           install -m 644 app/packaging/linux/mygitui.desktop AppDir/usr/share/applications/mygitui.desktop
+          # the continuous appimagetool only finds desktop files at the AppDir
+          # root, so keep a copy there too (the share/applications copy stays
+          # for standards-compliant installs from the AppDir).
+          cp app/packaging/linux/mygitui.desktop AppDir/mygitui.desktop
           install -m 644 app/icons/128x128.png AppDir/usr/share/icons/hicolor/128x128/apps/mygitui.png
           cat > AppDir/AppRun <<'EOF'
           #!/bin/sh
