@@ -236,6 +236,11 @@ pub enum Message {
     Backend(BackendEvent),
     SystemTheme(iced::theme::Mode),
     Modifiers(iced::keyboard::Modifiers),
+    /// A fixed shell shortcut (`F5`, `Ctrl/Cmd+1..8`, `Ctrl/Cmd+S`,
+    /// `Ctrl/Cmd+Enter`, `Ctrl/Cmd+Alt+Left/Right`, `Ctrl/Cmd+W`) mapped by
+    /// the global key handler; dispatched with the overlay guard in
+    /// [`App::update`].
+    Shortcut(ShellShortcut),
     OpenDialog,
     OpenPicked(Option<PathBuf>),
     OpenPath(String),
@@ -1183,14 +1188,14 @@ impl App {
             "Close repository tab",
             "Repository",
             repo_id.is_some(),
-            None,
+            Some("Ctrl+W"),
         );
         register(
             "repo.refresh",
             "Refresh status",
             "Repository",
             repo_id.is_some(),
-            None,
+            Some("F5"),
         );
 
         register(
@@ -1248,7 +1253,7 @@ impl App {
             "Commit staged changes",
             "Commit",
             repo_id.is_some(),
-            None,
+            Some("Ctrl+Enter"),
         );
 
         register(
@@ -1270,7 +1275,7 @@ impl App {
             "Toggle history panel",
             "View",
             repo_id.is_some(),
-            None,
+            Some("Ctrl+4"),
         );
         register(
             "history.filter",
@@ -1291,7 +1296,7 @@ impl App {
             "Toggle branches panel",
             "View",
             repo_id.is_some(),
-            None,
+            Some("Ctrl+1"),
         );
         register(
             "branches.copy_current",
@@ -1305,28 +1310,28 @@ impl App {
             "Toggle stashes panel",
             "View",
             repo_id.is_some(),
-            None,
+            Some("Ctrl+2"),
         );
         register(
             "remotes.toggle",
             "Toggle remotes panel",
             "View",
             repo_id.is_some(),
-            None,
+            Some("Ctrl+3"),
         );
         register(
             "view.toggle_terminal",
             "Toggle terminal panel",
             "View",
             repo_id.is_some(),
-            None,
+            Some("Ctrl+8"),
         );
         register(
             "view.toggle_forge",
             "Toggle forge panel",
             "View",
             repo_id.is_some(),
-            None,
+            Some("Ctrl+5"),
         );
         register(
             "bisect.toggle",
@@ -1340,14 +1345,14 @@ impl App {
             "Toggle reflog panel",
             "View",
             repo_id.is_some(),
-            None,
+            Some("Ctrl+7"),
         );
         register(
             "health.toggle",
             "Toggle repo health panel",
             "View",
             repo_id.is_some(),
-            None,
+            Some("Ctrl+6"),
         );
         register(
             "files.quick_open",
@@ -3424,6 +3429,61 @@ impl App {
         Task::batch(tasks)
     }
 
+    /// Whether an overlay with its own key listener (command palette, quick
+    /// open, quick switcher, context menu) is open: while one is, the fixed
+    /// shell shortcuts stay dark so keystrokes can only reach the overlay.
+    fn overlay_open(&self) -> bool {
+        self.palette.open || self.quick_open.open || self.switcher.open || self.ctx_menu.open
+    }
+
+    /// Dispatches a fixed shell shortcut (the `Message::Shortcut` arm).
+    /// Every target routes through the same arms the buttons/palette use, so
+    /// their guards (no repo tab, commit validation, editor save guard)
+    /// apply unchanged; safe to fire with no repo tab open.
+    fn shortcut(&mut self, shortcut: ShellShortcut) -> Task<Message> {
+        if self.overlay_open() {
+            return Task::none();
+        }
+        match shortcut {
+            ShellShortcut::RefreshRepo => {
+                // A focused terminal owns plain keys (`F5` writes an xterm
+                // sequence into the shell); modifier combos are pane-ignored
+                // and stay live. Only the non-combo shortcut needs this guard.
+                if self
+                    .tabs
+                    .get(self.active)
+                    .is_some_and(|tab| tab.terminal_open && tab.terminal.is_focused())
+                {
+                    return Task::none();
+                }
+                match self.tabs.get(self.active) {
+                    Some(tab) => self.update(Message::Refresh(tab.repo.repo_id.clone())),
+                    None => Task::none(),
+                }
+            }
+            ShellShortcut::Panel(index) => match panel_toggle_message(index) {
+                Some(msg) => self.update(msg),
+                None => Task::none(),
+            },
+            ShellShortcut::SaveEditor => {
+                self.update(Message::Editor(editor_view::Msg::SavePressed))
+            }
+            ShellShortcut::Commit => self.update(Message::CommitPressed),
+            ShellShortcut::NextTab | ShellShortcut::PrevTab => {
+                if self.tabs.len() < 2 {
+                    return Task::none();
+                }
+                let next = matches!(shortcut, ShellShortcut::NextTab);
+                let target = wrapped_tab_index(self.active, self.tabs.len(), next);
+                self.update(Message::SelectTab(target))
+            }
+            ShellShortcut::CloseTab => match self.tabs.get(self.active) {
+                Some(tab) => self.update(Message::CloseTab(tab.repo.repo_id.clone())),
+                None => Task::none(),
+            },
+        }
+    }
+
     fn open_repo(&mut self, path: String) -> Task<Message> {
         if self.open_in_flight {
             return Task::none();
@@ -3940,6 +4000,7 @@ impl App {
                 self.modifiers = modifiers;
                 Task::none()
             }
+            Message::Shortcut(shortcut) => self.shortcut(shortcut),
             Message::OpenDialog => {
                 if self.open_in_flight {
                     return Task::none();
@@ -8442,6 +8503,96 @@ fn window_focus_changed(
     }
 }
 
+/// Fixed shell shortcuts handled by the global key handler (fixed defaults,
+/// not user-configurable). The palette mirrors these in its hint fields and
+/// `docs/contracts.md` lists the final mapping.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShellShortcut {
+    /// `F5` — refresh the active repo's status.
+    RefreshRepo,
+    /// `Ctrl/Cmd+1..8` — toggle the panel at this fixed index (see
+    /// [`panel_toggle_message`]).
+    Panel(usize),
+    /// `Ctrl/Cmd+S` — save the in-app editor file (no-op when it is closed).
+    SaveEditor,
+    /// `Ctrl/Cmd+Enter` — commit staged changes (same arm as the Commit
+    /// button, so its validation applies).
+    Commit,
+    /// `Ctrl/Cmd+Alt+Right` — next repo tab (wraps).
+    NextTab,
+    /// `Ctrl/Cmd+Alt+Left` — previous repo tab (wraps).
+    PrevTab,
+    /// `Ctrl/Cmd+W` — close the current repo tab.
+    CloseTab,
+}
+
+/// The `Ctrl/Cmd+1..8` panel mapping, in the fixed shortcut order that
+/// mirrors the repo header toggle buttons left→right: 1 Branches,
+/// 2 Stashes, 3 Remotes, 4 History, 5 Forge, 6 Repo health, 7 Reflog,
+/// 8 Terminal.
+fn panel_toggle_message(index: usize) -> Option<Message> {
+    match index {
+        0 => Some(Message::ToggleBranchPanel),
+        1 => Some(Message::ToggleStashPanel),
+        2 => Some(Message::ToggleRemotePanel),
+        3 => Some(Message::ToggleHistory),
+        4 => Some(Message::Forge(forge_panel::Msg::ToggleOpen)),
+        5 => Some(Message::Health(health_panel::Msg::ToggleOpen)),
+        6 => Some(Message::Reflog(reflog_panel::Msg::ToggleOpen)),
+        7 => Some(Message::ToggleTerminal),
+        _ => None,
+    }
+}
+
+/// Wrapped tab step for the `Ctrl/Cmd+Alt+Left/Right` shortcuts (`next` is
+/// +1 / -1). A single tab stays put; `len == 0` is a no-op for the caller.
+fn wrapped_tab_index(active: usize, len: usize, next: bool) -> usize {
+    if len <= 1 {
+        return active.min(len.saturating_sub(1));
+    }
+    if next {
+        (active + 1) % len
+    } else {
+        active.checked_sub(1).unwrap_or(len - 1)
+    }
+}
+
+/// Maps a key press to a [`ShellShortcut`]. `cmd` mirrors the existing
+/// global bindings (`⌘` on macOS, `Ctrl` elsewhere). Every binding is a
+/// modifier combo except `F5` — plain keystrokes belong to typing surfaces
+/// (the focused terminal pane writes `F5` into the shell itself).
+fn shell_shortcut(
+    key: &iced::keyboard::Key,
+    modifiers: iced::keyboard::Modifiers,
+) -> Option<ShellShortcut> {
+    use iced::keyboard::key::Named;
+    let cmd = modifiers.logo() || (modifiers.control() && !cfg!(target_os = "macos"));
+    match key {
+        iced::keyboard::Key::Named(Named::F5) => Some(ShellShortcut::RefreshRepo),
+        iced::keyboard::Key::Named(Named::Enter) if cmd => Some(ShellShortcut::Commit),
+        iced::keyboard::Key::Named(Named::ArrowRight) if cmd && modifiers.alt() => {
+            Some(ShellShortcut::NextTab)
+        }
+        iced::keyboard::Key::Named(Named::ArrowLeft) if cmd && modifiers.alt() => {
+            Some(ShellShortcut::PrevTab)
+        }
+        iced::keyboard::Key::Character(c) if cmd => match c.as_str() {
+            "1" => Some(ShellShortcut::Panel(0)),
+            "2" => Some(ShellShortcut::Panel(1)),
+            "3" => Some(ShellShortcut::Panel(2)),
+            "4" => Some(ShellShortcut::Panel(3)),
+            "5" => Some(ShellShortcut::Panel(4)),
+            "6" => Some(ShellShortcut::Panel(5)),
+            "7" => Some(ShellShortcut::Panel(6)),
+            "8" => Some(ShellShortcut::Panel(7)),
+            "s" => Some(ShellShortcut::SaveEditor),
+            "w" => Some(ShellShortcut::CloseTab),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
 fn modifiers_changed(
     event: iced::Event,
     _status: iced::event::Status,
@@ -8467,7 +8618,10 @@ fn modifiers_changed(
                 iced::keyboard::Key::Character(c) if cmd && c == "p" => {
                     Some(Message::QuickOpen(quick_open::Msg::Toggle))
                 }
-                _ => None,
+                // Everything else in the fixed shortcut suite routes through
+                // Message::Shortcut, which drops it while an overlay with its
+                // own key listener is open.
+                _ => shell_shortcut(&key, modifiers).map(Message::Shortcut),
             }
         }
         _ => None,
@@ -8738,7 +8892,9 @@ fn percent_decode(input: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::first_repo_arg;
+    use super::{first_repo_arg, panel_toggle_message, shell_shortcut, wrapped_tab_index};
+    use iced::keyboard::key::Named;
+    use iced::keyboard::{Key, Modifiers};
 
     #[test]
     fn first_repo_arg_skips_flags() {
@@ -8766,5 +8922,142 @@ mod tests {
             first_repo_arg(&["mygitui://bogus".to_string()]),
             Some("mygitui://bogus".to_string())
         );
+    }
+
+    /// The platform shortcut modifier (`Ctrl` everywhere, `⌘` on macOS).
+    fn cmd() -> Modifiers {
+        if cfg!(target_os = "macos") {
+            Modifiers::LOGO
+        } else {
+            Modifiers::CTRL
+        }
+    }
+
+    #[test]
+    fn f5_refreshes_without_modifiers() {
+        assert_eq!(
+            shell_shortcut(&Key::Named(Named::F5), Modifiers::empty()),
+            Some(super::ShellShortcut::RefreshRepo)
+        );
+        // Ctrl+F5 stays the same refresh; plain digits/letters do nothing.
+        assert_eq!(
+            shell_shortcut(&Key::Named(Named::F5), cmd()),
+            Some(super::ShellShortcut::RefreshRepo)
+        );
+        assert_eq!(
+            shell_shortcut(&Key::Character("1".into()), Modifiers::empty()),
+            None
+        );
+        assert_eq!(
+            shell_shortcut(&Key::Character("s".into()), Modifiers::empty()),
+            None
+        );
+    }
+
+    #[test]
+    fn ctrl_digits_map_to_the_fixed_panel_order() {
+        for (index, digit) in ["1", "2", "3", "4", "5", "6", "7", "8"].iter().enumerate() {
+            assert_eq!(
+                shell_shortcut(&Key::Character((*digit).into()), cmd()),
+                Some(super::ShellShortcut::Panel(index)),
+                "Ctrl+{digit} maps to panel index {index}"
+            );
+        }
+        assert_eq!(
+            shell_shortcut(&Key::Character("9".into()), cmd()),
+            None,
+            "only 1..8 are bound"
+        );
+        // The panel mapping mirrors the repo header toggles left→right:
+        // 1 Branches, 2 Stashes, 3 Remotes, 4 History, 5 Forge, 6 Health,
+        // 7 Reflog, 8 Terminal.
+        assert!(matches!(
+            panel_toggle_message(0),
+            Some(super::Message::ToggleBranchPanel)
+        ));
+        assert!(matches!(
+            panel_toggle_message(1),
+            Some(super::Message::ToggleStashPanel)
+        ));
+        assert!(matches!(
+            panel_toggle_message(2),
+            Some(super::Message::ToggleRemotePanel)
+        ));
+        assert!(matches!(
+            panel_toggle_message(3),
+            Some(super::Message::ToggleHistory)
+        ));
+        assert!(matches!(
+            panel_toggle_message(4),
+            Some(super::Message::Forge(super::forge_panel::Msg::ToggleOpen))
+        ));
+        assert!(matches!(
+            panel_toggle_message(5),
+            Some(super::Message::Health(super::health_panel::Msg::ToggleOpen))
+        ));
+        assert!(matches!(
+            panel_toggle_message(6),
+            Some(super::Message::Reflog(super::reflog_panel::Msg::ToggleOpen))
+        ));
+        assert!(matches!(
+            panel_toggle_message(7),
+            Some(super::Message::ToggleTerminal)
+        ));
+        assert!(panel_toggle_message(8).is_none());
+    }
+
+    #[test]
+    fn combo_shortcuts_map_to_their_actions() {
+        assert_eq!(
+            shell_shortcut(&Key::Named(Named::Enter), cmd()),
+            Some(super::ShellShortcut::Commit)
+        );
+        assert_eq!(
+            shell_shortcut(&Key::Character("s".into()), cmd()),
+            Some(super::ShellShortcut::SaveEditor)
+        );
+        assert_eq!(
+            shell_shortcut(&Key::Character("w".into()), cmd()),
+            Some(super::ShellShortcut::CloseTab)
+        );
+        // Enter without modifiers stays a typing keystroke.
+        assert_eq!(
+            shell_shortcut(&Key::Named(Named::Enter), Modifiers::empty()),
+            None
+        );
+        // Tab cycling needs cmd+alt on the arrows.
+        assert_eq!(
+            shell_shortcut(&Key::Named(Named::ArrowRight), cmd() | Modifiers::ALT),
+            Some(super::ShellShortcut::NextTab)
+        );
+        assert_eq!(
+            shell_shortcut(&Key::Named(Named::ArrowLeft), cmd() | Modifiers::ALT),
+            Some(super::ShellShortcut::PrevTab)
+        );
+        assert_eq!(
+            shell_shortcut(&Key::Named(Named::ArrowRight), cmd()),
+            None,
+            "alt is required for tab cycling"
+        );
+        assert_eq!(
+            shell_shortcut(&Key::Named(Named::ArrowRight), Modifiers::ALT),
+            None
+        );
+    }
+
+    #[test]
+    fn wrapped_tab_index_steps_and_wraps() {
+        assert_eq!(wrapped_tab_index(0, 3, true), 1);
+        assert_eq!(wrapped_tab_index(2, 3, true), 0, "next wraps at the end");
+        assert_eq!(wrapped_tab_index(2, 3, false), 1);
+        assert_eq!(
+            wrapped_tab_index(0, 3, false),
+            2,
+            "previous wraps at the start"
+        );
+        // Degenerate cases: no tabs or a single tab never moves.
+        assert_eq!(wrapped_tab_index(0, 0, true), 0);
+        assert_eq!(wrapped_tab_index(0, 1, true), 0);
+        assert_eq!(wrapped_tab_index(0, 1, false), 0);
     }
 }
