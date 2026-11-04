@@ -116,6 +116,15 @@ openssl = { version = "0.10", features = ["vendored"] }
 tar = "0.4"
 flate2 = "1"
 
+# Compiles icon + version metadata into mygitui.exe (Windows builds only;
+# see build.rs). Declared for every host: build scripts are built against
+# the host platform, so a `cfg(windows)`-gated section would be skipped on
+# Linux/macOS and break compilation of build.rs there. The crate itself is
+# inert on non-Windows hosts — build.rs only calls it when the *target* is
+# Windows.
+[build-dependencies]
+winresource = "0.1"
+
 [dev-dependencies]
 criterion = "0.8.2"
 git2 = "0.21.0"

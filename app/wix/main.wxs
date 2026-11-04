@@ -87,8 +87,7 @@
 
         <Directory Id='TARGETDIR' Name='SourceDir'>
             <Directory Id='$(var.PlatformProgramFilesFolder)' Name='PFiles'>
-                <Directory Id='APPLICATIONFOLDER' Name='mygitui'>
-                    
+                <Directory Id='APPLICATIONFOLDER' Name='mygitui'>                    
                     <!--
                       Enabling the license sidecar file in the installer is a four step process:
 
@@ -131,6 +130,57 @@
                     </Directory>
                 </Directory>
             </Directory>
+
+            <!--
+              Start Menu shortcut, in a "mygitui" programs subfolder. WiX 3
+              references standard directories by re-declaring their well-known
+              Id under TARGETDIR (light merges these with the built-in
+              definitions). Components are keyed to an HKCU registry value
+              (the standard pattern for non-advertised shortcuts) so Windows
+              removes the shortcut and folder on uninstall even in this
+              per-machine install.
+            -->
+            <Directory Id='ProgramMenuFolder' Name='Programs'>
+                <Directory Id='ShortcutFolder' Name='mygitui'>
+                    <Component Id='StartMenuShortcut' Guid='C34FC4D0-6764-4E32-8422-728BBA58BC34'>
+                        <Shortcut
+                            Id='StartMenuAppShortcut'
+                            Name='MyGitUI'
+                            Description='Fast, configurable Git GUI with AI-assisted workflows'
+                            Target='[Bin]mygitui.exe'
+                            WorkingDirectory='APPLICATIONFOLDER'
+                            Icon='ProductICO'/>
+                        <RemoveFolder Id='RemoveShortcutFolder' On='uninstall'/>
+                        <RegistryValue
+                            Root='HKCU'
+                            Key='Software\raulshma\mygitui'
+                            Name='StartMenuShortcut'
+                            Type='integer'
+                            Value='1'
+                            KeyPath='yes'/>
+                    </Component>
+                </Directory>
+            </Directory>
+
+            <!-- Desktop shortcut; HKCU registry keypath as above. -->
+            <Directory Id='DesktopFolder' Name='Desktop'>
+                <Component Id='DesktopShortcut' Guid='ACBE9CDA-95B7-45CF-80D6-CA7FAE8F7417'>
+                    <Shortcut
+                        Id='DesktopAppShortcut'
+                        Name='MyGitUI'
+                        Description='Fast, configurable Git GUI with AI-assisted workflows'
+                        Target='[Bin]mygitui.exe'
+                        WorkingDirectory='APPLICATIONFOLDER'
+                        Icon='ProductICO'/>
+                    <RegistryValue
+                        Root='HKCU'
+                        Key='Software\raulshma\mygitui'
+                        Name='DesktopShortcut'
+                        Type='integer'
+                        Value='1'
+                        KeyPath='yes'/>
+                </Component>
+            </Directory>
         </Directory>
 
         <Feature
@@ -159,19 +209,45 @@
                 Absent='allow'>
                 <ComponentRef Id='Path'/>
             </Feature>
+
+            <!--
+              Shortcut options. Both are checked by default and can be
+              unchecked in the installer's "Custom Setup" tree
+              (WixUI_FeatureTree), or removed later via Add/Remove Programs >
+              Change.
+            -->
+            <Feature
+                Id='StartMenuShortcut'
+                Title='Start Menu shortcut'
+                Description='Adds a [ProductName] shortcut to the Start Menu.'
+                Level='1'
+                AllowAdvertise='no'
+                Absent='allow'>
+                <ComponentRef Id='StartMenuShortcut'/>
+            </Feature>
+
+            <Feature
+                Id='DesktopShortcut'
+                Title='Desktop shortcut'
+                Description='Adds a [ProductName] shortcut to the Desktop.'
+                Level='1'
+                AllowAdvertise='no'
+                Absent='allow'>
+                <ComponentRef Id='DesktopShortcut'/>
+            </Feature>
         </Feature>
 
         <SetProperty Id='ARPINSTALLLOCATION' Value='[APPLICATIONFOLDER]' After='CostFinalize'/>
 
-        
-        <!--
-          Uncomment the following `Icon` and `Property` tags to change the product icon.
 
-          The product icon is the graphic that appears in the Add/Remove
-          Programs control panel for the application.
+        <!--
+          The product icon: shown in Add/Remove Programs (ARPPRODUCTICON) and
+          reused by the Start Menu and Desktop shortcuts. The path is anchored
+          to $(sys.SOURCEFILEDIR) — the directory holding this .wxs file — so
+          it resolves no matter where the WiX toolchain is invoked from.
         -->
-        <!--<Icon Id='ProductICO' SourceFile='wix\Product.ico'/>-->
-        <!--<Property Id='ARPPRODUCTICON' Value='ProductICO' />-->
+        <Icon Id='ProductICO' SourceFile='$(sys.SOURCEFILEDIR)\..\icons\icon.ico'/>
+        <Property Id='ARPPRODUCTICON' Value='ProductICO'/>
 
         <Property Id='ARPHELPLINK' Value='https://github.com/raulshma/mygitui'/>
         
