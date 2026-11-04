@@ -14,8 +14,6 @@
 
 use std::path::PathBuf;
 
-use crate::service::events::{global, BackendEvent};
-
 /// Platform listener for the primary's accept loop: a Unix-domain socket
 /// listener on Unix, nothing on Windows yet.
 #[cfg(unix)]
@@ -39,11 +37,13 @@ pub enum Role {
     Primary(Option<InstanceListener>),
     /// A primary is already running and the argv was forwarded; the caller
     /// should exit without starting a UI.
+    #[cfg(unix)]
     Forwarded,
 }
 
 /// Per-user socket path, derived from the same data dir the config lives
 /// in, so any second launch agrees on it without reading config.
+#[cfg(unix)]
 fn socket_path() -> Option<PathBuf> {
     dirs::data_dir().map(|dir| dir.join("mygitui").join("instance.sock"))
 }
@@ -95,6 +95,7 @@ pub async fn bind_or_forward(_args: &[String]) -> Role {
 /// process exits elsewhere.
 #[cfg(unix)]
 pub async fn serve(listener: InstanceListener) {
+    use crate::service::events::{global, BackendEvent};
     use tokio::io::AsyncBufReadExt;
     loop {
         match listener.accept().await {

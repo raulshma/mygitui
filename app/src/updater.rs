@@ -356,6 +356,8 @@ mod tests {
             asset("mygitui-x86_64-pc-windows-msvc.msi.sha256"),
             asset("mygitui-x86_64-pc-windows-msvc.zip"),
             asset("mygitui-x86_64-unknown-linux-gnu.tar.xz"),
+            asset("mygitui-aarch64-unknown-linux-gnu.AppImage"),
+            asset("mygitui-aarch64-unknown-linux-gnu.AppImage.sha256"),
             asset("mygitui-x86_64-unknown-linux-gnu.AppImage"),
             asset("mygitui-x86_64-unknown-linux-gnu.AppImage.sha256"),
             asset("mygitui-installer.sh"),
@@ -368,16 +370,17 @@ mod tests {
     fn pick_matches_the_platform_artifact_only() {
         let assets = release_assets_fixture();
         let picked = |pkg| pick_asset(&assets, pkg).map(|asset| asset.name.as_str());
-        assert_eq!(
-            picked(Package::AppImage),
-            Some("mygitui-x86_64-unknown-linux-gnu.AppImage")
+        // AppImages and app bundles are arch-specific; this build's arch
+        // decides which one is picked (both exist in the fixture).
+        let appimage = format!(
+            "mygitui-{}-unknown-linux-gnu.AppImage",
+            std::env::consts::ARCH
         );
+        assert_eq!(picked(Package::AppImage), Some(appimage.as_str()));
         assert_eq!(
             picked(Package::Msi),
             Some("mygitui-x86_64-pc-windows-msvc.msi")
         );
-        // App bundles are arch-specific; this build's arch decides which
-        // one is picked (both exist in the fixture).
         let picked_bundle = pick_asset(&assets, Package::AppBundle).unwrap();
         assert!(picked_bundle.name.ends_with(".app.tar.gz"));
         assert!(!picked_bundle.name.ends_with(".sha256"));
