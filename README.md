@@ -8,10 +8,11 @@ support (russh), forge integration, and opt-in AI assist via **opencode**
 The shell is the native **iced 0.14** UI: the former Svelte webview is gone,
 and the backend runs in-process behind the `service::*` functions and the
 typed `BackendEvent` bus (see `docs/contracts.md`). The migration is
-complete: embedded terminal, diff popouts, command palette + keybinds +
-context menus, and OS-accent theming are all in the native UI. Only
-installer packaging and download-and-install auto-update remain deferred
-(release checks are informational via the palette's `Check for updates`).
+complete — embedded terminal, diff popouts, command palette + keybinds +
+context menus, OS-accent theming, installers (Windows MSI, macOS app
+bundles, Linux AppImage via [cargo-dist](https://opensource.axo.dev/cargo-dist/)),
+and an in-app updater (checksum-verified download-and-install from GitHub
+releases) are all in the native UI.
 
 ## Quickstart
 
@@ -41,6 +42,20 @@ job runs fmt + clippy first so lint mistakes get one clear, fast failure; the
 cfg-dependent). Linux tests run inside a private D-Bus session with an
 unlocked gnome-keyring so the Secret Service keyring path is exercised, not
 skipped.
+
+### Releases
+
+Pushing a `v*` tag runs the [cargo-dist](https://opensource.axo.dev/cargo-dist/)
+release workflow: release builds across four targets (Linux/macOS x2/Windows),
+tar.xz/zip archives, shell + PowerShell installers, a Windows MSI, SHA-256
+sidecars, plus two hand-added jobs producing the Linux AppImage and macOS
+`.app` bundles the updater installs from — all published to a GitHub release.
+The running app checks that release feed on startup (toggleable) and its
+palette offers `Install available update`, which downloads the platform
+artifact, verifies the checksum, and applies it (AppImage self-replace /
+silent MSI / bundle swap, then restart). Configure dist in
+`dist-workspace.toml` (run `dist` from the repo root); `dist plan` previews
+a release without building.
 
 ## Pre-push hook & test conventions
 
@@ -112,7 +127,8 @@ generated output — do not commit it.
   + CI checks (`gh` CLI), split panes, command palette + keybinds + context
   menus, shadcn-derived light/dark theming, syntax-highlighted diffs,
   OS-accent theming, embedded terminal, diff popout windows, single-instance
-  forwarding + deep links, a11y throughout
+  forwarding + deep links, installers + self-update (MSI / .app / AppImage,
+  SHA-256-verified in-app update flow), a11y throughout
 - **AI assist (opt-in per repo)**: commit message, PR title/desc,
   explain-hunk, staged-diff review, stash message, branch-name
   suggestion; connection health chip
@@ -148,7 +164,9 @@ terminal, forge, bisect, reflog, health, worktrees, submodules, tags, blame,
 file history, compare, custom actions, output log, file editor, contribution
 stats, syntax highlighting, OS-accent theming, diff popouts, single-instance
 forwarding, deep links, AI assist) is fully restored in the native UI.
-Remaining work is packaging/installer polish.
+M8's packaging + updater goal is also landed: tag pushes build installers
+for all three OSes (MSI / .app / AppImage) and the app can update itself
+from GitHub releases.
 
 
 ## License

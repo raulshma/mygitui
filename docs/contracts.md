@@ -358,9 +358,13 @@ twins) are the only sanctioned paths for engine ops:
 - **Deliberately off-queue**: `repo_log_stream` / `repo_file_history`
   (their own cancellation loop and stream tokens on a dedicated thread),
   `mergetool_run` (interactive, minutes-long — blocking the queue would
-  freeze the repo while the external tool writes files), and the
+  freeze the repo while the external tool writes files), the
   never-locks-the-repo commands (FS/CLI reads and spawns: maintenance
-  probes, forge, clone, actions, pty, secrets, editors).
+  probes, forge, clone, actions, pty, secrets, editors), and the update
+  check/installer (`update_check` queries the GitHub releases API;
+  `updater.rs` downloads the platform artifact, verifies its `.sha256`
+  sidecar and applies it — AppImage self-replace, silent MSI, `.app`
+  bundle swap — restarting the app on success).
 
 Op kinds double as progress labels: `stage`, `commit`, `branch` (tags
 report here), `fetch` (remote config ops report here), `pull`, `push`,
@@ -402,7 +406,8 @@ terminal panel, `ActionOutput` → action run view.
 - **User config** — `<config_dir>/com.raulshma.mygitui/config.json`
   (`ui/config.rs`): `{ theme: "system"|"light"|"dark", diff_wrap: bool,
   auto_fetch_minutes: u32, recent_repos: [{ path, pinned, last_opened }],
-  accent: bool, highlight: bool, ai: { enabled, provider, opencode_url,
+  accent: bool, highlight: bool, update_check_on_start: bool,
+  ai: { enabled, provider, opencode_url,
   opencode_model, openrouter_model, repo_opt_in } }` (AI secrets live in
   the OS keyring, never here).
   Loading never fails (missing/corrupt → defaults, unknown keys ignored);
