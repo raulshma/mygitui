@@ -405,8 +405,18 @@ pub enum Message {
     RemoteUrlChanged(String),
     RemoteAdd,
     FetchRemote(String),
+    /// Open the pull options dialog for a remote.
     PullRemote(String),
+    PullBranchChanged(String),
+    PullRebaseToggled(bool),
+    PullFfOnlyToggled(bool),
+    PullConfirmed,
+    /// Open the push options dialog for a remote.
     PushRemote(String),
+    PushForceToggled(bool),
+    PushForceLeaseToggled(bool),
+    PushTagsToggled(bool),
+    PushConfirmed,
     RemoteRemoveRequested(String),
     RemoteRemoveConfirmed,
     RemotesDone {
@@ -3289,6 +3299,8 @@ impl App {
                     tab.pending_remote_remove = None;
                     tab.pending_rebase = None;
                     tab.pending_merge = None;
+                    tab.pending_pull = None;
+                    tab.pending_push = None;
                 }
                 Task::none()
             }
@@ -4208,11 +4220,53 @@ impl App {
                 )
             }
             Message::PullRemote(remote) => {
+                if let Some(tab) = self.tabs.get_mut(self.active) {
+                    tab.pending_pull = Some(dialog::PullRequest {
+                        remote,
+                        ..Default::default()
+                    });
+                }
+                Task::none()
+            }
+            Message::PullBranchChanged(value) => {
+                if let Some(request) = self
+                    .tabs
+                    .get_mut(self.active)
+                    .and_then(|tab| tab.pending_pull.as_mut())
+                {
+                    request.branch = value;
+                }
+                Task::none()
+            }
+            Message::PullRebaseToggled(value) => {
+                if let Some(request) = self
+                    .tabs
+                    .get_mut(self.active)
+                    .and_then(|tab| tab.pending_pull.as_mut())
+                {
+                    request.rebase = value;
+                }
+                Task::none()
+            }
+            Message::PullFfOnlyToggled(value) => {
+                if let Some(request) = self
+                    .tabs
+                    .get_mut(self.active)
+                    .and_then(|tab| tab.pending_pull.as_mut())
+                {
+                    request.ff_only = value;
+                }
+                Task::none()
+            }
+            Message::PullConfirmed => {
                 let Some(tab) = self.tabs.get_mut(self.active) else {
                     return Task::none();
                 };
+                let Some(request) = tab.pending_pull.take() else {
+                    return Task::none();
+                };
                 let repo_id = tab.repo.repo_id.clone();
-                let label = format!("pull {remote}");
+                let label = format!("pull {}", request.remote);
                 let summary_label = label.clone();
                 let services = self.services.clone();
                 Task::perform(
@@ -4221,10 +4275,10 @@ impl App {
                             &services,
                             repo_id.clone(),
                             PullOptions {
-                                remote,
-                                branch: String::new(),
-                                ff_only: false,
-                                rebase: false,
+                                remote: request.remote,
+                                branch: request.branch.trim().to_string(),
+                                ff_only: request.ff_only,
+                                rebase: request.rebase,
                             },
                         )
                         .await
@@ -4239,11 +4293,60 @@ impl App {
                 )
             }
             Message::PushRemote(remote) => {
+                if let Some(tab) = self.tabs.get_mut(self.active) {
+                    tab.pending_push = Some(dialog::PushRequest {
+                        remote,
+                        ..Default::default()
+                    });
+                }
+                Task::none()
+            }
+            Message::PushForceToggled(value) => {
+                if let Some(request) = self
+                    .tabs
+                    .get_mut(self.active)
+                    .and_then(|tab| tab.pending_push.as_mut())
+                {
+                    request.force = value;
+                    if value {
+                        // The two force modes are mutually exclusive.
+                        request.force_with_lease = false;
+                    }
+                }
+                Task::none()
+            }
+            Message::PushForceLeaseToggled(value) => {
+                if let Some(request) = self
+                    .tabs
+                    .get_mut(self.active)
+                    .and_then(|tab| tab.pending_push.as_mut())
+                {
+                    request.force_with_lease = value;
+                    if value {
+                        request.force = false;
+                    }
+                }
+                Task::none()
+            }
+            Message::PushTagsToggled(value) => {
+                if let Some(request) = self
+                    .tabs
+                    .get_mut(self.active)
+                    .and_then(|tab| tab.pending_push.as_mut())
+                {
+                    request.tags = value;
+                }
+                Task::none()
+            }
+            Message::PushConfirmed => {
                 let Some(tab) = self.tabs.get_mut(self.active) else {
                     return Task::none();
                 };
+                let Some(request) = tab.pending_push.take() else {
+                    return Task::none();
+                };
                 let repo_id = tab.repo.repo_id.clone();
-                let label = format!("push {remote}");
+                let label = format!("push {}", request.remote);
                 let summary_label = label.clone();
                 let services = self.services.clone();
                 Task::perform(
@@ -4252,13 +4355,13 @@ impl App {
                             &services,
                             repo_id.clone(),
                             PushOptions {
-                                remote,
+                                remote: request.remote,
                                 branch: String::new(),
-                                force: false,
-                                force_with_lease: false,
+                                force: request.force,
+                                force_with_lease: request.force_with_lease,
                                 set_upstream: true,
                                 refs: Vec::new(),
-                                tags: false,
+                                tags: request.tags,
                                 delete: false,
                             },
                         )

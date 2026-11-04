@@ -116,8 +116,8 @@ backend the same fn enqueues the remote twin on the same serial queue.
 | `remotes(repo_id)` | Configured remotes with URLs. |
 | `remote_add` / `remote_remove` / `remote_set_url` | Remote config mutations. |
 | `fetch(repo_id, opts)` | Fetch with prune/depth options; streams throttled progress and forwards engine callbacks to `OpCtx::emit_progress`. |
-| `pull(repo_id, opts)` | Pull with ff / merge / rebase policy. |
-| `push(repo_id, opts)` | Push with force, force-with-lease (real expected-sha checking), tags, multi-ref, remote ref deletion; the hook path routes through `cli::push_via_cli` so `pre-push` really runs and streams output. |
+| `pull(repo_id, opts)` | Pull with ff / merge / rebase policy. The UI opens a per-remote options dialog (optional branch — empty = the current branch's upstream, rebase, ff-only) and only runs the op on confirm. |
+| `push(repo_id, opts)` | Push with force, force-with-lease (real expected-sha checking), tags, multi-ref, remote ref deletion; the hook path routes through `cli::push_via_cli` so `pre-push` really runs and streams output. The UI opens a per-remote options dialog (force, force-with-lease — the two are mutually exclusive, push all tags) and only runs the op on confirm. |
 | `auth_respond(op_id, answer)` | UI answer to an `BackendEvent::AuthRequest`; routes `(username, password, store)` to the blocked credentials callback. |
 
 ### Stash / worktrees — `service/stash.rs`

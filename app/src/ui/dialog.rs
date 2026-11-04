@@ -3,7 +3,7 @@
 //! The scrim is a [`mouse_area`], so presses outside the card dismiss the
 //! dialog and never reach the workspace underneath.
 
-use iced::widget::{button, checkbox, column, container, mouse_area, row, text, Space};
+use iced::widget::{button, checkbox, column, container, mouse_area, row, text, text_input, Space};
 use iced::{Alignment, Background, Border, Element, Length};
 
 use crate::engine::types::{MergeFavor, MergeOptions, PreviewInfo, ResetKind};
@@ -68,6 +68,31 @@ impl MergeRequest {
             favor: self.favor,
         }
     }
+}
+
+/// Pending pull from the remotes panel: remote plus its options.
+#[derive(Debug, Clone, Default)]
+pub struct PullRequest {
+    pub remote: String,
+    /// Branch to pull; empty pulls the upstream of the current branch.
+    pub branch: String,
+    /// Rebase instead of merge (`git pull --rebase`).
+    pub rebase: bool,
+    /// Fail instead of creating a merge when not fast-forward.
+    pub ff_only: bool,
+}
+
+/// Pending push from the remotes panel: remote plus its options.
+#[derive(Debug, Clone, Default)]
+pub struct PushRequest {
+    pub remote: String,
+    /// Plain force (`+` refspec) — mutually exclusive with `force_with_lease`.
+    pub force: bool,
+    /// `--force-with-lease`: fails when the remote moved since the last
+    /// fetch (mutually exclusive with `force`).
+    pub force_with_lease: bool,
+    /// Push every local tag (`--tags`).
+    pub tags: bool,
 }
 
 /// Reset modes that discard worktree changes (and therefore get a preview).
@@ -563,6 +588,85 @@ pub fn merge<'a>(
         440.0,
         body.into(),
         action_row(tokens, "Merge", (!dirty).then_some(Message::MergeConfirmed)),
+    )
+}
+
+/// Centered modal with per-remote pull options: optional branch (empty =
+/// the current branch's upstream), rebase and ff-only.
+pub fn pull<'a>(tokens: Tokens, request: &PullRequest) -> Element<'a, Message> {
+    let body = column![
+        text(format!("Pull from {}", request.remote))
+            .size(14)
+            .font(theme::semibold()),
+        Space::new().height(4),
+        text("Leave the branch empty to pull the upstream of the current branch.")
+            .size(12)
+            .color(tokens.muted_foreground),
+        text_input("branch (optional)", request.branch.as_str())
+            .on_input(Message::PullBranchChanged)
+            .on_submit(Message::PullConfirmed)
+            .size(11)
+            .padding([4, 6]),
+        checkbox(request.rebase)
+            .label("Rebase instead of merge")
+            .size(12)
+            .text_size(11)
+            .spacing(4)
+            .on_toggle(Message::PullRebaseToggled),
+        checkbox(request.ff_only)
+            .label("Fast-forward only")
+            .size(12)
+            .text_size(11)
+            .spacing(4)
+            .on_toggle(Message::PullFfOnlyToggled),
+    ]
+    .spacing(6);
+
+    modal(
+        tokens,
+        400.0,
+        body.into(),
+        action_row(tokens, "Pull", Some(Message::PullConfirmed)),
+    )
+}
+
+/// Centered modal with per-remote push options: force / force-with-lease
+/// (mutually exclusive — the update arms clear the counterpart) and tags.
+pub fn push<'a>(tokens: Tokens, request: &PushRequest) -> Element<'a, Message> {
+    let body = column![
+        text(format!("Push to {}", request.remote))
+            .size(14)
+            .font(theme::semibold()),
+        Space::new().height(4),
+        text("Pushes the current branch and sets its upstream when missing.")
+            .size(12)
+            .color(tokens.muted_foreground),
+        checkbox(request.force)
+            .label("Force")
+            .size(12)
+            .text_size(11)
+            .spacing(4)
+            .on_toggle(Message::PushForceToggled),
+        checkbox(request.force_with_lease)
+            .label("Force with lease (fails if the remote moved since the last fetch)")
+            .size(12)
+            .text_size(11)
+            .spacing(4)
+            .on_toggle(Message::PushForceLeaseToggled),
+        checkbox(request.tags)
+            .label("Push all tags")
+            .size(12)
+            .text_size(11)
+            .spacing(4)
+            .on_toggle(Message::PushTagsToggled),
+    ]
+    .spacing(6);
+
+    modal(
+        tokens,
+        440.0,
+        body.into(),
+        action_row(tokens, "Push", Some(Message::PushConfirmed)),
     )
 }
 

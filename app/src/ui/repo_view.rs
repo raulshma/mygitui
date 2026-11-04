@@ -161,6 +161,10 @@ pub struct Tab {
     pub pending_rebase: Option<PendingRebase>,
     /// Branch + options awaiting the merge confirmation dialog.
     pub pending_merge: Option<dialog::MergeRequest>,
+    /// Remote + options awaiting the pull options dialog.
+    pub pending_pull: Option<dialog::PullRequest>,
+    /// Remote + options awaiting the push options dialog.
+    pub pending_push: Option<dialog::PushRequest>,
 
     pub diff_seq: u64,
     pub commit_diff_seq: u64,
@@ -223,6 +227,8 @@ impl Tab {
             pending_remote_remove: None,
             pending_rebase: None,
             pending_merge: None,
+            pending_pull: None,
+            pending_push: None,
             diff_seq: 0,
             commit_diff_seq: 0,
         }
@@ -536,6 +542,14 @@ fn dialog_overlay<'a>(tab: &'a Tab, tokens: Tokens) -> Option<Element<'a, Messag
             tab.head_branch(),
             tab.working_tree_dirty(),
         ));
+    }
+
+    if let Some(request) = &tab.pending_pull {
+        return Some(dialog::pull(tokens, request));
+    }
+
+    if let Some(request) = &tab.pending_push {
+        return Some(dialog::push(tokens, request));
     }
 
     None
