@@ -8,7 +8,7 @@ use iced::widget::{
 };
 use iced::{Alignment, Background, Border, Element, Length};
 
-use crate::engine::types::{MergeFavor, MergeOptions, PreviewInfo, ResetKind};
+use crate::engine::types::{MergeFavor, MergeOptions, MergetoolInfo, PreviewInfo, ResetKind};
 use crate::service::files::GitignoreTemplate;
 
 use super::app::Message;
@@ -1072,6 +1072,152 @@ pub fn clean<'a>(tokens: Tokens, request: &CleanRequest) -> Element<'a, Message>
     )
 }
 
+// ---------------------------------------------------------------------------
+// Mergetool
+// ---------------------------------------------------------------------------
+
+/// Pending "Run mergetool" dialog: the conflicted paths plus the detected
+/// tool config (`mergetool_info` result, loaded async after the dialog
+/// opens).
+#[derive(Debug, Clone, Default)]
+pub struct MergetoolRequest {
+    pub paths: Vec<String>,
+    pub selected: usize,
+    /// `mergetool_info` result (`None` while loading).
+    pub info: Option<MergetoolInfo>,
+    /// Set when the config read failed (rare: the repo handle disappeared).
+    pub error: Option<String>,
+    pub running: bool,
+}
+
+impl MergetoolRequest {
+    pub fn new(paths: Vec<String>) -> Self {
+        Self {
+            paths,
+            selected: 0,
+            info: None,
+            error: None,
+            running: false,
+        }
+    }
+
+    /// The tool `git mergetool` resolves for this run — gui-first, matching
+    /// the engine's `mergetool_info` resolution (`merge.guitool` wins over
+    /// `merge.tool`).
+    pub fn effective_tool(&self) -> Option<&str> {
+        self.info
+            .as_ref()
+            .and_then(|info| info.gui_tool.as_deref().or(info.tool.as_deref()))
+            .filter(|tool| !tool.trim().is_empty())
+    }
+
+    /// The conflicted path the tool would run on.
+    pub fn selected_path(&self) -> Option<&str> {
+        self.paths.get(self.selected).map(String::as_str)
+    }
+}
+
+/// Guidance shown instead of the Run button when no merge tool resolves
+/// from the repo+global config (the `mergetool_info` result carries the
+/// absence; this is its none-found explanation).
+pub fn mergetool_guidance() -> &'static str {
+    "No merge tool is configured. Set merge.tool (or merge.guitool) in git config, e.g. `git config merge.tool vimdiff`."
+}
+
+/// Centered modal launching `git mergetool` for one conflicted path: the
+/// detected tool (or setup guidance when none is configured) and a radio
+/// list of the conflicted paths. The conflict list is re-read through the
+/// regular status refresh after the tool exits.
+pub fn mergetool<'a>(tokens: Tokens, request: &'a MergetoolRequest) -> Element<'a, Message> {
+    let mut body = column![
+        text("Run mergetool").size(14).font(theme::semibold()),
+        Space::new().height(4),
+        text(
+            "Launches your configured merge tool for one conflicted file; \
+             resolve it there — the conflict list is re-read when the tool exits."
+        )
+        .size(12)
+        .color(tokens.muted_foreground),
+    ]
+    .spacing(6);
+
+    if let Some(tool) = request.effective_tool() {
+        let info = request.info.as_ref().expect("tool implies loaded info");
+        let mut detail = vec![format!("Tool: {tool}")];
+        if let Some(path) = &info.path {
+            detail.push(format!("path: {path}"));
+        }
+        if let Some(cmd) = &info.cmd {
+            detail.push(format!("cmd: {cmd}"));
+        }
+        body = body.push(
+            container(
+                text(detail.join("\n"))
+                    .size(11)
+                    .font(theme::mono())
+                    .color(tokens.foreground),
+            )
+            .padding([6, 8])
+            .width(Length::Fill)
+            .style(move |_theme| container::Style {
+                background: Some(Background::Color(tokens.muted)),
+                border: Border {
+                    color: tokens.border,
+                    width: 1.0,
+                    radius: 4.0.into(),
+                },
+                ..container::Style::default()
+            }),
+        );
+    } else if request.info.is_some() || request.error.is_some() {
+        body = body.push(
+            text(request.error.as_deref().unwrap_or(mergetool_guidance()))
+                .size(11)
+                .color(tokens.deleted)
+                .width(Length::Fill),
+        );
+    } else {
+        body = body.push(
+            text("Loading tool configuration…")
+                .size(11)
+                .color(tokens.muted_foreground),
+        );
+    }
+
+    let mut list = column![].spacing(2).width(Length::Fill);
+    for (index, path) in request.paths.iter().enumerate() {
+        list = list.push(option_line(
+            tokens,
+            index == request.selected,
+            path.as_str(),
+            "",
+            Message::MergetoolPathSelected(index),
+        ));
+    }
+    body = body.push(
+        scrollable(list)
+            .height(Length::Fixed(180.0))
+            .width(Length::Fill),
+    );
+
+    if request.running {
+        body = body.push(
+            text("mergetool is running — finish the merge in the tool window.")
+                .size(11)
+                .color(tokens.muted_foreground),
+        );
+    }
+
+    let ready =
+        request.effective_tool().is_some() && !request.running && request.selected_path().is_some();
+    modal(
+        tokens,
+        460.0,
+        body.into(),
+        action_row(tokens, "Run", ready.then_some(Message::MergetoolRun)),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1169,6 +1315,48 @@ mod tests {
             request.confirm_ready(),
             "match is trimmed + case-insensitive"
         );
+    }
+
+    fn tool_info(tool: Option<&str>, gui_tool: Option<&str>) -> MergetoolInfo {
+        MergetoolInfo {
+            tool: tool.map(str::to_string),
+            gui_tool: gui_tool.map(str::to_string),
+            path: None,
+            cmd: None,
+        }
+    }
+
+    #[test]
+    fn mergetool_request_resolves_the_tool_gui_first() {
+        let mut request = MergetoolRequest::new(vec!["a.txt".into()]);
+        assert!(request.effective_tool().is_none(), "not loaded yet");
+        assert_eq!(request.selected_path(), Some("a.txt"));
+
+        request.info = Some(tool_info(Some("kdiff3"), Some("mgui")));
+        assert_eq!(request.effective_tool(), Some("mgui"));
+
+        request.info = Some(tool_info(Some("kdiff3"), None));
+        assert_eq!(request.effective_tool(), Some("kdiff3"));
+
+        // Blank config values count as unset.
+        request.info = Some(tool_info(Some("  "), None));
+        assert_eq!(request.effective_tool(), None);
+        // And with no tool resolved, the guidance applies.
+        assert_eq!(
+            request.effective_tool().is_none().then(mergetool_guidance),
+            Some(mergetool_guidance())
+        );
+    }
+
+    #[test]
+    fn mergetool_request_tracks_the_selected_path() {
+        let mut request = MergetoolRequest::new(vec!["a.txt".into(), "b.txt".into()]);
+        assert_eq!(request.selected_path(), Some("a.txt"));
+        request.selected = 1;
+        assert_eq!(request.selected_path(), Some("b.txt"));
+        // Out-of-range selections resolve to nothing (Run stays disabled).
+        request.selected = 9;
+        assert_eq!(request.selected_path(), None);
     }
 
     #[test]

@@ -186,6 +186,8 @@ pub struct Tab {
     /// Interactive rebase planner (commit row context menu) awaiting its
     /// dialog: the onto commit plus the editable plan rows.
     pub pending_rebase_planner: Option<rebase_planner::Planner>,
+    /// "Run mergetool" dialog state (conflicted paths + tool config).
+    pub pending_mergetool: Option<dialog::MergetoolRequest>,
 
     pub diff_seq: u64,
     pub commit_diff_seq: u64,
@@ -259,6 +261,7 @@ impl Tab {
             pending_remote_branch_delete: None,
             pending_tag_at: None,
             pending_rebase_planner: None,
+            pending_mergetool: None,
             diff_seq: 0,
             commit_diff_seq: 0,
         }
@@ -656,6 +659,10 @@ fn dialog_overlay<'a>(tab: &'a Tab, tokens: Tokens) -> Option<Element<'a, Messag
             planner,
             tab.working_tree_dirty(),
         ));
+    }
+
+    if let Some(request) = &tab.pending_mergetool {
+        return Some(dialog::mergetool(tokens, request));
     }
 
     None

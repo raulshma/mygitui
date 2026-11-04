@@ -18,9 +18,10 @@ use iced::{window, Alignment, Element, Length, Subscription, Task};
 
 use crate::engine::types::{
     BranchInfo, BranchTrashEntry, ChangeKind, CheckpointInfo, CommitOptions, ConflictResolution,
-    DiffSide, FetchOptions, FileDiff, LineRange, MergeFavor, MergeOutcome, MergeResult, NetStats,
-    PreviewInfo, PullOptions, PushOptions, RebaseState, RebaseStep, RemoteBranchInfo, RemoteInfo,
-    RepoId, RepoInfo, RepoStatus, ResetKind, StageRequest, StageTarget, StashInfo,
+    DiffSide, FetchOptions, FileDiff, LineRange, MergeFavor, MergeOutcome, MergeResult,
+    MergetoolInfo, MergetoolResult, NetStats, PreviewInfo, PullOptions, PushOptions, RebaseState,
+    RebaseStep, RemoteBranchInfo, RemoteInfo, RepoId, RepoInfo, RepoStatus, ResetKind,
+    StageRequest, StageTarget, StashInfo,
 };
 use crate::remote::prompts::SecretAnswer;
 use crate::service::events::BackendEvent;
@@ -512,6 +513,26 @@ pub enum Message {
         repo_id: RepoId,
         label: String,
         result: Result<(), String>,
+    },
+
+    /// Open the "Run mergetool" dialog for the current conflicts (status
+    /// panel header + palette `conflicts.mergetool`).
+    MergetoolRequested,
+    /// The configured-tool read (`mergetool_info`) finished.
+    MergetoolInfoLoaded {
+        repo_id: RepoId,
+        result: Result<MergetoolInfo, String>,
+    },
+    /// One conflicted path was picked in the mergetool dialog.
+    MergetoolPathSelected(usize),
+    /// Run `git mergetool` on the selected conflicted path.
+    MergetoolRun,
+    /// The mergetool run finished; the dialog closes and the repo refreshes
+    /// (the conflict list is re-read through the regular status load).
+    MergetoolDone {
+        repo_id: RepoId,
+        path: String,
+        result: Result<MergetoolResult, String>,
     },
 
     AuthUsernameChanged(String),
@@ -1031,6 +1052,15 @@ impl App {
             })
             .unwrap_or_default();
         let head_branch: Option<String> = tab.and_then(|tab| tab.head_branch().map(str::to_string));
+        let conflicted: Vec<String> = tab
+            .map(|tab| {
+                Self::visible_rows(tab)
+                    .into_iter()
+                    .filter(|row| row.kind == ChangeKind::Conflicted)
+                    .map(|row| row.path.clone())
+                    .collect()
+            })
+            .unwrap_or_default();
         let remotes: Vec<String> = tab
             .and_then(|tab| tab.remotes.list.as_ref())
             .map(|list| list.iter().map(|remote| remote.name.clone()).collect())
@@ -1141,6 +1171,13 @@ impl App {
             "Clean untracked files…",
             "Working copy",
             !untracked.is_empty(),
+            None,
+        );
+        register(
+            "conflicts.mergetool",
+            "Run mergetool…",
+            "Working copy",
+            !conflicted.is_empty(),
             None,
         );
 
@@ -1500,6 +1537,7 @@ impl App {
             "status.select_none" => self.update(Message::StatusSelectNone),
             "status.ignore_templates" => self.update(Message::IgnoreTemplatesRequested),
             "status.clean" => self.update(Message::CleanDialogRequested),
+            "conflicts.mergetool" => self.update(Message::MergetoolRequested),
             "commit.commit" => self.update(Message::CommitPressed),
             "diff.toggle_split" => self.update(Message::DiffToggleSplit),
             "diff.toggle_wrap" => self.update(Message::DiffToggleWrap),
@@ -4109,6 +4147,7 @@ impl App {
                     tab.pending_remote_branch_delete = None;
                     tab.pending_tag_at = None;
                     tab.pending_rebase_planner = None;
+                    tab.pending_mergetool = None;
                 }
                 self.devices.pending_forget = None;
                 Task::none()
@@ -6133,6 +6172,120 @@ impl App {
                     Err(err) => {
                         self.notice = Some(Notice::error(format!("{label} failed: {err}")));
                         Task::none()
+                    }
+                }
+            }
+            Message::MergetoolRequested => {
+                let Some(tab) = self.tabs.get_mut(self.active) else {
+                    return Task::none();
+                };
+                // Conflicted paths from the loaded status (unfiltered — the
+                // dialog picks among all conflicts, not the visible rows).
+                let paths: Vec<String> = tab
+                    .status_index
+                    .rows
+                    .iter()
+                    .filter(|row| row.kind == ChangeKind::Conflicted)
+                    .map(|row| row.path.clone())
+                    .collect();
+                if paths.is_empty() {
+                    return Task::none();
+                }
+                tab.pending_mergetool = Some(dialog::MergetoolRequest::new(paths));
+                let repo_id = tab.repo.repo_id.clone();
+                let services = self.services.clone();
+                Task::perform(
+                    async move {
+                        let result =
+                            crate::service::branches::mergetool_info(&services, repo_id.clone())
+                                .await;
+                        Message::MergetoolInfoLoaded { repo_id, result }
+                    },
+                    std::convert::identity,
+                )
+            }
+            Message::MergetoolInfoLoaded { repo_id, result } => {
+                let Some(index) = repo_view::tab_index(&self.tabs, &repo_id) else {
+                    return Task::none();
+                };
+                if let Some(request) = &mut self.tabs[index].pending_mergetool {
+                    match result {
+                        Ok(info) => request.info = Some(info),
+                        Err(err) => request.error = Some(err),
+                    }
+                }
+                Task::none()
+            }
+            Message::MergetoolPathSelected(index) => {
+                if let Some(tab) = self.tabs.get_mut(self.active) {
+                    if let Some(request) = &mut tab.pending_mergetool {
+                        request.selected = index;
+                    }
+                }
+                Task::none()
+            }
+            Message::MergetoolRun => {
+                let Some(tab) = self.tabs.get_mut(self.active) else {
+                    return Task::none();
+                };
+                let Some(request) = &mut tab.pending_mergetool else {
+                    return Task::none();
+                };
+                let Some(path) = request.selected_path().map(str::to_string) else {
+                    return Task::none();
+                };
+                // Deliberately off the op queue: the external tool runs
+                // interactively for minutes (service/branches.rs).
+                let tool = request.effective_tool().map(str::to_string);
+                request.running = true;
+                let repo_id = tab.repo.repo_id.clone();
+                let services = self.services.clone();
+                Task::perform(
+                    async move {
+                        let result = crate::service::branches::mergetool_run(
+                            &services,
+                            repo_id.clone(),
+                            path.clone(),
+                            tool,
+                        )
+                        .await;
+                        Message::MergetoolDone {
+                            repo_id,
+                            path,
+                            result,
+                        }
+                    },
+                    std::convert::identity,
+                )
+            }
+            Message::MergetoolDone {
+                repo_id,
+                path,
+                result,
+            } => {
+                let Some(index) = repo_view::tab_index(&self.tabs, &repo_id) else {
+                    return Task::none();
+                };
+                // The dialog closes either way; the status refresh re-reads
+                // the conflict list so resolved files leave it.
+                self.tabs[index].pending_mergetool = None;
+                match result {
+                    Ok(run) if run.success => {
+                        self.last_op = Some(format!("Mergetool finished for {path}"));
+                        self.refresh(repo_id)
+                    }
+                    Ok(run) if !run.output.trim().is_empty() => {
+                        self.notice =
+                            Some(Notice::error(format!("Mergetool failed: {}", run.output)));
+                        self.refresh(repo_id)
+                    }
+                    Ok(_) => {
+                        self.notice = Some(Notice::error(format!("Mergetool failed for {path}")));
+                        self.refresh(repo_id)
+                    }
+                    Err(err) => {
+                        self.notice = Some(Notice::error(format!("Mergetool failed: {err}")));
+                        self.refresh(repo_id)
                     }
                 }
             }

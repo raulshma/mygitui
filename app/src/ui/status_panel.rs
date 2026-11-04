@@ -39,19 +39,33 @@ pub fn view<'a>(tab: &'a Tab, tokens: Tokens) -> Element<'a, Message> {
     } else {
         mini(tokens, "Clean…", "No untracked files")
     };
+    // Conflicted rows get a one-click path into the external mergetool.
+    let conflicts = tab
+        .status_index
+        .rows
+        .iter()
+        .filter(|row| row.kind == ChangeKind::Conflicted)
+        .count();
 
-    let header = container(
-        row![
-            text("Source Control").size(12).font(theme::semibold()),
-            Space::new().width(Length::Fill),
-            text(summary).size(10).color(tokens.muted_foreground),
-            mini(tokens, "Templates", "Ignore templates…")
-                .on_press(Message::IgnoreTemplatesRequested),
-            clean_button,
-        ]
-        .align_y(Alignment::Center)
-        .padding([8, 10]),
-    );
+    let mut header_row = row![
+        text("Source Control").size(12).font(theme::semibold()),
+        Space::new().width(Length::Fill),
+        text(summary).size(10).color(tokens.muted_foreground),
+        mini(tokens, "Templates", "Ignore templates…").on_press(Message::IgnoreTemplatesRequested),
+        clean_button,
+    ]
+    .align_y(Alignment::Center);
+    if conflicts > 0 {
+        header_row = header_row.push(
+            mini(
+                tokens,
+                "Mergetool…",
+                "Run the configured merge tool on a conflict",
+            )
+            .on_press(Message::MergetoolRequested),
+        );
+    }
+    let header = container(header_row.padding([8, 10]));
 
     let filter = container(
         row![
