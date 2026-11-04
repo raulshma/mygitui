@@ -61,7 +61,8 @@ pub struct DiffImages {
 }
 
 /// Per-pane diff state: payload, derived rows and view-only options.
-#[derive(Debug, Default)]
+/// `Clone` backs diff popout windows (a snapshot pane per window).
+#[derive(Debug, Default, Clone)]
 pub struct DiffPane {
     pub content: DiffContent,
     pub model: DiffRowModel,

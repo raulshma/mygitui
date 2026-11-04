@@ -34,7 +34,7 @@ use super::compare_view;
 use super::config::{self, Config, RecentRepo};
 use super::context_menu;
 use super::dialog::{self, ResetRequest};
-use super::diff_view::{DiffPane, DiffSlot};
+use super::diff_view::{self, DiffPane, DiffSlot, PaneMode};
 use super::editor_view;
 use super::file_history_view;
 use super::forge_panel;
@@ -56,24 +56,29 @@ use super::terminal;
 use super::theme::{self, Mode, Tokens};
 use super::worktree_panel;
 
-pub fn run(
-    cli_args: Vec<String>,
-    instance_listener: crate::instance::SharedListener,
-) -> iced::Result {
-    iced::application(
-        move || App::boot(cli_args.clone(), instance_listener.clone()),
-        App::update,
-        App::view,
-    )
-    .title("mygitui")
-    .theme(App::theme)
-    .subscription(App::subscription)
-    .window(window::Settings {
+fn main_window_settings() -> window::Settings {
+    window::Settings {
         size: iced::Size::new(1152.0, 720.0),
         min_size: Some(iced::Size::new(900.0, 600.0)),
         icon: window::icon::from_file_data(include_bytes!("../../icons/64x64.png"), None).ok(),
         ..window::Settings::default()
-    })
+    }
+}
+
+pub fn run(
+    cli_args: Vec<String>,
+    instance_listener: crate::instance::SharedListener,
+) -> iced::Result {
+    // Daemon (multi-window) mode: the primary window is opened from boot so
+    // diff popouts can be plain extra windows routed by `window::Id`.
+    iced::daemon(
+        move || App::boot(cli_args.clone(), instance_listener.clone()),
+        App::update,
+        App::view,
+    )
+    .title(App::title)
+    .theme(App::theme)
+    .subscription(App::subscription)
     .run()
 }
 
@@ -100,6 +105,9 @@ pub struct App {
     instance_listener: Option<crate::instance::InstanceListener>,
     /// Open AI result dialog (review/explain/branch-name output).
     ai_result: Option<AiResult>,
+    /// Open diff popout: its window id and a snapshot clone of the diff
+    /// pane (own scroll state; dropped when the window closes).
+    popout: Option<(window::Id, DiffPane)>,
     /// User-configured custom shell actions (persisted as `actions.json`
     /// next to `config.json`; separate file so schema evolution stays
     /// independent).
@@ -502,6 +510,12 @@ pub enum Message {
     Stats(stats_panel::Msg),
     /// OS accent colour fetched (boot + theme changes).
     AccentLoaded(Option<String>),
+    /// Window bookkeeping (daemon mode): any window closed.
+    WindowClosed(window::Id),
+    /// Diff-viewer messages for the popout window.
+    Popout(Box<Message>),
+    /// Pop out the active diff pane into its own window.
+    PopoutDiff,
     /// Custom actions / output / editor (routed to the active tab).
     Actions(actions_panel::Msg),
     /// A custom action started; feeds the panels and opens the output.
@@ -627,6 +641,7 @@ impl App {
             switcher: quick_switcher::State::default(),
             cursor: iced::Point::ORIGIN,
             ai_result: None,
+            popout: None,
             custom_actions: Vec::new(),
         };
         app.custom_actions = app.load_custom_actions();
@@ -638,6 +653,10 @@ impl App {
         super::diff_view::highlight::set_enabled(highlight_enabled);
         theme::set_accent_enabled(accent_enabled);
         let mut tasks = vec![iced::system::theme().map(Message::SystemTheme)];
+        {
+            let (_, opened) = window::open(main_window_settings());
+            tasks.push(opened.map(|_| Message::Noop));
+        }
         if let Some(path) = first_repo_arg(&cli_args) {
             tasks.push(app.open_repo(path));
         }
@@ -964,6 +983,13 @@ impl App {
             None,
         );
         register(
+            "view.popout_diff",
+            "Pop out diff into a window",
+            "View",
+            repo_id.is_some(),
+            None,
+        );
+        register(
             "terminal.restart",
             "Restart terminal",
             "View",
@@ -1156,6 +1182,7 @@ impl App {
             "panel.actions" => self.update(Message::Actions(actions_panel::Msg::ToggleOpen)),
             "panel.output" => self.update(Message::Output(output_panel::Msg::ToggleOpen)),
             "panel.stats" => self.update(Message::Stats(stats_panel::Msg::ToggleOpen)),
+            "view.popout_diff" => self.update(Message::PopoutDiff),
             "view.compare" => {
                 if let Some(tab) = self.tabs.get_mut(self.active) {
                     tab.detail_open = false;
@@ -5041,7 +5068,8 @@ impl App {
                     .command("panel.worktrees", "Worktrees…")
                     .command("panel.submodules", "Submodules…")
                     .command("panel.tags", "Tags…")
-                    .command("panel.stats", "Contribution stats…");
+                    .command("panel.stats", "Contribution stats…")
+                    .command("view.popout_diff", "Pop out diff");
                 self.ctx_menu.open_at(self.cursor, menu);
                 Task::none()
             }
@@ -5151,6 +5179,43 @@ impl App {
                     Some(true) | None => {}
                     Some(false) => {
                         tracing::debug!("OS accent colour unparsable; ignoring");
+                    }
+                }
+                Task::none()
+            }
+            Message::WindowClosed(id) => {
+                if self
+                    .popout
+                    .as_ref()
+                    .is_some_and(|(popout, _)| *popout == id)
+                {
+                    self.popout = None;
+                }
+                Task::none()
+            }
+            Message::PopoutDiff => {
+                let Some(tab) = self.tabs.get(self.active) else {
+                    return Task::none();
+                };
+                if !tab.diff.is_ready() {
+                    return Task::none();
+                }
+                let pane = tab.diff.clone();
+                let settings = window::Settings {
+                    size: iced::Size::new(900.0, 640.0),
+                    ..main_window_settings()
+                };
+                let (id, opened) = window::open(settings);
+                self.popout = Some((id, pane));
+                opened.map(|_| Message::Noop)
+            }
+            Message::Popout(msg) => {
+                // Diff-viewer messages for the popout pane (scroll etc.);
+                // unrelated messages are ignored there.
+                if let Some((_, pane)) = self.popout.as_mut() {
+                    if let Message::DiffScrolled { y, viewport, .. } = *msg {
+                        pane.scroll = y;
+                        pane.viewport = viewport;
                     }
                 }
                 Task::none()
@@ -5451,6 +5516,7 @@ impl App {
             Subscription::run(bus::stream).map(Message::Backend),
             iced::system::theme_changes().map(Message::SystemTheme),
             iced::event::listen_with(modifiers_changed),
+            iced::window::close_events().map(Message::WindowClosed),
             // Overlay components own their key/backdrop handling; each mapper
             // is a no-op while its overlay is closed.
             iced::event::listen_with(|event, status, window| {
@@ -5516,7 +5582,19 @@ impl App {
         }))
     }
 
-    fn view(&self) -> Element<'_, Message> {
+    fn view(&self, id: window::Id) -> Element<'_, Message> {
+        if let Some((_, pane)) = self.popout.as_ref().filter(|(popout, _)| *popout == id) {
+            return diff_view::view(
+                pane,
+                DiffSlot::Commit,
+                self.tokens(),
+                false,
+                false,
+                PaneMode::default(),
+            )
+            .map(|msg| Message::Popout(Box::new(msg)));
+        }
+        let _ = id;
         let tokens = self.tokens();
         let body: Element<'_, Message> = if self.show_home || self.tabs.is_empty() {
             home::view(
@@ -5689,8 +5767,19 @@ impl App {
             .into()
     }
 
-    fn theme(&self) -> iced::Theme {
+    fn theme(&self, _id: window::Id) -> iced::Theme {
         theme::app_theme(self.tokens())
+    }
+
+    fn title(&self, id: window::Id) -> String {
+        if self
+            .popout
+            .as_ref()
+            .is_some_and(|(popout, _)| *popout == id)
+        {
+            return "mygitui — diff".to_string();
+        }
+        "mygitui".to_string()
     }
 }
 
