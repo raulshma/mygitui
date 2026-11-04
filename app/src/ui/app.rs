@@ -27,6 +27,7 @@ use crate::service::events::BackendEvent;
 use crate::service::AppServices;
 
 use super::actions_panel;
+use super::ai_settings;
 use super::bisect_panel;
 use super::blame_view;
 use super::bus;
@@ -133,6 +134,14 @@ pub struct App {
     clone: clone_dialog::State,
     /// SSH device management (Home section, add/edit dialog, device browser).
     devices: devices::State,
+    /// AI settings dialog (draft provider/model/URL fields + keyring edits).
+    ai_settings: ai_settings::State,
+    /// Last `service::ai::ai_status` probe (header AI chip; refreshed on
+    /// boot, dialog open, settings save and the AI toggles — never polled).
+    ai_status: Option<crate::service::ai::AiStatus>,
+    /// Error text of the last failed AI call (cleared by the next success;
+    /// drives the header chip's `AI error: …` state).
+    ai_last_error: Option<String>,
     /// The main window's id (focus transitions gate the remote poll pause).
     main_window: Option<window::Id>,
     /// Quick Open overlay state (`ctrl/cmd+P`).
@@ -592,10 +601,16 @@ pub enum Message {
     ToggleUpdateCheck,
     /// Open a URL in the OS default handler (update check, docs links).
     OpenUrl(String),
-    /// Toggle the AI master switch (palette).
+    /// Toggle the AI master switch (palette, AI settings dialog).
     AiToggleEnabled,
-    /// Toggle opt-in for the active repo (palette).
+    /// Toggle opt-in for the active repo (palette, AI settings dialog).
     AiToggleRepoOptIn,
+    /// Open the AI settings dialog (header chip, palette `app.ai_settings`).
+    AiOpenSettings,
+    /// AI settings dialog (routed through `ai_settings::update` → `Action`).
+    AiSettings(ai_settings::Msg),
+    /// `service::ai::ai_status` probe result for the header AI chip.
+    AiStatusLoaded(crate::service::ai::AiStatus),
     /// Generation completions.
     AiCommitMessageDone(Result<String, String>),
     AiReviewDone(Result<String, String>),
@@ -857,6 +872,9 @@ impl App {
             switcher: quick_switcher::State::default(),
             clone: clone_dialog::State::default(),
             devices: devices::State::default(),
+            ai_settings: ai_settings::State::default(),
+            ai_status: None,
+            ai_last_error: None,
             main_window: None,
             quick_open: quick_open::State::default(),
             cursor: iced::Point::ORIGIN,
@@ -883,6 +901,8 @@ impl App {
             tasks.push(app.open_repo(path));
         }
         tasks.push(app.refresh_devices());
+        // Header AI chip seed (one-shot probe; refreshed on toggles/save).
+        tasks.push(app.refresh_ai_status());
         tasks.push(Task::perform(
             async move {
                 let accent = crate::service::misc::os_accent_color(&services_boot).await;
@@ -975,6 +995,48 @@ impl App {
 
     fn reindex_recent(&mut self) {
         self.recent = self.config.recent_sorted();
+    }
+
+    /// One-shot `service::ai::ai_status` probe for the header AI chip
+    /// (boot, dialog open, settings save, AI toggles — no polling).
+    fn refresh_ai_status(&self) -> Task<Message> {
+        let services = self.services.clone();
+        Task::perform(
+            async move { Message::AiStatusLoaded(crate::service::ai::ai_status(&services).await) },
+            std::convert::identity,
+        )
+    }
+
+    /// Reads the OpenRouter key's presence from the OS keyring for the
+    /// settings dialog (`None` when the probe itself failed).
+    fn load_ai_key_status(&self) -> Task<Message> {
+        let services = self.services.clone();
+        Task::perform(
+            async move {
+                let has_key = tokio::task::spawn_blocking(move || {
+                    crate::keyring_store::secrets_get(
+                        &services,
+                        crate::service::ai::KEY_OPENROUTER_API.to_string(),
+                    )
+                    .ok()
+                    .flatten()
+                    .is_some()
+                })
+                .await
+                .ok();
+                Message::AiSettings(ai_settings::Msg::KeyStatusLoaded(has_key))
+            },
+            std::convert::identity,
+        )
+    }
+
+    /// Tracks the last AI call outcome for the header chip (error text only
+    /// — successes reset it; result payloads are handled by the callers).
+    fn note_ai_result(&mut self, result: &Result<String, String>) {
+        match result {
+            Ok(_) => self.ai_last_error = None,
+            Err(error) => self.ai_last_error = Some(error.clone()),
+        }
     }
 
     /// Palette command registry, rebuilt whenever the palette opens so
@@ -1397,6 +1459,7 @@ impl App {
             true,
             None,
         );
+        register("app.ai_settings", "AI settings…", "Settings", true, None);
         register("view.cycle_theme", "Cycle theme", "Settings", true, None);
         register(
             "view.cycle_autofetch",
@@ -1552,6 +1615,7 @@ impl App {
             "app.check_updates" => self.update(Message::CheckUpdates),
             "app.install_update" => self.update(Message::InstallUpdate),
             "app.toggle_update_check" => self.update(Message::ToggleUpdateCheck),
+            "app.ai_settings" => self.update(Message::AiOpenSettings),
             "view.cycle_theme" => self.update(Message::CycleTheme),
             "view.cycle_autofetch" => self.update(Message::CycleAutoFetch),
             // Context-menu commands carry their target after a `:` prefix.
@@ -6713,7 +6777,8 @@ impl App {
                     "AI assist {}",
                     if enabled { "enabled" } else { "disabled" }
                 )));
-                Task::none()
+                // The header chip derives from the master switch — refresh.
+                self.refresh_ai_status()
             }
             Message::AiToggleRepoOptIn => {
                 let Some(tab) = self.tabs.get(self.active) else {
@@ -6727,97 +6792,182 @@ impl App {
                     "AI assist {} for this repo",
                     if enabled { "opted in" } else { "disabled" }
                 )));
+                self.refresh_ai_status()
+            }
+            Message::AiOpenSettings => {
+                ai_settings::open(&mut self.ai_settings, &self.config.ai);
+                Task::batch([self.load_ai_key_status(), self.refresh_ai_status()])
+            }
+            Message::AiSettings(msg) => {
+                let action = ai_settings::update(&mut self.ai_settings, msg);
+                match action {
+                    Some(ai_settings::Action::Close) | None => Task::none(),
+                    // The dialog's checkboxes reuse the palette toggles
+                    // (immediate, persisted, footer-noticed).
+                    Some(ai_settings::Action::ToggleMaster) => {
+                        self.update(Message::AiToggleEnabled)
+                    }
+                    Some(ai_settings::Action::ToggleOptIn) => {
+                        self.update(Message::AiToggleRepoOptIn)
+                    }
+                    Some(ai_settings::Action::Save {
+                        provider,
+                        opencode_url,
+                        opencode_model,
+                        openrouter_model,
+                        api_key,
+                    }) => {
+                        self.config.ai.provider = provider;
+                        self.config.ai.opencode_url = opencode_url;
+                        self.config.ai.opencode_model = opencode_model;
+                        self.config.ai.openrouter_model = openrouter_model;
+                        self.persist_config();
+                        // Keyring writes are blocking — off the UI thread;
+                        // the chip refresh runs after the write lands.
+                        let services = self.services.clone();
+                        let keyring = Task::perform(
+                            async move {
+                                let result = tokio::task::spawn_blocking(move || match api_key {
+                                    ai_settings::ApiKeyEdit::Keep => Ok(()),
+                                    ai_settings::ApiKeyEdit::Set(key) => {
+                                        crate::keyring_store::secrets_set(
+                                            &services,
+                                            crate::service::ai::KEY_OPENROUTER_API.to_string(),
+                                            key,
+                                        )
+                                    }
+                                    ai_settings::ApiKeyEdit::Clear => {
+                                        crate::keyring_store::secrets_delete(
+                                            &services,
+                                            crate::service::ai::KEY_OPENROUTER_API.to_string(),
+                                        )
+                                    }
+                                })
+                                .await
+                                .unwrap_or_else(|error| {
+                                    Err(format!("keyring task failed: {error}"))
+                                });
+                                Message::AiSettings(ai_settings::Msg::SaveDone(result))
+                            },
+                            std::convert::identity,
+                        );
+                        keyring.chain(self.refresh_ai_status())
+                    }
+                }
+            }
+            Message::AiStatusLoaded(status) => {
+                self.ai_status = Some(status);
                 Task::none()
             }
-            Message::AiCommitMessageDone(result) => match result {
-                Ok(message) => {
-                    let Some(tab) = self.tabs.get_mut(self.active) else {
-                        return Task::none();
-                    };
-                    tab.message = text_editor::Content::with_text(&message);
-                    self.last_op = Some("AI: commit message ready".to_string());
-                    Task::none()
+            Message::AiCommitMessageDone(result) => {
+                self.note_ai_result(&result);
+                match result {
+                    Ok(message) => {
+                        let Some(tab) = self.tabs.get_mut(self.active) else {
+                            return Task::none();
+                        };
+                        tab.message = text_editor::Content::with_text(&message);
+                        self.last_op = Some("AI: commit message ready".to_string());
+                        Task::none()
+                    }
+                    Err(err) => {
+                        self.notice = Some(Notice::error(format!("AI: {err}")));
+                        Task::none()
+                    }
                 }
-                Err(err) => {
-                    self.notice = Some(Notice::error(format!("AI: {err}")));
-                    Task::none()
+            }
+            Message::AiReviewDone(result) => {
+                self.note_ai_result(&result);
+                match result {
+                    Ok(body) => {
+                        self.ai_result = Some(AiResult {
+                            title: "AI review of staged changes".to_string(),
+                            body,
+                        });
+                        Task::none()
+                    }
+                    Err(err) => {
+                        self.notice = Some(Notice::error(format!("AI: {err}")));
+                        Task::none()
+                    }
                 }
-            },
-            Message::AiReviewDone(result) => match result {
-                Ok(body) => {
-                    self.ai_result = Some(AiResult {
-                        title: "AI review of staged changes".to_string(),
-                        body,
-                    });
-                    Task::none()
+            }
+            Message::AiExplainDone { path, result } => {
+                self.note_ai_result(&result);
+                match result {
+                    Ok(body) => {
+                        self.ai_result = Some(AiResult {
+                            title: format!("AI explanation — {path}"),
+                            body,
+                        });
+                        Task::none()
+                    }
+                    Err(err) => {
+                        self.notice = Some(Notice::error(format!("AI: {err}")));
+                        Task::none()
+                    }
                 }
-                Err(err) => {
-                    self.notice = Some(Notice::error(format!("AI: {err}")));
-                    Task::none()
+            }
+            Message::AiStashMessageDone(result) => {
+                self.note_ai_result(&result);
+                match result {
+                    Ok(message) => {
+                        let Some(tab) = self.tabs.get_mut(self.active) else {
+                            return Task::none();
+                        };
+                        tab.stashes.message = message;
+                        self.last_op = Some("AI: stash message ready".to_string());
+                        Task::none()
+                    }
+                    Err(err) => {
+                        self.notice = Some(Notice::error(format!("AI: {err}")));
+                        Task::none()
+                    }
                 }
-            },
-            Message::AiExplainDone { path, result } => match result {
-                Ok(body) => {
-                    self.ai_result = Some(AiResult {
-                        title: format!("AI explanation — {path}"),
-                        body,
-                    });
-                    Task::none()
+            }
+            Message::AiPrTextDone(result) => {
+                self.note_ai_result(&result);
+                match result {
+                    Ok(text) => {
+                        // The service returns "title\n\nbody" (parse rules in
+                        // ai::prompts); feed the forge create form.
+                        let (title, body) = match text.split_once("\n\n") {
+                            Some((title, body)) => (title.to_string(), body.to_string()),
+                            None => (text.clone(), text),
+                        };
+                        self.ai_result = Some(AiResult {
+                            title: "AI PR title & description".to_string(),
+                            body: format!("{title}\n\n{body}"),
+                        });
+                        Task::batch([
+                            self.update(Message::Forge(forge_panel::Msg::CreateTitleChanged(
+                                title,
+                            ))),
+                            self.update(Message::Forge(forge_panel::Msg::CreateBodySet(body))),
+                        ])
+                    }
+                    Err(err) => {
+                        self.notice = Some(Notice::error(format!("AI: {err}")));
+                        Task::none()
+                    }
                 }
-                Err(err) => {
-                    self.notice = Some(Notice::error(format!("AI: {err}")));
-                    Task::none()
+            }
+            Message::AiBranchNameDone(result) => {
+                self.note_ai_result(&result);
+                match result {
+                    Ok(name) => {
+                        self.ai_result = Some(AiResult {
+                            title: "AI branch name suggestion".to_string(),
+                            body: name,
+                        });
+                        Task::none()
+                    }
+                    Err(err) => {
+                        self.notice = Some(Notice::error(format!("AI: {err}")));
+                        Task::none()
+                    }
                 }
-            },
-            Message::AiStashMessageDone(result) => match result {
-                Ok(message) => {
-                    let Some(tab) = self.tabs.get_mut(self.active) else {
-                        return Task::none();
-                    };
-                    tab.stashes.message = message;
-                    self.last_op = Some("AI: stash message ready".to_string());
-                    Task::none()
-                }
-                Err(err) => {
-                    self.notice = Some(Notice::error(format!("AI: {err}")));
-                    Task::none()
-                }
-            },
-            Message::AiPrTextDone(result) => match result {
-                Ok(text) => {
-                    // The service returns "title\n\nbody" (parse rules in
-                    // ai::prompts); feed the forge create form.
-                    let (title, body) = match text.split_once("\n\n") {
-                        Some((title, body)) => (title.to_string(), body.to_string()),
-                        None => (text.clone(), text),
-                    };
-                    self.ai_result = Some(AiResult {
-                        title: "AI PR title & description".to_string(),
-                        body: format!("{title}\n\n{body}"),
-                    });
-                    Task::batch([
-                        self.update(Message::Forge(forge_panel::Msg::CreateTitleChanged(title))),
-                        self.update(Message::Forge(forge_panel::Msg::CreateBodySet(body))),
-                    ])
-                }
-                Err(err) => {
-                    self.notice = Some(Notice::error(format!("AI: {err}")));
-                    Task::none()
-                }
-            },
-            Message::AiBranchNameDone(result) => match result {
-                Ok(name) => {
-                    self.ai_result = Some(AiResult {
-                        title: "AI branch name suggestion".to_string(),
-                        body: name,
-                    });
-                    Task::none()
-                }
-                Err(err) => {
-                    self.notice = Some(Notice::error(format!("AI: {err}")));
-                    Task::none()
-                }
-            },
+            }
             Message::Health(msg) => {
                 let Some(tab) = self.tabs.get_mut(self.active) else {
                     return Task::none();
@@ -7687,6 +7837,23 @@ impl App {
         if self.clone.open {
             layers.push(clone_dialog::view(&self.clone, &tokens).map(Message::Clone));
         }
+        // AI settings: a global overlay (the ai section of config.json is
+        // app-wide; the per-repo checkbox reads the active tab).
+        if self.ai_settings.open {
+            let repo_opt_in = self
+                .tabs
+                .get(self.active)
+                .map(|tab| self.config.ai_enabled_for(&tab.repo.root));
+            layers.push(
+                ai_settings::view(
+                    &self.ai_settings,
+                    &tokens,
+                    self.config.ai.enabled,
+                    repo_opt_in,
+                )
+                .map(Message::AiSettings),
+            );
+        }
         // SSH devices: the add/edit dialog and the device file browser are
         // global overlays (reachable from Home and the palette); the forget
         // confirmation renders while a device id is pending.
@@ -7777,6 +7944,29 @@ impl App {
                 .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
                 .padding([5, 10])
                 .on_press(Message::CycleAutoFetch),
+        );
+
+        // AI health chip (derived, click opens the AI settings dialog).
+        let ai_health = ai_settings::ai_health(
+            self.config.ai.enabled,
+            self.ai_status.as_ref(),
+            self.ai_last_error.as_deref(),
+        );
+        let ai_tone = match ai_settings::ai_health_tone(&ai_health) {
+            ai_settings::AiHealthTone::Muted => tokens.muted_foreground,
+            ai_settings::AiHealthTone::Good => tokens.added,
+            ai_settings::AiHealthTone::Warn => tokens.modified,
+            ai_settings::AiHealthTone::Bad => tokens.deleted,
+        };
+        actions = actions.push(
+            button(
+                text(ai_settings::ai_health_label(&ai_health))
+                    .size(12)
+                    .color(ai_tone),
+            )
+            .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
+            .padding([5, 10])
+            .on_press(Message::AiOpenSettings),
         );
 
         container(

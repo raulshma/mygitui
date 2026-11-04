@@ -23,10 +23,11 @@ use crate::service::{
 };
 
 /// Keyring key of the OpenRouter API key (old `SECRET_KEYS.openrouterApiKey`).
-const KEY_OPENROUTER_API: &str = "openrouter.api-key";
+/// The settings dialog reads/writes through the same entry.
+pub const KEY_OPENROUTER_API: &str = "openrouter.api-key";
 /// Keyring key of the opencode server basic-auth password
 /// (old `SECRET_KEYS.opencodeServerPassword`).
-const KEY_OPENCODE_PASSWORD: &str = "opencode.server.password";
+pub const KEY_OPENCODE_PASSWORD: &str = "opencode.server.password";
 
 // ---------------------------------------------------------------------------
 // config.json `ai` section (mirror of ui::config::AiSettings)
