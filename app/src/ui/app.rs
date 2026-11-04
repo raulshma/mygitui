@@ -108,6 +108,9 @@ pub struct App {
     /// Open diff popout: its window id and a snapshot clone of the diff
     /// pane (own scroll state; dropped when the window closes).
     popout: Option<(window::Id, DiffPane)>,
+    /// Update found by the latest check: (tag, release URL). Enables the
+    /// palette's install command until the check is superseded.
+    update_ready: Option<(String, String)>,
     /// User-configured custom shell actions (persisted as `actions.json`
     /// next to `config.json`; separate file so schema evolution stays
     /// independent).
@@ -484,6 +487,13 @@ pub enum Message {
     CheckUpdates,
     /// Update-check completion.
     UpdateChecked(Result<crate::update_check::Update, String>),
+    /// Palette: download, verify and install the update found by a check.
+    InstallUpdate,
+    /// Install completion (only reached on failure — success restarts
+    /// inside the updater).
+    UpdateInstallDone(Result<String, String>),
+    /// Palette: toggle the startup update check.
+    ToggleUpdateCheck,
     /// Open a URL in the OS default handler (update check, docs links).
     OpenUrl(String),
     /// Toggle the AI master switch (palette).
@@ -642,6 +652,7 @@ impl App {
             cursor: iced::Point::ORIGIN,
             ai_result: None,
             popout: None,
+            update_ready: None,
             custom_actions: Vec::new(),
         };
         app.custom_actions = app.load_custom_actions();
@@ -667,6 +678,12 @@ impl App {
             },
             std::convert::identity,
         ));
+        if app.config.update_check_on_start {
+            tasks.push(Task::perform(
+                async move { Message::UpdateChecked(crate::update_check::check().await) },
+                std::convert::identity,
+            ));
+        }
         if let Some(listener) = app.instance_listener.take() {
             // Never-ending accept loop; forwarded argv arrives as
             // BackendEvent::CliArgs through the bus subscription.
@@ -1085,6 +1102,20 @@ impl App {
             true,
             None,
         );
+        register(
+            "app.install_update",
+            "Install available update",
+            "Settings",
+            self.update_ready.is_some(),
+            None,
+        );
+        register(
+            "app.toggle_update_check",
+            "Toggle update check on startup",
+            "Settings",
+            true,
+            None,
+        );
         register("view.cycle_theme", "Cycle theme", "Settings", true, None);
         register(
             "view.cycle_autofetch",
@@ -1219,6 +1250,8 @@ impl App {
             "ai.toggle_enabled" => self.update(Message::AiToggleEnabled),
             "ai.toggle_repo_opt_in" => self.update(Message::AiToggleRepoOptIn),
             "app.check_updates" => self.update(Message::CheckUpdates),
+            "app.install_update" => self.update(Message::InstallUpdate),
+            "app.toggle_update_check" => self.update(Message::ToggleUpdateCheck),
             "view.cycle_theme" => self.update(Message::CycleTheme),
             "view.cycle_autofetch" => self.update(Message::CycleAutoFetch),
             // Context-menu commands carry their target after a `:` prefix.
@@ -4889,10 +4922,15 @@ impl App {
                 Ok(update) => {
                     self.notice = Some(match update {
                         crate::update_check::Update::UpToDate(version) => {
+                            self.update_ready = None;
                             Notice::plain(format!("Up to date (v{version})"))
                         }
                         crate::update_check::Update::Available(tag, url) => {
-                            Notice::with_link(format!("New release {tag} available"), url)
+                            self.update_ready = Some((tag.clone(), url.clone()));
+                            Notice::with_link(
+                                format!("New release {tag} available — install via the palette"),
+                                url,
+                            )
                         }
                     });
                     Task::none()
@@ -4902,6 +4940,38 @@ impl App {
                     Task::none()
                 }
             },
+            Message::InstallUpdate => {
+                let Some((tag, _)) = self.update_ready.clone() else {
+                    self.notice = Some(Notice::plain(
+                        "No update staged — run `Check for updates` first",
+                    ));
+                    return Task::none();
+                };
+                self.last_op = Some(format!("Installing update {tag}…"));
+                Task::perform(
+                    async move { Message::UpdateInstallDone(crate::updater::install(&tag).await) },
+                    std::convert::identity,
+                )
+            }
+            // Success never reaches here: the updater restarts/exits the
+            // process before returning.
+            Message::UpdateInstallDone(result) => {
+                self.notice = Some(match result {
+                    Ok(_) => Notice::plain("Update installed".to_string()),
+                    Err(err) => Notice::error(format!("Update install failed: {err}")),
+                });
+                Task::none()
+            }
+            Message::ToggleUpdateCheck => {
+                self.config.update_check_on_start = !self.config.update_check_on_start;
+                let on = self.config.update_check_on_start;
+                self.persist_config();
+                self.notice = Some(Notice::plain(format!(
+                    "Startup update check {}",
+                    if on { "enabled" } else { "disabled" }
+                )));
+                Task::none()
+            }
             Message::OpenUrl(url) => Task::perform(
                 async move {
                     let _ = tokio::task::spawn_blocking(move || open::that_detached(&url)).await;

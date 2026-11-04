@@ -26,6 +26,9 @@ pub struct Config {
     pub accent: bool,
     /// Syntax-highlight diff rows (syntect; off renders plain monochrome).
     pub highlight: bool,
+    /// Query GitHub for a newer release at startup (never auto-installs;
+    /// installing is an explicit palette action).
+    pub update_check_on_start: bool,
     /// AI assist settings (default off; secrets live in the OS keyring,
     /// never in this file).
     pub ai: AiSettings,
@@ -65,6 +68,7 @@ impl Default for Config {
             recent_repos: Vec::new(),
             accent: true,
             highlight: true,
+            update_check_on_start: true,
             ai: AiSettings::default(),
         }
     }

@@ -104,6 +104,14 @@ inherits = "release"
 [target.'cfg(target_os = "linux")'.dependencies]
 openssl = { version = "0.10", features = ["vendored"] }
 
+# Updater: SHA-256 verification of release artifacts (all platforms), and
+# the macOS `.app` bundle tarball extraction (macOS only).
+sha2 = "0.10"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+tar = "0.4"
+flate2 = "1"
+
 [dev-dependencies]
 criterion = "0.8.2"
 git2 = "0.21.0"

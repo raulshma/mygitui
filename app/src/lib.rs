@@ -40,6 +40,7 @@ mod rt;
 pub mod service;
 mod ui;
 mod update_check;
+mod updater;
 mod watcher;
 #[allow(dead_code)]
 mod workspace;
