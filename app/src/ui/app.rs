@@ -2352,12 +2352,15 @@ impl App {
                 name,
                 target,
                 message,
-                annotated,
+                annotated: _,
+                signed,
             } => Task::perform(
                 async move {
                     Message::Tags(tags_panel::Msg::CreateDone(
+                        // `signed` maps to the service's `sign` flag; the
+                        // message already carries the annotated-ness.
                         crate::service::tags::tag_create(
-                            &services, repo_id2, name, target, message, annotated,
+                            &services, repo_id2, name, target, message, signed,
                         )
                         .await,
                     ))
