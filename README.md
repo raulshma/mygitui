@@ -158,15 +158,35 @@ proptests + soak + baseline-compare gates) →
 **M13–M14 native UI** (iced 0.14 cutover: in-process service bus, native
 shell, status/commit/diff/history panels, remote + safety surfaces).
 
-M13–M14 are landed on `main` — the iced cutover is done, and the Svelte-era
-feature surface (palette, keybinds, context menus, quick switcher, embedded
-terminal, forge, bisect, reflog, health, worktrees, submodules, tags, blame,
-file history, compare, custom actions, output log, file editor, contribution
-stats, syntax highlighting, OS-accent theming, diff popouts, single-instance
-forwarding, deep links, AI assist) is fully restored in the native UI.
+M13–M14 are landed on `main` — the iced cutover is done, and a
+**M15 parity pass** restored the remaining Svelte-era surface in the native
+UI: clone dialog, files panel + quick open (Ctrl+P), SSH device management
+(add/edit/test/browse/scan, remote repo tabs, SSH terminal), merge/pull/push
+option dialogs with a dirty-worktree guard, stash keep-index, interactive
+rebase planner (pick/squash/fixup/drop/edit/reword + autosquash), mergetool
+launcher, gitignore template gallery + ignore pattern variants, clean-untracked
+dialog with type-to-confirm, checkpoint GC, deleted-branch trash + restore,
+branch rename, remote-branch checkout/delete, signed tags, tag-at-commit,
+copy conveniences (describe, branch name, selected lines), forge write
+actions (PR comments/reviews, workflow dispatch/cancel/rerun/logs), AI
+settings dialog + health chip, keyboard shortcut suite (F5, Ctrl+1..8,
+Ctrl+S, Ctrl+Enter, Ctrl+Alt+←/→, Ctrl+W, Ctrl+O), session restore, and
+window size/position persistence. Alongside the original cutover set
+(palette, keybinds, context menus, quick switcher, embedded terminal,
+forge, bisect, reflog, health, worktrees, submodules, tags, blame, file
+history, compare, custom actions, output log, file editor, contribution
+stats, syntax highlighting, OS-accent theming, diff popouts,
+single-instance forwarding, deep links, AI assist).
 M8's packaging + updater goal is also landed: tag pushes build installers
 for all three OSes (MSI / .app / AppImage) and the app can update itself
 from GitHub releases.
+
+Still not carried over from the Svelte era (deliberately deferred): the
+configurable layout system (presets/splitters/activity bar), the appearance
+customizer (font/style/icon-theme presets with shareable codes), user-
+rebindable keybinds, markdown preview, image-diff overlay mode, diff
+popouts beyond the working diff, drag-and-drop repo open, and i18n
+groundwork.
 
 
 ## License
