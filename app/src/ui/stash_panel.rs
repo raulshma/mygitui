@@ -6,7 +6,7 @@
 use iced::widget::{button, checkbox, column, container, row, scrollable, text, text_input, Space};
 use iced::{Alignment, Background, Border, Element, Length};
 
-use crate::engine::types::{CheckpointInfo, StashInfo};
+use crate::engine::types::{BranchTrashEntry, CheckpointInfo, StashInfo};
 
 use super::app::Message;
 use super::history_model::relative_age;
@@ -27,6 +27,11 @@ pub struct StashesState {
     pub checkpoints: Option<Vec<CheckpointInfo>>,
     pub checkpoints_loading: bool,
     pub checkpoints_error: Option<String>,
+    /// Branches preserved under `refs/mygitui/trash/*` (deleted-branch
+    /// trash), loaded alongside the checkpoints.
+    pub trash: Option<Vec<BranchTrashEntry>>,
+    pub trash_loading: bool,
+    pub trash_error: Option<String>,
 }
 
 pub fn view<'a>(tab: &'a Tab, tokens: Tokens) -> Element<'a, Message> {
@@ -164,13 +169,60 @@ pub fn view<'a>(tab: &'a Tab, tokens: Tokens) -> Element<'a, Message> {
         None => note(tokens, "Loading checkpoints…"),
     };
 
+    let trash_count = state.trash.as_ref().map(|list| list.len());
+    let mut trash_header = row![text(format!(
+        "Deleted branches ({})",
+        trash_count
+            .map(|n| n.to_string())
+            .unwrap_or_else(|| "…".into())
+    ))
+    .size(10)
+    .color(tokens.muted_foreground)]
+    .align_y(Alignment::Center);
+    if state.trash_loading {
+        trash_header = trash_header
+            .push(Space::new().width(6))
+            .push(text("· loading…").size(10).color(tokens.muted_foreground));
+    }
+    trash_header = trash_header.push(Space::new().width(Length::Fill)).push(
+        button(text("⟳").size(9))
+            .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
+            .padding([2, 6])
+            .on_press(Message::RefreshTrash),
+    );
+
+    let trash_rows: Element<'a, Message> = match &state.trash {
+        Some(list) if !list.is_empty() => {
+            let mut rows = column![].spacing(1).width(Length::Fill);
+            let now = now_seconds();
+            for entry in list {
+                rows = rows.push(trash_row(entry, now, tokens));
+            }
+            let height = (list.len() as f32 * 26.0).clamp(26.0, 120.0);
+            scrollable(rows)
+                .height(Length::Fixed(height))
+                .width(Length::Fill)
+                .into()
+        }
+        Some(_) => note(
+            tokens,
+            "No deleted branches. Deleting a branch keeps a restore point here.",
+        ),
+        None if state.trash_error.is_some() => {
+            note(tokens, state.trash_error.clone().unwrap_or_default())
+        }
+        None => note(tokens, "Loading deleted branches…"),
+    };
+
     container(
         column![
             header,
             push_form,
             stash_rows,
             checkpoint_header,
-            checkpoint_rows
+            checkpoint_rows,
+            trash_header,
+            trash_rows
         ]
         .spacing(6)
         .padding([8, 10]),
@@ -286,6 +338,35 @@ fn checkpoint_row<'a>(
                 id: checkpoint.id.clone(),
                 reason: checkpoint.reason.clone(),
             }),
+    ]
+    .spacing(2)
+    .align_y(Alignment::Center)
+    .width(Length::Fill);
+
+    container(row).padding([2, 4]).width(Length::Fill).into()
+}
+
+fn trash_row<'a>(entry: &'a BranchTrashEntry, now: i64, tokens: Tokens) -> Element<'a, Message> {
+    let row = row![
+        column![
+            text(clip(&entry.name, 30))
+                .size(11)
+                .color(tokens.foreground),
+            text(format!(
+                "{} · {}",
+                relative_age(entry.deleted_at, now),
+                short_sha(&entry.sha)
+            ))
+            .size(9)
+            .color(tokens.muted_foreground),
+        ]
+        .spacing(0)
+        .width(Length::Fill),
+        button(text("Restore").size(9))
+            .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
+            .padding([2, 6])
+            .width(Length::Fixed(56.0))
+            .on_press(Message::TrashRestore(entry.id.clone())),
     ]
     .spacing(2)
     .align_y(Alignment::Center)

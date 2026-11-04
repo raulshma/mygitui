@@ -17,8 +17,8 @@ use iced::widget::{
 use iced::{window, Alignment, Element, Length, Subscription, Task};
 
 use crate::engine::types::{
-    BranchInfo, ChangeKind, CheckpointInfo, CommitOptions, ConflictResolution, DiffSide,
-    FetchOptions, FileDiff, LineRange, MergeFavor, MergeOutcome, MergeResult, NetStats,
+    BranchInfo, BranchTrashEntry, ChangeKind, CheckpointInfo, CommitOptions, ConflictResolution,
+    DiffSide, FetchOptions, FileDiff, LineRange, MergeFavor, MergeOutcome, MergeResult, NetStats,
     PreviewInfo, PullOptions, PushOptions, RebaseState, RebaseStep, RemoteInfo, RepoId, RepoInfo,
     RepoStatus, ResetKind, StageRequest, StageTarget, StashInfo,
 };
@@ -396,6 +396,21 @@ pub enum Message {
     CheckpointsGcDone {
         repo_id: RepoId,
         result: Result<u32, String>,
+    },
+    /// Refresh the deleted-branch trash list (stash panel open/refresh).
+    RefreshTrash,
+    /// Trash list loaded.
+    TrashLoaded {
+        repo_id: RepoId,
+        result: Result<Vec<BranchTrashEntry>, String>,
+    },
+    /// Restore one trashed branch by id.
+    TrashRestore(String),
+    /// Trash restore finished with the restored branch name (a name
+    /// conflict surfaces as an error here).
+    TrashRestoreDone {
+        repo_id: RepoId,
+        result: Result<String, String>,
     },
     ResetRequested(String),
     ResetKindSelected(ResetKind),
@@ -3127,6 +3142,18 @@ impl App {
         )
     }
 
+    fn load_trash(&self, repo_id: RepoId) -> Task<Message> {
+        let services = self.services.clone();
+        Task::perform(
+            async move {
+                let result =
+                    crate::service::branches::branch_trash_list(&services, repo_id.clone()).await;
+                Message::TrashLoaded { repo_id, result }
+            },
+            std::convert::identity,
+        )
+    }
+
     fn load_remotes(&self, repo_id: RepoId) -> Task<Message> {
         let services = self.services.clone();
         Task::perform(
@@ -4077,11 +4104,18 @@ impl App {
                         tab.reload_diff = true;
                         tab.branches.create_name.clear();
                         tab.branches.loading = true;
-                        Task::batch([
+                        let mut tasks = vec![
                             self.refresh(repo_id.clone()),
                             self.start_log(repo_id.clone()),
-                            self.load_branches(repo_id),
-                        ])
+                            self.load_branches(repo_id.clone()),
+                        ];
+                        // A deleted branch just moved into the trash; keep
+                        // the stash panel's trash section current.
+                        if self.tabs[index].stashes.open {
+                            self.tabs[index].stashes.trash_loading = true;
+                            tasks.push(self.load_trash(repo_id));
+                        }
+                        Task::batch(tasks)
                     }
                     Err(err) => {
                         self.notice = Some(Notice::error(format!("{label} failed: {err}")));
@@ -4101,12 +4135,15 @@ impl App {
                 tab.remotes.open = false;
                 tab.stashes.loading = true;
                 tab.stashes.checkpoints_loading = true;
+                tab.stashes.trash_loading = true;
                 tab.stashes.error = None;
                 tab.stashes.checkpoints_error = None;
+                tab.stashes.trash_error = None;
                 let repo_id = tab.repo.repo_id.clone();
                 Task::batch([
                     self.load_stashes(repo_id.clone()),
-                    self.load_checkpoints(repo_id),
+                    self.load_checkpoints(repo_id.clone()),
+                    self.load_trash(repo_id),
                 ])
             }
             Message::RefreshStashes => {
@@ -4115,12 +4152,15 @@ impl App {
                 };
                 tab.stashes.loading = true;
                 tab.stashes.checkpoints_loading = true;
+                tab.stashes.trash_loading = true;
                 tab.stashes.error = None;
                 tab.stashes.checkpoints_error = None;
+                tab.stashes.trash_error = None;
                 let repo_id = tab.repo.repo_id.clone();
                 Task::batch([
                     self.load_stashes(repo_id.clone()),
-                    self.load_checkpoints(repo_id),
+                    self.load_checkpoints(repo_id.clone()),
+                    self.load_trash(repo_id),
                 ])
             }
             Message::StashesLoaded { repo_id, result } => {
@@ -4152,6 +4192,67 @@ impl App {
                     Err(err) => stashes.checkpoints_error = Some(err),
                 }
                 Task::none()
+            }
+            Message::RefreshTrash => {
+                let Some(tab) = self.tabs.get_mut(self.active) else {
+                    return Task::none();
+                };
+                tab.stashes.trash_loading = true;
+                tab.stashes.trash_error = None;
+                let repo_id = tab.repo.repo_id.clone();
+                self.load_trash(repo_id)
+            }
+            Message::TrashLoaded { repo_id, result } => {
+                let Some(index) = repo_view::tab_index(&self.tabs, &repo_id) else {
+                    return Task::none();
+                };
+                let stashes = &mut self.tabs[index].stashes;
+                stashes.trash_loading = false;
+                match result {
+                    Ok(list) => {
+                        stashes.trash = Some(list);
+                        stashes.trash_error = None;
+                    }
+                    Err(err) => stashes.trash_error = Some(err),
+                }
+                Task::none()
+            }
+            Message::TrashRestore(id) => {
+                let Some(tab) = self.tabs.get(self.active) else {
+                    return Task::none();
+                };
+                let repo_id = tab.repo.repo_id.clone();
+                let services = self.services.clone();
+                Task::perform(
+                    async move {
+                        let result = crate::service::branches::branch_trash_restore(
+                            &services,
+                            repo_id.clone(),
+                            id,
+                            None,
+                        )
+                        .await;
+                        Message::TrashRestoreDone { repo_id, result }
+                    },
+                    std::convert::identity,
+                )
+            }
+            Message::TrashRestoreDone { repo_id, result } => {
+                match &result {
+                    Ok(name) => {
+                        self.notice = Some(Notice::plain(format!("Restored branch {name}")))
+                    }
+                    Err(err) => self.notice = Some(Notice::error(format!("Restore failed: {err}"))),
+                }
+                if let Some(index) = repo_view::tab_index(&self.tabs, &repo_id) {
+                    self.tabs[index].stashes.trash_loading = true;
+                    self.tabs[index].branches.loading = true;
+                }
+                Task::batch([
+                    self.refresh(repo_id.clone()),
+                    self.load_trash(repo_id.clone()),
+                    self.load_branches(repo_id),
+                ])
             }
             Message::StashMessageChanged(value) => {
                 if let Some(tab) = self.tabs.get_mut(self.active) {
@@ -6393,6 +6494,7 @@ impl App {
                     if stashes_open && changed.full {
                         self.tabs[index].stashes.loading = true;
                         self.tabs[index].stashes.checkpoints_loading = true;
+                        self.tabs[index].stashes.trash_loading = true;
                     }
                     if files_open {
                         // The tree cache is per-listing; drop it and let the
@@ -6412,6 +6514,7 @@ impl App {
                     if stashes_open {
                         tasks.push(self.load_stashes(changed.repo_id.clone()));
                         tasks.push(self.load_checkpoints(changed.repo_id.clone()));
+                        tasks.push(self.load_trash(changed.repo_id.clone()));
                     }
                 }
                 Task::batch(tasks)
