@@ -35,6 +35,9 @@ pub struct Config {
     /// AI assist settings (default off; secrets live in the OS keyring,
     /// never in this file).
     pub ai: AiSettings,
+    /// Open repo tabs persisted across runs (local repos only; see
+    /// [`SessionState`]).
+    pub session: SessionState,
 }
 
 /// Auto-fetch cadence choices cycled by the header button (minutes; 0 = off).
@@ -74,7 +77,53 @@ impl Default for Config {
             highlight: true,
             update_check_on_start: true,
             ai: AiSettings::default(),
+            session: SessionState::default(),
         }
+    }
+}
+
+/// Open repo tabs persisted across runs (`config.json` `session` section):
+/// ordered repo root paths plus the tab index to focus after restore.
+/// Device-backed repos are never stored here (reopening them needs the SSH
+/// device flow, not a plain path open); paths that no longer exist or fail
+/// to open are silently dropped at boot.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SessionState {
+    /// Repo root paths in tab order (as resolved by the last open).
+    pub tabs: Vec<String>,
+    /// Tab to activate after restore (clamped to the restored tabs).
+    pub active: usize,
+}
+
+/// Builds the persisted session from the open tabs: `(root, is_local)`
+/// pairs in tab order plus the focused index. Device-backed tabs are
+/// skipped; the focused index is re-based onto the filtered list (falling
+/// back to the previously stored index when it points at a skipped tab,
+/// clamped), and duplicate roots keep their first occurrence.
+pub fn session_state(
+    tabs: &[(&str, bool)],
+    focused: Option<usize>,
+    previous_active: usize,
+) -> SessionState {
+    let mut tabs_out: Vec<String> = Vec::new();
+    for (root, local) in tabs {
+        if *local && !tabs_out.iter().any(|seen| seen == root) {
+            tabs_out.push((*root).to_string());
+        }
+    }
+    let focused_root = focused.and_then(|index| {
+        tabs.get(index)
+            .copied()
+            .filter(|(_, local)| *local)
+            .map(|(root, _)| root)
+    });
+    let active = focused_root
+        .and_then(|root| tabs_out.iter().position(|seen| seen == root))
+        .unwrap_or_else(|| previous_active.min(tabs_out.len().saturating_sub(1)));
+    SessionState {
+        tabs: tabs_out,
+        active,
     }
 }
 
@@ -453,5 +502,67 @@ mod tests {
         assert_eq!(loaded.ai, config.ai);
         assert!(loaded.ai_enabled_for("/repos/alpha"));
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn session_defaults_for_older_config_files() {
+        // Pre-session config files keep loading with an empty session.
+        let dir = temp_dir("session-default");
+        std::fs::write(
+            dir.join("config.json"),
+            r#"{"theme": "Dark", "recent_repos": []}"#,
+        )
+        .unwrap();
+        let loaded = Config::load(&dir);
+        assert_eq!(loaded.session, SessionState::default());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn session_round_trips_through_disk() {
+        let dir = temp_dir("session-roundtrip");
+        let config = Config {
+            session: SessionState {
+                tabs: vec!["/repos/alpha".into(), "/repos/beta".into()],
+                active: 1,
+            },
+            ..Config::default()
+        };
+        config.save(&dir).expect("save");
+        let loaded = Config::load(&dir);
+        assert_eq!(loaded.session.tabs, vec!["/repos/alpha", "/repos/beta"]);
+        assert_eq!(loaded.session.active, 1);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn session_state_skips_device_tabs_and_keeps_order() {
+        let tabs = [("/a", true), ("/remote", false), ("/b", true), ("/a", true)];
+        let session = session_state(&tabs, Some(2), 0);
+        assert_eq!(
+            session.tabs,
+            vec!["/a", "/b"],
+            "device tabs dropped, dupes folded"
+        );
+        // Focused local tab re-bases onto the filtered list.
+        assert_eq!(session.active, 1);
+    }
+
+    #[test]
+    fn session_state_falls_back_when_focus_is_a_device_tab() {
+        let tabs = [("/a", true), ("/remote", false)];
+        let session = session_state(&tabs, Some(1), 0);
+        assert_eq!(session.tabs, vec!["/a"]);
+        // The focused tab is device-backed: keep the previous index, clamped.
+        assert_eq!(session.active, 0);
+        let session = session_state(&tabs, Some(1), 7);
+        assert_eq!(session.active, 0, "previous index clamps to the last tab");
+    }
+
+    #[test]
+    fn session_state_empty_tabs_collapse_to_default() {
+        let session = session_state(&[("/remote", false)], None, 3);
+        assert_eq!(session, SessionState::default());
+        assert_eq!(session_state(&[], None, 2), SessionState::default());
     }
 }

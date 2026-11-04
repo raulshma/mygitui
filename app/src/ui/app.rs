@@ -104,6 +104,12 @@ pub struct App {
     file_history_seq: u64,
     tabs: Vec<Tab>,
     active: usize,
+    /// Session-restore queue: repo paths still to reopen at boot, chained
+    /// one open at a time through `RepoOpened` (empty when there is nothing
+    /// to restore or the run was started with an explicit repo argument).
+    restore_queue: Vec<String>,
+    /// Session tab index to focus once the restore queue drains.
+    restore_active: usize,
     show_home: bool,
     notice: Option<Notice>,
     last_op: Option<String>,
@@ -904,6 +910,8 @@ impl App {
             file_history_seq: 0,
             tabs: Vec::new(),
             active: 0,
+            restore_queue: Vec::new(),
+            restore_active: 0,
             show_home: true,
             notice: None,
             last_op: None,
@@ -930,6 +938,30 @@ impl App {
         };
         app.custom_actions = app.load_custom_actions();
 
+        // Session restore: reopen the persisted tabs unless this launch
+        // carries an explicit repo argument (argv / deep link wins for that
+        // run). Paths that no longer exist are dropped here; paths that fail
+        // to open are dropped silently by the `RepoOpened` arm. Device-backed
+        // tabs were never persisted (see `config::session_state`).
+        let restore = if first_repo_arg(&cli_args).is_none() && !app.config.session.tabs.is_empty()
+        {
+            let mut seen = HashSet::new();
+            let queue: Vec<String> = app
+                .config
+                .session
+                .tabs
+                .iter()
+                .filter(|path| std::path::Path::new(path).exists())
+                .filter(|path| seen.insert(config::canonical_key(path)))
+                .cloned()
+                .collect();
+            app.restore_active = app.config.session.active.min(queue.len().saturating_sub(1));
+            app.restore_queue = queue;
+            !app.restore_queue.is_empty()
+        } else {
+            false
+        };
+
         let instance_listener = crate::instance::take_listener(&instance_listener);
         app.instance_listener = instance_listener;
         // Polish toggles from config (highlight defaults on; the accent
@@ -944,6 +976,12 @@ impl App {
         }
         if let Some(path) = first_repo_arg(&cli_args) {
             tasks.push(app.open_repo(path));
+        } else if restore {
+            // Restore opens chain one at a time: the next open is issued by
+            // the `RepoOpened` arm when the previous one settles.
+            if let Some(path) = app.restore_queue.first().cloned() {
+                tasks.push(app.open_repo(path));
+            }
         }
         tasks.push(app.refresh_devices());
         // Header AI chip seed (one-shot probe; refreshed on toggles/save).
@@ -3484,6 +3522,40 @@ impl App {
         }
     }
 
+    /// Syncs `config.session` with the open tabs and persists the config
+    /// file (called on open / close / activate). Device-backed tabs are
+    /// skipped and the focused index is re-based onto the filtered list —
+    /// see [`config::session_state`].
+    fn persist_session(&mut self) {
+        let tabs: Vec<(&str, bool)> = self
+            .tabs
+            .iter()
+            .map(|tab| (tab.repo.root.as_str(), tab.repo.device_id.is_none()))
+            .collect();
+        let focused = if self.tabs.is_empty() {
+            None
+        } else {
+            Some(self.active)
+        };
+        self.config.session = config::session_state(&tabs, focused, self.config.session.active);
+        self.persist_config();
+    }
+
+    /// Continues the boot-time session restore: opens the next queued repo,
+    /// or — once the queue drains — focuses the persisted active tab (the
+    /// index is best-effort: repos that failed to open shift it, so it is
+    /// clamped and silently ignored when out of range).
+    fn continue_restore(&mut self) -> Task<Message> {
+        if let Some(path) = self.restore_queue.first().cloned() {
+            return self.open_repo(path);
+        }
+        if self.restore_active < self.tabs.len() {
+            self.update(Message::SelectTab(self.restore_active))
+        } else {
+            Task::none()
+        }
+    }
+
     fn open_repo(&mut self, path: String) -> Task<Message> {
         if self.open_in_flight {
             return Task::none();
@@ -3528,6 +3600,7 @@ impl App {
             }
         }
         self.show_home = false;
+        self.persist_session();
         Task::batch([
             self.refresh(repo_id.clone()),
             self.start_log(repo_id.clone()),
@@ -4023,6 +4096,14 @@ impl App {
             Message::OpenPath(path) => self.open_repo(path),
             Message::RepoOpened { path, result } => {
                 self.open_in_flight = false;
+                // A restore open matches the head of the pending queue: it
+                // is consumed whether it succeeds or fails, and the chain
+                // continues. Failures during restore are silent — a repo
+                // that vanished since the last run is not an error.
+                let restore_open = self.restore_queue.first().is_some_and(|head| *head == path);
+                if restore_open {
+                    self.restore_queue.remove(0);
+                }
                 match result {
                     Ok(info) => {
                         // Record the resolved workdir so recents stay valid
@@ -4033,11 +4114,20 @@ impl App {
                             self.reindex_recent();
                             self.persist_config();
                         }
-                        self.activate_repo(info)
+                        let mut tasks = vec![self.activate_repo(info)];
+                        if restore_open {
+                            tasks.push(self.continue_restore());
+                        }
+                        Task::batch(tasks)
                     }
                     Err(err) => {
-                        self.notice = Some(Notice::error(format!("Could not open {path}: {err}")));
-                        Task::none()
+                        if restore_open {
+                            self.continue_restore()
+                        } else {
+                            self.notice =
+                                Some(Notice::error(format!("Could not open {path}: {err}")));
+                            Task::none()
+                        }
                     }
                 }
             }
@@ -4104,6 +4194,7 @@ impl App {
                     self.active = index;
                     self.show_home = false;
                 }
+                self.persist_session();
                 Task::none()
             }
             Message::CloseTab(repo_id) => {
@@ -4126,6 +4217,7 @@ impl App {
                             self.active = self.tabs.len() - 1;
                         }
                     }
+                    self.persist_session();
                 }
                 Task::none()
             }
