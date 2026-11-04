@@ -127,7 +127,8 @@ generated output — do not commit it.
   + CI checks (`gh` CLI), split panes, command palette + keybinds + context
   menus, shadcn-derived light/dark theming, syntax-highlighted diffs,
   OS-accent theming, embedded terminal, diff popout windows, single-instance
-  forwarding + deep links, installers + self-update (MSI / .app / AppImage,
+  forwarding + deep links, session restore + window-geometry persistence
+  across runs, installers + self-update (MSI / .app / AppImage,
   SHA-256-verified in-app update flow), a11y throughout
 - **AI assist (opt-in per repo)**: commit message, PR title/desc,
   explain-hunk, staged-diff review, stash message, branch-name
