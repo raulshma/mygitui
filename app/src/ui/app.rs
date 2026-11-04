@@ -132,6 +132,8 @@ pub struct App {
     clone: clone_dialog::State,
     /// SSH device management (Home section, add/edit dialog, device browser).
     devices: devices::State,
+    /// The main window's id (focus transitions gate the remote poll pause).
+    main_window: Option<window::Id>,
     /// Quick Open overlay state (`ctrl/cmd+P`).
     quick_open: quick_open::State,
     /// Last known cursor position, used to anchor context menus opened via
@@ -518,6 +520,13 @@ pub enum Message {
         path: String,
         result: Result<RepoInfo, String>,
     },
+    /// A window gained/lost focus; the main window's transitions pause/resume
+    /// remote repo change polling (devices keep dialing only while the app
+    /// is looked at).
+    WindowFocus {
+        window: window::Id,
+        focused: bool,
+    },
     /// Native folder-picker result for the clone destination (None =
     /// canceled).
     ClonePicked(Option<PathBuf>),
@@ -671,6 +680,13 @@ pub enum Message {
     },
 }
 
+/// Terminal sessions carry their kind in the id: `pty-*` is a local PTY,
+/// `rshell-*` an SSH shell over a device session (both emit the same
+/// `PtyOutput`/`PtyExit` events the terminal pane consumes).
+fn is_remote_shell_session(session: &str) -> bool {
+    session.starts_with("rshell-")
+}
+
 /// One background auto-fetch cycle for a repo: pick the default remote
 /// (`origin`, else the first configured) and fetch with prune. `Ok(None)`
 /// means nothing to do (no remotes) and is never surfaced as an error.
@@ -736,6 +752,7 @@ impl App {
             switcher: quick_switcher::State::default(),
             clone: clone_dialog::State::default(),
             devices: devices::State::default(),
+            main_window: None,
             quick_open: quick_open::State::default(),
             cursor: iced::Point::ORIGIN,
             ai_result: None,
@@ -753,7 +770,8 @@ impl App {
         theme::set_accent_enabled(accent_enabled);
         let mut tasks = vec![iced::system::theme().map(Message::SystemTheme)];
         {
-            let (_, opened) = window::open(main_window_settings());
+            let (main_window, opened) = window::open(main_window_settings());
+            app.main_window = Some(main_window);
             tasks.push(opened.map(|_| Message::Noop));
         }
         if let Some(path) = first_repo_arg(&cli_args) {
@@ -1567,14 +1585,19 @@ impl App {
                 repo_root,
             } => {
                 if let Some(old) = old_session {
-                    if let Err(err) = crate::pty::pty_kill(&self.services, old) {
+                    if let Err(err) = self.kill_terminal_session(&old) {
                         tracing::debug!(err, "terminal restart: old session kill failed");
                     }
                 }
                 self.spawn_terminal(repo_root)
             }
             terminal::Action::Write { session, data } => {
-                if let Err(err) = crate::pty::pty_write(&self.services, session, data) {
+                let result = if is_remote_shell_session(&session) {
+                    crate::remote::term::rshell_write(&self.services, session, data)
+                } else {
+                    crate::pty::pty_write(&self.services, session, data)
+                };
+                if let Err(err) = result {
                     tracing::debug!(err, "pty write failed");
                 }
                 Task::none()
@@ -1584,13 +1607,18 @@ impl App {
                 cols,
                 rows,
             } => {
-                if let Err(err) = crate::pty::pty_resize(&self.services, session, rows, cols) {
+                let result = if is_remote_shell_session(&session) {
+                    crate::remote::term::rshell_resize(&self.services, session, rows, cols)
+                } else {
+                    crate::pty::pty_resize(&self.services, session, rows, cols)
+                };
+                if let Err(err) = result {
                     tracing::debug!(err, "pty resize failed");
                 }
                 Task::none()
             }
             terminal::Action::Kill { session } => {
-                if let Err(err) = crate::pty::pty_kill(&self.services, session) {
+                if let Err(err) = self.kill_terminal_session(&session) {
                     tracing::debug!(err, "pty kill failed");
                 }
                 Task::none()
@@ -1601,8 +1629,20 @@ impl App {
         }
     }
 
+    /// Kills a terminal session of either kind (local `pty-*` PTY or remote
+    /// `rshell-*` SSH shell); errors mean the session is already gone.
+    fn kill_terminal_session(&self, session: &str) -> Result<(), String> {
+        if is_remote_shell_session(session) {
+            crate::remote::term::rshell_kill(&self.services, session.to_string())
+        } else {
+            crate::pty::pty_kill(&self.services, session.to_string())
+        }
+    }
+
     /// Spawns the shell session for the tab whose root matches (the active
     /// tab in practice) and feeds the returned session id back to its pane.
+    /// Remote tabs (device repos) spawn an SSH shell over the device session
+    /// instead of a local PTY; the pane consumes both unchanged.
     fn spawn_terminal(&mut self, repo_root: PathBuf) -> Task<Message> {
         let Some(index) = self
             .tabs
@@ -1613,7 +1653,17 @@ impl App {
         };
         let (cols, rows) = self.tabs[index].terminal.dims();
         let repo_id = self.tabs[index].repo.repo_id.clone();
-        match crate::pty::pty_create(&self.services, repo_id, Some(rows), Some(cols)) {
+        let remote = self
+            .services
+            .repos
+            .get(&repo_id)
+            .is_some_and(|handle| handle.is_remote());
+        let spawned = if remote {
+            crate::remote::term::rshell_create(&self.services, repo_id, Some(rows), Some(cols))
+        } else {
+            crate::pty::pty_create(&self.services, repo_id, Some(rows), Some(cols))
+        };
+        match spawned {
             Ok(session) => {
                 let follow = terminal::update(
                     &mut self.tabs[index].terminal,
@@ -3489,7 +3539,7 @@ impl App {
             Message::CloseTab(repo_id) => {
                 if let Some(index) = repo_view::tab_index(&self.tabs, &repo_id) {
                     if let Some(session) = self.tabs[index].terminal.session().map(str::to_owned) {
-                        if let Err(err) = crate::pty::pty_kill(&self.services, session) {
+                        if let Err(err) = self.kill_terminal_session(&session) {
                             tracing::debug!(err, "tab close: pty kill failed");
                         }
                     }
@@ -5632,6 +5682,16 @@ impl App {
                     Task::none()
                 }
             },
+            Message::WindowFocus { window, focused } => {
+                if self.main_window == Some(window) {
+                    // Remote repos poll their device over SSH on a timer;
+                    // pause while the app window is not focused and resume
+                    // when it comes back (the transport reconnects lazily).
+                    let _ =
+                        crate::remote::commands::remote_poll_set_paused(&self.services, !focused);
+                }
+                Task::none()
+            }
             Message::CursorMoved(position) => {
                 self.cursor = position;
                 Task::none()
@@ -6562,6 +6622,7 @@ impl App {
             Subscription::run(bus::stream).map(Message::Backend),
             iced::system::theme_changes().map(Message::SystemTheme),
             iced::event::listen_with(modifiers_changed),
+            iced::event::listen_with(window_focus_changed),
             iced::window::close_events().map(Message::WindowClosed),
             // Overlay components own their key/backdrop handling; each mapper
             // is a no-op while its overlay is closed.
@@ -6869,6 +6930,27 @@ impl App {
             return "mygitui — diff".to_string();
         }
         "mygitui".to_string()
+    }
+}
+
+/// Window focus transitions (main window) pause/resume remote repo change
+/// polling: devices keep dialing only while the app is looked at. The
+/// update arm filters to [`App::main_window`] (popouts are irrelevant).
+fn window_focus_changed(
+    event: iced::Event,
+    _status: iced::event::Status,
+    window: window::Id,
+) -> Option<Message> {
+    match event {
+        iced::Event::Window(window::Event::Focused) => Some(Message::WindowFocus {
+            window,
+            focused: true,
+        }),
+        iced::Event::Window(window::Event::Unfocused) => Some(Message::WindowFocus {
+            window,
+            focused: false,
+        }),
+        _ => None,
     }
 }
 
