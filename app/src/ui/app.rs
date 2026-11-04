@@ -657,6 +657,19 @@ pub enum Message {
         repo_id: RepoId,
         result: Result<(), String>,
     },
+    /// Open the clean-untracked dialog (status panel + palette).
+    CleanDialogRequested,
+    /// Toggle one path's checkbox in the clean dialog.
+    CleanToggled(String),
+    /// The clean dialog's typed confirmation changed.
+    CleanConfirmChanged(String),
+    /// Run the confirmed clean (checkpointed by the service).
+    CleanConfirmed,
+    /// Clean finished with the number of removed paths.
+    CleanDone {
+        repo_id: RepoId,
+        result: Result<u32, String>,
+    },
 }
 
 /// One background auto-fetch cycle for a repo: pick the default remote
@@ -863,6 +876,17 @@ impl App {
                     .collect()
             })
             .unwrap_or_default();
+        let untracked: Vec<String> = tab
+            .map(|tab| {
+                Self::visible_rows(tab)
+                    .into_iter()
+                    .filter(|row| {
+                        row.section == SectionId::Changes && row.kind == ChangeKind::Untracked
+                    })
+                    .map(|row| row.path.clone())
+                    .collect()
+            })
+            .unwrap_or_default();
         let remotes: Vec<String> = tab
             .and_then(|tab| tab.remotes.list.as_ref())
             .map(|list| list.iter().map(|remote| remote.name.clone()).collect())
@@ -952,6 +976,13 @@ impl App {
             "Ignore templates…",
             "Working copy",
             repo_id.is_some(),
+            None,
+        );
+        register(
+            "status.clean",
+            "Clean untracked files…",
+            "Working copy",
+            !untracked.is_empty(),
             None,
         );
 
@@ -1289,6 +1320,7 @@ impl App {
             "status.select_all" => self.update(Message::StatusSelectAll),
             "status.select_none" => self.update(Message::StatusSelectNone),
             "status.ignore_templates" => self.update(Message::IgnoreTemplatesRequested),
+            "status.clean" => self.update(Message::CleanDialogRequested),
             "commit.commit" => self.update(Message::CommitPressed),
             "diff.toggle_split" => self.update(Message::DiffToggleSplit),
             "diff.toggle_wrap" => self.update(Message::DiffToggleWrap),
@@ -3639,6 +3671,7 @@ impl App {
                     tab.pending_pull = None;
                     tab.pending_push = None;
                     tab.pending_ignore_templates = None;
+                    tab.pending_clean = None;
                 }
                 Task::none()
             }
@@ -6202,6 +6235,84 @@ impl App {
                     Err(err) => {
                         self.notice = Some(Notice::error(format!("Apply template failed: {err}")));
                     }
+                }
+                self.refresh(repo_id)
+            }
+            Message::CleanDialogRequested => {
+                let Some(tab) = self.tabs.get_mut(self.active) else {
+                    return Task::none();
+                };
+                let paths: Vec<String> = tab
+                    .status_index
+                    .rows
+                    .iter()
+                    .filter(|row| {
+                        row.section == SectionId::Changes && row.kind == ChangeKind::Untracked
+                    })
+                    .map(|row| row.path.clone())
+                    .collect();
+                if paths.is_empty() {
+                    return Task::none();
+                }
+                tab.pending_clean = Some(dialog::CleanRequest::new(paths));
+                Task::none()
+            }
+            Message::CleanToggled(path) => {
+                if let Some(tab) = self.tabs.get_mut(self.active) {
+                    if let Some(request) = &mut tab.pending_clean {
+                        request.toggle(&path);
+                    }
+                }
+                Task::none()
+            }
+            Message::CleanConfirmChanged(value) => {
+                if let Some(tab) = self.tabs.get_mut(self.active) {
+                    if let Some(request) = &mut tab.pending_clean {
+                        request.confirm_text = value;
+                    }
+                }
+                Task::none()
+            }
+            Message::CleanConfirmed => {
+                let Some(tab) = self.tabs.get_mut(self.active) else {
+                    return Task::none();
+                };
+                let Some(request) = tab.pending_clean.take() else {
+                    return Task::none();
+                };
+                let paths = request.selected();
+                if paths.is_empty() {
+                    return Task::none();
+                }
+                tab.reload_diff = true;
+                let repo_id = tab.repo.repo_id.clone();
+                let services = self.services.clone();
+                Task::perform(
+                    async move {
+                        // repo_clean validates, snapshots a "pre-clean"
+                        // checkpoint, then deletes — the safety chain is the
+                        // service's, the dialog only gates it.
+                        let result = crate::service::maintenance::repo_clean(
+                            &services,
+                            repo_id.clone(),
+                            paths,
+                            "pre-clean".to_string(),
+                        )
+                        .await;
+                        Message::CleanDone { repo_id, result }
+                    },
+                    std::convert::identity,
+                )
+            }
+            Message::CleanDone { repo_id, result } => {
+                match result {
+                    Ok(removed) => {
+                        self.notice = Some(Notice::plain(format!(
+                            "Cleaned {removed} untracked path{}",
+                            if removed == 1 { "" } else { "s" }
+                        )))
+                    }
+                    Err(err) => self.notice = Some(Notice::error(format!("Clean failed: {err}"))),
                 }
                 self.refresh(repo_id)
             }

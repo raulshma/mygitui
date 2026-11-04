@@ -772,6 +772,170 @@ pub fn templates<'a>(tokens: Tokens, state: &IgnoreTemplates) -> Element<'a, Mes
     modal(tokens, 460.0, body.into(), actions)
 }
 
+// ---------------------------------------------------------------------------
+// Clean untracked files
+// ---------------------------------------------------------------------------
+
+/// Selections larger than this require typing `clean` before the confirm
+/// button unlocks.
+pub const CLEAN_TYPE_TO_CONFIRM_THRESHOLD: usize = 10;
+
+/// Pending `git clean` of untracked paths: the paths from the status state,
+/// per-file checkboxes (all on by default) and the typed confirmation for
+/// large selections.
+#[derive(Debug, Clone, Default)]
+pub struct CleanRequest {
+    pub paths: Vec<String>,
+    /// Parallel to `paths`; every entry starts checked.
+    pub checked: Vec<bool>,
+    pub confirm_text: String,
+}
+
+impl CleanRequest {
+    pub fn new(paths: Vec<String>) -> Self {
+        let checked = vec![true; paths.len()];
+        Self {
+            paths,
+            checked,
+            confirm_text: String::new(),
+        }
+    }
+
+    pub fn is_checked(&self, path: &str) -> bool {
+        self.paths
+            .iter()
+            .position(|candidate| candidate == path)
+            .and_then(|index| self.checked.get(index))
+            .copied()
+            .unwrap_or(false)
+    }
+
+    pub fn toggle(&mut self, path: &str) {
+        if let Some(index) = self.paths.iter().position(|candidate| candidate == path) {
+            if let Some(flag) = self.checked.get_mut(index) {
+                *flag = !*flag;
+            }
+        }
+    }
+
+    /// The selected paths, in the original (status) order.
+    pub fn selected(&self) -> Vec<String> {
+        self.paths
+            .iter()
+            .zip(&self.checked)
+            .filter(|(_, checked)| **checked)
+            .map(|(path, _)| path.clone())
+            .collect()
+    }
+
+    pub fn needs_typed_confirmation(&self) -> bool {
+        self.selected().len() > CLEAN_TYPE_TO_CONFIRM_THRESHOLD
+    }
+
+    /// Confirm unlocks when anything is selected and — for large
+    /// selections — the typed text matches `clean` (case-insensitive).
+    pub fn confirm_ready(&self) -> bool {
+        if self.selected().is_empty() {
+            return false;
+        }
+        !self.needs_typed_confirmation() || self.confirm_text.trim().eq_ignore_ascii_case("clean")
+    }
+}
+
+/// Paths grouped by directory (first-appearance order; the root group is
+/// `""`). Backs the dialog's per-directory sections.
+pub fn group_by_dir(paths: &[String]) -> Vec<(String, Vec<String>)> {
+    let mut groups: Vec<(String, Vec<String>)> = Vec::new();
+    for path in paths {
+        let (dir, _) = super::status_model::split_path(path);
+        let dir = dir.to_string();
+        match groups.iter_mut().find(|(group, _)| *group == dir) {
+            Some((_, members)) => members.push(path.clone()),
+            None => groups.push((dir, vec![path.clone()])),
+        }
+    }
+    groups
+}
+
+/// Centered modal deleting checked untracked paths: per-directory groups
+/// with checkboxes (all on), and a type-`clean` guard for large selections.
+/// The backend snapshots a checkpoint before deleting, so the dialog says
+/// so instead of demanding the discard-style "cannot be undone" wording.
+pub fn clean<'a>(tokens: Tokens, request: &CleanRequest) -> Element<'a, Message> {
+    let selected = request.selected();
+    let mut intro = column![
+        text("Clean untracked files").size(14).font(theme::semibold()),
+        Space::new().height(4),
+        text(format!(
+            "Delete {} of {} untracked path{}? A checkpoint of the current state is saved first, so this can be undone from the checkpoints panel.",
+            selected.len(),
+            request.paths.len(),
+            if request.paths.len() == 1 { "" } else { "s" }
+        ))
+        .size(12)
+        .color(tokens.muted_foreground),
+    ]
+    .spacing(6);
+
+    let mut list = column![].spacing(1).width(Length::Fill);
+    for (dir, members) in group_by_dir(&request.paths) {
+        list = list.push(
+            text(if dir.is_empty() {
+                "(root)".to_string()
+            } else {
+                dir
+            })
+            .size(10)
+            .font(theme::semibold())
+            .color(tokens.muted_foreground),
+        );
+        for path in members {
+            list = list.push(
+                checkbox(request.is_checked(&path))
+                    .label(path.clone())
+                    .size(12)
+                    .text_size(11)
+                    .spacing(6)
+                    .on_toggle(move |_| Message::CleanToggled(path.clone())),
+            );
+        }
+    }
+    intro = intro.push(
+        scrollable(list)
+            .height(Length::Fixed(280.0))
+            .width(Length::Fill),
+    );
+
+    if request.needs_typed_confirmation() {
+        intro = intro.push(
+            column![
+                text(format!(
+                    "Type “clean” to confirm deleting {} paths.",
+                    selected.len()
+                ))
+                .size(11)
+                .color(tokens.deleted),
+                text_input("clean", request.confirm_text.as_str())
+                    .on_input(Message::CleanConfirmChanged)
+                    .size(11)
+                    .padding([4, 6]),
+            ]
+            .spacing(4),
+        );
+    }
+
+    modal(
+        tokens,
+        460.0,
+        intro.into(),
+        action_row(
+            tokens,
+            "Clean",
+            request.confirm_ready().then_some(Message::CleanConfirmed),
+        ),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -824,5 +988,77 @@ mod tests {
         assert!(reset_kind_discards_worktree(ResetKind::Merge));
         assert!(!reset_kind_discards_worktree(ResetKind::Soft));
         assert!(!reset_kind_discards_worktree(ResetKind::Mixed));
+    }
+
+    #[test]
+    fn clean_selection_starts_all_checked_and_toggles() {
+        let mut request = CleanRequest::new(vec!["a.txt".into(), "b.log".into(), "c/".into()]);
+        assert_eq!(request.selected(), vec!["a.txt", "b.log", "c/"]);
+        request.toggle("b.log");
+        assert_eq!(request.selected(), vec!["a.txt", "c/"]);
+        assert!(!request.is_checked("b.log"));
+        request.toggle("b.log");
+        assert!(request.is_checked("b.log"));
+        // Unknown paths toggle nothing.
+        request.toggle("missing");
+        assert_eq!(request.selected().len(), 3);
+    }
+
+    #[test]
+    fn clean_confirm_gate_needs_typing_only_for_big_selections() {
+        let paths: Vec<String> = (0..10).map(|index| format!("f{index}.txt")).collect();
+        let mut request = CleanRequest::new(paths);
+        assert!(!request.needs_typed_confirmation());
+        assert!(request.confirm_ready(), "small selections confirm freely");
+
+        // Empty selection never confirms.
+        for path in request.paths.clone() {
+            request.toggle(&path);
+        }
+        assert!(request.selected().is_empty());
+        assert!(!request.confirm_ready());
+        for index in 0..10 {
+            request.toggle(&format!("f{index}.txt"));
+        }
+
+        // 11 selected (threshold 10): typing is required.
+        request.paths.push("extra.txt".into());
+        request.checked.push(true);
+        assert!(request.needs_typed_confirmation());
+        assert!(!request.confirm_ready());
+        request.confirm_text = "nope".into();
+        assert!(!request.confirm_ready());
+        request.confirm_text = "  Clean ".into();
+        assert!(
+            request.confirm_ready(),
+            "match is trimmed + case-insensitive"
+        );
+    }
+
+    #[test]
+    fn group_by_dir_keeps_first_appearance_order() {
+        let paths = vec![
+            "src/b.rs".to_string(),
+            "a.txt".to_string(),
+            "src/c.rs".to_string(),
+            "build/".to_string(),
+            "d.log".to_string(),
+        ];
+        let groups = group_by_dir(&paths);
+        assert_eq!(
+            groups,
+            vec![
+                (
+                    "src/".to_string(),
+                    vec!["src/b.rs".to_string(), "src/c.rs".to_string()]
+                ),
+                (
+                    "".to_string(),
+                    vec!["a.txt".to_string(), "d.log".to_string()]
+                ),
+                ("build/".to_string(), vec!["build/".to_string()]),
+            ]
+        );
+        assert!(group_by_dir(&[]).is_empty());
     }
 }

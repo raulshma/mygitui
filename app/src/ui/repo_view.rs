@@ -172,6 +172,8 @@ pub struct Tab {
     pub pending_push: Option<dialog::PushRequest>,
     /// Gitignore template gallery (search filter state).
     pub pending_ignore_templates: Option<dialog::IgnoreTemplates>,
+    /// Pending clean-untracked dialog (checked paths + typed confirm).
+    pub pending_clean: Option<dialog::CleanRequest>,
 
     pub diff_seq: u64,
     pub commit_diff_seq: u64,
@@ -239,6 +241,7 @@ impl Tab {
             pending_pull: None,
             pending_push: None,
             pending_ignore_templates: None,
+            pending_clean: None,
             diff_seq: 0,
             commit_diff_seq: 0,
         }
@@ -582,6 +585,10 @@ fn dialog_overlay<'a>(tab: &'a Tab, tokens: Tokens) -> Option<Element<'a, Messag
 
     if let Some(state) = &tab.pending_ignore_templates {
         return Some(dialog::templates(tokens, state));
+    }
+
+    if let Some(request) = &tab.pending_clean {
+        return Some(dialog::clean(tokens, request));
     }
 
     None
