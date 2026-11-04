@@ -692,6 +692,12 @@ pub enum Message {
         repo_id: RepoId,
         result: Result<u32, String>,
     },
+    /// Open the branch rename dialog (branch row context menu).
+    BranchRenameRequested(String),
+    /// The rename dialog's target name changed.
+    BranchRenameChanged(String),
+    /// Run the confirmed rename.
+    BranchRenameConfirmed,
 }
 
 /// One background auto-fetch cycle for a repo: pick the default remote
@@ -1543,6 +1549,9 @@ impl App {
             other if other.starts_with("branch.switch:") => self.update(Message::BranchSwitch(
                 other["branch.switch:".len()..].to_string(),
             )),
+            other if other.starts_with("branch.rename:") => self.update(
+                Message::BranchRenameRequested(other["branch.rename:".len()..].to_string()),
+            ),
             other if other.starts_with("branch.delete:") => self.update(
                 Message::BranchDeleteRequested(other["branch.delete:".len()..].to_string()),
             ),
@@ -3714,6 +3723,7 @@ impl App {
                     tab.pending_push = None;
                     tab.pending_ignore_templates = None;
                     tab.pending_clean = None;
+                    tab.pending_branch_rename = None;
                 }
                 Task::none()
             }
@@ -6465,6 +6475,56 @@ impl App {
                 }
                 self.refresh(repo_id)
             }
+            Message::BranchRenameRequested(name) => {
+                if let Some(tab) = self.tabs.get_mut(self.active) {
+                    tab.pending_branch_rename = Some(dialog::RenameRequest {
+                        old: name.clone(),
+                        new: name,
+                    });
+                }
+                Task::none()
+            }
+            Message::BranchRenameChanged(value) => {
+                if let Some(tab) = self.tabs.get_mut(self.active) {
+                    if let Some(request) = &mut tab.pending_branch_rename {
+                        request.new = value;
+                    }
+                }
+                Task::none()
+            }
+            Message::BranchRenameConfirmed => {
+                let Some(tab) = self.tabs.get_mut(self.active) else {
+                    return Task::none();
+                };
+                let Some(request) = tab.pending_branch_rename.take() else {
+                    return Task::none();
+                };
+                let new = request.new.trim().to_string();
+                if new.is_empty() || new == request.old {
+                    return Task::none();
+                }
+                let repo_id = tab.repo.repo_id.clone();
+                let label = format!("Rename {} to {new}", request.old);
+                let old = request.old;
+                let services = self.services.clone();
+                Task::perform(
+                    async move {
+                        let result = crate::service::branches::branch_rename(
+                            &services,
+                            repo_id.clone(),
+                            old,
+                            new,
+                        )
+                        .await;
+                        Message::BranchDone {
+                            repo_id,
+                            label,
+                            result,
+                        }
+                    },
+                    std::convert::identity,
+                )
+            }
             Message::Noop => Task::none(),
         }
     }
@@ -7028,6 +7088,7 @@ fn branch_row_menu(name: &str) -> context_menu::Menu {
         format!("Switch to “{name}”"),
     );
     menu = menu.separator();
+    menu = menu.command(format!("branch.rename:{name}"), "Rename…");
     menu = menu.command(format!("branch.delete:{name}"), format!("Delete “{name}”"));
     menu
 }

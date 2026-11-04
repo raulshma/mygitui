@@ -174,6 +174,8 @@ pub struct Tab {
     pub pending_ignore_templates: Option<dialog::IgnoreTemplates>,
     /// Pending clean-untracked dialog (checked paths + typed confirm).
     pub pending_clean: Option<dialog::CleanRequest>,
+    /// Branch awaiting the rename dialog (input prefilled with the old name).
+    pub pending_branch_rename: Option<dialog::RenameRequest>,
 
     pub diff_seq: u64,
     pub commit_diff_seq: u64,
@@ -242,6 +244,7 @@ impl Tab {
             pending_push: None,
             pending_ignore_templates: None,
             pending_clean: None,
+            pending_branch_rename: None,
             diff_seq: 0,
             commit_diff_seq: 0,
         }
@@ -589,6 +592,10 @@ fn dialog_overlay<'a>(tab: &'a Tab, tokens: Tokens) -> Option<Element<'a, Messag
 
     if let Some(request) = &tab.pending_clean {
         return Some(dialog::clean(tokens, request));
+    }
+
+    if let Some(request) = &tab.pending_branch_rename {
+        return Some(dialog::rename(tokens, request));
     }
 
     None

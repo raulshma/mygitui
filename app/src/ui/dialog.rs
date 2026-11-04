@@ -773,6 +773,63 @@ pub fn templates<'a>(tokens: Tokens, state: &IgnoreTemplates) -> Element<'a, Mes
 }
 
 // ---------------------------------------------------------------------------
+// Branch rename
+// ---------------------------------------------------------------------------
+
+/// Pending branch rename: the current name plus the edited target (the
+/// input starts prefilled with the current name).
+#[derive(Debug, Clone, Default)]
+pub struct RenameRequest {
+    pub old: String,
+    pub new: String,
+}
+
+impl RenameRequest {
+    /// The confirm unlocks only for a real change (non-empty and different
+    /// from the current name).
+    pub fn confirm_ready(&self) -> bool {
+        let new = self.new.trim();
+        !new.is_empty() && new != self.old.trim()
+    }
+}
+
+/// Centered modal renaming a branch: one text input prefilled with the
+/// current name.
+pub fn rename<'a>(tokens: Tokens, request: &RenameRequest) -> Element<'a, Message> {
+    let submit = if request.confirm_ready() {
+        Message::BranchRenameConfirmed
+    } else {
+        Message::Noop
+    };
+    let body = column![
+        text("Rename branch").size(14).font(theme::semibold()),
+        Space::new().height(4),
+        text(format!("Rename “{}” to:", request.old))
+            .size(12)
+            .color(tokens.muted_foreground),
+        text_input("new-branch-name", request.new.as_str())
+            .on_input(Message::BranchRenameChanged)
+            .on_submit(submit)
+            .size(11)
+            .padding([4, 6]),
+    ]
+    .spacing(6);
+
+    modal(
+        tokens,
+        400.0,
+        body.into(),
+        action_row(
+            tokens,
+            "Rename",
+            request
+                .confirm_ready()
+                .then_some(Message::BranchRenameConfirmed),
+        ),
+    )
+}
+
+// ---------------------------------------------------------------------------
 // Clean untracked files
 // ---------------------------------------------------------------------------
 
