@@ -249,6 +249,13 @@ pub struct WorkflowInfo {
     pub state: String,
 }
 
+/// The workflow name — what pick lists render (the path is too wide).
+impl std::fmt::Display for WorkflowInfo {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.name)
+    }
+}
+
 /// One `key=value` input of `workflow_dispatch`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct WorkflowInput {

@@ -63,8 +63,9 @@ use iced::widget::{
 use iced::{Alignment, Background, Border, Color, Element, Length};
 
 use crate::forge::{
-    CheckInfo, ForgeContext, ForgeError, ForgeStatus, PrCreated, PrInfo, WorkflowRun,
-    KIND_ALREADY_EXISTS, KIND_NOT_AUTHED, KIND_NO_GH,
+    CheckInfo, ForgeContext, ForgeError, ForgeStatus, PrCreated, PrInfo, WorkflowInfo,
+    WorkflowInput, WorkflowJob, WorkflowRun, WorkflowRunDetail, KIND_ALREADY_EXISTS,
+    KIND_NOT_AUTHED, KIND_NO_GH,
 };
 
 use super::repo_view::short_sha;
@@ -277,6 +278,32 @@ pub struct ForgeState {
     pub runs: Option<Vec<WorkflowRun>>,
     pub runs_loading: bool,
     pub runs_error: Option<String>,
+    /// Head branch the runs were filtered by (re-fetched after run actions).
+    pub runs_branch: String,
+    /// The expanded run's detail + logs (`workflow_run_detail`/`_logs`).
+    pub open_run: Option<u64>,
+    pub run_detail: Option<WorkflowRunDetail>,
+    pub run_detail_loading: bool,
+    pub run_detail_error: Option<String>,
+    /// Log lines of [`ForgeState::open_run`], oldest first (capped).
+    pub run_logs: Option<Vec<String>>,
+    pub run_logs_loading: bool,
+    pub run_logs_error: Option<String>,
+    /// Run id awaiting its cancel confirmation (inline two-step).
+    pub pending_run_cancel: Option<u64>,
+
+    // Dispatch form ("Dispatch workflow…" in the runs section).
+    pub dispatch_open: bool,
+    pub workflows: Option<Vec<WorkflowInfo>>,
+    pub workflows_loading: bool,
+    pub workflows_error: Option<String>,
+    pub dispatch_workflow: Option<WorkflowInfo>,
+    /// Ref to dispatch on (defaults to the current branch).
+    pub dispatch_ref: String,
+    /// Inputs as a JSON object string, parsed on submit.
+    pub dispatch_inputs: String,
+    pub dispatch_error: Option<String>,
+    pub dispatch_submitting: bool,
 
     // Create-PR form.
     pub create_open: bool,
@@ -351,6 +378,57 @@ pub enum Msg {
     RunsLoaded {
         result: Result<Vec<WorkflowRun>, String>,
     },
+
+    // Per-run actions (the shell runs the matching service call).
+    /// Expand one run's detail + logs (fetches both).
+    RunLogsPressed(u64),
+    /// Collapse the expanded run's detail view.
+    RunDetailClosed,
+    /// `workflow_run_detail` result for `run_id` (stale responses ignored;
+    /// boxed to keep the message enum small).
+    RunDetailLoaded {
+        run_id: u64,
+        result: Result<Box<WorkflowRunDetail>, String>,
+    },
+    /// `workflow_run_logs` result for `run_id` (stale responses ignored).
+    RunLogsLoaded {
+        run_id: u64,
+        result: Result<String, String>,
+    },
+    /// First press of Cancel: shows the inline confirmation row.
+    RunCancelPressed(u64),
+    /// Keep the run (dismiss the confirmation).
+    RunCancelDismissed,
+    /// Confirm the cancel (locks the row and hands off to the shell).
+    RunCancelConfirmed,
+    /// Rerun a completed run (`failed_only` reruns just the failed jobs).
+    RunRerunPressed {
+        run_id: u64,
+        failed_only: bool,
+    },
+    /// Result of any run-side action run by the shell (cancel / rerun).
+    RunActionDone {
+        run_id: u64,
+        label: String,
+        result: Result<String, ForgeError>,
+    },
+
+    // Dispatch form.
+    /// "Dispatch workflow…": toggles the form and (re)loads the workflow
+    /// list ("× Discard dispatch" closes through the same message).
+    DispatchPressed,
+    /// `workflow_list` result.
+    WorkflowsLoaded {
+        result: Result<Vec<WorkflowInfo>, String>,
+    },
+    /// Pick the workflow to dispatch.
+    DispatchWorkflowSelected(WorkflowInfo),
+    DispatchRefChanged(String),
+    DispatchInputsChanged(String),
+    /// Submit the dispatch (validates the inputs JSON object inline).
+    DispatchSubmit,
+    /// `workflow_dispatch` result.
+    DispatchDone(Result<String, ForgeError>),
 
     // Per-PR actions (the shell runs the matching service call).
     OpenInBrowser(u64),
@@ -508,6 +586,32 @@ pub enum Action {
         action: ReviewAction,
         body: String,
     },
+    /// Load one run's detail (`workflow_run_detail`) and its logs
+    /// (`workflow_run_logs`, whole run) in one go.
+    OpenRunLogs {
+        run_id: u64,
+    },
+    CancelRun {
+        run_id: u64,
+    },
+    RerunRun {
+        run_id: u64,
+        failed_only: bool,
+    },
+    /// Re-fetch the runs list for the selected PR's head branch; `reopen`
+    /// re-loads an open run's detail + logs right behind the list.
+    RefreshRuns {
+        branch: String,
+        reopen: Option<u64>,
+    },
+    /// Load the dispatchable workflows (`workflow_list`).
+    LoadWorkflows,
+    /// Trigger a `workflow_dispatch` (`inputs` already validated).
+    DispatchWorkflow {
+        workflow: String,
+        git_ref: String,
+        inputs: Vec<WorkflowInput>,
+    },
     CreatePr {
         base: String,
         head: String,
@@ -593,6 +697,91 @@ pub fn comment_body(state: &ForgeState) -> String {
     state.comment.text().trim().to_string()
 }
 
+/// Whether a run is still queued/running (cancelable, not rerunnable).
+pub fn run_is_active(status: &str) -> bool {
+    matches!(
+        status,
+        "queued" | "in_progress" | "waiting" | "requested" | "pending"
+    )
+}
+
+/// Log text → display lines, oldest first, capped at `cap` (the newest are
+/// kept — tail-follow semantics like `output_panel`).
+pub fn split_log_lines(log: &str, cap: usize) -> Vec<String> {
+    let cap = cap.max(1);
+    let mut lines: Vec<String> = log.lines().map(str::to_string).collect();
+    let excess = lines.len().saturating_sub(cap);
+    if excess > 0 {
+        lines.rotate_left(excess);
+        // Mark the cut instead of silently dropping history.
+        lines[0] = format!("… {} earlier lines dropped", excess);
+        lines.truncate(cap);
+    }
+    lines
+}
+
+/// Cap for [`split_log_lines`] (mirrors `output_panel::MAX_LINES_PER_RUN`).
+pub const MAX_LOG_LINES: usize = 5_000;
+
+/// Parse the dispatch form's inputs field: a JSON **object** whose values
+/// must be scalars (gh inputs are strings; numbers/bools are stringified).
+/// Empty/whitespace input means "no inputs".
+pub fn parse_inputs_json(raw: &str) -> Result<Vec<WorkflowInput>, String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Ok(Vec::new());
+    }
+    let value: serde_json::Value = serde_json::from_str(trimmed)
+        .map_err(|err| format!("Inputs must be a JSON object: {err}"))?;
+    let object = value
+        .as_object()
+        .ok_or_else(|| "Inputs must be a JSON object (e.g. {\"debug\": \"true\"})".to_string())?;
+    let mut inputs = Vec::with_capacity(object.len());
+    for (key, value) in object {
+        let text = match value {
+            serde_json::Value::String(text) => text.clone(),
+            serde_json::Value::Number(number) => number.to_string(),
+            serde_json::Value::Bool(flag) => flag.to_string(),
+            serde_json::Value::Null => String::new(),
+            _ => {
+                return Err(format!(
+                "Input “{key}” must be a scalar (string, number, or boolean), not a nested value"
+            ))
+            }
+        };
+        if key.trim().is_empty() {
+            return Err("Input keys must not be empty".to_string());
+        }
+        inputs.push(WorkflowInput {
+            key: key.clone(),
+            value: text,
+        });
+    }
+    // Deterministic order (serde_json maps are BTree-backed by default,
+    // but sort explicitly so dispatches are stable regardless).
+    inputs.sort_by(|a, b| a.key.cmp(&b.key));
+    Ok(inputs)
+}
+
+/// Whether the dispatch form can be submitted: a workflow is picked, the
+/// form is not already submitting, and the ref is non-empty.
+pub fn can_dispatch(state: &ForgeState) -> bool {
+    !state.dispatch_submitting
+        && state.dispatch_workflow.is_some()
+        && !resolve_dispatch_ref(state).is_empty()
+}
+
+/// The ref the dispatch runs on: the typed one when set, else the mirrored
+/// current branch (empty when neither is known).
+pub fn resolve_dispatch_ref(state: &ForgeState) -> String {
+    let typed = state.dispatch_ref.trim();
+    if typed.is_empty() {
+        state.current_branch.trim().to_string()
+    } else {
+        typed.to_string()
+    }
+}
+
 /// Guidance text for a structured [`ForgeError`] (install/auth hints for
 /// the environment kinds, `kind: message` otherwise).
 pub fn forge_error_text(err: &ForgeError) -> String {
@@ -615,6 +804,18 @@ impl ForgeState {
 // ---------------------------------------------------------------------------
 // Update
 // ---------------------------------------------------------------------------
+
+/// Collapses the expanded run's detail view (detail + logs + confirm row).
+fn close_run_detail(state: &mut ForgeState) {
+    state.open_run = None;
+    state.run_detail = None;
+    state.run_detail_error = None;
+    state.run_detail_loading = false;
+    state.run_logs = None;
+    state.run_logs_error = None;
+    state.run_logs_loading = false;
+    state.pending_run_cancel = None;
+}
 
 /// Pure state machine: apply `msg`, return the intent (if any) for the shell
 /// to execute. See the module docs for the update-shape decision.
@@ -687,6 +888,7 @@ pub fn update(state: &mut ForgeState, msg: Msg) -> Option<Action> {
                             state.selected = None;
                             state.checks = None;
                             state.runs = None;
+                            close_run_detail(state);
                         }
                     }
                     state.prs = Some(rows);
@@ -698,6 +900,7 @@ pub fn update(state: &mut ForgeState, msg: Msg) -> Option<Action> {
                     state.selected = None;
                     state.checks = None;
                     state.runs = None;
+                    close_run_detail(state);
                 }
             }
             None
@@ -712,6 +915,8 @@ pub fn update(state: &mut ForgeState, msg: Msg) -> Option<Action> {
             state.runs = None;
             state.runs_error = None;
             state.runs_loading = true;
+            state.runs_branch = head.clone();
+            close_run_detail(state);
             Some(Action::LoadPrDetails {
                 number,
                 head_branch: head,
@@ -754,6 +959,210 @@ pub fn update(state: &mut ForgeState, msg: Msg) -> Option<Action> {
                 }
             }
             None
+        }
+
+        // Per-run actions.
+        Msg::RunLogsPressed(run_id) => {
+            state.open_run = Some(run_id);
+            state.run_detail = None;
+            state.run_detail_error = None;
+            state.run_detail_loading = true;
+            state.run_logs = None;
+            state.run_logs_error = None;
+            state.run_logs_loading = true;
+            state.pending_run_cancel = None;
+            Some(Action::OpenRunLogs { run_id })
+        }
+        Msg::RunDetailClosed => {
+            close_run_detail(state);
+            None
+        }
+        Msg::RunDetailLoaded { run_id, result } => {
+            if state.open_run == Some(run_id) {
+                state.run_detail_loading = false;
+                match result {
+                    Ok(detail) => {
+                        state.run_detail = Some(*detail);
+                        state.run_detail_error = None;
+                    }
+                    Err(error) => {
+                        state.run_detail = None;
+                        state.run_detail_error = Some(error);
+                    }
+                }
+            }
+            None
+        }
+        Msg::RunLogsLoaded { run_id, result } => {
+            if state.open_run == Some(run_id) {
+                state.run_logs_loading = false;
+                match result {
+                    Ok(logs) => {
+                        state.run_logs = Some(split_log_lines(&logs, MAX_LOG_LINES));
+                        state.run_logs_error = None;
+                    }
+                    Err(error) => {
+                        state.run_logs = None;
+                        state.run_logs_error = Some(error);
+                    }
+                }
+            }
+            None
+        }
+        Msg::RunCancelPressed(run_id) => {
+            // Confirm only cancelable runs (a completed run cannot be).
+            state.pending_run_cancel = state
+                .runs
+                .as_ref()
+                .and_then(|runs| runs.iter().find(|run| run.database_id == run_id))
+                .filter(|run| run_is_active(&run.status))
+                .map(|run| run.database_id);
+            None
+        }
+        Msg::RunCancelDismissed => {
+            state.pending_run_cancel = None;
+            None
+        }
+        Msg::RunCancelConfirmed => {
+            let run_id = state.pending_run_cancel.take()?;
+            state.busy = Some(Busy {
+                number: None,
+                label: "Cancel run".to_string(),
+            });
+            Some(Action::CancelRun { run_id })
+        }
+        Msg::RunRerunPressed {
+            run_id,
+            failed_only,
+        } => {
+            if state.busy.is_some() {
+                return None;
+            }
+            state.busy = Some(Busy {
+                number: None,
+                label: if failed_only {
+                    "Rerun failed".to_string()
+                } else {
+                    "Rerun".to_string()
+                },
+            });
+            Some(Action::RerunRun {
+                run_id,
+                failed_only,
+            })
+        }
+        Msg::RunActionDone {
+            run_id: _,
+            label,
+            result,
+        } => {
+            state.busy = None;
+            match result {
+                Ok(output) => {
+                    state.notice = Some(if output.trim().is_empty() {
+                        format!("{label} ok")
+                    } else {
+                        clip(&format!("{label}: {output}"), 140)
+                    });
+                    state.error = None;
+                    // The runs list refreshes; an open run detail re-loads
+                    // right behind it (same branch/filter vocabulary).
+                    Some(Action::RefreshRuns {
+                        branch: state.runs_branch.clone(),
+                        reopen: state.open_run,
+                    })
+                }
+                Err(err) => {
+                    state.error = Some(format!("{label} failed: {}", forge_error_text(&err)));
+                    None
+                }
+            }
+        }
+
+        // Dispatch form.
+        Msg::DispatchPressed => {
+            state.dispatch_open = !state.dispatch_open;
+            state.dispatch_error = None;
+            if state.dispatch_open {
+                state.workflows = None;
+                state.workflows_error = None;
+                state.workflows_loading = true;
+                state.dispatch_workflow = None;
+                state.dispatch_inputs.clear();
+                Some(Action::LoadWorkflows)
+            } else {
+                None
+            }
+        }
+        Msg::WorkflowsLoaded { result } => {
+            state.workflows_loading = false;
+            match result {
+                Ok(workflows) => {
+                    state.workflows = Some(workflows);
+                    state.workflows_error = None;
+                }
+                Err(error) => {
+                    state.workflows = None;
+                    state.workflows_error = Some(error);
+                }
+            }
+            None
+        }
+        Msg::DispatchWorkflowSelected(workflow) => {
+            state.dispatch_workflow = Some(workflow);
+            None
+        }
+        Msg::DispatchRefChanged(git_ref) => {
+            state.dispatch_ref = git_ref;
+            None
+        }
+        Msg::DispatchInputsChanged(inputs) => {
+            state.dispatch_inputs = inputs;
+            state.dispatch_error = None;
+            None
+        }
+        Msg::DispatchSubmit => {
+            if !can_dispatch(state) {
+                return None;
+            }
+            let inputs = match parse_inputs_json(&state.dispatch_inputs) {
+                Ok(inputs) => inputs,
+                Err(error) => {
+                    state.dispatch_error = Some(error);
+                    return None;
+                }
+            };
+            let workflow = state.dispatch_workflow.clone()?;
+            state.dispatch_submitting = true;
+            state.dispatch_error = None;
+            Some(Action::DispatchWorkflow {
+                workflow: workflow.name.clone(),
+                git_ref: resolve_dispatch_ref(state),
+                inputs,
+            })
+        }
+        Msg::DispatchDone(result) => {
+            state.dispatch_submitting = false;
+            match result {
+                Ok(output) => {
+                    state.dispatch_open = false;
+                    state.dispatch_inputs.clear();
+                    state.notice = Some(if output.trim().is_empty() {
+                        "Dispatch ok".to_string()
+                    } else {
+                        clip(&format!("Dispatch: {output}"), 140)
+                    });
+                    state.runs_loading = true;
+                    Some(Action::RefreshRuns {
+                        branch: state.runs_branch.clone(),
+                        reopen: None,
+                    })
+                }
+                Err(err) => {
+                    state.dispatch_error = Some(forge_error_text(&err));
+                    None
+                }
+            }
         }
 
         Msg::OpenInBrowser(number) => state.pr_url(number).map(Action::OpenUrl),
@@ -1559,18 +1968,42 @@ fn check_row<'a>(check: &'a CheckInfo, tokens: Tokens) -> Element<'a, Msg> {
 
 fn runs_section<'a>(state: &'a ForgeState, tokens: Tokens) -> Element<'a, Msg> {
     let mut section = column![].spacing(2).width(Length::Fill);
-    section = section.push(
+    let mut head = row![].spacing(6).align_y(Alignment::Center);
+    head = head.push(
         text("Workflow runs")
             .size(10)
             .color(tokens.muted_foreground),
     );
+    head = head.push(Space::new().width(Length::Fill));
+    head = head.push(action_button(
+        if state.dispatch_open {
+            "× Discard dispatch"
+        } else {
+            "Dispatch workflow…"
+        },
+        theme::ButtonKind::Secondary,
+        true,
+        Msg::DispatchPressed,
+        tokens,
+    ));
+    section = section.push(head);
+
+    if state.dispatch_open {
+        section = section.push(dispatch_form(state, tokens));
+    }
 
     let body: Element<'a, Msg> = match (&state.runs, state.runs_loading, &state.runs_error) {
         (Some(runs), _, _) if runs.is_empty() => note(tokens, "No workflow runs for this branch."),
         (Some(runs), _, _) => {
             let mut rows = column![].spacing(1).width(Length::Fill);
             for run in runs {
-                rows = rows.push(run_row(run, tokens));
+                rows = rows.push(run_row(run, state, tokens));
+                if state.open_run == Some(run.database_id) {
+                    rows = rows.push(run_detail_section(state, tokens));
+                }
+                if state.pending_run_cancel == Some(run.database_id) {
+                    rows = rows.push(run_cancel_confirm(run, tokens));
+                }
             }
             let height = (runs.len() as f32 * 28.0).clamp(28.0, 150.0);
             scrollable(rows)
@@ -1599,8 +2032,60 @@ fn runs_section<'a>(state: &'a ForgeState, tokens: Tokens) -> Element<'a, Msg> {
         .into()
 }
 
-fn run_row<'a>(run: &'a WorkflowRun, tokens: Tokens) -> Element<'a, Msg> {
+fn run_row<'a>(run: &'a WorkflowRun, state: &'a ForgeState, tokens: Tokens) -> Element<'a, Msg> {
     let (glyph, color) = run_glyph(run, tokens);
+    let locked = state.busy.is_some();
+
+    let mut buttons = row![].spacing(3).align_y(Alignment::Center);
+    buttons = buttons.push(action_button(
+        if state.open_run == Some(run.database_id) {
+            "Hide logs"
+        } else {
+            "Logs"
+        },
+        theme::ButtonKind::Ghost,
+        !locked,
+        if state.open_run == Some(run.database_id) {
+            Msg::RunDetailClosed
+        } else {
+            Msg::RunLogsPressed(run.database_id)
+        },
+        tokens,
+    ));
+    if run_is_active(&run.status) {
+        buttons = buttons.push(action_button(
+            "Cancel",
+            theme::ButtonKind::Ghost,
+            !locked,
+            Msg::RunCancelPressed(run.database_id),
+            tokens,
+        ));
+    } else {
+        buttons = buttons.push(action_button(
+            "Rerun",
+            theme::ButtonKind::Ghost,
+            !locked,
+            Msg::RunRerunPressed {
+                run_id: run.database_id,
+                failed_only: false,
+            },
+            tokens,
+        ));
+        // `gh run rerun --failed` only applies to failed/timed-out runs.
+        if matches!(run.conclusion.as_str(), "failure" | "timed_out") {
+            buttons = buttons.push(action_button(
+                "Rerun failed",
+                theme::ButtonKind::Ghost,
+                !locked,
+                Msg::RunRerunPressed {
+                    run_id: run.database_id,
+                    failed_only: true,
+                },
+                tokens,
+            ));
+        }
+    }
+
     row![
         text(glyph).size(10).color(color),
         column![
@@ -1619,11 +2104,265 @@ fn run_row<'a>(run: &'a WorkflowRun, tokens: Tokens) -> Element<'a, Msg> {
         ]
         .spacing(0)
         .width(Length::Fill),
+        buttons,
     ]
     .spacing(6)
     .align_y(Alignment::Center)
     .width(Length::Fill)
     .into()
+}
+
+/// Inline two-step confirmation for cancelling a run.
+fn run_cancel_confirm<'a>(run: &'a WorkflowRun, tokens: Tokens) -> Element<'a, Msg> {
+    row![
+        text(format!("Cancel run #{}?", run.number))
+            .size(9)
+            .color(tokens.deleted),
+        action_button(
+            "Confirm",
+            theme::ButtonKind::Danger,
+            true,
+            Msg::RunCancelConfirmed,
+            tokens,
+        ),
+        action_button(
+            "Keep",
+            theme::ButtonKind::Secondary,
+            true,
+            Msg::RunCancelDismissed,
+            tokens,
+        ),
+    ]
+    .spacing(4)
+    .align_y(Alignment::Center)
+    .padding([2, 0])
+    .width(Length::Fill)
+    .into()
+}
+
+/// Expanded run view: status line, jobs/steps summary and the run's log
+/// lines (monospace-ish scrollable, tail-capped like the output panel).
+fn run_detail_section<'a>(state: &'a ForgeState, tokens: Tokens) -> Element<'a, Msg> {
+    let mut detail = column![].spacing(3).width(Length::Fill);
+
+    match (
+        &state.run_detail,
+        state.run_detail_loading,
+        &state.run_detail_error,
+    ) {
+        (_, true, _) => detail = detail.push(note(tokens, "Loading run detail…")),
+        (_, false, Some(error)) => {
+            detail = detail.push(note(tokens, &clip(error, 140)));
+        }
+        (Some(loaded), false, _) => {
+            let run = &loaded.run;
+            detail = detail.push(
+                text(format!(
+                    "attempt {} · {} · {}",
+                    run.attempt, run.status, run.conclusion
+                ))
+                .size(9)
+                .font(theme::mono())
+                .color(tokens.muted_foreground),
+            );
+            let mut jobs = column![].spacing(1).width(Length::Fill);
+            for job in &loaded.jobs {
+                let (glyph, color) = check_glyph(&conclusion_glyph_key(job), tokens);
+                let mut job_row = row![].spacing(4).align_y(Alignment::Center);
+                job_row = job_row.push(text(glyph).size(9).color(color));
+                job_row = job_row.push(
+                    text(job.name.as_str())
+                        .size(9)
+                        .font(theme::mono())
+                        .color(tokens.foreground),
+                );
+                job_row = job_row.push(
+                    text(format!(
+                        "{} · {} steps",
+                        if job.status.is_empty() {
+                            "?"
+                        } else {
+                            job.status.as_str()
+                        },
+                        job.steps.len()
+                    ))
+                    .size(8)
+                    .color(tokens.muted_foreground),
+                );
+                jobs = jobs.push(job_row);
+            }
+            let jobs_height = (loaded.jobs.len() as f32 * 14.0).clamp(14.0, 60.0);
+            detail = detail.push(
+                scrollable(jobs)
+                    .height(Length::Fixed(jobs_height))
+                    .width(Length::Fill),
+            );
+        }
+        (None, false, None) => {}
+    }
+
+    // Log lines (whole run; failed-steps-only is a follow-up filter).
+    let logs: Element<'a, Msg> = match (
+        &state.run_logs,
+        state.run_logs_loading,
+        &state.run_logs_error,
+    ) {
+        (Some(lines), _, _) if lines.is_empty() => note(
+            tokens,
+            "No log output yet (empty while the run is active is normal).",
+        ),
+        (Some(lines), _, _) => {
+            let mut log_rows = column![].spacing(0).width(Length::Fill);
+            for line in lines {
+                log_rows = log_rows.push(
+                    text(line.as_str())
+                        .size(8)
+                        .font(theme::mono())
+                        .color(tokens.foreground),
+                );
+            }
+            scrollable(log_rows)
+                .height(Length::Fixed(220.0))
+                .width(Length::Fill)
+                .into()
+        }
+        (None, true, _) => note(tokens, "Loading logs…"),
+        (None, false, Some(error)) => note(tokens, &clip(error, 140)),
+        (None, false, None) => note(tokens, "…"),
+    };
+    detail = detail.push(logs);
+
+    container(detail)
+        .padding([4, 6])
+        .width(Length::Fill)
+        .style(move |_theme| container::Style {
+            background: Some(Background::Color(tokens.card)),
+            border: Border {
+                color: theme::with_alpha(tokens.border, 0.6),
+                width: 1.0,
+                radius: 6.0.into(),
+            },
+            ..container::Style::default()
+        })
+        .into()
+}
+
+/// Job conclusion mapped onto the check glyph vocabulary (an active job
+/// shows the pending glyph; missing conclusions fall back to unknown).
+fn conclusion_glyph_key(job: &WorkflowJob) -> String {
+    if !job.conclusion.is_empty() {
+        return match job.conclusion.as_str() {
+            "success" => "pass".to_string(),
+            "failure" | "timed_out" | "startup_failure" | "action_required" => "fail".to_string(),
+            "cancelled" => "skipping".to_string(),
+            "skipped" | "neutral" => "skipping".to_string(),
+            other => other.to_string(),
+        };
+    }
+    if job.status.is_empty() {
+        String::new()
+    } else {
+        "pending".to_string()
+    }
+}
+
+/// Inline dispatch form: workflow picker, ref (defaults to the current
+/// branch) and an inputs JSON object validated on submit.
+fn dispatch_form<'a>(state: &'a ForgeState, tokens: Tokens) -> Element<'a, Msg> {
+    let mut form = column![].spacing(3).width(Length::Fill);
+
+    let mut picks = row![].spacing(6).align_y(Alignment::Center);
+    picks = picks.push(text("workflow").size(9).color(tokens.muted_foreground));
+    picks = picks.push(match (&state.workflows, state.workflows_loading) {
+        (Some(workflows), _) => Element::from(
+            pick_list(
+                workflows.as_slice(),
+                state.dispatch_workflow.as_ref(),
+                |workflow| Msg::DispatchWorkflowSelected(workflow.clone()),
+            )
+            .text_size(10)
+            .padding([3, 6])
+            .width(Length::Fixed(220.0)),
+        ),
+        (None, true) => text("Loading workflows…").size(9).into(),
+        (None, false) => match &state.workflows_error {
+            Some(error) => note(tokens, &clip(error, 100)),
+            None => note(tokens, "Press ⟳ or reopen to retry."),
+        },
+    });
+    picks = picks.push(text("ref").size(9).color(tokens.muted_foreground));
+    picks = picks.push(
+        text_input(
+            &if state.current_branch.trim().is_empty() {
+                "branch or sha".to_string()
+            } else {
+                state.current_branch.trim().to_string()
+            },
+            state.dispatch_ref.as_str(),
+        )
+        .on_input(Msg::DispatchRefChanged)
+        .size(10)
+        .padding([3, 6])
+        .width(Length::Fixed(150.0)),
+    );
+    form = form.push(picks);
+
+    form = form.push(
+        text_input(
+            r#"Inputs JSON object, e.g. {"debug": "true"} — optional"#,
+            state.dispatch_inputs.as_str(),
+        )
+        .on_input(Msg::DispatchInputsChanged)
+        .on_submit(Msg::DispatchSubmit)
+        .size(10)
+        .padding([3, 6])
+        .width(Length::Fill),
+    );
+
+    let enabled = can_dispatch(state);
+    form = form.push(
+        row![
+            Space::new().width(Length::Fill),
+            button(
+                text(if state.dispatch_submitting {
+                    "Dispatching…"
+                } else {
+                    "Run workflow"
+                })
+                .size(9)
+                .color(tokens.primary_foreground),
+            )
+            .style(theme::button_style(
+                tokens,
+                if enabled {
+                    theme::ButtonKind::Primary
+                } else {
+                    theme::ButtonKind::Secondary
+                },
+            ))
+            .padding([2, 10])
+            .on_press_maybe(enabled.then_some(Msg::DispatchSubmit)),
+        ]
+        .align_y(Alignment::Center),
+    );
+
+    if let Some(error) = &state.dispatch_error {
+        form = form.push(text(error.clone()).size(9).color(tokens.deleted));
+    }
+
+    container(form)
+        .padding([4, 6])
+        .width(Length::Fill)
+        .style(move |_theme| container::Style {
+            background: Some(Background::Color(theme::with_alpha(tokens.muted, 0.08))),
+            border: Border {
+                color: theme::with_alpha(tokens.border, 0.6),
+                width: 1.0,
+                radius: 6.0.into(),
+            },
+            ..container::Style::default()
+        })
+        .into()
 }
 
 // ---------------------------------------------------------------------------
@@ -2597,6 +3336,364 @@ mod tests {
             Msg::CommentChanged(text_editor::Action::Edit(text_editor::Edit::Insert('x'))),
         );
         assert_eq!(state.comment_error, None);
+    }
+
+    // -- workflow run actions -----------------------------------------------------
+
+    fn run_fixture(database_id: u64, status: &str, conclusion: &str) -> WorkflowRun {
+        WorkflowRun {
+            database_id,
+            number: 27,
+            name: "CI".into(),
+            display_title: "chore(release): bump version".into(),
+            event: "push".into(),
+            head_branch: "pr-12".into(),
+            head_sha: "abcd1234".into(),
+            status: status.into(),
+            conclusion: conclusion.into(),
+            url: format!("https://github.com/acme/widget/actions/runs/{database_id}"),
+            created_at: None,
+            updated_at: None,
+            started_at: None,
+            attempt: 1,
+            workflow_database_id: 1,
+        }
+    }
+
+    #[test]
+    fn run_is_active_matches_gh_statuses() {
+        assert!(run_is_active("queued"));
+        assert!(run_is_active("in_progress"));
+        assert!(run_is_active("waiting"));
+        assert!(!run_is_active("completed"));
+        assert!(!run_is_active(""));
+    }
+
+    #[test]
+    fn split_log_lines_keeps_the_tail_and_marks_the_cut() {
+        assert_eq!(split_log_lines("", 10), Vec::<String>::new());
+        let short = split_log_lines("a\nb\nc", 10);
+        assert_eq!(short, vec!["a", "b", "c"]);
+        let capped = split_log_lines("1\n2\n3\n4\n5", 3);
+        assert_eq!(capped.len(), 3);
+        assert_eq!(capped[0], "… 2 earlier lines dropped");
+        assert_eq!(capped[1], "4");
+        assert_eq!(capped[2], "5");
+        // Cap of zero clamps to one line (the newest, behind the cut mark).
+        assert_eq!(
+            split_log_lines("x\ny", 0),
+            vec!["… 1 earlier lines dropped"]
+        );
+    }
+
+    #[test]
+    fn parse_inputs_json_accepts_scalars_and_rejects_the_rest() {
+        assert_eq!(parse_inputs_json(""), Ok(Vec::new()));
+        assert_eq!(parse_inputs_json("   "), Ok(Vec::new()));
+        assert_eq!(
+            parse_inputs_json(r#"{"debug": "true", "count": 3, "dry": false}"#),
+            Ok(vec![
+                WorkflowInput {
+                    key: "count".into(),
+                    value: "3".into()
+                },
+                WorkflowInput {
+                    key: "debug".into(),
+                    value: "true".into()
+                },
+                WorkflowInput {
+                    key: "dry".into(),
+                    value: "false".into()
+                },
+            ])
+        );
+        // JSON null stringifies to the empty value (gh inputs are strings).
+        assert_eq!(
+            parse_inputs_json(r#"{"empty": null}"#),
+            Ok(vec![WorkflowInput {
+                key: "empty".into(),
+                value: String::new()
+            }])
+        );
+        // Not an object / not JSON at all.
+        assert!(parse_inputs_json(r#"["a"]"#).is_err());
+        assert!(parse_inputs_json("{not json").is_err());
+        // Nested values are rejected with the key named.
+        assert!(parse_inputs_json(r#"{"bad": {"deep": 1}}"#)
+            .unwrap_err()
+            .contains("bad"));
+    }
+
+    #[test]
+    fn dispatch_submit_validates_inputs_and_defaults_ref() {
+        let mut state = state_with(|s| {
+            s.current_branch = "feature-x".into();
+            s.workflows = Some(vec![WorkflowInfo {
+                id: 1,
+                name: "CI".into(),
+                path: ".github/workflows/ci.yml".into(),
+                state: "active".into(),
+            }]);
+        });
+        // Nothing picked yet: no action.
+        assert_eq!(update(&mut state, Msg::DispatchSubmit), None);
+
+        state.dispatch_workflow = Some(state.workflows.as_ref().unwrap()[0].clone());
+        // Invalid JSON object: inline error, nothing submitted.
+        state.dispatch_inputs = "[1,2]".into();
+        assert_eq!(update(&mut state, Msg::DispatchSubmit), None);
+        assert!(state.dispatch_error.is_some());
+        assert!(!state.dispatch_submitting);
+
+        // Valid object: submit carries the parsed inputs + current branch.
+        state.dispatch_inputs = r#"{"debug": "true"}"#.into();
+        assert_eq!(
+            update(&mut state, Msg::DispatchSubmit),
+            Some(Action::DispatchWorkflow {
+                workflow: "CI".into(),
+                git_ref: "feature-x".into(),
+                inputs: vec![WorkflowInput {
+                    key: "debug".into(),
+                    value: "true".into()
+                }],
+            })
+        );
+        assert!(state.dispatch_submitting);
+        assert_eq!(state.dispatch_error, None);
+
+        // A typed ref wins over the mirrored current branch.
+        let state = state_with(|s| {
+            s.current_branch = "feature-x".into();
+            s.dispatch_ref = " main ".into();
+            s.dispatch_workflow = Some(WorkflowInfo {
+                id: 1,
+                name: "CI".into(),
+                path: ".github/workflows/ci.yml".into(),
+                state: "active".into(),
+            });
+        });
+        assert_eq!(resolve_dispatch_ref(&state), "main");
+        assert!(can_dispatch(&state));
+    }
+
+    #[test]
+    fn dispatch_pressed_opens_form_and_requests_workflow_list() {
+        let mut state = ForgeState::default();
+        assert_eq!(
+            update(&mut state, Msg::DispatchPressed),
+            Some(Action::LoadWorkflows)
+        );
+        assert!(state.dispatch_open);
+        assert!(state.workflows_loading);
+
+        update(
+            &mut state,
+            Msg::WorkflowsLoaded {
+                result: Ok(vec![WorkflowInfo {
+                    id: 1,
+                    name: "CI".into(),
+                    path: ".github/workflows/ci.yml".into(),
+                    state: "active".into(),
+                }]),
+            },
+        );
+        assert_eq!(state.workflows.as_ref().unwrap().len(), 1);
+        assert!(!state.workflows_loading);
+
+        // Toggling again discards the form (same message as the × button).
+        assert_eq!(update(&mut state, Msg::DispatchPressed), None);
+        assert!(!state.dispatch_open);
+    }
+
+    #[test]
+    fn run_logs_pressed_fetches_detail_and_logs() {
+        let mut state = state_with(|s| {
+            s.runs = Some(vec![run_fixture(99, "completed", "failure")]);
+            s.pending_run_cancel = Some(99);
+        });
+        assert_eq!(
+            update(&mut state, Msg::RunLogsPressed(99)),
+            Some(Action::OpenRunLogs { run_id: 99 })
+        );
+        assert_eq!(state.open_run, Some(99));
+        assert!(state.run_detail_loading && state.run_logs_loading);
+        assert_eq!(
+            state.pending_run_cancel, None,
+            "confirm row collapses when the detail opens"
+        );
+
+        // Results land for the open run…
+        update(
+            &mut state,
+            Msg::RunDetailLoaded {
+                run_id: 99,
+                result: Err("gh died".into()),
+            },
+        );
+        assert_eq!(
+            state.run_detail_error.as_deref(),
+            Some("gh died"),
+            "detail errors surface"
+        );
+        update(
+            &mut state,
+            Msg::RunLogsLoaded {
+                run_id: 99,
+                result: Ok("line1\nline2\nline3".into()),
+            },
+        );
+        assert_eq!(
+            state.run_logs.as_deref(),
+            Some(
+                &[
+                    "line1".to_string(),
+                    "line2".to_string(),
+                    "line3".to_string()
+                ][..]
+            )
+        );
+
+        // …but stale responses for another run are ignored.
+        update(
+            &mut state,
+            Msg::RunLogsLoaded {
+                run_id: 55,
+                result: Err("stale".into()),
+            },
+        );
+        assert_eq!(state.run_logs_error, None);
+
+        // Close clears everything.
+        assert_eq!(update(&mut state, Msg::RunDetailClosed), None);
+        assert_eq!(state.open_run, None);
+        assert_eq!(state.run_logs, None);
+    }
+
+    #[test]
+    fn run_cancel_requires_confirmation_and_locks() {
+        let mut state = state_with(|s| {
+            s.runs = Some(vec![
+                run_fixture(1, "in_progress", ""),
+                run_fixture(2, "completed", "success"),
+            ]);
+        });
+        // First press only arms the inline confirmation…
+        assert_eq!(update(&mut state, Msg::RunCancelPressed(1)), None);
+        assert_eq!(state.pending_run_cancel, Some(1));
+        // …pressing Cancel on a completed run clears the pending confirm
+        // (completed runs are not cancelable).
+        update(&mut state, Msg::RunCancelPressed(2));
+        assert_eq!(state.pending_run_cancel, None);
+
+        // Dismiss clears it.
+        update(&mut state, Msg::RunCancelDismissed);
+        assert_eq!(state.pending_run_cancel, None);
+
+        // Confirm hands off and locks the panel.
+        update(&mut state, Msg::RunCancelPressed(1));
+        assert_eq!(
+            update(&mut state, Msg::RunCancelConfirmed),
+            Some(Action::CancelRun { run_id: 1 })
+        );
+        assert_eq!(state.busy.as_ref().unwrap().label, "Cancel run");
+        assert_eq!(state.pending_run_cancel, None);
+    }
+
+    #[test]
+    fn run_rerun_maps_failed_only_flag() {
+        let mut state = ForgeState::default();
+        assert_eq!(
+            update(
+                &mut state,
+                Msg::RunRerunPressed {
+                    run_id: 5,
+                    failed_only: false
+                }
+            ),
+            Some(Action::RerunRun {
+                run_id: 5,
+                failed_only: false
+            })
+        );
+        assert_eq!(state.busy.as_ref().unwrap().label, "Rerun");
+        // While busy, further run actions are ignored.
+        assert_eq!(
+            update(
+                &mut state,
+                Msg::RunRerunPressed {
+                    run_id: 5,
+                    failed_only: true
+                }
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn run_action_done_refreshes_runs_and_reopens_detail() {
+        let mut state = state_with(|s| {
+            s.runs_branch = "pr-12".into();
+            s.busy = Some(Busy {
+                number: None,
+                label: "Cancel run".into(),
+            });
+        });
+        // No detail open: plain refresh of the runs list.
+        assert_eq!(
+            update(
+                &mut state,
+                Msg::RunActionDone {
+                    run_id: 1,
+                    label: "Cancel run".into(),
+                    result: Ok("canceled".into())
+                }
+            ),
+            Some(Action::RefreshRuns {
+                branch: "pr-12".into(),
+                reopen: None
+            })
+        );
+        assert_eq!(state.busy, None);
+        assert_eq!(state.notice.as_deref(), Some("Cancel run: canceled"));
+
+        // Detail open: the refresh re-opens it.
+        state.open_run = Some(1);
+        assert_eq!(
+            update(
+                &mut state,
+                Msg::RunActionDone {
+                    run_id: 1,
+                    label: "Rerun".into(),
+                    result: Ok(String::new())
+                }
+            ),
+            Some(Action::RefreshRuns {
+                branch: "pr-12".into(),
+                reopen: Some(1)
+            })
+        );
+        assert_eq!(state.notice.as_deref(), Some("Rerun ok"));
+
+        // Failures surface as the panel error and refresh nothing.
+        assert_eq!(
+            update(
+                &mut state,
+                Msg::RunActionDone {
+                    run_id: 1,
+                    label: "Rerun".into(),
+                    result: Err(ForgeError {
+                        kind: KIND_NOT_AUTHED.into(),
+                        message: "not logged in".into(),
+                        url: None,
+                    })
+                }
+            ),
+            None
+        );
+        assert_eq!(
+            state.error.as_deref(),
+            Some("Rerun failed: gh is not authenticated — run `gh auth login`")
+        );
     }
 
     // -- status / context ------------------------------------------------------------

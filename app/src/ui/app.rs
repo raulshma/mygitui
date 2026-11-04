@@ -2076,6 +2076,136 @@ impl App {
                     std::convert::identity,
                 )
             }
+            forge_panel::Action::OpenRunLogs { run_id } => {
+                let services = self.services.clone();
+                let services2 = self.services.clone();
+                let repo_id2 = repo_id.clone();
+                Task::batch([
+                    Task::perform(
+                        async move {
+                            Message::Forge(forge_panel::Msg::RunDetailLoaded {
+                                run_id,
+                                result: crate::service::forge::workflow_run_detail(
+                                    &services, repo_id2, run_id,
+                                )
+                                .await
+                                .map(Box::new),
+                            })
+                        },
+                        std::convert::identity,
+                    ),
+                    Task::perform(
+                        async move {
+                            let result = crate::service::forge::workflow_run_logs(
+                                &services2, repo_id, run_id, None, false,
+                            )
+                            .await;
+                            Message::Forge(forge_panel::Msg::RunLogsLoaded { run_id, result })
+                        },
+                        std::convert::identity,
+                    ),
+                ])
+            }
+            forge_panel::Action::CancelRun { run_id } => {
+                let services = self.services.clone();
+                Task::perform(
+                    async move {
+                        Message::Forge(forge_panel::Msg::RunActionDone {
+                            run_id,
+                            label: "Cancel run".to_string(),
+                            result: crate::service::forge::workflow_run_cancel(
+                                &services, repo_id, run_id,
+                            )
+                            .await,
+                        })
+                    },
+                    std::convert::identity,
+                )
+            }
+            forge_panel::Action::RerunRun {
+                run_id,
+                failed_only,
+            } => {
+                let services = self.services.clone();
+                Task::perform(
+                    async move {
+                        Message::Forge(forge_panel::Msg::RunActionDone {
+                            run_id,
+                            label: if failed_only {
+                                "Rerun failed".to_string()
+                            } else {
+                                "Rerun".to_string()
+                            },
+                            result: crate::service::forge::workflow_run_rerun(
+                                &services,
+                                repo_id,
+                                run_id,
+                                failed_only,
+                            )
+                            .await,
+                        })
+                    },
+                    std::convert::identity,
+                )
+            }
+            forge_panel::Action::RefreshRuns { branch, reopen } => {
+                let services = self.services.clone();
+                let runs = Task::perform(
+                    async move {
+                        let result = crate::service::forge::workflow_runs(
+                            &services,
+                            repo_id,
+                            None,
+                            (!branch.is_empty()).then_some(branch),
+                            None,
+                            None,
+                        )
+                        .await;
+                        Message::Forge(forge_panel::Msg::RunsLoaded { result })
+                    },
+                    std::convert::identity,
+                );
+                match reopen {
+                    // The open run's detail re-loads right behind the list.
+                    Some(run_id) => {
+                        let reopen = Task::perform(
+                            async move { Message::Forge(forge_panel::Msg::RunLogsPressed(run_id)) },
+                            std::convert::identity,
+                        );
+                        runs.chain(reopen)
+                    }
+                    None => runs,
+                }
+            }
+            forge_panel::Action::LoadWorkflows => {
+                let services = self.services.clone();
+                Task::perform(
+                    async move {
+                        Message::Forge(forge_panel::Msg::WorkflowsLoaded {
+                            result: crate::service::forge::workflow_list(&services, repo_id).await,
+                        })
+                    },
+                    std::convert::identity,
+                )
+            }
+            forge_panel::Action::DispatchWorkflow {
+                workflow,
+                git_ref,
+                inputs,
+            } => {
+                let services = self.services.clone();
+                Task::perform(
+                    async move {
+                        Message::Forge(forge_panel::Msg::DispatchDone(
+                            crate::service::forge::workflow_dispatch(
+                                &services, repo_id, workflow, git_ref, inputs,
+                            )
+                            .await,
+                        ))
+                    },
+                    std::convert::identity,
+                )
+            }
             forge_panel::Action::CreatePr {
                 base,
                 head,
@@ -6365,7 +6495,18 @@ impl App {
                 // Action outcomes land in the global footer notice too: the
                 // panel is a dropdown that may not be open when they arrive.
                 // (The panel banner keeps its own copy for in-panel reading.)
-                if let forge_panel::Msg::ActionDone { label, result, .. } = &msg {
+                let outcome = match &msg {
+                    forge_panel::Msg::ActionDone { label, result, .. }
+                    | forge_panel::Msg::RunActionDone { label, result, .. } => {
+                        Some((label.clone(), result.as_ref().map_err(Clone::clone)))
+                    }
+                    forge_panel::Msg::DispatchDone(result) => Some((
+                        "Dispatch".to_string(),
+                        result.as_ref().map_err(Clone::clone),
+                    )),
+                    _ => None,
+                };
+                if let Some((label, result)) = outcome {
                     match result {
                         Ok(output) => {
                             self.notice = Some(Notice::plain(if output.trim().is_empty() {
@@ -6377,7 +6518,7 @@ impl App {
                         Err(err) => {
                             self.notice = Some(Notice::error(format!(
                                 "{label} failed: {}",
-                                forge_panel::forge_error_text(err)
+                                forge_panel::forge_error_text(&err)
                             )));
                         }
                     }
