@@ -64,10 +64,32 @@ use super::terminal;
 use super::theme::{self, Mode, Tokens};
 use super::worktree_panel;
 
+/// Minimum main-window size (also the clamp floor for a restored,
+/// hand-edited or zeroed persisted size).
+const MIN_WINDOW_SIZE: (f32, f32) = (900.0, 600.0);
+
+/// First-run window settings (the fixed fallbacks; persisted geometry is
+/// seeded through [`window_settings`]).
 fn main_window_settings() -> window::Settings {
+    window_settings(&config::WindowFrame::default())
+}
+
+/// Main-window settings seeded from the persisted geometry: size always,
+/// position only when the platform reported one (Wayland never does — the
+/// platform default is used instead), maximized as observed. Sizes below
+/// the minimum clamp up so a degenerate config stays valid.
+fn window_settings(frame: &config::WindowFrame) -> window::Settings {
     window::Settings {
-        size: iced::Size::new(1152.0, 720.0),
-        min_size: Some(iced::Size::new(900.0, 600.0)),
+        size: iced::Size::new(
+            frame.size[0].max(MIN_WINDOW_SIZE.0),
+            frame.size[1].max(MIN_WINDOW_SIZE.1),
+        ),
+        maximized: frame.maximized,
+        position: frame
+            .position
+            .map(|[x, y]| window::Position::Specific(iced::Point::new(x, y)))
+            .unwrap_or(window::Position::Default),
+        min_size: Some(iced::Size::new(MIN_WINDOW_SIZE.0, MIN_WINDOW_SIZE.1)),
         icon: window::icon::from_file_data(include_bytes!("../../icons/64x64.png"), None).ok(),
         ..window::Settings::default()
     }
@@ -104,6 +126,16 @@ pub struct App {
     file_history_seq: u64,
     tabs: Vec<Tab>,
     active: usize,
+    /// Session-restore queue: repo paths still to reopen at boot, chained
+    /// one open at a time through `RepoOpened` (empty when there is nothing
+    /// to restore or the run was started with an explicit repo argument).
+    restore_queue: Vec<String>,
+    /// Session tab index to focus once the restore queue drains.
+    restore_active: usize,
+    /// Debounced window-geometry persistence (main window): the latest
+    /// observed frame plus a generation counter collapsing move/resize
+    /// bursts into one save (see [`config::WindowSave`]).
+    window_save: config::WindowSave,
     show_home: bool,
     notice: Option<Notice>,
     last_op: Option<String>,
@@ -236,6 +268,11 @@ pub enum Message {
     Backend(BackendEvent),
     SystemTheme(iced::theme::Mode),
     Modifiers(iced::keyboard::Modifiers),
+    /// A fixed shell shortcut (`F5`, `Ctrl/Cmd+1..8`, `Ctrl/Cmd+S`,
+    /// `Ctrl/Cmd+Enter`, `Ctrl/Cmd+Alt+Left/Right`, `Ctrl/Cmd+W`) mapped by
+    /// the global key handler; dispatched with the overlay guard in
+    /// [`App::update`].
+    Shortcut(ShellShortcut),
     OpenDialog,
     OpenPicked(Option<PathBuf>),
     OpenPath(String),
@@ -599,6 +636,23 @@ pub enum Message {
         window: window::Id,
         focused: bool,
     },
+    /// Main-window move (window-geometry persistence; popouts ignored).
+    WindowMoved {
+        window: window::Id,
+        position: iced::Point,
+    },
+    /// Main-window resize (window-geometry persistence; popouts ignored).
+    WindowResized {
+        window: window::Id,
+        size: iced::Size,
+    },
+    /// A debounced window-geometry save timer fired (generation `seq`).
+    WindowSaveTick(u64),
+    /// The maximized-state query for a due window-geometry save finished.
+    WindowSaveMaximized {
+        seq: u64,
+        maximized: bool,
+    },
     /// Native folder-picker result for the clone destination (None =
     /// canceled).
     ClonePicked(Option<PathBuf>),
@@ -888,6 +942,7 @@ impl App {
         let accent_enabled = config.accent;
         let services_boot = services.clone();
         let recent = config.recent_sorted();
+        let window_save = config::WindowSave::new(config.window);
         let mut app = Self {
             services,
             config,
@@ -899,6 +954,9 @@ impl App {
             file_history_seq: 0,
             tabs: Vec::new(),
             active: 0,
+            restore_queue: Vec::new(),
+            restore_active: 0,
+            window_save,
             show_home: true,
             notice: None,
             last_op: None,
@@ -925,6 +983,30 @@ impl App {
         };
         app.custom_actions = app.load_custom_actions();
 
+        // Session restore: reopen the persisted tabs unless this launch
+        // carries an explicit repo argument (argv / deep link wins for that
+        // run). Paths that no longer exist are dropped here; paths that fail
+        // to open are dropped silently by the `RepoOpened` arm. Device-backed
+        // tabs were never persisted (see `config::session_state`).
+        let restore = if first_repo_arg(&cli_args).is_none() && !app.config.session.tabs.is_empty()
+        {
+            let mut seen = HashSet::new();
+            let queue: Vec<String> = app
+                .config
+                .session
+                .tabs
+                .iter()
+                .filter(|path| std::path::Path::new(path).exists())
+                .filter(|path| seen.insert(config::canonical_key(path)))
+                .cloned()
+                .collect();
+            app.restore_active = app.config.session.active.min(queue.len().saturating_sub(1));
+            app.restore_queue = queue;
+            !app.restore_queue.is_empty()
+        } else {
+            false
+        };
+
         let instance_listener = crate::instance::take_listener(&instance_listener);
         app.instance_listener = instance_listener;
         // Polish toggles from config (highlight defaults on; the accent
@@ -933,12 +1015,19 @@ impl App {
         theme::set_accent_enabled(accent_enabled);
         let mut tasks = vec![iced::system::theme().map(Message::SystemTheme)];
         {
-            let (main_window, opened) = window::open(main_window_settings());
+            // Geometry from the last run (fixed fallbacks on first run).
+            let (main_window, opened) = window::open(window_settings(&app.config.window));
             app.main_window = Some(main_window);
             tasks.push(opened.map(|_| Message::Noop));
         }
         if let Some(path) = first_repo_arg(&cli_args) {
             tasks.push(app.open_repo(path));
+        } else if restore {
+            // Restore opens chain one at a time: the next open is issued by
+            // the `RepoOpened` arm when the previous one settles.
+            if let Some(path) = app.restore_queue.first().cloned() {
+                tasks.push(app.open_repo(path));
+            }
         }
         tasks.push(app.refresh_devices());
         // Header AI chip seed (one-shot probe; refreshed on toggles/save).
@@ -1031,6 +1120,37 @@ impl App {
         if let Err(err) = self.config.save(&self.services.config_dir) {
             self.notice = Some(Notice::error(format!("Could not save settings: {err}")));
         }
+    }
+
+    /// Records a main-window geometry change and (re)arms the trailing
+    /// save timer; each new generation supersedes the previous tick, so a
+    /// drag-resize storm collapses into one config write.
+    fn arm_window_save(&mut self, frame: config::WindowFrame) -> Task<Message> {
+        if !self.window_save.note_change(frame) {
+            return Task::none();
+        }
+        let seq = self.window_save.seq;
+        Task::perform(
+            async move {
+                tokio::time::sleep(config::WINDOW_SAVE_DEBOUNCE).await;
+                Message::WindowSaveTick(seq)
+            },
+            std::convert::identity,
+        )
+    }
+
+    /// Persists the debounced geometry (generation `seq`) with the queried
+    /// maximized state; stale generations are dropped.
+    fn finish_window_save(&mut self, seq: u64, maximized: bool) -> Task<Message> {
+        if !self.window_save.due(seq) {
+            return Task::none();
+        }
+        self.window_save.mark_saved(seq);
+        let mut frame = self.window_save.frame;
+        frame.maximized = maximized;
+        self.config.window = frame;
+        self.persist_config();
+        Task::none()
     }
 
     fn reindex_recent(&mut self) {
@@ -1183,14 +1303,14 @@ impl App {
             "Close repository tab",
             "Repository",
             repo_id.is_some(),
-            None,
+            Some("Ctrl+W"),
         );
         register(
             "repo.refresh",
             "Refresh status",
             "Repository",
             repo_id.is_some(),
-            None,
+            Some("F5"),
         );
 
         register(
@@ -1248,7 +1368,7 @@ impl App {
             "Commit staged changes",
             "Commit",
             repo_id.is_some(),
-            None,
+            Some("Ctrl+Enter"),
         );
 
         register(
@@ -1270,7 +1390,7 @@ impl App {
             "Toggle history panel",
             "View",
             repo_id.is_some(),
-            None,
+            Some("Ctrl+4"),
         );
         register(
             "history.filter",
@@ -1291,7 +1411,7 @@ impl App {
             "Toggle branches panel",
             "View",
             repo_id.is_some(),
-            None,
+            Some("Ctrl+1"),
         );
         register(
             "branches.copy_current",
@@ -1305,28 +1425,28 @@ impl App {
             "Toggle stashes panel",
             "View",
             repo_id.is_some(),
-            None,
+            Some("Ctrl+2"),
         );
         register(
             "remotes.toggle",
             "Toggle remotes panel",
             "View",
             repo_id.is_some(),
-            None,
+            Some("Ctrl+3"),
         );
         register(
             "view.toggle_terminal",
             "Toggle terminal panel",
             "View",
             repo_id.is_some(),
-            None,
+            Some("Ctrl+8"),
         );
         register(
             "view.toggle_forge",
             "Toggle forge panel",
             "View",
             repo_id.is_some(),
-            None,
+            Some("Ctrl+5"),
         );
         register(
             "bisect.toggle",
@@ -1340,14 +1460,14 @@ impl App {
             "Toggle reflog panel",
             "View",
             repo_id.is_some(),
-            None,
+            Some("Ctrl+7"),
         );
         register(
             "health.toggle",
             "Toggle repo health panel",
             "View",
             repo_id.is_some(),
-            None,
+            Some("Ctrl+6"),
         );
         register(
             "files.quick_open",
@@ -3424,6 +3544,95 @@ impl App {
         Task::batch(tasks)
     }
 
+    /// Whether an overlay with its own key listener (command palette, quick
+    /// open, quick switcher, context menu) is open: while one is, the fixed
+    /// shell shortcuts stay dark so keystrokes can only reach the overlay.
+    fn overlay_open(&self) -> bool {
+        self.palette.open || self.quick_open.open || self.switcher.open || self.ctx_menu.open
+    }
+
+    /// Dispatches a fixed shell shortcut (the `Message::Shortcut` arm).
+    /// Every target routes through the same arms the buttons/palette use, so
+    /// their guards (no repo tab, commit validation, editor save guard)
+    /// apply unchanged; safe to fire with no repo tab open.
+    fn shortcut(&mut self, shortcut: ShellShortcut) -> Task<Message> {
+        if self.overlay_open() {
+            return Task::none();
+        }
+        match shortcut {
+            ShellShortcut::RefreshRepo => {
+                // A focused terminal owns plain keys (`F5` writes an xterm
+                // sequence into the shell); modifier combos are pane-ignored
+                // and stay live. Only the non-combo shortcut needs this guard.
+                if self
+                    .tabs
+                    .get(self.active)
+                    .is_some_and(|tab| tab.terminal_open && tab.terminal.is_focused())
+                {
+                    return Task::none();
+                }
+                match self.tabs.get(self.active) {
+                    Some(tab) => self.update(Message::Refresh(tab.repo.repo_id.clone())),
+                    None => Task::none(),
+                }
+            }
+            ShellShortcut::Panel(index) => match panel_toggle_message(index) {
+                Some(msg) => self.update(msg),
+                None => Task::none(),
+            },
+            ShellShortcut::SaveEditor => {
+                self.update(Message::Editor(editor_view::Msg::SavePressed))
+            }
+            ShellShortcut::Commit => self.update(Message::CommitPressed),
+            ShellShortcut::NextTab | ShellShortcut::PrevTab => {
+                if self.tabs.len() < 2 {
+                    return Task::none();
+                }
+                let next = matches!(shortcut, ShellShortcut::NextTab);
+                let target = wrapped_tab_index(self.active, self.tabs.len(), next);
+                self.update(Message::SelectTab(target))
+            }
+            ShellShortcut::CloseTab => match self.tabs.get(self.active) {
+                Some(tab) => self.update(Message::CloseTab(tab.repo.repo_id.clone())),
+                None => Task::none(),
+            },
+        }
+    }
+
+    /// Syncs `config.session` with the open tabs and persists the config
+    /// file (called on open / close / activate). Device-backed tabs are
+    /// skipped and the focused index is re-based onto the filtered list —
+    /// see [`config::session_state`].
+    fn persist_session(&mut self) {
+        let tabs: Vec<(&str, bool)> = self
+            .tabs
+            .iter()
+            .map(|tab| (tab.repo.root.as_str(), tab.repo.device_id.is_none()))
+            .collect();
+        let focused = if self.tabs.is_empty() {
+            None
+        } else {
+            Some(self.active)
+        };
+        self.config.session = config::session_state(&tabs, focused, self.config.session.active);
+        self.persist_config();
+    }
+
+    /// Continues the boot-time session restore: opens the next queued repo,
+    /// or — once the queue drains — focuses the persisted active tab (the
+    /// index is best-effort: repos that failed to open shift it, so it is
+    /// clamped and silently ignored when out of range).
+    fn continue_restore(&mut self) -> Task<Message> {
+        if let Some(path) = self.restore_queue.first().cloned() {
+            return self.open_repo(path);
+        }
+        if self.restore_active < self.tabs.len() {
+            self.update(Message::SelectTab(self.restore_active))
+        } else {
+            Task::none()
+        }
+    }
+
     fn open_repo(&mut self, path: String) -> Task<Message> {
         if self.open_in_flight {
             return Task::none();
@@ -3468,6 +3677,7 @@ impl App {
             }
         }
         self.show_home = false;
+        self.persist_session();
         Task::batch([
             self.refresh(repo_id.clone()),
             self.start_log(repo_id.clone()),
@@ -3940,6 +4150,7 @@ impl App {
                 self.modifiers = modifiers;
                 Task::none()
             }
+            Message::Shortcut(shortcut) => self.shortcut(shortcut),
             Message::OpenDialog => {
                 if self.open_in_flight {
                     return Task::none();
@@ -3962,6 +4173,14 @@ impl App {
             Message::OpenPath(path) => self.open_repo(path),
             Message::RepoOpened { path, result } => {
                 self.open_in_flight = false;
+                // A restore open matches the head of the pending queue: it
+                // is consumed whether it succeeds or fails, and the chain
+                // continues. Failures during restore are silent — a repo
+                // that vanished since the last run is not an error.
+                let restore_open = self.restore_queue.first().is_some_and(|head| *head == path);
+                if restore_open {
+                    self.restore_queue.remove(0);
+                }
                 match result {
                     Ok(info) => {
                         // Record the resolved workdir so recents stay valid
@@ -3972,11 +4191,20 @@ impl App {
                             self.reindex_recent();
                             self.persist_config();
                         }
-                        self.activate_repo(info)
+                        let mut tasks = vec![self.activate_repo(info)];
+                        if restore_open {
+                            tasks.push(self.continue_restore());
+                        }
+                        Task::batch(tasks)
                     }
                     Err(err) => {
-                        self.notice = Some(Notice::error(format!("Could not open {path}: {err}")));
-                        Task::none()
+                        if restore_open {
+                            self.continue_restore()
+                        } else {
+                            self.notice =
+                                Some(Notice::error(format!("Could not open {path}: {err}")));
+                            Task::none()
+                        }
                     }
                 }
             }
@@ -4043,6 +4271,7 @@ impl App {
                     self.active = index;
                     self.show_home = false;
                 }
+                self.persist_session();
                 Task::none()
             }
             Message::CloseTab(repo_id) => {
@@ -4065,6 +4294,7 @@ impl App {
                             self.active = self.tabs.len() - 1;
                         }
                     }
+                    self.persist_session();
                 }
                 Task::none()
             }
@@ -6851,6 +7081,37 @@ impl App {
                 }
                 Task::none()
             }
+            Message::WindowMoved { window, position } => {
+                if self.main_window == Some(window) {
+                    let mut frame = self.window_save.frame;
+                    frame.position = Some([position.x, position.y]);
+                    return self.arm_window_save(frame);
+                }
+                Task::none()
+            }
+            Message::WindowResized { window, size } => {
+                if self.main_window == Some(window) {
+                    let mut frame = self.window_save.frame;
+                    frame.size = [size.width, size.height];
+                    return self.arm_window_save(frame);
+                }
+                Task::none()
+            }
+            Message::WindowSaveTick(seq) => {
+                if !self.window_save.due(seq) {
+                    return Task::none();
+                }
+                // Resolve the maximized state once the storm has settled;
+                // a change arriving mid-query supersedes this generation.
+                match self.main_window {
+                    Some(id) => iced::window::is_maximized(id)
+                        .map(move |maximized| Message::WindowSaveMaximized { seq, maximized }),
+                    None => self.finish_window_save(seq, false),
+                }
+            }
+            Message::WindowSaveMaximized { seq, maximized } => {
+                self.finish_window_save(seq, maximized)
+            }
             Message::CursorMoved(position) => {
                 self.cursor = position;
                 Task::none()
@@ -8071,6 +8332,7 @@ impl App {
             iced::system::theme_changes().map(Message::SystemTheme),
             iced::event::listen_with(modifiers_changed),
             iced::event::listen_with(window_focus_changed),
+            iced::event::listen_with(window_geometry_changed),
             iced::window::close_events().map(Message::WindowClosed),
             // Overlay components own their key/backdrop handling; each mapper
             // is a no-op while its overlay is closed.
@@ -8442,6 +8704,115 @@ fn window_focus_changed(
     }
 }
 
+/// Window move/resize events feeding the debounced geometry persistence.
+/// Like the focus listener, the update arm filters to the main window
+/// (popout geometry is irrelevant).
+fn window_geometry_changed(
+    event: iced::Event,
+    _status: iced::event::Status,
+    window: window::Id,
+) -> Option<Message> {
+    match event {
+        iced::Event::Window(window::Event::Moved(position)) => {
+            Some(Message::WindowMoved { window, position })
+        }
+        iced::Event::Window(window::Event::Resized(size)) => {
+            Some(Message::WindowResized { window, size })
+        }
+        _ => None,
+    }
+}
+
+/// Fixed shell shortcuts handled by the global key handler (fixed defaults,
+/// not user-configurable). The palette mirrors these in its hint fields and
+/// `docs/contracts.md` lists the final mapping.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShellShortcut {
+    /// `F5` — refresh the active repo's status.
+    RefreshRepo,
+    /// `Ctrl/Cmd+1..8` — toggle the panel at this fixed index (see
+    /// [`panel_toggle_message`]).
+    Panel(usize),
+    /// `Ctrl/Cmd+S` — save the in-app editor file (no-op when it is closed).
+    SaveEditor,
+    /// `Ctrl/Cmd+Enter` — commit staged changes (same arm as the Commit
+    /// button, so its validation applies).
+    Commit,
+    /// `Ctrl/Cmd+Alt+Right` — next repo tab (wraps).
+    NextTab,
+    /// `Ctrl/Cmd+Alt+Left` — previous repo tab (wraps).
+    PrevTab,
+    /// `Ctrl/Cmd+W` — close the current repo tab.
+    CloseTab,
+}
+
+/// The `Ctrl/Cmd+1..8` panel mapping, in the fixed shortcut order that
+/// mirrors the repo header toggle buttons left→right: 1 Branches,
+/// 2 Stashes, 3 Remotes, 4 History, 5 Forge, 6 Repo health, 7 Reflog,
+/// 8 Terminal.
+fn panel_toggle_message(index: usize) -> Option<Message> {
+    match index {
+        0 => Some(Message::ToggleBranchPanel),
+        1 => Some(Message::ToggleStashPanel),
+        2 => Some(Message::ToggleRemotePanel),
+        3 => Some(Message::ToggleHistory),
+        4 => Some(Message::Forge(forge_panel::Msg::ToggleOpen)),
+        5 => Some(Message::Health(health_panel::Msg::ToggleOpen)),
+        6 => Some(Message::Reflog(reflog_panel::Msg::ToggleOpen)),
+        7 => Some(Message::ToggleTerminal),
+        _ => None,
+    }
+}
+
+/// Wrapped tab step for the `Ctrl/Cmd+Alt+Left/Right` shortcuts (`next` is
+/// +1 / -1). A single tab stays put; `len == 0` is a no-op for the caller.
+fn wrapped_tab_index(active: usize, len: usize, next: bool) -> usize {
+    if len <= 1 {
+        return active.min(len.saturating_sub(1));
+    }
+    if next {
+        (active + 1) % len
+    } else {
+        active.checked_sub(1).unwrap_or(len - 1)
+    }
+}
+
+/// Maps a key press to a [`ShellShortcut`]. `cmd` mirrors the existing
+/// global bindings (`⌘` on macOS, `Ctrl` elsewhere). Every binding is a
+/// modifier combo except `F5` — plain keystrokes belong to typing surfaces
+/// (the focused terminal pane writes `F5` into the shell itself).
+fn shell_shortcut(
+    key: &iced::keyboard::Key,
+    modifiers: iced::keyboard::Modifiers,
+) -> Option<ShellShortcut> {
+    use iced::keyboard::key::Named;
+    let cmd = modifiers.logo() || (modifiers.control() && !cfg!(target_os = "macos"));
+    match key {
+        iced::keyboard::Key::Named(Named::F5) => Some(ShellShortcut::RefreshRepo),
+        iced::keyboard::Key::Named(Named::Enter) if cmd => Some(ShellShortcut::Commit),
+        iced::keyboard::Key::Named(Named::ArrowRight) if cmd && modifiers.alt() => {
+            Some(ShellShortcut::NextTab)
+        }
+        iced::keyboard::Key::Named(Named::ArrowLeft) if cmd && modifiers.alt() => {
+            Some(ShellShortcut::PrevTab)
+        }
+        iced::keyboard::Key::Character(c) if cmd => match c.as_str() {
+            "1" => Some(ShellShortcut::Panel(0)),
+            "2" => Some(ShellShortcut::Panel(1)),
+            "3" => Some(ShellShortcut::Panel(2)),
+            "4" => Some(ShellShortcut::Panel(3)),
+            "5" => Some(ShellShortcut::Panel(4)),
+            "6" => Some(ShellShortcut::Panel(5)),
+            "7" => Some(ShellShortcut::Panel(6)),
+            "8" => Some(ShellShortcut::Panel(7)),
+            "s" => Some(ShellShortcut::SaveEditor),
+            "w" => Some(ShellShortcut::CloseTab),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
 fn modifiers_changed(
     event: iced::Event,
     _status: iced::event::Status,
@@ -8467,7 +8838,10 @@ fn modifiers_changed(
                 iced::keyboard::Key::Character(c) if cmd && c == "p" => {
                     Some(Message::QuickOpen(quick_open::Msg::Toggle))
                 }
-                _ => None,
+                // Everything else in the fixed shortcut suite routes through
+                // Message::Shortcut, which drops it while an overlay with its
+                // own key listener is open.
+                _ => shell_shortcut(&key, modifiers).map(Message::Shortcut),
             }
         }
         _ => None,
@@ -8738,7 +9112,9 @@ fn percent_decode(input: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::first_repo_arg;
+    use super::{first_repo_arg, panel_toggle_message, shell_shortcut, wrapped_tab_index};
+    use iced::keyboard::key::Named;
+    use iced::keyboard::{Key, Modifiers};
 
     #[test]
     fn first_repo_arg_skips_flags() {
@@ -8766,5 +9142,166 @@ mod tests {
             first_repo_arg(&["mygitui://bogus".to_string()]),
             Some("mygitui://bogus".to_string())
         );
+    }
+
+    /// The platform shortcut modifier (`Ctrl` everywhere, `⌘` on macOS).
+    fn cmd() -> Modifiers {
+        if cfg!(target_os = "macos") {
+            Modifiers::LOGO
+        } else {
+            Modifiers::CTRL
+        }
+    }
+
+    #[test]
+    fn f5_refreshes_without_modifiers() {
+        assert_eq!(
+            shell_shortcut(&Key::Named(Named::F5), Modifiers::empty()),
+            Some(super::ShellShortcut::RefreshRepo)
+        );
+        // Ctrl+F5 stays the same refresh; plain digits/letters do nothing.
+        assert_eq!(
+            shell_shortcut(&Key::Named(Named::F5), cmd()),
+            Some(super::ShellShortcut::RefreshRepo)
+        );
+        assert_eq!(
+            shell_shortcut(&Key::Character("1".into()), Modifiers::empty()),
+            None
+        );
+        assert_eq!(
+            shell_shortcut(&Key::Character("s".into()), Modifiers::empty()),
+            None
+        );
+    }
+
+    #[test]
+    fn ctrl_digits_map_to_the_fixed_panel_order() {
+        for (index, digit) in ["1", "2", "3", "4", "5", "6", "7", "8"].iter().enumerate() {
+            assert_eq!(
+                shell_shortcut(&Key::Character((*digit).into()), cmd()),
+                Some(super::ShellShortcut::Panel(index)),
+                "Ctrl+{digit} maps to panel index {index}"
+            );
+        }
+        assert_eq!(
+            shell_shortcut(&Key::Character("9".into()), cmd()),
+            None,
+            "only 1..8 are bound"
+        );
+        // The panel mapping mirrors the repo header toggles left→right:
+        // 1 Branches, 2 Stashes, 3 Remotes, 4 History, 5 Forge, 6 Health,
+        // 7 Reflog, 8 Terminal.
+        assert!(matches!(
+            panel_toggle_message(0),
+            Some(super::Message::ToggleBranchPanel)
+        ));
+        assert!(matches!(
+            panel_toggle_message(1),
+            Some(super::Message::ToggleStashPanel)
+        ));
+        assert!(matches!(
+            panel_toggle_message(2),
+            Some(super::Message::ToggleRemotePanel)
+        ));
+        assert!(matches!(
+            panel_toggle_message(3),
+            Some(super::Message::ToggleHistory)
+        ));
+        assert!(matches!(
+            panel_toggle_message(4),
+            Some(super::Message::Forge(super::forge_panel::Msg::ToggleOpen))
+        ));
+        assert!(matches!(
+            panel_toggle_message(5),
+            Some(super::Message::Health(super::health_panel::Msg::ToggleOpen))
+        ));
+        assert!(matches!(
+            panel_toggle_message(6),
+            Some(super::Message::Reflog(super::reflog_panel::Msg::ToggleOpen))
+        ));
+        assert!(matches!(
+            panel_toggle_message(7),
+            Some(super::Message::ToggleTerminal)
+        ));
+        assert!(panel_toggle_message(8).is_none());
+    }
+
+    #[test]
+    fn combo_shortcuts_map_to_their_actions() {
+        assert_eq!(
+            shell_shortcut(&Key::Named(Named::Enter), cmd()),
+            Some(super::ShellShortcut::Commit)
+        );
+        assert_eq!(
+            shell_shortcut(&Key::Character("s".into()), cmd()),
+            Some(super::ShellShortcut::SaveEditor)
+        );
+        assert_eq!(
+            shell_shortcut(&Key::Character("w".into()), cmd()),
+            Some(super::ShellShortcut::CloseTab)
+        );
+        // Enter without modifiers stays a typing keystroke.
+        assert_eq!(
+            shell_shortcut(&Key::Named(Named::Enter), Modifiers::empty()),
+            None
+        );
+        // Tab cycling needs cmd+alt on the arrows.
+        assert_eq!(
+            shell_shortcut(&Key::Named(Named::ArrowRight), cmd() | Modifiers::ALT),
+            Some(super::ShellShortcut::NextTab)
+        );
+        assert_eq!(
+            shell_shortcut(&Key::Named(Named::ArrowLeft), cmd() | Modifiers::ALT),
+            Some(super::ShellShortcut::PrevTab)
+        );
+        assert_eq!(
+            shell_shortcut(&Key::Named(Named::ArrowRight), cmd()),
+            None,
+            "alt is required for tab cycling"
+        );
+        assert_eq!(
+            shell_shortcut(&Key::Named(Named::ArrowRight), Modifiers::ALT),
+            None
+        );
+    }
+
+    #[test]
+    fn wrapped_tab_index_steps_and_wraps() {
+        assert_eq!(wrapped_tab_index(0, 3, true), 1);
+        assert_eq!(wrapped_tab_index(2, 3, true), 0, "next wraps at the end");
+        assert_eq!(wrapped_tab_index(2, 3, false), 1);
+        assert_eq!(
+            wrapped_tab_index(0, 3, false),
+            2,
+            "previous wraps at the start"
+        );
+        // Degenerate cases: no tabs or a single tab never moves.
+        assert_eq!(wrapped_tab_index(0, 0, true), 0);
+        assert_eq!(wrapped_tab_index(0, 1, true), 0);
+        assert_eq!(wrapped_tab_index(0, 1, false), 0);
+    }
+
+    #[test]
+    fn window_settings_clamp_restored_size_and_keep_position() {
+        let frame = super::config::WindowFrame {
+            size: [1.0, 1.0],
+            position: Some([12.0, 24.0]),
+            maximized: true,
+        };
+        let settings = super::window_settings(&frame);
+        assert_eq!(settings.size.width, super::MIN_WINDOW_SIZE.0);
+        assert_eq!(settings.size.height, super::MIN_WINDOW_SIZE.1);
+        assert!(settings.maximized);
+        assert!(matches!(
+            settings.position,
+            iced::window::Position::Specific(point) if point.x == 12.0 && point.y == 24.0
+        ));
+
+        // No persisted position: the platform default applies (Wayland).
+        let settings = super::window_settings(&super::config::WindowFrame::default());
+        assert!(matches!(settings.position, iced::window::Position::Default));
+        assert_eq!(settings.size.width, 1152.0);
+        assert_eq!(settings.size.height, 720.0);
+        assert!(!settings.maximized);
     }
 }

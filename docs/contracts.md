@@ -396,7 +396,8 @@ primary window hosts the shell and diffs can pop out into secondary windows
 `window::close_events`). The subscription batch adds the system theme-change
 subscription, the keyboard listener (palette / quick-switcher / quick-open
 chords), the `window::close_events` stream, the main-window focus listener
-(focus/unfocus pauses/resumes the remote change pollers), and the per-tab
+(focus/unfocus pauses/resumes the remote change pollers), the main-window
+move/resize listener (window-geometry persistence), and the per-tab
 auto-fetch timer (keyed by repo + cadence; `0` disables). Each
 `BackendEvent` variant
 maps to a UI behavior: `RepoChanged` → targeted panel refreshes (including
@@ -407,6 +408,40 @@ progress bar (matched by `url`), `DeviceStatus` → the Home devices
 section's status dots, prompts (`AuthRequest` /
 `HostKeyRequest` / `DeviceAuthRequest`) → queued overlay dialogs,
 `PtyOutput`/`PtyExit` → terminal panel, `ActionOutput` → action run view.
+
+### Keyboard shortcuts (fixed defaults)
+
+Beyond the palette / quick-switcher / quick-open chords (`Ctrl/Cmd+Shift+P`,
+`Ctrl/Cmd+K`, `Ctrl/Cmd+O`, `Ctrl/Cmd+P`), the global key handler maps a
+fixed shortcut suite (`ShellShortcut` → `Message::Shortcut`); every target
+routes through the same arms the buttons and palette commands use, so their
+guards apply unchanged. The mapping (⌘ on macOS, Ctrl elsewhere):
+
+| Combo | Action |
+| ------------------------- | ------------------------------------------------ |
+| `F5` | Refresh the active repo's status |
+| `Ctrl/Cmd+1` | Toggle branches panel |
+| `Ctrl/Cmd+2` | Toggle stashes panel |
+| `Ctrl/Cmd+3` | Toggle remotes panel |
+| `Ctrl/Cmd+4` | Toggle history panel |
+| `Ctrl/Cmd+5` | Toggle forge panel |
+| `Ctrl/Cmd+6` | Toggle repo health panel |
+| `Ctrl/Cmd+7` | Toggle reflog panel |
+| `Ctrl/Cmd+8` | Toggle terminal panel |
+| `Ctrl/Cmd+S` | Save the in-app editor file (no-op when closed) |
+| `Ctrl/Cmd+Enter` | Commit staged changes (`CommitPressed` validation) |
+| `Ctrl/Cmd+Alt+Right/Left` | Next / previous repo tab (wraps) |
+| `Ctrl/Cmd+W` | Close the current repo tab |
+
+The Ctrl+1..8 order mirrors the repo header toggle buttons left→right.
+The whole suite is suppressed while an overlay with its own key listener is
+open (palette, quick open, quick switcher, context menu), and the only
+non-combo binding, `F5`, stays dark while the focused terminal pane owns
+the keyboard (it writes the xterm F5 sequence into the shell instead;
+modifier combos are pane-ignored and stay live). Palette entries whose
+commands match a shortcut carry the combo in their hint field. (Note:
+Ctrl+Alt+Left/Right may be claimed by desktop workspaces at the
+compositor level, outside the app's reach.)
 
 ### Shell surfaces (clone / files / quick-open / SSH devices)
 
@@ -501,12 +536,41 @@ section's status dots, prompts (`AuthRequest` /
   recent_repos: [{ path, pinned, last_opened }],
   accent: bool, highlight: bool, update_check_on_start: bool,
   ai: { enabled, provider, opencode_url,
-  opencode_model, openrouter_model, repo_opt_in } }` (AI secrets live in
-  the OS keyring, never here). The diff prefs seed every new tab and are
-  re-persisted when the diff toolbar toggles split/wrap.
-  Loading never fails (missing/corrupt → defaults, unknown keys ignored);
-  saves are atomic (temp + rename) and surface I/O errors to the UI.
-  Recents dedupe separator/case variants.
+  opencode_model, openrouter_model, repo_opt_in },
+  session: { tabs: [root paths], active: usize },
+  window: { size: [w, h], position: [x, y] | null, maximized: bool } }`
+  (AI secrets live in the OS keyring, never here). The diff prefs seed
+  every new tab and are re-persisted when the diff toolbar toggles
+  split/wrap. Loading never fails (missing/corrupt → defaults, unknown
+  keys ignored); saves are atomic (temp + rename) and surface I/O errors
+  to the UI. Recents dedupe separator/case variants.
+- **Session restore** (`config.session`): written whenever the tab set
+  changes — a repo opens (`activate_repo`, local and device flows), a tab
+  is closed, or the focused tab changes (`SelectTab`). Only local repos
+  are stored (device-backed repos need the SSH device browser flow to
+  reopen, not a path open); the focused index is re-based onto the
+  filtered list when it points at a device tab, falling back to the
+  previous index clamped (`config::session_state`, pure + tested). At
+  boot the queued paths reopen through the ordinary `open_repo` /
+  `RepoOpened` flow chained one open at a time, then the persisted
+  `active` tab is focused (best-effort: repos that failed to open shift
+  the index, so it is clamped). Restore is skipped entirely when the
+  launch carries an explicit repo argument (argv / deep link wins).
+  Paths that no longer exist are dropped before opening; open failures
+  during restore are dropped silently (no footer notice).
+- **Window geometry** (`config.window`): main-window move/resize events
+  feed a trailing-debounce model (`config::WindowSave`): each observed
+  change bumps a generation and arms a 750 ms timer, and only a timer
+  whose generation is still newest persists the frame (drag-resize
+  storms collapse into one atomic write). The real maximized state is
+  queried on the save tick (iced 0.14 has no maximize-changed event;
+  maximize toggles surface as resizes). Boot seeds `window::Settings`
+  from the frame: size always (clamped up to the 900×600 minimum),
+  maximized as observed, position only when the platform reported one —
+  Wayland never emits global coordinates, so `position` stays `null`
+  there and the platform default applies (size + maximized still
+  restore). First run falls back to the fixed 1152×720 defaults; diff
+  popouts keep using the fixed settings.
 - **Custom actions** — `<config_dir>/com.raulshma.mygitui/actions.json`
   (the app's actions panel: name, command, shortcuts; atomic writes,
   malformed file → defaults).

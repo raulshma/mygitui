@@ -8,7 +8,7 @@
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
@@ -35,6 +35,11 @@ pub struct Config {
     /// AI assist settings (default off; secrets live in the OS keyring,
     /// never in this file).
     pub ai: AiSettings,
+    /// Open repo tabs persisted across runs (local repos only; see
+    /// [`SessionState`]).
+    pub session: SessionState,
+    /// Main-window geometry persisted across runs ([`WindowFrame`]).
+    pub window: WindowFrame,
 }
 
 /// Auto-fetch cadence choices cycled by the header button (minutes; 0 = off).
@@ -74,7 +79,132 @@ impl Default for Config {
             highlight: true,
             update_check_on_start: true,
             ai: AiSettings::default(),
+            session: SessionState::default(),
+            window: WindowFrame::default(),
         }
+    }
+}
+
+/// Open repo tabs persisted across runs (`config.json` `session` section):
+/// ordered repo root paths plus the tab index to focus after restore.
+/// Device-backed repos are never stored here (reopening them needs the SSH
+/// device flow, not a plain path open); paths that no longer exist or fail
+/// to open are silently dropped at boot.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SessionState {
+    /// Repo root paths in tab order (as resolved by the last open).
+    pub tabs: Vec<String>,
+    /// Tab to activate after restore (clamped to the restored tabs).
+    pub active: usize,
+}
+
+/// Builds the persisted session from the open tabs: `(root, is_local)`
+/// pairs in tab order plus the focused index. Device-backed tabs are
+/// skipped; the focused index is re-based onto the filtered list (falling
+/// back to the previously stored index when it points at a skipped tab,
+/// clamped), and duplicate roots keep their first occurrence.
+pub fn session_state(
+    tabs: &[(&str, bool)],
+    focused: Option<usize>,
+    previous_active: usize,
+) -> SessionState {
+    let mut tabs_out: Vec<String> = Vec::new();
+    for (root, local) in tabs {
+        if *local && !tabs_out.iter().any(|seen| seen == root) {
+            tabs_out.push((*root).to_string());
+        }
+    }
+    let focused_root = focused.and_then(|index| {
+        tabs.get(index)
+            .copied()
+            .filter(|(_, local)| *local)
+            .map(|(root, _)| root)
+    });
+    let active = focused_root
+        .and_then(|root| tabs_out.iter().position(|seen| seen == root))
+        .unwrap_or_else(|| previous_active.min(tabs_out.len().saturating_sub(1)));
+    SessionState {
+        tabs: tabs_out,
+        active,
+    }
+}
+
+/// Main-window geometry persisted across runs (`config.json` `window`
+/// section). `position` stays `None` on platforms that do not report
+/// reliable global coordinates (Wayland never emits move events) — restore
+/// then uses the platform default, so this degrades to size + maximized.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct WindowFrame {
+    /// Inner window size in logical pixels `[width, height]`.
+    pub size: [f32; 2],
+    /// Outer window position in logical pixels `[x, y]`, when known.
+    pub position: Option<[f32; 2]>,
+    /// Whether the window was maximized at the last observation.
+    pub maximized: bool,
+}
+
+impl Default for WindowFrame {
+    /// First-run fallback geometry (the historical fixed window size).
+    fn default() -> Self {
+        Self {
+            size: [1152.0, 720.0],
+            position: None,
+            maximized: false,
+        }
+    }
+}
+
+/// Trailing-debounce window for persisting [`WindowFrame`]: moves and
+/// resizes arrive in bursts, so every observed change bumps a generation
+/// counter and arms a timer; only a timer whose generation is still the
+/// newest persists the frame (a drag-resize storm collapses into one
+/// write).
+pub const WINDOW_SAVE_DEBOUNCE: Duration = Duration::from_millis(750);
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct WindowSave {
+    /// Latest observed geometry.
+    pub frame: WindowFrame,
+    /// Bumped by every observed change.
+    pub seq: u64,
+    /// Generation last persisted.
+    pub saved_seq: u64,
+}
+
+impl WindowSave {
+    /// Starts from the geometry the window was opened with.
+    pub fn new(frame: WindowFrame) -> Self {
+        Self {
+            frame,
+            seq: 0,
+            saved_seq: 0,
+        }
+    }
+
+    /// Records an observed geometry change; `true` when the frame actually
+    /// changed and a save timer must be (re)armed with the new generation
+    /// (`seq`).
+    pub fn note_change(&mut self, frame: WindowFrame) -> bool {
+        if frame == self.frame {
+            return false;
+        }
+        self.frame = frame;
+        self.seq += 1;
+        true
+    }
+
+    /// Whether the timer that fired carries the newest generation and has
+    /// not been persisted yet; stale ticks (superseded by a newer change)
+    /// are dropped.
+    pub fn due(&self, seq: u64) -> bool {
+        seq == self.seq && seq > self.saved_seq
+    }
+
+    /// Marks the generation the caller persisted.
+    pub fn mark_saved(&mut self, seq: u64) {
+        self.saved_seq = seq;
     }
 }
 
@@ -453,5 +583,132 @@ mod tests {
         assert_eq!(loaded.ai, config.ai);
         assert!(loaded.ai_enabled_for("/repos/alpha"));
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn session_defaults_for_older_config_files() {
+        // Pre-session config files keep loading with an empty session.
+        let dir = temp_dir("session-default");
+        std::fs::write(
+            dir.join("config.json"),
+            r#"{"theme": "Dark", "recent_repos": []}"#,
+        )
+        .unwrap();
+        let loaded = Config::load(&dir);
+        assert_eq!(loaded.session, SessionState::default());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn session_round_trips_through_disk() {
+        let dir = temp_dir("session-roundtrip");
+        let config = Config {
+            session: SessionState {
+                tabs: vec!["/repos/alpha".into(), "/repos/beta".into()],
+                active: 1,
+            },
+            ..Config::default()
+        };
+        config.save(&dir).expect("save");
+        let loaded = Config::load(&dir);
+        assert_eq!(loaded.session.tabs, vec!["/repos/alpha", "/repos/beta"]);
+        assert_eq!(loaded.session.active, 1);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn session_state_skips_device_tabs_and_keeps_order() {
+        let tabs = [("/a", true), ("/remote", false), ("/b", true), ("/a", true)];
+        let session = session_state(&tabs, Some(2), 0);
+        assert_eq!(
+            session.tabs,
+            vec!["/a", "/b"],
+            "device tabs dropped, dupes folded"
+        );
+        // Focused local tab re-bases onto the filtered list.
+        assert_eq!(session.active, 1);
+    }
+
+    #[test]
+    fn session_state_falls_back_when_focus_is_a_device_tab() {
+        let tabs = [("/a", true), ("/remote", false)];
+        let session = session_state(&tabs, Some(1), 0);
+        assert_eq!(session.tabs, vec!["/a"]);
+        // The focused tab is device-backed: keep the previous index, clamped.
+        assert_eq!(session.active, 0);
+        let session = session_state(&tabs, Some(1), 7);
+        assert_eq!(session.active, 0, "previous index clamps to the last tab");
+    }
+
+    #[test]
+    fn session_state_empty_tabs_collapse_to_default() {
+        let session = session_state(&[("/remote", false)], None, 3);
+        assert_eq!(session, SessionState::default());
+        assert_eq!(session_state(&[], None, 2), SessionState::default());
+    }
+
+    #[test]
+    fn window_defaults_are_the_first_run_fallbacks() {
+        let frame = WindowFrame::default();
+        assert_eq!(frame.size, [1152.0, 720.0]);
+        assert_eq!(frame.position, None);
+        assert!(!frame.maximized);
+    }
+
+    #[test]
+    fn window_frame_round_trips_through_disk_and_defaults_for_older_files() {
+        let dir = temp_dir("window-roundtrip");
+        let config = Config {
+            window: WindowFrame {
+                size: [1440.0, 900.0],
+                position: Some([64.0, 48.0]),
+                maximized: true,
+            },
+            ..Config::default()
+        };
+        config.save(&dir).expect("save");
+        let loaded = Config::load(&dir);
+        assert_eq!(loaded.window, config.window);
+
+        // Pre-window config files keep loading with the fallback geometry.
+        std::fs::write(
+            dir.join("config.json"),
+            r#"{"theme": "Dark", "recent_repos": []}"#,
+        )
+        .unwrap();
+        assert_eq!(Config::load(&dir).window, WindowFrame::default());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn window_save_debounce_collapses_bursts_and_drops_stale_ticks() {
+        let start = WindowFrame::default();
+        let mut save = WindowSave::new(start);
+        assert!(!save.due(0), "nothing persisted yet");
+
+        // Identical geometry is not a change.
+        assert!(!save.note_change(start));
+
+        // A burst of changes: every one bumps the generation.
+        let mut frame = start;
+        frame.size = [1000.0, 700.0];
+        assert!(save.note_change(frame));
+        assert_eq!(save.seq, 1);
+        frame.position = Some([10.0, 20.0]);
+        assert!(save.note_change(frame));
+        assert_eq!(save.seq, 2);
+
+        // The first timer's tick is stale and dropped.
+        assert!(!save.due(1));
+        // The newest tick persists exactly once.
+        assert!(save.due(2));
+        save.mark_saved(2);
+        assert!(!save.due(2), "a generation is persisted at most once");
+
+        // A later change re-arms with a fresh generation.
+        frame.position = Some([30.0, 40.0]);
+        assert!(save.note_change(frame));
+        assert_eq!(save.seq, 3);
+        assert!(save.due(3));
     }
 }
