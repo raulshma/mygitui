@@ -97,11 +97,15 @@ strip = true
 [profile.dist]
 inherits = "release"
 
-# Vendor OpenSSL on Linux only: libgit2's TLS on macOS/Windows uses the OS
-# stack and reqwest falls back to those too, but on Linux openssl-sys needs
-# libssl-dev at build time and the .so at run time — vendoring makes CI
-# builds self-contained and the shipped AppImage portable.
-[target.'cfg(target_os = "linux")'.dependencies]
+# Vendor OpenSSL on every non-Windows target: libgit2 1.9 (via libgit2-sys)
+# and libssh2-sys both build against openssl-sys on unix platforms — since
+# libgit2 1.9 there is no SecureTransport fallback on macOS — and openssl-sys
+# needs libssl-dev (Linux) or a brew OpenSSL (macOS) that CI runners and
+# end-user toolchains can't be assumed to have. Vendoring makes builds
+# self-contained everywhere and keeps the shipped AppImage portable.
+# Windows is excluded: libgit2/libssh2 use WinHTTP/schannel there and
+# openssl-sys never enters the tree.
+[target.'cfg(not(target_os = "windows"))'.dependencies]
 openssl = { version = "0.10", features = ["vendored"] }
 
 # Updater: SHA-256 verification of release artifacts (all platforms), and
