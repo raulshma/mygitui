@@ -120,8 +120,17 @@ mod tests {
     #[test]
     fn worktree_path_derives_a_sibling_folder_from_the_branch_name() {
         let root = Path::new("/repos/mygitui");
-        assert_eq!(worktree_path(root, "spike", "").unwrap(), "/repos/spike");
-        assert_eq!(worktree_path(root, "spike", "   ").unwrap(), "/repos/spike");
+        // Compare as paths: the returned String carries the host's
+        // separators (`\` on Windows).
+        let expected = Path::new("/repos").join("spike");
+        assert_eq!(
+            Path::new(&worktree_path(root, "spike", "").unwrap()),
+            expected
+        );
+        assert_eq!(
+            Path::new(&worktree_path(root, "spike", "   ").unwrap()),
+            expected
+        );
     }
 
     #[test]
