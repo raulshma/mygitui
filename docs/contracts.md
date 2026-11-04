@@ -80,7 +80,7 @@ backend the same fn enqueues the remote twin on the same serial queue.
 | `checkpoint_create(repo_id, reason)` | Snapshot index+workdir to a hidden ref `refs/mygitui/checkpoints/<unix_millis>-<reason>`. |
 | `checkpoints(repo_id)` | List checkpoints, newest first. |
 | `checkpoint_restore(repo_id, id)` | Restore index+workdir from a checkpoint (HEAD/refs/reflog untouched). A pre-restore checkpoint is snapshotted first. |
-| `checkpoint_gc(repo_id)` | Delete checkpoint refs older than the cutoff, always keeping the newest (safety floor). |
+| `checkpoint_gc(repo_id, older_than_days)` | Delete checkpoint refs older than the cutoff (UI default 30 days), always keeping the newest (safety floor); returns the number of deleted checkpoints. |
 | `ops_preview(repo_id, kind, params)` | Pure what-if preview of a dangerous op (`reset_hard` / `clean` / `checkout_force` / `branch_delete`) — no mutation, no checkpoint. |
 | `guard_checkpoint(repo_id, reason)` | Snapshot an undo point right before a dangerous op (queue mutation, serialized with the op it guards). UI flow: `ops_preview` → dialog → `guard_checkpoint` → op. |
 | `os_accent_color()` | OS accent color for the dynamic-color pipeline (Windows DWM registry read; `None` elsewhere). |
@@ -99,7 +99,7 @@ backend the same fn enqueues the remote twin on the same serial queue.
 | `branch_is_merged(repo_id, name, into)` | Merged-guard preview: is `name` fully merged into `into`? |
 | `branch_delete(repo_id, name)` | Delete after the merged-guard; the branch is preserved under `refs/mygitui/trash/<id>` first (deleted-branch trash). |
 | `branch_rename(repo_id, name, new_name)` | Rename a branch. |
-| `tag_create(repo_id, name, target?, message?)` | Lightweight or annotated tag. |
+| `tag_create(repo_id, name, target?, message?)` / `tag_create_signed(repo_id, name, target?, message?)` | Lightweight or annotated tag; `tag_create_signed` makes a signed annotated tag via `git tag -s`. The `service/tags.rs` wrapper takes the same family as `tag_create(repo_id, name, target?, message?, sign?)` and routes `sign` to the CLI path. |
 | `tag_create_signed(repo_id, name, target?, message?)` | Signed annotated tag via `git tag -s` (libgit2 cannot sign); message travels via `-F` temp file. |
 | `tag_delete(repo_id, name)` / `tag_list(repo_id)` | Delete / list tags. |
 | `remote_branches(repo_id)` | Remote tracking branches (`refs/remotes/*`). |
@@ -159,7 +159,7 @@ backend the same fn enqueues the remote twin on the same serial queue.
 | `repo_health(repo_id)` | Fast FS-only snapshot (repo + gitdir sizes, object counts, cached fsck dangling census). |
 | `maintenance_run(repo_id, op)` | One of `gc` / `prune` / `commit_graph` / `pack_refs` / `count_objects` on the op queue; resolves with the command output. |
 | `archive(repo_id, spec, destination)` | `git archive --format <zip\|tar\|tar.gz> <ref> -o <destination>`; spec/destination are metacharacter-guarded. |
-| `repo_clean(repo_id, paths, dirs?)` | Checkpoint first, then delete each validated path; returns the number removed. |
+| `repo_clean(repo_id, paths, checkpoint_reason?)` | Validate, snapshot a checkpoint (reason, UI passes `pre-clean`), then delete each path; returns the number removed. The UI's clean-untracked dialog feeds it the checked untracked paths. |
 | `sparse_info(repo_id)` / `sparse_apply(repo_id, patterns, add?)` | Sparse-checkout state / apply (cone mode; empty = full checkout). |
 | `lfs_status(repo_id)` / `lfs_run(repo_id, subcommand)` | `git lfs` availability + tracked patterns / run `pull`\|`push`\|`install`\|`fetch`. |
 | `clone_blobless(url, destination, depth?)` | Blobless (partial) clone via `git clone --filter=blob:none`. |
