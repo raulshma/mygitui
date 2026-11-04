@@ -125,7 +125,7 @@ backend the same fn enqueues the remote twin on the same serial queue.
 | Fn | Semantics |
 |---|---|
 | `stash_list(repo_id)` | Stashes, newest first. |
-| `stash_push(repo_id, message?, keep_index?)` | Stash current changes. |
+| `stash_push(repo_id, message?, keep_index, include_untracked)` | Stash current changes; the UI form offers include-untracked and a "Keep staged changes" (`--keep-index`) checkbox. |
 | `stash_apply(repo_id, index)` / `stash_drop(repo_id, index)` | Apply (without dropping) / drop one stash. |
 | `stash_branch(repo_id, index, name)` | Apply a stash onto a new branch. |
 | `worktrees(repo_id)` | Registered worktrees with main-entry marking. |

@@ -355,6 +355,7 @@ pub enum Message {
     },
     StashMessageChanged(String),
     StashIncludeUntracked(bool),
+    StashKeepIndex(bool),
     StashPush,
     StashApply {
         index: u32,
@@ -3779,12 +3780,19 @@ impl App {
                 }
                 Task::none()
             }
+            Message::StashKeepIndex(value) => {
+                if let Some(tab) = self.tabs.get_mut(self.active) {
+                    tab.stashes.keep_index = value;
+                }
+                Task::none()
+            }
             Message::StashPush => {
                 let Some(tab) = self.tabs.get_mut(self.active) else {
                     return Task::none();
                 };
                 let message = tab.stashes.message.trim().to_string();
                 let include_untracked = tab.stashes.include_untracked;
+                let keep_index = tab.stashes.keep_index;
                 let repo_id = tab.repo.repo_id.clone();
                 let services = self.services.clone();
                 Task::perform(
@@ -3793,7 +3801,7 @@ impl App {
                             &services,
                             repo_id.clone(),
                             (!message.is_empty()).then_some(message),
-                            false,
+                            keep_index,
                             include_untracked,
                         )
                         .await;

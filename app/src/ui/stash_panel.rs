@@ -22,6 +22,8 @@ pub struct StashesState {
     pub error: Option<String>,
     pub message: String,
     pub include_untracked: bool,
+    /// `git stash push --keep-index`: leave the staged changes in the index.
+    pub keep_index: bool,
     pub checkpoints: Option<Vec<CheckpointInfo>>,
     pub checkpoints_loading: bool,
     pub checkpoints_error: Option<String>,
@@ -78,6 +80,12 @@ pub fn view<'a>(tab: &'a Tab, tokens: Tokens) -> Element<'a, Message> {
             .text_size(10)
             .spacing(4)
             .on_toggle(Message::StashIncludeUntracked),
+        checkbox(state.keep_index)
+            .label("Keep staged changes")
+            .size(12)
+            .text_size(10)
+            .spacing(4)
+            .on_toggle(Message::StashKeepIndex),
         button(text("Stash").size(10))
             .style(theme::button_style(tokens, theme::ButtonKind::Primary))
             .padding([4, 10])
