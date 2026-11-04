@@ -133,6 +133,12 @@ pub fn view<'a>(tab: &'a Tab, tokens: Tokens) -> Element<'a, Message> {
                 .style(theme::button_style(tokens, theme::ButtonKind::Secondary))
                 .padding([2, 8])
                 .on_press(Message::CheckpointCreate),
+        )
+        .push(
+            button(text("GC").size(9))
+                .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
+                .padding([2, 8])
+                .on_press(Message::CheckpointGc),
         );
 
     let checkpoint_rows: Element<'a, Message> = match &state.checkpoints {

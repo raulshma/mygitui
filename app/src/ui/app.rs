@@ -390,6 +390,13 @@ pub enum Message {
         label: String,
         result: Result<(), String>,
     },
+    /// Palette/stash-panel: delete checkpoints older than 30 days.
+    CheckpointGc,
+    /// Checkpoint GC finished with the number of deleted checkpoints.
+    CheckpointsGcDone {
+        repo_id: RepoId,
+        result: Result<u32, String>,
+    },
     ResetRequested(String),
     ResetKindSelected(ResetKind),
     ResetPreviewLoaded {
@@ -1167,6 +1174,13 @@ impl App {
             None,
         );
         register(
+            "checkpoints.gc",
+            "GC checkpoints (older than 30 days)",
+            "Safety net",
+            repo_id.is_some(),
+            None,
+        );
+        register(
             "ops.cancel",
             "Cancel running operation",
             "Safety net",
@@ -1374,6 +1388,7 @@ impl App {
             "network.push" => self.first_remote_task(Message::PushRemote),
             "stash.push" => self.update(Message::StashPush),
             "checkpoints.create" => self.update(Message::CheckpointCreate),
+            "checkpoints.gc" => self.update(Message::CheckpointGc),
             "ops.cancel" => self.update(Message::CancelOp),
             "ai.commit_message" => self.update(Message::AiGenerate(AiAction::CommitMessage)),
             "ai.review_staged" => self.update(Message::AiGenerate(AiAction::ReviewStaged)),
@@ -4354,6 +4369,39 @@ impl App {
                         Task::none()
                     }
                 }
+            }
+            Message::CheckpointGc => {
+                let Some(tab) = self.tabs.get(self.active) else {
+                    return Task::none();
+                };
+                let repo_id = tab.repo.repo_id.clone();
+                let services = self.services.clone();
+                Task::perform(
+                    async move {
+                        let result =
+                            crate::service::misc::checkpoint_gc(&services, repo_id.clone(), 30)
+                                .await;
+                        Message::CheckpointsGcDone { repo_id, result }
+                    },
+                    std::convert::identity,
+                )
+            }
+            Message::CheckpointsGcDone { repo_id, result } => {
+                match result {
+                    Ok(freed) => {
+                        self.notice = Some(Notice::plain(format!(
+                            "GC freed {freed} checkpoint{} (older than 30 days)",
+                            if freed == 1 { "" } else { "s" }
+                        )));
+                    }
+                    Err(err) => {
+                        self.notice = Some(Notice::error(format!("Checkpoint GC failed: {err}")));
+                    }
+                }
+                if let Some(index) = repo_view::tab_index(&self.tabs, &repo_id) {
+                    self.tabs[index].stashes.checkpoints_loading = true;
+                }
+                self.load_checkpoints(repo_id)
             }
             Message::ResetRequested(sha) => {
                 let Some(tab) = self.tabs.get_mut(self.active) else {
