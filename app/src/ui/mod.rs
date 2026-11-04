@@ -21,6 +21,8 @@
 //! - [`remote_panel`] — remotes, fetch/pull/push controls
 //! - [`prompts`] — credential, host-key and device-secret modals
 //! - [`dialog`] — modal confirmation overlay
+//! - [`clone_dialog`] — clone-repository dialog (URL + destination +
+//!   options, streaming clone progress)
 //! - [`palette`] — command palette overlay (ranked command registry)
 //! - [`context_menu`] — reusable right-click menu component
 //! - [`quick_switcher`] — repo quick-switcher overlay (ctrl/cmd+K)
@@ -44,6 +46,7 @@ mod bisect_panel;
 mod blame_view;
 mod branch_panel;
 mod bus;
+mod clone_dialog;
 mod commit_bar;
 mod commit_detail;
 mod compare_view;

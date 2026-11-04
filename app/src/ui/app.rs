@@ -30,6 +30,7 @@ use super::actions_panel;
 use super::bisect_panel;
 use super::blame_view;
 use super::bus;
+use super::clone_dialog;
 use super::compare_view;
 use super::config::{self, Config, RecentRepo};
 use super::context_menu;
@@ -124,6 +125,8 @@ pub struct App {
     ctx_menu: context_menu::State,
     /// Repo quick-switcher overlay state (`ctrl/cmd+k`).
     switcher: quick_switcher::State,
+    /// Clone-repository dialog state (Home button / `repo.clone` palette).
+    clone: clone_dialog::State,
     /// Last known cursor position, used to anchor context menus opened via
     /// `mouse_area` right-presses (which do not carry coordinates).
     cursor: iced::Point,
@@ -462,6 +465,16 @@ pub enum Message {
     Palette(palette::Msg),
     ContextMenu(context_menu::Msg),
     Switcher(quick_switcher::Msg),
+    /// Clone-repository dialog (fields, folder pick, submit).
+    Clone(clone_dialog::Msg),
+    /// Native folder-picker result for the clone destination (None =
+    /// canceled).
+    ClonePicked(Option<PathBuf>),
+    /// Clone finished: on success the destination opens as a repo tab.
+    CloneDone {
+        destination: String,
+        result: Result<String, String>,
+    },
     /// Track the cursor so right-press menus can be positioned.
     CursorMoved(iced::Point),
     /// Embedded terminal pane (routed to the active tab).
@@ -649,6 +662,7 @@ impl App {
             palette: palette::State::default(),
             ctx_menu: context_menu::State::default(),
             switcher: quick_switcher::State::default(),
+            clone: clone_dialog::State::default(),
             cursor: iced::Point::ORIGIN,
             ai_result: None,
             popout: None,
@@ -814,6 +828,7 @@ impl App {
             true,
             Some("Ctrl+O"),
         );
+        register("repo.clone", "Clone repository…", "Repository", true, None);
         register(
             "repo.quick_switch",
             "Quick-switch repository…",
@@ -1144,6 +1159,7 @@ impl App {
     fn run_command(&mut self, id: &str) -> Task<Message> {
         match id {
             "repo.open" => self.update(Message::OpenDialog),
+            "repo.clone" => self.update(Message::Clone(clone_dialog::Msg::Open)),
             "repo.quick_switch" => self.update(Message::Switcher(quick_switcher::Msg::Open)),
             "repo.home" => self.update(Message::GoHome),
             "repo.close_tab" => match self.tabs.get(self.active) {
@@ -4752,6 +4768,82 @@ impl App {
                 }
                 Task::none()
             }
+            Message::Clone(msg) => {
+                match clone_dialog::update(&mut self.clone, msg) {
+                    Some(clone_dialog::Action::Close) | None => {}
+                    Some(clone_dialog::Action::PickFolder) => {
+                        return Task::perform(
+                            async {
+                                rfd::AsyncFileDialog::new()
+                                    .set_title("Clone into")
+                                    .pick_folder()
+                                    .await
+                                    .map(|handle| handle.path().to_path_buf())
+                            },
+                            Message::ClonePicked,
+                        );
+                    }
+                    Some(clone_dialog::Action::Start {
+                        url,
+                        destination,
+                        blobless,
+                        depth,
+                    }) => {
+                        self.clone.start(&url);
+                        let services = self.services.clone();
+                        return Task::perform(
+                            async move {
+                                let result = if blobless {
+                                    crate::service::maintenance::clone_blobless(
+                                        &services,
+                                        url.clone(),
+                                        destination.clone(),
+                                        depth,
+                                    )
+                                    .await
+                                } else {
+                                    crate::service::repo::repo_clone(
+                                        &services,
+                                        url.clone(),
+                                        destination.clone(),
+                                        depth,
+                                    )
+                                    .await
+                                };
+                                Message::CloneDone {
+                                    destination,
+                                    result,
+                                }
+                            },
+                            std::convert::identity,
+                        );
+                    }
+                }
+                Task::none()
+            }
+            Message::ClonePicked(path) => {
+                self.update(Message::Clone(clone_dialog::Msg::FolderPicked(path)))
+            }
+            Message::CloneDone {
+                destination,
+                result,
+            } => {
+                self.clone.running = false;
+                self.clone.progress = None;
+                match result {
+                    Ok(path) => {
+                        self.clone.close();
+                        self.last_op = Some(format!("Cloned into {path}"));
+                        self.open_repo(path)
+                    }
+                    Err(err) => {
+                        self.notice = Some(Notice::error(format!(
+                            "Clone of {destination} failed: {err}"
+                        )));
+                        Task::none()
+                    }
+                }
+            }
             Message::CursorMoved(position) => {
                 self.cursor = position;
                 Task::none()
@@ -5577,6 +5669,22 @@ impl App {
                     });
                 Task::none()
             }
+            BackendEvent::CloneProgress(progress) => {
+                // Streamed into the clone dialog's progress bar while its own
+                // clone is running; unrelated clones only tick the footer.
+                if self.clone.open && self.clone.running && self.clone.active_url == progress.url {
+                    self.clone.progress = Some(clone_dialog::Progress {
+                        received: progress.received,
+                        total: progress.total,
+                        objects: progress.objects,
+                    });
+                }
+                self.last_op = Some(format!(
+                    "clone: {} / {} objects",
+                    progress.objects, progress.total
+                ));
+                Task::none()
+            }
             _ => Task::none(),
         }
     }
@@ -5689,6 +5797,9 @@ impl App {
         }
         if self.switcher.open {
             layers.push(quick_switcher::view(&self.switcher, &tokens).map(Message::Switcher));
+        }
+        if self.clone.open {
+            layers.push(clone_dialog::view(&self.clone, &tokens).map(Message::Clone));
         }
         if self.ctx_menu.open {
             layers.push(context_menu::view(&self.ctx_menu, &tokens).map(Message::ContextMenu));

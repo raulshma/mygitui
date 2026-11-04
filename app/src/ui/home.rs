@@ -4,6 +4,7 @@ use iced::widget::{button, column, container, row, scrollable, text, Space};
 use iced::{Alignment, Element, Length};
 
 use super::app::Message;
+use super::clone_dialog;
 use super::config::RecentRepo;
 use super::theme::{self, Tokens};
 
@@ -41,6 +42,11 @@ pub fn view<'a>(
             .on_press(Message::OpenDialog)
     };
 
+    let clone_button = button(text("Clone repository…").size(13))
+        .style(theme::button_style(tokens, theme::ButtonKind::Secondary))
+        .padding([8, 16])
+        .on_press(Message::Clone(clone_dialog::Msg::Open));
+
     let card = container(
         column![
             text("mygitui").size(24).font(theme::semibold()),
@@ -48,7 +54,7 @@ pub fn view<'a>(
                 .size(13)
                 .color(tokens.muted_foreground),
             Space::new().height(16),
-            open_button,
+            row![open_button, clone_button].spacing(8),
             Space::new().height(24),
             text("Recent repositories").size(12).font(theme::semibold()),
             Space::new().height(4),
