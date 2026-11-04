@@ -231,7 +231,11 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p AppDir/usr/bin AppDir/usr/share/applications AppDir/usr/share/icons/hicolor/128x128/apps
-          tar -xf local/mygitui-x86_64-unknown-linux-gnu.tar.xz -C AppDir/usr/bin
+          # dist archives wrap their contents in a top-level mygitui-<triple>/
+          # directory — extract to scratch and move the binary out explicitly.
+          mkdir -p scratch
+          tar -xf local/mygitui-x86_64-unknown-linux-gnu.tar.xz -C scratch
+          mv scratch/mygitui-x86_64-unknown-linux-gnu/mygitui AppDir/usr/bin/mygitui
           chmod +x AppDir/usr/bin/mygitui
           install -m 644 app/packaging/linux/mygitui.desktop AppDir/usr/share/applications/mygitui.desktop
           install -m 644 app/icons/128x128.png AppDir/usr/share/icons/hicolor/128x128/apps/mygitui.png
@@ -283,7 +287,11 @@ jobs:
           set -euo pipefail
           version="${GITHUB_REF_NAME#v}"
           mkdir -p MyGitUI.app/Contents/MacOS MyGitUI.app/Contents/Resources
-          tar -xf local/mygitui-${{ matrix.triple }}.tar.xz -C MyGitUI.app/Contents/MacOS
+          # dist archives wrap their contents in a top-level mygitui-<triple>/
+          # directory — extract to scratch and move the binary out explicitly.
+          mkdir -p scratch
+          tar -xf local/mygitui-${{ matrix.triple }}.tar.xz -C scratch
+          mv scratch/mygitui-${{ matrix.triple }}/mygitui MyGitUI.app/Contents/MacOS/mygitui
           chmod +x MyGitUI.app/Contents/MacOS/mygitui
           sed "s/@VERSION@/$version/" app/packaging/macos/Info.plist > MyGitUI.app/Contents/Info.plist
           cp app/icons/icon.icns MyGitUI.app/Contents/Resources/AppIcon.icns
