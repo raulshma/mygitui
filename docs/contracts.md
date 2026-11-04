@@ -452,6 +452,39 @@ section's status dots, prompts (`AuthRequest` /
   activation as `RepoOpened`; remote repos keep their distinct backend, so
   recents stay local-only and every engine call runs on the device).
   Palette `repo.devices` expands the section and switches to Home.
+- **Forge panel** (`ui/forge_panel.rs`, dropdown behind the repo header's
+  Forge button or palette `view.toggle_forge`): gh-backed PR list (state
+  filter, gh status/context line) with a per-PR detail section — checks,
+  workflow runs, checkout/open/merge/close/reopen/draft actions and a
+  comment/review form: a shared body field feeding `pr_comment` ("Comment")
+  and the three `pr_review` verdicts (Approve / Request changes /
+  Comment-only; the verdicts that carry written feedback validate inline).
+  Panel actions are intents the shell maps onto `service::forge`; every
+  action outcome lands in the panel banner and the global footer notice,
+  and mutating actions refresh the PR list (runs refresh after run
+  actions). Run rows carry Logs (inline run view: `workflow_run_detail`
+  jobs/steps plus `workflow_run_logs` lines in a tail-capped monospace
+  scrollable; empty output while a run is active renders as such), Cancel
+  (two-step inline confirm, queued/running runs only) and Rerun / Rerun
+  failed (`workflow_run_rerun --failed` for failure/timed_out runs). The
+  runs section's "Dispatch workflow…" form (workflow_list picker, ref
+  defaulting to the current branch, inputs JSON object validated
+  client-side into `WorkflowInput`s) triggers `workflow_dispatch`.
+- **AI settings + health chip** (`ui/ai_settings.rs`, global overlay;
+  opened from the header AI chip or palette `app.ai_settings`): provider
+  radio (opencode / openrouter), opencode attach URL + model (blank URL =
+  managed server), OpenRouter model + password-style API key field with a
+  stored/not-set indicator probed via `secrets_get` — saving writes
+  through `secrets_set`, an empty field keeps the stored key and "Clear
+  stored key" deletes it (`secrets_delete`); the stored secret is never
+  displayed. The AI-enabled and per-repo opt-in checkboxes reuse the
+  `AiToggleEnabled` / `AiToggleRepoOptIn` shell arms (immediate +
+  persisted); every other field is a draft applied on Save through the
+  atomic config save, Cancel discards, and the managed-opencode auto-start
+  behavior is untouched. The header chip derives honestly from the master
+  switch, the last AI call's outcome and the one-shot `ai_status` probe
+  (refreshed on boot, dialog open, save, toggles — no health polling):
+  `AI off` / `AI ready` / `AI not configured` / `AI error: <last error>`.
 - **Remote terminal + polling** — the embedded terminal spawns an SSH shell
   (`remote::term::rshell_create`) for device repos instead of a local PTY;
   routing keys off the session id (`rshell-*` vs `pty-*`), and Restart

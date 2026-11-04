@@ -25,6 +25,8 @@
 //! - [`dialog`] — modal confirmation overlay
 //! - [`clone_dialog`] — clone-repository dialog (URL + destination +
 //!   options, streaming clone progress)
+//! - [`ai_settings`] — AI settings dialog (provider/model/URL drafts,
+//!   OpenRouter key via the OS keyring) + header AI health chip derivation
 //! - [`palette`] — command palette overlay (ranked command registry)
 //! - [`context_menu`] — reusable right-click menu component
 //! - [`quick_switcher`] — repo quick-switcher overlay (ctrl/cmd+K)
@@ -49,6 +51,7 @@
 //!   pick/squash/fixup/drop/edit/reword actions, reorder, autosquash)
 
 mod actions_panel;
+mod ai_settings;
 mod app;
 mod bisect_panel;
 mod blame_view;
