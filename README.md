@@ -7,9 +7,11 @@ support (russh), forge integration, and opt-in AI assist via **opencode**
 
 The shell is the native **iced 0.14** UI: the former Svelte webview is gone,
 and the backend runs in-process behind the `service::*` functions and the
-typed `BackendEvent` bus (see `docs/contracts.md`). Packaging,
-auto-update, deep links, single-instance forwarding, and the embedded
-terminal UI are intentionally deferred until after the daily-driver UI lands.
+typed `BackendEvent` bus (see `docs/contracts.md`). The migration is
+complete: embedded terminal, diff popouts, command palette + keybinds +
+context menus, and OS-accent theming are all in the native UI. Only
+installer packaging and download-and-install auto-update remain deferred
+(release checks are informational via the palette's `Check for updates`).
 
 ## Quickstart
 
@@ -108,9 +110,9 @@ generated output — do not commit it.
   `git verify-commit`), signed fixture repos
 - **Platform**: custom shell actions **with keyboard shortcuts**, GitHub PRs
   + CI checks (`gh` CLI), split panes, command palette + keybinds + context
-  menus, shadcn-derived light/dark theming, syntax-highlighted diffs, a11y
-  throughout (terminal UI, popouts, and OS-accent theming are being restored
-  in the native UI)
+  menus, shadcn-derived light/dark theming, syntax-highlighted diffs,
+  OS-accent theming, embedded terminal, diff popout windows, single-instance
+  forwarding + deep links, a11y throughout
 - **AI assist (opt-in per repo)**: commit message, PR title/desc,
   explain-hunk, staged-diff review, stash message, branch-name
   suggestion; connection health chip
@@ -140,8 +142,13 @@ proptests + soak + baseline-compare gates) →
 **M13–M14 native UI** (iced 0.14 cutover: in-process service bus, native
 shell, status/commit/diff/history panels, remote + safety surfaces).
 
-M13–M14 are landed on `main` — the iced cutover is done — and remaining work
-is polish.
+M13–M14 are landed on `main` — the iced cutover is done, and the Svelte-era
+feature surface (palette, keybinds, context menus, quick switcher, embedded
+terminal, forge, bisect, reflog, health, worktrees, submodules, tags, blame,
+file history, compare, custom actions, output log, file editor, contribution
+stats, syntax highlighting, OS-accent theming, diff popouts, single-instance
+forwarding, deep links, AI assist) is fully restored in the native UI.
+Remaining work is packaging/installer polish.
 
 
 ## License

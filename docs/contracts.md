@@ -329,7 +329,7 @@ event or the explicit refresh path).
 | `ActionOutput` | `{ run_id, repo_id, name, line, done }` | Custom action runner (`actions.rs`); empty `line` on the final event. |
 | `PtyOutput` | `{ session_id, data }` | PTY sink (`pty.rs`) — lossy-UTF-8 decoded terminal bytes for one coalesced window. |
 | `PtyExit` | `{ session_id, code }` | PTY exit waiter. |
-| `CliArgs` | `Vec<String>` | Second-launch CLI args forwarded by the single-instance guard (forwarding itself is deferred; the variant and the consumed-once `CliArgs` first-launch store already exist). |
+| `CliArgs` | `Vec<String>` | Second-launch CLI args forwarded by the single-instance guard (`instance.rs`: per-user Unix-domain socket; second launch forwards argv and exits, primary publishes here — Unix only, Windows runs standalone). |
 
 ## UI ⇄ service contract
 
@@ -384,9 +384,13 @@ always arrives for queued mutations/net ops — success or error — and clears
 
 `ui/bus.rs` wraps the bus in one iced `Subscription`
 (`Subscription::run(bus::stream).map(Message::Backend)`); `Lagged` gaps are
-logged and skipped. The app batches the bus subscription with the system
-theme-change subscription, the keyboard listener, and the per-tab auto-fetch
-timer (keyed by repo + cadence; `0` disables). Each `BackendEvent` variant
+logged and skipped. The app runs under `iced::daemon` (multi-window): the
+primary window hosts the shell and diffs can pop out into secondary windows
+(`App::popout`, per-window `view`/`theme`/`title`, cleanup via
+`window::close_events`). The subscription batch adds the system theme-change
+subscription, the keyboard listener (palette/switcher chords), the
+`window::close_events` stream, and the per-tab auto-fetch timer (keyed by
+repo + cadence; `0` disables). Each `BackendEvent` variant
 maps to a UI behavior: `RepoChanged` → targeted panel refreshes,
 `LogPage` → history model accept (matched by `request_id`), `OpProgress` →
 footer/ActiveOp, prompts (`AuthRequest` / `HostKeyRequest` /
@@ -397,10 +401,16 @@ terminal panel, `ActionOutput` → action run view.
 
 - **User config** — `<config_dir>/com.raulshma.mygitui/config.json`
   (`ui/config.rs`): `{ theme: "system"|"light"|"dark", diff_wrap: bool,
-  auto_fetch_minutes: u32, recent_repos: [{ path, pinned, last_opened }] }`.
+  auto_fetch_minutes: u32, recent_repos: [{ path, pinned, last_opened }],
+  accent: bool, highlight: bool, ai: { enabled, provider, opencode_url,
+  opencode_model, openrouter_model, repo_opt_in } }` (AI secrets live in
+  the OS keyring, never here).
   Loading never fails (missing/corrupt → defaults, unknown keys ignored);
   saves are atomic (temp + rename) and surface I/O errors to the UI.
   Recents dedupe separator/case variants.
+- **Custom actions** — `<config_dir>/com.raulshma.mygitui/actions.json`
+  (the app's actions panel: name, command, shortcuts; atomic writes,
+  malformed file → defaults).
 - **Data dir** — `<data_dir>/com.raulshma.mygitui/` (`AppServices::data_dir`):
   `remote/devices.json` (device profiles, secrets excluded — they live in
   the keyring) and `remote/known_hosts.json` (TOFU-pinned host keys). The
