@@ -107,7 +107,9 @@ backend the same fn enqueues the remote twin on the same serial queue.
 | `branch_trash_list(repo_id)` | Branches preserved under `refs/mygitui/trash/*`, newest first. |
 | `branch_trash_restore(repo_id, id, new_name?)` | Restore a trashed branch (optionally renamed); returns the branch name. |
 | `commit_signature(repo_id, sha)` | Verification status of one commit's signature (queued read). |
-| `autosquash_plan(repo_id, base)` | Autosquash rebase plan for `base..HEAD` (feeds `rebase_start`). |
+| `autosquash_plan(repo_id, base)` | Autosquash rebase plan for `base..HEAD` (feeds `rebase_start`). The rebase planner's "Autosquash fixups" button swaps its authored rows for this output. |
+| `mergetool_info(repo_id)` | Configured external merge tools (pure config read; gui-first resolution). The "Run mergetool…" dialog (status panel conflicted header + palette `conflicts.mergetool`) shows the detected tool, or the none-found guidance instead of a Run button. |
+| `mergetool_run(repo_id, path, tool?)` | Launch `git mergetool --no-prompt` for one conflicted path (off the op queue — the tool runs interactively for minutes). Completion closes the dialog, posts a footer notice and refreshes the repo so the conflict list is re-read. |
 
 ### Network — `service/network.rs`
 
@@ -142,8 +144,8 @@ backend the same fn enqueues the remote twin on the same serial queue.
 | `conflict_resolve(repo_id, path, resolution)` | Resolve one conflict (ours/theirs/both/manual content). |
 | `cherry_pick(repo_id, sha)` / `revert(repo_id, sha)` | Cherry-pick / revert (sequences surface through `rebase_state`). |
 | `reset(repo_id, kind, to?)` | Reset soft/mixed/hard to a commit-ish. |
-| `rebase_start(repo_id, base, steps?)` | Start an interactive rebase with an explicit step list (reorder, squash/fixup/drop/edit/reword, `exec`). |
-| `rebase_plan(repo_id, base)` | Plain plan: every commit in `base..HEAD` oldest first; empty means nothing to rebase. |
+| `rebase_start(repo_id, base, steps?)` | Start an interactive rebase with an explicit step list (reorder, squash/fixup/drop/edit/reword, `exec`). The UI runs it from the interactive rebase planner (`ui/rebase_planner.rs`): the commit row context menu's "Rebase from here…" opens the dialog seeded by `rebase_plan`, each row cycles pick/squash/fixup/drop/edit/reword (reword prompts for the new message) and carries ↑/↓ reorder buttons, "Autosquash fixups" replaces the plan via `autosquash_plan`, and the start button is blocked with "Stash your changes first" while uncommitted staged+unstaged changes exist. Completion flows into the existing in-progress rebase surface (header chips + continue/abort). The branch panel's simple "Rebase onto…" confirm (plain pick plan) is unchanged. |
+| `rebase_plan(repo_id, base)` | Plain plan: every commit in `base..HEAD` oldest first; empty means nothing to rebase. Doubles as the range query that seeds the planner's rows. |
 | `rebase_state(repo_id)` | Progress + remaining steps + conflicts of the running rebase. |
 | `rebase_continue(repo_id)` / `rebase_abort(repo_id)` | Continue (resolving conflicts first) / abort. |
 | `bisect_start(repo_id, good, bad?)` | Begin a bisect (`<gitdir>/mygitui/bisect.json` is the state file). |
