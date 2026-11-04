@@ -12,6 +12,7 @@
 //! on Windows run standalone. A stale socket file (crashed previous
 //! instance) is detected by the failed connect and removed before bind.
 
+#[cfg(unix)]
 use std::path::PathBuf;
 
 /// Platform listener for the primary's accept loop: a Unix-domain socket
