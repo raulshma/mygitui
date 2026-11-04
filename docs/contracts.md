@@ -136,7 +136,7 @@ backend the same fn enqueues the remote twin on the same serial queue.
 
 | Fn | Semantics |
 |---|---|
-| `merge_branch(repo_id, opts)` | Merge with ff policy / squash / `--no-commit` / `-X ours|theirs`. |
+| `merge_branch(repo_id, opts)` | Merge with ff policy / squash / `--no-commit` / `-X ours|theirs`. The UI runs it only after a confirm dialog (shows the branch being merged into the current one, offers exactly these options) and disables the confirm button while uncommitted staged+unstaged changes exist ("Stash your changes first"). |
 | `merge_abort(repo_id)` / `sequencer_abort(repo_id)` | Abort an in-progress merge / cherry-pick-revert sequence. |
 | `conflicts(repo_id)` | Current conflict list with marker previews. |
 | `conflict_resolve(repo_id, path, resolution)` | Resolve one conflict (ours/theirs/both/manual content). |

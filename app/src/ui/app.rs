@@ -18,7 +18,7 @@ use iced::{window, Alignment, Element, Length, Subscription, Task};
 
 use crate::engine::types::{
     BranchInfo, ChangeKind, CheckpointInfo, CommitOptions, ConflictResolution, DiffSide,
-    FetchOptions, FileDiff, LineRange, MergeOptions, MergeOutcome, MergeResult, NetStats,
+    FetchOptions, FileDiff, LineRange, MergeFavor, MergeOutcome, MergeResult, NetStats,
     PreviewInfo, PullOptions, PushOptions, RebaseState, RebaseStep, RemoteInfo, RepoId, RepoInfo,
     RepoStatus, ResetKind, StageRequest, StageTarget, StashInfo,
 };
@@ -415,7 +415,13 @@ pub enum Message {
         result: Result<String, String>,
     },
 
+    /// Open the merge confirm dialog for a branch (into the current one).
     MergeBranch(String),
+    MergeNoFfSelected(bool),
+    MergeSquashToggled(bool),
+    MergeNoCommitToggled(bool),
+    MergeFavorSelected(MergeFavor),
+    MergeConfirmed,
     MergeDone {
         repo_id: RepoId,
         label: String,
@@ -3282,6 +3288,7 @@ impl App {
                     tab.pending_reset = None;
                     tab.pending_remote_remove = None;
                     tab.pending_rebase = None;
+                    tab.pending_merge = None;
                 }
                 Task::none()
             }
@@ -4332,19 +4339,69 @@ impl App {
                 }
             }
             Message::MergeBranch(name) => {
+                if let Some(tab) = self.tabs.get_mut(self.active) {
+                    tab.pending_merge = Some(dialog::MergeRequest::new(name));
+                }
+                Task::none()
+            }
+            Message::MergeNoFfSelected(value) => {
+                if let Some(request) = self
+                    .tabs
+                    .get_mut(self.active)
+                    .and_then(|tab| tab.pending_merge.as_mut())
+                {
+                    request.no_ff = value;
+                }
+                Task::none()
+            }
+            Message::MergeSquashToggled(value) => {
+                if let Some(request) = self
+                    .tabs
+                    .get_mut(self.active)
+                    .and_then(|tab| tab.pending_merge.as_mut())
+                {
+                    request.squash = value;
+                }
+                Task::none()
+            }
+            Message::MergeNoCommitToggled(value) => {
+                if let Some(request) = self
+                    .tabs
+                    .get_mut(self.active)
+                    .and_then(|tab| tab.pending_merge.as_mut())
+                {
+                    request.no_commit = value;
+                }
+                Task::none()
+            }
+            Message::MergeFavorSelected(value) => {
+                if let Some(request) = self
+                    .tabs
+                    .get_mut(self.active)
+                    .and_then(|tab| tab.pending_merge.as_mut())
+                {
+                    request.favor = value;
+                }
+                Task::none()
+            }
+            Message::MergeConfirmed => {
                 let Some(tab) = self.tabs.get_mut(self.active) else {
                     return Task::none();
                 };
+                let Some(request) = tab.pending_merge.take() else {
+                    return Task::none();
+                };
                 let repo_id = tab.repo.repo_id.clone();
-                let label = format!("Merge {name}");
+                let label = format!("Merge {}", request.name);
+                let options = request.options();
                 let services = self.services.clone();
                 Task::perform(
                     async move {
                         let result = crate::service::merge::merge_branch(
                             &services,
                             repo_id.clone(),
-                            name,
-                            MergeOptions::default(),
+                            request.name,
+                            options,
                         )
                         .await;
                         Message::MergeDone {

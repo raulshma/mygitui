@@ -33,8 +33,8 @@ use super::remote_panel::{self, RemotesState};
 use super::stash_panel::{self, StashesState};
 use super::stats_panel;
 use super::status_model::{
-    build_status_index, has_staged_changes, remap_selection, SectionId, StatusIndex, StatusRow,
-    StatusSelection,
+    build_status_index, has_staged_changes, has_uncommitted_changes, remap_selection, SectionId,
+    StatusIndex, StatusRow, StatusSelection,
 };
 use super::status_panel;
 use super::submodule_panel;
@@ -159,6 +159,8 @@ pub struct Tab {
     pub pending_remote_remove: Option<String>,
     /// Rebase (target branch + pick plan) awaiting the confirmation dialog.
     pub pending_rebase: Option<PendingRebase>,
+    /// Branch + options awaiting the merge confirmation dialog.
+    pub pending_merge: Option<dialog::MergeRequest>,
 
     pub diff_seq: u64,
     pub commit_diff_seq: u64,
@@ -220,6 +222,7 @@ impl Tab {
             pending_reset: None,
             pending_remote_remove: None,
             pending_rebase: None,
+            pending_merge: None,
             diff_seq: 0,
             commit_diff_seq: 0,
         }
@@ -297,6 +300,24 @@ impl Tab {
                 .ready()
                 .map(|status| has_staged_changes(&status.entries))
                 .unwrap_or(false)
+    }
+
+    /// Uncommitted staged+unstaged changes exist (untracked files excluded —
+    /// they never block a merge): the merge dialog's confirm guard.
+    pub fn working_tree_dirty(&self) -> bool {
+        self.status
+            .ready()
+            .is_some_and(|status| has_uncommitted_changes(&status.entries))
+    }
+
+    /// Name of the checked-out branch, when the branch list is loaded.
+    pub fn head_branch(&self) -> Option<&str> {
+        self.branches
+            .list
+            .as_ref()?
+            .iter()
+            .find(|branch| branch.is_head)
+            .map(|branch| branch.name.as_str())
     }
 
     /// Rebuild the row index from a fresh status and reconcile selection.
@@ -505,6 +526,15 @@ fn dialog_overlay<'a>(tab: &'a Tab, tokens: Tokens) -> Option<Element<'a, Messag
             &spec,
             Message::CancelDialog,
             Message::RebaseConfirmed,
+        ));
+    }
+
+    if let Some(request) = &tab.pending_merge {
+        return Some(dialog::merge(
+            tokens,
+            request,
+            tab.head_branch(),
+            tab.working_tree_dirty(),
         ));
     }
 

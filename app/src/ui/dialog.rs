@@ -3,10 +3,10 @@
 //! The scrim is a [`mouse_area`], so presses outside the card dismiss the
 //! dialog and never reach the workspace underneath.
 
-use iced::widget::{button, column, container, mouse_area, row, text, Space};
+use iced::widget::{button, checkbox, column, container, mouse_area, row, text, Space};
 use iced::{Alignment, Background, Border, Element, Length};
 
-use crate::engine::types::{PreviewInfo, ResetKind};
+use crate::engine::types::{MergeFavor, MergeOptions, PreviewInfo, ResetKind};
 
 use super::app::Message;
 use super::theme::{self, Tokens};
@@ -30,6 +30,44 @@ pub struct ResetRequest {
     /// `ops_preview` result for worktree-discarding kinds (loaded async;
     /// `None` while loading or when the mode keeps the files).
     pub preview: Option<PreviewInfo>,
+}
+
+/// Pending merge awaiting its confirm dialog: the branch being merged into
+/// the current one plus the options the backend `merge_branch` supports.
+#[derive(Debug, Clone)]
+pub struct MergeRequest {
+    /// Branch being merged (not the branch merged into).
+    pub name: String,
+    /// Force a merge commit even when a fast-forward is possible (`--no-ff`).
+    pub no_ff: bool,
+    /// Stage the merge result without committing (`--squash`).
+    pub squash: bool,
+    /// Stop before creating the merge commit (`--no-commit`).
+    pub no_commit: bool,
+    /// Auto-resolve conflicting hunks favoring one side (`-X ours|theirs`).
+    pub favor: MergeFavor,
+}
+
+impl MergeRequest {
+    pub fn new(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            no_ff: false,
+            squash: false,
+            no_commit: false,
+            favor: MergeFavor::None,
+        }
+    }
+
+    /// The backend options these dialog fields map to.
+    pub fn options(&self) -> MergeOptions {
+        MergeOptions {
+            no_ff: self.no_ff,
+            squash: self.squash,
+            no_commit: self.no_commit,
+            favor: self.favor,
+        }
+    }
 }
 
 /// Reset modes that discard worktree changes (and therefore get a preview).
@@ -327,6 +365,205 @@ pub fn confirm<'a>(
         });
 
     mouse_area(scrim).on_press(cancel).into()
+}
+
+/// Shared modal scaffold for the option cards below: a centered card over a
+/// dimmed scrim; pressing outside the card dispatches [`Message::CancelDialog`].
+fn modal<'a>(
+    tokens: Tokens,
+    width: f32,
+    body: Element<'a, Message>,
+    actions: Element<'a, Message>,
+) -> Element<'a, Message> {
+    let card = container(column![body, Space::new().height(8), actions].spacing(6))
+        .width(Length::Fixed(width))
+        .padding([16, 18])
+        .style(move |_theme| container::Style {
+            background: Some(Background::Color(tokens.card)),
+            border: Border {
+                color: tokens.border,
+                width: 1.0,
+                radius: 10.0.into(),
+            },
+            ..container::Style::default()
+        });
+
+    let scrim = container(card)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .align_x(Alignment::Center)
+        .align_y(Alignment::Center)
+        .style(move |_theme| container::Style {
+            background: Some(Background::Color(theme::with_alpha(
+                iced::Color::BLACK,
+                0.4,
+            ))),
+            ..container::Style::default()
+        });
+
+    mouse_area(scrim).on_press(Message::CancelDialog).into()
+}
+
+/// One select line of an option card: radio dot + label + description.
+fn option_line<'a>(
+    tokens: Tokens,
+    selected: bool,
+    label: &'a str,
+    description: &'a str,
+    on_press: Message,
+) -> Element<'a, Message> {
+    button(
+        row![
+            text(if selected { "●" } else { "○" })
+                .size(10)
+                .color(if selected {
+                    tokens.primary
+                } else {
+                    tokens.muted_foreground
+                }),
+            text(label).size(11).color(tokens.foreground),
+            text(description).size(10).color(tokens.muted_foreground),
+        ]
+        .spacing(8)
+        .align_y(Alignment::Center),
+    )
+    .style(theme::button_style(
+        tokens,
+        if selected {
+            theme::ButtonKind::Secondary
+        } else {
+            theme::ButtonKind::Ghost
+        },
+    ))
+    .padding([4, 8])
+    .width(Length::Fill)
+    .on_press(on_press)
+    .into()
+}
+
+/// Card action row: spacer + Cancel + the primary confirm button. The
+/// confirm press is optional (the merge card drops it while dirty).
+fn action_row<'a>(
+    tokens: Tokens,
+    confirm_label: &str,
+    on_confirm: Option<Message>,
+) -> Element<'a, Message> {
+    row![
+        Space::new().width(Length::Fill),
+        button(text("Cancel").size(11))
+            .style(theme::button_style(tokens, theme::ButtonKind::Secondary))
+            .padding([4, 12])
+            .on_press(Message::CancelDialog),
+        button(text(confirm_label.to_string()).size(11))
+            .style(theme::button_style(tokens, theme::ButtonKind::Primary))
+            .padding([4, 12])
+            .on_press_maybe(on_confirm),
+    ]
+    .spacing(6)
+    .align_y(Alignment::Center)
+    .into()
+}
+
+/// Centered modal confirming a merge into the current branch: the options
+/// the backend `merge_branch` supports (ff policy, squash, `--no-commit`,
+/// `-X ours|theirs`) and a dirty guard — uncommitted staged+unstaged
+/// changes disable the confirm button.
+pub fn merge<'a>(
+    tokens: Tokens,
+    request: &MergeRequest,
+    head: Option<&str>,
+    dirty: bool,
+) -> Element<'a, Message> {
+    let mut options = column![].spacing(4);
+    for (no_ff, label, description) in [
+        (
+            false,
+            "Fast-forward when possible",
+            "just move the branch when it can",
+        ),
+        (true, "Always create a merge commit", "--no-ff"),
+    ] {
+        options = options.push(option_line(
+            tokens,
+            request.no_ff == no_ff,
+            label,
+            description,
+            Message::MergeNoFfSelected(no_ff),
+        ));
+    }
+
+    let mut favor = row![text("Conflicting hunks:")
+        .size(10)
+        .color(tokens.muted_foreground)]
+    .spacing(4)
+    .align_y(Alignment::Center);
+    for (kind, label) in [
+        (MergeFavor::None, "leave conflicts"),
+        (MergeFavor::Ours, "-X ours"),
+        (MergeFavor::Theirs, "-X theirs"),
+    ] {
+        favor = favor.push(
+            button(text(label).size(10))
+                .style(theme::button_style(
+                    tokens,
+                    if request.favor == kind {
+                        theme::ButtonKind::Secondary
+                    } else {
+                        theme::ButtonKind::Ghost
+                    },
+                ))
+                .padding([2, 6])
+                .on_press(Message::MergeFavorSelected(kind)),
+        );
+    }
+
+    let mut body = column![
+        text(format!("Merge {}", request.name))
+            .size(14)
+            .font(theme::semibold()),
+        Space::new().height(4),
+        text(match head {
+            Some(head) => format!("Merge “{}” into “{head}”?", request.name),
+            None => format!("Merge “{}” into the current branch?", request.name),
+        })
+        .size(12)
+        .color(tokens.muted_foreground),
+        Space::new().height(6),
+        options,
+        row![
+            checkbox(request.squash)
+                .label("Squash (--squash)")
+                .size(12)
+                .text_size(10)
+                .spacing(4)
+                .on_toggle(Message::MergeSquashToggled),
+            checkbox(request.no_commit)
+                .label("Stop before committing (--no-commit)")
+                .size(12)
+                .text_size(10)
+                .spacing(4)
+                .on_toggle(Message::MergeNoCommitToggled),
+        ]
+        .spacing(10)
+        .align_y(Alignment::Center),
+        favor,
+    ]
+    .spacing(6);
+
+    if dirty {
+        body = body.push(
+            text("Stash your changes first")
+                .size(10)
+                .color(tokens.deleted),
+        );
+    }
+
+    modal(
+        tokens,
+        440.0,
+        body.into(),
+        action_row(tokens, "Merge", (!dirty).then_some(Message::MergeConfirmed)),
+    )
 }
 
 #[cfg(test)]

@@ -417,6 +417,17 @@ pub fn has_staged_changes(entries: &[StatusEntry]) -> bool {
     entries.iter().any(|entry| is_change_kind(entry.index))
 }
 
+/// True when any entry carries staged or unstaged changes, conflicts
+/// included. Untracked files don't count: they never block a merge.
+pub fn has_uncommitted_changes(entries: &[StatusEntry]) -> bool {
+    entries.iter().any(|entry| {
+        is_change_kind(entry.index)
+            || is_change_kind(entry.worktree)
+            || entry.index == ChangeKind::Conflicted
+            || entry.worktree == ChangeKind::Conflicted
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -596,6 +607,36 @@ mod tests {
         ];
         assert!(has_staged_changes(&entries));
         assert!(!has_staged_changes(&entries[1..]));
+    }
+
+    #[test]
+    fn uncommitted_changes_cover_staged_unstaged_and_conflicts_not_untracked() {
+        assert!(!has_uncommitted_changes(&[]));
+        assert!(!has_uncommitted_changes(&[entry(
+            "a",
+            ChangeKind::Unmodified,
+            ChangeKind::Untracked
+        )]));
+        assert!(has_uncommitted_changes(&[entry(
+            "a",
+            ChangeKind::Modified,
+            ChangeKind::Unmodified
+        )]));
+        assert!(has_uncommitted_changes(&[entry(
+            "a",
+            ChangeKind::Unmodified,
+            ChangeKind::Modified
+        )]));
+        assert!(has_uncommitted_changes(&[entry(
+            "a",
+            ChangeKind::Conflicted,
+            ChangeKind::Unmodified
+        )]));
+        assert!(has_uncommitted_changes(&[entry(
+            "a",
+            ChangeKind::Unmodified,
+            ChangeKind::Conflicted
+        )]));
     }
 
     #[test]
