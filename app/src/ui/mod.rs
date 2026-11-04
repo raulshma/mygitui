@@ -26,6 +26,8 @@
 //! - [`palette`] — command palette overlay (ranked command registry)
 //! - [`context_menu`] — reusable right-click menu component
 //! - [`quick_switcher`] — repo quick-switcher overlay (ctrl/cmd+K)
+//! - [`quick_open`] — quick-open overlay (ctrl/cmd+P): fuzzy file search
+//!   over the workspace file index, opens in the in-app editor
 //! - [`terminal`] — embedded PTY terminal pane (monitor with input)
 //! - [`forge_panel`] — GitHub PRs, CI checks and workflow runs (gh CLI)
 //! - [`stats_panel`] — contribution heatmap and contributor leaderboard
@@ -69,6 +71,7 @@ mod home;
 mod output_panel;
 mod palette;
 mod prompts;
+mod quick_open;
 mod quick_switcher;
 mod reflog_panel;
 mod remote_panel;

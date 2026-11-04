@@ -46,6 +46,7 @@ use super::home;
 use super::output_panel;
 use super::palette;
 use super::prompts::{self, AuthPromptState, DeviceSecretPromptState, HostKeyPromptState};
+use super::quick_open;
 use super::quick_switcher;
 use super::reflog_panel;
 use super::remote_panel::net_summary;
@@ -128,6 +129,8 @@ pub struct App {
     switcher: quick_switcher::State,
     /// Clone-repository dialog state (Home button / `repo.clone` palette).
     clone: clone_dialog::State,
+    /// Quick Open overlay state (`ctrl/cmd+P`).
+    quick_open: quick_open::State,
     /// Last known cursor position, used to anchor context menus opened via
     /// `mouse_area` right-presses (which do not carry coordinates).
     cursor: iced::Point,
@@ -466,6 +469,13 @@ pub enum Message {
     Palette(palette::Msg),
     ContextMenu(context_menu::Msg),
     Switcher(quick_switcher::Msg),
+    /// Quick Open overlay (`ctrl/cmd+P`, routed from its own key listener).
+    QuickOpen(quick_open::Msg),
+    /// Quick Open file index fetched for the active repo.
+    QuickOpenIndexLoaded {
+        repo_id: RepoId,
+        result: Result<crate::workspace::FileIndex, String>,
+    },
     /// Clone-repository dialog (fields, folder pick, submit).
     Clone(clone_dialog::Msg),
     /// Native folder-picker result for the clone destination (None =
@@ -685,6 +695,7 @@ impl App {
             ctx_menu: context_menu::State::default(),
             switcher: quick_switcher::State::default(),
             clone: clone_dialog::State::default(),
+            quick_open: quick_open::State::default(),
             cursor: iced::Point::ORIGIN,
             ai_result: None,
             popout: None,
@@ -1009,6 +1020,13 @@ impl App {
             None,
         );
         register(
+            "files.quick_open",
+            "Go to file…",
+            "View",
+            repo_id.is_some(),
+            Some("Ctrl+P"),
+        );
+        register(
             "view.files",
             "Toggle files panel",
             "View",
@@ -1259,6 +1277,7 @@ impl App {
             "panel.output" => self.update(Message::Output(output_panel::Msg::ToggleOpen)),
             "panel.stats" => self.update(Message::Stats(stats_panel::Msg::ToggleOpen)),
             "view.popout_diff" => self.update(Message::PopoutDiff),
+            "files.quick_open" => self.update(Message::QuickOpen(quick_open::Msg::Open)),
             "view.files" => self.update(Message::Files(files_panel::Msg::Toggle)),
             "view.compare" => {
                 if let Some(tab) = self.tabs.get_mut(self.active) {
@@ -5106,6 +5125,72 @@ impl App {
             Message::ClonePicked(path) => {
                 self.update(Message::Clone(clone_dialog::Msg::FolderPicked(path)))
             }
+            Message::QuickOpen(msg) => {
+                let opening = matches!(msg, quick_open::Msg::Open)
+                    || matches!(msg, quick_open::Msg::Toggle) && !self.quick_open.open;
+                if opening {
+                    if self.tabs.is_empty() {
+                        // No repository open: the hotkey is inert.
+                        return Task::none();
+                    }
+                    self.quick_open.open();
+                    // Fetch/build the index on every open (cheap, capped,
+                    // and keeps up with watcher churn).
+                    let repo_id = self.tabs[self.active].repo.repo_id.clone();
+                    let services = self.services.clone();
+                    return Task::perform(
+                        async move {
+                            let result =
+                                crate::workspace::repo_file_index(&services, repo_id.clone()).await;
+                            Message::QuickOpenIndexLoaded { repo_id, result }
+                        },
+                        std::convert::identity,
+                    );
+                }
+                match quick_open::update(&mut self.quick_open, msg) {
+                    Some(quick_open::Action::Open(path)) => {
+                        self.quick_open.close();
+                        if let Some(tab) = self.tabs.get_mut(self.active) {
+                            tab.detail_open = false;
+                            tab.blame.open = false;
+                            tab.file_history.open = false;
+                            tab.compare.open = false;
+                            tab.files.open = false;
+                        }
+                        return self.update(Message::Editor(editor_view::Msg::OpenRequested(path)));
+                    }
+                    Some(quick_open::Action::Close) | None => {}
+                }
+                Task::none()
+            }
+            Message::QuickOpenIndexLoaded { repo_id, result } => {
+                // Stale (closed or another tab became active): drop.
+                let matches_active = self
+                    .tabs
+                    .get(self.active)
+                    .is_some_and(|tab| tab.repo.repo_id == repo_id)
+                    && self.quick_open.open;
+                if !matches_active {
+                    return Task::none();
+                }
+                match result {
+                    Ok(index) => {
+                        let entries = index
+                            .entries
+                            .into_iter()
+                            .filter(|entry| !entry.is_dir)
+                            .map(|entry| quick_open::Entry { path: entry.path })
+                            .collect();
+                        self.quick_open.set_entries(entries);
+                    }
+                    Err(err) => {
+                        self.quick_open.loading = false;
+                        self.notice = Some(Notice::error(format!("Quick Open failed: {err}")));
+                        self.quick_open.close();
+                    }
+                }
+                Task::none()
+            }
             Message::CloneDone {
                 destination,
                 result,
@@ -6062,6 +6147,9 @@ impl App {
             iced::event::listen_with(|event, status, window| {
                 quick_switcher::event_to_msg(event, status, window).map(Message::Switcher)
             }),
+            iced::event::listen_with(|event, status, window| {
+                quick_open::event_to_msg(event, status, window).map(Message::QuickOpen)
+            }),
             self.auto_fetch_subscription(),
         ];
         // Terminal panes: PTY output per live session (every tab, so
@@ -6153,6 +6241,9 @@ impl App {
         }
         if self.switcher.open {
             layers.push(quick_switcher::view(&self.switcher, &tokens).map(Message::Switcher));
+        }
+        if self.quick_open.open {
+            layers.push(quick_open::view(&self.quick_open, &tokens).map(Message::QuickOpen));
         }
         if self.clone.open {
             layers.push(clone_dialog::view(&self.clone, &tokens).map(Message::Clone));
@@ -6340,6 +6431,9 @@ fn modifiers_changed(
                 }
                 iced::keyboard::Key::Character(c) if cmd && c == "k" => {
                     Some(Message::Switcher(quick_switcher::Msg::Toggle))
+                }
+                iced::keyboard::Key::Character(c) if cmd && c == "p" => {
+                    Some(Message::QuickOpen(quick_open::Msg::Toggle))
                 }
                 _ => None,
             }
