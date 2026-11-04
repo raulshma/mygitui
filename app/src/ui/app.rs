@@ -19,8 +19,8 @@ use iced::{window, Alignment, Element, Length, Subscription, Task};
 use crate::engine::types::{
     BranchInfo, BranchTrashEntry, ChangeKind, CheckpointInfo, CommitOptions, ConflictResolution,
     DiffSide, FetchOptions, FileDiff, LineRange, MergeFavor, MergeOutcome, MergeResult, NetStats,
-    PreviewInfo, PullOptions, PushOptions, RebaseState, RebaseStep, RemoteInfo, RepoId, RepoInfo,
-    RepoStatus, ResetKind, StageRequest, StageTarget, StashInfo,
+    PreviewInfo, PullOptions, PushOptions, RebaseState, RebaseStep, RemoteBranchInfo, RemoteInfo,
+    RepoId, RepoInfo, RepoStatus, ResetKind, StageRequest, StageTarget, StashInfo,
 };
 use crate::remote::prompts::SecretAnswer;
 use crate::service::events::BackendEvent;
@@ -698,6 +698,36 @@ pub enum Message {
     BranchRenameChanged(String),
     /// Run the confirmed rename.
     BranchRenameConfirmed,
+    /// Remote-tracking branch list loaded (branch panel).
+    RemoteBranchesLoaded {
+        repo_id: RepoId,
+        result: Result<Vec<RemoteBranchInfo>, String>,
+    },
+    /// Check out a remote branch into a local one (confirms when the
+    /// working tree is dirty).
+    RemoteBranchCheckout {
+        remote: String,
+        name: String,
+    },
+    /// The dirty-checkout confirm was accepted.
+    RemoteBranchCheckoutConfirmed,
+    /// Remote checkout finished with the checked-out local branch.
+    RemoteCheckoutDone {
+        repo_id: RepoId,
+        result: Result<String, String>,
+    },
+    /// Delete a remote branch (push delete; confirmed by a dialog).
+    RemoteBranchDeleteRequested {
+        remote: String,
+        name: String,
+    },
+    /// The delete confirm was accepted.
+    RemoteBranchDeleteConfirmed,
+    /// Remote branch deletion finished.
+    RemoteBranchDeleteDone {
+        repo_id: RepoId,
+        result: Result<NetStats, String>,
+    },
 }
 
 /// One background auto-fetch cycle for a repo: pick the default remote
@@ -3129,6 +3159,43 @@ impl App {
         )
     }
 
+    fn load_remote_branches(&self, repo_id: RepoId) -> Task<Message> {
+        let services = self.services.clone();
+        Task::perform(
+            async move {
+                let result =
+                    crate::service::branches::remote_branches(&services, repo_id.clone()).await;
+                Message::RemoteBranchesLoaded { repo_id, result }
+            },
+            std::convert::identity,
+        )
+    }
+
+    /// Runs the remote checkout (the dirty-tree guard already decided this
+    /// is safe to go straight in).
+    fn checkout_remote_branch(
+        &mut self,
+        repo_id: RepoId,
+        remote: String,
+        name: String,
+    ) -> Task<Message> {
+        let services = self.services.clone();
+        Task::perform(
+            async move {
+                let result = crate::service::branches::branch_checkout_remote(
+                    &services,
+                    repo_id.clone(),
+                    remote,
+                    name,
+                    None,
+                )
+                .await;
+                Message::RemoteCheckoutDone { repo_id, result }
+            },
+            std::convert::identity,
+        )
+    }
+
     fn load_stashes(&self, repo_id: RepoId) -> Task<Message> {
         let services = self.services.clone();
         Task::perform(
@@ -3724,6 +3791,8 @@ impl App {
                     tab.pending_ignore_templates = None;
                     tab.pending_clean = None;
                     tab.pending_branch_rename = None;
+                    tab.pending_remote_checkout = None;
+                    tab.pending_remote_branch_delete = None;
                 }
                 Task::none()
             }
@@ -3972,8 +4041,13 @@ impl App {
                 tab.remotes.open = false;
                 tab.branches.loading = true;
                 tab.branches.error = None;
+                tab.branches.remote_loading = true;
+                tab.branches.remote_error = None;
                 let repo_id = tab.repo.repo_id.clone();
-                self.load_branches(repo_id)
+                Task::batch([
+                    self.load_branches(repo_id.clone()),
+                    self.load_remote_branches(repo_id),
+                ])
             }
             Message::RefreshBranches => {
                 let Some(tab) = self.tabs.get_mut(self.active) else {
@@ -3981,8 +4055,13 @@ impl App {
                 };
                 tab.branches.loading = true;
                 tab.branches.error = None;
+                tab.branches.remote_loading = true;
+                tab.branches.remote_error = None;
                 let repo_id = tab.repo.repo_id.clone();
-                self.load_branches(repo_id)
+                Task::batch([
+                    self.load_branches(repo_id.clone()),
+                    self.load_remote_branches(repo_id),
+                ])
             }
             Message::BranchesLoaded { repo_id, result } => {
                 let Some(index) = repo_view::tab_index(&self.tabs, &repo_id) else {
@@ -3996,6 +4075,21 @@ impl App {
                         branches.error = None;
                     }
                     Err(err) => branches.error = Some(err),
+                }
+                Task::none()
+            }
+            Message::RemoteBranchesLoaded { repo_id, result } => {
+                let Some(index) = repo_view::tab_index(&self.tabs, &repo_id) else {
+                    return Task::none();
+                };
+                let branches = &mut self.tabs[index].branches;
+                branches.remote_loading = false;
+                match result {
+                    Ok(list) => {
+                        branches.remote_list = Some(list);
+                        branches.remote_error = None;
+                    }
+                    Err(err) => branches.remote_error = Some(err),
                 }
                 Task::none()
             }
@@ -4035,6 +4129,104 @@ impl App {
                     },
                     std::convert::identity,
                 )
+            }
+            Message::RemoteBranchCheckout { remote, name } => {
+                let Some(tab) = self.tabs.get_mut(self.active) else {
+                    return Task::none();
+                };
+                // Dirty working tree: confirm first (uncommitted changes can
+                // block or bleed into the checkout).
+                if tab.working_tree_dirty() {
+                    tab.pending_remote_checkout = Some((remote, name));
+                    return Task::none();
+                }
+                let repo_id = tab.repo.repo_id.clone();
+                self.checkout_remote_branch(repo_id, remote, name)
+            }
+            Message::RemoteBranchCheckoutConfirmed => {
+                let Some(tab) = self.tabs.get_mut(self.active) else {
+                    return Task::none();
+                };
+                let Some((remote, name)) = tab.pending_remote_checkout.take() else {
+                    return Task::none();
+                };
+                let repo_id = tab.repo.repo_id.clone();
+                self.checkout_remote_branch(repo_id, remote, name)
+            }
+            Message::RemoteCheckoutDone { repo_id, result } => {
+                match &result {
+                    Ok(branch) => {
+                        self.notice = Some(Notice::plain(format!("Checked out {branch}")));
+                    }
+                    Err(err) => {
+                        self.notice = Some(Notice::error(format!("Remote checkout failed: {err}")));
+                    }
+                }
+                if let Some(index) = repo_view::tab_index(&self.tabs, &repo_id) {
+                    let tab = &mut self.tabs[index];
+                    tab.history.selected = None;
+                    tab.detail_open = false;
+                    tab.commit_diff = DiffPane::default();
+                    tab.reload_diff = true;
+                    tab.branches.loading = true;
+                }
+                Task::batch([
+                    self.refresh(repo_id.clone()),
+                    self.start_log(repo_id.clone()),
+                    self.load_branches(repo_id.clone()),
+                    self.load_remote_branches(repo_id),
+                ])
+            }
+            Message::RemoteBranchDeleteRequested { remote, name } => {
+                if let Some(tab) = self.tabs.get_mut(self.active) {
+                    tab.pending_remote_branch_delete = Some((remote, name));
+                }
+                Task::none()
+            }
+            Message::RemoteBranchDeleteConfirmed => {
+                let Some(tab) = self.tabs.get_mut(self.active) else {
+                    return Task::none();
+                };
+                let Some((remote, name)) = tab.pending_remote_branch_delete.take() else {
+                    return Task::none();
+                };
+                let repo_id = tab.repo.repo_id.clone();
+                let services = self.services.clone();
+                Task::perform(
+                    async move {
+                        // `PushOptions.delete` with the branch's full ref
+                        // name removes it on the remote.
+                        let options = PushOptions {
+                            remote,
+                            refs: vec![format!("refs/heads/{name}")],
+                            delete: true,
+                            ..PushOptions::default()
+                        };
+                        let result =
+                            crate::service::network::push(&services, repo_id.clone(), options)
+                                .await;
+                        Message::RemoteBranchDeleteDone { repo_id, result }
+                    },
+                    std::convert::identity,
+                )
+            }
+            Message::RemoteBranchDeleteDone { repo_id, result } => {
+                match &result {
+                    Ok(_) => self.last_op = Some("Deleted remote branch".to_string()),
+                    Err(err) => {
+                        self.notice =
+                            Some(Notice::error(format!("Remote branch delete failed: {err}")));
+                    }
+                }
+                if let Some(index) = repo_view::tab_index(&self.tabs, &repo_id) {
+                    self.tabs[index].branches.remote_loading = true;
+                    self.tabs[index].branches.loading = true;
+                }
+                Task::batch([
+                    self.refresh(repo_id.clone()),
+                    self.load_branches(repo_id.clone()),
+                    self.load_remote_branches(repo_id),
+                ])
             }
             Message::BranchSwitch(name) => {
                 let Some(tab) = self.tabs.get_mut(self.active) else {

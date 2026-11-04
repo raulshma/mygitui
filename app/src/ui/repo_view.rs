@@ -176,6 +176,10 @@ pub struct Tab {
     pub pending_clean: Option<dialog::CleanRequest>,
     /// Branch awaiting the rename dialog (input prefilled with the old name).
     pub pending_branch_rename: Option<dialog::RenameRequest>,
+    /// (remote, name) awaiting the dirty-tree checkout confirm.
+    pub pending_remote_checkout: Option<(String, String)>,
+    /// (remote, name) awaiting the remote-branch delete confirm.
+    pub pending_remote_branch_delete: Option<(String, String)>,
 
     pub diff_seq: u64,
     pub commit_diff_seq: u64,
@@ -245,6 +249,8 @@ impl Tab {
             pending_ignore_templates: None,
             pending_clean: None,
             pending_branch_rename: None,
+            pending_remote_checkout: None,
+            pending_remote_branch_delete: None,
             diff_seq: 0,
             commit_diff_seq: 0,
         }
@@ -596,6 +602,40 @@ fn dialog_overlay<'a>(tab: &'a Tab, tokens: Tokens) -> Option<Element<'a, Messag
 
     if let Some(request) = &tab.pending_branch_rename {
         return Some(dialog::rename(tokens, request));
+    }
+
+    if let Some((remote, name)) = &tab.pending_remote_checkout {
+        let spec = dialog::Confirm {
+            title: "Checkout remote branch".to_string(),
+            body: format!(
+                "Check out “{remote}/{name}”? You have uncommitted changes that may conflict."
+            ),
+            detail: None,
+            confirm_label: "Checkout".to_string(),
+            danger: false,
+        };
+        return Some(dialog::confirm(
+            tokens,
+            &spec,
+            Message::CancelDialog,
+            Message::RemoteBranchCheckoutConfirmed,
+        ));
+    }
+
+    if let Some((remote, name)) = &tab.pending_remote_branch_delete {
+        let spec = dialog::Confirm {
+            title: "Delete remote branch".to_string(),
+            body: format!("Delete “{remote}/{name}” on the remote? This cannot be undone."),
+            detail: None,
+            confirm_label: "Delete".to_string(),
+            danger: true,
+        };
+        return Some(dialog::confirm(
+            tokens,
+            &spec,
+            Message::CancelDialog,
+            Message::RemoteBranchDeleteConfirmed,
+        ));
     }
 
     None
