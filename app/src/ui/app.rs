@@ -5090,7 +5090,8 @@ impl App {
                         blobless,
                         depth,
                     }) => {
-                        self.clone.start(&url);
+                        // The dialog's own update already flipped it into the
+                        // running state (active_url set for CloneProgress).
                         let services = self.services.clone();
                         return Task::perform(
                             async move {

@@ -130,16 +130,13 @@ impl State {
 
     /// Applies a natively picked folder: the clone goes into a subdirectory
     /// named after the repository (the picked folder itself must stay
-    /// untouched; the service only clones into missing-or-empty paths).
+    /// untouched; the service only clones into missing-or-empty paths). An
+    /// explicit browse replaces whatever was typed.
     pub fn set_destination_folder(&mut self, picked: &str) {
-        let joined = match repo_name_from_url(&self.url) {
+        self.destination = match repo_name_from_url(&self.url) {
             Some(name) => join_destination(picked, &name),
             None => picked.to_string(),
         };
-        if !self.destination.trim().is_empty() && self.destination == joined {
-            return;
-        }
-        self.destination = joined;
     }
 }
 
@@ -265,33 +262,45 @@ pub fn parse_depth(raw: &str) -> Option<u32> {
 /// Derives the repository directory name from a remote URL: the last path
 /// segment minus a `.git` suffix. Handles https/ssh URLs, `git@host:path`
 /// scp-like forms and plain local paths; `None` when nothing sensible
-/// remains (empty, root, only a host).
+/// remains (empty, only a host, no path after the host).
 pub fn repo_name_from_url(url: &str) -> Option<String> {
-    let trimmed = url.trim().trim_end_matches('/');
-    // scp-like: `git@github.com:user/repo.git` — take the part after ':'.
-    let path = match trimmed.split_once(':') {
-        // A drive letter (`C:\repo`) is a path, not a scheme separator.
-        Some((before, after))
-            if !before.is_empty()
-                && !after.starts_with('/')
-                && !before.contains('/')
-                && before.len() > 1 =>
-        {
-            after
+    let trimmed = url.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let last_segment = |path: &str| -> Option<String> {
+        let name = path
+            .rsplit(['/', '\\'])
+            .find(|segment| !segment.is_empty())?;
+        if name == ".git" || name == ".." {
+            return None;
         }
-        _ => trimmed,
+        let name = name.strip_suffix(".git").unwrap_or(name);
+        (!name.is_empty()).then(|| name.to_string())
     };
-    let name = path
-        .rsplit(['/', '\\'])
-        .find(|segment| !segment.is_empty())?;
-    if name == ".git" || name == ".." {
-        return None;
+
+    // `scheme://host/path` — the repo name lives in the path after the
+    // first `/`; a bare host (with or without a trailing slash) has none.
+    if let Some(pos) = trimmed.find("://") {
+        let rest = &trimmed[pos + 3..];
+        let path = rest.split_once('/').map(|(_, path)| path)?;
+        return last_segment(path);
     }
-    let name = name.strip_suffix(".git").unwrap_or(name);
-    if name.is_empty() {
-        return None;
+    // scp-like `git@github.com:user/repo.git` — take the part after ':'.
+    // A drive letter (`C:\repo`) is a path, not a scheme separator.
+    if let Some((before, after)) = trimmed.split_once(':') {
+        if !before.is_empty()
+            && before.len() > 1
+            && !before.contains('/')
+            && !after.starts_with('/')
+            && !after.starts_with('\\')
+        {
+            return last_segment(after);
+        }
     }
-    Some(name.to_string())
+    // Plain local path.
+    last_segment(trimmed)
 }
 
 /// Joins a picked folder and a repository name into the clone destination.
@@ -556,6 +565,7 @@ mod tests {
             Some("repo".to_string())
         );
         assert_eq!(repo_name_from_url("https://github.com/"), None);
+        assert_eq!(repo_name_from_url("https://github.com"), None);
         assert_eq!(repo_name_from_url(""), None);
     }
 
