@@ -64,10 +64,32 @@ use super::terminal;
 use super::theme::{self, Mode, Tokens};
 use super::worktree_panel;
 
+/// Minimum main-window size (also the clamp floor for a restored,
+/// hand-edited or zeroed persisted size).
+const MIN_WINDOW_SIZE: (f32, f32) = (900.0, 600.0);
+
+/// First-run window settings (the fixed fallbacks; persisted geometry is
+/// seeded through [`window_settings`]).
 fn main_window_settings() -> window::Settings {
+    window_settings(&config::WindowFrame::default())
+}
+
+/// Main-window settings seeded from the persisted geometry: size always,
+/// position only when the platform reported one (Wayland never does — the
+/// platform default is used instead), maximized as observed. Sizes below
+/// the minimum clamp up so a degenerate config stays valid.
+fn window_settings(frame: &config::WindowFrame) -> window::Settings {
     window::Settings {
-        size: iced::Size::new(1152.0, 720.0),
-        min_size: Some(iced::Size::new(900.0, 600.0)),
+        size: iced::Size::new(
+            frame.size[0].max(MIN_WINDOW_SIZE.0),
+            frame.size[1].max(MIN_WINDOW_SIZE.1),
+        ),
+        maximized: frame.maximized,
+        position: frame
+            .position
+            .map(|[x, y]| window::Position::Specific(iced::Point::new(x, y)))
+            .unwrap_or(window::Position::Default),
+        min_size: Some(iced::Size::new(MIN_WINDOW_SIZE.0, MIN_WINDOW_SIZE.1)),
         icon: window::icon::from_file_data(include_bytes!("../../icons/64x64.png"), None).ok(),
         ..window::Settings::default()
     }
@@ -110,6 +132,10 @@ pub struct App {
     restore_queue: Vec<String>,
     /// Session tab index to focus once the restore queue drains.
     restore_active: usize,
+    /// Debounced window-geometry persistence (main window): the latest
+    /// observed frame plus a generation counter collapsing move/resize
+    /// bursts into one save (see [`config::WindowSave`]).
+    window_save: config::WindowSave,
     show_home: bool,
     notice: Option<Notice>,
     last_op: Option<String>,
@@ -610,6 +636,23 @@ pub enum Message {
         window: window::Id,
         focused: bool,
     },
+    /// Main-window move (window-geometry persistence; popouts ignored).
+    WindowMoved {
+        window: window::Id,
+        position: iced::Point,
+    },
+    /// Main-window resize (window-geometry persistence; popouts ignored).
+    WindowResized {
+        window: window::Id,
+        size: iced::Size,
+    },
+    /// A debounced window-geometry save timer fired (generation `seq`).
+    WindowSaveTick(u64),
+    /// The maximized-state query for a due window-geometry save finished.
+    WindowSaveMaximized {
+        seq: u64,
+        maximized: bool,
+    },
     /// Native folder-picker result for the clone destination (None =
     /// canceled).
     ClonePicked(Option<PathBuf>),
@@ -899,6 +942,7 @@ impl App {
         let accent_enabled = config.accent;
         let services_boot = services.clone();
         let recent = config.recent_sorted();
+        let window_save = config::WindowSave::new(config.window);
         let mut app = Self {
             services,
             config,
@@ -912,6 +956,7 @@ impl App {
             active: 0,
             restore_queue: Vec::new(),
             restore_active: 0,
+            window_save,
             show_home: true,
             notice: None,
             last_op: None,
@@ -970,7 +1015,8 @@ impl App {
         theme::set_accent_enabled(accent_enabled);
         let mut tasks = vec![iced::system::theme().map(Message::SystemTheme)];
         {
-            let (main_window, opened) = window::open(main_window_settings());
+            // Geometry from the last run (fixed fallbacks on first run).
+            let (main_window, opened) = window::open(window_settings(&app.config.window));
             app.main_window = Some(main_window);
             tasks.push(opened.map(|_| Message::Noop));
         }
@@ -1074,6 +1120,37 @@ impl App {
         if let Err(err) = self.config.save(&self.services.config_dir) {
             self.notice = Some(Notice::error(format!("Could not save settings: {err}")));
         }
+    }
+
+    /// Records a main-window geometry change and (re)arms the trailing
+    /// save timer; each new generation supersedes the previous tick, so a
+    /// drag-resize storm collapses into one config write.
+    fn arm_window_save(&mut self, frame: config::WindowFrame) -> Task<Message> {
+        if !self.window_save.note_change(frame) {
+            return Task::none();
+        }
+        let seq = self.window_save.seq;
+        Task::perform(
+            async move {
+                tokio::time::sleep(config::WINDOW_SAVE_DEBOUNCE).await;
+                Message::WindowSaveTick(seq)
+            },
+            std::convert::identity,
+        )
+    }
+
+    /// Persists the debounced geometry (generation `seq`) with the queried
+    /// maximized state; stale generations are dropped.
+    fn finish_window_save(&mut self, seq: u64, maximized: bool) -> Task<Message> {
+        if !self.window_save.due(seq) {
+            return Task::none();
+        }
+        self.window_save.mark_saved(seq);
+        let mut frame = self.window_save.frame;
+        frame.maximized = maximized;
+        self.config.window = frame;
+        self.persist_config();
+        Task::none()
     }
 
     fn reindex_recent(&mut self) {
@@ -7004,6 +7081,37 @@ impl App {
                 }
                 Task::none()
             }
+            Message::WindowMoved { window, position } => {
+                if self.main_window == Some(window) {
+                    let mut frame = self.window_save.frame;
+                    frame.position = Some([position.x, position.y]);
+                    return self.arm_window_save(frame);
+                }
+                Task::none()
+            }
+            Message::WindowResized { window, size } => {
+                if self.main_window == Some(window) {
+                    let mut frame = self.window_save.frame;
+                    frame.size = [size.width, size.height];
+                    return self.arm_window_save(frame);
+                }
+                Task::none()
+            }
+            Message::WindowSaveTick(seq) => {
+                if !self.window_save.due(seq) {
+                    return Task::none();
+                }
+                // Resolve the maximized state once the storm has settled;
+                // a change arriving mid-query supersedes this generation.
+                match self.main_window {
+                    Some(id) => iced::window::is_maximized(id)
+                        .map(move |maximized| Message::WindowSaveMaximized { seq, maximized }),
+                    None => self.finish_window_save(seq, false),
+                }
+            }
+            Message::WindowSaveMaximized { seq, maximized } => {
+                self.finish_window_save(seq, maximized)
+            }
             Message::CursorMoved(position) => {
                 self.cursor = position;
                 Task::none()
@@ -8224,6 +8332,7 @@ impl App {
             iced::system::theme_changes().map(Message::SystemTheme),
             iced::event::listen_with(modifiers_changed),
             iced::event::listen_with(window_focus_changed),
+            iced::event::listen_with(window_geometry_changed),
             iced::window::close_events().map(Message::WindowClosed),
             // Overlay components own their key/backdrop handling; each mapper
             // is a no-op while its overlay is closed.
@@ -8591,6 +8700,25 @@ fn window_focus_changed(
             window,
             focused: false,
         }),
+        _ => None,
+    }
+}
+
+/// Window move/resize events feeding the debounced geometry persistence.
+/// Like the focus listener, the update arm filters to the main window
+/// (popout geometry is irrelevant).
+fn window_geometry_changed(
+    event: iced::Event,
+    _status: iced::event::Status,
+    window: window::Id,
+) -> Option<Message> {
+    match event {
+        iced::Event::Window(window::Event::Moved(position)) => {
+            Some(Message::WindowMoved { window, position })
+        }
+        iced::Event::Window(window::Event::Resized(size)) => {
+            Some(Message::WindowResized { window, size })
+        }
         _ => None,
     }
 }
@@ -9151,5 +9279,29 @@ mod tests {
         assert_eq!(wrapped_tab_index(0, 0, true), 0);
         assert_eq!(wrapped_tab_index(0, 1, true), 0);
         assert_eq!(wrapped_tab_index(0, 1, false), 0);
+    }
+
+    #[test]
+    fn window_settings_clamp_restored_size_and_keep_position() {
+        let frame = super::config::WindowFrame {
+            size: [1.0, 1.0],
+            position: Some([12.0, 24.0]),
+            maximized: true,
+        };
+        let settings = super::window_settings(&frame);
+        assert_eq!(settings.size.width, super::MIN_WINDOW_SIZE.0);
+        assert_eq!(settings.size.height, super::MIN_WINDOW_SIZE.1);
+        assert!(settings.maximized);
+        assert!(matches!(
+            settings.position,
+            iced::window::Position::Specific(point) if point.x == 12.0 && point.y == 24.0
+        ));
+
+        // No persisted position: the platform default applies (Wayland).
+        let settings = super::window_settings(&super::config::WindowFrame::default());
+        assert!(matches!(settings.position, iced::window::Position::Default));
+        assert_eq!(settings.size.width, 1152.0);
+        assert_eq!(settings.size.height, 720.0);
+        assert!(!settings.maximized);
     }
 }
