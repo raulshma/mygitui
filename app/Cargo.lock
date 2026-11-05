@@ -2539,8 +2539,6 @@ dependencies = [
 [[package]]
 name = "iced_tiny_skia"
 version = "0.14.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c267596d742714b1853cc10c3983a367762816fc4836bd3b79f76ce76787d6f8"
 dependencies = [
  "bytemuck",
  "cosmic-text",
@@ -3391,12 +3389,14 @@ checksum = "13d2233c9842d08cfe13f9eac96e207ca6a2ea10b80259ebe8ad0268be27d2af"
 name = "mygitui"
 version = "0.1.14"
 dependencies = [
+ "bytemuck",
  "criterion",
  "dirs",
  "flate2",
  "futures-util",
  "git2",
  "iced",
+ "iced_tiny_skia",
  "ignore",
  "imara-diff",
  "keyring",
@@ -3420,6 +3420,7 @@ dependencies = [
  "sysinfo",
  "tar",
  "thiserror 2.0.21",
+ "tiny-skia",
  "tokio",
  "tracing",
  "tracing-subscriber",

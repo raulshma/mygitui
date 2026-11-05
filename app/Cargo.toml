@@ -135,3 +135,22 @@ rand_core = "0.10"
 wiremock = "0.6"
 # Mock keyring store for integration tests (no OS secret service on CI).
 keyring-core = "1"
+# Renderer seam for the popup-shadow regression test (tests/
+# quad_shadow_clipping.rs); resolved to the vendored copy above.
+iced_tiny_skia = "0.14.1"
+# Same spec as iced_tiny_skia's own tiny-skia dependency, so the test
+# reuses the backend's build instead of adding a second one.
+tiny-skia = { version = "0.11", default-features = false, features = [
+    "std",
+    "simd",
+] }
+bytemuck = "1"
+
+# Vendored patch: `iced_tiny_skia` 0.14.1 with the upstream fix for quad
+# shadows being re-composited over stale pixels on every partial redraw
+# (hovering a menu item visibly stacked its popup's shadow; see
+# iced commit 05535598 "Clip quad shadows in `tiny-skia` renderer").
+# No released iced version carries the fix yet — drop this vendored copy
+# and this section once iced ships it (0.14.2+ / 0.15).
+[patch.crates-io]
+iced_tiny_skia = { path = "vendor/iced_tiny_skia" }
