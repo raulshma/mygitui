@@ -272,7 +272,7 @@ jobs:
       - plan
       - build-local-artifacts
     if: ${{ always() && needs.build-local-artifacts.result == 'success' }}
-    runs-on: "macos-14"
+    runs-on: "macos-15"
     strategy:
       matrix:
         include:
