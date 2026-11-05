@@ -282,39 +282,59 @@ impl StatsPanel {
             return column![].into();
         }
 
-        let mut header = row![text("Contributions").size(12).font(theme::semibold())]
-            .spacing(6)
-            .align_y(Alignment::Center);
+        let mut header = row![text("Contributions")
+            .size(theme::TEXT_BODY)
+            .font(theme::semibold())]
+        .spacing(6)
+        .align_y(Alignment::Center);
         if self.loading {
-            header = header.push(text("· loading…").size(10).color(tokens.muted_foreground));
+            header = header.push(
+                text("· loading…")
+                    .size(theme::TEXT_META)
+                    .color(tokens.muted_foreground),
+            );
         }
         header = header
             .push(Space::new().width(Length::Fill))
             .push(
                 pick_list(Window::ALL, Some(self.window), Msg::WindowSelected)
-                    .text_size(11)
+                    .text_size(theme::TEXT_SMALL)
                     .padding([2, 6])
                     .width(Length::Fixed(120.0)),
             )
-            .push(
-                button(text("⟳").size(11))
+            .push(theme::tip(
+                tokens,
+                button(text(theme::icon::REFRESH).size(theme::TEXT_SMALL))
                     .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
-                    .padding([2, 8])
+                    .padding([4, 8])
                     .on_press(Msg::RefreshPressed),
-            )
-            .push(
-                button(text("×").size(12))
+                "Reload contributions and contributors",
+            ))
+            .push(theme::tip(
+                tokens,
+                button(text(theme::icon::CLOSE).size(theme::TEXT_BODY))
                     .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
-                    .padding([2, 8])
+                    .padding([4, 8])
                     .on_press(Msg::ToggleOpen),
-            );
+                "Close stats panel",
+            ));
 
         let mut body = column![header].spacing(8).width(Length::Fill);
         if let Some(error) = &self.error {
+            // Refresh re-reads both sections, so it doubles as the retry.
             body = body.push(
-                container(text(error.as_str()).size(11).color(tokens.deleted))
-                    .padding([4, 6])
-                    .width(Length::Fill),
+                row![
+                    theme::note(tokens, error.as_str(), true, theme::NoteKind::Inline),
+                    theme::mini_button(
+                        tokens,
+                        "Retry",
+                        "Reload contributions and contributors",
+                        Some(Msg::RefreshPressed),
+                    ),
+                ]
+                .spacing(4)
+                .align_y(Alignment::Center)
+                .width(Length::Fill),
             );
         }
         body = body.push(heatmap_section(self, tokens));
@@ -342,7 +362,7 @@ impl StatsPanel {
 /// Section title helper.
 fn section_title<'a>(label: &str, tokens: Tokens) -> Element<'a, Msg> {
     text(label.to_owned())
-        .size(11)
+        .size(theme::TEXT_SMALL)
         .font(theme::semibold())
         .color(tokens.muted_foreground)
         .into()
@@ -385,9 +405,11 @@ fn heatmap_section<'a>(panel: &'a StatsPanel, tokens: Tokens) -> Element<'a, Msg
         grid = grid.push(cells);
     }
 
-    let mut legend = row![text("Less").size(10).color(tokens.muted_foreground)]
-        .spacing(4)
-        .align_y(Alignment::Center);
+    let mut legend = row![text("Less")
+        .size(theme::TEXT_META)
+        .color(tokens.muted_foreground)]
+    .spacing(4)
+    .align_y(Alignment::Center);
     for count in [0u32, 1, 3, 6, 10] {
         let color = bucket_color(tokens, count);
         legend = legend.push(container(Space::new().width(CELL).height(CELL)).style(
@@ -402,10 +424,19 @@ fn heatmap_section<'a>(panel: &'a StatsPanel, tokens: Tokens) -> Element<'a, Msg
             },
         ));
     }
-    legend = legend.push(text("More").size(10).color(tokens.muted_foreground));
+    legend = legend.push(
+        text("More")
+            .size(theme::TEXT_META)
+            .color(tokens.muted_foreground),
+    );
 
     let body = if panel.activity.is_none() && !panel.loading {
-        note(tokens, "Open the panel to load contribution activity.")
+        theme::note(
+            tokens,
+            "Open the panel to load contribution activity.",
+            false,
+            theme::NoteKind::Empty,
+        )
     } else {
         column![grid, legend].spacing(6).into()
     };
@@ -421,16 +452,28 @@ fn contributors_section<'a>(panel: &'a StatsPanel, tokens: Tokens) -> Element<'a
     let mut body = column![].spacing(4).width(Length::Fill);
     match &panel.contributors {
         None if !panel.loading => {
-            body = body.push(note(
+            body = body.push(theme::note(
                 tokens,
                 "Open the panel to load contributor statistics.",
+                false,
+                theme::NoteKind::Empty,
             ));
         }
         None => {
-            body = body.push(note(tokens, "Loading contributors…"));
+            body = body.push(theme::note(
+                tokens,
+                "Loading contributors…",
+                false,
+                theme::NoteKind::Inline,
+            ));
         }
         Some(list) if list.is_empty() => {
-            body = body.push(note(tokens, "No commits in this window."));
+            body = body.push(theme::note(
+                tokens,
+                "No commits in this window.",
+                false,
+                theme::NoteKind::Empty,
+            ));
         }
         Some(list) => {
             let max = list.iter().map(|c| c.count).max().unwrap_or_default();
@@ -453,7 +496,9 @@ fn contributors_section<'a>(panel: &'a StatsPanel, tokens: Tokens) -> Element<'a
                 };
                 body = body.push(
                     row![
-                        text(label).size(11).width(Length::Fixed(170.0)),
+                        text(label)
+                            .size(theme::TEXT_SMALL)
+                            .width(Length::Fixed(170.0)),
                         container(bar)
                             .width(Length::Fixed(BAR_MAX_WIDTH))
                             .style(move |_theme| container::Style {
@@ -464,7 +509,7 @@ fn contributors_section<'a>(panel: &'a StatsPanel, tokens: Tokens) -> Element<'a
                                 ..container::Style::default()
                             }),
                         text(contributor.count.to_string())
-                            .size(11)
+                            .size(theme::TEXT_SMALL)
                             .color(tokens.muted_foreground)
                             .width(Length::Fixed(44.0))
                             .align_x(Alignment::End),
@@ -478,13 +523,6 @@ fn contributors_section<'a>(panel: &'a StatsPanel, tokens: Tokens) -> Element<'a
 
     column![section_title("Top contributors", tokens), body]
         .spacing(4)
-        .width(Length::Fill)
-        .into()
-}
-
-fn note<'a>(tokens: Tokens, message: impl Into<String>) -> Element<'a, Msg> {
-    container(text(message.into()).size(11).color(tokens.muted_foreground))
-        .padding([4, 6])
         .width(Length::Fill)
         .into()
 }

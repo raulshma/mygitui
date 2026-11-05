@@ -6,7 +6,9 @@
 
 use std::collections::HashSet;
 
-use iced::widget::{button, column, container, row, scrollable, text, text_editor, Space};
+use iced::widget::{
+    button, column, container, mouse_area, row, scrollable, text, text_editor, Space,
+};
 use iced::{Alignment, Color, Element, Length};
 
 use crate::engine::types::{ChangeKind, RebaseStep, RepoId, RepoInfo, RepoStatus};
@@ -47,6 +49,34 @@ use super::worktree_panel;
 
 pub const SIDEBAR_WIDTH: f32 = 320.0;
 pub const HISTORY_WIDTH: f32 = 340.0;
+
+/// Workspace pane sizes a new tab starts with (persisted defaults from the
+/// config; dragging a divider updates them).
+#[derive(Debug, Clone, Copy)]
+pub struct PaneSizes {
+    pub sidebar: f32,
+    pub history: f32,
+    pub terminal: f32,
+}
+
+impl Default for PaneSizes {
+    fn default() -> Self {
+        Self {
+            sidebar: SIDEBAR_WIDTH,
+            history: HISTORY_WIDTH,
+            terminal: 280.0,
+        }
+    }
+}
+
+/// Which divider the user is dragging (press starts it, mouse release ends
+/// it; the shell applies cursor deltas while it is set).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PaneDivider {
+    Sidebar,
+    History,
+    Terminal,
+}
 
 /// Load state for data fetched through the service layer.
 pub enum Load<T> {
@@ -149,6 +179,11 @@ pub struct Tab {
     /// Embedded PTY terminal pane and its visibility toggle.
     pub terminal: terminal::State,
     pub terminal_open: bool,
+    /// Resizable pane geometry (drag the dividers between the panes).
+    pub sidebar_width: f32,
+    pub history_width: f32,
+    pub terminal_height: f32,
+    pub pane_drag: Option<PaneDivider>,
     /// Paths awaiting the discard confirmation dialog.
     pub pending_discard: Option<Vec<String>>,
     /// Branch awaiting the delete confirmation dialog.
@@ -179,6 +214,9 @@ pub struct Tab {
     pub pending_branch_rename: Option<dialog::RenameRequest>,
     /// (remote, name) awaiting the dirty-tree checkout confirm.
     pub pending_remote_checkout: Option<(String, String)>,
+    /// Local branch awaiting the dirty-tree checkout confirm (local switches
+    /// previously ran immediately and surfaced raw conflict errors).
+    pub pending_local_checkout: Option<String>,
     /// (remote, name) awaiting the remote-branch delete confirm.
     pub pending_remote_branch_delete: Option<(String, String)>,
     /// "Tag here…" dialog state (target commit + create form).
@@ -194,7 +232,7 @@ pub struct Tab {
 }
 
 impl Tab {
-    pub fn new(repo: RepoInfo, diff_split: bool, diff_wrap: bool) -> Self {
+    pub fn new(repo: RepoInfo, diff_split: bool, diff_wrap: bool, panes: PaneSizes) -> Self {
         let terminal = terminal::State::new(Some(repo.root.clone().into()));
         Self {
             repo,
@@ -243,6 +281,10 @@ impl Tab {
             compare_diff: DiffPane::default(),
             file_history_seq: 0,
             terminal_open: false,
+            sidebar_width: panes.sidebar,
+            history_width: panes.history,
+            terminal_height: panes.terminal,
+            pane_drag: None,
             pending_discard: None,
             pending_branch_delete: None,
             pending_stash_drop: None,
@@ -258,6 +300,7 @@ impl Tab {
             pending_clean: None,
             pending_branch_rename: None,
             pending_remote_checkout: None,
+            pending_local_checkout: None,
             pending_remote_branch_delete: None,
             pending_tag_at: None,
             pending_rebase_planner: None,
@@ -341,6 +384,32 @@ impl Tab {
                 .unwrap_or(false)
     }
 
+    /// Whether a per-tab modal dialog is open (rendered by
+    /// [`dialog_overlay`]). While one is, shell shortcuts stay dark so
+    /// keystrokes can't act behind the scrim.
+    pub fn dialog_pending(&self) -> bool {
+        self.pending_discard.is_some()
+            || self.pending_branch_delete.is_some()
+            || self.pending_stash_drop.is_some()
+            || self.pending_checkpoint_restore.is_some()
+            || self.pending_reset.is_some()
+            || self.pending_remote_remove.is_some()
+            || self.pending_files_delete.is_some()
+            || self.pending_rebase.is_some()
+            || self.pending_merge.is_some()
+            || self.pending_pull.is_some()
+            || self.pending_push.is_some()
+            || self.pending_ignore_templates.is_some()
+            || self.pending_clean.is_some()
+            || self.pending_branch_rename.is_some()
+            || self.pending_remote_checkout.is_some()
+            || self.pending_local_checkout.is_some()
+            || self.pending_remote_branch_delete.is_some()
+            || self.pending_tag_at.is_some()
+            || self.pending_rebase_planner.is_some()
+            || self.pending_mergetool.is_some()
+    }
+
     /// Uncommitted staged+unstaged changes exist (untracked files excluded —
     /// they never block a merge): the merge dialog's confirm guard.
     pub fn working_tree_dirty(&self) -> bool {
@@ -418,15 +487,27 @@ impl Tab {
     }
 }
 
-pub fn view<'a>(tabs: &'a [Tab], active: usize, tokens: Tokens) -> Element<'a, Message> {
+pub fn view<'a>(
+    tabs: &'a [Tab],
+    active: usize,
+    tokens: Tokens,
+    window_width: f32,
+) -> Element<'a, Message> {
     let Some(tab) = tabs.get(active) else {
-        return Space::new().into();
+        // No active tab: an explicitly empty surface (window background),
+        // not a bare Space — this arm is a latent-blank-screen guard; the
+        // shell routes tab-less sessions to the Home view instead.
+        return container(Space::new())
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .style(theme::surface_style(tokens))
+            .into();
     };
 
     let page = column![
         tab_strip(tabs, active, tokens),
         repo_header(tab, tokens),
-        workspace(tab, tokens),
+        workspace(tab, tokens, window_width),
     ];
 
     let base: Element<'a, Message> = page.width(Length::Fill).height(Length::Fill).into();
@@ -449,7 +530,7 @@ fn dialog_overlay<'a>(tab: &'a Tab, tokens: Tokens) -> Option<Element<'a, Messag
         let spec = dialog::Confirm {
             title: "Discard changes".to_string(),
             body: format!(
-                "Discard uncommitted changes in {} file{}? This cannot be undone.",
+                "Discard uncommitted changes in {} file{}? A checkpoint of the current state is saved first — undo from the Stashes panel.",
                 paths.len(),
                 if paths.len() == 1 { "" } else { "s" }
             ),
@@ -468,7 +549,9 @@ fn dialog_overlay<'a>(tab: &'a Tab, tokens: Tokens) -> Option<Element<'a, Messag
     if let Some(name) = &tab.pending_branch_delete {
         let spec = dialog::Confirm {
             title: "Delete branch".to_string(),
-            body: format!("Delete the branch “{name}”? This cannot be undone."),
+            body: format!(
+                "Delete the branch “{name}”? It is kept in a recoverable trash — restore it from the Stashes panel."
+            ),
             detail: None,
             confirm_label: "Delete".to_string(),
             danger: true,
@@ -633,6 +716,44 @@ fn dialog_overlay<'a>(tab: &'a Tab, tokens: Tokens) -> Option<Element<'a, Messag
         ));
     }
 
+    if let Some(name) = &tab.pending_local_checkout {
+        // Same dirty-tree guard the remote checkout already had, plus a
+        // one-click "stash first" path instead of a raw conflict error.
+        let body = column![
+            text(format!("Switch to “{name}”?"))
+                .size(theme::TEXT_BODY)
+                .color(tokens.card_foreground),
+            text("You have uncommitted changes that may conflict with the switch.")
+                .size(theme::TEXT_SMALL)
+                .color(tokens.muted_foreground),
+        ]
+        .spacing(4)
+        .width(Length::Fill);
+        let actions = row![
+            button(text("Cancel").size(theme::TEXT_SMALL))
+                .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
+                .padding([4, 10])
+                .on_press(Message::CancelDialog),
+            Space::new().width(Length::Fill),
+            button(text("Checkout anyway").size(theme::TEXT_SMALL))
+                .style(theme::button_style(tokens, theme::ButtonKind::Secondary))
+                .padding([4, 10])
+                .on_press(Message::LocalCheckoutConfirmed),
+            button(text("Stash and switch").size(theme::TEXT_SMALL))
+                .style(theme::button_style(tokens, theme::ButtonKind::Primary))
+                .padding([4, 10])
+                .on_press(Message::LocalCheckoutStashAndSwitch),
+        ]
+        .spacing(6)
+        .align_y(Alignment::Center);
+        return Some(super::dialog::modal(
+            tokens,
+            420.0,
+            body.into(),
+            actions.into(),
+        ));
+    }
+
     if let Some((remote, name)) = &tab.pending_remote_branch_delete {
         let spec = dialog::Confirm {
             title: "Delete remote branch".to_string(),
@@ -673,27 +794,44 @@ fn tab_strip<'a>(tabs: &'a [Tab], active: usize, tokens: Tokens) -> Element<'a, 
 
     for (index, tab) in tabs.iter().enumerate() {
         let selected = index == active;
+        // Every tab gets its own close button (muted when inactive) — a
+        // close affordance that only exists on the active tab forces users
+        // to select a tab before they can close it. The label selects; the
+        // × beside it closes.
+        let (label_color, close_color) = if selected {
+            (tokens.card_foreground, tokens.foreground)
+        } else {
+            (tokens.muted_foreground, tokens.muted_foreground)
+        };
         strip = strip.push(
-            button(text(tab.repo.name.as_str()).size(12))
-                .style(theme::button_style(
-                    tokens,
-                    if selected {
-                        theme::ButtonKind::Secondary
-                    } else {
-                        theme::ButtonKind::Ghost
-                    },
-                ))
-                .padding([5, 12])
-                .on_press(Message::SelectTab(index)),
+            button(
+                text(tab.repo.name.as_str())
+                    .size(theme::TEXT_BODY)
+                    .color(label_color),
+            )
+            .style(theme::button_style(
+                tokens,
+                if selected {
+                    theme::ButtonKind::Secondary
+                } else {
+                    theme::ButtonKind::Ghost
+                },
+            ))
+            .padding([5, 12])
+            .on_press(Message::SelectTab(index)),
         );
-        if selected {
-            strip = strip.push(
-                button(text("×").size(12))
-                    .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
-                    .padding([5, 7])
-                    .on_press(Message::CloseTab(tab.repo.repo_id.clone())),
-            );
-        }
+        strip = strip.push(
+            button(theme::tip(
+                tokens,
+                text(theme::icon::CLOSE)
+                    .size(theme::TEXT_SMALL)
+                    .color(close_color),
+                "Close tab",
+            ))
+            .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
+            .padding([5, 7])
+            .on_press(Message::CloseTab(tab.repo.repo_id.clone())),
+        );
     }
 
     container(
@@ -795,6 +933,51 @@ fn repo_header<'a>(tab: &'a Tab, tokens: Tokens) -> Element<'a, Message> {
         "Remote"
     };
 
+    // Conflicts are a blocking state: they get a first-class danger pill in
+    // the header (previously the "N conflicts — resolve them" outcome only
+    // reached the muted footer line). Clicking selects the first conflicted
+    // row so the diff and Ours/Theirs bar are one click away.
+    let conflicts = tab
+        .status_index
+        .rows
+        .iter()
+        .filter(|row| row.kind == crate::engine::types::ChangeKind::Conflicted)
+        .count();
+    let conflict_chip: Option<Element<'a, Message>> = (conflicts > 0).then(|| {
+        let first = tab
+            .status_index
+            .rows
+            .iter()
+            .find(|row| row.kind == crate::engine::types::ChangeKind::Conflicted)
+            .map(|row| row.key.clone());
+        let label = format!(
+            "{conflicts} conflict{} · resolve",
+            if conflicts == 1 { "" } else { "s" }
+        );
+        let chip = container(text(label).size(theme::TEXT_SMALL).color(tokens.conflicted))
+            .padding([2, 7])
+            .style(move |_theme| container::Style {
+                background: Some(iced::Background::Color(theme::with_alpha(
+                    tokens.conflicted,
+                    0.14,
+                ))),
+                border: iced::Border {
+                    color: theme::with_alpha(tokens.conflicted, 0.3),
+                    width: 1.0,
+                    radius: 99.0.into(),
+                },
+                ..container::Style::default()
+            });
+        match first {
+            Some(key) => button(chip)
+                .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
+                .padding([0, 0])
+                .on_press(Message::StatusSelect { key })
+                .into(),
+            None => chip.into(),
+        }
+    });
+
     container(
         row![
             column![
@@ -802,94 +985,89 @@ fn repo_header<'a>(tab: &'a Tab, tokens: Tokens) -> Element<'a, Message> {
                     .size(16)
                     .font(theme::semibold()),
                 text(tab.repo.root.as_str())
-                    .size(11)
+                    .size(theme::TEXT_SMALL)
                     .color(tokens.muted_foreground),
             ]
             .spacing(1),
             Space::new().width(12),
-            button(
-                text(format!("{branch} ▾"))
-                    .size(11)
-                    .color(if tab.branches.open {
-                        tokens.primary
-                    } else {
-                        tokens.muted_foreground
-                    }),
-            )
+            button(text(format!("{branch} ▾")).size(theme::TEXT_SMALL).color(
+                if tab.branches.open {
+                    tokens.primary
+                } else {
+                    tokens.muted_foreground
+                }
+            ),)
             .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
             .padding([3, 8])
             .on_press(Message::ToggleBranchPanel),
             sync,
+            conflict_chip,
             Space::new().width(Length::Fill),
-            button(text(remote_label).size(11).color(if tab.remotes.open {
-                tokens.primary
-            } else {
-                tokens.muted_foreground
-            }),)
+            header_toggle(
+                tokens,
+                remote_label,
+                Some(3),
+                tab.remotes.open,
+                Message::ToggleRemotePanel
+            ),
+            header_toggle(
+                tokens,
+                stash_label,
+                Some(2),
+                tab.stashes.open,
+                Message::ToggleStashPanel
+            ),
+            header_toggle(
+                tokens,
+                history_label,
+                Some(4),
+                tab.history_open,
+                Message::ToggleHistory
+            ),
+            header_toggle(
+                tokens,
+                "Forge",
+                Some(5),
+                tab.forge.open,
+                Message::Forge(forge_panel::Msg::ToggleOpen),
+            ),
+            header_toggle(
+                tokens,
+                "Bisect",
+                None,
+                tab.bisect.open || tab.bisect.is_active(),
+                Message::Bisect(bisect_panel::Msg::ToggleOpen),
+            ),
+            header_toggle(
+                tokens,
+                "Health",
+                Some(6),
+                tab.health.open,
+                Message::Health(health_panel::Msg::ToggleOpen),
+            ),
+            header_toggle(
+                tokens,
+                "Reflog",
+                Some(7),
+                tab.reflog.open,
+                Message::Reflog(reflog_panel::Msg::ToggleOpen),
+            ),
+            header_toggle(
+                tokens,
+                "Terminal",
+                Some(8),
+                tab.terminal_open,
+                Message::ToggleTerminal
+            ),
+            button(theme::tip(
+                tokens,
+                text(theme::icon::MENU).size(theme::TEXT_BODY),
+                "More: worktrees, submodules, tags, stats, files, popout diff"
+            ))
             .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
             .padding([6, 10])
-            .on_press(Message::ToggleRemotePanel),
-            button(text(stash_label).size(11).color(if tab.stashes.open {
-                tokens.primary
-            } else {
-                tokens.muted_foreground
-            }),)
-            .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
-            .padding([6, 10])
-            .on_press(Message::ToggleStashPanel),
-            button(text(history_label).size(11))
-                .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
-                .padding([6, 10])
-                .on_press(Message::ToggleHistory),
-            button(text("Forge").size(11).color(if tab.forge.open {
-                tokens.primary
-            } else {
-                tokens.foreground
-            }))
-            .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
-            .padding([6, 10])
-            .on_press(Message::Forge(forge_panel::Msg::ToggleOpen)),
-            button(
-                text("Bisect")
-                    .size(11)
-                    .color(if tab.bisect.open || tab.bisect.is_active() {
-                        tokens.primary
-                    } else {
-                        tokens.foreground
-                    })
-            )
-            .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
-            .padding([6, 10])
-            .on_press(Message::Bisect(bisect_panel::Msg::ToggleOpen)),
-            button(text("Health").size(11).color(if tab.health.open {
-                tokens.primary
-            } else {
-                tokens.foreground
-            }))
-            .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
-            .padding([6, 10])
-            .on_press(Message::Health(health_panel::Msg::ToggleOpen)),
-            button(text("⋯").size(12))
-                .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
-                .padding([6, 10])
-                .on_press(Message::MoreMenu),
-            button(text("Reflog").size(11).color(if tab.reflog.open {
-                tokens.primary
-            } else {
-                tokens.foreground
-            }))
-            .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
-            .padding([6, 10])
-            .on_press(Message::Reflog(reflog_panel::Msg::ToggleOpen)),
-            button(text("Terminal").size(11).color(if tab.terminal_open {
-                tokens.primary
-            } else {
-                tokens.foreground
-            }))
-            .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
-            .padding([6, 10])
-            .on_press(Message::ToggleTerminal),
-            button(text("Refresh").size(11))
+            .on_press(Message::MoreMenu),
+            button(text("Refresh").size(theme::TEXT_SMALL))
                 .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
                 .padding([6, 10])
                 .on_press(Message::Refresh(tab.repo.repo_id.clone())),
@@ -910,7 +1088,7 @@ fn repo_header<'a>(tab: &'a Tab, tokens: Tokens) -> Element<'a, Message> {
     .into()
 }
 
-fn workspace<'a>(tab: &'a Tab, tokens: Tokens) -> Element<'a, Message> {
+fn workspace<'a>(tab: &'a Tab, tokens: Tokens, window_width: f32) -> Element<'a, Message> {
     let sidebar = container(
         column![
             container(status_panel::view(tab, tokens))
@@ -920,7 +1098,7 @@ fn workspace<'a>(tab: &'a Tab, tokens: Tokens) -> Element<'a, Message> {
         ]
         .height(Length::Fill),
     )
-    .width(Length::Fixed(SIDEBAR_WIDTH))
+    .width(Length::Fixed(tab.sidebar_width))
     .height(Length::Fill)
     .style(move |_theme| container::Style {
         background: Some(iced::Background::Color(tokens.sidebar)),
@@ -1000,16 +1178,23 @@ fn workspace<'a>(tab: &'a Tab, tokens: Tokens) -> Element<'a, Message> {
 
     let mut body = row![
         sidebar,
+        drag_strip(tokens, PaneDivider::Sidebar, true),
         container(center).width(Length::Fill).height(Length::Fill),
     ]
     .spacing(0)
     .width(Length::Fill)
     .height(Length::Fill);
 
-    if tab.history_open {
+    // On narrow windows the history panel overlays the center pane instead
+    // of squeezing the diff down to nothing (fixed chrome previously ate
+    // 660px of a 900px minimum window).
+    let narrow = window_width < NARROW_LAYOUT_BREAKPOINT;
+    let mut history_overlay: Option<Element<'a, Message>> = None;
+    if tab.history_open && !narrow {
+        body = body.push(drag_strip(tokens, PaneDivider::History, true));
         body = body.push(
             container(history_panel::view(tab, tokens))
-                .width(Length::Fixed(HISTORY_WIDTH))
+                .width(Length::Fixed(tab.history_width))
                 .height(Length::Fill)
                 .style(move |_theme| container::Style {
                     background: Some(iced::Background::Color(tokens.sidebar)),
@@ -1020,6 +1205,19 @@ fn workspace<'a>(tab: &'a Tab, tokens: Tokens) -> Element<'a, Message> {
                     },
                     ..container::Style::default()
                 }),
+        );
+    } else if tab.history_open && narrow {
+        history_overlay = Some(
+            container(
+                container(history_panel::view(tab, tokens))
+                    .width(Length::Fixed(tab.history_width.min(480.0))),
+            )
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .align_x(Alignment::End)
+            .align_y(Alignment::Start)
+            .padding([6, 8])
+            .into(),
         );
     }
 
@@ -1038,12 +1236,17 @@ fn workspace<'a>(tab: &'a Tab, tokens: Tokens) -> Element<'a, Message> {
         || tab.submodule.open
         || tab.tags.open
         || tab.stats.open
+        || tab.actions.open
+        || tab.output.open
     {
         // Dropdowns: overlaid on the workspace so opening them never
         // reflows the panes underneath. The branch picker anchors top-left,
         // the stash/checkpoint and remote panels top-right (opening one
         // closes the others).
         let mut layers: Vec<Element<'a, Message>> = vec![surface.into()];
+        if let Some(overlay) = history_overlay {
+            layers.push(overlay);
+        }
 
         if tab.branches.open {
             layers.push(
@@ -1176,13 +1379,49 @@ fn workspace<'a>(tab: &'a Tab, tokens: Tokens) -> Element<'a, Message> {
                 .into(),
             );
         }
+        // Custom shell actions + their live output (palette `panel.actions`
+        // / `panel.output`; action runs force `output.open`).
+        if tab.actions.open {
+            layers.push(
+                container(
+                    container(tab.actions.view(tokens).map(Message::Actions))
+                        .width(Length::Fixed(520.0)),
+                )
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .align_x(Alignment::End)
+                .align_y(Alignment::Start)
+                .padding([6, 8])
+                .into(),
+            );
+        }
+        if tab.output.open {
+            layers.push(
+                container(
+                    container(output_panel::view(&tab.output, tokens).map(Message::Output))
+                        .width(Length::Fixed(520.0)),
+                )
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .align_x(Alignment::End)
+                .align_y(Alignment::Start)
+                .padding([6, 8])
+                .into(),
+            );
+        }
 
         iced::widget::stack(layers)
             .width(Length::Fill)
             .height(Length::Fill)
             .into()
     } else {
-        surface.into()
+        match history_overlay {
+            Some(overlay) => iced::widget::stack![Element::<Message>::from(surface), overlay]
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .into(),
+            None => surface.into(),
+        }
     };
 
     let main: Element<'a, Message> = match tab.bisect.view(tokens) {
@@ -1195,12 +1434,14 @@ fn workspace<'a>(tab: &'a Tab, tokens: Tokens) -> Element<'a, Message> {
 
     if tab.terminal_open {
         // Bottom dock: overlays above still cover the whole workspace; the
-        // terminal shrinks the panes above it.
+        // terminal shrinks the panes above it. The strip above the dock
+        // drags its height.
         column![
             main,
+            drag_strip(tokens, PaneDivider::Terminal, false),
             container(terminal::view(&tab.terminal, tokens).map(Message::Terminal))
                 .width(Length::Fill)
-                .height(Length::Fixed(TERMINAL_HEIGHT))
+                .height(Length::Fixed(tab.terminal_height))
                 .style(move |_theme| container::Style {
                     border: iced::Border {
                         color: tokens.border,
@@ -1218,8 +1459,70 @@ fn workspace<'a>(tab: &'a Tab, tokens: Tokens) -> Element<'a, Message> {
     }
 }
 
-/// Height of the docked terminal pane.
-const TERMINAL_HEIGHT: f32 = 280.0;
+/// Below this window width the history panel overlays instead of docking
+/// (fixed 320px sidebar + 340px history left ~240px of diff at the 900px
+/// minimum window size).
+const NARROW_LAYOUT_BREAKPOINT: f32 = 1100.0;
+
+/// Drag limits keeping a pane usable while the other keeps content
+/// (the shell's drag-delta math uses these too).
+pub(crate) const SIDEBAR_MIN_WIDTH: f32 = 240.0;
+pub(crate) const SIDEBAR_MAX_WIDTH: f32 = 520.0;
+pub(crate) const HISTORY_MIN_WIDTH: f32 = 260.0;
+pub(crate) const HISTORY_MAX_WIDTH: f32 = 560.0;
+pub(crate) const TERMINAL_MIN_HEIGHT: f32 = 120.0;
+pub(crate) const TERMINAL_MAX_HEIGHT: f32 = 600.0;
+
+/// Pane divider drag handle: a 6px strip along a pane edge. Press starts
+/// the drag (the shell applies cursor deltas until mouse release); the
+/// border tint hints draggability on hover.
+fn drag_strip<'a>(tokens: Tokens, divider: PaneDivider, vertical: bool) -> Element<'a, Message> {
+    let (width, height) = if vertical {
+        (Length::Fixed(6.0), Length::Fill)
+    } else {
+        (Length::Fill, Length::Fixed(6.0))
+    };
+    let tint = theme::with_alpha(tokens.ring, 0.35);
+    mouse_area(
+        container(Space::new().width(width).height(height)).style(move |_theme| container::Style {
+            background: Some(iced::Background::Color(tint)),
+            ..container::Style::default()
+        }),
+    )
+    .on_press(Message::PaneDragStart(divider))
+    .into()
+}
+
+/// Repo-header panel toggle: one closed color (muted) and one open color
+/// (primary) for every toggle of the same kind, plus the fixed shortcut
+/// digit as a muted hint (`Ctrl/Cmd+N`, see `panel_toggle_message`).
+/// Toggles previously mixed muted/foreground/unset resting colors.
+fn header_toggle<'a>(
+    tokens: Tokens,
+    label: &'a str,
+    digit: Option<usize>,
+    open: bool,
+    message: Message,
+) -> Element<'a, Message> {
+    let mut content = row![text(label).size(theme::TEXT_SMALL).color(if open {
+        tokens.primary
+    } else {
+        tokens.muted_foreground
+    })]
+    .align_y(Alignment::Center);
+    if let Some(digit) = digit {
+        content = content.push(Space::new().width(5)).push(
+            text(format!("{digit}"))
+                .size(theme::TEXT_META)
+                .color(tokens.muted_foreground),
+        );
+    }
+    button(content)
+        .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
+        .padding([6, 10])
+        .on_press(message)
+        .into()
+}
 
 fn control_button<'a>(
     tokens: Tokens,

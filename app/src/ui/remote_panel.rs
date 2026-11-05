@@ -22,44 +22,56 @@ pub struct RemotesState {
     pub error: Option<String>,
     pub add_name: String,
     pub add_url: String,
+    /// Remote with a net op in flight (its Fetch/Pull/Push buttons park
+    /// until the op lands; `None` = idle).
+    // TODO(shell-wiring): set to Some(remote) when a Fetch/Pull/Push op
+    // starts and None when it completes or fails.
+    pub busy: Option<String>,
 }
 
 pub fn view<'a>(tab: &'a Tab, tokens: Tokens) -> Element<'a, Message> {
     let state = &tab.remotes;
 
-    let mut header = row![text("Remotes").size(12).font(theme::semibold())]
-        .spacing(6)
-        .align_y(Alignment::Center);
+    let mut header = row![text("Remotes")
+        .size(theme::TEXT_BODY)
+        .font(theme::semibold())]
+    .spacing(6)
+    .align_y(Alignment::Center);
     if let Some(list) = &state.list {
         header = header.push(
             text(format!("{}", list.len()))
-                .size(10)
+                .size(theme::TEXT_META)
                 .color(tokens.muted_foreground),
         );
     }
     if state.loading {
-        header = header.push(text("· loading…").size(10).color(tokens.muted_foreground));
+        header = header.push(
+            text("· loading…")
+                .size(theme::TEXT_META)
+                .color(tokens.muted_foreground),
+        );
     }
     header = header
         .push(Space::new().width(Length::Fill))
-        .push(
-            button(text("⟳").size(11))
-                .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
-                .padding([2, 8])
-                .on_press(Message::RefreshRemotes),
-        )
-        .push(
-            button(text("×").size(12))
-                .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
-                .padding([2, 8])
-                .on_press(Message::ToggleRemotePanel),
-        );
+        .push(theme::mini_button(
+            tokens,
+            theme::icon::REFRESH,
+            "Refresh remotes",
+            Some(Message::RefreshRemotes),
+        ))
+        .push(theme::mini_button(
+            tokens,
+            theme::icon::CLOSE,
+            "Close panel",
+            Some(Message::ToggleRemotePanel),
+        ));
 
     let body: Element<'a, Message> = match &state.list {
         Some(list) if !list.is_empty() => {
+            let busy = state.busy.as_deref();
             let mut rows = column![].spacing(3).width(Length::Fill);
             for remote in list {
-                rows = rows.push(remote_row(remote, tokens));
+                rows = rows.push(remote_row(remote, busy, tokens));
             }
             let height = (list.len() as f32 * 44.0).clamp(44.0, 220.0);
             scrollable(rows)
@@ -69,21 +81,21 @@ pub fn view<'a>(tab: &'a Tab, tokens: Tokens) -> Element<'a, Message> {
         }
         Some(_) => container(
             text("No remotes configured.")
-                .size(11)
+                .size(theme::TEXT_SMALL)
                 .color(tokens.muted_foreground),
         )
         .padding([6, 2])
         .into(),
         None if state.error.is_some() => container(
             text(state.error.clone().unwrap_or_default())
-                .size(11)
+                .size(theme::TEXT_SMALL)
                 .color(tokens.deleted),
         )
         .padding([6, 2])
         .into(),
         None => container(
             text("Loading remotes…")
-                .size(11)
+                .size(theme::TEXT_SMALL)
                 .color(tokens.muted_foreground),
         )
         .padding([6, 2])
@@ -94,16 +106,16 @@ pub fn view<'a>(tab: &'a Tab, tokens: Tokens) -> Element<'a, Message> {
         text_input("name", state.add_name.as_str())
             .on_input(Message::RemoteNameChanged)
             .on_submit(Message::RemoteAdd)
-            .size(11)
+            .size(theme::TEXT_SMALL)
             .padding([4, 6])
             .width(Length::Fixed(96.0)),
         text_input("https://host/repo.git", state.add_url.as_str())
             .on_input(Message::RemoteUrlChanged)
             .on_submit(Message::RemoteAdd)
-            .size(11)
+            .size(theme::TEXT_SMALL)
             .padding([4, 6])
             .width(Length::Fill),
-        button(text("Add").size(10))
+        button(text("Add").size(theme::TEXT_META))
             .style(theme::button_style(tokens, theme::ButtonKind::Primary))
             .padding([4, 10])
             .on_press_maybe(
@@ -128,14 +140,19 @@ pub fn view<'a>(tab: &'a Tab, tokens: Tokens) -> Element<'a, Message> {
         .into()
 }
 
-fn remote_row<'a>(remote: &'a RemoteInfo, tokens: Tokens) -> Element<'a, Message> {
+fn remote_row<'a>(
+    remote: &'a RemoteInfo,
+    busy: Option<&str>,
+    tokens: Tokens,
+) -> Element<'a, Message> {
+    let op_in_flight = busy == Some(remote.name.as_str());
     let mut info = column![
         text(remote.name.as_str())
-            .size(11)
+            .size(theme::TEXT_SMALL)
             .font(theme::mono())
             .color(tokens.foreground),
         text(clip(&remote.url, 56))
-            .size(9)
+            .size(theme::TEXT_META)
             .color(tokens.muted_foreground),
     ]
     .spacing(0)
@@ -145,14 +162,14 @@ fn remote_row<'a>(remote: &'a RemoteInfo, tokens: Tokens) -> Element<'a, Message
         if push_url != remote.url {
             info = column![
                 text(remote.name.as_str())
-                    .size(11)
+                    .size(theme::TEXT_SMALL)
                     .font(theme::mono())
                     .color(tokens.foreground),
                 text(clip(&remote.url, 56))
-                    .size(9)
+                    .size(theme::TEXT_META)
                     .color(tokens.muted_foreground),
                 text(format!("push → {}", clip(push_url, 48)))
-                    .size(9)
+                    .size(theme::TEXT_META)
                     .color(tokens.muted_foreground),
             ]
             .spacing(0)
@@ -162,26 +179,36 @@ fn remote_row<'a>(remote: &'a RemoteInfo, tokens: Tokens) -> Element<'a, Message
 
     let line = row![
         info,
-        button(text("Fetch").size(9))
-            .style(theme::button_style(tokens, theme::ButtonKind::Secondary))
-            .padding([2, 6])
-            .width(Length::Fixed(46.0))
-            .on_press(Message::FetchRemote(remote.name.clone())),
-        button(text("Pull").size(9))
-            .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
-            .padding([2, 6])
-            .width(Length::Fixed(40.0))
-            .on_press(Message::PullRemote(remote.name.clone())),
-        button(text("Push").size(9))
-            .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
-            .padding([2, 6])
-            .width(Length::Fixed(40.0))
-            .on_press(Message::PushRemote(remote.name.clone())),
-        button(text("✕").size(9))
-            .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
-            .padding([2, 6])
-            .width(Length::Fixed(24.0))
-            .on_press(Message::RemoteRemoveRequested(remote.name.clone())),
+        net_button(
+            tokens,
+            "Fetch",
+            46.0,
+            theme::ButtonKind::Secondary,
+            op_in_flight,
+            Message::FetchRemote(remote.name.clone()),
+        ),
+        net_button(
+            tokens,
+            "Pull",
+            40.0,
+            theme::ButtonKind::Ghost,
+            op_in_flight,
+            Message::PullRemote(remote.name.clone()),
+        ),
+        net_button(
+            tokens,
+            "Push",
+            40.0,
+            theme::ButtonKind::Ghost,
+            op_in_flight,
+            Message::PushRemote(remote.name.clone()),
+        ),
+        theme::mini_button(
+            tokens,
+            theme::icon::CLOSE,
+            "Remove remote",
+            Some(Message::RemoteRemoveRequested(remote.name.clone())),
+        ),
     ]
     .spacing(2)
     .align_y(Alignment::Center)
@@ -200,6 +227,27 @@ fn remote_row<'a>(remote: &'a RemoteInfo, tokens: Tokens) -> Element<'a, Message
             ..container::Style::default()
         })
         .into()
+}
+
+/// Net-op button for one remote row. While `busy` it renders disabled with
+/// an ellipsis (a second concurrent net op on the same remote would race the
+/// first; the shell clears `RemotesState::busy` when the op lands).
+fn net_button<'a>(
+    tokens: Tokens,
+    label: &'a str,
+    width: f32,
+    kind: theme::ButtonKind,
+    busy: bool,
+    on_press: Message,
+) -> Element<'a, Message> {
+    let mut b = button(text(if busy { "…" } else { label }).size(theme::TEXT_META))
+        .style(theme::button_style(tokens, kind))
+        .padding([2, 6])
+        .width(Length::Fixed(width));
+    if !busy {
+        b = b.on_press(on_press);
+    }
+    b.into()
 }
 
 /// "fetch origin: 2 refs, 14 objects, 3.4 KiB" footer summary.

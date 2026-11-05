@@ -71,17 +71,16 @@ pub fn view<'a>(tab: &'a Tab, tokens: Tokens) -> Element<'a, Message> {
         "Commit".to_string()
     };
     let enabled = tab.can_commit();
-    let commit = button(text(label).size(12).color(tokens.primary_foreground))
-        .style(theme::button_style(
-            tokens,
-            if enabled {
-                theme::ButtonKind::Primary
-            } else {
-                theme::ButtonKind::Secondary
-            },
-        ))
-        .padding([6, 16])
-        .on_press_maybe(enabled.then_some(Message::CommitPressed));
+    // Stays `Primary` while disabled so the dimmed Disabled style (not a
+    // normal-looking Secondary) tells the user why the click won't land.
+    let commit = button(
+        text(label)
+            .size(theme::TEXT_BODY)
+            .color(tokens.primary_foreground),
+    )
+    .style(theme::button_style(tokens, theme::ButtonKind::Primary))
+    .padding([6, 16])
+    .on_press_maybe(enabled.then_some(Message::CommitPressed));
     toggles = toggles.push(commit);
 
     let mut form = column![
@@ -90,14 +89,22 @@ pub fn view<'a>(tab: &'a Tab, tokens: Tokens) -> Element<'a, Message> {
             Space::new().width(Length::Fill),
             text(staged_label).size(10).color(tokens.muted_foreground),
             Space::new().width(8),
-            button(text("✨ Msg").size(10))
-                .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
-                .padding([2, 6])
-                .on_press(Message::AiGenerate(super::app::AiAction::CommitMessage)),
-            button(text("✨ Review").size(10))
-                .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
-                .padding([2, 6])
-                .on_press(Message::AiGenerate(super::app::AiAction::ReviewStaged)),
+            button(theme::tip(
+                tokens,
+                text(format!("{} Msg", theme::icon::AI)).size(theme::TEXT_META),
+                "Generate a commit message from the staged changes",
+            ))
+            .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
+            .padding([2, 6])
+            .on_press(Message::AiGenerate(super::app::AiAction::CommitMessage)),
+            button(theme::tip(
+                tokens,
+                text(format!("{} Review", theme::icon::AI)).size(theme::TEXT_META),
+                "Review the staged changes with AI",
+            ))
+            .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
+            .padding([2, 6])
+            .on_press(Message::AiGenerate(super::app::AiAction::ReviewStaged)),
         ]
         .align_y(Alignment::Center),
         Space::new().height(4),

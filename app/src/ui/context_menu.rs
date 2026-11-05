@@ -309,7 +309,7 @@ pub fn view(state: &State, tokens: &Tokens) -> Element<'static, Msg> {
                 body = body.push(
                     container(
                         text(label.clone())
-                            .size(9)
+                            .size(theme::TEXT_META)
                             .font(theme::semibold())
                             .color(tokens.muted_foreground),
                     )
@@ -374,10 +374,12 @@ fn item_row(
     };
 
     let line = row![
-        text(label.to_string()).size(11).color(label_color),
+        text(label.to_string())
+            .size(theme::TEXT_SMALL)
+            .color(label_color),
         Space::new().width(Length::Fill),
         text(keybind.unwrap_or_default().to_string())
-            .size(9)
+            .size(theme::TEXT_META)
             .font(theme::mono())
             .color(tokens.muted_foreground),
     ]

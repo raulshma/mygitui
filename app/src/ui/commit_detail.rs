@@ -7,7 +7,7 @@ use iced::{Alignment, Border, Element, Length};
 use super::app::Message;
 use super::diff_view::{self, DiffSlot, PaneMode};
 use super::history_model::relative_age;
-use super::repo_view::{chip, short_sha, Tab};
+use super::repo_view::{short_sha, Tab};
 use super::theme::{self, Tokens};
 
 fn clip_ref(reference: &str) -> String {
@@ -21,13 +21,12 @@ fn clip_ref(reference: &str) -> String {
 
 pub fn view<'a>(tab: &'a Tab, tokens: Tokens) -> Element<'a, Message> {
     let Some(commit) = tab.history.selected_commit() else {
-        return container(
-            text("Select a commit in the history list.")
-                .size(12)
-                .color(tokens.muted_foreground),
-        )
-        .padding(20)
-        .into();
+        return theme::note(
+            tokens,
+            "Select a commit in the history list.",
+            false,
+            theme::NoteKind::Empty,
+        );
     };
 
     let age = relative_age(
@@ -40,25 +39,31 @@ pub fn view<'a>(tab: &'a Tab, tokens: Tokens) -> Element<'a, Message> {
 
     let mut meta = row![
         text(short_sha(&commit.sha))
-            .size(10)
+            .size(theme::TEXT_META)
             .font(theme::mono())
             .color(tokens.muted_foreground),
         Space::new().width(8),
         text(commit.author.name.as_str())
-            .size(11)
+            .size(theme::TEXT_SMALL)
             .color(tokens.foreground),
         text(format!("<{}>", commit.author.email))
-            .size(10)
+            .size(theme::TEXT_META)
             .color(tokens.muted_foreground),
         Space::new().width(8),
-        text(age).size(10).color(tokens.muted_foreground),
+        text(age)
+            .size(theme::TEXT_META)
+            .color(tokens.muted_foreground),
         Space::new().width(Length::Fill),
     ]
     .spacing(4)
     .align_y(Alignment::Center);
 
     for reference in commit.refs.iter().take(3) {
-        meta = meta.push(chip(clip_ref(reference), tokens.primary));
+        meta = meta.push(theme::chip(
+            clip_ref(reference),
+            tokens.primary,
+            theme::ChipShape::Pill,
+        ));
         meta = meta.push(Space::new().width(4));
     }
 
@@ -72,14 +77,14 @@ pub fn view<'a>(tab: &'a Tab, tokens: Tokens) -> Element<'a, Message> {
     // the whole width.
     let title = row![
         text(summary)
-            .size(14)
+            .size(theme::TEXT_TITLE)
             .font(theme::semibold())
             .width(Length::Fill),
-        button(text("Reset…").size(11))
+        button(text("Reset…").size(theme::TEXT_SMALL))
             .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
             .padding([3, 10])
             .on_press(Message::ResetRequested(commit.sha.clone())),
-        button(text("Close").size(11))
+        button(text("Close").size(theme::TEXT_SMALL))
             .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
             .padding([3, 10])
             .on_press(Message::CloseDetail),
@@ -89,7 +94,7 @@ pub fn view<'a>(tab: &'a Tab, tokens: Tokens) -> Element<'a, Message> {
     let message = container(
         scrollable(
             text(commit.message.trim_end())
-                .size(11)
+                .size(theme::TEXT_SMALL)
                 .font(theme::mono())
                 .color(tokens.foreground),
         )
@@ -100,13 +105,12 @@ pub fn view<'a>(tab: &'a Tab, tokens: Tokens) -> Element<'a, Message> {
 
     let is_root = commit.parents.is_empty();
     let body: Element<'a, Message> = if is_root {
-        container(
-            text("Root commit — there is no parent to diff against.")
-                .size(11)
-                .color(tokens.muted_foreground),
+        theme::note(
+            tokens,
+            "Root commit — there is no parent to diff against.",
+            false,
+            theme::NoteKind::Empty,
         )
-        .padding(16)
-        .into()
     } else {
         diff_view::view(
             &tab.commit_diff,

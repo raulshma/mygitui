@@ -19,14 +19,12 @@ pub fn view<'a>(
     let mut list = column![].spacing(2).width(Length::Fill);
 
     if recent.is_empty() {
-        list = list.push(
-            container(
-                text("No recent repositories yet.")
-                    .size(13)
-                    .color(tokens.muted_foreground),
-            )
-            .padding([16, 0]),
-        );
+        list = list.push(theme::note(
+            tokens,
+            "No recent repositories yet.",
+            false,
+            theme::NoteKind::Empty,
+        ));
     } else {
         for entry in recent {
             list = list.push(recent_row(tokens, entry, now_ms));
@@ -34,31 +32,36 @@ pub fn view<'a>(
     }
 
     let open_button = if busy {
-        button(text("Opening…").size(13))
+        button(text("Opening…").size(theme::TEXT_BODY))
             .style(theme::button_style(tokens, theme::ButtonKind::Primary))
             .padding([8, 16])
     } else {
-        button(text("Open repository…").size(13))
+        button(text("Open repository…").size(theme::TEXT_BODY))
             .style(theme::button_style(tokens, theme::ButtonKind::Primary))
             .padding([8, 16])
             .on_press(Message::OpenDialog)
     };
 
-    let clone_button = button(text("Clone repository…").size(13))
+    let clone_button = button(text("Clone repository…").size(theme::TEXT_BODY))
         .style(theme::button_style(tokens, theme::ButtonKind::Secondary))
         .padding([8, 16])
         .on_press(Message::Clone(clone_dialog::Msg::Open));
 
     let card = container(
         column![
-            text("mygitui").size(24).font(theme::semibold()),
+            // The wordmark comes down to TEXT_TITLE like every other title.
+            text("mygitui")
+                .size(theme::TEXT_TITLE)
+                .font(theme::semibold()),
             text("A native Git client. Pick a repository to get started.")
-                .size(13)
+                .size(theme::TEXT_BODY)
                 .color(tokens.muted_foreground),
             Space::new().height(16),
             row![open_button, clone_button].spacing(8),
             Space::new().height(24),
-            text("Recent repositories").size(12).font(theme::semibold()),
+            text("Recent repositories")
+                .size(theme::TEXT_BODY)
+                .font(theme::semibold()),
             Space::new().height(4),
             list,
             Space::new().height(24),
@@ -92,8 +95,12 @@ fn recent_row<'a>(tokens: Tokens, entry: &'a RecentRepo, now_ms: u64) -> Element
     );
     let label = container(
         column![
-            text(entry.path.as_str()).size(13).color(tokens.foreground),
-            text(meta).size(11).color(tokens.muted_foreground),
+            text(entry.path.as_str())
+                .size(theme::TEXT_BODY)
+                .color(tokens.foreground),
+            text(meta)
+                .size(theme::TEXT_SMALL)
+                .color(tokens.muted_foreground),
         ]
         .width(Length::Fill),
     )
@@ -107,12 +114,12 @@ fn recent_row<'a>(tokens: Tokens, entry: &'a RecentRepo, now_ms: u64) -> Element
         .on_press(Message::OpenPath(entry.path.clone()));
 
     let pin_label = if entry.pinned { "Unpin" } else { "Pin" };
-    let pin = button(text(pin_label).size(11))
+    let pin = button(text(pin_label).size(theme::TEXT_SMALL))
         .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
         .padding([6, 8])
         .on_press(Message::TogglePin(entry.path.clone()));
 
-    let remove = button(text("Remove").size(11))
+    let remove = button(text("Remove").size(theme::TEXT_SMALL))
         .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
         .padding([6, 8])
         .on_press(Message::RemoveRecent(entry.path.clone()));

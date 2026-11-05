@@ -20,6 +20,20 @@ use super::theme::{self, Tokens};
 /// Rows rendered before and after the visible range.
 const OVERSCAN: usize = 20;
 
+// Fixed column widths of a commit row. `commit_row` lays them out from
+// these and the summary clip below divides what is left by the rough
+// char width of TEXT_SMALL text — keep the two in sync.
+/// Short SHA column.
+const SHA_COL_W: f32 = 52.0;
+/// Relative-age column.
+const AGE_COL_W: f32 = 44.0;
+/// Refs badge allowance (sized for the 14-char clip on TEXT_META text).
+const REFS_COL_W: f32 = 76.0;
+/// Row chrome: inter-column spacing plus the hover container's padding.
+const ROW_CHROME_W: f32 = 24.0;
+/// Approximate rendered width of one TEXT_SMALL character.
+const SUMMARY_CHAR_W: f32 = 5.6;
+
 pub fn view<'a>(tab: &'a Tab, tokens: Tokens) -> Element<'a, Message> {
     let history = &tab.history;
     let filter_active = tab.history_filter.is_active();
@@ -34,11 +48,15 @@ pub fn view<'a>(tab: &'a Tab, tokens: Tokens) -> Element<'a, Message> {
 
     let header = container(
         row![
-            text("History").size(12).font(theme::semibold()),
+            text("History")
+                .size(theme::TEXT_BODY)
+                .font(theme::semibold()),
             Space::new().width(Length::Fill),
-            text(status).size(10).color(tokens.muted_foreground),
+            text(status)
+                .size(theme::TEXT_META)
+                .color(tokens.muted_foreground),
             Space::new().width(4),
-            button(text("Filter").size(10))
+            button(text("Filter").size(theme::TEXT_META))
                 .style(theme::button_style(
                     tokens,
                     if tab.history_filter_open {
@@ -51,10 +69,14 @@ pub fn view<'a>(tab: &'a Tab, tokens: Tokens) -> Element<'a, Message> {
                 ))
                 .padding([2, 6])
                 .on_press(Message::HistoryFilterToggle),
-            button(text("⟳").size(11))
-                .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
-                .padding([2, 6])
-                .on_press(Message::RefreshLog(tab.repo.repo_id.clone())),
+            theme::tip(
+                tokens,
+                button(text(theme::icon::REFRESH).size(theme::TEXT_SMALL))
+                    .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
+                    .padding([4, 6])
+                    .on_press(Message::RefreshLog(tab.repo.repo_id.clone())),
+                "Refresh history",
+            ),
         ]
         .align_y(Alignment::Center)
         .padding([8, 10]),
@@ -70,9 +92,7 @@ pub fn view<'a>(tab: &'a Tab, tokens: Tokens) -> Element<'a, Message> {
         } else {
             "Loading…"
         };
-        container(text(note).size(11).color(tokens.muted_foreground))
-            .padding([16, 12])
-            .into()
+        theme::note(tokens, note, false, theme::NoteKind::Empty)
     } else {
         list(tab, tokens)
     };
@@ -94,20 +114,21 @@ fn filter_panel<'a>(tab: &'a Tab, tokens: Tokens) -> Element<'a, Message> {
     let input = |placeholder: &'a str, value: &'a str, field: HistoryFilterField| {
         text_input(placeholder, value)
             .on_input(move |value| Message::HistoryFilterChanged { field, value })
-            .size(10)
+            .size(theme::TEXT_META)
             .padding([4, 6])
             .width(Length::Fill)
     };
     let toggle = |label: &'a str, value: bool, message: fn(bool) -> Message| {
         checkbox(value)
             .label(label)
-            .size(12)
-            .text_size(10)
+            .size(theme::TEXT_BODY)
+            .text_size(theme::TEXT_META)
             .spacing(4)
             .on_toggle(message)
     };
 
-    let content = column![
+    let date_error = fields.date_error();
+    let mut content = column![
         row![
             input("Message text", &fields.text, HistoryFilterField::Text),
             toggle("Regex", fields.regex, Message::HistoryFilterRegex),
@@ -145,11 +166,18 @@ fn filter_panel<'a>(tab: &'a Tab, tokens: Tokens) -> Element<'a, Message> {
         .spacing(6)
         .align_y(Alignment::Center),
         row![
-            button(text("Apply").size(10))
-                .style(theme::button_style(tokens, theme::ButtonKind::Primary))
+            button(text("Apply").size(theme::TEXT_META))
+                .style(theme::button_style(
+                    tokens,
+                    if date_error.is_none() {
+                        theme::ButtonKind::Primary
+                    } else {
+                        theme::ButtonKind::Secondary
+                    }
+                ))
                 .padding([3, 10])
-                .on_press(Message::HistoryFilterApply),
-            button(text("Clear").size(10))
+                .on_press_maybe((date_error.is_none()).then_some(Message::HistoryFilterApply)),
+            button(text("Clear").size(theme::TEXT_META))
                 .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
                 .padding([3, 10])
                 .on_press(Message::HistoryFilterClear),
@@ -159,6 +187,9 @@ fn filter_panel<'a>(tab: &'a Tab, tokens: Tokens) -> Element<'a, Message> {
         .align_y(Alignment::Center),
     ]
     .spacing(5);
+    if let Some(error) = date_error {
+        content = content.push(text(error).size(theme::TEXT_META).color(tokens.destructive));
+    }
 
     container(content)
         .padding([6, 10])
@@ -250,9 +281,14 @@ fn commit_row<'a>(
 
     // Fixed-height rows: budget the summary length per available width so it
     // never wraps (author lives in the commit detail header instead).
-    let badge_width = if commit.refs.is_empty() { 0.0 } else { 62.0 };
-    let budget =
-        (((HISTORY_WIDTH - lanes - 52.0 - 44.0 - badge_width - 24.0) / 5.6) as usize).clamp(8, 48);
+    let badge_width = if commit.refs.is_empty() {
+        0.0
+    } else {
+        REFS_COL_W
+    };
+    let budget = (((HISTORY_WIDTH - lanes - SHA_COL_W - AGE_COL_W - badge_width - ROW_CHROME_W)
+        / SUMMARY_CHAR_W) as usize)
+        .clamp(8, 48);
     let summary = clip(short_summary(commit), budget);
     let age = relative_age(commit.author.time, now);
 
@@ -261,19 +297,19 @@ fn commit_row<'a>(
             .width(Length::Fixed(lanes))
             .height(Length::Fixed(ROW_HEIGHT)),
         text(short_sha(&commit.sha))
-            .size(10)
+            .size(theme::TEXT_META)
             .font(theme::mono())
             .color(tokens.muted_foreground)
-            .width(Length::Fixed(52.0)),
+            .width(Length::Fixed(SHA_COL_W)),
         text(summary)
-            .size(11)
+            .size(theme::TEXT_SMALL)
             .wrapping(Wrapping::None)
             .color(tokens.foreground)
             .width(Length::Fill),
         text(age)
-            .size(9)
+            .size(theme::TEXT_META)
             .color(tokens.muted_foreground)
-            .width(Length::Fixed(44.0))
+            .width(Length::Fixed(AGE_COL_W))
             .align_x(Alignment::End),
     ]
     .spacing(4)
@@ -281,9 +317,11 @@ fn commit_row<'a>(
     .height(Length::Fixed(ROW_HEIGHT));
 
     if !commit.refs.is_empty() {
+        // Refs sit on TEXT_META now; REFS_COL_W above is the matching
+        // budget so the badge never pushes the summary to wrap.
         let badge = container(
             text(clip(&commit.refs.join(" "), 14))
-                .size(8)
+                .size(theme::TEXT_META)
                 .color(tokens.primary),
         )
         .padding([0, 3]);

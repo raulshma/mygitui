@@ -11,9 +11,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use iced::widget::{
-    button, column, container, mouse_area, row, scrollable, text, text_editor, Space,
-};
+use iced::widget::{button, column, container, row, scrollable, text, text_editor, Space};
 use iced::{window, Alignment, Element, Length, Subscription, Task};
 
 use crate::engine::types::{
@@ -141,6 +139,9 @@ pub struct App {
     last_op: Option<String>,
     /// Op currently reporting progress, for the footer cancel button.
     active_op: Option<ActiveOp>,
+    /// Cancel flag of the running clone (flip to abort the transfer; the
+    /// footer shows Cancel while this is set).
+    clone_cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     /// Single-instance accept loop handle, moved into its task at boot.
     instance_listener: Option<crate::instance::InstanceListener>,
     /// Open AI result dialog (review/explain/branch-name output).
@@ -183,6 +184,8 @@ pub struct App {
     /// Last known cursor position, used to anchor context menus opened via
     /// `mouse_area` right-presses (which do not carry coordinates).
     cursor: iced::Point,
+    /// Keyboard-shortcuts help overlay (F1 / palette "Keyboard shortcuts").
+    help_open: bool,
 }
 
 /// The op whose progress the footer is showing (cancelable via `op_cancel`).
@@ -296,6 +299,8 @@ pub enum Message {
         result: Result<Option<NetStats>, String>,
     },
     CancelOp,
+    /// Footer cancel for a running clone (flips its transfer flag).
+    CloneCancel,
     OpCanceled {
         kind: String,
         result: Result<bool, String>,
@@ -498,6 +503,8 @@ pub enum Message {
     /// Open the push options dialog for a remote.
     PushRemote(String),
     PushForceToggled(bool),
+    /// Keystrokes into the force-push typed-confirm field.
+    PushConfirmChanged(String),
     PushForceLeaseToggled(bool),
     PushTagsToggled(bool),
     PushConfirmed,
@@ -663,6 +670,12 @@ pub enum Message {
     },
     /// Track the cursor so right-press menus can be positioned.
     CursorMoved(iced::Point),
+    /// Started dragging a workspace pane divider (mouse press on a strip).
+    PaneDragStart(repo_view::PaneDivider),
+    /// Toggle the keyboard-shortcuts help overlay (F1 / palette).
+    ToggleHelp,
+    /// Mouse release after a divider drag: persist the pane sizes.
+    PaneDragEnd,
     /// Embedded terminal pane (routed to the active tab).
     Terminal(terminal::Msg),
     /// Show/hide the terminal dock.
@@ -853,6 +866,10 @@ pub enum Message {
     },
     /// The dirty-checkout confirm was accepted.
     RemoteBranchCheckoutConfirmed,
+    /// Dirty-tree confirm accepted: switch with the changes in place.
+    LocalCheckoutConfirmed,
+    /// Dirty-tree confirm: stash first, then switch to the pending branch.
+    LocalCheckoutStashAndSwitch,
     /// Remote checkout finished with the checked-out local branch.
     RemoteCheckoutDone {
         repo_id: RepoId,
@@ -961,6 +978,8 @@ impl App {
             notice: None,
             last_op: None,
             active_op: None,
+            clone_cancel: None,
+            help_open: false,
             instance_listener: None,
             auth_prompts: std::collections::VecDeque::new(),
             host_key_prompts: std::collections::VecDeque::new(),
@@ -1525,6 +1544,13 @@ impl App {
             repo_id.is_some(),
             None,
         );
+        register(
+            "app.shortcuts",
+            "Keyboard shortcuts",
+            "App",
+            true,
+            Some("F1"),
+        );
 
         register(
             "network.fetch",
@@ -1748,6 +1774,7 @@ impl App {
             "panel.submodules" => self.update(Message::Submodule(submodule_panel::Msg::ToggleOpen)),
             "panel.tags" => self.update(Message::Tags(tags_panel::Msg::ToggleOpen)),
             "panel.actions" => self.update(Message::Actions(actions_panel::Msg::ToggleOpen)),
+            "app.shortcuts" => self.update(Message::ToggleHelp),
             "panel.output" => self.update(Message::Output(output_panel::Msg::ToggleOpen)),
             "panel.stats" => self.update(Message::Stats(stats_panel::Msg::ToggleOpen)),
             "view.popout_diff" => self.update(Message::PopoutDiff),
@@ -3551,15 +3578,60 @@ impl App {
         self.palette.open || self.quick_open.open || self.switcher.open || self.ctx_menu.open
     }
 
+    /// Whether any modal dialog is up — the active tab's confirmation cards,
+    /// the global clone/AI-settings/device dialogs, auth prompts or the AI
+    /// result window. Shell shortcuts stay dark behind these too: Ctrl+Enter
+    /// must not commit while "Discard changes?" is on screen.
+    fn dialog_open(&self) -> bool {
+        self.clone.open
+            || self.ai_settings.open
+            || self.devices.dialog.open
+            || self.devices.browse.open
+            || self.devices.pending_forget.is_some()
+            || self.ai_result.is_some()
+            || self.help_open
+            || !self.auth_prompts.is_empty()
+            || !self.host_key_prompts.is_empty()
+            || !self.device_secret_prompts.is_empty()
+            || self.tabs.get(self.active).is_some_and(Tab::dialog_pending)
+    }
+
     /// Dispatches a fixed shell shortcut (the `Message::Shortcut` arm).
     /// Every target routes through the same arms the buttons/palette use, so
     /// their guards (no repo tab, commit validation, editor save guard)
     /// apply unchanged; safe to fire with no repo tab open.
     fn shortcut(&mut self, shortcut: ShellShortcut) -> Task<Message> {
-        if self.overlay_open() {
-            return Task::none();
-        }
         match shortcut {
+            // Escape claims dialogs before the general dark-out below:
+            // while a dialog is up the other shortcuts are dead, but Escape
+            // must still reach the dialog's cancel arm. With no dialog
+            // open it's a no-op.
+            ShellShortcut::CancelDialog => {
+                if self.dialog_open() {
+                    self.update(Message::CancelDialog)
+                } else {
+                    Task::none()
+                }
+            }
+            // Tab traversal stays live (focus movement is never harmful),
+            // but only away from a focused terminal: the pane owns plain
+            // keys and focus jumping out mid-session would be jarring.
+            ShellShortcut::FocusNext => {
+                if self
+                    .tabs
+                    .get(self.active)
+                    .is_some_and(|tab| tab.terminal_open && tab.terminal.is_focused())
+                {
+                    Task::none()
+                } else {
+                    iced::widget::operation::focus_next::<Message>()
+                }
+            }
+            _ if self.overlay_open() || self.dialog_open() => Task::none(),
+            ShellShortcut::Help => {
+                self.help_open = !self.help_open;
+                Task::none()
+            }
             ShellShortcut::RefreshRepo => {
                 // A focused terminal owns plain keys (`F5` writes an xterm
                 // sequence into the shell); modifier combos are pane-ignored
@@ -3592,10 +3664,24 @@ impl App {
                 let target = wrapped_tab_index(self.active, self.tabs.len(), next);
                 self.update(Message::SelectTab(target))
             }
-            ShellShortcut::CloseTab => match self.tabs.get(self.active) {
-                Some(tab) => self.update(Message::CloseTab(tab.repo.repo_id.clone())),
-                None => Task::none(),
-            },
+            ShellShortcut::CloseTab => {
+                // A focused terminal should keep Ctrl+W: it's the common
+                // readline delete-word binding, and closing the tab kills
+                // the PTY session — a data-losing surprise from inside the
+                // shell. (The pane yields modifier combos to the shell, so
+                // this guard mirrors F5's.)
+                if self
+                    .tabs
+                    .get(self.active)
+                    .is_some_and(|tab| tab.terminal_open && tab.terminal.is_focused())
+                {
+                    return Task::none();
+                }
+                match self.tabs.get(self.active) {
+                    Some(tab) => self.update(Message::CloseTab(tab.repo.repo_id.clone())),
+                    None => Task::none(),
+                }
+            }
         }
     }
 
@@ -3672,7 +3758,17 @@ impl App {
                 // Seed the tab's diff layout from the saved
                 // prefs so split/wrap survive restarts.
                 let (diff_split, diff_wrap) = (self.config.diff_split, self.config.diff_wrap);
-                self.tabs.push(Tab::new(info, diff_split, diff_wrap));
+                let [sidebar, history, terminal_height] = self.config.pane_sizes;
+                self.tabs.push(Tab::new(
+                    info,
+                    diff_split,
+                    diff_wrap,
+                    repo_view::PaneSizes {
+                        sidebar,
+                        history,
+                        terminal: terminal_height,
+                    },
+                ));
                 self.active = self.tabs.len() - 1;
             }
         }
@@ -4057,6 +4153,14 @@ impl App {
         let Some(tab) = self.tabs.get_mut(self.active) else {
             return Task::none();
         };
+        // Backstop for non-button paths (the Apply button already greys
+        // out): bad dates must not silently filter everything out.
+        if !clear {
+            if let Some(error) = tab.history_filter.date_error() {
+                self.notice = Some(Notice::error(error));
+                return Task::none();
+            }
+        }
         if clear {
             tab.history_filter = FilterFields::default();
         }
@@ -4132,6 +4236,23 @@ impl App {
                 | Message::HistoryFilterChanged { .. }
         ) {
             self.blur_terminals();
+        }
+        // While a modal dialog is up, the palette-family overlays must not
+        // open (or toggle closed): they render *beneath* the dialog scrim
+        // but their key listeners stay live, so keystrokes would vanish
+        // into an invisible overlay. Dialog-openers are blocked for the
+        // same stacking reason.
+        if self.dialog_open() {
+            match message {
+                Message::Palette(palette::Msg::Toggle)
+                | Message::Switcher(quick_switcher::Msg::Toggle)
+                | Message::QuickOpen(quick_open::Msg::Toggle)
+                | Message::OpenDialog
+                | Message::Clone(clone_dialog::Msg::Open)
+                | Message::AiOpenSettings
+                | Message::Devices(devices::Msg::AddDevice) => return Task::none(),
+                _ => {}
+            }
         }
         match message {
             Message::Backend(event) => self.backend(event),
@@ -4376,6 +4497,13 @@ impl App {
                     |(kind, result)| Message::OpCanceled { kind, result },
                 )
             }
+            Message::CloneCancel => {
+                if let Some(cancel) = &self.clone_cancel {
+                    cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+                    self.last_op = Some("cancel requested: clone".to_string());
+                }
+                Task::none()
+            }
             Message::OpCanceled { kind, result } => match result {
                 Ok(true) => {
                     self.last_op = Some(format!("cancel requested: {kind}"));
@@ -4614,6 +4742,27 @@ impl App {
                     tab.pending_mergetool = None;
                 }
                 self.devices.pending_forget = None;
+                // Global dialogs close on Escape/scrim parity with the
+                // per-tab cards; each routes through its own Close so any
+                // save/clone guards keep applying.
+                if self.clone.open {
+                    return self.update(Message::Clone(clone_dialog::Msg::Close));
+                }
+                if self.ai_settings.open {
+                    return self.update(Message::AiSettings(ai_settings::Msg::Close));
+                }
+                if self.devices.dialog.open {
+                    return self.update(Message::Devices(devices::Msg::Dialog(
+                        devices::DialogMsg::Cancel,
+                    )));
+                }
+                if self.devices.browse.open {
+                    return self.update(Message::Devices(devices::Msg::Browse(
+                        devices::BrowseMsg::Close,
+                    )));
+                }
+                self.ai_result = None;
+                self.help_open = false;
                 Task::none()
             }
             Message::MutationDone {
@@ -4622,8 +4771,14 @@ impl App {
                 result,
             } => {
                 match &result {
-                    Ok(()) => self.last_op = Some(format!("{label} done")),
+                    // A success supersedes any standing error notice — an
+                    // old "discard failed" must not outlive recovery.
+                    Ok(()) => {
+                        self.last_op = Some(format!("{label} done"));
+                        self.notice = None;
+                    }
                     Err(err) => {
+                        let err = friendly_error(err);
                         self.notice = Some(Notice::error(format!("{label} failed: {err}")));
                     }
                 }
@@ -4720,6 +4875,25 @@ impl App {
             Message::CommitAmend(value) => {
                 if let Some(tab) = self.tabs.get_mut(self.active) {
                     tab.amend = value;
+                    // `git commit --amend` keeps the previous message:
+                    // prefill the editor with HEAD's so the user edits it
+                    // instead of retyping from empty (which the engine
+                    // refuses). Only prefill an empty box — never clobber
+                    // a message the user already typed. HEAD is the log's
+                    // first commit when unfiltered; prefer the commit that
+                    // carries the HEAD decoration.
+                    if value && tab.message.text().trim().is_empty() {
+                        let head = tab
+                            .history
+                            .commits
+                            .iter()
+                            .find(|commit| commit.refs.iter().any(|r| r.starts_with("HEAD")))
+                            .or_else(|| tab.history.commits.first())
+                            .map(|commit| commit.message.clone());
+                        if let Some(message) = head {
+                            tab.message = text_editor::Content::with_text(&message);
+                        }
+                    }
                 }
                 Task::none()
             }
@@ -5178,6 +5352,13 @@ impl App {
                 let Some(tab) = self.tabs.get_mut(self.active) else {
                     return Task::none();
                 };
+                // Same dirty-tree guard the remote checkout has: a switch
+                // that would conflict surfaces as a confirm (with a stash
+                // shortcut) instead of a raw engine error.
+                if tab.working_tree_dirty() {
+                    tab.pending_local_checkout = Some(name);
+                    return Task::none();
+                }
                 let repo_id = tab.repo.repo_id.clone();
                 let label = format!("Switch to {name}");
                 let services = self.services.clone();
@@ -5193,6 +5374,47 @@ impl App {
                         Message::BranchDone {
                             repo_id,
                             label,
+                            result,
+                        }
+                    },
+                    std::convert::identity,
+                )
+            }
+            Message::LocalCheckoutConfirmed => {
+                let name = match self.tabs.get_mut(self.active) {
+                    Some(tab) => tab.pending_local_checkout.take(),
+                    None => None,
+                };
+                match name {
+                    Some(name) => self.update(Message::BranchSwitch(name)),
+                    None => Task::none(),
+                }
+            }
+            Message::LocalCheckoutStashAndSwitch => {
+                let Some(tab) = self.tabs.get_mut(self.active) else {
+                    return Task::none();
+                };
+                let Some(name) = tab.pending_local_checkout.take() else {
+                    return Task::none();
+                };
+                let include_untracked = tab.stashes.include_untracked;
+                let repo_id = tab.repo.repo_id.clone();
+                let services = self.services.clone();
+                // Stash with a descriptive message; StashesDone chains the
+                // switch when the label matches (see that arm).
+                Task::perform(
+                    async move {
+                        let result = crate::service::stash::stash_push(
+                            &services,
+                            repo_id.clone(),
+                            Some(format!("Before switching to {name}")),
+                            false,
+                            include_untracked,
+                        )
+                        .await;
+                        Message::StashesDone {
+                            repo_id,
+                            label: format!("Stash and switch:{name}"),
                             result,
                         }
                     },
@@ -5518,6 +5740,13 @@ impl App {
                 let Some(index) = repo_view::tab_index(&self.tabs, &repo_id) else {
                     return Task::none();
                 };
+                // "Stash and switch:<branch>" chains the switch after a
+                // successful stash (the dirty-checkout confirm's shortcut).
+                if result.is_ok() {
+                    if let Some(branch) = label.strip_prefix("Stash and switch:") {
+                        return self.update(Message::BranchSwitch(branch.to_string()));
+                    }
+                }
                 match result {
                     Ok(()) => {
                         self.last_op = Some(format!("{label} done"));
@@ -5867,6 +6096,9 @@ impl App {
                 let Some(tab) = self.tabs.get_mut(self.active) else {
                     return Task::none();
                 };
+                // The row's buttons render disabled ("…") while busy, so a
+                // double-click can't enqueue duplicate fetches.
+                tab.remotes.busy = Some(remote.clone());
                 let repo_id = tab.repo.repo_id.clone();
                 let label = format!("fetch {remote}");
                 let summary_label = label.clone();
@@ -5941,6 +6173,7 @@ impl App {
                     return Task::none();
                 };
                 let repo_id = tab.repo.repo_id.clone();
+                tab.remotes.busy = Some(request.remote.clone());
                 let label = format!("pull {}", request.remote);
                 let summary_label = label.clone();
                 let services = self.services.clone();
@@ -5983,10 +6216,23 @@ impl App {
                     .and_then(|tab| tab.pending_push.as_mut())
                 {
                     request.force = value;
+                    // Arming (or disarming) force always resets the typed
+                    // confirmation — it must be re-typed for this attempt.
+                    request.confirm_typed.clear();
                     if value {
                         // The two force modes are mutually exclusive.
                         request.force_with_lease = false;
                     }
+                }
+                Task::none()
+            }
+            Message::PushConfirmChanged(value) => {
+                if let Some(request) = self
+                    .tabs
+                    .get_mut(self.active)
+                    .and_then(|tab| tab.pending_push.as_mut())
+                {
+                    request.confirm_typed = value;
                 }
                 Task::none()
             }
@@ -6020,7 +6266,13 @@ impl App {
                 let Some(request) = tab.pending_push.take() else {
                     return Task::none();
                 };
+                // Backstop for the view-level gate: plain force must have
+                // been typed-confirmed with the remote name.
+                if request.force_needs_confirm() {
+                    return Task::none();
+                }
                 let repo_id = tab.repo.repo_id.clone();
+                tab.remotes.busy = Some(request.remote.clone());
                 let label = format!("push {}", request.remote);
                 let summary_label = label.clone();
                 let services = self.services.clone();
@@ -6099,6 +6351,7 @@ impl App {
                         self.last_op = Some(summary);
                         self.notice = None;
                         let tab = &mut self.tabs[index];
+                        tab.remotes.busy = None;
                         if label.starts_with("Add remote") {
                             tab.remotes.add_name.clear();
                             tab.remotes.add_url.clear();
@@ -6111,7 +6364,11 @@ impl App {
                         ])
                     }
                     Err(err) => {
-                        self.notice = Some(Notice::error(format!("{label} failed: {err}")));
+                        self.tabs[index].remotes.busy = None;
+                        self.notice = Some(Notice::error(format!(
+                            "{label} failed: {}",
+                            friendly_error(&err)
+                        )));
                         Task::none()
                     }
                 }
@@ -6233,7 +6490,10 @@ impl App {
                         Task::batch(tasks)
                     }
                     Err(err) => {
-                        self.notice = Some(Notice::error(format!("{label} failed: {err}")));
+                        self.notice = Some(Notice::error(format!(
+                            "{label} failed: {}",
+                            friendly_error(&err)
+                        )));
                         Task::none()
                     }
                 }
@@ -6882,8 +7142,22 @@ impl App {
                 Task::none()
             }
             Message::Clone(msg) => {
+                let opening = matches!(msg, clone_dialog::Msg::Open);
                 match clone_dialog::update(&mut self.clone, msg) {
                     Some(clone_dialog::Action::Close) | None => {}
+                    Some(clone_dialog::Action::CancelClone) => {
+                        // Abandon the in-flight clone and dismiss the
+                        // dialog; CloneDone for the cancelled transfer is
+                        // a no-op (already closed, flag flipped).
+                        if let Some(cancel) = &self.clone_cancel {
+                            cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+                        }
+                        self.clone_cancel = None;
+                        self.clone.close();
+                        self.clone.running = false;
+                        self.last_op = Some("Clone cancelled".to_string());
+                        return Task::none();
+                    }
                     Some(clone_dialog::Action::PickFolder) => {
                         return Task::perform(
                             async {
@@ -6904,6 +7178,10 @@ impl App {
                     }) => {
                         // The dialog's own update already flipped it into the
                         // running state (active_url set for CloneProgress).
+                        // The flag lives on the shell so the footer Cancel
+                        // can abort the transfer mid-run.
+                        let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+                        self.clone_cancel = Some(cancel.clone());
                         let services = self.services.clone();
                         return Task::perform(
                             async move {
@@ -6913,6 +7191,7 @@ impl App {
                                         url.clone(),
                                         destination.clone(),
                                         depth,
+                                        cancel,
                                     )
                                     .await
                                 } else {
@@ -6921,6 +7200,7 @@ impl App {
                                         url.clone(),
                                         destination.clone(),
                                         depth,
+                                        cancel,
                                     )
                                     .await
                                 };
@@ -6932,6 +7212,13 @@ impl App {
                             std::convert::identity,
                         );
                     }
+                }
+                // Fresh dialog: put the keyboard in the URL field so the
+                // user can paste and hit Enter without a click.
+                if opening {
+                    return iced::widget::operation::focus::<Message>(iced::widget::Id::new(
+                        "clone-url",
+                    ));
                 }
                 Task::none()
             }
@@ -7010,11 +7297,17 @@ impl App {
             } => {
                 self.clone.running = false;
                 self.clone.progress = None;
+                self.clone_cancel = None;
                 match result {
                     Ok(path) => {
                         self.clone.close();
                         self.last_op = Some(format!("Cloned into {path}"));
                         self.open_repo(path)
+                    }
+                    Err(err) if err.contains("cancelled") => {
+                        // User-initiated footer cancel: not an error.
+                        self.last_op = Some("Clone cancelled".to_string());
+                        Task::none()
                     }
                     Err(err) => {
                         self.notice = Some(Notice::error(format!(
@@ -7113,7 +7406,57 @@ impl App {
                 self.finish_window_save(seq, maximized)
             }
             Message::CursorMoved(position) => {
+                // Divider drags reuse the globally tracked cursor: the delta
+                // since the last move event resizes the dragged pane (no
+                // window-size math needed). The cursor is updated first so
+                // the delta is correct on the next event.
+                let previous = self.cursor;
                 self.cursor = position;
+                if let Some(tab) = self.tabs.get_mut(self.active) {
+                    let Some(divider) = tab.pane_drag else {
+                        return Task::none();
+                    };
+                    let dx = position.x - previous.x;
+                    let dy = position.y - previous.y;
+                    match divider {
+                        repo_view::PaneDivider::Sidebar => {
+                            tab.sidebar_width = (tab.sidebar_width + dx)
+                                .clamp(repo_view::SIDEBAR_MIN_WIDTH, repo_view::SIDEBAR_MAX_WIDTH);
+                        }
+                        repo_view::PaneDivider::History => {
+                            tab.history_width = (tab.history_width - dx)
+                                .clamp(repo_view::HISTORY_MIN_WIDTH, repo_view::HISTORY_MAX_WIDTH);
+                        }
+                        repo_view::PaneDivider::Terminal => {
+                            tab.terminal_height = (tab.terminal_height - dy).clamp(
+                                repo_view::TERMINAL_MIN_HEIGHT,
+                                repo_view::TERMINAL_MAX_HEIGHT,
+                            );
+                        }
+                    }
+                }
+                Task::none()
+            }
+            Message::ToggleHelp => {
+                self.help_open = !self.help_open;
+                Task::none()
+            }
+            Message::PaneDragStart(divider) => {
+                if let Some(tab) = self.tabs.get_mut(self.active) {
+                    tab.pane_drag = Some(divider);
+                }
+                Task::none()
+            }
+            Message::PaneDragEnd => {
+                // Persist the sizes as the new defaults (config + live tabs
+                // keep their own copies; new tabs read the config).
+                if let Some(tab) = self.tabs.get_mut(self.active) {
+                    if tab.pane_drag.take().is_some() {
+                        self.config.pane_sizes =
+                            [tab.sidebar_width, tab.history_width, tab.terminal_height];
+                        self.persist_config();
+                    }
+                }
                 Task::none()
             }
             Message::ToggleTerminal => {
@@ -8333,6 +8676,13 @@ impl App {
             iced::event::listen_with(modifiers_changed),
             iced::event::listen_with(window_focus_changed),
             iced::event::listen_with(window_geometry_changed),
+            // Mouse release ends a pane-divider drag (the press started it).
+            iced::event::listen_with(|event, _status, _window| match event {
+                iced::Event::Mouse(iced::mouse::Event::ButtonReleased(
+                    iced::mouse::Button::Left,
+                )) => Some(Message::PaneDragEnd),
+                _ => None,
+            }),
             iced::window::close_events().map(Message::WindowClosed),
             // Overlay components own their key/backdrop handling; each mapper
             // is a no-op while its overlay is closed.
@@ -8425,7 +8775,12 @@ impl App {
                 &self.devices,
             )
         } else {
-            repo_view::view(&self.tabs, self.active, tokens)
+            repo_view::view(
+                &self.tabs,
+                self.active,
+                tokens,
+                self.window_save.frame.size[0],
+            )
         };
 
         let page: Element<'_, Message> = column![self.header(tokens), body, self.footer(tokens)]
@@ -8502,6 +8857,9 @@ impl App {
         }
         if let Some(result) = &self.ai_result {
             layers.push(ai_result_overlay(result, tokens));
+        }
+        if self.help_open {
+            layers.push(help_overlay(tokens));
         }
         if let Some(overlay) = prompts::overlay(
             tokens,
@@ -8634,6 +8992,15 @@ impl App {
                     .padding([2, 8])
                     .on_press(Message::CancelOp),
             );
+        } else if self.clone_cancel.is_some() && self.clone.open && self.clone.running {
+            // Clones aren't repo ops (no `op_cancel` id); the flag aborts
+            // the transfer. Available from the moment the clone starts.
+            bar = bar.push(
+                button(text("Cancel").size(11))
+                    .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
+                    .padding([2, 8])
+                    .on_press(Message::CloneCancel),
+            );
         }
 
         if let Some(link) = self.notice.as_ref().and_then(|notice| notice.link.clone()) {
@@ -8723,6 +9090,49 @@ fn window_geometry_changed(
     }
 }
 
+/// Appends an actionable hint to raw engine/git error strings for the
+/// failure classes users actually hit. Matching is on the engine's stable
+/// phrasings (lowercased substring); anything unmatched passes through
+/// unchanged — never worse than the raw string.
+fn friendly_error(err: &str) -> String {
+    let lower = err.to_lowercase();
+    let hint = if lower.contains("auth")
+        || lower.contains("401")
+        || lower.contains("403")
+        || lower.contains("permission denied")
+        || lower.contains("publickey")
+        || lower.contains("credentials")
+    {
+        "Check your credentials or SSH key, then retry — the app prompts when a remote asks."
+    } else if lower.contains("tls")
+        || lower.contains("ssl")
+        || lower.contains("could not resolve")
+        || lower.contains("connection refused")
+        || lower.contains("timed out")
+        || lower.contains("network")
+    {
+        "Check your network connection and the remote URL."
+    } else if lower.contains("non-fast-forward")
+        || lower.contains("fetch first")
+        || lower.contains("rejected")
+    {
+        "The remote has newer commits — pull first, then push (or force-push deliberately)."
+    } else if lower.contains("index.lock")
+        || lower.contains("lock file")
+        || lower.contains("already locked")
+    {
+        "Another git process may still be running — wait a moment and retry."
+    } else if lower.contains("conflict")
+        || lower.contains("local changes")
+        || lower.contains("would be overwritten")
+    {
+        "Commit or stash your changes first, then retry."
+    } else {
+        return err.to_string();
+    };
+    format!("{err} — {hint}")
+}
+
 /// Fixed shell shortcuts handled by the global key handler (fixed defaults,
 /// not user-configurable). The palette mirrors these in its hint fields and
 /// `docs/contracts.md` lists the final mapping.
@@ -8744,6 +9154,15 @@ pub enum ShellShortcut {
     PrevTab,
     /// `Ctrl/Cmd+W` — close the current repo tab.
     CloseTab,
+    /// `Escape` — dismiss the top-most open modal dialog (no-op when none
+    /// is; the palette-family overlays close themselves via their own key
+    /// listeners before this ever fires).
+    CancelDialog,
+    /// `F1` — toggle the keyboard-shortcuts help overlay.
+    Help,
+    /// `Tab` — move keyboard focus to the next focusable widget (best-
+    /// effort traversal; widgets without focus state are skipped).
+    FocusNext,
 }
 
 /// The `Ctrl/Cmd+1..8` panel mapping, in the fixed shortcut order that
@@ -8789,6 +9208,12 @@ fn shell_shortcut(
     let cmd = modifiers.logo() || (modifiers.control() && !cfg!(target_os = "macos"));
     match key {
         iced::keyboard::Key::Named(Named::F5) => Some(ShellShortcut::RefreshRepo),
+        // Escape is a plain key, but it only ever acts on a dialog; typing
+        // surfaces (text inputs, the terminal) don't lose it — when no
+        // dialog is open the arm below is a no-op.
+        iced::keyboard::Key::Named(Named::Escape) => Some(ShellShortcut::CancelDialog),
+        iced::keyboard::Key::Named(Named::F1) => Some(ShellShortcut::Help),
+        iced::keyboard::Key::Named(Named::Tab) => Some(ShellShortcut::FocusNext),
         iced::keyboard::Key::Named(Named::Enter) if cmd => Some(ShellShortcut::Commit),
         iced::keyboard::Key::Named(Named::ArrowRight) if cmd && modifiers.alt() => {
             Some(ShellShortcut::NextTab)
@@ -8937,6 +9362,55 @@ fn branch_row_menu(name: &str) -> context_menu::Menu {
     menu
 }
 
+/// Keyboard-shortcuts help overlay (F1 / palette "Keyboard shortcuts").
+/// The fixed shell suite plus the overlay hotkeys, in discovery order.
+fn help_overlay<'a>(tokens: Tokens) -> Element<'a, Message> {
+    const ROWS: [(&str, &str); 13] = [
+        ("Refresh repository", "F5"),
+        ("Toggle panels", "Ctrl+1 … 8"),
+        ("Save editor file", "Ctrl+S"),
+        ("Commit staged changes", "Ctrl+Enter"),
+        ("Next / previous tab", "Ctrl+Alt+→ / ←"),
+        ("Close tab", "Ctrl+W"),
+        ("Close dialog", "Esc"),
+        ("Cycle keyboard focus", "Tab"),
+        ("Command palette", "Ctrl+Shift+P"),
+        ("Repo quick-switcher", "Ctrl+K"),
+        ("Quick open file", "Ctrl+P"),
+        ("Open repository", "Ctrl+O"),
+        ("Toggle this help", "F1"),
+    ];
+    let mut body = column![
+        text("Keyboard shortcuts")
+            .size(theme::TEXT_TITLE)
+            .font(theme::semibold()),
+        Space::new().height(6),
+    ]
+    .spacing(2);
+    for (action, key) in ROWS {
+        body = body.push(
+            row![
+                text(action).size(theme::TEXT_SMALL).width(Length::Fill),
+                text(key)
+                    .size(theme::TEXT_SMALL)
+                    .font(theme::mono())
+                    .color(tokens.muted_foreground),
+            ]
+            .align_y(Alignment::Center),
+        );
+    }
+    body = body.push(text("The command palette (Ctrl+Shift+P) lists every command; most appear here as they ship."))
+        .push(Space::new().height(4));
+
+    super::dialog::modal_with_cancel(
+        tokens,
+        520.0,
+        body.into(),
+        Space::new().width(0).into(),
+        Message::ToggleHelp,
+    )
+}
+
 /// Centered modal showing an AI generation (review/explain/branch name)
 /// with copy + close; the body scrolls for long reviews.
 fn ai_result_overlay<'a>(result: &'a AiResult, tokens: Tokens) -> Element<'a, Message> {
@@ -8957,48 +9431,31 @@ fn ai_result_overlay<'a>(result: &'a AiResult, tokens: Tokens) -> Element<'a, Me
     ]
     .align_y(Alignment::Center);
 
-    let card = container(
-        column![
-            title,
-            Space::new().height(8),
-            scrollable(
-                container(text(result.body.as_str()).size(11).font(theme::mono()))
-                    .width(Length::Fill)
+    let body = column![
+        title,
+        Space::new().height(8),
+        scrollable(
+            container(
+                text(result.body.as_str())
+                    .size(theme::TEXT_SMALL)
+                    .font(theme::mono())
             )
-            .height(Length::Fixed(380.0)),
-        ]
-        .spacing(4)
-        .width(Length::Fill),
-    )
-    .width(Length::Fixed(640.0))
-    .padding(12)
-    .style(move |_theme| container::Style {
-        background: Some(iced::Background::Color(tokens.card)),
-        border: iced::Border {
-            color: tokens.border,
-            width: 1.0,
-            radius: 8.0.into(),
-        },
-        ..container::Style::default()
-    });
-
-    // Dimmed backdrop closes on click, like the other overlays.
-    mouse_area(
-        container(card)
             .width(Length::Fill)
-            .height(Length::Fill)
-            .align_x(Alignment::Center)
-            .align_y(Alignment::Center)
-            .style(move |_theme| container::Style {
-                background: Some(iced::Background::Color(theme::with_alpha(
-                    tokens.muted,
-                    0.35,
-                ))),
-                ..container::Style::default()
-            }),
+        )
+        .height(Length::Fixed(380.0)),
+    ]
+    .spacing(4)
+    .width(Length::Fill);
+
+    // Shared modal scaffold: proper dimming (BLACK 0.4) like every other
+    // dialog — the old muted-tint scrim was near-invisible in dark theme.
+    super::dialog::modal_with_cancel(
+        tokens,
+        640.0,
+        body.into(),
+        Space::new().width(0).into(),
+        Message::AiResultClose,
     )
-    .on_press(Message::AiResultClose)
-    .into()
 }
 
 /// Feeds a loaded plan (the planner's initial pick list or an autosquash

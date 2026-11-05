@@ -96,6 +96,18 @@ pub struct PushRequest {
     pub force_with_lease: bool,
     /// Push every local tag (`--tags`).
     pub tags: bool,
+    /// Typed confirmation for plain force: must equal the remote name
+    /// before Push unlocks (rewriting published history in one checkbox
+    /// was too cheap a gesture).
+    pub confirm_typed: String,
+}
+
+impl PushRequest {
+    /// Plain force is armed and must be typed-confirmed with the remote
+    /// name before the dialog's Push action fires.
+    pub fn force_needs_confirm(&self) -> bool {
+        self.force && self.confirm_typed.trim() != self.remote
+    }
 }
 
 /// Reset modes that discard worktree changes (and therefore get a preview).
@@ -169,14 +181,16 @@ pub fn reset<'a>(tokens: Tokens, request: &ResetRequest) -> Element<'a, Message>
             button(
                 row![
                     text(if selected { "●" } else { "○" })
-                        .size(10)
+                        .size(theme::TEXT_META)
                         .color(if selected {
                             tokens.primary
                         } else {
                             tokens.muted_foreground
                         }),
-                    text(label).size(11).color(kind_color),
-                    text(description).size(10).color(tokens.muted_foreground),
+                    text(label).size(theme::TEXT_SMALL).color(kind_color),
+                    text(description)
+                        .size(theme::TEXT_META)
+                        .color(tokens.muted_foreground),
                 ]
                 .spacing(8)
                 .align_y(Alignment::Center),
@@ -204,7 +218,7 @@ pub fn reset<'a>(tokens: Tokens, request: &ResetRequest) -> Element<'a, Message>
             "Move the current branch to {}. A checkpoint of the current state is saved first.",
             &request.sha[..request.sha.len().min(7)]
         ))
-        .size(12)
+        .size(theme::TEXT_BODY)
         .color(tokens.muted_foreground),
         Space::new().height(6),
         options,
@@ -217,7 +231,7 @@ pub fn reset<'a>(tokens: Tokens, request: &ResetRequest) -> Element<'a, Message>
                 body = body.push(
                     container(
                         text(preview_detail(preview, 5))
-                            .size(11)
+                            .size(theme::TEXT_SMALL)
                             .font(theme::mono())
                             .color(if preview.files.is_empty() {
                                 tokens.muted_foreground
@@ -241,7 +255,7 @@ pub fn reset<'a>(tokens: Tokens, request: &ResetRequest) -> Element<'a, Message>
             None => {
                 body = body.push(
                     text("Checking what would be discarded…")
-                        .size(11)
+                        .size(theme::TEXT_SMALL)
                         .color(tokens.muted_foreground),
                 );
             }
@@ -259,11 +273,11 @@ pub fn reset<'a>(tokens: Tokens, request: &ResetRequest) -> Element<'a, Message>
 
     let actions = row![
         Space::new().width(Length::Fill),
-        button(text("Cancel").size(11))
+        button(text("Cancel").size(theme::TEXT_SMALL))
             .style(theme::button_style(tokens, theme::ButtonKind::Secondary))
             .padding([4, 12])
             .on_press(Message::CancelDialog),
-        button(text(confirm_label).size(11))
+        button(text(confirm_label).size(theme::TEXT_SMALL))
             .style(theme::button_style(
                 tokens,
                 if danger {
@@ -318,7 +332,7 @@ pub fn confirm<'a>(
         text(spec.title.clone()).size(14).font(theme::semibold()),
         Space::new().height(4),
         text(spec.body.clone())
-            .size(12)
+            .size(theme::TEXT_BODY)
             .color(tokens.muted_foreground),
     ]
     .spacing(2);
@@ -327,7 +341,7 @@ pub fn confirm<'a>(
         body = body.push(
             container(
                 text(detail.clone())
-                    .size(11)
+                    .size(theme::TEXT_SMALL)
                     .font(theme::mono())
                     .color(tokens.foreground),
             )
@@ -347,11 +361,11 @@ pub fn confirm<'a>(
 
     let actions = row![
         Space::new().width(Length::Fill),
-        button(text("Cancel").size(11))
+        button(text("Cancel").size(theme::TEXT_SMALL))
             .style(theme::button_style(tokens, theme::ButtonKind::Secondary))
             .padding([4, 12])
             .on_press(cancel.clone()),
-        button(text(spec.confirm_label.clone()).size(11))
+        button(text(spec.confirm_label.clone()).size(theme::TEXT_SMALL))
             .style(theme::button_style(
                 tokens,
                 if spec.danger {
@@ -403,6 +417,21 @@ pub(crate) fn modal<'a>(
     body: Element<'a, Message>,
     actions: Element<'a, Message>,
 ) -> Element<'a, Message> {
+    modal_with_cancel(tokens, width, body, actions, Message::CancelDialog)
+}
+
+/// [`modal`] with a custom scrim-click message, for overlays that aren't
+/// option cards (the AI result window closes instead of cancelling).
+/// Generic over the message type so dialogs that own a private `Msg` enum
+/// (clone, AI settings, devices, the palettes) share the same scaffold and
+/// map the element to their own message afterwards.
+pub(crate) fn modal_with_cancel<'a, M: Clone + 'a>(
+    tokens: Tokens,
+    width: f32,
+    body: Element<'a, M>,
+    actions: Element<'a, M>,
+    on_cancel: M,
+) -> Element<'a, M> {
     let card = container(column![body, Space::new().height(8), actions].spacing(6))
         .width(Length::Fixed(width))
         .padding([16, 18])
@@ -429,7 +458,7 @@ pub(crate) fn modal<'a>(
             ..container::Style::default()
         });
 
-    mouse_area(scrim).on_press(Message::CancelDialog).into()
+    mouse_area(scrim).on_press(on_cancel).into()
 }
 
 /// One select line of an option card: radio dot + label + description.
@@ -443,14 +472,16 @@ fn option_line<'a>(
     button(
         row![
             text(if selected { "●" } else { "○" })
-                .size(10)
+                .size(theme::TEXT_META)
                 .color(if selected {
                     tokens.primary
                 } else {
                     tokens.muted_foreground
                 }),
-            text(label).size(11).color(tokens.foreground),
-            text(description).size(10).color(tokens.muted_foreground),
+            text(label).size(theme::TEXT_SMALL).color(tokens.foreground),
+            text(description)
+                .size(theme::TEXT_META)
+                .color(tokens.muted_foreground),
         ]
         .spacing(8)
         .align_y(Alignment::Center),
@@ -478,11 +509,11 @@ pub(crate) fn action_row<'a>(
 ) -> Element<'a, Message> {
     row![
         Space::new().width(Length::Fill),
-        button(text("Cancel").size(11))
+        button(text("Cancel").size(theme::TEXT_SMALL))
             .style(theme::button_style(tokens, theme::ButtonKind::Secondary))
             .padding([4, 12])
             .on_press(Message::CancelDialog),
-        button(text(confirm_label.to_string()).size(11))
+        button(text(confirm_label.to_string()).size(theme::TEXT_SMALL))
             .style(theme::button_style(tokens, theme::ButtonKind::Primary))
             .padding([4, 12])
             .on_press_maybe(on_confirm),
@@ -521,7 +552,7 @@ pub fn merge<'a>(
     }
 
     let mut favor = row![text("Conflicting hunks:")
-        .size(10)
+        .size(theme::TEXT_META)
         .color(tokens.muted_foreground)]
     .spacing(4)
     .align_y(Alignment::Center);
@@ -531,7 +562,7 @@ pub fn merge<'a>(
         (MergeFavor::Theirs, "-X theirs"),
     ] {
         favor = favor.push(
-            button(text(label).size(10))
+            button(text(label).size(theme::TEXT_META))
                 .style(theme::button_style(
                     tokens,
                     if request.favor == kind {
@@ -554,21 +585,21 @@ pub fn merge<'a>(
             Some(head) => format!("Merge “{}” into “{head}”?", request.name),
             None => format!("Merge “{}” into the current branch?", request.name),
         })
-        .size(12)
+        .size(theme::TEXT_BODY)
         .color(tokens.muted_foreground),
         Space::new().height(6),
         options,
         row![
             checkbox(request.squash)
                 .label("Squash (--squash)")
-                .size(12)
-                .text_size(10)
+                .size(theme::TEXT_BODY)
+                .text_size(theme::TEXT_META)
                 .spacing(4)
                 .on_toggle(Message::MergeSquashToggled),
             checkbox(request.no_commit)
                 .label("Stop before committing (--no-commit)")
-                .size(12)
-                .text_size(10)
+                .size(theme::TEXT_BODY)
+                .text_size(theme::TEXT_META)
                 .spacing(4)
                 .on_toggle(Message::MergeNoCommitToggled),
         ]
@@ -581,7 +612,7 @@ pub fn merge<'a>(
     if dirty {
         body = body.push(
             text("Stash your changes first")
-                .size(10)
+                .size(theme::TEXT_META)
                 .color(tokens.deleted),
         );
     }
@@ -603,23 +634,23 @@ pub fn pull<'a>(tokens: Tokens, request: &PullRequest) -> Element<'a, Message> {
             .font(theme::semibold()),
         Space::new().height(4),
         text("Leave the branch empty to pull the upstream of the current branch.")
-            .size(12)
+            .size(theme::TEXT_BODY)
             .color(tokens.muted_foreground),
         text_input("branch (optional)", request.branch.as_str())
             .on_input(Message::PullBranchChanged)
             .on_submit(Message::PullConfirmed)
-            .size(11)
+            .size(theme::TEXT_SMALL)
             .padding([4, 6]),
         checkbox(request.rebase)
             .label("Rebase instead of merge")
-            .size(12)
-            .text_size(11)
+            .size(theme::TEXT_BODY)
+            .text_size(theme::TEXT_SMALL)
             .spacing(4)
             .on_toggle(Message::PullRebaseToggled),
         checkbox(request.ff_only)
             .label("Fast-forward only")
-            .size(12)
-            .text_size(11)
+            .size(theme::TEXT_BODY)
+            .text_size(theme::TEXT_SMALL)
             .spacing(4)
             .on_toggle(Message::PullFfOnlyToggled),
     ]
@@ -635,41 +666,67 @@ pub fn pull<'a>(tokens: Tokens, request: &PullRequest) -> Element<'a, Message> {
 
 /// Centered modal with per-remote push options: force / force-with-lease
 /// (mutually exclusive — the update arms clear the counterpart) and tags.
+/// Plain force demands a typed confirmation of the remote name and warns
+/// toward force-with-lease; force-with-lease alone pushes normally.
 pub fn push<'a>(tokens: Tokens, request: &PushRequest) -> Element<'a, Message> {
-    let body = column![
+    let mut body = column![
         text(format!("Push to {}", request.remote))
-            .size(14)
+            .size(theme::TEXT_TITLE)
             .font(theme::semibold()),
         Space::new().height(4),
         text("Pushes the current branch and sets its upstream when missing.")
-            .size(12)
+            .size(theme::TEXT_BODY)
             .color(tokens.muted_foreground),
-        checkbox(request.force)
-            .label("Force")
-            .size(12)
-            .text_size(11)
-            .spacing(4)
-            .on_toggle(Message::PushForceToggled),
         checkbox(request.force_with_lease)
-            .label("Force with lease (fails if the remote moved since the last fetch)")
-            .size(12)
-            .text_size(11)
+            .label("Force with lease (recommended; fails if the remote moved since the last fetch)")
+            .size(theme::TEXT_BODY)
+            .text_size(theme::TEXT_SMALL)
             .spacing(4)
             .on_toggle(Message::PushForceLeaseToggled),
-        checkbox(request.tags)
-            .label("Push all tags")
-            .size(12)
-            .text_size(11)
+        checkbox(request.force)
+            .label("Force (overwrites the remote branch, even others' commits)")
+            .size(theme::TEXT_BODY)
+            .text_size(theme::TEXT_SMALL)
             .spacing(4)
-            .on_toggle(Message::PushTagsToggled),
+            .on_toggle(Message::PushForceToggled),
     ]
     .spacing(6);
+
+    let mut confirmed = Some(Message::PushConfirmed);
+    if request.force {
+        body = body
+            .push(
+                text("Plain force rewrites published history. Prefer force-with-lease.")
+                    .size(theme::TEXT_SMALL)
+                    .color(tokens.destructive),
+            )
+            .push(
+                text_input(
+                    &format!("type \"{}\" to confirm", request.remote),
+                    request.confirm_typed.as_str(),
+                )
+                .on_input(Message::PushConfirmChanged)
+                .size(theme::TEXT_SMALL)
+                .padding([4, 6]),
+            );
+        if request.force_needs_confirm() {
+            confirmed = None;
+        }
+    }
+    body = body.push(
+        checkbox(request.tags)
+            .label("Push all tags")
+            .size(theme::TEXT_BODY)
+            .text_size(theme::TEXT_SMALL)
+            .spacing(4)
+            .on_toggle(Message::PushTagsToggled),
+    );
 
     modal(
         tokens,
         440.0,
         body.into(),
-        action_row(tokens, "Push", Some(Message::PushConfirmed)),
+        action_row(tokens, "Push", confirmed),
     )
 }
 
@@ -712,14 +769,16 @@ pub fn templates<'a>(tokens: Tokens, state: &IgnoreTemplates) -> Element<'a, Mes
         rows = rows.push(
             row![
                 column![
-                    text(template.name.clone()).size(11).font(theme::semibold()),
+                    text(template.name.clone())
+                        .size(theme::TEXT_SMALL)
+                        .font(theme::semibold()),
                     text(template.description.clone())
-                        .size(10)
+                        .size(theme::TEXT_META)
                         .color(tokens.muted_foreground),
                 ]
                 .spacing(1)
                 .width(Length::Fill),
-                button(text("Apply").size(10))
+                button(text("Apply").size(theme::TEXT_META))
                     .style(theme::button_style(tokens, theme::ButtonKind::Secondary))
                     .padding([3, 8])
                     .on_press(Message::IgnoreTemplateApplied(template.name.clone())),
@@ -737,16 +796,16 @@ pub fn templates<'a>(tokens: Tokens, state: &IgnoreTemplates) -> Element<'a, Mes
             "Applying appends a template's patterns under a `# <name>` header \
              to the repo-root .gitignore."
         )
-        .size(12)
+        .size(theme::TEXT_BODY)
         .color(tokens.muted_foreground),
         text_input("Search templates", state.filter.as_str())
             .on_input(Message::IgnoreTemplatesFilterChanged)
-            .size(11)
+            .size(theme::TEXT_SMALL)
             .padding([4, 6]),
         if matches.is_empty() {
             Element::<Message>::from(
                 text("No templates match.")
-                    .size(11)
+                    .size(theme::TEXT_SMALL)
                     .color(tokens.muted_foreground),
             )
         } else {
@@ -760,7 +819,7 @@ pub fn templates<'a>(tokens: Tokens, state: &IgnoreTemplates) -> Element<'a, Mes
 
     let actions: Element<'a, Message> = row![
         Space::new().width(Length::Fill),
-        button(text("Close").size(11))
+        button(text("Close").size(theme::TEXT_SMALL))
             .style(theme::button_style(tokens, theme::ButtonKind::Secondary))
             .padding([4, 12])
             .on_press(Message::CancelDialog),
@@ -815,16 +874,16 @@ pub fn tag_at<'a>(tokens: Tokens, request: &TagAtRequest) -> Element<'a, Message
             .font(theme::semibold()),
         Space::new().height(4),
         text("Create a tag pointing at this commit.")
-            .size(12)
+            .size(theme::TEXT_BODY)
             .color(tokens.muted_foreground),
         text_input("Tag name", request.name.as_str())
             .on_input(Message::TagAtNameChanged)
-            .size(11)
+            .size(theme::TEXT_SMALL)
             .padding([4, 6]),
         checkbox(request.annotated)
             .label("Annotated")
-            .size(12)
-            .text_size(11)
+            .size(theme::TEXT_BODY)
+            .text_size(theme::TEXT_SMALL)
             .spacing(4)
             .on_toggle(Message::TagAtAnnotatedToggled),
     ]
@@ -834,7 +893,7 @@ pub fn tag_at<'a>(tokens: Tokens, request: &TagAtRequest) -> Element<'a, Message
         body = body.push(
             text_input("Tag message", request.message.as_str())
                 .on_input(Message::TagAtMessageChanged)
-                .size(11)
+                .size(theme::TEXT_SMALL)
                 .padding([4, 6]),
         );
     }
@@ -884,12 +943,12 @@ pub fn rename<'a>(tokens: Tokens, request: &RenameRequest) -> Element<'a, Messag
         text("Rename branch").size(14).font(theme::semibold()),
         Space::new().height(4),
         text(format!("Rename “{}” to:", request.old))
-            .size(12)
+            .size(theme::TEXT_BODY)
             .color(tokens.muted_foreground),
         text_input("new-branch-name", request.new.as_str())
             .on_input(Message::BranchRenameChanged)
             .on_submit(submit)
-            .size(11)
+            .size(theme::TEXT_SMALL)
             .padding([4, 6]),
     ]
     .spacing(6);
@@ -1008,7 +1067,7 @@ pub fn clean<'a>(tokens: Tokens, request: &CleanRequest) -> Element<'a, Message>
             request.paths.len(),
             if request.paths.len() == 1 { "" } else { "s" }
         ))
-        .size(12)
+        .size(theme::TEXT_BODY)
         .color(tokens.muted_foreground),
     ]
     .spacing(6);
@@ -1021,7 +1080,7 @@ pub fn clean<'a>(tokens: Tokens, request: &CleanRequest) -> Element<'a, Message>
             } else {
                 dir
             })
-            .size(10)
+            .size(theme::TEXT_META)
             .font(theme::semibold())
             .color(tokens.muted_foreground),
         );
@@ -1029,8 +1088,8 @@ pub fn clean<'a>(tokens: Tokens, request: &CleanRequest) -> Element<'a, Message>
             list = list.push(
                 checkbox(request.is_checked(&path))
                     .label(path.clone())
-                    .size(12)
-                    .text_size(11)
+                    .size(theme::TEXT_BODY)
+                    .text_size(theme::TEXT_SMALL)
                     .spacing(6)
                     .on_toggle(move |_| Message::CleanToggled(path.clone())),
             );
@@ -1049,11 +1108,11 @@ pub fn clean<'a>(tokens: Tokens, request: &CleanRequest) -> Element<'a, Message>
                     "Type “clean” to confirm deleting {} paths.",
                     selected.len()
                 ))
-                .size(11)
+                .size(theme::TEXT_SMALL)
                 .color(tokens.deleted),
                 text_input("clean", request.confirm_text.as_str())
                     .on_input(Message::CleanConfirmChanged)
-                    .size(11)
+                    .size(theme::TEXT_SMALL)
                     .padding([4, 6]),
             ]
             .spacing(4),
@@ -1136,7 +1195,7 @@ pub fn mergetool<'a>(tokens: Tokens, request: &'a MergetoolRequest) -> Element<'
             "Launches your configured merge tool for one conflicted file; \
              resolve it there — the conflict list is re-read when the tool exits."
         )
-        .size(12)
+        .size(theme::TEXT_BODY)
         .color(tokens.muted_foreground),
     ]
     .spacing(6);
@@ -1153,7 +1212,7 @@ pub fn mergetool<'a>(tokens: Tokens, request: &'a MergetoolRequest) -> Element<'
         body = body.push(
             container(
                 text(detail.join("\n"))
-                    .size(11)
+                    .size(theme::TEXT_SMALL)
                     .font(theme::mono())
                     .color(tokens.foreground),
             )
@@ -1172,14 +1231,14 @@ pub fn mergetool<'a>(tokens: Tokens, request: &'a MergetoolRequest) -> Element<'
     } else if request.info.is_some() || request.error.is_some() {
         body = body.push(
             text(request.error.as_deref().unwrap_or(mergetool_guidance()))
-                .size(11)
+                .size(theme::TEXT_SMALL)
                 .color(tokens.deleted)
                 .width(Length::Fill),
         );
     } else {
         body = body.push(
             text("Loading tool configuration…")
-                .size(11)
+                .size(theme::TEXT_SMALL)
                 .color(tokens.muted_foreground),
         );
     }
@@ -1203,7 +1262,7 @@ pub fn mergetool<'a>(tokens: Tokens, request: &'a MergetoolRequest) -> Element<'
     if request.running {
         body = body.push(
             text("mergetool is running — finish the merge in the tool window.")
-                .size(11)
+                .size(theme::TEXT_SMALL)
                 .color(tokens.muted_foreground),
         );
     }

@@ -195,64 +195,76 @@ impl TagsPanel {
     }
 
     pub fn view(&self, tokens: Tokens) -> Element<'_, Msg> {
-        let mut header = row![text("Tags").size(12).font(theme::semibold())]
+        let mut header = row![text("Tags").size(theme::TEXT_BODY).font(theme::semibold())]
             .spacing(6)
             .align_y(Alignment::Center);
         if let Some(list) = &self.list {
             header = header.push(
                 text(format!("{}", list.len()))
-                    .size(10)
+                    .size(theme::TEXT_META)
                     .color(tokens.muted_foreground),
             );
         }
         if self.loading {
-            header = header.push(text("· loading…").size(10).color(tokens.muted_foreground));
+            header = header.push(
+                text("· loading…")
+                    .size(theme::TEXT_META)
+                    .color(tokens.muted_foreground),
+            );
         }
         if self.busy {
-            header = header.push(text("· working…").size(10).color(tokens.muted_foreground));
+            header = header.push(
+                text("· working…")
+                    .size(theme::TEXT_META)
+                    .color(tokens.muted_foreground),
+            );
         }
         header = header
             .push(Space::new().width(Length::Fill))
-            .push(
-                button(text("⟳").size(11))
+            .push(theme::tip(
+                tokens,
+                button(text(theme::icon::REFRESH).size(theme::TEXT_SMALL))
                     .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
-                    .padding([2, 8])
+                    .padding([4, 8])
                     .on_press(Msg::RefreshPressed),
-            )
-            .push(
-                button(text("×").size(12))
+                "Reload tags",
+            ))
+            .push(theme::tip(
+                tokens,
+                button(text(theme::icon::CLOSE).size(theme::TEXT_BODY))
                     .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
-                    .padding([2, 8])
+                    .padding([4, 8])
                     .on_press(Msg::ToggleOpen),
-            );
+                "Close tags panel",
+            ));
 
         let create_enabled = create_error(self).is_none() && !self.busy;
         let mut create_form = row![
             text_input("Tag name", self.create_name.as_str())
                 .on_input(Msg::CreateNameChanged)
                 .on_submit(Msg::CreatePressed)
-                .size(11)
+                .size(theme::TEXT_SMALL)
                 .padding([4, 6])
                 .width(Length::Fixed(120.0)),
             text_input("HEAD (default)", self.create_target.as_str())
                 .on_input(Msg::CreateTargetChanged)
                 .on_submit(Msg::CreatePressed)
-                .size(11)
+                .size(theme::TEXT_SMALL)
                 .padding([4, 6])
                 .width(Length::Fixed(140.0)),
             checkbox(self.create_annotated)
                 .label("annotated")
-                .size(12)
-                .text_size(10)
+                .size(theme::TEXT_BODY)
+                .text_size(theme::TEXT_META)
                 .spacing(4)
                 .on_toggle(Msg::CreateAnnotatedToggled),
             checkbox(self.create_signed)
                 .label("signed")
-                .size(12)
-                .text_size(10)
+                .size(theme::TEXT_BODY)
+                .text_size(theme::TEXT_META)
                 .spacing(4)
                 .on_toggle(Msg::CreateSignedToggled),
-            button(text("Create").size(10))
+            button(text("Create").size(theme::TEXT_META))
                 .style(theme::button_style(tokens, theme::ButtonKind::Primary))
                 .padding([4, 10])
                 .on_press_maybe(create_enabled.then_some(Msg::CreatePressed)),
@@ -265,7 +277,7 @@ impl TagsPanel {
                 text_input("Tag message", self.create_message.as_str())
                     .on_input(Msg::CreateMessageChanged)
                     .on_submit(Msg::CreatePressed)
-                    .size(11)
+                    .size(theme::TEXT_SMALL)
                     .padding([4, 6])
                     .width(Length::Fill),
             );
@@ -285,12 +297,21 @@ impl TagsPanel {
                     .width(Length::Fill)
                     .into()
             }
-            Some(_) => note(tokens, "No tags.", false),
-            None => note(tokens, "Loading tags…", false),
+            Some(_) => theme::note(tokens, "No tags.", false, theme::NoteKind::Empty),
+            None => theme::note(tokens, "Loading tags…", false, theme::NoteKind::Inline),
         };
 
         let error_note: Element<'_, Msg> = match &self.error {
-            Some(error) => note(tokens, error.clone(), true),
+            Some(error) => {
+                // Refresh re-lists tags, so it doubles as the retry.
+                row![
+                    theme::note(tokens, error.clone(), true, theme::NoteKind::Inline),
+                    theme::mini_button(tokens, "Retry", "Reload tags", Some(Msg::RefreshPressed),),
+                ]
+                .spacing(4)
+                .align_y(Alignment::Center)
+                .into()
+            }
             None => column![].into(),
         };
 
@@ -330,7 +351,7 @@ pub(crate) fn create_error(panel: &TagsPanel) -> Option<&'static str> {
 fn tag_row<'a>(tag: &'a TagInfo, panel: &TagsPanel, tokens: Tokens) -> Element<'a, Msg> {
     let line = row![
         text(tag.name.as_str())
-            .size(11)
+            .size(theme::TEXT_SMALL)
             .font(theme::mono())
             .color(tokens.foreground),
         if tag.annotated {
@@ -340,14 +361,18 @@ fn tag_row<'a>(tag: &'a TagInfo, panel: &TagsPanel, tokens: Tokens) -> Element<'
         },
         Space::new().width(Length::Fill),
         text(short_sha(&tag.target))
-            .size(9)
+            .size(theme::TEXT_META)
             .font(theme::mono())
             .color(tokens.muted_foreground),
-        button(text("✕").size(9))
-            .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
-            .padding([2, 6])
-            .width(Length::Fixed(24.0))
-            .on_press_maybe((!panel.busy).then_some(Msg::DeleteRequested(tag.name.clone()))),
+        theme::tip(
+            tokens,
+            button(text(theme::icon::CLOSE).size(theme::TEXT_META))
+                .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
+                .padding([4, 6])
+                .width(Length::Fixed(24.0))
+                .on_press_maybe((!panel.busy).then_some(Msg::DeleteRequested(tag.name.clone()))),
+            "Delete this tag",
+        ),
     ]
     .spacing(4)
     .align_y(Alignment::Center)
@@ -357,7 +382,7 @@ fn tag_row<'a>(tag: &'a TagInfo, panel: &TagsPanel, tokens: Tokens) -> Element<'
     if let Some(subject) = subject(tag) {
         card = card.push(
             text(clip(subject, 56))
-                .size(9)
+                .size(theme::TEXT_META)
                 .color(tokens.muted_foreground),
         );
     }
@@ -366,14 +391,14 @@ fn tag_row<'a>(tag: &'a TagInfo, panel: &TagsPanel, tokens: Tokens) -> Element<'
         card = card.push(
             row![
                 text(format!("Delete tag `{}`?", tag.name))
-                    .size(9)
+                    .size(theme::TEXT_META)
                     .color(tokens.muted_foreground),
                 Space::new().width(Length::Fill),
-                button(text("Cancel").size(9))
+                button(text("Cancel").size(theme::TEXT_META))
                     .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
                     .padding([2, 6])
                     .on_press(Msg::DeleteCanceled),
-                button(text("Confirm delete").size(9))
+                button(text("Confirm delete").size(theme::TEXT_META))
                     .style(theme::button_style(tokens, theme::ButtonKind::Danger))
                     .padding([2, 6])
                     .on_press_maybe((!panel.busy).then_some(Msg::DeleteConfirmed)),
@@ -401,19 +426,7 @@ fn tag_row<'a>(tag: &'a TagInfo, panel: &TagsPanel, tokens: Tokens) -> Element<'
 
 /// The "annotated" chip shown on annotated rows.
 fn chip_view<'a>(tokens: Tokens) -> Element<'a, Msg> {
-    let color = tokens.muted_foreground;
-    container(text("annotated").size(9).color(color))
-        .padding([1, 6])
-        .style(move |_theme| container::Style {
-            background: Some(Background::Color(theme::with_alpha(color, 0.12))),
-            border: Border {
-                color: theme::with_alpha(color, 0.4),
-                width: 1.0,
-                radius: 8.0.into(),
-            },
-            ..container::Style::default()
-        })
-        .into()
+    theme::chip("annotated", tokens.muted_foreground, theme::ChipShape::Pill)
 }
 
 /// First line of an annotated tag's message (None for lightweight tags).
@@ -430,17 +443,6 @@ fn non_empty(value: &str) -> Option<String> {
     } else {
         Some(value.to_owned())
     }
-}
-
-fn note<'a>(tokens: Tokens, label: impl Into<String>, error: bool) -> Element<'a, Msg> {
-    let color = if error {
-        tokens.deleted
-    } else {
-        tokens.muted_foreground
-    };
-    container(text(label.into()).size(10).color(color))
-        .padding([2, 4])
-        .into()
 }
 
 fn clip(text: &str, max_chars: usize) -> String {

@@ -123,52 +123,62 @@ impl SubmodulePanel {
     }
 
     pub fn view(&self, tokens: Tokens) -> Element<'_, Msg> {
-        let mut header = row![text("Submodules").size(12).font(theme::semibold())]
-            .spacing(6)
-            .align_y(Alignment::Center);
+        let mut header = row![text("Submodules")
+            .size(theme::TEXT_BODY)
+            .font(theme::semibold())]
+        .spacing(6)
+        .align_y(Alignment::Center);
         if let Some(list) = &self.list {
             header = header.push(
                 text(format!("{}", list.len()))
-                    .size(10)
+                    .size(theme::TEXT_META)
                     .color(tokens.muted_foreground),
             );
         }
         if self.loading {
-            header = header.push(text("· loading…").size(10).color(tokens.muted_foreground));
+            header = header.push(
+                text("· loading…")
+                    .size(theme::TEXT_META)
+                    .color(tokens.muted_foreground),
+            );
         }
         if let Some(busy) = &self.busy {
             header = header.push(
                 text(format!("· {busy}…"))
-                    .size(10)
+                    .size(theme::TEXT_META)
                     .color(tokens.muted_foreground),
             );
         }
         header = header
             .push(Space::new().width(Length::Fill))
             .push(
-                button(text("Update all").size(9))
+                button(text("Update all").size(theme::TEXT_META))
                     .style(theme::button_style(tokens, theme::ButtonKind::Secondary))
                     .padding([2, 8])
                     .on_press_maybe(self.actionable().then_some(Msg::UpdateAllPressed)),
             )
             .push(
-                button(text("Sync all").size(9))
+                button(text("Sync all").size(theme::TEXT_META))
                     .style(theme::button_style(tokens, theme::ButtonKind::Secondary))
                     .padding([2, 8])
                     .on_press_maybe(self.actionable().then_some(Msg::SyncPressed(None))),
             )
-            .push(
-                button(text("⟳").size(11))
+            .push(theme::tip(
+                tokens,
+                button(text(theme::icon::REFRESH).size(theme::TEXT_SMALL))
                     .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
-                    .padding([2, 8])
+                    .padding([4, 8])
                     .on_press(Msg::RefreshPressed),
-            )
-            .push(
-                button(text("×").size(12))
+                "Reload submodules",
+            ))
+            .push(theme::tip(
+                tokens,
+                button(text(theme::icon::CLOSE).size(theme::TEXT_BODY))
                     .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
-                    .padding([2, 8])
+                    .padding([4, 8])
                     .on_press(Msg::ToggleOpen),
-            );
+                "Close submodules panel",
+            ));
 
         let body: Element<'_, Msg> = match &self.list {
             Some(list) if !list.is_empty() => {
@@ -182,12 +192,31 @@ impl SubmodulePanel {
                     .width(Length::Fill)
                     .into()
             }
-            Some(_) => note(tokens, "No submodules.", false),
-            None => note(tokens, "Loading submodules…", false),
+            Some(_) => theme::note(tokens, "No submodules.", false, theme::NoteKind::Empty),
+            None => theme::note(
+                tokens,
+                "Loading submodules…",
+                false,
+                theme::NoteKind::Inline,
+            ),
         };
 
         let error_note: Element<'_, Msg> = match &self.error {
-            Some(error) => note(tokens, error.clone(), true),
+            Some(error) => {
+                // Refresh re-lists submodules, so it doubles as the retry.
+                row![
+                    theme::note(tokens, error.clone(), true, theme::NoteKind::Inline),
+                    theme::mini_button(
+                        tokens,
+                        "Retry",
+                        "Reload submodules",
+                        Some(Msg::RefreshPressed),
+                    ),
+                ]
+                .spacing(4)
+                .align_y(Alignment::Center)
+                .into()
+            }
             None => column![].into(),
         };
 
@@ -226,13 +255,13 @@ fn submodule_row<'a>(
 
     let line = row![
         text(info.path.as_str())
-            .size(11)
+            .size(theme::TEXT_SMALL)
             .font(theme::mono())
             .color(tokens.foreground),
         chips,
         Space::new().width(Length::Fill),
         text(commit_label(info))
-            .size(9)
+            .size(theme::TEXT_META)
             .color(tokens.muted_foreground),
     ]
     .spacing(4)
@@ -240,7 +269,7 @@ fn submodule_row<'a>(
     .width(Length::Fill);
 
     let buttons = row![
-        button(text("Update").size(9))
+        button(text("Update").size(theme::TEXT_META))
             .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
             .padding([2, 6])
             .width(Length::Fixed(48.0))
@@ -249,7 +278,7 @@ fn submodule_row<'a>(
                     .actionable()
                     .then_some(Msg::UpdatePressed(info.path.clone()))
             ),
-        button(text("Sync").size(9))
+        button(text("Sync").size(theme::TEXT_META))
             .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
             .padding([2, 6])
             .width(Length::Fixed(42.0))
@@ -265,7 +294,7 @@ fn submodule_row<'a>(
     let card = column![
         row![line, buttons].spacing(4).align_y(Alignment::Center),
         text(clip(&info.url, 64))
-            .size(9)
+            .size(theme::TEXT_META)
             .color(tokens.muted_foreground)
     ]
     .spacing(2)
@@ -336,29 +365,7 @@ fn chip_view<'a>(chip: Chip, tokens: Tokens) -> Element<'a, Msg> {
     } else {
         tokens.muted_foreground
     };
-    container(text(chip.label).size(9).color(color))
-        .padding([1, 6])
-        .style(move |_theme| container::Style {
-            background: Some(Background::Color(theme::with_alpha(color, 0.12))),
-            border: Border {
-                color: theme::with_alpha(color, 0.4),
-                width: 1.0,
-                radius: 8.0.into(),
-            },
-            ..container::Style::default()
-        })
-        .into()
-}
-
-fn note<'a>(tokens: Tokens, label: impl Into<String>, error: bool) -> Element<'a, Msg> {
-    let color = if error {
-        tokens.deleted
-    } else {
-        tokens.muted_foreground
-    };
-    container(text(label.into()).size(10).color(color))
-        .padding([2, 4])
-        .into()
+    theme::chip(chip.label, color, theme::ChipShape::Pill)
 }
 
 fn clip(text: &str, max_chars: usize) -> String {

@@ -382,22 +382,28 @@ impl ActionsPanel {
             return column![].into();
         }
 
-        let mut header = row![text("Shell actions").size(12).font(theme::semibold())]
-            .spacing(6)
-            .align_y(Alignment::Center);
+        let mut header = row![text("Shell actions")
+            .size(theme::TEXT_BODY)
+            .font(theme::semibold())]
+        .spacing(6)
+        .align_y(Alignment::Center);
         if self.loading {
-            header = header.push(text("· loading…").size(10).color(tokens.muted_foreground));
+            header = header.push(
+                text("· loading…")
+                    .size(theme::TEXT_META)
+                    .color(tokens.muted_foreground),
+            );
         }
         header = header
             .push(Space::new().width(Length::Fill))
             .push(
-                button(text("⟳").size(11))
+                button(text("⟳").size(theme::TEXT_SMALL))
                     .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
                     .padding([2, 8])
                     .on_press(Msg::RefreshPressed),
             )
             .push(
-                button(text("×").size(12))
+                button(text("×").size(theme::TEXT_BODY))
                     .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
                     .padding([2, 8])
                     .on_press(Msg::ToggleOpen),
@@ -407,7 +413,7 @@ impl ActionsPanel {
         if let Some(error) = &self.error {
             body = body.push(
                 text(error.as_str())
-                    .size(10)
+                    .size(theme::TEXT_META)
                     .color(tokens.destructive)
                     .width(Length::Fill),
             );
@@ -439,14 +445,16 @@ impl ActionsPanel {
     /// The configured list with per-row Run/Delete (and the inline delete
     /// confirm on the parked row).
     fn configured_section(&self, tokens: Tokens) -> Element<'_, Msg> {
-        let mut section = column![text("Configured").size(10).color(tokens.muted_foreground)]
-            .spacing(4)
-            .width(Length::Fill);
+        let mut section = column![text("Configured")
+            .size(theme::TEXT_META)
+            .color(tokens.muted_foreground)]
+        .spacing(4)
+        .width(Length::Fill);
 
         if self.actions.is_empty() {
             section = section.push(
                 text("No actions configured yet — add one below; it is stored in your config.")
-                    .size(10)
+                    .size(theme::TEXT_META)
                     .color(tokens.muted_foreground),
             );
             return section.into();
@@ -459,13 +467,13 @@ impl ActionsPanel {
                     container(
                         row![
                             text(format!("Delete `{}`?", entry.name))
-                                .size(10)
+                                .size(theme::TEXT_META)
                                 .width(Length::Fill),
-                            button(text("Cancel").size(9))
+                            button(text("Cancel").size(theme::TEXT_META))
                                 .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
                                 .padding([2, 8])
                                 .on_press(Msg::DeleteCanceled),
-                            button(text("Delete").size(9))
+                            button(text("Delete").size(theme::TEXT_META))
                                 .style(theme::button_style(tokens, theme::ButtonKind::Danger))
                                 .padding([2, 8])
                                 .on_press(Msg::DeleteConfirmed),
@@ -495,19 +503,21 @@ impl ActionsPanel {
             section = section.push(
                 row![
                     column![
-                        text(entry.name.as_str()).size(11).font(theme::semibold()),
+                        text(entry.name.as_str())
+                            .size(theme::TEXT_SMALL)
+                            .font(theme::semibold()),
                         text(clip(&entry.command, 72))
-                            .size(10)
+                            .size(theme::TEXT_META)
                             .font(theme::mono())
                             .color(tokens.muted_foreground),
                     ]
                     .spacing(1)
                     .width(Length::Fill),
-                    button(text(if running { "Running" } else { "Run" }).size(10))
+                    button(text(if running { "Running" } else { "Run" }).size(theme::TEXT_META))
                         .style(theme::button_style(tokens, theme::ButtonKind::Secondary))
                         .padding([3, 10])
                         .on_press_maybe((!running).then(|| Msg::RunPressed(entry.name.clone()))),
-                    button(text("Delete").size(10))
+                    button(text("Delete").size(theme::TEXT_META))
                         .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
                         .padding([3, 8])
                         .on_press(Msg::DeleteRequested(entry.name.clone())),
@@ -526,20 +536,22 @@ impl ActionsPanel {
         let valid =
             add_validation_error(&self.actions, &self.new_name, &self.new_command).is_none();
         column![
-            text("Add action").size(10).color(tokens.muted_foreground),
+            text("Add action")
+                .size(theme::TEXT_META)
+                .color(tokens.muted_foreground),
             row![
                 text_input("name", self.new_name.as_str())
                     .on_input(Msg::NameChanged)
-                    .size(11)
+                    .size(theme::TEXT_SMALL)
                     .padding([4, 6])
                     .width(Length::Fixed(150.0)),
                 text_input("command (cwd = repo root)", self.new_command.as_str())
                     .on_input(Msg::CommandChanged)
                     .on_submit_maybe(valid.then_some(Msg::AddPressed))
-                    .size(11)
+                    .size(theme::TEXT_SMALL)
                     .padding([4, 6])
                     .width(Length::Fill),
-                button(text("Add").size(10))
+                button(text("Add").size(theme::TEXT_META))
                     .style(theme::button_style(tokens, theme::ButtonKind::Primary))
                     .padding([4, 12])
                     .on_press_maybe(valid.then_some(Msg::AddPressed)),
@@ -556,14 +568,16 @@ impl ActionsPanel {
     /// Live runs with their cancel affordances (output itself streams in
     /// the output panel).
     fn running_section(&self, tokens: Tokens) -> Element<'_, Msg> {
-        let mut section = column![text("Running").size(10).color(tokens.muted_foreground)]
-            .spacing(4)
-            .width(Length::Fill);
+        let mut section = column![text("Running")
+            .size(theme::TEXT_META)
+            .color(tokens.muted_foreground)]
+        .spacing(4)
+        .width(Length::Fill);
 
         if self.running.is_empty() {
             section = section.push(
                 text("Nothing running.")
-                    .size(10)
+                    .size(theme::TEXT_META)
                     .color(tokens.muted_foreground),
             );
             return section.into();
@@ -573,15 +587,15 @@ impl ActionsPanel {
             section = section.push(
                 row![
                     column![
-                        text(run.name.as_str()).size(11),
+                        text(run.name.as_str()).size(theme::TEXT_SMALL),
                         text(clip(&run.run_id, 24))
-                            .size(9)
+                            .size(theme::TEXT_META)
                             .font(theme::mono())
                             .color(tokens.muted_foreground),
                     ]
                     .spacing(1)
                     .width(Length::Fill),
-                    button(text("Cancel").size(10))
+                    button(text("Cancel").size(theme::TEXT_META))
                         .style(theme::button_style(tokens, theme::ButtonKind::Danger))
                         .padding([3, 10])
                         .on_press(Msg::CancelPressed(run.run_id.clone())),

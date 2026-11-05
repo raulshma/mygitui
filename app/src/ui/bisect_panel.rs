@@ -203,45 +203,78 @@ impl BisectPanel {
             return None;
         }
 
-        let mut header = row![text("Bisect").size(12).font(theme::semibold())]
-            .spacing(6)
-            .align_y(Alignment::Center);
+        let mut header = row![text("Bisect")
+            .size(theme::TEXT_BODY)
+            .font(theme::semibold())]
+        .spacing(6)
+        .align_y(Alignment::Center);
         if self.loading {
-            header = header.push(text("· loading…").size(10).color(tokens.muted_foreground));
+            header = header.push(
+                text("· loading…")
+                    .size(theme::TEXT_META)
+                    .color(tokens.muted_foreground),
+            );
         }
         header = header
             .push(Space::new().width(Length::Fill))
-            .push(
-                button(text("⟳").size(11))
+            .push(theme::tip(
+                tokens,
+                button(text(theme::icon::REFRESH).size(theme::TEXT_SMALL))
                     .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
-                    .padding([2, 8])
+                    .padding([4, 8])
                     .on_press(Msg::RefreshPressed),
-            )
-            .push(
-                button(text("×").size(12))
+                "Reload bisect state",
+            ))
+            .push(theme::tip(
+                tokens,
+                button(text(theme::icon::CLOSE).size(theme::TEXT_BODY))
                     .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
-                    .padding([2, 8])
+                    .padding([4, 8])
                     .on_press(Msg::ToggleOpen),
-            );
+                "Close bisect panel",
+            ));
 
         let body: Element<'_, Msg> = match &self.state {
             Some(state) if state.active => self.active_body(state, tokens),
             Some(_) => self.start_form(tokens),
             None if self.error.is_some() => {
-                note(tokens, self.error.as_deref().unwrap_or_default(), true)
+                // Refresh re-reads the bisect state, so it doubles as retry.
+                let retry = theme::mini_button(
+                    tokens,
+                    "Retry",
+                    "Reload bisect state",
+                    Some(Msg::RefreshPressed),
+                );
+                row![
+                    theme::note(
+                        tokens,
+                        self.error.as_deref().unwrap_or_default(),
+                        true,
+                        theme::NoteKind::Inline
+                    ),
+                    retry,
+                ]
+                .spacing(4)
+                .align_y(Alignment::Center)
+                .into()
             }
-            None => note(tokens, "Loading bisect state…", false),
+            None => theme::note(
+                tokens,
+                "Loading bisect state…",
+                false,
+                theme::NoteKind::Inline,
+            ),
         };
 
         let mut card = column![header].spacing(6);
         if let Some(err) = &self.error {
             if self.state.is_some() {
-                card = card.push(
-                    text(err.as_str())
-                        .size(10)
-                        .color(tokens.deleted)
-                        .width(Length::Fill),
-                );
+                card = card.push(theme::note(
+                    tokens,
+                    err.as_str(),
+                    true,
+                    theme::NoteKind::Inline,
+                ));
             }
         }
         card = card.push(body);
@@ -269,29 +302,29 @@ impl BisectPanel {
         row![
             column![
                 text("Bad (first known bad)")
-                    .size(9)
+                    .size(theme::TEXT_META)
                     .color(tokens.muted_foreground),
                 text_input("HEAD", self.start_bad.as_str())
                     .on_input(Msg::StartBadChanged)
                     .on_submit(Msg::StartPressed)
-                    .size(11)
+                    .size(theme::TEXT_SMALL)
                     .padding([4, 6])
                     .width(Length::Fixed(150.0)),
             ]
             .spacing(2),
             column![
                 text("Good (last known good, optional)")
-                    .size(9)
+                    .size(theme::TEXT_META)
                     .color(tokens.muted_foreground),
                 text_input("tag or sha", self.start_good.as_str())
                     .on_input(Msg::StartGoodChanged)
                     .on_submit(Msg::StartPressed)
-                    .size(11)
+                    .size(theme::TEXT_SMALL)
                     .padding([4, 6])
                     .width(Length::Fixed(170.0)),
             ]
             .spacing(2),
-            button(text("Start bisect").size(10))
+            button(text("Start bisect").size(theme::TEXT_META))
                 .style(theme::button_style(tokens, theme::ButtonKind::Primary))
                 .padding([4, 10])
                 .on_press_maybe(can_start.then_some(Msg::StartPressed)),
@@ -314,15 +347,15 @@ impl BisectPanel {
         } else {
             let mut status = row![
                 text("Bisecting")
-                    .size(11)
+                    .size(theme::TEXT_SMALL)
                     .font(theme::semibold())
                     .color(tokens.foreground),
                 text(short_sha(&state.bad))
-                    .size(11)
+                    .size(theme::TEXT_SMALL)
                     .font(theme::mono())
                     .color(tokens.foreground),
                 text(remaining_label(state))
-                    .size(10)
+                    .size(theme::TEXT_META)
                     .color(tokens.muted_foreground),
             ]
             .spacing(6)
@@ -330,7 +363,7 @@ impl BisectPanel {
             if let Some(branch) = state.orig_branch.as_deref() {
                 status = status.push(
                     text(format!("started from {branch}"))
-                        .size(9)
+                        .size(theme::TEXT_META)
                         .color(tokens.muted_foreground),
                 );
             }
@@ -339,20 +372,20 @@ impl BisectPanel {
 
         body = body.push(
             row![
-                button(text("Good").size(10))
+                button(text("Good").size(theme::TEXT_META))
                     .style(theme::button_style(tokens, theme::ButtonKind::Secondary))
                     .padding([3, 10])
                     .on_press_maybe(marks_enabled.then_some(Msg::MarkGood)),
-                button(text("Bad").size(10))
+                button(text("Bad").size(theme::TEXT_META))
                     .style(theme::button_style(tokens, theme::ButtonKind::Danger))
                     .padding([3, 10])
                     .on_press_maybe(marks_enabled.then_some(Msg::MarkBad)),
-                button(text("Skip").size(10))
+                button(text("Skip").size(theme::TEXT_META))
                     .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
                     .padding([3, 10])
                     .on_press_maybe(marks_enabled.then_some(Msg::MarkSkip)),
                 Space::new().width(Length::Fill),
-                button(text(if converged { "Stop bisect" } else { "Stop" }).size(10))
+                button(text(if converged { "Stop bisect" } else { "Stop" }).size(theme::TEXT_META))
                     .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
                     .padding([3, 10])
                     .on_press_maybe((!self.loading).then_some(Msg::ResetPressed)),
@@ -374,7 +407,12 @@ impl BisectPanel {
             None => &state.log,
         };
         if entries.is_empty() {
-            return note(tokens, "No marks recorded yet.", false);
+            return theme::note(
+                tokens,
+                "No marks recorded yet.",
+                false,
+                theme::NoteKind::Empty,
+            );
         }
         let highlight_sha = first_bad_reached(state).then_some(state.bad.as_str());
         let now = now_seconds();
@@ -422,15 +460,15 @@ fn remaining_label(state: &BisectState) -> String {
 fn first_bad_banner<'a>(state: &'a BisectState, loading: bool, tokens: Tokens) -> Element<'a, Msg> {
     row![
         text("First bad commit")
-            .size(10)
+            .size(theme::TEXT_META)
             .font(theme::semibold())
             .color(tokens.deleted),
         text(short_sha(&state.bad))
-            .size(11)
+            .size(theme::TEXT_SMALL)
             .font(theme::mono())
             .color(tokens.foreground),
         Space::new().width(Length::Fill),
-        button(text("Stop bisect").size(10))
+        button(text("Stop bisect").size(theme::TEXT_META))
             .style(theme::button_style(tokens, theme::ButtonKind::Primary))
             .padding([3, 10])
             .on_press_maybe((!loading).then_some(Msg::ResetPressed)),
@@ -454,20 +492,20 @@ fn log_row<'a>(
     };
     let line = row![
         text(format!("#{step}"))
-            .size(9)
+            .size(theme::TEXT_META)
             .color(tokens.muted_foreground)
             .width(Length::Fixed(24.0)),
         text(mark_label)
-            .size(10)
+            .size(theme::TEXT_META)
             .color(mark_color)
             .width(Length::Fixed(28.0)),
         text(short_sha(&entry.sha))
-            .size(10)
+            .size(theme::TEXT_META)
             .font(theme::mono())
             .color(tokens.foreground),
         Space::new().width(6),
         text(relative_age(entry.at, now))
-            .size(9)
+            .size(theme::TEXT_META)
             .color(tokens.muted_foreground),
     ]
     .spacing(6)
@@ -491,17 +529,6 @@ fn log_row<'a>(
             },
             ..container::Style::default()
         })
-        .into()
-}
-
-fn note<'a>(tokens: Tokens, label: impl Into<String>, is_error: bool) -> Element<'a, Msg> {
-    let color = if is_error {
-        tokens.deleted
-    } else {
-        tokens.muted_foreground
-    };
-    container(text(label.into()).size(10).color(color))
-        .padding([4, 4])
         .into()
 }
 

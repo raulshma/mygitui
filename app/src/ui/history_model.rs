@@ -150,6 +150,39 @@ pub enum HistoryFilterField {
 }
 
 impl FilterFields {
+    /// Validation error for the date fields, if any. Bad dates previously
+    /// applied silently and just filtered everything out ("No commits
+    /// match the filter."), which read like a miss, not a typo.
+    pub fn date_error(&self) -> Option<String> {
+        fn valid(field: &str) -> bool {
+            let trimmed = field.trim();
+            if trimmed.is_empty() {
+                return true;
+            }
+            let parts: Vec<&str> = trimmed.split('-').collect();
+            if parts.len() != 3 || parts.iter().any(|p| p.is_empty()) {
+                return false;
+            }
+            let (Ok(year), Ok(month), Ok(day)) = (
+                parts[0].parse::<i32>(),
+                parts[1].parse::<u32>(),
+                parts[2].parse::<u32>(),
+            ) else {
+                return false;
+            };
+            // Shape-level check (not calendar-accurate): the engine hands
+            // the string to libgit2, which rejects only truly invalid dates.
+            (1970..=9999).contains(&year) && (1..=12).contains(&month) && (1..=31).contains(&day)
+        }
+        if !valid(&self.after) {
+            return Some("After must be a date (YYYY-MM-DD)".to_string());
+        }
+        if !valid(&self.before) {
+            return Some("Before must be a date (YYYY-MM-DD)".to_string());
+        }
+        None
+    }
+
     pub fn field_mut(&mut self, field: HistoryFilterField) -> &mut String {
         match field {
             HistoryFilterField::Text => &mut self.text,

@@ -40,6 +40,14 @@ pub struct Config {
     pub session: SessionState,
     /// Main-window geometry persisted across runs ([`WindowFrame`]).
     pub window: WindowFrame,
+    /// Workspace pane sizes new tabs start with (sidebar, history, terminal
+    /// dock height); persisted whenever a divider drag ends.
+    #[serde(default = "default_pane_sizes")]
+    pub pane_sizes: [f32; 3],
+}
+
+fn default_pane_sizes() -> [f32; 3] {
+    [320.0, 340.0, 280.0]
 }
 
 /// Auto-fetch cadence choices cycled by the header button (minutes; 0 = off).
@@ -81,6 +89,7 @@ impl Default for Config {
             ai: AiSettings::default(),
             session: SessionState::default(),
             window: WindowFrame::default(),
+            pane_sizes: default_pane_sizes(),
         }
     }
 }

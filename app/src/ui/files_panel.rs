@@ -452,47 +452,67 @@ pub fn view<'a>(
     let states = states(status_rows);
 
     let mut header = row![
-        text("Files").size(12).font(theme::semibold()),
+        text("Files").size(theme::TEXT_BODY).font(theme::semibold()),
         Space::new().width(Length::Fill),
-        button(text("+ File").size(11))
+        button(text("+ File").size(theme::TEXT_SMALL))
             .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
             .padding([2, 8])
             .on_press_maybe(new_entry_message(panel, NewEntryKind::File)),
-        button(text("+ Folder").size(11))
+        button(text("+ Folder").size(theme::TEXT_SMALL))
             .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
             .padding([2, 8])
             .on_press_maybe(new_entry_message(panel, NewEntryKind::Dir)),
-        button(text("⟳").size(11))
-            .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
-            .padding([2, 8])
-            .on_press(Message::Files(Msg::Reload)),
-        button(text("×").size(12))
-            .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
-            .padding([2, 8])
-            .on_press(Message::Files(Msg::Toggle)),
+        theme::tip(
+            tokens,
+            button(text(theme::icon::REFRESH).size(theme::TEXT_SMALL))
+                .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
+                .padding([4, 8])
+                .on_press(Message::Files(Msg::Reload)),
+            "Reload directories",
+        ),
+        theme::tip(
+            tokens,
+            button(text(theme::icon::CLOSE).size(theme::TEXT_BODY))
+                .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
+                .padding([4, 8])
+                .on_press(Message::Files(Msg::Toggle)),
+            "Close files panel",
+        ),
     ]
     .align_y(Alignment::Center)
     .spacing(4);
 
     if !panel.dirs.contains_key("") {
-        header = header.push(text("· loading…").size(10).color(tokens.muted_foreground));
+        header = header.push(
+            text("· loading…")
+                .size(theme::TEXT_META)
+                .color(tokens.muted_foreground),
+        );
     }
 
     let body: Element<'a, Message> = if let Some(err) = &panel.error {
-        empty_state(
-            err,
-            if panel.dirs.contains_key("") {
-                tokens.deleted
-            } else {
-                tokens.foreground
-            },
-        )
+        // Reload is the panel's own refresh path, so it doubles as retry.
+        let retry = theme::mini_button(
+            tokens,
+            "Retry",
+            "Reload directories",
+            Some(Message::Files(Msg::Reload)),
+        );
+        let kind = if panel.dirs.contains_key("") {
+            theme::NoteKind::Inline
+        } else {
+            theme::NoteKind::Empty
+        };
+        row![theme::note(tokens, err.clone(), true, kind), retry,]
+            .spacing(4)
+            .align_y(Alignment::Center)
+            .into()
     } else if !panel.dirs.contains_key("") {
-        empty_state("Loading files…", tokens.muted_foreground)
+        theme::note(tokens, "Loading files…", false, theme::NoteKind::Empty)
     } else {
         let rows = flatten(&panel.dirs, &panel.expanded, &states);
         if rows.is_empty() {
-            empty_state("Empty working tree.", tokens.muted_foreground)
+            theme::note(tokens, "Empty working tree.", false, theme::NoteKind::Empty)
         } else {
             let mut list = column![].spacing(1).width(Length::Fill);
             for tree_row in &rows {
@@ -542,13 +562,6 @@ fn new_entry_message(panel: &FilesPanel, kind: NewEntryKind) -> Option<Message> 
     Some(Message::Files(Msg::PromptOpen(kind)))
 }
 
-fn empty_state<'a>(label: &'a str, color: Color) -> Element<'a, Message> {
-    container(text(label.to_string()).size(12).color(color))
-        .padding([12, 4])
-        .width(Length::Fill)
-        .into()
-}
-
 /// One tree row: indent, caret, name, state dot, right-click menu. All
 /// content is owned, so the element is `'static`.
 fn row_view(tree_row: &Row, tokens: Tokens) -> Element<'static, Message> {
@@ -556,9 +569,9 @@ fn row_view(tree_row: &Row, tokens: Tokens) -> Element<'static, Message> {
 
     let caret = if is_dir {
         if tree_row.expanded {
-            "▾"
+            theme::icon::EXPAND
         } else {
-            "▸"
+            theme::icon::COLLAPSE
         }
     } else {
         "·"
@@ -574,21 +587,29 @@ fn row_view(tree_row: &Row, tokens: Tokens) -> Element<'static, Message> {
         .align_y(Alignment::Center);
     line = line.push(
         text(caret)
-            .size(9)
+            .size(theme::TEXT_META)
             .color(caret_color)
             .width(Length::Fixed(10.0)),
     );
     line = line.push(
         text(tree_row.name.clone())
-            .size(11)
+            .size(theme::TEXT_SMALL)
             .font(theme::mono())
             .color(tokens.foreground),
     );
     if matches!(tree_row.kind, DirEntryKind::Submodule) {
-        line = line.push(text("(submodule)").size(9).color(tokens.muted_foreground));
+        line = line.push(
+            text("(submodule)")
+                .size(theme::TEXT_META)
+                .color(tokens.muted_foreground),
+        );
     }
     if let Some(state) = tree_row.state {
-        line = line.push(text("●").size(9).color(state_color(tokens, state)));
+        line = line.push(
+            text("●")
+                .size(theme::TEXT_META)
+                .color(state_color(tokens, state)),
+        );
     }
 
     let open_msg = Message::Files(Msg::RowOpen {
@@ -633,17 +654,17 @@ fn prompt_view<'a>(prompt: &'a Prompt, tokens: Tokens) -> Element<'a, Message> {
         text_input(placeholder, prompt.value.as_str())
             .on_input(|value| Message::Files(Msg::PromptChanged(value)))
             .on_submit(Message::Files(Msg::PromptConfirm))
-            .size(11)
+            .size(theme::TEXT_SMALL)
             .padding([4, 6])
             .width(Length::Fill),
-        button(text(confirm_label).size(11))
+        button(text(confirm_label).size(theme::TEXT_SMALL))
             .style(theme::button_style(tokens, theme::ButtonKind::Primary))
             .padding([4, 10])
             .on_press_maybe(
                 (!prompt.value.trim().trim_matches('/').is_empty())
                     .then_some(Message::Files(Msg::PromptConfirm))
             ),
-        button(text("Cancel").size(11))
+        button(text("Cancel").size(theme::TEXT_SMALL))
             .style(theme::button_style(tokens, theme::ButtonKind::Secondary))
             .padding([4, 10])
             .on_press(Message::Files(Msg::PromptCancel)),

@@ -289,14 +289,21 @@ pub async fn lfs_run(
 }
 
 /// Blobless (partial) clone via the git CLI: `git clone --filter=blob:none`.
+/// The CLI child can't be cancelled mid-run, so `cancel` is checked before
+/// spawning and the result reports cancelled if the flag flipped while it
+/// ran (the abandoned partial directory stays for cleanup).
 pub async fn clone_blobless(
     _services: &AppServices,
     url: String,
     destination: String,
     depth: Option<u32>,
+    cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
 ) -> Result<String, String> {
     if url.contains(';') || destination.is_empty() {
         return Err("invalid clone arguments".into());
+    }
+    if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+        return Err("clone cancelled".into());
     }
     let parent = std::path::Path::new(&destination)
         .parent()
@@ -313,7 +320,11 @@ pub async fn clone_blobless(
             args.insert(2, format!("--depth={depth}"));
         }
         let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
-        crate::maintenance::git_run(&parent, &arg_refs)?;
+        let result = crate::maintenance::git_run(&parent, &arg_refs);
+        if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+            return Err("clone cancelled".into());
+        }
+        result?;
         Ok(destination)
     })
     .await

@@ -192,40 +192,54 @@ impl CompareView {
         }
 
         let header = row![
-            text("Compare").size(12).font(theme::semibold()),
+            text("Compare")
+                .size(theme::TEXT_BODY)
+                .font(theme::semibold()),
             Space::new().width(Length::Fill),
-            button(text("×").size(12))
-                .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
-                .padding([2, 8])
-                .on_press(Msg::Close),
+            theme::tip(
+                tokens,
+                button(text(theme::icon::CLOSE).size(theme::TEXT_BODY))
+                    .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
+                    .padding([4, 8])
+                    .on_press(Msg::Close),
+                "Close compare",
+            ),
         ]
         .align_y(Alignment::Center);
 
         let refs = row![
-            text("Old").size(9).color(tokens.muted_foreground),
+            text("Old")
+                .size(theme::TEXT_META)
+                .color(tokens.muted_foreground),
             text_input("HEAD~1", self.old_ref.as_str())
                 .on_input(Msg::OldRefChanged)
                 .on_submit(Msg::ComparePressed)
-                .size(11)
+                .size(theme::TEXT_SMALL)
                 .padding([4, 6])
                 .width(Length::Fixed(150.0)),
-            button(text("⇄").size(11))
-                .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
-                .padding([2, 8])
-                .on_press(Msg::Swapped),
-            text("New").size(9).color(tokens.muted_foreground),
+            theme::tip(
+                tokens,
+                button(text(theme::icon::SWAP).size(theme::TEXT_SMALL))
+                    .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
+                    .padding([4, 8])
+                    .on_press(Msg::Swapped),
+                "Swap old and new refs",
+            ),
+            text("New")
+                .size(theme::TEXT_META)
+                .color(tokens.muted_foreground),
             text_input("HEAD", self.new_ref.as_str())
                 .on_input(Msg::NewRefChanged)
                 .on_submit(Msg::ComparePressed)
-                .size(11)
+                .size(theme::TEXT_SMALL)
                 .padding([4, 6])
                 .width(Length::Fixed(150.0)),
-            button(text("Compare").size(10))
+            button(text("Compare").size(theme::TEXT_META))
                 .style(theme::button_style(tokens, theme::ButtonKind::Primary))
                 .padding([3, 10])
                 .on_press(Msg::ComparePressed),
             Space::new().width(Length::Fill),
-            button(text(if self.split { "Split" } else { "Unified" }).size(10))
+            button(text(if self.split { "Split" } else { "Unified" }).size(theme::TEXT_META))
                 .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
                 .padding([3, 8])
                 .on_press(Msg::ToggleSplit),
@@ -236,12 +250,21 @@ impl CompareView {
         let mut card = column![header, refs].spacing(6);
 
         if let Some(err) = &self.error {
-            card = card.push(
-                text(err.as_str())
-                    .size(10)
-                    .color(tokens.deleted)
-                    .width(Length::Fill),
-            );
+            // Compare re-runs the diff for the current refs, so it doubles
+            // as the retry.
+            let retry_note: Element<'_, Msg> = row![
+                theme::note(tokens, err.as_str(), true, theme::NoteKind::Inline),
+                theme::mini_button(
+                    tokens,
+                    "Retry",
+                    "Run the compare again",
+                    Some(Msg::ComparePressed),
+                ),
+            ]
+            .spacing(4)
+            .align_y(Alignment::Center)
+            .into();
+            card = card.push(retry_note);
         }
 
         if !self.diff.files.is_empty() {
@@ -253,19 +276,17 @@ impl CompareView {
                     additions,
                     deletions
                 ))
-                .size(10)
+                .size(theme::TEXT_META)
                 .color(tokens.muted_foreground),
             );
             card = card.push(file_list(self, tokens));
         } else if self.error.is_none() {
-            card = card.push(
-                container(
-                    text("Pick two refs and press Compare.")
-                        .size(10)
-                        .color(tokens.muted_foreground),
-                )
-                .padding([8, 4]),
-            );
+            card = card.push(theme::note(
+                tokens,
+                "Pick two refs and press Compare.",
+                false,
+                theme::NoteKind::Empty,
+            ));
         }
 
         Some(
@@ -340,22 +361,22 @@ fn file_row_view<'a>(
 
     let mut line = row![
         text(model.kind_letter)
-            .size(10)
+            .size(theme::TEXT_META)
             .font(theme::mono())
             .color(kind_color)
             .width(Length::Fixed(16.0)),
         text(model.path)
-            .size(11)
+            .size(theme::TEXT_SMALL)
             .font(theme::mono())
             .color(tokens.foreground)
             .width(Length::Fill),
         text(format!("+{}", model.additions))
-            .size(10)
+            .size(theme::TEXT_META)
             .color(tokens.added)
             .width(Length::Fixed(52.0))
             .align_x(Alignment::End),
         text(format!("−{}", model.deletions))
-            .size(10)
+            .size(theme::TEXT_META)
             .color(tokens.deleted)
             .width(Length::Fixed(52.0))
             .align_x(Alignment::End),
@@ -364,14 +385,22 @@ fn file_row_view<'a>(
     .align_y(Alignment::Center);
 
     if model.binary {
-        line = line.push(chip("binary", tokens));
+        line = line.push(theme::chip(
+            "binary",
+            tokens.muted_foreground,
+            theme::ChipShape::Pill,
+        ));
     }
     if model.image {
-        line = line.push(chip("image", tokens));
+        line = line.push(theme::chip(
+            "image",
+            tokens.muted_foreground,
+            theme::ChipShape::Pill,
+        ));
     }
     line = line.push(
         text(format!("{} hunks", model.hunk_count))
-            .size(9)
+            .size(theme::TEXT_META)
             .color(tokens.muted_foreground)
             .width(Length::Fixed(56.0))
             .align_x(Alignment::End),
@@ -404,21 +433,6 @@ fn file_row_view<'a>(
     )
     .width(Length::Fill)
     .into()
-}
-
-fn chip<'a>(label: &'static str, tokens: Tokens) -> Element<'a, Msg> {
-    container(text(label).size(8).color(tokens.muted_foreground))
-        .padding([1, 4])
-        .style(move |_theme| container::Style {
-            background: Some(Background::Color(tokens.muted)),
-            border: Border {
-                color: tokens.border,
-                width: 1.0,
-                radius: 4.0.into(),
-            },
-            ..container::Style::default()
-        })
-        .into()
 }
 
 #[cfg(test)]

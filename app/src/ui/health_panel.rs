@@ -684,27 +684,35 @@ impl HealthPanel {
         }
 
         let mut header = row![text("Health & maintenance")
-            .size(12)
+            .size(theme::TEXT_BODY)
             .font(theme::semibold())]
         .spacing(6)
         .align_y(Alignment::Center);
         if self.loading {
-            header = header.push(text("· loading…").size(10).color(tokens.muted_foreground));
+            header = header.push(
+                text("· loading…")
+                    .size(theme::TEXT_META)
+                    .color(tokens.muted_foreground),
+            );
         }
         header = header
             .push(Space::new().width(Length::Fill))
-            .push(
-                button(text("⟳").size(11))
+            .push(theme::tip(
+                tokens,
+                button(text(theme::icon::REFRESH).size(theme::TEXT_SMALL))
                     .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
-                    .padding([2, 8])
+                    .padding([4, 8])
                     .on_press(Msg::RefreshPressed),
-            )
-            .push(
-                button(text("×").size(12))
+                "Reload health, sparse and LFS state",
+            ))
+            .push(theme::tip(
+                tokens,
+                button(text(theme::icon::CLOSE).size(theme::TEXT_BODY))
                     .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
-                    .padding([2, 8])
+                    .padding([4, 8])
                     .on_press(Msg::ToggleOpen),
-            );
+                "Close health panel",
+            ));
 
         let mut body = column![header].spacing(6).width(Length::Fill);
         if let Some(line) = status_line(self, tokens) {
@@ -744,20 +752,36 @@ fn status_line<'a>(panel: &'a HealthPanel, tokens: Tokens) -> Option<Element<'a,
     if let Some(busy) = &panel.busy {
         return Some(
             row![
-                text("⏳").size(10),
-                text(busy.as_str()).size(10).color(tokens.muted_foreground)
+                text("⏳").size(theme::TEXT_META),
+                text(busy.as_str())
+                    .size(theme::TEXT_META)
+                    .color(tokens.muted_foreground)
             ]
             .spacing(4)
             .into(),
         );
     }
     if let Some(error) = &panel.error {
-        return Some(note(tokens, error.clone(), true).into());
+        // Refresh re-reads every section, so it doubles as the retry.
+        return Some(
+            row![
+                theme::note(tokens, error.clone(), true, theme::NoteKind::Inline),
+                theme::mini_button(
+                    tokens,
+                    "Retry",
+                    "Reload health, sparse and LFS state",
+                    Some(Msg::RefreshPressed),
+                ),
+            ]
+            .spacing(4)
+            .align_y(Alignment::Center)
+            .into(),
+        );
     }
     panel
         .last_result
         .as_ref()
-        .map(|result| note(tokens, result.clone(), false).into())
+        .map(|result| theme::note(tokens, result.clone(), false, theme::NoteKind::Inline))
 }
 
 /// The one inline confirm strip for whichever section requested it.
@@ -772,14 +796,14 @@ fn confirm_strip<'a>(panel: &'a HealthPanel, tokens: Tokens) -> Option<Element<'
         container(
             row![
                 text(confirm.label.as_str())
-                    .size(10)
+                    .size(theme::TEXT_META)
                     .color(tokens.foreground)
                     .width(Length::Fill),
-                button(text("Cancel").size(9))
+                button(text("Cancel").size(theme::TEXT_META))
                     .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
                     .padding([2, 8])
                     .on_press(cancel),
-                button(text("Confirm").size(9))
+                button(text("Confirm").size(theme::TEXT_META))
                     .style(theme::button_style(tokens, theme::ButtonKind::Danger))
                     .padding([2, 8])
                     .on_press(press),
@@ -859,10 +883,13 @@ fn health_section<'a>(panel: &HealthPanel, tokens: Tokens) -> Element<'a, Msg> {
             .width(Length::Fill)
             .into()
         }
-        None if panel.error.is_some() => {
-            note(tokens, "Health unavailable — see the error above.", false).into()
-        }
-        None => note(tokens, "Loading health…", false).into(),
+        None if panel.error.is_some() => theme::note(
+            tokens,
+            "Health unavailable — see the error above.",
+            false,
+            theme::NoteKind::Inline,
+        ),
+        None => theme::note(tokens, "Loading health…", false, theme::NoteKind::Inline),
     };
     section = section.push(rows);
     section_card(section, tokens)
@@ -878,7 +905,7 @@ fn maintenance_section<'a>(panel: &HealthPanel, tokens: Tokens) -> Element<'a, M
         let mut buttons = row![].spacing(4);
         for op in chunk {
             buttons = buttons.push(
-                button(text(op_label(op)).size(10))
+                button(text(op_label(op)).size(theme::TEXT_META))
                     .style(theme::button_style(tokens, theme::ButtonKind::Secondary))
                     .padding([4, 8])
                     .width(Length::Fill)
@@ -889,16 +916,18 @@ fn maintenance_section<'a>(panel: &HealthPanel, tokens: Tokens) -> Element<'a, M
     }
     section = section.push(op_rows);
     if locked {
-        section = section.push(note(
+        section = section.push(theme::note(
             tokens,
             "An op is running — buttons stay disabled until it finishes.",
             false,
+            theme::NoteKind::Inline,
         ));
     } else {
-        section = section.push(note(
+        section = section.push(theme::note(
             tokens,
             "Count objects is a read-only census; the other ops confirm first.",
             false,
+            theme::NoteKind::Inline,
         ));
     }
     section_card(section, tokens)
@@ -916,7 +945,7 @@ fn archive_section<'a>(panel: &HealthPanel, tokens: Tokens) -> Element<'a, Msg> 
             text_input("ref (HEAD, branch, tag…)", panel.archive_ref.as_str())
                 .on_input(Msg::ArchiveRefChanged)
                 .on_submit_maybe(can_archive(panel).then_some(Msg::ArchivePressed))
-                .size(11)
+                .size(theme::TEXT_SMALL)
                 .padding([4, 6])
                 .width(Length::Fill),
             pick_list(
@@ -924,10 +953,10 @@ fn archive_section<'a>(panel: &HealthPanel, tokens: Tokens) -> Element<'a, Msg> 
                 Some(panel.archive_format),
                 Msg::ArchiveFormatChanged
             )
-            .text_size(11)
+            .text_size(theme::TEXT_SMALL)
             .padding([3, 6])
             .width(Length::Fixed(110.0)),
-            button(text("Export…").size(10))
+            button(text("Export…").size(theme::TEXT_META))
                 .style(theme::button_style(tokens, theme::ButtonKind::Primary))
                 .padding([4, 10])
                 .on_press_maybe(can_archive(panel).then_some(Msg::ArchivePressed)),
@@ -941,7 +970,7 @@ fn archive_section<'a>(panel: &HealthPanel, tokens: Tokens) -> Element<'a, Msg> 
     } else {
         "Invalid ref: no leading dash, shell metacharacters or control characters."
     };
-    section = section.push(note(tokens, hint, !valid));
+    section = section.push(theme::note(tokens, hint, !valid, theme::NoteKind::Inline));
     section_card(section, tokens)
 }
 
@@ -971,7 +1000,7 @@ fn sparse_section<'a>(panel: &'a HealthPanel, tokens: Tokens) -> Element<'a, Msg
         for pattern in info.patterns.iter().take(6) {
             pattern_rows = pattern_rows.push(
                 text(pattern.as_str())
-                    .size(9)
+                    .size(theme::TEXT_META)
                     .font(theme::mono())
                     .color(tokens.muted_foreground),
             );
@@ -983,14 +1012,19 @@ fn sparse_section<'a>(panel: &'a HealthPanel, tokens: Tokens) -> Element<'a, Msg
             section = section.push(pattern_rows);
         }
     } else {
-        section = section.push(note(tokens, "Sparse state not loaded yet.", false));
+        section = section.push(theme::note(
+            tokens,
+            "Sparse state not loaded yet.",
+            false,
+            theme::NoteKind::Inline,
+        ));
     }
 
     section = section.push(
         text_editor(&panel.sparse_body)
             .placeholder("one directory pattern per line (empty = full checkout)")
             .on_action(Msg::SparseEdited)
-            .size(11)
+            .size(theme::TEXT_SMALL)
             .padding(6)
             .height(Length::Fixed(64.0)),
     );
@@ -998,12 +1032,12 @@ fn sparse_section<'a>(panel: &'a HealthPanel, tokens: Tokens) -> Element<'a, Msg
         row![
             checkbox(panel.sparse_add)
                 .label("add (keep existing patterns)")
-                .size(12)
-                .text_size(10)
+                .size(theme::TEXT_BODY)
+                .text_size(theme::TEXT_META)
                 .spacing(4)
                 .on_toggle(Msg::SparseAddToggled),
             Space::new().width(Length::Fill),
-            button(text("Apply…").size(10))
+            button(text("Apply…").size(theme::TEXT_META))
                 .style(theme::button_style(tokens, theme::ButtonKind::Primary))
                 .padding([4, 10])
                 .on_press_maybe((panel.busy.is_none()).then_some(Msg::SparsePressed)),
@@ -1033,7 +1067,7 @@ fn lfs_section<'a>(panel: &HealthPanel, tokens: Tokens) -> Element<'a, Msg> {
             if let Some(version) = status.version.as_deref() {
                 chips = chips.push(
                     text(clip(version, 34))
-                        .size(9)
+                        .size(theme::TEXT_META)
                         .font(theme::mono())
                         .color(tokens.muted_foreground),
                 );
@@ -1041,7 +1075,12 @@ fn lfs_section<'a>(panel: &HealthPanel, tokens: Tokens) -> Element<'a, Msg> {
             section = section.push(chips);
 
             if status.tracked_patterns.is_empty() {
-                section = section.push(note(tokens, "No tracked LFS patterns.", false));
+                section = section.push(theme::note(
+                    tokens,
+                    "No tracked LFS patterns.",
+                    false,
+                    theme::NoteKind::Inline,
+                ));
             } else {
                 let mut patterns = row![].spacing(4);
                 for pattern in status.tracked_patterns.iter().take(8) {
@@ -1054,14 +1093,21 @@ fn lfs_section<'a>(panel: &HealthPanel, tokens: Tokens) -> Element<'a, Msg> {
                 section = section.push(patterns);
             }
         }
-        None => section = section.push(note(tokens, "LFS status not loaded yet.", false)),
+        None => {
+            section = section.push(theme::note(
+                tokens,
+                "LFS status not loaded yet.",
+                false,
+                theme::NoteKind::Inline,
+            ))
+        }
     }
 
     let locked = panel.busy.is_some();
     let mut buttons = row![].spacing(4);
     for sub in ["pull", "push", "fetch", "install"] {
         buttons = buttons.push(
-            button(text(sub).size(10))
+            button(text(sub).size(theme::TEXT_META))
                 .style(theme::button_style(tokens, theme::ButtonKind::Secondary))
                 .padding([4, 8])
                 .on_press_maybe((!locked).then(|| Msg::LfsOpRequested(sub.to_string()))),
@@ -1077,7 +1123,7 @@ fn lfs_section<'a>(panel: &HealthPanel, tokens: Tokens) -> Element<'a, Msg> {
 
 fn section_header<'a>(tokens: Tokens, label: &str) -> Column<'a, Msg> {
     column![text(label.to_string())
-        .size(10)
+        .size(theme::TEXT_META)
         .font(theme::semibold())
         .color(tokens.muted_foreground)]
     .spacing(4)
@@ -1102,10 +1148,10 @@ fn section_card<'a>(section: Column<'a, Msg>, tokens: Tokens) -> Element<'a, Msg
 fn kv<'a>(tokens: Tokens, label: &str, value: String) -> Element<'a, Msg> {
     row![
         text(label.to_string())
-            .size(10)
+            .size(theme::TEXT_META)
             .color(tokens.muted_foreground)
             .width(Length::Fixed(120.0)),
-        text(value).size(10).color(tokens.foreground),
+        text(value).size(theme::TEXT_META).color(tokens.foreground),
     ]
     .spacing(6)
     .width(Length::Fill)
@@ -1118,31 +1164,7 @@ fn chip_view<'a>(tokens: Tokens, label: &str, danger: bool) -> Element<'a, Msg> 
     } else {
         tokens.muted_foreground
     };
-    container(text(label.to_string()).size(9).color(color))
-        .padding([1, 6])
-        .style(move |_theme| container::Style {
-            background: Some(Background::Color(theme::with_alpha(color, 0.12))),
-            border: Border {
-                color: theme::with_alpha(color, 0.4),
-                width: 1.0,
-                radius: 8.0.into(),
-            },
-            ..container::Style::default()
-        })
-        .into()
-}
-
-fn note<'a>(
-    tokens: Tokens,
-    label: impl Into<String>,
-    error: bool,
-) -> container::Container<'a, Msg> {
-    let color = if error {
-        tokens.destructive
-    } else {
-        tokens.muted_foreground
-    };
-    container(text(label.into()).size(10).color(color)).padding([2, 4])
+    theme::chip(label.to_string(), color, theme::ChipShape::Pill)
 }
 
 fn clip(text: &str, max_chars: usize) -> String {

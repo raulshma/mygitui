@@ -151,54 +151,64 @@ impl WorktreePanel {
     pub fn view(&self, tokens: Tokens) -> Element<'_, Msg> {
         let count = self.list.as_ref().map(|list| list.len());
 
-        let mut header = row![text("Worktrees").size(12).font(theme::semibold())]
-            .spacing(6)
-            .align_y(Alignment::Center);
+        let mut header = row![text("Worktrees")
+            .size(theme::TEXT_BODY)
+            .font(theme::semibold())]
+        .spacing(6)
+        .align_y(Alignment::Center);
         if let Some(count) = count {
             header = header.push(
                 text(format!("{count}"))
-                    .size(10)
+                    .size(theme::TEXT_META)
                     .color(tokens.muted_foreground),
             );
         }
         if self.loading {
-            header = header.push(text("· loading…").size(10).color(tokens.muted_foreground));
+            header = header.push(
+                text("· loading…")
+                    .size(theme::TEXT_META)
+                    .color(tokens.muted_foreground),
+            );
         }
         header = header
             .push(Space::new().width(Length::Fill))
             .push(
-                button(text("Prune").size(9))
+                button(text("Prune").size(theme::TEXT_META))
                     .style(theme::button_style(tokens, theme::ButtonKind::Secondary))
                     .padding([2, 8])
                     .on_press(Msg::PrunePressed),
             )
-            .push(
-                button(text("⟳").size(11))
+            .push(theme::tip(
+                tokens,
+                button(text(theme::icon::REFRESH).size(theme::TEXT_SMALL))
                     .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
-                    .padding([2, 8])
+                    .padding([4, 8])
                     .on_press(Msg::RefreshPressed),
-            )
-            .push(
-                button(text("×").size(12))
+                "Reload worktrees",
+            ))
+            .push(theme::tip(
+                tokens,
+                button(text(theme::icon::CLOSE).size(theme::TEXT_BODY))
                     .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
-                    .padding([2, 8])
+                    .padding([4, 8])
                     .on_press(Msg::ToggleOpen),
-            );
+                "Close worktrees panel",
+            ));
 
         let add_form = row![
             text_input("Branch (existing or new)", self.add_name.as_str())
                 .on_input(Msg::AddNameChanged)
                 .on_submit(Msg::AddPressed)
-                .size(11)
+                .size(theme::TEXT_SMALL)
                 .padding([4, 6])
                 .width(Length::Fixed(150.0)),
             text_input("Folder (optional)", self.add_path.as_str())
                 .on_input(Msg::AddPathChanged)
                 .on_submit(Msg::AddPressed)
-                .size(11)
+                .size(theme::TEXT_SMALL)
                 .padding([4, 6])
                 .width(Length::Fill),
-            button(text("Add").size(10))
+            button(text("Add").size(theme::TEXT_META))
                 .style(theme::button_style(tokens, theme::ButtonKind::Primary))
                 .padding([4, 10])
                 .on_press_maybe((!self.add_name.trim().is_empty()).then_some(Msg::AddPressed)),
@@ -207,8 +217,22 @@ impl WorktreePanel {
         .align_y(Alignment::Center);
 
         let status_note: Element<'_, Msg> = match (&self.error, &self.prune_note) {
-            (Some(error), _) => note(tokens, error.clone(), true),
-            (None, Some(done)) => note(tokens, done.clone(), false),
+            (Some(error), _) => {
+                // Refresh re-lists worktrees, so it doubles as the retry.
+                row![
+                    theme::note(tokens, error.clone(), true, theme::NoteKind::Inline),
+                    theme::mini_button(
+                        tokens,
+                        "Retry",
+                        "Reload worktrees",
+                        Some(Msg::RefreshPressed),
+                    ),
+                ]
+                .spacing(4)
+                .align_y(Alignment::Center)
+                .into()
+            }
+            (None, Some(done)) => theme::note(tokens, done.clone(), false, theme::NoteKind::Inline),
             (None, None) => column![].into(),
         };
 
@@ -224,8 +248,13 @@ impl WorktreePanel {
                     .width(Length::Fill)
                     .into()
             }
-            Some(_) => note(tokens, "No linked worktrees.", false),
-            None => note(tokens, "Loading worktrees…", false),
+            Some(_) => theme::note(
+                tokens,
+                "No linked worktrees.",
+                false,
+                theme::NoteKind::Empty,
+            ),
+            None => theme::note(tokens, "Loading worktrees…", false, theme::NoteKind::Inline),
         };
 
         container(
@@ -259,13 +288,15 @@ fn worktree_row<'a>(
 
     let line = row![
         text(info.name.as_str())
-            .size(11)
+            .size(theme::TEXT_SMALL)
             .font(theme::mono())
             .color(tokens.foreground),
         chips,
         Space::new().width(Length::Fill),
-        text(ref_label(info)).size(9).color(tokens.muted_foreground),
-        button(text("Remove").size(9))
+        text(ref_label(info))
+            .size(theme::TEXT_META)
+            .color(tokens.muted_foreground),
+        button(text("Remove").size(theme::TEXT_META))
             .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
             .padding([2, 6])
             .width(Length::Fixed(50.0))
@@ -278,7 +309,7 @@ fn worktree_row<'a>(
     let mut card = column![
         line,
         text(clip(&info.path, 64))
-            .size(9)
+            .size(theme::TEXT_META)
             .color(tokens.muted_foreground)
     ]
     .spacing(2)
@@ -292,13 +323,15 @@ fn worktree_row<'a>(
         };
         card = card.push(
             row![
-                text(force_note).size(9).color(tokens.muted_foreground),
+                text(force_note)
+                    .size(theme::TEXT_META)
+                    .color(tokens.muted_foreground),
                 Space::new().width(Length::Fill),
-                button(text("Cancel").size(9))
+                button(text("Cancel").size(theme::TEXT_META))
                     .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
                     .padding([2, 6])
                     .on_press(Msg::RemoveCanceled),
-                button(text("Confirm remove").size(9))
+                button(text("Confirm remove").size(theme::TEXT_META))
                     .style(theme::button_style(tokens, theme::ButtonKind::Danger))
                     .padding([2, 6])
                     .on_press(Msg::RemoveConfirmed),
@@ -385,29 +418,7 @@ fn chip_view<'a>(chip: Chip, tokens: Tokens) -> Element<'a, Msg> {
     } else {
         tokens.muted_foreground
     };
-    container(text(chip.label).size(9).color(color))
-        .padding([1, 6])
-        .style(move |_theme| container::Style {
-            background: Some(Background::Color(theme::with_alpha(color, 0.12))),
-            border: Border {
-                color: theme::with_alpha(color, 0.4),
-                width: 1.0,
-                radius: 8.0.into(),
-            },
-            ..container::Style::default()
-        })
-        .into()
-}
-
-fn note<'a>(tokens: Tokens, label: impl Into<String>, error: bool) -> Element<'a, Msg> {
-    let color = if error {
-        tokens.deleted
-    } else {
-        tokens.muted_foreground
-    };
-    container(text(label.into()).size(10).color(color))
-        .padding([2, 4])
-        .into()
+    theme::chip(chip.label, color, theme::ChipShape::Pill)
 }
 
 fn clip(text: &str, max_chars: usize) -> String {

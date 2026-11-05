@@ -22,9 +22,10 @@
 //! progress events, so the card shows an indeterminate "Starting clone…"
 //! line instead).
 
-use iced::widget::{button, checkbox, column, container, mouse_area, row, text, text_input, Space};
+use iced::widget::{button, checkbox, column, container, row, text, text_input, Space};
 use iced::{Alignment, Background, Border, Element, Length};
 
+use super::dialog::modal_with_cancel;
 use super::theme::{self, Tokens};
 
 /// Width of the dialog card.
@@ -165,6 +166,9 @@ pub enum Msg {
 pub enum Action {
     /// The dialog dismissed itself; `open` is already `false`.
     Close,
+    /// Close was requested mid-run: cancel the in-flight transfer and
+    /// dismiss the dialog (the abandoned partial directory stays).
+    CancelClone,
     /// Spawn the native folder picker.
     PickFolder,
     /// Run the clone: blobless routes to `maintenance::clone_blobless`, a
@@ -186,7 +190,11 @@ pub fn update(state: &mut State, msg: Msg) -> Option<Action> {
         }
         Msg::Close => {
             if state.running {
-                return None; // a clone is in flight; let it finish
+                // Closing mid-run abandons the clone: the shell flips the
+                // transfer's cancel flag (footer Cancel does the same), the
+                // dialog closes now, and the in-flight task's CloneDone is
+                // a no-op once the flag is set.
+                return Some(Action::CancelClone);
             }
             state.close();
             Some(Action::Close)
@@ -332,19 +340,21 @@ pub fn view(state: &State, tokens: &Tokens) -> Element<'static, Msg> {
     let title = row![
         text("Clone repository").size(14).font(theme::semibold()),
         Space::new().width(Length::Fill),
-        button(text("×").size(12))
-            .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
-            .padding([3, 8])
-            .on_press(Msg::Close),
+        theme::mini_button(tokens, theme::icon::CLOSE, "Close dialog", Some(Msg::Close)),
     ]
     .align_y(Alignment::Center);
 
+    // Enter in either field submits the same flow as the Clone button (the
+    // Submit arm re-validates). Ids let the shell autofocus the URL field.
+    // (`text_input::focus` on the Id below).
     let url = labeled_field(
         tokens,
         "Repository URL",
         text_input("https://github.com/user/repo.git", state.url.as_str())
+            .id(iced::widget::Id::new("clone-url"))
             .on_input(Msg::UrlChanged)
-            .size(12)
+            .on_submit(Msg::Submit)
+            .size(theme::TEXT_BODY)
             .padding([5, 8]),
     );
 
@@ -353,11 +363,13 @@ pub fn view(state: &State, tokens: &Tokens) -> Element<'static, Msg> {
         "Destination directory",
         row![
             text_input("/path/to/clone-into", state.destination.as_str())
+                .id(iced::widget::Id::new("clone-destination"))
                 .on_input(Msg::DestinationChanged)
-                .size(12)
+                .on_submit(Msg::Submit)
+                .size(theme::TEXT_BODY)
                 .padding([5, 8])
                 .width(Length::Fill),
-            button(text("Browse…").size(11))
+            button(text("Browse…").size(theme::TEXT_SMALL))
                 .style(theme::button_style(tokens, theme::ButtonKind::Secondary))
                 .padding([5, 10])
                 .on_press_maybe((!state.running).then_some(Msg::PickFolder)),
@@ -372,7 +384,7 @@ pub fn view(state: &State, tokens: &Tokens) -> Element<'static, Msg> {
             "Depth (commits)",
             text_input("1", state.depth.as_str())
                 .on_input(Msg::DepthChanged)
-                .size(12)
+                .size(theme::TEXT_BODY)
                 .padding([5, 8])
                 .width(Length::Fixed(90.0)),
         )
@@ -383,13 +395,13 @@ pub fn view(state: &State, tokens: &Tokens) -> Element<'static, Msg> {
     let mut options = column![
         checkbox(state.shallow)
             .label("Shallow clone")
-            .text_size(11)
+            .text_size(theme::TEXT_SMALL)
             .size(14)
             .spacing(5)
             .on_toggle(Msg::ShallowToggled),
         checkbox(state.blobless)
             .label("Blobless (no file contents)")
-            .text_size(11)
+            .text_size(theme::TEXT_SMALL)
             .size(14)
             .spacing(5)
             .on_toggle(Msg::BloblessToggled),
@@ -407,7 +419,7 @@ pub fn view(state: &State, tokens: &Tokens) -> Element<'static, Msg> {
                 }
                 area = area.push(
                     text(progress.summary())
-                        .size(10)
+                        .size(theme::TEXT_META)
                         .color(tokens.muted_foreground),
                 );
                 area.into()
@@ -417,7 +429,7 @@ pub fn view(state: &State, tokens: &Tokens) -> Element<'static, Msg> {
             } else {
                 "Starting clone…"
             })
-            .size(10)
+            .size(theme::TEXT_META)
             .color(tokens.muted_foreground)
             .into(),
         }
@@ -427,11 +439,11 @@ pub fn view(state: &State, tokens: &Tokens) -> Element<'static, Msg> {
 
     let actions = row![
         Space::new().width(Length::Fill),
-        button(text("Cancel").size(11))
+        button(text("Cancel").size(theme::TEXT_SMALL))
             .style(theme::button_style(tokens, theme::ButtonKind::Secondary))
             .padding([4, 12])
             .on_press_maybe((!state.running).then_some(Msg::Close)),
-        button(text(if state.running { "Cloning…" } else { "Clone" }).size(11))
+        button(text(if state.running { "Cloning…" } else { "Clone" }).size(theme::TEXT_SMALL))
             .style(theme::button_style(tokens, theme::ButtonKind::Primary))
             .padding([4, 12])
             .on_press_maybe((!state.running).then_some(Msg::Submit)),
@@ -439,40 +451,18 @@ pub fn view(state: &State, tokens: &Tokens) -> Element<'static, Msg> {
     .spacing(6)
     .align_y(Alignment::Center);
 
-    let card = container(
-        column![title, url, destination, options, progress_area, actions]
+    // Shared modal scaffold: scrim press closes (the update arm already
+    // swallows Close while a clone runs), inputs consume their own presses.
+    modal_with_cancel(
+        tokens,
+        CARD_WIDTH,
+        column![title, url, destination, options, progress_area]
             .spacing(10)
-            .width(Length::Fill),
+            .width(Length::Fill)
+            .into(),
+        actions.into(),
+        Msg::Close,
     )
-    .width(Length::Fixed(CARD_WIDTH))
-    .padding([16, 18])
-    .style(move |_theme| container::Style {
-        background: Some(Background::Color(tokens.card)),
-        text_color: Some(tokens.card_foreground),
-        border: Border {
-            color: tokens.border,
-            width: 1.0,
-            radius: 10.0.into(),
-        },
-        ..container::Style::default()
-    });
-
-    let scrim = container(card)
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .align_x(Alignment::Center)
-        .align_y(Alignment::Center)
-        .style(move |_theme| container::Style {
-            background: Some(Background::Color(theme::with_alpha(
-                iced::Color::BLACK,
-                0.4,
-            ))),
-            ..container::Style::default()
-        });
-
-    // Like dialog.rs: presses on the scrim cancel the dialog (unless a
-    // clone is running — the widget handles that), inputs consume theirs.
-    mouse_area(scrim).on_press(Msg::Close).into()
 }
 
 /// Label above a field, following the dialog spacing vocabulary.
@@ -482,7 +472,9 @@ fn labeled_field<'a>(
     field: impl Into<Element<'a, Msg>>,
 ) -> Element<'a, Msg> {
     column![
-        text(label).size(11).color(tokens.muted_foreground),
+        text(label)
+            .size(theme::TEXT_SMALL)
+            .color(tokens.muted_foreground),
         field.into(),
     ]
     .spacing(3)
@@ -735,16 +727,16 @@ mod tests {
     }
 
     #[test]
-    fn close_while_running_is_ignored() {
+    fn close_while_running_cancels() {
         let mut state = State::default();
         state.open();
         state.url = "https://example.com/r.git".to_string();
         state.destination = "/tmp/r".to_string();
         let _ = update(&mut state, Msg::Submit);
         assert!(state.running);
-        // Close is swallowed while a clone is in flight.
-        assert_eq!(update(&mut state, Msg::Close), None);
-        assert!(state.open);
+        // Close mid-run abandons the clone: the shell cancels the transfer
+        // and dismisses the dialog (never a held-hostage modal).
+        assert_eq!(update(&mut state, Msg::Close), Some(Action::CancelClone));
     }
 
     #[test]

@@ -146,44 +146,56 @@ impl ReflogPanel {
         }
         let ref_label = self.requested_ref().unwrap_or_else(|| "HEAD".to_string());
 
-        let mut header = row![text("Reflog").size(12).font(theme::semibold())]
-            .spacing(6)
-            .align_y(Alignment::Center);
+        let mut header = row![text("Reflog")
+            .size(theme::TEXT_BODY)
+            .font(theme::semibold())]
+        .spacing(6)
+        .align_y(Alignment::Center);
         if let Some(list) = &self.entries {
             header = header.push(
                 text(format!("{ref_label} · {} entries", list.len()))
-                    .size(10)
+                    .size(theme::TEXT_META)
                     .color(tokens.muted_foreground),
             );
         }
         if self.loading {
-            header = header.push(text("· loading…").size(10).color(tokens.muted_foreground));
+            header = header.push(
+                text("· loading…")
+                    .size(theme::TEXT_META)
+                    .color(tokens.muted_foreground),
+            );
         }
         header = header
             .push(Space::new().width(Length::Fill))
-            .push(
-                button(text("⟳").size(11))
+            .push(theme::tip(
+                tokens,
+                button(text(theme::icon::REFRESH).size(theme::TEXT_SMALL))
                     .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
-                    .padding([2, 8])
+                    .padding([4, 8])
                     .on_press(Msg::RefreshPressed),
-            )
-            .push(
-                button(text("×").size(12))
+                "Reload reflog for the entered ref",
+            ))
+            .push(theme::tip(
+                tokens,
+                button(text(theme::icon::CLOSE).size(theme::TEXT_BODY))
                     .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
-                    .padding([2, 8])
+                    .padding([4, 8])
                     .on_press(Msg::ToggleOpen),
-            );
+                "Close reflog panel",
+            ));
 
         let filter = row![
-            text("Ref").size(9).color(tokens.muted_foreground),
+            text("Ref")
+                .size(theme::TEXT_META)
+                .color(tokens.muted_foreground),
             text_input("ref (blank = HEAD)", self.ref_name.as_str())
                 .on_input(Msg::RefChanged)
                 .on_submit(Msg::RefreshPressed)
-                .size(11)
+                .size(theme::TEXT_SMALL)
                 .padding([4, 6])
                 .width(Length::Fixed(160.0)),
             text("Blank lists HEAD's reflog.")
-                .size(9)
+                .size(theme::TEXT_META)
                 .color(tokens.muted_foreground),
         ]
         .spacing(6)
@@ -208,22 +220,36 @@ impl ReflogPanel {
                     .width(Length::Fill)
                     .into()
             }
-            Some(_) => note(tokens, "No reflog entries.", false),
+            Some(_) => theme::note(tokens, "No reflog entries.", false, theme::NoteKind::Empty),
             None if self.error.is_some() => {
-                note(tokens, self.error.as_deref().unwrap_or_default(), true)
+                // Refresh re-reads the reflog, so it doubles as the retry.
+                let retry =
+                    theme::mini_button(tokens, "Retry", "Reload reflog", Some(Msg::RefreshPressed));
+                row![
+                    theme::note(
+                        tokens,
+                        self.error.as_deref().unwrap_or_default(),
+                        true,
+                        theme::NoteKind::Inline
+                    ),
+                    retry,
+                ]
+                .spacing(4)
+                .align_y(Alignment::Center)
+                .into()
             }
-            None => note(tokens, "Loading reflog…", false),
+            None => theme::note(tokens, "Loading reflog…", false, theme::NoteKind::Inline),
         };
 
         let mut card = column![header, filter].spacing(6);
         if let Some(err) = &self.error {
             if self.entries.is_some() {
-                card = card.push(
-                    text(err.as_str())
-                        .size(10)
-                        .color(tokens.deleted)
-                        .width(Length::Fill),
-                );
+                card = card.push(theme::note(
+                    tokens,
+                    err.as_str(),
+                    true,
+                    theme::NoteKind::Inline,
+                ));
             }
         }
         card = card.push(body);
@@ -273,25 +299,25 @@ fn reflog_row_view<'a>(
     let info = button(
         row![
             text(model.selector)
-                .size(10)
+                .size(theme::TEXT_META)
                 .font(theme::mono())
                 .color(tokens.muted_foreground)
                 .width(Length::Fixed(86.0)),
             text(model.sha)
-                .size(10)
+                .size(theme::TEXT_META)
                 .font(theme::mono())
                 .color(tokens.foreground)
                 .width(Length::Fixed(58.0)),
             text(model.message)
-                .size(11)
+                .size(theme::TEXT_SMALL)
                 .color(tokens.foreground)
                 .width(Length::Fill),
             text(model.author)
-                .size(9)
+                .size(theme::TEXT_META)
                 .color(tokens.muted_foreground)
                 .width(Length::Fixed(72.0)),
             text(model.age)
-                .size(9)
+                .size(theme::TEXT_META)
                 .color(tokens.muted_foreground)
                 .width(Length::Fixed(54.0)),
         ]
@@ -311,19 +337,19 @@ fn reflog_row_view<'a>(
     if selected {
         line = line
             .push(
-                button(text("Copy SHA").size(9))
+                button(text("Copy SHA").size(theme::TEXT_META))
                     .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
                     .padding([2, 6])
                     .on_press(Msg::CopySha(sha.clone())),
             )
             .push(
-                button(text("Reset here").size(9))
+                button(text("Reset here").size(theme::TEXT_META))
                     .style(theme::button_style(tokens, theme::ButtonKind::Secondary))
                     .padding([2, 6])
                     .on_press(Msg::ResetTo(sha.clone())),
             )
             .push(
-                button(text("Branch here").size(9))
+                button(text("Branch here").size(theme::TEXT_META))
                     .style(theme::button_style(tokens, theme::ButtonKind::Secondary))
                     .padding([2, 6])
                     .on_press(Msg::BranchFrom(sha)),
@@ -346,17 +372,6 @@ fn reflog_row_view<'a>(
             },
             ..container::Style::default()
         })
-        .into()
-}
-
-fn note<'a>(tokens: Tokens, label: impl Into<String>, is_error: bool) -> Element<'a, Msg> {
-    let color = if is_error {
-        tokens.deleted
-    } else {
-        tokens.muted_foreground
-    };
-    container(text(label.into()).size(10).color(color))
-        .padding([4, 4])
         .into()
 }
 

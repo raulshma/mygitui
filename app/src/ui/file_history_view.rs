@@ -201,9 +201,11 @@ impl FileHistoryView {
         }
 
         let mut header = row![
-            text("File history").size(12).font(theme::semibold()),
+            text("File history")
+                .size(theme::TEXT_BODY)
+                .font(theme::semibold()),
             text(self.path.as_deref().unwrap_or_default())
-                .size(11)
+                .size(theme::TEXT_SMALL)
                 .font(theme::mono())
                 .color(tokens.muted_foreground),
         ]
@@ -211,42 +213,66 @@ impl FileHistoryView {
         .align_y(Alignment::Center);
         header = header.push(
             text(status_label(self))
-                .size(10)
+                .size(theme::TEXT_META)
                 .color(tokens.muted_foreground),
         );
         if self.error.is_some() {
-            header = header.push(text("· failed").size(10).color(tokens.deleted));
+            header = header.push(
+                text("· failed")
+                    .size(theme::TEXT_META)
+                    .color(tokens.deleted),
+            );
         }
         header = header.push(Space::new().width(Length::Fill));
         if self.next_cursor.is_some() {
             header = header.push(
-                button(text("Load more").size(9))
+                button(text("Load more").size(theme::TEXT_META))
                     .style(theme::button_style(tokens, theme::ButtonKind::Secondary))
                     .padding([2, 6])
                     .on_press(Msg::LoadMore),
             );
         }
-        header = header.push(
-            button(text("×").size(12))
+        header = header.push(theme::tip(
+            tokens,
+            button(text(theme::icon::CLOSE).size(theme::TEXT_BODY))
                 .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
-                .padding([2, 8])
+                .padding([4, 8])
                 .on_press(Msg::Close),
-        );
+            "Close file history",
+        ));
 
         let body: Element<'_, Msg> = if let Some(err) = &self.error {
-            if self.commits.is_empty() {
-                note(tokens, err, true)
+            // Re-opening the same path is the existing reload path, so it
+            // doubles as the retry affordance.
+            let retry = theme::mini_button(
+                tokens,
+                "Retry",
+                "Reload file history",
+                Some(Msg::Opened {
+                    path: self.path.clone().unwrap_or_default(),
+                }),
+            );
+            let label = if self.commits.is_empty() {
+                err.clone()
             } else {
-                note(
-                    tokens,
-                    format!("{err} · showing {} commits so far", self.commits.len()),
-                    true,
-                )
-            }
+                format!("{err} · showing {} commits so far", self.commits.len())
+            };
+            row![
+                theme::note(tokens, label, true, theme::NoteKind::Inline),
+                retry,
+            ]
+            .spacing(4)
+            .align_y(Alignment::Center)
+            .into()
         } else if self.commits.is_empty() && self.loading {
-            note(tokens, "Loading history…", false)
+            theme::note(tokens, "Loading history…", false, theme::NoteKind::Inline)
         } else if self.commits.is_empty() {
-            note(tokens, "No commits touch this file.", false)
+            theme::note(
+                tokens,
+                "No commits touch this file.",
+                false,
+                theme::NoteKind::Empty,
+            )
         } else {
             commit_list(self, tokens)
         };
@@ -331,16 +357,16 @@ fn commit_row_view<'a>(
     let line = button(
         row![
             text(model.sha)
-                .size(10)
+                .size(theme::TEXT_META)
                 .font(theme::mono())
                 .color(tokens.muted_foreground)
                 .width(Length::Fixed(56.0)),
             text(model.summary)
-                .size(11)
+                .size(theme::TEXT_SMALL)
                 .color(tokens.foreground)
                 .width(Length::Fill),
             text(model.age)
-                .size(9)
+                .size(theme::TEXT_META)
                 .color(tokens.muted_foreground)
                 .width(Length::Fixed(52.0))
                 .align_x(Alignment::End),
@@ -373,13 +399,13 @@ fn commit_row_view<'a>(
     if selected {
         row_view = row_view
             .push(
-                button(text("Diff").size(9))
+                button(text("Diff").size(theme::TEXT_META))
                     .style(theme::button_style(tokens, theme::ButtonKind::Secondary))
                     .padding([2, 6])
                     .on_press(Msg::OpenDiff(commit.sha.clone())),
             )
             .push(
-                button(text("View commit").size(9))
+                button(text("View commit").size(theme::TEXT_META))
                     .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
                     .padding([2, 6])
                     .on_press(Msg::CommitDetails(commit.sha.clone())),
@@ -387,17 +413,6 @@ fn commit_row_view<'a>(
     }
 
     container(row_view).width(Length::Fill).into()
-}
-
-fn note<'a>(tokens: Tokens, label: impl Into<String>, is_error: bool) -> Element<'a, Msg> {
-    let color = if is_error {
-        tokens.deleted
-    } else {
-        tokens.muted_foreground
-    };
-    container(text(label.into()).size(10).color(color))
-        .padding([8, 4])
-        .into()
 }
 
 fn clip(text: &str, max_chars: usize) -> String {

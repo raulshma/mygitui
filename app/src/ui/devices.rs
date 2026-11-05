@@ -21,16 +21,15 @@
 //! typing into the dialog (they go once into the OS keyring on save and are
 //! never read back for display).
 
-use iced::widget::{
-    button, checkbox, column, container, mouse_area, row, scrollable, text, text_input, Space,
-};
-use iced::{Alignment, Background, Border, Element, Length};
+use iced::widget::{button, checkbox, column, container, row, scrollable, text, text_input, Space};
+use iced::{Alignment, Element, Length};
 
 use crate::remote::commands::{DeviceInfo, DeviceInput, DeviceRepoCandidate};
 use crate::remote::profiles::{AuthKind, DeviceProfile, DEFAULT_POLL_SECS};
 use crate::workspace::{DirEntryKind, DirListing};
 
 use super::app::Message;
+use super::dialog::modal_with_cancel;
 use super::theme::{self, Tokens};
 
 /// Width of the add/edit dialog card.
@@ -722,7 +721,7 @@ pub fn home_section<'a>(state: &'a State, tokens: Tokens) -> Element<'a, Message
             } else {
                 "▸ SSH devices"
             })
-            .size(12)
+            .size(theme::TEXT_BODY)
             .font(theme::semibold()),
         )
         .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
@@ -731,12 +730,16 @@ pub fn home_section<'a>(state: &'a State, tokens: Tokens) -> Element<'a, Message
     );
     let caption = section_caption(state);
     if !caption.is_empty() {
-        header = header.push(text(caption).size(11).color(tokens.muted_foreground));
+        header = header.push(
+            text(caption)
+                .size(theme::TEXT_SMALL)
+                .color(tokens.muted_foreground),
+        );
     }
     if state.expanded {
         header = header.push(Space::new().width(Length::Fill));
         header = header.push(
-            button(text("Add device…").size(11))
+            button(text("Add device…").size(theme::TEXT_SMALL))
                 .style(theme::button_style(tokens, theme::ButtonKind::Secondary))
                 .padding([4, 10])
                 .on_press(Message::Devices(Msg::AddDevice)),
@@ -748,9 +751,11 @@ pub fn home_section<'a>(state: &'a State, tokens: Tokens) -> Element<'a, Message
         if let Some(err) = &state.load_error {
             body = body.push(
                 row![
-                    text(err.clone()).size(11).color(tokens.deleted),
+                    text(err.clone())
+                        .size(theme::TEXT_SMALL)
+                        .color(tokens.deleted),
                     Space::new().width(Length::Fill),
-                    button(text("Retry").size(11))
+                    button(text("Retry").size(theme::TEXT_SMALL))
                         .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
                         .padding([4, 10])
                         .on_press(Message::Devices(Msg::Refresh)),
@@ -761,13 +766,13 @@ pub fn home_section<'a>(state: &'a State, tokens: Tokens) -> Element<'a, Message
         } else if !state.loaded {
             body = body.push(
                 text("Loading devices…")
-                    .size(11)
+                    .size(theme::TEXT_SMALL)
                     .color(tokens.muted_foreground),
             );
         } else if state.rows.is_empty() {
             body = body.push(
                 text("No devices yet. Add one to open repositories stored on it over SSH.")
-                    .size(11)
+                    .size(theme::TEXT_SMALL)
                     .color(tokens.muted_foreground),
             );
         } else {
@@ -810,7 +815,7 @@ fn device_row<'a>(tokens: Tokens, device: &'a DeviceInfo) -> Element<'a, Message
                 .size(13)
                 .color(tokens.foreground),
             text(profile_summary(&device.profile))
-                .size(11)
+                .size(theme::TEXT_SMALL)
                 .color(tokens.muted_foreground),
         ]
         .width(Length::Fill),
@@ -889,7 +894,7 @@ fn row_button<'a>(
     label: &'a str,
     on_press: Option<Message>,
 ) -> Element<'a, Message> {
-    let b = button(text(label).size(11))
+    let b = button(text(label).size(theme::TEXT_SMALL))
         .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
         .padding([4, 8]);
     if let Some(message) = on_press {
@@ -907,7 +912,7 @@ fn status_dot(tokens: Tokens, status: Status) -> Element<'static, Message> {
         Status::Connecting => tokens.modified,
         Status::Offline => tokens.muted_foreground,
     };
-    container(text("●").size(10).color(color))
+    container(text("●").size(theme::TEXT_META).color(color))
         .width(Length::Fixed(16.0))
         .align_x(Alignment::Center)
         .into()
@@ -933,10 +938,12 @@ pub fn dialog_view(state: &State, tokens: &Tokens) -> Element<'static, Msg> {
         .size(14)
         .font(theme::semibold()),
         Space::new().width(Length::Fill),
-        button(text("×").size(12))
-            .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
-            .padding([3, 8])
-            .on_press(msg(DialogMsg::Cancel)),
+        theme::mini_button(
+            tokens,
+            theme::icon::CLOSE,
+            "Close dialog",
+            Some(msg(DialogMsg::Cancel)),
+        ),
     ]
     .align_y(Alignment::Center);
 
@@ -945,7 +952,7 @@ pub fn dialog_view(state: &State, tokens: &Tokens) -> Element<'static, Msg> {
         "Name (empty = user@host)",
         text_input("raspberry-pi", dialog.name.as_str())
             .on_input(move |v| msg(DialogMsg::NameChanged(v)))
-            .size(12)
+            .size(theme::TEXT_BODY)
             .padding([5, 8]),
     );
     let host = labeled_field(
@@ -953,7 +960,7 @@ pub fn dialog_view(state: &State, tokens: &Tokens) -> Element<'static, Msg> {
         "Host",
         text_input("192.168.1.42", dialog.host.as_str())
             .on_input(move |v| msg(DialogMsg::HostChanged(v)))
-            .size(12)
+            .size(theme::TEXT_BODY)
             .padding([5, 8]),
     );
     let port_user = row![
@@ -962,7 +969,7 @@ pub fn dialog_view(state: &State, tokens: &Tokens) -> Element<'static, Msg> {
             "Port",
             text_input("22", dialog.port.as_str())
                 .on_input(move |v| msg(DialogMsg::PortChanged(v)))
-                .size(12)
+                .size(theme::TEXT_BODY)
                 .padding([5, 8])
                 .width(Length::Fixed(90.0)),
         ),
@@ -971,7 +978,7 @@ pub fn dialog_view(state: &State, tokens: &Tokens) -> Element<'static, Msg> {
             "Username",
             text_input("pi", dialog.username.as_str())
                 .on_input(move |v| msg(DialogMsg::UsernameChanged(v)))
-                .size(12)
+                .size(theme::TEXT_BODY)
                 .padding([5, 8])
                 .width(Length::Fill),
         ),
@@ -980,7 +987,7 @@ pub fn dialog_view(state: &State, tokens: &Tokens) -> Element<'static, Msg> {
     .width(Length::Fill);
 
     let mut auth = column![text("Authentication")
-        .size(11)
+        .size(theme::TEXT_SMALL)
         .color(tokens.muted_foreground)]
     .spacing(4)
     .width(Length::Fill);
@@ -997,14 +1004,16 @@ pub fn dialog_view(state: &State, tokens: &Tokens) -> Element<'static, Msg> {
             button(
                 row![
                     text(if selected { "●" } else { "○" })
-                        .size(10)
+                        .size(theme::TEXT_META)
                         .color(if selected {
                             tokens.primary
                         } else {
                             tokens.muted_foreground
                         }),
-                    text(label).size(11).color(tokens.foreground),
-                    text(description).size(10).color(tokens.muted_foreground),
+                    text(label).size(theme::TEXT_SMALL).color(tokens.foreground),
+                    text(description)
+                        .size(theme::TEXT_META)
+                        .color(tokens.muted_foreground),
                 ]
                 .spacing(8)
                 .align_y(Alignment::Center),
@@ -1030,14 +1039,14 @@ pub fn dialog_view(state: &State, tokens: &Tokens) -> Element<'static, Msg> {
             "Private key path",
             text_input("~/.ssh/id_ed25519", dialog.key_path.as_str())
                 .on_input(move |v| msg(DialogMsg::KeyPathChanged(v)))
-                .size(12)
+                .size(theme::TEXT_BODY)
                 .padding([5, 8]),
         ));
         kind_fields = kind_fields.push(
             checkbox(dialog.has_passphrase)
                 .label("The key has a passphrase")
-                .size(12)
-                .text_size(11)
+                .size(theme::TEXT_BODY)
+                .text_size(theme::TEXT_SMALL)
                 .spacing(5)
                 .on_toggle(move |v| msg(DialogMsg::HasPassphraseToggled(v))),
         );
@@ -1053,7 +1062,7 @@ pub fn dialog_view(state: &State, tokens: &Tokens) -> Element<'static, Msg> {
                 text_input("Passphrase", dialog.passphrase.as_str())
                     .secure(true)
                     .on_input(move |v| msg(DialogMsg::PassphraseChanged(v)))
-                    .size(12)
+                    .size(theme::TEXT_BODY)
                     .padding([5, 8]),
             ));
         }
@@ -1069,7 +1078,7 @@ pub fn dialog_view(state: &State, tokens: &Tokens) -> Element<'static, Msg> {
             text_input("Password", dialog.password.as_str())
                 .secure(true)
                 .on_input(move |v| msg(DialogMsg::PasswordChanged(v)))
-                .size(12)
+                .size(theme::TEXT_BODY)
                 .padding([5, 8]),
         ));
     }
@@ -1079,7 +1088,7 @@ pub fn dialog_view(state: &State, tokens: &Tokens) -> Element<'static, Msg> {
         format!("Poll interval seconds (empty = {DEFAULT_POLL_SECS})"),
         text_input("5", dialog.poll_secs.as_str())
             .on_input(move |v| msg(DialogMsg::PollSecsChanged(v)))
-            .size(12)
+            .size(theme::TEXT_BODY)
             .padding([5, 8])
             .width(Length::Fixed(90.0)),
     );
@@ -1094,7 +1103,7 @@ pub fn dialog_view(state: &State, tokens: &Tokens) -> Element<'static, Msg> {
         } else {
             "Test connection"
         })
-        .size(11),
+        .size(theme::TEXT_SMALL),
     )
     .style(theme::button_style(tokens, theme::ButtonKind::Secondary))
     .padding([4, 10]);
@@ -1108,7 +1117,7 @@ pub fn dialog_view(state: &State, tokens: &Tokens) -> Element<'static, Msg> {
         } else {
             "Dials the device without saving anything."
         })
-        .size(10)
+        .size(theme::TEXT_META)
         .color(tokens.muted_foreground),
     ]
     .spacing(8)
@@ -1117,10 +1126,18 @@ pub fn dialog_view(state: &State, tokens: &Tokens) -> Element<'static, Msg> {
     .width(Length::Fill);
     match &dialog.test_result {
         Some(Ok(output)) => {
-            test_area = test_area.push(text(format!("ok: {output}")).size(10).color(tokens.added));
+            test_area = test_area.push(
+                text(format!("ok: {output}"))
+                    .size(theme::TEXT_META)
+                    .color(tokens.added),
+            );
         }
         Some(Err(err)) => {
-            test_area = test_area.push(text(err.clone()).size(10).color(tokens.deleted));
+            test_area = test_area.push(
+                text(err.clone())
+                    .size(theme::TEXT_META)
+                    .color(tokens.deleted),
+            );
         }
         None => {}
     }
@@ -1138,12 +1155,16 @@ pub fn dialog_view(state: &State, tokens: &Tokens) -> Element<'static, Msg> {
     .spacing(10)
     .width(Length::Fill);
     if let Some(err) = &dialog.error {
-        body = body.push(text(err.clone()).size(11).color(tokens.deleted));
+        body = body.push(
+            text(err.clone())
+                .size(theme::TEXT_SMALL)
+                .color(tokens.deleted),
+        );
     }
 
     let actions = row![
         Space::new().width(Length::Fill),
-        button(text("Cancel").size(11))
+        button(text("Cancel").size(theme::TEXT_SMALL))
             .style(theme::button_style(tokens, theme::ButtonKind::Secondary))
             .padding([4, 12])
             .on_press_maybe((!dialog.saving).then_some(msg(DialogMsg::Cancel))),
@@ -1155,7 +1176,7 @@ pub fn dialog_view(state: &State, tokens: &Tokens) -> Element<'static, Msg> {
             } else {
                 "Add device"
             })
-            .size(11)
+            .size(theme::TEXT_SMALL)
         )
         .style(theme::button_style(tokens, theme::ButtonKind::Primary))
         .padding([4, 12])
@@ -1166,36 +1187,15 @@ pub fn dialog_view(state: &State, tokens: &Tokens) -> Element<'static, Msg> {
     .spacing(6)
     .align_y(Alignment::Center);
 
-    let card = container(column![body, Space::new().height(8), actions].spacing(6))
-        .width(Length::Fixed(DIALOG_WIDTH))
-        .padding([16, 18])
-        .style(move |_theme| container::Style {
-            background: Some(Background::Color(tokens.card)),
-            text_color: Some(tokens.card_foreground),
-            border: Border {
-                color: tokens.border,
-                width: 1.0,
-                radius: 10.0.into(),
-            },
-            ..container::Style::default()
-        });
-
-    let scrim = container(card)
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .align_x(Alignment::Center)
-        .align_y(Alignment::Center)
-        .style(move |_theme| container::Style {
-            background: Some(Background::Color(theme::with_alpha(
-                iced::Color::BLACK,
-                0.4,
-            ))),
-            ..container::Style::default()
-        });
-
-    mouse_area(scrim)
-        .on_press(Msg::Dialog(DialogMsg::Cancel))
-        .into()
+    // Shared modal scaffold: scrim press cancels (the dialog's Cancel works
+    // even while a save is in flight), inputs consume their own presses.
+    modal_with_cancel(
+        tokens,
+        DIALOG_WIDTH,
+        body.into(),
+        actions.into(),
+        msg(DialogMsg::Cancel),
+    )
 }
 
 /// The device file browser / repo scanner overlay (layered above the page
@@ -1213,14 +1213,16 @@ pub fn browse_view(state: &State, tokens: &Tokens) -> Element<'static, Msg> {
             .size(14)
             .font(theme::semibold()),
         Space::new().width(Length::Fill),
-        button(text("×").size(12))
-            .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
-            .padding([3, 8])
-            .on_press(BrowseMsg::Close),
+        theme::mini_button(
+            tokens,
+            theme::icon::CLOSE,
+            "Close browser",
+            Some(BrowseMsg::Close)
+        ),
     ]
     .align_y(Alignment::Center);
 
-    let mut up = button(text("Up").size(11))
+    let mut up = button(text("Up").size(theme::TEXT_SMALL))
         .style(theme::button_style(tokens, theme::ButtonKind::Secondary))
         .padding([4, 10]);
     if !browse.loading && browse.listing.is_some() {
@@ -1230,7 +1232,7 @@ pub fn browse_view(state: &State, tokens: &Tokens) -> Element<'static, Msg> {
     let path_field = text_input("/home/pi/projects", browse.path_field.as_str())
         .on_input(BrowseMsg::PathChanged)
         .on_submit(BrowseMsg::PathSubmitted)
-        .size(11)
+        .size(theme::TEXT_SMALL)
         .padding([4, 8])
         .width(Length::Fill);
 
@@ -1240,7 +1242,7 @@ pub fn browse_view(state: &State, tokens: &Tokens) -> Element<'static, Msg> {
         } else {
             "Scan for repositories"
         })
-        .size(11),
+        .size(theme::TEXT_SMALL),
     )
     .style(theme::button_style(tokens, theme::ButtonKind::Secondary))
     .padding([4, 10]);
@@ -1259,13 +1261,17 @@ pub fn browse_view(state: &State, tokens: &Tokens) -> Element<'static, Msg> {
     .width(Length::Fill);
 
     if let Some(err) = &browse.error {
-        body = body.push(text(err.clone()).size(11).color(tokens.deleted));
+        body = body.push(
+            text(err.clone())
+                .size(theme::TEXT_SMALL)
+                .color(tokens.deleted),
+        );
     }
 
     // Directory listing (directories navigate; files are inert labels).
     let listing_area: Element<'static, BrowseMsg> = if browse.loading {
         text("Loading…")
-            .size(11)
+            .size(theme::TEXT_SMALL)
             .color(tokens.muted_foreground)
             .into()
     } else if let Some(listing) = &browse.listing {
@@ -1273,7 +1279,7 @@ pub fn browse_view(state: &State, tokens: &Tokens) -> Element<'static, Msg> {
         if listing.entries.is_empty() {
             rows = rows.push(
                 text("Empty directory")
-                    .size(11)
+                    .size(theme::TEXT_SMALL)
                     .color(tokens.muted_foreground),
             );
         }
@@ -1282,8 +1288,12 @@ pub fn browse_view(state: &State, tokens: &Tokens) -> Element<'static, Msg> {
             let row_element: Element<'static, BrowseMsg> = if is_dir {
                 button(
                     row![
-                        text("▸").size(10).color(tokens.muted_foreground),
-                        text(entry.name.clone()).size(12).color(tokens.foreground),
+                        text(theme::icon::COLLAPSE)
+                            .size(theme::TEXT_META)
+                            .color(tokens.muted_foreground),
+                        text(entry.name.clone())
+                            .size(theme::TEXT_BODY)
+                            .color(tokens.foreground),
                     ]
                     .spacing(6)
                     .align_y(Alignment::Center),
@@ -1297,7 +1307,7 @@ pub fn browse_view(state: &State, tokens: &Tokens) -> Element<'static, Msg> {
                 row![
                     Space::new().width(10.0),
                     text(entry.name.clone())
-                        .size(12)
+                        .size(theme::TEXT_BODY)
                         .color(tokens.muted_foreground),
                 ]
                 .spacing(6)
@@ -1315,14 +1325,14 @@ pub fn browse_view(state: &State, tokens: &Tokens) -> Element<'static, Msg> {
         if listing.truncated {
             listing_col = listing_col.push(
                 text("Listing truncated.")
-                    .size(10)
+                    .size(theme::TEXT_META)
                     .color(tokens.muted_foreground),
             );
         }
         listing_col.into()
     } else {
         text("Enter a path or press Scan.")
-            .size(11)
+            .size(theme::TEXT_SMALL)
             .color(tokens.muted_foreground)
             .into()
     };
@@ -1333,19 +1343,19 @@ pub fn browse_view(state: &State, tokens: &Tokens) -> Element<'static, Msg> {
     if browse.scanning {
         scan_area = scan_area.push(
             text("Scanning for git repositories…")
-                .size(11)
+                .size(theme::TEXT_SMALL)
                 .color(tokens.muted_foreground),
         );
     } else if let Some(candidates) = &browse.scan {
         scan_area = scan_area.push(
             text(format!("Repositories found: {}", candidates.len()))
-                .size(11)
+                .size(theme::TEXT_SMALL)
                 .font(theme::semibold()),
         );
         if candidates.is_empty() {
             scan_area = scan_area.push(
                 text("No repositories under the current directory (depth 4).")
-                    .size(11)
+                    .size(theme::TEXT_SMALL)
                     .color(tokens.muted_foreground),
             );
         }
@@ -1353,10 +1363,10 @@ pub fn browse_view(state: &State, tokens: &Tokens) -> Element<'static, Msg> {
             scan_area = scan_area.push(
                 row![
                     text(candidate.path.clone())
-                        .size(11)
+                        .size(theme::TEXT_SMALL)
                         .font(theme::mono())
                         .color(tokens.foreground),
-                    button(text("Open").size(10))
+                    button(text("Open").size(theme::TEXT_META))
                         .style(theme::button_style(tokens, theme::ButtonKind::Secondary))
                         .padding([2, 8])
                         .on_press_maybe((browse.opening.is_none()).then_some(
@@ -1375,14 +1385,14 @@ pub fn browse_view(state: &State, tokens: &Tokens) -> Element<'static, Msg> {
     if let Some(path) = &browse.opening {
         body = body.push(
             text(format!("Opening {path}…"))
-                .size(11)
+                .size(theme::TEXT_SMALL)
                 .color(tokens.muted_foreground),
         );
     }
 
     let actions = row![
         Space::new().width(Length::Fill),
-        button(text("Close").size(11))
+        button(text("Close").size(theme::TEXT_SMALL))
             .style(theme::button_style(tokens, theme::ButtonKind::Secondary))
             .padding([4, 12])
             .on_press(BrowseMsg::Close),
@@ -1390,34 +1400,15 @@ pub fn browse_view(state: &State, tokens: &Tokens) -> Element<'static, Msg> {
     .spacing(6)
     .align_y(Alignment::Center);
 
-    let card = container(column![body, Space::new().height(8), actions].spacing(6))
-        .width(Length::Fixed(BROWSE_WIDTH))
-        .padding([16, 18])
-        .style(move |_theme| container::Style {
-            background: Some(Background::Color(tokens.card)),
-            text_color: Some(tokens.card_foreground),
-            border: Border {
-                color: tokens.border,
-                width: 1.0,
-                radius: 10.0.into(),
-            },
-            ..container::Style::default()
-        });
-
-    let scrim = container(card)
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .align_x(Alignment::Center)
-        .align_y(Alignment::Center)
-        .style(move |_theme| container::Style {
-            background: Some(Background::Color(theme::with_alpha(
-                iced::Color::BLACK,
-                0.4,
-            ))),
-            ..container::Style::default()
-        });
-
-    let content: Element<'static, BrowseMsg> = mouse_area(scrim).on_press(BrowseMsg::Close).into();
+    // Shared modal scaffold: scrim press closes the browser, listing rows
+    // and inputs consume their own presses.
+    let content: Element<'static, BrowseMsg> = modal_with_cancel(
+        tokens,
+        BROWSE_WIDTH,
+        body.into(),
+        actions.into(),
+        BrowseMsg::Close,
+    );
     content.map(Msg::Browse)
 }
 
@@ -1429,7 +1420,9 @@ fn labeled_field<'a>(
     field: impl Into<Element<'a, Msg>>,
 ) -> Element<'a, Msg> {
     column![
-        text(label.into()).size(11).color(tokens.muted_foreground),
+        text(label.into())
+            .size(theme::TEXT_SMALL)
+            .color(tokens.muted_foreground),
         field.into(),
     ]
     .spacing(3)

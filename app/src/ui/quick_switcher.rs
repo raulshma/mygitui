@@ -29,11 +29,10 @@
 use std::path::PathBuf;
 
 use iced::keyboard::{key::Named, Key, Modifiers};
-use iced::widget::{
-    button, column, container, mouse_area, row, scrollable, text, text_input, Space,
-};
-use iced::{Alignment, Background, Border, Element, Length, Shadow, Vector};
+use iced::widget::{button, column, container, row, scrollable, text, text_input, Space};
+use iced::{Alignment, Background, Element, Length};
 
+use super::dialog::modal_with_cancel;
 use super::theme::{self, Tokens};
 
 /// Width of the switcher card.
@@ -347,10 +346,12 @@ pub fn view(state: &State, tokens: &Tokens) -> Element<'static, Msg> {
     let query_row = row![
         text("›").size(13).color(tokens.muted_foreground),
         text_input("Switch repository…", state.query.as_str())
-            .size(12)
+            .size(theme::TEXT_BODY)
             .padding([4, 4])
             .width(Length::Fill),
-        text("enter to open").size(9).color(tokens.muted_foreground),
+        text("enter to open")
+            .size(theme::TEXT_META)
+            .color(tokens.muted_foreground),
     ]
     .spacing(8)
     .align_y(Alignment::Center);
@@ -365,7 +366,7 @@ pub fn view(state: &State, tokens: &Tokens) -> Element<'static, Msg> {
             } else {
                 "No matching repositories."
             })
-            .size(11)
+            .size(theme::TEXT_SMALL)
             .color(tokens.muted_foreground),
         )
         .padding([6, 2])
@@ -387,41 +388,19 @@ pub fn view(state: &State, tokens: &Tokens) -> Element<'static, Msg> {
             .into()
     };
 
-    let card = container(column![query_row, Space::new().height(4), list].spacing(6))
-        .width(Length::Fixed(SWITCHER_WIDTH))
-        .padding([12, 14])
-        .style(move |_theme| container::Style {
-            background: Some(Background::Color(tokens.popover)),
-            text_color: Some(tokens.popover_foreground),
-            border: Border {
-                color: tokens.border,
-                width: 1.0,
-                radius: 10.0.into(),
-            },
-            shadow: Shadow {
-                color: theme::with_alpha(iced::Color::BLACK, 0.25),
-                offset: Vector::new(0.0, 8.0),
-                blur_radius: 24.0,
-            },
-            snap: true,
-        });
-
-    let scrim = container(card)
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .align_x(Alignment::Center)
-        .align_y(Alignment::Center)
-        .style(move |_theme| container::Style {
-            background: Some(Background::Color(theme::with_alpha(
-                iced::Color::BLACK,
-                0.4,
-            ))),
-            ..container::Style::default()
-        });
-
-    // As in dialog.rs, the query input and row buttons consume their own
-    // presses; presses on the scrim or the card's padding close the switcher.
-    mouse_area(scrim).on_press(Msg::Close).into()
+    // Shared modal scaffold (its card look replaces the popover tint so
+    // every overlay reads the same): the query input and row buttons consume
+    // their own presses; presses on the scrim or the card's padding close
+    // the switcher.
+    modal_with_cancel(
+        tokens,
+        SWITCHER_WIDTH,
+        column![query_row, Space::new().height(4), list]
+            .spacing(6)
+            .into(),
+        Space::new().width(0).into(),
+        Msg::Close,
+    )
 }
 
 fn entry_row(
@@ -433,14 +412,23 @@ fn entry_row(
     let tokens = *tokens;
     let mut name_line = row![].spacing(4).align_y(Alignment::Center);
     if entry.pinned {
-        name_line = name_line.push(text("★").size(9).color(tokens.modified));
+        // Pinned (not "changed"): the amber `modified` hue read as a warning.
+        name_line = name_line.push(
+            text(theme::icon::PIN)
+                .size(theme::TEXT_META)
+                .color(tokens.primary),
+        );
     }
-    name_line = name_line.push(text(entry.name.clone()).size(11).color(tokens.foreground));
+    name_line = name_line.push(
+        text(entry.name.clone())
+            .size(theme::TEXT_SMALL)
+            .color(tokens.foreground),
+    );
 
     let content = column![
         name_line,
         text(entry.path.display().to_string())
-            .size(9)
+            .size(theme::TEXT_META)
             .color(tokens.muted_foreground),
     ]
     .spacing(1)

@@ -6,14 +6,18 @@
 //! forwarded to the broker (optionally persisted to the OS keyring by the
 //! service layer); the UI never writes them to disk.
 
-use iced::widget::{button, checkbox, column, container, mouse_area, row, text, text_input, Space};
+use iced::widget::{button, checkbox, column, container, row, text, text_input, Space};
 use iced::{Alignment, Background, Border, Element, Length};
 
 use crate::auth::AuthRequestEvent;
 use crate::remote::prompts::{DeviceAuthRequestEvent, HostKeyRequestEvent};
 
 use super::app::Message;
+use super::dialog::modal_with_cancel;
 use super::theme::{self, Tokens};
+
+/// Width of the prompt card (matches the settings/clone dialog cards).
+const CARD_WIDTH: f32 = 480.0;
 
 /// FE state of an HTTP(S)/SSH credential request.
 #[derive(Debug)]
@@ -90,11 +94,11 @@ fn auth_prompt<'a>(tokens: Tokens, state: &AuthPromptState) -> Element<'a, Messa
             .font(theme::semibold()),
         Space::new().height(4),
         text(clip(&state.request.url, 72))
-            .size(11)
+            .size(theme::TEXT_SMALL)
             .font(theme::mono())
             .color(tokens.muted_foreground),
         text(state.request.prompt.clone())
-            .size(11)
+            .size(theme::TEXT_SMALL)
             .color(tokens.foreground),
     ]
     .spacing(3);
@@ -104,7 +108,7 @@ fn auth_prompt<'a>(tokens: Tokens, state: &AuthPromptState) -> Element<'a, Messa
             text_input("Username", state.username.as_str())
                 .on_input(Message::AuthUsernameChanged)
                 .on_submit(Message::AuthPromptSubmit)
-                .size(11)
+                .size(theme::TEXT_SMALL)
                 .padding([5, 8]),
         );
     }
@@ -114,20 +118,20 @@ fn auth_prompt<'a>(tokens: Tokens, state: &AuthPromptState) -> Element<'a, Messa
                 .secure(true)
                 .on_input(Message::AuthPasswordChanged)
                 .on_submit(Message::AuthPromptSubmit)
-                .size(11)
+                .size(theme::TEXT_SMALL)
                 .padding([5, 8]),
         );
         body = body.push(
             checkbox(state.store)
                 .label("Remember in the OS keyring")
-                .size(12)
-                .text_size(10)
+                .size(theme::TEXT_BODY)
+                .text_size(theme::TEXT_META)
                 .spacing(4)
                 .on_toggle(Message::AuthStoreToggled),
         );
     }
 
-    let mut confirm = button(text("Continue").size(11))
+    let mut confirm = button(text("Continue").size(theme::TEXT_SMALL))
         .style(theme::button_style(tokens, theme::ButtonKind::Primary))
         .padding([4, 12]);
     if state.can_submit() {
@@ -136,7 +140,7 @@ fn auth_prompt<'a>(tokens: Tokens, state: &AuthPromptState) -> Element<'a, Messa
 
     let actions = row![
         Space::new().width(Length::Fill),
-        button(text("Cancel").size(11))
+        button(text("Cancel").size(theme::TEXT_SMALL))
             .style(theme::button_style(tokens, theme::ButtonKind::Secondary))
             .padding([4, 12])
             .on_press(Message::AuthPromptCancel),
@@ -145,9 +149,15 @@ fn auth_prompt<'a>(tokens: Tokens, state: &AuthPromptState) -> Element<'a, Messa
     .spacing(6)
     .align_y(Alignment::Center);
 
-    card(
+    // Shared modal scaffold. A scrim press answers the prompt with its
+    // cancel — the blocked op unblocks instead of hanging on the auth
+    // timeout that a silently vanished prompt used to incur.
+    modal_with_cancel(
         tokens,
-        column![body, Space::new().height(8), actions].spacing(6),
+        CARD_WIDTH,
+        body.into(),
+        actions.into(),
+        Message::AuthPromptCancel,
     )
 }
 
@@ -168,7 +178,7 @@ fn host_key_prompt<'a>(tokens: Tokens, state: &HostKeyPromptState) -> Element<'a
             "{}:{} offers a {} key.",
             request.host, request.port, request.algo
         ))
-        .size(11)
+        .size(theme::TEXT_SMALL)
         .color(tokens.foreground),
         Space::new().height(4),
         mono_box(tokens, &request.fingerprint),
@@ -178,13 +188,13 @@ fn host_key_prompt<'a>(tokens: Tokens, state: &HostKeyPromptState) -> Element<'a
     if changed {
         body = body.push(
             text("This differs from the pinned key. Accepting can expose the connection to a man-in-the-middle.")
-                .size(11)
+                .size(theme::TEXT_SMALL)
                 .color(tokens.deleted),
         );
         if let Some(pinned) = request.pinned_fingerprint.as_deref() {
             body = body.push(
                 text(format!("Pinned: {pinned}"))
-                    .size(10)
+                    .size(theme::TEXT_META)
                     .font(theme::mono())
                     .color(tokens.muted_foreground),
             );
@@ -193,7 +203,7 @@ fn host_key_prompt<'a>(tokens: Tokens, state: &HostKeyPromptState) -> Element<'a
 
     let actions = row![
         Space::new().width(Length::Fill),
-        button(text("Reject").size(11))
+        button(text("Reject").size(theme::TEXT_SMALL))
             .style(theme::button_style(tokens, theme::ButtonKind::Secondary))
             .padding([4, 12])
             .on_press(Message::HostKeyAnswer(false)),
@@ -203,7 +213,7 @@ fn host_key_prompt<'a>(tokens: Tokens, state: &HostKeyPromptState) -> Element<'a
             } else {
                 "Accept & pin"
             })
-            .size(11)
+            .size(theme::TEXT_SMALL)
         )
         .style(theme::button_style(
             tokens,
@@ -219,9 +229,13 @@ fn host_key_prompt<'a>(tokens: Tokens, state: &HostKeyPromptState) -> Element<'a
     .spacing(6)
     .align_y(Alignment::Center);
 
-    card(
+    // Scrim press = Reject (answers the broker, so the blocked op proceeds).
+    modal_with_cancel(
         tokens,
-        column![body, Space::new().height(8), actions].spacing(6),
+        CARD_WIDTH,
+        body.into(),
+        actions.into(),
+        Message::HostKeyAnswer(false),
     )
 }
 
@@ -232,7 +246,7 @@ fn device_prompt<'a>(tokens: Tokens, state: &DeviceSecretPromptState) -> Element
         "Device password"
     };
 
-    let mut confirm = button(text("Unlock").size(11))
+    let mut confirm = button(text("Unlock").size(theme::TEXT_SMALL))
         .style(theme::button_style(tokens, theme::ButtonKind::Primary))
         .padding([4, 12]);
     if !state.password.is_empty() {
@@ -243,18 +257,18 @@ fn device_prompt<'a>(tokens: Tokens, state: &DeviceSecretPromptState) -> Element
         text(title).size(14).font(theme::semibold()),
         Space::new().height(4),
         text(state.request.prompt.clone())
-            .size(11)
+            .size(theme::TEXT_SMALL)
             .color(tokens.foreground),
         text_input("Secret", state.password.as_str())
             .secure(true)
             .on_input(Message::DeviceSecretChanged)
             .on_submit(Message::DeviceSecretSubmit)
-            .size(11)
+            .size(theme::TEXT_SMALL)
             .padding([5, 8]),
         checkbox(state.store)
             .label("Remember in the OS keyring")
-            .size(12)
-            .text_size(10)
+            .size(theme::TEXT_BODY)
+            .text_size(theme::TEXT_META)
             .spacing(4)
             .on_toggle(Message::DeviceSecretStoreToggled),
     ]
@@ -262,7 +276,7 @@ fn device_prompt<'a>(tokens: Tokens, state: &DeviceSecretPromptState) -> Element
 
     let actions = row![
         Space::new().width(Length::Fill),
-        button(text("Cancel").size(11))
+        button(text("Cancel").size(theme::TEXT_SMALL))
             .style(theme::button_style(tokens, theme::ButtonKind::Secondary))
             .padding([4, 12])
             .on_press(Message::DeviceSecretCancel),
@@ -271,48 +285,20 @@ fn device_prompt<'a>(tokens: Tokens, state: &DeviceSecretPromptState) -> Element
     .spacing(6)
     .align_y(Alignment::Center);
 
-    card(
+    // Scrim press cancels the unlock (answers the broker).
+    modal_with_cancel(
         tokens,
-        column![body, Space::new().height(8), actions].spacing(6),
+        CARD_WIDTH,
+        body.into(),
+        actions.into(),
+        Message::DeviceSecretCancel,
     )
-}
-
-fn card<'a>(tokens: Tokens, content: impl Into<Element<'a, Message>>) -> Element<'a, Message> {
-    let card = container(content)
-        .width(Length::Fixed(460.0))
-        .padding([16, 18])
-        .style(move |_theme| container::Style {
-            background: Some(Background::Color(tokens.card)),
-            border: Border {
-                color: tokens.border,
-                width: 1.0,
-                radius: 10.0.into(),
-            },
-            ..container::Style::default()
-        });
-
-    let scrim = container(card)
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .align_x(Alignment::Center)
-        .align_y(Alignment::Center)
-        .style(move |_theme| container::Style {
-            background: Some(Background::Color(theme::with_alpha(
-                iced::Color::BLACK,
-                0.45,
-            ))),
-            ..container::Style::default()
-        });
-
-    // Swallow outside presses (no dismissal): a blocked backend op would
-    // hang until the auth timeout if the prompt vanished without an answer.
-    mouse_area(scrim).on_press(Message::Noop).into()
 }
 
 fn mono_box<'a>(tokens: Tokens, value: &str) -> Element<'a, Message> {
     container(
         text(value.to_string())
-            .size(11)
+            .size(theme::TEXT_SMALL)
             .font(theme::mono())
             .color(tokens.foreground),
     )

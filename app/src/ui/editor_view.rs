@@ -418,15 +418,12 @@ impl EditorView {
         };
 
         let header = row![
-            text(path).size(12).font(theme::mono()),
+            text(path).size(theme::TEXT_BODY).font(theme::mono()),
             text(if self.dirty { "•" } else { " " })
-                .size(12)
+                .size(theme::TEXT_BODY)
                 .color(tokens.modified),
             Space::new().width(Length::Fill),
-            button(text("×").size(12))
-                .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
-                .padding([2, 8])
-                .on_press(Msg::Close),
+            theme::mini_button(tokens, theme::icon::CLOSE, "Close editor", Some(Msg::Close)),
         ]
         .spacing(4)
         .align_y(Alignment::Center)
@@ -437,13 +434,21 @@ impl EditorView {
 
         // Status / error line.
         if self.loading {
-            body = body.push(text("loading…").size(10).color(tokens.muted_foreground));
+            body = body.push(
+                text("loading…")
+                    .size(theme::TEXT_META)
+                    .color(tokens.muted_foreground),
+            );
         } else if self.saving {
-            body = body.push(text("saving…").size(10).color(tokens.muted_foreground));
+            body = body.push(
+                text("saving…")
+                    .size(theme::TEXT_META)
+                    .color(tokens.muted_foreground),
+            );
         } else if let Some(error) = &self.error {
             body = body.push(
                 text(error.as_str())
-                    .size(10)
+                    .size(theme::TEXT_META)
                     .color(tokens.destructive)
                     .width(Length::Fill),
             );
@@ -454,14 +459,16 @@ impl EditorView {
             body = body.push(
                 container(
                     column![
-                        text(conflict.as_str()).size(10).width(Length::Fill),
+                        text(conflict.as_str())
+                            .size(theme::TEXT_META)
+                            .width(Length::Fill),
                         row![
                             Space::new().width(Length::Fill),
-                            button(text("Overwrite").size(9))
+                            button(text("Overwrite").size(theme::TEXT_META))
                                 .style(theme::button_style(tokens, theme::ButtonKind::Danger))
                                 .padding([2, 8])
                                 .on_press(Msg::ConflictOverwrite),
-                            button(text("Reload").size(9))
+                            button(text("Reload").size(theme::TEXT_META))
                                 .style(theme::button_style(tokens, theme::ButtonKind::Secondary))
                                 .padding([2, 8])
                                 .on_press(Msg::ConflictReload),
@@ -490,15 +497,10 @@ impl EditorView {
 
         // Toolbar: save + open-in-external-editor.
         let mut toolbar = row![
-            button(text("Save").size(10))
-                .style(theme::button_style(
-                    tokens,
-                    if self.can_save() {
-                        theme::ButtonKind::Primary
-                    } else {
-                        theme::ButtonKind::Secondary
-                    }
-                ))
+            // Stays `Primary` while disabled so the dimmed Disabled style
+            // (not a normal-looking Secondary) shows the click won't land.
+            button(text("Save").size(theme::TEXT_META))
+                .style(theme::button_style(tokens, theme::ButtonKind::Primary))
                 .padding([4, 12])
                 .on_press_maybe(self.can_save().then_some(Msg::SavePressed)),
             Space::new().width(Length::Fill),
@@ -513,12 +515,12 @@ impl EditorView {
                         self.selected_app.clone(),
                         Msg::AppSelected,
                     )
-                    .text_size(10)
+                    .text_size(theme::TEXT_META)
                     .padding([3, 6])
                     .width(Length::Fixed(170.0)),
                 )
                 .push(
-                    button(text("Open in…").size(10))
+                    button(text("Open in…").size(theme::TEXT_META))
                         .style(theme::button_style(tokens, theme::ButtonKind::Secondary))
                         .padding([4, 10])
                         .on_press_maybe(
@@ -534,7 +536,7 @@ impl EditorView {
             text_editor(&self.content)
                 .placeholder("Empty file")
                 .on_action(Msg::ContentChanged)
-                .size(12)
+                .size(theme::TEXT_BODY)
                 .padding(8)
                 .font(theme::mono())
                 .height(Length::Fill),

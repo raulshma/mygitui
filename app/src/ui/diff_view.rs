@@ -150,10 +150,21 @@ pub fn view<'a>(
     mode: PaneMode,
 ) -> Element<'a, Message> {
     match &pane.content {
-        DiffContent::Empty => note(tokens, "Select a file or commit to see its diff."),
-        DiffContent::Loading => note(tokens, "Loading diff…"),
-        DiffContent::Failed(error) => note_error(tokens, error),
-        DiffContent::Ready(files) if files.is_empty() => note(tokens, "No changes."),
+        DiffContent::Empty => theme::note(
+            tokens,
+            "Select a file or commit to see its diff.",
+            false,
+            theme::NoteKind::Empty,
+        ),
+        DiffContent::Loading => {
+            theme::note(tokens, "Loading diff…", false, theme::NoteKind::Inline)
+        }
+        DiffContent::Failed(error) => {
+            theme::note(tokens, error.clone(), true, theme::NoteKind::Inline)
+        }
+        DiffContent::Ready(files) if files.is_empty() => {
+            theme::note(tokens, "No changes.", false, theme::NoteKind::Empty)
+        }
         DiffContent::Ready(files) => {
             let toolbar = toolbar(pane, slot, tokens, split, wrap, mode, files);
             let body = if wrap {
@@ -181,12 +192,12 @@ fn toolbar<'a>(
     let mut stats = row![].spacing(8).align_y(Alignment::Center);
     stats = stats.push(
         text(format!("+{}", pane.model.total_additions))
-            .size(11)
+            .size(theme::TEXT_SMALL)
             .color(tokens.added),
     );
     stats = stats.push(
         text(format!("−{}", pane.model.total_deletions))
-            .size(11)
+            .size(theme::TEXT_SMALL)
             .color(tokens.deleted),
     );
     stats = stats.push(
@@ -195,14 +206,14 @@ fn toolbar<'a>(
         } else {
             format!("{} files", files.len())
         })
-        .size(11)
+        .size(theme::TEXT_SMALL)
         .color(tokens.muted_foreground),
     );
 
     let mut actions = row![].spacing(4).align_y(Alignment::Center);
     if !pane.lines.is_empty() {
         actions = actions.push(
-            button(text(format!("Copy {}", pane.lines.len())).size(11))
+            button(text(format!("Copy {}", pane.lines.len())).size(theme::TEXT_SMALL))
                 .style(theme::button_style(tokens, theme::ButtonKind::Secondary))
                 .padding([3, 8])
                 .on_press(Message::CopySelectedLines { slot }),
@@ -217,21 +228,21 @@ fn toolbar<'a>(
                     pane.lines.len(),
                     if pane.lines.len() == 1 { "" } else { "s" }
                 ))
-                .size(11),
+                .size(theme::TEXT_SMALL),
             )
             .style(theme::button_style(tokens, theme::ButtonKind::Primary))
             .padding([3, 8])
             .on_press(Message::StageSelectedLines { slot }),
         );
         actions = actions.push(
-            button(text("Clear").size(11))
+            button(text("Clear").size(theme::TEXT_SMALL))
                 .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
                 .padding([3, 8])
                 .on_press(Message::ClearLineSelection { slot }),
         );
     }
     actions = actions.push(
-        button(text(if split { "Split" } else { "Unified" }).size(11))
+        button(text(if split { "Split" } else { "Unified" }).size(theme::TEXT_SMALL))
             .style(theme::button_style(
                 tokens,
                 if split {
@@ -244,7 +255,7 @@ fn toolbar<'a>(
             .on_press(Message::DiffToggleSplit),
     );
     actions = actions.push(
-        button(text("Wrap").size(11))
+        button(text("Wrap").size(theme::TEXT_SMALL))
             .style(theme::button_style(
                 tokens,
                 if wrap {
@@ -336,9 +347,11 @@ fn wrapped_rows<'a>(
         content = content.push(render_row(*row, pane, slot, tokens, split, mode, files));
     }
     if pane.model.rows.len() > WRAP_CAP {
-        content = content.push(note(
+        content = content.push(theme::note(
             tokens,
             "Wrap mode renders at most 4000 rows; switch to the virtualized view for the rest.",
+            false,
+            theme::NoteKind::Inline,
         ));
     }
     scrollable(content)
@@ -443,26 +456,30 @@ fn file_header<'a>(
 
     let summary = container(
         row![
-            text(if collapsed { "▸" } else { "▾" })
-                .size(10)
-                .color(tokens.muted_foreground),
+            text(if collapsed {
+                theme::icon::COLLAPSE
+            } else {
+                theme::icon::EXPAND
+            })
+            .size(theme::TEXT_META)
+            .color(tokens.muted_foreground),
             text(file_kind_letter(kind))
-                .size(11)
+                .size(theme::TEXT_SMALL)
                 .font(theme::mono())
                 .color(color),
             text(path)
-                .size(12)
+                .size(theme::TEXT_BODY)
                 .font(theme::mono())
                 .color(tokens.foreground)
                 .width(Length::Fill),
             text(kind_label(kind))
-                .size(10)
+                .size(theme::TEXT_META)
                 .color(tokens.muted_foreground),
             text(format!("+{}", file.additions))
-                .size(10)
+                .size(theme::TEXT_META)
                 .color(tokens.added),
             text(format!("−{}", file.deletions))
-                .size(10)
+                .size(theme::TEXT_META)
                 .color(tokens.deleted),
         ]
         .spacing(6)
@@ -492,7 +509,7 @@ fn file_header<'a>(
                 } else {
                     "Stage file"
                 })
-                .size(10),
+                .size(theme::TEXT_META),
             )
             .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
             .padding([3, 8])
@@ -558,7 +575,7 @@ fn hunk_header<'a>(
     mode: PaneMode,
 ) -> Element<'a, Message> {
     // Start/count come from the hunk itself (same derivation as the row
-    // model's `hunk_counts`), so the header and its ✨ payload agree.
+    // model's `hunk_counts`), so the header and its AI payload agree.
     let Some(diff_file) = files.get(file) else {
         return Space::new().width(0).into();
     };
@@ -570,7 +587,7 @@ fn hunk_header<'a>(
     let mut content = row![text(format!(
         "@@ -{old_start},{old_count} +{new_start},{new_count} @@"
     ))
-    .size(11)
+    .size(theme::TEXT_SMALL)
     .font(theme::mono())
     .color(tokens.muted_foreground)
     .width(Length::Fill),]
@@ -579,7 +596,7 @@ fn hunk_header<'a>(
 
     if let Some(hunk_payload) = hunk_text(files, file, hunk) {
         content = content.push(
-            button(text("✨").size(10))
+            button(text(format!("{} Explain", theme::icon::AI)).size(theme::TEXT_META))
                 .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
                 .padding([2, 6])
                 .on_press(Message::AiExplainHunk {
@@ -596,7 +613,7 @@ fn hunk_header<'a>(
                 } else {
                     "Stage hunk"
                 })
-                .size(10),
+                .size(theme::TEXT_META),
             )
             .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
             .padding([2, 6])
@@ -651,20 +668,20 @@ fn unified_line<'a>(
     let content = row![
         gutter,
         text(diff_line.old_no.map(number).unwrap_or_default())
-            .size(11)
+            .size(theme::TEXT_SMALL)
             .font(theme::mono())
             .color(tokens.muted_foreground)
             .width(Length::Fixed(40.0))
             .align_x(Alignment::End),
         text(diff_line.new_no.map(number).unwrap_or_default())
-            .size(11)
+            .size(theme::TEXT_SMALL)
             .font(theme::mono())
             .color(tokens.muted_foreground)
             .width(Length::Fixed(40.0))
             .align_x(Alignment::End),
         Space::new().width(6),
         text(diff_line.origin.to_string())
-            .size(12)
+            .size(theme::TEXT_BODY)
             .font(theme::mono())
             .color(origin_color(tokens, diff_line.origin))
             .width(Length::Fixed(14.0)),
@@ -700,7 +717,7 @@ fn line_gutter<'a>(
         return Space::new().width(Length::Fixed(0.0)).into();
     };
     let selected = pane.lines.contains(file, hunk, new_no);
-    let cell = container(text("▍").size(12).color(if selected {
+    let cell = container(text("▍").size(theme::TEXT_BODY).color(if selected {
         tokens.primary
     } else {
         theme::with_alpha(tokens.primary, 0.0)
@@ -815,7 +832,7 @@ fn split_cell<'a>(
         if new_side && mode.line_actions {
             content = content.push(
                 mouse_area(
-                    container(text("▍").size(12).color(if selected {
+                    container(text("▍").size(theme::TEXT_BODY).color(if selected {
                         tokens.primary
                     } else {
                         theme::with_alpha(tokens.primary, 0.0)
@@ -840,7 +857,7 @@ fn split_cell<'a>(
                 .map(|value| value.to_string())
                 .unwrap_or_default(),
         )
-        .size(11)
+        .size(theme::TEXT_SMALL)
         .font(theme::mono())
         .color(tokens.muted_foreground)
         .width(Length::Fixed(40.0))
@@ -849,7 +866,7 @@ fn split_cell<'a>(
     content = content.push(Space::new().width(4));
     content = content.push(
         text(marker)
-            .size(12)
+            .size(theme::TEXT_BODY)
             .font(theme::mono())
             .color(origin_color(tokens, origin))
             .width(Length::Fixed(12.0)),
@@ -857,7 +874,7 @@ fn split_cell<'a>(
     content = content.push(match line {
         Some(diff_line) => line_body(tokens, path, diff_line),
         None => text(String::new())
-            .size(12)
+            .size(theme::TEXT_BODY)
             .font(theme::mono())
             .color(tokens.foreground)
             .width(Length::Fill)
@@ -881,7 +898,7 @@ fn split_cell<'a>(
 fn line_body<'a>(tokens: Tokens, path: &str, line: &'a DiffLine) -> Element<'a, Message> {
     if !highlight::enabled() || line.origin == '=' || line.text.is_empty() {
         return text(line.text.as_str())
-            .size(12)
+            .size(theme::TEXT_BODY)
             .font(theme::mono())
             .color(tokens.foreground)
             .width(Length::Fill)
@@ -890,7 +907,7 @@ fn line_body<'a>(tokens: Tokens, path: &str, line: &'a DiffLine) -> Element<'a, 
     let runs = highlight::for_mode(tokens.dark).highlight_line(path, &line.text, tokens.foreground);
     if runs.is_empty() {
         return text(line.text.as_str())
-            .size(12)
+            .size(theme::TEXT_BODY)
             .font(theme::mono())
             .color(tokens.foreground)
             .width(Length::Fill)
@@ -903,7 +920,7 @@ fn line_body<'a>(tokens: Tokens, path: &str, line: &'a DiffLine) -> Element<'a, 
     };
     let spans = highlight::to_spans(runs, &line.highlights, emphasis);
     rich_text(spans)
-        .size(12)
+        .size(theme::TEXT_BODY)
         .font(theme::mono())
         .width(Length::Fill)
         .into()
@@ -913,7 +930,7 @@ fn binary_row<'a>(tokens: Tokens, file: Option<&FileDiff>) -> Element<'a, Messag
     let label = file
         .map(|file| format!("Binary file — {} bytes of content are not shown", file.path))
         .unwrap_or_else(|| "Binary file".to_string());
-    note(tokens, label.as_str())
+    theme::note(tokens, label, false, theme::NoteKind::Inline)
 }
 
 /// Side-by-side image preview. Handles arrive asynchronously from the shell
@@ -938,14 +955,16 @@ fn image_row<'a>(
                 .height(Length::Fill)
                 .into(),
             None => text("no preview")
-                .size(11)
+                .size(theme::TEXT_SMALL)
                 .color(tokens.muted_foreground)
                 .width(Length::Fill)
                 .align_x(Alignment::Center)
                 .into(),
         };
         column![
-            text(title).size(10).color(tokens.muted_foreground),
+            text(title)
+                .size(theme::TEXT_META)
+                .color(tokens.muted_foreground),
             container(body)
                 .width(Length::Fill)
                 .height(Length::Fixed(220.0))
@@ -958,7 +977,9 @@ fn image_row<'a>(
 
     container(
         column![
-            text(label).size(12).color(tokens.muted_foreground),
+            text(label)
+                .size(theme::TEXT_BODY)
+                .color(tokens.muted_foreground),
             row![side("Before", old), side("After", new)].spacing(8),
         ]
         .spacing(8)
@@ -977,18 +998,4 @@ fn line_at(files: &[FileDiff], file: usize, hunk: usize, line: usize) -> Option<
 
 fn number(value: u32) -> String {
     value.to_string()
-}
-
-fn note<'a>(tokens: Tokens, message: impl Into<String>) -> Element<'a, Message> {
-    container(text(message.into()).size(12).color(tokens.muted_foreground))
-        .padding([16, 12])
-        .width(Length::Fill)
-        .into()
-}
-
-fn note_error<'a>(tokens: Tokens, message: impl Into<String>) -> Element<'a, Message> {
-    container(text(message.into()).size(12).color(tokens.deleted))
-        .padding([16, 12])
-        .width(Length::Fill)
-        .into()
 }

@@ -35,7 +35,9 @@ pub fn view<'a>(tab: &'a Tab, tokens: Tokens) -> Element<'a, Message> {
     let state = &tab.branches;
 
     let mut header = row![
-        text("Branches").size(12).font(theme::semibold()),
+        text("Branches")
+            .size(theme::TEXT_BODY)
+            .font(theme::semibold()),
         Space::new().width(6),
     ]
     .align_y(Alignment::Center);
@@ -43,27 +45,31 @@ pub fn view<'a>(tab: &'a Tab, tokens: Tokens) -> Element<'a, Message> {
     if let Some(list) = &state.list {
         header = header.push(
             text(format!("{}", list.len()))
-                .size(10)
+                .size(theme::TEXT_META)
                 .color(tokens.muted_foreground),
         );
     }
     if state.loading {
-        header = header.push(text("· loading…").size(10).color(tokens.muted_foreground));
+        header = header.push(
+            text("· loading…")
+                .size(theme::TEXT_META)
+                .color(tokens.muted_foreground),
+        );
     }
     header = header
         .push(Space::new().width(Length::Fill))
-        .push(
-            button(text("⟳").size(11))
-                .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
-                .padding([2, 8])
-                .on_press(Message::RefreshBranches),
-        )
-        .push(
-            button(text("×").size(12))
-                .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
-                .padding([2, 8])
-                .on_press(Message::ToggleBranchPanel),
-        );
+        .push(theme::mini_button(
+            tokens,
+            theme::icon::REFRESH,
+            "Refresh branches",
+            Some(Message::RefreshBranches),
+        ))
+        .push(theme::mini_button(
+            tokens,
+            theme::icon::CLOSE,
+            "Close panel",
+            Some(Message::ToggleBranchPanel),
+        ));
 
     let body: Element<'a, Message> = match &state.list {
         Some(list) if !list.is_empty() => {
@@ -78,19 +84,23 @@ pub fn view<'a>(tab: &'a Tab, tokens: Tokens) -> Element<'a, Message> {
                 .width(Length::Fill)
                 .into()
         }
-        Some(_) => container(text("No branches.").size(11).color(tokens.muted_foreground))
-            .padding([6, 2])
-            .into(),
+        Some(_) => container(
+            text("No branches.")
+                .size(theme::TEXT_SMALL)
+                .color(tokens.muted_foreground),
+        )
+        .padding([6, 2])
+        .into(),
         None if state.error.is_some() => container(
             text(state.error.clone().unwrap_or_default())
-                .size(11)
+                .size(theme::TEXT_SMALL)
                 .color(tokens.deleted),
         )
         .padding([6, 2])
         .into(),
         None => container(
             text("Loading branches…")
-                .size(11)
+                .size(theme::TEXT_SMALL)
                 .color(tokens.muted_foreground),
         )
         .padding([6, 2])
@@ -101,10 +111,10 @@ pub fn view<'a>(tab: &'a Tab, tokens: Tokens) -> Element<'a, Message> {
         text_input("new-branch", state.create_name.as_str())
             .on_input(Message::BranchCreateNameChanged)
             .on_submit(Message::BranchCreate)
-            .size(11)
+            .size(theme::TEXT_SMALL)
             .padding([4, 6])
             .width(Length::Fill),
-        button(text("Create & checkout").size(11))
+        button(text("Create & checkout").size(theme::TEXT_SMALL))
             .style(theme::button_style(tokens, theme::ButtonKind::Primary))
             .padding([4, 10])
             .on_press_maybe(
@@ -143,10 +153,10 @@ fn branch_row<'a>(branch: &'a BranchInfo, tokens: Tokens) -> Element<'a, Message
 
     let mut info = row![
         text(if branch.is_head { "●" } else { "○" })
-            .size(9)
+            .size(theme::TEXT_META)
             .color(name_color),
         text(branch.name.as_str())
-            .size(11)
+            .size(theme::TEXT_SMALL)
             .font(theme::mono())
             .color(name_color),
     ]
@@ -160,7 +170,7 @@ fn branch_row<'a>(branch: &'a BranchInfo, tokens: Tokens) -> Element<'a, Message
             } else {
                 upstream.to_string()
             })
-            .size(9)
+            .size(theme::TEXT_META)
             .color(tokens.muted_foreground),
         );
     }
@@ -189,21 +199,21 @@ fn branch_row<'a>(branch: &'a BranchInfo, tokens: Tokens) -> Element<'a, Message
         // Explicit width: a Shrink button beside the Fill row button resolves
         // to a zero-width hit area inside the scrollable row.
         line = line.push(
-            button(text("Rebase").size(9))
+            button(text("Rebase").size(theme::TEXT_META))
                 .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
                 .padding([2, 6])
                 .width(Length::Fixed(48.0))
                 .on_press(Message::RebaseOntoRequested(branch.name.clone())),
         );
         line = line.push(
-            button(text("Merge").size(9))
+            button(text("Merge").size(theme::TEXT_META))
                 .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
                 .padding([2, 6])
                 .width(Length::Fixed(46.0))
                 .on_press(Message::MergeBranch(branch.name.clone())),
         );
         line = line.push(
-            button(text("Delete").size(9))
+            button(text("Delete").size(theme::TEXT_META))
                 .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
                 .padding([2, 6])
                 .width(Length::Fixed(48.0))
@@ -234,14 +244,16 @@ fn branch_row<'a>(branch: &'a BranchInfo, tokens: Tokens) -> Element<'a, Message
 /// delete confirmed by the shell) actions.
 fn remote_section<'a>(state: &'a BranchesState, tokens: Tokens) -> Element<'a, Message> {
     let mut header = row![text("Remote")
-        .size(10)
+        .size(theme::TEXT_META)
         .font(theme::semibold())
         .color(tokens.muted_foreground)]
     .align_y(Alignment::Center);
     if state.remote_loading {
-        header = header
-            .push(Space::new().width(6))
-            .push(text("· loading…").size(10).color(tokens.muted_foreground));
+        header = header.push(Space::new().width(6)).push(
+            text("· loading…")
+                .size(theme::TEXT_META)
+                .color(tokens.muted_foreground),
+        );
     }
 
     let rows: Element<'a, Message> = match &state.remote_list {
@@ -258,21 +270,21 @@ fn remote_section<'a>(state: &'a BranchesState, tokens: Tokens) -> Element<'a, M
         }
         Some(_) => container(
             text("No remote branches.")
-                .size(10)
+                .size(theme::TEXT_META)
                 .color(tokens.muted_foreground),
         )
         .padding([2, 2])
         .into(),
         None if state.remote_error.is_some() => container(
             text(state.remote_error.clone().unwrap_or_default())
-                .size(10)
+                .size(theme::TEXT_META)
                 .color(tokens.deleted),
         )
         .padding([2, 2])
         .into(),
         None => container(
             text("Loading remote branches…")
-                .size(10)
+                .size(theme::TEXT_META)
                 .color(tokens.muted_foreground),
         )
         .padding([2, 2])
@@ -286,11 +298,11 @@ fn remote_branch_row<'a>(branch: &'a RemoteBranchInfo, tokens: Tokens) -> Elemen
     let full = format!("{}/{}", branch.remote, branch.name);
     let mut line = row![
         text(full.clone())
-            .size(11)
+            .size(theme::TEXT_SMALL)
             .font(theme::mono())
             .color(tokens.foreground),
         text(super::repo_view::short_sha(&branch.sha))
-            .size(9)
+            .size(theme::TEXT_META)
             .font(theme::mono())
             .color(tokens.muted_foreground),
         Space::new().width(Length::Fill),
@@ -300,7 +312,7 @@ fn remote_branch_row<'a>(branch: &'a RemoteBranchInfo, tokens: Tokens) -> Elemen
     .width(Length::Fill);
 
     line = line.push(
-        button(text("Checkout").size(9))
+        button(text("Checkout").size(theme::TEXT_META))
             .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
             .padding([2, 6])
             .width(Length::Fixed(58.0))
@@ -310,14 +322,14 @@ fn remote_branch_row<'a>(branch: &'a RemoteBranchInfo, tokens: Tokens) -> Elemen
             }),
     );
     line = line.push(
-        button(text("Copy").size(9))
+        button(text("Copy").size(theme::TEXT_META))
             .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
             .padding([2, 6])
             .width(Length::Fixed(40.0))
             .on_press(Message::CopyText(full)),
     );
     line = line.push(
-        button(text("Delete").size(9))
+        button(text("Delete").size(theme::TEXT_META))
             .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
             .padding([2, 6])
             .width(Length::Fixed(48.0))

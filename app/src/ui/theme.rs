@@ -8,7 +8,7 @@
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use iced::font::{Family, Font, Weight};
-use iced::widget::button;
+use iced::widget::{button, container};
 use iced::{Background, Border, Color, Shadow, Theme};
 use serde::{Deserialize, Serialize};
 
@@ -43,6 +43,36 @@ impl Mode {
 
 /// Corner radius used for controls (shadcn `--radius: 0.625rem`).
 pub const RADIUS: f32 = 6.0;
+
+/// Type scale. The smallest size any text may use — below [`TEXT_META`]
+/// glyphs stop being readable at 96dpi. Panels must take a size from here,
+/// not hardcode one, so the app keeps a consistent hierarchy.
+pub const TEXT_META: f32 = 10.0;
+/// Secondary labels, notes, dense list rows.
+pub const TEXT_SMALL: f32 = 11.0;
+/// Default size: rows, inputs, buttons, commit messages.
+pub const TEXT_BODY: f32 = 12.0;
+/// Section and dialog titles.
+pub const TEXT_TITLE: f32 = 14.0;
+
+/// Shared icon glyphs. Deliberately from the same unicode blocks so the
+/// text pipeline's font fallback resolves them consistently (emoji like
+/// ✨ depend on system emoji fonts and can render as tofu). New icon
+/// buttons must take their glyph from here instead of inlining one.
+pub mod icon {
+    pub const ADD: &str = "＋";
+    pub const REMOVE: &str = "−";
+    pub const DISCARD: &str = "↺";
+    pub const REFRESH: &str = "⟳";
+    pub const CLOSE: &str = "×";
+    pub const MENU: &str = "⋯";
+    pub const SWAP: &str = "⇄";
+    pub const EXPAND: &str = "▾";
+    pub const COLLAPSE: &str = "▸";
+    pub const PIN: &str = "★";
+    /// AI actions carry this text prefix instead of an emoji glyph.
+    pub const AI: &str = "AI";
+}
 
 const fn rgb(hex: u32) -> Color {
     Color {
@@ -118,7 +148,10 @@ impl Tokens {
         secondary: rgb(0xf5f5f5),
         secondary_foreground: rgb(0x171717),
         muted: rgb(0xf5f5f5),
-        muted_foreground: rgb(0x737373),
+        // One step darker than the shadcn stock #737373: muted text is used
+        // at 10-11px throughout, and #737373 on white sits at ≈4.4:1, just
+        // under the WCAG AA line for small text.
+        muted_foreground: rgb(0x616161),
         accent: rgb(0xf5f5f5),
         accent_foreground: rgb(0x171717),
         destructive: rgb(0xe7000b),
@@ -458,6 +491,153 @@ pub fn surface_style(tokens: Tokens) -> impl Fn(&Theme) -> iced::widget::contain
         shadow: Shadow::default(),
         snap: true,
     }
+}
+
+// ---------------------------------------------------------------------------
+// Shared micro-components
+// ---------------------------------------------------------------------------
+
+/// Hover tooltip showing `tip` under `content`, styled on the popover
+/// tokens. Glyph-only icon buttons must wrap themselves in this — their
+/// semantics are otherwise undiscoverable.
+pub fn tip<'a, Message: 'a>(
+    tokens: Tokens,
+    content: impl Into<iced::Element<'a, Message>>,
+    tip: impl Into<String>,
+) -> iced::Element<'a, Message> {
+    iced::widget::tooltip(
+        content,
+        container(iced::widget::text(tip.into()).size(TEXT_SMALL))
+            .padding([4, 8])
+            .style(move |_theme| iced::widget::container::Style {
+                text_color: Some(tokens.popover_foreground),
+                background: Some(Background::Color(tokens.popover)),
+                border: Border {
+                    color: tokens.border,
+                    width: 1.0,
+                    radius: RADIUS.into(),
+                },
+                ..iced::widget::container::Style::default()
+            }),
+        iced::widget::tooltip::Position::FollowCursor,
+    )
+    .into()
+}
+
+/// Kind of [`note`]: how much room an in-panel status line gets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NoteKind {
+    /// Empty panel / nothing to show — generous padding so the state reads
+    /// as intentional rather than a rendering accident.
+    Empty,
+    /// Inline status line (loading hint, transient message) — compact.
+    Inline,
+}
+
+/// Shared empty/status line for every panel: muted text, or danger when
+/// `is_error`. Panels previously shipped ~15 private copies of this.
+pub fn note<'a, Message: 'a>(
+    tokens: Tokens,
+    label: impl Into<String>,
+    is_error: bool,
+    kind: NoteKind,
+) -> iced::Element<'a, Message> {
+    let padding = match kind {
+        NoteKind::Empty => [16, 12],
+        NoteKind::Inline => [4, 6],
+    };
+    container(
+        iced::widget::text(label.into())
+            .size(TEXT_SMALL)
+            .color(if is_error {
+                tokens.destructive
+            } else {
+                tokens.muted_foreground
+            }),
+    )
+    .padding(padding)
+    .into()
+}
+
+/// Shape of a [`chip`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChipShape {
+    /// Rounded pill for state labels (ahead/behind, counts, PR state).
+    Pill,
+    /// Fixed square for one-letter change kinds (A/M/D/R/U).
+    Badge,
+}
+
+/// Shared chip/badge: a short colored label on a translucent tint of the
+/// same hue. One visual language for every chip in the app.
+pub fn chip<'a, Message: 'a>(
+    label: impl Into<String>,
+    color: Color,
+    shape: ChipShape,
+) -> iced::Element<'a, Message> {
+    match shape {
+        ChipShape::Pill => container(
+            iced::widget::text(label.into())
+                .size(TEXT_SMALL)
+                .color(color),
+        )
+        .padding([2, 7])
+        .style(move |_theme| iced::widget::container::Style {
+            background: Some(Background::Color(with_alpha(color, 0.12))),
+            border: Border {
+                color: with_alpha(color, 0.25),
+                width: 1.0,
+                radius: 99.0.into(),
+            },
+            ..iced::widget::container::Style::default()
+        })
+        .into(),
+        ChipShape::Badge => container(
+            iced::widget::text(label.into())
+                .size(TEXT_META)
+                .font(mono())
+                .color(color),
+        )
+        .width(iced::Length::Fixed(18.0))
+        .height(iced::Length::Fixed(18.0))
+        .align_x(iced::alignment::Horizontal::Center)
+        .align_y(iced::alignment::Vertical::Center)
+        .style(move |_theme| iced::widget::container::Style {
+            background: Some(Background::Color(with_alpha(color, 0.14))),
+            border: Border {
+                color: with_alpha(color, 0.3),
+                width: 1.0,
+                radius: RADIUS.into(),
+            },
+            ..iced::widget::container::Style::default()
+        })
+        .into(),
+    }
+}
+
+/// Small ghost icon-button with a comfortable hit target (~24px square via
+/// padding) and a tooltip. `glyph` should come from [`icon`]; `tip_label`
+/// is what the button does. `None` disables the button.
+pub fn mini_button<'a, Message: 'a>(
+    tokens: Tokens,
+    glyph: &'a str,
+    tip_label: &'a str,
+    on_press: Option<Message>,
+) -> iced::widget::Button<'a, Message> {
+    let mut b = button(tip(
+        tokens,
+        iced::widget::text(glyph)
+            .size(TEXT_SMALL)
+            .color(tokens.muted_foreground),
+        tip_label,
+    ))
+    .style(button_style(tokens, ButtonKind::Ghost))
+    .padding([3, 7]);
+    b = match on_press {
+        Some(m) => b.on_press(m),
+        None => b,
+    };
+    b
 }
 
 #[cfg(test)]

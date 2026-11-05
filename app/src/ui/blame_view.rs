@@ -171,9 +171,9 @@ impl BlameView {
             .unwrap_or_else(|| "Blame".to_string());
 
         let mut header = row![
-            text("Blame").size(12).font(theme::semibold()),
+            text("Blame").size(theme::TEXT_BODY).font(theme::semibold()),
             text(clip(&title, 64))
-                .size(11)
+                .size(theme::TEXT_SMALL)
                 .font(theme::mono())
                 .color(tokens.muted_foreground),
         ]
@@ -181,38 +181,69 @@ impl BlameView {
         .align_y(Alignment::Center);
         header = header.push(match &self.lines {
             Some(lines) => text(format!("{} lines", lines.len()))
-                .size(10)
+                .size(theme::TEXT_META)
                 .color(tokens.muted_foreground),
-            None => text(String::new()).size(10),
+            None => text(String::new()).size(theme::TEXT_META),
         });
         if self.loading {
-            header = header.push(text("· loading…").size(10).color(tokens.muted_foreground));
+            header = header.push(
+                text("· loading…")
+                    .size(theme::TEXT_META)
+                    .color(tokens.muted_foreground),
+            );
         }
-        header = header.push(Space::new().width(Length::Fill)).push(
-            button(text("×").size(12))
-                .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
-                .padding([2, 8])
-                .on_press(Msg::Close),
-        );
+        header = header
+            .push(Space::new().width(Length::Fill))
+            .push(theme::tip(
+                tokens,
+                button(text(theme::icon::CLOSE).size(theme::TEXT_BODY))
+                    .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
+                    .padding([4, 8])
+                    .on_press(Msg::Close),
+                "Close blame",
+            ));
 
         let body: Element<'_, Msg> = match &self.lines {
             Some(lines) if !lines.is_empty() => blame_list(lines, &self.selected, tokens),
-            Some(_) => note(tokens, "Empty file.", false),
+            Some(_) => theme::note(tokens, "Empty file.", false, theme::NoteKind::Empty),
             None if self.error.is_some() => {
-                note(tokens, self.error.as_deref().unwrap_or_default(), true)
+                // Re-opening the same path is the existing reload path, so
+                // it doubles as the retry affordance.
+                let retry = theme::mini_button(
+                    tokens,
+                    "Retry",
+                    "Reload blame",
+                    Some(Msg::Opened {
+                        path: self.path.clone().unwrap_or_default(),
+                    }),
+                );
+                row![
+                    theme::note(
+                        tokens,
+                        self.error.as_deref().unwrap_or_default(),
+                        true,
+                        theme::NoteKind::Inline
+                    ),
+                    retry,
+                ]
+                .spacing(4)
+                .align_y(Alignment::Center)
+                .into()
             }
-            None if self.loading => note(tokens, "Loading blame…", false),
-            None => note(tokens, "No blame loaded.", false),
+            None if self.loading => {
+                theme::note(tokens, "Loading blame…", false, theme::NoteKind::Inline)
+            }
+            None => theme::note(tokens, "No blame loaded.", false, theme::NoteKind::Empty),
         };
 
         let mut card = column![header].spacing(4);
         if let Some(err) = &self.error {
-            card = card.push(
-                text(err.as_str())
-                    .size(10)
-                    .color(tokens.deleted)
-                    .width(Length::Fill),
-            );
+            card = card.push(theme::note(
+                tokens,
+                err.as_str(),
+                true,
+                theme::NoteKind::Inline,
+            ));
         }
         if let Some(digest) = self.selected_digest(now_seconds()) {
             card = card.push(footer(digest, tokens));
@@ -327,26 +358,26 @@ fn blame_list<'a>(
 fn blame_line_view<'a>(model: BlameRow, selected: bool, tokens: Tokens) -> Element<'a, Msg> {
     let line = row![
         text(short_sha(&model.sha).to_string())
-            .size(10)
+            .size(theme::TEXT_META)
             .font(theme::mono())
             .color(sha_color(tokens, &model.sha))
             .width(Length::Fixed(52.0)),
         text(model.author)
-            .size(10)
+            .size(theme::TEXT_META)
             .color(tokens.muted_foreground)
             .width(Length::Fixed(96.0)),
         text(model.age)
-            .size(9)
+            .size(theme::TEXT_META)
             .color(heat_color(tokens, model.age_days))
             .width(Length::Fixed(52.0))
             .align_x(Alignment::End),
         text(model.line_no.to_string())
-            .size(9)
+            .size(theme::TEXT_META)
             .color(tokens.muted_foreground)
             .width(Length::Fixed(40.0))
             .align_x(Alignment::End),
         text(model.text)
-            .size(11)
+            .size(theme::TEXT_SMALL)
             .font(theme::mono())
             .color(tokens.foreground)
             .width(Length::Fill),
@@ -389,20 +420,24 @@ fn footer(digest: CommitDigest, tokens: Tokens) -> Element<'static, Msg> {
     let copy_sha = digest.sha.clone();
     row![
         text(digest.sha)
-            .size(10)
+            .size(theme::TEXT_META)
             .font(theme::mono())
             .color(tokens.primary),
-        text(digest.author).size(10).color(tokens.foreground),
-        text(digest.age).size(9).color(tokens.muted_foreground),
+        text(digest.author)
+            .size(theme::TEXT_META)
+            .color(tokens.foreground),
+        text(digest.age)
+            .size(theme::TEXT_META)
+            .color(tokens.muted_foreground),
         text(format!("{} lines", digest.line_count))
-            .size(9)
+            .size(theme::TEXT_META)
             .color(tokens.muted_foreground),
         Space::new().width(Length::Fill),
-        button(text("View commit").size(9))
+        button(text("View commit").size(theme::TEXT_META))
             .style(theme::button_style(tokens, theme::ButtonKind::Secondary))
             .padding([2, 6])
             .on_press(Msg::SelectCommit(select_sha)),
-        button(text("Copy SHA").size(9))
+        button(text("Copy SHA").size(theme::TEXT_META))
             .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
             .padding([2, 6])
             .on_press(Msg::CopySha(copy_sha)),
@@ -411,17 +446,6 @@ fn footer(digest: CommitDigest, tokens: Tokens) -> Element<'static, Msg> {
     .align_y(Alignment::Center)
     .padding([4, 0])
     .into()
-}
-
-fn note<'a>(tokens: Tokens, label: impl Into<String>, is_error: bool) -> Element<'a, Msg> {
-    let color = if is_error {
-        tokens.deleted
-    } else {
-        tokens.muted_foreground
-    };
-    container(text(label.into()).size(10).color(color))
-        .padding([8, 4])
-        .into()
 }
 
 fn clip(text: &str, max_chars: usize) -> String {

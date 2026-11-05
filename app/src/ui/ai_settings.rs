@@ -26,12 +26,13 @@
 //! shell's existing `*Done` arms) and the one-shot `service::ai::ai_status`
 //! probe — no extra polling beyond what the service already exposes.
 
-use iced::widget::{button, checkbox, column, container, mouse_area, row, text, text_input, Space};
-use iced::{Alignment, Background, Border, Element, Length};
+use iced::widget::{button, checkbox, column, row, text, text_input, Space};
+use iced::{Alignment, Element, Length};
 
 use crate::service::ai::AiStatus;
 
 use super::config::{AiProviderChoice, AiSettings};
+use super::dialog::modal_with_cancel;
 use super::theme::{self, Tokens};
 
 /// Width of the dialog card.
@@ -317,17 +318,19 @@ pub fn view(
     let title = row![
         text("AI settings").size(14).font(theme::semibold()),
         Space::new().width(Length::Fill),
-        button(text("×").size(12))
-            .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
-            .padding([3, 8])
-            .on_press_maybe((!state.saving).then_some(Msg::Close)),
+        theme::mini_button(
+            tokens,
+            theme::icon::CLOSE,
+            "Close dialog",
+            (!state.saving).then_some(Msg::Close),
+        ),
     ]
     .align_y(Alignment::Center);
 
     let mut switches = column![checkbox(enabled)
         .label("Enable AI assist")
-        .size(12)
-        .text_size(11)
+        .size(theme::TEXT_BODY)
+        .text_size(theme::TEXT_SMALL)
         .spacing(4)
         .on_toggle(|_| Msg::EnabledToggled),]
     .spacing(6);
@@ -335,16 +338,18 @@ pub fn view(
         switches = switches.push(
             checkbox(opt_in)
                 .label("Opt in for this repository")
-                .size(12)
-                .text_size(11)
+                .size(theme::TEXT_BODY)
+                .text_size(theme::TEXT_SMALL)
                 .spacing(4)
                 .on_toggle(|_| Msg::OptInToggled),
         );
     }
 
-    let mut provider = column![text("Provider").size(11).color(tokens.muted_foreground)]
-        .spacing(3)
-        .width(Length::Fill);
+    let mut provider = column![text("Provider")
+        .size(theme::TEXT_SMALL)
+        .color(tokens.muted_foreground)]
+    .spacing(3)
+    .width(Length::Fill);
     for (choice, label, description) in [
         (
             AiProviderChoice::Opencode,
@@ -373,7 +378,7 @@ pub fn view(
                 "opencode server URL (empty = managed by the app)",
                 text_input("http://127.0.0.1:4096", state.opencode_url.as_str())
                     .on_input(Msg::OpencodeUrlChanged)
-                    .size(12)
+                    .size(theme::TEXT_BODY)
                     .padding([5, 8]),
             ),
             labeled_field(
@@ -381,7 +386,7 @@ pub fn view(
                 "opencode model (empty = server default)",
                 text_input("provider/model", state.opencode_model.as_str())
                     .on_input(Msg::OpencodeModelChanged)
-                    .size(12)
+                    .size(theme::TEXT_BODY)
                     .padding([5, 8]),
             ),
         ]
@@ -394,7 +399,7 @@ pub fn view(
                     "OpenRouter model (empty = backend default)",
                     text_input("vendor/model", state.openrouter_model.as_str())
                         .on_input(Msg::OpenrouterModelChanged)
-                        .size(12)
+                        .size(theme::TEXT_BODY)
                         .padding([5, 8]),
                 ),
                 labeled_field(
@@ -406,7 +411,7 @@ pub fn view(
                     )
                     .secure(true)
                     .on_input(Msg::ApiKeyChanged)
-                    .size(12)
+                    .size(theme::TEXT_BODY)
                     .padding([5, 8]),
                 ),
             ]
@@ -421,16 +426,20 @@ pub fn view(
         .width(Length::Fill);
 
     if let Some(error) = &state.error {
-        body = body.push(text(error.clone()).size(11).color(tokens.deleted));
+        body = body.push(
+            text(error.clone())
+                .size(theme::TEXT_SMALL)
+                .color(tokens.deleted),
+        );
     }
 
     let actions = row![
         Space::new().width(Length::Fill),
-        button(text("Cancel").size(11))
+        button(text("Cancel").size(theme::TEXT_SMALL))
             .style(theme::button_style(tokens, theme::ButtonKind::Secondary))
             .padding([4, 12])
             .on_press_maybe((!state.saving).then_some(Msg::Close)),
-        button(text(if state.saving { "Saving…" } else { "Save" }).size(11))
+        button(text(if state.saving { "Saving…" } else { "Save" }).size(theme::TEXT_SMALL))
             .style(theme::button_style(tokens, theme::ButtonKind::Primary))
             .padding([4, 12])
             .on_press_maybe((!state.saving).then_some(Msg::Save)),
@@ -438,36 +447,9 @@ pub fn view(
     .spacing(6)
     .align_y(Alignment::Center);
 
-    let card = container(column![body, Space::new().height(8), actions].spacing(6))
-        .width(Length::Fixed(CARD_WIDTH))
-        .padding([16, 18])
-        .style(move |_theme| container::Style {
-            background: Some(Background::Color(tokens.card)),
-            text_color: Some(tokens.card_foreground),
-            border: Border {
-                color: tokens.border,
-                width: 1.0,
-                radius: 10.0.into(),
-            },
-            ..container::Style::default()
-        });
-
-    let scrim = container(card)
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .align_x(Alignment::Center)
-        .align_y(Alignment::Center)
-        .style(move |_theme| container::Style {
-            background: Some(Background::Color(theme::with_alpha(
-                iced::Color::BLACK,
-                0.4,
-            ))),
-            ..container::Style::default()
-        });
-
-    // Like dialog.rs: presses on the scrim cancel the dialog (unless a save
-    // is running — the widget handles that), inputs consume theirs.
-    mouse_area(scrim).on_press(Msg::Close).into()
+    // Shared modal scaffold: scrim press closes (the update arm already
+    // swallows Close while a save is in flight), inputs consume theirs.
+    modal_with_cancel(tokens, CARD_WIDTH, body.into(), actions.into(), Msg::Close)
 }
 
 /// Key presence indicator + clear button (openrouter only). The stored key
@@ -481,7 +463,7 @@ fn key_status_row(state: &State, tokens: Tokens) -> Element<'static, Msg> {
     };
     let mut row = row![
         text(format!("Keyring: {status}"))
-            .size(10)
+            .size(theme::TEXT_META)
             .color(tokens.muted_foreground),
         Space::new().width(Length::Fill),
     ]
@@ -489,7 +471,7 @@ fn key_status_row(state: &State, tokens: Tokens) -> Element<'static, Msg> {
     .align_y(Alignment::Center);
     if state.has_key == Some(true) && !state.clear_key {
         row = row.push(
-            button(text("Clear stored key").size(10))
+            button(text("Clear stored key").size(theme::TEXT_META))
                 .style(theme::button_style(tokens, theme::ButtonKind::Secondary))
                 .padding([2, 8])
                 .on_press_maybe((!state.saving).then_some(Msg::ClearApiKeyPressed)),
@@ -512,14 +494,16 @@ fn option_line<'a>(
     button(
         row![
             text(if selected { "●" } else { "○" })
-                .size(10)
+                .size(theme::TEXT_META)
                 .color(if selected {
                     tokens.primary
                 } else {
                     tokens.muted_foreground
                 }),
-            text(label).size(11).color(tokens.foreground),
-            text(description).size(10).color(tokens.muted_foreground),
+            text(label).size(theme::TEXT_SMALL).color(tokens.foreground),
+            text(description)
+                .size(theme::TEXT_META)
+                .color(tokens.muted_foreground),
         ]
         .spacing(8)
         .align_y(Alignment::Center),
@@ -546,7 +530,9 @@ fn labeled_field(
 ) -> Element<'static, Msg> {
     let label = label.to_string();
     column![
-        text(label).size(11).color(tokens.muted_foreground),
+        text(label)
+            .size(theme::TEXT_SMALL)
+            .color(tokens.muted_foreground),
         field.into(),
     ]
     .spacing(3)

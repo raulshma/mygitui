@@ -276,13 +276,15 @@ pub fn view(panel: &OutputPanel, tokens: Tokens) -> Element<'_, Msg> {
         return column![].into();
     }
 
-    let mut header = row![text("Action output").size(12).font(theme::semibold())]
-        .spacing(6)
-        .align_y(Alignment::Center);
+    let mut header = row![text("Action output")
+        .size(theme::TEXT_BODY)
+        .font(theme::semibold())]
+    .spacing(6)
+    .align_y(Alignment::Center);
     header = header
         .push(Space::new().width(Length::Fill))
         .push(
-            button(text("Clear finished").size(10))
+            button(text("Clear finished").size(theme::TEXT_META))
                 .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
                 .padding([2, 8])
                 .on_press_maybe(
@@ -294,7 +296,7 @@ pub fn view(panel: &OutputPanel, tokens: Tokens) -> Element<'_, Msg> {
                 ),
         )
         .push(
-            button(text("×").size(12))
+            button(text("×").size(theme::TEXT_BODY))
                 .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
                 .padding([2, 8])
                 .on_press(Msg::ToggleOpen),
@@ -304,7 +306,7 @@ pub fn view(panel: &OutputPanel, tokens: Tokens) -> Element<'_, Msg> {
     if panel.runs.is_empty() {
         body = body.push(
             text("No output yet — run a shell action and its lines stream here.")
-                .size(10)
+                .size(theme::TEXT_META)
                 .color(tokens.muted_foreground),
         );
     }
@@ -338,16 +340,16 @@ fn run_section<'a>(run: &'a RunView, tokens: Tokens) -> Element<'a, Msg> {
     let running = run.is_running();
 
     let mut section = column![row![
-        button(text(arrow).size(10))
+        button(text(arrow).size(theme::TEXT_META))
             .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
             .padding([2, 6])
             .on_press(Msg::ExpandToggled(run.run_id.clone())),
         text(run.name.as_str())
-            .size(11)
+            .size(theme::TEXT_SMALL)
             .font(theme::semibold())
             .width(Length::Fill),
         status_chip(run, tokens),
-        button(text("Cancel").size(10))
+        button(text("Cancel").size(theme::TEXT_META))
             .style(theme::button_style(tokens, theme::ButtonKind::Danger))
             .padding([3, 10])
             .on_press_maybe(running.then(|| Msg::CancelPressed(run.run_id.clone()))),
@@ -367,7 +369,7 @@ fn run_section<'a>(run: &'a RunView, tokens: Tokens) -> Element<'a, Msg> {
                 } else {
                     "(no output)"
                 })
-                .size(10)
+                .size(theme::TEXT_META)
                 .font(theme::mono())
                 .color(tokens.muted_foreground),
             );
@@ -375,7 +377,7 @@ fn run_section<'a>(run: &'a RunView, tokens: Tokens) -> Element<'a, Msg> {
         for line in &run.lines {
             lines = lines.push(
                 text(line.as_str())
-                    .size(11)
+                    .size(theme::TEXT_SMALL)
                     .font(theme::mono())
                     .width(Length::Fill),
             );
@@ -415,7 +417,11 @@ fn status_chip<'a>(run: &'a RunView, tokens: Tokens) -> Element<'a, Msg> {
         Some(code) if code == "0" => ("exited (0)".to_string(), tokens.added),
         Some(code) => (format!("exited ({code})"), tokens.destructive),
     };
-    text(label).size(9).font(theme::mono()).color(color).into()
+    text(label)
+        .size(theme::TEXT_META)
+        .font(theme::mono())
+        .color(color)
+        .into()
 }
 
 // ---------------------------------------------------------------------------

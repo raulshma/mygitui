@@ -26,11 +26,10 @@
 #![allow(dead_code)]
 
 use iced::keyboard::{key::Named, Key, Modifiers};
-use iced::widget::{
-    button, column, container, mouse_area, row, scrollable, text, text_input, Space,
-};
-use iced::{Alignment, Background, Border, Element, Length, Shadow, Vector};
+use iced::widget::{button, column, container, row, scrollable, text, text_input, Space};
+use iced::{Alignment, Background, Element, Length};
 
+use super::dialog::modal_with_cancel;
 use super::theme::{self, Tokens};
 
 /// Width of the palette card.
@@ -407,10 +406,12 @@ pub fn view(state: &State, tokens: &Tokens) -> Element<'static, Msg> {
     let query_row = row![
         text("›").size(13).color(tokens.muted_foreground),
         text_input("Type a command…", state.query.as_str())
-            .size(12)
+            .size(theme::TEXT_BODY)
             .padding([4, 4])
             .width(Length::Fill),
-        text("esc to close").size(9).color(tokens.muted_foreground),
+        text("esc to close")
+            .size(theme::TEXT_META)
+            .color(tokens.muted_foreground),
     ]
     .spacing(8)
     .align_y(Alignment::Center);
@@ -426,7 +427,7 @@ pub fn view(state: &State, tokens: &Tokens) -> Element<'static, Msg> {
             } else {
                 "No matching commands."
             })
-            .size(11)
+            .size(theme::TEXT_SMALL)
             .color(tokens.muted_foreground),
         )
         .padding([6, 2])
@@ -448,41 +449,19 @@ pub fn view(state: &State, tokens: &Tokens) -> Element<'static, Msg> {
             .into()
     };
 
-    let card = container(column![query_row, Space::new().height(4), list].spacing(6))
-        .width(Length::Fixed(PALETTE_WIDTH))
-        .padding([12, 14])
-        .style(move |_theme| container::Style {
-            background: Some(Background::Color(tokens.popover)),
-            text_color: Some(tokens.popover_foreground),
-            border: Border {
-                color: tokens.border,
-                width: 1.0,
-                radius: 10.0.into(),
-            },
-            shadow: Shadow {
-                color: theme::with_alpha(iced::Color::BLACK, 0.25),
-                offset: Vector::new(0.0, 8.0),
-                blur_radius: 24.0,
-            },
-            snap: true,
-        });
-
-    let scrim = container(card)
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .align_x(Alignment::Center)
-        .align_y(Alignment::Center)
-        .style(move |_theme| container::Style {
-            background: Some(Background::Color(theme::with_alpha(
-                iced::Color::BLACK,
-                0.4,
-            ))),
-            ..container::Style::default()
-        });
-
-    // As in dialog.rs, the query input and row buttons consume their own
-    // presses; presses on the scrim or the card's padding close the palette.
-    mouse_area(scrim).on_press(Msg::Close).into()
+    // Shared modal scaffold (its card look replaces the popover tint so
+    // every overlay reads the same): the query input and row buttons consume
+    // their own presses; presses on the scrim or the card's padding close
+    // the palette.
+    modal_with_cancel(
+        tokens,
+        PALETTE_WIDTH,
+        column![query_row, Space::new().height(4), list]
+            .spacing(6)
+            .into(),
+        Space::new().width(0).into(),
+        Msg::Close,
+    )
 }
 
 fn command_row(
@@ -501,11 +480,15 @@ fn command_row(
     };
 
     let line = row![
-        text(command.section.clone()).size(9).color(meta_color),
-        text(command.label.clone()).size(11).color(label_color),
+        text(command.section.clone())
+            .size(theme::TEXT_META)
+            .color(meta_color),
+        text(command.label.clone())
+            .size(theme::TEXT_SMALL)
+            .color(label_color),
         Space::new().width(Length::Fill),
         text(command.keybind.clone().unwrap_or_default())
-            .size(9)
+            .size(theme::TEXT_META)
             .font(theme::mono())
             .color(meta_color),
     ]

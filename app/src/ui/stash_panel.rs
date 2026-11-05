@@ -40,61 +40,77 @@ pub fn view<'a>(tab: &'a Tab, tokens: Tokens) -> Element<'a, Message> {
     let stash_count = state.list.as_ref().map(|list| list.len());
     let checkpoint_count = state.checkpoints.as_ref().map(|list| list.len());
 
-    let mut header = row![text("Stash & checkpoints").size(12).font(theme::semibold())]
-        .spacing(6)
-        .align_y(Alignment::Center);
+    let mut header = row![text("Stash & checkpoints")
+        .size(theme::TEXT_BODY)
+        .font(theme::semibold())]
+    .spacing(6)
+    .align_y(Alignment::Center);
     if let Some(count) = stash_count {
         header = header.push(
             text(format!("{count} stashed"))
-                .size(10)
+                .size(theme::TEXT_META)
                 .color(tokens.muted_foreground),
         );
     }
     if state.loading || state.checkpoints_loading {
-        header = header.push(text("· loading…").size(10).color(tokens.muted_foreground));
+        header = header.push(
+            text("· loading…")
+                .size(theme::TEXT_META)
+                .color(tokens.muted_foreground),
+        );
     }
     header = header
         .push(Space::new().width(Length::Fill))
-        .push(
-            button(text("⟳").size(11))
-                .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
-                .padding([2, 8])
-                .on_press(Message::RefreshStashes),
-        )
-        .push(
-            button(text("×").size(12))
-                .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
-                .padding([2, 8])
-                .on_press(Message::ToggleStashPanel),
-        );
+        .push(theme::mini_button(
+            tokens,
+            theme::icon::REFRESH,
+            "Refresh stashes",
+            Some(Message::RefreshStashes),
+        ))
+        .push(theme::mini_button(
+            tokens,
+            theme::icon::CLOSE,
+            "Close panel",
+            Some(Message::ToggleStashPanel),
+        ));
+
+    // Stash push has nothing to do on a clean tree — guard the button and
+    // say why instead of letting the op fail confusingly.
+    let dirty = tab.working_tree_dirty();
 
     let push_form = row![
         text_input("Stash message (optional)", state.message.as_str())
             .on_input(Message::StashMessageChanged)
-            .on_submit(Message::StashPush)
-            .size(11)
+            .on_submit(if dirty {
+                Message::StashPush
+            } else {
+                Message::Noop
+            })
+            .size(theme::TEXT_SMALL)
             .padding([4, 6])
             .width(Length::Fill),
-        button(text("✨").size(10))
-            .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
-            .padding([2, 6])
-            .on_press(Message::AiGenerate(super::app::AiAction::StashMessage)),
+        theme::mini_button(
+            tokens,
+            theme::icon::AI,
+            "Generate stash message with AI",
+            Some(Message::AiGenerate(super::app::AiAction::StashMessage)),
+        ),
         checkbox(state.include_untracked)
             .label("untracked")
-            .size(12)
-            .text_size(10)
+            .size(theme::TEXT_BODY)
+            .text_size(theme::TEXT_META)
             .spacing(4)
             .on_toggle(Message::StashIncludeUntracked),
         checkbox(state.keep_index)
             .label("Keep staged changes")
-            .size(12)
-            .text_size(10)
+            .size(theme::TEXT_BODY)
+            .text_size(theme::TEXT_META)
             .spacing(4)
             .on_toggle(Message::StashKeepIndex),
-        button(text("Stash").size(10))
+        button(text("Stash").size(theme::TEXT_META))
             .style(theme::button_style(tokens, theme::ButtonKind::Primary))
             .padding([4, 10])
-            .on_press(Message::StashPush),
+            .on_press_maybe(dirty.then_some(Message::StashPush)),
     ]
     .spacing(6)
     .align_y(Alignment::Center);
@@ -111,9 +127,14 @@ pub fn view<'a>(tab: &'a Tab, tokens: Tokens) -> Element<'a, Message> {
                 .width(Length::Fill)
                 .into()
         }
-        Some(_) => note(tokens, "No stashes."),
-        None if state.error.is_some() => note(tokens, state.error.clone().unwrap_or_default()),
-        None => note(tokens, "Loading stashes…"),
+        Some(_) => theme::note(tokens, "No stashes.", false, theme::NoteKind::Empty),
+        None if state.error.is_some() => theme::note(
+            tokens,
+            state.error.clone().unwrap_or_default(),
+            true,
+            theme::NoteKind::Empty,
+        ),
+        None => theme::note(tokens, "Loading stashes…", false, theme::NoteKind::Empty),
     };
 
     let mut checkpoint_header = row![text(format!(
@@ -122,25 +143,27 @@ pub fn view<'a>(tab: &'a Tab, tokens: Tokens) -> Element<'a, Message> {
             .map(|n| n.to_string())
             .unwrap_or_else(|| "…".into())
     ))
-    .size(10)
+    .size(theme::TEXT_META)
     .color(tokens.muted_foreground),]
     .align_y(Alignment::Center);
 
     if state.checkpoints_loading {
-        checkpoint_header = checkpoint_header
-            .push(Space::new().width(6))
-            .push(text("· loading…").size(10).color(tokens.muted_foreground));
+        checkpoint_header = checkpoint_header.push(Space::new().width(6)).push(
+            text("· loading…")
+                .size(theme::TEXT_META)
+                .color(tokens.muted_foreground),
+        );
     }
     checkpoint_header = checkpoint_header
         .push(Space::new().width(Length::Fill))
         .push(
-            button(text("Undo point").size(9))
+            button(text("Undo point").size(theme::TEXT_META))
                 .style(theme::button_style(tokens, theme::ButtonKind::Secondary))
                 .padding([2, 8])
                 .on_press(Message::CheckpointCreate),
         )
         .push(
-            button(text("GC").size(9))
+            button(text("GC").size(theme::TEXT_META))
                 .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
                 .padding([2, 8])
                 .on_press(Message::CheckpointGc),
@@ -159,14 +182,24 @@ pub fn view<'a>(tab: &'a Tab, tokens: Tokens) -> Element<'a, Message> {
                 .width(Length::Fill)
                 .into()
         }
-        Some(_) => note(
+        Some(_) => theme::note(
             tokens,
             "No checkpoints yet. Restoring one snapshots the current state first.",
+            false,
+            theme::NoteKind::Empty,
         ),
-        None if state.checkpoints_error.is_some() => {
-            note(tokens, state.checkpoints_error.clone().unwrap_or_default())
-        }
-        None => note(tokens, "Loading checkpoints…"),
+        None if state.checkpoints_error.is_some() => theme::note(
+            tokens,
+            state.checkpoints_error.clone().unwrap_or_default(),
+            true,
+            theme::NoteKind::Empty,
+        ),
+        None => theme::note(
+            tokens,
+            "Loading checkpoints…",
+            false,
+            theme::NoteKind::Empty,
+        ),
     };
 
     let trash_count = state.trash.as_ref().map(|list| list.len());
@@ -176,20 +209,24 @@ pub fn view<'a>(tab: &'a Tab, tokens: Tokens) -> Element<'a, Message> {
             .map(|n| n.to_string())
             .unwrap_or_else(|| "…".into())
     ))
-    .size(10)
+    .size(theme::TEXT_META)
     .color(tokens.muted_foreground)]
     .align_y(Alignment::Center);
     if state.trash_loading {
-        trash_header = trash_header
-            .push(Space::new().width(6))
-            .push(text("· loading…").size(10).color(tokens.muted_foreground));
+        trash_header = trash_header.push(Space::new().width(6)).push(
+            text("· loading…")
+                .size(theme::TEXT_META)
+                .color(tokens.muted_foreground),
+        );
     }
-    trash_header = trash_header.push(Space::new().width(Length::Fill)).push(
-        button(text("⟳").size(9))
-            .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
-            .padding([2, 6])
-            .on_press(Message::RefreshTrash),
-    );
+    trash_header = trash_header
+        .push(Space::new().width(Length::Fill))
+        .push(theme::mini_button(
+            tokens,
+            theme::icon::REFRESH,
+            "Refresh deleted branches",
+            Some(Message::RefreshTrash),
+        ));
 
     let trash_rows: Element<'a, Message> = match &state.trash {
         Some(list) if !list.is_empty() => {
@@ -204,46 +241,68 @@ pub fn view<'a>(tab: &'a Tab, tokens: Tokens) -> Element<'a, Message> {
                 .width(Length::Fill)
                 .into()
         }
-        Some(_) => note(
+        Some(_) => theme::note(
             tokens,
             "No deleted branches. Deleting a branch keeps a restore point here.",
+            false,
+            theme::NoteKind::Empty,
         ),
-        None if state.trash_error.is_some() => {
-            note(tokens, state.trash_error.clone().unwrap_or_default())
-        }
-        None => note(tokens, "Loading deleted branches…"),
+        None if state.trash_error.is_some() => theme::note(
+            tokens,
+            state.trash_error.clone().unwrap_or_default(),
+            true,
+            theme::NoteKind::Empty,
+        ),
+        None => theme::note(
+            tokens,
+            "Loading deleted branches…",
+            false,
+            theme::NoteKind::Empty,
+        ),
     };
 
-    container(
-        column![
-            header,
-            push_form,
-            stash_rows,
-            checkpoint_header,
-            checkpoint_rows,
-            trash_header,
-            trash_rows
-        ]
-        .spacing(6)
-        .padding([8, 10]),
-    )
-    .width(Length::Fill)
-    .style(move |_theme| container::Style {
-        background: Some(Background::Color(tokens.card)),
-        border: Border {
-            color: tokens.border,
-            width: 1.0,
-            radius: 8.0.into(),
-        },
-        ..container::Style::default()
-    })
-    .into()
+    // One guard line at a time: why Stash is disabled (clean tree), or what
+    // Apply/Pop will do to uncommitted work (dirty tree).
+    let mut content = column![header, push_form].spacing(6);
+    if dirty {
+        content = content.push(
+            text("Applying will mix with uncommitted changes")
+                .size(theme::TEXT_META)
+                .color(tokens.modified),
+        );
+    } else {
+        content = content.push(
+            text("Nothing to stash — the working tree is clean.")
+                .size(theme::TEXT_META)
+                .color(tokens.muted_foreground),
+        );
+    }
+    let content = content
+        .push(stash_rows)
+        .push(checkpoint_header)
+        .push(checkpoint_rows)
+        .push(trash_header)
+        .push(trash_rows)
+        .padding([8, 10]);
+
+    container(content)
+        .width(Length::Fill)
+        .style(move |_theme| container::Style {
+            background: Some(Background::Color(tokens.card)),
+            border: Border {
+                color: tokens.border,
+                width: 1.0,
+                radius: 8.0.into(),
+            },
+            ..container::Style::default()
+        })
+        .into()
 }
 
 fn stash_row<'a>(stash: &'a StashInfo, tokens: Tokens) -> Element<'a, Message> {
     let mut info = column![
         text(clip(&stash.message, 46))
-            .size(11)
+            .size(theme::TEXT_SMALL)
             .color(tokens.foreground),
         text(format!(
             "stash@{{{}}} · {} · {}",
@@ -251,7 +310,7 @@ fn stash_row<'a>(stash: &'a StashInfo, tokens: Tokens) -> Element<'a, Message> {
             short_sha(&stash.sha),
             stash.author.name
         ))
-        .size(9)
+        .size(theme::TEXT_META)
         .color(tokens.muted_foreground),
     ]
     .spacing(0)
@@ -259,13 +318,15 @@ fn stash_row<'a>(stash: &'a StashInfo, tokens: Tokens) -> Element<'a, Message> {
 
     if stash.message.trim().is_empty() {
         info = column![
-            text("(no message)").size(11).color(tokens.muted_foreground),
+            text("(no message)")
+                .size(theme::TEXT_SMALL)
+                .color(tokens.muted_foreground),
             text(format!(
                 "stash@{{{}}} · {}",
                 stash.index,
                 short_sha(&stash.sha)
             ))
-            .size(9)
+            .size(theme::TEXT_META)
             .color(tokens.muted_foreground),
         ]
         .spacing(0)
@@ -274,7 +335,7 @@ fn stash_row<'a>(stash: &'a StashInfo, tokens: Tokens) -> Element<'a, Message> {
 
     let row = row![
         info,
-        button(text("Apply").size(9))
+        button(text("Apply").size(theme::TEXT_META))
             .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
             .padding([2, 6])
             .width(Length::Fixed(46.0))
@@ -282,7 +343,7 @@ fn stash_row<'a>(stash: &'a StashInfo, tokens: Tokens) -> Element<'a, Message> {
                 index: stash.index,
                 pop: false,
             }),
-        button(text("Pop").size(9))
+        button(text("Pop").size(theme::TEXT_META))
             .style(theme::button_style(tokens, theme::ButtonKind::Secondary))
             .padding([2, 6])
             .width(Length::Fixed(38.0))
@@ -290,11 +351,12 @@ fn stash_row<'a>(stash: &'a StashInfo, tokens: Tokens) -> Element<'a, Message> {
                 index: stash.index,
                 pop: true,
             }),
-        button(text("✕").size(9))
-            .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
-            .padding([2, 6])
-            .width(Length::Fixed(24.0))
-            .on_press(Message::StashDropRequested(stash.index)),
+        theme::mini_button(
+            tokens,
+            theme::icon::CLOSE,
+            "Drop stash",
+            Some(Message::StashDropRequested(stash.index)),
+        ),
     ]
     .spacing(2)
     .align_y(Alignment::Center)
@@ -310,11 +372,11 @@ fn checkpoint_row<'a>(
 ) -> Element<'a, Message> {
     let mut label = row![
         text(clip(&checkpoint.reason, 30))
-            .size(11)
+            .size(theme::TEXT_SMALL)
             .color(tokens.foreground),
         Space::new().width(6),
         text(relative_age(checkpoint.created_at, now))
-            .size(9)
+            .size(theme::TEXT_META)
             .color(tokens.muted_foreground),
     ]
     .align_y(Alignment::Center)
@@ -323,14 +385,14 @@ fn checkpoint_row<'a>(
     if let Some(branch) = checkpoint.branch.as_deref() {
         label = label.push(Space::new().width(6)).push(
             text(format!("on {branch}"))
-                .size(9)
+                .size(theme::TEXT_META)
                 .color(tokens.muted_foreground),
         );
     }
 
     let row = row![
         label,
-        button(text("Restore").size(9))
+        button(text("Restore").size(theme::TEXT_META))
             .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
             .padding([2, 6])
             .width(Length::Fixed(56.0))
@@ -350,19 +412,19 @@ fn trash_row<'a>(entry: &'a BranchTrashEntry, now: i64, tokens: Tokens) -> Eleme
     let row = row![
         column![
             text(clip(&entry.name, 30))
-                .size(11)
+                .size(theme::TEXT_SMALL)
                 .color(tokens.foreground),
             text(format!(
                 "{} · {}",
                 relative_age(entry.deleted_at, now),
                 short_sha(&entry.sha)
             ))
-            .size(9)
+            .size(theme::TEXT_META)
             .color(tokens.muted_foreground),
         ]
         .spacing(0)
         .width(Length::Fill),
-        button(text("Restore").size(9))
+        button(text("Restore").size(theme::TEXT_META))
             .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
             .padding([2, 6])
             .width(Length::Fixed(56.0))
@@ -373,12 +435,6 @@ fn trash_row<'a>(entry: &'a BranchTrashEntry, now: i64, tokens: Tokens) -> Eleme
     .width(Length::Fill);
 
     container(row).padding([2, 4]).width(Length::Fill).into()
-}
-
-fn note<'a>(tokens: Tokens, label: impl Into<String>) -> Element<'a, Message> {
-    container(text(label.into()).size(10).color(tokens.muted_foreground))
-        .padding([4, 4])
-        .into()
 }
 
 fn clip(text: &str, max_chars: usize) -> String {

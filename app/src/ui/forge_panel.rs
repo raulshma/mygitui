@@ -1389,7 +1389,7 @@ pub fn view<'a>(state: &'a ForgeState, tokens: Tokens, ctx: &'a ForgeCtx) -> Ele
 
 /// Title row: gh badge, PR count, loading marker, filter/refresh/close.
 fn header<'a>(state: &'a ForgeState, tokens: Tokens) -> Element<'a, Msg> {
-    let mut header = row![text("Forge").size(12).font(theme::semibold())]
+    let mut header = row![text("Forge").size(theme::TEXT_BODY).font(theme::semibold())]
         .spacing(6)
         .align_y(Alignment::Center);
     header = header.push(status_badge(state, tokens));
@@ -1400,33 +1400,41 @@ fn header<'a>(state: &'a ForgeState, tokens: Tokens) -> Element<'a, Msg> {
                 prs.len(),
                 if prs.len() == 1 { "" } else { "s" }
             ))
-            .size(10)
+            .size(theme::TEXT_META)
             .color(tokens.muted_foreground),
         );
     }
     if state.loading || state.status_loading {
-        header = header.push(text("· loading…").size(10).color(tokens.muted_foreground));
+        header = header.push(
+            text("· loading…")
+                .size(theme::TEXT_META)
+                .color(tokens.muted_foreground),
+        );
     }
     header = header
         .push(Space::new().width(Length::Fill))
         .push(
-            button(text(prs_filter_label(&state.prs_filter)).size(9))
+            button(text(prs_filter_label(&state.prs_filter)).size(theme::TEXT_META))
                 .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
                 .padding([2, 8])
                 .on_press(Msg::CyclePrFilter),
         )
-        .push(
-            button(text("⟳").size(11))
+        .push(theme::tip(
+            tokens,
+            button(text(theme::icon::REFRESH).size(theme::TEXT_SMALL))
                 .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
-                .padding([2, 8])
+                .padding([4, 8])
                 .on_press(Msg::RefreshPressed),
-        )
-        .push(
-            button(text("×").size(12))
+            "Reload status, context and pull requests",
+        ))
+        .push(theme::tip(
+            tokens,
+            button(text(theme::icon::CLOSE).size(theme::TEXT_BODY))
                 .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
-                .padding([2, 8])
+                .padding([4, 8])
                 .on_press(Msg::ToggleOpen),
-        );
+            "Close forge panel",
+        ));
     header.into()
 }
 
@@ -1445,7 +1453,7 @@ fn status_badge<'a>(state: &'a ForgeState, tokens: Tokens) -> Element<'a, Msg> {
             (format!("gh {version}"), tokens.added)
         }
     };
-    text(label).size(10).color(color).into()
+    text(label).size(theme::TEXT_META).color(color).into()
 }
 
 /// gh status line: install/auth guidance, or owner/repo + branch + sha.
@@ -1456,24 +1464,28 @@ fn status_line<'a>(state: &'a ForgeState, tokens: Tokens, ctx: &'a ForgeCtx) -> 
         if !status.available {
             line = line.push(
                 text("gh not found — install the GitHub CLI (https://cli.github.com) and run `gh auth login`.")
-                    .size(10)
+                    .size(theme::TEXT_META)
                     .color(tokens.deleted),
             );
         } else if !status.authed {
             line = line.push(
                 text("gh is installed but not authenticated — run `gh auth login`.")
-                    .size(10)
+                    .size(theme::TEXT_META)
                     .color(tokens.modified),
             );
         }
     } else if state.status_loading {
-        line = line.push(text("Checking gh…").size(10).color(tokens.muted_foreground));
+        line = line.push(
+            text("Checking gh…")
+                .size(theme::TEXT_META)
+                .color(tokens.muted_foreground),
+        );
     }
 
     if let Some(error) = &state.context_error {
         line = line.push(
             text(clip(&format!("not a GitHub remote: {error}"), 120))
-                .size(9)
+                .size(theme::TEXT_META)
                 .color(tokens.muted_foreground),
         );
     } else if let Some(context) = &state.context {
@@ -1492,7 +1504,7 @@ fn status_line<'a>(state: &'a ForgeState, tokens: Tokens, ctx: &'a ForgeCtx) -> 
                 "{}/{} · branch {branch}{sha}",
                 context.owner, context.repo
             ))
-            .size(9)
+            .size(theme::TEXT_META)
             .color(tokens.muted_foreground),
         );
     }
@@ -1515,7 +1527,7 @@ fn create_section<'a>(
             } else {
                 "+ New pull request"
             })
-            .size(10),
+            .size(theme::TEXT_META),
         )
         .style(theme::button_style(tokens, theme::ButtonKind::Secondary))
         .padding([2, 8])
@@ -1530,7 +1542,7 @@ fn create_section<'a>(
         };
         head = head.push(
             text(format!("head {head_label} → base"))
-                .size(9)
+                .size(theme::TEXT_META)
                 .color(tokens.muted_foreground),
         );
     }
@@ -1538,22 +1550,30 @@ fn create_section<'a>(
 
     if state.create_open {
         let mut picks = row![].spacing(6).align_y(Alignment::Center);
-        picks = picks.push(text("base").size(9).color(tokens.muted_foreground));
+        picks = picks.push(
+            text("base")
+                .size(theme::TEXT_META)
+                .color(tokens.muted_foreground),
+        );
         picks = picks.push(
             pick_list(
                 ctx.base_branches.as_slice(),
                 Some(resolve_base(state, ctx)),
                 Msg::CreateBaseChanged,
             )
-            .text_size(11)
+            .text_size(theme::TEXT_SMALL)
             .padding([3, 6])
             .width(Length::Fixed(150.0)),
         );
-        picks = picks.push(text("head").size(9).color(tokens.muted_foreground));
+        picks = picks.push(
+            text("head")
+                .size(theme::TEXT_META)
+                .color(tokens.muted_foreground),
+        );
         picks = picks.push(
             text_input("defaults to current branch", state.create_head.as_str())
                 .on_input(Msg::CreateHeadChanged)
-                .size(11)
+                .size(theme::TEXT_SMALL)
                 .padding([4, 6])
                 .width(Length::Fixed(150.0)),
         );
@@ -1563,7 +1583,7 @@ fn create_section<'a>(
             text_input("Title", state.create_title.as_str())
                 .on_input(Msg::CreateTitleChanged)
                 .on_submit(Msg::CreatePressed)
-                .size(11)
+                .size(theme::TEXT_SMALL)
                 .padding([4, 6])
                 .width(Length::Fill),
         );
@@ -1572,7 +1592,7 @@ fn create_section<'a>(
             text_editor(&state.create_body)
                 .placeholder("Description (optional)")
                 .on_action(Msg::CreateBodyChanged)
-                .size(11)
+                .size(theme::TEXT_SMALL)
                 .padding(6)
                 .height(Length::Fixed(72.0)),
         );
@@ -1587,7 +1607,7 @@ fn create_section<'a>(
                     } else {
                         "Create pull request"
                     })
-                    .size(10)
+                    .size(theme::TEXT_META)
                     .color(tokens.primary_foreground)
                 )
                 .style(theme::button_style(
@@ -1605,7 +1625,12 @@ fn create_section<'a>(
         );
 
         if let Some(error) = &state.create_error {
-            section = section.push(text(error).size(10).color(tokens.deleted));
+            section = section.push(theme::note(
+                tokens,
+                error.clone(),
+                true,
+                theme::NoteKind::Inline,
+            ));
         }
     }
 
@@ -1625,13 +1650,45 @@ fn pr_list<'a>(state: &'a ForgeState, tokens: Tokens) -> Element<'a, Msg> {
                 .width(Length::Fill)
                 .into()
         }
-        Some(_) => note(tokens, "No pull requests match this filter."),
-        None if state.prs_error.is_some() => note(
+        Some(_) => theme::note(
             tokens,
-            &clip(state.prs_error.as_deref().unwrap_or_default(), 160),
+            "No pull requests match this filter.",
+            false,
+            theme::NoteKind::Empty,
         ),
-        None if state.loading => note(tokens, "Loading pull requests…"),
-        None => note(tokens, "No pull requests loaded — press ⟳."),
+        None if state.prs_error.is_some() => {
+            // The header ⟳ is the panel's refresh; reuse it as the retry.
+            let retry = theme::mini_button(
+                tokens,
+                "Retry",
+                "Reload pull requests",
+                Some(Msg::RefreshPressed),
+            );
+            row![
+                theme::note(
+                    tokens,
+                    clip(state.prs_error.as_deref().unwrap_or_default(), 160),
+                    true,
+                    theme::NoteKind::Inline,
+                ),
+                retry,
+            ]
+            .spacing(4)
+            .align_y(Alignment::Center)
+            .into()
+        }
+        None if state.loading => theme::note(
+            tokens,
+            "Loading pull requests…",
+            false,
+            theme::NoteKind::Inline,
+        ),
+        None => theme::note(
+            tokens,
+            "No pull requests loaded — press ⟳.",
+            false,
+            theme::NoteKind::Empty,
+        ),
     };
     list
 }
@@ -1640,11 +1697,15 @@ fn pr_row<'a>(pr: &'a PrRow, selected: bool, tokens: Tokens) -> Element<'a, Msg>
     let mut title_line = row![].spacing(6).align_y(Alignment::Center);
     title_line = title_line.push(
         text(format!("#{}", pr.number))
-            .size(11)
+            .size(theme::TEXT_SMALL)
             .font(theme::mono())
             .color(tokens.muted_foreground),
     );
-    title_line = title_line.push(text(clip(&pr.title, 60)).size(11).color(tokens.foreground));
+    title_line = title_line.push(
+        text(clip(&pr.title, 60))
+            .size(theme::TEXT_SMALL)
+            .color(tokens.foreground),
+    );
     title_line = title_line.push(state_chip(pr.state, tokens));
     if let Some(summary) = &pr.checks {
         title_line = title_line.push(ci_chip(summary, tokens));
@@ -1652,7 +1713,9 @@ fn pr_row<'a>(pr: &'a PrRow, selected: bool, tokens: Tokens) -> Element<'a, Msg>
 
     let line = column![
         title_line,
-        text(pr_meta(pr)).size(9).color(tokens.muted_foreground),
+        text(pr_meta(pr))
+            .size(theme::TEXT_META)
+            .color(tokens.muted_foreground),
     ]
     .spacing(1)
     .width(Length::Fill);
@@ -1696,7 +1759,7 @@ fn detail_section<'a>(state: &'a ForgeState, tokens: Tokens) -> Option<Element<'
     let mut title = row![].spacing(6).align_y(Alignment::Center);
     title = title.push(
         text(format!("#{} {}", pr.number, clip(&pr.title, 60)))
-            .size(11)
+            .size(theme::TEXT_SMALL)
             .font(theme::semibold())
             .color(tokens.foreground),
     );
@@ -1704,17 +1767,21 @@ fn detail_section<'a>(state: &'a ForgeState, tokens: Tokens) -> Option<Element<'
     if !pr.review_decision.is_empty() {
         title = title.push(
             text(review_label(&pr.review_decision))
-                .size(9)
+                .size(theme::TEXT_META)
                 .color(tokens.muted_foreground),
         );
     }
     detail = detail.push(title);
-    detail = detail.push(text(pr_meta(pr)).size(9).color(tokens.muted_foreground));
+    detail = detail.push(
+        text(pr_meta(pr))
+            .size(theme::TEXT_META)
+            .color(tokens.muted_foreground),
+    );
 
     if pr.mergeable == "CONFLICTING" {
         detail = detail.push(
             text("head conflicts with base — merging fails until the conflicts are resolved")
-                .size(9)
+                .size(theme::TEXT_META)
                 .color(tokens.deleted),
         );
     }
@@ -1818,8 +1885,8 @@ fn pr_actions<'a>(pr: &'a PrRow, state: &'a ForgeState, tokens: Tokens) -> Eleme
     actions = actions.push(
         checkbox(state.merge_delete_branch)
             .label("delete branch")
-            .size(12)
-            .text_size(9)
+            .size(theme::TEXT_BODY)
+            .text_size(theme::TEXT_META)
             .spacing(4)
             .on_toggle(Msg::MergeDeleteBranchToggled),
     );
@@ -1833,7 +1900,7 @@ fn pr_actions<'a>(pr: &'a PrRow, state: &'a ForgeState, tokens: Tokens) -> Eleme
                     .map(|busy| busy.label.as_str())
                     .unwrap_or("working")
             ))
-            .size(9)
+            .size(theme::TEXT_META)
             .color(tokens.muted_foreground),
         );
     }
@@ -1883,20 +1950,25 @@ fn comment_section<'a>(state: &'a ForgeState, tokens: Tokens) -> Element<'a, Msg
     let mut section = column![].spacing(2).width(Length::Fill);
     section = section.push(
         text("Comment / review")
-            .size(10)
+            .size(theme::TEXT_META)
             .color(tokens.muted_foreground),
     );
     section = section.push(
         text_editor(&state.comment)
             .placeholder("Comment body (request changes needs one)…")
             .on_action(Msg::CommentChanged)
-            .size(11)
+            .size(theme::TEXT_SMALL)
             .padding(6)
             .height(Length::Fixed(56.0)),
     );
     section = section.push(actions);
     if let Some(error) = &state.comment_error {
-        section = section.push(text(error.clone()).size(10).color(tokens.deleted));
+        section = section.push(theme::note(
+            tokens,
+            error.clone(),
+            true,
+            theme::NoteKind::Inline,
+        ));
     }
 
     section.into()
@@ -1906,16 +1978,27 @@ fn checks_section<'a>(pr: &'a PrRow, state: &'a ForgeState, tokens: Tokens) -> E
     let mut section = column![].spacing(2).width(Length::Fill);
 
     let mut head = row![].spacing(6).align_y(Alignment::Center);
-    head = head.push(text("Checks").size(10).color(tokens.muted_foreground));
+    head = head.push(
+        text("Checks")
+            .size(theme::TEXT_META)
+            .color(tokens.muted_foreground),
+    );
     if let Some(summary) = &pr.checks {
-        head = head.push(text(summary.label()).size(9).color(tokens.muted_foreground));
+        head = head.push(
+            text(summary.label())
+                .size(theme::TEXT_META)
+                .color(tokens.muted_foreground),
+        );
     }
     section = section.push(head);
 
     let body: Element<'a, Msg> = match (&state.checks, state.checks_loading, &state.checks_error) {
-        (Some(checks), _, _) if checks.is_empty() => {
-            note(tokens, "No checks reported for this PR.")
-        }
+        (Some(checks), _, _) if checks.is_empty() => theme::note(
+            tokens,
+            "No checks reported for this PR.",
+            false,
+            theme::NoteKind::Empty,
+        ),
         (Some(checks), _, _) => {
             let mut rows = column![].spacing(1).width(Length::Fill);
             for check in checks {
@@ -1927,9 +2010,11 @@ fn checks_section<'a>(pr: &'a PrRow, state: &'a ForgeState, tokens: Tokens) -> E
                 .width(Length::Fill)
                 .into()
         }
-        (None, true, _) => note(tokens, "Loading checks…"),
-        (None, false, Some(error)) => note(tokens, &clip(error, 140)),
-        (None, false, None) => note(tokens, "…"),
+        (None, true, _) => theme::note(tokens, "Loading checks…", false, theme::NoteKind::Inline),
+        (None, false, Some(error)) => {
+            theme::note(tokens, clip(error, 140), true, theme::NoteKind::Inline)
+        }
+        (None, false, None) => theme::note(tokens, "…", false, theme::NoteKind::Inline),
     };
     section = section.push(body);
 
@@ -1951,13 +2036,13 @@ fn checks_section<'a>(pr: &'a PrRow, state: &'a ForgeState, tokens: Tokens) -> E
 fn check_row<'a>(check: &'a CheckInfo, tokens: Tokens) -> Element<'a, Msg> {
     let (glyph, color) = check_glyph(&check.state, tokens);
     row![
-        text(glyph).size(10).color(color),
+        text(glyph).size(theme::TEXT_META).color(color),
         text(check.name.as_str())
-            .size(10)
+            .size(theme::TEXT_META)
             .font(theme::mono())
             .color(tokens.foreground),
         text(check.state.as_str())
-            .size(9)
+            .size(theme::TEXT_META)
             .color(tokens.muted_foreground),
     ]
     .spacing(6)
@@ -1971,7 +2056,7 @@ fn runs_section<'a>(state: &'a ForgeState, tokens: Tokens) -> Element<'a, Msg> {
     let mut head = row![].spacing(6).align_y(Alignment::Center);
     head = head.push(
         text("Workflow runs")
-            .size(10)
+            .size(theme::TEXT_META)
             .color(tokens.muted_foreground),
     );
     head = head.push(Space::new().width(Length::Fill));
@@ -1993,7 +2078,12 @@ fn runs_section<'a>(state: &'a ForgeState, tokens: Tokens) -> Element<'a, Msg> {
     }
 
     let body: Element<'a, Msg> = match (&state.runs, state.runs_loading, &state.runs_error) {
-        (Some(runs), _, _) if runs.is_empty() => note(tokens, "No workflow runs for this branch."),
+        (Some(runs), _, _) if runs.is_empty() => theme::note(
+            tokens,
+            "No workflow runs for this branch.",
+            false,
+            theme::NoteKind::Empty,
+        ),
         (Some(runs), _, _) => {
             let mut rows = column![].spacing(1).width(Length::Fill);
             for run in runs {
@@ -2011,9 +2101,16 @@ fn runs_section<'a>(state: &'a ForgeState, tokens: Tokens) -> Element<'a, Msg> {
                 .width(Length::Fill)
                 .into()
         }
-        (None, true, _) => note(tokens, "Loading workflow runs…"),
-        (None, false, Some(error)) => note(tokens, &clip(error, 140)),
-        (None, false, None) => note(tokens, "…"),
+        (None, true, _) => theme::note(
+            tokens,
+            "Loading workflow runs…",
+            false,
+            theme::NoteKind::Inline,
+        ),
+        (None, false, Some(error)) => {
+            theme::note(tokens, clip(error, 140), true, theme::NoteKind::Inline)
+        }
+        (None, false, None) => theme::note(tokens, "…", false, theme::NoteKind::Inline),
     };
     section = section.push(body);
 
@@ -2087,10 +2184,10 @@ fn run_row<'a>(run: &'a WorkflowRun, state: &'a ForgeState, tokens: Tokens) -> E
     }
 
     row![
-        text(glyph).size(10).color(color),
+        text(glyph).size(theme::TEXT_META).color(color),
         column![
             text(format!("#{} {}", run.number, clip(&run.name, 32)))
-                .size(10)
+                .size(theme::TEXT_META)
                 .font(theme::mono())
                 .color(tokens.foreground),
             text(format!(
@@ -2099,7 +2196,7 @@ fn run_row<'a>(run: &'a WorkflowRun, state: &'a ForgeState, tokens: Tokens) -> E
                 run.event,
                 clip(&run.display_title, 48)
             ))
-            .size(9)
+            .size(theme::TEXT_META)
             .color(tokens.muted_foreground),
         ]
         .spacing(0)
@@ -2116,7 +2213,7 @@ fn run_row<'a>(run: &'a WorkflowRun, state: &'a ForgeState, tokens: Tokens) -> E
 fn run_cancel_confirm<'a>(run: &'a WorkflowRun, tokens: Tokens) -> Element<'a, Msg> {
     row![
         text(format!("Cancel run #{}?", run.number))
-            .size(9)
+            .size(theme::TEXT_META)
             .color(tokens.deleted),
         action_button(
             "Confirm",
@@ -2150,9 +2247,21 @@ fn run_detail_section<'a>(state: &'a ForgeState, tokens: Tokens) -> Element<'a, 
         state.run_detail_loading,
         &state.run_detail_error,
     ) {
-        (_, true, _) => detail = detail.push(note(tokens, "Loading run detail…")),
+        (_, true, _) => {
+            detail = detail.push(theme::note(
+                tokens,
+                "Loading run detail…",
+                false,
+                theme::NoteKind::Inline,
+            ))
+        }
         (_, false, Some(error)) => {
-            detail = detail.push(note(tokens, &clip(error, 140)));
+            detail = detail.push(theme::note(
+                tokens,
+                clip(error, 140),
+                true,
+                theme::NoteKind::Inline,
+            ));
         }
         (Some(loaded), false, _) => {
             let run = &loaded.run;
@@ -2161,7 +2270,7 @@ fn run_detail_section<'a>(state: &'a ForgeState, tokens: Tokens) -> Element<'a, 
                     "attempt {} · {} · {}",
                     run.attempt, run.status, run.conclusion
                 ))
-                .size(9)
+                .size(theme::TEXT_META)
                 .font(theme::mono())
                 .color(tokens.muted_foreground),
             );
@@ -2169,10 +2278,10 @@ fn run_detail_section<'a>(state: &'a ForgeState, tokens: Tokens) -> Element<'a, 
             for job in &loaded.jobs {
                 let (glyph, color) = check_glyph(&conclusion_glyph_key(job), tokens);
                 let mut job_row = row![].spacing(4).align_y(Alignment::Center);
-                job_row = job_row.push(text(glyph).size(9).color(color));
+                job_row = job_row.push(text(glyph).size(theme::TEXT_META).color(color));
                 job_row = job_row.push(
                     text(job.name.as_str())
-                        .size(9)
+                        .size(theme::TEXT_META)
                         .font(theme::mono())
                         .color(tokens.foreground),
                 );
@@ -2186,7 +2295,7 @@ fn run_detail_section<'a>(state: &'a ForgeState, tokens: Tokens) -> Element<'a, 
                         },
                         job.steps.len()
                     ))
-                    .size(8)
+                    .size(theme::TEXT_META)
                     .color(tokens.muted_foreground),
                 );
                 jobs = jobs.push(job_row);
@@ -2207,16 +2316,18 @@ fn run_detail_section<'a>(state: &'a ForgeState, tokens: Tokens) -> Element<'a, 
         state.run_logs_loading,
         &state.run_logs_error,
     ) {
-        (Some(lines), _, _) if lines.is_empty() => note(
+        (Some(lines), _, _) if lines.is_empty() => theme::note(
             tokens,
             "No log output yet (empty while the run is active is normal).",
+            false,
+            theme::NoteKind::Inline,
         ),
         (Some(lines), _, _) => {
             let mut log_rows = column![].spacing(0).width(Length::Fill);
             for line in lines {
                 log_rows = log_rows.push(
                     text(line.as_str())
-                        .size(8)
+                        .size(theme::TEXT_META)
                         .font(theme::mono())
                         .color(tokens.foreground),
                 );
@@ -2226,9 +2337,11 @@ fn run_detail_section<'a>(state: &'a ForgeState, tokens: Tokens) -> Element<'a, 
                 .width(Length::Fill)
                 .into()
         }
-        (None, true, _) => note(tokens, "Loading logs…"),
-        (None, false, Some(error)) => note(tokens, &clip(error, 140)),
-        (None, false, None) => note(tokens, "…"),
+        (None, true, _) => theme::note(tokens, "Loading logs…", false, theme::NoteKind::Inline),
+        (None, false, Some(error)) => {
+            theme::note(tokens, clip(error, 140), true, theme::NoteKind::Inline)
+        }
+        (None, false, None) => theme::note(tokens, "…", false, theme::NoteKind::Inline),
     };
     detail = detail.push(logs);
 
@@ -2272,7 +2385,11 @@ fn dispatch_form<'a>(state: &'a ForgeState, tokens: Tokens) -> Element<'a, Msg> 
     let mut form = column![].spacing(3).width(Length::Fill);
 
     let mut picks = row![].spacing(6).align_y(Alignment::Center);
-    picks = picks.push(text("workflow").size(9).color(tokens.muted_foreground));
+    picks = picks.push(
+        text("workflow")
+            .size(theme::TEXT_META)
+            .color(tokens.muted_foreground),
+    );
     picks = picks.push(match (&state.workflows, state.workflows_loading) {
         (Some(workflows), _) => Element::from(
             pick_list(
@@ -2280,17 +2397,26 @@ fn dispatch_form<'a>(state: &'a ForgeState, tokens: Tokens) -> Element<'a, Msg> 
                 state.dispatch_workflow.as_ref(),
                 |workflow| Msg::DispatchWorkflowSelected(workflow.clone()),
             )
-            .text_size(10)
+            .text_size(theme::TEXT_META)
             .padding([3, 6])
             .width(Length::Fixed(220.0)),
         ),
-        (None, true) => text("Loading workflows…").size(9).into(),
+        (None, true) => text("Loading workflows…").size(theme::TEXT_META).into(),
         (None, false) => match &state.workflows_error {
-            Some(error) => note(tokens, &clip(error, 100)),
-            None => note(tokens, "Press ⟳ or reopen to retry."),
+            Some(error) => theme::note(tokens, clip(error, 100), true, theme::NoteKind::Inline),
+            None => theme::note(
+                tokens,
+                "Press ⟳ or reopen to retry.",
+                false,
+                theme::NoteKind::Inline,
+            ),
         },
     });
-    picks = picks.push(text("ref").size(9).color(tokens.muted_foreground));
+    picks = picks.push(
+        text("ref")
+            .size(theme::TEXT_META)
+            .color(tokens.muted_foreground),
+    );
     picks = picks.push(
         text_input(
             &if state.current_branch.trim().is_empty() {
@@ -2301,7 +2427,7 @@ fn dispatch_form<'a>(state: &'a ForgeState, tokens: Tokens) -> Element<'a, Msg> 
             state.dispatch_ref.as_str(),
         )
         .on_input(Msg::DispatchRefChanged)
-        .size(10)
+        .size(theme::TEXT_META)
         .padding([3, 6])
         .width(Length::Fixed(150.0)),
     );
@@ -2314,7 +2440,7 @@ fn dispatch_form<'a>(state: &'a ForgeState, tokens: Tokens) -> Element<'a, Msg> 
         )
         .on_input(Msg::DispatchInputsChanged)
         .on_submit(Msg::DispatchSubmit)
-        .size(10)
+        .size(theme::TEXT_META)
         .padding([3, 6])
         .width(Length::Fill),
     );
@@ -2329,7 +2455,7 @@ fn dispatch_form<'a>(state: &'a ForgeState, tokens: Tokens) -> Element<'a, Msg> 
                 } else {
                     "Run workflow"
                 })
-                .size(9)
+                .size(theme::TEXT_META)
                 .color(tokens.primary_foreground),
             )
             .style(theme::button_style(
@@ -2347,7 +2473,12 @@ fn dispatch_form<'a>(state: &'a ForgeState, tokens: Tokens) -> Element<'a, Msg> 
     );
 
     if let Some(error) = &state.dispatch_error {
-        form = form.push(text(error.clone()).size(9).color(tokens.deleted));
+        form = form.push(theme::note(
+            tokens,
+            error.clone(),
+            true,
+            theme::NoteKind::Inline,
+        ));
     }
 
     container(form)
@@ -2416,51 +2547,26 @@ fn run_glyph(run: &WorkflowRun, tokens: Tokens) -> (&'static str, Color) {
 }
 
 fn state_chip<'a>(state: PrState, tokens: Tokens) -> Element<'a, Msg> {
-    let (fg, bg) = match state {
-        PrState::Open => (tokens.added, tokens.added_bg()),
-        PrState::Draft => (
-            tokens.muted_foreground,
-            theme::with_alpha(tokens.muted, 0.6),
-        ),
-        PrState::Merged => (tokens.renamed, tokens.renamed_bg()),
-        PrState::Closed => (tokens.deleted, tokens.deleted_bg()),
-        PrState::Unknown => (
-            tokens.muted_foreground,
-            theme::with_alpha(tokens.muted, 0.6),
-        ),
+    let fg = match state {
+        PrState::Open => tokens.added,
+        PrState::Draft | PrState::Unknown => tokens.muted_foreground,
+        PrState::Merged => tokens.renamed,
+        PrState::Closed => tokens.deleted,
     };
-    chip(state.label(), fg, bg)
+    theme::chip(state.label(), fg, theme::ChipShape::Pill)
 }
 
 fn ci_chip<'a>(summary: &'a CheckSummary, tokens: Tokens) -> Element<'a, Msg> {
-    let (fg, bg) = if summary.fail > 0 {
-        (tokens.deleted, tokens.deleted_bg())
+    let fg = if summary.fail > 0 {
+        tokens.deleted
     } else if summary.pending > 0 {
-        (tokens.modified, tokens.modified_bg())
+        tokens.modified
     } else if summary.total() > 0 {
-        (tokens.added, tokens.added_bg())
+        tokens.added
     } else {
-        (
-            tokens.muted_foreground,
-            theme::with_alpha(tokens.muted, 0.6),
-        )
+        tokens.muted_foreground
     };
-    chip(&summary.label(), fg, bg)
-}
-
-fn chip<'a>(label: &str, fg: Color, bg: Color) -> Element<'a, Msg> {
-    container(text(label.to_string()).size(9).color(fg))
-        .padding([1, 6])
-        .style(move |_theme| container::Style {
-            background: Some(Background::Color(bg)),
-            border: Border {
-                color: bg,
-                width: 1.0,
-                radius: 8.0.into(),
-            },
-            ..container::Style::default()
-        })
-        .into()
+    theme::chip(summary.label(), fg, theme::ChipShape::Pill)
 }
 
 fn action_button<'a>(
@@ -2470,7 +2576,7 @@ fn action_button<'a>(
     msg: Msg,
     tokens: Tokens,
 ) -> Element<'a, Msg> {
-    button(text(label.to_string()).size(9))
+    button(text(label.to_string()).size(theme::TEXT_META))
         .style(theme::button_style(tokens, kind))
         .padding([2, 6])
         .on_press_maybe(enabled.then_some(msg))
@@ -2480,7 +2586,7 @@ fn action_button<'a>(
 fn banner<'a>(label: &str, color: Color) -> Element<'a, Msg> {
     container(
         text(clip(label, 200))
-            .size(10)
+            .size(theme::TEXT_META)
             .font(theme::semibold())
             .color(color),
     )
@@ -2495,17 +2601,6 @@ fn banner<'a>(label: &str, color: Color) -> Element<'a, Msg> {
         },
         ..container::Style::default()
     })
-    .into()
-}
-
-fn note<'a>(tokens: Tokens, label: &str) -> Element<'a, Msg> {
-    container(
-        text(label.to_string())
-            .size(10)
-            .color(tokens.muted_foreground),
-    )
-    .padding([4, 2])
-    .width(Length::Fill)
     .into()
 }
 

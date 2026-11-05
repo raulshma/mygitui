@@ -178,18 +178,27 @@ fn validate_clone_destination(path: &Path) -> Result<(), String> {
 
 /// Clone `url` into `destination` (missing or empty), optionally shallow
 /// (`depth`), publishing `clone-progress` events. Resolves with the path.
+/// `cancel` aborts the transfer from the UI: git2's transfer-progress
+/// callback returning `false` stops the clone (the resolve is then an
+/// "cancelled" error).
 pub async fn repo_clone(
     _services: &AppServices,
     url: String,
     destination: String,
     depth: Option<u32>,
+    cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
 ) -> Result<String, String> {
-    crate::rt::spawn_blocking(move || clone_sync(&url, &destination, depth))
+    crate::rt::spawn_blocking(move || clone_sync(&url, &destination, depth, &cancel))
         .await
         .map_err(|e| format!("clone task failed: {e}"))?
 }
 
-fn clone_sync(url: &str, destination: &str, depth: Option<u32>) -> Result<String, String> {
+fn clone_sync(
+    url: &str,
+    destination: &str,
+    depth: Option<u32>,
+    cancel: &std::sync::Arc<std::sync::atomic::AtomicBool>,
+) -> Result<String, String> {
     if url.trim().is_empty() {
         return Err("clone url must not be empty".to_string());
     }
@@ -202,7 +211,12 @@ fn clone_sync(url: &str, destination: &str, depth: Option<u32>) -> Result<String
     let mut callbacks = git2::RemoteCallbacks::new();
     let event_url = url.to_string();
     let last_emit = Mutex::new(std::time::Instant::now());
+    let cancelled = std::sync::Arc::clone(cancel);
     callbacks.transfer_progress(move |stats| {
+        // The UI flips `cancel` to abort; libgit2 then unwinds the clone.
+        if cancelled.load(std::sync::atomic::Ordering::Relaxed) {
+            return false;
+        }
         let stats = CloneStats::from(&stats);
         let done = stats.total_objects > 0 && stats.received_objects >= stats.total_objects;
         let ready = {
@@ -227,9 +241,13 @@ fn clone_sync(url: &str, destination: &str, depth: Option<u32>) -> Result<String
     }
     let mut builder = git2::build::RepoBuilder::new();
     builder.fetch_options(fetch);
-    builder
-        .clone(url, dest)
-        .map_err(|e| format!("clone failed: {e}"))?;
+    builder.clone(url, dest).map_err(|e| {
+        if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+            "clone cancelled".to_string()
+        } else {
+            format!("clone failed: {e}")
+        }
+    })?;
     Ok(destination.to_string())
 }
 

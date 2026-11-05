@@ -35,9 +35,14 @@ pub fn view<'a>(tab: &'a Tab, tokens: Tokens) -> Element<'a, Message> {
         .filter(|row| row.section == SectionId::Changes && row.kind == ChangeKind::Untracked)
         .count();
     let clean_button = if untracked > 0 {
-        mini(tokens, "Clean…", "Delete untracked files").on_press(Message::CleanDialogRequested)
+        theme::mini_button(
+            tokens,
+            "Clean…",
+            "Delete untracked files",
+            Some(Message::CleanDialogRequested),
+        )
     } else {
-        mini(tokens, "Clean…", "No untracked files")
+        theme::mini_button(tokens, "Clean…", "No untracked files", None)
     };
     // Conflicted rows get a one-click path into the external mergetool.
     let conflicts = tab
@@ -47,34 +52,58 @@ pub fn view<'a>(tab: &'a Tab, tokens: Tokens) -> Element<'a, Message> {
         .filter(|row| row.kind == ChangeKind::Conflicted)
         .count();
 
-    let mut header_row = row![
-        text("Source Control").size(12).font(theme::semibold()),
+    // Two header rows: title + counts, then the action minis. One row
+    // overflows the 320px sidebar once conflicts add "Mergetool…" and the
+    // counts grow (iced rows don't wrap).
+    let title_row = row![
+        text("Source Control")
+            .size(theme::TEXT_BODY)
+            .font(theme::semibold()),
         Space::new().width(Length::Fill),
-        text(summary).size(10).color(tokens.muted_foreground),
-        mini(tokens, "Templates", "Ignore templates…").on_press(Message::IgnoreTemplatesRequested),
-        clean_button,
+        text(summary)
+            .size(theme::TEXT_META)
+            .color(tokens.muted_foreground),
     ]
     .align_y(Alignment::Center);
+    let mut actions_row = row![
+        theme::mini_button(
+            tokens,
+            "Templates",
+            "Ignore templates…",
+            Some(Message::IgnoreTemplatesRequested),
+        ),
+        clean_button,
+    ]
+    .spacing(4)
+    .align_y(Alignment::Center);
     if conflicts > 0 {
-        header_row = header_row.push(
-            mini(
-                tokens,
-                "Mergetool…",
-                "Run the configured merge tool on a conflict",
-            )
-            .on_press(Message::MergetoolRequested),
-        );
+        actions_row = actions_row.push(theme::mini_button(
+            tokens,
+            "Mergetool…",
+            "Run the configured merge tool on a conflict",
+            Some(Message::MergetoolRequested),
+        ));
     }
-    let header = container(header_row.padding([8, 10]));
+    let header = container(column![title_row, actions_row].spacing(2).padding([8, 10]));
 
     let filter = container(
         row![
             text_input("Filter files", tab.filter.as_str())
                 .on_input(Message::StatusFilterChanged)
-                .size(11)
+                .size(theme::TEXT_SMALL)
                 .padding([5, 8]),
-            mini(tokens, "All", "Select all visible files").on_press(Message::StatusSelectAll),
-            mini(tokens, "None", "Clear selection").on_press(Message::StatusSelectNone),
+            theme::mini_button(
+                tokens,
+                "All",
+                "Select all visible files",
+                Some(Message::StatusSelectAll),
+            ),
+            theme::mini_button(
+                tokens,
+                "None",
+                "Clear selection",
+                Some(Message::StatusSelectNone)
+            ),
         ]
         .spacing(4)
         .align_y(Alignment::Center),
@@ -83,8 +112,23 @@ pub fn view<'a>(tab: &'a Tab, tokens: Tokens) -> Element<'a, Message> {
     .width(Length::Fill);
 
     let body: Element<'a, Message> = match &tab.status {
-        Load::Loading => note(tokens, "Loading status…"),
-        Load::Failed(error) => note(tokens, error.clone()),
+        Load::Loading => theme::note(tokens, "Loading status…", false, theme::NoteKind::Inline),
+        Load::Failed(error) => {
+            // Reuse the repo refresh the toolbar already wires instead of
+            // inventing a panel-specific retry message.
+            row![
+                theme::note(tokens, error.clone(), true, theme::NoteKind::Inline),
+                theme::mini_button(
+                    tokens,
+                    "Retry",
+                    "Reload status",
+                    Some(Message::Refresh(tab.repo.repo_id.clone())),
+                ),
+            ]
+            .spacing(4)
+            .align_y(Alignment::Center)
+            .into()
+        }
         Load::Ready(_) => sections(tab, tokens),
     };
 
@@ -99,10 +143,15 @@ pub fn view<'a>(tab: &'a Tab, tokens: Tokens) -> Element<'a, Message> {
 fn sections<'a>(tab: &'a Tab, tokens: Tokens) -> Element<'a, Message> {
     let views = filter_sections(&tab.status_index, &tab.filter);
     if tab.status_index.total() == 0 {
-        return note(tokens, "Working tree clean.");
+        return theme::note(tokens, "Working tree clean.", false, theme::NoteKind::Empty);
     }
     if views.is_empty() {
-        return note(tokens, "No files match the filter.");
+        return theme::note(
+            tokens,
+            "No files match the filter.",
+            false,
+            theme::NoteKind::Empty,
+        );
     }
 
     let mut list = column![].spacing(1).width(Length::Fill);
@@ -127,11 +176,15 @@ fn section_header<'a>(
     section: &SectionView<'a>,
 ) -> Element<'a, Message> {
     let collapsed = tab.section_collapsed(section.id);
-    let chevron = if collapsed { "▸" } else { "▾" };
+    let chevron = if collapsed {
+        theme::icon::COLLAPSE
+    } else {
+        theme::icon::EXPAND
+    };
     let label = format!("{chevron} {} ({})", section.id.label(), section.rows.len());
 
     let mut header = row![
-        button(text(label).size(11).font(theme::semibold()))
+        button(text(label).size(theme::TEXT_SMALL).font(theme::semibold()))
             .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
             .padding([5, 6])
             .on_press(Message::ToggleSection(section.id)),
@@ -147,7 +200,7 @@ fn section_header<'a>(
             SectionId::Changes => ("Stage all", false),
         };
         header = header.push(
-            button(text(label).size(10))
+            button(text(label).size(theme::TEXT_META))
                 .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
                 .padding([3, 6])
                 .on_press(Message::StagePaths { paths, unstage }),
@@ -169,13 +222,15 @@ fn row_view<'a>(tab: &'a Tab, tokens: Tokens, item: &'a StatusRow) -> Element<'a
     let current = tab.selected_row.as_deref() == Some(item.key.as_str());
     let color = kind_color(tokens, item.kind);
 
-    let mut label = column![text(clip(&item.base, 34)).size(12).font(theme::mono())]
-        .spacing(0)
-        .width(Length::Fill);
+    let mut label = column![text(clip(&item.base, 34))
+        .size(theme::TEXT_BODY)
+        .font(theme::mono())]
+    .spacing(0)
+    .width(Length::Fill);
     if !item.dir.is_empty() {
         label = label.push(
             text(clip(&item.dir, 42))
-                .size(10)
+                .size(theme::TEXT_META)
                 .color(tokens.muted_foreground),
         );
     }
@@ -193,7 +248,7 @@ fn row_view<'a>(tab: &'a Tab, tokens: Tokens, item: &'a StatusRow) -> Element<'a
 
     let mut content = row![
         accent,
-        badge(item.kind, color),
+        theme::chip(kind_letter(item.kind), color, theme::ChipShape::Badge),
         label,
         row_actions(tokens, item),
     ]
@@ -202,8 +257,14 @@ fn row_view<'a>(tab: &'a Tab, tokens: Tokens, item: &'a StatusRow) -> Element<'a
     .width(Length::Fill);
 
     if item.index == ChangeKind::Conflicted || item.worktree == ChangeKind::Conflicted {
-        content = content
-            .push(container(text("resolve").size(9).color(tokens.conflicted)).padding([0, 4]));
+        content = content.push(
+            container(
+                text("resolve")
+                    .size(theme::TEXT_META)
+                    .color(tokens.conflicted),
+            )
+            .padding([0, 4]),
+        );
     }
 
     let background = if current {
@@ -249,33 +310,35 @@ fn row_actions<'a>(tokens: Tokens, item: &'a StatusRow) -> Element<'a, Message> 
     let mut actions = row![].spacing(2).align_y(Alignment::Center);
     match item.section {
         SectionId::Staged => {
-            actions = actions.push(mini(tokens, "−", "Unstage file").on_press(
-                Message::StageFile {
+            actions = actions.push(theme::mini_button(
+                tokens,
+                theme::icon::REMOVE,
+                "Unstage file",
+                Some(Message::StageFile {
                     path: item.path.clone(),
                     unstage: true,
-                },
+                }),
             ));
         }
         SectionId::Changes => {
-            actions = actions.push(
-                mini(tokens, "＋", "Stage file").on_press(Message::StageFile {
+            actions = actions.push(theme::mini_button(
+                tokens,
+                theme::icon::ADD,
+                "Stage file",
+                Some(Message::StageFile {
                     path: item.path.clone(),
                     unstage: false,
                 }),
-            );
-            actions = actions.push(
-                mini(tokens, "↺", "Discard changes")
-                    .on_press(Message::DiscardPath(item.path.clone())),
-            );
+            ));
+            actions = actions.push(theme::mini_button(
+                tokens,
+                theme::icon::DISCARD,
+                "Discard changes",
+                Some(Message::DiscardPath(item.path.clone())),
+            ));
         }
     }
     actions.into()
-}
-
-fn mini<'a>(tokens: Tokens, glyph: &'a str, _tip: &'a str) -> iced::widget::Button<'a, Message> {
-    button(text(glyph).size(11).color(tokens.muted_foreground))
-        .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
-        .padding([1, 5])
 }
 
 fn selection_bar<'a>(tab: &'a Tab, tokens: Tokens) -> Element<'a, Message> {
@@ -294,7 +357,7 @@ fn selection_bar<'a>(tab: &'a Tab, tokens: Tokens) -> Element<'a, Message> {
 
     let mut bar = row![
         text(format!("{count} selected"))
-            .size(10)
+            .size(theme::TEXT_META)
             .color(tokens.muted_foreground),
         Space::new().width(6),
     ]
@@ -303,7 +366,7 @@ fn selection_bar<'a>(tab: &'a Tab, tokens: Tokens) -> Element<'a, Message> {
 
     if !actions.stage.is_empty() {
         bar = bar.push(
-            button(text(format!("Stage {}", actions.stage.len())).size(10))
+            button(text(format!("Stage {}", actions.stage.len())).size(theme::TEXT_META))
                 .style(theme::button_style(tokens, theme::ButtonKind::Secondary))
                 .padding([2, 6])
                 .on_press(Message::StagePaths {
@@ -314,7 +377,7 @@ fn selection_bar<'a>(tab: &'a Tab, tokens: Tokens) -> Element<'a, Message> {
     }
     if !actions.unstage.is_empty() {
         bar = bar.push(
-            button(text(format!("Unstage {}", actions.unstage.len())).size(10))
+            button(text(format!("Unstage {}", actions.unstage.len())).size(theme::TEXT_META))
                 .style(theme::button_style(tokens, theme::ButtonKind::Secondary))
                 .padding([2, 6])
                 .on_press(Message::StagePaths {
@@ -325,7 +388,7 @@ fn selection_bar<'a>(tab: &'a Tab, tokens: Tokens) -> Element<'a, Message> {
     }
     if !actions.discard.is_empty() {
         bar = bar.push(
-            button(text(format!("Discard {}", actions.discard.len())).size(10))
+            button(text(format!("Discard {}", actions.discard.len())).size(theme::TEXT_META))
                 .style(theme::button_style(tokens, theme::ButtonKind::Danger))
                 .padding([2, 6])
                 .on_press(Message::DiscardPaths(actions.discard)),
@@ -347,7 +410,7 @@ fn selection_bar<'a>(tab: &'a Tab, tokens: Tokens) -> Element<'a, Message> {
             ("Both", ConflictResolution::Both),
         ] {
             bar = bar.push(
-                button(text(label).size(10).color(tokens.conflicted))
+                button(text(label).size(theme::TEXT_META).color(tokens.conflicted))
                     .style(theme::button_style(tokens, theme::ButtonKind::Secondary))
                     .padding([2, 6])
                     .on_press(Message::ConflictResolve {
@@ -359,12 +422,14 @@ fn selection_bar<'a>(tab: &'a Tab, tokens: Tokens) -> Element<'a, Message> {
     }
 
     bar = bar.push(Space::new().width(Length::Fill));
-    bar = bar.push(
-        button(text("✕").size(10))
+    bar = bar.push(theme::tip(
+        tokens,
+        button(text(theme::icon::CLOSE).size(theme::TEXT_META))
             .style(theme::button_style(tokens, theme::ButtonKind::Ghost))
-            .padding([2, 6])
+            .padding([4, 6])
             .on_press(Message::StatusSelectNone),
-    );
+        "Clear selection",
+    ));
 
     container(bar)
         .padding([3, 8])
@@ -378,35 +443,6 @@ fn selection_bar<'a>(tab: &'a Tab, tokens: Tokens) -> Element<'a, Message> {
             },
             ..container::Style::default()
         })
-        .into()
-}
-
-fn badge<'a>(kind: ChangeKind, color: Color) -> Element<'a, Message> {
-    container(
-        text(kind_letter(kind))
-            .size(9)
-            .font(theme::mono())
-            .color(color),
-    )
-    .width(Length::Fixed(16.0))
-    .height(Length::Fixed(16.0))
-    .align_x(Alignment::Center)
-    .align_y(Alignment::Center)
-    .style(move |_theme| container::Style {
-        background: Some(Background::Color(theme::with_alpha(color, 0.14))),
-        border: Border {
-            color: theme::with_alpha(color, 0.3),
-            width: 1.0,
-            radius: 3.0.into(),
-        },
-        ..container::Style::default()
-    })
-    .into()
-}
-
-fn note<'a>(tokens: Tokens, note: impl Into<String>) -> Element<'a, Message> {
-    container(text(note.into()).size(11).color(tokens.muted_foreground))
-        .padding([16, 12])
         .into()
 }
 

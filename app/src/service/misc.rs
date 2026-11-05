@@ -485,3 +485,85 @@ pub fn action_cancel(services: &AppServices, run_id: String) -> Result<bool, Str
     }
     Ok(services.remote_actions.cancel(&run_id))
 }
+
+#[cfg(test)]
+mod discard_repro_tests {
+    use super::*;
+
+    /// Temp repo with one commit containing `a.txt`.
+    fn scratch_repo(name: &str) -> std::path::PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("mygitui-discard-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let run = |args: &[&str]| {
+            let out = std::process::Command::new("git")
+                .args(args)
+                .current_dir(&dir)
+                .output()
+                .unwrap();
+            assert!(
+                out.status.success(),
+                "git {args:?}: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        };
+        run(&["init"]);
+        run(&["config", "user.name", "t"]);
+        run(&["config", "user.email", "t@t"]);
+        std::fs::write(dir.join("a.txt"), "one\n").unwrap();
+        run(&["add", "."]);
+        run(&["commit", "-m", "init"]);
+        dir
+    }
+
+    #[tokio::test]
+    async fn discard_restores_tracked_file_and_snapshots_first() {
+        let dir = scratch_repo("tracked");
+        // Services config lives beside the repo so nothing global is touched.
+        let services = AppServices::in_dir(&dir);
+        let info = services.repos.open_unwatched(&dir).unwrap();
+
+        std::fs::write(dir.join("a.txt"), "two\n").unwrap();
+        let result = discard(
+            &services,
+            info.repo_id.clone(),
+            vec![StageTarget::File("a.txt".into())],
+        )
+        .await;
+        assert!(result.is_ok(), "discard failed: {:?}", result.err());
+        assert_eq!(
+            std::fs::read_to_string(dir.join("a.txt")).unwrap(),
+            "one\n",
+            "workdir bytes must be restored from HEAD"
+        );
+        // The promised checkpoint exists and references a snapshot commit.
+        let checkpoints = checkpoints(&services, info.repo_id.clone()).await.unwrap();
+        assert!(
+            checkpoints.iter().any(|c| c.reason.contains("discard")),
+            "checkpoint must be created before discard: {checkpoints:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn discard_drops_newly_added_file() {
+        let dir = scratch_repo("untracked");
+        let services = AppServices::in_dir(&dir);
+        let info = services.repos.open_unwatched(&dir).unwrap();
+
+        std::fs::write(dir.join("new.txt"), "fresh\n").unwrap();
+        let result = discard(
+            &services,
+            info.repo_id.clone(),
+            vec![StageTarget::File("new.txt".into())],
+        )
+        .await;
+        assert!(result.is_ok(), "discard failed: {:?}", result.err());
+        assert!(
+            !dir.join("new.txt").exists(),
+            "untracked file must be deleted"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
