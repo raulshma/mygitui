@@ -38,6 +38,7 @@ import {
 } from "$lib/palette/palette.svelte";
 import { commandIcon } from "$lib/palette/commandIcons";
 import Icon from "$lib/components/icons/Icon.svelte";
+import { trapTab } from "$lib/components/safety/trapTab";
 import { Input } from "$lib/components/ui/input/index.js";
 import { Kbd } from "$lib/components/ui/kbd/index.js";
 
@@ -47,6 +48,7 @@ import { Kbd } from "$lib/components/ui/kbd/index.js";
   let query = $state("");
   let activeIndex = $state(0);
   let inputEl: HTMLInputElement | null = $state(null);
+  let panelEl: HTMLElement | null = $state(null);
   /** Element focused before the palette opened; focus returns there on close. */
   let triggerEl: HTMLElement | null = null;
 
@@ -138,8 +140,12 @@ import { Kbd } from "$lib/components/ui/kbd/index.js";
     }
   }
 
-  /** Typed keys stay in the combobox; Escape keeps bubbling to the scrim. */
+  /**
+   * Typed keys stay in the combobox; Tab is trapped inside the dialog;
+   * Escape keeps bubbling to the scrim.
+   */
   function onPanelKeydown(event: KeyboardEvent): void {
+    trapTab(panelEl, event);
     if (event.key !== "Escape") event.stopPropagation();
   }
 
@@ -174,6 +180,7 @@ import { Kbd } from "$lib/components/ui/kbd/index.js";
       aria-modal="true"
       aria-label="Command palette"
       tabindex="-1"
+      bind:this={panelEl}
       onclick={(event) => event.stopPropagation()}
       onkeydown={onPanelKeydown}
     >

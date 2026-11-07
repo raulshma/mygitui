@@ -88,6 +88,7 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
   import BisectBanner from "$lib/components/bisect/BisectBanner.svelte";
   import ConfirmDialog from "$lib/components/safety/ConfirmDialog.svelte";
   import PromptDialog from "$lib/components/safety/PromptDialog.svelte";
+  import { trapTab } from "$lib/components/safety/trapTab";
   import CommitBar from "$lib/components/panels/CommitBar.svelte";
   import OpLogStrip from "$lib/components/panels/OpLogStrip.svelte";
   import EditorPane from "$lib/components/panels/EditorPane.svelte";
@@ -716,6 +717,9 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
 
   /** ConflictEditor overlay open? */
   let conflictEditorOpen = $state(false);
+  let conflictDialogEl = $state<HTMLElement | null>(null);
+  /** Element focused before the overlay opened (restored on close). */
+  let conflictRestoreTo: HTMLElement | null = null;
   /** Abort RPC in flight (disables the Abort button). */
   let aborting = $state(false);
 
@@ -735,6 +739,21 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
     } else {
       conflictsStore.clear(repoId);
       conflictEditorOpen = false;
+    }
+  });
+
+  // Conflict overlay a11y: focus the dialog when it opens (ConflictEditor
+  // has no autofocus of its own) and return focus to the invoker on close.
+  $effect(() => {
+    if (conflictEditorOpen) {
+      conflictRestoreTo =
+        document.activeElement instanceof HTMLElement
+          ? document.activeElement
+          : null;
+      requestAnimationFrame(() => conflictDialogEl?.focus());
+    } else if (conflictRestoreTo !== null) {
+      conflictRestoreTo.focus();
+      conflictRestoreTo = null;
     }
   });
 
@@ -1660,12 +1679,23 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
 </div>
 
 {#if conflictEditorOpen}
+  <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
   <!-- Conflict resolution overlay: centered, large, above everything. -->
   <div
     class="conflict-overlay fixed inset-0 z-[60] flex items-center justify-center bg-black/45 p-8"
+    role="presentation"
+    onkeydown={(e) => {
+      // Tab stays inside the dialog (shared focus trap).
+      trapTab(conflictDialogEl, e);
+    }}
   >
     <div
       class="conflict-dialog flex h-[min(48rem,100%)] w-[min(64rem,100%)] flex-col overflow-hidden rounded-lg bg-card text-card-foreground shadow-[0_1rem_3rem_rgba(0,0,0,0.35)] [&>*]:flex-1 [&>*]:min-h-0"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Resolve merge conflicts"
+      tabindex="-1"
+      bind:this={conflictDialogEl}
     >
       <ConflictEditor
         {repoId}

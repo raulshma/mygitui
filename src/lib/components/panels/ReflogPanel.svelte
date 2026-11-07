@@ -19,6 +19,7 @@
   import PromptDialog from "$lib/components/safety/PromptDialog.svelte";
   import Icon from "$lib/components/icons/Icon.svelte";
   import { Button } from "$lib/components/ui/button/index.js";
+  import { Spinner } from "$lib/components/ui/spinner/index.js";
   import { appIcon } from "$lib/components/icons/library.svelte";
   import {
     groupReflogByDay,
@@ -171,6 +172,13 @@
     <p class="state m-0 px-3 py-4 text-[0.8125rem] text-destructive" role="alert"
       >{error}</p
     >
+  {:else if loading && entries.length === 0}
+    <p class="state m-auto px-3 py-4 text-[0.8125rem] text-muted-foreground" role="status">
+      <span class="inline-flex items-center gap-[0.4rem]">
+        <Spinner class="size-[14px]" role="presentation" aria-hidden="true" />
+        Loading reflog…
+      </span>
+    </p>
   {:else if !loading && entries.length === 0}
     <p class="state m-0 px-3 py-4 text-[0.8125rem] text-muted-foreground">
       No reflog entries for this ref.</p

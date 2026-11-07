@@ -25,6 +25,7 @@
   import { Badge } from "$lib/components/ui/badge";
   import { Button } from "$lib/components/ui/button/index.js";
   import { Input } from "$lib/components/ui/input/index.js";
+  import { Spinner } from "$lib/components/ui/spinner/index.js";
   import { appIcon } from "$lib/components/icons/library.svelte";
 
   let {
@@ -274,6 +275,13 @@
       <p class="state m-0 px-3 py-1 text-xs text-destructive" role="alert"
         >{error}</p
       >
+    {:else if loading && list.length === 0}
+      <p class="state m-0 px-3 py-1 text-xs text-muted-foreground" role="status">
+        <span class="inline-flex items-center gap-[0.3rem]">
+          <Spinner class="size-[12px]" role="presentation" aria-hidden="true" />
+          Loading tags…
+        </span>
+      </p>
     {:else if !loading && list.length === 0}
       <p class="state m-0 px-3 py-1 text-xs text-muted-foreground">No tags.</p>
     {:else}

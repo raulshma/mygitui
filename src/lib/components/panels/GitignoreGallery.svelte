@@ -9,6 +9,7 @@
   import { gitignoreApplyTemplate, gitignoreTemplates } from "$lib/ipc/client";
   import type { GitignoreTemplate } from "$lib/ipc/client";
   import { toast } from "$lib/toast";
+  import { trapTab } from "$lib/components/safety/trapTab";
   import { Button } from "$lib/components/ui/button/index.js";
 
   let {
@@ -28,6 +29,11 @@
   let query = $state("");
   let applying = $state<string | null>(null);
 
+  let searchEl = $state<HTMLInputElement | null>(null);
+  let dialogEl = $state<HTMLElement | null>(null);
+  /** Element focused before the gallery opened (restored on close). */
+  let restoreTo: HTMLElement | null = null;
+
   $effect(() => {
     if (!open || templates.length > 0) return;
     loading = true;
@@ -38,6 +44,20 @@
         error = err instanceof Error ? err.message : String(err);
       })
       .finally(() => (loading = false));
+  });
+
+  // Open: remember the invoker and focus the search box; close: restore.
+  $effect(() => {
+    if (open) {
+      restoreTo =
+        document.activeElement instanceof HTMLElement
+          ? document.activeElement
+          : null;
+      requestAnimationFrame(() => searchEl?.focus());
+    } else if (restoreTo !== null) {
+      restoreTo.focus();
+      restoreTo = null;
+    }
   });
 
   const filtered = $derived(
@@ -76,15 +96,19 @@
       if (e.key === "Escape") {
         e.preventDefault();
         open = false;
+        return;
       }
+      // Tab stays inside the dialog (shared focus trap).
+      trapTab(dialogEl, e);
     }}
   >
-    <div class="dialog flex max-h-[min(30rem,calc(100vh-4rem))] w-[min(26rem,calc(100vw-2rem))] flex-col rounded-lg border border-border bg-card px-6 py-5 text-sm text-foreground shadow-xl" role="dialog" aria-modal="true" aria-labelledby="gi-title">
+    <div class="dialog flex max-h-[min(30rem,calc(100vh-4rem))] w-[min(26rem,calc(100vw-2rem))] flex-col rounded-lg border border-border bg-card px-6 py-5 text-sm text-foreground shadow-xl" role="dialog" aria-modal="true" aria-labelledby="gi-title" bind:this={dialogEl}>
       <h2 id="gi-title" class="title m-0 mb-3 text-lg font-medium">.gitignore templates</h2>
       <input
         class="search mb-2 rounded-md border border-border bg-background px-2.5 py-1.5 text-foreground focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-ring"
         type="search"
         bind:value={query}
+        bind:this={searchEl}
         placeholder="Search templates"
         aria-label="Search gitignore templates"
       />

@@ -16,16 +16,28 @@
   import type { BranchOpsController } from "$lib/git/branchOps.svelte";
   import ConfirmDialog from "$lib/components/safety/ConfirmDialog.svelte";
   import PreviewDialog from "$lib/components/safety/PreviewDialog.svelte";
+  import { trapTab } from "$lib/components/safety/trapTab";
   import { Button } from "$lib/components/ui/button/index.js";
 
   let { controller }: { controller: BranchOpsController } = $props();
 
   let stashButton = $state<HTMLButtonElement | null>(null);
+  let dialogEl = $state<HTMLElement | null>(null);
+  /** Element focused before the switch dialog opened (restored on close). */
+  let restoreTo: HTMLElement | null = null;
 
-  // Focus the primary choice when the switch dialog appears.
+  // Focus the primary choice when the switch dialog appears; return focus
+  // to the invoker when it closes.
   $effect(() => {
     if (controller.switchChoice) {
+      restoreTo =
+        document.activeElement instanceof HTMLElement
+          ? document.activeElement
+          : null;
       requestAnimationFrame(() => stashButton?.focus());
+    } else if (restoreTo !== null) {
+      restoreTo.focus();
+      restoreTo = null;
     }
   });
 </script>
@@ -55,7 +67,10 @@
       if (e.key === "Escape") {
         e.preventDefault();
         controller.cancelChoice();
+        return;
       }
+      // Tab stays inside the dialog (shared focus trap).
+      trapTab(dialogEl, e);
     }}
   >
     <div
@@ -63,6 +78,7 @@
       role="dialog"
       aria-modal="true"
       aria-labelledby="switch-choice-title"
+      bind:this={dialogEl}
     >
       <h2 id="switch-choice-title" class="title mb-2 mt-0 text-lg font-medium">
         Uncommitted changes

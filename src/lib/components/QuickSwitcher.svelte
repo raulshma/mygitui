@@ -22,6 +22,7 @@
     type RankedItem,
   } from "$lib/stores/switcher.svelte";
   import { toast } from "$lib/toast";
+  import { trapTab } from "$lib/components/safety/trapTab";
   import { Input } from "$lib/components/ui/input/index.js";
   import { Badge } from "$lib/components/ui/badge/index.js";
 
@@ -30,18 +31,29 @@
   let query = $state("");
   let activeIndex = $state(0);
   let inputEl: HTMLInputElement | null = $state(null);
+  let panelEl: HTMLElement | null = $state(null);
+  /** Element focused before the switcher opened (restored on close). */
+  let restoreTo: HTMLElement | null = null;
 
   // Snapshot recents/tabs while computing matches; tabs are rune state so
   // this stays fresh, and recents are re-read on every open (see effect).
   const items = $derived(buildSwitcherItems(recentRepos.list(), tabStore.tabs));
   const ranked = $derived(rankSwitcherItems(items, query));
 
-  // Opening resets the session and focuses the input; closing clears it.
+  // Opening resets the session, remembers the invoker and focuses the
+  // input; closing restores focus there and clears it.
   $effect(() => {
     if (open) {
+      restoreTo =
+        document.activeElement instanceof HTMLElement
+          ? document.activeElement
+          : null;
       query = "";
       activeIndex = 0;
       inputEl?.focus();
+    } else if (restoreTo !== null) {
+      restoreTo.focus();
+      restoreTo = null;
     }
   });
 
@@ -67,9 +79,11 @@
 
   /**
    * Keys typed inside the panel stop at the panel (they belong to the
-   * combobox); Escape keeps bubbling so the scrim/window close handlers run.
+   * combobox); Tab is trapped inside the dialog; Escape keeps bubbling so
+   * the scrim/window close handlers run.
    */
   function onPanelKeydown(event: KeyboardEvent): void {
+    trapTab(panelEl, event);
     if (event.key !== "Escape") event.stopPropagation();
   }
 
@@ -142,6 +156,7 @@
       aria-modal="true"
       aria-label="Quick switcher"
       tabindex="-1"
+      bind:this={panelEl}
       onclick={(event) => event.stopPropagation()}
       onkeydown={onPanelKeydown}
     >

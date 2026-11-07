@@ -19,6 +19,7 @@
   import { fileIconForPath, fileIconColorForPath } from "$lib/components/icons/fileIcons";
   import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.svelte";
   import Icon from "$lib/components/icons/Icon.svelte";
+  import { trapTab } from "$lib/components/safety/trapTab";
   import { Spinner } from "$lib/components/ui/spinner/index.js";
   import { appIcon } from "$lib/components/icons/library.svelte";
 
@@ -48,6 +49,9 @@
   let errorText = $state("");
   let selectedIndex = $state(0);
   let inputEl = $state<HTMLInputElement | undefined>();
+  let panelEl = $state<HTMLElement | null>(null);
+  /** Element focused before the finder opened (restored on close). */
+  let restoreTo: HTMLElement | null = null;
 
   let index = $state<PathIndex | null>(null);
 
@@ -59,8 +63,17 @@
   const visible = $derived(hits.slice(0, VISIBLE));
 
   $effect(() => {
-    // Autofocus + Escape scoping.
+    // Autofocus + Escape scoping; remember the invoker so focus returns
+    // there when the finder unmounts (owner may close it without onClose).
+    restoreTo =
+      document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
     inputEl?.focus();
+    return () => {
+      restoreTo?.focus();
+      restoreTo = null;
+    };
   });
 
   $effect(() => {
@@ -147,6 +160,12 @@
     role="dialog"
     aria-modal="true"
     aria-label="Go to file"
+    tabindex="-1"
+    bind:this={panelEl}
+    onkeydown={(e) => {
+      // Tab stays inside the dialog (shared focus trap).
+      trapTab(panelEl, e);
+    }}
   >
     <div
       class="inputrow flex flex-none items-center gap-[0.45rem] border-b border-border px-3 py-[0.55rem] text-muted-foreground"
