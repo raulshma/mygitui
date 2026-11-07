@@ -4,7 +4,7 @@
  * conflict-banner source mapping. No IPC, no DOM.
  */
 
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { BranchInfo, ReflogEntry, RepoStatus } from "$lib/ipc/types";
 import {
   conflictAbortCommand,
@@ -26,6 +26,10 @@ import {
 /** Fixed "now": 2026-10-07 12:00:00 local. */
 const NOW = new Date(2026, 9, 7, 12, 0, 0).getTime();
 const sec = (ms: number): number => Math.floor(ms / 1000);
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 function sig(time: number) {
   return { name: "Ada", email: "ada@example.com", time, offset_minutes: 0 };
@@ -212,6 +216,20 @@ describe("groupReflogByDay", () => {
   });
 
   it("starts a new group when the day changes, preserving input order", () => {
+    // Pin the formatter locale: the production label uses the ambient
+    // locale, so the literal expectation below must not drift per machine.
+    const RealDateTimeFormat = Intl.DateTimeFormat;
+    class PinnedDateTimeFormat extends RealDateTimeFormat {
+      constructor(
+        locale: string | string[] | undefined,
+        options?: Intl.DateTimeFormatOptions,
+      ) {
+        super(locale ?? "en-US", options);
+      }
+    }
+    vi.spyOn(Intl, "DateTimeFormat").mockImplementation(
+      PinnedDateTimeFormat as unknown as typeof Intl.DateTimeFormat,
+    );
     const groups = groupReflogByDay(
       [
         entry(sec(new Date(2026, 9, 7, 11, 0).getTime()), "newest"),
