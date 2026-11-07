@@ -1,6 +1,8 @@
 /**
  * Unit tests for the auto-fetch store (`$lib/stores/autofetch.svelte`).
  * The IPC client is fully mocked (`vi.mock`); timers are vitest fakes.
+ * Config is root-keyed (persistence survives restarts); `start` gets the
+ * root as a hint because the tabs store is empty under test.
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -14,15 +16,25 @@ import {
   type StorageLike,
 } from "$lib/stores/autofetch.svelte";
 
+// tabs.svelte (imported for the id → root lookup) needs these at module
+// evaluation; the autofetch tests never drive them.
 vi.mock("$lib/ipc/client", () => ({
   branches: vi.fn(),
   fetchRepo: vi.fn(),
   remotes: vi.fn(),
+  openRepo: vi.fn(),
+  closeRepo: vi.fn(),
+  remoteRepoOpen: vi.fn(),
+  repoStatus: vi.fn(),
 }));
 
 const mockBranches = vi.mocked(branches);
 const mockFetchRepo = vi.mocked(fetchRepo);
 const mockRemotes = vi.mocked(remotes);
+
+/** Test repo (id minted per session, like production) and its root key. */
+const REPO_ID = "repo-1";
+const ROOT = "/repos/alpha";
 
 /** In-memory storage (hermetic; records writes). */
 function memStorage(initial: Record<string, string> = {}): StorageLike & {
@@ -85,19 +97,19 @@ afterEach(() => {
 describe("AutofetchStore", () => {
   it("fetches on the configured cadence with prune and the default remote", async () => {
     const storage = memStorage({
-      "mygitui.autofetch": JSON.stringify({ "repo-1": 5 }),
+      "mygitui.autofetch": JSON.stringify({ [ROOT]: 5 }),
     });
     const store = new AutofetchStore(storage);
 
-    expect(store.getInterval("repo-1")).toBe(5);
-    await store.start("repo-1");
+    expect(store.getInterval(ROOT)).toBe(5);
+    await store.start(REPO_ID, ROOT);
 
-    expect(mockRemotes).toHaveBeenCalledWith("repo-1");
+    expect(mockRemotes).toHaveBeenCalledWith(REPO_ID);
     expect(mockFetchRepo).not.toHaveBeenCalled();
 
     await vi.advanceTimersByTimeAsync(5 * 60_000);
     expect(mockFetchRepo).toHaveBeenCalledTimes(1);
-    expect(mockFetchRepo).toHaveBeenCalledWith("repo-1", {
+    expect(mockFetchRepo).toHaveBeenCalledWith(REPO_ID, {
       remote: "origin",
       prune: true,
       refs: [],
@@ -112,10 +124,10 @@ describe("AutofetchStore", () => {
 
   it("start is a no-op without a configured interval", async () => {
     const store = new AutofetchStore(memStorage());
-    await store.start("repo-1");
+    await store.start(REPO_ID, ROOT);
 
     expect(mockRemotes).not.toHaveBeenCalled();
-    expect(store.isRunning("repo-1")).toBe(false);
+    expect(store.isRunning(REPO_ID)).toBe(false);
 
     await vi.advanceTimersByTimeAsync(60 * 60_000);
     expect(mockFetchRepo).not.toHaveBeenCalled();
@@ -123,10 +135,10 @@ describe("AutofetchStore", () => {
 
   it("toasts only when refs were updated (silent when up to date)", async () => {
     const storage = memStorage({
-      "mygitui.autofetch": JSON.stringify({ "repo-1": 1 }),
+      "mygitui.autofetch": JSON.stringify({ [ROOT]: 1 }),
     });
     const store = new AutofetchStore(storage);
-    await store.start("repo-1");
+    await store.start(REPO_ID, ROOT);
 
     mockFetchRepo.mockResolvedValueOnce(STATS_UPDATED);
     await vi.advanceTimersByTimeAsync(60_000);
@@ -147,10 +159,10 @@ describe("AutofetchStore", () => {
 
   it("toasts errors when the fetch fails", async () => {
     const storage = memStorage({
-      "mygitui.autofetch": JSON.stringify({ "repo-1": 1 }),
+      "mygitui.autofetch": JSON.stringify({ [ROOT]: 1 }),
     });
     const store = new AutofetchStore(storage);
-    await store.start("repo-1");
+    await store.start(REPO_ID, ROOT);
 
     const before = errorToasts();
     mockFetchRepo.mockRejectedValueOnce(new Error("no network") as never);
@@ -169,13 +181,13 @@ describe("AutofetchStore", () => {
       { name: "upstream", url: "https://host/u.git", push_url: null },
     ]);
     const storage = memStorage({
-      "mygitui.autofetch": JSON.stringify({ "repo-1": 10 }),
+      "mygitui.autofetch": JSON.stringify({ [ROOT]: 10 }),
     });
     const store = new AutofetchStore(storage);
-    await store.start("repo-1");
+    await store.start(REPO_ID, ROOT);
 
     await vi.advanceTimersByTimeAsync(10 * 60_000);
-    expect(mockFetchRepo).toHaveBeenCalledWith("repo-1", {
+    expect(mockFetchRepo).toHaveBeenCalledWith(REPO_ID, {
       remote: "upstream",
       prune: true,
       refs: [],
@@ -187,22 +199,22 @@ describe("AutofetchStore", () => {
 
   it("stop clears the interval; set to 0 stops a running fetch too", async () => {
     const storage = memStorage({
-      "mygitui.autofetch": JSON.stringify({ "repo-1": 1 }),
+      "mygitui.autofetch": JSON.stringify({ [ROOT]: 1 }),
     });
     const store = new AutofetchStore(storage);
-    await store.start("repo-1");
-    expect(store.isRunning("repo-1")).toBe(true);
+    await store.start(REPO_ID, ROOT);
+    expect(store.isRunning(REPO_ID)).toBe(true);
 
-    store.stop("repo-1");
-    expect(store.isRunning("repo-1")).toBe(false);
+    store.stop(REPO_ID);
+    expect(store.isRunning(REPO_ID)).toBe(false);
 
     await vi.advanceTimersByTimeAsync(5 * 60_000);
     expect(mockFetchRepo).not.toHaveBeenCalled();
 
-    await store.start("repo-1");
-    store.setInterval("repo-1", 0); // disables while running
-    expect(store.isRunning("repo-1")).toBe(false);
-    expect(store.getInterval("repo-1")).toBe(0);
+    await store.start(REPO_ID, ROOT);
+    store.setInterval(ROOT, 0); // disables while running
+    expect(store.isRunning(REPO_ID)).toBe(false);
+    expect(store.getInterval(ROOT)).toBe(0);
 
     await vi.advanceTimersByTimeAsync(5 * 60_000);
     expect(mockFetchRepo).not.toHaveBeenCalled();
@@ -212,25 +224,51 @@ describe("AutofetchStore", () => {
     const storage = memStorage();
     const store = new AutofetchStore(storage);
 
-    store.setInterval("repo-1", 5);
-    expect(store.getInterval("repo-1")).toBe(5);
+    store.setInterval(ROOT, 5);
+    expect(store.getInterval(ROOT)).toBe(5);
     expect(JSON.parse(storage.dump()["mygitui.autofetch"]!)).toEqual({
-      "repo-1": 5,
+      [ROOT]: 5,
     });
 
-    await store.start("repo-1");
-    store.setInterval("repo-1", 1); // restart while running
+    await store.start(REPO_ID, ROOT);
+    store.setInterval(ROOT, 1); // restart while running
     await flush(); // the internal restart resolves the remote asynchronously
-    expect(store.isRunning("repo-1")).toBe(true);
+    expect(store.isRunning(REPO_ID)).toBe(true);
 
     await vi.advanceTimersByTimeAsync(60_000);
     expect(mockFetchRepo).toHaveBeenCalledTimes(1);
 
     // Malformed persisted values are dropped on load.
-    const dirty = memStorage({ "mygitui.autofetch": '{"repo-1": "soon", "repo-2": -3}' });
+    const dirty = memStorage({ "mygitui.autofetch": `{"${ROOT}": "soon", "/repos/beta": -3}` });
     const dirtyStore = new AutofetchStore(dirty);
-    expect(dirtyStore.getInterval("repo-1")).toBe(0);
-    expect(dirtyStore.getInterval("repo-2")).toBe(0);
+    expect(dirtyStore.getInterval(ROOT)).toBe(0);
+    expect(dirtyStore.getInterval("/repos/beta")).toBe(0);
+
+    store.stopAll();
+  });
+
+  it("drops legacy per-session repo-id keys (settings are root-keyed now)", () => {
+    // Pre-rekey configs stored `{ [repoId]: minutes }`; ids don't survive a
+    // restart, so those entries are unreachable garbage — drop them.
+    const storage = memStorage({
+      "mygitui.autofetch": JSON.stringify({ "repo-1": 5, "repo-2": 15 }),
+    });
+    const store = new AutofetchStore(storage);
+    expect(store.getInterval("repo-1")).toBe(0);
+    expect(store.getInterval("repo-2")).toBe(0);
+    expect(store.getInterval(ROOT)).toBe(0);
+  });
+
+  it("keeps ssh:// tab URIs as persistence keys (remote repos)", async () => {
+    const uri = "ssh://device-1/srv/git/alpha";
+    const storage = memStorage({
+      "mygitui.autofetch": JSON.stringify({ [uri]: 30 }),
+    });
+    const store = new AutofetchStore(storage);
+
+    expect(store.getInterval(uri)).toBe(30);
+    await store.start(REPO_ID, uri);
+    expect(store.isRunning(REPO_ID)).toBe(true);
 
     store.stopAll();
   });
@@ -307,9 +345,9 @@ describe("upstreamMoved (M12 pure)", () => {
 describe("reportUpstreamMoved (store integration)", () => {
   it("toasts upstream-moved after a fetch that updated refs", async () => {
     const store = new AutofetchStore(memStorage({
-      "mygitui.autofetch": JSON.stringify({ "repo-1": 1 }),
+      "mygitui.autofetch": JSON.stringify({ [ROOT]: 1 }),
     }));
-    await store.start("repo-1");
+    await store.start(REPO_ID, ROOT);
 
     mockFetchRepo.mockResolvedValueOnce(STATS_UPDATED);
     mockBranches.mockResolvedValueOnce([
@@ -318,7 +356,7 @@ describe("reportUpstreamMoved (store integration)", () => {
     ]);
 
     await vi.advanceTimersByTimeAsync(60_000);
-    expect(mockBranches).toHaveBeenCalledWith("repo-1");
+    expect(mockBranches).toHaveBeenCalledWith(REPO_ID);
     expect(
       getToasts().some((t) => t.message === "upstream moved: feature is 3 behind"),
     ).toBe(true);
@@ -340,9 +378,9 @@ describe("reportUpstreamMoved (store integration)", () => {
 
   it("stays silent when the branch list cannot be read", async () => {
     const store = new AutofetchStore(memStorage({
-      "mygitui.autofetch": JSON.stringify({ "repo-1": 1 }),
+      "mygitui.autofetch": JSON.stringify({ [ROOT]: 1 }),
     }));
-    await store.start("repo-1");
+    await store.start(REPO_ID, ROOT);
 
     mockFetchRepo.mockResolvedValueOnce(STATS_UPDATED);
     mockBranches.mockRejectedValueOnce(new Error("repo gone") as never);

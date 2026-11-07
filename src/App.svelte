@@ -19,11 +19,14 @@
     hideRecentRepos,
     openTab,
     recentRepos,
+    refreshStatus,
     restoreSession,
     retryRemoteTab,
     startTabEvents,
     tabStore,
   } from "$lib/stores/tabs.svelte";
+  import { opStore } from "$lib/stores/ops.svelte";
+  import { syncWindowTitle } from "$lib/stores/windowTitle.svelte";
   import {
     deviceInputFromProfile,
     remoteDevices,
@@ -288,6 +291,39 @@
     tabStore.restoreRoot ? repoName(tabStore.restoreRoot) : null,
   );
 
+  // Dynamic window title: one effect reads the active tab (+ its status's
+  // dirty marker) through the title store, which guards the Tauri call.
+  $effect(() => {
+    syncWindowTitle();
+  });
+
+  // -- focus refresh ---------------------------------------------------------
+  //
+  // The backend FS watcher gives up permanently after 3 restart attempts;
+  // when it dies, `repo-changed` events stop and the UI would stay stale
+  // forever. Re-run the tab store's coalesced status refresh (the same
+  // `refreshStatus` path watcher events use) when the window regains focus
+  // or becomes visible again. Debounced so rapid alt-tabs fire one cycle;
+  // skipped while ops run — a mutation refreshes status on completion.
+
+  /** Debounce window for focus-triggered refreshes. */
+  const FOCUS_REFRESH_DEBOUNCE_MS = 1000;
+
+  let focusRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+
+  function queueFocusRefresh(): void {
+    if (focusRefreshTimer !== null) clearTimeout(focusRefreshTimer);
+    focusRefreshTimer = setTimeout(() => {
+      focusRefreshTimer = null;
+      if (tabStore.tabs.some((tab) => opStore.busy(tab.id))) return;
+      for (const tab of tabStore.tabs) void refreshStatus(tab.id);
+    }, FOCUS_REFRESH_DEBOUNCE_MS);
+  }
+
+  function onVisibilityRefresh(): void {
+    if (document.visibilityState === "visible") queueFocusRefresh();
+  }
+
   function refreshRepos(): void {
     repos = recentRepos.list();
   }
@@ -422,6 +458,17 @@
     cleanups.push(startKeybinds((commandId) => {
       void executeCommandById(commandId);
     }));
+
+    // Focus refresh (see the block above): watcher death fallback. Popouts
+    // returned early — they render one panel and hold no tabs, so their
+    // tabStore is empty and the cycle would be a no-op.
+    window.addEventListener("focus", queueFocusRefresh);
+    document.addEventListener("visibilitychange", onVisibilityRefresh);
+    cleanups.push(() => {
+      window.removeEventListener("focus", queueFocusRefresh);
+      document.removeEventListener("visibilitychange", onVisibilityRefresh);
+      if (focusRefreshTimer !== null) clearTimeout(focusRefreshTimer);
+    });
 
     // Palette "Clone repository…" opens the dialog App owns (real today).
     cleanups.push(

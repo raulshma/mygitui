@@ -2,12 +2,20 @@
  * Auto-fetch store (Svelte 5 runes) — per-repo background fetch intervals.
  *
  * Interval minutes live in localStorage under `mygitui.autofetch` as
- * `{ [repoId]: minutes }` (`0` = off). `start(repoId)` is called when a tab
- * opens (RepoView `$effect`): with an interval > 0 it resolves the default
- * remote (`origin`, else the first configured remote) and fetches with
- * prune on that cadence. Toasts fire only on error or when the fetch
- * actually updated refs — a silent up-to-date fetch stays silent.
- * `stop(repoId)` clears the timer on tab close.
+ * `{ [root]: minutes }` (`0` = off), keyed by the canonical repo ROOT (or
+ * the `ssh://` URI for remote tabs) — the same convention as the bookmarks
+ * and branch-colors stores. Roots are stable across restarts; repo ids are
+ * minted per session (`millis-pid-counter`), so keying by id (the original
+ * scheme) never survived a relaunch. Load-time migration: keys that don't
+ * look like a root path/URI are legacy ids and are dropped.
+ *
+ * `start(repoId)` is called when a tab opens (RepoView `$effect`): with an
+ * interval > 0 it resolves the repo's root (from the hint or the tab store)
+ * plus the default remote (`origin`, else the first configured remote) and
+ * fetches with prune on that cadence. Toasts fire only on error or when the
+ * fetch actually updated refs — a silent up-to-date fetch stays silent.
+ * `stop(repoId)` clears the timer on tab close. The scheduler API stays
+ * repo-id keyed because timers belong to open tabs, not disk paths.
  *
  * Lives in a `.svelte.ts` module because `$state` only compiles there.
  * Backend access goes exclusively through `$lib/ipc/client`; the scheduler
@@ -16,9 +24,10 @@
 
 import { branches, fetchRepo, remotes } from "$lib/ipc/client";
 import type { BranchInfo, NetStats, RepoId } from "$lib/ipc/types";
+import { tabStore } from "$lib/stores/tabs.svelte";
 import { toast } from "$lib/toast";
 
-/** localStorage key: `{ [repoId]: minutes }`. */
+/** localStorage key: `{ [root]: minutes }` (root-keyed since the re-key). */
 export const AUTOFETCH_STORAGE_KEY = "mygitui.autofetch";
 
 /** Max "upstream moved" toasts per fetch cycle (M12). */
@@ -51,7 +60,22 @@ function defaultStorage(): StorageLike | null {
   }
 }
 
-/** Parses persisted config; drops malformed entries. */
+/**
+ * A persisted key is a repo root: a POSIX absolute path, a Windows drive/
+ * UNC path, or an `ssh://` tab URI. Anything else is a legacy per-session
+ * repo id — unrecognizable old keys are dropped (ids never survive restart,
+ * so those settings were unreachable anyway).
+ */
+function looksLikeRoot(key: string): boolean {
+  return (
+    key.startsWith("/") ||
+    key.startsWith("\\\\") ||
+    key.startsWith("ssh://") ||
+    /^[A-Za-z]:[\\/]/.test(key)
+  );
+}
+
+/** Parses persisted config; drops malformed entries + legacy id keys. */
 function parseConfig(raw: string | null): Record<string, number> {
   if (!raw) return {};
   let parsed: unknown;
@@ -62,9 +86,10 @@ function parseConfig(raw: string | null): Record<string, number> {
   }
   if (typeof parsed !== "object" || parsed === null) return {};
   const out: Record<string, number> = {};
-  for (const [repoId, value] of Object.entries(parsed as Record<string, unknown>)) {
+  for (const [root, value] of Object.entries(parsed as Record<string, unknown>)) {
+    if (!looksLikeRoot(root)) continue;
     if (typeof value === "number" && Number.isFinite(value) && value >= 0) {
-      out[repoId] = value;
+      out[root] = value;
     }
   }
   return out;
@@ -73,6 +98,8 @@ function parseConfig(raw: string | null): Record<string, number> {
 interface RunningFetch {
   timer: unknown;
   remote: string;
+  /** Persistence key (repo root) this repo's interval came from. */
+  root: string;
 }
 
 /**
@@ -101,8 +128,8 @@ export function upstreamMoved(
 }
 
 export class AutofetchStore {
-  /** Configured interval minutes per repo (0 = off); persisted on change. */
-  config: Record<RepoId, number> = $state({});
+  /** Interval minutes per repo root (0 = off); persisted on change. */
+  config: Record<string, number> = $state({});
 
   #storage: StorageLike | null;
   #scheduler: Scheduler;
@@ -119,9 +146,19 @@ export class AutofetchStore {
     this.config = parseConfig(storage?.getItem(AUTOFETCH_STORAGE_KEY) ?? null);
   }
 
-  /** Interval minutes for a repo (0 = off). */
-  getInterval(repoId: RepoId): number {
-    return this.config[repoId] ?? 0;
+  /**
+   * Persistence key for a repo: its canonical root. The tabs store owns the
+   * id → root binding (ids are minted per session; roots are stable, like
+   * the bookmarks/branch-colors keys). Falls back to the id itself when the
+   * tab is already gone — the lookup then misses and the fetch stays off.
+   */
+  #rootFor(repoId: RepoId): string {
+    return tabStore.tabs.find((tab) => tab.id === repoId)?.root ?? repoId;
+  }
+
+  /** Interval minutes for a repo root (0 = off). */
+  getInterval(root: string): number {
+    return this.config[root] ?? 0;
   }
 
   /** True when auto-fetch is currently running for the repo. */
@@ -130,36 +167,43 @@ export class AutofetchStore {
   }
 
   /**
-   * Sets (and persists) the interval; `0` disables. A running repo restarts
-   * immediately with the new cadence.
+   * Sets (and persists) the interval for a repo root; `0` disables. Any
+   * running repo bound to this root restarts immediately with the new
+   * cadence.
    */
-  setInterval(repoId: RepoId, minutes: number): void {
+  setInterval(root: string, minutes: number): void {
     const safe = Number.isFinite(minutes) && minutes > 0 ? Math.floor(minutes) : 0;
     const config = { ...this.config };
-    if (safe === 0) delete config[repoId];
-    else config[repoId] = safe;
+    if (safe === 0) delete config[root];
+    else config[root] = safe;
     this.config = config;
     this.#persist();
-    if (this.#running.has(repoId)) {
+    for (const [repoId, running] of [...this.#running]) {
+      if (running.root !== root) continue;
       this.stop(repoId);
-      if (safe > 0) void this.start(repoId);
+      // Restart with the recorded root — the tab may already be closing, so
+      // a fresh tabs-store lookup could miss.
+      if (safe > 0) void this.start(repoId, running.root);
     }
   }
 
   /**
    * Starts the background fetch for a repo whose interval is > 0 (no-op
-   * otherwise, and when it is already running). The default remote is
-   * `origin`, else the first configured remote, else the literal fallback
-   * "origin" (the fetch will error-toast if the repo has none).
+   * otherwise, and when it is already running). `rootHint` overrides the
+   * tabs-store root lookup (tests inject it; production callers omit it).
+   * The default remote is `origin`, else the first configured remote, else
+   * the literal fallback "origin" (the fetch will error-toast if the repo
+   * has none).
    */
-  async start(repoId: RepoId): Promise<void> {
+  async start(repoId: RepoId, rootHint?: string): Promise<void> {
     if (this.#running.has(repoId)) return;
-    const minutes = this.getInterval(repoId);
+    const root = rootHint ?? this.#rootFor(repoId);
+    const minutes = this.getInterval(root);
     if (minutes <= 0) return;
 
     const remote = await this.#defaultRemote(repoId);
     // Config may have changed while the remote lookup was in flight.
-    if (this.getInterval(repoId) <= 0 || this.#running.has(repoId)) return;
+    if (this.getInterval(root) <= 0 || this.#running.has(repoId)) return;
 
     const tick = (): void => {
       fetchRepo(repoId, { remote, prune: true, refs: [], depth: null })
@@ -180,7 +224,7 @@ export class AutofetchStore {
     };
 
     const timer = this.#scheduler.setInterval(tick, minutes * 60_000);
-    this.#running.set(repoId, { timer, remote });
+    this.#running.set(repoId, { timer, remote, root });
   }
 
   /** Stops the background fetch for a repo (tab close). No-op when off. */

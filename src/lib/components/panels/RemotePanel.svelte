@@ -208,6 +208,15 @@
   const ahead = $derived(repoStatus?.ahead ?? 0);
   const behind = $derived(repoStatus?.behind ?? 0);
 
+  /**
+   * Persistence key for the auto-fetch store: the canonical repo root
+   * (stable across restarts — the store keys settings by root, like the
+   * bookmarks/branch-colors stores; ids are minted per session).
+   */
+  const repoRoot = $derived(
+    tabStore.tabs.find((tab) => tab.id === repoId)?.root ?? repoId,
+  );
+
   /** The remote the bar acts on (origin preferred, else the first). */
   const primaryRemote = $derived<RemoteInfo | null>(
     list.find((r) => r.name === "origin") ?? list[0] ?? null,
@@ -418,8 +427,8 @@
       <span>auto-fetch</span>
       <Select.Root
         type="single"
-        value={String(autofetch.getInterval(repoId))}
-        onValueChange={(value) => autofetch.setInterval(repoId, Number(value))}
+        value={String(autofetch.getInterval(repoRoot))}
+        onValueChange={(value) => autofetch.setInterval(repoRoot, Number(value))}
       >
         <Select.Trigger
           class="max-w-[12rem] h-[1.5rem] rounded border-border bg-background dark:bg-background px-1.5 py-0 text-xs text-foreground gap-1"

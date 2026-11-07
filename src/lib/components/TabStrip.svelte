@@ -8,7 +8,9 @@
    * active tab is tab-reachable (tabindex 0), the rest are programmatic
    * (tabindex -1). Arrow/Home/End keys move focus; Enter/Space activate the
    * focused tab (native button behavior routes through `setActive`).
-   * Middle-click (auxclick button 1) closes a tab, as does its × button.
+   * Middle-click (auxclick button 1) closes a tab, as does its × button;
+   * right-click opens the shared context menu (close variants + path
+   * utilities) through the global context-menu store.
    *
    * Focus order is sane: each × close button follows its tab in DOM order, so
    * Tab runs tab → its close → next reachable control. Overflowed (ellipsis-
@@ -21,8 +23,15 @@
     closeTab,
     setActive,
     showRecentRepos,
+    SSH_SCHEME,
     tabStore,
+    type Tab,
   } from "$lib/stores/tabs.svelte";
+  import { showMenuAt, type MenuEntry } from "$lib/components/menu/contextMenuStore.svelte";
+  import { isTauri } from "$lib/entry/dragdrop";
+  import { revealItemInDir } from "@tauri-apps/plugin-opener";
+  import { describeError } from "$lib/errors";
+  import { toast } from "$lib/toast";
   import Icon from "$lib/components/icons/Icon.svelte";
   import { appIcon } from "$lib/components/icons/library.svelte";
   import { Button } from "$lib/components/ui/button/index.js";
@@ -76,6 +85,63 @@
       void closeTab(tabId);
     }
   }
+
+  /**
+   * Right-click menu (global context-menu store, BranchSwitcher-style):
+   * close variants + path utilities. Close loops snapshot the strip first —
+   * closeTab splices as each close settles, so live iteration would skip.
+   * Remote tabs (`ssh://`) have no local path: Copy still works (the URI),
+   * Reveal is disabled.
+   */
+  function tabMenu(event: MouseEvent, tab: Tab): void {
+    const others = tabStore.tabs.filter((entry) => entry.id !== tab.id);
+    const entries: MenuEntry[] = [
+      { id: "close", label: "Close", run: () => void closeTab(tab.id) },
+      {
+        id: "close-others",
+        label: "Close Others",
+        disabled: others.length === 0,
+        run: () => {
+          for (const entry of others) void closeTab(entry.id);
+        },
+      },
+      {
+        id: "close-all",
+        label: "Close All",
+        run: () => {
+          for (const entry of [...tabStore.tabs]) void closeTab(entry.id);
+        },
+      },
+      { separator: true },
+      {
+        id: "copy-path",
+        label: "Copy Repo Path",
+        // Inline clipboard like BranchSwitcher (no shared helper exists).
+        run: () =>
+          void navigator.clipboard.writeText(tab.root).then(
+            () => toast(`Copied ${tab.root}`),
+            () => toast("Could not access the clipboard", { kind: "error" }),
+          ),
+      },
+      {
+        id: "reveal",
+        label: "Reveal Repository",
+        disabled: tab.root.startsWith(SSH_SCHEME),
+        run: () => void revealRepo(tab.root),
+      },
+    ];
+    showMenuAt(event, entries);
+  }
+
+  /** Opens the repo root in the platform file manager (opener plugin). */
+  async function revealRepo(root: string): Promise<void> {
+    if (!isTauri()) return; // browser / e2e: no file manager to reveal in
+    try {
+      await revealItemInDir(root);
+    } catch (err) {
+      toast(`Reveal failed: ${describeError(err)}`, { kind: "error" });
+    }
+  }
 </script>
 
 <div class="tabbar flex min-w-0 flex-none items-stretch border-b border-border bg-card">
@@ -98,6 +164,7 @@
     tabindex="-1"
     bind:this={strip}
     onkeydown={onKeydown}
+    oncontextmenu={(e) => e.preventDefault()}
   >
     {#each tabStore.tabs as tab (tab.id)}
       {@const isActive = tab.id === tabStore.activeId}
@@ -121,6 +188,7 @@
           aria-label={`${tab.name} — ${tab.root}`}
           onclick={() => setActive(tab.id)}
           onauxclick={(event) => onAuxClick(event, tab.id)}
+          oncontextmenu={(event) => tabMenu(event, tab)}
           onmousedown={(event) => {
             if (event.button === 1) event.preventDefault();
           }}
