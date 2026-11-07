@@ -256,6 +256,37 @@ fn reorder_plan_rewrites_history_and_map() {
     assert!(!ENGINE.rebase_state_impl(&temp).expect("state").active);
 }
 
+/// A cancelled start refuses up-front: no sequencer state, nothing moved.
+/// Clearing the token lets the identical call through (same convention as
+/// the cancelled push/pull/merge guards).
+#[test]
+fn cancelled_rebase_start_refuses_up_front() {
+    let (temp, c1, _c2, _c3) = chain_of_three("cancel-start");
+    let before = temp.head_sha();
+
+    let cancel = std::sync::atomic::AtomicBool::new(true);
+    match ENGINE.rebase_start_ext(&temp, &[pick(&c1)], None, Some(&cancel)) {
+        Err(EngineError::Invalid(msg)) => assert_eq!(msg, "cancelled"),
+        other => panic!("expected Invalid(cancelled), got {other:?}"),
+    }
+    assert_eq!(
+        temp.head_sha(),
+        before,
+        "cancelled start must not move HEAD"
+    );
+    assert!(
+        !ENGINE.rebase_state_impl(&temp).expect("state").active,
+        "no sequencer state may exist after a refused start"
+    );
+
+    // With the token clear the same plan runs to completion.
+    let state = ENGINE
+        .rebase_start_ext(&temp, &[pick(&c1)], None, None)
+        .expect("rebase runs once the token is clear");
+    assert!(!state.active);
+    assert_ne!(temp.head_sha(), before, "pick replayed");
+}
+
 // ---------------------------------------------------------------------------
 // squash / fixup
 // ---------------------------------------------------------------------------

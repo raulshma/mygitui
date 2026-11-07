@@ -36,11 +36,14 @@
 
 use serde::{Deserialize, Serialize};
 
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use git2::build::CheckoutBuilder;
 use git2::{Commit, MergeOptions, Oid, Repository, StatusOptions};
 
 use super::git_engine::{EngineError, EngineResult};
 use super::libgit2::Libgit2Engine;
+use super::netops::cancelled_err;
 use super::types::{RebaseState, RebaseStep};
 
 /// Actions accepted in `RebaseStep::action`. `exec` runs `new_message` as
@@ -120,10 +123,10 @@ fn active_state(st: &RebaseFileState) -> RebaseState {
 // ---------------------------------------------------------------------------
 
 // Rust only allows a single `impl GitEngineM3 for Libgit2Engine` (currently
-// owned by merge.rs), so until the integration pass wires the forwarding
-// there, the methods below are only called from `rebase_tests` and count as
-// dead code in the non-test build (same arrangement as stash.rs).
-#[allow(dead_code)]
+// owned by merge.rs), so the rebase entry points land here as inherent
+// `*_impl` methods — the same pattern as M2 (`mutations.rs` + the forwarding
+// impl in `libgit2.rs`). Integration forwards `GitEngineM3::rebase_*` to
+// these; the op queue wires the cancellation-aware `_ext` variants directly.
 impl Libgit2Engine {
     pub(crate) fn rebase_start_impl(
         &self,
@@ -131,6 +134,25 @@ impl Libgit2Engine {
         plan: &[RebaseStep],
         onto: Option<&str>,
     ) -> EngineResult<RebaseState> {
+        self.rebase_start_ext(repo, plan, onto, None)
+    }
+
+    /// Cancellation-aware start: `cancel` is polled up-front, before the
+    /// mutating detach+checkout phase, and once per step in the sequencer
+    /// loop. A cancel mid-loop leaves the persisted sequencer state live
+    /// (position saved before each step), exactly like an interrupted real
+    /// rebase — the FE continues or aborts it. `pull --rebase` shares this
+    /// path with the pull op's token.
+    pub(crate) fn rebase_start_ext(
+        &self,
+        repo: &Repository,
+        plan: &[RebaseStep],
+        onto: Option<&str>,
+        cancel: Option<&AtomicBool>,
+    ) -> EngineResult<RebaseState> {
+        if cancel.is_some_and(|c| c.load(Ordering::Acquire)) {
+            return Err(cancelled_err());
+        }
         if load_state(repo)?.is_some() {
             return Err(EngineError::Invalid(
                 "a rebase is already in progress; continue or abort it first".into(),
@@ -238,6 +260,12 @@ impl Libgit2Engine {
         };
         save_state(repo, &st)?;
 
+        // Last clean bail-out point: the detach + checkout below mutate HEAD
+        // and the workdir (recoverable via `rebase_abort` once the state file
+        // exists, but refused here while nothing has moved).
+        if cancel.is_some_and(|c| c.load(Ordering::Acquire)) {
+            return Err(cancelled_err());
+        }
         // Replay detached from the base; the branch ref moves to the rewritten
         // head on completion (finish_rebase) and abort restores it.
         if base_commit.id().to_string() != st.orig_head {
@@ -245,7 +273,7 @@ impl Libgit2Engine {
             hard_checkout(repo, &base_commit)?;
         }
 
-        run_rebase(repo, &mut st)
+        run_rebase(repo, &mut st, cancel)
     }
 
     pub(crate) fn rebase_state_impl(&self, repo: &Repository) -> EngineResult<RebaseState> {
@@ -275,7 +303,7 @@ impl Libgit2Engine {
         }
         // A paused `exec` intentionally does NOT advance: continue re-runs it
         // (the user is expected to fix whatever failed first).
-        run_rebase(repo, &mut st)
+        run_rebase(repo, &mut st, None)
     }
 
     pub(crate) fn rebase_abort_impl(&self, repo: &Repository) -> EngineResult<()> {
@@ -299,8 +327,20 @@ impl Libgit2Engine {
 // sequencer loop
 // ---------------------------------------------------------------------------
 
-fn run_rebase(repo: &Repository, st: &mut RebaseFileState) -> EngineResult<RebaseState> {
+/// The sequencer loop. `cancel` is polled once per step (between phases;
+/// same cadence as fetch's between-phase checks) — `None` from
+/// `rebase_continue`, whose op has no token wired yet.
+fn run_rebase(
+    repo: &Repository,
+    st: &mut RebaseFileState,
+    cancel: Option<&AtomicBool>,
+) -> EngineResult<RebaseState> {
     loop {
+        if cancel.is_some_and(|c| c.load(Ordering::Acquire)) {
+            // Position is already persisted: the rebase stays resumable
+            // (continue/abort from the rebase view).
+            return Err(cancelled_err());
+        }
         if st.current >= st.plan.len() {
             return finish_rebase(repo, st);
         }

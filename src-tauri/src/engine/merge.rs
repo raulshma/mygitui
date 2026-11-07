@@ -48,12 +48,14 @@
 //!   the workdir (force). Works on unborn and detached HEAD.
 
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use git2::build::CheckoutBuilder;
 use git2::{Index, Repository, RepositoryState, Signature, Time};
 
 use super::git_engine::{EngineError, EngineResult, GitEngineM3};
 use super::libgit2::Libgit2Engine;
+use super::netops::cancelled_err;
 use super::types::{
     BisectMark, BisectState, ConflictFile, ConflictResolution, MergeFavor, MergeOptions,
     MergeOutcome, MergeResult, PreviewInfo, ResetKind,
@@ -466,12 +468,34 @@ fn sequencer_apply(
 // GitEngineM3
 // ---------------------------------------------------------------------------
 
-impl GitEngineM3 for Libgit2Engine {
-    fn merge_branch(
+impl Libgit2Engine {
+    /// Cancellation-aware merge: `cancel` is polled up-front and between the
+    /// analysis and the mutating (checkout/merge) phases. Once the mutating
+    /// phase starts it runs to completion — libgit2 offers no mid-merge
+    /// abort, the same non-interruptible shape as push's pack phase; a
+    /// cancel landing there is observed on the next op. Wired by the op
+    /// queue; the trait-facing `merge_branch` keeps its signature.
+    pub(crate) fn merge_branch_ext(
         &self,
         repo: &Repository,
         ref_name: &str,
         opts: &MergeOptions,
+        cancel: Option<&AtomicBool>,
+    ) -> EngineResult<MergeResult> {
+        if cancel.is_some_and(|c| c.load(Ordering::Acquire)) {
+            return Err(cancelled_err());
+        }
+        self.merge_branch_phases(repo, ref_name, opts, cancel)
+    }
+
+    /// The merge phase loop (guards + analysis, then the mutating phase).
+    /// `cancel` is re-checked right before the workdir/refs are touched.
+    fn merge_branch_phases(
+        &self,
+        repo: &Repository,
+        ref_name: &str,
+        opts: &MergeOptions,
+        cancel: Option<&AtomicBool>,
     ) -> EngineResult<MergeResult> {
         if merge_in_progress(repo) {
             return Err(EngineError::Invalid(
@@ -484,6 +508,10 @@ impl GitEngineM3 for Libgit2Engine {
         let annotated = repo.find_annotated_commit(theirs.id())?;
         let (analysis, _) = repo.merge_analysis(&[&annotated])?;
 
+        // Last clean bail-out point: everything below touches workdir/refs.
+        if cancel.is_some_and(|c| c.load(Ordering::Acquire)) {
+            return Err(cancelled_err());
+        }
         if analysis.is_up_to_date() {
             return Ok(MergeResult {
                 outcome: MergeOutcome::UpToDate,
@@ -584,6 +612,17 @@ impl GitEngineM3 for Libgit2Engine {
             conflicts: Vec::new(),
             new_head: Some(oid.to_string()),
         })
+    }
+}
+
+impl GitEngineM3 for Libgit2Engine {
+    fn merge_branch(
+        &self,
+        repo: &Repository,
+        ref_name: &str,
+        opts: &MergeOptions,
+    ) -> EngineResult<MergeResult> {
+        self.merge_branch_ext(repo, ref_name, opts, None)
     }
 
     fn merge_abort(&self, repo: &Repository) -> EngineResult<()> {

@@ -563,6 +563,11 @@ fn clone_sync(
     validate_clone_destination(dest)?;
 
     let mut callbacks = git2::RemoteCallbacks::new();
+    // Same credential path as fetch/push (`engine/netops.rs`): the broker's
+    // chain covers HTTPS (cache → keyring → git credential helpers → FE
+    // prompt) and SSH (agent → passphrase prompt). No repo exists yet, so
+    // auth-request events carry an empty repo_id (no `with_netop_context`).
+    callbacks.credentials(crate::auth::broker().credentials());
     let event_url = url.to_string();
     let last_emit = Mutex::new(std::time::Instant::now());
     let emitter = app.clone();
@@ -1630,16 +1635,23 @@ pub async fn pull(
         });
         return finish_op(rx).await;
     }
-    let engine = handle.engine();
     let repo = handle.repo()?;
     let opening = format!("pulling {}", options.remote);
     finish_op(enqueue_net_op(
         &handle,
         "pull",
         opening,
-        move |_ctx, progress| {
+        move |ctx, progress| {
+            // Cancellation-aware ext path (see fetch): `op_cancel` flips the
+            // ctx token and pull polls it inside the fetch transfer callbacks
+            // and between the fetch + merge phases. DELIBERATE `Libgit2Engine`
+            // exception to the dispatch rule: the cancellation variants
+            // (`pull_impl_ext`) take the cancel token and are not on a trait —
+            // the engine is stateless, so a fresh instance behaves identically
+            // to `handle.engine()`.
+            let engine = crate::engine::libgit2::Libgit2Engine::new();
             let guard = repo.lock();
-            engine.pull(&guard, &options, progress)
+            engine.pull_impl_ext(&guard, &options, progress, ctx.cancel_token().as_deref())
         },
     ))
     .await
@@ -2176,13 +2188,20 @@ pub async fn merge_branch(
         ))
         .await;
     }
-    let engine = handle.m3();
     let repo = handle.repo()?;
     finish_op(enqueue_mutation(
         &handle,
         &repo,
         "merge",
-        move |_ctx, repo| engine.merge_branch(repo, &ref_name, &opts),
+        move |ctx, repo| {
+            // Cancellation-aware ext path (see fetch): `op_cancel` flips the
+            // ctx token; merge polls it up-front and between the analysis +
+            // mutating phases. Deliberate `Libgit2Engine` exception to the
+            // dispatch rule — `merge_branch_ext` is not on the M3 trait
+            // (same reason as fetch).
+            let engine = crate::engine::libgit2::Libgit2Engine::new();
+            engine.merge_branch_ext(repo, &ref_name, &opts, ctx.cancel_token().as_deref())
+        },
     ))
     .await
 }
@@ -2388,13 +2407,20 @@ pub async fn rebase_start(
         ))
         .await;
     }
-    let engine = handle.m3();
     let repo = handle.repo()?;
     finish_op(enqueue_mutation(
         &handle,
         &repo,
         "rebase",
-        move |_ctx, repo| engine.rebase_start(repo, &plan, onto.as_deref()),
+        move |ctx, repo| {
+            // Cancellation-aware ext path (see fetch): `op_cancel` flips the
+            // ctx token; the rebase loop polls it per step. Deliberate
+            // `Libgit2Engine` exception to the dispatch rule —
+            // `rebase_start_ext` is not on the M3 trait (same reason as
+            // fetch).
+            let engine = crate::engine::libgit2::Libgit2Engine::new();
+            engine.rebase_start_ext(repo, &plan, onto.as_deref(), ctx.cancel_token().as_deref())
+        },
     ))
     .await
 }

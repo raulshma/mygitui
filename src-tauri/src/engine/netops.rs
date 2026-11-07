@@ -94,8 +94,10 @@ fn expand_refspec(remote: &str, spec: &str) -> String {
     format!("+{src}:refs/remotes/{remote}/{short}")
 }
 
-/// Error raised when an op observes its cancellation token.
-fn cancelled_err() -> EngineError {
+/// Error raised when an op observes its cancellation token. Shared with the
+/// merge/rebase phase loops (same convention so the FE treats every
+/// cancellation uniformly).
+pub(crate) fn cancelled_err() -> EngineError {
     EngineError::Invalid("cancelled".to_owned())
 }
 
@@ -308,6 +310,21 @@ impl Libgit2Engine {
         opts: &PullOptions,
         progress: &mut dyn FnMut(FetchProgress),
     ) -> EngineResult<NetStats> {
+        self.pull_impl_ext(repo, opts, progress, None)
+    }
+
+    /// Cancellation-aware pull: `cancel` is polled inside the fetch transfer
+    /// callbacks (via `fetch_with_refspecs`) and between the fetch and merge
+    /// phases; a cancel lands once the local merge/commit phase returns
+    /// (same non-interruptible phase shape as push). Wired by the op queue;
+    /// `pull_impl` keeps the trait-facing signature.
+    pub(crate) fn pull_impl_ext(
+        &self,
+        repo: &Repository,
+        opts: &PullOptions,
+        progress: &mut dyn FnMut(FetchProgress),
+        cancel: Option<&AtomicBool>,
+    ) -> EngineResult<NetStats> {
         let current = current_branch_name(repo).ok_or_else(|| {
             EngineError::Invalid("cannot pull: no current branch (detached or unborn HEAD)".into())
         })?;
@@ -322,8 +339,20 @@ impl Libgit2Engine {
         // leading `+` keeps the tracking ref movable when the remote rewrote
         // history, matching the configured `+refs/heads/*` refspec).
         let refspec = format!("+refs/heads/{branch}:{tracking_ref}");
-        let stats =
-            fetch_with_refspecs(repo, &opts.remote, &[refspec], false, None, progress, None)?;
+        let stats = fetch_with_refspecs(
+            repo,
+            &opts.remote,
+            &[refspec],
+            false,
+            None,
+            progress,
+            cancel,
+        )?;
+        // Gate between the fetch and merge phases (fetch already covered the
+        // up-front + in-transfer + post-transfer checks).
+        if cancel.is_some_and(|c| c.load(Ordering::Acquire)) {
+            return Err(cancelled_err());
+        }
 
         // 2. Merge the fetched tip into the current branch.
         let tracking = repo.find_reference(&tracking_ref).map_err(|e| {
@@ -349,7 +378,7 @@ impl Libgit2Engine {
             ));
         }
         if opts.rebase {
-            return self.pull_rebase(repo, &current, fetched_oid, stats);
+            return self.pull_rebase(repo, &current, fetched_oid, stats, cancel);
         }
 
         // Default: merge, favoring fast-forward (handled above).
@@ -394,6 +423,7 @@ impl Libgit2Engine {
         current: &str,
         fetched_oid: git2::Oid,
         stats: NetStats,
+        cancel: Option<&AtomicBool>,
     ) -> EngineResult<NetStats> {
         let head = repo
             .head()
@@ -427,7 +457,7 @@ impl Libgit2Engine {
                 new_message: None,
             })
             .collect();
-        let state = self.rebase_start_impl(repo, &plan, Some(&fetched_oid.to_string()))?;
+        let state = self.rebase_start_ext(repo, &plan, Some(&fetched_oid.to_string()), cancel)?;
         if state.active {
             return Err(EngineError::Invalid(format!(
                 "pull --rebase hit a conflict on `{current}`: resolve it in the rebase view, then continue (or abort)",

@@ -4,6 +4,7 @@
 //! `std::env::temp_dir()` (never fixtures/) — same pattern as net_tests.rs.
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::AtomicBool;
 
 use git2::{IndexAddOption, Repository, RepositoryInitOptions, RepositoryState};
 
@@ -268,6 +269,39 @@ fn merge_fast_forward_moves_branch_and_workdir() {
     assert_ne!(branch_sha(&fx.repo, "main"), base);
     assert_eq!(head_sha(&fx.repo), feature_tip);
     assert_eq!(workdir_text(&fx.repo, "file.txt"), "feature\n");
+}
+
+/// A cancelled merge refuses before touching refs/workdir (same guard
+/// convention as the push/pull cancellation tests); clearing the token lets
+/// the identical call through.
+#[test]
+fn cancelled_merge_refuses_before_touching_refs() {
+    let fx = init_fixture("merge-cancel");
+    commit_file(&fx.repo, "base.txt", "base\n", "base");
+    ENGINE
+        .branch_create(&fx.repo, "feature", None, true)
+        .expect("branch feature");
+    let feature_tip = commit_file(&fx.repo, "feature.txt", "feature\n", "feature adds");
+    ENGINE
+        .branch_switch(&fx.repo, "main", false)
+        .expect("switch back");
+    let main_tip = head_sha(&fx.repo);
+
+    let cancel = AtomicBool::new(true);
+    match ENGINE.merge_branch_ext(&fx.repo, "feature", &Default::default(), Some(&cancel)) {
+        Err(EngineError::Invalid(msg)) => assert_eq!(msg, "cancelled"),
+        other => panic!("expected Invalid(cancelled), got {other:?}"),
+    }
+    // Nothing moved: refs, HEAD, workdir, and no merge state.
+    assert_eq!(head_sha(&fx.repo), main_tip);
+    assert_eq!(branch_sha(&fx.repo, "feature"), feature_tip);
+    assert!(!fx.repo.workdir().unwrap().join("feature.txt").exists());
+    assert_ne!(fx.repo.state(), RepositoryState::Merge);
+
+    let result = ENGINE
+        .merge_branch_ext(&fx.repo, "feature", &Default::default(), None)
+        .expect("merge goes through once the token is clear");
+    assert!(matches!(result.outcome, MergeOutcome::FastForward));
 }
 
 #[test]

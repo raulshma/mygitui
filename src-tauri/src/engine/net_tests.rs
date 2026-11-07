@@ -5,6 +5,7 @@
 //! fixtures/) so parallel lanes can append to `tests.rs` safely.
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::AtomicBool;
 
 use git2::{BranchType, IndexAddOption, Repository, RepositoryInitOptions};
 
@@ -734,6 +735,32 @@ fn pull_missing_remote_branch_errors() {
         .expect_err("pulling a missing branch must fail");
     let msg = format!("{err}");
     assert!(msg.contains("ghost"), "{msg}");
+}
+
+/// A cancelled pull refuses before touching anything (mirror of the push
+/// guard in netops's tests): HEAD stays put and the fetch never runs.
+#[test]
+fn cancelled_pull_refuses_up_front() {
+    let f = NetFixture::new("pull-cancel");
+    commit_file(&f.b, "cancel.md", "c\n", "remote advance");
+    raw_push(&f.b, "refs/heads/main:refs/heads/main");
+    let before = head_sha(&f.a);
+    let new_remote_tip = head_sha(&f.b);
+
+    let cancel = AtomicBool::new(true);
+    match ENGINE.pull_impl_ext(&f.a, &pull_opts(), &mut |_| {}, Some(&cancel)) {
+        Err(EngineError::Invalid(msg)) => assert_eq!(msg, "cancelled"),
+        other => panic!("expected Invalid(cancelled), got {other:?}"),
+    }
+    assert_eq!(head_sha(&f.a), before, "cancelled pull must not move HEAD");
+    // The fetch never ran: the tracking ref misses b's advance.
+    let tracking =
+        f.a.find_reference("refs/remotes/origin/main")
+            .expect("tracking ref");
+    assert_ne!(
+        tracking.peel_to_commit().unwrap().id().to_string(),
+        new_remote_tip
+    );
 }
 
 // ---------------------------------------------------------------------------
