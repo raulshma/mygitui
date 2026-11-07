@@ -281,6 +281,26 @@ describe("filter debounce", () => {
     store.setFilter({ text: "a" });
     expect(store.filterActive).toBe(true);
   });
+
+  it("restarts with the branch scope in refs and counts it as active", async () => {
+    vi.useFakeTimers();
+    const store = new HistoryStore();
+    store.start("repo-1");
+
+    store.setFilter({ scopeRef: "feature/login" });
+    expect(store.filterActive).toBe(true); // scope alone drives the clear button
+    expect(calls).toHaveLength(1); // debounced — nothing yet
+
+    await vi.advanceTimersByTimeAsync(200);
+    expect(calls).toHaveLength(2);
+    expect(calls[1]!.filter.refs).toEqual(["feature/login"]);
+
+    // Back to "All branches" — refs resets to the default walk.
+    store.setFilter({ scopeRef: "" });
+    await vi.advanceTimersByTimeAsync(200);
+    expect(calls).toHaveLength(3);
+    expect(calls[2]!.filter.refs).toEqual([]);
+  });
 });
 
 // ---------------------------------------------------------------------------

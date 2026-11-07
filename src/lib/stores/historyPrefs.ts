@@ -63,6 +63,8 @@ export function parseHistoryPrefs(raw: string | null): HistoryPrefs | null {
     before: day(f?.before),
     pickaxe: str(f?.pickaxe),
     pickaxeRegex: str(f?.pickaxeRegex),
+    // Branch scope (backend LogFilter.refs walk root); "" = all branches.
+    scopeRef: str(f?.scopeRef),
   };
   const selectedSha =
     typeof v.selectedSha === "string" && SHA_RE.test(v.selectedSha)

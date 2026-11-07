@@ -159,7 +159,8 @@ export class HistoryStore {
         f.after ||
         f.before ||
         f.pickaxe ||
-        f.pickaxeRegex,
+        f.pickaxeRegex ||
+        f.scopeRef,
     );
   }
 

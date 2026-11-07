@@ -61,6 +61,22 @@ describe("toLogFilter", () => {
     expect(filter.after_unix).toBeNull();
     expect(filter.before_unix).toBeNull();
   });
+
+  it("serializes the branch scope into refs (backend LogFilter.refs)", () => {
+    // "" (default) walks all refs + HEAD — the exact default shape above.
+    expect(toLogFilter({ ...EMPTY_FILTER, scopeRef: "" }).refs).toEqual([]);
+    // "HEAD" = the checked-out branch; a name = that branch only (trimmed).
+    expect(toLogFilter({ ...EMPTY_FILTER, scopeRef: "HEAD" }).refs).toEqual([
+      "HEAD",
+    ]);
+    expect(toLogFilter({ ...EMPTY_FILTER, scopeRef: " feature " }).refs).toEqual([
+      "feature",
+    ]);
+    // File-history walks are single-path and never branch-scoped.
+    expect(
+      toLogFilter({ ...EMPTY_FILTER, scopeRef: "main" }, { follow: true }).refs,
+    ).toEqual([]);
+  });
 });
 
 // ---------------------------------------------------------------------------

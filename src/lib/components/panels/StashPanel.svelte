@@ -11,12 +11,16 @@
    * mutation refreshes the repo status (stashing changes the worktree)
    * and reloads the list.
    */
-  import { stashApply, stashBranch, stashDrop, stashList, stashPush } from "$lib/ipc/client";
-  import type { StashInfo } from "$lib/ipc/types";
+  import { repoDiff, stashApply, stashBranch, stashDrop, stashList, stashPush } from "$lib/ipc/client";
+  import type { FileDiff, StashInfo } from "$lib/ipc/types";
+  import { describeError } from "$lib/errors";
   import { refreshStatus } from "$lib/stores/tabs.svelte";
   import { toast } from "$lib/toast";
+  import { emitUiEvent } from "$lib/palette/events";
   import { relativeAge, shortSha, stashRef } from "./panelModel";
   import ConfirmDialog from "$lib/components/safety/ConfirmDialog.svelte";
+  import DialogShell from "$lib/components/safety/DialogShell.svelte";
+  import DiffViewer from "$lib/components/diff/DiffViewer.svelte";
   import StashMessageButton from "$lib/components/ai/StashMessageButton.svelte";
   import { showMenuAtElement } from "$lib/components/menu/contextMenuStore.svelte";
   import Icon from "$lib/components/icons/Icon.svelte";
@@ -41,6 +45,8 @@
   const iconDrop = $derived(appIcon("delete")!);
   const iconCheck = $derived(appIcon("check")!);
   const iconMore = $derived(appIcon("more-vert")!);
+  const iconView = $derived(appIcon("difference")!);
+  const iconHistory = $derived(appIcon("history")!);
 
   let list = $state<StashInfo[]>([]);
   let loading = $state(false);
@@ -162,11 +168,24 @@
 
   /**
    * Row kebab menu (UI review P2 #11): Apply stays the one visible primary
-   * action; Pop / Branch / Drop get text labels here instead of unlabeled
-   * icon buttons.
+   * action; View / Pop / Branch / Drop / Show in History get text labels
+   * here instead of unlabeled icon buttons.
    */
   function stashMenu(info: StashInfo, event: MouseEvent): void {
     showMenuAtElement(event.currentTarget as HTMLElement, [
+      {
+        id: "view",
+        label: "View diff",
+        icon: iconView,
+        run: () => void onPreview(info),
+      },
+      {
+        id: "show-in-history",
+        label: "Show in History",
+        icon: iconHistory,
+        run: () => showInHistory(info),
+      },
+      { separator: true },
       {
         id: "pop",
         label: "Pop (apply and drop)",
@@ -194,6 +213,54 @@
         run: () => void onDrop(info),
       },
     ]);
+  }
+
+  // -- "Show in History" + stash preview ---------------------------------------
+
+  /**
+   * Opens the history sidebar for this repo, then selects + scrolls to the
+   * stash commit. Stash commits are excluded from the default log walk
+   * (backend skips refs/stash), so the miss is the common path — the
+   * history panel toasts an info instead of failing silently.
+   */
+  function showInHistory(info: StashInfo): void {
+    emitUiEvent("focus-panel", { panel: "history", repoId });
+    emitUiEvent("history-select-commit", {
+      sha: info.sha,
+      repoId,
+      toastOnMiss: true,
+    });
+  }
+
+  /** Open preview dialog: files `null` while `repo_diff` is in flight. */
+  let preview = $state<{
+    info: StashInfo;
+    files: FileDiff[] | null;
+    error: string | null;
+  } | null>(null);
+
+  /**
+   * "View diff": `stash^..stash` — the stash commit against its first
+   * parent (its base HEAD), i.e. `git stash show -p` semantics. Backend
+   * `repo_diff` revparses the `<sha>^` spec.
+   */
+  async function onPreview(info: StashInfo): Promise<void> {
+    preview = { info, files: null, error: null };
+    try {
+      const files = await repoDiff(
+        repoId,
+        { commit: `${info.sha}^` },
+        { commit: info.sha },
+      );
+      // Stale-guard: the dialog may have been closed / re-opened meanwhile.
+      if (preview?.info.sha === info.sha) {
+        preview = { info, files, error: null };
+      }
+    } catch (err) {
+      if (preview?.info.sha === info.sha) {
+        preview = { info, files: null, error: describeError(err) };
+      }
+    }
   }
 </script>
 
@@ -366,3 +433,46 @@
   danger
   onConfirm={() => void onDropConfirmed()}
 />
+
+{#if preview}
+  <!-- Stash preview: the stash diff (stash^..stash) in the shared dialog
+       chrome, rendered by the same DiffViewer as every other diff. -->
+  <DialogShell
+    bind:open={
+      () => preview !== null,
+      (v) => {
+        if (!v) preview = null;
+      }
+    }
+    labelledBy="stash-preview-title"
+    width="54rem"
+  >
+    {#snippet children()}
+      {@const p = preview}
+      {#if p}
+        <h2 id="stash-preview-title" class="sdlg-title title flex items-baseline gap-2">
+          {stashRef(p.info)}
+          <span class="min-w-0 flex-1 truncate text-[0.8125rem] font-normal text-muted-foreground" title={p.info.message}>
+            {p.info.message}
+          </span>
+        </h2>
+        <div class="preview-body max-h-[60vh] min-h-24 overflow-y-auto rounded border border-border bg-card">
+          {#if p.error}
+            <p class="p-3 text-[13px] text-destructive" role="alert">{p.error}</p>
+          {:else if p.files === null}
+            <p class="p-3 text-[13px] text-muted-foreground" role="status">Loading stash diff…</p>
+          {:else if p.files.length === 0}
+            <p class="p-3 text-[13px] text-muted-foreground">This stash has no tracked-file changes.</p>
+          {:else}
+            <DiffViewer files={p.files} />
+          {/if}
+        </div>
+      {/if}
+    {/snippet}
+    {#snippet actions()}
+      <button class="secondary sdlg-secondary" type="button" onclick={() => (preview = null)}>
+        Close
+      </button>
+    {/snippet}
+  </DialogShell>
+{/if}

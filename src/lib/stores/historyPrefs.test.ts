@@ -49,6 +49,7 @@ describe("parseHistoryPrefs", () => {
         before: "",
         pickaxe: "-S needle",
         pickaxeRegex: "",
+        scopeRef: "",
       },
       selectedSha: "abcdef1234567890",
       detailOpen: true,

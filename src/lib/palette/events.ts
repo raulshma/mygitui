@@ -21,8 +21,22 @@ export interface UiEventMap {
   "history-refresh": undefined;
   /** Toggle the blame view. */
   "history-toggle-blame": undefined;
-  /** Select a commit in history: `{ sha, repoId? }`. */
-  "history-select-commit": { sha: string; repoId?: string };
+  /**
+   * Select a commit in history: `{ sha, repoId?, toastOnMiss? }` — the
+   * handler selects + scrolls once the commit reaches the loaded log
+   * (parking the request while the stream may still deliver it). When
+   * `toastOnMiss` is set and the stream exhausts without the commit, the
+   * panel toasts kind "info" instead of failing silently ("Show in History"
+   * from BranchPanel/StashPanel uses this).
+   */
+  "history-select-commit": { sha: string; repoId?: string; toastOnMiss?: boolean };
+  /**
+   * Open the history commit context menu from the graph canvas:
+   * `{ sha, clientX, clientY }` — emitted by GraphCanvas on a right-click
+   * that hit-tests to a commit row; HistoryView (which owns the commit
+   * menu actions) opens its usual commit menu at that position.
+   */
+  "graph-open-context-menu": { sha: string; clientX: number; clientY: number };
   /** Toggle split/unified diff mode. */
   "diff-toggle-mode": undefined;
   /** Toggle diff line wrapping (persisted; every mounted viewer flips). */

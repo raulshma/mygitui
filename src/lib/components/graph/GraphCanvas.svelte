@@ -15,6 +15,11 @@
    *   rowHeight           fixed row height in CSS px (default 24)
    *   onCommitClick(sha)  fired when a lane node/channel is clicked or Enter
    *                       is pressed on the focused row
+   *   contextmenu         a right-click that hit-tests to a commit row emits
+   *                       the typed `graph-open-context-menu` bus event
+   *                       ({sha, clientX, clientY}) — HistoryView owns the
+   *                       commit menu and opens it at the pointer. Outside a
+   *                       row the event is not claimed (no preventDefault).
    *   onReachEnd()        fired while fewer than `reachEndThresholdRows` rows
    *                       remain after the visible window (parent streams
    *                       more pages; may fire repeatedly until buffered)
@@ -47,8 +52,9 @@
    */
   import { onDestroy } from "svelte";
   import type { LogPage } from "$lib/ipc/types";
+  import { emitUiEvent } from "$lib/palette/events";
   import { applyDprTransform, pixelSize, scrollToRowTarget, visibleRange } from "./layout";
-  import { hitTest } from "./hitTest";
+  import { hitTest, type HitResult } from "./hitTest";
   import { FALLBACK_THEME, readTheme, type ThemeColors } from "./palette";
   import { drawGraph } from "./render";
   import { RowCache } from "./rows";
@@ -380,11 +386,15 @@
     hover = null;
   }
 
-  function onClick(event: MouseEvent): void {
+  /**
+   * Row/lane under a pointer event's client coordinates (canvas-local hit
+   * test against the live scroll offset). Shared by click + contextmenu.
+   */
+  function hitAtClient(event: MouseEvent): HitResult {
     const canvas = canvasEl;
-    if (!canvas) return;
+    if (!canvas) return { row: -1, lane: null };
     const rect = canvas.getBoundingClientRect();
-    const hit = hitTest({
+    return hitTest({
       x: event.clientX - rect.left,
       y: event.clientY - rect.top,
       scrollTop: scrollEl?.scrollTop ?? 0,
@@ -394,6 +404,12 @@
       padding,
       tolerance: nodeTolerance,
     });
+  }
+
+  function onClick(event: MouseEvent): void {
+    const canvas = canvasEl;
+    if (!canvas) return;
+    const hit = hitAtClient(event);
     if (hit.row < 0) return;
     focusRow = hit.row;
     canvas.focus();
@@ -401,6 +417,25 @@
       const sha = cache.rows[hit.row]?.sha;
       if (sha) onCommitClick(sha);
     }
+  }
+
+  /**
+   * Right-click on a commit row → `graph-open-context-menu` (typed bus,
+   * palette/events.ts): HistoryView owns the commit menu and opens it at
+   * the pointer. Outside a row nothing is claimed — the browser default
+   * (and any other handler) applies untouched.
+   */
+  function onContextMenu(event: MouseEvent): void {
+    const hit = hitAtClient(event);
+    if (hit.row < 0) return;
+    const sha = cache.rows[hit.row]?.sha;
+    if (!sha) return;
+    event.preventDefault();
+    emitUiEvent("graph-open-context-menu", {
+      sha,
+      clientX: event.clientX,
+      clientY: event.clientY,
+    });
   }
 
   // ---------------------------------------------------------------------------
@@ -464,6 +499,7 @@
           onpointermove={onPointerMove}
           onpointerleave={onPointerLeave}
           onclick={onClick}
+          oncontextmenu={onContextMenu}
           onkeydown={onKeydown}
           onfocus={() => (hasFocus = true)}
           onblur={() => (hasFocus = false)}

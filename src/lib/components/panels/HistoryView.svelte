@@ -40,13 +40,15 @@
   import {
     archiveSpec,
     branchCreate,
+    branches,
     cherryPick,
     describe,
     pickSaveFile,
     revertCommits,
     tagCreate,
   } from "$lib/ipc/client";
-  import type { CommitInfo, FileDiff, MergeResult } from "$lib/ipc/types";
+  import type { BranchInfo, CommitInfo, FileDiff, MergeResult } from "$lib/ipc/types";
+  import { describeError } from "$lib/errors";
   import GraphCanvas from "$lib/components/graph/GraphCanvas.svelte";
   import CompareBar from "$lib/components/panels/CompareBar.svelte";
   import type { CompareResult } from "$lib/components/panels/compare";
@@ -62,7 +64,11 @@
   } from "$lib/stores/historyPrefs";
   import { bookmarks as bookmarkStore } from "$lib/components/graph/bookmarks.svelte";
   import { onUiEvent } from "$lib/palette/events";
-  import { showMenuAt, type MenuEntry } from "$lib/components/menu/contextMenuStore.svelte";
+  import {
+    contextMenu,
+    showMenuAt,
+    type MenuEntry,
+  } from "$lib/components/menu/contextMenuStore.svelte";
   import { openPanelPopout } from "$lib/layout/popout";
   import SplitPane from "$lib/components/layout/SplitPane.svelte";
   import { readSplitRatio, writeSplitRatio } from "$lib/layout/splitPrefs";
@@ -272,6 +278,16 @@
   let restoreScroll = false;
 
   /**
+   * Parked `history-select-commit` request whose commit has not reached the
+   * loaded log yet ("Show in History" from BranchPanel/StashPanel). It rides
+   * the same restore machine as a persisted selection: buffered pages release
+   * while the commit can still arrive; once the stream exhausts without it,
+   * the request is dropped — with an info toast when the sender asked for
+   * one (the sha may sit outside the restored filter's window).
+   */
+  let pendingReveal = $state<{ sha: string; toastOnMiss: boolean } | null>(null);
+
+  /**
    * Repo re-targeting — on mount and on every repo switch it resets
    * transient view state (dialogs, compare results, scroll/range) and
    * hydrates the non-filter UI state (selection + detail visibility) from
@@ -296,6 +312,7 @@
         branchFromSha = null;
         tagAtSha = null;
         resetToSha = null;
+        pendingReveal = null;
         sync.reset();
       });
     }
@@ -394,6 +411,65 @@
     return out;
   });
 
+  // -- branch scope (backend LogFilter.refs) ------------------------------------
+
+  /** Local branches feeding the scope dropdown (best-effort; never blocks). */
+  let branchList = $state<BranchInfo[]>([]);
+
+  async function refreshBranches(): Promise<void> {
+    if (repoId === "") return;
+    try {
+      branchList = await branches(repoId);
+    } catch {
+      branchList = []; // dropdown degrades to All/Current only
+    }
+  }
+
+  $effect(() => {
+    void repoId; // re-fetch when the repo switches
+    branchList = [];
+    void refreshBranches();
+  });
+
+  /**
+   * Branch names offered by the scope dropdown — the loaded list, plus the
+   * active scope when it is a branch the list no longer contains (deleted
+   * after being persisted): the select keeps showing the live value and the
+   * chip stays clearable instead of silently snapping to "All branches".
+   */
+  const scopeOptions = $derived.by(() => {
+    const scope = store.filter.scopeRef ?? "";
+    const names = branchList.map((b) => b.name);
+    if (scope !== "" && scope !== "HEAD" && !names.includes(scope)) {
+      names.push(scope);
+    }
+    return names;
+  });
+
+  /** Human label of the active scope (chip); null when unscoped. */
+  const scopeLabel = $derived.by(() => {
+    const scope = store.filter.scopeRef ?? "";
+    if (scope === "") return null;
+    if (scope === "HEAD") return tabStore.active?.status?.branch ?? "current branch";
+    return scope;
+  });
+
+  /**
+   * The scope dropdown's value is applied by effect, not a `value` prop: the
+   * branch options stream in asynchronously (and may include the persisted
+   * scope only after `refreshBranches` lands), so re-apply whenever the
+   * option list or the filter field changes — a one-way `value` attribute
+   * can otherwise strand on "All branches" while the store still holds the
+   * restored scope.
+   */
+  let scopeSelectEl = $state<HTMLSelectElement | null>(null);
+  $effect(() => {
+    const el = scopeSelectEl;
+    if (!el) return;
+    void scopeOptions; // re-apply after the option list (re)renders
+    el.value = store.filter.scopeRef ?? "";
+  });
+
   // -- selection ----------------------------------------------------------------------
 
   function select(
@@ -436,6 +512,26 @@
     } else if (outcome.kind === "dropped") {
       onRevealHandled?.();
       toast("Parent commit is not in the loaded history");
+    }
+  });
+
+  // Parked cross-panel reveals ("Show in History" from BranchPanel /
+  // StashPanel via `history-select-commit`): the same resolve machine as the
+  // persisted-selection restore — select + scroll once the commit lands,
+  // info-toast when the exhausted stream never delivers it.
+  $effect(() => {
+    const pending = pendingReveal;
+    if (!pending) return;
+    void store.flat; // re-run as pages release into the index
+    const outcome = store.resolveRestoredSelection(pending.sha);
+    if (outcome.kind === "resolved") {
+      pendingReveal = null;
+      select(pending.sha, { scroll: true });
+    } else if (outcome.kind === "dropped") {
+      pendingReveal = null;
+      if (pending.toastOnMiss) {
+        toast("Commit is outside the loaded history window", { kind: "info" });
+      }
     }
   });
 
@@ -544,10 +640,6 @@
   }
 
   // -- commit actions (M3 E2) ---------------------------------------------------
-
-  function describeError(err: unknown): string {
-    return err instanceof Error ? err.message : String(err);
-  }
 
   /** Toasts a mutation result and refreshes the tab status. The history
    *  store restarts on its own via the backend `repo-changed` event. */
@@ -699,7 +791,10 @@
     const unlisteners = [
       onUiEvent("history-focus-filter", () => filterTextEl?.focus()),
       onUiEvent("history-clear-filter", () => store.clearFilter()),
-      onUiEvent("history-refresh", () => store.restart()),
+      onUiEvent("history-refresh", () => {
+        store.restart();
+        void refreshBranches(); // the scope dropdown follows branch mutations
+      }),
       onUiEvent("history-toggle-blame", () => {
         // The file list lives in CommitDetail — delegate to its exported
         // handler (null when the detail pane is closed).
@@ -707,11 +802,23 @@
           toast("Select a commit with file changes to blame");
         }
       }),
-      onUiEvent("history-select-commit", ({ sha, repoId: target }) => {
+      onUiEvent("history-select-commit", ({ sha, repoId: target, toastOnMiss }) => {
         if (target !== undefined && target !== repoId) return;
         if (store.revealSha(sha)) {
           select(sha, { scroll: true });
+        } else {
+          // Beyond the loaded window (and nothing buffered to release):
+          // park the request — it selects when the stream delivers the
+          // commit, or toasts once the stream exhausts without it.
+          pendingReveal = { sha, toastOnMiss: toastOnMiss ?? false };
         }
+      }),
+      onUiEvent("graph-open-context-menu", ({ sha, clientX, clientY }) => {
+        // Right-click on the graph canvas: same behavior as the DOM list's
+        // row menu — select the commit, then open the commit menu at the
+        // pointer (the row is already on screen; no scroll).
+        select(sha);
+        contextMenu.show(clientX, clientY, commitMenuEntries(sha));
       }),
       onUiEvent("commit-action", ({ sha, action }) => {
         if (repoId === "") return;
@@ -736,11 +843,15 @@
     });
   }
 
-  /** Row right-click: the commit action menu. */
-  function commitMenu(event: MouseEvent, sha: string, idx: number): void {
-    onRowClick(sha, idx, event);
+  /**
+   * The commit action menu (branch/tag/reset/cherry-pick/revert/copy) for
+   * `sha` — shared by the DOM list's row right-click and the graph canvas's
+   * `graph-open-context-menu`. Entries close over this view's handlers, so
+   * the selection done by the caller is what the actions operate on.
+   */
+  function commitMenuEntries(sha: string): MenuEntry[] {
     const bookmarked = root !== "" && bookmarkStore.has(root, sha);
-    const entries: MenuEntry[] = [
+    return [
       { id: "pick", label: "Cherry-pick…", run: () => void doCherryPick() },
       { id: "revert", label: "Revert…", run: () => void doRevert() },
       { id: "rebase", label: "Rebase from here…", run: rebaseFromHere },
@@ -752,7 +863,12 @@
       { id: "copy-describe", label: "Copy describe", run: () => void copyDescribe(sha) },
       { id: "archive", label: "Export archive…", run: () => void exportArchive(sha) },
     ];
-    showMenuAt(event, entries);
+  }
+
+  /** Row right-click: the commit action menu. */
+  function commitMenu(event: MouseEvent, sha: string, idx: number): void {
+    onRowClick(sha, idx, event);
+    showMenuAt(event, commitMenuEntries(sha));
   }
 
   /** M11: zip/tar export of the commit's tree via the save picker. */
@@ -871,6 +987,25 @@
     {/if}
 
     {#if !sidebar || showAdvanced}
+      <!-- Branch scope: backend LogFilter.refs — "" walks all refs + HEAD,
+           "HEAD" the checked-out branch, a name only that branch's history.
+           Restarts the stream through the same debounced setFilter path as
+           the other filter fields. -->
+      <label class="scope flex items-center gap-1 text-muted-foreground" title="Limit the log to one branch's history">
+        <span class="dl">scope</span>
+        <select
+          class="h-auto rounded-sm border border-input bg-card px-[0.3rem] py-[0.15rem] text-[0.6875rem] text-foreground focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-1"
+          aria-label="Branch scope"
+          bind:this={scopeSelectEl}
+          onchange={(e) => store.setFilter({ scopeRef: e.currentTarget.value })}
+        >
+          <option value="">All branches</option>
+          <option value="HEAD">Current branch</option>
+          {#each scopeOptions as name (name)}
+            <option value={name}>{name}</option>
+          {/each}
+        </select>
+      </label>
       <Input
         class="f h-auto w-36 rounded-sm bg-card dark:bg-card px-[0.45rem] py-[0.2rem] text-xs md:text-xs placeholder:text-muted-foreground/80"
         placeholder="Author"
@@ -933,6 +1068,27 @@
         value={store.filter.pickaxeRegex ?? ""}
         oninput={(e) => store.setFilter({ pickaxeRegex: e.currentTarget.value })}
       />
+    {/if}
+
+    {#if scopeLabel}
+      <!-- Scope chip stays visible even with the advanced filters collapsed
+           (sidebar mode): the log may be narrower than it looks, so the
+           active scope is always shown and one click clears it. -->
+      <span
+        class="scope-chip inline-flex flex-none items-center gap-[0.15rem] rounded-full bg-primary/10 py-0 pr-[0.3rem] pl-[0.45rem] text-[0.6875rem] text-primary"
+        title="The log is scoped to this branch's history"
+      >
+        <span class="max-w-36 truncate">scoped to {scopeLabel}</span>
+        <button
+          class="rounded-full px-[0.25rem] text-[0.75rem] leading-none text-primary/80 hover:bg-accent hover:text-accent-foreground focus-visible:outline-2 focus-visible:outline-ring"
+          type="button"
+          aria-label="Clear branch scope"
+          title="Back to all branches"
+          onclick={() => store.setFilter({ scopeRef: "" })}
+        >
+          ×
+        </button>
+      </span>
     {/if}
 
     {#if filterActive}

@@ -194,6 +194,44 @@ describe("GraphCanvas", () => {
     expect(onCommitClick).toHaveBeenCalledWith("sha-1-0");
   });
 
+  it("contextmenu on a commit row emits graph-open-context-menu and claims the event; off-row it does not", () => {
+    const bus: CustomEvent<{ sha: string; clientX: number; clientY: number }>[] = [];
+    const contextmenuEvents: MouseEvent[] = [];
+    const onBus = (event: Event): void => {
+      bus.push(event as CustomEvent<{ sha: string; clientX: number; clientY: number }>);
+    };
+    const onCtx = (event: Event): void => {
+      contextmenuEvents.push(event as MouseEvent);
+    };
+    document.addEventListener("graph-open-context-menu", onBus);
+    document.addEventListener("contextmenu", onCtx);
+    try {
+      const { getByRole } = render(GraphCanvas, {
+        props: {
+          pages: [pageOf(2)],
+          onCommitClick: () => {},
+          onReachEnd: () => {},
+        },
+      });
+      const canvas = getByRole("img");
+
+      // Row 0 spans y 0..24 — the pointer carries the row sha + position.
+      fireEvent.contextMenu(canvas, { clientX: 10, clientY: 12 });
+      expect(bus).toHaveLength(1);
+      expect(bus[0]!.detail).toEqual({ sha: "sha-1-0", clientX: 10, clientY: 12 });
+      expect(contextmenuEvents[0]!.defaultPrevented).toBe(true);
+
+      // Below the loaded rows (2 × 24px) nothing is claimed: no bus event,
+      // browser default left untouched.
+      fireEvent.contextMenu(canvas, { clientX: 10, clientY: 500 });
+      expect(bus).toHaveLength(1);
+      expect(contextmenuEvents[1]!.defaultPrevented).toBe(false);
+    } finally {
+      document.removeEventListener("graph-open-context-menu", onBus);
+      document.removeEventListener("contextmenu", onCtx);
+    }
+  });
+
   it("exposes the imperative scrollToRow via the component instance", () => {
     const rendered = render(GraphCanvas, {
       props: {

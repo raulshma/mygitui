@@ -24,7 +24,7 @@
   import { branchCreate, branchDelete, branchIsMerged, branches } from "$lib/ipc/client";
   import type { BranchInfo } from "$lib/ipc/types";
   import { toast } from "$lib/toast";
-  import { onUiEvent } from "$lib/palette/events";
+  import { emitUiEvent, onUiEvent } from "$lib/palette/events";
   import { showMenuAt, type MenuEntry } from "$lib/components/menu/contextMenuStore.svelte";
   import { contextMenu } from "$lib/components/menu/contextMenuStore.svelte";
   import ResetDialog from "$lib/components/safety/ResetDialog.svelte";
@@ -229,6 +229,17 @@
 
   // -- M9 F1: row context menu -------------------------------------------------
 
+  /**
+   * "Show in History": opens the history sidebar for this repo, then
+   * selects + scrolls to the branch's tip commit. The commit may sit
+   * outside the loaded graph window (or the restored filter's scope) — the
+   * history panel then toasts an info instead of failing silently.
+   */
+  function showInHistory(sha: string): void {
+    emitUiEvent("focus-panel", { panel: "history", repoId });
+    emitUiEvent("history-select-commit", { sha, repoId, toastOnMiss: true });
+  }
+
   function branchMenu(event: MouseEvent, branch: BranchInfo): void {
     const entries: MenuEntry[] = [];
     if (!branch.is_head) {
@@ -244,6 +255,11 @@
     entries.push(
       { id: "push", label: "Push", run: () => void ops.push(branch, false) },
       { id: "upstream", label: "Push and set upstream", run: () => void ops.push(branch, true) },
+      {
+        id: "show-in-history",
+        label: "Show in History",
+        run: () => showInHistory(branch.sha),
+      },
       {
         id: "rename",
         label: "Rename…",
