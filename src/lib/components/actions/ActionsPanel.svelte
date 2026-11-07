@@ -233,8 +233,11 @@
 
 </script>
 
+<!-- min-h-0 + overflow-y-auto: the panel is one continuous column (projects,
+     actions, form, runs) that can outgrow its tab body, so the section itself
+     scrolls — same contract as the other sidebar panels. -->
 <section
-  class="actions-panel flex flex-col gap-[0.6rem] px-3 py-2 text-[0.8125rem] text-foreground"
+  class="actions-panel flex min-h-0 flex-col gap-[0.6rem] overflow-y-auto px-3 py-2 text-[0.8125rem] text-foreground [scrollbar-gutter:stable]"
   aria-label="Detected projects and custom actions"
 >
   <header class="section-head flex flex-wrap items-baseline gap-2">
