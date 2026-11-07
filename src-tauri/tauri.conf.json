@@ -17,13 +17,14 @@
         "height": 900,
         "minWidth": 900,
         "minHeight": 600,
-        "additionalBrowserArgs": "--remote-debugging-port=9222",
         "backgroundColor": "#0a0a0a",
         "visible": false
       }
     ],
     "security": {
-      "csp": null
+      "csp": "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; font-src 'self'; connect-src 'self' ipc: http://ipc.localhost https://openrouter.ai http://127.0.0.1:* http://localhost:*; object-src 'none'; base-uri 'self'; form-action 'self'",
+      "devCsp": "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; font-src 'self'; connect-src 'self' ipc: http://ipc.localhost https://openrouter.ai http://127.0.0.1:* http://localhost:* ws://localhost:1420 ws://127.0.0.1:1420 ws://localhost:1421 ws://127.0.0.1:1421; object-src 'none'; base-uri 'self'; form-action 'self'",
+      "dangerousDisableAssetCspModification": ["style-src"]
     }
   },
   "plugins": {
