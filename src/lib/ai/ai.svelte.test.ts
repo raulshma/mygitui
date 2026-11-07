@@ -7,7 +7,7 @@
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { FileDiff } from "$lib/ipc/types";
-import { AiStore, parseAiConfig, AI_STORAGE_KEY } from "./ai.svelte";
+import { AiStore, localServeCwd, parseAiConfig, AI_STORAGE_KEY } from "./ai.svelte";
 import type { AiProbeResult, AiProvider, ProviderSet } from "./provider";
 import type { FeatureGitClient } from "./features";
 import { OpenCodeProvider } from "./opencode";
@@ -132,6 +132,23 @@ beforeEach(() => {
 // ---------------------------------------------------------------------------
 // Config persistence
 // ---------------------------------------------------------------------------
+
+describe("localServeCwd", () => {
+  it("passes local tab roots through as the managed workspace", () => {
+    expect(localServeCwd("/home/raulshma/agent-repos/mygitui")).toBe(
+      "/home/raulshma/agent-repos/mygitui",
+    );
+    expect(localServeCwd("C:\\Code\\repo")).toBe("C:\\Code\\repo");
+  });
+
+  it("drops ssh:// remote tab roots (managed serve is a local process)", () => {
+    expect(
+      localServeCwd("ssh://dev-6c4a837b-a7ef-45c2-a5cd-409e856e7916/home/raulshma/agent-repos/mygitui"),
+    ).toBeUndefined();
+    expect(localServeCwd(undefined)).toBeUndefined();
+    expect(localServeCwd(null)).toBeUndefined();
+  });
+});
 
 describe("AiStore config persistence", () => {
   it("defaults to opencode + fallback allowed, nothing opted in", () => {

@@ -394,9 +394,18 @@ export function basicAuthHeader(password: string): string {
  * is mis-parsed into a garbage project directory and every prompt fails
  * with a 500 "Unexpected server error". Verified against opencode 1.18.35:
  * `C:/repo` works, `C:\repo` and `\\?\C:\repo` do not.
+ *
+ * URI-form roots (`ssh://<device-id>/<path>` — a remote tab) yield
+ * `undefined`: the opencode server is a local process and can never
+ * resolve a remote device's filesystem, so such a "directory" makes every
+ * call fail with `LocationNotFoundError` (verified against opencode
+ * 2.2.1). Omitting the directory entirely lets the server's default
+ * location — and its global model catalog — apply. Windows drive letters
+ * (`C:/repo`) don't match the `scheme://` shape and stay untouched.
  */
 export function normalizeDirectory(directory: string | null | undefined): string | undefined {
   if (!directory) return undefined;
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(directory)) return undefined;
   const stripped = directory.replace(/^\\\\\?\\/, "");
   const normalized = stripped.replace(/\\/g, "/");
   return normalized.length > 0 ? normalized : undefined;

@@ -29,7 +29,7 @@ import {
   opencodeServeStop,
 } from "$lib/ipc/client";
 import { isTauri } from "$lib/entry/dragdrop";
-import { tabStore } from "$lib/stores/tabs.svelte";
+import { SSH_SCHEME, tabStore } from "$lib/stores/tabs.svelte";
 import { ConnectionSupervisor } from "./connection";
 import type { SupervisorOptions } from "./connection";
 import { OpenCodeProvider } from "./opencode";
@@ -52,12 +52,22 @@ export interface StorageLike {
 }
 
 /**
+ * Workspace for a managed-serve start. The opencode CLI is spawned
+ * locally, so a remote tab's `ssh://` root is not a usable workspace —
+ * pass `undefined` and the Rust side falls back to its default scratch
+ * workspace (the same path it takes when no repository is active).
+ */
+export function localServeCwd(root: string | null | undefined): string | undefined {
+  return typeof root === "string" && !root.startsWith(SSH_SCHEME) ? root : undefined;
+}
+
+/**
  * Managed opencode serve bridge (Rust IPC). The provider only receives it
  * inside a Tauri webview; everywhere else managed mode degrades to attach.
  */
 const managedServeBridge: ManagedServe = {
   status: () => opencodeServeStatus(),
-  start: (cwd) => opencodeServeStart(cwd ?? tabStore.active?.root),
+  start: (cwd) => opencodeServeStart(localServeCwd(cwd ?? tabStore.active?.root)),
 };
 
 function opencodeDirectory(sessionKey?: string): string | undefined {

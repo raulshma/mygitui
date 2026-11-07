@@ -741,6 +741,71 @@ describe("normalizeDirectory", () => {
     expect(normalizeDirectory(null)).toBeUndefined();
     expect(normalizeDirectory("")).toBeUndefined();
   });
+
+  it("returns undefined for ssh:// remote tab roots (URIs are never local dirs)", () => {
+    expect(
+      normalizeDirectory(
+        "ssh://dev-6c4a837b-a7ef-45c2-a5cd-409e856e7916/home/raulshma/agent-repos/mygitui",
+      ),
+    ).toBeUndefined();
+  });
+
+  it("keeps Windows drive letters that merely look scheme-like", () => {
+    expect(normalizeDirectory("C:/Code/repo")).toBe("C:/Code/repo");
+  });
+});
+
+describe("remote ssh:// tab roots never reach the server as a directory", () => {
+  const REMOTE_ROOT = "ssh://dev-6c4a837b-a7ef-45c2-a5cd-409e856e7916/home/raulshma/agent-repos/mygitui";
+
+  it("v2 listModels omits the location so the server default applies", async () => {
+    FAKE_V2.model.list.mockResolvedValue({
+      data: [{ providerID: "a", id: "m", name: "M" }],
+    });
+    FAKE_V2.provider.list.mockResolvedValue({ data: [] });
+    const provider = new OpenCodeProvider({
+      fetchImpl: healthFetch(200, { v2: true }),
+      directory: () => REMOTE_ROOT,
+    });
+    await expect(provider.listModels()).resolves.toEqual([
+      { id: "a/m", provider: "a", label: "a/m" },
+    ]);
+    // A real server answers LocationNotFoundError for an ssh:// directory;
+    // no location at all lists its global catalog.
+    expect(FAKE_V2.model.list).toHaveBeenCalledWith(undefined);
+    expect(FAKE_V2.provider.list).toHaveBeenCalledWith(undefined);
+  });
+
+  it("v2 generate creates the temp session without a location", async () => {
+    FAKE_V2.session.create.mockResolvedValue({ id: "sess-v2" });
+    FAKE_V2.session.prompt.mockResolvedValue({ id: "msg-1" });
+    FAKE_V2.session.remove.mockResolvedValue(undefined);
+    FAKE_V2.event.subscribe.mockReturnValue(v2Events());
+    const provider = new OpenCodeProvider({
+      fetchImpl: healthFetch(200, { v2: true }),
+      directory: () => REMOTE_ROOT,
+    });
+    await expect(
+      provider.generate({ prompt: "hi", sessionKey: "repo-remote" }),
+    ).resolves.toMatchObject({ text: "v2 says hi", backend: "opencode" });
+    expect(FAKE_V2.session.create.mock.calls[0][0]).not.toHaveProperty("location");
+  });
+
+  it("v1 generate builds the SDK client without a directory", async () => {
+    FAKE_CLIENT.session.create.mockResolvedValue({ data: SESSION, error: undefined });
+    FAKE_CLIENT.session.prompt.mockResolvedValue({
+      data: { parts: PROMPT_PARTS },
+      error: undefined,
+    });
+    const provider = new OpenCodeProvider({
+      fetchImpl: healthFetch(200),
+      directory: () => REMOTE_ROOT,
+    });
+    await provider.generate({ prompt: "hello", sessionKey: "repo-remote" });
+    const calls = vi.mocked(createOpencodeClient).mock.calls;
+    const args = calls.at(-1)![0] as Record<string, unknown>;
+    expect(args).not.toHaveProperty("directory");
+  });
 });
 
 describe("directory header + error surfacing in generate", () => {
