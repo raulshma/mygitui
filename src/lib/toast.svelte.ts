@@ -18,6 +18,8 @@ export interface ToastOptions {
 }
 
 const AUTO_DISMISS_MS = 4_000;
+/** Errors linger past the 4s default so failures can be read (and copied). */
+const ERROR_AUTO_DISMISS_MS = 9_000;
 
 let toasts = $state<ToastItem[]>([]);
 let nextId = 1;
@@ -49,12 +51,12 @@ export function dismissToast(id: number): void {
   dismiss(id);
 }
 
-/** Shows a toast; auto-dismisses after 4 seconds. */
+/** Shows a toast; auto-dismisses after 4 seconds (errors after 9). */
 export function toast(message: string, opts?: ToastOptions): void {
   const id = nextId++;
   const kind: ToastKind = opts?.kind ?? "info";
   toasts = [...toasts, { id, message, kind }];
-  schedule(id, AUTO_DISMISS_MS);
+  schedule(id, kind === "error" ? ERROR_AUTO_DISMISS_MS : AUTO_DISMISS_MS);
 }
 
 /**

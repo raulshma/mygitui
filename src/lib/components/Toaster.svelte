@@ -36,7 +36,7 @@
     >
       <!-- Semantic accents: shape + glyph carry the meaning, color reinforces it. -->
       <span
-        class="badge grid size-5 flex-none place-items-center rounded-full bg-primary text-[0.75rem] font-bold leading-none text-primary-foreground group-data-[kind=success]:bg-green-600 group-data-[kind=success]:text-white group-data-[kind=error]:bg-destructive group-data-[kind=error]:text-white dark:group-data-[kind=success]:bg-green-500"
+        class="badge grid size-5 flex-none place-items-center rounded-full bg-primary text-[0.75rem] font-bold leading-none text-primary-foreground group-data-[kind=success]:bg-green-600 group-data-[kind=success]:text-white group-data-[kind=error]:bg-destructive group-data-[kind=error]:text-white dark:group-data-[kind=success]:bg-green-700"
         aria-hidden="true"
       >{glyph(item.kind)}</span>
       <span class="message min-w-0 flex-1 text-[0.8125rem] [overflow-wrap:anywhere]">{item.message}</span>

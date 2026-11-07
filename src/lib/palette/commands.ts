@@ -65,6 +65,7 @@ import {
   setThemePreference,
   type ThemePreference,
 } from "$lib/theme";
+import { openAboutDialog } from "$lib/components/aboutDialog";
 
 /** What a command knows about the active tab when it runs. */
 export interface CommandCtx {
@@ -164,6 +165,17 @@ async function runPush(ctx: CommandCtx): Promise<void> {
 function focusPanel(panel: string, ctx: CommandCtx): void {
   dispatchFocusPanel(panel, ctx.repoId);
 }
+
+/**
+ * Shortcuts for the panels outside the Ctrl+1–8 sidebar numbering (the
+ * index-based fallback below would hand History "ctrl+10", a combo no key
+ * produces). Ctrl+9 reaches the Terminal; History takes the row's last
+ * free slot, Ctrl+0 — Ctrl+7 is already Undo's.
+ */
+const PANEL_SHORTCUTS: Record<string, string> = {
+  terminal: "ctrl+9",
+  history: "ctrl+0",
+};
 
 // ---------------------------------------------------------------------------
 // Theme commands (M7 I2) — direct calls into $lib/theme, no event hop
@@ -546,6 +558,8 @@ export const COMMANDS: Command[] = [
       ["reflog", "Reflog"],
       ["undo", "Undo"],
       ["files", "Files"],
+      ["terminal", "Terminal"],
+      ["history", "History"],
     ] as const
   ).map(([panel, label], index): Command => ({
     id: `panel.focus-${panel}`,
@@ -553,7 +567,7 @@ export const COMMANDS: Command[] = [
     section: "Panels",
     keywords: ["show", "goto", "open"],
     when: (ctx) => ctx.repoId !== null,
-    shortcut: `ctrl+${index + 1}`,
+    shortcut: PANEL_SHORTCUTS[panel] ?? `ctrl+${index + 1}`,
     run: (ctx) => focusPanel(panel, ctx),
   })),
 
@@ -661,6 +675,15 @@ export const COMMANDS: Command[] = [
       resetBindings();
       ok("Keyboard shortcuts reset to defaults");
     },
+  },
+  {
+    id: "app.about",
+    title: "About mygitui",
+    section: "App",
+    keywords: ["version", "license", "info", "credits"],
+    // The about-dialog host is plain TS (see aboutDialog.ts): the registry
+    // stays free of static Svelte-component imports, like the theme calls.
+    run: () => openAboutDialog(),
   },
 ];
 

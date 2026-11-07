@@ -13,6 +13,7 @@
    * into the repo config, Open (initialized modules only) opens the module
    * worktree as a repository tab.
    */
+  import { describeError } from "$lib/errors";
   import { submoduleSync, submoduleUpdate, submodules } from "$lib/ipc/client";
   import type { SubmoduleInfo } from "$lib/ipc/types";
   import { openTab } from "$lib/stores/tabs.svelte";
@@ -66,10 +67,6 @@
     } finally {
       loading = false;
     }
-  }
-
-  function describeError(err: unknown): string {
-    return err instanceof Error ? err.message : String(err);
   }
 
   function fail(what: string, err: unknown): void {

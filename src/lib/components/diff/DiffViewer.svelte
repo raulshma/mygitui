@@ -12,6 +12,7 @@
    * mounted. 10k-hunk diffs scroll at 60fps — the math is unit tested and
    * perf-gated in diff/virtualizer.test.ts.
    */
+  import { describeError } from "$lib/errors";
   import type { FileDiff } from "$lib/ipc/types";
   import { onMount } from "svelte";
   import { discard, stage } from "$lib/ipc/client";
@@ -255,10 +256,6 @@
   });
 
   // -- M9 F6: hunk staging / discard ------------------------------------------
-
-  function describeError(err: unknown): string {
-    return err instanceof Error ? err.message : String(err);
-  }
 
   function stageHunk(fileIndex: number, hunkIndex: number): void {
     if (!repoId || !hunkStaging) return;

@@ -55,6 +55,10 @@ export const DEFAULT_BINDINGS: Record<string, string> = {
   "panel.focus-reflog": "ctrl+6",
   "panel.focus-undo": "ctrl+7",
   "panel.focus-files": "ctrl+8",
+  // Terminal/History sit outside the 1–8 sidebar numbering (their slots
+  // mirror PANEL_SHORTCUTS in $lib/palette/commands).
+  "panel.focus-terminal": "ctrl+9",
+  "panel.focus-history": "ctrl+0",
   "files.quick-open": "ctrl+p",
   "files.save": "ctrl+s",
   "files.markdown-view": "ctrl+shift+v",
