@@ -5,8 +5,11 @@
  * events are upserted into a repo→ops map (fresh reference per update so
  * rune readers re-run), dropped when `done`, and failures surface as error
  * toasts. Panels drive spinners / inline progress off `busy()` /
- * `opsFor()`. Raw hook/CLI output arrives on `op-log` and is kept per repo
- * in `logs` (rendered by `OpLogStrip`) so it survives the op finishing.
+ * `opsFor()`. `cancel(opId)` requests cooperative cancellation via
+ * `op_cancel` and flags the op so the strip can spin it; a done event whose
+ * error means cancellation toasts as info, not error. Raw hook/CLI output
+ * arrives on `op-log` and is kept per repo in `logs` (rendered by
+ * `OpLogStrip`) so it survives the op finishing.
  *
  * `AuthStore` holds the pending `auth-request` for the modal dialog. The FE
  * flow is: backend pauses a network op and emits `auth-request` → dialog
@@ -20,7 +23,8 @@
  * `vi.mock` in tests).
  */
 
-import { authRespond } from "$lib/ipc/client";
+import { authRespond, opCancel } from "$lib/ipc/client";
+import { describeError } from "$lib/errors";
 import { onAuthRequest, onOpLog, onOpProgress } from "$lib/events/repoEvents";
 import type { AuthRequest, OpLog, OpProgress, RepoId } from "$lib/ipc/types";
 import { toast } from "$lib/toast";
@@ -33,6 +37,13 @@ export interface ActiveOp {
   pct: number | null;
   done: boolean;
   error: string | null;
+  /**
+   * Cancel was requested for this op (`cancel()`); the UI shows a spinner
+   * until the done event lands. Flipped back off when the backend reports
+   * the op was already gone. Optional so pre-cancel fixtures construct
+   * plainly (absent = not cancelling).
+   */
+  cancelling?: boolean;
 }
 
 /** Raw output of the latest logging op in a repo (hooks / CLI fallback). */
@@ -48,7 +59,7 @@ export interface OpLogSession {
 const MAX_LOG_LINES = 500;
 
 /** "fetch" → "Fetch" (fallback for kinds without a friendly label). */
-function kindLabel(kind: string): string {
+export function kindLabel(kind: string): string {
   const known: Record<string, string> = {
     stage: "Stage",
     commit: "Commit",
@@ -59,6 +70,17 @@ function kindLabel(kind: string): string {
     clone: "Clone",
   };
   return known[kind] ?? kind.charAt(0).toUpperCase() + kind.slice(1);
+}
+
+/**
+ * Whether an op's final error means it was cancelled, not failed. The
+ * backend's cooperative cancellation surfaces as the bare text "cancelled"
+ * (`netops.rs` `cancelled_err()` and the op queue's queued-not-started skip
+ * both use exactly that word), matched loosely so wrapped variants still
+ * hit. Every other error is a real failure.
+ */
+export function isCancellationError(error: string): boolean {
+  return /cancel/i.test(error);
 }
 
 export class OpStore {
@@ -91,7 +113,13 @@ export class OpStore {
     if (p.done) {
       this.#finishLog(p);
       if (p.error) {
-        toast(`${kindLabel(p.kind)} failed: ${p.error}`, { kind: "error" });
+        // A cancellation the user asked for is not a failure: announce it
+        // as info so the strip/toast don't read as an error.
+        if (isCancellationError(p.error)) {
+          toast("Cancelled", { kind: "info" });
+        } else {
+          toast(`${kindLabel(p.kind)} failed: ${p.error}`, { kind: "error" });
+        }
       }
       const remaining = this.ops[p.repo_id] ?? [];
       const kept = remaining.filter((op) => op.op_id !== p.op_id);
@@ -104,6 +132,7 @@ export class OpStore {
 
     this.#clearStaleLog(p);
     const list = this.ops[p.repo_id] ?? [];
+    const idx = list.findIndex((op) => op.op_id === p.op_id);
     const entry: ActiveOp = {
       op_id: p.op_id,
       kind: p.kind,
@@ -111,8 +140,8 @@ export class OpStore {
       pct: p.pct,
       done: false,
       error: p.error,
+      cancelling: idx === -1 ? false : list[idx]?.cancelling,
     };
-    const idx = list.findIndex((op) => op.op_id === p.op_id);
     const next =
       idx === -1
         ? [...list, entry]
@@ -185,6 +214,43 @@ export class OpStore {
       : ops.some((op) => op.kind === kind);
   }
 
+  /**
+   * Requests cancellation of one running op (backend `op_cancel`, M12
+   * cooperative cancel — the op stops at its next checkpoint). Flags the op
+   * `cancelling` first so the UI spins immediately; a `false` reply (op
+   * already finished) or an IPC error un-flags it. Resolves `false` when
+   * the op is unknown here.
+   */
+  async cancel(opId: string): Promise<boolean> {
+    const repoId = Object.keys(this.ops).find((repo) =>
+      this.ops[repo].some((op) => op.op_id === opId),
+    );
+    if (repoId === undefined) return false;
+    this.#setCancelling(repoId, opId, true);
+    try {
+      const accepted = await opCancel(repoId, opId);
+      if (!accepted) this.#setCancelling(repoId, opId, false);
+      return accepted;
+    } catch (err) {
+      this.#setCancelling(repoId, opId, false);
+      toast(`Cancel failed: ${describeError(err)}`, { kind: "error" });
+      return false;
+    }
+  }
+
+  /** Flips one op's `cancelling` flag (no-op when it already finished). */
+  #setCancelling(repoId: RepoId, opId: string, cancelling: boolean): void {
+    const list = this.ops[repoId] ?? [];
+    const idx = list.findIndex((op) => op.op_id === opId);
+    if (idx === -1) return;
+    this.ops = {
+      ...this.ops,
+      [repoId]: list.map((op, i) =>
+        i === idx ? { ...op, cancelling } : op,
+      ),
+    };
+  }
+
   /** Deregisters and clears (test helper / teardown). */
   stop(): void {
     for (const unregister of this.#unregister) unregister();
@@ -209,6 +275,11 @@ export function opsFor(repoId: RepoId): ActiveOp[] {
 
 export function busy(repoId: RepoId, kind?: string): boolean {
   return opStore.busy(repoId, kind);
+}
+
+/** Requests cancellation of one running op (see `OpStore.cancel`). */
+export function cancelOp(opId: string): Promise<boolean> {
+  return opStore.cancel(opId);
 }
 
 export function opLogsFor(repoId: RepoId): OpLogSession | null {
@@ -317,10 +388,7 @@ export class AuthStore {
         payload?.store ?? false,
       );
     } catch (err: unknown) {
-      toast(
-        `Auth failed: ${err instanceof Error ? err.message : String(err)}`,
-        { kind: "error" },
-      );
+      toast(`Auth failed: ${describeError(err)}`, { kind: "error" });
     }
   }
 

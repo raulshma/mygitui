@@ -4,17 +4,19 @@
    * workspace's left column), so the commit message and button stay visible
    * while the changes list scrolls above.
    *
-   * Message textarea (Ctrl/Cmd+Enter commits; starts one row tall and grows
-   * with the draft up to a cap, then scrolls), compact icon toggles for
-   * Amend / skip-hooks / author override, signing + hook status icons, a
-   * Fixup action, and the Commit button (spinner while a commit op runs per
-   * the OpStore; disabled with no message unless amending).
+   * Message textarea (Ctrl/Cmd+Enter commits; Ctrl/Cmd+Shift+Enter commits
+   * and pushes; starts one row tall and grows with the draft up to a cap,
+   * then scrolls), compact icon toggles for Amend / skip-hooks / author
+   * override, signing + hook status icons, a Fixup action, the Commit
+   * button and a secondary Commit & Push button (spinner while the commit /
+   * push op runs per the OpStore; disabled with no message unless amending).
    * Controls sit in one dense row under the message (wrapping only when the
    * sidebar gets too narrow): options left, Fixup + AI + Commit right. The
    * author override fields expand as a full-width row under that.
    * Success clears the form, toasts the short sha and asks the owner to
    * refresh (`onCommitted` → RepoView refreshStatus). Failures render
-   * inline next to the button. The AI button is a disabled ghost (M6).
+   * inline next to the button; a push failure after a landed commit toasts
+   * "Committed — push failed: …". The AI button is a disabled ghost (M6).
    *
    * M12 (lane C): "Fixup into HEAD" commits the staged changes straight
    * into `fixup! <HEAD summary>` (no message needed; respects the
@@ -24,6 +26,8 @@
    */
   import { commit, hooksList, signingInfo, streamLog } from "$lib/ipc/client";
   import type { GitSignature, HookInfo, LogFilter, RepoStatus, SigningInfo } from "$lib/ipc/types";
+  import { describeError } from "$lib/errors";
+  import { pushCurrentBranch, syncSkipMessage } from "$lib/git/sync";
   import { busy } from "$lib/stores/ops.svelte";
   import { tabStore } from "$lib/stores/tabs.svelte";
   import { toast } from "$lib/toast";
@@ -55,6 +59,7 @@
   const iconAuthor = $derived(appIcon("person")!);
   const iconFixup = $derived(appIcon("merge-type")!);
   const iconProgress = $derived(appIcon("progress-activity")!);
+  const iconPush = $derived(appIcon("arrow-upward")!);
   const iconSigning = $derived(appIcon("verified")!);
   const iconHook = $derived(appIcon("bolt")!);
   const iconOptions = $derived(appIcon("tune")!);
@@ -68,6 +73,8 @@
   let authorEmail = $state("");
   let error = $state<string | null>(null);
   let committing = $state(false);
+  /** The push half of Commit & Push is in flight (instant feedback). */
+  let pushing = $state(false);
 
   /** Grows the message box from one row up to a readable cap. */
   const MAX_MESSAGE_HEIGHT = 176;
@@ -97,6 +104,8 @@
   );
 
   const commitBusy = $derived(busy(repoId, "commit"));
+  /** True while a push op runs for this repo (any entry point). */
+  const pushBusy = $derived(busy(repoId, "push"));
 
   /** The repo's latest status snapshot (staged detection + HEAD sha). */
   const activeStatus = $derived(
@@ -116,6 +125,8 @@
   const canCommit = $derived(
     (amend || hasMessage) && !needsStaged && !commitBusy && !committing,
   );
+  /** Commit & Push shares Commit's preconditions plus the push phase. */
+  const canCommitPush = $derived(canCommit && !pushBusy && !pushing);
 
   /** Explains what the primary button will do (title/cursor affordance). */
   const commitHint = $derived(
@@ -128,9 +139,32 @@
           : "Commit staged changes (Ctrl+Enter)",
   );
 
+  /**
+   * Amend hint (nothing staged + exactly one commit ahead of the upstream):
+   * the likely intent is patching the just-made local commit, so the plain
+   * "stage a file" line swaps to an amend affordance while that state holds.
+   * Hidden automatically once amend is toggled on or something is staged
+   * (both flip `needsStaged` off).
+   */
+  const showAmendHint = $derived(
+    needsStaged && activeStatus !== null && activeStatus.ahead === 1,
+  );
+
   /** Only warn when there are changes to stage (a clean tree is self-evident). */
   const showStagedHint = $derived(
-    needsStaged && activeStatus !== null && activeStatus.entries.length > 0,
+    !showAmendHint &&
+      needsStaged &&
+      activeStatus !== null &&
+      activeStatus.entries.length > 0,
+  );
+
+  /** The inline hint (amend suggestion or stage reminder) the buttons describe. */
+  const stagedHintId = $derived(
+    showAmendHint
+      ? "commit-amend-hint"
+      : showStagedHint
+        ? "commit-staged-hint"
+        : undefined,
   );
 
   $effect(() => {
@@ -169,37 +203,83 @@
     };
   }
 
-  async function doCommit(): Promise<void> {
+  /**
+   * Commits the staged changes (or amend). With `pushAfter` the existing
+   * commit flow is chained into a push of the current branch via the shared
+   * header/palette helper (primary remote, plain push — no force, no
+   * force-with-lease overrides). A landed commit followed by a failed push
+   * says so explicitly; a commit failure renders inline like Commit does.
+   */
+  async function doCommit(pushAfter = false): Promise<void> {
     if (!canCommit) return;
     committing = true;
     error = null;
+    let sha: string | null = null;
     try {
-      const sha = await commit(repoId, {
+      sha = await commit(repoId, {
         message: message.trimEnd(),
         amend,
         no_verify: noVerify,
         allow_empty: false,
         author: authorOverride(),
       });
-      message = "";
-      authorName = "";
-      authorEmail = "";
-      showAuthor = false;
-      amend = false;
-      noVerify = false;
-      toast(`Committed ${sha.slice(0, 7)}`, { kind: "success" });
-      onCommitted?.();
     } catch (err) {
-      error = err instanceof Error ? err.message : String(err);
-    } finally {
+      error = describeError(err);
       committing = false;
+      return;
+    }
+    committing = false;
+    if (sha === null) return; // unreachable: success always yields a sha
+
+    // Commit landed: clear the form, refresh, then optionally push.
+    message = "";
+    authorName = "";
+    authorEmail = "";
+    showAuthor = false;
+    amend = false;
+    noVerify = false;
+    onCommitted?.();
+    if (!pushAfter) {
+      toast(`Committed ${sha.slice(0, 7)}`, { kind: "success" });
+      return;
+    }
+    await pushAfterCommit();
+  }
+
+  /**
+   * The "push" half of Commit & Push (never runs standalone). Pushes the
+   * current branch with the same defaults as the header quick actions.
+   */
+  async function pushAfterCommit(): Promise<void> {
+    pushing = true;
+    try {
+      const outcome = await pushCurrentBranch(
+        repoId,
+        activeStatus?.branch ?? null,
+      );
+      if (outcome.kind === "skipped") {
+        // Push never touched the network (no remote / detached HEAD) —
+        // still worth saying the commit itself landed.
+        toast(
+          `Committed — push failed: ${syncSkipMessage(outcome.reason, "push")}`,
+          { kind: "error" },
+        );
+        return;
+      }
+      toast("Committed & pushed", { kind: "success" });
+    } catch (err) {
+      toast(`Committed — push failed: ${describeError(err)}`, {
+        kind: "error",
+      });
+    } finally {
+      pushing = false;
     }
   }
 
   function onMessageKeydown(event: KeyboardEvent): void {
     if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
       event.preventDefault();
-      void doCommit();
+      void doCommit(event.shiftKey);
     }
   }
 
@@ -291,10 +371,7 @@
       toast(`Fixup committed into ${sha.slice(0, 7)}`, { kind: "success" });
       onCommitted?.();
     } catch (err) {
-      toast(
-        `Fixup failed: ${err instanceof Error ? err.message : String(err)}`,
-        { kind: "error" },
-      );
+      toast(`Fixup failed: ${describeError(err)}`, { kind: "error" });
     } finally {
       fixing = false;
     }
@@ -315,8 +392,8 @@
       id="commit-message"
       class="message flex-none w-full min-w-0 box-border field-sizing-fixed min-h-[1.7rem] max-h-44 resize-none overflow-y-hidden rounded-sm px-2 py-[0.28rem] text-xs leading-[1.35] font-mono bg-background"
       placeholder="Commit message… Ctrl+↵"
-      title="Commit message (Ctrl+Enter commits)"
-      aria-keyshortcuts="Control+Enter Meta+Enter"
+      title="Commit message (Ctrl+Enter commits, Ctrl+Shift+Enter commits and pushes)"
+      aria-keyshortcuts="Control+Enter Meta+Enter Control+Shift+Enter Meta+Shift+Enter"
       rows={1}
       bind:ref={messageEl}
       bind:value={message}
@@ -410,10 +487,29 @@ ${m.body}` : m.subject;
           />
 
           <Button
+            class="h-7 gap-[0.35rem] rounded-full px-3 text-xs"
+            variant="secondary"
+            type="button"
+            title="Commit, then push the branch to the primary remote (Ctrl+Shift+Enter)"
+            aria-keyshortcuts="Control+Shift+Enter Meta+Shift+Enter"
+            aria-describedby={stagedHintId}
+            disabled={!canCommitPush}
+            onclick={() => void doCommit(true)}
+          >
+            {#if pushing || pushBusy}
+              <Spinner class="size-3" role="presentation" aria-hidden="true" />
+              <span>Pushing…</span>
+            {:else}
+              <Icon icon={iconPush} size={13} />
+              <span>Commit &amp; Push</span>
+            {/if}
+          </Button>
+
+          <Button
             class="h-7 min-w-[5.25rem] gap-[0.35rem] rounded-full px-4 text-xs"
             type="submit"
             title={commitHint}
-            aria-describedby={showStagedHint ? "commit-staged-hint" : undefined}
+            aria-describedby={stagedHintId}
             disabled={!canCommit}
           >
             {#if commitBusy || committing}
@@ -428,7 +524,20 @@ ${m.body}` : m.subject;
     </div>
   </div>
 
-  {#if showStagedHint}
+  {#if showAmendHint}
+    <p id="commit-amend-hint" class="amend-hint m-0 flex items-center gap-1 text-muted-foreground text-[0.6875rem] leading-[1.3]" role="status">
+      <span class="shrink-0">Nothing staged — amend the last commit instead?</span>
+      <Button
+        class="h-auto min-w-0 rounded-full px-1.5 py-px text-[0.6875rem] leading-[1.4] text-primary hover:bg-accent hover:text-accent-foreground"
+        variant="ghost"
+        type="button"
+        title="Fold the next change into the previous commit (amend)"
+        onclick={() => (amend = true)}
+      >
+        Amend last commit
+      </Button>
+    </p>
+  {:else if showStagedHint}
     <p id="commit-staged-hint" class="staged-hint m-0 text-muted-foreground text-[0.6875rem] leading-[1.3]" role="status">
       No staged changes yet — stage a file to commit.
     </p>

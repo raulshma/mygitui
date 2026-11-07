@@ -53,6 +53,7 @@
     submodules as listSubmodules,
   } from "$lib/ipc/client";
   import { onRepoChange } from "$lib/events/repoEvents";
+  import { describeError } from "$lib/errors";
   import { openTab, parseSshUri, tabStore } from "$lib/stores/tabs.svelte";
   import { normalizeRepoPath } from "$lib/stores/switcher.svelte";
   import CommitBar from "$lib/components/panels/CommitBar.svelte";
@@ -158,6 +159,7 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
   const iconAhead = $derived(appIcon("arrow-upward")!);
   const iconBehind = $derived(appIcon("arrow-downward")!);
   const iconPalette = $derived(appIcon("palette")!);
+  const iconInfo = $derived(appIcon("info")!);
 
   type DisplaySection = StatusSectionView & { modules: SubmoduleInfo[] };
 
@@ -166,6 +168,11 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
     staged: false,
     changes: false,
   });
+  /**
+   * Dismiss state of the keyboard-shortcuts hint row (re-showable from the
+   * toolbar's ⋮ menu). Per-session, not persisted.
+   */
+  let shortcutsHintDismissed = $state(false);
 
   /** Roving focus: key of the focused row (null → first visible row). */
   let focusKey: string | null = $state(null);
@@ -199,8 +206,17 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
   let ignoreFor = $state<string | null>(null);
   let ignoreChoices = $state<{ label: string; pattern: string }[]>([]);
 
-  function describeError(err: unknown): string {
-    return err instanceof Error ? err.message : String(err);
+  /**
+   * Clipboard write with the app's toast feedback (same
+   * `navigator.clipboard` + toast pattern the other panels use).
+   */
+  async function copyText(text: string): Promise<void> {
+    try {
+      await navigator.clipboard.writeText(text);
+      toast("Copied", { kind: "success" });
+    } catch (err) {
+      toast(`Copy failed: ${describeError(err)}`, { kind: "error" });
+    }
   }
 
   /** Candidate ignore patterns for one path: exact, `*.ext`, `dir/`. */
@@ -1125,6 +1141,15 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
         },
       );
     }
+    entries.push(
+      { separator: true },
+      {
+        id: "keyboard-shortcuts",
+        label: "Keyboard shortcuts",
+        icon: iconInfo,
+        run: () => (shortcutsHintDismissed = false),
+      },
+    );
     entries.push({ separator: true });
     for (const option of FILE_ICON_THEMES) {
       entries.push({
@@ -1150,6 +1175,27 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
     const at = visibleRows.findIndex((r) => r.key === row.key);
     anchorIndex = at === -1 ? 0 : at;
     focusKey = row.key;
+  }
+
+  /**
+   * Repo-relative and absolute worktree paths for one row. Submodule rows
+   * are relative to the superproject (`<module path>/<file>`); the absolute
+   * path anchors at the module's own worktree root.
+   */
+  function copyPathsFor(row: StatusRow): { rel: string; abs: string } {
+    if (row.submodulePath) {
+      const subRoot =
+        submodulesMap[row.submodulePath]?.root ??
+        `${root.replace(/[\\/]+$/, "")}/${row.submodulePath}`;
+      return {
+        rel: `${row.submodulePath}/${row.entry.path}`,
+        abs: `${subRoot.replace(/[\\/]+$/, "")}/${row.entry.path}`,
+      };
+    }
+    return {
+      rel: row.entry.path,
+      abs: `${root.replace(/[\\/]+$/, "")}/${row.entry.path}`,
+    };
   }
 
   function rowMenuEntries(row: StatusRow): MenuEntry[] {
@@ -1263,6 +1309,20 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
           },
         );
       }
+      const paths = copyPathsFor(single);
+      entries.push(
+        { separator: true },
+        {
+          id: "copy-path",
+          label: "Copy Path",
+          run: () => void copyText(paths.rel),
+        },
+        {
+          id: "copy-absolute-path",
+          label: "Copy Absolute Path",
+          run: () => void copyText(paths.abs),
+        },
+      );
     }
     return entries;
   }
@@ -1573,6 +1633,36 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
         <Icon icon={iconMore} size={16} />
       </Button>
     </div>
+
+    {#if !shortcutsHintDismissed}
+      <!-- Dismissible hint banner (same pattern as ReflogPanel's hint);
+           re-showable via the ⋮ menu's "Keyboard shortcuts" entry. -->
+      <div
+        class="kbd-hint flex shrink-0 items-center gap-1 border-b border-border bg-primary/10 px-2 py-[0.3rem] pr-1 text-[0.72rem] text-foreground"
+        role="note"
+        aria-label="File list keyboard shortcuts"
+      >
+        <span class="min-w-0 flex-1 truncate">
+          Shortcuts: <kbd class="font-[inherit] font-semibold">s</kbd> stage /
+          unstage ·
+          <kbd class="font-[inherit] font-semibold">d</kbd> discard ·
+          <kbd class="font-[inherit] font-semibold">Space</kbd> select ·
+          <kbd class="font-[inherit] font-semibold">Ctrl+A</kbd> select all ·
+          <kbd class="font-[inherit] font-semibold">Menu</kbd> row menu
+        </span>
+        <Button
+          class="size-[1.15rem] shrink-0 rounded-full p-0 text-muted-foreground hover:bg-accent hover:text-foreground [&_svg:not([class*='size-'])]:size-3"
+          variant="ghost"
+          size="icon-xs"
+          type="button"
+          aria-label="Dismiss keyboard shortcuts hint"
+          title="Dismiss"
+          onclick={() => (shortcutsHintDismissed = true)}
+        >
+          <Icon icon={iconClear} size={12} />
+        </Button>
+      </div>
+    {/if}
 
     {#if status.merging || status.rebasing || status.sequencer || status.detached || status.ahead > 0 || status.behind > 0}
       <div class="banners flex flex-wrap gap-1 px-[0.4rem] py-[0.3rem] flex-none">

@@ -11,6 +11,7 @@ import {
   onAuthRequest,
   onOpLog,
   onOpProgress,
+  opCancel,
 } from "$lib/ipc/client";
 import type { AuthRequest, OpLog, OpProgress } from "$lib/ipc/types";
 import { resetRepoEvents } from "$lib/events/repoEvents";
@@ -25,6 +26,7 @@ import {
 
 vi.mock("$lib/ipc/client", () => ({
   authRespond: vi.fn(),
+  opCancel: vi.fn(),
   onAuthRequest: vi.fn(),
   onOpProgress: vi.fn(),
   onOpLog: vi.fn(),
@@ -41,6 +43,7 @@ const mockAuthRespond = vi.mocked(authRespond);
 const mockOnAuthRequest = vi.mocked(onAuthRequest);
 const mockOnOpProgress = vi.mocked(onOpProgress);
 const mockOnOpLog = vi.mocked(onOpLog);
+const mockOpCancel = vi.mocked(opCancel);
 
 // ---------------------------------------------------------------------------
 // Fixtures + subscription harness
@@ -89,7 +92,9 @@ beforeEach(() => {
   mockOnOpProgress.mockReset();
   mockOnOpLog.mockReset();
   mockOnAuthRequest.mockReset();
+  mockOpCancel.mockReset();
   mockAuthRespond.mockResolvedValue(undefined);
+  mockOpCancel.mockResolvedValue(true);
   mockOnOpProgress.mockImplementation(
     ((cb: (event: OpProgress) => void) => {
       opHandlers.push(cb);
@@ -240,6 +245,69 @@ describe("OpStore", () => {
         (t) => t.kind === "error" && t.message.includes("Push failed: non-fast-forward"),
       ),
     ).toBe(true);
+  });
+
+  it("toasts a cancellation completion as info, not error", () => {
+    const store = new OpStore();
+    store.applyProgress(progress({ op_id: "a", repo_id: "repo-1", kind: "fetch" }));
+    store.applyProgress(
+      progress({ op_id: "a", repo_id: "repo-1", kind: "fetch", done: true, error: "cancelled" }),
+    );
+
+    expect(store.opsFor("repo-1")).toEqual([]);
+    expect(getToasts().some((t) => t.kind === "info" && t.message === "Cancelled")).toBe(true);
+    expect(getToasts().some((t) => t.kind === "error" && t.message.includes("cancelled"))).toBe(
+      false,
+    );
+  });
+
+  it("cancel marks the op cancelling, calls opCancel, and keeps the flag across progress", async () => {
+    const store = new OpStore();
+    store.applyProgress(progress({ op_id: "a", repo_id: "repo-1", kind: "push" }));
+
+    const pending = store.cancel("a");
+    // Flagged synchronously so the UI spins before the IPC resolves.
+    expect(store.opsFor("repo-1")[0]?.cancelling).toBe(true);
+
+    await pending;
+    expect(mockOpCancel).toHaveBeenCalledWith("repo-1", "a");
+
+    // A later progress event upserts the op but preserves the flag.
+    store.applyProgress(progress({ op_id: "a", repo_id: "repo-1", pct: 50, message: "sending" }));
+    expect(store.opsFor("repo-1")[0]).toMatchObject({ cancelling: true, pct: 50 });
+
+    // The final cancellation error toasts as info.
+    store.applyProgress(
+      progress({ op_id: "a", repo_id: "repo-1", done: true, error: "cancelled" }),
+    );
+    expect(getToasts().some((t) => t.kind === "info" && t.message === "Cancelled")).toBe(true);
+  });
+
+  it("cancel un-flags the op when the backend reports it already finished", async () => {
+    const store = new OpStore();
+    store.applyProgress(progress({ op_id: "a", repo_id: "repo-1", kind: "fetch" }));
+
+    mockOpCancel.mockResolvedValueOnce(false);
+    await expect(store.cancel("a")).resolves.toBe(false);
+    expect(store.opsFor("repo-1")[0]?.cancelling).toBe(false);
+  });
+
+  it("cancel un-flags and toasts when the IPC call rejects", async () => {
+    const store = new OpStore();
+    store.applyProgress(progress({ op_id: "a", repo_id: "repo-1", kind: "push" }));
+
+    mockOpCancel.mockRejectedValueOnce(new Error("backend gone") as never);
+    await expect(store.cancel("a")).resolves.toBe(false);
+    expect(store.opsFor("repo-1")[0]?.cancelling).toBe(false);
+    expect(
+      getToasts().some((t) => t.kind === "error" && t.message.includes("backend gone")),
+    ).toBe(true);
+  });
+
+  it("cancel resolves false without IPC for an unknown op", async () => {
+    const store = new OpStore();
+    await expect(store.cancel("nope")).resolves.toBe(false);
+    expect(mockOpCancel).not.toHaveBeenCalled();
   });
 
   it("stop deregisters the store and clears state; restart re-registers", async () => {
