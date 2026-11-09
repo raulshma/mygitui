@@ -397,11 +397,11 @@
      unresolved conflict. -->
 <svelte:window onkeydown={onKeydown} />
 
-<div class="root flex h-full min-h-0 flex-col rounded-lg border border-border bg-background text-foreground text-[0.8125rem]">
+<div class="root flex h-full min-h-0 flex-col rounded-lg border border-border bg-background text-foreground text-ui-base">
   <header class="topbar flex flex-none items-center gap-2 border-b border-border px-2 py-1.5">
     <Badge
       variant="outline"
-      class="source h-auto whitespace-nowrap rounded-full border-transparent bg-primary/10 px-2 py-0.5 text-[0.6875rem] font-semibold uppercase tracking-wider text-primary"
+      class="source h-auto whitespace-nowrap rounded-full border-transparent bg-primary/10 px-2 py-0.5 text-ui-micro font-semibold uppercase tracking-wider text-primary"
       title="Operation that produced these conflicts"
     >
       {files[0]?.source ?? "merge"}
@@ -472,7 +472,7 @@
               (marked[file.path] ? " line-through opacity-70" : "")}
           >{file.path}</span>
           {#if fileConflictTotal(file.path) !== null}
-            <Badge variant="secondary" class="count h-auto flex-none rounded-full bg-muted px-1.5 text-[0.6875rem] tabular-nums">{fileConflictTotal(file.path)}</Badge>
+            <Badge variant="secondary" class="count h-auto flex-none rounded-full bg-muted px-1.5 text-ui-micro tabular-nums">{fileConflictTotal(file.path)}</Badge>
           {/if}
         </Button>
       {/each}
@@ -490,7 +490,7 @@
         <p class="empty p-4 text-muted-foreground">Loading {selected.path}…</p>
       {:else}
         {#if !selected.has_base}
-          <p class="hint flex-none bg-primary/10 px-2.5 py-1 text-[0.6875rem] text-primary" role="note">
+          <p class="hint flex-none bg-primary/10 px-2.5 py-1 text-ui-micro text-primary" role="note">
             Base unavailable (rename/add conflict) — showing ours vs theirs only.
           </p>
         {/if}
@@ -622,7 +622,7 @@
           {#if dirty}
             <Badge
               variant="outline"
-              class="unsaved h-auto rounded-full border-transparent bg-primary/10 px-2 py-0.5 text-[0.6875rem] text-primary"
+              class="unsaved h-auto rounded-full border-transparent bg-primary/10 px-2 py-0.5 text-ui-micro text-primary"
               title="Choices not written yet — mark the file resolved to persist"
             >
               unsaved

@@ -69,7 +69,7 @@
   <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
   <Dialog.Overlay class="scrim bg-black/40" role="presentation" />
   <Dialog.Content
-    class="dialog w-[26rem] max-w-none gap-0 rounded-lg bg-card px-6 py-5 text-sm text-popover-foreground shadow-xl sm:max-w-none"
+    class="dialog w-[26rem] max-w-none text-sm text-popover-foreground sm:max-w-none"
     role="alertdialog"
     aria-modal="true"
     aria-labelledby="confirm-title"
@@ -84,7 +84,7 @@
       }
     }}
   >
-    <Dialog.Title id="confirm-title" class="m-0 mb-2 text-lg font-medium">{title}</Dialog.Title>
+    <Dialog.Title id="confirm-title" class="m-0 mb-2 font-medium">{title}</Dialog.Title>
     {#if message}
       <div id="confirm-message" class="m-0 mb-4 text-muted-foreground [overflow-wrap:anywhere]">
         {#if typeof message === "string"}{message}{:else}{@render message()}{/if}

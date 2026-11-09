@@ -148,7 +148,12 @@
 </script>
 
 {#if open}
-  <Dialog.Root bind:open>
+  <Dialog.Root
+    bind:open
+    onOpenChange={(next) => {
+      if (!next) close();
+    }}
+  >
     <!-- svelte-ignore a11y_click_events_have_key_events -->
     <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
     <Dialog.Overlay
@@ -159,30 +164,18 @@
       }}
     />
     <Dialog.Content
-      class="dialog w-[min(32rem,calc(100vw-2rem))] max-w-none sm:max-w-none left-1/2 top-[12vh] -translate-x-1/2 translate-y-0"
+      class="dialog w-[min(32rem,calc(100vw-2rem))] max-w-none sm:max-w-none"
       role="dialog"
       aria-modal="true"
       aria-labelledby="clone-title"
-      showCloseButton={false}
       escapeKeydownBehavior="ignore"
       interactOutsideBehavior="ignore"
       onOpenAutoFocus={(event) => event.preventDefault()}
       onCloseAutoFocus={(event) => event.preventDefault()}
       onkeydown={onDialogKeydown}
     >
-      <Dialog.Header class="title-row flex-row items-center gap-2">
+      <Dialog.Header class="title-row">
         <Dialog.Title id="clone-title" class="title flex-1">Clone repository</Dialog.Title>
-        <Button
-          class="close rounded-full text-lg leading-none text-muted-foreground hover:text-foreground"
-          variant="ghost"
-          size="icon-sm"
-          type="button"
-          aria-label="Close clone dialog"
-          title="Close"
-          onclick={close}
-        >
-          ×
-        </Button>
       </Dialog.Header>
 
       <form
@@ -194,7 +187,7 @@
         <Label class="field flex-col items-stretch gap-1">
           <span class="field-label text-xs font-medium text-muted-foreground">Repository URL</span>
           <Input
-            class="input flex-1 min-w-0 h-auto py-2.5 px-3 font-mono text-sm md:text-sm"
+            class="input flex-1 min-w-0 font-mono"
             type="text"
             placeholder="https://github.com/user/repo.git"
             autocomplete="off"
@@ -209,7 +202,7 @@
           <span class="field-label text-xs font-medium text-muted-foreground">Destination folder</span>
           <span class="dest-row flex gap-2">
             <Input
-              class="input flex-1 min-w-0 h-auto py-2.5 px-3 font-mono text-sm md:text-sm"
+              class="input flex-1 min-w-0 font-mono"
               type="text"
               placeholder="e.g. C:\Users\you\Projects\repo"
               autocomplete="off"

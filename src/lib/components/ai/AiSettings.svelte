@@ -311,7 +311,7 @@
     <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
     <Dialog.Overlay class="scrim bg-black/40" role="presentation" />
     <Dialog.Content
-      class="dialog flex w-[42rem] max-w-none flex-col gap-0 overflow-y-auto rounded-2xl p-5 text-popover-foreground shadow-[0_8px_32px_rgba(0,0,0,0.35)] max-h-[calc(100dvh_-_2rem)] max-[36rem]:max-h-[calc(100dvh_-_1rem)] max-[36rem]:p-4 sm:max-w-none"
+      class="dialog flex w-[42rem] max-w-none flex-col overflow-y-auto text-popover-foreground max-h-[calc(100dvh_-_2rem)] max-[36rem]:max-h-[calc(100dvh_-_1rem)] sm:max-w-none"
       role="dialog"
       aria-modal="true"
       aria-labelledby="ai-settings-title"
@@ -323,10 +323,10 @@
     >
       <header class="dialog-header mb-[1.125rem] flex flex-none items-start justify-between gap-4">
         <div>
-          <Dialog.Title id="ai-settings-title" class="title m-0 text-[1.2rem] font-semibold text-foreground">AI settings</Dialog.Title>
-          <p id="ai-settings-description" class="subtitle mb-0 mt-1 text-[0.8125rem] text-muted-foreground">Choose a provider and check its connection.</p>
+          <Dialog.Title id="ai-settings-title" class="title m-0 font-semibold text-foreground">AI settings</Dialog.Title>
+          <p id="ai-settings-description" class="subtitle mb-0 mt-1 text-ui-base text-muted-foreground">Choose a provider and check its connection.</p>
         </div>
-        <Button variant="ghost" size="icon" class="icon-button flex-none rounded-full text-[1.35rem] leading-none text-muted-foreground" type="button" aria-label="Close AI settings" onclick={close}>
+        <Button variant="ghost" size="icon" class="icon-button flex-none rounded-full text-lg leading-none text-muted-foreground" type="button" aria-label="Close AI settings" onclick={close}>
           ×
         </Button>
       </header>
@@ -356,21 +356,21 @@
               />
               <span class="backend-copy flex min-w-0 flex-col gap-[0.15rem]">
                 <strong class="text-sm font-semibold">{option === "opencode" ? "OpenCode" : "OpenRouter"}</strong>
-                <span class="text-[0.72rem] text-muted-foreground">{option === "opencode" ? "Local server, managed by mygitui" : "Direct API, requires an API key"}</span>
+                <span class="text-ui-meta text-muted-foreground">{option === "opencode" ? "Local server, managed by mygitui" : "Direct API, requires an API key"}</span>
               </span>
-              <span class="backend-status {statuses[option].status} flex min-w-0 flex-col gap-[0.15rem] text-right text-[0.72rem] [overflow-wrap:anywhere] max-w-56 max-[36rem]:col-start-2 max-[36rem]:text-left {statuses[option].status === 'ok' ? 'text-primary' : statuses[option].status === 'down' || statuses[option].status === 'unauthenticated' ? 'text-destructive' : 'text-muted-foreground'}">{statusLine(option)}</span>
+              <span class="backend-status {statuses[option].status} flex min-w-0 flex-col gap-[0.15rem] text-right text-ui-meta [overflow-wrap:anywhere] max-w-56 max-[36rem]:col-start-2 max-[36rem]:text-left {statuses[option].status === 'ok' ? 'text-primary' : statuses[option].status === 'down' || statuses[option].status === 'unauthenticated' ? 'text-destructive' : 'text-muted-foreground'}">{statusLine(option)}</span>
             </label>
           {/each}
         </fieldset>
 
         <fieldset class="group m-0 flex min-w-0 flex-col gap-[0.625rem] rounded-xl border border-border bg-muted/30 px-4 pb-4 pt-[0.9rem]">
           <legend class="legend px-[0.35rem] text-xs font-semibold text-muted-foreground">OpenCode</legend>
-          <p class="status-line m-0 text-[0.8125rem] text-foreground [overflow-wrap:anywhere]" role="status">{installLine()}</p>
+          <p class="status-line m-0 text-ui-base text-foreground [overflow-wrap:anywhere]" role="status">{installLine()}</p>
           <div class="row flex flex-wrap items-center gap-3">
             <Button
               variant="link"
               size="sm"
-              class="link h-auto p-0 text-[0.72rem] underline"
+              class="link h-auto p-0 text-ui-meta underline"
               type="button"
               disabled={checkingInstall}
               onclick={() => void refreshInstall()}
@@ -378,17 +378,17 @@
               {#if checkingInstall}Checking…{:else}Check OpenCode{/if}
             </Button>
             {#if detection?.installed && detection.major !== null && detection.major >= 2}
-              <span class="hint m-0 text-[0.72rem] text-muted-foreground">OpenCode 2.x detected (v{detection.version}) — managed and attach modes both supported</span>
+              <span class="hint m-0 text-ui-meta text-muted-foreground">OpenCode 2.x detected (v{detection.version}) — managed and attach modes both supported</span>
             {/if}
           </div>
-          <label class="radio flex cursor-pointer items-baseline gap-[0.375rem] text-[0.8125rem]">
+          <label class="radio flex cursor-pointer items-baseline gap-[0.375rem] text-ui-base">
             <Checkbox bind:checked={opencodeEnabled} />
             <span>Enable OpenCode</span>
           </label>
           <label class="field flex flex-col gap-[0.125rem]">
-            <span class="field-label text-[0.72rem] text-muted-foreground">Search models</span>
+            <span class="field-label text-ui-meta text-muted-foreground">Search models</span>
             <Input
-              class="input h-auto rounded px-[0.625rem] py-2 text-[0.8125rem]"
+              class="input rounded"
               type="search"
               placeholder="Filter by model or provider"
               aria-label="Search OpenCode models"
@@ -397,8 +397,8 @@
             />
           </label>
           <label class="field flex flex-col gap-[0.125rem]">
-            <span class="field-label text-[0.72rem] text-muted-foreground">Default model</span>
-            <select class="input rounded border border-border bg-background px-[0.625rem] py-2 text-[0.8125rem] text-foreground font-[inherit] focus-visible:-outline-offset-1 focus-visible:outline-2 focus-visible:outline-primary" bind:value={opencodeModel} disabled={!opencodeEnabled}>
+            <span class="field-label text-ui-meta text-muted-foreground">Default model</span>
+            <select class="input rounded border border-border bg-background text-foreground font-[inherit] focus-visible:-outline-offset-1 focus-visible:outline-2 focus-visible:outline-primary" bind:value={opencodeModel} disabled={!opencodeEnabled}>
               <option value="">Use OpenCode server default</option>
               {#if opencodeModel && !opencodeModelGroups.some(
                   (group) => group.models.some((model) => model.id === opencodeModel),
@@ -420,23 +420,23 @@
               {/each}
             </select>
           </label>
-          <p class="hint m-0 text-[0.72rem] text-muted-foreground">
+          <p class="hint m-0 text-ui-meta text-muted-foreground">
             Used whenever an AI feature is routed to OpenCode. Leave on the server default to
             follow OpenCode’s own model setting.
           </p>
           {#if opencodeModelsLoading}
-            <p class="hint m-0 text-[0.72rem] text-muted-foreground" role="status">Loading OpenCode models…</p>
+            <p class="hint m-0 text-ui-meta text-muted-foreground" role="status">Loading OpenCode models…</p>
           {/if}
           {#if opencodeModelsError}
-            <p class="hint error-text m-0 text-[0.72rem] text-destructive">OpenCode model list unavailable: {opencodeModelsError}</p>
+            <p class="hint error-text m-0 text-ui-meta text-destructive">OpenCode model list unavailable: {opencodeModelsError}</p>
           {/if}
           {#if !opencodeEnabled}
-            <p class="hint warn m-0 text-[0.72rem] text-destructive">
+            <p class="hint warn m-0 text-ui-meta text-destructive">
               OpenCode is disabled. AI features can use OpenRouter when fallback is enabled.
             </p>
           {/if}
 
-          <label class="radio advanced-toggle mt-1 flex cursor-pointer items-baseline gap-[0.375rem] text-[0.8125rem] text-muted-foreground">
+          <label class="radio advanced-toggle mt-1 flex cursor-pointer items-baseline gap-[0.375rem] text-ui-base text-muted-foreground">
             <Checkbox bind:checked={showAdvanced} />
             <span>Advanced</span>
           </label>
@@ -444,7 +444,7 @@
             <fieldset class="group inner m-0 ml-3.5 mt-0.5 flex min-w-0 flex-col gap-[0.625rem] rounded-none border-0 border-l border-border bg-transparent pb-0 pl-2.5 pr-0 pt-0">
               <legend class="legend px-[0.35rem] text-xs font-semibold text-muted-foreground">Server mode</legend>
               {#each ["managed", "attach"] as modeOption (modeOption)}
-                <label class="radio flex cursor-pointer items-baseline gap-[0.375rem] text-[0.8125rem]">
+                <label class="radio flex cursor-pointer items-baseline gap-[0.375rem] text-ui-base">
                   <input
                     type="radio"
                     name="opencode-mode"
@@ -461,24 +461,24 @@
               {/each}
               {#if opencodeModeChoice === "attach"}
                 <label class="field flex flex-col gap-[0.125rem]">
-                  <span class="field-label text-[0.72rem] text-muted-foreground">Server URL</span>
+                  <span class="field-label text-ui-meta text-muted-foreground">Server URL</span>
                   <Input
-                    class="input h-auto rounded px-[0.625rem] py-2 text-[0.8125rem]"
+                    class="input rounded"
                     type="url"
                     placeholder="http://127.0.0.1:4096"
                     spellcheck="false"
                     bind:value={opencodeUrl}
                   />
                 </label>
-                <p class="hint m-0 text-[0.72rem] text-muted-foreground">
+                <p class="hint m-0 text-ui-meta text-muted-foreground">
                   Leave empty to check the default server at 127.0.0.1:4096.
                 </p>
               {/if}
             </fieldset>
             <label class="field flex flex-col gap-[0.125rem]">
-              <span class="field-label text-[0.72rem] text-muted-foreground">Server password (optional)</span>
+              <span class="field-label text-ui-meta text-muted-foreground">Server password (optional)</span>
               <Input
-                class="input h-auto rounded px-[0.625rem] py-2 text-[0.8125rem]"
+                class="input rounded"
                 type="password"
                 autocomplete="off"
                 placeholder="stored in OS keyring (type to change)"
@@ -486,7 +486,7 @@
               />
             </label>
             <div class="row flex flex-wrap items-center gap-3">
-              <Button variant="link" size="sm" class="link h-auto p-0 text-[0.72rem] underline" type="button" onclick={() => void clearOpencodePassword()}>
+              <Button variant="link" size="sm" class="link h-auto p-0 text-ui-meta underline" type="button" onclick={() => void clearOpencodePassword()}>
                 Remove stored password
               </Button>
             </div>
@@ -496,9 +496,9 @@
         <fieldset class="group m-0 flex min-w-0 flex-col gap-[0.625rem] rounded-xl border border-border bg-muted/30 px-4 pb-4 pt-[0.9rem]">
           <legend class="legend px-[0.35rem] text-xs font-semibold text-muted-foreground">OpenRouter</legend>
           <label class="field flex flex-col gap-[0.125rem]">
-            <span class="field-label text-[0.72rem] text-muted-foreground">API key</span>
+            <span class="field-label text-ui-meta text-muted-foreground">API key</span>
             <Input
-              class="input h-auto rounded px-[0.625rem] py-2 text-[0.8125rem]"
+              class="input rounded"
               type="password"
               autocomplete="off"
               placeholder="stored in OS keyring (type to change)"
@@ -506,14 +506,14 @@
             />
           </label>
           <div class="row flex flex-wrap items-center gap-3">
-            <Button variant="link" size="sm" class="link h-auto p-0 text-[0.72rem] underline" type="button" onclick={() => void clearOpenrouterKey()}>
+            <Button variant="link" size="sm" class="link h-auto p-0 text-ui-meta underline" type="button" onclick={() => void clearOpenrouterKey()}>
               Remove stored API key
             </Button>
           </div>
           <label class="field flex flex-col gap-[0.125rem]">
-            <span class="field-label text-[0.72rem] text-muted-foreground">Default model</span>
+            <span class="field-label text-ui-meta text-muted-foreground">Default model</span>
             <Input
-              class="input h-auto rounded px-[0.625rem] py-2 text-[0.8125rem]"
+              class="input rounded"
               type="text"
               list="ai-openrouter-models"
               placeholder="anthropic/claude-sonnet-4.5"
@@ -527,20 +527,20 @@
             {/each}
           </datalist>
           {#if modelsError}
-            <p class="hint error-text m-0 text-[0.72rem] text-destructive">Model list unavailable: {modelsError}</p>
+            <p class="hint error-text m-0 text-ui-meta text-destructive">Model list unavailable: {modelsError}</p>
           {/if}
         </fieldset>
 
         <fieldset class="group m-0 flex min-w-0 flex-col gap-[0.625rem] rounded-xl border border-border bg-muted/30 px-4 pb-4 pt-[0.9rem]">
           <legend class="legend px-[0.35rem] text-xs font-semibold text-muted-foreground">Behavior</legend>
-          <label class="radio flex cursor-pointer items-baseline gap-[0.375rem] text-[0.8125rem]">
+          <label class="radio flex cursor-pointer items-baseline gap-[0.375rem] text-ui-base">
             <Checkbox bind:checked={allowFallback} />
             <span>
               Fall back to the other backend when the preferred one is
               unavailable
             </span>
           </label>
-          <p class="hint m-0 text-[0.72rem] text-muted-foreground">
+          <p class="hint m-0 text-ui-meta text-muted-foreground">
             Repositories opt in to AI features individually (asked on first
             use of an AI feature). Secrets live in the OS keyring; the rest
             stays in local app settings.
@@ -548,10 +548,10 @@
         </fieldset>
 
         <div class="status mb-0 mt-1 flex items-center gap-3 border-b border-t border-border py-3 max-[36rem]:flex-col max-[36rem]:items-stretch" role="status">
-          <Button variant="outline" size="sm" class="secondary rounded-full px-4 text-primary" type="button" disabled={testing} onclick={() => void testConnection()}>
+          <Button variant="outline" class="secondary rounded-full text-primary" type="button" disabled={testing} onclick={() => void testConnection()}>
             {#if testing}Checking…{:else}Check connections{/if}
           </Button>
-          <ul class="status-list m-0 flex list-none flex-col gap-[0.125rem] p-0 text-[0.72rem] text-muted-foreground">
+          <ul class="status-list m-0 flex list-none flex-col gap-[0.125rem] p-0 text-ui-meta text-muted-foreground">
             {#each AI_BACKENDS as backend (backend)}
               <li>
                 <span class="mono font-mono">{backend}</span>: {statusLine(backend)}
@@ -562,10 +562,10 @@
         </div>
 
         <div class="actions flex flex-none justify-end gap-2 pt-3">
-          <Button variant="default" size="sm" class="primary rounded-full px-4" type="submit" disabled={saving}>
+          <Button variant="default" class="primary rounded-full" type="submit" disabled={saving}>
             {#if saving}Saving…{:else}Save{/if}
           </Button>
-          <Button variant="outline" size="sm" class="secondary rounded-full px-4 text-primary" type="button" onclick={close}>Cancel</Button>
+          <Button variant="outline" class="secondary rounded-full text-primary" type="button" onclick={close}>Cancel</Button>
         </div>
       </form>
     </Dialog.Content>

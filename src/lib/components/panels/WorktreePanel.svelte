@@ -25,6 +25,7 @@
   import ConfirmDialog from "$lib/components/safety/ConfirmDialog.svelte";
   import Icon from "$lib/components/icons/Icon.svelte";
   import { Button } from "$lib/components/ui/button/index.js";
+  import EmptyState from "../layout/EmptyState.svelte";
   import { appIcon } from "$lib/components/icons/library.svelte";
   import {
     baseName,
@@ -220,7 +221,7 @@
   }
 </script>
 
-<aside class="worktree-panel flex min-h-0 flex-col text-[13px]" aria-label="Worktrees">
+<aside class="worktree-panel flex min-h-0 flex-col text-ui-base" aria-label="Worktrees">
   <div class="toolbar flex flex-none items-center gap-1.5 px-2 py-1.5">
     <Button
       class="aria-pressed:bg-accent aria-pressed:text-accent-foreground"
@@ -273,7 +274,7 @@
     >
       <div class="path-row flex flex-wrap items-center gap-1.5">
         <input
-          class="path min-w-40 flex-1 rounded border border-input bg-background px-2 py-0.5 font-mono text-[0.72rem] text-foreground focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-1"
+          class="path min-w-40 flex-1 rounded border border-input bg-background px-2 py-0.5 font-mono text-ui-meta text-foreground focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-1"
           type="text"
           placeholder="Worktree folder path"
           aria-label="Worktree folder path"
@@ -302,10 +303,10 @@
         </Button>
       </div>
       <div class="mode-row flex flex-wrap items-center gap-1.5">
-        <label class="mode flex items-center gap-1.5 text-[0.72rem] text-muted-foreground">
+        <label class="mode flex items-center gap-1.5 text-ui-meta text-muted-foreground">
           <span class="mode-label">Branch</span>
           <select
-            class="max-w-56 rounded border border-input bg-background px-2 py-0.5 text-[0.72rem] text-foreground focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-1"
+            class="max-w-56 rounded border border-input bg-background px-2 py-0.5 text-ui-meta text-foreground focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-1"
             aria-label="Worktree branch mode"
             bind:value={addMode}
           >
@@ -315,7 +316,7 @@
         </label>
         {#if addMode === "existing"}
           <select
-            class="max-w-56 rounded border border-input bg-background px-2 py-0.5 text-[0.72rem] text-foreground focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-1"
+            class="max-w-56 rounded border border-input bg-background px-2 py-0.5 text-ui-meta text-foreground focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-1"
             aria-label="Existing branch for the worktree"
             bind:value={addBranch}
           >
@@ -325,7 +326,7 @@
           </select>
         {:else}
           <input
-            class="new-branch min-w-32 flex-1 rounded border border-input bg-background px-2 py-0.5 font-mono text-[0.72rem] text-foreground focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-1"
+            class="new-branch min-w-32 flex-1 rounded border border-input bg-background px-2 py-0.5 font-mono text-ui-meta text-foreground focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-1"
             type="text"
             placeholder="new branch name"
             aria-label="New branch name for the worktree"
@@ -337,9 +338,9 @@
   {/if}
 
   {#if error}
-    <p class="state error py-4 px-3 text-[13px] text-destructive" role="alert">{error}</p>
+    <p class="state error py-4 px-3 text-ui-base text-destructive" role="alert">{error}</p>
   {:else if !loading && list.length === 0}
-    <p class="state py-4 px-3 text-[13px] text-muted-foreground">No linked worktrees.</p>
+    <EmptyState title="No linked worktrees." />
   {:else}
     <ul class="worktrees m-0 flex min-h-0 flex-1 list-none flex-col gap-2 overflow-y-auto px-2 py-1.5" role="list" aria-label="Worktree list">
       <!-- Main entry: the backend lists linked worktrees only, so this
@@ -347,10 +348,10 @@
       <li class="card main flex flex-col gap-1 rounded-lg border border-dashed border-border bg-card px-2 py-1.5">
         <div class="row flex min-w-0 flex-wrap items-center gap-1.5">
           <span class="name font-semibold text-primary">{baseName(root)}</span>
-          <span class="badge main-badge inline-flex h-auto shrink-0 items-center rounded-full border border-transparent bg-secondary px-1.5 py-0 text-[0.625rem] font-medium text-secondary-foreground">main</span>
-          <span class="ref ml-auto truncate text-[0.72rem] text-muted-foreground">this repository</span>
+          <span class="badge main-badge inline-flex h-auto shrink-0 items-center rounded-full border border-transparent bg-secondary px-1.5 py-0 text-ui-tiny font-medium text-secondary-foreground">main</span>
+          <span class="ref ml-auto truncate text-ui-meta text-muted-foreground">this repository</span>
         </div>
-        <div class="path truncate font-mono text-[0.6875rem] text-muted-foreground" title={root}>{root}</div>
+        <div class="path truncate font-mono text-ui-micro text-muted-foreground" title={root}>{root}</div>
         <div class="actions flex items-center gap-1">
           <Button
             class="relative text-muted-foreground after:absolute after:-inset-1 after:content-[''] hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-4"
@@ -372,25 +373,25 @@
             {#if info.is_main}
               <!-- M12: marks the repository's true main worktree (this tab is
                    itself a linked one). -->
-              <span class="badge main-badge inline-flex h-auto shrink-0 items-center rounded-full border border-transparent bg-secondary px-1.5 py-0 text-[0.625rem] font-medium text-secondary-foreground" title="The repository's main worktree">main</span>
+              <span class="badge main-badge inline-flex h-auto shrink-0 items-center rounded-full border border-transparent bg-secondary px-1.5 py-0 text-ui-tiny font-medium text-secondary-foreground" title="The repository's main worktree">main</span>
             {/if}
             {#each worktreeBadges(info) as badge (badge.label)}
               <span
-                class="badge inline-flex h-auto shrink-0 items-center rounded-full border border-transparent bg-muted px-1.5 py-0 text-[0.625rem] font-medium {badge.danger ? "bg-destructive/10 text-destructive" : "text-muted-foreground"}"
+                class="badge inline-flex h-auto shrink-0 items-center rounded-full border border-transparent bg-muted px-1.5 py-0 text-ui-tiny font-medium {badge.danger ? "bg-destructive/10 text-destructive" : "text-muted-foreground"}"
                 class:danger={badge.danger}
                 title={badge.title}
               >
                 {badge.label}
               </span>
             {/each}
-            <span class="ref ml-auto truncate text-[0.72rem] text-muted-foreground">{worktreeRefLabel(info)}</span>
+            <span class="ref ml-auto truncate text-ui-meta text-muted-foreground">{worktreeRefLabel(info)}</span>
           </div>
-          <div class="path truncate font-mono text-[0.6875rem] text-muted-foreground" title={info.path}>{info.path}</div>
+          <div class="path truncate font-mono text-ui-micro text-muted-foreground" title={info.path}>{info.path}</div>
           <div class="actions flex items-center gap-1">
             {#if removingPath === info.path}
               <!-- Removal in flight: row-level progress while the backend
                    deletes the admin area + working tree. -->
-              <span class="removing animate-pulse text-[0.72rem] text-muted-foreground" role="status">Removing…</span>
+              <span class="removing animate-pulse text-ui-meta text-muted-foreground" role="status">Removing…</span>
             {:else}
               <Button
                 class="relative text-muted-foreground after:absolute after:-inset-1 after:content-[''] hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-4"
@@ -422,7 +423,7 @@
             <div class="remove-confirm flex items-center gap-2 border-t border-dashed border-border pt-1">
               {#if worktreeNeedsForce(info)}
                 <label
-                  class="toggle flex cursor-pointer items-center gap-1 whitespace-nowrap text-[0.6875rem] text-muted-foreground"
+                  class="toggle flex cursor-pointer items-center gap-1 whitespace-nowrap text-ui-micro text-muted-foreground"
                   title="Required while the worktree is locked or prunable"
                 >
                   <input type="checkbox" class="m-0 accent-primary" bind:checked={removeForce} />
@@ -430,7 +431,7 @@
                 </label>
               {/if}
               <Button
-                class="h-auto shrink-0 rounded-full px-3 py-0.5 text-[0.72rem]"
+                class="h-auto shrink-0 rounded-full px-3 py-0.5 text-ui-meta"
                 variant="destructive"
                 type="button"
                 disabled={busy}

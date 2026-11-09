@@ -25,6 +25,7 @@
   import CommitDetail from "$lib/components/panels/CommitDetail.svelte";
   import DiffViewer from "$lib/components/diff/DiffViewer.svelte";
   import Icon from "$lib/components/icons/Icon.svelte";
+  import EmptyState from "../layout/EmptyState.svelte";
   import { Button } from "$lib/components/ui/button/index.js";
   import { Spinner } from "$lib/components/ui/spinner/index.js";
   import { Kbd } from "$lib/components/ui/kbd/index.js";
@@ -164,10 +165,10 @@
   {#if actionRunId !== null}
     {#await import("$lib/components/actions/ActionRunView.svelte")}
       <p
-        class="estate estate-loading m-auto inline-flex items-center gap-[0.4rem] text-[0.8125rem] text-muted-foreground"
+        class="estate estate-loading m-auto inline-flex items-center gap-[0.4rem] text-ui-base text-muted-foreground"
         role="status"
       >
-        <Spinner class="size-[14px]" role="presentation" aria-hidden="true" />
+        <Spinner class="size-4" role="presentation" aria-hidden="true" />
         Loading action run…
       </p>
     {:then ActionRunViewModule}
@@ -181,10 +182,10 @@
   {:else if workflowRunId !== null}
     {#await import("$lib/components/forge/WorkflowRunView.svelte")}
       <p
-        class="estate estate-loading m-auto inline-flex items-center gap-[0.4rem] text-[0.8125rem] text-muted-foreground"
+        class="estate estate-loading m-auto inline-flex items-center gap-[0.4rem] text-ui-base text-muted-foreground"
         role="status"
       >
-        <Spinner class="size-[14px]" role="presentation" aria-hidden="true" />
+        <Spinner class="size-4" role="presentation" aria-hidden="true" />
         Loading run…
       </p>
     {:then WorkflowRunViewModule}
@@ -221,10 +222,10 @@
   {:else if files && files.openFiles.length > 0}
     {#await import("$lib/components/files/FileWorkspace.svelte")}
       <p
-        class="estate estate-loading m-auto inline-flex items-center gap-[0.4rem] text-[0.8125rem] text-muted-foreground"
+        class="estate estate-loading m-auto inline-flex items-center gap-[0.4rem] text-ui-base text-muted-foreground"
         role="status"
       >
-        <Spinner class="size-[14px]" role="presentation" aria-hidden="true" />
+        <Spinner class="size-4" role="presentation" aria-hidden="true" />
         Loading workspace…
       </p>
     {:then FileWorkspaceModule}
@@ -239,27 +240,27 @@
         onOpenDiff={(path) => onOpenDiffFile?.(path)}
       />
     {:catch err}
-      <p class="estate m-auto text-[0.8125rem] text-muted-foreground" role="alert">Failed to load the file workspace: {String(err)}</p>
+      <p class="estate m-auto text-ui-base text-muted-foreground" role="alert">Failed to load the file workspace: {String(err)}</p>
     {/await}
   {:else if entry}
     <div class="file-editor flex min-h-0 min-w-0 flex-col">
       <header
-        class="ehead flex min-h-[1.9rem] flex-none items-center gap-[0.4rem] border-b border-border bg-popover px-[0.6rem] py-[0.15rem] text-[0.8125rem]"
+        class="ehead flex min-h-7 flex-none items-center gap-[0.4rem] border-b border-border bg-popover px-2.5 py-0.5 text-ui-base"
       >
         <span
-          class="epath min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap font-mono text-[0.78rem] text-foreground"
+          class="epath min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap font-mono text-ui-meta text-foreground"
           title={entry.path}
         >
           {#if entry.old_path}{entry.old_path} → {/if}{entry.path}
         </span>
         {#if repoName}
           <span
-            class="echip chip-repo flex-none whitespace-nowrap rounded-full bg-accent px-[0.45rem] text-[0.625rem] leading-[1.5] text-muted-foreground"
+            class="echip chip-repo flex-none whitespace-nowrap rounded-full bg-accent px-2 text-ui-tiny leading-[1.5] text-muted-foreground"
             title={`Repository / Submodule: ${repoName}`}
           >{repoName}</span>
         {/if}
         <span
-          class="echip flex-none whitespace-nowrap rounded-full bg-accent px-[0.45rem] text-[0.625rem] leading-[1.5] {entry.index !==
+          class="echip flex-none whitespace-nowrap rounded-full bg-accent px-2 text-ui-tiny leading-[1.5] {entry.index !==
           "unmodified"
             ? "text-accent-foreground"
             : "text-muted-foreground"}"
@@ -272,7 +273,7 @@
         {#if entryCount > 1 && onPrevFile && onNextFile}
           <span class="enav inline-flex flex-none items-center gap-[0.05rem]">
             <Button
-              class="text-muted-foreground hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-[14px]"
+              class="text-muted-foreground hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-3.5"
               variant="ghost"
               size="icon-sm"
               type="button"
@@ -284,13 +285,13 @@
               <Icon icon={iconPrev} size={14} />
             </Button>
             <span
-              class="epos min-w-[3.2rem] whitespace-nowrap text-center text-[0.65rem] tabular-nums text-muted-foreground"
+              class="epos min-w-[3.2rem] whitespace-nowrap text-center text-ui-tiny tabular-nums text-muted-foreground"
               aria-label={`File ${entryIndex === null ? "?" : entryIndex + 1} of ${entryCount}`}
             >
               {(entryIndex ?? 0) + 1} / {entryCount}
             </span>
             <Button
-              class="text-muted-foreground hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-[14px]"
+              class="text-muted-foreground hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-3.5"
               variant="ghost"
               size="icon-sm"
               type="button"
@@ -306,7 +307,7 @@
         {#if onStageEntry}
           {#if entry.index === "unmodified"}
             <Button
-              class="h-[1.35rem] flex-none rounded-sm px-[0.4rem] text-[0.6875rem] leading-[1.5] font-normal"
+              class="h-5 flex-none rounded-sm px-2 text-ui-micro leading-[1.5] font-normal"
               variant="outline"
               type="button"
               title="Stage this file (move its changes into the commit)"
@@ -316,7 +317,7 @@
             </Button>
           {:else}
             <Button
-              class="h-[1.35rem] flex-none rounded-sm px-[0.4rem] text-[0.6875rem] leading-[1.5] font-normal"
+              class="h-5 flex-none rounded-sm px-2 text-ui-micro leading-[1.5] font-normal"
               variant="outline"
               type="button"
               title="Unstage this file (keep the worktree changes)"
@@ -328,7 +329,7 @@
         {/if}
         {#if onDiscardEntry && entry.worktree !== "unmodified"}
           <Button
-            class="h-[1.35rem] flex-none rounded-sm px-[0.4rem] text-[0.6875rem] leading-[1.5] font-normal"
+            class="h-5 flex-none rounded-sm px-2 text-ui-micro leading-[1.5] font-normal"
             variant="destructive"
             type="button"
             title="Discard this file's changes (a safety checkpoint is created first)"
@@ -339,7 +340,7 @@
         {/if}
         {#if onEditEntry}
           <Button
-            class="h-[1.35rem] flex-none rounded-sm px-[0.4rem] text-[0.6875rem] leading-[1.5] font-normal"
+            class="h-5 flex-none rounded-sm px-2 text-ui-micro leading-[1.5] font-normal"
             variant="outline"
             type="button"
             title="Edit this file in the file workspace"
@@ -350,7 +351,7 @@
         {/if}
         {#if onPopoutDiff}
           <Button
-            class="h-[1.35rem] flex-none rounded-sm px-[0.4rem] text-[0.6875rem] leading-[1.5] font-normal"
+            class="h-5 flex-none rounded-sm px-2 text-ui-micro leading-[1.5] font-normal"
             variant="outline"
             type="button"
             title="Open the diff panel in its own window"
@@ -361,7 +362,7 @@
         {/if}
         {#if onClose}
           <Button
-            class="h-[1.35rem] flex-none rounded-sm px-[0.4rem] text-[0.6875rem] leading-[1.5] font-normal"
+            class="h-5 flex-none rounded-sm px-2 text-ui-micro leading-[1.5] font-normal"
             variant="outline"
             type="button"
             aria-label="Close diff"
@@ -375,14 +376,14 @@
       <div class="ebody flex min-h-0 flex-1 flex-col overflow-hidden">
         {#if diffLoading}
           <p
-            class="estate estate-loading m-auto inline-flex items-center gap-[0.4rem] text-[0.8125rem] text-muted-foreground"
+            class="estate estate-loading m-auto inline-flex items-center gap-[0.4rem] text-ui-base text-muted-foreground"
             role="status"
           >
-            <Spinner class="size-[14px]" role="presentation" aria-hidden="true" />
+            <Spinner class="size-4" role="presentation" aria-hidden="true" />
             Loading diff…
           </p>
         {:else if diffFiles.length === 0}
-          <p class="estate m-auto text-[0.8125rem] text-muted-foreground">No diff against HEAD for this file.</p>
+          <EmptyState title="No diff against HEAD for this file." />
         {:else}
           <DiffViewer
             files={diffFiles}
@@ -399,7 +400,7 @@
       class="welcome flex min-h-0 flex-1 select-none flex-col items-center justify-center gap-[0.4rem] p-8 text-center text-muted-foreground"
     >
       <span
-        class="wicon inline-flex h-[2.75rem] w-[2.75rem] items-center justify-center rounded-full border border-border bg-card text-primary"
+        class="wicon inline-flex size-11 items-center justify-center rounded-full border border-border bg-card text-primary"
         aria-hidden="true"
       ><Icon icon={iconTree} size={22} /></span>
       <p class="wtitle m-0 text-sm font-medium text-foreground">Nothing open</p>
@@ -409,10 +410,10 @@
           aria-label="Repository summary"
         >
           <span
-            class="wchip wbranch inline-flex items-center gap-[0.2rem] whitespace-nowrap rounded-full border border-primary/35 px-[0.5rem] py-[0.1rem] font-mono text-[0.6875rem] leading-[1.4] tabular-nums text-primary"
+            class="wchip wbranch inline-flex items-center gap-[0.2rem] whitespace-nowrap rounded-full border border-primary/35 px-2 py-px font-mono text-ui-micro leading-[1.4] tabular-nums text-primary"
           >{branchLabel}</span>
           <span
-            class="wchip inline-flex items-center gap-[0.2rem] whitespace-nowrap rounded-full border border-border px-[0.5rem] py-[0.1rem] text-[0.6875rem] leading-[1.4] tabular-nums"
+            class="wchip inline-flex items-center gap-[0.2rem] whitespace-nowrap rounded-full border border-border px-2 py-px text-ui-micro leading-[1.4] tabular-nums"
           >
             {changeCount === 0
               ? "Clean working tree"
@@ -420,7 +421,7 @@
           </span>
           {#if status.ahead > 0}
             <span
-              class="wchip wahead inline-flex items-center gap-[0.2rem] whitespace-nowrap rounded-full border border-transparent bg-accent px-[0.5rem] py-[0.1rem] text-[0.6875rem] leading-[1.4] tabular-nums text-accent-foreground"
+              class="wchip wahead inline-flex items-center gap-[0.2rem] whitespace-nowrap rounded-full border border-transparent bg-accent px-2 py-px text-ui-micro leading-[1.4] tabular-nums text-accent-foreground"
               title={`${status.ahead} ${status.ahead === 1 ? "commit" : "commits"} to push`}
             >
               ↑ {status.ahead} to push
@@ -428,7 +429,7 @@
           {/if}
           {#if status.behind > 0}
             <span
-              class="wchip wbehind inline-flex items-center gap-[0.2rem] whitespace-nowrap rounded-full border border-transparent bg-muted px-[0.5rem] py-[0.1rem] text-[0.6875rem] leading-[1.4] tabular-nums text-muted-foreground"
+              class="wchip wbehind inline-flex items-center gap-[0.2rem] whitespace-nowrap rounded-full border border-transparent bg-muted px-2 py-px text-ui-micro leading-[1.4] tabular-nums text-muted-foreground"
               title={`${status.behind} ${status.behind === 1 ? "commit" : "commits"} to pull`}
             >
               ↓ {status.behind} to pull
@@ -437,10 +438,10 @@
         </div>
       {:else}
         <p
-          class="wloading mt-[0.15rem] inline-flex items-center gap-[0.4rem] text-[0.6875rem]"
+          class="wloading mt-[0.15rem] inline-flex items-center gap-[0.4rem] text-ui-micro"
           role="status"
         >
-          <Spinner class="size-[13px]" role="presentation" aria-hidden="true" />
+          <Spinner class="size-3" role="presentation" aria-hidden="true" />
           Reading repository…
         </p>
       {/if}
@@ -452,7 +453,7 @@
         <div class="wactions mt-2 flex flex-wrap justify-center gap-2">
           {#if changeCount > 0 && onOpenFirstChange}
             <Button
-              class="h-auto rounded-full px-[0.9rem] py-[0.3rem] text-[0.8125rem]"
+              class="h-auto rounded-full px-[0.9rem] py-1 text-ui-base"
               type="button"
               onclick={onOpenFirstChange}
             >
@@ -461,7 +462,7 @@
           {/if}
           {#if onBrowseHistory}
             <Button
-              class="h-auto rounded-full px-[0.9rem] py-[0.3rem] text-[0.8125rem]"
+              class="h-auto rounded-full px-[0.9rem] py-1 text-ui-base"
               variant="outline"
               type="button"
               onclick={onBrowseHistory}
@@ -472,7 +473,7 @@
         </div>
       {/if}
       <ul
-        class="whints mt-[0.9rem] flex list-none flex-wrap justify-center gap-x-[1.1rem] gap-y-[0.4rem] border-t border-border pt-[0.7rem] text-[0.6875rem] text-muted-foreground"
+        class="whints mt-[0.9rem] flex list-none flex-wrap justify-center gap-x-[1.1rem] gap-y-[0.4rem] border-t border-border pt-[0.7rem] text-ui-micro text-muted-foreground"
         aria-label="Keyboard shortcuts"
       >
         <li class="inline-flex items-center gap-[0.15rem]"><Kbd>Ctrl</Kbd>+<Kbd>Shift</Kbd>+<Kbd>P</Kbd><span class="ml-[0.4rem]">Command palette</span></li>

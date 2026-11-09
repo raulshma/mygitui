@@ -117,7 +117,7 @@
   aria-label="Open repository with an app"
 >
   <Button
-    class="primary h-[1.45rem] w-[1.65rem] rounded-none p-0 text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-2 focus-visible:outline-primary focus-visible:-outline-offset-2 focus-visible:ring-0"
+    class="primary text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-2 focus-visible:outline-primary focus-visible:-outline-offset-2 focus-visible:ring-0"
     variant="ghost"
     size="icon-xs"
     type="button"
@@ -127,13 +127,13 @@
     onclick={() => current && openWithApp(current)}
   >
     {#if current}
-      <Icon icon={iconFor(current)} size={15} />
+      <Icon icon={iconFor(current)} size={14} />
     {:else}
-      <Icon icon={iconDescription} size={15} />
+      <Icon icon={iconDescription} size={14} />
     {/if}
   </Button>
   <Button
-    class="chev h-auto w-[1.1rem] rounded-none border-l border-border p-0 text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-2 focus-visible:outline-primary focus-visible:-outline-offset-2 focus-visible:ring-0"
+    class="chev border-l border-border text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-2 focus-visible:outline-primary focus-visible:-outline-offset-2 focus-visible:ring-0"
     variant="ghost"
     size="icon-xs"
     type="button"

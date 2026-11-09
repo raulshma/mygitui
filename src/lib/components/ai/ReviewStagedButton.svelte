@@ -67,7 +67,7 @@
   <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
   <Dialog.Overlay class="scrim bg-black/40" role="presentation" />
   <Dialog.Content
-    class="dialog w-[min(34rem,calc(100vw-3rem))] max-w-none gap-0 rounded-lg bg-card px-6 py-5 text-sm text-popover-foreground shadow-xl sm:max-w-none"
+    class="dialog w-[min(34rem,calc(100vw-3rem))] max-w-none bg-card text-popover-foreground shadow-xl sm:max-w-none"
     role="dialog"
     aria-modal="true"
     aria-labelledby="review-staged-title"
@@ -84,17 +84,17 @@
     <Dialog.Title id="review-staged-title" class="m-0 mb-2 text-[1.125rem] font-medium text-foreground">Staged changes review</Dialog.Title>
     {#if findings !== null}
       <div class="rs-findings mb-3 max-h-[55vh] overflow-y-auto rounded-xl border border-border bg-muted/50 px-3 py-[0.625rem] focus-visible:-outline-offset-2 focus-visible:outline-2 focus-visible:outline-primary">
-        <p class="rs-text m-0 text-[0.8125rem] leading-[1.45] whitespace-pre-wrap [overflow-wrap:anywhere]">{findings}</p>
+        <p class="rs-text m-0 text-ui-base leading-[1.45] whitespace-pre-wrap [overflow-wrap:anywhere]">{findings}</p>
       </div>
-      <p class="rs-note m-0 mb-3 text-[0.6875rem] text-muted-foreground">
+      <p class="rs-note m-0 mb-3 text-ui-micro text-muted-foreground">
         Advisory only — nothing was changed. Verify findings before acting.
       </p>
     {/if}
     <div class="mt-4 flex flex-wrap justify-end gap-2">
-      <Button variant="outline" class="text-muted-foreground" size="sm" type="button" onclick={() => void copy()}>
+      <Button variant="outline" class="text-muted-foreground" type="button" onclick={() => void copy()}>
         Copy
       </Button>
-      <Button bind:ref={closeButton} size="sm" type="button" onclick={() => (open = false)}>
+      <Button bind:ref={closeButton} type="button" onclick={() => (open = false)}>
         Close
       </Button>
     </div>

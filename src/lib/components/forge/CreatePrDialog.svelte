@@ -33,6 +33,7 @@
   import { Input } from "$lib/components/ui/input/index.js";
   import { Textarea } from "$lib/components/ui/textarea/index.js";
   import { Checkbox } from "$lib/components/ui/checkbox/index.js";
+  import { Label } from "$lib/components/ui/label/index.js";
   import { prNumberFromUrl } from "./forgeModel";
 
   let {
@@ -213,7 +214,7 @@
     <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
     <Dialog.Overlay class="scrim bg-black/45" role="presentation" />
     <Dialog.Content
-      class="dialog flex max-h-[calc(100vh-4rem)] w-[min(34rem,calc(100vw-3rem))] max-w-none gap-2.5 overflow-y-auto rounded-lg border border-border bg-card px-5 py-4 text-popover-foreground shadow-xl sm:max-w-none"
+      class="dialog flex max-h-[calc(100vh-4rem)] w-[min(34rem,calc(100vw-3rem))] max-w-none overflow-y-auto bg-card text-popover-foreground shadow-xl sm:max-w-none"
       role="dialog"
       aria-modal="true"
       aria-labelledby="create-pr-title"
@@ -231,13 +232,12 @@
         <p class="created-line m-0 font-semibold" aria-live="polite">
           PR #{done.number} created successfully.
         </p>
-        <p class="created-url m-0 truncate font-mono text-[0.72rem] text-muted-foreground" title={done.url}>
+        <p class="created-url m-0 truncate font-mono text-ui-meta text-muted-foreground" title={done.url}>
           {done.url}
         </p>
         <div class="actions mt-1 flex flex-wrap items-center gap-2">
           <Button
-            size="sm"
-            class="confirm flex-none rounded-full px-4 text-[0.7813rem]"
+            class="confirm flex-none rounded-full px-4"
             type="button"
             onclick={() => void openCreated(done.url)}
           >
@@ -245,8 +245,7 @@
           </Button>
           <Button
             variant="outline"
-            size="sm"
-            class="cancel flex-none rounded-full px-4 text-[0.7813rem] text-muted-foreground"
+            class="cancel flex-none rounded-full px-4 text-muted-foreground"
             type="button"
             onclick={onClose}
           >
@@ -259,13 +258,12 @@
           A pull request already exists for this branch
           {existingNumber !== null ? `(#{existingNumber})` : ""}.
         </p>
-        <p class="created-url m-0 truncate font-mono text-[0.72rem] text-muted-foreground" title={url}>
+        <p class="created-url m-0 truncate font-mono text-ui-meta text-muted-foreground" title={url}>
           {url}
         </p>
         <div class="actions mt-1 flex flex-wrap items-center gap-2">
           <Button
-            size="sm"
-            class="confirm flex-none rounded-full px-4 text-[0.7813rem]"
+            class="confirm flex-none rounded-full px-4"
             type="button"
             onclick={() => void openCreated(url)}
           >
@@ -273,8 +271,7 @@
           </Button>
           <Button
             variant="outline"
-            size="sm"
-            class="cancel flex-none rounded-full px-4 text-[0.7813rem] text-muted-foreground"
+            class="cancel flex-none rounded-full px-4 text-muted-foreground"
             type="button"
             onclick={onClose}
           >
@@ -282,10 +279,10 @@
           </Button>
         </div>
       {:else}
-        <label class="field flex flex-col gap-1">
-          <span class="label text-[0.72rem] text-muted-foreground">Base branch</span>
+        <Label class="field flex flex-col gap-1">
+          <span class="label text-ui-meta text-muted-foreground">Base branch</span>
           <select
-            class="rounded-sm border border-border bg-background px-[0.45rem] py-[0.3rem] text-[0.8125rem] text-foreground focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-primary"
+            class="rounded-sm border border-border bg-background px-2 py-1 text-foreground focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-primary"
             bind:value={base}
             disabled={loading || baseOptions.length === 0}
           >
@@ -293,13 +290,13 @@
               <option value={name}>{name}</option>
             {/each}
           </select>
-        </label>
+        </Label>
 
         <div class="ai-row flex flex-wrap items-center gap-2">
           <Button
             variant="secondary"
             size="xs"
-            class="tb self-start rounded-full px-3 text-[0.72rem]"
+            class="tb self-start rounded-full px-3 text-ui-meta"
             type="button"
             onclick={requestAi}
             disabled={loading || aiPending}
@@ -307,58 +304,57 @@
             {aiPending ? "Waiting for AI…" : "Generate title/body"}
           </Button>
           {#if aiPending}
-            <span class="ai-hint text-[0.6875rem] text-muted-foreground [overflow-wrap:anywhere]">
+            <span class="ai-hint text-ui-micro text-muted-foreground [overflow-wrap:anywhere]">
               Waiting for the AI layer — type to fill manually.
             </span>
           {:else if aiError}
             <span
-              class="ai-hint ai-fail text-[0.6875rem] text-destructive [overflow-wrap:anywhere]"
+              class="ai-hint ai-fail text-ui-micro text-destructive [overflow-wrap:anywhere]"
               role="alert"
             >{aiError}</span>
           {/if}
         </div>
 
-        <label class="field flex flex-col gap-1">
-          <span class="label text-[0.72rem] text-muted-foreground">Title</span>
+        <Label class="field flex flex-col gap-1">
+          <span class="label text-ui-meta text-muted-foreground">Title</span>
           <Input
-            class="h-auto rounded-sm px-[0.45rem] py-[0.3rem] text-[0.8125rem] focus-visible:-outline-offset-1"
+            class="focus-visible:-outline-offset-1"
             type="text"
             bind:value={title}
             placeholder="PR title"
             oninput={() => (aiPending = false)}
           />
-        </label>
+        </Label>
 
-        <label class="field flex flex-col gap-1">
-          <span class="label text-[0.72rem] text-muted-foreground">Description</span>
+        <Label class="field flex flex-col gap-1">
+          <span class="label text-ui-meta text-muted-foreground">Description</span>
           <Textarea
-            class="h-auto min-h-0 resize-y rounded-sm px-[0.45rem] py-[0.3rem] text-[0.8125rem] focus-visible:-outline-offset-1 md:text-[0.8125rem]"
+            class="min-h-0 resize-y focus-visible:-outline-offset-1"
             rows={7}
             bind:value={body}
             placeholder="What does this PR change?"
             oninput={() => (aiPending = false)}
           ></Textarea>
-        </label>
+        </Label>
 
-        <label
+        <Label
           class="draft flex cursor-pointer items-center gap-1.5 text-xs text-muted-foreground"
           title="Open the PR as a draft (no reviewers requested)"
         >
           <Checkbox bind:checked={draft} />
           <span>Draft</span>
-        </label>
+        </Label>
 
         {#if error}
           <p class="error m-0 text-xs text-destructive" role="alert">{error}</p>
         {/if}
 
         <div class="actions mt-1 flex flex-wrap items-center gap-2">
-          <span class="hint min-w-[10rem] flex-1 text-[0.6875rem] text-muted-foreground">
+          <span class="hint min-w-[10rem] flex-1 text-ui-micro text-muted-foreground">
             Runs `gh pr create` with your gh credentials.
           </span>
           <Button
-            size="sm"
-            class="confirm flex-none rounded-full px-4 text-[0.7813rem]"
+            class="confirm flex-none rounded-full px-4"
             type="button"
             disabled={!canCreate}
             onclick={() => void create()}
@@ -367,8 +363,7 @@
           </Button>
           <Button
             variant="outline"
-            size="sm"
-            class="cancel flex-none rounded-full px-4 text-[0.7813rem] text-muted-foreground"
+            class="cancel flex-none rounded-full px-4 text-muted-foreground"
             type="button"
             disabled={creating}
             onclick={onClose}

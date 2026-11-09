@@ -19,6 +19,7 @@
   import { openTab } from "$lib/stores/tabs.svelte";
   import { toast } from "$lib/toast";
   import { Button } from "$lib/components/ui/button/index.js";
+  import EmptyState from "../layout/EmptyState.svelte";
   import Icon from "$lib/components/icons/Icon.svelte";
   import { splitPath, submoduleDisplay } from "./statusModel";
   import { appIcon } from "$lib/components/icons/library.svelte";
@@ -151,17 +152,17 @@
   }
 </script>
 
-<aside class="submodule-panel flex min-h-0 flex-col bg-card text-[13px] text-foreground" aria-label="Submodules">
+<aside class="submodule-panel flex min-h-0 flex-col bg-card text-ui-base text-foreground" aria-label="Submodules">
   <div class="toolbar flex flex-none items-center gap-2 border-b border-border bg-muted px-1.5 py-1">
     <label
-      class="toggle inline-flex cursor-pointer items-center gap-0.5 text-[0.6875rem] text-muted-foreground focus-within:text-foreground"
+      class="toggle inline-flex cursor-pointer items-center gap-0.5 text-ui-micro text-muted-foreground focus-within:text-foreground"
       title="Also initialize uninitialized submodules"
     >
       <input type="checkbox" class="m-0 size-3.5 accent-primary" bind:checked={init} />
       <span>init</span>
     </label>
     <label
-      class="toggle inline-flex cursor-pointer items-center gap-0.5 text-[0.6875rem] text-muted-foreground focus-within:text-foreground"
+      class="toggle inline-flex cursor-pointer items-center gap-0.5 text-ui-micro text-muted-foreground focus-within:text-foreground"
       title="Update nested submodules too"
     >
       <input type="checkbox" class="m-0 size-3.5 accent-primary" bind:checked={recursive} />
@@ -169,7 +170,7 @@
     </label>
     <span class="spacer flex-1"></span>
     <span
-      class="count inline-flex h-auto shrink-0 items-center rounded-full border border-transparent bg-muted px-1.5 py-0 text-[0.625rem] font-medium tabular-nums text-muted-foreground"
+      class="count inline-flex h-auto shrink-0 items-center rounded-full border border-transparent bg-muted px-1.5 py-0 text-ui-tiny font-medium tabular-nums text-muted-foreground"
       title="Submodules in this repository"
     >{list.length}</span>
     <Button
@@ -192,18 +193,14 @@
       <Button
         type="button"
         variant="outline"
-        class="h-auto rounded border-[var(--app-deleted)] bg-[var(--app-deleted-bg)] px-2 py-0.5 text-[0.6875rem] font-normal text-[var(--app-deleted)] hover:bg-[var(--app-deleted-bg)] dark:bg-[var(--app-deleted-bg)] dark:text-[var(--app-deleted)] dark:hover:bg-[var(--app-deleted-bg)]"
+        class="h-auto rounded border-[var(--app-deleted)] bg-[var(--app-deleted-bg)] px-2 py-0.5 text-ui-micro font-normal text-[var(--app-deleted)] hover:bg-[var(--app-deleted-bg)] dark:bg-[var(--app-deleted-bg)] dark:text-[var(--app-deleted)] dark:hover:bg-[var(--app-deleted-bg)]"
         onclick={() => void reload()}
       >Retry</Button>
     </div>
   {:else if loading && list.length === 0}
     <p class="state py-4 px-3 text-xs text-muted-foreground" role="status">Loading submodules…</p>
   {:else if list.length === 0}
-    <div class="state empty flex flex-1 select-none flex-col items-center justify-center gap-1 px-4 py-8 text-center text-muted-foreground" role="status">
-      <span class="empty-icon mb-0.5 inline-flex size-10 items-center justify-center rounded-full border border-border text-[var(--app-added)]"><Icon icon={iconCheck} size={22} /></span>
-      <p class="empty-title m-0 text-[13px] font-medium text-foreground">No submodules</p>
-      <p class="empty-hint m-0 text-[0.72rem]">Add one with <code class="font-mono">git submodule add</code>.</p>
-    </div>
+    <EmptyState icon={iconCheck} title="No submodules" hint="Add one with git submodule add." />
   {:else}
     <ul class="modules m-0 min-h-0 flex-1 list-none overflow-y-auto p-0 pb-2" role="list" aria-label="Submodule list" aria-busy={loading}>
       {#each list as info (info.path)}
@@ -224,7 +221,7 @@
               </span>
               {#if display.tag}
                 <span
-                  class={`tag max-w-36 shrink-0 truncate text-[0.625rem] leading-[1.35] ${display.tone === "danger" ? "text-[var(--app-deleted)]" : display.tone === "dirty" ? "text-[var(--app-modified)]" : "text-muted-foreground"}`}
+                  class={`tag max-w-36 shrink-0 truncate text-ui-tiny leading-[1.35] ${display.tone === "danger" ? "text-[var(--app-deleted)]" : display.tone === "dirty" ? "text-[var(--app-modified)]" : "text-muted-foreground"}`}
                   title={display.detail}
                 >
                   {display.tag}
@@ -276,7 +273,7 @@
               {/if}
             </span>
           </div>
-          <div class="meta flex min-w-0 items-center gap-1 whitespace-nowrap pl-5 font-mono text-[0.625rem] text-muted-foreground opacity-85" title="Checked-out HEAD vs recorded gitlink">
+          <div class="meta flex min-w-0 items-center gap-1 whitespace-nowrap pl-5 font-mono text-ui-tiny text-muted-foreground opacity-85" title="Checked-out HEAD vs recorded gitlink">
             {#if updateAvailable(info)}
               <span class="update shrink-0 font-semibold text-[var(--app-modified)]">↓ update available</span>
             {/if}

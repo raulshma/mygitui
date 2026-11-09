@@ -39,7 +39,7 @@
 
 <Dialog.Root {open} {onOpenChange}>
   <Dialog.Content
-    class="sdlg-dialog dialog w-full gap-4 px-6 py-5 sm:max-w-[28rem] {changed
+    class="sdlg-dialog dialog w-full gap-4 sm:max-w-[28rem] {changed
       ? "danger border-destructive bg-destructive/10"
       : ""}"
     role="alertdialog"
@@ -50,7 +50,7 @@
     <Dialog.Header>
       <Dialog.Title
         id="hostkey-title"
-        class="title text-lg font-medium {changed ? "text-destructive" : ""}"
+        class="title font-medium {changed ? "text-destructive" : ""}"
       >
         {changed ? "Host key changed!" : "Unknown host"}
       </Dialog.Title>

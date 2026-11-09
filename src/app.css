@@ -66,7 +66,7 @@
   --chart-3: oklch(0.439 0 0);
   --chart-4: oklch(0.371 0 0);
   --chart-5: oklch(0.269 0 0);
-  --radius: 0.625rem;
+  --radius: 0.5rem;
   --sidebar: oklch(0.985 0 0);
   --sidebar-foreground: oklch(0.145 0 0);
   --sidebar-primary: oklch(0.205 0 0);
@@ -109,6 +109,15 @@
   --sidebar-accent-foreground: oklch(0.985 0 0);
   --sidebar-border: oklch(1 0 0 / 10%);
   --sidebar-ring: oklch(0.556 0 0);
+}
+
+/* Dense-UI text ramp (static): `text-ui-*` utilities sized below Tailwind's
+ * text-* scale, for the app's compact chrome — list rows, chips, meta labels. */
+@theme {
+  --text-ui-base: 0.8125rem; /* dense UI body, list rows, panel bodies */
+  --text-ui-meta: 0.71875rem; /* small controls, chips, secondary text */
+  --text-ui-micro: 0.6875rem; /* meta labels, uppercase section headers */
+  --text-ui-tiny: 0.625rem; /* count badges, tiny tags */
 }
 
 @theme inline {

@@ -50,6 +50,7 @@
   import type { BranchInfo, CommitInfo, FileDiff, MergeResult } from "$lib/ipc/types";
   import { describeError } from "$lib/errors";
   import GraphCanvas from "$lib/components/graph/GraphCanvas.svelte";
+  import EmptyState from "../layout/EmptyState.svelte";
   import CompareBar from "$lib/components/panels/CompareBar.svelte";
   import type { CompareResult } from "$lib/components/panels/compare";
   import CommitDetail from "$lib/components/panels/CommitDetail.svelte";
@@ -915,8 +916,8 @@
   {#if sidebar}
     <!-- 1a. sidebar header: the panel is a bare layout leaf, so it owns its
          own title row (full mode lives in a tab/popout and has one). -->
-    <header class="sidebar-head flex flex-none items-center gap-1 border-b border-border bg-popover py-[0.3rem] pr-[0.4rem] pl-[0.6rem]">
-      <span class="sh-title min-w-0 flex-1 truncate text-[0.6875rem] font-semibold uppercase tracking-[0.04em] text-muted-foreground">History</span>
+    <header class="sidebar-head flex flex-none items-center gap-1 border-b border-border bg-popover px-2.5 py-1">
+      <span class="sh-title min-w-0 flex-1 truncate text-ui-micro font-semibold uppercase tracking-[0.04em] text-muted-foreground">History</span>
       {#if onPopout}
         <Button
           class="relative text-muted-foreground after:absolute after:-inset-1 after:content-[''] hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-4"
@@ -948,7 +949,7 @@
 
   <!-- 1b. filter bar (sidebar: search + a disclosure for the rest) -->
   <div
-    class="filterbar flex flex-wrap items-center border-b border-border bg-popover text-xs {sidebar ? 'compact gap-1 px-1.5 py-[0.3rem]' : 'gap-1.5 px-3 py-1.5'}"
+    class="filterbar flex flex-wrap items-center border-b border-border bg-popover text-xs {sidebar ? 'compact gap-1 px-1.5 py-1' : 'gap-1.5 px-3 py-1.5'}"
     class:compact={sidebar}
     role="search"
     aria-label="Filter commits"
@@ -958,7 +959,7 @@
         <Icon icon={iconSearch} size={12} />
       </span>
       <Input
-        class="f h-auto rounded-sm bg-card dark:bg-card px-[1.5rem] py-[0.2rem] text-xs md:text-xs placeholder:text-muted-foreground/80"
+        class="f h-auto rounded-sm bg-card dark:bg-card px-6 py-0.5 text-xs md:text-xs placeholder:text-muted-foreground/80"
         bind:ref={filterTextEl}
         type="search"
         placeholder="Search commits"
@@ -994,7 +995,7 @@
       <label class="scope flex items-center gap-1 text-muted-foreground" title="Limit the log to one branch's history">
         <span class="dl">scope</span>
         <select
-          class="h-auto rounded-sm border border-input bg-card px-[0.3rem] py-[0.15rem] text-[0.6875rem] text-foreground focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-1"
+          class="h-auto rounded-sm border border-input bg-card px-[0.3rem] py-0.5 text-ui-micro text-foreground focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-1"
           aria-label="Branch scope"
           bind:this={scopeSelectEl}
           onchange={(e) => store.setFilter({ scopeRef: e.currentTarget.value })}
@@ -1007,14 +1008,14 @@
         </select>
       </label>
       <Input
-        class="f h-auto w-36 rounded-sm bg-card dark:bg-card px-[0.45rem] py-[0.2rem] text-xs md:text-xs placeholder:text-muted-foreground/80"
+        class="f h-auto w-36 rounded-sm bg-card dark:bg-card px-2 py-0.5 text-xs md:text-xs placeholder:text-muted-foreground/80"
         placeholder="Author"
         aria-label="Filter by author"
         value={store.filter.author}
         oninput={(e) => store.setFilter({ author: e.currentTarget.value })}
       />
       <Input
-        class="f h-auto w-48 rounded-sm bg-card dark:bg-card px-[0.45rem] py-[0.2rem] text-xs md:text-xs placeholder:text-muted-foreground/80"
+        class="f h-auto w-48 rounded-sm bg-card dark:bg-card px-2 py-0.5 text-xs md:text-xs placeholder:text-muted-foreground/80"
         placeholder="Path"
         aria-label="Filter by path"
         value={store.filter.path}
@@ -1024,7 +1025,7 @@
         <span class="dl">after</span>
         <Input
           type="date"
-          class="h-auto rounded-sm bg-card dark:bg-card px-[0.3rem] py-[0.15rem] text-[0.6875rem] md:text-[0.6875rem] placeholder:text-muted-foreground/80"
+          class="h-auto rounded-sm bg-card dark:bg-card px-[0.3rem] py-0.5 text-ui-micro md:text-ui-micro placeholder:text-muted-foreground/80"
           aria-label="Commits after this date"
           value={store.filter.after}
           onchange={(e) => store.setFilter({ after: e.currentTarget.value })}
@@ -1034,7 +1035,7 @@
         <span class="dl">before</span>
         <Input
           type="date"
-          class="h-auto rounded-sm bg-card dark:bg-card px-[0.3rem] py-[0.15rem] text-[0.6875rem] md:text-[0.6875rem] placeholder:text-muted-foreground/80"
+          class="h-auto rounded-sm bg-card dark:bg-card px-[0.3rem] py-0.5 text-ui-micro md:text-ui-micro placeholder:text-muted-foreground/80"
           aria-label="Commits before this date"
           value={store.filter.before}
           onchange={(e) => store.setFilter({ before: e.currentTarget.value })}
@@ -1051,7 +1052,7 @@
       </label>
       <!-- M10: pickaxe -S — commits whose patch adds/removes the string. -->
       <Input
-        class="f h-auto w-36 rounded-sm bg-card dark:bg-card px-[0.45rem] py-[0.2rem] text-xs md:text-xs placeholder:text-muted-foreground/80"
+        class="f h-auto w-36 rounded-sm bg-card dark:bg-card px-2 py-0.5 text-xs md:text-xs placeholder:text-muted-foreground/80"
         placeholder="Changes containing… (-S)"
         aria-label="Pickaxe: patches adding or removing this string"
         value={store.filter.pickaxe}
@@ -1062,7 +1063,7 @@
            verbatim and the backend intersects them (simplest contract — no
            cross-clearing UI to get out of sync). -->
       <Input
-        class="f h-auto w-36 rounded-sm bg-card dark:bg-card px-[0.45rem] py-[0.2rem] text-xs md:text-xs placeholder:text-muted-foreground/80"
+        class="f h-auto w-36 rounded-sm bg-card dark:bg-card px-2 py-0.5 text-xs md:text-xs placeholder:text-muted-foreground/80"
         placeholder="patch regex (-G)"
         aria-label="Pickaxe: patches adding or removing lines matching this regex"
         value={store.filter.pickaxeRegex ?? ""}
@@ -1075,12 +1076,12 @@
            (sidebar mode): the log may be narrower than it looks, so the
            active scope is always shown and one click clears it. -->
       <span
-        class="scope-chip inline-flex flex-none items-center gap-[0.15rem] rounded-full bg-primary/10 py-0 pr-[0.3rem] pl-[0.45rem] text-[0.6875rem] text-primary"
+        class="scope-chip inline-flex flex-none items-center gap-[0.15rem] rounded-full bg-primary/10 py-0 pr-[0.3rem] pl-2 text-ui-micro text-primary"
         title="The log is scoped to this branch's history"
       >
         <span class="max-w-36 truncate">scoped to {scopeLabel}</span>
         <button
-          class="rounded-full px-[0.25rem] text-[0.75rem] leading-none text-primary/80 hover:bg-accent hover:text-accent-foreground focus-visible:outline-2 focus-visible:outline-ring"
+          class="rounded-full px-[0.25rem] text-ui-meta leading-none text-primary/80 hover:bg-accent hover:text-accent-foreground focus-visible:outline-2 focus-visible:outline-ring"
           type="button"
           aria-label="Clear branch scope"
           title="Back to all branches"
@@ -1135,7 +1136,7 @@
     {/if}
 
     <span
-      class="status flex items-center gap-1.5 text-[0.6875rem] text-muted-foreground {sidebar ? 'basis-full' : 'ml-auto'}"
+      class="status flex items-center gap-1.5 text-ui-micro text-muted-foreground {sidebar ? 'basis-full' : 'ml-auto'}"
       role="status"
       aria-live="polite"
     >
@@ -1153,7 +1154,7 @@
           <Icon icon={iconRetry} size={16} />
         </Button>
       {:else if store.loading}
-        <Spinner class="size-[11px]" role="presentation" aria-hidden="true" />
+        <Spinner class="size-3" role="presentation" aria-hidden="true" />
         Streaming…
       {:else}
         {total}
@@ -1174,14 +1175,14 @@
   {#snippet logPane()}
   <div class="listwrap relative flex min-h-0 flex-1">
     {#if store.loading && total === 0}
-      <p class="empty m-auto text-[0.8125rem] text-muted-foreground" role="status">
+      <p class="empty m-auto text-ui-base text-muted-foreground" role="status">
         <span class="empty-loading inline-flex items-center gap-[0.4rem]">
-          <Spinner class="size-[14px]" role="presentation" aria-hidden="true" />
+          <Spinner class="size-4" role="presentation" aria-hidden="true" />
           Loading history…
         </span>
       </p>
     {:else if !store.loading && !store.error && total === 0}
-      <p class="empty m-auto text-[0.8125rem] text-muted-foreground">No commits match the current filters.</p>
+      <EmptyState title="No commits match the current filters." />
     {:else}
       <div
         class="scroller min-w-0 flex-1 overflow-y-auto focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring {sidebar
@@ -1199,7 +1200,7 @@
           {#each visible as v (v.commit.sha)}
             <div
               id={`commit-row-${v.idx}`}
-              class="row absolute inset-x-0 flex cursor-pointer items-center border-b border-border/45 py-0 text-[0.8125rem] {sidebar ? "gap-1 pr-[0.45rem] pl-[0.55rem]" : "gap-1.5 pr-[0.6rem] pl-[0.75rem]"} {v.idx === selectedIdx
+              class="row absolute inset-x-0 flex cursor-pointer items-center border-b border-border/45 py-0 text-ui-base {sidebar ? "gap-1 pr-2 pl-2" : "gap-1.5 pr-2.5 pl-3"} {v.idx === selectedIdx
                 ? "bg-secondary text-secondary-foreground"
                 : multiIdx.includes(v.idx)
                   ? "bg-secondary/45 hover:bg-secondary/60"
@@ -1240,17 +1241,17 @@
                         ? "border-transparent bg-accent text-accent-foreground"
                         : "border-primary bg-primary/10 text-primary"}
                 <span
-                  class="ref ref-{kind} inline-flex flex-none items-center gap-1 whitespace-nowrap rounded-sm border px-[0.35rem] text-[0.6875rem] leading-[1.4] {sidebar ? 'max-w-24' : 'max-w-36'} {refTint}"
+                  class="ref ref-{kind} inline-flex flex-none items-center gap-1 whitespace-nowrap rounded-sm border px-1 text-ui-micro leading-[1.4] {sidebar ? 'max-w-24' : 'max-w-36'} {refTint}"
                   title={`${scope}: ${shortRefName(ref)}`}
                   aria-label={`${scope}: ${shortRefName(ref)}`}
                 >
-                  <span class="ref-scope flex-none text-[0.55rem] font-bold uppercase tracking-[0.025em] opacity-80 {sidebar ? 'hidden' : ''}" aria-hidden="true">{scope}</span>
+                  <span class="ref-scope flex-none text-ui-tiny font-bold uppercase tracking-[0.025em] opacity-80 {sidebar ? 'hidden' : ''}" aria-hidden="true">{scope}</span>
                   <span class="ref-name min-w-0 truncate">{shortRefName(ref)}</span>
                 </span>
               {/each}
               {#if v.commit.refs.length > 3}
                 <span
-                  class="ref ref-more inline-flex flex-none items-center whitespace-nowrap rounded-sm border border-transparent bg-muted px-[0.35rem] text-[0.6875rem] leading-[1.4] tabular-nums text-muted-foreground"
+                  class="ref ref-more inline-flex flex-none items-center whitespace-nowrap rounded-sm border border-transparent bg-muted px-1 text-ui-micro leading-[1.4] tabular-nums text-muted-foreground"
                   title={v.commit.refs.slice(3).map(shortRefName).join(", ")}
                   aria-label={`${v.commit.refs.length - 3} more refs`}
                 >
@@ -1259,7 +1260,7 @@
               {/if}
               <span class="summary min-w-0 flex-1 truncate" title={v.commit.summary}>{v.commit.summary}</span>
               <span class="author max-w-40 flex-none truncate {v.idx === selectedIdx ? "" : "text-muted-foreground"} {sidebar ? "hidden" : ""}">{v.commit.author.name}</span>
-              <span class="date flex-none text-muted-foreground {sidebar ? "text-[0.65rem]" : "text-[0.6875rem]"}">{formatRelativeTime(v.commit.author.time)}</span>
+              <span class="date flex-none text-muted-foreground {sidebar ? "text-ui-micro" : "text-ui-micro"}">{formatRelativeTime(v.commit.author.time)}</span>
             </div>
           {/each}
         </div>
@@ -1321,7 +1322,7 @@
     {#if selectedInfo}
       <Button
         variant="ghost"
-        class="detail-open flex-none h-auto w-full justify-start truncate rounded-none border-t border-border bg-popover px-3 py-1 text-left text-[0.72rem] font-normal text-primary hover:bg-accent hover:text-primary focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring dark:hover:bg-accent"
+        class="detail-open flex-none h-auto w-full justify-start truncate rounded-none border-t border-border bg-popover px-3 py-1 text-left text-ui-meta font-normal text-primary hover:bg-accent hover:text-primary focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring dark:hover:bg-accent"
         onclick={() => (detailOpen = true)}
         aria-expanded="false"
       >

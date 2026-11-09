@@ -1436,7 +1436,7 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
 {#snippet forgePanel()}
   {#if isRemote}
     <aside
-      class="missing-panel flex flex-1 items-center justify-center text-[0.8125rem] text-muted-foreground"
+      class="missing-panel flex flex-1 items-center justify-center text-ui-base text-muted-foreground"
       title="Not available for remote projects"
     >
       Not available for remote projects
@@ -1459,7 +1459,7 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
 {/snippet}
 {#snippet missingPanel()}
   <aside
-    class="missing-panel flex flex-1 items-center justify-center text-[0.8125rem] text-muted-foreground"
+    class="missing-panel flex flex-1 items-center justify-center text-ui-base text-muted-foreground"
   >This panel is not available.</aside>
 {/snippet}
 
@@ -1471,7 +1471,7 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
   class="repo-workspace flex h-full w-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden"
 >
   <header
-    class="repo-header flex min-w-0 flex-none flex-wrap items-center gap-x-2 gap-y-1.5 border-b border-border bg-popover px-[0.6rem] py-[0.3rem] text-[0.8125rem]"
+    class="repo-header flex min-w-0 flex-none flex-wrap items-center gap-x-2 gap-y-1.5 border-b border-border bg-popover px-2.5 py-1 text-ui-base"
   >
     <span class="repo-identity flex min-w-0 flex-1 items-center gap-[0.4rem]">
       <span
@@ -1482,7 +1482,7 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
         <!-- Remote repository: connection chip fed by the devices store. -->
         <Badge
           variant="secondary"
-          class="remote-chip flex-none gap-[0.3rem] rounded-full bg-accent px-[0.45rem] py-[0.1rem] h-auto text-[0.6875rem] {remoteStatus === 'connected' ? 'text-foreground' : 'text-muted-foreground'}"
+          class="remote-chip flex-none gap-[0.3rem] rounded-full bg-accent px-2 py-px h-auto text-ui-micro {remoteStatus === 'connected' ? 'text-foreground' : 'text-muted-foreground'}"
           data-status={remoteStatus}
           title={remoteStatus === "connected"
             ? "Device connected"
@@ -1506,7 +1506,7 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
       <BranchSwitcher {repoId} {status} onMutated={refresh} />
       <RepoQuickActions {repoId} {status} onMutated={refresh} />
       <span
-        class="repo-root max-[980px]:hidden min-w-0 flex-[1_1_auto] overflow-hidden text-ellipsis whitespace-nowrap font-mono text-[0.6875rem] text-muted-foreground"
+        class="repo-root max-[980px]:hidden min-w-0 flex-[1_1_auto] overflow-hidden text-ellipsis whitespace-nowrap font-mono text-ui-micro text-muted-foreground"
         title={root}
       >{root}</span>
     </span>
@@ -1535,7 +1535,7 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
         onValueChange={(value) => layouts.applyPreset(root, value)}
       >
         <Select.Trigger
-          class="preset-select max-[760px]:hidden max-w-[8.5rem] h-[1.35rem] rounded-sm border-border bg-card dark:bg-card px-1 py-0 text-[0.6875rem] text-card-foreground gap-1"
+          class="preset-select max-[760px]:hidden max-w-[8.5rem] h-5 rounded-sm border-border bg-card dark:bg-card px-1 py-0 text-ui-micro text-card-foreground gap-1"
           aria-label="Layout preset"
           title="Layout preset"
         >
@@ -1543,7 +1543,7 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
         </Select.Trigger>
         <Select.Content>
           {#each layouts.listPresets() as preset (preset.id)}
-            <Select.Item value={preset.id} label={preset.name} class="text-[0.6875rem]" />
+            <Select.Item value={preset.id} label={preset.name} class="text-ui-micro" />
           {/each}
         </Select.Content>
       </Select.Root>
@@ -1577,11 +1577,11 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
 
   {#if opSource && conflictCount > 0}
     <div
-      class="conflict-banner flex flex-none items-center gap-2 border-b border-border bg-destructive/15 px-3 py-[0.3rem] text-[0.8125rem] text-destructive"
+      class="conflict-banner flex flex-none items-center gap-2 border-b border-border bg-destructive/15 px-3 py-1 text-ui-base text-destructive"
       role="alert"
     >
       <span
-        class="cb-icon inline-flex h-[1.1rem] w-[1.1rem] flex-none items-center justify-center rounded-full border-[1.5px] border-current text-[0.6875rem] font-bold"
+        class="cb-icon inline-flex size-4 flex-none items-center justify-center rounded-full border-[1.5px] border-current text-ui-micro font-bold"
         aria-hidden="true"
       >!</span>
       <span
@@ -1592,7 +1592,7 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
       </span>
       <span class="cb-actions ml-auto flex flex-none gap-1.5">
         <Button
-          class="cb-resolve rounded-full px-3 py-[0.15rem] h-auto bg-destructive text-white hover:bg-destructive hover:brightness-110 text-[0.72rem] font-normal"
+          class="cb-resolve rounded-full px-3 py-0.5 h-auto bg-destructive text-white hover:bg-destructive hover:brightness-110 text-ui-meta font-normal"
           type="button"
           onclick={onResolve}
         >
@@ -1600,7 +1600,7 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
         </Button>
         <Button
           variant="outline"
-          class="cb-abort rounded-full border-current px-3 py-[0.15rem] h-auto bg-transparent text-[0.72rem] font-normal text-inherit hover:bg-foreground/10 hover:text-inherit dark:bg-transparent dark:border-current dark:hover:bg-foreground/10 disabled:cursor-not-allowed disabled:opacity-55"
+          class="cb-abort rounded-full border-current px-3 py-0.5 h-auto bg-transparent text-ui-meta font-normal text-inherit hover:bg-foreground/10 hover:text-inherit dark:bg-transparent dark:border-current dark:hover:bg-foreground/10 disabled:cursor-not-allowed disabled:opacity-55"
           type="button"
           disabled={aborting}
           onclick={() => void onAbort()}
@@ -1670,7 +1670,7 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
           <path d={PANEL_META.history.icon} />
         </svg>
         <span
-          class="history-rail-label rotate-180 text-[0.6875rem] uppercase tracking-[0.04em] [writing-mode:vertical-rl]"
+          class="history-rail-label rotate-180 text-ui-micro uppercase tracking-[0.04em] [writing-mode:vertical-rl]"
         >History</span>
       </button>
     {/if}
@@ -1682,7 +1682,7 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
   <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
   <!-- Conflict resolution overlay: centered, large, above everything. -->
   <div
-    class="conflict-overlay fixed inset-0 z-[60] flex items-center justify-center bg-black/45 p-8"
+    class="conflict-overlay fixed inset-0 z-60 flex items-center justify-center bg-black/45 p-8"
     role="presentation"
     onkeydown={(e) => {
       // Tab stays inside the dialog (shared focus trap).

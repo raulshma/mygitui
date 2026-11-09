@@ -122,7 +122,7 @@
 
 <section class="browser flex min-w-0 flex-col gap-2.5" aria-label="Device files">
   <nav
-    class="crumbs text-muted-foreground flex flex-wrap items-center gap-1 text-[0.8125rem]"
+    class="crumbs text-muted-foreground flex flex-wrap items-center gap-1 text-ui-base"
     aria-label="Device path"
   >
     {#each crumbs as crumb, index (crumb.target)}
@@ -138,7 +138,7 @@
         </span>
       {:else}
         <button
-          class="crumb focus-visible:outline-primary hover:bg-muted text-primary max-w-64 cursor-pointer truncate rounded-md border-0 bg-transparent px-1 py-0.5 text-[0.8125rem] outline-none focus-visible:outline-2"
+          class="crumb focus-visible:outline-primary hover:bg-muted text-primary max-w-64 cursor-pointer truncate rounded-md border-0 bg-transparent px-1 py-0.5 text-ui-base outline-none focus-visible:outline-2"
           type="button"
           onclick={() => void browse(crumb.target)}
         >
@@ -157,7 +157,7 @@
       }}
     >
       <Input
-        class="input min-w-0 flex-1 font-mono text-[0.8125rem]"
+        class="input min-w-0 flex-1 font-mono text-ui-base"
         type="text"
         aria-label="Device path"
         placeholder="Absolute path (empty = home, ~ = home)"
@@ -182,11 +182,11 @@
   </div>
 
   {#if error}
-    <p class="error text-destructive wrap-anywhere m-0 text-[0.8125rem]" role="alert">
+    <p class="error text-destructive wrap-anywhere m-0 text-ui-base" role="alert">
       {error}
     </p>
   {:else if loading}
-    <p class="hint text-muted-foreground m-0 text-[0.8125rem]" aria-busy="true">
+    <p class="hint text-muted-foreground m-0 text-ui-base" aria-busy="true">
       Loading…
     </p>
   {:else if listing}
@@ -219,11 +219,11 @@
           {/if}
         </li>
       {:else}
-        <li class="hint text-muted-foreground text-[0.8125rem]">This directory is empty.</li>
+        <li class="hint text-muted-foreground text-ui-base">This directory is empty.</li>
       {/each}
     </ul>
     {#if listing.truncated}
-      <p class="hint text-muted-foreground m-0 text-[0.8125rem]">
+      <p class="hint text-muted-foreground m-0 text-ui-base">
         Listing truncated (too many entries).
       </p>
     {/if}
@@ -243,7 +243,7 @@
               </span>
               <span class="row-main flex min-w-0 flex-1 flex-col">
                 <span class="row-name truncate min-w-0 text-sm">{candidate.name}</span>
-                <span class="row-path text-muted-foreground truncate min-w-0 font-mono text-[0.6875rem]">
+                <span class="row-path text-muted-foreground truncate min-w-0 font-mono text-ui-micro">
                   {candidate.path}
                 </span>
               </span>
@@ -259,7 +259,7 @@
             </Button>
           </li>
         {:else}
-          <li class="hint text-muted-foreground text-[0.8125rem]">
+          <li class="hint text-muted-foreground text-ui-base">
             No repositories found under the home directory.
           </li>
         {/each}

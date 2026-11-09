@@ -20,6 +20,7 @@
   import * as Dialog from "$lib/components/ui/dialog/index.js";
   import { Button } from "$lib/components/ui/button/index.js";
   import { Checkbox } from "$lib/components/ui/checkbox/index.js";
+  import { Label } from "$lib/components/ui/label/index.js";
   import { workingCopyDirty } from "./mergeModel";
 
   let {
@@ -118,7 +119,7 @@
     <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
     <Dialog.Overlay class="scrim bg-black/40" role="presentation" />
     <Dialog.Content
-      class="dialog max-h-[calc(100vh-4rem)] w-[min(28rem,calc(100vw-2rem))] max-w-none gap-0 overflow-y-auto rounded-2xl bg-card px-6 py-5 text-sm text-popover-foreground shadow-lg sm:max-w-none"
+      class="dialog max-h-[calc(100vh-4rem)] w-[min(28rem,calc(100vw-2rem))] max-w-none overflow-y-auto bg-card text-popover-foreground shadow-lg sm:max-w-none"
       role="dialog"
       aria-modal="true"
       aria-labelledby="merge-title"
@@ -142,49 +143,49 @@
         <p class="text mb-3 text-muted-foreground">Into the current branch.</p>
 
         {#if dirty}
-          <p class="dirty mb-3 rounded-lg bg-destructive/10 px-2.5 py-1.5 text-[0.8125rem] text-destructive" role="alert">
+          <p class="dirty mb-3 rounded-lg bg-destructive/10 px-2.5 py-1.5 text-ui-base text-destructive" role="alert">
             Working copy has uncommitted changes — commit or stash first
           </p>
         {/if}
 
         <fieldset class="group mb-3 rounded-xl border border-border px-3 py-2">
-          <legend class="px-1 text-[0.72rem] text-muted-foreground">Fast-forward</legend>
-          <label class="flex cursor-pointer items-center gap-1.5 py-0.5">
+          <legend class="px-1 text-ui-meta text-muted-foreground">Fast-forward</legend>
+          <Label class="flex cursor-pointer items-center gap-1.5 py-0.5">
             <input class="m-0 accent-primary" type="radio" bind:group={ffMode} value="auto" />
             <span>Allow fast-forward</span>
-          </label>
-          <label class="flex cursor-pointer items-center gap-1.5 py-0.5">
+          </Label>
+          <Label class="flex cursor-pointer items-center gap-1.5 py-0.5">
             <input class="m-0 accent-primary" type="radio" bind:group={ffMode} value="no_ff" />
             <span>Always create a merge commit (--no-ff)</span>
-          </label>
+          </Label>
         </fieldset>
 
         <fieldset class="group mb-3 rounded-xl border border-border px-3 py-2">
-          <legend class="px-1 text-[0.72rem] text-muted-foreground">Result</legend>
-          <label class="flex cursor-pointer items-center gap-1.5 py-0.5">
+          <legend class="px-1 text-ui-meta text-muted-foreground">Result</legend>
+          <Label class="flex cursor-pointer items-center gap-1.5 py-0.5">
             <Checkbox bind:checked={squash} />
             <span>Squash — stage the result, single-parent commit later</span>
-          </label>
-          <label class="flex cursor-pointer items-center gap-1.5 py-0.5">
+          </Label>
+          <Label class="flex cursor-pointer items-center gap-1.5 py-0.5">
             <Checkbox bind:checked={noCommit} />
             <span>Stop before committing (--no-commit)</span>
-          </label>
+          </Label>
         </fieldset>
 
         <fieldset class="group mb-3 rounded-xl border border-border px-3 py-2">
-          <legend class="px-1 text-[0.72rem] text-muted-foreground">Conflicting hunks (-X)</legend>
-          <label class="flex cursor-pointer items-center gap-1.5 py-0.5">
+          <legend class="px-1 text-ui-meta text-muted-foreground">Conflicting hunks (-X)</legend>
+          <Label class="flex cursor-pointer items-center gap-1.5 py-0.5">
             <input class="m-0 accent-primary" type="radio" bind:group={favor} value="none" />
             <span>Leave conflicts for me to resolve</span>
-          </label>
-          <label class="flex cursor-pointer items-center gap-1.5 py-0.5">
+          </Label>
+          <Label class="flex cursor-pointer items-center gap-1.5 py-0.5">
             <input class="m-0 accent-primary" type="radio" bind:group={favor} value="ours" />
             <span>Auto-resolve in favor of the current branch</span>
-          </label>
-          <label class="flex cursor-pointer items-center gap-1.5 py-0.5">
+          </Label>
+          <Label class="flex cursor-pointer items-center gap-1.5 py-0.5">
             <input class="m-0 accent-primary" type="radio" bind:group={favor} value="theirs" />
             <span>Auto-resolve in favor of “{branch}”</span>
-          </label>
+          </Label>
         </fieldset>
 
         <div class="actions mt-1 flex justify-end gap-2">

@@ -41,9 +41,9 @@
 
 <Button
   variant="outline"
-  size="xs"
-  class="ai-health {view.tone} h-auto min-h-7 gap-[0.3rem] rounded-full px-[0.55rem] py-[0.1rem] text-[0.6875rem] text-muted-foreground {compact
-    ? 'compact size-7 justify-center gap-0 p-0'
+  size="sm"
+  class="ai-health {view.tone} gap-[0.3rem] rounded-full text-muted-foreground {compact
+    ? 'compact'
     : ''}"
   type="button"
   title={`AI: ${view.detail}`}

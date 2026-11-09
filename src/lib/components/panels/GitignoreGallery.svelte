@@ -90,7 +90,7 @@
 {#if open}
   <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
   <div
-    class="scrim fixed inset-0 z-[70] flex items-center justify-center bg-black/40"
+    class="scrim fixed inset-0 z-70 flex items-center justify-center bg-black/40"
     role="presentation"
     onkeydown={(e) => {
       if (e.key === "Escape") {

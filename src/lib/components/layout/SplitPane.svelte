@@ -104,7 +104,7 @@
   <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
   <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
   <div
-    class="relative z-[1] shrink-0 touch-none outline-none {axis === 'x'
+    class="relative z-1 shrink-0 touch-none outline-none {axis === 'x'
       ? 'mx-[-2px] w-[5px] cursor-col-resize'
       : 'my-[-2px] h-[5px] w-auto cursor-row-resize'} {dragging
       ? 'bg-primary'

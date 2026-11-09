@@ -63,7 +63,7 @@
   class="popout-diff flex h-screen min-h-0 flex-col bg-card text-card-foreground"
 >
   <header
-    class="bar flex flex-none items-center gap-2 border-b border-border bg-popover px-3 py-[0.3rem] text-[0.8125rem]"
+    class="bar flex flex-none items-center gap-2 border-b border-border bg-popover px-2.5 py-1 text-ui-base"
   >
     <span class="title font-medium">Working tree diff</span>
     <span class="spacer flex-1"></span>
@@ -77,7 +77,7 @@
       >
     {/if}
     <Button
-      class="refresh h-auto flex-none rounded-full px-[0.6rem] py-[0.1rem] text-[0.72rem] hover:bg-accent hover:text-card-foreground focus-visible:bg-accent focus-visible:outline-2 focus-visible:outline-primary focus-visible:-outline-offset-2 focus-visible:ring-0"
+      class="refresh h-auto flex-none rounded-full px-2.5 py-px text-ui-meta hover:bg-accent hover:text-card-foreground focus-visible:bg-accent focus-visible:outline-2 focus-visible:outline-primary focus-visible:-outline-offset-2 focus-visible:ring-0"
       variant="outline"
       size="sm"
       type="button"

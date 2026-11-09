@@ -44,6 +44,7 @@
   import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.svelte";
   import Icon from "$lib/components/icons/Icon.svelte";
   import { Spinner } from "$lib/components/ui/spinner/index.js";
+  import EmptyState from "../layout/EmptyState.svelte";
   import { Button } from "$lib/components/ui/button/index.js";
   import { Input } from "$lib/components/ui/input/index.js";
   import { contextMenu, type MenuEntry } from "$lib/components/menu/contextMenuStore.svelte";
@@ -698,45 +699,45 @@
 
   const activeFilePath = $derived(selectedPath);</script>
 
-<div class="files flex h-full min-h-0 min-w-0 flex-col bg-background text-[13px] text-foreground">
+<div class="files flex h-full min-h-0 min-w-0 flex-col bg-background text-ui-base text-foreground">
   <div class="toolbar flex shrink-0 items-center gap-[2px] border-b border-border bg-card px-1.5 py-1">
     <Button
-      class="text-muted-foreground hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-[15px]"
+      class="text-muted-foreground hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-3.5"
       variant="ghost"
-      size="icon-sm"
+      size="icon-xs"
       type="button"
       aria-label="New file"
       title="New file"
       onclick={() => startCreate("file")}
     >
-      <Icon icon={iconAddFile} size={15} />
+      <Icon icon={iconAddFile} size={14} />
     </Button>
     <Button
-      class="text-muted-foreground hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-[15px]"
+      class="text-muted-foreground hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-3.5"
       variant="ghost"
-      size="icon-sm"
+      size="icon-xs"
       type="button"
       aria-label="New folder"
       title="New folder"
       onclick={() => startCreate("dir")}
     >
-      <Icon icon={iconAddFolder} size={15} />
+      <Icon icon={iconAddFolder} size={14} />
     </Button>
     <Button
-      class="text-muted-foreground hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-[15px]"
+      class="text-muted-foreground hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-3.5"
       variant="ghost"
-      size="icon-sm"
+      size="icon-xs"
       type="button"
       aria-label="Refresh"
       title="Refresh tree"
       onclick={() => void refreshTree()}
     >
-      <Icon icon={iconRefresh} size={15} />
+      <Icon icon={iconRefresh} size={14} />
     </Button>
     <Button
-      class="text-muted-foreground hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-[15px]"
+      class="text-muted-foreground hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-3.5"
       variant="ghost"
-      size="icon-sm"
+      size="icon-xs"
       type="button"
       aria-label="Reveal active file"
       title="Reveal the open file in the tree"
@@ -747,14 +748,14 @@
         }
       }}
     >
-      <Icon icon={iconReveal} size={15} />
+      <Icon icon={iconReveal} size={14} />
     </Button>
     <span class="spacer flex-1"></span>
     <div
-      class="filter flex min-w-16 max-w-56 flex-1 items-center gap-1 rounded-full border border-border bg-background px-1.5 py-[2px] text-muted-foreground"
+      class="filter flex min-w-16 max-w-56 flex-1 items-center gap-1 rounded-full border border-border bg-background px-1.5 py-px text-muted-foreground"
       role="search"
     >
-      <Icon icon={iconSearch} size={13} />
+      <Icon icon={iconSearch} size={14} />
       <!-- svelte-ignore a11y_autofocus -->
       <Input
         type="text"
@@ -774,24 +775,24 @@
         }}
       />
       {#if filter !== ""}
-        <span class="fcount flex-none text-[10px] tabular-nums text-muted-foreground">{rows.length}</span>
+        <span class="fcount flex-none text-ui-tiny tabular-nums text-muted-foreground">{rows.length}</span>
       {/if}
     </div>
     <Button
-      class="text-muted-foreground hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-[15px]"
+      class="text-muted-foreground hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-3.5"
       variant="ghost"
-      size="icon-sm"
+      size="icon-xs"
       type="button"
       aria-label="More options"
       title="File icons and ignored files"
       onclick={(event) => overflowMenu(event)}
     >
-      <Icon icon={iconMore} size={15} />
+      <Icon icon={iconMore} size={14} />
     </Button>
   </div>
 
   <div
-    class="tree min-h-0 flex-1 select-none overflow-auto pb-12 outline-none focus-visible:shadow-[inset_0_0_0_2px_var(--ring)]"
+    class="tree min-h-0 flex-1 select-none overflow-auto pb-3 outline-none focus-visible:shadow-[inset_0_0_0_2px_var(--ring)]"
     role="tree"
     aria-label="Repository files"
     tabindex="0"
@@ -800,11 +801,11 @@
     onkeydown={onTreeKeydown}
   >
     {#if rootLoading && rows.length === 0}
-      <p class="state inline-flex items-center gap-1.5 p-4 text-xs text-muted-foreground" role="status"><Spinner class="size-[14px]" role="presentation" aria-hidden="true" /> Reading files…</p>
+      <p class="state inline-flex items-center gap-1.5 p-4 text-xs text-muted-foreground" role="status"><Spinner class="size-4" role="presentation" aria-hidden="true" /> Reading files…</p>
     {:else if loadError !== null && rows.length === 0}
       <p class="state state-error inline-flex items-center gap-1.5 p-4 text-xs text-destructive" role="alert">{loadError}</p>
     {:else if rows.length === 0}
-      <p class="state inline-flex items-center gap-1.5 p-4 text-xs text-muted-foreground">{filter !== "" ? "No matches" : "Empty repository"}</p>
+      <EmptyState title={filter !== "" ? "No matches" : "Empty repository"} />
     {:else}
       {#if virtualized}
         <div class="row-spacer w-full" style={`height:${topSpacer}px`}></div>
@@ -836,7 +837,7 @@
               <Button
                 variant="ghost"
                 size="icon-xs"
-                class="chev-btn size-3.5 rounded-none p-0 text-muted-foreground hover:bg-transparent hover:text-foreground dark:hover:bg-transparent [&_svg:not([class*='size-'])]:size-[13px]"
+                class="chev-btn size-3.5 rounded-none p-0 text-muted-foreground hover:bg-transparent hover:text-foreground dark:hover:bg-transparent [&_svg:not([class*='size-'])]:size-3.5"
                 tabindex={-1}
                 aria-label={node.expanded ? `Collapse ${node.name}` : `Expand ${node.name}`}
                 onclick={(event) => {
@@ -844,7 +845,7 @@
                   toggleDir(node);
                 }}
               >
-                <Icon icon={node.expanded ? iconChevronDown : iconChevronRight} size={13} />
+                <Icon icon={node.expanded ? iconChevronDown : iconChevronRight} size={14} />
               </Button>
             {/if}
           </span>
@@ -859,14 +860,14 @@
           </span>
           <span class="name min-w-0 flex-1 overflow-hidden text-ellipsis" title={node.path}>{node.name}</span>
           {#if node.kind === "file" && node.size !== null && !isDir}
-            <span class="size flex-none text-[10px] tabular-nums text-muted-foreground">{formatSize(node.size)}</span>
+            <span class="size flex-none text-ui-tiny tabular-nums text-muted-foreground">{formatSize(node.size)}</span>
           {/if}
           {#if node.truncated}
             <span class="trunc flex-none text-muted-foreground" title="Listing capped — some entries are missing">…</span>
           {/if}
           {#if badge}
             <span
-              class="badge h-[7px] w-[7px] flex-none rounded-full"
+              class="badge size-2 flex-none rounded-full"
               title={`Git: ${badge}`}
               style={`background:${BADGE_VAR[badge]}`}
             ></span>

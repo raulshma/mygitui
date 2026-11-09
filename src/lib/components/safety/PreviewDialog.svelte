@@ -80,7 +80,7 @@
   <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
   <Dialog.Overlay class="scrim bg-black/40" role="presentation" />
   <Dialog.Content
-    class="dialog flex max-h-[calc(100vh-4rem)] w-[min(30rem,calc(100vw-2rem))] max-w-none flex-col gap-0 rounded-lg bg-card px-6 py-5 text-sm text-popover-foreground shadow-xl sm:max-w-none"
+    class="dialog flex max-h-[calc(100vh-4rem)] w-[min(30rem,calc(100vw-2rem))] max-w-none flex-col text-sm text-popover-foreground sm:max-w-none"
     role="dialog"
     aria-modal="true"
     aria-labelledby="preview-title"
@@ -97,7 +97,7 @@
   >
     <Dialog.Title
       id="preview-title"
-      class={"mb-2 mt-0 text-lg font-medium " +
+      class={"mb-2 mt-0 font-medium " +
         (dangerInfo.level === "danger" ? "danger text-destructive" : "")}
     >
       {title ?? `${dangerInfo.verb} — preview`}
@@ -106,9 +106,9 @@
     <p id="preview-summary" class="mb-2 mt-0 whitespace-pre-line text-foreground [overflow-wrap:anywhere]">{info.summary}</p>
 
     {#if lines.length > 1}
-      <ul class="mb-3 mt-0 max-h-48 list-none overflow-y-auto rounded-sm border border-border bg-background px-[0.6rem] py-[0.35rem] font-mono text-[0.72rem] text-muted-foreground" role="list" aria-label="Affected files">
+      <ul class="mb-3 mt-0 max-h-48 list-none overflow-y-auto rounded-sm border border-border bg-background px-[0.6rem] py-[0.35rem] font-mono text-ui-meta text-muted-foreground" role="list" aria-label="Affected files">
         {#each lines.slice(1) as line, i (i)}
-          <li class="py-[0.1rem] [overflow-wrap:anywhere]">{line}</li>
+          <li class="py-px [overflow-wrap:anywhere]">{line}</li>
         {/each}
       </ul>
     {/if}
@@ -131,7 +131,7 @@
           autocomplete="off"
           aria-label={`Type ${confirmPhrase} to confirm`}
           placeholder={confirmPhrase}
-          class="h-auto rounded-sm px-[0.6rem] py-[0.45rem] font-mono text-sm focus-visible:-outline-offset-1 focus-visible:outline-2 focus-visible:outline-ring"
+          class="rounded-sm font-mono focus-visible:-outline-offset-1 focus-visible:outline-2 focus-visible:outline-ring"
           bind:value={phrase}
           bind:ref={phraseInput}
         />

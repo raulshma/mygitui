@@ -67,7 +67,7 @@
   <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
   <Dialog.Overlay class="scrim bg-black/40" role="presentation" />
   <Dialog.Content
-    class="dialog w-[24rem] max-w-none gap-0 rounded-lg bg-card px-6 py-5 text-sm text-popover-foreground shadow-xl sm:max-w-none"
+    class="dialog w-[24rem] max-w-none text-sm text-popover-foreground sm:max-w-none"
     role="dialog"
     aria-modal="true"
     aria-labelledby="prompt-title"
@@ -87,12 +87,12 @@
         submit();
       }}
     >
-      <Dialog.Title id="prompt-title" class="m-0 mb-2 text-lg font-medium">{title}</Dialog.Title>
+      <Dialog.Title id="prompt-title" class="m-0 mb-2 font-medium">{title}</Dialog.Title>
       {#if message}<p class="m-0 mb-4 text-muted-foreground [overflow-wrap:anywhere]">{message}</p>{/if}
       <Input
         bind:ref={inputEl}
         bind:value
-        class="h-auto rounded-sm px-[0.6rem] py-[0.45rem] text-sm focus-visible:-outline-offset-1 focus-visible:outline-2 focus-visible:outline-ring"
+        class="rounded-sm focus-visible:-outline-offset-1 focus-visible:outline-2 focus-visible:outline-ring"
         type="text"
         {placeholder}
         aria-label={title}

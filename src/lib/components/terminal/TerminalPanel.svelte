@@ -16,6 +16,7 @@
   import { FitAddon } from "@xterm/addon-fit";
   import { WebLinksAddon } from "@xterm/addon-web-links";
   import {
+    TERMINAL_FONT_SIZE,
     terminals,
     terminalTheme,
     type TerminalHandle,
@@ -26,7 +27,7 @@
     const term = new Terminal({
       fontFamily:
         'ui-monospace, Consolas, "Cascadia Mono", "Courier New", monospace',
-      fontSize: 13,
+      fontSize: TERMINAL_FONT_SIZE,
       scrollback: 5000,
       theme: terminalTheme() as ITheme,
     });
@@ -132,14 +133,14 @@
 </script>
 
 <section class="terminal-panel flex h-full w-full min-h-0 min-w-0 flex-col bg-background text-foreground" aria-label="Terminal">
-  <header class="term-head flex flex-none items-center gap-2 border-b border-border bg-card px-3 py-[0.2rem] text-xs">
+  <header class="term-head flex flex-none items-center gap-2 border-b border-border bg-card px-2.5 py-1 text-ui-base">
     <span class="term-title font-medium">Shell</span>
     {#if statusLabel !== ""}
       <span class="term-status text-muted-foreground">{statusLabel}</span>
     {/if}
     <span class="term-actions ml-auto flex gap-1">
       <Button
-        class="term-btn h-auto whitespace-nowrap px-[0.45rem] py-[0.1rem] text-[0.6875rem] hover:bg-accent hover:text-primary focus-visible:bg-accent focus-visible:text-primary"
+        class="term-btn whitespace-nowrap hover:bg-accent hover:text-primary focus-visible:bg-accent focus-visible:text-primary"
         variant="outline"
         size="xs"
         type="button"
@@ -150,7 +151,7 @@
         Restart
       </Button>
       <Button
-        class="term-btn danger h-auto whitespace-nowrap px-[0.45rem] py-[0.1rem] text-[0.6875rem] text-destructive hover:bg-accent hover:text-destructive focus-visible:bg-accent focus-visible:text-destructive"
+        class="term-btn danger whitespace-nowrap text-destructive hover:bg-accent hover:text-destructive focus-visible:bg-accent focus-visible:text-destructive"
         variant="outline"
         size="xs"
         type="button"
@@ -164,16 +165,16 @@
   </header>
 
   {#if !supported}
-    <div class="term-placeholder flex flex-1 flex-col items-center justify-center gap-2 p-4 text-center text-[0.8125rem] text-muted-foreground">Terminal requires the desktop app.</div>
+    <div class="term-placeholder flex flex-1 flex-col items-center justify-center gap-2 p-4 text-center text-ui-base text-muted-foreground">Terminal requires the desktop app.</div>
   {:else if entry?.status === "exited" || entry?.status === "failed"}
-    <div class="term-placeholder flex flex-1 flex-col items-center justify-center gap-2 p-4 text-center text-[0.8125rem] text-muted-foreground">
+    <div class="term-placeholder flex flex-1 flex-col items-center justify-center gap-2 p-4 text-center text-ui-base text-muted-foreground">
       <p class="m-0">
         {entry?.status === "failed"
           ? `Could not start the terminal: ${entry?.error ?? "unknown error"}`
           : "The terminal session ended."}
       </p>
       <Button
-        class="term-btn h-auto whitespace-nowrap px-[0.45rem] py-[0.1rem] text-[0.6875rem] hover:bg-accent hover:text-primary focus-visible:bg-accent focus-visible:text-primary"
+        class="term-btn whitespace-nowrap hover:bg-accent hover:text-primary focus-visible:bg-accent focus-visible:text-primary"
         variant="outline"
         size="xs"
         type="button"
@@ -183,7 +184,7 @@
       </Button>
     </div>
   {:else if entry?.status === "unavailable"}
-    <div class="term-placeholder flex flex-1 flex-col items-center justify-center gap-2 p-4 text-center text-[0.8125rem] text-muted-foreground">Terminal is not available.</div>
+    <div class="term-placeholder flex flex-1 flex-col items-center justify-center gap-2 p-4 text-center text-ui-base text-muted-foreground">Terminal is not available.</div>
   {:else}
     <!-- svelte-ignore a11y_click_events_have_key_events -->
     <!-- svelte-ignore a11y_no_static_element_interactions -->

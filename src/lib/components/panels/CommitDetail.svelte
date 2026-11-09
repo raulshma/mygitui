@@ -207,14 +207,14 @@
 </script>
 
 <div class="detail flex min-h-0 flex-col bg-card" aria-label="Commit detail">
-  <header class="dhead flex items-center gap-2 border-b border-border bg-popover px-3 py-1 text-[0.8125rem]">
+  <header class="dhead flex items-center gap-2 border-b border-border bg-popover px-2.5 py-1 text-ui-base">
     {#if info}
       <span class="dsha font-mono text-primary">{info.sha.slice(0, 7)}</span>
       <span class="dsummary min-w-0 flex-1 truncate font-medium text-foreground" title={info.summary}>{info.summary}</span>
       {#if root !== ""}
         <!-- M12: bookmark star (same store mutation as the menu item). -->
         <Button
-          class="h-auto flex-none rounded-sm px-[0.45rem] py-[0.05rem] text-[0.8125rem] leading-[1.3] font-normal {bookmarked
+          class="h-auto flex-none rounded-sm px-2 py-[0.05rem] text-ui-base leading-[1.3] font-normal {bookmarked
             ? 'border-primary bg-transparent text-primary'
             : 'border-border bg-transparent text-muted-foreground'}"
           variant="outline"
@@ -234,7 +234,7 @@
       {/if}
       {#if onPopout}
         <Button
-          class="h-auto rounded-sm px-[0.4rem] py-[0.1rem] text-[0.72rem] font-normal text-muted-foreground"
+          class="h-auto rounded-sm px-2 py-px text-ui-meta font-normal text-muted-foreground"
           variant="outline"
           title="Open this commit's detail in its own window"
           onclick={onPopout}
@@ -247,26 +247,26 @@
       <span class="dsummary min-w-0 flex-1 truncate font-medium text-foreground">{compare?.base} → {compare?.target}</span>
     {/if}
     {#if onClose}
-      <Button class="h-auto rounded-sm px-[0.4rem] py-[0.1rem] text-[0.72rem] font-normal text-muted-foreground" variant="outline" onclick={onClose} aria-label="Close detail">
+      <Button class="h-auto rounded-sm px-2 py-px text-ui-meta font-normal text-muted-foreground" variant="outline" onclick={onClose} aria-label="Close detail">
         ×
       </Button>
     {/if}
   </header>
   {#if info}
-    <div class="cactions flex flex-none flex-wrap items-center gap-1.5 border-b border-border bg-muted/50 px-3 py-1 text-[0.72rem]" role="toolbar" aria-label="Commit actions">
+    <div class="cactions flex flex-none flex-wrap items-center gap-1.5 border-b border-border bg-muted/50 px-3 py-1 text-ui-meta" role="toolbar" aria-label="Commit actions">
       {#if onCherryPick}
-        <Button class="h-auto rounded-full px-2.5 py-[0.18rem] text-[0.72rem] font-normal" variant="secondary" onclick={onCherryPick} disabled={actionBusy}>
+        <Button class="h-auto rounded-full px-2.5 py-0.5 text-ui-meta font-normal" variant="secondary" onclick={onCherryPick} disabled={actionBusy}>
           Cherry-pick{actionCount > 1 ? ` (${actionCount})` : ""}
         </Button>
       {/if}
       {#if onRevert}
-        <Button class="h-auto rounded-full px-2.5 py-[0.18rem] text-[0.72rem] font-normal" variant="secondary" onclick={onRevert} disabled={actionBusy}>
+        <Button class="h-auto rounded-full px-2.5 py-0.5 text-ui-meta font-normal" variant="secondary" onclick={onRevert} disabled={actionBusy}>
           Revert{actionCount > 1 ? ` (${actionCount})` : ""}
         </Button>
       {/if}
       {#if onRebaseFromHere}
         <Button
-          class="h-auto rounded-full px-2.5 py-[0.18rem] text-[0.72rem] font-normal"
+          class="h-auto rounded-full px-2.5 py-0.5 text-ui-meta font-normal"
           variant="secondary"
           onclick={onRebaseFromHere}
           disabled={actionBusy}
@@ -275,8 +275,8 @@
           Rebase from here
         </Button>
       {/if}
-      <Button class="h-auto rounded-full px-2.5 py-[0.18rem] text-[0.72rem] font-normal" variant="secondary" onclick={copySha}>Copy sha</Button>
-      <span class="cinfo ml-auto text-[0.6875rem] text-muted-foreground" role="status">
+      <Button class="h-auto rounded-full px-2.5 py-0.5 text-ui-meta font-normal" variant="secondary" onclick={copySha}>Copy sha</Button>
+      <span class="cinfo ml-auto text-ui-micro text-muted-foreground" role="status">
         {#if actionCount > 1}
           {actionCount} commits selected (shift-click to extend)
         {/if}
@@ -287,10 +287,10 @@
     {#snippet filesPane()}
     <div class="dfiles flex min-w-0 flex-1 flex-col">
       {#if blameTarget}
-        <div class="dtab flex flex-none items-center gap-2 border-b border-border bg-muted py-0.5 pr-2 pl-3 text-[0.72rem] text-foreground">
+        <div class="dtab flex flex-none items-center gap-2 border-b border-border bg-muted py-0.5 pr-2 pl-3 text-ui-meta text-foreground">
           <span class="min-w-0 flex-1 truncate font-mono">Blame: {blameTarget.path}</span>
           <Button
-            class="h-auto rounded-sm px-[0.4rem] py-[0.1rem] text-[0.72rem] font-normal text-muted-foreground"
+            class="h-auto rounded-sm px-2 py-px text-ui-meta font-normal text-muted-foreground"
             variant="outline"
             onclick={() => (blameTarget = null)}
             aria-label="Close blame">×
@@ -300,25 +300,25 @@
           <BlameView {repoId} path={blameTarget.path} from={blameTarget.from} />
         </div>
       {:else if compare}
-        <div class="dtab flex flex-none items-center gap-2 border-b border-border bg-muted py-0.5 pr-2 pl-3 text-[0.72rem] text-foreground">
+        <div class="dtab flex flex-none items-center gap-2 border-b border-border bg-muted py-0.5 pr-2 pl-3 text-ui-meta text-foreground">
           <span class="min-w-0 flex-1 truncate font-mono">Compare: {compare.base} → {compare.target} ({compare.files.length} files)</span>
           {#if onCloseCompare}
-            <Button class="h-auto rounded-sm px-[0.4rem] py-[0.1rem] text-[0.72rem] font-normal text-muted-foreground" variant="outline" onclick={onCloseCompare} aria-label="Close compare">×</Button>
+            <Button class="h-auto rounded-sm px-2 py-px text-ui-meta font-normal text-muted-foreground" variant="outline" onclick={onCloseCompare} aria-label="Close compare">×</Button>
           {/if}
         </div>
         <div class="dtabbody flex min-h-0 flex-1 flex-col">
           <DiffViewer files={compare.files} />
         </div>
       {:else if detailLoading}
-        <p class="dstate m-auto text-[0.8125rem] text-muted-foreground" role="status">Loading diff…</p>
+        <p class="dstate m-auto text-ui-base text-muted-foreground" role="status">Loading diff…</p>
       {:else if !info || info.parents.length === 0}
-        <p class="dstate m-auto text-[0.8125rem] text-muted-foreground">Root commit — nothing to diff against.</p>
+        <p class="dstate m-auto text-ui-base text-muted-foreground">Root commit — nothing to diff against.</p>
       {:else if detailFiles === null}
-        <p class="dstate m-auto text-[0.8125rem] text-muted-foreground">Diff unavailable.</p>
+        <p class="dstate m-auto text-ui-base text-muted-foreground">Diff unavailable.</p>
       {:else if detailFiles.length === 0}
-        <p class="dstate m-auto text-[0.8125rem] text-muted-foreground">No changes against first parent.</p>
+        <p class="dstate m-auto text-ui-base text-muted-foreground">No changes against first parent.</p>
       {:else}
-        <ul class="filelist m-0 max-h-[30%] flex-none list-none overflow-y-auto border-b border-border py-0.5 text-[0.72rem]" aria-label="Changed files">
+        <ul class="filelist m-0 max-h-[30%] flex-none list-none overflow-y-auto border-b border-border py-0.5 text-ui-meta" aria-label="Changed files">
           {#each detailFiles as file (file.path)}
             <li
               class="flex items-center gap-2 px-3 py-0.5"
@@ -335,9 +335,9 @@
                   <span class="muted text-muted-foreground">binary</span>
                 {/if}
               </span>
-              <Button class="h-auto rounded-sm px-[0.4rem] py-[0.1rem] text-[0.72rem] font-normal text-muted-foreground" variant="outline" onclick={() => openBlame(file.path)}>Blame</Button>
+              <Button class="h-auto rounded-sm px-2 py-px text-ui-meta font-normal text-muted-foreground" variant="outline" onclick={() => openBlame(file.path)}>Blame</Button>
               <Button
-                class="h-auto rounded-sm px-[0.4rem] py-[0.1rem] text-[0.72rem] font-normal text-muted-foreground"
+                class="h-auto rounded-sm px-2 py-px text-ui-meta font-normal text-muted-foreground"
                 variant="outline"
                 title="History of {file.path} (popout)"
                 onclick={() =>
@@ -367,27 +367,27 @@
           {#if info}
         <aside class="dmeta min-w-0 flex-1 overflow-y-auto px-3 py-2 text-xs">
             <dl class="m-0 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
-              <dt class="pt-0.5 text-[0.6875rem] uppercase tracking-[0.02em] text-muted-foreground">Author</dt>
+              <dt class="pt-0.5 text-ui-micro uppercase tracking-[0.02em] text-muted-foreground">Author</dt>
               <dd class="m-0 text-foreground">
                 {info.author.name}
                 <span class="muted text-muted-foreground">&lt;{info.author.email}&gt;</span><br />
                 {formatDateTime(info.author.time)}
                 <span class="muted text-muted-foreground">({formatRelativeTime(info.author.time)})</span>
               </dd>
-              <dt class="pt-0.5 text-[0.6875rem] uppercase tracking-[0.02em] text-muted-foreground">Committer</dt>
+              <dt class="pt-0.5 text-ui-micro uppercase tracking-[0.02em] text-muted-foreground">Committer</dt>
               <dd class="m-0 text-foreground">
                 {info.committer.name}<br />
                 {formatDateTime(info.committer.time)}
                 <span class="muted text-muted-foreground">({formatRelativeTime(info.committer.time)})</span>
               </dd>
-              <dt class="pt-0.5 text-[0.6875rem] uppercase tracking-[0.02em] text-muted-foreground">Parents</dt>
+              <dt class="pt-0.5 text-ui-micro uppercase tracking-[0.02em] text-muted-foreground">Parents</dt>
               <dd class="m-0 text-foreground">
                 {#if info.parents.length === 0}
                   <em>root</em>
                 {:else}
                   {#each info.parents as p (p)}
                     <Button
-                      class="mr-1 h-auto rounded-sm px-[0.3rem] py-[0.05rem] font-mono text-[0.6875rem] font-normal"
+                      class="mr-1 h-auto rounded-sm px-[0.3rem] py-[0.05rem] font-mono text-ui-micro font-normal"
                       variant="outline"
                       onclick={() => onSelectParent?.(p)}
                       disabled={!onSelectParent}
@@ -398,7 +398,7 @@
                   {/each}
                 {/if}
               </dd>
-              <dt class="pt-0.5 text-[0.6875rem] uppercase tracking-[0.02em] text-muted-foreground">Describe</dt>
+              <dt class="pt-0.5 text-ui-micro uppercase tracking-[0.02em] text-muted-foreground">Describe</dt>
               <dd class="m-0 text-foreground">
                 {#if describeText}
                   <code>{describeText}</code>
@@ -407,14 +407,14 @@
                 {/if}
               </dd>
               <!-- M12: commit-signature verification badge. -->
-              <dt class="pt-0.5 text-[0.6875rem] uppercase tracking-[0.02em] text-muted-foreground">Signature</dt>
+              <dt class="pt-0.5 text-ui-micro uppercase tracking-[0.02em] text-muted-foreground">Signature</dt>
               <dd class="m-0 text-foreground"><SignatureBadge {repoId} sha={info.sha} /></dd>
               {#if info.refs.length > 0}
-                <dt class="pt-0.5 text-[0.6875rem] uppercase tracking-[0.02em] text-muted-foreground">Refs</dt>
+                <dt class="pt-0.5 text-ui-micro uppercase tracking-[0.02em] text-muted-foreground">Refs</dt>
                 <dd class="drefs m-0 flex flex-wrap gap-1 text-foreground">
                   {#each info.refs as ref (ref)}
                     {@const kind = classifyRef(ref)}
-                    <span class="ref ref-{kind} inline-flex max-w-36 items-center overflow-hidden whitespace-nowrap rounded-sm border px-[0.35rem] text-[0.6875rem] leading-[1.4] text-ellipsis {kind === "local"
+                    <span class="ref ref-{kind} inline-flex max-w-36 items-center overflow-hidden whitespace-nowrap rounded-sm border px-1 text-ui-micro leading-[1.4] text-ellipsis {kind === "local"
                       ? "border-transparent bg-primary/10 text-primary"
                       : kind === "remote"
                         ? "border-border text-muted-foreground"
@@ -425,7 +425,7 @@
                 </dd>
               {/if}
             </dl>
-            <pre class="msg mt-2 whitespace-pre-wrap rounded-sm border border-border bg-muted p-2 font-mono text-[0.72rem] text-foreground [overflow-wrap:anywhere]">{info.message}</pre>
+            <pre class="msg mt-2 whitespace-pre-wrap rounded-sm border border-border bg-muted p-2 font-mono text-ui-meta text-foreground [overflow-wrap:anywhere]">{info.message}</pre>
           </aside>
           {/if}
             {/snippet}

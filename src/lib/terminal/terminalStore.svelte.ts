@@ -44,6 +44,13 @@ import { toast } from "$lib/toast";
 /** Debounce window between a panel fit and the `pty_resize` call. */
 export const RESIZE_DEBOUNCE_MS = 100;
 
+/**
+ * xterm font size (px) used by the panel's terminal factory — the terminal's
+ * fixed-density mono grid (kept alongside the font stack, which stays in
+ * TerminalPanel's factory).
+ */
+export const TERMINAL_FONT_SIZE = 13;
+
 /** Lifecycle of a repo's terminal (drives the panel's UI states). */
 export type TerminalStatus =
   | /** pty_create in flight; the terminal exists but has no pty yet. */

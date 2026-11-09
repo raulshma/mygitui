@@ -156,7 +156,7 @@
   <!-- svelte-ignore a11y_click_events_have_key_events -->
   <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
   <Dialog.Content
-    class="sdlg-dialog dialog max-h-[84vh] w-full gap-4 overflow-y-auto px-6 py-6 sm:max-w-[30rem]"
+    class="sdlg-dialog dialog max-h-[84vh] w-full gap-4 overflow-y-auto sm:max-w-[30rem]"
     aria-describedby={undefined}
     showCloseButton={false}
     bind:ref={dialogEl}
@@ -361,16 +361,16 @@
       </div>
 
       {#if error}
-        <p class="error text-destructive m-0 text-[0.8125rem]" role="alert">
+        <p class="error text-destructive m-0 text-ui-base" role="alert">
           {error}
         </p>
       {/if}
 
       <div class="actions flex justify-end gap-2">
-        <Button class="secondary" variant="outline" size="sm" type="button" onclick={close}>
+        <Button class="secondary" variant="outline" type="button" onclick={close}>
           Cancel
         </Button>
-        <Button class="primary" size="sm" type="submit" disabled={!canSave}>
+        <Button class="primary" type="submit" disabled={!canSave}>
           {busy ? "Saving…" : edit !== null ? "Save changes" : "Add device"}
         </Button>
       </div>

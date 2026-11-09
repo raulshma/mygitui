@@ -113,7 +113,7 @@
   <Badge
     variant="outline"
     class={"sig-badge " + view.tone + " " + TONE_CLASS[view.tone] +
-      " h-auto flex-none items-center gap-1 rounded-full px-[0.45rem] text-[0.625rem] leading-[1.5] tracking-[0.02em] whitespace-nowrap select-none"}
+      " h-auto flex-none items-center gap-1 rounded-full px-2 text-ui-tiny leading-[1.5] tracking-[0.02em] whitespace-nowrap select-none"}
     title={view.title}
     data-sha={sha}
   >{view.label}</Badge>

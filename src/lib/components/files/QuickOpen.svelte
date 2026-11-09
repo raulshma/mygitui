@@ -151,12 +151,12 @@
 </script>
 
 <div
-  class="scrim fixed inset-0 z-[90] flex items-start justify-center bg-black/32 px-4 pt-[10vh] pb-4"
+  class="scrim fixed inset-0 z-90 flex items-start justify-center bg-black/32 px-4 pt-[10vh] pb-4"
   role="presentation"
   onclick={onScrimClick}
 >
   <div
-    class="panel flex max-h-[60vh] w-[min(34rem,100%)] flex-col overflow-hidden rounded-md border border-border bg-popover shadow-[0_12px_40px_rgb(0_0_0/0.35)]"
+    class="panel flex max-h-[55vh] w-[min(34rem,100%)] flex-col overflow-hidden rounded-md border border-border bg-popover shadow-[0_12px_40px_rgb(0_0_0/0.35)]"
     role="dialog"
     aria-modal="true"
     aria-label="Go to file"
@@ -168,13 +168,13 @@
     }}
   >
     <div
-      class="inputrow flex flex-none items-center gap-[0.45rem] border-b border-border px-3 py-[0.55rem] text-muted-foreground"
+      class="inputrow flex flex-none items-center gap-[0.45rem] border-b border-border px-3 py-2.5 text-muted-foreground"
       role="combobox"
       aria-expanded={hits.length > 0}
       aria-controls="quick-open-list"
       aria-haspopup="listbox"
     >
-      <Icon icon={iconSearch} size={15} />
+      <Icon icon={iconSearch} size={14} />
       <input
         bind:this={inputEl}
         bind:value={query}
@@ -187,14 +187,14 @@
         class="min-w-0 flex-1 border-0 bg-transparent font-sans text-sm text-foreground outline-none"
       />
       {#if loading}
-        <Spinner class="size-[13px]" role="presentation" aria-hidden="true" />
+        <Spinner class="size-4" role="presentation" aria-hidden="true" />
       {/if}
     </div>
 
     {#if errorText !== ""}
-      <p class="state state-error p-[0.9rem] text-center text-[0.8125rem] text-destructive" role="alert">{errorText}</p>
+      <p class="state state-error p-[0.9rem] text-center text-ui-base text-destructive" role="alert">{errorText}</p>
     {:else if !loading && hits.length === 0}
-      <p class="state p-[0.9rem] text-center text-[0.8125rem] text-muted-foreground">No matching files</p>
+      <p class="state p-[0.9rem] text-center text-ui-base text-muted-foreground">No matching files</p>
     {:else if visible.length > 0}
       <ul
         class="list m-0 min-h-0 flex-1 list-none overflow-y-auto p-1"
@@ -206,7 +206,7 @@
           <!-- svelte-ignore a11y_click_events_have_key_events -- the
                input owns all keyboard navigation (combobox pattern) -->
           <li
-            class="row flex cursor-pointer items-center gap-[0.45rem] rounded-sm px-2 py-[0.28rem] text-[0.8125rem] text-foreground {i === safeSelected
+            class="row flex cursor-pointer items-center gap-[0.45rem] rounded-sm px-2 py-0.5 text-ui-base text-foreground {i === safeSelected
               ? 'bg-primary/15'
               : ''}"
             class:sel={i === safeSelected}
@@ -231,7 +231,7 @@
         {/each}
       </ul>
       {#if hits.length > visible.length}
-        <p class="more m-0 flex-none border-t border-border px-3 py-[0.3rem] text-center text-[0.6875rem] text-muted-foreground">{hits.length} matches — keep typing to narrow</p>
+        <p class="more m-0 flex-none border-t border-border px-3 py-[0.3rem] text-center text-ui-micro text-muted-foreground">{hits.length} matches — keep typing to narrow</p>
       {/if}
     {/if}
   </div>

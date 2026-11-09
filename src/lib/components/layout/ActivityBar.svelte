@@ -172,7 +172,7 @@
       oncontextmenu={(event) => onRailContext(event, panel)}
     >
       <svg
-        class="h-[1.15rem] w-[1.15rem]"
+        class="h-5 w-5"
         viewBox="0 0 24 24"
         fill="none"
         stroke="currentColor"
@@ -185,7 +185,7 @@
       </svg>
       {#if count > 0}
         <span
-          class="activity-badge absolute right-[0.05rem] top-[0.1rem] grid h-[0.8rem] min-w-[0.8rem] place-items-center rounded-full border-2 border-popover bg-primary px-[0.14rem] text-[0.5rem] font-bold leading-none tracking-[-0.02em] text-primary-foreground tabular-nums [.active_&]:border-accent"
+          class="activity-badge absolute right-[0.05rem] top-[0.1rem] grid h-4 min-w-[0.8rem] place-items-center rounded-full border-2 border-popover bg-primary px-[0.14rem] text-ui-tiny font-bold leading-none tracking-[-0.02em] text-primary-foreground tabular-nums [.active_&]:border-accent"
           aria-hidden="true"
           >{badgeText(count)}</span
         >
@@ -233,7 +233,7 @@
       onclick={onHistory}
     >
       <svg
-        class="h-[1.15rem] w-[1.15rem]"
+        class="h-5 w-5"
         viewBox="0 0 24 24"
         fill="none"
         stroke="currentColor"
@@ -258,7 +258,7 @@
       onclick={onToggleCollapse}
     >
       <svg
-        class="h-[1.15rem] w-[1.15rem]"
+        class="h-5 w-5"
         viewBox="0 0 24 24"
         fill="none"
         stroke="currentColor"

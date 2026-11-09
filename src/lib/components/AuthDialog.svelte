@@ -61,13 +61,13 @@
 
 <Dialog.Root {open} {onOpenChange}>
   <Dialog.Content
-    class="sdlg-dialog dialog w-full gap-4 px-6 py-5 sm:max-w-[26rem]"
+    class="sdlg-dialog dialog w-full gap-4 sm:max-w-[26rem]"
     interactOutsideBehavior="ignore"
     showCloseButton={false}
     aria-describedby="auth-prompt"
   >
     <Dialog.Header>
-      <Dialog.Title id="auth-title" class="title text-lg font-medium">
+      <Dialog.Title id="auth-title" class="title font-medium">
         Authentication required
       </Dialog.Title>
       <Dialog.Description id="auth-prompt" class="prompt wrap-anywhere">
@@ -75,7 +75,7 @@
       </Dialog.Description>
     </Dialog.Header>
     <p
-      class="meta text-muted-foreground truncate font-mono text-[0.72rem]"
+      class="meta text-muted-foreground truncate font-mono text-ui-meta"
       title={request?.url}
     >
       {request?.url}
@@ -121,13 +121,12 @@
       </Label>
 
       <div class="actions mt-1 flex justify-end gap-2">
-        <Button class="primary" size="sm" type="submit">
+        <Button class="primary" type="submit">
           {isPassphrase ? "Unlock" : "Sign in"}
         </Button>
         <Button
           class="secondary"
           variant="outline"
-          size="sm"
           type="button"
           onclick={() => void cancel()}
         >

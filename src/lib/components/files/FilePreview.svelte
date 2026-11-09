@@ -100,9 +100,9 @@
 <div class="preview flex h-full min-h-0 flex-col items-center justify-center gap-[0.4rem] overflow-auto bg-card p-6" role="figure" aria-label="Preview of {path}">
   {#if isImage}
     {#if phase === "loading"}
-      <p class="state inline-flex items-center gap-[0.4rem] text-[0.8125rem] text-muted-foreground" role="status"><Spinner class="size-[14px]" role="presentation" aria-hidden="true" /> Loading image…</p>
+      <p class="state inline-flex items-center gap-[0.4rem] text-ui-base text-muted-foreground" role="status"><Spinner class="size-3" role="presentation" aria-hidden="true" /> Loading image…</p>
     {:else if phase === "error"}
-      <p class="state state-error inline-flex items-center gap-[0.4rem] text-[0.8125rem] text-destructive" role="alert">{errorText}</p>
+      <p class="state state-error inline-flex items-center gap-[0.4rem] text-ui-base text-destructive" role="alert">{errorText}</p>
     {:else if url !== null}
       <!-- svelte-ignore a11y_img_redundant_alt -->
       <img
@@ -114,7 +114,7 @@
           naturalSize = { w: el.naturalWidth, h: el.naturalHeight };
         }}
       />
-      <p class="caption m-0 text-[0.6875rem] tabular-nums text-muted-foreground">
+      <p class="caption m-0 text-ui-micro tabular-nums text-muted-foreground">
         {formatSize(meta.size)}{naturalSize ? ` · ${naturalSize.w}×${naturalSize.h}` : ""}
       </p>
     {/if}
@@ -125,7 +125,7 @@
         {path} · {formatSize(meta.size)}{meta.readonly ? " · read-only" : ""}
       </p>
       <Button
-        class="cbtn mt-[0.3rem] h-auto gap-[0.35rem] rounded-full px-[0.85rem] py-[0.3rem] text-[0.78rem] font-normal"
+        class="cbtn mt-[0.3rem] h-auto gap-[0.35rem] rounded-full px-3 py-1 text-ui-meta font-normal"
         variant="outline"
         type="button"
         onclick={openExternally}

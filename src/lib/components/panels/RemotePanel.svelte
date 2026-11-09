@@ -38,6 +38,7 @@
   import Icon from "$lib/components/icons/Icon.svelte";
   import { Switch } from "$lib/components/ui/switch/index.js";
   import { Progress } from "$lib/components/ui/progress";
+  import EmptyState from "../layout/EmptyState.svelte";
   import { Button } from "$lib/components/ui/button/index.js";
   import { Badge } from "$lib/components/ui/badge/index.js";
   import { Input } from "$lib/components/ui/input/index.js";
@@ -406,7 +407,7 @@
   }
 </script>
 
-<aside class="remote-panel flex flex-col min-h-0 text-[13px]" aria-label="Remotes">
+<aside class="remote-panel flex flex-col min-h-0 text-ui-base" aria-label="Remotes">
   <div class="toolbar flex shrink-0 items-center gap-3 px-2 py-1.5">
     <Button
       class="border-border text-muted-foreground hover:border-primary hover:bg-accent hover:text-accent-foreground"
@@ -431,7 +432,7 @@
         onValueChange={(value) => autofetch.setInterval(repoRoot, Number(value))}
       >
         <Select.Trigger
-          class="max-w-[12rem] h-[1.5rem] rounded border-border bg-background dark:bg-background px-1.5 py-0 text-xs text-foreground gap-1"
+          class="max-w-[12rem] h-6 rounded border-border bg-background dark:bg-background px-1.5 py-0 text-ui-meta text-foreground gap-1"
           aria-label="Auto-fetch interval in minutes"
         >
           <Select.Value />
@@ -467,7 +468,7 @@
           : "Pull is unavailable without a current branch"}
         onclick={onBarPull}
       >
-        {#if behind > 0}<Badge variant="secondary" class="sync-count behind rounded-full bg-muted px-1.5 h-auto py-0 text-[10px] font-semibold leading-tight tabular-nums text-muted-foreground">↓ {behind}</Badge>{/if}
+        {#if behind > 0}<Badge variant="secondary" class="sync-count behind rounded-full bg-muted px-1.5 h-auto py-0 text-ui-tiny font-semibold leading-tight tabular-nums text-muted-foreground">↓ {behind}</Badge>{/if}
         Pull
       </Button>
       <Button
@@ -480,7 +481,7 @@
           : "Push is unavailable without a current branch"}
         onclick={onBarPush}
       >
-        {#if ahead > 0}<Badge variant="secondary" class="sync-count ahead rounded-full bg-primary-foreground px-1.5 h-auto py-0 text-[10px] font-semibold leading-tight tabular-nums text-primary">↑ {ahead}</Badge>{/if}
+        {#if ahead > 0}<Badge variant="secondary" class="sync-count ahead rounded-full bg-primary-foreground px-1.5 h-auto py-0 text-ui-tiny font-semibold leading-tight tabular-nums text-primary">↑ {ahead}</Badge>{/if}
         Push
       </Button>
       <Button
@@ -520,9 +521,9 @@
   {/if}
 
   {#if error}
-    <p class="state error m-0 px-3 py-4 text-[13px] text-destructive" role="alert">{error}</p>
+    <p class="state error m-0 px-3 py-4 text-ui-base text-destructive" role="alert">{error}</p>
   {:else if !loading && list.length === 0}
-    <p class="state m-0 px-3 py-4 text-[13px] text-muted-foreground">No remotes configured.</p>
+    <EmptyState title="No remotes configured." />
   {:else}
     <ul class="remotes m-0 flex min-h-0 flex-1 list-none flex-col gap-2 overflow-y-auto px-2 py-1.5" role="list" aria-label="Configured remotes">
       {#each list as remote (remote.name)}
@@ -536,10 +537,10 @@
                 void onSetUrl();
               }}
             >
-              <label class="eu-label flex min-w-40 flex-1 items-center gap-1.5 text-[0.72rem] text-muted-foreground">
+              <label class="eu-label flex min-w-40 flex-1 items-center gap-1.5 text-ui-meta text-muted-foreground">
                 {editing.field === "url" ? "fetch URL" : "push URL"}:
                 <Input
-                  class="eu-input h-auto min-w-32 flex-1 rounded bg-background dark:bg-background px-1.5 py-0.5 font-mono text-[0.72rem] md:text-[0.72rem] text-foreground"
+                  class="eu-input h-auto min-w-32 flex-1 rounded bg-background dark:bg-background px-1.5 py-0.5 font-mono text-ui-meta md:text-ui-meta text-foreground"
                   type="text"
                   aria-label={`${editing.field} for ${remote.name}`}
                   bind:value={editing.value}
@@ -572,9 +573,9 @@
           {:else}
             <div class="card-head flex min-w-0 flex-wrap items-center gap-2">
               <span class="rname shrink-0 overflow-hidden text-ellipsis whitespace-nowrap font-semibold text-primary" title={remote.name}>{remote.name}</span>
-              <span class="url min-w-32 flex-1 overflow-hidden text-ellipsis whitespace-nowrap font-mono text-[0.6875rem] text-muted-foreground" title={remote.url}>{remote.url}</span>
+              <span class="url min-w-32 flex-1 overflow-hidden text-ellipsis whitespace-nowrap font-mono text-ui-micro text-muted-foreground" title={remote.url}>{remote.url}</span>
               {#if remote.push_url}
-                <span class="url push max-w-[40%] shrink-0 overflow-hidden text-ellipsis whitespace-nowrap font-mono text-[0.6875rem] text-muted-foreground" title={remote.push_url}>push: {remote.push_url}</span>
+                <span class="url push max-w-[40%] shrink-0 overflow-hidden text-ellipsis whitespace-nowrap font-mono text-ui-micro text-muted-foreground" title={remote.push_url}>push: {remote.push_url}</span>
               {/if}
               <span class="head-actions ml-auto flex shrink-0 gap-1">
                 <Button
@@ -674,7 +675,7 @@
                       </li>
                       {#if compareKey === `${rb.remote}/${rb.name}`}
                         <li class="rb-compare rounded-lg border border-border px-1.5 py-1">
-                          <div class="rb-compare-head flex items-center justify-between gap-2 font-mono text-[0.72rem] text-muted-foreground">
+                          <div class="rb-compare-head flex items-center justify-between gap-2 font-mono text-ui-meta text-muted-foreground">
                             <span>HEAD ↔ {rb.remote}/{rb.name}
                               {#if compareFiles}({compareFiles.length}
                                 file{compareFiles.length === 1 ? "" : "s"}){/if}
@@ -692,9 +693,9 @@
                             </Button>
                           </div>
                           {#if compareLoading}
-                            <p class="rb-compare-state mb-0 mt-1 text-[0.72rem] text-muted-foreground">Comparing…</p>
+                            <p class="rb-compare-state mb-0 mt-1 text-ui-meta text-muted-foreground">Comparing…</p>
                           {:else if compareFiles !== null && compareFiles.length === 0}
-                            <p class="rb-compare-state mb-0 mt-1 text-[0.72rem] text-muted-foreground">No differences.</p>
+                            <p class="rb-compare-state mb-0 mt-1 text-ui-meta text-muted-foreground">No differences.</p>
                           {:else if compareFiles}
                             <div class="rb-compare-diff mt-1 max-h-72 overflow-auto">
                               <DiffViewer files={compareFiles} />
@@ -708,8 +709,8 @@
               </div>
             {/if}
             <div class="card-actions mt-1.5 flex flex-col">
-              <div class="action-row grid grid-cols-[auto_1fr] items-center gap-2.5 py-[0.3rem]">
-                <span class="action-label min-w-11 text-[0.6875rem] font-semibold uppercase tracking-[0.04em] text-muted-foreground">Fetch</span>
+              <div class="action-row grid grid-cols-[auto_1fr] items-center gap-2.5 py-1">
+                <span class="action-label min-w-11 text-ui-micro font-semibold uppercase tracking-[0.04em] text-muted-foreground">Fetch</span>
                 <div class="action-main flex min-w-0 flex-wrap items-center gap-1.5">
                   <Button
                     class="relative text-muted-foreground after:absolute after:-inset-1 after:content-[''] hover:bg-accent hover:text-accent-foreground aria-pressed:bg-accent aria-pressed:text-accent-foreground [&_svg:not([class*='size-'])]:size-4"
@@ -739,8 +740,8 @@
                 </div>
               </div>
 
-              <div class="action-row grid grid-cols-[auto_1fr] items-center gap-2.5 border-t border-border py-[0.3rem]">
-                <span class="action-label min-w-11 text-[0.6875rem] font-semibold uppercase tracking-[0.04em] text-muted-foreground">Pull</span>
+              <div class="action-row grid grid-cols-[auto_1fr] items-center gap-2.5 border-t border-border py-1">
+                <span class="action-label min-w-11 text-ui-micro font-semibold uppercase tracking-[0.04em] text-muted-foreground">Pull</span>
                 <div class="action-main flex min-w-0 flex-wrap items-center gap-1.5">
                   <Select.Root
                     type="single"
@@ -748,7 +749,7 @@
                     onValueChange={(value) => (branchPick[remote.name] = value)}
                   >
                     <Select.Trigger
-                      class="max-w-36 h-[1.35rem] rounded bg-background dark:bg-background px-2 py-0 text-[0.72rem] text-foreground gap-1"
+                      class="max-w-36 h-6 rounded bg-background dark:bg-background px-2 py-0 text-ui-meta text-foreground gap-1"
                       aria-label={`Branch for pull and push on ${remote.name}`}
                     >
                       <Select.Value />
@@ -758,7 +759,7 @@
                         <Select.Item
                           value={name}
                           label={`${name}${name === currentBranch ? " (current)" : ""}`}
-                          class="text-[0.72rem]"
+                          class="text-ui-meta"
                         />
                       {/each}
                     </Select.Content>
@@ -778,8 +779,8 @@
                 </div>
               </div>
 
-              <div class="action-row grid grid-cols-[auto_1fr] items-center gap-2.5 border-t border-border py-[0.3rem]">
-                <span class="action-label min-w-11 text-[0.6875rem] font-semibold uppercase tracking-[0.04em] text-muted-foreground">Push</span>
+              <div class="action-row grid grid-cols-[auto_1fr] items-center gap-2.5 border-t border-border py-1">
+                <span class="action-label min-w-11 text-ui-micro font-semibold uppercase tracking-[0.04em] text-muted-foreground">Push</span>
                 <div class="action-main flex min-w-0 flex-wrap items-center gap-1.5">
                   <Button
                     class="relative after:absolute after:-inset-1 after:content-[''] [&_svg:not([class*='size-'])]:size-4"
@@ -796,7 +797,7 @@
                 </div>
               </div>
 
-              <details class="adv mt-1 text-[0.72rem]">
+              <details class="adv mt-1 text-ui-meta">
                 <summary class="cursor-pointer select-none py-0.5 text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring focus-visible:outline-offset-1">Advanced options</summary>
                 <div class="adv-opts flex flex-col gap-1 pb-1.5 pt-1">
                   <label

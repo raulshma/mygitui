@@ -34,6 +34,7 @@
     rangeIndices,
   } from "./fileHistoryModel";
   import BlameView from "./BlameView.svelte";
+  import EmptyState from "../layout/EmptyState.svelte";
   import { Badge } from "$lib/components/ui/badge";
   import { Button } from "$lib/components/ui/button/index.js";
 
@@ -174,9 +175,9 @@
   class="file-history flex h-full min-h-0 flex-col [&>.split]:min-h-0 [&>.split]:flex-1"
   aria-label="File history for {path}"
 >
-  <header class="head flex items-center gap-3 border-b border-border px-4 py-2.5">
+  <header class="head flex items-center gap-3 border-b border-border px-2.5 py-1">
     <h1
-      class="title m-0 min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap font-mono text-[0.9375rem] font-medium"
+      class="title m-0 min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap font-mono text-sm font-medium"
       title={path}
     >
       {path}
@@ -195,7 +196,7 @@
   </header>
 
   {#if history.error}
-    <p class="error m-0 px-4 py-3 text-[0.8125rem] text-destructive" role="alert">
+    <p class="error m-0 px-4 py-3 text-ui-base text-destructive" role="alert">
       {history.error}
       <Button
         class="shrink-0 rounded-lg px-2.5 py-1 text-xs font-normal"
@@ -207,11 +208,9 @@
       </Button>
     </p>
   {:else if history.flat.commits.length === 0 && history.loading}
-    <p class="note m-0 px-4 py-3 text-[0.8125rem] text-muted-foreground">Loading history…</p>
+    <p class="note m-0 px-4 py-3 text-ui-base text-muted-foreground">Loading history…</p>
   {:else if history.flat.commits.length === 0}
-    <p class="note m-0 px-4 py-3 text-[0.8125rem] text-muted-foreground">
-      No commits touch this file.</p
-    >
+    <EmptyState title="No commits touch this file." />
   {/if}
 
   {#if blameOpen}
@@ -262,7 +261,7 @@
               {#each commit.refs.slice(0, 2) as ref (ref)}
                 <Badge
                   variant="outline"
-                  class="ref h-auto rounded-full px-1.5 py-px whitespace-nowrap text-[0.6875rem]"
+                  class="ref h-auto rounded-full px-1.5 py-px whitespace-nowrap text-ui-micro"
                   style="background: hsl({hashHue(ref)} 45% 88%)"
                   >{ref}</Badge
                 >

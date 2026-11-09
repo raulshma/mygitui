@@ -483,7 +483,7 @@
 
 <Button
   bind:ref={triggerEl}
-  class="branch-chip h-auto max-w-64 min-w-0 flex-none gap-1 rounded-full px-[0.45rem] py-[0.1rem] font-mono text-[0.6875rem] focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-1 hover:brightness-[1.08] [&_svg]:flex-none"
+  class="branch-chip h-auto max-w-64 min-w-0 flex-none gap-1 rounded-full px-2 py-px font-mono text-ui-micro focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-1 hover:brightness-[1.08] [&_svg]:flex-none"
   variant="secondary"
   type="button"
   title="Switch branch"
@@ -500,17 +500,17 @@
 {#if open}
   <div
     bind:this={popoverEl}
-    class="popover fixed z-60 flex max-h-[min(32rem,calc(100vh-1.5rem))] w-[22rem] max-w-[calc(100vw-1rem)] flex-col overflow-hidden rounded-md border border-border bg-popover text-[0.8125rem] text-popover-foreground shadow-md"
+    class="popover fixed z-60 flex max-h-[min(32rem,calc(100vh-1.5rem))] w-[22rem] max-w-[calc(100vw-1rem)] flex-col overflow-hidden rounded-lg border border-border bg-popover text-ui-base text-popover-foreground shadow-md"
     role="dialog"
     aria-label="Branch switcher"
     use:floating={{ anchor: triggerEl ?? undefined, gap: 6 }}
   >
     <div
-      class="search-row flex flex-none items-center gap-[0.4rem] border-b border-border px-[0.7rem] py-[0.55rem] text-muted-foreground"
+      class="search-row flex flex-none items-center gap-[0.4rem] border-b border-border px-3 py-[0.55rem] text-muted-foreground"
     >
       <Icon icon={iconSearch} size={14} />
       <Input
-        class="search h-auto min-w-0 flex-1 rounded-none border-0 bg-transparent px-0 text-[0.8125rem] shadow-none focus-visible:border-0 focus-visible:ring-0 md:text-[0.8125rem]"
+        class="search h-auto min-w-0 flex-1 rounded-none border-0 bg-transparent px-0 text-sm shadow-none focus-visible:border-0 focus-visible:ring-0"
         type="text"
         role="combobox"
         aria-expanded="true"
@@ -551,25 +551,25 @@
       aria-label="Branches"
     >
       {#if error}
-        <li class="state error p-3 text-[0.8125rem] text-destructive" role="alert">
+        <li class="state error p-3 text-ui-base text-destructive" role="alert">
           {error} — use Refresh to retry.
         </li>
       {:else if loading && localList.length === 0 && remoteList.length === 0}
-        <li class="state p-3 text-[0.8125rem] text-muted-foreground" role="status">
+        <li class="state p-3 text-ui-base text-muted-foreground" role="status">
           Loading branches…
         </li>
       {:else}
         {#each rows as row, i (rowKey(row))}
           {#if row.kind === "local" && rows[i - 1]?.kind !== "local"}
             <li
-              class="section select-none px-3 pb-[0.2rem] pt-2 text-[0.6875rem] font-bold uppercase tracking-[0.08em] text-primary"
+              class="section select-none px-3 pb-[0.2rem] pt-2 text-ui-micro font-bold uppercase tracking-[0.08em] text-primary"
               role="presentation"
             >
               Local branches
             </li>
           {:else if row.kind === "remote" && rows[i - 1]?.kind !== "remote"}
             <li
-              class="section select-none px-3 pb-[0.2rem] pt-2 text-[0.6875rem] font-bold uppercase tracking-[0.08em] text-primary"
+              class="section select-none px-3 pb-[0.2rem] pt-2 text-ui-micro font-bold uppercase tracking-[0.08em] text-primary"
               role="presentation"
             >
               Remote branches
@@ -631,12 +631,12 @@
               >
                 {row.branch.name}
               </span>
-              <span class="sha flex-none font-mono text-[0.6875rem] text-muted-foreground">
+              <span class="sha flex-none font-mono text-ui-micro text-muted-foreground">
                 {row.branch.sha.slice(0, 7)}
               </span>
               {#if row.branch.upstream}
                 <span
-                  class="upstream min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap font-mono text-[0.6875rem] text-muted-foreground"
+                  class="upstream min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap font-mono text-ui-micro text-muted-foreground"
                   title={row.branch.upstream}
                 >
                   {row.branch.upstream}
@@ -647,7 +647,7 @@
                   {/if}
                   {#if row.branch.gone}
                     <span
-                      class="gone ml-1.5 rounded-full border border-destructive px-[0.35rem] text-[0.625rem] text-destructive"
+                      class="gone ml-1.5 rounded-full border border-destructive px-[0.35rem] text-ui-tiny text-destructive"
                       >gone</span
                     >
                   {/if}
@@ -695,7 +695,7 @@
               >
                 {row.rb.remote}/{row.rb.name}
               </span>
-              <span class="sha flex-none font-mono text-[0.6875rem] text-muted-foreground">
+              <span class="sha flex-none font-mono text-ui-micro text-muted-foreground">
                 {row.rb.sha.slice(0, 7)}
               </span>
               <span class="row-actions ml-auto flex flex-none items-center">
@@ -720,7 +720,7 @@
         {/each}
         {#if rows.length === 0}
           <li
-            class="state p-3 text-[0.8125rem] text-muted-foreground"
+            class="state p-3 text-ui-base text-muted-foreground"
             role="option"
             aria-selected="false"
             aria-disabled="true"
@@ -733,29 +733,29 @@
 
     <footer class="foot flex flex-none items-center gap-1 border-t border-border px-2 py-[0.35rem]">
       <Button
-        class="foot-btn h-auto gap-[0.3rem] rounded-full px-[0.55rem] py-1 text-[0.72rem] focus-visible:outline-2 focus-visible:outline-primary focus-visible:-outline-offset-2 focus-visible:ring-0"
+        class="foot-btn h-auto gap-[0.3rem] rounded-full px-[0.55rem] py-1 text-ui-meta focus-visible:outline-2 focus-visible:outline-primary focus-visible:-outline-offset-2 focus-visible:ring-0"
         variant="ghost"
         size="sm"
         type="button"
         disabled={fetchBusy}
         onclick={() => void onFetch()}
       >
-        <Icon icon={iconFetch} size={13} />
+        <Icon icon={iconFetch} size={14} />
         Fetch
       </Button>
       <Button
-        class="foot-btn h-auto gap-[0.3rem] rounded-full px-[0.55rem] py-1 text-[0.72rem] focus-visible:outline-2 focus-visible:outline-primary focus-visible:-outline-offset-2 focus-visible:ring-0"
+        class="foot-btn h-auto gap-[0.3rem] rounded-full px-[0.55rem] py-1 text-ui-meta focus-visible:outline-2 focus-visible:outline-primary focus-visible:-outline-offset-2 focus-visible:ring-0"
         variant="ghost"
         size="sm"
         type="button"
         onclick={() => void reload()}
       >
-        <Icon icon={iconRefresh} size={13} />
+        <Icon icon={iconRefresh} size={14} />
         Refresh
       </Button>
       <span class="foot-spacer flex-1"></span>
       <Button
-        class="foot-btn manage h-auto gap-[0.3rem] rounded-full px-[0.55rem] py-1 text-[0.72rem] text-primary hover:text-primary focus-visible:outline-2 focus-visible:outline-primary focus-visible:-outline-offset-2 focus-visible:ring-0"
+        class="foot-btn manage h-auto gap-[0.3rem] rounded-full px-[0.55rem] py-1 text-ui-meta text-primary hover:text-primary focus-visible:outline-2 focus-visible:outline-primary focus-visible:-outline-offset-2 focus-visible:ring-0"
         variant="ghost"
         size="sm"
         type="button"

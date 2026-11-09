@@ -173,7 +173,7 @@
   }
 </script>
 
-<section class="undo-panel flex min-h-0 flex-col text-[0.8125rem]" aria-label="Checkpoints and undo">
+<section class="undo-panel flex min-h-0 flex-col text-ui-base" aria-label="Checkpoints and undo">
   <div class="toolbar flex shrink-0 items-center gap-2 px-2 py-[0.375rem]">
     <Button
       class="border-border text-muted-foreground hover:border-primary hover:bg-accent hover:text-accent-foreground"
@@ -199,13 +199,13 @@
     >
       <Icon icon={iconGc} size={16} />
     </Button>
-    <span class="hint ml-auto text-[0.6875rem] text-muted-foreground" title="Checkpoints are automatic snapshots created before dangerous operations">
+    <span class="hint ml-auto text-ui-micro text-muted-foreground" title="Checkpoints are automatic snapshots created before dangerous operations">
       {undo.checkpoints.length} checkpoint{undo.checkpoints.length === 1 ? "" : "s"}
     </span>
   </div>
 
   {#if undo.error}
-    <p class="state error m-0 px-3 py-4 text-[0.8125rem] text-destructive" role="alert">{undo.error}</p>
+    <p class="state error m-0 px-3 py-4 text-ui-base text-destructive" role="alert">{undo.error}</p>
   {:else if !undo.loading && undo.checkpoints.length === 0}
     <div class="empty px-3 py-4">
       <p class="empty-title mb-[0.35rem] mt-0 font-semibold text-foreground">No checkpoints yet.</p>
@@ -227,7 +227,7 @@
               role="alertdialog"
               aria-label={`Restore checkpoint ${cp.id}`}
             >
-              <p class="cr-text mb-[0.4rem] mt-0 text-[0.72rem] leading-[1.4] text-foreground">
+              <p class="cr-text mb-[0.4rem] mt-0 text-ui-meta leading-[1.4] text-foreground">
                 Restore returns the repo to this snapshot: changes made since
                 are discarded and untracked files created after it are removed.
                 The current state is checkpointed first (pre-restore), so this
@@ -259,9 +259,9 @@
             <div class="info flex min-w-0 grow flex-col gap-[0.15rem]">
               <span class="title truncate text-xs text-foreground" title={cp.ref_name}>{checkpointTitle(cp, Math.floor(Date.now() / 1000))}</span>
               <span class="chips flex flex-wrap gap-1">
-                {#if cp.branch}<Badge variant="outline" class="chip h-auto max-w-40 overflow-hidden rounded-full px-[0.4rem] py-0 text-[0.625rem] text-muted-foreground text-ellipsis whitespace-nowrap">{cp.branch}</Badge>{/if}
+                {#if cp.branch}<Badge variant="outline" class="chip h-auto max-w-40 overflow-hidden rounded-full px-2 py-0 text-ui-tiny text-muted-foreground text-ellipsis whitespace-nowrap">{cp.branch}</Badge>{/if}
                 {#if cp.has_worktree_state}
-                  <Badge variant="outline" class="chip worktree h-auto max-w-40 overflow-hidden rounded-full border-primary px-[0.4rem] py-0 text-[0.625rem] text-primary text-ellipsis whitespace-nowrap" title="Snapshot includes working-copy + index state">worktree</Badge>
+                  <Badge variant="outline" class="chip worktree h-auto max-w-40 overflow-hidden rounded-full border-primary px-2 py-0 text-ui-tiny text-primary text-ellipsis whitespace-nowrap" title="Snapshot includes working-copy + index state">worktree</Badge>
                 {/if}
               </span>
             </div>
@@ -304,11 +304,11 @@
     </header>
 
     {#if trashError}
-      <p class="state error m-0 px-3 py-4 text-[0.8125rem] text-destructive" role="alert">{trashError}</p>
+      <p class="state error m-0 px-3 py-4 text-ui-base text-destructive" role="alert">{trashError}</p>
     {:else if !trashLoading && trash.length === 0}
       <p class="trash-empty m-0 px-2 pb-2 pt-[0.15rem] text-xs leading-[1.45] text-muted-foreground">
         No deleted branches. Force-deleted branches are kept here (under
-        <code class="font-mono text-[0.6875rem]">refs/mygitui/trash/*</code>) so their commits stay recoverable
+        <code class="font-mono text-ui-micro">refs/mygitui/trash/*</code>) so their commits stay recoverable
         until checkpoint GC cleans them up.
       </p>
     {:else}
@@ -318,8 +318,8 @@
             <div class="info flex min-w-0 grow flex-col gap-[0.15rem]">
               <span class="title truncate text-xs text-foreground" title={entry.name}>{entry.name}</span>
               <span class="chips flex flex-wrap gap-1">
-                <Badge variant="outline" class="chip sha-chip h-auto max-w-40 overflow-hidden rounded-full px-[0.4rem] py-0 font-mono text-[0.625rem] text-muted-foreground text-ellipsis whitespace-nowrap" title={entry.sha}>{entry.sha.slice(0, 7)}</Badge>
-                <Badge variant="outline" class="chip h-auto max-w-40 overflow-hidden rounded-full px-[0.4rem] py-0 text-[0.625rem] text-muted-foreground text-ellipsis whitespace-nowrap" title="Deleted {formatDateTime(entry.deleted_at)}">
+                <Badge variant="outline" class="chip sha-chip h-auto max-w-40 overflow-hidden rounded-full px-2 py-0 font-mono text-ui-tiny text-muted-foreground text-ellipsis whitespace-nowrap" title={entry.sha}>{entry.sha.slice(0, 7)}</Badge>
+                <Badge variant="outline" class="chip h-auto max-w-40 overflow-hidden rounded-full px-2 py-0 text-ui-tiny text-muted-foreground text-ellipsis whitespace-nowrap" title="Deleted {formatDateTime(entry.deleted_at)}">
                   deleted {formatDateTime(entry.deleted_at)}
                 </Badge>
               </span>

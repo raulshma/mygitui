@@ -187,7 +187,7 @@
 
 <div class="preview flex h-full min-h-0 min-w-0 flex-col bg-card" aria-label="Markdown preview of {path}">
   {#if !ready}
-    <p class="state absolute inset-0 inline-flex items-center justify-center gap-[0.4rem] text-[0.8125rem] text-muted-foreground" role="status"><Spinner class="size-[14px]" role="presentation" aria-hidden="true" /> Rendering preview…</p>
+    <p class="state absolute inset-0 inline-flex items-center justify-center gap-[0.4rem] text-ui-base text-muted-foreground" role="status"><Spinner class="size-3" role="presentation" aria-hidden="true" /> Rendering preview…</p>
   {/if}
   <!-- svelte-ignore a11y_click_events_have_key_events -- the pane is a
        read-only render; the editor owns the keyboard, clicks are bonus

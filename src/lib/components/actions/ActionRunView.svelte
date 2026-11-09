@@ -120,20 +120,20 @@
 <div class="action-run-view @container flex h-full min-h-0 min-w-0 flex-col bg-background">
   <header class="run-head flex-none flex flex-col gap-[0.35rem] border-b border-border bg-card px-[0.7rem] pb-[0.55rem] pt-[0.4rem] @max-[38rem]:px-2 @max-[38rem]:pb-[0.45rem] @max-[38rem]:pt-[0.35rem]">
     <div class="head-top flex min-w-0 items-center gap-[0.4rem]">
-      <span class="crumbs flex min-w-0 items-baseline gap-[0.35rem] text-[0.72rem] text-muted-foreground">
+      <span class="crumbs flex min-w-0 items-baseline gap-[0.35rem] text-ui-meta text-muted-foreground">
         <span class="crumb-muted flex-none opacity-80">Actions</span>
         <span class="crumb-sep flex-none opacity-80" aria-hidden="true">/</span>
         <span class="crumb-current min-w-0 truncate font-medium text-foreground" title={run?.name ?? "Action run"}>
           {run?.name ?? "Action run"}
         </span>
-        {#if run}<span class="run-id flex-none font-mono text-[0.66rem] text-muted-foreground opacity-85">{run.run_id}</span>{/if}
+        {#if run}<span class="run-id flex-none font-mono text-ui-micro text-muted-foreground opacity-85">{run.run_id}</span>{/if}
       </span>
       <span class="spacer ml-auto"></span>
       {#if onPopout}
         <Button
           variant="outline"
           size="xs"
-          class="tb flex-none rounded-full px-[0.6rem] text-[0.68rem] leading-[1.4] text-muted-foreground @max-[38rem]:px-[0.45rem] @max-[38rem]:text-[0.64rem]"
+          class="tb flex-none rounded-full px-2.5 text-ui-micro leading-[1.4] text-muted-foreground @max-[38rem]:px-2 @max-[38rem]:text-ui-tiny"
           type="button"
           title="Open this run log in its own window"
           onclick={onPopout}
@@ -145,7 +145,7 @@
         <Button
           variant="outline"
           size="xs"
-          class="tb close flex-none rounded-full px-[0.4rem] text-[0.9rem] leading-none text-muted-foreground"
+          class="tb close flex-none rounded-full px-2 text-[0.9rem] leading-none text-muted-foreground"
           type="button"
           aria-label="Close run log"
           title="Close run log"
@@ -160,12 +160,12 @@
       <div class="title-row flex min-w-0 flex-wrap items-center gap-[0.45rem]">
         <Badge
           variant="outline"
-          class={`status-chip chip-${run.status} h-auto flex-none items-center whitespace-nowrap rounded-full border-transparent px-2 py-[0.05rem] text-[0.66rem] font-semibold ${run.status === "running" ? "bg-secondary text-secondary-foreground" : run.status === "success" ? "bg-primary/15 text-primary" : run.status === "failed" ? "bg-destructive/10 text-destructive" : "bg-muted text-muted-foreground"}`}
+          class={`status-chip chip-${run.status} h-auto flex-none items-center whitespace-nowrap rounded-full border-transparent px-2 py-px text-ui-micro font-semibold ${run.status === "running" ? "bg-secondary text-secondary-foreground" : run.status === "success" ? "bg-primary/15 text-primary" : run.status === "failed" ? "bg-destructive/10 text-destructive" : "bg-muted text-muted-foreground"}`}
         >
           {runStatusLabel(run.status, run.exit_code)}
         </Badge>
         {#if live}
-          <span class="live-badge flex-none inline-flex items-center gap-[0.3rem] text-[0.66rem] font-semibold text-primary">
+          <span class="live-badge flex-none inline-flex items-center gap-[0.3rem] text-ui-micro font-semibold text-primary">
             <span class="live-dot size-[0.42rem] rounded-full bg-current animate-pulse" aria-hidden="true"></span>
             Running
           </span>
@@ -173,9 +173,9 @@
         <h2 class="run-title m-0 min-w-0 text-[0.95rem] font-semibold leading-[1.25] text-foreground [overflow-wrap:anywhere]">{run.name}</h2>
       </div>
       {#if run.command}
-        <code class="command max-w-full self-start truncate rounded border border-border bg-muted px-[0.45rem] py-[0.12rem] font-mono text-[0.7rem] text-foreground" title={run.command}>{run.command}</code>
+        <code class="command max-w-full self-start truncate rounded border border-border bg-muted px-2 py-px font-mono text-ui-micro text-foreground" title={run.command}>{run.command}</code>
       {/if}
-      <div class="meta flex flex-wrap items-center gap-x-3 gap-y-[0.35rem] text-[0.68rem] text-muted-foreground">
+      <div class="meta flex flex-wrap items-center gap-x-3 gap-y-[0.35rem] text-ui-micro text-muted-foreground">
         <span class="meta-item inline-flex items-baseline gap-1 whitespace-nowrap">
           <span class="meta-label opacity-75">Output</span>
           {run.lines.length}
@@ -202,7 +202,7 @@
         <h3 class="pane-title m-0 text-xs font-semibold text-foreground">Output</h3>
         <Badge
           variant="outline"
-          class={`log-state ${live ? "live" : ""} h-auto flex-none rounded-full border-transparent px-[0.45rem] py-px text-[0.62rem] ${live ? "bg-secondary text-secondary-foreground" : "bg-muted text-muted-foreground"}`}
+          class={`log-state ${live ? "live" : ""} h-auto flex-none rounded-full border-transparent px-2 py-px text-ui-tiny ${live ? "bg-secondary text-secondary-foreground" : "bg-muted text-muted-foreground"}`}
         >
           {live ? "Live" : "Finished"}
         </Badge>
@@ -210,7 +210,7 @@
         <Toggle
           variant="outline"
           size="sm"
-          class="tb flex-none whitespace-nowrap rounded-full border-border px-[0.6rem] text-[0.68rem] leading-[1.4] text-muted-foreground aria-pressed:border-transparent aria-pressed:bg-primary/15 aria-pressed:text-primary @max-[38rem]:px-[0.45rem] @max-[38rem]:text-[0.64rem]"
+          class="tb flex-none whitespace-nowrap rounded-full border-border px-2.5 text-ui-micro leading-[1.4] text-muted-foreground aria-pressed:border-transparent aria-pressed:bg-primary/15 aria-pressed:text-primary @max-[38rem]:px-2 @max-[38rem]:text-ui-tiny"
           bind:pressed={follow}
           title={follow
             ? "Pause auto-scroll (scroll up to pause too)"
@@ -218,14 +218,14 @@
         >
           {follow ? "Following" : "Follow"}
         </Toggle>
-        <Button variant="outline" size="xs" class="tb flex-none rounded-full px-[0.6rem] text-[0.68rem] leading-[1.4] text-muted-foreground @max-[38rem]:px-[0.45rem] @max-[38rem]:text-[0.64rem]" type="button" onclick={() => void copyLog()}>
+        <Button variant="outline" size="xs" class="tb flex-none rounded-full px-2.5 text-ui-micro leading-[1.4] text-muted-foreground @max-[38rem]:px-2 @max-[38rem]:text-ui-tiny" type="button" onclick={() => void copyLog()}>
           Copy log
         </Button>
         {#if live}
           <Button
             variant="destructive"
             size="xs"
-            class="tb danger flex-none rounded-full px-[0.6rem] text-[0.68rem] leading-[1.4] @max-[38rem]:px-[0.45rem] @max-[38rem]:text-[0.64rem]"
+            class="tb danger flex-none rounded-full px-2.5 text-ui-micro leading-[1.4] @max-[38rem]:px-2 @max-[38rem]:text-ui-tiny"
             type="button"
             title="Cancel this action"
             onclick={cancelRun}
@@ -283,7 +283,7 @@
         Run the action again to see fresh output.
       </p>
       {#if onClose}
-        <Button variant="outline" size="xs" class="tb flex-none rounded-full px-[0.6rem] text-[0.68rem] leading-[1.4] text-muted-foreground" type="button" onclick={onClose}>Close</Button>
+        <Button variant="outline" size="xs" class="tb flex-none rounded-full px-2.5 text-ui-micro leading-[1.4] text-muted-foreground" type="button" onclick={onClose}>Close</Button>
       {/if}
     </div>
   {/if}

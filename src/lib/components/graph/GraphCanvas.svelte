@@ -506,7 +506,7 @@
         ></canvas>
         {#if tip}
           <div
-            class="gc-tip pointer-events-none absolute z-[1] flex max-w-[260px] flex-col gap-[2px] rounded-sm bg-primary px-2 py-1 text-xs leading-[1.35] text-primary-foreground shadow-md"
+            class="gc-tip pointer-events-none absolute z-1 flex max-w-[260px] flex-col gap-0.5 rounded-sm bg-primary px-2 py-1 text-xs leading-[1.35] text-primary-foreground shadow-md"
             role="tooltip"
             style:left="{tip.x}px"
             style:top="{tip.y}px"

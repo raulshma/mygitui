@@ -237,16 +237,16 @@
      actions, form, runs) that can outgrow its tab body, so the section itself
      scrolls — same contract as the other sidebar panels. -->
 <section
-  class="actions-panel flex min-h-0 flex-col gap-[0.6rem] overflow-y-auto px-3 py-2 text-[0.8125rem] text-foreground [scrollbar-gutter:stable]"
+  class="actions-panel flex min-h-0 flex-col gap-[0.6rem] overflow-y-auto px-3 py-2 text-ui-base text-foreground [scrollbar-gutter:stable]"
   aria-label="Detected projects and custom actions"
 >
   <header class="section-head flex flex-wrap items-baseline gap-2">
-    <h3 class="section-title m-0 text-[0.9375rem] font-semibold">Detected projects</h3>
-    <span class="section-hint text-[0.7rem] text-muted-foreground">Run or watch from the repo root</span>
+    <h3 class="section-title m-0 text-sm font-semibold">Detected projects</h3>
+    <span class="section-hint text-ui-micro text-muted-foreground">Run or watch from the repo root</span>
     <Button
       variant="outline"
       size="xs"
-      class="btn ghost ml-auto rounded-full px-[0.6rem] text-[0.7rem] text-muted-foreground"
+      class="btn ghost ml-auto rounded-full text-ui-meta text-muted-foreground"
       type="button"
       disabled={projectsLoading}
       onclick={() => void projectsStore.refresh(repoId)}
@@ -269,15 +269,15 @@
   {:else}
     <ul class="project-list m-0 flex list-none flex-col gap-[0.45rem] p-0" role="list">
       {#each projects as project (project.kind + ":" + project.path)}
-        <li class="project-card flex flex-col gap-[0.4rem] rounded-lg border border-border bg-card px-[0.55rem] py-[0.45rem]">
+        <li class="project-card flex flex-col gap-[0.4rem] rounded-lg border border-border bg-card px-2 py-[0.45rem]">
           <div class="project-head flex min-w-0 flex-wrap items-baseline gap-[0.4rem]">
-            <span class="project-kind flex-none text-[0.625rem] font-bold uppercase tracking-[0.04em] text-primary">{projectKindLabel(project.kind)}</span>
-            <span class="project-name min-w-0 truncate text-[0.8rem] font-semibold" title={project.name}>{project.name}</span>
+            <span class="project-kind flex-none text-ui-tiny font-bold uppercase tracking-[0.04em] text-primary">{projectKindLabel(project.kind)}</span>
+            <span class="project-name min-w-0 truncate text-ui-meta font-semibold" title={project.name}>{project.name}</span>
             {#if project.path !== "."}
-              <span class="project-path flex-none font-mono text-[0.68rem] text-muted-foreground" title={project.path}>{project.path}</span>
+              <span class="project-path flex-none font-mono text-ui-micro text-muted-foreground" title={project.path}>{project.path}</span>
             {/if}
             <span
-              class="project-from ml-auto max-w-[55%] truncate text-[0.65rem] text-muted-foreground opacity-75"
+              class="project-from ml-auto max-w-[55%] truncate text-ui-tiny text-muted-foreground opacity-75"
               title={`Detected from ${project.detected_from.join(", ")}`}
             >
               {project.detected_from.join(", ")}
@@ -302,20 +302,20 @@
                     <span class="script-label min-w-0 flex-1 truncate text-xs font-medium">{script.label}</span>
                     <Badge
                       variant="outline"
-                      class={`script-kind ${script.watch ? "watch" : ""} h-auto flex-none rounded-full border-transparent px-[0.35rem] py-[0.04rem] text-[0.625rem] font-semibold uppercase tracking-[0.03em] ${script.watch ? "bg-secondary text-secondary-foreground" : "bg-muted text-muted-foreground"}`}
+                      class={`script-kind ${script.watch ? "watch" : ""} h-auto flex-none rounded-full border-transparent px-[0.35rem] py-px text-ui-tiny font-semibold uppercase tracking-[0.03em] ${script.watch ? "bg-secondary text-secondary-foreground" : "bg-muted text-muted-foreground"}`}
                     >
                       {script.watch ? "watch" : scriptKindLabel(script.kind)}
                     </Badge>
                     {#if running}
-                      <span class="script-state flex-none text-[0.62rem] text-primary">running…</span>
+                      <span class="script-state flex-none text-ui-tiny text-primary">running…</span>
                     {/if}
                   </Button>
                   <span class="script-command-row flex min-w-0 items-center gap-[0.2rem] border-t border-border pb-[0.15rem] pl-[0.4rem] pr-[0.2rem] pt-[0.15rem]">
-                    <code class="script-command min-w-0 flex-1 font-mono text-[0.65rem] leading-[1.35] text-muted-foreground [overflow-wrap:anywhere]" title={script.command}>{script.command}</code>
+                    <code class="script-command min-w-0 flex-1 font-mono text-ui-tiny leading-[1.35] text-muted-foreground [overflow-wrap:anywhere]" title={script.command}>{script.command}</code>
                     <Button
                       variant="ghost"
                       size="icon-xs"
-                      class="script-copy flex-none text-[0.8rem] leading-none text-muted-foreground opacity-55 hover:opacity-100"
+                      class="script-copy flex-none text-ui-meta leading-none text-muted-foreground opacity-55 hover:opacity-100"
                       type="button"
                       aria-label={`Copy command for ${script.label}`}
                       title="Copy command"
@@ -334,8 +334,8 @@
   {/if}
 
   <header class="section-head actions-head mt-[0.4rem] flex flex-wrap items-baseline gap-2">
-    <h3 class="section-title m-0 text-[0.9375rem] font-semibold">Custom actions</h3>
-    <span class="section-hint text-[0.7rem] text-muted-foreground">Shell commands run in the repository root</span>
+    <h3 class="section-title m-0 text-sm font-semibold">Custom actions</h3>
+    <span class="section-hint text-ui-micro text-muted-foreground">Shell commands run in the repository root</span>
   </header>
 
   {#if defs.length === 0}
@@ -343,17 +343,17 @@
   {:else}
     <ul class="def-list m-0 flex list-none flex-col gap-1 p-0" role="list">
       {#each defs as def (def.id)}
-        <li class="def-row flex flex-col gap-[0.3rem] rounded-lg border border-border bg-card px-[0.55rem] py-[0.45rem]">
+        <li class="def-row flex flex-col gap-[0.3rem] rounded-lg border border-border bg-card px-2 py-[0.45rem]">
           <div class="def-fields flex gap-[0.4rem]">
             <Input
-              class="def-name h-auto min-w-0 flex-[1_1_9rem] rounded px-[0.4rem] py-1 text-[0.78rem]"
+              class="def-name min-w-0 flex-[1_1_9rem]"
               type="text"
               aria-label="Action name"
               value={def.name}
               onchange={(e) => actionsStore.updateDef(def.id, { name: e.currentTarget.value })}
             />
             <Input
-              class="def-command h-auto min-w-0 flex-[2_1_14rem] rounded px-[0.4rem] py-1 font-mono text-[0.78rem]"
+              class="def-command min-w-0 flex-[2_1_14rem] font-mono"
               type="text"
               spellcheck="false"
               aria-label="Action command"
@@ -364,7 +364,7 @@
           </div>
           <div class="def-controls flex items-center gap-[0.4rem]">
             <select
-              class="def-scope flex-none rounded border border-border bg-background px-[0.4rem] py-1 text-[0.78rem] text-foreground font-[inherit] focus-visible:-outline-offset-1 focus-visible:outline-2 focus-visible:outline-primary"
+              class="def-scope flex-none rounded border border-border bg-background px-2 py-1 text-foreground font-[inherit] focus-visible:-outline-offset-1 focus-visible:outline-2 focus-visible:outline-primary"
               aria-label="Action scope"
               value={def.scope}
               onchange={(e) => {
@@ -381,7 +381,7 @@
             <!-- M12: shortcut capture — focus, press e.g. Ctrl+Shift+R;
                  Escape clears, blur cancels. -->
             <Input
-              class="def-shortcut h-auto flex-[0_0_7.5rem] cursor-pointer rounded px-[0.4rem] py-1 font-mono text-[0.7rem] text-primary"
+              class="def-shortcut flex-[0_0_7.5rem] cursor-pointer font-mono text-ui-micro text-primary"
               type="text"
               readonly
               data-shortcut-capture
@@ -400,7 +400,7 @@
             <Button
               variant="default"
               size="xs"
-              class="btn run rounded-full px-[0.85rem]"
+              class="btn run rounded-full px-3"
               type="button"
               disabled={runningNames.has(def.name)}
               onclick={() => runDef(def)}
@@ -425,33 +425,33 @@
 
   <form class="add-form flex flex-wrap items-center gap-1" onsubmit={submitAdd}>
     <Input
-      class="def-name h-auto min-w-0 flex-[1_1_9rem] rounded px-[0.4rem] py-1 text-[0.78rem]"
+      class="def-name min-w-0 flex-[1_1_9rem]"
       type="text"
       placeholder="Name"
       aria-label="New action name"
       bind:value={addName}
     />
     <Input
-      class="def-command h-auto min-w-0 flex-[2_1_14rem] rounded px-[0.4rem] py-1 font-mono text-[0.78rem]"
+      class="def-command min-w-0 flex-[2_1_14rem] font-mono"
       type="text"
       placeholder="Command (e.g. npm test)"
       aria-label="New action command"
       spellcheck="false"
       bind:value={addCommand}
     />
-    <select class="def-scope flex-none rounded border border-border bg-background px-[0.4rem] py-1 text-[0.78rem] text-foreground focus-visible:-outline-offset-1 focus-visible:outline-2 focus-visible:outline-primary" aria-label="New action scope" bind:value={addScope}>
+    <select class="def-scope flex-none rounded border border-border bg-background px-2 py-1 text-foreground focus-visible:-outline-offset-1 focus-visible:outline-2 focus-visible:outline-primary" aria-label="New action scope" bind:value={addScope}>
       <option value="repo">this repo</option>
       <option value="global">global</option>
     </select>
-    <Button variant="default" size="xs" class="btn add flex-none rounded-full px-[0.85rem]" type="submit" disabled={!addName.trim() || !addCommand.trim()}>
+    <Button variant="default" size="xs" class="btn add flex-none rounded-full px-3" type="submit" disabled={!addName.trim() || !addCommand.trim()}>
       Add
     </Button>
   </form>
 
   <header class="section-head runs-head mt-[0.4rem] flex flex-wrap items-baseline gap-2">
-    <h3 class="section-title m-0 text-[0.9375rem] font-semibold">Runs</h3>
+    <h3 class="section-title m-0 text-sm font-semibold">Runs</h3>
     {#if runs.length > 0}
-      <span class="section-hint text-[0.7rem] text-muted-foreground">{runs.length} recent</span>
+      <span class="section-hint text-ui-micro text-muted-foreground">{runs.length} recent</span>
     {/if}
   </header>
 
@@ -464,14 +464,14 @@
           <div class="run-head flex items-center justify-between gap-1">
             <Button
               variant="ghost"
-              class="run-toggle flex min-w-0 flex-1 cursor-pointer items-center justify-start gap-2 rounded-none px-[0.55rem] py-[0.4rem] text-left font-normal"
+              class="run-toggle flex min-w-0 flex-1 cursor-pointer items-center justify-start gap-2 rounded-none px-2 py-[0.4rem] text-left font-normal"
               type="button"
               title="Show this run's log in the editor"
               onclick={() => openRun(run.run_id)}
             >
               <Badge
                 variant="outline"
-                class={`chip chip-${run.status} h-auto flex-none rounded-full border-transparent px-2 py-[0.1rem] text-[0.68rem] font-semibold ${run.status === "running" ? "bg-secondary text-secondary-foreground" : run.status === "success" ? "bg-primary/15 text-primary" : "bg-destructive/10 text-destructive"}`}
+                class={`chip chip-${run.status} h-auto flex-none rounded-full border-transparent px-2 py-px text-ui-micro font-semibold ${run.status === "running" ? "bg-secondary text-secondary-foreground" : run.status === "success" ? "bg-primary/15 text-primary" : "bg-destructive/10 text-destructive"}`}
               >
                 {runStatusLabel(run.status, run.exit_code)}
               </Badge>
@@ -481,7 +481,7 @@
               <Button
                 variant="destructive"
                 size="xs"
-                class="btn cancel rounded-full px-[0.85rem]"
+                class="btn cancel rounded-full px-3"
                 type="button"
                 onclick={() => void actionsStore.cancel(run.run_id)}
               >

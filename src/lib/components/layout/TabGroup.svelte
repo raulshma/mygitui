@@ -175,7 +175,7 @@
   {#if hideTabs}
     {#if activePanel}
       <div
-        class="panel-head flex flex-none items-center gap-[0.35rem] border-b border-border bg-popover pt-[0.3rem] pb-[0.3rem] pr-[0.4rem] pl-[0.6rem]"
+        class="panel-head flex flex-none items-center gap-[0.35rem] border-b border-border bg-popover px-2.5 py-1"
       >
         <svg
           class="tab-icon h-3 w-3 flex-none text-muted-foreground"
@@ -190,11 +190,11 @@
           <path d={PANEL_META[activePanel]?.icon ?? ""} />
         </svg>
         <span
-          class="panel-title min-w-0 flex-1 truncate text-[0.6875rem] font-semibold uppercase tracking-[0.04em] text-muted-foreground"
+          class="panel-title min-w-0 flex-1 truncate text-ui-micro font-semibold uppercase tracking-[0.04em] text-muted-foreground"
           >{panelLabel(activePanel)}</span
         >
         <Button
-          class="panel-menu size-[1.35rem] flex-none rounded-sm p-0 text-sm leading-none focus-visible:outline-2 focus-visible:outline-primary focus-visible:-outline-offset-2 focus-visible:ring-0"
+          class="panel-menu size-5 flex-none rounded-sm p-0 text-sm leading-none focus-visible:outline-2 focus-visible:outline-primary focus-visible:-outline-offset-2 focus-visible:ring-0"
           variant="ghost"
           size="icon-xs"
           type="button"
@@ -220,7 +220,7 @@
       {#each node.tabs as panel, index (panel)}
         <button
           data-tab-index={index}
-          class="panel-tab inline-flex flex-none cursor-pointer items-center gap-1 whitespace-nowrap rounded-t-sm border border-b-0 bg-transparent px-2 py-1 text-[0.6875rem] font-medium text-muted-foreground hover:bg-accent focus-visible:outline-2 focus-visible:outline-primary focus-visible:-outline-offset-2 aria-selected:-mb-px aria-selected:rounded-b-none aria-selected:bg-card aria-selected:pb-[calc(0.25rem+1px)] aria-selected:text-primary"
+          class="panel-tab inline-flex flex-none cursor-pointer items-center gap-1 whitespace-nowrap rounded-t-sm border border-b-0 bg-transparent px-2 py-1 text-ui-micro font-medium text-muted-foreground hover:bg-accent focus-visible:outline-2 focus-visible:outline-primary focus-visible:-outline-offset-2 aria-selected:-mb-px aria-selected:rounded-b-none aria-selected:bg-card aria-selected:pb-[calc(0.25rem+1px)] aria-selected:text-primary"
           type="button"
           role="tab"
           aria-selected={index === activeIndex}
@@ -248,7 +248,7 @@
 
       {#if hiddenPanels.length > 0}
         <Button
-          class="panel-add h-auto flex-none rounded-b-none rounded-t-sm border-b border-b-transparent px-2 py-1 text-[0.8125rem] leading-none hover:text-primary focus-visible:bg-accent focus-visible:text-primary"
+          class="panel-add h-auto flex-none rounded-b-none rounded-t-sm border-b border-b-transparent px-2 py-1 text-ui-base leading-none hover:text-primary focus-visible:bg-accent focus-visible:text-primary"
           variant="ghost"
           size="sm"
           type="button"

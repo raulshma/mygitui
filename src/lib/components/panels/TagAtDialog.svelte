@@ -55,7 +55,7 @@
         submit();
       }}
     >
-      <Dialog.Title id="tag-at-title" class="tagat-title m-0 text-lg font-medium text-foreground">
+      <Dialog.Title id="tag-at-title" class="tagat-title m-0 font-medium text-foreground">
         New tag at {sha.slice(0, 7)}
       </Dialog.Title>
       <Input
@@ -68,7 +68,7 @@
         onfocus={(e) => e.currentTarget.select()}
       />
       <label
-        class="tagat-toggle flex cursor-pointer items-center gap-1.5 text-[0.8125rem] text-muted-foreground"
+        class="tag-at-toggle flex cursor-pointer items-center gap-1.5 text-ui-base text-muted-foreground"
         title="Annotated tags carry a message, tagger and date"
       >
         <input type="checkbox" class="m-0 accent-primary" bind:checked={annotated} />

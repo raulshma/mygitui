@@ -124,7 +124,7 @@
     <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
     <Dialog.Overlay class="scrim bg-black/40" role="presentation" />
     <Dialog.Content
-      class={"dialog w-[min(32rem,calc(100vw_-_2rem))] max-w-none gap-0 overflow-y-auto rounded-2xl px-6 py-5 text-sm text-popover-foreground shadow-[0_8px_24px_rgba(0,0,0,0.3)] sm:max-w-none " + (selectedPaths.length > 0 ? "danger" : "")}
+      class={"dialog w-[min(32rem,calc(100vw_-_2rem))] max-w-none overflow-y-auto text-popover-foreground shadow-[0_8px_24px_rgba(0,0,0,0.3)] sm:max-w-none " + (selectedPaths.length > 0 ? "danger" : "")}
       role="dialog"
       aria-modal="true"
       aria-labelledby="clean-title"
@@ -154,11 +154,11 @@
         <div class="file-list mb-3 max-h-64 overflow-y-auto rounded border border-border bg-background p-[0.5rem_0.6rem]" role="list" aria-label="Untracked paths to delete">
           {#each groups as group (group.dir)}
             <div class="group mb-[0.4rem] last:mb-0">
-              <div class="group-label mb-[0.1rem] font-mono text-[0.7rem] font-semibold text-muted-foreground">{groupLabel(group)}</div>
+              <div class="group-label mb-[0.1rem] font-mono text-ui-micro font-semibold text-muted-foreground">{groupLabel(group)}</div>
               {#each group.files as file (file.path)}
                 <label class="file flex cursor-pointer items-baseline gap-[0.4rem] py-[0.06rem]">
                   <input type="checkbox" class="m-0 accent-destructive" bind:checked={checked[file.path]} />
-                  <span class="path font-mono text-[0.72rem] [overflow-wrap:anywhere]">{file.path}</span>
+                  <span class="path font-mono text-ui-meta [overflow-wrap:anywhere]">{file.path}</span>
                 </label>
               {/each}
             </div>
@@ -175,7 +175,7 @@
               spellcheck="false"
               autocomplete="off"
               placeholder={CLEAN_CONFIRM_WORD}
-              class="rounded border border-destructive bg-background px-[0.6rem] py-[0.4rem] font-[inherit] text-foreground focus-visible:-outline-offset-1 focus-visible:outline-2 focus-visible:outline-destructive"
+              class="rounded border border-destructive bg-background px-2.5 py-[0.4rem] font-[inherit] text-foreground focus-visible:-outline-offset-1 focus-visible:outline-2 focus-visible:outline-destructive"
               bind:value={confirmText}
             />
           </label>
@@ -183,7 +183,7 @@
       {/if}
 
       <div class="actions flex items-center justify-end gap-2">
-        <span class="guard-note mr-auto text-[0.7rem] text-muted-foreground">A checkpoint is created first (undo available).</span>
+        <span class="guard-note mr-auto text-ui-micro text-muted-foreground">A checkpoint is created first (undo available).</span>
         <button
           class="confirm rounded-full border-0 bg-destructive px-5 py-[0.45rem] font-[inherit] font-medium text-destructive-foreground cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-destructive disabled:cursor-not-allowed disabled:opacity-55"
           type="button"

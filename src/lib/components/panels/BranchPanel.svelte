@@ -35,6 +35,7 @@
   import Icon from "$lib/components/icons/Icon.svelte";
   import { appIcon } from "$lib/components/icons/library.svelte";
   import { Button } from "$lib/components/ui/button/index.js";
+  import EmptyState from "../layout/EmptyState.svelte";
   import DialogShell from "$lib/components/safety/DialogShell.svelte";
   import { Badge } from "$lib/components/ui/badge";
 
@@ -288,10 +289,10 @@
   }
 </script>
 
-<aside class="branch-panel flex min-h-0 flex-col text-[13px]" aria-label="Branches">
+<aside class="branch-panel flex min-h-0 flex-col text-ui-base" aria-label="Branches">
   <div class="toolbar flex flex-none items-center gap-2 px-2 py-1.5">
     <input
-      class="filter min-w-20 flex-1 rounded border border-input bg-background px-2 py-0.5 text-[0.72rem] text-foreground focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-1"
+      class="filter min-w-20 flex-1 rounded border border-input bg-background px-2 py-0.5 text-ui-meta text-foreground focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-1"
       type="search"
       bind:this={filterEl}
       bind:value={filter}
@@ -322,7 +323,7 @@
     >
       <Icon icon={iconCleanup} size={16} />
     </Button>
-    {#if ops.busy}<span class="busy text-[0.72rem] text-muted-foreground" role="status">Branch op running…</span>{/if}
+    {#if ops.busy}<span class="busy text-ui-meta text-muted-foreground" role="status">Branch op running…</span>{/if}
   </div>
 
   <form
@@ -355,9 +356,9 @@
       </Button>
     </div>
     <label class="from flex items-center gap-1 text-muted-foreground">
-      <span class="fl text-[0.6875rem]">from</span>
+      <span class="fl text-ui-micro">from</span>
       <select
-        class="max-w-36 rounded border border-input bg-background px-2 py-0.5 text-[0.72rem] text-foreground focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-1"
+        class="max-w-36 rounded border border-input bg-background px-2 py-0.5 text-ui-meta text-foreground focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-1"
         bind:value={newFrom}
         aria-label="Create branch from"
       >
@@ -368,7 +369,7 @@
       </select>
     </label>
     <label
-      class="toggle flex cursor-pointer items-center gap-1 text-[0.72rem] text-muted-foreground"
+      class="toggle flex cursor-pointer items-center gap-1 text-ui-meta text-muted-foreground"
       title="Check out the new branch after creating it"
     >
       <input type="checkbox" class="m-0 accent-primary" bind:checked={newCheckout} />
@@ -377,9 +378,9 @@
   </form>
 
   {#if error}
-    <p class="state py-4 px-3 text-[13px] text-destructive" role="alert">{error}</p>
+    <p class="state py-4 px-3 text-ui-base text-destructive" role="alert">{error}</p>
   {:else if !loading && list.length === 0}
-    <p class="state py-4 px-3 text-[13px] text-muted-foreground">No branches.</p>
+    <EmptyState title="No branches." />
   {:else}
     <ul class="branches m-0 min-h-0 flex-1 list-none overflow-y-auto p-0 pb-3" role="list" aria-label="Local branches">
       {#each visibleBranches as branch (branch.name)}
@@ -432,14 +433,14 @@
               {branch.is_head ? "●" : ""}
             </span>
             <span class="bname min-w-12 max-w-44 shrink truncate font-mono text-xs font-semibold text-foreground" title={branch.name}>{branch.name}</span>
-            <span class="sha shrink-0 font-mono text-[0.6875rem] text-muted-foreground">{shortSha(branch.sha)}</span>
+            <span class="sha shrink-0 font-mono text-ui-micro text-muted-foreground">{shortSha(branch.sha)}</span>
             {#if branch.upstream}
-              <span class="upstream min-w-0 flex-1 truncate font-mono text-[0.6875rem] text-muted-foreground" title={branch.upstream}>
+              <span class="upstream min-w-0 flex-1 truncate font-mono text-ui-micro text-muted-foreground" title={branch.upstream}>
                 {branch.upstream}
                 {#if branch.ahead > 0 || branch.behind > 0}
                   <span class="ab pl-1.5 text-primary">↑{branch.ahead} ↓{branch.behind}</span>
                 {/if}
-                {#if branch.gone}<Badge variant="outline" class="gone ml-1.5 h-auto shrink-0 rounded-full border-destructive px-1.5 py-0 text-[0.625rem] text-destructive">gone</Badge>{/if}
+                {#if branch.gone}<Badge variant="outline" class="gone ml-1.5 h-auto shrink-0 rounded-full border-destructive px-1.5 py-0 text-ui-tiny text-destructive">gone</Badge>{/if}
               </span>
             {/if}
             <span class="actions ml-auto flex shrink-0 items-center gap-1">
@@ -456,7 +457,7 @@
                   <Icon icon={iconSwitch} size={16} />
                 </Button>
               {:else}
-                <Badge variant="secondary" class="head-chip h-auto shrink-0 rounded-full bg-foreground px-1.5 py-0 text-[0.625rem] font-semibold tracking-[0.04em] text-background">HEAD</Badge>
+                <Badge variant="secondary" class="head-chip h-auto shrink-0 rounded-full bg-foreground px-1.5 py-0 text-ui-tiny font-semibold tracking-[0.04em] text-background">HEAD</Badge>
               {/if}
               <Button
                 class="relative text-muted-foreground after:absolute after:-inset-1 after:content-[''] hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-4"

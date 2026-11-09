@@ -146,7 +146,7 @@
 
 <div class="tabbar flex min-w-0 flex-none items-stretch border-b border-border bg-card">
   <Button
-    class="tab-home ml-2 size-[1.9rem] flex-none self-center rounded-lg aria-[pressed=true]:bg-secondary aria-[pressed=true]:text-secondary-foreground focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring focus-visible:ring-0"
+    class="tab-home ml-2 size-7 flex-none self-center rounded-lg aria-[pressed=true]:bg-secondary aria-[pressed=true]:text-secondary-foreground focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring focus-visible:ring-0"
     variant="ghost"
     size="icon-sm"
     type="button"
@@ -155,7 +155,7 @@
     title="Recent repositories"
     onclick={showRecentRepos}
   >
-    <Icon icon={iconHome} size={17} />
+    <Icon icon={iconHome} size={16} />
   </Button>
   <div
     class="tabstrip flex min-w-0 flex-1 items-stretch gap-0.5 overflow-x-auto px-2 pt-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
@@ -196,7 +196,7 @@
           <span class="name block overflow-hidden text-ellipsis whitespace-nowrap">{tab.name}</span>
         </button>
         <Button
-          class="tab-close ml-0.5 h-auto flex-none rounded-tr-lg px-2 text-base leading-none focus-visible:bg-accent focus-visible:text-foreground"
+          class="tab-close ml-0.5 h-auto flex-none rounded-tr-lg px-2 text-sm leading-none focus-visible:bg-accent focus-visible:text-foreground"
           variant="ghost"
           size="icon-xs"
           type="button"
@@ -210,7 +210,7 @@
     {/each}
 
     <Button
-      class="tab-new my-0.5 h-auto flex-none px-3 text-base leading-none hover:text-primary focus-visible:bg-accent focus-visible:text-primary"
+      class="tab-new my-0.5 h-auto flex-none px-3 text-sm leading-none hover:text-primary focus-visible:bg-accent focus-visible:text-primary"
       variant="ghost"
       size="sm"
       type="button"

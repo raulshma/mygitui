@@ -20,6 +20,7 @@
   import Icon from "$lib/components/icons/Icon.svelte";
   import { Button } from "$lib/components/ui/button/index.js";
   import { Spinner } from "$lib/components/ui/spinner/index.js";
+  import EmptyState from "../layout/EmptyState.svelte";
   import { appIcon } from "$lib/components/icons/library.svelte";
   import {
     groupReflogByDay,
@@ -132,7 +133,7 @@
   }
 </script>
 
-<aside class="reflog-panel flex min-h-0 flex-col text-[0.8125rem]" aria-label="Reflog">
+<aside class="reflog-panel flex min-h-0 flex-col text-ui-base" aria-label="Reflog">
   <div class="toolbar flex shrink-0 items-center gap-1.5 px-2 py-1.5">
     <label class="ref-pick flex items-center gap-1.5">
       <span class="sr-only">Reflog ref</span>
@@ -163,31 +164,29 @@
   </div>
 
   <p
-    class="hint m-0 shrink-0 border-b border-border bg-primary/10 px-2 py-[0.3rem] text-[0.72rem] text-foreground"
+    class="hint m-0 shrink-0 border-b border-border bg-primary/10 px-2 py-1 text-ui-meta text-foreground"
   >
     Lost commits? Find them here — every HEAD move is recorded.
   </p>
 
   {#if error}
-    <p class="state m-0 px-3 py-4 text-[0.8125rem] text-destructive" role="alert"
+    <p class="state m-0 px-3 py-4 text-ui-base text-destructive" role="alert"
       >{error}</p
     >
   {:else if loading && entries.length === 0}
-    <p class="state m-auto px-3 py-4 text-[0.8125rem] text-muted-foreground" role="status">
+    <p class="state m-auto px-3 py-4 text-ui-base text-muted-foreground" role="status">
       <span class="inline-flex items-center gap-[0.4rem]">
-        <Spinner class="size-[14px]" role="presentation" aria-hidden="true" />
+        <Spinner class="size-4" role="presentation" aria-hidden="true" />
         Loading reflog…
       </span>
     </p>
   {:else if !loading && entries.length === 0}
-    <p class="state m-0 px-3 py-4 text-[0.8125rem] text-muted-foreground">
-      No reflog entries for this ref.</p
-    >
+    <EmptyState title="No reflog entries for this ref." />
   {:else}
     <div class="log min-h-0 flex-1 overflow-y-auto px-2 pb-2 pt-1" role="list" aria-label="Reflog entries">
       {#each visibleGroups as group (group.label + group.entries[0].new_sha)}
         <h3
-          class="day mb-1 mt-2 text-[0.6875rem] font-semibold uppercase tracking-[0.05em] text-muted-foreground"
+          class="day mb-1 mt-2 text-ui-micro font-semibold uppercase tracking-[0.05em] text-muted-foreground"
         >
           {group.label}
         </h3>
@@ -201,14 +200,14 @@
                 onclick={() => copySha(entry)}
                 oncontextmenu={(e) => entryMenu(e, entry)}
               >
-                <span class="sha shrink-0 font-mono text-[0.72rem] text-primary"
+                <span class="sha shrink-0 font-mono text-ui-meta text-primary"
                   >{shortSha(entry.new_sha)}</span
                 >
                 <span class="what flex min-w-0 flex-col">
                   <span class="message overflow-hidden text-ellipsis whitespace-nowrap"
                     >{entry.message}</span
                   >
-                  <span class="meta text-[0.6875rem] text-muted-foreground"
+                  <span class="meta text-ui-micro text-muted-foreground"
                     >{entry.signature.name} · {relativeAge(entry.signature.time)}</span
                   >
                 </span>
@@ -218,7 +217,7 @@
         </ul>
       {/each}
       {#if entries.length > REFLOG_DISPLAY_CAP}
-        <p class="cap mb-0 mt-2 text-[0.6875rem] text-muted-foreground" role="note">
+        <p class="cap mb-0 mt-2 text-ui-micro text-muted-foreground" role="note">
           Showing the {REFLOG_DISPLAY_CAP} most recent of {entries.length} entries.
         </p>
       {/if}

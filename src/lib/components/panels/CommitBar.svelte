@@ -379,18 +379,18 @@
 </script>
 
 <form
-  class="commit-bar flex-none flex flex-col gap-[0.3rem] px-[0.45rem] py-1.5 border-t border-border bg-card text-[0.8125rem]"
+  class="commit-bar flex-none flex flex-col gap-1 px-2 py-1.5 border-t border-border bg-card text-ui-base"
   aria-label="Create commit"
   onsubmit={(e) => {
     e.preventDefault();
     void doCommit();
   }}
 >
-  <div class="row-main flex flex-col gap-[0.3rem] min-h-0">
+  <div class="row-main flex flex-col gap-1 min-h-0">
     <label class="sr-only" for="commit-message">Commit message</label>
     <Textarea
       id="commit-message"
-      class="message flex-none w-full min-w-0 box-border field-sizing-fixed min-h-[1.7rem] max-h-44 resize-none overflow-y-hidden rounded-sm px-2 py-[0.28rem] text-xs leading-[1.35] font-mono bg-background"
+      class="message flex-none w-full min-w-0 box-border field-sizing-fixed min-h-7 max-h-44 resize-none overflow-y-hidden rounded-sm px-2 py-0.5 text-xs leading-[1.35] font-mono bg-background"
       placeholder="Commit message… Ctrl+↵"
       title="Commit message (Ctrl+Enter commits, Ctrl+Shift+Enter commits and pushes)"
       aria-keyshortcuts="Control+Enter Meta+Enter Control+Shift+Enter Meta+Shift+Enter"
@@ -404,7 +404,7 @@
     <div class="controls flex items-center flex-wrap gap-x-[0.375rem] gap-y-1 w-full min-w-0">
       <div class="opt-switches flex items-center gap-0.5 min-w-0">
         {#if anyOption}
-          <span class="opt-summary shrink-0 max-w-48 overflow-hidden text-ellipsis whitespace-nowrap px-[0.45rem] py-px rounded-full bg-muted text-muted-foreground text-[0.65rem] leading-normal" role="status" title="Active commit options">
+          <span class="opt-summary shrink-0 max-w-48 overflow-hidden text-ellipsis whitespace-nowrap px-2 py-px rounded-full bg-muted text-muted-foreground text-ui-tiny leading-normal" role="status" title="Active commit options">
             {optionSummary}
           </span>
         {/if}
@@ -500,7 +500,7 @@ ${m.body}` : m.subject;
               <Spinner class="size-3" role="presentation" aria-hidden="true" />
               <span>Pushing…</span>
             {:else}
-              <Icon icon={iconPush} size={13} />
+              <Icon icon={iconPush} size={14} />
               <span>Commit &amp; Push</span>
             {/if}
           </Button>
@@ -525,10 +525,10 @@ ${m.body}` : m.subject;
   </div>
 
   {#if showAmendHint}
-    <p id="commit-amend-hint" class="amend-hint m-0 flex items-center gap-1 text-muted-foreground text-[0.6875rem] leading-[1.3]" role="status">
+    <p id="commit-amend-hint" class="amend-hint m-0 flex items-center gap-1 text-muted-foreground text-ui-micro leading-[1.3]" role="status">
       <span class="shrink-0">Nothing staged — amend the last commit instead?</span>
       <Button
-        class="h-auto min-w-0 rounded-full px-1.5 py-px text-[0.6875rem] leading-[1.4] text-primary hover:bg-accent hover:text-accent-foreground"
+        class="h-auto min-w-0 rounded-full px-1.5 py-px text-ui-micro leading-[1.4] text-primary hover:bg-accent hover:text-accent-foreground"
         variant="ghost"
         type="button"
         title="Fold the next change into the previous commit (amend)"
@@ -538,28 +538,28 @@ ${m.body}` : m.subject;
       </Button>
     </p>
   {:else if showStagedHint}
-    <p id="commit-staged-hint" class="staged-hint m-0 text-muted-foreground text-[0.6875rem] leading-[1.3]" role="status">
+    <p id="commit-staged-hint" class="staged-hint m-0 text-muted-foreground text-ui-micro leading-[1.3]" role="status">
       No staged changes yet — stage a file to commit.
     </p>
   {/if}
 
   {#if showAuthor}
-    <div class="author flex flex-col gap-[0.3rem] pt-0.5">
+    <div class="author flex flex-col gap-1 pt-0.5">
       <label class="flex-1 flex items-center gap-[0.375rem] min-w-0">
-        <span class="al shrink-0 text-muted-foreground text-[0.6875rem]">Name</span>
+        <span class="al shrink-0 text-muted-foreground text-ui-micro">Name</span>
         <Input
           type="text"
-          class="h-auto flex-1 min-w-0 rounded-sm px-1.5 py-[0.15rem] text-[0.72rem]"
+          class="h-auto flex-1 min-w-0 rounded-sm px-1.5 py-0.5 text-ui-meta"
           placeholder="Ada Lovelace"
           bind:value={authorName}
           aria-label="Author name override"
         />
       </label>
       <label class="flex-1 flex items-center gap-[0.375rem] min-w-0">
-        <span class="al shrink-0 text-muted-foreground text-[0.6875rem]">Email</span>
+        <span class="al shrink-0 text-muted-foreground text-ui-micro">Email</span>
         <Input
           type="email"
-          class="h-auto flex-1 min-w-0 rounded-sm px-1.5 py-[0.15rem] text-[0.72rem]"
+          class="h-auto flex-1 min-w-0 rounded-sm px-1.5 py-0.5 text-ui-meta"
           placeholder="ada@example.com"
           bind:value={authorEmail}
           aria-label="Author email override"
@@ -569,6 +569,6 @@ ${m.body}` : m.subject;
   {/if}
 
   {#if error}
-    <p class="error m-0 text-destructive text-[0.72rem] [overflow-wrap:anywhere]" role="alert">{error}</p>
+    <p class="error m-0 text-destructive text-ui-meta [overflow-wrap:anywhere]" role="alert">{error}</p>
   {/if}
 </form>

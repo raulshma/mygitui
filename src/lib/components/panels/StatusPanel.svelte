@@ -66,6 +66,7 @@
   } from "$lib/components/menu/contextMenuStore.svelte";
   import ConfirmDialog from "$lib/components/safety/ConfirmDialog.svelte";
   import GitignoreGallery from "$lib/components/panels/GitignoreGallery.svelte";
+  import EmptyState from "../layout/EmptyState.svelte";
   import Icon from "$lib/components/icons/Icon.svelte";
   import { Spinner } from "$lib/components/ui/spinner/index.js";
 import {
@@ -1555,16 +1556,16 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
 
 <aside
   aria-label="Source control"
-  class="flex flex-1 flex-col h-full min-h-0 min-w-0 overflow-hidden bg-background text-foreground text-[0.8125rem]"
+  class="flex flex-1 flex-col h-full min-h-0 min-w-0 overflow-hidden bg-background text-foreground text-ui-base"
 >
   {#if status}
-    <div class="toolbar flex items-center gap-0.5 px-[0.4rem] py-[0.3rem] flex-none bg-card border-b border-border">
+    <div class="toolbar flex items-center gap-0.5 px-2 py-1 flex-none bg-card border-b border-border">
       <span class="relative flex-1 min-w-0 flex items-center text-muted-foreground">
         <span class="absolute left-1.5 inline-flex pointer-events-none opacity-75">
-          <Icon icon={iconSearch} size={13} />
+          <Icon icon={iconSearch} size={14} />
         </span>
         <Input
-          class="h-[1.6rem] rounded-sm bg-background dark:bg-background px-6 text-xs md:text-xs placeholder:text-muted-foreground/80"
+          class="h-6 rounded-sm bg-background dark:bg-background px-6 text-xs md:text-xs placeholder:text-muted-foreground/80"
           type="text"
           placeholder="Filter changes"
           aria-label="Filter changed files by path"
@@ -1573,7 +1574,7 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
         />
         {#if filterText}
           <Button
-            class="absolute right-[0.2rem] size-[1.15rem] rounded-full p-0 text-muted-foreground hover:bg-accent hover:text-foreground"
+            class="absolute right-0.5 size-5 rounded-full p-0 text-muted-foreground hover:bg-accent hover:text-foreground"
             variant="ghost"
             size="icon-xs"
             type="button"
@@ -1638,7 +1639,7 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
       <!-- Dismissible hint banner (same pattern as ReflogPanel's hint);
            re-showable via the ⋮ menu's "Keyboard shortcuts" entry. -->
       <div
-        class="kbd-hint flex shrink-0 items-center gap-1 border-b border-border bg-primary/10 px-2 py-[0.3rem] pr-1 text-[0.72rem] text-foreground"
+        class="kbd-hint flex shrink-0 items-center gap-1 border-b border-border bg-primary/10 px-2 py-1 pr-1 text-ui-meta text-foreground"
         role="note"
         aria-label="File list keyboard shortcuts"
       >
@@ -1651,7 +1652,7 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
           <kbd class="font-[inherit] font-semibold">Menu</kbd> row menu
         </span>
         <Button
-          class="size-[1.15rem] shrink-0 rounded-full p-0 text-muted-foreground hover:bg-accent hover:text-foreground [&_svg:not([class*='size-'])]:size-3"
+          class="size-5 shrink-0 rounded-full p-0 text-muted-foreground hover:bg-accent hover:text-foreground [&_svg:not([class*='size-'])]:size-3"
           variant="ghost"
           size="icon-xs"
           type="button"
@@ -1665,32 +1666,32 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
     {/if}
 
     {#if status.merging || status.rebasing || status.sequencer || status.detached || status.ahead > 0 || status.behind > 0}
-      <div class="banners flex flex-wrap gap-1 px-[0.4rem] py-[0.3rem] flex-none">
-        {#if status.merging}<Badge variant="secondary" class="gap-[0.2rem] rounded-full px-[0.45rem] py-px h-auto text-[0.6875rem] bg-muted text-foreground">Merge in progress</Badge>{/if}
-        {#if status.rebasing}<Badge variant="secondary" class="gap-[0.2rem] rounded-full px-[0.45rem] py-px h-auto text-[0.6875rem] bg-muted text-foreground">Rebase in progress</Badge>{/if}
-        {#if status.sequencer}<Badge variant="secondary" class="gap-[0.2rem] rounded-full px-[0.45rem] py-px h-auto text-[0.6875rem] bg-muted text-foreground">Cherry-pick / revert in progress</Badge>{/if}
-        {#if status.detached}<Badge variant="secondary" class="gap-[0.2rem] rounded-full px-[0.45rem] py-px h-auto text-[0.6875rem] bg-muted text-foreground">Detached HEAD</Badge>{/if}
+      <div class="banners flex flex-wrap gap-1 px-2 py-1 flex-none">
+        {#if status.merging}<Badge variant="secondary" class="gap-[0.2rem] rounded-full px-2 py-px h-auto text-ui-micro bg-muted text-foreground">Merge in progress</Badge>{/if}
+        {#if status.rebasing}<Badge variant="secondary" class="gap-[0.2rem] rounded-full px-2 py-px h-auto text-ui-micro bg-muted text-foreground">Rebase in progress</Badge>{/if}
+        {#if status.sequencer}<Badge variant="secondary" class="gap-[0.2rem] rounded-full px-2 py-px h-auto text-ui-micro bg-muted text-foreground">Cherry-pick / revert in progress</Badge>{/if}
+        {#if status.detached}<Badge variant="secondary" class="gap-[0.2rem] rounded-full px-2 py-px h-auto text-ui-micro bg-muted text-foreground">Detached HEAD</Badge>{/if}
         {#if status.ahead > 0}
           <Badge
             variant="secondary"
-            class="gap-[0.2rem] rounded-full px-[0.45rem] py-px h-auto text-[0.6875rem] bg-primary/10 text-primary tabular-nums"
+            class="gap-[0.2rem] rounded-full px-2 py-px h-auto text-ui-micro bg-primary/10 text-primary tabular-nums"
             role="img"
             aria-label={`${status.ahead} ${status.ahead === 1 ? "commit" : "commits"} to push`}
             title={`${status.ahead} ${status.ahead === 1 ? "commit" : "commits"} to push`}
           >
-            <Icon icon={iconAhead} size={11} />
+            <Icon icon={iconAhead} size={12} />
             {status.ahead} to push
           </Badge>
         {/if}
         {#if status.behind > 0}
           <Badge
             variant="secondary"
-            class="gap-[0.2rem] rounded-full px-[0.45rem] py-px h-auto text-[0.6875rem] bg-accent text-accent-foreground tabular-nums"
+            class="gap-[0.2rem] rounded-full px-2 py-px h-auto text-ui-micro bg-accent text-accent-foreground tabular-nums"
             role="img"
             aria-label={`${status.behind} ${status.behind === 1 ? "commit" : "commits"} to pull`}
             title={`${status.behind} ${status.behind === 1 ? "commit" : "commits"} to pull`}
           >
-            <Icon icon={iconBehind} size={11} />
+            <Icon icon={iconBehind} size={12} />
             {status.behind} to pull
           </Badge>
         {/if}
@@ -1700,7 +1701,7 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
     {#if moduleError}
       <Button
         variant="ghost"
-        class="mx-[0.4rem] mb-1 h-auto justify-start border border-[color:var(--app-deleted)] rounded-sm px-1 py-0.5 bg-[color:var(--app-conflicted-bg)] text-[color:var(--app-deleted)] text-left text-[0.6875rem] hover:bg-[color:var(--app-conflicted-bg)] hover:text-[color:var(--app-deleted)] dark:hover:bg-[color:var(--app-conflicted-bg)] dark:hover:text-[color:var(--app-deleted)]"
+        class="mx-2 mb-1 h-auto justify-start border border-[color:var(--app-deleted)] rounded-sm px-1 py-0.5 bg-[color:var(--app-conflicted-bg)] text-[color:var(--app-deleted)] text-left text-ui-micro hover:bg-[color:var(--app-conflicted-bg)] hover:text-[color:var(--app-deleted)] dark:hover:bg-[color:var(--app-conflicted-bg)] dark:hover:text-[color:var(--app-deleted)]"
         title={moduleError}
         onclick={() => void reloadModules()}
       >
@@ -1717,7 +1718,7 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
       {@const info = !subPath ? moduleByPath.get(row.entry.path) : undefined}
       {@const display = info ? submoduleDisplay(info) : null}
       <div
-        class="row file-row group/row relative flex items-center gap-[0.4rem] min-w-0 h-6 min-h-6 box-border pl-[0.45rem] pr-[0.4rem] cursor-pointer [content-visibility:auto] [contain-intrinsic-size:auto_1.375rem] hover:bg-[color:var(--app-hover)] focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-2 [&.selected]:bg-[color:var(--app-active)] [&.selected]:shadow-[inset_2px_0_0_var(--primary)]"
+        class="row file-row group/row relative flex items-center gap-[0.4rem] min-w-0 h-6 min-h-6 box-border pl-2 pr-2 cursor-pointer [content-visibility:auto] [contain-intrinsic-size:auto_1.5rem] hover:bg-[color:var(--app-hover)] focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-2 [&.selected]:bg-[color:var(--app-active)] [&.selected]:shadow-[inset_2px_0_0_var(--primary)]"
         class:selected={isSelected(row.key)}
         role="treeitem"
         aria-selected={isSelected(row.key)}
@@ -1763,27 +1764,27 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
           >{row.base}</span>
           {#if row.dir}
             <span
-              class="dir grow min-w-0 max-w-[48%] ml-auto overflow-hidden text-ellipsis whitespace-nowrap text-right text-muted-foreground opacity-70 text-[0.6875rem]"
+              class="dir grow min-w-0 max-w-[48%] ml-auto overflow-hidden text-ellipsis whitespace-nowrap text-right text-muted-foreground opacity-70 text-ui-micro"
               title={dirText(row.dir)}
             >{dirText(row.dir)}</span>
           {/if}
         </span>
         {#if info && display && display.tag}
-          <span class={`module-tag shrink-0 max-w-[6.5rem] overflow-hidden text-ellipsis whitespace-nowrap text-[0.625rem] leading-[1.35] text-muted-foreground ${toneColorClass(display.tone)}`} title={display.detail}>
+          <span class={`module-tag shrink-0 max-w-[6.5rem] overflow-hidden text-ellipsis whitespace-nowrap text-ui-tiny leading-[1.35] text-muted-foreground ${toneColorClass(display.tone)}`} title={display.detail}>
             {display.tag}
           </span>
         {/if}
         <span
-          class={`kind shrink-0 w-4 inline-flex items-center justify-center text-[0.6875rem] font-bold font-mono leading-none relative z-[1] cursor-help ${kindColorClass(row.kind)}`}
+          class={`kind shrink-0 w-4 inline-flex items-center justify-center text-ui-micro font-bold font-mono leading-none relative z-1 cursor-help ${kindColorClass(row.kind)}`}
           title={`${row.entry.path} · ${kindLabel(row.kind)}`}
           aria-hidden="true"
         >
           {kindLetter(row.kind)}
         </span>
-        <span class="row-actions absolute right-[1.35rem] top-1/2 -translate-y-1/2 flex items-center gap-px opacity-0 transition-opacity group-hover/row:opacity-100 group-focus-visible/row:opacity-100 group-has-[:focus-visible]/row:opacity-100 pointer-coarse:static pointer-coarse:transform-none pointer-coarse:opacity-100">
+        <span class="row-actions absolute right-5 top-1/2 -translate-y-1/2 flex items-center gap-px opacity-0 transition-opacity group-hover/row:opacity-100 group-focus-visible/row:opacity-100 group-has-[:focus-visible]/row:opacity-100 pointer-coarse:static pointer-coarse:transform-none pointer-coarse:opacity-100">
           <span
             aria-hidden="true"
-            class={`pointer-events-none absolute -left-[0.9rem] -top-[0.1rem] -bottom-[0.1rem] w-[0.9rem] pointer-coarse:hidden ${isSelected(row.key)
+            class={`pointer-events-none absolute -left-4 -top-[0.1rem] -bottom-[0.1rem] w-4 pointer-coarse:hidden ${isSelected(row.key)
               ? "bg-[linear-gradient(to_right,transparent,color-mix(in_srgb,var(--primary)_12%,var(--background)))]"
               : "bg-[linear-gradient(to_right,transparent,var(--background))] group-hover/row:bg-[linear-gradient(to_right,transparent,color-mix(in_srgb,var(--foreground)_5%,var(--background)))]"}`}
           ></span>
@@ -1882,7 +1883,7 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
                       class="whitespace-nowrap rounded-sm px-2 py-1 text-xs"
                       onSelect={() => void onIgnore(choice, row)}
                     >
-                      {choice.label}: <code class="font-mono text-[0.6875rem] text-muted-foreground">{choice.pattern}</code>
+                      {choice.label}: <code class="font-mono text-ui-micro text-muted-foreground">{choice.pattern}</code>
                     </DropdownMenu.Item>
                   {/each}
                 </DropdownMenu.Content>
@@ -1922,9 +1923,9 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
       >
         <!-- Main repository accordion -->
         <div class="repo-accordion border-b border-border">
-          <div class="repo-accordion-header group/acc flex items-center w-full min-h-7 px-1 py-[0.15rem] box-border bg-card border-y border-border select-none gap-1">
+          <div class="repo-accordion-header group/acc flex items-center w-full min-h-7 px-1 py-0.5 box-border bg-card border-y border-border select-none gap-1">
             <button
-              class="repo-accordion-toggle flex-1 min-w-0 flex items-center gap-[0.35rem] h-[1.6rem] bg-transparent border-0 text-foreground text-xs font-semibold px-[0.2rem] cursor-pointer text-left hover:text-primary focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-2"
+              class="repo-accordion-toggle flex-1 min-w-0 flex items-center gap-[0.35rem] h-6 bg-transparent border-0 text-foreground text-xs font-semibold px-[0.2rem] cursor-pointer text-left hover:text-primary focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-2"
               type="button"
               aria-expanded={!mainRepoCollapsed}
               onclick={() => (mainRepoCollapsed = !mainRepoCollapsed)}
@@ -1935,17 +1936,17 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
                   : 'rotate-90'}"
                 class:closed={mainRepoCollapsed}
               >
-                <Icon icon={iconChevron} size={13} />
+                <Icon icon={iconChevron} size={14} />
               </span>
               <span class="repo-title overflow-hidden text-ellipsis whitespace-nowrap">{repoName || "repository"}</span>
               {#if status}
-                <span class="branch-pill shrink-0 inline-flex items-center gap-[0.2rem] px-[0.35rem] py-px rounded-full bg-muted text-muted-foreground text-[0.625rem] font-medium max-w-28 overflow-hidden text-ellipsis whitespace-nowrap" title={`Branch: ${mainBranchLabel(status)}`}>
-                  <Icon icon={iconBranch} size={10} />
+                <span class="branch-pill shrink-0 inline-flex items-center gap-[0.2rem] px-[0.35rem] py-px rounded-full bg-muted text-muted-foreground text-ui-tiny font-medium max-w-28 overflow-hidden text-ellipsis whitespace-nowrap" title={`Branch: ${mainBranchLabel(status)}`}>
+                  <Icon icon={iconBranch} size={12} />
                   <span>{mainBranchLabel(status)}</span>
                 </span>
               {/if}
               {#if index && index.total > 0}
-                <span class="count-pill shrink-0 min-w-4 px-[0.35rem] rounded-full bg-muted text-muted-foreground text-[0.625rem] font-semibold leading-[1.05rem] text-center tabular-nums">{index.total}</span>
+                <span class="count-pill shrink-0 min-w-4 px-[0.35rem] rounded-full bg-muted text-muted-foreground text-ui-tiny font-semibold text-center tabular-nums">{index.total}</span>
               {/if}
             </button>
             <div class="header-actions flex items-center gap-[0.1rem] shrink-0 opacity-0 transition-opacity group-hover/acc:opacity-100 group-focus-within/acc:opacity-100">
@@ -1978,21 +1979,21 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
 
           {#if !mainRepoCollapsed}
             {#if repoId}
-              <div class="embedded-commit-bar px-[0.4rem] pt-[0.3rem] pb-[0.4rem] bg-background border-b border-border">
+              <div class="embedded-commit-bar pt-[0.3rem] pb-[0.4rem] bg-background border-b border-border">
                 <CommitBar {repoId} {status} onCommitted={refreshAll} />
               </div>
             {/if}
 
             {#if index && index.total === 0}
-              <div class="sub-clean-hint px-3 py-2 text-[0.72rem] text-muted-foreground italic">No changes in main repository</div>
+              <div class="sub-clean-hint px-3 py-2 text-ui-meta text-muted-foreground italic">No changes in main repository</div>
             {:else if sections.length === 0 && filterText}
-              <div class="sub-clean-hint px-3 py-2 text-[0.72rem] text-muted-foreground italic">No matching changes in main repository</div>
+              <div class="sub-clean-hint px-3 py-2 text-ui-meta text-muted-foreground italic">No matching changes in main repository</div>
             {:else}
               {#each sections as section, sectionIndex (section.id)}
                 <div class="section" role="group" aria-labelledby={`main-section-${section.id}`}>
-                  <div class="section-header group/header sticky top-0 z-[2] flex items-center w-full h-[26px] box-border bg-card border-b border-border select-none" class:border-t={sectionIndex > 0}>
+                  <div class="section-header group/header sticky top-0 z-2 flex items-center w-full h-6 box-border bg-card border-b border-border select-none" class:border-t={sectionIndex > 0}>
                     <button
-                      class="section-toggle flex-1 min-w-0 flex items-center gap-[0.3rem] h-6 bg-transparent border-0 text-muted-foreground text-[0.6875rem] font-bold tracking-[0.045em] uppercase px-2 cursor-pointer text-left hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-2"
+                      class="section-toggle flex-1 min-w-0 flex items-center gap-[0.3rem] h-6 bg-transparent border-0 text-muted-foreground text-ui-micro font-bold tracking-[0.045em] uppercase px-2 cursor-pointer text-left hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-2"
                       type="button"
                       id={`main-section-${section.id}`}
                       aria-expanded={!collapsed[section.id]}
@@ -2004,10 +2005,10 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
                           : 'rotate-90'}"
                         class:closed={collapsed[section.id]}
                       >
-                        <Icon icon={iconChevron} size={13} />
+                        <Icon icon={iconChevron} size={14} />
                       </span>
                       <span class="section-name min-w-0 overflow-hidden text-ellipsis whitespace-nowrap leading-[1.2]">{section.label}</span>
-                      <span class="count shrink-0 min-w-[1.15rem] ml-auto px-1.5 rounded-full bg-muted text-muted-foreground text-[0.625rem] font-semibold leading-[1.075rem] text-center tabular-nums transition-opacity group-hover/header:opacity-0 group-focus-within/header:opacity-0 pointer-coarse:hidden">{section.rows.length}</span>
+                      <span class="count shrink-0 min-w-5 ml-auto px-1.5 rounded-full bg-muted text-muted-foreground text-ui-tiny font-semibold text-center tabular-nums transition-opacity group-hover/header:opacity-0 group-focus-within/header:opacity-0 pointer-coarse:hidden">{section.rows.length}</span>
                     </button>
                     {#if canMutate && (section.id === "staged" || section.rows.some((row) => row.kind !== "conflicted"))}
                       <span class="section-action absolute right-[0.3rem] top-1/2 -translate-y-1/2 inline-flex opacity-0 transition-opacity group-hover/header:opacity-100 group-focus-within/header:opacity-100 pointer-coarse:static pointer-coarse:transform-none pointer-coarse:opacity-100 pointer-coarse:pr-1">
@@ -2043,9 +2044,9 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
           {@const display = submoduleDisplay(info)}
           {@const counts = submoduleChangeCounts(sub?.status ?? null)}
           <div class="repo-accordion submodule-accordion border-b border-border">
-            <div class="repo-accordion-header group/acc flex items-center w-full min-h-7 px-1 py-[0.15rem] box-border bg-card border-y border-border select-none gap-1">
+            <div class="repo-accordion-header group/acc flex items-center w-full min-h-7 px-1 py-0.5 box-border bg-card border-y border-border select-none gap-1">
               <button
-                class="repo-accordion-toggle flex-1 min-w-0 flex items-center gap-[0.35rem] h-[1.6rem] bg-transparent border-0 text-foreground text-xs font-semibold px-[0.2rem] cursor-pointer text-left hover:text-primary focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-2"
+                class="repo-accordion-toggle flex-1 min-w-0 flex items-center gap-[0.35rem] h-6 bg-transparent border-0 text-foreground text-xs font-semibold px-[0.2rem] cursor-pointer text-left hover:text-primary focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-2"
                 type="button"
                 aria-expanded={!isCollapsed}
                 onclick={() => toggleSubmodule(info.path)}
@@ -2056,21 +2057,21 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
                     : 'rotate-90'}"
                   class:closed={isCollapsed}
                 >
-                  <Icon icon={iconChevron} size={13} />
+                  <Icon icon={iconChevron} size={14} />
                 </span>
                 <Icon icon={iconModule} size={14} />
                 <span class="repo-title overflow-hidden text-ellipsis whitespace-nowrap" title={info.path}>{info.path}</span>
-                <span class="branch-pill shrink-0 inline-flex items-center gap-[0.2rem] px-[0.35rem] py-px rounded-full bg-muted text-muted-foreground text-[0.625rem] font-medium max-w-28 overflow-hidden text-ellipsis whitespace-nowrap" title={`Branch: ${submoduleBranchLabel(info, sub?.status ?? null)}`}>
-                  <Icon icon={iconBranch} size={10} />
+                <span class="branch-pill shrink-0 inline-flex items-center gap-[0.2rem] px-[0.35rem] py-px rounded-full bg-muted text-muted-foreground text-ui-tiny font-medium max-w-28 overflow-hidden text-ellipsis whitespace-nowrap" title={`Branch: ${submoduleBranchLabel(info, sub?.status ?? null)}`}>
+                  <Icon icon={iconBranch} size={12} />
                   <span>{submoduleBranchLabel(info, sub?.status ?? null)}</span>
                 </span>
                 {#if display.tag}
-                  <span class={`module-tag shrink-0 max-w-[6.5rem] overflow-hidden text-ellipsis whitespace-nowrap text-[0.625rem] leading-[1.35] text-muted-foreground ${toneColorClass(display.tone)}`} title={display.detail}>
+                  <span class={`module-tag shrink-0 max-w-[6.5rem] overflow-hidden text-ellipsis whitespace-nowrap text-ui-tiny leading-[1.35] text-muted-foreground ${toneColorClass(display.tone)}`} title={display.detail}>
                     {display.tag}
                   </span>
                 {/if}
                 {#if info.initialized && counts.total > 0}
-                  <span class="count-pill shrink-0 min-w-4 px-[0.35rem] rounded-full bg-muted text-muted-foreground text-[0.625rem] font-semibold leading-[1.05rem] text-center tabular-nums">{counts.total}</span>
+                  <span class="count-pill shrink-0 min-w-4 px-[0.35rem] rounded-full bg-muted text-muted-foreground text-ui-tiny font-semibold text-center tabular-nums">{counts.total}</span>
                 {/if}
               </button>
               <div class="header-actions flex items-center gap-[0.1rem] shrink-0 opacity-0 transition-opacity group-hover/acc:opacity-100 group-focus-within/acc:opacity-100">
@@ -2158,24 +2159,24 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
                   <Button
                     variant="outline"
                     size="xs"
-                    class="gap-[0.35rem] rounded-sm px-[0.6rem] py-1 bg-muted text-primary hover:bg-accent hover:text-primary text-[0.72rem] dark:bg-muted dark:hover:bg-accent [&_svg:not([class*='size-'])]:size-[13px]"
+                    class="gap-[0.35rem] rounded-sm px-2.5 py-1 bg-muted text-primary hover:bg-accent hover:text-primary text-ui-meta dark:bg-muted dark:hover:bg-accent [&_svg:not([class*='size-'])]:size-3.5"
                     onclick={() => void updateSubmodule(info)}
                     disabled={moduleBusy !== null}
                   >
-                    <Icon icon={iconUpdate} size={13} />
+                    <Icon icon={iconUpdate} size={14} />
                     Initialize and update submodule
                   </Button>
                 </div>
               {:else if sub?.loading && !sub.status}
-                <div class="sub-clean-hint px-3 py-2 text-[0.72rem] text-muted-foreground italic">
+                <div class="sub-clean-hint px-3 py-2 text-ui-meta text-muted-foreground italic">
                   <Spinner class="size-3" role="presentation" aria-hidden="true" /> Loading submodule changes…
                 </div>
               {:else if sub?.error}
-                <div class="module-error mx-[0.4rem] mb-1 px-1 py-0.5 border border-[color:var(--app-deleted)] rounded-sm bg-[color:var(--app-conflicted-bg)] text-[color:var(--app-deleted)] text-left text-[0.6875rem]" title={sub.error}>
+                <div class="module-error mx-2 mb-1 px-1 py-0.5 border border-[color:var(--app-deleted)] rounded-sm bg-[color:var(--app-conflicted-bg)] text-[color:var(--app-deleted)] text-left text-ui-micro" title={sub.error}>
                   Submodule error: {sub.error}
                 </div>
               {:else if sub?.status}
-                <div class="embedded-commit-bar px-[0.4rem] pt-[0.3rem] pb-[0.4rem] bg-background border-b border-border">
+                <div class="embedded-commit-bar pt-[0.3rem] pb-[0.4rem] bg-background border-b border-border">
                   <CommitBar
                     repoId={sub.repoId!}
                     status={sub.status}
@@ -2188,16 +2189,16 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
 
                 {@const subFilteredSections = sub.index ? filterSections(sub.index, filterText) : []}
                 {#if counts.total === 0}
-                  <div class="sub-clean-hint px-3 py-2 text-[0.72rem] text-muted-foreground italic">No changes in submodule</div>
+                  <div class="sub-clean-hint px-3 py-2 text-ui-meta text-muted-foreground italic">No changes in submodule</div>
                 {:else if subFilteredSections.length === 0 && filterText}
-                  <div class="sub-clean-hint px-3 py-2 text-[0.72rem] text-muted-foreground italic">No matching changes in submodule</div>
+                  <div class="sub-clean-hint px-3 py-2 text-ui-meta text-muted-foreground italic">No matching changes in submodule</div>
                 {:else}
                   {#each subFilteredSections as subSection, subSectionIndex (subSection.id)}
                     {@const subSecCollapsed = isSubSectionCollapsed(info.path, subSection.id)}
                     <div class="section" role="group" aria-labelledby={`sub-${info.path}-${subSection.id}`}>
-                      <div class="section-header group/header sticky top-0 z-[2] flex items-center w-full h-[26px] box-border bg-card border-b border-border select-none" class:border-t={subSectionIndex > 0}>
+                      <div class="section-header group/header sticky top-0 z-2 flex items-center w-full h-6 box-border bg-card border-b border-border select-none" class:border-t={subSectionIndex > 0}>
                         <button
-                          class="section-toggle flex-1 min-w-0 flex items-center gap-[0.3rem] h-6 bg-transparent border-0 text-muted-foreground text-[0.6875rem] font-bold tracking-[0.045em] uppercase px-2 cursor-pointer text-left hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-2"
+                          class="section-toggle flex-1 min-w-0 flex items-center gap-[0.3rem] h-6 bg-transparent border-0 text-muted-foreground text-ui-micro font-bold tracking-[0.045em] uppercase px-2 cursor-pointer text-left hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-2"
                           type="button"
                           id={`sub-${info.path}-${subSection.id}`}
                           aria-expanded={!subSecCollapsed}
@@ -2209,10 +2210,10 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
                               : 'rotate-90'}"
                             class:closed={subSecCollapsed}
                           >
-                            <Icon icon={iconChevron} size={13} />
+                            <Icon icon={iconChevron} size={14} />
                           </span>
                           <span class="section-name min-w-0 overflow-hidden text-ellipsis whitespace-nowrap leading-[1.2]">{subSection.label}</span>
-                          <span class="count shrink-0 min-w-[1.15rem] ml-auto px-1.5 rounded-full bg-muted text-muted-foreground text-[0.625rem] font-semibold leading-[1.075rem] text-center tabular-nums transition-opacity group-hover/header:opacity-0 group-focus-within/header:opacity-0 pointer-coarse:hidden">{subSection.rows.length}</span>
+                          <span class="count shrink-0 min-w-5 ml-auto px-1.5 rounded-full bg-muted text-muted-foreground text-ui-tiny font-semibold text-center tabular-nums transition-opacity group-hover/header:opacity-0 group-focus-within/header:opacity-0 pointer-coarse:hidden">{subSection.rows.length}</span>
                         </button>
                         {#if sub.repoId && (subSection.id === "staged" || subSection.rows.some((row) => row.kind !== "conflicted"))}
                           <span class="section-action absolute right-[0.3rem] top-1/2 -translate-y-1/2 inline-flex opacity-0 transition-opacity group-hover/header:opacity-100 group-focus-within/header:opacity-100 pointer-coarse:static pointer-coarse:transform-none pointer-coarse:opacity-100 pointer-coarse:pr-1">
@@ -2245,16 +2246,9 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
         {/each}
       </div>
     {:else if index !== null && index.total === 0 && extraModules.length === 0}
-      <div class="empty-state flex-1 min-h-0 flex flex-col items-center justify-center gap-[0.3rem] px-4 py-8 text-center text-muted-foreground select-none" role="status">
-        <span class="empty-icon inline-flex items-center justify-center size-11 mb-0.5 rounded-full border border-border text-[color:var(--app-added)] opacity-90"><Icon icon={iconCheck} size={26} /></span>
-        <p class="empty-title m-0 text-[0.8125rem] font-medium text-foreground">No changes</p>
-        <p class="empty-hint m-0 max-w-[15rem] text-[0.72rem] leading-[1.4]">Your working tree is clean.</p>
-      </div>
+      <EmptyState icon={iconCheck} title="No changes" hint="Your working tree is clean." />
     {:else if sections.length === 0 && extraModules.length === 0}
-      <div class="empty-state flex-1 min-h-0 flex flex-col items-center justify-center gap-[0.3rem] px-4 py-8 text-center text-muted-foreground select-none" role="status">
-        <p class="empty-title m-0 text-[0.8125rem] font-medium text-foreground">No matching changes</p>
-        <p class="empty-hint m-0 max-w-[15rem] text-[0.72rem] leading-[1.4]">Nothing matches “{filterText}”.</p>
-      </div>
+      <EmptyState title="No matching changes" hint={`Nothing matches “${filterText}”.`} />
     {:else}
       <div
         class="tree flex-1 min-h-0 overflow-y-auto [scrollbar-gutter:stable] pb-3 outline-none"
@@ -2267,9 +2261,9 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
         {#each sectionWindows as window, windowIndex (window.section.id)}
           {@const section = window.section}
           <div class="section" role="group" aria-labelledby={`section-${section.id}`}>
-            <div class="section-header group/header sticky top-0 z-[2] flex items-center w-full h-[26px] box-border bg-card border-b border-border select-none" class:border-t={windowIndex > 0}>
+            <div class="section-header group/header sticky top-0 z-2 flex items-center w-full h-6 box-border bg-card border-b border-border select-none" class:border-t={windowIndex > 0}>
               <button
-                class="section-toggle flex-1 min-w-0 flex items-center gap-[0.3rem] h-6 bg-transparent border-0 text-muted-foreground text-[0.6875rem] font-bold tracking-[0.045em] uppercase px-2 cursor-pointer text-left hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-2"
+                class="section-toggle flex-1 min-w-0 flex items-center gap-[0.3rem] h-6 bg-transparent border-0 text-muted-foreground text-ui-micro font-bold tracking-[0.045em] uppercase px-2 cursor-pointer text-left hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-2"
                 type="button"
                 id={`section-${section.id}`}
                 aria-expanded={!collapsed[section.id]}
@@ -2282,10 +2276,10 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
                     : 'rotate-90'}"
                   class:closed={collapsed[section.id]}
                 >
-                  <Icon icon={iconChevron} size={13} />
+                  <Icon icon={iconChevron} size={14} />
                 </span>
                 <span class="section-name min-w-0 overflow-hidden text-ellipsis whitespace-nowrap leading-[1.2]">{section.label}</span>
-                <span class="count shrink-0 min-w-[1.15rem] ml-auto px-1.5 rounded-full bg-muted text-muted-foreground text-[0.625rem] font-semibold leading-[1.075rem] text-center tabular-nums transition-opacity group-hover/header:opacity-0 group-focus-within/header:opacity-0 pointer-coarse:hidden">{section.rows.length + section.modules.length}</span>
+                <span class="count shrink-0 min-w-5 ml-auto px-1.5 rounded-full bg-muted text-muted-foreground text-ui-tiny font-semibold text-center tabular-nums transition-opacity group-hover/header:opacity-0 group-focus-within/header:opacity-0 pointer-coarse:hidden">{section.rows.length + section.modules.length}</span>
               </button>
               {#if canMutate &&
                 (section.id === "staged" || section.rows.some((row) => row.kind !== "conflicted"))}
@@ -2327,7 +2321,7 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
                 {@const display = submoduleDisplay(info)}
                 {@const parts = splitPath(info.path)}
                 <div
-                  class="row module-row group/row relative flex items-center gap-[0.4rem] min-w-0 h-6 min-h-6 box-border px-[0.4rem] cursor-pointer [content-visibility:auto] [contain-intrinsic-size:auto_1.375rem] hover:bg-[color:var(--app-hover)]"
+                  class="row module-row group/row relative flex items-center gap-[0.4rem] min-w-0 h-6 min-h-6 box-border px-2 cursor-pointer [content-visibility:auto] [contain-intrinsic-size:auto_1.5rem] hover:bg-[color:var(--app-hover)]"
                   role="treeitem"
                   aria-selected="false"
                   aria-setsize={section.rows.length + section.modules.length}
@@ -2347,26 +2341,26 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
                     <span class="path flex-1 basis-auto min-w-0 flex items-baseline gap-[0.35rem] overflow-hidden text-xs leading-[1.25]">
                       <span class={`base min-w-8 overflow-hidden text-ellipsis whitespace-nowrap font-normal ${display.tone === "danger" ? "text-[color:var(--app-deleted)]" : "text-foreground"}`} title={info.path}>{parts.base}</span>
                       {#if parts.dir}
-                        <span class="dir grow min-w-0 max-w-[48%] ml-auto overflow-hidden text-ellipsis whitespace-nowrap text-right text-muted-foreground opacity-70 text-[0.6875rem]" title={dirText(parts.dir)}>{dirText(parts.dir)}</span>
+                        <span class="dir grow min-w-0 max-w-[48%] ml-auto overflow-hidden text-ellipsis whitespace-nowrap text-right text-muted-foreground opacity-70 text-ui-micro" title={dirText(parts.dir)}>{dirText(parts.dir)}</span>
                       {/if}
                     </span>
                     {#if display.tag}
-                      <span class={`module-tag shrink-0 max-w-[6.5rem] overflow-hidden text-ellipsis whitespace-nowrap text-[0.625rem] leading-[1.35] text-muted-foreground ${toneColorClass(display.tone)}`} title={display.detail}>
+                      <span class={`module-tag shrink-0 max-w-[6.5rem] overflow-hidden text-ellipsis whitespace-nowrap text-ui-tiny leading-[1.35] text-muted-foreground ${toneColorClass(display.tone)}`} title={display.detail}>
                         {display.tag}
                       </span>
                     {/if}
                   </button>
                   <span
-                    class="kind shrink-0 w-4 inline-flex items-center justify-center text-[0.6875rem] font-bold font-mono leading-none relative z-[1] cursor-help text-[color:var(--app-modified)]"
+                    class="kind shrink-0 w-4 inline-flex items-center justify-center text-ui-micro font-bold font-mono leading-none relative z-1 cursor-help text-[color:var(--app-modified)]"
                     title={`${info.path} · ${display.detail}`}
                     aria-hidden="true"
                   >
                     S
                   </span>
-                  <span class="row-actions absolute right-[1.35rem] top-1/2 -translate-y-1/2 flex items-center gap-px opacity-0 transition-opacity group-hover/row:opacity-100 group-focus-visible/row:opacity-100 group-has-[:focus-visible]/row:opacity-100 pointer-coarse:static pointer-coarse:transform-none pointer-coarse:opacity-100">
+                  <span class="row-actions absolute right-5 top-1/2 -translate-y-1/2 flex items-center gap-px opacity-0 transition-opacity group-hover/row:opacity-100 group-focus-visible/row:opacity-100 group-has-[:focus-visible]/row:opacity-100 pointer-coarse:static pointer-coarse:transform-none pointer-coarse:opacity-100">
                     <span
                       aria-hidden="true"
-                      class="pointer-events-none absolute -left-[0.9rem] -top-[0.1rem] -bottom-[0.1rem] w-[0.9rem] pointer-coarse:hidden bg-[linear-gradient(to_right,transparent,var(--background))] group-hover/row:bg-[linear-gradient(to_right,transparent,color-mix(in_srgb,var(--foreground)_5%,var(--background)))]"
+                      class="pointer-events-none absolute -left-4 -top-[0.1rem] -bottom-[0.1rem] w-4 pointer-coarse:hidden bg-[linear-gradient(to_right,transparent,var(--background))] group-hover/row:bg-[linear-gradient(to_right,transparent,color-mix(in_srgb,var(--foreground)_5%,var(--background)))]"
                     ></span>
                     <Button
                       class="relative text-muted-foreground after:absolute after:-inset-1 after:content-[''] hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-4"
@@ -2420,8 +2414,8 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
     {/if}
   {:else}
     <div class="empty-state flex-1 min-h-0 flex flex-col items-center justify-center gap-[0.3rem] px-4 py-8 text-center text-muted-foreground select-none" role="status">
-      <Spinner class="size-[18px]" role="presentation" aria-hidden="true" />
-      <p class="empty-title m-0 text-[0.8125rem] font-medium text-foreground">Loading changes…</p>
+      <Spinner class="size-4" role="presentation" aria-hidden="true" />
+      <p class="empty-title m-0 text-ui-base font-medium text-foreground">Loading changes…</p>
     </div>
   {/if}
 </aside>

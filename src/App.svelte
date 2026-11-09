@@ -38,6 +38,7 @@
   import TabStrip from "$lib/components/TabStrip.svelte";
   import ThemeToggle from "$lib/components/ThemeToggle.svelte";
   import Icon from "$lib/components/icons/Icon.svelte";
+  import EmptyState from "$lib/components/layout/EmptyState.svelte";
   import { Input } from "$lib/components/ui/input/index.js";
   import { formatRelativeTime } from "$lib/git/format";
   import iconBrand from "@ktibow/iconset-material-symbols/account-tree";
@@ -587,7 +588,7 @@
         >
           <Icon icon={iconBrand} size={26} />
         </span>
-        <span class="launch-title text-[0.9375rem] font-medium text-foreground">
+        <span class="launch-title text-sm font-medium text-foreground">
           Opening {restoreName ?? "your last workspace"}…
         </span>
         {#if tabStore.restoreRoot}
@@ -624,7 +625,7 @@
             title={active.root}>{active.root}</span
           >
           <p
-            class="offline-msg mb-2 max-w-[min(32rem,80vw)] text-[0.8125rem] [overflow-wrap:anywhere]"
+            class="offline-msg mb-2 max-w-[min(32rem,80vw)] text-ui-base [overflow-wrap:anywhere]"
             role="alert"
           >
             {active.openError}
@@ -688,11 +689,11 @@
               </span>
               <span class="brand-text flex min-w-0 flex-col leading-[1.15]">
                 <span
-                  class="brand-name text-[1.0625rem] font-semibold tracking-[-0.01em]"
+                  class="brand-name text-lg font-semibold tracking-[-0.01em]"
                   >mygitui</span
                 >
                 <span
-                  class="brand-tag max-[720px]:hidden text-[0.6875rem] text-muted-foreground"
+                  class="brand-tag max-[720px]:hidden text-ui-micro text-muted-foreground"
                   >your local git workspace</span
                 >
               </span>
@@ -764,13 +765,13 @@
 
           {#if showRepoFilter}
             <label
-              class="repo-search mb-3 flex h-[2.1rem] items-center gap-1.5 rounded-full border border-border bg-card px-2.5 text-muted-foreground focus-within:border-primary focus-within:ring-1 focus-within:ring-primary"
+              class="repo-search flex h-8 items-center gap-1.5 rounded-full border border-border bg-card px-2.5 text-muted-foreground focus-within:border-primary focus-within:ring-1 focus-within:ring-primary"
             >
               <span class="search-icon inline-flex flex-none opacity-80" aria-hidden="true">
-                <Icon icon={iconSearch} size={15} />
+                <Icon icon={iconSearch} size={14} />
               </span>
               <input
-                class="min-w-0 flex-1 border-0 bg-transparent text-[0.8125rem] text-foreground outline-none placeholder:text-muted-foreground placeholder:opacity-80"
+                class="min-w-0 flex-1 border-0 bg-transparent text-ui-base text-foreground outline-none placeholder:text-muted-foreground placeholder:opacity-80"
                 type="text"
                 aria-label="Filter recent repositories"
                 placeholder="Filter repositories by name or path"
@@ -784,7 +785,7 @@
                   title="Clear filter"
                   onclick={() => (repoFilter = "")}
                 >
-                  <Icon icon={iconClose} size={13} />
+                  <Icon icon={iconClose} size={14} />
                 </button>
               {/if}
             </label>
@@ -806,7 +807,7 @@
                 Open your first repository
               </h2>
               <p
-                class="empty-text m-0 max-w-[26rem] text-[0.8125rem] leading-normal text-muted-foreground"
+                class="empty-text m-0 max-w-[26rem] text-ui-base leading-normal text-muted-foreground"
               >
                 Choose a folder on disk, clone a remote, or drag a folder onto
                 this window to get started.
@@ -831,22 +832,18 @@
               </div>
             </div>
           {:else if filteredRepos.length === 0}
-            <div
-              class="no-results rounded-2xl border border-dashed border-border px-4 py-8 text-center text-muted-foreground"
+            <EmptyState
+              class="no-results rounded-2xl border border-dashed border-border"
+              title={`No repositories match “${repoFilter}”`}
             >
-              <p
-                class="empty-title m-0 mb-2 text-base font-semibold text-foreground"
-              >
-                No repositories match “{repoFilter}”
-              </p>
               <button
-                class="clear-search mt-3 inline-flex cursor-pointer items-center gap-1.5 rounded-full border border-border bg-transparent px-3.5 py-1.5 text-xs font-medium whitespace-nowrap text-primary hover:border-input hover:bg-accent focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+                class="clear-search inline-flex cursor-pointer items-center gap-1.5 rounded-full border border-border bg-transparent px-3.5 py-1.5 text-xs font-medium whitespace-nowrap text-primary hover:border-input hover:bg-accent focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
                 type="button"
                 onclick={() => (repoFilter = "")}
               >
                 Clear filter
               </button>
-            </div>
+            </EmptyState>
           {:else}
             <ul class="repo-list m-0 flex list-none flex-col gap-1.5 p-0">
               {#each filteredRepos as repo (repo.path)}
@@ -862,28 +859,28 @@
                     </span>
                     <span class="repo-main flex min-w-0 flex-1 flex-col gap-0.5">
                       <span class="repo-title flex min-w-0 items-center gap-[0.3rem]">
-                        <span class="repo-name overflow-hidden text-ellipsis whitespace-nowrap text-[0.9375rem] font-semibold">{repoName(repo.path)}</span>
+                        <span class="repo-name overflow-hidden text-ellipsis whitespace-nowrap text-sm font-semibold">{repoName(repo.path)}</span>
                         {#if repo.pinned}
                           <span
                             class="pin-mark inline-flex flex-none text-primary"
                             title="Pinned"
                           >
-                            <Icon icon={iconPin} size={13} />
+                            <Icon icon={iconPin} size={14} />
                           </span>
                         {/if}
                       </span>
                       <span class="repo-path max-w-full overflow-hidden text-ellipsis whitespace-nowrap font-mono text-xs text-muted-foreground">{repo.path}</span>
                     </span>
                     {#if when}
-                      <span
-                        class="repo-when max-[720px]:hidden flex-none whitespace-nowrap text-[0.6875rem] text-muted-foreground"
-                        >{when}</span
-                      >
+                    <span
+                      class="repo-when max-[720px]:hidden flex-none whitespace-nowrap text-ui-micro text-muted-foreground"
+                      >{when}</span
+                    >
                     {/if}
                   </button>
                   <span class="row-actions flex flex-none items-center gap-0.5 opacity-75 transition-opacity group-hover/row:opacity-100 group-focus-within/row:opacity-100">
                     <button
-                      class="row-action pin inline-flex size-[1.9rem] cursor-pointer items-center justify-center rounded-lg border-0 bg-transparent p-0 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-primary {repo.pinned ? 'text-primary' : ''}"
+                      class="row-action pin inline-flex size-7 cursor-pointer items-center justify-center rounded-lg border-0 bg-transparent p-0 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-primary {repo.pinned ? 'text-primary' : ''}"
                       class:pinned={repo.pinned}
                       type="button"
                       aria-pressed={repo.pinned}
@@ -893,16 +890,16 @@
                         : "Pin repository"}
                       onclick={() => togglePin(repo.path)}
                     >
-                      <Icon icon={iconPin} size={15} />
+                      <Icon icon={iconPin} size={14} />
                     </button>
                     <button
-                      class="row-action remove inline-flex size-[1.9rem] cursor-pointer items-center justify-center rounded-lg border-0 bg-transparent p-0 text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-primary"
+                      class="row-action remove inline-flex size-7 cursor-pointer items-center justify-center rounded-lg border-0 bg-transparent p-0 text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-primary"
                       type="button"
                       title="Remove from recent list"
                       aria-label={`Remove ${repoName(repo.path)} from the recent list`}
                       onclick={() => removeFromRecents(repo.path)}
                     >
-                      <Icon icon={iconClose} size={15} />
+                      <Icon icon={iconClose} size={14} />
                     </button>
                   </span>
                 </li>
@@ -957,10 +954,10 @@
                   <Icon icon={iconDevices} size={18} />
                 </span>
                 <span class="detail-main flex min-w-0 flex-1 flex-col gap-0.5">
-                  <span
-                    class="detail-name overflow-hidden text-ellipsis whitespace-nowrap text-[0.9375rem] font-semibold"
-                    >{deviceDetail.profile.name}</span
-                  >
+                <span
+                  class="detail-name overflow-hidden text-ellipsis whitespace-nowrap text-sm font-semibold"
+                  >{deviceDetail.profile.name}</span
+                >
                   <span
                     class="detail-host overflow-hidden text-ellipsis whitespace-nowrap font-mono text-xs text-muted-foreground"
                   >
@@ -968,7 +965,7 @@
                   </span>
                 </span>
                 <span
-                  class="device-status inline-flex flex-none items-center gap-1.5 whitespace-nowrap rounded-full bg-muted px-[0.55rem] py-[0.1rem] text-[0.6875rem] {deviceDetail.status === 'connected'
+                  class="device-status inline-flex flex-none items-center gap-1.5 whitespace-nowrap rounded-full bg-muted px-2 py-px text-ui-micro {deviceDetail.status === 'connected'
                     ? 'text-foreground'
                     : 'text-muted-foreground'}"
                   data-status={deviceDetail.status}
@@ -1009,7 +1006,7 @@
                   type="button"
                   onclick={() => openEditDevice(deviceDetail.profile)}
                 >
-                  <Icon icon={iconEdit} size={13} />
+                  <Icon icon={iconEdit} size={14} />
                   Edit…
                 </button>
               </div>
@@ -1019,11 +1016,11 @@
               >
                 <label class="poll-field flex flex-col gap-0.5">
                   <span
-                    class="field-label text-[0.6875rem] text-muted-foreground"
+                    class="field-label text-ui-micro text-muted-foreground"
                     >Poll interval (seconds)</span
                   >
                   <input
-                    class="poll-input w-[5.5rem] rounded border border-border bg-card px-2 py-[0.35rem] text-[0.8125rem] text-foreground focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-primary"
+                    class="poll-input w-[5.5rem] rounded border border-border bg-card px-2 py-[0.35rem] text-ui-base text-foreground focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-primary"
                     type="number"
                     min="1"
                     aria-label="Poll interval in seconds"
@@ -1057,7 +1054,7 @@
             </div>
           {:else if (remoteDevices.devices?.length ?? 0) === 0}
             <p
-              class="devices-empty m-0 rounded-2xl border border-dashed border-border px-6 py-5 text-[0.8125rem] leading-normal text-muted-foreground"
+              class="devices-empty m-0 rounded-2xl border border-dashed border-border px-6 py-5 text-ui-base leading-normal text-muted-foreground"
             >
               No devices yet. Register an SSH machine to browse and open its
               repositories as projects.
@@ -1076,14 +1073,14 @@
                     </span>
                     <span class="repo-main flex min-w-0 flex-1 flex-col gap-0.5">
                       <span class="repo-title flex min-w-0 items-center gap-[0.3rem]">
-                        <span class="repo-name overflow-hidden text-ellipsis whitespace-nowrap text-[0.9375rem] font-semibold">{device.profile.name}</span>
+                        <span class="repo-name overflow-hidden text-ellipsis whitespace-nowrap text-sm font-semibold">{device.profile.name}</span>
                       </span>
                       <span class="repo-path max-w-full overflow-hidden text-ellipsis whitespace-nowrap font-mono text-xs text-muted-foreground">
                         {device.profile.username}@{device.profile.host}:{device.profile.port}
                       </span>
                     </span>
                     <span
-                      class="device-status inline-flex flex-none items-center gap-1.5 whitespace-nowrap rounded-full bg-muted px-[0.55rem] py-[0.1rem] text-[0.6875rem] {device.status === 'connected'
+                      class="device-status inline-flex flex-none items-center gap-1.5 whitespace-nowrap rounded-full bg-muted px-2 py-px text-ui-micro {device.status === 'connected'
                         ? 'text-foreground'
                         : 'text-muted-foreground'}"
                       data-status={device.status}
@@ -1101,13 +1098,13 @@
                   </button>
                   <span class="row-actions flex flex-none items-center gap-0.5 opacity-75 transition-opacity group-hover/row:opacity-100 group-focus-within/row:opacity-100">
                     <button
-                      class="row-action inline-flex size-[1.9rem] cursor-pointer items-center justify-center rounded-lg border-0 bg-transparent p-0 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-primary"
+                      class="row-action inline-flex size-7 cursor-pointer items-center justify-center rounded-lg border-0 bg-transparent p-0 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-primary"
                       type="button"
                       title="Edit device"
                       aria-label={`Edit device ${device.profile.name}`}
                       onclick={() => openEditDevice(device.profile)}
                     >
-                      <Icon icon={iconEdit} size={15} />
+                      <Icon icon={iconEdit} size={14} />
                     </button>
                   </span>
                 </li>
@@ -1118,7 +1115,7 @@
       </div>
 
       <footer
-        class="home-foot flex flex-none items-center gap-5 border-t border-border bg-muted/80 px-5 py-[0.65rem] text-[0.6875rem] text-muted-foreground"
+        class="home-foot flex flex-none items-center gap-5 border-t border-border bg-muted/80 px-5 py-[0.65rem] text-ui-micro text-muted-foreground"
       >
         <span class="hint">
           <kbd class="kbd">Ctrl</kbd><kbd class="kbd">K</kbd> quick switcher

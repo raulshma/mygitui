@@ -11,16 +11,13 @@
  */
 
 import { ROW_HEIGHTS, rowHeight, type DiffRow } from "./rowModel";
+import { GUTTER_PX } from "./metrics";
 import { charWidth, visualColumns } from "./textWidth";
 
-/** Gutter + padding constants — must match DiffRow.svelte's CSS (content-box):
- *  `.no` 3.25rem + 0.5rem padding, `.sign` 1.25rem, `.txt` padding-right 1rem. */
-export const GUTTER_PX = {
-  /** Per split half: one line-number gutter + sign + text right padding. */
-  splitSide: 96,
-  /** Unified row: two line-number gutters + sign + text right padding. */
-  unified: 156,
-} as const;
+// Back-compat re-export: the gutter constants live in diff/metrics.ts (alongside
+// ROW_HEIGHTS and the cell widths DiffRow renders); GUTTER_PX is derived there
+// from the same constants, so it can no longer drift from the DOM.
+export { GUTTER_PX };
 
 export interface WrapMetrics {
   /** Usable text width of one split half, px (≤ 0 = cannot wrap → 1 line). */

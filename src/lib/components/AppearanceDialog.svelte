@@ -348,7 +348,7 @@
           <Tooltip.Root>
             <Tooltip.Trigger aria-label="Copy appearance preset code">
               {#snippet child({ props })}
-                <Button {...props} variant="outline" size="sm" onclick={copyCode}>
+                <Button {...props} variant="outline" onclick={copyCode}>
                   Copy preset
                 </Button>
               {/snippet}
@@ -359,18 +359,17 @@
           </Tooltip.Root>
         </Tooltip.Provider>
         <Input
-          class="h-8 w-44 font-mono text-xs {codeError ? 'border-destructive' : ''}"
+          class="w-44 font-mono text-xs {codeError ? 'border-destructive' : ''}"
           placeholder="Preset code…"
           bind:value={codeInput}
           aria-invalid={codeError}
           onkeydown={(e) => e.key === "Enter" && applyCode()}
         />
-        <Button variant="secondary" size="sm" onclick={applyCode}>Apply</Button>
+        <Button variant="secondary" onclick={applyCode}>Apply</Button>
         <span class="flex-1"></span>
-        <Button variant="outline" size="sm" onclick={() => appearance.shuffle()}>Shuffle</Button>
+        <Button variant="outline" onclick={() => appearance.shuffle()}>Shuffle</Button>
         <Button
           variant="ghost"
-          size="sm"
           onclick={() => {
             appearance.reset();
             toast("Appearance reset to defaults", { kind: "info" });

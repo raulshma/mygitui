@@ -306,7 +306,7 @@
   <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
   <Dialog.Overlay class="scrim bg-black/30" role="presentation" />
   <Dialog.Content
-    class="dialog flex max-h-[80vh] w-[min(40rem,calc(100vw-2rem))] max-w-none flex-col gap-0 rounded-3xl bg-card px-6 py-5 text-foreground shadow-lg sm:max-w-none"
+    class="dialog flex max-h-[80vh] w-[min(40rem,calc(100vw-2rem))] max-w-none flex-col bg-card text-foreground shadow-lg sm:max-w-none"
     role="dialog"
     aria-modal="true"
     aria-labelledby="rebase-title"
@@ -327,11 +327,11 @@
 
     {#if phase === "planning"}
       {#if loading}
-        <p class="state mx-1 mb-3 mt-1 text-[0.8125rem] text-muted-foreground" role="status">Loading commits…</p>
+        <p class="state mx-1 mb-3 mt-1 text-ui-base text-muted-foreground" role="status">Loading commits…</p>
       {:else if loadError !== null}
-        <p class="state error mx-1 mb-3 mt-1 text-[0.8125rem] text-destructive" role="alert">Failed to load commits: {loadError}</p>
+        <p class="state error mx-1 mb-3 mt-1 text-ui-base text-destructive" role="alert">Failed to load commits: {loadError}</p>
       {:else if rows.length === 0}
-        <p class="state mx-1 mb-3 mt-1 text-[0.8125rem] text-muted-foreground">No commits in range (HEAD..{shortBase}).</p>
+        <p class="state mx-1 mb-3 mt-1 text-ui-base text-muted-foreground">No commits in range (HEAD..{shortBase}).</p>
       {:else}
         <ol class="plan m-0 mb-2 min-h-0 flex-1 list-none overflow-y-auto rounded-xl border border-border bg-background p-1" aria-label="Rebase plan (oldest first)">
           {#each rows as row, i (row.sha)}
@@ -348,7 +348,7 @@
               ondrop={(e) => onDrop(e, i)}
               ondragend={onDragEnd}
             >
-              <div class="pline flex items-center gap-1.5 px-[0.35rem] py-0.5 text-[0.78rem]">
+              <div class="pline flex items-center gap-1.5 px-[0.35rem] py-0.5 text-ui-meta">
                 <span class="grip flex-none cursor-grab select-none text-muted-foreground" aria-hidden="true">⠿</span>
                 <select
                   class="action w-[5.5rem] flex-none rounded-md border border-border bg-muted px-1 py-0.5 text-xs text-foreground focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring"
@@ -370,7 +370,7 @@
                   <Button
                     variant="outline"
                     size="icon-xs"
-                    class="text-[0.7rem] leading-none text-muted-foreground disabled:opacity-35"
+                    class="text-ui-micro leading-none text-muted-foreground disabled:opacity-35"
                     type="button"
                     onclick={() => moveBy(i, -1)}
                     disabled={i === 0}
@@ -379,7 +379,7 @@
                   <Button
                     variant="outline"
                     size="icon-xs"
-                    class="text-[0.7rem] leading-none text-muted-foreground disabled:opacity-35"
+                    class="text-ui-micro leading-none text-muted-foreground disabled:opacity-35"
                     type="button"
                     onclick={() => moveBy(i, 1)}
                     disabled={i === rows.length - 1}
@@ -401,7 +401,7 @@
           {/each}
         </ol>
         {#if validationError !== null}
-          <p class="validate mx-1 mb-2 text-[0.78rem] text-destructive" role="alert">{validationError}</p>
+          <p class="validate mx-1 mb-2 text-ui-meta text-destructive" role="alert">{validationError}</p>
         {/if}
       {/if}
       <div class="actions flex flex-none justify-end gap-2 pt-1">
@@ -427,7 +427,7 @@
       </div>
     {:else}
       {#if monitor.inConflict}
-        <div class="conflict mx-1 mb-2 rounded-xl border border-destructive/55 bg-destructive/5 px-3 py-2.5 text-[0.8125rem]" role="alert">
+        <div class="conflict mx-1 mb-2 rounded-xl border border-destructive/55 bg-destructive/5 px-3 py-2.5 text-ui-base" role="alert">
           <p class="ctitle mb-1 font-medium text-destructive">
             Conflicts — {monitor.conflictCount}
             file{monitor.conflictCount === 1 ? "" : "s"}
@@ -437,7 +437,7 @@
               <li class="cpath overflow-hidden text-ellipsis whitespace-nowrap font-mono text-xs text-foreground" title={file.path}>{file.path}</li>
             {/each}
           </ul>
-          <p class="chint mb-2 text-[0.78rem] text-muted-foreground">Resolve in the status panel, then Continue.</p>
+          <p class="chint mb-2 text-ui-meta text-muted-foreground">Resolve in the status panel, then Continue.</p>
           <Button
             variant="outline"
             class="text-primary"
@@ -451,13 +451,13 @@
           </Button>
         </div>
       {:else if monitor.paused && phase === "running"}
-        <p class="state mx-1 mb-3 mt-1 text-[0.8125rem] text-muted-foreground" role="status">
+        <p class="state mx-1 mb-3 mt-1 text-ui-base text-muted-foreground" role="status">
           Paused for edit — inspect the commit, then Continue.
         </p>
       {/if}
 
       {#if phase === "running"}
-        <p class="runstate mx-1 my-2 text-[0.8125rem] tabular-nums text-foreground" role="status">
+        <p class="runstate mx-1 my-2 text-ui-base tabular-nums text-foreground" role="status">
           {#if progress !== null}
             step {progress.k}/{progress.n} ({progress.label}) · {progress.rewritten}
             rewritten
@@ -466,7 +466,7 @@
           {/if}
         </p>
       {:else}
-        <p class="state mx-1 mb-3 mt-1 text-[0.8125rem] text-muted-foreground" role="status">
+        <p class="state mx-1 mb-3 mt-1 text-ui-base text-muted-foreground" role="status">
           {progress?.rewritten ?? monitor.rewrittenCount}
           commit{(progress?.rewritten ?? monitor.rewrittenCount) === 1 ? "" : "s"}
           rewritten.

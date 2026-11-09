@@ -166,7 +166,7 @@
     <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
     <Dialog.Overlay class="scrim bg-black/40" role="presentation" />
     <Dialog.Content
-      class="dialog max-h-[calc(100vh-4rem)] w-[min(30rem,calc(100vw-2rem))] max-w-none gap-0 overflow-y-auto rounded-lg bg-card px-6 py-5 text-sm text-popover-foreground shadow-xl sm:max-w-none"
+      class="dialog max-h-[calc(100vh-4rem)] w-[min(30rem,calc(100vw-2rem))] max-w-none overflow-y-auto text-sm text-popover-foreground sm:max-w-none"
       role="dialog"
       aria-modal="true"
       aria-labelledby="reset-title"
@@ -180,7 +180,7 @@
         }
       }}
     >
-      <Dialog.Title id="reset-title" class="m-0 mb-3 text-lg font-medium">Reset current branch</Dialog.Title>
+      <Dialog.Title id="reset-title" class="m-0 mb-3 font-medium">Reset current branch</Dialog.Title>
 
       <form
         onsubmit={(event) => {
@@ -208,7 +208,7 @@
             spellcheck="false"
             autocomplete="off"
             list="reset-target-suggestions"
-            class="h-auto rounded-sm px-[0.6rem] py-[0.45rem] font-mono text-sm focus-visible:-outline-offset-1 focus-visible:outline-2 focus-visible:outline-ring"
+            class="rounded-sm font-mono focus-visible:-outline-offset-1 focus-visible:outline-2 focus-visible:outline-ring"
             bind:value={target}
             bind:ref={targetField}
           />
@@ -225,23 +225,23 @@
           {:else if previewing || !previewInfo}
             <p class="preview-loading m-0 text-xs text-muted-foreground">Previewing…</p>
           {:else}
-            <p class="preview-summary mb-[0.35rem] mt-0 text-[0.78rem] text-foreground">{lines[0]}</p>
+            <p class="preview-summary mb-[0.35rem] mt-0 text-ui-base text-foreground">{lines[0]}</p>
             {#if lines.length > 1}
-              <ul class="preview-files m-0 max-h-36 list-none overflow-y-auto p-0 font-mono text-[0.7rem] text-muted-foreground" role="list" aria-label="Files affected by a hard reset">
+              <ul class="preview-files m-0 max-h-36 list-none overflow-y-auto p-0 font-mono text-ui-micro text-muted-foreground" role="list" aria-label="Files affected by a hard reset">
                 {#each lines.slice(1) as line, i (i)}
-                  <li class="py-[0.08rem] [overflow-wrap:anywhere]">{line}</li>
+                  <li class="py-px [overflow-wrap:anywhere]">{line}</li>
                 {/each}
               </ul>
             {:else}
               <p class="preview-empty m-0 text-xs text-muted-foreground">No file changes.</p>
             {/if}
             {#if mode === "keep" || mode === "merge"}
-              <p class="preview-note mb-0 mt-[0.4rem] text-[0.7rem] text-muted-foreground">
+              <p class="preview-note mb-0 mt-[0.4rem] text-ui-micro text-muted-foreground">
                 Preview shows the file impact; a {label(mode).toLowerCase()} reset
                 preserves uncommitted changes where it safely can.
               </p>
             {:else if mode !== "hard"}
-              <p class="preview-note mb-0 mt-[0.4rem] text-[0.7rem] text-muted-foreground">
+              <p class="preview-note mb-0 mt-[0.4rem] text-ui-micro text-muted-foreground">
                 Preview shows the hard-reset impact; {label(mode).toLowerCase()} reset keeps your changes.
               </p>
             {/if}
@@ -250,7 +250,7 @@
 
         <div class="actions flex items-center justify-end gap-2">
           {#if resetIsDestructive(mode)}
-            <span class="guard-note mr-auto text-[0.7rem] text-muted-foreground">A checkpoint is created first (undo available).</span>
+            <span class="guard-note mr-auto text-ui-micro text-muted-foreground">A checkpoint is created first (undo available).</span>
           {/if}
           <Button
             variant={resetIsDestructive(mode) ? "destructive" : "default"}

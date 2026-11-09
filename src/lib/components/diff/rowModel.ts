@@ -22,20 +22,14 @@
 
 import type { DiffHunk, DiffLine, FileDiff } from "$lib/ipc/types";
 import { visualColumns } from "$lib/components/diff/textWidth";
+import { ROW_HEIGHTS } from "$lib/components/diff/metrics";
+
+// Back-compat re-export: the row heights moved to diff/metrics.ts (the shared
+// geometry module), but rowModel remains the canonical import for the model's
+// consumers (virtualizer tests, DiffViewer).
+export { ROW_HEIGHTS };
 
 export type DiffMode = "split" | "unified";
-
-/**
- * Fixed row heights (px). The Svelte side renders rows with these exact
- * inline heights — CSS never disagrees with the virtualizer.
- */
-export const ROW_HEIGHTS = {
-  fileHeader: 40,
-  hunkHeader: 26,
-  line: 20,
-  binary: 56,
-  image: 384,
-} as const;
 
 /**
  * Image URL resolver for image diffs (asset/convert protocol etc. is the

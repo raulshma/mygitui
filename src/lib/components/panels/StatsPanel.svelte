@@ -137,7 +137,7 @@
     <header class="stats-head flex min-w-0 flex-none flex-wrap items-center gap-1.5">
       <span class="title mr-1 min-w-0 overflow-hidden text-ellipsis whitespace-nowrap font-medium">Contribution stats</span>
       <input
-        class="author w-44 min-w-20 flex-[0_1_auto] rounded-sm border border-border bg-background px-[7px] py-[2px] text-[11.5px] text-foreground focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-ring"
+        class="author w-44 min-w-20 flex-[0_1_auto] rounded-sm border border-border bg-background px-[7px] py-px text-ui-meta text-foreground focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-ring"
         type="search"
         placeholder="Filter by author"
         aria-label="Filter stats by author"
@@ -149,7 +149,7 @@
         }}
       />
       <Button
-        class="h-auto whitespace-nowrap rounded-sm px-2 py-[2px] text-[11px] font-normal"
+        class="h-auto whitespace-nowrap rounded-sm px-2 py-px text-ui-tiny font-normal"
         variant="secondary"
         type="button"
         title="Clear the author filter"
@@ -159,7 +159,7 @@
       </Button>
       <span class="spacer flex-1"></span>
       <Button
-        class="h-auto whitespace-nowrap rounded-sm px-2 py-[2px] text-[11px] font-normal"
+        class="h-auto whitespace-nowrap rounded-sm px-2 py-px text-ui-tiny font-normal"
         variant="secondary"
         type="button"
         bind:ref={colorsButton}
@@ -170,7 +170,7 @@
         Colors…
       </Button>
       <Button
-        class="h-auto whitespace-nowrap rounded-sm px-2 py-[2px] text-[11px] font-normal"
+        class="h-auto whitespace-nowrap rounded-sm px-2 py-px text-ui-tiny font-normal"
         variant="secondary"
         type="button"
         title="Refresh stats"
@@ -183,7 +183,7 @@
     {#if error}
       <p class="error m-0 flex flex-none items-center gap-2 rounded-md bg-destructive/10 px-2 py-1 text-destructive" role="alert">
         {error}
-        <Button class="h-auto whitespace-nowrap rounded-sm px-2 py-[2px] text-[11px] font-normal" variant="secondary" type="button" onclick={refresh}>Retry</Button>
+        <Button class="h-auto whitespace-nowrap rounded-sm px-2 py-px text-ui-tiny font-normal" variant="secondary" type="button" onclick={refresh}>Retry</Button>
       </p>
     {/if}
 
@@ -193,36 +193,36 @@
       <!-- 2. summary cards -->
       <div class="cards flex flex-none flex-wrap gap-1.5">
         <div class="card flex min-w-[4.5rem] flex-col gap-[1px] rounded-md border border-border bg-card px-2.5 py-[5px]">
-          <span class="card-value text-[15px] font-semibold tabular-nums">{summary.commits}</span>
-          <span class="card-label text-[10px] uppercase tracking-[0.03em] text-muted-foreground">commits</span>
+          <span class="card-value text-sm font-semibold tabular-nums">{summary.commits}</span>
+          <span class="card-label text-ui-tiny uppercase tracking-[0.03em] text-muted-foreground">commits</span>
         </div>
         <div class="card flex min-w-[4.5rem] flex-col gap-[1px] rounded-md border border-border bg-card px-2.5 py-[5px]">
-          <span class="card-value text-[15px] font-semibold tabular-nums">{summary.activeDays}</span>
-          <span class="card-label text-[10px] uppercase tracking-[0.03em] text-muted-foreground">active days</span>
+          <span class="card-value text-sm font-semibold tabular-nums">{summary.activeDays}</span>
+          <span class="card-label text-ui-tiny uppercase tracking-[0.03em] text-muted-foreground">active days</span>
         </div>
         <div class="card flex min-w-[4.5rem] flex-col gap-[1px] rounded-md border border-border bg-card px-2.5 py-[5px]">
-          <span class="card-value text-[15px] font-semibold tabular-nums">{summary.avgPerDay}</span>
-          <span class="card-label text-[10px] uppercase tracking-[0.03em] text-muted-foreground">avg / active day</span>
+          <span class="card-value text-sm font-semibold tabular-nums">{summary.avgPerDay}</span>
+          <span class="card-label text-ui-tiny uppercase tracking-[0.03em] text-muted-foreground">avg / active day</span>
         </div>
         <div class="card flex min-w-[4.5rem] flex-col gap-[1px] rounded-md border border-border bg-card px-2.5 py-[5px]">
-          <span class="card-value text-[15px] font-semibold tabular-nums">{streakSummary.current}</span>
-          <span class="card-label text-[10px] uppercase tracking-[0.03em] text-muted-foreground">current streak</span>
+          <span class="card-value text-sm font-semibold tabular-nums">{streakSummary.current}</span>
+          <span class="card-label text-ui-tiny uppercase tracking-[0.03em] text-muted-foreground">current streak</span>
         </div>
         <div class="card flex min-w-[4.5rem] flex-col gap-[1px] rounded-md border border-border bg-card px-2.5 py-[5px]">
-          <span class="card-value text-[15px] font-semibold tabular-nums">{streakSummary.longest}</span>
-          <span class="card-label text-[10px] uppercase tracking-[0.03em] text-muted-foreground">longest streak</span>
+          <span class="card-value text-sm font-semibold tabular-nums">{streakSummary.longest}</span>
+          <span class="card-label text-ui-tiny uppercase tracking-[0.03em] text-muted-foreground">longest streak</span>
         </div>
       </div>
 
       <!-- 3. heatmap (table semantics; weeks are columns, rows Sun..Sat).
            tabindex makes the scrollable region keyboard-scrollable. -->
       <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
-      <div class="heatmap-wrap flex-none overflow-x-auto pb-[2px]" role="region" aria-label="Contribution heatmap" tabindex="0">
-        <table class="heatmap border-separate border-spacing-[2px] text-[10px] text-muted-foreground">
+      <div class="heatmap-wrap flex-none overflow-x-auto pb-px" role="region" aria-label="Contribution heatmap" tabindex="0">
+        <table class="heatmap border-separate border-spacing-[2px] text-ui-tiny text-muted-foreground">
           <thead>
             <tr>
               {#each grid.weeks as _, week (week)}
-                <th class="min-w-[11px] whitespace-nowrap pb-[2px] text-left font-normal" scope="col">
+                <th class="min-w-[11px] whitespace-nowrap pb-px text-left font-normal" scope="col">
                   {grid.monthLabels.find((m) => m.week === week)?.label ?? ""}
                 </th>
               {/each}
@@ -244,7 +244,7 @@
             {/each}
           </tbody>
         </table>
-        <div class="legend mt-1 flex items-center gap-[3px] text-[10px] text-muted-foreground" aria-hidden="true">
+        <div class="legend mt-1 flex items-center gap-[3px] text-ui-tiny text-muted-foreground" aria-hidden="true">
           <span>Less</span>
           {#each [0, 1, 2, 3, 4] as level (level)}
             <span class="cell legend-cell inline-block h-[11px] w-[11px] flex-none rounded-[2px]" style:background={levelBackground(level)}></span>
@@ -255,7 +255,7 @@
 
       <!-- 4. contributors -->
       <section class="contributors" aria-label="Contributors">
-        <h3 class="section-title mb-[2px] mt-1 text-[11.5px] font-medium">Contributors</h3>
+        <h3 class="section-title mb-[2px] mt-1 text-ui-meta font-medium">Contributors</h3>
         {#if contributors.length === 0}
           <p class="note m-0 flex-none text-muted-foreground">No commits in the last {entry.maxDays} days.</p>
         {:else}
@@ -270,7 +270,7 @@
                   ></span>
                 </span>
                 <span class="ccount text-right tabular-nums">{c.count}</span>
-                <span class="crange whitespace-nowrap text-[10.5px] text-muted-foreground">{c.first_day} → {c.last_day}</span>
+                <span class="crange whitespace-nowrap text-ui-tiny text-muted-foreground">{c.first_day} → {c.last_day}</span>
               </li>
             {/each}
           </ul>
@@ -289,7 +289,7 @@
         <div class="colors-head flex items-center justify-between font-medium">
           <span>Branch color rules</span>
           <button
-            class="btn cursor-pointer whitespace-nowrap rounded-sm border border-border bg-muted px-2 py-[2px] text-[11px] text-foreground hover:bg-accent focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-ring"
+            class="btn cursor-pointer whitespace-nowrap rounded-sm border border-border bg-muted px-2 py-px text-ui-tiny text-foreground hover:bg-accent focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-ring"
             type="button"
             aria-label="Close branch color rules"
             onclick={() => (colorsOpen = false)}
@@ -297,7 +297,7 @@
             ×
           </button>
         </div>
-        <p class="colors-hint m-0 text-[10.5px] text-muted-foreground">
+        <p class="colors-hint m-0 text-ui-tiny text-muted-foreground">
           Patterns match branch names on graph rows: <code class="font-mono">feature/*</code>
           (prefix), <code class="font-mono">*-hotfix</code> (suffix), <code class="font-mono">main</code>
           (exact), <code class="font-mono">*</code> (all). First match wins; matching rows are
@@ -311,7 +311,7 @@
               <li class="rule flex items-center gap-1.5">
                 <span class="swatch h-3.5 w-3.5 flex-none rounded-[3px] border border-border" style:background={rule.color}></span>
                 <input
-                  class="rule-pattern min-w-0 flex-1 rounded-sm border border-border bg-background px-[5px] py-[2px] font-mono text-[11px] text-foreground focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-ring"
+                  class="rule-pattern min-w-0 flex-1 rounded-sm border border-border bg-background px-[5px] py-px font-mono text-ui-tiny text-foreground focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-ring"
                   aria-label={`Pattern ${index + 1}`}
                   value={rule.pattern}
                   onchange={(e) =>
@@ -330,7 +330,7 @@
                     })}
                 />
                 <Button
-                  class="h-auto whitespace-nowrap rounded-sm px-2 py-[2px] text-[11px] font-normal"
+                  class="h-auto whitespace-nowrap rounded-sm px-2 py-px text-ui-tiny font-normal"
                   variant="secondary"
                   type="button"
                   aria-label={`Remove rule ${rule.pattern}`}
@@ -350,7 +350,7 @@
           }}
         >
           <input
-            class="rule-pattern min-w-0 flex-1 rounded-sm border border-border bg-background px-[5px] py-[2px] font-mono text-[11px] text-foreground focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-ring"
+            class="rule-pattern min-w-0 flex-1 rounded-sm border border-border bg-background px-[5px] py-px font-mono text-ui-tiny text-foreground focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-ring"
             placeholder="Pattern (feature/*)"
             aria-label="New rule pattern"
             value={newPattern}
@@ -363,7 +363,7 @@
             value="#6750a4"
             oninput={(e) => (newColor = (e.currentTarget as HTMLInputElement).value)}
           />
-          <Button class="h-auto whitespace-nowrap rounded-sm px-2 py-[2px] text-[11px] font-normal" variant="secondary" type="submit">Add</Button>
+          <Button class="h-auto whitespace-nowrap rounded-sm px-2 py-px text-ui-tiny font-normal" variant="secondary" type="submit">Add</Button>
         </form>
       </div>
     {/if}

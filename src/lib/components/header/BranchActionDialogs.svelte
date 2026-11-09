@@ -80,7 +80,7 @@
       aria-labelledby="switch-choice-title"
       bind:this={dialogEl}
     >
-      <h2 id="switch-choice-title" class="title mb-2 mt-0 text-lg font-medium">
+      <h2 id="switch-choice-title" class="title mb-2 mt-0 font-medium">
         Uncommitted changes
       </h2>
       <p class="text mb-4 mt-0 text-card-foreground [overflow-wrap:anywhere]">
@@ -89,22 +89,25 @@
       </p>
       <div class="actions flex flex-wrap justify-end gap-2">
         <Button
-          class="primary rounded-full px-5 py-[0.45rem] text-[0.875rem] focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-1"
+          class="primary rounded-full text-ui-meta focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-1"
+          size="sm"
           bind:ref={stashButton}
           onclick={() => void controller.chooseStash()}
         >
           Stash changes
         </Button>
         <Button
-          class="danger-btn rounded-full bg-destructive px-4 py-[0.45rem] text-[0.875rem] text-white hover:bg-destructive/90 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-1 focus-visible:ring-0"
+          class="danger-btn rounded-full bg-destructive text-ui-meta text-white hover:bg-destructive/90 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-1 focus-visible:ring-0"
           variant="destructive"
+          size="sm"
           onclick={() => void controller.chooseForce()}
         >
           Proceed anyway
         </Button>
         <Button
-          class="secondary rounded-full border-border px-4 py-[0.45rem] text-[0.875rem] text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-1 focus-visible:ring-0"
+          class="secondary rounded-full border-border text-ui-meta text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-1 focus-visible:ring-0"
           variant="outline"
+          size="sm"
           onclick={() => controller.cancelChoice()}
         >
           Cancel

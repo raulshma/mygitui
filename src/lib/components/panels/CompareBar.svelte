@@ -102,8 +102,9 @@
     disabled={loading}
   />
   <Button
-    class="flex-none rounded-sm px-2.5 py-1 text-sm leading-none font-normal"
+    class="flex-none rounded-sm leading-none font-normal text-ui-meta"
     variant="secondary"
+    size="xs"
     onclick={swap}
     aria-label="Swap base and target"
     title="Swap"
@@ -121,7 +122,8 @@
     disabled={loading}
   />
   <Button
-    class="rounded-sm px-2.5 py-1 text-xs"
+    class="rounded-sm text-xs"
+    size="xs"
     onclick={() => void run()}
     disabled={loading}
   >

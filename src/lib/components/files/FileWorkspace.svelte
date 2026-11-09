@@ -33,6 +33,7 @@
   import { isMarkdownPath } from "./markdownPath";
   import { toast } from "$lib/toast";
   import { appIcon } from "$lib/components/icons/library.svelte";
+  import EmptyState from "../layout/EmptyState.svelte";
 
   /** One open file (RepoView state). */
   export interface OpenFileInfo {
@@ -231,7 +232,7 @@
       <!-- svelte-ignore a11y_click_events_have_key_events -- keyboard
            handling lives on the tab strip's focusable row buttons + menus -->
       <div
-        class="tab flex h-8 max-w-56 flex-none cursor-pointer items-center gap-[0.3rem] border-r border-border py-0 pl-[0.6rem] pr-[0.3rem] whitespace-nowrap select-none text-[0.78rem] {isActive
+        class="tab flex h-8 max-w-56 flex-none cursor-pointer items-center gap-[0.3rem] border-r border-border py-0 pl-2.5 pr-[0.3rem] whitespace-nowrap select-none text-ui-meta {isActive
           ? 'bg-card text-foreground shadow-[inset_0_2px_0_var(--primary)]'
           : 'text-muted-foreground hover:bg-accent'}"
         class:active={isActive}
@@ -251,7 +252,7 @@
         >
           <Icon
             icon={fileIconForPath(file.path, fileIconPreferences.theme)}
-            size={13}
+            size={14}
           />
         </span>
         <span class="tname min-w-0 overflow-hidden text-ellipsis">{basename(file.path)}</span>
@@ -259,7 +260,7 @@
           <span class="dirty size-[7px] flex-none rounded-full bg-[var(--app-modified)]" title="Unsaved changes"></span>
         {/if}
         <Button
-          class="tclose size-[1.15rem] rounded-full text-muted-foreground opacity-65 hover:bg-accent hover:text-accent-foreground hover:opacity-100 [&_svg:not([class*='size-'])]:size-3"
+          class="tclose size-5 rounded-full text-muted-foreground opacity-65 hover:bg-accent hover:text-accent-foreground hover:opacity-100 [&_svg:not([class*='size-'])]:size-3"
           variant="ghost"
           size="icon-sm"
           type="button"
@@ -281,7 +282,7 @@
         <div class="seg inline-flex flex-none items-center gap-0 rounded-full border border-border px-1" role="group" aria-label="Markdown view">
           {#each MD_VIEW_SEGMENTS as seg (seg.id)}
             <Toggle
-              class="h-auto rounded-full px-[0.55rem] py-[0.1rem] text-[0.6875rem] font-normal focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-primary focus-visible:ring-0 {editorPrefs.mdView === seg.id
+              class="h-auto rounded-full px-2 py-px text-ui-micro font-normal focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-primary focus-visible:ring-0 {editorPrefs.mdView === seg.id
                 ? 'bg-primary text-primary-foreground'
                 : 'text-muted-foreground hover:text-foreground'}"
               pressed={editorPrefs.mdView === seg.id}
@@ -295,7 +296,7 @@
       {/if}
       <Button
         type="button"
-        class="tact h-auto gap-1 rounded-sm px-[0.45rem] py-[0.1rem] text-[0.6875rem] font-normal disabled:cursor-default disabled:opacity-45"
+        class="tact h-auto gap-1 rounded-sm px-2 py-px text-ui-micro font-normal disabled:cursor-default disabled:opacity-45"
         variant="ghost"
         title="Open the working-copy diff for this file"
         disabled={active === null || onOpenDiff === undefined}
@@ -306,7 +307,7 @@
       </Button>
       <Button
         type="button"
-        class="tact h-auto gap-1 rounded-sm px-[0.45rem] py-[0.1rem] text-[0.6875rem] font-normal {editorPrefs.wrap
+        class="tact h-auto gap-1 rounded-sm px-2 py-px text-ui-micro font-normal {editorPrefs.wrap
           ? 'bg-primary/10 text-primary'
           : ''}"
         variant="ghost"
@@ -318,7 +319,7 @@
       </Button>
       <Button
         type="button"
-        class="tact h-auto gap-1 rounded-sm px-[0.45rem] py-[0.1rem] text-[0.6875rem] font-normal"
+        class="tact h-auto gap-1 rounded-sm px-2 py-px text-ui-micro font-normal"
         variant="ghost"
         title="Close all saved files"
         onclick={closeAll}
@@ -333,7 +334,7 @@
     {#each openFiles as file (file.path)}
       <div class="pane min-h-0 flex-1 [&>*]:h-full" class:hidden={file.path !== active}>
         {#if file.meta === null}
-          <p class="state m-auto inline-flex items-center gap-[0.4rem] text-[0.8125rem] text-muted-foreground" role="status"><Spinner class="size-[14px]" role="presentation" aria-hidden="true" /> Reading {file.path}…</p>
+          <p class="state m-auto inline-flex items-center gap-[0.4rem] text-ui-base text-muted-foreground" role="status"><Spinner class="size-3" role="presentation" aria-hidden="true" /> Reading {file.path}…</p>
         {:else if usesEditor(file.meta)}
           <FileEditor
             bind:this={editorRefs[file.path]}
@@ -350,7 +351,7 @@
       </div>
     {/each}
     {#if activeFile === null && openFiles.length === 0}
-      <p class="state m-auto inline-flex items-center gap-[0.4rem] text-[0.8125rem] text-muted-foreground">No files open</p>
+      <EmptyState class="m-auto" title="No files open" />
     {/if}
   </div>
 
@@ -362,8 +363,8 @@
     onCancel={confirmCancel}
   >
     {#snippet children()}
-      <h3 class="dlg-title m-0 mb-[0.4rem] text-[0.9375rem] font-medium text-foreground" id="fw-close-title">Unsaved changes</h3>
-      <p class="dlg-body m-0 break-all font-mono text-[0.8125rem] leading-[1.45] text-muted-foreground" id="fw-close-body">
+      <h3 class="dlg-title m-0 mb-[0.4rem] text-sm font-medium text-foreground" id="fw-close-title">Unsaved changes</h3>
+      <p class="dlg-body m-0 break-all font-mono text-ui-base leading-[1.45] text-muted-foreground" id="fw-close-body">
         {confirmPath === null
           ? ""
           : `${confirmPath} has unsaved edits. Save before closing?`}
@@ -371,7 +372,7 @@
     {/snippet}
     {#snippet actions()}
       <Button
-        class="dlg-btn dlg-primary h-auto rounded-full px-[0.85rem] py-[0.3rem] text-[0.78rem]"
+        class="dlg-btn dlg-primary h-auto rounded-full px-3 py-1 text-ui-meta"
         type="button"
         data-autofocus
         onclick={confirmSave}
@@ -379,7 +380,7 @@
         Save
       </Button>
       <Button
-        class="dlg-btn h-auto rounded-full px-[0.85rem] py-[0.3rem] text-[0.78rem] font-normal"
+        class="dlg-btn h-auto rounded-full px-3 py-1 text-ui-meta font-normal"
         variant="outline"
         type="button"
         onclick={confirmDiscard}
@@ -387,7 +388,7 @@
         Don't save
       </Button>
       <Button
-        class="dlg-btn h-auto rounded-full px-[0.85rem] py-[0.3rem] text-[0.78rem] font-normal"
+        class="dlg-btn h-auto rounded-full px-3 py-1 text-ui-meta font-normal"
         variant="outline"
         type="button"
         onclick={confirmCancel}

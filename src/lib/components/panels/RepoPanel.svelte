@@ -184,14 +184,14 @@
 </script>
 
 <aside
-  class="repo-panel flex min-h-0 flex-col overflow-y-auto bg-background pb-3 text-[13px] text-foreground"
+  class="repo-panel flex min-h-0 flex-col overflow-y-auto bg-background pb-3 text-ui-base text-foreground"
   aria-label="Repository health and maintenance"
 >
   <div class="toolbar flex shrink-0 items-center gap-2 px-2 py-1.5">
-    <Button class="h-auto rounded px-2 py-[3px] text-[11.5px] font-normal text-muted-foreground" variant="outline" type="button" onclick={() => void reload()} disabled={running !== null}>
+    <Button class="h-auto rounded px-2 py-px text-ui-meta font-normal text-muted-foreground" variant="outline" type="button" onclick={() => void reload()} disabled={running !== null}>
       Refresh
     </Button>
-    {#if running}<span class="busy text-[11.5px] text-muted-foreground" role="status">{running} running…</span>{/if}
+    {#if running}<span class="busy text-ui-meta text-muted-foreground" role="status">{running} running…</span>{/if}
   </div>
 
   {#if error}
@@ -220,25 +220,25 @@
         <dd class="m-0 font-mono">{health.packed_refs ? "yes" : "no"}</dd>
       </dl>
       <div class="ops flex flex-wrap gap-1.5">
-        <Button class="h-auto rounded px-2 py-[3px] text-[11.5px] font-normal text-muted-foreground" variant="outline" type="button" disabled={running !== null} onclick={() => void run("count_objects", "Count objects")}>
+        <Button class="h-auto rounded px-2 py-px text-ui-meta font-normal text-muted-foreground" variant="outline" type="button" disabled={running !== null} onclick={() => void run("count_objects", "Count objects")}>
           Count objects
         </Button>
-        <Button class="h-auto rounded px-2 py-[3px] text-[11.5px] font-normal text-muted-foreground" variant="outline" type="button" disabled={running !== null} title="Write the commit-graph (faster log on big repos)" onclick={() => void run("commit_graph", "Commit-graph write")}>
+        <Button class="h-auto rounded px-2 py-px text-ui-meta font-normal text-muted-foreground" variant="outline" type="button" disabled={running !== null} title="Write the commit-graph (faster log on big repos)" onclick={() => void run("commit_graph", "Commit-graph write")}>
           Write commit-graph
         </Button>
-        <Button class="h-auto rounded px-2 py-[3px] text-[11.5px] font-normal text-muted-foreground" variant="outline" type="button" disabled={running !== null} onclick={() => void run("pack_refs", "Pack refs")}>
+        <Button class="h-auto rounded px-2 py-px text-ui-meta font-normal text-muted-foreground" variant="outline" type="button" disabled={running !== null} onclick={() => void run("pack_refs", "Pack refs")}>
           Pack refs
         </Button>
-        <Button class="h-auto rounded px-2 py-[3px] text-[11.5px] font-normal text-muted-foreground" variant="outline" type="button" disabled={running !== null} title="git prune — drops unreachable loose objects" onclick={() => void run("prune", "Prune")}>
+        <Button class="h-auto rounded px-2 py-px text-ui-meta font-normal text-muted-foreground" variant="outline" type="button" disabled={running !== null} title="git prune — drops unreachable loose objects" onclick={() => void run("prune", "Prune")}>
           Prune
         </Button>
-        <Button class="h-auto rounded px-2 py-[3px] text-[11.5px] font-normal text-muted-foreground" variant="outline" type="button" disabled={running !== null} title="git gc --auto — pack, repack, and tidy" onclick={() => void run("gc", "GC")}>
+        <Button class="h-auto rounded px-2 py-px text-ui-meta font-normal text-muted-foreground" variant="outline" type="button" disabled={running !== null} title="git gc --auto — pack, repack, and tidy" onclick={() => void run("gc", "GC")}>
           GC
         </Button>
         <!-- M12: git fsck — object-store integrity + dangling-object census.
              The result block below stays hidden until the first run
              (fsck_dangling is null in a fresh RepoHealth). -->
-        <Button class="h-auto rounded px-2 py-[3px] text-[11.5px] font-normal text-muted-foreground" variant="outline" type="button" disabled={running !== null} title="git fsck — check object connectivity and list dangling objects" onclick={() => void run("fsck", "Check objects")}>
+        <Button class="h-auto rounded px-2 py-px text-ui-meta font-normal text-muted-foreground" variant="outline" type="button" disabled={running !== null} title="git fsck — check object connectivity and list dangling objects" onclick={() => void run("fsck", "Check objects")}>
           Check objects (fsck)
         </Button>
       </div>
@@ -253,7 +253,7 @@
             <div class="fsck-samples flex flex-wrap gap-1">
               {#each health.fsck_samples as sha (sha)}
                 <Button
-                  class="h-auto rounded px-[5px] py-[2px] font-mono text-[11px] font-normal text-muted-foreground"
+                  class="h-auto rounded px-[5px] py-px font-mono text-ui-tiny font-normal text-muted-foreground"
                   variant="outline"
                   type="button"
                   title="Copy {sha}"
@@ -272,13 +272,13 @@
       <h2 class="head mb-1.5 text-xs font-semibold uppercase tracking-[0.05em] text-muted-foreground">Archive</h2>
       <div class="row flex items-center gap-1.5">
         <input
-          class="text min-w-20 flex-1 rounded border border-border bg-background px-[7px] py-[3px] text-xs text-foreground"
+          class="text min-w-20 flex-1 rounded border border-border bg-background px-[7px] py-px text-xs text-foreground"
           bind:value={archiveSpecText}
           placeholder="ref or sha"
           aria-label="Archive ref"
         />
         <select
-          class="rounded border border-border bg-background px-1 py-[2px] text-[11.5px] text-foreground"
+          class="rounded border border-border bg-background px-1 py-px text-ui-meta text-foreground"
           bind:value={archiveFormat}
           aria-label="Archive format"
         >
@@ -287,7 +287,7 @@
           <option value="tar.gz">tar.gz</option>
         </select>
         <Button
-          class="h-auto rounded-full px-3 py-[3px] text-[11.5px]"
+          class="h-auto rounded-full px-3 py-px text-ui-meta"
           type="button"
           disabled={archiving || !archiveSpecText.trim()}
           onclick={() => void onArchive()}
@@ -314,13 +314,13 @@
         aria-label="Sparse checkout patterns"
       ></textarea>
       <div class="ops flex flex-wrap gap-1.5">
-        <Button class="h-auto rounded px-2 py-[3px] text-[11.5px] font-normal text-muted-foreground" variant="outline" type="button" disabled={sparseBusy} onclick={() => void onSparseApply(false)}>
+        <Button class="h-auto rounded px-2 py-px text-ui-meta font-normal text-muted-foreground" variant="outline" type="button" disabled={sparseBusy} onclick={() => void onSparseApply(false)}>
           Apply
         </Button>
-        <Button class="h-auto rounded px-2 py-[3px] text-[11.5px] font-normal text-muted-foreground" variant="outline" type="button" disabled={sparseBusy} onclick={() => void onSparseApply(true)}>
+        <Button class="h-auto rounded px-2 py-px text-ui-meta font-normal text-muted-foreground" variant="outline" type="button" disabled={sparseBusy} onclick={() => void onSparseApply(true)}>
           Add
         </Button>
-        <Button class="h-auto rounded px-2 py-[3px] text-[11.5px] font-normal" variant="destructive" type="button" disabled={sparseBusy} title="Back to a full checkout" onclick={() => { sparseText = ""; void onSparseApply(false); }}>
+        <Button class="h-auto rounded px-2 py-px text-ui-meta font-normal" variant="destructive" type="button" disabled={sparseBusy} title="Back to a full checkout" onclick={() => { sparseText = ""; void onSparseApply(false); }}>
           Disable
         </Button>
       </div>
@@ -336,9 +336,9 @@
           <p class="state mb-1.5 text-xs text-muted-foreground">No filter=lfs patterns in tracked .gitattributes.</p>
         {/if}
         <div class="ops flex flex-wrap gap-1.5">
-          <Button class="h-auto rounded px-2 py-[3px] text-[11.5px] font-normal text-muted-foreground" variant="outline" type="button" disabled={lfsBusy} onclick={() => void onLfs("pull")}>Pull</Button>
-          <Button class="h-auto rounded px-2 py-[3px] text-[11.5px] font-normal text-muted-foreground" variant="outline" type="button" disabled={lfsBusy} onclick={() => void onLfs("push")}>Push</Button>
-          <Button class="h-auto rounded px-2 py-[3px] text-[11.5px] font-normal text-muted-foreground" variant="outline" type="button" disabled={lfsBusy} onclick={() => void onLfs("fetch")}>Fetch</Button>
+          <Button class="h-auto rounded px-2 py-px text-ui-meta font-normal text-muted-foreground" variant="outline" type="button" disabled={lfsBusy} onclick={() => void onLfs("pull")}>Pull</Button>
+          <Button class="h-auto rounded px-2 py-px text-ui-meta font-normal text-muted-foreground" variant="outline" type="button" disabled={lfsBusy} onclick={() => void onLfs("push")}>Push</Button>
+          <Button class="h-auto rounded px-2 py-px text-ui-meta font-normal text-muted-foreground" variant="outline" type="button" disabled={lfsBusy} onclick={() => void onLfs("fetch")}>Fetch</Button>
         </div>
       {:else if lfs}
         <p class="state warn mb-1.5 text-xs text-amber-600 dark:text-amber-400">

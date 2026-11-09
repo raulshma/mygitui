@@ -35,11 +35,8 @@
   } from "$lib/components/diff/rowModel";
   import { buildLayout, visibleSlices } from "$lib/components/diff/virtualizer";
   import { measureLineWidth } from "$lib/components/diff/textWidth";
-  import {
-    GUTTER_PX,
-    wrappedHeights,
-    wrapMetrics,
-  } from "$lib/components/diff/wrapHeights";
+  import { wrappedHeights, wrapMetrics } from "$lib/components/diff/wrapHeights";
+  import { GUTTER_PX } from "$lib/components/diff/metrics";
   import { readWrapPref, writeWrapPref } from "$lib/diff/wrapPref";
   import { readDiffModePref, writeDiffModePref } from "$lib/diff/modePref";
   import {
@@ -57,6 +54,7 @@
   import { createWrapFeedback } from "$lib/diff/wrapFeedback";
   import DiffRow from "$lib/components/diff/DiffRow.svelte";
   import ExplainHunkPanel from "$lib/components/ai/ExplainHunkPanel.svelte";
+  import EmptyState from "../layout/EmptyState.svelte";
   import { Toggle } from "$lib/components/ui/toggle/index.js";
 
   let {
@@ -167,8 +165,9 @@
    * One-sided files (added/deleted) render inline even in split mode, so a
    * model with only those rows grows by a single gutter + text width.
    * Widths are measured in the rows' own monospace font (textWidth.ts);
-   * the gutter constants come from wrapHeights.ts (kept in sync with
-   * DiffRow.svelte's CSS).
+   * the gutter constants come from diff/metrics.ts — the same constants
+   * DiffRow renders its gutters with, so the scroll width can never drift
+   * from the rows.
    */
   const contentMinWidth = $derived.by(() => {
     if (wrap) return "100%";
@@ -603,29 +602,28 @@
 </script>
 
 {#if files.length === 0}
-  <div class="diff-viewer empty relative flex h-full min-h-0 flex-col items-center justify-center gap-1 bg-background text-muted-foreground">
-    <p class="empty-title m-0 text-[0.9375rem] font-medium text-foreground">No changes</p>
-    <p class="empty-hint m-0 text-xs">Select a file with differences to see its diff here.</p>
+  <div class="diff-viewer empty relative flex h-full min-h-0 flex-col bg-background">
+    <EmptyState title="No changes" hint="Select a file with differences to see its diff here." />
   </div>
 {:else}
   <div class="diff-viewer relative flex h-full min-h-0 flex-col bg-background">
-    <div class="toolbar flex min-h-[1.8rem] shrink-0 items-center gap-1.5 border-b border-[var(--diff-divider)] bg-card px-2.5 py-[0.2rem]">
+    <div class="toolbar flex min-h-7 shrink-0 items-center gap-1.5 border-b border-[var(--diff-divider)] bg-card px-2.5 py-0.5">
       <div class="segmented inline-flex shrink-0 overflow-hidden rounded border border-border" role="group" aria-label="Diff layout">
         <Toggle
-          class="h-auto rounded-none border-0 px-2 py-0 text-[0.6875rem] leading-[1.5] font-normal text-muted-foreground aria-pressed:font-semibold aria-pressed:text-foreground focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary focus-visible:ring-0"
+          class="h-auto rounded-none border-0 px-2 py-0 text-ui-micro leading-[1.5] font-normal text-muted-foreground aria-pressed:font-semibold aria-pressed:text-foreground focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary focus-visible:ring-0"
           pressed={mode === "split"}
           onPressedChange={(next) => next && setMode("split")}
           title="Show old and new side by side"
         >Split</Toggle>
         <Toggle
-          class="h-auto rounded-none border-0 border-l border-l-border px-2 py-0 text-[0.6875rem] leading-[1.5] font-normal text-muted-foreground aria-pressed:font-semibold aria-pressed:text-foreground focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary focus-visible:ring-0"
+          class="h-auto rounded-none border-0 border-l border-l-border px-2 py-0 text-ui-micro leading-[1.5] font-normal text-muted-foreground aria-pressed:font-semibold aria-pressed:text-foreground focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary focus-visible:ring-0"
           pressed={mode === "unified"}
           onPressedChange={(next) => next && setMode("unified")}
           title="Show old and new in one column"
         >Unified</Toggle>
       </div>
       <Toggle
-        class="h-auto shrink-0 rounded border border-border px-2 py-0 text-[0.6875rem] leading-[1.5] font-normal text-muted-foreground aria-pressed:text-foreground focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary focus-visible:ring-0"
+        class="h-auto shrink-0 rounded border border-border px-2 py-0 text-ui-micro leading-[1.5] font-normal text-muted-foreground aria-pressed:text-foreground focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary focus-visible:ring-0"
         pressed={wrap}
         onPressedChange={() => toggleWrap()}
         aria-label="Wrap long lines"
@@ -633,7 +631,7 @@
           ? "Long lines wrap — click to scroll instead"
           : "Long lines scroll — click to wrap"}
       >Wrap</Toggle>
-      <span class="stats ml-auto flex items-center gap-[0.4rem] text-[0.6875rem] text-muted-foreground tabular-nums">
+      <span class="stats ml-auto flex items-center gap-[0.4rem] text-ui-micro text-muted-foreground tabular-nums">
         <span class="stat-files">{files.length} {files.length === 1 ? "file" : "files"}</span>
         <span class="stat-adds text-[var(--app-added)]">+{model.totalAdditions}</span>
         <span class="stat-dels text-[var(--app-deleted)]">−{model.totalDeletions}</span>

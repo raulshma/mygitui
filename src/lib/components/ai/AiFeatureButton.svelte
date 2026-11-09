@@ -166,7 +166,7 @@
             <path d="M19 15l1.18 3.32L23.5 19.5l-3.32 1.18L19 24l-1.18-3.32L14.5 19.5l3.32-1.18L19 15z" />
           </svg>
           {#if busy}
-            <Spinner class="icon-spinner absolute inset-0 m-auto size-[0.9rem] text-primary" aria-hidden="true" />
+            <Spinner class="icon-spinner absolute inset-0 m-auto size-3 text-primary" aria-hidden="true" />
           {/if}
         </span>
       </Button>
@@ -174,8 +174,8 @@
       <Button
         variant="outline"
         size="xs"
-        class="feature-btn h-auto gap-[0.3rem] rounded-full px-[0.6rem] py-[0.15rem] text-[0.72rem] text-muted-foreground {compact
-          ? 'compact px-2 py-[0.05rem] text-[0.6875rem]'
+        class="feature-btn rounded-full gap-[0.3rem] text-ui-meta text-muted-foreground {compact
+          ? 'compact px-2 py-px text-ui-micro'
           : ''}"
         type="button"
         {disabled}
@@ -184,7 +184,7 @@
         onclick={openAction}
       >
         {#if busy}
-          <Spinner class="size-[0.65rem] text-primary" aria-hidden="true" />
+          <Spinner class="size-3 text-primary" aria-hidden="true" />
         {/if}
         {label}
       </Button>
@@ -199,16 +199,16 @@
       >
         <p class="confirm-text m-0 mb-[0.375rem] text-xs">{confirmText.replace("{backend}", backendLabel)}</p>
         <div class="confirm-actions flex flex-row flex-wrap gap-1">
-          <Button variant="default" size="xs" class="mini h-auto rounded-full px-2 py-[0.15rem] text-[0.72rem]" type="button" onclick={() => void allowAndRun(true)}>
+          <Button variant="default" size="xs" class="mini rounded-full text-ui-meta" type="button" onclick={() => void allowAndRun(true)}>
             Always allow
           </Button>
-          <Button variant="outline" size="xs" class="mini h-auto rounded-full px-2 py-[0.15rem] text-[0.72rem]" type="button" onclick={() => void allowAndRun(false)}>
+          <Button variant="outline" size="xs" class="mini rounded-full text-ui-meta" type="button" onclick={() => void allowAndRun(false)}>
             Just once
           </Button>
           <Button
             variant="outline"
             size="xs"
-            class="mini h-auto rounded-full px-2 py-[0.15rem] text-[0.72rem]"
+            class="mini rounded-full text-ui-meta"
             type="button"
             onclick={() => {
               confirmOpen = false;
@@ -217,7 +217,7 @@
           >
             Configure…
           </Button>
-          <Button variant="outline" size="xs" class="mini h-auto rounded-full px-2 py-[0.15rem] text-[0.72rem]" type="button" onclick={() => (confirmOpen = false)}>
+          <Button variant="outline" size="xs" class="mini rounded-full text-ui-meta" type="button" onclick={() => (confirmOpen = false)}>
             Cancel
           </Button>
         </div>
@@ -230,9 +230,9 @@
         role="alert"
         use:floating={{ anchor: root, above: popUp, alignEnd: icon }}
       >
-        <span class="fail-text text-[0.72rem] text-destructive [overflow-wrap:anywhere]">{error}</span>
-        <Button variant="outline" size="xs" class="mini h-auto rounded-full px-2 py-[0.15rem] text-[0.72rem]" type="button" onclick={() => void doRun()}>Retry</Button>
-        <Button variant="outline" size="xs" class="mini h-auto rounded-full px-2 py-[0.15rem] text-[0.72rem]" type="button" onclick={() => (error = null)}>Dismiss</Button>
+        <span class="fail-text text-ui-meta text-destructive [overflow-wrap:anywhere]">{error}</span>
+        <Button variant="outline" size="xs" class="mini rounded-full text-ui-meta" type="button" onclick={() => void doRun()}>Retry</Button>
+        <Button variant="outline" size="xs" class="mini rounded-full text-ui-meta" type="button" onclick={() => (error = null)}>Dismiss</Button>
       </div>
     {/if}
   </span>

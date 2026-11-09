@@ -170,7 +170,7 @@ import { Kbd } from "$lib/components/ui/kbd/index.js";
 
 {#if open}
   <div
-    class="scrim fixed inset-0 z-[70] flex justify-center items-start pt-[10vh] bg-black/50"
+    class="scrim fixed inset-0 z-70 flex justify-center items-start pt-[10vh] bg-black/50"
     role="presentation"
     onclick={close}
   >
@@ -185,7 +185,7 @@ import { Kbd } from "$lib/components/ui/kbd/index.js";
       onkeydown={onPanelKeydown}
     >
       <Input
-        class="search m-3 h-auto rounded-full border-0 bg-muted px-4 py-2.5 text-base shadow-none ring-0 focus-visible:border-0 focus-visible:ring-2 focus-visible:ring-ring md:text-base"
+        class="search m-3 h-auto rounded-full border-0 bg-muted px-4 py-2.5 text-sm shadow-none ring-0 focus-visible:border-0 focus-visible:ring-2 focus-visible:ring-ring"
         type="text"
         role="combobox"
         aria-expanded="true"
@@ -209,7 +209,7 @@ import { Kbd } from "$lib/components/ui/kbd/index.js";
           {@const cmdIcon = commandIcon(entry.command)}
           {#if isFirstOfSection(i)}
             <li
-              class="section px-3 pt-2.5 pb-1 text-[0.6875rem] font-bold uppercase tracking-[0.08em] text-primary select-none"
+              class="section px-3 pt-2.5 pb-1 text-ui-micro font-bold uppercase tracking-[0.08em] text-primary select-none"
               role="presentation"
             >{sectionFor(i)?.name}</li>
           {/if}
@@ -235,7 +235,7 @@ import { Kbd } from "$lib/components/ui/kbd/index.js";
                 class:text-accent-foreground={i === activeIndex}
                 aria-hidden="true"
               >
-                <Icon icon={cmdIcon} size={15} />
+                <Icon icon={cmdIcon} size={16} />
               </span>
             {/if}
             <span class="label flex-1 min-w-0 font-medium whitespace-nowrap overflow-hidden text-ellipsis">
@@ -246,15 +246,13 @@ import { Kbd } from "$lib/components/ui/kbd/index.js";
                 >{ch}</span>{/each}
             </span>
             {#if hint(entry.command) !== null}
-              <Kbd
-                class="shortcut h-auto shrink-0 rounded-md border border-border px-1.5 py-0.5 font-mono text-[0.6875rem]"
-              >{hint(entry.command)}</Kbd>
+              <Kbd class="shortcut shrink-0">{hint(entry.command)}</Kbd>
             {/if}
           </li>
         {/each}
         {#if flat.length === 0}
           <li
-            class="none px-3 py-4 text-muted-foreground text-[0.8125rem]"
+            class="none px-3 py-4 text-muted-foreground text-ui-base"
             role="option"
             aria-disabled="true"
             aria-selected="false"
@@ -263,7 +261,7 @@ import { Kbd } from "$lib/components/ui/kbd/index.js";
           </li>
         {/if}
       </ul>
-      <footer class="hintbar px-4 pt-2 pb-3 border-t border-border text-muted-foreground text-[0.6875rem]">↑↓ navigate · ↵ run · esc close</footer>
+      <footer class="hintbar px-4 pt-2 pb-3 border-t border-border text-muted-foreground text-ui-micro">↑↓ navigate · ↵ run · esc close</footer>
     </div>
   </div>
 {/if}

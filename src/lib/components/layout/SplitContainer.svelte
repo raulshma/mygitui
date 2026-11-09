@@ -178,7 +178,7 @@
     <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
     <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
     <div
-      class="relative z-[1] mx-[-2px] w-[5px] shrink-0 cursor-col-resize touch-none focus-visible:outline-none {dragSplitId ===
+      class="relative z-1 mx-[-2px] w-[5px] shrink-0 cursor-col-resize touch-none focus-visible:outline-none {dragSplitId ===
       node.id
         ? "bg-[linear-gradient(to_right,transparent_1px,var(--primary)_1px,var(--primary)_4px,transparent_4px)]"
         : "bg-[linear-gradient(to_right,transparent_2px,var(--border)_2px,var(--border)_3px,transparent_3px)] hover:bg-[linear-gradient(to_right,transparent_1px,var(--primary)_1px,var(--primary)_4px,transparent_4px)] focus-visible:bg-[linear-gradient(to_right,transparent_1px,var(--primary)_1px,var(--primary)_4px,transparent_4px)]"}"

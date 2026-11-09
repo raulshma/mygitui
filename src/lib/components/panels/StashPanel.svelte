@@ -19,6 +19,7 @@
   import { emitUiEvent } from "$lib/palette/events";
   import { relativeAge, shortSha, stashRef } from "./panelModel";
   import ConfirmDialog from "$lib/components/safety/ConfirmDialog.svelte";
+  import EmptyState from "../layout/EmptyState.svelte";
   import DialogShell from "$lib/components/safety/DialogShell.svelte";
   import DiffViewer from "$lib/components/diff/DiffViewer.svelte";
   import StashMessageButton from "$lib/components/ai/StashMessageButton.svelte";
@@ -264,7 +265,7 @@
   }
 </script>
 
-<aside class="stash-panel flex min-h-0 flex-col text-[13px]" aria-label="Stashes">
+<aside class="stash-panel flex min-h-0 flex-col text-ui-base" aria-label="Stashes">
   <div class="toolbar flex flex-none items-center gap-1.5 px-2 py-1.5">
     <Button
       class="aria-pressed:bg-accent aria-pressed:text-accent-foreground"
@@ -315,14 +316,14 @@
       />
       <div class="opts flex items-center gap-2.5">
         <label
-          class="toggle flex cursor-pointer items-center gap-1 whitespace-nowrap text-[0.6875rem] text-muted-foreground"
+          class="toggle flex cursor-pointer items-center gap-1 whitespace-nowrap text-ui-micro text-muted-foreground"
           title="Keep changes already staged in the index"
         >
           <input type="checkbox" class="m-0 accent-primary" bind:checked={keepIndex} />
           <span>keep-index</span>
         </label>
         <label
-          class="toggle flex cursor-pointer items-center gap-1 whitespace-nowrap text-[0.6875rem] text-muted-foreground"
+          class="toggle flex cursor-pointer items-center gap-1 whitespace-nowrap text-ui-micro text-muted-foreground"
           title="Also stash untracked files"
         >
           <input type="checkbox" class="m-0 accent-primary" bind:checked={includeUntracked} />
@@ -330,7 +331,7 @@
         </label>
       </div>
       <Button
-        class="h-auto shrink-0 rounded-full px-3 py-0.5 text-[0.72rem]"
+        class="h-auto shrink-0 rounded-full px-3 py-0.5 text-ui-meta"
         type="submit"
         disabled={busy}
       >Stash</Button>
@@ -338,18 +339,18 @@
   {/if}
 
   {#if error}
-    <p class="state error py-4 px-3 text-[13px] text-destructive" role="alert">{error}</p>
+    <p class="state error py-4 px-3 text-ui-base text-destructive" role="alert">{error}</p>
   {:else if !loading && list.length === 0}
-    <p class="state py-4 px-3 text-[13px] text-muted-foreground">No stashes. Use "Stash changes" to park your work.</p>
+    <EmptyState title={'No stashes. Use "Stash changes" to park your work.'} />
   {:else}
     <ul class="stashes m-0 flex min-h-0 flex-1 list-none flex-col gap-2 overflow-y-auto px-2 py-1.5" role="list" aria-label="Stash list">
       {#each list as info (info.index)}
         <li class="card flex flex-col gap-1 rounded-lg border border-border bg-card px-2 py-1.5">
           <div class="row flex min-w-0 items-baseline gap-2">
-            <span class="ref shrink-0 font-mono text-[0.6875rem] font-semibold text-primary">{stashRef(info)}</span>
+            <span class="ref shrink-0 font-mono text-ui-micro font-semibold text-primary">{stashRef(info)}</span>
             <span class="msg min-w-0 flex-1 truncate" title={info.message}>{info.message}</span>
           </div>
-          <div class="meta flex items-center gap-2.5 text-[0.6875rem] text-muted-foreground">
+          <div class="meta flex items-center gap-2.5 text-ui-micro text-muted-foreground">
             <span class="sha font-mono">{shortSha(info.sha)}</span>
             <span class="author">{info.author.name}</span>
             <span class="age">{age(info)}</span>
@@ -391,7 +392,7 @@
               }}
             >
               <Input
-                class="h-auto min-w-32 flex-1 rounded px-1.5 py-0.5 font-mono text-[0.72rem]"
+                class="h-auto min-w-32 flex-1 rounded px-1.5 py-0.5 font-mono text-ui-meta"
                 type="text"
                 placeholder="new branch name"
                 aria-label="New branch name"
@@ -452,17 +453,17 @@
       {#if p}
         <h2 id="stash-preview-title" class="sdlg-title title flex items-baseline gap-2">
           {stashRef(p.info)}
-          <span class="min-w-0 flex-1 truncate text-[0.8125rem] font-normal text-muted-foreground" title={p.info.message}>
+          <span class="min-w-0 flex-1 truncate text-ui-base font-normal text-muted-foreground" title={p.info.message}>
             {p.info.message}
           </span>
         </h2>
         <div class="preview-body max-h-[60vh] min-h-24 overflow-y-auto rounded border border-border bg-card">
           {#if p.error}
-            <p class="p-3 text-[13px] text-destructive" role="alert">{p.error}</p>
+            <p class="p-3 text-ui-base text-destructive" role="alert">{p.error}</p>
           {:else if p.files === null}
-            <p class="p-3 text-[13px] text-muted-foreground" role="status">Loading stash diff…</p>
+            <p class="p-3 text-ui-base text-muted-foreground" role="status">Loading stash diff…</p>
           {:else if p.files.length === 0}
-            <p class="p-3 text-[13px] text-muted-foreground">This stash has no tracked-file changes.</p>
+            <p class="p-3 text-ui-base text-muted-foreground">This stash has no tracked-file changes.</p>
           {:else}
             <DiffViewer files={p.files} />
           {/if}

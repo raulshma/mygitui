@@ -145,7 +145,7 @@
 
 {#if open}
   <div
-    class="scrim fixed inset-0 z-[60] flex justify-center items-start pt-[12vh] bg-black/50"
+    class="scrim fixed inset-0 z-60 flex justify-center items-start pt-[10vh] bg-black/50"
     role="presentation"
     onclick={close}
     onkeydown={onScrimKeydown}
@@ -161,7 +161,7 @@
       onkeydown={onPanelKeydown}
     >
       <Input
-        class="search m-3 h-auto rounded-full border-0 bg-muted px-4 py-2.5 text-base shadow-none ring-0 focus-visible:border-0 focus-visible:ring-2 focus-visible:ring-ring md:text-base"
+        class="search m-3 h-auto rounded-full border-0 bg-muted px-4 py-2.5 text-sm shadow-none ring-0 focus-visible:border-0 focus-visible:ring-2 focus-visible:ring-ring"
         type="text"
         role="combobox"
         aria-expanded="true"
@@ -176,7 +176,7 @@
       />
       <ul
         id="switcher-list"
-        class="list list-none m-0 px-2 pt-1 pb-2 max-h-[50vh] overflow-y-auto"
+        class="list list-none m-0 px-2 pt-1 pb-2 max-h-[55vh] overflow-y-auto"
         role="listbox"
         aria-label="Repositories"
       >
@@ -206,11 +206,11 @@
                 >{ch}</span>{/each}
             </span>
             <span
-              class="sub flex-1 min-w-0 text-muted-foreground font-mono text-[0.6875rem] whitespace-nowrap overflow-hidden text-ellipsis"
+              class="sub flex-1 min-w-0 text-muted-foreground font-mono text-ui-micro whitespace-nowrap overflow-hidden text-ellipsis"
             >{item.sub}</span>
             {#if item.kind === "tab"}
               <Badge
-                class="badge h-auto shrink-0 rounded-full border-border px-2 py-0.5 text-[0.625rem] uppercase tracking-[0.05em] text-primary"
+                class="badge shrink-0 uppercase tracking-[0.05em] text-primary"
                 variant="outline"
                 aria-label="Open tab"
               >open</Badge>
@@ -219,7 +219,7 @@
         {/each}
         {#if ranked.length === 0}
           <li
-            class="none px-3 py-4 text-muted-foreground text-[0.8125rem]"
+            class="none px-3 py-4 text-muted-foreground text-ui-base"
             role="option"
             aria-disabled="true"
             aria-selected="false"
@@ -228,7 +228,7 @@
           </li>
         {/if}
       </ul>
-      <footer class="hint px-4 pt-2 pb-3 border-t border-border text-muted-foreground text-[0.6875rem]">↑↓ navigate · ↵ open · esc close · cmd/ctrl+K toggle</footer>
+      <footer class="hint px-4 pt-2 pb-3 border-t border-border text-muted-foreground text-ui-micro">↑↓ navigate · ↵ open · esc close · cmd/ctrl+K toggle</footer>
     </div>
   </div>
 {/if}

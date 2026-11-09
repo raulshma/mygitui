@@ -34,6 +34,7 @@
   } from "$lib/git/format";
   import { ageBackground, ageRatios } from "./blameModel";
   import { Button } from "$lib/components/ui/button/index.js";
+  import EmptyState from "../layout/EmptyState.svelte";
 
   let {
     repoId,
@@ -45,7 +46,7 @@
     from?: string;
   } = $props();
 
-  const ROW_HEIGHT = 22;
+  const ROW_HEIGHT = 24;
   const OVERSCAN = 12;
 
   /** One rendered row: either a group header or a blame line. */
@@ -235,7 +236,7 @@
   class="blame flex h-full min-h-0 flex-col bg-background"
   aria-label={"Blame for " + path}
 >
-  <header class="bhead flex items-baseline gap-2 border-b border-border bg-muted/50 px-3 py-1 text-xs">
+  <header class="bhead flex items-baseline gap-2 border-b border-border bg-muted/50 px-2.5 py-1 text-xs">
     <span
       class="bpath overflow-hidden text-ellipsis whitespace-nowrap font-mono text-foreground"
       title={path}>{path}</span
@@ -247,7 +248,7 @@
     {/if}
     {#if blameFrom.length > 0}
       <Button
-        class="h-auto shrink-0 whitespace-nowrap rounded-full px-2 py-0 text-[0.6875rem] font-normal text-muted-foreground"
+        class="h-auto shrink-0 whitespace-nowrap rounded-full px-2 py-0 text-ui-micro font-normal text-muted-foreground"
         variant="outline"
         type="button"
         title={blameFrom.length > 1
@@ -258,7 +259,7 @@
         ← Back
       </Button>
       {#if blameFrom.length > 1}
-        <span class="bdepth shrink-0 text-[0.6875rem] text-muted-foreground"
+        <span class="bdepth shrink-0 text-ui-micro text-muted-foreground"
           >{blameFrom.length} steps</span
         >
       {/if}
@@ -288,14 +289,14 @@
         ({reblame.parent.slice(0, 8)})
       </span>
       <Button
-        class="h-auto shrink-0 whitespace-nowrap rounded-full px-2.5 py-0.5 text-[0.6875rem]"
+        class="h-auto shrink-0 whitespace-nowrap rounded-full px-2.5 py-0.5 text-ui-micro"
         type="button"
         onclick={doReblame}
       >
         Blame from {reblame.parent.slice(0, 8)}
       </Button>
       <Button
-        class="h-auto shrink-0 whitespace-nowrap rounded-full px-2 py-0 text-[0.6875rem] font-normal text-muted-foreground"
+        class="h-auto shrink-0 whitespace-nowrap rounded-full px-2 py-0 text-ui-micro font-normal text-muted-foreground"
         variant="outline"
         type="button"
         aria-label="Dismiss re-blame"
@@ -307,17 +308,15 @@
   {/if}
 
   {#if loading}
-    <p class="empty m-auto text-[0.8125rem] text-muted-foreground" role="status">
+    <p class="empty m-auto text-ui-base text-muted-foreground" role="status">
       Loading blame for {path}…</p
     >
   {:else if error}
-    <p class="empty m-auto text-[0.8125rem] text-muted-foreground" role="alert">
+    <p class="empty m-auto text-ui-base text-muted-foreground" role="alert">
       Blame failed: {error}</p
     >
   {:else if rows.length === 0}
-    <p class="empty m-auto text-[0.8125rem] text-muted-foreground">
-      No blame lines for {path}.</p
-    >
+    <EmptyState title={`No blame lines for ${path}.`} />
   {:else}
     <div class="bscroll min-h-0 flex-1 overflow-auto" bind:this={scrollerEl} onscroll={onScroll}>
       <div

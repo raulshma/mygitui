@@ -71,18 +71,18 @@
   <div class="controls flex shrink-0 items-center gap-3">
     <div class="seg flex overflow-hidden rounded-full border border-border" role="group" aria-label="Image compare mode">
       <Toggle
-        class="h-auto rounded-none border-0 px-[0.6rem] py-[0.3rem] font-normal text-[0.6875rem] leading-none text-muted-foreground aria-pressed:text-foreground focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary focus-visible:ring-0"
+        class="h-auto rounded-none border-0 px-2.5 py-1 font-normal text-ui-micro leading-none text-muted-foreground aria-pressed:text-foreground focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary focus-visible:ring-0"
         pressed={!overlay}
         onPressedChange={(next) => next && switchToOverlay(false)}
       >Side by side</Toggle>
       <Toggle
-        class="h-auto rounded-none border-0 px-[0.6rem] py-[0.3rem] font-normal text-[0.6875rem] leading-none text-muted-foreground aria-pressed:text-foreground focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary focus-visible:ring-0"
+        class="h-auto rounded-none border-0 px-2.5 py-1 font-normal text-ui-micro leading-none text-muted-foreground aria-pressed:text-foreground focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary focus-visible:ring-0"
         pressed={overlay}
         onPressedChange={(next) => next && switchToOverlay(true)}
       >Overlay</Toggle>
     </div>
     <label class="slider flex min-w-0 flex-1 items-center gap-2">
-      <span class="lbl shrink-0 text-[0.6875rem] text-muted-foreground">Old</span>
+      <span class="lbl shrink-0 text-ui-micro text-muted-foreground">Old</span>
       <input
         type="range"
         min="0"
@@ -93,10 +93,10 @@
         disabled={!overlay || blink}
         aria-label="New image opacity (0 = old image, 100 = new image)"
       />
-      <span class="lbl shrink-0 text-[0.6875rem] text-muted-foreground">New</span>
+      <span class="lbl shrink-0 text-ui-micro text-muted-foreground">New</span>
     </label>
     <Toggle
-      class="h-auto shrink-0 rounded-full border border-border px-3 py-[0.3rem] font-normal text-[0.6875rem] text-muted-foreground aria-pressed:border-transparent aria-pressed:text-[var(--app-renamed)] aria-pressed:bg-[var(--app-renamed-bg)] disabled:cursor-default disabled:opacity-45 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary focus-visible:ring-0"
+      class="h-auto shrink-0 rounded-full border border-border px-3 py-1 font-normal text-ui-micro text-muted-foreground aria-pressed:border-transparent aria-pressed:text-[var(--app-renamed)] aria-pressed:bg-[var(--app-renamed-bg)] disabled:cursor-default disabled:opacity-45 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary focus-visible:ring-0"
       pressed={blink}
       disabled={!overlay}
       onPressedChange={(next) => (blink = next)}
@@ -126,7 +126,7 @@
         {:else}
           <div class="placeholder grid h-full w-full min-h-12 place-items-center rounded border border-dashed border-border bg-muted text-xs text-muted-foreground">{loading ? "Loading old image…" : "Old image unavailable"}</div>
         {/if}
-        <figcaption class="shrink-0 overflow-hidden text-ellipsis whitespace-nowrap font-mono text-[0.6875rem] text-muted-foreground">Old — {file.old_path ?? file.path}</figcaption>
+        <figcaption class="shrink-0 overflow-hidden text-ellipsis whitespace-nowrap font-mono text-ui-micro text-muted-foreground">Old — {file.old_path ?? file.path}</figcaption>
       </figure>
       <figure class="panel m-0 flex min-w-0 flex-1 flex-col gap-1">
         {#if newUrl}
@@ -134,7 +134,7 @@
         {:else}
           <div class="placeholder grid h-full w-full min-h-12 place-items-center rounded border border-dashed border-border bg-muted text-xs text-muted-foreground">{loading ? "Loading new image…" : "New image unavailable"}</div>
         {/if}
-        <figcaption class="shrink-0 overflow-hidden text-ellipsis whitespace-nowrap font-mono text-[0.6875rem] text-muted-foreground">New — {file.path}</figcaption>
+        <figcaption class="shrink-0 overflow-hidden text-ellipsis whitespace-nowrap font-mono text-ui-micro text-muted-foreground">New — {file.path}</figcaption>
       </figure>
     </div>
   {/if}

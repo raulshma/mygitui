@@ -26,6 +26,7 @@
   import { Button } from "$lib/components/ui/button/index.js";
   import { Input } from "$lib/components/ui/input/index.js";
   import { Spinner } from "$lib/components/ui/spinner/index.js";
+  import EmptyState from "../layout/EmptyState.svelte";
   import { appIcon } from "$lib/components/icons/library.svelte";
 
   let {
@@ -229,16 +230,16 @@
       }}
     >
       <Input
-        class="h-auto w-32 rounded-md px-2 py-0.5 text-[0.72rem]"
+        class="h-auto w-32 rounded-md px-2 py-0.5 text-ui-meta"
         type="text"
         placeholder="New tag name"
         aria-label="New tag name"
         bind:value={newName}
       />
-      <label class="from flex items-center gap-1 text-[0.6875rem] text-muted-foreground">
+      <label class="from flex items-center gap-1 text-ui-micro text-muted-foreground">
         <span class="fl">at</span>
         <select
-          class="max-w-32 rounded-md border border-input bg-background px-2 py-0.5 font-[inherit] text-[0.72rem] text-foreground"
+          class="max-w-32 rounded-md border border-input bg-background px-2 py-0.5 font-[inherit] text-ui-meta text-foreground"
           bind:value={newTarget}
           aria-label="Tag target"
         >
@@ -249,21 +250,21 @@
         </select>
       </label>
       <Input
-        class="h-auto min-w-32 flex-1 rounded-md px-2 py-0.5 text-[0.72rem]"
+        class="h-auto min-w-32 flex-1 rounded-md px-2 py-0.5 text-ui-meta"
         type="text"
         placeholder="Message (makes it annotated)"
         aria-label="Tag message"
         bind:value={newMessage}
       />
       <label
-        class="toggle flex cursor-pointer items-center gap-1 text-[0.72rem] text-muted-foreground"
+        class="toggle flex cursor-pointer items-center gap-1 text-ui-meta text-muted-foreground"
         title="Create a signed tag (git tag -s; requires signing config)"
       >
         <input type="checkbox" class="m-0 accent-primary" bind:checked={newSigned} />
         <span>sign</span>
       </label>
       <Button
-        class="h-auto rounded-full px-3 py-0.5 text-[0.72rem]"
+        class="h-auto rounded-full px-3 py-0.5 text-ui-meta"
         type="submit"
         disabled={!newName.trim()}
       >
@@ -278,22 +279,22 @@
     {:else if loading && list.length === 0}
       <p class="state m-0 px-3 py-1 text-xs text-muted-foreground" role="status">
         <span class="inline-flex items-center gap-[0.3rem]">
-          <Spinner class="size-[12px]" role="presentation" aria-hidden="true" />
+          <Spinner class="size-3" role="presentation" aria-hidden="true" />
           Loading tags…
         </span>
       </p>
     {:else if !loading && list.length === 0}
-      <p class="state m-0 px-3 py-1 text-xs text-muted-foreground">No tags.</p>
+      <EmptyState title="No tags." />
     {:else}
       <ul class="list m-0 list-none p-0 pb-2" role="list" aria-label="Tags">
         {#each list as tag (tag.name)}
-          <li class="row flex items-center gap-1.5 px-2 py-0.5 text-[0.72rem] hover:bg-muted/60">
+          <li class="row flex items-center gap-1.5 px-2 py-0.5 text-ui-meta hover:bg-muted/60">
             <span
               class="tname overflow-hidden text-ellipsis whitespace-nowrap font-mono font-semibold text-foreground"
               title={tag.message ?? tag.name}>{tag.name}</span
             >
             {#if tag.annotated}
-              <Badge variant="outline" class="chip h-auto shrink-0 rounded-full px-1.5 py-0 text-[0.625rem] text-muted-foreground"
+              <Badge variant="outline" class="chip h-auto shrink-0 rounded-full px-1.5 py-0 text-ui-tiny text-muted-foreground"
                 >annotated</Badge
               >
             {/if}

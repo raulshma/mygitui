@@ -21,9 +21,25 @@
     type DiffRow,
     type LoadImageFn,
   } from "$lib/components/diff/rowModel";
+  import {
+    LINE_NUMBER_W,
+    LINE_NUMBER_PAD_R,
+    SIGN_W,
+    TEXT_PAD_R,
+  } from "$lib/components/diff/metrics";
   import { cachedTokens, type TokenSpan } from "$lib/diff/highlight";
   import { observeRowMeasure } from "$lib/components/diff/rowMeasure";
   import ImageCompare from "$lib/components/diff/ImageCompare.svelte";
+
+  /**
+   * Gutter cell geometry, inline from diff/metrics.ts (border-box): the same
+   * constants wrapHeights' wrap arithmetic sums into GUTTER_PX, so the DOM
+   * and the estimates can never drift. (Was rem utilities: `min-w-[3.25rem]`
+   * + `pr-2`, `w-5`, `pr-4` — same 52/20/16 px at a 16px root.)
+   */
+  const noStyle = `min-width: ${LINE_NUMBER_W}px; padding-right: ${LINE_NUMBER_PAD_R}px;`;
+  const signStyle = `width: ${SIGN_W}px;`;
+  const txtStyle = `padding-right: ${TEXT_PAD_R}px;`;
 
   let {
     row,
@@ -167,13 +183,13 @@
   <div class="row file-header flex w-full box-border items-center gap-[0.4rem] border-y border-[var(--diff-divider)] bg-[var(--diff-file-bg)] py-0 pl-1 pr-3 shadow-[inset_3px_0_var(--diff-file-accent)]" style:height={`${rowHeight(row)}px`}>
     <button
       type="button"
-      class="collapse grid h-[22px] w-[22px] shrink-0 cursor-pointer place-items-center rounded-[4px] border-0 bg-transparent p-0 text-[11px] text-muted-foreground hover:bg-accent focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary"
+      class="collapse grid h-[22px] w-[22px] shrink-0 cursor-pointer place-items-center rounded-[4px] border-0 bg-transparent p-0 text-[12px] text-muted-foreground hover:bg-accent focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary"
       aria-expanded={!row.collapsed}
       aria-label={row.collapsed ? `Expand ${row.file.path}` : `Collapse ${row.file.path}`}
       onclick={() => onToggleCollapse?.(row.file.path)}
     ><span class="chev" aria-hidden="true">{row.collapsed ? "▸" : "▾"}</span></button>
     <span
-      class={`fkind fk-${change} inline-flex h-[1.05rem] w-[1.05rem] shrink-0 items-center justify-center rounded-[3px] font-mono text-[0.625rem] leading-none font-bold ${
+      class={`fkind fk-${change} inline-flex h-[1.05rem] w-[1.05rem] shrink-0 items-center justify-center rounded-[3px] font-mono text-ui-tiny leading-none font-bold ${
         change === "added"
           ? "text-[var(--app-added)] bg-[var(--app-added-bg)]"
           : change === "deleted"
@@ -185,14 +201,14 @@
       title={fileKindLabel(change)}
       aria-label={fileKindLabel(change)}
     >{fileKindLetter(change)}</span>
-    <span class="path min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap font-mono text-[0.8125rem] font-semibold" title={row.file.path}>
+    <span class="path min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap font-mono text-ui-base font-semibold" title={row.file.path}>
       {#if row.file.old_path && row.file.old_path !== row.file.path}
         <span class="old-path text-muted-foreground">{row.file.old_path}</span><span class="arrow text-muted-foreground" aria-hidden="true"> → </span>{row.file.path}
       {:else}{row.file.path}{/if}
     </span>
-    {#if row.file.is_image}<span class="chip shrink-0 rounded-full border border-border px-[0.4rem] text-[0.625rem] leading-[1.4] uppercase tracking-[0.04em] text-muted-foreground">image</span>{/if}
-    {#if row.file.binary}<span class="chip shrink-0 rounded-full border border-border px-[0.4rem] text-[0.625rem] leading-[1.4] uppercase tracking-[0.04em] text-muted-foreground">binary</span>{/if}
-    <span class="counts flex shrink-0 gap-[0.3rem] font-mono text-[0.6875rem] tabular-nums">
+    {#if row.file.is_image}<span class="chip shrink-0 rounded-full border border-border px-2 text-ui-tiny leading-[1.4] uppercase tracking-[0.04em] text-muted-foreground">image</span>{/if}
+    {#if row.file.binary}<span class="chip shrink-0 rounded-full border border-border px-2 text-ui-tiny leading-[1.4] uppercase tracking-[0.04em] text-muted-foreground">binary</span>{/if}
+    <span class="counts flex shrink-0 gap-[0.3rem] font-mono text-ui-micro tabular-nums">
       <span class="adds rounded-[3px] px-1 text-[var(--app-added)] bg-[var(--app-added-bg)]">+{row.file.additions}</span>
       <span class="dels rounded-[3px] px-1 text-[var(--app-deleted)] bg-[var(--app-deleted-bg)]">−{row.file.deletions}</span>
     </span>
@@ -213,13 +229,13 @@
   >
     <span class="hh overflow-hidden text-ellipsis whitespace-nowrap font-mono text-[11px] leading-[20px] font-medium text-muted-foreground [tab-size:8] group-hover/hh:text-foreground">@@ -{row.oldStart},{row.oldCount} +{row.newStart},{row.newCount} @@</span>
     {#if selectionCount > 0}
-      <span class="sel-count shrink-0 whitespace-nowrap text-[10px] tabular-nums text-primary" aria-live="polite">{selectionCount} selected</span>
+      <span class="sel-count shrink-0 whitespace-nowrap text-ui-tiny tabular-nums text-primary" aria-live="polite">{selectionCount} selected</span>
     {/if}
     <span class="hunk-actions ml-auto shrink-0 items-center gap-1 {selectionCount > 0 ? "inline-flex" : "hidden"} group-hover/hh:inline-flex group-focus-within/hh:inline-flex group-focus-visible/hh:inline-flex">
       {#if selectionCount > 0 && onStageSelection}
         <button
           type="button"
-          class="sel cursor-pointer rounded-lg border border-primary bg-background px-[0.4rem] py-[0.05rem] font-sans text-[10px] font-semibold text-primary"
+          class="sel cursor-pointer rounded-lg border border-primary bg-background px-2 py-px font-sans text-ui-tiny font-semibold text-primary"
           onclick={(e) => {
             e.stopPropagation();
             onStageSelection?.(row.fileIndex, row.hunkIndex);
@@ -229,7 +245,7 @@
       {#if selectionCount > 0 && onDiscardSelection}
         <button
           type="button"
-          class="sel discard cursor-pointer rounded-lg border border-primary bg-background px-[0.4rem] py-[0.05rem] font-sans text-[10px] font-semibold text-destructive"
+          class="sel discard cursor-pointer rounded-lg border border-primary bg-background px-2 py-px font-sans text-ui-tiny font-semibold text-destructive"
           onclick={(e) => {
             e.stopPropagation();
             onDiscardSelection?.(row.fileIndex, row.hunkIndex);
@@ -239,21 +255,21 @@
       {#if onStageHunk}
         <button
           type="button"
-          class="cursor-pointer rounded-lg border border-border bg-background px-[0.4rem] py-[0.05rem] font-sans text-[10px] text-foreground"
+          class="cursor-pointer rounded-lg border border-border bg-background px-2 py-px font-sans text-ui-tiny text-foreground"
           onclick={() => onStageHunk?.(row.fileIndex, row.hunkIndex)}
         >{stageLabel}</button>
       {/if}
       {#if onDiscardHunk}
         <button
           type="button"
-          class="discard cursor-pointer rounded-lg border border-border bg-background px-[0.4rem] py-[0.05rem] font-sans text-[10px] text-destructive"
+          class="discard cursor-pointer rounded-lg border border-border bg-background px-2 py-px font-sans text-ui-tiny text-destructive"
           onclick={() => onDiscardHunk?.(row.fileIndex, row.hunkIndex)}
         >Discard hunk</button>
       {/if}
       {#if onExplainHunk}
         <button
           type="button"
-          class="explain cursor-pointer rounded-lg border border-border bg-background px-[0.4rem] py-[0.05rem] font-sans text-[10px] text-[var(--app-renamed)]"
+          class="explain cursor-pointer rounded-lg border border-border bg-background px-2 py-px font-sans text-ui-tiny text-[var(--app-renamed)]"
           title="Explain this change with AI"
           onclick={(e) => {
             e.stopPropagation();
@@ -282,7 +298,7 @@
     >
       <button
         type="button"
-        class="no m-0 min-w-[3.25rem] shrink-0 select-none overflow-hidden border-0 bg-transparent p-0 pr-2 text-right font-mono text-[11px] leading-[20px] text-clip whitespace-pre [tab-size:8] text-muted-foreground {onGutterClick !== undefined
+        style={noStyle} class="no m-0 shrink-0 select-none overflow-hidden border-0 bg-transparent p-0 text-right font-mono text-[11px] leading-[20px] text-clip whitespace-pre [tab-size:8] text-muted-foreground {onGutterClick !== undefined
           ? "click cursor-pointer hover:text-foreground hover:underline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary"
           : ""}"
         tabindex="-1"
@@ -292,8 +308,8 @@
           gutter(row.fileIndex, row.hunkIndex, row.lineIndex, e);
         }}
       >{row.line.old_no ?? ""}</button>
-      <span class="sign w-5 shrink-0 select-none text-center font-mono text-[12px] leading-[20px] whitespace-pre [tab-size:8]" aria-hidden="true"></span>
-      <span class="txt min-w-0 flex-1 overflow-hidden pr-4 font-mono text-[12px] leading-[20px] [tab-size:8] {wrap ? "whitespace-pre-wrap break-all" : "whitespace-pre"}" class:wrap={wrap}>{@render text(row.line)}</span>
+      <span style={signStyle} class="sign shrink-0 select-none text-center font-mono text-[12px] leading-[20px] whitespace-pre [tab-size:8]" aria-hidden="true"></span>
+      <span style={txtStyle} class="txt min-w-0 flex-1 overflow-hidden font-mono text-[12px] leading-[20px] [tab-size:8] {wrap ? "whitespace-pre-wrap break-all" : "whitespace-pre"}" class:wrap={wrap}>{@render text(row.line)}</span>
     </div>
     <div
       class="half right flex min-w-0 flex-[1_1_50%] border-l border-[var(--diff-divider)] {selCls(selectedInRow(row.lineIndex))}"
@@ -301,7 +317,7 @@
     >
       <button
         type="button"
-        class="no m-0 min-w-[3.25rem] shrink-0 select-none overflow-hidden border-0 bg-transparent p-0 pr-2 text-right font-mono text-[11px] leading-[20px] text-clip whitespace-pre [tab-size:8] text-muted-foreground {onGutterClick !== undefined
+        style={noStyle} class="no m-0 shrink-0 select-none overflow-hidden border-0 bg-transparent p-0 text-right font-mono text-[11px] leading-[20px] text-clip whitespace-pre [tab-size:8] text-muted-foreground {onGutterClick !== undefined
           ? "click cursor-pointer hover:text-foreground hover:underline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary"
           : ""}"
         tabindex="-1"
@@ -311,8 +327,8 @@
           gutter(row.fileIndex, row.hunkIndex, row.lineIndex, e);
         }}
       >{row.line.new_no ?? ""}</button>
-      <span class="sign w-5 shrink-0 select-none text-center font-mono text-[12px] leading-[20px] whitespace-pre [tab-size:8]" aria-hidden="true"></span>
-      <span class="txt min-w-0 flex-1 overflow-hidden pr-4 font-mono text-[12px] leading-[20px] [tab-size:8] {wrap ? "whitespace-pre-wrap break-all" : "whitespace-pre"}" class:wrap={wrap}>{@render text(row.line)}</span>
+      <span style={signStyle} class="sign shrink-0 select-none text-center font-mono text-[12px] leading-[20px] whitespace-pre [tab-size:8]" aria-hidden="true"></span>
+      <span style={txtStyle} class="txt min-w-0 flex-1 overflow-hidden font-mono text-[12px] leading-[20px] [tab-size:8] {wrap ? "whitespace-pre-wrap break-all" : "whitespace-pre"}" class:wrap={wrap}>{@render text(row.line)}</span>
     </div>
   </div>
 
@@ -332,7 +348,7 @@
       {#if row.left}
         <button
           type="button"
-          class="no m-0 min-w-[3.25rem] shrink-0 select-none overflow-hidden border-0 bg-transparent p-0 pr-2 text-right font-mono text-[11px] leading-[20px] text-clip whitespace-pre [tab-size:8] text-muted-foreground {onGutterClick !== undefined
+          style={noStyle} class="no m-0 shrink-0 select-none overflow-hidden border-0 bg-transparent p-0 text-right font-mono text-[11px] leading-[20px] text-clip whitespace-pre [tab-size:8] text-muted-foreground {onGutterClick !== undefined
             ? "click cursor-pointer hover:text-foreground hover:underline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary"
             : ""}"
           tabindex="-1"
@@ -342,8 +358,8 @@
             gutter(row.fileIndex, row.hunkIndex, row.leftIndex ?? -1, e);
           }}
         >{row.left.old_no ?? ""}</button>
-        <span class="sign del w-5 shrink-0 select-none text-center font-mono text-[12px] leading-[20px] font-bold whitespace-pre [tab-size:8] text-[var(--app-deleted)]" aria-hidden="true">−</span>
-        <span class="txt min-w-0 flex-1 overflow-hidden pr-4 font-mono text-[12px] leading-[20px] [tab-size:8] {wrap ? "whitespace-pre-wrap break-all" : "whitespace-pre"}" class:wrap={wrap}>{@render text(row.left)}</span>
+        <span style={signStyle} class="sign del shrink-0 select-none text-center font-mono text-[12px] leading-[20px] font-bold whitespace-pre [tab-size:8] text-[var(--app-deleted)]" aria-hidden="true">−</span>
+        <span style={txtStyle} class="txt min-w-0 flex-1 overflow-hidden font-mono text-[12px] leading-[20px] [tab-size:8] {wrap ? "whitespace-pre-wrap break-all" : "whitespace-pre"}" class:wrap={wrap}>{@render text(row.left)}</span>
       {/if}
     </div>
     <div
@@ -355,7 +371,7 @@
       {#if row.right}
         <button
           type="button"
-          class="no m-0 min-w-[3.25rem] shrink-0 select-none overflow-hidden border-0 bg-transparent p-0 pr-2 text-right font-mono text-[11px] leading-[20px] text-clip whitespace-pre [tab-size:8] text-muted-foreground {onGutterClick !== undefined
+          style={noStyle} class="no m-0 shrink-0 select-none overflow-hidden border-0 bg-transparent p-0 text-right font-mono text-[11px] leading-[20px] text-clip whitespace-pre [tab-size:8] text-muted-foreground {onGutterClick !== undefined
             ? "click cursor-pointer hover:text-foreground hover:underline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary"
             : ""}"
           tabindex="-1"
@@ -365,8 +381,8 @@
             gutter(row.fileIndex, row.hunkIndex, row.rightIndex ?? -1, e);
           }}
         >{row.right.new_no ?? ""}</button>
-        <span class="sign add w-5 shrink-0 select-none text-center font-mono text-[12px] leading-[20px] font-bold whitespace-pre [tab-size:8] text-[var(--app-added)]" aria-hidden="true">+</span>
-        <span class="txt min-w-0 flex-1 overflow-hidden pr-4 font-mono text-[12px] leading-[20px] [tab-size:8] {wrap ? "whitespace-pre-wrap break-all" : "whitespace-pre"}" class:wrap={wrap}>{@render text(row.right)}</span>
+        <span style={signStyle} class="sign add shrink-0 select-none text-center font-mono text-[12px] leading-[20px] font-bold whitespace-pre [tab-size:8] text-[var(--app-added)]" aria-hidden="true">+</span>
+        <span style={txtStyle} class="txt min-w-0 flex-1 overflow-hidden font-mono text-[12px] leading-[20px] [tab-size:8] {wrap ? "whitespace-pre-wrap break-all" : "whitespace-pre"}" class:wrap={wrap}>{@render text(row.right)}</span>
       {/if}
     </div>
   </div>
@@ -384,7 +400,7 @@
   >
     <button
       type="button"
-      class="no m-0 min-w-[3.25rem] shrink-0 select-none overflow-hidden border-0 bg-transparent p-0 pr-2 text-right font-mono text-[11px] leading-[20px] text-clip whitespace-pre [tab-size:8] text-muted-foreground {onGutterClick !== undefined
+      style={noStyle} class="no m-0 shrink-0 select-none overflow-hidden border-0 bg-transparent p-0 text-right font-mono text-[11px] leading-[20px] text-clip whitespace-pre [tab-size:8] text-muted-foreground {onGutterClick !== undefined
         ? "click cursor-pointer hover:text-foreground hover:underline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary"
         : ""}"
       tabindex="-1"
@@ -394,8 +410,8 @@
         gutter(row.fileIndex, row.hunkIndex, row.lineIndex, e);
       }}
     >{lineNo ?? ""}</button>
-    <span class="sign{isAdd ? " add" : isDel ? " del" : ""} w-5 shrink-0 select-none text-center font-mono text-[12px] leading-[20px] whitespace-pre [tab-size:8] {isAdd ? "font-bold text-[var(--app-added)]" : isDel ? "font-bold text-[var(--app-deleted)]" : ""}" aria-hidden="true">{row.line.origin.trim()}</span>
-    <span class="txt min-w-0 flex-1 overflow-hidden pr-4 font-mono text-[12px] leading-[20px] [tab-size:8] {wrap ? "whitespace-pre-wrap break-all" : "whitespace-pre"}" class:wrap={wrap}>{@render text(row.line)}</span>
+    <span style={signStyle} class="sign{isAdd ? " add" : isDel ? " del" : ""} shrink-0 select-none text-center font-mono text-[12px] leading-[20px] whitespace-pre [tab-size:8] {isAdd ? "font-bold text-[var(--app-added)]" : isDel ? "font-bold text-[var(--app-deleted)]" : ""}" aria-hidden="true">{row.line.origin.trim()}</span>
+    <span style={txtStyle} class="txt min-w-0 flex-1 overflow-hidden font-mono text-[12px] leading-[20px] [tab-size:8] {wrap ? "whitespace-pre-wrap break-all" : "whitespace-pre"}" class:wrap={wrap}>{@render text(row.line)}</span>
   </div>
 
 {:else if row.kind === "line"}
@@ -410,7 +426,7 @@
   >
     <button
       type="button"
-      class="no m-0 min-w-[3.25rem] shrink-0 select-none overflow-hidden border-0 bg-transparent p-0 pr-2 text-right font-mono text-[11px] leading-[20px] text-clip whitespace-pre [tab-size:8] text-muted-foreground {onGutterClick !== undefined
+      style={noStyle} class="no m-0 shrink-0 select-none overflow-hidden border-0 bg-transparent p-0 text-right font-mono text-[11px] leading-[20px] text-clip whitespace-pre [tab-size:8] text-muted-foreground {onGutterClick !== undefined
         ? "click cursor-pointer hover:text-foreground hover:underline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary"
         : ""}"
       tabindex="-1"
@@ -422,7 +438,7 @@
     >{row.line.old_no ?? ""}</button>
     <button
       type="button"
-      class="no m-0 min-w-[3.25rem] shrink-0 select-none overflow-hidden border-0 bg-transparent p-0 pr-2 text-right font-mono text-[11px] leading-[20px] text-clip whitespace-pre [tab-size:8] text-muted-foreground {onGutterClick !== undefined
+      style={noStyle} class="no m-0 shrink-0 select-none overflow-hidden border-0 bg-transparent p-0 text-right font-mono text-[11px] leading-[20px] text-clip whitespace-pre [tab-size:8] text-muted-foreground {onGutterClick !== undefined
         ? "click cursor-pointer hover:text-foreground hover:underline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary"
         : ""}"
       tabindex="-1"
@@ -432,13 +448,13 @@
         gutter(row.fileIndex, row.hunkIndex, row.lineIndex, e);
       }}
     >{row.line.new_no ?? ""}</button>
-    <span class="sign{isAdd ? " add" : isDel ? " del" : ""} w-5 shrink-0 select-none text-center font-mono text-[12px] leading-[20px] whitespace-pre [tab-size:8] {isAdd ? "font-bold text-[var(--app-added)]" : isDel ? "font-bold text-[var(--app-deleted)]" : ""}" aria-hidden="true">{row.line.origin.trim()}</span>
-    <span class="txt min-w-0 flex-1 overflow-hidden pr-4 font-mono text-[12px] leading-[20px] [tab-size:8] {wrap ? "whitespace-pre-wrap break-all" : "whitespace-pre"}" class:wrap={wrap}>{@render text(row.line)}</span>
+    <span style={signStyle} class="sign{isAdd ? " add" : isDel ? " del" : ""} shrink-0 select-none text-center font-mono text-[12px] leading-[20px] whitespace-pre [tab-size:8] {isAdd ? "font-bold text-[var(--app-added)]" : isDel ? "font-bold text-[var(--app-deleted)]" : ""}" aria-hidden="true">{row.line.origin.trim()}</span>
+    <span style={txtStyle} class="txt min-w-0 flex-1 overflow-hidden font-mono text-[12px] leading-[20px] [tab-size:8] {wrap ? "whitespace-pre-wrap break-all" : "whitespace-pre"}" class:wrap={wrap}>{@render text(row.line)}</span>
   </div>
 
 {:else if row.kind === "binary"}
   <div class="row binary flex w-full box-border items-center justify-center" style:height={`${rowHeight(row)}px`}>
-    <span class="binary-note text-[0.8125rem] text-muted-foreground">Binary file — changes not shown</span>
+    <span class="binary-note text-ui-base text-muted-foreground">Binary file — changes not shown</span>
   </div>
 
 {:else if row.kind === "image"}

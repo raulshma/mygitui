@@ -87,7 +87,7 @@
 <DropdownMenu.Root open={contextMenu.open} {onOpenChange}>
   <DropdownMenu.Content
     customAnchor={anchor}
-    class="menu z-[1000] w-auto min-w-[180px] max-w-[320px]"
+    class="menu z-1000 w-auto min-w-44 max-w-80"
     {onCloseAutoFocus}
   >
     {#each contextMenu.entries as entry, index (index)}
@@ -108,7 +108,7 @@
           {#if entry.action}
             <button
               type="button"
-              class="entry-action -mr-[0.35rem] inline-flex h-6 w-6 shrink-0 cursor-pointer items-center justify-center rounded-sm border-0 bg-transparent p-0 text-xs text-inherit [font:inherit] opacity-65 hover:bg-accent hover:opacity-100 focus-visible:bg-accent focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-ring group-data-[disabled]/dropdown-menu-item:pointer-events-none group-data-[disabled]/dropdown-menu-item:opacity-30"
+              class="entry-action -mr-1.5 inline-flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-sm border-0 bg-transparent p-0 text-xs text-inherit [font:inherit] opacity-65 hover:bg-accent hover:opacity-100 focus-visible:bg-accent focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-ring group-data-[disabled]/dropdown-menu-item:pointer-events-none group-data-[disabled]/dropdown-menu-item:opacity-30"
               title={entry.action.label}
               aria-label={entry.action.label}
               onclick={(event) => runAction(entry, event)}

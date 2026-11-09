@@ -18,6 +18,7 @@
   import * as Dialog from "$lib/components/ui/dialog/index.js";
   import { Button } from "$lib/components/ui/button/index.js";
   import { Input } from "$lib/components/ui/input/index.js";
+  import { Label } from "$lib/components/ui/label/index.js";
 
   let { repoId, showLauncher = true }: { repoId: string; showLauncher?: boolean } = $props();
 
@@ -139,7 +140,7 @@
 
 {#if bisect?.active}
   <div
-    class={"banner flex flex-wrap items-center gap-2 border-b border-border px-3 py-1.5 text-[0.8125rem] " +
+    class={"banner flex flex-wrap items-center gap-2 border-b border-border px-3 py-1.5 text-ui-base " +
       (bisect.remaining === 0
         ? "done bg-primary/15 text-primary"
         : "bg-secondary text-secondary-foreground")}
@@ -150,7 +151,7 @@
       <span class="detail min-w-0 overflow-hidden text-ellipsis whitespace-nowrap">
         First bad commit: <code class="font-mono">{bisect.bad.slice(0, 8)}</code>
       </span>
-      <Button variant="outline" size="xs" class="flex-none rounded-full px-2.5 text-[0.72rem]" type="button" onclick={() => emitUiEvent("history-select-commit", { sha: bisect?.bad ?? "" })}>
+      <Button variant="outline" size="xs" class="flex-none rounded-full px-2.5 text-ui-meta" type="button" onclick={() => emitUiEvent("history-select-commit", { sha: bisect?.bad ?? "" })}>
         Show in history
       </Button>
     {:else}
@@ -159,14 +160,14 @@
         testing <code class="font-mono">{(bisect.current ?? "").slice(0, 8)}</code>
         · {bisect.remaining} candidate{bisect.remaining === 1 ? "" : "s"} left
       </span>
-      <Button variant="default" size="xs" class="flex-none rounded-full px-2.5 text-[0.72rem]" type="button" disabled={marking} onclick={() => void onMark("good")}>Good</Button>
-      <Button variant="destructive" size="xs" class="flex-none rounded-full px-2.5 text-[0.72rem]" type="button" disabled={marking} onclick={() => void onMark("bad")}>Bad</Button>
-      <Button variant="outline" size="xs" class="flex-none rounded-full px-2.5 text-[0.72rem]" type="button" disabled={marking} onclick={() => void onMark("skip")}>Skip</Button>
+      <Button variant="default" size="xs" class="flex-none rounded-full px-2.5 text-ui-meta" type="button" disabled={marking} onclick={() => void onMark("good")}>Good</Button>
+      <Button variant="destructive" size="xs" class="flex-none rounded-full px-2.5 text-ui-meta" type="button" disabled={marking} onclick={() => void onMark("bad")}>Bad</Button>
+      <Button variant="outline" size="xs" class="flex-none rounded-full px-2.5 text-ui-meta" type="button" disabled={marking} onclick={() => void onMark("skip")}>Skip</Button>
     {/if}
-    <Button variant="outline" size="xs" class="btn subtle ml-auto flex-none rounded-full px-2.5 text-[0.72rem]" type="button" disabled={marking} onclick={() => void onLog()}>
+    <Button variant="outline" size="xs" class="btn subtle ml-auto flex-none rounded-full px-2.5 text-ui-meta" type="button" disabled={marking} onclick={() => void onLog()}>
       Log…
     </Button>
-    <Button variant="outline" size="xs" class="btn subtle ml-auto flex-none rounded-full px-2.5 text-[0.72rem]" type="button" disabled={marking} onclick={() => void onReset()}>
+    <Button variant="outline" size="xs" class="btn subtle ml-auto flex-none rounded-full px-2.5 text-ui-meta" type="button" disabled={marking} onclick={() => void onReset()}>
       Reset
     </Button>
   </div>
@@ -174,7 +175,7 @@
   <Button
     variant="outline"
     size="xs"
-    class="launcher mx-2 my-1 self-start rounded-full px-2.5 text-[0.72rem] text-muted-foreground"
+    class="launcher mx-2 my-1 self-start rounded-full px-2.5 text-ui-meta text-muted-foreground"
     type="button"
     onclick={() => {
       badRef = status?.head ?? "";
@@ -192,7 +193,7 @@
     <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
     <Dialog.Overlay class="scrim bg-black/40" role="presentation" />
     <Dialog.Content
-      class="dialog w-[min(24rem,calc(100vw-2rem))] max-w-none gap-0 rounded-2xl bg-card px-6 py-5 text-sm text-popover-foreground shadow-lg sm:max-w-none"
+      class="dialog w-[min(24rem,calc(100vw-2rem))] max-w-none bg-card text-popover-foreground shadow-lg sm:max-w-none"
       role="dialog"
       aria-modal="true"
       aria-labelledby="bisect-title"
@@ -217,24 +218,24 @@
           Binary-search history for the first bad commit. HEAD detaches onto
           probes until you mark and reset.
         </p>
-        <label class="field mb-2.5 flex flex-col gap-1 text-xs text-muted-foreground">
+        <Label class="field mb-2.5 flex flex-col gap-1 text-xs text-muted-foreground">
           <span>Bad (search starts here)</span>
           <Input
-            class="h-auto rounded-lg px-1.5 py-1 text-[0.8125rem] focus-visible:-outline-offset-1"
+            class="focus-visible:-outline-offset-1"
             bind:value={badRef}
             placeholder="HEAD or ref"
             aria-label="Bad commit-ish"
           />
-        </label>
-        <label class="field mb-2.5 flex flex-col gap-1 text-xs text-muted-foreground">
+        </Label>
+        <Label class="field mb-2.5 flex flex-col gap-1 text-xs text-muted-foreground">
           <span>Good (last known-good, optional)</span>
           <Input
-            class="h-auto rounded-lg px-1.5 py-1 text-[0.8125rem] focus-visible:-outline-offset-1"
+            class="focus-visible:-outline-offset-1"
             bind:value={goodRef}
             placeholder="ref or sha"
             aria-label="Good commit-ish"
           />
-        </label>
+        </Label>
         <div class="actions mt-3 flex justify-end gap-2">
           <Button variant="outline" class="text-muted-foreground" type="button" onclick={() => (startOpen = false)}>
             Cancel
@@ -255,7 +256,7 @@
     <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
     <Dialog.Overlay class="scrim bg-black/40" role="presentation" />
     <Dialog.Content
-      class="dialog w-[min(24rem,calc(100vw-2rem))] max-w-none gap-0 rounded-2xl bg-card px-6 py-5 text-sm text-popover-foreground shadow-lg sm:max-w-none"
+      class="dialog w-[min(24rem,calc(100vw-2rem))] max-w-none bg-card text-popover-foreground shadow-lg sm:max-w-none"
       role="dialog"
       aria-modal="true"
       aria-labelledby="bisect-log-title"
@@ -279,7 +280,7 @@
           {#each logEntries as entry, i (i)}
             <li class="log-row flex items-center gap-2 py-0.5">
               <span
-                class={"mark w-12 flex-none rounded-full px-1.5 text-center text-[0.625rem] font-semibold uppercase tracking-wide " +
+                class={"mark w-12 flex-none rounded-full px-1.5 text-center text-ui-tiny font-semibold uppercase tracking-wide " +
                   `mark-${entry.mark} ` +
                   (entry.mark === "good"
                     ? "bg-primary/15 text-primary"
@@ -288,7 +289,7 @@
                       : "bg-muted text-muted-foreground")}
               >{entry.mark}</span>
               <code class="log-sha font-mono text-primary" title={entry.sha}>{entry.sha.slice(0, 8)}</code>
-              <span class="log-time ml-auto text-[0.6875rem] text-muted-foreground">{formatDateTime(entry.at)}</span>
+              <span class="log-time ml-auto text-ui-micro text-muted-foreground">{formatDateTime(entry.at)}</span>
             </li>
           {/each}
         </ol>
