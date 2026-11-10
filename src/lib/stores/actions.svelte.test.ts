@@ -56,6 +56,7 @@ function outputEvent(
     line: "",
     done: false,
     exit_code: null,
+    outcome: null,
     ...patch,
   };
 }
@@ -213,6 +214,13 @@ describe("ActionsStore runs", () => {
     store.applyOutput(outputEvent({ run_id: "r2", done: true, exit_code: null }));
     // Killed without a code = failed.
     expect(store.runs[0].status).toBe("failed");
+
+    // The typed outcome wins over the exit code: a cancelled run (exit -1,
+    // same as a failure before the field existed) is its own state.
+    store.applyOutput(
+      outputEvent({ run_id: "r3", done: true, exit_code: -1, outcome: "cancelled" }),
+    );
+    expect(store.runs[0].status).toBe("cancelled");
   });
 
   it("creates runs for events of unknown runs and scopes them to their repo", () => {

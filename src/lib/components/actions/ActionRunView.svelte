@@ -160,7 +160,7 @@
       <div class="title-row flex min-w-0 flex-wrap items-center gap-[0.45rem]">
         <Badge
           variant="outline"
-          class={`status-chip chip-${run.status} h-auto flex-none items-center whitespace-nowrap rounded-full border-transparent px-2 py-px text-ui-micro font-semibold ${run.status === "running" ? "bg-secondary text-secondary-foreground" : run.status === "success" ? "bg-primary/15 text-primary" : run.status === "failed" ? "bg-destructive/10 text-destructive" : "bg-muted text-muted-foreground"}`}
+          class={`status-chip chip-${run.status} h-auto flex-none items-center whitespace-nowrap rounded-full border-transparent px-2 py-px text-ui-micro font-semibold ${run.status === "running" ? "bg-secondary text-secondary-foreground" : run.status === "success" ? "bg-primary/15 text-primary" : run.status === "cancelled" ? "bg-muted text-muted-foreground" : "bg-destructive/10 text-destructive"}`}
         >
           {runStatusLabel(run.status, run.exit_code)}
         </Badge>

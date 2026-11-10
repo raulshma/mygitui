@@ -226,6 +226,7 @@ export class ActionsStore {
     const order = this.#orderCounter;
     const done = event.done;
     const exitCode = done ? (event.exit_code ?? null) : null;
+    const outcome = done ? (event.outcome ?? null) : null;
     const existing = this.runs.find((run) => run.run_id === event.run_id);
 
     if (existing) {
@@ -243,7 +244,7 @@ export class ActionsStore {
         done,
         exit_code: exitCode,
         order,
-        status: classifyRun(done, exitCode),
+        status: classifyRun(done, exitCode, outcome),
       };
       this.runs = this.runs.map((run) =>
         run.run_id === event.run_id ? updated : run,
@@ -263,7 +264,7 @@ export class ActionsStore {
       done,
       exit_code: exitCode,
       order,
-      status: classifyRun(done, exitCode),
+      status: classifyRun(done, exitCode, outcome),
     };
     this.runs = [run, ...this.runs].slice(0, MAX_RUNS);
   }

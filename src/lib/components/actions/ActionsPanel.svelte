@@ -471,7 +471,7 @@
             >
               <Badge
                 variant="outline"
-                class={`chip chip-${run.status} h-auto flex-none rounded-full border-transparent px-2 py-px text-ui-micro font-semibold ${run.status === "running" ? "bg-secondary text-secondary-foreground" : run.status === "success" ? "bg-primary/15 text-primary" : "bg-destructive/10 text-destructive"}`}
+                class={`chip chip-${run.status} h-auto flex-none rounded-full border-transparent px-2 py-px text-ui-micro font-semibold ${run.status === "running" ? "bg-secondary text-secondary-foreground" : run.status === "success" ? "bg-primary/15 text-primary" : run.status === "cancelled" ? "bg-muted text-muted-foreground" : "bg-destructive/10 text-destructive"}`}
               >
                 {runStatusLabel(run.status, run.exit_code)}
               </Badge>

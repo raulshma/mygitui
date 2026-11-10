@@ -4,14 +4,17 @@
    *
    * App.svelte owns the `open` flag (bindable) and mounts this component
    * for the whole session, so an in-flight clone keeps reporting even if
-   * the dialog is closed — progress events are matched by URL and the
-   * success path (toast + `openTab`) still runs.
+   * the dialog is closed — progress events are matched by the run id this
+   * dialog mints (URLs repeat across clones; run ids do not, which also
+   * keeps two windows' same-URL clones apart) and the success path (toast
+   * + `openTab`) still runs.
    *
-   * Backend contract: `cloneRepo(url, destination, depth?)` → Rust
+   * Backend contract: `cloneRepo(url, destination, depth?, runId?)` → Rust
    * `repo_clone`, which emits `clone-progress` events
-   * `{url, received, total, objects}` (received = bytes; total/objects =
-   * object counts — libgit2 has no total-bytes estimate) and resolves with
-   * the cloned repository path.
+   * `{url, received, total, objects, run_id?}` (received = bytes;
+   * total/objects = object counts — libgit2 has no total-bytes estimate)
+   * and resolves with the cloned repository path. The blobless path (git
+   * CLI) emits no progress events; the bar stays indeterminate there.
    */
   import { onMount } from "svelte";
   import {
@@ -38,9 +41,27 @@
   let cloning = $state(false);
   let error = $state("");
   let progress = $state<CloneProgressEvent | null>(null);
-  /** URL of the clone currently in flight (progress events are matched on it). */
+  /** Run id of the clone currently in flight (progress events match it). */
+  let activeRunId: string | null = null;
+  /** URL of the clone currently in flight (fallback discriminator). */
   let activeUrl: string | null = null;
+  /** Wall clock of the last progress event (drives the stall hint). */
+  let lastProgressAt = 0;
   let urlInput = $state<HTMLInputElement | null>(null);
+  /** Ticks once per interval while cloning so the stall hint can fire. */
+  let now = $state(Date.now());
+
+  /** No progress event for this long → hint that the transfer may be stuck. */
+  const STALL_AFTER_MS = 45_000;
+
+  let runCounter = 0;
+  /** Mints a fresh correlation id per clone (unique across windows). */
+  function mintRunId(): string {
+    runCounter += 1;
+    return typeof crypto !== "undefined" && "randomUUID" in crypto
+      ? `clone-${crypto.randomUUID()}`
+      : `clone-${Date.now()}-${runCounter}`;
+  }
   /** Element focused before the dialog opened (focus returns there on close). */
   let restoreTo: HTMLElement | null = null;
 
@@ -50,14 +71,37 @@
       ? Math.min(100, Math.round((progress.objects / progress.total) * 100))
       : null,
   );
+  /** True when a clone with a live progress stream has gone quiet. */
+  const stalled = $derived(
+    cloning && progress !== null && now - lastProgressAt > STALL_AFTER_MS,
+  );
 
   // Progress events live for the component's lifetime (not just while the
   // dialog is open) so background clones still complete visibly. Registered
   // through the shared event module; the in-flight URL filter stays here.
   onMount(() => {
     return onCloneProgress((event: CloneProgressEvent) => {
-      if (activeUrl !== null && event.url === activeUrl) progress = event;
+      if (activeRunId === null) return;
+      // Strict match on the echoed run id; URL matching only covers
+      // events predating the field.
+      const mine =
+        event.run_id !== null && event.run_id !== undefined
+          ? event.run_id === activeRunId
+          : event.url === activeUrl;
+      if (mine) {
+        progress = event;
+        lastProgressAt = Date.now();
+      }
     });
+  });
+
+  // Tick the clock while cloning so the stall hint can fire (the interval
+  // only exists for a run with a live progress stream — the blobless path
+  // never emits progress and stays "Contacting remote…").
+  $effect(() => {
+    if (!cloning || progress === null) return;
+    const timer = setInterval(() => (now = Date.now()), 5_000);
+    return () => clearInterval(timer);
   });
 
   $effect(() => {
@@ -110,12 +154,15 @@
     cloning = true;
     error = "";
     progress = null;
+    const runId = mintRunId();
+    activeRunId = runId;
     activeUrl = targetUrl;
+    lastProgressAt = Date.now();
     try {
       // Blobless clones route through the git CLI (libgit2 has no --filter).
       const path = blobless
         ? await cloneBlobless(targetUrl, destPath, shallow ? 1 : undefined)
-        : await cloneRepo(targetUrl, destPath, shallow ? 1 : undefined);
+        : await cloneRepo(targetUrl, destPath, shallow ? 1 : undefined, runId);
       toast(`Cloned ${targetUrl} → ${path}`, { kind: "success" });
       open = false;
       try {
@@ -130,6 +177,7 @@
       toast(`Clone failed: ${message}`, { kind: "error" });
     } finally {
       cloning = false;
+      activeRunId = null;
       activeUrl = null;
     }
   }
@@ -254,6 +302,11 @@
           <p class="stats text-xs text-muted-foreground tabular-nums">
             {percent !== null ? `${percent}% · ` : ""}{progress.objects}/{progress.total} objects · {fmtBytes(progress.received)}
           </p>
+          {#if stalled}
+            <p class="stats text-xs text-muted-foreground" role="status">
+              No progress update for {Math.round(STALL_AFTER_MS / 1000)} s — the remote may be slow or the transfer stalled.
+            </p>
+          {/if}
         {:else if cloning}
           <p class="stats text-xs text-muted-foreground tabular-nums">Contacting remote…</p>
         {/if}

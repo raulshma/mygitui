@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex};
 use serde::Serialize;
 use ts_rs::TS;
 
-use crate::actions::{ActionOutput, ActionSink};
+use crate::actions::{ActionOutput, ActionRunOutcome, ActionSink};
 use crate::remote::engine::RemoteGitEngine;
 use crate::remote::parsers::redact_prompt;
 use crate::remote::quoting::shell_quote;
@@ -83,10 +83,22 @@ impl RemoteActionRegistry {
                             line: redact_prompt(line),
                             done: false,
                             exit_code: None,
+                            outcome: None,
                         });
                         true
                     },
                 ));
+                // Cancel wins over the transport result: dropping the exec
+                // channel reads as an error/kill, but the user asked for it.
+                let outcome = if cancelled.load(Ordering::SeqCst) {
+                    ActionRunOutcome::Cancelled
+                } else {
+                    match &result {
+                        Ok(out) if out.exit_code == 0 => ActionRunOutcome::Completed,
+                        Ok(_) => ActionRunOutcome::Failed,
+                        Err(_) => ActionRunOutcome::Failed,
+                    }
+                };
                 let exit_code = match result {
                     Ok(out) => i32::try_from(out.exit_code).unwrap_or(-1),
                     Err(_) => -1,
@@ -98,6 +110,7 @@ impl RemoteActionRegistry {
                     line: String::new(),
                     done: true,
                     exit_code: Some(exit_code),
+                    outcome: Some(outcome),
                 });
                 // Finished runs leave the registry so a later `cancel`
                 // reports false (mirrors the local registry's done flag).

@@ -20,4 +20,10 @@ total: number,
 /**
  * Objects received so far.
  */
-objects: number, };
+objects: number, 
+/**
+ * FE-minted run id (`repo_clone`'s `run_id` argument) — the strict
+ * multi-clone discriminator (URLs repeat; run ids do not). `None`
+ * only for callers predating the argument.
+ */
+run_id: string | null, };

@@ -165,7 +165,7 @@ Checkpoints live at `refs/mygitui/checkpoints/<ts>-<reason>`; worktree state is 
 
 | Event | Payload |
 |---|---|
-| `action-output` | `{ run_id, repo_id, name, line, done: bool, exit_code: number \| null }` |
+| `action-output` | `{ run_id, repo_id, name, line, done: bool, exit_code: number \| null, outcome: "completed" \| "cancelled" \| "failed" \| null }` — `outcome` is set on the final event only (`null` while running): `cancelled` is reserved for runs aborted through `action_cancel` (exit_code stays `-1` there, so events predating the field still classify via the code) |
 
 Custom actions config lives FE-side (localStorage `mygitui.actions`), scope global or per-repo.
 Layout presets FE-side (localStorage `mygitui.layouts` + per-repo overlay `mygitui.layouts.<root>`).
@@ -683,6 +683,24 @@ Quality gates:
 - `prop_tests.rs`: proptest roundtrips — hunk-apply selection and checkpoint restore over randomized worktree states.
 - Benches added: `cold/open_plus_status`, `diff/synthetic_10k_hunks`, `search/log_filter_regex_page`, `history/file_history_page`, `bisect/mark_step`.
 - Playwright smoke (SPA-level, mocked `__TAURI_INTERNALS__`): app boot → open repo → stage → commit dialog.
+
+## Additive wire changes — state-machine wave (2026-11)
+
+Registry: `docs/state-machines.md`. These extend the wire additively; no
+existing field changed meaning.
+
+- **`ActionOutput.outcome`** (`action-output` done events, local and
+  remote runners) — `ActionRunOutcome` enum `completed | cancelled |
+  failed`, `null` on non-final events. Cancelled runs no longer classify
+  as "failed" (both used to be `exit_code: Some(-1)`).
+- **`repo_clone(url, destination, depth?, run_id?)`** — new optional
+  FE-minted correlation argument, echoed in every `clone-progress` event's
+  `run_id` (`CloneProgress` gained `run_id: Option<String>`). `run_id` is
+  the strict multi-clone discriminator (URLs repeat; run ids do not —
+  sequential same-URL clones from different windows can no longer
+  cross-match); `null` keeps URL-keyed matching for callers predating the
+  argument. The `clone-progress` payload is `{url, received, total,
+  objects, run_id}`; the blobless CLI path emits no progress events.
 
 ## Commands (workspace files — file browser / viewer / editor)
 

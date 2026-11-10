@@ -415,22 +415,28 @@ export function onRepoChanged(
 /**
  * Clones `url` into `destination` (created if missing, must be empty if it
  * exists). `depth` 1 performs a shallow clone. Resolves with the cloned
- * repository path on success.
+ * repository path on success. `runId` (FE-minted) is echoed in every
+ * `clone-progress` event for this run — the strict multi-clone
+ * discriminator (URLs repeat; run ids do not).
  */
 export function cloneRepo(
   url: string,
   destination: string,
   depth?: number,
+  runId?: string,
 ): Promise<string> {
   const args: Record<string, unknown> = { url, destination };
   if (depth !== undefined) args.depth = depth;
+  if (runId !== undefined) args.run_id = runId;
   return call<string>("repo_clone", args);
 }
 
 /**
  * Subscribes to `clone-progress` events (emitted by an in-flight
- * `repo_clone`; identify yours by `url`). Same contract as
- * {@link onRepoChanged}: never throws, no-op unlisten outside Tauri.
+ * `repo_clone`; identify yours by `run_id` — the id you passed to
+ * {@link cloneRepo} — falling back to `url` for events predating the
+ * field). Same contract as {@link onRepoChanged}: never throws, no-op
+ * unlisten outside Tauri.
  */
 export function onCloneProgress(
   cb: (event: CloneProgressEvent) => void,

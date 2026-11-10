@@ -93,6 +93,8 @@ export type { SubmoduleInfo } from "./gen/SubmoduleInfo";
 export type { GitignoreTemplate } from "./gen/GitignoreTemplate";
 /** `action-output` event payload (Rust: `ActionOutput`). */
 export type { ActionOutput as ActionOutputEvent } from "./gen/ActionOutput";
+/** How a finished action run ended (Rust: `ActionRunOutcome`). */
+export type { ActionRunOutcome } from "./gen/ActionRunOutcome";
 
 // ---------------------------------------------------------------------------
 // M5: embedded terminal (Rust: src-tauri/src/pty.rs)

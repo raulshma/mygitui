@@ -6,7 +6,7 @@
  * and the clean-preview path grouping.
  */
 
-import type { PreviewFile } from "$lib/ipc/types";
+import type { ActionRunOutcome, PreviewFile } from "$lib/ipc/types";
 
 /** Max runs kept in the actions store (oldest dropped). */
 export const MAX_RUNS = 200;
@@ -25,21 +25,29 @@ export const CLEAN_CONFIRM_WORD = "clean";
 // ---------------------------------------------------------------------------
 
 /** Lifecycle of one action run. */
-export type RunStatus = "running" | "success" | "failed";
+export type RunStatus = "running" | "success" | "failed" | "cancelled";
 
 /**
- * Classifies a run: running until the done event, then success on exit
- * code 0 and failed otherwise (including a done run without a code, e.g.
- * a cancelled run — non-zero semantics).
+ * Classifies a run: running until the done event. The done event's typed
+ * `outcome` wins when present (a cancelled run is no longer "failed");
+ * the exit code classifies events predating the field.
  */
-export function classifyRun(done: boolean, exitCode: number | null): RunStatus {
+export function classifyRun(
+  done: boolean,
+  exitCode: number | null,
+  outcome: ActionRunOutcome | null = null,
+): RunStatus {
   if (!done) return "running";
+  if (outcome === "cancelled") return "cancelled";
+  if (outcome === "completed") return "success";
+  if (outcome === "failed") return "failed";
   return exitCode === 0 ? "success" : "failed";
 }
 
-/** Chip text for a run status: "running" / "exit 0" / "exit 3". */
+/** Chip text for a run status: "running" / "exit 0" / "exit 3" / "cancelled". */
 export function runStatusLabel(status: RunStatus, exitCode: number | null): string {
   if (status === "running") return "running";
+  if (status === "cancelled") return "cancelled";
   return `exit ${exitCode ?? "?"}`;
 }
 

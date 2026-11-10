@@ -445,8 +445,8 @@ mod tests {
 //
 // Clones a remote URL into a local destination with git2's `RepoBuilder`
 // (fetch options + transfer-progress callback), emitting throttled
-// `clone-progress` events `{url, received, total, objects}` over the app
-// emitter. `received` counts bytes; `total`/`objects` count git objects —
+// `clone-progress` events `{url, received, total, objects, run_id}` over
+// the app emitter. `received` counts bytes; `total`/`objects` count git objects —
 // libgit2's transfer progress has no total-bytes estimate, so the FE bar
 // fills by objects. Pure helpers (`clone_emit_ready`,
 // `clone_progress_event`, `validate_clone_destination`) are unit-tested
@@ -469,6 +469,10 @@ pub struct CloneProgress {
     pub total: usize,
     /// Objects received so far.
     pub objects: usize,
+    /// FE-minted run id (`repo_clone`'s `run_id` argument) — the strict
+    /// multi-clone discriminator (URLs repeat; run ids do not). `None`
+    /// only for callers predating the argument.
+    pub run_id: Option<String>,
 }
 
 /// Minimum interval between two `clone-progress` events; the libgit2
@@ -500,12 +504,13 @@ impl<'a> From<&git2::Progress<'a>> for CloneStats {
 }
 
 /// Builds the event payload from a stats snapshot.
-fn clone_progress_event(url: &str, stats: &CloneStats) -> CloneProgress {
+fn clone_progress_event(url: &str, run_id: Option<&str>, stats: &CloneStats) -> CloneProgress {
     CloneProgress {
         url: url.to_string(),
         received: stats.received_bytes,
         total: stats.total_objects,
         objects: stats.received_objects,
+        run_id: run_id.map(String::from),
     }
 }
 
@@ -540,17 +545,23 @@ pub async fn repo_clone(
     url: String,
     destination: String,
     depth: Option<u32>,
+    // FE-minted correlation id echoed in every `clone-progress` event for
+    // this run (additive argument; `None` keeps URL-keyed matching).
+    run_id: Option<String>,
     app: tauri::AppHandle,
 ) -> Result<String, String> {
-    tauri::async_runtime::spawn_blocking(move || clone_sync(&url, &destination, depth, &app))
-        .await
-        .map_err(|e| format!("clone task failed: {e}"))?
+    tauri::async_runtime::spawn_blocking(move || {
+        clone_sync(&url, &destination, depth, run_id.as_deref(), &app)
+    })
+    .await
+    .map_err(|e| format!("clone task failed: {e}"))?
 }
 
 fn clone_sync(
     url: &str,
     destination: &str,
     depth: Option<u32>,
+    run_id: Option<&str>,
     app: &tauri::AppHandle,
 ) -> Result<String, String> {
     if url.trim().is_empty() {
@@ -583,7 +594,7 @@ fn clone_sync(
             ready
         };
         if ready {
-            let payload = clone_progress_event(&event_url, &stats);
+            let payload = clone_progress_event(&event_url, run_id, &stats);
             if let Err(err) = emitter.emit("clone-progress", &payload) {
                 tracing::warn!(
                     url = %event_url,
@@ -628,7 +639,7 @@ mod clone_tests {
             received_objects: 10,
             total_objects: 42,
         };
-        let event = clone_progress_event("https://host/repo.git", &stats);
+        let event = clone_progress_event("https://host/repo.git", None, &stats);
         assert_eq!(
             event,
             CloneProgress {
@@ -636,14 +647,19 @@ mod clone_tests {
                 received: 4096,
                 total: 42,
                 objects: 10,
+                run_id: None,
             }
         );
+        // With a run id it is echoed verbatim (the strict discriminator).
+        let identified = clone_progress_event("https://host/repo.git", Some("clone-1"), &stats);
+        assert_eq!(identified.run_id.as_deref(), Some("clone-1"));
         // Serializes with the documented field names.
         let json = serde_json::to_value(&event).unwrap();
         assert_eq!(json["url"], "https://host/repo.git");
         assert_eq!(json["received"], 4096);
         assert_eq!(json["total"], 42);
         assert_eq!(json["objects"], 10);
+        assert_eq!(json["run_id"], serde_json::Value::Null);
     }
 
     #[test]

@@ -2,8 +2,8 @@
 //!
 //! `action_run` spawns a user-defined shell command with the repository
 //! workdir as its cwd and streams its output as `action-output` events
-//! `{run_id, repo_id, name, line, done, exit_code}`; `action_cancel` kills
-//! a running action by run id. Output is streamed raw (user-triggered, no
+//! `{run_id, repo_id, name, line, done, exit_code, outcome}`;
+//! `action_cancel` kills a running action by run id. Output is streamed raw (user-triggered, no
 //! throttle) but capped at [`MAX_OUTPUT_LINES`] emitted lines — the pipe is
 //! still drained past the cap so the child never blocks on a full buffer,
 //! only the emission stops (one truncation marker is emitted at the cap).
@@ -60,6 +60,21 @@ const WAIT_POLL_INTERVAL: Duration = Duration::from_millis(50);
 /// that (late output is dropped via the cancelled flag).
 const READER_GRACE: Duration = Duration::from_secs(2);
 
+/// Terminal classification of one action run (`ActionOutput.outcome`),
+/// mirroring `ops.rs::OpOutcome`: `cancelled` is reserved for runs aborted
+/// through `action_cancel` — any other non-zero exit is a real failure.
+/// Absent on non-final events. Additive to the wire: `exit_code` stays so
+/// events predating the field still classify, and a cancelled run no
+/// longer has to impersonate "failed".
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum ActionRunOutcome {
+    Completed,
+    Cancelled,
+    Failed,
+}
+
 /// `action-output` payload — field names and shapes are fixed by
 /// docs/contracts.md; generated to `src/lib/ipc/gen/` and re-exported
 /// under the FE name `ActionOutputEvent` by `src/lib/ipc/types.ts`.
@@ -78,6 +93,8 @@ pub struct ActionOutput {
     /// `null` while running; the process exit code on the final event
     /// (`-1` when no code is available, e.g. killed by a signal).
     pub exit_code: Option<i32>,
+    /// `null` while running; how the run ended on the final event.
+    pub outcome: Option<ActionRunOutcome>,
 }
 
 /// Where `action-output` events go (see `ops.rs::EventSink` for the same
@@ -347,6 +364,13 @@ pub fn run_action(
             .name(format!("action-{run_id}"))
             .spawn(move || {
                 let code = wait_for_exit(&child, closed).unwrap_or(-1);
+                let outcome = if wait_ctx.cancelled.load(Ordering::Relaxed) {
+                    ActionRunOutcome::Cancelled
+                } else if code == 0 {
+                    ActionRunOutcome::Completed
+                } else {
+                    ActionRunOutcome::Failed
+                };
                 wait_registry.set_done(&wait_run_id);
                 wait_ctx.emit(ActionOutput {
                     run_id: wait_run_id,
@@ -355,6 +379,7 @@ pub fn run_action(
                     line: String::new(),
                     done: true,
                     exit_code: Some(code),
+                    outcome: Some(outcome),
                 });
                 let _ = exit_tx.send(code);
             })
@@ -487,6 +512,7 @@ impl RunContext {
                     ),
                     done: false,
                     exit_code: None,
+                    outcome: None,
                 });
             }
             return;
@@ -498,6 +524,7 @@ impl RunContext {
             line,
             done: false,
             exit_code: None,
+            outcome: None,
         });
     }
 }
