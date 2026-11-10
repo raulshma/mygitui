@@ -675,7 +675,7 @@
       {/if}
     {:else}
       <main
-        class="home flex min-h-0 flex-1 flex-col overflow-y-auto bg-[radial-gradient(circle_at_50%_-12%,color-mix(in_srgb,var(--primary)_8%,transparent),transparent_46%)] bg-background"
+        class="home flex min-h-0 flex-1 flex-col overflow-hidden bg-[radial-gradient(circle_at_50%_-12%,color-mix(in_srgb,var(--primary)_8%,transparent),transparent_46%)] bg-background"
       >
         {#if !tabsOpen}
           <header
@@ -706,9 +706,11 @@
           </header>
         {/if}
 
-      <div
-        class="home-body flex flex-1 flex-col items-center gap-9 px-5 pb-8 pt-11 max-[720px]:pt-7"
-      >
+      <!-- Only the middle scrolls: header and footer stay pinned above/below it. -->
+      <div class="home-scroll min-h-0 flex-1 overflow-y-auto">
+        <div
+          class="home-body flex flex-col items-center gap-9 px-5 pb-8 pt-11 max-[720px]:pt-7"
+        >
         <section
           class="recent w-full min-w-0 max-w-[44rem]"
           aria-labelledby="recent-heading"
@@ -1113,6 +1115,7 @@
             </ul>
           {/if}
         </section>
+        </div>
       </div>
 
       <footer

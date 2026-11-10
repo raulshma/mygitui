@@ -204,3 +204,46 @@ test("add-existing repo opens the folder picker", async ({
   expect(tracked.errors, tracked.errors.join("\n")).toEqual([]);
   await tracked.attach(testInfo);
 });
+
+test("home keeps the header and footer pinned while the list scrolls", async ({
+  page,
+}, testInfo) => {
+  const tracked = trackErrors(page);
+  const repos = Array.from({ length: 40 }, (_, index) => ({
+    path: `/tmp/repo-${index}`,
+    pinned: false,
+    lastOpened: index + 1,
+  }));
+  await boot(page, { [RECENT_REPOS_KEY]: JSON.stringify(repos) });
+
+  await page.goto("/");
+
+  const footer = page.locator("footer.home-foot");
+  const header = page.locator("header.home-top");
+  await expect(header).toBeVisible();
+  await expect(footer).toBeVisible();
+
+  // The footer sits at the bottom edge of the viewport (pinned, not
+  // pushed below the fold by the list).
+  const viewport = page.viewportSize();
+  const footerBefore = await footer.boundingBox();
+  expect(footerBefore).not.toBeNull();
+  expect(viewport).not.toBeNull();
+  expect(footerBefore!.y + footerBefore!.height).toBeGreaterThan(
+    viewport!.height - 4,
+  );
+
+  // Scrolling happens inside the middle region only: it actually scrolls,
+  // and the header + footer stay exactly where they were.
+  const scroller = page.locator(".home-scroll");
+  await scroller.evaluate((el) => el.scrollTo(0, el.scrollHeight));
+  await expect
+    .poll(async () => scroller.evaluate((el) => el.scrollTop))
+    .toBeGreaterThan(0);
+  const footerAfter = await footer.boundingBox();
+  expect(footerAfter!.y).toBeCloseTo(footerBefore!.y, 0);
+  await expect(header).toBeVisible();
+
+  expect(tracked.errors, tracked.errors.join("\n")).toEqual([]);
+  await tracked.attach(testInfo);
+});
