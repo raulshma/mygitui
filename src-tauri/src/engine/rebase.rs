@@ -298,8 +298,12 @@ impl Libgit2Engine {
             EngineError::Invalid("no rebase in progress (mygitui/rebase.json missing)".into())
         })?;
         if st.paused_for_edit {
-            // `edit` pause done: unpause, advance past the edit step, keep
-            // going. Any user amend/commit made during the pause stays as-is.
+            // `edit` pause done: the next pick force-checkouts over the
+            // worktree, so uncommitted edits would be silently discarded.
+            // Refuse BEFORE advancing the persisted position (a failed
+            // continue must leave the pause exactly where it was).
+            ensure_clean_worktree(repo)?;
+            // Any user amend/commit made during the pause stays as-is.
             st.paused_for_edit = false;
             st.current += 1;
         }
@@ -391,11 +395,18 @@ fn run_rebase(
         }
 
         let commit = resolve_commitish(repo, &step.sha)?;
-        if !resume && apply_step(repo, &commit)? {
-            // Fresh apply hit a conflict: park here until the FE resolves.
-            st.mid_merge = true;
-            save_state(repo, st)?;
-            return Ok(active_state(st));
+        if !resume {
+            // A fresh step force-checkouts the merged tree, so any staged or
+            // unstaged edit left behind by an `edit`/`exec` pause would be
+            // silently discarded. Git refuses to continue in that state too;
+            // untracked files stay allowed.
+            ensure_clean_worktree(repo)?;
+            if apply_step(repo, &commit)? {
+                // Fresh apply hit a conflict: park here until the FE resolves.
+                st.mid_merge = true;
+                save_state(repo, st)?;
+                return Ok(active_state(st));
+            }
         }
 
         commit_step(repo, &commit, &step, st)?;

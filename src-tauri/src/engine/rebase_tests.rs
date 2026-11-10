@@ -412,6 +412,36 @@ fn edit_pauses_then_continue_finishes() {
     assert!(!ENGINE.rebase_state_impl(&temp).expect("state").active);
 }
 
+#[test]
+fn continue_after_edit_pause_refuses_to_overwrite_uncommitted_edits() {
+    let (temp, c1, c2, c3) = chain_of_three("edit-dirty-continue");
+    let plan = vec![pick(&c1), step("edit", &c2, None), pick(&c3)];
+    let state = ENGINE
+        .rebase_start_impl(&temp, &plan, None)
+        .expect("edit rebase");
+    assert!(state.paused_for_edit);
+
+    // Uncommitted work left during the pause must not be force-checked away
+    // by the next pick (git also refuses to continue here).
+    temp.write("f1.txt", "uncommitted local edit\n");
+    let err = ENGINE
+        .rebase_continue_impl(&temp)
+        .expect_err("dirty continue must be refused");
+    expect_invalid(err, "clean working tree");
+    assert_eq!(temp.file_content("f1.txt"), "uncommitted local edit\n");
+    let live = ENGINE.rebase_state_impl(&temp).expect("state");
+    assert!(live.active && live.paused_for_edit && live.current == 1);
+
+    // With the worktree clean again the pause finishes normally.
+    temp.write("f1.txt", "one\n");
+    let state = ENGINE.rebase_continue_impl(&temp).expect("clean continue");
+    assert!(!state.active);
+    assert_eq!(
+        first_parent_summaries(&temp),
+        ["three", "two", "one", "base"]
+    );
+}
+
 // ---------------------------------------------------------------------------
 // conflict flow
 // ---------------------------------------------------------------------------
