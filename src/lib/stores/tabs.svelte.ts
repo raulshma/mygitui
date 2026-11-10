@@ -229,12 +229,20 @@ export class TabStore {
       return;
     }
     this.restoring = true;
+    const positions = new Map<RepoId, number>();
     try {
       await Promise.all(
         session.roots.map((root, index) =>
           this.openTab(root, { activate: false, index })
             .then((tab) => {
-              if (tab.root === session.activeRoot) this.activeId = tab.id;
+              positions.set(tab.id, Math.min(index, positions.get(tab.id) ?? index));
+              this.tabs.sort((a, b) =>
+                (positions.get(a.id) ?? session.roots.length) -
+                (positions.get(b.id) ?? session.roots.length),
+              );
+              if (root === session.activeRoot && this.activeId === null) {
+                this.activeId = tab.id;
+              }
             })
             .catch(() => {
               // Folder deleted/moved since the last run — skip it.

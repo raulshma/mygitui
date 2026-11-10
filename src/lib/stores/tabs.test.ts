@@ -546,6 +546,47 @@ describe("session persistence", () => {
     expect(store.activeId).toBe("repo-1");
   });
 
+  it.each([
+    [0, 1, 2], [0, 2, 1], [1, 0, 2], [1, 2, 0], [2, 0, 1], [2, 1, 0],
+  ])("restores three tabs in stored order after completion order %s, %s, %s", async (...order) => {
+    const repos = [ALPHA, BETA, repoInfo("repo-3", "C:/repos/gamma", "gamma")];
+    const storage = memSessionStorage();
+    const roots = repos.map((repo) => repo.root);
+    storage.data.set("mygitui.session", JSON.stringify({ roots, activeRoot: ALPHA.root }));
+    const store = new TabStore(new RecentRepoStore(noStorage), storage);
+    const releases = new Map<string, (info: typeof ALPHA) => void>();
+    mockOpenRepo.mockImplementation((path) => new Promise((resolve) => releases.set(path, resolve)));
+
+    const restored = store.restoreSession();
+    for (const index of order) {
+      const repo = repos[index]!;
+      releases.get(repo.root)!(repo);
+      await vi.waitFor(() => expect(store.tabs.some((tab) => tab.id === repo.repo_id)).toBe(true));
+    }
+    await restored;
+
+    expect(store.tabs.map((tab) => tab.root)).toEqual(roots);
+    expect(JSON.parse(storage.data.get("mygitui.session")!).roots).toEqual(roots);
+  });
+
+  it("does not replace an explicit selection when the stored active tab opens late", async () => {
+    const storage = memSessionStorage();
+    storage.data.set("mygitui.session", JSON.stringify({ roots: [ALPHA.root, BETA.root], activeRoot: ALPHA.root }));
+    const store = new TabStore(new RecentRepoStore(noStorage), storage);
+    let releaseAlpha!: (info: typeof ALPHA) => void;
+    mockOpenRepo.mockImplementation((path) => path === ALPHA.root
+      ? new Promise((resolve) => (releaseAlpha = resolve))
+      : Promise.resolve(BETA));
+
+    const restored = store.restoreSession();
+    await vi.waitFor(() => expect(store.tabs).toHaveLength(1));
+    store.setActive(BETA.repo_id);
+    releaseAlpha(ALPHA);
+    await restored;
+
+    expect(store.activeId).toBe(BETA.repo_id);
+  });
+
   it("restoreSession opens tabs in parallel, not one after another", async () => {
     const storage = memSessionStorage();
     storage.data.set(
