@@ -26,8 +26,8 @@ use std::path::{Path, PathBuf};
 
 use git2::build::CheckoutBuilder;
 use git2::{
-    BranchType, ErrorCode, Repository, StashFlags, Worktree, WorktreeAddOptions,
-    WorktreeLockStatus, WorktreePruneOptions,
+    BranchType, ErrorCode, Repository, StashFlags, StatusOptions, Worktree,
+    WorktreeAddOptions, WorktreeLockStatus, WorktreePruneOptions,
 };
 
 use super::git_engine::{EngineError, EngineResult};
@@ -390,6 +390,25 @@ impl Libgit2Engine {
         // working tree even though they are valid. Locked worktrees need
         // `force` (libgit2 otherwise errors with
         // "not pruning locked working tree: '<reason>'").
+        //
+        // Like git, a linked worktree with local changes is only removable
+        // with `force`: pruning would silently discard edits that no ref
+        // points at. Ignored files are not local changes (status excludes
+        // them unless asked), which matches `git worktree remove`.
+        if !force {
+            if let Ok(linked) = Repository::open(wt.path()) {
+                let mut statuses = StatusOptions::new();
+                statuses
+                    .include_untracked(true)
+                    .recurse_untracked_dirs(true)
+                    .exclude_submodules(true);
+                if !linked.statuses(Some(&mut statuses))?.is_empty() {
+                    return Err(EngineError::Invalid(format!(
+                        "worktree `{name}` has local changes; commit or stash them, or remove it with force"
+                    )));
+                }
+            }
+        }
         let mut opts = WorktreePruneOptions::new();
         opts.valid(true).working_tree(true);
         if force {

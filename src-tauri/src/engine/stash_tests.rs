@@ -416,6 +416,67 @@ fn worktree_add_list_remove_roundtrip() {
 }
 
 #[test]
+fn worktree_remove_rejects_dirty_linked_worktrees_without_losing_data() {
+    for dirty in ["staged", "unstaged", "untracked", "mixed"] {
+        let (dir, repo) = repo_with_feature_branch(&format!("wt-dirty-{dirty}"));
+        let wt_path = dir.sub("wt-dirty");
+        ENGINE
+            .worktree_add_impl(&repo, wt_path.to_str().unwrap(), Some("feature"), None)
+            .expect("worktree add");
+        let linked = Repository::open(&wt_path).expect("open linked worktree");
+        if matches!(dirty, "staged" | "mixed") {
+            stage_content(&linked, "a.txt", "staged bytes\n");
+        }
+        if matches!(dirty, "unstaged" | "mixed") {
+            write_file(&linked, "a.txt", "unstaged bytes\n");
+        }
+        if matches!(dirty, "untracked" | "mixed") {
+            write_file(&linked, "scratch/data.txt", "untracked bytes\n");
+        }
+        let index_path = linked.path().join("index");
+        let index_before = std::fs::read(&index_path).unwrap();
+        let head_before = std::fs::read(linked.path().join("HEAD")).unwrap();
+        let tracked_before = std::fs::read(wt_path.join("a.txt")).unwrap();
+        let gitfile_before = std::fs::read(wt_path.join(".git")).unwrap();
+        // Release the linked handle: an OS file lock must not be what saves it.
+        drop(linked);
+
+        ENGINE
+            .worktree_remove_impl(&repo, "wt-dirty", false)
+            .expect_err("non-force removal must reject local changes");
+        assert_eq!(std::fs::read(&index_path).unwrap(), index_before, "{dirty}");
+        assert_eq!(std::fs::read(index_path.with_file_name("HEAD")).unwrap(), head_before);
+        assert_eq!(std::fs::read(wt_path.join("a.txt")).unwrap(), tracked_before);
+        assert_eq!(std::fs::read(wt_path.join(".git")).unwrap(), gitfile_before);
+        if matches!(dirty, "untracked" | "mixed") {
+            assert_eq!(std::fs::read(wt_path.join("scratch/data.txt")).unwrap(), b"untracked bytes\n");
+        }
+        assert!(repo.find_worktree("wt-dirty").is_ok());
+
+        ENGINE
+            .worktree_remove_impl(&repo, "wt-dirty", true)
+            .expect("explicit force may discard local changes");
+        assert!(!wt_path.exists());
+        assert!(repo.find_worktree("wt-dirty").is_err());
+    }
+}
+
+#[test]
+fn worktree_remove_matches_git_for_ignored_only_worktrees() {
+    let (dir, repo) = repo_with_feature_branch("wt-ignored-only");
+    let wt_path = dir.sub("wt-ignored");
+    ENGINE
+        .worktree_add_impl(&repo, wt_path.to_str().unwrap(), Some("feature"), None)
+        .unwrap();
+    std::fs::write(repo.path().join("info/exclude"), "*.ignored\n").unwrap();
+    std::fs::write(wt_path.join("cache.ignored"), "ignored cache\n").unwrap();
+
+    // Git worktree remove treats ignored-only files as clean (unlike untracked).
+    ENGINE.worktree_remove_impl(&repo, "wt-ignored", false).unwrap();
+    assert!(!wt_path.exists());
+}
+
+#[test]
 fn worktree_add_new_branch_and_argument_guards() {
     let (_dir, repo) = repo_with_feature_branch("wt-new-branch");
     let wt_path = _dir.sub("wt-fresh");
