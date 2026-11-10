@@ -283,6 +283,68 @@ fn output_capture_exit_event_and_unregister() {
     );
 }
 
+/// A real command interpreter, so a response proves the child processed
+/// input rather than merely observing the terminal's local input echo.
+fn lifecycle_shell_command() -> CommandBuilder {
+    #[cfg(windows)]
+    {
+        let mut cmd = CommandBuilder::new("cmd");
+        cmd.args(["/D", "/Q"]);
+        cmd
+    }
+    #[cfg(not(windows))]
+    {
+        CommandBuilder::new("sh")
+    }
+}
+
+fn assert_shell_responds(registry: &PtyRegistry, id: &str, sink: &CollectorPtySink) {
+    let tag = marker("ptylive");
+    let expected = format!("alive-{tag}");
+    // The expected string never occurs verbatim in the input.
+    let input = if cfg!(windows) {
+        format!("set \"PTY_LIVE_MARKER={tag}\"\r\necho alive-%PTY_LIVE_MARKER%\r\n")
+    } else {
+        format!("printf 'alive-%s\\n' '{tag}'\n")
+    };
+    write_to_session(registry, id, &input).expect("surviving shell accepts input");
+    assert!(
+        wait_for(TIMEOUT, || sink
+            .outputs_with(&expected)
+            .iter()
+            .any(|event| event.session_id == id)),
+        "session {id} did not process input; got: {}",
+        sink.joined_output()
+    );
+    assert!(registry.get(id).is_some(), "session {id} remains live");
+    assert!(sink.exits().iter().all(|event| event.session_id != id));
+}
+
+#[test]
+fn exiting_one_session_keeps_other_session_live() {
+    let registry = PtyRegistry::default();
+    let sink = CollectorPtySink::shared();
+    let b = spawn_session(&registry, spec(Some(lifecycle_shell_command())), sink.clone())
+        .expect("spawn B");
+    assert_shell_responds(&registry, &b, &sink);
+    let a = spawn_session(
+        &registry,
+        spec(Some(echo_command(&marker("exit-a")))),
+        sink.clone(),
+    )
+    .expect("spawn A");
+
+    assert!(wait_for(TIMEOUT, || sink
+        .exits()
+        .iter()
+        .any(|event| event.session_id == a && event.code == 0)));
+    assert_shell_responds(&registry, &b, &sink);
+    assert_eq!(registry.live_count(), 1, "only A is unregistered");
+
+    kill_session(&registry, &b).expect("kill B");
+    assert!(wait_for(KILL_TIMEOUT, || sink.exits().len() == 2));
+}
+
 #[test]
 fn write_reaches_shell_then_resize_and_kill_cleanup() {
     let registry = PtyRegistry::default();

@@ -279,6 +279,12 @@ impl Clone for PtyRegistry {
     }
 }
 
+impl RegistryInner {
+    fn remove(&self, session_id: &str) -> Option<Arc<Session>> {
+        self.sessions.lock().remove(session_id)
+    }
+}
+
 /// Everything needed to launch one session (validated by the caller).
 pub(crate) struct SessionSpec {
     /// Working directory for the shell (the repo workdir root).
@@ -345,7 +351,9 @@ pub(crate) fn spawn_session(
     registry.insert(&session_id, session.clone());
 
     spawn_output_pipeline(&session_id, reader, pipeline_writer, sink.clone());
-    spawn_exit_waiter(registry.clone(), &session_id, child, sink);
+    // The waiter must not own a PtyRegistry clone: dropping that clone would
+    // run the registry-wide kill_all and terminate unrelated terminals.
+    spawn_exit_waiter(registry.inner.clone(), &session_id, child, sink);
 
     Ok(session_id)
 }
@@ -472,7 +480,7 @@ fn spawn_output_pipeline(
 /// Exit-waiter thread: blocks on the child, then unregisters the session
 /// and emits the final `pty-exit` event with the real exit code.
 fn spawn_exit_waiter(
-    registry: PtyRegistry,
+    registry: Arc<RegistryInner>,
     session_id: &str,
     mut child: Box<dyn Child + Send + Sync>,
     sink: Arc<dyn PtySink>,
