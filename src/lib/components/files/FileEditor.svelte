@@ -18,6 +18,7 @@
     follows the color scheme automatically.
 -->
 <script lang="ts">
+  import { untrack } from "svelte";
   import type { FileMeta } from "$lib/ipc/types";
   import { checkpointCreate, readFile, writeFile } from "$lib/ipc/client";
   import ConfirmDialog from "$lib/components/safety/ConfirmDialog.svelte";
@@ -231,24 +232,29 @@
   $effect(() => {
     // `host` is read synchronously so the template ref is a tracked
     // dependency: the effect re-runs once the div exists (and after
-    // remounts from reload()).
+    // remounts from reload()). Everything else is untracked: the editor is
+    // keyed by path in the workspace, and parent updates (visibility, tab
+    // state, status refreshes) must not tear down the CodeMirror view and
+    // re-read the file over a dirty buffer.
     const hostEl = host;
-    const token = ++loadToken;
-    status = "loading";
-    void (async () => {
-      try {
-        const [loaded, bytes] = await Promise.all([loadCm(), readFile(repoId, path)]);
-        if (token !== loadToken) return;
-        cm = loaded;
-        currentMeta = meta;
-        mount(hostEl, bytes);
-        status = "ready";
-      } catch (err) {
-        if (token !== loadToken) return;
-        errorText = String(err);
-        status = "error";
-      }
-    })();
+    untrack(() => {
+      const token = ++loadToken;
+      status = "loading";
+      void (async () => {
+        try {
+          const [loaded, bytes] = await Promise.all([loadCm(), readFile(repoId, path)]);
+          if (token !== loadToken) return;
+          cm = loaded;
+          currentMeta = meta;
+          mount(hostEl, bytes);
+          status = "ready";
+        } catch (err) {
+          if (token !== loadToken) return;
+          errorText = String(err);
+          status = "error";
+        }
+      })();
+    });
     return () => {
       loadToken++;
       destroyView();

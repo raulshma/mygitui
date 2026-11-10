@@ -54,6 +54,7 @@
     root,
     openFiles,
     active = null,
+    visible = true,
     onActivate,
     onClose,
     onMutated = undefined,
@@ -64,6 +65,8 @@
     root: string;
     openFiles: OpenFileInfo[];
     active: string | null;
+    /** False while another center view covers a retained workspace. */
+    visible?: boolean;
     onActivate: (path: string) => void;
     onClose: (path: string) => void;
     /** After a successful save (status refresh). */
@@ -190,7 +193,7 @@
   // carries an in-editor Mod-s keymap as a fallback).
   $effect(() => {
     return onUiEvent("files-save", () => {
-      if (active === null) return;
+      if (!visible || active === null) return;
       const editor = editorRefs[active];
       if (editor) void editor.save();
     });
@@ -200,7 +203,7 @@
   // preview layout (edit → split → preview), persisted via editorPrefs.
   $effect(() => {
     return onUiEvent("files-md-view", () => {
-      if (active === null || !isMarkdownPath(active)) return;
+      if (!visible || active === null || !isMarkdownPath(active)) return;
       editorPrefs.cycleMdView();
     });
   });

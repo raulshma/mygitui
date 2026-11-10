@@ -954,6 +954,7 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
     compareResult = null;
     actionRunId = null;
     workflowRunId = runId;
+    filesMode = false;
     focusPanel("diff");
   }
 
@@ -968,6 +969,7 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
     compareResult = null;
     workflowRunId = null;
     actionRunId = runId;
+    filesMode = false;
     focusPanel("diff");
   }
 
@@ -1157,7 +1159,8 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
     // history is collapsed/reopened it must not replace an open file diff.
     if (
       source === "restore" &&
-      (selectedCommit ||
+      (filesMode ||
+        selectedCommit ||
         diffEntry ||
         compareResult ||
         workflowRunId !== null ||
@@ -1167,6 +1170,7 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
     }
     selectedCommit = info;
     if (!info) return;
+    filesMode = false;
     diffToken++;
     diffEntry = null;
     diffFiles = [];
@@ -1183,6 +1187,7 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
     selectedCommit = null;
     workflowRunId = null;
     actionRunId = null;
+    filesMode = false;
     diffToken++;
     diffEntry = null;
     diffFiles = [];
@@ -1378,8 +1383,8 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
       ? changeEntries.findIndex((e) => e.path === diffEntry?.path)
       : null}
     entryCount={diffRepoId === repoId ? changeEntries.length : 0}
-    files={filesMode && openFiles.length > 0
-      ? { repoId, root, openFiles, active: activeFile }
+    files={openFiles.length > 0
+      ? { repoId, root, openFiles, active: activeFile, visible: filesMode }
       : null}
     onClose={clearEditor}
     onCloseCompare={() => (compareResult = null)}

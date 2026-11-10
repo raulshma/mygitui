@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 import {
   historyCommands,
   installTauriMock,
@@ -156,3 +156,96 @@ test("activity bar, sidebars and center editor share the workspace", async ({
 
   expect(tracked.errors).toEqual([]);
 });
+
+const WORKFLOW_RUN = {
+  database_id: 101,
+  number: 42,
+  name: "CI",
+  display_title: "Editor safety checks",
+  event: "push",
+  head_branch: "main",
+  head_sha: "0123456789abcdef0123456789abcdef01234567",
+  status: "completed",
+  conclusion: "success",
+  url: "https://github.com/acme/repo/actions/runs/101",
+  created_at: "2026-10-20T08:00:00Z",
+  updated_at: "2026-10-20T08:04:00Z",
+  started_at: "2026-10-20T08:00:00Z",
+  attempt: 1,
+  workflow_database_id: 9001,
+};
+
+async function openTextEditor(page: Page) {
+  const tracked = trackErrors(page);
+  await seedStorage(page, recentRepos(["/tmp/repo"]));
+  const mock = await installTauriMock(page, {
+    commands: {
+      ...historyCommands(linearLog(3)),
+      forge_status: { available: true, version: "2.95.0", authed: true },
+      forge_context: {
+        owner: "acme", repo: "repo", branch: "main",
+        remote_url: "git@github.com:acme/repo.git",
+      },
+      workflow_runs: [WORKFLOW_RUN],
+      workflow_run_detail: { run: WORKFLOW_RUN, jobs: [] },
+      workflow_run_logs: "All checks passed\n",
+    },
+  });
+  await openRecentRepo(page);
+  // FileWorkspace and CodeMirror must remain lazy until a file is opened.
+  await expect(page.locator(".editor .file-editor .epath")).toHaveText("src/app.ts");
+  await expect(page.locator(".workspace")).toHaveCount(0);
+  await openPanel(page, "Files");
+  await page.getByRole("button", { name: "Expand src" }).click();
+  await page.getByRole("treeitem", { name: /^app\.ts/ }).click();
+  const content = page.locator(".cm-content");
+  await expect(content).toHaveText("export const app = 1;", { timeout: 30_000 });
+  return { mock, content, tracked };
+}
+
+for (const destination of ["diff", "commit", "workflow"] as const) {
+  test(`dirty CodeMirror text and undo survive the ${destination} view`, async ({ page }) => {
+    const { mock, content, tracked } = await openTextEditor(page);
+    await content.click();
+    await page.keyboard.press("Control+End");
+    await page.keyboard.insertText("// unsaved editor change");
+    await expect(content).toContainText("// unsaved editor change");
+    await expect(page.locator(".workspace .dirty")).toBeVisible();
+
+    if (destination === "diff") {
+      await page.getByRole("button", { name: "Diff", exact: true }).click();
+      await expect(page.locator(".editor .file-editor .epath")).toHaveText("src/app.ts");
+    } else if (destination === "commit") {
+      await page.locator("#commit-row-0").click();
+      await expect(page.locator(".editor .dsummary").first()).toHaveText("commit message 0");
+    } else {
+      await openPanel(page, "GitHub");
+      await page.getByRole("tab", { name: "Actions", exact: true }).click();
+      await page.locator(".wf-run-main").click();
+      await expect(page.locator(".run-view")).toContainText("Editor safety checks");
+    }
+    await expect(content).toBeHidden();
+    // Global save must not act on the retained, hidden editor.
+    await page.keyboard.press("Control+s");
+
+    // Return through the natural affordances: the diff header's Edit button,
+    // or the file tree (switching the sidebar back to Files when needed).
+    if (destination === "diff") {
+      await page.getByRole("button", { name: "Edit", exact: true }).click();
+    } else {
+      if (destination === "workflow") await openPanel(page, "Files");
+      await page.getByRole("treeitem", { name: /^app\.ts/ }).click();
+    }
+    await expect(content).toBeVisible();
+    await expect(content).toContainText("// unsaved editor change");
+    await expect(page.locator(".workspace .dirty")).toBeVisible();
+    expect(await mock.callsOf("repo_write_file")).toEqual([]);
+    // No replacement editor read from disk; real undo still reaches the original doc.
+    expect(await mock.callsOf("repo_read_file")).toHaveLength(1);
+    await content.click();
+    await page.keyboard.press("Control+z");
+    await expect(content).toHaveText("export const app = 1;");
+    await expect(page.locator(".editor .detail, .editor .run-view, .editor .file-editor")).toHaveCount(0);
+    expect(tracked.errors).toEqual([]);
+  });
+}

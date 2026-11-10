@@ -35,6 +35,26 @@
   const iconPrev = $derived(appIcon("arrow-upward")!);
   const iconNext = $derived(appIcon("arrow-downward")!);
 
+  // The lazy views must keep the *same* promise across updates: `{#await
+  // import(...)}` would hand Svelte a fresh promise on every parent update,
+  // re-entering the pending branch and remounting the view (losing dirty
+  // editor buffers, log scroll, etc.).
+  let fileWorkspaceImport: Promise<typeof import("$lib/components/files/FileWorkspace.svelte")> | null =
+    null;
+  let actionRunImport: Promise<typeof import("$lib/components/actions/ActionRunView.svelte")> | null =
+    null;
+  let workflowRunImport: Promise<typeof import("$lib/components/forge/WorkflowRunView.svelte")> | null =
+    null;
+  function loadFileWorkspace() {
+    return (fileWorkspaceImport ??= import("$lib/components/files/FileWorkspace.svelte"));
+  }
+  function loadActionRun() {
+    return (actionRunImport ??= import("$lib/components/actions/ActionRunView.svelte"));
+  }
+  function loadWorkflowRun() {
+    return (workflowRunImport ??= import("$lib/components/forge/WorkflowRunView.svelte"));
+  }
+
   let {
     repoId,
     root = "",
@@ -110,6 +130,8 @@
       root: string;
       openFiles: OpenFileInfo[];
       active: string | null;
+      /** Whether the workspace owns the center pane right now. */
+      visible: boolean;
     } | null;
     /** Clears the editor (closes the current commit/diff). */
     onClose?: () => void;
@@ -162,8 +184,38 @@
   class="editor flex h-full min-h-0 min-w-0 flex-col bg-card [&>*]:min-h-0 [&>*]:flex-1"
   aria-label="Editor"
 >
+  {#if files}
+    <!-- Kept mounted while another center view is shown: unmounting the
+         workspace would discard dirty CodeMirror buffers and undo history. -->
+    <div class="min-h-0 min-w-0 flex-1" class:hidden={!files.visible}>
+      {#await loadFileWorkspace()}
+        <p
+          class="estate estate-loading m-auto inline-flex items-center gap-[0.4rem] text-ui-base text-muted-foreground"
+          role="status"
+        >
+          <Spinner class="size-4" role="presentation" aria-hidden="true" />
+          Loading workspace…
+        </p>
+      {:then FileWorkspaceModule}
+        <FileWorkspaceModule.default
+          repoId={files.repoId}
+          root={files.root}
+          openFiles={files.openFiles}
+          active={files.active}
+          visible={files.visible}
+          onActivate={(path) => onActivateFile?.(path)}
+          onClose={(path) => onCloseFile?.(path)}
+          onMutated={onMutated}
+          onOpenDiff={(path) => onOpenDiffFile?.(path)}
+        />
+      {:catch err}
+        <p class="estate m-auto text-ui-base text-muted-foreground" role="alert">Failed to load the file workspace: {String(err)}</p>
+      {/await}
+    </div>
+  {/if}
+  {#if !(files?.visible)}
   {#if actionRunId !== null}
-    {#await import("$lib/components/actions/ActionRunView.svelte")}
+    {#await loadActionRun()}
       <p
         class="estate estate-loading m-auto inline-flex items-center gap-[0.4rem] text-ui-base text-muted-foreground"
         role="status"
@@ -180,7 +232,7 @@
       />
     {/await}
   {:else if workflowRunId !== null}
-    {#await import("$lib/components/forge/WorkflowRunView.svelte")}
+    {#await loadWorkflowRun()}
       <p
         class="estate estate-loading m-auto inline-flex items-center gap-[0.4rem] text-ui-base text-muted-foreground"
         role="status"
@@ -219,29 +271,6 @@
       onClose={onClose}
       onCloseCompare={onCloseCompare}
     />
-  {:else if files && files.openFiles.length > 0}
-    {#await import("$lib/components/files/FileWorkspace.svelte")}
-      <p
-        class="estate estate-loading m-auto inline-flex items-center gap-[0.4rem] text-ui-base text-muted-foreground"
-        role="status"
-      >
-        <Spinner class="size-4" role="presentation" aria-hidden="true" />
-        Loading workspace…
-      </p>
-    {:then FileWorkspaceModule}
-      <FileWorkspaceModule.default
-        repoId={files.repoId}
-        root={files.root}
-        openFiles={files.openFiles}
-        active={files.active}
-        onActivate={(path) => onActivateFile?.(path)}
-        onClose={(path) => onCloseFile?.(path)}
-        onMutated={onMutated}
-        onOpenDiff={(path) => onOpenDiffFile?.(path)}
-      />
-    {:catch err}
-      <p class="estate m-auto text-ui-base text-muted-foreground" role="alert">Failed to load the file workspace: {String(err)}</p>
-    {/await}
   {:else if entry}
     <div class="file-editor flex min-h-0 min-w-0 flex-col">
       <header
@@ -481,5 +510,6 @@
         <li class="inline-flex items-center gap-[0.15rem]"><Kbd>Ctrl</Kbd>+<Kbd>1</Kbd><span class="ml-[0.4rem]">Focus source control</span></li>
       </ul>
     </div>
+  {/if}
   {/if}
 </div>
