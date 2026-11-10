@@ -29,7 +29,7 @@
   // Focus the primary choice when the switch dialog appears; return focus
   // to the invoker when it closes.
   $effect(() => {
-    if (controller.switchChoice) {
+    if (controller.switchChoice.open) {
       restoreTo =
         document.activeElement instanceof HTMLElement
           ? document.activeElement
@@ -44,12 +44,12 @@
 
 <ConfirmDialog
   bind:open={
-    () => controller.confirmDelete !== null,
+    () => controller.confirmDelete.open,
     (v) => {
       if (!v) controller.cancelDelete();
     }
   }
-  title={controller.confirmDelete
+  title={controller.confirmDelete.open
     ? `Delete branch ${controller.confirmDelete.name}?`
     : ""}
   message="The branch is fully merged into the current branch — deleting it loses no commits."
@@ -58,7 +58,7 @@
   onConfirm={() => void controller.confirmMergedDelete()}
 />
 
-{#if controller.switchChoice}
+{#if controller.switchChoice.open}
   <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
   <div
     class="scrim fixed inset-0 z-60 flex items-center justify-center bg-black/40"
@@ -117,7 +117,7 @@
   </div>
 {/if}
 
-{#if controller.previewDelete}
+{#if controller.previewDelete.open}
   <PreviewDialog
     info={controller.previewDelete.info}
     danger

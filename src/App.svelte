@@ -67,6 +67,7 @@
   import AiHealthChip from "$lib/components/ai/AiHealthChip.svelte";
   import DeviceBrowser from "$lib/components/DeviceBrowser.svelte";
   import type { DeviceProfile } from "$lib/ipc/types";
+  import { closedDialog, openDialog, type DialogState } from "$lib/state/dialog";
 
   /**
    * Overlay lazy-mounting: the dialogs below mount on first need instead of
@@ -202,9 +203,13 @@
 
   /** The device whose detail view (browser + settings) the home shows. */
   let deviceDetailId = $state<string | null>(null);
-  /** Add/edit-device dialog visibility + the device being edited. */
-  let addDeviceOpen = $state(false);
-  let editingDevice = $state<DeviceProfile | null>(null);
+  /**
+   * Add/edit-device dialog — one state, the edited device travels with
+   * open (null device = "add"), so no open/close site can hand-reset it.
+   */
+  let addDevice = $state<DialogState<{ device: DeviceProfile | null }>>(
+    closedDialog(),
+  );
   /** Delete-device confirmation. */
   let removeDeviceOpen = $state(false);
   /** Draft of the detail view's poll-interval field (seconds). */
@@ -221,13 +226,11 @@
   }
 
   function openAddDevice(): void {
-    editingDevice = null;
-    addDeviceOpen = true;
+    addDevice = openDialog({ device: null });
   }
 
   function openEditDevice(device: DeviceProfile): void {
-    editingDevice = device;
-    addDeviceOpen = true;
+    addDevice = openDialog({ device });
   }
 
   /** Persists the detail view's poll-interval draft via device_update. */
@@ -1165,9 +1168,17 @@
 
 <!-- Remote devices: add/edit dialog + the connect-prompt dialogs (driven
      by the remote-devices store's pending queues, AuthDialog-style). -->
-{#if addDeviceOpen || addDeviceOverlay.landed}
+{#if addDevice.open || addDeviceOverlay.landed}
   {#await addDeviceOverlay.chunk() then AddDeviceDialogModule}
-    <AddDeviceDialogModule.default bind:open={addDeviceOpen} edit={editingDevice} />
+    <AddDeviceDialogModule.default
+      bind:open={
+        () => addDevice.open,
+        (v) => {
+          if (!v) addDevice = closedDialog();
+        }
+      }
+      edit={addDevice.open ? addDevice.device : null}
+    />
   {/await}
 {/if}
 {#if remoteDevices.hostkeyPending || hostKeyOverlay.landed}

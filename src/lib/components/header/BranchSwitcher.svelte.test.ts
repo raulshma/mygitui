@@ -33,9 +33,9 @@ const mocks = vi.hoisted(() => {
   // switcher consumes; dialogs never open because the dialog states stay
   // null and `busy` stays false (BranchActionDialogs renders nothing).
   const controller = {
-    switchChoice: null,
-    confirmDelete: null,
-    previewDelete: null,
+    switchChoice: { open: false },
+    confirmDelete: { open: false },
+    previewDelete: { open: false },
     busy: false,
     setList: vi.fn(),
     setReload: vi.fn(),

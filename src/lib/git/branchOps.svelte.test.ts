@@ -158,7 +158,7 @@ describe("switch flow", () => {
     await ops.requestSwitch("feature");
 
     expect(mocks.branchSwitch).toHaveBeenCalledWith(REPO, "feature", false);
-    expect(ops.switchChoice).toBeNull();
+    expect(ops.switchChoice.open).toBe(false);
     // Completed mutation → reload hook + owner notification.
     expect(reload).toHaveBeenCalled();
     expect(onMutated).toHaveBeenCalled();
@@ -170,7 +170,7 @@ describe("switch flow", () => {
 
     await ops.requestSwitch("feature");
 
-    expect(ops.switchChoice).toEqual({ name: "feature" });
+    expect(ops.switchChoice).toEqual({ open: true, name: "feature" });
     expect(mocks.branchSwitch).not.toHaveBeenCalled();
   });
 
@@ -186,7 +186,7 @@ describe("switch flow", () => {
       "pre-switch stash (switching to feature)",
     );
     expect(mocks.branchSwitch).toHaveBeenCalledWith(REPO, "feature", false);
-    expect(ops.switchChoice).toBeNull();
+    expect(ops.switchChoice.open).toBe(false);
   });
 
   it("chooseForce switches with force (discarding modifications)", async () => {
@@ -197,7 +197,7 @@ describe("switch flow", () => {
     await ops.chooseForce();
 
     expect(mocks.branchSwitch).toHaveBeenCalledWith(REPO, "feature", true);
-    expect(ops.switchChoice).toBeNull();
+    expect(ops.switchChoice.open).toBe(false);
     expect(mocks.stashPush).not.toHaveBeenCalled();
   });
 
@@ -208,7 +208,7 @@ describe("switch flow", () => {
 
     ops.cancelChoice();
 
-    expect(ops.switchChoice).toBeNull();
+    expect(ops.switchChoice.open).toBe(false);
     expect(mocks.branchSwitch).not.toHaveBeenCalled();
     expect(mocks.stashPush).not.toHaveBeenCalled();
   });
@@ -244,8 +244,8 @@ describe("delete flow", () => {
       name: "feature",
       into: "main",
     });
-    expect(ops.confirmDelete).toEqual({ name: "feature" });
-    expect(ops.previewDelete).toBeNull();
+    expect(ops.confirmDelete).toEqual({ open: true, name: "feature" });
+    expect(ops.previewDelete.open).toBe(false);
   });
 
   it("falls back to `into: HEAD` when no HEAD branch is in the list", async () => {
@@ -257,7 +257,7 @@ describe("delete flow", () => {
       name: "feature",
       into: "HEAD",
     });
-    expect(ops.confirmDelete).toEqual({ name: "feature" });
+    expect(ops.confirmDelete).toEqual({ open: true, name: "feature" });
   });
 
   it("confirmMergedDelete deletes non-forced and closes the dialog", async () => {
@@ -267,7 +267,7 @@ describe("delete flow", () => {
     await ops.confirmMergedDelete();
 
     expect(mocks.branchDelete).toHaveBeenCalledWith(REPO, "feature", false);
-    expect(ops.confirmDelete).toBeNull();
+    expect(ops.confirmDelete.open).toBe(false);
   });
 
   it("routes an unmerged delete to the preview dialog", async () => {
@@ -277,8 +277,8 @@ describe("delete flow", () => {
 
     await ops.requestDelete(branch({ name: "feature" }));
 
-    expect(ops.previewDelete).toEqual({ name: "feature", info });
-    expect(ops.confirmDelete).toBeNull();
+    expect(ops.previewDelete).toEqual({ open: true, name: "feature", info });
+    expect(ops.confirmDelete.open).toBe(false);
   });
 
   it("confirmForceDelete(true) creates a guard checkpoint then force-deletes", async () => {
@@ -298,7 +298,7 @@ describe("delete flow", () => {
             "Force deleted feature — undo available (checkpoint cp-1)",
       ),
     ).toBe(true);
-    expect(ops.previewDelete).toBeNull();
+    expect(ops.previewDelete.open).toBe(false);
   });
 
   it("confirmForceDelete(false) skips the checkpoint", async () => {
@@ -324,8 +324,8 @@ describe("delete flow", () => {
           t.kind === "error" && t.message === "Cannot preview delete of feature: boom",
       ),
     ).toBe(true);
-    expect(ops.confirmDelete).toBeNull();
-    expect(ops.previewDelete).toBeNull();
+    expect(ops.confirmDelete.open).toBe(false);
+    expect(ops.previewDelete.open).toBe(false);
   });
 
   it("cancelDelete closes both delete dialogs without acting", async () => {
@@ -335,7 +335,7 @@ describe("delete flow", () => {
 
     ops.cancelDelete();
 
-    expect(ops.previewDelete).toBeNull();
+    expect(ops.previewDelete.open).toBe(false);
     expect(mocks.branchDelete).not.toHaveBeenCalled();
   });
 });

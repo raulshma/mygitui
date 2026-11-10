@@ -48,6 +48,7 @@
     tagCreate,
   } from "$lib/ipc/client";
   import type { BranchInfo, CommitInfo, FileDiff, MergeResult } from "$lib/ipc/types";
+  import { closedDialog, openDialog, type DialogState } from "$lib/state/dialog";
   import { describeError } from "$lib/errors";
   import GraphCanvas from "$lib/components/graph/GraphCanvas.svelte";
   import EmptyState from "../layout/EmptyState.svelte";
@@ -195,16 +196,17 @@
   let anchorIdx: number | null = null;
   /** True while a cherry-pick/revert IPC is in flight. */
   let opBusy = $state(false);
-  let plannerOpen = $state(false);
-  let plannerBaseSha = $state<string | null>(null);
+  /** Interactive rebase planner for `HEAD..baseSha` (one state, args ride along). */
+  let planner = $state<DialogState<{ baseSha: string }>>(closedDialog());
 
-  // M12 commit-menu dialogs (sha the dialog operates on, null = closed).
-  /** "Branch from here…" PromptDialog open for this sha. */
-  let branchFromSha = $state<string | null>(null);
-  /** "Tag here…" TagAtDialog open for this sha. */
-  let tagAtSha = $state<string | null>(null);
-  /** "Reset current branch to here…" ResetDialog open for this sha. */
-  let resetToSha = $state<string | null>(null);
+  // M12 commit-menu dialogs — one DialogState each; the sha travels with
+  // open, so no open/close site can leave a stale sha behind.
+  /** "Branch from here…" PromptDialog. */
+  let branchFrom = $state<DialogState<{ sha: string }>>(closedDialog());
+  /** "Tag here…" TagAtDialog. */
+  let tagAt = $state<DialogState<{ sha: string }>>(closedDialog());
+  /** "Reset current branch to here…" ResetDialog. */
+  let resetTo = $state<DialogState<{ sha: string }>>(closedDialog());
 
   // -- virtualizer + canvas scroll sync ------------------------------------------
 
@@ -311,10 +313,10 @@
         compare = null;
         multiIdx = [];
         anchorIdx = null;
-        plannerOpen = false;
-        branchFromSha = null;
-        tagAtSha = null;
-        resetToSha = null;
+        planner = closedDialog();
+        branchFrom = closedDialog();
+        tagAt = closedDialog();
+        resetTo = closedDialog();
         pendingReveal = null;
         sync.reset();
       });
@@ -712,8 +714,7 @@
    *  exclusive base — it is NOT part of the rebase). */
   function rebaseFromHere(): void {
     if (!selectedInfo || opBusy) return;
-    plannerBaseSha = selectedInfo.sha;
-    plannerOpen = true;
+    planner = openDialog({ baseSha: selectedInfo.sha });
   }
 
   /**
@@ -762,7 +763,7 @@
 
   /** Creates a branch at `sha` (not checked out — HEAD stays put). */
   async function createBranchFrom(sha: string, name: string): Promise<void> {
-    branchFromSha = null;
+    branchFrom = closedDialog();
     try {
       await branchCreate(repoId, name, false, sha);
       toast(`Created branch ${name} at ${sha.slice(0, 7)}`, { kind: "success" });
@@ -782,7 +783,7 @@
     annotated: boolean,
     message: string,
   ): Promise<void> {
-    tagAtSha = null;
+    tagAt = closedDialog();
     try {
       // The backend makes a tag annotated by passing a message.
       await tagCreate(repoId, name, sha, annotated ? message : undefined);
@@ -797,7 +798,7 @@
 
   /** ResetDialog finished: the history restarts via repo-changed. */
   function onResetFromHereDone(): void {
-    resetToSha = null;
+    resetTo = closedDialog();
     void tabStore.refreshStatus(repoId);
   }
 
@@ -882,9 +883,9 @@
       { id: "revert", label: "Revert…", run: () => void doRevert() },
       { id: "rebase", label: "Rebase from here…", run: rebaseFromHere },
       { id: "bookmark", label: bookmarked ? "Remove bookmark" : "Bookmark commit", run: () => toggleBookmark(sha) },
-      { id: "branch-from", label: "Branch from here…", run: () => (branchFromSha = sha) },
-      { id: "tag-at", label: "Tag here…", run: () => (tagAtSha = sha) },
-      { id: "reset-to", label: "Reset current branch to here…", run: () => (resetToSha = sha) },
+      { id: "branch-from", label: "Branch from here…", run: () => (branchFrom = openDialog({ sha })) },
+      { id: "tag-at", label: "Tag here…", run: () => (tagAt = openDialog({ sha })) },
+      { id: "reset-to", label: "Reset current branch to here…", run: () => (resetTo = openDialog({ sha })) },
       { id: "copy", label: "Copy sha", run: copySha },
       { id: "copy-describe", label: "Copy describe", run: () => void copyDescribe(sha) },
       { id: "archive", label: "Export archive…", run: () => void exportArchive(sha) },
@@ -1357,43 +1358,46 @@
   {/if}
 
   <!-- 4. interactive rebase planner (M3 E2) -->
-  {#if plannerOpen}
+  {#if planner.open}
     <RebasePlanner
       {repoId}
-      baseSha={plannerBaseSha}
-      onClose={() => (plannerOpen = false)}
+      baseSha={planner.baseSha}
+      onClose={() => (planner = closedDialog())}
       onFinished={onRebaseFinished}
     />
   {/if}
 
   <!-- 5. M12 commit-menu dialogs (branch / tag / reset "from here") -->
-  {#if branchFromSha}
+  {#if branchFrom.open}
     <PromptDialog
       open={true}
-      title={`Branch from ${branchFromSha.slice(0, 7)}`}
+      title={`Branch from ${branchFrom.sha.slice(0, 7)}`}
       message="Creates the branch at this commit; your current branch stays checked out."
       placeholder="New branch name"
       confirmLabel="Create branch"
-      onSubmit={(name) => void createBranchFrom(branchFromSha ?? "", name)}
-      onCancel={() => (branchFromSha = null)}
+      onSubmit={(name) => {
+        if (branchFrom.open) void createBranchFrom(branchFrom.sha, name);
+      }}
+      onCancel={() => (branchFrom = closedDialog())}
     />
   {/if}
 
-  {#if tagAtSha}
+  {#if tagAt.open}
     <TagAtDialog
-      sha={tagAtSha}
-      onSubmit={(name, annotated, message) =>
-        void createTagAt(tagAtSha ?? "", name, annotated, message)}
-      onCancel={() => (tagAtSha = null)}
+      sha={tagAt.sha}
+      onSubmit={(name, annotated, message) => {
+        if (tagAt.open) void createTagAt(tagAt.sha, name, annotated, message);
+      }}
+      onCancel={() => (tagAt = closedDialog())}
     />
   {/if}
 
-  {#if resetToSha}
+  {#if resetTo.open}
     <ResetDialog
       {repoId}
       open={true}
-      defaultTarget={resetToSha}
-      onClose={() => (resetToSha = null)}
+      defaultTarget={resetTo.sha}
+      onClose={() => (resetTo = closedDialog())}
       onDone={onResetFromHereDone}
     />
   {/if}

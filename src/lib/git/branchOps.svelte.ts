@@ -44,6 +44,7 @@ import { tabStore } from "$lib/stores/tabs.svelte";
 import { toast } from "$lib/toast";
 import { describeGitError } from "$lib/errors";
 import { isMergedPreview } from "$lib/components/safety/safetyModel";
+import { closedDialog, openDialog, type DialogState } from "$lib/state/dialog";
 
 /**
  * Reactive controller for one repo's branch mutations. Create one per
@@ -60,12 +61,14 @@ export class BranchOpsController {
   /** Latest branch list, fed by the owner (HEAD lookups, not rendering). */
   #list: BranchInfo[] = [];
 
-  /** Pending dirty-switch choice dialog, or `null` when none. */
-  switchChoice = $state<{ name: string } | null>(null);
-  /** Pending merged-delete confirmation, or `null` when none. */
-  confirmDelete = $state<{ name: string } | null>(null);
-  /** Pending unmerged (force-)delete preview, or `null` when none. */
-  previewDelete = $state<{ name: string; info: PreviewInfo } | null>(null);
+  /** Pending dirty-switch choice dialog (closed by default). */
+  switchChoice = $state<DialogState<{ name: string }>>(closedDialog());
+  /** Pending merged-delete confirmation (closed by default). */
+  confirmDelete = $state<DialogState<{ name: string }>>(closedDialog());
+  /** Pending unmerged (force-)delete preview (closed by default). */
+  previewDelete = $state<DialogState<{ name: string; info: PreviewInfo }>>(
+    closedDialog(),
+  );
 
   /** True while a "branch"-kind backend op runs for this repo. */
   readonly busy: boolean = $derived(this.#branchBusy());
@@ -165,7 +168,7 @@ export class BranchOpsController {
   async requestSwitch(name: string): Promise<void> {
     if (this.#dirtyWorktree()) {
       // Real choice replaces the old "auto-stash" hint.
-      this.switchChoice = { name };
+      this.switchChoice = openDialog({ name });
       return;
     }
     await this.#doSwitch(name, false);
@@ -173,9 +176,9 @@ export class BranchOpsController {
 
   /** "Stash changes": stash_push → clean switch. */
   async chooseStash(): Promise<void> {
-    if (!this.switchChoice) return;
+    if (!this.switchChoice.open) return;
     const name = this.switchChoice.name;
-    this.switchChoice = null;
+    this.switchChoice = closedDialog();
     await this.#run(`Switch to ${name}`, async () => {
       await stashPush(this.#repoId, `pre-switch stash (switching to ${name})`);
       await branchSwitch(this.#repoId, name, false);
@@ -184,18 +187,18 @@ export class BranchOpsController {
 
   /** "Proceed anyway": forced checkout (discards local modifications). */
   async chooseForce(): Promise<void> {
-    if (!this.switchChoice) return;
+    if (!this.switchChoice.open) return;
     const name = this.switchChoice.name;
     await this.#doSwitch(name, true);
   }
 
   /** Closes the switch-choice dialog without switching. */
   cancelChoice(): void {
-    this.switchChoice = null;
+    this.switchChoice = closedDialog();
   }
 
   async #doSwitch(name: string, force: boolean): Promise<void> {
-    this.switchChoice = null;
+    this.switchChoice = closedDialog();
     await this.#run(`Switch to ${name}`, () =>
       branchSwitch(this.#repoId, name, force),
     );
@@ -224,17 +227,17 @@ export class BranchOpsController {
       return;
     }
     if (isMergedPreview(info)) {
-      this.confirmDelete = { name: branch.name };
+      this.confirmDelete = openDialog({ name: branch.name });
       return;
     }
-    this.previewDelete = { name: branch.name, info };
+    this.previewDelete = openDialog({ name: branch.name, info });
   }
 
   /** Merged-delete confirmation (safe `branch_delete`). */
   async confirmMergedDelete(): Promise<void> {
     const job = this.confirmDelete;
-    if (!job) return;
-    this.confirmDelete = null;
+    if (!job.open) return;
+    this.confirmDelete = closedDialog();
     await this.#run(`Delete ${job.name}`, () =>
       branchDelete(this.#repoId, job.name, false),
     );
@@ -246,8 +249,8 @@ export class BranchOpsController {
    */
   async confirmForceDelete(createCheckpoint: boolean): Promise<void> {
     const job = this.previewDelete;
-    if (!job) return;
-    this.previewDelete = null;
+    if (!job.open) return;
+    this.previewDelete = closedDialog();
     await this.#run(`Force delete ${job.name}`, async () => {
       if (createCheckpoint) {
         const cp = await guardCheckpoint(this.#repoId, "pre-branch-delete");
@@ -264,8 +267,8 @@ export class BranchOpsController {
 
   /** Closes both delete dialogs without deleting. */
   cancelDelete(): void {
-    this.confirmDelete = null;
-    this.previewDelete = null;
+    this.confirmDelete = closedDialog();
+    this.previewDelete = closedDialog();
   }
 
   // -- rename / push -----------------------------------------------------------

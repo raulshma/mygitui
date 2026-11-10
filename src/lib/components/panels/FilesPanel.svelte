@@ -57,6 +57,7 @@
   import { openTab } from "$lib/stores/tabs.svelte";
   import { toast } from "$lib/toast";
   import { appIcon } from "$lib/components/icons/library.svelte";
+  import { closedDialog, openDialog, type DialogState } from "$lib/state/dialog";
 
   let {
     repoId,
@@ -360,16 +361,21 @@
 
   // --- File ops ---------------------------------------------------------------
 
-  let promptOpen = $state(false);
-  let promptTitle = $state("");
-  let promptMessage = $state("");
-  let promptInitial = $state("");
-  let promptConfirm = $state("Create");
-  let promptSubmit = $state<(value: string) => void>(() => {});
-  let confirmOpen = $state(false);
-  let confirmTitle = $state("");
-  let confirmMessage = $state("");
-  let confirmSubmit = $state<() => void>(() => {});
+  /** One file-tree prompt dialog: args (incl. the submit action) travel with open. */
+  let prompt = $state<
+    DialogState<{
+      title: string;
+      message: string;
+      placeholder: string;
+      initial: string;
+      confirmLabel: string;
+      onSubmit: (value: string) => void | Promise<void>;
+    }>
+  >(closedDialog());
+  /** One file-tree confirm dialog: args travel with open. */
+  let confirm = $state<
+    DialogState<{ title: string; message: string; onConfirm: () => void | Promise<void> }>
+  >(closedDialog());
   /** Where a pending New File/Folder should land. */
   let newEntryDir = $state("");
 
@@ -389,25 +395,27 @@
           : parentDirOf(selected.path);
     }
     newEntryDir = dir;
-    promptTitle = kind === "file" ? "New file" : "New folder";
-    promptMessage =
-      dir === "" ? "Created at the repository root" : `Created in ${dir}/`;
-    promptConfirm = "Create";
-    promptInitial = "";
-    promptSubmit = async (value: string) => {
-      const name = value.replace(/\\/g, "/").replace(/\/+$/, "");
-      if (!name) return;
-      const target = dir === "" ? name : `${dir}/${name}`;
-      try {
-        await createEntry(repoId, target, kind);
-        insertEntry(tree, dir, { name, kind });
-        selectedPath = target;
-        if (kind === "file") openFileByPath(target);
-      } catch (err) {
-        toast(String(err), { kind: "error" });
-      }
-    };
-    promptOpen = true;
+    prompt = openDialog({
+      title: kind === "file" ? "New file" : "New folder",
+      message:
+        dir === "" ? "Created at the repository root" : `Created in ${dir}/`,
+      placeholder: kind === "file" ? "path/to/file.ts" : "folder-name",
+      initial: "",
+      confirmLabel: "Create",
+      onSubmit: async (value: string) => {
+        const name = value.replace(/\\/g, "/").replace(/\/+$/, "");
+        if (!name) return;
+        const target = dir === "" ? name : `${dir}/${name}`;
+        try {
+          await createEntry(repoId, target, kind);
+          insertEntry(tree, dir, { name, kind });
+          selectedPath = target;
+          if (kind === "file") openFileByPath(target);
+        } catch (err) {
+          toast(String(err), { kind: "error" });
+        }
+      },
+    });
   }
 
   function openFileByPath(path: string): void {
@@ -415,26 +423,28 @@
   }
 
   function startRename(node: FileNode): void {
-    promptTitle = `Rename ${node.name}`;
-    promptMessage = node.path;
-    promptConfirm = "Rename";
-    promptInitial = node.name;
-    promptSubmit = async (value: string) => {
-      const name = value.replace(/\\/g, "/").replace(/\/+$/, "");
-      if (!name || name === node.name) return;
-      const newPath =
-        parentDirOf(node.path) === ""
-          ? name
-          : `${parentDirOf(node.path)}/${name}`;
-      try {
-        await renameEntry(repoId, node.path, newPath);
-        renameEntryInTree(node.path, newPath);
-        selectedPath = newPath;
-      } catch (err) {
-        toast(String(err), { kind: "error" });
-      }
-    };
-    promptOpen = true;
+    prompt = openDialog({
+      title: `Rename ${node.name}`,
+      message: node.path,
+      placeholder: "",
+      initial: node.name,
+      confirmLabel: "Rename",
+      onSubmit: async (value: string) => {
+        const name = value.replace(/\\/g, "/").replace(/\/+$/, "");
+        if (!name || name === node.name) return;
+        const newPath =
+          parentDirOf(node.path) === ""
+            ? name
+            : `${parentDirOf(node.path)}/${name}`;
+        try {
+          await renameEntry(repoId, node.path, newPath);
+          renameEntryInTree(node.path, newPath);
+          selectedPath = newPath;
+        } catch (err) {
+          toast(String(err), { kind: "error" });
+        }
+      },
+    });
   }
 
   function renameEntryInTree(path: string, newPath: string): void {
@@ -442,22 +452,23 @@
   }
 
   function startDelete(node: FileNode): void {
-    confirmTitle = `Delete ${node.name}?`;
-    confirmMessage =
-      node.kind === "dir"
-        ? "`" + node.path + "` and everything inside it will be deleted. A checkpoint is created first, so this is undoable from the Undo panel."
-        : "`" + node.path + "` will be deleted. A checkpoint is created first, so this is undoable from the Undo panel.";
-    confirmSubmit = async () => {
-      try {
-        await deleteEntry(repoId, node.path);
-        removeEntry(tree, node.path);
-        if (selectedPath === node.path) selectedPath = "";
-        toast(`Deleted ${node.path}`);
-      } catch (err) {
-        toast(String(err), { kind: "error" });
-      }
-    };
-    confirmOpen = true;
+    confirm = openDialog({
+      title: `Delete ${node.name}?`,
+      message:
+        node.kind === "dir"
+          ? "`" + node.path + "` and everything inside it will be deleted. A checkpoint is created first, so this is undoable from the Undo panel."
+          : "`" + node.path + "` will be deleted. A checkpoint is created first, so this is undoable from the Undo panel.",
+      onConfirm: async () => {
+        try {
+          await deleteEntry(repoId, node.path);
+          removeEntry(tree, node.path);
+          if (selectedPath === node.path) selectedPath = "";
+          toast(`Deleted ${node.path}`);
+        } catch (err) {
+          toast(String(err), { kind: "error" });
+        }
+      },
+    });
   }
 
   // --- Context menu -----------------------------------------------------------
@@ -881,21 +892,35 @@
   </div>
 
   <PromptDialog
-    bind:open={promptOpen}
-    title={promptTitle}
-    message={promptMessage}
-    placeholder={promptTitle === "New file" ? "path/to/file.ts" : "folder-name"}
-    initial={promptInitial}
-    confirmLabel={promptConfirm}
-    onSubmit={promptSubmit}
+    bind:open={
+      () => prompt.open,
+      (v) => {
+        if (!v) prompt = closedDialog();
+      }
+    }
+    title={prompt.open ? prompt.title : ""}
+    message={prompt.open ? prompt.message : ""}
+    placeholder={prompt.open ? prompt.placeholder : ""}
+    initial={prompt.open ? prompt.initial : ""}
+    confirmLabel={prompt.open ? prompt.confirmLabel : "Create"}
+    onSubmit={(value) => {
+      if (prompt.open) void prompt.onSubmit(value);
+    }}
   />
   <ConfirmDialog
-    bind:open={confirmOpen}
-    title={confirmTitle}
-    message={confirmMessage}
+    bind:open={
+      () => confirm.open,
+      (v) => {
+        if (!v) confirm = closedDialog();
+      }
+    }
+    title={confirm.open ? confirm.title : ""}
+    message={confirm.open ? confirm.message : ""}
     confirmLabel="Delete"
     danger
-    onConfirm={confirmSubmit}
+    onConfirm={() => {
+      if (confirm.open) void confirm.onConfirm();
+    }}
   />
 </div>
 
