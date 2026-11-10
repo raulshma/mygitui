@@ -13,6 +13,11 @@ export default defineConfig({
   use: {
     baseURL: "http://127.0.0.1:1420",
   },
+  // Popouts boot behind a dynamic `import()`; on a cold Vite dev server the
+  // first parallel workers can wait several seconds for on-demand compiles.
+  // 5s (the default) flakes there; the app itself renders as soon as the
+  // chunk arrives.
+  expect: { timeout: 10_000 },
   webServer: {
     command: "npm run dev",
     url: "http://127.0.0.1:1420",
