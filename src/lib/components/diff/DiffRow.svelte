@@ -74,6 +74,8 @@
     onDiscardSelection = undefined,
     /** M12 AI: explain this hunk (viewer opens its explain panel). */
     onExplainHunk = undefined,
+    /** A hunk mutation is in flight — positional targets may be stale. */
+    actionBusy = false,
   }: {
     row: DiffRow;
     wrap?: boolean;
@@ -100,6 +102,7 @@
     onStageSelection?: ((fileIndex: number, hunkIndex: number) => void) | undefined;
     onDiscardSelection?: ((fileIndex: number, hunkIndex: number) => void) | undefined;
     onExplainHunk?: ((fileIndex: number, hunkIndex: number) => void) | undefined;
+    actionBusy?: boolean;
   } = $props();
 
   /**
@@ -235,7 +238,8 @@
       {#if selectionCount > 0 && onStageSelection}
         <button
           type="button"
-          class="sel cursor-pointer rounded-lg border border-primary bg-background px-2 py-px font-sans text-ui-tiny font-semibold text-primary"
+          class="sel cursor-pointer rounded-lg border border-primary bg-background px-2 py-px font-sans text-ui-tiny font-semibold text-primary disabled:cursor-not-allowed disabled:opacity-50"
+          disabled={actionBusy}
           onclick={(e) => {
             e.stopPropagation();
             onStageSelection?.(row.fileIndex, row.hunkIndex);
@@ -245,7 +249,8 @@
       {#if selectionCount > 0 && onDiscardSelection}
         <button
           type="button"
-          class="sel discard cursor-pointer rounded-lg border border-primary bg-background px-2 py-px font-sans text-ui-tiny font-semibold text-destructive"
+          class="sel discard cursor-pointer rounded-lg border border-primary bg-background px-2 py-px font-sans text-ui-tiny font-semibold text-destructive disabled:cursor-not-allowed disabled:opacity-50"
+          disabled={actionBusy}
           onclick={(e) => {
             e.stopPropagation();
             onDiscardSelection?.(row.fileIndex, row.hunkIndex);
@@ -255,14 +260,16 @@
       {#if onStageHunk}
         <button
           type="button"
-          class="cursor-pointer rounded-lg border border-border bg-background px-2 py-px font-sans text-ui-tiny text-foreground"
+          class="cursor-pointer rounded-lg border border-border bg-background px-2 py-px font-sans text-ui-tiny text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+          disabled={actionBusy}
           onclick={() => onStageHunk?.(row.fileIndex, row.hunkIndex)}
         >{stageLabel}</button>
       {/if}
       {#if onDiscardHunk}
         <button
           type="button"
-          class="discard cursor-pointer rounded-lg border border-border bg-background px-2 py-px font-sans text-ui-tiny text-destructive"
+          class="discard cursor-pointer rounded-lg border border-border bg-background px-2 py-px font-sans text-ui-tiny text-destructive disabled:cursor-not-allowed disabled:opacity-50"
+          disabled={actionBusy}
           onclick={() => onDiscardHunk?.(row.fileIndex, row.hunkIndex)}
         >Discard hunk</button>
       {/if}

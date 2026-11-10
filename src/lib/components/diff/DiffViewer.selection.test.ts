@@ -249,6 +249,29 @@ describe("DiffViewer line selection", () => {
     });
   });
 
+  it("ignores a second hunk discard while the first is in flight", async () => {
+    // A double-click's second event would otherwise re-target per-hunk
+    // indices against a diff the first discard is about to invalidate.
+    let release!: () => void;
+    const transport = vi.fn(
+      () =>
+        new Promise<unknown>((resolve) => {
+          release = () => resolve(undefined);
+        }),
+    );
+    setTransport(transport);
+    const { getByText } = mountViewer();
+    const button = getByText("Discard hunk") as HTMLButtonElement;
+
+    fireEvent.click(button);
+    fireEvent.click(button);
+    await tick();
+
+    expect(transport).toHaveBeenCalledTimes(1);
+    expect(button.disabled).toBe(true);
+    release();
+  });
+
   it("Unstage mode relabels the action and sends unstage: true", async () => {
     const transport = vi.fn(recordingTransport());
     setTransport(transport);

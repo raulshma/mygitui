@@ -256,32 +256,79 @@
 
   // -- M9 F6: hunk staging / discard ------------------------------------------
 
+  /**
+   * One hunk mutation at a time. Targets are positional (`path` + hunk
+   * index), so a double-click fired before the refreshed diff lands would
+   * act on indices that no longer describe what the user clicked — a
+   * discard could silently drop the wrong hunk. Actions ignore calls while
+   * busy; the flag clears when the parent's refreshed `files` arrive, on
+   * failure, or after a safety timeout (in case no refresh follows).
+   */
+  const MUTATION_GUARD_MS = 4000;
+  let mutating = $state(false);
+  let mutationTimer: ReturnType<typeof setTimeout> | null = null;
+
+  function beginMutation(): boolean {
+    if (mutating) return false;
+    mutating = true;
+    mutationTimer = setTimeout(() => {
+      mutationTimer = null;
+      mutating = false;
+    }, MUTATION_GUARD_MS);
+    return true;
+  }
+
+  function endMutation(): void {
+    if (mutationTimer !== null) {
+      clearTimeout(mutationTimer);
+      mutationTimer = null;
+    }
+    mutating = false;
+  }
+
+  // The refreshed diff is the natural "done" signal: old indices are gone,
+  // so the next action is safe again.
+  let lastFiles: FileDiff[] | undefined;
+  $effect(() => {
+    const current = files;
+    if (lastFiles === undefined) {
+      lastFiles = current;
+      return;
+    }
+    if (current !== lastFiles) {
+      lastFiles = current;
+      endMutation();
+    }
+  });
+
   function stageHunk(fileIndex: number, hunkIndex: number): void {
     if (!repoId || !hunkStaging) return;
     const file = files[fileIndex];
-    if (!file) return;
+    if (!file || !beginMutation()) return;
     const unstage = hunkStaging === "unstage";
     stage(repoId, {
       targets: [{ hunk: { path: file.path, hunk: hunkIndex } }],
       unstage,
     })
       .then(() => onMutated?.())
-      .catch((err: unknown) =>
+      .catch((err: unknown) => {
+        endMutation();
         toast(`${unstage ? "Unstage" : "Stage"} failed: ${describeError(err)}`, {
           kind: "error",
-        }),
-      );
+        });
+      });
   }
 
   function discardHunk(fileIndex: number, hunkIndex: number): void {
     if (!repoId) return;
     const file = files[fileIndex];
-    if (!file) return;
+    if (!file || !beginMutation()) return;
     discard(repoId, [{ hunk: { path: file.path, hunk: hunkIndex } }])
       .then(() => onMutated?.())
-      .catch((err: unknown) =>
-        toast(`Discard failed: ${describeError(err)}`, { kind: "error" }),
-      );
+      .catch((err: unknown) => {
+        endMutation();
+        toast(`Discard failed: ${describeError(err)}`, { kind: "error" });
+      });
   }
 
   // -- M12: line-granular selection -------------------------------------------
@@ -326,7 +373,7 @@
   function stageSelection(fileIndex: number, hunkIndex: number): void {
     if (!repoId || !hunkStaging || !selection) return;
     const file = files[fileIndex];
-    if (!file) return;
+    if (!file || !beginMutation()) return;
     const unstage = hunkStaging === "unstage";
     stage(repoId, {
       targets: [
@@ -344,18 +391,19 @@
         selectionCtl.clearLines();
         onMutated?.();
       })
-      .catch((err: unknown) =>
+      .catch((err: unknown) => {
+        endMutation();
         toast(
           `${unstage ? "Unstage" : "Stage"} selected failed: ${describeError(err)}`,
           { kind: "error" },
-        ),
-      );
+        );
+      });
   }
 
   function discardSelection(fileIndex: number, hunkIndex: number): void {
     if (!repoId || !hunkDiscard || !selection) return;
     const file = files[fileIndex];
-    if (!file) return;
+    if (!file || !beginMutation()) return;
     discard(repoId, [
       {
         lines: {
@@ -369,9 +417,10 @@
         selectionCtl.clearLines();
         onMutated?.();
       })
-      .catch((err: unknown) =>
-        toast(`Discard selected failed: ${describeError(err)}`, { kind: "error" }),
-      );
+      .catch((err: unknown) => {
+        endMutation();
+        toast(`Discard selected failed: ${describeError(err)}`, { kind: "error" });
+      });
   }
 
   // Escape anywhere (and clicks elsewhere in the diff) clear the selection.
@@ -667,6 +716,7 @@
                 {onLoadImage}
                 onStageHunk={repoId && hunkStaging ? stageHunk : undefined}
                 onDiscardHunk={repoId && hunkDiscard ? discardHunk : undefined}
+                actionBusy={mutating}
                 stageLabel={hunkStaging === "unstage" ? "Unstage hunk" : "Stage hunk"}
                 filePath={syntaxEnabled
                   ? (files[model.fileIndexes[slice.firstRow + i]]?.path ?? null)
