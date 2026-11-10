@@ -930,6 +930,7 @@ impl RemoteGitEngine {
         let output = self.block(self.session.exec_stream(
             &cmd,
             LONG_EXEC_TIMEOUT,
+            || false,
             |_is_stderr, line| {
                 if let Some(p) = parse_transfer_line(line) {
                     transfer = p;
@@ -964,6 +965,7 @@ impl RemoteGitEngine {
         let output = self.block(self.session.exec_stream(
             cmd,
             LONG_EXEC_TIMEOUT,
+            || false,
             |_is_stderr, line| {
                 if let Some(p) = parse_transfer_line(line) {
                     last = p;

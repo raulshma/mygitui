@@ -67,6 +67,7 @@ impl RemoteActionRegistry {
                 let result = tauri::async_runtime::block_on(git.session.exec_stream(
                     &cmd,
                     std::time::Duration::from_secs(60 * 60),
+                    || cancelled.load(Ordering::SeqCst),
                     |_is_stderr, line| {
                         // Cancel aborts the exec itself: returning false
                         // makes the transport drop the channel, so the

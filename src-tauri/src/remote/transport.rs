@@ -579,27 +579,33 @@ impl DeviceSession {
     }
 
     /// Run one remote command, streaming complete stdout/stderr LINES to
-    /// `on_line` as they arrive (progress bars, live op logs). `on_line`
-    /// returns `false` to abort: the channel is dropped (the remote process
-    /// gets the connection-closed SIGHUP). Like [`Self::exec`], failures
-    /// after the command was sent are NOT retried — a partially-seen
+    /// `on_line` as they arrive (progress bars, live op logs). `should_abort`
+    /// is polled between output waits, so a quiet command (no newline for a
+    /// while) still honours Cancel promptly; `on_line` returning `false`
+    /// aborts with the same effect: the channel is dropped (the remote
+    /// process gets the connection-closed SIGHUP). Like [`Self::exec`],
+    /// failures after the command was sent are NOT retried — a partially-seen
     /// `git push` may have completed on the device.
     pub async fn exec_stream(
         &self,
         command: &str,
         timeout: Duration,
+        should_abort: impl Fn() -> bool + Send,
         mut on_line: impl FnMut(bool, &str) -> bool + Send,
     ) -> Result<ExecOutput, String> {
         let mut channel = self.open_session_channel().await?;
-        Self::drive_stream(&mut channel, command, timeout, &mut on_line).await
+        Self::drive_stream(&mut channel, command, timeout, &should_abort, &mut on_line).await
     }
 
     async fn drive_stream(
         channel: &mut Channel<russh::client::Msg>,
         command: &str,
         timeout: Duration,
+        should_abort: &(dyn Fn() -> bool + Send),
         on_line: &mut impl FnMut(bool, &str) -> bool,
     ) -> Result<ExecOutput, String> {
+        // How often a quiet stream re-checks `should_abort`.
+        const CANCEL_POLL: Duration = Duration::from_millis(100);
         channel
             .exec(true, command.as_bytes().to_vec())
             .await
@@ -609,6 +615,7 @@ impl DeviceSession {
         let mut out_buf: Vec<u8> = Vec::new();
         let mut err_buf: Vec<u8> = Vec::new();
         let mut exit_code: Option<u32> = None;
+        let mut idle = Duration::ZERO;
         let mut feed =
             |buf: &mut Vec<u8>, data: &[u8], is_stderr: bool, total: &mut Vec<u8>| -> bool {
                 if total.len() + data.len() > MAX_EXEC_BYTES {
@@ -626,23 +633,40 @@ impl DeviceSession {
                 true
             };
         loop {
-            match tokio::time::timeout(timeout, channel.wait()).await {
+            if should_abort() {
+                return Err(EXEC_CANCELLED.to_string());
+            }
+            // Slice the idle wait so Cancel is noticed even while the
+            // command produces no output; `idle` keeps the original
+            // "no message for `timeout`" semantics across slices.
+            let wait = CANCEL_POLL.min(timeout.saturating_sub(idle));
+            match tokio::time::timeout(wait, channel.wait()).await {
+                Err(_) => {
+                    idle += wait;
+                    if idle >= timeout {
+                        return Err("remote command timed out".to_string());
+                    }
+                }
                 Ok(None) => break,
                 Ok(Some(ChannelMsg::Data { data })) => {
+                    idle = Duration::ZERO;
                     if !feed(&mut out_buf, &data, false, &mut stdout) {
                         return Err(EXEC_CANCELLED.to_string());
                     }
                 }
                 Ok(Some(ChannelMsg::ExtendedData { data, .. })) => {
+                    idle = Duration::ZERO;
                     if !feed(&mut err_buf, &data, true, &mut stderr) {
                         return Err(EXEC_CANCELLED.to_string());
                     }
                 }
-                Ok(Some(ChannelMsg::ExitStatus { exit_status })) => exit_code = Some(exit_status),
-                Ok(Some(ChannelMsg::Eof)) => {}
+                Ok(Some(ChannelMsg::ExitStatus { exit_status })) => {
+                    idle = Duration::ZERO;
+                    exit_code = Some(exit_status);
+                }
+                Ok(Some(ChannelMsg::Eof)) => idle = Duration::ZERO,
                 Ok(Some(ChannelMsg::Close)) => break,
-                Ok(Some(_)) => {}
-                Err(_) => return Err("remote command timed out".to_string()),
+                Ok(Some(_)) => idle = Duration::ZERO,
             }
         }
         // Flush trailing partial lines.
