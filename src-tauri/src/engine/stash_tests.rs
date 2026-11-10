@@ -445,11 +445,20 @@ fn worktree_remove_rejects_dirty_linked_worktrees_without_losing_data() {
             .worktree_remove_impl(&repo, "wt-dirty", false)
             .expect_err("non-force removal must reject local changes");
         assert_eq!(std::fs::read(&index_path).unwrap(), index_before, "{dirty}");
-        assert_eq!(std::fs::read(index_path.with_file_name("HEAD")).unwrap(), head_before);
-        assert_eq!(std::fs::read(wt_path.join("a.txt")).unwrap(), tracked_before);
+        assert_eq!(
+            std::fs::read(index_path.with_file_name("HEAD")).unwrap(),
+            head_before
+        );
+        assert_eq!(
+            std::fs::read(wt_path.join("a.txt")).unwrap(),
+            tracked_before
+        );
         assert_eq!(std::fs::read(wt_path.join(".git")).unwrap(), gitfile_before);
         if matches!(dirty, "untracked" | "mixed") {
-            assert_eq!(std::fs::read(wt_path.join("scratch/data.txt")).unwrap(), b"untracked bytes\n");
+            assert_eq!(
+                std::fs::read(wt_path.join("scratch/data.txt")).unwrap(),
+                b"untracked bytes\n"
+            );
         }
         assert!(repo.find_worktree("wt-dirty").is_ok());
 
@@ -472,7 +481,9 @@ fn worktree_remove_matches_git_for_ignored_only_worktrees() {
     std::fs::write(wt_path.join("cache.ignored"), "ignored cache\n").unwrap();
 
     // Git worktree remove treats ignored-only files as clean (unlike untracked).
-    ENGINE.worktree_remove_impl(&repo, "wt-ignored", false).unwrap();
+    ENGINE
+        .worktree_remove_impl(&repo, "wt-ignored", false)
+        .unwrap();
     assert!(!wt_path.exists());
 }
 

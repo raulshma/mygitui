@@ -324,8 +324,12 @@ fn assert_shell_responds(registry: &PtyRegistry, id: &str, sink: &CollectorPtySi
 fn exiting_one_session_keeps_other_session_live() {
     let registry = PtyRegistry::default();
     let sink = CollectorPtySink::shared();
-    let b = spawn_session(&registry, spec(Some(lifecycle_shell_command())), sink.clone())
-        .expect("spawn B");
+    let b = spawn_session(
+        &registry,
+        spec(Some(lifecycle_shell_command())),
+        sink.clone(),
+    )
+    .expect("spawn B");
     assert_shell_responds(&registry, &b, &sink);
     let a = spawn_session(
         &registry,

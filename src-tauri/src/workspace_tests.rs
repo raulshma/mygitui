@@ -352,9 +352,15 @@ fn delete_entry_refuses_ignored_untracked_file_without_losing_bytes() {
     touch(&root, "local.sqlite", bytes);
 
     let result = delete_entry_impl(&root, "local.sqlite");
-    assert!(result.is_err(), "ignored data must not be deleted: {result:?}");
+    assert!(
+        result.is_err(),
+        "ignored data must not be deleted: {result:?}"
+    );
     let error = result.unwrap_err();
-    assert!(error.contains("ignored") && error.contains("local.sqlite"), "{error}");
+    assert!(
+        error.contains("ignored") && error.contains("local.sqlite"),
+        "{error}"
+    );
     assert!(error.contains("Undo") && error.contains("move"), "{error}");
     assert_eq!(fs::read(root.join("local.sqlite")).unwrap(), bytes);
     let _ = fs::remove_dir_all(&root);
@@ -368,7 +374,10 @@ fn delete_entry_refuses_ignored_untracked_directory() {
     touch(&root, "ignored-dir/cache.bin", b"cache bytes");
 
     let result = delete_entry_impl(&root, "ignored-dir");
-    assert!(result.is_err(), "ignored tree must not be deleted: {result:?}");
+    assert!(
+        result.is_err(),
+        "ignored tree must not be deleted: {result:?}"
+    );
     assert_eq!(
         fs::read(root.join("ignored-dir/cache.bin")).unwrap(),
         b"cache bytes"

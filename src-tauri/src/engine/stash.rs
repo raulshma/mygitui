@@ -26,8 +26,8 @@ use std::path::{Path, PathBuf};
 
 use git2::build::CheckoutBuilder;
 use git2::{
-    BranchType, ErrorCode, Repository, StashFlags, StatusOptions, Worktree,
-    WorktreeAddOptions, WorktreeLockStatus, WorktreePruneOptions,
+    BranchType, ErrorCode, Repository, StashFlags, StatusOptions, Worktree, WorktreeAddOptions,
+    WorktreeLockStatus, WorktreePruneOptions,
 };
 
 use super::git_engine::{EngineError, EngineResult};

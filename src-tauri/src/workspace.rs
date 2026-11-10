@@ -651,7 +651,8 @@ fn guard_ignored_untracked(
     let ignored = repo.status_should_ignore(rel).unwrap_or(false)
         || (is_dir && {
             let dir_form = format!("{}/", path.trim_end_matches('/'));
-            repo.status_should_ignore(Path::new(&dir_form)).unwrap_or(false)
+            repo.status_should_ignore(Path::new(&dir_form))
+                .unwrap_or(false)
         });
     if !ignored {
         return Ok(());
@@ -661,9 +662,9 @@ fn guard_ignored_untracked(
     };
     let tracked = if is_dir {
         let prefix = format!("{}/", path.trim_end_matches('/'));
-        index.iter().any(|entry| {
-            String::from_utf8_lossy(&entry.path).starts_with(&prefix)
-        })
+        index
+            .iter()
+            .any(|entry| String::from_utf8_lossy(&entry.path).starts_with(&prefix))
     } else {
         index.get_path(rel, 0).is_some()
     };
