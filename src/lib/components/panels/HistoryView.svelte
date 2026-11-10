@@ -189,6 +189,8 @@
 
   /** Multi-selection as row indices (list order); shift-click range. */
   let multiIdx = $state<number[]>([]);
+  /** Membership view of `multiIdx` — the row template asks 3× per visible row. */
+  const multiSet = $derived(new Set(multiIdx));
   /** Anchor row for shift-click ranges (last plain click). */
   let anchorIdx: number | null = null;
   /** True while a cherry-pick/revert IPC is in flight. */
@@ -1202,14 +1204,14 @@
               id={`commit-row-${v.idx}`}
               class="row absolute inset-x-0 flex cursor-pointer items-center border-b border-border/45 py-0 text-ui-base {sidebar ? "gap-1 pr-2 pl-2" : "gap-1.5 pr-2.5 pl-3"} {v.idx === selectedIdx
                 ? "bg-secondary text-secondary-foreground"
-                : multiIdx.includes(v.idx)
+                : multiSet.has(v.idx)
                   ? "bg-secondary/45 hover:bg-secondary/60"
                   : "hover:bg-accent"}"
               class:selected={v.idx === selectedIdx}
-              class:multisel={v.idx !== selectedIdx && multiIdx.includes(v.idx)}
+              class:multisel={v.idx !== selectedIdx && multiSet.has(v.idx)}
               role="option"
               tabindex="-1"
-              aria-selected={v.idx === selectedIdx || multiIdx.includes(v.idx)}
+              aria-selected={v.idx === selectedIdx || multiSet.has(v.idx)}
               style:top={`${v.idx * ROW_HEIGHT}px`}
               style:height={`${ROW_HEIGHT}px`}
               onclick={(e) => onRowClick(v.commit.sha, v.idx, e)}

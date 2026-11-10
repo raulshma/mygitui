@@ -92,6 +92,7 @@
   let selectedInfo = $state<CommitInfo | null>(null);
   /** Multi-selection as absolute row indices (shift-click range). */
   let multiIdx = $state<number[]>([]);
+  const multiSet = $derived(new Set(multiIdx));
   /** Anchor row for shift-click ranges (last plain click). */
   let anchorIdx: number | null = null;
   let detailOpen = $state(false);
@@ -235,15 +236,15 @@
             class="row flex cursor-pointer select-none items-center justify-between gap-4 border-b border-border py-0.5 {commit.sha ===
             selectedSha
               ? 'bg-primary/15 text-foreground'
-              : multiIdx.includes(idx)
+              : multiSet.has(idx)
                 ? 'bg-primary/5'
                 : 'hover:bg-muted/50'}"
             class:selected={commit.sha === selectedSha}
-            class:multisel={commit.sha !== selectedSha && multiIdx.includes(idx)}
+            class:multisel={commit.sha !== selectedSha && multiSet.has(idx)}
             style:height="{ROW_HEIGHT}px"
             role="option"
             tabindex="-1"
-            aria-selected={commit.sha === selectedSha || multiIdx.includes(idx)}
+            aria-selected={commit.sha === selectedSha || multiSet.has(idx)}
             onclick={(e) => onRowClick(commit, idx, e)}
             onkeydown={(e) => onRowKeydown(commit, idx, e)}
           >

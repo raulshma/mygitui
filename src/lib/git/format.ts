@@ -68,13 +68,36 @@ const MINUTE = 60;
 const HOUR = 60 * MINUTE;
 const DAY = 24 * HOUR;
 
+/*
+ * Intl constructors resolve locale data and are far too expensive to build
+ * per call: these run once per rendered row per scroll frame in the history,
+ * blame and file-history lists. One formatter per distinct locale/options
+ * key, reused for the session.
+ */
+const relativeFormatters = new Map<string, Intl.RelativeTimeFormat>();
+const dateFormatters = new Map<string, Intl.DateTimeFormat>();
+
+/** Caps the caches so exotic caller-supplied options can't grow them forever. */
+const FORMATTER_CACHE_LIMIT = 32;
+
+function cached<K, V>(cache: Map<K, V>, key: K, create: () => V): V {
+  const hit = cache.get(key);
+  if (hit !== undefined) return hit;
+  const made = create();
+  if (cache.size >= FORMATTER_CACHE_LIMIT) cache.clear();
+  cache.set(key, made);
+  return made;
+}
+
 /** `Intl.RelativeTimeFormat` with auto bucketing: "now", "3 days ago", … */
 export function formatRelativeTime(
   unixSeconds: number,
   opts: RelativeTimeOptions = {},
 ): string {
   const now = opts.now ?? Math.floor(Date.now() / 1000);
-  const rtf = new Intl.RelativeTimeFormat(opts.locale, { numeric: "auto" });
+  const rtf = cached(relativeFormatters, opts.locale ?? "", () =>
+    new Intl.RelativeTimeFormat(opts.locale, { numeric: "auto" }),
+  );
   const diff = unixSeconds - now;
   const abs = Math.abs(diff);
   if (abs < MINUTE) return rtf.format(diff, "second");
@@ -92,11 +115,15 @@ export function formatDateTime(
   locale?: string,
   opts?: Intl.DateTimeFormatOptions,
 ): string {
-  return new Intl.DateTimeFormat(locale, {
+  const resolved: Intl.DateTimeFormatOptions = {
     dateStyle: "medium",
     timeStyle: "short",
     ...opts,
-  }).format(new Date(unixSeconds * 1000));
+  };
+  const dtf = cached(dateFormatters, `${locale ?? ""}|${JSON.stringify(resolved)}`, () =>
+    new Intl.DateTimeFormat(locale, resolved),
+  );
+  return dtf.format(new Date(unixSeconds * 1000));
 }
 
 // ---------------------------------------------------------------------------

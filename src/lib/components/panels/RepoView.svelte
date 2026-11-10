@@ -291,6 +291,8 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
 
   /** The active layout for this repo (overlay > preset > default). */
   const resolved = $derived(layouts.active(root));
+  /** Resolved once per rule change, not once per painted graph row. */
+  const branchRules = $derived(branchColorStore.rules(root));
   /** Panels not currently placed (candidates for "Add panel" menus). */
   const hiddenPanels = $derived(
     TREE_PANELS.filter((p) => !visiblePanels(resolved.layout.main).includes(p)),
@@ -1418,7 +1420,7 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
       variant="sidebar"
       onPopout={popOutHistory}
       bookmarks={bookmarks.shas(root)}
-      branchColors={(refs) => branchColorForRefs(refs, branchColorStore.rules(root))}
+      branchColors={(refs) => branchColorForRefs(refs, branchRules)}
       onSelectCommit={onHistorySelect}
       onCompareResult={onHistoryCompare}
       onActionsChange={onHistoryActions}

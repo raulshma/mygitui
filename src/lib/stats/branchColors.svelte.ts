@@ -110,6 +110,9 @@ function parseRules(raw: string | null): BranchColorRule[] {
   return out;
 }
 
+/** Shared empty result so unknown roots do not allocate on every read. */
+const NO_RULES: BranchColorRule[] = [];
+
 export class BranchColorStore {
   #byRoot: Record<string, BranchColorRule[]> = $state({});
   readonly #storage: StorageLike | null;
@@ -130,7 +133,7 @@ export class BranchColorStore {
 
   /** Rules of `root`, array order = match priority (empty when unknown). */
   rules(root: string): BranchColorRule[] {
-    return this.#byRoot[root] ?? [];
+    return this.#byRoot[root] ?? NO_RULES;
   }
 
   /** Appends a rule (both fields required; duplicate patterns rejected). */

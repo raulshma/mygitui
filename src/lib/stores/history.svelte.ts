@@ -53,14 +53,23 @@ function errorMessage(err: unknown): string {
 }
 
 export class HistoryStore {
-  /** Released `LogPage`s — the source GraphCanvas renders from. */
-  pages: LogPage[] = $state([]);
+  /**
+   * Released `LogPage`s — the source GraphCanvas renders from.
+   *
+   * `$state.raw` on both log fields: a 250k-commit log would otherwise be
+   * deep-proxied, and the canvas paint loop reads `row.lane` / `edge.from`
+   * through those proxies every scroll frame, re-collecting thousands of
+   * dependencies per frame. Reactivity is carried by the wholesale
+   * reassignment in `#release()` (and the resets), never by inner mutation,
+   * so raw arrays signal readers exactly the same way.
+   */
+  pages: LogPage[] = $state.raw([]);
   /**
    * Flattened commits + index-aligned graph rows (derived cache). Replaced by
    * a fresh wrapper object per release so rune readers re-run; the inner
    * arrays are reused (appended in place — never reflattened from scratch).
    */
-  flat: FlatLog = $state({ commits: [], rows: [] });
+  flat: FlatLog = $state.raw({ commits: [], rows: [] });
   /** Filter-bar state (typed strings; serialized via `toLogFilter`). */
   filter: HistoryFilterFields = $state({ ...EMPTY_FILTER });
   /** True while a `repo_log_stream` request is in flight. */
