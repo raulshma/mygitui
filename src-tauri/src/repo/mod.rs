@@ -270,7 +270,11 @@ impl RepoManager {
                 .ops()
                 .set_sink(Arc::new(crate::ops::TauriEventSink::new(app.clone())));
             let mut slot = handle.watcher.lock();
-            if slot.is_none() {
+            // A watcher that exhausted its restart budget stays in the slot
+            // with a dead thread; replacing it makes "reopen the repo to
+            // retry" literally true. Without this check, `repo_open` reused
+            // the handle and the repo silently watched nothing forever.
+            if slot.as_ref().is_none_or(|w| w.is_dead()) {
                 let app = app.clone();
                 *slot = Some(RepoWatcher::start(
                     handle.id.clone(),

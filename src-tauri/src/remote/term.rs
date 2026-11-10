@@ -62,13 +62,23 @@ impl ShellSink for TauriShellSink {
     }
 }
 
+/// One live remote shell. Abstracted behind a trait so registry lifecycle
+/// tests can install fakes (same headless-testability pattern as
+/// [`ShellSink`]); production impl is [`ShellSession`].
+trait ShellChannel: Send + Sync {
+    fn write_bytes(&self, data: &str) -> Result<(), String>;
+    fn resize(&self, rows: u32, cols: u32) -> Result<(), String>;
+    /// Flip the closed flag and close the write half (kill path).
+    fn close(&self);
+}
+
 struct ShellSession {
     write: Mutex<ChannelWriteHalf<Msg>>,
     /// Flipped by kill; the reader task exits on sight.
     closed: Arc<AtomicBool>,
 }
 
-impl ShellSession {
+impl ShellChannel for ShellSession {
     fn write_bytes(&self, data: &str) -> Result<(), String> {
         let write = self.write.lock();
         tauri::async_runtime::block_on(async {
@@ -114,8 +124,33 @@ pub struct RemoteShellRegistry {
 
 #[derive(Default)]
 struct RegistryInner {
-    sessions: Mutex<HashMap<String, Arc<ShellSession>>>,
+    sessions: Mutex<HashMap<String, Arc<dyn ShellChannel>>>,
     counter: AtomicU64,
+}
+
+impl RegistryInner {
+    /// End-of-life for one session: unregister it, then announce the exit.
+    /// Removal happens BEFORE the event (mirrors `pty.rs`'s exit waiter and
+    /// the `pty-exit` contract: "the session is unregistered before it
+    /// fires"). Idempotent — the entry may already be gone via `kill`, and
+    /// unknown ids still emit the exit event.
+    fn finish_session(&self, session_id: &str, code: i32, sink: &dyn ShellSink) {
+        self.sessions.lock().remove(session_id);
+        sink.emit_exit(&PtyExit {
+            session_id: session_id.to_owned(),
+            code,
+        });
+    }
+
+    /// Cap check for `create` (extracted so tests can exercise it with
+    /// manually inserted sessions).
+    fn ensure_slot(&self) -> Result<(), String> {
+        let sessions = self.sessions.lock();
+        if sessions.len() >= MAX_SESSIONS {
+            return Err(format!("too many terminal sessions (max {MAX_SESSIONS})"));
+        }
+        Ok(())
+    }
 }
 
 impl RemoteShellRegistry {
@@ -129,12 +164,7 @@ impl RemoteShellRegistry {
         cols: u16,
         sink: Arc<dyn ShellSink>,
     ) -> Result<String, String> {
-        {
-            let sessions = self.inner.sessions.lock();
-            if sessions.len() >= MAX_SESSIONS {
-                return Err(format!("too many terminal sessions (max {MAX_SESSIONS})"));
-            }
-        }
+        self.inner.ensure_slot()?;
         let channel = tauri::async_runtime::block_on(
             remote
                 .git()
@@ -147,7 +177,7 @@ impl RemoteShellRegistry {
             self.inner.counter.fetch_add(1, Ordering::Relaxed)
         );
         let closed = Arc::new(AtomicBool::new(false));
-        let session = Arc::new(ShellSession {
+        let session: Arc<dyn ShellChannel> = Arc::new(ShellSession {
             write: Mutex::new(write_half),
             closed: closed.clone(),
         });
@@ -156,9 +186,15 @@ impl RemoteShellRegistry {
             .lock()
             .insert(id.clone(), session.clone());
 
-        // Reader task: stream decoded output through the coalescer.
+        // Reader task: stream decoded output through the coalescer. The
+        // task owns the session's end-of-life: when the channel closes on
+        // the device side (shell exit, network drop) nobody else would call
+        // `rshell_kill`, so the reader unregisters the session itself —
+        // exactly like the local pty's exit waiter. Without this, entries
+        // accumulate until `rshell_create` hits the session cap.
+        let inner = self.inner.clone();
         let reader_id = id.clone();
-        std::thread::Builder::new()
+        let reader = std::thread::Builder::new()
             .name(format!("rshell-read-{reader_id}"))
             .spawn(move || {
                 let mut pending: Vec<u8> = Vec::new();
@@ -207,14 +243,17 @@ impl RemoteShellRegistry {
                         Ok(Some(_)) => {}
                     }
                 }
-                // Final flush + exit event.
+                // Final flush, unregister, exit event.
                 flush_pending(&mut pending, &mut window_start, &reader_id, sink.as_ref());
-                sink.emit_exit(&PtyExit {
-                    session_id: reader_id,
-                    code: 0,
-                });
-            })
-            .map_err(|e| format!("spawn shell reader: {e}"))?;
+                inner.finish_session(&reader_id, 0, sink.as_ref());
+            });
+        if let Err(e) = reader {
+            // The session would never unregister itself (no reader task) —
+            // tear it back down instead of leaking a slot.
+            self.inner.sessions.lock().remove(&id);
+            session.close();
+            return Err(format!("spawn shell reader: {e}"));
+        }
         Ok(id)
     }
 
@@ -238,13 +277,119 @@ impl RemoteShellRegistry {
         }
     }
 
-    fn get(&self, session_id: &str) -> Result<Arc<ShellSession>, String> {
+    fn get(&self, session_id: &str) -> Result<Arc<dyn ShellChannel>, String> {
         self.inner
             .sessions
             .lock()
             .get(session_id)
             .cloned()
             .ok_or_else(|| format!("unknown remote shell session: {session_id}"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use std::sync::Mutex as StdMutex;
+
+    #[derive(Default)]
+    struct FakeChannel {
+        closed: StdMutex<Vec<()>>,
+    }
+
+    impl ShellChannel for FakeChannel {
+        fn write_bytes(&self, _data: &str) -> Result<(), String> {
+            Ok(())
+        }
+        fn resize(&self, _rows: u32, _cols: u32) -> Result<(), String> {
+            Ok(())
+        }
+        fn close(&self) {
+            self.closed.lock().unwrap().push(());
+        }
+    }
+
+    #[derive(Default)]
+    struct SinkCollector {
+        exits: StdMutex<Vec<PtyExit>>,
+    }
+
+    impl ShellSink for SinkCollector {
+        fn emit_output(&self, _event: &PtyOutput) {}
+        fn emit_exit(&self, event: &PtyExit) {
+            self.exits.lock().unwrap().push(event.clone());
+        }
+    }
+
+    fn fake(id: &str, inner: &RegistryInner) -> Arc<FakeChannel> {
+        let channel = Arc::new(FakeChannel::default());
+        inner
+            .sessions
+            .lock()
+            .insert(id.to_owned(), channel.clone() as Arc<dyn ShellChannel>);
+        channel
+    }
+
+    /// Device-side close: the reader's finish_session must unregister the
+    /// session (the FE never calls `rshell_kill` for it) BEFORE the exit
+    /// event fires — the leak this regression test pins: 8 device-side
+    /// shell exits used to wedge `rshell_create` at the cap until restart.
+    #[test]
+    fn finish_session_unregisters_then_emits_exit() {
+        let inner = RegistryInner::default();
+        let sink = SinkCollector::default();
+        fake("rshell-a", &inner);
+
+        inner.finish_session("rshell-a", 0, &sink);
+        assert!(inner.sessions.lock().is_empty(), "entry must be removed");
+        let exits = sink.exits.lock().unwrap();
+        assert_eq!(exits.len(), 1);
+        assert_eq!(exits[0].session_id, "rshell-a");
+        assert_eq!(exits[0].code, 0);
+    }
+
+    /// Idempotent end-of-life: after `kill` already removed the entry, the
+    /// reader's finish_session is a no-op removal but still announces the
+    /// exit (the contract: `pty-exit` fires even for killed sessions).
+    #[test]
+    fn finish_session_is_idempotent_and_emits_for_unknown_ids() {
+        let inner = RegistryInner::default();
+        let sink = SinkCollector::default();
+        fake("rshell-a", &inner);
+        inner.sessions.lock().remove("rshell-a"); // kill() got there first
+
+        inner.finish_session("rshell-a", 0, &sink);
+        assert_eq!(sink.exits.lock().unwrap().len(), 1);
+    }
+
+    /// kill(): removes the entry and closes the channel; unknown ids
+    /// return false without touching anything. (Never hold the sessions
+    /// guard across `kill` — the mutex is not reentrant.)
+    #[test]
+    fn kill_removes_and_closes() {
+        let registry = RemoteShellRegistry::default();
+        assert!(!registry.kill("rshell-x"));
+        let channel = Arc::new(FakeChannel::default());
+        registry.inner.sessions.lock().insert(
+            "rshell-x".to_owned(),
+            channel.clone() as Arc<dyn ShellChannel>,
+        );
+        assert!(registry.kill("rshell-x"));
+        assert_eq!(channel.closed.lock().unwrap().len(), 1);
+        assert!(registry.inner.sessions.lock().is_empty());
+        assert!(!registry.kill("rshell-x"));
+    }
+
+    /// The cap check counts live sessions; at MAX it rejects.
+    #[test]
+    fn ensure_slot_rejects_at_cap() {
+        let inner = RegistryInner::default();
+        for i in 0..MAX_SESSIONS {
+            assert!(inner.ensure_slot().is_ok());
+            fake(&format!("rshell-{i}"), &inner);
+        }
+        assert!(inner.ensure_slot().is_err());
     }
 }
 

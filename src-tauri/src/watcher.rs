@@ -21,7 +21,7 @@
 //! `repo-changed` tauri event (payload: [`RepoChangedEvent`]).
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
@@ -328,6 +328,12 @@ enum Feed {
 pub struct RepoWatcher {
     tx: Sender<Feed>,
     thread: Option<JoinHandle<()>>,
+    /// Flipped when the debounce thread exits for any reason. A
+    /// slot-resident watcher can only have exited by exhausting its
+    /// restart budget (`Feed::Shutdown` is sent solely by [`Drop`], which
+    /// removes the watcher from consideration) — `RepoManager::open` uses
+    /// this to replace a dead watcher instead of reusing it forever.
+    dead: Arc<AtomicBool>,
 }
 
 impl RepoWatcher {
@@ -341,19 +347,28 @@ impl RepoWatcher {
         on_batch: impl Fn(RepoChangedEvent) + Send + 'static,
     ) -> RepoWatcher {
         let (tx, rx) = mpsc::channel::<Feed>();
+        let dead = Arc::new(AtomicBool::new(false));
         let thread = thread::Builder::new()
             .name(format!("watcher-{}", repo_id.0))
             .spawn({
                 let tx = tx.clone();
+                let dead = dead.clone();
                 move || {
                     run(rx, tx, repo_id, root, generation, Box::new(on_batch));
+                    dead.store(true, Ordering::Relaxed);
                 }
             })
             .expect("watcher thread spawn");
         RepoWatcher {
             tx,
             thread: Some(thread),
+            dead,
         }
+    }
+
+    /// True once the debounce thread has exited (restart budget spent).
+    pub fn is_dead(&self) -> bool {
+        self.dead.load(Ordering::Relaxed)
     }
 }
 
@@ -464,6 +479,15 @@ fn run(
     let mut watcher = create_watcher(&ctx.root, &tx);
     if watcher.is_none() {
         watcher = restart(&ctx, &tx, &mut attempts);
+        if watcher.is_none() {
+            // Budget spent before the loop even started (e.g. the root
+            // never existed): without a watcher there can be no events,
+            // so park-looping on `rx` would wedge the thread alive-but-
+            // inert forever. Exit and let the `dead` flag flip so
+            // `RepoManager::open` replaces us on the next reopen — the
+            // same contract as the errored path below.
+            return;
+        }
     }
 
     'events: loop {
@@ -829,6 +853,39 @@ mod tests {
         assert!(
             cache.ignores("build/out.obj", false),
             "old pattern survives"
+        );
+    }
+
+    /// A watcher whose every (re)start attempt fails (the root never
+    /// exists) exhausts its budget, exits the debounce thread and must
+    /// flag itself dead — `RepoManager::open` keys the revival on this
+    /// ("reopen the repo to retry").
+    #[test]
+    fn exhausted_restarts_flip_the_dead_flag() {
+        let dead_root = std::env::temp_dir().join(format!(
+            "mygitui-watcher-dead-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        // Deliberately never created: create_watcher fails every time.
+        let watcher = RepoWatcher::start(
+            RepoId("watcher-dead-test".to_owned()),
+            dead_root,
+            Arc::new(AtomicU64::new(0)),
+            |_| {},
+        );
+        assert!(!watcher.is_dead(), "fresh watcher is alive");
+        // 3 backoff attempts (200+500+1000 ms) plus scheduler slack.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < deadline && !watcher.is_dead() {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        assert!(
+            watcher.is_dead(),
+            "watcher must flag itself dead after exhausting restarts"
         );
     }
 }

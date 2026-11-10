@@ -887,10 +887,30 @@ impl DeviceRegistry {
         }
         let session = DeviceSession::new(profile, host_key_store.clone());
         session.ensure_connected().await?;
-        self.sessions
-            .lock()
-            .insert(profile.id.clone(), session.clone());
-        Ok(session)
+        // Another caller may have dialed the same device concurrently:
+        // the first insert wins and the loser disconnects its (fully
+        // authenticated) session. Overwriting instead would leak the
+        // winner's live connection and duplicate the `device-status`
+        // event stream for this device. Check + insert are one lock
+        // scope (atomic against other dialers); the guard never spans
+        // the disconnect await below.
+        let winner = {
+            let mut slots = self.sessions.lock();
+            match slots.get(&profile.id).cloned() {
+                Some(winner) => Some(winner),
+                None => {
+                    slots.insert(profile.id.clone(), session.clone());
+                    None
+                }
+            }
+        };
+        match winner {
+            Some(winner) => {
+                session.disconnect().await;
+                Ok(winner)
+            }
+            None => Ok(session),
+        }
     }
 
     /// Live session without connecting (None when never connected).

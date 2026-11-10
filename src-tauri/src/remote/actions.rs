@@ -58,7 +58,7 @@ impl RemoteActionRegistry {
         let repo_id = repo_id.to_string();
         let name = name.to_string();
         let command = command.to_string();
-        std::thread::Builder::new()
+        let reader = std::thread::Builder::new()
             .name(format!("remote-action-{run_id}"))
             .spawn(move || {
                 // Same trust model as local actions: the command comes from
@@ -103,8 +103,14 @@ impl RemoteActionRegistry {
                 // reports false (mirrors the local registry's done flag).
                 registry.runs.lock().unwrap().remove(&run_id_cleanup);
                 let _ = &git;
-            })
-            .map_err(|e| format!("spawn remote action: {e}"))?;
+            });
+        if let Err(e) = reader {
+            // The run never started: drop the registry entry instead of
+            // leaking it (a stale flag would make `cancel` report true
+            // for a dead run forever).
+            self.inner.runs.lock().unwrap().remove(&run_id);
+            return Err(format!("spawn remote action: {e}"));
+        }
         Ok(run_id)
     }
 

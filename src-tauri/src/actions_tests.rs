@@ -218,6 +218,41 @@ fn cancel_unknown_run_returns_false() {
     assert!(!registry.cancel("act-deadbeef"));
 }
 
+/// `abort` (the launch-wiring failure path) must tear the run down
+/// completely: kill the child, drop the entry and free the per-repo
+/// budget. A leaked `done = false` entry would count against
+/// `running_count_for` forever, rejecting every later action for the
+/// repo after three failed launches.
+#[test]
+fn abort_tears_down_a_run_and_frees_the_budget() {
+    let registry = ActionRegistry::default();
+    let sink = CollectorActionSink::shared();
+    let launch = run_action(&registry, spec("repo-abort", long_command()), sink.clone())
+        .expect("launch long action");
+    assert_eq!(registry.running_count_for("repo-abort"), 1);
+
+    registry.abort(&launch.run_id);
+    assert_eq!(
+        registry.running_count_for("repo-abort"),
+        0,
+        "aborted run must free the budget"
+    );
+    assert!(!registry.cancel(&launch.run_id), "aborted run is unknown");
+
+    // The freed budget accepts a new run for the same repo.
+    let next = run_action(&registry, spec("repo-abort", long_command()), sink.clone())
+        .expect("budget freed after abort");
+    registry.abort(&next.run_id);
+    assert_eq!(registry.running_count_for("repo-abort"), 0);
+}
+
+#[test]
+fn abort_unknown_run_is_a_noop() {
+    let registry = ActionRegistry::default();
+    registry.abort("act-deadbeef");
+    assert_eq!(registry.running_count_for("repo-x"), 0);
+}
+
 #[test]
 fn per_repo_concurrency_is_capped_at_three() {
     let registry = ActionRegistry::default();

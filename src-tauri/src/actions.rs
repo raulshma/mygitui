@@ -252,6 +252,21 @@ impl ActionRegistry {
         let _ = entry.child.lock().kill();
         true
     }
+
+    /// Tear down a run whose launch wiring failed (reader/waiter thread
+    /// spawn error): kill the child and drop the entry. Without this, the
+    /// entry stays `done = false` forever — `running_count_for` keeps
+    /// counting it, so 3 such failures would reject every later action for
+    /// the repo until app restart (the prune retains `!done` entries).
+    pub fn abort(&self, run_id: &str) {
+        let entry = self.inner.runs.lock().remove(run_id);
+        if let Some(entry) = entry {
+            if !entry.done {
+                entry.ctx.cancelled.store(true, Ordering::Relaxed);
+                let _ = entry.child.lock().kill();
+            }
+        }
+    }
 }
 
 /// Handle to a launched action.
@@ -313,34 +328,44 @@ pub fn run_action(
     // One reader per stream; each signals its channel at EOF. The waiter
     // waits for the signals (bounded by READER_GRACE) instead of joining,
     // so a killed shell's grandchild holding the inherited pipe can never
-    // stall the done event.
-    let mut closed = Vec::new();
-    if let Some(stream) = stdout {
-        closed.push(spawn_reader(stream, ctx.clone(), &run_id, "out")?);
-    }
-    if let Some(stream) = stderr {
-        closed.push(spawn_reader(stream, ctx.clone(), &run_id, "err")?);
-    }
+    // stall the done event. Any failure past `register` must abort the
+    // run — a dead entry would poison the per-repo budget (see
+    // [`ActionRegistry::abort`]).
+    let wired = (|| {
+        let mut closed = Vec::new();
+        if let Some(stream) = stdout {
+            closed.push(spawn_reader(stream, ctx.clone(), &run_id, "out")?);
+        }
+        if let Some(stream) = stderr {
+            closed.push(spawn_reader(stream, ctx.clone(), &run_id, "err")?);
+        }
 
-    let wait_ctx = ctx.clone();
-    let wait_run_id = run_id.clone();
-    let wait_registry = registry.clone();
-    std::thread::Builder::new()
-        .name(format!("action-{run_id}"))
-        .spawn(move || {
-            let code = wait_for_exit(&child, closed).unwrap_or(-1);
-            wait_registry.set_done(&wait_run_id);
-            wait_ctx.emit(ActionOutput {
-                run_id: wait_run_id,
-                repo_id: wait_ctx.repo_id.clone(),
-                name: wait_ctx.name.clone(),
-                line: String::new(),
-                done: true,
-                exit_code: Some(code),
-            });
-            let _ = exit_tx.send(code);
-        })
-        .map_err(|e| format!("failed to spawn action waiter: {e}"))?;
+        let wait_ctx = ctx.clone();
+        let wait_run_id = run_id.clone();
+        let wait_registry = registry.clone();
+        std::thread::Builder::new()
+            .name(format!("action-{run_id}"))
+            .spawn(move || {
+                let code = wait_for_exit(&child, closed).unwrap_or(-1);
+                wait_registry.set_done(&wait_run_id);
+                wait_ctx.emit(ActionOutput {
+                    run_id: wait_run_id,
+                    repo_id: wait_ctx.repo_id.clone(),
+                    name: wait_ctx.name.clone(),
+                    line: String::new(),
+                    done: true,
+                    exit_code: Some(code),
+                });
+                let _ = exit_tx.send(code);
+            })
+            .map_err(|e| format!("failed to spawn action waiter: {e}"))?;
+        Ok(())
+    })();
+
+    if let Err(e) = wired {
+        registry.abort(&run_id);
+        return Err(e);
+    }
 
     Ok(ActionLaunch {
         run_id,

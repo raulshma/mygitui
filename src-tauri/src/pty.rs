@@ -44,7 +44,7 @@
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc};
 use std::time::{Duration, Instant};
 
@@ -219,6 +219,9 @@ pub struct PtyRegistry {
 struct RegistryInner {
     sessions: Mutex<HashMap<String, Arc<Session>>>,
     counter: AtomicU64,
+    /// Slots held by in-flight `spawn_session` calls between the cap check
+    /// and the map `insert` (see [`RegistryInner::reserve_slot`]).
+    reserved: AtomicUsize,
 }
 
 impl PtyRegistry {
@@ -230,6 +233,8 @@ impl PtyRegistry {
     }
 
     /// How many sessions are live right now (the cap is [`MAX_SESSIONS`]).
+    // Production reads go through `reserve_slot` now; tests assert on this.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn live_count(&self) -> usize {
         self.inner.sessions.lock().len()
     }
@@ -283,6 +288,50 @@ impl RegistryInner {
     fn remove(&self, session_id: &str) -> Option<Arc<Session>> {
         self.sessions.lock().remove(session_id)
     }
+
+    /// Atomically check the cap and reserve one slot for a spawn in
+    /// flight. `spawn_session` used to check `live_count()` and only
+    /// `insert` after openpty/spawn succeeded — two concurrent
+    /// `pty_create` calls could both pass the check and land at
+    /// `MAX_SESSIONS + 1`. The returned [`Reservation`] is RAII: any
+    /// failure path that returns early releases the slot; call
+    /// [`Reservation::commit`] right after the session is in the map.
+    fn reserve_slot(&self) -> Result<Reservation<'_>, String> {
+        let sessions = self.sessions.lock();
+        let live = sessions.len() + self.reserved.load(Ordering::Relaxed);
+        if live >= MAX_SESSIONS {
+            return Err(format!(
+                "{MAX_SESSIONS} terminal sessions already running; close one first"
+            ));
+        }
+        self.reserved.fetch_add(1, Ordering::Relaxed);
+        Ok(Reservation {
+            inner: self,
+            committed: false,
+        })
+    }
+}
+
+/// One reserved cap slot (RAII; see [`RegistryInner::reserve_slot`]).
+struct Reservation<'a> {
+    inner: &'a RegistryInner,
+    committed: bool,
+}
+
+impl Reservation<'_> {
+    /// The session is registered — the map now accounts for the slot.
+    fn commit(mut self) {
+        self.committed = true;
+        self.inner.reserved.fetch_sub(1, Ordering::Relaxed);
+    }
+}
+
+impl Drop for Reservation<'_> {
+    fn drop(&mut self) {
+        if !self.committed {
+            self.inner.reserved.fetch_sub(1, Ordering::Relaxed);
+        }
+    }
 }
 
 /// Everything needed to launch one session (validated by the caller).
@@ -305,11 +354,11 @@ pub(crate) fn spawn_session(
     spec: SessionSpec,
     sink: Arc<dyn PtySink>,
 ) -> Result<String, String> {
-    if registry.live_count() >= MAX_SESSIONS {
-        return Err(format!(
-            "{MAX_SESSIONS} terminal sessions already running; close one first"
-        ));
-    }
+    // Reserve the cap slot before any side effect; the reservation is
+    // released by RAII if openpty/spawn below fails, and committed once
+    // the session is in the map (any early `?` from here to `commit`
+    // leaves no accounting behind).
+    let reservation = registry.inner.reserve_slot()?;
     let rows = spec.rows.max(1);
     let cols = spec.cols.max(1);
 
@@ -349,6 +398,7 @@ pub(crate) fn spawn_session(
         master: Mutex::new(pair.master),
     });
     registry.insert(&session_id, session.clone());
+    reservation.commit();
 
     spawn_output_pipeline(&session_id, reader, pipeline_writer, sink.clone());
     // The waiter must not own a PtyRegistry clone: dropping that clone would
@@ -635,4 +685,43 @@ pub(crate) fn kill_session(registry: &PtyRegistry, session_id: &str) -> Result<(
         .ok_or_else(|| format!("unknown pty session: {session_id}"))?;
     session.kill();
     Ok(())
+}
+
+#[cfg(test)]
+mod reservation_tests {
+    use super::*;
+
+    /// The cap check and the slot reservation are one atomic step: at
+    /// MAX_SESSIONS the next reserve rejects, and an uncommitted
+    /// reservation released by drop frees its slot again. Pins the
+    /// concurrent-`pty_create` TOCTOU fix (live_count-only checks could
+    /// both pass and overshoot the cap).
+    #[test]
+    fn reserve_slot_is_atomic_and_releases_on_drop() {
+        let inner = RegistryInner::default();
+
+        let mut held = Vec::new();
+        for _ in 0..MAX_SESSIONS {
+            held.push(inner.reserve_slot().expect("reserve under cap"));
+        }
+        assert!(inner.reserve_slot().is_err(), "cap must reject at max");
+
+        drop(held.pop());
+        assert!(
+            inner.reserve_slot().is_ok(),
+            "released reservation must free a slot"
+        );
+    }
+
+    /// commit() hands the slot over to the map's accounting: the reserved
+    /// counter drops back to zero (a committed reservation must not keep
+    /// the cap blocked after `insert`).
+    #[test]
+    fn committed_reservation_releases_the_counter() {
+        let inner = RegistryInner::default();
+        let reservation = inner.reserve_slot().expect("reserve under cap");
+        assert_eq!(inner.reserved.load(Ordering::Relaxed), 1);
+        reservation.commit();
+        assert_eq!(inner.reserved.load(Ordering::Relaxed), 0);
+    }
 }
