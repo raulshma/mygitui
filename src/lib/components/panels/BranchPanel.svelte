@@ -23,6 +23,7 @@
    */
   import { branchCreate, branchDelete, branchIsMerged, branches } from "$lib/ipc/client";
   import type { BranchInfo } from "$lib/ipc/types";
+  import { describeGitError } from "$lib/errors";
   import { toast } from "$lib/toast";
   import { emitUiEvent, onUiEvent } from "$lib/palette/events";
   import { showMenuAt, type MenuEntry } from "$lib/components/menu/contextMenuStore.svelte";
@@ -148,7 +149,8 @@
       await run();
       afterMutation();
     } catch (err) {
-      toast(`${label} failed: ${err instanceof Error ? err.message : String(err)}`, {
+      const message = err instanceof Error ? err.message : String(err);
+      toast(`${label} failed: ${describeGitError(message)}`, {
         kind: "error",
       });
     }
@@ -205,13 +207,21 @@
     if (names.length === 0) return;
     cleanupBusy = true;
     let deleted = 0;
-    const failed: string[] = [];
+    const failed: { name: string; reason: string }[] = [];
     for (const name of names) {
       try {
         await branchDelete(repoId, name, false);
         deleted++;
-      } catch {
-        failed.push(name);
+      } catch (err) {
+        // Keep the per-branch reason (mapped to actionable text) — bare
+        // names left the user guessing why a "merged" branch refused.
+        failed.push({
+          name,
+          reason: describeGitError(
+            err instanceof Error ? err.message : String(err),
+            name,
+          ),
+        });
       }
     }
     cleanupBusy = false;
@@ -220,8 +230,11 @@
         kind: "success",
       });
     } else {
+      const detail = failed
+        .map(({ name, reason }) => `${name} — ${reason}`)
+        .join("; ");
       toast(
-        `Deleted ${deleted}; failed: ${failed.join(", ")}`,
+        `Deleted ${deleted}; failed ${failed.length}: ${detail}`,
         { kind: "error" },
       );
     }

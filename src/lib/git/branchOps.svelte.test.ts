@@ -44,7 +44,7 @@ import type { BranchInfo, PreviewInfo, StatusEntry } from "$lib/ipc/types";
 import { getToasts } from "$lib/toast";
 import { opStore } from "$lib/stores/ops.svelte";
 import { resetTabStore, tabStore, type Tab } from "$lib/stores/tabs.svelte";
-import { branchOpsController } from "./branchOps.svelte";
+import { branchOpsController, remoteBranchDelete } from "./branchOps.svelte";
 
 // ---------------------------------------------------------------------------
 // Fixtures + harness
@@ -400,6 +400,59 @@ describe("push", () => {
       getToasts().some(
         (t) =>
           t.kind === "error" && t.message === "No remote configured — cannot push",
+      ),
+    ).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Remote branch delete (push --delete helper shared by the surfaces)
+// ---------------------------------------------------------------------------
+
+describe("remoteBranchDelete", () => {
+  it("push --deletes the ref and toasts success", async () => {
+    mocks.pushRepo.mockResolvedValueOnce({
+      received_bytes: 0,
+      objects: 0,
+      updated_refs: [],
+    });
+
+    await expect(remoteBranchDelete(REPO, "origin", "feature")).resolves.toBe(true);
+
+    expect(mocks.pushRepo).toHaveBeenCalledWith(REPO, {
+      remote: "origin",
+      branch: "",
+      force: false,
+      force_with_lease: false,
+      set_upstream: false,
+      refs: ["feature"],
+      tags: false,
+      delete: true,
+    });
+    expect(
+      getToasts().some(
+        (t) =>
+          t.kind === "success" &&
+          t.message === "Deleted remote branch origin/feature",
+      ),
+    ).toBe(true);
+  });
+
+  it("maps a server refusal to a friendly error toast and resolves false", async () => {
+    mocks.pushRepo.mockRejectedValueOnce(
+      new Error(
+        "push failed (exit 1): error: refusing to delete the current branch: refs/heads/main",
+      ),
+    );
+
+    await expect(remoteBranchDelete(REPO, "origin", "main")).resolves.toBe(false);
+
+    expect(
+      getToasts().some(
+        (t) =>
+          t.kind === "error" &&
+          t.message ===
+            "Delete failed: The remote protects this branch (its default or currently checked-out branch) and refused to delete it.",
       ),
     ).toBe(true);
   });

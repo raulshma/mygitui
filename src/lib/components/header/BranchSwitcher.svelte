@@ -42,8 +42,8 @@
     RepoStatus,
     RemoteBranchInfo,
   } from "$lib/ipc/types";
-  import { branches, pushRepo, remoteBranches } from "$lib/ipc/client";
-  import { branchOpsController } from "$lib/git/branchOps.svelte";
+  import { branches, remoteBranches } from "$lib/ipc/client";
+  import { branchOpsController, remoteBranchDelete } from "$lib/git/branchOps.svelte";
   import {
     fetchDefaultRemote,
     syncSkipMessage,
@@ -316,33 +316,16 @@
     await controller.checkoutRemote(rb.remote, rb.name);
   }
 
-  /** `push --delete` on the remote branch (RemotePanel's flow + texts). */
+  /** `push --delete` on the remote branch (shared helper + texts). */
   async function deleteRemoteBranch(): Promise<void> {
     const rb = remoteDelete;
+    remoteDelete = null;
     if (!rb) return;
-    try {
-      await pushRepo(repoId, {
-        remote: rb.remote,
-        branch: "",
-        force: false,
-        force_with_lease: false,
-        set_upstream: false,
-        refs: [rb.name],
-        tags: false,
-        delete: true,
-      });
-      toast(`Deleted remote branch ${rb.remote}/${rb.name}`, {
-        kind: "success",
-      });
+    if (await remoteBranchDelete(repoId, rb.remote, rb.name)) {
       // Not routed through the controller (it is a push --delete), so
       // refresh the lists and the repo status here.
       void reload();
       onMutated?.();
-    } catch (err) {
-      toast(
-        `Delete failed: ${err instanceof Error ? err.message : String(err)}`,
-        { kind: "error" },
-      );
     }
   }
 

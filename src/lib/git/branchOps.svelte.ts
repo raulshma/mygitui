@@ -42,6 +42,7 @@ import type { BranchInfo, PreviewInfo } from "$lib/ipc/types";
 import { busy as opBusy } from "$lib/stores/ops.svelte";
 import { tabStore } from "$lib/stores/tabs.svelte";
 import { toast } from "$lib/toast";
+import { describeGitError } from "$lib/errors";
 import { isMergedPreview } from "$lib/components/safety/safetyModel";
 
 /**
@@ -215,10 +216,9 @@ export class BranchOpsController {
         into,
       });
     } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
       toast(
-        `Cannot preview delete of ${branch.name}: ${
-          err instanceof Error ? err.message : String(err)
-        }`,
+        `Cannot preview delete of ${branch.name}: ${describeGitError(message, branch.name)}`,
         { kind: "error" },
       );
       return;
@@ -331,10 +331,45 @@ export class BranchOpsController {
       await run();
       this.#afterMutation();
     } catch (err) {
-      toast(`${label} failed: ${err instanceof Error ? err.message : String(err)}`, {
+      const message = err instanceof Error ? err.message : String(err);
+      toast(`${label} failed: ${describeGitError(message)}`, {
         kind: "error",
       });
     }
+  }
+}
+
+/**
+ * Deletes `<remote>/<name>` on the remote via `push --delete`, with the
+ * shared toast texts + friendly error mapping (BranchSwitcher and
+ * RemotePanel both offer this; the confirmation dialog lives in each
+ * surface). Resolves `true` when the delete succeeded — callers refresh
+ * their own branch lists.
+ */
+export async function remoteBranchDelete(
+  repoId: string,
+  remote: string,
+  name: string,
+): Promise<boolean> {
+  try {
+    await pushRepo(repoId, {
+      remote,
+      branch: "",
+      force: false,
+      force_with_lease: false,
+      set_upstream: false,
+      refs: [name],
+      tags: false,
+      delete: true,
+    });
+    toast(`Deleted remote branch ${remote}/${name}`, { kind: "success" });
+    return true;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    toast(`Delete failed: ${describeGitError(message, name)}`, {
+      kind: "error",
+    });
+    return false;
   }
 }
 

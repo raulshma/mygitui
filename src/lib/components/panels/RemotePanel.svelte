@@ -45,6 +45,7 @@
   import * as Select from "$lib/components/ui/select/index.js";
   import ConfirmDialog from "$lib/components/safety/ConfirmDialog.svelte";
   import DiffViewer from "$lib/components/diff/DiffViewer.svelte";
+  import { remoteBranchDelete } from "$lib/git/branchOps.svelte";
   import { appIcon } from "$lib/components/icons/library.svelte";
 
   let {
@@ -322,25 +323,23 @@
     }
   }
 
-  async function onDeleteRemoteBranch(rb: RemoteBranchInfo): Promise<void> {
-    try {
-      await pushRepo(repoId, {
-        remote: rb.remote,
-        branch: "",
-        force: false,
-        force_with_lease: false,
-        set_upstream: false,
-        refs: [rb.name],
-        tags: false,
-        delete: true,
-      });
-      toast(`Deleted remote branch ${rb.remote}/${rb.name}`, { kind: "success" });
+  /**
+   * Remote-branch delete: opens a confirmation first (deleting on the
+   * remote is not undoable via the app's trash — the local branch trash
+   * does not cover it), then runs the shared `push --delete` helper.
+   */
+  let deleteCandidate = $state<RemoteBranchInfo | null>(null);
+
+  function onDeleteRemoteBranch(rb: RemoteBranchInfo): void {
+    deleteCandidate = rb;
+  }
+
+  async function onDeleteRemoteBranchConfirmed(): Promise<void> {
+    const rb = deleteCandidate;
+    deleteCandidate = null;
+    if (!rb) return;
+    if (await remoteBranchDelete(repoId, rb.remote, rb.name)) {
       remoteBranchList = await remoteBranches(repoId);
-    } catch (err) {
-      toast(
-        `Delete failed: ${err instanceof Error ? err.message : String(err)}`,
-        { kind: "error" },
-      );
     }
   }
 
@@ -667,8 +666,8 @@
                           size="icon-xs"
                           type="button"
                           aria-label={`Delete remote branch ${rb.remote}/${rb.name}`}
-                          title="Delete {rb.remote}/{rb.name} on the remote"
-                          onclick={() => void onDeleteRemoteBranch(rb)}
+                          title="Delete {rb.remote}/{rb.name} on the remote (asks for confirmation)"
+                          onclick={() => onDeleteRemoteBranch(rb)}
                         >
                           <Icon icon={iconRemove} size={16} />
                         </Button>
@@ -891,4 +890,21 @@
   confirmLabel="Remove remote"
   danger
   onConfirm={() => void onRemoveConfirmed()}
+/>
+
+<!-- Remote branch delete (expanded remote rows). -->
+<ConfirmDialog
+  bind:open={
+    () => deleteCandidate !== null,
+    (v) => {
+      if (!v) deleteCandidate = null;
+    }
+  }
+  title={deleteCandidate
+    ? `Delete remote branch ${deleteCandidate.remote}/${deleteCandidate.name}?`
+    : ""}
+  message="The branch is deleted on the remote; local clones update on their next fetch."
+  confirmLabel="Delete remote branch"
+  danger
+  onConfirm={() => void onDeleteRemoteBranchConfirmed()}
 />
