@@ -1432,15 +1432,19 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
     for (const [subPath, repoCandidates] of byRepo.entries()) {
       const rid = subPath ? submodulesMap[subPath]?.repoId : repoId;
       if (!rid) continue;
+      // A rename must discard both sides: the new path alone would leave
+      // the old path's deletion staged (and `git checkout` would miss it).
+      const targets = repoCandidates.flatMap((row) => {
+        const list = [{ file: row.entry.path }];
+        const old = row.entry.old_path;
+        if (old && old !== row.entry.path) list.push({ file: old });
+        return list;
+      });
       await mutate(
         repoCandidates.length > 1
           ? `Discard ${repoCandidates.length} files`
           : `Discard ${repoCandidates[0]!.entry.path}`,
-        () =>
-          discard(
-            rid,
-            repoCandidates.map((row) => ({ file: row.entry.path })),
-          ),
+        () => discard(rid, targets),
       );
       if (subPath) {
         void loadSubmoduleStatus(subPath);

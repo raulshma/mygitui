@@ -1114,8 +1114,14 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
     const current = diffEntry;
     const targetRepoId = diffRepoId ?? repoId;
     if (!current) return;
+    // Renames discard both sides: path alone leaves the old path's
+    // deletion staged.
+    const targets = [{ file: current.path }];
+    if (current.old_path && current.old_path !== current.path) {
+      targets.push({ file: current.old_path });
+    }
     try {
-      await discard(targetRepoId, [{ file: current.path }]);
+      await discard(targetRepoId, targets);
       discardOpen = false;
       toast(`Discarded changes in ${current.path}`, { kind: "success" });
       refresh();

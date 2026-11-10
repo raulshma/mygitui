@@ -466,7 +466,7 @@ impl RemoteGitEngine {
         // new-side line ranges).
         let patch_raw = self.git_out(&format!(
             "-c core.quotePath=false diff --no-color --no-ext-diff -U3 -- {}",
-            shell_quote(path)
+            literal_spec(path)
         ))?;
         let files = split_patch(&patch_raw);
         let file = files
@@ -507,15 +507,41 @@ impl RemoteGitEngine {
                 StageTarget::Hunk { .. } | StageTarget::Lines { .. } => hunks.push(target),
             }
         }
-        if !paths.is_empty() {
-            self.git_checked(
-                &format!("checkout -q --{}", quoted_paths(&paths)),
-                "discard",
-            )?;
+        for path in &paths {
+            self.discard_file(path)?;
         }
         for group in group_hunks_by_path(&hunks) {
             self.apply_hunk_patch(&group.0, &group.1, true, false)?;
         }
+        Ok(())
+    }
+
+    /// Whole-file discard with the local engine's semantics:
+    /// * in HEAD — index and worktree return to HEAD;
+    /// * not in HEAD — the index entry (if any) is dropped and the worktree
+    ///   file deleted, so staged-new and plain untracked paths both work.
+    ///
+    /// Every pathspec is literal: status paths may contain `*?[`, which a
+    /// bare pathspec would glob (or fail to match) — the reason some files
+    /// "cannot be discarded".
+    fn discard_file(&self, path: &str) -> Result<(), String> {
+        let spec = literal_spec(path);
+        let in_head = self
+            .git_raw(
+                &format!("cat-file -e HEAD:{}", shell_quote(path)),
+                DEFAULT_EXEC_TIMEOUT,
+            )?
+            .exit_code
+            == 0;
+        if in_head {
+            self.git_checked(&format!("checkout -q HEAD -- {spec}"), "discard")?;
+            return Ok(());
+        }
+        // `--ignore-unmatch`: a plain untracked path has no index entry.
+        self.git_checked(&format!("rm -q -f --ignore-unmatch -- {spec}"), "discard")?;
+        // `rm` deleted a staged-new file; this catches the untracked case
+        // (and is a silent no-op when the file is already gone).
+        self.git_checked(&format!("clean -q -f -d -- {spec}"), "discard")?;
         Ok(())
     }
 
@@ -1208,16 +1234,16 @@ impl RemoteGitEngine {
                 ConflictResolution::Theirs => "--theirs",
                 // "both": keep the conflict-marker file as the user sees it.
                 ConflictResolution::Both => {
-                    self.git_checked(&format!("add --{}", shell_quote(path)), "resolve")?;
+                    self.git_checked(&format!("add --{}", literal_spec(path)), "resolve")?;
                     return Ok(());
                 }
             };
             self.git_checked(
-                &format!("checkout -q {side} -- {}", shell_quote(path)),
+                &format!("checkout -q {side} -- {}", literal_spec(path)),
                 "resolve",
             )?;
         }
-        self.git_checked(&format!("add --{}", shell_quote(path)), "resolve")?;
+        self.git_checked(&format!("add --{}", literal_spec(path)), "resolve")?;
         Ok(())
     }
 
@@ -2403,8 +2429,15 @@ fn path_spec(paths: Option<&[String]>) -> String {
 fn quoted_paths(paths: &[String]) -> String {
     paths
         .iter()
-        .map(|p| format!(" {}", shell_quote(p)))
+        .map(|p| format!(" {}", literal_spec(p)))
         .collect()
+}
+
+/// Shell-quoted pathspec pinned to literal matching. Status paths are real
+/// file names, but plain pathspecs glob — a file named `a[1].txt` would
+/// match `a1.txt` instead (or nothing at all), breaking stage/discard.
+fn literal_spec(path: &str) -> String {
+    shell_quote(&format!(":(literal){path}"))
 }
 
 /// Map a DiffSide pair onto `git diff` argument shapes. `Worktree` has no
@@ -2684,4 +2717,15 @@ fn parse_checkpoint_message(message: &str) -> (String, Option<String>) {
         }
     }
     (reason, branch)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn literal_spec_pins_glob_metacharacters() {
+        assert_eq!(literal_spec("a[1].txt"), "':(literal)a[1].txt'");
+        assert_eq!(literal_spec("it's *"), "':(literal)it'\\''s *'");
+    }
 }

@@ -1429,6 +1429,36 @@ fn discard_file_deletes_newly_added_and_restores_deleted() {
 }
 
 #[test]
+fn discard_handles_read_only_workdir_files() {
+    let temp = TempRepo::new("discard-readonly");
+    temp.write("base.txt", "b\n");
+    temp.add_all_and_commit("base");
+
+    // Tracked, modified and read-only: restore must be able to write it.
+    let tracked = temp.repo.workdir().unwrap().join("base.txt");
+    std::fs::write(&tracked, "modified\n").expect("write");
+    set_readonly(&tracked, true);
+    // Untracked and read-only: deletion must clear the attribute first
+    // (Windows blocks remove_file on read-only files).
+    let untracked = temp.repo.workdir().unwrap().join("locked.txt");
+    std::fs::write(&untracked, "locked\n").expect("write");
+    set_readonly(&untracked, true);
+
+    ENGINE
+        .discard(&temp, &[file_target("base.txt"), file_target("locked.txt")])
+        .expect("discard read-only files");
+
+    assert_eq!(workdir_file(&temp, "base.txt"), "b\n", "restored");
+    assert!(!untracked.exists(), "read-only untracked file deleted");
+}
+
+fn set_readonly(path: &Path, readonly: bool) {
+    let mut perms = std::fs::metadata(path).expect("metadata").permissions();
+    perms.set_readonly(readonly);
+    std::fs::set_permissions(path, perms).expect("set_permissions");
+}
+
+#[test]
 fn discard_hunks_reverses_only_selected_changes() {
     let temp = TempRepo::new("discard-hunks");
     let (path, base, _changed) = three_change_file(&temp);
@@ -1451,6 +1481,84 @@ fn discard_hunks_reverses_only_selected_changes() {
     assert!(!after.contains("L23"), "deletion kept");
     // Index untouched (still HEAD).
     assert_eq!(index_blob(&temp, path), base);
+}
+
+#[test]
+fn discard_file_handles_pathspec_metacharacters_in_name() {
+    let temp = TempRepo::new("discard-glob-name");
+    temp.write("a[1].txt", "v1\n");
+    temp.add_all_and_commit("base");
+
+    // Staged + unstaged changes on a name that a pathspec would read as a
+    // glob character class: the discard must address the literal path.
+    temp.write("a[1].txt", "v1\nstaged\n");
+    temp.stage("a[1].txt");
+    temp.write("a[1].txt", "v1\nstaged\nworkdir\n");
+
+    ENGINE
+        .discard(&temp, &[file_target("a[1].txt")])
+        .expect("discard glob-named file");
+
+    assert_eq!(index_blob(&temp, "a[1].txt"), "v1\n", "index back to HEAD");
+    assert_eq!(
+        workdir_file(&temp, "a[1].txt"),
+        "v1\n",
+        "workdir back to HEAD"
+    );
+}
+
+#[test]
+fn discard_file_restores_both_sides_of_a_rename() {
+    let temp = TempRepo::new("discard-rename");
+    temp.write("old name.txt", "content\n");
+    temp.add_all_and_commit("base");
+
+    // Stage a rename; callers pass the new path plus the old one from the
+    // status entry, and the pair must land back on HEAD.
+    std::fs::rename(
+        temp.repo.workdir().unwrap().join("old name.txt"),
+        temp.repo.workdir().unwrap().join("new name.txt"),
+    )
+    .expect("rename");
+    temp.stage_removal("old name.txt");
+    temp.stage("new name.txt");
+
+    ENGINE
+        .discard(
+            &temp,
+            &[file_target("new name.txt"), file_target("old name.txt")],
+        )
+        .expect("discard rename");
+
+    assert_eq!(workdir_file(&temp, "old name.txt"), "content\n");
+    assert!(
+        !temp.repo.workdir().unwrap().join("new name.txt").exists(),
+        "renamed copy deleted"
+    );
+    let index = temp.repo.index().unwrap();
+    assert!(index.get_path(Path::new("old name.txt"), 0).is_some());
+    assert!(index.get_path(Path::new("new name.txt"), 0).is_none());
+}
+
+#[test]
+fn unstage_handles_pathspec_metacharacters_in_name() {
+    let temp = TempRepo::new("unstage-glob-name");
+    temp.write("a[1].txt", "v1\n");
+    temp.add_all_and_commit("base");
+    temp.write("a[1].txt", "v1\nstaged\n");
+    temp.stage("a[1].txt");
+
+    ENGINE
+        .stage(
+            &temp,
+            &StageRequest {
+                targets: vec![file_target("a[1].txt")],
+                unstage: true,
+            },
+        )
+        .expect("unstage glob-named file");
+
+    assert_eq!(index_blob(&temp, "a[1].txt"), "v1\n", "index back to HEAD");
 }
 
 #[test]

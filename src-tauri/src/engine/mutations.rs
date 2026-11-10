@@ -168,11 +168,37 @@ fn discard_file(repo: &Repository, path: &str) -> EngineResult<()> {
         if let Some(workdir) = repo.workdir() {
             let file = workdir.join(path);
             if std::fs::symlink_metadata(&file).is_ok() {
-                let _ = std::fs::remove_file(file);
+                remove_workdir_file(&file)?;
             }
         }
     }
     Ok(())
+}
+
+/// Remove a worktree file, tolerating "already gone" and clearing a
+/// read-only attribute first (git for Windows does the same; plain
+/// `remove_file` fails on read-only files, which left discards half-done).
+fn remove_workdir_file(path: &Path) -> EngineResult<()> {
+    make_writable_if_readonly(path);
+    match std::fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e.into()),
+    }
+}
+
+/// Windows only: a read-only attribute blocks writes/removal. Elsewhere
+/// permissions are left alone (clearing them would widen the file mode).
+fn make_writable_if_readonly(_path: &Path) {
+    #[cfg(windows)]
+    if let Ok(meta) = std::fs::metadata(_path) {
+        let mut perms = meta.permissions();
+        if perms.readonly() {
+            #[allow(clippy::permissions_set_readonly_false)]
+            perms.set_readonly(false);
+            let _ = std::fs::set_permissions(_path, perms);
+        }
+    }
 }
 
 fn write_workdir_bytes(repo: &Repository, path: &str, content: &[u8]) -> EngineResult<()> {
@@ -183,6 +209,7 @@ fn write_workdir_bytes(repo: &Repository, path: &str, content: &[u8]) -> EngineR
     if let Some(parent) = file.parent() {
         std::fs::create_dir_all(parent)?;
     }
+    make_writable_if_readonly(&file);
     std::fs::write(file, content)?;
     Ok(())
 }
