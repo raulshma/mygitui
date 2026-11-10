@@ -610,6 +610,11 @@ pub(crate) fn delete_entry_impl(root: &Path, path: &str) -> Result<(), String> {
     }
     let full = validate_rel_path(root, path)?;
     let meta = std::fs::metadata(&full).map_err(|e| format!("`{path}`: {e}"))?;
+    // Checkpoints intentionally exclude ignored untracked files (they are
+    // not part of the git snapshot), so deleting one is irreversible. Git
+    // itself never cleans ignored paths without an explicit `-x`: refuse
+    // and point at the reversible alternatives instead.
+    guard_ignored_untracked(root, path, &full, meta.is_dir())?;
     if meta.is_dir() {
         if full.join(".git").exists() {
             return Err(format!(
@@ -620,6 +625,54 @@ pub(crate) fn delete_entry_impl(root: &Path, path: &str) -> Result<(), String> {
     } else {
         std::fs::remove_file(&full).map_err(|e| format!("deleting `{path}`: {e}"))
     }
+}
+
+/// Reject deletion of an entry that exists only because it is gitignored:
+/// no checkpoint can restore it. A tracked file (or a directory containing
+/// tracked entries) stays deletable — the checkpoint covers those bytes.
+fn guard_ignored_untracked(
+    root: &Path,
+    path: &str,
+    full: &Path,
+    is_dir: bool,
+) -> Result<(), String> {
+    let Ok(repo) = git2::Repository::discover(root) else {
+        return Ok(());
+    };
+    let Some(workdir) = repo.workdir() else {
+        return Ok(());
+    };
+    if !full.starts_with(workdir) {
+        return Ok(());
+    }
+    let rel = Path::new(path);
+    // Directory ignore patterns are written with a trailing slash; libgit2
+    // stats the path, but try the explicit directory form too.
+    let ignored = repo.status_should_ignore(rel).unwrap_or(false)
+        || (is_dir && {
+            let dir_form = format!("{}/", path.trim_end_matches('/'));
+            repo.status_should_ignore(Path::new(&dir_form)).unwrap_or(false)
+        });
+    if !ignored {
+        return Ok(());
+    }
+    let Ok(index) = repo.index() else {
+        return Ok(());
+    };
+    let tracked = if is_dir {
+        let prefix = format!("{}/", path.trim_end_matches('/'));
+        index.iter().any(|entry| {
+            String::from_utf8_lossy(&entry.path).starts_with(&prefix)
+        })
+    } else {
+        index.get_path(rel, 0).is_some()
+    };
+    if tracked {
+        return Ok(());
+    }
+    Err(format!(
+        "refusing to delete `{path}`: it is a gitignored untracked entry that Undo cannot restore; move or rename it instead"
+    ))
 }
 
 // -- Queue plumbing --------------------------------------------------------------

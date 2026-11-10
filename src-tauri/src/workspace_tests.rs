@@ -336,6 +336,64 @@ fn delete_entry_refuses_submodule_checkout() {
     let _ = fs::remove_dir_all(&root);
 }
 
+// -- verified delete safety (real repositories) ----------------------------------------
+
+fn delete_repo(tag: &str) -> (std::path::PathBuf, git2::Repository) {
+    let root = temp_root(tag);
+    let repo = git2::Repository::init(&root).expect("init delete fixture");
+    (root, repo)
+}
+
+#[test]
+fn delete_entry_refuses_ignored_untracked_file_without_losing_bytes() {
+    let (root, _repo) = delete_repo("delete-ignored-file");
+    touch(&root, ".gitignore", b"*.sqlite\n");
+    let bytes = b"SQLite format 3\0\xfflocal data not in Git";
+    touch(&root, "local.sqlite", bytes);
+
+    let result = delete_entry_impl(&root, "local.sqlite");
+    assert!(result.is_err(), "ignored data must not be deleted: {result:?}");
+    let error = result.unwrap_err();
+    assert!(error.contains("ignored") && error.contains("local.sqlite"), "{error}");
+    assert!(error.contains("Undo") && error.contains("move"), "{error}");
+    assert_eq!(fs::read(root.join("local.sqlite")).unwrap(), bytes);
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn delete_entry_refuses_ignored_untracked_directory() {
+    let (root, _repo) = delete_repo("delete-ignored-dir");
+    touch(&root, ".gitignore", b"ignored-dir/\n");
+    mkdir(&root, "ignored-dir");
+    touch(&root, "ignored-dir/cache.bin", b"cache bytes");
+
+    let result = delete_entry_impl(&root, "ignored-dir");
+    assert!(result.is_err(), "ignored tree must not be deleted: {result:?}");
+    assert_eq!(
+        fs::read(root.join("ignored-dir/cache.bin")).unwrap(),
+        b"cache bytes"
+    );
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn delete_entry_allows_ignored_directory_with_tracked_entries() {
+    let (root, repo) = delete_repo("delete-ignored-tracked");
+    touch(&root, ".gitignore", b"build/\n");
+    mkdir(&root, "build");
+    touch(&root, "build/keep.txt", b"tracked bytes");
+    let mut index = repo.index().expect("index");
+    index
+        .add_path(Path::new("build/keep.txt"))
+        .expect("track ignored file");
+    index.write().expect("write index");
+
+    // The checkpoint captures tracked entries, so the delete stays undoable.
+    delete_entry_impl(&root, "build").expect("tracked contents are recoverable");
+    assert!(!root.join("build").exists());
+    let _ = fs::remove_dir_all(&root);
+}
+
 // -- file_index -----------------------------------------------------------------------
 
 #[test]
