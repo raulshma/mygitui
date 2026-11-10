@@ -11,6 +11,8 @@ export interface ToastItem {
   id: number;
   message: string;
   kind: ToastKind;
+  /** Repeat count for a coalesced message (1 for a first occurrence). */
+  count: number;
 }
 
 export interface ToastOptions {
@@ -20,6 +22,8 @@ export interface ToastOptions {
 const AUTO_DISMISS_MS = 4_000;
 /** Errors linger past the 4s default so failures can be read (and copied). */
 const ERROR_AUTO_DISMISS_MS = 9_000;
+/** Beyond this the stack would climb past the viewport; oldest makes way. */
+const MAX_VISIBLE = 4;
 
 let toasts = $state<ToastItem[]>([]);
 let nextId = 1;
@@ -51,12 +55,36 @@ export function dismissToast(id: number): void {
   dismiss(id);
 }
 
-/** Shows a toast; auto-dismisses after 4 seconds (errors after 9). */
+/**
+ * Shows a toast; auto-dismisses after 4 seconds (errors after 9).
+ *
+ * A message already on screen is coalesced into a repeat count and its
+ * timer restarted rather than stacked again — retry loops and per-file
+ * operations otherwise bury the viewport in identical rows. Past
+ * {@link MAX_VISIBLE} the oldest toast is dropped to make room.
+ */
 export function toast(message: string, opts?: ToastOptions): void {
-  const id = nextId++;
   const kind: ToastKind = opts?.kind ?? "info";
-  toasts = [...toasts, { id, message, kind }];
-  schedule(id, kind === "error" ? ERROR_AUTO_DISMISS_MS : AUTO_DISMISS_MS);
+  const delay = kind === "error" ? ERROR_AUTO_DISMISS_MS : AUTO_DISMISS_MS;
+
+  const existing = toasts.find((item) => item.message === message && item.kind === kind);
+  if (existing !== undefined) {
+    existing.count += 1;
+    if (timers.has(existing.id)) {
+      clearTimeout(timers.get(existing.id)!);
+      timers.delete(existing.id);
+      schedule(existing.id, delay);
+    } else {
+      // Paused under the pointer: bank the full duration for the resume.
+      deadlines.set(existing.id, delay);
+    }
+    return;
+  }
+
+  const id = nextId++;
+  toasts = [...toasts, { id, message, kind, count: 1 }];
+  schedule(id, delay);
+  while (toasts.length > MAX_VISIBLE) dismiss(toasts[0]!.id);
 }
 
 /**
