@@ -84,10 +84,14 @@ export default defineConfig({
 
   test: {
     environment: "jsdom",
-    // Vitest creates one jsdom environment per suite; on Windows that setup
-    // dominates the run, and component tests that take ~1s in isolation can
-    // exceed the 5s default while dozens of suites start in parallel. The
-    // timeout only caps failures, so passing tests are unaffected.
+    // jsdom costs ~13s per environment on Windows. The default `forks` pool
+    // builds one per test file (98 of them); `vmThreads` builds one per worker
+    // and resets globals between files, keeping per-file isolation while
+    // cutting setup from two thirds of the run to a rounding error.
+    pool: "vmThreads",
+    // Component tests that take ~1s in isolation can exceed the 5s default
+    // while dozens of suites start in parallel. The timeout only caps
+    // failures, so passing tests are unaffected.
     testTimeout: 20_000,
     include: ["src/**/*.{test,spec}.{js,ts}"],
     setupFiles: ["./src/test-setup.ts"],

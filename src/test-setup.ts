@@ -18,3 +18,33 @@ if (typeof window !== "undefined" && typeof window.matchMedia !== "function") {
       dispatchEvent: () => false,
     }) as unknown as MediaQueryList;
 }
+
+/**
+ * jsdom ships no web streams either. The `forks`/`threads` pools inherit
+ * them from Node, but `vmThreads` builds the global object from the jsdom
+ * window alone, so SSE tests would see `ReadableStream is not defined`.
+ * Node's own implementations are the ones undici brand-checks against, so
+ * `new Response(stream)` keeps working across both pools.
+ */
+const streamWeb = await import("node:stream/web");
+for (const name of [
+  "ReadableStream",
+  "ReadableStreamDefaultReader",
+  "ReadableStreamBYOBReader",
+  "ReadableStreamDefaultController",
+  "ReadableByteStreamController",
+  "WritableStream",
+  "WritableStreamDefaultWriter",
+  "WritableStreamDefaultController",
+  "TransformStream",
+  "TransformStreamDefaultController",
+  "TextEncoderStream",
+  "TextDecoderStream",
+  "ByteLengthQueuingStrategy",
+  "CountQueuingStrategy",
+] as const) {
+  const globals = globalThis as unknown as Record<string, unknown>;
+  if (globals[name] === undefined) globals[name] = streamWeb[name];
+}
+
+export {};
