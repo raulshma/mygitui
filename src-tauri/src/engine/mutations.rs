@@ -210,8 +210,17 @@ fn write_workdir_bytes(repo: &Repository, path: &str, content: &[u8]) -> EngineR
         std::fs::create_dir_all(parent)?;
     }
     make_writable_if_readonly(&file);
-    std::fs::write(file, content)?;
-    Ok(())
+    match std::fs::write(&file, content) {
+        Ok(()) => Ok(()),
+        // A read-only file blocks O_WRONLY even for its owner on Unix.
+        // Git recreates the file instead of widening its mode; do the same.
+        Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
+            std::fs::remove_file(&file)?;
+            std::fs::write(file, content)?;
+            Ok(())
+        }
+        Err(e) => Err(e.into()),
+    }
 }
 
 impl Libgit2Engine {
