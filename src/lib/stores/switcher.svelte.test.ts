@@ -72,7 +72,7 @@ beforeEach(() => {
     behind: 0,
     merging: false,
     rebasing: false,
-    sequencer: false,
+    sequencer: false,    bisecting: false,
     entries: [],
   });
   mockOpenRepo.mockImplementation((path: string) =>

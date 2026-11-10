@@ -98,44 +98,16 @@ pub(crate) fn merge_in_progress(repo: &Repository) -> bool {
     repo.path().join("MERGE_HEAD").exists() || repo.state() == RepositoryState::Merge
 }
 
-/// Which sequencer owns the current conflicts. Precedence mirrors the
-/// `in_progress_state` helper in libgit2.rs: rebase beats cherry-pick beats
-/// revert; anything else reads as a merge.
+/// Which sequencer owns the current conflicts — the shared
+/// `engine/in_progress.rs` precedence (rebase > cherry-pick > revert >
+/// merge), not a hand-rolled copy.
 fn sequencer_source(repo: &Repository) -> String {
-    let gitdir = repo.path();
-    let state = repo.state();
-    let rebasing = gitdir.join("rebase-merge").is_dir()
-        || gitdir.join("rebase-apply").is_dir()
-        // mygitui's custom rebase sequencer state (engine/rebase.rs).
-        || gitdir.join("mygitui").join("rebase.json").exists()
-        || matches!(
-            state,
-            RepositoryState::Rebase
-                | RepositoryState::RebaseInteractive
-                | RepositoryState::RebaseMerge
-                | RepositoryState::ApplyMailbox
-                | RepositoryState::ApplyMailboxOrRebase
-        );
-    if rebasing {
-        return "rebase".into();
-    }
-    if gitdir.join("CHERRY_PICK_HEAD").exists()
-        || matches!(
-            state,
-            RepositoryState::CherryPick | RepositoryState::CherryPickSequence
-        )
-    {
-        return "cherry-pick".into();
-    }
-    if gitdir.join("REVERT_HEAD").exists()
-        || matches!(
-            state,
-            RepositoryState::Revert | RepositoryState::RevertSequence
-        )
-    {
-        return "revert".into();
-    }
-    "merge".into()
+    let probe = super::in_progress::Probe::from_gitdir(repo.path(), repo.state());
+    probe
+        .in_progress()
+        .map(|kind| kind.label())
+        .unwrap_or("merge")
+        .to_string()
 }
 
 /// All conflicted paths in the index with their stage availability.

@@ -135,13 +135,23 @@ pub struct AuthBroker {
     /// store (fill hit or approve): only those get `git credential reject`
     /// when the remote refuses the credential.
     helper_served: Mutex<HashSet<String>>,
-    /// op_id → sender woken by `auth_respond`.
-    pending: Mutex<HashMap<String, tokio::sync::oneshot::Sender<AuthAnswer>>>,
+    /// op_id → (sender woken by `auth_respond`, owning repo id — empty
+    /// for clone-time prompts). The repo id lets a repo close cancel its
+    /// prompts instead of leaving the handshake thread sitting out its
+    /// timeout (registry #4).
+    pending: Mutex<HashMap<String, PendingAuth>>,
     /// Set by `init` from lib.rs setup; `None` in unit tests / headless.
     app: RwLock<Option<tauri::AppHandle>>,
     counter: AtomicU64,
     /// `git credential fill` seam (see [`HelperFillFn`]).
     helper_fill: HelperFillFn,
+}
+
+/// One parked `auth-request`: the answer channel plus the repo whose op
+/// triggered it (empty for clone-time prompts — no repo exists yet).
+struct PendingAuth {
+    repo_id: String,
+    tx: tokio::sync::oneshot::Sender<AuthAnswer>,
 }
 
 impl AuthBroker {
@@ -199,14 +209,18 @@ fn current_repo_id() -> String {
 }
 
 impl AuthBroker {
-    /// Register a pending FE request; returns the receiver to await.
+    /// Register a pending FE request attributed to `repo_id` (empty when
+    /// no repo exists yet, e.g. a clone). Returns the receiver to await.
     /// A duplicate `op_id` replaces (and cancels) the previous waiter.
     pub fn register_pending(
         &self,
         op_id: String,
+        repo_id: String,
     ) -> Option<tokio::sync::oneshot::Receiver<AuthAnswer>> {
         let (tx, rx) = tokio::sync::oneshot::channel();
-        self.pending.lock().insert(op_id, tx);
+        self.pending
+            .lock()
+            .insert(op_id, PendingAuth { repo_id, tx });
         Some(rx)
     }
 
@@ -214,15 +228,36 @@ impl AuthBroker {
     /// with the answer.
     pub fn answer(&self, op_id: String, answer: AuthAnswer) -> bool {
         match self.pending.lock().remove(&op_id) {
-            Some(tx) => tx.send(answer).is_ok(),
+            Some(entry) => entry.tx.send(answer).is_ok(),
             None => false,
         }
     }
 
-    /// Drop a pending request (timeout / emit failure); wakes its bridge
-    /// thread with a cancellation.
-    fn cancel_pending(&self, op_id: &str) {
+    /// Drop a pending request (timeout / emit failure / op cancel); wakes
+    /// its bridge thread with a cancellation.
+    pub(crate) fn cancel_pending(&self, op_id: &str) {
         self.pending.lock().remove(op_id);
+    }
+
+    /// Resolve every pending request owned by `repo_id` as cancelled.
+    /// Repo close owns that lifecycle: without this a closed repo's
+    /// handshake thread sat out its whole [`AUTH_TIMEOUT`]. Returns how
+    /// many waiters were woken.
+    pub fn cancel_for_repo(&self, repo_id: &str) -> usize {
+        let mut pending = self.pending.lock();
+        let stale: Vec<String> = pending
+            .iter()
+            .filter(|(_, entry)| entry.repo_id == repo_id)
+            .map(|(op_id, _)| op_id.clone())
+            .collect();
+        let mut woken = 0;
+        for op_id in stale {
+            if let Some(entry) = pending.remove(&op_id) {
+                drop(entry.tx);
+                woken += 1;
+            }
+        }
+        woken
     }
 
     /// Keyring lookup ("https:<host>" entries). A hit also warms the
@@ -384,13 +419,16 @@ impl AuthBroker {
             std::process::id(),
             self.counter.fetch_add(1, Ordering::Relaxed)
         );
-        // Register before emitting: an instant FE answer must find a waiter.
+        // Register before emitting: an instant FE answer must find a
+        // waiter. The prompt attributes to the repo whose op is running
+        // (empty pre-clone), so a repo close can cancel it.
+        let repo_id = current_repo_id();
         let rx = self
-            .register_pending(op_id.clone())
+            .register_pending(op_id.clone(), repo_id.clone())
             .expect("register_pending always returns a receiver");
         let payload = AuthRequestEvent {
             op_id: op_id.clone(),
-            repo_id: current_repo_id(),
+            repo_id,
             url: url.to_string(),
             kind: kind.to_string(),
             prompt,
@@ -624,7 +662,7 @@ mod tests {
     fn register_pending_answer_roundtrip() {
         let broker = broker();
         let rx = broker
-            .register_pending("op-1".to_string())
+            .register_pending("op-1".to_string(), String::new())
             .expect("receiver");
         assert!(broker.answer(
             "op-1".to_string(),
@@ -652,7 +690,7 @@ mod tests {
             }
         ));
         let rx = broker
-            .register_pending("op-2".to_string())
+            .register_pending("op-2".to_string(), String::new())
             .expect("receiver");
         assert!(broker.answer(
             "op-2".to_string(),
@@ -675,13 +713,38 @@ mod tests {
     }
 
     #[test]
+    fn cancel_for_repo_wakes_only_that_repos_waiters() {
+        let broker = broker();
+        let ours = broker
+            .register_pending("op-a".to_string(), "repo-1".to_string())
+            .expect("receiver");
+        let foreign = broker
+            .register_pending("op-b".to_string(), "repo-2".to_string())
+            .expect("receiver");
+        let clone_time = broker
+            .register_pending("op-c".to_string(), String::new())
+            .expect("receiver");
+
+        assert_eq!(broker.cancel_for_repo("repo-1"), 1);
+        assert!(
+            ours.blocking_recv().is_err(),
+            "the closed repo's waiter must wake as cancelled"
+        );
+        // Other repos' waiters (and the clone-time orphan, whose prompt
+        // belongs to no repo) stay parked, and a second pass is a no-op.
+        assert_eq!(broker.cancel_for_repo("repo-1"), 0);
+        drop(foreign);
+        drop(clone_time);
+    }
+
+    #[test]
     fn duplicate_registration_cancels_previous_waiter() {
         let broker = broker();
         let first = broker
-            .register_pending("dup".to_string())
+            .register_pending("dup".to_string(), String::new())
             .expect("receiver");
         let _second = broker
-            .register_pending("dup".to_string())
+            .register_pending("dup".to_string(), String::new())
             .expect("receiver");
         assert!(
             first.blocking_recv().is_err(),

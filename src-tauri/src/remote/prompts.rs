@@ -70,9 +70,33 @@ pub struct SecretAnswer {
     pub store: bool,
 }
 
+/// A parked prompt: the answer channel plus the device it belongs to
+/// (so a disconnect/remove can cancel it instead of leaving the
+/// handshake thread sitting out its deadline).
 enum Pending {
-    HostKey(oneshot::Sender<bool>),
-    Secret(oneshot::Sender<Option<SecretAnswer>>),
+    HostKey {
+        device_id: String,
+        tx: oneshot::Sender<bool>,
+    },
+    Secret {
+        device_id: String,
+        tx: oneshot::Sender<Option<SecretAnswer>>,
+    },
+}
+
+impl Pending {
+    /// Resolve as dismissed — the same answers the FE's Escape path
+    /// sends (host key denied, auth aborted).
+    fn cancel(self) {
+        match self {
+            Pending::HostKey { tx, .. } => {
+                let _ = tx.send(false);
+            }
+            Pending::Secret { tx, .. } => {
+                let _ = tx.send(None);
+            }
+        }
+    }
 }
 
 static PENDING: LazyLock<Mutex<HashMap<String, Pending>>> =
@@ -108,9 +132,13 @@ pub(crate) fn emit_status(payload: &super::transport::DeviceStatusEvent) {
 pub async fn ask_host_key(event: HostKeyRequestEvent) -> Result<bool, String> {
     let (tx, rx) = oneshot::channel();
     let request_id = event.request_id.clone();
-    PENDING
-        .lock()
-        .insert(request_id.clone(), Pending::HostKey(tx));
+    PENDING.lock().insert(
+        request_id.clone(),
+        Pending::HostKey {
+            device_id: event.device_id.clone(),
+            tx,
+        },
+    );
     emit_event(HOSTKEY_REQUEST_EVENT, &event);
     match tokio::time::timeout(PROMPT_TIMEOUT, rx).await {
         Ok(Ok(answer)) => Ok(answer),
@@ -127,9 +155,13 @@ pub async fn ask_host_key(event: HostKeyRequestEvent) -> Result<bool, String> {
 pub async fn ask_secret(event: DeviceAuthRequestEvent) -> Result<Option<SecretAnswer>, String> {
     let (tx, rx) = oneshot::channel();
     let request_id = event.request_id.clone();
-    PENDING
-        .lock()
-        .insert(request_id.clone(), Pending::Secret(tx));
+    PENDING.lock().insert(
+        request_id.clone(),
+        Pending::Secret {
+            device_id: event.device_id.clone(),
+            tx,
+        },
+    );
     emit_event(DEVICE_AUTH_REQUEST_EVENT, &event);
     match tokio::time::timeout(PROMPT_TIMEOUT, rx).await {
         Ok(Ok(answer)) => Ok(answer),
@@ -143,7 +175,7 @@ pub async fn ask_secret(event: DeviceAuthRequestEvent) -> Result<Option<SecretAn
 
 /// FE answer for a `hostkey-request`: accept (true) or reject.
 pub fn respond_host_key(request_id: &str, accept: bool) -> bool {
-    if let Some(Pending::HostKey(tx)) = PENDING.lock().remove(request_id) {
+    if let Some(Pending::HostKey { tx, .. }) = PENDING.lock().remove(request_id) {
         tx.send(accept).is_ok()
     } else {
         false
@@ -152,11 +184,35 @@ pub fn respond_host_key(request_id: &str, accept: bool) -> bool {
 
 /// FE answer for a `device-auth-request`.
 pub fn respond_secret(request_id: &str, answer: Option<SecretAnswer>) -> bool {
-    if let Some(Pending::Secret(tx)) = PENDING.lock().remove(request_id) {
+    if let Some(Pending::Secret { tx, .. }) = PENDING.lock().remove(request_id) {
         tx.send(answer).is_ok()
     } else {
         false
     }
+}
+
+/// Resolve every pending prompt belonging to `device_id` as dismissed.
+/// Device disconnect/remove owns that lifecycle: without this the
+/// handshake threads sat out their full [`PROMPT_TIMEOUT`] after the
+/// device was gone (registry #4). Returns how many waiters were woken.
+pub fn cancel_for_device(device_id: &str) -> usize {
+    let mut pending = PENDING.lock();
+    let stale: Vec<String> = pending
+        .iter()
+        .filter(|(_, entry)| match entry {
+            Pending::HostKey { device_id: id, .. } => id == device_id,
+            Pending::Secret { device_id: id, .. } => id == device_id,
+        })
+        .map(|(request_id, _)| request_id.clone())
+        .collect();
+    let mut woken = 0;
+    for request_id in stale {
+        if let Some(entry) = pending.remove(&request_id) {
+            entry.cancel();
+            woken += 1;
+        }
+    }
+    woken
 }
 
 /// Fingerprint + algorithm of a presented host key, in OpenSSH display
@@ -186,4 +242,71 @@ pub fn pending_count() -> usize {
 #[cfg(test)]
 pub fn clear_pending() {
     PENDING.lock().clear();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Unique ids: `PENDING` is process-global and the integration suite
+    /// reads `pending_count` concurrently.
+    fn unique(tag: &str) -> String {
+        format!(
+            "{tag}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos()
+        )
+    }
+
+    #[tokio::test]
+    async fn cancel_for_device_resolves_only_that_devices_prompts() {
+        let device = unique("dev");
+        let other = unique("other");
+        let host_key = HostKeyRequestEvent {
+            request_id: format!("hk-{device}"),
+            device_id: device.clone(),
+            host: "example.net".into(),
+            port: 22,
+            algo: "ssh-ed25519".into(),
+            fingerprint: "SHA256:test".into(),
+            status: "unknown".into(),
+            pinned_fingerprint: None,
+        };
+        let secret = DeviceAuthRequestEvent {
+            request_id: format!("sec-{device}"),
+            device_id: device.clone(),
+            kind: KIND_DEVICE_PASSWORD.into(),
+            prompt: "password:".into(),
+        };
+        let foreign = HostKeyRequestEvent {
+            request_id: format!("hk-{other}"),
+            device_id: other.clone(),
+            host: "example.org".into(),
+            port: 22,
+            algo: "ssh-ed25519".into(),
+            fingerprint: "SHA256:test".into(),
+            status: "unknown".into(),
+            pinned_fingerprint: None,
+        };
+
+        let host_ask = tokio::spawn(ask_host_key(host_key));
+        let secret_ask = tokio::spawn(ask_secret(secret));
+        let foreign_ask = tokio::spawn(ask_host_key(foreign));
+        // Let the three tasks park on their oneshots.
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        assert_eq!(cancel_for_device(&device), 2);
+        // The cancelled device's prompts resolve as dismissed.
+        assert_eq!(host_ask.await.expect("task"), Ok(false));
+        assert!(
+            matches!(secret_ask.await.expect("task"), Ok(None)),
+            "the secret prompt must resolve as dismissed"
+        );
+        // The other device's prompt stays parked — answer it to clean up.
+        assert!(respond_host_key(&format!("hk-{other}"), false));
+        assert_eq!(foreign_ask.await.expect("task"), Ok(false));
+    }
 }

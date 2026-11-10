@@ -365,6 +365,9 @@ impl RepoManager {
     pub fn close(&self, id: &RepoId) -> bool {
         match self.repos.lock().remove(id) {
             Some(handle) => {
+                // Auth prompts belonging to this repo's net ops resolve as
+                // cancelled now, not at their 60 s timeout (registry #4).
+                crate::auth::broker().cancel_for_repo(id.0.as_str());
                 handle.shutdown();
                 true
             }

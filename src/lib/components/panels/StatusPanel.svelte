@@ -1685,11 +1685,12 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
       </div>
     {/if}
 
-    {#if status.merging || status.rebasing || status.sequencer || status.detached || status.ahead > 0 || status.behind > 0}
+    {#if status.merging || status.rebasing || status.sequencer || status.bisecting || status.detached || status.ahead > 0 || status.behind > 0}
       <div class="banners flex flex-wrap gap-1 px-2 py-1 flex-none">
         {#if status.merging}<Badge variant="secondary" class="gap-[0.2rem] rounded-full px-2 py-px h-auto text-ui-micro bg-muted text-foreground">Merge in progress</Badge>{/if}
         {#if status.rebasing}<Badge variant="secondary" class="gap-[0.2rem] rounded-full px-2 py-px h-auto text-ui-micro bg-muted text-foreground">Rebase in progress</Badge>{/if}
         {#if status.sequencer}<Badge variant="secondary" class="gap-[0.2rem] rounded-full px-2 py-px h-auto text-ui-micro bg-muted text-foreground">Cherry-pick / revert in progress</Badge>{/if}
+        {#if status.bisecting}<Badge variant="secondary" class="gap-[0.2rem] rounded-full px-2 py-px h-auto text-ui-micro bg-muted text-foreground">Bisect in progress</Badge>{/if}
         {#if status.detached}<Badge variant="secondary" class="gap-[0.2rem] rounded-full px-2 py-px h-auto text-ui-micro bg-muted text-foreground">Detached HEAD</Badge>{/if}
         {#if status.ahead > 0}
           <Badge

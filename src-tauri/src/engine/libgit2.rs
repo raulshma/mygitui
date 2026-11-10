@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use git2::{
     BlameOptions, Branch, Commit, Delta, Diff, DiffFindOptions, DiffOptions, Oid, Patch,
-    Repository, RepositoryState, Signature, StatusOptions,
+    Repository, Signature, StatusOptions,
 };
 use imara_diff::{Algorithm, Diff as WordDiff, InternedInput, TokenSource};
 use parking_lot::Mutex;
@@ -199,38 +199,21 @@ fn ahead_behind(repo: &Repository) -> (u32, u32) {
     }
 }
 
-fn in_progress_state(repo: &Repository) -> (bool, bool, bool) {
-    let gitdir = repo.path();
-    let state = repo.state();
-
-    let rebasing = gitdir.join("rebase-merge").is_dir()
-        || gitdir.join("rebase-apply").is_dir()
-        // mygitui's custom rebase sequencer (engine/rebase.rs) persists its
-        // state as JSON instead of git's rebase dirs.
-        || gitdir.join("mygitui").join("rebase.json").exists()
-        || matches!(
-            state,
-            RepositoryState::Rebase
-                | RepositoryState::RebaseInteractive
-                | RepositoryState::RebaseMerge
-                | RepositoryState::ApplyMailbox
-                | RepositoryState::ApplyMailboxOrRebase
-        );
-    let merging = gitdir.join("MERGE_HEAD").exists() || state == RepositoryState::Merge;
-    // During a rebase, cherry-pick/revert marker files may also be present;
-    // report only the rebase in that case (matches `git status`).
-    let sequencer = !rebasing
-        && (gitdir.join("sequencer").is_dir()
-            || gitdir.join("CHERRY_PICK_HEAD").exists()
-            || gitdir.join("REVERT_HEAD").exists()
-            || matches!(
-                state,
-                RepositoryState::CherryPick
-                    | RepositoryState::CherryPickSequence
-                    | RepositoryState::Revert
-                    | RepositoryState::RevertSequence
-            ));
-    (merging, rebasing, sequencer)
+/// The shared in-progress machine (`engine/in_progress.rs`) flattened to
+/// the `RepoStatus` booleans.
+fn in_progress_flags(probe: &super::in_progress::Probe) -> (bool, bool, bool) {
+    let active = probe.in_progress();
+    (
+        active == Some(super::in_progress::InProgress::Merging),
+        active == Some(super::in_progress::InProgress::Rebasing),
+        matches!(
+            active,
+            Some(
+                super::in_progress::InProgress::CherryPicking
+                    | super::in_progress::InProgress::Reverting
+            )
+        ),
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -1052,7 +1035,8 @@ impl GitEngine for Libgit2Engine {
             .and_then(|h| h.target())
             .map(|oid| oid.to_string());
         let (ahead, behind) = ahead_behind(repo);
-        let (merging, rebasing, sequencer) = in_progress_state(repo);
+        let probe = super::in_progress::Probe::from_gitdir(repo.path(), repo.state());
+        let (merging, rebasing, sequencer) = in_progress_flags(&probe);
 
         Ok(RepoStatus {
             branch,
@@ -1063,6 +1047,7 @@ impl GitEngine for Libgit2Engine {
             merging,
             rebasing,
             sequencer,
+            bisecting: probe.bisecting(),
             entries,
         })
     }

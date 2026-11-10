@@ -362,7 +362,7 @@ describe("statusModel performance", () => {
       behind: 2,
       merging: false,
       rebasing: false,
-      sequencer: false,
+      sequencer: false,      bisecting: false,
       entries: entries10k().slice(0, 100),
     };
     const index = buildStatusIndex(status.entries);
@@ -396,7 +396,7 @@ describe("statusModel performance", () => {
       behind: 0,
       merging: false,
       rebasing: false,
-      sequencer: false,
+      sequencer: false,      bisecting: false,
       entries: [
         entry("staged.txt", "added", "unmodified"),
         entry("changes.txt", "unmodified", "modified"),
@@ -425,7 +425,7 @@ describe("statusModel performance", () => {
         behind: 0,
         merging: false,
         rebasing: false,
-        sequencer: false,
+        sequencer: false,        bisecting: false,
         entries: [],
       }),
     ).toBe("feature/test");
@@ -439,7 +439,7 @@ describe("statusModel performance", () => {
         behind: 0,
         merging: false,
         rebasing: false,
-        sequencer: false,
+        sequencer: false,        bisecting: false,
         entries: [],
       }),
     ).toBe("detached at 1234567");

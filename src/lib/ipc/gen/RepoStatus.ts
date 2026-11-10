@@ -17,4 +17,10 @@ rebasing: boolean,
 /**
  * True while a cherry-pick or revert is in progress.
  */
-sequencer: boolean, entries: Array<StatusEntry>, };
+sequencer: boolean, 
+/**
+ * True while a bisect search is in progress (`BISECT_LOG` exists).
+ * Additive: reported independently of the sequencer flags, so the UI
+ * never shows "clean" mid-search.
+ */
+bisecting: boolean, entries: Array<StatusEntry>, };

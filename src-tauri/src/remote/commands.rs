@@ -165,8 +165,10 @@ pub async fn device_remove(
     app: tauri::AppHandle,
     registry: State<'_, DeviceRegistry>,
 ) -> Result<(), String> {
-    // Drop the live session first (it keys on the device id).
+    // Drop the live session first (it keys on the device id); its prompts
+    // go with it instead of sitting out their deadline.
     if let Some(session) = registry.remove(&device_id) {
+        super::prompts::cancel_for_device(&device_id);
         session.disconnect().await;
     }
     device_store(&app).remove(&device_id)?;
@@ -196,6 +198,9 @@ pub async fn device_disconnect(
     device_id: String,
     registry: State<'_, DeviceRegistry>,
 ) -> Result<(), String> {
+    // A connect handshake waiting on a prompt for this device must wake
+    // now, not at its 120 s deadline (registry #4).
+    super::prompts::cancel_for_device(&device_id);
     if let Some(session) = registry.peek(&device_id) {
         session.disconnect().await;
     }

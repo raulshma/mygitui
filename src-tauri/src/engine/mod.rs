@@ -1,6 +1,7 @@
 pub mod bisect;
 pub mod branches;
 pub mod git_engine;
+pub mod in_progress;
 pub mod libgit2;
 pub mod mutations;
 pub mod netops;
@@ -10,6 +11,8 @@ pub mod types;
 mod tests;
 
 pub mod checkpoints;
+#[cfg(test)]
+mod in_progress_tests;
 pub mod merge;
 #[cfg(test)]
 mod merge_tests;

@@ -73,7 +73,7 @@ function status(branch: string, ahead: number, behind: number) {
     behind,
     merging: false,
     rebasing: false,
-    sequencer: false,
+    sequencer: false,    bisecting: false,
     entries: [],
   };
 }

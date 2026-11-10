@@ -11,7 +11,7 @@ are GENERATED from it (see "Type single-sourcing" below).
 |---|---|---|---|
 | `repo_open` | `path: string` | `RepoInfo` | opens repo, starts watcher, new tab |
 | `repo_close` | `repo_id: string` | `void` | stops watcher, drops caches |
-| `repo_status` | `repo_id: string` | `RepoStatus` | |
+| `repo_status` | `repo_id: string` | `RepoStatus` (gained additive `bisecting: bool` — a `BISECT_LOG` search no longer reads as "clean"; both engines share one precedence function, `engine/in_progress.rs`) | |
 | `repo_diff` | `repo_id, old: DiffSide, new: DiffSide, paths?: string[]` | `FileDiff[]` | small/medium diffs |
 | `repo_diff_stream` | `repo_id, old, new, paths?, channel: Channel<FileDiff[]>` | `void` | pages of ~50 files |
 | `repo_log_stream` | `repo_id, filter: LogFilter, channel: Channel<LogPage>` | `void` | pages of 500; see LogPage |

@@ -2815,7 +2815,12 @@ pub async fn op_cancel(
     state: State<'_, RepoManager>,
 ) -> Result<bool, String> {
     let handle = get_handle(&state, &repo_id)?;
-    Ok(handle.ops().cancel_op(repo_id.0.as_str(), &op_id))
+    let cancelled = handle.ops().cancel_op(repo_id.0.as_str(), &op_id);
+    // A cancelled op's auth prompt must not keep its handshake thread
+    // waiting for the FE (or its 60 s timeout) — wake it now (registry
+    // #4). No-op when the op had no pending request.
+    crate::auth::broker().cancel_pending(&op_id);
+    Ok(cancelled)
 }
 
 /// `git describe --tags` for a commit-ish.

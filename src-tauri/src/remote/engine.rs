@@ -212,17 +212,31 @@ impl RemoteGitEngine {
         let raw = self.git_out("status --porcelain=v2 -z --branch -uall")?;
         let (header, entries) = parse_status(&raw);
         let states = self.state_probe()?;
+        let probe = crate::engine::in_progress::Probe {
+            merge_head: states.iter().any(|s| s == "MERGE_HEAD"),
+            rebase_dirs: states.iter().any(|s| s == "REBASING"),
+            cherry_pick_head: states.iter().any(|s| s == "CHERRY_PICK_HEAD"),
+            revert_head: states.iter().any(|s| s == "REVERT_HEAD"),
+            bisect_log: states.iter().any(|s| s == "BISECTING"),
+            ..crate::engine::in_progress::Probe::default()
+        };
+        let active = probe.in_progress();
         Ok(RepoStatus {
             branch: header_branch(&header),
             head: header_oid(&header),
             detached: header.head == "(detached)",
             ahead: header.ahead,
             behind: header.behind,
-            merging: states.iter().any(|s| s == "MERGE_HEAD"),
-            rebasing: states.iter().any(|s| s == "REBASING"),
-            sequencer: states
-                .iter()
-                .any(|s| s == "CHERRY_PICK_HEAD" || s == "REVERT_HEAD"),
+            merging: active == Some(crate::engine::in_progress::InProgress::Merging),
+            rebasing: active == Some(crate::engine::in_progress::InProgress::Rebasing),
+            sequencer: matches!(
+                active,
+                Some(
+                    crate::engine::in_progress::InProgress::CherryPicking
+                        | crate::engine::in_progress::InProgress::Reverting
+                )
+            ),
+            bisecting: probe.bisecting(),
             entries,
         })
     }
@@ -1225,19 +1239,24 @@ impl RemoteGitEngine {
         self.conflict_files()
     }
 
+    /// The shared `engine/in_progress.rs` precedence applied to the
+    /// state probe's marker names. (This used to check MERGE_HEAD first —
+    /// a hand-rolled precedence that drifted from the local rule and
+    /// mislabeled a rebase's conflicts as "merge".)
     fn sequencer_source(&self) -> Result<String, String> {
         let states = self.state_probe()?;
-        Ok(if states.iter().any(|s| s == "MERGE_HEAD") {
-            "merge".to_string()
-        } else if states.iter().any(|s| s == "CHERRY_PICK_HEAD") {
-            "cherry-pick".to_string()
-        } else if states.iter().any(|s| s == "REVERT_HEAD") {
-            "revert".to_string()
-        } else if states.iter().any(|s| s == "REBASING") {
-            "rebase".to_string()
-        } else {
-            String::new()
-        })
+        let probe = crate::engine::in_progress::Probe {
+            merge_head: states.iter().any(|s| s == "MERGE_HEAD"),
+            rebase_dirs: states.iter().any(|s| s == "REBASING"),
+            cherry_pick_head: states.iter().any(|s| s == "CHERRY_PICK_HEAD"),
+            revert_head: states.iter().any(|s| s == "REVERT_HEAD"),
+            bisect_log: states.iter().any(|s| s == "BISECTING"),
+            ..crate::engine::in_progress::Probe::default()
+        };
+        Ok(probe
+            .in_progress()
+            .map(|kind| kind.label().to_string())
+            .unwrap_or_default())
     }
 
     pub fn conflict_resolve(

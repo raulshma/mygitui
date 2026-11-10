@@ -94,7 +94,7 @@ const REPO_STATUS: RepoStatus = {
   behind: 1,
   merging: false,
   rebasing: false,
-  sequencer: false,
+  sequencer: false,  bisecting: false,
   entries: [
     { path: "src/a.ts", old_path: null, index: "modified", worktree: "unmodified" },
     { path: "src/b.ts", old_path: null, index: "unmodified", worktree: "modified" },

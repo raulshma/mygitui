@@ -100,7 +100,7 @@ function tabWith(entries: StatusEntry[]): Tab {
       behind: 0,
       merging: false,
       rebasing: false,
-      sequencer: false,
+      sequencer: false,      bisecting: false,
       entries,
     },
   };

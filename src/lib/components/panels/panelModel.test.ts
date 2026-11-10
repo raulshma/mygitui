@@ -53,7 +53,7 @@ function status(patch: Partial<RepoStatus>): RepoStatus {
     behind: 0,
     merging: false,
     rebasing: false,
-    sequencer: false,
+    sequencer: false,    bisecting: false,
     entries: [],
     ...patch,
   };
