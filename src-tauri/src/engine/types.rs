@@ -643,6 +643,10 @@ pub struct RebaseState {
     pub current: usize,
     /// When set: paused for `edit` — user amends the worktree, then continues.
     pub paused_for_edit: bool,
+    /// When set: paused on a conflicted step — the index holds unmerged
+    /// entries; the user resolves them (status panel), then continues.
+    #[serde(default)]
+    pub paused_for_conflict: bool,
     /// When set: paused for a failed `exec` — user fixes, then continues
     /// (the step re-runs). Diagnostics in `exec_error`. (M10)
     #[serde(default)]

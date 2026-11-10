@@ -1336,6 +1336,7 @@ impl RemoteGitEngine {
                 plan: Vec::new(),
                 current: 0,
                 paused_for_edit: false,
+                paused_for_conflict: false,
                 paused_for_exec: false,
                 exec_error: None,
                 rewritten: Vec::new(),
@@ -1362,6 +1363,12 @@ impl RemoteGitEngine {
             .trim()
             .to_string();
         let amend = !read_remote_file("rebase-merge/amend").trim().is_empty();
+        // Unmerged index entries = the stopped step hit a conflict. Plain
+        // `rebase-merge/` files don't carry that, so ask the index.
+        let conflicted = self
+            .git_out("ls-files --unmerged")
+            .map(|out| !out.trim().is_empty())
+            .unwrap_or(false);
         let mut plan: Vec<RebaseStep> = done
             .into_iter()
             .map(|(action, sha, message)| RebaseStep {
@@ -1392,6 +1399,7 @@ impl RemoteGitEngine {
             plan,
             current,
             paused_for_edit: amend,
+            paused_for_conflict: conflicted,
             paused_for_exec: false,
             exec_error: None,
             rewritten: Vec::new(),

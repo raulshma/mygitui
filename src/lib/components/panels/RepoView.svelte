@@ -89,6 +89,7 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
   import ConfirmDialog from "$lib/components/safety/ConfirmDialog.svelte";
   import PromptDialog from "$lib/components/safety/PromptDialog.svelte";
   import { trapTab } from "$lib/components/safety/trapTab";
+  import { rebaseMonitor } from "$lib/components/rebase/rebaseStore.svelte";
   import CommitBar from "$lib/components/panels/CommitBar.svelte";
   import OpLogStrip from "$lib/components/panels/OpLogStrip.svelte";
   import EditorPane from "$lib/components/panels/EditorPane.svelte";
@@ -724,6 +725,17 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
   let conflictRestoreTo: HTMLElement | null = null;
   /** Abort RPC in flight (disables the Abort button). */
   let aborting = $state(false);
+  /** Continue RPC in flight (disables the Continue button). */
+  let continuing = $state(false);
+
+  // The banner's Continue reads the shared rebase monitor, which the history
+  // planner normally owns. Attach whenever this repo reports a live rebase
+  // so Continue/Abort stay available after the planner was closed to reach
+  // the conflict editor.
+  $effect(() => {
+    if (status?.rebasing) rebaseMonitor.start(repoId);
+    else if (rebaseMonitor.repoId === repoId) rebaseMonitor.stop();
+  });
 
   /** In-progress operation (merge / rebase / sequencer), or null. */
   const opSource = $derived(status ? conflictSource(status) : null);
@@ -1257,6 +1269,29 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
     conflictEditorOpen = false;
   }
 
+  /**
+   * Continues a paused rebase from the top banner. Delegates to the shared
+   * monitor so its state (and the history planner's view of it) stays in
+   * sync; the monitor toasts failures and refreshes the conflict list.
+   */
+  async function onContinueRebase(): Promise<void> {
+    if (
+      opSource !== "rebase" ||
+      continuing ||
+      !rebaseMonitor.paused ||
+      rebaseMonitor.inConflict
+    ) {
+      return;
+    }
+    continuing = true;
+    try {
+      await rebaseMonitor.continueRebase();
+      await refreshStatus(repoId);
+    } finally {
+      continuing = false;
+    }
+  }
+
   /** Aborts the in-progress operation (rebase / merge / sequencer each have
    *  their own backend command — `conflictAbortCommand`). The confirmation
    *  is a ConfirmDialog (M9 F9). */
@@ -1577,7 +1612,7 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
 
   <OpLogStrip {repoId} />
 
-  {#if opSource && conflictCount > 0}
+  {#if opSource && (conflictCount > 0 || (opSource === "rebase" && rebaseMonitor.paused))}
     <div
       class="conflict-banner flex flex-none items-center gap-2 border-b border-border bg-destructive/15 px-3 py-1 text-ui-base text-destructive"
       role="alert"
@@ -1589,17 +1624,32 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
       <span
         class="cb-text min-w-0 overflow-hidden text-ellipsis whitespace-nowrap"
       >
-        {conflictSourceLabel(opSource)} in progress — {conflictCount}
-        conflicted file{conflictCount === 1 ? "" : "s"}
+        {conflictSourceLabel(opSource)} in progress{#if conflictCount > 0} — {conflictCount}
+        conflicted file{conflictCount === 1 ? "" : "s"}{/if}
       </span>
       <span class="cb-actions ml-auto flex flex-none gap-1.5">
-        <Button
-          class="cb-resolve rounded-full px-3 py-0.5 h-auto bg-destructive text-white hover:bg-destructive hover:brightness-110 text-ui-meta font-normal"
-          type="button"
-          onclick={onResolve}
-        >
-          Resolve
-        </Button>
+        {#if conflictCount > 0}
+          <Button
+            class="cb-resolve rounded-full px-3 py-0.5 h-auto bg-destructive text-white hover:bg-destructive hover:brightness-110 text-ui-meta font-normal"
+            type="button"
+            onclick={onResolve}
+          >
+            Resolve
+          </Button>
+        {/if}
+        {#if opSource === "rebase"}
+          <Button
+            class="cb-continue rounded-full px-3 py-0.5 h-auto text-ui-meta font-normal"
+            type="button"
+            disabled={continuing || !rebaseMonitor.paused || rebaseMonitor.inConflict}
+            title={rebaseMonitor.inConflict
+              ? "Resolve the conflicted files first"
+              : "Continue the paused rebase"}
+            onclick={() => void onContinueRebase()}
+          >
+            {continuing ? "Continuing…" : "Continue"}
+          </Button>
+        {/if}
         <Button
           variant="outline"
           class="cb-abort rounded-full border-current px-3 py-0.5 h-auto bg-transparent text-ui-meta font-normal text-inherit hover:bg-foreground/10 hover:text-inherit dark:bg-transparent dark:border-current dark:hover:bg-foreground/10 disabled:cursor-not-allowed disabled:opacity-55"

@@ -25,10 +25,10 @@
    *
    * A11y: rendered through the shadcn ui/dialog primitives — `role="dialog"`
    * + `aria-modal`, focus trap and focus restore come from bits-ui. Esc /
-   * outside-click close in the planning phase only (never mid-rebase).
-   * Closing the dialog never stops a live rebase — the shared monitor keeps
-   * watching and a reopened planner re-attaches to it.
-   */
+   * outside-click close while planning and while a conflict pause needs the
+   * status-panel editor; a running rebase is never stopped by closing — the
+   * shared monitor keeps watching, and RepoView's top banner carries
+   * Continue/Abort while this dialog is hidden. */
   import { rebaseStart, streamLog, autosquashPlan } from "$lib/ipc/client";
   import type { CommitInfo, RebaseStep } from "$lib/ipc/types";
   import { toast } from "$lib/toast";
@@ -85,6 +85,14 @@
       validationError === null,
   );
   const shortBase = $derived(baseSha === null ? "root" : baseSha.slice(0, 7));
+
+  /**
+   * Esc/outside-click may dismiss while planning or while a conflict pause
+   * must be resolved in the status panel (the editor sits behind this
+   * modal). Closing never stops the rebase — RepoView's banner offers
+   * Continue/Abort meanwhile.
+   */
+  const dismissible = $derived(phase === "planning" || monitor.inConflict);
 
   /** M10: replace the plan with the backend's autosquash ordering. */
   let autosquashing = $state(false);
@@ -311,8 +319,8 @@
     aria-modal="true"
     aria-labelledby="rebase-title"
     showCloseButton={false}
-    escapeKeydownBehavior={phase === "planning" ? "close" : "ignore"}
-    interactOutsideBehavior={phase === "planning" ? "close" : "ignore"}
+    escapeKeydownBehavior={dismissible ? "close" : "ignore"}
+    interactOutsideBehavior={dismissible ? "close" : "ignore"}
   >
     <Dialog.Title id="rebase-title" class="mx-1 mb-3 text-xl font-normal text-foreground">
       {#if phase === "planning"}
@@ -437,20 +445,20 @@
               <li class="cpath overflow-hidden text-ellipsis whitespace-nowrap font-mono text-xs text-foreground" title={file.path}>{file.path}</li>
             {/each}
           </ul>
-          <p class="chint mb-2 text-ui-meta text-muted-foreground">Resolve in the status panel, then Continue.</p>
+          <p class="chint mb-2 text-ui-meta text-muted-foreground">
+            Resolve in the status panel, then press Continue there or in the
+            top banner. Closing this dialog keeps the rebase running.
+          </p>
           <Button
             variant="outline"
             class="text-primary"
             type="button"
-            onclick={() =>
-              toast("Resolve conflicts in the status panel, then press Continue", {
-                kind: "info",
-              })}
+            onclick={onClose}
           >
-            Open in editor
+            Resolve in editor
           </Button>
         </div>
-      {:else if monitor.paused && phase === "running"}
+      {:else if monitor.pausedForEdit && phase === "running"}
         <p class="state mx-1 mb-3 mt-1 text-ui-base text-muted-foreground" role="status">
           Paused for edit — inspect the commit, then Continue.
         </p>
@@ -476,11 +484,15 @@
       <div class="actions flex flex-none justify-end gap-2 pt-1">
         {#if phase === "running"}
           <Button variant="outline" class="border-destructive/60 text-destructive" type="button" onclick={cancel}>Abort rebase</Button>
+          <span style:flex="1"></span>
+          <Button variant="outline" class="text-primary" type="button" onclick={onClose}>
+            Hide
+          </Button>
           <Button
             variant="default"
             type="button"
             onclick={continueRebase}
-            disabled={!monitor.paused}
+            disabled={!monitor.paused || monitor.inConflict}
           >
             Continue
           </Button>

@@ -7,6 +7,11 @@ export type RebaseState = { active: boolean, plan: Array<RebaseStep>, current: n
  */
 paused_for_edit: boolean, 
 /**
+ * When set: paused on a conflicted step — the index holds unmerged
+ * entries; the user resolves them (status panel), then continues.
+ */
+paused_for_conflict: boolean, 
+/**
  * When set: paused for a failed `exec` — user fixes, then continues
  * (the step re-runs). Diagnostics in `exec_error`. (M10)
  */

@@ -42,6 +42,7 @@ function state(patch: Partial<RebaseState> = {}): RebaseState {
     plan: [],
     current: 0,
     paused_for_edit: false,
+    paused_for_conflict: false,
     paused_for_exec: false,
     exec_error: null,
     rewritten: [],
@@ -333,6 +334,23 @@ describe("RebaseMonitor pause detection", () => {
     await vi.advanceTimersByTimeAsync(REBASE_POLL_MS);
 
     expect(mockConflicts).not.toHaveBeenCalled();
+    monitor.stop();
+  });
+
+  it("detects a conflict pause (mid-merge, no edit pause) as inConflict", async () => {
+    mockRebaseState.mockResolvedValue(
+      state({ active: true, paused_for_conflict: true }),
+    );
+    mockConflicts.mockResolvedValue(CONFLICT_FILES);
+    const monitor = new RebaseMonitor();
+    monitor.start("repo-1");
+    await flush();
+
+    expect(mockConflicts).toHaveBeenCalledWith("repo-1");
+    expect(monitor.paused).toBe(true);
+    expect(monitor.pausedForEdit).toBe(false);
+    expect(monitor.inConflict).toBe(true);
+
     monitor.stop();
   });
 });

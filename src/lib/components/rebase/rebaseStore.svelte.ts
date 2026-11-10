@@ -70,8 +70,14 @@ export class RebaseMonitor {
     return this.conflicts.length;
   }
 
-  /** Backend is paused mid-rebase (`edit`/`reword` stop or a conflict). */
+  /** Backend is stopped mid-rebase and waiting for the user (edit or
+   *  conflict pause). Continue is only meaningful while this is true. */
   get paused(): boolean {
+    return this.pausedForEdit || this.state?.paused_for_conflict === true;
+  }
+
+  /** Backend is paused for `edit` (inspect/amend the commit, then continue). */
+  get pausedForEdit(): boolean {
     return this.state?.paused_for_edit === true;
   }
 
@@ -136,7 +142,7 @@ export class RebaseMonitor {
       this.state = state;
       this.active = state.active;
       this.error = null;
-      if (state.active && state.paused_for_edit) {
+      if (state.active && (state.paused_for_edit || state.paused_for_conflict)) {
         try {
           this.conflicts = await conflicts(repoId);
         } catch {
@@ -187,7 +193,7 @@ export class RebaseMonitor {
       this.state = state;
       this.active = state.active;
 
-      if (state.active && state.paused_for_edit) {
+      if (state.active && (state.paused_for_edit || state.paused_for_conflict)) {
         try {
           const files = await conflicts(repoId);
           if (token !== this.#token) return;
