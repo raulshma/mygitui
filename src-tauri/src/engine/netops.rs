@@ -96,9 +96,10 @@ fn expand_refspec(remote: &str, spec: &str) -> String {
 
 /// Error raised when an op observes its cancellation token. Shared with the
 /// merge/rebase phase loops (same convention so the FE treats every
-/// cancellation uniformly).
+/// cancellation uniformly); the word itself lives in
+/// [`crate::ops::CANCELLED_ERR`] next to its classifier.
 pub(crate) fn cancelled_err() -> EngineError {
-    EngineError::Invalid("cancelled".to_owned())
+    EngineError::Invalid(crate::ops::CANCELLED_ERR.to_owned())
 }
 
 /// Core fetch: download + update tips + collect stats, running the given

@@ -100,7 +100,7 @@ events). Arg keys snake_case (commands use `rename_all`).
 
 | Event | Payload | Meaning |
 |---|---|---|
-| `op-progress` | `{ repo_id, op_id, kind, message, pct: number \| null, done: bool, error: string \| null }` | op-queue progress for mutations and net ops: throttled updates plus a final `done` event on success or failure (failures toast FE-side). Queue-dispatched reads (`status`, `refs`, `blame`, `diff`, …) emit nothing — their errors return through the command. Kinds: `stage`, `commit`, `branch`, `merge`, `rebase`, `bisect`, `stash`, `worktree`, `checkpoint`, `submodule`, `discard`, `clean`, `fetch`, `pull`, `push`, `maintenance`, `archive`, `sparse`, `lfs` (tags report as `branch`, remote config ops as `fetch`) |
+| `op-progress` | `{ repo_id, op_id, kind, message, pct: number \| null, done: bool, error: string \| null, outcome: "completed" \| "cancelled" \| "failed" \| null }` | op-queue progress for mutations and net ops: throttled updates plus a final `done` event on success or failure (failures toast FE-side). `outcome` is set on the final event only (`null` on intermediate progress): `cancelled` is reserved for ops aborted through `op_cancel` (backend sentinel `ops::CANCELLED_ERR` = "cancelled", classified by `OpOutcome::for_error`); `failed` covers every other error. Queue-dispatched reads (`status`, `refs`, `blame`, `diff`, …) emit nothing — their errors return through the command. Kinds: `stage`, `commit`, `branch`, `merge`, `rebase`, `bisect`, `stash`, `worktree`, `checkpoint`, `submodule`, `discard`, `clean`, `fetch`, `pull`, `push`, `maintenance`, `archive`, `sparse`, `lfs` (tags report as `branch`, remote config ops as `fetch`) |
 | `op-log` | `{ repo_id, op_id, kind, line }` | raw, unthrottled child output while an op runs; currently streams commit/signing hooks and the `push` CLI fallback (pre-push hook present). The FE keeps the newest session per repo and renders it in the workspace output strip. |
 | `auth-request` | `{ op_id, repo_id, url, kind: "https-user" \| "https-pass" \| "ssh-passphrase", prompt }` | engine needs credentials; FE shows dialog, answers via `auth_respond` |
 
@@ -749,9 +749,9 @@ interpolated path/ref passes the unit-tested POSIX quoting helper
 | `device_add` | `input: DeviceInput` | `DeviceInfo` | registers; secrets write-once into the keyring |
 | `device_update` | `input: DeviceInput` (`input.id` selects) | `DeviceInfo` | `None` secrets = leave stored ones |
 | `device_remove` | `device_id` | `void` | drops session, deletes profile + keyring secrets |
-| `device_connect` | `device_id` | `string` (status) | dials + auths; surfacing host-key/auth prompts as events |
+| `device_connect` | `device_id` | `DeviceStatus` | dials + auths; surfacing host-key/auth prompts as events |
 | `device_disconnect` | `device_id` | `void` | idle; ops reconnect on demand |
-| `device_status` | `device_id` | `string` | one-shot status probe (`"disconnected" \| "connecting" \| "connected"`) |
+| `device_status` | `device_id` | `DeviceStatus` | one-shot status probe (`"disconnected" \| "connecting" \| "connected"`) |
 | `device_test` | `input: DeviceInput` | `string` (probe output) | Test-connection button; nothing persisted (unsaved ids clean their keyring entries up) |
 | `device_hostkey_respond` | `request_id, accept: bool` | `void` | answers a `hostkey-request` |
 | `device_auth_respond` | `request_id, password?, store: bool` | `void` | answers a `device-auth-request` |
@@ -766,7 +766,10 @@ interpolated path/ref passes the unit-tested POSIX quoting helper
 | `rshell_resize` | `session_id, rows: u16, cols: u16` | `void` | pty window-change |
 | `rshell_kill` | `session_id` | `void` | closes the channel (remote shell dies) |
 
-`DeviceInfo = { profile: DeviceProfile, status: string }`,
+`DeviceInfo = { profile: DeviceProfile, status: DeviceStatus }`,
+`DeviceStatus = "disconnected" | "connecting" | "connected"` (typed enum
+end to end — the Rust `DeviceStatus` serializes snake_case, so the wire
+values are unchanged),
 `DeviceRepoCandidate = { path, name }` — ts-rs generated to
 `src/lib/ipc/gen/`, re-exported by `src/lib/ipc/types.ts`.
 

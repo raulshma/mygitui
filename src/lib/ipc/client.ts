@@ -48,6 +48,7 @@ import type {
   DeviceInfo,
   DeviceInput,
   DeviceRepoCandidate,
+  DeviceStatus,
   DeviceStatusEvent,
   DiffSide,
   DirListing,
@@ -1891,10 +1892,10 @@ export function deviceRemove(deviceId: string): Promise<void> {
 /**
  * Connects to a device, surfacing host-key / auth prompts as events
  * (answered via {@link deviceHostkeyRespond} / {@link deviceAuthRespond}).
- * Resolves with a human-readable status string.
+ * Resolves with the connection status.
  */
-export function deviceConnect(deviceId: string): Promise<string> {
-  return call<string>("device_connect", { device_id: deviceId });
+export function deviceConnect(deviceId: string): Promise<DeviceStatus> {
+  return call<DeviceStatus>("device_connect", { device_id: deviceId });
 }
 
 /** Drops the connection (background operations may reconnect on demand). */
@@ -1902,9 +1903,9 @@ export function deviceDisconnect(deviceId: string): Promise<void> {
   return call<void>("device_disconnect", { device_id: deviceId });
 }
 
-/** One-shot connection status string for a device. */
-export function deviceStatus(deviceId: string): Promise<string> {
-  return call<string>("device_status", { device_id: deviceId });
+/** One-shot connection status for a device. */
+export function deviceStatus(deviceId: string): Promise<DeviceStatus> {
+  return call<DeviceStatus>("device_status", { device_id: deviceId });
 }
 
 /**

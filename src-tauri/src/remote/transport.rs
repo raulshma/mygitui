@@ -54,7 +54,12 @@ pub const MAX_EXEC_BYTES: usize = 256 * 1024 * 1024;
 const EXEC_CANCELLED: &str = "remote command cancelled";
 
 /// Connection state of one device, mirrored to the FE as `device-status`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Serialized snake_case over the wire (the same strings the FE's
+/// generated union has always carried) — typed end to end, no stringly
+/// boundary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
 pub enum DeviceStatus {
     Disconnected,
     Connecting,
@@ -62,6 +67,8 @@ pub enum DeviceStatus {
 }
 
 impl DeviceStatus {
+    /// Headless/textual consumers (logs, tests). The wire uses the enum.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn as_str(&self) -> &'static str {
         match self {
             DeviceStatus::Disconnected => "disconnected",
@@ -76,9 +83,7 @@ impl DeviceStatus {
 #[ts(export)]
 pub struct DeviceStatusEvent {
     pub device_id: String,
-    /// "disconnected" | "connecting" | "connected".
-    #[ts(type = "\"disconnected\" | \"connecting\" | \"connected\"")]
-    pub status: String,
+    pub status: DeviceStatus,
 }
 
 /// Completed remote command execution.
@@ -266,7 +271,7 @@ impl DeviceSession {
             let _ = self.status.send_replace(status);
             prompts::emit_status(&DeviceStatusEvent {
                 device_id: self.device_id.clone(),
-                status: status.as_str().to_string(),
+                status,
             });
         }
     }

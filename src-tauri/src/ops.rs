@@ -42,6 +42,37 @@ pub const OP_LOG_EVENT: &str = "op-log";
 /// (mirrors the clone-progress throttle in ipc_commands).
 pub(crate) const THROTTLE_MS: u64 = 80;
 
+/// Error string for a caller-aborted op. The queue's queued-skip and the
+/// engine's cooperative cancellation (`netops::cancelled_err`) both use
+/// exactly this word; [`OpOutcome::for_error`] is the single comparison
+/// site, and the FE keeps a regex fallback keyed on it.
+pub const CANCELLED_ERR: &str = "cancelled";
+
+/// Terminal classification of one op (`OpProgress.outcome`). `cancelled`
+/// is reserved for ops aborted through the op-cancel path — any other
+/// error is a real failure. Absent on non-final events.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum OpOutcome {
+    Completed,
+    Cancelled,
+    Failed,
+}
+
+impl OpOutcome {
+    /// Classify a terminal op state from its error string (the queue's
+    /// single sentinel comparison — the FE receives the precomputed
+    /// outcome instead of pattern-matching error text).
+    pub fn for_error(error: Option<&str>) -> Self {
+        match error {
+            None => OpOutcome::Completed,
+            Some(msg) if msg == CANCELLED_ERR => OpOutcome::Cancelled,
+            Some(_) => OpOutcome::Failed,
+        }
+    }
+}
+
 /// `op-progress` payload — field names and shapes are fixed by
 /// docs/contracts.md; generated to `src/lib/ipc/gen/` via ts-rs and
 /// re-exported by `src/lib/ipc/types.ts`.
@@ -58,6 +89,8 @@ pub struct OpProgress {
     pub done: bool,
     /// `Some(msg)` when the op failed.
     pub error: Option<String>,
+    /// Terminal classification, set on the final event only.
+    pub outcome: Option<OpOutcome>,
 }
 
 /// One line of raw op output (`op-log`). Hooks and CLI fallbacks stream
@@ -301,14 +334,15 @@ impl OpQueue {
                             repo_id: final_repo,
                             op_id: final_op,
                             kind: final_kind,
-                            message: "cancelled".to_string(),
+                            message: CANCELLED_ERR.to_string(),
                             pct: None,
                             done: true,
-                            error: Some("cancelled".to_string()),
+                            error: Some(CANCELLED_ERR.to_string()),
+                            outcome: Some(OpOutcome::Cancelled),
                         });
                     }
                     if let Some(tx) = job_tx.lock().take() {
-                        let _ = tx.send(Err("cancelled".to_string()));
+                        let _ = tx.send(Err(CANCELLED_ERR.to_string()));
                     }
                     return;
                 }
@@ -324,6 +358,7 @@ impl OpQueue {
                     message: error.clone().unwrap_or_else(|| "done".to_string()),
                     pct: if error.is_some() { None } else { Some(100.0) },
                     done: true,
+                    outcome: Some(OpOutcome::for_error(error.as_deref())),
                     error,
                 };
                 if let Some(sink) = &sink {
@@ -419,6 +454,7 @@ impl OpCtx {
                 pct,
                 done: false,
                 error: None,
+                outcome: None,
             });
         }
     }

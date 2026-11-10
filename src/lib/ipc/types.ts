@@ -58,6 +58,8 @@ export type { RemoteInfo } from "./gen/RemoteInfo";
 export type { TagInfo } from "./gen/TagInfo";
 export type { RemoteBranchInfo } from "./gen/RemoteBranchInfo";
 export type { OpProgress } from "./gen/OpProgress";
+/** Terminal op classification (`OpProgress.outcome`, final event only). */
+export type { OpOutcome } from "./gen/OpOutcome";
 /** `op-log` event payload: one raw output line (hooks / CLI fallbacks). */
 export type { OpLog } from "./gen/OpLog";
 /** `auth-request` event payload (Rust: `AuthRequestEvent`). */
@@ -224,6 +226,8 @@ export type { DeviceInput } from "./gen/DeviceInput";
 export type { DeviceRepoCandidate } from "./gen/DeviceRepoCandidate";
 /** `device-status` event payload. */
 export type { DeviceStatusEvent } from "./gen/DeviceStatusEvent";
+/** Device connection lifecycle (`DeviceStatusEvent.status`). */
+export type { DeviceStatus } from "./gen/DeviceStatus";
 /** `hostkey-request` event payload. */
 export type { HostKeyRequestEvent } from "./gen/HostKeyRequestEvent";
 /** `device-auth-request` event payload. */

@@ -17,7 +17,7 @@ use super::profiles::{
     self, delete_secrets, sanitize_profile, AuthKind, DeviceAuth, DeviceProfile, DeviceStore,
 };
 use super::prompts;
-use super::transport::{test_connect, DeviceRegistry};
+use super::transport::{test_connect, DeviceRegistry, DeviceStatus};
 use crate::repo::RepoManager;
 
 /// `<app-data>/remote/…` stores rooted at the app data dir.
@@ -42,9 +42,7 @@ pub fn host_key_store(app: &tauri::AppHandle) -> Arc<HostKeyStore> {
 #[ts(export)]
 pub struct DeviceInfo {
     pub profile: DeviceProfile,
-    /// "disconnected" | "connecting" | "connected".
-    #[ts(type = "\"disconnected\" | \"connecting\" | \"connected\"")]
-    pub status: String,
+    pub status: DeviceStatus,
 }
 
 /// One repository candidate found by `device_scan_repos`.
@@ -59,7 +57,7 @@ pub struct DeviceRepoCandidate {
 
 fn device_info(registry: &DeviceRegistry, profile: DeviceProfile) -> DeviceInfo {
     DeviceInfo {
-        status: registry.status(&profile.id).as_str().to_string(),
+        status: registry.status(&profile.id),
         profile,
     }
 }
@@ -183,14 +181,14 @@ pub async fn device_connect(
     device_id: String,
     app: tauri::AppHandle,
     registry: State<'_, DeviceRegistry>,
-) -> Result<String, String> {
+) -> Result<DeviceStatus, String> {
     let profile = device_store(&app)
         .get(&device_id)
         .ok_or_else(|| format!("unknown device: {device_id}"))?;
     let session = registry
         .session_for(&profile, &host_key_store(&app))
         .await?;
-    Ok(session.status().as_str().to_string())
+    Ok(session.status())
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -205,8 +203,8 @@ pub async fn device_disconnect(
 }
 
 #[tauri::command(rename_all = "snake_case")]
-pub fn device_status(device_id: String, registry: State<'_, DeviceRegistry>) -> String {
-    registry.status(&device_id).as_str().to_string()
+pub fn device_status(device_id: String, registry: State<'_, DeviceRegistry>) -> DeviceStatus {
+    registry.status(&device_id)
 }
 
 /// Probe-only connect (Test connection button). Nothing is persisted.

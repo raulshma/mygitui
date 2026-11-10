@@ -583,6 +583,7 @@ describe("busy and list wiring", () => {
       pct: null,
       done: false,
       error: null,
+      outcome: null,
     });
     expect(ops.busy).toBe(true);
 
@@ -595,6 +596,7 @@ describe("busy and list wiring", () => {
       pct: null,
       done: false,
       error: null,
+      outcome: null,
     });
     expect(ops.busy).toBe(true);
 
@@ -606,6 +608,7 @@ describe("busy and list wiring", () => {
       pct: null,
       done: true,
       error: null,
+      outcome: "completed",
     });
     expect(ops.busy).toBe(false);
   });
