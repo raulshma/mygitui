@@ -27,7 +27,7 @@
 		{sideOffset}
 		{side}
 		class={cn(
-			"cn-tooltip-content z-50 w-fit max-w-xs origin-(--bits-tooltip-content-transform-origin) bg-foreground text-background",
+			"cn-tooltip-content z-50 w-fit max-w-xs origin-(--bits-tooltip-content-transform-origin) rounded-md border border-border bg-popover text-popover-foreground shadow-md",
 			className
 		)}
 		{...restProps}
@@ -37,7 +37,7 @@
 			{#snippet child({ props })}
 				<div
 					class={cn(
-						"cn-tooltip-arrow z-50 bg-foreground fill-foreground data-[side=bottom]:-translate-x-1/2 data-[side=bottom]:-translate-y-[calc(-50%_+_1px)] data-[side=left]:-translate-y-[calc(50%_-_3px)] data-[side=right]:translate-x-[calc(50%_+_2px)] data-[side=right]:translate-y-1/2 data-[side=top]:translate-x-1/2 data-[side=top]:translate-y-[calc(-50%_+_2px)]",
+						"cn-tooltip-arrow z-50 bg-popover fill-popover data-[side=bottom]:-translate-x-1/2 data-[side=bottom]:-translate-y-[calc(-50%_+_1px)] data-[side=left]:-translate-y-[calc(50%_-_3px)] data-[side=right]:translate-x-[calc(50%_+_2px)] data-[side=right]:translate-y-1/2 data-[side=top]:translate-x-1/2 data-[side=top]:translate-y-[calc(-50%_+_2px)]",
 						arrowClasses
 					)}
 					{...props}
