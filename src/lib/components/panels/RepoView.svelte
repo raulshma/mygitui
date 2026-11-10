@@ -187,8 +187,44 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
 
   // --- Center editor state -------------------------------------------------
 
-  /** Working-copy file whose diff is shown in the editor (null = none). */
-  let diffEntry = $state<StatusEntry | null>(null);
+  /**
+   * The center editor's mode — ONE state machine, ONE `$state`. Every mode
+   * change is a single assignment of this union (impossible to forget a
+   * sibling reset), and only one mode can be active at a time. It replaces
+   * six parallel nullable fields whose combinations were resolved by
+   * EditorPane's priority if-chain — the encoding that let repo A's file
+   * tabs survive a switch to repo B (state-machine audit, 2026-11).
+   */
+  type CenterPane =
+    | { kind: "empty" }
+    | { kind: "diff"; entry: StatusEntry }
+    | { kind: "commit"; commit: CommitInfo }
+    | { kind: "compare"; result: CompareResult }
+    | { kind: "workflowRun"; runId: number }
+    | { kind: "actionRun"; runId: string }
+    | { kind: "files" };
+  const EMPTY_PANE: CenterPane = { kind: "empty" };
+
+  /** The center editor's mode (see {@link CenterPane}). */
+  let center = $state<CenterPane>({ kind: "empty" });
+
+  // Per-mode projections. Reads keep the old names (the template and the
+  // diff-stream plumbing below are unchanged); writes go through `center`.
+  const diffEntry = $derived(center.kind === "diff" ? center.entry : null);
+  const selectedCommit = $derived(
+    center.kind === "commit" ? center.commit : null,
+  );
+  const compareResult = $derived(
+    center.kind === "compare" ? center.result : null,
+  );
+  const workflowRunId = $derived(
+    center.kind === "workflowRun" ? center.runId : null,
+  );
+  const actionRunId = $derived(center.kind === "actionRun" ? center.runId : null);
+  const filesMode = $derived(center.kind === "files");
+
+  // Diff-stream plumbing (output state of the working-copy diff stream —
+  // only meaningful while `center` is in the "diff" mode).
   let diffRepoId = $state<string | null>(null);
   let diffRoot = $state<string | null>(null);
   let diffRepoName = $state<string | null>(null);
@@ -196,14 +232,6 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
   let diffLoading = $state(false);
   /** Hunk staging is only safe when the file has no staged changes. */
   let diffHunkable = $state(false);
-  /** Commit selected in the history sidebar. */
-  let selectedCommit = $state<CommitInfo | null>(null);
-  /** Compare result selected in the history sidebar. */
-  let compareResult = $state<CompareResult | null>(null);
-  /** GitHub Actions run shown in the editor (from the forge sidebar). */
-  let workflowRunId = $state<number | null>(null);
-  /** Custom action run shown in the editor (from the actions panel). */
-  let actionRunId = $state<string | null>(null);
   /** Multi-selection action toolbar state reported by the history sidebar. */
   let historyActions = $state<HistoryCommitActions | null>(null);
   /** Commit to reveal/select in history (parent navigation from the editor). */
@@ -217,8 +245,6 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
   let openFiles = $state<OpenFileInfo[]>([]);
   /** Active (visible) workspace tab. */
   let activeFile = $state<string | null>(null);
-  /** Center shows the file workspace (vs the diff/commit views). */
-  let filesMode = $state(false);
   /** Quick-open (Ctrl+P) overlay visibility. */
   let quickOpenVisible = $state(false);
 
@@ -227,18 +253,14 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
     const existing = openFiles.find((f) => f.path === path);
     if (existing) {
       activeFile = path;
-      filesMode = true;
+      center = { kind: "files" };
       return;
     }
     const file: OpenFileInfo = { path, dirty: false, meta: null };
     openFiles.push(file);
     activeFile = path;
-    filesMode = true;
-    diffEntry = null;
-    selectedCommit = null;
-    compareResult = null;
-    workflowRunId = null;
-    actionRunId = null;
+    // Single mode transition: the workspace replaces whatever was showing.
+    center = { kind: "files" };
     try {
       const meta: FileMeta = await statFile(repoId, path);
       // Write through the proxied array: the local `file` is the raw
@@ -260,7 +282,9 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
       activeFile =
         openFiles[Math.min(idx, openFiles.length - 1)]?.path ?? null;
     }
-    if (openFiles.length === 0) filesMode = false;
+    if (openFiles.length === 0 && center.kind === "files") {
+      center = EMPTY_PANE;
+    }
   }
 
   function workdirDiffFor(path: string): void {
@@ -271,7 +295,6 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
       toast(`No working-copy changes for ${path}`);
       return;
     }
-    filesMode = false;
     void openDiff(entry);
   }
 
@@ -921,17 +944,18 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
   $effect(() => {
     void repoId;
     selected = [];
-    diffEntry = null;
+    center = EMPTY_PANE;
     diffFiles = [];
     diffLoading = false;
     diffHunkable = false;
-    selectedCommit = null;
-    compareResult = null;
     historyActions = null;
     pendingHistorySha = null;
-    workflowRunId = null;
-    actionRunId = null;
     conflictEditorOpen = false;
+    // The file workspace is repo-scoped: open tabs are keyed by workdir
+    // path only, and keeping them across a switch would run repo A's
+    // paths against repo B's IPC (read/write the wrong repo's files).
+    openFiles = [];
+    activeFile = null;
   });
 
   // Repos persisted before the editor existed may have no `diff` panel:
@@ -946,30 +970,20 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
   /** Opens a GitHub Actions run in the main editor (forge sidebar event). */
   function openWorkflowRun(runId: number): void {
     diffToken++;
-    diffEntry = null;
     diffFiles = [];
     diffLoading = false;
     diffHunkable = false;
-    selectedCommit = null;
-    compareResult = null;
-    actionRunId = null;
-    workflowRunId = runId;
-    filesMode = false;
+    center = { kind: "workflowRun", runId };
     focusPanel("diff");
   }
 
   /** Opens a custom action run in the main editor (actions panel event). */
   function openActionRun(runId: string): void {
     diffToken++;
-    diffEntry = null;
     diffFiles = [];
     diffLoading = false;
     diffHunkable = false;
-    selectedCommit = null;
-    compareResult = null;
-    workflowRunId = null;
-    actionRunId = runId;
-    filesMode = false;
+    center = { kind: "actionRun", runId };
     focusPanel("diff");
   }
 
@@ -981,17 +995,12 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
     targetRepoName?: string,
   ): Promise<void> {
     const token = ++diffToken;
-    diffEntry = entry;
+    center = { kind: "diff", entry };
     diffFiles = [];
     diffLoading = true;
     // Only files with NO staged changes can use head→worktree hunks for
     // staging: there the pane's hunks coincide with index→workdir.
     diffHunkable = entry.index === "unmodified";
-    selectedCommit = null;
-    compareResult = null;
-    workflowRunId = null;
-    actionRunId = null;
-    filesMode = false;
     diffRepoId = targetRepoId ?? repoId;
     diffRoot = targetRoot ?? root;
     diffRepoName = targetRepoName ?? "";
@@ -1043,14 +1052,10 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
     const prefs = root ? loadHistoryPrefs(root) : null;
     if (prefs?.selectedSha) return;
     const first = status.entries[0];
-    if (
-      first &&
-      diffEntry === null &&
-      selectedCommit === null &&
-      compareResult === null &&
-      workflowRunId === null &&
-      actionRunId === null
-    ) {
+    // The old encoding checked its five nullable siblings but not
+    // `filesMode` — an open file workspace got yanked to a diff. The
+    // union makes "empty" exactly what it says.
+    if (first && center.kind === "empty") {
       void openDiff(first);
     }
   });
@@ -1060,11 +1065,12 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
   $effect(() => {
     const current = diffEntry;
     if (!current || diffRepoId !== repoId || !status) return;
+    if (center.kind !== "diff") return;
     const fresh = status.entries.find((e) => e.path === current.path);
     if (!fresh) return;
     diffHunkable = fresh.index === "unmodified";
     if (fresh.index !== current.index || fresh.worktree !== current.worktree) {
-      diffEntry = fresh;
+      center = { kind: "diff", entry: fresh };
     }
   });
 
@@ -1143,14 +1149,10 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
   /** Clears the center editor (close button or the empty-state reset). */
   function clearEditor(): void {
     diffToken++;
-    diffEntry = null;
+    center = EMPTY_PANE;
     diffFiles = [];
     diffLoading = false;
     diffHunkable = false;
-    selectedCommit = null;
-    compareResult = null;
-    workflowRunId = null;
-    actionRunId = null;
     diffRepoId = null;
     diffRoot = null;
     diffRepoName = null;
@@ -1163,39 +1165,25 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
   ): void {
     // A restored selection only opens when nothing is in the editor: after
     // history is collapsed/reopened it must not replace an open file diff.
-    if (
-      source === "restore" &&
-      (filesMode ||
-        selectedCommit ||
-        diffEntry ||
-        compareResult ||
-        workflowRunId !== null ||
-        actionRunId !== null)
-    ) {
+    if (source === "restore" && center.kind !== "empty") {
       return;
     }
-    selectedCommit = info;
-    if (!info) return;
-    filesMode = false;
+    if (info === null) {
+      // Deselect: close a shown commit detail, leave other modes alone.
+      if (center.kind === "commit") center = EMPTY_PANE;
+      return;
+    }
+    center = { kind: "commit", commit: info };
     diffToken++;
-    diffEntry = null;
     diffFiles = [];
     diffLoading = false;
     diffHunkable = false;
-    compareResult = null;
-    workflowRunId = null;
-    actionRunId = null;
   }
 
   /** History sidebar: compare results open in the center editor. */
   function onHistoryCompare(result: CompareResult): void {
-    compareResult = result;
-    selectedCommit = null;
-    workflowRunId = null;
-    actionRunId = null;
-    filesMode = false;
+    center = { kind: "compare", result };
     diffToken++;
-    diffEntry = null;
     diffFiles = [];
     diffLoading = false;
     diffHunkable = false;
@@ -1357,6 +1345,7 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
   >
     <StatusPanel
       {status}
+      statusError={tabStore.tabs.find((t) => t.id === repoId)?.statusError ?? null}
       {repoId}
       {root}
       repoName={name}
@@ -1393,9 +1382,15 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
       ? { repoId, root, openFiles, active: activeFile, visible: filesMode }
       : null}
     onClose={clearEditor}
-    onCloseCompare={() => (compareResult = null)}
-    onCloseWorkflowRun={() => (workflowRunId = null)}
-    onCloseActionRun={() => (actionRunId = null)}
+    onCloseCompare={() => {
+      if (center.kind === "compare") center = EMPTY_PANE;
+    }}
+    onCloseWorkflowRun={() => {
+      if (center.kind === "workflowRun") center = EMPTY_PANE;
+    }}
+    onCloseActionRun={() => {
+      if (center.kind === "actionRun") center = EMPTY_PANE;
+    }}
     onSelectParent={revealHistoryCommit}
     onPopoutCommit={selectedCommit ? popOutCommit : undefined}
     onPopoutDiff={popOutDiff}
