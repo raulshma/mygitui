@@ -260,6 +260,20 @@ describe("filter debounce", () => {
     expect(store.flat.commits.map((c) => c.summary)).toEqual(["commit 10"]);
   });
 
+  it("bumps restartEpoch on every stream restart (row indices reset)", async () => {
+    vi.useFakeTimers();
+    const store = new HistoryStore();
+    store.start("repo-1");
+    const initial = store.restartEpoch;
+
+    store.setFilter({ text: "fix" });
+    await vi.advanceTimersByTimeAsync(200);
+    expect(store.restartEpoch).toBe(initial + 1);
+
+    store.restart();
+    expect(store.restartEpoch).toBe(initial + 2);
+  });
+
   it("clearFilter empties every field and restarts", async () => {
     vi.useFakeTimers();
     const store = new HistoryStore();

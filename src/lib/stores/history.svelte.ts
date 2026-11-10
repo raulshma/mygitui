@@ -80,6 +80,13 @@ export class HistoryStore {
   error: string | null = $state(null);
   /** Pages buffered but not yet released to `pages`/`flat`. */
   pendingCount = $state(0);
+  /**
+   * Bumps whenever the stream restarts (filter edit, external ref move,
+   * manual refresh). Views keep row-index state (multi-selection, anchors):
+   * indices only identify commits within one stream, so they must re-check
+   * this before acting.
+   */
+  restartEpoch = $state(0);
 
   readonly #index = new LogIndex();
   /** Rename-following walk (file-history mode). */
@@ -260,6 +267,11 @@ export class HistoryStore {
     if (!this.#started || !repoId) return;
     this.#clearDebounce();
     const token = ++this.#token;
+    // Untracked read: `start()` runs inside a view `$effect` whose cleanup
+    // destroys the store. Tracking the counter here would re-run that effect
+    // on every restart — destroy un-arms the start guard → restart → bump →
+    // forever. Like `filter`, the epoch must not enter the effect graph.
+    untrack(() => (this.restartEpoch += 1));
     this.#index.reset();
     this.#pending = [];
     this.#releasedCommits = 0;

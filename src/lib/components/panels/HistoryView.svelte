@@ -499,6 +499,29 @@
   // selection (panel re-mounted after a collapse) updates the list highlight
   // without stealing the editor away from an open working-copy diff.
 
+  /**
+   * Drop the index-based multi-selection when the log restarts. Indices only
+   * name commits within one stream; after a restart (filter edit, external
+   * ref move, manual refresh) the same numbers can point at different
+   * commits, and Cherry-pick/Revert would silently act on rows the user
+   * never picked. The sha-based single selection re-resolves on its own.
+   */
+  let selectionEpoch = -1;
+  $effect(() => {
+    const epoch = store.restartEpoch;
+    untrack(() => {
+      if (selectionEpoch === -1) {
+        selectionEpoch = epoch;
+        return;
+      }
+      if (epoch !== selectionEpoch) {
+        selectionEpoch = epoch;
+        if (multiIdx.length > 0) multiIdx = [];
+        anchorIdx = null;
+      }
+    });
+  });
+
   // Sidebar variant: parent navigation from the center editor. The commit
   // may still be beyond the released window (or the stream may not have
   // reached it yet), so retry as pages land; a commit the active filter
