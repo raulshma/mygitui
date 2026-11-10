@@ -158,21 +158,55 @@ export function hasModifier(combo: string): boolean {
   return parts !== null && (parts.ctrl || parts.alt || parts.shift);
 }
 
-/** Display form for hints: `"ctrl+shift+p"` → `"Ctrl+Shift+P"`. */
-export function formatCombo(combo: string): string {
+/** Named keys that read better as a glyph than as their raw token. */
+const KEY_GLYPHS: Record<string, string> = {
+  arrowleft: "←",
+  arrowright: "→",
+  arrowup: "↑",
+  arrowdown: "↓",
+  enter: "↵",
+  escape: "Esc",
+  backspace: "⌫",
+  delete: "Del",
+  space: "Space",
+  tab: "Tab",
+  pageup: "PgUp",
+  pagedown: "PgDn",
+  home: "Home",
+  end: "End",
+};
+
+function displayKey(key: string): string {
+  const glyph = KEY_GLYPHS[key];
+  if (glyph !== undefined) return glyph;
+  return key.length === 1
+    ? key.toUpperCase()
+    : key.charAt(0).toUpperCase() + key.slice(1);
+}
+
+/**
+ * Display form for hints: `"ctrl+shift+p"` → `"Ctrl+Shift+P"`, or `"⇧⌘P"`
+ * on macOS where the matcher treats Cmd as `ctrl`. Modifier order follows
+ * each platform's convention (macOS: ⌥⇧⌘, no separators).
+ */
+export function formatCombo(combo: string, platform: Platform = detectPlatform()): string {
   const parts = parseCombo(combo);
   if (parts === null) return combo;
+  const key = displayKey(parts.key);
+  if (platform === "mac") {
+    return `${parts.alt ? "⌥" : ""}${parts.shift ? "⇧" : ""}${parts.ctrl ? "⌘" : ""}${key}`;
+  }
   const tokens: string[] = [];
   if (parts.ctrl) tokens.push("Ctrl");
   if (parts.alt) tokens.push("Alt");
   if (parts.shift) tokens.push("Shift");
-  const key = parts.key;
-  tokens.push(
-    key.length === 1
-      ? key.toUpperCase()
-      : key.charAt(0).toUpperCase() + key.slice(1),
-  );
+  tokens.push(key);
   return tokens.join("+");
+}
+
+/** The platform's primary modifier label, for hints built outside a combo. */
+export function primaryModifierLabel(platform: Platform = detectPlatform()): string {
+  return platform === "mac" ? "⌘" : "Ctrl";
 }
 
 // ---------------------------------------------------------------------------

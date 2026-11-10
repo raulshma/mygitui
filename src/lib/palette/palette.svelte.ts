@@ -16,7 +16,7 @@ import {
   type Command,
   type CommandCtx,
 } from "$lib/palette/commands";
-import { getBinding } from "$lib/palette/keybinds";
+import { formatCombo, getBinding } from "$lib/palette/keybinds";
 
 /** localStorage key holding the last-run command ids. */
 export const PALETTE_RECENTS_KEY = "mygitui.palette.recents";
@@ -324,7 +324,8 @@ export async function executeCommandById(id: string): Promise<void> {
 
 /** The effective shortcut hint for a command, or `null` when unbound. */
 export function shortcutHint(command: Command): string | null {
-  return getBinding(command.id);
+  const combo = getBinding(command.id);
+  return combo === null ? null : formatCombo(combo);
 }
 
 /** Test seam: open flag + recents + toast count in one snapshot. */

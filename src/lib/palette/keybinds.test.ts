@@ -17,6 +17,7 @@ import {
   detectPlatform,
   findConflicts,
   formatCombo,
+  primaryModifierLabel,
   getBinding,
   getOverrides,
   hasModifier,
@@ -114,10 +115,29 @@ describe("combo canonicalization", () => {
   });
 
   it("formats combos for display", () => {
-    expect(formatCombo("ctrl+shift+p")).toBe("Ctrl+Shift+P");
-    expect(formatCombo("ctrl+alt+arrowleft")).toBe("Ctrl+Alt+Arrowleft");
-    expect(formatCombo("f5")).toBe("F5");
-    expect(formatCombo("ctrl+1")).toBe("Ctrl+1");
+    expect(formatCombo("ctrl+shift+p", "pc")).toBe("Ctrl+Shift+P");
+    expect(formatCombo("ctrl+alt+arrowleft", "pc")).toBe("Ctrl+Alt+←");
+    expect(formatCombo("f5", "pc")).toBe("F5");
+    expect(formatCombo("ctrl+1", "pc")).toBe("Ctrl+1");
+    expect(formatCombo("enter", "pc")).toBe("↵");
+  });
+
+  it("uses macOS symbols and modifier order on mac", () => {
+    // ctrl is Cmd on mac (see eventCtrl); macOS orders ⌥⇧⌘ with no "+".
+    expect(formatCombo("ctrl+shift+p", "mac")).toBe("⇧⌘P");
+    expect(formatCombo("ctrl+alt+arrowleft", "mac")).toBe("⌥⌘←");
+    expect(formatCombo("ctrl+s", "mac")).toBe("⌘S");
+    expect(formatCombo("f5", "mac")).toBe("F5");
+  });
+
+  it("falls back to the raw string for unparseable combos", () => {
+    expect(formatCombo("not a combo", "pc")).toBe("not a combo");
+    expect(formatCombo("", "mac")).toBe("");
+  });
+
+  it("labels the primary modifier per platform", () => {
+    expect(primaryModifierLabel("pc")).toBe("Ctrl");
+    expect(primaryModifierLabel("mac")).toBe("⌘");
   });
 });
 

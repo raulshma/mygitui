@@ -40,6 +40,7 @@
   import Icon from "$lib/components/icons/Icon.svelte";
   import EmptyState from "$lib/components/layout/EmptyState.svelte";
   import { Input } from "$lib/components/ui/input/index.js";
+  import { Kbd } from "$lib/components/ui/kbd/index.js";
   import { formatRelativeTime } from "$lib/git/format";
   import iconBrand from "@ktibow/iconset-material-symbols/account-tree";
   import iconAdd from "@ktibow/iconset-material-symbols/add";
@@ -58,7 +59,7 @@
   // M4 F1: panel popout query contract (?panel=diff|history&repo=<id>).
   import { parsePopoutQuery } from "$lib/layout/popout";
   // M4 F2: global keybind engine + palette execution entry point.
-  import { startKeybinds } from "$lib/palette/keybinds";
+  import { startKeybinds, primaryModifierLabel } from "$lib/palette/keybinds";
   import { executeCommandById, isPaletteOpen, togglePalette } from "$lib/palette/palette.svelte";
   import { isSwitcherOpen } from "$lib/stores/switcher.svelte";
   import { contextMenu } from "$lib/components/menu/contextMenuStore.svelte";
@@ -1117,13 +1118,13 @@
       <footer
         class="home-foot flex flex-none items-center gap-5 border-t border-border bg-muted/80 px-5 py-[0.65rem] text-ui-micro text-muted-foreground"
       >
-        <span class="hint">
-          <kbd class="kbd">Ctrl</kbd><kbd class="kbd">K</kbd> quick switcher
+        <span class="hint inline-flex items-center gap-1.5">
+          <Kbd>{primaryModifierLabel()}</Kbd><Kbd>K</Kbd>
+          <span class="ml-0.5">quick switcher</span>
         </span>
-        <span class="hint">
-          <kbd class="kbd">Ctrl</kbd><kbd class="kbd">Shift</kbd
-          ><kbd class="kbd">P</kbd>
-          command palette
+        <span class="hint inline-flex items-center gap-1.5">
+          <Kbd>{primaryModifierLabel()}</Kbd><Kbd>Shift</Kbd><Kbd>P</Kbd>
+          <span class="ml-0.5">command palette</span>
         </span>
         <span class="foot-note ml-auto opacity-85 max-[720px]:hidden"
           >Tip: drop a folder here to open it</span
