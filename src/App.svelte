@@ -160,6 +160,12 @@
   const popout = parsePopoutQuery(
     typeof location !== "undefined" ? location.search : "",
   );
+  if (popout !== null) {
+    // Popouts render one panel and never restore the session — clear the
+    // launch-hold flags so a popout-side `launching` reader can never
+    // wedge (registry #13; `restoreSession` is main-window-only).
+    tabStore.skipRestore();
+  }
 
   // Customizer (shadcn style/base/theme/fonts/...): storage → DOM during
   // component init — before any paint — so a persisted appearance never

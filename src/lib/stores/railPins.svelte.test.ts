@@ -113,4 +113,18 @@ describe("RailPinsStore", () => {
     expect(loadRailPins()).toEqual([]);
     expect(new RailPinsStore().pins).toEqual([]);
   });
+
+  it("loads legacy unversioned pin lists and re-saves them enveloped", () => {
+    // Pre-envelope payload (registry #7): a bare array.
+    localStorage.setItem(RAIL_PINS_KEY, JSON.stringify(["worktrees"]));
+    expect(loadRailPins()).toEqual(["worktrees"]);
+    // The next save migrates the payload into the envelope.
+    railPins.clear();
+    railPins.pin("worktrees");
+    expect(JSON.parse(localStorage.getItem(RAIL_PINS_KEY) ?? "{}")).toEqual({
+      v: 1,
+      data: ["worktrees"],
+    });
+    expect(loadRailPins()).toEqual(["worktrees"]);
+  });
 });

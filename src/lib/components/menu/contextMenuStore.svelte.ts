@@ -9,6 +9,7 @@
  */
 
 import type { IconifyIcon } from "@iconify/types";
+import { OverlayLayer, overlayStack } from "$lib/state/overlays.svelte";
 
 /** Secondary affordance rendered as a small button on the entry's right. */
 export interface MenuEntryAction {
@@ -77,11 +78,13 @@ export const contextMenu = {
     state.y = y;
     state.entries = entries;
     state.open = true;
+    overlayStack.open("context-menu", OverlayLayer.contextMenu);
   },
 
   /** Closes without running anything. */
   hide(): void {
     state.open = false;
+    overlayStack.close("context-menu");
     state.entries = [];
   },
 

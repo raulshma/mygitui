@@ -19,6 +19,7 @@
  */
   import { tabStore } from "$lib/stores/tabs.svelte";
   import { formatCombo } from "$lib/palette/keybinds";
+  import { overlayStack } from "$lib/state/overlays.svelte";
   import {
     COMMANDS,
     activeCtx,
@@ -126,6 +127,9 @@ import { Kbd } from "$lib/components/ui/kbd/index.js";
         run(entry);
       }
     } else if (event.key === "Escape") {
+      // Registry #10: a higher overlay (context menu, modal dialog) gets
+      // the Escape; the palette only closes when it is on top.
+      if (!overlayStack.isTop("palette")) return;
       event.preventDefault();
       event.stopPropagation();
       close();
@@ -134,10 +138,9 @@ import { Kbd } from "$lib/components/ui/kbd/index.js";
 
   /** Escape on the (never-focused) scrim still closes — defense in depth. */
   function onScrimKeydown(event: KeyboardEvent): void {
-    if (event.key === "Escape") {
-      event.preventDefault();
-      close();
-    }
+    if (event.key !== "Escape" || !overlayStack.isTop("palette")) return;
+    event.preventDefault();
+    close();
   }
 
   /**

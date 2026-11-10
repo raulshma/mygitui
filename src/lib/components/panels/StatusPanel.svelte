@@ -623,19 +623,57 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
    * Stage/unstage remaps queued by mutations: once the refreshed status
    * arrives, selected keys flip section (a staged file moves Changes →
    * Staged Changes) so the selection follows the files, VS Code style.
+   *
+   * Each remap is tied to the mutation that queued it (registry #12): it
+   * applies only on the refresh following a successful mutation — a
+   * failed stage drops its remaps instead of letting an unrelated
+   * watcher refresh apply them later.
    */
-  let pendingRemaps: { prefix?: string; paths: ReadonlySet<string>; unstage: boolean }[] = [];
+  interface PendingRemap {
+    prefix?: string;
+    paths: ReadonlySet<string>;
+    unstage: boolean;
+    /** null while the mutation runs; its result afterwards. */
+    ok: boolean | null;
+  }
+  let pendingRemaps: PendingRemap[] = [];
 
-  // Runs on every status refresh: apply queued remaps, then drop keys whose
-  // rows vanished (discarded, committed elsewhere, filtered out upstream).
+  /** Queues remaps tied to the mutation about to run. */
+  function queueRemaps(
+    entries: Array<Omit<PendingRemap, "ok">>,
+  ): PendingRemap[] {
+    const tracked: PendingRemap[] = entries.map((entry) => ({
+      ...entry,
+      ok: null,
+    }));
+    pendingRemaps.push(...tracked);
+    return tracked;
+  }
+
+  /** Resolves one mutation's remaps; failures drop them immediately. */
+  function settleRemaps(remaps: PendingRemap[], ok: boolean): void {
+    for (const remap of remaps) remap.ok = ok;
+    if (!ok) {
+      pendingRemaps = pendingRemaps.filter(
+        (remap) => !remaps.includes(remap),
+      );
+    }
+  }
+
+  // Runs on every status refresh: apply the remaps of settled successful
+  // mutations, then drop keys whose rows vanished (discarded, committed
+  // elsewhere, filtered out upstream).
   $effect(() => {
     const rows = allRows;
-    if (rows.length === 0 && pendingRemaps.length === 0) return;
+    const applicable = pendingRemaps.filter((remap) => remap.ok === true);
+    if (applicable.length > 0) {
+      pendingRemaps = pendingRemaps.filter((remap) => remap.ok !== true);
+    }
+    if (rows.length === 0 && applicable.length === 0) return;
     let next = selected;
-    for (const remap of pendingRemaps) {
+    for (const remap of applicable) {
       next = remapSelection(next, remap.paths, remap.unstage, rows, remap.prefix);
     }
-    pendingRemaps = [];
     next = pruneSelection(next, rows);
     const changed =
       next.length !== selected.length ||
@@ -904,12 +942,14 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
       const actions = selectionActions(repoTargets);
       const paths = [...actions.unstage, ...actions.stage];
       if (paths.length === 0) continue;
+      const queued: Array<Omit<PendingRemap, "ok">> = [];
       if (actions.unstage.length > 0) {
-        pendingRemaps.push({ prefix: subPath ?? "", paths: new Set(actions.unstage), unstage: true });
+        queued.push({ prefix: subPath ?? "", paths: new Set(actions.unstage), unstage: true });
       }
       if (actions.stage.length > 0) {
-        pendingRemaps.push({ prefix: subPath ?? "", paths: new Set(actions.stage), unstage: false });
+        queued.push({ prefix: subPath ?? "", paths: new Set(actions.stage), unstage: false });
       }
+      const remaps = queueRemaps(queued);
       const hasModule = !subPath && paths.some((path) => moduleByPath.has(path));
       void mutate(
         stageLabel(actions),
@@ -929,6 +969,7 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
               : Promise.resolve(),
           ]).then(() => undefined),
       ).then((ok) => {
+        settleRemaps(remaps, ok);
         if (ok) {
           if (subPath) {
             void loadSubmoduleStatus(subPath);
@@ -946,15 +987,15 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
     const sub = submodulesMap[subPath];
     if (!sub || !sub.repoId) return;
     if (unstage) {
-      const stagedRows = sub.index?.bySection.staged ?? [];
-      if (stagedRows.length > 0) {
-        pendingRemaps.push({
+      const remaps = queueRemaps(
+        (sub.index?.bySection.staged ?? []).map((r) => ({
           prefix: subPath,
-          paths: new Set(stagedRows.map((r) => r.entry.path)),
+          paths: new Set([r.entry.path]),
           unstage: true,
-        });
-      }
+        })),
+      );
       void mutate(`Unstage all in ${subPath}`, () => stageAll(sub.repoId!, true)).then((ok) => {
+        settleRemaps(remaps, ok);
         if (ok) {
           void loadSubmoduleStatus(subPath);
           onAfterMutation?.();
@@ -968,14 +1009,17 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
         .filter((r) => r.kind !== "conflicted")
         .map((r) => ({ file: r.entry.path }));
       if (files.length === 0) return;
-      pendingRemaps.push({
-        prefix: subPath,
-        paths: new Set(files.map((f) => f.file)),
-        unstage: false,
-      });
+      const remaps = queueRemaps([
+        {
+          prefix: subPath,
+          paths: new Set(files.map((f) => f.file)),
+          unstage: false,
+        },
+      ]);
       void mutate(`Stage all in ${subPath}`, () =>
         stage(sub.repoId!, { targets: files, unstage: false }),
       ).then((ok) => {
+        settleRemaps(remaps, ok);
         if (ok) {
           void loadSubmoduleStatus(subPath);
           onAfterMutation?.();
@@ -1000,11 +1044,13 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
       (r) => r.kind !== "conflicted",
     );
     if (rows.length === 0) return;
-    pendingRemaps.push({
-      prefix: subPath,
-      paths: new Set(rows.map((r) => r.entry.path)),
-      unstage,
-    });
+    const remaps = queueRemaps([
+      {
+        prefix: subPath,
+        paths: new Set(rows.map((r) => r.entry.path)),
+        unstage,
+      },
+    ]);
     void mutate(
       `${unstage ? "Unstage" : "Stage"} all in ${subPath} (${sectionId})`,
       () =>
@@ -1013,6 +1059,7 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
           unstage,
         }),
     ).then((ok) => {
+      settleRemaps(remaps, ok);
       if (ok) {
         void loadSubmoduleStatus(subPath);
         onAfterMutation?.();
@@ -1040,11 +1087,13 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
     const unstage = section.id === "staged";
     const rows = section.rows.filter((row) => row.kind !== "conflicted");
     if (rows.length === 0) return;
-    pendingRemaps.push({
-      prefix: "",
-      paths: new Set(rows.map((row) => row.entry.path)),
-      unstage,
-    });
+    const remaps = queueRemaps([
+      {
+        prefix: "",
+        paths: new Set(rows.map((row) => row.entry.path)),
+        unstage,
+      },
+    ]);
     const hasModule = rows.some((row) => moduleByPath.has(row.entry.path));
     void mutate(
       `${unstage ? "Unstage" : "Stage"} all in ${section.label}`,
@@ -1054,6 +1103,7 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
           unstage,
         }),
     ).then((ok) => {
+      settleRemaps(remaps, ok);
       if (ok && hasModule) void reloadModules();
     });
   }
@@ -1067,17 +1117,16 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
     if (!repoId) return;
     if (unstage) {
       const source = index;
-      if (source !== null && source.bySection.staged.length > 0) {
-        pendingRemaps.push({
+      const remaps = queueRemaps(
+        (source?.bySection.staged ?? []).map((row) => ({
           prefix: "",
-          paths: new Set(
-            source.bySection.staged.map((row) => row.entry.path),
-          ),
+          paths: new Set([row.entry.path]),
           unstage: true,
-        });
-      }
+        })),
+      );
       void mutate("Unstage all files", () => stageAll(repoId, true)).then(
         (ok) => {
+          settleRemaps(remaps, ok);
           if (ok && moduleList.length > 0) void reloadModules();
         },
       );
@@ -1091,7 +1140,7 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
       if (row.kind !== "conflicted") paths.add(path);
     }
     if (paths.size === 0) return;
-    pendingRemaps.push({ prefix: "", paths, unstage: false });
+    const remaps = queueRemaps([{ prefix: "", paths, unstage: false }]);
     const files = [...paths];
     const hasModule = files.some((path) => moduleByPath.has(path));
     void mutate("Stage all files", () =>
@@ -1100,6 +1149,7 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
         unstage: false,
       }),
     ).then((ok) => {
+      settleRemaps(remaps, ok);
       if (ok && hasModule) void reloadModules();
     });
   }

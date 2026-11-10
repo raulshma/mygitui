@@ -277,7 +277,14 @@ function loadRecentsCache(): string[] {
 // Open/close + execution
 // ---------------------------------------------------------------------------
 
+import { OverlayLayer, overlayStack } from "$lib/state/overlays.svelte";
+
 let open = $state(false);
+
+// Registry #10: the palette registers on the shared overlay stack so its
+// close affordances defer to whatever visually sits above it (a context
+// menu, a modal dialog).
+const PALETTE_OVERLAY_ID = "palette";
 
 export function isPaletteOpen(): boolean {
   return open;
@@ -285,14 +292,17 @@ export function isPaletteOpen(): boolean {
 
 export function openPalette(): void {
   open = true;
+  overlayStack.open(PALETTE_OVERLAY_ID, OverlayLayer.palette);
 }
 
 export function closePalette(): void {
   open = false;
+  overlayStack.close(PALETTE_OVERLAY_ID);
 }
 
 export function togglePalette(): void {
-  open = !open;
+  if (open) closePalette();
+  else openPalette();
 }
 
 /**

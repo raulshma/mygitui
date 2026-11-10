@@ -36,6 +36,7 @@
   import { toast } from "$lib/toast";
   import { Button } from "$lib/components/ui/button/index.js";
   import { Badge } from "$lib/components/ui/badge/index.js";
+  import { OverlayLayer, overlayStack } from "$lib/state/overlays.svelte";
   import {
     applyResolutions,
     countConflicts,
@@ -385,6 +386,13 @@
       clearTimeout(abortTimer);
       abortArmed = false;
     };
+  });
+
+  // Registry #10: occupy the lowest overlay layer while mounted, so the
+  // palette/context-menu Escape arbitration knows this surface exists.
+  $effect(() => {
+    overlayStack.open("conflict-editor", OverlayLayer.panel);
+    return () => overlayStack.close("conflict-editor");
   });
 
   /** First click arms (4 s), second click aborts the merge for real. */

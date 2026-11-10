@@ -188,12 +188,18 @@
 
   // -- commit actions (M3 E2) -------------------------------------------------
 
-  /** Multi-selection as row indices (list order); shift-click range. */
-  let multiIdx = $state<number[]>([]);
-  /** Membership view of `multiIdx` — the row template asks 3× per visible row. */
-  const multiSet = $derived(new Set(multiIdx));
-  /** Anchor row for shift-click ranges (last plain click). */
-  let anchorIdx: number | null = null;
+  /**
+   * Multi-selection as SHAS, list order (cherry-pick/revert input) — a
+   * selection-owned machine like the single select: the pick names
+   * commits, not rows, so a stream restart can never repoint it at rows
+   * the user did not click (registry #11 — the old index-based list only
+   * survived on an epoch-mirror effect faithfully clearing it).
+   */
+  let multiShas = $state<string[]>([]);
+  /** Membership view of `multiShas` — the row template asks 3× per visible row. */
+  const multiSet = $derived(new Set(multiShas));
+  /** Anchor commit for shift-click ranges (last plain click). */
+  let anchorSha: string | null = null;
   /** True while a cherry-pick/revert IPC is in flight. */
   let opBusy = $state(false);
   /** Interactive rebase planner for `HEAD..baseSha` (one state, args ride along). */
@@ -311,8 +317,8 @@
     if (switching) {
       untrack(() => {
         compare = null;
-        multiIdx = [];
-        anchorIdx = null;
+        multiShas = [];
+        anchorSha = null;
         planner = closedDialog();
         branchFrom = closedDialog();
         tagAt = closedDialog();
@@ -351,8 +357,8 @@
       const commit = commits[restored.index] ?? null;
       if (!commit) return;
       selectedInfo = commit;
-      multiIdx = [restored.index];
-      anchorIdx = restored.index;
+      multiShas = [sha];
+      anchorSha = sha;
       if (restoreScroll) {
         restoreScroll = false;
         sync.scrollToIndex(restored.index);
@@ -389,14 +395,7 @@
   });
 
   /** Shas of the multi-selection (cherry-pick/revert input), list order. */
-  const selectedShas = $derived.by(() => {
-    const out: string[] = [];
-    for (const i of multiIdx) {
-      const commit = commits[i];
-      if (commit) out.push(commit.sha);
-    }
-    return out;
-  });
+  const selectedShas = $derived(multiShas);
   const filterActive = $derived(store.filterActive);
 
   const activeDescendant = $derived(
@@ -486,8 +485,8 @@
     const commit = idx >= 0 ? commits[idx] : null;
     if (commit) selectedInfo = commit;
     if (!opts.keepMulti) {
-      multiIdx = idx >= 0 ? [idx] : [];
-      anchorIdx = idx >= 0 ? idx : null;
+      multiShas = [sha];
+      anchorSha = sha;
     }
     if (!sidebar && opts.open !== false) detailOpen = Boolean(selectedInfo);
     if (opts.scroll && idx >= 0) sync.scrollToIndex(idx);
@@ -501,28 +500,6 @@
   // selection (panel re-mounted after a collapse) updates the list highlight
   // without stealing the editor away from an open working-copy diff.
 
-  /**
-   * Drop the index-based multi-selection when the log restarts. Indices only
-   * name commits within one stream; after a restart (filter edit, external
-   * ref move, manual refresh) the same numbers can point at different
-   * commits, and Cherry-pick/Revert would silently act on rows the user
-   * never picked. The sha-based single selection re-resolves on its own.
-   */
-  let selectionEpoch = -1;
-  $effect(() => {
-    const epoch = store.restartEpoch;
-    untrack(() => {
-      if (selectionEpoch === -1) {
-        selectionEpoch = epoch;
-        return;
-      }
-      if (epoch !== selectionEpoch) {
-        selectionEpoch = epoch;
-        if (multiIdx.length > 0) multiIdx = [];
-        anchorIdx = null;
-      }
-    });
-  });
 
   // Sidebar variant: parent navigation from the center editor. The commit
   // may still be beyond the released window (or the stream may not have
@@ -598,17 +575,27 @@
    * the multi-selection to the anchor..clicked range (cherry-pick input).
    */
   function onRowClick(sha: string, idx: number, event: MouseEvent): void {
-    if (event.shiftKey && anchorIdx !== null) {
-      const lo = Math.min(anchorIdx, idx);
-      const hi = Math.max(anchorIdx, idx);
-      const range: number[] = [];
-      for (let i = lo; i <= hi; i++) range.push(i);
-      multiIdx = range;
-      select(sha, { keepMulti: true });
-    } else {
-      anchorIdx = idx;
-      select(sha);
+    if (event.shiftKey && anchorSha !== null) {
+      // Shift-click extends over the anchor..clicked ROW range (resolved
+      // in the current stream — the selection itself stays sha-owned).
+      const anchorIdx = store.indexOfSha(anchorSha);
+      if (anchorIdx >= 0) {
+        const lo = Math.min(anchorIdx, idx);
+        const hi = Math.max(anchorIdx, idx);
+        const range: string[] = [];
+        for (let i = lo; i <= hi; i++) {
+          const commit = commits[i];
+          if (commit) range.push(commit.sha);
+        }
+        multiShas = range;
+        select(sha, { keepMulti: true });
+        return;
+      }
+      // The anchor row is not in the loaded stream anymore: degrade to a
+      // plain single pick instead of silently re-pointing the range.
     }
+    anchorSha = sha;
+    select(sha);
   }
 
   function selectParent(sha: string): void {
@@ -1228,14 +1215,14 @@
               id={`commit-row-${v.idx}`}
               class="row absolute inset-x-0 flex cursor-pointer items-center border-b border-border/45 py-0 text-ui-base {sidebar ? "gap-1 pr-2 pl-2" : "gap-1.5 pr-2.5 pl-3"} {v.idx === selectedIdx
                 ? "bg-secondary text-secondary-foreground"
-                : multiSet.has(v.idx)
+                : multiSet.has(v.commit.sha)
                   ? "bg-secondary/45 hover:bg-secondary/60"
                   : "hover:bg-accent"}"
               class:selected={v.idx === selectedIdx}
-              class:multisel={v.idx !== selectedIdx && multiSet.has(v.idx)}
+              class:multisel={v.idx !== selectedIdx && multiSet.has(v.commit.sha)}
               role="option"
               tabindex="-1"
-              aria-selected={v.idx === selectedIdx || multiSet.has(v.idx)}
+              aria-selected={v.idx === selectedIdx || multiSet.has(v.commit.sha)}
               style:top={`${v.idx * ROW_HEIGHT}px`}
               style:height={`${ROW_HEIGHT}px`}
               onclick={(e) => onRowClick(v.commit.sha, v.idx, e)}

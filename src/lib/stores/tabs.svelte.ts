@@ -201,6 +201,16 @@ export class TabStore {
     this.restoreRoot = stored.activeRoot ?? stored.roots[0] ?? null;
   }
 
+  /**
+   * Popout windows render one panel and never run {@link restoreSession};
+   * this clears the constructor's launch-hold so their `restoring` (and
+   * any `launching` derivation off it) cannot wedge at `true` forever.
+   */
+  skipRestore(): void {
+    this.restoring = false;
+    this.restoreRoot = null;
+  }
+
   /** The currently active tab, or `null`. */
   get active(): Tab | null {
     return this.tabs.find((tab) => tab.id === this.activeId) ?? null;
