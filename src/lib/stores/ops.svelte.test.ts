@@ -15,8 +15,9 @@ import {
 } from "$lib/ipc/client";
 import type { AuthRequest, OpLog, OpProgress } from "$lib/ipc/types";
 import { resetRepoEvents } from "$lib/events/repoEvents";
-import { getToasts } from "$lib/toast";
+import { dismissToast, getToasts } from "$lib/toast";
 import {
+  AUTH_PROMPT_TIMEOUT_MS,
   authStore,
   AuthStore,
   opStore,
@@ -56,6 +57,7 @@ function progress(patch: Partial<OpProgress> & { op_id: string; repo_id: string 
     pct: null,
     done: false,
     error: null,
+    outcome: null,
     ...patch,
   };
 }
@@ -442,5 +444,102 @@ describe("AuthStore", () => {
 
     expect(resolved).toBeNull();
     expect(store.pending).toBeNull();
+  });
+
+  // -- state-machine audit regressions ---------------------------------------
+
+  it("the typed outcome classifies the toast, even when error text lacks 'cancel'", () => {
+    for (const t of getToasts()) dismissToast(t.id); // toasts accumulate across tests
+    const store = new OpStore();
+    store.applyProgress(progress({ op_id: "a", repo_id: "repo-1", kind: "push" }));
+    store.applyProgress(
+      progress({
+        op_id: "a",
+        repo_id: "repo-1",
+        kind: "push",
+        done: true,
+        error: "remote hook declined the push",
+        outcome: "cancelled",
+      }),
+    );
+
+    expect(getToasts().some((t) => t.kind === "info" && t.message === "Cancelled")).toBe(true);
+  });
+
+  it("outcome 'failed' wins over error text that merely contains 'cancel'", () => {
+    for (const t of getToasts()) dismissToast(t.id); // toasts accumulate across tests
+    const store = new OpStore();
+    store.applyProgress(progress({ op_id: "a", repo_id: "repo-1", kind: "fetch" }));
+    store.applyProgress(
+      progress({
+        op_id: "a",
+        repo_id: "repo-1",
+        kind: "fetch",
+        done: true,
+        error: "failed to cancel the transfer lock",
+        outcome: "failed",
+      }),
+    );
+
+    expect(
+      getToasts().some((t) => t.kind === "error" && t.message.includes("failed to cancel")),
+    ).toBe(true);
+    expect(getToasts().some((t) => t.kind === "info" && t.message === "Cancelled")).toBe(false);
+  });
+
+  it("an auth dialog for a finished op is cleared instead of sticking forever", async () => {
+    const ops = new OpStore();
+    const auth = new AuthStore();
+    ops.onOpFinished = (opId) => auth.notifyOpFinished(opId);
+    auth.handleRequest(AUTH_REQ);
+    expect(auth.pending?.op_id).toBe("op-1");
+
+    // The op ends without an answer (cancelled / failed / queue dropped):
+    // the done event must retire the dialog and resolve its waiters.
+    let resolved: AuthAnswerPayload | null | undefined;
+    void auth.whenAnswered("op-1").then((value) => {
+      resolved = value;
+    });
+
+    ops.applyProgress(
+      progress({
+        op_id: "op-1",
+        repo_id: "repo-1",
+        kind: "push",
+        done: true,
+        error: "cancelled",
+        outcome: "cancelled",
+      }),
+    );
+
+    expect(auth.pending).toBeNull();
+    await flush();
+    expect(resolved).toBeNull();
+  });
+
+  it("a queued auth request for a finished op is dropped from the queue", () => {
+    const auth = new AuthStore();
+    auth.handleRequest(AUTH_REQ);
+    const second: AuthRequest = { ...AUTH_REQ, op_id: "op-2", kind: "ssh-passphrase" };
+    auth.handleRequest(second);
+    // op-1 shows, op-2 waits in line — then op-2's op dies.
+    auth.notifyOpFinished("op-2");
+
+    expect(auth.pending?.op_id).toBe("op-1");
+    // Answering op-1 must not surface the dead request.
+    void auth.answer({ password: "pw" });
+    expect(auth.pending).toBeNull();
+  });
+
+  it("pruneStale retires requests older than the backend's 120s prompt timeout", () => {
+    const auth = new AuthStore();
+    auth.handleRequest(AUTH_REQ);
+    expect(auth.pending).not.toBeNull();
+
+    auth.pruneStale(Date.now() + 119_000);
+    expect(auth.pending).not.toBeNull();
+
+    auth.pruneStale(Date.now() + AUTH_PROMPT_TIMEOUT_MS + 1);
+    expect(auth.pending).toBeNull();
   });
 });

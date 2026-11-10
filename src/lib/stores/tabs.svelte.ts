@@ -20,6 +20,7 @@ import {
 import type { RepoId, RepoStatus } from "$lib/ipc/types";
 import { onRepoChange } from "$lib/events/repoEvents";
 import { RecentRepoStore } from "$lib/entry/recentRepos";
+import { terminals } from "$lib/terminal/terminalStore.svelte";
 
 /** One open repository tab. */
 export interface Tab {
@@ -31,6 +32,14 @@ export interface Tab {
   root: string;
   /** Latest known status; `null` until the first `repo_status` lands. */
   status: RepoStatus | null;
+  /**
+   * Why the last `repo_status` failed while `status` is still `null`
+   * (backend wedged, watcher dead, …). The shell renders an offline-style
+   * error state with a Retry instead of an endless spinner; `null` once a
+   * status lands (a failing refresh on a loaded tab keeps the previous
+   * status and leaves this alone).
+   */
+  statusError: string | null;
   /** Watcher/stream generation, bumped when the repo changes under us. */
   generation: number;
   /**
@@ -309,6 +318,7 @@ export class TabStore {
       name: info.name,
       root: info.root,
       status: null,
+      statusError: null,
       generation: 0,
       deviceId: null,
       openError: null,
@@ -365,13 +375,30 @@ export class TabStore {
         name: info.name,
         root: uri,
         status: null,
+        statusError: null,
         generation: 0,
         deviceId,
         openError: null,
       };
-      if (byUri) {
+      // Re-find after the await: a concurrent open of the same URI (e.g. a
+      // double-clicked Retry) may have replaced or opened the tab while
+      // this call was in flight. The stale pre-await reference would make
+      // `indexOf` return -1 and `splice(-1, 1, …)` delete an unrelated
+      // tab — re-finding by root (like {@link openTab}) keeps the strip
+      // consistent. A tab that is already open wins; just activate it.
+      const existing = this.tabs.find((t) => t.root === uri);
+      if (existing && existing.openError === null) {
+        if (activate) {
+          this.activeId = existing.id;
+          this.recentsOpen = false;
+        }
+        this.#recents.add(uri);
+        this.#persistSession();
+        return existing;
+      }
+      if (existing) {
         // Upgrade the offline tab in place: strip position is preserved.
-        this.tabs.splice(this.tabs.indexOf(byUri), 1, tab);
+        this.tabs.splice(this.tabs.indexOf(existing), 1, tab);
       } else {
         const at = Math.min(options.index ?? this.tabs.length, this.tabs.length);
         this.tabs.splice(at, 0, tab);
@@ -391,12 +418,27 @@ export class TabStore {
         name: remoteRepoName(path),
         root: uri,
         status: null,
+        statusError: null,
         generation: 0,
         deviceId,
         openError: message,
       };
-      if (byUri) {
-        this.tabs.splice(this.tabs.indexOf(byUri), 1, tab);
+      // Same re-find as the success path: a concurrent call may have
+      // replaced the offline tab while this one was in flight — and if
+      // that call succeeded, its open tab must not be clobbered by this
+      // call's failure.
+      const existing = this.tabs.find((t) => t.root === uri);
+      if (existing && existing.openError === null) {
+        if (activate) {
+          this.activeId = existing.id;
+          this.recentsOpen = false;
+        }
+        this.#recents.add(uri);
+        this.#persistSession();
+        return existing;
+      }
+      if (existing) {
+        this.tabs.splice(this.tabs.indexOf(existing), 1, tab);
       } else {
         const at = Math.min(options.index ?? this.tabs.length, this.tabs.length);
         this.tabs.splice(at, 0, tab);
@@ -427,9 +469,18 @@ export class TabStore {
    * Closes a tab: notifies the backend, removes the tab, and — when the
    * closed tab was active — activates its neighbor (left preferred, then
    * right, else nothing). Backend close failures still remove the tab.
+   *
+   * Terminal teardown happens HERE (the single close choke point), not
+   * only in RepoView's unmount: switching tabs reuses the RepoView
+   * instance, so closing a background tab (or the active tab, whose
+   * neighbor activation keeps the component mounted) never unmounted
+   * anything — the shell kept running until app exit, violating the M5
+   * contract ("the FE must `pty_kill` each terminal panel's session when
+   * its tab closes"). `dispose` is a no-op for repos without a session.
    */
   async closeTab(id: RepoId): Promise<void> {
     if (this.tabs.every((tab) => tab.id !== id)) return;
+    terminals.dispose(id);
     try {
       await closeRepo(id);
     } catch (err) {
@@ -491,8 +542,17 @@ export class TabStore {
         if (!tab) return;
         try {
           tab.status = await repoStatus(id);
+          tab.statusError = null;
         } catch (err) {
           console.warn(`[tabs] repo_status failed for ${id}:`, err);
+          // A failed refresh on a loaded tab keeps the previous status
+          // (tests pin that); but a repo that has NEVER loaded must not
+          // spin forever — surface the error so the shell can offer a
+          // Retry instead of an indistinguishable "Loading changes…".
+          if (tab.status === null) {
+            tab.statusError =
+              err instanceof Error ? err.message : String(err);
+          }
         }
       } while (state.again);
     })().finally(() => {

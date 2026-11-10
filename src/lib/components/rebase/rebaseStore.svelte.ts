@@ -71,14 +71,18 @@ export class RebaseMonitor {
   }
 
   /** Backend is stopped mid-rebase and waiting for the user (edit or
-   *  conflict pause). Continue is only meaningful while this is true. */
+   *  conflict pause). Continue is only meaningful while this is true.
+   *  Requires `active`: after a natural completion `#finish` keeps the
+   *  final `state` visible while clearing `active` — without this gate
+   *  the stale pause flags enabled Continue against a rebase that had
+   *  already ended (`rebase_continue` then errored backend-side). */
   get paused(): boolean {
-    return this.pausedForEdit || this.state?.paused_for_conflict === true;
+    return this.active && (this.pausedForEdit || this.state?.paused_for_conflict === true);
   }
 
   /** Backend is paused for `edit` (inspect/amend the commit, then continue). */
   get pausedForEdit(): boolean {
-    return this.state?.paused_for_edit === true;
+    return this.active && this.state?.paused_for_edit === true;
   }
 
   /** Active rebase with conflicts to resolve — the Continue gate. */

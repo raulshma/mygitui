@@ -58,6 +58,10 @@ export interface OpLogSession {
 /** Keep the hook log bounded even when a chatty hook floods the pipe. */
 const MAX_LOG_LINES = 500;
 
+/** Mirrors the backend's prompt timeout (`remote/prompts.rs`: 120 s) — a
+ * request older than this can no longer be answered, so its dialog goes. */
+export const AUTH_PROMPT_TIMEOUT_MS = 120_000;
+
 /** "fetch" → "Fetch" (fallback for kinds without a friendly label). */
 export function kindLabel(kind: string): string {
   const known: Record<string, string> = {
@@ -78,9 +82,24 @@ export function kindLabel(kind: string): string {
  * (`netops.rs` `cancelled_err()` and the op queue's queued-not-started skip
  * both use exactly that word), matched loosely so wrapped variants still
  * hit. Every other error is a real failure.
+ *
+ * Fallback only — final `op-progress` events carry a typed `outcome`
+ * (backend `OpOutcome::for_error`, the single sentinel comparison site);
+ * prefer that via {@link isCancelledOp}.
  */
 export function isCancellationError(error: string): boolean {
   return /cancel/i.test(error);
+}
+
+/**
+ * Terminal classification of a done event: the backend's typed `outcome`
+ * wins; the error-text regex covers events from a backend that predates
+ * the field.
+ */
+export function isCancelledOp(p: OpProgress): boolean {
+  if (p.outcome === "cancelled") return true;
+  if (p.outcome === "failed") return false;
+  return p.error !== null && isCancellationError(p.error);
 }
 
 export class OpStore {
@@ -89,6 +108,13 @@ export class OpStore {
 
   /** Latest op output per repo (hook/CLI lines), kept after completion. */
   logs: Record<RepoId, OpLogSession> = $state({});
+
+  /**
+   * Retires the auth dialog for an op that ended without an answer (see
+   * {@link AuthStore.notifyOpFinished}). Injectable so tests can drive a
+   * local AuthStore instead of the module singleton.
+   */
+  onOpFinished: (opId: string) => void = (opId) => authStore.notifyOpFinished(opId);
 
   #unregister: Array<() => void> = [];
 
@@ -112,10 +138,15 @@ export class OpStore {
   applyProgress(p: OpProgress): void {
     if (p.done) {
       this.#finishLog(p);
+      // An auth dialog waiting on this op must not outlive it: the op
+      // ended without an answer (cancelled / failed / dropped), so clear
+      // the dialog now instead of showing it until the backend's own 120 s
+      // prompt timeout.
+      this.onOpFinished(p.op_id);
       if (p.error) {
         // A cancellation the user asked for is not a failure: announce it
         // as info so the strip/toast don't read as an error.
-        if (isCancellationError(p.error)) {
+        if (isCancelledOp(p)) {
           toast("Cancelled", { kind: "info" });
         } else {
           toast(`${kindLabel(p.kind)} failed: ${p.error}`, { kind: "error" });
@@ -307,6 +338,8 @@ export class AuthStore {
   pending: AuthRequest | null = $state(null);
 
   #queue: AuthRequest[] = [];
+  /** op_id → queue arrival (ms), for {@link pruneStale}. */
+  #queuedAt = new Map<string, number>();
   #waiters = new Map<string, Array<(answer: AuthAnswerPayload | null) => void>>();
   #unregister: (() => void) | null = null;
 
@@ -325,8 +358,46 @@ export class AuthStore {
    * it as soon as no other request is on screen.
    */
   handleRequest(request: AuthRequest): void {
+    this.pruneStale();
+    this.#queuedAt.set(request.op_id, Date.now());
     this.#queue.push(request);
     if (this.pending === null) this.pending = this.#queue.shift() ?? null;
+  }
+
+  /**
+   * The op behind an auth request ended without an answer (cancelled,
+   * failed, dropped by a closing queue). The dialog for that op must not
+   * outlive it: remove it (showing or queued), resolve its waiters with
+   * `null`, and surface the next queued request. Without this the dialog
+   * stayed on screen forever whenever the op died before answering —
+   * until the backend's own 120 s prompt timeout, which only helps the
+   * net op, not the FE's dialog state.
+   */
+  notifyOpFinished(opId: string): void {
+    let removed = false;
+    if (this.pending?.op_id === opId) {
+      this.pending = null;
+      removed = true;
+    }
+    const before = this.#queue.length;
+    this.#queue = this.#queue.filter((r) => r.op_id !== opId);
+    removed = removed || this.#queue.length !== before;
+    if (!removed) return;
+    this.#queuedAt.delete(opId);
+    this.#resolveWaiters(opId, null);
+    if (this.pending === null) this.pending = this.#queue.shift() ?? null;
+  }
+
+  /**
+   * Drops requests older than {@link AUTH_PROMPT_TIMEOUT_MS} — the backend
+   * expires an unanswered prompt after 120 s (remote/prompts.rs), so a
+   * dialog showing one can no longer be answered. Called on every event
+   * touching the store (same no-timer pattern as RemoteDeviceStore).
+   */
+  pruneStale(now: number = Date.now()): void {
+    for (const [opId, at] of this.#queuedAt) {
+      if (now - at > AUTH_PROMPT_TIMEOUT_MS) this.notifyOpFinished(opId);
+    }
   }
 
   /**
@@ -350,6 +421,7 @@ export class AuthStore {
     const request = this.pending;
     if (!request) return;
     this.#advance();
+    this.#queuedAt.delete(request.op_id);
     await this.#respond(request, payload);
     this.#resolveWaiters(request.op_id, payload);
   }
@@ -362,6 +434,7 @@ export class AuthStore {
     const request = this.pending;
     if (!request) return;
     this.#advance();
+    this.#queuedAt.delete(request.op_id);
     await this.#respond(request, null);
     this.#resolveWaiters(request.op_id, null);
   }
@@ -371,6 +444,7 @@ export class AuthStore {
     this.#unregister?.();
     this.#unregister = null;
     this.#queue = [];
+    this.#queuedAt.clear();
     this.pending = null;
     this.#resolveWaitersAll(null);
   }

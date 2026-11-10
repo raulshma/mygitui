@@ -446,4 +446,29 @@ describe("RebaseMonitor continue/abort", () => {
     expect(monitor.polling).toBe(true); // still watching the live rebase
     monitor.stop();
   });
+
+  it("a finished rebase's stale pause flags no longer gate Continue (paused requires active)", async () => {
+    // Live rebase, paused for edit: Continue is enabled.
+    mockRebaseState.mockResolvedValue(
+      state({ active: true, plan: [step(SHA_A)], current: 0, paused_for_edit: true }),
+    );
+    const monitor = new RebaseMonitor();
+    monitor.start("repo-1");
+    await flush();
+    expect(monitor.paused).toBe(true);
+
+    // The rebase completes; `#finish` keeps the final state visible — and
+    // that final state still carries paused_for_edit. The old encoding
+    // kept `paused` true, so RepoView's Continue button fired
+    // `rebase_continue` against a rebase that had already ended.
+    mockRebaseState.mockResolvedValue(
+      state({ active: false, plan: [step(SHA_A)], current: 1, paused_for_edit: true }),
+    );
+    await vi.advanceTimersByTimeAsync(REBASE_POLL_MS);
+
+    expect(monitor.active).toBe(false);
+    expect(monitor.state?.paused_for_edit).toBe(true); // summary still visible
+    expect(monitor.paused).toBe(false); // but Continue is off
+    expect(monitor.pausedForEdit).toBe(false);
+  });
 });

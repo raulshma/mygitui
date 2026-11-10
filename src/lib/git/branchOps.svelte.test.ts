@@ -90,6 +90,7 @@ function tabWith(entries: StatusEntry[]): Tab {
     root: "/repo",
     generation: 0,
     deviceId: null,
+    statusError: null,
     openError: null,
     status: {
       branch: "main",

@@ -120,6 +120,7 @@ function seedTab(id = "r1"): void {
     name: "r1",
     root: "/repos/r1",
     status: { branch: "main" } as never,
+    statusError: null,
     generation: 0,
     deviceId: null,
     openError: null,

@@ -8,11 +8,13 @@ import {
   closeRepo,
   onRepoChanged,
   openRepo,
+  remoteRepoOpen,
   repoStatus,
 } from "$lib/ipc/client";
 import type { RepoChangedEvent } from "$lib/ipc/types";
 import { resetRepoEvents } from "$lib/events/repoEvents";
 import { RecentRepoStore, type StorageLike } from "$lib/entry/recentRepos";
+import { terminals } from "$lib/terminal/terminalStore.svelte";
 import {
   closeTab,
   openTab,
@@ -28,6 +30,7 @@ vi.mock("$lib/ipc/client", () => ({
   openRepo: vi.fn(),
   closeRepo: vi.fn(),
   repoStatus: vi.fn(),
+  remoteRepoOpen: vi.fn(),
   onRepoChanged: vi.fn(),
   // $lib/events/repoEvents (imported by tabs.svelte) pulls the other event
   // seams in transitively; they are never called in this suite.
@@ -43,6 +46,7 @@ vi.mock("$lib/ipc/client", () => ({
 const mockOpenRepo = vi.mocked(openRepo);
 const mockCloseRepo = vi.mocked(closeRepo);
 const mockRepoStatus = vi.mocked(repoStatus);
+const mockRemoteRepoOpen = vi.mocked(remoteRepoOpen);
 const mockOnRepoChanged = vi.mocked(onRepoChanged);
 
 // ---------------------------------------------------------------------------
@@ -91,6 +95,7 @@ beforeEach(() => {
   mockOpenRepo.mockReset();
   mockCloseRepo.mockReset();
   mockRepoStatus.mockReset();
+  mockRemoteRepoOpen.mockReset();
   mockOnRepoChanged.mockReset();
   mockCloseRepo.mockResolvedValue(undefined);
   mockRepoStatus.mockResolvedValue(status("main", 0, 0));
@@ -703,5 +708,157 @@ describe("parseStoredSession", () => {
       roots: ["ok"],
       activeRoot: null,
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// openRemoteTab / retryRemoteTab (state-machine audit regressions)
+// ---------------------------------------------------------------------------
+
+describe("openRemoteTab", () => {
+  const URI = "ssh://dev-1/srv/app";
+  function remoteInfo(id = "remote-repo-1") {
+    return {
+      repo_id: id,
+      root: URI,
+      name: "app",
+      bare: false,
+      git_dir: "/srv/app/.git",
+      device_id: "dev-1",
+    };
+  }
+
+  it("opens a remote repo as a tab keyed by the ssh:// URI", async () => {
+    const store = freshStore();
+    mockRemoteRepoOpen.mockResolvedValue(remoteInfo());
+    mockRepoStatus.mockResolvedValue(status("main", 0, 0));
+
+    const tab = await store.openRemoteTab("dev-1", "/srv/app");
+
+    expect(mockRemoteRepoOpen).toHaveBeenCalledWith("dev-1", "/srv/app");
+    expect(tab).toMatchObject({ id: "remote-repo-1", root: URI, deviceId: "dev-1" });
+    expect(store.tabs).toHaveLength(1);
+    expect(store.activeId).toBe("remote-repo-1");
+  });
+
+  it("a backend failure opens an offline tab; the retry upgrades it in place", async () => {
+    const store = freshStore();
+    mockRemoteRepoOpen.mockRejectedValueOnce(new Error("device offline"));
+    const offline = await store.openRemoteTab("dev-1", "/srv/app");
+
+    expect(offline.openError).toBe("device offline");
+    expect(offline.id).toBe(URI); // no backend repo: the URI is the tab id
+    expect(store.tabs).toHaveLength(1);
+
+    mockRemoteRepoOpen.mockResolvedValueOnce(remoteInfo());
+    await store.retryRemoteTab(URI);
+
+    expect(store.tabs).toHaveLength(1); // same strip position, no duplicate
+    expect(store.tabs[0]).toMatchObject({ id: "remote-repo-1", openError: null });
+    expect(store.activeId).toBe("remote-repo-1");
+  });
+
+  it("a failed retry does not clobber a tab a concurrent call opened (old code spliced at -1)", async () => {
+    const store = freshStore();
+    // Seed: a local tab FIRST, then the offline remote tab. The local tab
+    // is the victim the old stale-reference `splice(-1, 1, …)` deleted.
+    mockOpenRepo.mockResolvedValue(BETA);
+    await store.openTab("C:/repos/beta");
+    mockRemoteRepoOpen.mockRejectedValueOnce(new Error("device offline"));
+    await store.openRemoteTab("dev-1", "/srv/app");
+    expect(store.tabs.map((t) => t.id)).toEqual(["repo-2", URI]);
+
+    // Double-clicked Retry: call A hangs, call B fails fast.
+    let resolveA!: (value: ReturnType<typeof remoteInfo>) => void;
+    mockRemoteRepoOpen.mockImplementationOnce(
+      () => new Promise((resolve) => (resolveA = resolve)),
+    );
+    mockRemoteRepoOpen.mockRejectedValueOnce(new Error("still offline"));
+    const attemptA = store.openRemoteTab("dev-1", "/srv/app");
+    const attemptB = store.openRemoteTab("dev-1", "/srv/app");
+    resolveA(remoteInfo());
+    await Promise.all([attemptA, attemptB]);
+
+    // Exactly one remote tab, open, and the unrelated local tab survived.
+    expect(store.tabs.map((t) => t.id)).toEqual(["repo-2", "remote-repo-1"]);
+    expect(store.tabs[1]?.openError).toBeNull();
+  });
+
+  it("retries on a tab that is already open are no-ops", async () => {
+    const store = freshStore();
+    mockRemoteRepoOpen.mockResolvedValue(remoteInfo());
+    await store.openRemoteTab("dev-1", "/srv/app");
+
+    await store.retryRemoteTab(URI);
+
+    expect(mockRemoteRepoOpen).toHaveBeenCalledTimes(1);
+    expect(store.tabs).toHaveLength(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// statusError (the no-error-state machine: stuck "Loading changes…" spinner)
+// ---------------------------------------------------------------------------
+
+describe("refreshStatus statusError", () => {
+  it("a failed first status lands in statusError; a later success clears it", async () => {
+    const store = freshStore();
+    mockOpenRepo.mockResolvedValue(ALPHA);
+    mockRepoStatus.mockRejectedValueOnce(new Error("op queue wedged"));
+
+    await store.openTab("C:/repos/alpha");
+
+    await vi.waitFor(() => {
+      expect(store.tabs[0]?.statusError).toBe("op queue wedged");
+    });
+    expect(store.tabs[0]?.status).toBeNull();
+
+    mockRepoStatus.mockResolvedValue(STATUS_1);
+    await store.refreshStatus("repo-1");
+    expect(store.tabs[0]?.statusError).toBeNull();
+    expect(store.tabs[0]?.status).toEqual(STATUS_1);
+  });
+
+  it("a failed refresh on a loaded tab keeps the status and sets no error", async () => {
+    const store = freshStore();
+    mockOpenRepo.mockResolvedValue(ALPHA);
+    mockRepoStatus.mockResolvedValueOnce(STATUS_1);
+    await store.openTab("C:/repos/alpha");
+    await vi.waitFor(() => expect(store.tabs[0]?.status).toEqual(STATUS_1));
+
+    mockRepoStatus.mockRejectedValueOnce(new Error("boom"));
+    await store.refreshStatus("repo-1");
+
+    expect(store.tabs[0]?.status).toEqual(STATUS_1);
+    expect(store.tabs[0]?.statusError).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// closeTab terminal teardown (M5 contract: the FE must pty_kill per closed tab)
+// ---------------------------------------------------------------------------
+
+describe("closeTab terminal teardown", () => {
+  it("closing a tab disposes the repo's terminal session", async () => {
+    const store = freshStore();
+    mockOpenRepo.mockResolvedValue(ALPHA);
+    await store.openTab("C:/repos/alpha");
+    const dispose = vi.spyOn(terminals, "dispose").mockImplementation(() => {});
+
+    await store.closeTab("repo-1");
+
+    expect(dispose).toHaveBeenCalledWith("repo-1");
+    dispose.mockRestore();
+  });
+
+  it("closing a tab with no terminal session still closes cleanly", async () => {
+    const store = freshStore();
+    mockOpenRepo.mockResolvedValue(ALPHA);
+    await store.openTab("C:/repos/alpha");
+
+    await store.closeTab("repo-1");
+
+    expect(mockCloseRepo).toHaveBeenCalledWith("repo-1");
+    expect(store.tabs).toHaveLength(0);
   });
 });

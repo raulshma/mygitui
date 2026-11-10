@@ -54,7 +54,7 @@
   } from "$lib/ipc/client";
   import { onRepoChange } from "$lib/events/repoEvents";
   import { describeError } from "$lib/errors";
-  import { openTab, parseSshUri, tabStore } from "$lib/stores/tabs.svelte";
+  import { openTab, parseSshUri, refreshStatus, tabStore } from "$lib/stores/tabs.svelte";
   import { normalizeRepoPath } from "$lib/stores/switcher.svelte";
   import CommitBar from "$lib/components/panels/CommitBar.svelte";
   import { toast } from "$lib/toast";
@@ -107,6 +107,7 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
 
   let {
     status,
+    statusError = null,
     onOpenDiff,
     selected = $bindable([]),
     repoId = null,
@@ -117,6 +118,8 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
     onOpenConflict = undefined,
   }: {
     status: RepoStatus | null;
+    /** Why the first `repo_status` failed (null once loaded / on success). */
+    statusError?: string | null;
     onOpenDiff: (
       entry: StatusEntry,
       targetRepoId?: string,
@@ -2416,6 +2419,19 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
         {/each}
       </div>
     {/if}
+  {:else if statusError !== null}
+    <!-- The first repo_status failed: an error state with a Retry instead
+         of a spinner indistinguishable from a slow first load. -->
+    <div class="flex-1 min-h-0 flex flex-col items-center justify-center gap-2 px-4 py-8 text-center text-muted-foreground select-none" role="alert">
+      <p class="empty-title m-0 text-ui-base font-medium text-foreground">Couldn't load status</p>
+      <p class="m-0 max-w-64 text-ui-xs break-words">{statusError}</p>
+      {#if repoId}
+        <Button variant="outline" size="sm" onclick={() => void refreshStatus(repoId)}>
+          <Icon icon={iconRefresh} size={16} />
+          Retry
+        </Button>
+      {/if}
+    </div>
   {:else}
     <div class="empty-state flex-1 min-h-0 flex flex-col items-center justify-center gap-[0.3rem] px-4 py-8 text-center text-muted-foreground select-none" role="status">
       <Spinner class="size-4" role="presentation" aria-hidden="true" />

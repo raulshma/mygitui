@@ -54,6 +54,7 @@ function tab(id: string, root: string) {
     name: repoBasename(root),
     root,
     status: null,
+    statusError: null,
     generation: 0,
     deviceId: null,
     openError: null,
