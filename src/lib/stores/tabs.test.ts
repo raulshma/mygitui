@@ -243,6 +243,41 @@ describe("closeTab", () => {
     expect(store.activeId).toBe("repo-2");
   });
 
+  it("preserves a newer selection while an active tab is closing", async () => {
+    const store = freshStore();
+    const gamma = repoInfo("repo-3", "C:/repos/gamma", "gamma");
+    mockOpenRepo.mockResolvedValueOnce(ALPHA).mockResolvedValueOnce(BETA).mockResolvedValueOnce(gamma);
+    await store.openTab(ALPHA.root);
+    await store.openTab(BETA.root);
+    await store.openTab(gamma.root);
+    let finishClose!: () => void;
+    mockCloseRepo.mockImplementation(() => new Promise((resolve) => (finishClose = resolve)));
+
+    const closing = store.closeTab(gamma.repo_id);
+    store.setActive(ALPHA.repo_id);
+    finishClose();
+    await closing;
+
+    expect(store.activeId).toBe(ALPHA.repo_id);
+  });
+
+  it("selects a neighbor when a closing background tab becomes active", async () => {
+    const store = freshStore();
+    mockOpenRepo.mockResolvedValueOnce(ALPHA).mockResolvedValueOnce(BETA);
+    await store.openTab(ALPHA.root);
+    await store.openTab(BETA.root);
+    let finishClose!: () => void;
+    mockCloseRepo.mockImplementation(() => new Promise((resolve) => (finishClose = resolve)));
+
+    const closing = store.closeTab(ALPHA.repo_id);
+    store.setActive(ALPHA.repo_id);
+    finishClose();
+    await closing;
+
+    expect(store.activeId).toBe(BETA.repo_id);
+    expect(store.active).not.toBeNull();
+  });
+
   it("still removes the tab when the backend close fails", async () => {
     const store = freshStore();
     mockOpenRepo.mockResolvedValue(ALPHA);

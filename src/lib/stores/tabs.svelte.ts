@@ -422,7 +422,6 @@ export class TabStore {
    */
   async closeTab(id: RepoId): Promise<void> {
     if (this.tabs.every((tab) => tab.id !== id)) return;
-    const wasActive = this.activeId === id;
     try {
       await closeRepo(id);
     } catch (err) {
@@ -431,7 +430,7 @@ export class TabStore {
     const index = this.tabs.findIndex((tab) => tab.id === id);
     if (index === -1) return;
     this.tabs.splice(index, 1);
-    if (wasActive) {
+    if (this.activeId === id) {
       const neighbor = this.tabs[Math.max(0, index - 1)];
       this.activeId = neighbor ? neighbor.id : null;
     }

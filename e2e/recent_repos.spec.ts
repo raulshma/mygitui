@@ -138,6 +138,48 @@ test("top-bar home opens recents above open tabs; back returns", async ({
   await tracked.attach(testInfo);
 });
 
+test("a delayed tab close preserves a newer repository selection", async ({ page }) => {
+  const tracked = trackErrors(page);
+  await boot(page, {
+    [RECENT_REPOS_KEY]: JSON.stringify(["alpha", "beta", "gamma"].map((name) => ({
+      path: `/tmp/${name}`, pinned: false, lastOpened: 1,
+    }))),
+  });
+  await page.goto("/");
+  await expect(page.getByRole("heading", { name: /Repositories/i })).toBeVisible();
+  await page.evaluate(() => {
+    const runtime = (window as unknown as {
+      __TAURI_INTERNALS__: { invoke: (cmd: string, args?: Record<string, unknown>) => Promise<unknown> };
+      finishTabClose?: () => void;
+    });
+    const invoke = runtime.__TAURI_INTERNALS__.invoke;
+    runtime.__TAURI_INTERNALS__.invoke = async (cmd, args) => {
+      if (cmd === "repo_open") {
+        const info = await invoke(cmd, args) as Record<string, unknown>;
+        const root = String(args?.path);
+        return { ...info, root, repo_id: root, name: root.split("/").pop() };
+      }
+      if (cmd === "repo_close") {
+        await new Promise<void>((resolve) => { runtime.finishTabClose = resolve; });
+      }
+      return invoke(cmd, args);
+    };
+  });
+
+  for (const name of ["alpha", "beta", "gamma"]) {
+    if (name !== "alpha") await page.getByRole("button", { name: "Recent repositories", exact: true }).click();
+    await page.getByRole("button", { name: new RegExp(`^${name}\\s`) }).click();
+    await expect(page.getByRole("tab", { name: `${name} — /tmp/${name}`, exact: true })).toBeVisible();
+  }
+  await page.getByRole("button", { name: "Close gamma", exact: true }).click();
+  const alpha = page.getByRole("tab", { name: "alpha — /tmp/alpha", exact: true });
+  await alpha.click();
+  await page.evaluate(() => (window as unknown as { finishTabClose: () => void }).finishTabClose());
+  await expect(page.getByRole("tab", { name: "gamma — /tmp/gamma", exact: true })).toHaveCount(0);
+  await expect(alpha).toHaveAttribute("aria-selected", "true");
+  expect(tracked.errors).toEqual([]);
+});
+
 test("add-existing repo opens the folder picker", async ({
   page,
 }, testInfo) => {
