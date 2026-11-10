@@ -89,8 +89,16 @@
   const iconChevronDown = $derived(appIcon("chevron-down")!);
   const iconPin = $derived(appIcon("push-pin")!);
 
-  /** Set while this component's invoke is awaiting the backend. */
-  let pending = $state<SyncVerb | null>(null);
+  /**
+   * Set while this component's invoke is awaiting the backend. Tagged with
+   * the repo that started it: RepoView (and therefore this header) is
+   * reused when the active tab changes, so an untagged flag would show a
+   * spinner on every other project until the first repo's RPC settles.
+   */
+  let pending = $state.raw<{ repoId: string; verb: SyncVerb } | null>(null);
+  const pendingVerb = $derived(
+    pending !== null && pending.repoId === repoId ? pending.verb : null,
+  );
 
   /** Sync ops already running for this repo (any entry point). */
   const activeOps = $derived(
@@ -101,8 +109,8 @@
     (activeOps[0]?.kind ?? null) as SyncVerb | null,
   );
 
-  const busy = $derived(netBusy || pending !== null);
-  const runningVerb = $derived<SyncVerb | null>(pending ?? activeVerb);
+  const busy = $derived(netBusy || pendingVerb !== null);
+  const runningVerb = $derived<SyncVerb | null>(pendingVerb ?? activeVerb);
 
   const branch = $derived(status?.branch ?? null);
   const branchLabel = $derived(branch ?? "current branch");
@@ -179,7 +187,10 @@
     if (busy) return;
     if (verb !== "fetch" && !canUseBranch) return;
 
-    pending = verb;
+    // Identity-checked so a finishing run never clears a newer run started
+    // for another repo while this one was still in flight.
+    const entry = { repoId, verb };
+    pending = entry;
     try {
       const outcome = await actionFor(verb);
       if (outcome.kind === "skipped") {
@@ -194,7 +205,7 @@
         { kind: "error" },
       );
     } finally {
-      pending = null;
+      if (pending === entry) pending = null;
     }
   }
 

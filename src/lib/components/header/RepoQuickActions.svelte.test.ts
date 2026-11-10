@@ -295,6 +295,38 @@ describe("RepoQuickActions", () => {
     expect(onMutated).toHaveBeenCalledTimes(1);
   });
 
+  it("scopes an in-flight sync to its repo when the header switches projects", async () => {
+    let resolvePush: (value: {
+      kind: "done";
+      remote: string;
+      stats: NetStats;
+    }) => void = () => {};
+    mocks.pushCurrentBranch.mockReturnValue(
+      new Promise((resolve) => (resolvePush = resolve)),
+    );
+    headerPins.pin("push");
+    const { rerender } = render(RepoQuickActions, {
+      repoId: "r1",
+      status: status(),
+    });
+
+    await fireEvent.click(pinButton("push"));
+    expect(pinButton("push").getAttribute("aria-busy")).toBe("true");
+
+    // RepoView reuses the header across tab switches: the pending run
+    // belongs to r1 and must not spin (or disable) r2's controls.
+    await rerender({ repoId: "r2", status: status() });
+    expect(pinButton("push").getAttribute("aria-busy")).toBe("false");
+    expect(pinButton("push").disabled).toBe(false);
+
+    resolvePush({ kind: "done", remote: "origin", stats: STATS });
+    await waitFor(() =>
+      expect(toast).toHaveBeenCalledWith("done push origin main", {
+        kind: "success",
+      }),
+    );
+  });
+
   it("reports a no-remote skip instead of calling the network", async () => {
     mocks.fetchDefaultRemote.mockResolvedValue({
       kind: "skipped",
