@@ -385,6 +385,39 @@ fn delete_entry_refuses_ignored_untracked_directory() {
     let _ = fs::remove_dir_all(&root);
 }
 
+/// `target` expressed relative to `from` (both absolute paths).
+fn relative_to(from: &Path, target: &Path) -> std::path::PathBuf {
+    let from: Vec<_> = from.components().collect();
+    let target: Vec<_> = target.components().collect();
+    let common = from.iter().zip(&target).take_while(|(a, b)| a == b).count();
+    let mut out = std::path::PathBuf::new();
+    for _ in common..from.len() {
+        out.push("..");
+    }
+    for component in &target[common..] {
+        out.push(component.as_os_str());
+    }
+    out
+}
+
+#[test]
+fn delete_guard_handles_non_canonical_root_paths() {
+    let (root, _repo) = delete_repo("delete-noncanonical-root");
+    touch(&root, ".gitignore", b"*.sqlite\n");
+    touch(&root, "local.sqlite", b"bytes");
+
+    // Callers may hand us the same repository through a path that is not
+    // byte-identical to libgit2's resolved workdir (relative, symlinked or
+    // short-form — CI temp dirs are all three). The ignore guard must still
+    // see the entry.
+    let cwd = std::env::current_dir().expect("cwd");
+    let relative = relative_to(&cwd, &root);
+    let result = delete_entry_impl(&relative, "local.sqlite");
+    assert!(result.is_err(), "ignored data must stay: {result:?}");
+    assert_eq!(fs::read(root.join("local.sqlite")).unwrap(), b"bytes");
+    let _ = fs::remove_dir_all(&root);
+}
+
 #[test]
 fn delete_entry_allows_ignored_directory_with_tracked_entries() {
     let (root, repo) = delete_repo("delete-ignored-tracked");

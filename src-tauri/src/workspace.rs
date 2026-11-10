@@ -642,15 +642,29 @@ fn guard_ignored_untracked(
     let Some(workdir) = repo.workdir() else {
         return Ok(());
     };
-    if !full.starts_with(workdir) {
+    // Canonicalize before the containment test: callers hand us the path in
+    // whatever form their OS uses (macOS temp dirs live behind the /var
+    // symlink, Windows CI temp dirs use short names), while libgit2 reports
+    // the resolved workdir. A raw prefix compare then misses and the guard
+    // would silently allow deleting ignored data.
+    let canon_full = full
+        .parent()
+        .and_then(|parent| parent.canonicalize().ok())
+        .zip(full.file_name())
+        .map(|(parent, name)| parent.join(name));
+    let (Some(canon_full), Ok(canon_workdir)) = (canon_full, workdir.canonicalize()) else {
         return Ok(());
-    }
-    let rel = Path::new(path);
+    };
+    let Ok(rel) = canon_full.strip_prefix(&canon_workdir) else {
+        return Ok(());
+    };
+    // libgit2 speaks `/`-separated repo-relative paths on every platform.
+    let rel = rel.to_string_lossy().replace('\\', "/");
     // Directory ignore patterns are written with a trailing slash; libgit2
     // stats the path, but try the explicit directory form too.
-    let ignored = repo.status_should_ignore(rel).unwrap_or(false)
+    let ignored = repo.status_should_ignore(Path::new(&rel)).unwrap_or(false)
         || (is_dir && {
-            let dir_form = format!("{}/", path.trim_end_matches('/'));
+            let dir_form = format!("{}/", rel.trim_end_matches('/'));
             repo.status_should_ignore(Path::new(&dir_form))
                 .unwrap_or(false)
         });
@@ -661,12 +675,12 @@ fn guard_ignored_untracked(
         return Ok(());
     };
     let tracked = if is_dir {
-        let prefix = format!("{}/", path.trim_end_matches('/'));
+        let prefix = format!("{}/", rel.trim_end_matches('/'));
         index
             .iter()
             .any(|entry| String::from_utf8_lossy(&entry.path).starts_with(&prefix))
     } else {
-        index.get_path(rel, 0).is_some()
+        index.get_path(Path::new(&rel), 0).is_some()
     };
     if tracked {
         return Ok(());
