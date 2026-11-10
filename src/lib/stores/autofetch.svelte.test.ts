@@ -397,3 +397,101 @@ describe("reportUpstreamMoved (store integration)", () => {
     store.stopAll();
   });
 });
+
+describe("AutofetchStore start/stop races", () => {
+  /** Storage with a 1-minute cadence for ROOT. */
+  function armed(): AutofetchStore {
+    return new AutofetchStore(memStorage({
+      "mygitui.autofetch": JSON.stringify({ [ROOT]: 1 }),
+    }));
+  }
+
+  it("a stop during the remote lookup does not leave an orphaned timer", async () => {
+    const store = armed();
+    let release: (value: RemoteInfo[]) => void = () => {};
+    mockRemotes.mockImplementationOnce(
+      () => new Promise<RemoteInfo[]>((resolve) => { release = resolve; }),
+    );
+
+    const starting = store.start(REPO_ID, ROOT);
+    store.stop(REPO_ID); // nothing registered yet — must still tombstone
+    release(REMOTES);
+    await starting;
+
+    expect(store.isRunning(REPO_ID)).toBe(false);
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+    expect(mockFetchRepo).not.toHaveBeenCalled();
+  });
+
+  it("a stop during an in-flight fetch suppresses its toast", async () => {
+    const store = armed();
+    await store.start(REPO_ID, ROOT);
+    const before = getToasts().length;
+
+    let release: (value: NetStats) => void = () => {};
+    mockFetchRepo.mockImplementationOnce(
+      () => new Promise<NetStats>((resolve) => { release = resolve; }),
+    );
+    await vi.advanceTimersByTimeAsync(60_000);
+    store.stop(REPO_ID);
+    release(STATS_UPDATED);
+    await flush();
+
+    expect(getToasts().length).toBe(before);
+    expect(mockBranches).not.toHaveBeenCalled();
+  });
+
+  it("a failed fetch after stop stays silent", async () => {
+    const store = armed();
+    await store.start(REPO_ID, ROOT);
+    const before = errorToasts();
+
+    let fail: (err: Error) => void = () => {};
+    mockFetchRepo.mockImplementationOnce(
+      () => new Promise<NetStats>((_resolve, reject) => { fail = reject; }),
+    );
+    await vi.advanceTimersByTimeAsync(60_000);
+    store.stop(REPO_ID);
+    fail(new Error("repo gone"));
+    await flush();
+
+    expect(errorToasts()).toBe(before);
+  });
+
+  it("of two concurrent starts only the newer one registers", async () => {
+    const store = armed();
+    const resolvers: Array<(value: RemoteInfo[]) => void> = [];
+    mockRemotes.mockImplementation(
+      () => new Promise<RemoteInfo[]>((resolve) => { resolvers.push(resolve); }),
+    );
+
+    const first = store.start(REPO_ID, ROOT);
+    const second = store.start(REPO_ID, ROOT);
+    for (const resolve of resolvers) resolve(REMOTES);
+    await Promise.all([first, second]);
+
+    expect(store.isRunning(REPO_ID)).toBe(true);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(mockFetchRepo).toHaveBeenCalledTimes(1);
+    store.stopAll();
+  });
+
+  it("a stop during the branch read does not resurrect the behind map", async () => {
+    const store = armed();
+    await store.start(REPO_ID, ROOT);
+    mockFetchRepo.mockResolvedValueOnce(STATS_UPDATED);
+    let release: (value: BranchInfo[]) => void = () => {};
+    mockBranches.mockImplementationOnce(
+      () => new Promise<BranchInfo[]>((resolve) => { release = resolve; }),
+    );
+    await vi.advanceTimersByTimeAsync(60_000);
+    await flush();
+    store.stop(REPO_ID);
+    const before = getToasts().length;
+    release([{ name: "feature", behind: 3 } as BranchInfo]);
+    await flush();
+
+    expect(getToasts().length).toBe(before);
+    store.stopAll();
+  });
+});

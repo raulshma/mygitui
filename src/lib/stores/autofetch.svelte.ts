@@ -134,6 +134,12 @@ export class AutofetchStore {
   #storage: StorageLike | null;
   #scheduler: Scheduler;
   #running = new Map<RepoId, RunningFetch>();
+  /**
+   * Bumped by every start AND stop. `start` awaits its remote lookup before
+   * it can register a timer, so a `stop` landing in that window has nothing
+   * to clear yet — the token is the tombstone that makes it stick.
+   */
+  #startToken = new Map<RepoId, number>();
   /** M12: last cycle's branch → behind counts, per repo (dedupe baseline). */
   #lastBehind = new Map<RepoId, Map<string, number>>();
 
@@ -201,13 +207,18 @@ export class AutofetchStore {
     const minutes = this.getInterval(root);
     if (minutes <= 0) return;
 
+    const token = this.#bumpToken(repoId);
     const remote = await this.#defaultRemote(repoId);
-    // Config may have changed while the remote lookup was in flight.
+    // Config may have changed while the remote lookup was in flight, and a
+    // stop (or a newer start) may have superseded this one.
+    if (this.#startToken.get(repoId) !== token) return;
     if (this.getInterval(root) <= 0 || this.#running.has(repoId)) return;
 
     const tick = (): void => {
       fetchRepo(repoId, { remote, prune: true, refs: [], depth: null })
         .then((stats: NetStats) => {
+          // A stop during the fetch must not toast for a closed repo.
+          if (this.#startToken.get(repoId) !== token) return;
           if (stats.updated_refs.length > 0) {
             toast(`${remote} updated: ${stats.updated_refs.length} refs`);
             // M12: after refs moved, check which local branches fell behind
@@ -216,6 +227,7 @@ export class AutofetchStore {
           }
         })
         .catch((err: unknown) => {
+          if (this.#startToken.get(repoId) !== token) return;
           toast(
             `Auto-fetch failed: ${err instanceof Error ? err.message : String(err)}`,
             { kind: "error" },
@@ -229,11 +241,20 @@ export class AutofetchStore {
 
   /** Stops the background fetch for a repo (tab close). No-op when off. */
   stop(repoId: RepoId): void {
+    // Tombstone first: a start still awaiting its remote lookup must not
+    // register a timer after this returns.
+    this.#bumpToken(repoId);
     const running = this.#running.get(repoId);
     if (!running) return;
     this.#running.delete(repoId);
     this.#lastBehind.delete(repoId);
     this.#scheduler.clearInterval(running.timer);
+  }
+
+  #bumpToken(repoId: RepoId): number {
+    const next = (this.#startToken.get(repoId) ?? 0) + 1;
+    this.#startToken.set(repoId, next);
+    return next;
   }
 
   /**
@@ -249,6 +270,9 @@ export class AutofetchStore {
     } catch {
       return;
     }
+    // Stopped while the branch list was in flight: don't resurrect the
+    // behind-count map that stop() just cleared.
+    if (!this.#running.has(repoId)) return;
     const { messages, current } = upstreamMoved(
       this.#lastBehind.get(repoId) ?? new Map<string, number>(),
       list,
