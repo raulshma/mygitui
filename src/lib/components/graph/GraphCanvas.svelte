@@ -53,6 +53,8 @@
   import { onDestroy } from "svelte";
   import type { LogPage } from "$lib/ipc/types";
   import { emitUiEvent } from "$lib/palette/events";
+  import { THEME_SCHEME_EVENT } from "$lib/theme";
+  import { APPEARANCE_EVENT } from "$lib/theme/appearance.svelte";
   import { applyDprTransform, pixelSize, scrollToRowTarget, visibleRange } from "./layout";
   import { hitTest, type HitResult } from "./hitTest";
   import { FALLBACK_THEME, readTheme, type ThemeColors } from "./palette";
@@ -190,10 +192,14 @@
   });
 
   /**
-   * Re-read M3 tokens once per theme change (never per frame). Theme swaps
-   * happen via `prefers-color-scheme` (initTheme rewrites the tokens) and via
-   * the initial initTheme() apply — both covered by the media listener plus a
-   * MutationObserver on <html>'s inline style, where initTheme writes tokens.
+   * Re-read the design tokens once per theme change (never per frame).
+   *
+   * The token sets live in app.css / the injected appearance <style>, and the
+   * scheme is a `.dark` class on <html> — so watching the root's `style`
+   * attribute (the old approach) saw nothing. Both changes announce
+   * themselves on the window: THEME_SCHEME_EVENT for light/dark (manual or
+   * OS-driven) and APPEARANCE_EVENT for accent/base/style edits. The media
+   * query covers the window before initTheme() has wired its own listener.
    */
   $effect(() => {
     const read = () => {
@@ -203,21 +209,29 @@
     };
     read();
     const disposers: Array<() => void> = [watchMedia("(prefers-color-scheme: dark)", read)];
-    if (typeof MutationObserver !== "undefined") {
-      const mo = new MutationObserver(read);
-      mo.observe(document.documentElement, { attributes: true, attributeFilter: ["style"] });
-      disposers.push(() => mo.disconnect());
+    if (typeof window !== "undefined") {
+      window.addEventListener(THEME_SCHEME_EVENT, read);
+      window.addEventListener(APPEARANCE_EVENT, read);
+      disposers.push(() => {
+        window.removeEventListener(THEME_SCHEME_EVENT, read);
+        window.removeEventListener(APPEARANCE_EVENT, read);
+      });
     }
     return () => disposers.forEach((dispose) => dispose());
   });
 
-  /** Track device-pixel-ratio changes (zoom / monitor moves). */
+  /**
+   * Track device-pixel-ratio changes (zoom / monitor moves). Reading `dpr`
+   * here re-arms the resolution query at the new ratio — a query built once
+   * from the launch ratio stops matching after the first change.
+   */
   $effect(() => {
+    const ratio = dpr;
     const sync = () => {
-      const ratio = window.devicePixelRatio || 1;
-      if (ratio !== dpr) dpr = ratio;
+      const next = window.devicePixelRatio || 1;
+      if (next !== dpr) dpr = next;
     };
-    const stop = watchMedia(`(resolution: ${window.devicePixelRatio || 1}dppx)`, sync);
+    const stop = watchMedia(`(resolution: ${ratio}dppx)`, sync);
     window.addEventListener("resize", sync);
     return () => {
       stop();
