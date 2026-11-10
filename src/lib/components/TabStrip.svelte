@@ -8,11 +8,15 @@
    * active tab is tab-reachable (tabindex 0), the rest are programmatic
    * (tabindex -1). Arrow/Home/End keys move focus; Enter/Space activate the
    * focused tab (native button behavior routes through `setActive`).
-   * Middle-click (auxclick button 1) closes a tab, as does its × button;
+   * Middle-click (auxclick button 1) closes a tab, as does its close button;
    * right-click opens the shared context menu (close variants + path
    * utilities) through the global context-menu store.
    *
-   * Focus order is sane: each × close button follows its tab in DOM order, so
+   * Overflow: the strip scrolls horizontally (vertical wheel is translated),
+   * fades whichever edge has more content, and scrolls the active tab back
+   * into view whenever activation or membership changes.
+   *
+   * Focus order is sane: each close button follows its tab in DOM order, so
    * Tab runs tab → its close → next reachable control. Overflowed (ellipsis-
    * truncated) names announce in full: each tab's accessible name is
    * "name — root" (label-in-name compliant) and the title tooltip shows the
@@ -35,6 +39,8 @@
   import Icon from "$lib/components/icons/Icon.svelte";
   import { appIcon } from "$lib/components/icons/library.svelte";
   import { Button } from "$lib/components/ui/button/index.js";
+  import iconClose from "@ktibow/iconset-material-symbols/close";
+  import iconAdd from "@ktibow/iconset-material-symbols/add";
 
   let {
     openFolder,
@@ -48,6 +54,86 @@
   const iconHome = $derived(appIcon("home-rounded")!);
 
   let strip: HTMLDivElement | undefined = $state();
+  let overflowLeft = $state(false);
+  let overflowRight = $state(false);
+
+  /** Edge fades only where there is actually more strip to scroll to. */
+  const stripMask = $derived(
+    overflowLeft && overflowRight
+      ? "linear-gradient(to right, transparent, black 1.25rem, black calc(100% - 1.25rem), transparent)"
+      : overflowLeft
+        ? "linear-gradient(to right, transparent, black 1.25rem)"
+        : overflowRight
+          ? "linear-gradient(to left, transparent, black 1.25rem)"
+          : "none",
+  );
+
+  function syncOverflow(): void {
+    if (!strip) return;
+    const max = strip.scrollWidth - strip.clientWidth;
+    // Sub-pixel scrollLeft/rounding would otherwise flicker the far fade.
+    overflowLeft = strip.scrollLeft > 1;
+    overflowRight = max > 1 && strip.scrollLeft < max - 1;
+  }
+
+  /**
+   * Keeps the active tab visible after a switch, a close, or a window
+   * resize. Scrolls the strip only — `scrollIntoView` would also drag
+   * every scrollable ancestor.
+   */
+  function revealActive(): void {
+    if (!strip) return;
+    const active = strip.querySelector<HTMLButtonElement>("button[role='tab'][aria-selected='true']");
+    if (!active) return;
+    const bounds = active.getBoundingClientRect();
+    const view = strip.getBoundingClientRect();
+    const pad = 8;
+    const left = bounds.left - view.left + strip.scrollLeft;
+    const right = left + bounds.width;
+    let target = strip.scrollLeft;
+    if (left < target + pad) target = left - pad;
+    else if (right > target + strip.clientWidth - pad) target = right - strip.clientWidth + pad;
+    const max = Math.max(0, strip.scrollWidth - strip.clientWidth);
+    target = Math.min(Math.max(target, 0), max);
+    if (Math.abs(target - strip.scrollLeft) < 1) return;
+    const reduce = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
+    strip.scrollTo({ left: target, behavior: reduce ? "auto" : "smooth" });
+  }
+
+  $effect(() => {
+    // Re-run on membership changes as well as activation: closing the last
+    // tab shifts everything left of it.
+    void tabStore.tabs.length;
+    void tabStore.activeId;
+    const node = strip;
+    if (!node) return;
+    revealActive();
+    syncOverflow();
+  });
+
+  $effect(() => {
+    const node = strip;
+    if (!node) return;
+    // Vertical wheel over a horizontal strip: translate it, but leave
+    // trackpad horizontal gestures to the browser. Non-passive so the
+    // page behind the strip does not scroll along with it.
+    const onWheel = (event: WheelEvent): void => {
+      if (node.scrollWidth <= node.clientWidth) return;
+      if (event.deltaY === 0 || Math.abs(event.deltaX) > Math.abs(event.deltaY)) return;
+      event.preventDefault();
+      node.scrollLeft += event.deltaY;
+    };
+    node.addEventListener("wheel", onWheel, { passive: false });
+    node.addEventListener("scroll", syncOverflow, { passive: true });
+    const observer =
+      typeof ResizeObserver === "undefined" ? null : new ResizeObserver(syncOverflow);
+    observer?.observe(node);
+    return () => {
+      node.removeEventListener("wheel", onWheel);
+      node.removeEventListener("scroll", syncOverflow);
+      observer?.disconnect();
+    };
+  });
 
   function tabButtons(): HTMLButtonElement[] {
     if (!strip) return [];
@@ -163,6 +249,7 @@
     aria-label="Open repositories"
     tabindex="-1"
     bind:this={strip}
+    style:mask-image={stripMask}
     onkeydown={onKeydown}
     oncontextmenu={(e) => e.preventDefault()}
   >
@@ -196,7 +283,7 @@
           <span class="name block overflow-hidden text-ellipsis whitespace-nowrap">{tab.name}</span>
         </button>
         <Button
-          class="tab-close ml-0.5 h-auto flex-none rounded-tr-lg px-2 text-sm leading-none focus-visible:bg-accent focus-visible:text-foreground"
+          class="tab-close ml-0.5 h-auto flex-none rounded-tr-lg px-1.5 text-muted-foreground/70 hover:text-foreground focus-visible:bg-accent focus-visible:text-foreground"
           variant="ghost"
           size="icon-xs"
           type="button"
@@ -204,21 +291,21 @@
           title="Close {tab.name}"
           onclick={() => void closeTab(tab.id)}
         >
-          ×
+          <Icon icon={iconClose} size={13} />
         </Button>
       </div>
     {/each}
 
     <Button
-      class="tab-new my-0.5 h-auto flex-none px-3 text-sm leading-none hover:text-primary focus-visible:bg-accent focus-visible:text-primary"
+      class="tab-new my-0.5 h-auto flex-none px-2.5 text-muted-foreground hover:text-primary focus-visible:bg-accent focus-visible:text-primary"
       variant="ghost"
-      size="sm"
+      size="icon-sm"
       type="button"
       aria-label="Open a repository"
       title="Open a repository"
       onclick={() => openFolder?.()}
     >
-      +
+      <Icon icon={iconAdd} size={16} />
     </Button>
   </div>
 

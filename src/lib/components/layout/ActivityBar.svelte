@@ -79,6 +79,10 @@
   const iconMore = $derived(appIcon("more-horiz")!);
   const iconPin = $derived(appIcon("push-pin")!);
 
+  /** Rail chrome (flyout + active indicator) lives in `@utility activity-btn`. */
+  const railBtn =
+    "activity-btn relative flex-none rounded-sm text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:bg-accent focus-visible:text-foreground focus-visible:outline-2 focus-visible:outline-primary focus-visible:-outline-offset-2 focus-visible:ring-0 [&.active]:bg-accent [&.active]:text-primary";
+
   /** Default rail buttons (registry order first: the core panels). */
   const defaultRail = $derived(
     RAIL_PANELS.filter((panel) => panels.includes(panel)),
@@ -157,7 +161,7 @@
   {#each railPanels as panel (panel)}
     {@const count = badges[panel] ?? 0}
     <Button
-      class="activity-btn relative flex-none rounded-sm text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:bg-accent focus-visible:text-foreground focus-visible:outline-2 focus-visible:outline-primary focus-visible:-outline-offset-2 focus-visible:ring-0 [&.active]:bg-accent [&.active]:text-primary after:pointer-events-none after:absolute after:left-[calc(100%+0.4rem)] after:top-1/2 after:z-70 after:-translate-x-1 after:-translate-y-1/2 after:rounded-sm after:bg-primary after:px-[0.55rem] after:py-1 after:text-xs after:leading-[1.3] after:whitespace-nowrap after:text-primary-foreground after:opacity-0 after:delay-300 after:duration-[120ms] after:content-[attr(data-label)] after:transition-[opacity,transform] hover:after:translate-x-0 hover:after:-translate-y-1/2 hover:after:opacity-100 focus-visible:after:translate-x-0 focus-visible:after:-translate-y-1/2 focus-visible:after:opacity-100 [&.active]:before:absolute [&.active]:before:-left-0.5 [&.active]:before:top-[20%] [&.active]:before:bottom-[20%] [&.active]:before:w-0.5 [&.active]:before:rounded-full [&.active]:before:bg-primary [&.active]:before:content-[''] {active === panel ? "active" : ""}"
+      class="{railBtn} {active === panel ? 'active' : ''}"
       variant="ghost"
       size="icon-lg"
       type="button"
@@ -195,7 +199,7 @@
 
   {#if morePanels.length > 0}
     <Button
-      class="activity-btn relative flex-none rounded-sm text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:bg-accent focus-visible:text-foreground focus-visible:outline-2 focus-visible:outline-primary focus-visible:-outline-offset-2 focus-visible:ring-0 [&.active]:bg-accent [&.active]:text-primary after:pointer-events-none after:absolute after:left-[calc(100%+0.4rem)] after:top-1/2 after:z-70 after:-translate-x-1 after:-translate-y-1/2 after:rounded-sm after:bg-primary after:px-[0.55rem] after:py-1 after:text-xs after:leading-[1.3] after:whitespace-nowrap after:text-primary-foreground after:opacity-0 after:delay-300 after:duration-[120ms] after:content-[attr(data-label)] after:transition-[opacity,transform] hover:after:translate-x-0 hover:after:-translate-y-1/2 hover:after:opacity-100 focus-visible:after:translate-x-0 focus-visible:after:-translate-y-1/2 focus-visible:after:opacity-100 {moreActive ? "active" : ""}"
+      class="{railBtn} {moreActive ? 'active' : ''}"
       variant="ghost"
       size="icon-lg"
       type="button"
@@ -220,7 +224,7 @@
     class="activity-bottom mt-auto flex w-full flex-col items-center gap-0.5 border-t border-border pt-1"
   >
     <Button
-      class="activity-btn relative flex-none rounded-sm text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:bg-accent focus-visible:text-foreground focus-visible:outline-2 focus-visible:outline-primary focus-visible:-outline-offset-2 focus-visible:ring-0 [&.active]:bg-accent [&.active]:text-primary after:pointer-events-none after:absolute after:left-[calc(100%+0.4rem)] after:top-1/2 after:z-70 after:-translate-x-1 after:-translate-y-1/2 after:rounded-sm after:bg-primary after:px-[0.55rem] after:py-1 after:text-xs after:leading-[1.3] after:whitespace-nowrap after:text-primary-foreground after:opacity-0 after:delay-300 after:duration-[120ms] after:content-[attr(data-label)] after:transition-[opacity,transform] hover:after:translate-x-0 hover:after:-translate-y-1/2 hover:after:opacity-100 focus-visible:after:translate-x-0 focus-visible:after:-translate-y-1/2 focus-visible:after:opacity-100 {historyActive ? "active" : ""}"
+      class="{railBtn} {historyActive ? 'active' : ''}"
       variant="ghost"
       size="icon-lg"
       type="button"
@@ -246,7 +250,7 @@
       </svg>
     </Button>
     <Button
-      class="activity-btn collapse-btn relative flex-none rounded-sm text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:bg-accent focus-visible:text-foreground focus-visible:outline-2 focus-visible:outline-primary focus-visible:-outline-offset-2 focus-visible:ring-0 after:pointer-events-none after:absolute after:left-[calc(100%+0.4rem)] after:top-1/2 after:z-70 after:-translate-x-1 after:-translate-y-1/2 after:rounded-sm after:bg-primary after:px-[0.55rem] after:py-1 after:text-xs after:leading-[1.3] after:whitespace-nowrap after:text-primary-foreground after:opacity-0 after:delay-300 after:duration-[120ms] after:content-[attr(data-label)] after:transition-[opacity,transform] hover:after:translate-x-0 hover:after:-translate-y-1/2 hover:after:opacity-100 focus-visible:after:translate-x-0 focus-visible:after:-translate-y-1/2 focus-visible:after:opacity-100"
+      class="{railBtn} collapse-btn"
       variant="ghost"
       size="icon-lg"
       type="button"
