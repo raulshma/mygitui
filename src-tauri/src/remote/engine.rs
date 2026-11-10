@@ -672,6 +672,14 @@ impl RemoteGitEngine {
     }
 
     pub fn branch_delete(&self, name: &str, force: bool) -> Result<(), String> {
+        // Same guard as the local engine (`engine/branches.rs`): git's own
+        // refusal ("Cannot delete branch 'x' checked out at …") is a worktree
+        // error — refuse it up front with the shared message instead.
+        if self.current_branch()?.as_deref() == Some(name) {
+            return Err(format!(
+                "cannot delete the current branch `{name}`; switch away first"
+            ));
+        }
         // Safety net: snapshot under the trash ref before deleting (same
         // model as engine/trash.rs).
         let sha = self
@@ -881,7 +889,11 @@ impl RemoteGitEngine {
         }
         let cmd = self.command(&args);
         let (output, transfer) = self.stream_with_progress(&cmd, progress)?;
+        // Parse before `checked` consumes the output: a failed `git fetch`
+        // used to resolve Ok with refs parsed from its error output, so
+        // treat non-zero exits as errors instead.
         let refs = parse_updated_refs(&output.stderr_str());
+        output.checked("fetch")?;
         Ok(NetStats {
             received_bytes: transfer.bytes,
             objects: transfer.objects_total,
@@ -908,10 +920,13 @@ impl RemoteGitEngine {
         }
         let cmd = self.command(&args);
         let (output, transfer) = self.stream_with_progress(&cmd, progress)?;
+        // Same exit-code guard as `fetch`.
+        let refs = parse_updated_refs(&output.stderr_str());
+        output.checked("pull")?;
         Ok(NetStats {
             received_bytes: transfer.bytes,
             objects: transfer.objects_total,
-            updated_refs: parse_updated_refs(&output.stderr_str()),
+            updated_refs: refs,
         })
     }
 
@@ -953,23 +968,28 @@ impl RemoteGitEngine {
         }
         let cmd = self.command(&args);
         let mut transfer = TransferProgress::default();
-        let output = self.block(self.session.exec_stream(
-            &cmd,
-            LONG_EXEC_TIMEOUT,
-            || false,
-            |_is_stderr, line| {
-                if let Some(p) = parse_transfer_line(line) {
-                    transfer = p;
-                    progress(PushProgress {
-                        current: p.objects_received,
-                        total: p.objects_total,
-                        bytes: p.bytes,
-                        message: "pushing".to_string(),
-                    });
-                }
-                true
-            },
-        ))?;
+        let output = self
+            .block(self.session.exec_stream(
+                &cmd,
+                LONG_EXEC_TIMEOUT,
+                || false,
+                |_is_stderr, line| {
+                    if let Some(p) = parse_transfer_line(line) {
+                        transfer = p;
+                        progress(PushProgress {
+                            current: p.objects_received,
+                            total: p.objects_total,
+                            bytes: p.bytes,
+                            message: "pushing".to_string(),
+                        });
+                    }
+                    true
+                },
+            ))?
+            // A rejected `git push` (protected branch, declined delete, auth
+            // failure) exits non-zero — without this check the delete resolved
+            // Ok and the FE toasted success while nothing was deleted.
+            .checked("push")?;
         Ok(NetStats {
             received_bytes: transfer.bytes,
             objects: transfer.objects_total,
@@ -1742,25 +1762,43 @@ impl RemoteGitEngine {
                 })
             }
             "branch_delete" => {
-                let branch = param("branch").ok_or("branch_delete preview needs branch")?;
+                // The FE sends `{ name, into }` (the local engine's param
+                // contract); accept the legacy `branch` key too.
+                let branch = param("name")
+                    .or_else(|| param("branch"))
+                    .ok_or("branch_delete preview needs name")?;
                 let into = param("into").unwrap_or_else(|| "HEAD".to_string());
-                let raw = self
-                    .git_out(&format!(
-                        "log --format='%s' {}..{}",
-                        shell_quote(&into),
-                        shell_quote(&branch)
-                    ))?
+                // Merged/unmerged must match the local preview's string
+                // contract (`preview_branch_delete` in engine/checkpoints.rs):
+                // the FE's `isMergedPreview` checks `merged`-prefixed summary
+                // + empty files to route confirm vs. force-delete.
+                if self.branch_is_merged(&branch, &into)? {
+                    return Ok(PreviewInfo {
+                        kind: kind.to_string(),
+                        summary: format!("merged into {into}"),
+                        files: Vec::new(),
+                    });
+                }
+                // Unmerged: list the commits that would become unreachable,
+                // capped (same shape as the local engine: sha + subject).
+                let raw = self.git_out(&format!(
+                    "log --format='%H%x09%s' {}..{}",
+                    shell_quote(&into),
+                    shell_quote(&branch)
+                ))?;
+                let files: Vec<PreviewFile> = raw
                     .lines()
                     .take(100)
-                    .map(|s| PreviewFile {
-                        path: s.to_string(),
-                        change: s.to_string(),
+                    .filter_map(|line| line.split_once('\t'))
+                    .map(|(sha, subject)| PreviewFile {
+                        path: sha.to_string(),
+                        change: subject.to_string(),
                     })
                     .collect();
                 Ok(PreviewInfo {
                     kind: kind.to_string(),
-                    summary: format!("Commits lost from {branch}"),
-                    files: raw,
+                    summary: format!("UNMERGED: {} commits would be unreachable", files.len()),
+                    files,
                 })
             }
             other => Err(format!("unknown preview kind `{other}`")),
