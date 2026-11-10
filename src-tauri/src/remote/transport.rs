@@ -182,9 +182,11 @@ pub struct DeviceSession {
     handle: Mutex<Option<Handle<ClientHandler>>>,
     status: watch::Sender<DeviceStatus>,
     /// One shared SFTP session (one channel per device, reused by every
-    /// file op — some servers refuse a burst of channel opens). Guarded by
-    /// [`Self::sftp_epoch`]: bumping it invalidates the cache.
-    sftp_cache: Mutex<Option<Arc<russh_sftp::client::SftpSession>>>,
+    /// file op — some servers refuse a burst of channel opens). Stored with
+    /// the epoch it was opened under: [`Self::sftp_invalidate`] bumps the
+    /// epoch, so a populated entry stops matching immediately and the next
+    /// call re-opens.
+    sftp_cache: Mutex<Option<(u64, Arc<russh_sftp::client::SftpSession>)>>,
     sftp_epoch: std::sync::atomic::AtomicU64,
     /// Single-flight gate for the SFTP open itself: without it, N callers
     /// that all miss the (empty) cache at once each open their own channel
@@ -691,8 +693,9 @@ impl DeviceSession {
 
     /// The device's shared SFTP session, opened once per connection epoch
     /// and reused by every file op (each op used to open its own channel,
-    /// which some servers refuse under bursts). Returns a stale session
-    /// after [`Self::sftp_invalidate`] until the next call re-opens.
+    /// which some servers refuse under bursts). [`Self::sftp_invalidate`]
+    /// bumps the epoch, which makes the cached entry stale: the next call
+    /// re-opens instead of handing out the invalidated session.
     ///
     /// Concurrent callers are single-flighted: one opens the channel while
     /// the rest wait on [`Self::sftp_open_lock`] and then hit the cache.
@@ -703,13 +706,15 @@ impl DeviceSession {
         let epoch = self.sftp_epoch.load(std::sync::atomic::Ordering::SeqCst);
         {
             let cache = self.sftp_cache.lock().await;
-            if cache.is_some() {
-                // Cached only while its epoch is current: read the epoch
-                // again after taking the lock so an invalidate racing the
-                // lock is still honored.
-                if self.sftp_epoch.load(std::sync::atomic::Ordering::SeqCst) == epoch {
-                    let sftp = cache.as_ref().unwrap().clone();
-                    return Ok(sftp);
+            if let Some((cached_epoch, sftp)) = cache.as_ref() {
+                // The stored epoch must match: an invalidate keeps the Arc
+                // alive for in-flight users but must stop new hand-outs.
+                // Read the epoch again after taking the lock so an
+                // invalidate racing the lock is still honored.
+                if *cached_epoch == epoch
+                    && self.sftp_epoch.load(std::sync::atomic::Ordering::SeqCst) == epoch
+                {
+                    return Ok(sftp.clone());
                 }
             }
         }
@@ -732,10 +737,12 @@ impl DeviceSession {
         let epoch = self.sftp_epoch.load(std::sync::atomic::Ordering::SeqCst);
         {
             let cache = self.sftp_cache.lock().await;
-            if cache.is_some() && self.sftp_epoch.load(std::sync::atomic::Ordering::SeqCst) == epoch
-            {
-                let sftp = cache.as_ref().unwrap().clone();
-                return Ok(sftp);
+            if let Some((cached_epoch, sftp)) = cache.as_ref() {
+                if *cached_epoch == epoch
+                    && self.sftp_epoch.load(std::sync::atomic::Ordering::SeqCst) == epoch
+                {
+                    return Ok(sftp.clone());
+                }
             }
         }
         // Second cooldown check: callers that queued on the gate must not
@@ -791,7 +798,7 @@ impl DeviceSession {
         // Store only when still current — a concurrent invalidate (or a
         // fresher open) wins.
         if self.sftp_epoch.load(std::sync::atomic::Ordering::SeqCst) == epoch {
-            *cache = Some(sftp.clone());
+            *cache = Some((epoch, sftp.clone()));
         }
         Ok(sftp)
     }
@@ -804,6 +811,12 @@ impl DeviceSession {
             .store(0, std::sync::atomic::Ordering::SeqCst);
         self.sftp_epoch
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        // Best-effort eviction: the epoch bump alone guarantees the dead
+        // session is never handed out again; dropping the Arc here just lets
+        // its channel close promptly when uncontended.
+        if let Ok(mut cache) = self.sftp_cache.try_lock() {
+            *cache = None;
+        }
     }
 
     /// Open an interactive shell channel (terminal panel). The channel is
