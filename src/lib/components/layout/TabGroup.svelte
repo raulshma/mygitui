@@ -141,6 +141,14 @@
     };
   }
 
+  /** Middle click hides the panel, mirroring the repo/file tab strips. */
+  function onAuxClick(event: MouseEvent, panel: PanelId): void {
+    if (event.button !== 1) return;
+    // Prevent the webview's autoscroll affordance.
+    event.preventDefault();
+    onAction("hide", node.id, panel);
+  }
+
   function runAction(action: PanelGroupAction): void {
     if (menu?.kind !== "context") return;
     const { panel } = menu;
@@ -176,6 +184,7 @@
     {#if activePanel}
       <div
         class="panel-head flex flex-none items-center gap-[0.35rem] border-b border-border bg-popover px-2.5 py-1"
+        onauxclick={(e) => onAuxClick(e, activePanel)}
       >
         <svg
           class="tab-icon h-3 w-3 flex-none text-muted-foreground"
@@ -227,7 +236,9 @@
           aria-controls={`tabpanel-${node.id}`}
           id={`tab-${node.id}-${panel}`}
           tabindex={index === activeIndex ? 0 : -1}
+          title={`${panelLabel(panel)} — middle-click to close`}
           onclick={() => onActivate(node.id, index)}
+          onauxclick={(e) => onAuxClick(e, panel)}
           oncontextmenu={(e) => openContext(e, panel)}
         >
           <svg
