@@ -10,11 +10,13 @@
  * `$lib/stores/ops.svelte`:
  *
  *   backend pauses a connect and emits `hostkey-request` /
- *   `device-auth-request` → this store surfaces it as `hostkeyPending` /
- *   `authPending` → dialog binds to it → the user answers via
- *   `answerHostKey()` / `answerAuth()` (or `dismissHostKey()` /
+ *   `device-auth-request` → this store surfaces it as the single
+ *   {@link RemoteDeviceStore.pendingPrompt} slot (`hostkeyPending` /
+ *   `authPending` are derived views of it) → dialog binds to it → the user
+ *   answers via `answerHostKey()` / `answerAuth()` (or `dismissHostKey()` /
  *   `dismissAuth()` on Escape), which call the `device_*_respond` commands
- *   and advance to the next queued request.
+ *   and advance to the next queued request. One shared queue + one visible
+ *   slot: a host-key and an auth prompt can never stack as two modals.
  *
  * The backend expires an unanswered prompt after 120 s; `pruneStale()`
  * drops queue entries older than that so a timed-out prompt never blocks
@@ -77,17 +79,35 @@ export function deviceInputFromProfile(profile: DeviceProfile): DeviceInput {
   };
 }
 
+/** A pending connect prompt: the tagged event travels with the slot. */
+export type PendingPrompt =
+  | { kind: "hostkey"; request: HostKeyRequestEvent }
+  | { kind: "auth"; request: DeviceAuthRequestEvent };
+
 export class RemoteDeviceStore {
   /** All registered devices, in registry order. */
   devices: DeviceInfo[] = $state([]);
 
-  /** The connect prompt the dialog is showing, or `null` when none pending. */
-  hostkeyPending: HostKeyRequestEvent | null = $state(null);
-  /** The auth prompt the dialog is showing, or `null` when none pending. */
-  authPending: DeviceAuthRequestEvent | null = $state(null);
+  /**
+   * The connect prompt the dialog is showing, or `null` when none is
+   * pending. One slot over one shared queue — the two prompt kinds
+   * arbitrate instead of stacking.
+   */
+  pendingPrompt: PendingPrompt | null = $state(null);
 
-  #hostkeyQueue: HostKeyRequestEvent[] = [];
-  #authQueue: DeviceAuthRequestEvent[] = [];
+  /** The visible host-key prompt, or `null` (derived from {@link pendingPrompt}). */
+  get hostkeyPending(): HostKeyRequestEvent | null {
+    return this.pendingPrompt?.kind === "hostkey"
+      ? this.pendingPrompt.request
+      : null;
+  }
+
+  /** The visible auth prompt, or `null` (derived from {@link pendingPrompt}). */
+  get authPending(): DeviceAuthRequestEvent | null {
+    return this.pendingPrompt?.kind === "auth" ? this.pendingPrompt.request : null;
+  }
+
+  #promptQueue: PendingPrompt[] = [];
   /** request_id → queue arrival (ms), for {@link pruneStale}. */
   #queuedAt = new Map<string, number>();
   #unregister: Array<() => void> = [];
@@ -165,9 +185,15 @@ export class RemoteDeviceStore {
     this.setStatus(deviceId, "connecting");
     try {
       await deviceConnect(deviceId);
-      this.setStatus(deviceId, "connected");
+      // An authoritative `device-status` event that arrived mid-await wins;
+      // only complete the optimistic transition if it is still showing.
+      if (this.statusOf(deviceId) === "connecting") {
+        this.setStatus(deviceId, "connected");
+      }
     } catch (err) {
-      this.setStatus(deviceId, "disconnected");
+      if (this.statusOf(deviceId) === "connecting") {
+        this.setStatus(deviceId, "disconnected");
+      }
       toast(
         `Connect failed: ${err instanceof Error ? err.message : String(err)}`,
         { kind: "error" },
@@ -210,27 +236,26 @@ export class RemoteDeviceStore {
 
   // -- prompt queue ----------------------------------------------------------
 
-  /**
-   * Registers an incoming host-key prompt (public for tests): prunes stale
-   * entries, queues it and shows it as soon as no other prompt is on
-   * screen.
-   */
+  /** Registers an incoming host-key prompt (public for tests). */
   applyHostKeyRequest(event: HostKeyRequestEvent): void {
-    this.pruneStale();
-    this.#queuedAt.set(event.request_id, Date.now());
-    this.#hostkeyQueue.push(event);
-    if (this.hostkeyPending === null) {
-      this.hostkeyPending = this.#hostkeyQueue.shift() ?? null;
-    }
+    this.applyPrompt({ kind: "hostkey", request: event });
   }
 
-  /** Registers an incoming device-auth prompt (same policy as above). */
+  /** Registers an incoming device-auth prompt (public for tests). */
   applyAuthRequest(event: DeviceAuthRequestEvent): void {
+    this.applyPrompt({ kind: "auth", request: event });
+  }
+
+  /**
+   * Registers an incoming prompt (public for tests): prunes stale entries,
+   * queues it and shows it as soon as no other prompt is on screen.
+   */
+  applyPrompt(prompt: PendingPrompt): void {
     this.pruneStale();
-    this.#queuedAt.set(event.request_id, Date.now());
-    this.#authQueue.push(event);
-    if (this.authPending === null) {
-      this.authPending = this.#authQueue.shift() ?? null;
+    this.#queuedAt.set(prompt.request.request_id, Date.now());
+    this.#promptQueue.push(prompt);
+    if (this.pendingPrompt === null) {
+      this.pendingPrompt = this.#promptQueue.shift() ?? null;
     }
   }
 
@@ -250,7 +275,7 @@ export class RemoteDeviceStore {
   async answerHostKey(accept: boolean): Promise<void> {
     const request = this.hostkeyPending;
     if (!request) return;
-    this.#advanceHostKey();
+    this.#advance();
     try {
       await deviceHostkeyRespond(request.request_id, accept);
     } catch (err) {
@@ -273,7 +298,7 @@ export class RemoteDeviceStore {
   async answerAuth(password: string | null, store: boolean): Promise<void> {
     const request = this.authPending;
     if (!request) return;
-    this.#advanceAuth();
+    this.#advance();
     try {
       await deviceAuthRespond(request.request_id, password, store);
     } catch (err) {
@@ -295,21 +320,14 @@ export class RemoteDeviceStore {
    * polls it so a timed-out visible prompt clears without new traffic.
    */
   pruneStale(now: number = Date.now()): void {
-    this.#pruneQueue(this.#hostkeyQueue, now);
-    this.#pruneQueue(this.#authQueue, now);
+    this.#pruneQueue(this.#promptQueue, now);
+    const pending = this.pendingPrompt;
     if (
-      this.hostkeyPending !== null &&
-      now - (this.#queuedAt.get(this.hostkeyPending.request_id) ?? now) >
+      pending !== null &&
+      now - (this.#queuedAt.get(pending.request.request_id) ?? now) >
         PROMPT_TIMEOUT_MS
     ) {
-      this.#advanceHostKey();
-    }
-    if (
-      this.authPending !== null &&
-      now - (this.#queuedAt.get(this.authPending.request_id) ?? now) >
-        PROMPT_TIMEOUT_MS
-    ) {
-      this.#advanceAuth();
+      this.#advance();
     }
   }
 
@@ -318,11 +336,9 @@ export class RemoteDeviceStore {
     for (const unregister of this.#unregister) unregister();
     this.#unregister = [];
     this.devices = [];
-    this.#hostkeyQueue = [];
-    this.#authQueue = [];
+    this.#promptQueue = [];
     this.#queuedAt.clear();
-    this.hostkeyPending = null;
-    this.authPending = null;
+    this.pendingPrompt = null;
   }
 
   // -- internals ---------------------------------------------------------------
@@ -334,22 +350,17 @@ export class RemoteDeviceStore {
     );
   }
 
-  #advanceHostKey(): void {
-    this.hostkeyPending = this.#hostkeyQueue.shift() ?? null;
+  /** Shows the next queued prompt (or closes the slot). */
+  #advance(): void {
+    this.pendingPrompt = this.#promptQueue.shift() ?? null;
   }
 
-  #advanceAuth(): void {
-    this.authPending = this.#authQueue.shift() ?? null;
-  }
-
-  #pruneQueue(
-    queue: Array<HostKeyRequestEvent | DeviceAuthRequestEvent>,
-    now: number,
-  ): void {
+  #pruneQueue(queue: PendingPrompt[], now: number): void {
     for (let i = queue.length - 1; i >= 0; i--) {
-      const arrivedAt = this.#queuedAt.get(queue[i]!.request_id);
+      const requestId = queue[i]!.request.request_id;
+      const arrivedAt = this.#queuedAt.get(requestId);
       if (arrivedAt !== undefined && now - arrivedAt > PROMPT_TIMEOUT_MS) {
-        this.#queuedAt.delete(queue[i]!.request_id);
+        this.#queuedAt.delete(requestId);
         queue.splice(i, 1);
       }
     }
@@ -357,14 +368,10 @@ export class RemoteDeviceStore {
 
   /** Drops every pending/queued prompt belonging to `deviceId`. */
   #dropPromptsFor(deviceId: string): void {
-    this.#hostkeyQueue = this.#hostkeyQueue.filter(
-      (request) => request.device_id !== deviceId,
+    this.#promptQueue = this.#promptQueue.filter(
+      (prompt) => prompt.request.device_id !== deviceId,
     );
-    if (this.hostkeyPending?.device_id === deviceId) this.#advanceHostKey();
-    this.#authQueue = this.#authQueue.filter(
-      (request) => request.device_id !== deviceId,
-    );
-    if (this.authPending?.device_id === deviceId) this.#advanceAuth();
+    if (this.pendingPrompt?.request.device_id === deviceId) this.#advance();
   }
 }
 

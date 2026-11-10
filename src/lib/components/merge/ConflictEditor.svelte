@@ -83,7 +83,15 @@
   // capturing only the initial `files` value).
   let selectedPath = $state("");
   let cursor = $state(0);
-  let busyPath = $state<string | null>(null);
+  /**
+   * What the editor is doing right now: resolving one file, or aborting
+   * the merge. One tagged union — the old encoding doubled a file path
+   * with the magic `"::abort"` sentinel, which any real path could
+   * collide with and which `busy` alone could not distinguish.
+   */
+  let busyState = $state<{ kind: "resolve"; path: string } | { kind: "abort" } | null>(
+    null,
+  );
   let abortArmed = $state(false);
 
   /** Conflict block elements by ordinal (scroll targets; non-reactive). */
@@ -111,7 +119,11 @@
   const unresolved = $derived(unresolvedConflicts(segments, choiceMap, customMap));
   const resolvedFiles = $derived(files.filter((f) => marked[f.path]).length);
   const allResolved = $derived(files.length > 0 && resolvedFiles === files.length);
-  const busy = $derived(busyPath !== null);
+  const busy = $derived(busyState !== null);
+  /** Path of the resolve in progress, or null (abort busy has no path). */
+  const resolvingPath = $derived(
+    busyState?.kind === "resolve" ? busyState.path : null,
+  );
   /** Unsaved choices/custom text that a "Mark resolved" has not persisted. */
   const dirty = $derived(selected !== null && !marked[selected.path]);
 
@@ -203,7 +215,7 @@
 
   function choose(index: number, choice: "ours" | "theirs"): void {
     const path = selected?.path;
-    if (path === undefined || busyPath === path) return;
+    if (path === undefined || resolvingPath === path) return;
     choicesByFile[path] = { ...(choicesByFile[path] ?? {}), [index]: choice };
     if (customsByFile[path]?.[index] !== undefined) {
       const customs = { ...customsByFile[path] };
@@ -216,7 +228,7 @@
 
   function startEdit(index: number): void {
     const path = selected?.path;
-    if (path === undefined || busyPath === path) return;
+    if (path === undefined || resolvingPath === path) return;
     const customs = { ...(customsByFile[path] ?? {}) };
     // Prefill with the current effective content (ours until edited).
     if (customs[index] === undefined) {
@@ -244,7 +256,7 @@
   /** Bulk-fill every conflict in the current file (quick action). */
   function resolveAll(choice: "ours" | "theirs"): void {
     const path = selected?.path;
-    if (path === undefined || busyPath === path || total === 0) return;
+    if (path === undefined || resolvingPath === path || total === 0) return;
     const next: Record<number, ResolutionChoice> = { ...(choicesByFile[path] ?? {}) };
     for (let i = 0; i < total; i++) next[i] = choice;
     choicesByFile[path] = next;
@@ -334,7 +346,7 @@
 
   async function markResolved(): Promise<void> {
     const file = selected;
-    if (file === null || busyPath !== null) return;
+    if (file === null || busyState !== null) return;
     if (text === null) {
       toast(`Cannot resolve ${file.path}: content not loaded`, { kind: "error" });
       return;
@@ -346,7 +358,7 @@
       );
       return;
     }
-    busyPath = file.path;
+    busyState = { kind: "resolve", path: file.path };
     try {
       await conflictResolve(repoId, file.path, "both", serializeFor(file.path));
       marked[file.path] = true;
@@ -359,11 +371,21 @@
     } catch (err) {
       toast(`Resolving ${file.path} failed: ${errorMessage(err)}`, { kind: "error" });
     } finally {
-      busyPath = null;
+      busyState = null;
     }
   }
 
   let abortTimer: ReturnType<typeof setTimeout> | undefined;
+
+  // The armed-abort state must not outlive the editor: an unmount between
+  // the two clicks would otherwise leave a pending timer writing to dead
+  // state and ambiguous semantics on the next mount.
+  $effect(() => {
+    return () => {
+      clearTimeout(abortTimer);
+      abortArmed = false;
+    };
+  });
 
   /** First click arms (4 s), second click aborts the merge for real. */
   async function abortMerge(): Promise<void> {
@@ -375,15 +397,15 @@
     }
     abortArmed = false;
     clearTimeout(abortTimer);
-    if (busyPath !== null) return;
-    busyPath = "::abort";
+    if (busyState !== null) return;
+    busyState = { kind: "abort" };
     try {
       await mergeAbort(repoId);
       onResolved();
     } catch (err) {
       toast(`Merge abort failed: ${errorMessage(err)}`, { kind: "error" });
     } finally {
-      busyPath = null;
+      busyState = null;
     }
   }
 
@@ -465,7 +487,7 @@
               (marked[file.path] ? "text-[var(--app-added)]" : "text-primary")}
             aria-hidden="true"
           >
-            {#if busyPath === file.path}…{:else if marked[file.path]}✓{:else if fileDirty(file.path)}•{/if}
+            {#if resolvingPath === file.path}…{:else if marked[file.path]}✓{:else if fileDirty(file.path)}•{/if}
           </span>
           <span
             class={"filepath min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap" +
@@ -525,7 +547,7 @@
                     class={tbIdle}
                     size="xs"
                     type="button"
-                    disabled={busyPath === selected.path}
+                    disabled={resolvingPath === selected.path}
                     aria-label={`Choose ours for conflict ${index + 1}`}
                     onclick={() => choose(index, "ours")}>Choose ours</Button
                   >
@@ -534,7 +556,7 @@
                     class={tbIdle}
                     size="xs"
                     type="button"
-                    disabled={busyPath === selected.path}
+                    disabled={resolvingPath === selected.path}
                     aria-label={`Choose theirs for conflict ${index + 1}`}
                     onclick={() => choose(index, "theirs")}>Choose theirs</Button
                   >
@@ -544,7 +566,7 @@
                       class={tbIdle}
                       size="xs"
                       type="button"
-                      disabled={busyPath === selected.path}
+                      disabled={resolvingPath === selected.path}
                       onclick={stopEdit}>Done editing</Button
                     >
                   {:else}
@@ -553,7 +575,7 @@
                       class={tbIdle}
                       size="xs"
                       type="button"
-                      disabled={busyPath === selected.path}
+                      disabled={resolvingPath === selected.path}
                       aria-label={`Edit conflict ${index + 1}`}
                       onclick={() => startEdit(index)}>Edit</Button
                     >
@@ -565,7 +587,7 @@
                     aria-label={`Custom resolution for conflict ${index + 1}`}
                     rows={Math.max(3, (customMap.get(index) ?? "").split("\n").length)}
                     value={draftFor(index)}
-                    disabled={busyPath === selected.path}
+                    disabled={resolvingPath === selected.path}
                     oninput={(event) => setCustom(index, event.currentTarget.value)}
                   ></textarea>
                 {:else}
@@ -605,7 +627,7 @@
             class={tbIdle}
             size="xs"
             type="button"
-            disabled={total === 0 || busyPath === selected.path}
+            disabled={total === 0 || resolvingPath === selected.path}
             title="Resolve every conflict in this file with our side"
             onclick={() => resolveAll("ours")}>Resolve all ours</Button
           >
@@ -614,7 +636,7 @@
             class={tbIdle}
             size="xs"
             type="button"
-            disabled={total === 0 || busyPath === selected.path}
+            disabled={total === 0 || resolvingPath === selected.path}
             title="Resolve every conflict in this file with their side"
             onclick={() => resolveAll("theirs")}>Resolve all theirs</Button
           >
@@ -629,11 +651,11 @@
             </Badge>
           {/if}
           <Button
-            variant={busyPath === selected.path || text === null || unresolved.length > 0 ? "outline" : "ghost"}
-            class={"primary " + (busyPath === selected.path || text === null || unresolved.length > 0 ? tbIdle : tbTonal)}
+            variant={resolvingPath === selected.path || text === null || unresolved.length > 0 ? "outline" : "ghost"}
+            class={"primary " + (resolvingPath === selected.path || text === null || unresolved.length > 0 ? tbIdle : tbTonal)}
             size="xs"
             type="button"
-            disabled={busyPath === selected.path || text === null || unresolved.length > 0}
+            disabled={resolvingPath === selected.path || text === null || unresolved.length > 0}
             title={
               unresolved.length > 0
                 ? `${unresolved.length} conflict(s) still unresolved`

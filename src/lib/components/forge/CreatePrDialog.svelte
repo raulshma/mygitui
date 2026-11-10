@@ -67,6 +67,8 @@
   let aiPending = $state(false);
   /** Inline failure from the last AI generation (cleared on retry/success). */
   let aiError = $state<string | null>(null);
+  /** Deadline for the UI-bus round-trip (see {@link AI_PREFILL_TIMEOUT_MS}). */
+  let aiTimer: ReturnType<typeof setTimeout> | undefined;
 
   let seq = 0;
 
@@ -85,6 +87,7 @@
     commits = [];
     aiPending = false;
     aiError = null;
+    clearTimeout(aiTimer);
     loading = true;
 
     branches(repoId)
@@ -136,10 +139,12 @@
       aiPending = false;
       aiError =
         detail.message.length > 0 ? detail.message : "AI generation failed";
+      clearTimeout(aiTimer);
     });
     return () => {
       unregisterResult();
       unregisterError();
+      clearTimeout(aiTimer);
     };
   });
 
@@ -159,10 +164,24 @@
     return names.includes("main") ? "main" : names.includes("master") ? "master" : (names[0] ?? "");
   }
 
+  /** How long the dialog waits for the AI bridge's answer on the UI bus. */
+  const AI_PREFILL_TIMEOUT_MS = 45_000;
+
   function requestAi(): void {
     aiPending = true;
     aiError = null;
     emitUiEvent("ai-generate-pr", { repoId, commits });
+    // The answer round-trips the typed UI bus; if no bridge is listening
+    // (AI unconfigured, or the dialog mounted outside a workspace), the
+    // button would stick on "Waiting…" forever. The deadline turns that
+    // wedge into a recoverable error.
+    clearTimeout(aiTimer);
+    aiTimer = setTimeout(() => {
+      if (!aiPending) return;
+      aiPending = false;
+      aiError =
+        "AI generation did not answer in time — check the AI settings and retry, or fill the fields manually.";
+    }, AI_PREFILL_TIMEOUT_MS);
   }
 
   function onKeydown(event: KeyboardEvent): void {

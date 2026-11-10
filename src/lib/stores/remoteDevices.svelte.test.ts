@@ -271,16 +271,22 @@ describe("device-auth prompt queue", () => {
     store.applyHostKeyRequest(hostkeyRequest("r1", "d1"));
     store.applyAuthRequest(authRequest("a1", "d1"));
 
-    // Fresh prompts survive a prune at "now".
+    // Fresh prompts survive a prune at "now". One visible slot: the
+    // host-key prompt is showing and the auth prompt stays queued behind
+    // it (registry #9 — two prompts never stack as two modals).
     store.pruneStale(Date.now());
     expect(store.hostkeyPending?.request_id).toBe("r1");
+    expect(store.authPending).toBeNull();
+
+    // Answering the visible one advances the shared queue to the auth one.
+    void store.answerHostKey(true);
+    expect(mockHostkeyRespond).toHaveBeenCalledWith("r1", true);
     expect(store.authPending?.request_id).toBe("a1");
 
-    // Past the 120 s backend timeout, the visible prompts are pruned (the
-    // backend stopped waiting for their answers already).
+    // Past the 120 s backend timeout, the visible prompt is pruned (the
+    // backend stopped waiting for its answer already).
     const later = Date.now() + PROMPT_TIMEOUT_MS + 1;
     store.pruneStale(later);
-    expect(store.hostkeyPending).toBeNull();
     expect(store.authPending).toBeNull();
 
     // ... and the next request surfaces directly again (pruned by a fresh
