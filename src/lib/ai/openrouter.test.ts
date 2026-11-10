@@ -135,6 +135,63 @@ describe("fetchOpenRouterModels", () => {
     // that yields an empty list rather than a throw.
     await expect(fetchOpenRouterModels(garbage)).resolves.toEqual([]);
   });
+
+  it("aborts a probe that never answers so the health slot is released", async () => {
+    vi.useFakeTimers();
+    try {
+      let seen: AbortSignal | undefined;
+      const hung = vi.fn(
+        (_input: RequestInfo | URL, init?: RequestInit) =>
+          new Promise<Response>((_resolve, reject) => {
+            seen = init?.signal ?? undefined;
+            seen?.addEventListener("abort", () =>
+              reject(new DOMException("aborted", "AbortError")),
+            );
+          }),
+      );
+      const pending = fetchOpenRouterModels(hung as unknown as typeof fetch);
+      const assertion = expect(pending).rejects.toMatchObject({
+        kind: "unavailable",
+        message: "openrouter.ai did not answer the model list in time",
+      });
+      await vi.advanceTimersByTimeAsync(8_000);
+      await assertion;
+      expect(seen?.aborted).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("aborts a body that stalls after the headers arrive", async () => {
+    vi.useFakeTimers();
+    try {
+      let seen: AbortSignal | undefined;
+      const stalled = vi.fn(
+        (_input: RequestInfo | URL, init?: RequestInit) => {
+          seen = init?.signal ?? undefined;
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: () =>
+              new Promise((_resolve, reject) => {
+                seen?.addEventListener("abort", () =>
+                  reject(new DOMException("aborted", "AbortError")),
+                );
+              }),
+          } as unknown as Response);
+        },
+      );
+      const pending = fetchOpenRouterModels(stalled as unknown as typeof fetch);
+      const assertion = expect(pending).rejects.toMatchObject({
+        kind: "unavailable",
+        message: "openrouter.ai did not finish sending the model list in time",
+      });
+      await vi.advanceTimersByTimeAsync(8_000);
+      await assertion;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------

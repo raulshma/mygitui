@@ -32,6 +32,13 @@ export const OPENROUTER_API_BASE = "https://openrouter.ai/api/v1";
 /** Injectable fetch surface (subset of DOM fetch; tests stub globalThis). */
 export type FetchLike = typeof fetch;
 
+/**
+ * Ceiling for the models probe. The supervisor coalesces health checks into
+ * one slot, so a probe that never settles blocks every later AI request
+ * behind it and leaves the status chip on "checking" indefinitely.
+ */
+const MODELS_TIMEOUT_MS = 8_000;
+
 /** Removes every occurrence of `secret` from `text` (defensive scrubbing). */
 export function scrubSecret(text: string, secret: string | null | undefined): string {
   if (!secret || secret.length === 0) return text;
@@ -69,34 +76,50 @@ function modelListFromReply(reply: unknown): ModelInfo[] {
 export async function fetchOpenRouterModels(
   fetchImpl: FetchLike = fetch,
 ): Promise<ModelInfo[]> {
-  let response: Response;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), MODELS_TIMEOUT_MS);
+  const timedOut = (): boolean => controller.signal.aborted;
   try {
-    const key = await apiKey();
-    response = await fetchImpl(`${OPENROUTER_API_BASE}/models`, {
-      headers: key ? { Authorization: `Bearer ${key}` } : undefined,
-    });
-  } catch (err) {
-    throw new AiError("unavailable", "could not reach openrouter.ai to list models", {
-      backend: "openrouter",
-      cause: err,
-    });
-  }
-  if (!response.ok) {
-    throw new AiError(
-      response.status === 401 || response.status === 403 ? "unauthenticated" : "bad-response",
-      response.status === 401 || response.status === 403
-        ? "openrouter rejected the API key (HTTP 401) — check it in AI settings"
-        : `openrouter model list failed: HTTP ${response.status}`,
-      { backend: "openrouter" },
-    );
-  }
-  try {
-    return modelListFromReply(await response.json());
-  } catch (err) {
-    throw new AiError("bad-response", "openrouter model list was not valid JSON", {
-      backend: "openrouter",
-      cause: err,
-    });
+    let response: Response;
+    try {
+      const key = await apiKey();
+      response = await fetchImpl(`${OPENROUTER_API_BASE}/models`, {
+        headers: key ? { Authorization: `Bearer ${key}` } : undefined,
+        signal: controller.signal,
+      });
+    } catch (err) {
+      throw new AiError(
+        "unavailable",
+        timedOut()
+          ? "openrouter.ai did not answer the model list in time"
+          : "could not reach openrouter.ai to list models",
+        { backend: "openrouter", cause: err },
+      );
+    }
+    if (!response.ok) {
+      throw new AiError(
+        response.status === 401 || response.status === 403 ? "unauthenticated" : "bad-response",
+        response.status === 401 || response.status === 403
+          ? "openrouter rejected the API key (HTTP 401) — check it in AI settings"
+          : `openrouter model list failed: HTTP ${response.status}`,
+        { backend: "openrouter" },
+      );
+    }
+    try {
+      // The signal covers the body read too: headers can arrive and the
+      // stream then stall, which a fetch-only timeout would miss.
+      return modelListFromReply(await response.json());
+    } catch (err) {
+      throw new AiError(
+        timedOut() ? "unavailable" : "bad-response",
+        timedOut()
+          ? "openrouter.ai did not finish sending the model list in time"
+          : "openrouter model list was not valid JSON",
+        { backend: "openrouter", cause: err },
+      );
+    }
+  } finally {
+    clearTimeout(timer);
   }
 }
 

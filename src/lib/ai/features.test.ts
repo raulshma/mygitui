@@ -421,4 +421,53 @@ describe("runFeature", () => {
     });
     expect(deps.router.generate).toHaveBeenCalledTimes(1);
   });
+
+  it("fails instead of hanging when the log stream never sends a page", async () => {
+    // repo_log_stream resolves on acceptance, so a stream superseded before
+    // its first page used to leave pr-title-body pending forever.
+    vi.useFakeTimers();
+    try {
+      const deps = makeDeps();
+      deps.git.streamLog = vi.fn(async () => {});
+      const pending = runFeature("pr-title-body", { repoId: "r1" }, deps);
+      const assertion = expect(pending).rejects.toMatchObject({ kind: "unavailable" });
+      await vi.advanceTimersByTimeAsync(10_000);
+      await assertion;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("aborts a generation that never settles and surfaces a timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      const deps = makeDeps();
+      let seen: AbortSignal | undefined;
+      deps.router.generate = vi.fn(
+        (req: { signal?: AbortSignal }) =>
+          new Promise<AiResult>((_resolve, reject) => {
+            seen = req.signal;
+            req.signal?.addEventListener("abort", () =>
+              reject(new AiError("unavailable", "aborted", {})),
+            );
+          }),
+      );
+      const pending = runFeature("commit-message", { repoId: "r1" }, deps);
+      const assertion = expect(pending).rejects.toMatchObject({
+        kind: "unavailable",
+        message: "the AI backend did not finish in time",
+      });
+      await vi.advanceTimersByTimeAsync(120_000);
+      await assertion;
+      expect(seen?.aborted).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("passes an abort signal to every generation", async () => {
+    const deps = makeDeps();
+    await runFeature("commit-message", { repoId: "r1" }, deps);
+    expect(deps.generate.mock.calls[0][0].signal).toBeInstanceOf(AbortSignal);
+  });
 });

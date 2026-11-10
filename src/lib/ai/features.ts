@@ -355,16 +355,41 @@ async function gatherStagedDiff(git: FeatureGitClient, repoId: string): Promise<
   return stagedDiffText(files);
 }
 
+/**
+ * Deadline for the first log page. `repo_log_stream` resolves as soon as the
+ * backend ACCEPTS the command (it walks on a spawned thread), so a stream
+ * superseded before its first page — a history refresh or watcher bump
+ * cancels it — would otherwise leave this promise pending forever and wedge
+ * the repo's AI busy flag.
+ */
+const LOG_FIRST_PAGE_TIMEOUT_MS = 10_000;
+
+/** Ceiling for one generation, so a stalled backend cannot wedge the UI. */
+const FEATURE_TIMEOUT_MS = 120_000;
+
 /** Gathers the first log page's commits for a repo. */
 async function gatherCommits(
   git: FeatureGitClient,
   repoId: string,
 ): Promise<Array<{ summary: string; sha: string }>> {
-  return new Promise((resolve, reject) => {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const firstPage = new Promise<Array<{ summary: string; sha: string }>>((resolve, reject) => {
+    timer = setTimeout(
+      () =>
+        reject(
+          new AiError("unavailable", "timed out reading the repository history", {}),
+        ),
+      LOG_FIRST_PAGE_TIMEOUT_MS,
+    );
     void git.streamLog(repoId, EMPTY_LOG_FILTER, (page) => {
       resolve(page.commits.map((c) => ({ summary: c.summary, sha: c.sha })));
     }).catch(reject);
   });
+  try {
+    return await firstPage;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /**
@@ -451,12 +476,27 @@ export async function runFeature(
     }
   }
 
-  const result = await deps.router.generate({
-    system: built.system,
-    prompt: built.prompt,
-    model: ctx.model,
-    sessionKey: ctx.repoId,
-  });
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), FEATURE_TIMEOUT_MS);
+  let result: AiResult;
+  try {
+    result = await deps.router.generate({
+      system: built.system,
+      prompt: built.prompt,
+      model: ctx.model,
+      sessionKey: ctx.repoId,
+      signal: controller.signal,
+    });
+  } catch (err) {
+    // Without this the repo's busy flag never clears and every later AI
+    // request for it is refused while the spinner runs forever.
+    if (controller.signal.aborted) {
+      throw new AiError("unavailable", "the AI backend did not finish in time", {});
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
 
   const outcome: FeatureOutcome = { kind, result, text: result.text };
   switch (kind) {
