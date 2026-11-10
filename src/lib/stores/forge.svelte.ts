@@ -4,8 +4,10 @@
  * Caches, per open repo: the `gh` status (process-global, fetched once per
  * refresh), the forge context (owner/repo/branch), the PR list and — lazily,
  * per opened PR — its CI checks (keyed `"<repoId>:<number>"`). Refresh
- * actions are the store's whole write surface; stale-response races are
- * dropped with per-target sequence counters.
+ * actions are the store's whole write surface; each target group is one
+ * {@link AsyncMap} (idle/loading/ready/error per key, stale responses
+ * dropped), so `loading && error` is unrepresentable and a failed PR/check
+ * fetch surfaces instead of silently blanking the list.
  *
  * Lives in a `.svelte.ts` module because `$state` only compiles there.
  * Backend access goes exclusively through `$lib/ipc/client` (mocked with
@@ -48,6 +50,7 @@ import type {
   WorkflowRunFilters,
 } from "$lib/ipc/client";
 import type { RepoId } from "$lib/ipc/types";
+import { AsyncMap } from "$lib/state/async.svelte";
 
 /** Storage key for one PR's checks. */
 export function checksKey(repoId: RepoId, number: number): string {
@@ -69,164 +72,117 @@ export function runLogsKey(
   return `${repoId}:${runId}:${jobId ?? "all"}:${failedOnly ? "failed" : "full"}`;
 }
 
+/** Cache key for the process-global `gh` status probe. */
+const STATUS_KEY = "gh-status";
+
+/** What a failed status probe degrades to (the panel shows "unavailable"). */
+const GH_UNAVAILABLE: ForgeStatus = {
+  available: false,
+  version: "",
+  authed: false,
+};
+
 export class ForgeStore {
-  /** `gh` availability/auth (global, not per repo). */
-  status = $state<ForgeStatus | null>(null);
-  /** True while the status probe is in flight. */
-  statusLoading = $state(false);
+  /** `gh` status probe (global, not per repo): one entry under {@link STATUS_KEY}. */
+  #status = new AsyncMap<ForgeStatus>();
 
   /** Forge context per repo id. */
-  contexts = $state<Record<string, ForgeContext>>({});
-  /** Context errors per repo id (no origin / non-GitHub / detached HEAD). */
-  contextErrors = $state<Record<string, string>>({});
+  #contexts = new AsyncMap<ForgeContext>();
 
   /** PR list per repo id. */
-  prs = $state<Record<string, PrInfo[]>>({});
-  /** PR-list refresh in flight per repo id. */
-  prsLoading = $state<Record<string, boolean>>({});
+  #prs = new AsyncMap<PrInfo[]>();
   /** Selected PR-list state filter per repo id (default "open"). */
   prFilters = $state<Record<string, PrStateFilter>>({});
 
   /** Mutating PR action in flight per `"<repoId>:<number>"`. */
-  busy = $state<Record<string, boolean>>({});
+  #busy = $state<Record<string, boolean>>({});
 
   /** CI checks per `"<repoId>:<number>"` (lazy, per opened PR). */
-  checks = $state<Record<string, CheckInfo[]>>({});
-  /** Checks refresh in flight per `"<repoId>:<number>"`. */
-  checksLoading = $state<Record<string, boolean>>({});
+  #checks = new AsyncMap<CheckInfo[]>();
 
   // -- GitHub Actions -------------------------------------------------------
 
   /** Recent runs per repo id (newest first). */
-  runs = $state<Record<string, WorkflowRun[]>>({});
-  /** Run-list refresh in flight per repo id. */
-  runsLoading = $state<Record<string, boolean>>({});
-  /** Run-list errors per repo id. */
-  runsErrors = $state<Record<string, string>>({});
+  #runs = new AsyncMap<WorkflowRun[]>();
   /** Applied run-list filters per repo id. */
   runFilters = $state<Record<string, WorkflowRunFilters>>({});
 
   /** Workflow files per repo id (dispatch picker). */
-  workflows = $state<Record<string, WorkflowInfo[]>>({});
-  workflowsLoading = $state<Record<string, boolean>>({});
-  workflowsErrors = $state<Record<string, string>>({});
+  #workflows = new AsyncMap<WorkflowInfo[]>();
 
   /** Run detail (jobs/steps) per `"<repoId>:<runId>"` (lazy). */
-  details = $state<Record<string, WorkflowRunDetail>>({});
-  detailsLoading = $state<Record<string, boolean>>({});
-  detailsErrors = $state<Record<string, string>>({});
+  #details = new AsyncMap<WorkflowRunDetail>();
 
   /** Log text per {@link runLogsKey}. */
-  logs = $state<Record<string, string>>({});
-  logsLoading = $state<Record<string, boolean>>({});
-  logsErrors = $state<Record<string, string>>({});
+  #logs = new AsyncMap<string>();
 
   /** Cancel/rerun in flight per `"<repoId>:<runId>"`. */
-  runBusy = $state<Record<string, boolean>>({});
+  #runBusy = $state<Record<string, boolean>>({});
   /** Workflow dispatch in flight per repo id. */
-  dispatchBusy = $state<Record<string, boolean>>({});
+  #dispatchBusy = $state<Record<string, boolean>>({});
 
-  #statusSeq = 0;
-  #contextSeqs = new Map<string, number>();
-  #prsSeqs = new Map<string, number>();
-  #checksSeqs = new Map<string, number>();
-  #runsSeqs = new Map<string, number>();
-  #workflowsSeqs = new Map<string, number>();
-  #detailsSeqs = new Map<string, number>();
-  #logsSeqs = new Map<string, number>();
+  // -- shared AsyncMap read helpers -----------------------------------------
+
+  /** Ready data for `key`, or null (absent / loading / error without data). */
+  #readyData<T>(map: AsyncMap<T>, key: string): T | null {
+    const entry = map.get(key);
+    return entry.state === "ready" ? entry.data : null;
+  }
+
+  /** Ready data, or the data a failed refresh left visible. */
+  #staleData<T>(map: AsyncMap<T>, key: string): T | null {
+    const entry = map.get(key);
+    if (entry.state === "ready") return entry.data;
+    return entry.state === "error" ? entry.previous : null;
+  }
+
+  /** The failure message for `key`, or null when its latest fetch succeeded. */
+  #mapError<T>(map: AsyncMap<T>, key: string): string | null {
+    const entry = map.get(key);
+    return entry.state === "error" ? entry.message : null;
+  }
+
+  /** True while `key`'s latest fetch is in flight. */
+  #mapLoading<T>(map: AsyncMap<T>, key: string): boolean {
+    return map.get(key).state === "loading";
+  }
 
   /** Probes `gh` status (once per call; panels call this on mount). */
   async refreshStatus(): Promise<ForgeStatus | null> {
-    this.statusLoading = true;
-    const seq = ++this.#statusSeq;
-    try {
-      const status = await forgeStatus();
-      if (seq === this.#statusSeq) this.status = status;
-      return status;
-    } catch (err) {
-      if (seq === this.#statusSeq) {
-        this.status = { available: false, version: "", authed: false };
+    return this.#status.run(STATUS_KEY, async () => {
+      try {
+        return await forgeStatus();
+      } catch (err) {
         console.warn("[forge] status probe failed:", err);
+        return GH_UNAVAILABLE;
       }
-      return null;
-    } finally {
-      if (seq === this.#statusSeq) this.statusLoading = false;
-    }
+    });
   }
 
   /** Refreshes (or clears) one repo's forge context. */
   async refreshContext(repoId: RepoId): Promise<ForgeContext | null> {
-    const seq = (this.#contextSeqs.get(repoId) ?? 0) + 1;
-    this.#contextSeqs.set(repoId, seq);
-    try {
-      const context = await forgeContext(repoId);
-      if (seq === this.#contextSeqs.get(repoId)) {
-        this.contexts = { ...this.contexts, [repoId]: context };
-        const errors = { ...this.contextErrors };
-        delete errors[repoId];
-        this.contextErrors = errors;
-      }
-      return context;
-    } catch (err) {
-      if (seq === this.#contextSeqs.get(repoId)) {
-        const message = err instanceof Error ? err.message : String(err);
-        this.contextErrors = { ...this.contextErrors, [repoId]: message };
-      }
-      return null;
-    }
+    return this.#contexts.run(repoId, () => forgeContext(repoId));
   }
 
-  /** Refreshes one repo's PR list (resolves [] on error — panel toasts). */
+  /** Refreshes one repo's PR list (resolves [] on error; error is visible). */
   async refreshPrs(
     repoId: RepoId,
     state: PrStateFilter = this.filterFor(repoId),
   ): Promise<PrInfo[]> {
-    const seq = (this.#prsSeqs.get(repoId) ?? 0) + 1;
-    this.#prsSeqs.set(repoId, seq);
     this.prFilters = { ...this.prFilters, [repoId]: state };
-    this.prsLoading = { ...this.prsLoading, [repoId]: true };
-    try {
-      const list = await prList(repoId, state);
-      if (seq === this.#prsSeqs.get(repoId)) {
-        this.prs = { ...this.prs, [repoId]: list };
-      }
-      return list;
-    } catch (err) {
-      console.warn("[forge] pr list failed:", err);
-      if (seq === this.#prsSeqs.get(repoId)) {
-        this.prs = { ...this.prs, [repoId]: [] };
-      }
-      return [];
-    } finally {
-      if (seq === this.#prsSeqs.get(repoId)) {
-        this.prsLoading = { ...this.prsLoading, [repoId]: false };
-      }
-    }
+    const list = await this.#prs.run(repoId, () => prList(repoId, state), {
+      onError: (err) => console.warn("[forge] pr list failed:", err),
+    });
+    return list ?? [];
   }
 
   /** Lazily refreshes one PR's checks (keyed per repo+number). */
   async refreshChecks(repoId: RepoId, number: number): Promise<CheckInfo[]> {
     const key = checksKey(repoId, number);
-    const seq = (this.#checksSeqs.get(key) ?? 0) + 1;
-    this.#checksSeqs.set(key, seq);
-    this.checksLoading = { ...this.checksLoading, [key]: true };
-    try {
-      const list = await prChecks(repoId, number);
-      if (seq === this.#checksSeqs.get(key)) {
-        this.checks = { ...this.checks, [key]: list };
-      }
-      return list;
-    } catch (err) {
-      console.warn("[forge] pr checks failed:", err);
-      if (seq === this.#checksSeqs.get(key)) {
-        this.checks = { ...this.checks, [key]: [] };
-      }
-      return [];
-    } finally {
-      if (seq === this.#checksSeqs.get(key)) {
-        this.checksLoading = { ...this.checksLoading, [key]: false };
-      }
-    }
+    const list = await this.#checks.run(key, () => prChecks(repoId, number), {
+      onError: (err) => console.warn("[forge] pr checks failed:", err),
+    });
+    return list ?? [];
   }
 
   // -- mutating PR actions --------------------------------------------------
@@ -238,13 +194,13 @@ export class ForgeStore {
     fn: () => Promise<T>,
   ): Promise<T> {
     const key = checksKey(repoId, number);
-    this.busy = { ...this.busy, [key]: true };
+    this.#busy = { ...this.#busy, [key]: true };
     try {
       return await fn();
     } finally {
-      const busy = { ...this.busy };
+      const busy = { ...this.#busy };
       delete busy[key];
-      this.busy = busy;
+      this.#busy = busy;
     }
   }
 
@@ -339,82 +295,43 @@ export class ForgeStore {
 
   // -- GitHub Actions -------------------------------------------------------
 
-  /** Refreshes one repo's run list (resolves [] on error; panel shows it). */
+  /** Refreshes one repo's run list (resolves [] on error; error is visible). */
   async refreshRuns(
     repoId: RepoId,
     filters: WorkflowRunFilters = this.runFiltersFor(repoId),
     silent = false,
   ): Promise<WorkflowRun[]> {
-    const seq = (this.#runsSeqs.get(repoId) ?? 0) + 1;
-    this.#runsSeqs.set(repoId, seq);
     this.runFilters = { ...this.runFilters, [repoId]: filters };
-    if (!silent) this.runsLoading = { ...this.runsLoading, [repoId]: true };
-    try {
-      const list = await workflowRuns(repoId, filters);
-      if (seq === this.#runsSeqs.get(repoId)) {
-        this.runs = { ...this.runs, [repoId]: list };
-        const errors = { ...this.runsErrors };
-        delete errors[repoId];
-        this.runsErrors = errors;
-      }
-      return list;
-    } catch (err) {
-      console.warn("[forge] workflow runs failed:", err);
-      if (seq === this.#runsSeqs.get(repoId)) {
-        this.runsErrors = {
-          ...this.runsErrors,
-          [repoId]: err instanceof Error ? err.message : String(err),
-        };
-      }
-      return [];
-    } finally {
-      if (seq === this.#runsSeqs.get(repoId)) {
-        this.runsLoading = { ...this.runsLoading, [repoId]: false };
-      }
-    }
+    const list = await this.#runs.run(
+      repoId,
+      () => workflowRuns(repoId, filters),
+      {
+        silent,
+        onError: (err) => console.warn("[forge] workflow runs failed:", err),
+      },
+    );
+    return list ?? [];
   }
 
   /** Refreshes the repo's workflow files (dispatch picker). */
   async refreshWorkflows(repoId: RepoId): Promise<WorkflowInfo[]> {
-    const seq = (this.#workflowsSeqs.get(repoId) ?? 0) + 1;
-    this.#workflowsSeqs.set(repoId, seq);
-    this.workflowsLoading = { ...this.workflowsLoading, [repoId]: true };
-    try {
-      const list = await workflowList(repoId);
-      if (seq === this.#workflowsSeqs.get(repoId)) {
-        this.workflows = { ...this.workflows, [repoId]: list };
-        const errors = { ...this.workflowsErrors };
-        delete errors[repoId];
-        this.workflowsErrors = errors;
-      }
-      return list;
-    } catch (err) {
-      console.warn("[forge] workflow list failed:", err);
-      if (seq === this.#workflowsSeqs.get(repoId)) {
-        this.workflowsErrors = {
-          ...this.workflowsErrors,
-          [repoId]: err instanceof Error ? err.message : String(err),
-        };
-      }
-      return [];
-    } finally {
-      if (seq === this.#workflowsSeqs.get(repoId)) {
-        this.workflowsLoading = { ...this.workflowsLoading, [repoId]: false };
-      }
-    }
+    const list = await this.#workflows.run(repoId, () => workflowList(repoId), {
+      onError: (err) => console.warn("[forge] workflow list failed:", err),
+    });
+    return list ?? [];
   }
 
   /** Keeps the run list row in sync with a fresher detail payload. */
   #mergeRun(repoId: RepoId, run: WorkflowRun): void {
-    const list = this.runs[repoId];
-    if (!list) return;
-    const index = list.findIndex(
-      (entry) => entry.database_id === run.database_id,
+    const entry = this.#runs.get(repoId);
+    if (entry.state !== "ready") return;
+    const index = entry.data.findIndex(
+      (candidate) => candidate.database_id === run.database_id,
     );
     if (index === -1) return;
-    const next = list.slice();
+    const next = entry.data.slice();
     next[index] = run;
-    this.runs = { ...this.runs, [repoId]: next };
+    this.#runs.set(repoId, next);
   }
 
   /** Lazily loads one run's jobs/steps (keyed per repo+run). */
@@ -423,33 +340,16 @@ export class ForgeStore {
     runId: number,
   ): Promise<WorkflowRunDetail | null> {
     const key = runKey(repoId, runId);
-    const seq = (this.#detailsSeqs.get(key) ?? 0) + 1;
-    this.#detailsSeqs.set(key, seq);
-    this.detailsLoading = { ...this.detailsLoading, [key]: true };
-    try {
-      const detail = await workflowRunDetail(repoId, runId);
-      if (seq === this.#detailsSeqs.get(key)) {
-        this.details = { ...this.details, [key]: detail };
-        this.#mergeRun(repoId, detail.run);
-        const errors = { ...this.detailsErrors };
-        delete errors[key];
-        this.detailsErrors = errors;
-      }
-      return detail;
-    } catch (err) {
-      console.warn("[forge] workflow run detail failed:", err);
-      if (seq === this.#detailsSeqs.get(key)) {
-        this.detailsErrors = {
-          ...this.detailsErrors,
-          [key]: err instanceof Error ? err.message : String(err),
-        };
-      }
-      return null;
-    } finally {
-      if (seq === this.#detailsSeqs.get(key)) {
-        this.detailsLoading = { ...this.detailsLoading, [key]: false };
-      }
-    }
+    const detail = await this.#details.run(
+      key,
+      () => workflowRunDetail(repoId, runId),
+      {
+        onError: (err) =>
+          console.warn("[forge] workflow run detail failed:", err),
+      },
+    );
+    if (detail !== null) this.#mergeRun(repoId, detail.run);
+    return detail;
   }
 
   /** Loads a run/job log (cached per view; `jobId` null = whole run). */
@@ -460,62 +360,20 @@ export class ForgeStore {
     failedOnly = false,
   ): Promise<string | null> {
     const key = runLogsKey(repoId, runId, jobId, failedOnly);
-    const seq = (this.#logsSeqs.get(key) ?? 0) + 1;
-    this.#logsSeqs.set(key, seq);
-    this.logsLoading = { ...this.logsLoading, [key]: true };
-    try {
-      const text = await workflowRunLogs(repoId, runId, jobId, failedOnly);
-      if (seq === this.#logsSeqs.get(key)) {
-        this.logs = { ...this.logs, [key]: text };
-        const errors = { ...this.logsErrors };
-        delete errors[key];
-        this.logsErrors = errors;
-      }
-      return text;
-    } catch (err) {
-      console.warn("[forge] workflow run logs failed:", err);
-      if (seq === this.#logsSeqs.get(key)) {
-        this.logsErrors = {
-          ...this.logsErrors,
-          [key]: err instanceof Error ? err.message : String(err),
-        };
-      }
-      return null;
-    } finally {
-      if (seq === this.#logsSeqs.get(key)) {
-        this.logsLoading = { ...this.logsLoading, [key]: false };
-      }
-    }
+    return this.#logs.run(key, () => workflowRunLogs(repoId, runId, jobId, failedOnly), {
+      onError: (err) => console.warn("[forge] workflow run logs failed:", err),
+    });
   }
 
   /** Drops cached logs of one run (after cancel/rerun, logs go stale). */
   #clearRunLogs(repoId: RepoId, runId: number): void {
-    const prefix = `${repoId}:${runId}:`;
-    const logs = { ...this.logs };
-    const errors = { ...this.logsErrors };
-    let changed = false;
-    for (const key of Object.keys(logs)) {
-      if (key.startsWith(prefix)) {
-        delete logs[key];
-        changed = true;
-      }
-    }
-    for (const key of Object.keys(errors)) {
-      if (key.startsWith(prefix)) {
-        delete errors[key];
-        changed = true;
-      }
-    }
-    if (changed) {
-      this.logs = logs;
-      this.logsErrors = errors;
-    }
+    this.#logs.resetPrefix(`${repoId}:${runId}:`);
   }
 
   /** Cancel a queued/running run, then refresh list + detail. */
   async cancelRun(repoId: RepoId, runId: number): Promise<string> {
     const key = runKey(repoId, runId);
-    this.runBusy = { ...this.runBusy, [key]: true };
+    this.#runBusy = { ...this.#runBusy, [key]: true };
     try {
       const out = await workflowRunCancel(repoId, runId);
       this.#clearRunLogs(repoId, runId);
@@ -525,9 +383,9 @@ export class ForgeStore {
       ]);
       return out;
     } finally {
-      const busy = { ...this.runBusy };
+      const busy = { ...this.#runBusy };
       delete busy[key];
-      this.runBusy = busy;
+      this.#runBusy = busy;
     }
   }
 
@@ -538,7 +396,7 @@ export class ForgeStore {
     failedOnly = false,
   ): Promise<string> {
     const key = runKey(repoId, runId);
-    this.runBusy = { ...this.runBusy, [key]: true };
+    this.#runBusy = { ...this.#runBusy, [key]: true };
     try {
       const out = await workflowRunRerun(repoId, runId, failedOnly);
       this.#clearRunLogs(repoId, runId);
@@ -548,9 +406,9 @@ export class ForgeStore {
       ]);
       return out;
     } finally {
-      const busy = { ...this.runBusy };
+      const busy = { ...this.#runBusy };
       delete busy[key];
-      this.runBusy = busy;
+      this.#runBusy = busy;
     }
   }
 
@@ -561,15 +419,15 @@ export class ForgeStore {
     gitRef: string,
     inputs: WorkflowInput[] = [],
   ): Promise<string> {
-    this.dispatchBusy = { ...this.dispatchBusy, [repoId]: true };
+    this.#dispatchBusy = { ...this.#dispatchBusy, [repoId]: true };
     try {
       const out = await workflowDispatch(repoId, workflow, gitRef, inputs);
       await this.refreshRuns(repoId);
       return out;
     } finally {
-      const busy = { ...this.dispatchBusy };
+      const busy = { ...this.#dispatchBusy };
       delete busy[repoId];
-      this.dispatchBusy = busy;
+      this.#dispatchBusy = busy;
     }
   }
 
@@ -587,7 +445,7 @@ export class ForgeStore {
    */
   async ensure(repoId: RepoId): Promise<void> {
     const jobs: Promise<unknown>[] = [this.refreshContext(repoId), this.refreshPrs(repoId)];
-    if (!this.status) jobs.push(this.refreshStatus());
+    if (this.status === null) jobs.push(this.refreshStatus());
     await Promise.all(jobs);
   }
 
@@ -598,20 +456,36 @@ export class ForgeStore {
 
   // -- read helpers ---------------------------------------------------------
 
+  /** `gh` availability/auth (global), or null before the first probe lands. */
+  get status(): ForgeStatus | null {
+    return this.#readyData(this.#status, STATUS_KEY);
+  }
+
+  /** True while the status probe is in flight. */
+  get statusLoading(): boolean {
+    return this.#mapLoading(this.#status, STATUS_KEY);
+  }
+
   contextFor(repoId: RepoId): ForgeContext | null {
-    return this.contexts[repoId] ?? null;
+    return this.#readyData(this.#contexts, repoId);
   }
 
   contextErrorFor(repoId: RepoId): string | null {
-    return this.contextErrors[repoId] ?? null;
+    return this.#mapError(this.#contexts, repoId);
   }
 
+  /** PR list, or the list a failed refresh left visible. */
   prsFor(repoId: RepoId): PrInfo[] {
-    return this.prs[repoId] ?? [];
+    return this.#staleData(this.#prs, repoId) ?? [];
   }
 
   prsLoadingFor(repoId: RepoId): boolean {
-    return this.prsLoading[repoId] ?? false;
+    return this.#mapLoading(this.#prs, repoId);
+  }
+
+  /** The PR-list fetch failure, if the latest fetch failed. */
+  prsErrorFor(repoId: RepoId): string | null {
+    return this.#mapError(this.#prs, repoId);
   }
 
   filterFor(repoId: RepoId): PrStateFilter {
@@ -619,57 +493,65 @@ export class ForgeStore {
   }
 
   isBusy(repoId: RepoId, number: number): boolean {
-    return this.busy[checksKey(repoId, number)] ?? false;
+    return this.#busy[checksKey(repoId, number)] ?? false;
   }
 
+  /** CI checks, or the checks a failed refresh left visible. */
   checksFor(repoId: RepoId, number: number): CheckInfo[] | null {
-    return this.checks[checksKey(repoId, number)] ?? null;
+    return this.#staleData(this.#checks, checksKey(repoId, number));
   }
 
   checksLoadingFor(repoId: RepoId, number: number): boolean {
-    return this.checksLoading[checksKey(repoId, number)] ?? false;
+    return this.#mapLoading(this.#checks, checksKey(repoId, number));
+  }
+
+  /** The checks fetch failure, if the latest fetch failed. */
+  checksErrorFor(repoId: RepoId, number: number): string | null {
+    return this.#mapError(this.#checks, checksKey(repoId, number));
   }
 
   // -- GitHub Actions read helpers -----------------------------------------
 
+  /** Run list, or the list a failed refresh left visible. */
   runsFor(repoId: RepoId): WorkflowRun[] {
-    return this.runs[repoId] ?? [];
+    return this.#staleData(this.#runs, repoId) ?? [];
   }
 
   runsLoadingFor(repoId: RepoId): boolean {
-    return this.runsLoading[repoId] ?? false;
+    return this.#mapLoading(this.#runs, repoId);
   }
 
   runsErrorFor(repoId: RepoId): string | null {
-    return this.runsErrors[repoId] ?? null;
+    return this.#mapError(this.#runs, repoId);
   }
 
   runFiltersFor(repoId: RepoId): WorkflowRunFilters {
     return this.runFilters[repoId] ?? {};
   }
 
+  /** Workflow files, or the list a failed refresh left visible. */
   workflowsFor(repoId: RepoId): WorkflowInfo[] {
-    return this.workflows[repoId] ?? [];
+    return this.#staleData(this.#workflows, repoId) ?? [];
   }
 
   workflowsLoadingFor(repoId: RepoId): boolean {
-    return this.workflowsLoading[repoId] ?? false;
+    return this.#mapLoading(this.#workflows, repoId);
   }
 
   workflowsErrorFor(repoId: RepoId): string | null {
-    return this.workflowsErrors[repoId] ?? null;
+    return this.#mapError(this.#workflows, repoId);
   }
 
   detailFor(repoId: RepoId, runId: number): WorkflowRunDetail | null {
-    return this.details[runKey(repoId, runId)] ?? null;
+    return this.#readyData(this.#details, runKey(repoId, runId));
   }
 
   detailLoadingFor(repoId: RepoId, runId: number): boolean {
-    return this.detailsLoading[runKey(repoId, runId)] ?? false;
+    return this.#mapLoading(this.#details, runKey(repoId, runId));
   }
 
   detailErrorFor(repoId: RepoId, runId: number): string | null {
-    return this.detailsErrors[runKey(repoId, runId)] ?? null;
+    return this.#mapError(this.#details, runKey(repoId, runId));
   }
 
   logsFor(
@@ -678,7 +560,7 @@ export class ForgeStore {
     jobId: number | null,
     failedOnly: boolean,
   ): string | null {
-    return this.logs[runLogsKey(repoId, runId, jobId, failedOnly)] ?? null;
+    return this.#readyData(this.#logs, runLogsKey(repoId, runId, jobId, failedOnly));
   }
 
   logsLoadingFor(
@@ -687,8 +569,9 @@ export class ForgeStore {
     jobId: number | null,
     failedOnly: boolean,
   ): boolean {
-    return (
-      this.logsLoading[runLogsKey(repoId, runId, jobId, failedOnly)] ?? false
+    return this.#mapLoading(
+      this.#logs,
+      runLogsKey(repoId, runId, jobId, failedOnly),
     );
   }
 
@@ -698,17 +581,18 @@ export class ForgeStore {
     jobId: number | null,
     failedOnly: boolean,
   ): string | null {
-    return (
-      this.logsErrors[runLogsKey(repoId, runId, jobId, failedOnly)] ?? null
+    return this.#mapError(
+      this.#logs,
+      runLogsKey(repoId, runId, jobId, failedOnly),
     );
   }
 
   isRunBusy(repoId: RepoId, runId: number): boolean {
-    return this.runBusy[runKey(repoId, runId)] ?? false;
+    return this.#runBusy[runKey(repoId, runId)] ?? false;
   }
 
   isDispatchBusy(repoId: RepoId): boolean {
-    return this.dispatchBusy[repoId] ?? false;
+    return this.#dispatchBusy[repoId] ?? false;
   }
 }
 

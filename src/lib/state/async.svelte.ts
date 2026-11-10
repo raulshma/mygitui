@@ -42,26 +42,55 @@ export class AsyncMap<T> {
    * started meanwhile. Resolves with the data, or `null` when the fetch
    * failed or was superseded — callers that want the failure reason read
    * {@link get} instead.
+   *
+   * `silent` skips the `loading` flip (background refreshes must not
+   * flash the toolbar); the result still lands through the same guard.
+   * `onError` observes the failure without replacing the union's error
+   * state (for `console.warn`-style logging).
    */
-  async run(key: string, fn: () => Promise<T>): Promise<T | null> {
+  async run(
+    key: string,
+    fn: () => Promise<T>,
+    opts?: { silent?: boolean; onError?: (err: unknown) => void },
+  ): Promise<T | null> {
     const seq = (this.#seqs.get(key) ?? 0) + 1;
     this.#seqs.set(key, seq);
-    const entry = this.get(key);
-    const previous = entry.state === "ready" ? entry.data : null;
-    this.#entries = { ...this.#entries, [key]: { state: "loading", previous } };
+    if (!opts?.silent) {
+      const entry = this.get(key);
+      const previous = entry.state === "ready" ? entry.data : null;
+      this.#entries = {
+        ...this.#entries,
+        [key]: { state: "loading", previous },
+      };
+    }
     try {
       const data = await fn();
       if (seq !== this.#seqs.get(key)) return null;
       this.#entries = { ...this.#entries, [key]: { state: "ready", data } };
       return data;
     } catch (err) {
+      opts?.onError?.(err);
       if (seq !== this.#seqs.get(key)) return null;
+      // Whatever data was visible before the failure stays visible: the
+      // loading flip's `previous`, or the ready/error data of a silent run.
+      const entry = this.get(key);
+      const previous =
+        entry.state === "ready"
+          ? entry.data
+          : entry.state === "loading" || entry.state === "error"
+            ? entry.previous
+            : null;
       this.#entries = {
         ...this.#entries,
         [key]: { state: "error", message: describeError(err), previous },
       };
       return null;
     }
+  }
+
+  /** Writes a ready entry directly (store-internal cache patches). */
+  set(key: string, data: T): void {
+    this.#entries = { ...this.#entries, [key]: { state: "ready", data } };
   }
 
   /**
@@ -73,5 +102,22 @@ export class AsyncMap<T> {
     const entries = { ...this.#entries };
     delete entries[key];
     this.#entries = entries;
+  }
+
+  /**
+   * Drops every entry whose key starts with `prefix` (a cached subtree,
+   * e.g. one run's log views), invalidating their in-flight runs too.
+   */
+  resetPrefix(prefix: string): void {
+    const entries = { ...this.#entries };
+    let changed = false;
+    for (const key of Object.keys(entries)) {
+      if (key.startsWith(prefix)) {
+        this.#seqs.set(key, (this.#seqs.get(key) ?? 0) + 1);
+        delete entries[key];
+        changed = true;
+      }
+    }
+    if (changed) this.#entries = entries;
   }
 }

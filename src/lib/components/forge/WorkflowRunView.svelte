@@ -116,7 +116,10 @@
   const detailError = $derived(forgeStore.detailErrorFor(repoId, runId));
   const busy = $derived(forgeStore.isRunBusy(repoId, runId));
 
-  const active = $derived(run ? runIsActive(run) : true);
+  // A run we haven't seen yet is not an active run: polling starts once the
+  // first payload arrives (the initial load effect covers the gap), so a
+  // finished run's view never fires the finished-edge spuriously on mount.
+  const active = $derived(run !== null && runIsActive(run));
   const kind = $derived(run ? runStateKind(run) : "unknown");
   const statusText = $derived(run ? runStateLabel(run) : "Loading");
   const duration = $derived(run ? runElapsedLabel(run, now) : null);
@@ -177,6 +180,8 @@
   // A different run is a different view: drop the previous scope and resume
   // live updates even if the user had paused the last run.
   let viewKey = "";
+  /** Whether the run we were watching was active (for the final fetch). */
+  let wasActive = false;
   $effect(() => {
     const key = `${repoId}\u0000${runId}`;
     if (key === viewKey) return;
@@ -186,6 +191,7 @@
     failedOnly = false;
     autoRefresh = true;
     manualRefresh = false;
+    wasActive = false;
   });
 
   // Initial load + selection changes. `untrack` keeps the fetch from making
@@ -234,8 +240,9 @@
   });
 
   // Final fetch when the run finishes (the poll may stop before the last
-  // archive chunk becomes available).
-  let wasActive = false;
+  // archive chunk becomes available). Derived from run presence — an unseen
+  // run is not an active→finished edge — and reset per view above, so
+  // switching to a finished run cannot forge one.
   $effect(() => {
     const isActive = active;
     if (wasActive && !isActive) {

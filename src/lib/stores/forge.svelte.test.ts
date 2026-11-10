@@ -213,13 +213,36 @@ describe("ForgeStore", () => {
     expect(store.contextErrorFor("r1")).toBeNull();
   });
 
-  it("pr list failure resolves [] and clears the loading flag", async () => {
-    mockPrList.mockRejectedValue(new Error("gh auth required"));
+  it("pr list failure surfaces an error and clears the loading flag", async () => {
+    mockPrList.mockRejectedValueOnce(new Error("gh auth required"));
     const store = new ForgeStore();
     const result = await store.refreshPrs("r1");
     expect(result).toEqual([]);
     expect(store.prsFor("r1")).toEqual([]);
+    expect(store.prsErrorFor("r1")).toContain("gh auth required");
     expect(store.prsLoadingFor("r1")).toBe(false);
+    // A later success clears the error.
+    await store.refreshPrs("r1");
+    expect(store.prsErrorFor("r1")).toBeNull();
+  });
+
+  it("a failed PR refresh keeps the previously loaded list visible", async () => {
+    const store = new ForgeStore();
+    await store.refreshPrs("r1");
+    mockPrList.mockRejectedValue(new Error("network down"));
+    await store.refreshPrs("r1");
+    expect(store.prsFor("r1")).toHaveLength(2);
+    expect(store.prsErrorFor("r1")).toContain("network down");
+  });
+
+  it("checks failure surfaces an error instead of a silent empty list", async () => {
+    mockPrChecks.mockRejectedValue(new Error("rate limited"));
+    const store = new ForgeStore();
+    const result = await store.refreshChecks("r1", 1);
+    expect(result).toEqual([]);
+    expect(store.checksErrorFor("r1", 1)).toContain("rate limited");
+    expect(store.checksFor("r1", 1)).toBeNull();
+    expect(store.checksLoadingFor("r1", 1)).toBe(false);
   });
 
   it("checks are lazy and keyed per repo+number", async () => {

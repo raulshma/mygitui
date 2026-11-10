@@ -166,6 +166,7 @@
   const contextError = $derived(forgeStore.contextErrorFor(repoId));
   const prs = $derived(forgeStore.prsFor(repoId));
   const prsLoading = $derived(forgeStore.prsLoadingFor(repoId));
+  const prsError = $derived(forgeStore.prsErrorFor(repoId));
   const filter = $derived(forgeStore.filterFor(repoId));
   const branchPr = $derived(prForBranch(prs, context?.branch ?? ""));
   const listedPrs = $derived(
@@ -177,9 +178,11 @@
   const emptyLabel = $derived(
     prsLoading
       ? "Loading pull requests…"
-      : filter === "open"
-        ? "No other open pull requests."
-        : "No pull requests match this filter.",
+      : prsError
+        ? "Could not load pull requests."
+        : filter === "open"
+          ? "No other open pull requests."
+          : "No pull requests match this filter.",
   );
 
   // Actions tab.
@@ -669,6 +672,7 @@
   {#snippet checksBlock(pr: PrInfo)}
     {@const checks = forgeStore.checksFor(repoId, pr.number)}
     {@const loading = forgeStore.checksLoadingFor(repoId, pr.number)}
+    {@const checksError = forgeStore.checksErrorFor(repoId, pr.number)}
     {@const summary = summarizeChecks(checks ?? [])}
     {@const isWatching = watching.includes(pr.number)}
     <div class="checks mt-2 border-t border-border pt-[0.375rem]">
@@ -698,7 +702,9 @@
           {loading ? "Loading…" : "Refresh checks"}
         </Button>
       </div>
-      {#if checks === null}
+      {#if checksError}
+        <p class="error my-1 text-ui-meta text-destructive [overflow-wrap:anywhere]" role="alert">Could not load checks: {checksError}</p>
+      {:else if checks === null}
         <p class="muted my-1 text-ui-meta text-muted-foreground" aria-live="polite">Loading checks…</p>
       {:else if checks.length === 0}
         <p class="muted my-1 text-ui-meta text-muted-foreground">No checks reported for this PR.</p>
@@ -1041,6 +1047,9 @@
             ? "All pull requests"
             : `${filter[0]?.toUpperCase() ?? ""}${filter.slice(1)} pull requests`}
       </h3>
+      {#if prsError}
+        <p class="error-inline my-[0.15rem] text-xs text-destructive [overflow-wrap:anywhere]" role="alert">{prsError}</p>
+      {/if}
       {#if listedPrs.length === 0}
         <p class="muted my-1 text-ui-meta text-muted-foreground">{emptyLabel}</p>
       {:else}

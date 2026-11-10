@@ -308,13 +308,23 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
       },
     ];
   });
+  /**
+   * One submodule's embed state. The status fetch is its own machine per
+   * module path: `loading → (status+index | error)`; a failed fetch nulls
+   * status/index (protective — mutation helpers no-op on stale data) and
+   * a module-list reload clears the error because every initialized
+   * module refetches right after.
+   */
   interface SubmoduleData {
     info: SubmoduleInfo;
+    /** Resolved lazily: an open tab's repo id, a remote open, or a local open. */
     repoId: string | null;
     root: string;
     status: RepoStatus | null;
     index: StatusIndex | null;
+    /** A status fetch is in flight (the first fetch included). */
     loading: boolean;
+    /** The latest fetch failed; status/index are then null. */
     error: string | null;
   }
 
@@ -524,8 +534,11 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
           root: subRoot,
           status: existing?.status ?? null,
           index: existing?.index ?? null,
+          // Every initialized module refetches below, so a fresh map entry
+          // starts as loading — never reuse `initialized` as a pseudo-
+          // loading flag here, and never carry a stale error over it.
           loading: existing ? existing.loading : info.initialized,
-          error: existing?.error ?? null,
+          error: null,
         };
       }
       submodulesMap = nextMap;
