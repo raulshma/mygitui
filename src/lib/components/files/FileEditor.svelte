@@ -503,9 +503,12 @@
     title="File changed on disk"
     message="{path} was modified outside this window while you were editing. Reload the on-disk version, or keep your edits and overwrite the file?"
     confirmLabel="Reload from disk"
-    cancelLabel="Keep my version"
+    cancelLabel="Cancel"
+    alternateLabel="Overwrite file"
+    alternateDanger
     onConfirm={conflictReload}
-    onCancel={conflictKeepMine}
+    onCancel={() => (conflictOpen = false)}
+    onAlternate={conflictKeepMine}
   />
 </div>
 
