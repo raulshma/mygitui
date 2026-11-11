@@ -3200,7 +3200,7 @@ dependencies = [
 
 [[package]]
 name = "mygitui"
-version = "0.1.21"
+version = "0.1.22"
 dependencies = [
  "criterion",
  "futures-util",
