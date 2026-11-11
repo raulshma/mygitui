@@ -80,6 +80,11 @@ export interface UiEventMap {
    */
   "toggle-command-palette": undefined;
   /**
+   * Open the software-update popover (UpdateChip owns it; the "update
+   * available" toast's View action routes here).
+   */
+  "open-updates": undefined;
+  /**
    * Ask the mounted RepoView's AI bridge to generate a PR title/body
    * (CreatePrDialog prefill): `{ repoId, commits }` — up to 10 recent
    * commit summaries as context (may be empty).

@@ -10,9 +10,6 @@ jobs:
   build-and-draft-release:
     permissions:
       contents: write
-    env:
-      # Empty by default (secrets unset) — both updater steps then no-op.
-      TAURI_UPDATER_PUBKEY: ${{ secrets.TAURI_UPDATER_PUBKEY }}
     strategy:
       fail-fast: false
       matrix:
@@ -52,38 +49,19 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
-      # Updater endpoint: when a pubkey is configured (TAURI_UPDATER_PUBKEY
-      # secret), overlay tauri.conf.json so the bundled updater polls the
-      # latest.json artifact this release publishes. Empty secret = no
-      # overlay (updater stays inert, exactly as shipped today).
-      - name: Prepare updater config overlay
-        id: updater-config
-        if: env.TAURI_UPDATER_PUBKEY != ''
-        shell: bash
-        run: |
-          cat > updater-overlay.json <<EOF
-          {
-            "bundle": {
-              "createUpdaterArtifacts": true
-            },
-            "plugins": {
-              "updater": {
-                "pubkey": "${TAURI_UPDATER_PUBKEY}",
-                "endpoints": [
-                  "https://github.com/${{ github.repository }}/releases/latest/download/latest.json"
-                ]
-              }
-            }
-          }
-          EOF
-          echo "args=--config updater-overlay.json" >> "$GITHUB_OUTPUT"
-
-      # Tauri updater signing (M12 wiring). Secrets are NOT invented here:
-      # generate a keypair with `cargo tauri signer generate -w ~/.tauri/`,
-      # store the private key + password as the two repo secrets below and
-      # the minisign pubkey in tauri.conf.json `plugins.updater.pubkey`.
-      # When the secrets are absent the env vars resolve empty and
-      # tauri-action skips signing (releases still build, just unsigned).
+      # Updater artifacts + endpoints now live in tauri.conf.json
+      # (`bundle.createUpdaterArtifacts: true` +
+      # `plugins.updater.endpoints`), so the old CI-only config overlay is
+      # gone. The signing secrets below are still REQUIRED: the updater's
+      # minisign pubkey check rejects unsigned artifacts.
+      #
+      # Generate a keypair once with `cargo tauri signer generate -w
+      # ~/.tauri/`, store the private key + password as the two repo
+      # secrets below (the minisign pubkey already lives in
+      # tauri.conf.json `plugins.updater.pubkey`). The same requirement
+      # applies to local builds: `tauri build` now needs
+      # TAURI_SIGNING_PRIVATE_KEY(+_PASSWORD) set or it fails on the
+      # updater artifact step.
       - name: Build and draft release (tauri-action)
         uses: tauri-apps/tauri-action@v0
         env:
@@ -96,4 +74,4 @@ jobs:
           releaseBody: 'Draft release built from tag ${{ github.ref_name }}. Download the artifact for your platform from the assets below.'
           releaseDraft: true
           prerelease: false
-          args: ${{ matrix.args }} ${{ steps.updater-config.outputs.args }}
+          args: ${{ matrix.args }}

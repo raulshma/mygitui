@@ -7,16 +7,27 @@
 
 export type ToastKind = "info" | "success" | "error";
 
+/** One inline button on a toast ("View update", …). Clicking it runs the
+ * callback and dismisses the toast. */
+export interface ToastAction {
+  label: string;
+  run: () => void;
+}
+
 export interface ToastItem {
   id: number;
   message: string;
   kind: ToastKind;
   /** Repeat count for a coalesced message (1 for a first occurrence). */
   count: number;
+  /** Optional inline action button (rendered by the Toaster). */
+  action: ToastAction | null;
 }
 
 export interface ToastOptions {
   kind?: ToastKind;
+  /** Inline action button (click runs it and dismisses the toast). */
+  action?: ToastAction;
 }
 
 const AUTO_DISMISS_MS = 4_000;
@@ -70,6 +81,8 @@ export function toast(message: string, opts?: ToastOptions): void {
   const existing = toasts.find((item) => item.message === message && item.kind === kind);
   if (existing !== undefined) {
     existing.count += 1;
+    // Keep the freshest action; a repeat usually re-fires with the same one.
+    existing.action = opts?.action ?? existing.action;
     if (timers.has(existing.id)) {
       clearTimeout(timers.get(existing.id)!);
       timers.delete(existing.id);
@@ -82,7 +95,10 @@ export function toast(message: string, opts?: ToastOptions): void {
   }
 
   const id = nextId++;
-  toasts = [...toasts, { id, message, kind, count: 1 }];
+  toasts = [
+    ...toasts,
+    { id, message, kind, count: 1, action: opts?.action ?? null },
+  ];
   schedule(id, delay);
   while (toasts.length > MAX_VISIBLE) dismiss(toasts[0]!.id);
 }

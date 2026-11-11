@@ -41,6 +41,7 @@
   import EmptyState from "$lib/components/layout/EmptyState.svelte";
   import { Input } from "$lib/components/ui/input/index.js";
   import { Kbd } from "$lib/components/ui/kbd/index.js";
+  import { Hint } from "$lib/components/ui/tooltip/index.js";
   import { formatRelativeTime } from "$lib/git/format";
   import iconBrand from "@ktibow/iconset-material-symbols/account-tree";
   import iconAdd from "@ktibow/iconset-material-symbols/add";
@@ -65,6 +66,8 @@
   import { contextMenu } from "$lib/components/menu/contextMenuStore.svelte";
   import { onUiEvent } from "$lib/palette/events";
   import AiHealthChip from "$lib/components/ai/AiHealthChip.svelte";
+  import UpdateChip from "$lib/components/UpdateChip.svelte";
+  import { updater } from "$lib/stores/updater.svelte";
   import DeviceBrowser from "$lib/components/DeviceBrowser.svelte";
   import type { DeviceProfile } from "$lib/ipc/types";
   import { closedDialog, openDialog, type DialogState } from "$lib/state/dialog";
@@ -456,6 +459,10 @@
       // Overlay dialogs mount lazily (see the lazy-mounting note); warm
       // their chunks once the launch settles.
       warmNextOverlay();
+      // Self-update: schedule the gated auto-check (settings from
+      // localStorage; polls only when autoCheck and the last check is
+      // ~12h stale, 15s after launch). Popouts never check.
+      updater.init();
     }
 
     // Popout windows render one panel only — no shell-level listeners.
@@ -579,6 +586,7 @@
     {#if !launching && tabsOpen}
       <TabStrip openFolder={openFromDisk}>
         {#snippet trailing()}
+          <UpdateChip compact />
           <AiHealthChip compact />
           <ThemeToggle />
         {/snippet}
@@ -602,12 +610,16 @@
           Opening {restoreName ?? "your last workspace"}…
         </span>
         {#if tabStore.restoreRoot}
-          <span
-            class="launch-sub max-w-[min(32rem,80vw)] overflow-hidden text-ellipsis whitespace-nowrap font-mono text-xs opacity-75"
-            title={tabStore.restoreRoot}
-          >
-            {tabStore.restoreRoot}
-          </span>
+          <Hint label={tabStore.restoreRoot} side="bottom">
+            {#snippet child({ props })}
+              <span
+                class="launch-sub max-w-[min(32rem,80vw)] overflow-hidden text-ellipsis whitespace-nowrap font-mono text-xs opacity-75"
+                {...props}
+              >
+                {tabStore.restoreRoot}
+              </span>
+            {/snippet}
+          </Hint>
         {/if}
         <span
           class="launch-spinner mt-[0.35rem] size-[1.4rem] animate-spin rounded-full border-[2.5px] border-primary/25 border-t-primary"
@@ -630,10 +642,14 @@
           <h2 class="offline-title m-0 text-base font-medium text-foreground">
             {active.name} is not reachable
           </h2>
-          <span
-            class="offline-path max-w-[min(32rem,80vw)] overflow-hidden text-ellipsis whitespace-nowrap font-mono text-xs opacity-75"
-            title={active.root}>{active.root}</span
-          >
+          <Hint label={active.root} side="bottom">
+            {#snippet child({ props })}
+              <span
+                class="offline-path max-w-[min(32rem,80vw)] overflow-hidden text-ellipsis whitespace-nowrap font-mono text-xs opacity-75"
+                {...props}>{active.root}</span
+              >
+            {/snippet}
+          </Hint>
           <p
             class="offline-msg mb-2 max-w-[min(32rem,80vw)] text-ui-base [overflow-wrap:anywhere]"
             role="alert"
@@ -709,6 +725,7 @@
               </span>
             </div>
             <div class="home-utilities flex flex-none items-center gap-1.5">
+              <UpdateChip />
               <AiHealthChip />
               <ThemeToggle />
             </div>
@@ -790,15 +807,19 @@
                 bind:value={repoFilter}
               />
               {#if repoFilter}
-                <button
-                  class="search-clear inline-flex size-5 flex-none cursor-pointer items-center justify-center rounded-full border-0 bg-transparent p-0 text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-primary"
-                  type="button"
-                  aria-label="Clear repository filter"
-                  title="Clear filter"
-                  onclick={() => (repoFilter = "")}
-                >
-                  <Icon icon={iconClose} size={14} />
-                </button>
+                <Hint label="Clear filter">
+                  {#snippet child({ props })}
+                    <button
+                      class="search-clear inline-flex size-5 flex-none cursor-pointer items-center justify-center rounded-full border-0 bg-transparent p-0 text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-primary"
+                      type="button"
+                      {...props}
+                      aria-label="Clear repository filter"
+                      onclick={() => (repoFilter = "")}
+                    >
+                      <Icon icon={iconClose} size={14} />
+                    </button>
+                  {/snippet}
+                </Hint>
               {/if}
             </label>
           {/if}
@@ -873,12 +894,16 @@
                       <span class="repo-title flex min-w-0 items-center gap-[0.3rem]">
                         <span class="repo-name overflow-hidden text-ellipsis whitespace-nowrap text-sm font-semibold">{repoName(repo.path)}</span>
                         {#if repo.pinned}
-                          <span
-                            class="pin-mark inline-flex flex-none text-primary"
-                            title="Pinned"
-                          >
-                            <Icon icon={iconPin} size={14} />
-                          </span>
+                          <Hint label="Pinned" side="bottom">
+                            {#snippet child({ props })}
+                              <span
+                                class="pin-mark inline-flex flex-none text-primary"
+                                {...props}
+                              >
+                                <Icon icon={iconPin} size={14} />
+                              </span>
+                            {/snippet}
+                          </Hint>
                         {/if}
                       </span>
                       <span class="repo-path max-w-full overflow-hidden text-ellipsis whitespace-nowrap font-mono text-xs text-muted-foreground">{repo.path}</span>
@@ -891,28 +916,36 @@
                     {/if}
                   </button>
                   <span class="row-actions flex flex-none items-center gap-0.5 opacity-75 transition-opacity group-hover/row:opacity-100 group-focus-within/row:opacity-100">
-                    <button
-                      class="row-action pin inline-flex size-7 cursor-pointer items-center justify-center rounded-lg border-0 bg-transparent p-0 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-primary {repo.pinned ? 'text-primary' : ''}"
-                      class:pinned={repo.pinned}
-                      type="button"
-                      aria-pressed={repo.pinned}
-                      title={repo.pinned ? "Unpin repository" : "Pin repository"}
-                      aria-label={repo.pinned
-                        ? "Unpin repository"
-                        : "Pin repository"}
-                      onclick={() => togglePin(repo.path)}
-                    >
-                      <Icon icon={iconPin} size={14} />
-                    </button>
-                    <button
-                      class="row-action remove inline-flex size-7 cursor-pointer items-center justify-center rounded-lg border-0 bg-transparent p-0 text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-primary"
-                      type="button"
-                      title="Remove from recent list"
-                      aria-label={`Remove ${repoName(repo.path)} from the recent list`}
-                      onclick={() => removeFromRecents(repo.path)}
-                    >
-                      <Icon icon={iconClose} size={14} />
-                    </button>
+                    <Hint label={repo.pinned ? "Unpin repository" : "Pin repository"}>
+                      {#snippet child({ props })}
+                        <button
+                          class="row-action pin inline-flex size-7 cursor-pointer items-center justify-center rounded-lg border-0 bg-transparent p-0 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-primary {repo.pinned ? 'text-primary' : ''}"
+                          class:pinned={repo.pinned}
+                          type="button"
+                          {...props}
+                          aria-pressed={repo.pinned}
+                          aria-label={repo.pinned
+                            ? "Unpin repository"
+                            : "Pin repository"}
+                          onclick={() => togglePin(repo.path)}
+                        >
+                          <Icon icon={iconPin} size={14} />
+                        </button>
+                      {/snippet}
+                    </Hint>
+                    <Hint label="Remove from recent list">
+                      {#snippet child({ props })}
+                        <button
+                          class="row-action remove inline-flex size-7 cursor-pointer items-center justify-center rounded-lg border-0 bg-transparent p-0 text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-primary"
+                          type="button"
+                          {...props}
+                          aria-label={`Remove ${repoName(repo.path)} from the recent list`}
+                          onclick={() => removeFromRecents(repo.path)}
+                        >
+                          <Icon icon={iconClose} size={14} />
+                        </button>
+                      {/snippet}
+                    </Hint>
                   </span>
                 </li>
               {/each}
@@ -1109,15 +1142,19 @@
                     </span>
                   </button>
                   <span class="row-actions flex flex-none items-center gap-0.5 opacity-75 transition-opacity group-hover/row:opacity-100 group-focus-within/row:opacity-100">
-                    <button
-                      class="row-action inline-flex size-7 cursor-pointer items-center justify-center rounded-lg border-0 bg-transparent p-0 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-primary"
-                      type="button"
-                      title="Edit device"
-                      aria-label={`Edit device ${device.profile.name}`}
-                      onclick={() => openEditDevice(device.profile)}
-                    >
-                      <Icon icon={iconEdit} size={14} />
-                    </button>
+                    <Hint label="Edit device">
+                      {#snippet child({ props })}
+                        <button
+                          class="row-action inline-flex size-7 cursor-pointer items-center justify-center rounded-lg border-0 bg-transparent p-0 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-primary"
+                          type="button"
+                          {...props}
+                          aria-label={`Edit device ${device.profile.name}`}
+                          onclick={() => openEditDevice(device.profile)}
+                        >
+                          <Icon icon={iconEdit} size={14} />
+                        </button>
+                      {/snippet}
+                    </Hint>
                   </span>
                 </li>
               {/each}

@@ -19,4 +19,4 @@ export {
   resumeToast,
   toast,
 } from "./toast.svelte";
-export type { ToastItem, ToastKind, ToastOptions } from "./toast.svelte";
+export type { ToastAction, ToastItem, ToastKind, ToastOptions } from "./toast.svelte";

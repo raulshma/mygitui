@@ -31,6 +31,7 @@ mod pty;
 mod pty_tests;
 pub mod remote;
 mod repo;
+mod updater;
 mod watcher;
 mod workspace;
 #[cfg(test)]
@@ -142,6 +143,10 @@ pub fn run() {
         .manage(remote::transport::DeviceRegistry::new())
         .manage(remote::term::RemoteShellRegistry::default())
         .manage(remote::actions::RemoteActionRegistry::default())
+        // Self-update cycle: `updater_check` parks the plugin's `Update`
+        // handle here for `updater_download_and_install` to consume (see
+        // `updater.rs` for the flow).
+        .manage(updater::PendingUpdate::default())
         .invoke_handler(tauri::generate_handler![
             keyring_store::secrets_get,
             keyring_store::secrets_set,
@@ -303,6 +308,9 @@ pub fn run() {
             remote::term::rshell_write,
             remote::term::rshell_resize,
             remote::term::rshell_kill,
+            updater::updater_check,
+            updater::updater_download_and_install,
+            updater::updater_relaunch,
         ])
         // Windows are created hidden so the window-state plugin's restore
         // (position/size/maximize) lands before anything is on screen; this

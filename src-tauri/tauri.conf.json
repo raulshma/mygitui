@@ -29,7 +29,10 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDMxMkEzNTVGNDM0MUIzRjAKUldUd3MwRkRYelVxTWJmdFhaTll2THBGWVd2SXRSaGxkeURsc1d2TjAzR0h5R3F1d2JDTWZKRmwK"
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDMxMkEzNTVGNDM0MUIzRjAKUldUd3MwRkRYelVxTWJmdFhaTll2THBGWVd2SXRSaGxkeURsc1d2TjAzR0h5R3F1d2JDTWZKRmwK",
+      "endpoints": [
+        "https://github.com/raulshma/mygitui/releases/latest/download/latest.json"
+      ]
     },
     "deep-link": {
       "desktop": {
@@ -40,6 +43,7 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "createUpdaterArtifacts": true,
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

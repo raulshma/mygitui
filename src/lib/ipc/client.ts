@@ -98,6 +98,8 @@ import type {
   RepoStatus,
   ResetKind,
   SigningInfo,
+  UpdateInfo,
+  UpdateProgress,
   SparseInfo,
   StageRequest,
   StageTarget,
@@ -2081,4 +2083,44 @@ export function onDeviceStatus(
   cb: (event: DeviceStatusEvent) => void,
 ): Promise<() => void> {
   return subscribe("device-status", cb);
+}
+
+// ---------------------------------------------------------------------------
+// App self-update (tauri-plugin-updater; Rust: src-tauri/src/updater.rs)
+// ---------------------------------------------------------------------------
+
+/**
+ * Polls the update endpoint. Resolves `UpdateInfo` when a newer release
+ * exists, `null` when running the latest version. Errors (network,
+ * signature) reject with an `IpcError` the caller displays.
+ */
+export function updaterCheck(): Promise<UpdateInfo | null> {
+  return call<UpdateInfo | null>("updater_check", {});
+}
+
+/**
+ * Downloads the update found by {@link updaterCheck} and runs the platform
+ * install. Download progress (throttled on the backend) arrives on the
+ * channel; on Windows the installer exits the app by itself once done, on
+ * macOS/Linux the caller finishes with {@link updaterRelaunch}.
+ */
+export function updaterDownloadAndInstall(
+  onProgress: (progress: UpdateProgress) => void,
+): Promise<void> {
+  const usingDefaults = transportOverride === null && channelFactoryOverride === null;
+  if (usingDefaults && !isTauri()) return Promise.resolve();
+  const factory = channelFactoryOverride ?? defaultChannelFactory;
+  const channel = factory<UpdateProgress>((progress) => onProgress(progress));
+  // The backend command declares the channel arg as `on_progress`.
+  return call<void>("updater_download_and_install", { on_progress: channel });
+}
+
+/**
+ * Exits and relaunches the app (apply the installed update). The invoke
+ * never resolves — the process goes away first — so the returned promise
+ * rejecting/resolving is not meaningful; errors still reject for callers
+ * that surface them.
+ */
+export function updaterRelaunch(): Promise<void> {
+  return call<void>("updater_relaunch", {});
 }

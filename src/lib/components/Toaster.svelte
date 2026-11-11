@@ -50,6 +50,20 @@
         <Icon icon={glyph(item.kind)} size={13} />
       </span>
       <span class="message min-w-0 flex-1 text-ui-base [overflow-wrap:anywhere]">{item.message}</span>
+      {#if item.action}
+        <Button
+          class="action flex-none font-medium text-primary hover:text-primary focus-visible:text-primary"
+          variant="ghost"
+          size="sm"
+          type="button"
+          onclick={() => {
+            item.action?.run();
+            dismissToast(item.id);
+          }}
+        >
+          {item.action.label}
+        </Button>
+      {/if}
       {#if item.count > 1}
         <span
           class="repeat flex-none rounded-full bg-muted px-1.5 py-0.5 text-ui-tiny font-semibold leading-none text-muted-foreground tabular-nums"

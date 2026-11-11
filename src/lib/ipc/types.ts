@@ -236,3 +236,12 @@ export type { HostKeyRequestEvent } from "./gen/HostKeyRequestEvent";
 export type { DeviceAuthRequestEvent } from "./gen/DeviceAuthRequestEvent";
 /** One pinned host key (JSON file entry). */
 export type { KnownHostKey } from "./gen/KnownHostKey";
+
+// ---------------------------------------------------------------------------
+// App self-update (Rust: src-tauri/src/updater.rs)
+// ---------------------------------------------------------------------------
+
+/** One update poll's result (`null` when running the latest version). */
+export type { UpdateInfo } from "./gen/UpdateInfo";
+/** Throttled download-progress emission (`updater_download_and_install`). */
+export type { UpdateProgress } from "./gen/UpdateProgress";
