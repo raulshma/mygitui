@@ -12,6 +12,15 @@
    * right-click opens the shared context menu (close variants + path
    * utilities) through the global context-menu store.
    *
+   * Drag-to-reorder (mouse only, HTML5 dnd — the RebasePlanner idiom, no
+   * libraries): the tab label is `draggable`; dragging it over another tab
+   * shows an insertion bar on the side of the hovered tab's midpoint the
+   * pointer is on, and dropping there splices the strip order through
+   * `reorderTab` (persisted like open/close). The handlers only act on
+   * drags this strip started (dataTransfer type marker), so external file
+   * drops are untouched; the dragged tab dims and dropping onto itself,
+   * the strip background, or outside the window is a no-op.
+   *
    * Overflow: the strip scrolls horizontally (vertical wheel is translated),
    * fades whichever edge has more content, and scrolls the active tab back
    * into view whenever activation or membership changes.
@@ -19,12 +28,13 @@
    * Focus order is sane: each close button follows its tab in DOM order, so
    * Tab runs tab → its close → next reachable control. Overflowed (ellipsis-
    * truncated) names announce in full: each tab's accessible name is
-   * "name — root" (label-in-name compliant) and the title tooltip shows the
+   * "name — root" (label-in-name compliant) and the Hint tooltip shows the
    * root on hover.
    */
   import type { Snippet } from "svelte";
   import {
     closeTab,
+    reorderTab,
     setActive,
     showRecentRepos,
     SSH_SCHEME,
@@ -39,6 +49,7 @@
   import Icon from "$lib/components/icons/Icon.svelte";
   import { appIcon } from "$lib/components/icons/library.svelte";
   import { Button } from "$lib/components/ui/button/index.js";
+  import { Hint } from "$lib/components/ui/tooltip/index.js";
   import iconClose from "@ktibow/iconset-material-symbols/close";
   import iconAdd from "@ktibow/iconset-material-symbols/add";
 
@@ -172,6 +183,75 @@
     }
   }
 
+  // -- drag-to-reorder (HTML5 dnd, RebasePlanner idiom — no libraries) -------
+
+  /** dataTransfer type marker: strip drag handlers ignore every other drag. */
+  const TAB_DRAG_TYPE = "application/x-mygitui-tab";
+
+  /** Id of the tab being dragged, `null` when no strip drag is in flight. */
+  let dragTabId = $state<string | null>(null);
+  /** Id of the tab under the pointer (drives the insertion indicator). */
+  let dropTargetId = $state<string | null>(null);
+  /** Which side of the hovered tab's midpoint the drop would land on. */
+  let dropSide = $state<"before" | "after">("before");
+
+  function onDragStart(event: DragEvent, tabId: string): void {
+    dragTabId = tabId;
+    // Marker type first (what our handlers sniff), text/plain as the
+    // human-readable fallback — the RebasePlanner payload shape.
+    event.dataTransfer?.setData(TAB_DRAG_TYPE, tabId);
+    event.dataTransfer?.setData("text/plain", tabId);
+    if (event.dataTransfer) event.dataTransfer.effectAllowed = "move";
+  }
+
+  /** True only for drags this strip started (external file drops excluded). */
+  function isTabDrag(event: DragEvent): boolean {
+    return (
+      dragTabId !== null &&
+      (event.dataTransfer?.types.includes(TAB_DRAG_TYPE) ?? false)
+    );
+  }
+
+  function onTabDragOver(event: DragEvent, tab: Tab): void {
+    if (!isTabDrag(event)) return;
+    if (tab.id === dragTabId) {
+      // Hovering the dragged tab: no drop target (dropping onto itself is
+      // a no-op), so any stale indicator goes away.
+      dropTargetId = null;
+      return;
+    }
+    event.preventDefault();
+    if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+    const bounds = (event.currentTarget as HTMLElement | null)?.getBoundingClientRect();
+    dropSide =
+      bounds && event.clientX >= bounds.left + bounds.width / 2 ? "after" : "before";
+    dropTargetId = tab.id;
+  }
+
+  function onTabDrop(event: DragEvent, index: number): void {
+    if (!isTabDrag(event)) return;
+    event.preventDefault();
+    // In-flight state is primary; the dataTransfer payload is the fallback
+    // (the RebasePlanner shape) should the state ever be lost mid-drag.
+    const raw = event.dataTransfer?.getData(TAB_DRAG_TYPE) ?? "";
+    const id = raw !== "" ? raw : dragTabId;
+    if (id !== null) {
+      reorderTab(id, dropSide === "after" ? index + 1 : index);
+    }
+    clearDrag();
+  }
+
+  /** Fires on the source element whether or not the drop was accepted. */
+  function onDragEnd(): void {
+    clearDrag();
+  }
+
+  function clearDrag(): void {
+    dragTabId = null;
+    dropTargetId = null;
+    dropSide = "before";
+  }
+
   /**
    * Right-click menu (global context-menu store, BranchSwitcher-style):
    * close variants + path utilities. Close loops snapshot the strip first —
@@ -231,18 +311,21 @@
 </script>
 
 <div class="tabbar flex min-w-0 flex-none items-stretch border-b border-border bg-card">
-  <Button
-    class="tab-home ml-2 size-7 flex-none self-center rounded-lg aria-[pressed=true]:bg-secondary aria-[pressed=true]:text-secondary-foreground focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring focus-visible:ring-0"
-    variant="ghost"
-    size="icon-sm"
-    type="button"
-    aria-label="Recent repositories"
-    aria-pressed={tabStore.recentsOpen}
-    title="Recent repositories"
-    onclick={showRecentRepos}
-  >
-    <Icon icon={iconHome} size={16} />
-  </Button>
+  <Hint label="Recent repositories" side="bottom">
+    {#snippet child({ props })}
+      <Button
+        class="tab-home ml-2 size-7 flex-none self-center rounded-lg aria-[pressed=true]:bg-secondary aria-[pressed=true]:text-secondary-foreground focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring focus-visible:ring-0"
+        variant="ghost"
+        size="icon-sm"
+        type="button"
+        {...props}
+        aria-pressed={tabStore.recentsOpen}
+        onclick={showRecentRepos}
+      >
+        <Icon icon={iconHome} size={16} />
+      </Button>
+    {/snippet}
+  </Hint>
   <div
     class="tabstrip flex min-w-0 flex-1 items-stretch gap-0.5 overflow-x-auto px-2 pt-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
     role="tablist"
@@ -253,60 +336,91 @@
     onkeydown={onKeydown}
     oncontextmenu={(e) => e.preventDefault()}
   >
-    {#each tabStore.tabs as tab (tab.id)}
+    {#each tabStore.tabs as tab, index (tab.id)}
       {@const isActive = tab.id === tabStore.activeId}
+      {@const dropping = dropTargetId === tab.id && dragTabId !== null}
+      <!-- Dragover/drop live on the tab cell (label + close area both accept
+           a drop); dragstart only from the label — the close button stays a
+           plain click target. -->
+      <!-- svelte-ignore a11y_no_static_element_interactions -->
       <div
-        class="tab flex min-w-0 max-w-64 items-stretch rounded-t-lg border-b-2 border-transparent transition-colors"
+        class="tab relative flex min-w-0 max-w-64 items-stretch rounded-t-lg border-b-2 border-transparent transition-colors"
         class:active={isActive}
         class:bg-accent={isActive}
         class:border-b-primary={isActive}
+        class:opacity-45={dragTabId === tab.id}
+        ondragover={(event) => onTabDragOver(event, tab)}
+        ondrop={(event) => onTabDrop(event, index)}
       >
+        {#if dropping}
+          <!-- Insertion bar (no layout shift): lands on the hovered tab's
+               edge the pointer is past. -->
+          <span
+            class="pointer-events-none absolute inset-y-0.5 w-0.5 rounded-full bg-primary {dropSide === "before" ? "-left-px" : "-right-px"}"
+            aria-hidden="true"
+          ></span>
+        {/if}
         <!-- font-weight stays constant across active/inactive: a
              selected-state weight bump widens the label, resizing the tab
              and shifting every sibling tab. -->
-        <button
-          class="tab-main min-w-0 cursor-pointer select-none overflow-hidden text-ellipsis whitespace-nowrap rounded-t-lg border-0 bg-transparent py-2 pl-3.5 pr-1 text-sm font-medium text-muted-foreground outline-none focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring"
-          class:text-primary={isActive}
-          type="button"
-          role="tab"
-          aria-selected={isActive}
-          tabindex={isActive ? 0 : -1}
-          title={tab.root}
-          aria-label={`${tab.name} — ${tab.root}`}
-          onclick={() => setActive(tab.id)}
-          onauxclick={(event) => onAuxClick(event, tab.id)}
-          oncontextmenu={(event) => tabMenu(event, tab)}
-          onmousedown={(event) => {
-            if (event.button === 1) event.preventDefault();
-          }}
-        >
-          <span class="name block overflow-hidden text-ellipsis whitespace-nowrap">{tab.name}</span>
-        </button>
-        <Button
-          class="tab-close ml-0.5 h-auto flex-none rounded-tr-lg px-1.5 text-muted-foreground/70 hover:text-foreground focus-visible:bg-accent focus-visible:text-foreground"
-          variant="ghost"
-          size="icon-xs"
-          type="button"
-          aria-label="Close {tab.name}"
-          title="Close {tab.name}"
-          onclick={() => void closeTab(tab.id)}
-        >
-          <Icon icon={iconClose} size={13} />
-        </Button>
+        <Hint label={tab.root} side="bottom">
+          {#snippet child({ props })}
+            <button
+              class="tab-main min-w-0 cursor-pointer select-none overflow-hidden text-ellipsis whitespace-nowrap rounded-t-lg border-0 bg-transparent py-2 pl-3.5 pr-1 text-sm font-medium text-muted-foreground outline-none focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring"
+              class:text-primary={isActive}
+              type="button"
+              role="tab"
+              aria-selected={isActive}
+              {...props}
+              tabindex={isActive ? 0 : -1}
+              aria-label={`${tab.name} — ${tab.root}`}
+              draggable="true"
+              onclick={() => setActive(tab.id)}
+              onauxclick={(event) => onAuxClick(event, tab.id)}
+              oncontextmenu={(event) => tabMenu(event, tab)}
+              ondragstart={(event) => onDragStart(event, tab.id)}
+              ondragend={onDragEnd}
+              onmousedown={(event) => {
+                // Middle only: suppress autoscroll. The primary button keeps
+                // its default so the native drag (draggable above) can start.
+                if (event.button === 1) event.preventDefault();
+              }}
+            >
+              <span class="name block overflow-hidden text-ellipsis whitespace-nowrap">{tab.name}</span>
+            </button>
+          {/snippet}
+        </Hint>
+        <Hint label={`Close ${tab.name}`} side="bottom">
+          {#snippet child({ props })}
+            <Button
+              class="tab-close ml-0.5 h-auto flex-none rounded-tr-lg px-1.5 text-muted-foreground/70 hover:text-foreground focus-visible:bg-accent focus-visible:text-foreground"
+              variant="ghost"
+              size="icon-xs"
+              type="button"
+              {...props}
+              onclick={() => void closeTab(tab.id)}
+            >
+              <Icon icon={iconClose} size={13} />
+            </Button>
+          {/snippet}
+        </Hint>
       </div>
     {/each}
 
-    <Button
-      class="tab-new my-0.5 h-auto flex-none px-2.5 text-muted-foreground hover:text-primary focus-visible:bg-accent focus-visible:text-primary"
-      variant="ghost"
-      size="icon-sm"
-      type="button"
-      aria-label="Open a repository"
-      title="Open a repository"
-      onclick={() => openFolder?.()}
-    >
-      <Icon icon={iconAdd} size={16} />
-    </Button>
+    <Hint label="Open a repository" side="bottom">
+      {#snippet child({ props })}
+        <Button
+          class="tab-new my-0.5 h-auto flex-none px-2.5 text-muted-foreground hover:text-primary focus-visible:bg-accent focus-visible:text-primary"
+          variant="ghost"
+          size="icon-sm"
+          type="button"
+          {...props}
+          onclick={() => openFolder?.()}
+        >
+          <Icon icon={iconAdd} size={16} />
+        </Button>
+      {/snippet}
+    </Hint>
   </div>
 
   {#if trailing}

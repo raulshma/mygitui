@@ -163,3 +163,161 @@ describe("TabStrip overflow", () => {
     expect(tabStore.tabs.map((entry) => entry.id)).toEqual(["repo-1", "repo-3", "repo-4"]);
   });
 });
+
+describe("TabStrip drag-to-reorder", () => {
+  /**
+   * jsdom has no DragEvent/DataTransfer, and @testing-library's fireEvent
+   * re-creates events from init objects (dropping non-enumerable assigned
+   * fields like a defineProperty dataTransfer). So every drag event here is
+   * hand-rolled and dispatched directly.
+   */
+
+  /** jsdom has no DataTransfer — hand-roll the payload. */
+  function dataTransfer(): DataTransfer {
+    const data = new Map<string, string>();
+    return {
+      setData(type: string, value: string): void {
+        data.set(type, value);
+      },
+      getData(type: string): string {
+        return data.get(type) ?? "";
+      },
+      get types(): string[] {
+        return [...data.keys()];
+      },
+      effectAllowed: "none",
+      dropEffect: "none",
+    } as unknown as DataTransfer;
+  }
+
+  function dragEvent(type: string, dt: DataTransfer, clientX = 0): DragEvent {
+    const event = new Event(type, { bubbles: true, cancelable: true });
+    Object.defineProperty(event, "dataTransfer", { value: dt });
+    Object.defineProperty(event, "clientX", { value: clientX });
+    return event as DragEvent;
+  }
+
+  /** Dispatches a synthetic drag event; returns !defaultPrevented. */
+  function fire(node: Element, type: string, dt: DataTransfer, clientX = 0): boolean {
+    return node.dispatchEvent(dragEvent(type, dt, clientX));
+  }
+
+  /** The `.tab` cell divs (dragover/drop targets), in strip order. */
+  function tabCells(strip: HTMLElement): HTMLElement[] {
+    return [...strip.querySelectorAll<HTMLElement>("div.tab")];
+  }
+
+  /** The draggable tab button inside a cell — where dragstart originates. */
+  function tabButton(cell: HTMLElement): HTMLElement {
+    const button = cell.querySelector<HTMLElement>("button[role='tab']");
+    if (button === null) throw new Error("tab button not rendered");
+    return button;
+  }
+
+  function indicator(strip: HTMLElement): HTMLElement | null {
+    // The insertion bar is the only aria-hidden span inside a tab cell.
+    return strip.querySelector<HTMLElement>("div.tab > span[aria-hidden='true']");
+  }
+
+  /** Cells are laid out left to right, 200px each. */
+  function grid(cells: HTMLElement[]): void {
+    cells.forEach((cell, index) => {
+      cell.getBoundingClientRect = () => ({ left: index * 200, width: 200 }) as DOMRect;
+    });
+  }
+
+  it("reorders on drop, before or after the hovered tab's midpoint", async () => {
+    render(TabStrip);
+    await tick();
+    const strip = stripEl();
+    const cells = tabCells(strip);
+    grid(cells);
+    const dt = dataTransfer();
+
+    // Drag the last tab over the first: pointer on the left half → before.
+    fire(tabButton(cells[3]!), "dragstart", dt);
+    await tick();
+    fire(cells[0]!, "dragover", dt, 50);
+    // Accepted drops are preventDefaulted → dispatchEvent reports false.
+    expect(fire(cells[0]!, "drop", dt, 50)).toBe(false);
+    await tick();
+    expect(tabStore.tabs.map((entry) => entry.id)).toEqual(["repo-4", "repo-1", "repo-2", "repo-3"]);
+
+    // Again: drag repo-4 (now first) over repo-1, pointer on the right
+    // half of its cell (midpoint 300) → after.
+    const cells2 = tabCells(strip);
+    grid(cells2);
+    const dt2 = dataTransfer();
+    fire(tabButton(cells2[0]!), "dragstart", dt2);
+    fire(cells2[1]!, "dragover", dt2, 350);
+    fire(cells2[1]!, "drop", dt2, 350);
+    await tick();
+    expect(tabStore.tabs.map((entry) => entry.id)).toEqual(["repo-1", "repo-4", "repo-2", "repo-3"]);
+  });
+
+  it("shows the insertion indicator while dragging and cleans up on dragend", async () => {
+    render(TabStrip);
+    await tick();
+    const strip = stripEl();
+    const cells = tabCells(strip);
+    grid(cells);
+    const dt = dataTransfer();
+
+    expect(indicator(strip)).toBeNull();
+
+    fire(tabButton(cells[1]!), "dragstart", dt);
+    await tick();
+    // The dragged tab itself dims; no indicator until it hovers another.
+    expect(cells[1]!.className).toContain("opacity-45");
+    expect(indicator(strip)).toBeNull();
+
+    fire(cells[2]!, "dragover", dt, 0); // well left of the hovered midpoint
+    await tick();
+    const bar = indicator(strip);
+    expect(bar).not.toBeNull();
+    expect(bar!.className).toContain("-left-px"); // before the hovered tab
+
+    fire(cells[0]!, "dragover", dt, 300); // right half of repo-1's cell
+    await tick();
+    expect(indicator(strip)!.className).toContain("-right-px"); // after repo-1
+
+    fire(tabButton(cells[1]!), "dragend", dt);
+    await tick();
+    expect(indicator(strip)).toBeNull();
+    expect(cells[1]!.className).not.toContain("opacity-45");
+    expect(tabStore.tabs.map((entry) => entry.id)).toEqual(["repo-1", "repo-2", "repo-3", "repo-4"]);
+  });
+
+  it("ignores drags the strip did not start (external file drops untouched)", async () => {
+    render(TabStrip);
+    await tick();
+    const strip = stripEl();
+    const cells = tabCells(strip);
+    // No dragstart on the strip: an incoming dragover/drop (e.g. a file
+    // from the OS) must not be preventDefaulted nor reorder anything.
+    expect(fire(cells[0]!, "dragover", dataTransfer(), 0)).toBe(true);
+    expect(indicator(strip)).toBeNull();
+
+    fire(cells[0]!, "drop", dataTransfer(), 0);
+    await tick();
+    expect(tabStore.tabs.map((entry) => entry.id)).toEqual(["repo-1", "repo-2", "repo-3", "repo-4"]);
+  });
+
+  it("dropping a tab onto itself is a no-op", async () => {
+    render(TabStrip);
+    await tick();
+    const strip = stripEl();
+    const cells = tabCells(strip);
+    grid(cells);
+    const dt = dataTransfer();
+
+    fire(tabButton(cells[0]!), "dragstart", dt);
+    fire(cells[0]!, "dragover", dt, 0);
+    await tick();
+    // Hovering the dragged tab shows no indicator and accepts no drop.
+    expect(indicator(strip)).toBeNull();
+    fire(cells[0]!, "drop", dt, 0);
+    await tick();
+    expect(tabStore.tabs.map((entry) => entry.id)).toEqual(["repo-1", "repo-2", "repo-3", "repo-4"]);
+  });
+});

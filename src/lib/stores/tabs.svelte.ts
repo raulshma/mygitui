@@ -515,6 +515,31 @@ export class TabStore {
     }
   }
 
+  /**
+   * Reorders a tab within the strip (drag-and-drop): moves `id` so it lands
+   * at `toIndex` — the insertion slot expressed against the strip as it was
+   * BEFORE the move (drop "before" tab at index i → i, "after" → i + 1),
+   * clamped to the valid range. Moving into its own slot is a no-op, so
+   * dropping a tab onto itself (or outside the strip) changes nothing.
+   *
+   * `activeId` is untouched — reordering never changes focus — and the new
+   * order goes through the same `#persistSession` path as open/close, so it
+   * survives restart. Remote tabs persist their `ssh://` URI as `root`
+   * (like every other tab in `StoredSession.roots`), so they reorder and
+   * round-trip identically.
+   */
+  reorderTab(id: RepoId, toIndex: number): void {
+    const from = this.tabs.findIndex((tab) => tab.id === id);
+    if (from === -1) return;
+    const slot = Math.min(Math.max(toIndex, 0), this.tabs.length);
+    const target = slot > from ? slot - 1 : slot;
+    if (target === from) return;
+    const moved = this.tabs[from]!;
+    this.tabs.splice(from, 1);
+    this.tabs.splice(target, 0, moved);
+    this.#persistSession();
+  }
+
   /** Shows the recents home above the open tabs (nothing is closed). */
   showRecentRepos(): void {
     this.recentsOpen = true;
@@ -611,6 +636,11 @@ export function closeTab(id: RepoId): Promise<void> {
 
 export function setActive(id: RepoId): void {
   tabStore.setActive(id);
+}
+
+/** Reorders a tab in the strip (see {@link TabStore.reorderTab}). */
+export function reorderTab(id: RepoId, toIndex: number): void {
+  tabStore.reorderTab(id, toIndex);
 }
 
 /** Shows the recents home without closing the open tabs. */

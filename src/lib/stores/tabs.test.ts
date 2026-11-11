@@ -319,6 +319,103 @@ describe("setActive", () => {
 });
 
 // ---------------------------------------------------------------------------
+// reorderTab (drag-to-reorder in the strip)
+// ---------------------------------------------------------------------------
+
+describe("reorderTab", () => {
+  const GAMMA = repoInfo("repo-3", "C:/repos/gamma", "gamma");
+
+  /** Store with three tabs opened in strip order: alpha, beta, gamma. */
+  async function seededStore(): Promise<TabStore> {
+    const store = freshStore();
+    mockOpenRepo
+      .mockResolvedValueOnce(ALPHA)
+      .mockResolvedValueOnce(BETA)
+      .mockResolvedValueOnce(GAMMA);
+    await store.openTab(ALPHA.root);
+    await store.openTab(BETA.root);
+    await store.openTab(GAMMA.root);
+    return store;
+  }
+
+  it("moves a tab to an earlier slot (slots are pre-move positions)", async () => {
+    const store = await seededStore();
+
+    store.reorderTab("repo-3", 0);
+
+    expect(store.tabs.map((tab) => tab.id)).toEqual(["repo-3", "repo-1", "repo-2"]);
+  });
+
+  it("moves a tab later (slot arithmetic accounts for the removal)", async () => {
+    const store = await seededStore();
+
+    // Slot 2 in the pre-move strip lands alpha between beta and gamma.
+    store.reorderTab("repo-1", 2);
+
+    expect(store.tabs.map((tab) => tab.id)).toEqual(["repo-2", "repo-1", "repo-3"]);
+  });
+
+  it("preserves the active tab", async () => {
+    const store = await seededStore();
+    store.setActive("repo-2");
+
+    store.reorderTab("repo-2", 0);
+
+    expect(store.activeId).toBe("repo-2");
+    expect(store.tabs.map((tab) => tab.id)).toEqual(["repo-2", "repo-1", "repo-3"]);
+  });
+
+  it("clamps out-of-range slots", async () => {
+    const store = await seededStore();
+
+    store.reorderTab("repo-1", 99);
+    expect(store.tabs.map((tab) => tab.id)).toEqual(["repo-2", "repo-3", "repo-1"]);
+
+    store.reorderTab("repo-1", -5);
+    expect(store.tabs.map((tab) => tab.id)).toEqual(["repo-1", "repo-2", "repo-3"]);
+  });
+
+  it("is a no-op for unknown ids and self-drops", async () => {
+    const store = await seededStore();
+
+    store.reorderTab("missing", 0);
+    // Slot 0 is repo-1's own position; slot 1 ("after itself") resolves to
+    // the same final index — both must change nothing.
+    store.reorderTab("repo-1", 0);
+    store.reorderTab("repo-1", 1);
+
+    expect(store.tabs.map((tab) => tab.id)).toEqual(["repo-1", "repo-2", "repo-3"]);
+  });
+
+  it("persists the new strip order (remote tabs persist as URIs)", async () => {
+    const storage = memSessionStorage();
+    const store = new TabStore(new RecentRepoStore(noStorage), storage);
+    const URI = "ssh://dev-1/srv/app";
+    mockOpenRepo.mockResolvedValueOnce(ALPHA);
+    mockRemoteRepoOpen.mockResolvedValueOnce({
+      repo_id: "remote-repo-1",
+      root: URI,
+      name: "app",
+      bare: false,
+      git_dir: "/srv/app/.git",
+      device_id: "dev-1",
+    });
+    await store.openTab(ALPHA.root);
+    // activate: false keeps alpha focused, so the assertion also pins that
+    // reordering never disturbs the persisted active root.
+    await store.openRemoteTab("dev-1", "/srv/app", { activate: false });
+
+    store.reorderTab("remote-repo-1", 0);
+
+    expect(store.tabs.map((tab) => tab.id)).toEqual(["remote-repo-1", "repo-1"]);
+    expect(JSON.parse(storage.data.get("mygitui.session")!)).toEqual({
+      roots: [URI, ALPHA.root],
+      activeRoot: ALPHA.root,
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
 // refreshStatus (rune reactivity: fresh object reference)
 // ---------------------------------------------------------------------------
 
