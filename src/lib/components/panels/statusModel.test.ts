@@ -9,6 +9,9 @@ import type { ChangeKind, StatusEntry, RepoStatus } from "$lib/ipc/types";
 import {
   buildStatusIndex,
   classifyEntry,
+  diffHunkActions,
+  diffScopeForSection,
+  diffScopeSides,
   filterSections,
   kindClass,
   kindLabel,
@@ -451,5 +454,83 @@ describe("statusModel performance", () => {
         null,
       ),
     ).toBe("not initialized");
+  });
+});
+
+describe("diffScopeSides", () => {
+  it("staged scope compares HEAD→index (git diff --cached)", () => {
+    expect(diffScopeSides("staged")).toEqual({
+      oldSide: "head",
+      newSide: "index",
+    });
+  });
+
+  it("unstaged scope compares index→worktree (git diff)", () => {
+    expect(diffScopeSides("unstaged")).toEqual({
+      oldSide: "index",
+      newSide: "worktree",
+    });
+  });
+});
+
+describe("diffScopeForSection", () => {
+  it("maps the staged section to the staged scope", () => {
+    expect(diffScopeForSection("staged")).toBe("staged");
+  });
+
+  it("maps the changes section (and anything else) to the unstaged scope", () => {
+    expect(diffScopeForSection("changes")).toBe("unstaged");
+  });
+});
+
+describe("diffHunkActions", () => {
+  it("unstaged scope stages hunks and allows discard", () => {
+    expect(diffHunkActions(entry("a.ts", UNMODIFIED, "modified"), "unstaged")).toEqual({
+      staging: "stage",
+      discard: true,
+    });
+  });
+
+  it("staged scope unstages hunks and never allows discard", () => {
+    // The backend's discard engine reads index→workdir hunks, which the
+    // staged (HEAD→index) view does not show.
+    expect(diffHunkActions(entry("a.ts", "modified", UNMODIFIED), "staged")).toEqual({
+      staging: "unstage",
+      discard: false,
+    });
+  });
+
+  it("a file with changes on both sides gets scope-correct actions in each view", () => {
+    const both = entry("a.ts", "modified", "modified");
+    expect(diffHunkActions(both, "staged")).toEqual({
+      staging: "unstage",
+      discard: false,
+    });
+    expect(diffHunkActions(both, "unstaged")).toEqual({
+      staging: "stage",
+      discard: true,
+    });
+  });
+
+  it("untracked workdir files stage but get no hunk discard", () => {
+    expect(diffHunkActions(entry("new.ts", UNMODIFIED, "untracked"), "unstaged")).toEqual({
+      staging: "stage",
+      discard: false,
+    });
+    expect(diffHunkActions(entry("new.ts", "untracked", UNMODIFIED), "unstaged")).toEqual({
+      staging: "stage",
+      discard: false,
+    });
+  });
+
+  it("conflicted entries get no hunk actions in either scope", () => {
+    expect(diffHunkActions(entry("c.ts", "conflicted", "modified"), "unstaged")).toEqual({
+      staging: undefined,
+      discard: false,
+    });
+    expect(diffHunkActions(entry("c.ts", "modified", "conflicted"), "staged")).toEqual({
+      staging: undefined,
+      discard: false,
+    });
   });
 });

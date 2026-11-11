@@ -36,6 +36,7 @@
     SubmoduleInfo,
   } from "$lib/ipc/types";
   import { Button } from "$lib/components/ui/button/index.js";
+  import { Hint } from "$lib/components/ui/tooltip/index.js";
   import { Badge } from "$lib/components/ui/badge/index.js";
   import { Input } from "$lib/components/ui/input/index.js";
   import * as DropdownMenu from "$lib/components/ui/dropdown-menu/index.js";
@@ -80,6 +81,7 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
   import { appIcon } from "$lib/components/icons/library.svelte";
   import {
     buildStatusIndex,
+    diffScopeForSection,
     filterSections,
     kindLabel,
     kindLetter,
@@ -88,6 +90,7 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
     submoduleChangeCounts,
     submoduleDisplay,
     submoduleNeedsAttention,
+    type DiffScope,
     type SectionId,
     type StatusIndex,
     type StatusRow,
@@ -120,11 +123,17 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
     status: RepoStatus | null;
     /** Why the first `repo_status` failed (null once loaded / on success). */
     statusError?: string | null;
+    /**
+     * Opens a row's diff. The section decides the scope (VSCode semantics):
+     * a Staged Changes row diffs HEAD→index, a Changes row diffs
+     * index→worktree (see {@link diffScopeForSection}).
+     */
     onOpenDiff: (
       entry: StatusEntry,
       targetRepoId?: string,
       targetRoot?: string,
       targetRepoName?: string,
+      scope?: DiffScope,
     ) => void;
     /** Selected row keys (`section:path` or `prefix:section:path`), VS Code multi-select style. */
     selected: string[];
@@ -868,8 +877,14 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
    * Plain click: select + open (submodule tab, conflict editor, or diff).
    * Ctrl: toggle in the selection (no open). Shift: extend the range from
    * the anchor (no open). All VS Code list behaviors.
+   *
+   * The row's section decides the diff scope: Staged Changes rows stream
+   * HEAD→index, Changes rows index→worktree. Submodule rows are built from
+   * the submodule's own status index, so the same rule transfers — the sides
+   * are resolved against the submodule repo.
    */
   function openRow(row: StatusRow): void {
+    const scope = diffScopeForSection(row.section);
     if (row.submodulePath) {
       const sub = submodulesMap[row.submodulePath];
       if (sub && sub.repoId) {
@@ -878,6 +893,7 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
           sub.repoId,
           sub.root,
           sub.info.name || sub.info.path,
+          scope,
         );
         return;
       }
@@ -890,7 +906,7 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
     if (row.kind === "conflicted" && onOpenConflict !== undefined) {
       onOpenConflict(row.entry);
     } else {
-      onOpenDiff(row.entry);
+      onOpenDiff(row.entry, undefined, undefined, undefined, scope);
     }
   }
 
@@ -1337,7 +1353,14 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
           {
             id: "open-diff",
             label: "Open gitlink diff",
-            run: () => onOpenDiff(single.entry),
+            run: () =>
+              onOpenDiff(
+                single.entry,
+                undefined,
+                undefined,
+                undefined,
+                diffScopeForSection(single.section),
+              ),
           },
         );
       } else {
@@ -1643,17 +1666,21 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
           onkeydown={onFilterKeydown}
         />
         {#if filterText}
-          <Button
-            class="absolute right-0.5 size-5 rounded-full p-0 text-muted-foreground hover:bg-accent hover:text-foreground"
-            variant="ghost"
-            size="icon-xs"
-            type="button"
-            aria-label="Clear filter"
-            title="Clear filter"
-            onclick={() => (filterText = "")}
-          >
-            <Icon icon={iconClear} size={12} />
-          </Button>
+          <Hint label="Clear filter">
+            {#snippet child({ props })}
+              <Button
+                {...props}
+                class="absolute right-0.5 size-5 rounded-full p-0 text-muted-foreground hover:bg-accent hover:text-foreground"
+                variant="ghost"
+                size="icon-xs"
+                type="button"
+                aria-label="Clear filter"
+                onclick={() => (filterText = "")}
+              >
+                <Icon icon={iconClear} size={12} />
+              </Button>
+            {/snippet}
+          </Hint>
         {/if}
       </span>
       <Button
@@ -1692,17 +1719,21 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
       >
         <Icon icon={iconRefresh} size={16} />
       </Button>
-      <Button
-        class="relative text-muted-foreground after:absolute after:-inset-1 after:content-[''] hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-4"
-        variant="ghost"
-        size="icon-xs"
-        type="button"
-        aria-label="More source-control actions"
-        title="More actions"
-        onclick={(event) => toolbarMenu(event)}
-      >
-        <Icon icon={iconMore} size={16} />
-      </Button>
+      <Hint label="More actions">
+        {#snippet child({ props })}
+          <Button
+            {...props}
+            class="relative text-muted-foreground after:absolute after:-inset-1 after:content-[''] hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-4"
+            variant="ghost"
+            size="icon-xs"
+            type="button"
+            aria-label="More source-control actions"
+            onclick={(event) => toolbarMenu(event)}
+          >
+            <Icon icon={iconMore} size={16} />
+          </Button>
+        {/snippet}
+      </Hint>
     </div>
 
     {#if !shortcutsHintDismissed}
@@ -1721,17 +1752,21 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
           <kbd class="font-[inherit] font-semibold">Ctrl+A</kbd> select all ·
           <kbd class="font-[inherit] font-semibold">Menu</kbd> row menu
         </span>
-        <Button
-          class="size-5 shrink-0 rounded-full p-0 text-muted-foreground hover:bg-accent hover:text-foreground [&_svg:not([class*='size-'])]:size-3"
-          variant="ghost"
-          size="icon-xs"
-          type="button"
-          aria-label="Dismiss keyboard shortcuts hint"
-          title="Dismiss"
-          onclick={() => (shortcutsHintDismissed = true)}
-        >
-          <Icon icon={iconClear} size={12} />
-        </Button>
+        <Hint label="Dismiss">
+          {#snippet child({ props })}
+            <Button
+              {...props}
+              class="size-5 shrink-0 rounded-full p-0 text-muted-foreground hover:bg-accent hover:text-foreground [&_svg:not([class*='size-'])]:size-3"
+              variant="ghost"
+              size="icon-xs"
+              type="button"
+              aria-label="Dismiss keyboard shortcuts hint"
+              onclick={() => (shortcutsHintDismissed = true)}
+            >
+              <Icon icon={iconClear} size={12} />
+            </Button>
+          {/snippet}
+        </Hint>
       </div>
     {/if}
 
@@ -1743,41 +1778,53 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
         {#if status.bisecting}<Badge variant="secondary" class="gap-[0.2rem] rounded-full px-2 py-px h-auto text-ui-micro bg-muted text-foreground">Bisect in progress</Badge>{/if}
         {#if status.detached}<Badge variant="secondary" class="gap-[0.2rem] rounded-full px-2 py-px h-auto text-ui-micro bg-muted text-foreground">Detached HEAD</Badge>{/if}
         {#if status.ahead > 0}
-          <Badge
-            variant="secondary"
-            class="gap-[0.2rem] rounded-full px-2 py-px h-auto text-ui-micro bg-primary/10 text-primary tabular-nums"
-            role="img"
-            aria-label={`${status.ahead} ${status.ahead === 1 ? "commit" : "commits"} to push`}
-            title={`${status.ahead} ${status.ahead === 1 ? "commit" : "commits"} to push`}
-          >
-            <Icon icon={iconAhead} size={12} />
-            {status.ahead} to push
-          </Badge>
+          <Hint label={`${status.ahead} ${status.ahead === 1 ? "commit" : "commits"} to push`}>
+            {#snippet child({ props })}
+              <Badge
+                {...props}
+                variant="secondary"
+                class="gap-[0.2rem] rounded-full px-2 py-px h-auto text-ui-micro bg-primary/10 text-primary tabular-nums"
+                role="img"
+                aria-label={`${status.ahead} ${status.ahead === 1 ? "commit" : "commits"} to push`}
+              >
+                <Icon icon={iconAhead} size={12} />
+                {status.ahead} to push
+              </Badge>
+            {/snippet}
+          </Hint>
         {/if}
         {#if status.behind > 0}
-          <Badge
-            variant="secondary"
-            class="gap-[0.2rem] rounded-full px-2 py-px h-auto text-ui-micro bg-accent text-accent-foreground tabular-nums"
-            role="img"
-            aria-label={`${status.behind} ${status.behind === 1 ? "commit" : "commits"} to pull`}
-            title={`${status.behind} ${status.behind === 1 ? "commit" : "commits"} to pull`}
-          >
-            <Icon icon={iconBehind} size={12} />
-            {status.behind} to pull
-          </Badge>
+          <Hint label={`${status.behind} ${status.behind === 1 ? "commit" : "commits"} to pull`}>
+            {#snippet child({ props })}
+              <Badge
+                {...props}
+                variant="secondary"
+                class="gap-[0.2rem] rounded-full px-2 py-px h-auto text-ui-micro bg-accent text-accent-foreground tabular-nums"
+                role="img"
+                aria-label={`${status.behind} ${status.behind === 1 ? "commit" : "commits"} to pull`}
+              >
+                <Icon icon={iconBehind} size={12} />
+                {status.behind} to pull
+              </Badge>
+            {/snippet}
+          </Hint>
         {/if}
       </div>
     {/if}
 
     {#if moduleError}
-      <Button
-        variant="ghost"
-        class="mx-2 mb-1 h-auto justify-start border border-[color:var(--app-deleted)] rounded-sm px-1 py-0.5 bg-[color:var(--app-conflicted-bg)] text-[color:var(--app-deleted)] text-left text-ui-micro hover:bg-[color:var(--app-conflicted-bg)] hover:text-[color:var(--app-deleted)] dark:hover:bg-[color:var(--app-conflicted-bg)] dark:hover:text-[color:var(--app-deleted)]"
-        title={moduleError}
-        onclick={() => void reloadModules()}
-      >
-        Submodule status unavailable — retry
-      </Button>
+      <Hint label={moduleError}>
+        {#snippet child({ props })}
+          <Button
+            {...props}
+            variant="ghost"
+            class="mx-2 mb-1 h-auto justify-start border border-[color:var(--app-deleted)] rounded-sm px-1 py-0.5 bg-[color:var(--app-conflicted-bg)] text-[color:var(--app-deleted)] text-left text-ui-micro hover:bg-[color:var(--app-conflicted-bg)] hover:text-[color:var(--app-deleted)] dark:hover:bg-[color:var(--app-conflicted-bg)] dark:hover:text-[color:var(--app-deleted)]"
+            onclick={() => void reloadModules()}
+          >
+            Submodule status unavailable — retry
+          </Button>
+        {/snippet}
+      </Hint>
     {/if}
 
     {#snippet renderRow(
@@ -1788,199 +1835,226 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
     )}
       {@const info = !subPath ? moduleByPath.get(row.entry.path) : undefined}
       {@const display = info ? submoduleDisplay(info) : null}
-      <div
-        class="row file-row group/row relative flex items-center gap-[0.4rem] min-w-0 h-6 min-h-6 box-border pl-2 pr-2 cursor-pointer [content-visibility:auto] [contain-intrinsic-size:auto_1.5rem] hover:bg-[color:var(--app-hover)] focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-2 [&.selected]:bg-[color:var(--app-active)] [&.selected]:shadow-[inset_2px_0_0_var(--primary)]"
-        class:selected={isSelected(row.key)}
-        role="treeitem"
-        aria-selected={isSelected(row.key)}
-        aria-label={rowAriaLabel(row, info)}
-        aria-keyshortcuts={row.section === "staged"
-          ? "S"
-          : row.kind === "conflicted"
-            ? undefined
-            : "S D"}
-        tabindex={row.key === tabIndexKey ? 0 : -1}
-        data-row-key={row.key}
-        data-kind={row.kind}
-        bind:this={rowEls[row.key]}
-        title={rowTitle(row, info)}
-        onkeydown={onTreeKeydown}
-        oncontextmenu={(event) => rowMenu(event, row)}
-        onclick={(event) =>
-          onRowClick(
-            event,
-            row,
-            visibleRows.findIndex((r) => r.key === row.key),
-          )}
-      >
-        {#if info}
-          <span class="shrink-0 inline-flex text-muted-foreground opacity-90">
-            <Icon icon={iconModule} size={14} />
-          </span>
-        {:else}
-          <span
-            class="file-icon shrink-0 inline-flex items-center justify-center leading-none"
-            style:color={fileIconColorForPath(row.entry.path, fileIconPreferences.theme)}
+      <Hint label={rowTitle(row, info)}>
+        {#snippet child({ props })}
+          <div
+            {...props}
+            class="row file-row group/row relative flex items-center gap-[0.4rem] min-w-0 h-6 min-h-6 box-border pl-2 pr-2 cursor-pointer [content-visibility:auto] [contain-intrinsic-size:auto_1.5rem] hover:bg-[color:var(--app-hover)] focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-2 [&.selected]:bg-[color:var(--app-active)] [&.selected]:shadow-[inset_2px_0_0_var(--primary)]"
+            class:selected={isSelected(row.key)}
+            role="treeitem"
+            aria-selected={isSelected(row.key)}
+            aria-label={rowAriaLabel(row, info)}
+            aria-keyshortcuts={row.section === "staged"
+              ? "S"
+              : row.kind === "conflicted"
+                ? undefined
+                : "S D"}
+            tabindex={row.key === tabIndexKey ? 0 : -1}
+            data-row-key={row.key}
+            data-kind={row.kind}
+            bind:this={rowEls[row.key]}
+            onkeydown={onTreeKeydown}
+            oncontextmenu={(event) => rowMenu(event, row)}
+            onclick={(event) =>
+              onRowClick(
+                event,
+                row,
+                visibleRows.findIndex((r) => r.key === row.key),
+              )}
           >
-            <Icon
-              icon={fileIconForPath(row.entry.path, fileIconPreferences.theme)}
-              size={14}
-            />
-          </span>
-        {/if}
-        <span class="path flex-1 basis-auto min-w-0 flex items-baseline gap-[0.35rem] overflow-hidden text-xs leading-[1.25]">
-          <span
-            class="base min-w-8 overflow-hidden text-ellipsis whitespace-nowrap text-foreground font-normal group-data-[kind=added]/row:text-[color:var(--app-added)] group-data-[kind=untracked]/row:text-[color:var(--app-untracked)] group-data-[kind=modified]/row:text-[color:var(--app-modified)] group-data-[kind=renamed]/row:text-[color:var(--app-renamed)] group-data-[kind=copied]/row:text-[color:var(--app-renamed)] group-data-[kind=conflicted]/row:text-[color:var(--app-conflicted)] group-data-[kind=deleted]/row:text-[color:var(--app-deleted)] group-data-[kind=deleted]/row:line-through group-data-[kind=deleted]/row:decoration-1"
-            title={row.entry.path}
-          >{row.base}</span>
-          {#if row.dir}
-            <span
-              class="dir grow min-w-0 max-w-[48%] ml-auto overflow-hidden text-ellipsis whitespace-nowrap text-right text-muted-foreground opacity-70 text-ui-micro"
-              title={dirText(row.dir)}
-            >{dirText(row.dir)}</span>
-          {/if}
-        </span>
-        {#if info && display && display.tag}
-          <span class={`module-tag shrink-0 max-w-[6.5rem] overflow-hidden text-ellipsis whitespace-nowrap text-ui-tiny leading-[1.35] text-muted-foreground ${toneColorClass(display.tone)}`} title={display.detail}>
-            {display.tag}
-          </span>
-        {/if}
-        <span
-          class={`kind shrink-0 w-4 inline-flex items-center justify-center text-ui-micro font-bold font-mono leading-none relative z-1 cursor-help ${kindColorClass(row.kind)}`}
-          title={`${row.entry.path} · ${kindLabel(row.kind)}`}
-          aria-hidden="true"
-        >
-          {kindLetter(row.kind)}
-        </span>
-        <span class="row-actions absolute right-5 top-1/2 -translate-y-1/2 flex items-center gap-px opacity-0 transition-opacity group-hover/row:opacity-100 group-focus-visible/row:opacity-100 group-has-[:focus-visible]/row:opacity-100 pointer-coarse:static pointer-coarse:transform-none pointer-coarse:opacity-100">
-          <span
-            aria-hidden="true"
-            class={`pointer-events-none absolute -left-4 -top-[0.1rem] -bottom-[0.1rem] w-4 pointer-coarse:hidden ${isSelected(row.key)
-              ? "bg-[linear-gradient(to_right,transparent,color-mix(in_srgb,var(--primary)_12%,var(--background)))]"
-              : "bg-[linear-gradient(to_right,transparent,var(--background))] group-hover/row:bg-[linear-gradient(to_right,transparent,color-mix(in_srgb,var(--foreground)_5%,var(--background)))]"}`}
-          ></span>
-          {#if row.section === "staged"}
-            <Button
-              class="relative text-muted-foreground after:absolute after:-inset-1 after:content-[''] hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-4"
-              variant="ghost"
-              size="icon-xs"
-              type="button"
-              aria-label={`Unstage ${row.entry.path}`}
-              title="Unstage this file (S)"
-              tabindex={-1}
-              disabled={!targetRepoId || mutating}
-              onclick={(event) => stageAction(row, event)}
-            >
-              <Icon icon={iconUnstage} size={16} />
-            </Button>
-          {:else if row.kind !== "conflicted"}
-            <Button
-              class="relative text-muted-foreground after:absolute after:-inset-1 after:content-[''] hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-4"
-              variant="ghost"
-              size="icon-xs"
-              type="button"
-              aria-label={`Stage ${row.entry.path}`}
-              title="Stage this file (S)"
-              tabindex={-1}
-              disabled={!targetRepoId || mutating}
-              onclick={(event) => stageAction(row, event)}
-            >
-              <Icon icon={iconStage} size={16} />
-            </Button>
-            {#if !info}
-              <Button
-                class="relative text-destructive after:absolute after:-inset-1 after:content-[''] hover:bg-destructive/10 hover:text-destructive [&_svg:not([class*='size-'])]:size-4"
-                variant="ghost"
-                size="icon-xs"
-                type="button"
-                aria-label={`Discard changes to ${row.entry.path}`}
-                title="Discard changes to this file (D)"
-                tabindex={-1}
-                disabled={!targetRepoId || mutating}
-                onclick={(event) => requestDiscard(row, event)}
+            {#if info}
+              <span class="shrink-0 inline-flex text-muted-foreground opacity-90">
+                <Icon icon={iconModule} size={14} />
+              </span>
+            {:else}
+              <span
+                class="file-icon shrink-0 inline-flex items-center justify-center leading-none"
+                style:color={fileIconColorForPath(row.entry.path, fileIconPreferences.theme)}
               >
-                <Icon icon={iconDiscard} size={16} />
-              </Button>
+                <Icon
+                  icon={fileIconForPath(row.entry.path, fileIconPreferences.theme)}
+                  size={14}
+                />
+              </span>
             {/if}
-          {/if}
-          {#if info}
-            <Button
-              class="relative text-muted-foreground after:absolute after:-inset-1 after:content-[''] hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-4"
-              variant="ghost"
-              size="icon-xs"
-              type="button"
-              aria-label={`Open submodule ${row.entry.path}`}
-              title="Open this submodule as a tab"
-              tabindex={-1}
-              disabled={!info.initialized}
-              onclick={(event) => {
-                event.stopPropagation();
-                void openSubmodule(info);
-              }}
-            >
-              <Icon icon={iconOpen} size={16} />
-            </Button>
-          {/if}
-          {#if row.kind === "untracked" && !info && targetRepoId && !mutating}
-            <span class="ignore-wrap relative shrink-0 inline-flex">
-              <DropdownMenu.Root
-                open={ignoreFor === row.key}
-                onOpenChange={(open) => {
-                  if (open) {
-                    ignoreFor = row.key;
-                    ignoreChoices = choicesFor(row.entry.path);
-                  } else if (ignoreFor === row.key) {
-                    ignoreFor = null;
-                  }
-                }}
-              >
-                <DropdownMenu.Trigger
-                  class="relative inline-flex shrink-0 cursor-pointer items-center justify-center rounded-md border border-transparent bg-transparent p-0 text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-1 aria-expanded:bg-accent aria-expanded:text-accent-foreground size-6 disabled:cursor-not-allowed disabled:text-muted-foreground/50 disabled:hover:bg-transparent"
-                  title="Add to .gitignore"
-                  aria-label={`Ignore ${row.entry.path}`}
-                  disabled={mutating}
-                  tabindex={-1}
-                  onclick={(event) => event.stopPropagation()}
-                >
-                  <Icon icon={iconIgnore} size={16} />
-                </DropdownMenu.Trigger>
-                <DropdownMenu.Content
-                  class="min-w-48 max-w-[calc(100vw-1rem)] rounded-md p-0.5"
-                  align="end"
-                  aria-label="Ignore pattern choices"
-                >
-                  {#each ignoreChoices as choice (choice.pattern)}
-                    <DropdownMenu.Item
-                      class="whitespace-nowrap rounded-sm px-2 py-1 text-xs"
-                      onSelect={() => void onIgnore(choice, row)}
-                    >
-                      {choice.label}: <code class="font-mono text-ui-micro text-muted-foreground">{choice.pattern}</code>
-                    </DropdownMenu.Item>
-                  {/each}
-                </DropdownMenu.Content>
-              </DropdownMenu.Root>
+            <span class="path flex-1 basis-auto min-w-0 flex items-baseline gap-[0.35rem] overflow-hidden text-xs leading-[1.25]">
+              <Hint label={row.entry.path}>
+                {#snippet child({ props })}
+                  <span
+                    {...props}
+                    class="base min-w-8 overflow-hidden text-ellipsis whitespace-nowrap text-foreground font-normal group-data-[kind=added]/row:text-[color:var(--app-added)] group-data-[kind=untracked]/row:text-[color:var(--app-untracked)] group-data-[kind=modified]/row:text-[color:var(--app-modified)] group-data-[kind=renamed]/row:text-[color:var(--app-renamed)] group-data-[kind=copied]/row:text-[color:var(--app-renamed)] group-data-[kind=conflicted]/row:text-[color:var(--app-conflicted)] group-data-[kind=deleted]/row:text-[color:var(--app-deleted)] group-data-[kind=deleted]/row:line-through group-data-[kind=deleted]/row:decoration-1"
+                  >{row.base}</span>
+                {/snippet}
+              </Hint>
+              {#if row.dir}
+                <Hint label={dirText(row.dir)}>
+                  {#snippet child({ props })}
+                    <span
+                      {...props}
+                      class="dir grow min-w-0 max-w-[48%] ml-auto overflow-hidden text-ellipsis whitespace-nowrap text-right text-muted-foreground opacity-70 text-ui-micro"
+                    >{dirText(row.dir)}</span>
+                  {/snippet}
+                </Hint>
+              {/if}
             </span>
-          {/if}
-          {#if targetRepoId}
-            <Button
-              class="relative text-muted-foreground after:absolute after:-inset-1 after:content-[''] hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-4"
-              variant="ghost"
-              size="icon-xs"
-              type="button"
-              aria-label={`More actions for ${row.entry.path}`}
-              title="More actions"
-              aria-haspopup="menu"
-              tabindex={-1}
-              onclick={(event) => {
-                event.stopPropagation();
-                openRowMenu(row);
-              }}
-            >
-              <Icon icon={iconMore} size={16} />
-            </Button>
-          {/if}
-        </span>
-      </div>
+            {#if info && display && display.tag}
+              <Hint label={display.detail}>
+                {#snippet child({ props })}
+                  <span
+                    {...props}
+                    class={`module-tag shrink-0 max-w-[6.5rem] overflow-hidden text-ellipsis whitespace-nowrap text-ui-tiny leading-[1.35] text-muted-foreground ${toneColorClass(display.tone)}`}
+                  >
+                    {display.tag}
+                  </span>
+                {/snippet}
+              </Hint>
+            {/if}
+            <Hint label={`${row.entry.path} · ${kindLabel(row.kind)}`}>
+              {#snippet child({ props })}
+                <span
+                  {...props}
+                  class={`kind shrink-0 w-4 inline-flex items-center justify-center text-ui-micro font-bold font-mono leading-none relative z-1 cursor-help ${kindColorClass(row.kind)}`}
+                  aria-hidden="true"
+                >
+                  {kindLetter(row.kind)}
+                </span>
+              {/snippet}
+            </Hint>
+            <span class="row-actions absolute right-5 top-1/2 -translate-y-1/2 flex items-center gap-px opacity-0 transition-opacity group-hover/row:opacity-100 group-focus-visible/row:opacity-100 group-has-[:focus-visible]/row:opacity-100 pointer-coarse:static pointer-coarse:transform-none pointer-coarse:opacity-100">
+              <span
+                aria-hidden="true"
+                class={`pointer-events-none absolute -left-4 -top-[0.1rem] -bottom-[0.1rem] w-4 pointer-coarse:hidden ${isSelected(row.key)
+                  ? "bg-[linear-gradient(to_right,transparent,color-mix(in_srgb,var(--primary)_12%,var(--background)))]"
+                  : "bg-[linear-gradient(to_right,transparent,var(--background))] group-hover/row:bg-[linear-gradient(to_right,transparent,color-mix(in_srgb,var(--foreground)_5%,var(--background)))]"}`}
+              ></span>
+              {#if row.section === "staged"}
+                <Button
+                  class="relative text-muted-foreground after:absolute after:-inset-1 after:content-[''] hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-4"
+                  variant="ghost"
+                  size="icon-xs"
+                  type="button"
+                  aria-label={`Unstage ${row.entry.path}`}
+                  title="Unstage this file (S)"
+                  tabindex={-1}
+                  disabled={!targetRepoId || mutating}
+                  onclick={(event) => stageAction(row, event)}
+                >
+                  <Icon icon={iconUnstage} size={16} />
+                </Button>
+              {:else if row.kind !== "conflicted"}
+                <Button
+                  class="relative text-muted-foreground after:absolute after:-inset-1 after:content-[''] hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-4"
+                  variant="ghost"
+                  size="icon-xs"
+                  type="button"
+                  aria-label={`Stage ${row.entry.path}`}
+                  title="Stage this file (S)"
+                  tabindex={-1}
+                  disabled={!targetRepoId || mutating}
+                  onclick={(event) => stageAction(row, event)}
+                >
+                  <Icon icon={iconStage} size={16} />
+                </Button>
+                {#if !info}
+                  <Button
+                    class="relative text-destructive after:absolute after:-inset-1 after:content-[''] hover:bg-destructive/10 hover:text-destructive [&_svg:not([class*='size-'])]:size-4"
+                    variant="ghost"
+                    size="icon-xs"
+                    type="button"
+                    aria-label={`Discard changes to ${row.entry.path}`}
+                    title="Discard changes to this file (D)"
+                    tabindex={-1}
+                    disabled={!targetRepoId || mutating}
+                    onclick={(event) => requestDiscard(row, event)}
+                  >
+                    <Icon icon={iconDiscard} size={16} />
+                  </Button>
+                {/if}
+              {/if}
+              {#if info}
+                <Button
+                  class="relative text-muted-foreground after:absolute after:-inset-1 after:content-[''] hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-4"
+                  variant="ghost"
+                  size="icon-xs"
+                  type="button"
+                  aria-label={`Open submodule ${row.entry.path}`}
+                  title="Open this submodule as a tab"
+                  tabindex={-1}
+                  disabled={!info.initialized}
+                  onclick={(event) => {
+                    event.stopPropagation();
+                    void openSubmodule(info);
+                  }}
+                >
+                  <Icon icon={iconOpen} size={16} />
+                </Button>
+              {/if}
+              {#if row.kind === "untracked" && !info && targetRepoId && !mutating}
+                <span class="ignore-wrap relative shrink-0 inline-flex">
+                  <DropdownMenu.Root
+                    open={ignoreFor === row.key}
+                    onOpenChange={(open) => {
+                      if (open) {
+                        ignoreFor = row.key;
+                        ignoreChoices = choicesFor(row.entry.path);
+                      } else if (ignoreFor === row.key) {
+                        ignoreFor = null;
+                      }
+                    }}
+                  >
+                    <DropdownMenu.Trigger
+                      class="relative inline-flex shrink-0 cursor-pointer items-center justify-center rounded-md border border-transparent bg-transparent p-0 text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-1 aria-expanded:bg-accent aria-expanded:text-accent-foreground size-6 disabled:cursor-not-allowed disabled:text-muted-foreground/50 disabled:hover:bg-transparent"
+                      title="Add to .gitignore"
+                      aria-label={`Ignore ${row.entry.path}`}
+                      disabled={mutating}
+                      tabindex={-1}
+                      onclick={(event) => event.stopPropagation()}
+                    >
+                      <Icon icon={iconIgnore} size={16} />
+                    </DropdownMenu.Trigger>
+                    <DropdownMenu.Content
+                      class="min-w-48 max-w-[calc(100vw-1rem)] rounded-md p-0.5"
+                      align="end"
+                      aria-label="Ignore pattern choices"
+                    >
+                      {#each ignoreChoices as choice (choice.pattern)}
+                        <DropdownMenu.Item
+                          class="whitespace-nowrap rounded-sm px-2 py-1 text-xs"
+                          onSelect={() => void onIgnore(choice, row)}
+                        >
+                          {choice.label}: <code class="font-mono text-ui-micro text-muted-foreground">{choice.pattern}</code>
+                        </DropdownMenu.Item>
+                      {/each}
+                    </DropdownMenu.Content>
+                  </DropdownMenu.Root>
+                </span>
+              {/if}
+              {#if targetRepoId}
+                <Hint label="More actions">
+                  {#snippet child({ props })}
+                    <Button
+                      {...props}
+                      class="relative text-muted-foreground after:absolute after:-inset-1 after:content-[''] hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-4"
+                      variant="ghost"
+                      size="icon-xs"
+                      type="button"
+                      aria-label={`More actions for ${row.entry.path}`}
+                      aria-haspopup="menu"
+                      tabindex={-1}
+                      onclick={(event) => {
+                        event.stopPropagation();
+                        openRowMenu(row);
+                      }}
+                    >
+                      <Icon icon={iconMore} size={16} />
+                    </Button>
+                  {/snippet}
+                </Hint>
+              {/if}
+            </span>
+          </div>
+        {/snippet}
+      </Hint>
     {/snippet}
 
     {#if hasSubmodules}
@@ -2011,10 +2085,17 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
               </span>
               <span class="repo-title overflow-hidden text-ellipsis whitespace-nowrap">{repoName || "repository"}</span>
               {#if status}
-                <span class="branch-pill shrink-0 inline-flex items-center gap-[0.2rem] px-[0.35rem] py-px rounded-full bg-muted text-muted-foreground text-ui-tiny font-medium max-w-28 overflow-hidden text-ellipsis whitespace-nowrap" title={`Branch: ${mainBranchLabel(status)}`}>
-                  <Icon icon={iconBranch} size={12} />
-                  <span>{mainBranchLabel(status)}</span>
-                </span>
+                <Hint label={`Branch: ${mainBranchLabel(status)}`}>
+                  {#snippet child({ props })}
+                    <span
+                      {...props}
+                      class="branch-pill shrink-0 inline-flex items-center gap-[0.2rem] px-[0.35rem] py-px rounded-full bg-muted text-muted-foreground text-ui-tiny font-medium max-w-28 overflow-hidden text-ellipsis whitespace-nowrap"
+                    >
+                      <Icon icon={iconBranch} size={12} />
+                      <span>{mainBranchLabel(status)}</span>
+                    </span>
+                  {/snippet}
+                </Hint>
               {/if}
               {#if index && index.total > 0}
                 <span class="count-pill shrink-0 min-w-4 px-[0.35rem] rounded-full bg-muted text-muted-foreground text-ui-tiny font-semibold text-center tabular-nums">{index.total}</span>
@@ -2083,17 +2164,21 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
                     </button>
                     {#if canMutate && (section.id === "staged" || section.rows.some((row) => row.kind !== "conflicted"))}
                       <span class="section-action absolute right-[0.3rem] top-1/2 -translate-y-1/2 inline-flex opacity-0 transition-opacity group-hover/header:opacity-100 group-focus-within/header:opacity-100 pointer-coarse:static pointer-coarse:transform-none pointer-coarse:opacity-100 pointer-coarse:pr-1">
-                        <Button
-                          class="relative text-muted-foreground after:absolute after:-inset-1 after:content-[''] hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-4"
-                          variant="ghost"
-                          size="icon-xs"
-                          type="button"
-                          aria-label={`${section.id === "staged" ? "Unstage" : "Stage"} all in ${section.label}`}
-                          title={`${section.id === "staged" ? "Unstage" : "Stage"} all files in ${section.label}`}
-                          onclick={(event) => stageSection(section, event)}
-                        >
-                          <Icon icon={section.id === "staged" ? iconUnstage : iconStage} size={16} />
-                        </Button>
+                        <Hint label={`${section.id === "staged" ? "Unstage" : "Stage"} all files in ${section.label}`}>
+                          {#snippet child({ props })}
+                            <Button
+                              {...props}
+                              class="relative text-muted-foreground after:absolute after:-inset-1 after:content-[''] hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-4"
+                              variant="ghost"
+                              size="icon-xs"
+                              type="button"
+                              aria-label={`${section.id === "staged" ? "Unstage" : "Stage"} all in ${section.label}`}
+                              onclick={(event) => stageSection(section, event)}
+                            >
+                              <Icon icon={section.id === "staged" ? iconUnstage : iconStage} size={16} />
+                            </Button>
+                          {/snippet}
+                        </Hint>
                       </span>
                     {/if}
                   </div>
@@ -2131,15 +2216,33 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
                   <Icon icon={iconChevron} size={14} />
                 </span>
                 <Icon icon={iconModule} size={14} />
-                <span class="repo-title overflow-hidden text-ellipsis whitespace-nowrap" title={info.path}>{info.path}</span>
-                <span class="branch-pill shrink-0 inline-flex items-center gap-[0.2rem] px-[0.35rem] py-px rounded-full bg-muted text-muted-foreground text-ui-tiny font-medium max-w-28 overflow-hidden text-ellipsis whitespace-nowrap" title={`Branch: ${submoduleBranchLabel(info, sub?.status ?? null)}`}>
-                  <Icon icon={iconBranch} size={12} />
-                  <span>{submoduleBranchLabel(info, sub?.status ?? null)}</span>
-                </span>
+                <Hint label={info.path}>
+                  {#snippet child({ props })}
+                    <span {...props} class="repo-title overflow-hidden text-ellipsis whitespace-nowrap">{info.path}</span>
+                  {/snippet}
+                </Hint>
+                <Hint label={`Branch: ${submoduleBranchLabel(info, sub?.status ?? null)}`}>
+                  {#snippet child({ props })}
+                    <span
+                      {...props}
+                      class="branch-pill shrink-0 inline-flex items-center gap-[0.2rem] px-[0.35rem] py-px rounded-full bg-muted text-muted-foreground text-ui-tiny font-medium max-w-28 overflow-hidden text-ellipsis whitespace-nowrap"
+                    >
+                      <Icon icon={iconBranch} size={12} />
+                      <span>{submoduleBranchLabel(info, sub?.status ?? null)}</span>
+                    </span>
+                  {/snippet}
+                </Hint>
                 {#if display.tag}
-                  <span class={`module-tag shrink-0 max-w-[6.5rem] overflow-hidden text-ellipsis whitespace-nowrap text-ui-tiny leading-[1.35] text-muted-foreground ${toneColorClass(display.tone)}`} title={display.detail}>
-                    {display.tag}
-                  </span>
+                  <Hint label={display.detail}>
+                    {#snippet child({ props })}
+                      <span
+                        {...props}
+                        class={`module-tag shrink-0 max-w-[6.5rem] overflow-hidden text-ellipsis whitespace-nowrap text-ui-tiny leading-[1.35] text-muted-foreground ${toneColorClass(display.tone)}`}
+                      >
+                        {display.tag}
+                      </span>
+                    {/snippet}
+                  </Hint>
                 {/if}
                 {#if info.initialized && counts.total > 0}
                   <span class="count-pill shrink-0 min-w-4 px-[0.35rem] rounded-full bg-muted text-muted-foreground text-ui-tiny font-semibold text-center tabular-nums">{counts.total}</span>
@@ -2208,17 +2311,21 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
                   >
                     <Icon icon={iconSync} size={16} />
                   </Button>
-                  <Button
-                    class="relative text-muted-foreground after:absolute after:-inset-1 after:content-[''] hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-4"
-                    variant="ghost"
-                    size="icon-xs"
-                    type="button"
-                    aria-label={`Open submodule ${info.path}`}
-                    title="Open submodule as a tab"
-                    onclick={() => void openSubmodule(info)}
-                  >
-                    <Icon icon={iconOpen} size={16} />
-                  </Button>
+                  <Hint label="Open submodule as a tab">
+                    {#snippet child({ props })}
+                      <Button
+                        {...props}
+                        class="relative text-muted-foreground after:absolute after:-inset-1 after:content-[''] hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-4"
+                        variant="ghost"
+                        size="icon-xs"
+                        type="button"
+                        aria-label={`Open submodule ${info.path}`}
+                        onclick={() => void openSubmodule(info)}
+                      >
+                        <Icon icon={iconOpen} size={16} />
+                      </Button>
+                    {/snippet}
+                  </Hint>
                 {/if}
               </div>
             </div>
@@ -2243,9 +2350,16 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
                   <Spinner class="size-3" role="presentation" aria-hidden="true" /> Loading submodule changes…
                 </div>
               {:else if sub?.error}
-                <div class="module-error mx-2 mb-1 px-1 py-0.5 border border-[color:var(--app-deleted)] rounded-sm bg-[color:var(--app-conflicted-bg)] text-[color:var(--app-deleted)] text-left text-ui-micro" title={sub.error}>
-                  Submodule error: {sub.error}
-                </div>
+                <Hint label={sub.error}>
+                  {#snippet child({ props })}
+                    <div
+                      {...props}
+                      class="module-error mx-2 mb-1 px-1 py-0.5 border border-[color:var(--app-deleted)] rounded-sm bg-[color:var(--app-conflicted-bg)] text-[color:var(--app-deleted)] text-left text-ui-micro"
+                    >
+                      Submodule error: {sub.error}
+                    </div>
+                  {/snippet}
+                </Hint>
               {:else if sub?.status}
                 <div class="embedded-commit-bar pt-[0.3rem] pb-[0.4rem] bg-background border-b border-border">
                   <CommitBar
@@ -2355,17 +2469,21 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
               {#if canMutate &&
                 (section.id === "staged" || section.rows.some((row) => row.kind !== "conflicted"))}
                 <span class="section-action absolute right-[0.3rem] top-1/2 -translate-y-1/2 inline-flex opacity-0 transition-opacity group-hover/header:opacity-100 group-focus-within/header:opacity-100 pointer-coarse:static pointer-coarse:transform-none pointer-coarse:opacity-100 pointer-coarse:pr-1">
-                  <Button
-                    class="relative text-muted-foreground after:absolute after:-inset-1 after:content-[''] hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-4"
-                    variant="ghost"
-                    size="icon-xs"
-                    type="button"
-                    aria-label={`${section.id === "staged" ? "Unstage" : "Stage"} all in ${section.label}`}
-                    title={`${section.id === "staged" ? "Unstage" : "Stage"} all files in ${section.label}`}
-                    onclick={(event) => stageSection(section, event)}
-                  >
-                    <Icon icon={section.id === "staged" ? iconUnstage : iconStage} size={16} />
-                  </Button>
+                  <Hint label={`${section.id === "staged" ? "Unstage" : "Stage"} all files in ${section.label}`}>
+                    {#snippet child({ props })}
+                      <Button
+                        {...props}
+                        class="relative text-muted-foreground after:absolute after:-inset-1 after:content-[''] hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-4"
+                        variant="ghost"
+                        size="icon-xs"
+                        type="button"
+                        aria-label={`${section.id === "staged" ? "Unstage" : "Stage"} all in ${section.label}`}
+                        onclick={(event) => stageSection(section, event)}
+                      >
+                        <Icon icon={section.id === "staged" ? iconUnstage : iconStage} size={16} />
+                      </Button>
+                    {/snippet}
+                  </Hint>
                 </span>
               {/if}
             </div>
@@ -2391,92 +2509,123 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
               {#each section.modules as info, moduleIndex (info.path)}
                 {@const display = submoduleDisplay(info)}
                 {@const parts = splitPath(info.path)}
-                <div
-                  class="row module-row group/row relative flex items-center gap-[0.4rem] min-w-0 h-6 min-h-6 box-border px-2 cursor-pointer [content-visibility:auto] [contain-intrinsic-size:auto_1.5rem] hover:bg-[color:var(--app-hover)]"
-                  role="treeitem"
-                  aria-selected="false"
-                  aria-setsize={section.rows.length + section.modules.length}
-                  aria-posinset={section.rows.length + moduleIndex + 1}
-                  tabindex={-1}
-                  aria-label={`${info.path}, submodule, ${display.detail}`}
-                  title={moduleTitle(info)}
-                  oncontextmenu={(event) => submoduleMenu(event, info)}
-                >
-                  <Icon icon={iconModule} size={14} />
-                  <button
-                    class="module-open flex-1 basis-auto min-w-0 flex items-center gap-[0.4rem] bg-transparent border-0 p-0 text-left text-inherit cursor-pointer rounded-xs focus-visible:outline-2 focus-visible:outline-ring focus-visible:outline-offset-1"
-                    type="button"
-                    title={moduleTitle(info)}
-                    onclick={() => void openSubmodule(info)}
-                  >
-                    <span class="path flex-1 basis-auto min-w-0 flex items-baseline gap-[0.35rem] overflow-hidden text-xs leading-[1.25]">
-                      <span class={`base min-w-8 overflow-hidden text-ellipsis whitespace-nowrap font-normal ${display.tone === "danger" ? "text-[color:var(--app-deleted)]" : "text-foreground"}`} title={info.path}>{parts.base}</span>
-                      {#if parts.dir}
-                        <span class="dir grow min-w-0 max-w-[48%] ml-auto overflow-hidden text-ellipsis whitespace-nowrap text-right text-muted-foreground opacity-70 text-ui-micro" title={dirText(parts.dir)}>{dirText(parts.dir)}</span>
-                      {/if}
-                    </span>
-                    {#if display.tag}
-                      <span class={`module-tag shrink-0 max-w-[6.5rem] overflow-hidden text-ellipsis whitespace-nowrap text-ui-tiny leading-[1.35] text-muted-foreground ${toneColorClass(display.tone)}`} title={display.detail}>
-                        {display.tag}
+                <Hint label={moduleTitle(info)}>
+                  {#snippet child({ props })}
+                    <div
+                      {...props}
+                      class="row module-row group/row relative flex items-center gap-[0.4rem] min-w-0 h-6 min-h-6 box-border px-2 cursor-pointer [content-visibility:auto] [contain-intrinsic-size:auto_1.5rem] hover:bg-[color:var(--app-hover)]"
+                      role="treeitem"
+                      aria-selected="false"
+                      aria-setsize={section.rows.length + section.modules.length}
+                      aria-posinset={section.rows.length + moduleIndex + 1}
+                      tabindex={-1}
+                      aria-label={`${info.path}, submodule, ${display.detail}`}
+                      oncontextmenu={(event) => submoduleMenu(event, info)}
+                    >
+                      <Icon icon={iconModule} size={14} />
+                      <Hint label={moduleTitle(info)}>
+                        {#snippet child({ props })}
+                          <button
+                            {...props}
+                            class="module-open flex-1 basis-auto min-w-0 flex items-center gap-[0.4rem] bg-transparent border-0 p-0 text-left text-inherit cursor-pointer rounded-xs focus-visible:outline-2 focus-visible:outline-ring focus-visible:outline-offset-1"
+                            type="button"
+                            onclick={() => void openSubmodule(info)}
+                          >
+                            <span class="path flex-1 basis-auto min-w-0 flex items-baseline gap-[0.35rem] overflow-hidden text-xs leading-[1.25]">
+                              <Hint label={info.path}>
+                                {#snippet child({ props })}
+                                  <span {...props} class={`base min-w-8 overflow-hidden text-ellipsis whitespace-nowrap font-normal ${display.tone === "danger" ? "text-[color:var(--app-deleted)]" : "text-foreground"}`}>{parts.base}</span>
+                                {/snippet}
+                              </Hint>
+                              {#if parts.dir}
+                                <Hint label={dirText(parts.dir)}>
+                                  {#snippet child({ props })}
+                                    <span {...props} class="dir grow min-w-0 max-w-[48%] ml-auto overflow-hidden text-ellipsis whitespace-nowrap text-right text-muted-foreground opacity-70 text-ui-micro">{dirText(parts.dir)}</span>
+                                  {/snippet}
+                                </Hint>
+                              {/if}
+                            </span>
+                            {#if display.tag}
+                              <Hint label={display.detail}>
+                                {#snippet child({ props })}
+                                  <span
+                                    {...props}
+                                    class={`module-tag shrink-0 max-w-[6.5rem] overflow-hidden text-ellipsis whitespace-nowrap text-ui-tiny leading-[1.35] text-muted-foreground ${toneColorClass(display.tone)}`}
+                                  >
+                                    {display.tag}
+                                  </span>
+                                {/snippet}
+                              </Hint>
+                            {/if}
+                          </button>
+                        {/snippet}
+                      </Hint>
+                      <Hint label={`${info.path} · ${display.detail}`}>
+                        {#snippet child({ props })}
+                          <span
+                            {...props}
+                            class="kind shrink-0 w-4 inline-flex items-center justify-center text-ui-micro font-bold font-mono leading-none relative z-1 cursor-help text-[color:var(--app-modified)]"
+                            aria-hidden="true"
+                          >
+                            S
+                          </span>
+                        {/snippet}
+                      </Hint>
+                      <span class="row-actions absolute right-5 top-1/2 -translate-y-1/2 flex items-center gap-px opacity-0 transition-opacity group-hover/row:opacity-100 group-focus-visible/row:opacity-100 group-has-[:focus-visible]/row:opacity-100 pointer-coarse:static pointer-coarse:transform-none pointer-coarse:opacity-100">
+                        <span
+                          aria-hidden="true"
+                          class="pointer-events-none absolute -left-4 -top-[0.1rem] -bottom-[0.1rem] w-4 pointer-coarse:hidden bg-[linear-gradient(to_right,transparent,var(--background))] group-hover/row:bg-[linear-gradient(to_right,transparent,color-mix(in_srgb,var(--foreground)_5%,var(--background)))]"
+                        ></span>
+                        <Button
+                          class="relative text-muted-foreground after:absolute after:-inset-1 after:content-[''] hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-4"
+                          variant="ghost"
+                          size="icon-xs"
+                          type="button"
+                          aria-label={`${info.initialized ? "Update" : "Initialize"} submodule ${info.path}`}
+                          title={info.initialized
+                            ? "Check out the commit the superproject records"
+                            : "Initialize and update this submodule"}
+                          tabindex={-1}
+                          disabled={moduleBusy !== null}
+                          onclick={() => void updateSubmodule(info)}
+                        >
+                          <Icon icon={iconUpdate} size={16} />
+                        </Button>
+                        {#if info.initialized}
+                          <Hint label="Open this submodule as a tab">
+                            {#snippet child({ props })}
+                              <Button
+                                {...props}
+                                class="relative text-muted-foreground after:absolute after:-inset-1 after:content-[''] hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-4"
+                                variant="ghost"
+                                size="icon-xs"
+                                type="button"
+                                aria-label={`Open submodule ${info.path}`}
+                                tabindex={-1}
+                                onclick={() => void openSubmodule(info)}
+                              >
+                                <Icon icon={iconOpen} size={16} />
+                              </Button>
+                            {/snippet}
+                          </Hint>
+                        {/if}
+                        <Button
+                          class="relative text-muted-foreground after:absolute after:-inset-1 after:content-[''] hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-4"
+                          variant="ghost"
+                          size="icon-xs"
+                          type="button"
+                          aria-label={`Sync submodule ${info.path}`}
+                          title="Rewrite the URL from .gitmodules into the repo config"
+                          tabindex={-1}
+                          disabled={moduleBusy !== null}
+                          onclick={() => void syncSubmodule(info)}
+                        >
+                          <Icon icon={iconSync} size={16} />
+                        </Button>
                       </span>
-                    {/if}
-                  </button>
-                  <span
-                    class="kind shrink-0 w-4 inline-flex items-center justify-center text-ui-micro font-bold font-mono leading-none relative z-1 cursor-help text-[color:var(--app-modified)]"
-                    title={`${info.path} · ${display.detail}`}
-                    aria-hidden="true"
-                  >
-                    S
-                  </span>
-                  <span class="row-actions absolute right-5 top-1/2 -translate-y-1/2 flex items-center gap-px opacity-0 transition-opacity group-hover/row:opacity-100 group-focus-visible/row:opacity-100 group-has-[:focus-visible]/row:opacity-100 pointer-coarse:static pointer-coarse:transform-none pointer-coarse:opacity-100">
-                    <span
-                      aria-hidden="true"
-                      class="pointer-events-none absolute -left-4 -top-[0.1rem] -bottom-[0.1rem] w-4 pointer-coarse:hidden bg-[linear-gradient(to_right,transparent,var(--background))] group-hover/row:bg-[linear-gradient(to_right,transparent,color-mix(in_srgb,var(--foreground)_5%,var(--background)))]"
-                    ></span>
-                    <Button
-                      class="relative text-muted-foreground after:absolute after:-inset-1 after:content-[''] hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-4"
-                      variant="ghost"
-                      size="icon-xs"
-                      type="button"
-                      aria-label={`${info.initialized ? "Update" : "Initialize"} submodule ${info.path}`}
-                      title={info.initialized
-                        ? "Check out the commit the superproject records"
-                        : "Initialize and update this submodule"}
-                      tabindex={-1}
-                      disabled={moduleBusy !== null}
-                      onclick={() => void updateSubmodule(info)}
-                    >
-                      <Icon icon={iconUpdate} size={16} />
-                    </Button>
-                    {#if info.initialized}
-                      <Button
-                        class="relative text-muted-foreground after:absolute after:-inset-1 after:content-[''] hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-4"
-                        variant="ghost"
-                        size="icon-xs"
-                        type="button"
-                        aria-label={`Open submodule ${info.path}`}
-                        title="Open this submodule as a tab"
-                        tabindex={-1}
-                        onclick={() => void openSubmodule(info)}
-                      >
-                        <Icon icon={iconOpen} size={16} />
-                      </Button>
-                    {/if}
-                    <Button
-                      class="relative text-muted-foreground after:absolute after:-inset-1 after:content-[''] hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-4"
-                      variant="ghost"
-                      size="icon-xs"
-                      type="button"
-                      aria-label={`Sync submodule ${info.path}`}
-                      title="Rewrite the URL from .gitmodules into the repo config"
-                      tabindex={-1}
-                      disabled={moduleBusy !== null}
-                      onclick={() => void syncSubmodule(info)}
-                    >
-                      <Icon icon={iconSync} size={16} />
-                    </Button>
-                  </span>
-                </div>
+                    </div>
+                  {/snippet}
+                </Hint>
               {/each}
             {/if}
           </div>

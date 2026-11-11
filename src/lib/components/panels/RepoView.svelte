@@ -74,6 +74,10 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
     StatusEntry,
   } from "$lib/ipc/types";
   import {
+    diffScopeSides,
+    type DiffScope,
+  } from "$lib/components/panels/statusModel";
+  import {
     discard,
     mergeAbort,
     rebaseAbort,
@@ -96,6 +100,7 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
   import Icon from "$lib/components/icons/Icon.svelte";
   import { Button } from "$lib/components/ui/button/index.js";
   import { Badge } from "$lib/components/ui/badge/index.js";
+  import { Hint } from "$lib/components/ui/tooltip/index.js";
   import * as Select from "$lib/components/ui/select/index.js";
   import type { CompareResult } from "$lib/components/panels/compare";
   import type { HistoryCommitActions } from "$lib/components/panels/historySidebar";
@@ -197,7 +202,7 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
    */
   type CenterPane =
     | { kind: "empty" }
-    | { kind: "diff"; entry: StatusEntry }
+    | { kind: "diff"; entry: StatusEntry; scope: DiffScope }
     | { kind: "commit"; commit: CommitInfo }
     | { kind: "compare"; result: CompareResult }
     | { kind: "workflowRun"; runId: number }
@@ -211,6 +216,10 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
   // Per-mode projections. Reads keep the old names (the template and the
   // diff-stream plumbing below are unchanged); writes go through `center`.
   const diffEntry = $derived(center.kind === "diff" ? center.entry : null);
+  /** Which working-copy comparison the open diff shows (staged or unstaged). */
+  const diffScope = $derived(
+    center.kind === "diff" ? center.scope : ("unstaged" as DiffScope),
+  );
   const selectedCommit = $derived(
     center.kind === "commit" ? center.commit : null,
   );
@@ -230,8 +239,6 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
   let diffRepoName = $state<string | null>(null);
   let diffFiles: FileDiff[] = $state([]);
   let diffLoading = $state(false);
-  /** Hunk staging is only safe when the file has no staged changes. */
-  let diffHunkable = $state(false);
   /** Multi-selection action toolbar state reported by the history sidebar. */
   let historyActions = $state<HistoryCommitActions | null>(null);
   /** Commit to reveal/select in history (parent navigation from the editor). */
@@ -947,7 +954,6 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
     center = EMPTY_PANE;
     diffFiles = [];
     diffLoading = false;
-    diffHunkable = false;
     historyActions = null;
     pendingHistorySha = null;
     conflictEditorOpen = false;
@@ -972,7 +978,6 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
     diffToken++;
     diffFiles = [];
     diffLoading = false;
-    diffHunkable = false;
     center = { kind: "workflowRun", runId };
     focusPanel("diff");
   }
@@ -982,33 +987,41 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
     diffToken++;
     diffFiles = [];
     diffLoading = false;
-    diffHunkable = false;
     center = { kind: "actionRun", runId };
     focusPanel("diff");
   }
 
-  /** Working-copy row selected in the changes sidebar. */
+  /**
+   * Working-copy row selected in the changes sidebar.
+   *
+   * VSCode-style scope semantics (`scope` comes from the row's section; see
+   * {@link diffScopeSides}): the staged view streams HEAD→index (what
+   * `git diff --cached` shows), the unstaged view index→worktree (plain
+   * `git diff`). When nothing is staged, index == HEAD, so the unstaged view
+   * equals the old head→worktree one — which is why every entry point that
+   * has no section (auto-open, prev/next, the file workspace) defaults to
+   * "unstaged".
+   */
   async function openDiff(
     entry: StatusEntry,
     targetRepoId?: string,
     targetRoot?: string,
     targetRepoName?: string,
+    scope: DiffScope = "unstaged",
   ): Promise<void> {
     const token = ++diffToken;
-    center = { kind: "diff", entry };
+    center = { kind: "diff", entry, scope };
     diffFiles = [];
     diffLoading = true;
-    // Only files with NO staged changes can use head→worktree hunks for
-    // staging: there the pane's hunks coincide with index→workdir.
-    diffHunkable = entry.index === "unmodified";
+    const { oldSide, newSide } = diffScopeSides(scope);
     diffRepoId = targetRepoId ?? repoId;
     diffRoot = targetRoot ?? root;
     diffRepoName = targetRepoName ?? "";
     try {
       await streamDiff(
         diffRepoId,
-        "head",
-        "worktree",
+        oldSide,
+        newSide,
         (page) => {
           if (token !== diffToken) return;
           diffFiles = page.filter(
@@ -1035,6 +1048,7 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
         diffRepoId ?? undefined,
         diffRoot ?? undefined,
         diffRepoName ?? undefined,
+        diffScope,
       );
     }
   }
@@ -1060,17 +1074,18 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
     }
   });
 
-  /** Keep the open diff's kinds (and hunk staging safety) in sync with the
-   *  refreshed status — staging from the header flips the entry state. */
+  /** Keep the open diff's entry kinds in sync with the refreshed status —
+   *  staging from the header flips the entry state. The scope stays: the pane
+   *  keeps comparing the sides the user opened (a staged view simply goes
+   *  empty once everything is staged). */
   $effect(() => {
     const current = diffEntry;
     if (!current || diffRepoId !== repoId || !status) return;
     if (center.kind !== "diff") return;
     const fresh = status.entries.find((e) => e.path === current.path);
     if (!fresh) return;
-    diffHunkable = fresh.index === "unmodified";
     if (fresh.index !== current.index || fresh.worktree !== current.worktree) {
-      center = { kind: "diff", entry: fresh };
+      center = { kind: "diff", entry: fresh, scope: center.scope };
     }
   });
 
@@ -1137,6 +1152,7 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
         diffRepoId ?? undefined,
         diffRoot ?? undefined,
         diffRepoName ?? undefined,
+        diffScope,
       );
     } catch (err) {
       toast(
@@ -1152,7 +1168,6 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
     center = EMPTY_PANE;
     diffFiles = [];
     diffLoading = false;
-    diffHunkable = false;
     diffRepoId = null;
     diffRoot = null;
     diffRepoName = null;
@@ -1177,7 +1192,6 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
     diffToken++;
     diffFiles = [];
     diffLoading = false;
-    diffHunkable = false;
   }
 
   /** History sidebar: compare results open in the center editor. */
@@ -1186,7 +1200,6 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
     diffToken++;
     diffFiles = [];
     diffLoading = false;
-    diffHunkable = false;
   }
 
   function onHistoryActions(actions: HistoryCommitActions | null): void {
@@ -1349,7 +1362,8 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
       {repoId}
       {root}
       repoName={name}
-      onOpenDiff={(e, subRepoId, subRoot, subName) => void openDiff(e, subRepoId, subRoot, subName)}
+      onOpenDiff={(e, subRepoId, subRoot, subName, scope) =>
+        void openDiff(e, subRepoId, subRoot, subName, scope)}
       onAfterMutation={refresh}
       bind:selected
       bind:hasSubmodules
@@ -1370,7 +1384,7 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
     entry={diffEntry}
     diffFiles={diffFiles}
     diffLoading={diffLoading}
-    diffHunkable={diffHunkable}
+    diffScope={diffScope}
     historyActions={historyActions}
     workflowRunId={workflowRunId}
     actionRunId={actionRunId}
@@ -1478,12 +1492,16 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
 {/snippet}
 {#snippet forgePanel()}
   {#if isRemote}
-    <aside
-      class="missing-panel flex flex-1 items-center justify-center text-ui-base text-muted-foreground"
-      title="Not available for remote projects"
-    >
-      Not available for remote projects
-    </aside>
+    <Hint label="Not available for remote projects">
+      {#snippet child({ props })}
+        <aside
+          class="missing-panel flex flex-1 items-center justify-center text-ui-base text-muted-foreground"
+          {...props}
+        >
+          Not available for remote projects
+        </aside>
+      {/snippet}
+    </Hint>
   {:else}
     {#await forgePanelImport() then ForgePanelModule}
       <ForgePanelModule.default {repoId} />
@@ -1517,41 +1535,55 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
     class="repo-header flex min-w-0 flex-none flex-wrap items-center gap-x-2 gap-y-1.5 border-b border-border bg-popover px-2.5 py-1 text-ui-base"
   >
     <span class="repo-identity flex min-w-0 flex-1 items-center gap-[0.4rem]">
-      <span
-        class="repo-name max-w-[15rem] min-w-0 flex-[0_1_auto] overflow-hidden text-ellipsis whitespace-nowrap font-semibold"
-        title={name}
-      >{name}</span>
+      <Hint label={name}>
+        {#snippet child({ props })}
+          <span
+            class="repo-name max-w-[15rem] min-w-0 flex-[0_1_auto] overflow-hidden text-ellipsis whitespace-nowrap font-semibold"
+            {...props}
+          >{name}</span>
+        {/snippet}
+      </Hint>
       {#if remoteStatus}
         <!-- Remote repository: connection chip fed by the devices store. -->
-        <Badge
-          variant="secondary"
-          class="remote-chip flex-none gap-[0.3rem] rounded-full bg-accent px-2 py-px h-auto text-ui-micro {remoteStatus === 'connected' ? 'text-foreground' : 'text-muted-foreground'}"
-          data-status={remoteStatus}
-          title={remoteStatus === "connected"
+        <Hint
+          label={remoteStatus === "connected"
             ? "Device connected"
             : remoteStatus === "connecting"
               ? "Device connecting…"
               : "Device offline"}
         >
-          <span
-            class="remote-dot h-[0.45rem] w-[0.45rem] flex-none rounded-full {remoteStatus === 'connected' ? 'bg-primary' : remoteStatus === 'connecting' ? 'bg-muted-foreground' : 'bg-border'}"
-            aria-hidden="true"
-          ></span>
-          <span class="remote-label">
-            {remoteStatus === "connected"
-              ? "connected"
-              : remoteStatus === "connecting"
-                ? "connecting…"
-                : "offline"}
-          </span>
-        </Badge>
+          {#snippet child({ props })}
+            <Badge
+              variant="secondary"
+              class="remote-chip flex-none gap-[0.3rem] rounded-full bg-accent px-2 py-px h-auto text-ui-micro {remoteStatus === 'connected' ? 'text-foreground' : 'text-muted-foreground'}"
+              {...props}
+              data-status={remoteStatus}
+            >
+              <span
+                class="remote-dot h-[0.45rem] w-[0.45rem] flex-none rounded-full {remoteStatus === 'connected' ? 'bg-primary' : remoteStatus === 'connecting' ? 'bg-muted-foreground' : 'bg-border'}"
+                aria-hidden="true"
+              ></span>
+              <span class="remote-label">
+                {remoteStatus === "connected"
+                  ? "connected"
+                  : remoteStatus === "connecting"
+                    ? "connecting…"
+                    : "offline"}
+              </span>
+            </Badge>
+          {/snippet}
+        </Hint>
       {/if}
       <BranchSwitcher {repoId} {status} onMutated={refresh} />
       <RepoQuickActions {repoId} {status} onMutated={refresh} />
-      <span
-        class="repo-root max-[980px]:hidden min-w-0 flex-[1_1_auto] overflow-hidden text-ellipsis whitespace-nowrap font-mono text-ui-micro text-muted-foreground"
-        title={root}
-      >{root}</span>
+      <Hint label={root}>
+        {#snippet child({ props })}
+          <span
+            class="repo-root max-[980px]:hidden min-w-0 flex-[1_1_auto] overflow-hidden text-ellipsis whitespace-nowrap font-mono text-ui-micro text-muted-foreground"
+            {...props}
+          >{root}</span>
+        {/snippet}
+      </Hint>
     </span>
     <span class="layout-controls ml-auto flex flex-none items-center gap-1">
       <OpenWithButton {root} />
@@ -1577,42 +1609,54 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
         value={resolved.presetId}
         onValueChange={(value) => layouts.applyPreset(root, value)}
       >
-        <Select.Trigger
-          class="preset-select max-[760px]:hidden max-w-[8.5rem] h-5 rounded-sm border-border bg-card dark:bg-card px-1 py-0 text-ui-micro text-card-foreground gap-1"
-          aria-label="Layout preset"
-          title="Layout preset"
-        >
-          <Select.Value />
-        </Select.Trigger>
+        <Hint label="Layout preset">
+          {#snippet child({ props })}
+            <Select.Trigger
+              class="preset-select max-[760px]:hidden max-w-[8.5rem] h-5 rounded-sm border-border bg-card dark:bg-card px-1 py-0 text-ui-micro text-card-foreground gap-1"
+              aria-label="Layout preset"
+              {...props}
+            >
+              <Select.Value />
+            </Select.Trigger>
+          {/snippet}
+        </Hint>
         <Select.Content>
           {#each layouts.listPresets() as preset (preset.id)}
             <Select.Item value={preset.id} label={preset.name} class="text-ui-micro" />
           {/each}
         </Select.Content>
       </Select.Root>
-      <Button
-        class="text-muted-foreground hover:bg-accent hover:text-accent-foreground"
-        variant="ghost"
-        size="icon-sm"
-        type="button"
-        aria-label="Terminal"
-        title="Open (or focus) this repository's terminal panel"
-        onclick={onNewTerminal}
-      >
-        <Icon icon={iconTerminal} size={16} />
-      </Button>
-      <Button
-        class="text-muted-foreground hover:bg-accent hover:text-accent-foreground"
-        variant="ghost"
-        size="icon-sm"
-        type="button"
-        aria-label="More repository actions"
-        title="More repository actions"
-        aria-haspopup="menu"
-        onclick={openHeaderMenu}
-      >
-        <Icon icon={iconMore} size={16} />
-      </Button>
+      <Hint label="Open (or focus) this repository's terminal panel">
+        {#snippet child({ props })}
+          <Button
+            class="text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+            variant="ghost"
+            size="icon-sm"
+            type="button"
+            {...props}
+            aria-label="Terminal"
+            onclick={onNewTerminal}
+          >
+            <Icon icon={iconTerminal} size={16} />
+          </Button>
+        {/snippet}
+      </Hint>
+      <Hint label="More repository actions">
+        {#snippet child({ props })}
+          <Button
+            class="text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+            variant="ghost"
+            size="icon-sm"
+            type="button"
+            {...props}
+            aria-label="More repository actions"
+            aria-haspopup="menu"
+            onclick={openHeaderMenu}
+          >
+            <Icon icon={iconMore} size={16} />
+          </Button>
+        {/snippet}
+      </Hint>
     </span>
   </header>
 
@@ -1708,29 +1752,33 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
       />
     </div>
     {#if showHistoryRail}
-      <button
-        class="history-rail flex w-[var(--history-rail-width)] flex-none cursor-pointer flex-col items-center gap-2 border-l border-border bg-popover py-2 text-muted-foreground hover:bg-accent hover:text-primary focus-visible:-outline-offset-2 focus-visible:outline-2 focus-visible:outline-primary"
-        type="button"
-        aria-label="Show history sidebar"
-        title="Show history sidebar"
-        onclick={showHistory}
-      >
-        <svg
-          class="h-4 w-4 flex-none"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-          aria-hidden="true"
-        >
-          <path d={PANEL_META.history.icon} />
-        </svg>
-        <span
-          class="history-rail-label rotate-180 text-ui-micro uppercase tracking-[0.04em] [writing-mode:vertical-rl]"
-        >History</span>
-      </button>
+      <Hint label="Show history sidebar" side="left">
+        {#snippet child({ props })}
+          <button
+            class="history-rail flex w-[var(--history-rail-width)] flex-none cursor-pointer flex-col items-center gap-2 border-l border-border bg-popover py-2 text-muted-foreground hover:bg-accent hover:text-primary focus-visible:-outline-offset-2 focus-visible:outline-2 focus-visible:outline-primary"
+            type="button"
+            {...props}
+            aria-label="Show history sidebar"
+            onclick={showHistory}
+          >
+            <svg
+              class="h-4 w-4 flex-none"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              aria-hidden="true"
+            >
+              <path d={PANEL_META.history.icon} />
+            </svg>
+            <span
+              class="history-rail-label rotate-180 text-ui-micro uppercase tracking-[0.04em] [writing-mode:vertical-rl]"
+            >History</span>
+          </button>
+        {/snippet}
+      </Hint>
     {/if}
   </div>
 

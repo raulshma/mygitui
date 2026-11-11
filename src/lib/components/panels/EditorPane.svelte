@@ -7,8 +7,8 @@
    * - a GitHub Actions run (`WorkflowRunView`: status, jobs, live logs),
    * - a commit's detail (`CommitDetail`: metadata, changed files, diff),
    * - compare results (`CommitDetail` in compare mode — no commit info),
-   * - a working-copy file's diff (`DiffViewer`, with hunk staging when the
-   *   shown file has no staged changes),
+   * - a working-copy file's diff (`DiffViewer`, with scope-correct hunk
+   *   actions: unstaged hunks stage/discard, staged hunks unstage),
    * - the file workspace (`FileWorkspace`: open workdir files as tabs —
    *   viewer/editor via CodeMirror, image/binary previews),
    * - an empty invitation to pick something in the sidebars.
@@ -22,11 +22,13 @@
   import type { CompareResult } from "$lib/components/panels/compare";
   import type { HistoryCommitActions } from "$lib/components/panels/historySidebar";
   import type { OpenFileInfo } from "$lib/components/files/FileWorkspace.svelte";
+  import { diffHunkActions, type DiffScope } from "$lib/components/panels/statusModel";
   import CommitDetail from "$lib/components/panels/CommitDetail.svelte";
   import DiffViewer from "$lib/components/diff/DiffViewer.svelte";
   import Icon from "$lib/components/icons/Icon.svelte";
   import EmptyState from "../layout/EmptyState.svelte";
   import { Button } from "$lib/components/ui/button/index.js";
+  import { Hint } from "$lib/components/ui/tooltip/index.js";
   import { Spinner } from "$lib/components/ui/spinner/index.js";
   import { Kbd } from "$lib/components/ui/kbd/index.js";
   import { appIcon } from "$lib/components/icons/library.svelte";
@@ -65,7 +67,7 @@
     status = null,
     diffFiles = [],
     diffLoading = false,
-    diffHunkable = false,
+    diffScope = "unstaged",
     historyActions = null,
     workflowRunId = null,
     actionRunId = null,
@@ -109,8 +111,12 @@
     /** Streamed diff for `entry`. */
     diffFiles?: FileDiff[];
     diffLoading?: boolean;
-    /** Hunk actions are only safe when the file has no staged changes. */
-    diffHunkable?: boolean;
+    /**
+     * Which working-copy comparison the streamed diff shows (VSCode
+     * semantics): `staged` = HEAD→index, `unstaged` = index→worktree.
+     * Decides the hunk actions and the empty-state wording.
+     */
+    diffScope?: DiffScope;
     /** Multi-selection action toolbar state from the history sidebar. */
     historyActions?: HistoryCommitActions | null;
     /** Custom action run taking over the editor. */
@@ -177,6 +183,21 @@
   );
   const branchLabel = $derived(
     status ? (status.branch ?? (status.detached ? "detached HEAD" : "unknown")) : "",
+  );
+
+  /**
+   * Hunk actions mirror the shown scope (see {@link diffHunkActions}): the
+   * staged view's hunks are HEAD→index, so they *unstage*; the unstaged
+   * view's hunks are index→worktree, so they stage — and only there does
+   * hunk discard exist (the backend's discard engine reads index→workdir
+   * hunks). Replaces the old `diffHunkable` gate, which approximated the
+   * unstaged view with head→worktree and only coincided when nothing was
+   * staged.
+   */
+  const hunkActions = $derived(
+    entry
+      ? diffHunkActions(entry, diffScope)
+      : { staging: undefined, discard: false },
   );
 </script>
 
@@ -276,29 +297,43 @@
       <header
         class="ehead flex min-h-7 flex-none items-center gap-[0.4rem] border-b border-border bg-popover px-2.5 py-0.5 text-ui-base"
       >
-        <span
-          class="epath min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap font-mono text-ui-meta text-foreground"
-          title={entry.path}
-        >
-          {#if entry.old_path}{entry.old_path} → {/if}{entry.path}
-        </span>
+        <Hint label={entry.path}>
+          {#snippet child({ props })}
+            <span
+              class="epath min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap font-mono text-ui-meta text-foreground"
+              {...props}
+            >
+              {#if entry.old_path}{entry.old_path} → {/if}{entry.path}
+            </span>
+          {/snippet}
+        </Hint>
         {#if repoName}
-          <span
-            class="echip chip-repo flex-none whitespace-nowrap rounded-full bg-accent px-2 text-ui-tiny leading-[1.5] text-muted-foreground"
-            title={`Repository / Submodule: ${repoName}`}
-          >{repoName}</span>
+          <Hint label={`Repository / Submodule: ${repoName}`}>
+            {#snippet child({ props })}
+              <span
+                class="echip chip-repo flex-none whitespace-nowrap rounded-full bg-accent px-2 text-ui-tiny leading-[1.5] text-muted-foreground"
+                {...props}
+              >{repoName}</span>
+            {/snippet}
+          </Hint>
         {/if}
-        <span
-          class="echip flex-none whitespace-nowrap rounded-full bg-accent px-2 text-ui-tiny leading-[1.5] {entry.index !==
-          "unmodified"
-            ? "text-accent-foreground"
-            : "text-muted-foreground"}"
-          title={entry.index !== "unmodified"
+        <Hint
+          label={entry.index !== "unmodified"
             ? "This file has staged changes"
             : "Changes are not staged"}
         >
-          {entry.index !== "unmodified" ? "staged" : "unstaged"}
-        </span>
+          {#snippet child({ props })}
+            <span
+              class="echip flex-none whitespace-nowrap rounded-full bg-accent px-2 text-ui-tiny leading-[1.5] {entry.index !==
+              "unmodified"
+                ? "text-accent-foreground"
+                : "text-muted-foreground"}"
+              {...props}
+            >
+              {entry.index !== "unmodified" ? "staged" : "unstaged"}
+            </span>
+          {/snippet}
+        </Hint>
         {#if entryCount > 1 && onPrevFile && onNextFile}
           <span class="enav inline-flex flex-none items-center gap-[0.05rem]">
             <Button
@@ -335,71 +370,95 @@
         {/if}
         {#if onStageEntry}
           {#if entry.index === "unmodified"}
-            <Button
-              class="h-5 flex-none rounded-sm px-2 text-ui-micro leading-[1.5] font-normal"
-              variant="outline"
-              type="button"
-              title="Stage this file (move its changes into the commit)"
-              onclick={() => onStageEntry?.(false)}
-            >
-              Stage
-            </Button>
+            <Hint label="Stage this file (move its changes into the commit)">
+              {#snippet child({ props })}
+                <Button
+                  class="h-5 flex-none rounded-sm px-2 text-ui-micro leading-[1.5] font-normal"
+                  variant="outline"
+                  type="button"
+                  {...props}
+                  onclick={() => onStageEntry?.(false)}
+                >
+                  Stage
+                </Button>
+              {/snippet}
+            </Hint>
           {:else}
-            <Button
-              class="h-5 flex-none rounded-sm px-2 text-ui-micro leading-[1.5] font-normal"
-              variant="outline"
-              type="button"
-              title="Unstage this file (keep the worktree changes)"
-              onclick={() => onStageEntry?.(true)}
-            >
-              Unstage
-            </Button>
+            <Hint label="Unstage this file (keep the worktree changes)">
+              {#snippet child({ props })}
+                <Button
+                  class="h-5 flex-none rounded-sm px-2 text-ui-micro leading-[1.5] font-normal"
+                  variant="outline"
+                  type="button"
+                  {...props}
+                  onclick={() => onStageEntry?.(true)}
+                >
+                  Unstage
+                </Button>
+              {/snippet}
+            </Hint>
           {/if}
         {/if}
         {#if onDiscardEntry && entry.worktree !== "unmodified"}
-          <Button
-            class="h-5 flex-none rounded-sm px-2 text-ui-micro leading-[1.5] font-normal"
-            variant="destructive"
-            type="button"
-            title="Discard this file's changes (a safety checkpoint is created first)"
-            onclick={onDiscardEntry}
-          >
-            Discard
-          </Button>
+          <Hint label="Discard this file's changes (a safety checkpoint is created first)">
+            {#snippet child({ props })}
+              <Button
+                class="h-5 flex-none rounded-sm px-2 text-ui-micro leading-[1.5] font-normal"
+                variant="destructive"
+                type="button"
+                {...props}
+                onclick={onDiscardEntry}
+              >
+                Discard
+              </Button>
+            {/snippet}
+          </Hint>
         {/if}
         {#if onEditEntry}
-          <Button
-            class="h-5 flex-none rounded-sm px-2 text-ui-micro leading-[1.5] font-normal"
-            variant="outline"
-            type="button"
-            title="Edit this file in the file workspace"
-            onclick={onEditEntry}
-          >
-            Edit
-          </Button>
+          <Hint label="Edit this file in the file workspace">
+            {#snippet child({ props })}
+              <Button
+                class="h-5 flex-none rounded-sm px-2 text-ui-micro leading-[1.5] font-normal"
+                variant="outline"
+                type="button"
+                {...props}
+                onclick={onEditEntry}
+              >
+                Edit
+              </Button>
+            {/snippet}
+          </Hint>
         {/if}
         {#if onPopoutDiff}
-          <Button
-            class="h-5 flex-none rounded-sm px-2 text-ui-micro leading-[1.5] font-normal"
-            variant="outline"
-            type="button"
-            title="Open the diff panel in its own window"
-            onclick={onPopoutDiff}
-          >
-            Pop out
-          </Button>
+          <Hint label="Open the diff panel in its own window">
+            {#snippet child({ props })}
+              <Button
+                class="h-5 flex-none rounded-sm px-2 text-ui-micro leading-[1.5] font-normal"
+                variant="outline"
+                type="button"
+                {...props}
+                onclick={onPopoutDiff}
+              >
+                Pop out
+              </Button>
+            {/snippet}
+          </Hint>
         {/if}
         {#if onClose}
-          <Button
-            class="h-5 flex-none rounded-sm px-2 text-ui-micro leading-[1.5] font-normal"
-            variant="outline"
-            type="button"
-            aria-label="Close diff"
-            title="Close diff"
-            onclick={onClose}
-          >
-            ×
-          </Button>
+          <Hint label="Close diff">
+            {#snippet child({ props })}
+              <Button
+                class="h-5 flex-none rounded-sm px-2 text-ui-micro leading-[1.5] font-normal"
+                variant="outline"
+                type="button"
+                {...props}
+                aria-label="Close diff"
+                onclick={onClose}
+              >
+                ×
+              </Button>
+            {/snippet}
+          </Hint>
         {/if}
       </header>
       <div class="ebody flex min-h-0 flex-1 flex-col overflow-hidden">
@@ -412,13 +471,17 @@
             Loading diff…
           </p>
         {:else if diffFiles.length === 0}
-          <EmptyState title="No diff against HEAD for this file." />
+          <EmptyState
+            title={diffScope === "staged"
+              ? "No staged changes for this file."
+              : "No unstaged changes for this file."}
+          />
         {:else}
           <DiffViewer
             files={diffFiles}
             {repoId}
-            hunkStaging={diffHunkable ? "stage" : undefined}
-            hunkDiscard={diffHunkable}
+            hunkStaging={hunkActions.staging}
+            hunkDiscard={hunkActions.discard}
             {onMutated}
           />
         {/if}
@@ -449,20 +512,28 @@
               : `${changeCount} changed ${changeCount === 1 ? "file" : "files"}`}
           </span>
           {#if status.ahead > 0}
-            <span
-              class="wchip wahead inline-flex items-center gap-[0.2rem] whitespace-nowrap rounded-full border border-transparent bg-accent px-2 py-px text-ui-micro leading-[1.4] tabular-nums text-accent-foreground"
-              title={`${status.ahead} ${status.ahead === 1 ? "commit" : "commits"} to push`}
-            >
-              ↑ {status.ahead} to push
-            </span>
+            <Hint label={`${status.ahead} ${status.ahead === 1 ? "commit" : "commits"} to push`}>
+              {#snippet child({ props })}
+                <span
+                  class="wchip wahead inline-flex items-center gap-[0.2rem] whitespace-nowrap rounded-full border border-transparent bg-accent px-2 py-px text-ui-micro leading-[1.4] tabular-nums text-accent-foreground"
+                  {...props}
+                >
+                  ↑ {status.ahead} to push
+                </span>
+              {/snippet}
+            </Hint>
           {/if}
           {#if status.behind > 0}
-            <span
-              class="wchip wbehind inline-flex items-center gap-[0.2rem] whitespace-nowrap rounded-full border border-transparent bg-muted px-2 py-px text-ui-micro leading-[1.4] tabular-nums text-muted-foreground"
-              title={`${status.behind} ${status.behind === 1 ? "commit" : "commits"} to pull`}
-            >
-              ↓ {status.behind} to pull
-            </span>
+            <Hint label={`${status.behind} ${status.behind === 1 ? "commit" : "commits"} to pull`}>
+              {#snippet child({ props })}
+                <span
+                  class="wchip wbehind inline-flex items-center gap-[0.2rem] whitespace-nowrap rounded-full border border-transparent bg-muted px-2 py-px text-ui-micro leading-[1.4] tabular-nums text-muted-foreground"
+                  {...props}
+                >
+                  ↓ {status.behind} to pull
+                </span>
+              {/snippet}
+            </Hint>
           {/if}
         </div>
       {:else}

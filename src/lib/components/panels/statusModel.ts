@@ -12,9 +12,68 @@
  *              status side is conflicted.
  */
 
-import type { ChangeKind, RepoStatus, StatusEntry, SubmoduleInfo } from "$lib/ipc/types";
+import type {
+  ChangeKind,
+  DiffSide,
+  RepoStatus,
+  StatusEntry,
+  SubmoduleInfo,
+} from "$lib/ipc/types";
 
 export type SectionId = "staged" | "changes";
+
+/**
+ * Which working-copy comparison a diff pane shows (VSCode semantics):
+ * `staged` rows compare HEAD→index, `unstaged` rows compare index→worktree.
+ */
+export type DiffScope = "staged" | "unstaged";
+
+/**
+ * The IPC diff sides a scope streams: staged scope = HEAD vs index (what
+ * `git diff --cached` shows), unstaged scope = index vs worktree (what plain
+ * `git diff` shows). When nothing is staged, index == HEAD, so the unstaged
+ * view equals the old head→worktree one.
+ */
+export function diffScopeSides(
+  scope: DiffScope,
+): { oldSide: DiffSide; newSide: DiffSide } {
+  return scope === "staged"
+    ? { oldSide: "head", newSide: "index" }
+    : { oldSide: "index", newSide: "worktree" };
+}
+
+/** Diff scope for a status row's section (staged group vs changes group). */
+export function diffScopeForSection(section: SectionId): DiffScope {
+  return section === "staged" ? "staged" : "unstaged";
+}
+
+/**
+ * Hunk-level actions offered for `entry` viewed at `scope`. Both sides of the
+ * pair mirror the backend's selection engine: "stage" hunks are computed from
+ * index→workdir, "unstage" hunks from HEAD→index, and hunk *discard* always
+ * operates on index→workdir hunks — so it is only offered in the unstaged
+ * scope.
+ */
+export function diffHunkActions(
+  entry: StatusEntry,
+  scope: DiffScope,
+): { staging: "stage" | "unstage" | undefined; discard: boolean } {
+  // Conflicted paths cannot be staged from a diff (unmerged index entries);
+  // they open in the conflict editor anyway.
+  if (entry.index === "conflicted" || entry.worktree === "conflicted") {
+    return { staging: undefined, discard: false };
+  }
+  if (scope === "staged") {
+    // HEAD→index hunks pair with the unstage direction. Hunk discard stays
+    // off: the backend's discard engine reads index→workdir hunks, which the
+    // staged view does not show.
+    return { staging: "unstage", discard: false };
+  }
+  // Untracked workdir files: whole-file discard has a dedicated path (the
+  // file is deleted); hunk surgery would only empty it.
+  const untracked = entry.index === "untracked" || entry.worktree === "untracked";
+  return { staging: "stage", discard: !untracked };
+}
 
 /** VS Code displays the index group above the working tree group. */
 export const SECTION_ORDER: readonly SectionId[] = ["staged", "changes"];
