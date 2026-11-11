@@ -3,10 +3,12 @@
    * TerminalPanel (M5 lane G2) — xterm.js UI for the per-repo PTY.
    *
    * All xterm.js knowledge lives here: the module script registers the real
-   * terminal factory (Terminal + FitAddon + WebLinksAddon, theme mapped from
-   * the M3 CSS variables) with the terminal store singleton; the instance
+   * terminal factory (Terminal + FitAddon + WebLinksAddon, theme resolved by
+   * the terminal theme preference — fixed light/dark palettes or the live
+   * M3 CSS-var derivation) with the terminal store singleton; the instance
    * script only talks to the store's `TerminalLike`/`TerminalHandle` API.
-   * See `$lib/terminal/terminalStore.svelte.ts` for the session lifecycle.
+   * See `$lib/terminal/terminalStore.svelte.ts` for the session lifecycle
+   * and `$lib/terminal/terminalThemes.svelte.ts` for the preference.
    * `remote` repositories (on an SSH device) get a remote shell instead of
    * a local pty — same UI, the store branches the transport.
    */
@@ -18,9 +20,12 @@
   import {
     TERMINAL_FONT_SIZE,
     terminals,
-    terminalTheme,
     type TerminalHandle,
   } from "$lib/terminal/terminalStore.svelte";
+  import {
+    activeTerminalTheme,
+    startTerminalThemeSync,
+  } from "$lib/terminal/terminalThemes.svelte";
 
   /** The real xterm factory — registered once with the app-wide store. */
   terminals.setFactory((): TerminalHandle => {
@@ -29,7 +34,7 @@
         'ui-monospace, Consolas, "Cascadia Mono", "Courier New", monospace',
       fontSize: TERMINAL_FONT_SIZE,
       scrollback: 5000,
-      theme: terminalTheme() as ITheme,
+      theme: activeTerminalTheme() as ITheme,
     });
     const fit = new FitAddon();
     term.loadAddon(fit);
@@ -50,13 +55,26 @@
       },
     };
   });
+
+  // Re-theme every live session when the app's resolved scheme changes
+  // (covers manual app-theme switches too — `THEME_SCHEME_EVENT` fires on
+  // those, unlike `matchMedia`). Preference changes re-theme through the
+  // store itself. Idempotent; lives for the app's lifetime like the factory.
+  startTerminalThemeSync();
 </script>
 
 <script lang="ts">
   import { isTauri } from "$lib/entry/dragdrop";
-  import { onSchemeChange } from "$lib/terminal/terminalStore.svelte";
   import type { TerminalSession } from "$lib/terminal/terminalStore.svelte";
+  import {
+    TERMINAL_THEME_TITLES,
+    terminalThemePref,
+    type TerminalThemePreference,
+  } from "$lib/terminal/terminalThemes.svelte";
   import { Button } from "$lib/components/ui/button/index.js";
+  import { Hint } from "$lib/components/ui/tooltip/index.js";
+  import Icon from "$lib/components/icons/Icon.svelte";
+  import { appIcon } from "$lib/components/icons/library.svelte";
 
   let { repoId, remote = false }: { repoId: string; remote?: boolean } = $props();
 
@@ -111,13 +129,21 @@
     return () => observer.disconnect();
   });
 
-  // Follow OS light/dark switches: rebuild the theme from the fresh tokens.
-  $effect(() => {
-    if (!supported) return;
-    return onSchemeChange(() => {
-      terminals.session(repoId)?.setTheme?.(terminalTheme());
-    });
-  });
+  // The header's theme toggle: the icon follows the current terminal theme
+  // preference (system/light/dark); re-theming of all live sessions happens
+  // inside the preference store.
+  const THEME_ICONS: Record<TerminalThemePreference, string> = {
+    system: "brightness-auto",
+    light: "sunny",
+    dark: "bedtime",
+  };
+
+  const themeIcon = $derived(appIcon(THEME_ICONS[terminalThemePref.preference])!);
+  const themeTitle = $derived(TERMINAL_THEME_TITLES[terminalThemePref.preference]);
+
+  function onTerminalTheme(): void {
+    terminalThemePref.cycle();
+  }
 
   function onHostClick(): void {
     terminals.session(repoId)?.term?.focus();
@@ -139,6 +165,21 @@
       <span class="term-status text-muted-foreground">{statusLabel}</span>
     {/if}
     <span class="term-actions ml-auto flex gap-1">
+      <Hint label={themeTitle}>
+        {#snippet child({ props })}
+          <Button
+            {...props}
+            class="term-btn hover:bg-accent hover:text-primary focus-visible:bg-accent focus-visible:text-primary"
+            variant="outline"
+            size="icon-xs"
+            type="button"
+            disabled={!supported}
+            onclick={onTerminalTheme}
+          >
+            <Icon icon={themeIcon} size={12} />
+          </Button>
+        {/snippet}
+      </Hint>
       <Button
         class="term-btn whitespace-nowrap hover:bg-accent hover:text-primary focus-visible:bg-accent focus-visible:text-primary"
         variant="outline"

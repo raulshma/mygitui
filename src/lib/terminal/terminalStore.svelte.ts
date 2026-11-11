@@ -549,27 +549,3 @@ export function terminalTheme(): TerminalTheme {
   return theme;
 }
 
-/**
- * Subscribes to OS light/dark scheme changes; returns an unlisten function
- * (a no-op where `matchMedia` is unavailable, e.g. jsdom). Never throws.
- */
-export function onSchemeChange(cb: () => void): () => void {
-  try {
-    if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
-      return () => {};
-    }
-    const query = window.matchMedia("(prefers-color-scheme: dark)");
-    const onChange = (): void => cb();
-    if (typeof query.addEventListener === "function") {
-      query.addEventListener("change", onChange);
-      return () => query.removeEventListener("change", onChange);
-    }
-    if (typeof query.addListener === "function") {
-      query.addListener(onChange);
-      return () => query.removeListener(onChange);
-    }
-    return () => {};
-  } catch {
-    return () => {};
-  }
-}
