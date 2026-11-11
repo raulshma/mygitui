@@ -27,12 +27,13 @@
 import { conflicts, rebaseAbort, rebaseContinue, rebaseState } from "$lib/ipc/client";
 import type { ConflictFile, RebaseState, RebaseStep } from "$lib/ipc/types";
 import { toast } from "$lib/toast";
+import { describeError } from "$lib/errors";
 
 /** Poll interval for `rebase_state` (contract: every 500ms). */
 export const REBASE_POLL_MS = 500;
 
 function errorMessage(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
+  return describeError(err);
 }
 
 export class RebaseMonitor {

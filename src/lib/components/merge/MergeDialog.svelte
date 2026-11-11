@@ -22,6 +22,7 @@
   import { Checkbox } from "$lib/components/ui/checkbox/index.js";
   import { Label } from "$lib/components/ui/label/index.js";
   import { workingCopyDirty } from "./mergeModel";
+  import { describeError } from "$lib/errors";
 
   let {
     open,
@@ -103,7 +104,7 @@
       onDone?.(result);
     } catch (err) {
       toast(
-        `Merge failed: ${err instanceof Error ? err.message : String(err)}`,
+        `Merge failed: ${describeError(err)}`,
         { kind: "error" },
       );
       onDone?.(null);

@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { branches, fetchRepo, remotes } from "$lib/ipc/client";
 import type { BranchInfo, NetStats, RemoteInfo } from "$lib/ipc/types";
 import { getToasts } from "$lib/toast";
+import { appSettings, APP_SETTINGS_DEFAULTS } from "$lib/state/appSettings.svelte";
 import {
   AutofetchStore,
   upstreamMoved,
@@ -271,6 +272,94 @@ describe("AutofetchStore", () => {
     expect(store.isRunning(REPO_ID)).toBe(true);
 
     store.stopAll();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Global default cadence (appSettings.defaultAutofetchMinutes)
+// ---------------------------------------------------------------------------
+
+describe("AutofetchStore global default cadence", () => {
+  afterEach(() => {
+    // These tests mutate the app-wide settings singleton; restore the default.
+    appSettings.update({
+      defaultAutofetchMinutes: APP_SETTINGS_DEFAULTS.defaultAutofetchMinutes,
+    });
+  });
+
+  it("repos without an override follow the global default cadence", async () => {
+    appSettings.update({ defaultAutofetchMinutes: 5 });
+    const store = new AutofetchStore(memStorage());
+
+    expect(store.getInterval(ROOT)).toBe(5);
+    await store.start(REPO_ID, ROOT);
+    expect(store.isRunning(REPO_ID)).toBe(true);
+
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+    expect(mockFetchRepo).toHaveBeenCalledTimes(1);
+    expect(mockFetchRepo).toHaveBeenCalledWith(REPO_ID, {
+      remote: "origin",
+      prune: true,
+      refs: [],
+      depth: null,
+    });
+
+    store.stopAll();
+  });
+
+  it("a per-repo override wins over the global default", async () => {
+    appSettings.update({ defaultAutofetchMinutes: 2 });
+    const store = new AutofetchStore(memStorage({
+      "mygitui.autofetch": JSON.stringify({ [ROOT]: 10 }),
+    }));
+
+    expect(store.getInterval(ROOT)).toBe(10);
+    await store.start(REPO_ID, ROOT);
+
+    // The 2-minute default must not fire; the 10-minute override does.
+    await vi.advanceTimersByTimeAsync(2 * 60_000);
+    expect(mockFetchRepo).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(8 * 60_000);
+    expect(mockFetchRepo).toHaveBeenCalledTimes(1);
+
+    store.stopAll();
+  });
+
+  it("clearing an override falls back to the global default (restarts when positive)", async () => {
+    appSettings.update({ defaultAutofetchMinutes: 3 });
+    const storage = memStorage({
+      "mygitui.autofetch": JSON.stringify({ [ROOT]: 10 }),
+    });
+    const store = new AutofetchStore(storage);
+    await store.start(REPO_ID, ROOT);
+    expect(store.isRunning(REPO_ID)).toBe(true);
+
+    store.setInterval(ROOT, 0); // override cleared — the global default applies
+    await flush(); // the internal restart resolves the remote asynchronously
+    expect(store.getInterval(ROOT)).toBe(3);
+    expect(store.isRunning(REPO_ID)).toBe(true);
+    // The default is not persisted per repo — the override just stays cleared.
+    expect(JSON.parse(storage.dump()["mygitui.autofetch"]!)).toEqual({});
+
+    await vi.advanceTimersByTimeAsync(3 * 60_000);
+    expect(mockFetchRepo).toHaveBeenCalledTimes(1);
+
+    store.stopAll();
+  });
+
+  it("clearing an override stays off when the global default is 0", async () => {
+    const store = new AutofetchStore(memStorage({
+      "mygitui.autofetch": JSON.stringify({ [ROOT]: 10 }),
+    }));
+    await store.start(REPO_ID, ROOT);
+    expect(store.isRunning(REPO_ID)).toBe(true);
+
+    store.setInterval(ROOT, 0);
+    expect(store.isRunning(REPO_ID)).toBe(false);
+    expect(store.getInterval(ROOT)).toBe(0);
+
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+    expect(mockFetchRepo).not.toHaveBeenCalled();
   });
 });
 

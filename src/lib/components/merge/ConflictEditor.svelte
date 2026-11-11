@@ -49,6 +49,7 @@
     type ResolutionChoice,
     type Segment,
   } from "./conflictModel";
+  import { describeError } from "$lib/errors";
 
   let {
     repoId,
@@ -156,7 +157,7 @@
   }
 
   function errorMessage(err: unknown): string {
-    return err instanceof Error ? err.message : String(err);
+    return describeError(err);
   }
 
   /** Conflict count of a (loaded) file; null while content is unavailable. */

@@ -33,6 +33,7 @@
   import Icon from "$lib/components/icons/Icon.svelte";
   import { checkpointTitle } from "./safetyModel";
   import { appIcon } from "$lib/components/icons/library.svelte";
+  import { describeError } from "$lib/errors";
 
   let {
     repoId,
@@ -87,7 +88,7 @@
       afterMutation();
     } catch (err) {
       toast(
-        `Restore failed: ${err instanceof Error ? err.message : String(err)}`,
+        `Restore failed: ${describeError(err)}`,
         { kind: "error" },
       );
     } finally {
@@ -115,7 +116,7 @@
       );
     } catch (err) {
       toast(
-        `Clean failed: ${err instanceof Error ? err.message : String(err)}`,
+        `Clean failed: ${describeError(err)}`,
         { kind: "error" },
       );
     } finally {
@@ -141,7 +142,7 @@
     try {
       trash = await branchTrashList(repoId);
     } catch (err) {
-      trashError = err instanceof Error ? err.message : String(err);
+      trashError = describeError(err);
     } finally {
       trashLoading = false;
     }
@@ -165,7 +166,7 @@
       onMutated?.();
     } catch (err) {
       toast(
-        `Restore failed: ${err instanceof Error ? err.message : String(err)}`,
+        `Restore failed: ${describeError(err)}`,
         { kind: "error" },
       );
     } finally {

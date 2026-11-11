@@ -15,10 +15,14 @@
    *   switches through the shared {@link branchOpsController}; the ⋮ menu
    *   and right-click offer Switch / Push / Push and set upstream / Rename
    *   (PromptDialog, old name preselected) / Copy / Delete;
-   * - "Remote branches" rows (ones a local branch already tracks are
-   *   hidden). Click/Enter checks out through the controller; the menu
-   *   offers Checkout / Copy / Delete remote branch (local ConfirmDialog →
-   *   `push --delete`, mirroring RemotePanel's flow and toast texts);
+   * - "Remote branches" rows — ALL of them, so nothing a user is looking
+   *   for is hidden: rows a local branch already tracks carry a subtle
+   *   "tracked by <local>" affordance and activate as a plain switch to
+   *   that local branch, the rest check out through the controller's
+   *   dirty-gated requestCheckoutRemote; the menu offers Checkout (or
+   *   Switch to <local>) / Copy / Delete remote branch (local
+   *   ConfirmDialog → `push --delete`, mirroring RemotePanel's flow and
+   *   toast texts);
    * - a footer with Fetch (same shared verb + toasts as RepoQuickActions),
    *   Refresh (reload both lists), and "Manage branches" (focus-panel
    *   event → the Branches panel tab).
@@ -64,6 +68,7 @@
   import { Button } from "$lib/components/ui/button/index.js";
   import { Input } from "$lib/components/ui/input/index.js";
   import { Hint } from "$lib/components/ui/tooltip/index.js";
+  import { describeError } from "$lib/errors";
 
   let {
     repoId,
@@ -145,17 +150,16 @@
       : localList.filter((b) => b.name.toLowerCase().includes(q)),
   );
 
-  /** Remote branches, minus ones a local branch already tracks. */
+  /**
+   * Remote branches — every one of them (nothing hidden): rows a local
+   * branch already tracks are marked with a "tracked by" affordance and
+   * activate as a switch to that local branch instead of a checkout.
+   */
   const visibleRemote = $derived.by(() => {
-    const tracked = new Set(
-      localList.flatMap((b) => (b.upstream ? [b.upstream] : [])),
+    if (q === "") return remoteList;
+    return remoteList.filter((rb) =>
+      `${rb.remote}/${rb.name}`.toLowerCase().includes(q),
     );
-    return remoteList.filter((rb) => {
-      if (tracked.has(`${rb.remote}/${rb.name}`)) return false;
-      return (
-        q === "" || `${rb.remote}/${rb.name}`.toLowerCase().includes(q)
-      );
-    });
   });
 
   /** A non-empty query that isn't an exact local branch offers creation. */
@@ -225,7 +229,7 @@
       remoteList = remote;
     } catch (err) {
       if (repoId !== forRepo) return;
-      error = err instanceof Error ? err.message : String(err);
+      error = describeError(err);
     } finally {
       if (repoId === forRepo) loading = false;
     }
@@ -313,8 +317,10 @@
 
   async function checkoutRemote(rb: RemoteBranchInfo): Promise<void> {
     close();
-    // The controller toasts + reloads (setReload) + notifies onMutated.
-    await controller.checkoutRemote(rb.remote, rb.name);
+    // requestCheckoutRemote gates on a dirty worktree (the same stash /
+    // force choice as a local switch); the controller toasts + reloads
+    // (setReload) + notifies onMutated.
+    await controller.requestCheckoutRemote(rb.remote, rb.name);
   }
 
   /** `push --delete` on the remote branch (shared helper + texts). */
@@ -382,10 +388,19 @@
     showMenuAt(event, entries);
   }
 
-  /** Right-click / ⋮ menu for a remote row. */
+  /** Right-click / ⋮ menu for a remote row (checkout first, delete last). */
   function remoteMenu(event: MouseEvent, rb: RemoteBranchInfo): void {
+    const tracked = rb.tracked_by;
     const entries: MenuEntry[] = [
-      { id: "checkout", label: "Checkout", run: () => void checkoutRemote(rb) },
+      // Tracked remotes switch to their local branch (a fresh checkout
+      // would refuse: the branch already exists); untracked ones check out.
+      tracked
+        ? {
+            id: "switch",
+            label: `Switch to ${tracked}`,
+            run: () => switchTo(tracked),
+          }
+        : { id: "checkout", label: "Checkout", run: () => void checkoutRemote(rb) },
       {
         id: "copy",
         label: "Copy name",
@@ -418,7 +433,7 @@
       void reload();
     } catch (err) {
       toast(
-        `Fetch failed: ${err instanceof Error ? err.message : String(err)}`,
+        `Fetch failed: ${describeError(err)}`,
         { kind: "error" },
       );
     } finally {
@@ -434,6 +449,9 @@
   function activate(row: Row): void {
     if (row.kind === "create") void createFromQuery();
     else if (row.kind === "local") switchTo(row.branch.name);
+    // A remote branch that a local branch tracks activates as a plain
+    // switch to that local (a fresh checkout would refuse: it exists).
+    else if (row.rb.tracked_by) switchTo(row.rb.tracked_by);
     else void checkoutRemote(row.rb);
   }
 
@@ -707,8 +725,15 @@
               <span class="sha flex-none font-mono text-ui-micro text-muted-foreground">
                 {row.rb.sha.slice(0, 7)}
               </span>
+              {#if row.rb.tracked_by}
+                <span
+                  class="tracked min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap text-ui-micro text-muted-foreground"
+                >
+                  tracked by {row.rb.tracked_by}
+                </span>
+              {/if}
               <span class="row-actions ml-auto flex flex-none items-center">
-                <Hint label="Checkout, copy, or delete this remote branch">
+                <Hint label="Checkout or switch, copy, or delete this remote branch">
                   {#snippet child({ props })}
                     <Button
                       class="relative size-6 after:absolute after:-inset-1 after:content-['']"

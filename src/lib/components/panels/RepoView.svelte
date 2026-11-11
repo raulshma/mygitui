@@ -159,6 +159,7 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
   import { startAuthEvents, startOpsEvents } from "$lib/stores/ops.svelte";
   import { autofetch } from "$lib/stores/autofetch.svelte";
   import { remoteDevices } from "$lib/stores/remoteDevices.svelte";
+  import { appSettings } from "$lib/state/appSettings.svelte";
   import { toast } from "$lib/toast";
   import { contextMenu, type MenuEntry } from "$lib/components/menu/contextMenuStore.svelte";
   import { appIcon } from "$lib/components/icons/library.svelte";
@@ -957,11 +958,50 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
     historyActions = null;
     pendingHistorySha = null;
     conflictEditorOpen = false;
+    // Status-derived flags are repo-scoped too: a stale `hasSubmodules`
+    // from repo A would suppress repo B's CommitBar until the next status
+    // snapshot landed.
+    hasSubmodules = false;
     // The file workspace is repo-scoped: open tabs are keyed by workdir
     // path only, and keeping them across a switch would run repo A's
     // paths against repo B's IPC (read/write the wrong repo's files).
     openFiles = [];
     activeFile = null;
+  });
+
+  // -- repo-switch transition --------------------------------------------------
+
+  let workspaceEl = $state<HTMLElement | null>(null);
+  /** RepoId the workspace transition was last applied to (null = mount). */
+  let transitionedRepoId: string | null = null;
+
+  $effect(() => {
+    // Subtle fade/slide when the repoId PROP changes — not on mount. The
+    // workspace element is reused across switches, so the Web Animations
+    // API (el.animate) keeps the transition restartable without a remount
+    // or CSS-class hacks.
+    const id = repoId;
+    if (transitionedRepoId === null) {
+      transitionedRepoId = id;
+      return;
+    }
+    if (id === transitionedRepoId) return;
+    transitionedRepoId = id;
+    const el = workspaceEl;
+    if (!el || typeof el.animate !== "function") return;
+    if (
+      typeof matchMedia === "function" &&
+      matchMedia("(prefers-reduced-motion: reduce)").matches
+    ) {
+      return;
+    }
+    el.animate(
+      [
+        { opacity: 0.35, transform: "translateY(3px)" },
+        { opacity: 1, transform: "translateY(0)" },
+      ],
+      { duration: 200, easing: "cubic-bezier(0.2, 0, 0, 1)" },
+    );
   });
 
   // Repos persisted before the editor existed may have no `diff` panel:
@@ -1124,11 +1164,19 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
     }
   }
 
-  /** Discard confirmation for the open file (discard checkpoints upstream). */
+  /** Discard confirmation for the open file (discard checkpoints upstream).
+   *  Both settings are read reactively so a mid-session Settings toggle
+   *  applies to the next discard immediately. */
   let discardOpen = $state(false);
+  const confirmDiscardEnabled = $derived(appSettings.confirmDiscard);
+  const checkpointsEnabled = $derived(appSettings.checkpointsEnabled);
 
   function requestDiscardOpenEntry(): void {
-    if (diffEntry !== null) discardOpen = true;
+    if (diffEntry === null) return;
+    // "Confirm before discard" off: discard right away (same skip as
+    // StatusPanel's row menus).
+    if (!confirmDiscardEnabled) void discardOpenEntry();
+    else discardOpen = true;
   }
 
   async function discardOpenEntry(): Promise<void> {
@@ -1142,9 +1190,20 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
       targets.push({ file: current.old_path });
     }
     try {
-      await discard(targetRepoId, targets);
+      // A non-null warning means the discard succeeded but the undo
+      // checkpoint failed (e.g. no git identity) — surface it instead
+      // of silently losing the undo point.
+      const warning = await discard(targetRepoId, targets, {
+        checkpoint: checkpointsEnabled,
+      });
       discardOpen = false;
-      toast(`Discarded changes in ${current.path}`, { kind: "success" });
+      if (warning) {
+        toast(`Discarded, but the undo checkpoint failed: ${warning}`, {
+          kind: "info",
+        });
+      } else {
+        toast(`Discarded changes in ${current.path}`, { kind: "success" });
+      }
       refresh();
       if (diffRepoId && diffRepoId !== repoId) void refreshStatus(diffRepoId);
       void openDiff(
@@ -1530,6 +1589,7 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
      wide panel content from stretching the workspace past the window edge. -->
 <div
   class="repo-workspace flex h-full w-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden"
+  bind:this={workspaceEl}
 >
   <header
     class="repo-header flex min-w-0 flex-none flex-wrap items-center gap-x-2 gap-y-1.5 border-b border-border bg-popover px-2.5 py-1 text-ui-base"
@@ -1856,7 +1916,11 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
   bind:open={discardOpen}
   title="Discard changes?"
   message={diffEntry
-    ? `All uncommitted changes in ${diffEntry.path} are discarded. A safety checkpoint is created first — restore it from the Undo panel.`
+    ? `All uncommitted changes in ${diffEntry.path} are discarded.${
+        checkpointsEnabled
+          ? " A safety checkpoint is created first — restore it from the Undo panel."
+          : " No checkpoint is created (checkpoints are disabled in Settings)."
+      }`
     : "All uncommitted changes in this file are discarded."}
   confirmLabel="Discard changes"
   danger

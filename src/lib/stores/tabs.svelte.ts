@@ -21,6 +21,11 @@ import type { RepoId, RepoStatus } from "$lib/ipc/types";
 import { onRepoChange } from "$lib/events/repoEvents";
 import { RecentRepoStore } from "$lib/entry/recentRepos";
 import { terminals } from "$lib/terminal/terminalStore.svelte";
+import { opStore } from "$lib/stores/ops.svelte";
+import { conflictsStore } from "$lib/components/panels/conflictsStore.svelte";
+import { statsStore } from "$lib/stats/statsStore.svelte";
+import { projectsStore } from "$lib/stores/projects.svelte";
+import { describeError } from "$lib/errors";
 
 /** One open repository tab. */
 export interface Tab {
@@ -422,7 +427,7 @@ export class TabStore {
       void this.refreshStatus(tab.id);
       return tab;
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = describeError(err);
       const tab: Tab = {
         id: uri,
         name: remoteRepoName(path),
@@ -487,10 +492,17 @@ export class TabStore {
    * anything — the shell kept running until app exit, violating the M5
    * contract ("the FE must `pty_kill` each terminal panel's session when
    * its tab closes"). `dispose` is a no-op for repos without a session.
+   *
+   * The same choke point drops the per-repo panel caches (conflicts
+   * banner, stats heatmap, detected projects) — they must not outlive
+   * their repo id and leak into the next open of the same path.
    */
   async closeTab(id: RepoId): Promise<void> {
     if (this.tabs.every((tab) => tab.id !== id)) return;
     terminals.dispose(id);
+    conflictsStore.clear(id);
+    statsStore.clear(id);
+    projectsStore.clear(id);
     try {
       await closeRepo(id);
     } catch (err) {
@@ -506,12 +518,22 @@ export class TabStore {
     this.#persistSession();
   }
 
-  /** Activates a tab (no-op for unknown ids). Leaves the recents home. */
+  /**
+   * Activates a tab (no-op for unknown ids). Leaves the recents home.
+   *
+   * Also refreshes the newly active tab's status: a background tab keeps
+   * the snapshot from when it was last visible, so dirty counts would be
+   * stale until some unrelated event refreshed it. Coalesced per repo (a
+   * burst of activations shares one fetch), and skipped while an op is
+   * busy for the repo — the op completion refreshes status itself (the
+   * same rule App.svelte's focus refresh applies).
+   */
   setActive(id: RepoId): void {
     if (this.tabs.some((tab) => tab.id === id)) {
       this.activeId = id;
       this.recentsOpen = false;
       this.#persistSession();
+      if (!opStore.busy(id)) void this.refreshStatus(id);
     }
   }
 
@@ -586,7 +608,7 @@ export class TabStore {
           // Retry instead of an indistinguishable "Loading changes…".
           if (tab.status === null) {
             tab.statusError =
-              err instanceof Error ? err.message : String(err);
+              describeError(err);
           }
         }
       } while (state.again);

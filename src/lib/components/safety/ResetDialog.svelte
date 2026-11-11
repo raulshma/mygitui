@@ -36,6 +36,7 @@
     previewSummaryLines,
     resetIsDestructive,
   } from "./safetyModel";
+  import { describeError } from "$lib/errors";
 
   let {
     repoId,
@@ -94,7 +95,7 @@
         .catch((err: unknown) => {
           if (seq === previewSeq) {
             previewInfo = null;
-            previewError = err instanceof Error ? err.message : String(err);
+            previewError = describeError(err);
           }
         })
         .finally(() => {
@@ -144,7 +145,7 @@
       onDone();
     } catch (err) {
       running = false;
-      toast(`Reset failed: ${err instanceof Error ? err.message : String(err)}`, {
+      toast(`Reset failed: ${describeError(err)}`, {
         kind: "error",
       });
     }

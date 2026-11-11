@@ -1,9 +1,11 @@
 /**
  * BranchSwitcher tests: the popover opens from the header chip and lists
- * local + remote branches (BranchPanel row language, tracked remotes
- * hidden), the search filters both sections and offers the VS Code style
+ * local + remote branches (BranchPanel row language; tracked remotes stay
+ * visible with a "tracked by" affordance and activate as a switch to the
+ * local branch, untracked ones check out through the dirty-gated
+ * controller), the search filters both sections and offers the VS Code style
  * create row (clicking it calls the shared controller), local rows switch
- * through the controller, remote rows check out remotely, and Escape
+ * through the controller, and Escape
  * closes and restores trigger focus. The controller factory is asked for
  * per-repoId (a pinned controller would mutate the wrong repo after an
  * un-keyed repo-tab switch), the typed `branch-switcher-open` event opens
@@ -42,6 +44,7 @@ const mocks = vi.hoisted(() => {
     headBranch: vi.fn(() => null),
     create: vi.fn(async () => true),
     checkoutRemote: vi.fn(async () => "next"),
+    requestCheckoutRemote: vi.fn(async () => {}),
     requestSwitch: vi.fn(async () => {}),
     chooseStash: vi.fn(async () => {}),
     chooseForce: vi.fn(async () => {}),
@@ -241,7 +244,7 @@ describe("BranchSwitcher", () => {
     );
   });
 
-  it("checks out a remote branch through the controller", async () => {
+  it("checks out a remote branch through the controller (dirty-gated)", async () => {
     mocks.branches.mockResolvedValue([branch({ name: "main", is_head: true })]);
     mocks.remoteBranches.mockResolvedValue([remoteBranch()]);
 
@@ -251,7 +254,7 @@ describe("BranchSwitcher", () => {
     await fireEvent.click(within(dialog).getByText("origin/next"));
 
     await waitFor(() =>
-      expect(mocks.controller.checkoutRemote).toHaveBeenCalledWith(
+      expect(mocks.controller.requestCheckoutRemote).toHaveBeenCalledWith(
         "origin",
         "next",
       ),
@@ -265,7 +268,7 @@ describe("BranchSwitcher", () => {
     );
   });
 
-  it("hides remote branches a local branch already tracks", async () => {
+  it("shows tracked remote branches with an affordance and switches on click", async () => {
     mocks.branches.mockResolvedValue([
       branch({ name: "main", is_head: true, upstream: "origin/main" }),
     ]);
@@ -281,8 +284,22 @@ describe("BranchSwitcher", () => {
     render(BranchSwitcher, { repoId: "r1", status: status() });
     const dialog = await openSwitcher();
 
-    expect(within(dialog).queryByText("dddd444")).toBeNull();
+    // Nothing is hidden anymore: every remote row renders, the tracked one
+    // carrying a "tracked by" affordance.
+    expect(within(dialog).getByText("dddd444")).not.toBeNull();
+    expect(within(dialog).getByText("tracked by main")).not.toBeNull();
     expect(within(dialog).getByText("eeee555")).not.toBeNull();
+
+    // Activating the tracked remote switches to its local branch (a fresh
+    // checkout would refuse: the branch already exists).
+    await fireEvent.click(within(dialog).getByText("tracked by main"));
+
+    await waitFor(() =>
+      expect(mocks.controller.requestSwitch).toHaveBeenCalledWith("main"),
+    );
+    await waitFor(() =>
+      expect(mocks.controller.requestCheckoutRemote).not.toHaveBeenCalled(),
+    );
   });
 
   it("closes on Escape and returns focus to the trigger", async () => {

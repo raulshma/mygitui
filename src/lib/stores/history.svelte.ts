@@ -41,6 +41,7 @@ import {
   type HistoryFilterFields,
   type RestoredSelection,
 } from "./history-logic";
+import { describeError } from "$lib/errors";
 
 /** Debounce for filter edits before the stream restarts (ms). */
 export const FILTER_DEBOUNCE_MS = 200;
@@ -49,7 +50,7 @@ export const FILTER_DEBOUNCE_MS = 200;
 export const RELEASE_CHUNK_COMMITS = 1_000;
 
 function errorMessage(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
+  return describeError(err);
 }
 
 export class HistoryStore {

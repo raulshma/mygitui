@@ -29,6 +29,7 @@ import {
   truncateLines,
   type RunStatus,
 } from "$lib/components/actions/actionsModel";
+import { describeError } from "$lib/errors";
 
 /** localStorage key: `{ defs: ActionDef[] }`. */
 export const ACTIONS_STORAGE_KEY = "mygitui.actions";
@@ -335,7 +336,7 @@ export class ActionsStore {
     } catch (err: unknown) {
       toast(
         `Action "${def.name}" failed to start: ${
-          err instanceof Error ? err.message : String(err)
+          describeError(err)
         }`,
         { kind: "error" },
       );
@@ -353,7 +354,7 @@ export class ActionsStore {
       return killed;
     } catch (err: unknown) {
       toast(
-        `Cancel failed: ${err instanceof Error ? err.message : String(err)}`,
+        `Cancel failed: ${describeError(err)}`,
         { kind: "error" },
       );
       return false;

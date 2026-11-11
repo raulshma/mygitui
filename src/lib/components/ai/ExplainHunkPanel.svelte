@@ -18,6 +18,7 @@
   import { Spinner } from "$lib/components/ui/spinner/index.js";
   import { Hint } from "$lib/components/ui/tooltip/index.js";
   import { toast } from "$lib/toast";
+  import { describeError } from "$lib/errors";
 
   let {
     repoId,
@@ -58,7 +59,7 @@
       })
       .catch((err: unknown) => {
         if (token !== attempt) return;
-        error = err instanceof Error ? err.message : String(err);
+        error = describeError(err);
         needsOptIn = isAiError(err) && err.kind === "opt-in";
       });
   });

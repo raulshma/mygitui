@@ -278,6 +278,7 @@ function loadRecentsCache(): string[] {
 // ---------------------------------------------------------------------------
 
 import { OverlayLayer, overlayStack } from "$lib/state/overlays.svelte";
+import { describeError } from "$lib/errors";
 
 let open = $state(false);
 
@@ -315,7 +316,7 @@ export async function runCommand(command: Command, ctx: CommandCtx): Promise<voi
   try {
     await command.run(ctx);
   } catch (err) {
-    toast(`Command failed: ${err instanceof Error ? err.message : String(err)}`, {
+    toast(`Command failed: ${describeError(err)}`, {
       kind: "error",
     });
   }

@@ -63,6 +63,7 @@
     workflowStateLabel,
     worstChipClass,
   } from "./forgeModel";
+  import { describeError } from "$lib/errors";
 
   let { repoId }: { repoId: string } = $props();
 
@@ -261,7 +262,7 @@
   }
 
   function errorText(err: unknown): string {
-    return err instanceof Error ? err.message : String(err);
+    return describeError(err);
   }
 
   function refresh(): void {

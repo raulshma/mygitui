@@ -48,6 +48,7 @@
     type PlanRow,
     type RebaseAction,
   } from "./plannerModel";
+  import { describeError } from "$lib/errors";
 
   let {
     repoId,
@@ -112,7 +113,7 @@
       toast(`Autosquash: ${steps.filter((s) => s.action !== "pick").length} fixup/squash step(s) placed`, { kind: "success" });
     } catch (err) {
       toast(
-        `Autosquash failed: ${err instanceof Error ? err.message : String(err)}`,
+        `Autosquash failed: ${describeError(err)}`,
         { kind: "error" },
       );
     } finally {
@@ -181,7 +182,7 @@
         if (token !== loadToken || settled) return;
         settled = true;
         loading = false;
-        loadError = err instanceof Error ? err.message : String(err);
+        loadError = describeError(err);
       });
     return () => {
       loadToken++;
@@ -273,7 +274,7 @@
       );
     } catch (err) {
       toast(
-        `Rebase failed to start: ${err instanceof Error ? err.message : String(err)}`,
+        `Rebase failed to start: ${describeError(err)}`,
         { kind: "error" },
       );
     } finally {

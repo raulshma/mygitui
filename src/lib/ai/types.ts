@@ -16,6 +16,8 @@
  * `"mygitui.ai"` localStorage key (see ai.svelte.ts).
  */
 
+import { describeError } from "$lib/errors";
+
 /** Which AI backend a request should go to. */
 export type AiBackend = "opencode" | "openrouter";
 
@@ -170,6 +172,5 @@ export function isAiError(err: unknown): err is AiError {
 
 /** Safe message for toasts/logs: never leaks secret material. */
 export function aiErrorMessage(err: unknown): string {
-  if (err instanceof Error) return err.message;
-  return String(err);
+  return describeError(err);
 }

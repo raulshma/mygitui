@@ -49,6 +49,7 @@ import type {
 } from "$lib/ipc/types";
 import { onDeviceAuthRequest, onDeviceStatus, onHostKeyRequest } from "$lib/events/repoEvents";
 import { toast } from "$lib/toast";
+import { describeError } from "$lib/errors";
 
 /**
  * How long the backend waits for a `device_*_respond` answer before it
@@ -195,7 +196,7 @@ export class RemoteDeviceStore {
         this.setStatus(deviceId, "disconnected");
       }
       toast(
-        `Connect failed: ${err instanceof Error ? err.message : String(err)}`,
+        `Connect failed: ${describeError(err)}`,
         { kind: "error" },
       );
     }
@@ -204,15 +205,21 @@ export class RemoteDeviceStore {
   /**
    * Disconnects. Never throws — the status is set optimistically (the
    * authoritative one arrives via the `device-status` event) and a failed
-   * command is toasted.
+   * command is toasted. The optimistic patch yields to an in-flight
+   * connect: while the backend is dialing, the connect's own completion /
+   * `device-status` events own the status, so disconnecting mid-connect
+   * cannot clobber `connecting` and leave the chip lying in either
+   * direction.
    */
   async disconnect(deviceId: string): Promise<void> {
-    this.setStatus(deviceId, "disconnected");
+    if (this.statusOf(deviceId) !== "connecting") {
+      this.setStatus(deviceId, "disconnected");
+    }
     try {
       await deviceDisconnect(deviceId);
     } catch (err) {
       toast(
-        `Disconnect failed: ${err instanceof Error ? err.message : String(err)}`,
+        `Disconnect failed: ${describeError(err)}`,
         { kind: "error" },
       );
     }
@@ -227,7 +234,7 @@ export class RemoteDeviceStore {
       return await deviceForgetHostKey(deviceId);
     } catch (err) {
       toast(
-        `Forget host key failed: ${err instanceof Error ? err.message : String(err)}`,
+        `Forget host key failed: ${describeError(err)}`,
         { kind: "error" },
       );
       return false;
@@ -280,7 +287,7 @@ export class RemoteDeviceStore {
       await deviceHostkeyRespond(request.request_id, accept);
     } catch (err) {
       toast(
-        `Host key answer failed: ${err instanceof Error ? err.message : String(err)}`,
+        `Host key answer failed: ${describeError(err)}`,
         { kind: "error" },
       );
     }
@@ -303,7 +310,7 @@ export class RemoteDeviceStore {
       await deviceAuthRespond(request.request_id, password, store);
     } catch (err) {
       toast(
-        `Device auth answer failed: ${err instanceof Error ? err.message : String(err)}`,
+        `Device auth answer failed: ${describeError(err)}`,
         { kind: "error" },
       );
     }

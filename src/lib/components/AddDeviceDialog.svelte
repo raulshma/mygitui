@@ -21,6 +21,7 @@
   import { Label } from "$lib/components/ui/label/index.js";
   import { Button } from "$lib/components/ui/button/index.js";
   import { Hint } from "$lib/components/ui/tooltip/index.js";
+  import { describeError } from "$lib/errors";
 
   let {
     open = $bindable(false),
@@ -125,7 +126,7 @@
     try {
       testResult = await deviceTest(buildInput());
     } catch (err) {
-      testError = err instanceof Error ? err.message : String(err);
+      testError = describeError(err);
     } finally {
       testing = false;
     }
@@ -146,7 +147,7 @@
       }
       open = false;
     } catch (err) {
-      error = err instanceof Error ? err.message : String(err);
+      error = describeError(err);
     } finally {
       busy = false;
     }

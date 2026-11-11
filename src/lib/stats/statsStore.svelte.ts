@@ -13,6 +13,7 @@
 import { commitActivity, contributorStats } from "$lib/ipc/client";
 import type { RepoId } from "$lib/ipc/types";
 import type { Contributor, DayCount } from "$lib/ipc/client";
+import { describeError } from "$lib/errors";
 
 /** Default stats window in days (~1 year, GitHub-heatmap scale). */
 export const DEFAULT_MAX_DAYS = 365;
@@ -108,7 +109,7 @@ export class StatsStore {
         });
       })
       .catch((err: unknown) => {
-        const message = err instanceof Error ? err.message : String(err);
+        const message = describeError(err);
         this.#set(repoId, {
           ...this.entry(repoId),
           loading: false,

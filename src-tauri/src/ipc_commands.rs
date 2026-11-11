@@ -911,16 +911,50 @@ pub async fn stage_all(
     .await
 }
 
-/// Discard local changes (files or hunks). A checkpoint is snapshotted
-/// BEFORE any side effect — a failed discard leaves the repo untouched
-/// (same ordering rule as repo_clean).
+/// Whether an optional `checkpoint` flag means "snapshot an undo point":
+/// absent/unset defaults to true (checkpoints are the safety net; the FE
+/// passes the global "checkpoints for git changes" setting here).
+fn checkpoint_enabled(flag: Option<bool>) -> bool {
+    flag.unwrap_or(true)
+}
+
+/// Outcome of the pre-discard checkpoint step. `None` = skipped (flag off)
+/// or created; `Some(reason)` = creation FAILED but the discard proceeds —
+/// the reason travels back to the FE as the warning payload. A checkpoint
+/// failure (most commonly a missing user.name/user.email) must not abort
+/// the op: the workdir still carries the changes, so failing the whole
+/// discard with "Discard failed" while nothing was discarded is strictly
+/// worse than proceeding and warning. `create` is lazy: a disabled flag
+/// never attempts the checkpoint at all.
+fn discard_checkpoint_outcome<T, E>(
+    enabled: bool,
+    create: impl FnOnce() -> Result<T, E>,
+    render: impl FnOnce(E) -> String,
+) -> Result<Option<String>, E> {
+    if !enabled {
+        return Ok(None);
+    }
+    match create() {
+        Ok(_) => Ok(None),
+        Err(err) => Ok(Some(render(err))),
+    }
+}
+
+/// Discard local changes (files or hunks). When checkpoints are enabled
+/// (`checkpoint`, default on) a checkpoint is snapshotted BEFORE any side
+/// effect — a failed discard leaves the repo untouched (same ordering rule
+/// as repo_clean). A checkpoint FAILURE does not abort the discard: the op
+/// succeeds and returns `Ok(Some(reason))` so the FE can surface it as a
+/// warning toast.
 #[tauri::command(rename_all = "snake_case")]
 pub async fn discard(
     repo_id: RepoId,
     targets: Vec<StageTarget>,
+    checkpoint: Option<bool>,
     state: State<'_, RepoManager>,
-) -> Result<(), String> {
+) -> Result<Option<String>, String> {
     let handle = get_handle(&state, &repo_id)?;
+    let checkpoint = checkpoint_enabled(checkpoint);
     if let Some(remote) = handle.remote() {
         // Same ordering rule as the local path: checkpoint BEFORE discard.
         return finish_op(enqueue_remote_mutation(
@@ -928,25 +962,57 @@ pub async fn discard(
             remote,
             "discard",
             move |git, _ws| {
-                git.checkpoint_create("discard changes")?;
-                git.discard(&targets)
+                let warning = discard_checkpoint_outcome(
+                    checkpoint,
+                    || git.checkpoint_create("discard changes"),
+                    |err| err,
+                )?;
+                git.discard(&targets)?;
+                Ok(warning)
             },
         ))
         .await;
     }
+    let repo = handle.repo()?;
+    finish_op(discard_op(&handle, repo, targets, checkpoint)).await
+}
+
+/// Enqueued `discard` body (op-queue mutation with the generation bump, like
+/// [`enqueue_mutation`]). Split from the command so tests can drive it
+/// through a real handle without `State`.
+fn discard_op(
+    handle: &RepoHandle,
+    repo: Arc<Mutex<git2::Repository>>,
+    targets: Vec<StageTarget>,
+    checkpoint: bool,
+) -> oneshot::Receiver<Result<Option<String>, String>> {
     let engine = handle.engine();
     let m3 = handle.m3();
-    let repo = handle.repo()?;
-    finish_op(enqueue_mutation(
-        &handle,
-        &repo,
-        "discard",
-        move |_ctx, repo| {
-            m3.checkpoint_create(repo, "discard changes")?;
-            engine.discard(repo, &targets)
-        },
-    ))
-    .await
+    let generation = handle.generation_shared();
+    let (_op_id, rx) = handle.ops().enqueue("discard", move |_ctx| {
+        let result = (|| -> Result<Option<String>, String> {
+            // Checkpoint FIRST (when enabled): the exact pre-discard state
+            // becomes an undo point. A failed checkpoint never aborts the
+            // discard (see [`discard_checkpoint_outcome`]).
+            let warning = {
+                let guard = repo.lock();
+                discard_checkpoint_outcome(
+                    checkpoint,
+                    || m3.checkpoint_create(&guard, "discard changes"),
+                    engine_err,
+                )
+                .map_err(engine_err)?
+            };
+            {
+                let guard = repo.lock();
+                engine.discard(&guard, &targets).map_err(engine_err)?;
+            }
+            Ok(warning)
+        })();
+        generation.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        result
+    });
+    rx
 }
 
 /// Commit: engine first; `EngineError::Unsupported` (active hooks/signing
@@ -3478,10 +3544,11 @@ pub async fn reflog(
 // path is validated first (relative, no `..`, inside the repo root — one
 // bad path aborts the whole op with zero side effects), then a checkpoint
 // of the full workdir state is created (reason argument, FE passes
-// "pre-clean"), then the paths are removed. Missing paths are skipped;
-// symlinks are unlinked, never traversed. Returns the count of removed
-// paths. It is an op-queue mutation: serialized with other mutations and
-// bumps the generation after (the watcher-driven clients resync).
+// "pre-clean"; skipped when the checkpoint flag is false), then the paths
+// are removed. Missing paths are skipped; symlinks are unlinked, never
+// traversed. Returns the count of removed paths. It is an op-queue
+// mutation: serialized with other mutations and bumps the generation after
+// (the watcher-driven clients resync).
 //
 // `action_run` / `action_cancel` delegate to the `actions` runner; the
 // registry is process-global managed state (see actions.rs).
@@ -3489,16 +3556,19 @@ pub async fn reflog(
 
 use crate::actions::{ActionRegistry, ActionSpec, TauriActionSink};
 
-/// git clean execution: checkpoint first, then delete each validated path.
-/// Returns the number of paths removed.
+/// git clean execution: checkpoint first (unless `checkpoint` is false —
+/// the FE passes the global "checkpoints for git changes" setting), then
+/// delete each validated path. Returns the number of paths removed.
 #[tauri::command(rename_all = "snake_case")]
 pub async fn repo_clean(
     repo_id: RepoId,
     paths: Vec<String>,
     checkpoint_reason: String,
+    checkpoint: Option<bool>,
     state: State<'_, RepoManager>,
 ) -> Result<u32, String> {
     let handle = get_handle(&state, &repo_id)?;
+    let checkpoint = checkpoint_enabled(checkpoint);
     if let Some(remote) = handle.remote() {
         // Same ordering rule as the local clean: validate FIRST (purely
         // lexical checks on the workdir-relative paths, so a rejected op
@@ -3511,24 +3581,35 @@ pub async fn repo_clean(
             remote,
             "clean",
             move |git, _ws| {
-                git.checkpoint_create(&checkpoint_reason)?;
+                if checkpoint {
+                    git.checkpoint_create(&checkpoint_reason)?;
+                }
                 git.repo_clean(&paths)
             },
         ))
         .await;
     }
     let repo = handle.repo()?;
-    finish_op(clean_op(&handle, repo, paths, checkpoint_reason)).await
+    finish_op(clean_op(
+        &handle,
+        repo,
+        paths,
+        checkpoint_reason,
+        checkpoint,
+    ))
+    .await
 }
 
 /// Enqueued `clean` body (op-queue mutation with the generation bump, like
 /// [`enqueue_mutation`]). Split from the command so tests can drive it
-/// through a real handle without `State`.
+/// through a real handle without `State`. `checkpoint` off skips the
+/// pre-clean undo point (the FE's "checkpoints for git changes" setting).
 fn clean_op(
     handle: &RepoHandle,
     repo: Arc<Mutex<git2::Repository>>,
     paths: Vec<String>,
     checkpoint_reason: String,
+    checkpoint: bool,
 ) -> oneshot::Receiver<Result<u32, String>> {
     let engine = handle.m3();
     let root = handle.root.clone();
@@ -3540,8 +3621,8 @@ fn clean_op(
             let resolved = validate_clean_paths(&root, &paths)?;
             // SAFETY SECOND: the exact pre-clean state becomes an undo
             // point (checkpoint refs never move HEAD/branches, status
-            // untouched).
-            {
+            // untouched). Skipped when checkpoints are disabled.
+            if checkpoint {
                 let guard = repo.lock();
                 engine
                     .checkpoint_create(&guard, &checkpoint_reason)
@@ -3771,6 +3852,7 @@ mod m4_clean_tests {
             handle.repo().expect("local repo"),
             vec!["junk.log".to_string()],
             "pre-clean".to_string(),
+            true,
         )
         .blocking_recv()
         .expect("queue alive")
@@ -3810,6 +3892,7 @@ mod m4_clean_tests {
             handle.repo().expect("local repo"),
             vec!["../evil".to_string()],
             "pre-clean".to_string(),
+            true,
         )
         .blocking_recv()
         .expect("queue alive")
@@ -3827,6 +3910,282 @@ mod m4_clean_tests {
         assert!(
             !checkpoints.iter().any(|cp| cp.reason == "pre-clean"),
             "no checkpoint on rejected clean: {checkpoints:?}"
+        );
+
+        manager.close(&info.repo_id);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Checkpoint flag off: the clean still runs, but no pre-clean undo
+    /// point is written (the FE's "checkpoints for git changes" setting).
+    #[test]
+    fn clean_op_with_checkpoint_false_skips_the_checkpoint() {
+        let root = temp_repo("no-ckpt");
+        std::fs::write(root.join("junk.log"), b"x").unwrap();
+
+        let manager = RepoManager::new();
+        let info = manager.open_unwatched(&root).unwrap();
+        let handle = manager.get(&info.repo_id).unwrap();
+
+        let removed = clean_op(
+            &handle,
+            handle.repo().expect("local repo"),
+            vec!["junk.log".to_string()],
+            "pre-clean".to_string(),
+            false,
+        )
+        .blocking_recv()
+        .expect("queue alive")
+        .expect("clean succeeds");
+        assert_eq!(removed, 1);
+        assert!(!root.join("junk.log").exists(), "clean still ran");
+
+        let engine = Libgit2Engine::new();
+        let checkpoints = {
+            let repo = handle.repo().expect("local repo");
+            let repo = repo.lock();
+            engine.checkpoints_impl(&repo).unwrap()
+        };
+        assert!(
+            !checkpoints.iter().any(|cp| cp.reason == "pre-clean"),
+            "no checkpoint when disabled: {checkpoints:?}"
+        );
+
+        manager.close(&info.repo_id);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// discard: checkpoint flag + recoverable checkpoint step.
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod discard_tests {
+    use super::*;
+    use crate::engine::libgit2::Libgit2Engine;
+
+    /// Repo with a committed tracked file, opened through the manager (same
+    /// scaffolding as `m4_clean_tests::temp_repo`). `identity` off leaves
+    /// user.name/email unset so checkpoint creation fails (the real-world
+    /// "sometimes discard doesn't make changes disappear" trigger); the
+    /// local config is emptied so a machine-global identity cannot leak in.
+    fn discard_fixture(tag: &str, identity: bool) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "mygitui-discard-{tag}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let repo = git2::Repository::init(&dir).unwrap();
+        repo.config()
+            .and_then(|mut c| {
+                if identity {
+                    c.set_str("user.name", "Discard Test")?;
+                    c.set_str("user.email", "discard@test.local")?;
+                } else {
+                    // An empty name is rejected by signature validation
+                    // deterministically, whatever the machine-global config
+                    // holds (repo-local values win).
+                    c.set_str("user.name", "")?;
+                    c.set_str("user.email", "")?;
+                }
+                c.set_bool("core.autocrlf", false)
+            })
+            .unwrap();
+        let sig = git2::Signature::now("Discard Test", "discard@test.local").unwrap();
+        let mut index = repo.index().unwrap();
+        std::fs::write(dir.join("a.txt"), b"one\n").unwrap();
+        index.add_path(std::path::Path::new("a.txt")).unwrap();
+        index.write().unwrap();
+        let tree_id = index.write_tree().unwrap();
+        let tree = repo.find_tree(tree_id).unwrap();
+        repo.commit(Some("HEAD"), &sig, &sig, "base", &tree, &[])
+            .unwrap();
+        dir
+    }
+
+    fn listed_checkpoints(handle: &RepoHandle) -> Vec<CheckpointInfo> {
+        let engine = Libgit2Engine::new();
+        let repo = handle.repo().expect("local repo");
+        let repo = repo.lock();
+        engine.checkpoints_impl(&repo).unwrap()
+    }
+
+    #[test]
+    fn discard_checkpoint_outcome_maps_failure_to_a_warning() {
+        // Absent flag = enabled (the FE default).
+        assert!(checkpoint_enabled(None));
+        assert!(!checkpoint_enabled(Some(false)));
+        assert!(checkpoint_enabled(Some(true)));
+
+        let failed = || -> Result<CheckpointInfo, EngineError> {
+            Err(EngineError::Invalid(
+                "committer identity not configured".into(),
+            ))
+        };
+        let created = || -> Result<CheckpointInfo, EngineError> {
+            Ok(CheckpointInfo {
+                id: "1-x".into(),
+                ref_name: "refs/mygitui/checkpoints/1-x".into(),
+                reason: "discard changes".into(),
+                created_at: 0,
+                branch: Some("main".into()),
+                has_worktree_state: false,
+            })
+        };
+
+        // Disabled: skipped — the checkpoint step is never attempted.
+        let attempted = std::cell::Cell::new(false);
+        assert_eq!(
+            discard_checkpoint_outcome(
+                false,
+                || {
+                    attempted.set(true);
+                    failed()
+                },
+                engine_err
+            )
+            .unwrap(),
+            None
+        );
+        assert!(
+            !attempted.get(),
+            "a disabled flag must not touch the checkpoint engine"
+        );
+
+        // Enabled + failure: the reason becomes the warning, not an error.
+        let warning = discard_checkpoint_outcome(true, failed, engine_err).unwrap();
+        assert!(
+            warning
+                .as_deref()
+                .is_some_and(|w| w.contains("committer identity")),
+            "warning carries the reason: {warning:?}"
+        );
+
+        // Enabled + success: no warning.
+        assert_eq!(
+            discard_checkpoint_outcome(true, created, engine_err).unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn discard_op_default_creates_a_checkpoint_and_discards() {
+        let root = discard_fixture("ckpt", true);
+        std::fs::write(root.join("a.txt"), b"two\n").unwrap();
+
+        let manager = RepoManager::new();
+        let info = manager.open_unwatched(&root).unwrap();
+        let handle = manager.get(&info.repo_id).unwrap();
+        let before = handle.generation();
+
+        // checkpoint_enabled(Some(true)) is the absent-flag default.
+        let warning = discard_op(
+            &handle,
+            handle.repo().expect("local repo"),
+            vec![StageTarget::File("a.txt".to_string())],
+            checkpoint_enabled(None),
+        )
+        .blocking_recv()
+        .expect("queue alive")
+        .expect("discard succeeds");
+        assert_eq!(warning, None, "no warning when the checkpoint works");
+        assert_eq!(
+            std::fs::read_to_string(root.join("a.txt")).unwrap(),
+            "one\n",
+            "workdir back to HEAD"
+        );
+        assert_eq!(handle.generation(), before + 1, "generation bumps");
+        assert!(
+            listed_checkpoints(&handle)
+                .iter()
+                .any(|cp| cp.reason == "discard changes"),
+            "undo point exists: {checkpoints:?}",
+            checkpoints = listed_checkpoints(&handle)
+        );
+
+        manager.close(&info.repo_id);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn discard_op_with_checkpoint_false_skips_the_checkpoint() {
+        let root = discard_fixture("off", true);
+        std::fs::write(root.join("a.txt"), b"two\n").unwrap();
+
+        let manager = RepoManager::new();
+        let info = manager.open_unwatched(&root).unwrap();
+        let handle = manager.get(&info.repo_id).unwrap();
+
+        let warning = discard_op(
+            &handle,
+            handle.repo().expect("local repo"),
+            vec![StageTarget::File("a.txt".to_string())],
+            false,
+        )
+        .blocking_recv()
+        .expect("queue alive")
+        .expect("discard succeeds");
+        assert_eq!(warning, None);
+        assert_eq!(
+            std::fs::read_to_string(root.join("a.txt")).unwrap(),
+            "one\n",
+            "discard still ran"
+        );
+        assert!(
+            !listed_checkpoints(&handle)
+                .iter()
+                .any(|cp| cp.reason == "discard changes"),
+            "no undo point when disabled"
+        );
+
+        manager.close(&info.repo_id);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The reported bug: without user.name/user.email the checkpoint used
+    /// to abort the whole discard ("Discard failed: …") while the working
+    /// copy kept the changes. Now the discard proceeds and the failure
+    /// comes back as a warning.
+    #[test]
+    fn discard_op_survives_a_failed_checkpoint_and_still_discards() {
+        let root = discard_fixture("no-identity", false);
+        std::fs::write(root.join("a.txt"), b"two\n").unwrap();
+
+        let manager = RepoManager::new();
+        let info = manager.open_unwatched(&root).unwrap();
+        let handle = manager.get(&info.repo_id).unwrap();
+
+        let outcome = discard_op(
+            &handle,
+            handle.repo().expect("local repo"),
+            vec![StageTarget::File("a.txt".to_string())],
+            true,
+        )
+        .blocking_recv()
+        .expect("queue alive");
+        let warning = outcome.expect("discard succeeds despite the failed checkpoint");
+        assert!(
+            warning
+                .as_ref()
+                .is_some_and(|w| w.contains("committer identity")),
+            "warning names the checkpoint failure: {warning:?}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(root.join("a.txt")).unwrap(),
+            "one\n",
+            "the changes are actually gone"
+        );
+        assert!(
+            !listed_checkpoints(&handle)
+                .iter()
+                .any(|cp| cp.reason == "discard changes"),
+            "no undo point was written"
         );
 
         manager.close(&info.repo_id);

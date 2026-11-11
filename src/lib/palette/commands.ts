@@ -66,6 +66,7 @@ import {
   type ThemePreference,
 } from "$lib/theme";
 import { openAboutDialog } from "$lib/components/aboutDialog";
+import { describeError } from "$lib/errors";
 
 /** What a command knows about the active tab when it runs. */
 export interface CommandCtx {
@@ -122,7 +123,7 @@ function ok(message: string): void {
 }
 
 function errorMessage(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
+  return describeError(err);
 }
 
 /** Hides a precondition skip; otherwise toasts the completed sync. */
@@ -665,6 +666,16 @@ export const COMMANDS: Command[] = [
       "customizer",
     ],
     run: () => emitUiEvent("open-appearance"),
+  },
+  {
+    id: "app.settings",
+    title: "Open settings",
+    section: "App",
+    keywords: ["preferences", "options", "configuration", "hub", "dialog"],
+    shortcut: "ctrl+comma",
+    // Same routing as open-appearance: App.svelte owns the dialog; the
+    // typed bus keeps the registry import-cycle-free.
+    run: () => emitUiEvent("open-settings"),
   },
   {
     id: "app.keybinds-reset",

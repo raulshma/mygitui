@@ -34,6 +34,7 @@
   import { opsFor } from "$lib/stores/ops.svelte";
   import { autofetch } from "$lib/stores/autofetch.svelte";
   import { tabStore } from "$lib/stores/tabs.svelte";
+  import { pageRows } from "$lib/git/branchListModel";
   import { toast } from "$lib/toast";
   import Icon from "$lib/components/icons/Icon.svelte";
   import { Switch } from "$lib/components/ui/switch/index.js";
@@ -110,14 +111,22 @@
     editing = null;
     compareKey = null;
     compareFiles = null;
+    expandedRemote = null;
+    remoteBranchList = [];
+    showAllRemoteBranches = {};
     void reload();
   });
 
   async function reload(): Promise<void> {
+    // Stale-response guard: the panel is keep-alive across repo switches —
+    // a slow remotes/branches response from repo A must never land after
+    // the switch to repo B and overwrite its pickers.
+    const id = repoId;
     loading = true;
     error = null;
     try {
-      const [remoteList, branchList] = await Promise.all([remotes(repoId), branches(repoId)]);
+      const [remoteList, branchList] = await Promise.all([remotes(id), branches(id)]);
+      if (id !== repoId) return;
       list = remoteList;
       branchNames = branchList.map((b) => b.name);
       const head = branchList.find((b) => b.is_head)?.name ?? "";
@@ -125,9 +134,10 @@
       branchPick = {};
       for (const remote of remoteList) branchPick[remote.name] = head;
     } catch (err) {
+      if (id !== repoId) return;
       error = err instanceof Error ? err.message : String(err);
     } finally {
-      loading = false;
+      if (id === repoId) loading = false;
     }
   }
 
@@ -292,6 +302,8 @@
 
   let expandedRemote = $state<string | null>(null);
   let remoteBranchList = $state<RemoteBranchInfo[]>([]);
+  /** Per-remote "Show all N" expander (unbounded group lists are capped). */
+  let showAllRemoteBranches = $state<Record<string, boolean>>({});
 
   async function onToggleRemoteBranches(remote: RemoteInfo): Promise<void> {
     if (expandedRemote === remote.name) {
@@ -299,8 +311,13 @@
       return;
     }
     expandedRemote = remote.name;
+    // Stale-response guard: a slow list for the old repo must not fill the
+    // expanded card after the switch.
+    const id = repoId;
     try {
-      remoteBranchList = await remoteBranches(repoId);
+      const branchList = await remoteBranches(id);
+      if (id !== repoId) return;
+      remoteBranchList = branchList;
     } catch (err) {
       toast(
         `Remote branches failed: ${err instanceof Error ? err.message : String(err)}`,
@@ -339,8 +356,11 @@
     const rb = deleteCandidate;
     deleteCandidate = null;
     if (!rb) return;
-    if (await remoteBranchDelete(repoId, rb.remote, rb.name)) {
-      remoteBranchList = await remoteBranches(repoId);
+    const id = repoId;
+    if (await remoteBranchDelete(id, rb.remote, rb.name)) {
+      const branchList = await remoteBranches(id);
+      if (id !== repoId) return;
+      remoteBranchList = branchList;
     }
   }
 
@@ -662,13 +682,20 @@
               </span>
             </div>
             {#if expandedRemote === remote.name}
+              <!-- Large-list guard: each remote group renders its first page
+                   behind a "Show all N" expander (same paging as the
+                   branches panel's remote section). -->
+              {@const rbPage = pageRows(
+                remoteBranchList.filter((b) => b.remote === remote.name),
+                showAllRemoteBranches[remote.name] ?? false,
+              )}
               <div class="remote-branches">
                 <p class="rb-head">Remote branches</p>
                 {#if remoteBranchList.length === 0}
                   <p class="rb-empty">Fetch to discover remote branches.</p>
                 {:else}
                   <ul class="rb-list">
-                    {#each remoteBranchList.filter((b) => b.remote === remote.name) as rb (rb.remote + "/" + rb.name)}
+                    {#each rbPage.visible as rb (rb.remote + "/" + rb.name)}
                       <li class="rb-row">
                         <Hint label={`${rb.remote}/${rb.name}`}>
                           {#snippet child({ props })}
@@ -764,6 +791,23 @@
                         </li>
                       {/if}
                     {/each}
+                    {#if rbPage.hidden > 0}
+                      <li class="rb-row show-more">
+                        <Button
+                          class="h-auto px-2 py-0.5 text-ui-meta text-muted-foreground hover:text-foreground"
+                          variant="ghost"
+                          size="sm"
+                          type="button"
+                          onclick={() =>
+                            (showAllRemoteBranches = {
+                              ...showAllRemoteBranches,
+                              [remote.name]: true,
+                            })}
+                        >
+                          Show all {rbPage.total} {remote.name} branches
+                        </Button>
+                      </li>
+                    {/if}
                   </ul>
                 {/if}
               </div>

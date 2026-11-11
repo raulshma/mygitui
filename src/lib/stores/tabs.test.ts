@@ -15,6 +15,10 @@ import type { RepoChangedEvent } from "$lib/ipc/types";
 import { resetRepoEvents } from "$lib/events/repoEvents";
 import { RecentRepoStore, type StorageLike } from "$lib/entry/recentRepos";
 import { terminals } from "$lib/terminal/terminalStore.svelte";
+import { opStore } from "$lib/stores/ops.svelte";
+import { conflictsStore } from "$lib/components/panels/conflictsStore.svelte";
+import { statsStore } from "$lib/stats/statsStore.svelte";
+import { projectsStore } from "$lib/stores/projects.svelte";
 import {
   closeTab,
   openTab,
@@ -41,6 +45,13 @@ vi.mock("$lib/ipc/client", () => ({
   onActionOutput: vi.fn(),
   onPtyOutput: vi.fn(),
   onPtyExit: vi.fn(),
+  // The per-repo cache stores imported by tabs.svelte (conflicts / stats /
+  // projects) bind these client functions; the cache-hygiene tests only
+  // exercise `clear`, so they are never called in this suite either.
+  conflicts: vi.fn(),
+  commitActivity: vi.fn(),
+  contributorStats: vi.fn(),
+  projectDetect: vi.fn(),
 }));
 
 const mockOpenRepo = vi.mocked(openRepo);
@@ -302,6 +313,46 @@ describe("closeTab", () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// closeTab cache hygiene (per-repo panel caches must not outlive their repo)
+// ---------------------------------------------------------------------------
+
+describe("closeTab cache hygiene", () => {
+  it("clears the conflicts, stats and projects caches for the closed repo", async () => {
+    const store = freshStore();
+    mockOpenRepo.mockResolvedValue(ALPHA);
+    await store.openTab("C:/repos/alpha");
+    const clearConflicts = vi.spyOn(conflictsStore, "clear");
+    const clearStats = vi.spyOn(statsStore, "clear");
+    const clearProjects = vi.spyOn(projectsStore, "clear");
+
+    await store.closeTab("repo-1");
+
+    expect(clearConflicts).toHaveBeenCalledWith("repo-1");
+    expect(clearStats).toHaveBeenCalledWith("repo-1");
+    expect(clearProjects).toHaveBeenCalledWith("repo-1");
+    clearConflicts.mockRestore();
+    clearStats.mockRestore();
+    clearProjects.mockRestore();
+  });
+
+  it("touches no cache for an unknown id (early return)", async () => {
+    const store = freshStore();
+    const clearConflicts = vi.spyOn(conflictsStore, "clear");
+    const clearStats = vi.spyOn(statsStore, "clear");
+    const clearProjects = vi.spyOn(projectsStore, "clear");
+
+    await store.closeTab("missing");
+
+    expect(clearConflicts).not.toHaveBeenCalled();
+    expect(clearStats).not.toHaveBeenCalled();
+    expect(clearProjects).not.toHaveBeenCalled();
+    clearConflicts.mockRestore();
+    clearStats.mockRestore();
+    clearProjects.mockRestore();
+  });
+});
+
 describe("setActive", () => {
   it("activates a known tab and ignores unknown ids", async () => {
     const store = freshStore();
@@ -315,6 +366,53 @@ describe("setActive", () => {
 
     store.setActive("unknown");
     expect(store.activeId).toBe("repo-1");
+  });
+
+  it("refreshes the newly active tab's status (background tabs go stale)", async () => {
+    const store = freshStore();
+    mockOpenRepo.mockResolvedValueOnce(ALPHA);
+    mockOpenRepo.mockResolvedValueOnce(BETA);
+    await store.openTab("C:/repos/alpha");
+    await store.openTab("C:/repos/beta");
+    // Let the background fetches from openTab settle first.
+    await vi.waitFor(() =>
+      expect(store.tabs.every((tab) => tab.status !== null)).toBe(true),
+    );
+
+    mockRepoStatus.mockResolvedValueOnce(STATUS_2);
+    store.setActive("repo-1");
+
+    await vi.waitFor(() => {
+      expect(store.tabs[0]?.status).toEqual(STATUS_2);
+    });
+  });
+
+  it("skips the activation refresh while an op is busy for the repo", async () => {
+    const store = freshStore();
+    mockOpenRepo.mockResolvedValue(ALPHA);
+    await store.openTab("C:/repos/alpha");
+    await vi.waitFor(() => expect(store.tabs[0]?.status).not.toBeNull());
+
+    mockRepoStatus.mockClear();
+    opStore.ops = {
+      "repo-1": [
+        {
+          op_id: "op-1",
+          kind: "fetch",
+          message: "Fetching",
+          pct: null,
+          done: false,
+          error: null,
+        },
+      ],
+    };
+    try {
+      store.setActive("repo-1");
+      await Promise.resolve(); // a (skipped) refresh would call synchronously
+      expect(mockRepoStatus).not.toHaveBeenCalled();
+    } finally {
+      opStore.ops = {};
+    }
   });
 });
 

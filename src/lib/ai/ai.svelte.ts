@@ -40,6 +40,7 @@ import type { FeatureCtx, FeatureDeps, FeatureGitClient, FeatureOutcome } from "
 import { defaultAiConfig, AiError, resolveOpencode } from "./types";
 import type { AiBackend, AiConfig, FeatureKind, OpencodeMode } from "./types";
 import type { ProviderSet, Unsubscribe } from "./provider";
+import { describeError } from "$lib/errors";
 
 /** localStorage key for the non-secret AI config. */
 export const AI_STORAGE_KEY = "mygitui.ai";
@@ -440,7 +441,7 @@ export class AiStore {
       state.last = outcome;
       return outcome;
     } catch (err) {
-      state.error = err instanceof Error ? err.message : String(err);
+      state.error = describeError(err);
       throw err;
     } finally {
       state.busy = false;

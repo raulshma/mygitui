@@ -1,7 +1,8 @@
 //! Branch and tag operations.
 //!
-//! Local branches only: remote-tracking refs surface through log decorations
-//! and `repo_refs`; the branch panel gets its remote list from there.
+//! Local branches plus pure-local remote-tracking reads (`remote_branches`,
+//! no network): remote branch rows carry the local branch tracking them, and
+//! `branch_checkout_remote` creates the tracking local branch on checkout.
 
 use git2::build::CheckoutBuilder;
 use git2::{BranchType, Repository};

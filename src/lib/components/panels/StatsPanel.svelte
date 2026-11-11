@@ -26,6 +26,7 @@
   import { floating } from "$lib/components/overlay/floating";
   import { Button } from "$lib/components/ui/button/index.js";
   import { Hint } from "$lib/components/ui/tooltip/index.js";
+  import EmptyState from "../layout/EmptyState.svelte";
   import {
     branchColorStore,
     type BranchColorRule,
@@ -202,6 +203,13 @@
 
     {#if loading && activity.length === 0 && contributors.length === 0}
       <p class="note m-0 flex-none text-muted-foreground" role="status">Loading stats…</p>
+    {:else if !error && activity.length === 0 && contributors.length === 0}
+      <!-- Load finished with nothing to chart (empty repo) — an empty state
+           instead of zero-value cards forever. -->
+      <EmptyState
+        title="No contribution data."
+        hint="Stats appear once this repository has commits in the tracked window."
+      />
     {:else}
       <!-- 2. summary cards -->
       <div class="cards flex flex-none flex-wrap gap-1.5">

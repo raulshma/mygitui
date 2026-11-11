@@ -11,6 +11,7 @@
   import { toast } from "$lib/toast";
   import { trapTab } from "$lib/components/safety/trapTab";
   import { Button } from "$lib/components/ui/button/index.js";
+  import { describeError } from "$lib/errors";
 
   let {
     open = $bindable(false),
@@ -41,7 +42,7 @@
     gitignoreTemplates()
       .then((list) => (templates = list))
       .catch((err: unknown) => {
-        error = err instanceof Error ? err.message : String(err);
+        error = describeError(err);
       })
       .finally(() => (loading = false));
   });
@@ -78,7 +79,7 @@
       onApplied?.();
     } catch (err) {
       toast(
-        `Apply failed: ${err instanceof Error ? err.message : String(err)}`,
+        `Apply failed: ${describeError(err)}`,
         { kind: "error" },
       );
     } finally {

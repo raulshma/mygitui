@@ -28,6 +28,7 @@
 import { isTauri } from "$lib/entry/dragdrop";
 import { openPopout } from "$lib/ipc/client";
 import { toast } from "$lib/toast";
+import { describeError } from "$lib/errors";
 
 /** Panels that support popout windows. */
 export type PopoutPanel =
@@ -193,7 +194,7 @@ export async function openPanelPopout(
     });
   } catch (err) {
     toast(
-      `Popout failed: ${err instanceof Error ? err.message : String(err)}`,
+      `Popout failed: ${describeError(err)}`,
       { kind: "error" },
     );
   }

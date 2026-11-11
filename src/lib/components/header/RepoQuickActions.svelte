@@ -70,6 +70,7 @@
   import Icon from "$lib/components/icons/Icon.svelte";
   import { Spinner } from "$lib/components/ui/spinner/index.js";
   import { appIcon } from "$lib/components/icons/library.svelte";
+  import { describeError } from "$lib/errors";
 
   let {
     repoId,
@@ -202,7 +203,7 @@
       onMutated?.();
     } catch (err) {
       toast(
-        `${VERB_LABELS[verb]} failed: ${err instanceof Error ? err.message : String(err)}`,
+        `${VERB_LABELS[verb]} failed: ${describeError(err)}`,
         { kind: "error" },
       );
     } finally {

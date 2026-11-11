@@ -36,6 +36,7 @@
     stepStateLabel,
     workflowEventLabel,
   } from "./forgeModel";
+  import { describeError } from "$lib/errors";
 
   let {
     repoId,
@@ -322,7 +323,7 @@
   }
 
   function errorText(err: unknown): string {
-    return err instanceof Error ? err.message : String(err);
+    return describeError(err);
   }
 
   async function cancelRun(): Promise<void> {

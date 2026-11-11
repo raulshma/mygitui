@@ -17,6 +17,7 @@
   import { onMount } from "svelte";
   import { discard, stage } from "$lib/ipc/client";
   import { onUiEvent } from "$lib/palette/events";
+  import { appSettings } from "$lib/state/appSettings.svelte";
   import { toast } from "$lib/toast";
   import { ai } from "$lib/ai/ai.svelte";
   import { formatHunkText } from "$lib/ai/features";
@@ -324,7 +325,9 @@
     if (!repoId) return;
     const file = files[fileIndex];
     if (!file || !beginMutation()) return;
-    discard(repoId, [{ hunk: { path: file.path, hunk: hunkIndex } }])
+    discard(repoId, [{ hunk: { path: file.path, hunk: hunkIndex } }], {
+      checkpoint: appSettings.checkpointsEnabled,
+    })
       .then(() => onMutated?.())
       .catch((err: unknown) => {
         endMutation();
@@ -405,15 +408,19 @@
     if (!repoId || !hunkDiscard || !selection) return;
     const file = files[fileIndex];
     if (!file || !beginMutation()) return;
-    discard(repoId, [
-      {
-        lines: {
-          path: file.path,
-          hunk: hunkIndex,
-          ranges: selectionRanges(selection),
+    discard(
+      repoId,
+      [
+        {
+          lines: {
+            path: file.path,
+            hunk: hunkIndex,
+            ranges: selectionRanges(selection),
+          },
         },
-      },
-    ])
+      ],
+      { checkpoint: appSettings.checkpointsEnabled },
+    )
       .then(() => {
         selectionCtl.clearLines();
         onMutated?.();

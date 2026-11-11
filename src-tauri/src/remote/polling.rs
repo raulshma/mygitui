@@ -28,6 +28,15 @@ pub fn set_paused(paused: bool) {
     POLL_PAUSED.store(paused, Ordering::SeqCst);
 }
 
+/// Consecutive poll failures before the loop runs the ops' ensure/re-dial
+/// path on the pooled session. Every exec already re-dials transparently,
+/// but after repeated failures an explicit `ensure_connected` guarantees
+/// the session heals (or reports Disconnected) instead of quietly failing
+/// forever — the dial emits the same connecting/connected/disconnected
+/// `device-status` transitions a user-triggered op would, so recovery is
+/// visible without anything new on the wire.
+const POLL_HEAL_AFTER_FAILURES: u32 = 3;
+
 pub struct RepoPoller {
     stop: Arc<AtomicBool>,
     thread: Option<std::thread::JoinHandle<()>>,
@@ -49,6 +58,7 @@ impl RepoPoller {
             .name(format!("remote-poll-{}", repo_id.0))
             .spawn(move || {
                 let mut last: Option<(String, String)> = None;
+                let mut consecutive_failures: u32 = 0;
                 loop {
                     // Sleep in slices so a close is honored within ~200ms.
                     let mut slept = Duration::ZERO;
@@ -69,6 +79,7 @@ impl RepoPoller {
                     let fingerprint = engine.change_fingerprint();
                     match fingerprint {
                         Ok(Some(current)) => {
+                            consecutive_failures = 0;
                             let changed = last.as_ref() != Some(&current);
                             if changed {
                                 let head_moved = last
@@ -98,7 +109,25 @@ impl RepoPoller {
                             // Device unreachable: stay quiet, the session
                             // status broadcast covers the UX; keep the last
                             // fingerprint so a reconnect re-notifies.
+                            consecutive_failures += 1;
                             tracing::debug!(repo = %repo_id.0, error = %err, "poll failed");
+                            // Don't sit on a stale closed handle: after a
+                            // few failures, run the same ensure/re-dial
+                            // path the ops use so the pooled session heals
+                            // (and the FE sees the status transition).
+                            if consecutive_failures >= POLL_HEAL_AFTER_FAILURES {
+                                consecutive_failures = 0;
+                                let session = engine.session.clone();
+                                if let Err(heal_err) =
+                                    tauri::async_runtime::block_on(session.ensure_connected())
+                                {
+                                    tracing::debug!(
+                                        repo = %repo_id.0,
+                                        error = %heal_err,
+                                        "poll re-dial failed"
+                                    );
+                                }
+                            }
                         }
                     }
                 }

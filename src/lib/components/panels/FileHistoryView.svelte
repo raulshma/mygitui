@@ -38,6 +38,7 @@
   import { Badge } from "$lib/components/ui/badge";
   import { Button } from "$lib/components/ui/button/index.js";
   import { Hint } from "$lib/components/ui/tooltip/index.js";
+  import { describeError } from "$lib/errors";
 
   let { repoId, path }: { repoId: string; path: string } = $props();
 
@@ -140,7 +141,7 @@
     } catch (err: unknown) {
       if (token !== aggToken) return;
       toast(
-        `Aggregate diff failed: ${err instanceof Error ? err.message : String(err)}`,
+        `Aggregate diff failed: ${describeError(err)}`,
         { kind: "error" },
       );
     }

@@ -75,14 +75,20 @@
   });
 
   async function reload(): Promise<void> {
+    // Stale-response guard: the panel is keep-alive across repo switches —
+    // a slow stash list from repo A must never land after the switch.
+    const id = repoId;
     loading = true;
     error = null;
     try {
-      list = await stashList(repoId);
+      const fresh = await stashList(id);
+      if (id !== repoId) return;
+      list = fresh;
     } catch (err) {
+      if (id !== repoId) return;
       error = err instanceof Error ? err.message : String(err);
     } finally {
-      loading = false;
+      if (id === repoId) loading = false;
     }
   }
 

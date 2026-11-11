@@ -18,6 +18,7 @@
 //! prompts the FE through [`prompts`], with an optional "remember" that
 //! writes back to the keyring.
 
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -49,6 +50,36 @@ const KEEPALIVE_MAX: usize = 4;
 /// Hard cap on buffered exec output (archive-scale responses); a command
 /// producing more fails instead of exhausting host memory.
 pub const MAX_EXEC_BYTES: usize = 256 * 1024 * 1024;
+
+/// Liveness watchdog hysteresis: consecutive closed observations (one per
+/// [`WATCHDOG_TICK`]) required before the status flips to Disconnected.
+/// A single blip — a tick racing an op's transparent re-dial — must not
+/// flap the chip while every operation would reconnect successfully anyway.
+const WATCHDOG_CLOSED_TICKS: u32 = 2;
+/// Watchdog tick interval (one liveness probe per tick).
+const WATCHDOG_TICK: Duration = Duration::from_secs(5);
+
+/// Automatic reconnection: delay (seconds) before reconnect attempt
+/// `attempt` (0-based). After the schedule is exhausted the cadence caps at
+/// [`RECONNECT_BACKOFF_CAP_SECS`] forever — a powered-off device probes
+/// every 30 s until it answers, the user disconnects or the device is
+/// removed.
+const RECONNECT_BACKOFF_SECS: [u64; 4] = [1, 2, 5, 10];
+const RECONNECT_BACKOFF_CAP_SECS: u64 = 30;
+
+/// Whether `consecutive_closed` watchdog observations (one per tick) flip
+/// the session to Disconnected. Exposed as a pure function for tests.
+fn should_mark_disconnected(consecutive_closed: u32) -> bool {
+    consecutive_closed >= WATCHDOG_CLOSED_TICKS
+}
+
+/// Backoff before reconnect attempt `attempt` (0-based). Pure for tests.
+fn reconnect_backoff_secs(attempt: u32) -> u64 {
+    match RECONNECT_BACKOFF_SECS.get(usize::try_from(attempt).unwrap_or(usize::MAX)) {
+        Some(secs) => *secs,
+        None => RECONNECT_BACKOFF_CAP_SECS,
+    }
+}
 
 /// Error string for a caller-aborted `exec_stream`: the caller returned
 /// `false` from `on_line`, so the channel is dropped without draining.
@@ -205,6 +236,19 @@ pub struct DeviceSession {
     /// two opens, not two per waiting caller. Cleared on success and on
     /// [`Self::sftp_invalidate`].
     sftp_fail_until: std::sync::atomic::AtomicU64,
+    /// Liveness watchdog state: consecutive ticks that saw a closed handle
+    /// (reset by any tick seeing a live handle or no handle at all). The
+    /// status flips to Disconnected only after
+    /// [`WATCHDOG_CLOSED_TICKS`] of these (hysteresis — a single blip must
+    /// not flap the chip).
+    consecutive_closed: AtomicU32,
+    /// Set by a user-initiated disconnect or a registry removal: the
+    /// watchdog must NOT auto-reconnect this session afterwards. Cleared by
+    /// a successful dial (the session is wanted again).
+    no_reconnect: AtomicBool,
+    /// Single-flight gate for the auto-reconnect loop: the 5 s watchdog
+    /// ticks must not stack reconnect tasks for one death episode.
+    reconnecting: AtomicBool,
 }
 
 /// Current time as unix millis (for the SFTP cooldown deadline).
@@ -232,6 +276,9 @@ impl DeviceSession {
             sftp_epoch: std::sync::atomic::AtomicU64::new(0),
             sftp_open_lock: Mutex::new(()),
             sftp_fail_until: std::sync::atomic::AtomicU64::new(0),
+            consecutive_closed: AtomicU32::new(0),
+            no_reconnect: AtomicBool::new(false),
+            reconnecting: AtomicBool::new(false),
         });
         session.spawn_liveness_watchdog();
         session
@@ -242,11 +289,17 @@ impl DeviceSession {
     /// without this the chip would keep saying "connected" while every
     /// command quietly re-dials. Runs while anyone else holds the session;
     /// exits when only the watchdog itself remains (throwaway probes).
+    ///
+    /// Hysteresis: the flip to Disconnected needs
+    /// [`WATCHDOG_CLOSED_TICKS`] consecutive closed observations, and once
+    /// it fires the session also spawns the auto-reconnect loop (unless a
+    /// user disconnect / removal disabled that — see
+    /// [`Self::spawn_reconnect_loop`]).
     fn spawn_liveness_watchdog(self: &Arc<Self>) {
         let session = Arc::downgrade(self);
         tauri::async_runtime::spawn(async move {
             loop {
-                tokio::time::sleep(Duration::from_secs(5)).await;
+                tokio::time::sleep(WATCHDOG_TICK).await;
                 let Some(session) = session.upgrade() else {
                     break; // session dropped: nothing to watch
                 };
@@ -254,12 +307,55 @@ impl DeviceSession {
                     break; // only the watchdog holds it (probe session)
                 }
                 let handle = session.handle.lock().await;
-                if let Some(handle) = handle.as_ref() {
-                    if handle.is_closed() {
-                        session.set_status(DeviceStatus::Disconnected);
+                match handle.as_ref() {
+                    Some(handle) if handle.is_closed() => {
+                        let closed_ticks =
+                            session.consecutive_closed.fetch_add(1, Ordering::SeqCst) + 1;
+                        if should_mark_disconnected(closed_ticks) {
+                            session.set_status(DeviceStatus::Disconnected);
+                            session.spawn_reconnect_loop();
+                        }
                     }
+                    // Live handle (re-dialed by an op or the reconnect
+                    // loop) or no handle (never connected / user
+                    // disconnect): the blip window resets.
+                    _ => session.consecutive_closed.store(0, Ordering::SeqCst),
                 }
             }
+        });
+    }
+
+    /// Automatic reconnection: spawned by the liveness watchdog when a
+    /// session dies without a user-requested disconnect. Waits
+    /// [`reconnect_backoff_secs`] between attempts, re-dials through
+    /// [`Self::ensure_connected`] (so each attempt mirrors a user op: it
+    /// sets Connecting, then Connected/Disconnected — the FE chip shows
+    /// "connecting…" with the existing status, no new wire variant) and
+    /// stops when the session is live again, the user disconnects or the
+    /// device is removed. Single-flighted via `reconnecting` so the 5 s
+    /// watchdog ticks never stack loops for one death episode.
+    fn spawn_reconnect_loop(self: &Arc<Self>) {
+        if self.no_reconnect.load(Ordering::SeqCst) {
+            return;
+        }
+        if self.reconnecting.swap(true, Ordering::SeqCst) {
+            return; // a loop is already running for this death episode
+        }
+        let session = Arc::clone(self);
+        tauri::async_runtime::spawn(async move {
+            for attempt in 0u32.. {
+                if session.no_reconnect.load(Ordering::SeqCst) {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_secs(reconnect_backoff_secs(attempt))).await;
+                if session.no_reconnect.load(Ordering::SeqCst) {
+                    break; // user disconnect / device removal won the race
+                }
+                if session.ensure_connected().await.is_ok() {
+                    break;
+                }
+            }
+            session.reconnecting.store(false, Ordering::SeqCst);
         });
     }
 
@@ -395,7 +491,10 @@ impl DeviceSession {
     }
 
     /// Connect when not already connected. No-op when live (a closed but
-    /// still-cached handle is re-dialed, not reported as connected).
+    /// still-cached handle is re-dialed, not reported as connected). A
+    /// successful dial re-enables the watchdog's auto-reconnect: an
+    /// explicit connect (or an op healing the session) means the device is
+    /// wanted again, whatever tore it down before.
     pub async fn ensure_connected(&self) -> Result<(), String> {
         let mut guard = self.handle.lock().await;
         if let Some(handle) = guard.as_ref() {
@@ -407,6 +506,7 @@ impl DeviceSession {
         self.sftp_invalidate();
         let handle = self.establish().await?;
         *guard = Some(handle);
+        self.no_reconnect.store(false, Ordering::SeqCst);
         Ok(())
     }
 
@@ -495,8 +595,12 @@ impl DeviceSession {
         Ok(channel)
     }
 
-    /// Close the session (idempotent).
+    /// Close the session (idempotent). Marks the session as deliberately
+    /// torn down so the liveness watchdog does NOT auto-reconnect it
+    /// afterwards (device removal goes through the same gate via
+    /// [`DeviceRegistry::remove`]).
     pub async fn disconnect(&self) {
+        self.no_reconnect.store(true, Ordering::SeqCst);
         if let Some(handle) = self.handle.lock().await.take() {
             let _ = handle
                 .disconnect(Disconnect::ByApplication, "", "english")
@@ -956,8 +1060,49 @@ impl DeviceRegistry {
             .unwrap_or(DeviceStatus::Disconnected)
     }
 
-    /// Take the session out (e.g. before forgetting a device).
+    /// Take the session out (e.g. before forgetting a device). Cancels any
+    /// running auto-reconnect loop for it — a removed device must not keep
+    /// dialing.
     pub fn remove(&self, device_id: &str) -> Option<Arc<DeviceSession>> {
-        self.sessions.lock().remove(device_id)
+        let session = self.sessions.lock().remove(device_id);
+        if let Some(session) = session.as_ref() {
+            session.no_reconnect.store(true, Ordering::SeqCst);
+        }
+        session
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tests: the watchdog hysteresis and backoff schedules are pure decisions,
+// unit-tested here (session-level behavior is covered end-to-end by
+// tests/remote_status_churn.rs against an in-process SSH server).
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn watchdog_hysteresis_needs_two_consecutive_closed_ticks() {
+        assert!(!should_mark_disconnected(0));
+        assert!(
+            !should_mark_disconnected(1),
+            "a single blip (tick racing an op's re-dial) must not flip"
+        );
+        assert!(should_mark_disconnected(2));
+        assert!(
+            should_mark_disconnected(3),
+            "stays flipped on later closed ticks"
+        );
+    }
+
+    #[test]
+    fn reconnect_backoff_follows_the_schedule_then_caps() {
+        assert_eq!(reconnect_backoff_secs(0), 1);
+        assert_eq!(reconnect_backoff_secs(1), 2);
+        assert_eq!(reconnect_backoff_secs(2), 5);
+        assert_eq!(reconnect_backoff_secs(3), 10);
+        assert_eq!(reconnect_backoff_secs(4), 30, "cap after the schedule");
+        assert_eq!(reconnect_backoff_secs(40), 30, "caps forever");
     }
 }

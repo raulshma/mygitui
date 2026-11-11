@@ -25,6 +25,7 @@ import {
   type AiProbeResult,
 } from "./provider";
 import type { AiResult, ModelInfo } from "./types";
+import { describeError } from "$lib/errors";
 
 /** Public OpenRouter API base (models listing + generation). */
 export const OPENROUTER_API_BASE = "https://openrouter.ai/api/v1";
@@ -172,7 +173,7 @@ export class OpenRouterProvider implements AiProvider {
       }
       return {
         status: "down",
-        error: err instanceof Error ? err.message : String(err),
+        error: describeError(err),
       };
     }
   }
@@ -230,7 +231,7 @@ export class OpenRouterProvider implements AiProvider {
       if (err instanceof AiError) throw err;
       // The SDK surfaces provider errors as Error subclasses whose message
       // may echo request material — scrub the key before it escapes.
-      const raw = err instanceof Error ? err.message : String(err);
+      const raw = describeError(err);
       throw new AiError("unknown", scrubSecret(raw, key).slice(0, 500), {
         backend: "openrouter",
         cause: err,

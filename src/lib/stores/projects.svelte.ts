@@ -12,6 +12,7 @@
 
 import { projectDetect } from "$lib/ipc/client";
 import type { ProjectInfo, RepoId } from "$lib/ipc/types";
+import { describeError } from "$lib/errors";
 
 export class ProjectsStore {
   /** Detection result per repository id (empty array = scanned, none found). */
@@ -61,7 +62,7 @@ export class ProjectsStore {
       if (this.#seqs.get(repoId) === seq) {
         this.errors = {
           ...this.errors,
-          [repoId]: err instanceof Error ? err.message : String(err),
+          [repoId]: describeError(err),
         };
       }
       return [];

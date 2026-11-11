@@ -22,7 +22,11 @@ import {
   RemoteDeviceStore,
   deviceInputFromProfile,
 } from "$lib/stores/remoteDevices.svelte";
-import type { DeviceInfo, DeviceProfile } from "$lib/ipc/types";
+import type {
+  DeviceInfo,
+  DeviceProfile,
+  DeviceStatus,
+} from "$lib/ipc/types";
 
 vi.mock("$lib/ipc/client", () => ({
   deviceAdd: vi.fn(),
@@ -178,6 +182,54 @@ describe("registry (load / add / update / remove)", () => {
 
     mockDeviceDisconnect.mockRejectedValue(new Error("already gone") as never);
     await store.disconnect("d1");
+    expect(store.statusOf("d1")).toBe("disconnected");
+  });
+
+  it("disconnect during an in-flight connect does not clobber connecting", async () => {
+    mockDeviceList.mockResolvedValue([device("d1")]);
+    const store = new RemoteDeviceStore();
+    await store.load();
+
+    let resolveConnect: (value: DeviceStatus) => void = () => {};
+    mockDeviceConnect.mockReturnValue(
+      new Promise<DeviceStatus>((resolve) => {
+        resolveConnect = resolve;
+      }),
+    );
+
+    const connecting = store.connect("d1");
+    expect(store.statusOf("d1")).toBe("connecting");
+
+    await store.disconnect("d1");
+    expect(mockDeviceDisconnect).toHaveBeenCalledWith("d1");
+    // The optimistic patch yields: an in-flight connect owns the status
+    // until it resolves (the chip must not flash "disconnected" mid-dial).
+    expect(store.statusOf("d1")).toBe("connecting");
+
+    resolveConnect("connected");
+    await connecting;
+    expect(store.statusOf("d1")).toBe("connected");
+  });
+
+  it("an authoritative device-status event wins over a mid-connect disconnect", async () => {
+    mockDeviceList.mockResolvedValue([device("d1")]);
+    const store = new RemoteDeviceStore();
+    await store.load();
+
+    let resolveConnect: (value: DeviceStatus) => void = () => {};
+    mockDeviceConnect.mockReturnValue(
+      new Promise<DeviceStatus>((resolve) => {
+        resolveConnect = resolve;
+      }),
+    );
+
+    const connecting = store.connect("d1");
+    // The backend reported the (auto-reconnecting / torn-down) session
+    // while the connect was in flight — the event, not the connect
+    // completion, owns the final status.
+    store.applyStatus({ device_id: "d1", status: "disconnected" });
+    resolveConnect("connected");
+    await connecting;
     expect(store.statusOf("d1")).toBe("disconnected");
   });
 

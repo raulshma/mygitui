@@ -40,6 +40,7 @@
   import Icon from "$lib/components/icons/Icon.svelte";
   import EmptyState from "$lib/components/layout/EmptyState.svelte";
   import { Input } from "$lib/components/ui/input/index.js";
+  import { Button } from "$lib/components/ui/button/index.js";
   import { Kbd } from "$lib/components/ui/kbd/index.js";
   import { Hint } from "$lib/components/ui/tooltip/index.js";
   import { formatRelativeTime } from "$lib/git/format";
@@ -53,6 +54,7 @@
   import iconBack from "@ktibow/iconset-material-symbols/arrow-back-rounded";
   import iconDevices from "@ktibow/iconset-material-symbols/devices";
   import iconEdit from "@ktibow/iconset-material-symbols/edit";
+  import iconSettings from "@ktibow/iconset-material-symbols/settings";
   // Startup: the popout-only views below are dynamically imported inside
   // the popout branch — the main window never renders them, so their
   // module trees (history graph, file-history, popout panels) stay out of
@@ -71,6 +73,7 @@
   import DeviceBrowser from "$lib/components/DeviceBrowser.svelte";
   import type { DeviceProfile } from "$lib/ipc/types";
   import { closedDialog, openDialog, type DialogState } from "$lib/state/dialog";
+  import { describeError } from "$lib/errors";
 
   /**
    * Overlay lazy-mounting: the dialogs below mount on first need instead of
@@ -133,6 +136,9 @@
   const appearanceOverlay = lazyOverlay(
     () => import("$lib/components/AppearanceDialog.svelte"),
   );
+  const settingsOverlay = lazyOverlay(
+    () => import("$lib/components/settings/SettingsDialog.svelte"),
+  );
 
   /** Overlay chunks fetched one per idle slot, launch graph untouched. */
   const overlayWarmers: Array<() => Promise<unknown>> = [
@@ -146,6 +152,7 @@
     deviceAuthOverlay.chunk,
     confirmOverlay.chunk,
     appearanceOverlay.chunk,
+    settingsOverlay.chunk,
   ];
   function warmNextOverlay(): void {
     const next = overlayWarmers.shift();
@@ -208,6 +215,9 @@
   /** Appearance customizer (opened by the palette / ThemeToggle menu). */
   let appearanceOpen = $state(false);
 
+  /** Settings hub (opened by the palette / TabStrip gear / Ctrl+Comma). */
+  let settingsOpen = $state(false);
+
   // --- Remote devices (SSH) -------------------------------------------------
 
   /** The device whose detail view (browser + settings) the home shows. */
@@ -256,7 +266,7 @@
         kind: "success",
       });
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = describeError(err);
       toast(`Failed to update ${profile.name}: ${message}`, { kind: "error" });
     }
   }
@@ -280,7 +290,7 @@
       deviceDetailId = null;
       toast(`Removed device ${profile.name}`);
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = describeError(err);
       toast(`Failed to remove ${profile.name}: ${message}`, { kind: "error" });
     }
   }
@@ -387,7 +397,7 @@
       await openTab(path);
       refreshRepos();
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = describeError(err);
       toast(`Failed to open ${path}: ${message}`, { kind: "error" });
     }
   }
@@ -534,6 +544,12 @@
       }),
     );
 
+    cleanups.push(
+      onUiEvent("open-settings", () => {
+        settingsOpen = true;
+      }),
+    );
+
     return () => {
       for (const unlisten of cleanups) unlisten();
     };
@@ -588,6 +604,20 @@
         {#snippet trailing()}
           <UpdateChip compact />
           <AiHealthChip compact />
+          <Hint label="Settings (Ctrl+,)">
+            {#snippet child({ props })}
+              <Button
+                {...props}
+                variant="ghost"
+                size="icon-sm"
+                type="button"
+                aria-label="Open settings"
+                onclick={() => (settingsOpen = true)}
+              >
+                <Icon icon={iconSettings} size={16} />
+              </Button>
+            {/snippet}
+          </Hint>
           <ThemeToggle />
         {/snippet}
       </TabStrip>
@@ -727,6 +757,20 @@
             <div class="home-utilities flex flex-none items-center gap-1.5">
               <UpdateChip />
               <AiHealthChip />
+              <Hint label="Settings (Ctrl+,)">
+                {#snippet child({ props })}
+                  <Button
+                    {...props}
+                    variant="ghost"
+                    size="icon-sm"
+                    type="button"
+                    aria-label="Open settings"
+                    onclick={() => (settingsOpen = true)}
+                  >
+                    <Icon icon={iconSettings} size={16} />
+                  </Button>
+                {/snippet}
+              </Hint>
               <ThemeToggle />
             </div>
           </header>
@@ -1259,6 +1303,13 @@
 {#if appearanceOpen || appearanceOverlay.landed}
   {#await appearanceOverlay.chunk() then AppearanceDialogModule}
     <AppearanceDialogModule.default bind:open={appearanceOpen} />
+  {/await}
+{/if}
+
+<!-- Settings hub (opened by the palette / TabStrip gear / Ctrl+Comma). -->
+{#if settingsOpen || settingsOverlay.landed}
+  {#await settingsOverlay.chunk() then SettingsDialogModule}
+    <SettingsDialogModule.default bind:open={settingsOpen} />
   {/await}
 {/if}
 

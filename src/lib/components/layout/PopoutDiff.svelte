@@ -13,6 +13,7 @@
   import { onRepoChange } from "$lib/events/repoEvents";
   import DiffViewer from "$lib/components/diff/DiffViewer.svelte";
   import { Button } from "$lib/components/ui/button/index.js";
+  import { describeError } from "$lib/errors";
 
   let { repoId }: { repoId: RepoId } = $props();
 
@@ -38,7 +39,7 @@
       .catch((err: unknown) => {
         if (generation !== reload) return;
         loading = false;
-        error = err instanceof Error ? err.message : String(err);
+        error = describeError(err);
       });
     return () => {
       void run;

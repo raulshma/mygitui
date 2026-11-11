@@ -50,35 +50,63 @@
   let sparse = $state<SparseInfo | null>(null);
   let sparseText = $state("");
   let sparseBusy = $state(false);
+  /** The sparse read failed (muted error line + Retry in its section). */
+  let sparseError = $state<string | null>(null);
 
   // LFS
   let lfs = $state<LfsStatus | null>(null);
   let lfsBusy = $state(false);
+  /** The LFS read failed (muted error line + Retry in its section). */
+  let lfsError = $state<string | null>(null);
 
   $effect(() => {
     void repoId;
     health = null;
     sparse = null;
+    sparseText = "";
     lfs = null;
+    sparseError = null;
+    lfsError = null;
     void reload();
   });
 
   async function reload(): Promise<void> {
+    // Stale-response guard: the panel is keep-alive across repo switches —
+    // a slow health/sparse/LFS response from repo A must never land after
+    // the switch to repo B.
+    const id = repoId;
     error = null;
     try {
-      health = await repoHealth(repoId);
+      const fresh = await repoHealth(id);
+      if (id !== repoId) return;
+      health = fresh;
     } catch (err) {
+      if (id !== repoId) return;
       error = err instanceof Error ? err.message : String(err);
     }
-    sparseInfo(repoId)
+    // Best-effort side reads: they refine the sparse + LFS sections and
+    // degrade to a muted error line (with Retry) when they fail.
+    sparseInfo(id)
       .then((info) => {
+        if (id !== repoId) return;
+        sparseError = null;
         sparse = info;
         sparseText = info.patterns.join("\n");
       })
-      .catch(() => {});
-    lfsStatus(repoId)
-      .then((status) => (lfs = status))
-      .catch(() => {});
+      .catch((err) => {
+        if (id !== repoId) return;
+        sparseError = err instanceof Error ? err.message : String(err);
+      });
+    lfsStatus(id)
+      .then((status) => {
+        if (id !== repoId) return;
+        lfsError = null;
+        lfs = status;
+      })
+      .catch((err) => {
+        if (id !== repoId) return;
+        lfsError = err instanceof Error ? err.message : String(err);
+      });
   }
 
   function fmtSize(bytes: number): string {
@@ -304,6 +332,19 @@
 
     <section class="group border-t border-border px-2 py-1.5" aria-label="Sparse checkout">
       <h2 class="head mb-1.5 text-xs font-semibold uppercase tracking-[0.05em] text-muted-foreground">Sparse checkout (cone mode)</h2>
+      {#if sparseError}
+        <p class="state mb-1.5 flex flex-wrap items-center gap-2 text-xs text-destructive" role="alert">
+          {sparseError}
+          <Button
+            class="h-auto rounded px-2 py-px text-ui-meta font-normal text-muted-foreground"
+            variant="outline"
+            type="button"
+            onclick={() => void reload()}
+          >
+            Retry
+          </Button>
+        </p>
+      {/if}
       {#if sparse}
         <p class="state mb-1.5 text-xs text-muted-foreground">
           {sparse.enabled
@@ -333,6 +374,19 @@
 
     <section class="group border-t border-border px-2 py-1.5" aria-label="Git LFS">
       <h2 class="head mb-1.5 text-xs font-semibold uppercase tracking-[0.05em] text-muted-foreground">Git LFS</h2>
+      {#if lfsError}
+        <p class="state mb-1.5 flex flex-wrap items-center gap-2 text-xs text-destructive" role="alert">
+          {lfsError}
+          <Button
+            class="h-auto rounded px-2 py-px text-ui-meta font-normal text-muted-foreground"
+            variant="outline"
+            type="button"
+            onclick={() => void reload()}
+          >
+            Retry
+          </Button>
+        </p>
+      {/if}
       {#if lfs?.installed}
         <p class="state mb-1.5 text-xs text-muted-foreground">{lfs.version}</p>
         {#if lfs.tracked_patterns.length > 0}

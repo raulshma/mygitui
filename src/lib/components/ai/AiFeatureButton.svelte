@@ -35,6 +35,7 @@
   import { Spinner } from "$lib/components/ui/spinner/index.js";
   import { Hint } from "$lib/components/ui/tooltip/index.js";
   import { toast } from "$lib/toast";
+  import { describeError } from "$lib/errors";
 
   let {
     repoId,
@@ -127,7 +128,7 @@
         root?.dispatchEvent(new CustomEvent(resultEvent, { detail: outcome, bubbles: true }));
       }
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = describeError(err);
       error = message;
       toast(`${errorPrefix}: ${message}`, { kind: "error" });
       // Revoked elsewhere (or gateVisibility=false): re-arm the first-use flow.

@@ -21,6 +21,7 @@
   import CommitDetail from "$lib/components/panels/CommitDetail.svelte";
   import RebasePlanner from "$lib/components/rebase/RebasePlanner.svelte";
   import { toast } from "$lib/toast";
+  import { describeError } from "$lib/errors";
 
   let { repoId, sha }: { repoId: RepoId; sha: string } = $props();
 
@@ -73,7 +74,7 @@
       })
       .catch((err: unknown) => {
         if (generation !== reload) return;
-        error = err instanceof Error ? err.message : String(err);
+        error = describeError(err);
       });
   });
 
@@ -106,7 +107,7 @@
     try {
       reportMergeResult("Cherry-picked", await cherryPick(repoId, [info.sha]));
     } catch (err) {
-      toast(`Cherry-pick failed: ${err instanceof Error ? err.message : String(err)}`, {
+      toast(`Cherry-pick failed: ${describeError(err)}`, {
         kind: "error",
       });
     } finally {
@@ -120,7 +121,7 @@
     try {
       reportMergeResult("Reverted", await revertCommits(repoId, [info.sha]));
     } catch (err) {
-      toast(`Revert failed: ${err instanceof Error ? err.message : String(err)}`, {
+      toast(`Revert failed: ${describeError(err)}`, {
         kind: "error",
       });
     } finally {

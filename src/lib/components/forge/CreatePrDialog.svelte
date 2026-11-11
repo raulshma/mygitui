@@ -36,6 +36,7 @@
   import { Label } from "$lib/components/ui/label/index.js";
   import { Hint } from "$lib/components/ui/tooltip/index.js";
   import { prNumberFromUrl } from "./forgeModel";
+  import { describeError } from "$lib/errors";
 
   let {
     repoId,
@@ -100,7 +101,7 @@
       })
       .catch((err: unknown) => {
         if (current !== seq) return;
-        error = err instanceof Error ? err.message : String(err);
+        error = describeError(err);
         loading = false;
       });
 
@@ -215,7 +216,7 @@
           error = err.message;
         }
       } else {
-        error = err instanceof Error ? err.message : String(err);
+        error = describeError(err);
       }
     } finally {
       creating = false;

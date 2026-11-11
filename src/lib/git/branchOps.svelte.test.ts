@@ -170,7 +170,7 @@ describe("switch flow", () => {
 
     await ops.requestSwitch("feature");
 
-    expect(ops.switchChoice).toEqual({ open: true, name: "feature" });
+    expect(ops.switchChoice).toEqual({ open: true, name: "feature", remote: null });
     expect(mocks.branchSwitch).not.toHaveBeenCalled();
   });
 
@@ -564,6 +564,87 @@ describe("checkoutRemote", () => {
           t.kind === "error" && t.message === "Checkout feature failed: no such remote",
       ),
     ).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Remote checkout with the dirty-worktree choice (panel + switcher rows)
+// ---------------------------------------------------------------------------
+
+describe("requestCheckoutRemote", () => {
+  it("checks out directly when the worktree is clean", async () => {
+    tabStore.tabs = [tabWith(CLEAN)];
+    const { ops, reload, onMutated } = makeController();
+    mocks.branchCheckoutRemote.mockResolvedValueOnce("next");
+
+    await ops.requestCheckoutRemote("origin", "next");
+
+    expect(mocks.branchCheckoutRemote).toHaveBeenCalledWith(REPO, "origin", "next");
+    expect(ops.switchChoice.open).toBe(false);
+    expect(reload).toHaveBeenCalled();
+    expect(onMutated).toHaveBeenCalled();
+  });
+
+  it("opens the choice dialog instead when the worktree is dirty", async () => {
+    tabStore.tabs = [tabWith(DIRTY)];
+    const { ops } = makeController();
+
+    await ops.requestCheckoutRemote("origin", "next");
+
+    expect(ops.switchChoice).toEqual({
+      open: true,
+      name: "next",
+      remote: "origin",
+    });
+    expect(mocks.branchCheckoutRemote).not.toHaveBeenCalled();
+  });
+
+  it("chooseStash stashes, then creates + checks out the tracking branch", async () => {
+    tabStore.tabs = [tabWith(DIRTY)];
+    const { ops } = makeController();
+    await ops.requestCheckoutRemote("origin", "next");
+
+    await ops.chooseStash();
+
+    expect(mocks.stashPush).toHaveBeenCalledWith(
+      REPO,
+      "pre-switch stash (switching to next)",
+    );
+    expect(mocks.branchCheckoutRemote).toHaveBeenCalledWith(REPO, "origin", "next");
+    expect(mocks.branchSwitch).not.toHaveBeenCalled();
+    expect(ops.switchChoice.open).toBe(false);
+  });
+
+  it("chooseForce creates the branch at the tip and force-switches onto it", async () => {
+    tabStore.tabs = [tabWith(DIRTY)];
+    const { ops } = makeController();
+    await ops.requestCheckoutRemote("origin", "next");
+
+    await ops.chooseForce();
+
+    expect(mocks.branchCreate).toHaveBeenCalledWith(REPO, "next", false, "origin/next");
+    expect(mocks.branchSwitch).toHaveBeenCalledWith(REPO, "next", true);
+    expect(mocks.branchCheckoutRemote).not.toHaveBeenCalled();
+    expect(ops.switchChoice.open).toBe(false);
+    expect(
+      getToasts().some(
+        (t) =>
+          t.kind === "success" &&
+          t.message === "Checked out next (tracking origin/next)",
+      ),
+    ).toBe(true);
+  });
+
+  it("cancelChoice aborts the remote checkout without acting", async () => {
+    tabStore.tabs = [tabWith(DIRTY)];
+    const { ops } = makeController();
+    await ops.requestCheckoutRemote("origin", "next");
+
+    ops.cancelChoice();
+
+    expect(ops.switchChoice.open).toBe(false);
+    expect(mocks.branchCheckoutRemote).not.toHaveBeenCalled();
+    expect(mocks.stashPush).not.toHaveBeenCalled();
   });
 });
 

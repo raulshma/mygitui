@@ -5,8 +5,9 @@
 
   Mount it once per controller (conditional rendering is driven by the
   controller's state, so it is safe to keep it always mounted):
-    - `switchChoice` → the dirty-switch choice (stash / proceed / cancel);
-      the stash button takes focus when the dialog appears;
+    - `switchChoice` → the dirty-switch choice (stash / proceed / cancel) —
+      for a plain local switch or a remote-branch checkout (the dialog says
+      which); the stash button takes focus when the dialog appears;
     - `confirmDelete` → ConfirmDialog for a merged (safe) delete;
     - `previewDelete` → PreviewDialog (type-the-name + undo checkpoint) for
       a force delete. The controller performs the operations itself; this
@@ -85,7 +86,13 @@
       </h2>
       <p class="text mb-4 mt-0 text-card-foreground [overflow-wrap:anywhere]">
         You have uncommitted changes. What should happen to them when
-        switching to <strong>{controller.switchChoice.name}</strong>?
+        switching to
+        {#if controller.switchChoice.remote}
+          <strong>{controller.switchChoice.remote}/{controller.switchChoice.name}</strong>
+          (creates the local branch <strong>{controller.switchChoice.name}</strong>)?
+        {:else}
+          <strong>{controller.switchChoice.name}</strong>?
+        {/if}
       </p>
       <div class="actions flex flex-wrap justify-end gap-2">
         <Button

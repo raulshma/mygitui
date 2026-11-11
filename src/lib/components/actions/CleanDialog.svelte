@@ -16,6 +16,7 @@
    */
   import { opsPreview, repoClean } from "$lib/ipc/client";
   import type { PreviewFile } from "$lib/ipc/types";
+  import { appSettings } from "$lib/state/appSettings.svelte";
   import { toast } from "$lib/toast";
   import * as Dialog from "$lib/components/ui/dialog/index.js";
   import {
@@ -25,6 +26,7 @@
     groupLabel,
     needsTypeConfirm,
   } from "./actionsModel";
+  import { describeError } from "$lib/errors";
 
   let {
     repoId,
@@ -69,7 +71,7 @@
       })
       .catch((err: unknown) => {
         if (seq !== previewSeq) return;
-        error = err instanceof Error ? err.message : String(err);
+        error = describeError(err);
         loading = false;
       });
   });
@@ -82,6 +84,7 @@
       selectedPaths.length === 0 ||
       (typeConfirmNeeded && confirmText !== CLEAN_CONFIRM_WORD),
   );
+  const checkpointsEnabled = $derived(appSettings.checkpointsEnabled);
 
   function setAll(value: boolean): void {
     const all: Record<string, boolean> = {};
@@ -101,17 +104,23 @@
     running = true;
     try {
       // The backend checkpoints the full workdir state ("pre-clean") before
-      // deleting, so this is undoable via checkpoints.
-      const removed = await repoClean(repoId, selectedPaths, "pre-clean");
+      // deleting, so this is undoable via checkpoints — unless the global
+      // "checkpoints for git changes" setting is off.
+      const removed = await repoClean(repoId, selectedPaths, "pre-clean", {
+        checkpoint: appSettings.checkpointsEnabled,
+      });
       toast(
-        `Cleaned ${removed} path${removed === 1 ? "" : "s"} — undo available (checkpoint "pre-clean")`,
+        `Cleaned ${removed} path${removed === 1 ? "" : "s"}` +
+          (checkpointsEnabled
+            ? ` — undo available (checkpoint "pre-clean")`
+            : " — no checkpoint created (checkpoints are disabled in Settings)"),
         { kind: "success" },
       );
       running = false;
       onDone();
     } catch (err) {
       running = false;
-      toast(`Clean failed: ${err instanceof Error ? err.message : String(err)}`, {
+      toast(`Clean failed: ${describeError(err)}`, {
         kind: "error",
       });
     }
@@ -183,7 +192,11 @@
       {/if}
 
       <div class="actions flex items-center justify-end gap-2">
-        <span class="guard-note mr-auto text-ui-micro text-muted-foreground">A checkpoint is created first (undo available).</span>
+        <span class="guard-note mr-auto text-ui-micro text-muted-foreground">
+          {checkpointsEnabled
+            ? "A checkpoint is created first (undo available)."
+            : "No checkpoint is created (checkpoints are disabled in Settings)."}
+        </span>
         <button
           class="confirm rounded-full border-0 bg-destructive px-5 py-[0.45rem] font-[inherit] font-medium text-destructive-foreground cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-destructive disabled:cursor-not-allowed disabled:opacity-55"
           type="button"

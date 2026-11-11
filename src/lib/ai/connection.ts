@@ -22,6 +22,7 @@
 import type { AiBackend, AiConfig, AiResult } from "./types";
 import { AiError } from "./types";
 import type { AiGenerateRequest, AiProbeResult, AiProvider, ProviderSet } from "./provider";
+import { describeError } from "$lib/errors";
 
 /** A backend's observed connection state. */
 export type ConnectionStatus = "unknown" | "checking" | "ok" | "down" | "unauthenticated";
@@ -190,7 +191,7 @@ export class ConnectionSupervisor {
       } catch (err) {
         result = {
           status: "down",
-          error: err instanceof Error ? err.message : String(err),
+          error: describeError(err),
         };
       }
       const latency = this.#now() - started;

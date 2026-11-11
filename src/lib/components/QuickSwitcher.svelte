@@ -25,6 +25,7 @@
   import { trapTab } from "$lib/components/safety/trapTab";
   import { Input } from "$lib/components/ui/input/index.js";
   import { Badge } from "$lib/components/ui/badge/index.js";
+  import { describeError } from "$lib/errors";
 
   const open = $derived(isSwitcherOpen());
 
@@ -129,7 +130,7 @@
       await activateSwitcherItem(item);
       query = "";
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = describeError(err);
       toast(`Failed to open ${item.sub}: ${message}`, { kind: "error" });
     }
   }

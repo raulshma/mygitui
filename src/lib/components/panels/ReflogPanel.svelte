@@ -64,18 +64,23 @@
   });
 
   async function reload(): Promise<void> {
+    // Stale-response guard: the panel is keep-alive across repo switches —
+    // a slow reflog from repo A must never land after the switch.
+    const id = repoId;
     loading = true;
     error = null;
     try {
       const refName = selectedRef === "HEAD" ? undefined : selectedRef;
-      const [log, br] = await Promise.all([reflog(repoId, refName), branches(repoId)]);
+      const [log, br] = await Promise.all([reflog(id, refName), branches(id)]);
+      if (id !== repoId) return;
       entries = log;
       branchList = br;
     } catch (err) {
+      if (id !== repoId) return;
       error = err instanceof Error ? err.message : String(err);
       entries = [];
     } finally {
-      loading = false;
+      if (id === repoId) loading = false;
     }
   }
 

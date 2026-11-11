@@ -218,6 +218,13 @@
   // -- virtualizer + canvas scroll sync ------------------------------------------
 
   let scrollerEl = $state<HTMLDivElement | undefined>(undefined);
+  /**
+   * The view's section root. ResizeObserver watches it in addition to the
+   * scroller: SplitContainer (collapsed sidebar) and TabGroup (keep-alive
+   * tab host) hide this panel with `hidden` on an ANCESTOR, and an unhide
+   * must re-window the virtualizer or the list stays empty.
+   */
+  let panelEl = $state<HTMLElement | undefined>(undefined);
   /** GraphCanvas's native scroll container (`bind:scrollEl`) — fast path. */
   let canvasScrollEl = $state<HTMLDivElement | undefined>(undefined);
   let canvasRef = $state<{ scrollToRow?: (i: number) => void } | null>(null);
@@ -269,11 +276,17 @@
   $effect(() => {
     // Splitter drags resize the scroller without a scroll event: re-window
     // the virtualizer as the box changes (guarded — ResizeObserver is
-    // absent in some test environments).
-    const el = scrollerEl;
-    if (!el || typeof ResizeObserver === "undefined") return;
+    // absent in some test environments). The section root is observed too:
+    // the panel is hidden by `hidden` on an ANCESTOR (SplitContainer
+    // collapse / TabGroup keep-alive host), so the unhide is a 0→N box
+    // change only visible on the section — without it a restart that ran
+    // while the panel was hidden would leave an empty list.
+    const scroller = scrollerEl;
+    const panel = panelEl;
+    if ((!scroller && !panel) || typeof ResizeObserver === "undefined") return;
     const observer = new ResizeObserver(() => sync.updateOwnRange());
-    observer.observe(el);
+    if (scroller) observer.observe(scroller);
+    if (panel) observer.observe(panel);
     return () => observer.disconnect();
   });
 
@@ -338,6 +351,21 @@
   $effect(() => {
     store.start(repoId, { root });
     return () => store.destroy();
+  });
+
+  $effect(() => {
+    // Reset the scroll windows on EVERY stream restart, not only repo
+    // re-targets: filter edits, watcher-driven refreshes and manual retries
+    // all bump the store's epoch in #beginStream, and a render window
+    // indexes into ONE stream's rows — inheriting the previous stream's
+    // window (or its scrollTop) renders nothing until the first scroll
+    // event. The repo re-target effect above resets too (root-only
+    // re-targets keep the same repoId, so no epoch bump there); a persisted
+    // selection re-resolves and re-scrolls as its commit lands (the
+    // restore effects below). Untracked reset: the ports read the bound
+    // elements, which must not enter this effect's dependencies.
+    void store.restartEpoch;
+    untrack(() => sync.reset());
   });
 
   /**
@@ -416,16 +444,63 @@
     return out;
   });
 
+  /**
+   * Cheap safety net for an empty render window while data exists: the
+   * scroll, ResizeObserver and total-effect re-window paths can all miss
+   * when a restart ran while the panel was hidden, so schedule one
+   * `updateOwnRange()` on the next animation frame. The frame callback is
+   * deliberately fire-and-forget (canceling it on effect re-run would
+   * starve the one shot whenever another dep changes in the same frame);
+   * the latch guards against loops — it re-arms only once the window
+   * actually changes (rows render again), so a hopeless case (scroller
+   * permanently absent) never reschedules every frame.
+   */
+  let emptyWindowRetried = false;
+  $effect(() => {
+    if (total === 0 || visible.length > 0) {
+      emptyWindowRetried = false;
+      return;
+    }
+    if (emptyWindowRetried) return;
+    emptyWindowRetried = true;
+    const rewindow = () => {
+      sync.updateOwnRange();
+      // A canvas window left over from a previous stream shadows the fresh
+      // local window (renderWindow prefers it) — drop it when it still
+      // renders nothing, so the view falls back to the local window.
+      const w = sync.renderWindow();
+      if (total > 0 && w.end <= w.start) canvasWindow = null;
+    };
+    if (typeof requestAnimationFrame !== "function") {
+      setTimeout(rewindow, 16);
+    } else {
+      requestAnimationFrame(rewindow);
+    }
+  });
+
   // -- branch scope (backend LogFilter.refs) ------------------------------------
 
   /** Local branches feeding the scope dropdown (best-effort; never blocks). */
   let branchList = $state<BranchInfo[]>([]);
 
+  /**
+   * Stale-response guard (the store's `#token` pattern): every fetch bumps
+   * the token and a response is dropped when a newer fetch started — repo
+   * A's slow branch list must not land after the view re-targeted to B
+   * (the re-target effect resets the list and fetches again, bumping it).
+   */
+  let branchToken = 0;
+
   async function refreshBranches(): Promise<void> {
     if (repoId === "") return;
+    const token = ++branchToken;
+    const target = repoId;
     try {
-      branchList = await branches(repoId);
+      const list = await branches(target);
+      if (token !== branchToken) return;
+      branchList = list;
     } catch {
+      if (token !== branchToken) return;
       branchList = []; // dropdown degrades to All/Current only
     }
   }
@@ -926,6 +1001,7 @@
   class="history flex h-full min-h-0 flex-col bg-card [&>.split]:flex-1 [&>.split]:min-h-0"
   class:sidebar
   aria-label="Commit history"
+  bind:this={panelEl}
 >
   {#if sidebar}
     <!-- 1a. sidebar header: the panel is a bare layout leaf, so it owns its
@@ -1238,124 +1314,144 @@
        virtualizer markup. -->
   {#snippet logPane()}
   <div class="listwrap relative flex min-h-0 flex-1">
-    {#if store.loading && total === 0}
-      <p class="empty m-auto text-ui-base text-muted-foreground" role="status">
-        <span class="empty-loading inline-flex items-center gap-[0.4rem]">
-          <Spinner class="size-4" role="presentation" aria-hidden="true" />
-          Loading history…
-        </span>
-      </p>
-    {:else if !store.loading && !store.error && total === 0}
-      <EmptyState title="No commits match the current filters." />
-    {:else}
-      <div
-        class="scroller min-w-0 flex-1 overflow-y-auto focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring {sidebar
-          ? ""
-          : "[scrollbar-width:none] [&::-webkit-scrollbar]:hidden"}"
-        bind:this={scrollerEl}
-        onscroll={onScroll}
-        role="listbox"
-        aria-label="Commits"
-        tabindex="0"
-        aria-activedescendant={activeDescendant}
-        onkeydown={onKeydown}
-      >
-        <div class="spacer relative" style:height={`${total * ROW_HEIGHT}px`}>
-          {#each visible as v (v.commit.sha)}
-            <div
-              id={`commit-row-${v.idx}`}
-              class="row absolute inset-x-0 flex cursor-pointer items-center border-b border-border/45 py-0 text-ui-base {sidebar ? "gap-1 pr-2 pl-2" : "gap-1.5 pr-2.5 pl-3"} {v.idx === selectedIdx
-                ? "bg-secondary text-secondary-foreground"
-                : multiSet.has(v.commit.sha)
-                  ? "bg-secondary/45 hover:bg-secondary/60"
-                  : "hover:bg-accent"}"
-              class:selected={v.idx === selectedIdx}
-              class:multisel={v.idx !== selectedIdx && multiSet.has(v.commit.sha)}
-              role="option"
-              tabindex="-1"
-              aria-selected={v.idx === selectedIdx || multiSet.has(v.commit.sha)}
-              style:top={`${v.idx * ROW_HEIGHT}px`}
-              style:height={`${ROW_HEIGHT}px`}
-              onclick={(e) => onRowClick(v.commit.sha, v.idx, e)}
-              oncontextmenu={(e) => commitMenu(e, v.commit.sha, v.idx)}
-              onkeydown={(e) => {
-                if (e.key === "Enter" || e.key === " ") {
-                  e.preventDefault();
-                  select(v.commit.sha);
-                }
-              }}
-            >
-              <span class="sha flex-none font-mono {v.idx === selectedIdx ? "" : "text-muted-foreground"}">{v.commit.sha.slice(0, 7)}</span>
-              {#each v.commit.refs.slice(0, 3) as ref, i (`${v.commit.sha}:${i}:${ref}`)}
-                {@const kind = classifyRef(ref)}
-                {@const scope =
-                  kind === "local"
-                    ? "Local"
-                    : kind === "remote"
-                      ? "Remote"
-                      : kind === "tag"
-                        ? "Tag"
-                        : "HEAD"}
-                {@const refTint =
-                  kind === "local"
-                    ? "border-transparent bg-primary/10 text-primary"
-                    : kind === "remote"
-                      ? "border-border text-muted-foreground"
-                      : kind === "tag"
-                        ? "border-transparent bg-accent text-accent-foreground"
-                        : "border-primary bg-primary/10 text-primary"}
-                <Hint label={`${scope}: ${shortRefName(ref)}`}>
-                  {#snippet child({ props })}
-                    <span
-                      {...props}
-                      class="ref ref-{kind} inline-flex flex-none items-center gap-1 whitespace-nowrap rounded-sm border px-1 text-ui-micro leading-[1.4] {sidebar ? 'max-w-24' : 'max-w-36'} {refTint}"
-                      aria-label={`${scope}: ${shortRefName(ref)}`}
-                    >
-                      <span class="ref-scope flex-none text-ui-tiny font-bold uppercase tracking-[0.025em] opacity-80 {sidebar ? 'hidden' : ''}" aria-hidden="true">{scope}</span>
-                      <span class="ref-name min-w-0 truncate">{shortRefName(ref)}</span>
-                    </span>
-                  {/snippet}
-                </Hint>
-              {/each}
-              {#if v.commit.refs.length > 3}
-                <Hint label={v.commit.refs.slice(3).map(shortRefName).join(", ")}>
-                  {#snippet child({ props })}
-                    <span
-                      {...props}
-                      class="ref ref-more inline-flex flex-none items-center whitespace-nowrap rounded-sm border border-transparent bg-muted px-1 text-ui-micro leading-[1.4] tabular-nums text-muted-foreground"
-                      aria-label={`${v.commit.refs.length - 3} more refs`}
-                    >
-                      +{v.commit.refs.length - 3}
-                    </span>
-                  {/snippet}
-                </Hint>
-              {/if}
-              <Hint label={v.commit.summary}>
+    <!-- The scroller stays MOUNTED across loading/empty states: swapping it
+         out per state destroyed `scrollerEl` on every stream restart, and a
+         restart while the panel was hidden left the recreated scroller
+         unmeasured (0px) with the render window stuck empty until the user
+         scrolled. Loading / empty render as overlays instead (the spacer is
+         0px tall while total === 0, so the scroller itself shows nothing). -->
+    <div
+      class="scroller min-w-0 flex-1 overflow-y-auto focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring {sidebar
+        ? ""
+        : "[scrollbar-width:none] [&::-webkit-scrollbar]:hidden"}"
+      bind:this={scrollerEl}
+      onscroll={onScroll}
+      role="listbox"
+      aria-label="Commits"
+      tabindex="0"
+      aria-activedescendant={activeDescendant}
+      onkeydown={onKeydown}
+    >
+      <div class="spacer relative" style:height={`${total * ROW_HEIGHT}px`}>
+        {#each visible as v (v.commit.sha)}
+          <div
+            id={`commit-row-${v.idx}`}
+            class="row absolute inset-x-0 flex cursor-pointer items-center border-b border-border/45 py-0 text-ui-base {sidebar ? "gap-1 pr-2 pl-2" : "gap-1.5 pr-2.5 pl-3"} {v.idx === selectedIdx
+              ? "bg-secondary text-secondary-foreground"
+              : multiSet.has(v.commit.sha)
+                ? "bg-secondary/45 hover:bg-secondary/60"
+                : "hover:bg-accent"}"
+            class:selected={v.idx === selectedIdx}
+            class:multisel={v.idx !== selectedIdx && multiSet.has(v.commit.sha)}
+            role="option"
+            tabindex="-1"
+            aria-selected={v.idx === selectedIdx || multiSet.has(v.commit.sha)}
+            style:top={`${v.idx * ROW_HEIGHT}px`}
+            style:height={`${ROW_HEIGHT}px`}
+            onclick={(e) => onRowClick(v.commit.sha, v.idx, e)}
+            oncontextmenu={(e) => commitMenu(e, v.commit.sha, v.idx)}
+            onkeydown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                select(v.commit.sha);
+              }
+            }}
+          >
+            <span class="sha flex-none font-mono {v.idx === selectedIdx ? "" : "text-muted-foreground"}">{v.commit.sha.slice(0, 7)}</span>
+            {#each v.commit.refs.slice(0, 3) as ref, i (`${v.commit.sha}:${i}:${ref}`)}
+              {@const kind = classifyRef(ref)}
+              {@const scope =
+                kind === "local"
+                  ? "Local"
+                  : kind === "remote"
+                    ? "Remote"
+                    : kind === "tag"
+                      ? "Tag"
+                      : "HEAD"}
+              {@const refTint =
+                kind === "local"
+                  ? "border-transparent bg-primary/10 text-primary"
+                  : kind === "remote"
+                    ? "border-border text-muted-foreground"
+                    : kind === "tag"
+                      ? "border-transparent bg-accent text-accent-foreground"
+                      : "border-primary bg-primary/10 text-primary"}
+              <Hint label={`${scope}: ${shortRefName(ref)}`}>
                 {#snippet child({ props })}
-                  <span {...props} class="summary min-w-0 flex-1 truncate">{v.commit.summary}</span>
+                  <span
+                    {...props}
+                    class="ref ref-{kind} inline-flex flex-none items-center gap-1 whitespace-nowrap rounded-sm border px-1 text-ui-micro leading-[1.4] {sidebar ? 'max-w-24' : 'max-w-36'} {refTint}"
+                    aria-label={`${scope}: ${shortRefName(ref)}`}
+                  >
+                    <span class="ref-scope flex-none text-ui-tiny font-bold uppercase tracking-[0.025em] opacity-80 {sidebar ? 'hidden' : ''}" aria-hidden="true">{scope}</span>
+                    <span class="ref-name min-w-0 truncate">{shortRefName(ref)}</span>
+                  </span>
                 {/snippet}
               </Hint>
-              <span class="author max-w-40 flex-none truncate {v.idx === selectedIdx ? "" : "text-muted-foreground"} {sidebar ? "hidden" : ""}">{v.commit.author.name}</span>
-              <span class="date flex-none text-muted-foreground {sidebar ? "text-ui-micro" : "text-ui-micro"}">{formatRelativeTime(v.commit.author.time)}</span>
-            </div>
-          {/each}
-        </div>
+            {/each}
+            {#if v.commit.refs.length > 3}
+              <Hint label={v.commit.refs.slice(3).map(shortRefName).join(", ")}>
+                {#snippet child({ props })}
+                  <span
+                    {...props}
+                    class="ref ref-more inline-flex flex-none items-center whitespace-nowrap rounded-sm border border-transparent bg-muted px-1 text-ui-micro leading-[1.4] tabular-nums text-muted-foreground"
+                    aria-label={`${v.commit.refs.length - 3} more refs`}
+                  >
+                    +{v.commit.refs.length - 3}
+                  </span>
+                {/snippet}
+              </Hint>
+            {/if}
+            <Hint label={v.commit.summary}>
+              {#snippet child({ props })}
+                <span {...props} class="summary min-w-0 flex-1 truncate">{v.commit.summary}</span>
+              {/snippet}
+            </Hint>
+            <span class="author max-w-40 flex-none truncate {v.idx === selectedIdx ? "" : "text-muted-foreground"} {sidebar ? "hidden" : ""}">{v.commit.author.name}</span>
+            <span class="date flex-none text-muted-foreground {sidebar ? "text-ui-micro" : "text-ui-micro"}">{formatRelativeTime(v.commit.author.time)}</span>
+          </div>
+        {/each}
       </div>
-      {#if !sidebar}
-        <div class="graphcol h-full min-h-0 flex-none border-l border-border bg-card" style:width={`${GRAPH_WIDTH}px`}>
-          <GraphCanvas
-            pages={store.pages}
-            rowHeight={ROW_HEIGHT}
-            onCommitClick={(sha) => select(sha)}
-            onReachEnd={() => store.loadMore()}
-            onVisibleRowsChange={sync.onCanvasVisible}
-            {bookmarks}
-            {branchColors}
-            bind:scrollEl={canvasScrollEl}
-            bind:this={canvasRef}
-          />
-        </div>
-      {/if}
+    </div>
+    {#if !sidebar}
+      <div class="graphcol h-full min-h-0 flex-none border-l border-border bg-card" style:width={`${GRAPH_WIDTH}px`}>
+        <GraphCanvas
+          pages={store.pages}
+          rowHeight={ROW_HEIGHT}
+          onCommitClick={(sha) => select(sha)}
+          onReachEnd={() => store.loadMore()}
+          onVisibleRowsChange={sync.onCanvasVisible}
+          {bookmarks}
+          {branchColors}
+          bind:scrollEl={canvasScrollEl}
+          bind:this={canvasRef}
+        />
+      </div>
+    {/if}
+    {#if store.loading && total === 0}
+      <!-- Loading overlay: pointer-events-none so the (empty) scroller keeps
+           focus/scroll handling while the first page streams in. -->
+      <div
+        class="absolute inset-0 z-10 flex items-center justify-center bg-card pointer-events-none"
+      >
+        <p class="empty m-auto text-ui-base text-muted-foreground" role="status">
+          <span class="empty-loading inline-flex items-center gap-[0.4rem]">
+            <Spinner class="size-4" role="presentation" aria-hidden="true" />
+            Loading history…
+          </span>
+        </p>
+      </div>
+    {:else if !store.loading && !store.error && total === 0}
+      <!-- Empty overlay: keeps the EmptyState interactive (action buttons)
+           with its own stacking above the still-mounted scroller. An empty
+           log without an active filter is just a freshly initialized repo. -->
+      <div class="absolute inset-0 z-10 flex items-center justify-center bg-card">
+        <EmptyState
+          title={filterActive
+            ? "No commits match the current filters."
+            : "No commits yet."}
+        />
+      </div>
     {/if}
   </div>
   {/snippet}

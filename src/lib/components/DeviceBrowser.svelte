@@ -28,6 +28,7 @@
     TabsList,
     TabsTrigger,
   } from "$lib/components/ui/tabs/index.js";
+  import { describeError } from "$lib/errors";
 
   let { deviceId }: { deviceId: string } = $props();
 
@@ -88,7 +89,7 @@
     } catch (err) {
       if (token !== browseToken) return;
       listing = null;
-      browseError = err instanceof Error ? err.message : String(err);
+      browseError = describeError(err);
     } finally {
       if (token === browseToken) loading = false;
     }
@@ -107,7 +108,7 @@
       candidates = await deviceScanRepos(deviceId, null);
     } catch (err) {
       candidates = null;
-      scanError = err instanceof Error ? err.message : String(err);
+      scanError = describeError(err);
     } finally {
       scanning = false;
     }
@@ -130,7 +131,7 @@
     } catch (err) {
       // openRemoteTab keeps offline tabs instead of throwing; this is the
       // belt-and-braces path (e.g. an unknown device id).
-      const message = err instanceof Error ? err.message : String(err);
+      const message = describeError(err);
       toast(`Failed to open ${repoPath}: ${message}`, { kind: "error" });
     }
   }

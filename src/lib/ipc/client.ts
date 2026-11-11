@@ -843,12 +843,22 @@ export function mergetoolRun(
   return call<MergetoolResult>("mergetool_run", args);
 }
 
-/** Discards local changes (files or hunks); checkpoints first. */
+/**
+ * Discards local changes (files or hunks). When `opts.checkpoint` is not
+ * `false` (default on; the FE passes the global "checkpoints for git
+ * changes" setting) the backend snapshots an undo point first. Resolves
+ * with a checkpoint-failure warning: the discard itself succeeded, but the
+ * undo checkpoint could not be created (most commonly a missing git
+ * identity) — `null` means everything worked.
+ */
 export function discard(
   repoId: RepoId,
   targets: StageTarget[],
-): Promise<void> {
-  return call<void>("discard", { repo_id: repoId, targets });
+  opts?: { checkpoint?: boolean },
+): Promise<string | null> {
+  const args: Record<string, unknown> = { repo_id: repoId, targets };
+  if (opts?.checkpoint !== undefined) args.checkpoint = opts.checkpoint;
+  return call<string | null>("discard", args);
 }
 
 // ---------- M10: bisect / describe / autosquash ----------
@@ -1201,20 +1211,24 @@ export function gitignoreApplyTemplate(
  * Deletes the given workdir-relative untracked paths (as listed by
  * `opsPreview(repoId, "clean", { dirs: true })`). A checkpoint of the full
  * workdir state is created FIRST (`checkpoint_reason`, conventionally
- * "pre-clean"), so the deletion is undoable via checkpoints. Resolves with
- * the number of paths actually removed (paths that vanished in the meantime
- * are skipped).
+ * "pre-clean") unless `opts.checkpoint` is `false` (the global "checkpoints
+ * for git changes" setting), so the deletion is undoable via checkpoints.
+ * Resolves with the number of paths actually removed (paths that vanished
+ * in the meantime are skipped).
  */
 export function repoClean(
   repoId: string,
   paths: string[],
   checkpointReason: string,
+  opts?: { checkpoint?: boolean },
 ): Promise<number> {
-  return invokeTauri<number>("repo_clean", {
+  const args: Record<string, unknown> = {
     repo_id: repoId,
     paths,
     checkpoint_reason: checkpointReason,
-  });
+  };
+  if (opts?.checkpoint !== undefined) args.checkpoint = opts.checkpoint;
+  return invokeTauri<number>("repo_clean", args);
 }
 
 /**
@@ -1865,6 +1879,26 @@ export async function detectEditors(): Promise<EditorApp[]> {
 /** Opens the repository root in the app with the given id. */
 export function openWith(repoRoot: string, appId: string): Promise<void> {
   return call<void>("open_with", { repo_root: repoRoot, app_id: appId });
+}
+
+/**
+ * Spawns a user-defined custom "Open with" command for the repository root.
+ * The full spec is sent per launch (nothing is persisted backend-side):
+ * backend-side, every `{path}` occurrence in `command` is substituted with
+ * the repo root, or the root is appended as the final (quoted) argument when
+ * the template has none — see `src/lib/openwith/customApps.svelte.ts` for
+ * the persistence side.
+ */
+export function openWithCustom(
+  repoRoot: string,
+  app: { id: string; name: string; command: string },
+): Promise<void> {
+  return call<void>("open_with_custom", {
+    repo_root: repoRoot,
+    app_id: app.id,
+    name: app.name,
+    command: app.command,
+  });
 }
 
 // ---------------------------------------------------------------------------

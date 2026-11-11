@@ -31,6 +31,7 @@
   import { Label } from "$lib/components/ui/label/index.js";
   import { Checkbox } from "$lib/components/ui/checkbox/index.js";
   import { Button } from "$lib/components/ui/button/index.js";
+  import { describeError } from "$lib/errors";
 
   let { open = $bindable(false) }: { open?: boolean } = $props();
 
@@ -168,11 +169,11 @@
       try {
         await openTab(path);
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
+        const message = describeError(err);
         toast(`Failed to open ${path}: ${message}`, { kind: "error" });
       }
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = describeError(err);
       error = message;
       toast(`Clone failed: ${message}`, { kind: "error" });
     } finally {

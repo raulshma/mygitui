@@ -20,6 +20,7 @@
   import { Input } from "$lib/components/ui/input/index.js";
   import { Label } from "$lib/components/ui/label/index.js";
   import { Hint } from "$lib/components/ui/tooltip/index.js";
+  import { describeError } from "$lib/errors";
 
   let { repoId, showLauncher = true }: { repoId: string; showLauncher?: boolean } = $props();
 
@@ -74,7 +75,7 @@
       logEntries = await bisectLog(repoId);
     } catch (err) {
       toast(
-        `Bisect log failed: ${err instanceof Error ? err.message : String(err)}`,
+        `Bisect log failed: ${describeError(err)}`,
         { kind: "error" },
       );
       logOpen = false;
@@ -93,7 +94,7 @@
       toast("Bisect started — HEAD detached on the first probe", { kind: "success" });
     } catch (err) {
       toast(
-        `Bisect start failed: ${err instanceof Error ? err.message : String(err)}`,
+        `Bisect start failed: ${describeError(err)}`,
         { kind: "error" },
       );
     } finally {
@@ -112,7 +113,7 @@
       }
     } catch (err) {
       toast(
-        `Bisect mark failed: ${err instanceof Error ? err.message : String(err)}`,
+        `Bisect mark failed: ${describeError(err)}`,
         { kind: "error" },
       );
     } finally {
@@ -130,7 +131,7 @@
       toast("Bisect ended — back on the original branch", { kind: "success" });
     } catch (err) {
       toast(
-        `Bisect reset failed: ${err instanceof Error ? err.message : String(err)}`,
+        `Bisect reset failed: ${describeError(err)}`,
         { kind: "error" },
       );
     } finally {

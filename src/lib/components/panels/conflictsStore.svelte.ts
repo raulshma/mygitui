@@ -14,6 +14,7 @@
 
 import { conflicts } from "$lib/ipc/client";
 import type { ConflictFile, RepoId } from "$lib/ipc/types";
+import { describeError } from "$lib/errors";
 
 /** Cached state for one repository. */
 export interface ConflictsEntry {
@@ -68,7 +69,7 @@ export class ConflictsStore {
         return files;
       })
       .catch((err: unknown) => {
-        const message = err instanceof Error ? err.message : String(err);
+        const message = describeError(err);
         this.#set(repoId, {
           files: this.entry(repoId).files,
           loading: false,

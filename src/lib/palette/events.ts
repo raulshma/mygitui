@@ -68,6 +68,8 @@ export interface UiEventMap {
   "open-ai-settings": undefined;
   /** Open the appearance customizer (App owns the dialog). */
   "open-appearance": undefined;
+  /** Open the settings hub (App owns the dialog). */
+  "open-settings": undefined;
   /** M12: open the accent-seed picker (App owns the dialog). */
   "open-seed-dialog": undefined;
   /** Open the clone-repository dialog (App owns the dialog; palette command). */

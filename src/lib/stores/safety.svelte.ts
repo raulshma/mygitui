@@ -15,6 +15,7 @@ import { checkpoints, guardCheckpoint } from "$lib/ipc/client";
 import type { CheckpointInfo, RepoId } from "$lib/ipc/types";
 import { sortNewestFirst } from "$lib/components/safety/safetyModel";
 import { untrack } from "svelte";
+import { describeError } from "$lib/errors";
 
 /** Per-repo undo state (repos with no data yet have no entry). */
 export interface SafetyState {
@@ -57,7 +58,7 @@ export class SafetyStore {
     } catch (err) {
       this.#patch(repoId, {
         loading: false,
-        error: err instanceof Error ? err.message : String(err),
+        error: describeError(err),
       });
     }
   }

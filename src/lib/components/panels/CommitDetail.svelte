@@ -36,6 +36,7 @@
     shortRefName,
   } from "$lib/git/format";
   import { toast } from "$lib/toast";
+  import { describeError } from "$lib/errors";
 
   let {
     repoId,
@@ -100,7 +101,7 @@
         if (token !== diffToken) return;
         detailLoading = false;
         detailFiles = null;
-        toast(`Diff failed: ${err instanceof Error ? err.message : String(err)}`, {
+        toast(`Diff failed: ${describeError(err)}`, {
           kind: "error",
         });
       });

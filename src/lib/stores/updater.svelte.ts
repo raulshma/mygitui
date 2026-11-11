@@ -33,6 +33,7 @@ import type { UpdateInfo, UpdateProgress } from "$lib/ipc/types";
 import { emitUiEvent } from "$lib/palette/events";
 import { loadVersioned, writeEnvelope, type StorageLike } from "$lib/state/persist";
 import { toast } from "$lib/toast";
+import { describeError } from "$lib/errors";
 
 /** Lifecycle state driving the chip, popover and toasts. */
 export type UpdaterStatus =
@@ -336,7 +337,7 @@ export class UpdaterStore {
 }
 
 function describe(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
+  return describeError(err);
 }
 
 /** Shared app-wide instance (App.svelte wires the startup check). */

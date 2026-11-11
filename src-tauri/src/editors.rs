@@ -12,12 +12,19 @@
 //! like every other child: the allowlist retains the entries GUI apps need
 //! (SYSTEMROOT/USERPROFILE/APPDATA/LOCALAPPDATA/PATH/HOME/TMP…), so editors
 //! locate their config while git credentials/hooks env stays out.
+//!
+//! User-defined custom commands ([`open_with_custom`]) are the deliberate
+//! exception to the machine-verified-path rule: the frontend sends the full
+//! command line per launch (nothing is persisted backend-side), and it is
+//! spawned through the same platform shell wrapping as the custom shell
+//! actions ([`crate::actions::build_shell_command`]).
 
 use serde::{Deserialize, Serialize};
 #[cfg(windows)]
 use std::collections::HashMap;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
+use std::process::Stdio;
 use ts_rs::TS;
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -494,6 +501,82 @@ pub async fn open_with(repo_root: String, app_id: String) -> Result<(), String> 
     .map_err(|e| format!("open_with failed: {e}"))?
 }
 
+// -- user-defined custom commands ----------------------------------------------
+
+/// Renders the command line spawned for a user-defined custom app:
+/// every `{path}` occurrence becomes the repo root; a template without
+/// `{path}` gets the (double-quoted) root appended as the final argument —
+/// the platform shell parses the line, so the quotes protect paths with
+/// spaces. With `{path}` present, quoting is the template author's job.
+pub fn render_command(command: &str, root: &str) -> String {
+    if command.contains("{path}") {
+        command.replace("{path}", root)
+    } else {
+        format!("{command} \"{root}\"")
+    }
+}
+
+/// Validates a user-defined custom command template (pure). The frontend
+/// enforces the same rule inline; this is the backend's last line of
+/// defense before a shell line is built from frontend input.
+pub fn validate_command(command: &str) -> Result<(), String> {
+    if command.trim().is_empty() {
+        Err("command must not be empty".to_string())
+    } else {
+        Ok(())
+    }
+}
+
+/// Spawns a user-defined custom "open with" command with the repository
+/// root. Unlike [`open_path_with`] the command line is explicitly
+/// user-provided (sent per launch; nothing is persisted backend-side), so
+/// the machine-verified-path contract of detected apps does not apply.
+/// Fire-and-forget: the shell is spawned detached and never waited on, with
+/// null stdio (no output is captured or streamed) and the same sanitized
+/// environment as every other child.
+pub fn open_custom_with(command: &str, root: &Path) -> Result<(), String> {
+    validate_command(command)?;
+    if !root.is_dir() {
+        return Err(format!(
+            "repository root {} does not exist or is not a directory",
+            root.display()
+        ));
+    }
+    let root_str = to_native_path(root).to_string_lossy().into_owned();
+    let rendered = render_command(command, &root_str);
+    // Same platform shell wrapping as the custom shell actions (actions.rs):
+    // `cmd /C` on Windows — PATH shims like `code` are .cmd files — and
+    // `sh -c` elsewhere.
+    let mut cmd = crate::actions::build_shell_command(&rendered);
+    crate::cli::apply_sanitized_env(&mut cmd);
+    cmd.stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    cmd.spawn()
+        .map(|_| ())
+        .map_err(|e| format!("failed to launch `{command}`: {e}"))
+}
+
+/// Opens the repository root with a user-defined command. The frontend
+/// sends the full spec per launch (`app_id`/`name` are log context only);
+/// nothing is persisted backend-side.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn open_with_custom(
+    repo_root: String,
+    app_id: String,
+    name: String,
+    command: String,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        open_custom_with(&command, Path::new(&repo_root)).map_err(|e| {
+            tracing::warn!(app = %name, app_id = %app_id, error = %e, "open_with_custom failed");
+            e
+        })
+    })
+    .await
+    .map_err(|e| format!("open_with_custom failed: {e}"))?
+}
+
 // -- tests ---------------------------------------------------------------------
 
 #[cfg(test)]
@@ -605,5 +688,43 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         let zed = apps.iter().find(|a| a.id == "zed").expect("zed found");
         assert!(zed.path.ends_with(exe));
+    }
+
+    /// Custom command templates: `{path}` is substituted (every occurrence);
+    /// a template without the placeholder gets the root appended quoted.
+    #[test]
+    fn render_command_substitutes_path_placeholder() {
+        assert_eq!(
+            render_command("code {path}", "/repos/demo"),
+            "code /repos/demo"
+        );
+        assert_eq!(
+            render_command("{path} --git-dir {path}/.git", "/r"),
+            "/r --git-dir /r/.git"
+        );
+    }
+
+    #[test]
+    fn render_command_appends_quoted_root_without_placeholder() {
+        assert_eq!(
+            render_command("kitty", "/repos/my repo"),
+            "kitty \"/repos/my repo\""
+        );
+    }
+
+    /// Empty/whitespace templates are rejected before anything is spawned.
+    #[test]
+    fn validate_command_rejects_empty() {
+        assert!(validate_command("").is_err());
+        assert!(validate_command("   ").is_err());
+        assert!(validate_command("code {path}").is_ok());
+    }
+
+    /// The repo root must exist and be a directory; this fires before any
+    /// spawn, so the test never launches a process.
+    #[test]
+    fn custom_open_rejects_missing_root() {
+        let err = open_custom_with("true {path}", Path::new("/definitely/not/a/dir")).unwrap_err();
+        assert!(err.contains("does not exist"), "unexpected error: {err}");
     }
 }

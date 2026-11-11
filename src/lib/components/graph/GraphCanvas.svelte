@@ -149,6 +149,11 @@
 
   /** Parent (HistoryView) syncs its DOM commit list to this window. */
   $effect(() => {
+    // Skip degenerate reports (no rows flattened yet, or a zero-height
+    // viewport while the panel is hidden): the parent would adopt a stale
+    // or empty window and render an empty list until the next scroll. The
+    // effect re-runs (and reports) once rows or viewport height appear.
+    if (rowCount === 0 || viewport.h === 0) return;
     const { first, last } = visible;
     onVisibleRowsChange?.(first, last);
   });

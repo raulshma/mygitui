@@ -4,7 +4,8 @@
  *
  * The branch panel and the header branch switcher offer the same safety UX
  * for the same backend ops, so the flow logic lives here exactly once: a
- * dirty-worktree switch becomes a real choice (stash / force / cancel), a
+ * dirty-worktree switch — local or remote-checkout — becomes a real choice
+ * (stash / force / cancel), a
  * delete previews first (merged → confirm, unmerged → type-the-name +
  * optional undo checkpoint), and every completed mutation reloads the
  * caller's list and notifies the repo view. The controller owns only the
@@ -42,7 +43,7 @@ import type { BranchInfo, PreviewInfo } from "$lib/ipc/types";
 import { busy as opBusy } from "$lib/stores/ops.svelte";
 import { tabStore } from "$lib/stores/tabs.svelte";
 import { toast } from "$lib/toast";
-import { describeGitError } from "$lib/errors";
+import { describeError, describeGitError } from "$lib/errors";
 import { isMergedPreview } from "$lib/components/safety/safetyModel";
 import { closedDialog, openDialog, type DialogState } from "$lib/state/dialog";
 
@@ -61,8 +62,15 @@ export class BranchOpsController {
   /** Latest branch list, fed by the owner (HEAD lookups, not rendering). */
   #list: BranchInfo[] = [];
 
-  /** Pending dirty-switch choice dialog (closed by default). */
-  switchChoice = $state<DialogState<{ name: string }>>(closedDialog());
+  /**
+   * Pending dirty-switch choice dialog (closed by default). `remote` is
+   * null for a plain local switch; for a remote checkout it names the
+   * remote, so the choice flows stash → `branch_checkout_remote` and
+   * force → create-at-tip + forced switch.
+   */
+  switchChoice = $state<DialogState<{ name: string; remote: string | null }>>(
+    closedDialog(),
+  );
   /** Pending merged-delete confirmation (closed by default). */
   confirmDelete = $state<DialogState<{ name: string }>>(closedDialog());
   /** Pending unmerged (force-)delete preview (closed by default). */
@@ -127,7 +135,7 @@ export class BranchOpsController {
     } catch (err) {
       toast(
         `Create branch ${trimmed} failed: ${
-          err instanceof Error ? err.message : String(err)
+          describeError(err)
         }`,
         { kind: "error" },
       );
@@ -136,9 +144,10 @@ export class BranchOpsController {
   }
 
   /**
-   * Creates + checks out a local branch tracking `<remote>/<name>`.
-   * Resolves the local branch name, or `null` on failure (toasted
-   * internally).
+   * Creates + checks out a local branch tracking `<remote>/<name>` without
+   * the dirty-worktree gate (the clean path; surfaces call
+   * {@link requestCheckoutRemote} to get the choice dialog). Resolves the
+   * local branch name, or `null` on failure (toasted internally).
    */
   async checkoutRemote(remote: string, name: string): Promise<string | null> {
     try {
@@ -151,7 +160,7 @@ export class BranchOpsController {
     } catch (err) {
       toast(
         `Checkout ${name} failed: ${
-          err instanceof Error ? err.message : String(err)
+          describeError(err)
         }`,
         { kind: "error" },
       );
@@ -168,27 +177,62 @@ export class BranchOpsController {
   async requestSwitch(name: string): Promise<void> {
     if (this.#dirtyWorktree()) {
       // Real choice replaces the old "auto-stash" hint.
-      this.switchChoice = openDialog({ name });
+      this.switchChoice = openDialog({ name, remote: null });
       return;
     }
     await this.#doSwitch(name, false);
   }
 
-  /** "Stash changes": stash_push → clean switch. */
+  /**
+   * Requests checking out `<remote>/<name>` as a fresh tracking branch:
+   * the same dirty-worktree gate as {@link requestSwitch}, with the choice
+   * flows below branching on the dialog's `remote` payload. A clean
+   * worktree goes straight through {@link checkoutRemote}.
+   */
+  async requestCheckoutRemote(remote: string, name: string): Promise<void> {
+    if (this.#dirtyWorktree()) {
+      this.switchChoice = openDialog({ name, remote });
+      return;
+    }
+    await this.checkoutRemote(remote, name);
+  }
+
+  /** "Stash changes": stash_push → clean switch (local or remote). */
   async chooseStash(): Promise<void> {
     if (!this.switchChoice.open) return;
-    const name = this.switchChoice.name;
+    const { name, remote } = this.switchChoice;
     this.switchChoice = closedDialog();
-    await this.#run(`Switch to ${name}`, async () => {
+    await this.#run(`Switch to ${remote ? `${remote}/${name}` : name}`, async () => {
       await stashPush(this.#repoId, `pre-switch stash (switching to ${name})`);
-      await branchSwitch(this.#repoId, name, false);
+      if (remote) {
+        await branchCheckoutRemote(this.#repoId, remote, name);
+      } else {
+        await branchSwitch(this.#repoId, name, false);
+      }
     });
   }
 
   /** "Proceed anyway": forced checkout (discards local modifications). */
   async chooseForce(): Promise<void> {
     if (!this.switchChoice.open) return;
-    const name = this.switchChoice.name;
+    const { name, remote } = this.switchChoice;
+    if (remote) {
+      this.switchChoice = closedDialog();
+      await this.#run(`Switch to ${remote}/${name}`, async () => {
+        // No force variant of branch_checkout_remote exists, so mirror the
+        // local switch's "discard conflicting modifications" semantics:
+        // create the local branch at the tracking tip first (a pure ref
+        // write, no workdir change), then force-switch onto it. Unlike the
+        // clean path this leaves the upstream unset — the backend exposes
+        // no way to configure tracking without a network push.
+        await branchCreate(this.#repoId, name, false, `${remote}/${name}`);
+        await branchSwitch(this.#repoId, name, true);
+        toast(`Checked out ${name} (tracking ${remote}/${name})`, {
+          kind: "success",
+        });
+      });
+      return;
+    }
     await this.#doSwitch(name, true);
   }
 
@@ -219,7 +263,7 @@ export class BranchOpsController {
         into,
       });
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = describeError(err);
       toast(
         `Cannot preview delete of ${branch.name}: ${describeGitError(message, branch.name)}`,
         { kind: "error" },
@@ -334,7 +378,7 @@ export class BranchOpsController {
       await run();
       this.#afterMutation();
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = describeError(err);
       toast(`${label} failed: ${describeGitError(message)}`, {
         kind: "error",
       });
@@ -368,7 +412,7 @@ export async function remoteBranchDelete(
     toast(`Deleted remote branch ${remote}/${name}`, { kind: "success" });
     return true;
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+    const message = describeError(err);
     toast(`Delete failed: ${describeGitError(message, name)}`, {
       kind: "error",
     });

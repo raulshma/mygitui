@@ -18,7 +18,7 @@
   import { FitAddon } from "@xterm/addon-fit";
   import { WebLinksAddon } from "@xterm/addon-web-links";
   import {
-    TERMINAL_FONT_SIZE,
+    terminalFontSize,
     terminals,
     type TerminalHandle,
   } from "$lib/terminal/terminalStore.svelte";
@@ -32,7 +32,7 @@
     const term = new Terminal({
       fontFamily:
         'ui-monospace, Consolas, "Cascadia Mono", "Courier New", monospace',
-      fontSize: TERMINAL_FONT_SIZE,
+      fontSize: terminalFontSize(),
       scrollback: 5000,
       theme: activeTerminalTheme() as ITheme,
     });

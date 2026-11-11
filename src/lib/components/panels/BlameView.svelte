@@ -36,6 +36,7 @@
   import { Button } from "$lib/components/ui/button/index.js";
   import { Hint } from "$lib/components/ui/tooltip/index.js";
   import EmptyState from "../layout/EmptyState.svelte";
+  import { describeError } from "$lib/errors";
 
   let {
     repoId,
@@ -182,7 +183,7 @@
       .catch((err: unknown) => {
         if (token !== reqToken) return;
         loading = false;
-        error = err instanceof Error ? err.message : String(err);
+        error = describeError(err);
         toast(`Blame failed: ${error}`, { kind: "error" });
       });
   });

@@ -22,6 +22,7 @@
   import { toast } from "$lib/toast";
   import type { FileDiff } from "$lib/ipc/types";
   import { Button } from "$lib/components/ui/button/index.js";
+  import { describeError } from "$lib/errors";
 
   let {
     repoId,
@@ -64,7 +65,7 @@
       onCompare(files, b, t);
       if (files.length === 0) toast(`No differences between ${b} and ${t}`);
     } catch (err) {
-      toast(`Compare failed: ${err instanceof Error ? err.message : String(err)}`, {
+      toast(`Compare failed: ${describeError(err)}`, {
         kind: "error",
       });
     } finally {

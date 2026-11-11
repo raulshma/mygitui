@@ -17,6 +17,7 @@
  */
 
 import type { FetchLike } from "./opencode";
+import { describeError } from "$lib/errors";
 
 /** Consumer of one decoded opencode event. */
 export type OpencodeEventHandler = (
@@ -150,7 +151,7 @@ export function subscribeOpencodeEvents(
       }
       options.onEnded?.(
         "error",
-        err instanceof Error ? err.message : String(err),
+        describeError(err),
       );
     }
   })();

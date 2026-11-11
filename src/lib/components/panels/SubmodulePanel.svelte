@@ -60,14 +60,20 @@
   });
 
   async function reload(): Promise<void> {
+    // Stale-response guard: the panel is keep-alive across repo switches —
+    // a slow submodule list from repo A must never land after the switch.
+    const id = repoId;
     loading = true;
     error = null;
     try {
-      list = await submodules(repoId);
+      const fresh = await submodules(id);
+      if (id !== repoId) return;
+      list = fresh;
     } catch (err) {
+      if (id !== repoId) return;
       error = describeError(err);
     } finally {
-      loading = false;
+      if (id === repoId) loading = false;
     }
   }
 

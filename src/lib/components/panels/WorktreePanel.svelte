@@ -113,10 +113,14 @@
   });
 
   async function reload(): Promise<void> {
+    // Stale-response guard: the panel is keep-alive across repo switches —
+    // a slow worktree list from repo A must never land after the switch.
+    const id = repoId;
     loading = true;
     error = null;
     try {
-      const [wt, br] = await Promise.all([worktrees(repoId), branches(repoId)]);
+      const [wt, br] = await Promise.all([worktrees(id), branches(id)]);
+      if (id !== repoId) return;
       list = wt;
       allBranches = br;
       // Keep the existing-branch select on a valid choice (repo switches
@@ -126,9 +130,10 @@
         addBranch = candidates[0]?.name ?? "";
       }
     } catch (err) {
+      if (id !== repoId) return;
       error = err instanceof Error ? err.message : String(err);
     } finally {
-      loading = false;
+      if (id === repoId) loading = false;
     }
   }
 

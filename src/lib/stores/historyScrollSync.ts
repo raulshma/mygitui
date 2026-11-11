@@ -32,6 +32,15 @@ export interface ScrollWindow {
   end: number;
 }
 
+/**
+ * Rows shown by the hidden-panel fail-safe in {@link updateOwnRange}: when
+ * the scroller exists but measures 0px tall (SplitContainer collapse /
+ * TabGroup keep-alive host), the window clamps to a minimal top window of
+ * this many rows instead of staying empty, so a panel that reappears never
+ * has to wait for a scroll event to render anything.
+ */
+export const MIN_HIDDEN_WINDOW_ROWS = 40;
+
 /** The canvas's reported drawn row window `[first, last)` (incl. overscan). */
 export interface CanvasWindow {
   first: number;
@@ -127,16 +136,30 @@ export function createHistoryScrollSync(
       : deps.ownRange();
   }
 
-  /** Recomputes the local window from the list port (no-op when unmounted). */
+  /**
+   * Recomputes the local window from the list port. A fully absent scroller
+   * (unmounted port → null scrollTop) is a no-op; a scroller that measures
+   * 0px tall (the view is hidden behind SplitContainer's `hidden` attr or a
+   * TabGroup keep-alive host) falls back to a minimal top window so the
+   * panel can never get stuck on an empty render — the next real
+   * measurement (unhide, splitter drag) overwrites it.
+   */
   function updateOwnRange(): void {
     const top = deps.list.getScrollTop();
+    if (top === null) return;
     const height = deps.list.getClientHeight();
-    if (top === null || height === 0) return;
+    const current = deps.ownRange();
+    if (height === 0) {
+      const end = Math.min(deps.totalRows(), MIN_HIDDEN_WINDOW_ROWS);
+      if (current.start !== 0 || current.end !== end) {
+        deps.setOwnRange({ start: 0, end });
+      }
+      return;
+    }
     const first = Math.floor(top / deps.rowHeight);
     const count = Math.ceil(height / deps.rowHeight);
     const start = Math.max(0, first - deps.overscan);
     const end = Math.min(deps.totalRows(), first + count + deps.overscan);
-    const current = deps.ownRange();
     if (start !== current.start || end !== current.end) {
       deps.setOwnRange({ start, end });
     }

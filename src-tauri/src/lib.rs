@@ -287,6 +287,7 @@ pub fn run() {
             opencode::opencode_serve_stop,
             editors::detect_editors,
             editors::open_with,
+            editors::open_with_custom,
             popout::open_popout,
             remote::commands::device_list,
             remote::commands::device_add,

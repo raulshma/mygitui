@@ -37,6 +37,7 @@
   import { Button } from "$lib/components/ui/button/index.js";
   import { Input } from "$lib/components/ui/input/index.js";
   import { Checkbox } from "$lib/components/ui/checkbox/index.js";
+  import { describeError } from "$lib/errors";
 
   let {
     open = $bindable(false),
@@ -157,7 +158,7 @@
       .catch((err: unknown) => {
         if (!current) return;
         models = [];
-        modelsError = err instanceof Error ? err.message : String(err);
+        modelsError = describeError(err);
       });
     if (untrack(() => ai.config.opencodeEnabled !== false)) {
       opencodeModelsLoading = true;
@@ -172,7 +173,7 @@
         .catch((err: unknown) => {
           if (!current) return;
           opencodeModels = [];
-          opencodeModelsError = err instanceof Error ? err.message : String(err);
+          opencodeModelsError = describeError(err);
           opencodeModelsLoading = false;
         });
     } else {
@@ -254,7 +255,7 @@
       onclose?.();
     } catch (err) {
       toast(
-        `Saving AI settings failed: ${err instanceof Error ? err.message : String(err)}`,
+        `Saving AI settings failed: ${describeError(err)}`,
         { kind: "error" },
       );
     } finally {
@@ -270,7 +271,7 @@
       toast("opencode password removed from the keyring");
     } catch (err) {
       toast(
-        `Removing the password failed: ${err instanceof Error ? err.message : String(err)}`,
+        `Removing the password failed: ${describeError(err)}`,
         { kind: "error" },
       );
     }
@@ -284,7 +285,7 @@
       toast("OpenRouter API key removed from the keyring");
     } catch (err) {
       toast(
-        `Removing the API key failed: ${err instanceof Error ? err.message : String(err)}`,
+        `Removing the API key failed: ${describeError(err)}`,
         { kind: "error" },
       );
     }

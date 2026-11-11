@@ -16,6 +16,7 @@ import {
   cloneRepo,
   closeRepo,
   commit,
+  discard,
   fetchRepo,
   hooksList,
   IpcError,
@@ -24,6 +25,7 @@ import {
   onOpProgress,
   onRepoChanged,
   openRepo,
+  openWithCustom,
   pickFolder,
   pullRepo,
   pushRepo,
@@ -33,6 +35,7 @@ import {
   remoteRemove,
   remoteSetUrl,
   repoBlame,
+  repoClean,
   repoDiff,
   repoRefs,
   repoStatus,
@@ -805,6 +808,65 @@ describe("ipc client M2 mutation wrappers", () => {
 });
 
 // ---------------------------------------------------------------------------
+// discard / clean checkpoint flag (the "checkpoints for git changes" setting)
+// ---------------------------------------------------------------------------
+
+describe("ipc client checkpoint-flag wrappers", () => {
+  const TARGETS = [{ file: "src/a.ts" }];
+
+  it("discard omits the checkpoint field by default (backend default = on)", async () => {
+    const { transport, calls } = mockTransport(() => null);
+    setTransport(transport);
+
+    await expect(discard("repo-1", TARGETS)).resolves.toBeNull();
+    expect(calls).toEqual([
+      { command: "discard", args: { repo_id: "repo-1", targets: TARGETS } },
+    ]);
+  });
+
+  it("discard forwards the checkpoint flag and resolves the warning payload", async () => {
+    const { transport, calls } = mockTransport((call) =>
+      call.args.checkpoint === false ? "committer identity not configured" : null,
+    );
+    setTransport(transport);
+
+    await expect(discard("repo-1", TARGETS, { checkpoint: true })).resolves.toBeNull();
+    await expect(
+      discard("repo-1", TARGETS, { checkpoint: false }),
+    ).resolves.toBe("committer identity not configured");
+    expect(calls[0]).toEqual({
+      command: "discard",
+      args: { repo_id: "repo-1", targets: TARGETS, checkpoint: true },
+    });
+    expect(calls[1]).toEqual({
+      command: "discard",
+      args: { repo_id: "repo-1", targets: TARGETS, checkpoint: false },
+    });
+  });
+
+  it("repoClean omits the checkpoint field by default and forwards it when given", async () => {
+    const { transport, calls } = mockTransport(() => 2);
+    setTransport(transport);
+
+    await expect(repoClean("repo-1", ["junk.log"], "pre-clean")).resolves.toBe(2);
+    await expect(
+      repoClean("repo-1", ["junk.log"], "pre-clean", { checkpoint: false }),
+    ).resolves.toBe(2);
+    expect(calls[0]?.args).toEqual({
+      repo_id: "repo-1",
+      paths: ["junk.log"],
+      checkpoint_reason: "pre-clean",
+    });
+    expect(calls[1]?.args).toEqual({
+      repo_id: "repo-1",
+      paths: ["junk.log"],
+      checkpoint_reason: "pre-clean",
+      checkpoint: false,
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
 // M3 conflict-editor file access (E1, appended)
 // ---------------------------------------------------------------------------
 
@@ -892,5 +954,52 @@ describe("ipc client secrets_* wrappers", () => {
   it("SECRET_KEYS pins the keyring entry names", () => {
     expect(SECRET_KEYS.openrouterApiKey).toBe("openrouter.api-key");
     expect(SECRET_KEYS.opencodeServerPassword).toBe("opencode.server.password");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// External apps ("Open with…") — appended with the custom-app support
+// ---------------------------------------------------------------------------
+
+describe("ipc client open-with wrappers", () => {
+  it("openWithCustom sends the full custom-app spec in snake_case", async () => {
+    const { transport, calls } = mockTransport(() => undefined);
+    setTransport(transport);
+
+    await expect(
+      openWithCustom("C:/repos/mygitui", {
+        id: "custom:abc-123",
+        name: "Neovim",
+        command: "kitty {path}",
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(calls).toEqual([
+      {
+        command: "open_with_custom",
+        args: {
+          repo_root: "C:/repos/mygitui",
+          app_id: "custom:abc-123",
+          name: "Neovim",
+          command: "kitty {path}",
+        },
+      },
+    ]);
+  });
+
+  it("openWithCustom normalizes failures (binary not found) to IpcError", async () => {
+    const { transport } = mockTransport(() => {
+      throw "failed to launch `kitty /repos/x`: No such file or directory";
+    });
+    setTransport(transport);
+
+    const err = await openWithCustom("/repos/x", {
+      id: "custom:abc-123",
+      name: "Neovim",
+      command: "kitty {path}",
+    }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(IpcError);
+    expect((err as IpcError).command).toBe("open_with_custom");
+    expect((err as IpcError).message).toContain("No such file or directory");
   });
 });

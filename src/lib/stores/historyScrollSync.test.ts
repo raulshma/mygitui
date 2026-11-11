@@ -4,13 +4,15 @@
  * no real DOM — and the view-owned window state is mirrored in the harness,
  * exactly like HistoryView's `$state` ports. Covers the three strategies:
  * fast path (exact scrollTop mirroring), fallback (`scrollToRow` without a
- * canvas scroll element), degraded local-window mode, plus the ≥ 1px
- * equality guards that keep the two-way pushes from feeding back.
+ * canvas scroll element), degraded local-window mode, the ≥ 1px
+ * equality guards that keep the two-way pushes from feeding back, and the
+ * hidden-panel fail-safe (0px scroller → minimal top window).
  */
 
 import { describe, expect, it, vi } from "vitest";
 import {
   createHistoryScrollSync,
+  MIN_HIDDEN_WINDOW_ROWS,
   type CanvasWindow,
   type GraphScrollPort,
   type ScrollEndpoint,
@@ -142,15 +144,42 @@ describe("updateOwnRange", () => {
     expect(h2.ownRange).toEqual({ start: 85, end: 100 }); // end clamps to total
   });
 
-  it("is a no-op while the scroller is unmounted or zero-height", () => {
-    const h = harness();
+  it("is a no-op while the scroller is unmounted (null port)", () => {
+    const h = harness({ total: 100 });
     h.list.el = null; // unmounted
     h.sync.updateOwnRange();
     expect(h.ownRangeWrites).toBe(0);
+    expect(h.ownRange).toEqual({ start: 0, end: 0 });
+  });
 
-    h.list.el = fakeElement(0, 0); // hidden (0px)
+  it("fails safe to a minimal top window while hidden (zero height)", () => {
+    const h = harness({ total: 1_000 });
+    h.list.el = fakeElement(480, 0); // hidden behind `hidden`/display:none
     h.sync.updateOwnRange();
-    expect(h.ownRangeWrites).toBe(0);
+    expect(h.ownRange).toEqual({ start: 0, end: MIN_HIDDEN_WINDOW_ROWS });
+
+    // Idempotent: the next notification while still hidden writes nothing.
+    h.sync.updateOwnRange();
+    expect(h.ownRangeWrites).toBe(1);
+  });
+
+  it("clamps the hidden fail-safe window to the available rows", () => {
+    const h = harness({ total: 15 });
+    h.list.el = fakeElement(0, 0);
+    h.sync.updateOwnRange();
+    expect(h.ownRange).toEqual({ start: 0, end: 15 });
+  });
+
+  it("a later real measurement overwrites the hidden fail-safe window", () => {
+    const h = harness({ total: 100 });
+    h.list.el = fakeElement(0, 0); // hidden
+    h.sync.updateOwnRange();
+    expect(h.ownRange).toEqual({ start: 0, end: MIN_HIDDEN_WINDOW_ROWS });
+
+    h.list.el = fakeElement(24 * 20, 240); // unhidden: row 20 on top, 10 rows
+    h.sync.updateOwnRange();
+    expect(h.ownRange).toEqual({ start: 10, end: 40 });
+    expect(h.ownRangeWrites).toBe(2);
   });
 
   it("reports only on actual change", () => {

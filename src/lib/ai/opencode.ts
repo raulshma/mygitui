@@ -68,6 +68,7 @@ import type {
 import { subscribeOpencodeEvents, type OpencodeEventSession } from "./opencodeEvents";
 import { AiError } from "./types";
 import type { AiResult, ModelInfo, OpencodeResolve } from "./types";
+import { describeError } from "$lib/errors";
 
 /** v2 promise-client type (resolved through {@link v2MakeFactory}). */
 export type OpenCodeV2Client = ReturnType<
@@ -780,7 +781,7 @@ export class OpenCodeProvider implements AiProvider {
       }
       return {
         status: "down",
-        error: err instanceof Error ? err.message : String(err),
+        error: describeError(err),
       };
     }
   }
@@ -1277,7 +1278,7 @@ function describeInfoError(
 /** Maps an arbitrary thrown value to an {@link AiError} for this backend. */
 function toAiError(err: unknown): AiError {
   if (err instanceof AiError) return err;
-  const message = err instanceof Error ? err.message : String(err);
+  const message = describeError(err);
   return new AiError("unavailable", `opencode request failed: ${message}`, {
     backend: "opencode",
     cause: err,

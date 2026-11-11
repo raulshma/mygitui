@@ -40,16 +40,30 @@ import type { PtyExitEvent } from "$lib/ipc/types";
 import { onPtyExit, onPtyOutput } from "$lib/events/repoEvents";
 import { isTauri } from "$lib/entry/dragdrop";
 import { toast } from "$lib/toast";
+import { describeError } from "$lib/errors";
+import { appSettings } from "$lib/state/appSettings.svelte";
 
 /** Debounce window between a panel fit and the `pty_resize` call. */
 export const RESIZE_DEBOUNCE_MS = 100;
 
 /**
- * xterm font size (px) used by the panel's terminal factory — the terminal's
- * fixed-density mono grid (kept alongside the font stack, which stays in
- * TerminalPanel's factory).
+ * xterm font size (px) fallback — used when the `terminalFontSize` app
+ * setting is somehow not a finite number (kept alongside the font stack,
+ * which stays in TerminalPanel's factory).
  */
 export const TERMINAL_FONT_SIZE = 13;
+
+/**
+ * The configured xterm font size (px) for the panel's terminal factory.
+ * Read fresh at every session (re)creation (`ensure` / `restart` call the
+ * factory again), so a Settings change applies to NEW sessions; running
+ * sessions are deliberately not live-resized (the pty grid would need a
+ * re-fit + `pty_resize` round-trip — restart picks the new size up).
+ */
+export function terminalFontSize(): number {
+  const size = appSettings.terminalFontSize;
+  return Number.isFinite(size) ? size : TERMINAL_FONT_SIZE;
+}
 
 /** Lifecycle of a repo's terminal (drives the panel's UI states). */
 export type TerminalStatus =
@@ -262,7 +276,7 @@ export class TerminalStore {
     try {
       handle = this.#factory();
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = describeError(err);
       this.sessions[repoId] = {
         repoId,
         sessionId: null,
@@ -316,7 +330,7 @@ export class TerminalStore {
       .catch((err) => {
         if (this.#tokens.get(repoId) !== token) return;
         this.#tokens.delete(repoId);
-        const message = err instanceof Error ? err.message : String(err);
+        const message = describeError(err);
         const current = this.sessions[repoId];
         if (current) {
           current.term?.dispose();

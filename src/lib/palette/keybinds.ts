@@ -44,6 +44,7 @@ export type Platform = "mac" | "pc";
  */
 export const DEFAULT_BINDINGS: Record<string, string> = {
   "app.palette": "ctrl+shift+p",
+  "app.settings": "ctrl+comma",
   "repo.refresh": "f5",
   "tab.next": "ctrl+alt+arrowright",
   "tab.prev": "ctrl+alt+arrowleft",

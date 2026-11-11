@@ -69,14 +69,20 @@
   });
 
   async function reload(): Promise<void> {
+    // Stale-response guard: the section is keep-alive across repo switches —
+    // a slow tag list from repo A must never land after the switch.
+    const id = repoId;
     loading = true;
     error = null;
     try {
-      list = await tagList(repoId);
+      const fresh = await tagList(id);
+      if (id !== repoId) return;
+      list = fresh;
     } catch (err) {
+      if (id !== repoId) return;
       error = err instanceof Error ? err.message : String(err);
     } finally {
-      loading = false;
+      if (id === repoId) loading = false;
     }
   }
 

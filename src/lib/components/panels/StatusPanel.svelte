@@ -55,6 +55,7 @@
   } from "$lib/ipc/client";
   import { onRepoChange } from "$lib/events/repoEvents";
   import { describeError } from "$lib/errors";
+  import { appSettings } from "$lib/state/appSettings.svelte";
   import { openTab, parseSshUri, refreshStatus, tabStore } from "$lib/stores/tabs.svelte";
   import { normalizeRepoPath } from "$lib/stores/switcher.svelte";
   import CommitBar from "$lib/components/panels/CommitBar.svelte";
@@ -1318,7 +1319,12 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
           ? `Discard changes in ${discardable.length} files…`
           : "Discard changes…",
         danger: true,
-        run: () => (discardCandidates = discardable),
+        run: () => {
+          discardCandidates = discardable;
+          // Same confirm-skip as the hover button / `d` path: with the
+          // "confirm before discard" setting off, discard immediately.
+          if (!confirmDiscardEnabled) void onDiscardConfirmed();
+        },
       });
     }
 
@@ -1480,11 +1486,17 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
   let galleryOpen = $state(false);
   /** Rows pending a discard confirmation (whole files; checkpointed upstream). */
   let discardCandidates = $state<StatusRow[]>([]);
+  // Live settings reads ($derived so toggling a setting mid-session takes
+  // effect without remounting the panel).
+  let confirmDiscardEnabled = $derived(appSettings.confirmDiscard);
+  let checkpointsEnabled = $derived(appSettings.checkpointsEnabled);
 
   /**
    * Hover button / `d`: discard the selection when the target row is part
    * of it, otherwise just the row. Staged, conflicted and submodule rows
-   * never discard (conflict resolution is an explicit edit).
+   * never discard (conflict resolution is an explicit edit). When the
+   * "confirm before discard" setting is off, discards run immediately
+   * instead of opening the confirm dialog.
    */
   function requestDiscard(row: StatusRow, event?: MouseEvent): void {
     event?.stopPropagation();
@@ -1503,9 +1515,13 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
         candidate.kind !== "conflicted" &&
         (candidate.submodulePath ? true : !moduleByPath.has(candidate.entry.path)),
     );
+    if (!confirmDiscardEnabled) {
+      void onDiscardConfirmed();
+    }
   }
 
-  /** Discard confirmed: the backend snapshots a checkpoint first. */
+  /** Discard confirmed: the backend snapshots a checkpoint first (unless
+   * the "checkpoints for git changes" setting is off). */
   async function onDiscardConfirmed(): Promise<void> {
     const candidates = discardCandidates;
     if (candidates.length === 0) return;
@@ -1533,7 +1549,19 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
         repoCandidates.length > 1
           ? `Discard ${repoCandidates.length} files`
           : `Discard ${repoCandidates[0]!.entry.path}`,
-        () => discard(rid, targets),
+        async () => {
+          // A non-null warning means the discard succeeded but the undo
+          // checkpoint failed (e.g. no git identity) — surface it instead
+          // of silently losing the undo point.
+          const warning = await discard(rid, targets, {
+            checkpoint: checkpointsEnabled,
+          });
+          if (warning) {
+            toast(`Discarded, but the undo checkpoint failed: ${warning}`, {
+              kind: "info",
+            });
+          }
+        },
       );
       if (subPath) {
         void loadSubmoduleStatus(subPath);
@@ -2665,9 +2693,14 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
     : discardCandidates[0]
       ? `Discard changes to ${discardCandidates[0].submodulePath ? `${discardCandidates[0].submodulePath}/${discardCandidates[0].entry.path}` : discardCandidates[0].entry.path}?`
       : ""}
-  message={discardCandidates.length > 1
-    ? `Staged and unstaged changes to these ${discardCandidates.length} files return to HEAD (untracked files are deleted). A checkpoint is created first — restorable from the Undo panel.`
-    : "Staged and unstaged changes to this file return to HEAD (untracked files are deleted). A checkpoint is created first — restorable from the Undo panel."}
+  message={
+    (discardCandidates.length > 1
+      ? `Unstaged changes to these ${discardCandidates.length} files are discarded from the working copy. Discarding a file resets it to HEAD as a whole, so staged changes on the same file are discarded too (untracked files are deleted).`
+      : "Unstaged changes to this file are discarded from the working copy. Discarding a file resets it to HEAD as a whole, so staged changes on the same file are discarded too (untracked files are deleted).") +
+    (checkpointsEnabled
+      ? " A checkpoint is created first — restorable from the Undo panel."
+      : " No checkpoint is created (checkpoints are disabled in Settings).")
+  }
   confirmLabel="Discard changes"
   danger
   onConfirm={() => void onDiscardConfirmed()}

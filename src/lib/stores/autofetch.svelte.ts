@@ -7,7 +7,9 @@
  * and branch-colors stores. Roots are stable across restarts; repo ids are
  * minted per session (`millis-pid-counter`), so keying by id (the original
  * scheme) never survived a relaunch. Load-time migration: keys that don't
- * look like a root path/URI are legacy ids and are dropped.
+ * look like a root path/URI are legacy ids and are dropped. Roots without
+ * an entry follow the global default (`appSettings.defaultAutofetchMinutes`,
+ * 0 = off).
  *
  * `start(repoId)` is called when a tab opens (RepoView `$effect`): with an
  * interval > 0 it resolves the repo's root (from the hint or the tab store)
@@ -26,6 +28,8 @@ import { branches, fetchRepo, remotes } from "$lib/ipc/client";
 import type { BranchInfo, NetStats, RepoId } from "$lib/ipc/types";
 import { tabStore } from "$lib/stores/tabs.svelte";
 import { toast } from "$lib/toast";
+import { describeError } from "$lib/errors";
+import { appSettings } from "$lib/state/appSettings.svelte";
 
 /** localStorage key: `{ [root]: minutes }` (root-keyed since the re-key). */
 export const AUTOFETCH_STORAGE_KEY = "mygitui.autofetch";
@@ -162,9 +166,13 @@ export class AutofetchStore {
     return tabStore.tabs.find((tab) => tab.id === repoId)?.root ?? repoId;
   }
 
-  /** Interval minutes for a repo root (0 = off). */
+  /**
+   * Interval minutes for a repo root (0 = off). An explicit per-repo
+   * override wins; without one, the global default
+   * (`appSettings.defaultAutofetchMinutes`, 0 = off) applies.
+   */
   getInterval(root: string): number {
-    return this.config[root] ?? 0;
+    return this.config[root] ?? appSettings.defaultAutofetchMinutes;
   }
 
   /** True when auto-fetch is currently running for the repo. */
@@ -188,8 +196,9 @@ export class AutofetchStore {
       if (running.root !== root) continue;
       this.stop(repoId);
       // Restart with the recorded root — the tab may already be closing, so
-      // a fresh tabs-store lookup could miss.
-      if (safe > 0) void this.start(repoId, running.root);
+      // a fresh tabs-store lookup could miss. Clearing an override (0) can
+      // still leave a positive cadence: the global default applies then.
+      if (this.getInterval(root) > 0) void this.start(repoId, running.root);
     }
   }
 
@@ -229,7 +238,7 @@ export class AutofetchStore {
         .catch((err: unknown) => {
           if (this.#startToken.get(repoId) !== token) return;
           toast(
-            `Auto-fetch failed: ${err instanceof Error ? err.message : String(err)}`,
+            `Auto-fetch failed: ${describeError(err)}`,
             { kind: "error" },
           );
         });
