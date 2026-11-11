@@ -20,6 +20,7 @@
   import WorkflowLogViewer from "./WorkflowLogViewer.svelte";
   import { Button } from "$lib/components/ui/button/index.js";
   import { Toggle } from "$lib/components/ui/toggle/index.js";
+  import { Hint } from "$lib/components/ui/tooltip/index.js";
   import {
     activityDurationLabel,
     prAgeLabel,
@@ -354,34 +355,46 @@
       <span class="crumbs flex min-w-0 items-baseline gap-[0.35rem] text-ui-meta text-muted-foreground">
         <span class="crumb-muted flex-none">Actions</span>
         <span class="crumb-sep flex-none opacity-60" aria-hidden="true">/</span>
-        <span class="crumb-current min-w-0 truncate font-medium text-foreground" title={run?.name ?? "Workflow run"}>
-          {run?.name ?? "Workflow run"}
-        </span>
+        <Hint label={run?.name ?? "Workflow run"}>
+          {#snippet child({ props })}
+            <span class="crumb-current min-w-0 truncate font-medium text-foreground" {...props}>
+              {run?.name ?? "Workflow run"}
+            </span>
+          {/snippet}
+        </Hint>
         {#if run}<span class="run-number flex-none font-mono text-ui-micro text-muted-foreground">#{run.number}</span>{/if}
       </span>
       <span class="spacer ml-auto"></span>
       {#if onPopout}
-        <Button
-          class={tb}
-          variant="outline"
-          type="button"
-          title="Open this run in its own window"
-          onclick={onPopout}
-        >
-          Pop out
-        </Button>
+        <Hint label="Open this run in its own window">
+          {#snippet child({ props })}
+            <Button
+              class={tb}
+              variant="outline"
+              {...props}
+              type="button"
+              onclick={onPopout}
+            >
+              Pop out
+            </Button>
+          {/snippet}
+        </Hint>
       {/if}
       {#if onClose}
-        <Button
-          class="close {tb} px-2 py-px text-[0.9rem] leading-none"
-          variant="outline"
-          type="button"
-          aria-label="Close run details"
-          title="Close run details"
-          onclick={onClose}
-        >
-          ×
-        </Button>
+        <Hint label="Close run details">
+          {#snippet child({ props })}
+            <Button
+              class="close {tb} px-2 py-px text-[0.9rem] leading-none"
+              variant="outline"
+              {...props}
+              type="button"
+              aria-label="Close run details"
+              onclick={onClose}
+            >
+              ×
+            </Button>
+          {/snippet}
+        </Hint>
       {/if}
     </div>
 
@@ -413,28 +426,40 @@
         {#if run.head_branch}
           <span class="meta-item inline-flex items-baseline gap-1 whitespace-nowrap">
             <span class="meta-label opacity-75">Branch</span>
-            <code class="branch max-w-64 truncate font-mono text-ui-micro" title={run.head_branch}>{run.head_branch}</code>
+            <Hint label={run.head_branch}>
+              {#snippet child({ props })}
+                <code class="branch max-w-64 truncate font-mono text-ui-micro" {...props}>{run.head_branch}</code>
+              {/snippet}
+            </Hint>
           </span>
         {/if}
         {#if run.head_sha}
-          <Button
-            class="h-auto rounded-sm px-[0.3rem] font-mono text-ui-micro font-normal text-muted-foreground"
-            variant="outline"
-            type="button"
-            title="Copy the full commit SHA"
-            onclick={() => void copySha()}
-          >
-            {run.head_sha.slice(0, 7)}
-          </Button>
+          <Hint label="Copy the full commit SHA">
+            {#snippet child({ props })}
+              <Button
+                class="h-auto rounded-sm px-[0.3rem] font-mono text-ui-micro font-normal text-muted-foreground"
+                variant="outline"
+                {...props}
+                type="button"
+                onclick={() => void copySha()}
+              >
+                {run.head_sha.slice(0, 7)}
+              </Button>
+            {/snippet}
+          </Hint>
         {/if}
         {#if run.attempt > 1}
           <span class="meta-item inline-flex items-baseline gap-1 whitespace-nowrap">attempt {run.attempt}</span>
         {/if}
         {#if duration}
-          <span class="meta-item inline-flex items-baseline gap-1 whitespace-nowrap" title="Elapsed time">
-            <span class="meta-label opacity-75">{active ? "Running" : "Took"}</span>
-            {duration}
-          </span>
+          <Hint label="Elapsed time">
+            {#snippet child({ props })}
+              <span class="meta-item inline-flex items-baseline gap-1 whitespace-nowrap" {...props}>
+                <span class="meta-label opacity-75">{active ? "Running" : "Took"}</span>
+                {duration}
+              </span>
+            {/snippet}
+          </Hint>
         {/if}
         {#if updatedAgo}
           <span class="meta-item inline-flex items-baseline gap-1 whitespace-nowrap">
@@ -449,15 +474,19 @@
 
     <div class="actions flex flex-wrap items-center gap-[0.3rem] @max-[38rem]:gap-[0.2rem]" aria-label="Run actions">
       {#if active}
-        <Button
-          class={tb}
-          variant="outline"
-          type="button"
-          title={autoRefresh ? "Pause live updates" : "Resume live updates"}
-          onclick={toggleAutoRefresh}
-        >
-          {autoRefresh ? "Pause live" : "Resume live"}
-        </Button>
+        <Hint label={autoRefresh ? "Pause live updates" : "Resume live updates"}>
+          {#snippet child({ props })}
+            <Button
+              class={tb}
+              variant="outline"
+              {...props}
+              type="button"
+              onclick={toggleAutoRefresh}
+            >
+              {autoRefresh ? "Pause live" : "Resume live"}
+            </Button>
+          {/snippet}
+        </Hint>
       {/if}
       <Button
         class={tb}
@@ -526,26 +555,34 @@
           {#if jobs.length > 0}<span class="pane-count rounded-full bg-accent px-[0.35rem] text-ui-tiny font-medium text-muted-foreground">{jobs.length}</span>{/if}
         </h3>
         {#if active && jobs.length > 0}
-          <span
-            class="job-progress inline-flex items-center gap-[0.3rem] whitespace-nowrap text-ui-tiny text-muted-foreground"
-            title={`${jobsDone} of ${jobs.length} jobs finished`}
-          >
-            <span class="job-progress-track block h-[0.3rem] w-[3.2rem] overflow-hidden rounded-full bg-accent" aria-hidden="true">
-              <span class="job-progress-fill block h-full bg-primary transition-[width] duration-[0.35s] ease-out [border-radius:inherit]" style="width: {jobProgressPct}%"></span>
-            </span>
-            <span class="job-progress-label [font-variant-numeric:tabular-nums]">{jobsDone}/{jobs.length}</span>
-          </span>
+          <Hint label={`${jobsDone} of ${jobs.length} jobs finished`}>
+            {#snippet child({ props })}
+              <span
+                class="job-progress inline-flex items-center gap-[0.3rem] whitespace-nowrap text-ui-tiny text-muted-foreground"
+                {...props}
+              >
+                <span class="job-progress-track block h-[0.3rem] w-[3.2rem] overflow-hidden rounded-full bg-accent" aria-hidden="true">
+                  <span class="job-progress-fill block h-full bg-primary transition-[width] duration-[0.35s] ease-out [border-radius:inherit]" style="width: {jobProgressPct}%"></span>
+                </span>
+                <span class="job-progress-label [font-variant-numeric:tabular-nums]">{jobsDone}/{jobs.length}</span>
+              </span>
+            {/snippet}
+          </Hint>
         {/if}
         {#if failedJobs.length > 0 || failedOnly}
-          <Toggle
-            class="{tb} {failedOnly ? "border-transparent bg-accent text-accent-foreground" : ""} focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary focus-visible:ring-0"
-            pressed={failedOnly}
-            onPressedChange={() => toggleFailedOnly()}
-            title="Show failed jobs and only failed steps in the log"
-          >
-            Failed only
-            <span class="filter-count rounded-full bg-current/15 px-[0.3rem] text-ui-tiny">{failedJobs.length}</span>
-          </Toggle>
+          <Hint label="Show failed jobs and only failed steps in the log">
+            {#snippet child({ props })}
+              <Toggle
+                class="{tb} {failedOnly ? "border-transparent bg-accent text-accent-foreground" : ""} focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary focus-visible:ring-0"
+                {...props}
+                pressed={failedOnly}
+                onPressedChange={() => toggleFailedOnly()}
+              >
+                Failed only
+                <span class="filter-count rounded-full bg-current/15 px-[0.3rem] text-ui-tiny">{failedJobs.length}</span>
+              </Toggle>
+            {/snippet}
+          </Hint>
         {/if}
       </div>
 
@@ -571,24 +608,28 @@
         </div>
       {:else}
         <div class="jobs-list flex min-h-0 flex-1 flex-col gap-[0.1rem] overflow-y-auto p-1" role="group" aria-label="Jobs in this run">
-          <button
-            class="job-row all mb-[0.15rem] grid w-full cursor-pointer grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-[0.45rem] rounded-none border border-transparent border-b-border bg-transparent px-2 pb-[0.4rem] pt-[0.3rem] text-left text-inherit hover:bg-accent focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary {selectedJobId === null
-              ? "border-primary bg-primary/10"
-              : ""}"
-            class:selected={selectedJobId === null}
-            type="button"
-            aria-pressed={selectedJobId === null}
-            title="Show the combined log of every job"
-            onclick={() => selectJob(null)}
-          >
-            <span class="job-bullet all-bullet inline-flex size-5 flex-none items-center justify-center rounded-full bg-accent text-ui-tiny text-muted-foreground" aria-hidden="true">▤</span>
-            <span class="job-main flex min-w-0 flex-col">
-              <span class="job-name truncate text-[0.74rem] font-medium text-foreground">All jobs</span>
-              <span class="job-sub truncate text-[0.64rem] text-muted-foreground">
-                {failedOnly ? "Failed steps across the run" : "Combined log"}
-              </span>
-            </span>
-          </button>
+          <Hint label="Show the combined log of every job">
+            {#snippet child({ props })}
+              <button
+                class="job-row all mb-[0.15rem] grid w-full cursor-pointer grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-[0.45rem] rounded-none border border-transparent border-b-border bg-transparent px-2 pb-[0.4rem] pt-[0.3rem] text-left text-inherit hover:bg-accent focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary {selectedJobId === null
+                  ? "border-primary bg-primary/10"
+                  : ""}"
+                class:selected={selectedJobId === null}
+                {...props}
+                type="button"
+                aria-pressed={selectedJobId === null}
+                onclick={() => selectJob(null)}
+              >
+                <span class="job-bullet all-bullet inline-flex size-5 flex-none items-center justify-center rounded-full bg-accent text-ui-tiny text-muted-foreground" aria-hidden="true">▤</span>
+                <span class="job-main flex min-w-0 flex-col">
+                  <span class="job-name truncate text-[0.74rem] font-medium text-foreground">All jobs</span>
+                  <span class="job-sub truncate text-[0.64rem] text-muted-foreground">
+                    {failedOnly ? "Failed steps across the run" : "Combined log"}
+                  </span>
+                </span>
+              </button>
+            {/snippet}
+          </Hint>
 
           {#if visibleJobs.length === 0}
             <p class="pane-note m-[0.5rem_0.4rem] text-ui-micro text-muted-foreground">
@@ -609,33 +650,37 @@
               job.status,
               now,
             )}
-            <button
-              class="job-row grid w-full cursor-pointer grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-[0.45rem] rounded-sm border border-transparent bg-transparent px-2 py-[0.3rem] text-left text-inherit hover:bg-accent focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary {selectedJobId === job.database_id
-                ? "border-primary bg-primary/10"
-                : ""}"
-              class:selected={selectedJobId === job.database_id}
-              type="button"
-              aria-pressed={selectedJobId === job.database_id}
-              title={`Show the log of ${job.name}`}
-              onclick={() => selectJob(job.database_id)}
-            >
-              <span
-                class="job-bullet inline-flex size-5 flex-none items-center justify-center rounded-full text-ui-micro {stepStateClass(job.conclusion, job.status)} {runTone[stepStateClass(job.conclusion, job.status)] ?? "text-muted-foreground"}"
-                aria-hidden="true"
-              >
-                {runStateIcon(jobKind)}
-              </span>
-              <span class="job-main flex min-w-0 flex-col">
-                <span class="job-name truncate text-[0.74rem] font-medium text-foreground">{job.name}</span>
-                <span class="job-sub truncate text-[0.64rem] text-muted-foreground">
-                  {stepStateLabel(job.conclusion, job.status)}
-                  {#if jobDuration} · {jobDuration}{/if}
-                </span>
-              </span>
-              <span class="job-status whitespace-nowrap text-ui-tiny {stepStateClass(job.conclusion, job.status)} {runTone[stepStateClass(job.conclusion, job.status)] ?? "text-muted-foreground"}">
-                {stepStateLabel(job.conclusion, job.status)}
-              </span>
-            </button>
+            <Hint label={`Show the log of ${job.name}`}>
+              {#snippet child({ props })}
+                <button
+                  class="job-row grid w-full cursor-pointer grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-[0.45rem] rounded-sm border border-transparent bg-transparent px-2 py-[0.3rem] text-left text-inherit hover:bg-accent focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary {selectedJobId === job.database_id
+                    ? "border-primary bg-primary/10"
+                    : ""}"
+                  class:selected={selectedJobId === job.database_id}
+                  {...props}
+                  type="button"
+                  aria-pressed={selectedJobId === job.database_id}
+                  onclick={() => selectJob(job.database_id)}
+                >
+                  <span
+                    class="job-bullet inline-flex size-5 flex-none items-center justify-center rounded-full text-ui-micro {stepStateClass(job.conclusion, job.status)} {runTone[stepStateClass(job.conclusion, job.status)] ?? "text-muted-foreground"}"
+                    aria-hidden="true"
+                  >
+                    {runStateIcon(jobKind)}
+                  </span>
+                  <span class="job-main flex min-w-0 flex-col">
+                    <span class="job-name truncate text-[0.74rem] font-medium text-foreground">{job.name}</span>
+                    <span class="job-sub truncate text-[0.64rem] text-muted-foreground">
+                      {stepStateLabel(job.conclusion, job.status)}
+                      {#if jobDuration} · {jobDuration}{/if}
+                    </span>
+                  </span>
+                  <span class="job-status whitespace-nowrap text-ui-tiny {stepStateClass(job.conclusion, job.status)} {runTone[stepStateClass(job.conclusion, job.status)] ?? "text-muted-foreground"}">
+                    {stepStateLabel(job.conclusion, job.status)}
+                  </span>
+                </button>
+              {/snippet}
+            </Hint>
 
             {#if selectedJobId === job.database_id && job.steps.length > 0}
               <ol class="steps m-0 list-none flex flex-col gap-[0.1rem] border-l-2 border-border pb-[0.1rem] pl-[0.5rem] pt-[0.1rem] ml-[0.6rem] mb-[0.25rem] mt-[0.1rem]" aria-label={`Steps in ${job.name}`}>
@@ -652,28 +697,36 @@
                   )}
                   {@const stepKeyStr = `${job.name}\u0000${step.name}`}
                   <li class="step-item m-0 p-0">
-                    <button
-                      class="step-row-btn group flex w-full cursor-pointer items-center gap-[0.4rem] rounded-sm border px-2 py-0.5 text-left text-ui-micro text-inherit transition-[background-color,border-color] duration-150 hover:border-border hover:bg-accent focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary {activeStepKey === stepKeyStr
-                        ? "border-primary bg-primary/[0.14] font-medium"
-                        : "border-transparent bg-transparent"}"
-                      class:active={activeStepKey === stepKeyStr}
-                      type="button"
-                      title={`Jump to ${step.name} logs`}
-                      onclick={() => jumpToStep(job.name, step.name)}
-                    >
-                      <span
-                        class="step-icon w-[0.8rem] flex-none text-center text-ui-tiny {stepStateClass(step.conclusion, step.status)} {runTone[stepStateClass(step.conclusion, step.status)] ?? "text-muted-foreground"}"
-                        aria-hidden="true"
-                      >
-                        {runStateIcon(stepKind)}
-                      </span>
-                      <span class="step-name min-w-0 flex-1 truncate text-foreground" title={step.name}>{step.name}</span>
-                      <span class="step-meta flex-none text-ui-tiny text-muted-foreground opacity-90">
-                        {stepStateLabel(step.conclusion, step.status)}
-                        {#if stepDuration} · {stepDuration}{/if}
-                      </span>
-                      <span class="step-jump-icon flex-none text-[0.64rem] text-muted-foreground opacity-0 transition-[opacity,transform] duration-150 group-hover:translate-x-[2px] group-hover:opacity-80 {activeStepKey === stepKeyStr ? "translate-x-[2px] opacity-80" : ""}" aria-hidden="true">→</span>
-                    </button>
+                    <Hint label={`Jump to ${step.name} logs`}>
+                      {#snippet child({ props })}
+                        <button
+                          class="step-row-btn group flex w-full cursor-pointer items-center gap-[0.4rem] rounded-sm border px-2 py-0.5 text-left text-ui-micro text-inherit transition-[background-color,border-color] duration-150 hover:border-border hover:bg-accent focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary {activeStepKey === stepKeyStr
+                            ? "border-primary bg-primary/[0.14] font-medium"
+                            : "border-transparent bg-transparent"}"
+                          class:active={activeStepKey === stepKeyStr}
+                          {...props}
+                          type="button"
+                          onclick={() => jumpToStep(job.name, step.name)}
+                        >
+                          <span
+                            class="step-icon w-[0.8rem] flex-none text-center text-ui-tiny {stepStateClass(step.conclusion, step.status)} {runTone[stepStateClass(step.conclusion, step.status)] ?? "text-muted-foreground"}"
+                            aria-hidden="true"
+                          >
+                            {runStateIcon(stepKind)}
+                          </span>
+                          <Hint label={step.name}>
+                            {#snippet child({ props })}
+                              <span class="step-name min-w-0 flex-1 truncate text-foreground" {...props}>{step.name}</span>
+                            {/snippet}
+                          </Hint>
+                          <span class="step-meta flex-none text-ui-tiny text-muted-foreground opacity-90">
+                            {stepStateLabel(step.conclusion, step.status)}
+                            {#if stepDuration} · {stepDuration}{/if}
+                          </span>
+                          <span class="step-jump-icon flex-none text-[0.64rem] text-muted-foreground opacity-0 transition-[opacity,transform] duration-150 group-hover:translate-x-[2px] group-hover:opacity-80 {activeStepKey === stepKeyStr ? "translate-x-[2px] opacity-80" : ""}" aria-hidden="true">→</span>
+                        </button>
+                      {/snippet}
+                    </Hint>
                   </li>
                 {/each}
               </ol>
@@ -699,15 +752,19 @@
         {/if}
         <span class="spacer ml-auto"></span>
         {#if selectedJob}
-          <Button
-            class={tb}
-            variant="outline"
-            type="button"
-            title="Back to the combined log"
-            onclick={() => selectJob(null)}
-          >
-            All jobs
-          </Button>
+          <Hint label="Back to the combined log">
+            {#snippet child({ props })}
+              <Button
+                class={tb}
+                variant="outline"
+                {...props}
+                type="button"
+                onclick={() => selectJob(null)}
+              >
+                All jobs
+              </Button>
+            {/snippet}
+          </Hint>
         {/if}
       </div>
 

@@ -11,6 +11,7 @@
    */
   import * as Dialog from "$lib/components/ui/dialog/index.js";
   import { Button } from "$lib/components/ui/button/index.js";
+  import { Hint } from "$lib/components/ui/tooltip/index.js";
   import { Input } from "$lib/components/ui/input/index.js";
 
   let {
@@ -67,13 +68,17 @@
         data-autofocus
         onfocus={(e) => e.currentTarget.select()}
       />
-      <label
-        class="tag-at-toggle flex cursor-pointer items-center gap-1.5 text-ui-base text-muted-foreground"
-        title="Annotated tags carry a message, tagger and date"
-      >
-        <input type="checkbox" class="m-0 accent-primary" bind:checked={annotated} />
-        <span>annotated</span>
-      </label>
+      <Hint label="Annotated tags carry a message, tagger and date">
+        {#snippet child({ props })}
+          <label
+            {...props}
+            class="tag-at-toggle flex cursor-pointer items-center gap-1.5 text-ui-base text-muted-foreground"
+          >
+            <input type="checkbox" class="m-0 accent-primary" bind:checked={annotated} />
+            <span>annotated</span>
+          </label>
+        {/snippet}
+      </Hint>
       {#if annotated}
         <Input
           class="rounded-lg"

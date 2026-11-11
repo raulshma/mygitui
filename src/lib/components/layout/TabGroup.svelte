@@ -32,6 +32,7 @@
     type TabsNode,
   } from "$lib/layout/layoutModel";
   import { Button } from "$lib/components/ui/button/index.js";
+  import { Hint } from "$lib/components/ui/tooltip/index.js";
 
   let {
     node,
@@ -202,19 +203,22 @@
           class="panel-title min-w-0 flex-1 truncate text-ui-micro font-semibold uppercase tracking-[0.04em] text-muted-foreground"
           >{panelLabel(activePanel)}</span
         >
-        <Button
-          class="panel-menu size-5 flex-none rounded-sm p-0 text-sm leading-none focus-visible:outline-2 focus-visible:outline-primary focus-visible:-outline-offset-2 focus-visible:ring-0"
-          variant="ghost"
-          size="icon-xs"
-          type="button"
-          aria-label="Panel actions"
-          aria-haspopup="menu"
-          aria-expanded={menu?.kind === "context"}
-          title="Panel actions"
-          onclick={(e) => openContext(e, activePanel)}
-        >
-          ⋯
-        </Button>
+        <Hint label="Panel actions">
+          {#snippet child({ props })}
+            <Button
+              class="panel-menu size-5 flex-none rounded-sm p-0 text-sm leading-none focus-visible:outline-2 focus-visible:outline-primary focus-visible:-outline-offset-2 focus-visible:ring-0"
+              variant="ghost"
+              size="icon-xs"
+              type="button"
+              {...props}
+              aria-haspopup="menu"
+              aria-expanded={menu?.kind === "context"}
+              onclick={(e) => openContext(e, activePanel)}
+            >
+              ⋯
+            </Button>
+          {/snippet}
+        </Hint>
       </div>
     {/if}
   {:else}
@@ -227,50 +231,58 @@
       oncontextmenu={(e) => e.preventDefault()}
     >
       {#each node.tabs as panel, index (panel)}
-        <button
-          data-tab-index={index}
-          class="panel-tab inline-flex flex-none cursor-pointer items-center gap-1 whitespace-nowrap rounded-t-sm border border-b-0 bg-transparent px-2 py-1 text-ui-micro font-medium text-muted-foreground hover:bg-accent focus-visible:outline-2 focus-visible:outline-primary focus-visible:-outline-offset-2 aria-selected:-mb-px aria-selected:rounded-b-none aria-selected:bg-card aria-selected:pb-[calc(0.25rem+1px)] aria-selected:text-primary"
-          type="button"
-          role="tab"
-          aria-selected={index === activeIndex}
-          aria-controls={`tabpanel-${node.id}`}
-          id={`tab-${node.id}-${panel}`}
-          tabindex={index === activeIndex ? 0 : -1}
-          title={`${panelLabel(panel)} — middle-click to close`}
-          onclick={() => onActivate(node.id, index)}
-          onauxclick={(e) => onAuxClick(e, panel)}
-          oncontextmenu={(e) => openContext(e, panel)}
-        >
-          <svg
-            class="tab-icon h-3 w-3 flex-none"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-            aria-hidden="true"
-          >
-            <path d={PANEL_META[panel]?.icon ?? ""} />
-          </svg>
-          {panelLabel(panel)}
-        </button>
+        <Hint label={`${panelLabel(panel)} — middle-click to close`}>
+          {#snippet child({ props })}
+            <button
+              data-tab-index={index}
+              class="panel-tab inline-flex flex-none cursor-pointer items-center gap-1 whitespace-nowrap rounded-t-sm border border-b-0 bg-transparent px-2 py-1 text-ui-micro font-medium text-muted-foreground hover:bg-accent focus-visible:outline-2 focus-visible:outline-primary focus-visible:-outline-offset-2 aria-selected:-mb-px aria-selected:rounded-b-none aria-selected:bg-card aria-selected:pb-[calc(0.25rem+1px)] aria-selected:text-primary"
+              type="button"
+              role="tab"
+              aria-selected={index === activeIndex}
+              aria-controls={`tabpanel-${node.id}`}
+              {...props}
+              id={`tab-${node.id}-${panel}`}
+              tabindex={index === activeIndex ? 0 : -1}
+              aria-label={panelLabel(panel)}
+              onclick={() => onActivate(node.id, index)}
+              onauxclick={(e) => onAuxClick(e, panel)}
+              oncontextmenu={(e) => openContext(e, panel)}
+            >
+              <svg
+                class="tab-icon h-3 w-3 flex-none"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                aria-hidden="true"
+              >
+                <path d={PANEL_META[panel]?.icon ?? ""} />
+              </svg>
+              {panelLabel(panel)}
+            </button>
+          {/snippet}
+        </Hint>
       {/each}
 
       {#if hiddenPanels.length > 0}
-        <Button
-          class="panel-add h-auto flex-none rounded-b-none rounded-t-sm border-b border-b-transparent px-2 py-1 text-ui-base leading-none hover:text-primary focus-visible:bg-accent focus-visible:text-primary"
-          variant="ghost"
-          size="sm"
-          type="button"
-          aria-label="Add panel"
-          aria-haspopup="menu"
-          aria-expanded={menu?.kind === "add"}
-          title="Add panel"
-          onclick={openAdd}
-        >
-          +
-        </Button>
+        <Hint label="Add panel">
+          {#snippet child({ props })}
+            <Button
+              class="panel-add h-auto flex-none rounded-b-none rounded-t-sm border-b border-b-transparent px-2 py-1 text-ui-base leading-none hover:text-primary focus-visible:bg-accent focus-visible:text-primary"
+              variant="ghost"
+              size="sm"
+              type="button"
+              {...props}
+              aria-haspopup="menu"
+              aria-expanded={menu?.kind === "add"}
+              onclick={openAdd}
+            >
+              +
+            </Button>
+          {/snippet}
+        </Hint>
       {/if}
     </div>
   {/if}

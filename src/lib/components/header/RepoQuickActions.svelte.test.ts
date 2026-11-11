@@ -112,7 +112,11 @@ describe("RepoQuickActions header pins", () => {
 
     await openMenu();
     // Entries render in fetch/pull/push order — the first pin action pins Fetch.
-    await fireEvent.click(screen.getAllByTitle("Pin to header")[0]!);
+    // The action button's label rides the Hint trigger's aria-label (native
+    // title= is gone), so query by accessible name.
+    await fireEvent.click(
+      screen.getAllByRole("button", { name: "Pin to header" })[0]!,
+    );
     expect(headerPins.pins).toEqual(["fetch"]);
     expect(contextMenu.open).toBe(false);
     expect(pinButton("fetch")).not.toBeNull();
@@ -124,9 +128,13 @@ describe("RepoQuickActions header pins", () => {
     render(ContextMenu);
 
     await openMenu();
-    expect(screen.getByTitle("Unpin from header")).not.toBeNull();
+    expect(
+      screen.getByRole("button", { name: "Unpin from header" }),
+    ).not.toBeNull();
     // The other two verbs still offer pinning.
-    expect(screen.getAllByTitle("Pin to header")).toHaveLength(2);
+    expect(
+      screen.getAllByRole("button", { name: "Pin to header" }),
+    ).toHaveLength(2);
   });
 
   it("renders pinned verbs as segments in fetch/pull/push order", () => {

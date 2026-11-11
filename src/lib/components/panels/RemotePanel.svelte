@@ -37,6 +37,7 @@
   import { toast } from "$lib/toast";
   import Icon from "$lib/components/icons/Icon.svelte";
   import { Switch } from "$lib/components/ui/switch/index.js";
+  import { Hint } from "$lib/components/ui/tooltip/index.js";
   import { Progress } from "$lib/components/ui/progress";
   import EmptyState from "../layout/EmptyState.svelte";
   import { Button } from "$lib/components/ui/button/index.js";
@@ -420,29 +421,33 @@
     >
       <Icon icon={iconRefresh} size={16} />
     </Button>
-    <label
-      class="autofetch ml-auto flex items-center gap-1.5 text-xs text-muted-foreground"
-      title="Fetch the default remote in the background while this repo is open"
-    >
-      <span>auto-fetch</span>
-      <Select.Root
-        type="single"
-        value={String(autofetch.getInterval(repoRoot))}
-        onValueChange={(value) => autofetch.setInterval(repoRoot, Number(value))}
-      >
-        <Select.Trigger
-          class="max-w-[12rem] h-6 rounded border-border bg-background dark:bg-background px-1.5 py-0 text-ui-meta text-foreground gap-1"
-          aria-label="Auto-fetch interval in minutes"
+    <Hint label="Fetch the default remote in the background while this repo is open">
+      {#snippet child({ props })}
+        <label
+          class="autofetch ml-auto flex items-center gap-1.5 text-xs text-muted-foreground"
+          {...props}
         >
-          <Select.Value />
-        </Select.Trigger>
-        <Select.Content>
-          {#each INTERVALS as minutes (minutes)}
-            <Select.Item value={String(minutes)} label={minutes === 0 ? "off" : `${minutes} min`} class="text-xs" />
-          {/each}
-        </Select.Content>
-      </Select.Root>
-    </label>
+          <span>auto-fetch</span>
+          <Select.Root
+            type="single"
+            value={String(autofetch.getInterval(repoRoot))}
+            onValueChange={(value) => autofetch.setInterval(repoRoot, Number(value))}
+          >
+            <Select.Trigger
+              class="max-w-[12rem] h-6 rounded border-border bg-background dark:bg-background px-1.5 py-0 text-ui-meta text-foreground gap-1"
+              aria-label="Auto-fetch interval in minutes"
+            >
+              <Select.Value />
+            </Select.Trigger>
+            <Select.Content>
+              {#each INTERVALS as minutes (minutes)}
+                <Select.Item value={String(minutes)} label={minutes === 0 ? "off" : `${minutes} min`} class="text-xs" />
+              {/each}
+            </Select.Content>
+          </Select.Root>
+        </label>
+      {/snippet}
+    </Hint>
   </div>
 
   {#if primaryRemote}
@@ -451,12 +456,16 @@
       role="group"
       aria-label={`Repository sync with ${primaryRemote.name}`}
     >
-      <span
-        class="sync-remote mr-auto max-w-[10rem] shrink-0 overflow-hidden text-ellipsis whitespace-nowrap text-xs font-semibold text-muted-foreground"
-        title={`Primary remote: ${primaryRemote.url}`}
-      >
-        {primaryRemote.name}
-      </span>
+      <Hint label={`Primary remote: ${primaryRemote.url}`}>
+        {#snippet child({ props })}
+          <span
+            class="sync-remote mr-auto max-w-[10rem] shrink-0 overflow-hidden text-ellipsis whitespace-nowrap text-xs font-semibold text-muted-foreground"
+            {...props}
+          >
+            {primaryRemote.name}
+          </span>
+        {/snippet}
+      </Hint>
       <Button
         variant="ghost"
         class="sync-act min-h-7 gap-1.5 rounded-full border border-border bg-transparent px-2.5 text-xs text-foreground hover:bg-accent hover:text-foreground dark:hover:bg-accent"
@@ -548,76 +557,108 @@
                   }}
                 />
               </label>
-              <Button
-                variant="default"
-                size="icon-sm"
-                type="submit"
-                aria-label="Save remote URL"
-                title="Save URL"
-              >
-                <Icon icon={iconCheck} size={16} />
-              </Button>
-              <Button
-                class="border-border text-muted-foreground hover:border-primary hover:bg-accent hover:text-accent-foreground"
-                variant="ghost"
-                size="icon-sm"
-                type="button"
-                aria-label="Cancel URL edit"
-                title="Cancel"
-                onclick={() => (editing = null)}
-              >
-                <Icon icon={iconClose} size={16} />
-              </Button>
+              <Hint label="Save URL">
+                {#snippet child({ props })}
+                  <Button
+                    variant="default"
+                    size="icon-sm"
+                    {...props}
+                    type="submit"
+                    aria-label="Save remote URL"
+                  >
+                    <Icon icon={iconCheck} size={16} />
+                  </Button>
+                {/snippet}
+              </Hint>
+              <Hint label="Cancel">
+                {#snippet child({ props })}
+                  <Button
+                    class="border-border text-muted-foreground hover:border-primary hover:bg-accent hover:text-accent-foreground"
+                    variant="ghost"
+                    size="icon-sm"
+                    {...props}
+                    type="button"
+                    aria-label="Cancel URL edit"
+                    onclick={() => (editing = null)}
+                  >
+                    <Icon icon={iconClose} size={16} />
+                  </Button>
+                {/snippet}
+              </Hint>
             </form>
           {:else}
             <div class="card-head flex min-w-0 flex-wrap items-center gap-2">
-              <span class="rname shrink-0 overflow-hidden text-ellipsis whitespace-nowrap font-semibold text-primary" title={remote.name}>{remote.name}</span>
-              <span class="url min-w-32 flex-1 overflow-hidden text-ellipsis whitespace-nowrap font-mono text-ui-micro text-muted-foreground" title={remote.url}>{remote.url}</span>
+              <Hint label={remote.name}>
+                {#snippet child({ props })}
+                  <span class="rname shrink-0 overflow-hidden text-ellipsis whitespace-nowrap font-semibold text-primary" {...props}>{remote.name}</span>
+                {/snippet}
+              </Hint>
+              <Hint label={remote.url}>
+                {#snippet child({ props })}
+                  <span class="url min-w-32 flex-1 overflow-hidden text-ellipsis whitespace-nowrap font-mono text-ui-micro text-muted-foreground" {...props}>{remote.url}</span>
+                {/snippet}
+              </Hint>
               {#if remote.push_url}
-                <span class="url push max-w-[40%] shrink-0 overflow-hidden text-ellipsis whitespace-nowrap font-mono text-ui-micro text-muted-foreground" title={remote.push_url}>push: {remote.push_url}</span>
+                <Hint label={remote.push_url}>
+                  {#snippet child({ props })}
+                    <span class="url push max-w-[40%] shrink-0 overflow-hidden text-ellipsis whitespace-nowrap font-mono text-ui-micro text-muted-foreground" {...props}>push: {remote.push_url}</span>
+                  {/snippet}
+                </Hint>
               {/if}
               <span class="head-actions ml-auto flex shrink-0 gap-1">
-                <Button
-                  class="relative text-muted-foreground after:absolute after:-inset-1 after:content-[''] hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-4"
-                  variant="ghost"
-                  size="icon-xs"
-                  type="button"
-                  aria-label={`Edit fetch URL for ${remote.name}`}
-                  title="Set the fetch URL"
-                  onclick={() =>
-                    (editing = { name: remote.name, field: "url", value: remote.url })}
-                >
-                  <Icon icon={iconSetUrl} size={16} />
-                </Button>
+                <Hint label="Set the fetch URL">
+                  {#snippet child({ props })}
+                    <Button
+                      class="relative text-muted-foreground after:absolute after:-inset-1 after:content-[''] hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-4"
+                      variant="ghost"
+                      size="icon-xs"
+                      {...props}
+                      type="button"
+                      aria-label={`Edit fetch URL for ${remote.name}`}
+                      onclick={() =>
+                        (editing = { name: remote.name, field: "url", value: remote.url })}
+                    >
+                      <Icon icon={iconSetUrl} size={16} />
+                    </Button>
+                  {/snippet}
+                </Hint>
                 {#if remote.push_url}
-                  <Button
-                    class="relative text-muted-foreground after:absolute after:-inset-1 after:content-[''] hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-4"
-                    variant="ghost"
-                    size="icon-xs"
-                    type="button"
-                    aria-label={`Edit push URL for ${remote.name}`}
-                    title="Set the push URL"
-                    onclick={() =>
-                      (editing = {
-                        name: remote.name,
-                        field: "push_url",
-                        value: remote.push_url ?? "",
-                      })}
-                  >
-                    <Icon icon={iconSetPushUrl} size={16} />
-                  </Button>
+                  <Hint label="Set the push URL">
+                    {#snippet child({ props })}
+                      <Button
+                        class="relative text-muted-foreground after:absolute after:-inset-1 after:content-[''] hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-4"
+                        variant="ghost"
+                        size="icon-xs"
+                        {...props}
+                        type="button"
+                        aria-label={`Edit push URL for ${remote.name}`}
+                        onclick={() =>
+                          (editing = {
+                            name: remote.name,
+                            field: "push_url",
+                            value: remote.push_url ?? "",
+                          })}
+                      >
+                        <Icon icon={iconSetPushUrl} size={16} />
+                      </Button>
+                    {/snippet}
+                  </Hint>
                 {/if}
-                <Button
-                  class="relative text-destructive after:absolute after:-inset-1 after:content-[''] hover:bg-destructive/10 hover:text-destructive [&_svg:not([class*='size-'])]:size-4"
-                  variant="ghost"
-                  size="icon-xs"
-                  type="button"
-                  aria-label={`Remove remote ${remote.name}`}
-                  title="Remove this remote"
-                  onclick={() => void onRemove(remote)}
-                >
-                  <Icon icon={iconRemove} size={16} />
-                </Button>
+                <Hint label="Remove this remote">
+                  {#snippet child({ props })}
+                    <Button
+                      class="relative text-destructive after:absolute after:-inset-1 after:content-[''] hover:bg-destructive/10 hover:text-destructive [&_svg:not([class*='size-'])]:size-4"
+                      variant="ghost"
+                      size="icon-xs"
+                      {...props}
+                      type="button"
+                      aria-label={`Remove remote ${remote.name}`}
+                      onclick={() => void onRemove(remote)}
+                    >
+                      <Icon icon={iconRemove} size={16} />
+                    </Button>
+                  {/snippet}
+                </Hint>
               </span>
             </div>
             {#if expandedRemote === remote.name}
@@ -629,48 +670,64 @@
                   <ul class="rb-list">
                     {#each remoteBranchList.filter((b) => b.remote === remote.name) as rb (rb.remote + "/" + rb.name)}
                       <li class="rb-row">
-                        <span class="rb-name" title="{rb.remote}/{rb.name}">
-                          {rb.name}
-                          {#if rb.tracked_by}<span class="rb-tracked">({rb.tracked_by})</span>{/if}
-                        </span>
+                        <Hint label={`${rb.remote}/${rb.name}`}>
+                          {#snippet child({ props })}
+                            <span class="rb-name" {...props}>
+                              {rb.name}
+                              {#if rb.tracked_by}<span class="rb-tracked">({rb.tracked_by})</span>{/if}
+                            </span>
+                          {/snippet}
+                        </Hint>
                         {#if rb.tracked_by === null}
-                          <Button
-                            class="relative text-muted-foreground after:absolute after:-inset-1 after:content-[''] hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-4"
-                            variant="ghost"
-                            size="icon-xs"
-                            type="button"
-                            aria-label={`Check out ${rb.remote}/${rb.name}`}
-                            title="Create a local branch tracking {rb.remote}/{rb.name} and check it out"
-                            onclick={() => void onCheckoutRemote(rb)}
-                          >
-                            <Icon icon={iconCheckout} size={16} />
-                          </Button>
+                          <Hint label={`Create a local branch tracking ${rb.remote}/${rb.name} and check it out`}>
+                            {#snippet child({ props })}
+                              <Button
+                                class="relative text-muted-foreground after:absolute after:-inset-1 after:content-[''] hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-4"
+                                variant="ghost"
+                                size="icon-xs"
+                                {...props}
+                                type="button"
+                                aria-label={`Check out ${rb.remote}/${rb.name}`}
+                                onclick={() => void onCheckoutRemote(rb)}
+                              >
+                                <Icon icon={iconCheckout} size={16} />
+                              </Button>
+                            {/snippet}
+                          </Hint>
                         {/if}
                         <!-- M12: diff HEAD against this remote branch inline. -->
-                        <Button
-                          class="relative text-muted-foreground after:absolute after:-inset-1 after:content-[''] hover:bg-accent hover:text-accent-foreground aria-pressed:bg-accent aria-pressed:text-accent-foreground [&_svg:not([class*='size-'])]:size-4"
-                          variant="ghost"
-                          size="icon-xs"
-                          type="button"
-                          aria-label={`Compare HEAD with ${rb.remote}/${rb.name}`}
-                          aria-pressed={compareKey === `${rb.remote}/${rb.name}`}
-                          aria-expanded={compareKey === `${rb.remote}/${rb.name}`}
-                          title="Diff HEAD against {rb.remote}/{rb.name}"
-                          onclick={() => void onCompareHead(rb)}
-                        >
-                          <Icon icon={iconCompare} size={16} />
-                        </Button>
-                        <Button
-                          class="relative text-destructive after:absolute after:-inset-1 after:content-[''] hover:bg-destructive/10 hover:text-destructive [&_svg:not([class*='size-'])]:size-4"
-                          variant="ghost"
-                          size="icon-xs"
-                          type="button"
-                          aria-label={`Delete remote branch ${rb.remote}/${rb.name}`}
-                          title="Delete {rb.remote}/{rb.name} on the remote (asks for confirmation)"
-                          onclick={() => onDeleteRemoteBranch(rb)}
-                        >
-                          <Icon icon={iconRemove} size={16} />
-                        </Button>
+                        <Hint label={`Diff HEAD against ${rb.remote}/${rb.name}`}>
+                          {#snippet child({ props })}
+                            <Button
+                              class="relative text-muted-foreground after:absolute after:-inset-1 after:content-[''] hover:bg-accent hover:text-accent-foreground aria-pressed:bg-accent aria-pressed:text-accent-foreground [&_svg:not([class*='size-'])]:size-4"
+                              variant="ghost"
+                              size="icon-xs"
+                              {...props}
+                              type="button"
+                              aria-label={`Compare HEAD with ${rb.remote}/${rb.name}`}
+                              aria-pressed={compareKey === `${rb.remote}/${rb.name}`}
+                              aria-expanded={compareKey === `${rb.remote}/${rb.name}`}
+                              onclick={() => void onCompareHead(rb)}
+                            >
+                              <Icon icon={iconCompare} size={16} />
+                            </Button>
+                          {/snippet}
+                        </Hint>
+                        <Hint label={`Delete ${rb.remote}/${rb.name} on the remote (asks for confirmation)`}>
+                          {#snippet child({ props })}
+                            <Button
+                              class="relative text-destructive after:absolute after:-inset-1 after:content-[''] hover:bg-destructive/10 hover:text-destructive [&_svg:not([class*='size-'])]:size-4"
+                              variant="ghost"
+                              size="icon-xs"
+                              {...props}
+                              type="button"
+                              aria-label={`Delete remote branch ${rb.remote}/${rb.name}`}
+                              onclick={() => onDeleteRemoteBranch(rb)}
+                            >
+                              <Icon icon={iconRemove} size={16} />
+                            </Button>
+                          {/snippet}
+                        </Hint>
                       </li>
                       {#if compareKey === `${rb.remote}/${rb.name}`}
                         <li class="rb-compare rounded-lg border border-border px-1.5 py-1">
@@ -679,17 +736,21 @@
                               {#if compareFiles}({compareFiles.length}
                                 file{compareFiles.length === 1 ? "" : "s"}){/if}
                             </span>
-                            <Button
-                              class="relative text-muted-foreground after:absolute after:-inset-1 after:content-[''] hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-4"
-                              variant="ghost"
-                              size="icon-xs"
-                              type="button"
-                              aria-label="Close compare"
-                              title="Close compare"
-                              onclick={() => (compareKey = null)}
-                            >
-                              <Icon icon={iconClose} size={16} />
-                            </Button>
+                            <Hint label="Close compare">
+                              {#snippet child({ props })}
+                                <Button
+                                  class="relative text-muted-foreground after:absolute after:-inset-1 after:content-[''] hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-4"
+                                  variant="ghost"
+                                  size="icon-xs"
+                                  {...props}
+                                  type="button"
+                                  aria-label="Close compare"
+                                  onclick={() => (compareKey = null)}
+                                >
+                                  <Icon icon={iconClose} size={16} />
+                                </Button>
+                              {/snippet}
+                            </Hint>
                           </div>
                           {#if compareLoading}
                             <p class="rb-compare-state mb-0 mt-1 text-ui-meta text-muted-foreground">Comparing…</p>
@@ -799,41 +860,61 @@
               <details class="adv mt-1 text-ui-meta">
                 <summary class="cursor-pointer select-none py-0.5 text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring focus-visible:outline-offset-1">Advanced options</summary>
                 <div class="adv-opts flex flex-col gap-1 pb-1.5 pt-1">
-                  <label
-                    class="inline-flex cursor-pointer select-none items-center gap-1.5 whitespace-nowrap text-sm"
-                    title="Fetch: delete remote-tracking branches that vanished upstream"
-                  >
-                    <Switch bind:checked={prune} />
-                    <span class="text-muted-foreground text-xs">prune on fetch</span>
-                  </label>
-                  <label
-                    class="inline-flex cursor-pointer select-none items-center gap-1.5 whitespace-nowrap text-sm"
-                    title="Pull: refuse when the merge would not be a fast-forward"
-                  >
-                    <Switch bind:checked={ffOnly} />
-                    <span class="text-muted-foreground text-xs">ff-only on pull</span>
-                  </label>
-                  <label
-                    class="inline-flex cursor-pointer select-none items-center gap-1.5 whitespace-nowrap text-sm"
-                    title="Pull: rebase local commits on top of the fetched branch"
-                  >
-                    <Switch bind:checked={rebase} />
-                    <span class="text-muted-foreground text-xs">rebase on pull</span>
-                  </label>
-                  <label
-                    class="inline-flex cursor-pointer select-none items-center gap-1.5 whitespace-nowrap text-sm"
-                    title="Push: overwrite the remote branch"
-                  >
-                    <Switch bind:checked={force} />
-                    <span class="text-muted-foreground text-xs">force on push</span>
-                  </label>
-                  <label
-                    class="inline-flex cursor-pointer select-none items-center gap-1.5 whitespace-nowrap text-sm"
-                    title="Push: set this branch's upstream to this remote"
-                  >
-                    <Switch bind:checked={setUpstream} />
-                    <span class="text-muted-foreground text-xs">set-upstream on push</span>
-                  </label>
+                  <Hint label="Fetch: delete remote-tracking branches that vanished upstream">
+                    {#snippet child({ props })}
+                      <label
+                        class="inline-flex cursor-pointer select-none items-center gap-1.5 whitespace-nowrap text-sm"
+                        {...props}
+                      >
+                        <Switch bind:checked={prune} />
+                        <span class="text-muted-foreground text-xs">prune on fetch</span>
+                      </label>
+                    {/snippet}
+                  </Hint>
+                  <Hint label="Pull: refuse when the merge would not be a fast-forward">
+                    {#snippet child({ props })}
+                      <label
+                        class="inline-flex cursor-pointer select-none items-center gap-1.5 whitespace-nowrap text-sm"
+                        {...props}
+                      >
+                        <Switch bind:checked={ffOnly} />
+                        <span class="text-muted-foreground text-xs">ff-only on pull</span>
+                      </label>
+                    {/snippet}
+                  </Hint>
+                  <Hint label="Pull: rebase local commits on top of the fetched branch">
+                    {#snippet child({ props })}
+                      <label
+                        class="inline-flex cursor-pointer select-none items-center gap-1.5 whitespace-nowrap text-sm"
+                        {...props}
+                      >
+                        <Switch bind:checked={rebase} />
+                        <span class="text-muted-foreground text-xs">rebase on pull</span>
+                      </label>
+                    {/snippet}
+                  </Hint>
+                  <Hint label="Push: overwrite the remote branch">
+                    {#snippet child({ props })}
+                      <label
+                        class="inline-flex cursor-pointer select-none items-center gap-1.5 whitespace-nowrap text-sm"
+                        {...props}
+                      >
+                        <Switch bind:checked={force} />
+                        <span class="text-muted-foreground text-xs">force on push</span>
+                      </label>
+                    {/snippet}
+                  </Hint>
+                  <Hint label="Push: set this branch's upstream to this remote">
+                    {#snippet child({ props })}
+                      <label
+                        class="inline-flex cursor-pointer select-none items-center gap-1.5 whitespace-nowrap text-sm"
+                        {...props}
+                      >
+                        <Switch bind:checked={setUpstream} />
+                        <span class="text-muted-foreground text-xs">set-upstream on push</span>
+                      </label>
+                    {/snippet}
+                  </Hint>
                 </div>
               </details>
             </div>

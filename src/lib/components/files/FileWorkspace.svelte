@@ -24,6 +24,7 @@
   import { Button } from "$lib/components/ui/button/index.js";
   import { Spinner } from "$lib/components/ui/spinner/index.js";
   import { Toggle } from "$lib/components/ui/toggle/index.js";
+  import { Hint } from "$lib/components/ui/tooltip/index.js";
   import Icon from "$lib/components/icons/Icon.svelte";
   import { fileIconForPath, fileIconColorForPath } from "$lib/components/icons/fileIcons";
   import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.svelte";
@@ -232,68 +233,88 @@
   >
     {#each openFiles as file (file.path)}
       {@const isActive = file.path === active}
-      <!-- svelte-ignore a11y_click_events_have_key_events -- keyboard
-           handling lives on the tab strip's focusable row buttons + menus -->
-      <div
-        class="tab flex h-8 max-w-56 flex-none cursor-pointer items-center gap-[0.3rem] border-r border-border py-0 pl-2.5 pr-[0.3rem] whitespace-nowrap select-none text-ui-meta {isActive
-          ? 'bg-card text-foreground shadow-[inset_0_2px_0_var(--primary)]'
-          : 'text-muted-foreground hover:bg-accent'}"
-        class:active={isActive}
-        role="tab"
-        aria-selected={isActive}
-        tabindex="-1"
-        title={file.path}
-        onclick={() => onActivate(file.path)}
-        onauxclick={(event) => {
-          if (event.button === 1) requestClose(file.path);
-        }}
-        oncontextmenu={(event) => tabMenu(event, file.path)}
-      >
-        <span
-          class="ticon inline-flex flex-none"
-          style={`color:${fileIconColorForPath(file.path, fileIconPreferences.theme)}`}
-        >
-          <Icon
-            icon={fileIconForPath(file.path, fileIconPreferences.theme)}
-            size={14}
-          />
-        </span>
-        <span class="tname min-w-0 overflow-hidden text-ellipsis">{basename(file.path)}</span>
-        {#if file.dirty}
-          <span class="dirty size-[7px] flex-none rounded-full bg-[var(--app-modified)]" title="Unsaved changes"></span>
-        {/if}
-        <Button
-          class="tclose size-5 rounded-full text-muted-foreground opacity-65 hover:bg-accent hover:text-accent-foreground hover:opacity-100 [&_svg:not([class*='size-'])]:size-3"
-          variant="ghost"
-          size="icon-sm"
-          type="button"
-          aria-label={`Close ${basename(file.path)}`}
-          title="Close (middle-click)"
-          tabindex={-1}
-          onclick={(event) => {
-            event.stopPropagation();
-            requestClose(file.path);
-          }}
-        >
-          <Icon icon={iconClose} size={12} />
-        </Button>
-      </div>
+      <Hint label={file.path}>
+        {#snippet child({ props })}
+          <!-- svelte-ignore a11y_click_events_have_key_events -- keyboard
+               handling lives on the tab strip's focusable row buttons + menus -->
+          <div
+            {...props}
+            class="tab flex h-8 max-w-56 flex-none cursor-pointer items-center gap-[0.3rem] border-r border-border py-0 pl-2.5 pr-[0.3rem] whitespace-nowrap select-none text-ui-meta {isActive
+              ? 'bg-card text-foreground shadow-[inset_0_2px_0_var(--primary)]'
+              : 'text-muted-foreground hover:bg-accent'}"
+            class:active={isActive}
+            role="tab"
+            aria-selected={isActive}
+            tabindex="-1"
+            onclick={() => onActivate(file.path)}
+            onauxclick={(event) => {
+              if (event.button === 1) requestClose(file.path);
+            }}
+            oncontextmenu={(event) => tabMenu(event, file.path)}
+          >
+            <span
+              class="ticon inline-flex flex-none"
+              style={`color:${fileIconColorForPath(file.path, fileIconPreferences.theme)}`}
+            >
+              <Icon
+                icon={fileIconForPath(file.path, fileIconPreferences.theme)}
+                size={14}
+              />
+            </span>
+            <span class="tname min-w-0 overflow-hidden text-ellipsis">{basename(file.path)}</span>
+            {#if file.dirty}
+              <Hint label="Unsaved changes">
+                {#snippet child({ props: dotProps })}
+                  <span
+                    {...dotProps}
+                    tabindex="-1"
+                    class="dirty size-[7px] flex-none rounded-full bg-[var(--app-modified)]"
+                  ></span>
+                {/snippet}
+              </Hint>
+            {/if}
+            <Hint label="Close (middle-click)">
+              {#snippet child({ props })}
+                <Button
+                  {...props}
+                  class="tclose size-5 rounded-full text-muted-foreground opacity-65 hover:bg-accent hover:text-accent-foreground hover:opacity-100 [&_svg:not([class*='size-'])]:size-3"
+                  variant="ghost"
+                  size="icon-sm"
+                  type="button"
+                  aria-label={`Close ${basename(file.path)}`}
+                  tabindex={-1}
+                  onclick={(event) => {
+                    event.stopPropagation();
+                    requestClose(file.path);
+                  }}
+                >
+                  <Icon icon={iconClose} size={12} />
+                </Button>
+              {/snippet}
+            </Hint>
+          </div>
+        {/snippet}
+      </Hint>
     {/each}
     <span class="tspacer flex-1"></span>
     <div class="tactions flex flex-none items-center gap-0.5 px-1">
       {#if mdActive}
         <div class="seg inline-flex flex-none items-center gap-0 rounded-full border border-border px-1" role="group" aria-label="Markdown view">
           {#each MD_VIEW_SEGMENTS as seg (seg.id)}
-            <Toggle
-              class="h-auto rounded-full px-2 py-px text-ui-micro font-normal focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-primary focus-visible:ring-0 {editorPrefs.mdView === seg.id
-                ? 'bg-primary text-primary-foreground'
-                : 'text-muted-foreground hover:text-foreground'}"
-              pressed={editorPrefs.mdView === seg.id}
-              onPressedChange={(next) => next && editorPrefs.setMdView(seg.id)}
-              title={seg.title}
-            >
-              {seg.label}
-            </Toggle>
+            <Hint label={seg.title}>
+              {#snippet child({ props })}
+                <Toggle
+                  {...props}
+                  class="h-auto rounded-full px-2 py-px text-ui-micro font-normal focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-primary focus-visible:ring-0 {editorPrefs.mdView === seg.id
+                    ? 'bg-primary text-primary-foreground'
+                    : 'text-muted-foreground hover:text-foreground'}"
+                  pressed={editorPrefs.mdView === seg.id}
+                  onPressedChange={(next) => next && editorPrefs.setMdView(seg.id)}
+                >
+                  {seg.label}
+                </Toggle>
+              {/snippet}
+            </Hint>
           {/each}
         </div>
       {/if}
@@ -308,28 +329,36 @@
         <Icon icon={iconDiff} size={14} />
         Diff
       </Button>
-      <Button
-        type="button"
-        class="tact h-auto gap-1 rounded-sm px-2 py-px text-ui-micro font-normal {editorPrefs.wrap
-          ? 'bg-primary/10 text-primary'
-          : ''}"
-        variant="ghost"
-        title={editorPrefs.wrap ? "Disable word wrap" : "Enable word wrap"}
-        onclick={() => editorPrefs.setWrap(!editorPrefs.wrap)}
-      >
-        <Icon icon={iconWrap} size={14} />
-        Wrap
-      </Button>
-      <Button
-        type="button"
-        class="tact h-auto gap-1 rounded-sm px-2 py-px text-ui-micro font-normal"
-        variant="ghost"
-        title="Close all saved files"
-        onclick={closeAll}
-      >
-        <Icon icon={iconClose} size={14} />
-        Close all
-      </Button>
+      <Hint label={editorPrefs.wrap ? "Disable word wrap" : "Enable word wrap"}>
+        {#snippet child({ props })}
+          <Button
+            {...props}
+            type="button"
+            class="tact h-auto gap-1 rounded-sm px-2 py-px text-ui-micro font-normal {editorPrefs.wrap
+              ? 'bg-primary/10 text-primary'
+              : ''}"
+            variant="ghost"
+            onclick={() => editorPrefs.setWrap(!editorPrefs.wrap)}
+          >
+            <Icon icon={iconWrap} size={14} />
+            Wrap
+          </Button>
+        {/snippet}
+      </Hint>
+      <Hint label="Close all saved files">
+        {#snippet child({ props })}
+          <Button
+            {...props}
+            type="button"
+            class="tact h-auto gap-1 rounded-sm px-2 py-px text-ui-micro font-normal"
+            variant="ghost"
+            onclick={closeAll}
+          >
+            <Icon icon={iconClose} size={14} />
+            Close all
+          </Button>
+        {/snippet}
+      </Hint>
     </div>
   </div>
 

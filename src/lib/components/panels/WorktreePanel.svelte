@@ -25,6 +25,7 @@
   import ConfirmDialog from "$lib/components/safety/ConfirmDialog.svelte";
   import Icon from "$lib/components/icons/Icon.svelte";
   import { Button } from "$lib/components/ui/button/index.js";
+  import { Hint } from "$lib/components/ui/tooltip/index.js";
   import EmptyState from "../layout/EmptyState.svelte";
   import { appIcon } from "$lib/components/icons/library.svelte";
   import {
@@ -280,17 +281,21 @@
           aria-label="Worktree folder path"
           bind:value={addPath}
         />
-        <Button
-          class="border-border text-muted-foreground hover:border-primary hover:bg-accent hover:text-accent-foreground"
-          variant="ghost"
-          size="icon-sm"
-          type="button"
-          aria-label="Browse for worktree folder"
-          title="Browse for a folder"
-          onclick={() => void browse()}
-        >
-          <Icon icon={iconBrowse} size={16} />
-        </Button>
+        <Hint label="Browse for a folder">
+          {#snippet child({ props })}
+            <Button
+              class="border-border text-muted-foreground hover:border-primary hover:bg-accent hover:text-accent-foreground"
+              variant="ghost"
+              size="icon-sm"
+              type="button"
+              {...props}
+              aria-label="Browse for worktree folder"
+              onclick={() => void browse()}
+            >
+              <Icon icon={iconBrowse} size={16} />
+            </Button>
+          {/snippet}
+        </Hint>
         <Button
           variant="default"
           size="icon-sm"
@@ -351,19 +356,27 @@
           <span class="badge main-badge inline-flex h-auto shrink-0 items-center rounded-full border border-transparent bg-secondary px-1.5 py-0 text-ui-tiny font-medium text-secondary-foreground">main</span>
           <span class="ref ml-auto truncate text-ui-meta text-muted-foreground">this repository</span>
         </div>
-        <div class="path truncate font-mono text-ui-micro text-muted-foreground" title={root}>{root}</div>
+        <Hint label={root}>
+          {#snippet child({ props })}
+            <div class="path truncate font-mono text-ui-micro text-muted-foreground" {...props}>{root}</div>
+          {/snippet}
+        </Hint>
         <div class="actions flex items-center gap-1">
-          <Button
-            class="relative text-muted-foreground after:absolute after:-inset-1 after:content-[''] hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-4"
-            variant="ghost"
-            size="icon-xs"
-            type="button"
-            aria-label="Focus this repository's tab"
-            title="Open this repository's tab"
-            onclick={() => void onOpen({ name: baseName(root), path: root })}
-          >
-            <Icon icon={iconOpen} size={16} />
-          </Button>
+          <Hint label="Open this repository's tab">
+            {#snippet child({ props })}
+              <Button
+                class="relative text-muted-foreground after:absolute after:-inset-1 after:content-[''] hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-4"
+                variant="ghost"
+                size="icon-xs"
+                type="button"
+                {...props}
+                aria-label="Focus this repository's tab"
+                onclick={() => void onOpen({ name: baseName(root), path: root })}
+              >
+                <Icon icon={iconOpen} size={16} />
+              </Button>
+            {/snippet}
+          </Hint>
         </div>
       </li>
       {#each linked as info (info.path)}
@@ -373,20 +386,32 @@
             {#if info.is_main}
               <!-- M12: marks the repository's true main worktree (this tab is
                    itself a linked one). -->
-              <span class="badge main-badge inline-flex h-auto shrink-0 items-center rounded-full border border-transparent bg-secondary px-1.5 py-0 text-ui-tiny font-medium text-secondary-foreground" title="The repository's main worktree">main</span>
+              <Hint label="The repository's main worktree">
+                {#snippet child({ props })}
+                  <span class="badge main-badge inline-flex h-auto shrink-0 items-center rounded-full border border-transparent bg-secondary px-1.5 py-0 text-ui-tiny font-medium text-secondary-foreground" {...props}>main</span>
+                {/snippet}
+              </Hint>
             {/if}
             {#each worktreeBadges(info) as badge (badge.label)}
-              <span
-                class="badge inline-flex h-auto shrink-0 items-center rounded-full border border-transparent bg-muted px-1.5 py-0 text-ui-tiny font-medium {badge.danger ? "bg-destructive/10 text-destructive" : "text-muted-foreground"}"
-                class:danger={badge.danger}
-                title={badge.title}
-              >
-                {badge.label}
-              </span>
+              <Hint label={badge.title}>
+                {#snippet child({ props })}
+                  <span
+                    class="badge inline-flex h-auto shrink-0 items-center rounded-full border border-transparent bg-muted px-1.5 py-0 text-ui-tiny font-medium {badge.danger ? "bg-destructive/10 text-destructive" : "text-muted-foreground"}"
+                    class:danger={badge.danger}
+                    {...props}
+                  >
+                    {badge.label}
+                  </span>
+                {/snippet}
+              </Hint>
             {/each}
             <span class="ref ml-auto truncate text-ui-meta text-muted-foreground">{worktreeRefLabel(info)}</span>
           </div>
-          <div class="path truncate font-mono text-ui-micro text-muted-foreground" title={info.path}>{info.path}</div>
+          <Hint label={info.path}>
+            {#snippet child({ props })}
+              <div class="path truncate font-mono text-ui-micro text-muted-foreground" {...props}>{info.path}</div>
+            {/snippet}
+          </Hint>
           <div class="actions flex items-center gap-1">
             {#if removingPath === info.path}
               <!-- Removal in flight: row-level progress while the backend
@@ -422,13 +447,17 @@
           {#if removeConfirmFor === info.path && removingPath !== info.path}
             <div class="remove-confirm flex items-center gap-2 border-t border-dashed border-border pt-1">
               {#if worktreeNeedsForce(info)}
-                <label
-                  class="toggle flex cursor-pointer items-center gap-1 whitespace-nowrap text-ui-micro text-muted-foreground"
-                  title="Required while the worktree is locked or prunable"
-                >
-                  <input type="checkbox" class="m-0 accent-primary" bind:checked={removeForce} />
-                  <span>force</span>
-                </label>
+                <Hint label="Required while the worktree is locked or prunable">
+                  {#snippet child({ props })}
+                    <label
+                      class="toggle flex cursor-pointer items-center gap-1 whitespace-nowrap text-ui-micro text-muted-foreground"
+                      {...props}
+                    >
+                      <input type="checkbox" class="m-0 accent-primary" bind:checked={removeForce} />
+                      <span>force</span>
+                    </label>
+                  {/snippet}
+                </Hint>
               {/if}
               <Button
                 class="h-auto shrink-0 rounded-full px-3 py-0.5 text-ui-meta"

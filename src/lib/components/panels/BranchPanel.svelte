@@ -36,6 +36,7 @@
   import Icon from "$lib/components/icons/Icon.svelte";
   import { appIcon } from "$lib/components/icons/library.svelte";
   import { Button } from "$lib/components/ui/button/index.js";
+  import { Hint } from "$lib/components/ui/tooltip/index.js";
   import EmptyState from "../layout/EmptyState.svelte";
   import DialogShell from "$lib/components/safety/DialogShell.svelte";
   import { Badge } from "$lib/components/ui/badge";
@@ -381,13 +382,17 @@
         {/each}
       </select>
     </label>
-    <label
-      class="toggle flex cursor-pointer items-center gap-1 text-ui-meta text-muted-foreground"
-      title="Check out the new branch after creating it"
-    >
-      <input type="checkbox" class="m-0 accent-primary" bind:checked={newCheckout} />
-      <span>checkout</span>
-    </label>
+    <Hint label="Check out the new branch after creating it">
+      {#snippet child({ props })}
+        <label
+          class="toggle flex cursor-pointer items-center gap-1 text-ui-meta text-muted-foreground"
+          {...props}
+        >
+          <input type="checkbox" class="m-0 accent-primary" bind:checked={newCheckout} />
+          <span>checkout</span>
+        </label>
+      {/snippet}
+    </Hint>
   </form>
 
   {#if error}
@@ -420,70 +425,98 @@
                   if (e.key === "Escape") renaming = null;
                 }}
               />
-              <Button
-                variant="default"
-                size="icon-sm"
-                type="submit"
-                aria-label="Save new branch name"
-                title="Save the new branch name"
-              >
-                <Icon icon={iconCheck} size={16} />
-              </Button>
-              <Button
-                class="border-border text-muted-foreground hover:border-primary hover:bg-accent hover:text-accent-foreground"
-                variant="ghost"
-                size="icon-sm"
-                type="button"
-                aria-label="Cancel rename"
-                title="Cancel rename"
-                onclick={() => (renaming = null)}
-              >
-                <Icon icon={iconClose} size={16} />
-              </Button>
+              <Hint label="Save the new branch name">
+                {#snippet child({ props })}
+                  <Button
+                    variant="default"
+                    size="icon-sm"
+                    type="submit"
+                    {...props}
+                    aria-label="Save new branch name"
+                  >
+                    <Icon icon={iconCheck} size={16} />
+                  </Button>
+                {/snippet}
+              </Hint>
+              <Hint label="Cancel rename">
+                {#snippet child({ props })}
+                  <Button
+                    class="border-border text-muted-foreground hover:border-primary hover:bg-accent hover:text-accent-foreground"
+                    variant="ghost"
+                    size="icon-sm"
+                    type="button"
+                    {...props}
+                    aria-label="Cancel rename"
+                    onclick={() => (renaming = null)}
+                  >
+                    <Icon icon={iconClose} size={16} />
+                  </Button>
+                {/snippet}
+              </Hint>
             </form>
           {:else}
-            <span class="marker w-3.5 shrink-0 text-center text-primary" aria-label="Current branch" title="Current branch">
-              {branch.is_head ? "●" : ""}
-            </span>
-            <span class="bname min-w-12 max-w-44 shrink truncate font-mono text-xs font-semibold text-foreground" title={branch.name}>{branch.name}</span>
+            <Hint label="Current branch">
+              {#snippet child({ props })}
+                <span class="marker w-3.5 shrink-0 text-center text-primary" {...props} aria-label="Current branch">
+                  {branch.is_head ? "●" : ""}
+                </span>
+              {/snippet}
+            </Hint>
+            <Hint label={branch.name}>
+              {#snippet child({ props })}
+                <span class="bname min-w-12 max-w-44 shrink truncate font-mono text-xs font-semibold text-foreground" {...props}>{branch.name}</span>
+              {/snippet}
+            </Hint>
             <span class="sha shrink-0 font-mono text-ui-micro text-muted-foreground">{shortSha(branch.sha)}</span>
             {#if branch.upstream}
-              <span class="upstream min-w-0 flex-1 truncate font-mono text-ui-micro text-muted-foreground" title={branch.upstream}>
-                {branch.upstream}
-                {#if branch.ahead > 0 || branch.behind > 0}
-                  <span class="ab pl-1.5 text-primary">↑{branch.ahead} ↓{branch.behind}</span>
-                {/if}
-                {#if branch.gone}<Badge variant="outline" class="gone ml-1.5 h-auto shrink-0 rounded-full border-destructive px-1.5 py-0 text-ui-tiny text-destructive">gone</Badge>{/if}
-              </span>
+              <Hint label={branch.upstream}>
+                {#snippet child({ props })}
+                  <span class="upstream min-w-0 flex-1 truncate font-mono text-ui-micro text-muted-foreground" {...props}>
+                    {branch.upstream}
+                    {#if branch.ahead > 0 || branch.behind > 0}
+                      <span class="ab pl-1.5 text-primary">↑{branch.ahead} ↓{branch.behind}</span>
+                    {/if}
+                    {#if branch.gone}<Badge variant="outline" class="gone ml-1.5 h-auto shrink-0 rounded-full border-destructive px-1.5 py-0 text-ui-tiny text-destructive">gone</Badge>{/if}
+                  </span>
+                {/snippet}
+              </Hint>
             {/if}
             <span class="actions ml-auto flex shrink-0 items-center gap-1">
               {#if !branch.is_head}
-                <Button
-                  class="relative text-muted-foreground after:absolute after:-inset-1 after:content-[''] hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-4"
-                  variant="ghost"
-                  size="icon-xs"
-                  type="button"
-                  aria-label={`Switch to ${branch.name}`}
-                  title={`Switch to ${branch.name}`}
-                  onclick={() => void ops.requestSwitch(branch.name)}
-                >
-                  <Icon icon={iconSwitch} size={16} />
-                </Button>
+                <Hint label={`Switch to ${branch.name}`}>
+                  {#snippet child({ props })}
+                    <Button
+                      class="relative text-muted-foreground after:absolute after:-inset-1 after:content-[''] hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-4"
+                      variant="ghost"
+                      size="icon-xs"
+                      type="button"
+                      {...props}
+                      aria-label={`Switch to ${branch.name}`}
+                      onclick={() => void ops.requestSwitch(branch.name)}
+                    >
+                      <Icon icon={iconSwitch} size={16} />
+                    </Button>
+                  {/snippet}
+                </Hint>
               {:else}
                 <Badge variant="secondary" class="head-chip h-auto shrink-0 rounded-full bg-foreground px-1.5 py-0 text-ui-tiny font-semibold tracking-[0.04em] text-background">HEAD</Badge>
               {/if}
-              <Button
-                class="relative text-muted-foreground after:absolute after:-inset-1 after:content-[''] hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-4"
-                variant="ghost"
-                size="icon-xs"
-                type="button"
-                aria-label={`More actions for ${branch.name}`}
-                title="Push, merge, rename, reset, or delete this branch"
-                aria-haspopup="menu"
-                onclick={(event) => branchMenu(event, branch)}
-              >
-                <Icon icon={iconMore} size={16} />
-              </Button>
+              <Hint label="Push, merge, rename, reset, or delete this branch">
+                {#snippet child({ props })}
+                  <Button
+                    class="relative text-muted-foreground after:absolute after:-inset-1 after:content-[''] hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-4"
+                    variant="ghost"
+                    size="icon-xs"
+                    type="button"
+                    {...props}
+                    aria-label={`More actions for ${branch.name}`}
+                    aria-haspopup="menu"
+                    onclick={(event) => branchMenu(event, branch)}
+                  >
+                    <Icon icon={iconMore} size={16} />
+                  </Button>
+                {/snippet}
+              </Hint>
             </span>
           {/if}
         </li>

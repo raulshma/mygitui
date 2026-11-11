@@ -80,7 +80,8 @@ describe("SignatureBadge", () => {
     });
     const chip = container.querySelector<HTMLElement>(".sig-badge.verified");
     expect(chip).toBeTruthy();
-    expect(chip?.title).toBe("gpg: Good");
+    // Tooltip text rides the Hint trigger's aria-label (native title= is gone).
+    expect(chip?.getAttribute("aria-label")).toBe("gpg: Good");
   });
 
   it("labels a valid SSH signature Verified (SSH)", async () => {
@@ -107,7 +108,7 @@ describe("SignatureBadge", () => {
       expect(getByText("Unverifiable")).toBeTruthy();
     });
     const chip = container.querySelector<HTMLElement>(".sig-badge.unverifiable");
-    expect(chip?.title).toBe("no public key");
+    expect(chip?.getAttribute("aria-label")).toBe("no public key");
   });
 
   it("renders nothing when the IPC call fails", async () => {

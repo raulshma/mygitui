@@ -63,6 +63,7 @@
   import { appIcon } from "$lib/components/icons/library.svelte";
   import { Button } from "$lib/components/ui/button/index.js";
   import { Input } from "$lib/components/ui/input/index.js";
+  import { Hint } from "$lib/components/ui/tooltip/index.js";
 
   let {
     repoId,
@@ -464,21 +465,24 @@
   }
 </script>
 
-<Button
-  bind:ref={triggerEl}
-  class="branch-chip h-auto max-w-64 min-w-0 flex-none gap-1 rounded-full px-2 py-px font-mono text-ui-micro focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-1 hover:brightness-[1.08] [&_svg]:flex-none"
-  variant="secondary"
-  type="button"
-  title="Switch branch"
-  aria-label="Switch branch"
-  aria-haspopup="dialog"
-  aria-expanded={open}
-  onclick={toggle}
->
-  <Icon icon={iconBranch} size={12} />
-  <span class="branch-label min-w-0 truncate">{chipLabel}</span>
-  <Icon icon={iconChevronDown} size={10} />
-</Button>
+<Hint label="Switch branch">
+  {#snippet child({ props })}
+    <Button
+      bind:ref={triggerEl}
+      class="branch-chip h-auto max-w-64 min-w-0 flex-none gap-1 rounded-full px-2 py-px font-mono text-ui-micro focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-1 hover:brightness-[1.08] [&_svg]:flex-none"
+      variant="secondary"
+      type="button"
+      {...props}
+      aria-haspopup="dialog"
+      aria-expanded={open}
+      onclick={toggle}
+    >
+      <Icon icon={iconBranch} size={12} />
+      <span class="branch-label min-w-0 truncate">{chipLabel}</span>
+      <Icon icon={iconChevronDown} size={10} />
+    </Button>
+  {/snippet}
+</Hint>
 
 {#if open}
   <div
@@ -509,20 +513,23 @@
         onkeydown={onInputKeydown}
       />
       {#if query !== ""}
-        <Button
-          class="clear size-5 flex-none rounded-full"
-          variant="ghost"
-          size="icon-xs"
-          type="button"
-          aria-label="Clear search"
-          title="Clear search"
-          onclick={() => {
-            query = "";
-            inputEl?.focus();
-          }}
-        >
-          <Icon icon={iconClose} size={12} />
-        </Button>
+        <Hint label="Clear search">
+          {#snippet child({ props })}
+            <Button
+              class="clear size-5 flex-none rounded-full"
+              variant="ghost"
+              size="icon-xs"
+              type="button"
+              {...props}
+              onclick={() => {
+                query = "";
+                inputEl?.focus();
+              }}
+            >
+              <Icon icon={iconClose} size={12} />
+            </Button>
+          {/snippet}
+        </Hint>
       {/if}
     </div>
 
@@ -601,57 +608,72 @@
               onmouseenter={() => (activeIndex = i)}
               oncontextmenu={(event) => localMenu(event, row.branch)}
             >
-              <span
-                class="marker w-3.5 flex-none text-center text-primary"
-                aria-label={row.branch.is_head ? "Current branch" : undefined}
-                title={row.branch.is_head ? "Current branch" : undefined}
-              >
-                {row.branch.is_head ? "●" : ""}
-              </span>
-              <span
-                class="bname max-w-44 min-w-12 flex-initial overflow-hidden text-ellipsis whitespace-nowrap font-mono text-xs font-semibold text-popover-foreground"
-                title={row.branch.name}
-              >
-                {row.branch.name}
-              </span>
+              <Hint label={row.branch.is_head ? "Current branch" : ""}>
+                {#snippet child({ props })}
+                  <span
+                    class="marker w-3.5 flex-none text-center text-primary"
+                    {...props}
+                  >
+                    {row.branch.is_head ? "●" : ""}
+                  </span>
+                {/snippet}
+              </Hint>
+              <Hint label={row.branch.name}>
+                {#snippet child({ props })}
+                  <span
+                    class="bname max-w-44 min-w-12 flex-initial overflow-hidden text-ellipsis whitespace-nowrap font-mono text-xs font-semibold text-popover-foreground"
+                    {...props}
+                  >
+                    {row.branch.name}
+                  </span>
+                {/snippet}
+              </Hint>
               <span class="sha flex-none font-mono text-ui-micro text-muted-foreground">
                 {row.branch.sha.slice(0, 7)}
               </span>
               {#if row.branch.upstream}
-                <span
-                  class="upstream min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap font-mono text-ui-micro text-muted-foreground"
-                  title={row.branch.upstream}
-                >
-                  {row.branch.upstream}
-                  {#if row.branch.ahead > 0 || row.branch.behind > 0}
-                    <span class="ab pl-1.5 text-primary"
-                      >↑{row.branch.ahead} ↓{row.branch.behind}</span
-                    >
-                  {/if}
-                  {#if row.branch.gone}
+                <Hint label={row.branch.upstream}>
+                  {#snippet child({ props })}
                     <span
-                      class="gone ml-1.5 rounded-full border border-destructive px-[0.35rem] text-ui-tiny text-destructive"
-                      >gone</span
+                      class="upstream min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap font-mono text-ui-micro text-muted-foreground"
+                      {...props}
                     >
-                  {/if}
-                </span>
+                      {row.branch.upstream}
+                      {#if row.branch.ahead > 0 || row.branch.behind > 0}
+                        <span class="ab pl-1.5 text-primary"
+                          >↑{row.branch.ahead} ↓{row.branch.behind}</span
+                        >
+                      {/if}
+                      {#if row.branch.gone}
+                        <span
+                          class="gone ml-1.5 rounded-full border border-destructive px-[0.35rem] text-ui-tiny text-destructive"
+                          >gone</span
+                        >
+                      {/if}
+                    </span>
+                  {/snippet}
+                </Hint>
               {/if}
               <span class="row-actions ml-auto flex flex-none items-center">
-                <Button
-                  class="relative size-6 after:absolute after:-inset-1 after:content-['']"
-                  variant="ghost"
-                  size="icon-xs"
-                  type="button"
-                  aria-label={`More actions for ${row.branch.name}`}
-                  title="Switch, push, rename, or delete this branch"
-                  aria-haspopup="menu"
-                  onclick={(event) => {
-                    event.stopPropagation();
-                    localMenu(event, row.branch);
-                  }}
-                >
-                  <Icon icon={iconMore} size={16} />
-                </Button>
+                <Hint label="Switch, push, rename, or delete this branch">
+                  {#snippet child({ props })}
+                    <Button
+                      class="relative size-6 after:absolute after:-inset-1 after:content-['']"
+                      variant="ghost"
+                      size="icon-xs"
+                      type="button"
+                      {...props}
+                      aria-label={`More actions for ${row.branch.name}`}
+                      aria-haspopup="menu"
+                      onclick={(event) => {
+                        event.stopPropagation();
+                        localMenu(event, row.branch);
+                      }}
+                    >
+                      <Icon icon={iconMore} size={16} />
+                    </Button>
+                  {/snippet}
+                </Hint>
               </span>
             </li>
           {:else}
@@ -672,31 +694,39 @@
               oncontextmenu={(event) => remoteMenu(event, row.rb)}
             >
               <span class="marker w-3.5 flex-none text-center text-primary" aria-hidden="true"></span>
-              <span
-                class="bname max-w-44 min-w-12 flex-initial overflow-hidden text-ellipsis whitespace-nowrap font-mono text-xs font-semibold text-popover-foreground"
-                title="{row.rb.remote}/{row.rb.name}"
-              >
-                {row.rb.remote}/{row.rb.name}
-              </span>
+              <Hint label={`${row.rb.remote}/${row.rb.name}`}>
+                {#snippet child({ props })}
+                  <span
+                    class="bname max-w-44 min-w-12 flex-initial overflow-hidden text-ellipsis whitespace-nowrap font-mono text-xs font-semibold text-popover-foreground"
+                    {...props}
+                  >
+                    {row.rb.remote}/{row.rb.name}
+                  </span>
+                {/snippet}
+              </Hint>
               <span class="sha flex-none font-mono text-ui-micro text-muted-foreground">
                 {row.rb.sha.slice(0, 7)}
               </span>
               <span class="row-actions ml-auto flex flex-none items-center">
-                <Button
-                  class="relative size-6 after:absolute after:-inset-1 after:content-['']"
-                  variant="ghost"
-                  size="icon-xs"
-                  type="button"
-                  aria-label={`More actions for ${row.rb.remote}/${row.rb.name}`}
-                  title="Checkout, copy, or delete this remote branch"
-                  aria-haspopup="menu"
-                  onclick={(event) => {
-                    event.stopPropagation();
-                    remoteMenu(event, row.rb);
-                  }}
-                >
-                  <Icon icon={iconMore} size={16} />
-                </Button>
+                <Hint label="Checkout, copy, or delete this remote branch">
+                  {#snippet child({ props })}
+                    <Button
+                      class="relative size-6 after:absolute after:-inset-1 after:content-['']"
+                      variant="ghost"
+                      size="icon-xs"
+                      type="button"
+                      {...props}
+                      aria-label={`More actions for ${row.rb.remote}/${row.rb.name}`}
+                      aria-haspopup="menu"
+                      onclick={(event) => {
+                        event.stopPropagation();
+                        remoteMenu(event, row.rb);
+                      }}
+                    >
+                      <Icon icon={iconMore} size={16} />
+                    </Button>
+                  {/snippet}
+                </Hint>
               </span>
             </li>
           {/if}

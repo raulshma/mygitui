@@ -46,6 +46,7 @@
   import { Spinner } from "$lib/components/ui/spinner/index.js";
   import EmptyState from "../layout/EmptyState.svelte";
   import { Button } from "$lib/components/ui/button/index.js";
+  import { Hint } from "$lib/components/ui/tooltip/index.js";
   import { Input } from "$lib/components/ui/input/index.js";
   import { contextMenu, type MenuEntry } from "$lib/components/menu/contextMenuStore.svelte";
   import { showMenuAt } from "$lib/components/menu/contextMenuStore.svelte";
@@ -712,39 +713,51 @@
 
 <div class="files flex h-full min-h-0 min-w-0 flex-col bg-background text-ui-base text-foreground">
   <div class="toolbar flex shrink-0 items-center gap-[2px] border-b border-border bg-card px-1.5 py-1">
-    <Button
-      class="text-muted-foreground hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-3.5"
-      variant="ghost"
-      size="icon-xs"
-      type="button"
-      aria-label="New file"
-      title="New file"
-      onclick={() => startCreate("file")}
-    >
-      <Icon icon={iconAddFile} size={14} />
-    </Button>
-    <Button
-      class="text-muted-foreground hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-3.5"
-      variant="ghost"
-      size="icon-xs"
-      type="button"
-      aria-label="New folder"
-      title="New folder"
-      onclick={() => startCreate("dir")}
-    >
-      <Icon icon={iconAddFolder} size={14} />
-    </Button>
-    <Button
-      class="text-muted-foreground hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-3.5"
-      variant="ghost"
-      size="icon-xs"
-      type="button"
-      aria-label="Refresh"
-      title="Refresh tree"
-      onclick={() => void refreshTree()}
-    >
-      <Icon icon={iconRefresh} size={14} />
-    </Button>
+    <Hint label="New file">
+      {#snippet child({ props })}
+        <Button
+          class="text-muted-foreground hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-3.5"
+          variant="ghost"
+          size="icon-xs"
+          type="button"
+          {...props}
+          aria-label="New file"
+          onclick={() => startCreate("file")}
+        >
+          <Icon icon={iconAddFile} size={14} />
+        </Button>
+      {/snippet}
+    </Hint>
+    <Hint label="New folder">
+      {#snippet child({ props })}
+        <Button
+          class="text-muted-foreground hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-3.5"
+          variant="ghost"
+          size="icon-xs"
+          type="button"
+          {...props}
+          aria-label="New folder"
+          onclick={() => startCreate("dir")}
+        >
+          <Icon icon={iconAddFolder} size={14} />
+        </Button>
+      {/snippet}
+    </Hint>
+    <Hint label="Refresh tree">
+      {#snippet child({ props })}
+        <Button
+          class="text-muted-foreground hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-3.5"
+          variant="ghost"
+          size="icon-xs"
+          type="button"
+          {...props}
+          aria-label="Refresh"
+          onclick={() => void refreshTree()}
+        >
+          <Icon icon={iconRefresh} size={14} />
+        </Button>
+      {/snippet}
+    </Hint>
     <Button
       class="text-muted-foreground hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-3.5"
       variant="ghost"
@@ -789,17 +802,21 @@
         <span class="fcount flex-none text-ui-tiny tabular-nums text-muted-foreground">{rows.length}</span>
       {/if}
     </div>
-    <Button
-      class="text-muted-foreground hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-3.5"
-      variant="ghost"
-      size="icon-xs"
-      type="button"
-      aria-label="More options"
-      title="File icons and ignored files"
-      onclick={(event) => overflowMenu(event)}
-    >
-      <Icon icon={iconMore} size={14} />
-    </Button>
+    <Hint label="File icons and ignored files">
+      {#snippet child({ props })}
+        <Button
+          class="text-muted-foreground hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-3.5"
+          variant="ghost"
+          size="icon-xs"
+          type="button"
+          {...props}
+          aria-label="More options"
+          onclick={(event) => overflowMenu(event)}
+        >
+          <Icon icon={iconMore} size={14} />
+        </Button>
+      {/snippet}
+    </Hint>
   </div>
 
   <div
@@ -869,19 +886,35 @@
               size={14}
             />
           </span>
-          <span class="name min-w-0 flex-1 overflow-hidden text-ellipsis" title={node.path}>{node.name}</span>
+          <Hint label={node.path}>
+            {#snippet child({ props })}
+              <!-- svelte-ignore a11y_no_noninteractive_tabindex (aria-activedescendant tree: rows must stay out of tab order) -->
+              <span class="name min-w-0 flex-1 overflow-hidden text-ellipsis" {...props} tabindex={-1}>{node.name}</span>
+            {/snippet}
+          </Hint>
           {#if node.kind === "file" && node.size !== null && !isDir}
             <span class="size flex-none text-ui-tiny tabular-nums text-muted-foreground">{formatSize(node.size)}</span>
           {/if}
           {#if node.truncated}
-            <span class="trunc flex-none text-muted-foreground" title="Listing capped — some entries are missing">…</span>
+            <Hint label="Listing capped — some entries are missing">
+              {#snippet child({ props })}
+                <!-- svelte-ignore a11y_no_noninteractive_tabindex (aria-activedescendant tree: rows must stay out of tab order) -->
+                <span class="trunc flex-none text-muted-foreground" {...props} tabindex={-1}>…</span>
+              {/snippet}
+            </Hint>
           {/if}
           {#if badge}
-            <span
-              class="badge size-2 flex-none rounded-full"
-              title={`Git: ${badge}`}
-              style={`background:${BADGE_VAR[badge]}`}
-            ></span>
+            <Hint label={`Git: ${badge}`}>
+              {#snippet child({ props })}
+                <!-- svelte-ignore a11y_no_noninteractive_tabindex (aria-activedescendant tree: rows must stay out of tab order) -->
+                <span
+                  class="badge size-2 flex-none rounded-full"
+                  {...props}
+                  tabindex={-1}
+                  style={`background:${BADGE_VAR[badge]}`}
+                ></span>
+              {/snippet}
+            </Hint>
           {/if}
         </div>
       {/each}

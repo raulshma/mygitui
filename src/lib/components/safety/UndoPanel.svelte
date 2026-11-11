@@ -29,6 +29,7 @@
   import PromptDialog from "$lib/components/safety/PromptDialog.svelte";
   import { Badge } from "$lib/components/ui/badge/index.js";
   import { Button } from "$lib/components/ui/button/index.js";
+  import { Hint } from "$lib/components/ui/tooltip/index.js";
   import Icon from "$lib/components/icons/Icon.svelte";
   import { checkpointTitle } from "./safetyModel";
   import { appIcon } from "$lib/components/icons/library.svelte";
@@ -199,9 +200,13 @@
     >
       <Icon icon={iconGc} size={16} />
     </Button>
-    <span class="hint ml-auto text-ui-micro text-muted-foreground" title="Checkpoints are automatic snapshots created before dangerous operations">
-      {undo.checkpoints.length} checkpoint{undo.checkpoints.length === 1 ? "" : "s"}
-    </span>
+    <Hint label="Checkpoints are automatic snapshots created before dangerous operations">
+      {#snippet child({ props })}
+        <span class="hint ml-auto text-ui-micro text-muted-foreground" {...props}>
+          {undo.checkpoints.length} checkpoint{undo.checkpoints.length === 1 ? "" : "s"}
+        </span>
+      {/snippet}
+    </Hint>
   </div>
 
   {#if undo.error}
@@ -257,11 +262,19 @@
             </div>
           {:else}
             <div class="info flex min-w-0 grow flex-col gap-[0.15rem]">
-              <span class="title truncate text-xs text-foreground" title={cp.ref_name}>{checkpointTitle(cp, Math.floor(Date.now() / 1000))}</span>
+              <Hint label={cp.ref_name}>
+                {#snippet child({ props })}
+                  <span class="title truncate text-xs text-foreground" {...props}>{checkpointTitle(cp, Math.floor(Date.now() / 1000))}</span>
+                {/snippet}
+              </Hint>
               <span class="chips flex flex-wrap gap-1">
                 {#if cp.branch}<Badge variant="outline" class="chip h-auto max-w-40 overflow-hidden rounded-full px-2 py-0 text-ui-tiny text-muted-foreground text-ellipsis whitespace-nowrap">{cp.branch}</Badge>{/if}
                 {#if cp.has_worktree_state}
-                  <Badge variant="outline" class="chip worktree h-auto max-w-40 overflow-hidden rounded-full border-primary px-2 py-0 text-ui-tiny text-primary text-ellipsis whitespace-nowrap" title="Snapshot includes working-copy + index state">worktree</Badge>
+                  <Hint label="Snapshot includes working-copy + index state">
+                    {#snippet child({ props })}
+                      <Badge variant="outline" class="chip worktree h-auto max-w-40 overflow-hidden rounded-full border-primary px-2 py-0 text-ui-tiny text-primary text-ellipsis whitespace-nowrap" {...props}>worktree</Badge>
+                    {/snippet}
+                  </Hint>
                 {/if}
               </span>
             </div>
@@ -316,12 +329,24 @@
         {#each trash as entry (entry.id)}
           <li class="row flex min-w-0 items-center gap-[0.375rem] px-2 py-1 hover:bg-accent">
             <div class="info flex min-w-0 grow flex-col gap-[0.15rem]">
-              <span class="title truncate text-xs text-foreground" title={entry.name}>{entry.name}</span>
+              <Hint label={entry.name}>
+                {#snippet child({ props })}
+                  <span class="title truncate text-xs text-foreground" {...props}>{entry.name}</span>
+                {/snippet}
+              </Hint>
               <span class="chips flex flex-wrap gap-1">
-                <Badge variant="outline" class="chip sha-chip h-auto max-w-40 overflow-hidden rounded-full px-2 py-0 font-mono text-ui-tiny text-muted-foreground text-ellipsis whitespace-nowrap" title={entry.sha}>{entry.sha.slice(0, 7)}</Badge>
-                <Badge variant="outline" class="chip h-auto max-w-40 overflow-hidden rounded-full px-2 py-0 text-ui-tiny text-muted-foreground text-ellipsis whitespace-nowrap" title="Deleted {formatDateTime(entry.deleted_at)}">
-                  deleted {formatDateTime(entry.deleted_at)}
-                </Badge>
+                <Hint label={entry.sha}>
+                  {#snippet child({ props })}
+                    <Badge variant="outline" class="chip sha-chip h-auto max-w-40 overflow-hidden rounded-full px-2 py-0 font-mono text-ui-tiny text-muted-foreground text-ellipsis whitespace-nowrap" {...props}>{entry.sha.slice(0, 7)}</Badge>
+                  {/snippet}
+                </Hint>
+                <Hint label="Deleted {formatDateTime(entry.deleted_at)}">
+                  {#snippet child({ props })}
+                    <Badge variant="outline" class="chip h-auto max-w-40 overflow-hidden rounded-full px-2 py-0 text-ui-tiny text-muted-foreground text-ellipsis whitespace-nowrap" {...props}>
+                      deleted {formatDateTime(entry.deleted_at)}
+                    </Badge>
+                  {/snippet}
+                </Hint>
               </span>
             </div>
             <span class="actions ml-auto shrink-0">

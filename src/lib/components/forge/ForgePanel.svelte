@@ -32,6 +32,7 @@
   import DialogShell from "$lib/components/safety/DialogShell.svelte";
   import { Button } from "$lib/components/ui/button/index.js";
   import { Label } from "$lib/components/ui/label/index.js";
+  import { Hint } from "$lib/components/ui/tooltip/index.js";
   import CreatePrDialog from "./CreatePrDialog.svelte";
   import {
     GH_AUTH_COMMAND,
@@ -543,17 +544,25 @@
     {@const review = reviewDecisionLabel(pr.review_decision)}
     <div class="pr-meta mt-[0.3rem] flex flex-wrap items-center gap-[0.375rem] text-ui-micro text-muted-foreground">
       {#if pr.author}
-        <span class="author flex-none" title="Author">by {pr.author}</span>
+        <Hint label="Author">
+          {#snippet child({ props })}
+            <span class="author flex-none" {...props}>by {pr.author}</span>
+          {/snippet}
+        </Hint>
       {/if}
       {#if pr.additions || pr.deletions || pr.changed_files}
-        <span
-          class="stats inline-flex flex-none items-baseline gap-[0.2rem] font-mono tabular-nums"
-          title={`${pr.additions} additions, ${pr.deletions} deletions, ${pr.changed_files} changed files`}
-        >
-          <span class="add text-[var(--app-added)]">+{pr.additions}</span>
-          <span class="del text-[var(--app-deleted)]">−{pr.deletions}</span>
-          <span class="files ml-[0.15rem]">{pr.changed_files} file{pr.changed_files === 1 ? "" : "s"}</span>
-        </span>
+        <Hint label={`${pr.additions} additions, ${pr.deletions} deletions, ${pr.changed_files} changed files`}>
+          {#snippet child({ props })}
+            <span
+              class="stats inline-flex flex-none items-baseline gap-[0.2rem] font-mono tabular-nums"
+              {...props}
+            >
+              <span class="add text-[var(--app-added)]">+{pr.additions}</span>
+              <span class="del text-[var(--app-deleted)]">−{pr.deletions}</span>
+              <span class="files ml-[0.15rem]">{pr.changed_files} file{pr.changed_files === 1 ? "" : "s"}</span>
+            </span>
+          {/snippet}
+        </Hint>
       {/if}
       {#if review}
         <span class="review flex-none rounded-full bg-accent px-2 py-[0.02rem] text-foreground">{review}</span>
@@ -683,17 +692,21 @@
           {checkSummaryLabel(summary)}
         </span>
         <span class="spacer ml-auto"></span>
-        <Button
-          class="{tb} watching {isWatching ? "border-primary text-primary" : ""}"
-          variant="outline"
-          type="button"
-          title={isWatching
-            ? "Stop auto-refreshing checks"
-            : "Auto-refresh checks every 10 seconds"}
-          onclick={() => toggleWatch(pr.number)}
-        >
-          {isWatching ? "Watching" : "Watch"}
-        </Button>
+        <Hint label={isWatching
+          ? "Stop auto-refreshing checks"
+          : "Auto-refresh checks every 10 seconds"}>
+          {#snippet child({ props })}
+            <Button
+              class="{tb} watching {isWatching ? "border-primary text-primary" : ""}"
+              variant="outline"
+              {...props}
+              type="button"
+              onclick={() => toggleWatch(pr.number)}
+            >
+              {isWatching ? "Watching" : "Watch"}
+            </Button>
+          {/snippet}
+        </Hint>
         <Button class={tb} variant="outline"
           type="button"
           disabled={loading}
@@ -718,7 +731,11 @@
               >
                 {checkIcon(check.state)}
               </span>
-              <span class="check-name truncate text-foreground" title={check.name}>{check.name}</span>
+              <Hint label={check.name}>
+                {#snippet child({ props })}
+                  <span class="check-name truncate text-foreground" {...props}>{check.name}</span>
+                {/snippet}
+              </Hint>
             </li>
           {/each}
         </ul>
@@ -758,7 +775,12 @@
       </button>
     </div>
     {#if forgeStore.status?.available}
-      <span class="gh-meta text-ui-micro text-muted-foreground" title="GitHub CLI version">gh {forgeStore.status.version}</span>
+      {@const ghStatus = forgeStore.status}
+      <Hint label="GitHub CLI version">
+        {#snippet child({ props })}
+          <span class="gh-meta text-ui-micro text-muted-foreground" {...props}>gh {ghStatus.version}</span>
+        {/snippet}
+      </Hint>
     {/if}
     <span class="spacer ml-auto"></span>
     {#if tab === "prs"}
@@ -910,41 +932,61 @@
               {@const duration = runElapsedLabel(run, now)}
               <li class="wf-run min-w-0 overflow-hidden rounded-lg border border-border bg-card">
                 <div class="wf-run-line flex min-w-0 flex-wrap items-start gap-[0.375rem] px-2 py-[0.375rem]">
-                  <button
-                    class="wf-run-main group flex min-w-0 flex-[1_1_12rem] cursor-pointer flex-wrap items-baseline gap-x-[0.375rem] gap-y-[0.15rem] rounded-sm border-none bg-transparent p-0 text-left text-ui-meta text-inherit focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary"
-                    type="button"
-                    title="Open run details, jobs and logs"
-                    onclick={() => openRun(run)}
-                  >
-                    <span
-                      class="run-chip {runStateClass(kind)} {chipTone[runStateClass(kind)] ?? "bg-accent text-foreground"} mt-[0.05rem] inline-flex flex-none items-center gap-[0.15rem] whitespace-nowrap rounded-full px-2 py-px text-ui-tiny font-semibold"
-                    >
-                      <span aria-hidden="true">{runStateIcon(kind)}</span>
-                      {runStateLabel(run)}
-                    </span>
-                    <span class="wf-run-name max-w-[40%] flex-[0_1_auto] truncate font-semibold group-hover:underline" title={run.name}>{run.name}</span>
-                    <span class="wf-run-title min-w-0 flex-[1_1_8rem] truncate text-muted-foreground" title={run.display_title}>
-                      {run.display_title}
-                    </span>
-                    <span class="wf-run-meta flex min-w-0 flex-[1_1_100%] flex-wrap items-center gap-[0.375rem] text-ui-micro text-muted-foreground">
-                      <span class="pr-no flex-none font-mono text-ui-meta text-muted-foreground">#{run.number}</span>
-                      {#if run.head_branch}
-                        <code class="wf-branch max-w-56 truncate font-mono text-ui-micro text-muted-foreground" title="Head branch">{run.head_branch}</code>
-                      {/if}
-                      <span class="wf-event whitespace-nowrap rounded-full border border-border px-[0.35rem] text-ui-tiny" title="Trigger event">
-                        {workflowEventLabel(run.event)}
-                      </span>
-                      {#if run.attempt > 1}
-                        <span class="wf-attempt whitespace-nowrap tabular-nums">attempt {run.attempt}</span>
-                      {/if}
-                      {#if age}
-                        <span class="age text-ui-micro text-muted-foreground">{age} ago</span>
-                      {/if}
-                      {#if duration}
-                        <span class="wf-duration whitespace-nowrap tabular-nums">{duration}</span>
-                      {/if}
-                    </span>
-                  </button>
+                  <Hint label="Open run details, jobs and logs">
+                    {#snippet child({ props })}
+                      <button
+                        class="wf-run-main group flex min-w-0 flex-[1_1_12rem] cursor-pointer flex-wrap items-baseline gap-x-[0.375rem] gap-y-[0.15rem] rounded-sm border-none bg-transparent p-0 text-left text-ui-meta text-inherit focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary"
+                        {...props}
+                        type="button"
+                        onclick={() => openRun(run)}
+                      >
+                        <span
+                          class="run-chip {runStateClass(kind)} {chipTone[runStateClass(kind)] ?? "bg-accent text-foreground"} mt-[0.05rem] inline-flex flex-none items-center gap-[0.15rem] whitespace-nowrap rounded-full px-2 py-px text-ui-tiny font-semibold"
+                        >
+                          <span aria-hidden="true">{runStateIcon(kind)}</span>
+                          {runStateLabel(run)}
+                        </span>
+                        <Hint label={run.name}>
+                          {#snippet child({ props })}
+                            <span class="wf-run-name max-w-[40%] flex-[0_1_auto] truncate font-semibold group-hover:underline" {...props}>{run.name}</span>
+                          {/snippet}
+                        </Hint>
+                        <Hint label={run.display_title}>
+                          {#snippet child({ props })}
+                            <span class="wf-run-title min-w-0 flex-[1_1_8rem] truncate text-muted-foreground" {...props}>
+                              {run.display_title}
+                            </span>
+                          {/snippet}
+                        </Hint>
+                        <span class="wf-run-meta flex min-w-0 flex-[1_1_100%] flex-wrap items-center gap-[0.375rem] text-ui-micro text-muted-foreground">
+                          <span class="pr-no flex-none font-mono text-ui-meta text-muted-foreground">#{run.number}</span>
+                          {#if run.head_branch}
+                            <Hint label="Head branch">
+                              {#snippet child({ props })}
+                                <code class="wf-branch max-w-56 truncate font-mono text-ui-micro text-muted-foreground" {...props}>{run.head_branch}</code>
+                              {/snippet}
+                            </Hint>
+                          {/if}
+                          <Hint label="Trigger event">
+                            {#snippet child({ props })}
+                              <span class="wf-event whitespace-nowrap rounded-full border border-border px-[0.35rem] text-ui-tiny" {...props}>
+                                {workflowEventLabel(run.event)}
+                              </span>
+                            {/snippet}
+                          </Hint>
+                          {#if run.attempt > 1}
+                            <span class="wf-attempt whitespace-nowrap tabular-nums">attempt {run.attempt}</span>
+                          {/if}
+                          {#if age}
+                            <span class="age text-ui-micro text-muted-foreground">{age} ago</span>
+                          {/if}
+                          {#if duration}
+                            <span class="wf-duration whitespace-nowrap tabular-nums">{duration}</span>
+                          {/if}
+                        </span>
+                      </button>
+                    {/snippet}
+                  </Hint>
                   <span class="wf-run-actions ml-auto flex flex-none flex-wrap items-center justify-end gap-[0.2rem]">
                     {#if active}
                       <Button class="{tb} danger border-current/45 text-[var(--app-deleted)]" variant="outline"
@@ -976,20 +1018,28 @@
                         </Button>
                       {/if}
                     {/if}
-                    <Button class="{tb} primary border-primary bg-primary font-semibold text-primary-foreground hover:not-disabled:bg-primary hover:not-disabled:brightness-[1.06]" variant="outline"
-                      type="button"
-                      title="Open run details, jobs and logs"
-                      onclick={() => openRun(run)}
-                    >
-                      Details
-                    </Button>
-                    <Button class={tb} variant="outline"
-                      type="button"
-                      title="Open run on GitHub"
-                      onclick={() => void openUrl(run.url)}
-                    >
-                      Open
-                    </Button>
+                    <Hint label="Open run details, jobs and logs">
+                      {#snippet child({ props })}
+                        <Button class="{tb} primary border-primary bg-primary font-semibold text-primary-foreground hover:not-disabled:bg-primary hover:not-disabled:brightness-[1.06]" variant="outline"
+                          {...props}
+                          type="button"
+                          onclick={() => openRun(run)}
+                        >
+                          Details
+                        </Button>
+                      {/snippet}
+                    </Hint>
+                    <Hint label="Open run on GitHub">
+                      {#snippet child({ props })}
+                        <Button class={tb} variant="outline"
+                          {...props}
+                          type="button"
+                          onclick={() => void openUrl(run.url)}
+                        >
+                          Open
+                        </Button>
+                      {/snippet}
+                    </Hint>
                   </span>
                 </div>
               </li>
@@ -1008,15 +1058,23 @@
           {#if branchPr.is_draft}
             <span class="chip chip-draft flex-none rounded-full border border-border bg-transparent px-2 py-px text-ui-tiny font-semibold text-muted-foreground">Draft</span>
           {/if}
-          <span class="pr-title min-w-0 truncate font-semibold text-foreground" title={branchPr.title}>{branchPr.title}</span>
+          <Hint label={branchPr.title}>
+            {#snippet child({ props })}
+              <span class="pr-title min-w-0 truncate font-semibold text-foreground" {...props}>{branchPr.title}</span>
+            {/snippet}
+          </Hint>
           <span class="pr-no flex-none font-mono text-ui-meta text-muted-foreground">#{branchPr.number}</span>
         </div>
         <div class="card-sub mt-[0.375rem] flex flex-wrap items-center gap-2">
           <span class="refs font-mono text-ui-meta text-muted-foreground">{branchPr.head_ref_name} → {branchPr.base_ref_name}</span>
           {#if branchAge}
-            <span class="age text-ui-micro text-muted-foreground" title="Opened"
-              >opened {branchAge === "just now" ? "just now" : `${branchAge} ago`}</span
-            >
+            <Hint label="Opened">
+              {#snippet child({ props })}
+                <span class="age text-ui-micro text-muted-foreground" {...props}
+                  >opened {branchAge === "just now" ? "just now" : `${branchAge} ago`}</span
+                >
+              {/snippet}
+            </Hint>
           {/if}
         </div>
         {@render prMeta(branchPr)}
@@ -1057,33 +1115,45 @@
           {#each listedPrs as pr (pr.number)}
             <li>
               <div class="pr-line flex min-w-0 items-start gap-1">
-                <button
-                  class="pr-row flex-1 flex w-full min-w-0 cursor-pointer items-center gap-[0.375rem] rounded-lg border border-border bg-card px-2 py-[0.375rem] text-left text-ui-meta text-foreground hover:bg-accent focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary"
-                  type="button"
-                  aria-expanded={expandedNumber === pr.number}
-                  title="Show checks and actions"
-                  onclick={() => toggleExpanded(pr.number)}
-                >
-                  <span class="expand-icon w-[1em] flex-none text-center text-muted-foreground" aria-hidden="true">
-                    {expandedNumber === pr.number ? "▾" : "▸"}
-                  </span>
-                  <span
-                    class="chip {prStateClass(pr.state)} {chipTone[prStateClass(pr.state)] ?? "bg-accent text-foreground"} flex-none rounded-full px-2 py-px text-ui-tiny font-semibold"
-                  >{prStateLabel(pr.state)}</span>
-                  {#if pr.is_draft}
-                    <span class="chip chip-draft flex-none rounded-full border border-border bg-transparent px-2 py-px text-ui-tiny font-semibold text-muted-foreground">Draft</span>
-                  {/if}
-                  <span class="pr-title min-w-0 truncate font-semibold text-foreground" title={pr.title}>{pr.title}</span>
-                  <span class="pr-no flex-none font-mono text-ui-meta text-muted-foreground">#{pr.number}</span>
-                  <span class="refs ml-auto max-w-[40%] flex-none truncate font-mono text-ui-meta text-muted-foreground">{pr.head_ref_name} → {pr.base_ref_name}</span>
-                </button>
-                <Button class="{tb} mt-[0.375rem]" variant="outline"
-                  type="button"
-                  title="Open on GitHub"
-                  onclick={() => void openUrl(pr.url)}
-                >
-                  Open
-                </Button>
+                <Hint label="Show checks and actions">
+                  {#snippet child({ props })}
+                    <button
+                      class="pr-row flex-1 flex w-full min-w-0 cursor-pointer items-center gap-[0.375rem] rounded-lg border border-border bg-card px-2 py-[0.375rem] text-left text-ui-meta text-foreground hover:bg-accent focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary"
+                      {...props}
+                      type="button"
+                      aria-expanded={expandedNumber === pr.number}
+                      onclick={() => toggleExpanded(pr.number)}
+                    >
+                      <span class="expand-icon w-[1em] flex-none text-center text-muted-foreground" aria-hidden="true">
+                        {expandedNumber === pr.number ? "▾" : "▸"}
+                      </span>
+                      <span
+                        class="chip {prStateClass(pr.state)} {chipTone[prStateClass(pr.state)] ?? "bg-accent text-foreground"} flex-none rounded-full px-2 py-px text-ui-tiny font-semibold"
+                      >{prStateLabel(pr.state)}</span>
+                      {#if pr.is_draft}
+                        <span class="chip chip-draft flex-none rounded-full border border-border bg-transparent px-2 py-px text-ui-tiny font-semibold text-muted-foreground">Draft</span>
+                      {/if}
+                      <Hint label={pr.title}>
+                        {#snippet child({ props })}
+                          <span class="pr-title min-w-0 truncate font-semibold text-foreground" {...props}>{pr.title}</span>
+                        {/snippet}
+                      </Hint>
+                      <span class="pr-no flex-none font-mono text-ui-meta text-muted-foreground">#{pr.number}</span>
+                      <span class="refs ml-auto max-w-[40%] flex-none truncate font-mono text-ui-meta text-muted-foreground">{pr.head_ref_name} → {pr.base_ref_name}</span>
+                    </button>
+                  {/snippet}
+                </Hint>
+                <Hint label="Open on GitHub">
+                  {#snippet child({ props })}
+                    <Button class="{tb} mt-[0.375rem]" variant="outline"
+                      {...props}
+                      type="button"
+                      onclick={() => void openUrl(pr.url)}
+                    >
+                      Open
+                    </Button>
+                  {/snippet}
+                </Hint>
               </div>
               <div class="pr-sub pb-[0.2rem] pl-[1.5rem] pr-2 pt-[0.15rem]">
                 {@render prMeta(pr)}

@@ -5,7 +5,7 @@
  */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render } from "@testing-library/svelte";
+import { cleanup, fireEvent, render, screen } from "@testing-library/svelte";
 import { onUiEvent } from "$lib/palette/events";
 import AiHealthChip from "$lib/components/ai/AiHealthChip.svelte";
 
@@ -41,10 +41,26 @@ describe("AiHealthChip", () => {
     }
   });
 
-  it("tooltip lists both backends", () => {
-    const { getByRole } = render(AiHealthChip);
-    const title = getByRole("button").getAttribute("title") ?? "";
-    expect(title).toContain("opencode:");
-    expect(title).toContain("openrouter:");
+  it("tooltip lists both backends", async () => {
+    // The chip uses the canonical Hint tooltip (no native title=): it
+    // opens on hover after the ~300ms delay and lists every backend.
+    vi.useFakeTimers();
+    try {
+      const { getByRole } = render(AiHealthChip);
+      const chip = getByRole("button");
+      expect(chip.getAttribute("title")).toBeNull();
+
+      fireEvent.pointerEnter(chip);
+      await vi.advanceTimersByTimeAsync(400);
+
+      const tooltip = screen.getByText((_, el) =>
+        el?.getAttribute("data-slot") === "tooltip-content",
+      );
+      expect(tooltip.textContent).toContain("opencode:");
+      expect(tooltip.textContent).toContain("openrouter:");
+    } finally {
+      vi.useRealTimers();
+      cleanup();
+    }
   });
 });

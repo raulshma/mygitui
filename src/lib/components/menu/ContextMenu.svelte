@@ -15,6 +15,7 @@
 <script lang="ts">
   import * as DropdownMenu from "$lib/components/ui/dropdown-menu/index.js";
   import Icon from "$lib/components/icons/Icon.svelte";
+  import { Hint } from "$lib/components/ui/tooltip/index.js";
   import {
     contextMenu,
     isSeparator,
@@ -106,24 +107,29 @@
           {/if}
           <span class="label min-w-0 flex-1 overflow-hidden text-ellipsis">{entry.label}</span>
           {#if entry.action}
-            <button
-              type="button"
-              class="entry-action -mr-1.5 inline-flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-sm border-0 bg-transparent p-0 text-xs text-inherit [font:inherit] opacity-65 hover:bg-accent hover:opacity-100 focus-visible:bg-accent focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-ring group-data-[disabled]/dropdown-menu-item:pointer-events-none group-data-[disabled]/dropdown-menu-item:opacity-30"
-              title={entry.action.label}
-              aria-label={entry.action.label}
-              onclick={(event) => runAction(entry, event)}
-              onkeydown={(event) => {
-                if (event.key === "Enter" || event.key === " ") {
-                  runAction(entry, event);
-                }
-              }}
-            >
-              {#if entry.action.icon}
-                <Icon icon={entry.action.icon} />
-              {:else}
-                {entry.action.label}
-              {/if}
-            </button>
+            {@const action = entry.action}
+            <Hint label={action.label} side="left">
+              {#snippet child({ props })}
+                <button
+                  {...props}
+                  type="button"
+                  class="entry-action -mr-1.5 inline-flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-sm border-0 bg-transparent p-0 text-xs text-inherit [font:inherit] opacity-65 hover:bg-accent hover:opacity-100 focus-visible:bg-accent focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-ring group-data-[disabled]/dropdown-menu-item:pointer-events-none group-data-[disabled]/dropdown-menu-item:opacity-30"
+                  aria-label={action.label}
+                  onclick={(event) => runAction(entry, event)}
+                  onkeydown={(event) => {
+                    if (event.key === "Enter" || event.key === " ") {
+                      runAction(entry, event);
+                    }
+                  }}
+                >
+                  {#if action.icon}
+                    <Icon icon={action.icon} />
+                  {:else}
+                    {action.label}
+                  {/if}
+                </button>
+              {/snippet}
+            </Hint>
           {/if}
         </DropdownMenu.Item>
       {/if}

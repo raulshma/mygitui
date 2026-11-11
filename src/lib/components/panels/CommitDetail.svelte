@@ -28,6 +28,7 @@
   import { showMenuAt, type MenuEntry } from "$lib/components/menu/contextMenuStore.svelte";
   import { readSplitRatio, writeSplitRatio } from "$lib/layout/splitPrefs";
   import { Button } from "$lib/components/ui/button/index.js";
+  import { Hint } from "$lib/components/ui/tooltip/index.js";
   import {
     classifyRef,
     formatDateTime,
@@ -207,40 +208,70 @@
 </script>
 
 <div class="detail flex min-h-0 flex-col bg-card" aria-label="Commit detail">
-  <header class="dhead flex items-center gap-2 border-b border-border bg-popover px-2.5 py-1 text-ui-base">
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
+  <!-- Middle-click anywhere on the header row closes the detail (the
+       TabStrip tab idiom); the buttons inside keep their own click flow —
+       their events simply bubble up through this row. -->
+  <header
+    class="dhead flex items-center gap-2 border-b border-border bg-popover px-2.5 py-1 text-ui-base"
+    onauxclick={(event) => {
+      if (event.button === 1 && onClose) {
+        event.preventDefault();
+        onClose();
+      }
+    }}
+    onmousedown={(event) => {
+      // Middle only: suppress the browser's autoscroll affordance. The
+      // primary button keeps its default so header buttons stay clickable
+      // and focusable as usual.
+      if (event.button === 1) event.preventDefault();
+    }}
+  >
     {#if info}
       <span class="dsha font-mono text-primary">{info.sha.slice(0, 7)}</span>
-      <span class="dsummary min-w-0 flex-1 truncate font-medium text-foreground" title={info.summary}>{info.summary}</span>
+      <Hint label={info.summary}>
+        {#snippet child({ props })}
+          <span class="dsummary min-w-0 flex-1 truncate font-medium text-foreground" {...props}>{info.summary}</span>
+        {/snippet}
+      </Hint>
       {#if root !== ""}
         <!-- M12: bookmark star (same store mutation as the menu item). -->
-        <Button
-          class="h-auto flex-none rounded-sm px-2 py-[0.05rem] text-ui-base leading-[1.3] font-normal {bookmarked
-            ? 'border-primary bg-transparent text-primary'
-            : 'border-border bg-transparent text-muted-foreground'}"
-          variant="outline"
-          aria-pressed={bookmarked}
-          aria-label={bookmarked
-            ? "Remove bookmark from this commit"
-            : "Bookmark this commit"}
-          title={bookmarked ? "Remove bookmark" : "Bookmark commit"}
-          onclick={() => {
-            // Snippet narrowing doesn't reach the callback closure.
-            const sha = info?.sha;
-            if (sha) toggleBookmark(sha);
-          }}
-        >
-          {bookmarked ? "★" : "☆"}
-        </Button>
+        <Hint label={bookmarked ? "Remove bookmark" : "Bookmark commit"}>
+          {#snippet child({ props })}
+            <Button
+              class="h-auto flex-none rounded-sm px-2 py-[0.05rem] text-ui-base leading-[1.3] font-normal {bookmarked
+                ? 'border-primary bg-transparent text-primary'
+                : 'border-border bg-transparent text-muted-foreground'}"
+              variant="outline"
+              {...props}
+              aria-pressed={bookmarked}
+              aria-label={bookmarked
+                ? "Remove bookmark from this commit"
+                : "Bookmark this commit"}
+              onclick={() => {
+                // Snippet narrowing doesn't reach the callback closure.
+                const sha = info?.sha;
+                if (sha) toggleBookmark(sha);
+              }}
+            >
+              {bookmarked ? "★" : "☆"}
+            </Button>
+          {/snippet}
+        </Hint>
       {/if}
       {#if onPopout}
-        <Button
-          class="h-auto rounded-sm px-2 py-px text-ui-meta font-normal text-muted-foreground"
-          variant="outline"
-          title="Open this commit's detail in its own window"
-          onclick={onPopout}
-        >
-          Pop out
-        </Button>
+        <Hint label="Open this commit's detail in its own window">
+          {#snippet child({ props })}
+            <Button
+              class="h-auto rounded-sm px-2 py-px text-ui-meta font-normal text-muted-foreground"
+              variant="outline"
+              {...props}
+              onclick={onPopout}
+            >
+              Pop out
+            </Button>
+          {/snippet}
+        </Hint>
       {/if}
     {:else}
       <span class="dsha font-mono text-primary">diff</span>
@@ -265,15 +296,19 @@
         </Button>
       {/if}
       {#if onRebaseFromHere}
-        <Button
-          class="h-auto rounded-full px-2.5 py-0.5 text-ui-meta font-normal"
-          variant="secondary"
-          onclick={onRebaseFromHere}
-          disabled={actionBusy}
-          title={`Rebase HEAD..${info.sha.slice(0, 7)} (selected commit is the exclusive base)`}
-        >
-          Rebase from here
-        </Button>
+        <Hint label={`Rebase HEAD..${info.sha.slice(0, 7)} (selected commit is the exclusive base)`}>
+          {#snippet child({ props })}
+            <Button
+              class="h-auto rounded-full px-2.5 py-0.5 text-ui-meta font-normal"
+              variant="secondary"
+              {...props}
+              onclick={onRebaseFromHere}
+              disabled={actionBusy}
+            >
+              Rebase from here
+            </Button>
+          {/snippet}
+        </Hint>
       {/if}
       <Button class="h-auto rounded-full px-2.5 py-0.5 text-ui-meta font-normal" variant="secondary" onclick={copySha}>Copy sha</Button>
       <span class="cinfo ml-auto text-ui-micro text-muted-foreground" role="status">
@@ -324,9 +359,13 @@
               class="flex items-center gap-2 px-3 py-0.5"
               oncontextmenu={(e) => fileMenu(e, file.path)}
             >
-              <span class="fpath min-w-0 flex-1 truncate font-mono text-foreground" title={file.path}>
-                {#if file.old_path}{file.old_path} → {/if}{file.path}
-              </span>
+              <Hint label={file.path}>
+                {#snippet child({ props })}
+                  <span class="fpath min-w-0 flex-1 truncate font-mono text-foreground" {...props}>
+                    {#if file.old_path}{file.old_path} → {/if}{file.path}
+                  </span>
+                {/snippet}
+              </Hint>
               <span class="stats flex-none font-mono">
                 {#if !file.binary}
                   <span class="add text-[color:var(--app-added)]">+{file.additions}</span>
@@ -336,13 +375,17 @@
                 {/if}
               </span>
               <Button class="h-auto rounded-sm px-2 py-px text-ui-meta font-normal text-muted-foreground" variant="outline" onclick={() => openBlame(file.path)}>Blame</Button>
-              <Button
-                class="h-auto rounded-sm px-2 py-px text-ui-meta font-normal text-muted-foreground"
-                variant="outline"
-                title="History of {file.path} (popout)"
-                onclick={() =>
-                  void openPanelPopout("filehistory", repoId, `History: ${file.path}`, { path: file.path })}
-              >History</Button>
+              <Hint label={`History of ${file.path} (popout)`}>
+                {#snippet child({ props })}
+                  <Button
+                    class="h-auto rounded-sm px-2 py-px text-ui-meta font-normal text-muted-foreground"
+                    variant="outline"
+                    {...props}
+                    onclick={() =>
+                      void openPanelPopout("filehistory", repoId, `History: ${file.path}`, { path: file.path })}
+                  >History</Button>
+                {/snippet}
+              </Hint>
             </li>
           {/each}
         </ul>
@@ -385,17 +428,21 @@
                 {#if info.parents.length === 0}
                   <em>root</em>
                 {:else}
-                  {#each info.parents as p (p)}
-                    <Button
-                      class="mr-1 h-auto rounded-sm px-[0.3rem] py-[0.05rem] font-mono text-ui-micro font-normal"
-                      variant="outline"
-                      onclick={() => onSelectParent?.(p)}
-                      disabled={!onSelectParent}
-                      title={"Go to " + p}
-                    >
-                      {p.slice(0, 7)}
-                    </Button>
-                  {/each}
+                {#each info.parents as p (p)}
+                  <Hint label={"Go to " + p}>
+                    {#snippet child({ props })}
+                      <Button
+                        class="mr-1 h-auto rounded-sm px-[0.3rem] py-[0.05rem] font-mono text-ui-micro font-normal"
+                        variant="outline"
+                        {...props}
+                        onclick={() => onSelectParent?.(p)}
+                        disabled={!onSelectParent}
+                      >
+                        {p.slice(0, 7)}
+                      </Button>
+                    {/snippet}
+                  </Hint>
+                {/each}
                 {/if}
               </dd>
               <dt class="pt-0.5 text-ui-micro uppercase tracking-[0.02em] text-muted-foreground">Describe</dt>

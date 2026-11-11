@@ -173,7 +173,7 @@ describe("BranchSwitcher", () => {
     expect(within(dialog).getByText("aaaa111")).not.toBeNull();
     expect(within(dialog).getByText("origin/next")).not.toBeNull();
     expect(within(dialog).getByText("cccc333")).not.toBeNull();
-    expect(within(dialog).getByTitle("Current branch")).not.toBeNull();
+    expect(within(dialog).getByLabelText("Current branch")).not.toBeNull();
   });
 
   it("filters both sections as the query is typed", async () => {

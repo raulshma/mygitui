@@ -37,6 +37,7 @@
   import EmptyState from "../layout/EmptyState.svelte";
   import { Badge } from "$lib/components/ui/badge";
   import { Button } from "$lib/components/ui/button/index.js";
+  import { Hint } from "$lib/components/ui/tooltip/index.js";
 
   let { repoId, path }: { repoId: string; path: string } = $props();
 
@@ -177,12 +178,16 @@
   aria-label="File history for {path}"
 >
   <header class="head flex items-center gap-3 border-b border-border px-2.5 py-1">
-    <h1
-      class="title m-0 min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap font-mono text-sm font-medium"
-      title={path}
-    >
-      {path}
-    </h1>
+    <Hint label={path}>
+      {#snippet child({ props })}
+        <h1
+          {...props}
+          class="title m-0 min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap font-mono text-sm font-medium"
+        >
+          {path}
+        </h1>
+      {/snippet}
+    </Hint>
     <span class="count shrink-0 text-xs text-muted-foreground"
       >{history.flat.commits.length} commit{history.flat.commits.length === 1 ? "" : "s"}</span
     >
@@ -249,9 +254,13 @@
             onkeydown={(e) => onRowKeydown(commit, idx, e)}
           >
             <div class="main flex min-w-0 flex-col">
-              <span class="summary overflow-hidden text-ellipsis whitespace-nowrap text-sm" title={commit.message}
-                >{commit.summary}</span
-              >
+              <Hint label={commit.message}>
+                {#snippet child({ props })}
+                  <span class="summary overflow-hidden text-ellipsis whitespace-nowrap text-sm" {...props}
+                    >{commit.summary}</span
+                  >
+                {/snippet}
+              </Hint>
               <span
                 class="meta text-xs {commit.sha === selectedSha ? 'text-inherit' : 'text-muted-foreground'}"
                 >{commit.author.name}

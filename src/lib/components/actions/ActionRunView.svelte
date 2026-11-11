@@ -14,6 +14,7 @@
   import { Button } from "$lib/components/ui/button/index.js";
   import { Badge } from "$lib/components/ui/badge/index.js";
   import { Toggle } from "$lib/components/ui/toggle/index.js";
+  import { Hint } from "$lib/components/ui/tooltip/index.js";
   import {
     actionsStore,
     startActionsEvents,
@@ -123,36 +124,48 @@
       <span class="crumbs flex min-w-0 items-baseline gap-[0.35rem] text-ui-meta text-muted-foreground">
         <span class="crumb-muted flex-none opacity-80">Actions</span>
         <span class="crumb-sep flex-none opacity-80" aria-hidden="true">/</span>
-        <span class="crumb-current min-w-0 truncate font-medium text-foreground" title={run?.name ?? "Action run"}>
-          {run?.name ?? "Action run"}
-        </span>
+        <Hint label={run?.name ?? "Action run"}>
+          {#snippet child({ props })}
+            <span class="crumb-current min-w-0 truncate font-medium text-foreground" {...props}>
+              {run?.name ?? "Action run"}
+            </span>
+          {/snippet}
+        </Hint>
         {#if run}<span class="run-id flex-none font-mono text-ui-micro text-muted-foreground opacity-85">{run.run_id}</span>{/if}
       </span>
       <span class="spacer ml-auto"></span>
       {#if onPopout}
-        <Button
-          variant="outline"
-          size="xs"
-          class="tb flex-none rounded-full px-2.5 text-ui-micro leading-[1.4] text-muted-foreground @max-[38rem]:px-2 @max-[38rem]:text-ui-tiny"
-          type="button"
-          title="Open this run log in its own window"
-          onclick={onPopout}
-        >
-          Pop out
-        </Button>
+        <Hint label="Open this run log in its own window">
+          {#snippet child({ props })}
+            <Button
+              variant="outline"
+              size="xs"
+              class="tb flex-none rounded-full px-2.5 text-ui-micro leading-[1.4] text-muted-foreground @max-[38rem]:px-2 @max-[38rem]:text-ui-tiny"
+              {...props}
+              type="button"
+              onclick={onPopout}
+            >
+              Pop out
+            </Button>
+          {/snippet}
+        </Hint>
       {/if}
       {#if onClose}
-        <Button
-          variant="outline"
-          size="xs"
-          class="tb close flex-none rounded-full px-2 text-[0.9rem] leading-none text-muted-foreground"
-          type="button"
-          aria-label="Close run log"
-          title="Close run log"
-          onclick={onClose}
-        >
-          ×
-        </Button>
+        <Hint label="Close run log">
+          {#snippet child({ props })}
+            <Button
+              variant="outline"
+              size="xs"
+              class="tb close flex-none rounded-full px-2 text-[0.9rem] leading-none text-muted-foreground"
+              {...props}
+              type="button"
+              aria-label="Close run log"
+              onclick={onClose}
+            >
+              ×
+            </Button>
+          {/snippet}
+        </Hint>
       {/if}
     </div>
 
@@ -173,7 +186,11 @@
         <h2 class="run-title m-0 min-w-0 text-[0.95rem] font-semibold leading-[1.25] text-foreground [overflow-wrap:anywhere]">{run.name}</h2>
       </div>
       {#if run.command}
-        <code class="command max-w-full self-start truncate rounded border border-border bg-muted px-2 py-px font-mono text-ui-micro text-foreground" title={run.command}>{run.command}</code>
+        <Hint label={run.command}>
+          {#snippet child({ props })}
+            <code class="command max-w-full self-start truncate rounded border border-border bg-muted px-2 py-px font-mono text-ui-micro text-foreground" {...props}>{run.command}</code>
+          {/snippet}
+        </Hint>
       {/if}
       <div class="meta flex flex-wrap items-center gap-x-3 gap-y-[0.35rem] text-ui-micro text-muted-foreground">
         <span class="meta-item inline-flex items-baseline gap-1 whitespace-nowrap">
@@ -207,31 +224,39 @@
           {live ? "Live" : "Finished"}
         </Badge>
         <span class="spacer ml-auto"></span>
-        <Toggle
-          variant="outline"
-          size="sm"
-          class="tb flex-none whitespace-nowrap rounded-full border-border px-2.5 text-ui-micro leading-[1.4] text-muted-foreground aria-pressed:border-transparent aria-pressed:bg-primary/15 aria-pressed:text-primary @max-[38rem]:px-2 @max-[38rem]:text-ui-tiny"
-          bind:pressed={follow}
-          title={follow
-            ? "Pause auto-scroll (scroll up to pause too)"
-            : "Follow new output"}
-        >
-          {follow ? "Following" : "Follow"}
-        </Toggle>
+        <Hint label={follow
+          ? "Pause auto-scroll (scroll up to pause too)"
+          : "Follow new output"}>
+          {#snippet child({ props })}
+            <Toggle
+              variant="outline"
+              size="sm"
+              class="tb flex-none whitespace-nowrap rounded-full border-border px-2.5 text-ui-micro leading-[1.4] text-muted-foreground aria-pressed:border-transparent aria-pressed:bg-primary/15 aria-pressed:text-primary @max-[38rem]:px-2 @max-[38rem]:text-ui-tiny"
+              {...props}
+              bind:pressed={follow}
+            >
+              {follow ? "Following" : "Follow"}
+            </Toggle>
+          {/snippet}
+        </Hint>
         <Button variant="outline" size="xs" class="tb flex-none rounded-full px-2.5 text-ui-micro leading-[1.4] text-muted-foreground @max-[38rem]:px-2 @max-[38rem]:text-ui-tiny" type="button" onclick={() => void copyLog()}>
           Copy log
         </Button>
         {#if live}
-          <Button
-            variant="destructive"
-            size="xs"
-            class="tb danger flex-none rounded-full px-2.5 text-ui-micro leading-[1.4] @max-[38rem]:px-2 @max-[38rem]:text-ui-tiny"
-            type="button"
-            title="Cancel this action"
-            onclick={cancelRun}
-          >
-            Cancel
-          </Button>
+          <Hint label="Cancel this action">
+            {#snippet child({ props })}
+              <Button
+                variant="destructive"
+                size="xs"
+                class="tb danger flex-none rounded-full px-2.5 text-ui-micro leading-[1.4] @max-[38rem]:px-2 @max-[38rem]:text-ui-tiny"
+                {...props}
+                type="button"
+                onclick={cancelRun}
+              >
+                Cancel
+              </Button>
+            {/snippet}
+          </Hint>
         {/if}
       </div>
 

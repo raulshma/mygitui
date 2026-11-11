@@ -37,6 +37,7 @@
   import { Button } from "$lib/components/ui/button/index.js";
   import { Input } from "$lib/components/ui/input/index.js";
   import { Toggle } from "$lib/components/ui/toggle/index.js";
+  import { Hint } from "$lib/components/ui/tooltip/index.js";
 
   let {
     text,
@@ -479,16 +480,20 @@
         onkeydown={onSearchKeydown}
       />
       {#if query.trim()}
-        <Button
-          class="clear-search absolute right-[0.3rem] h-auto px-[0.2rem] py-0 text-[0.9rem] leading-none font-normal text-muted-foreground hover:text-foreground dark:hover:bg-transparent"
-          variant="ghost"
-          type="button"
-          aria-label="Clear log search"
-          title="Clear search"
-          onclick={clearSearch}
-        >
-          ×
-        </Button>
+        <Hint label="Clear search">
+          {#snippet child({ props })}
+            <Button
+              class="clear-search absolute right-[0.3rem] h-auto px-[0.2rem] py-0 text-[0.9rem] leading-none font-normal text-muted-foreground hover:text-foreground dark:hover:bg-transparent"
+              variant="ghost"
+              {...props}
+              type="button"
+              aria-label="Clear log search"
+              onclick={clearSearch}
+            >
+              ×
+            </Button>
+          {/snippet}
+        </Hint>
       {/if}
     </div>
     <span class="log-count flex-none whitespace-nowrap text-ui-micro text-muted-foreground max-[44rem]:order-2" aria-live="polite">
@@ -502,64 +507,92 @@
       {/if}
     </span>
     {#if live}
-      <span class="live-badge flex-none inline-flex items-center gap-1 whitespace-nowrap text-ui-micro font-semibold text-primary" title="Following this run while GitHub publishes output">
-        <span class="live-dot size-[0.42rem] animate-pulse rounded-full bg-primary" aria-hidden="true"></span>
-        Live
-      </span>
+      <Hint label="Following this run while GitHub publishes output">
+        {#snippet child({ props })}
+          <span class="live-badge flex-none inline-flex items-center gap-1 whitespace-nowrap text-ui-micro font-semibold text-primary" {...props}>
+            <span class="live-dot size-[0.42rem] animate-pulse rounded-full bg-primary" aria-hidden="true"></span>
+            Live
+          </span>
+        {/snippet}
+      </Hint>
     {/if}
     {#if firstError}
-      <Button
-        class={tb}
-        variant="outline"
-        type="button"
-        title="Jump to the first error line"
-        onclick={jumpToFirstError}
-      >
-        First error
-      </Button>
+      <Hint label="Jump to the first error line">
+        {#snippet child({ props })}
+          <Button
+            class={tb}
+            variant="outline"
+            {...props}
+            type="button"
+            onclick={jumpToFirstError}
+          >
+            First error
+          </Button>
+        {/snippet}
+      </Hint>
     {/if}
     <span class="spacer ml-auto max-[44rem]:hidden"></span>
     {#if liveConsole && onOpenLive}
-      <Button
-        class="live-console {tb} border-current/40 text-primary"
-        variant="outline"
-        type="button"
-        title="Open GitHub's live console for this run"
-        onclick={onOpenLive}
-      >
-        <span class="live-dot size-[0.42rem] animate-pulse rounded-full bg-primary" aria-hidden="true"></span>
-        Live console
-      </Button>
+      <Hint label="Open GitHub's live console for this run">
+        {#snippet child({ props })}
+          <Button
+            class="live-console {tb} border-current/40 text-primary"
+            variant="outline"
+            {...props}
+            type="button"
+            onclick={onOpenLive}
+          >
+            <span class="live-dot size-[0.42rem] animate-pulse rounded-full bg-primary" aria-hidden="true"></span>
+            Live console
+          </Button>
+        {/snippet}
+      </Hint>
     {/if}
-    <Toggle
-      class="{tb} {wrap ? "border-transparent bg-accent text-accent-foreground" : ""} focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary focus-visible:ring-0"
-      pressed={wrap}
-      onPressedChange={() => (wrap = !wrap)}
-      title="Wrap long log lines"
-    >
-      Wrap
-    </Toggle>
-    <Toggle
-      class="{tb} {follow ? "border-transparent bg-accent text-accent-foreground" : ""} focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary focus-visible:ring-0"
-      pressed={follow}
-      onPressedChange={() => toggleFollow()}
-      title={follow ? "Stop following new output" : "Follow new output"}
-    >
-      {#if live}<span class="live-dot size-[0.42rem] animate-pulse rounded-full bg-primary" aria-hidden="true"></span>{/if}
-      {follow ? "Following" : "Tail"}
-    </Toggle>
-    <Button class={tb} variant="outline" type="button" title="Expand all sections" onclick={expandAll}>
-      Expand
-    </Button>
-    <Button
-      class={tb}
-      variant="outline"
-      type="button"
-      title="Collapse all sections"
-      onclick={collapseAll}
-    >
-      Collapse
-    </Button>
+    <Hint label="Wrap long log lines">
+      {#snippet child({ props })}
+        <Toggle
+          class="{tb} {wrap ? "border-transparent bg-accent text-accent-foreground" : ""} focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary focus-visible:ring-0"
+          {...props}
+          pressed={wrap}
+          onPressedChange={() => (wrap = !wrap)}
+        >
+          Wrap
+        </Toggle>
+      {/snippet}
+    </Hint>
+    <Hint label={follow ? "Stop following new output" : "Follow new output"}>
+      {#snippet child({ props })}
+        <Toggle
+          class="{tb} {follow ? "border-transparent bg-accent text-accent-foreground" : ""} focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary focus-visible:ring-0"
+          {...props}
+          pressed={follow}
+          onPressedChange={() => toggleFollow()}
+        >
+          {#if live}<span class="live-dot size-[0.42rem] animate-pulse rounded-full bg-primary" aria-hidden="true"></span>{/if}
+          {follow ? "Following" : "Tail"}
+        </Toggle>
+      {/snippet}
+    </Hint>
+    <Hint label="Expand all sections">
+      {#snippet child({ props })}
+        <Button class={tb} variant="outline" {...props} type="button" onclick={expandAll}>
+          Expand
+        </Button>
+      {/snippet}
+    </Hint>
+    <Hint label="Collapse all sections">
+      {#snippet child({ props })}
+        <Button
+          class={tb}
+          variant="outline"
+          {...props}
+          type="button"
+          onclick={collapseAll}
+        >
+          Collapse
+        </Button>
+      {/snippet}
+    </Hint>
     <Button
       class={tb}
       variant="outline"

@@ -16,6 +16,7 @@
   import AiSettings from "./AiSettings.svelte";
   import { Button } from "$lib/components/ui/button/index.js";
   import { Spinner } from "$lib/components/ui/spinner/index.js";
+  import { Hint } from "$lib/components/ui/tooltip/index.js";
   import { toast } from "$lib/toast";
 
   let {
@@ -80,7 +81,11 @@
 
 <div class="explain-panel absolute bottom-2 left-3 right-3 z-30 flex max-h-[45%] max-w-[34rem] flex-col rounded-xl border border-border bg-popover text-ui-base text-popover-foreground shadow-[0_8px_24px_rgba(0,0,0,0.35)]" role="complementary" aria-label={`AI explanation of ${path} hunk`}>
   <header class="head flex-none flex items-center gap-2 border-b border-border pb-[0.375rem] pl-3 pr-2 pt-[0.375rem]">
-    <span class="file min-w-0 truncate font-mono text-xs font-semibold" title={path}>{path}</span>
+    <Hint label={path}>
+      {#snippet child({ props })}
+        <span class="file min-w-0 truncate font-mono text-xs font-semibold" {...props}>{path}</span>
+      {/snippet}
+    </Hint>
     <span class="hunk-label flex-none font-mono text-ui-micro text-muted-foreground">{label}</span>
     <span class="spacer flex-1"></span>
     {#if outcome}

@@ -33,6 +33,7 @@
   import { floating } from "$lib/components/overlay/floating";
   import { Button } from "$lib/components/ui/button/index.js";
   import { Spinner } from "$lib/components/ui/spinner/index.js";
+  import { Hint } from "$lib/components/ui/tooltip/index.js";
   import { toast } from "$lib/toast";
 
   let {
@@ -140,54 +141,62 @@
 {#if !gateVisibility || ai.isOptedIn(repoId)}
   <span class="ai-feature relative inline-flex {rootClass ?? ''}" bind:this={root}>
     {#if icon}
-      <Button
-        variant="outline"
-        size="icon"
-        class="sparkle size-7 rounded-full text-primary"
-        type="button"
-        {disabled}
-        aria-label={ariaLabel ?? title ?? label}
-        aria-busy={busy}
-        title={title ?? label}
-        onclick={openAction}
-      >
-        <span class="icon-box relative block" class:busy>
-          <svg
-            class="icon block {busy ? 'opacity-25' : ''}"
-            aria-hidden="true"
-            width="14"
-            height="14"
-            viewBox="0 0 24 24"
-            fill="currentColor"
+      <Hint label={title ?? label}>
+        {#snippet child({ props })}
+          <Button
+            variant="outline"
+            size="icon"
+            class="sparkle size-7 rounded-full text-primary"
+            type="button"
+            {...props}
+            {disabled}
+            aria-label={ariaLabel ?? title ?? label}
+            aria-busy={busy}
+            onclick={openAction}
           >
-            <path
-              d="M12 2l2.09 6.26L20 10.35l-5.91 2.09L12 18.7l-2.09-6.26L4 10.35l5.91-2.09L12 2z"
-            />
-            <path d="M19 15l1.18 3.32L23.5 19.5l-3.32 1.18L19 24l-1.18-3.32L14.5 19.5l3.32-1.18L19 15z" />
-          </svg>
-          {#if busy}
-            <Spinner class="icon-spinner absolute inset-0 m-auto size-3 text-primary" aria-hidden="true" />
-          {/if}
-        </span>
-      </Button>
+            <span class="icon-box relative block" class:busy>
+              <svg
+                class="icon block {busy ? 'opacity-25' : ''}"
+                aria-hidden="true"
+                width="14"
+                height="14"
+                viewBox="0 0 24 24"
+                fill="currentColor"
+              >
+                <path
+                  d="M12 2l2.09 6.26L20 10.35l-5.91 2.09L12 18.7l-2.09-6.26L4 10.35l5.91-2.09L12 2z"
+                />
+                <path d="M19 15l1.18 3.32L23.5 19.5l-3.32 1.18L19 24l-1.18-3.32L14.5 19.5l3.32-1.18L19 15z" />
+              </svg>
+              {#if busy}
+                <Spinner class="icon-spinner absolute inset-0 m-auto size-3 text-primary" aria-hidden="true" />
+              {/if}
+            </span>
+          </Button>
+        {/snippet}
+      </Hint>
     {:else}
-      <Button
-        variant="outline"
-        size="xs"
-        class="feature-btn rounded-full gap-[0.3rem] text-ui-meta text-muted-foreground {compact
-          ? 'compact px-2 py-px text-ui-micro'
-          : ''}"
-        type="button"
-        {disabled}
-        aria-label={ariaLabel ?? title ?? label}
-        title={title ?? label}
-        onclick={openAction}
-      >
-        {#if busy}
-          <Spinner class="size-3 text-primary" aria-hidden="true" />
-        {/if}
-        {label}
-      </Button>
+      <Hint label={title ?? label}>
+        {#snippet child({ props })}
+          <Button
+            variant="outline"
+            size="xs"
+            class="feature-btn rounded-full gap-[0.3rem] text-ui-meta text-muted-foreground {compact
+              ? 'compact px-2 py-px text-ui-micro'
+              : ''}"
+            type="button"
+            {...props}
+            {disabled}
+            aria-label={ariaLabel ?? title ?? label}
+            onclick={openAction}
+          >
+            {#if busy}
+              <Spinner class="size-3 text-primary" aria-hidden="true" />
+            {/if}
+            {label}
+          </Button>
+        {/snippet}
+      </Hint>
     {/if}
 
     {#if confirmOpen}

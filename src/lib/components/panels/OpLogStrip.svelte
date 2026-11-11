@@ -19,6 +19,7 @@
   } from "$lib/stores/ops.svelte";
   import Icon from "$lib/components/icons/Icon.svelte";
   import { Button } from "$lib/components/ui/button/index.js";
+  import { Hint } from "$lib/components/ui/tooltip/index.js";
   import { Spinner } from "$lib/components/ui/spinner/index.js";
   import { appIcon } from "$lib/components/icons/library.svelte";
 
@@ -108,17 +109,21 @@
                 Cancelling…
               </span>
             {:else}
-              <Button
-                class="size-5 rounded-full text-muted-foreground hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-3.5"
-                variant="ghost"
-                size="icon-sm"
-                type="button"
-                aria-label={`Cancel ${kindLabel(op.kind)}`}
-                title={`Cancel ${kindLabel(op.kind)}`}
-                onclick={() => void cancelOp(op.op_id)}
-              >
-                <Icon icon={iconClose} size={14} />
-              </Button>
+              <Hint label={`Cancel ${kindLabel(op.kind)}`}>
+                {#snippet child({ props })}
+                  <Button
+                    {...props}
+                    class="size-5 rounded-full text-muted-foreground hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-3.5"
+                    variant="ghost"
+                    size="icon-sm"
+                    type="button"
+                    aria-label={`Cancel ${kindLabel(op.kind)}`}
+                    onclick={() => void cancelOp(op.op_id)}
+                  >
+                    <Icon icon={iconClose} size={14} />
+                  </Button>
+                {/snippet}
+              </Hint>
             {/if}
           </li>
         {/each}
@@ -147,31 +152,39 @@
           >{countLabel}</span
         >
         <span class="grow min-w-0 flex-1"></span>
-        <Button
-          class={`size-5 rounded-full text-muted-foreground hover:bg-accent hover:text-accent-foreground aria-expanded:bg-accent aria-expanded:text-accent-foreground [&_svg]:transition-transform [&_svg]:duration-100 ${expanded
-            ? ""
-            : "[&_svg]:-rotate-90"} [&_svg:not([class*='size-'])]:size-4`}
-          variant="ghost"
-          size="icon-sm"
-          type="button"
-          aria-label={expanded ? "Collapse output" : "Expand output"}
-          aria-expanded={expanded}
-          title={expanded ? "Collapse output" : "Expand output"}
-          onclick={() => (expanded = !expanded)}
-        >
-          <Icon icon={iconExpand} size={14} />
-        </Button>
-        <Button
-          class="size-5 rounded-full text-muted-foreground hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-3.5"
-          variant="ghost"
-          size="icon-sm"
-          type="button"
-          aria-label="Dismiss output"
-          title="Dismiss output"
-          onclick={() => clearOpLogs(repoId)}
-        >
-          <Icon icon={iconClose} size={14} />
-        </Button>
+        <Hint label={expanded ? "Collapse output" : "Expand output"}>
+          {#snippet child({ props })}
+            <Button
+              {...props}
+              class={`size-5 rounded-full text-muted-foreground hover:bg-accent hover:text-accent-foreground aria-expanded:bg-accent aria-expanded:text-accent-foreground [&_svg]:transition-transform [&_svg]:duration-100 ${expanded
+                ? ""
+                : "[&_svg]:-rotate-90"} [&_svg:not([class*='size-'])]:size-4`}
+              variant="ghost"
+              size="icon-sm"
+              type="button"
+              aria-label={expanded ? "Collapse output" : "Expand output"}
+              aria-expanded={expanded}
+              onclick={() => (expanded = !expanded)}
+            >
+              <Icon icon={iconExpand} size={14} />
+            </Button>
+          {/snippet}
+        </Hint>
+        <Hint label="Dismiss output">
+          {#snippet child({ props })}
+            <Button
+              {...props}
+              class="size-5 rounded-full text-muted-foreground hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-3.5"
+              variant="ghost"
+              size="icon-sm"
+              type="button"
+              aria-label="Dismiss output"
+              onclick={() => clearOpLogs(repoId)}
+            >
+              <Icon icon={iconClose} size={14} />
+            </Button>
+          {/snippet}
+        </Hint>
       </div>
       {#if expanded}
         <!-- Scrollable region: focusable so keyboard users can reach the log. -->

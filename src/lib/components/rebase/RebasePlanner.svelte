@@ -36,6 +36,7 @@
   import * as Dialog from "$lib/components/ui/dialog/index.js";
   import { Button } from "$lib/components/ui/button/index.js";
   import { Textarea } from "$lib/components/ui/textarea/index.js";
+  import { Hint } from "$lib/components/ui/tooltip/index.js";
   import { rebaseMonitor } from "./rebaseStore.svelte";
   import {
     REBASE_ACTIONS,
@@ -373,7 +374,15 @@
                   {/each}
                 </select>
                 <span class="psha flex-none font-mono text-primary">{row.sha.slice(0, 7)}</span>
-                <span class="psummary min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap text-foreground" title={row.summary}>{row.summary}</span>
+                <Hint label={row.summary}>
+                  {#snippet child({ props })}
+                    <span
+                      {...props}
+                      tabindex="-1"
+                      class="psummary min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap text-foreground"
+                    >{row.summary}</span>
+                  {/snippet}
+                </Hint>
                 <span class="moves flex flex-none gap-0.5">
                   <Button
                     variant="outline"
@@ -442,7 +451,15 @@
           </p>
           <ul class="clist m-0 mb-1 max-h-28 list-none overflow-y-auto p-0">
             {#each monitor.conflicts as file (file.path)}
-              <li class="cpath overflow-hidden text-ellipsis whitespace-nowrap font-mono text-xs text-foreground" title={file.path}>{file.path}</li>
+              <Hint label={file.path}>
+                {#snippet child({ props })}
+                  <li
+                    {...props}
+                    tabindex="-1"
+                    class="cpath overflow-hidden text-ellipsis whitespace-nowrap font-mono text-xs text-foreground"
+                  >{file.path}</li>
+                {/snippet}
+              </Hint>
             {/each}
           </ul>
           <p class="chint mb-2 text-ui-meta text-muted-foreground">

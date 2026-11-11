@@ -20,6 +20,7 @@
   import { Input } from "$lib/components/ui/input/index.js";
   import { Label } from "$lib/components/ui/label/index.js";
   import { Button } from "$lib/components/ui/button/index.js";
+  import { Hint } from "$lib/components/ui/tooltip/index.js";
 
   let {
     open = $bindable(false),
@@ -169,17 +170,21 @@
       >
         {edit !== null ? "Edit device" : "Add device"}
       </h2>
-      <Button
-        class="close rounded-full text-xl leading-none"
-        variant="ghost"
-        size="icon-sm"
-        type="button"
-        aria-label="Close device dialog"
-        title="Close"
-        onclick={close}
-      >
-        ×
-      </Button>
+      <Hint label="Close">
+        {#snippet child({ props })}
+          <Button
+            {...props}
+            class="close rounded-full text-xl leading-none"
+            variant="ghost"
+            size="icon-sm"
+            type="button"
+            aria-label="Close device dialog"
+            onclick={close}
+          >
+            ×
+          </Button>
+        {/snippet}
+      </Hint>
     </div>
 
     <form

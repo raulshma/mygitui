@@ -24,6 +24,7 @@
   import { toast } from "$lib/toast";
   import { formatRelativeTime } from "$lib/git/format";
   import { Button } from "$lib/components/ui/button/index.js";
+  import { Hint } from "$lib/components/ui/tooltip/index.js";
 
   let {
     repoId,
@@ -252,15 +253,19 @@
           {#if health.fsck_samples.length > 0}
             <div class="fsck-samples flex flex-wrap gap-1">
               {#each health.fsck_samples as sha (sha)}
-                <Button
-                  class="h-auto rounded px-[5px] py-px font-mono text-ui-tiny font-normal text-muted-foreground"
-                  variant="outline"
-                  type="button"
-                  title="Copy {sha}"
-                  onclick={() => void copySha(sha)}
-                >
-                  {sha.slice(0, 12)}
-                </Button>
+                <Hint label={`Copy ${sha}`}>
+                  {#snippet child({ props })}
+                    <Button
+                      {...props}
+                      class="h-auto rounded px-[5px] py-px font-mono text-ui-tiny font-normal text-muted-foreground"
+                      variant="outline"
+                      type="button"
+                      onclick={() => void copySha(sha)}
+                    >
+                      {sha.slice(0, 12)}
+                    </Button>
+                  {/snippet}
+                </Hint>
               {/each}
             </div>
           {/if}

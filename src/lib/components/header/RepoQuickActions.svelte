@@ -62,6 +62,7 @@
   import { headerPins } from "$lib/stores/headerPins.svelte";
   import { toast } from "$lib/toast";
   import { Button } from "$lib/components/ui/button/index.js";
+  import { Hint } from "$lib/components/ui/tooltip/index.js";
   import {
     showMenuAt,
     showMenuAtElement,
@@ -299,83 +300,94 @@
   aria-label="Git sync actions"
   aria-busy={busy}
 >
-  <Button
-    class="sync-main gap-[0.3rem] border-0 px-2 text-ui-meta transition-colors duration-[120ms] hover:bg-accent hover:text-foreground focus-visible:outline-2 focus-visible:outline-primary focus-visible:-outline-offset-2 focus-visible:ring-0"
-    variant="ghost"
-    aria-label={primaryAriaLabel}
-    aria-busy={runningVerb !== null}
-    title={primaryTitle}
-    disabled={busy || (primaryVerb !== "fetch" && !canUseBranch)}
-    onclick={() => void run(primaryVerb)}
-  >
-    <span class="verb-icon inline-flex h-3.5 w-3.5 flex-none items-center justify-center">
-      {#if runningVerb !== null}
-        <Spinner class="size-3.5" role="presentation" aria-hidden="true" />
-      {:else}
-        <Icon icon={iconSync} size={14} />
-      {/if}
-    </span>
-    <span class="sync-word flex-none font-medium leading-none max-[760px]:hidden">Sync</span>
-    {#if behind > 0 && runningVerb === null}
-      <span
-        class="count behind inline-flex h-auto min-w-4 flex-none items-center gap-[0.1rem] rounded-full bg-muted px-1 text-ui-tiny font-semibold leading-tight text-center tabular-nums text-muted-foreground max-[760px]:hidden"
-        title={`${behind} behind`}
+  <Hint label={primaryTitle}>
+    {#snippet child({ props })}
+      <Button
+        class="sync-main gap-[0.3rem] border-0 px-2 text-ui-meta transition-colors duration-[120ms] hover:bg-accent hover:text-foreground focus-visible:outline-2 focus-visible:outline-primary focus-visible:-outline-offset-2 focus-visible:ring-0"
+        variant="ghost"
+        {...props}
+        aria-label={primaryAriaLabel}
+        aria-busy={runningVerb !== null}
+        disabled={busy || (primaryVerb !== "fetch" && !canUseBranch)}
+        onclick={() => void run(primaryVerb)}
       >
-        <Icon icon={iconPull} size={12} />
-        {badgeCount(behind)}
-      </span>
-    {/if}
-    {#if ahead > 0 && runningVerb === null}
-      <span
-        class="count ahead inline-flex h-auto min-w-4 flex-none items-center gap-[0.1rem] rounded-full bg-accent px-1 text-ui-tiny font-semibold leading-tight text-center tabular-nums text-accent-foreground max-[760px]:hidden"
-        title={`${ahead} ahead`}
-      >
-        <Icon icon={iconPush} size={12} />
-        {badgeCount(ahead)}
-      </span>
-    {/if}
-  </Button>
+        <span class="verb-icon inline-flex h-3.5 w-3.5 flex-none items-center justify-center">
+          {#if runningVerb !== null}
+            <Spinner class="size-3.5" role="presentation" aria-hidden="true" />
+          {:else}
+            <Icon icon={iconSync} size={14} />
+          {/if}
+        </span>
+        <span class="sync-word flex-none font-medium leading-none max-[760px]:hidden">Sync</span>
+        {#if behind > 0 && runningVerb === null}
+          <!-- Count badges carry no own tooltip: they sit inside this
+               button's Hint trigger, and this button's tooltip already
+               spells the behind/ahead counts out. -->
+          <span
+            class="count behind inline-flex h-auto min-w-4 flex-none items-center gap-[0.1rem] rounded-full bg-muted px-1 text-ui-tiny font-semibold leading-tight text-center tabular-nums text-muted-foreground max-[760px]:hidden"
+          >
+            <Icon icon={iconPull} size={12} />
+            {badgeCount(behind)}
+          </span>
+        {/if}
+        {#if ahead > 0 && runningVerb === null}
+          <span
+            class="count ahead inline-flex h-auto min-w-4 flex-none items-center gap-[0.1rem] rounded-full bg-accent px-1 text-ui-tiny font-semibold leading-tight text-center tabular-nums text-accent-foreground max-[760px]:hidden"
+          >
+            <Icon icon={iconPush} size={12} />
+            {badgeCount(ahead)}
+          </span>
+        {/if}
+      </Button>
+    {/snippet}
+  </Hint>
 
   {#each pinnedVerbs as verb (verb)}
-    <Button
-      class="sync-pin-btn flex-none gap-[0.3rem] border-0 border-l border-border px-[0.3rem] text-ui-meta transition-colors duration-[120ms] hover:bg-accent hover:text-foreground focus-visible:outline-2 focus-visible:outline-primary focus-visible:-outline-offset-2 focus-visible:ring-0"
-      variant="ghost"
-      data-sync-pin={verb}
-      aria-label={pinTitle(verb)}
-      aria-busy={runningVerb === verb}
-      title={pinTitle(verb)}
-      disabled={busy || (verb !== "fetch" && !canUseBranch)}
-      onclick={() => void run(verb)}
-      oncontextmenu={(event) => openPinContext(event, verb)}
-    >
-      <span class="verb-icon inline-flex h-3.5 w-3.5 flex-none items-center justify-center">
-        {#if runningVerb === verb}
-          <Spinner class="size-3.5" role="presentation" aria-hidden="true" />
-        {:else}
-          <Icon icon={verbIcon(verb)} size={14} />
-        {/if}
-      </span>
-      {#if pinCount(verb) !== null && runningVerb === null}
-        {@const badge = pinCount(verb)!}
-        <span
-          class={`count ${badge.dir} inline-flex h-auto min-w-4 flex-none items-center gap-[0.1rem] rounded-full px-1 text-ui-tiny font-semibold leading-tight text-center tabular-nums max-[760px]:hidden ${badge.dir === "ahead" ? "bg-accent text-accent-foreground" : "bg-muted text-muted-foreground"}`}
-          title={`${badge.count} ${badge.dir}`}
+    <Hint label={pinTitle(verb)}>
+      {#snippet child({ props })}
+        <Button
+          class="sync-pin-btn flex-none gap-[0.3rem] border-0 border-l border-border px-[0.3rem] text-ui-meta transition-colors duration-[120ms] hover:bg-accent hover:text-foreground focus-visible:outline-2 focus-visible:outline-primary focus-visible:-outline-offset-2 focus-visible:ring-0"
+          variant="ghost"
+          data-sync-pin={verb}
+          {...props}
+          aria-busy={runningVerb === verb}
+          disabled={busy || (verb !== "fetch" && !canUseBranch)}
+          onclick={() => void run(verb)}
+          oncontextmenu={(event) => openPinContext(event, verb)}
         >
-          {badgeCount(badge.count)}
-        </span>
-      {/if}
-    </Button>
+          <span class="verb-icon inline-flex h-3.5 w-3.5 flex-none items-center justify-center">
+            {#if runningVerb === verb}
+              <Spinner class="size-3.5" role="presentation" aria-hidden="true" />
+            {:else}
+              <Icon icon={verbIcon(verb)} size={14} />
+            {/if}
+          </span>
+          {#if pinCount(verb) !== null && runningVerb === null}
+            {@const badge = pinCount(verb)!}
+            <span
+              class={`count ${badge.dir} inline-flex h-auto min-w-4 flex-none items-center gap-[0.1rem] rounded-full px-1 text-ui-tiny font-semibold leading-tight text-center tabular-nums max-[760px]:hidden ${badge.dir === "ahead" ? "bg-accent text-accent-foreground" : "bg-muted text-muted-foreground"}`}
+            >
+              {badgeCount(badge.count)}
+            </span>
+          {/if}
+        </Button>
+      {/snippet}
+    </Hint>
   {/each}
 
-  <Button
-    class="sync-menu-btn flex-none gap-[0.3rem] border-0 border-l border-border px-[0.2rem] text-ui-meta transition-colors duration-[120ms] hover:bg-accent hover:text-foreground focus-visible:outline-2 focus-visible:outline-primary focus-visible:-outline-offset-2 focus-visible:ring-0"
-    variant="ghost"
-    aria-label="More sync actions"
-    title="Fetch / Pull / Push"
-    aria-haspopup="menu"
-    disabled={busy}
-    onclick={openSyncMenu}
-  >
-    <Icon icon={iconChevronDown} size={14} />
-  </Button>
+  <Hint label="Fetch / Pull / Push">
+    {#snippet child({ props })}
+      <Button
+        class="sync-menu-btn flex-none gap-[0.3rem] border-0 border-l border-border px-[0.2rem] text-ui-meta transition-colors duration-[120ms] hover:bg-accent hover:text-foreground focus-visible:outline-2 focus-visible:outline-primary focus-visible:-outline-offset-2 focus-visible:ring-0"
+        variant="ghost"
+        {...props}
+        aria-label="More sync actions"
+        aria-haspopup="menu"
+        disabled={busy}
+        onclick={openSyncMenu}
+      >
+        <Icon icon={iconChevronDown} size={14} />
+      </Button>
+    {/snippet}
+  </Hint>
 </div>

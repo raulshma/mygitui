@@ -34,6 +34,7 @@
   import { Textarea } from "$lib/components/ui/textarea/index.js";
   import { Checkbox } from "$lib/components/ui/checkbox/index.js";
   import { Label } from "$lib/components/ui/label/index.js";
+  import { Hint } from "$lib/components/ui/tooltip/index.js";
   import { prNumberFromUrl } from "./forgeModel";
 
   let {
@@ -251,9 +252,13 @@
         <p class="created-line m-0 font-semibold" aria-live="polite">
           PR #{done.number} created successfully.
         </p>
-        <p class="created-url m-0 truncate font-mono text-ui-meta text-muted-foreground" title={done.url}>
-          {done.url}
-        </p>
+        <Hint label={done.url}>
+          {#snippet child({ props })}
+            <p class="created-url m-0 truncate font-mono text-ui-meta text-muted-foreground" {...props}>
+              {done.url}
+            </p>
+          {/snippet}
+        </Hint>
         <div class="actions mt-1 flex flex-wrap items-center gap-2">
           <Button
             class="confirm flex-none rounded-full px-4"
@@ -277,9 +282,13 @@
           A pull request already exists for this branch
           {existingNumber !== null ? `(#{existingNumber})` : ""}.
         </p>
-        <p class="created-url m-0 truncate font-mono text-ui-meta text-muted-foreground" title={url}>
-          {url}
-        </p>
+        <Hint label={url}>
+          {#snippet child({ props })}
+            <p class="created-url m-0 truncate font-mono text-ui-meta text-muted-foreground" {...props}>
+              {url}
+            </p>
+          {/snippet}
+        </Hint>
         <div class="actions mt-1 flex flex-wrap items-center gap-2">
           <Button
             class="confirm flex-none rounded-full px-4"
@@ -356,13 +365,17 @@
           ></Textarea>
         </Label>
 
-        <Label
-          class="draft flex cursor-pointer items-center gap-1.5 text-xs text-muted-foreground"
-          title="Open the PR as a draft (no reviewers requested)"
-        >
-          <Checkbox bind:checked={draft} />
-          <span>Draft</span>
-        </Label>
+        <Hint label="Open the PR as a draft (no reviewers requested)">
+          {#snippet child({ props })}
+            <Label
+              class="draft flex cursor-pointer items-center gap-1.5 text-xs text-muted-foreground"
+              {...props}
+            >
+              <Checkbox bind:checked={draft} />
+              <span>Draft</span>
+            </Label>
+          {/snippet}
+        </Hint>
 
         {#if error}
           <p class="error m-0 text-xs text-destructive" role="alert">{error}</p>

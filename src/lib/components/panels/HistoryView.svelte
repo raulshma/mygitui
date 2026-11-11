@@ -86,6 +86,7 @@
   import { toast } from "$lib/toast";
   import Icon from "$lib/components/icons/Icon.svelte";
   import { Button } from "$lib/components/ui/button/index.js";
+  import { Hint } from "$lib/components/ui/tooltip/index.js";
   import { Spinner } from "$lib/components/ui/spinner/index.js";
   import { Checkbox } from "$lib/components/ui/checkbox/index.js";
   import { Input } from "$lib/components/ui/input/index.js";
@@ -932,30 +933,38 @@
     <header class="sidebar-head flex flex-none items-center gap-1 border-b border-border bg-popover px-2.5 py-1">
       <span class="sh-title min-w-0 flex-1 truncate text-ui-micro font-semibold uppercase tracking-[0.04em] text-muted-foreground">History</span>
       {#if onPopout}
-        <Button
-          class="relative text-muted-foreground after:absolute after:-inset-1 after:content-[''] hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-4"
-          variant="ghost"
-          size="icon-xs"
-          type="button"
-          aria-label="Pop out history"
-          title="Pop out history"
-          onclick={onPopout}
-        >
-          <Icon icon={iconPopout} size={16} />
-        </Button>
+        <Hint label="Pop out history">
+          {#snippet child({ props })}
+            <Button
+              {...props}
+              class="relative text-muted-foreground after:absolute after:-inset-1 after:content-[''] hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-4"
+              variant="ghost"
+              size="icon-xs"
+              type="button"
+              aria-label="Pop out history"
+              onclick={onPopout}
+            >
+              <Icon icon={iconPopout} size={16} />
+            </Button>
+          {/snippet}
+        </Hint>
       {/if}
       {#if onCollapse}
-        <Button
-          class="relative text-muted-foreground after:absolute after:-inset-1 after:content-[''] hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-4"
-          variant="ghost"
-          size="icon-xs"
-          type="button"
-          aria-label="Hide history sidebar"
-          title="Hide the history sidebar"
-          onclick={onCollapse}
-        >
-          <Icon icon={iconCollapse} size={16} />
-        </Button>
+        <Hint label="Hide the history sidebar">
+          {#snippet child({ props })}
+            <Button
+              {...props}
+              class="relative text-muted-foreground after:absolute after:-inset-1 after:content-[''] hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-4"
+              variant="ghost"
+              size="icon-xs"
+              type="button"
+              aria-label="Hide history sidebar"
+              onclick={onCollapse}
+            >
+              <Icon icon={iconCollapse} size={16} />
+            </Button>
+          {/snippet}
+        </Hint>
       {/if}
     </header>
   {/if}
@@ -983,21 +992,25 @@
     </span>
 
     {#if sidebar}
-      <Button
-        class="relative after:absolute after:-inset-1 after:content-[''] hover:bg-accent hover:text-accent-foreground aria-pressed:bg-accent aria-pressed:text-accent-foreground {filterActive
-          ? 'text-primary'
-          : 'text-muted-foreground'} [&_svg:not([class*='size-'])]:size-4"
-        variant="ghost"
-        size="icon-xs"
-        type="button"
-        aria-label="More filters"
-        aria-pressed={showAdvanced}
-        aria-expanded={showAdvanced}
-        title="More filters"
-        onclick={() => (showAdvanced = !showAdvanced)}
-      >
-        <Icon icon={iconFilters} size={16} />
-      </Button>
+      <Hint label="More filters">
+        {#snippet child({ props })}
+          <Button
+            {...props}
+            class="relative after:absolute after:-inset-1 after:content-[''] hover:bg-accent hover:text-accent-foreground aria-pressed:bg-accent aria-pressed:text-accent-foreground {filterActive
+              ? 'text-primary'
+              : 'text-muted-foreground'} [&_svg:not([class*='size-'])]:size-4"
+            variant="ghost"
+            size="icon-xs"
+            type="button"
+            aria-label="More filters"
+            aria-pressed={showAdvanced}
+            aria-expanded={showAdvanced}
+            onclick={() => (showAdvanced = !showAdvanced)}
+          >
+            <Icon icon={iconFilters} size={16} />
+          </Button>
+        {/snippet}
+      </Hint>
     {/if}
 
     {#if !sidebar || showAdvanced}
@@ -1005,21 +1018,28 @@
            "HEAD" the checked-out branch, a name only that branch's history.
            Restarts the stream through the same debounced setFilter path as
            the other filter fields. -->
-      <label class="scope flex items-center gap-1 text-muted-foreground" title="Limit the log to one branch's history">
-        <span class="dl">scope</span>
-        <select
-          class="h-auto rounded-sm border border-input bg-card px-[0.3rem] py-0.5 text-ui-micro text-foreground focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-1"
-          aria-label="Branch scope"
-          bind:this={scopeSelectEl}
-          onchange={(e) => store.setFilter({ scopeRef: e.currentTarget.value })}
-        >
-          <option value="">All branches</option>
-          <option value="HEAD">Current branch</option>
-          {#each scopeOptions as name (name)}
-            <option value={name}>{name}</option>
-          {/each}
-        </select>
-      </label>
+      <Hint label="Limit the log to one branch's history">
+        {#snippet child({ props })}
+          <label
+            {...props}
+            class="scope flex items-center gap-1 text-muted-foreground"
+          >
+            <span class="dl">scope</span>
+            <select
+              class="h-auto rounded-sm border border-input bg-card px-[0.3rem] py-0.5 text-ui-micro text-foreground focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-1"
+              aria-label="Branch scope"
+              bind:this={scopeSelectEl}
+              onchange={(e) => store.setFilter({ scopeRef: e.currentTarget.value })}
+            >
+              <option value="">All branches</option>
+              <option value="HEAD">Current branch</option>
+              {#each scopeOptions as name (name)}
+                <option value={name}>{name}</option>
+              {/each}
+            </select>
+          </label>
+        {/snippet}
+      </Hint>
       <Input
         class="f h-auto w-36 rounded-sm bg-card dark:bg-card px-2 py-0.5 text-xs md:text-xs placeholder:text-muted-foreground/80"
         placeholder="Author"
@@ -1055,14 +1075,21 @@
         />
       </label>
       <!-- M9: regex mode is live (backend `LogFilter.regex`). -->
-      <label class="regex flex items-center gap-1 text-muted-foreground" title="Treat the search text as a regular expression">
-        <Checkbox
-          checked={store.filter.regex}
-          onCheckedChange={(checked) => store.setFilter({ regex: checked === true })}
-          aria-label="Treat the search text as a regular expression"
-        />
-        <span>Regex</span>
-      </label>
+      <Hint label="Treat the search text as a regular expression">
+        {#snippet child({ props })}
+          <label
+            {...props}
+            class="regex flex items-center gap-1 text-muted-foreground"
+          >
+            <Checkbox
+              checked={store.filter.regex}
+              onCheckedChange={(checked) => store.setFilter({ regex: checked === true })}
+              aria-label="Treat the search text as a regular expression"
+            />
+            <span>Regex</span>
+          </label>
+        {/snippet}
+      </Hint>
       <!-- M10: pickaxe -S — commits whose patch adds/removes the string. -->
       <Input
         class="f h-auto w-36 rounded-sm bg-card dark:bg-card px-2 py-0.5 text-xs md:text-xs placeholder:text-muted-foreground/80"
@@ -1088,64 +1115,84 @@
       <!-- Scope chip stays visible even with the advanced filters collapsed
            (sidebar mode): the log may be narrower than it looks, so the
            active scope is always shown and one click clears it. -->
-      <span
-        class="scope-chip inline-flex flex-none items-center gap-[0.15rem] rounded-full bg-primary/10 py-0 pr-[0.3rem] pl-2 text-ui-micro text-primary"
-        title="The log is scoped to this branch's history"
-      >
-        <span class="max-w-36 truncate">scoped to {scopeLabel}</span>
-        <button
-          class="rounded-full px-[0.25rem] text-ui-meta leading-none text-primary/80 hover:bg-accent hover:text-accent-foreground focus-visible:outline-2 focus-visible:outline-ring"
-          type="button"
-          aria-label="Clear branch scope"
-          title="Back to all branches"
-          onclick={() => store.setFilter({ scopeRef: "" })}
-        >
-          ×
-        </button>
-      </span>
+      <Hint label="The log is scoped to this branch's history">
+        {#snippet child({ props })}
+          <span
+            {...props}
+            class="scope-chip inline-flex flex-none items-center gap-[0.15rem] rounded-full bg-primary/10 py-0 pr-[0.3rem] pl-2 text-ui-micro text-primary"
+          >
+            <span class="max-w-36 truncate">scoped to {scopeLabel}</span>
+            <Hint label="Back to all branches">
+              {#snippet child({ props })}
+                <button
+                  {...props}
+                  class="rounded-full px-[0.25rem] text-ui-meta leading-none text-primary/80 hover:bg-accent hover:text-accent-foreground focus-visible:outline-2 focus-visible:outline-ring"
+                  type="button"
+                  aria-label="Clear branch scope"
+                  onclick={() => store.setFilter({ scopeRef: "" })}
+                >
+                  ×
+                </button>
+              {/snippet}
+            </Hint>
+          </span>
+        {/snippet}
+      </Hint>
     {/if}
 
     {#if filterActive}
-      <Button
-        class="relative text-muted-foreground after:absolute after:-inset-1 after:content-[''] hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-4"
-        variant="ghost"
-        size="icon-xs"
-        type="button"
-        aria-label="Clear filters"
-        title="Clear all filters"
-        onclick={() => store.clearFilter()}
-      >
-        <Icon icon={iconClearFilters} size={16} />
-      </Button>
+      <Hint label="Clear all filters">
+        {#snippet child({ props })}
+          <Button
+            {...props}
+            class="relative text-muted-foreground after:absolute after:-inset-1 after:content-[''] hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-4"
+            variant="ghost"
+            size="icon-xs"
+            type="button"
+            aria-label="Clear filters"
+            onclick={() => store.clearFilter()}
+          >
+            <Icon icon={iconClearFilters} size={16} />
+          </Button>
+        {/snippet}
+      </Hint>
     {/if}
 
-    <Button
-      class="relative text-muted-foreground after:absolute after:-inset-1 after:content-[''] hover:bg-accent hover:text-accent-foreground aria-pressed:bg-accent aria-pressed:text-accent-foreground [&_svg:not([class*='size-'])]:size-4"
-      variant="ghost"
-      size="icon-xs"
-      type="button"
-      aria-label="Compare commits"
-      aria-pressed={showCompare}
-      aria-expanded={showCompare}
-      title="Compare commits"
-      onclick={() => (showCompare = !showCompare)}
-    >
-      <Icon icon={iconCompare} size={16} />
-    </Button>
+    <Hint label="Compare commits">
+      {#snippet child({ props })}
+        <Button
+          {...props}
+          class="relative text-muted-foreground after:absolute after:-inset-1 after:content-[''] hover:bg-accent hover:text-accent-foreground aria-pressed:bg-accent aria-pressed:text-accent-foreground [&_svg:not([class*='size-'])]:size-4"
+          variant="ghost"
+          size="icon-xs"
+          type="button"
+          aria-label="Compare commits"
+          aria-pressed={showCompare}
+          aria-expanded={showCompare}
+          onclick={() => (showCompare = !showCompare)}
+        >
+          <Icon icon={iconCompare} size={16} />
+        </Button>
+      {/snippet}
+    </Hint>
 
     {#if onPopout && !sidebar}
       <!-- M4 F1: pop the history out into its own window (desktop only). -->
-      <Button
-        class="relative text-muted-foreground after:absolute after:-inset-1 after:content-[''] hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-4"
-        variant="ghost"
-        size="icon-xs"
-        type="button"
-        aria-label="Pop out history"
-        title="Pop out history into its own window"
-        onclick={onPopout}
-      >
-        <Icon icon={iconPopout} size={16} />
-      </Button>
+      <Hint label="Pop out history into its own window">
+        {#snippet child({ props })}
+          <Button
+            {...props}
+            class="relative text-muted-foreground after:absolute after:-inset-1 after:content-[''] hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-4"
+            variant="ghost"
+            size="icon-xs"
+            type="button"
+            aria-label="Pop out history"
+            onclick={onPopout}
+          >
+            <Icon icon={iconPopout} size={16} />
+          </Button>
+        {/snippet}
+      </Hint>
     {/if}
 
     <span
@@ -1155,17 +1202,21 @@
     >
       {#if store.error}
         <span class="err text-destructive" role="alert">{store.error}</span>
-        <Button
-          class="relative text-muted-foreground after:absolute after:-inset-1 after:content-[''] hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-4"
-          variant="ghost"
-          size="icon-xs"
-          type="button"
-          aria-label="Retry loading history"
-          title="Retry loading history"
-          onclick={() => store.restart()}
-        >
-          <Icon icon={iconRetry} size={16} />
-        </Button>
+        <Hint label="Retry loading history">
+          {#snippet child({ props })}
+            <Button
+              {...props}
+              class="relative text-muted-foreground after:absolute after:-inset-1 after:content-[''] hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-4"
+              variant="ghost"
+              size="icon-xs"
+              type="button"
+              aria-label="Retry loading history"
+              onclick={() => store.restart()}
+            >
+              <Icon icon={iconRetry} size={16} />
+            </Button>
+          {/snippet}
+        </Hint>
       {:else if store.loading}
         <Spinner class="size-3" role="presentation" aria-hidden="true" />
         Streaming…
@@ -1253,25 +1304,37 @@
                       : kind === "tag"
                         ? "border-transparent bg-accent text-accent-foreground"
                         : "border-primary bg-primary/10 text-primary"}
-                <span
-                  class="ref ref-{kind} inline-flex flex-none items-center gap-1 whitespace-nowrap rounded-sm border px-1 text-ui-micro leading-[1.4] {sidebar ? 'max-w-24' : 'max-w-36'} {refTint}"
-                  title={`${scope}: ${shortRefName(ref)}`}
-                  aria-label={`${scope}: ${shortRefName(ref)}`}
-                >
-                  <span class="ref-scope flex-none text-ui-tiny font-bold uppercase tracking-[0.025em] opacity-80 {sidebar ? 'hidden' : ''}" aria-hidden="true">{scope}</span>
-                  <span class="ref-name min-w-0 truncate">{shortRefName(ref)}</span>
-                </span>
+                <Hint label={`${scope}: ${shortRefName(ref)}`}>
+                  {#snippet child({ props })}
+                    <span
+                      {...props}
+                      class="ref ref-{kind} inline-flex flex-none items-center gap-1 whitespace-nowrap rounded-sm border px-1 text-ui-micro leading-[1.4] {sidebar ? 'max-w-24' : 'max-w-36'} {refTint}"
+                      aria-label={`${scope}: ${shortRefName(ref)}`}
+                    >
+                      <span class="ref-scope flex-none text-ui-tiny font-bold uppercase tracking-[0.025em] opacity-80 {sidebar ? 'hidden' : ''}" aria-hidden="true">{scope}</span>
+                      <span class="ref-name min-w-0 truncate">{shortRefName(ref)}</span>
+                    </span>
+                  {/snippet}
+                </Hint>
               {/each}
               {#if v.commit.refs.length > 3}
-                <span
-                  class="ref ref-more inline-flex flex-none items-center whitespace-nowrap rounded-sm border border-transparent bg-muted px-1 text-ui-micro leading-[1.4] tabular-nums text-muted-foreground"
-                  title={v.commit.refs.slice(3).map(shortRefName).join(", ")}
-                  aria-label={`${v.commit.refs.length - 3} more refs`}
-                >
-                  +{v.commit.refs.length - 3}
-                </span>
+                <Hint label={v.commit.refs.slice(3).map(shortRefName).join(", ")}>
+                  {#snippet child({ props })}
+                    <span
+                      {...props}
+                      class="ref ref-more inline-flex flex-none items-center whitespace-nowrap rounded-sm border border-transparent bg-muted px-1 text-ui-micro leading-[1.4] tabular-nums text-muted-foreground"
+                      aria-label={`${v.commit.refs.length - 3} more refs`}
+                    >
+                      +{v.commit.refs.length - 3}
+                    </span>
+                  {/snippet}
+                </Hint>
               {/if}
-              <span class="summary min-w-0 flex-1 truncate" title={v.commit.summary}>{v.commit.summary}</span>
+              <Hint label={v.commit.summary}>
+                {#snippet child({ props })}
+                  <span {...props} class="summary min-w-0 flex-1 truncate">{v.commit.summary}</span>
+                {/snippet}
+              </Hint>
               <span class="author max-w-40 flex-none truncate {v.idx === selectedIdx ? "" : "text-muted-foreground"} {sidebar ? "hidden" : ""}">{v.commit.author.name}</span>
               <span class="date flex-none text-muted-foreground {sidebar ? "text-ui-micro" : "text-ui-micro"}">{formatRelativeTime(v.commit.author.time)}</span>
             </div>

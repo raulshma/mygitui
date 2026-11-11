@@ -19,6 +19,7 @@
   import { openTab } from "$lib/stores/tabs.svelte";
   import { toast } from "$lib/toast";
   import { Button } from "$lib/components/ui/button/index.js";
+  import { Hint } from "$lib/components/ui/tooltip/index.js";
   import EmptyState from "../layout/EmptyState.svelte";
   import Icon from "$lib/components/icons/Icon.svelte";
   import { splitPath, submoduleDisplay } from "./statusModel";
@@ -154,25 +155,37 @@
 
 <aside class="submodule-panel flex min-h-0 flex-col bg-card text-ui-base text-foreground" aria-label="Submodules">
   <div class="toolbar flex flex-none items-center gap-2 border-b border-border bg-muted px-1.5 py-1">
-    <label
-      class="toggle inline-flex cursor-pointer items-center gap-0.5 text-ui-micro text-muted-foreground focus-within:text-foreground"
-      title="Also initialize uninitialized submodules"
-    >
-      <input type="checkbox" class="m-0 size-3.5 accent-primary" bind:checked={init} />
-      <span>init</span>
-    </label>
-    <label
-      class="toggle inline-flex cursor-pointer items-center gap-0.5 text-ui-micro text-muted-foreground focus-within:text-foreground"
-      title="Update nested submodules too"
-    >
-      <input type="checkbox" class="m-0 size-3.5 accent-primary" bind:checked={recursive} />
-      <span>recursive</span>
-    </label>
+    <Hint label="Also initialize uninitialized submodules">
+      {#snippet child({ props })}
+        <label
+          class="toggle inline-flex cursor-pointer items-center gap-0.5 text-ui-micro text-muted-foreground focus-within:text-foreground"
+          {...props}
+        >
+          <input type="checkbox" class="m-0 size-3.5 accent-primary" bind:checked={init} />
+          <span>init</span>
+        </label>
+      {/snippet}
+    </Hint>
+    <Hint label="Update nested submodules too">
+      {#snippet child({ props })}
+        <label
+          class="toggle inline-flex cursor-pointer items-center gap-0.5 text-ui-micro text-muted-foreground focus-within:text-foreground"
+          {...props}
+        >
+          <input type="checkbox" class="m-0 size-3.5 accent-primary" bind:checked={recursive} />
+          <span>recursive</span>
+        </label>
+      {/snippet}
+    </Hint>
     <span class="spacer flex-1"></span>
-    <span
-      class="count inline-flex h-auto shrink-0 items-center rounded-full border border-transparent bg-muted px-1.5 py-0 text-ui-tiny font-medium tabular-nums text-muted-foreground"
-      title="Submodules in this repository"
-    >{list.length}</span>
+    <Hint label="Submodules in this repository">
+      {#snippet child({ props })}
+        <span
+          class="count inline-flex h-auto shrink-0 items-center rounded-full border border-transparent bg-muted px-1.5 py-0 text-ui-tiny font-medium tabular-nums text-muted-foreground"
+          {...props}
+        >{list.length}</span>
+      {/snippet}
+    </Hint>
     <Button
       class={`relative text-muted-foreground after:absolute after:-inset-1 after:content-[''] hover:bg-accent hover:text-accent-foreground ${loading ? "[&_svg]:animate-spin" : ""} [&_svg:not([class*='size-'])]:size-4`}
       variant="ghost"
@@ -209,25 +222,33 @@
         <li class="module group border-b border-border/55 px-1.5 py-1 hover:bg-muted/60" class:danger={display.tone === "danger"}>
           <div class="line flex min-w-0 items-center gap-1 [&>svg]:shrink-0 [&>svg]:text-muted-foreground">
             <Icon icon={iconModule} size={14} />
-            <button
-              class="open flex min-w-0 flex-1 cursor-pointer items-center gap-1 border-0 bg-transparent p-0 text-left font-[inherit] text-inherit focus-visible:rounded-sm focus-visible:outline-2 focus-visible:outline-ring focus-visible:outline-offset-1"
-              type="button"
-              title={title(info)}
-              onclick={() => void onOpen(info)}
-            >
-              <span class="path min-w-0 truncate font-mono text-xs">
-                {#if parts.dir}<span class="dir text-muted-foreground opacity-80">{parts.dir}</span>{/if}
-                <span class="base font-semibold {display.tone === "danger" ? "text-[var(--app-deleted)]" : "text-foreground"}">{parts.base}</span>
-              </span>
-              {#if display.tag}
-                <span
-                  class={`tag max-w-36 shrink-0 truncate text-ui-tiny leading-[1.35] ${display.tone === "danger" ? "text-[var(--app-deleted)]" : display.tone === "dirty" ? "text-[var(--app-modified)]" : "text-muted-foreground"}`}
-                  title={display.detail}
+            <Hint label={title(info)}>
+              {#snippet child({ props })}
+                <button
+                  class="open flex min-w-0 flex-1 cursor-pointer items-center gap-1 border-0 bg-transparent p-0 text-left font-[inherit] text-inherit focus-visible:rounded-sm focus-visible:outline-2 focus-visible:outline-ring focus-visible:outline-offset-1"
+                  type="button"
+                  {...props}
+                  onclick={() => void onOpen(info)}
                 >
-                  {display.tag}
-                </span>
-              {/if}
-            </button>
+                  <span class="path min-w-0 truncate font-mono text-xs">
+                    {#if parts.dir}<span class="dir text-muted-foreground opacity-80">{parts.dir}</span>{/if}
+                    <span class="base font-semibold {display.tone === "danger" ? "text-[var(--app-deleted)]" : "text-foreground"}">{parts.base}</span>
+                  </span>
+                  {#if display.tag}
+                    <Hint label={display.detail}>
+                      {#snippet child({ props: tagProps })}
+                        <span
+                          class={`tag max-w-36 shrink-0 truncate text-ui-tiny leading-[1.35] ${display.tone === "danger" ? "text-[var(--app-deleted)]" : display.tone === "dirty" ? "text-[var(--app-modified)]" : "text-muted-foreground"}`}
+                          {...tagProps}
+                        >
+                          {display.tag}
+                        </span>
+                      {/snippet}
+                    </Hint>
+                  {/if}
+                </button>
+              {/snippet}
+            </Hint>
             <span class="actions inline-flex shrink-0 items-center gap-px opacity-0 transition-opacity duration-100 group-hover:opacity-100 group-focus-within:opacity-100 [@media(pointer:coarse)]:opacity-100">
               <Button
                 class="relative text-muted-foreground after:absolute after:-inset-1 after:content-[''] hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-4"
@@ -258,32 +279,44 @@
                 <Icon icon={iconSync} size={16} />
               </Button>
               {#if info.initialized}
-                <Button
-                  class="relative text-muted-foreground after:absolute after:-inset-1 after:content-[''] hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-4"
-                  variant="ghost"
-                  size="icon-xs"
-                  type="button"
-                  aria-label={`Open submodule ${info.path} as a tab`}
-                  title="Open this submodule as a tab"
-                  tabindex={-1}
-                  onclick={() => void onOpen(info)}
-                >
-                  <Icon icon={iconOpen} size={16} />
-                </Button>
+                <Hint label="Open this submodule as a tab">
+                  {#snippet child({ props })}
+                    <Button
+                      class="relative text-muted-foreground after:absolute after:-inset-1 after:content-[''] hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-4"
+                      variant="ghost"
+                      size="icon-xs"
+                      type="button"
+                      {...props}
+                      aria-label={`Open submodule ${info.path} as a tab`}
+                      tabindex={-1}
+                      onclick={() => void onOpen(info)}
+                    >
+                      <Icon icon={iconOpen} size={16} />
+                    </Button>
+                  {/snippet}
+                </Hint>
               {/if}
             </span>
           </div>
-          <div class="meta flex min-w-0 items-center gap-1 whitespace-nowrap pl-5 font-mono text-ui-tiny text-muted-foreground opacity-85" title="Checked-out HEAD vs recorded gitlink">
-            {#if updateAvailable(info)}
-              <span class="update shrink-0 font-semibold text-[var(--app-modified)]">↓ update available</span>
-            {/if}
-            <span class="head text-primary">HEAD {shortSha(info.head_sha)}</span>
-            <span class="sep opacity-50">·</span>
-            <span>recorded {shortSha(info.recorded_sha)}</span>
-            {#if info.url}
-              <span class="url min-w-0 flex-1 truncate text-right opacity-75" title={info.url}>{info.url}</span>
-            {/if}
-          </div>
+          <Hint label="Checked-out HEAD vs recorded gitlink">
+            {#snippet child({ props })}
+              <div class="meta flex min-w-0 items-center gap-1 whitespace-nowrap pl-5 font-mono text-ui-tiny text-muted-foreground opacity-85" {...props}>
+                {#if updateAvailable(info)}
+                  <span class="update shrink-0 font-semibold text-[var(--app-modified)]">↓ update available</span>
+                {/if}
+                <span class="head text-primary">HEAD {shortSha(info.head_sha)}</span>
+                <span class="sep opacity-50">·</span>
+                <span>recorded {shortSha(info.recorded_sha)}</span>
+                {#if info.url}
+                  <Hint label={info.url}>
+                    {#snippet child({ props: urlProps })}
+                      <span class="url min-w-0 flex-1 truncate text-right opacity-75" {...urlProps}>{info.url}</span>
+                    {/snippet}
+                  </Hint>
+                {/if}
+              </div>
+            {/snippet}
+          </Hint>
         </li>
       {/each}
     </ul>

@@ -56,6 +56,7 @@
   import ExplainHunkPanel from "$lib/components/ai/ExplainHunkPanel.svelte";
   import EmptyState from "../layout/EmptyState.svelte";
   import { Toggle } from "$lib/components/ui/toggle/index.js";
+  import { Hint } from "$lib/components/ui/tooltip/index.js";
 
   let {
     files,
@@ -658,28 +659,42 @@
   <div class="diff-viewer relative flex h-full min-h-0 flex-col bg-background">
     <div class="toolbar flex min-h-7 shrink-0 items-center gap-1.5 border-b border-[var(--diff-divider)] bg-card px-2.5 py-0.5">
       <div class="segmented inline-flex shrink-0 overflow-hidden rounded border border-border" role="group" aria-label="Diff layout">
-        <Toggle
-          class="h-auto rounded-none border-0 px-2 py-0 text-ui-micro leading-[1.5] font-normal text-muted-foreground aria-pressed:font-semibold aria-pressed:text-foreground focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary focus-visible:ring-0"
-          pressed={mode === "split"}
-          onPressedChange={(next) => next && setMode("split")}
-          title="Show old and new side by side"
-        >Split</Toggle>
-        <Toggle
-          class="h-auto rounded-none border-0 border-l border-l-border px-2 py-0 text-ui-micro leading-[1.5] font-normal text-muted-foreground aria-pressed:font-semibold aria-pressed:text-foreground focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary focus-visible:ring-0"
-          pressed={mode === "unified"}
-          onPressedChange={(next) => next && setMode("unified")}
-          title="Show old and new in one column"
-        >Unified</Toggle>
+        <Hint label="Show old and new side by side">
+          {#snippet child({ props })}
+            <Toggle
+              {...props}
+              class="h-auto rounded-none border-0 px-2 py-0 text-ui-micro leading-[1.5] font-normal text-muted-foreground aria-pressed:font-semibold aria-pressed:text-foreground focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary focus-visible:ring-0"
+              pressed={mode === "split"}
+              onPressedChange={(next) => next && setMode("split")}
+            >Split</Toggle>
+          {/snippet}
+        </Hint>
+        <Hint label="Show old and new in one column">
+          {#snippet child({ props })}
+            <Toggle
+              {...props}
+              class="h-auto rounded-none border-0 border-l border-l-border px-2 py-0 text-ui-micro leading-[1.5] font-normal text-muted-foreground aria-pressed:font-semibold aria-pressed:text-foreground focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary focus-visible:ring-0"
+              pressed={mode === "unified"}
+              onPressedChange={(next) => next && setMode("unified")}
+            >Unified</Toggle>
+          {/snippet}
+        </Hint>
       </div>
-      <Toggle
-        class="h-auto shrink-0 rounded border border-border px-2 py-0 text-ui-micro leading-[1.5] font-normal text-muted-foreground aria-pressed:text-foreground focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary focus-visible:ring-0"
-        pressed={wrap}
-        onPressedChange={() => toggleWrap()}
-        aria-label="Wrap long lines"
-        title={wrap
+      <Hint
+        label={wrap
           ? "Long lines wrap — click to scroll instead"
           : "Long lines scroll — click to wrap"}
-      >Wrap</Toggle>
+      >
+        {#snippet child({ props })}
+          <Toggle
+            {...props}
+            class="h-auto shrink-0 rounded border border-border px-2 py-0 text-ui-micro leading-[1.5] font-normal text-muted-foreground aria-pressed:text-foreground focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary focus-visible:ring-0"
+            pressed={wrap}
+            onPressedChange={() => toggleWrap()}
+            aria-label="Wrap long lines"
+          >Wrap</Toggle>
+        {/snippet}
+      </Hint>
       <span class="stats ml-auto flex items-center gap-[0.4rem] text-ui-micro text-muted-foreground tabular-nums">
         <span class="stat-files">{files.length} {files.length === 1 ? "file" : "files"}</span>
         <span class="stat-adds text-[var(--app-added)]">+{model.totalAdditions}</span>

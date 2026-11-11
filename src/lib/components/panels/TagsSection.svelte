@@ -24,6 +24,7 @@
   import Icon from "$lib/components/icons/Icon.svelte";
   import { Badge } from "$lib/components/ui/badge";
   import { Button } from "$lib/components/ui/button/index.js";
+  import { Hint } from "$lib/components/ui/tooltip/index.js";
   import { Input } from "$lib/components/ui/input/index.js";
   import { Spinner } from "$lib/components/ui/spinner/index.js";
   import EmptyState from "../layout/EmptyState.svelte";
@@ -256,13 +257,17 @@
         aria-label="Tag message"
         bind:value={newMessage}
       />
-      <label
-        class="toggle flex cursor-pointer items-center gap-1 text-ui-meta text-muted-foreground"
-        title="Create a signed tag (git tag -s; requires signing config)"
-      >
-        <input type="checkbox" class="m-0 accent-primary" bind:checked={newSigned} />
-        <span>sign</span>
-      </label>
+      <Hint label="Create a signed tag (git tag -s; requires signing config)">
+        {#snippet child({ props })}
+          <label
+            {...props}
+            class="toggle flex cursor-pointer items-center gap-1 text-ui-meta text-muted-foreground"
+          >
+            <input type="checkbox" class="m-0 accent-primary" bind:checked={newSigned} />
+            <span>sign</span>
+          </label>
+        {/snippet}
+      </Hint>
       <Button
         class="h-auto rounded-full px-3 py-0.5 text-ui-meta"
         type="submit"
@@ -289,48 +294,66 @@
       <ul class="list m-0 list-none p-0 pb-2" role="list" aria-label="Tags">
         {#each list as tag (tag.name)}
           <li class="row flex items-center gap-1.5 px-2 py-0.5 text-ui-meta hover:bg-muted/60">
-            <span
-              class="tname overflow-hidden text-ellipsis whitespace-nowrap font-mono font-semibold text-foreground"
-              title={tag.message ?? tag.name}>{tag.name}</span
-            >
+            <Hint label={tag.message ?? tag.name}>
+              {#snippet child({ props })}
+                <span
+                  {...props}
+                  class="tname overflow-hidden text-ellipsis whitespace-nowrap font-mono font-semibold text-foreground"
+                  >{tag.name}</span
+                >
+              {/snippet}
+            </Hint>
             {#if tag.annotated}
               <Badge variant="outline" class="chip h-auto shrink-0 rounded-full px-1.5 py-0 text-ui-tiny text-muted-foreground"
                 >annotated</Badge
               >
             {/if}
             {#if tag.tagger}
-              <span
-                class="meta min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap text-muted-foreground"
-                title={tag.message ?? ""}>
-                {tag.tagger.name} · {formatRelativeTime(tag.tagger.time)}
-              </span>
+              {@const tagger = tag.tagger}
+              <Hint label={tag.message ?? ""}>
+                {#snippet child({ props })}
+                  <span
+                    {...props}
+                    class="meta min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap text-muted-foreground">
+                    {tagger.name} · {formatRelativeTime(tagger.time)}
+                  </span>
+                {/snippet}
+              </Hint>
             {/if}
             <span class="sha shrink-0 font-mono text-muted-foreground"
               >{tag.target.slice(0, 7)}</span
             >
             <span class="actions shrink-0">
-              <Button
-                class="relative text-muted-foreground after:absolute after:-inset-1 after:content-[''] hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-4"
-                variant="ghost"
-                size="icon-xs"
-                type="button"
-                aria-label={`Export archive of tag ${tag.name}`}
-                title="Export this tag's tree as a zip/tar archive"
-                onclick={() => void onExportArchive(tag)}
-              >
-                <Icon icon={iconExport} size={16} />
-              </Button>
-              <Button
-                class="relative text-destructive after:absolute after:-inset-1 after:content-[''] hover:bg-destructive/10 hover:text-destructive [&_svg:not([class*='size-'])]:size-4"
-                variant="ghost"
-                size="icon-xs"
-                type="button"
-                aria-label={`Delete tag ${tag.name}`}
-                title="Delete this tag"
-                onclick={() => (deleting = tag)}
-              >
-                <Icon icon={iconDelete} size={16} />
-              </Button>
+              <Hint label="Export this tag's tree as a zip/tar archive">
+                {#snippet child({ props })}
+                  <Button
+                    {...props}
+                    class="relative text-muted-foreground after:absolute after:-inset-1 after:content-[''] hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-4"
+                    variant="ghost"
+                    size="icon-xs"
+                    type="button"
+                    aria-label={`Export archive of tag ${tag.name}`}
+                    onclick={() => void onExportArchive(tag)}
+                  >
+                    <Icon icon={iconExport} size={16} />
+                  </Button>
+                {/snippet}
+              </Hint>
+              <Hint label="Delete this tag">
+                {#snippet child({ props })}
+                  <Button
+                    {...props}
+                    class="relative text-destructive after:absolute after:-inset-1 after:content-[''] hover:bg-destructive/10 hover:text-destructive [&_svg:not([class*='size-'])]:size-4"
+                    variant="ghost"
+                    size="icon-xs"
+                    type="button"
+                    aria-label={`Delete tag ${tag.name}`}
+                    onclick={() => (deleting = tag)}
+                  >
+                    <Icon icon={iconDelete} size={16} />
+                  </Button>
+                {/snippet}
+              </Hint>
             </span>
           </li>
         {/each}

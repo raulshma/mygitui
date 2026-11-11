@@ -19,6 +19,7 @@
   import { Button } from "$lib/components/ui/button/index.js";
   import { Input } from "$lib/components/ui/input/index.js";
   import { Label } from "$lib/components/ui/label/index.js";
+  import { Hint } from "$lib/components/ui/tooltip/index.js";
 
   let { repoId, showLauncher = true }: { repoId: string; showLauncher?: boolean } = $props();
 
@@ -288,7 +289,15 @@
                       ? "bg-destructive/10 text-destructive"
                       : "bg-muted text-muted-foreground")}
               >{entry.mark}</span>
-              <code class="log-sha font-mono text-primary" title={entry.sha}>{entry.sha.slice(0, 8)}</code>
+              <Hint label={entry.sha}>
+                {#snippet child({ props })}
+                  <code
+                    {...props}
+                    tabindex="-1"
+                    class="log-sha font-mono text-primary"
+                  >{entry.sha.slice(0, 8)}</code>
+                {/snippet}
+              </Hint>
               <span class="log-time ml-auto text-ui-micro text-muted-foreground">{formatDateTime(entry.at)}</span>
             </li>
           {/each}

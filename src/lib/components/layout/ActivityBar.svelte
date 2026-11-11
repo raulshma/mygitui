@@ -106,7 +106,7 @@
     morePanels.reduce((sum, panel) => sum + (badges[panel] ?? 0), 0),
   );
 
-  /** Caps runaway counts; the full number stays in the title. */
+  /** Caps runaway counts; the full number stays in the flyout label. */
   function badgeText(count: number): string {
     return count > 99 ? "99+" : String(count);
   }
@@ -166,12 +166,11 @@
       size="icon-lg"
       type="button"
       data-activity-panel={panel}
-      data-label={panelLabel(panel)}
-      aria-label={panelLabel(panel)}
-      aria-pressed={active === panel}
-      title={count > 0
+      data-label={count > 0
         ? `${panelLabel(panel)} — ${count} ${count === 1 ? "item" : "items"}`
         : panelLabel(panel)}
+      aria-label={panelLabel(panel)}
+      aria-pressed={active === panel}
       onclick={() => onSelect(panel)}
       oncontextmenu={(event) => onRailContext(event, panel)}
     >
@@ -207,7 +206,6 @@
       aria-label="More panels"
       aria-pressed={moreActive}
       aria-haspopup="menu"
-      title="More panels"
       onclick={openMoreMenu}
     >
       <Icon icon={iconMore} size={18} />
@@ -232,7 +230,6 @@
       data-label="History"
       aria-label="History"
       aria-pressed={historyActive}
-      title="History"
       disabled={historyActive && !historyCanHide}
       onclick={onHistory}
     >
@@ -257,7 +254,6 @@
       data-label={collapsed ? "Show sidebar" : "Hide sidebar"}
       aria-label={collapsed ? "Show sidebar" : "Hide sidebar"}
       aria-pressed={collapsed}
-      title={collapsed ? "Show sidebar" : "Hide sidebar"}
       disabled={!canCollapse && !collapsed}
       onclick={onToggleCollapse}
     >

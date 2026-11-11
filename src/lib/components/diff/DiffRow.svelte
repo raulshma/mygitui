@@ -30,6 +30,7 @@
   import { cachedTokens, type TokenSpan } from "$lib/diff/highlight";
   import { observeRowMeasure } from "$lib/components/diff/rowMeasure";
   import ImageCompare from "$lib/components/diff/ImageCompare.svelte";
+  import { Hint } from "$lib/components/ui/tooltip/index.js";
 
   /**
    * Gutter cell geometry, inline from diff/metrics.ts (border-box): the same
@@ -191,24 +192,37 @@
       aria-label={row.collapsed ? `Expand ${row.file.path}` : `Collapse ${row.file.path}`}
       onclick={() => onToggleCollapse?.(row.file.path)}
     ><span class="chev" aria-hidden="true">{row.collapsed ? "▸" : "▾"}</span></button>
-    <span
-      class={`fkind fk-${change} inline-flex h-[1.05rem] w-[1.05rem] shrink-0 items-center justify-center rounded-[3px] font-mono text-ui-tiny leading-none font-bold ${
-        change === "added"
-          ? "text-[var(--app-added)] bg-[var(--app-added-bg)]"
-          : change === "deleted"
-            ? "text-[var(--app-deleted)] bg-[var(--app-deleted-bg)]"
-            : change === "renamed"
-              ? "text-[var(--app-renamed)] bg-[var(--app-renamed-bg)]"
-              : "text-[var(--app-modified)] bg-[var(--app-modified-bg)]"
-      }`}
-      title={fileKindLabel(change)}
-      aria-label={fileKindLabel(change)}
-    >{fileKindLetter(change)}</span>
-    <span class="path min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap font-mono text-ui-base font-semibold" title={row.file.path}>
-      {#if row.file.old_path && row.file.old_path !== row.file.path}
-        <span class="old-path text-muted-foreground">{row.file.old_path}</span><span class="arrow text-muted-foreground" aria-hidden="true"> → </span>{row.file.path}
-      {:else}{row.file.path}{/if}
-    </span>
+    <Hint label={fileKindLabel(change)}>
+      {#snippet child({ props })}
+        <span
+          {...props}
+          tabindex="-1"
+          class={`fkind fk-${change} inline-flex h-[1.05rem] w-[1.05rem] shrink-0 items-center justify-center rounded-[3px] font-mono text-ui-tiny leading-none font-bold ${
+            change === "added"
+              ? "text-[var(--app-added)] bg-[var(--app-added-bg)]"
+              : change === "deleted"
+                ? "text-[var(--app-deleted)] bg-[var(--app-deleted-bg)]"
+                : change === "renamed"
+                  ? "text-[var(--app-renamed)] bg-[var(--app-renamed-bg)]"
+                  : "text-[var(--app-modified)] bg-[var(--app-modified-bg)]"
+          }`}
+          aria-label={fileKindLabel(change)}
+        >{fileKindLetter(change)}</span>
+      {/snippet}
+    </Hint>
+    <Hint label={row.file.path}>
+      {#snippet child({ props })}
+        <span
+          {...props}
+          tabindex="-1"
+          class="path min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap font-mono text-ui-base font-semibold"
+        >
+          {#if row.file.old_path && row.file.old_path !== row.file.path}
+            <span class="old-path text-muted-foreground">{row.file.old_path}</span><span class="arrow text-muted-foreground" aria-hidden="true"> → </span>{row.file.path}
+          {:else}{row.file.path}{/if}
+        </span>
+      {/snippet}
+    </Hint>
     {#if row.file.is_image}<span class="chip shrink-0 rounded-full border border-border px-2 text-ui-tiny leading-[1.4] uppercase tracking-[0.04em] text-muted-foreground">image</span>{/if}
     {#if row.file.binary}<span class="chip shrink-0 rounded-full border border-border px-2 text-ui-tiny leading-[1.4] uppercase tracking-[0.04em] text-muted-foreground">binary</span>{/if}
     <span class="counts flex shrink-0 gap-[0.3rem] font-mono text-ui-micro tabular-nums">
@@ -274,15 +288,19 @@
         >Discard hunk</button>
       {/if}
       {#if onExplainHunk}
-        <button
-          type="button"
-          class="explain cursor-pointer rounded-lg border border-border bg-background px-2 py-px font-sans text-ui-tiny text-[var(--app-renamed)]"
-          title="Explain this change with AI"
-          onclick={(e) => {
-            e.stopPropagation();
-            onExplainHunk?.(row.fileIndex, row.hunkIndex);
-          }}
-        >Explain</button>
+        <Hint label="Explain this change with AI">
+          {#snippet child({ props })}
+            <button
+              {...props}
+              type="button"
+              class="explain cursor-pointer rounded-lg border border-border bg-background px-2 py-px font-sans text-ui-tiny text-[var(--app-renamed)]"
+              onclick={(e) => {
+                e.stopPropagation();
+                onExplainHunk?.(row.fileIndex, row.hunkIndex);
+              }}
+            >Explain</button>
+          {/snippet}
+        </Hint>
       {/if}
     </span>
   </div>

@@ -36,6 +36,7 @@
   import { toast } from "$lib/toast";
   import { Button } from "$lib/components/ui/button/index.js";
   import { Badge } from "$lib/components/ui/badge/index.js";
+  import { Hint } from "$lib/components/ui/tooltip/index.js";
   import { OverlayLayer, overlayStack } from "$lib/state/overlays.svelte";
   import {
     applyResolutions,
@@ -429,13 +430,17 @@
 
 <div class="root flex h-full min-h-0 flex-col rounded-lg border border-border bg-background text-foreground text-ui-base">
   <header class="topbar flex flex-none items-center gap-2 border-b border-border px-2 py-1.5">
-    <Badge
-      variant="outline"
-      class="source h-auto whitespace-nowrap rounded-full border-transparent bg-primary/10 px-2 py-0.5 text-ui-micro font-semibold uppercase tracking-wider text-primary"
-      title="Operation that produced these conflicts"
-    >
-      {files[0]?.source ?? "merge"}
-    </Badge>
+    <Hint label="Operation that produced these conflicts" side="bottom">
+      {#snippet child({ props })}
+        <Badge
+          {...props}
+          variant="outline"
+          class="source h-auto whitespace-nowrap rounded-full border-transparent bg-primary/10 px-2 py-0.5 text-ui-micro font-semibold uppercase tracking-wider text-primary"
+        >
+          {files[0]?.source ?? "merge"}
+        </Badge>
+      {/snippet}
+    </Hint>
     <span
       class="progress overflow-hidden text-ellipsis whitespace-nowrap text-xs tabular-nums text-muted-foreground"
       aria-live="polite"
@@ -650,13 +655,17 @@
           >
           <span class="head-spacer flex-1"></span>
           {#if dirty}
-            <Badge
-              variant="outline"
-              class="unsaved h-auto rounded-full border-transparent bg-primary/10 px-2 py-0.5 text-ui-micro text-primary"
-              title="Choices not written yet — mark the file resolved to persist"
-            >
-              unsaved
-            </Badge>
+            <Hint label="Choices not written yet — mark the file resolved to persist" side="top">
+              {#snippet child({ props })}
+                <Badge
+                  {...props}
+                  variant="outline"
+                  class="unsaved h-auto rounded-full border-transparent bg-primary/10 px-2 py-0.5 text-ui-micro text-primary"
+                >
+                  unsaved
+                </Badge>
+              {/snippet}
+            </Hint>
           {/if}
           <Button
             variant={resolvingPath === selected.path || text === null || unresolved.length > 0 ? "outline" : "ghost"}

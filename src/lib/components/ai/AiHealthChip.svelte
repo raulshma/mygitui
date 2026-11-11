@@ -18,6 +18,7 @@
   import { isTauri } from "$lib/entry/dragdrop";
   import { emitUiEvent } from "$lib/palette/events";
   import { Button } from "$lib/components/ui/button/index.js";
+  import { Hint } from "$lib/components/ui/tooltip/index.js";
   import { onMount } from "svelte";
 
   // The supervisor is a plain Svelte-store-contract observable, not a
@@ -39,25 +40,29 @@
   let { compact = false }: { compact?: boolean } = $props();
 </script>
 
-<Button
-  variant="outline"
-  size="sm"
-  class="ai-health {view.tone} gap-[0.3rem] rounded-full text-muted-foreground {compact
-    ? 'compact'
-    : ''}"
-  type="button"
-  title={`AI: ${view.detail}`}
-  aria-label={`AI connection: ${view.label} — open AI settings`}
-  onclick={() => emitUiEvent("open-ai-settings")}
->
-  <span
-    class="dot flex-none size-2 rounded-full {view.tone === 'ok'
-      ? 'bg-[var(--app-added)]'
-      : view.tone === 'degraded'
-        ? 'bg-[var(--app-modified)]'
-        : view.tone === 'down'
-          ? 'bg-destructive'
-          : 'bg-muted-foreground'}"
-    aria-hidden="true"></span>
-  <span class="label {compact ? 'sr-only' : ''}">AI {view.label}</span>
-</Button>
+<Hint label={`AI: ${view.detail}`}>
+  {#snippet child({ props })}
+    <Button
+      variant="outline"
+      size="sm"
+      class="ai-health {view.tone} gap-[0.3rem] rounded-full text-muted-foreground {compact
+        ? 'compact'
+        : ''}"
+      type="button"
+      {...props}
+      aria-label={`AI connection: ${view.label} — open AI settings`}
+      onclick={() => emitUiEvent("open-ai-settings")}
+    >
+      <span
+        class="dot flex-none size-2 rounded-full {view.tone === 'ok'
+          ? 'bg-[var(--app-added)]'
+          : view.tone === 'degraded'
+            ? 'bg-[var(--app-modified)]'
+            : view.tone === 'down'
+              ? 'bg-destructive'
+              : 'bg-muted-foreground'}"
+        aria-hidden="true"></span>
+      <span class="label {compact ? 'sr-only' : ''}">AI {view.label}</span>
+    </Button>
+  {/snippet}
+</Hint>

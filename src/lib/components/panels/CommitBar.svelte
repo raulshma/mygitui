@@ -36,6 +36,7 @@
   import { Spinner } from "$lib/components/ui/spinner/index.js";
   import { Input } from "$lib/components/ui/input/index.js";
   import { Textarea } from "$lib/components/ui/textarea/index.js";
+  import { Hint } from "$lib/components/ui/tooltip/index.js";
   import Icon from "$lib/components/icons/Icon.svelte";
   import { ai } from "$lib/ai/ai.svelte";
   import AiFeatureButton from "$lib/components/ai/AiFeatureButton.svelte";
@@ -388,81 +389,108 @@
 >
   <div class="row-main flex flex-col gap-1 min-h-0">
     <label class="sr-only" for="commit-message">Commit message</label>
-    <Textarea
-      id="commit-message"
-      class="message flex-none w-full min-w-0 box-border field-sizing-fixed min-h-7 max-h-44 resize-none overflow-y-hidden rounded-sm px-2 py-0.5 text-xs leading-[1.35] font-mono bg-background"
-      placeholder="Commit message… Ctrl+↵"
-      title="Commit message (Ctrl+Enter commits, Ctrl+Shift+Enter commits and pushes)"
-      aria-keyshortcuts="Control+Enter Meta+Enter Control+Shift+Enter Meta+Shift+Enter"
-      rows={1}
-      bind:ref={messageEl}
-      bind:value={message}
-      onkeydown={onMessageKeydown}
-      disabled={commitBusy || committing}
-    />
+    <Hint label="Commit message (Ctrl+Enter commits, Ctrl+Shift+Enter commits and pushes)">
+      {#snippet child({ props })}
+        <Textarea
+          class="message flex-none w-full min-w-0 box-border field-sizing-fixed min-h-7 max-h-44 resize-none overflow-y-hidden rounded-sm px-2 py-0.5 text-xs leading-[1.35] font-mono bg-background"
+          placeholder="Commit message… Ctrl+↵"
+          aria-keyshortcuts="Control+Enter Meta+Enter Control+Shift+Enter Meta+Shift+Enter"
+          rows={1}
+          bind:ref={messageEl}
+          bind:value={message}
+          {...props}
+          id="commit-message"
+          onkeydown={onMessageKeydown}
+          disabled={commitBusy || committing}
+        />
+      {/snippet}
+    </Hint>
 
     <div class="controls flex items-center flex-wrap gap-x-[0.375rem] gap-y-1 w-full min-w-0">
       <div class="opt-switches flex items-center gap-0.5 min-w-0">
         {#if anyOption}
-          <span class="opt-summary shrink-0 max-w-48 overflow-hidden text-ellipsis whitespace-nowrap px-2 py-px rounded-full bg-muted text-muted-foreground text-ui-tiny leading-normal" role="status" title="Active commit options">
-            {optionSummary}
-          </span>
+          <Hint label="Active commit options">
+            {#snippet child({ props })}
+              <span class="opt-summary shrink-0 max-w-48 overflow-hidden text-ellipsis whitespace-nowrap px-2 py-px rounded-full bg-muted text-muted-foreground text-ui-tiny leading-normal" role="status" {...props}>
+                {optionSummary}
+              </span>
+            {/snippet}
+          </Hint>
         {/if}
-        <Button
-          class="text-muted-foreground hover:bg-accent hover:text-accent-foreground aria-pressed:bg-accent aria-pressed:text-accent-foreground"
-          variant="ghost"
-          size="icon-sm"
-          type="button"
-          aria-label="More commit options"
-          aria-pressed={anyOption}
-          aria-haspopup="menu"
-          title="Amend, skip hooks, or override the author"
-          onclick={openCommitOptions}
-        >
-          <Icon icon={iconOptions} size={16} />
-        </Button>
+        <Hint label="Amend, skip hooks, or override the author">
+          {#snippet child({ props })}
+            <Button
+              class="text-muted-foreground hover:bg-accent hover:text-accent-foreground aria-pressed:bg-accent aria-pressed:text-accent-foreground"
+              variant="ghost"
+              size="icon-sm"
+              type="button"
+              {...props}
+              aria-label="More commit options"
+              aria-pressed={anyOption}
+              aria-haspopup="menu"
+              onclick={openCommitOptions}
+            >
+              <Icon icon={iconOptions} size={16} />
+            </Button>
+          {/snippet}
+        </Hint>
 
         {#if signing?.active || runningHooks.length > 0}
           <span class="meta-icons inline-flex items-center gap-0.5 ml-0.5 pl-1 border-l border-border">
             {#if signing?.active}
-              <span
-                class="meta-icon sign inline-flex items-center justify-center text-foreground/80 opacity-90"
-                role="img"
-                title={signing.key_id
-                  ? `Commits will be signed with ${signing.format} (key ${signing.key_id})`
-                  : `Commits will be signed (${signing.format})`}
-                aria-label={`Signing active: ${signing.format}`}
+              {@const active = signing}
+              <Hint
+                label={active.key_id
+                  ? `Commits will be signed with ${active.format} (key ${active.key_id})`
+                  : `Commits will be signed (${active.format})`}
               >
-                <Icon icon={iconSigning} size={14} />
-              </span>
+                {#snippet child({ props })}
+                  <span
+                    class="meta-icon sign inline-flex items-center justify-center text-foreground/80 opacity-90"
+                    role="img"
+                    {...props}
+                    aria-label={`Signing active: ${active.format}`}
+                  >
+                    <Icon icon={iconSigning} size={14} />
+                  </span>
+                {/snippet}
+              </Hint>
             {/if}
             {#each runningHooks as hook (hook.kind)}
-              <span
-                class="meta-icon hook inline-flex items-center justify-center text-primary opacity-90"
-                role="img"
-                title="{hook.kind} will run on commit"
-                aria-label={`${hook.kind} hook will run`}
-              >
-                <Icon icon={iconHook} size={14} />
-              </span>
+              <Hint label={`${hook.kind} will run on commit`}>
+                {#snippet child({ props })}
+                  <span
+                    class="meta-icon hook inline-flex items-center justify-center text-primary opacity-90"
+                    role="img"
+                    {...props}
+                    aria-label={`${hook.kind} hook will run`}
+                  >
+                    <Icon icon={iconHook} size={14} />
+                  </span>
+                {/snippet}
+              </Hint>
             {/each}
           </span>
         {/if}
       </div>
 
       <div class="actions ml-auto flex items-center flex-wrap gap-1">
-        <Button
-          class={`text-[var(--app-added)] hover:bg-accent hover:text-accent-foreground ${fixing ? "[&_svg]:animate-spin" : ""}`}
-          variant="ghost"
-          size="icon-sm"
-          type="button"
-          aria-label="Fixup into HEAD"
-          title="Commit the staged changes as fixup! into HEAD (message not needed)"
-          disabled={!canFixup}
-          onclick={() => void doFixup()}
-        >
-          <Icon icon={fixing ? iconProgress : iconFixup} size={16} />
-        </Button>
+        <Hint label="Commit the staged changes as fixup! into HEAD (message not needed)">
+          {#snippet child({ props })}
+            <Button
+              class={`text-[var(--app-added)] hover:bg-accent hover:text-accent-foreground ${fixing ? "[&_svg]:animate-spin" : ""}`}
+              variant="ghost"
+              size="icon-sm"
+              type="button"
+              {...props}
+              aria-label="Fixup into HEAD"
+              disabled={!canFixup}
+              onclick={() => void doFixup()}
+            >
+              <Icon icon={fixing ? iconProgress : iconFixup} size={16} />
+            </Button>
+          {/snippet}
+        </Hint>
 
         <div class="primary inline-flex items-center gap-[0.375rem]">
           <AiFeatureButton
@@ -486,39 +514,47 @@ ${m.body}` : m.subject;
             }}
           />
 
-          <Button
-            class="h-7 gap-[0.35rem] rounded-full px-3 text-xs"
-            variant="secondary"
-            type="button"
-            title="Commit, then push the branch to the primary remote (Ctrl+Shift+Enter)"
-            aria-keyshortcuts="Control+Shift+Enter Meta+Shift+Enter"
-            aria-describedby={stagedHintId}
-            disabled={!canCommitPush}
-            onclick={() => void doCommit(true)}
-          >
-            {#if pushing || pushBusy}
-              <Spinner class="size-3" role="presentation" aria-hidden="true" />
-              <span>Pushing…</span>
-            {:else}
-              <Icon icon={iconPush} size={14} />
-              <span>Commit &amp; Push</span>
-            {/if}
-          </Button>
+          <Hint label="Commit, then push the branch to the primary remote (Ctrl+Shift+Enter)">
+            {#snippet child({ props })}
+              <Button
+                class="h-7 gap-[0.35rem] rounded-full px-3 text-xs"
+                variant="secondary"
+                type="button"
+                {...props}
+                aria-keyshortcuts="Control+Shift+Enter Meta+Shift+Enter"
+                aria-describedby={stagedHintId}
+                disabled={!canCommitPush}
+                onclick={() => void doCommit(true)}
+              >
+                {#if pushing || pushBusy}
+                  <Spinner class="size-3" role="presentation" aria-hidden="true" />
+                  <span>Pushing…</span>
+                {:else}
+                  <Icon icon={iconPush} size={14} />
+                  <span>Commit &amp; Push</span>
+                {/if}
+              </Button>
+            {/snippet}
+          </Hint>
 
-          <Button
-            class="h-7 min-w-[5.25rem] gap-[0.35rem] rounded-full px-4 text-xs"
-            type="submit"
-            title={commitHint}
-            aria-describedby={stagedHintId}
-            disabled={!canCommit}
-          >
-            {#if commitBusy || committing}
-              <Spinner class="size-3" role="presentation" aria-hidden="true" />
-              <span>Committing…</span>
-            {:else}
-              <span>Commit</span>
-            {/if}
-          </Button>
+          <Hint label={commitHint}>
+            {#snippet child({ props })}
+              <Button
+                class="h-7 min-w-[5.25rem] gap-[0.35rem] rounded-full px-4 text-xs"
+                {...props}
+                type="submit"
+                aria-describedby={stagedHintId}
+                disabled={!canCommit}
+              >
+                {#if commitBusy || committing}
+                  <Spinner class="size-3" role="presentation" aria-hidden="true" />
+                  <span>Committing…</span>
+                {:else}
+                  <span>Commit</span>
+                {/if}
+              </Button>
+            {/snippet}
+          </Hint>
         </div>
       </div>
     </div>
@@ -527,15 +563,19 @@ ${m.body}` : m.subject;
   {#if showAmendHint}
     <p id="commit-amend-hint" class="amend-hint m-0 flex items-center gap-1 text-muted-foreground text-ui-micro leading-[1.3]" role="status">
       <span class="shrink-0">Nothing staged — amend the last commit instead?</span>
-      <Button
-        class="h-auto min-w-0 rounded-full px-1.5 py-px text-ui-micro leading-[1.4] text-primary hover:bg-accent hover:text-accent-foreground"
-        variant="ghost"
-        type="button"
-        title="Fold the next change into the previous commit (amend)"
-        onclick={() => (amend = true)}
-      >
-        Amend last commit
-      </Button>
+      <Hint label="Fold the next change into the previous commit (amend)">
+        {#snippet child({ props })}
+          <Button
+            class="h-auto min-w-0 rounded-full px-1.5 py-px text-ui-micro leading-[1.4] text-primary hover:bg-accent hover:text-accent-foreground"
+            variant="ghost"
+            type="button"
+            {...props}
+            onclick={() => (amend = true)}
+          >
+            Amend last commit
+          </Button>
+        {/snippet}
+      </Hint>
     </p>
   {:else if showStagedHint}
     <p id="commit-staged-hint" class="staged-hint m-0 text-muted-foreground text-ui-micro leading-[1.3]" role="status">

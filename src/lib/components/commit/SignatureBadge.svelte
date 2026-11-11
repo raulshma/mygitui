@@ -21,6 +21,7 @@
   import { commitSignature } from "$lib/ipc/client";
   import type { CommitSignature } from "$lib/ipc/types";
   import { Badge } from "$lib/components/ui/badge/index.js";
+  import { Hint } from "$lib/components/ui/tooltip/index.js";
 
   let {
     repoId,
@@ -110,11 +111,15 @@
 </script>
 
 {#if view}
-  <Badge
-    variant="outline"
-    class={"sig-badge " + view.tone + " " + TONE_CLASS[view.tone] +
-      " h-auto flex-none items-center gap-1 rounded-full px-2 text-ui-tiny leading-[1.5] tracking-[0.02em] whitespace-nowrap select-none"}
-    title={view.title}
-    data-sha={sha}
-  >{view.label}</Badge>
+  <Hint label={view.title}>
+    {#snippet child({ props })}
+      <Badge
+        {...props}
+        variant="outline"
+        class={"sig-badge " + view.tone + " " + TONE_CLASS[view.tone] +
+          " h-auto flex-none items-center gap-1 rounded-full px-2 text-ui-tiny leading-[1.5] tracking-[0.02em] whitespace-nowrap select-none"}
+        data-sha={sha}
+      >{view.label}</Badge>
+    {/snippet}
+  </Hint>
 {/if}

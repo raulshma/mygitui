@@ -34,6 +34,7 @@
   } from "$lib/git/format";
   import { ageBackground, ageRatios } from "./blameModel";
   import { Button } from "$lib/components/ui/button/index.js";
+  import { Hint } from "$lib/components/ui/tooltip/index.js";
   import EmptyState from "../layout/EmptyState.svelte";
 
   let {
@@ -237,27 +238,37 @@
   aria-label={"Blame for " + path}
 >
   <header class="bhead flex items-baseline gap-2 border-b border-border bg-muted/50 px-2.5 py-1 text-xs">
-    <span
-      class="bpath overflow-hidden text-ellipsis whitespace-nowrap font-mono text-foreground"
-      title={path}>{path}</span
-    >
+    <Hint label={path}>
+      {#snippet child({ props })}
+        <span
+          {...props}
+          class="bpath overflow-hidden text-ellipsis whitespace-nowrap font-mono text-foreground"
+        >{path}</span>
+      {/snippet}
+    </Hint>
     {#if effectiveFrom}
       <span class="bfrom shrink-0 font-mono text-muted-foreground"
         >@ {effectiveFrom.slice(0, 8)}</span
       >
     {/if}
     {#if blameFrom.length > 0}
-      <Button
-        class="h-auto shrink-0 whitespace-nowrap rounded-full px-2 py-0 text-ui-micro font-normal text-muted-foreground"
-        variant="outline"
-        type="button"
-        title={blameFrom.length > 1
+      <Hint
+        label={blameFrom.length > 1
           ? `Back to ${blameFrom[blameFrom.length - 2].slice(0, 8)}`
           : "Back to the original revision"}
-        onclick={reblameBack}
       >
-        ← Back
-      </Button>
+        {#snippet child({ props })}
+          <Button
+            {...props}
+            class="h-auto shrink-0 whitespace-nowrap rounded-full px-2 py-0 text-ui-micro font-normal text-muted-foreground"
+            variant="outline"
+            type="button"
+            onclick={reblameBack}
+          >
+            ← Back
+          </Button>
+        {/snippet}
+      </Hint>
       {#if blameFrom.length > 1}
         <span class="bdepth shrink-0 text-ui-micro text-muted-foreground"
           >{blameFrom.length} steps</span
@@ -332,14 +343,18 @@
               style:top={`${v.idx * ROW_HEIGHT}px`}
               style:height={`${ROW_HEIGHT}px`}
             >
-              <button
-                class="bsha shrink-0 cursor-pointer border-0 bg-transparent px-1 font-mono text-xs hover:underline focus-visible:rounded-xs focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary"
-                style:color={shaColor(v.row.sha)}
-                title="Show this commit in history"
-                onclick={() => shaClick(v.row.sha)}
-              >
-                {v.row.sha.slice(0, 8)}
-              </button>
+              <Hint label="Show this commit in history">
+                {#snippet child({ props })}
+                  <button
+                    {...props}
+                    class="bsha shrink-0 cursor-pointer border-0 bg-transparent px-1 font-mono text-xs hover:underline focus-visible:rounded-xs focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary"
+                    style:color={shaColor(v.row.sha)}
+                    onclick={() => shaClick(v.row.sha)}
+                  >
+                    {v.row.sha.slice(0, 8)}
+                  </button>
+                {/snippet}
+              </Hint>
               <span class="bauthor max-w-48 shrink-0 overflow-hidden text-ellipsis text-foreground"
                 >{v.row.line?.signature.name ?? ""}</span
               >
@@ -351,28 +366,35 @@
               >
             </div>
           {:else}
-            <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-            <!-- svelte-ignore a11y_click_events_have_key_events -->
-            <div
-              class="bline group/bline absolute inset-x-0 flex cursor-pointer items-center gap-2 py-0 pl-2 pr-3 text-xs text-foreground whitespace-pre"
-              role="listitem"
-              style:top={`${v.idx * ROW_HEIGHT}px`}
-              style:height={`${ROW_HEIGHT}px`}
-              style:background={ageBackground(heat.get(v.row.sha) ?? 0)}
-              title={v.row.line
+            <Hint
+              label={v.row.line
                 ? `${v.row.line.signature.name} · ${formatDateTime(v.row.line.signature.time)} — click to blame from this commit's parent`
                 : ""}
-              onclick={() => lineClick(v.row.sha)}
             >
-              <span
-                class="bno w-12 shrink-0 select-none text-right font-mono text-muted-foreground"
-                >{v.row.line?.line_no}</span
-              >
-              <span
-                class="btext font-mono [tab-size:4] group-hover/bline:underline group-hover/bline:decoration-dotted group-hover/bline:underline-offset-3"
-                >{v.row.line?.text ?? ""}</span
-              >
-            </div>
+              {#snippet child({ props })}
+                <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+                <!-- svelte-ignore a11y_click_events_have_key_events -->
+                <div
+                  {...props}
+                  tabindex="-1"
+                  class="bline group/bline absolute inset-x-0 flex cursor-pointer items-center gap-2 py-0 pl-2 pr-3 text-xs text-foreground whitespace-pre"
+                  role="listitem"
+                  style:top={`${v.idx * ROW_HEIGHT}px`}
+                  style:height={`${ROW_HEIGHT}px`}
+                  style:background={ageBackground(heat.get(v.row.sha) ?? 0)}
+                  onclick={() => lineClick(v.row.sha)}
+                >
+                  <span
+                    class="bno w-12 shrink-0 select-none text-right font-mono text-muted-foreground"
+                    >{v.row.line?.line_no}</span
+                  >
+                  <span
+                    class="btext font-mono [tab-size:4] group-hover/bline:underline group-hover/bline:decoration-dotted group-hover/bline:underline-offset-3"
+                    >{v.row.line?.text ?? ""}</span
+                  >
+                </div>
+              {/snippet}
+            </Hint>
           {/if}
         {/each}
       </div>

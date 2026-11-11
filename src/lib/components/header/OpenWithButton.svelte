@@ -55,6 +55,7 @@
   import { contextMenu, showMenuAt } from "$lib/components/menu/contextMenuStore.svelte";
   import { appIcons } from "./appIcons";
   import { Button } from "$lib/components/ui/button/index.js";
+  import { Hint } from "$lib/components/ui/tooltip/index.js";
 
   let { root }: { root: string } = $props();
 
@@ -116,22 +117,26 @@
   role="group"
   aria-label="Open repository with an app"
 >
-  <Button
-    class="primary text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-2 focus-visible:outline-primary focus-visible:-outline-offset-2 focus-visible:ring-0"
-    variant="ghost"
-    size="icon-xs"
-    type="button"
-    disabled={!current || launching || contextMenu.open}
-    title={current ? `Open with ${current.name}` : "Detecting apps…"}
-    aria-label={current ? `Open with ${current.name}` : "Open with"}
-    onclick={() => current && openWithApp(current)}
-  >
-    {#if current}
-      <Icon icon={iconFor(current)} size={14} />
-    {:else}
-      <Icon icon={iconDescription} size={14} />
-    {/if}
-  </Button>
+  <Hint label={current ? `Open with ${current.name}` : "Detecting apps…"}>
+    {#snippet child({ props })}
+      <Button
+        class="primary text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-2 focus-visible:outline-primary focus-visible:-outline-offset-2 focus-visible:ring-0"
+        variant="ghost"
+        size="icon-xs"
+        type="button"
+        {...props}
+        disabled={!current || launching || contextMenu.open}
+        aria-label={current ? `Open with ${current.name}` : "Open with"}
+        onclick={() => current && openWithApp(current)}
+      >
+        {#if current}
+          <Icon icon={iconFor(current)} size={14} />
+        {:else}
+          <Icon icon={iconDescription} size={14} />
+        {/if}
+      </Button>
+    {/snippet}
+  </Hint>
   <Button
     class="chev border-l border-border text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-2 focus-visible:outline-primary focus-visible:-outline-offset-2 focus-visible:ring-0"
     variant="ghost"

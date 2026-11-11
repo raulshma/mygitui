@@ -67,7 +67,7 @@ describe("ActivityBar rail pins", () => {
     railPins.pin("stashes");
     render(ActivityBar, baseProps());
 
-    await fireEvent.click(screen.getByTitle("More panels"));
+    await fireEvent.click(screen.getByRole("button", { name: "More panels" }));
     const labels = contextMenu.entries.map((entry) =>
       "label" in entry ? entry.label : "",
     );
@@ -79,9 +79,11 @@ describe("ActivityBar rail pins", () => {
     const { rerender } = render(ActivityBar, baseProps());
     render(ContextMenu);
 
-    await fireEvent.click(screen.getByTitle("More panels"));
+    await fireEvent.click(screen.getByRole("button", { name: "More panels" }));
     // Entries render in `panels` order — stashes is the first pin action.
-    const pin = screen.getAllByTitle("Pin to rail")[0]!;
+    // The action button's label rides the Hint trigger's aria-label (native
+    // title= is gone), so query by accessible name.
+    const pin = screen.getAllByRole("button", { name: "Pin to rail" })[0]!;
     await fireEvent.click(pin);
     expect(railPins.pins).toEqual(["stashes"]);
     expect(contextMenu.open).toBe(false);
@@ -124,7 +126,7 @@ describe("ActivityBar rail pins", () => {
     render(ActivityBar, { ...baseProps(), onTogglePin: null });
     render(ContextMenu);
 
-    await fireEvent.click(screen.getByTitle("More panels"));
+    await fireEvent.click(screen.getByRole("button", { name: "More panels" }));
     expect(
       contextMenu.entries.some(
         (entry) => !("separator" in entry) && entry.action !== undefined,

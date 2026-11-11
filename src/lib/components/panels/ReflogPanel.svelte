@@ -19,6 +19,7 @@
   import PromptDialog from "$lib/components/safety/PromptDialog.svelte";
   import Icon from "$lib/components/icons/Icon.svelte";
   import { Button } from "$lib/components/ui/button/index.js";
+  import { Hint } from "$lib/components/ui/tooltip/index.js";
   import { Spinner } from "$lib/components/ui/spinner/index.js";
   import EmptyState from "../layout/EmptyState.svelte";
   import { appIcon } from "$lib/components/icons/library.svelte";
@@ -193,25 +194,29 @@
         <ul class="entries m-0 flex list-none flex-col p-0" role="list" aria-label={`Reflog entries for ${group.label}`}>
           {#each group.entries as entry, i (`${entry.new_sha}:${i}`)}
             <li>
-              <button
-                class="entry flex w-full cursor-pointer items-baseline gap-2 rounded-sm border-0 bg-transparent px-1.5 py-1 text-left font-[inherit] text-foreground hover:bg-muted/60 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary"
-                type="button"
-                title={`${entry.message} — click to copy ${shortSha(entry.new_sha)}`}
-                onclick={() => copySha(entry)}
-                oncontextmenu={(e) => entryMenu(e, entry)}
-              >
-                <span class="sha shrink-0 font-mono text-ui-meta text-primary"
-                  >{shortSha(entry.new_sha)}</span
-                >
-                <span class="what flex min-w-0 flex-col">
-                  <span class="message overflow-hidden text-ellipsis whitespace-nowrap"
-                    >{entry.message}</span
+              <Hint label={`${entry.message} — click to copy ${shortSha(entry.new_sha)}`}>
+                {#snippet child({ props })}
+                  <button
+                    {...props}
+                    class="entry flex w-full cursor-pointer items-baseline gap-2 rounded-sm border-0 bg-transparent px-1.5 py-1 text-left font-[inherit] text-foreground hover:bg-muted/60 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary"
+                    type="button"
+                    onclick={() => copySha(entry)}
+                    oncontextmenu={(e) => entryMenu(e, entry)}
                   >
-                  <span class="meta text-ui-micro text-muted-foreground"
-                    >{entry.signature.name} · {relativeAge(entry.signature.time)}</span
-                  >
-                </span>
-              </button>
+                    <span class="sha shrink-0 font-mono text-ui-meta text-primary"
+                      >{shortSha(entry.new_sha)}</span
+                    >
+                    <span class="what flex min-w-0 flex-col">
+                      <span class="message overflow-hidden text-ellipsis whitespace-nowrap"
+                        >{entry.message}</span
+                      >
+                      <span class="meta text-ui-micro text-muted-foreground"
+                        >{entry.signature.name} · {relativeAge(entry.signature.time)}</span
+                      >
+                    </span>
+                  </button>
+                {/snippet}
+              </Hint>
             </li>
           {/each}
         </ul>

@@ -35,6 +35,7 @@
   import { Button } from "$lib/components/ui/button/index.js";
   import { Badge } from "$lib/components/ui/badge/index.js";
   import { Input } from "$lib/components/ui/input/index.js";
+  import { Hint } from "$lib/components/ui/tooltip/index.js";
   import type { ProjectInfo, ProjectScript } from "$lib/ipc/types";
 
   let { repoId }: { repoId: string } = $props();
@@ -272,16 +273,28 @@
         <li class="project-card flex flex-col gap-[0.4rem] rounded-lg border border-border bg-card px-2 py-[0.45rem]">
           <div class="project-head flex min-w-0 flex-wrap items-baseline gap-[0.4rem]">
             <span class="project-kind flex-none text-ui-tiny font-bold uppercase tracking-[0.04em] text-primary">{projectKindLabel(project.kind)}</span>
-            <span class="project-name min-w-0 truncate text-ui-meta font-semibold" title={project.name}>{project.name}</span>
+            <Hint label={project.name}>
+              {#snippet child({ props })}
+                <span class="project-name min-w-0 truncate text-ui-meta font-semibold" {...props}>{project.name}</span>
+              {/snippet}
+            </Hint>
             {#if project.path !== "."}
-              <span class="project-path flex-none font-mono text-ui-micro text-muted-foreground" title={project.path}>{project.path}</span>
+              <Hint label={project.path}>
+                {#snippet child({ props })}
+                  <span class="project-path flex-none font-mono text-ui-micro text-muted-foreground" {...props}>{project.path}</span>
+                {/snippet}
+              </Hint>
             {/if}
-            <span
-              class="project-from ml-auto max-w-[55%] truncate text-ui-tiny text-muted-foreground opacity-75"
-              title={`Detected from ${project.detected_from.join(", ")}`}
-            >
-              {project.detected_from.join(", ")}
-            </span>
+            <Hint label={`Detected from ${project.detected_from.join(", ")}`}>
+              {#snippet child({ props })}
+                <span
+                  class="project-from ml-auto max-w-[55%] truncate text-ui-tiny text-muted-foreground opacity-75"
+                  {...props}
+                >
+                  {project.detected_from.join(", ")}
+                </span>
+              {/snippet}
+            </Hint>
           </div>
           {#if project.scripts.length === 0}
             <p class="empty m-0 text-xs text-muted-foreground">No scripts detected.</p>
@@ -311,18 +324,26 @@
                     {/if}
                   </Button>
                   <span class="script-command-row flex min-w-0 items-center gap-[0.2rem] border-t border-border pb-[0.15rem] pl-[0.4rem] pr-[0.2rem] pt-[0.15rem]">
-                    <code class="script-command min-w-0 flex-1 font-mono text-ui-tiny leading-[1.35] text-muted-foreground [overflow-wrap:anywhere]" title={script.command}>{script.command}</code>
-                    <Button
-                      variant="ghost"
-                      size="icon-xs"
-                      class="script-copy flex-none text-ui-meta leading-none text-muted-foreground opacity-55 hover:opacity-100"
-                      type="button"
-                      aria-label={`Copy command for ${script.label}`}
-                      title="Copy command"
-                      onclick={() => void copyCommand(script.command)}
-                    >
-                      ⧉
-                    </Button>
+                    <Hint label={script.command}>
+                      {#snippet child({ props })}
+                        <code class="script-command min-w-0 flex-1 font-mono text-ui-tiny leading-[1.35] text-muted-foreground [overflow-wrap:anywhere]" {...props}>{script.command}</code>
+                      {/snippet}
+                    </Hint>
+                    <Hint label="Copy command">
+                      {#snippet child({ props })}
+                        <Button
+                          variant="ghost"
+                          size="icon-xs"
+                          class="script-copy flex-none text-ui-meta leading-none text-muted-foreground opacity-55 hover:opacity-100"
+                          {...props}
+                          type="button"
+                          aria-label={`Copy command for ${script.label}`}
+                          onclick={() => void copyCommand(script.command)}
+                        >
+                          ⧉
+                        </Button>
+                      {/snippet}
+                    </Hint>
                   </span>
                 </div>
               {/each}
@@ -380,23 +401,27 @@
             </select>
             <!-- M12: shortcut capture — focus, press e.g. Ctrl+Shift+R;
                  Escape clears, blur cancels. -->
-            <Input
-              class="def-shortcut flex-[0_0_7.5rem] cursor-pointer font-mono text-ui-micro text-primary"
-              type="text"
-              readonly
-              data-shortcut-capture
-              placeholder="shortcut"
-              aria-label={`Shortcut for action ${def.name}`}
-              title="Focus and press a key combination (e.g. Ctrl+Shift+R). Escape clears."
-              value={capturingId === def.id
-                ? capturePreview || "press keys…"
-                : def.shortcut
-                  ? formatShortcut(def.shortcut)
-                  : ""}
-              onfocus={() => onCaptureFocus(def)}
-              onblur={onCaptureBlur}
-              onkeydown={(e) => onCaptureKeydown(e, def)}
-            />
+            <Hint label="Focus and press a key combination (e.g. Ctrl+Shift+R). Escape clears.">
+              {#snippet child({ props })}
+                <Input
+                  class="def-shortcut flex-[0_0_7.5rem] cursor-pointer font-mono text-ui-micro text-primary"
+                  {...props}
+                  type="text"
+                  readonly
+                  data-shortcut-capture
+                  placeholder="shortcut"
+                  aria-label={`Shortcut for action ${def.name}`}
+                  value={capturingId === def.id
+                    ? capturePreview || "press keys…"
+                    : def.shortcut
+                      ? formatShortcut(def.shortcut)
+                      : ""}
+                  onfocus={() => onCaptureFocus(def)}
+                  onblur={onCaptureBlur}
+                  onkeydown={(e) => onCaptureKeydown(e, def)}
+                />
+              {/snippet}
+            </Hint>
             <Button
               variant="default"
               size="xs"
@@ -462,21 +487,25 @@
       {#each runs as run (run.run_id)}
         <li class="run-row overflow-hidden rounded-lg border border-border transition-colors duration-100 hover:border-ring/60 hover:bg-muted/60 focus-within:border-ring/60 focus-within:bg-muted/60">
           <div class="run-head flex items-center justify-between gap-1">
-            <Button
-              variant="ghost"
-              class="run-toggle flex min-w-0 flex-1 cursor-pointer items-center justify-start gap-2 rounded-none px-2 py-[0.4rem] text-left font-normal"
-              type="button"
-              title="Show this run's log in the editor"
-              onclick={() => openRun(run.run_id)}
-            >
-              <Badge
-                variant="outline"
-                class={`chip chip-${run.status} h-auto flex-none rounded-full border-transparent px-2 py-px text-ui-micro font-semibold ${run.status === "running" ? "bg-secondary text-secondary-foreground" : run.status === "success" ? "bg-primary/15 text-primary" : run.status === "cancelled" ? "bg-muted text-muted-foreground" : "bg-destructive/10 text-destructive"}`}
-              >
-                {runStatusLabel(run.status, run.exit_code)}
-              </Badge>
-              <span class="run-name truncate">{run.name}</span>
-            </Button>
+            <Hint label="Show this run's log in the editor">
+              {#snippet child({ props })}
+                <Button
+                  variant="ghost"
+                  class="run-toggle flex min-w-0 flex-1 cursor-pointer items-center justify-start gap-2 rounded-none px-2 py-[0.4rem] text-left font-normal"
+                  {...props}
+                  type="button"
+                  onclick={() => openRun(run.run_id)}
+                >
+                  <Badge
+                    variant="outline"
+                    class={`chip chip-${run.status} h-auto flex-none rounded-full border-transparent px-2 py-px text-ui-micro font-semibold ${run.status === "running" ? "bg-secondary text-secondary-foreground" : run.status === "success" ? "bg-primary/15 text-primary" : run.status === "cancelled" ? "bg-muted text-muted-foreground" : "bg-destructive/10 text-destructive"}`}
+                  >
+                    {runStatusLabel(run.status, run.exit_code)}
+                  </Badge>
+                  <span class="run-name truncate">{run.name}</span>
+                </Button>
+              {/snippet}
+            </Hint>
             {#if !run.done}
               <Button
                 variant="destructive"

@@ -25,6 +25,7 @@
   import { isTauri } from "$lib/entry/dragdrop";
   import { floating } from "$lib/components/overlay/floating";
   import { Button } from "$lib/components/ui/button/index.js";
+  import { Hint } from "$lib/components/ui/tooltip/index.js";
   import {
     branchColorStore,
     type BranchColorRule,
@@ -148,36 +149,48 @@
           if (e.key === "Enter") applyAuthorFilter();
         }}
       />
-      <Button
-        class="h-auto whitespace-nowrap rounded-sm px-2 py-px text-ui-tiny font-normal"
-        variant="secondary"
-        type="button"
-        title="Clear the author filter"
-        onclick={clearAuthorFilter}
-      >
-        All authors
-      </Button>
+      <Hint label="Clear the author filter">
+        {#snippet child({ props })}
+          <Button
+            {...props}
+            class="h-auto whitespace-nowrap rounded-sm px-2 py-px text-ui-tiny font-normal"
+            variant="secondary"
+            type="button"
+            onclick={clearAuthorFilter}
+          >
+            All authors
+          </Button>
+        {/snippet}
+      </Hint>
       <span class="spacer flex-1"></span>
-      <Button
-        class="h-auto whitespace-nowrap rounded-sm px-2 py-px text-ui-tiny font-normal"
-        variant="secondary"
-        type="button"
-        bind:ref={colorsButton}
-        aria-expanded={colorsOpen}
-        title="Branch color rules (applied to the commit graph)"
-        onclick={() => (colorsOpen = !colorsOpen)}
-      >
-        Colors…
-      </Button>
-      <Button
-        class="h-auto whitespace-nowrap rounded-sm px-2 py-px text-ui-tiny font-normal"
-        variant="secondary"
-        type="button"
-        title="Refresh stats"
-        onclick={refresh}
-      >
-        ↻
-      </Button>
+      <Hint label="Branch color rules (applied to the commit graph)">
+        {#snippet child({ props })}
+          <Button
+            {...props}
+            class="h-auto whitespace-nowrap rounded-sm px-2 py-px text-ui-tiny font-normal"
+            variant="secondary"
+            type="button"
+            bind:ref={colorsButton}
+            aria-expanded={colorsOpen}
+            onclick={() => (colorsOpen = !colorsOpen)}
+          >
+            Colors…
+          </Button>
+        {/snippet}
+      </Hint>
+      <Hint label="Refresh stats">
+        {#snippet child({ props })}
+          <Button
+            {...props}
+            class="h-auto whitespace-nowrap rounded-sm px-2 py-px text-ui-tiny font-normal"
+            variant="secondary"
+            type="button"
+            onclick={refresh}
+          >
+            ↻
+          </Button>
+        {/snippet}
+      </Hint>
     </header>
 
     {#if error}
@@ -233,12 +246,17 @@
               <tr>
                 {#each grid.weeks as column, week (week)}
                   {@const cell = column[dow]}
-                  <td
-                    class="cell h-[11px] w-[11px] min-w-[11px] rounded-[2px]"
-                    aria-label={cell ? cellLabel(cell.day, cell.count) : "No commits"}
-                    title={cell ? cellLabel(cell.day, cell.count) : ""}
-                    style:background={cell ? levelBackground(cell.level) : "transparent"}
-                  ></td>
+                  <Hint label={cell ? cellLabel(cell.day, cell.count) : ""}>
+                    {#snippet child({ props })}
+                      <td
+                        {...props}
+                        tabindex="-1"
+                        class="cell h-[11px] w-[11px] min-w-[11px] rounded-[2px]"
+                        aria-label={cell ? cellLabel(cell.day, cell.count) : "No commits"}
+                        style:background={cell ? levelBackground(cell.level) : "transparent"}
+                      ></td>
+                    {/snippet}
+                  </Hint>
                 {/each}
               </tr>
             {/each}
@@ -262,7 +280,11 @@
           <ul class="contributor-list m-0 flex list-none flex-col gap-[3px] p-0">
             {#each contributors as c (c.name + c.email)}
               <li class="contributor grid grid-cols-[minmax(6rem,10rem)_1fr_2.5rem_auto] items-center gap-2">
-                <span class="cname overflow-hidden text-ellipsis whitespace-nowrap" title={c.email}>{c.name}</span>
+                <Hint label={c.email}>
+                  {#snippet child({ props })}
+                    <span {...props} class="cname overflow-hidden text-ellipsis whitespace-nowrap">{c.name}</span>
+                  {/snippet}
+                </Hint>
                 <span class="cbar-wrap h-2 overflow-hidden rounded bg-muted" aria-hidden="true">
                   <span
                     class="cbar block h-full rounded bg-primary"

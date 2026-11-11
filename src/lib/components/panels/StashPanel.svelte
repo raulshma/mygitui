@@ -26,6 +26,7 @@
   import { showMenuAtElement } from "$lib/components/menu/contextMenuStore.svelte";
   import Icon from "$lib/components/icons/Icon.svelte";
   import { Button } from "$lib/components/ui/button/index.js";
+  import { Hint } from "$lib/components/ui/tooltip/index.js";
   import { Input } from "$lib/components/ui/input/index.js";
   import { appIcon } from "$lib/components/icons/library.svelte";
 
@@ -315,20 +316,28 @@
         onMessage={(suggested) => (message = suggested)}
       />
       <div class="opts flex items-center gap-2.5">
-        <label
-          class="toggle flex cursor-pointer items-center gap-1 whitespace-nowrap text-ui-micro text-muted-foreground"
-          title="Keep changes already staged in the index"
-        >
-          <input type="checkbox" class="m-0 accent-primary" bind:checked={keepIndex} />
-          <span>keep-index</span>
-        </label>
-        <label
-          class="toggle flex cursor-pointer items-center gap-1 whitespace-nowrap text-ui-micro text-muted-foreground"
-          title="Also stash untracked files"
-        >
-          <input type="checkbox" class="m-0 accent-primary" bind:checked={includeUntracked} />
-          <span>include-untracked</span>
-        </label>
+        <Hint label="Keep changes already staged in the index">
+          {#snippet child({ props })}
+            <label
+              class="toggle flex cursor-pointer items-center gap-1 whitespace-nowrap text-ui-micro text-muted-foreground"
+              {...props}
+            >
+              <input type="checkbox" class="m-0 accent-primary" bind:checked={keepIndex} />
+              <span>keep-index</span>
+            </label>
+          {/snippet}
+        </Hint>
+        <Hint label="Also stash untracked files">
+          {#snippet child({ props })}
+            <label
+              class="toggle flex cursor-pointer items-center gap-1 whitespace-nowrap text-ui-micro text-muted-foreground"
+              {...props}
+            >
+              <input type="checkbox" class="m-0 accent-primary" bind:checked={includeUntracked} />
+              <span>include-untracked</span>
+            </label>
+          {/snippet}
+        </Hint>
       </div>
       <Button
         class="h-auto shrink-0 rounded-full px-3 py-0.5 text-ui-meta"
@@ -348,7 +357,11 @@
         <li class="card flex flex-col gap-1 rounded-lg border border-border bg-card px-2 py-1.5">
           <div class="row flex min-w-0 items-baseline gap-2">
             <span class="ref shrink-0 font-mono text-ui-micro font-semibold text-primary">{stashRef(info)}</span>
-            <span class="msg min-w-0 flex-1 truncate" title={info.message}>{info.message}</span>
+            <Hint label={info.message}>
+              {#snippet child({ props })}
+                <span class="msg min-w-0 flex-1 truncate" {...props}>{info.message}</span>
+              {/snippet}
+            </Hint>
           </div>
           <div class="meta flex items-center gap-2.5 text-ui-micro text-muted-foreground">
             <span class="sha font-mono">{shortSha(info.sha)}</span>
@@ -453,9 +466,13 @@
       {#if p}
         <h2 id="stash-preview-title" class="sdlg-title title flex items-baseline gap-2">
           {stashRef(p.info)}
-          <span class="min-w-0 flex-1 truncate text-ui-base font-normal text-muted-foreground" title={p.info.message}>
-            {p.info.message}
-          </span>
+          <Hint label={p.info.message}>
+            {#snippet child({ props })}
+              <span class="min-w-0 flex-1 truncate text-ui-base font-normal text-muted-foreground" {...props}>
+                {p.info.message}
+              </span>
+            {/snippet}
+          </Hint>
         </h2>
         <div class="preview-body max-h-[60vh] min-h-24 overflow-y-auto rounded border border-border bg-card">
           {#if p.error}

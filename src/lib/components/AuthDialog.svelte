@@ -16,6 +16,7 @@
   import { Label } from "$lib/components/ui/label/index.js";
   import { Checkbox } from "$lib/components/ui/checkbox/index.js";
   import { Button } from "$lib/components/ui/button/index.js";
+  import { Hint } from "$lib/components/ui/tooltip/index.js";
 
   const request = $derived(authStore.pending);
   const isPassphrase = $derived(request?.kind === "ssh-passphrase");
@@ -74,12 +75,17 @@
         {request?.prompt}
       </Dialog.Description>
     </Dialog.Header>
-    <p
-      class="meta text-muted-foreground truncate font-mono text-ui-meta"
-      title={request?.url}
-    >
-      {request?.url}
-    </p>
+    <Hint label={request?.url ?? ""}>
+      {#snippet child({ props })}
+        <p
+          {...props}
+          tabindex="-1"
+          class="meta text-muted-foreground truncate font-mono text-ui-meta"
+        >
+          {request?.url}
+        </p>
+      {/snippet}
+    </Hint>
 
     <form
       class="flex flex-col gap-3"
