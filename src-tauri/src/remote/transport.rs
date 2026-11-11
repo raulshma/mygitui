@@ -34,6 +34,7 @@ use super::prompts::{
     self, describe_host_key, DeviceAuthRequestEvent, HostKeyRequestEvent, KIND_DEVICE_PASSWORD,
     KIND_SSH_PASSPHRASE,
 };
+use super::quoting::shell_quote;
 
 /// Hard cap on a single dial (TCP + KEX + auth).
 pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
@@ -826,16 +827,41 @@ impl DeviceSession {
 
     /// Open an interactive shell channel (terminal panel). The channel is
     /// owned by the caller; dropping it closes the remote shell.
-    pub async fn shell(&self, rows: u32, cols: u32) -> Result<Channel<russh::client::Msg>, String> {
+    ///
+    /// `cwd` starts the shell in that directory (the repo root on the
+    /// device): after the pty request the channel execs
+    /// `cd <cwd> && exec "${SHELL:-/bin/sh}"` instead of a plain shell
+    /// request — the SSH server would otherwise start the shell in the
+    /// user's home dir. The exec command runs under the remote user's
+    /// login shell, so `$SHELL` expands there; the fallback covers login
+    /// shells that don't export it. `cwd` MUST pass through
+    /// [`shell_quote`] (paths with spaces/metacharacters).
+    pub async fn shell(
+        &self,
+        rows: u32,
+        cols: u32,
+        cwd: Option<&str>,
+    ) -> Result<Channel<russh::client::Msg>, String> {
         let channel = self.open_session_channel().await?;
         channel
             .request_pty(true, "xterm-256color", cols, rows, 0, 0, &[])
             .await
             .map_err(|e| format!("pty request failed: {e}"))?;
-        channel
-            .request_shell(true)
-            .await
-            .map_err(|e| format!("shell request failed: {e}"))?;
+        match cwd {
+            None => {
+                channel
+                    .request_shell(true)
+                    .await
+                    .map_err(|e| format!("shell request failed: {e}"))?;
+            }
+            Some(dir) => {
+                let cmd = format!("cd {} && exec \"${{SHELL:-/bin/sh}}\"", shell_quote(dir));
+                channel
+                    .exec(true, cmd.as_bytes().to_vec())
+                    .await
+                    .map_err(|e| format!("shell request failed: {e}"))?;
+            }
+        }
         Ok(channel)
     }
 

@@ -779,7 +779,7 @@ interpolated path/ref passes the unit-tested POSIX quoting helper
 | `device_scan_repos` | `device_id, root?` (default home) | `DeviceRepoCandidate[]` | depth-limited `.git` scan, dependency/build dirs skipped, capped 200 |
 | `remote_repo_open` | `device_id, path` | `RepoInfo` (`device_id` set) | opens the remote repo as a project tab; starts the poller |
 | `remote_poll_set_paused` | `paused: bool` | `void` | pause/resume every remote repo poller (FE mirrors `visibilitychange` — polling is "paused when tab hidden") |
-| `rshell_create` | `repo_id, rows?, cols?` | `session_id: string` | remote shell over a pty'd exec channel (remote project required) |
+| `rshell_create` | `repo_id, rows?, cols?` | `session_id: string` | remote shell over a pty'd exec channel (remote project required); the shell starts in the repo root on the device (the channel execs `cd <root> && exec "${SHELL:-/bin/sh}"` after the pty request instead of a plain shell request) |
 | `rshell_write` | `session_id, data: string` | `void` | keystrokes/paste to the remote shell |
 | `rshell_resize` | `session_id, rows: u16, cols: u16` | `void` | pty window-change |
 | `rshell_kill` | `session_id` | `void` | closes the channel (remote shell dies) |
@@ -813,5 +813,8 @@ backend-side before emission.
 | `device-auth-request` | `{ request_id, device_id, kind: "device-password" \| "ssh-passphrase", prompt }` | missing credential prompt; answered via `device_auth_respond`; backend waits up to 120 s |
 
 `rshell_*` sessions reuse the local `pty-output` / `pty-exit` events,
-keyed by the `rshell_create` session id. Remote action runs reuse
+keyed by the `rshell_create` session id. The shell starts in the repo's
+workdir on the device (`remote.root`, quoted via `remote/quoting.rs`) so
+`rshell_write` keystrokes land in a shell already at the repo root —
+mirroring the local PTY, which starts in the repo dir. Remote action runs reuse
 `action_run` / `action_cancel` and stream `action-output` (M4 contract).

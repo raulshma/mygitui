@@ -154,7 +154,11 @@ impl RegistryInner {
 }
 
 impl RemoteShellRegistry {
-    /// Create a shell session on the device behind `repo_id`.
+    /// Create a shell session on the device behind `repo_id`. The shell
+    /// starts in the repo's workdir on the device (`remote.root`), not in
+    /// the device user's home dir — the channel execs
+    /// `cd <root> && exec $SHELL` after the pty request (see
+    /// `DeviceSession::shell`).
     #[allow(clippy::too_many_arguments)]
     pub fn create(
         &self,
@@ -165,12 +169,11 @@ impl RemoteShellRegistry {
         sink: Arc<dyn ShellSink>,
     ) -> Result<String, String> {
         self.inner.ensure_slot()?;
-        let channel = tauri::async_runtime::block_on(
-            remote
-                .git()
-                .session
-                .shell(rows.max(1) as u32, cols.max(1) as u32),
-        )?;
+        let channel = tauri::async_runtime::block_on(remote.git().session.shell(
+            rows.max(1) as u32,
+            cols.max(1) as u32,
+            Some(&remote.root),
+        ))?;
         let (mut read_half, write_half) = channel.split();
         let id = format!(
             "rshell-{:x}",
