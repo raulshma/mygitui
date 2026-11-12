@@ -180,6 +180,7 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
   } = $props();
 
   const iconHistory = $derived(appIcon("history")!);
+  const iconCloud = $derived(appIcon("cloud")!);
   const iconBisect = $derived(appIcon("alt-route")!);
   const iconSaveLayout = $derived(appIcon("save")!);
   const iconTerminal = $derived(appIcon("terminal")!);
@@ -1594,7 +1595,7 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
   bind:this={workspaceEl}
 >
   <header
-    class="repo-header flex min-w-0 flex-none flex-wrap items-center gap-x-2 gap-y-1.5 border-b border-border bg-popover px-2.5 py-1 text-ui-base"
+    class="repo-header flex min-w-0 flex-none flex-wrap items-center gap-x-2 gap-y-1 border-b border-border bg-popover px-2.5 py-0.5 text-ui-base"
   >
     <span class="repo-identity flex min-w-0 flex-1 items-center gap-ui-4">
       <Hint label={name}>
@@ -1606,13 +1607,15 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
         {/snippet}
       </Hint>
       {#if remoteStatus}
-        <!-- Remote repository: connection chip fed by the devices store. -->
+        <!-- Remote repository: connection chip fed by the devices store. The
+             cloud glyph marks the repo itself as remote; its tint carries
+             the live status (label spells it out). -->
         <Hint
           label={remoteStatus === "connected"
-            ? "Device connected"
+            ? "Remote repository — device connected"
             : remoteStatus === "connecting"
-              ? "Device connecting…"
-              : "Device offline"}
+              ? "Remote repository — device connecting…"
+              : "Remote repository — device offline"}
         >
           {#snippet child({ props })}
             <Badge
@@ -1622,9 +1625,11 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
               data-status={remoteStatus}
             >
               <span
-                class="remote-dot h-[0.45rem] w-[0.45rem] flex-none rounded-full {remoteStatus === 'connected' ? 'bg-primary' : remoteStatus === 'connecting' ? 'bg-muted-foreground' : 'bg-border'}"
+                class="remote-icon inline-flex flex-none items-center justify-center {remoteStatus === 'connected' ? 'text-primary' : remoteStatus === 'connecting' ? 'text-muted-foreground' : 'opacity-50'}"
                 aria-hidden="true"
-              ></span>
+              >
+                <Icon icon={iconCloud} size={12} />
+              </span>
               <span class="remote-label">
                 {remoteStatus === "connected"
                   ? "connected"

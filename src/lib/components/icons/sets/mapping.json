@@ -148,6 +148,13 @@
     "phosphor": "x",
     "ri": "close-line"
   },
+  "cloud": {
+    "lucide": "cloud",
+    "tabler": "cloud",
+    "hugeicons": "cloud",
+    "phosphor": "cloud",
+    "ri": "cloud-line"
+  },
   "cloud-download": {
     "lucide": "cloud-download",
     "tabler": "cloud-download",

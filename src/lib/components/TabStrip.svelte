@@ -8,10 +8,15 @@
    * active tab is tab-reachable (tabindex 0), the rest are programmatic
    * (tabindex -1). Arrow/Home/End keys move focus; Enter/Space activate the
    * focused tab (native button behavior routes through `setActive`).
-   * Middle-click (auxclick button 1) closes a tab, as does its close button;
-   * right-click opens the shared context menu (close variants + path
-   * utilities) through the global context-menu store.
-   *
+ * Middle-click (auxclick button 1) closes a tab, as does its close button;
+ * right-click opens the shared context menu (close variants + path
+ * utilities) through the global context-menu store.
+ *
+ * Remote tabs (`deviceId` set) lead with a small cloud glyph — dimmed while
+ * the device is offline (`remoteDevices.statusOf`, unknown ids report
+ * "disconnected") — so a repository living on another machine is
+ * identifiable at a glance; the tooltip's `ssh://` root says the same.
+ *
    * Drag-to-reorder (mouse only, HTML5 dnd — the RebasePlanner idiom, no
    * libraries): the tab label is `draggable`; dragging it over another tab
    * shows an insertion bar on the side of the hovered tab label's midpoint
@@ -42,6 +47,7 @@
     type Tab,
   } from "$lib/stores/tabs.svelte";
   import { showMenuAt, type MenuEntry } from "$lib/components/menu/contextMenuStore.svelte";
+  import { remoteDevices } from "$lib/stores/remoteDevices.svelte";
   import { isTauri } from "$lib/entry/dragdrop";
   import { revealItemInDir } from "@tauri-apps/plugin-opener";
   import { describeError } from "$lib/errors";
@@ -63,6 +69,7 @@
   } = $props();
 
   const iconHome = $derived(appIcon("home-rounded")!);
+  const iconCloud = $derived(appIcon("cloud")!);
 
   let strip: HTMLDivElement | undefined = $state();
   let overflowLeft = $state(false);
@@ -334,7 +341,7 @@
     {/snippet}
   </Hint>
   <div
-    class="tabstrip flex min-w-0 flex-1 items-stretch gap-0.5 overflow-x-auto px-2 pt-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+    class="tabstrip flex min-w-0 flex-1 items-stretch gap-0.5 overflow-x-auto px-2 pt-0.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
     role="tablist"
     aria-label="Open repositories"
     tabindex="-1"
@@ -346,6 +353,8 @@
     {#each tabStore.tabs as tab, index (tab.id)}
       {@const isActive = tab.id === tabStore.activeId}
       {@const dropping = dropTargetId === tab.id && dragTabId !== null}
+      {@const deviceConnected =
+        tab.deviceId !== null && remoteDevices.statusOf(tab.deviceId) === "connected"}
       <!-- Dragover/drop live on the tab cell (label + close area both accept
            a drop); dragstart only from the label — the close button stays a
            plain click target. -->
@@ -373,7 +382,7 @@
         <Hint label={tab.root} side="bottom">
           {#snippet child({ props })}
             <button
-              class="tab-main min-w-0 cursor-pointer select-none overflow-hidden text-ellipsis whitespace-nowrap rounded-t-lg border-0 bg-transparent py-2 pl-3.5 pr-1 text-sm font-medium text-muted-foreground outline-none focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring"
+              class="tab-main flex min-w-0 cursor-pointer select-none items-center gap-1 overflow-hidden text-ellipsis whitespace-nowrap rounded-t-lg border-0 bg-transparent py-1 pl-3.5 pr-1 text-sm font-medium text-muted-foreground outline-none focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring"
               class:text-primary={isActive}
               type="button"
               role="tab"
@@ -393,7 +402,18 @@
                 if (event.button === 1) event.preventDefault();
               }}
             >
-              <span class="name block overflow-hidden text-ellipsis whitespace-nowrap">{tab.name}</span>
+              {#if tab.deviceId !== null}
+                <!-- Remote repository: the cloud marks tabs living on a
+                     device; dimmed while that device is not connected
+                     (unknown ids report "disconnected"). -->
+                <span
+                  class="remote-mark inline-flex flex-none items-center justify-center text-muted-foreground {deviceConnected ? '' : 'opacity-50'}"
+                  aria-hidden="true"
+                >
+                  <Icon icon={iconCloud} size={13} />
+                </span>
+              {/if}
+              <span class="name block min-w-0 overflow-hidden text-ellipsis whitespace-nowrap">{tab.name}</span>
             </button>
           {/snippet}
         </Hint>
@@ -431,6 +451,6 @@
   </div>
 
   {#if trailing}
-    <div class="tabbar-trailing m-1 flex flex-none items-center gap-1 border-l border-border px-2">{@render trailing()}</div>
+    <div class="tabbar-trailing m-0.5 flex flex-none items-center gap-1 border-l border-border px-2">{@render trailing()}</div>
   {/if}
 </div>

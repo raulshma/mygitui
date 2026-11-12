@@ -21,6 +21,7 @@ import iconChevronRight from "@ktibow/iconset-material-symbols/chevron-right";
 import iconCircle from "@ktibow/iconset-material-symbols/circle";
 import iconCleaningServices from "@ktibow/iconset-material-symbols/cleaning-services";
 import iconClose from "@ktibow/iconset-material-symbols/close";
+import iconCloud from "@ktibow/iconset-material-symbols/cloud";
 import iconCloudDownload from "@ktibow/iconset-material-symbols/cloud-download";
 import iconCloudUpload from "@ktibow/iconset-material-symbols/cloud-upload";
 import iconCompareArrows from "@ktibow/iconset-material-symbols/compare-arrows";
@@ -103,6 +104,7 @@ export const MATERIAL_SYMBOLS_ICONS: Record<string, IconifyIcon> = {
 	"circle": iconCircle,
 	"cleaning-services": iconCleaningServices,
 	"close": iconClose,
+	"cloud": iconCloud,
 	"cloud-download": iconCloudDownload,
 	"cloud-upload": iconCloudUpload,
 	"compare-arrows": iconCompareArrows,
