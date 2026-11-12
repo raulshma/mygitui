@@ -22,9 +22,11 @@
 	 * </Hint>
 	 * ```
 	 *
-	 * `props` carries the trigger behavior plus `aria-label={label}`;
-	 * attributes written after the spread (e.g. your own `aria-label`)
-	 * win. Dynamic labels are fine: `label={cond ? "A" : "B"}`.
+	 * `props` carries the trigger behavior (`id`, `tabindex`, `type`,
+	 * pointer/focus handlers, state data-attrs). If your trigger is
+	 * icon-only, give it an `aria-label` yourself — the hint text is NOT
+	 * injected as a name (it would shadow text buttons). Dynamic labels are
+	 * fine: `label={cond ? "A" : "B"}`.
 	 *
 	 * **Lazy mounting**: virtualized lists (history rows, blame lines,
 	 * file lists) render a Hint per row — mounting the full bits-ui stack
@@ -38,7 +40,7 @@
 		label,
 		side = "bottom",
 		delayDuration,
-		child,
+		child: children,
 		...restProps
 	}: TooltipPrimitive.RootProps & {
 		/** Tooltip text; also merged into the trigger as `aria-label`. */
@@ -115,10 +117,51 @@
 		}
 	}
 
+	/**
+	 * Accessible-name sync. The hint doubles as the name ONLY for icon-only
+	 * triggers that carry no name of their own — injected AFTER mount by the
+	 * capture action (marked with `data-hint-named` so later label changes
+	 * stay in sync). Injecting via the spread props instead would shadow
+	 * every text button ("Commit", "Unified"…) with the hint sentence — per
+	 * ARIA an `aria-label` beats the visible text — and would clobber
+	 * consumer-written labels. Consumer-named triggers are never touched;
+	 * symbol glyphs (×, →) don't count as visible text.
+	 */
+	let triggerEl: HTMLElement | null = null;
+
+	function syncName(): void {
+		const el = triggerEl;
+		if (!el || !("dataset" in el)) return;
+		if (el.dataset.hintNamed === "1") {
+			// Ours from a previous sync — follow dynamic label changes.
+			if (empty) {
+				el.removeAttribute("aria-label");
+				delete el.dataset.hintNamed;
+			} else {
+				el.setAttribute("aria-label", label);
+			}
+			return;
+		}
+		if (empty || el.hasAttribute("aria-label")) return; // consumer named it
+		if (/[\p{L}\p{N}]/u.test(el.textContent ?? "")) return; // text names it
+		// Icon-only and unnamed: the hint doubles as the accessible name.
+		el.setAttribute("aria-label", label);
+		el.dataset.hintNamed = "1";
+	}
+
+	function captureTrigger(el: HTMLElement): void {
+		triggerEl = el.firstElementChild as HTMLElement | null;
+		syncName();
+	}
+
+	$effect(() => {
+		void label; // track: a dynamic hint re-evaluates the injected name
+		syncName();
+	});
+
 	/** Idle-phase props: shape-compatible with the real trigger props. */
 	const idleProps = $derived({
 		type: "button",
-		"aria-label": empty ? undefined : label,
 		onpointerenter: (event: Event) => armEnter(event.currentTarget),
 		onpointerleave: () => disarm(),
 		onfocus: () => armEnter(null),
@@ -130,11 +173,10 @@
 	Spread `props` FIRST and write your own attributes AFTER it: `props`
 	carries the trigger's `id`, `tabindex`, `type="button"`, `disabled`,
 	state data-attrs and pointer/focus/click handlers, and a later
-	attribute overrides the spread. On triggers with visible text, write
-	`aria-label` after the spread to keep the visible label as the
-	accessible name (the Hint label is otherwise merged as aria-label for
-	icon-only elements, and the tooltip itself is wired up as
-	aria-describedby while open).
+	attribute overrides the spread. The hint text is wired to the trigger
+	as `aria-describedby` while the pill is open; for icon-only triggers,
+	write your own `aria-label` — the hint never injects one (it would
+	shadow the visible-text names of labeled buttons).
 -->
 
 {#if armed}
@@ -156,10 +198,18 @@
 			disabled={empty}
 			{...restProps}
 		>
-			<TooltipPrimitive.Trigger aria-label={empty ? undefined : label} {child} />
+			<TooltipPrimitive.Trigger>
+				{#snippet child({ props })}
+					<span class="hint-trigger-scope" style="display: contents" use:captureTrigger>
+						{@render children({ props })}
+					</span>
+				{/snippet}
+			</TooltipPrimitive.Trigger>
 			<Content {side} sideOffset={6}>{label}</Content>
 		</TooltipPrimitive.Root>
 	</Provider>
 {:else}
-	{@render child({ props: idleProps })}
+	<span class="hint-trigger-scope" style="display: contents" use:captureTrigger>
+		{@render children({ props: idleProps })}
+	</span>
 {/if}

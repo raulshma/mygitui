@@ -491,6 +491,7 @@
       variant="secondary"
       type="button"
       {...props}
+      aria-label="Switch branch"
       aria-haspopup="dialog"
       aria-expanded={open}
       onclick={toggle}

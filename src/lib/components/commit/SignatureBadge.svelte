@@ -115,6 +115,7 @@
     {#snippet child({ props })}
       <Badge
         {...props}
+        aria-label={view.title}
         variant="outline"
         class={"sig-badge " + view.tone + " " + TONE_CLASS[view.tone] +
           " h-auto flex-none items-center gap-1 rounded-full px-2 text-ui-tiny leading-[1.5] tracking-[0.02em] whitespace-nowrap select-none"}

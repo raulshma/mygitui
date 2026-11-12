@@ -351,6 +351,7 @@
           variant="ghost"
           data-sync-pin={verb}
           {...props}
+          aria-label={pinTitle(verb)}
           aria-busy={runningVerb === verb}
           disabled={busy || (verb !== "fetch" && !canUseBranch)}
           onclick={() => void run(verb)}

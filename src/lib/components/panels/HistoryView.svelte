@@ -417,7 +417,13 @@
   // -- derived ----------------------------------------------------------------------
 
   const commits = $derived(store.flat.commits);
-  const total = $derived(commits.length);
+  // `total`/`visible` read THROUGH the flat wrapper, not through `commits`:
+  // the wrapper object changes identity on every release, while the inner
+  // array does not (LogIndex mutates in place) — a derived re-exposing the
+  // same array is equality-skipped by the graph, which left the list empty
+  // after a stream restart whose render window landed back on the same
+  // value (the header updated; the rows never re-rendered).
+  const total = $derived.by(() => store.flat.commits.length);
   const selectedIdx = $derived.by(() => {
     void store.flat; // re-resolve after stream restarts reset the index
     return selectedSha ? store.indexOfSha(selectedSha) : -1;
@@ -434,11 +440,12 @@
   );
 
   const visible = $derived.by(() => {
+    const current = store.flat.commits;
     const start = Math.max(0, Math.min(range.start, total));
     const end = Math.max(start, Math.min(range.end, total));
     const out: Array<{ commit: CommitInfo; idx: number }> = [];
     for (let i = start; i < end; i++) {
-      const commit = commits[i];
+      const commit = current[i];
       if (commit) out.push({ commit, idx: i });
     }
     return out;
