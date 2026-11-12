@@ -38,7 +38,7 @@
   import { Hint } from "$lib/components/ui/tooltip/index.js";
   import type { ProjectInfo, ProjectScript } from "$lib/ipc/types";
 
-  let { repoId }: { repoId: string } = $props();
+  let { repoId, root }: { repoId: string; root: string } = $props();
 
   // The panel is the primary mount of the store's event subscription
   // (idempotent; other consumers get the same stream).
@@ -67,7 +67,7 @@
     void repoId;
     const platform = detectPlatform();
     const handler = (event: KeyboardEvent): void => {
-      const def = defForEvent(event, actionsStore.defsFor(repoId), platform);
+      const def = defForEvent(event, actionsStore.defsFor(root), platform);
       if (!def) return;
       event.preventDefault();
       event.stopPropagation();
@@ -78,7 +78,10 @@
   });
 
   // Merged config view for the active repo (fresh array per store change).
-  const defs = $derived(actionsStore.defsFor(repoId));
+  // Defs are bound to the repo's root PATH, not the per-launch repo_id —
+  // the backend mints a fresh id every process start, so an id-bound def
+  // would vanish from this panel after every relaunch.
+  const defs = $derived(actionsStore.defsFor(root));
   const runs = $derived(actionsStore.runsFor(repoId));
   /** Def names with a live run (their Run buttons show a spinner state). */
   const runningNames = $derived(
@@ -101,7 +104,7 @@
       name: addName,
       command: addCommand,
       scope: addScope,
-      ...(addScope === "repo" ? { repoId } : {}),
+      ...(addScope === "repo" ? { repoRoot: root } : {}),
     });
     if (def) {
       addName = "";
@@ -163,7 +166,7 @@
       name: scriptRunName(project, script),
       command: script.command,
       scope: "repo",
-      repoId,
+      repoRoot: root,
     };
   }
 
@@ -392,7 +395,9 @@
                 const scope = e.currentTarget.value as "global" | "repo";
                 actionsStore.updateDef(def.id, {
                   scope,
-                  ...(scope === "repo" ? { repoId } : { repoId: undefined }),
+                  ...(scope === "repo"
+                    ? { repoRoot: root }
+                    : { repoRoot: undefined }),
                 });
               }}
             >

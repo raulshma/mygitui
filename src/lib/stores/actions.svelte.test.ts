@@ -143,8 +143,16 @@ describe("ActionsStore config", () => {
   it("updates and removes defs by id", () => {
     const store = new ActionsStore(fakeStorage());
     const def = store.addDef({ name: "A", command: "a", scope: "global" })!;
-    store.updateDef(def.id, { command: "b", scope: "repo", repoId: "repo-1" });
-    expect(store.defs[0]).toMatchObject({ command: "b", scope: "repo", repoId: "repo-1" });
+    store.updateDef(def.id, {
+      command: "b",
+      scope: "repo",
+      repoRoot: "/tmp/repo-1",
+    });
+    expect(store.defs[0]).toMatchObject({
+      command: "b",
+      scope: "repo",
+      repoRoot: "/tmp/repo-1",
+    });
 
     store.removeDef(def.id);
     expect(store.defs).toEqual([]);
@@ -153,11 +161,21 @@ describe("ActionsStore config", () => {
   it("defsFor merges global defs with the repo's own scoped defs", () => {
     const store = new ActionsStore(fakeStorage());
     store.addDef({ name: "g", command: "g", scope: "global" });
-    store.addDef({ name: "own", command: "o", scope: "repo", repoId: "repo-1" });
-    store.addDef({ name: "other", command: "x", scope: "repo", repoId: "repo-2" });
+    store.addDef({
+      name: "own",
+      command: "o",
+      scope: "repo",
+      repoRoot: "/tmp/repo-1",
+    });
+    store.addDef({
+      name: "other",
+      command: "x",
+      scope: "repo",
+      repoRoot: "/tmp/repo-2",
+    });
 
-    expect(store.defsFor("repo-1").map((d) => d.name)).toEqual(["g", "own"]);
-    expect(store.defsFor("repo-2").map((d) => d.name)).toEqual(["g", "other"]);
+    expect(store.defsFor("/tmp/repo-1").map((d) => d.name)).toEqual(["g", "own"]);
+    expect(store.defsFor("/tmp/repo-2").map((d) => d.name)).toEqual(["g", "other"]);
   });
 
   it("drops malformed persisted entries", () => {
@@ -171,6 +189,26 @@ describe("ActionsStore config", () => {
     storage.setItem("other-key", "not json at all");
     const store = new ActionsStore(storage);
     expect(store.defs.map((d) => d.id)).toEqual(["ok"]);
+  });
+
+  it("drops legacy repoId-bound repo defs but keeps global ones on load", () => {
+    // Pre-root-binding envelopes bound repo-scoped defs to the backend's
+    // per-launch repo_id; no later relaunch can hand that id out again, so
+    // those defs could never render — dropped instead of carried as dead
+    // entries. Global defs were never bound and stay usable.
+    const storage = fakeStorage();
+    storage.setItem(ACTIONS_STORAGE_KEY, JSON.stringify({ defs: [
+      { id: "keep", name: "g", command: "c", scope: "global" },
+      {
+        id: "dead",
+        name: "old",
+        command: "c",
+        scope: "repo",
+        repoId: "18f2a1b3c4d-1234-0",
+      },
+    ] }));
+    const store = new ActionsStore(storage);
+    expect(store.defs.map((d) => d.id)).toEqual(["keep"]);
   });
 });
 

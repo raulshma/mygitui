@@ -26,7 +26,7 @@ function seededDefs(): string {
     name: `action-${i + 1}`,
     command: `echo ${i + 1}`,
     scope: "repo",
-    repoId: "r1",
+    repoRoot: "/tmp/repo",
   }));
   return JSON.stringify({ defs });
 }

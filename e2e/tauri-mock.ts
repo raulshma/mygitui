@@ -222,10 +222,21 @@ export async function openPanel(page: Page, name: string): Promise<void> {
 
 /** The init-script body — runs in the page BEFORE the app bundle. */
 function BOOTSTRAP(options: TauriMockOptions): void {
+  // The real backend mints a fresh repo_id per process launch (see
+  // `repo::RepoManager::next_repo_id` — timestamp + pid + counter). A
+  // relaunch therefore presents a DIFFERENT id for the same repo. Tests
+  // model that by setting `e2e-repo-id` in sessionStorage (survives reload
+  // within one browser context) before the reload.
+  let seededRepoId: string | null = null;
+  try {
+    seededRepoId = sessionStorage.getItem("e2e-repo-id");
+  } catch {
+    seededRepoId = null;
+  }
   const commandMocks: Record<string, CommandMock> = {
     // -- core commands (payloads mirror src/lib/ipc/types.ts, snake_case) --
     repo_open: {
-      repo_id: "r1",
+      repo_id: seededRepoId ?? "r1",
       root: "/tmp/repo",
       name: "repo",
       bare: false,

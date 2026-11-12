@@ -4,7 +4,11 @@
  * Config (`ActionDef`s) lives FE-side per contracts.md, persisted to
  * localStorage under `mygitui.actions`; `scope: "global"` defs show for
  * every repo, `scope: "repo"` defs only for the repo they were created in
- * (`repoId` binding) — `defsFor(repoId)` is that merged view.
+ * (`repoRoot` binding) — `defsFor(repoRoot)` is that merged view. The
+ * binding is the repo's root PATH, not the backend's `repo_id`: that id is
+ * minted per process launch (`repo::next_repo_id` — timestamp + pid +
+ * counter), so defs bound to it would be orphaned after every relaunch and
+ * vanish from the panel while still sitting in storage.
  *
  * Runs mirror the backend's action runner: `action-output` events are
  * upserted into a newest-first run list (fresh array per update so rune
@@ -45,10 +49,13 @@ export interface ActionDef {
   id: string;
   name: string;
   command: string;
-  /** `global` shows for every repo; `repo` only for `repoId`'s. */
+  /** `global` shows for every repo; `repo` only for `repoRoot`'s. */
   scope: "global" | "repo";
-  /** Repo binding for `scope: "repo"` defs (ignored otherwise). */
-  repoId?: string;
+  /**
+   * Repo binding for `scope: "repo"` defs: the repo's root path, which is
+   * stable across relaunches (unlike the backend's per-process `repo_id`).
+   */
+  repoRoot?: string;
   /**
    * Global keyboard shortcut (canonical combo, e.g. `"ctrl+shift+r"`).
    * M12: live — a single window keydown listener in ActionsPanel matches
@@ -62,7 +69,7 @@ export interface ActionDefInput {
   name: string;
   command: string;
   scope: "global" | "repo";
-  repoId?: string;
+  repoRoot?: string;
   shortcut?: string;
 }
 
@@ -114,12 +121,17 @@ function parseDefs(raw: string | null): ActionDef[] {
       typeof d?.command === "string" &&
       (d?.scope === "global" || d?.scope === "repo")
     ) {
+      // Repo-scoped defs written before the root-path binding carry only a
+      // `repoId` — the backend's per-launch id, which no relaunch can ever
+      // hand out again. They are permanently invisible; drop them instead
+      // of carrying dead entries (parse-and-drop, like malformed shapes).
+      if (d.scope === "repo" && typeof d.repoRoot !== "string") continue;
       out.push({
         id: d.id,
         name: d.name,
         command: d.command,
         scope: d.scope,
-        ...(d.repoId !== undefined ? { repoId: d.repoId } : {}),
+        ...(d.repoRoot !== undefined ? { repoRoot: d.repoRoot } : {}),
         ...(d.shortcut !== undefined ? { shortcut: d.shortcut } : {}),
       });
     }
@@ -172,8 +184,8 @@ export class ActionsStore {
       name,
       command,
       scope: input.scope,
-      ...(input.scope === "repo" && input.repoId !== undefined
-        ? { repoId: input.repoId }
+      ...(input.scope === "repo" && input.repoRoot !== undefined
+        ? { repoRoot: input.repoRoot }
         : {}),
       ...(input.shortcut !== undefined && input.shortcut !== ""
         ? { shortcut: input.shortcut }
@@ -199,10 +211,13 @@ export class ActionsStore {
     this.#persist();
   }
 
-  /** Merged view: global defs plus this repo's own scoped defs, in order. */
-  defsFor(repoId: RepoId): ActionDef[] {
+  /**
+   * Merged view: global defs plus this repo's own scoped defs, in order.
+   * `repoRoot` is the repo's root path (stable across relaunches).
+   */
+  defsFor(repoRoot: string): ActionDef[] {
     return this.defs.filter(
-      (def) => def.scope === "global" || def.repoId === repoId,
+      (def) => def.scope === "global" || def.repoRoot === repoRoot,
     );
   }
 
@@ -466,8 +481,9 @@ export function cancelAction(runId: string): Promise<boolean> {
   return actionsStore.cancel(runId);
 }
 
-export function defsFor(repoId: RepoId): ActionDef[] {
-  return actionsStore.defsFor(repoId);
+/** defs visible for a repo root (global defs plus that repo's own). */
+export function defsFor(repoRoot: string): ActionDef[] {
+  return actionsStore.defsFor(repoRoot);
 }
 
 export function actionRunsFor(repoId: RepoId): ActionRun[] {

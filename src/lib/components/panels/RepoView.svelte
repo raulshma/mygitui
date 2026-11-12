@@ -1571,7 +1571,7 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
 {/snippet}
 {#snippet actionsPanel()}
   {#await actionsPanelImport() then ActionsPanelModule}
-    <ActionsPanelModule.default {repoId} />
+    <ActionsPanelModule.default {repoId} {root} />
   {/await}
 {/snippet}
 {#snippet statsPanel()}
