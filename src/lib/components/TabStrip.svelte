@@ -14,8 +14,8 @@
    *
    * Drag-to-reorder (mouse only, HTML5 dnd — the RebasePlanner idiom, no
    * libraries): the tab label is `draggable`; dragging it over another tab
-   * shows an insertion bar on the side of the hovered tab's midpoint the
-   * pointer is on, and dropping there splices the strip order through
+   * shows an insertion bar on the side of the hovered tab label's midpoint
+   * the pointer is on, and dropping there splices the strip order through
    * `reorderTab` (persisted like open/close). The handlers only act on
    * drags this strip started (dataTransfer type marker), so external file
    * drops are untouched; the dragged tab dims and dropping onto itself,
@@ -222,7 +222,14 @@
     }
     event.preventDefault();
     if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
-    const bounds = (event.currentTarget as HTMLElement | null)?.getBoundingClientRect();
+    // The insertion side is the hovered tab LABEL's midpoint, not the tab
+    // cell's: the cell extends past the label to the close button, so a
+    // cell-midpoint test put the label's own center on the "before" side —
+    // the natural drop (onto the next tab's label) computed as a silent
+    // no-op (insert before the tab it is already before).
+    const label = (event.currentTarget as HTMLElement | null)
+      ?.querySelector<HTMLElement>("button[role='tab']");
+    const bounds = label?.getBoundingClientRect();
     dropSide =
       bounds && event.clientX >= bounds.left + bounds.width / 2 ? "after" : "before";
     dropTargetId = tab.id;

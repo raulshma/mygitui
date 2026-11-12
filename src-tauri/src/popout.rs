@@ -49,7 +49,13 @@ pub async fn open_popout(
         // Matches the main window + the index.html splash: the popout
         // opens on the dark splash instead of flashing white while its
         // webview is still loading.
-        .background_color(SPLASH_BACKGROUND);
+        .background_color(SPLASH_BACKGROUND)
+        // Matches the main window's `dragDropEnabled: false` in
+        // tauri.conf.json: Tauri's native drag-drop handler replaces the
+        // webview's own and HTML5 drag events (tab reordering in the strip,
+        // file-drop repo opening) never reach the page. File drops are
+        // handled in-page instead (see `$lib/entry/dragdrop.ts`).
+        .disable_drag_drop_handler();
     if let Some(args) = browser_args {
         builder = builder.additional_browser_args(&args);
     }

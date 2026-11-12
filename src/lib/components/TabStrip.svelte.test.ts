@@ -219,14 +219,23 @@ describe("TabStrip drag-to-reorder", () => {
     return strip.querySelector<HTMLElement>("div.tab > span[aria-hidden='true']");
   }
 
-  /** Cells are laid out left to right, 200px each. */
+  /**
+   * Cells are laid out left to right, 200px each; the insertion side is
+   * measured against the tab LABEL's rect (160px — the rest of the cell is
+   * the close button), so stub both.
+   */
   function grid(cells: HTMLElement[]): void {
     cells.forEach((cell, index) => {
       cell.getBoundingClientRect = () => ({ left: index * 200, width: 200 }) as DOMRect;
+      const label = cell.querySelector<HTMLElement>("button[role='tab']");
+      if (label !== null) {
+        label.getBoundingClientRect = () =>
+          ({ left: index * 200, width: 160 }) as DOMRect;
+      }
     });
   }
 
-  it("reorders on drop, before or after the hovered tab's midpoint", async () => {
+  it("reorders on drop, before or after the hovered tab label's midpoint", async () => {
     render(TabStrip);
     await tick();
     const strip = stripEl();
@@ -234,7 +243,8 @@ describe("TabStrip drag-to-reorder", () => {
     grid(cells);
     const dt = dataTransfer();
 
-    // Drag the last tab over the first: pointer on the left half → before.
+    // Drag the last tab over the first: pointer on the left half of the
+    // label (midpoint 80) → before.
     fire(tabButton(cells[3]!), "dragstart", dt);
     await tick();
     fire(cells[0]!, "dragover", dt, 50);
@@ -244,7 +254,7 @@ describe("TabStrip drag-to-reorder", () => {
     expect(tabStore.tabs.map((entry) => entry.id)).toEqual(["repo-4", "repo-1", "repo-2", "repo-3"]);
 
     // Again: drag repo-4 (now first) over repo-1, pointer on the right
-    // half of its cell (midpoint 300) → after.
+    // half of its label (midpoint 280) → after.
     const cells2 = tabCells(strip);
     grid(cells2);
     const dt2 = dataTransfer();
@@ -271,13 +281,13 @@ describe("TabStrip drag-to-reorder", () => {
     expect(cells[1]!.className).toContain("opacity-45");
     expect(indicator(strip)).toBeNull();
 
-    fire(cells[2]!, "dragover", dt, 0); // well left of the hovered midpoint
+    fire(cells[2]!, "dragover", dt, 0); // well left of the label's midpoint
     await tick();
     const bar = indicator(strip);
     expect(bar).not.toBeNull();
     expect(bar!.className).toContain("-left-px"); // before the hovered tab
 
-    fire(cells[0]!, "dragover", dt, 300); // right half of repo-1's cell
+    fire(cells[0]!, "dragover", dt, 300); // right half of repo-1's label
     await tick();
     expect(indicator(strip)!.className).toContain("-right-px"); // after repo-1
 
