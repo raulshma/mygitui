@@ -33,10 +33,17 @@
   } from "$lib/stats/branchColors.svelte";
   import { buildHeatmap, streaks, todayISO, totals } from "$lib/stats/heatmapModel";
   import { statsStore } from "$lib/stats/statsStore.svelte";
+  import { primaryHex } from "$lib/components/graph/palette";
+  import Icon from "$lib/components/icons/Icon.svelte";
+  import { appIcon } from "$lib/components/icons/library.svelte";
 
   let { repoId, root }: { repoId: string; root: string } = $props();
 
   const supported = isTauri();
+
+  /** Default swatch for new/invalid rules: the live accent, as hex. */
+  const defaultRuleColor = primaryHex();
+  const iconRefresh = $derived(appIcon("refresh")!);
 
   /** Author filter input (committed on change/Enter, cleared explicitly). */
   let authorInput = $state("");
@@ -137,7 +144,8 @@
     </p>
   {:else}
     <header class="stats-head flex min-w-0 flex-none flex-wrap items-center gap-1.5">
-      <span class="title mr-1 min-w-0 overflow-hidden text-ellipsis whitespace-nowrap font-medium">Contribution stats</span>
+      <!-- Full-width title keeps the controls row aligned at any panel width. -->
+      <span class="title basis-full min-w-0 overflow-hidden text-ellipsis whitespace-nowrap font-medium">Contribution stats</span>
       <input
         class="author w-44 min-w-20 flex-[0_1_auto] rounded-sm border border-border bg-background px-[7px] py-px text-ui-meta text-foreground focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-ring"
         type="search"
@@ -188,7 +196,7 @@
             type="button"
             onclick={refresh}
           >
-            ↻
+            <Icon icon={iconRefresh} size={12} />
           </Button>
         {/snippet}
       </Hint>
@@ -311,7 +319,7 @@
     {#if colorsOpen}
       <!-- Branch color rules editor (popover): pattern → color, first match wins. -->
       <div
-        class="colors-pop invisible fixed left-0 top-0 z-40 flex max-h-[calc(100vh-1rem)] w-[min(22rem,calc(100vw-1rem))] flex-col gap-1.5 overflow-y-auto rounded-lg border border-border bg-popover px-2.5 py-2 shadow-[0_0.35rem_1.25rem_rgb(0_0_0/0.25)]"
+        class="colors-pop invisible fixed left-0 top-0 z-40 flex max-h-[calc(100vh-1rem)] w-[min(22rem,calc(100vw-1rem))] flex-col gap-1.5 overflow-y-auto rounded-lg border border-border bg-popover px-2.5 py-2 shadow-overlay"
         role="dialog"
         aria-label="Branch color rules"
         use:floating={{ anchor: colorsButton ?? undefined, alignEnd: true }}
@@ -353,7 +361,7 @@
                   class="rule-color h-6 w-8 flex-none cursor-pointer rounded-sm border border-border bg-background p-0"
                   type="color"
                   aria-label={`Color ${index + 1}`}
-                  value={/^#[0-9a-fA-F]{6}$/.test(rule.color) ? rule.color : "#6750a4"}
+                  value={/^#[0-9a-fA-F]{6}$/.test(rule.color) ? rule.color : defaultRuleColor}
                   onchange={(e) =>
                     branchColorStore.updateRule(root, index, {
                       color: (e.currentTarget as HTMLInputElement).value,
@@ -390,7 +398,7 @@
             class="rule-color h-6 w-8 flex-none cursor-pointer rounded-sm border border-border bg-background p-0"
             type="color"
             aria-label="New rule color"
-            value="#6750a4"
+            value={defaultRuleColor}
             oninput={(e) => (newColor = (e.currentTarget as HTMLInputElement).value)}
           />
           <Button class="h-auto whitespace-nowrap rounded-sm px-2 py-px text-ui-tiny font-normal" variant="secondary" type="submit">Add</Button>

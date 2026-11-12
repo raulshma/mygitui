@@ -443,7 +443,7 @@
     class:level-meta={line.level === "command" || line.level === "debug"}
     data-first-error={isFirstError ? "true" : undefined}
   >
-    <span class="ln w-12 flex-none select-none pr-[0.15rem] text-right text-ui-micro leading-[inherit] text-muted-foreground opacity-55" aria-hidden="true">{number}</span>
+    <span class="ln w-12 flex-none select-none pr-ui-15 text-right text-ui-micro leading-[inherit] text-muted-foreground opacity-55" aria-hidden="true">{number}</span>
     {#if hasTimes}
       <span class="lt flex-none select-none text-ui-micro text-muted-foreground opacity-70" aria-hidden="true">{formatLogTime(line.time)}</span>
     {/if}
@@ -467,7 +467,7 @@
   class="log-viewer flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-sm border border-border bg-background"
   class:wrap
 >
-  <div class="log-toolbar flex-none flex flex-wrap items-center gap-[0.3rem] border-b border-border bg-popover px-2 py-[0.35rem]" role="toolbar" aria-label="Log controls">
+  <div class="log-toolbar flex-none flex flex-wrap items-center gap-ui-3 border-b border-border bg-popover px-2 py-ui-35" role="toolbar" aria-label="Log controls">
     <div class="log-search relative flex min-w-32 flex-[1_1_11rem] max-w-[22rem] items-center">
       <span class="search-icon pointer-events-none absolute left-[0.45rem] text-[0.9rem] text-muted-foreground" aria-hidden="true">⌕</span>
       <Input
@@ -483,7 +483,7 @@
         <Hint label="Clear search">
           {#snippet child({ props })}
             <Button
-              class="clear-search absolute right-[0.3rem] h-auto px-[0.2rem] py-0 text-[0.9rem] leading-none font-normal text-muted-foreground hover:text-foreground dark:hover:bg-transparent"
+              class="clear-search absolute right-[0.3rem] h-auto px-ui-2 py-0 text-[0.9rem] leading-none font-normal text-muted-foreground hover:text-foreground dark:hover:bg-transparent"
               variant="ghost"
               {...props}
               type="button"
@@ -606,7 +606,7 @@
   </div>
 
   {#if error}
-    <div class="log-error flex-none flex flex-wrap items-baseline gap-[0.4rem] border-b border-current/25 bg-destructive/15 px-2.5 py-[0.35rem] text-xs text-destructive" role="alert">
+    <div class="log-error flex-none flex flex-wrap items-baseline gap-ui-4 border-b border-current/25 bg-destructive/15 px-2.5 py-ui-35 text-xs text-destructive" role="alert">
       <span class="err-mark flex-none inline-flex size-4 items-center justify-center rounded-full border border-current text-ui-tiny font-bold" aria-hidden="true">!</span>
       <span class="err-text min-w-0 [overflow-wrap:anywhere]">{error}</span>
       {#if text !== null}
@@ -616,7 +616,7 @@
   {/if}
 
   {#if text === null}
-    <div class="log-state flex min-h-0 flex-1 flex-col items-center justify-center gap-[0.45rem] p-6 text-center text-ui-meta text-muted-foreground" aria-live="polite">
+    <div class="log-state flex min-h-0 flex-1 flex-col items-center justify-center gap-ui-45 p-6 text-center text-ui-meta text-muted-foreground" aria-live="polite">
       {#if loading}
         <span class="state-spinner flex-none size-4 animate-spin rounded-full border-2 border-border border-t-primary" aria-hidden="true"></span>
         <p class="m-0">Loading logs…</p>
@@ -634,18 +634,18 @@
     </div>
   {:else if filtered && filtered.jobs.length === 0}
     {#if query.trim()}
-      <div class="log-state flex min-h-0 flex-1 flex-col items-center justify-center gap-[0.45rem] p-6 text-center text-ui-meta text-muted-foreground">
+      <div class="log-state flex min-h-0 flex-1 flex-col items-center justify-center gap-ui-45 p-6 text-center text-ui-meta text-muted-foreground">
         <p class="m-0">No log lines match “{query.trim()}”.</p>
         <Button class={tb} variant="outline" type="button" onclick={clearSearch}>Clear search</Button>
       </div>
     {:else}
-      <div class="log-state flex min-h-0 flex-1 flex-col items-center justify-center gap-[0.45rem] p-6 text-center text-ui-meta text-muted-foreground">
+      <div class="log-state flex min-h-0 flex-1 flex-col items-center justify-center gap-ui-45 p-6 text-center text-ui-meta text-muted-foreground">
         <p class="m-0">{emptyText}</p>
       </div>
     {/if}
   {:else}
     {#if live && total === 0 && query.trim() === ""}
-      <div class="live-note flex-none flex flex-wrap items-center gap-[0.45rem] border-b border-border bg-muted/35 px-2.5 py-[0.4rem] text-xs leading-[1.4] text-foreground" role="status">
+      <div class="live-note flex-none flex flex-wrap items-center gap-ui-45 border-b border-border bg-muted/35 px-2.5 py-ui-4 text-xs leading-[1.4] text-foreground" role="status">
         <span class="live-dot size-[0.42rem] animate-pulse rounded-full bg-primary" aria-hidden="true"></span>
         <span class="live-note-text min-w-0 flex-[1_1_16rem]">
           GitHub publishes each job's log when it finishes. For output while a
@@ -660,7 +660,7 @@
     {/if}
     <!-- svelte-ignore a11y_no_noninteractive_tabindex (scrollable log region must be keyboard focusable) -->
     <div
-      class="log-scroll min-h-0 flex-1 overflow-auto bg-background pb-[0.6rem] pt-[0.35rem] font-mono text-[0.725rem] leading-[1.55] text-foreground focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary"
+      class="log-scroll min-h-0 flex-1 overflow-auto bg-background pb-[0.6rem] pt-ui-35 font-mono text-[0.725rem] leading-[1.55] text-foreground focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary"
       bind:this={scrollEl}
       onscroll={onScroll}
       tabindex="0"
@@ -676,7 +676,7 @@
           )}
           <section class="log-job border-b border-border last:border-none" aria-label={jobEntry.job.name}>
             <button
-              class="log-job-head sticky top-0 z-2 flex w-full min-w-0 cursor-pointer items-center gap-[0.4rem] border-none bg-popover px-2.5 py-[0.3rem] text-left text-[0.76rem] font-semibold text-inherit hover:bg-accent focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary"
+              class="log-job-head sticky top-0 z-2 flex w-full min-w-0 cursor-pointer items-center gap-ui-4 border-none bg-popover px-2.5 py-ui-3 text-left text-[0.76rem] font-semibold text-inherit hover:bg-accent focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary"
               type="button"
               aria-expanded={!collapsed[jobEntry.job.key]}
               onclick={() => toggle(jobEntry.job.key)}
@@ -709,7 +709,7 @@
                 </span>
               {/if}
               {#if jobDuration}
-                <span class="muted job-duration mr-[0.35rem] text-ui-micro font-normal text-muted-foreground">{jobDuration}</span>
+                <span class="muted job-duration mr-ui-35 text-ui-micro font-normal text-muted-foreground">{jobDuration}</span>
               {/if}
             </button>
 
@@ -735,7 +735,7 @@
                   aria-label={step.name}
                 >
                   <button
-                    class="log-step-head flex w-full min-w-0 cursor-pointer items-center gap-[0.4rem] border-none px-2.5 py-[0.24rem] pl-[1.1rem] text-left text-ui-meta text-inherit hover:bg-accent focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary {step.conclusion === "failure" ||
+                    class="log-step-head flex w-full min-w-0 cursor-pointer items-center gap-ui-4 border-none px-2.5 py-[0.24rem] pl-[1.1rem] text-left text-ui-meta text-inherit hover:bg-accent focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary {step.conclusion === "failure" ||
                     step.errorCount > 0
                       ? "border-l-[3px] border-l-destructive bg-destructive/15"
                       : step.status === "in_progress"
@@ -757,7 +757,7 @@
                     <span class="step-name min-w-0 truncate">{step.name}</span>
                     <span class="spacer ml-auto"></span>
                     {#if step.lineCount > 0}
-                      <span class="muted step-lines mr-[0.35rem] text-ui-micro font-normal text-muted-foreground">{lineLabel(step.lineCount)}</span>
+                      <span class="muted step-lines mr-ui-35 text-ui-micro font-normal text-muted-foreground">{lineLabel(step.lineCount)}</span>
                     {/if}
                     {#if step.errorCount > 0}
                       <span class="mini-chip flex-none rounded-full bg-destructive/15 px-2 text-ui-tiny leading-[1.5] font-medium text-destructive">
@@ -770,7 +770,7 @@
                       </span>
                     {/if}
                     {#if step.conclusion === "skipped"}
-                      <span class="muted step-state-badge mr-[0.35rem] text-ui-micro font-normal text-muted-foreground">Skipped</span>
+                      <span class="muted step-state-badge mr-ui-35 text-ui-micro font-normal text-muted-foreground">Skipped</span>
                     {/if}
                     {#if duration}
                       <span class="muted step-time ml-auto text-ui-micro font-normal text-muted-foreground">{duration}</span>
@@ -779,7 +779,7 @@
 
                   {#if !isStepCollapsed}
                     {#if step.lineCount === 0}
-                      <div class="empty-step-notice flex items-center gap-[0.4rem] py-[0.45rem] pr-4 pl-[2.6rem] text-ui-micro italic text-muted-foreground opacity-80">
+                      <div class="empty-step-notice flex items-center gap-ui-4 py-ui-45 pr-4 pl-[2.6rem] text-ui-micro italic text-muted-foreground opacity-80">
                         {#if step.conclusion === "skipped"}
                           This step was skipped.
                         {:else if step.status === "queued" || step.status === "in_progress"}
@@ -808,7 +808,7 @@
                           {#if segmentEntry.segment.kind === "group"}
                             <div class="log-group m-0">
                               <button
-                                class="log-group-head flex w-full min-w-0 cursor-pointer items-center gap-[0.4rem] border-none bg-transparent px-2.5 py-[0.18rem] pl-[2.1rem] text-left text-ui-micro text-muted-foreground hover:bg-accent focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary"
+                                class="log-group-head flex w-full min-w-0 cursor-pointer items-center gap-ui-4 border-none bg-transparent px-2.5 py-[0.18rem] pl-[2.1rem] text-left text-ui-micro text-muted-foreground hover:bg-accent focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary"
                                 type="button"
                                 aria-expanded={!collapsed[segmentEntry.segment.key]}
                                 onclick={() => toggle(segmentEntry.segment.key)}
@@ -863,7 +863,7 @@
     </div>
 
     {#if total > shown}
-      <div class="log-more flex-none flex flex-wrap items-center justify-center gap-[0.6rem] border-t border-border bg-card px-2.5 py-[0.3rem] text-ui-micro text-muted-foreground">
+      <div class="log-more flex-none flex flex-wrap items-center justify-center gap-[0.6rem] border-t border-border bg-card px-2.5 py-ui-3 text-ui-micro text-muted-foreground">
         <span>
           Showing lines {renderFrom + 1}–{renderEnd} of {total}
         </span>

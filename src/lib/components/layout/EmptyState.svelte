@@ -39,7 +39,7 @@
   {/if}
   <p class="empty-title m-0 text-ui-base font-medium text-foreground">{title}</p>
   {#if hint}
-    <p class="empty-hint m-0 max-w-[15rem] text-ui-meta leading-[1.4]">{hint}</p>
+    <p class="empty-hint m-0 max-w-[15rem] text-ui-meta leading-[1.4] text-pretty">{hint}</p>
   {/if}
   {#if children}
     <div class="empty-actions mt-3 flex flex-wrap items-center justify-center gap-2">

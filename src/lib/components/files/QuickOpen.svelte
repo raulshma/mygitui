@@ -156,7 +156,7 @@
   onclick={onScrimClick}
 >
   <div
-    class="panel flex max-h-[55vh] w-[min(34rem,100%)] flex-col overflow-hidden rounded-md border border-border bg-popover shadow-[0_12px_40px_rgb(0_0_0/0.35)]"
+    class="panel flex max-h-[55vh] w-[min(34rem,100%)] flex-col overflow-hidden rounded-md border border-border bg-popover shadow-modal"
     role="dialog"
     aria-modal="true"
     aria-label="Go to file"
@@ -168,7 +168,7 @@
     }}
   >
     <div
-      class="inputrow flex flex-none items-center gap-[0.45rem] border-b border-border px-3 py-2.5 text-muted-foreground"
+      class="inputrow flex flex-none items-center gap-ui-45 border-b border-border px-3 py-2.5 text-muted-foreground"
       role="combobox"
       aria-expanded={hits.length > 0}
       aria-controls="quick-open-list"
@@ -206,7 +206,7 @@
           <!-- svelte-ignore a11y_click_events_have_key_events -- the
                input owns all keyboard navigation (combobox pattern) -->
           <li
-            class="row flex cursor-pointer items-center gap-[0.45rem] rounded-sm px-2 py-0.5 text-ui-base text-foreground {i === safeSelected
+            class="row flex cursor-pointer items-center gap-ui-45 rounded-sm px-2 py-0.5 text-ui-base text-foreground {i === safeSelected
               ? 'bg-primary/15'
               : ''}"
             class:sel={i === safeSelected}
@@ -231,7 +231,7 @@
         {/each}
       </ul>
       {#if hits.length > visible.length}
-        <p class="more m-0 flex-none border-t border-border px-3 py-[0.3rem] text-center text-ui-micro text-muted-foreground">{hits.length} matches — keep typing to narrow</p>
+        <p class="more m-0 flex-none border-t border-border px-3 py-ui-3 text-center text-ui-micro text-muted-foreground">{hits.length} matches — keep typing to narrow</p>
       {/if}
     {/if}
   </div>

@@ -557,7 +557,9 @@
       void onCreate();
     }}
   >
-    <div class="name-row flex min-w-24 flex-1 items-center gap-1">
+    <!-- Name on its own full-width row so the input never truncates; the
+         "from" select and checkout toggle wrap onto a second row. -->
+    <div class="name-row flex min-w-24 flex-1 basis-full items-center gap-1">
       <input
         class="name min-w-24 flex-1 rounded border border-input bg-background px-2 py-0.5 text-xs text-foreground focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-1"
         type="text"
@@ -581,7 +583,7 @@
     <label class="from flex items-center gap-1 text-muted-foreground">
       <span class="fl text-ui-micro">from</span>
       <select
-        class="max-w-36 rounded border border-input bg-background px-2 py-0.5 text-ui-meta text-foreground focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-1"
+        class="min-w-0 max-w-48 flex-1 rounded border border-input bg-background px-2 py-0.5 text-ui-meta text-foreground focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-1"
         bind:value={newFrom}
         aria-label="Create branch from"
       >
@@ -701,7 +703,7 @@
                         <span class="upstream min-w-0 flex-1 truncate font-mono text-ui-micro text-muted-foreground" {...props}>
                           {branch.upstream}
                           {#if branch.ahead > 0 || branch.behind > 0}
-                            <span class="ab pl-1.5 text-primary">↑{branch.ahead} ↓{branch.behind}</span>
+                            <span class="ab pl-1.5 text-primary tabular-nums">↑{branch.ahead} ↓{branch.behind}</span>
                           {/if}
                           {#if branch.gone}<Badge variant="outline" class="gone ml-1.5 h-auto shrink-0 rounded-full border-destructive px-1.5 py-0 text-ui-tiny text-destructive">gone</Badge>{/if}
                         </span>
@@ -783,7 +785,7 @@
             <div class="group flex flex-col">
               <div class="group-head flex flex-none items-center gap-1 px-1">
                 <Button
-                  class="h-auto gap-[0.3rem] px-1 py-0.5 text-xs font-semibold dark:hover:bg-muted/50"
+                  class="h-auto gap-ui-3 px-1 py-0.5 text-xs font-semibold dark:hover:bg-muted/50"
                   variant="ghost"
                   type="button"
                   aria-expanded={groupExpanded(group.remote)}

@@ -361,9 +361,9 @@
 </script>
 
 <div class="run-view @container flex h-full min-h-0 min-w-0 flex-col bg-card">
-  <header class="run-head flex-none flex flex-col gap-[0.35rem] border-b border-border bg-popover px-[0.7rem] pt-[0.4rem] pb-[0.55rem] @max-[38rem]:px-2 @max-[38rem]:pt-[0.35rem] @max-[38rem]:pb-[0.45rem]">
-    <div class="head-top flex min-w-0 items-center gap-[0.4rem]">
-      <span class="crumbs flex min-w-0 items-baseline gap-[0.35rem] text-ui-meta text-muted-foreground">
+  <header class="run-head flex-none flex flex-col gap-ui-35 border-b border-border bg-popover px-[0.7rem] pt-ui-4 pb-[0.55rem] @max-[38rem]:px-2 @max-[38rem]:pt-ui-35 @max-[38rem]:pb-ui-45">
+    <div class="head-top flex min-w-0 items-center gap-ui-4">
+      <span class="crumbs flex min-w-0 items-baseline gap-ui-35 text-ui-meta text-muted-foreground">
         <span class="crumb-muted flex-none">Actions</span>
         <span class="crumb-sep flex-none opacity-60" aria-hidden="true">/</span>
         <Hint label={run?.name ?? "Workflow run"}>
@@ -409,14 +409,14 @@
       {/if}
     </div>
 
-    <div class="title-row flex min-w-0 flex-wrap items-center gap-[0.45rem]">
+    <div class="title-row flex min-w-0 flex-wrap items-center gap-ui-45">
       <span class="status-chip flex-none inline-flex items-center gap-1 whitespace-nowrap rounded-full px-2 py-px text-ui-micro font-semibold {chipTone[runStateClass(kind)] ?? "bg-accent text-muted-foreground"}">
         <span class="status-icon text-ui-tiny" aria-hidden="true">{runStateIcon(kind)}</span>
         {statusText}
       </span>
       {#if active}
         <span
-          class="live-badge flex-none inline-flex items-center gap-[0.3rem] text-ui-micro font-semibold {autoRefresh
+          class="live-badge flex-none inline-flex items-center gap-ui-3 text-ui-micro font-semibold {autoRefresh
             ? "text-primary"
             : "text-muted-foreground"}"
           class:paused={!autoRefresh}
@@ -448,7 +448,7 @@
           <Hint label="Copy the full commit SHA">
             {#snippet child({ props })}
               <Button
-                class="h-auto rounded-sm px-[0.3rem] font-mono text-ui-micro font-normal text-muted-foreground"
+                class="h-auto rounded-sm px-ui-3 font-mono text-ui-micro font-normal text-muted-foreground"
                 variant="outline"
                 {...props}
                 type="button"
@@ -483,7 +483,7 @@
       {/if}
     </div>
 
-    <div class="actions flex flex-wrap items-center gap-[0.3rem] @max-[38rem]:gap-[0.2rem]" aria-label="Run actions">
+    <div class="actions flex flex-wrap items-center gap-ui-3 @max-[38rem]:gap-ui-2" aria-label="Run actions">
       {#if active}
         <Hint label={autoRefresh ? "Pause live updates" : "Resume live updates"}>
           {#snippet child({ props })}
@@ -552,24 +552,24 @@
     </div>
 
     {#if detailError && detail}
-      <div class="inline-error [overflow-wrap:anywhere] rounded-sm bg-destructive/15 px-2 py-[0.3rem] text-ui-micro text-destructive" role="alert">
+      <div class="inline-error [overflow-wrap:anywhere] rounded-sm bg-destructive/15 px-2 py-ui-3 text-ui-micro text-destructive" role="alert">
         Could not refresh run details: {detailError}
       </div>
     {/if}
   </header>
 
-  <div class="run-body grid min-h-0 flex-1 grid-cols-[minmax(14rem,19rem)_minmax(0,1fr)] gap-2 p-2 @max-[55rem]:grid-cols-[minmax(0,1fr)] @max-[55rem]:grid-rows-[minmax(7rem,32%)_minmax(0,1fr)] @max-[38rem]:gap-[0.35rem] @max-[38rem]:p-[0.35rem] @max-[38rem]:grid-rows-[minmax(6rem,30%)_minmax(0,1fr)]">
+  <div class="run-body grid min-h-0 flex-1 grid-cols-[minmax(14rem,19rem)_minmax(0,1fr)] gap-2 p-2 @max-[55rem]:grid-cols-[minmax(0,1fr)] @max-[55rem]:grid-rows-[minmax(7rem,32%)_minmax(0,1fr)] @max-[38rem]:gap-ui-35 @max-[38rem]:p-ui-35 @max-[38rem]:grid-rows-[minmax(6rem,30%)_minmax(0,1fr)]">
     <aside class="jobs-pane flex min-h-0 min-w-0 flex-col overflow-hidden rounded-sm border border-border bg-card @max-[55rem]:min-h-0" aria-label="Workflow jobs">
-      <div class="jobs-head flex-none flex flex-wrap items-center gap-[0.4rem] border-b border-border bg-popover px-2 py-[0.35rem]">
-        <h3 class="pane-title m-0 inline-flex min-w-0 items-baseline gap-[0.35rem] truncate text-xs font-semibold text-foreground">
+      <div class="jobs-head flex-none flex flex-wrap items-center gap-ui-4 border-b border-border bg-popover px-2 py-ui-35">
+        <h3 class="pane-title m-0 inline-flex min-w-0 items-baseline gap-ui-35 truncate text-xs font-semibold text-foreground">
           Jobs
-          {#if jobs.length > 0}<span class="pane-count rounded-full bg-accent px-[0.35rem] text-ui-tiny font-medium text-muted-foreground">{jobs.length}</span>{/if}
+          {#if jobs.length > 0}<span class="pane-count rounded-full bg-accent px-ui-35 text-ui-tiny font-medium text-muted-foreground">{jobs.length}</span>{/if}
         </h3>
         {#if active && jobs.length > 0}
           <Hint label={`${jobsDone} of ${jobs.length} jobs finished`}>
             {#snippet child({ props })}
               <span
-                class="job-progress inline-flex items-center gap-[0.3rem] whitespace-nowrap text-ui-tiny text-muted-foreground"
+                class="job-progress inline-flex items-center gap-ui-3 whitespace-nowrap text-ui-tiny text-muted-foreground"
                 {...props}
               >
                 <span class="job-progress-track block h-[0.3rem] w-[3.2rem] overflow-hidden rounded-full bg-accent" aria-hidden="true">
@@ -590,7 +590,7 @@
                 onPressedChange={() => toggleFailedOnly()}
               >
                 Failed only
-                <span class="filter-count rounded-full bg-current/15 px-[0.3rem] text-ui-tiny">{failedJobs.length}</span>
+                <span class="filter-count rounded-full bg-current/15 px-ui-3 text-ui-tiny">{failedJobs.length}</span>
               </Toggle>
             {/snippet}
           </Hint>
@@ -598,12 +598,12 @@
       </div>
 
       {#if detailLoading && !detail}
-        <div class="pane-state flex min-h-0 flex-1 flex-col items-center justify-center gap-[0.4rem] p-4 text-center text-xs text-muted-foreground" aria-live="polite">
+        <div class="pane-state flex min-h-0 flex-1 flex-col items-center justify-center gap-ui-4 p-4 text-center text-xs text-muted-foreground" aria-live="polite">
           <span class="state-spinner size-4 animate-spin rounded-full border-2 border-border border-t-primary" aria-hidden="true"></span>
           <p class="m-0">Loading jobs…</p>
         </div>
       {:else if detailError && !detail}
-        <div class="pane-state flex min-h-0 flex-1 flex-col items-center justify-center gap-[0.4rem] p-4 text-center text-xs text-muted-foreground" role="alert">
+        <div class="pane-state flex min-h-0 flex-1 flex-col items-center justify-center gap-ui-4 p-4 text-center text-xs text-muted-foreground" role="alert">
           <p class="m-0">Could not load this run.</p>
           <p class="state-hint m-0 max-w-[18rem] text-ui-micro leading-[1.4] opacity-85 [overflow-wrap:anywhere]">{detailError}</p>
           <Button class={tb} variant="outline" type="button" onclick={() => void refreshNow()}>
@@ -611,18 +611,18 @@
           </Button>
         </div>
       {:else if !detail && !listRun}
-        <div class="pane-state flex min-h-0 flex-1 flex-col items-center justify-center gap-[0.4rem] p-4 text-center text-xs text-muted-foreground" aria-live="polite">
+        <div class="pane-state flex min-h-0 flex-1 flex-col items-center justify-center gap-ui-4 p-4 text-center text-xs text-muted-foreground" aria-live="polite">
           <p class="m-0">This run is no longer available.</p>
           <p class="state-hint m-0 max-w-[18rem] text-ui-micro leading-[1.4] opacity-85 [overflow-wrap:anywhere]">
             It may have been removed, or the run list has not loaded yet.
           </p>
         </div>
       {:else}
-        <div class="jobs-list flex min-h-0 flex-1 flex-col gap-[0.1rem] overflow-y-auto p-1" role="group" aria-label="Jobs in this run">
+        <div class="jobs-list flex min-h-0 flex-1 flex-col gap-ui-1 overflow-y-auto p-1" role="group" aria-label="Jobs in this run">
           <Hint label="Show the combined log of every job">
             {#snippet child({ props })}
               <button
-                class="job-row all mb-[0.15rem] grid w-full cursor-pointer grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-[0.45rem] rounded-none border border-transparent border-b-border bg-transparent px-2 pb-[0.4rem] pt-[0.3rem] text-left text-inherit hover:bg-accent focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary {selectedJobId === null
+                class="job-row all mb-ui-15 grid w-full cursor-pointer grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-ui-45 rounded-none border border-transparent border-b-border bg-transparent px-2 pb-ui-4 pt-ui-3 text-left text-inherit hover:bg-accent focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary {selectedJobId === null
                   ? "border-primary bg-primary/10"
                   : ""}"
                 class:selected={selectedJobId === null}
@@ -664,7 +664,7 @@
             <Hint label={`Show the log of ${job.name}`}>
               {#snippet child({ props })}
                 <button
-                  class="job-row grid w-full cursor-pointer grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-[0.45rem] rounded-sm border border-transparent bg-transparent px-2 py-[0.3rem] text-left text-inherit hover:bg-accent focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary {selectedJobId === job.database_id
+                  class="job-row grid w-full cursor-pointer grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-ui-45 rounded-sm border border-transparent bg-transparent px-2 py-ui-3 text-left text-inherit hover:bg-accent focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary {selectedJobId === job.database_id
                     ? "border-primary bg-primary/10"
                     : ""}"
                   class:selected={selectedJobId === job.database_id}
@@ -694,7 +694,7 @@
             </Hint>
 
             {#if selectedJobId === job.database_id && job.steps.length > 0}
-              <ol class="steps m-0 list-none flex flex-col gap-[0.1rem] border-l-2 border-border pb-[0.1rem] pl-[0.5rem] pt-[0.1rem] ml-[0.6rem] mb-[0.25rem] mt-[0.1rem]" aria-label={`Steps in ${job.name}`}>
+              <ol class="steps m-0 list-none flex flex-col gap-ui-1 border-l-2 border-border pb-ui-1 pl-2 pt-ui-1 ml-[0.6rem] mb-1 mt-ui-1" aria-label={`Steps in ${job.name}`}>
                 {#each job.steps as step (step.number)}
                   {@const stepKind = runStateKind({
                     status: step.status,
@@ -711,7 +711,7 @@
                     <Hint label={`Jump to ${step.name} logs`}>
                       {#snippet child({ props })}
                         <button
-                          class="step-row-btn group flex w-full cursor-pointer items-center gap-[0.4rem] rounded-sm border px-2 py-0.5 text-left text-ui-micro text-inherit transition-[background-color,border-color] duration-150 hover:border-border hover:bg-accent focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary {activeStepKey === stepKeyStr
+                          class="step-row-btn group flex w-full cursor-pointer items-center gap-ui-4 rounded-sm border px-2 py-0.5 text-left text-ui-micro text-inherit transition-[background-color,border-color] duration-150 hover:border-border hover:bg-accent focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary {activeStepKey === stepKeyStr
                             ? "border-primary bg-primary/[0.14] font-medium"
                             : "border-transparent bg-transparent"}"
                           class:active={activeStepKey === stepKeyStr}
@@ -748,13 +748,13 @@
     </aside>
 
     <section class="log-pane flex min-h-0 min-w-0 flex-col overflow-hidden rounded-sm border border-border bg-card" aria-label="Workflow log">
-      <div class="log-head flex-none flex flex-wrap items-center gap-[0.4rem] border-b border-border bg-popover px-2 py-[0.35rem]">
-        <h3 class="pane-title m-0 inline-flex min-w-0 items-baseline gap-[0.35rem] truncate text-xs font-semibold text-foreground">
+      <div class="log-head flex-none flex flex-wrap items-center gap-ui-4 border-b border-border bg-popover px-2 py-ui-35">
+        <h3 class="pane-title m-0 inline-flex min-w-0 items-baseline gap-ui-35 truncate text-xs font-semibold text-foreground">
           {selectedJob ? selectedJob.name : "All jobs"}
           {#if failedOnly}<span class="scope-chip rounded-full bg-muted px-2 text-ui-tiny font-medium text-muted-foreground">failed steps</span>{/if}
         </h3>
         {#if live}
-          <span class="live-badge small flex-none inline-flex items-center gap-[0.3rem] text-ui-tiny font-medium text-primary">
+          <span class="live-badge small flex-none inline-flex items-center gap-ui-3 text-ui-tiny font-medium text-primary">
             <span class="live-dot size-[0.42rem] animate-pulse rounded-full bg-current" aria-hidden="true"></span>
             Live
           </span>
@@ -779,7 +779,7 @@
         {/if}
       </div>
 
-      <div class="log-body flex min-h-0 flex-1 p-[0.4rem]">
+      <div class="log-body flex min-h-0 flex-1 p-ui-4">
         <!-- Remount per run so search, collapse state, and tailing do not leak
              from the previously opened run into this one. -->
         {#key `${repoId}:${runId}`}

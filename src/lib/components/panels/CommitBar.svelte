@@ -492,7 +492,7 @@
           {/snippet}
         </Hint>
 
-        <div class="primary inline-flex items-center gap-[0.375rem]">
+        <div class="primary inline-flex items-center gap-ui-375">
           <AiFeatureButton
             {repoId}
             icon
@@ -517,7 +517,7 @@ ${m.body}` : m.subject;
           <Hint label="Commit, then push the branch to the primary remote (Ctrl+Shift+Enter)">
             {#snippet child({ props })}
               <Button
-                class="h-7 gap-[0.35rem] rounded-full px-3 text-xs"
+                class="h-7 gap-ui-35 rounded-full px-3 text-xs"
                 variant="secondary"
                 type="button"
                 {...props}
@@ -540,7 +540,7 @@ ${m.body}` : m.subject;
           <Hint label={commitHint}>
             {#snippet child({ props })}
               <Button
-                class="h-7 min-w-[5.25rem] gap-[0.35rem] rounded-full px-4 text-xs"
+                class="h-7 min-w-[5.25rem] gap-ui-35 rounded-full px-4 text-xs"
                 {...props}
                 type="submit"
                 aria-describedby={stagedHintId}
@@ -585,7 +585,7 @@ ${m.body}` : m.subject;
 
   {#if showAuthor}
     <div class="author flex flex-col gap-1 pt-0.5">
-      <label class="flex-1 flex items-center gap-[0.375rem] min-w-0">
+      <label class="flex-1 flex items-center gap-ui-375 min-w-0">
         <span class="al shrink-0 text-muted-foreground text-ui-micro">Name</span>
         <Input
           type="text"
@@ -595,7 +595,7 @@ ${m.body}` : m.subject;
           aria-label="Author name override"
         />
       </label>
-      <label class="flex-1 flex items-center gap-[0.375rem] min-w-0">
+      <label class="flex-1 flex items-center gap-ui-375 min-w-0">
         <span class="al shrink-0 text-muted-foreground text-ui-micro">Email</span>
         <Input
           type="email"

@@ -62,7 +62,7 @@
     <Button
       variant="outline"
       size="sm"
-      class="ai-health {view.tone} gap-[0.3rem] rounded-full text-muted-foreground {compact
+      class="ai-health {view.tone} gap-ui-3 rounded-full text-muted-foreground {compact
         ? 'compact'
         : ''}"
       type="button"

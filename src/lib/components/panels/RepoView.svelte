@@ -1594,7 +1594,7 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
   <header
     class="repo-header flex min-w-0 flex-none flex-wrap items-center gap-x-2 gap-y-1.5 border-b border-border bg-popover px-2.5 py-1 text-ui-base"
   >
-    <span class="repo-identity flex min-w-0 flex-1 items-center gap-[0.4rem]">
+    <span class="repo-identity flex min-w-0 flex-1 items-center gap-ui-4">
       <Hint label={name}>
         {#snippet child({ props })}
           <span
@@ -1615,7 +1615,7 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
           {#snippet child({ props })}
             <Badge
               variant="secondary"
-              class="remote-chip flex-none gap-[0.3rem] rounded-full bg-accent px-2 py-px h-auto text-ui-micro {remoteStatus === 'connected' ? 'text-foreground' : 'text-muted-foreground'}"
+              class="remote-chip flex-none gap-ui-3 rounded-full bg-accent px-2 py-px h-auto text-ui-micro {remoteStatus === 'connected' ? 'text-foreground' : 'text-muted-foreground'}"
               {...props}
               data-status={remoteStatus}
             >
@@ -1740,7 +1740,7 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
       <span class="cb-actions ml-auto flex flex-none gap-1.5">
         {#if conflictCount > 0}
           <Button
-            class="cb-resolve rounded-full px-3 py-0.5 h-auto bg-destructive text-white hover:bg-destructive hover:brightness-110 text-ui-meta font-normal"
+            class="cb-resolve rounded-full px-3 py-0.5 h-auto bg-destructive text-destructive-foreground hover:bg-destructive hover:brightness-110 text-ui-meta font-normal"
             type="button"
             onclick={onResolve}
           >
@@ -1856,7 +1856,7 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
     }}
   >
     <div
-      class="conflict-dialog flex h-[min(48rem,100%)] w-[min(64rem,100%)] flex-col overflow-hidden rounded-lg bg-card text-card-foreground shadow-[0_1rem_3rem_rgba(0,0,0,0.35)] [&>*]:flex-1 [&>*]:min-h-0"
+      class="conflict-dialog flex h-[min(48rem,100%)] w-[min(64rem,100%)] flex-col overflow-hidden rounded-lg bg-card text-card-foreground shadow-modal [&>*]:flex-1 [&>*]:min-h-0"
       role="dialog"
       aria-modal="true"
       aria-label="Resolve merge conflicts"

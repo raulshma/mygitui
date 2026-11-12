@@ -704,13 +704,15 @@
 
   // --- Render helpers ----------------------------------------------------------
 
+  // Fallbacks mirror the light-scheme values in app.css — the tokens are
+  // always defined, so these only matter if the stylesheet failed to load.
   const BADGE_VAR: Record<BadgeKind, string> = {
-    added: "var(--app-added, #3fb950)",
-    modified: "var(--app-modified, #d29922)",
-    deleted: "var(--app-deleted, #f85149)",
-    renamed: "var(--app-renamed, #8492ff)",
-    conflicted: "var(--app-conflicted, #f85149)",
-    untracked: "var(--app-untracked, #7ee787)",
+    added: "var(--app-added, #1a7f37)",
+    modified: "var(--app-modified, #9a6700)",
+    deleted: "var(--app-deleted, #cf222e)",
+    renamed: "var(--app-renamed, #8250df)",
+    conflicted: "var(--app-conflicted, #cf222e)",
+    untracked: "var(--app-untracked, #1a7f37)",
   };
 
   function formatSize(size: number | null): string {

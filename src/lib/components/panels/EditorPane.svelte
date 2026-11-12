@@ -211,7 +211,7 @@
     <div class="min-h-0 min-w-0 flex-1" class:hidden={!files.visible}>
       {#await loadFileWorkspace()}
         <p
-          class="estate estate-loading m-auto inline-flex items-center gap-[0.4rem] text-ui-base text-muted-foreground"
+          class="estate estate-loading m-auto inline-flex items-center gap-ui-4 text-ui-base text-muted-foreground"
           role="status"
         >
           <Spinner class="size-4" role="presentation" aria-hidden="true" />
@@ -238,7 +238,7 @@
   {#if actionRunId !== null}
     {#await loadActionRun()}
       <p
-        class="estate estate-loading m-auto inline-flex items-center gap-[0.4rem] text-ui-base text-muted-foreground"
+        class="estate estate-loading m-auto inline-flex items-center gap-ui-4 text-ui-base text-muted-foreground"
         role="status"
       >
         <Spinner class="size-4" role="presentation" aria-hidden="true" />
@@ -255,7 +255,7 @@
   {:else if workflowRunId !== null}
     {#await loadWorkflowRun()}
       <p
-        class="estate estate-loading m-auto inline-flex items-center gap-[0.4rem] text-ui-base text-muted-foreground"
+        class="estate estate-loading m-auto inline-flex items-center gap-ui-4 text-ui-base text-muted-foreground"
         role="status"
       >
         <Spinner class="size-4" role="presentation" aria-hidden="true" />
@@ -295,7 +295,7 @@
   {:else if entry}
     <div class="file-editor flex min-h-0 min-w-0 flex-col">
       <header
-        class="ehead flex min-h-7 flex-none items-center gap-[0.4rem] border-b border-border bg-popover px-2.5 py-0.5 text-ui-base"
+        class="ehead flex min-h-7 flex-none items-center gap-ui-4 border-b border-border bg-popover px-2.5 py-0.5 text-ui-base"
       >
         <Hint label={entry.path}>
           {#snippet child({ props })}
@@ -464,7 +464,7 @@
       <div class="ebody flex min-h-0 flex-1 flex-col overflow-hidden">
         {#if diffLoading}
           <p
-            class="estate estate-loading m-auto inline-flex items-center gap-[0.4rem] text-ui-base text-muted-foreground"
+            class="estate estate-loading m-auto inline-flex items-center gap-ui-4 text-ui-base text-muted-foreground"
             role="status"
           >
             <Spinner class="size-4" role="presentation" aria-hidden="true" />
@@ -489,7 +489,7 @@
     </div>
   {:else}
     <div
-      class="welcome flex min-h-0 flex-1 select-none flex-col items-center justify-center gap-[0.4rem] p-8 text-center text-muted-foreground"
+      class="welcome flex min-h-0 flex-1 select-none flex-col items-center justify-center gap-ui-4 p-8 text-center text-muted-foreground"
     >
       <span
         class="wicon inline-flex size-11 items-center justify-center rounded-full border border-border bg-card text-primary"
@@ -498,14 +498,14 @@
       <p class="wtitle m-0 text-sm font-medium text-foreground">Nothing open</p>
       {#if status}
         <div
-          class="wsummary mt-[0.15rem] flex flex-wrap items-center justify-center gap-[0.35rem]"
+          class="wsummary mt-ui-15 flex flex-wrap items-center justify-center gap-ui-35"
           aria-label="Repository summary"
         >
           <span
-            class="wchip wbranch inline-flex items-center gap-[0.2rem] whitespace-nowrap rounded-full border border-primary/35 px-2 py-px font-mono text-ui-micro leading-[1.4] tabular-nums text-primary"
+            class="wchip wbranch inline-flex items-center gap-ui-2 whitespace-nowrap rounded-full border border-primary/35 px-2 py-px font-mono text-ui-micro leading-[1.4] tabular-nums text-primary"
           >{branchLabel}</span>
           <span
-            class="wchip inline-flex items-center gap-[0.2rem] whitespace-nowrap rounded-full border border-border px-2 py-px text-ui-micro leading-[1.4] tabular-nums"
+            class="wchip inline-flex items-center gap-ui-2 whitespace-nowrap rounded-full border border-border px-2 py-px text-ui-micro leading-[1.4] tabular-nums"
           >
             {changeCount === 0
               ? "Clean working tree"
@@ -515,7 +515,7 @@
             <Hint label={`${status.ahead} ${status.ahead === 1 ? "commit" : "commits"} to push`}>
               {#snippet child({ props })}
                 <span
-                  class="wchip wahead inline-flex items-center gap-[0.2rem] whitespace-nowrap rounded-full border border-transparent bg-accent px-2 py-px text-ui-micro leading-[1.4] tabular-nums text-accent-foreground"
+                  class="wchip wahead inline-flex items-center gap-ui-2 whitespace-nowrap rounded-full border border-transparent bg-accent px-2 py-px text-ui-micro leading-[1.4] tabular-nums text-accent-foreground"
                   {...props}
                 >
                   ↑ {status.ahead} to push
@@ -527,7 +527,7 @@
             <Hint label={`${status.behind} ${status.behind === 1 ? "commit" : "commits"} to pull`}>
               {#snippet child({ props })}
                 <span
-                  class="wchip wbehind inline-flex items-center gap-[0.2rem] whitespace-nowrap rounded-full border border-transparent bg-muted px-2 py-px text-ui-micro leading-[1.4] tabular-nums text-muted-foreground"
+                  class="wchip wbehind inline-flex items-center gap-ui-2 whitespace-nowrap rounded-full border border-transparent bg-muted px-2 py-px text-ui-micro leading-[1.4] tabular-nums text-muted-foreground"
                   {...props}
                 >
                   ↓ {status.behind} to pull
@@ -538,7 +538,7 @@
         </div>
       {:else}
         <p
-          class="wloading mt-[0.15rem] inline-flex items-center gap-[0.4rem] text-ui-micro"
+          class="wloading mt-ui-15 inline-flex items-center gap-ui-4 text-ui-micro"
           role="status"
         >
           <Spinner class="size-3" role="presentation" aria-hidden="true" />
@@ -576,9 +576,9 @@
         class="whints mt-[0.9rem] flex list-none flex-wrap justify-center gap-x-[1.1rem] gap-y-[0.4rem] border-t border-border pt-[0.7rem] text-ui-micro text-muted-foreground"
         aria-label="Keyboard shortcuts"
       >
-        <li class="inline-flex items-center gap-[0.15rem]"><Kbd>Ctrl</Kbd>+<Kbd>Shift</Kbd>+<Kbd>P</Kbd><span class="ml-[0.4rem]">Command palette</span></li>
-        <li class="inline-flex items-center gap-[0.15rem]"><Kbd>F5</Kbd><span class="ml-[0.4rem]">Refresh repository</span></li>
-        <li class="inline-flex items-center gap-[0.15rem]"><Kbd>Ctrl</Kbd>+<Kbd>1</Kbd><span class="ml-[0.4rem]">Focus source control</span></li>
+        <li class="inline-flex items-center gap-ui-15"><Kbd>Ctrl</Kbd>+<Kbd>Shift</Kbd>+<Kbd>P</Kbd><span class="ml-ui-4">Command palette</span></li>
+        <li class="inline-flex items-center gap-ui-15"><Kbd>F5</Kbd><span class="ml-ui-4">Refresh repository</span></li>
+        <li class="inline-flex items-center gap-ui-15"><Kbd>Ctrl</Kbd>+<Kbd>1</Kbd><span class="ml-ui-4">Focus source control</span></li>
       </ul>
     </div>
   {/if}

@@ -635,7 +635,7 @@
         aria-busy="true"
       >
         <span
-          class="launch-mark mb-[0.35rem] grid size-[3.25rem] place-items-center rounded-[0.95rem] bg-primary/10 text-primary shadow-sm"
+          class="launch-mark mb-ui-35 grid size-[3.25rem] place-items-center rounded-[0.95rem] bg-primary/10 text-primary shadow-sm"
           aria-hidden="true"
         >
           <Icon icon={iconBrand} size={26} />
@@ -656,7 +656,7 @@
           </Hint>
         {/if}
         <span
-          class="launch-spinner mt-[0.35rem] size-[1.4rem] animate-spin rounded-full border-[2.5px] border-primary/25 border-t-primary"
+          class="launch-spinner mt-ui-35 size-[1.4rem] animate-spin rounded-full border-[2.5px] border-primary/25 border-t-primary"
           aria-hidden="true"
         ></span>
       </main>
@@ -668,7 +668,7 @@
           class="repo-offline flex min-h-0 flex-1 flex-col items-center justify-center gap-2.5 p-8 text-center text-muted-foreground"
         >
           <span
-            class="offline-icon mb-[0.35rem] grid size-[3.25rem] place-items-center rounded-[0.95rem] bg-muted text-muted-foreground shadow-sm"
+            class="offline-icon mb-ui-35 grid size-[3.25rem] place-items-center rounded-[0.95rem] bg-muted text-muted-foreground shadow-sm"
             aria-hidden="true"
           >
             <Icon icon={iconDevices} size={26} />
@@ -691,7 +691,7 @@
             {active.openError}
           </p>
           <button
-            class="add-btn inline-flex cursor-pointer items-center gap-1.5 rounded-full border border-transparent bg-primary px-3.5 py-1.5 text-xs font-medium whitespace-nowrap text-primary-foreground hover:brightness-110 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+            class="add-btn pill-btn pill-btn-md pill-btn-primary"
             type="button"
             onclick={() => void retryRemoteTab(active.root)}
           >
@@ -810,7 +810,7 @@
               <div class="head-actions flex flex-none flex-wrap gap-2">
                 {#if tabsOpen}
                   <button
-                    class="back-btn inline-flex cursor-pointer items-center gap-1.5 rounded-full border border-border bg-muted px-3.5 py-1.5 text-xs font-medium whitespace-nowrap text-foreground hover:border-input hover:bg-accent focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+                    class="back-btn pill-btn pill-btn-md pill-btn-secondary"
                     type="button"
                     onclick={hideRecentRepos}
                   >
@@ -820,7 +820,7 @@
                 {/if}
                 {#if repos.length > 0}
                   <button
-                    class="add-btn inline-flex cursor-pointer items-center gap-1.5 rounded-full border border-transparent bg-primary px-3.5 py-1.5 text-xs font-medium whitespace-nowrap text-primary-foreground hover:brightness-110 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+                    class="add-btn pill-btn pill-btn-md pill-btn-primary"
                     type="button"
                     onclick={() => void openFromDisk()}
                   >
@@ -828,7 +828,7 @@
                     Open repository…
                   </button>
                   <button
-                    class="clone-btn inline-flex cursor-pointer items-center gap-1.5 rounded-full border border-border bg-transparent px-3.5 py-1.5 text-xs font-medium whitespace-nowrap text-foreground hover:border-input hover:bg-accent focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+                    class="clone-btn pill-btn pill-btn-md pill-btn-ghost"
                     type="button"
                     onclick={() => (cloneOpen = true)}
                   >
@@ -877,7 +877,7 @@
               class="empty flex flex-col items-center gap-1.5 rounded-[28px] border border-dashed border-border bg-muted/30 px-6 py-10 text-center"
             >
               <span
-                class="empty-icon mb-[0.35rem] grid size-14 place-items-center rounded-full bg-primary/10 text-primary"
+                class="empty-icon mb-ui-35 grid size-14 place-items-center rounded-full bg-primary/10 text-primary"
                 aria-hidden="true"
               >
                 <Icon icon={iconFolder} size={30} />
@@ -895,7 +895,7 @@
               </p>
               <div class="empty-actions mt-3 flex flex-wrap justify-center gap-2">
                 <button
-                  class="add-btn inline-flex cursor-pointer items-center gap-1.5 rounded-full border border-transparent bg-primary px-3.5 py-1.5 text-xs font-medium whitespace-nowrap text-primary-foreground hover:brightness-110 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+                  class="add-btn pill-btn pill-btn-md pill-btn-primary"
                   type="button"
                   onclick={() => void openFromDisk()}
                 >
@@ -903,7 +903,7 @@
                   Open repository…
                 </button>
                 <button
-                  class="clone-btn inline-flex cursor-pointer items-center gap-1.5 rounded-full border border-border bg-transparent px-3.5 py-1.5 text-xs font-medium whitespace-nowrap text-foreground hover:border-input hover:bg-accent focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+                  class="clone-btn pill-btn pill-btn-md pill-btn-ghost"
                   type="button"
                   onclick={() => (cloneOpen = true)}
                 >
@@ -918,7 +918,7 @@
               title={`No repositories match “${repoFilter}”`}
             >
               <button
-                class="clear-search inline-flex cursor-pointer items-center gap-1.5 rounded-full border border-border bg-transparent px-3.5 py-1.5 text-xs font-medium whitespace-nowrap text-primary hover:border-input hover:bg-accent focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+                class="clear-search pill-btn pill-btn-md pill-btn-ghost text-primary"
                 type="button"
                 onclick={() => (repoFilter = "")}
               >
@@ -929,7 +929,7 @@
             <ul class="repo-list m-0 flex list-none flex-col gap-1.5 p-0">
               {#each filteredRepos as repo (repo.path)}
                 {@const when = lastOpenedLabel(repo.lastOpened)}
-                <li class="repo-row-wrapper group/row flex items-center gap-0.5 rounded-xl border border-transparent bg-muted/40 pr-[0.35rem] transition-colors hover:border-border hover:bg-muted/70 focus-within:border-border focus-within:bg-muted/70">
+                <li class="repo-row-wrapper group/row flex items-center gap-0.5 rounded-xl border border-transparent bg-muted/40 pr-ui-35 transition-colors hover:border-border hover:bg-muted/70 focus-within:border-border focus-within:bg-muted/70">
                   <button
                     class="repo-row flex min-w-0 flex-1 cursor-pointer items-center gap-3 rounded-xl border border-transparent bg-transparent px-3 py-[0.55rem] text-left text-foreground hover:border-transparent hover:bg-transparent focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary"
                     type="button"
@@ -939,7 +939,7 @@
                       <Icon icon={iconFolder} size={20} />
                     </span>
                     <span class="repo-main flex min-w-0 flex-1 flex-col gap-0.5">
-                      <span class="repo-title flex min-w-0 items-center gap-[0.3rem]">
+                      <span class="repo-title flex min-w-0 items-center gap-ui-3">
                         <span class="repo-name overflow-hidden text-ellipsis whitespace-nowrap text-sm font-semibold">{repoName(repo.path)}</span>
                         {#if repo.pinned}
                           <Hint label="Pinned" side="bottom">
@@ -1022,7 +1022,7 @@
             <div class="head-actions flex flex-none flex-wrap gap-2">
               {#if deviceDetail}
                 <button
-                  class="back-btn inline-flex cursor-pointer items-center gap-1.5 rounded-full border border-border bg-muted px-3.5 py-1.5 text-xs font-medium whitespace-nowrap text-foreground hover:border-input hover:bg-accent focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+                  class="back-btn pill-btn pill-btn-md pill-btn-secondary"
                   type="button"
                   onclick={() => (deviceDetailId = null)}
                 >
@@ -1030,7 +1030,7 @@
                   All devices
                 </button>
               {/if}
-              <button class="clone-btn inline-flex cursor-pointer items-center gap-1.5 rounded-full border border-border bg-transparent px-3.5 py-1.5 text-xs font-medium whitespace-nowrap text-foreground hover:border-input hover:bg-accent focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary" type="button" onclick={openAddDevice}>
+              <button class="clone-btn pill-btn pill-btn-md pill-btn-ghost" type="button" onclick={openAddDevice}>
                 <Icon icon={iconAdd} size={14} />
                 Add device…
               </button>
@@ -1078,7 +1078,7 @@
               <div class="detail-actions flex flex-wrap items-end gap-2">
                 {#if deviceDetail.status === "connected"}
                   <button
-                    class="detail-btn inline-flex cursor-pointer items-center gap-[0.3rem] rounded-full border border-border bg-transparent px-[0.85rem] py-[0.35rem] text-xs font-medium whitespace-nowrap text-foreground hover:border-input hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+                    class="detail-btn pill-btn pill-btn-sm pill-btn-ghost"
                     type="button"
                     onclick={() => void remoteDevices.disconnect(deviceDetail.profile.id)}
                   >
@@ -1086,7 +1086,7 @@
                   </button>
                 {:else}
                   <button
-                    class="detail-btn inline-flex cursor-pointer items-center gap-[0.3rem] rounded-full border border-border bg-transparent px-[0.85rem] py-[0.35rem] text-xs font-medium whitespace-nowrap text-foreground hover:border-input hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+                    class="detail-btn pill-btn pill-btn-sm pill-btn-ghost"
                     type="button"
                     disabled={deviceDetail.status === "connecting"}
                     onclick={() => void remoteDevices.connect(deviceDetail.profile.id)}
@@ -1095,7 +1095,7 @@
                   </button>
                 {/if}
                 <button
-                  class="detail-btn inline-flex cursor-pointer items-center gap-[0.3rem] rounded-full border border-border bg-transparent px-[0.85rem] py-[0.35rem] text-xs font-medium whitespace-nowrap text-foreground hover:border-input hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+                  class="detail-btn pill-btn pill-btn-sm pill-btn-ghost"
                   type="button"
                   onclick={() => openEditDevice(deviceDetail.profile)}
                 >
@@ -1113,7 +1113,7 @@
                     >Poll interval (seconds)</span
                   >
                   <input
-                    class="poll-input w-[5.5rem] rounded border border-border bg-card px-2 py-[0.35rem] text-ui-base text-foreground focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-primary"
+                    class="poll-input w-[5.5rem] rounded border border-border bg-card px-2 py-ui-35 text-ui-base text-foreground focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-primary"
                     type="number"
                     min="1"
                     aria-label="Poll interval in seconds"
@@ -1121,21 +1121,21 @@
                   />
                 </label>
                 <button
-                  class="detail-btn inline-flex cursor-pointer items-center gap-[0.3rem] rounded-full border border-border bg-transparent px-[0.85rem] py-[0.35rem] text-xs font-medium whitespace-nowrap text-foreground hover:border-input hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+                  class="detail-btn pill-btn pill-btn-sm pill-btn-ghost"
                   type="button"
                   onclick={() => void savePollInterval()}
                 >
                   Save
                 </button>
                 <button
-                  class="detail-btn inline-flex cursor-pointer items-center gap-[0.3rem] rounded-full border border-border bg-transparent px-[0.85rem] py-[0.35rem] text-xs font-medium whitespace-nowrap text-foreground hover:border-input hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+                  class="detail-btn pill-btn pill-btn-sm pill-btn-ghost"
                   type="button"
                   onclick={() => void forgetHostKey()}
                 >
                   Forget host key
                 </button>
                 <button
-                  class="detail-btn danger inline-flex cursor-pointer items-center gap-[0.3rem] rounded-full border border-border bg-transparent px-[0.85rem] py-[0.35rem] text-xs font-medium whitespace-nowrap text-destructive hover:border-destructive hover:bg-destructive/10 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+                  class="detail-btn danger pill-btn pill-btn-sm pill-btn-danger"
                   type="button"
                   onclick={() => (removeDeviceOpen = true)}
                 >
@@ -1155,7 +1155,7 @@
           {:else}
             <ul class="repo-list m-0 flex list-none flex-col gap-1.5 p-0">
               {#each remoteDevices.devices ?? [] as device (device.profile.id)}
-                <li class="repo-row-wrapper group/row flex items-center gap-0.5 rounded-xl border border-transparent bg-muted/40 pr-[0.35rem] transition-colors hover:border-border hover:bg-muted/70 focus-within:border-border focus-within:bg-muted/70">
+                <li class="repo-row-wrapper group/row flex items-center gap-0.5 rounded-xl border border-transparent bg-muted/40 pr-ui-35 transition-colors hover:border-border hover:bg-muted/70 focus-within:border-border focus-within:bg-muted/70">
                   <button
                     class="repo-row flex min-w-0 flex-1 cursor-pointer items-center gap-3 rounded-xl border border-transparent bg-transparent px-3 py-[0.55rem] text-left text-foreground hover:border-transparent hover:bg-transparent focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary"
                     type="button"
@@ -1165,7 +1165,7 @@
                       <Icon icon={iconDevices} size={20} />
                     </span>
                     <span class="repo-main flex min-w-0 flex-1 flex-col gap-0.5">
-                      <span class="repo-title flex min-w-0 items-center gap-[0.3rem]">
+                      <span class="repo-title flex min-w-0 items-center gap-ui-3">
                         <span class="repo-name overflow-hidden text-ellipsis whitespace-nowrap text-sm font-semibold">{device.profile.name}</span>
                       </span>
                       <span class="repo-path max-w-full overflow-hidden text-ellipsis whitespace-nowrap font-mono text-xs text-muted-foreground">

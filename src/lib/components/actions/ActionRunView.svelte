@@ -119,9 +119,9 @@
 </script>
 
 <div class="action-run-view @container flex h-full min-h-0 min-w-0 flex-col bg-background">
-  <header class="run-head flex-none flex flex-col gap-[0.35rem] border-b border-border bg-card px-[0.7rem] pb-[0.55rem] pt-[0.4rem] @max-[38rem]:px-2 @max-[38rem]:pb-[0.45rem] @max-[38rem]:pt-[0.35rem]">
-    <div class="head-top flex min-w-0 items-center gap-[0.4rem]">
-      <span class="crumbs flex min-w-0 items-baseline gap-[0.35rem] text-ui-meta text-muted-foreground">
+  <header class="run-head flex-none flex flex-col gap-ui-35 border-b border-border bg-card px-[0.7rem] pb-[0.55rem] pt-ui-4 @max-[38rem]:px-2 @max-[38rem]:pb-ui-45 @max-[38rem]:pt-ui-35">
+    <div class="head-top flex min-w-0 items-center gap-ui-4">
+      <span class="crumbs flex min-w-0 items-baseline gap-ui-35 text-ui-meta text-muted-foreground">
         <span class="crumb-muted flex-none opacity-80">Actions</span>
         <span class="crumb-sep flex-none opacity-80" aria-hidden="true">/</span>
         <Hint label={run?.name ?? "Action run"}>
@@ -170,7 +170,7 @@
     </div>
 
     {#if run}
-      <div class="title-row flex min-w-0 flex-wrap items-center gap-[0.45rem]">
+      <div class="title-row flex min-w-0 flex-wrap items-center gap-ui-45">
         <Badge
           variant="outline"
           class={`status-chip chip-${run.status} h-auto flex-none items-center whitespace-nowrap rounded-full border-transparent px-2 py-px text-ui-micro font-semibold ${run.status === "running" ? "bg-secondary text-secondary-foreground" : run.status === "success" ? "bg-primary/15 text-primary" : run.status === "cancelled" ? "bg-muted text-muted-foreground" : "bg-destructive/10 text-destructive"}`}
@@ -178,7 +178,7 @@
           {runStatusLabel(run.status, run.exit_code)}
         </Badge>
         {#if live}
-          <span class="live-badge flex-none inline-flex items-center gap-[0.3rem] text-ui-micro font-semibold text-primary">
+          <span class="live-badge flex-none inline-flex items-center gap-ui-3 text-ui-micro font-semibold text-primary">
             <span class="live-dot size-[0.42rem] rounded-full bg-current animate-pulse" aria-hidden="true"></span>
             Running
           </span>
@@ -207,7 +207,7 @@
         {/if}
       </div>
     {:else}
-      <div class="title-row flex min-w-0 flex-wrap items-center gap-[0.45rem]">
+      <div class="title-row flex min-w-0 flex-wrap items-center gap-ui-45">
         <h2 class="run-title m-0 min-w-0 text-[0.95rem] font-semibold leading-[1.25] text-foreground [overflow-wrap:anywhere]">Run {runId}</h2>
       </div>
     {/if}
@@ -215,7 +215,7 @@
 
   {#if run}
     <section class="log-pane m-2 flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-lg border border-border bg-card" aria-label="Action output">
-      <div class="log-head flex-none flex flex-wrap items-center gap-[0.4rem] border-b border-border bg-muted/50 px-2 py-[0.35rem]">
+      <div class="log-head flex-none flex flex-wrap items-center gap-ui-4 border-b border-border bg-muted/50 px-2 py-ui-35">
         <h3 class="pane-title m-0 text-xs font-semibold text-foreground">Output</h3>
         <Badge
           variant="outline"

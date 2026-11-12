@@ -106,7 +106,7 @@
     <p id="preview-summary" class="mb-2 mt-0 whitespace-pre-line text-foreground [overflow-wrap:anywhere]">{info.summary}</p>
 
     {#if lines.length > 1}
-      <ul class="mb-3 mt-0 max-h-48 list-none overflow-y-auto rounded-sm border border-border bg-background px-[0.6rem] py-[0.35rem] font-mono text-ui-meta text-muted-foreground" role="list" aria-label="Affected files">
+      <ul class="mb-3 mt-0 max-h-48 list-none overflow-y-auto rounded-sm border border-border bg-background px-[0.6rem] py-ui-35 font-mono text-ui-meta text-muted-foreground" role="list" aria-label="Affected files">
         {#each lines.slice(1) as line, i (i)}
           <li class="py-px [overflow-wrap:anywhere]">{line}</li>
         {/each}

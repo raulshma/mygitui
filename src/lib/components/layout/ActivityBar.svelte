@@ -188,7 +188,7 @@
       </svg>
       {#if count > 0}
         <span
-          class="activity-badge absolute right-[0.05rem] top-[0.1rem] grid h-4 min-w-[0.8rem] place-items-center rounded-full border-2 border-popover bg-primary px-[0.14rem] text-ui-tiny font-bold leading-none tracking-[-0.02em] text-primary-foreground tabular-nums [.active_&]:border-accent"
+          class="activity-badge absolute right-[0.05rem] top-ui-1 grid h-4 min-w-[0.8rem] place-items-center rounded-full border-2 border-popover bg-primary px-[0.14rem] text-ui-tiny font-bold leading-none tracking-[-0.02em] text-primary-foreground tabular-nums [.active_&]:border-accent"
           aria-hidden="true"
           >{badgeText(count)}</span
         >
@@ -211,7 +211,7 @@
       <Icon icon={iconMore} size={18} />
       {#if moreBadgeCount > 0}
         <span
-          class="activity-badge dot absolute right-[0.05rem] top-[0.1rem] grid h-[0.45rem] w-[0.45rem] min-w-[0.45rem] place-items-center rounded-full border-0 bg-primary p-0 leading-none tracking-[-0.02em] text-primary-foreground tabular-nums"
+          class="activity-badge dot absolute right-[0.05rem] top-ui-1 grid h-[0.45rem] w-[0.45rem] min-w-[0.45rem] place-items-center rounded-full border-0 bg-primary p-0 leading-none tracking-[-0.02em] text-primary-foreground tabular-nums"
           aria-hidden="true"
         ></span>
       {/if}

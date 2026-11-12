@@ -239,7 +239,7 @@
                handling lives on the tab strip's focusable row buttons + menus -->
           <div
             {...props}
-            class="tab flex h-8 max-w-56 flex-none cursor-pointer items-center gap-[0.3rem] border-r border-border py-0 pl-2.5 pr-[0.3rem] whitespace-nowrap select-none text-ui-meta {isActive
+            class="tab flex h-8 max-w-56 flex-none cursor-pointer items-center gap-ui-3 border-r border-border py-0 pl-2.5 pr-ui-3 whitespace-nowrap select-none text-ui-meta {isActive
               ? 'bg-card text-foreground shadow-[inset_0_2px_0_var(--primary)]'
               : 'text-muted-foreground hover:bg-accent'}"
             class:active={isActive}
@@ -366,7 +366,7 @@
     {#each openFiles as file (file.path)}
       <div class="pane min-h-0 flex-1 [&>*]:h-full" class:hidden={file.path !== active}>
         {#if file.meta === null}
-          <p class="state m-auto inline-flex items-center gap-[0.4rem] text-ui-base text-muted-foreground" role="status"><Spinner class="size-3" role="presentation" aria-hidden="true" /> Reading {file.path}…</p>
+          <p class="state m-auto inline-flex items-center gap-ui-4 text-ui-base text-muted-foreground" role="status"><Spinner class="size-3" role="presentation" aria-hidden="true" /> Reading {file.path}…</p>
         {:else if usesEditor(file.meta)}
           <FileEditor
             bind:this={editorRefs[file.path]}
@@ -395,7 +395,7 @@
     onCancel={confirmCancel}
   >
     {#snippet children()}
-      <h3 class="dlg-title m-0 mb-[0.4rem] text-sm font-medium text-foreground" id="fw-close-title">Unsaved changes</h3>
+      <h3 class="dlg-title m-0 mb-ui-4 text-sm font-medium text-foreground" id="fw-close-title">Unsaved changes</h3>
       <p class="dlg-body m-0 break-all font-mono text-ui-base leading-[1.45] text-muted-foreground" id="fw-close-body">
         {confirmPath === null
           ? ""

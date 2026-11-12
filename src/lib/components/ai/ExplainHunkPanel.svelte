@@ -80,8 +80,8 @@
   }
 </script>
 
-<div class="explain-panel absolute bottom-2 left-3 right-3 z-30 flex max-h-[45%] max-w-[34rem] flex-col rounded-xl border border-border bg-popover text-ui-base text-popover-foreground shadow-[0_8px_24px_rgba(0,0,0,0.35)]" role="complementary" aria-label={`AI explanation of ${path} hunk`}>
-  <header class="head flex-none flex items-center gap-2 border-b border-border pb-[0.375rem] pl-3 pr-2 pt-[0.375rem]">
+<div class="explain-panel absolute bottom-2 left-3 right-3 z-30 flex max-h-[45%] max-w-[34rem] flex-col rounded-xl border border-border bg-popover text-ui-base text-popover-foreground shadow-overlay" role="complementary" aria-label={`AI explanation of ${path} hunk`}>
+  <header class="head flex-none flex items-center gap-2 border-b border-border pb-ui-375 pl-3 pr-2 pt-ui-375">
     <Hint label={path}>
       {#snippet child({ props })}
         <span class="file min-w-0 truncate font-mono text-xs font-semibold" {...props}>{path}</span>
@@ -101,11 +101,11 @@
   <div class="body overflow-y-auto px-3 py-2">
     {#if outcome}
       <p class="text m-0 leading-[1.45] whitespace-pre-wrap [overflow-wrap:anywhere]">{outcome.result.text}</p>
-      <p class="meta mb-0 mt-[0.375rem] text-ui-micro text-muted-foreground">via {outcome.result.model} · {outcome.result.backend}</p>
+      <p class="meta mb-0 mt-ui-375 text-ui-micro text-muted-foreground">via {outcome.result.model} · {outcome.result.backend}</p>
     {:else if error}
-      <p class="error m-0 mb-[0.375rem] text-destructive [overflow-wrap:anywhere]" role="alert">{error}</p>
+      <p class="error m-0 mb-ui-375 text-destructive [overflow-wrap:anywhere]" role="alert">{error}</p>
       {#if needsOptIn}
-        <div class="opts flex flex-wrap gap-[0.375rem]">
+        <div class="opts flex flex-wrap gap-ui-375">
           <Button
             variant="default"
             size="xs"

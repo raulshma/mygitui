@@ -482,9 +482,9 @@
        effect re-runs → loading → host unbinds). Loading/error state is
        an overlay on top of the (hidden) host instead. -->
   {#if status === "loading"}
-    <p class="state m-auto inline-flex items-center gap-[0.4rem] text-ui-base text-muted-foreground" role="status"><Spinner class="size-3" role="presentation" aria-hidden="true" /> Loading {path}…</p>
+    <p class="state m-auto inline-flex items-center gap-ui-4 text-ui-base text-muted-foreground" role="status"><Spinner class="size-3" role="presentation" aria-hidden="true" /> Loading {path}…</p>
   {:else if status === "error"}
-    <p class="state m-auto inline-flex items-center gap-[0.4rem] text-ui-base text-destructive" role="alert">{errorText}</p>
+    <p class="state m-auto inline-flex items-center gap-ui-4 text-ui-base text-destructive" role="alert">{errorText}</p>
   {/if}
   <div
     class="cm-host flex-1 min-h-0 overflow-hidden {showPreview ? 'min-w-0' : ''} {status !== "ready" || editorHidden ? 'hidden' : ''}"

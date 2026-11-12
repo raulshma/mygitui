@@ -113,7 +113,7 @@
       aria-label={editing !== null ? `Edit custom app ${editing.name}` : "Add custom app"}
       onsubmit={save}
     >
-      <label class="flex flex-col gap-[0.125rem]">
+      <label class="flex flex-col gap-ui-125">
         <span class="text-ui-meta text-muted-foreground">Name</span>
         <Input
           class="rounded"
@@ -127,7 +127,7 @@
           <p class="m-0 text-ui-meta text-destructive" role="alert">{nameError}</p>
         {/if}
       </label>
-      <label class="flex flex-col gap-[0.125rem]">
+      <label class="flex flex-col gap-ui-125">
         <span class="text-ui-meta text-muted-foreground">Command</span>
         <Input
           class="rounded font-mono"
@@ -173,7 +173,7 @@
         <li
           class="flex min-w-0 items-center gap-2 rounded-md border border-border px-2 py-1.5 hover:bg-muted/60"
         >
-          <span class="flex min-w-0 flex-1 flex-col gap-[0.1rem]">
+          <span class="flex min-w-0 flex-1 flex-col gap-ui-1">
             <span class="truncate text-sm font-medium text-foreground">{app.name}</span>
             <span class="truncate font-mono text-ui-meta text-muted-foreground"
               >{app.command}</span

@@ -341,7 +341,7 @@
       >
         <div class="dialog-body flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto">
         <fieldset class="group m-0 flex min-w-0 flex-col gap-[0.625rem] rounded-xl border border-border bg-muted/30 px-4 pb-4 pt-[0.9rem]">
-          <legend class="legend px-[0.35rem] text-xs font-semibold text-muted-foreground">Preferred backend</legend>
+          <legend class="legend px-ui-35 text-xs font-semibold text-muted-foreground">Preferred backend</legend>
           {#each AI_BACKENDS as option (option)}
             <label
               class="backend-option grid min-h-[3.25rem] cursor-pointer grid-cols-[auto_minmax(0,1fr)_minmax(8rem,auto)] items-center gap-3 rounded-lg border px-3 py-[0.65rem] max-[36rem]:grid-cols-[auto_minmax(0,1fr)] {backendChoice === option
@@ -355,17 +355,17 @@
                 class="m-0 accent-primary"
                 bind:group={backendChoice}
               />
-              <span class="backend-copy flex min-w-0 flex-col gap-[0.15rem]">
+              <span class="backend-copy flex min-w-0 flex-col gap-ui-15">
                 <strong class="text-sm font-semibold">{option === "opencode" ? "OpenCode" : "OpenRouter"}</strong>
                 <span class="text-ui-meta text-muted-foreground">{option === "opencode" ? "Local server, managed by mygitui" : "Direct API, requires an API key"}</span>
               </span>
-              <span class="backend-status {statuses[option].status} flex min-w-0 flex-col gap-[0.15rem] text-right text-ui-meta [overflow-wrap:anywhere] max-w-56 max-[36rem]:col-start-2 max-[36rem]:text-left {statuses[option].status === 'ok' ? 'text-primary' : statuses[option].status === 'down' || statuses[option].status === 'unauthenticated' ? 'text-destructive' : 'text-muted-foreground'}">{statusLine(option)}</span>
+              <span class="backend-status {statuses[option].status} flex min-w-0 flex-col gap-ui-15 text-right text-ui-meta [overflow-wrap:anywhere] max-w-56 max-[36rem]:col-start-2 max-[36rem]:text-left {statuses[option].status === 'ok' ? 'text-primary' : statuses[option].status === 'down' || statuses[option].status === 'unauthenticated' ? 'text-destructive' : 'text-muted-foreground'}">{statusLine(option)}</span>
             </label>
           {/each}
         </fieldset>
 
         <fieldset class="group m-0 flex min-w-0 flex-col gap-[0.625rem] rounded-xl border border-border bg-muted/30 px-4 pb-4 pt-[0.9rem]">
-          <legend class="legend px-[0.35rem] text-xs font-semibold text-muted-foreground">OpenCode</legend>
+          <legend class="legend px-ui-35 text-xs font-semibold text-muted-foreground">OpenCode</legend>
           <p class="status-line m-0 text-ui-base text-foreground [overflow-wrap:anywhere]" role="status">{installLine()}</p>
           <div class="row flex flex-wrap items-center gap-3">
             <Button
@@ -382,11 +382,11 @@
               <span class="hint m-0 text-ui-meta text-muted-foreground">OpenCode 2.x detected (v{detection.version}) — managed and attach modes both supported</span>
             {/if}
           </div>
-          <label class="radio flex cursor-pointer items-baseline gap-[0.375rem] text-ui-base">
+          <label class="radio flex cursor-pointer items-baseline gap-ui-375 text-ui-base">
             <Checkbox bind:checked={opencodeEnabled} />
             <span>Enable OpenCode</span>
           </label>
-          <label class="field flex flex-col gap-[0.125rem]">
+          <label class="field flex flex-col gap-ui-125">
             <span class="field-label text-ui-meta text-muted-foreground">Search models</span>
             <Input
               class="input rounded"
@@ -397,7 +397,7 @@
               disabled={!opencodeEnabled}
             />
           </label>
-          <label class="field flex flex-col gap-[0.125rem]">
+          <label class="field flex flex-col gap-ui-125">
             <span class="field-label text-ui-meta text-muted-foreground">Default model</span>
             <select class="input rounded border border-border bg-background text-foreground font-[inherit] focus-visible:-outline-offset-1 focus-visible:outline-2 focus-visible:outline-primary" bind:value={opencodeModel} disabled={!opencodeEnabled}>
               <option value="">Use OpenCode server default</option>
@@ -437,15 +437,15 @@
             </p>
           {/if}
 
-          <label class="radio advanced-toggle mt-1 flex cursor-pointer items-baseline gap-[0.375rem] text-ui-base text-muted-foreground">
+          <label class="radio advanced-toggle mt-1 flex cursor-pointer items-baseline gap-ui-375 text-ui-base text-muted-foreground">
             <Checkbox bind:checked={showAdvanced} />
             <span>Advanced</span>
           </label>
           {#if showAdvanced}
             <fieldset class="group inner m-0 ml-3.5 mt-0.5 flex min-w-0 flex-col gap-[0.625rem] rounded-none border-0 border-l border-border bg-transparent pb-0 pl-2.5 pr-0 pt-0">
-              <legend class="legend px-[0.35rem] text-xs font-semibold text-muted-foreground">Server mode</legend>
+              <legend class="legend px-ui-35 text-xs font-semibold text-muted-foreground">Server mode</legend>
               {#each ["managed", "attach"] as modeOption (modeOption)}
-                <label class="radio flex cursor-pointer items-baseline gap-[0.375rem] text-ui-base">
+                <label class="radio flex cursor-pointer items-baseline gap-ui-375 text-ui-base">
                   <input
                     type="radio"
                     name="opencode-mode"
@@ -461,7 +461,7 @@
                 </label>
               {/each}
               {#if opencodeModeChoice === "attach"}
-                <label class="field flex flex-col gap-[0.125rem]">
+                <label class="field flex flex-col gap-ui-125">
                   <span class="field-label text-ui-meta text-muted-foreground">Server URL</span>
                   <Input
                     class="input rounded"
@@ -476,7 +476,7 @@
                 </p>
               {/if}
             </fieldset>
-            <label class="field flex flex-col gap-[0.125rem]">
+            <label class="field flex flex-col gap-ui-125">
               <span class="field-label text-ui-meta text-muted-foreground">Server password (optional)</span>
               <Input
                 class="input rounded"
@@ -495,8 +495,8 @@
         </fieldset>
 
         <fieldset class="group m-0 flex min-w-0 flex-col gap-[0.625rem] rounded-xl border border-border bg-muted/30 px-4 pb-4 pt-[0.9rem]">
-          <legend class="legend px-[0.35rem] text-xs font-semibold text-muted-foreground">OpenRouter</legend>
-          <label class="field flex flex-col gap-[0.125rem]">
+          <legend class="legend px-ui-35 text-xs font-semibold text-muted-foreground">OpenRouter</legend>
+          <label class="field flex flex-col gap-ui-125">
             <span class="field-label text-ui-meta text-muted-foreground">API key</span>
             <Input
               class="input rounded"
@@ -511,7 +511,7 @@
               Remove stored API key
             </Button>
           </div>
-          <label class="field flex flex-col gap-[0.125rem]">
+          <label class="field flex flex-col gap-ui-125">
             <span class="field-label text-ui-meta text-muted-foreground">Default model</span>
             <Input
               class="input rounded"
@@ -533,8 +533,8 @@
         </fieldset>
 
         <fieldset class="group m-0 flex min-w-0 flex-col gap-[0.625rem] rounded-xl border border-border bg-muted/30 px-4 pb-4 pt-[0.9rem]">
-          <legend class="legend px-[0.35rem] text-xs font-semibold text-muted-foreground">Behavior</legend>
-          <label class="radio flex cursor-pointer items-baseline gap-[0.375rem] text-ui-base">
+          <legend class="legend px-ui-35 text-xs font-semibold text-muted-foreground">Behavior</legend>
+          <label class="radio flex cursor-pointer items-baseline gap-ui-375 text-ui-base">
             <Checkbox bind:checked={allowFallback} />
             <span>
               Fall back to the other backend when the preferred one is
@@ -552,7 +552,7 @@
           <Button variant="outline" class="secondary rounded-full text-primary" type="button" disabled={testing} onclick={() => void testConnection()}>
             {#if testing}Checking…{:else}Check connections{/if}
           </Button>
-          <ul class="status-list m-0 flex list-none flex-col gap-[0.125rem] p-0 text-ui-meta text-muted-foreground">
+          <ul class="status-list m-0 flex list-none flex-col gap-ui-125 p-0 text-ui-meta text-muted-foreground">
             {#each AI_BACKENDS as backend (backend)}
               <li>
                 <span class="mono font-mono">{backend}</span>: {statusLine(backend)}

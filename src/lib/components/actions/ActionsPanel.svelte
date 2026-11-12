@@ -268,10 +268,10 @@
       Go, Ruby, PHP, and Make.
     </p>
   {:else}
-    <ul class="project-list m-0 flex list-none flex-col gap-[0.45rem] p-0" role="list">
+    <ul class="project-list m-0 flex list-none flex-col gap-ui-45 p-0" role="list">
       {#each projects as project (project.kind + ":" + project.path)}
-        <li class="project-card flex flex-col gap-[0.4rem] rounded-lg border border-border bg-card px-2 py-[0.45rem]">
-          <div class="project-head flex min-w-0 flex-wrap items-baseline gap-[0.4rem]">
+        <li class="project-card flex flex-col gap-ui-4 rounded-lg border border-border bg-card px-2 py-ui-45">
+          <div class="project-head flex min-w-0 flex-wrap items-baseline gap-ui-4">
             <span class="project-kind flex-none text-ui-tiny font-bold uppercase tracking-[0.04em] text-primary">{projectKindLabel(project.kind)}</span>
             <Hint label={project.name}>
               {#snippet child({ props })}
@@ -299,14 +299,14 @@
           {#if project.scripts.length === 0}
             <p class="empty m-0 text-xs text-muted-foreground">No scripts detected.</p>
           {:else}
-            <div class="script-grid grid grid-cols-[repeat(auto-fill,minmax(13rem,1fr))] gap-[0.35rem]">
+            <div class="script-grid grid grid-cols-[repeat(auto-fill,minmax(13rem,1fr))] gap-ui-35">
               {#each project.scripts as script (`${script.id}:${script.command}`)}
                 {@const runName = scriptRunName(project, script)}
                 {@const running = runningNames.has(runName)}
                 <div class="script min-w-0 overflow-hidden rounded-md border border-border bg-background">
                   <Button
                     variant="ghost"
-                    class="script-run flex w-full min-w-0 items-center justify-start gap-[0.35rem] rounded-none px-1 py-[0.3rem] text-left font-normal"
+                    class="script-run flex w-full min-w-0 items-center justify-start gap-ui-35 rounded-none px-1 py-ui-3 text-left font-normal"
                     type="button"
                     disabled={running}
                     title={`${script.command}\n\n${script.watch ? "Long-running watcher" : "Runs to completion"}`}
@@ -315,7 +315,7 @@
                     <span class="script-label min-w-0 flex-1 truncate text-xs font-medium">{script.label}</span>
                     <Badge
                       variant="outline"
-                      class={`script-kind ${script.watch ? "watch" : ""} h-auto flex-none rounded-full border-transparent px-[0.35rem] py-px text-ui-tiny font-semibold uppercase tracking-[0.03em] ${script.watch ? "bg-secondary text-secondary-foreground" : "bg-muted text-muted-foreground"}`}
+                      class={`script-kind ${script.watch ? "watch" : ""} h-auto flex-none rounded-full border-transparent px-ui-35 py-px text-ui-tiny font-semibold uppercase tracking-[0.03em] ${script.watch ? "bg-secondary text-secondary-foreground" : "bg-muted text-muted-foreground"}`}
                     >
                       {script.watch ? "watch" : scriptKindLabel(script.kind)}
                     </Badge>
@@ -323,7 +323,7 @@
                       <span class="script-state flex-none text-ui-tiny text-primary">running…</span>
                     {/if}
                   </Button>
-                  <span class="script-command-row flex min-w-0 items-center gap-[0.2rem] border-t border-border pb-[0.15rem] pl-[0.4rem] pr-[0.2rem] pt-[0.15rem]">
+                  <span class="script-command-row flex min-w-0 items-center gap-ui-2 border-t border-border pb-ui-15 pl-ui-4 pr-ui-2 pt-ui-15">
                     <Hint label={script.command}>
                       {#snippet child({ props })}
                         <code class="script-command min-w-0 flex-1 font-mono text-ui-tiny leading-[1.35] text-muted-foreground [overflow-wrap:anywhere]" {...props}>{script.command}</code>
@@ -354,7 +354,7 @@
     </ul>
   {/if}
 
-  <header class="section-head actions-head mt-[0.4rem] flex flex-wrap items-baseline gap-2">
+  <header class="section-head actions-head mt-ui-4 flex flex-wrap items-baseline gap-2">
     <h3 class="section-title m-0 text-sm font-semibold">Custom actions</h3>
     <span class="section-hint text-ui-micro text-muted-foreground">Shell commands run in the repository root</span>
   </header>
@@ -364,8 +364,8 @@
   {:else}
     <ul class="def-list m-0 flex list-none flex-col gap-1 p-0" role="list">
       {#each defs as def (def.id)}
-        <li class="def-row flex flex-col gap-[0.3rem] rounded-lg border border-border bg-card px-2 py-[0.45rem]">
-          <div class="def-fields flex gap-[0.4rem]">
+        <li class="def-row flex flex-col gap-ui-3 rounded-lg border border-border bg-card px-2 py-ui-45">
+          <div class="def-fields flex gap-ui-4">
             <Input
               class="def-name min-w-0 flex-[1_1_9rem]"
               type="text"
@@ -383,7 +383,7 @@
                 actionsStore.updateDef(def.id, { command: e.currentTarget.value })}
             />
           </div>
-          <div class="def-controls flex items-center gap-[0.4rem]">
+          <div class="def-controls flex items-center gap-ui-4">
             <select
               class="def-scope flex-none rounded border border-border bg-background px-2 py-1 text-foreground font-[inherit] focus-visible:-outline-offset-1 focus-visible:outline-2 focus-visible:outline-primary"
               aria-label="Action scope"
@@ -473,7 +473,7 @@
     </Button>
   </form>
 
-  <header class="section-head runs-head mt-[0.4rem] flex flex-wrap items-baseline gap-2">
+  <header class="section-head runs-head mt-ui-4 flex flex-wrap items-baseline gap-2">
     <h3 class="section-title m-0 text-sm font-semibold">Runs</h3>
     {#if runs.length > 0}
       <span class="section-hint text-ui-micro text-muted-foreground">{runs.length} recent</span>
@@ -491,7 +491,7 @@
               {#snippet child({ props })}
                 <Button
                   variant="ghost"
-                  class="run-toggle flex min-w-0 flex-1 cursor-pointer items-center justify-start gap-2 rounded-none px-2 py-[0.4rem] text-left font-normal"
+                  class="run-toggle flex min-w-0 flex-1 cursor-pointer items-center justify-start gap-2 rounded-none px-2 py-ui-4 text-left font-normal"
                   {...props}
                   type="button"
                   onclick={() => openRun(run.run_id)}

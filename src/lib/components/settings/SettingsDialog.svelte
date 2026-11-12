@@ -7,8 +7,8 @@
    * custom), each wiring its OWN owning store — nothing is duplicated or
    * re-persisted here. The view renders rows generically, which buys:
    *
-   * - **Search** across every section (title + description + keywords) with
-   *   grouped results — the fastest path to "where is X?".
+   * - **Search** (header field) across every section (title + description +
+   *   keywords) with grouped results — the fastest path to "where is X?".
    * - **Keyboard navigation**: `/` or Ctrl/Cmd+F focuses the search field,
    *   ArrowUp/ArrowDown/Home/End walk the section nav, Escape clears the
    *   search first and closes the dialog second.
@@ -36,6 +36,7 @@
   import { Switch } from "$lib/components/ui/switch/index.js";
   import { Slider } from "$lib/components/ui/slider/index.js";
   import { Hint } from "$lib/components/ui/tooltip/index.js";
+  import { Kbd } from "$lib/components/ui/kbd/index.js";
   import * as Collapsible from "$lib/components/ui/collapsible/index.js";
   import ConfirmDialog from "$lib/components/safety/ConfirmDialog.svelte";
   import CustomAppsSection from "$lib/components/openWith/CustomAppsSection.svelte";
@@ -150,6 +151,8 @@
     kind: "action";
     /** Live status line above the description (updater state). */
     status?: () => string | null;
+    /** Tints the card + title as the section's danger zone. */
+    danger?: boolean;
     buttons: readonly ActionButtonDef[];
   }
 
@@ -405,6 +408,9 @@
   /** Search glyph resolved reactively (plain divs can't host `{@const}`). */
   const searchIcon = $derived(appIcon("search"));
 
+  /** Close glyph for the header button (text fallback while a set loads). */
+  const closeIcon = $derived(appIcon("close"));
+
   const normalizedQuery = $derived(query.trim().toLowerCase());
   const searching = $derived(normalizedQuery !== "");
 
@@ -563,7 +569,7 @@
           buttons: [{ label: "About", onclick: () => openAboutDialog() }],
         },
       ],
-      outro: "The interface language is English today; more languages are planned.",
+      outro: "The interface language is English; more languages are planned.",
     },
     {
       id: "appearance",
@@ -870,6 +876,7 @@
           kind: "action",
           id: "reset-all",
           title: "Reset all app settings",
+          danger: true,
           description:
             "Clears every “mygitui.*” local-storage entry (theme, appearance, AI, diff/editor/file-tree prefs, keybinds, update schedule, auto-fetch cadences, Open With apps). Repositories on disk are not touched.",
           keywords: "reset wipe clear defaults danger destructive",
@@ -887,9 +894,12 @@
     },
   ];
 
-  /** Shared card chrome for every row. */
+  /** Shared card chrome for every row; focus-within echoes keyboard focus. */
   const ROW_CARD =
-    "flex items-center justify-between gap-4 rounded-xl border border-border bg-card/40 px-4 py-3 transition-colors";
+    "flex items-center justify-between gap-4 rounded-xl border border-border bg-card/40 px-4 py-3 transition-colors focus-within:border-ring/50";
+  /** Danger-zone variant (destructive action rows): tinted, no hover affordance. */
+  const ROW_CARD_DANGER =
+    "flex items-center justify-between gap-4 rounded-xl border border-destructive/30 bg-destructive/5 px-4 py-3";
   const ROW_TEXT = "flex min-w-0 flex-col gap-0.5";
   const ROW_TITLE = "text-sm font-medium text-foreground";
   const ROW_DESC = "text-ui-meta text-muted-foreground";
@@ -897,6 +907,9 @@
   const activeSection = $derived(
     SECTIONS.find((section) => section.id === active) ?? SECTIONS[0],
   );
+
+  /** Section-header glyph (mirrors {@link searchIcon}: same reason). */
+  const activeSectionIcon = $derived(appIcon(activeSection.icon));
 
   /** Sections with ≥1 matching row, in nav order. */
   const searchResults = $derived.by(() => {
@@ -982,7 +995,7 @@
           {/if}
           <span class="flex flex-none items-center gap-1">
             <Input
-              class="w-16 rounded-md text-center"
+              class="w-16 rounded-md text-center tabular-nums"
               type="number"
               min={row.min}
               max={row.max}
@@ -1001,9 +1014,9 @@
         </span>
       </div>
     {:else if row.kind === "action"}
-      <div class="setting-row {ROW_CARD} bg-muted/30">
+      <div class="setting-row {row.danger ? ROW_CARD_DANGER : ROW_CARD}">
         <span class={ROW_TEXT}>
-          <span class={ROW_TITLE}>{row.title}</span>
+          <span class={ROW_TITLE} class:text-destructive={row.danger}>{row.title}</span>
           {#if row.status}
             {@const statusText = row.status()}
             {#if statusText !== null}
@@ -1039,7 +1052,7 @@
               <li class="flex min-w-0 items-center justify-between gap-3 rounded-md border border-border px-2.5 py-1.5">
                 <span class="min-w-0 truncate font-mono text-ui-meta text-foreground" title={root}>{root}</span>
                 <span class="flex flex-none items-center gap-2">
-                  <span class={ROW_DESC}>{minutes} min</span>
+                  <span class="{ROW_DESC} tabular-nums">{minutes} min</span>
                   <Hint label={`Clear the auto-fetch override for ${root}`}>
                     {#snippet child({ props })}
                       <Button
@@ -1115,7 +1128,7 @@
       so they always stack above the hub no matter which portal mounted first.
     -->
     <Dialog.Content
-      class="flex h-[min(38rem,calc(100dvh_-_2rem))] w-[min(52rem,calc(100vw_-_2rem))] max-w-none flex-col overflow-hidden text-popover-foreground sm:max-w-none z-40"
+      class="flex h-[min(38rem,calc(100dvh_-_2rem))] w-[min(52rem,calc(100vw_-_2rem))] max-w-none flex-col gap-0 overflow-hidden p-0 text-popover-foreground sm:max-w-none z-40"
       overlayClass="z-40 bg-black/40"
       role="dialog"
       aria-modal="true"
@@ -1126,64 +1139,72 @@
       interactOutsideBehavior="ignore"
       onkeydown={onKeydown}
     >
-      <header class="flex flex-none items-start justify-between gap-4 border-b border-border px-5 pb-3 pt-4">
-        <div>
-          <Dialog.Title id="settings-title" class="m-0 font-semibold text-foreground">Settings</Dialog.Title>
-          <p id="settings-description" class="mb-0 mt-1 text-ui-base text-muted-foreground">
-            Every app-wide preference in one place. Changes apply immediately.
-          </p>
+      <header class="flex flex-none items-center gap-4 border-b border-border px-5 py-3">
+        <Dialog.Title id="settings-title" class="m-0 shrink-0 font-semibold text-foreground">Settings</Dialog.Title>
+        <!-- Search lives in the header: the dialog's fast path gets full width
+             while the rail stays a pure section list. -->
+        <div class="relative ml-auto w-full max-w-xs min-w-40">
+          {#if searchIcon}
+            <span class="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground">
+              <Icon icon={searchIcon} size={13} />
+            </span>
+          {/if}
+          <input
+            bind:this={searchEl}
+            bind:value={query}
+            class="h-7 w-full rounded-lg border border-border bg-black/5 pl-7 pr-12 text-ui-base text-foreground placeholder:text-muted-foreground focus-visible:-outline-offset-1 focus-visible:outline-2 focus-visible:outline-primary dark:bg-black/20"
+            type="text"
+            placeholder="Search settings…"
+            aria-label="Search settings"
+            onkeydown={onSearchKeydown}
+          />
+          {#if query !== ""}
+            <button
+              type="button"
+              class="absolute right-1.5 top-1/2 -translate-y-1/2 cursor-pointer rounded-full px-1 text-ui-meta text-muted-foreground hover:text-foreground focus-visible:-outline-offset-1 focus-visible:outline-2 focus-visible:outline-primary"
+              aria-label="Clear search"
+              onclick={() => (query = "")}
+            >
+              ×
+            </button>
+          {:else}
+            <Kbd class="absolute right-2 top-1/2 -translate-y-1/2">/</Kbd>
+          {/if}
         </div>
-        <Button variant="ghost" size="icon" class="flex-none rounded-full text-lg leading-none text-muted-foreground" type="button" aria-label="Close settings" onclick={close}>
-          ×
+        <Button variant="ghost" size="icon" class="flex-none rounded-full text-muted-foreground" type="button" aria-label="Close settings" onclick={close}>
+          {#if closeIcon}
+            <Icon icon={closeIcon} size={16} />
+          {:else}
+            ×
+          {/if}
         </Button>
       </header>
 
       <div class="flex min-h-0 flex-1">
-        <!-- Sticky section nav: search + icon list -->
+        <!-- Sticky section nav: pure section list (search lives in the header) -->
         <nav
           class="flex w-44 flex-none flex-col gap-0.5 overflow-y-auto border-r border-border bg-muted/30 px-2 py-3"
           aria-label="Settings sections"
         >
-          <div class="relative mb-2 px-0.5">
-            {#if searchIcon}
-              <span class="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground">
-                <Icon icon={searchIcon} size={13} />
-              </span>
-            {/if}
-              <input
-                bind:this={searchEl}
-                bind:value={query}
-                class="w-full rounded-md border border-border bg-background py-1 pl-7 pr-6 text-ui-meta text-foreground placeholder:text-muted-foreground focus-visible:-outline-offset-1 focus-visible:outline-2 focus-visible:outline-primary"
-                type="text"
-                placeholder="Search…  /"
-                aria-label="Search settings"
-                onkeydown={onSearchKeydown}
-              />
-              {#if query !== ""}
-                <button
-                  type="button"
-                  class="absolute right-1.5 top-1/2 -translate-y-1/2 cursor-pointer rounded-full px-1 text-ui-meta text-muted-foreground hover:text-foreground focus-visible:-outline-offset-1 focus-visible:outline-2 focus-visible:outline-primary"
-                  aria-label="Clear search"
-                  onclick={() => (query = "")}
-                >
-                  ×
-                </button>
-              {/if}
-          </div>
           {#each SECTIONS as section (section.id)}
             {@const sectionIcon = appIcon(section.icon)}
+            {@const isActive = active === section.id && !searching}
             <button
               id={`settings-nav-${section.id}`}
-              class="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-sm transition-colors {active === section.id
+              class="relative flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-sm transition-colors {isActive
                 ? 'bg-accent font-medium text-accent-foreground'
                 : 'text-muted-foreground hover:bg-muted hover:text-foreground'} focus-visible:-outline-offset-1 focus-visible:outline-2 focus-visible:outline-primary"
               type="button"
-              aria-current={active === section.id ? "true" : undefined}
+              aria-current={isActive ? "true" : undefined}
               onclick={() => selectSection(section.id)}
               onkeydown={onNavKeydown}
             >
+              {#if isActive}
+                <!-- Left edge indicator: the activity-rail's active language. -->
+                <span class="absolute -left-2 top-1/2 h-4 w-0.5 -translate-y-1/2 rounded-full bg-primary" aria-hidden="true"></span>
+              {/if}
               {#if sectionIcon}
-                <span class="flex-none {active === section.id ? 'text-primary' : 'text-muted-foreground/80'}">
+                <span class="flex-none {isActive ? 'text-primary' : 'text-muted-foreground/80'}">
                   <Icon icon={sectionIcon} size={15} />
                 </span>
               {/if}
@@ -1225,22 +1246,48 @@
               {/if}
             </section>
           {:else}
-            <section aria-labelledby="settings-section-heading" class="flex flex-col gap-2.5">
-              <div id="settings-section-heading" class="flex flex-col gap-0.5 pb-1">
-                <h3 class="m-0 text-sm font-semibold text-foreground">{activeSection.label}</h3>
-                <p class="m-0 {ROW_DESC}">{activeSection.blurb}</p>
-              </div>
-              {#if activeSection.intro}
-                <p class="m-0 {ROW_DESC}">{activeSection.intro}</p>
-              {/if}
-              {@render renderRows(activeSection.rows)}
-              {#if activeSection.outro}
-                <p class="m-0 {ROW_DESC}">{activeSection.outro}</p>
-              {/if}
-            </section>
+            <!-- {#key} replays the entrance per section switch: 150ms,
+                 transform+opacity only; reduced-motion collapses globally. -->
+            {#key activeSection.id}
+              <section aria-labelledby="settings-section-heading" class="flex animate-in flex-col gap-2 fade-in-0 slide-in-from-bottom-1 duration-150">
+                <div id="settings-section-heading" class="flex items-center gap-2.5 pb-2">
+                  {#if activeSectionIcon}
+                    <span class="flex size-7 flex-none items-center justify-center rounded-lg bg-primary/10 text-primary">
+                      <Icon icon={activeSectionIcon} size={15} />
+                    </span>
+                  {/if}
+                  <div class="flex min-w-0 flex-col gap-0.5">
+                    <h3 class="m-0 text-base font-semibold text-foreground">{activeSection.label}</h3>
+                    <p class="m-0 {ROW_DESC}">{activeSection.blurb}</p>
+                  </div>
+                </div>
+                {#if activeSection.intro}
+                  <p class="m-0 {ROW_DESC}">{activeSection.intro}</p>
+                {/if}
+                {@render renderRows(activeSection.rows)}
+                {#if activeSection.outro}
+                  <p class="m-0 {ROW_DESC}">{activeSection.outro}</p>
+                {/if}
+              </section>
+            {/key}
           {/if}
         </div>
       </div>
+
+      <!-- Footer: the quiet close. Description (aria-describedby target) on
+           the left, keyboard hints on the right. -->
+      <footer class="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 border-t border-border px-5 py-2">
+        <p id="settings-description" class="m-0 text-ui-meta text-muted-foreground">
+          Every app-wide preference in one place. Changes apply immediately.
+        </p>
+        <p class="m-0 flex flex-none items-center gap-1 text-ui-meta text-muted-foreground" aria-hidden="true">
+          <Kbd class="text-ui-micro">/</Kbd>
+          <span>search</span>
+          <span class="text-border">·</span>
+          <Kbd class="text-ui-micro">Esc</Kbd>
+          <span>close</span>
+        </p>
+      </footer>
     </Dialog.Content>
   </Dialog.Root>
 {/if}

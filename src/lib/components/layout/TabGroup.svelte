@@ -184,7 +184,7 @@
   {#if hideTabs}
     {#if activePanel}
       <div
-        class="panel-head flex flex-none items-center gap-[0.35rem] border-b border-border bg-popover px-2.5 py-1"
+        class="panel-head flex flex-none items-center gap-ui-35 border-b border-border bg-popover px-2.5 py-1"
         onauxclick={(e) => onAuxClick(e, activePanel)}
       >
         <svg
@@ -309,7 +309,7 @@
 
 {#if menu}
   <div
-    class="menu fixed z-80 flex min-w-48 flex-col rounded-md border border-border bg-popover p-1 text-popover-foreground shadow-[0_0.5rem_1.5rem_rgb(0_0_0/0.3)]"
+    class="menu fixed z-80 flex min-w-48 flex-col rounded-md border border-border bg-popover p-1 text-popover-foreground shadow-overlay"
     role="menu"
     bind:this={menuEl}
     style:left={`${menu.x}px`}
@@ -317,7 +317,7 @@
   >
     {#if menu.kind === "context"}
       <button
-        class="menu-item inline-flex cursor-pointer items-center gap-1.5 whitespace-nowrap rounded-sm border-0 bg-transparent px-2 py-[0.35rem] text-left text-xs text-inherit enabled:hover:bg-accent focus-visible:bg-accent focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-45"
+        class="menu-item inline-flex cursor-pointer items-center gap-1.5 whitespace-nowrap rounded-sm border-0 bg-transparent px-2 py-ui-35 text-left text-xs text-inherit enabled:hover:bg-accent focus-visible:bg-accent focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-45"
         type="button"
         role="menuitem"
         disabled={!canMoveLeft}
@@ -326,7 +326,7 @@
         Move to left group
       </button>
       <button
-        class="menu-item inline-flex cursor-pointer items-center gap-1.5 whitespace-nowrap rounded-sm border-0 bg-transparent px-2 py-[0.35rem] text-left text-xs text-inherit enabled:hover:bg-accent focus-visible:bg-accent focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-45"
+        class="menu-item inline-flex cursor-pointer items-center gap-1.5 whitespace-nowrap rounded-sm border-0 bg-transparent px-2 py-ui-35 text-left text-xs text-inherit enabled:hover:bg-accent focus-visible:bg-accent focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-45"
         type="button"
         role="menuitem"
         disabled={!canMoveRight}
@@ -335,7 +335,7 @@
         Move to right group
       </button>
       <button
-        class="menu-item inline-flex cursor-pointer items-center gap-1.5 whitespace-nowrap rounded-sm border-0 bg-transparent px-2 py-[0.35rem] text-left text-xs text-inherit enabled:hover:bg-accent focus-visible:bg-accent focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-45"
+        class="menu-item inline-flex cursor-pointer items-center gap-1.5 whitespace-nowrap rounded-sm border-0 bg-transparent px-2 py-ui-35 text-left text-xs text-inherit enabled:hover:bg-accent focus-visible:bg-accent focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-45"
         type="button"
         role="menuitem"
         onclick={() => runAction("new-group-left")}
@@ -343,7 +343,7 @@
         New group to the left
       </button>
       <button
-        class="menu-item inline-flex cursor-pointer items-center gap-1.5 whitespace-nowrap rounded-sm border-0 bg-transparent px-2 py-[0.35rem] text-left text-xs text-inherit enabled:hover:bg-accent focus-visible:bg-accent focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-45"
+        class="menu-item inline-flex cursor-pointer items-center gap-1.5 whitespace-nowrap rounded-sm border-0 bg-transparent px-2 py-ui-35 text-left text-xs text-inherit enabled:hover:bg-accent focus-visible:bg-accent focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-45"
         type="button"
         role="menuitem"
         onclick={() => runAction("new-group-right")}
@@ -351,7 +351,7 @@
         New group to the right
       </button>
       <button
-        class="menu-item danger inline-flex cursor-pointer items-center gap-1.5 whitespace-nowrap rounded-sm border-0 bg-transparent px-2 py-[0.35rem] text-left text-xs text-inherit text-destructive enabled:hover:bg-accent focus-visible:bg-accent focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-45"
+        class="menu-item danger inline-flex cursor-pointer items-center gap-1.5 whitespace-nowrap rounded-sm border-0 bg-transparent px-2 py-ui-35 text-left text-xs text-inherit text-destructive enabled:hover:bg-accent focus-visible:bg-accent focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-45"
         type="button"
         role="menuitem"
         onclick={() => runAction("hide")}
@@ -361,7 +361,7 @@
     {:else}
       {#each hiddenPanels as panel (panel)}
         <button
-          class="menu-item inline-flex cursor-pointer items-center gap-1.5 whitespace-nowrap rounded-sm border-0 bg-transparent px-2 py-[0.35rem] text-left text-xs text-inherit enabled:hover:bg-accent focus-visible:bg-accent focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-45"
+          class="menu-item inline-flex cursor-pointer items-center gap-1.5 whitespace-nowrap rounded-sm border-0 bg-transparent px-2 py-ui-35 text-left text-xs text-inherit enabled:hover:bg-accent focus-visible:bg-accent focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-45"
           type="button"
           role="menuitem"
           onclick={() => runAdd(panel)}

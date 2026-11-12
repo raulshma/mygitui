@@ -184,7 +184,7 @@
 
 {#if row.kind === "file-header"}
   {@const change = fileChangeKind(row.file)}
-  <div class="row file-header flex w-full box-border items-center gap-[0.4rem] border-y border-[var(--diff-divider)] bg-[var(--diff-file-bg)] py-0 pl-1 pr-3 shadow-[inset_3px_0_var(--diff-file-accent)]" style:height={`${rowHeight(row)}px`}>
+  <div class="row file-header flex w-full box-border items-center gap-ui-4 border-y border-[var(--diff-divider)] bg-[var(--diff-file-bg)] py-0 pl-1 pr-3 shadow-[inset_3px_0_var(--diff-file-accent)]" style:height={`${rowHeight(row)}px`}>
     <button
       type="button"
       class="collapse grid h-[22px] w-[22px] shrink-0 cursor-pointer place-items-center rounded-[4px] border-0 bg-transparent p-0 text-[12px] text-muted-foreground hover:bg-accent focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary"
@@ -225,7 +225,7 @@
     </Hint>
     {#if row.file.is_image}<span class="chip shrink-0 rounded-full border border-border px-2 text-ui-tiny leading-[1.4] uppercase tracking-[0.04em] text-muted-foreground">image</span>{/if}
     {#if row.file.binary}<span class="chip shrink-0 rounded-full border border-border px-2 text-ui-tiny leading-[1.4] uppercase tracking-[0.04em] text-muted-foreground">binary</span>{/if}
-    <span class="counts flex shrink-0 gap-[0.3rem] font-mono text-ui-micro tabular-nums">
+    <span class="counts flex shrink-0 gap-ui-3 font-mono text-ui-micro tabular-nums">
       <span class="adds rounded-[3px] px-1 text-[var(--app-added)] bg-[var(--app-added-bg)]">+{row.file.additions}</span>
       <span class="dels rounded-[3px] px-1 text-[var(--app-deleted)] bg-[var(--app-deleted-bg)]">−{row.file.deletions}</span>
     </span>
@@ -334,7 +334,7 @@
         }}
       >{row.line.old_no ?? ""}</button>
       <span style={signStyle} class="sign shrink-0 select-none text-center font-mono text-[12px] leading-[20px] whitespace-pre [tab-size:8]" aria-hidden="true"></span>
-      <span style={txtStyle} class="txt min-w-0 flex-1 overflow-hidden font-mono text-[12px] leading-[20px] [tab-size:8] {wrap ? "whitespace-pre-wrap break-all" : "whitespace-pre"}" class:wrap={wrap}>{@render text(row.line)}</span>
+      <span style={txtStyle} class="txt min-w-0 flex-1 overflow-hidden font-mono text-[12px] leading-[20px] [tab-size:8] {wrap ? "whitespace-pre-wrap break-words" : "whitespace-pre"}" class:wrap={wrap}>{@render text(row.line)}</span>
     </div>
     <div
       class="half right flex min-w-0 flex-[1_1_50%] border-l border-[var(--diff-divider)] {selCls(selectedInRow(row.lineIndex))}"
@@ -353,7 +353,7 @@
         }}
       >{row.line.new_no ?? ""}</button>
       <span style={signStyle} class="sign shrink-0 select-none text-center font-mono text-[12px] leading-[20px] whitespace-pre [tab-size:8]" aria-hidden="true"></span>
-      <span style={txtStyle} class="txt min-w-0 flex-1 overflow-hidden font-mono text-[12px] leading-[20px] [tab-size:8] {wrap ? "whitespace-pre-wrap break-all" : "whitespace-pre"}" class:wrap={wrap}>{@render text(row.line)}</span>
+      <span style={txtStyle} class="txt min-w-0 flex-1 overflow-hidden font-mono text-[12px] leading-[20px] [tab-size:8] {wrap ? "whitespace-pre-wrap break-words" : "whitespace-pre"}" class:wrap={wrap}>{@render text(row.line)}</span>
     </div>
   </div>
 
@@ -384,7 +384,7 @@
           }}
         >{row.left.old_no ?? ""}</button>
         <span style={signStyle} class="sign del shrink-0 select-none text-center font-mono text-[12px] leading-[20px] font-bold whitespace-pre [tab-size:8] text-[var(--app-deleted)]" aria-hidden="true">−</span>
-        <span style={txtStyle} class="txt min-w-0 flex-1 overflow-hidden font-mono text-[12px] leading-[20px] [tab-size:8] {wrap ? "whitespace-pre-wrap break-all" : "whitespace-pre"}" class:wrap={wrap}>{@render text(row.left)}</span>
+        <span style={txtStyle} class="txt min-w-0 flex-1 overflow-hidden font-mono text-[12px] leading-[20px] [tab-size:8] {wrap ? "whitespace-pre-wrap break-words" : "whitespace-pre"}" class:wrap={wrap}>{@render text(row.left)}</span>
       {/if}
     </div>
     <div
@@ -407,7 +407,7 @@
           }}
         >{row.right.new_no ?? ""}</button>
         <span style={signStyle} class="sign add shrink-0 select-none text-center font-mono text-[12px] leading-[20px] font-bold whitespace-pre [tab-size:8] text-[var(--app-added)]" aria-hidden="true">+</span>
-        <span style={txtStyle} class="txt min-w-0 flex-1 overflow-hidden font-mono text-[12px] leading-[20px] [tab-size:8] {wrap ? "whitespace-pre-wrap break-all" : "whitespace-pre"}" class:wrap={wrap}>{@render text(row.right)}</span>
+        <span style={txtStyle} class="txt min-w-0 flex-1 overflow-hidden font-mono text-[12px] leading-[20px] [tab-size:8] {wrap ? "whitespace-pre-wrap break-words" : "whitespace-pre"}" class:wrap={wrap}>{@render text(row.right)}</span>
       {/if}
     </div>
   </div>
@@ -436,7 +436,7 @@
       }}
     >{lineNo ?? ""}</button>
     <span style={signStyle} class="sign{isAdd ? " add" : isDel ? " del" : ""} shrink-0 select-none text-center font-mono text-[12px] leading-[20px] whitespace-pre [tab-size:8] {isAdd ? "font-bold text-[var(--app-added)]" : isDel ? "font-bold text-[var(--app-deleted)]" : ""}" aria-hidden="true">{row.line.origin.trim()}</span>
-    <span style={txtStyle} class="txt min-w-0 flex-1 overflow-hidden font-mono text-[12px] leading-[20px] [tab-size:8] {wrap ? "whitespace-pre-wrap break-all" : "whitespace-pre"}" class:wrap={wrap}>{@render text(row.line)}</span>
+    <span style={txtStyle} class="txt min-w-0 flex-1 overflow-hidden font-mono text-[12px] leading-[20px] [tab-size:8] {wrap ? "whitespace-pre-wrap break-words" : "whitespace-pre"}" class:wrap={wrap}>{@render text(row.line)}</span>
   </div>
 
 {:else if row.kind === "line"}
@@ -474,7 +474,7 @@
       }}
     >{row.line.new_no ?? ""}</button>
     <span style={signStyle} class="sign{isAdd ? " add" : isDel ? " del" : ""} shrink-0 select-none text-center font-mono text-[12px] leading-[20px] whitespace-pre [tab-size:8] {isAdd ? "font-bold text-[var(--app-added)]" : isDel ? "font-bold text-[var(--app-deleted)]" : ""}" aria-hidden="true">{row.line.origin.trim()}</span>
-    <span style={txtStyle} class="txt min-w-0 flex-1 overflow-hidden font-mono text-[12px] leading-[20px] [tab-size:8] {wrap ? "whitespace-pre-wrap break-all" : "whitespace-pre"}" class:wrap={wrap}>{@render text(row.line)}</span>
+    <span style={txtStyle} class="txt min-w-0 flex-1 overflow-hidden font-mono text-[12px] leading-[20px] [tab-size:8] {wrap ? "whitespace-pre-wrap break-words" : "whitespace-pre"}" class:wrap={wrap}>{@render text(row.line)}</span>
   </div>
 
 {:else if row.kind === "binary"}

@@ -729,7 +729,7 @@
           >Wrap</Toggle>
         {/snippet}
       </Hint>
-      <span class="stats ml-auto flex items-center gap-[0.4rem] text-ui-micro text-muted-foreground tabular-nums">
+      <span class="stats ml-auto flex items-center gap-ui-4 text-ui-micro text-muted-foreground tabular-nums">
         <span class="stat-files">{files.length} {files.length === 1 ? "file" : "files"}</span>
         <span class="stat-adds text-[var(--app-added)]">+{model.totalAdditions}</span>
         <span class="stat-dels text-[var(--app-deleted)]">−{model.totalDeletions}</span>

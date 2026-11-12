@@ -454,7 +454,7 @@
                   <Hint label={"Go to " + p}>
                     {#snippet child({ props })}
                       <Button
-                        class="mr-1 h-auto rounded-sm px-[0.3rem] py-[0.05rem] font-mono text-ui-micro font-normal"
+                        class="mr-1 h-auto rounded-sm px-ui-3 py-[0.05rem] font-mono text-ui-micro font-normal"
                         variant="outline"
                         {...props}
                         onclick={() => onSelectParent?.(p)}

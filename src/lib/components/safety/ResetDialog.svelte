@@ -193,8 +193,8 @@
           <legend class="sr-only">Reset mode</legend>
           {#each RESET_MODES as m (m.kind)}
             <label class="mode flex cursor-pointer items-start gap-2">
-              <input class="mt-[0.15rem] accent-primary" type="radio" name="reset-mode" value={m.kind} bind:group={mode} />
-              <span class="mode-text flex flex-col gap-[0.1rem]">
+              <input class="mt-ui-15 accent-primary" type="radio" name="reset-mode" value={m.kind} bind:group={mode} />
+              <span class="mode-text flex flex-col gap-ui-1">
                 <span class="mode-label font-semibold">{m.label}</span>
                 <span class="mode-desc text-xs text-muted-foreground">{m.description}</span>
               </span>
@@ -226,7 +226,7 @@
           {:else if previewing || !previewInfo}
             <p class="preview-loading m-0 text-xs text-muted-foreground">Previewing…</p>
           {:else}
-            <p class="preview-summary mb-[0.35rem] mt-0 text-ui-base text-foreground">{lines[0]}</p>
+            <p class="preview-summary mb-ui-35 mt-0 text-ui-base text-foreground">{lines[0]}</p>
             {#if lines.length > 1}
               <ul class="preview-files m-0 max-h-36 list-none overflow-y-auto p-0 font-mono text-ui-micro text-muted-foreground" role="list" aria-label="Files affected by a hard reset">
                 {#each lines.slice(1) as line, i (i)}
@@ -237,12 +237,12 @@
               <p class="preview-empty m-0 text-xs text-muted-foreground">No file changes.</p>
             {/if}
             {#if mode === "keep" || mode === "merge"}
-              <p class="preview-note mb-0 mt-[0.4rem] text-ui-micro text-muted-foreground">
+              <p class="preview-note mb-0 mt-ui-4 text-ui-micro text-muted-foreground">
                 Preview shows the file impact; a {label(mode).toLowerCase()} reset
                 preserves uncommitted changes where it safely can.
               </p>
             {:else if mode !== "hard"}
-              <p class="preview-note mb-0 mt-[0.4rem] text-ui-micro text-muted-foreground">
+              <p class="preview-note mb-0 mt-ui-4 text-ui-micro text-muted-foreground">
                 Preview shows the hard-reset impact; {label(mode).toLowerCase()} reset keeps your changes.
               </p>
             {/if}

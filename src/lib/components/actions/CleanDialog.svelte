@@ -133,7 +133,7 @@
     <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
     <Dialog.Overlay class="scrim bg-black/40" role="presentation" />
     <Dialog.Content
-      class={"dialog w-[min(32rem,calc(100vw_-_2rem))] max-w-none overflow-y-auto text-popover-foreground shadow-[0_8px_24px_rgba(0,0,0,0.3)] sm:max-w-none " + (selectedPaths.length > 0 ? "danger" : "")}
+      class={"dialog w-[min(32rem,calc(100vw_-_2rem))] max-w-none overflow-y-auto text-popover-foreground shadow-modal sm:max-w-none " + (selectedPaths.length > 0 ? "danger" : "")}
       role="dialog"
       aria-modal="true"
       aria-labelledby="clean-title"
@@ -151,21 +151,21 @@
       {:else if files.length === 0}
         <p class="status m-0 mb-3 text-muted-foreground" aria-live="polite">Nothing to clean — no untracked paths.</p>
       {:else}
-        <p class="summary m-0 mb-[0.4rem] font-medium" aria-live="polite">
+        <p class="summary m-0 mb-ui-4 font-medium" aria-live="polite">
           {cleanSelectionSummary(selectedPaths.length, files.length)}
         </p>
 
-        <div class="bulk mb-[0.4rem] flex gap-3">
+        <div class="bulk mb-ui-4 flex gap-3">
           <button class="link cursor-pointer border-0 bg-transparent p-0 text-xs font-[inherit] text-primary underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary" type="button" onclick={() => setAll(true)}>Select all</button>
           <button class="link cursor-pointer border-0 bg-transparent p-0 text-xs font-[inherit] text-primary underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary" type="button" onclick={() => setAll(false)}>Select none</button>
         </div>
 
         <div class="file-list mb-3 max-h-64 overflow-y-auto rounded border border-border bg-background p-[0.5rem_0.6rem]" role="list" aria-label="Untracked paths to delete">
           {#each groups as group (group.dir)}
-            <div class="group mb-[0.4rem] last:mb-0">
-              <div class="group-label mb-[0.1rem] font-mono text-ui-micro font-semibold text-muted-foreground">{groupLabel(group)}</div>
+            <div class="group mb-ui-4 last:mb-0">
+              <div class="group-label mb-ui-1 font-mono text-ui-micro font-semibold text-muted-foreground">{groupLabel(group)}</div>
               {#each group.files as file (file.path)}
-                <label class="file flex cursor-pointer items-baseline gap-[0.4rem] py-[0.06rem]">
+                <label class="file flex cursor-pointer items-baseline gap-ui-4 py-[0.06rem]">
                   <input type="checkbox" class="m-0 accent-destructive" bind:checked={checked[file.path]} />
                   <span class="path font-mono text-ui-meta [overflow-wrap:anywhere]">{file.path}</span>
                 </label>
@@ -184,7 +184,7 @@
               spellcheck="false"
               autocomplete="off"
               placeholder={CLEAN_CONFIRM_WORD}
-              class="rounded border border-destructive bg-background px-2.5 py-[0.4rem] font-[inherit] text-foreground focus-visible:-outline-offset-1 focus-visible:outline-2 focus-visible:outline-destructive"
+              class="rounded border border-destructive bg-background px-2.5 py-ui-4 font-[inherit] text-foreground focus-visible:-outline-offset-1 focus-visible:outline-2 focus-visible:outline-destructive"
               bind:value={confirmText}
             />
           </label>
@@ -198,7 +198,7 @@
             : "No checkpoint is created (checkpoints are disabled in Settings)."}
         </span>
         <button
-          class="confirm rounded-full border-0 bg-destructive px-5 py-[0.45rem] font-[inherit] font-medium text-destructive-foreground cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-destructive disabled:cursor-not-allowed disabled:opacity-55"
+          class="confirm rounded-full border-0 bg-destructive px-5 py-ui-45 font-[inherit] font-medium text-destructive-foreground cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-destructive disabled:cursor-not-allowed disabled:opacity-55"
           type="button"
           disabled={confirmBlocked || loading || files.length === 0}
           onclick={() => void confirm()}
@@ -207,7 +207,7 @@
             ? "Cleaning…"
             : `Delete ${selectedPaths.length} path${selectedPaths.length === 1 ? "" : "s"}`}
         </button>
-        <button class="cancel rounded-full border border-border bg-transparent px-4 py-[0.45rem] font-[inherit] text-muted-foreground cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-destructive disabled:cursor-not-allowed disabled:opacity-55" type="button" disabled={running} onclick={onClose}>
+        <button class="cancel rounded-full border border-border bg-transparent px-4 py-ui-45 font-[inherit] text-muted-foreground cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-destructive disabled:cursor-not-allowed disabled:opacity-55" type="button" disabled={running} onclick={onClose}>
           Cancel
         </button>
       </div>

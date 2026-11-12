@@ -33,6 +33,9 @@ export const FALLBACK_THEME: ThemeColors = {
   outline: "#7a757f",
 };
 
+/** Seed accent of the baseline palette above, for hex-only consumers. */
+export const FALLBACK_ACCENT = "#6750a4";
+
 /** How many distinct lanes the palette carries before it repeats. */
 export const LANE_COUNT = 6;
 
@@ -302,6 +305,20 @@ export function readTheme(styles: StyleLike | null): ThemeColors {
     surface: toHex(surface),
     outline: toHex(outline),
   };
+}
+
+/**
+ * The live `--primary` accent as a concrete sRGB hex, for consumers that
+ * need a hex string (HTML `<input type="color">` can't take `oklch()`).
+ * Falls back to {@link FALLBACK_ACCENT} when the token is missing or
+ * unresolvable.
+ */
+export function primaryHex(styles?: StyleLike): string {
+  const raw = (styles ?? getComputedStyle(document.documentElement)).getPropertyValue(
+    "--primary",
+  );
+  const resolved = resolveColor(raw);
+  return resolved ? toHex(resolved.rgb) : FALLBACK_ACCENT;
 }
 
 /**

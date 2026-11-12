@@ -188,7 +188,7 @@ import { Kbd } from "$lib/components/ui/kbd/index.js";
       onkeydown={onPanelKeydown}
     >
       <Input
-        class="search m-3 h-auto rounded-full border-0 bg-muted px-4 py-2.5 text-sm shadow-none ring-0 focus-visible:border-0 focus-visible:ring-2 focus-visible:ring-ring"
+        class="search m-3 h-auto rounded-full border-0 bg-muted px-4 py-2.5 text-sm shadow-none ring-0 focus-visible:border-0 focus-visible:ring-2 focus-visible:ring-ring/50"
         type="text"
         role="combobox"
         aria-expanded="true"

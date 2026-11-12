@@ -512,7 +512,7 @@
     use:floating={{ anchor: triggerEl ?? undefined, gap: 6 }}
   >
     <div
-      class="search-row flex flex-none items-center gap-[0.4rem] border-b border-border px-3 py-[0.55rem] text-muted-foreground"
+      class="search-row flex flex-none items-center gap-ui-4 border-b border-border px-3 py-[0.55rem] text-muted-foreground"
     >
       <Icon icon={iconSearch} size={14} />
       <Input
@@ -554,7 +554,7 @@
 
     <ul
       id="branch-switcher-list"
-      class="rows m-0 min-h-0 flex-1 list-none overflow-y-auto px-0 pb-[0.4rem] pt-1 [&.busy]:pointer-events-none [&.busy_.row]:opacity-55"
+      class="rows m-0 min-h-0 flex-1 list-none overflow-y-auto px-0 pb-ui-4 pt-1 [&.busy]:pointer-events-none [&.busy_.row]:opacity-55"
       class:busy={controller.busy}
       role="listbox"
       aria-label="Branches"
@@ -571,14 +571,14 @@
         {#each rows as row, i (rowKey(row))}
           {#if row.kind === "local" && rows[i - 1]?.kind !== "local"}
             <li
-              class="section select-none px-3 pb-[0.2rem] pt-2 text-ui-micro font-bold uppercase tracking-[0.08em] text-primary"
+              class="section select-none px-3 pb-ui-2 pt-2 text-ui-micro font-bold uppercase tracking-[0.08em] text-primary"
               role="presentation"
             >
               Local branches
             </li>
           {:else if row.kind === "remote" && rows[i - 1]?.kind !== "remote"}
             <li
-              class="section select-none px-3 pb-[0.2rem] pt-2 text-ui-micro font-bold uppercase tracking-[0.08em] text-primary"
+              class="section select-none px-3 pb-ui-2 pt-2 text-ui-micro font-bold uppercase tracking-[0.08em] text-primary"
               role="presentation"
             >
               Remote branches
@@ -587,7 +587,7 @@
           {#if row.kind === "create"}
             <li
               id={`branch-opt-${i}`}
-              class="row create-row mx-1 flex min-w-0 cursor-pointer flex-wrap items-center gap-[0.375rem] rounded-sm px-[0.4rem] py-1 text-primary hover:bg-accent [&.active]:bg-accent"
+              class="row create-row mx-1 flex min-w-0 cursor-pointer flex-wrap items-center gap-ui-375 rounded-sm px-ui-4 py-1 text-primary hover:bg-accent [&.active]:bg-accent"
               class:active={i === activeIndex}
               role="option"
               aria-selected={i === activeIndex}
@@ -612,7 +612,7 @@
           {:else if row.kind === "local"}
             <li
               id={`branch-opt-${i}`}
-              class="row mx-1 flex min-w-0 cursor-pointer flex-wrap items-center gap-[0.375rem] rounded-sm px-[0.4rem] py-1 hover:bg-accent [&.head]:bg-secondary [&.head]:text-secondary-foreground [&.active]:bg-accent"
+              class="row mx-1 flex min-w-0 cursor-pointer flex-wrap items-center gap-ui-375 rounded-sm px-ui-4 py-1 hover:bg-accent [&.head]:bg-secondary [&.head]:text-secondary-foreground [&.active]:bg-accent"
               class:head={row.branch.is_head}
               class:active={i === activeIndex}
               role="option"
@@ -665,7 +665,7 @@
                       {/if}
                       {#if row.branch.gone}
                         <span
-                          class="gone ml-1.5 rounded-full border border-destructive px-[0.35rem] text-ui-tiny text-destructive"
+                          class="gone ml-1.5 rounded-full border border-destructive px-ui-35 text-ui-tiny text-destructive"
                           >gone</span
                         >
                       {/if}
@@ -698,7 +698,7 @@
           {:else}
             <li
               id={`branch-opt-${i}`}
-              class="row mx-1 flex min-w-0 cursor-pointer flex-wrap items-center gap-[0.375rem] rounded-sm px-[0.4rem] py-1 hover:bg-accent [&.active]:bg-accent"
+              class="row mx-1 flex min-w-0 cursor-pointer flex-wrap items-center gap-ui-375 rounded-sm px-ui-4 py-1 hover:bg-accent [&.active]:bg-accent"
               class:active={i === activeIndex}
               role="option"
               aria-selected={i === activeIndex}
@@ -770,9 +770,9 @@
       {/if}
     </ul>
 
-    <footer class="foot flex flex-none items-center gap-1 border-t border-border px-2 py-[0.35rem]">
+    <footer class="foot flex flex-none items-center gap-1 border-t border-border px-2 py-ui-35">
       <Button
-        class="foot-btn h-auto gap-[0.3rem] rounded-full px-[0.55rem] py-1 text-ui-meta focus-visible:outline-2 focus-visible:outline-primary focus-visible:-outline-offset-2 focus-visible:ring-0"
+        class="foot-btn h-auto gap-ui-3 rounded-full px-[0.55rem] py-1 text-ui-meta focus-visible:outline-2 focus-visible:outline-primary focus-visible:-outline-offset-2 focus-visible:ring-0"
         variant="ghost"
         size="sm"
         type="button"
@@ -783,7 +783,7 @@
         Fetch
       </Button>
       <Button
-        class="foot-btn h-auto gap-[0.3rem] rounded-full px-[0.55rem] py-1 text-ui-meta focus-visible:outline-2 focus-visible:outline-primary focus-visible:-outline-offset-2 focus-visible:ring-0"
+        class="foot-btn h-auto gap-ui-3 rounded-full px-[0.55rem] py-1 text-ui-meta focus-visible:outline-2 focus-visible:outline-primary focus-visible:-outline-offset-2 focus-visible:ring-0"
         variant="ghost"
         size="sm"
         type="button"
@@ -794,7 +794,7 @@
       </Button>
       <span class="foot-spacer flex-1"></span>
       <Button
-        class="foot-btn manage h-auto gap-[0.3rem] rounded-full px-[0.55rem] py-1 text-ui-meta text-primary hover:text-primary focus-visible:outline-2 focus-visible:outline-primary focus-visible:-outline-offset-2 focus-visible:ring-0"
+        class="foot-btn manage h-auto gap-ui-3 rounded-full px-[0.55rem] py-1 text-ui-meta text-primary hover:text-primary focus-visible:outline-2 focus-visible:outline-primary focus-visible:-outline-offset-2 focus-visible:ring-0"
         variant="ghost"
         size="sm"
         type="button"

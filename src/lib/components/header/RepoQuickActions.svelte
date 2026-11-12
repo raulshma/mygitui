@@ -304,7 +304,7 @@
   <Hint label={primaryTitle}>
     {#snippet child({ props })}
       <Button
-        class="sync-main gap-[0.3rem] border-0 px-2 text-ui-meta transition-colors duration-[120ms] hover:bg-accent hover:text-foreground focus-visible:outline-2 focus-visible:outline-primary focus-visible:-outline-offset-2 focus-visible:ring-0"
+        class="sync-main gap-ui-3 border-0 px-2 text-ui-meta transition-colors duration-[120ms] hover:bg-accent hover:text-foreground focus-visible:outline-2 focus-visible:outline-primary focus-visible:-outline-offset-2 focus-visible:ring-0"
         variant="ghost"
         {...props}
         aria-label={primaryAriaLabel}
@@ -325,7 +325,7 @@
                button's Hint trigger, and this button's tooltip already
                spells the behind/ahead counts out. -->
           <span
-            class="count behind inline-flex h-auto min-w-4 flex-none items-center gap-[0.1rem] rounded-full bg-muted px-1 text-ui-tiny font-semibold leading-tight text-center tabular-nums text-muted-foreground max-[760px]:hidden"
+            class="count behind inline-flex h-auto min-w-4 flex-none items-center gap-ui-1 rounded-full bg-muted px-1 text-ui-tiny font-semibold leading-tight text-center tabular-nums text-muted-foreground max-[760px]:hidden"
           >
             <Icon icon={iconPull} size={12} />
             {badgeCount(behind)}
@@ -333,7 +333,7 @@
         {/if}
         {#if ahead > 0 && runningVerb === null}
           <span
-            class="count ahead inline-flex h-auto min-w-4 flex-none items-center gap-[0.1rem] rounded-full bg-accent px-1 text-ui-tiny font-semibold leading-tight text-center tabular-nums text-accent-foreground max-[760px]:hidden"
+            class="count ahead inline-flex h-auto min-w-4 flex-none items-center gap-ui-1 rounded-full bg-accent px-1 text-ui-tiny font-semibold leading-tight text-center tabular-nums text-accent-foreground max-[760px]:hidden"
           >
             <Icon icon={iconPush} size={12} />
             {badgeCount(ahead)}
@@ -347,7 +347,7 @@
     <Hint label={pinTitle(verb)}>
       {#snippet child({ props })}
         <Button
-          class="sync-pin-btn flex-none gap-[0.3rem] border-0 border-l border-border px-[0.3rem] text-ui-meta transition-colors duration-[120ms] hover:bg-accent hover:text-foreground focus-visible:outline-2 focus-visible:outline-primary focus-visible:-outline-offset-2 focus-visible:ring-0"
+          class="sync-pin-btn flex-none gap-ui-3 border-0 border-l border-border px-ui-3 text-ui-meta transition-colors duration-[120ms] hover:bg-accent hover:text-foreground focus-visible:outline-2 focus-visible:outline-primary focus-visible:-outline-offset-2 focus-visible:ring-0"
           variant="ghost"
           data-sync-pin={verb}
           {...props}
@@ -367,7 +367,7 @@
           {#if pinCount(verb) !== null && runningVerb === null}
             {@const badge = pinCount(verb)!}
             <span
-              class={`count ${badge.dir} inline-flex h-auto min-w-4 flex-none items-center gap-[0.1rem] rounded-full px-1 text-ui-tiny font-semibold leading-tight text-center tabular-nums max-[760px]:hidden ${badge.dir === "ahead" ? "bg-accent text-accent-foreground" : "bg-muted text-muted-foreground"}`}
+              class={`count ${badge.dir} inline-flex h-auto min-w-4 flex-none items-center gap-ui-1 rounded-full px-1 text-ui-tiny font-semibold leading-tight text-center tabular-nums max-[760px]:hidden ${badge.dir === "ahead" ? "bg-accent text-accent-foreground" : "bg-muted text-muted-foreground"}`}
             >
               {badgeCount(badge.count)}
             </span>
@@ -380,7 +380,7 @@
   <Hint label="Fetch / Pull / Push">
     {#snippet child({ props })}
       <Button
-        class="sync-menu-btn flex-none gap-[0.3rem] border-0 border-l border-border px-[0.2rem] text-ui-meta transition-colors duration-[120ms] hover:bg-accent hover:text-foreground focus-visible:outline-2 focus-visible:outline-primary focus-visible:-outline-offset-2 focus-visible:ring-0"
+        class="sync-menu-btn flex-none gap-ui-3 border-0 border-l border-border px-ui-2 text-ui-meta transition-colors duration-[120ms] hover:bg-accent hover:text-foreground focus-visible:outline-2 focus-visible:outline-primary focus-visible:-outline-offset-2 focus-visible:ring-0"
         variant="ghost"
         {...props}
         aria-label="More sync actions"

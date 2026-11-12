@@ -1109,7 +1109,7 @@
           >
             <span class="dl">scope</span>
             <select
-              class="h-auto rounded-sm border border-input bg-card px-[0.3rem] py-0.5 text-ui-micro text-foreground focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-1"
+              class="h-auto rounded-sm border border-input bg-card px-ui-3 py-0.5 text-ui-micro text-foreground focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-1"
               aria-label="Branch scope"
               bind:this={scopeSelectEl}
               onchange={(e) => store.setFilter({ scopeRef: e.currentTarget.value })}
@@ -1141,7 +1141,7 @@
         <span class="dl">after</span>
         <Input
           type="date"
-          class="h-auto rounded-sm bg-card dark:bg-card px-[0.3rem] py-0.5 text-ui-micro md:text-ui-micro placeholder:text-muted-foreground/80"
+          class="h-auto rounded-sm bg-card dark:bg-card px-ui-3 py-0.5 text-ui-micro md:text-ui-micro placeholder:text-muted-foreground/80"
           aria-label="Commits after this date"
           value={store.filter.after}
           onchange={(e) => store.setFilter({ after: e.currentTarget.value })}
@@ -1151,7 +1151,7 @@
         <span class="dl">before</span>
         <Input
           type="date"
-          class="h-auto rounded-sm bg-card dark:bg-card px-[0.3rem] py-0.5 text-ui-micro md:text-ui-micro placeholder:text-muted-foreground/80"
+          class="h-auto rounded-sm bg-card dark:bg-card px-ui-3 py-0.5 text-ui-micro md:text-ui-micro placeholder:text-muted-foreground/80"
           aria-label="Commits before this date"
           value={store.filter.before}
           onchange={(e) => store.setFilter({ before: e.currentTarget.value })}
@@ -1202,14 +1202,14 @@
         {#snippet child({ props })}
           <span
             {...props}
-            class="scope-chip inline-flex flex-none items-center gap-[0.15rem] rounded-full bg-primary/10 py-0 pr-[0.3rem] pl-2 text-ui-micro text-primary"
+            class="scope-chip inline-flex flex-none items-center gap-ui-15 rounded-full bg-primary/10 py-0 pr-ui-3 pl-2 text-ui-micro text-primary"
           >
             <span class="max-w-36 truncate">scoped to {scopeLabel}</span>
             <Hint label="Back to all branches">
               {#snippet child({ props })}
                 <button
                   {...props}
-                  class="rounded-full px-[0.25rem] text-ui-meta leading-none text-primary/80 hover:bg-accent hover:text-accent-foreground focus-visible:outline-2 focus-visible:outline-ring"
+                  class="rounded-full px-1 text-ui-meta leading-none text-primary/80 hover:bg-accent hover:text-accent-foreground focus-visible:outline-2 focus-visible:outline-ring"
                   type="button"
                   aria-label="Clear branch scope"
                   onclick={() => store.setFilter({ scopeRef: "" })}
@@ -1415,7 +1415,7 @@
               {/snippet}
             </Hint>
             <span class="author max-w-40 flex-none truncate {v.idx === selectedIdx ? "" : "text-muted-foreground"} {sidebar ? "hidden" : ""}">{v.commit.author.name}</span>
-            <span class="date flex-none text-muted-foreground {sidebar ? "text-ui-micro" : "text-ui-micro"}">{formatRelativeTime(v.commit.author.time)}</span>
+            <span class="date flex-none text-muted-foreground tabular-nums {sidebar ? "text-ui-micro" : "text-ui-micro"}">{formatRelativeTime(v.commit.author.time)}</span>
           </div>
         {/each}
       </div>
@@ -1442,7 +1442,7 @@
         class="absolute inset-0 z-10 flex items-center justify-center bg-card pointer-events-none"
       >
         <p class="empty m-auto text-ui-base text-muted-foreground" role="status">
-          <span class="empty-loading inline-flex items-center gap-[0.4rem]">
+          <span class="empty-loading inline-flex items-center gap-ui-4">
             <Spinner class="size-4" role="presentation" aria-hidden="true" />
             Loading history…
           </span>

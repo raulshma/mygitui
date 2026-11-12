@@ -364,7 +364,7 @@
               ondrop={(e) => onDrop(e, i)}
               ondragend={onDragEnd}
             >
-              <div class="pline flex items-center gap-1.5 px-[0.35rem] py-0.5 text-ui-meta">
+              <div class="pline flex items-center gap-1.5 px-ui-35 py-0.5 text-ui-meta">
                 <span class="grip flex-none cursor-grab select-none text-muted-foreground" aria-hidden="true">⠿</span>
                 <select
                   class="action w-[5.5rem] flex-none rounded-md border border-border bg-muted px-1 py-0.5 text-xs text-foreground focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring"

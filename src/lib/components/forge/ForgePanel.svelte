@@ -552,7 +552,7 @@
 <aside class="forge-panel flex min-h-0 flex-col overflow-y-auto text-ui-base" aria-label="Pull requests">
   {#snippet prMeta(pr: PrInfo)}
     {@const review = reviewDecisionLabel(pr.review_decision)}
-    <div class="pr-meta mt-[0.3rem] flex flex-wrap items-center gap-[0.375rem] text-ui-micro text-muted-foreground">
+    <div class="pr-meta mt-ui-3 flex flex-wrap items-center gap-ui-375 text-ui-micro text-muted-foreground">
       {#if pr.author}
         <Hint label="Author">
           {#snippet child({ props })}
@@ -564,12 +564,12 @@
         <Hint label={`${pr.additions} additions, ${pr.deletions} deletions, ${pr.changed_files} changed files`}>
           {#snippet child({ props })}
             <span
-              class="stats inline-flex flex-none items-baseline gap-[0.2rem] font-mono tabular-nums"
+              class="stats inline-flex flex-none items-baseline gap-ui-2 font-mono tabular-nums"
               {...props}
             >
               <span class="add text-[var(--app-added)]">+{pr.additions}</span>
               <span class="del text-[var(--app-deleted)]">−{pr.deletions}</span>
-              <span class="files ml-[0.15rem]">{pr.changed_files} file{pr.changed_files === 1 ? "" : "s"}</span>
+              <span class="files ml-ui-15">{pr.changed_files} file{pr.changed_files === 1 ? "" : "s"}</span>
             </span>
           {/snippet}
         </Hint>
@@ -581,7 +581,7 @@
         <span class="warn flex-none rounded-full bg-destructive/15 px-2 py-[0.02rem] font-semibold text-destructive">Merge conflicts</span>
       {/if}
       {#if pr.labels.length > 0}
-        <span class="labels inline-flex min-w-0 flex-wrap gap-[0.2rem]">
+        <span class="labels inline-flex min-w-0 flex-wrap gap-ui-2">
           {#each pr.labels as label (label)}
             <span class="label max-w-36 truncate rounded-full border border-border px-2 py-[0.02rem] text-ui-tiny">{label}</span>
           {/each}
@@ -592,9 +592,9 @@
 
   {#snippet prBody(pr: PrInfo)}
     {#if pr.body.trim()}
-      <details class="pr-body mt-[0.35rem] text-ui-meta text-muted-foreground">
+      <details class="pr-body mt-ui-35 text-ui-meta text-muted-foreground">
         <summary class="w-fit cursor-pointer text-ui-micro text-primary">Description</summary>
-        <div class="pr-body-text mt-[0.3rem] max-h-64 overflow-auto whitespace-pre-wrap rounded-r-sm border-l-2 border-border bg-muted/40 px-2 py-[0.4rem] leading-[1.45] [overflow-wrap:anywhere]">{pr.body}</div>
+        <div class="pr-body-text mt-ui-3 max-h-64 overflow-auto whitespace-pre-wrap rounded-r-sm border-l-2 border-border bg-muted/40 px-2 py-ui-4 leading-[1.45] [overflow-wrap:anywhere]">{pr.body}</div>
       </details>
     {/if}
   {/snippet}
@@ -602,7 +602,7 @@
   {#snippet actionsBlock(pr: PrInfo)}
     {@const busy = forgeStore.isBusy(repoId, pr.number)}
     {@const blocked = prMergeBlockedReason(pr)}
-    <div class="pr-actions mt-[0.45rem] flex flex-wrap items-center gap-1" aria-label={`Actions for pull request ${pr.number}`}>
+    <div class="pr-actions mt-ui-45 flex flex-wrap items-center gap-1" aria-label={`Actions for pull request ${pr.number}`}>
       {#if isPrOpen(pr.state)}
         <Button class="{tb} border-primary bg-primary font-semibold text-primary-foreground hover:not-disabled:bg-primary hover:not-disabled:brightness-[1.06]" variant="outline"
           type="button"
@@ -694,8 +694,8 @@
     {@const checksError = forgeStore.checksErrorFor(repoId, pr.number)}
     {@const summary = summarizeChecks(checks ?? [])}
     {@const isWatching = watching.includes(pr.number)}
-    <div class="checks mt-2 border-t border-border pt-[0.375rem]">
-      <div class="checks-head flex items-center gap-[0.375rem]">
+    <div class="checks mt-2 border-t border-border pt-ui-375">
+      <div class="checks-head flex items-center gap-ui-375">
         <span
           class="chip {worstChipClass(summary.worst)} {chipTone[worstChipClass(summary.worst)] ?? "bg-accent text-foreground"} flex-none rounded-full px-2 py-px text-ui-tiny font-semibold"
         >
@@ -732,9 +732,9 @@
       {:else if checks.length === 0}
         <p class="muted my-1 text-ui-meta text-muted-foreground">No checks reported for this PR.</p>
       {:else}
-        <ul class="check-list m-0 mt-1 flex list-none flex-col gap-[0.125rem] p-0" role="list" aria-label="CI checks">
+        <ul class="check-list m-0 mt-1 flex list-none flex-col gap-ui-125 p-0" role="list" aria-label="CI checks">
           {#each checks as check (check.name)}
-            <li class="check flex min-w-0 items-center gap-[0.375rem]">
+            <li class="check flex min-w-0 items-center gap-ui-375">
               <span
                 class="check-icon {checkStateClass(check.state)} {chipTone[checkStateClass(check.state)] ?? "text-muted-foreground"} w-[1em] flex-none text-center"
                 aria-hidden="true"
@@ -753,9 +753,9 @@
     </div>
   {/snippet}
 
-  <div class="toolbar sticky top-0 z-1 flex flex-none flex-wrap items-center gap-[0.375rem] bg-background px-2 py-[0.375rem]">
+  <div class="toolbar sticky top-0 z-1 flex flex-none flex-wrap items-center gap-ui-375 bg-background px-2 py-ui-375">
     <div
-      class="tabs inline-flex flex-none gap-[0.125rem] rounded-full border border-border p-[0.1rem]"
+      class="tabs inline-flex flex-none gap-ui-125 rounded-full border border-border p-ui-1"
       role="tablist"
       aria-label="GitHub panels"
     >
@@ -795,7 +795,7 @@
     <span class="spacer ml-auto"></span>
     {#if tab === "prs"}
       <select
-        class="filter flex-none rounded-sm border border-border bg-background px-[0.25rem] py-px text-ui-meta text-foreground"
+        class="filter flex-none rounded-sm border border-border bg-background px-1 py-px text-ui-meta text-foreground"
         aria-label="Pull request state filter"
         value={filter}
         onchange={(event) => setFilter(event.currentTarget.value)}
@@ -825,14 +825,14 @@
       </Button>
     {:else}
       <input
-        class="filter branch-filter w-[8.5rem] flex-none rounded-sm border border-border bg-background px-[0.25rem] py-px text-ui-meta text-foreground"
+        class="filter branch-filter w-[8.5rem] flex-none rounded-sm border border-border bg-background px-1 py-px text-ui-meta text-foreground"
         aria-label="Run branch filter"
         placeholder="Branch (any)"
         bind:value={branchFilter}
         onchange={applyRunFilters}
       />
       <select
-        class="filter flex-none rounded-sm border border-border bg-background px-[0.25rem] py-px text-ui-meta text-foreground"
+        class="filter flex-none rounded-sm border border-border bg-background px-1 py-px text-ui-meta text-foreground"
         aria-label="Run status filter"
         bind:value={statusFilter}
         onchange={applyRunFilters}
@@ -849,7 +849,7 @@
         <option value="action_required">Action required</option>
       </select>
       <select
-        class="filter workflow-filter max-w-[11rem] flex-none rounded-sm border border-border bg-background px-[0.25rem] py-px text-ui-meta text-foreground"
+        class="filter workflow-filter max-w-[11rem] flex-none rounded-sm border border-border bg-background px-1 py-px text-ui-meta text-foreground"
         aria-label="Workflow filter"
         bind:value={workflowFilter}
         onchange={applyRunFilters}
@@ -906,7 +906,7 @@
     </div>
   {:else if tab === "actions"}
     {#if context}
-      <div class="section actions-section mx-2 mb-3 mt-2 flex flex-col gap-[0.35rem]">
+      <div class="section actions-section mx-2 mb-3 mt-2 flex flex-col gap-ui-35">
         <div class="actions-summary flex flex-wrap items-baseline gap-2">
           <h3 class="section-title m-0 text-ui-meta font-semibold uppercase tracking-[0.04em] text-muted-foreground">Recent runs</h3>
           <span class="muted m-0 text-ui-meta text-muted-foreground" aria-live="polite">
@@ -918,10 +918,10 @@
           {/if}
         </div>
         {#if runsError}
-          <p class="error-inline my-[0.15rem] text-xs text-destructive [overflow-wrap:anywhere]" role="alert">{runsError}</p>
+          <p class="error-inline my-ui-15 text-xs text-destructive [overflow-wrap:anywhere]" role="alert">{runsError}</p>
         {/if}
         {#if workflowsError}
-          <p class="error-inline my-[0.15rem] text-xs text-destructive [overflow-wrap:anywhere]" role="alert">Workflows: {workflowsError}</p>
+          <p class="error-inline my-ui-15 text-xs text-destructive [overflow-wrap:anywhere]" role="alert">Workflows: {workflowsError}</p>
         {/if}
 
         {#if runs.length === 0}
@@ -941,7 +941,7 @@
               {@const age = prAgeLabel(run.created_at, now)}
               {@const duration = runElapsedLabel(run, now)}
               <li class="wf-run min-w-0 overflow-hidden rounded-lg border border-border bg-card">
-                <div class="wf-run-line flex min-w-0 flex-wrap items-start gap-[0.375rem] px-2 py-[0.375rem]">
+                <div class="wf-run-line flex min-w-0 flex-wrap items-start gap-ui-375 px-2 py-ui-375">
                   <Hint label="Open run details, jobs and logs">
                     {#snippet child({ props })}
                       <button
@@ -951,7 +951,7 @@
                         onclick={() => openRun(run)}
                       >
                         <span
-                          class="run-chip {runStateClass(kind)} {chipTone[runStateClass(kind)] ?? "bg-accent text-foreground"} mt-[0.05rem] inline-flex flex-none items-center gap-[0.15rem] whitespace-nowrap rounded-full px-2 py-px text-ui-tiny font-semibold"
+                          class="run-chip {runStateClass(kind)} {chipTone[runStateClass(kind)] ?? "bg-accent text-foreground"} mt-[0.05rem] inline-flex flex-none items-center gap-ui-15 whitespace-nowrap rounded-full px-2 py-px text-ui-tiny font-semibold"
                         >
                           <span aria-hidden="true">{runStateIcon(kind)}</span>
                           {runStateLabel(run)}
@@ -968,7 +968,7 @@
                             </span>
                           {/snippet}
                         </Hint>
-                        <span class="wf-run-meta flex min-w-0 flex-[1_1_100%] flex-wrap items-center gap-[0.375rem] text-ui-micro text-muted-foreground">
+                        <span class="wf-run-meta flex min-w-0 flex-[1_1_100%] flex-wrap items-center gap-ui-375 text-ui-micro text-muted-foreground">
                           <span class="pr-no flex-none font-mono text-ui-meta text-muted-foreground">#{run.number}</span>
                           {#if run.head_branch}
                             <Hint label="Head branch">
@@ -979,7 +979,7 @@
                           {/if}
                           <Hint label="Trigger event">
                             {#snippet child({ props })}
-                              <span class="wf-event whitespace-nowrap rounded-full border border-border px-[0.35rem] text-ui-tiny" {...props}>
+                              <span class="wf-event whitespace-nowrap rounded-full border border-border px-ui-35 text-ui-tiny" {...props}>
                                 {workflowEventLabel(run.event)}
                               </span>
                             {/snippet}
@@ -997,7 +997,7 @@
                       </button>
                     {/snippet}
                   </Hint>
-                  <span class="wf-run-actions ml-auto flex flex-none flex-wrap items-center justify-end gap-[0.2rem]">
+                  <span class="wf-run-actions ml-auto flex flex-none flex-wrap items-center justify-end gap-ui-2">
                     {#if active}
                       <Button class="{tb} danger border-current/45 text-[var(--app-deleted)]" variant="outline"
                         type="button"
@@ -1061,7 +1061,7 @@
   {:else if context}
     {#if branchPr}
       <div class="card current mx-2 my-1 rounded-lg border border-border bg-card px-2.5 py-2">
-        <div class="card-head flex min-w-0 flex-wrap items-center gap-[0.375rem]">
+        <div class="card-head flex min-w-0 flex-wrap items-center gap-ui-375">
           <span
             class="chip {prStateClass(branchPr.state)} {chipTone[prStateClass(branchPr.state)] ?? "bg-accent text-foreground"} flex-none rounded-full px-2 py-px text-ui-tiny font-semibold"
           >{prStateLabel(branchPr.state)}</span>
@@ -1075,7 +1075,7 @@
           </Hint>
           <span class="pr-no flex-none font-mono text-ui-meta text-muted-foreground">#{branchPr.number}</span>
         </div>
-        <div class="card-sub mt-[0.375rem] flex flex-wrap items-center gap-2">
+        <div class="card-sub mt-ui-375 flex flex-wrap items-center gap-2">
           <span class="refs font-mono text-ui-meta text-muted-foreground">{branchPr.head_ref_name} → {branchPr.base_ref_name}</span>
           {#if branchAge}
             <Hint label="Opened">
@@ -1108,7 +1108,7 @@
     {/if}
 
     <div class="section mx-2 mb-3 mt-2">
-      <h3 class="section-title mb-[0.25rem] mt-0 text-ui-meta font-semibold uppercase tracking-[0.04em] text-muted-foreground">
+      <h3 class="section-title mb-1 mt-0 text-ui-meta font-semibold uppercase tracking-[0.04em] text-muted-foreground">
         {filter === "open"
           ? "Open pull requests"
           : filter === "all"
@@ -1116,7 +1116,7 @@
             : `${filter[0]?.toUpperCase() ?? ""}${filter.slice(1)} pull requests`}
       </h3>
       {#if prsError}
-        <p class="error-inline my-[0.15rem] text-xs text-destructive [overflow-wrap:anywhere]" role="alert">{prsError}</p>
+        <p class="error-inline my-ui-15 text-xs text-destructive [overflow-wrap:anywhere]" role="alert">{prsError}</p>
       {/if}
       {#if listedPrs.length === 0}
         <p class="muted my-1 text-ui-meta text-muted-foreground">{emptyLabel}</p>
@@ -1128,7 +1128,7 @@
                 <Hint label="Show checks and actions">
                   {#snippet child({ props })}
                     <button
-                      class="pr-row flex-1 flex w-full min-w-0 cursor-pointer items-center gap-[0.375rem] rounded-lg border border-border bg-card px-2 py-[0.375rem] text-left text-ui-meta text-foreground hover:bg-accent focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary"
+                      class="pr-row flex-1 flex w-full min-w-0 cursor-pointer items-center gap-ui-375 rounded-lg border border-border bg-card px-2 py-ui-375 text-left text-ui-meta text-foreground hover:bg-accent focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary"
                       {...props}
                       type="button"
                       aria-expanded={expandedNumber === pr.number}
@@ -1155,7 +1155,7 @@
                 </Hint>
                 <Hint label="Open on GitHub">
                   {#snippet child({ props })}
-                    <Button class="{tb} mt-[0.375rem]" variant="outline"
+                    <Button class="{tb} mt-ui-375" variant="outline"
                       {...props}
                       type="button"
                       onclick={() => void openUrl(pr.url)}
@@ -1165,7 +1165,7 @@
                   {/snippet}
                 </Hint>
               </div>
-              <div class="pr-sub pb-[0.2rem] pl-[1.5rem] pr-2 pt-[0.15rem]">
+              <div class="pr-sub pb-ui-2 pl-[1.5rem] pr-2 pt-ui-15">
                 {@render prMeta(pr)}
               </div>
               {#if expandedNumber === pr.number}
@@ -1200,7 +1200,7 @@
     <Label class="dialog-field mt-2 flex items-center gap-2 text-ui-base">
       <span>Workflow</span>
       <select
-        class="flex-1 rounded-sm border border-border bg-background px-[0.35rem] py-0.5 text-foreground"
+        class="flex-1 rounded-sm border border-border bg-background px-ui-35 py-0.5 text-foreground"
         bind:value={dispatchWorkflow}
       >
         {#if dispatchable.length === 0}
@@ -1221,7 +1221,7 @@
       />
     </Label>
     <Label class="dialog-field dialog-field-top mt-2 flex items-start gap-2 text-ui-base">
-      <span class="pt-[0.35rem]">Inputs</span>
+      <span class="pt-ui-35">Inputs</span>
       <textarea
         class="dialog-text mt-0 w-auto min-w-0 flex-1 resize-y rounded-sm border border-border bg-background p-2 text-ui-base text-foreground"
         aria-label="Workflow inputs"
@@ -1265,7 +1265,7 @@
     <Label class="dialog-field mt-2 flex items-center gap-2 text-ui-base">
       <span>Method</span>
       <select
-        class="flex-1 rounded-sm border border-border bg-background px-[0.35rem] py-0.5 text-foreground"
+        class="flex-1 rounded-sm border border-border bg-background px-ui-35 py-0.5 text-foreground"
         bind:value={mergeMethod}
       >
         <option value="squash">Squash and merge</option>

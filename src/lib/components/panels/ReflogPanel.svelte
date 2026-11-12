@@ -181,7 +181,7 @@
     >
   {:else if loading && entries.length === 0}
     <p class="state m-auto px-3 py-4 text-ui-base text-muted-foreground" role="status">
-      <span class="inline-flex items-center gap-[0.4rem]">
+      <span class="inline-flex items-center gap-ui-4">
         <Spinner class="size-4" role="presentation" aria-hidden="true" />
         Loading reflog…
       </span>

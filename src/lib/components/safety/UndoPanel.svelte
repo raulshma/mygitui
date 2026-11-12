@@ -176,7 +176,7 @@
 </script>
 
 <section class="undo-panel flex min-h-0 flex-col text-ui-base" aria-label="Checkpoints and undo">
-  <div class="toolbar flex shrink-0 items-center gap-2 px-2 py-[0.375rem]">
+  <div class="toolbar flex shrink-0 items-center gap-2 px-2 py-ui-375">
     <Button
       class="border-border text-muted-foreground hover:border-primary hover:bg-accent hover:text-accent-foreground"
       variant="ghost"
@@ -214,7 +214,7 @@
     <p class="state error m-0 px-3 py-4 text-ui-base text-destructive" role="alert">{undo.error}</p>
   {:else if !undo.loading && undo.checkpoints.length === 0}
     <div class="empty px-3 py-4">
-      <p class="empty-title mb-[0.35rem] mt-0 font-semibold text-foreground">No checkpoints yet.</p>
+      <p class="empty-title mb-ui-35 mt-0 font-semibold text-foreground">No checkpoints yet.</p>
       <p class="empty-text m-0 text-xs leading-[1.45] text-muted-foreground">
         Checkpoints are automatic snapshots mygitui creates before dangerous
         operations (hard resets, force branch deletes, restores). Restoring a
@@ -226,20 +226,20 @@
   {:else}
     <ul class="checkpoints m-0 min-h-0 grow list-none overflow-y-auto p-0 pb-3" role="list" aria-label="Checkpoints, newest first">
       {#each undo.checkpoints as cp (cp.id)}
-        <li class="row flex min-w-0 items-center gap-[0.375rem] px-2 py-1 hover:bg-accent">
+        <li class="row flex min-w-0 items-center gap-ui-375 px-2 py-1 hover:bg-accent">
           {#if confirmingRestore === cp.id}
             <div
-              class="confirm-restore min-w-0 grow rounded-md border border-destructive px-2 py-[0.35rem]"
+              class="confirm-restore min-w-0 grow rounded-md border border-destructive px-2 py-ui-35"
               role="alertdialog"
               aria-label={`Restore checkpoint ${cp.id}`}
             >
-              <p class="cr-text mb-[0.4rem] mt-0 text-ui-meta leading-[1.4] text-foreground">
+              <p class="cr-text mb-ui-4 mt-0 text-ui-meta leading-[1.4] text-foreground">
                 Restore returns the repo to this snapshot: changes made since
                 are discarded and untracked files created after it are removed.
                 The current state is checkpointed first (pre-restore), so this
                 is undoable.
               </p>
-              <div class="cr-actions flex gap-[0.375rem]">
+              <div class="cr-actions flex gap-ui-375">
                 <Button
                   variant="destructive"
                   size="xs"
@@ -262,7 +262,7 @@
               </div>
             </div>
           {:else}
-            <div class="info flex min-w-0 grow flex-col gap-[0.15rem]">
+            <div class="info flex min-w-0 grow flex-col gap-ui-15">
               <Hint label={cp.ref_name}>
                 {#snippet child({ props })}
                   <span class="title truncate text-xs text-foreground" {...props}>{checkpointTitle(cp, Math.floor(Date.now() / 1000))}</span>
@@ -301,7 +301,7 @@
 
   <!-- M12: force-deleted branches preserved under refs/mygitui/trash/* -->
   <section class="trash mt-1 shrink-0 border-t border-border" aria-label="Deleted branches">
-    <header class="trash-head flex items-center justify-between gap-2 px-2 pb-[0.15rem] pt-[0.375rem]">
+    <header class="trash-head flex items-center justify-between gap-2 px-2 pb-ui-15 pt-ui-375">
       <h2 class="trash-title m-0 text-xs font-semibold text-foreground">Deleted branches</h2>
       <Button
         class="border-border text-muted-foreground hover:border-primary hover:bg-accent hover:text-accent-foreground"
@@ -320,7 +320,7 @@
     {#if trashError}
       <p class="state error m-0 px-3 py-4 text-ui-base text-destructive" role="alert">{trashError}</p>
     {:else if !trashLoading && trash.length === 0}
-      <p class="trash-empty m-0 px-2 pb-2 pt-[0.15rem] text-xs leading-[1.45] text-muted-foreground">
+      <p class="trash-empty m-0 px-2 pb-2 pt-ui-15 text-xs leading-[1.45] text-muted-foreground">
         No deleted branches. Force-deleted branches are kept here (under
         <code class="font-mono text-ui-micro">refs/mygitui/trash/*</code>) so their commits stay recoverable
         until checkpoint GC cleans them up.
@@ -328,8 +328,8 @@
     {:else}
       <ul class="trash-list m-0 list-none p-0 pb-2" role="list" aria-label="Deleted branches, newest first">
         {#each trash as entry (entry.id)}
-          <li class="row flex min-w-0 items-center gap-[0.375rem] px-2 py-1 hover:bg-accent">
-            <div class="info flex min-w-0 grow flex-col gap-[0.15rem]">
+          <li class="row flex min-w-0 items-center gap-ui-375 px-2 py-1 hover:bg-accent">
+            <div class="info flex min-w-0 grow flex-col gap-ui-15">
               <Hint label={entry.name}>
                 {#snippet child({ props })}
                   <span class="title truncate text-xs text-foreground" {...props}>{entry.name}</span>

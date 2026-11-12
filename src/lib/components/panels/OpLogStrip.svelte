@@ -76,7 +76,7 @@
       >
         {#each activeOps as op (op.op_id)}
           <li
-            class="op-row flex h-6 min-w-0 items-center gap-[0.3rem] border-b border-border/60 pl-2 pr-1 text-muted-foreground"
+            class="op-row flex h-6 min-w-0 items-center gap-ui-3 border-b border-border/60 pl-2 pr-1 text-muted-foreground"
             aria-label={`${kindLabel(op.kind)} in progress`}
           >
             <span
@@ -130,7 +130,7 @@
       </ul>
     {/if}
     {#if session}
-      <div class="head flex h-6 min-w-0 items-center gap-[0.3rem] pl-2 pr-1 text-muted-foreground">
+      <div class="head flex h-6 min-w-0 items-center gap-ui-3 pl-2 pr-1 text-muted-foreground">
         <span
           class="status inline-flex size-3.5 shrink-0 items-center justify-center {session.done &&
           session.error === null

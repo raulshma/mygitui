@@ -182,7 +182,7 @@
           <Button
             variant="outline"
             size="xs"
-            class="feature-btn rounded-full gap-[0.3rem] text-ui-meta text-muted-foreground {compact
+            class="feature-btn rounded-full gap-ui-3 text-ui-meta text-muted-foreground {compact
               ? 'compact px-2 py-px text-ui-micro'
               : ''}"
             type="button"
@@ -202,12 +202,12 @@
 
     {#if confirmOpen}
       <div
-        class="confirm invisible fixed left-0 top-0 z-40 max-h-[calc(100vh_-_1rem)] w-max max-w-[min(18rem,calc(100vw_-_1rem))] overflow-y-auto rounded-lg border border-border bg-popover p-2 text-left text-popover-foreground shadow-[0_4px_16px_rgba(0,0,0,0.3)]"
+        class="confirm invisible fixed left-0 top-0 z-40 max-h-[calc(100vh_-_1rem)] w-max max-w-[min(18rem,calc(100vw_-_1rem))] overflow-y-auto rounded-lg border border-border bg-popover p-2 text-left text-popover-foreground shadow-overlay"
         role="dialog"
         aria-label="Allow AI for this repository"
         use:floating={{ anchor: root, above: popUp, alignEnd: icon }}
       >
-        <p class="confirm-text m-0 mb-[0.375rem] text-xs">{confirmText.replace("{backend}", backendLabel)}</p>
+        <p class="confirm-text m-0 mb-ui-375 text-xs">{confirmText.replace("{backend}", backendLabel)}</p>
         <div class="confirm-actions flex flex-row flex-wrap gap-1">
           <Button variant="default" size="xs" class="mini rounded-full text-ui-meta" type="button" onclick={() => void allowAndRun(true)}>
             Always allow
@@ -236,7 +236,7 @@
 
     {#if error && !confirmOpen}
       <div
-        class="fail invisible fixed left-0 top-0 z-40 flex max-h-[calc(100vh_-_1rem)] w-max max-w-[min(18rem,calc(100vw_-_1rem))] flex-row flex-wrap items-center gap-[0.375rem] overflow-y-auto rounded-lg border border-border bg-popover p-2 text-left text-popover-foreground shadow-[0_4px_16px_rgba(0,0,0,0.3)]"
+        class="fail invisible fixed left-0 top-0 z-40 flex max-h-[calc(100vh_-_1rem)] w-max max-w-[min(18rem,calc(100vw_-_1rem))] flex-row flex-wrap items-center gap-ui-375 overflow-y-auto rounded-lg border border-border bg-popover p-2 text-left text-popover-foreground shadow-overlay"
         role="alert"
         use:floating={{ anchor: root, above: popUp, alignEnd: icon }}
       >

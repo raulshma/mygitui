@@ -97,12 +97,12 @@
   }
 </script>
 
-<div class="preview flex h-full min-h-0 flex-col items-center justify-center gap-[0.4rem] overflow-auto bg-card p-6" role="figure" aria-label="Preview of {path}">
+<div class="preview flex h-full min-h-0 flex-col items-center justify-center gap-ui-4 overflow-auto bg-card p-6" role="figure" aria-label="Preview of {path}">
   {#if isImage}
     {#if phase === "loading"}
-      <p class="state inline-flex items-center gap-[0.4rem] text-ui-base text-muted-foreground" role="status"><Spinner class="size-3" role="presentation" aria-hidden="true" /> Loading image…</p>
+      <p class="state inline-flex items-center gap-ui-4 text-ui-base text-muted-foreground" role="status"><Spinner class="size-3" role="presentation" aria-hidden="true" /> Loading image…</p>
     {:else if phase === "error"}
-      <p class="state state-error inline-flex items-center gap-[0.4rem] text-ui-base text-destructive" role="alert">{errorText}</p>
+      <p class="state state-error inline-flex items-center gap-ui-4 text-ui-base text-destructive" role="alert">{errorText}</p>
     {:else if url !== null}
       <!-- svelte-ignore a11y_img_redundant_alt -->
       <img
@@ -119,13 +119,13 @@
       </p>
     {/if}
   {:else}
-    <div class="card flex flex-col items-center gap-[0.45rem] rounded-md border border-border bg-card px-[1.8rem] py-[1.4rem] text-center">
+    <div class="card flex flex-col items-center gap-ui-45 rounded-md border border-border bg-card px-[1.8rem] py-[1.4rem] text-center">
       <p class="ctitle m-0 text-sm font-medium text-foreground">{meta.kind === "binary" ? "Binary file" : "No inline preview"}</p>
       <p class="ctext m-0 font-mono text-xs text-muted-foreground">
         {path} · {formatSize(meta.size)}{meta.readonly ? " · read-only" : ""}
       </p>
       <Button
-        class="cbtn mt-[0.3rem] h-auto gap-[0.35rem] rounded-full px-3 py-1 text-ui-meta font-normal"
+        class="cbtn mt-ui-3 h-auto gap-ui-35 rounded-full px-3 py-1 text-ui-meta font-normal"
         variant="outline"
         type="button"
         onclick={openExternally}

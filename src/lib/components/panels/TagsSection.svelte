@@ -202,7 +202,7 @@
 <section class="tags mt-1 shrink-0 border-t border-border" aria-label="Tags">
   <div class="head flex items-center justify-between gap-2 px-2 py-1">
     <Button
-      class="h-auto gap-[0.3rem] px-1 py-0.5 text-xs font-semibold dark:hover:bg-muted/50"
+      class="h-auto gap-ui-3 px-1 py-0.5 text-xs font-semibold dark:hover:bg-muted/50"
       variant="ghost"
       type="button"
       aria-expanded={open}
@@ -289,7 +289,7 @@
       >
     {:else if loading && list.length === 0}
       <p class="state m-0 px-3 py-1 text-xs text-muted-foreground" role="status">
-        <span class="inline-flex items-center gap-[0.3rem]">
+        <span class="inline-flex items-center gap-ui-3">
           <Spinner class="size-3" role="presentation" aria-hidden="true" />
           Loading tags…
         </span>
