@@ -3,7 +3,13 @@
 	import { Tooltip as TooltipPrimitive } from "bits-ui";
 	import Provider from "./tooltip-provider.svelte";
 	import Content from "./tooltip-content.svelte";
-	import { claimActiveHint, recentlyScrolled, releaseActiveHint } from "./hint-active.js";
+	import {
+		claimActiveHint,
+		deferWhilePressed,
+		isPressInFlight,
+		recentlyScrolled,
+		releaseActiveHint,
+	} from "./hint-active.js";
 
 	/**
 	 * `Hint` — one-liner wrapper for the canonical tooltip: the small
@@ -72,6 +78,15 @@
 
 	let armed = $state(false); // full tooltip machinery mounted
 	let open = $state(false);
+	/**
+	 * The trigger was pressed: its pill closed for the interaction (and the
+	 * press focused it, which would otherwise re-arm after the dwell). The
+	 * pill stays suppressed — no re-show from pointer moves or focus while
+	 * the pointer rests on the control the user is operating — until the
+	 * pointer genuinely exits the trigger, after which hovering re-arms as
+	 * usual. Cleared by a connected `pointerleave` (swap artifacts don't).
+	 */
+	let pressDismissed = $state(false);
 	let hoverTimer: ReturnType<typeof setTimeout> | null = null;
 	let unarmTimer: ReturnType<typeof setTimeout> | null = null;
 	let hoverEl: Element | null = null;
@@ -83,15 +98,32 @@
 		}
 	}
 
-	/** Dwell timer fired (or focus): mount the machinery, already open. */
+	/**
+	 * Dwell timer fired (or focus): mount the machinery, already open.
+	 *
+	 * The mount replaces the idle trigger element, and a browser only
+	 * dispatches `click` when `mousedown` and `mouseup` land on the same
+	 * element — so the swap must never fire under an in-flight press (the
+	 * dwell lands ~300ms after the pointer arrives, exactly when an aiming
+	 * user clicks). Deferring the mount to after the click is not enough
+	 * either: the late swap destroys the now-focused trigger, and a select
+	 * opened by that press closes again (focus-outside dismissal — its
+	 * "nothing opens, the label just fixes itself" symptom). When the press
+	 * landed on THIS trigger the pill is dismissed for the interaction
+	 * (`pressDismissed`): skip the mount outright and let the interaction
+	 * finish on the stable idle trigger. Without a press in flight the
+	 * mount runs inline.
+	 */
 	function activate(): void {
-		if (empty) return;
-		armed = true;
-		open = true;
-		if (unarmTimer !== null) {
-			clearTimeout(unarmTimer);
-			unarmTimer = null;
-		}
+		if (empty || pressDismissed) return;
+		deferWhilePressed(() => {
+			armed = true;
+			open = true;
+			if (unarmTimer !== null) {
+				clearTimeout(unarmTimer);
+				unarmTimer = null;
+			}
+		});
 	}
 
 	/** Close the pill (and drop the machinery once faded out). */
@@ -126,8 +158,18 @@
 		disarm();
 	}
 
-	/** `pointerout` with no `relatedTarget` = the pointer left the window. */
+	/**
+	 * `pointerout` with no `relatedTarget` = the pointer left the window.
+	 * A `pointerout` aimed at a DETACHED node is not that: it is the
+	 * boundary artifact of the idle→armed swap removing the trigger under a
+	 * stationary pointer — the pointer never went anywhere. Swallowing it
+	 * keeps the freshly mounted pill from being closed by the very swap
+	 * that opened it (the close used to be followed by bits-ui's own
+	 * delayed re-open ~250ms later, replaying the open animation — the
+	 * pill visibly flashed, then re-showed).
+	 */
 	function sweepWindowExit(event: PointerEvent): void {
+		if (event.target instanceof Node && !event.target.isConnected) return;
 		if (event.relatedTarget === null) disarm();
 	}
 
@@ -167,7 +209,7 @@
 	 * Focus (`el === null`) arms directly.
 	 */
 	function armEnter(el: EventTarget | null): void {
-		if (empty) return;
+		if (empty || pressDismissed) return;
 		hoverEl = el as Element | null;
 		if (armed) {
 			activate(); // re-enter while machinery is up: show immediately
@@ -184,6 +226,24 @@
 		}
 	}
 
+	/**
+	 * A press landed on this trigger — the interaction dismisses its pill
+	 * and must not have it flash back over the control being operated (the
+	 * press also focuses the trigger, whose focus-dwell would re-show the
+	 * pill ~300ms later, and pointer micro-jitter re-armed it within
+	 * ~30ms). Suppression lifts when the pointer exits the trigger — see
+	 * the `pointerleave` handlers.
+	 */
+	function recordPress(event: Event): void {
+		if (
+			triggerEl !== null &&
+			event.target instanceof Node &&
+			triggerEl.contains(event.target)
+		) {
+			pressDismissed = true;
+		}
+	}
+
 	/** Pointer/focus left: drop the dwell timer and (once closed) the machinery. */
 	function disarm(): void {
 		hoverEl = null;
@@ -193,7 +253,16 @@
 			if (unarmTimer === null) {
 				unarmTimer = setTimeout(() => {
 					unarmTimer = null;
-					if (!open) armed = false;
+					// The swap back to the idle trigger is click-hazardous
+					// exactly like arming — see `activate`. While the pointer
+					// rests on the trigger after a press (`pressDismissed`),
+					// it would also destroy the trigger the press focused and
+					// dismiss whatever that press opened (a select's
+					// focus-outside path) — keep the machinery mounted until
+					// the pointer exits instead.
+					deferWhilePressed(() => {
+						if (!open && !pressDismissed) armed = false;
+					});
 				}, UNARM_DELAY_MS);
 			}
 		}
@@ -241,6 +310,37 @@
 		syncName();
 	});
 
+	/**
+	 * Boundary-event artifact guard, shared by the idle and armed trigger
+	 * handlers. The idle→armed swap removes the element under a stationary
+	 * pointer, and the browser announces that with `pointerleave`/`blur` on
+	 * the element it just removed — which read as "the pointer left" and
+	 * would close the pill the swap just opened (the close is followed by
+	 * bits-ui's own re-open, restarting the enter animation: the pill
+	 * visibly flashes, then re-shows). A handler whose target is already
+	 * detached is by definition such an artifact.
+	 */
+	function swapArtifact(event: Event): boolean {
+		return event.target instanceof Node && !event.target.isConnected;
+	}
+
+	/**
+	 * A `pointerleave` mid-press is not an exit: opening a select (or any
+	 * modal layer) makes its own trigger hit-test-invisible under the
+	 * stationary pointer, and the browser answers that with `pointerleave`
+	 * on a perfectly connected element. Treating it as an exit would lift
+	 * the post-press suppression and let the pending dwell mount the pill
+	 * mid-press — whose trigger swap then destroys the focused trigger and
+	 * dismisses the very menu the press opened. The suppression lifts on
+	 * the first leave while NO press is in flight (a real exit, or the
+	 * post-open leave after the press ended).
+	 */
+	function onTriggerLeave(): void {
+		if (isPressInFlight()) return;
+		pressDismissed = false;
+		disarm();
+	}
+
 	/** Idle-phase props: shape-compatible with the real trigger props. */
 	const idleProps = $derived({
 		type: "button",
@@ -248,9 +348,30 @@
 		// `armEnter`. No `pointerenter` arming: the browser re-sends it for
 		// a stationary pointer after scrolls/DOM changes.
 		onpointermove: (event: Event) => armEnter(event.currentTarget),
-		onpointerleave: () => disarm(),
+		onpointerdown: recordPress,
+		onpointerleave: (event: Event) => {
+			if (swapArtifact(event)) return;
+			onTriggerLeave();
+		},
 		onfocus: () => armEnter(null),
-		onblur: () => disarm(),
+		onblur: (event: Event) => {
+			if (swapArtifact(event)) return;
+			disarm();
+		},
+	});
+
+	const guardedChildProps = (props: Record<string, unknown>) => ({
+		...props,
+		onpointerleave: (event: PointerEvent) => {
+			if (swapArtifact(event)) return;
+			onTriggerLeave();
+			(props.onpointerleave as (e: PointerEvent) => void)?.(event);
+		},
+		onpointerdown: (event: PointerEvent) => {
+			if (swapArtifact(event)) return;
+			recordPress(event);
+			(props.onpointerdown as (e: PointerEvent) => void)?.(event);
+		},
 	});
 </script>
 
@@ -279,6 +400,10 @@
 					// dismissal just closed. Our own pointer path opens via
 					// `activate()` on real movement instead.
 					if (!open && recentlyScrolled()) return;
+					// A press on the trigger dismissed the pill for the
+					// interaction; bits-ui's delayed open (armed on its own
+					// pointer tracking) must not override that.
+					if (!open && pressDismissed) return;
 					open = true;
 					if (unarmTimer !== null) {
 						clearTimeout(unarmTimer);
@@ -303,10 +428,12 @@
 							// the trigger shows the pill again — `pointermove` is real
 							// pointer intent by definition, unlike the re-sent
 							// `pointerenter` the sweep-guarded dismissal filters out.
-							if (!open) activate();
+							// A press on the trigger keeps the pill suppressed until
+							// the pointer exits (see `recordPress`).
+							if (!open && !pressDismissed) activate();
 						}}
 					>
-						{@render children({ props })}
+						{@render children({ props: guardedChildProps(props) })}
 					</span>
 				{/snippet}
 			</TooltipPrimitive.Trigger>

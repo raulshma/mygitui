@@ -323,6 +323,8 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
 
   /** The active layout for this repo (overlay > preset > default). */
   const resolved = $derived(layouts.active(root));
+  /** The preset's display name for the header select (`Select.Value`). */
+  const presetName = $derived(layouts.presetById(resolved.presetId)?.name ?? "Default");
   /** Resolved once per rule change, not once per painted graph row. */
   const branchRules = $derived(branchColorStore.rules(root));
   /** Panels not currently placed (candidates for "Add panel" menus). */
@@ -1676,7 +1678,12 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
               aria-label="Layout preset"
               {...props}
             >
-              <Select.Value />
+              <!-- The preset's display name, rendered directly: bits-ui's
+                   `<Select.Value />` falls back to the raw value (the
+                   lowercase preset id) until the listbox has mounted once
+                   and cached the item labels — the trigger visibly flipped
+                   from "default" to "Default" on the first click. -->
+              <Select.Value>{presetName}</Select.Value>
             </Select.Trigger>
           {/snippet}
         </Hint>
