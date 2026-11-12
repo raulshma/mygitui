@@ -3,6 +3,7 @@
 	import { Tooltip as TooltipPrimitive } from "bits-ui";
 	import Provider from "./tooltip-provider.svelte";
 	import Content from "./tooltip-content.svelte";
+	import { claimActiveHint, recentlyScrolled, releaseActiveHint } from "./hint-active.js";
 
 	/**
 	 * `Hint` — one-liner wrapper for the canonical tooltip: the small
@@ -35,6 +36,15 @@
 	 * with plain idle props until the pointer (or focus) actually dwells
 	 * on THIS instance's trigger; only then does the tooltip machinery
 	 * mount, already open. Hovering past during a scroll costs nothing.
+	 *
+	 * **Dismissal guarantees**: at most one pill is open app-wide (opening
+	 * one closes the previous — nested row/path/badge triggers can't stack
+	 * pills), the pill is not hoverable (`pointer-events: none`, so it can
+	 * neither trap the pointer nor block the rows beneath it), and while a
+	 * pill is open a sweep guard closes it on scroll, wheel, pointer
+	 * movement outside the trigger, pointerdown outside the trigger,
+	 * window blur and window exit — covering the swaps and scrolls where
+	 * `pointerleave` never arrives.
 	 */
 	let {
 		label,
@@ -84,7 +94,78 @@
 		}
 	}
 
-	/** Pointer/focus entered the idle trigger: start the dwell timer. */
+	/** Close the pill (and drop the machinery once faded out). */
+	function closePill(): void {
+		disarm();
+	}
+
+	/**
+	 * While a pill is open, one pointer sweep guard closes it the moment a
+	 * pointer event lands OUTSIDE the trigger — the dismissal that pointer
+	 * events alone cannot deliver. Activating swaps the idle trigger for the
+	 * real one (the element under the pointer is replaced), and a browser
+	 * whose hover chain still references the replaced element may never
+	 * fire `pointerleave` on the new trigger; scrolling moves rows under a
+	 * stationary pointer with no boundary events at all. The sweep catches
+	 * every such case: the next pointer movement, scroll, wheel, click
+	 * outside, window blur or window exit closes the pill.
+	 */
+	function sweepPointer(event: PointerEvent): void {
+		const target = event.target;
+		// Unknown trigger yet (mid-swap): don't judge by a stale anchor.
+		if (triggerEl === null) return;
+		if (target instanceof Node && triggerEl.contains(target)) return;
+		disarm();
+	}
+
+	/** Clicking inside the trigger keeps the pill (the pointer is there). */
+	function sweepPointerDown(event: PointerEvent): void {
+		const target = event.target;
+		if (triggerEl === null) return;
+		if (target instanceof Node && triggerEl.contains(target)) return;
+		disarm();
+	}
+
+	/** `pointerout` with no `relatedTarget` = the pointer left the window. */
+	function sweepWindowExit(event: PointerEvent): void {
+		if (event.relatedTarget === null) disarm();
+	}
+
+	// The pill never traps the pointer either: `disableHoverableContent`
+	// renders the portal content with `pointer-events: none`, so a pill
+	// hanging below a list row can no longer swallow the hovers meant for
+	// the rows beneath it (and keep itself open).
+	$effect(() => {
+		if (!open) return;
+		claimActiveHint(closePill);
+		const capture = { capture: true } as const;
+		window.addEventListener("scroll", disarm, capture);
+		window.addEventListener("wheel", disarm, capture);
+		window.addEventListener("pointerdown", sweepPointerDown, capture);
+		window.addEventListener("pointerout", sweepWindowExit);
+		window.addEventListener("blur", disarm);
+		document.addEventListener("pointermove", sweepPointer, capture);
+		return () => {
+			releaseActiveHint(closePill);
+			window.removeEventListener("scroll", disarm, capture);
+			window.removeEventListener("wheel", disarm, capture);
+			window.removeEventListener("pointerdown", sweepPointerDown, capture);
+			window.removeEventListener("pointerout", sweepWindowExit);
+			window.removeEventListener("blur", disarm);
+			document.removeEventListener("pointermove", sweepPointer, capture);
+		};
+	});
+
+	/**
+	 * Arm the dwell timer. Pointer arming flows ONLY through `pointermove`:
+	 * a real hover always produces one on the trigger (the same gesture
+	 * dispatches it, and it bubbles from the row's children), while the
+	 * browser's hover recompute for a stationary pointer — scroll moving
+	 * rows underneath, or the virtualizer replacing the hovered row —
+	 * re-sends `pointerenter`/`pointerover` with no movement at all.
+	 * Arming from those would open a pill the pointer never moved onto.
+	 * Focus (`el === null`) arms directly.
+	 */
 	function armEnter(el: EventTarget | null): void {
 		if (empty) return;
 		hoverEl = el as Element | null;
@@ -96,8 +177,9 @@
 			hoverTimer = setTimeout(() => {
 				hoverTimer = null;
 				// The row may have scrolled away mid-dwell; a detached trigger
-				// has nowhere to anchor the pill.
-				if (hoverEl?.isConnected) activate();
+				// has nowhere to anchor the pill. `null` is the focus path
+				// (no element to detach).
+				if (hoverEl === null || hoverEl.isConnected) activate();
 			}, HOVER_DELAY_MS);
 		}
 	}
@@ -162,7 +244,10 @@
 	/** Idle-phase props: shape-compatible with the real trigger props. */
 	const idleProps = $derived({
 		type: "button",
-		onpointerenter: (event: Event) => armEnter(event.currentTarget),
+		// `pointermove` is the sole pointer-driven arming path — see
+		// `armEnter`. No `pointerenter` arming: the browser re-sends it for
+		// a stationary pointer after scrolls/DOM changes.
+		onpointermove: (event: Event) => armEnter(event.currentTarget),
 		onpointerleave: () => disarm(),
 		onfocus: () => armEnter(null),
 		onblur: () => disarm(),
@@ -184,9 +269,17 @@
 		<TooltipPrimitive.Root
 			{delayDuration}
 			{open}
+			disableHoverableContent
 			onOpenChange={(next) => {
-				open = next;
 				if (next) {
+					// bits-ui's trigger-level `pointerenter` (and the provider's
+					// pointerover tracking) also fire on the browser's hover
+					// recompute — scroll/virtualizer waves move elements under a
+					// stationary pointer and would re-open the very pill the
+					// dismissal just closed. Our own pointer path opens via
+					// `activate()` on real movement instead.
+					if (!open && recentlyScrolled()) return;
+					open = true;
 					if (unarmTimer !== null) {
 						clearTimeout(unarmTimer);
 						unarmTimer = null;
@@ -200,7 +293,19 @@
 		>
 			<TooltipPrimitive.Trigger>
 				{#snippet child({ props })}
-					<span class="hint-trigger-scope" style="display: contents" use:captureTrigger>
+					<span
+						class="hint-trigger-scope"
+						style="display: contents"
+						role="presentation"
+						use:captureTrigger
+						onpointermove={() => {
+							// Closed but still armed (just dismissed): movement within
+							// the trigger shows the pill again — `pointermove` is real
+							// pointer intent by definition, unlike the re-sent
+							// `pointerenter` the sweep-guarded dismissal filters out.
+							if (!open) activate();
+						}}
+					>
 						{@render children({ props })}
 					</span>
 				{/snippet}

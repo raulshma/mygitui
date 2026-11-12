@@ -36,7 +36,7 @@
 		{sideOffset}
 		{side}
 		class={cn(
-			"cn-tooltip-content z-50 w-fit max-w-xs origin-(--bits-tooltip-content-transform-origin) rounded-sm bg-primary py-1 px-[0.55rem] text-xs leading-[1.3] text-primary-foreground shadow-sm",
+			"cn-tooltip-content z-50 w-fit max-w-xs origin-(--bits-tooltip-content-transform-origin) rounded-sm bg-primary py-1 px-[0.55rem] text-xs leading-[1.3] text-primary-foreground shadow-sm whitespace-pre-line [overflow-wrap:anywhere]",
 			className
 		)}
 		{...restProps}

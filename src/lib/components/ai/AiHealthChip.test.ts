@@ -50,7 +50,10 @@ describe("AiHealthChip", () => {
       const chip = getByRole("button");
       expect(chip.getAttribute("title")).toBeNull();
 
-      fireEvent.pointerEnter(chip);
+      // The pill arms from `pointermove` only — a real hover always
+      // produces one, while the browser's re-sent `pointerenter` (scroll /
+      // DOM churn under a stationary pointer) must not arm it.
+      fireEvent.pointerMove(chip);
       await vi.advanceTimersByTimeAsync(400);
 
       const tooltip = screen.getByText((_, el) =>
