@@ -2,22 +2,26 @@
   /**
    * Settings dialog — the single hub for every app-wide preference.
    *
-   * Today's knobs live in feature stores (theme, appearance customizer, AI
-   * config, updater schedule, autofetch cadence, diff/editor/file-tree prefs,
-   * terminal theme, open-with apps, keybind overrides) plus the global
-   * `appSettings` switches. This dialog wires them all through their OWNING
-   * stores — nothing is duplicated or re-persisted here — with a left nav
-   * (General / Appearance / Git / Editor & Diffs / Terminal / Open With /
-   * AI / Updates / Advanced) and a scrollable content pane. Every control
-   * writes immediately (no Save step).
+   * The content is data-driven: a static {@link SECTIONS} registry describes
+   * every setting as a typed row (toggle / segmented / number / action /
+   * custom), each wiring its OWN owning store — nothing is duplicated or
+   * re-persisted here. The view renders rows generically, which buys:
    *
-   * Related dialogs are opened via the typed UI bus (`open-appearance`,
-   * `open-ai-settings`): App.svelte owns those overlays, and the command
-   * palette exposes the same targets, so the dialog only links.
+   * - **Search** across every section (title + description + keywords) with
+   *   grouped results — the fastest path to "where is X?".
+   * - **Keyboard navigation**: `/` or Ctrl/Cmd+F focuses the search field,
+   *   ArrowUp/ArrowDown/Home/End walk the section nav, Escape clears the
+   *   search first and closes the dialog second.
+   * - **Full-row toggles**: clicking anywhere on a switch row flips it.
    *
-   * The Advanced section is the escape hatch: a read-only inspector of the
-   * `mygitui.*` localStorage keys with copy-diagnostics, a keybind reset,
-   * and a confirmed danger reset that clears those keys (the global
+   * Related dialogs (appearance customizer, AI settings, About) open through
+   * the typed UI bus / hosts while this dialog stays open; it renders in the
+   * `z-40` band (overlay + content) so those spawned dialogs always stack
+   * above it regardless of which portal mounted first.
+   *
+   * The Advanced section remains the escape hatch: a read-only inspector of
+   * the `mygitui.*` localStorage keys with copy-diagnostics, a keybind
+   * reset, and a confirmed danger reset that clears those keys (the global
    * settings re-default immediately; the other stores re-read on next
    * launch).
    *
@@ -30,11 +34,13 @@
   import { Button } from "$lib/components/ui/button/index.js";
   import { Input } from "$lib/components/ui/input/index.js";
   import { Switch } from "$lib/components/ui/switch/index.js";
+  import { Slider } from "$lib/components/ui/slider/index.js";
   import { Hint } from "$lib/components/ui/tooltip/index.js";
   import * as Collapsible from "$lib/components/ui/collapsible/index.js";
   import ConfirmDialog from "$lib/components/safety/ConfirmDialog.svelte";
   import CustomAppsSection from "$lib/components/openWith/CustomAppsSection.svelte";
   import Icon from "$lib/components/icons/Icon.svelte";
+  import { appIcon } from "$lib/components/icons/library.svelte";
   import { toast } from "$lib/toast";
   import {
     appSettings,
@@ -60,7 +66,7 @@
   } from "$lib/terminal/terminalThemes.svelte";
   import { readDiffModePref, writeDiffModePref } from "$lib/diff/modePref";
   import { readWrapPref, writeWrapPref } from "$lib/diff/wrapPref";
-  import { editorPrefs, type MdViewMode } from "$lib/components/files/editorPrefs.svelte";
+  import { editorPrefs } from "$lib/components/files/editorPrefs.svelte";
   import { fileTreePrefs } from "$lib/components/panels/fileTreePrefs.svelte";
   import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.svelte";
   import { resetBindings } from "$lib/palette/keybinds";
@@ -76,20 +82,112 @@
   /** localStorage prefix the Advanced inspector / reset scope themselves to. */
   const APP_KEY_PREFIX = "mygitui.";
 
-  /** Left-nav entries, in display order. */
-  const SECTIONS = [
-    { id: "general", label: "General" },
-    { id: "appearance", label: "Appearance" },
-    { id: "git", label: "Git" },
-    { id: "editor", label: "Editor & Diffs" },
-    { id: "terminal", label: "Terminal" },
-    { id: "openwith", label: "Open With" },
-    { id: "ai", label: "AI" },
-    { id: "updates", label: "Updates" },
-    { id: "advanced", label: "Advanced" },
-  ] as const;
+  // --- Row registry types -----------------------------------------------------
 
-  type SectionId = (typeof SECTIONS)[number]["id"];
+  /** One pill of a segmented control. */
+  interface SegmentedOption {
+    value: string;
+    label: string;
+  }
+
+  /** Text that may be computed at render time (version lines, statuses). */
+  type DynamicText = string | (() => string);
+
+  function resolveText(text: DynamicText): string {
+    return typeof text === "function" ? text() : text;
+  }
+
+  interface BaseRowDef {
+    /** Stable id — the `settings-<id>-label` span anchors the control's label. */
+    id: string;
+    title: string;
+    description?: DynamicText;
+    /** Extra search terms beyond title + description. */
+    keywords?: string;
+  }
+
+  /** Boolean setting: a full-row-clickable card with a switch. */
+  interface ToggleRowDef extends BaseRowDef {
+    kind: "toggle";
+    get: () => boolean;
+    set: (value: boolean) => void;
+  }
+
+  /** 2–3 choice setting rendered as a segmented pill control. */
+  interface SegmentedRowDef extends BaseRowDef {
+    kind: "segmented";
+    options: readonly SegmentedOption[];
+    get: () => string;
+    set: (value: string) => void;
+  }
+
+  /** Numeric setting (number input; optionally a companion slider). */
+  interface NumberRowDef extends BaseRowDef {
+    kind: "number";
+    ariaLabel: string;
+    min: number;
+    max: number;
+    /** Unit suffix rendered after the input ("min", "px"). */
+    unit?: string;
+    /** Renders a slider alongside the input. */
+    slider?: boolean;
+    get: () => number;
+    set: (value: number) => void;
+  }
+
+  /** One button of an {@link ActionRowDef}. */
+  interface ActionButtonDef {
+    label: DynamicText;
+    onclick: () => void;
+    disabled?: () => boolean;
+    destructive?: boolean;
+    /** Rendered only while this returns true (e.g. "Restart now"). */
+    hidden?: () => boolean;
+  }
+
+  /** A card with text on the left and button(s) on the right. */
+  interface ActionRowDef extends BaseRowDef {
+    kind: "action";
+    /** Live status line above the description (updater state). */
+    status?: () => string | null;
+    buttons: readonly ActionButtonDef[];
+  }
+
+  /** Hand-drawn block (override list, custom apps, storage inspector). */
+  interface CustomRowDef extends BaseRowDef {
+    kind: "custom";
+    render: "overrides" | "apps" | "inspector";
+  }
+
+  type SettingRowDef =
+    | ToggleRowDef
+    | SegmentedRowDef
+    | NumberRowDef
+    | ActionRowDef
+    | CustomRowDef;
+
+  interface SectionDef {
+    id: SectionId;
+    label: string;
+    /** Semantic icon name resolved through the active icon set. */
+    icon: string;
+    /** One-liner under the section heading. */
+    blurb: string;
+    intro?: string;
+    outro?: string;
+    rows: readonly SettingRowDef[];
+  }
+
+  type SectionId =
+    | "general"
+    | "appearance"
+    | "git"
+    | "editor"
+    | "terminal"
+    | "openwith"
+    | "ai"
+    | "updates"
+    | "advanced";
 
   let {
     open = $bindable(false),
@@ -116,35 +214,6 @@
     return () => window.removeEventListener(THEME_PREFERENCE_EVENT, sync);
   });
 
-  function onThemeChange(event: Event): void {
-    const value = (event.currentTarget as HTMLSelectElement).value as ThemePreference;
-    themeChoice = value;
-    setThemePreference(value);
-  }
-
-  function onTerminalThemeChange(event: Event): void {
-    const value = (event.currentTarget as HTMLSelectElement).value as TerminalThemePreference;
-    terminalThemePref.set(value);
-  }
-
-  function onFileIconThemeChange(event: Event): void {
-    const value = (event.currentTarget as HTMLSelectElement).value;
-    fileIconPreferences.setTheme(
-      value === "material" || value === "minimal" ? value : "colorful",
-    );
-  }
-
-  function onMdViewChange(event: Event): void {
-    const value = (event.currentTarget as HTMLSelectElement).value;
-    editorPrefs.setMdView(value === "edit" || value === "preview" ? value : "split");
-  }
-
-  function onDiffModeChange(event: Event): void {
-    const value = (event.currentTarget as HTMLSelectElement).value;
-    diffMode = value === "unified" ? "unified" : "split";
-    writeDiffModePref(diffMode);
-  }
-
   /** App version (Tauri runtime; fallback constant in plain-browser runs). */
   let version = $state(FALLBACK_VERSION);
   onMount(() => {
@@ -157,27 +226,6 @@
         // Runtime refused/could not answer — keep the fallback constant.
       });
   });
-
-  // --- Git: default auto-fetch cadence + per-repo overrides -------------------
-
-  /** Per-repo cadence overrides, sorted for stable rendering. */
-  const autofetchOverrides = $derived(
-    Object.entries(autofetch.config).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)),
-  );
-
-  function onAutofetchMinutes(event: Event): void {
-    const raw = Number((event.currentTarget as HTMLInputElement).value);
-    // parseAppSettings clamps + rounds; `0` = off.
-    settings.update({ defaultAutofetchMinutes: Number.isFinite(raw) ? raw : 0 });
-  }
-
-  function onTerminalFont(event: Event): void {
-    const raw = Number((event.currentTarget as HTMLInputElement).value);
-    // parseAppSettings clamps to TERMINAL_FONT_MIN/MAX and rounds.
-    settings.update({
-      terminalFontSize: Number.isFinite(raw) ? raw : APP_SETTINGS_DEFAULTS.terminalFontSize,
-    });
-  }
 
   // --- Editor & Diffs: localStorage-backed prefs (mirrored on open) -----------
 
@@ -196,6 +244,13 @@
       themeChoice = getThemePreference();
     });
   });
+
+  // --- Git: per-repo auto-fetch overrides -------------------------------------
+
+  /** Per-repo cadence overrides, sorted for stable rendering. */
+  const autofetchOverrides = $derived(
+    Object.entries(autofetch.config).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)),
+  );
 
   // --- AI ---------------------------------------------------------------------
 
@@ -273,11 +328,11 @@
     entries = out;
   }
 
-  // The inspector reflects storage on section entry (localStorage is not
-  // reactive); the Refresh button re-runs it mid-visit.
+  // The inspector reflects storage when it can be on screen (localStorage is
+  // not reactive); the Refresh button re-runs it mid-visit.
   $effect(() => {
     if (!open) return;
-    if (active === "advanced") rescan();
+    if (active === "advanced" || query.trim() !== "") rescan();
   });
 
   /** Pretty-prints an inspector row's stored JSON when parseable. */
@@ -341,27 +396,727 @@
     toast("App settings reset to defaults", { kind: "info" });
   }
 
+  // --- Search -----------------------------------------------------------------
+
+  /** Search field text; empty string = not searching. */
+  let query = $state("");
+  let searchEl = $state<HTMLInputElement | null>(null);
+
+  /** Search glyph resolved reactively (plain divs can't host `{@const}`). */
+  const searchIcon = $derived(appIcon("search"));
+
+  const normalizedQuery = $derived(query.trim().toLowerCase());
+  const searching = $derived(normalizedQuery !== "");
+
+  /** Static search haystack for one row. */
+  function rowHaystack(row: SettingRowDef): string {
+    const description = typeof row.description === "string" ? row.description : "";
+    return `${row.title} ${description} ${row.keywords ?? ""}`.toLowerCase();
+  }
+
+  /** Picking a section is explicit intent — leave search mode. */
+  function selectSection(id: SectionId): void {
+    active = id;
+    query = "";
+  }
+
+  function onSearchKeydown(event: KeyboardEvent): void {
+    if (event.key === "Escape" && query !== "") {
+      event.preventDefault();
+      event.stopPropagation();
+      query = "";
+    }
+  }
+
+  function onKeydown(event: KeyboardEvent): void {
+    const target = event.target as HTMLElement | null;
+    const inField =
+      target !== null &&
+      (target.tagName === "INPUT" ||
+        target.tagName === "TEXTAREA" ||
+        target.tagName === "SELECT" ||
+        target.isContentEditable);
+    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "f" && !inField) {
+      event.preventDefault();
+      searchEl?.focus();
+      searchEl?.select();
+      return;
+    }
+    if (event.key === "/" && !inField) {
+      event.preventDefault();
+      searchEl?.focus();
+      return;
+    }
+    if (event.key === "Escape") {
+      event.preventDefault();
+      close();
+    }
+  }
+
+  // --- Nav keyboard walking ---------------------------------------------------
+
+  function onNavKeydown(event: KeyboardEvent): void {
+    if (
+      event.key !== "ArrowDown" &&
+      event.key !== "ArrowUp" &&
+      event.key !== "Home" &&
+      event.key !== "End"
+    ) {
+      return;
+    }
+    event.preventDefault();
+    const index = SECTIONS.findIndex((section) => section.id === active);
+    const last = SECTIONS.length - 1;
+    const next =
+      event.key === "ArrowDown"
+        ? Math.min(index + 1, last)
+        : event.key === "ArrowUp"
+          ? Math.max(index - 1, 0)
+          : event.key === "Home"
+            ? 0
+            : last;
+    const target = SECTIONS[next];
+    if (!target || target.id === active) return;
+    selectSection(target.id);
+    document.getElementById(`settings-nav-${target.id}`)?.focus();
+  }
+
+  // Keep the active section visible in the nav while walking with keys.
+  // (Optional call: jsdom and old webviews don't implement scrollIntoView.)
+  $effect(() => {
+    if (!open) return;
+    document.getElementById(`settings-nav-${active}`)?.scrollIntoView?.({
+      block: "nearest",
+    });
+  });
+
   function close(): void {
     // `open` is bindable and the app shell passes no onclose — clearing it
     // here is what actually dismisses the dialog (Close button / Escape).
     open = false;
   }
 
-  function onKeydown(event: KeyboardEvent): void {
-    if (event.key === "Escape") {
-      event.preventDefault();
-      close();
+  // --- Row setters ------------------------------------------------------------
+
+  function setTheme(value: string): void {
+    if (value === "system" || value === "light" || value === "dark") {
+      themeChoice = value;
+      setThemePreference(value);
     }
   }
+
+  function setFileIcons(value: string): void {
+    fileIconPreferences.setTheme(
+      value === "material" || value === "minimal" ? value : "colorful",
+    );
+  }
+
+  function setDiffMode(value: string): void {
+    diffMode = value === "unified" ? "unified" : "split";
+    writeDiffModePref(diffMode);
+  }
+
+  function setMdView(value: string): void {
+    editorPrefs.setMdView(value === "edit" || value === "preview" ? value : "split");
+  }
+
+  function setTerminalTheme(value: string): void {
+    if (value === "system" || value === "light" || value === "dark") {
+      terminalThemePref.set(value satisfies TerminalThemePreference);
+    }
+  }
+
+  // --- Section registry ---------------------------------------------------------
+
+  /**
+   * The dialog's entire content. Getters read reactive stores during render,
+   * so every row tracks its store; setters write straight through.
+   */
+  const SECTIONS: readonly SectionDef[] = [
+    {
+      id: "general",
+      label: "General",
+      icon: "tune",
+      blurb: "Theme and the app itself.",
+      rows: [
+        {
+          kind: "segmented",
+          id: "theme",
+          title: "Theme",
+          description:
+            "“Match system” follows the OS and switches live; a fixed choice overrides it.",
+          keywords: "dark light appearance scheme system",
+          options: [
+            { value: "system", label: "Match system" },
+            { value: "light", label: "Light" },
+            { value: "dark", label: "Dark" },
+          ],
+          get: () => themeChoice,
+          set: setTheme,
+        },
+        {
+          kind: "action",
+          id: "about",
+          title: "mygitui",
+          description: () => `Version ${version} · Fast, configurable Git GUI`,
+          keywords: "version about license info",
+          buttons: [{ label: "About", onclick: () => openAboutDialog() }],
+        },
+      ],
+      outro: "The interface language is English today; more languages are planned.",
+    },
+    {
+      id: "appearance",
+      label: "Appearance",
+      icon: "palette",
+      blurb: "How the app looks — customizer and file icons.",
+      rows: [
+        {
+          kind: "action",
+          id: "appearance-customize",
+          title: "Customize appearance",
+          description:
+            "Style, base color, theme, chart colors, fonts, icon set, radius and menu accents — changes apply live.",
+          keywords: "style font radius icons menu colors preset customizer",
+          buttons: [
+            { label: "Customize…", onclick: () => emitUiEvent("open-appearance") },
+          ],
+        },
+        {
+          kind: "segmented",
+          id: "file-icons",
+          title: "File icons",
+          description: "File-type glyphs in the file trees and the diff header.",
+          keywords: "icon set glyphs colorful material minimal",
+          options: [
+            { value: "colorful", label: "Colorful" },
+            { value: "material", label: "Material" },
+            { value: "minimal", label: "Minimal" },
+          ],
+          get: () => fileIconPreferences.theme,
+          set: setFileIcons,
+        },
+      ],
+    },
+    {
+      id: "git",
+      label: "Git",
+      icon: "account-tree",
+      blurb: "Undo safety nets, confirmations and background fetching.",
+      rows: [
+        {
+          kind: "toggle",
+          id: "checkpoints",
+          title: "Checkpoints for git changes",
+          description:
+            "Snapshot a restorable undo point before working-copy discards and cleans — restore them from the Undo panel.",
+          keywords: "checkpoint undo snapshot safety",
+          get: () => settings.checkpointsEnabled,
+          set: (value) => settings.update({ checkpointsEnabled: value }),
+        },
+        {
+          kind: "toggle",
+          id: "confirm-discard",
+          title: "Confirm before discard",
+          description:
+            "Ask for confirmation before discarding working-copy changes. Turn off if the prompt feels noisy — discards then apply immediately.",
+          keywords: "confirm discard prompt destructive clean",
+          get: () => settings.confirmDiscard,
+          set: (value) => settings.update({ confirmDiscard: value }),
+        },
+        {
+          kind: "number",
+          id: "autofetch",
+          title: "Auto-fetch every",
+          description:
+            "Default cadence for repositories without their own override; 0 disables auto-fetch. Per-repo overrides are set from the Branches panel.",
+          keywords: "fetch interval background poll minutes cadence",
+          ariaLabel: "Default auto-fetch interval in minutes",
+          min: 0,
+          max: AUTOFETCH_MINUTES_MAX,
+          unit: "min",
+          get: () => settings.defaultAutofetchMinutes,
+          set: (value) =>
+            settings.update({
+              defaultAutofetchMinutes: Number.isFinite(value) ? value : 0,
+            }),
+        },
+        {
+          kind: "custom",
+          id: "autofetch-overrides",
+          title: "Per-repo auto-fetch overrides",
+          keywords: "override cadence per repo interval",
+          render: "overrides",
+        },
+      ],
+    },
+    {
+      id: "editor",
+      label: "Editor & Diffs",
+      icon: "difference",
+      blurb: "Diff layout, wrapping and file-editor defaults.",
+      rows: [
+        {
+          kind: "segmented",
+          id: "diff-layout",
+          title: "Diff layout",
+          description:
+            "Split = side by side, unified = inline. Applies to diffs opened afterwards; the diff toolbar flips the current one.",
+          keywords: "diff split unified side side-by-side inline layout compare",
+          options: [
+            { value: "split", label: "Split" },
+            { value: "unified", label: "Unified" },
+          ],
+          get: () => diffMode,
+          set: setDiffMode,
+        },
+        {
+          kind: "toggle",
+          id: "diff-wrap",
+          title: "Wrap long diff lines",
+          description:
+            "Off = horizontal scrolling per diff, like the toolbar's wrap toggle.",
+          keywords: "wrap diff lines soft horizontal scroll",
+          get: () => diffWrap,
+          set: (value) => {
+            diffWrap = value;
+            writeWrapPref(value);
+          },
+        },
+        {
+          kind: "toggle",
+          id: "editor-wrap",
+          title: "Wrap lines in the editor",
+          description: "Soft-wrap for files opened in the file workspace.",
+          keywords: "wrap editor lines soft",
+          get: () => editorPrefs.wrap,
+          set: (value) => editorPrefs.setWrap(value),
+        },
+        {
+          kind: "segmented",
+          id: "md-view",
+          title: "Markdown default view",
+          description:
+            "How markdown files open in the editor (Ctrl+Shift+V cycles live).",
+          keywords: "markdown preview split edit view",
+          options: [
+            { value: "edit", label: "Edit" },
+            { value: "split", label: "Split" },
+            { value: "preview", label: "Preview" },
+          ],
+          get: () => editorPrefs.mdView,
+          set: setMdView,
+        },
+        {
+          kind: "toggle",
+          id: "show-ignored",
+          title: "Show ignored files",
+          description: "List gitignored paths in the Files panel tree.",
+          keywords: "ignored gitignored hidden files tree",
+          get: () => fileTreePrefs.showIgnored,
+          set: (value) => fileTreePrefs.setShowIgnored(value),
+        },
+      ],
+    },
+    {
+      id: "terminal",
+      label: "Terminal",
+      icon: "terminal",
+      blurb: "Palette and text size for the built-in terminal.",
+      rows: [
+        {
+          kind: "segmented",
+          id: "terminal-theme",
+          title: "Terminal theme",
+          description:
+            "“Match app” derives colors from the scheme live; a fixed choice pins an independent palette. Applies to running sessions immediately.",
+          keywords: "terminal colors palette dark light scheme",
+          options: [
+            { value: "system", label: "Match app" },
+            { value: "light", label: "Light" },
+            { value: "dark", label: "Dark" },
+          ],
+          get: () => terminalThemePref.preference,
+          set: setTerminalTheme,
+        },
+        {
+          kind: "number",
+          id: "terminal-font",
+          title: "Font size",
+          description:
+            "Saved with the app settings — applies to new terminal sessions (use the panel's Restart to pick it up); running sessions keep their current size.",
+          keywords: "font size text pixels scale terminal",
+          ariaLabel: "Terminal font size in pixels",
+          min: TERMINAL_FONT_MIN,
+          max: TERMINAL_FONT_MAX,
+          unit: "px",
+          slider: true,
+          get: () => settings.terminalFontSize,
+          set: (value) =>
+            settings.update({
+              terminalFontSize: Number.isFinite(value)
+                ? value
+                : APP_SETTINGS_DEFAULTS.terminalFontSize,
+            }),
+        },
+      ],
+    },
+    {
+      id: "openwith",
+      label: "Open With",
+      icon: "open-in-new",
+      blurb: "Editors and tools that open files from the header menu.",
+      intro:
+        "Detected editors come from this machine; custom apps below join them in the header's “Open with” menu. Nothing is synced.",
+      rows: [
+        {
+          kind: "custom",
+          id: "custom-apps",
+          title: "Custom apps",
+          keywords: "custom apps open with editors launcher commands",
+          render: "apps",
+        },
+      ],
+    },
+    {
+      id: "ai",
+      label: "AI",
+      icon: "bolt",
+      blurb: "Provider wiring for AI features.",
+      rows: [
+        {
+          kind: "action",
+          id: "ai-provider",
+          title: "AI provider",
+          description: () =>
+            `Preferred backend: ${aiBackendLabel}. Backends, models, connection checks and the per-repo feature opt-ins live in the AI settings dialog.`,
+          keywords: "openrouter opencode model llm provider backend",
+          buttons: [
+            { label: "AI settings…", onclick: () => emitUiEvent("open-ai-settings") },
+          ],
+        },
+      ],
+    },
+    {
+      id: "updates",
+      label: "Updates",
+      icon: "cloud-download",
+      blurb: "Automatic checks, downloads and install timing.",
+      rows: [
+        {
+          kind: "toggle",
+          id: "auto-check",
+          title: "Check for updates automatically",
+          description: "Polls at most every 12 hours after launch.",
+          keywords: "update check automatic poll",
+          get: () => updater.autoCheck,
+          set: (value) => updater.setAutoCheck(value),
+        },
+        {
+          kind: "toggle",
+          id: "auto-download",
+          title: "Download updates automatically",
+          description:
+            "Starts the download as soon as an update is found; installing always waits for your restart click.",
+          keywords: "update download automatic install",
+          get: () => updater.autoDownload,
+          set: (value) => updater.setAutoDownload(value),
+        },
+        {
+          kind: "action",
+          id: "update-status",
+          title: "Update status",
+          status: () => updateStatusLine,
+          description: () => `Last check: ${lastCheckLine}`,
+          keywords: "update check version restart install latest",
+          buttons: [
+            {
+              label: () => (updateBusy ? "Checking…" : "Check for updates"),
+              onclick: () => void updater.checkNow({ manual: true }),
+              disabled: () => updateBusy,
+            },
+            {
+              label: "Restart now",
+              onclick: () => updater.relaunch(),
+              hidden: () => updater.status !== "ready",
+            },
+          ],
+        },
+      ],
+    },
+    {
+      id: "advanced",
+      label: "Advanced",
+      icon: "inventory",
+      blurb: "Keybinds, local storage and the danger zone.",
+      rows: [
+        {
+          kind: "action",
+          id: "keybinds",
+          title: "Keyboard shortcuts",
+          description:
+            "Rebind commands from the command palette (Ctrl/Cmd+Shift+P); overrides are remembered per machine.",
+          keywords: "keybinds shortcuts hotkeys reset bindings palette",
+          buttons: [{ label: "Reset all keybinds", onclick: resetKeybinds }],
+        },
+        {
+          kind: "custom",
+          id: "storage-inspector",
+          title: "Local storage",
+          keywords: "storage diagnostics keys json debug inspector",
+          render: "inspector",
+        },
+        {
+          kind: "action",
+          id: "reset-all",
+          title: "Reset all app settings",
+          description:
+            "Clears every “mygitui.*” local-storage entry (theme, appearance, AI, diff/editor/file-tree prefs, keybinds, update schedule, auto-fetch cadences, Open With apps). Repositories on disk are not touched.",
+          keywords: "reset wipe clear defaults danger destructive",
+          buttons: [
+            {
+              label: "Reset settings…",
+              onclick: () => (resetOpen = true),
+              destructive: true,
+            },
+          ],
+        },
+      ],
+      outro:
+        "Shell actions are configured per repository in the Actions panel and the command palette. Recent repositories, pins and session restore are managed on the home screen.",
+    },
+  ];
+
+  /** Shared card chrome for every row. */
+  const ROW_CARD =
+    "flex items-center justify-between gap-4 rounded-xl border border-border bg-card/40 px-4 py-3 transition-colors";
+  const ROW_TEXT = "flex min-w-0 flex-col gap-0.5";
+  const ROW_TITLE = "text-sm font-medium text-foreground";
+  const ROW_DESC = "text-ui-meta text-muted-foreground";
+
+  const activeSection = $derived(
+    SECTIONS.find((section) => section.id === active) ?? SECTIONS[0],
+  );
+
+  /** Sections with ≥1 matching row, in nav order. */
+  const searchResults = $derived.by(() => {
+    if (!searching) return [];
+    return SECTIONS.map((section) => ({
+      section,
+      rows: section.rows.filter((row) => rowHaystack(row).includes(normalizedQuery)),
+    })).filter((group) => group.rows.length > 0);
+  });
+
+  /** Total matching rows across sections (for the result count line). */
+  const searchResultCount = $derived(
+    searchResults.reduce((sum, group) => sum + group.rows.length, 0),
+  );
 </script>
+
+<!-- Row renderer: shared by the section view and search results. -->
+{#snippet renderRows(rowList: readonly SettingRowDef[])}
+  {#each rowList as row (row.id)}
+    {#if row.kind === "toggle"}
+      <!-- svelte-ignore a11y_click_events_have_key_events -->
+      <!-- svelte-ignore a11y_no_static_element_interactions -->
+      <div
+        class="setting-row {ROW_CARD} cursor-pointer hover:border-ring/50 hover:bg-muted/40"
+        onclick={() => row.set(!row.get())}
+      >
+        <span class={ROW_TEXT}>
+          <span id={`settings-${row.id}-label`} class={ROW_TITLE}>{row.title}</span>
+          <span class={ROW_DESC}>{resolveText(row.description ?? "")}</span>
+        </span>
+        <Switch
+          class="mt-0.5 flex-none"
+          aria-labelledby={`settings-${row.id}-label`}
+          checked={row.get()}
+          onclick={(event) => event.stopPropagation()}
+          onCheckedChange={(checked) => row.set(checked)}
+        />
+      </div>
+    {:else if row.kind === "segmented"}
+      <div class="setting-row {ROW_CARD}">
+        <span class={ROW_TEXT}>
+          <span id={`settings-${row.id}-label`} class={ROW_TITLE}>{row.title}</span>
+          <span class={ROW_DESC}>{resolveText(row.description ?? "")}</span>
+        </span>
+        <div
+          class="flex flex-none items-center rounded-lg border border-border bg-muted/60 p-0.5"
+          role="radiogroup"
+          aria-labelledby={`settings-${row.id}-label`}
+        >
+          {#each row.options as option (option.value)}
+            <button
+              type="button"
+              role="radio"
+              aria-checked={row.get() === option.value}
+              class="cursor-pointer rounded-md px-2.5 py-1 text-ui-meta transition-colors {row.get() === option.value
+                ? 'bg-background font-medium text-foreground shadow-sm'
+                : 'text-muted-foreground hover:text-foreground'} focus-visible:-outline-offset-1 focus-visible:outline-2 focus-visible:outline-primary"
+              onclick={() => row.set(option.value)}
+            >
+              {option.label}
+            </button>
+          {/each}
+        </div>
+      </div>
+    {:else if row.kind === "number"}
+      <div class="setting-row {ROW_CARD}">
+        <span class={ROW_TEXT}>
+          <span id={`settings-${row.id}-label`} class={ROW_TITLE}>{row.title}</span>
+          <span class={ROW_DESC}>{resolveText(row.description ?? "")}</span>
+        </span>
+        <span class="flex flex-none items-center gap-2">
+          {#if row.slider}
+            <Slider
+              class="w-24 flex-none"
+              type="single"
+              min={row.min}
+              max={row.max}
+              step={1}
+              aria-label={`${row.ariaLabel} slider`}
+              value={row.get()}
+              onValueChange={(next) => row.set(next)}
+            />
+          {/if}
+          <span class="flex flex-none items-center gap-1">
+            <Input
+              class="w-16 rounded-md text-center"
+              type="number"
+              min={row.min}
+              max={row.max}
+              step={1}
+              aria-label={row.ariaLabel}
+              value={row.get()}
+              onchange={(event) => {
+                const raw = Number((event.currentTarget as HTMLInputElement).value);
+                row.set(raw);
+              }}
+            />
+            {#if row.unit}
+              <span class="text-ui-meta text-muted-foreground">{row.unit}</span>
+            {/if}
+          </span>
+        </span>
+      </div>
+    {:else if row.kind === "action"}
+      <div class="setting-row {ROW_CARD} bg-muted/30">
+        <span class={ROW_TEXT}>
+          <span class={ROW_TITLE}>{row.title}</span>
+          {#if row.status}
+            {@const statusText = row.status()}
+            {#if statusText !== null}
+              <span class="text-sm text-foreground" role="status">{statusText}</span>
+            {/if}
+          {/if}
+          <span class={ROW_DESC}>{resolveText(row.description ?? "")}</span>
+        </span>
+        <span class="flex flex-none items-center gap-2">
+          {#each row.buttons.filter((button) => !button.hidden?.()) as button, i (i)}
+            <Button
+              variant={button.destructive ? "destructive" : "outline"}
+              class="rounded-full"
+              type="button"
+              disabled={button.disabled?.()}
+              onclick={button.onclick}
+            >
+              {resolveText(button.label)}
+            </Button>
+          {/each}
+        </span>
+      </div>
+    {:else if row.render === "overrides"}
+      <div class="overrides flex flex-col gap-1.5">
+        <span id="settings-autofetch-overrides-label" class={ROW_TITLE}>{row.title}</span>
+        {#if autofetchOverrides.length === 0}
+          <p class="m-0 {ROW_DESC}">
+            No overrides — every open repository follows the default cadence.
+          </p>
+        {:else}
+          <ul class="m-0 flex list-none flex-col gap-1 p-0" role="list" aria-label="Per-repo auto-fetch overrides">
+            {#each autofetchOverrides as [root, minutes] (root)}
+              <li class="flex min-w-0 items-center justify-between gap-3 rounded-md border border-border px-2.5 py-1.5">
+                <span class="min-w-0 truncate font-mono text-ui-meta text-foreground" title={root}>{root}</span>
+                <span class="flex flex-none items-center gap-2">
+                  <span class={ROW_DESC}>{minutes} min</span>
+                  <Hint label={`Clear the auto-fetch override for ${root}`}>
+                    {#snippet child({ props })}
+                      <Button
+                        {...props}
+                        variant="ghost"
+                        size="icon-xs"
+                        type="button"
+                        aria-label={`Clear auto-fetch override for ${root}`}
+                        onclick={() => autofetch.setInterval(root, 0)}
+                      >
+                        ×
+                      </Button>
+                    {/snippet}
+                  </Hint>
+                </span>
+              </li>
+            {/each}
+          </ul>
+        {/if}
+      </div>
+    {:else if row.render === "apps"}
+      <CustomAppsSection store={apps} />
+    {:else if row.render === "inspector"}
+      <div class="inspector flex flex-col gap-2">
+        <div class="inspector-head flex flex-wrap items-center justify-between gap-2">
+          <span class={ROW_TITLE}>
+            Local storage ({entries.length}
+            {entries.length === 1 ? "key" : "keys"})
+          </span>
+          <span class="flex flex-none gap-2">
+            <Button variant="outline" class="rounded-full" type="button" onclick={rescan}>
+              Refresh
+            </Button>
+            <Button variant="outline" class="rounded-full" type="button" onclick={() => void copyDiagnostics()}>
+              Copy diagnostics
+            </Button>
+          </span>
+        </div>
+        {#if entries.length === 0}
+          <p class="m-0 rounded-xl border border-dashed border-border px-4 py-3 {ROW_DESC}">
+            No “{APP_KEY_PREFIX}” entries in local storage.
+          </p>
+        {:else}
+          <ul class="m-0 flex list-none flex-col gap-1 p-0" role="list" aria-label="Stored app settings">
+            {#each entries as entry (entry.key)}
+              <li>
+                <Collapsible.Root class="rounded-md border border-border bg-muted/30">
+                  <Collapsible.Trigger
+                    class="flex w-full cursor-pointer items-center justify-between gap-2 rounded-md px-2.5 py-1.5 text-left hover:bg-muted focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-primary"
+                  >
+                    <span class="min-w-0 truncate font-mono text-ui-meta text-foreground">{entry.key}</span>
+                    <Icon icon={iconChevronDown} size={14} />
+                  </Collapsible.Trigger>
+                  <Collapsible.Content class="border-t border-border px-2.5 py-1.5">
+                    <pre class="m-0 max-h-40 overflow-auto whitespace-pre-wrap break-all font-mono text-ui-micro text-muted-foreground">{prettyValue(entry.value)}</pre>
+                  </Collapsible.Content>
+                </Collapsible.Root>
+              </li>
+            {/each}
+          </ul>
+        {/if}
+      </div>
+    {/if}
+  {/each}
+{/snippet}
+
 
 {#if open}
   <Dialog.Root bind:open>
-    <!-- svelte-ignore a11y_click_events_have_key_events -->
-    <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-    <Dialog.Overlay class="scrim bg-black/40" role="presentation" />
+    <!--
+      z-40 band: the settings hub is the only dialog that SPAWNS other dialogs
+      (appearance customizer, AI settings, About). Those keep the default z-50,
+      so they always stack above the hub no matter which portal mounted first.
+    -->
     <Dialog.Content
-      class="dialog flex h-[min(34rem,calc(100dvh_-_2rem))] w-[min(46rem,calc(100vw_-_2rem))] max-w-none flex-col overflow-hidden text-popover-foreground sm:max-w-none"
+      class="flex h-[min(38rem,calc(100dvh_-_2rem))] w-[min(52rem,calc(100vw_-_2rem))] max-w-none flex-col overflow-hidden text-popover-foreground sm:max-w-none z-40"
+      overlayClass="z-40 bg-black/40"
       role="dialog"
       aria-modal="true"
       aria-labelledby="settings-title"
@@ -371,488 +1126,117 @@
       interactOutsideBehavior="ignore"
       onkeydown={onKeydown}
     >
-      <header class="dialog-header mb-0 flex flex-none items-start justify-between gap-4 border-b border-border px-5 pb-3 pt-4">
+      <header class="flex flex-none items-start justify-between gap-4 border-b border-border px-5 pb-3 pt-4">
         <div>
-          <Dialog.Title id="settings-title" class="title m-0 font-semibold text-foreground">Settings</Dialog.Title>
-          <p id="settings-description" class="subtitle mb-0 mt-1 text-ui-base text-muted-foreground">
+          <Dialog.Title id="settings-title" class="m-0 font-semibold text-foreground">Settings</Dialog.Title>
+          <p id="settings-description" class="mb-0 mt-1 text-ui-base text-muted-foreground">
             Every app-wide preference in one place. Changes apply immediately.
           </p>
         </div>
-        <Button variant="ghost" size="icon" class="icon-button flex-none rounded-full text-lg leading-none text-muted-foreground" type="button" aria-label="Close settings" onclick={close}>
+        <Button variant="ghost" size="icon" class="flex-none rounded-full text-lg leading-none text-muted-foreground" type="button" aria-label="Close settings" onclick={close}>
           ×
         </Button>
       </header>
 
-      <div class="dialog-body flex min-h-0 flex-1">
-        <!-- Sticky section nav -->
+      <div class="flex min-h-0 flex-1">
+        <!-- Sticky section nav: search + icon list -->
         <nav
-          class="sections-nav flex w-40 flex-none flex-col gap-0.5 overflow-y-auto border-r border-border bg-muted/30 px-2 py-3"
+          class="flex w-44 flex-none flex-col gap-0.5 overflow-y-auto border-r border-border bg-muted/30 px-2 py-3"
           aria-label="Settings sections"
         >
+          <div class="relative mb-2 px-0.5">
+            {#if searchIcon}
+              <span class="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground">
+                <Icon icon={searchIcon} size={13} />
+              </span>
+            {/if}
+              <input
+                bind:this={searchEl}
+                bind:value={query}
+                class="w-full rounded-md border border-border bg-background py-1 pl-7 pr-6 text-ui-meta text-foreground placeholder:text-muted-foreground focus-visible:-outline-offset-1 focus-visible:outline-2 focus-visible:outline-primary"
+                type="text"
+                placeholder="Search…  /"
+                aria-label="Search settings"
+                onkeydown={onSearchKeydown}
+              />
+              {#if query !== ""}
+                <button
+                  type="button"
+                  class="absolute right-1.5 top-1/2 -translate-y-1/2 cursor-pointer rounded-full px-1 text-ui-meta text-muted-foreground hover:text-foreground focus-visible:-outline-offset-1 focus-visible:outline-2 focus-visible:outline-primary"
+                  aria-label="Clear search"
+                  onclick={() => (query = "")}
+                >
+                  ×
+                </button>
+              {/if}
+          </div>
           {#each SECTIONS as section (section.id)}
+            {@const sectionIcon = appIcon(section.icon)}
             <button
-              class="nav-item flex w-full cursor-pointer items-center rounded-md px-2.5 py-1.5 text-left text-sm {active === section.id
+              id={`settings-nav-${section.id}`}
+              class="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-sm transition-colors {active === section.id
                 ? 'bg-accent font-medium text-accent-foreground'
-                : 'text-muted-foreground hover:bg-muted hover:text-foreground'} focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-primary"
+                : 'text-muted-foreground hover:bg-muted hover:text-foreground'} focus-visible:-outline-offset-1 focus-visible:outline-2 focus-visible:outline-primary"
               type="button"
               aria-current={active === section.id ? "true" : undefined}
-              onclick={() => (active = section.id)}
+              onclick={() => selectSection(section.id)}
+              onkeydown={onNavKeydown}
             >
-              {section.label}
+              {#if sectionIcon}
+                <span class="flex-none {active === section.id ? 'text-primary' : 'text-muted-foreground/80'}">
+                  <Icon icon={sectionIcon} size={15} />
+                </span>
+              {/if}
+              <span class="truncate">{section.label}</span>
             </button>
           {/each}
         </nav>
 
         <!-- Content pane (the only scroller) -->
-        <div class="dialog-content-pane min-h-0 flex-1 overflow-y-auto px-5 py-4">
-          {#if active === "general"}
-            <section aria-labelledby="settings-general-heading" class="flex flex-col gap-4">
-              <h3 id="settings-general-heading" class="m-0 text-sm font-semibold text-foreground">General</h3>
-              <div class="field flex flex-col gap-1">
-                <label class="flex flex-col gap-1">
-                  <span class="text-sm font-medium text-foreground">Theme</span>
-                  <select
-                    class="input w-48 rounded border border-border bg-background px-2 py-1.5 text-ui-base text-foreground focus-visible:-outline-offset-1 focus-visible:outline-2 focus-visible:outline-primary"
-                    value={themeChoice}
-                    onchange={onThemeChange}
-                  >
-                    <option value="system">Match system</option>
-                    <option value="light">Light</option>
-                    <option value="dark">Dark</option>
-                  </select>
-                </label>
-                <span class="text-ui-meta text-muted-foreground">
-                  “Match system” follows the OS and switches live; a fixed choice overrides it.
-                </span>
+        <div class="min-h-0 flex-1 overflow-y-auto px-5 py-4">
+          {#if searching}
+            <section aria-label="Search results" class="flex flex-col gap-4">
+              <div class="flex flex-col gap-0.5 pb-1">
+                <h3 class="m-0 text-sm font-semibold text-foreground">Search results</h3>
+                <p class="m-0 {ROW_DESC}">
+                  {#if searchResults.length === 0}
+                    Nothing matches “{query}”.
+                  {:else}
+                    {searchResultCount}
+                    {searchResultCount === 1 ? "setting" : "settings"} in
+                    {searchResults.length}
+                    {searchResults.length === 1 ? "section" : "sections"}
+                  {/if}
+                </p>
               </div>
-              <div class="about-row flex items-center justify-between gap-4 rounded-xl border border-border bg-muted/30 px-4 py-3">
-                <span class="flex min-w-0 flex-col gap-0.5">
-                  <span class="text-sm font-medium text-foreground">mygitui</span>
-                  <span class="text-ui-meta text-muted-foreground">Version {version} · Fast, configurable Git GUI</span>
-                </span>
-                <Button variant="outline" class="flex-none rounded-full" type="button" onclick={() => openAboutDialog()}>
-                  About
-                </Button>
-              </div>
-              <p class="hint m-0 text-ui-meta text-muted-foreground">
-                The interface language is English today; more languages are planned.
-              </p>
+              {#if searchResults.length === 0}
+                <p class="m-0 rounded-xl border border-dashed border-border px-4 py-6 text-center {ROW_DESC}">
+                  Try “wrap”, “theme”, “fetch”, “terminal”, “keys” or “updates”.
+                </p>
+              {:else}
+                {#each searchResults as group (group.section.id)}
+                  <section class="flex flex-col gap-2" aria-label={group.section.label}>
+                    <h4 class="m-0 text-ui-meta font-semibold uppercase tracking-wide text-muted-foreground">
+                      {group.section.label}
+                    </h4>
+                    {@render renderRows(group.rows)}
+                  </section>
+                {/each}
+              {/if}
             </section>
-          {:else if active === "appearance"}
-            <section aria-labelledby="settings-appearance-heading" class="flex flex-col gap-4">
-              <h3 id="settings-appearance-heading" class="m-0 text-sm font-semibold text-foreground">Appearance</h3>
-              <div class="flex items-center justify-between gap-4 rounded-xl border border-border bg-muted/30 px-4 py-3">
-                <span class="flex min-w-0 flex-col gap-0.5">
-                  <span class="text-sm font-medium text-foreground">Customize appearance</span>
-                  <span class="text-ui-meta text-muted-foreground">
-                    Style, base color, theme, chart colors, fonts, icon set, radius and menu
-                    accents — changes apply live.
-                  </span>
-                </span>
-                <Button
-                  variant="outline"
-                  class="flex-none rounded-full"
-                  type="button"
-                  onclick={() => emitUiEvent("open-appearance")}
-                >
-                  Customize…
-                </Button>
+          {:else}
+            <section aria-labelledby="settings-section-heading" class="flex flex-col gap-2.5">
+              <div id="settings-section-heading" class="flex flex-col gap-0.5 pb-1">
+                <h3 class="m-0 text-sm font-semibold text-foreground">{activeSection.label}</h3>
+                <p class="m-0 {ROW_DESC}">{activeSection.blurb}</p>
               </div>
-              <div class="field flex flex-col gap-1">
-                <label class="flex flex-col gap-1">
-                  <span class="text-sm font-medium text-foreground">File icons</span>
-                  <select
-                    class="input w-48 rounded border border-border bg-background px-2 py-1.5 text-ui-base text-foreground focus-visible:-outline-offset-1 focus-visible:outline-2 focus-visible:outline-primary"
-                    value={fileIconPreferences.theme}
-                    onchange={onFileIconThemeChange}
-                  >
-                    <option value="colorful">Colorful</option>
-                    <option value="material">Material</option>
-                    <option value="minimal">Minimal</option>
-                  </select>
-                </label>
-                <span class="text-ui-meta text-muted-foreground">
-                  File-type glyphs in the file trees and the diff header.
-                </span>
-              </div>
-            </section>
-          {:else if active === "git"}
-            <section aria-labelledby="settings-git-heading" class="flex flex-col gap-4">
-              <h3 id="settings-git-heading" class="m-0 text-sm font-semibold text-foreground">Git</h3>
-              <div class="row flex items-start justify-between gap-4">
-                <span class="flex min-w-0 flex-col gap-0.5">
-                  <span id="settings-checkpoints-label" class="text-sm font-medium text-foreground">
-                    Checkpoints for git changes
-                  </span>
-                  <span class="text-ui-meta text-muted-foreground">
-                    Snapshot a restorable undo point before working-copy discards and cleans —
-                    restore them from the Undo panel.
-                  </span>
-                </span>
-                <Switch
-                  class="mt-1 flex-none"
-                  aria-labelledby="settings-checkpoints-label"
-                  checked={settings.checkpointsEnabled}
-                  onCheckedChange={(checked) => settings.update({ checkpointsEnabled: checked })}
-                />
-              </div>
-              <div class="row flex items-start justify-between gap-4">
-                <span class="flex min-w-0 flex-col gap-0.5">
-                  <span id="settings-confirm-discard-label" class="text-sm font-medium text-foreground">
-                    Confirm before discard
-                  </span>
-                  <span class="text-ui-meta text-muted-foreground">
-                    Ask for confirmation before discarding working-copy changes. Turn off if the
-                    prompt feels noisy — discards then apply immediately.
-                  </span>
-                </span>
-                <Switch
-                  class="mt-1 flex-none"
-                  aria-labelledby="settings-confirm-discard-label"
-                  checked={settings.confirmDiscard}
-                  onCheckedChange={(checked) => settings.update({ confirmDiscard: checked })}
-                />
-              </div>
-              <div class="field flex max-w-56 flex-col gap-1">
-                <label class="flex flex-col gap-1">
-                  <span class="text-sm font-medium text-foreground">Auto-fetch every (minutes)</span>
-                  <Input
-                    class="input rounded"
-                    type="number"
-                    min={0}
-                    max={AUTOFETCH_MINUTES_MAX}
-                    step={1}
-                    aria-label="Default auto-fetch interval in minutes"
-                    value={settings.defaultAutofetchMinutes}
-                    onchange={onAutofetchMinutes}
-                  />
-                </label>
-                <span class="text-ui-meta text-muted-foreground">
-                  Default cadence for repositories without their own override; 0 disables
-                  auto-fetch. Per-repo overrides are set from the Branches panel.
-                </span>
-              </div>
-              <div class="overrides flex flex-col gap-1">
-                <span class="text-sm font-medium text-foreground">Per-repo auto-fetch overrides</span>
-                {#if autofetchOverrides.length === 0}
-                  <p class="m-0 text-ui-meta text-muted-foreground">
-                    No overrides — every open repository follows the default cadence.
-                  </p>
-                {:else}
-                  <ul class="m-0 flex list-none flex-col gap-1 p-0" role="list" aria-label="Per-repo auto-fetch overrides">
-                    {#each autofetchOverrides as [root, minutes] (root)}
-                      <li class="flex min-w-0 items-center justify-between gap-3 rounded-md border border-border px-2.5 py-1.5">
-                        <span class="min-w-0 truncate font-mono text-ui-meta text-foreground" title={root}>{root}</span>
-                        <span class="flex flex-none items-center gap-2">
-                          <span class="text-ui-meta text-muted-foreground">{minutes} min</span>
-                          <Hint label={`Clear the auto-fetch override for ${root}`}>
-                            {#snippet child({ props })}
-                              <Button
-                                {...props}
-                                variant="ghost"
-                                size="icon-xs"
-                                type="button"
-                                aria-label={`Clear auto-fetch override for ${root}`}
-                                onclick={() => autofetch.setInterval(root, 0)}
-                              >
-                                ×
-                              </Button>
-                            {/snippet}
-                          </Hint>
-                        </span>
-                      </li>
-                    {/each}
-                  </ul>
-                {/if}
-              </div>
-            </section>
-          {:else if active === "editor"}
-            <section aria-labelledby="settings-editor-heading" class="flex flex-col gap-4">
-              <h3 id="settings-editor-heading" class="m-0 text-sm font-semibold text-foreground">Editor &amp; Diffs</h3>
-              <div class="field flex flex-col gap-1">
-                <label class="flex flex-col gap-1">
-                  <span class="text-sm font-medium text-foreground">Diff layout</span>
-                  <select
-                    class="input w-48 rounded border border-border bg-background px-2 py-1.5 text-ui-base text-foreground focus-visible:-outline-offset-1 focus-visible:outline-2 focus-visible:outline-primary"
-                    value={diffMode}
-                    onchange={onDiffModeChange}
-                  >
-                    <option value="split">Split (side by side)</option>
-                    <option value="unified">Unified (inline)</option>
-                  </select>
-                </label>
-                <span class="text-ui-meta text-muted-foreground">
-                  Applies to diffs opened afterwards; the diff toolbar flips the current one.
-                </span>
-              </div>
-              <div class="row flex items-start justify-between gap-4">
-                <span class="flex min-w-0 flex-col gap-0.5">
-                  <span id="settings-diff-wrap-label" class="text-sm font-medium text-foreground">
-                    Wrap long diff lines
-                  </span>
-                  <span class="text-ui-meta text-muted-foreground">
-                    Off = horizontal scrolling per diff, like the toolbar's wrap toggle.
-                  </span>
-                </span>
-                <Switch
-                  class="mt-1 flex-none"
-                  aria-labelledby="settings-diff-wrap-label"
-                  checked={diffWrap}
-                  onCheckedChange={(checked) => {
-                    diffWrap = checked;
-                    writeWrapPref(checked);
-                  }}
-                />
-              </div>
-              <div class="row flex items-start justify-between gap-4">
-                <span class="flex min-w-0 flex-col gap-0.5">
-                  <span id="settings-editor-wrap-label" class="text-sm font-medium text-foreground">
-                    Wrap lines in the editor
-                  </span>
-                  <span class="text-ui-meta text-muted-foreground">
-                    Soft-wrap for files opened in the file workspace.
-                  </span>
-                </span>
-                <Switch
-                  class="mt-1 flex-none"
-                  aria-labelledby="settings-editor-wrap-label"
-                  checked={editorPrefs.wrap}
-                  onCheckedChange={(checked) => editorPrefs.setWrap(checked)}
-                />
-              </div>
-              <div class="field flex flex-col gap-1">
-                <label class="flex flex-col gap-1">
-                  <span class="text-sm font-medium text-foreground">Markdown default view</span>
-                  <select
-                    class="input w-48 rounded border border-border bg-background px-2 py-1.5 text-ui-base text-foreground focus-visible:-outline-offset-1 focus-visible:outline-2 focus-visible:outline-primary"
-                    value={editorPrefs.mdView}
-                    onchange={onMdViewChange}
-                  >
-                    <option value="edit">Edit</option>
-                    <option value="split">Split</option>
-                    <option value="preview">Preview</option>
-                  </select>
-                </label>
-                <span class="text-ui-meta text-muted-foreground">
-                  How markdown files open in the editor (Ctrl+Shift+V cycles live).
-                </span>
-              </div>
-              <div class="row flex items-start justify-between gap-4">
-                <span class="flex min-w-0 flex-col gap-0.5">
-                  <span id="settings-show-ignored-label" class="text-sm font-medium text-foreground">
-                    Show ignored files
-                  </span>
-                  <span class="text-ui-meta text-muted-foreground">
-                    List gitignored paths in the Files panel tree.
-                  </span>
-                </span>
-                <Switch
-                  class="mt-1 flex-none"
-                  aria-labelledby="settings-show-ignored-label"
-                  checked={fileTreePrefs.showIgnored}
-                  onCheckedChange={(checked) => fileTreePrefs.setShowIgnored(checked)}
-                />
-              </div>
-            </section>
-          {:else if active === "terminal"}
-            <section aria-labelledby="settings-terminal-heading" class="flex flex-col gap-4">
-              <h3 id="settings-terminal-heading" class="m-0 text-sm font-semibold text-foreground">Terminal</h3>
-              <div class="field flex flex-col gap-1">
-                <label class="flex flex-col gap-1">
-                  <span class="text-sm font-medium text-foreground">Terminal theme</span>
-                  <select
-                    class="input w-48 rounded border border-border bg-background px-2 py-1.5 text-ui-base text-foreground focus-visible:-outline-offset-1 focus-visible:outline-2 focus-visible:outline-primary"
-                    value={terminalThemePref.preference}
-                    onchange={onTerminalThemeChange}
-                  >
-                    <option value="system">Match app theme</option>
-                    <option value="light">Light</option>
-                    <option value="dark">Dark</option>
-                  </select>
-                </label>
-                <span class="text-ui-meta text-muted-foreground">
-                  “Match app theme” derives colors from the scheme live; a fixed choice pins an
-                  independent palette. Applies to running sessions immediately.
-                </span>
-              </div>
-              <div class="field flex max-w-56 flex-col gap-1">
-                <label class="flex flex-col gap-1">
-                  <span class="text-sm font-medium text-foreground">Font size (px)</span>
-                  <Input
-                    class="input rounded"
-                    type="number"
-                    min={TERMINAL_FONT_MIN}
-                    max={TERMINAL_FONT_MAX}
-                    step={1}
-                    aria-label="Terminal font size in pixels"
-                    value={settings.terminalFontSize}
-                    onchange={onTerminalFont}
-                  />
-                </label>
-                <span class="text-ui-meta text-muted-foreground">
-                  Saved with the app settings — applies to new terminal sessions (use the
-                  panel's Restart to pick it up); running sessions keep their current size.
-                </span>
-              </div>
-            </section>
-          {:else if active === "openwith"}
-            <section aria-labelledby="settings-openwith-heading" class="flex flex-col gap-4">
-              <h3 id="settings-openwith-heading" class="m-0 text-sm font-semibold text-foreground">Open With</h3>
-              <p class="m-0 text-ui-meta text-muted-foreground">
-                Detected editors come from this machine; custom apps below join them in the
-                header's “Open with” menu. Nothing is synced.
-              </p>
-              <CustomAppsSection store={apps} />
-            </section>
-          {:else if active === "ai"}
-            <section aria-labelledby="settings-ai-heading" class="flex flex-col gap-4">
-              <h3 id="settings-ai-heading" class="m-0 text-sm font-semibold text-foreground">AI</h3>
-              <div class="flex items-center justify-between gap-4 rounded-xl border border-border bg-muted/30 px-4 py-3">
-                <span class="flex min-w-0 flex-col gap-0.5">
-                  <span class="text-sm font-medium text-foreground">AI provider</span>
-                  <span class="text-ui-meta text-muted-foreground">
-                    Preferred backend: {aiBackendLabel}. Backends, models, connection checks and
-                    the per-repo feature opt-ins live in the AI settings dialog.
-                  </span>
-                </span>
-                <Button
-                  variant="outline"
-                  class="flex-none rounded-full"
-                  type="button"
-                  onclick={() => emitUiEvent("open-ai-settings")}
-                >
-                  AI settings…
-                </Button>
-              </div>
-            </section>
-          {:else if active === "updates"}
-            <section aria-labelledby="settings-updates-heading" class="flex flex-col gap-4">
-              <h3 id="settings-updates-heading" class="m-0 text-sm font-semibold text-foreground">Updates</h3>
-              <div class="row flex items-start justify-between gap-4">
-                <span class="flex min-w-0 flex-col gap-0.5">
-                  <span id="settings-auto-check-label" class="text-sm font-medium text-foreground">
-                    Check for updates automatically
-                  </span>
-                  <span class="text-ui-meta text-muted-foreground">
-                    Polls at most every 12 hours after launch.
-                  </span>
-                </span>
-                <Switch
-                  class="mt-1 flex-none"
-                  aria-labelledby="settings-auto-check-label"
-                  checked={updater.autoCheck}
-                  onCheckedChange={(checked) => updater.setAutoCheck(checked)}
-                />
-              </div>
-              <div class="row flex items-start justify-between gap-4">
-                <span class="flex min-w-0 flex-col gap-0.5">
-                  <span id="settings-auto-download-label" class="text-sm font-medium text-foreground">
-                    Download updates automatically
-                  </span>
-                  <span class="text-ui-meta text-muted-foreground">
-                    Starts the download as soon as an update is found; installing always waits
-                    for your restart click.
-                  </span>
-                </span>
-                <Switch
-                  class="mt-1 flex-none"
-                  aria-labelledby="settings-auto-download-label"
-                  checked={updater.autoDownload}
-                  onCheckedChange={(checked) => updater.setAutoDownload(checked)}
-                />
-              </div>
-              <div class="status-row flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-muted/30 px-4 py-3">
-                <span class="flex min-w-0 flex-col gap-0.5">
-                  <span class="text-sm font-medium text-foreground" role="status">{updateStatusLine}</span>
-                  <span class="text-ui-meta text-muted-foreground">Last check: {lastCheckLine}</span>
-                </span>
-                <Button
-                  variant="outline"
-                  class="flex-none rounded-full"
-                  type="button"
-                  disabled={updateBusy}
-                  onclick={() => void updater.checkNow({ manual: true })}
-                >
-                  {updateBusy ? "Checking…" : "Check for updates"}
-                </Button>
-              </div>
-            </section>
-          {:else if active === "advanced"}
-            <section aria-labelledby="settings-advanced-heading" class="flex flex-col gap-4">
-              <h3 id="settings-advanced-heading" class="m-0 text-sm font-semibold text-foreground">Advanced</h3>
-
-              <div class="keybinds-row flex items-center justify-between gap-4 rounded-xl border border-border bg-muted/30 px-4 py-3">
-                <span class="flex min-w-0 flex-col gap-0.5">
-                  <span class="text-sm font-medium text-foreground">Keyboard shortcuts</span>
-                  <span class="text-ui-meta text-muted-foreground">
-                    Rebind commands from the command palette (Ctrl/Cmd+Shift+P); overrides are
-                    remembered per machine.
-                  </span>
-                </span>
-                <Button variant="outline" class="flex-none rounded-full" type="button" onclick={resetKeybinds}>
-                  Reset all keybinds
-                </Button>
-              </div>
-
-              <p class="hint m-0 text-ui-meta text-muted-foreground">
-                Shell actions are configured per repository in the Actions panel and the command
-                palette. Recent repositories, pins and session restore are managed on the home
-                screen.
-              </p>
-
-              <div class="inspector flex flex-col gap-2">
-                <div class="inspector-head flex flex-wrap items-center justify-between gap-2">
-                  <span class="text-sm font-medium text-foreground">
-                    Local storage ({entries.length}
-                    {entries.length === 1 ? "key" : "keys"})
-                  </span>
-                  <span class="flex flex-none gap-2">
-                    <Button variant="outline" class="rounded-full" type="button" onclick={rescan}>
-                      Refresh
-                    </Button>
-                    <Button variant="outline" class="rounded-full" type="button" onclick={() => void copyDiagnostics()}>
-                      Copy diagnostics
-                    </Button>
-                  </span>
-                </div>
-                {#if entries.length === 0}
-                  <p class="m-0 rounded-xl border border-dashed border-border px-4 py-3 text-ui-meta text-muted-foreground">
-                    No “{APP_KEY_PREFIX}” entries in local storage.
-                  </p>
-                {:else}
-                  <ul class="m-0 flex list-none flex-col gap-1 p-0" role="list" aria-label="Stored app settings">
-                    {#each entries as entry (entry.key)}
-                      <li>
-                        <Collapsible.Root class="rounded-md border border-border bg-muted/30">
-                          <Collapsible.Trigger
-                            class="flex w-full cursor-pointer items-center justify-between gap-2 rounded-md px-2.5 py-1.5 text-left hover:bg-muted focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-primary"
-                          >
-                            <span class="min-w-0 truncate font-mono text-ui-meta text-foreground">{entry.key}</span>
-                            <Icon icon={iconChevronDown} size={14} />
-                          </Collapsible.Trigger>
-                          <Collapsible.Content class="border-t border-border px-2.5 py-1.5">
-                            <pre class="m-0 max-h-40 overflow-auto whitespace-pre-wrap break-all font-mono text-ui-micro text-muted-foreground">{prettyValue(entry.value)}</pre>
-                          </Collapsible.Content>
-                        </Collapsible.Root>
-                      </li>
-                    {/each}
-                  </ul>
-                {/if}
-              </div>
-
-              <div class="danger flex items-center justify-between gap-4 rounded-xl border border-destructive/40 bg-destructive/5 px-4 py-3">
-                <span class="flex min-w-0 flex-col gap-0.5">
-                  <span class="text-sm font-medium text-destructive">Reset all app settings</span>
-                  <span class="text-ui-meta text-muted-foreground">
-                    Clears every “{APP_KEY_PREFIX}” local-storage entry (theme, appearance, AI,
-                    diff/editor/file-tree prefs, keybinds, update schedule, auto-fetch cadences,
-                    Open With apps). Repositories on disk are not touched.
-                  </span>
-                </span>
-                <Button variant="destructive" class="flex-none rounded-full" type="button" onclick={() => (resetOpen = true)}>
-                  Reset settings…
-                </Button>
-              </div>
+              {#if activeSection.intro}
+                <p class="m-0 {ROW_DESC}">{activeSection.intro}</p>
+              {/if}
+              {@render renderRows(activeSection.rows)}
+              {#if activeSection.outro}
+                <p class="m-0 {ROW_DESC}">{activeSection.outro}</p>
+              {/if}
             </section>
           {/if}
         </div>

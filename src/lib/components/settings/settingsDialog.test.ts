@@ -1,9 +1,12 @@
 /**
- * SettingsDialog tests: section navigation, live store-backed writes (the
- * injected stores persist to the real jsdom localStorage, so the envelope
- * payloads are asserted directly), the Advanced inspector + diagnostics +
- * confirmed danger reset. The `$lib/toast` module is mocked like
- * CustomAppsSection's suite; nothing invokes Tauri IPC at render time.
+ * SettingsDialog tests: section navigation, cross-section search, live
+ * store-backed writes (the injected stores persist to the real jsdom
+ * localStorage, so the envelope payloads are asserted directly), and the
+ * Advanced inspector + diagnostics + confirmed danger reset. Choice settings
+ * render as segmented `role="radio"` pills; switches keep their
+ * aria-labelledby labels and whole rows are clickable. The `$lib/toast`
+ * module is mocked like CustomAppsSection's suite; nothing invokes Tauri
+ * IPC at render time.
  */
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/svelte";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -102,14 +105,16 @@ describe("SettingsDialog", () => {
   it("writes theme preference through the owning store (persisted)", async () => {
     render(SettingsDialog, { open: true, settings, apps });
 
-    const select = screen.getByLabelText("Theme") as HTMLSelectElement;
-    expect(select.value).toBe("system");
-    await fireEvent.change(select, { target: { value: "dark" } });
+    expect(screen.getByRole("radio", { name: "Match system" }).getAttribute("aria-checked")).toBe(
+      "true",
+    );
+    await fireEvent.click(screen.getByRole("radio", { name: "Dark" }));
 
     expect(localStorage.getItem("mygitui.theme")).toBe("dark");
-    expect(
-      (screen.getByLabelText("Theme") as HTMLSelectElement).value,
-    ).toBe("dark");
+    expect(screen.getByRole("radio", { name: "Dark" }).getAttribute("aria-checked")).toBe("true");
+    expect(screen.getByRole("radio", { name: "Match system" }).getAttribute("aria-checked")).toBe(
+      "false",
+    );
   });
 
   it("toggles the git switches and persists the app-settings envelope", async () => {
@@ -167,10 +172,8 @@ describe("SettingsDialog", () => {
     await fireEvent.click(diffWrap);
     expect(localStorage.getItem("mygitui.diff.wrap")).toBe("false");
 
-    // Diff layout select persists JSON ("split" | "unified").
-    await fireEvent.change(screen.getByLabelText("Diff layout"), {
-      target: { value: "unified" },
-    });
+    // Diff layout segmented pill persists JSON ("split" | "unified").
+    await fireEvent.click(screen.getByRole("radio", { name: "Unified" }));
     expect(localStorage.getItem("mygitui.diff.mode")).toBe('"unified"');
 
     // Editor wrap defaults OFF (unlike the diff viewer); toggling persists "1".
@@ -179,9 +182,7 @@ describe("SettingsDialog", () => {
     await fireEvent.click(editorWrap);
     expect(localStorage.getItem("mygitui.files.wrap")).toBe("1");
 
-    await fireEvent.change(screen.getByLabelText("Markdown default view"), {
-      target: { value: "preview" },
-    });
+    await fireEvent.click(screen.getByRole("radio", { name: "Preview" }));
     expect(localStorage.getItem("mygitui.files.md-view")).toBe("preview");
     expect(editorPrefs.mdView).toBe("preview");
 
@@ -193,13 +194,21 @@ describe("SettingsDialog", () => {
     expect(localStorage.getItem("mygitui.files.show-ignored")).toBe("1");
   });
 
+  it("toggles a setting by clicking anywhere on its row", async () => {
+    render(SettingsDialog, { open: true, settings, apps });
+    await fireEvent.click(screen.getByRole("button", { name: "Editor & Diffs" }));
+
+    expect(editorPrefs.wrap).toBe(false);
+    await fireEvent.click(screen.getByText("Wrap lines in the editor"));
+    expect(editorPrefs.wrap).toBe(true);
+    expect(localStorage.getItem("mygitui.files.wrap")).toBe("1");
+  });
+
   it("changes the terminal theme and font size (font clamped to bounds)", async () => {
     render(SettingsDialog, { open: true, settings, apps });
     await fireEvent.click(screen.getByRole("button", { name: "Terminal" }));
 
-    await fireEvent.change(screen.getByLabelText("Terminal theme"), {
-      target: { value: "dark" },
-    });
+    await fireEvent.click(screen.getByRole("radio", { name: "Dark" }));
     expect(terminalThemePref.preference).toBe("dark");
     expect(localStorage.getItem(TERMINAL_THEME_STORAGE_KEY)).toBe("dark");
 
@@ -211,6 +220,38 @@ describe("SettingsDialog", () => {
     // Out-of-range values clamp to the shared bounds.
     await fireEvent.change(font, { target: { value: "999" } });
     expect(settings.value.terminalFontSize).toBe(28);
+
+    // The companion slider carries its own label and mirrors the value.
+    expect(screen.getByLabelText("Terminal font size in pixels slider")).toBeTruthy();
+  });
+
+  it("searches across sections and returns to the section view on clear", async () => {
+    render(SettingsDialog, { open: true, settings, apps });
+
+    const input = screen.getByLabelText("Search settings") as HTMLInputElement;
+    await fireEvent.input(input, { target: { value: "wrap" } });
+
+    // Only matching rows show, grouped under their section heading.
+    expect(screen.getByText("Wrap long diff lines")).toBeTruthy();
+    expect(screen.getByText("Wrap lines in the editor")).toBeTruthy();
+    expect(screen.getByRole("region", { name: "Editor & Diffs" })).toBeTruthy();
+    expect(screen.queryByText("Checkpoints for git changes")).toBeNull();
+    expect(screen.queryByRole("radio", { name: "Match system" })).toBeNull();
+
+    // Clearing leaves search mode: General's content is back.
+    await fireEvent.click(screen.getByRole("button", { name: "Clear search" }));
+    expect(screen.queryByText("Wrap long diff lines")).toBeNull();
+    expect(screen.getByRole("radio", { name: "Match system" })).toBeTruthy();
+  });
+
+  it("shows an empty state when the search matches nothing", async () => {
+    render(SettingsDialog, { open: true, settings, apps });
+
+    await fireEvent.input(screen.getByLabelText("Search settings"), {
+      target: { value: "zzz-nothing-matches" },
+    });
+    expect(screen.getByText(/Nothing matches/)).toBeTruthy();
+    expect(screen.getByText(/Try “wrap”/)).toBeTruthy();
   });
 
   it("embeds the custom open-with apps manager", async () => {

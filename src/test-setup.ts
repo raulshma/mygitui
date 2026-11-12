@@ -20,6 +20,21 @@ if (typeof window !== "undefined" && typeof window.matchMedia !== "function") {
 }
 
 /**
+ * jsdom defines no `ResizeObserver`, which bits-ui's shared resize observer
+ * (slider/dialog content measuring) constructs inside an `$effect`. A no-op
+ * stub keeps component tests free of unhandled rejections; no test asserts
+ * on resize callbacks.
+ */
+if (typeof globalThis.ResizeObserver !== "function") {
+  class ResizeObserverStub {
+    observe(): void {}
+    unobserve(): void {}
+    disconnect(): void {}
+  }
+  globalThis.ResizeObserver = ResizeObserverStub as unknown as typeof ResizeObserver;
+}
+
+/**
  * jsdom ships no web streams either. The `forks`/`threads` pools inherit
  * them from Node, but `vmThreads` builds the global object from the jsdom
  * window alone, so SSE tests would see `ReadableStream is not defined`.

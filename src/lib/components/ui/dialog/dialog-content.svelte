@@ -12,6 +12,13 @@
 		ref = $bindable(null),
 		class: className,
 		portalProps,
+		/**
+		 * Extra classes for the scrim behind the content. Stacked dialogs use
+		 * this to sit in a z-band: a lower band (e.g. `z-40` on the settings
+		 * hub) keeps dialogs spawned from it (appearance, AI settings) above,
+		 * regardless of which portal mounted first.
+		 */
+		overlayClass,
 		children,
 		showCloseButton = true,
 		...restProps
@@ -19,13 +26,14 @@
 		portalProps?: WithoutChildrenOrChild<ComponentProps<typeof DialogPortal>>;
 		children: Snippet;
 		showCloseButton?: boolean;
+		overlayClass?: string;
 	} = $props();
 
 	const closeIcon = $derived(appIcon("close"));
 </script>
 
 <DialogPortal {...portalProps}>
-	<DialogOverlay />
+	<DialogOverlay class={overlayClass} />
 	<DialogPrimitive.Content
 		bind:ref
 		data-slot="dialog-content"
