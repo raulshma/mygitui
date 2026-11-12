@@ -188,10 +188,27 @@ describe("ForgeStore", () => {
     expect(store.status).toEqual(STATUS);
     expect(store.contextFor("r1")).toEqual(CONTEXT);
     expect(store.prsFor("r1")).toHaveLength(2);
-    // Second ensure keeps the known status but refreshes repo data.
+    // Second ensure within the TTL resolves from cache: tab switches with
+    // the panel mounted don't respawn the `gh` subprocesses. The status
+    // stays known regardless.
     await store.ensure("r1");
     expect(mockStatus).toHaveBeenCalledTimes(1);
-    expect(mockPrList).toHaveBeenCalledTimes(2);
+    expect(mockPrList).toHaveBeenCalledTimes(1);
+    expect(store.prsFor("r1")).toHaveLength(2);
+  });
+
+  it("ensure re-fetches repo data once the TTL lapses", async () => {
+    vi.useFakeTimers();
+    try {
+      const store = new ForgeStore();
+      await store.ensure("r1");
+      expect(mockPrList).toHaveBeenCalledTimes(1);
+      vi.advanceTimersByTime(ForgeStore.PANEL_ENSURE_TTL_MS + 1);
+      await store.ensure("r1");
+      expect(mockPrList).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("status failure degrades to unavailable without throwing", async () => {

@@ -46,6 +46,26 @@ pub trait GitEngine: Send + Sync {
         paths: Option<&[String]>,
     ) -> EngineResult<Vec<FileDiff>>;
 
+    /// Hand one `FileDiff` at a time to `on_file` while patches build.
+    /// `on_file` returns `false` to stop early (client gone). The default
+    /// materializes the whole diff first; engines that can build patches
+    /// lazily override this so page 1 ships before the rest is built.
+    fn diff_stream(
+        &self,
+        repo: &Repository,
+        old: &DiffSide,
+        new: &DiffSide,
+        paths: Option<&[String]>,
+        on_file: &mut dyn FnMut(FileDiff) -> bool,
+    ) -> EngineResult<()> {
+        for file in self.diff(repo, old, new, paths)? {
+            if !on_file(file) {
+                break;
+            }
+        }
+        Ok(())
+    }
+
     /// One page of history in topological/date order. `after` is the last sha
     /// of the previous page (None = first page). Returns the page plus a
     /// `next_cursor` (None when the walk is exhausted).
@@ -358,6 +378,19 @@ pub trait GitEngineM3: Send + Sync {
 
     fn checkpoint_create(&self, _repo: &Repository, _reason: &str) -> EngineResult<CheckpointInfo> {
         Err(EngineError::Unsupported("checkpoint_create".into()))
+    }
+
+    /// Scoped checkpoint: snapshot only `paths` (the workdir state of those
+    /// paths overlaid on the current index). The snapshot records its scope
+    /// so `checkpoint_restore` touches only those paths. Used by discard /
+    /// clean, whose blast radius is exactly their validated targets.
+    fn checkpoint_create_scoped(
+        &self,
+        _repo: &Repository,
+        _reason: &str,
+        _paths: &[String],
+    ) -> EngineResult<CheckpointInfo> {
+        Err(EngineError::Unsupported("checkpoint_create_scoped".into()))
     }
 
     fn checkpoints(&self, _repo: &Repository) -> EngineResult<Vec<CheckpointInfo>> {

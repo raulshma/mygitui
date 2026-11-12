@@ -215,7 +215,47 @@ export class ActionsStore {
    */
   startActionsEvents(): void {
     if (this.#unregister !== null) return;
-    this.#unregister = onActionOutput((event) => this.applyOutput(event));
+    this.#unregister = onActionOutput((event) => this.#bufferOutput(event));
+  }
+
+  /**
+   * Line events are buffered per run and flushed on a short timer: a chatty
+   * build emits ~1000 lines/s and the per-line store write copies the whole
+   * capped lines array plus the runs list — coalescing turns that into ~16
+   * batched writes/s with identical final state. Terminal (`done`) events
+   * bypass the buffer: busy flags and status flips must not wait it out.
+   */
+  static readonly OUTPUT_FLUSH_MS = 60;
+  #pendingEvents = new Map<string, ActionOutputEvent[]>();
+  #flushTimer: ReturnType<typeof setTimeout> | null = null;
+
+  #bufferOutput(event: ActionOutputEvent): void {
+    if (this.#unregister === null) return; // stopped store: receives nothing
+    if (event.done) {
+      this.#flushPending();
+      this.applyOutput(event);
+      return;
+    }
+    const list = this.#pendingEvents.get(event.run_id);
+    if (list) list.push(event);
+    else this.#pendingEvents.set(event.run_id, [event]);
+    if (this.#flushTimer === null) {
+      this.#flushTimer = setTimeout(() => {
+        this.#flushTimer = null;
+        this.#flushPending();
+      }, ActionsStore.OUTPUT_FLUSH_MS);
+    }
+  }
+
+  #flushPending(): void {
+    if (this.#flushTimer !== null) {
+      clearTimeout(this.#flushTimer);
+      this.#flushTimer = null;
+    }
+    if (this.#pendingEvents.size === 0) return;
+    const events = [...this.#pendingEvents.values()].flat();
+    this.#pendingEvents.clear();
+    this.applyOutputBatch(events);
   }
 
   /**
@@ -223,51 +263,72 @@ export class ActionsStore {
    * the line (capped), fixes status on done. Public for tests.
    */
   applyOutput(event: ActionOutputEvent): void {
-    this.#orderCounter += 1;
-    const order = this.#orderCounter;
-    const done = event.done;
-    const exitCode = done ? (event.exit_code ?? null) : null;
-    const outcome = done ? (event.outcome ?? null) : null;
-    const existing = this.runs.find((run) => run.run_id === event.run_id);
+    this.applyOutputBatch([event]);
+  }
 
-    if (existing) {
-      // Append then re-cap: `dropped` accumulates naturally (each pass only
-      // drops from the front and reports the total).
-      const withLine = event.line
-        ? [...existing.lines, event.line]
-        : existing.lines;
-      const { lines, dropped } = truncateLines(withLine, this.#lineCap);
-      const totalDropped = existing.dropped + dropped;
+  /**
+   * Applies a batch of `action-output` events in order: one store write per
+   * run, lines truncated once per batch (same final state as per-event
+   * application). Public for tests.
+   */
+  applyOutputBatch(events: ActionOutputEvent[]): void {
+    if (events.length === 0) return;
+    const byRun = new Map<string, ActionOutputEvent[]>();
+    for (const event of events) {
+      const list = byRun.get(event.run_id);
+      if (list) list.push(event);
+      else byRun.set(event.run_id, [event]);
+    }
+
+    let runs = this.runs;
+    for (const [runId, runEvents] of byRun) {
+      const existingIndex = runs.findIndex((run) => run.run_id === runId);
+      const existing = existingIndex >= 0 ? runs[existingIndex] : undefined;
+      // Merge across the batch; per-event ordering counters are preserved.
+      const linesAcc = existing ? [...existing.lines] : [];
+      let done = existing?.done ?? false;
+      let exitCode: number | null = existing?.exit_code ?? null;
+      let outcome: ActionOutputEvent["outcome"] = null;
+      let order = existing?.order ?? 0;
+      for (const event of runEvents) {
+        this.#orderCounter += 1;
+        order = this.#orderCounter;
+        if (event.line) linesAcc.push(event.line);
+        if (event.done) {
+          done = true;
+          exitCode = event.exit_code ?? null;
+          outcome = event.outcome ?? null;
+        }
+      }
+      const { lines, dropped } = truncateLines(linesAcc, this.#lineCap);
+      // Spread the existing run first: fields the batch doesn't touch (the
+      // launch-time `command`, …) survive, exactly like the per-event path.
       const updated: ActionRun = {
-        ...existing,
+        ...(existing ?? {
+          run_id: runId,
+          repo_id: runEvents[0]!.repo_id,
+          name: runEvents[0]!.name,
+          lines: [],
+          dropped: 0,
+          done: false,
+          exit_code: null,
+          order: 0,
+          status: "running" as RunStatus,
+        }),
         lines,
-        dropped: totalDropped,
+        dropped: (existing?.dropped ?? 0) + dropped,
         done,
-        exit_code: exitCode,
+        exit_code: done ? exitCode : null,
         order,
         status: classifyRun(done, exitCode, outcome),
       };
-      this.runs = this.runs.map((run) =>
-        run.run_id === event.run_id ? updated : run,
-      );
-      return;
+      if (existingIndex >= 0) {
+        runs = runs.map((run, i) => (i === existingIndex ? updated : run));
+      } else {
+        runs = [updated, ...runs].slice(0, MAX_RUNS);
+      }
     }
-
-    const { lines, dropped } = event.line
-      ? truncateLines([event.line], this.#lineCap)
-      : { lines: [], dropped: 0 };
-    const run: ActionRun = {
-      run_id: event.run_id,
-      repo_id: event.repo_id,
-      name: event.name,
-      lines,
-      dropped,
-      done,
-      exit_code: exitCode,
-      order,
-      status: classifyRun(done, exitCode, outcome),
-    };
-    this.runs = [run, ...this.runs].slice(0, MAX_RUNS);
+    this.runs = runs;
   }
 
   /** Observed runs of one repo, newest first. */
@@ -365,6 +426,12 @@ export class ActionsStore {
   stop(): void {
     this.#unregister?.();
     this.#unregister = null;
+    // Buffered lines of a stopped store are dropped, never applied later.
+    this.#pendingEvents.clear();
+    if (this.#flushTimer !== null) {
+      clearTimeout(this.#flushTimer);
+      this.#flushTimer = null;
+    }
     this.runs = [];
   }
 

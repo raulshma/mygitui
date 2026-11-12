@@ -53,6 +53,8 @@
 
   /** Bumped on every doc change; drives the (debounced) markdown preview. */
   let docVersion = $state(0);
+  /** Current doc size in chars, O(1)-maintained (Text.length) per change. */
+  let docLength = $state(0);
 
   const showPreview = $derived(previewMode !== "off" && status === "ready");
   /** In "preview" mode the editor column hides but CM stays mounted. */
@@ -327,13 +329,13 @@
     }
   });
 
-  function mount(hostEl: HTMLDivElement | undefined, bytes: number[]): void {
+  function mount(hostEl: HTMLDivElement | undefined, bytes: Uint8Array): void {
     if (!hostEl || !cm) return;
     destroyView();
     const c = cm;
     wrapCompartment = new c.Compartment();
     languageCompartment = new c.Compartment();
-    const doc = decoder.decode(new Uint8Array(bytes));
+    const doc = decoder.decode(bytes);
     const extensions: import("@codemirror/state").Extension[] = [
       c.basicSetup,
       ...buildTheme(c),
@@ -342,6 +344,9 @@
         if (update.docChanged) {
           dirty = true;
           docVersion++;
+          // O(1): Text.length is maintained incrementally by CodeMirror —
+          // never stringify the doc here (the preview only needs the size).
+          docLength = update.state.doc.length;
         }
       }),
       // In-editor fallback for contexts without the global keybinds.
@@ -363,6 +368,7 @@
       state: c.EditorState.create({ doc, extensions }),
     });
     view = nextView;
+    docLength = nextView.state.doc.length;
     nextView.scrollDOM.addEventListener("scroll", onEditorScroll);
     // Lazy per-language grammar (async, swapped into its compartment).
     const desc = c.LanguageDescription.matchFilename(c.languages, basename(path));
@@ -492,6 +498,7 @@
           {path}
           getDoc={getDocText}
           version={docVersion}
+          docLength={docLength}
           onJumpToLine={jumpToLine}
         />
       {/await}

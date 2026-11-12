@@ -78,11 +78,21 @@
   let detailLoading = $state(false);
   let diffToken = 0;
   let blameTarget = $state<{ path: string; from: string } | null>(null);
+  // Merge commits can touch thousands of files; the file list renders a
+  // page + "Show all" until the user asks for the rest.
+  const FILELIST_PAGE = 200;
+  let fileShowAll = $state(false);
+  const listedFiles = $derived(
+    detailFiles !== null && !fileShowAll && detailFiles.length > FILELIST_PAGE
+      ? detailFiles.slice(0, FILELIST_PAGE)
+      : detailFiles,
+  );
 
   $effect(() => {
     const current = info;
     void repoId; // reload on repo switch
     blameTarget = null;
+    fileShowAll = false;
     const token = ++diffToken;
     if (!current || current.parents.length === 0) {
       detailFiles = null;
@@ -355,7 +365,7 @@
         <p class="dstate m-auto text-ui-base text-muted-foreground">No changes against first parent.</p>
       {:else}
         <ul class="filelist m-0 max-h-[30%] flex-none list-none overflow-y-auto border-b border-border py-0.5 text-ui-meta" aria-label="Changed files">
-          {#each detailFiles as file (file.path)}
+          {#each listedFiles as file (file.path)}
             <li
               class="flex items-center gap-2 px-3 py-0.5"
               oncontextmenu={(e) => fileMenu(e, file.path)}
@@ -389,6 +399,17 @@
               </Hint>
             </li>
           {/each}
+          {#if listedFiles !== detailFiles}
+            <li class="px-3 py-0.5">
+              <button
+                type="button"
+                class="text-muted-foreground underline-offset-2 hover:underline"
+                onclick={() => (fileShowAll = true)}
+              >
+                Show all {detailFiles.length} changed files
+              </button>
+            </li>
+          {/if}
         </ul>
         <div class="ddiff min-h-0 flex-1 overflow-auto">
           <DiffViewer files={detailFiles} />

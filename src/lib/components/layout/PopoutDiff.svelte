@@ -48,15 +48,30 @@
 
   // The popout has no tab store; register with the shared event module.
   // Policy: this pane streams the whole worktree diff, so ANY backend change
-  // for this repo (workdir churn, head moves, resyncs) may alter it.
+  // for this repo (workdir churn, head moves, resyncs) may alter it — but a
+  // save bursts several watcher events and each would restart the entire
+  // stream (blanking the view and re-walking every page). Coalesce to one
+  // trailing re-stream, same policy as FilesPanel's tree refresh.
+  let repoChangeTimer: ReturnType<typeof setTimeout> | null = null;
   $effect(() => {
     const id = repoId;
-    return onRepoChange({
+    const unregister = onRepoChange({
       filter: (change) => change.repo_id === id,
       handle: () => {
-        reload += 1;
+        if (repoChangeTimer) clearTimeout(repoChangeTimer);
+        repoChangeTimer = setTimeout(() => {
+          repoChangeTimer = null;
+          reload += 1;
+        }, 500);
       },
     });
+    return () => {
+      unregister();
+      if (repoChangeTimer) {
+        clearTimeout(repoChangeTimer);
+        repoChangeTimer = null;
+      }
+    };
   });
 </script>
 

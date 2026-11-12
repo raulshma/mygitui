@@ -694,3 +694,101 @@ fn preview_unknown_kind_and_missing_params_are_invalid() {
         "unexpected error"
     );
 }
+
+// ---------------------------------------------------------------------------
+// scoped snapshots (discard/clean undo points)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn scoped_restore_touches_only_its_paths_and_spares_out_of_scope_untracked() {
+    let dir = TempDir::new("scoped-restore");
+    let repo = init_repo(dir.path());
+    commit_file(&repo, "a.txt", "committed a\n", "base");
+    commit_file(&repo, "b.txt", "committed b\n", "base");
+
+    // Dirty the workdir: a.txt + b.txt modified, c.txt + other.txt untracked.
+    write_file(&repo, "a.txt", "modified a\n");
+    write_file(&repo, "b.txt", "modified b\n");
+    write_file(&repo, "c.txt", "untracked c\n");
+    write_file(&repo, "other.txt", "untracked other\n");
+
+    let info = ENGINE
+        .checkpoint_create_scoped_impl(&repo, "discard changes", &["a.txt".to_owned()])
+        .expect("scoped checkpoint");
+
+    // Simulate the discard: a.txt back to HEAD content.
+    write_file(&repo, "a.txt", "committed a\n");
+
+    ENGINE
+        .checkpoint_restore_impl(&repo, &info.id)
+        .expect("scoped restore");
+
+    // In scope: the pre-discard content is back.
+    assert_eq!(read_file(&repo, "a.txt"), "modified a\n");
+    // Out of scope: nothing else changed.
+    assert_eq!(read_file(&repo, "b.txt"), "modified b\n");
+    assert!(file_exists(&repo, "c.txt"), "untracked c.txt must survive");
+    assert!(file_exists(&repo, "other.txt"));
+
+    // The restore's own undo point is a FULL pre-restore snapshot.
+    let list = ENGINE.checkpoints_impl(&repo).expect("list");
+    assert_eq!(list[0].reason, "pre-restore");
+}
+
+#[test]
+fn scoped_restore_redeletes_a_discarded_deletion() {
+    let dir = TempDir::new("scoped-redelete");
+    let repo = init_repo(dir.path());
+    commit_file(&repo, "a.txt", "committed a\n", "base");
+
+    // Delete a.txt in the workdir, snapshot the deletion, then "discard" it
+    // (the file comes back from HEAD).
+    std::fs::remove_file(repo.workdir().unwrap().join("a.txt")).expect("delete a.txt");
+    let info = ENGINE
+        .checkpoint_create_scoped_impl(&repo, "discard changes", &["a.txt".to_owned()])
+        .expect("scoped checkpoint");
+    write_file(&repo, "a.txt", "committed a\n");
+
+    ENGINE
+        .checkpoint_restore_impl(&repo, &info.id)
+        .expect("scoped restore");
+
+    // The undo point re-deletes the file (it was absent from the snapshot).
+    assert!(
+        !file_exists(&repo, "a.txt"),
+        "scoped restore must undo the discard of a deletion"
+    );
+}
+
+#[test]
+fn scoped_snapshot_leaves_status_and_out_of_scope_content_alone() {
+    let dir = TempDir::new("scoped-status");
+    let repo = init_repo(dir.path());
+    commit_file(&repo, "a.txt", "committed a\n", "base");
+
+    write_file(&repo, "a.txt", "modified a\n");
+    write_file(&repo, "b.txt", "untracked b\n");
+    let before = status_entry_count(&repo);
+
+    ENGINE
+        .checkpoint_create_scoped_impl(&repo, "discard changes", &["a.txt".to_owned()])
+        .expect("scoped checkpoint");
+
+    // Checkpoints never stage anything (fresh-handle index surgery).
+    assert_eq!(status_entry_count(&repo), before);
+
+    // The snapshot tree records only the scoped path's workdir content:
+    // b.txt is absent from it.
+    let list = ENGINE.checkpoints_impl(&repo).expect("list");
+    let commit = repo
+        .find_reference(&list[0].ref_name)
+        .expect("ref")
+        .peel_to_commit()
+        .expect("commit");
+    let tree = commit.tree().expect("tree");
+    assert!(tree.get_path(Path::new("a.txt")).is_ok(), "a.txt in scope");
+    assert!(
+        tree.get_path(Path::new("b.txt")).is_err(),
+        "b.txt out of scope"
+    );
+}

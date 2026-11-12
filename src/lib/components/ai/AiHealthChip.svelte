@@ -27,10 +27,27 @@
   $effect(() => ai.supervisor.subscribe((next) => (statuses = next)));
   onMount(() => {
     // The store may have been evaluated before the Tauri bridge was ready.
-    // Probe after mount so the health chip cannot remain unknown forever.
-    if (isTauri() && ai.supervisor.status("opencode").status === "unknown") {
-      void ai.supervisor.check("opencode");
+    // Probe after mount so the health chip cannot remain unknown forever —
+    // but AFTER the boot window: a fresh launch fires repo_open/repo_status
+    // for every restored tab, and the probe (PATH scan + `opencode
+    // --version` spawn in attach mode) would compete with them. Idle-chained
+    // so repos always win the first seconds.
+    if (!isTauri() || ai.supervisor.status("opencode").status !== "unknown") {
+      return;
     }
+    let handle = 0;
+    const idle = window.requestIdleCallback as
+      | ((cb: () => void, opts?: { timeout?: number }) => number)
+      | undefined;
+    if (idle) {
+      handle = idle(() => void ai.supervisor.check("opencode"), { timeout: 5000 });
+    } else {
+      handle = window.setTimeout(() => void ai.supervisor.check("opencode"), 2500);
+    }
+    return () => {
+      window.cancelIdleCallback?.(handle);
+      clearTimeout(handle);
+    };
   });
 
   const view = $derived(

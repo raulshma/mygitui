@@ -29,6 +29,8 @@ export class AsyncMap<T> {
   #entries = $state<Record<string, AsyncData<T>>>({});
   /** Latest-start sequence per key; only the newest run may write. */
   #seqs = new Map<string, number>();
+  /** When each key last landed a ready result (`ensure`'s TTL clock). */
+  #readyAt = new Map<string, number>();
 
   /** The entry for `key`, or idle when never fetched. */
   get(key: string): AsyncData<T> {
@@ -67,6 +69,7 @@ export class AsyncMap<T> {
       const data = await fn();
       if (seq !== this.#seqs.get(key)) return null;
       this.#entries = { ...this.#entries, [key]: { state: "ready", data } };
+      this.#readyAt.set(key, Date.now());
       return data;
     } catch (err) {
       opts?.onError?.(err);
@@ -94,11 +97,34 @@ export class AsyncMap<T> {
   }
 
   /**
+   * Ensure semantics (read-through cache): a `ready` entry younger than
+   * `ttlMs` (or an in-flight run) resolves with the cached/fetching data
+   * and starts nothing. Panel re-activations and repo switches use this
+   * instead of a bare `run` so flipping between tabs doesn't respawn
+   * subprocesses for data that landed seconds ago. Errors and stale
+   * entries fall through to a fresh `run`.
+   */
+  async ensure(
+    key: string,
+    fn: () => Promise<T>,
+    ttlMs: number,
+    opts?: { onError?: (err: unknown) => void },
+  ): Promise<T | null> {
+    const entry = this.get(key);
+    if (entry.state === "ready") {
+      const readyAt = this.#readyAt.get(key);
+      if (readyAt !== undefined && Date.now() - readyAt < ttlMs) return entry.data;
+    }
+    return this.run(key, fn, { silent: entry.state === "loading", onError: opts?.onError });
+  }
+
+  /**
    * Drops one entry (its owner closed); an in-flight run for the key is
    * invalidated so nothing lands into the deleted slot.
    */
   reset(key: string): void {
     this.#seqs.set(key, (this.#seqs.get(key) ?? 0) + 1);
+    this.#readyAt.delete(key);
     const entries = { ...this.#entries };
     delete entries[key];
     this.#entries = entries;

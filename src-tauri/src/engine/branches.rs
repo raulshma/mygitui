@@ -66,8 +66,9 @@ fn upstream_info(
             let name = up.name().ok().flatten().map(str::to_owned);
             match (up.get().target(), local_oid) {
                 (Some(up_oid), Some(local)) => {
-                    let (ahead, behind) = repo.graph_ahead_behind(local, up_oid)?;
-                    Ok((name, false, ahead as u32, behind as u32))
+                    let (ahead, behind) =
+                        super::libgit2::graph_ahead_behind_cached(repo, local, up_oid)?;
+                    Ok((name, false, ahead, behind))
                 }
                 _ => Ok((name, true, 0, 0)),
             }

@@ -871,13 +871,17 @@ describe("ipc client checkpoint-flag wrappers", () => {
 // ---------------------------------------------------------------------------
 
 describe("ipc client repo_read_file wrapper", () => {
-  it("readFile sends repo_id + path and returns byte arrays verbatim", async () => {
+  it("readFile sends repo_id + path and returns the bytes as a Uint8Array", async () => {
     // `<<<<<<< HEAD\n` as UTF-8 bytes — what the conflict editor consumes.
     const bytes = [0x3c, 0x3c, 0x3c, 0x3c, 0x3c, 0x3c, 0x3c, 0x20, 0x48, 0x0a];
     const { transport, calls } = mockTransport(() => bytes);
     setTransport(transport);
 
-    await expect(readFile("repo-1", "src/a.ts")).resolves.toEqual(bytes);
+    // Production returns an ArrayBuffer (raw IPC response) — normalized to
+    // Uint8Array here; test transports hand back the historical number[].
+    await expect(readFile("repo-1", "src/a.ts")).resolves.toEqual(
+      Uint8Array.from(bytes),
+    );
 
     expect(calls).toEqual([
       { command: "repo_read_file", args: { repo_id: "repo-1", path: "src/a.ts" } },
@@ -888,7 +892,9 @@ describe("ipc client repo_read_file wrapper", () => {
     const { transport } = mockTransport(() => []);
     setTransport(transport);
 
-    await expect(readFile("repo-1", "gone.txt")).resolves.toEqual([]);
+    await expect(readFile("repo-1", "gone.txt")).resolves.toEqual(
+      Uint8Array.of(),
+    );
   });
 
   it("readFile normalizes failures (path escape, not a file) to IpcError", async () => {

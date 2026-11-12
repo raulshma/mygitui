@@ -597,8 +597,10 @@ pub(crate) fn default_shell_command() -> CommandBuilder {
 
 /// Spawn a shell in a fresh pty at the repo root. Returns the session id
 /// the frontend uses for write/resize/kill and receives in the events.
+/// Async: openpty + process spawn + thread setup must not occupy the main
+/// thread (sync Tauri commands run there).
 #[tauri::command(rename_all = "snake_case")]
-pub fn pty_create(
+pub async fn pty_create(
     repo_id: RepoId,
     rows: Option<u16>,
     cols: Option<u16>,
@@ -623,9 +625,11 @@ pub fn pty_create(
     )
 }
 
-/// Send frontend input (keystrokes, paste) to the session's shell.
+/// Send frontend input (keystrokes, paste) to the session's shell. Async:
+/// a large paste into a shell that is not reading must never block the
+/// main thread on a full pty buffer — keystrokes arrive here constantly.
 #[tauri::command(rename_all = "snake_case")]
-pub fn pty_write(
+pub async fn pty_write(
     session_id: String,
     data: String,
     registry: tauri::State<'_, PtyRegistry>,
@@ -646,9 +650,10 @@ pub(crate) fn write_to_session(
     session.write(data)
 }
 
-/// Resize the session's terminal (frontend panel size changed).
+/// Resize the session's terminal (frontend panel size changed). Async for
+/// the same main-thread reason as [`pty_write`].
 #[tauri::command(rename_all = "snake_case")]
-pub fn pty_resize(
+pub async fn pty_resize(
     session_id: String,
     rows: u16,
     cols: u16,

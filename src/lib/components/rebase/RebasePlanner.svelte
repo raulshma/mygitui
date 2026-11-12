@@ -41,7 +41,6 @@
   import {
     REBASE_ACTIONS,
     buildPlan,
-    cutAtBase,
     moveRow,
     toRebaseSteps,
     validatePlan,
@@ -145,7 +144,13 @@
     loading = true;
     loadError = null;
     rows = [];
-    let acc: CommitInfo[] = [];
+    // Push-based accumulation with an O(1) seen-set: `acc.concat(page)` +
+    // `cutAtBase`'s findIndex-from-0 re-scan per page made a base far back
+    // in history cost O(pages × commits) string compares (multi-second
+    // stalls on the "Loading…" dialog). The stream stops FE-side the moment
+    // the base lands (later pages are dropped by the settled guard).
+    const acc: CommitInfo[] = [];
+    const seen = new Set<string>();
     let settled = false;
     const finish = (): void => {
       if (token !== loadToken || settled) return;
@@ -167,13 +172,14 @@
       },
       (page) => {
         if (token !== loadToken || settled) return;
-        acc = acc.concat(page.commits);
-        if (baseSha !== null) {
-          const cut = cutAtBase(acc, baseSha);
-          if (cut !== null) {
-            acc = cut;
-            finish();
+        for (const commit of page.commits) {
+          if (baseSha !== null && commit.sha === baseSha) {
+            finish(); // base excluded (HEAD..base semantics)
+            return;
           }
+          if (seen.has(commit.sha)) continue;
+          seen.add(commit.sha);
+          acc.push(commit);
         }
       },
     )

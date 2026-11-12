@@ -154,11 +154,20 @@
   });
 
   // Check watcher: one interval for every toggled PR; cleanup on unmount.
+  // Gated on document visibility like the runs refresh: each tick spawns one
+  // `gh pr checks` subprocess per watched PR.
   $effect(() => {
     const numbers = watching;
     if (numbers.length === 0) return;
+    const targetRepo = repoId;
     const timer = setInterval(() => {
-      for (const number of numbers) void forgeStore.refreshChecks(repoId, number);
+      if (
+        typeof document !== "undefined" &&
+        document.visibilityState === "hidden"
+      ) {
+        return;
+      }
+      for (const number of numbers) void forgeStore.refreshChecks(targetRepo, number);
     }, 10_000);
     return () => clearInterval(timer);
   });

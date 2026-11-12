@@ -24,6 +24,9 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"
+# File editor save path: content arrives base64-encoded (compact binary over
+# the JSON IPC bridge instead of a ~7x number array).
+base64 = "0.22"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tauri-plugin-single-instance = "2.5.2"

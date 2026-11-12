@@ -25,6 +25,7 @@
     activityDurationLabel,
     prAgeLabel,
     runCanRerun,
+    runDetailSignature,
     runElapsedLabel,
     runHasFailures,
     runIsActive,
@@ -214,7 +215,10 @@
 
   // Mild polling while the run is active. Hidden windows skip a beat; the
   // next visible tick catches up. Reading the scope state keeps the interval's
-  // closure fresh when the user switches jobs mid-run.
+  // closure fresh when the user switches jobs mid-run. Logs are re-fetched
+  // only when the detail's progress signature changed: `gh run view --log`
+  // ships the whole run text (MBs for long runs) — refetching it every tick
+  // re-serialized the entire log over IPC for the duration of the run.
   $effect(() => {
     if (!autoRefresh) return;
     const targetRepo = repoId;
@@ -222,6 +226,7 @@
     const jobId = selectedJobId;
     const onlyFailed = failedOnly;
     if (!active) return;
+    let lastLogSig = runDetailSignature(forgeStore.detailFor(targetRepo, id));
     const timer = setInterval(() => {
       if (
         typeof document !== "undefined" &&
@@ -229,8 +234,13 @@
       ) {
         return;
       }
-      void forgeStore.loadRunDetail(targetRepo, id);
-      void forgeStore.loadRunLogs(targetRepo, id, jobId, onlyFailed);
+      void forgeStore.loadRunDetail(targetRepo, id).then((detail) => {
+        if (detail === null) return;
+        const sig = runDetailSignature(detail);
+        if (sig === lastLogSig) return;
+        lastLogSig = sig;
+        void forgeStore.loadRunLogs(targetRepo, id, jobId, onlyFailed);
+      });
     }, 3_500);
     return () => clearInterval(timer);
   });

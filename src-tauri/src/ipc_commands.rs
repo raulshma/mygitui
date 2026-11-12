@@ -91,9 +91,12 @@ pub async fn repo_open(
 }
 
 /// Close a repository: stop its watcher, cancel its streams, drop caches.
+/// Async: the watcher teardown joins the debounce thread, which can wait
+/// out an in-flight emit — that must not occupy the main thread.
 #[tauri::command(rename_all = "snake_case")]
-pub fn repo_close(repo_id: RepoId, state: State<'_, RepoManager>) {
+pub async fn repo_close(repo_id: RepoId, state: State<'_, RepoManager>) -> Result<(), String> {
     state.close(&repo_id);
+    Ok(())
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -227,19 +230,30 @@ pub async fn repo_diff_stream(
     }
     let engine = handle.engine();
     let repo = handle.repo()?;
-    let diffs = tauri::async_runtime::spawn_blocking(move || {
+    tauri::async_runtime::spawn_blocking(move || -> Result<(), String> {
         let repo = repo.lock();
+        // Page while patches build: the first page ships after
+        // DIFF_PAGE_SIZE files instead of after the whole diff (every
+        // hunk, every line) is materialized; a client that leaves mid-
+        // stream also stops paying for the rest.
+        let mut page: Vec<FileDiff> = Vec::with_capacity(DIFF_PAGE_SIZE);
         engine
-            .diff(&repo, &old, &new, paths.as_deref())
-            .map_err(engine_err)
+            .diff_stream(&repo, &old, &new, paths.as_deref(), &mut |file| {
+                page.push(file);
+                if page.len() < DIFF_PAGE_SIZE {
+                    return true;
+                }
+                // Full page: ship it; a failed send = client gone.
+                on_page.send(std::mem::take(&mut page)).is_ok()
+            })
+            .map_err(engine_err)?;
+        if !page.is_empty() {
+            let _ = on_page.send(page);
+        }
+        Ok(())
     })
     .await
     .map_err(|e| format!("diff task failed: {e}"))??;
-    for page in chunk_vec(diffs, DIFF_PAGE_SIZE) {
-        if on_page.send(page).is_err() {
-            break; // client dropped the channel
-        }
-    }
     Ok(())
 }
 
@@ -705,7 +719,7 @@ mod clone_tests {
 // Progress: mutations and net ops stream `op-progress` (net ops forward
 // engine callbacks to `OpCtx::emit_progress`, throttled ≥80ms) and the
 // queue emits their final `done: true` event, success or error. Queue-
-// dispatched reads are silent (`enqueue_read` → `OpQueue::enqueue_silent`):
+// dispatched reads are silent (`enqueue_read` → `OpQueue::enqueue_read_lane`):
 // no progress, no done event — read failures surface only as command
 // errors, matching the pre-queue direct-call reads. Mutations bump the
 // repo generation afterwards so in-flight log streams abort and clients
@@ -758,11 +772,13 @@ where
     rx
 }
 
-/// Enqueue a read-only engine op on the repo's serial queue: `f` runs with
-/// the repo lock held, without the mutation generation bump. Silent on the
-/// op-progress surface ([`OpQueue::enqueue_silent`]): reads emit no
-/// progress/done events, exactly like the pre-queue direct reads — their
-/// failures surface only through the command's error return. The kind
+/// Enqueue a read-only engine op on the repo's read lane: `f` runs with the
+/// repo lock held, without the mutation generation bump, on the queue's
+/// second (read) worker — a long mutation or net op never queues reads
+/// behind it (the repo mutex still serializes reads against mutations).
+/// Silent on the op-progress surface ([`OpQueue::enqueue_read_lane`]): reads
+/// emit no progress/done events, exactly like the pre-queue direct reads —
+/// their failures surface only through the command's error return. The kind
 /// remains useful for queue rejection messages and debugging.
 fn enqueue_read<T, F>(
     handle: &RepoHandle,
@@ -775,7 +791,7 @@ where
     F: FnOnce(OpCtx, &git2::Repository) -> Result<T, EngineError> + Send + 'static,
 {
     let repo = repo.clone();
-    let (_op_id, rx) = handle.ops().enqueue_silent(kind, move |ctx| {
+    let (_op_id, rx) = handle.ops().enqueue_read_lane(kind, move |ctx| {
         let guard = repo.lock();
         f(ctx, &guard).map_err(engine_err)
     });
@@ -783,7 +799,7 @@ where
 }
 
 /// Remote twin of [`enqueue_read`]: runs a remote-engine read on the repo's
-/// serial op queue (silent: no progress events) without the git2 lock.
+/// read lane (silent: no progress events) without the git2 lock.
 fn enqueue_remote_read<T, F>(
     handle: &RepoHandle,
     remote: &Arc<crate::repo::RemoteHandle>,
@@ -802,7 +818,7 @@ where
     let remote = Arc::clone(remote);
     let (_op_id, rx) = handle
         .ops()
-        .enqueue_silent(kind, move |_ctx| f(&remote.git(), &remote.workspace()));
+        .enqueue_read_lane(kind, move |_ctx| f(&remote.git(), &remote.workspace()));
     rx
 }
 
@@ -989,6 +1005,10 @@ fn discard_op(
     let engine = handle.engine();
     let m3 = handle.m3();
     let generation = handle.generation_shared();
+    // The checkpoint only needs the paths the discard can touch: a scoped
+    // snapshot skips hashing the rest of the workdir (untracked files
+    // included), so discarding one file in a huge dirty repo stays instant.
+    let paths = target_paths(&targets);
     let (_op_id, rx) = handle.ops().enqueue("discard", move |_ctx| {
         let result = (|| -> Result<Option<String>, String> {
             // Checkpoint FIRST (when enabled): the exact pre-discard state
@@ -998,7 +1018,7 @@ fn discard_op(
                 let guard = repo.lock();
                 discard_checkpoint_outcome(
                     checkpoint,
-                    || m3.checkpoint_create(&guard, "discard changes"),
+                    || m3.checkpoint_create_scoped(&guard, "discard changes", &paths),
                     engine_err,
                 )
                 .map_err(engine_err)?
@@ -1013,6 +1033,22 @@ fn discard_op(
         result
     });
     rx
+}
+
+/// Unique file paths across discard targets (every variant carries the path
+/// it modifies). Order-stable for deterministic checkpoint messages.
+fn target_paths(targets: &[StageTarget]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for target in targets {
+        let path = match target {
+            StageTarget::File(path) => path,
+            StageTarget::Hunk { path, .. } | StageTarget::Lines { path, .. } => path,
+        };
+        if !out.iter().any(|seen| seen == path) {
+            out.push(path.clone());
+        }
+    }
+    out
 }
 
 /// Commit: engine first; `EngineError::Unsupported` (active hooks/signing
@@ -1652,6 +1688,15 @@ where
     rx
 }
 
+/// Fresh repository handle for a network op. Net ops must not touch the
+/// shared long-lived handle: holding its mutex across a transfer would
+/// stall every status/log/diff/blame refresh for the repo until the network
+/// finishes. Git's own file locking keeps concurrent ref/object writes
+/// (fetch here, user commit on the shared handle) safe.
+fn open_net_handle(workdir: &Path) -> Result<git2::Repository, EngineError> {
+    git2::Repository::open(workdir).map_err(EngineError::from)
+}
+
 #[tauri::command(rename_all = "snake_case")]
 pub async fn fetch(
     repo_id: RepoId,
@@ -1675,7 +1720,7 @@ pub async fn fetch(
         });
         return finish_op(rx).await;
     }
-    let repo = handle.repo()?;
+    let workdir = handle.root.clone();
     let opening = format!("fetching {}", options.remote);
     finish_op(enqueue_net_op(
         &handle,
@@ -1689,8 +1734,8 @@ pub async fn fetch(
             // cancel token and are not on a trait — the engine is stateless,
             // so a fresh instance behaves identically to `handle.engine()`.
             let engine = crate::engine::libgit2::Libgit2Engine::new();
-            let guard = repo.lock();
-            engine.fetch_impl_ext(&guard, &options, progress, ctx.cancel_token().as_deref())
+            let net_repo = open_net_handle(&workdir)?;
+            engine.fetch_impl_ext(&net_repo, &options, progress, ctx.cancel_token().as_deref())
         },
     ))
     .await
@@ -1717,7 +1762,7 @@ pub async fn pull(
         });
         return finish_op(rx).await;
     }
-    let repo = handle.repo()?;
+    let workdir = handle.root.clone();
     let opening = format!("pulling {}", options.remote);
     finish_op(enqueue_net_op(
         &handle,
@@ -1732,8 +1777,8 @@ pub async fn pull(
             // the engine is stateless, so a fresh instance behaves identically
             // to `handle.engine()`.
             let engine = crate::engine::libgit2::Libgit2Engine::new();
-            let guard = repo.lock();
-            engine.pull_impl_ext(&guard, &options, progress, ctx.cancel_token().as_deref())
+            let net_repo = open_net_handle(&workdir)?;
+            engine.pull_impl_ext(&net_repo, &options, progress, ctx.cancel_token().as_deref())
         },
     ))
     .await
@@ -1764,7 +1809,6 @@ pub async fn push(
         });
         return finish_op(rx).await;
     }
-    let repo = handle.repo()?;
     let workdir = handle.root.clone();
     let generation = handle.generation_shared();
     let net_repo = handle.id.clone();
@@ -1781,17 +1825,16 @@ pub async fn push(
         // trait (same reason as fetch).
         let engine = crate::engine::libgit2::Libgit2Engine::new();
         let result = crate::auth::with_netop_context(&net_repo, || {
-            let outcome = {
-                let guard = repo.lock();
+            let outcome = open_net_handle(&workdir).and_then(|net_handle| {
                 engine.push_impl_ext(
-                    &guard,
+                    &net_handle,
                     &options,
                     &mut |p| {
                         emit_push_progress(&ctx, &p);
                     },
                     ctx.cancel_token().as_deref(),
                 )
-            };
+            });
             match outcome {
                 // libgit2 cannot run hooks: the engine asks for the CLI
                 // (pre-push present). Stream the hook output into op-log.
@@ -2207,17 +2250,21 @@ pub async fn guard_checkpoint(
 /// not exist resolves to an empty vec (the editor treats that as "no
 /// marker preview written yet"). Workdir reads need no engine call, so the
 /// repo mutex is not taken.
+///
+/// Returns a raw IPC response (`tauri::ipc::Response`): the webview receives
+/// an `ArrayBuffer` instead of a JSON number array — a 2 MB file used to
+/// serialize as ~8 MB of JSON and a 2M-element JS array (~16 MB heap).
 #[tauri::command(rename_all = "snake_case")]
 pub async fn repo_read_file(
     repo_id: RepoId,
     path: String,
     state: State<'_, RepoManager>,
-) -> Result<Vec<u8>, String> {
+) -> Result<tauri::ipc::Response, String> {
     let handle = get_handle(&state, &repo_id)?;
-    if let Some(remote) = handle.remote() {
+    let content = if let Some(remote) = handle.remote() {
         // Remote repos read the workdir over SFTP through the workspace
         // (no engine call needed locally, none needed remotely either).
-        return finish_op(enqueue_remote_read(
+        finish_op(enqueue_remote_read(
             &handle,
             remote,
             "read_file",
@@ -2230,13 +2277,20 @@ pub async fn repo_read_file(
                 ws.read_file(&path)
             },
         ))
-        .await;
-    }
-    let root = handle.root.clone();
-    tauri::async_runtime::spawn_blocking(move || read_workdir_file(&root, &path))
-        .await
-        .map_err(|e| format!("read_file task failed: {e}"))?
+        .await?
+    } else {
+        let root = handle.root.clone();
+        tauri::async_runtime::spawn_blocking(move || read_workdir_file(&root, &path))
+            .await
+            .map_err(|e| format!("read_file task failed: {e}"))??
+    };
+    Ok(tauri::ipc::Response::new(content))
 }
+
+/// Largest file `repo_read_file` will ship over IPC. Anything bigger fails
+/// with a clear error instead of freezing the bridge (and the editor) on a
+/// multi-GB read; real source files are orders of magnitude smaller.
+const READ_FILE_MAX_BYTES: u64 = 32 * 1024 * 1024;
 
 /// Synchronous body of [`repo_read_file`] (validation + disk read). Path
 /// validation is shared with the workspace file-browser commands
@@ -2247,6 +2301,11 @@ fn read_workdir_file(root: &Path, path: &str) -> Result<Vec<u8>, String> {
         // Missing file → empty content (documented "no preview written").
         Err(_) => Ok(Vec::new()),
         Ok(meta) if !meta.is_file() => Err(format!("`{path}` is not a regular file")),
+        Ok(meta) if meta.len() > READ_FILE_MAX_BYTES => Err(format!(
+            "`{path}` is {} MB — larger than the {} MB read limit",
+            meta.len() / (1024 * 1024),
+            READ_FILE_MAX_BYTES / (1024 * 1024)
+        )),
         Ok(_) => std::fs::read(&full).map_err(|e| format!("reading `{path}` failed: {e}")),
     }
 }
@@ -3621,11 +3680,13 @@ fn clean_op(
             let resolved = validate_clean_paths(&root, &paths)?;
             // SAFETY SECOND: the exact pre-clean state becomes an undo
             // point (checkpoint refs never move HEAD/branches, status
-            // untouched). Skipped when checkpoints are disabled.
+            // untouched), scoped to the paths being removed so a huge
+            // untracked tree doesn't get hashed for a one-file clean.
+            // Skipped when checkpoints are disabled.
             if checkpoint {
                 let guard = repo.lock();
                 engine
-                    .checkpoint_create(&guard, &checkpoint_reason)
+                    .checkpoint_create_scoped(&guard, &checkpoint_reason, &paths)
                     .map_err(engine_err)?;
             }
             remove_resolved(&resolved)

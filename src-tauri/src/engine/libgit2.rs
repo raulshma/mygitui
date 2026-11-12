@@ -175,6 +175,43 @@ fn head_branch_name(repo: &Repository) -> Option<String> {
     sym.rsplit('/').next().map(str::to_owned)
 }
 
+/// Memoized `graph_ahead_behind`: the counts are a pure function of the two
+/// commit oids (commits are immutable), so entries never go stale. Status
+/// recomputes HEAD's numbers on every watcher batch and the branch panel
+/// walks one pair per branch — a stale fork on a big repo costs a full DAG
+/// walk each refresh without this. Keyed by oid pair only (oids identify
+/// commits across repos); cleared wholesale when full, entries are tiny.
+/// Memoized ahead/behind counts, keyed by commit-oid pair.
+type AheadBehindCache = HashMap<(Oid, Oid), (u32, u32)>;
+
+pub(crate) fn graph_ahead_behind_cached(
+    repo: &Repository,
+    local: Oid,
+    remote: Oid,
+) -> EngineResult<(u32, u32)> {
+    static CACHE: Mutex<Option<AheadBehindCache>> = Mutex::new(None);
+    const CACHE_MAX_ENTRIES: usize = 8192;
+
+    let hit = {
+        let cache = CACHE.lock();
+        cache
+            .as_ref()
+            .and_then(|m| m.get(&(local, remote)).copied())
+    };
+    if let Some(counts) = hit {
+        return Ok(counts);
+    }
+    let counts = repo.graph_ahead_behind(local, remote)?;
+    let counts = (counts.0 as u32, counts.1 as u32);
+    let mut cache = CACHE.lock();
+    let map = cache.get_or_insert_with(HashMap::new);
+    if map.len() >= CACHE_MAX_ENTRIES {
+        map.clear();
+    }
+    map.insert((local, remote), counts);
+    Ok(counts)
+}
+
 /// ahead/behind of HEAD's branch vs its configured upstream (0/0 when none).
 fn ahead_behind(repo: &Repository) -> (u32, u32) {
     let head = match repo.head() {
@@ -193,10 +230,7 @@ fn ahead_behind(repo: &Repository) -> (u32, u32) {
         Some(oid) => oid,
         None => return (0, 0),
     };
-    match repo.graph_ahead_behind(local, remote_oid) {
-        Ok((ahead, behind)) => (ahead as u32, behind as u32),
-        Err(_) => (0, 0),
-    }
+    graph_ahead_behind_cached(repo, local, remote_oid).unwrap_or((0, 0))
 }
 
 /// The shared in-progress machine (`engine/in_progress.rs`) flattened to
@@ -315,28 +349,101 @@ fn tree_of<'r>(commit: &Commit<'r>) -> EngineResult<git2::Tree<'r>> {
 /// sha -> ref-name decorations ("main", "origin/main", "v1.0.0",
 /// "HEAD -> main"), used by `log`.
 fn decorations(repo: &Repository) -> EngineResult<HashMap<Oid, Vec<String>>> {
-    let mut map: HashMap<Oid, Vec<String>> = HashMap::new();
+    Ok(refs_cached(repo)?.decos)
+}
+
+/// One cached snapshot of every ref: per-ref tip commit oids plus the sha ->
+/// decorations map. `log` needs both on every page; the expensive part —
+/// peeling each ref to its commit (an ODB read per ref, annotated tags a
+/// peel chain) — runs once per ref-set change instead of once per page. On
+/// a hit, a page pays only the reference iteration + target reads and a
+/// vector compare.
+struct RefsCacheEntry {
+    repo_path: PathBuf,
+    /// Raw snapshot: (full ref name, ref target oid — tag objects included)
+    /// plus the HEAD label. The whole entry is keyed on this.
+    raw: Vec<(String, Oid)>,
+    head_label: Option<String>,
+    /// Peeled tips: (full ref name, commit oid).
+    tips: Vec<(String, Oid)>,
+    decos: HashMap<Oid, Vec<String>>,
+}
+
+static REFS_CACHE: Mutex<Vec<RefsCacheEntry>> = Mutex::new(Vec::new());
+/// Repos whose snapshot is retained; bounded so multi-repo tabs cannot grow
+/// it without limit. Streams on more repos than this simply re-peel.
+const REFS_CACHE_MAX_REPOS: usize = 8;
+
+fn refs_cached(repo: &Repository) -> EngineResult<RefsCacheEntry> {
+    // Raw pass: no ODB reads. Direct refs contribute their target; symbolic
+    // refs (e.g. `origin/HEAD`) contribute the target ref's target. HEAD is
+    // captured separately with its decoration label.
+    let mut raw: Vec<(String, Oid)> = Vec::new();
     for reference in repo.references()?.flatten() {
         let Ok(name) = reference.name() else {
             continue;
         };
-        let Some(short) = short_ref_name(name) else {
+        let name = name.to_owned();
+        if let Some(oid) = reference.target() {
+            raw.push((name, oid));
             continue;
-        };
-        if let Ok(commit) = reference.peel_to_commit() {
-            map.entry(commit.id()).or_default().push(short.to_owned());
+        }
+        // Symbolic: key on the pointed-at ref's own target so a moved
+        // target invalidates the snapshot.
+        let sym = reference.symbolic_target().ok().flatten();
+        if let Some(oid) = sym
+            .and_then(|s| repo.find_reference(s).ok())
+            .and_then(|r| r.target())
+        {
+            raw.push((name, oid));
         }
     }
-    // HEAD decoration.
-    if let Ok(head) = repo.head() {
-        if let Some(target) = head.target() {
-            let label = if repo.head_detached().unwrap_or(false) {
-                "HEAD".to_string()
-            } else {
-                format!("HEAD -> {}", head.shorthand().unwrap_or("HEAD"))
-            };
-            map.entry(target).or_default().push(label);
+    let head = repo.head().ok();
+    let head_oid = head.as_ref().and_then(|h| h.target());
+    let head_label = head.as_ref().map(|h| {
+        if repo.head_detached().unwrap_or(false) {
+            "HEAD".to_string()
+        } else {
+            format!("HEAD -> {}", h.shorthand().unwrap_or("HEAD"))
         }
+    });
+
+    let repo_path = repo.path().to_path_buf();
+    {
+        let cache = REFS_CACHE.lock();
+        if let Some(entry) = cache.iter().find(|e| e.repo_path == repo_path) {
+            if entry.raw == raw && entry.head_label == head_label {
+                return Ok(RefsCacheEntry {
+                    repo_path,
+                    raw,
+                    head_label,
+                    tips: entry.tips.clone(),
+                    decos: entry.decos.clone(),
+                });
+            }
+        }
+    }
+
+    // Miss: peel once and build. `decos` is the previous behavior verbatim;
+    // `tips` feeds the log head set.
+    let mut tips: Vec<(String, Oid)> = Vec::with_capacity(raw.len());
+    let mut map: HashMap<Oid, Vec<String>> = HashMap::new();
+    for (name, target) in &raw {
+        let Ok(commit) = repo
+            .find_object(*target, None)
+            .and_then(|o| o.peel_to_commit())
+        else {
+            continue;
+        };
+        let short = match short_ref_name(name) {
+            Some(s) => s,
+            None => continue,
+        };
+        tips.push((name.clone(), commit.id()));
+        map.entry(commit.id()).or_default().push(short.to_owned());
+    }
+    if let (Some(oid), Some(label)) = (head_oid, &head_label) {
+        map.entry(oid).or_default().push(label.clone());
     }
     // Deterministic order: HEAD decoration first, then alphabetical.
     for names in map.values_mut() {
@@ -346,7 +453,27 @@ fn decorations(repo: &Repository) -> EngineResult<HashMap<Oid, Vec<String>>> {
             bh.cmp(&ah).then_with(|| a.cmp(b))
         });
     }
-    Ok(map)
+
+    let entry = RefsCacheEntry {
+        repo_path,
+        raw,
+        head_label,
+        tips,
+        decos: map,
+    };
+    let mut cache = REFS_CACHE.lock();
+    cache.retain(|e| e.repo_path != entry.repo_path);
+    if cache.len() >= REFS_CACHE_MAX_REPOS {
+        cache.remove(0);
+    }
+    cache.push(RefsCacheEntry {
+        repo_path: entry.repo_path.clone(),
+        raw: entry.raw.clone(),
+        head_label: entry.head_label.clone(),
+        tips: entry.tips.clone(),
+        decos: entry.decos.clone(),
+    });
+    Ok(entry)
 }
 
 fn commit_info(commit: &Commit<'_>, decos: &HashMap<Oid, Vec<String>>) -> CommitInfo {
@@ -623,6 +750,26 @@ fn untracked_file_hunk(repo: &Repository, path: &str) -> Option<(bool, Vec<DiffH
     Some((false, hunks, additions))
 }
 
+impl Libgit2Engine {
+    /// Build (but do not materialize) the diff for [`GitEngine::diff`]-shaped
+    /// inputs. `Ok(None)` = no deltas possible (workdir as base, identical
+    /// sides). The IPC diff stream pages over the returned diff with
+    /// [`file_from_delta`] so patch construction streams; [`GitEngine::diff`]
+    /// keeps the collect-all behavior for in-process callers.
+    pub(crate) fn diff_build<'r>(
+        &self,
+        repo: &'r Repository,
+        old: &DiffSide,
+        new: &DiffSide,
+    ) -> EngineResult<Option<Diff<'r>>> {
+        match (old, new) {
+            (DiffSide::Worktree, _) | (DiffSide::Index, DiffSide::Index) => return Ok(None),
+            _ => {}
+        }
+        build_diff(repo, old, new).map(Some)
+    }
+}
+
 fn diff_to_files(
     repo: &Repository,
     diff: &Diff<'_>,
@@ -630,85 +777,100 @@ fn diff_to_files(
 ) -> EngineResult<Vec<FileDiff>> {
     let mut files = Vec::new();
     for idx in 0..diff.deltas().len() {
-        let Some(delta) = diff.get_delta(idx) else {
-            continue;
-        };
-        let path = delta_path(&delta);
-        let old_path = delta_old_path(&delta);
-        // Path filtering first: building a patch is the expensive part and a
-        // single-file request over a dirty repo would otherwise pay for every
-        // changed file.
-        if !paths_allow(path.as_deref(), old_path.as_deref(), paths) {
-            continue;
+        if let Some(file) = file_from_delta(repo, diff, idx, paths)? {
+            files.push(file);
         }
-        let path = path.unwrap_or_default();
-
-        // Build the patch before reading the delta flags: libgit2 populates
-        // the BINARY flag while loading the patch content.
-        let patch = Patch::from_diff(diff, idx)?;
-        let mut binary = delta.flags().contains(git2::DiffFlags::BINARY);
-        let is_image = is_image_path(&path);
-        let mut hunks = Vec::new();
-        let mut additions = 0u32;
-        let mut deletions = 0u32;
-
-        if !binary {
-            if let Some(patch) = patch {
-                for h in 0..patch.num_hunks() {
-                    let (hunk, line_count) = patch.hunk(h)?;
-                    let mut lines = Vec::with_capacity(line_count);
-                    for l in 0..line_count {
-                        let line = patch.line_in_hunk(h, l)?;
-                        let origin = line.origin();
-                        if !matches!(origin, '+' | '-' | ' ') {
-                            continue; // e.g. "\ No newline at end of file"
-                        }
-                        if origin == '+' {
-                            additions += 1;
-                        } else if origin == '-' {
-                            deletions += 1;
-                        }
-                        let text = String::from_utf8_lossy(line.content());
-                        let text = text.trim_end_matches(['\n', '\r']).to_owned();
-                        lines.push(DiffLine {
-                            old_no: line.old_lineno(),
-                            new_no: line.new_lineno(),
-                            origin,
-                            text,
-                            highlights: Vec::new(),
-                        });
-                    }
-                    highlight_hunk(&mut lines);
-                    hunks.push(DiffHunk {
-                        old_start: hunk.old_start(),
-                        new_start: hunk.new_start(),
-                        lines,
-                    });
-                }
-            }
-        }
-
-        // Untracked deltas get no patch from libgit2: synthesize an all-added
-        // hunk from the workdir file so the UI has content to show.
-        if delta.status() == Delta::Untracked && hunks.is_empty() && !binary {
-            if let Some((is_binary, synth, adds)) = untracked_file_hunk(repo, &path) {
-                binary = is_binary;
-                additions = adds;
-                hunks = synth;
-            }
-        }
-
-        files.push(FileDiff {
-            path,
-            old_path,
-            binary,
-            is_image,
-            additions,
-            deletions,
-            hunks,
-        });
     }
     Ok(files)
+}
+
+/// Build one `FileDiff` from delta `idx` — patch materialization included.
+/// `Ok(None)` when the delta is filtered out by `paths`. Split out of
+/// [`diff_to_files`] so the IPC diff stream can page while later files are
+/// still building instead of materializing the whole diff first.
+pub(crate) fn file_from_delta(
+    repo: &Repository,
+    diff: &Diff<'_>,
+    idx: usize,
+    paths: Option<&[String]>,
+) -> EngineResult<Option<FileDiff>> {
+    let Some(delta) = diff.get_delta(idx) else {
+        return Ok(None);
+    };
+    let path = delta_path(&delta);
+    let old_path = delta_old_path(&delta);
+    // Path filtering first: building a patch is the expensive part and a
+    // single-file request over a dirty repo would otherwise pay for every
+    // changed file.
+    if !paths_allow(path.as_deref(), old_path.as_deref(), paths) {
+        return Ok(None);
+    }
+    let path = path.unwrap_or_default();
+
+    // Build the patch before reading the delta flags: libgit2 populates
+    // the BINARY flag while loading the patch content.
+    let patch = Patch::from_diff(diff, idx)?;
+    let mut binary = delta.flags().contains(git2::DiffFlags::BINARY);
+    let is_image = is_image_path(&path);
+    let mut hunks = Vec::new();
+    let mut additions = 0u32;
+    let mut deletions = 0u32;
+
+    if !binary {
+        if let Some(patch) = patch {
+            for h in 0..patch.num_hunks() {
+                let (hunk, line_count) = patch.hunk(h)?;
+                let mut lines = Vec::with_capacity(line_count);
+                for l in 0..line_count {
+                    let line = patch.line_in_hunk(h, l)?;
+                    let origin = line.origin();
+                    if !matches!(origin, '+' | '-' | ' ') {
+                        continue; // e.g. "\ No newline at end of file"
+                    }
+                    if origin == '+' {
+                        additions += 1;
+                    } else if origin == '-' {
+                        deletions += 1;
+                    }
+                    let text = String::from_utf8_lossy(line.content());
+                    let text = text.trim_end_matches(['\n', '\r']).to_owned();
+                    lines.push(DiffLine {
+                        old_no: line.old_lineno(),
+                        new_no: line.new_lineno(),
+                        origin,
+                        text,
+                        highlights: Vec::new(),
+                    });
+                }
+                highlight_hunk(&mut lines);
+                hunks.push(DiffHunk {
+                    old_start: hunk.old_start(),
+                    new_start: hunk.new_start(),
+                    lines,
+                });
+            }
+        }
+    }
+
+    // Untracked deltas get no patch from libgit2: synthesize an all-added
+    // hunk from the workdir file so the UI has content to show.
+    if delta.status() == Delta::Untracked && hunks.is_empty() && !binary {
+        if let Some((is_binary, synth, adds)) = untracked_file_hunk(repo, &path) {
+            binary = is_binary;
+            additions = adds;
+            hunks = synth;
+        }
+    }
+
+    Ok(Some(FileDiff {
+        path,
+        old_path,
+        binary,
+        is_image,
+        additions,
+        deletions,
+        hunks,
+    }))
 }
 
 // ---------------------------------------------------------------------------
@@ -744,9 +906,14 @@ fn resume_index(
         }
     }
 
+    // Abbreviated/opaque cursors keep the historical first-prefix-match
+    // semantics — minus the per-candidate hex String: oids hex-encode into
+    // one reused stack buffer (40 bytes) and compare by prefix.
+    let after_bytes = after.as_bytes();
+    let mut hex_buf = [0u8; 40];
     for (index, oid) in order.iter().enumerate() {
-        let hex = oid.to_string();
-        if hex == after || hex.starts_with(after) {
+        hex_encode_into(oid.as_bytes(), &mut hex_buf);
+        if hex_buf.starts_with(after_bytes) {
             return Ok(index + 1);
         }
         if index >= LOG_CURSOR_SCAN_LIMIT {
@@ -754,6 +921,15 @@ fn resume_index(
         }
     }
     Err(cursor_not_found(after))
+}
+
+/// Hex-encode `bytes` (20 oid bytes) lowercase into `out` (40 bytes).
+fn hex_encode_into(bytes: &[u8], out: &mut [u8]) {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    for (i, byte) in bytes.iter().enumerate() {
+        out[i * 2] = HEX[(byte >> 4) as usize];
+        out[i * 2 + 1] = HEX[(byte & 0x0f) as usize];
+    }
 }
 
 fn cursor_not_found(after: &str) -> EngineError {
@@ -775,6 +951,9 @@ fn commit_touches_path(repo: &Repository, commit: &Commit<'_>, path: &str) -> En
 /// Pickaxe `-S` test: does the commit's patch add or remove `needle`?
 /// Walks the patch lines of the (first-parent) tree diff; content is
 /// scanned byte-wise (needle is UTF-8; the diff may not be).
+/// No rename detection: git's pickaxe doesn't apply it by default, and the
+/// +/- line content — the only thing scanned here — is identical either
+/// way, while `find_similar` adds an O(files × candidates) pass per commit.
 fn commit_touches_string(
     repo: &Repository,
     commit: &Commit<'_>,
@@ -782,10 +961,7 @@ fn commit_touches_string(
 ) -> EngineResult<bool> {
     let tree = tree_of(commit)?;
     let parent_tree = commit.parent(0).ok().map(|p| tree_of(&p)).transpose()?;
-    let mut diff = repo.diff_tree_to_tree(parent_tree.as_ref(), Some(&tree), None)?;
-    let mut find = DiffFindOptions::new();
-    find.renames(true).copies(false);
-    let _ = diff.find_similar(Some(&mut find));
+    let diff = repo.diff_tree_to_tree(parent_tree.as_ref(), Some(&tree), None)?;
     let needle_bytes = needle.as_bytes();
     for delta_idx in 0..diff.deltas().len() {
         let patch = match Patch::from_diff(&diff, delta_idx)? {
@@ -827,10 +1003,7 @@ fn commit_touches_regex(
 ) -> EngineResult<bool> {
     let tree = tree_of(commit)?;
     let parent_tree = commit.parent(0).ok().map(|p| tree_of(&p)).transpose()?;
-    let mut diff = repo.diff_tree_to_tree(parent_tree.as_ref(), Some(&tree), None)?;
-    let mut find = DiffFindOptions::new();
-    find.renames(true).copies(false);
-    let _ = diff.find_similar(Some(&mut find));
+    let diff = repo.diff_tree_to_tree(parent_tree.as_ref(), Some(&tree), None)?;
     let mut patch_text = String::new();
     for delta_idx in 0..diff.deltas().len() {
         let patch = match Patch::from_diff(&diff, delta_idx)? {
@@ -1059,14 +1232,34 @@ impl GitEngine for Libgit2Engine {
         new: &DiffSide,
         paths: Option<&[String]>,
     ) -> EngineResult<Vec<FileDiff>> {
-        match (old, new) {
-            // The working directory cannot be the base side of a git diff,
-            // and identical sides produce no deltas.
-            (DiffSide::Worktree, _) | (DiffSide::Index, DiffSide::Index) => return Ok(Vec::new()),
-            _ => {}
-        }
-        let diff = build_diff(repo, old, new)?;
+        let Some(diff) = self.diff_build(repo, old, new)? else {
+            return Ok(Vec::new());
+        };
         diff_to_files(repo, &diff, paths)
+    }
+
+    /// Lazy override: build the diff once (delta list + rename detection),
+    /// then construct each file's patch on demand — the caller can ship
+    /// pages while later files are still building.
+    fn diff_stream(
+        &self,
+        repo: &Repository,
+        old: &DiffSide,
+        new: &DiffSide,
+        paths: Option<&[String]>,
+        on_file: &mut dyn FnMut(FileDiff) -> bool,
+    ) -> EngineResult<()> {
+        let Some(diff) = self.diff_build(repo, old, new)? else {
+            return Ok(());
+        };
+        for idx in 0..diff.deltas().len() {
+            if let Some(file) = file_from_delta(repo, &diff, idx, paths)? {
+                if !on_file(file) {
+                    break;
+                }
+            }
+        }
+        Ok(())
     }
 
     fn log(
@@ -1118,23 +1311,23 @@ impl GitEngine for Libgit2Engine {
         {
             let mut pushed: HashSet<Oid> = HashSet::new();
             if filter.refs.is_empty() {
-                if let Ok(head) = repo.head() {
-                    if let Some(oid) = head.target() {
-                        if pushed.insert(oid) {
-                            heads.push(oid);
-                        }
-                    }
-                }
-                for reference in repo.references()?.flatten() {
-                    // Stash commits live in the Stash panel: interleaving the
-                    // merge-shaped WIP/index/untracked triples here derails
-                    // the commit-graph lanes (their base commit is often
-                    // weeks old, holding a lane open across the whole graph).
-                    if reference.name().is_ok_and(|n| n.starts_with("refs/stash")) {
+                // Cached ref tips: the references() pass and peels are
+                // shared with the decorations map and reused across pages
+                // of the same ref set. Stash commits live in the Stash
+                // panel: interleaving the merge-shaped WIP/index/untracked
+                // triples here derails the commit-graph lanes (their base
+                // commit is often weeks old, holding a lane open across
+                // the whole graph).
+                for (name, oid) in &refs_cached(repo)?.tips {
+                    if name.starts_with("refs/stash") {
                         continue;
                     }
-                    if let Ok(commit) = reference.peel_to_commit() {
-                        let oid = commit.id();
+                    if pushed.insert(*oid) {
+                        heads.push(*oid);
+                    }
+                }
+                if let Ok(head) = repo.head() {
+                    if let Some(oid) = head.target() {
                         if pushed.insert(oid) {
                             heads.push(oid);
                         }

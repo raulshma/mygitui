@@ -184,17 +184,28 @@
     } finally {
       if (token === listToken) rootLoading = false;
     }
-    // Expanded dirs refresh after the root lands; errors are silent (a dir
-    // may have been deleted externally — it disappears on collapse/expand).
+    // Expanded dirs refresh in parallel after the root lands: a deep tree
+    // used to pay 1 sequential IPC round-trip per dir per refresh. Errors
+    // are silent (a dir may have been deleted externally — it disappears
+    // on collapse/expand). One mutation pass afterwards keeps the rows
+    // derivation from re-running once per dir.
     const expandedPaths = collectExpanded(tree);
-    for (const path of expandedPaths) {
-      if (token !== listToken) return;
-      try {
-        const result = await listDir(repoId, path, fileTreePrefs.showIgnored);
-        if (token !== listToken) return;
-        insertListing(tree, result);
-      } catch {
-        if (token === listToken) removeEntry(tree, path);
+    if (expandedPaths.length === 0) return;
+    const results = await Promise.all(
+      expandedPaths.map(async (path) => {
+        try {
+          return { path, result: await listDir(repoId, path, fileTreePrefs.showIgnored) };
+        } catch {
+          return { path, result: null };
+        }
+      }),
+    );
+    if (token !== listToken) return;
+    for (const entry of results) {
+      if (entry.result === null) {
+        removeEntry(tree, entry.path);
+      } else {
+        insertListing(tree, entry.result);
       }
     }
   }

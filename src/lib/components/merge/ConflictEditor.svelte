@@ -71,7 +71,7 @@
   /** Decoded workdir text per file; null/absent = not loaded yet. */
   let texts = $state<Record<string, string | null>>({});
   /** Raw bytes per file (fallback for unparseable / binary content). */
-  let rawBytes = $state<Record<string, number[] | null>>({});
+  let rawBytes = $state<Record<string, Uint8Array | null>>({});
   let loadErrors = $state<Record<string, string>>({});
   /** Explicit per-conflict choices: path → (conflict index → choice). */
   let choicesByFile = $state<Record<string, Record<number, ResolutionChoice>>>({});

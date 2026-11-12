@@ -25,6 +25,14 @@
 	 * `props` carries the trigger behavior plus `aria-label={label}`;
 	 * attributes written after the spread (e.g. your own `aria-label`)
 	 * win. Dynamic labels are fine: `label={cond ? "A" : "B"}`.
+	 *
+	 * **Lazy mounting**: virtualized lists (history rows, blame lines,
+	 * file lists) render a Hint per row — mounting the full bits-ui stack
+	 * (Root + Trigger + portal Content + contexts) for every row dominated
+	 * per-row render cost there. This wrapper therefore renders the child
+	 * with plain idle props until the pointer (or focus) actually dwells
+	 * on THIS instance's trigger; only then does the tooltip machinery
+	 * mount, already open. Hovering past during a scroll costs nothing.
 	 */
 	let {
 		label,
@@ -45,6 +53,77 @@
 
 	/** Blank label → no pill and no aria-label (dynamic labels can be empty). */
 	const empty = $derived(label.trim() === "");
+
+	const HOVER_DELAY_MS = $derived(delayDuration ?? 300);
+	/** How long a closed tooltip's machinery stays mounted (fade-out room). */
+	const UNARM_DELAY_MS = 400;
+
+	let armed = $state(false); // full tooltip machinery mounted
+	let open = $state(false);
+	let hoverTimer: ReturnType<typeof setTimeout> | null = null;
+	let unarmTimer: ReturnType<typeof setTimeout> | null = null;
+	let hoverEl: Element | null = null;
+
+	function clearHoverTimer(): void {
+		if (hoverTimer !== null) {
+			clearTimeout(hoverTimer);
+			hoverTimer = null;
+		}
+	}
+
+	/** Dwell timer fired (or focus): mount the machinery, already open. */
+	function activate(): void {
+		if (empty) return;
+		armed = true;
+		open = true;
+		if (unarmTimer !== null) {
+			clearTimeout(unarmTimer);
+			unarmTimer = null;
+		}
+	}
+
+	/** Pointer/focus entered the idle trigger: start the dwell timer. */
+	function armEnter(el: EventTarget | null): void {
+		if (empty) return;
+		hoverEl = el as Element | null;
+		if (armed) {
+			activate(); // re-enter while machinery is up: show immediately
+			return;
+		}
+		if (hoverTimer === null) {
+			hoverTimer = setTimeout(() => {
+				hoverTimer = null;
+				// The row may have scrolled away mid-dwell; a detached trigger
+				// has nowhere to anchor the pill.
+				if (hoverEl?.isConnected) activate();
+			}, HOVER_DELAY_MS);
+		}
+	}
+
+	/** Pointer/focus left: drop the dwell timer and (once closed) the machinery. */
+	function disarm(): void {
+		hoverEl = null;
+		clearHoverTimer();
+		if (open) {
+			open = false;
+			if (unarmTimer === null) {
+				unarmTimer = setTimeout(() => {
+					unarmTimer = null;
+					if (!open) armed = false;
+				}, UNARM_DELAY_MS);
+			}
+		}
+	}
+
+	/** Idle-phase props: shape-compatible with the real trigger props. */
+	const idleProps = $derived({
+		type: "button",
+		"aria-label": empty ? undefined : label,
+		onpointerenter: (event: Event) => armEnter(event.currentTarget),
+		onpointerleave: () => disarm(),
+		onfocus: () => armEnter(null),
+		onblur: () => disarm(),
+	});
 </script>
 
 <!--
@@ -58,9 +137,29 @@
 	aria-describedby while open).
 -->
 
-<Provider>
-	<TooltipPrimitive.Root {delayDuration} disabled={empty} {...restProps}>
-		<TooltipPrimitive.Trigger aria-label={empty ? undefined : label} {child} />
-		<Content {side} sideOffset={6}>{label}</Content>
-	</TooltipPrimitive.Root>
-</Provider>
+{#if armed}
+	<Provider>
+		<TooltipPrimitive.Root
+			{delayDuration}
+			{open}
+			onOpenChange={(next) => {
+				open = next;
+				if (next) {
+					if (unarmTimer !== null) {
+						clearTimeout(unarmTimer);
+						unarmTimer = null;
+					}
+				} else {
+					disarm();
+				}
+			}}
+			disabled={empty}
+			{...restProps}
+		>
+			<TooltipPrimitive.Trigger aria-label={empty ? undefined : label} {child} />
+			<Content {side} sideOffset={6}>{label}</Content>
+		</TooltipPrimitive.Root>
+	</Provider>
+{:else}
+	{@render child({ props: idleProps })}
+{/if}

@@ -431,22 +431,61 @@ export class ForgeStore {
     }
   }
 
-  /** First activation of the Actions tab: runs + workflow files. */
+  /** First activation of the Actions tab: runs + workflow files. Ensure
+   * semantics with a short TTL: re-activations within the window resolve
+   * from cache instead of respawning two `gh` subprocesses. */
+  static readonly ACTIONS_ENSURE_TTL_MS = 5_000;
   async ensureActions(repoId: RepoId): Promise<void> {
     await Promise.all([
-      this.refreshRuns(repoId),
-      this.refreshWorkflows(repoId),
+      this.ensureRuns(repoId),
+      this.#workflows.ensure(
+        repoId,
+        () => workflowList(repoId),
+        ForgeStore.ACTIONS_ENSURE_TTL_MS,
+        { onError: (err) => console.warn("[forge] workflow list failed:", err) },
+      ),
     ]);
+  }
+
+  /** TTL-guarded runs read (see {@link ensureActions}). */
+  async ensureRuns(repoId: RepoId): Promise<WorkflowRun[]> {
+    const list = await this.#runs.ensure(
+      repoId,
+      () => workflowRuns(repoId, this.runFiltersFor(repoId)),
+      ForgeStore.ACTIONS_ENSURE_TTL_MS,
+      { onError: (err) => console.warn("[forge] workflow runs failed:", err) },
+    );
+    return list ?? [];
   }
 
   /**
    * Panel mount bundle: status (global, skipped when already known),
-   * context and PR list for `repoId` — in parallel.
+   * context and PR list for `repoId` — in parallel. Ensure semantics with a
+   * short TTL so every tab switch with the panel mounted doesn't respawn
+   * the `forge_context` + `pr_list` subprocesses for data that just landed;
+   * mutations and explicit refreshes still bypass it via the refresh* calls.
    */
+  static readonly PANEL_ENSURE_TTL_MS = 3_000;
   async ensure(repoId: RepoId): Promise<void> {
-    const jobs: Promise<unknown>[] = [this.refreshContext(repoId), this.refreshPrs(repoId)];
+    const jobs: Promise<unknown>[] = [this.ensureContext(repoId), this.ensurePrs(repoId)];
     if (this.status === null) jobs.push(this.refreshStatus());
     await Promise.all(jobs);
+  }
+
+  /** TTL-guarded context read (see {@link ensure}). */
+  async ensureContext(repoId: RepoId): Promise<ForgeContext | null> {
+    return this.#contexts.ensure(repoId, () => forgeContext(repoId), ForgeStore.PANEL_ENSURE_TTL_MS);
+  }
+
+  /** TTL-guarded PR list read (see {@link ensure}). */
+  async ensurePrs(repoId: RepoId): Promise<PrInfo[]> {
+    const list = await this.#prs.ensure(
+      repoId,
+      () => prList(repoId, this.filterFor(repoId)),
+      ForgeStore.PANEL_ENSURE_TTL_MS,
+      { onError: (err) => console.warn("[forge] pr list failed:", err) },
+    );
+    return list ?? [];
   }
 
   /** Everything a PR creation should refresh: context + list. */

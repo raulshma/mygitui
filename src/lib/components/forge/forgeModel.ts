@@ -16,6 +16,7 @@ import type {
   WorkflowInput,
   WorkflowRun,
 } from "$lib/ipc/client";
+import type { WorkflowRunDetail } from "$lib/ipc/types";
 
 
 /** The worst overall state of a check set (`none` = no checks at all). */
@@ -558,4 +559,25 @@ export function parseWorkflowInputs(text: string): ParsedWorkflowInputs {
     inputs.push({ key, value });
   }
   return { inputs, error: null };
+}
+
+/**
+ * Cheap progress signature of a run detail: run status plus per-job/step
+ * statuses. The run view's poll compares signatures to decide whether the
+ * (potentially multi-MB) log text needs refetching — a run that hasn't
+ * moved since the last tick can't have new log lines.
+ */
+export function runDetailSignature(
+  detail: Pick<WorkflowRunDetail, "run" | "jobs"> | null,
+): string {
+  if (detail === null) return "";
+  return [
+    detail.run.status,
+    ...detail.jobs.map(
+      (job) =>
+        `${job.database_id}:${job.status}:${job.conclusion}:${job.steps
+          .map((step) => step.status)
+          .join("")}`,
+    ),
+  ].join("|");
 }

@@ -231,30 +231,57 @@
   });
 
   // Request parses for the visible window's lines (cheap: only uncached
-  // entries actually hit Shiki). The per-file text lists are derived once per
-  // diff, not rebuilt for every token-landed tick.
-  const syntaxTexts = $derived.by(() => {
-    const out: Array<{ path: string; texts: string[] }> = [];
-    for (const file of files) {
-      if (file.binary || file.is_image) continue;
-      const texts: string[] = [];
-      for (const hunk of file.hunks) {
-        for (const line of hunk.lines) {
-          texts.push(line.text);
-        }
-      }
-      out.push({ path: file.path, texts });
-    }
-    return out;
-  });
-
+  // entries actually hit Shiki). The visible window moves with scroll, so
+  // requests follow it; requesting the WHOLE diff here would re-walk every
+  // line of every file on each token-landed tick (plus a cache-key string
+  // per line) — O(diff) work per ~50ms tick while a large diff parses.
   $effect(() => {
     if (!syntaxEnabled) return;
     void syntaxTick; // re-request after background parses land (next window)
-    for (const file of syntaxTexts) {
-      requestTokens(file.path, file.texts);
+    const textsByFile = new Map<number, string[]>();
+    for (const slice of slices) {
+      for (let i = slice.firstRow; i < slice.firstRow + slice.count; i++) {
+        const row = model.rows[i];
+        if (row === undefined) continue;
+        // Only text-bearing rows carry a fileIndex (headers/binary/image
+        // have none and nothing to highlight).
+        let text: string | null;
+        switch (row.kind) {
+          case "line":
+          case "single":
+          case "context":
+            text = row.line.text;
+            break;
+          case "pair":
+            if (row.left !== null) requestTextFor(row, textsByFile, row.left.text);
+            if (row.right !== null) requestTextFor(row, textsByFile, row.right.text);
+            continue;
+          default:
+            continue; // headers / binary / image carry no highlightable text
+        }
+        requestTextFor(row, textsByFile, text);
+      }
+    }
+    for (const [fileIndex, texts] of textsByFile) {
+      const file = files[fileIndex];
+      if (!file || file.binary || file.is_image) continue;
+      requestTokens(file.path, texts);
     }
   });
+
+  /** Collect one line's text under its row's file, creating the bucket. */
+  function requestTextFor(
+    row: { fileIndex: number },
+    textsByFile: Map<number, string[]>,
+    text: string,
+  ): void {
+    let texts = textsByFile.get(row.fileIndex);
+    if (texts === undefined) {
+      texts = [];
+      textsByFile.set(row.fileIndex, texts);
+    }
+    texts.push(text);
+  }
 
   // -- M9 F6: hunk staging / discard ------------------------------------------
 

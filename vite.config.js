@@ -11,6 +11,14 @@ const host = process.env.TAURI_DEV_HOST;
 export default defineConfig({
   plugins: [tailwindcss(), svelte()],
 
+  build: {
+    // Tauri ships its own evergreen webview (WebView2 / WKWebView /
+    // WebKitGTK): esnext output skips esbuild's downleveling — smaller
+    // chunks, less parse work at boot, faster builds.
+    target: "esnext",
+    sourcemap: false,
+  },
+
   resolve: {
     alias: {
       $lib: fileURLToPath(new URL("./src/lib", import.meta.url)),

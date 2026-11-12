@@ -41,7 +41,11 @@
         gap: 18px;
         background: #0a0a0a;
         font-family: Inter, Roboto, "Segoe UI", system-ui, sans-serif;
-        animation: app-splash-expire 0.2s ease 8s forwards;
+        /* Self-expiry is a stuck-boot failsafe only: the app removes the
+         * splash itself on mount. It must outlast the backend's 10s
+         * invisible-window failsafe, or a slow boot trades the splash for a
+         * blank dark page. */
+        animation: app-splash-expire 0.2s ease 14s forwards;
       }
       #app-splash svg {
         width: 56px;

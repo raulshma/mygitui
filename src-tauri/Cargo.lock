@@ -3202,6 +3202,7 @@ dependencies = [
 name = "mygitui"
 version = "0.1.22"
 dependencies = [
+ "base64 0.22.1",
  "criterion",
  "futures-util",
  "git2",

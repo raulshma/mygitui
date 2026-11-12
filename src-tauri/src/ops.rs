@@ -1,12 +1,20 @@
-//! Per-repo serial op queue with `op-progress` events (contracts.md M2).
+//! Per-repo op queues with `op-progress` events (contracts.md M2).
 //!
 //! M1 read commands call the engine directly under the repo mutex —
 //! concurrent reads are safe because `git2::Repository` access is fully
 //! serialized by that lock. Every M2 mutation and network op instead goes
-//! through [`OpQueue`] (one per [`crate::repo::RepoHandle`]): a single
-//! worker thread per repo executes enqueued jobs in FIFO order, so a push
-//! never races a stage and one repo's slow fetch never blocks another's
-//! commit.
+//! through [`OpQueue`] (one per [`crate::repo::RepoHandle`]): a worker
+//! thread per repo executes enqueued jobs in FIFO order, so a push never
+//! races a stage and one repo's slow fetch never blocks another's commit.
+//!
+//! Two lanes share the queue's bookkeeping (op ids, cancellation, close):
+//! the **mutation lane** (default) serializes mutations and network ops in
+//! FIFO order — a pull's merge phase can never interleave with a stage —
+//! while the **read lane** ([`OpQueue::enqueue_read_lane`]) runs read-only
+//! jobs on a second worker. Reads take the shared repo-handle mutex inside
+//! their job, so a mutation still blocks at most one read; network ops
+//! never touch the shared handle (fresh handle per op), so a slow
+//! fetch/push/pull no longer stalls status/log/diff/blame refreshes.
 //!
 //! Progress flows through [`OpCtx::emit_progress`], throttled to at most
 //! one event per [`THROTTLE_MS`] per op; the queue itself always emits a
@@ -16,9 +24,9 @@
 //! abstraction — [`TauriEventSink`] in production, a collector in tests —
 //! so the queue itself needs no `AppHandle` to compile or run headless.
 //!
-//! Lifecycle: the worker thread is spawned lazily on the first `enqueue`
-//! and exits once [`OpQueue::shutdown`] runs (repo close) and the backlog
-//! has drained. Jobs still queued at close are executed, not dropped; their
+//! Lifecycle: worker threads are spawned lazily on the first `enqueue` and
+//! exit once [`OpQueue::shutdown`] runs (repo close) and the backlog has
+//! drained. Jobs still queued at close are executed, not dropped; their
 //! oneshot receivers still resolve.
 
 use std::collections::HashMap;
@@ -176,8 +184,12 @@ impl Clone for OpQueue {
 
 struct QueueInner {
     repo_id: RepoId,
-    /// Lazily spawned worker's channel; `None` after [`OpQueue::shutdown`].
+    /// Lazily spawned mutation worker's channel; `None` after
+    /// [`OpQueue::shutdown`].
     sender: Mutex<Option<mpsc::Sender<Job>>>,
+    /// Lazily spawned read worker's channel; `None` after shutdown. Reads
+    /// run here so they never queue behind a long mutation or net op.
+    read_sender: Mutex<Option<mpsc::Sender<Job>>>,
     /// Monotonic op counter (op ids are `<repo>-op-<n hex>`).
     counter: AtomicU64,
     sink: RwLock<Option<Arc<dyn EventSink>>>,
@@ -189,12 +201,24 @@ struct QueueInner {
     cancels: Mutex<HashMap<String, Arc<AtomicBool>>>,
 }
 
+/// Which worker an enqueued job runs on.
+#[derive(Clone, Copy)]
+enum Lane {
+    /// Mutations + net ops: FIFO-serialized with each other.
+    Mutation,
+    /// Read-only jobs: concurrent with the mutation lane; the shared
+    /// repo-handle mutex inside the job still serializes reads against
+    /// mutations.
+    Read,
+}
+
 impl OpQueue {
     pub fn new(repo_id: RepoId) -> Self {
         Self {
             inner: Arc::new(QueueInner {
                 repo_id,
                 sender: Mutex::new(None),
+                read_sender: Mutex::new(None),
                 counter: AtomicU64::new(0),
                 sink: RwLock::new(None),
                 closed: AtomicBool::new(false),
@@ -240,7 +264,7 @@ impl OpQueue {
         T: Send + 'static,
         F: FnOnce(OpCtx) -> Result<T, String> + Send + 'static,
     {
-        self.enqueue_inner(kind, run, true)
+        self.enqueue_inner(kind, run, true, Lane::Mutation)
     }
 
     /// Same as [`OpQueue::enqueue`] but silent: no `op-progress` events at
@@ -260,7 +284,24 @@ impl OpQueue {
         T: Send + 'static,
         F: FnOnce(OpCtx) -> Result<T, String> + Send + 'static,
     {
-        self.enqueue_inner(kind, run, false)
+        self.enqueue_inner(kind, run, false, Lane::Mutation)
+    }
+
+    /// Silent read job on the read lane: a second worker that runs
+    /// concurrently with the mutation lane, so a long mutation or net op
+    /// never queues reads behind it. Reads still take the shared
+    /// repo-handle mutex inside their job (see the module docs). Same
+    /// silent, cancellation, and close semantics as [`OpQueue::enqueue_silent`].
+    pub fn enqueue_read_lane<T, F>(
+        &self,
+        kind: &str,
+        run: F,
+    ) -> (String, tokio::sync::oneshot::Receiver<Result<T, String>>)
+    where
+        T: Send + 'static,
+        F: FnOnce(OpCtx) -> Result<T, String> + Send + 'static,
+    {
+        self.enqueue_inner(kind, run, false, Lane::Read)
     }
 
     fn enqueue_inner<T, F>(
@@ -268,6 +309,7 @@ impl OpQueue {
         kind: &str,
         run: F,
         emits_progress: bool,
+        lane: Lane,
     ) -> (String, tokio::sync::oneshot::Receiver<Result<T, String>>)
     where
         T: Send + 'static,
@@ -297,7 +339,10 @@ impl OpQueue {
         };
         let repo_id = self.inner.repo_id.0.clone();
         let kind_owned = kind.to_string();
-        let sender = self.ensure_worker();
+        let sender = match lane {
+            Lane::Mutation => self.ensure_worker(),
+            Lane::Read => self.ensure_read_worker(),
+        };
         // M12 cancellation token: registered before the job is queued so a
         // cancel that arrives while the op waits in line skips it entirely.
         let token = Arc::new(AtomicBool::new(false));
@@ -383,33 +428,51 @@ impl OpQueue {
     }
 
     /// Stop accepting ops. Queued jobs still execute (drain semantics);
-    /// the worker exits once the backlog is empty. Called from
+    /// the workers exit once the backlog is empty. Called from
     /// `RepoHandle::shutdown` (repo close / handle drop).
     pub fn shutdown(&self) {
         self.inner.closed.store(true, Ordering::Release);
         self.inner.sender.lock().take();
+        self.inner.read_sender.lock().take();
     }
 
-    /// Get the worker sender, spawning the worker thread on first use.
+    /// Get the mutation worker sender, spawning the worker thread on first
+    /// use.
     fn ensure_worker(&self) -> mpsc::Sender<Job> {
         let mut guard = self.inner.sender.lock();
         if let Some(sender) = guard.as_ref() {
             return sender.clone();
         }
-        let (tx, rx) = mpsc::channel::<Job>();
-        let name = format!("op-queue-{}", self.inner.repo_id.0);
-        std::thread::Builder::new()
-            .name(name)
-            .spawn(move || {
-                // Drains until every sender (incl. the queue's own) is gone.
-                for job in rx {
-                    (job.run)();
-                }
-            })
-            .expect("spawn op queue worker thread");
+        let tx = spawn_worker(&format!("op-queue-{}", self.inner.repo_id.0));
         *guard = Some(tx.clone());
         tx
     }
+
+    /// Get the read worker sender, spawning the worker thread on first use.
+    fn ensure_read_worker(&self) -> mpsc::Sender<Job> {
+        let mut guard = self.inner.read_sender.lock();
+        if let Some(sender) = guard.as_ref() {
+            return sender.clone();
+        }
+        let tx = spawn_worker(&format!("op-read-{}", self.inner.repo_id.0));
+        *guard = Some(tx.clone());
+        tx
+    }
+}
+
+/// Spawn one queue worker: drains until every sender (incl. the queue's own)
+/// is gone.
+fn spawn_worker(name: &str) -> mpsc::Sender<Job> {
+    let (tx, rx) = mpsc::channel::<Job>();
+    std::thread::Builder::new()
+        .name(name.to_owned())
+        .spawn(move || {
+            for job in rx {
+                (job.run)();
+            }
+        })
+        .expect("spawn op queue worker thread");
+    tx
 }
 
 /// Handout to one running op: identity fields, the throttled emitter, and

@@ -35,10 +35,25 @@ function measurer(): CanvasRenderingContext2D | null {
 
 const cache = new Map<string, number>();
 
+/** Bounded memo for [`visualColumns`]: wrap-mode height estimates re-walk
+ * every diff line's characters on every viewport-width change — a splitter
+ * drag re-runs the whole estimate pipeline per pointermove. Line texts are
+ * stable across re-wraps (and repeat across rows), so hit rates are ~100%
+ * after the first pass. */
+const vcCache = new Map<string, number>();
+const VC_CACHE_MAX = 16384;
+
+/** Cached advance of one monospace column ("0"), canvas-measured. The row
+ * font never changes at runtime (and canvas px are DPR-independent), so one
+ * measurement lasts the session. */
+let cachedCharWidth: number | null = null;
+
 /** Cached advance of one monospace column ("0"), canvas-measured. */
 export function charWidth(): number {
+  if (cachedCharWidth !== null) return cachedCharWidth;
   const c = measurer();
-  return c ? c.measureText("0").width || FALLBACK_CH_PX : FALLBACK_CH_PX;
+  cachedCharWidth = c ? c.measureText("0").width || FALLBACK_CH_PX : FALLBACK_CH_PX;
+  return cachedCharWidth;
 }
 
 /** Rendered width of one diff line in px (tab stops included). */
@@ -75,6 +90,16 @@ function computeWidth(text: string): number {
 
 /** Visual columns of `text`: each tab advances to the next `tabSize` stop. */
 export function visualColumns(text: string, tabSize = TAB_SIZE): number {
+  if (tabSize !== TAB_SIZE) return computeVisualColumns(text, tabSize);
+  const hit = vcCache.get(text);
+  if (hit !== undefined) return hit;
+  const col = computeVisualColumns(text, tabSize);
+  if (vcCache.size > VC_CACHE_MAX) vcCache.clear();
+  vcCache.set(text, col);
+  return col;
+}
+
+function computeVisualColumns(text: string, tabSize: number): number {
   let col = 0;
   for (const ch of text) {
     col = ch === "\t" ? (Math.floor(col / tabSize) + 1) * tabSize : col + 1;

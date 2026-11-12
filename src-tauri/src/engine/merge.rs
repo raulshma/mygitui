@@ -778,6 +778,14 @@ impl GitEngineM3 for Libgit2Engine {
     fn checkpoint_create(&self, repo: &Repository, reason: &str) -> EngineResult<CheckpointInfo> {
         self.checkpoint_create_impl(repo, reason)
     }
+    fn checkpoint_create_scoped(
+        &self,
+        repo: &Repository,
+        reason: &str,
+        paths: &[String],
+    ) -> EngineResult<CheckpointInfo> {
+        self.checkpoint_create_scoped_impl(repo, reason, paths)
+    }
     fn checkpoints(&self, repo: &Repository) -> EngineResult<Vec<CheckpointInfo>> {
         self.checkpoints_impl(repo)
     }

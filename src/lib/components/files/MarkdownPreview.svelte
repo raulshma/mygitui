@@ -30,6 +30,7 @@
     path,
     getDoc,
     version,
+    docLength,
     onJumpToLine = undefined,
   }: {
     /** Workdir-relative path (context for future resolvers/images). */
@@ -38,6 +39,11 @@
     getDoc: () => string;
     /** Bumped by the editor on every doc change. */
     version: number;
+    /** Current doc length, maintained by the editor (O(1) per keystroke).
+     * Used for the debounce decision; reading `getDoc().length` here would
+     * materialize the whole document string per keystroke just to throw it
+     * away. Falls back to the doc when absent (tests). */
+    docLength?: number | undefined;
     /** Plain click on a rendered block → its source line. */
     onJumpToLine?: (line: number) => void;
   } = $props();
@@ -96,7 +102,7 @@
       // First paint immediate — the preview must feel instant on open.
       void renderNow(gen);
     } else {
-      const size = getDoc().length;
+      const size = docLength ?? getDoc().length;
       debounceTimer = setTimeout(
         () => {
           debounceTimer = null;

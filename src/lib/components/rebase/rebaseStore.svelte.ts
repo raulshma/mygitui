@@ -32,6 +32,22 @@ import { describeError } from "$lib/errors";
 /** Poll interval for `rebase_state` (contract: every 500ms). */
 export const REBASE_POLL_MS = 500;
 
+/**
+ * After this much continuous polling the interval backs off: a rebase only
+ * advances through `continueRebase()` (which refreshes state immediately)
+ * or an external CLI continue, and the latter needs seconds, not
+ * milliseconds. The fast lane covers the typical short rebase; long
+ * conflict-resolution sessions stop paying 2 git2 rebase-state reads/s.
+ */
+const REBASE_BACKOFF_AFTER_MS = 15_000;
+const REBASE_BACKOFF_POLL_MS = 2_000;
+
+/**
+ * Conflicts are refetched at most this often while paused (and immediately
+ * on each pause transition): the list changes as the user resolves files.
+ */
+const CONFLICTS_REFRESH_MS = 1_000;
+
 function errorMessage(err: unknown): string {
   return describeError(err);
 }
@@ -50,6 +66,14 @@ export class RebaseMonitor {
 
   #repoId: string | null = null;
   #timer: ReturnType<typeof setInterval> | null = null;
+  /** Current poll cadence (re-armed when the backoff kicks in). */
+  #timerInterval = 0;
+  /** `Date.now()` of monitor start (backoff eligibility). */
+  #startedAt = 0;
+  /** Last conflicts() fetch time (paused-refresh cadence). */
+  #conflictsAt = 0;
+  /** Whether the previous poll saw a paused rebase (pause transitions). */
+  #wasPaused = false;
   /** Bumped by `#hardStop` — in-flight async work compares and bails. */
   #token = 0;
   /** Whether any poll of this run has seen an active rebase. */
@@ -123,8 +147,9 @@ export class RebaseMonitor {
     this.#hardStop();
     this.#repoId = repoId;
     this.polling = true;
+    this.#startedAt = Date.now();
     void this.#tick();
-    this.#timer = setInterval(() => void this.#tick(), REBASE_POLL_MS);
+    this.#armTimer(REBASE_POLL_MS);
   }
 
   /** Stops polling and clears all state. Safe to call repeatedly. */
@@ -198,14 +223,22 @@ export class RebaseMonitor {
       this.state = state;
       this.active = state.active;
 
-      if (state.active && (state.paused_for_edit || state.paused_for_conflict)) {
-        try {
-          const files = await conflicts(repoId);
-          if (token !== this.#token) return;
-          this.conflicts = files;
-        } catch (err) {
-          if (token !== this.#token) return;
-          this.error = errorMessage(err);
+      const paused = state.active && (state.paused_for_edit || state.paused_for_conflict);
+      if (paused) {
+        const now = Date.now();
+        // Conflicts change as the user resolves files, so refresh while
+        // paused — but on a 1s cadence + every pause transition, not on
+        // every 500ms tick.
+        if (!this.#wasPaused || now - this.#conflictsAt >= CONFLICTS_REFRESH_MS) {
+          this.#conflictsAt = now;
+          try {
+            const files = await conflicts(repoId);
+            if (token !== this.#token) return;
+            this.conflicts = files;
+          } catch (err) {
+            if (token !== this.#token) return;
+            this.error = errorMessage(err);
+          }
         }
         if (this.conflicts.length > 0 && !this.#hadConflicts) {
           this.#hadConflicts = true;
@@ -214,10 +247,13 @@ export class RebaseMonitor {
             { kind: "error" },
           );
         }
-      } else if (this.conflicts.length > 0) {
-        this.conflicts = [];
-        this.#hadConflicts = false;
+      } else {
+        if (this.conflicts.length > 0) {
+          this.conflicts = [];
+          this.#hadConflicts = false;
+        }
       }
+      this.#wasPaused = paused;
 
       if (!state.active) {
         // Poll-until-done contract: a rebase we were watching finished.
@@ -226,6 +262,13 @@ export class RebaseMonitor {
         return;
       }
       this.#engaged = true;
+      // Adaptive cadence: fast lane for the typical short rebase, backed off
+      // once polling has run a while (conflict-resolution sessions).
+      const interval =
+        Date.now() - this.#startedAt < REBASE_BACKOFF_AFTER_MS
+          ? REBASE_POLL_MS
+          : REBASE_BACKOFF_POLL_MS;
+      if (interval !== this.#timerInterval) this.#armTimer(interval);
     } catch (err) {
       // Transient poll failures keep the timer running; surface, don't die.
       if (token !== this.#token) return;
@@ -235,12 +278,19 @@ export class RebaseMonitor {
     }
   }
 
+  #armTimer(interval: number): void {
+    if (this.#timer !== null) clearInterval(this.#timer);
+    this.#timerInterval = interval;
+    this.#timer = setInterval(() => void this.#tick(), interval);
+  }
+
   /** Natural stop: clear the timer but keep the final state for display. */
   #finish(): void {
     if (this.#timer !== null) {
       clearInterval(this.#timer);
       this.#timer = null;
     }
+    this.#timerInterval = 0;
     this.polling = false;
     this.active = false;
     this.#engaged = false;
@@ -253,6 +303,7 @@ export class RebaseMonitor {
       clearInterval(this.#timer);
       this.#timer = null;
     }
+    this.#timerInterval = 0;
     this.#repoId = null;
     this.polling = false;
     this.active = false;

@@ -340,7 +340,11 @@
     focusRefreshTimer = setTimeout(() => {
       focusRefreshTimer = null;
       if (tabStore.tabs.some((tab) => opStore.busy(tab.id))) return;
-      for (const tab of tabStore.tabs) void refreshStatus(tab.id);
+      // The focused repo only: regaining focus says "this window's state may
+      // be stale", not "re-scan every open repo". Background tabs refresh on
+      // activation (setActive), so they are never stale when shown.
+      const active = tabStore.active;
+      if (active) void refreshStatus(active.id);
     }, FOCUS_REFRESH_DEBOUNCE_MS);
   }
 

@@ -1052,9 +1052,33 @@ export async function guardCheckpoint(repoId: string, reason: string): Promise<C
  * non-file rejects; a *missing* file resolves to an empty byte array. The
  * conflict editor uses this to load the marker-bearing workdir copy of a
  * conflicted path (there is no raw-file command in the M1 contract).
+ *
+ * The backend returns a raw IPC response (`tauri::ipc::Response`), so the
+ * transport hands back an `ArrayBuffer` — no JSON number array in between
+ * (a 2 MB file would serialize to ~8 MB of JSON and a 2M-element array).
  */
-export function readFile(repoId: string, path: string): Promise<number[]> {
-  return invokeTauri<number[]>("repo_read_file", { repo_id: repoId, path });
+export async function readFile(repoId: string, path: string): Promise<Uint8Array<ArrayBuffer>> {
+  const payload = await invokeTauri<ArrayBuffer | number[]>("repo_read_file", {
+    repo_id: repoId,
+    path,
+  });
+  // Production: ArrayBuffer from the raw response. Test transports (and any
+  // non-Tauri fallback) hand back the historical number[] form.
+  if (payload instanceof ArrayBuffer) return new Uint8Array(payload);
+  return Uint8Array.from(payload);
+}
+
+/** Base64 (STANDARD) of `bytes` — the file-save wire format. Prefers the
+ * built-in `toBase64` (evergreen webviews), falls back to chunked btoa. */
+function bytesToBase64(bytes: Uint8Array): string {
+  const fast = bytes as Uint8Array & { toBase64?: () => string };
+  if (typeof fast.toBase64 === "function") return fast.toBase64();
+  let binary = "";
+  const CHUNK = 0x8000;
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
+  }
+  return btoa(binary);
 }
 
 // ---------------------------------------------------------------------------
@@ -1092,6 +1116,10 @@ export function statFile(repoId: string, path: string): Promise<FileMeta> {
  * `expectedMtime` is the save-conflict guard: it must match the file's
  * current mtime (`0` = create), otherwise a "changed on disk" error
  * rejects the write.
+ *
+ * Content travels base64-encoded: a compact string over the JSON bridge
+ * instead of a ~7-8x number array (the backend decodes with the same
+ * STANDARD alphabet).
  */
 export function writeFile(
   repoId: string,
@@ -1102,7 +1130,7 @@ export function writeFile(
   return call<FileMeta>("repo_write_file", {
     repo_id: repoId,
     path,
-    content: Array.from(content),
+    content_b64: bytesToBase64(content),
     expected_mtime: expectedMtime,
   });
 }

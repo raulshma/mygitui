@@ -99,6 +99,13 @@ async function flush(): Promise<void> {
   await Promise.resolve();
 }
 
+/** Waits out the store's output coalescing window (`OUTPUT_FLUSH_MS` flush):
+ * line events received through the event subscription apply in batches, so
+ * event-path assertions follow one flush. */
+async function outputFlush(): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, 120));
+}
+
 // ---------------------------------------------------------------------------
 // Config
 // ---------------------------------------------------------------------------
@@ -180,6 +187,7 @@ describe("ActionsStore runs", () => {
 
     expect(mockOnActionOutput).toHaveBeenCalledTimes(1);
     outputHandlers[0]!(outputEvent({ run_id: "r1", line: "hello" }));
+    await outputFlush();
 
     expect(store.runsFor("repo-1")).toHaveLength(1);
     expect(store.runs[0]).toMatchObject({ run_id: "r1", lines: ["hello"], done: false, status: "running" });
@@ -351,6 +359,7 @@ describe("ActionsStore runs", () => {
     store.startActionsEvents();
     await flush();
     outputHandlers[0]!(outputEvent({ run_id: "r3" }));
+    await outputFlush();
     expect(store.runs.map((run) => run.run_id)).toContain("r3");
     store.stop();
   });
@@ -359,6 +368,7 @@ describe("ActionsStore runs", () => {
     actionsStore.startActionsEvents();
     await flush();
     outputHandlers[0]!(outputEvent({ run_id: "s1" }));
+    await outputFlush();
     expect(actionsStore.runs.map((r) => r.run_id)).toContain("s1");
   });
 });

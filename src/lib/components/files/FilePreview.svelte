@@ -67,7 +67,7 @@
         const bytes = await readFile(repoId, path);
         if (!alive) return;
         objectUrl = URL.createObjectURL(
-          new Blob([new Uint8Array(bytes)], { type: MIME[ext] }),
+          new Blob([bytes], { type: MIME[ext] }),
         );
         url = objectUrl;
         phase = "ready";

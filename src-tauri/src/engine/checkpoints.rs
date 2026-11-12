@@ -63,42 +63,27 @@ const PREVIEW_COMMIT_CAP: usize = 100;
 
 impl Libgit2Engine {
     /// Snapshot the full workdir state under a fresh checkpoint ref.
-    ///
-    /// The snapshot tree is built on a throwaway handle: `add_all` stages
-    /// modifications + untracked files, `update_all` drops entries whose
-    /// file vanished from the workdir. `write_tree` persists tree/blob
-    /// objects only — the index (the user's staging area, on disk or cached
-    /// in the shared handle) is never mutated, so taking a checkpoint leaves
-    /// `git status` untouched.
     pub(crate) fn checkpoint_create_impl(
         &self,
         repo: &Repository,
         reason: &str,
     ) -> EngineResult<CheckpointInfo> {
-        let tree_oid = workdir_snapshot_tree(repo)?;
-        let tree = repo.find_tree(tree_oid)?;
-        let committer = committer_signature(repo)?;
-        let head = head_commit(repo)?;
+        create_snapshot(repo, reason, None)
+    }
 
-        let branch = current_branch(repo);
-        let branch_label = branch.clone().unwrap_or_else(|| "detached".to_owned());
-        let message = format!(
-            "checkpoint: {reason}\n\n{MESSAGE_MARKER}\nbranch: {branch_label}\nworktree: yes\n"
-        );
-
-        let parents: Vec<&git2::Commit<'_>> = head.iter().collect();
-        let oid = repo.commit(None, &committer, &committer, &message, &tree, &parents)?;
-
-        let ref_name = format!(
-            "{CHECKPOINT_PREFIX}{}-{}",
-            unix_millis(),
-            sanitize_reason(reason)
-        );
-        // force=true: two checkpoints with the same millisecond + reason
-        // collide on the ref name; the newer snapshot wins, which is fine.
-        repo.reference(&ref_name, oid, true, "checkpoint: create")?;
-        let commit = repo.find_commit(oid)?;
-        Ok(checkpoint_info_of(&ref_name, &commit))
+    /// Snapshot only `paths` (plus the current index) under a fresh
+    /// checkpoint ref. Used by discard/clean, whose blast radius is exactly
+    /// the validated target paths: a 50k-untracked-file repo no longer
+    /// hashes its whole workdir to undo a one-file discard. The message
+    /// records the scope (`worktree: scoped` + one `path:` line each) so
+    /// [`Self::checkpoint_restore_impl`] restores only those paths.
+    pub(crate) fn checkpoint_create_scoped_impl(
+        &self,
+        repo: &Repository,
+        reason: &str,
+        paths: &[String],
+    ) -> EngineResult<CheckpointInfo> {
+        create_snapshot(repo, reason, Some(paths))
     }
 
     /// All checkpoints, newest first (by commit time; tie: ref name desc).
@@ -124,6 +109,9 @@ impl Libgit2Engine {
 
     /// Restore the workdir + index to a checkpoint's exact snapshot (see the
     /// module docs for the full semantics). HEAD/branch refs never move.
+    /// Scoped snapshots (see [`Self::checkpoint_create_scoped_impl`]) touch
+    /// only their recorded paths — anything outside the scope, including
+    /// untracked files, is left alone.
     pub(crate) fn checkpoint_restore_impl(&self, repo: &Repository, id: &str) -> EngineResult<()> {
         let ref_name = format!("{CHECKPOINT_PREFIX}{id}");
         let reference = repo
@@ -131,34 +119,74 @@ impl Libgit2Engine {
             .map_err(|_| EngineError::Invalid(format!("checkpoint `{id}` not found")))?;
 
         // SAFETY FIRST: snapshot the about-to-be-destroyed state so a
-        // restore has its own undo button.
+        // restore has its own undo button. Always a full snapshot: a
+        // restore (scoped or not) must be undoable for everything it might
+        // touch, and the pre-restore checkpoint is created before the
+        // target's scope is even read.
         self.checkpoint_create_impl(repo, "pre-restore")?;
 
         let snapshot = reference.peel_to_commit()?;
         let snapshot_tree = snapshot.tree()?;
+        let scope = snapshot_scope(snapshot.message().unwrap_or_default());
 
-        // Index := HEAD-at-snapshot tree (mixed reset); a root snapshot has
-        // no parent, so the index is emptied instead (unborn-style).
-        match snapshot.parent(0) {
-            Ok(parent1) => repo.reset_default(Some(parent1.as_object()), ["*"])?,
-            Err(_) => {
-                let mut index = repo.index()?;
-                index.clear()?;
-                index.write()?;
+        match &scope {
+            Some(paths) => {
+                // Index := parent tree for the scoped paths only (mixed
+                // reset); a root snapshot has no parent, so the scoped
+                // entries are dropped from the index instead (unborn-style).
+                match snapshot.parent(0) {
+                    Ok(parent1) => repo.reset_default(
+                        Some(parent1.as_object()),
+                        paths.iter().map(|p| p.as_str()),
+                    )?,
+                    Err(_) => {
+                        let mut index = repo.index()?;
+                        index.remove_all(paths.iter(), None)?;
+                        index.write()?;
+                    }
+                }
+
+                // Workdir := snapshot, exactly, within the scope.
+                // remove_untracked stays on: a file the discard brought back
+                // (discarded deletion) is "untracked" relative to the
+                // snapshot and must disappear again — pathspec-limited by
+                // libgit2, so out-of-scope untracked files survive (tested).
+                let mut checkout = CheckoutBuilder::new();
+                checkout
+                    .force()
+                    .recreate_missing(true)
+                    .remove_untracked(true);
+                for path in paths {
+                    checkout.path(path);
+                }
+                repo.checkout_tree(snapshot_tree.as_object(), Some(&mut checkout))?;
+            }
+            None => {
+                // Index := HEAD-at-snapshot tree (mixed reset); a root
+                // snapshot has no parent, so the index is emptied instead
+                // (unborn-style).
+                match snapshot.parent(0) {
+                    Ok(parent1) => repo.reset_default(Some(parent1.as_object()), ["*"])?,
+                    Err(_) => {
+                        let mut index = repo.index()?;
+                        index.clear()?;
+                        index.write()?;
+                    }
+                }
+
+                // Workdir := snapshot, exactly. Force overwrites local
+                // modifications; remove_untracked deletes files created
+                // after the checkpoint (documented: restore is an
+                // exact-snapshot restore). checkout_tree updates the index
+                // too (libgit2 default), landing it on the snapshot tree.
+                let mut checkout = CheckoutBuilder::new();
+                checkout
+                    .force()
+                    .recreate_missing(true)
+                    .remove_untracked(true);
+                repo.checkout_tree(snapshot_tree.as_object(), Some(&mut checkout))?;
             }
         }
-
-        // Workdir := snapshot, exactly. Force overwrites local
-        // modifications; remove_untracked deletes files created after the
-        // checkpoint (documented: restore is an exact-snapshot restore).
-        // checkout_tree updates the index too (libgit2 default), landing it
-        // on the snapshot tree.
-        let mut checkout = CheckoutBuilder::new();
-        checkout
-            .force()
-            .recreate_missing(true)
-            .remove_untracked(true);
-        repo.checkout_tree(snapshot_tree.as_object(), Some(&mut checkout))?;
         Ok(())
     }
 
@@ -272,8 +300,75 @@ fn marker_is_fresh(marker: &std::path::Path) -> bool {
     now - last < i64::from(AUTO_GC_DAYS) * 86_400_000
 }
 
-/// Tree of the full workdir state: HEAD tree overlaid with all workdir
-/// modifications + untracked files (`git add -A` semantics).
+/// Create a snapshot commit under a fresh checkpoint ref. `paths = None`
+/// snapshots the full worktree; `Some(paths)` snapshots only those paths
+/// overlaid on the current index (the message records the scope for
+/// [`Libgit2Engine::checkpoint_restore_impl`]).
+///
+/// The snapshot tree is built on a throwaway handle: `add_all` stages
+/// modifications + untracked files, `update_all` drops entries whose
+/// file vanished from the workdir. `write_tree` persists tree/blob
+/// objects only — the index (the user's staging area, on disk or cached
+/// in the shared handle) is never mutated, so taking a checkpoint leaves
+/// `git status` untouched.
+fn create_snapshot(
+    repo: &Repository,
+    reason: &str,
+    paths: Option<&[String]>,
+) -> EngineResult<CheckpointInfo> {
+    let tree_oid = workdir_snapshot_tree(repo, paths)?;
+    let tree = repo.find_tree(tree_oid)?;
+    let committer = committer_signature(repo)?;
+    let head = head_commit(repo)?;
+
+    let branch = current_branch(repo);
+    let branch_label = branch.clone().unwrap_or_else(|| "detached".to_owned());
+    let mut message = format!(
+        "checkpoint: {reason}\n\n{MESSAGE_MARKER}\nbranch: {branch_label}\nworktree: {}\n",
+        if paths.is_some() { "scoped" } else { "yes" }
+    );
+    if let Some(paths) = paths {
+        for path in paths {
+            message.push_str("path: ");
+            message.push_str(path);
+            message.push('\n');
+        }
+    }
+
+    let parents: Vec<&git2::Commit<'_>> = head.iter().collect();
+    let oid = repo.commit(None, &committer, &committer, &message, &tree, &parents)?;
+
+    let ref_name = format!(
+        "{CHECKPOINT_PREFIX}{}-{}",
+        unix_millis(),
+        sanitize_reason(reason)
+    );
+    // force=true: two checkpoints with the same millisecond + reason
+    // collide on the ref name; the newer snapshot wins, which is fine.
+    repo.reference(&ref_name, oid, true, "checkpoint: create")?;
+    let commit = repo.find_commit(oid)?;
+    Ok(checkpoint_info_of(&ref_name, &commit))
+}
+
+/// The path scope recorded in a scoped snapshot's message (`worktree:
+/// scoped` plus one `path:` line per scoped path). `None` = full-worktree
+/// snapshot.
+fn snapshot_scope(message: &str) -> Option<Vec<String>> {
+    if message_trailer(message, "worktree: ") != Some("scoped") {
+        return None;
+    }
+    Some(
+        message
+            .lines()
+            .filter_map(|line| line.strip_prefix("path: "))
+            .map(str::to_owned)
+            .collect(),
+    )
+}
+
+/// Tree of the (possibly scoped) workdir state: HEAD/index state overlaid
+/// with the workdir modifications + untracked files under `paths`
+/// (`git add -A` semantics; `None` = every path).
 ///
 /// The index surgery runs on a FRESH repository handle: `add_all` /
 /// `update_all` mutate the handle's cached in-memory index (they never touch
@@ -281,13 +376,17 @@ fn marker_is_fresh(marker: &std::path::Path) -> bool {
 /// report everything staged until reopened). The outer handle's index cache
 /// revalidates from disk, which stays untouched (same pattern as the
 /// `&mut Repository` dance in stash.rs).
-fn workdir_snapshot_tree(repo: &Repository) -> EngineResult<git2::Oid> {
+fn workdir_snapshot_tree(repo: &Repository, paths: Option<&[String]>) -> EngineResult<git2::Oid> {
     let fresh = Repository::open(repo.path())?;
     let mut index = fresh.index()?;
+    let specs: Vec<&str> = match paths {
+        None => vec!["*"],
+        Some(list) => list.iter().map(|p| p.as_str()).collect(),
+    };
     // add_all stages new + modified files (untracked included, ignored not).
-    index.add_all(["*"].iter(), IndexAddOption::DEFAULT, None)?;
+    index.add_all(specs.iter(), IndexAddOption::DEFAULT, None)?;
     // update_all sweeps tracked entries whose file left the workdir.
-    index.update_all(["*"].iter(), None)?;
+    index.update_all(specs.iter(), None)?;
     // Persists tree/blob objects to the odb; the index file stays as-is.
     Ok(index.write_tree()?)
 }

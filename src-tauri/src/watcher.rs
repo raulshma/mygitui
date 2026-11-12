@@ -25,7 +25,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 
 use ignore::gitignore::{Gitignore, GitignoreBuilder};
 use notify::{Event, RecommendedWatcher, RecursiveMode, Watcher as _};
@@ -36,6 +36,15 @@ use crate::engine::types::RepoId;
 
 /// Debounce window: a batch is emitted after this much FS quiet time.
 pub const DEBOUNCE: Duration = Duration::from_millis(200);
+
+/// Force-flush bound: a burst that never stays quiet for [`DEBOUNCE`] (a
+/// build writing continuously) ships its batch after at most this long
+/// instead of deferring forever.
+const MAX_WINDOW: Duration = Duration::from_secs(2);
+
+/// Path cap per batch: beyond this the batch ships early. Clients react to
+/// any batch with a resync, so a truncated path list stays correct.
+const MAX_PENDING_PATHS: usize = 2000;
 
 /// Tauri event name for emitted batches (registry: docs/contracts.md).
 pub const REPO_CHANGED_EVENT: &str = "repo-changed";
@@ -497,9 +506,15 @@ fn run(
         let mut pending: Vec<String> = Vec::new();
         let mut head_moved = false;
         let mut errored = false;
+        // Force-flush bounds: the quiet-window debounce alone lets a burst
+        // that never stays quiet (a build writing every <DEBOUNCE) defer
+        // its batch forever while `pending` grows. Ship the batch after
+        // MAX_WINDOW regardless, or earlier when the path list is full.
+        let window_deadline = Instant::now() + MAX_WINDOW;
 
         // Collect one debounce window: the first feed blocks, then we keep
-        // folding events until DEBOUNCE passes with no traffic.
+        // folding events until DEBOUNCE passes with no traffic (or a
+        // force-flush bound hits).
         loop {
             let feed = if pending.is_empty() && !errored {
                 match rx.recv() {
@@ -545,6 +560,9 @@ fn run(
                             head_moved = true;
                         }
                         pending.push(rel);
+                    }
+                    if pending.len() >= MAX_PENDING_PATHS || Instant::now() >= window_deadline {
+                        break;
                     }
                 }
             }

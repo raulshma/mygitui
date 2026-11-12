@@ -733,17 +733,17 @@ pub async fn repo_list_dir(
 ) -> Result<DirListing, String> {
     let handle = get_handle(&state, &repo_id)?;
     if let Some(remote) = handle.remote() {
-        // Remote read: same silent queue slot; the submodule marking comes
-        // from the device's index inside `list_dir` itself.
+        // Remote read: same silent read-lane slot; the submodule marking
+        // comes from the device's index inside `list_dir` itself.
         let ws = remote.workspace();
         let (_op_id, rx) = handle
             .ops()
-            .enqueue_silent("list_dir", move |_ctx| ws.list_dir(&path, include_ignored));
+            .enqueue_read_lane("list_dir", move |_ctx| ws.list_dir(&path, include_ignored));
         return finish(rx).await;
     }
     let root = handle.root.clone();
     let repo = handle.repo()?;
-    let (_op_id, rx) = handle.ops().enqueue_silent("list_dir", move |_ctx| {
+    let (_op_id, rx) = handle.ops().enqueue_read_lane("list_dir", move |_ctx| {
         let submodules = {
             let guard = repo.lock();
             collect_gitlinks(&guard)
@@ -769,7 +769,7 @@ pub async fn repo_stat_file(
         let ws = remote.workspace();
         let (_op_id, rx) = handle
             .ops()
-            .enqueue_silent("stat_file", move |_ctx| ws.stat_file(&path));
+            .enqueue_read_lane("stat_file", move |_ctx| ws.stat_file(&path));
         return finish(rx).await;
     }
     let root = handle.root.clone();
@@ -782,14 +782,23 @@ pub async fn repo_stat_file(
 /// mutation: serialized with every other op, generation-bumped so the
 /// watcher refreshes status/diffs. Remote repos run the same mtime-guarded
 /// write on the device over SFTP, queued as a mutation identically.
+///
+/// `content_b64` is base64 (STANDARD, with padding): the FE encodes the
+/// bytes once and the bridge carries a compact string instead of a JSON
+/// number array (~7-8 bytes per byte of file).
 #[tauri::command(rename_all = "snake_case")]
 pub async fn repo_write_file(
     repo_id: RepoId,
     path: String,
-    content: Vec<u8>,
+    content_b64: String,
     expected_mtime: Option<u128>,
     state: State<'_, RepoManager>,
 ) -> Result<FileMeta, String> {
+    let content = base64::Engine::decode(
+        &base64::engine::general_purpose::STANDARD,
+        content_b64.as_bytes(),
+    )
+    .map_err(|e| format!("invalid file content encoding: {e}"))?;
     let handle = get_handle(&state, &repo_id)?;
     if let Some(remote) = handle.remote() {
         let remote = Arc::clone(remote);
@@ -907,7 +916,7 @@ pub async fn repo_file_index(
         let ws = remote.workspace();
         let (_op_id, rx) = handle
             .ops()
-            .enqueue_silent("file_index", move |_ctx| ws.file_index());
+            .enqueue_read_lane("file_index", move |_ctx| ws.file_index());
         return finish(rx).await;
     }
     let root = handle.root.clone();

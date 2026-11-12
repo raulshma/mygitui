@@ -506,6 +506,37 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
     }
   }
 
+  /**
+   * Coalescing for watcher-driven per-submodule status loads: at most one
+   * in-flight fetch per sub path with a trailing re-run when events land
+   * mid-flight (the tabStore `refreshStatus` pattern). A burst of watcher
+   * events touching a submodule would otherwise queue one full working-copy
+   * scan per event — the heaviest command, multiplied.
+   */
+  const subLoadState = new Map<string, { inFlight: boolean; pending: boolean }>();
+
+  function requestSubmoduleStatus(subPath: string): void {
+    const state = subLoadState.get(subPath);
+    if (!state) {
+      subLoadState.set(subPath, { inFlight: true, pending: false });
+      void loadSubmoduleStatus(subPath).finally(() => {
+        const s = subLoadState.get(subPath);
+        if (!s) return;
+        if (s.pending) {
+          s.pending = false;
+          s.inFlight = true;
+          void loadSubmoduleStatus(subPath).finally(() => {
+            subLoadState.delete(subPath);
+          });
+        } else {
+          subLoadState.delete(subPath);
+        }
+      });
+      return;
+    }
+    state.pending = true;
+  }
+
   function cleanupOpenedRepos(): void {
     for (const id of openedRepoIds) {
       if (!tabStore.tabs.some((t) => t.id === id)) {
@@ -578,6 +609,10 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
   });
 
   $effect(() => {
+    // Parent-repo reloads coalesce like FilesPanel's tree refresh: a burst
+    // of watcher events (or one touching several submodules) reloads the
+    // module list + every submodule status once, not once per event.
+    let moduleReloadTimer: ReturnType<typeof setTimeout> | null = null;
     return onRepoChange({
       handle: (change) => {
         if (change.repo_id === repoId) {
@@ -587,13 +622,17 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
               (p) => p === ".gitmodules" || moduleByPath.has(p),
             )
           ) {
-            void reloadModules();
+            if (moduleReloadTimer) clearTimeout(moduleReloadTimer);
+            moduleReloadTimer = setTimeout(() => {
+              moduleReloadTimer = null;
+              void reloadModules();
+            }, 400);
           }
           return;
         }
         for (const [subPath, entry] of Object.entries(submodulesMap)) {
           if (entry.repoId && change.repo_id === entry.repoId) {
-            void loadSubmoduleStatus(subPath);
+            requestSubmoduleStatus(subPath);
           }
         }
       },
