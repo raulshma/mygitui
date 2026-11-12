@@ -3200,7 +3200,7 @@ dependencies = [
 
 [[package]]
 name = "mygitui"
-version = "0.1.23"
+version = "0.1.24"
 dependencies = [
  "base64 0.22.1",
  "criterion",
