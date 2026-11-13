@@ -33,6 +33,10 @@
     type OpencodeServeState,
   } from "$lib/ipc/client";
   import { toast } from "$lib/toast";
+  import Icon from "$lib/components/icons/Icon.svelte";
+  import { appIcon } from "$lib/components/icons/library.svelte";
+
+  const iconClose = $derived(appIcon("close")!);
   import * as Dialog from "$lib/components/ui/dialog/index.js";
   import { Button } from "$lib/components/ui/button/index.js";
   import { Input } from "$lib/components/ui/input/index.js";
@@ -327,8 +331,8 @@
           <Dialog.Title id="ai-settings-title" class="title m-0 font-semibold text-foreground">AI settings</Dialog.Title>
           <p id="ai-settings-description" class="subtitle mb-0 mt-1 text-ui-base text-muted-foreground">Choose a provider and check its connection.</p>
         </div>
-        <Button variant="ghost" size="icon" class="icon-button flex-none rounded-full text-lg leading-none text-muted-foreground" type="button" aria-label="Close AI settings" onclick={close}>
-          ×
+        <Button variant="ghost" size="icon" class="icon-button flex-none rounded-full text-muted-foreground [&_svg:not([class*='size-'])]:size-4" type="button" aria-label="Close AI settings" onclick={close}>
+          <Icon icon={iconClose} size={16} />
         </Button>
       </header>
 
@@ -371,7 +375,7 @@
             <Button
               variant="link"
               size="sm"
-              class="link h-auto p-0 text-ui-meta underline"
+              class="link relative h-auto p-0 text-ui-meta underline after:absolute after:-inset-1 after:content-['']"
               type="button"
               disabled={checkingInstall}
               onclick={() => void refreshInstall()}
@@ -487,7 +491,7 @@
               />
             </label>
             <div class="row flex flex-wrap items-center gap-3">
-              <Button variant="link" size="sm" class="link h-auto p-0 text-ui-meta underline" type="button" onclick={() => void clearOpencodePassword()}>
+              <Button variant="link" size="sm" class="link relative h-auto p-0 text-ui-meta underline after:absolute after:-inset-1 after:content-['']" type="button" onclick={() => void clearOpencodePassword()}>
                 Remove stored password
               </Button>
             </div>
@@ -507,7 +511,7 @@
             />
           </label>
           <div class="row flex flex-wrap items-center gap-3">
-            <Button variant="link" size="sm" class="link h-auto p-0 text-ui-meta underline" type="button" onclick={() => void clearOpenrouterKey()}>
+            <Button variant="link" size="sm" class="link relative h-auto p-0 text-ui-meta underline after:absolute after:-inset-1 after:content-['']" type="button" onclick={() => void clearOpenrouterKey()}>
               Remove stored API key
             </Button>
           </div>

@@ -15,6 +15,10 @@
   import { Badge } from "$lib/components/ui/badge/index.js";
   import { Toggle } from "$lib/components/ui/toggle/index.js";
   import { Hint } from "$lib/components/ui/tooltip/index.js";
+  import Icon from "$lib/components/icons/Icon.svelte";
+  import { appIcon } from "$lib/components/icons/library.svelte";
+
+  const iconClose = $derived(appIcon("close")!);
   import {
     actionsStore,
     startActionsEvents,
@@ -156,13 +160,13 @@
             <Button
               variant="outline"
               size="xs"
-              class="tb close flex-none rounded-full px-2 text-[0.9rem] leading-none text-muted-foreground"
+              class="tb close flex-none rounded-full px-1.5 text-muted-foreground [&_svg:not([class*='size-'])]:size-3"
               {...props}
               type="button"
               aria-label="Close run log"
               onclick={onClose}
             >
-              ×
+              <Icon icon={iconClose} size={12} />
             </Button>
           {/snippet}
         </Hint>

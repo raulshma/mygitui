@@ -16,6 +16,10 @@
   import AiSettings from "./AiSettings.svelte";
   import { Button } from "$lib/components/ui/button/index.js";
   import { Spinner } from "$lib/components/ui/spinner/index.js";
+  import Icon from "$lib/components/icons/Icon.svelte";
+  import { appIcon } from "$lib/components/icons/library.svelte";
+
+  const iconClose = $derived(appIcon("close")!);
   import { Hint } from "$lib/components/ui/tooltip/index.js";
   import { toast } from "$lib/toast";
   import { describeError } from "$lib/errors";
@@ -93,8 +97,8 @@
       <Button variant="outline" size="xs" class="mini whitespace-nowrap rounded-full text-ui-meta" type="button" onclick={() => void copy()}>Copy</Button>
       <Button variant="outline" size="xs" class="mini whitespace-nowrap rounded-full text-ui-meta" type="button" onclick={retry}>Re-run</Button>
     {/if}
-    <Button variant="outline" size="xs" class="mini whitespace-nowrap rounded-full text-ui-meta" type="button" aria-label="Close explanation" onclick={onClose}>
-      ×
+    <Button variant="outline" size="xs" class="mini inline-flex whitespace-nowrap rounded-full text-ui-meta [&_svg:not([class*='size-'])]:size-3" type="button" aria-label="Close explanation" onclick={onClose}>
+      <Icon icon={iconClose} size={12} />
     </Button>
   </header>
 

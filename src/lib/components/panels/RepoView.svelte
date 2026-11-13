@@ -74,6 +74,7 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
     StatusEntry,
   } from "$lib/ipc/types";
   import {
+    diffScopeForEntry,
     diffScopeSides,
     type DiffScope,
   } from "$lib/components/panels/statusModel";
@@ -304,7 +305,7 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
       toast(`No working-copy changes for ${path}`);
       return;
     }
-    void openDiff(entry);
+    void openDiff(entry, undefined, undefined, undefined, diffScopeForEntry(entry));
   }
 
   // --- Layout ---------------------------------------------------------------
@@ -1113,7 +1114,7 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
     // `filesMode` — an open file workspace got yanked to a diff. The
     // union makes "empty" exactly what it says.
     if (first && center.kind === "empty") {
-      void openDiff(first);
+      void openDiff(first, undefined, undefined, undefined, diffScopeForEntry(first));
     }
   });
 
@@ -1139,13 +1140,15 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
     if (!diffEntry || diffRepoId !== repoId || list.length < 2) return;
     const at = list.findIndex((e) => e.path === diffEntry?.path);
     const next = list[(Math.max(at, 0) + delta + list.length) % list.length]!;
-    void openDiff(next);
+    void openDiff(next, undefined, undefined, undefined, diffScopeForEntry(next));
   }
 
   /** Welcome pane: open the first changed file. */
   function openFirstChange(): void {
     const first = changeEntries[0];
-    if (first) void openDiff(first);
+    if (first) {
+      void openDiff(first, undefined, undefined, undefined, diffScopeForEntry(first));
+    }
   }
 
   /** Header Stage/Unstage for the open file. */
@@ -1475,6 +1478,16 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
     onMutated={onEditorMutated}
     onPrevFile={() => openAdjacentChange(-1)}
     onNextFile={() => openAdjacentChange(1)}
+    onScopeChange={diffEntry
+      ? (scope) =>
+          void openDiff(
+            diffEntry,
+            diffRepoId ?? undefined,
+            diffRoot ?? undefined,
+            diffRepoName ?? undefined,
+            scope,
+          )
+      : undefined}
     onStageEntry={diffRepoId === repoId
       ? (unstage) => void stageOpenEntry(unstage)
       : undefined}

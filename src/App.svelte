@@ -36,12 +36,13 @@
   import { toast } from "$lib/toast";
   import Toaster from "$lib/components/Toaster.svelte";
   import TabStrip from "$lib/components/TabStrip.svelte";
+  import StatusBar from "$lib/components/layout/StatusBar.svelte";
   import ThemeToggle from "$lib/components/ThemeToggle.svelte";
   import Icon from "$lib/components/icons/Icon.svelte";
   import EmptyState from "$lib/components/layout/EmptyState.svelte";
   import { Input } from "$lib/components/ui/input/index.js";
   import { Button } from "$lib/components/ui/button/index.js";
-  import { Kbd } from "$lib/components/ui/kbd/index.js";
+  import { Kbd, KbdGroup } from "$lib/components/ui/kbd/index.js";
   import { Hint } from "$lib/components/ui/tooltip/index.js";
   import { formatRelativeTime } from "$lib/git/format";
   import iconBrand from "@ktibow/iconset-material-symbols/account-tree";
@@ -732,6 +733,10 @@
           {/if}
         </main>
       {/if}
+      <!-- VS Code-style bottom chrome: a fixed-height strip whose indicators
+           appear/disappear inside it, so the workspace above never shifts
+           (the old in-flow op strip twitched on every auto-fetch tick). -->
+      <StatusBar />
     {:else}
       <main
         class="home flex min-h-0 flex-1 flex-col overflow-hidden bg-[radial-gradient(circle_at_50%_-12%,color-mix(in_srgb,var(--primary)_8%,transparent),transparent_46%)] bg-background"
@@ -1216,11 +1221,13 @@
         class="home-foot flex flex-none items-center gap-5 border-t border-border bg-muted/80 px-5 py-[0.65rem] text-ui-micro text-muted-foreground"
       >
         <span class="hint inline-flex items-center gap-1.5">
-          <Kbd>{primaryModifierLabel()}</Kbd><Kbd>K</Kbd>
+          <!-- KbdGroup keeps chord keys tighter (gap-1) than the chord→label
+               gap, so each chord reads as one key unit. -->
+          <KbdGroup><Kbd>{primaryModifierLabel()}</Kbd><Kbd>K</Kbd></KbdGroup>
           <span class="ml-0.5">quick switcher</span>
         </span>
         <span class="hint inline-flex items-center gap-1.5">
-          <Kbd>{primaryModifierLabel()}</Kbd><Kbd>Shift</Kbd><Kbd>P</Kbd>
+          <KbdGroup><Kbd>{primaryModifierLabel()}</Kbd><Kbd>Shift</Kbd><Kbd>P</Kbd></KbdGroup>
           <span class="ml-0.5">command palette</span>
         </span>
         <span class="foot-note ml-auto opacity-85 max-[720px]:hidden"

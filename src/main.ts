@@ -93,20 +93,28 @@ function showErrorFallback(message: string): void {
 }
 
 /**
- * Post-boot runtime errors: a fixed-position dismissible banner — message,
- * a "Copy details" button and a close button — appended to <body> as plain
- * DOM (it must not depend on the app being alive, same contract as
- * {@link showErrorFallback}), never replacing the mounted app. A later
- * error updates the message and the copy payload; dismissing the bar lets
- * a future error show a fresh one.
+ * Post-boot runtime errors: a fixed-position dismissible banner — headline,
+ * collapsible detail (the rest of a multi-line message, e.g. Svelte's
+ * component stack), a "Copy details" button and a close button — appended
+ * to <body> as plain DOM (it must not depend on the app being alive, same
+ * contract as {@link showErrorFallback}), never replacing the mounted app.
+ * A later error updates the message and the copy payload; dismissing the
+ * bar lets a future error show a fresh one.
+ *
+ * Styled from the theme tokens like the app's other destructive surfaces
+ * (a neutral card with a destructive *accent*), not a destructive fill:
+ * this scheme's dark `--destructive` is a light salmon meant for accents,
+ * so white-on-destructive text is unreadable there.
  */
 
 /** Details (message + stack) the banner's Copy button hands to the clipboard. */
 let bannerDetails = "";
 
+/** Warn-triangle glyph for the banner's accent chip (24×24 currentColor). */
+const ALERT_SVG =
+  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>';
+
 function showErrorBanner(message: string, details: string): void {
-  const background = themeVar("--destructive", "#dc2626");
-  const foreground = themeVar("--destructive-foreground", "#ffffff");
   bannerDetails = details;
 
   let bar = document.getElementById("runtime-error-banner");
@@ -123,35 +131,66 @@ function showErrorBanner(message: string, details: string): void {
       "bottom: 12px",
       "z-index: 2147483647",
       "display: flex",
-      "align-items: center",
-      "gap: 10px",
-      "padding: 10px 14px",
-      "border-radius: 8px",
-      `background: ${background}`,
-      `color: ${foreground}`,
+      "flex-direction: column",
+      "gap: 8px",
+      "padding: 10px 12px",
+      "border: 1px solid color-mix(in srgb, var(--destructive, #dc2626) 35%, transparent)",
+      "border-radius: var(--radius, 8px)",
+      "background: var(--popover, var(--card, #fff))",
+      "color: var(--foreground, #0a0a0a)",
       "font: 13px/1.45 Inter, system-ui, sans-serif",
-      "box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35)",
+      "box-shadow: var(--shadow-overlay, 0 8px 24px rgba(0, 0, 0, 0.35))",
     ].join(";");
+
+    // Header row: accent icon chip, headline, then the actions.
+    const head = document.createElement("div");
+    head.style.cssText =
+      "display: flex; align-items: center; gap: 10px; min-width: 0";
+
+    const chip = document.createElement("span");
+    chip.style.cssText = [
+      "flex: 0 0 auto",
+      "display: grid",
+      "place-items: center",
+      "width: 26px",
+      "height: 26px",
+      "border-radius: 999px",
+      "background: color-mix(in srgb, var(--destructive, #dc2626) 15%, transparent)",
+      "color: var(--destructive, #dc2626)",
+    ].join(";");
+    chip.setAttribute("aria-hidden", "true");
+    chip.innerHTML = ALERT_SVG;
+    const glyph = chip.firstElementChild as SVGSVGElement | null;
+    if (glyph) {
+      glyph.style.width = "14px";
+      glyph.style.height = "14px";
+    }
 
     const text = document.createElement("span");
     text.className = "runtime-error-message";
     text.style.cssText =
-      "min-width: 0; flex: 1 1 auto; overflow-wrap: anywhere; white-space: pre-wrap";
-    bar.append(text);
+      "min-width: 0; flex: 1 1 auto; font-weight: 500; overflow-wrap: anywhere";
+    head.append(chip, text);
 
     const copy = document.createElement("button");
     copy.type = "button";
     copy.textContent = "Copy details";
+    copy.className = "runtime-error-copy";
     copy.style.cssText = [
       "flex: 0 0 auto",
       "padding: 4px 10px",
-      "border: 0",
+      "border: 1px solid var(--border, #e4e4e7)",
       "border-radius: 999px",
       "background: transparent",
       "color: inherit",
       "cursor: pointer",
       "font: inherit",
+      "white-space: nowrap",
     ].join(";");
+    copy.onmouseenter = () =>
+      (copy.style.background =
+        "color-mix(in srgb, var(--foreground, #0a0a0a) 6%, transparent)");
+    copy.onmouseleave = () => (copy.style.background = "transparent");
     copy.onclick = () => {
       navigator.clipboard
         .writeText(bannerDetails)
@@ -165,24 +204,64 @@ function showErrorBanner(message: string, details: string): void {
     dismiss.setAttribute("aria-label", "Dismiss error");
     dismiss.style.cssText = [
       "flex: 0 0 auto",
-      "width: 22px",
-      "height: 22px",
+      "display: grid",
+      "place-items: center",
+      "width: 24px",
+      "height: 24px",
       "border: 0",
       "border-radius: 999px",
       "background: transparent",
       "color: inherit",
       "cursor: pointer",
       "font: inherit",
+      "font-size: 15px",
       "line-height: 1",
     ].join(";");
+    dismiss.onmouseenter = () =>
+      (dismiss.style.background =
+        "color-mix(in srgb, var(--foreground, #0a0a0a) 6%, transparent)");
+    dismiss.onmouseleave = () => (dismiss.style.background = "transparent");
     dismiss.onclick = () => bar!.remove();
 
-    bar.append(copy, dismiss);
+    head.append(copy, dismiss);
+
+    // Optional detail block: everything past the first line (component
+    // stack, cause chains) — monospace, capped, scrollable, selectable.
+    const detail = document.createElement("pre");
+    detail.className = "runtime-error-detail";
+    detail.style.cssText = [
+      "display: none",
+      "margin: 0",
+      "max-height: 6.5rem",
+      "overflow: auto",
+      "padding: 6px 8px",
+      "border-radius: calc(var(--radius, 8px) - 2px)",
+      "background: color-mix(in srgb, var(--foreground, #0a0a0a) 4%, transparent)",
+      "color: var(--muted-foreground, #737373)",
+      "font: 12px/1.5 var(--app-font-mono, ui-monospace, monospace)",
+      "white-space: pre-wrap",
+      "overflow-wrap: anywhere",
+      "user-select: text",
+    ].join(";");
+
+    bar.append(head, detail);
   }
 
-  // The latest error wins in the (possibly reused) bar.
+  // The latest error wins in the (possibly reused) bar: first line is the
+  // headline, the rest (when present) lands in the detail block.
+  const newlineAt = message.indexOf("\n");
+  const headText =
+    newlineAt === -1 ? message : message.slice(0, newlineAt);
+  const rest = newlineAt === -1 ? "" : message.slice(newlineAt + 1).trim();
+
   const text = bar.querySelector<HTMLElement>(".runtime-error-message");
-  if (text) text.textContent = message;
+  if (text) text.textContent = headText;
+
+  const detail = bar.querySelector<HTMLElement>(".runtime-error-detail");
+  if (detail) {
+    detail.textContent = rest;
+    detail.style.display = rest === "" ? "none" : "block";
+  }
 
   if (fresh) document.body.append(bar);
 }

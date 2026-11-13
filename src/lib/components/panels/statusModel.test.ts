@@ -10,6 +10,7 @@ import {
   buildStatusIndex,
   classifyEntry,
   diffHunkActions,
+  diffScopeForEntry,
   diffScopeForSection,
   diffScopeSides,
   filterSections,
@@ -480,6 +481,22 @@ describe("diffScopeForSection", () => {
 
   it("maps the changes section (and anything else) to the unstaged scope", () => {
     expect(diffScopeForSection("changes")).toBe("unstaged");
+  });
+});
+
+describe("diffScopeForEntry", () => {
+  it("opens staged-only changes at the staged scope (the unstaged side is empty)", () => {
+    expect(diffScopeForEntry(entry("a.ts", "modified", UNMODIFIED))).toBe("staged");
+    expect(diffScopeForEntry(entry("b.ts", "added", UNMODIFIED))).toBe("staged");
+  });
+
+  it("opens worktree changes at the unstaged scope", () => {
+    expect(diffScopeForEntry(entry("a.ts", UNMODIFIED, "modified"))).toBe("unstaged");
+    expect(diffScopeForEntry(entry("b.ts", UNMODIFIED, "untracked"))).toBe("unstaged");
+  });
+
+  it("opens both-side changes at the unstaged scope (its diff is non-empty)", () => {
+    expect(diffScopeForEntry(entry("a.ts", "modified", "modified"))).toBe("unstaged");
   });
 });
 

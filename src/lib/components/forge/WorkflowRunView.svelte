@@ -19,6 +19,10 @@
   import { toast } from "$lib/toast";
   import WorkflowLogViewer from "./WorkflowLogViewer.svelte";
   import { Button } from "$lib/components/ui/button/index.js";
+  import Icon from "$lib/components/icons/Icon.svelte";
+  import { appIcon } from "$lib/components/icons/library.svelte";
+
+  const iconClose = $derived(appIcon("close")!);
   import { Toggle } from "$lib/components/ui/toggle/index.js";
   import { Hint } from "$lib/components/ui/tooltip/index.js";
   import {
@@ -395,14 +399,14 @@
         <Hint label="Close run details">
           {#snippet child({ props })}
             <Button
-              class="close {tb} px-2 py-px text-[0.9rem] leading-none"
+              class="close {tb} px-1.5 py-px [&_svg:not([class*='size-'])]:size-3"
               variant="outline"
               {...props}
               type="button"
               aria-label="Close run details"
               onclick={onClose}
             >
-              ×
+              <Icon icon={iconClose} size={12} />
             </Button>
           {/snippet}
         </Hint>

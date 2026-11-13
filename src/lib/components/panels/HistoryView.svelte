@@ -80,6 +80,7 @@
   import type { HistoryCommitActions } from "$lib/components/panels/historySidebar";
   import {
     classifyRef,
+    formatDateTime,
     formatRelativeTime,
     shortRefName,
   } from "$lib/git/format";
@@ -98,6 +99,7 @@
   const iconFilters = $derived(appIcon("filter-list")!);
   const iconClearFilters = $derived(appIcon("filter-list-off")!);
   const iconCompare = $derived(appIcon("compare-arrows")!);
+  const iconClose = $derived(appIcon("close")!);
   const iconRetry = $derived(appIcon("restart-alt")!);
 
   let {
@@ -1059,7 +1061,13 @@
     role="search"
     aria-label="Filter commits"
   >
-    <span class="relative inline-flex items-center text-muted-foreground {sidebar ? 'w-auto min-w-0 flex-1 basis-28' : 'w-36'}">
+    <!-- Popout: flexible with a placeholder-fitting floor — a fixed w-36 can
+         be flex-crushed below the "Search commits" placeholder width and
+         truncate it (inputs are w-full min-w-0, so the wrapper's min-content
+         is 0 and the row squeezes it first). -->
+    <span class="relative inline-flex items-center text-muted-foreground {sidebar
+      ? 'w-auto min-w-0 flex-1 basis-28'
+      : 'w-auto min-w-40 flex-1 basis-40'}">
       <span class="absolute left-[0.45rem] inline-flex pointer-events-none opacity-75">
         <Icon icon={iconSearch} size={12} />
       </span>
@@ -1124,14 +1132,14 @@
         {/snippet}
       </Hint>
       <Input
-        class="f h-auto w-36 rounded-sm bg-card dark:bg-card px-2 py-0.5 text-xs md:text-xs placeholder:text-muted-foreground/80"
+        class="f h-auto w-36 flex-none rounded-sm bg-card dark:bg-card px-2 py-0.5 text-xs md:text-xs placeholder:text-muted-foreground/80"
         placeholder="Author"
         aria-label="Filter by author"
         value={store.filter.author}
         oninput={(e) => store.setFilter({ author: e.currentTarget.value })}
       />
       <Input
-        class="f h-auto w-48 rounded-sm bg-card dark:bg-card px-2 py-0.5 text-xs md:text-xs placeholder:text-muted-foreground/80"
+        class="f h-auto w-48 flex-none rounded-sm bg-card dark:bg-card px-2 py-0.5 text-xs md:text-xs placeholder:text-muted-foreground/80"
         placeholder="Path"
         aria-label="Filter by path"
         value={store.filter.path}
@@ -1175,7 +1183,7 @@
       </Hint>
       <!-- M10: pickaxe -S — commits whose patch adds/removes the string. -->
       <Input
-        class="f h-auto w-36 rounded-sm bg-card dark:bg-card px-2 py-0.5 text-xs md:text-xs placeholder:text-muted-foreground/80"
+        class="f h-auto w-36 flex-none rounded-sm bg-card dark:bg-card px-2 py-0.5 text-xs md:text-xs placeholder:text-muted-foreground/80"
         placeholder="Changes containing… (-S)"
         aria-label="Pickaxe: patches adding or removing this string"
         value={store.filter.pickaxe}
@@ -1186,7 +1194,7 @@
            verbatim and the backend intersects them (simplest contract — no
            cross-clearing UI to get out of sync). -->
       <Input
-        class="f h-auto w-36 rounded-sm bg-card dark:bg-card px-2 py-0.5 text-xs md:text-xs placeholder:text-muted-foreground/80"
+        class="f h-auto w-36 flex-none rounded-sm bg-card dark:bg-card px-2 py-0.5 text-xs md:text-xs placeholder:text-muted-foreground/80"
         placeholder="patch regex (-G)"
         aria-label="Pickaxe: patches adding or removing lines matching this regex"
         value={store.filter.pickaxeRegex ?? ""}
@@ -1209,12 +1217,12 @@
               {#snippet child({ props })}
                 <button
                   {...props}
-                  class="rounded-full px-1 text-ui-meta leading-none text-primary/80 hover:bg-accent hover:text-accent-foreground focus-visible:outline-2 focus-visible:outline-ring"
+                  class="inline-flex items-center rounded-full p-0.5 text-primary/80 hover:bg-accent hover:text-accent-foreground focus-visible:outline-2 focus-visible:outline-ring [&_svg:not([class*='size-'])]:size-2.5"
                   type="button"
                   aria-label="Clear branch scope"
                   onclick={() => store.setFilter({ scopeRef: "" })}
                 >
-                  ×
+                  <Icon icon={iconClose} size={10} />
                 </button>
               {/snippet}
             </Hint>
@@ -1415,7 +1423,17 @@
               {/snippet}
             </Hint>
             <span class="author max-w-40 flex-none truncate {v.idx === selectedIdx ? "" : "text-muted-foreground"} {sidebar ? "hidden" : ""}">{v.commit.author.name}</span>
-            <span class="date flex-none text-muted-foreground tabular-nums {sidebar ? "text-ui-micro" : "text-ui-micro"}">{formatRelativeTime(v.commit.author.time)}</span>
+            <Hint label={formatDateTime(v.commit.author.time)}>
+              {#snippet child({ props })}
+                <!-- Relative label stays compact in the row; the exact local
+                     timestamp rides on hover ("3 weeks ago" alone goes stale). -->
+                <span
+                  {...props}
+                  class="date flex-none cursor-help text-ui-micro text-muted-foreground tabular-nums"
+                  >{formatRelativeTime(v.commit.author.time)}</span
+                >
+              {/snippet}
+            </Hint>
           </div>
         {/each}
       </div>

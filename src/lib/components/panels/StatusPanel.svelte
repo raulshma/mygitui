@@ -1811,7 +1811,9 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
         role="note"
         aria-label="File list keyboard shortcuts"
       >
-        <span class="min-w-0 flex-1 truncate">
+        <!-- Wraps instead of truncating: the banner exists to teach the keys,
+             so hiding half of them behind an ellipsis defeats its purpose. -->
+        <span class="min-w-0 flex-1 leading-snug">
           Shortcuts: <kbd class="font-[inherit] font-semibold">s</kbd> stage /
           unstage ·
           <kbd class="font-[inherit] font-semibold">d</kbd> discard ·

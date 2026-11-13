@@ -72,6 +72,7 @@
   const iconCheckout = $derived(appIcon("fork-right")!);
   const iconCompare = $derived(appIcon("compare-arrows")!);
   const iconAdd = $derived(appIcon("add")!);
+  const iconCloud = $derived(appIcon("cloud")!);
 
   let list = $state<RemoteInfo[]>([]);
   let loading = $state(false);
@@ -93,12 +94,23 @@
   // Forms
   let addName = $state("");
   let addUrl = $state("");
+  /** Name field ref — the empty state's action focuses it (first-run path). */
+  let addNameEl: HTMLInputElement | null = $state(null);
   let editing = $state<{ name: string; field: "url" | "push_url"; value: string } | null>(
     null,
   );
 
   /** Auto-fetch interval choices (minutes; 0 = off). */
   const INTERVALS = [0, 1, 5, 15, 30, 60];
+
+  /**
+   * Label for an interval ("off", "5 min") — rendered directly in the
+   * trigger because `Select.Value` shows the raw value ("0") until the
+   * items register their labels (they exist only while the menu is open).
+   */
+  function intervalLabel(minutes: number): string {
+    return minutes === 0 ? "off" : `${minutes} min`;
+  }
 
   const netOps = $derived(
     opsFor(repoId).filter((op) => op.kind === "fetch" || op.kind === "pull" || op.kind === "push"),
@@ -229,6 +241,8 @@
   const repoRoot = $derived(
     tabStore.tabs.find((tab) => tab.id === repoId)?.root ?? repoId,
   );
+
+  const autofetchLabel = $derived(intervalLabel(autofetch.getInterval(repoRoot)));
 
   /** The remote the bar acts on (origin preferred, else the first). */
   const primaryRemote = $derived<RemoteInfo | null>(
@@ -457,11 +471,11 @@
               class="max-w-[12rem] h-6 rounded border-border bg-background dark:bg-background px-1.5 py-0 text-ui-meta text-foreground gap-1"
               aria-label="Auto-fetch interval in minutes"
             >
-              <Select.Value />
+              {autofetchLabel}
             </Select.Trigger>
             <Select.Content>
               {#each INTERVALS as minutes (minutes)}
-                <Select.Item value={String(minutes)} label={minutes === 0 ? "off" : `${minutes} min`} class="text-xs" />
+                <Select.Item value={String(minutes)} label={intervalLabel(minutes)} class="text-xs" />
               {/each}
             </Select.Content>
           </Select.Root>
@@ -551,7 +565,18 @@
   {#if error}
     <p class="state error m-0 px-3 py-4 text-ui-base text-destructive" role="alert">{error}</p>
   {:else if !loading && list.length === 0}
-    <EmptyState title="No remotes configured." />
+    <!-- First-run guidance: point at the add form (the branches panel's
+         empty state does the same for its "create above" form). -->
+    <EmptyState icon={iconCloud} title="No remotes configured." hint="Add a remote below to fetch, pull and push with it.">
+      <Button
+        class="h-7 rounded-full px-3 text-xs"
+        variant="outline"
+        type="button"
+        onclick={() => addNameEl?.focus()}
+      >
+        Add a remote
+      </Button>
+    </EmptyState>
   {:else}
     <ul class="remotes m-0 flex min-h-0 flex-1 list-none flex-col gap-2 overflow-y-auto px-2 py-1.5" role="list" aria-label="Configured remotes">
       {#each list as remote (remote.name)}
@@ -689,19 +714,22 @@
                 remoteBranchList.filter((b) => b.remote === remote.name),
                 showAllRemoteBranches[remote.name] ?? false,
               )}
-              <div class="remote-branches">
-                <p class="rb-head">Remote branches</p>
+              <div class="remote-branches mt-1 flex flex-col border-t border-border pt-1">
+                <p class="rb-head m-0 px-2 pb-0.5 text-ui-micro font-bold uppercase tracking-[0.08em] text-muted-foreground">Remote branches</p>
                 {#if remoteBranchList.length === 0}
-                  <p class="rb-empty">Fetch to discover remote branches.</p>
+                  <p class="rb-empty m-0 px-3 py-1 text-ui-meta text-muted-foreground">Fetch to discover remote branches.</p>
                 {:else}
-                  <ul class="rb-list">
+                  <ul class="rb-list m-0 list-none p-0" role="list">
                     {#each rbPage.visible as rb (rb.remote + "/" + rb.name)}
-                      <li class="rb-row">
+                      <li class="rb-row flex min-w-0 items-center gap-1.5 py-0.5 pl-1 pr-2 hover:bg-muted/60">
                         <Hint label={`${rb.remote}/${rb.name}`}>
                           {#snippet child({ props })}
-                            <span class="rb-name" {...props}>
+                            <span
+                              class="rb-name min-w-0 shrink truncate font-mono text-ui-meta text-foreground"
+                              {...props}
+                            >
                               {rb.name}
-                              {#if rb.tracked_by}<span class="rb-tracked">({rb.tracked_by})</span>{/if}
+                              {#if rb.tracked_by}<span class="rb-tracked pl-1 text-muted-foreground">({rb.tracked_by})</span>{/if}
                             </span>
                           {/snippet}
                         </Hint>
@@ -792,7 +820,7 @@
                       {/if}
                     {/each}
                     {#if rbPage.hidden > 0}
-                      <li class="rb-row show-more">
+                      <li class="rb-row show-more flex min-w-0 items-center px-1 py-0.5">
                         <Button
                           class="h-auto px-2 py-0.5 text-ui-meta text-muted-foreground hover:text-foreground"
                           variant="ghost"
@@ -981,6 +1009,7 @@
       type="text"
       placeholder="name"
       aria-label="New remote name"
+      bind:ref={addNameEl}
       bind:value={addName}
     />
     <Input

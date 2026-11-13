@@ -1063,7 +1063,11 @@
                         aria-label={`Clear auto-fetch override for ${root}`}
                         onclick={() => autofetch.setInterval(root, 0)}
                       >
-                        ×
+                        {#if closeIcon}
+                          <Icon icon={closeIcon} size={12} />
+                        {:else}
+                          ×
+                        {/if}
                       </Button>
                     {/snippet}
                   </Hint>
@@ -1161,11 +1165,15 @@
           {#if query !== ""}
             <button
               type="button"
-              class="absolute right-1.5 top-1/2 -translate-y-1/2 cursor-pointer rounded-full px-1 text-ui-meta text-muted-foreground hover:text-foreground focus-visible:-outline-offset-1 focus-visible:outline-2 focus-visible:outline-primary"
+              class="absolute right-0.5 top-1/2 flex size-6 -translate-y-1/2 cursor-pointer items-center justify-center rounded-full text-muted-foreground hover:text-foreground focus-visible:-outline-offset-1 focus-visible:outline-2 focus-visible:outline-primary [&_svg:not([class*='size-'])]:size-3"
               aria-label="Clear search"
               onclick={() => (query = "")}
             >
-              ×
+              {#if closeIcon}
+                <Icon icon={closeIcon} size={12} />
+              {:else}
+                ×
+              {/if}
             </button>
           {:else}
             <Kbd class="absolute right-2 top-1/2 -translate-y-1/2">/</Kbd>

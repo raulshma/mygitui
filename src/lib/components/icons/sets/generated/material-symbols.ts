@@ -69,6 +69,8 @@ import iconRestorePage from "@ktibow/iconset-material-symbols/restore-page";
 import iconRightPanelClose from "@ktibow/iconset-material-symbols/right-panel-close";
 import iconSave from "@ktibow/iconset-material-symbols/save";
 import iconSearch from "@ktibow/iconset-material-symbols/search";
+import iconStar from "@ktibow/iconset-material-symbols/star";
+import iconStarOutline from "@ktibow/iconset-material-symbols/star-outline";
 import iconSunny from "@ktibow/iconset-material-symbols/sunny";
 import iconSwapHoriz from "@ktibow/iconset-material-symbols/swap-horiz";
 import iconSync from "@ktibow/iconset-material-symbols/sync";
@@ -150,6 +152,8 @@ export const MATERIAL_SYMBOLS_ICONS: Record<string, IconifyIcon> = {
 	"right-panel-close": iconRightPanelClose,
 	"save": iconSave,
 	"search": iconSearch,
+	"star": iconStar,
+	"star-outline": iconStarOutline,
 	"sunny": iconSunny,
 	"swap-horiz": iconSwapHoriz,
 	"sync": iconSync,

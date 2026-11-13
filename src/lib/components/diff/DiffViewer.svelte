@@ -714,6 +714,8 @@
           {/snippet}
         </Hint>
       </div>
+      <!-- Option, not a mode: sits outside the Split/Unified group with a
+           wider gap so the two clusters don't read as one four-way switch. -->
       <Hint
         label={wrap
           ? "Long lines wrap — click to scroll instead"
@@ -722,7 +724,7 @@
         {#snippet child({ props })}
           <Toggle
             {...props}
-            class="h-auto shrink-0 rounded border border-border px-2 py-0 text-ui-micro leading-[1.5] font-normal text-muted-foreground aria-pressed:text-foreground focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary focus-visible:ring-0"
+            class="ml-1.5 h-auto shrink-0 rounded border border-border px-2 py-0 text-ui-micro leading-[1.5] font-normal text-muted-foreground aria-pressed:font-semibold aria-pressed:text-foreground focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary focus-visible:ring-0"
             pressed={wrap}
             onPressedChange={() => toggleWrap()}
             aria-label="Wrap long lines"

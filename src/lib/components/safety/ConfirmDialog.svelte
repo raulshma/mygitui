@@ -4,10 +4,12 @@
   Props: `open` (bindable), `title`, `message` (markup allowed via snippet
   slot), `confirmLabel`, `cancelLabel`, an optional `alternateLabel`
   (third, non-default action such as "Overwrite"), `danger` (error-colored
-  confirm), `onConfirm`, `onCancel`, `onAlternate`. Focus lands on confirm;
-  Enter confirms, Escape cancels; focus is trapped by the dialog (single
-  dialog). Focus is restored to the previously active element on close.
-  Chrome comes from the shadcn ui/dialog primitives.
+  confirm), `onConfirm`, `onCancel`, `onAlternate`. Focus lands on the least
+  destructive action — Cancel on `danger` dialogs, Confirm otherwise (WAI
+  APG alertdialog guidance: a reflexive Enter must not trigger the harmful
+  action). Enter confirms once focused, Escape cancels; focus is trapped by
+  the dialog (single dialog). Focus is restored to the previously active
+  element on close. Chrome comes from the shadcn ui/dialog primitives.
 -->
 <script lang="ts">
   import * as Dialog from "$lib/components/ui/dialog/index.js";
@@ -43,12 +45,14 @@
   } = $props();
 
   let confirmButton = $state<HTMLElement | null>(null);
+  let cancelButton = $state<HTMLElement | null>(null);
 
-  // Focus lands on confirm (the old data-autofocus convention) whenever
-  // the dialog opens.
+  // Focus lands on the least destructive action whenever the dialog opens:
+  // Cancel on `danger` dialogs (a reflexive Enter must not destroy work),
+  // Confirm otherwise (Enter-to-confirm stays a safe shortcut).
   $effect(() => {
     if (open) {
-      requestAnimationFrame(() => confirmButton?.focus());
+      requestAnimationFrame(() => (danger ? cancelButton : confirmButton)?.focus());
     }
   });
 
@@ -105,6 +109,7 @@
     {/if}
     <div class="mt-4 flex flex-nowrap justify-end gap-2">
       <Button
+        bind:ref={cancelButton}
         variant="outline"
         class="text-muted-foreground"
         type="button"

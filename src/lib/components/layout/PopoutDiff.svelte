@@ -76,7 +76,7 @@
 </script>
 
 <section
-  class="popout-diff flex h-screen min-h-0 flex-col bg-card text-card-foreground"
+  class="popout-diff flex h-dvh min-h-0 flex-col bg-card text-card-foreground"
 >
   <header
     class="bar flex flex-none items-center gap-2 border-b border-border bg-popover px-2.5 py-1 text-ui-base"

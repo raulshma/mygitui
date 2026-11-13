@@ -33,6 +33,10 @@
     hashHue,
   } from "$lib/git/format";
   import { ageBackground, ageRatios } from "./blameModel";
+  import Icon from "$lib/components/icons/Icon.svelte";
+  import { appIcon } from "$lib/components/icons/library.svelte";
+
+  const iconClose = $derived(appIcon("close")!);
   import { Button } from "$lib/components/ui/button/index.js";
   import { Hint } from "$lib/components/ui/tooltip/index.js";
   import EmptyState from "../layout/EmptyState.svelte";
@@ -308,13 +312,13 @@
         Blame from {reblame.parent.slice(0, 8)}
       </Button>
       <Button
-        class="h-auto shrink-0 whitespace-nowrap rounded-full px-2 py-0 text-ui-micro font-normal text-muted-foreground"
+        class="h-auto shrink-0 whitespace-nowrap rounded-full px-1.5 py-0 font-normal text-muted-foreground [&_svg:not([class*='size-'])]:size-3"
         variant="outline"
         type="button"
         aria-label="Dismiss re-blame"
         onclick={() => (reblame = null)}
       >
-        ×
+        <Icon icon={iconClose} size={12} />
       </Button>
     </div>
   {/if}

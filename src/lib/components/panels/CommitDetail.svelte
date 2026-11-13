@@ -37,6 +37,12 @@
   } from "$lib/git/format";
   import { toast } from "$lib/toast";
   import { describeError } from "$lib/errors";
+  import Icon from "$lib/components/icons/Icon.svelte";
+  import { appIcon } from "$lib/components/icons/library.svelte";
+
+  const iconClose = $derived(appIcon("close")!);
+  const iconStar = $derived(appIcon("star")!);
+  const iconStarOutline = $derived(appIcon("star-outline")!);
 
   let {
     repoId,
@@ -250,7 +256,7 @@
         <Hint label={bookmarked ? "Remove bookmark" : "Bookmark commit"}>
           {#snippet child({ props })}
             <Button
-              class="h-auto flex-none rounded-sm px-2 py-[0.05rem] text-ui-base leading-[1.3] font-normal {bookmarked
+              class="h-auto flex-none rounded-sm px-1.5 py-[0.05rem] [&_svg:not([class*='size-'])]:size-3 {bookmarked
                 ? 'border-primary bg-transparent text-primary'
                 : 'border-border bg-transparent text-muted-foreground'}"
               variant="outline"
@@ -265,7 +271,7 @@
                 if (sha) toggleBookmark(sha);
               }}
             >
-              {bookmarked ? "★" : "☆"}
+              <Icon icon={bookmarked ? iconStar : iconStarOutline} size={12} />
             </Button>
           {/snippet}
         </Hint>
@@ -289,8 +295,8 @@
       <span class="dsummary min-w-0 flex-1 truncate font-medium text-foreground">{compare?.base} → {compare?.target}</span>
     {/if}
     {#if onClose}
-      <Button class="h-auto rounded-sm px-2 py-px text-ui-meta font-normal text-muted-foreground" variant="outline" onclick={onClose} aria-label="Close detail">
-        ×
+      <Button class="h-auto rounded-sm px-1.5 py-px text-ui-meta font-normal text-muted-foreground [&_svg:not([class*='size-'])]:size-3" variant="outline" onclick={onClose} aria-label="Close detail">
+        <Icon icon={iconClose} size={12} />
       </Button>
     {/if}
   </header>
@@ -336,10 +342,11 @@
         <div class="dtab flex flex-none items-center gap-2 border-b border-border bg-muted py-0.5 pr-2 pl-3 text-ui-meta text-foreground">
           <span class="min-w-0 flex-1 truncate font-mono">Blame: {blameTarget.path}</span>
           <Button
-            class="h-auto rounded-sm px-2 py-px text-ui-meta font-normal text-muted-foreground"
+            class="h-auto rounded-sm px-1.5 py-px text-ui-meta font-normal text-muted-foreground [&_svg:not([class*='size-'])]:size-3"
             variant="outline"
             onclick={() => (blameTarget = null)}
-            aria-label="Close blame">×
+            aria-label="Close blame">
+            <Icon icon={iconClose} size={12} />
           </Button>
         </div>
         <div class="dtabbody flex min-h-0 flex-1 flex-col">
@@ -349,7 +356,9 @@
         <div class="dtab flex flex-none items-center gap-2 border-b border-border bg-muted py-0.5 pr-2 pl-3 text-ui-meta text-foreground">
           <span class="min-w-0 flex-1 truncate font-mono">Compare: {compare.base} → {compare.target} ({compare.files.length} files)</span>
           {#if onCloseCompare}
-            <Button class="h-auto rounded-sm px-2 py-px text-ui-meta font-normal text-muted-foreground" variant="outline" onclick={onCloseCompare} aria-label="Close compare">×</Button>
+            <Button class="h-auto rounded-sm px-1.5 py-px text-ui-meta font-normal text-muted-foreground [&_svg:not([class*='size-'])]:size-3" variant="outline" onclick={onCloseCompare} aria-label="Close compare">
+              <Icon icon={iconClose} size={12} />
+            </Button>
           {/if}
         </div>
         <div class="dtabbody flex min-h-0 flex-1 flex-col">
@@ -475,9 +484,12 @@
                   <span class="muted text-muted-foreground">…</span>
                 {/if}
               </dd>
-              <!-- M12: commit-signature verification badge. -->
+              <!-- M12: commit-signature verification badge. hideUnsigned=false:
+                   the meta grid always renders this row's label, so an
+                   unsigned commit must show the truthful "Unsigned" chip
+                   (the default hiding leaves a confusingly empty row). -->
               <dt class="pt-0.5 text-ui-micro uppercase tracking-[0.02em] text-muted-foreground">Signature</dt>
-              <dd class="m-0 text-foreground"><SignatureBadge {repoId} sha={info.sha} /></dd>
+              <dd class="m-0 text-foreground"><SignatureBadge {repoId} sha={info.sha} hideUnsigned={false} /></dd>
               {#if info.refs.length > 0}
                 <dt class="pt-0.5 text-ui-micro uppercase tracking-[0.02em] text-muted-foreground">Refs</dt>
                 <dd class="drefs m-0 flex flex-wrap gap-1 text-foreground">

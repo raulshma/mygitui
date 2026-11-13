@@ -44,6 +44,8 @@
   /** Default swatch for new/invalid rules: the live accent, as hex. */
   const defaultRuleColor = primaryHex();
   const iconRefresh = $derived(appIcon("refresh")!);
+  const iconClose = $derived(appIcon("close")!);
+  const iconDelete = $derived(appIcon("delete")!);
 
   /** Author filter input (committed on change/Enter, cleared explicitly). */
   let authorInput = $state("");
@@ -327,12 +329,12 @@
         <div class="colors-head flex items-center justify-between font-medium">
           <span>Branch color rules</span>
           <button
-            class="btn cursor-pointer whitespace-nowrap rounded-sm border border-border bg-muted px-2 py-px text-ui-tiny text-foreground hover:bg-accent focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-ring"
+            class="btn inline-flex cursor-pointer items-center whitespace-nowrap rounded-sm border border-border bg-muted px-1.5 py-px text-foreground hover:bg-accent focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-ring [&_svg:not([class*='size-'])]:size-3"
             type="button"
             aria-label="Close branch color rules"
             onclick={() => (colorsOpen = false)}
           >
-            ×
+            <Icon icon={iconClose} size={12} />
           </button>
         </div>
         <p class="colors-hint m-0 text-ui-tiny text-muted-foreground">
@@ -368,13 +370,13 @@
                     })}
                 />
                 <Button
-                  class="h-auto whitespace-nowrap rounded-sm px-2 py-px text-ui-tiny font-normal"
+                  class="h-auto whitespace-nowrap rounded-sm px-1.5 py-px font-normal [&_svg:not([class*='size-'])]:size-3"
                   variant="secondary"
                   type="button"
                   aria-label={`Remove rule ${rule.pattern}`}
                   onclick={() => removeRule(rule)}
                 >
-                  ×
+                  <Icon icon={iconDelete} size={12} />
                 </Button>
               </li>
             {/each}

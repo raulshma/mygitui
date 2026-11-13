@@ -1,22 +1,18 @@
 <script lang="ts">
   /**
-   * Live output strip for running and hook-bearing operations.
+   * Output strip for hook-bearing operations.
    *
-   * Two surfaces in one compact strip: every active op of the repo (from
-   * `OpStore.opsFor`, one row each with progress and a generic Cancel
-   * affordance wired to the backend's cooperative `op_cancel`) and the
-   * newest CLI/hook output session (from `op-log`, kept after completion).
-   * The strip surfaces both across the workspace (it is not tied to the
-   * panel that started the op), auto-scrolls while expanded, and lets the
-   * user collapse or dismiss the output.
+   * The newest CLI/hook output session of the repo (from `op-log`, kept
+   * after completion): auto-scrolls while expanded, and can be collapsed or
+   * dismissed. The strip surfaces the output across the workspace (it is
+   * not tied to the panel that started the op).
+   *
+   * In-flight op progress deliberately does NOT render here — it moved to
+   * the app-wide `StatusBar`, because a strip row mounting/unmounting in
+   * flow below the header shifted the whole workspace on every auto-fetch
+   * tick. Ops that emit no hook lines never mount this strip at all.
    */
-  import {
-    cancelOp,
-    clearOpLogs,
-    kindLabel,
-    opLogsFor,
-    opsFor,
-  } from "$lib/stores/ops.svelte";
+  import { clearOpLogs, opLogsFor } from "$lib/stores/ops.svelte";
   import Icon from "$lib/components/icons/Icon.svelte";
   import { Button } from "$lib/components/ui/button/index.js";
   import { Hint } from "$lib/components/ui/tooltip/index.js";
@@ -32,8 +28,6 @@
   const iconExpand = $derived(appIcon("chevron-down")!);
 
   const session = $derived(opLogsFor(repoId));
-  /** Ops currently queued/running for this repo (Cancel affordance). */
-  const activeOps = $derived(opsFor(repoId));
   let expanded = $state(true);
   let linesEl = $state<HTMLPreElement | null>(null);
 
@@ -56,7 +50,7 @@
   });
 </script>
 
-{#if session || activeOps.length > 0}
+{#if session}
   <section
     class="op-log flex min-w-0 shrink-0 flex-col border-b border-border bg-muted/40 text-xs text-foreground"
     class:done={session !== null && session.done && session.error === null}
@@ -64,138 +58,74 @@
     class:border-destructive={session !== null &&
       session.done &&
       session.error !== null}
-    aria-label={session ? title : "Running operations"}
-    aria-busy={activeOps.length > 0 || (session !== null && !session.done)}
+    aria-label={title}
+    aria-busy={session !== null && !session.done}
   >
-    {#if activeOps.length > 0}
-      <!-- One row per active op; Cancel works on any cancellable verb
-           (backend flips a per-op token the network ops poll). -->
-      <ul
-        class="active-ops m-0 flex list-none flex-col p-0"
-        aria-label="Running operations"
+    <div class="head flex h-6 min-w-0 items-center gap-ui-3 pl-2 pr-1 text-muted-foreground">
+      <span
+        class="status inline-flex size-3.5 shrink-0 items-center justify-center {session.done &&
+        session.error === null
+          ? 'text-primary'
+          : ''} {session.done && session.error !== null ? 'text-destructive' : ''}"
+        aria-hidden="true"
       >
-        {#each activeOps as op (op.op_id)}
-          <li
-            class="op-row flex h-6 min-w-0 items-center gap-ui-3 border-b border-border/60 pl-2 pr-1 text-muted-foreground"
-            aria-label={`${kindLabel(op.kind)} in progress`}
+        {#if !session.done}
+          <Spinner class="size-3" role="presentation" aria-hidden="true" />
+        {:else if session.error}
+          <Icon icon={iconError} size={14} />
+        {:else}
+          <Icon icon={iconDone} size={14} />
+        {/if}
+      </span>
+      <Icon icon={iconOutput} size={14} />
+      <span class="title shrink-0 font-semibold text-foreground">{title}</span>
+      <span class="meta shrink-0 text-ui-micro text-muted-foreground tabular-nums"
+        >{countLabel}</span
+      >
+      <span class="grow min-w-0 flex-1"></span>
+      <Hint label={expanded ? "Collapse output" : "Expand output"}>
+        {#snippet child({ props })}
+          <Button
+            {...props}
+            class={`size-5 rounded-full text-muted-foreground hover:bg-accent hover:text-accent-foreground aria-expanded:bg-accent aria-expanded:text-accent-foreground [&_svg]:transition-transform [&_svg]:duration-100 ${expanded
+              ? ""
+              : "[&_svg]:-rotate-90"} [&_svg:not([class*='size-'])]:size-4`}
+            variant="ghost"
+            size="icon-sm"
+            type="button"
+            aria-label={expanded ? "Collapse output" : "Expand output"}
+            aria-expanded={expanded}
+            onclick={() => (expanded = !expanded)}
           >
-            <span
-              class="status inline-flex size-3.5 shrink-0 items-center justify-center"
-              aria-hidden="true"
-            >
-              <Spinner class="size-3" role="presentation" aria-hidden="true" />
-            </span>
-            <span class="title shrink-0 font-semibold text-foreground"
-              >{kindLabel(op.kind)}</span
-            >
-            <span class="message min-w-0 flex-1 truncate text-left"
-              >{op.message}</span
-            >
-            {#if op.pct !== null}
-              <span class="pct shrink-0 tabular-nums"
-                >{Math.round(op.pct)}%</span
-              >
-            {/if}
-            {#if op.cancelling}
-              <span
-                class="cancelling inline-flex shrink-0 items-center gap-1 pr-1 text-muted-foreground"
-                role="status"
-              >
-                <Spinner
-                  class="size-3"
-                  role="presentation"
-                  aria-hidden="true"
-                />
-                Cancelling…
-              </span>
-            {:else}
-              <Hint label={`Cancel ${kindLabel(op.kind)}`}>
-                {#snippet child({ props })}
-                  <Button
-                    {...props}
-                    class="size-5 rounded-full text-muted-foreground hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-3.5"
-                    variant="ghost"
-                    size="icon-sm"
-                    type="button"
-                    aria-label={`Cancel ${kindLabel(op.kind)}`}
-                    onclick={() => void cancelOp(op.op_id)}
-                  >
-                    <Icon icon={iconClose} size={14} />
-                  </Button>
-                {/snippet}
-              </Hint>
-            {/if}
-          </li>
-        {/each}
-      </ul>
-    {/if}
-    {#if session}
-      <div class="head flex h-6 min-w-0 items-center gap-ui-3 pl-2 pr-1 text-muted-foreground">
-        <span
-          class="status inline-flex size-3.5 shrink-0 items-center justify-center {session.done &&
-          session.error === null
-            ? 'text-primary'
-            : ''} {session.done && session.error !== null ? 'text-destructive' : ''}"
-          aria-hidden="true"
-        >
-          {#if !session.done}
-            <Spinner class="size-3" role="presentation" aria-hidden="true" />
-          {:else if session.error}
-            <Icon icon={iconError} size={14} />
-          {:else}
-            <Icon icon={iconDone} size={14} />
-          {/if}
-        </span>
-        <Icon icon={iconOutput} size={14} />
-        <span class="title shrink-0 font-semibold text-foreground">{title}</span>
-        <span class="meta shrink-0 text-ui-micro text-muted-foreground tabular-nums"
-          >{countLabel}</span
-        >
-        <span class="grow min-w-0 flex-1"></span>
-        <Hint label={expanded ? "Collapse output" : "Expand output"}>
-          {#snippet child({ props })}
-            <Button
-              {...props}
-              class={`size-5 rounded-full text-muted-foreground hover:bg-accent hover:text-accent-foreground aria-expanded:bg-accent aria-expanded:text-accent-foreground [&_svg]:transition-transform [&_svg]:duration-100 ${expanded
-                ? ""
-                : "[&_svg]:-rotate-90"} [&_svg:not([class*='size-'])]:size-4`}
-              variant="ghost"
-              size="icon-sm"
-              type="button"
-              aria-label={expanded ? "Collapse output" : "Expand output"}
-              aria-expanded={expanded}
-              onclick={() => (expanded = !expanded)}
-            >
-              <Icon icon={iconExpand} size={14} />
-            </Button>
-          {/snippet}
-        </Hint>
-        <Hint label="Dismiss output">
-          {#snippet child({ props })}
-            <Button
-              {...props}
-              class="size-5 rounded-full text-muted-foreground hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-3.5"
-              variant="ghost"
-              size="icon-sm"
-              type="button"
-              aria-label="Dismiss output"
-              onclick={() => clearOpLogs(repoId)}
-            >
-              <Icon icon={iconClose} size={14} />
-            </Button>
-          {/snippet}
-        </Hint>
-      </div>
-      {#if expanded}
-        <!-- Scrollable region: focusable so keyboard users can reach the log. -->
-        <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
-        <pre
-          class="lines m-0 max-h-40 overflow-auto border-t border-border bg-background px-2 pb-1.5 pt-1 font-mono text-ui-meta leading-[1.4] text-muted-foreground [overflow-wrap:anywhere] whitespace-pre-wrap outline-none focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary"
-          bind:this={linesEl}
-          tabindex="0"
-          aria-label={`${title} lines`}>{session.lines.join("\n")}</pre
-        >
-      {/if}
+            <Icon icon={iconExpand} size={14} />
+          </Button>
+        {/snippet}
+      </Hint>
+      <Hint label="Dismiss output">
+        {#snippet child({ props })}
+          <Button
+            {...props}
+            class="size-5 rounded-full text-muted-foreground hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-3.5"
+            variant="ghost"
+            size="icon-sm"
+            type="button"
+            aria-label="Dismiss output"
+            onclick={() => clearOpLogs(repoId)}
+          >
+            <Icon icon={iconClose} size={14} />
+          </Button>
+        {/snippet}
+      </Hint>
+    </div>
+    {#if expanded}
+      <!-- Scrollable region: focusable so keyboard users can reach the log. -->
+      <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+      <pre
+        class="lines m-0 max-h-40 overflow-auto border-t border-border bg-background px-2 pb-1.5 pt-1 font-mono text-ui-meta leading-[1.4] text-muted-foreground [overflow-wrap:anywhere] whitespace-pre-wrap outline-none focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary"
+        bind:this={linesEl}
+        tabindex="0"
+        aria-label={`${title} lines`}>{session.lines.join("\n")}</pre
+      >
     {/if}
   </section>
 {/if}

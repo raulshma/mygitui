@@ -36,6 +36,7 @@
   const iconTree = $derived(appIcon("account-tree")!);
   const iconPrev = $derived(appIcon("arrow-upward")!);
   const iconNext = $derived(appIcon("arrow-downward")!);
+  const iconClose = $derived(appIcon("close")!);
 
   // The lazy views must keep the *same* promise across updates: `{#await
   // import(...)}` would hand Svelte a fresh promise on every parent update,
@@ -94,6 +95,7 @@
     onOpenDiffFile = undefined,
     onOpenFirstChange = undefined,
     onBrowseHistory = undefined,
+    onScopeChange = undefined,
   }: {
     repoId: string;
     /** Worktree root (bookmark persistence); empty in popouts. */
@@ -175,6 +177,8 @@
     onOpenFirstChange?: () => void;
     /** Welcome state: reveals the history sidebar. */
     onBrowseHistory?: () => void;
+    /** Re-opens the working-copy diff at the other scope (staged ↔ unstaged). */
+    onScopeChange?: (scope: DiffScope) => void;
   } = $props();
 
   /** Welcome summary: unique changed paths + upstream position. */
@@ -199,6 +203,22 @@
       ? diffHunkActions(entry, diffScope)
       : { staging: undefined, discard: false },
   );
+
+  /**
+   * The scope the empty state can offer instead (`null` when the shown side
+   * is the only one with content): an empty diff means the file's change
+   * lives entirely on the other side of the index, so the state points
+   * there — one clear next action, not a dead end.
+   */
+  const emptyStateScope = $derived.by<DiffScope | null>(() => {
+    if (!entry) return null;
+    const other: DiffScope = diffScope === "staged" ? "unstaged" : "staged";
+    const otherSideHasChanges =
+      other === "staged"
+        ? entry.index !== "unmodified"
+        : entry.worktree !== "unmodified";
+    return otherSideHasChanges ? other : null;
+  });
 </script>
 
 <div
@@ -448,14 +468,14 @@
           <Hint label="Close diff">
             {#snippet child({ props })}
               <Button
-                class="h-5 flex-none rounded-sm px-2 text-ui-micro leading-[1.5] font-normal"
+                class="h-5 flex-none rounded-sm px-1.5 text-ui-micro leading-[1.5] font-normal [&_svg:not([class*='size-'])]:size-3"
                 variant="outline"
                 type="button"
                 {...props}
                 aria-label="Close diff"
                 onclick={onClose}
               >
-                ×
+                <Icon icon={iconClose} size={12} />
               </Button>
             {/snippet}
           </Hint>
@@ -475,7 +495,29 @@
             title={diffScope === "staged"
               ? "No staged changes for this file."
               : "No unstaged changes for this file."}
-          />
+          >
+            {#if emptyStateScope !== null && onScopeChange}
+              <Hint
+                label={emptyStateScope === "staged"
+                  ? "Show this file's HEAD → index diff"
+                  : "Show this file's index → worktree diff"}
+              >
+                {#snippet child({ props })}
+                  <Button
+                    {...props}
+                    class="h-6 rounded-sm px-2.5 text-ui-meta leading-[1.5] font-normal"
+                    variant="outline"
+                    type="button"
+                    onclick={() => onScopeChange?.(emptyStateScope!)}
+                  >
+                    View{' '}
+                    {emptyStateScope === "staged" ? "staged" : "unstaged"}{' '}
+                    changes
+                  </Button>
+                {/snippet}
+              </Hint>
+            {/if}
+          </EmptyState>
         {:else}
           <DiffViewer
             files={diffFiles}

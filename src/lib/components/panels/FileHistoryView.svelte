@@ -19,6 +19,7 @@
   import { onDestroy, onMount } from "svelte";
   import { HistoryStore } from "$lib/stores/history.svelte";
   import {
+    formatDateTime,
     formatRelativeTime,
     hashHue,
   } from "$lib/git/format";
@@ -264,8 +265,12 @@
               </Hint>
               <span
                 class="meta text-xs {commit.sha === selectedSha ? 'text-inherit' : 'text-muted-foreground'}"
-                >{commit.author.name}
-                · {formatRelativeTime(commit.committer.time)}</span
+                >{commit.author.name}<!-- Relative label stays compact; exact timestamp on hover. -->
+                · <Hint label={formatDateTime(commit.committer.time)}>
+                  {#snippet child({ props })}
+                    <span {...props} class="cursor-help tabular-nums">{formatRelativeTime(commit.committer.time)}</span>
+                  {/snippet}
+                </Hint></span
               >
             </div>
             <div class="side flex shrink-0 items-center gap-1.5">

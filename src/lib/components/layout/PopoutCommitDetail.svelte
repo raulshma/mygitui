@@ -136,7 +136,7 @@
 </script>
 
 <section
-  class="popout-commit flex h-screen min-h-0 flex-col bg-card text-card-foreground [&>.detail]:min-h-0 [&>.detail]:flex-1"
+  class="popout-commit flex h-dvh min-h-0 flex-col bg-card text-card-foreground [&>.detail]:min-h-0 [&>.detail]:flex-1"
   aria-label="Commit detail"
 >
   {#if error && !info}

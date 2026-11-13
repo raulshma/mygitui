@@ -48,6 +48,19 @@ export function diffScopeForSection(section: SectionId): DiffScope {
 }
 
 /**
+ * Diff scope for an entry opened without a section (auto-open, prev/next,
+ * the file workspace). A staged-only change (index differs, worktree clean)
+ * has nothing on the unstaged side — its diff lives entirely in HEAD→index,
+ * so it opens staged; everything else opens unstaged (the default that
+ * equals the old head→worktree view when the index is clean).
+ */
+export function diffScopeForEntry(entry: StatusEntry): DiffScope {
+  return entry.worktree === "unmodified" && entry.index !== "unmodified"
+    ? "staged"
+    : "unstaged";
+}
+
+/**
  * Hunk-level actions offered for `entry` viewed at `scope`. Both sides of the
  * pair mirror the backend's selection engine: "stage" hunks are computed from
  * index→workdir, "unstage" hunks from HEAD→index, and hunk *discard* always

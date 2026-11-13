@@ -332,6 +332,18 @@
     Boolean(activeStatus?.head) && staged && !commitBusy && !committing && !fixing,
   );
 
+  /**
+   * Hint text that stays truthful in every state, including the disabled
+   * ones (the button can't explain itself — disabled buttons swallow
+   * pointer events, so the hint is the only voice it has).
+   */
+  const fixupHint = $derived.by(() => {
+    if (fixing || commitBusy || committing) return "Creating the fixup commit…";
+    if (!activeStatus?.head) return "Fixup needs a commit — HEAD is missing";
+    if (!staged) return "Stage a change to fixup into HEAD";
+    return "Commit the staged changes as fixup! into HEAD (message not needed)";
+  });
+
   const HEAD_LOG_FILTER: LogFilter = {
     text: null,
     regex: false,
@@ -474,25 +486,34 @@
         {/if}
       </div>
 
-      <div class="actions ml-auto flex items-center flex-wrap gap-1">
-        <Hint label="Commit the staged changes as fixup! into HEAD (message not needed)">
+      <div class="actions ml-auto flex items-center flex-wrap justify-end gap-1 min-w-0 max-w-full">
+        <Hint label={fixupHint}>
           {#snippet child({ props })}
-            <Button
-              class={`text-[var(--app-added)] hover:bg-accent hover:text-accent-foreground ${fixing ? "[&_svg]:animate-spin" : ""}`}
-              variant="ghost"
-              size="icon-sm"
-              type="button"
+            <!-- The hint trigger is the wrapper: a disabled button swallows
+                 pointer events, so the "why is this off" text would never
+                 show if the tooltip rode on the button itself. -->
+            <span
               {...props}
-              aria-label="Fixup into HEAD"
-              disabled={!canFixup}
-              onclick={() => void doFixup()}
+              class="inline-flex flex-none"
             >
-              <Icon icon={fixing ? iconProgress : iconFixup} size={16} />
-            </Button>
+              <Button
+                class={`text-[var(--app-added)] hover:bg-accent hover:text-accent-foreground ${fixing ? "[&_svg]:animate-spin" : ""}`}
+                variant="ghost"
+                size="icon-sm"
+                type="button"
+                aria-label="Fixup into HEAD"
+                disabled={!canFixup}
+                onclick={() => void doFixup()}
+              >
+                <Icon icon={fixing ? iconProgress : iconFixup} size={16} />
+              </Button>
+            </span>
           {/snippet}
         </Hint>
 
-        <div class="primary inline-flex items-center gap-ui-375">
+        <!-- Wraps (instead of overflowing the panel edge) when the column is
+             too narrow for the whole cluster: primary actions stay visible. -->
+        <div class="primary inline-flex flex-wrap items-center justify-end gap-x-ui-375 gap-y-1 min-w-0 max-w-full">
           <AiFeatureButton
             {repoId}
             icon

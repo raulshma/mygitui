@@ -473,6 +473,20 @@
     "phosphor": "magnifying-glass",
     "ri": "search-line"
   },
+  "star": {
+    "lucide": "star",
+    "tabler": "star-filled",
+    "hugeicons": "star",
+    "phosphor": "star-fill",
+    "ri": "star-fill"
+  },
+  "star-outline": {
+    "lucide": "star",
+    "tabler": "star",
+    "hugeicons": "star",
+    "phosphor": "star",
+    "ri": "star-line"
+  },
   "sunny": {
     "lucide": "sun",
     "tabler": "sun",

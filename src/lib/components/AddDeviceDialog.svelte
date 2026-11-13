@@ -17,6 +17,10 @@
   import { toast } from "$lib/toast";
   import { trapTab } from "$lib/components/safety/trapTab";
   import * as Dialog from "$lib/components/ui/dialog/index.js";
+  import Icon from "$lib/components/icons/Icon.svelte";
+  import { appIcon } from "$lib/components/icons/library.svelte";
+
+  const iconClose = $derived(appIcon("close")!);
   import { Input } from "$lib/components/ui/input/index.js";
   import { Label } from "$lib/components/ui/label/index.js";
   import { Button } from "$lib/components/ui/button/index.js";
@@ -175,14 +179,14 @@
         {#snippet child({ props })}
           <Button
             {...props}
-            class="close rounded-full text-xl leading-none"
+            class="close rounded-full [&_svg:not([class*='size-'])]:size-3.5"
             variant="ghost"
             size="icon-sm"
             type="button"
             aria-label="Close device dialog"
             onclick={close}
           >
-            ×
+            <Icon icon={iconClose} size={14} />
           </Button>
         {/snippet}
       </Hint>

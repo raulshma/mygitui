@@ -36,6 +36,10 @@
   } from "./runLogModel";
   import { Button } from "$lib/components/ui/button/index.js";
   import { Input } from "$lib/components/ui/input/index.js";
+  import Icon from "$lib/components/icons/Icon.svelte";
+  import { appIcon } from "$lib/components/icons/library.svelte";
+
+  const iconClose = $derived(appIcon("close")!);
   import { Toggle } from "$lib/components/ui/toggle/index.js";
   import { Hint } from "$lib/components/ui/tooltip/index.js";
 
@@ -483,14 +487,14 @@
         <Hint label="Clear search">
           {#snippet child({ props })}
             <Button
-              class="clear-search absolute right-[0.3rem] h-auto px-ui-2 py-0 text-[0.9rem] leading-none font-normal text-muted-foreground hover:text-foreground dark:hover:bg-transparent"
+              class="clear-search absolute right-[0.15rem] h-auto px-ui-1.5 py-0 font-normal text-muted-foreground hover:text-foreground dark:hover:bg-transparent [&_svg:not([class*='size-'])]:size-3"
               variant="ghost"
               {...props}
               type="button"
               aria-label="Clear log search"
               onclick={clearSearch}
             >
-              ×
+              <Icon icon={iconClose} size={12} />
             </Button>
           {/snippet}
         </Hint>
