@@ -140,6 +140,9 @@
   const settingsOverlay = lazyOverlay(
     () => import("$lib/components/settings/SettingsDialog.svelte"),
   );
+  const aiResultOverlay = lazyOverlay(
+    () => import("$lib/components/ai/AiResultDialog.svelte"),
+  );
 
   /** Overlay chunks fetched one per idle slot, launch graph untouched. */
   const overlayWarmers: Array<() => Promise<unknown>> = [
@@ -154,6 +157,7 @@
     confirmOverlay.chunk,
     appearanceOverlay.chunk,
     settingsOverlay.chunk,
+    aiResultOverlay.chunk,
   ];
   function warmNextOverlay(): void {
     const next = overlayWarmers.shift();
@@ -213,6 +217,14 @@
   /** AI settings dialog (opened by the AiHealthChip, M12). */
   let aiSettingsOpen = $state(false);
 
+  /**
+   * Shared AI result dialog (M13, `ai-show-result`): headless AI runs
+   * (palette commands, context-menu features without a home panel) present
+   * their output here.
+   */
+  let aiResultOpen = $state(false);
+  let aiResult = $state<{ title: string; text: string; meta?: string } | null>(null);
+
   /** Appearance customizer (opened by the palette / ThemeToggle menu). */
   let appearanceOpen = $state(false);
 
@@ -234,11 +246,19 @@
   let removeDeviceOpen = $state(false);
   /** Draft of the detail view's poll-interval field (seconds). */
   let pollDraft = $state(5);
+  /** Draft of the detail view's auto-connect-on-launch toggle. */
+  let autoConnectDraft = $state(false);
 
   /** The focused device entry, or `null` when the list is shown. */
   const deviceDetail = $derived(
     deviceDetailId !== null ? remoteDevices.byId(deviceDetailId) : null,
   );
+
+  // Follow profile changes (update responses, edit-dialog saves) so the
+  // toggle never shows a stale value while the detail view is open.
+  $effect(() => {
+    autoConnectDraft = deviceDetail?.profile.auto_connect ?? false;
+  });
 
   function openDeviceDetail(deviceId: string): void {
     deviceDetailId = deviceId;
@@ -267,6 +287,29 @@
         kind: "success",
       });
     } catch (err) {
+      const message = describeError(err);
+      toast(`Failed to update ${profile.name}: ${message}`, { kind: "error" });
+    }
+  }
+
+  /** Persists the detail view's auto-connect toggle via device_update. */
+  async function saveAutoConnect(enabled: boolean): Promise<void> {
+    const profile = deviceDetail?.profile;
+    if (!profile) return;
+    try {
+      await remoteDevices.update({
+        ...deviceInputFromProfile(profile),
+        auto_connect: enabled,
+      });
+      toast(
+        enabled
+          ? `${profile.name} will connect on launch`
+          : `${profile.name} will not connect on launch`,
+        { kind: "success" },
+      );
+    } catch (err) {
+      // Revert the visual toggle — the backend kept the old value.
+      autoConnectDraft = profile.auto_connect;
       const message = describeError(err);
       toast(`Failed to update ${profile.name}: ${message}`, { kind: "error" });
     }
@@ -442,9 +485,13 @@
     startTabEvents();
 
     // Remote devices: registry + prompt/status event wiring (idempotent),
-    // plus pruning of prompts the backend already timed out (120 s).
+    // plus pruning of prompts the backend already timed out (120 s). The
+    // registry lands BEFORE any dial starts (restore / CLI arg below):
+    // their device-status events must patch a loaded list, not race a
+    // stale snapshot replace — that race used to pin "disconnected" on
+    // launch until a reload. Opted-in devices then auto-connect.
     startRemoteDeviceEvents();
-    void remoteDevices.load();
+    void remoteDevices.load().then(() => remoteDevices.autoConnectOnLaunch());
     const pruneTimer = setInterval(
       () => remoteDevices.pruneStale(),
       Math.floor(PROMPT_TIMEOUT_MS / 4),
@@ -470,7 +517,14 @@
     // session. Runs before the CLI-arg/deep-link listeners below, so an
     // explicit `mygitui <path>` still wins the focus when it lands.
     if (!popout) {
-      void restoreSession();
+      // Restore dials every stored remote tab's device; once it settles,
+      // all launch dials have too — re-sync the statuses (the first load's
+      // pre-dial snapshot may have pinned "disconnected").
+      void restoreSession()
+        .then(() => remoteDevices.load())
+        .catch((err) =>
+          console.warn("[mygitui] post-restore device sync failed:", err),
+        );
       // Overlay dialogs mount lazily (see the lazy-mounting note); warm
       // their chunks once the launch settles.
       warmNextOverlay();
@@ -540,6 +594,14 @@
     cleanups.push(
       onUiEvent("open-ai-settings", () => {
         aiSettingsOpen = true;
+      }),
+    );
+
+    // M13: headless AI runs (palette commands) present results here.
+    cleanups.push(
+      onUiEvent("ai-show-result", (detail) => {
+        aiResult = detail;
+        aiResultOpen = true;
       }),
     );
 
@@ -1125,6 +1187,19 @@
                     bind:value={pollDraft}
                   />
                 </label>
+                <label class="check-field flex cursor-pointer items-center gap-1.5 pb-[0.3rem]">
+                  <input
+                    class="m-0 accent-primary"
+                    type="checkbox"
+                    bind:checked={autoConnectDraft}
+                    onchange={() => void saveAutoConnect(autoConnectDraft)}
+                    aria-label="Auto-connect on launch"
+                  />
+                  <span
+                    class="field-label text-ui-micro text-muted-foreground"
+                    >Auto-connect on launch</span
+                  >
+                </label>
                 <button
                   class="detail-btn pill-btn pill-btn-sm pill-btn-ghost"
                   type="button"
@@ -1307,6 +1382,18 @@
 {#if aiSettingsOpen || aiSettingsOverlay.landed}
   {#await aiSettingsOverlay.chunk() then AiSettingsModule}
     <AiSettingsModule.default bind:open={aiSettingsOpen} />
+  {/await}
+{/if}
+
+<!-- M13: shared AI result dialog (headless runs land here). -->
+{#if aiResultOpen || aiResultOverlay.landed}
+  {#await aiResultOverlay.chunk() then AiResultDialogModule}
+    <AiResultDialogModule.default
+      bind:open={aiResultOpen}
+      title={aiResult?.title ?? "AI result"}
+      text={aiResult?.text ?? ""}
+      meta={aiResult?.meta ?? null}
+    />
   {/await}
 {/if}
 

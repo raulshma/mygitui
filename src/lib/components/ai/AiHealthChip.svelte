@@ -57,6 +57,7 @@
   let { compact = false }: { compact?: boolean } = $props();
 </script>
 
+{#if ai.isEnabled()}
 <Hint label={`AI: ${view.detail}`}>
   {#snippet child({ props })}
     <Button
@@ -83,3 +84,4 @@
     </Button>
   {/snippet}
 </Hint>
+{/if}

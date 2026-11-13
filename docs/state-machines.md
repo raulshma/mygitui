@@ -158,6 +158,8 @@ the canonical encodings for the first three:
 | Run polling | `loading → live-polling(3.5s, visibility-gated) → finished(one final fetch)` | `WorkflowRunView.svelte` (polls only a seen run; the finished-edge resets per view) | fixed: the `wasActive` edge detector misfired a final fetch on mount of a finished run and across view switches (2026-11 wave #14) |
 | AI connection | `unknown → checking → ok/down/unauthenticated` (coalesced probes + jittered backoff) | `src/lib/ai/connection.ts` | explicit (tested) |
 | AI commit/PR generation | `idle → generating(busy-guard) → result \| error`; dialog prefill round-trips the typed UI bus **with a 45 s deadline** | `src/lib/ai/ai.svelte.ts`, `CreatePrDialog.svelte` | fixed: with no bridge listening the button stuck on "Waiting…" forever — the deadline turns the wedge into a recoverable error (2026-11 wave) |
+| AI job (M13) | `queued → gathering → prompting → generating(streaming) → parsing → done \| cancelled \| error` (terminal states move to a capped persisted history ring; cancel = abort → provider rejects → runner reports `cancelled`, distinguished from the 120s deadline) | `src/lib/ai/jobs.svelte.ts` (`AiJobStore.begin` ticket = the only mutation surface; `ai.svelte.ts run()` drives it) | explicit (tested); status bar, feature buttons and the Activity tab all read this one store |
+| Assistant chat turn (M13) | `idle → gathering(context chips, best-effort) → prompting → generating(streaming) → done \| cancelled \| error(+partial text kept)`; per-ROOT thread, own busy slot per root (never blocks feature runs), master-switch + opt-in gated; every failure path (context gather included) reaches exactly one terminal transition, and the 120s deadline reports an honest timeout error — never `cancelled` (a user cancel is distinguished via the job store's cancel-requested flag, runFeature's rule) | `src/lib/ai/chat.svelte.ts` (`ChatStore.send`); threads persist under `mygitui.ai.chat` | explicit (tested); advisory by contract — the assistant never mutates |
 | opencode serve | `empty → starting(≤30s) ⇄ running → stopped` (single slot) | `src-tauri/src/opencode.rs` registry | implicit-ok |
 
 ## Persistence (localStorage)
@@ -165,6 +167,7 @@ the canonical encodings for the first three:
 | Machine | States | Source of truth | Status |
 |---|---|---|---|
 | Per-key parse/store | `unparsed → enveloped {v, data} → migrated → validated (malformed dropped) → debounced last-wins write` | `src/lib/state/persist.ts` (`loadVersioned` + migration registry); `railPins` adopted as the canonical example (legacy lists load as v1 and re-save enveloped) | fixed: no schema versioning existed and the one migration (autofetch's legacy-key heuristic) was a guess — the next shape change migrates instead (2026-11 wave #7) |
+| AI activity history + assistant threads (M13) | enveloped `mygitui.ai.activity` (job records, cap 200; response text capped 20k on every terminal path — cancelled/failed streamed partials included) + `mygitui.ai.chat` (threads keyed by repo root, 60 messages, 20k chars/message, 20 roots each-capped); parse-and-drop validators, text caps on write AND parse so a runaway model cannot wedge storage | `src/lib/ai/jobs.svelte.ts`, `src/lib/ai/chat.svelte.ts` | explicit (tested) |
 
 ---
 

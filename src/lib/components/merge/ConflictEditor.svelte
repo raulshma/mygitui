@@ -50,6 +50,10 @@
     type Segment,
   } from "./conflictModel";
   import { describeError } from "$lib/errors";
+import { ai } from "$lib/ai/ai.svelte";
+import type { AiRunOptions } from "$lib/ai/ai.svelte";
+import AiFeatureButton from "$lib/components/ai/AiFeatureButton.svelte";
+import type { FeatureOutcome } from "$lib/ai/features";
 
   let {
     repoId,
@@ -315,6 +319,47 @@
   async function prevConflict(): Promise<void> {
     if (total === 0) return;
     await reveal((cursor - 1 + total) % total);
+  }
+
+  // -- M13: AI conflict suggestion ----------------------------------------------
+
+  /** Cap for the surrounding file content sent as context. */
+  const SUGGEST_CONTEXT_CHARS = 8_000;
+
+  /** conflict-assist: both sides + the file's (capped) marked content. */
+  function runSuggest(index: number, opts?: AiRunOptions): Promise<FeatureOutcome> {
+    const path = selected?.path;
+    const conflict = conflictSegments[index];
+    if (path === undefined || conflict === undefined) {
+      return Promise.reject(new Error("this conflict is no longer loaded"));
+    }
+    const body = text ?? "";
+    const context = body.length > SUGGEST_CONTEXT_CHARS ? body.slice(0, SUGGEST_CONTEXT_CHARS) : body;
+    return ai.run(
+      "conflict-assist",
+      { repoId, path, ours: conflict.ours, theirs: conflict.theirs, diff: context },
+      undefined,
+      opts,
+    );
+  }
+
+  /**
+   * Applies a parsed suggestion into the conflict's custom-text field and
+   * opens the Edit textarea on it — advisory by construction: nothing is
+   * resolved or staged until the user reviews and marks it resolved.
+   */
+  function onSuggestion(index: number, outcome: FeatureOutcome): void {
+    const path = selected?.path;
+    if (path === undefined) return;
+    const suggestion = outcome.text ?? "";
+    if (suggestion.length === 0) {
+      toast("AI returned an empty suggestion", { kind: "info" });
+      return;
+    }
+    customsByFile[path] = { ...(customsByFile[path] ?? {}), [index]: suggestion };
+    editing[path] = index;
+    cursor = index;
+    touch(path);
   }
 
   function onKeydown(event: KeyboardEvent): void {
@@ -594,6 +639,21 @@
                       onclick={() => startEdit(index)}>Edit</Button
                     >
                   {/if}
+                  <!-- M13: AI suggestion lands in the Edit textarea — the
+                       user reviews and applies it through the normal flow. -->
+                  <AiFeatureButton
+                    {repoId}
+                    kind="conflict-assist"
+                    label="AI suggest"
+                    title="Suggest a resolution with AI"
+                    confirmText={"Send both sides of this conflict to {backend} for a resolution suggestion?"}
+                    errorPrefix="AI suggestion failed"
+                    gateVisibility={false}
+                    compact
+                    disabled={resolvingPath === selected.path}
+                    run={(opts) => runSuggest(index, opts)}
+                    onResult={(outcome) => onSuggestion(index, outcome)}
+                  />
                 </div>
                 {#if isEditing(index)}
                   <textarea

@@ -788,14 +788,34 @@
       id: "ai",
       label: "AI",
       icon: "bolt",
-      blurb: "Provider wiring for AI features.",
+      blurb: "AI features, providers and transparency.",
       rows: [
+        {
+          kind: "toggle",
+          id: "ai-enabled",
+          title: "AI features",
+          description:
+            "Master switch. Off hides every AI affordance (buttons, assistant, health chip) and cancels running AI jobs. Nothing is sent anywhere while off.",
+          keywords: "ai enable disable off llm privacy",
+          get: () => ai.isEnabled(),
+          set: (value) => ai.setEnabled(value),
+        },
+        {
+          kind: "toggle",
+          id: "ai-status-bar",
+          title: "Live AI activity in the status bar",
+          description:
+            "One row per running AI job with its phase, elapsed time and a Cancel button.",
+          keywords: "ai progress status bar indicator cancel activity",
+          get: () => ai.isStatusBarEnabled(),
+          set: (value) => ai.setStatusBarEnabled(value),
+        },
         {
           kind: "action",
           id: "ai-provider",
           title: "AI provider",
           description: () =>
-            `Preferred backend: ${aiBackendLabel}. Backends, models, connection checks and the per-repo feature opt-ins live in the AI settings dialog.`,
+            `Preferred backend: ${aiBackendLabel}. Backends, models, per-feature toggles and connection checks live in the AI settings dialog.`,
           keywords: "openrouter opencode model llm provider backend",
           buttons: [
             { label: "AI settings…", onclick: () => emitUiEvent("open-ai-settings") },

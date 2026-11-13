@@ -54,6 +54,8 @@
     syncSuccessMessage,
   } from "$lib/git/sync";
   import { toast } from "$lib/toast";
+  import { ai } from "$lib/ai/ai.svelte";
+  import AiFeatureButton from "$lib/components/ai/AiFeatureButton.svelte";
   import { emitUiEvent, onUiEvent } from "$lib/palette/events";
   import {
     showMenuAt,
@@ -549,6 +551,28 @@
             </Button>
           {/snippet}
         </Hint>
+      {:else if ai.isEnabled() && ai.isFeatureEnabled("branch-name")}
+        <!-- M13: the long-orphaned branch-name feature gets its home —
+             AI reads the branch's recent work and suggests a kebab-case
+             name (first use shows the shared opt-in confirm). The answer
+             fills the query, which doubles as the create field. -->
+        <AiFeatureButton
+          {repoId}
+          kind="branch-name"
+          icon
+          gateVisibility={false}
+          label="Suggest branch name"
+          title="Suggest a branch name with AI"
+          confirmText={"Describe the branch to {backend} for a name suggestion?"}
+          errorPrefix="AI branch name failed"
+          run={(opts) => ai.run("branch-name", { repoId }, undefined, opts)}
+          onResult={(outcome) => {
+            if (outcome.branchName !== undefined && outcome.branchName !== "") {
+              query = outcome.branchName;
+              inputEl?.focus();
+            }
+          }}
+        />
       {/if}
     </div>
 

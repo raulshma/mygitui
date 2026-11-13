@@ -23,7 +23,7 @@
    * a breadcrumb stack — "Back" pops it. Sha chips keep emitting
    * history-select-commit.
    */
-  import { repoBlame, streamLog } from "$lib/ipc/client";
+  import { readFile, repoBlame, streamLog } from "$lib/ipc/client";
   import { toast } from "$lib/toast";
   import { emitUiEvent } from "$lib/palette/events";
   import type { BlameLine, LogFilter } from "$lib/ipc/types";
@@ -35,6 +35,9 @@
   import { ageBackground, ageRatios } from "./blameModel";
   import Icon from "$lib/components/icons/Icon.svelte";
   import { appIcon } from "$lib/components/icons/library.svelte";
+  import { showMenuAt, type MenuEntry } from "$lib/components/menu/contextMenuStore.svelte";
+  import { ai } from "$lib/ai/ai.svelte";
+  import { aiResultMeta } from "$lib/ai/usage";
 
   const iconClose = $derived(appIcon("close")!);
   import { Button } from "$lib/components/ui/button/index.js";
@@ -236,6 +239,90 @@
   function shaClick(sha: string): void {
     emitUiEvent("history-select-commit", { sha });
   }
+
+  // -- M13: explain-blame (per-line context menu) -------------------------------
+
+  /** sha → one-line summary (immutable blame commits; cached like parents). */
+  const summaryCache = new Map<string, string | null>();
+
+  async function summaryOf(sha: string): Promise<string | null> {
+    if (summaryCache.has(sha)) return summaryCache.get(sha) ?? null;
+    try {
+      const summary = await new Promise<string | null>((resolve, reject) => {
+        void streamLog(
+          repoId,
+          { ...PARENT_LOG_FILTER, refs: [sha] },
+          (page) => {
+            resolve(page.commits.find((c) => c.sha === sha)?.summary ?? null);
+          },
+        ).catch(reject);
+      });
+      summaryCache.set(sha, summary);
+      return summary;
+    } catch {
+      return null;
+    }
+  }
+
+  /** Decode + slice ±15 lines around `lineNo` (best-effort; binary → null). */
+  async function fileSliceAround(lineNo: number): Promise<string | null> {
+    try {
+      const bytes = await readFile(repoId, path);
+      const text = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
+      if (text.includes("\u0000")) return null; // binary — no useful slice
+      const all = text.split("\n");
+      const start = Math.max(0, lineNo - 1 - 15);
+      const end = Math.min(all.length, lineNo + 15);
+      return all
+        .slice(start, end)
+        .map((l, i) => `${start + i + 1}${start + i + 1 === lineNo ? " →" : "  "}| ${l}`)
+        .join("\n")
+        .slice(0, 4_000);
+    } catch {
+      return null;
+    }
+  }
+
+  /** Line row context menu (right-click): AI explain + the click offer. */
+  function lineMenu(event: MouseEvent, row: BlameRow): void {
+    if (row.kind !== "line" || row.line === undefined) return;
+    const entries: MenuEntry[] = [
+      { id: "blame-parent", label: "Blame from this commit's parent", run: () => void lineClick(row.sha) },
+    ];
+    if (ai.isEnabled() && ai.isFeatureEnabled("explain-blame")) {
+      entries.push({
+        id: "ai-explain-line",
+        label: "Explain with AI…",
+        run: () => void explainLine(row.sha, row.line!),
+      });
+    }
+    showMenuAt(event, entries);
+  }
+
+  /** Headless explain-blame for one line; result → shared dialog. */
+  async function explainLine(sha: string, line: BlameLine): Promise<void> {
+    try {
+      const [summary, slice] = await Promise.all([
+        summaryOf(sha),
+        fileSliceAround(line.line_no),
+      ]);
+      const outcome = await ai.run("explain-blame", {
+        repoId,
+        path,
+        line: line.line_no,
+        lineText: line.text,
+        commitSummary: summary ?? undefined,
+        fileSlice: slice ?? undefined,
+      });
+      emitUiEvent("ai-show-result", {
+        title: `${path}:${line.line_no}`,
+        text: outcome.text ?? outcome.result.text,
+        meta: aiResultMeta(outcome.result),
+      });
+    } catch (err) {
+      toast(`AI explain failed: ${describeError(err)}`, { kind: "error" });
+    }
+  }
 </script>
 
 <div
@@ -388,6 +475,7 @@
                   style:height={`${ROW_HEIGHT}px`}
                   style:background={ageBackground(heat.get(v.row.sha) ?? 0)}
                   onclick={() => lineClick(v.row.sha)}
+                  oncontextmenu={(e) => lineMenu(e, v.row)}
                 >
                   <span
                     class="bno w-12 shrink-0 select-none text-right font-mono text-muted-foreground"

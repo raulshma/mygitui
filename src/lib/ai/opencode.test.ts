@@ -1336,3 +1336,72 @@ describe("OpenCodeProvider.subscribeLiveness", () => {
     expect(streamAuth[1]).toBe(`Basic ${btoa("opencode:generated-two")}`);
   });
 });
+
+describe("OpenCodeProvider v2 generateStream (M13)", () => {
+  function v2StreamEvents(parts: string[]) {
+    const events: Array<{ type: string; data: unknown }> = parts.map((text, ordinal) => ({
+      type: "session.text.ended",
+      data: { sessionID: "sess-v2", assistantMessageID: "msg-1", ordinal, text },
+    }));
+    events.push({
+      type: "session.execution.succeeded",
+      // The REAL opencode `tokens` shape (sdk types.gen.d.ts): input/output
+      // keys, not the AI SDK's inputTokens/… — usageFromSdk maps it.
+      data: {
+        sessionID: "sess-v2",
+        usage: { input: 7, output: 3, reasoning: 0, cache: { read: 0, write: 0 } },
+      },
+    });
+    return (async function* () {
+      for (const event of events) yield event;
+    })();
+  }
+
+  it("delivers one delta per session.text.ended part and reads usage", async () => {
+    FAKE_V2.session.create.mockResolvedValue({ id: "sess-v2" });
+    FAKE_V2.session.prompt.mockResolvedValue({ id: "msg-1" });
+    FAKE_V2.session.remove.mockResolvedValue(undefined);
+    FAKE_V2.event.subscribe.mockReturnValue(v2StreamEvents(["part one. ", "part two."]));
+
+    const deltas: string[] = [];
+    const result = await makeV2Provider().generateStream({ prompt: "hello" }, (d) => deltas.push(d));
+    expect(deltas).toEqual(["part one. ", "part two."]);
+    // Parts join with a newline in the final text (they are segments).
+    expect(result).toMatchObject({
+      text: "part one. \npart two.",
+      backend: "opencode",
+      usage: { inputTokens: 7, outputTokens: 3 },
+    });
+    expect(FAKE_V2.session.remove).toHaveBeenCalledWith({ sessionID: "sess-v2" });
+  });
+
+  it("reports the requested model via onServing (default → null)", async () => {
+    FAKE_V2.session.create.mockResolvedValue({ id: "sess-v2" });
+    FAKE_V2.session.prompt.mockResolvedValue({ id: "msg-1" });
+    FAKE_V2.session.remove.mockResolvedValue(undefined);
+    FAKE_V2.event.subscribe.mockReturnValue(v2StreamEvents(["x"]));
+
+    const serving: Array<[string, string | null]> = [];
+    await makeV2Provider().generateStream(
+      { prompt: "hi", onServing: (backend, model) => serving.push([backend, model]) },
+      () => {},
+    );
+    // No explicit model → the server default serves → model is null.
+    expect(serving).toEqual([["opencode", null]]);
+  });
+
+  it("falls back to one-shot generate for v1 (no generateStream capability loss)", async () => {
+    // A 1.x server: the v1 client's blocking session.prompt answers once and
+    // the provider surfaces the whole text as a single delta.
+    FAKE_CLIENT.session.create.mockResolvedValue({ data: { id: "sess-1" } });
+    FAKE_CLIENT.session.prompt.mockResolvedValue({
+      data: { parts: [{ type: "text", text: "v1 whole answer" }] },
+    });
+
+    const deltas: string[] = [];
+    const provider = new OpenCodeProvider({ fetchImpl: healthFetch(200) });
+    const result = await provider.generateStream({ prompt: "hi" }, (d) => deltas.push(d));
+    expect(deltas).toEqual(["v1 whole answer"]);
+    expect(result.text).toBe("v1 whole answer");
+  });
+});

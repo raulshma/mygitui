@@ -31,6 +31,11 @@
   } from "./actionsModel";
   import { actionLogSegments } from "./actionLog";
   import { readStashedActionRun } from "./runPopout";
+  import { ai } from "$lib/ai/ai.svelte";
+  import type { AiRunOptions } from "$lib/ai/ai.svelte";
+  import AiFeatureButton from "$lib/components/ai/AiFeatureButton.svelte";
+  import { aiResultMeta } from "$lib/ai/usage";
+  import { emitUiEvent } from "$lib/palette/events";
 
   let {
     repoId,
@@ -119,6 +124,49 @@
   function cancelRun(): void {
     if (!run) return;
     void actionsStore.cancel(run.run_id);
+  }
+
+  // -- M13: AI diagnosis of the failed action run -------------------------------
+
+  /** Cap for the log tail sent to the model. */
+  const DIAG_LOG_TAIL_CHARS = 40_000;
+
+  /** True when the run finished unsuccessfully (the AI entry shows then). */
+  const failed = $derived(
+    run !== null && run.done && run.exit_code !== null && run.exit_code !== 0,
+  );
+
+  /** diagnose-action: command/exit metadata + the output's tail. */
+  function runDiagnose(opts?: AiRunOptions) {
+    const current = run;
+    if (!current) {
+      return Promise.reject(new Error("the run is not loaded"));
+    }
+    const lines = truncateLines(current.lines, RUN_LINE_CAP).lines;
+    const log = lines.join("\n").trim();
+    const meta = [
+      `Action: ${current.name}`,
+      current.command ? `Command: ${current.command}` : null,
+      `Exit code: ${current.exit_code ?? "?"}`,
+    ]
+      .filter((part): part is string => part !== null)
+      .join("\n");
+    const tail = log.length > DIAG_LOG_TAIL_CHARS ? log.slice(-DIAG_LOG_TAIL_CHARS) : log;
+    return ai.run(
+      "diagnose-action",
+      { repoId, runMeta: meta, diff: tail },
+      undefined,
+      opts,
+    );
+  }
+
+  function onDiagnose(outcome: import("$lib/ai/features").FeatureOutcome): void {
+    const current = run;
+    emitUiEvent("ai-show-result", {
+      title: `Diagnosis: ${current?.name ?? "action run"}`,
+      text: outcome.text ?? outcome.result.text,
+      meta: aiResultMeta(outcome.result),
+    });
   }
 </script>
 
@@ -246,6 +294,21 @@
         <Button variant="outline" size="xs" class="tb flex-none rounded-full px-2.5 text-ui-micro leading-[1.4] text-muted-foreground @max-[38rem]:px-2 @max-[38rem]:text-ui-tiny" type="button" onclick={() => void copyLog()}>
           Copy log
         </Button>
+        <!-- M13: AI diagnosis next to Copy log once the run failed. -->
+        {#if failed}
+          <AiFeatureButton
+            {repoId}
+            kind="diagnose-action"
+            label="AI diagnose"
+            title="Diagnose this failed run with AI"
+            confirmText={"Send this run's log tail to {backend} for a diagnosis?"}
+            errorPrefix="AI diagnose failed"
+            gateVisibility={false}
+            compact
+            run={runDiagnose}
+            onResult={onDiagnose}
+          />
+        {/if}
         {#if live}
           <Hint label="Cancel this action">
             {#snippet child({ props })}

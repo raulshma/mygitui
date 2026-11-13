@@ -36,10 +36,15 @@ import { OpenCodeProvider } from "./opencode";
 import type { ManagedServe } from "./opencode";
 import { OpenRouterProvider } from "./openrouter";
 import { runFeature } from "./features";
-import type { FeatureCtx, FeatureDeps, FeatureGitClient, FeatureOutcome } from "./features";
-import { defaultAiConfig, AiError, resolveOpencode } from "./types";
+import type { AiRunHooks, FeatureCtx, FeatureDeps, FeatureGitClient, FeatureOutcome } from "./features";
+import { defaultAiConfig, AiError, isAiError, resolveOpencode } from "./types";
 import type { AiBackend, AiConfig, FeatureKind, OpencodeMode } from "./types";
 import type { ProviderSet, Unsubscribe } from "./provider";
+import { AiJobStore } from "./jobs.svelte";
+import { ChatStore } from "./chat.svelte";
+import type { ChatContextSelection, ChatMessage } from "./chat.svelte";
+import { aiFeatureLabel, featureWantsStreaming } from "./registry";
+
 import { describeError } from "$lib/errors";
 
 /** localStorage key for the non-secret AI config. */
@@ -109,6 +114,10 @@ export interface AiStoreDeps {
   storage?: StorageLike | null;
   /** Provider overrides (tests mock the backends). */
   providers?: Partial<ProviderSet>;
+  /** Job store override (tests isolate the run history). */
+  jobs?: AiJobStore;
+  /** Chat store override (tests isolate assistant conversations). */
+  chat?: ChatStore;
   /** Supervisor option overrides (tests). */
   supervisor?: Partial<Pick<SupervisorOptions, "now" | "scheduler" | "jitter">>;
   /** Set `false` to disable the opencode SSE liveness stream (tests). */
@@ -156,6 +165,20 @@ export function parseAiConfig(raw: string | null): AiConfig {
   if (typeof obj.opencodeEnabled === "boolean") {
     config.opencodeEnabled = obj.opencodeEnabled;
   }
+  if (typeof obj.enabled === "boolean" && !obj.enabled) {
+    // Master switch is opt-out: only persist an explicit "off".
+    config.enabled = false;
+  }
+  if (typeof obj.statusBar === "boolean" && !obj.statusBar) {
+    config.statusBar = false;
+  }
+  if (typeof obj.features === "object" && obj.features !== null) {
+    for (const [kind, value] of Object.entries(obj.features as Record<string, unknown>)) {
+      if (typeof value === "boolean") {
+        (config.features ??= {})[kind] = value;
+      }
+    }
+  }
   if (typeof obj.repoOptIn === "object" && obj.repoOptIn !== null) {
     for (const [repoId, value] of Object.entries(obj.repoOptIn as Record<string, unknown>)) {
       if (typeof value === "boolean") config.repoOptIn[repoId] = value;
@@ -178,6 +201,17 @@ export class AiStore {
   config: AiConfig = $state(defaultAiConfig());
   /** Per-repo feature-run state (`busy`/`error`/`last`). */
   generateState: Record<string, AiGenerateState> = $state({});
+  /**
+   * The transparency engine (M13): every `run` becomes an observable
+   * `AiJob` — status-bar rows, cancel, activity history. Shares this
+   * store's storage so tests isolate both with one injectable.
+   */
+  readonly jobs: AiJobStore;
+  /**
+   * The repo-aware assistant (M13): per-root conversations, own busy slot
+   * (a chat never blocks feature runs), same master-switch + opt-in gates.
+   */
+  readonly chat: ChatStore;
 
   readonly #storage: StorageLike | null;
   readonly #supervisor: ConnectionSupervisor;
@@ -185,6 +219,7 @@ export class AiStore {
   constructor(deps: AiStoreDeps = {}) {
     this.#storage = deps.storage === undefined ? defaultStorage() : deps.storage;
     this.config = parseAiConfig(this.#storage?.getItem(AI_STORAGE_KEY) ?? null);
+    this.jobs = deps.jobs ?? new AiJobStore({ storage: this.#storage });
     // Injectable desktop check (tests): gates the liveness loop and the
     // managed-mode wiring below.
     const live = deps.isTauri ?? isTauri;
@@ -213,6 +248,17 @@ export class AiStore {
       config: () => this.config,
       ...deps.supervisor,
     });
+    this.chat =
+      deps.chat ??
+      new ChatStore({
+        storage: this.#storage,
+        jobs: this.jobs,
+        router: this.#supervisor,
+        // Chat respects the same gates as feature runs: the master switch
+        // and per-repo opt-in, read live so settings apply instantly.
+        enabled: () => this.isEnabled(),
+        isOptedIn: (repoId) => this.isOptedIn(repoId),
+      });
 
     // M12: opencode SSE liveness — while the server streams its event
     // endpoint, every decoded event refreshes transport freshness via the
@@ -336,6 +382,49 @@ export class AiStore {
     this.#persist();
   }
 
+  // -- master + per-feature switches (M13) --------------------------------------
+
+  /** True when AI is on at all (`enabled` is opt-out; default on). */
+  isEnabled(): boolean {
+    return this.config.enabled !== false;
+  }
+
+  /**
+   * Master switch (the "turn it off" control): hides every AI affordance
+   * and cancels in-flight jobs. Enabling re-arms nothing automatically —
+   * the next run probes backends through the supervisor as usual.
+   */
+  setEnabled(enabled: boolean): void {
+    if (enabled) delete this.config.enabled;
+    else this.config.enabled = false;
+    this.#persist();
+    if (!enabled) this.jobs.cancelAll();
+  }
+
+  /** True when `kind` is on (master switch AND per-feature toggle). */
+  isFeatureEnabled(kind: FeatureKind): boolean {
+    return this.isEnabled() && this.config.features?.[kind] !== false;
+  }
+
+  /** Per-feature toggle (settings renders these from `AI_FEATURES`). */
+  setFeatureEnabled(kind: FeatureKind, enabled: boolean): void {
+    const features = (this.config.features ??= {});
+    if (enabled) delete features[kind];
+    else features[kind] = false;
+    this.#persist();
+  }
+
+  /** Live AI job rows in the status bar (default on). */
+  isStatusBarEnabled(): boolean {
+    return this.config.statusBar !== false;
+  }
+
+  setStatusBarEnabled(enabled: boolean): void {
+    if (enabled) delete this.config.statusBar;
+    else this.config.statusBar = false;
+    this.#persist();
+  }
+
   // -- secrets (OS keyring; NEVER localStorage) --------------------------------
 
   /** Stores the OpenRouter API key in the OS keyring. */
@@ -402,11 +491,13 @@ export class AiStore {
   }
 
   /**
-   * Runs one AI feature with gating and state management: refuses when the
-   * repo is not opted in (AiError kind `opt-in`), refuses concurrent runs
-   * for the same repo, records busy/error/last, and rethrows failures so
-   * the caller can react (toast etc.). No automatic retries — the user
-   * re-invokes.
+   * Runs one AI feature with gating and state management: refuses when AI
+   * or the feature is switched off (AiError kind `opt-in`), refuses when
+   * the repo is not opted in, refuses concurrent runs for the same repo,
+   * records busy/error/last, and drives an {@link AiJobTicket} so the run
+   * is visible (phase, elapsed, cancel) in the status bar and Activity
+   * tab. Rethrows failures so the caller can react (toast etc.). No
+   * automatic retries — the user re-invokes.
    */
   async run(
     kind: FeatureKind,
@@ -414,6 +505,12 @@ export class AiStore {
     git?: FeatureGitClient,
     opts?: AiRunOptions,
   ): Promise<FeatureOutcome> {
+    if (!this.isEnabled()) {
+      throw new AiError("opt-in", "AI features are turned off in AI settings", {});
+    }
+    if (!this.isFeatureEnabled(kind)) {
+      throw new AiError("opt-in", `"${aiFeatureLabel(kind)}" is turned off in AI settings`, {});
+    }
     const oneShot = opts?.oneShot === true;
     if (!oneShot && !this.isOptedIn(ctx.repoId)) {
       throw new AiError(
@@ -434,14 +531,40 @@ export class AiStore {
       isOptedIn: (repoId) => oneShot || this.isOptedIn(repoId),
     };
 
+    // The job makes this run visible: status-bar row, phase, elapsed,
+    // cancel, and an activity-history record afterwards.
+    const repoName = tabStore.tabs.find((tab) => tab.id === ctx.repoId)?.name ?? null;
+    const ticket = this.jobs.begin({ repoId: ctx.repoId, repoName, feature: kind });
+    const hooks: AiRunHooks = {
+      onPhase: (phase, message) => ticket.phase(phase, message),
+      onPrompt: (system, prompt) => ticket.promptPreview(`${system}\n\n${prompt}`),
+      onServing: (backend, model) => ticket.serving(backend, model),
+      // Only stream-preferring features hook deltas (registry metadata):
+      // structured one-shot outputs (branch-name, conflict-assist) parse
+      // the finished text, so streaming them would spend tokens the
+      // caller never renders progressively.
+      onDelta: featureWantsStreaming(kind) ? (text) => ticket.delta(text) : undefined,
+      signal: ticket.signal,
+    };
+
     state.busy = true;
     state.error = null;
     try {
-      const outcome = await runFeature(kind, ctx, deps);
+      const outcome = await runFeature(kind, ctx, deps, hooks);
       state.last = outcome;
+      ticket.done({
+        backend: outcome.result.backend,
+        model: outcome.result.model,
+        elapsedMs: outcome.result.elapsedMs,
+        usage: outcome.result.usage ?? null,
+        text: outcome.result.text,
+      });
       return outcome;
     } catch (err) {
       state.error = describeError(err);
+      if (isAiError(err) && err.kind === "cancelled") ticket.cancelled();
+      else if (this.jobs.cancelRequested(ticket.id)) ticket.cancelled();
+      else ticket.failed(describeError(err));
       throw err;
     } finally {
       state.busy = false;
@@ -455,6 +578,21 @@ export class AiStore {
     opts?: AiRunOptions,
   ): Promise<FeatureOutcome> {
     return this.run("commit-message", { repoId }, git, opts);
+  }
+
+  /**
+   * Convenience: one assistant turn. Fills the tab name for the job's
+   * status-bar row (the same lookup `run` does) and delegates to the chat
+   * store — the thread is keyed by repo root, so callers must pass it.
+   */
+  async sendChat(opts: {
+    repoId: string;
+    root: string;
+    question: string;
+    context: ChatContextSelection;
+  }): Promise<ChatMessage> {
+    const repoName = tabStore.tabs.find((tab) => tab.id === opts.repoId)?.name ?? null;
+    return this.chat.send({ ...opts, repoName });
   }
 }
 

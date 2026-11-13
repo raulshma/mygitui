@@ -46,7 +46,8 @@ export type PanelId =
   | "terminal"
   | "forge"
   | "actions"
-  | "stats";
+  | "stats"
+  | "assistant";
 
 /** Registry order = default tab order (mirrors the pre-M4 RepoView stack,
  * with the file explorer first, VS Code-style). */
@@ -67,6 +68,9 @@ export const PANEL_IDS: readonly PanelId[] = [
   "forge",
   "actions",
   "stats",
+  // M13: appended last — old saved layouts validate against PANEL_IDS and
+  // simply lack the panel until the user focuses it (no migration).
+  "assistant",
 ];
 
 /**
@@ -148,6 +152,10 @@ export const PANEL_META: Record<PanelId, PanelMeta> = {
   stats: {
     label: "Stats",
     icon: "M18 20V10M12 20V4M6 20v-6",
+  },
+  assistant: {
+    label: "Assistant",
+    icon: "M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z",
   },
 };
 

@@ -531,3 +531,155 @@ describe("AiStore SSE liveness loop", () => {
     expect(streamAuth[1]).toBe(`Basic ${btoa("opencode:generated-two")}`);
   });
 });
+
+// ---------------------------------------------------------------------------
+// M13: master switch + per-feature gating + chat store wiring
+// ---------------------------------------------------------------------------
+
+describe("AiStore master switch and per-feature gates", () => {
+  it("run refuses while the master switch is off, works after re-enable", async () => {
+    const { store, git, opencode } = makeHarness();
+    store.setOptIn("r1", true);
+    store.setEnabled(false);
+    await expect(store.run("commit-message", { repoId: "r1" }, git)).rejects.toMatchObject({
+      kind: "opt-in",
+    });
+    expect(opencode.generate).not.toHaveBeenCalled();
+    // isEnabled is opt-out: re-enabling deletes the flag and runs again.
+    expect(store.isEnabled()).toBe(false);
+    store.setEnabled(true);
+    expect(store.isEnabled()).toBe(true);
+    await store.run("commit-message", { repoId: "r1" }, git);
+    expect(opencode.generate).toHaveBeenCalledTimes(1);
+  });
+
+  it("setEnabled(false) cancels in-flight jobs", async () => {
+    const { store, git, opencode } = makeHarness();
+    store.setOptIn("r1", true);
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    opencode.generate.mockImplementationOnce(
+      () =>
+        new Promise<AiResult>((_resolve, reject) => {
+          // Reject on cancel — what a real SDK does with an aborted signal.
+          void gate.then(() => reject(new DOMException("aborted", "AbortError")));
+        }),
+    );
+    const pending = store.run("commit-message", { repoId: "r1" }, git);
+    store.setEnabled(false); // cancels all jobs
+    release();
+    await expect(pending).rejects.toMatchObject({ kind: "cancelled" });
+    expect(store.jobs.history[0]).toMatchObject({ status: "cancelled" });
+  });
+
+  it("per-feature toggles gate only their own kind", async () => {
+    const { store, git } = makeHarness();
+    store.setOptIn("r1", true);
+    store.setFeatureEnabled("commit-message", false);
+    expect(store.isFeatureEnabled("commit-message")).toBe(false);
+    expect(store.isFeatureEnabled("review-staged")).toBe(true);
+    await expect(store.run("commit-message", { repoId: "r1" }, git)).rejects.toMatchObject({
+      kind: "opt-in",
+    });
+    // Re-enable via deletion (default-on semantics).
+    store.setFeatureEnabled("commit-message", true);
+    expect(store.isFeatureEnabled("commit-message")).toBe(true);
+  });
+
+  it("the status-bar toggle persists without disabling AI", () => {
+    const storage = memStorage();
+    const store = new AiStore({ storage, providers: {} });
+    expect(store.isStatusBarEnabled()).toBe(true);
+    store.setStatusBarEnabled(false);
+    expect(store.isStatusBarEnabled()).toBe(false);
+    expect(store.isEnabled()).toBe(true);
+    const second = new AiStore({ storage, providers: {} });
+    expect(second.isStatusBarEnabled()).toBe(false);
+    expect(second.isEnabled()).toBe(true);
+  });
+});
+
+describe("AiStore chat wiring", () => {
+  it("exposes a chat store sharing the same storage and gates", async () => {
+    const { store } = makeHarness();
+    store.setEnabled(false);
+    await expect(
+      store.sendChat({ repoId: "r1", root: "/repo", question: "hi", context: { staged: false, commits: false, path: null, pasted: null } }),
+    ).rejects.toMatchObject({ kind: "opt-in" });
+    store.setEnabled(true);
+    await expect(
+      store.sendChat({ repoId: "r1", root: "/repo", question: "hi", context: { staged: false, commits: false, path: null, pasted: null } }),
+    ).rejects.toMatchObject({ kind: "opt-in" }); // not opted in yet
+    store.setOptIn("r1", true);
+    const reply = await store.sendChat({
+      repoId: "r1",
+      root: "/repo",
+      question: "hi",
+      context: { staged: false, commits: false, path: null, pasted: null },
+    });
+    expect(reply.role).toBe("assistant");
+    // The turn minted a "chat" job (status bar + activity visibility).
+    expect(store.jobs.history[0]).toMatchObject({ feature: "chat", status: "done" });
+    // The thread is keyed by root (survives repoId churn across launches).
+    expect(store.chat.conversationFor("/repo")).toHaveLength(2);
+  });
+
+  it("chat turns do not take the one-feature-at-a-time gate", async () => {
+    const { store, git, opencode } = makeHarness();
+    store.setOptIn("r1", true);
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    opencode.generate.mockImplementationOnce(() => gate.then(() => ({
+      text: "feat: x",
+      model: "m",
+      backend: "opencode" as const,
+      elapsedMs: 1,
+    })));
+    // A feature run in flight…
+    const featureRun = store.run("commit-message", { repoId: "r1" }, git);
+    // …does not block a chat turn on the same repo.
+    const chatRun = store.sendChat({
+      repoId: "r1",
+      root: "/repo",
+      question: "q",
+      context: { staged: false, commits: false, path: null, pasted: null },
+    });
+    await chatRun;
+    release();
+    await featureRun;
+    expect(store.chat.conversationFor("/repo")).toHaveLength(2);
+  });
+});
+
+describe("AiStore streaming preference (registry-driven)", () => {
+  it("stream-preferring features hook deltas; structured ones stay one-shot", async () => {
+    const { store, git, opencode } = makeHarness();
+    store.setOptIn("r1", true);
+    // The provider CAN stream — the feature registry decides per kind.
+    const stream = vi.fn(async (_req, onDelta: (d: string) => void) => {
+      onDelta("kebab-case-name ");
+      return {
+        text: "kebab-case-name",
+        model: "opencode-model",
+        backend: "opencode" as const,
+        elapsedMs: 4,
+      };
+    });
+    (opencode as unknown as { generateStream: unknown }).generateStream = stream;
+
+    // branch-name carries no streaming preference → one-shot generate (the
+    // parsed answer is the deliverable; streamed deltas were never rendered).
+    await store.run("branch-name", { repoId: "r1", description: "add the thing" }, git);
+    expect(opencode.generate).toHaveBeenCalledTimes(1);
+    expect(stream).not.toHaveBeenCalled();
+
+    // review-staged prefers streaming → generateStream with deltas.
+    await store.run("review-staged", { repoId: "r1" }, git);
+    expect(stream).toHaveBeenCalledTimes(1);
+    expect(opencode.generate).toHaveBeenCalledTimes(1); // unchanged
+  });
+});

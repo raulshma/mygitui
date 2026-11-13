@@ -52,6 +52,7 @@
 
 <AiFeatureButton
   {repoId}
+  kind="stash-message"
   label="Suggest message"
   title="Draft a stash message with AI"
   confirmText={"Send a summary of your changes to {backend} to draft a stash message?"}

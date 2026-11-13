@@ -16,6 +16,7 @@ import {
 const mocks = vi.hoisted(() => {
   return {
     generateText: vi.fn(),
+    streamText: vi.fn(),
     createOpenRouter: vi.fn(() => {
       // The provider object is callable: openrouter(modelId) → model handle.
       const callable = vi.fn((modelId: string) => ({ modelId, __handle: true }));
@@ -27,6 +28,7 @@ const mocks = vi.hoisted(() => {
 
 vi.mock("ai", () => ({
   generateText: mocks.generateText,
+  streamText: mocks.streamText,
 }));
 
 vi.mock("@openrouter/ai-sdk-provider", () => ({
@@ -284,5 +286,80 @@ describe("OpenRouterProvider", () => {
       .catch((e: unknown) => e);
     expect((err as { kind?: string }).kind).toBe("cancelled");
     expect(mocks.generateText).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// M13: generateStream (streamText path)
+// ---------------------------------------------------------------------------
+
+describe("OpenRouterProvider.generateStream", () => {
+  function mockStream(chunks: string[], opts?: { usage?: unknown; modelId?: string }) {
+    mocks.streamText.mockImplementation(() => ({
+      textStream: (async function* () {
+        for (const chunk of chunks) yield chunk;
+      })(),
+      text: Promise.resolve(chunks.join("")),
+      usage: Promise.resolve(opts?.usage ?? { inputTokens: 10, outputTokens: 5, totalTokens: 15 }),
+      response: Promise.resolve({ modelId: opts?.modelId ?? "anthropic/claude-sonnet-4.5" }),
+    }));
+  }
+
+  it("feeds textStream chunks to onDelta and reads usage + model", async () => {
+    mockStream(["Hel", "lo ", "world"]);
+    const deltas: string[] = [];
+    const result = await new OpenRouterProvider().generateStream({ prompt: "p" }, (d) => deltas.push(d));
+    expect(deltas).toEqual(["Hel", "lo ", "world"]);
+    expect(result).toMatchObject({
+      text: "Hello world",
+      model: "anthropic/claude-sonnet-4.5",
+      backend: "openrouter",
+      usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 },
+    });
+    const call = mocks.streamText.mock.calls[0][0];
+    expect(call.prompt).toBe("p");
+  });
+
+  it("reports which model served via onServing", async () => {
+    mockStream(["x"], { modelId: "anthropic/claude-sonnet-4.5" });
+    const serving: Array<[string, string | null]> = [];
+    await new OpenRouterProvider().generateStream(
+      {
+        prompt: "p",
+        // onServing reports the model routing picked (the request's model,
+        // defaulted); the response's modelId lands on the result.
+        model: "openai/gpt-oss-120b",
+        onServing: (backend, model) => serving.push([backend, model]),
+      },
+      () => {},
+    );
+    expect(serving).toEqual([["openrouter", "openai/gpt-oss-120b"]]);
+  });
+
+  it("propagates SDK stream failures as AiError", async () => {
+    mocks.streamText.mockImplementation(() => ({
+      textStream: (async function* () {
+        yield "par";
+        throw new Error("stream blew up");
+      })(),
+      usage: Promise.resolve(undefined),
+      response: Promise.resolve({ modelId: "m" }),
+    }));
+    const deltas: string[] = [];
+    const err = await new OpenRouterProvider()
+      .generateStream({ prompt: "p" }, (d) => deltas.push(d))
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect(deltas).toEqual(["par"]); // partial deltas already delivered
+  });
+
+  it("generateStream respects an already-cancelled signal like generate", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const err = await new OpenRouterProvider()
+      .generateStream({ prompt: "p", signal: controller.signal }, () => {})
+      .catch((e: unknown) => e);
+    expect((err as { kind?: string }).kind).toBe("cancelled");
+    expect(mocks.streamText).not.toHaveBeenCalled();
   });
 });

@@ -45,6 +45,7 @@
   let passphrase = $state("");
   let password = $state("");
   let pollSecs = $state(5);
+  let autoConnect = $state(false);
 
   let busy = $state(false);
   let testing = $state(false);
@@ -80,6 +81,7 @@
       passphrase = "";
       password = "";
       pollSecs = edit?.poll_secs ?? 5;
+      autoConnect = edit?.auto_connect ?? false;
       error = "";
       testResult = "";
       testError = "";
@@ -119,6 +121,7 @@
       password: password !== "" ? password : null,
       passphrase: passphrase !== "" ? passphrase : null,
       poll_secs: pollSecs,
+      auto_connect: autoConnect,
     };
   }
 
@@ -346,6 +349,16 @@
           bind:value={pollSecs}
           disabled={busy}
         />
+      </Label>
+
+      <Label class="check flex cursor-pointer items-center gap-1.5 text-sm text-foreground">
+        <input
+          type="checkbox"
+          bind:checked={autoConnect}
+          disabled={busy}
+          class="m-0 accent-primary"
+        />
+        <span>Auto-connect on launch</span>
       </Label>
 
       <div class="test-row flex flex-wrap items-center gap-2.5">

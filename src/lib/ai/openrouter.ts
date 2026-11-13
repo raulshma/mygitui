@@ -24,7 +24,7 @@ import {
   type AiProvider,
   type AiProbeResult,
 } from "./provider";
-import type { AiResult, ModelInfo } from "./types";
+import type { AiResult, AiUsage, ModelInfo } from "./types";
 import { describeError } from "$lib/errors";
 
 /** Public OpenRouter API base (models listing + generation). */
@@ -32,6 +32,37 @@ export const OPENROUTER_API_BASE = "https://openrouter.ai/api/v1";
 
 /** Injectable fetch surface (subset of DOM fetch; tests stub globalThis). */
 export type FetchLike = typeof fetch;
+
+/**
+ * Reads a provider's usage payload defensively into an {@link AiUsage}
+ * (undefined when nothing usable is present — older SDKs, providers that
+ * omit counts). Two shapes arrive here: the AI SDK's `LanguageModelUsage`
+ * (`inputTokens`/`outputTokens`/`totalTokens`) and opencode's `tokens`
+ * (`input`/`output`/`total`, plus `reasoning`/`cache` this ignores).
+ */
+export function usageFromSdk(usage: unknown): AiUsage | undefined {
+  if (typeof usage !== "object" || usage === null) return undefined;
+  const u = usage as Record<string, unknown>;
+  const num = (v: unknown): number | undefined =>
+    typeof v === "number" && Number.isFinite(v) ? v : undefined;
+  const out: AiUsage = {
+    inputTokens: num(u.inputTokens) ?? num(u.input),
+    outputTokens: num(u.outputTokens) ?? num(u.output),
+    totalTokens: num(u.totalTokens) ?? num(u.total),
+    // OpenRouter reports cost only when the request asked for usage
+    // accounting; read it when present, never invent it.
+    costUsd: num(u.costUsd ?? (u as { cost?: unknown }).cost),
+  };
+  if (
+    out.inputTokens === undefined &&
+    out.outputTokens === undefined &&
+    out.totalTokens === undefined &&
+    out.costUsd === undefined
+  ) {
+    return undefined;
+  }
+  return out;
+}
 
 /**
  * Ceiling for the models probe. The supervisor coalesces health checks into
@@ -183,6 +214,22 @@ export class OpenRouterProvider implements AiProvider {
   }
 
   async generate(req: AiGenerateRequest): Promise<AiResult> {
+    return this.#run(req);
+  }
+
+  async generateStream(
+    req: AiGenerateRequest,
+    onDelta: (delta: string) => void,
+  ): Promise<AiResult> {
+    return this.#run(req, onDelta);
+  }
+
+  /**
+   * Shared generation path: `onDelta === undefined` uses `generateText`;
+   * otherwise `streamText` feeds the textStream chunks to `onDelta` and
+   * resolves with the same result shape (usage included either way).
+   */
+  async #run(req: AiGenerateRequest, onDelta?: (delta: string) => void): Promise<AiResult> {
     const started = Date.now();
     const key = await this.#key();
     if (!key) {
@@ -197,32 +244,59 @@ export class OpenRouterProvider implements AiProvider {
     }
 
     const modelId = req.model ?? this.#options.defaultModel ?? DEFAULT_OPENROUTER_MODEL;
+    req.onServing?.("openrouter", modelId);
     // Deferred SDK load: first AI call pays the import, launch does not.
-    const [{ createOpenRouter }, { generateText }] = await Promise.all([
+    const [{ createOpenRouter }, aiSdk] = await Promise.all([
       import("@openrouter/ai-sdk-provider"),
       import("ai"),
     ]);
     const openrouter = createOpenRouter({ apiKey: key });
     try {
-      const result = await generateText({
-        model: openrouter(modelId),
+      const model = openrouter(modelId);
+      const base = {
+        model,
         ...(req.system !== undefined ? { system: req.system } : {}),
         prompt: req.prompt,
         abortSignal: req.signal,
-      });
-      const text = (result as { text?: unknown }).text;
-      if (typeof text !== "string" || text.trim().length === 0) {
-        throw new AiError("bad-response", "openrouter returned no text output", {
-          backend: "openrouter",
-        });
+      };
+      let text: string;
+      let usage: AiUsage | undefined;
+      let answeredModel: string = modelId;
+      if (onDelta === undefined) {
+        const result = await aiSdk.generateText(base);
+        const out = (result as { text?: unknown }).text;
+        if (typeof out !== "string" || out.trim().length === 0) {
+          throw new AiError("bad-response", "openrouter returned no text output", {
+            backend: "openrouter",
+          });
+        }
+        text = out;
+        usage = usageFromSdk((result as { usage?: unknown }).usage);
+        const answered =
+          (result as { response?: { modelId?: unknown } }).response?.modelId;
+        if (typeof answered === "string" && answered) answeredModel = answered;
+      } else {
+        const result = aiSdk.streamText(base);
+        for await (const delta of result.textStream) {
+          if (delta.length > 0) onDelta(delta);
+        }
+        const full = await result.text;
+        if (typeof full !== "string" || full.trim().length === 0) {
+          throw new AiError("bad-response", "openrouter returned no text output", {
+            backend: "openrouter",
+          });
+        }
+        text = full;
+        usage = usageFromSdk(await result.usage);
+        const answered = (await result.response).modelId;
+        if (typeof answered === "string" && answered) answeredModel = answered;
       }
-      const answered =
-        (result as { response?: { modelId?: unknown } }).response?.modelId;
       return {
         text,
-        model: typeof answered === "string" && answered ? answered : modelId,
+        model: answeredModel,
         backend: "openrouter",
         elapsedMs: Date.now() - started,
+        ...(usage !== undefined ? { usage } : {}),
       };
     } catch (err) {
       if (req.signal?.aborted) {

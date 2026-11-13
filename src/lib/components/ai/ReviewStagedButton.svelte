@@ -13,14 +13,18 @@
   import { ai } from "$lib/ai/ai.svelte";
   import type { AiRunOptions } from "$lib/ai/ai.svelte";
   import type { FeatureOutcome } from "$lib/ai/features";
+  import { aiResultMeta } from "$lib/ai/usage";
   import * as Dialog from "$lib/components/ui/dialog/index.js";
   import { Button } from "$lib/components/ui/button/index.js";
+  import { Spinner } from "$lib/components/ui/spinner/index.js";
   import { toast } from "$lib/toast";
   import AiFeatureButton from "./AiFeatureButton.svelte";
+  import AiMarkdown from "./AiMarkdown.svelte";
 
   let { repoId }: { repoId: string } = $props();
 
   let findings = $state<string | null>(null);
+  let meta = $state<string | null>(null);
   let open = $state(false);
   let closeButton = $state<HTMLElement | null>(null);
 
@@ -30,9 +34,20 @@
 
   function onResult(outcome: FeatureOutcome): void {
     findings = outcome.result.text;
+    meta = aiResultMeta(outcome.result);
     open = true;
     toast("Staged-change review ready", { kind: "success" });
   }
+
+  // M13: the modal opens as soon as the run starts and shows the streamed
+  // answer live; on failure before any result it closes again (the
+  // AiFeatureButton's inline fail UI carries the error).
+  const job = $derived(ai.jobs.activeJob(repoId, "review-staged"));
+  const streamed = $derived(job?.streamedText ?? null);
+  $effect(() => {
+    if (job !== null && findings === null) open = true;
+    if (job === null && findings === null) open = false;
+  });
 
   // Focus lands on Close (the old data-autofocus convention) on open.
   $effect(() => {
@@ -54,6 +69,7 @@
 
 <AiFeatureButton
   {repoId}
+  kind="review-staged"
   label="Review staged…"
   title="Review the staged diff with AI"
   confirmText={"Send the staged diff to {backend} for review?"}
@@ -84,10 +100,22 @@
     <Dialog.Title id="review-staged-title" class="m-0 mb-2 text-[1.125rem] font-medium text-foreground">Staged changes review</Dialog.Title>
     {#if findings !== null}
       <div class="rs-findings mb-3 max-h-[55vh] overflow-y-auto rounded-xl border border-border bg-muted/50 px-3 py-[0.625rem] focus-visible:-outline-offset-2 focus-visible:outline-2 focus-visible:outline-primary">
-        <p class="rs-text m-0 text-ui-base leading-[1.45] whitespace-pre-wrap [overflow-wrap:anywhere]">{findings}</p>
+        <AiMarkdown text={findings} />
       </div>
+      {#if meta !== null}
+        <p class="rs-meta m-0 mb-1 text-ui-micro text-muted-foreground">{meta}</p>
+      {/if}
       <p class="rs-note m-0 mb-3 text-ui-micro text-muted-foreground">
         Advisory only — nothing was changed. Verify findings before acting.
+      </p>
+    {:else if streamed !== null && streamed.length > 0}
+      <div class="rs-findings mb-3 max-h-[55vh] overflow-y-auto rounded-xl border border-border bg-muted/50 px-3 py-[0.625rem]">
+        <AiMarkdown text={streamed} streaming />
+      </div>
+    {:else}
+      <p class="rs-loading m-0 mb-3 flex items-center gap-2 text-ui-meta text-muted-foreground" role="status">
+        <Spinner class="size-3 text-primary" aria-hidden="true" />
+        Analyzing the staged diff…
       </p>
     {/if}
     <div class="mt-4 flex flex-wrap justify-end gap-2">

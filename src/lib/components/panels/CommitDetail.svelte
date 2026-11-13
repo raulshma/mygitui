@@ -39,6 +39,12 @@
   import { describeError } from "$lib/errors";
   import Icon from "$lib/components/icons/Icon.svelte";
   import { appIcon } from "$lib/components/icons/library.svelte";
+  import { ai } from "$lib/ai/ai.svelte";
+  import type { AiRunOptions } from "$lib/ai/ai.svelte";
+  import AiFeatureButton from "$lib/components/ai/AiFeatureButton.svelte";
+  import { budgetedDiffText, statSummaryText } from "$lib/ai/diffBudget";
+  import { aiResultMeta } from "$lib/ai/usage";
+  import { emitUiEvent } from "$lib/palette/events";
 
   const iconClose = $derived(appIcon("close")!);
   const iconStar = $derived(appIcon("star")!);
@@ -204,6 +210,65 @@
 
   // -- actions ------------------------------------------------------------------
 
+  // -- M13: AI explain (commit) / release notes (compare range) -----------------
+
+  /** explain-commit: the loaded commit + its parent0 diff, budgeted. */
+  function runExplainCommit(opts?: AiRunOptions) {
+    const current = info;
+    const files = detailFiles;
+    if (!current || files === null || files.length === 0) {
+      return Promise.reject(new Error("this commit has no loaded diff to explain"));
+    }
+    return ai.run(
+      "explain-commit",
+      {
+        repoId,
+        sha: current.sha,
+        description: current.message,
+        diff: budgetedDiffText(files),
+      },
+      undefined,
+      opts,
+    );
+  }
+
+  function onExplainCommit(outcome: import("$lib/ai/features").FeatureOutcome): void {
+    const sha = info?.sha;
+    emitUiEvent("ai-show-result", {
+      title: `Commit ${(sha ?? "").slice(0, 7)}`,
+      text: outcome.text ?? outcome.result.text,
+      meta: aiResultMeta(outcome.result),
+    });
+  }
+
+  /** release-notes: the compare range's commits + aggregate file stats. */
+  function runReleaseNotes(opts?: AiRunOptions) {
+    const current = compare;
+    if (!current || current.commits === undefined || current.commits.length === 0) {
+      return Promise.reject(new Error("release notes need the range's commits"));
+    }
+    return ai.run(
+      "release-notes",
+      {
+        repoId,
+        range: `${current.base}..${current.target}`,
+        commits: current.commits,
+        diff: statSummaryText(current.files),
+      },
+      undefined,
+      opts,
+    );
+  }
+
+  function onReleaseNotes(outcome: import("$lib/ai/features").FeatureOutcome): void {
+    const current = compare;
+    emitUiEvent("ai-show-result", {
+      title: `Release notes: ${current?.base ?? ""}..${current?.target ?? ""}`,
+      text: outcome.text ?? outcome.result.text,
+      meta: aiResultMeta(outcome.result),
+    });
+  }
+
   async function copySha(): Promise<void> {
     if (!info) return;
     try {
@@ -328,6 +393,21 @@
         </Hint>
       {/if}
       <Button class="h-auto rounded-full px-2.5 py-0.5 text-ui-meta font-normal" variant="secondary" onclick={copySha}>Copy sha</Button>
+      <!-- M13: AI explain (disabled until the parent0 diff is loaded; the
+           root commit has nothing to diff against). -->
+      <AiFeatureButton
+        {repoId}
+        kind="explain-commit"
+        label="AI explain"
+        title="Explain this commit with AI"
+        confirmText={"Send this commit's message and diff to {backend} for an explanation?"}
+        errorPrefix="AI explain failed"
+        gateVisibility={false}
+        compact
+        disabled={info.parents.length === 0 || detailFiles === null || detailFiles.length === 0}
+        run={runExplainCommit}
+        onResult={onExplainCommit}
+      />
       <span class="cinfo ml-auto text-ui-micro text-muted-foreground" role="status">
         {#if actionCount > 1}
           {actionCount} commits selected (shift-click to extend)
@@ -355,6 +435,22 @@
       {:else if compare}
         <div class="dtab flex flex-none items-center gap-2 border-b border-border bg-muted py-0.5 pr-2 pl-3 text-ui-meta text-foreground">
           <span class="min-w-0 flex-1 truncate font-mono">Compare: {compare.base} → {compare.target} ({compare.files.length} files)</span>
+          <!-- M13: release notes for the compared range (needs the range's
+               commits, which HistoryView attaches to the compare result). -->
+          {#if compare.commits !== undefined && compare.commits.length > 0}
+            <AiFeatureButton
+              {repoId}
+              kind="release-notes"
+              label="AI release notes"
+              title="Write release notes for this range"
+              confirmText={"Send the range's commits and file stats to {backend} to draft release notes?"}
+              errorPrefix="AI release notes failed"
+              gateVisibility={false}
+              compact
+              run={runReleaseNotes}
+              onResult={onReleaseNotes}
+            />
+          {/if}
           {#if onCloseCompare}
             <Button class="h-auto rounded-sm px-1.5 py-px text-ui-meta font-normal text-muted-foreground [&_svg:not([class*='size-'])]:size-3" variant="outline" onclick={onCloseCompare} aria-label="Close compare">
               <Icon icon={iconClose} size={12} />

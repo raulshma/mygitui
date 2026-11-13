@@ -105,6 +105,15 @@ generated output — do not commit it.
 - **AI assist (opt-in per repo)**: commit message, PR title/desc,
   explain-hunk, staged-diff review, stash message, branch-name
   suggestion; connection health chip
+- **AI platform (M13)**: every run is a visible job — status-bar row with
+  live phase, elapsed time and cancel; token streaming with per-result
+  `model · backend · duration · tokens` footers; an assistant panel with a
+  repo-aware Q&A chat (context chips, advisory — never mutates) and an
+  app-wide activity log (job history + usage aggregates); six new
+  features (explain commit, explain blame line, CI/workflow failure
+  diagnosis, custom-action failure diagnosis, merge-conflict resolution
+  suggestions, release notes from a compare range); a master switch and
+  per-feature toggles turn all of it off
 - **Diff workflow**: line-granular stage/unstage/discard (gutter
   selection), blame with age heat and re-blame-at-parent
 - **Quality gates**: proptest roundtrips (hunk apply, checkpoint
@@ -127,7 +136,10 @@ clone, LFS, syntax highlighting, i18n groundwork) →
 fsck census, op cancellation, gitignore-aware watcher, auto checkpoint
 GC, signature badges, pickaxe `-G`, bisect log, line staging, blame
 heat + re-blame, all six AI features, deep links, first-launch argv,
-proptests + soak + baseline-compare gates, Playwright smoke). See
+proptests + soak + baseline-compare gates, Playwright smoke) →
+**M13 AI platform** (job engine + status-bar transparency, token
+streaming + usage accounting, feature registry, assistant panel
+(chat + activity), six new AI features, master switch). See
 `docs/contracts.md` for the per-milestone IPC contracts.
 
 

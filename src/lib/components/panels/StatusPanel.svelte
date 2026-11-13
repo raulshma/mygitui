@@ -108,6 +108,7 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
     toggleSelection,
     type SelectionActions,
   } from "./statusSelection";
+  import { statusTreePrefs } from "./statusTreePrefs.svelte";
 
   let {
     status,
@@ -345,6 +346,32 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
   let submoduleCollapsed = $state<Record<string, boolean>>({});
   let subSectionCollapsed = $state<Record<string, boolean>>({});
 
+  // Repo switch = rehydrate that repo's persisted collapse state, so the
+  // groups reopen the way they were left (also across app restarts). Keys:
+  // `section:<id>`, `repo`, `mod:<path>`, `sub:<path>:<section>`.
+  $effect(() => {
+    if (!root) return;
+    const saved = statusTreePrefs.snapshot(root);
+    const modules: Record<string, boolean> = {};
+    const subSections: Record<string, boolean> = {};
+    for (const [key, value] of Object.entries(saved)) {
+      if (key.startsWith("mod:")) modules[key.slice(4)] = value;
+      else if (key.startsWith("sub:")) subSections[key.slice(4)] = value;
+    }
+    collapsed = {
+      staged: saved["section:staged"] ?? false,
+      changes: saved["section:changes"] ?? false,
+    };
+    mainRepoCollapsed = saved["repo"] ?? false;
+    submoduleCollapsed = modules;
+    subSectionCollapsed = subSections;
+  });
+
+  /** Persists one collapse flag for the current repo (no-op without a root). */
+  function saveCollapsed(key: string, value: boolean): void {
+    if (root) statusTreePrefs.set(root, key, value);
+  }
+
   function isSubSectionCollapsed(subPath: string, sectionId: SectionId): boolean {
     return subSectionCollapsed[`${subPath}:${sectionId}`] ?? false;
   }
@@ -352,10 +379,17 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
   function toggleSubSection(subPath: string, sectionId: SectionId): void {
     const key = `${subPath}:${sectionId}`;
     subSectionCollapsed[key] = !subSectionCollapsed[key];
+    saveCollapsed(`sub:${key}`, subSectionCollapsed[key]);
   }
 
   function toggleSubmodule(path: string): void {
     submoduleCollapsed[path] = !submoduleCollapsed[path];
+    saveCollapsed(`mod:${path}`, submoduleCollapsed[path]);
+  }
+
+  function toggleMainRepo(): void {
+    mainRepoCollapsed = !mainRepoCollapsed;
+    saveCollapsed("repo", mainRepoCollapsed);
   }
 
   function mainBranchLabel(s: RepoStatus): string {
@@ -1345,12 +1379,7 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
       });
     }
 
-    const discardable = targets.filter(
-      (t) =>
-        t.section !== "staged" &&
-        t.kind !== "conflicted" &&
-        (t.submodulePath ? true : !moduleByPath.has(t.entry.path)),
-    );
+    const discardable = discardableRows(targets);
     if (discardable.length > 0) {
       entries.push({
         id: "discard",
@@ -1531,6 +1560,40 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
   let checkpointsEnabled = $derived(appSettings.checkpointsEnabled);
 
   /**
+   * Working-tree rows a discard may target: staged rows (index-side only),
+   * conflicted rows (resolution is an explicit edit) and superproject
+   * gitlinks (they manage the submodule checkout, not a working-tree
+   * diff) never discard — one filter shared by the row, menu, `d`-key and
+   * section-header paths.
+   */
+  function discardableRows(rows: StatusRow[]): StatusRow[] {
+    return rows.filter(
+      (row) =>
+        row.section !== "staged" &&
+        row.kind !== "conflicted" &&
+        (row.submodulePath ? true : !moduleByPath.has(row.entry.path)),
+    );
+  }
+
+  /**
+   * Section-header action (Changes groups): discard every discardable
+   * working-tree change in the section at once. Fills the same confirm
+   * dialog — and honors the same confirm-skip setting — as the per-row
+   * path; `onDiscardConfirmed` routes each row to its own repository.
+   */
+  function requestDiscardSection(
+    section: StatusSectionView,
+    event: MouseEvent,
+  ): void {
+    event.stopPropagation();
+    if (!repoId || mutating) return;
+    const candidates = discardableRows(section.rows);
+    if (candidates.length === 0) return;
+    discardCandidates = candidates;
+    if (!confirmDiscardEnabled) void onDiscardConfirmed();
+  }
+
+  /**
    * Hover button / `d`: discard the selection when the target row is part
    * of it, otherwise just the row. Staged, conflicted and submodule rows
    * never discard (conflict resolution is an explicit edit). When the
@@ -1548,12 +1611,7 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
       : repoId;
     if (!targetRepoId || mutating) return;
 
-    discardCandidates = actionRows(row, selected, visibleRows).filter(
-      (candidate) =>
-        candidate.section !== "staged" &&
-        candidate.kind !== "conflicted" &&
-        (candidate.submodulePath ? true : !moduleByPath.has(candidate.entry.path)),
-    );
+    discardCandidates = discardableRows(actionRows(row, selected, visibleRows));
     if (!confirmDiscardEnabled) {
       void onDiscardConfirmed();
     }
@@ -1704,6 +1762,7 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
 
   function toggleSection(id: SectionId): void {
     collapsed[id] = !collapsed[id];
+    saveCollapsed(`section:${id}`, collapsed[id]);
   }
 
 </script>
@@ -2142,7 +2201,7 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
               class="repo-accordion-toggle flex-1 min-w-0 flex items-center gap-ui-35 h-6 bg-transparent border-0 text-foreground text-xs font-semibold px-ui-2 cursor-pointer text-left hover:text-primary focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-2"
               type="button"
               aria-expanded={!mainRepoCollapsed}
-              onclick={() => (mainRepoCollapsed = !mainRepoCollapsed)}
+              onclick={toggleMainRepo}
             >
               <span
                 class="chevron inline-flex items-center justify-center w-4 shrink-0 opacity-80 transition-transform {mainRepoCollapsed
@@ -2248,6 +2307,23 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
                             </Button>
                           {/snippet}
                         </Hint>
+                        {#if section.id === "changes" && discardableRows(section.rows).length > 0}
+                          <Hint label={`Discard all changes in ${section.label}`}>
+                            {#snippet child({ props })}
+                              <Button
+                                {...props}
+                                class="relative text-destructive after:absolute after:-inset-1 after:content-[''] hover:bg-destructive/10 hover:text-destructive [&_svg:not([class*='size-'])]:size-4"
+                                variant="ghost"
+                                size="icon-xs"
+                                type="button"
+                                aria-label={`Discard all changes in ${section.label}`}
+                                onclick={(event) => requestDiscardSection(section, event)}
+                              >
+                                <Icon icon={iconDiscard} size={16} />
+                              </Button>
+                            {/snippet}
+                          </Hint>
+                        {/if}
                       </span>
                     {/if}
                   </div>
@@ -2483,6 +2559,20 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
                             >
                               <Icon icon={subSection.id === "staged" ? iconUnstage : iconStage} size={16} />
                             </Button>
+                            {#if subSection.id === "changes" && discardableRows(subSection.rows).length > 0}
+                              <Button
+                                class="relative text-destructive after:absolute after:-inset-1 after:content-[''] hover:bg-destructive/10 hover:text-destructive [&_svg:not([class*='size-'])]:size-4"
+                                variant="ghost"
+                                size="icon-xs"
+                                type="button"
+                                aria-label={`Discard all changes in ${subSection.label}`}
+                                title={`Discard all changes in ${subSection.label}`}
+                                disabled={mutating}
+                                onclick={(event) => requestDiscardSection(subSection, event)}
+                              >
+                                <Icon icon={iconDiscard} size={16} />
+                              </Button>
+                            {/if}
                           </span>
                         {/if}
                       </div>
@@ -2553,6 +2643,23 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
                       </Button>
                     {/snippet}
                   </Hint>
+                  {#if section.id === "changes" && discardableRows(section.rows).length > 0}
+                    <Hint label={`Discard all changes in ${section.label}`}>
+                      {#snippet child({ props })}
+                        <Button
+                          {...props}
+                          class="relative text-destructive after:absolute after:-inset-1 after:content-[''] hover:bg-destructive/10 hover:text-destructive [&_svg:not([class*='size-'])]:size-4"
+                          variant="ghost"
+                          size="icon-xs"
+                          type="button"
+                          aria-label={`Discard all changes in ${section.label}`}
+                          onclick={(event) => requestDiscardSection(section, event)}
+                        >
+                          <Icon icon={iconDiscard} size={16} />
+                        </Button>
+                      {/snippet}
+                    </Hint>
+                  {/if}
                 </span>
               {/if}
             </div>

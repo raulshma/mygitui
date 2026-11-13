@@ -33,6 +33,12 @@ export interface AiGenerateRequest {
    * (features pass the repoId); openrouter ignores it.
    */
   sessionKey?: string;
+  /**
+   * Called once routing resolved which backend (and request model) will
+   * serve this request (M13) — the job store's live "via <backend>"
+   * badge. The FINAL model id arrives with the {@link AiResult}.
+   */
+  onServing?: (backend: AiBackend, model: string | null) => void;
 }
 
 /** Result of a backend reachability/auth probe (supervisor input). */
@@ -95,6 +101,17 @@ export interface AiProvider {
   listModels(): Promise<ModelInfo[]>;
   /** One-shot text generation. Throws {@link AiError}-shaped failures. */
   generate(req: AiGenerateRequest): Promise<AiResult>;
+  /**
+   * Streaming variant of {@link generate} (M13): invokes `onDelta` per
+   * text chunk as it arrives and resolves with the same final
+   * {@link AiResult} (whose `text` equals the concatenation of the
+   * deltas). Optional capability — providers without stream support
+   * simply don't implement it and callers fall back to `generate`
+   * (delivering the whole text as one delta). `opencode` implements it
+   * and may still degrade to a single delta on v1 servers, which have no
+   * incremental path.
+   */
+  generateStream?(req: AiGenerateRequest, onDelta: (delta: string) => void): Promise<AiResult>;
 }
 
 /** The set of adapter instances selection picks from. */

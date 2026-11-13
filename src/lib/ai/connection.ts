@@ -334,18 +334,58 @@ export class ConnectionSupervisor {
    */
   async generate(req: AiGenerateRequest): Promise<AiResult> {
     const provider = await this.ensureReady();
+    req.onServing?.(provider.id, req.model ?? null);
     try {
       return await provider.generate(req);
     } catch (err) {
-      if (err instanceof AiError && err.kind === "unavailable") {
-        this.#setStatus(provider.id, {
-          status: "down",
-          lastCheck: this.#now(),
-          error: err.message,
-        });
-        this.#armRetry(provider.id, this.#attempts.get(provider.id) ?? 1);
-      }
+      this.#markUnavailable(provider, err);
       throw err;
+    }
+  }
+
+  /**
+   * Streaming twin of {@link generate} (M13): same routing, fallback and
+   * down-marking semantics. Uses the adapter's `generateStream` capability
+   * when it has one; otherwise degrades to one-shot `generate` with the
+   * full text delivered as a single delta, so streaming callers need no
+   * capability checks.
+   */
+  async generateStream(
+    req: AiGenerateRequest,
+    onDelta: (delta: string) => void,
+  ): Promise<AiResult> {
+    const provider = await this.ensureReady();
+    req.onServing?.(provider.id, req.model ?? null);
+    if (provider.generateStream === undefined) {
+      // One-shot fallback — inlined rather than routed through `generate`,
+      // which would fire `req.onServing` a second time; same down-marking
+      // semantics as every other routed request.
+      try {
+        const result = await provider.generate(req);
+        if (result.text.length > 0) onDelta(result.text);
+        return result;
+      } catch (err) {
+        this.#markUnavailable(provider, err);
+        throw err;
+      }
+    }
+    try {
+      return await provider.generateStream(req, onDelta);
+    } catch (err) {
+      this.#markUnavailable(provider, err);
+      throw err;
+    }
+  }
+
+  /** Flips the status to `down` on an `unavailable` failure (shared). */
+  #markUnavailable(provider: AiProvider, err: unknown): void {
+    if (err instanceof AiError && err.kind === "unavailable") {
+      this.#setStatus(provider.id, {
+        status: "down",
+        lastCheck: this.#now(),
+        error: err.message,
+      });
+      this.#armRetry(provider.id, this.#attempts.get(provider.id) ?? 1);
     }
   }
 }

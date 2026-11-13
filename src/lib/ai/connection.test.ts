@@ -324,3 +324,58 @@ describe("generate routing (never auto-replays)", () => {
     expect(h.opencode.check).toHaveBeenCalledTimes(2); // initial + retry probe
   });
 });
+
+describe("generateStream (M13)", () => {
+  it("streams through the adapter capability and reports serving once", async () => {
+    const h = makeHarness();
+    const streamMock = vi.fn(async (_req, onDelta: (d: string) => void) => {
+      onDelta("hel");
+      onDelta("lo");
+      return {
+        text: "hello",
+        model: "opencode-model",
+        backend: "opencode" as const,
+        elapsedMs: 5,
+      };
+    });
+    (h.supervisor.provider("opencode") as unknown as { generateStream: unknown }).generateStream =
+      streamMock;
+
+    const serving: Array<[AiBackend, string | null]> = [];
+    const deltas: string[] = [];
+    const result = await h.supervisor.generateStream(
+      { prompt: "hi", onServing: (b, m) => serving.push([b, m]) },
+      (d) => deltas.push(d),
+    );
+    expect(result.text).toBe("hello");
+    expect(deltas).toEqual(["hel", "lo"]);
+    expect(serving).toEqual([["opencode", null]]);
+    expect(streamMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("the one-shot fallback fires onServing exactly once (no re-report via generate)", async () => {
+    const h = makeHarness();
+    // MockProvider carries no generateStream capability → one-shot fallback.
+    const serving: Array<[AiBackend, string | null]> = [];
+    const deltas: string[] = [];
+    const result = await h.supervisor.generateStream(
+      { prompt: "hi", onServing: (b, m) => serving.push([b, m]) },
+      (d) => deltas.push(d),
+    );
+    expect(result.text).toBe("answer-from-opencode");
+    expect(deltas).toEqual(["answer-from-opencode"]);
+    expect(serving).toEqual([["opencode", null]]);
+    expect(h.opencode.generateMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("a one-shot fallback failure marks the backend down, same as generate", async () => {
+    const h = makeHarness();
+    h.opencode.generateMock.mockRejectedValueOnce(
+      new AiError("unavailable", "connection reset", { backend: "opencode" }),
+    );
+    await expect(
+      h.supervisor.generateStream({ prompt: "hi" }, () => {}),
+    ).rejects.toMatchObject({ kind: "unavailable" });
+    expect(h.supervisor.status("opencode").status).toBe("down");
+  });
+});

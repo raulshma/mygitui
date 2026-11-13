@@ -471,3 +471,210 @@ describe("runFeature", () => {
     expect(deps.generate.mock.calls[0][0].signal).toBeInstanceOf(AbortSignal);
   });
 });
+
+// ---------------------------------------------------------------------------
+// M13 prompt builders + parsers
+// ---------------------------------------------------------------------------
+
+import {
+  conflictSuggestionPrompt,
+  diagnoseFailurePrompt,
+  explainBlamePrompt,
+  explainCommitPrompt,
+  parseConflictSuggestion,
+  releaseNotesPrompt,
+} from "./features";
+
+describe("M13 prompt builders", () => {
+  it("explainCommitPrompt carries sha, message and diff with guardrails", () => {
+    const built = explainCommitPrompt("abcdef1234567890", "feat: add thing\n\nbody", "-old\n+new");
+    expect(built.system).toContain("explain Git commits");
+    expect(built.system).toContain("Never include secrets");
+    expect(built.prompt).toContain("Commit abcdef1234");
+    expect(built.prompt).toContain("feat: add thing");
+    expect(built.prompt).toContain("```diff\n-old\n+new\n```");
+  });
+
+  it("explainBlamePrompt includes line number/text and optional parts", () => {
+    const withAll = explainBlamePrompt("src/a.ts", 7, "let x = 1;", "introduce x", "1| let x = 1;");
+    expect(withAll.prompt).toContain("File: src/a.ts");
+    expect(withAll.prompt).toContain("Line 7:");
+    expect(withAll.prompt).toContain('Introduced by commit: "introduce x"');
+    expect(withAll.prompt).toContain("1| let x = 1;");
+
+    const minimal = explainBlamePrompt("f.ts", 1, "x", null, null);
+    expect(minimal.prompt).not.toContain("Introduced by");
+    expect(minimal.prompt).not.toContain("Surrounding file content");
+  });
+
+  it("diagnoseFailurePrompt frames the subject, meta and log tail", () => {
+    const built = diagnoseFailurePrompt("The workflow run", "Workflow: CI\nBranch: main", "error: boom");
+    expect(built.system).toContain("diagnose failed CI");
+    expect(built.prompt).toContain("The workflow run failed.");
+    expect(built.prompt).toContain("Workflow: CI");
+    expect(built.prompt).toContain("error: boom");
+  });
+
+  it("conflictSuggestionPrompt demands replacement text only", () => {
+    const built = conflictSuggestionPrompt("a.ts", "ours lines", "theirs lines", "context");
+    expect(built.system).toContain("ONLY the resolved replacement text");
+    expect(built.prompt).toContain('"ours"');
+    expect(built.prompt).toContain('"theirs"');
+    expect(built.prompt).toContain("context");
+    const bare = conflictSuggestionPrompt("a.ts", "o", "t", null);
+    expect(bare.prompt).not.toContain("Surrounding content");
+  });
+
+  it("releaseNotesPrompt lists commits and stats for the range", () => {
+    const built = releaseNotesPrompt(
+      "v1..v2",
+      [
+        { summary: "add feature", sha: "aaa111bbb222" },
+        { summary: "fix bug", sha: "ccc333ddd444" },
+      ],
+      "Files changed (2):",
+    );
+    expect(built.prompt).toContain("Write release notes for v1..v2.");
+    expect(built.prompt).toContain("- add feature (aaa111bb)");
+    expect(built.prompt).toContain("Files changed (2):");
+    const empty = releaseNotesPrompt("x", [], "(none)");
+    expect(empty.prompt).toContain("(no commits)");
+  });
+});
+
+describe("parseConflictSuggestion", () => {
+  it("passes plain replacement text through", () => {
+    expect(parseConflictSuggestion("const a = 1;\nconst b = 2;")).toBe("const a = 1;\nconst b = 2;");
+  });
+
+  it("strips one wrapping code fence", () => {
+    expect(parseConflictSuggestion("```ts\nconst a = 1;\n```")).toBe("const a = 1;");
+  });
+
+  it("never lets conflict markers survive", () => {
+    const noisy = [
+      "Here is the resolution:",
+      "```",
+      "<<<<<<< HEAD",
+      "ours",
+      "=======",
+      "theirs",
+      ">>>>>>> branch",
+      "resolved line",
+      "```",
+    ].join("\n");
+    const parsed = parseConflictSuggestion(noisy);
+    expect(parsed).not.toContain("<<<<<<<");
+    expect(parsed).not.toContain("=======");
+    expect(parsed).not.toContain(">>>>>>>");
+    expect(parsed).toContain("resolved line");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// M13 runFeature cases (pre-gathered ctx → prompt → generate)
+// ---------------------------------------------------------------------------
+
+describe("runFeature M13 kinds", () => {
+  it("explain-commit validates its required ctx", async () => {
+    const deps = makeDeps();
+    await expect(
+      runFeature("explain-commit", { repoId: "r1" }, deps),
+    ).rejects.toMatchObject({ kind: "unknown" });
+    expect(deps.generate).not.toHaveBeenCalled();
+  });
+
+  it("explain-commit builds from pre-gathered message + diff and returns text", async () => {
+    const deps = makeDeps({ generate: () => "It adds a feature." });
+    const outcome = await runFeature(
+      "explain-commit",
+      { repoId: "r1", sha: "abc1234def", description: "feat: thing", diff: "-a\n+b" },
+      deps,
+    );
+    expect(outcome.text).toBe("It adds a feature.");
+    expect(deps.generate.mock.calls[0][0].prompt).toContain("Commit abc1234def");
+    expect(deps.generate.mock.calls[0][0].prompt).toContain("feat: thing");
+  });
+
+  it("explain-blame accepts the minimal line ctx and optional extras", async () => {
+    const deps = makeDeps();
+    const outcome = await runFeature(
+      "explain-blame",
+      { repoId: "r1", path: "a.ts", line: 3, lineText: "let x = 1;" },
+      deps,
+    );
+    expect(outcome.text).toBeTruthy();
+    expect(deps.generate.mock.calls[0][0].prompt).toContain("Line 3:");
+
+    await runFeature(
+      "explain-blame",
+      {
+        repoId: "r1",
+        path: "a.ts",
+        line: 3,
+        lineText: "let x = 1;",
+        commitSummary: "introduce x",
+        fileSlice: "1| let x = 1;",
+      },
+      deps,
+    );
+    expect(deps.generate.mock.calls[1][0].prompt).toContain("introduce x");
+    await expect(
+      runFeature("explain-blame", { repoId: "r1", path: "a.ts" }, deps),
+    ).rejects.toMatchObject({ kind: "unknown" });
+  });
+
+  it("diagnose-workflow / diagnose-action share the builder; log is required", async () => {
+    const deps = makeDeps({ generate: () => "The failing step is X." });
+    const outcome = await runFeature(
+      "diagnose-workflow",
+      { repoId: "r1", runMeta: "Workflow: CI", diff: "log tail" },
+      deps,
+    );
+    expect(outcome.text).toBe("The failing step is X.");
+    expect(deps.generate.mock.calls[0][0].prompt).toContain("The workflow run failed.");
+
+    await runFeature(
+      "diagnose-action",
+      { repoId: "r1", runMeta: "Exit code: 1", diff: "log tail" },
+      deps,
+    );
+    expect(deps.generate.mock.calls[1][0].prompt).toContain("The action run failed.");
+
+    await expect(
+      runFeature("diagnose-action", { repoId: "r1", runMeta: "x" }, deps),
+    ).rejects.toMatchObject({ kind: "unknown" });
+  });
+
+  it("conflict-assist parses the suggestion into text", async () => {
+    const deps = makeDeps({ generate: () => "```\nresolved\n```" });
+    const outcome = await runFeature(
+      "conflict-assist",
+      { repoId: "r1", path: "a.ts", ours: "o", theirs: "t" },
+      deps,
+    );
+    expect(outcome.text).toBe("resolved");
+    await expect(
+      runFeature("conflict-assist", { repoId: "r1", path: "a.ts", ours: "o" }, deps),
+    ).rejects.toMatchObject({ kind: "unknown" });
+  });
+
+  it("release-notes requires commits and passes stats through ctx.diff", async () => {
+    const deps = makeDeps({ generate: () => "## Features\n- thing" });
+    const outcome = await runFeature(
+      "release-notes",
+      {
+        repoId: "r1",
+        range: "v1..v2",
+        commits: [{ summary: "add", sha: "abc" }],
+        diff: "Files changed (1):",
+      },
+      deps,
+    );
+    expect(outcome.text).toContain("## Features");
+    expect(deps.generate.mock.calls[0][0].prompt).toContain("Files changed (1):");
+    await expect(
+      runFeature("release-notes", { repoId: "r1", range: "v1..v2" }, deps),
+    ).rejects.toMatchObject({ kind: "unknown" });
+  });
+});

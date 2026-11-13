@@ -4,7 +4,7 @@
  * Prompt-queue behavior mirrors the AuthStore suites in `ops.svelte.test`.
  */
 
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   deviceAdd,
   deviceAuthRespond,
@@ -19,7 +19,9 @@ import {
 import { getToasts } from "$lib/toast";
 import {
   PROMPT_TIMEOUT_MS,
+  RESYNC_DEBOUNCE_MS,
   RemoteDeviceStore,
+  autoConnectBackoffMs,
   deviceInputFromProfile,
 } from "$lib/stores/remoteDevices.svelte";
 import type {
@@ -63,6 +65,7 @@ function profile(id: string, name = id): DeviceProfile {
     username: "deploy",
     auth: { kind: "password", key_path: null, has_passphrase: false },
     poll_secs: 5,
+    auto_connect: false,
   };
 }
 
@@ -233,13 +236,42 @@ describe("registry (load / add / update / remove)", () => {
     expect(store.statusOf("d1")).toBe("disconnected");
   });
 
-  it("applyStatus patches only known devices", () => {
-    const store = new RemoteDeviceStore();
-    store.devices = [device("d1")];
-    store.applyStatus({ device_id: "d1", status: "connected" });
-    expect(store.statusOf("d1")).toBe("connected");
-    store.applyStatus({ device_id: "ghost", status: "connected" });
-    expect(store.byId("ghost")).toBeNull();
+  it("applyStatus patches known devices; unknown ids schedule a re-sync", async () => {
+    vi.useFakeTimers();
+    try {
+      const store = new RemoteDeviceStore();
+      store.devices = [device("d1")];
+      store.applyStatus({ device_id: "d1", status: "connected" });
+      expect(store.statusOf("d1")).toBe("connected");
+
+      // An event for a device the list doesn't know yet (boot race: the
+      // dial started before load() landed) must not be dropped — the
+      // backend only emits on change, so the stale status would stick
+      // until the next reload.
+      store.applyStatus({ device_id: "ghost", status: "connected" });
+      store.applyStatus({ device_id: "ghost", status: "connecting" });
+      expect(store.byId("ghost")).toBeNull();
+      expect(mockDeviceList).not.toHaveBeenCalled();
+
+      mockDeviceList.mockResolvedValue([
+        device("d1"),
+        device("ghost", "connected"),
+      ]);
+      // Debounced: the burst of unknown-id events costs one device_list.
+      await vi.advanceTimersByTimeAsync(RESYNC_DEBOUNCE_MS);
+      expect(mockDeviceList).toHaveBeenCalledOnce();
+      expect(store.byId("ghost")?.status).toBe("connected");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("deviceInputFromProfile carries auto_connect", () => {
+    expect(deviceInputFromProfile(profile("d1")).auto_connect).toBe(false);
+    expect(
+      deviceInputFromProfile({ ...profile("d1"), auto_connect: true })
+        .auto_connect,
+    ).toBe(true);
   });
 
   it("forgetHostKey resolves whether a key was pinned and never throws", async () => {
@@ -346,5 +378,101 @@ describe("device-auth prompt queue", () => {
     store.applyHostKeyRequest(hostkeyRequest("r2", "d1"));
     store.pruneStale(Date.now());
     expect(store.hostkeyPending?.request_id).toBe("r2");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Launch auto-connect (opt-in per device, off by default)
+// ---------------------------------------------------------------------------
+
+describe("launch auto-connect", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("connects opted-in devices and skips the rest", async () => {
+    mockDeviceList.mockResolvedValue([
+      { profile: { ...profile("auto"), auto_connect: true }, status: "disconnected" },
+      { profile: { ...profile("already"), auto_connect: true }, status: "connected" },
+      device("manual"),
+    ]);
+    const store = new RemoteDeviceStore();
+    await store.load();
+    mockDeviceConnect.mockResolvedValue("connected");
+
+    store.autoConnectOnLaunch();
+    expect(store.statusOf("auto")).toBe("connecting");
+    expect(store.statusOf("manual")).toBe("disconnected");
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(mockDeviceConnect).toHaveBeenCalledTimes(1);
+    expect(mockDeviceConnect).toHaveBeenCalledWith("auto");
+    expect(store.statusOf("auto")).toBe("connected");
+  });
+
+  it("retries a failed dial with the backend's backoff until connected", async () => {
+    mockDeviceList.mockResolvedValue([
+      { profile: { ...profile("auto"), auto_connect: true }, status: "disconnected" },
+    ]);
+    const store = new RemoteDeviceStore();
+    await store.load();
+    mockDeviceConnect
+      .mockRejectedValueOnce(new Error("down") as never)
+      .mockResolvedValueOnce("connected");
+
+    store.autoConnectOnLaunch();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(store.statusOf("auto")).toBe("disconnected");
+
+    // First retry after 1 s (the backend's schedule: 1, 2, 5, 10 s, cap 30).
+    await vi.advanceTimersByTimeAsync(autoConnectBackoffMs(0));
+    expect(mockDeviceConnect).toHaveBeenCalledTimes(2);
+    expect(store.statusOf("auto")).toBe("connected");
+  });
+
+  it("a manual disconnect cancels the retry loop", async () => {
+    mockDeviceList.mockResolvedValue([
+      { profile: { ...profile("auto"), auto_connect: true }, status: "disconnected" },
+    ]);
+    const store = new RemoteDeviceStore();
+    await store.load();
+    mockDeviceConnect.mockRejectedValue(new Error("down") as never);
+
+    store.autoConnectOnLaunch();
+    await vi.advanceTimersByTimeAsync(0); // first attempt failed
+    await store.disconnect("auto"); // the user said "not now"
+
+    const dials = mockDeviceConnect.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(autoConnectBackoffMs(1) * 3);
+    expect(mockDeviceConnect).toHaveBeenCalledTimes(dials);
+    expect(store.statusOf("auto")).toBe("disconnected");
+  });
+
+  it("an auth prompt stops the loop (the user owns the connect now)", async () => {
+    mockDeviceList.mockResolvedValue([
+      { profile: { ...profile("auto"), auto_connect: true }, status: "disconnected" },
+    ]);
+    const store = new RemoteDeviceStore();
+    await store.load();
+    let rejectConnect: (err: unknown) => void = () => {};
+    mockDeviceConnect.mockReturnValue(
+      new Promise<DeviceStatus>((_, reject) => {
+        rejectConnect = reject;
+      }),
+    );
+
+    store.autoConnectOnLaunch();
+    expect(store.statusOf("auto")).toBe("connecting");
+
+    // The backend pauses the dial on the prompt; whatever the answer's
+    // outcome, the loop must not re-dial under the dialog (and re-prompt).
+    store.applyAuthRequest(authRequest("a1", "auto"));
+    rejectConnect(new Error("prompt cancelled"));
+    await vi.advanceTimersByTimeAsync(autoConnectBackoffMs(1) * 3);
+    expect(mockDeviceConnect).toHaveBeenCalledTimes(1);
+    expect(store.statusOf("auto")).toBe("disconnected");
   });
 });

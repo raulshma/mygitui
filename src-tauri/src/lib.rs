@@ -31,6 +31,7 @@ mod pty;
 mod pty_tests;
 pub mod remote;
 mod repo;
+mod shell_env;
 mod updater;
 mod watcher;
 mod workspace;
@@ -111,6 +112,12 @@ pub fn run() {
                 let _ = remote_app.emit(event, payload.clone());
             });
             *app.state::<CliArgs>().0.lock().unwrap() = cli_args;
+            // Warm the login-shell environment probe in the background: a
+            // GUI-launched app has no shell profile in its env (nvm & co
+            // missing), and action/editor spawns overlay the resolved env —
+            // better paid at boot than on the first action run (bounded by
+            // shell_env's timeout).
+            std::thread::spawn(crate::shell_env::warm);
             // Failsafe for the hidden-until-loaded windows: if the page
             // never fires a load event (broken asset pipeline, webview
             // error page without one), don't leave the user with an

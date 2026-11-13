@@ -12,4 +12,11 @@ export interface CompareResult {
   base: string;
   /** Target side sha (the newest selected commit). */
   target: string;
+  /**
+   * The selected range's commits (summary + sha, newest first) when the
+   * compare came from a row multi-selection — the release-notes feature's
+   * input. Absent for plain two-ref compares (typed, not selected), where
+   * the AI button therefore does not render.
+   */
+  commits?: Array<{ summary: string; sha: string }>;
 }

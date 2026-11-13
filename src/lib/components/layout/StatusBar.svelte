@@ -43,6 +43,8 @@
   import { panelIconData } from "$lib/layout/layoutModel";
   import { toast } from "$lib/toast";
   import { describeError } from "$lib/errors";
+  import { ai } from "$lib/ai/ai.svelte";
+  import { aiElapsedLabel, aiFeatureLabel, aiPhaseLabel } from "$lib/ai/registry";
   import Icon from "$lib/components/icons/Icon.svelte";
   import { appIcon } from "$lib/components/icons/library.svelte";
   import { Hint } from "$lib/components/ui/tooltip/index.js";
@@ -220,12 +222,60 @@
       })),
     ),
   );
+
+  // -- AI jobs (M13) ------------------------------------------------------------
+
+  /**
+   * One row per in-flight AI run, same treatment as backend ops: phase,
+   * elapsed, cancel. Hidden entirely by the AI master switch or the
+   * status-bar toggle — the workspace above never moves either way.
+   */
+  const aiRows = $derived(
+    ai.isEnabled() && ai.isStatusBarEnabled()
+      ? Object.values(ai.jobs.active).map((job) => ({
+          job,
+          repoName:
+            job.repoId === repoId
+              ? null
+              : (job.repoName ??
+                tabStore.tabs.find((t) => t.id === job.repoId)?.name ??
+                null),
+        }))
+      : [],
+  );
+
+  /** 1s ticker for the elapsed labels — runs only while rows are visible. */
+  let now = $state(Date.now());
+  $effect(() => {
+    if (aiRows.length === 0) return;
+    now = Date.now();
+    const timer = setInterval(() => (now = Date.now()), 1_000);
+    return () => clearInterval(timer);
+  });
+
+  /** Jobs the user asked to cancel; "Cancelling…" until the row drops. */
+  let aiCancelling = $state<Record<string, true>>({});
+
+  function cancelAiJob(id: string): void {
+    aiCancelling[id] = true;
+    ai.jobs.cancel(id);
+  }
+
+  // Entries are only ever added above, so a job that reaches a terminal
+  // state (cancel honored or not) must drop its flag or the map grows
+  // without bound across a session.
+  $effect(() => {
+    const live = new Set(Object.keys(ai.jobs.active));
+    for (const id of Object.keys(aiCancelling)) {
+      if (!live.has(id)) delete aiCancelling[id];
+    }
+  });
 </script>
 
 <footer
   class="status-bar flex h-6 min-w-0 flex-none items-center gap-ui-3 overflow-hidden border-t border-border bg-muted/80 px-ui-2 text-ui-micro text-muted-foreground"
   aria-label="Status bar"
-  aria-busy={opRows.length > 0}
+  aria-busy={opRows.length > 0 || aiRows.length > 0}
 >
   <!-- Left: the active repo's branch / sync / changes. -->
   <div class="repo-state flex min-w-0 flex-none items-center gap-ui-1">
@@ -364,6 +414,78 @@
                 type="button"
                 aria-label={`Cancel ${kindLabel(row.op.kind)}`}
                 onclick={() => void cancelOp(row.op.op_id)}
+              >
+                <Icon icon={iconClose} size={12} />
+              </button>
+            {/snippet}
+          </Hint>
+        {/if}
+      </div>
+    {/each}
+    {#each aiRows as row (row.job.id)}
+      <div
+        class="sb-ai flex min-w-0 flex-1 items-center gap-ui-2"
+        role="status"
+        aria-label={`${aiFeatureLabel(row.job.feature)} (AI) in progress`}
+        aria-busy="true"
+      >
+        <!-- The shared sparkle mark (same two-path glyph as the AI
+             feature buttons), pulsing while the model works. -->
+        <span
+          class="inline-flex size-3.5 flex-none items-center justify-center text-primary"
+          aria-hidden="true"
+        >
+          <svg
+            class="animate-pulse"
+            width="12"
+            height="12"
+            viewBox="0 0 24 24"
+            fill="currentColor"
+          >
+            <path
+              d="M12 2l2.09 6.26L20 10.35l-5.91 2.09L12 18.7l-2.09-6.26L4 10.35l5.91-2.09L12 2z"
+            />
+            <path d="M19 15l1.18 3.32L23.5 19.5l-3.32 1.18L19 24l-1.18-3.32L14.5 19.5l3.32-1.18L19 15z" />
+          </svg>
+        </span>
+        <!-- Click-through: the row's main segment opens the assistant
+             panel's Activity tab (job history + usage). -->
+        <button
+          class="flex h-full min-w-0 flex-1 items-center gap-ui-2 text-left transition-colors duration-[120ms] hover:bg-accent hover:text-accent-foreground focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary"
+          type="button"
+          aria-label="Open AI activity"
+          onclick={() => emitUiEvent("ai-open-activity")}
+        >
+          {#if row.repoName !== null}
+            <span class="flex-none font-medium text-foreground"
+              >{row.repoName}</span
+            >
+          {/if}
+          <span class="flex-none font-medium text-foreground"
+            >{aiFeatureLabel(row.job.feature)}</span
+          >
+          <span class="min-w-0 flex-1 truncate text-left">
+            {row.job.message ?? aiPhaseLabel(row.job.phase) ?? "working"}
+          </span>
+          <span class="flex-none tabular-nums">{aiElapsedLabel(now - row.job.startedAt)}</span>
+        </button>
+        {#if aiCancelling[row.job.id]}
+          <span
+            class="inline-flex flex-none items-center gap-ui-2 pr-ui-2"
+            role="status"
+          >
+            <Spinner class="size-3" role="presentation" aria-hidden="true" />
+            Cancelling…
+          </span>
+        {:else}
+          <Hint label={`Cancel ${aiFeatureLabel(row.job.feature)}`}>
+            {#snippet child({ props })}
+              <button
+                {...props}
+                class="inline-flex h-full w-6 flex-none items-center justify-center transition-colors duration-[120ms] hover:bg-accent hover:text-accent-foreground focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary [&_svg:not([class*='size-'])]:size-3"
+                type="button"
+                aria-label={`Cancel ${aiFeatureLabel(row.job.feature)}`}
+                onclick={() => cancelAiJob(row.job.id)}
               >
                 <Icon icon={iconClose} size={12} />
               </button>

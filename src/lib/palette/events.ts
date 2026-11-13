@@ -97,6 +97,18 @@ export interface UiEventMap {
   /** AI bridge failure: human-readable reason (dialog clears its wait). */
   "ai-pr-error": { message: string };
   /**
+   * Present a finished AI result in the shared result dialog (M13; App
+   * owns the dialog). Palette-initiated AI runs route their output here —
+   * headless by design, so the result surfaces no matter which panel is
+   * open.
+   */
+  "ai-show-result": { title: string; text: string; meta?: string };
+  /**
+   * Open the assistant panel's Activity tab (M13; RepoView owns the
+   * panel). Emitted by the status bar's AI job rows.
+   */
+  "ai-open-activity": undefined;
+  /**
    * Open a GitHub Actions run in the main editor:
    * `{ repoId, runId }`. Emitted by the forge sidebar's Actions tab.
    */

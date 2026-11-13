@@ -44,6 +44,7 @@
     cherryPick,
     describe,
     pickSaveFile,
+    repoDiff,
     revertCommits,
     tagCreate,
   } from "$lib/ipc/client";
@@ -65,7 +66,10 @@
     saveHistoryPrefs,
   } from "$lib/stores/historyPrefs";
   import { bookmarks as bookmarkStore } from "$lib/components/graph/bookmarks.svelte";
-  import { onUiEvent } from "$lib/palette/events";
+  import { onUiEvent, emitUiEvent } from "$lib/palette/events";
+  import { ai } from "$lib/ai/ai.svelte";
+  import { budgetedDiffText } from "$lib/ai/diffBudget";
+  import { aiResultMeta } from "$lib/ai/usage";
   import {
     contextMenu,
     showMenuAt,
@@ -729,14 +733,28 @@
   // -- commit detail: diff/describe/blame live in CommitDetail ------------------
 
   function onCompare(files: FileDiff[], base: string, target: string): void {
+    // Attach the multi-selection's commits (when the compare came from
+    // selected rows) so the center detail can offer AI release notes.
+    const selected = rangeCommits();
+    const commits = selected.length > 0 ? selected : undefined;
     if (sidebar) {
       // The workspace renders the result in the center editor; this panel
       // stays a pure list (no detail pane of its own).
-      onCompareResult?.({ files, base, target });
+      onCompareResult?.({ files, base, target, commits });
       return;
     }
-    compare = { files, base, target };
+    compare = { files, base, target, commits };
     detailOpen = true;
+  }
+
+  /** The multi-selection as prompt data, newest first (log row order). */
+  function rangeCommits(): Array<{ summary: string; sha: string }> {
+    const out: Array<{ summary: string; sha: string }> = [];
+    for (const sha of multiShas) {
+      const row = commits.find((c) => c.sha === sha);
+      if (row) out.push({ summary: row.summary, sha: row.sha });
+    }
+    return out;
   }
 
   // -- commit actions (M3 E2) ---------------------------------------------------
@@ -950,7 +968,7 @@
    */
   function commitMenuEntries(sha: string): MenuEntry[] {
     const bookmarked = root !== "" && bookmarkStore.has(root, sha);
-    return [
+    const entries: MenuEntry[] = [
       { id: "pick", label: "Cherry-pick…", run: () => void doCherryPick() },
       { id: "revert", label: "Revert…", run: () => void doRevert() },
       { id: "rebase", label: "Rebase from here…", run: rebaseFromHere },
@@ -962,6 +980,42 @@
       { id: "copy-describe", label: "Copy describe", run: () => void copyDescribe(sha) },
       { id: "archive", label: "Export archive…", run: () => void exportArchive(sha) },
     ];
+    // M13: AI explain, gated like every AI affordance (master + feature).
+    if (ai.isEnabled() && ai.isFeatureEnabled("explain-commit")) {
+      entries.push({ id: "ai-explain", label: "Explain with AI…", run: () => void explainCommit(sha) });
+    }
+    return entries;
+  }
+
+  /**
+   * M13: headless explain-commit for one commit — gathers the parent0→sha
+   * diff (the same shape CommitDetail shows), runs the feature, and routes
+   * the answer to the shared result dialog. Root commits (no parent) toast
+   * instead of failing opaquely.
+   */
+  async function explainCommit(sha: string): Promise<void> {
+    const row = commits.find((c) => c.sha === sha);
+    const parent = row?.parents[0];
+    if (!row || !parent) {
+      toast("Root commit — nothing to diff against", { kind: "info" });
+      return;
+    }
+    try {
+      const files = await repoDiff(repoId, { commit: parent }, { commit: sha });
+      const outcome = await ai.run("explain-commit", {
+        repoId,
+        sha,
+        description: row.message,
+        diff: budgetedDiffText(files),
+      });
+      emitUiEvent("ai-show-result", {
+        title: `Commit ${sha.slice(0, 7)}`,
+        text: outcome.text ?? outcome.result.text,
+        meta: aiResultMeta(outcome.result),
+      });
+    } catch (err) {
+      toast(`AI explain failed: ${describeError(err)}`, { kind: "error" });
+    }
   }
 
   /** Row right-click: the commit action menu. */

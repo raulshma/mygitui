@@ -42,6 +42,11 @@
     workflowEventLabel,
   } from "./forgeModel";
   import { describeError } from "$lib/errors";
+import { ai } from "$lib/ai/ai.svelte";
+import type { AiRunOptions } from "$lib/ai/ai.svelte";
+import AiFeatureButton from "$lib/components/ai/AiFeatureButton.svelte";
+import { aiResultMeta } from "$lib/ai/usage";
+import { emitUiEvent } from "$lib/palette/events";
 
   let {
     repoId,
@@ -289,6 +294,42 @@
     } finally {
       manualRefresh = false;
     }
+  }
+
+  // -- M13: AI diagnosis of the failed run --------------------------------------
+
+  /** Cap for the log tail sent to the model (the full log can be 1.5 MB). */
+  const DIAG_LOG_TAIL_CHARS = 40_000;
+
+  /** diagnose-workflow: run metadata + the loaded log's tail. */
+  function runDiagnose(opts?: AiRunOptions) {
+    const current = run;
+    const log = (logText ?? "").trim();
+    if (!current || log.length === 0) {
+      return Promise.reject(new Error("no log text is loaded for this run yet"));
+    }
+    const failed = failedJobs.map((job) => `- ${job.name}: ${job.conclusion}`).join("\n");
+    const meta = [
+      `Workflow: ${current.name} (#${current.number})`,
+      `Branch: ${current.head_branch} · Event: ${current.event}`,
+      failedJobs.length > 0 ? `Failed jobs:\n${failed}` : "Failed jobs: (see log)",
+    ].join("\n");
+    const tail = log.length > DIAG_LOG_TAIL_CHARS ? log.slice(-DIAG_LOG_TAIL_CHARS) : log;
+    return ai.run(
+      "diagnose-workflow",
+      { repoId, runMeta: meta, diff: tail },
+      undefined,
+      opts,
+    );
+  }
+
+  function onDiagnose(outcome: import("$lib/ai/features").FeatureOutcome): void {
+    const current = run;
+    emitUiEvent("ai-show-result", {
+      title: `Diagnosis: ${current?.name ?? "workflow run"} #${current?.number ?? ""}`,
+      text: outcome.text ?? outcome.result.text,
+      meta: aiResultMeta(outcome.result),
+    });
   }
 
   function selectJob(id: number | null): void {
@@ -548,6 +589,22 @@
               Rerun failed
             </Button>
           {/if}
+        {/if}
+        <!-- M13: AI diagnosis for any failed run (log tail → markdown answer). -->
+        {#if runHasFailures(run)}
+          <AiFeatureButton
+            {repoId}
+            kind="diagnose-workflow"
+            label="AI diagnose"
+            title="Diagnose this failed run with AI"
+            confirmText={"Send this run's log tail to {backend} for a diagnosis?"}
+            errorPrefix="AI diagnose failed"
+            gateVisibility={false}
+            compact
+            disabled={(logText ?? "").trim().length === 0}
+            run={runDiagnose}
+            onResult={onDiagnose}
+          />
         {/if}
         <Button class={tb} variant="outline" type="button" onclick={() => void openOnGitHub()}>
           Open on GitHub

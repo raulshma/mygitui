@@ -67,7 +67,8 @@ import type {
 } from "./provider";
 import { subscribeOpencodeEvents, type OpencodeEventSession } from "./opencodeEvents";
 import { AiError } from "./types";
-import type { AiResult, ModelInfo, OpencodeResolve } from "./types";
+import type { AiResult, AiUsage, ModelInfo, OpencodeResolve } from "./types";
+import { usageFromSdk } from "./openrouter";
 import { describeError } from "$lib/errors";
 
 /** v2 promise-client type (resolved through {@link v2MakeFactory}). */
@@ -946,6 +947,26 @@ export class OpenCodeProvider implements AiProvider {
   }
 
   async generate(req: AiGenerateRequest): Promise<AiResult> {
+    return this.#run(req);
+  }
+
+  async generateStream(
+    req: AiGenerateRequest,
+    onDelta: (delta: string) => void,
+  ): Promise<AiResult> {
+    return this.#run(req, onDelta);
+  }
+
+  /**
+   * Shared generation path. `onDelta` (M13) streams on v2 servers: each
+   * `session.text.ended` part is appended as it completes (parts arrive
+   * one by one as the model writes). Unrecognized cumulative-update
+   * events are deliberately ignored — appending their full-part text
+   * would duplicate what the part-completion deltas already delivered.
+   * v1 servers have no incremental path — the one-shot answer is
+   * delivered as a single delta so stream UIs still render.
+   */
+  async #run(req: AiGenerateRequest, onDelta?: (delta: string) => void): Promise<AiResult> {
     const started = Date.now();
     const directory = this.#options.directory?.(req.sessionKey);
     let resolved: ResolvedOpencodeServer;
@@ -961,13 +982,27 @@ export class OpenCodeProvider implements AiProvider {
       (typeof configuredModel === "function" ? configuredModel() : configuredModel)?.trim() ||
       undefined;
     const model = req.model ?? defaultModel ?? "opencode/default";
+    req.onServing?.("opencode", model === "opencode/default" ? null : model);
 
     try {
       if (resolved.server.kind === "v2") {
-        const text = await this.#generateV2(resolved.server.base, directory, model, req);
-        return { text, model, backend: "opencode", elapsedMs: Date.now() - started };
+        const { text, usage } = await this.#generateV2(
+          resolved.server.base,
+          directory,
+          model,
+          req,
+          onDelta,
+        );
+        return {
+          text,
+          model,
+          backend: "opencode",
+          elapsedMs: Date.now() - started,
+          ...(usage !== undefined ? { usage } : {}),
+        };
       }
       const text = await this.#generateV1(resolved.server.base, directory, model, req);
+      if (onDelta !== undefined && text.length > 0) onDelta(text);
       return { text, model, backend: "opencode", elapsedMs: Date.now() - started };
     } catch (err) {
       if (req.signal?.aborted) {
@@ -1057,7 +1092,8 @@ export class OpenCodeProvider implements AiProvider {
     rawDirectory: string | undefined,
     model: string,
     req: AiGenerateRequest,
-  ): Promise<string> {
+    onDelta?: (delta: string) => void,
+  ): Promise<{ text: string; usage: AiUsage | undefined }> {
     const client = await this.#clientForV2(base);
     const directory = normalizeDirectory(rawDirectory);
     const parsed =
@@ -1086,7 +1122,7 @@ export class OpenCodeProvider implements AiProvider {
     }
 
     try {
-      return await this.#awaitV2Execution(client, sessionID, text, req.signal);
+      return await this.#awaitV2Execution(client, sessionID, text, req.signal, onDelta);
     } finally {
       await client.session.remove({ sessionID }).catch(() => {});
     }
@@ -1103,7 +1139,8 @@ export class OpenCodeProvider implements AiProvider {
     sessionID: string,
     text: string,
     signal?: AbortSignal,
-  ): Promise<string> {
+    onDelta?: (delta: string) => void,
+  ): Promise<{ text: string; usage: AiUsage | undefined }> {
     if (signal?.aborted) {
       throw new AiError("cancelled", "AI request cancelled", { backend: "opencode" });
     }
@@ -1118,9 +1155,10 @@ export class OpenCodeProvider implements AiProvider {
       signal?.removeEventListener("abort", onAbort);
     };
 
-    const outcome = new Promise<string>((resolve, reject) => {
+    const outcome = new Promise<{ text: string; usage: AiUsage | undefined }>((resolve, reject) => {
       void (async () => {
         const texts = new Map<string, string>();
+        let v2Usage: AiUsage | undefined;
         try {
           // Subscribed first: the reply arrives only on this stream.
           const events = client.event.subscribe({ signal: controller.signal });
@@ -1138,6 +1176,9 @@ export class OpenCodeProvider implements AiProvider {
               case "session.text.ended": {
                 const d = data as { assistantMessageID: string; ordinal: number; text: string };
                 texts.set(`${d.assistantMessageID}:${d.ordinal}`, d.text);
+                // Each part completing is a real incremental chunk — parts
+                // arrive one by one as the model writes them.
+                if (d.text.length > 0) onDelta?.(d.text);
                 break;
               }
               case "permission.asked": {
@@ -1153,6 +1194,8 @@ export class OpenCodeProvider implements AiProvider {
                 break;
               }
               case "session.execution.succeeded": {
+                const d = data as { usage?: unknown; tokens?: unknown };
+                v2Usage = usageFromSdk(d.usage) ?? usageFromSdk(d.tokens);
                 const joined = [...texts.values()].join("\n").trim();
                 if (joined.length === 0) {
                   reject(
@@ -1161,7 +1204,7 @@ export class OpenCodeProvider implements AiProvider {
                     }),
                   );
                 } else {
-                  resolve(joined);
+                  resolve({ text: joined, usage: v2Usage });
                 }
                 return;
               }
@@ -1203,11 +1246,6 @@ export class OpenCodeProvider implements AiProvider {
       return await withTimeout(outcome, V2_GENERATION_TIMEOUT_MS, () =>
         client.session.interrupt({ sessionID }).catch(() => {}),
       );
-    } catch (err) {
-      if (err instanceof AiError && err.message.includes("did not finish generating in time")) {
-        throw err;
-      }
-      throw err;
     } finally {
       finish();
     }

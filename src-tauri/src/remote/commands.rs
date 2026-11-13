@@ -94,6 +94,8 @@ pub struct DeviceInput {
     /// Store/replace the key passphrase in the keyring.
     pub passphrase: Option<String>,
     pub poll_secs: Option<u32>,
+    /// Connect this device automatically on app launch (None = off).
+    pub auto_connect: Option<bool>,
 }
 
 fn profile_from_input(input: &DeviceInput, id: String) -> DeviceProfile {
@@ -109,6 +111,7 @@ fn profile_from_input(input: &DeviceInput, id: String) -> DeviceProfile {
             has_passphrase: input.has_passphrase,
         },
         poll_secs: input.poll_secs.unwrap_or(profiles::DEFAULT_POLL_SECS),
+        auto_connect: input.auto_connect.unwrap_or(false),
     })
 }
 

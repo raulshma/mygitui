@@ -25,7 +25,8 @@
   import { untrack } from "svelte";
   import { ai } from "$lib/ai/ai.svelte";
   import { AI_BACKENDS } from "$lib/ai/types";
-  import type { AiBackend, ModelInfo, OpencodeMode } from "$lib/ai/types";
+  import type { AiBackend, FeatureKind, ModelInfo, OpencodeMode } from "$lib/ai/types";
+  import { AI_FEATURES } from "$lib/ai/registry";
   import {
     opencodeDetect,
     opencodeServeStatus,
@@ -53,6 +54,10 @@
   } = $props();
 
   // --- form state (copies of the live config; applied on Save) ---------------
+  let aiEnabled = $state(true);
+  let statusBar = $state(true);
+  /** Per-feature toggles keyed by FeatureKind (registry order). */
+  let featureToggles = $state<Record<string, boolean>>({});
   let backendChoice = $state<AiBackend>("opencode");
   let opencodeEnabled = $state(true);
   let opencodeModeChoice = $state<OpencodeMode>("managed");
@@ -128,6 +133,11 @@
   $effect(() => {
     if (!open) return;
     untrack(() => {
+      aiEnabled = ai.isEnabled();
+      statusBar = ai.isStatusBarEnabled();
+      featureToggles = Object.fromEntries(
+        AI_FEATURES.map((def) => [def.kind, ai.isFeatureEnabled(def.kind)]),
+      );
       backendChoice = ai.config.backend;
       opencodeEnabled = ai.config.opencodeEnabled !== false;
       opencodeModeChoice =
@@ -237,6 +247,11 @@
   async function save(): Promise<void> {
     saving = true;
     try {
+      ai.setEnabled(aiEnabled);
+      ai.setStatusBarEnabled(statusBar);
+      for (const def of AI_FEATURES) {
+        ai.setFeatureEnabled(def.kind, featureToggles[def.kind] !== false);
+      }
       ai.setBackend(backendChoice);
       ai.setOpencodeMode(opencodeModeChoice);
       // Kept even in managed mode (attach needs it again after a switch);
@@ -252,9 +267,13 @@
         await ai.saveOpenrouterKey(openrouterKey);
       }
       // Check after writing secrets so the probe uses the newly saved password.
-      await ai.setOpencodeEnabled(opencodeEnabled);
-      await ai.supervisor.check("openrouter").catch(() => {});
-      void readInstallState();
+      // With the master switch off nothing is probed or spawned — providers
+      // keep their stored config for when AI is turned back on.
+      if (aiEnabled) {
+        await ai.setOpencodeEnabled(opencodeEnabled);
+        await ai.supervisor.check("openrouter").catch(() => {});
+        void readInstallState();
+      }
       toast("AI settings saved", { kind: "success" });
       onclose?.();
     } catch (err) {
@@ -344,6 +363,43 @@
         }}
       >
         <div class="dialog-body flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto">
+        <fieldset class="group m-0 flex min-w-0 flex-col gap-[0.625rem] rounded-xl border border-border bg-muted/30 px-4 pb-4 pt-[0.9rem]">
+          <legend class="legend px-ui-35 text-xs font-semibold text-muted-foreground">Features</legend>
+          <label class="radio flex cursor-pointer items-baseline gap-ui-375 text-ui-base font-medium">
+            <Checkbox bind:checked={aiEnabled} />
+            <span>
+              Enable AI features
+              <span class="block text-ui-meta font-normal text-muted-foreground">
+                Master switch — off hides every AI affordance and cancels running jobs. Nothing is sent anywhere while off.
+              </span>
+            </span>
+          </label>
+          {#if aiEnabled}
+            {#each AI_FEATURES as def (def.kind)}
+              <label class="radio feature-toggle flex cursor-pointer items-baseline gap-ui-375 pl-4 text-ui-base">
+                <Checkbox
+                  checked={featureToggles[def.kind] !== false}
+                  onCheckedChange={(checked) => (featureToggles[def.kind] = checked === true)}
+                />
+                <span>{def.title}</span>
+              </label>
+            {/each}
+            <label class="radio flex cursor-pointer items-baseline gap-ui-375 text-ui-base">
+              <Checkbox bind:checked={statusBar} />
+              <span>
+                Live AI activity in the status bar
+                <span class="block text-ui-meta text-muted-foreground">
+                  One row per running AI job: phase, elapsed time, Cancel.
+                </span>
+              </span>
+            </label>
+          {:else}
+            <p class="hint m-0 text-ui-meta text-muted-foreground" role="status">
+              AI is off. Provider settings below keep their values for when it is turned back on.
+            </p>
+          {/if}
+        </fieldset>
+
         <fieldset class="group m-0 flex min-w-0 flex-col gap-[0.625rem] rounded-xl border border-border bg-muted/30 px-4 pb-4 pt-[0.9rem]">
           <legend class="legend px-ui-35 text-xs font-semibold text-muted-foreground">Preferred backend</legend>
           {#each AI_BACKENDS as option (option)}

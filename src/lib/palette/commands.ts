@@ -33,11 +33,14 @@
 import {
   checkpointGc,
   pickFolder,
+  repoDiff,
   stashApply,
   stashList,
   stashPush,
   stageAll,
+  streamLog,
 } from "$lib/ipc/client";
+import type { CommitInfo, LogFilter } from "$lib/ipc/types";
 import {
   fetchDefaultRemote,
   pullCurrentBranch,
@@ -67,6 +70,10 @@ import {
 } from "$lib/theme";
 import { openAboutDialog } from "$lib/components/aboutDialog";
 import { describeError } from "$lib/errors";
+import { ai } from "$lib/ai/ai.svelte";
+import { aiFeatureDef } from "$lib/ai/registry";
+import { budgetedDiffText } from "$lib/ai/diffBudget";
+import { aiResultMeta } from "$lib/ai/usage";
 
 /** What a command knows about the active tab when it runs. */
 export interface CommandCtx {
@@ -116,6 +123,42 @@ function dispatch(name: string): void {
 // ---------------------------------------------------------------------------
 // Shared run helpers
 // ---------------------------------------------------------------------------
+
+/** Deadline for the log page `ai.explain-commit` reads (gatherCommits'). */
+const HEAD_LOG_TIMEOUT_MS = 10_000;
+
+/** The empty filter that streams plain history (first page = from HEAD). */
+const EMPTY_LOG_FILTER: LogFilter = {
+  text: null,
+  regex: false,
+  author: null,
+  path: null,
+  refs: [],
+  follow: false,
+};
+
+/**
+ * The current tip commit (first row of the first log page). Bounded like
+ * `gatherCommits` in features.ts: a stream superseded before its first
+ * page would otherwise pend forever and wedge the command.
+ */
+async function headCommit(repoId: string): Promise<CommitInfo | null> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const first = new Promise<CommitInfo | null>((resolve, reject) => {
+    timer = setTimeout(
+      () => reject(new Error("timed out reading the repository history")),
+      HEAD_LOG_TIMEOUT_MS,
+    );
+    void streamLog(repoId, EMPTY_LOG_FILTER, (page) => {
+      resolve(page.commits[0] ?? null);
+    }).catch(reject);
+  });
+  try {
+    return await first;
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 /** Toasts `message` (success kind). */
 function ok(message: string): void {
@@ -171,11 +214,13 @@ function focusPanel(panel: string, ctx: CommandCtx): void {
  * Shortcuts for the panels outside the Ctrl+1–8 sidebar numbering (the
  * index-based fallback below would hand History "ctrl+10", a combo no key
  * produces). Ctrl+9 reaches the Terminal; History takes the row's last
- * free slot, Ctrl+0 — Ctrl+7 is already Undo's.
+ * free slot, Ctrl+0. The Assistant (added later, all digits taken) uses
+ * Ctrl+Alt+A.
  */
 const PANEL_SHORTCUTS: Record<string, string> = {
   terminal: "ctrl+9",
   history: "ctrl+0",
+  assistant: "ctrl+alt+a",
 };
 
 // ---------------------------------------------------------------------------
@@ -561,6 +606,7 @@ export const COMMANDS: Command[] = [
       ["files", "Files"],
       ["terminal", "Terminal"],
       ["history", "History"],
+      ["assistant", "Assistant"],
     ] as const
   ).map(([panel, label], index): Command => ({
     id: `panel.focus-${panel}`,
@@ -607,6 +653,101 @@ export const COMMANDS: Command[] = [
     shortcut: "ctrl+shift+v",
     when: (ctx) => ctx.repoId !== null,
     run: () => emitUiEvent("files-md-view"),
+  },
+
+  // -- AI (M13; registry-driven) ---------------------------------------------
+  // Headless by design: runs present their output in the shared result
+  // dialog (`ai-show-result`), so they work no matter which panel is open.
+  ...(
+    [
+      {
+        kind: "commit-message" as const,
+        resultTitle: "Generated commit message",
+        run: async (repoId: string) => {
+          const outcome = await ai.generateCommitMessage(repoId);
+          const m = outcome.message ?? { subject: outcome.result.text, body: "" };
+          return m.body ? `${m.subject}\n\n${m.body}` : m.subject;
+        },
+      },
+      {
+        kind: "review-staged" as const,
+        resultTitle: "Staged changes review",
+        run: async (repoId: string) => (await ai.run("review-staged", { repoId })).result.text,
+      },
+    ] as const
+  ).map(({ kind, resultTitle, run }): Command => {
+    const def = aiFeatureDef(kind)!;
+    return {
+      id: `ai.${kind}`,
+      title: `AI: ${def.title}`,
+      section: "AI",
+      keywords: def.keywords.split(" "),
+      when: (ctx) =>
+        ctx.repoId !== null &&
+        ai.isEnabled() &&
+        ai.isFeatureEnabled(kind) &&
+        !ai.jobs.activeJob(ctx.repoId),
+      run: async (ctx) => {
+        try {
+          const text = await run(ctx.repoId!);
+          emitUiEvent("ai-show-result", { title: resultTitle, text });
+        } catch (err) {
+          toast(`AI ${def.title.toLowerCase()} failed: ${describeError(err)}`, { kind: "error" });
+        }
+      },
+    };
+  }),
+  {
+    // Headless like the mapped commands above, but it gathers its own
+    // subject: the palette has no selected commit, so it explains the
+    // current tip (first row of the first log page — the stream walks
+    // from HEAD). Registry-driven per the M13 contract.
+    id: "ai.explain-commit",
+    get title() {
+      return `AI: ${aiFeatureDef("explain-commit")!.title}`;
+    },
+    section: "AI",
+    keywords: aiFeatureDef("explain-commit")!.keywords.split(" "),
+    when: (ctx) =>
+      ctx.repoId !== null &&
+      ai.isEnabled() &&
+      ai.isFeatureEnabled("explain-commit") &&
+      !ai.jobs.activeJob(ctx.repoId),
+    run: async (ctx) => {
+      try {
+        const head = await headCommit(ctx.repoId!);
+        if (head === null) {
+          toast("No commits to explain", { kind: "info" });
+          return;
+        }
+        if (head.parents.length === 0) {
+          toast("Root commit — nothing to diff against", { kind: "info" });
+          return;
+        }
+        const files = await repoDiff(ctx.repoId!, { commit: head.parents[0] }, { commit: head.sha });
+        const outcome = await ai.run("explain-commit", {
+          repoId: ctx.repoId!,
+          sha: head.sha,
+          description: head.message,
+          diff: budgetedDiffText(files),
+        });
+        emitUiEvent("ai-show-result", {
+          title: `Commit ${head.sha.slice(0, 7)}`,
+          text: outcome.text ?? outcome.result.text,
+          meta: aiResultMeta(outcome.result),
+        });
+      } catch (err) {
+        toast(`AI explain failed: ${describeError(err)}`, { kind: "error" });
+      }
+    },
+  },
+  {
+    id: "ai.settings",
+    title: "AI: Settings",
+    section: "AI",
+    keywords: ["provider", "openrouter", "opencode", "model", "enable", "disable", "api key"],
+    // Always visible: the path back in when AI itself is switched off.
+    run: () => emitUiEvent("open-ai-settings"),
   },
 
   // -- App ------------------------------------------------------------------

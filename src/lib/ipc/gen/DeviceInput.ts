@@ -13,4 +13,8 @@ password: string | null,
 /**
  * Store/replace the key passphrase in the keyring.
  */
-passphrase: string | null, poll_secs: number | null, };
+passphrase: string | null, poll_secs: number | null, 
+/**
+ * Connect this device automatically on app launch (None = off).
+ */
+auto_connect: boolean | null, };

@@ -30,6 +30,7 @@ const terminalPanelImport = lazyImport(() => import("$lib/components/terminal/Te
 const forgePanelImport = lazyImport(() => import("$lib/components/forge/ForgePanel.svelte"));
 const actionsPanelImport = lazyImport(() => import("$lib/components/actions/ActionsPanel.svelte"));
 const statsPanelImport = lazyImport(() => import("$lib/components/panels/StatsPanel.svelte"));
+const assistantPanelImport = lazyImport(() => import("$lib/components/ai/AssistantPanel.svelte"));
 const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen.svelte"));
 </script>
 
@@ -719,6 +720,8 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
         return actionsPanel;
       case "stats":
         return statsPanel;
+      case "assistant":
+        return assistantPanel;
       default:
         return missingPanel;
     }
@@ -727,6 +730,11 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
   // --- Clean dialog + AI feature bridge ------------------------------------
 
   let cleanOpen = $state(false);
+
+  // The assistant panel's active tab, bound two-way into the panel snippet
+  // (`ai-open-activity` flips it before focusing so the panel — whether
+  // fresh-mounted or already open — lands on the Activity tab).
+  let assistantTab = $state<"chat" | "activity">("chat");
 
   // H2's CreatePrDialog asks for AI generation via the typed UI bus; H1's
   // runFeature answers it. One bridge, registered once per workspace mount.
@@ -843,6 +851,13 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
       onUiEvent("focus-panel", ({ panel, repoId: target }) => {
         if (target !== null && target !== repoId) return;
         focusPanel(panel as PanelId);
+      }),
+      // Status-bar AI rows: reveal the assistant panel with its Activity
+      // tab (job history + usage). The panel's tab is bound state, so this
+      // works whether the panel is already mounted or added by focusPanel.
+      onUiEvent("ai-open-activity", () => {
+        assistantTab = "activity";
+        focusPanel("assistant");
       }),
       onUiEvent("workflow-run-open", ({ repoId: target, runId }) => {
         if (target !== repoId) return;
@@ -980,10 +995,15 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
   let transitionedRepoId: string | null = null;
 
   $effect(() => {
-    // Subtle fade/slide when the repoId PROP changes — not on mount. The
-    // workspace element is reused across switches, so the Web Animations
-    // API (el.animate) keeps the transition restartable without a remount
-    // or CSS-class hacks.
+    // Brief opacity settle when the repoId PROP changes — not on mount.
+    // The first cut of this transition also dipped the workspace 3px down
+    // and flashed it to 35% opacity; on a full-window surface that reads
+    // as a blink-and-jump — the "whole UI twitches" report. So: opacity
+    // only, a gentle floor (0.6) and a fast duration (the overlay chrome's
+    // own fades run 100–150ms) — it smooths the content swap without any
+    // positional movement. The workspace element is reused across switches,
+    // so the Web Animations API (el.animate) keeps the transition
+    // restartable without a remount or CSS-class hacks.
     const id = repoId;
     if (transitionedRepoId === null) {
       transitionedRepoId = id;
@@ -999,13 +1019,10 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
     ) {
       return;
     }
-    el.animate(
-      [
-        { opacity: 0.35, transform: "translateY(3px)" },
-        { opacity: 1, transform: "translateY(0)" },
-      ],
-      { duration: 200, easing: "cubic-bezier(0.2, 0, 0, 1)" },
-    );
+    el.animate([{ opacity: 0.6 }, { opacity: 1 }], {
+      duration: 140,
+      easing: "cubic-bezier(0.2, 0, 0, 1)",
+    });
   });
 
   // Repos persisted before the editor existed may have no `diff` panel:
@@ -1591,6 +1608,17 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
 {#snippet statsPanel()}
   {#await statsPanelImport() then StatsPanelModule}
     <StatsPanelModule.default {repoId} {root} />
+  {/await}
+{/snippet}
+{#snippet assistantPanel()}
+  {#await assistantPanelImport() then AssistantPanelModule}
+    <AssistantPanelModule.default
+      {repoId}
+      {root}
+      repoName={name}
+      bind:tab={assistantTab}
+      diffPath={diffEntry?.path ?? null}
+    />
   {/await}
 {/snippet}
 {#snippet missingPanel()}

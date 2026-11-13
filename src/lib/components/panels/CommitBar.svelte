@@ -516,6 +516,7 @@
         <div class="primary inline-flex flex-wrap items-center justify-end gap-x-ui-375 gap-y-1 min-w-0 max-w-full">
           <AiFeatureButton
             {repoId}
+            kind="commit-message"
             icon
             gateVisibility={false}
             rootClass="ai-commit"

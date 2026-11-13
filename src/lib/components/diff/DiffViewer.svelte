@@ -618,14 +618,19 @@
     };
   });
 
-  // -- M12 AI: explain-hunk (visible once the repo opted in) -------------------
+  // -- M12 AI: explain-hunk (visible once AI is on, the feature is on, and
+  // the repo opted in — the same master + per-feature gates every other
+  // AI affordance follows, M13) ----------------------------------------------
 
   let explain = $state<{ path: string; hunkText: string; label: string } | null>(
     null,
   );
 
   const explainEnabled = $derived(
-    repoId !== undefined && ai.isOptedIn(repoId),
+    repoId !== undefined &&
+      ai.isEnabled() &&
+      ai.isFeatureEnabled("explain-hunk") &&
+      ai.isOptedIn(repoId),
   );
 
   function explainHunk(fileIndex: number, hunkIndex: number): void {

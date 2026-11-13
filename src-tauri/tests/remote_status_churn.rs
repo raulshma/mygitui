@@ -294,6 +294,7 @@ fn test_profile(port: u16) -> DeviceProfile {
             has_passphrase: false,
         },
         poll_secs: 5,
+        auto_connect: false,
     }
 }
 

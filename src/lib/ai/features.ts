@@ -13,11 +13,11 @@
  * gates on per-repo opt-in BEFORE any data is gathered or sent.
  */
 
-import type { DiffHunk, FileDiff, LogFilter, LogPage, RepoId } from "$lib/ipc/types";
+import type { DiffHunk, DiffSide, FileDiff, LogFilter, LogPage, RepoId } from "$lib/ipc/types";
 import { budgetedDiffText, MAX_DIFF_CHARS } from "./diffBudget";
 import type { ConnectionSupervisor } from "./connection";
 import { AiError } from "./types";
-import type { AiResult, FeatureKind } from "./types";
+import type { AiBackend, AiJobPhase, AiResult, FeatureKind } from "./types";
 
 // ---------------------------------------------------------------------------
 // Shared prompt plumbing
@@ -228,6 +228,188 @@ export function parseBranchName(text: string): string {
 }
 
 // ---------------------------------------------------------------------------
+// M13 prompt builders (all pure; call sites pre-gather the data)
+// ---------------------------------------------------------------------------
+
+/**
+ * System + user prompt explaining one commit: its message plus the
+ * parent→commit diff (budgeted by the caller). Free-form markdown answer.
+ */
+export function explainCommitPrompt(
+  sha: string,
+  message: string,
+  diff: string,
+): { system: string; prompt: string } {
+  return {
+    system: [
+      "You explain Git commits to developers.",
+      "Describe what changed and why it likely matters: intent, mechanics, and any risks worth knowing (behavior changes, migrations, breaking calls).",
+      "Answer in concise GitHub-flavored markdown, grounded strictly in the provided message and diff.",
+      GUARDRAILS,
+    ].join(" "),
+    prompt: [
+      `Commit ${sha.slice(0, 10)}`,
+      "Commit message:",
+      message.trim(),
+      "",
+      "Diff against the first parent:",
+      "```diff",
+      diff,
+      "```",
+    ].join("\n"),
+  };
+}
+
+/**
+ * System + user prompt explaining one blamed line: what the line does and
+ * how it came to be, from the line text, its blaming commit summary and an
+ * optional file slice for surrounding context.
+ */
+export function explainBlamePrompt(
+  path: string,
+  line: number,
+  lineText: string,
+  commitSummary: string | null,
+  fileSlice: string | null,
+): { system: string; prompt: string } {
+  const parts = [
+    `File: ${path}`,
+    `Line ${line}:`,
+    "```",
+    lineText,
+    "```",
+  ];
+  if (commitSummary !== null) parts.push(`Introduced by commit: "${commitSummary}"`);
+  if (fileSlice !== null) {
+    parts.push("Surrounding file content:", "```", fileSlice, "```");
+  }
+  parts.push(
+    "Explain this line: what it does, why it might be written this way, and what to watch out for when changing it. Be brief and concrete.",
+  );
+  return {
+    system: [
+      "You explain source code lines to developers, grounded strictly in the provided content — say so when the context is not enough to be sure.",
+      "Answer in concise GitHub-flavored markdown.",
+      GUARDRAILS,
+    ].join(" "),
+    prompt: parts.join("\n"),
+  };
+}
+
+/**
+ * Shared system + user prompt diagnosing a failed CI workflow run or
+ * custom action run: the failure metadata plus a capped log tail.
+ * Free-form markdown answer.
+ */
+export function diagnoseFailurePrompt(
+  subject: string,
+  meta: string,
+  logTail: string,
+): { system: string; prompt: string } {
+  return {
+    system: [
+      "You diagnose failed CI / automation runs for developers.",
+      "Identify the most likely failing step and root cause, quote the decisive log lines, and suggest the next concrete fix.",
+      "If the log does not contain a clear cause, say what is missing and list the most plausible candidates.",
+      "Answer in concise GitHub-flavored markdown.",
+      GUARDRAILS,
+    ].join(" "),
+    prompt: [`${subject} failed.`, "Run details:", meta, "Log tail:", "```", logTail, "```"].join("\n"),
+  };
+}
+
+/**
+ * System + user prompt suggesting a resolution for ONE merge conflict:
+ * the two sides plus optional surrounding content and merge hints.
+ * The answer must be replacement text only — the parser strips everything
+ * else, and the suggestion lands in the conflict editor's custom-text
+ * field for the user to review (advisory contract: AI never applies).
+ */
+export function conflictSuggestionPrompt(
+  path: string,
+  ours: string,
+  theirs: string,
+  context: string | null,
+): { system: string; prompt: string } {
+  const parts = [
+    `Conflicted file: ${path}`,
+    'Current branch side ("ours"):',
+    "```",
+    ours,
+    "```",
+    'Incoming side ("theirs"):',
+    "```",
+    theirs,
+    "```",
+  ];
+  if (context !== null) parts.push("Surrounding content:", "```", context, "```");
+  parts.push(
+    "Suggest the resolved content for this conflicted region: merge both sides' intent, keep valid syntax, and drop the conflict markers.",
+  );
+  return {
+    system: [
+      "You suggest merge-conflict resolutions.",
+      "Output ONLY the resolved replacement text — no explanations, no code fences, no conflict markers.",
+      "If both sides express incompatible intents, prefer the incoming change and note nothing (the user reviews the result).",
+      GUARDRAILS,
+    ].join(" "),
+    prompt: parts.join("\n"),
+  };
+}
+
+/**
+ * Extracts the resolved-region text from a model answer: strips code
+ * fences, residual conflict markers and prose around the payload. The
+ * editor's custom-text field is the review surface, so a slightly noisy
+ * parse is survivable — but markers must never survive into it.
+ */
+export function parseConflictSuggestion(text: string): string {
+  let out = text.trim();
+  // Strip one wrapping fence pair when present (```…``` or ```lang…```).
+  const fence = /^```[^\n]*\n([\s\S]*?)\n?```$/.exec(out);
+  if (fence !== null) out = fence[1] ?? out;
+  // Drop any leftover conflict-marker lines with their >>> / <<< rails.
+  out = out
+    .split("\n")
+    .filter((line) => !/^(<{7}|={7}|>{7})/.test(line))
+    .join("\n");
+  return out.trim();
+}
+
+/**
+ * System + user prompt writing release notes for a commit range: the
+ * range's commits plus the aggregate file stats. Markdown answer shaped
+ * for a changelog.
+ */
+export function releaseNotesPrompt(
+  range: string,
+  commits: Array<{ summary: string; sha: string }>,
+  stats: string,
+): { system: string; prompt: string } {
+  const lines =
+    commits.length > 0
+      ? commits.map((c) => `- ${c.summary} (${c.sha.slice(0, 8)})`).join("\n")
+      : "(no commits)";
+  return {
+    system: [
+      "You write release notes / changelog entries for developers.",
+      "Group the changes into sections (e.g. Features, Fixes, Other) with one concise bullet per user-visible change; skip pure chores unless notable.",
+      "Never invent changes that are not in the provided commits.",
+      "Answer in GitHub-flavored markdown.",
+      GUARDRAILS,
+    ].join(" "),
+    prompt: [
+      `Write release notes for ${range}.`,
+      "Commits (newest first):",
+      lines,
+      "",
+      "File stats across the range:",
+      stats,
+    ].join("\n"),
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Git data → prompt text (pure renderers over FileDiff)
 // ---------------------------------------------------------------------------
 
@@ -279,11 +461,7 @@ export function diffSummaryText(files: FileDiff[]): string {
 
 /** Git data providers a runner needs (subset of `$lib/ipc/client`). */
 export interface FeatureGitClient {
-  repoDiff(
-    repoId: RepoId,
-    oldSide: "head",
-    newSide: "index",
-  ): Promise<FileDiff[]>;
+  repoDiff(repoId: RepoId, oldSide: DiffSide, newSide: DiffSide): Promise<FileDiff[]>;
   streamLog(
     repoId: RepoId,
     filter: LogFilter,
@@ -299,7 +477,20 @@ export interface FeatureRouter {
     model?: string;
     signal?: AbortSignal;
     sessionKey?: string;
+    onServing?: (backend: AiBackend, model: string | null) => void;
   }): Promise<AiResult>;
+  /** Streaming twin (M13); absent routers fall back to `generate`. */
+  generateStream?(
+    req: {
+      system?: string;
+      prompt: string;
+      model?: string;
+      signal?: AbortSignal;
+      sessionKey?: string;
+      onServing?: (backend: AiBackend, model: string | null) => void;
+    },
+    onDelta: (delta: string) => void,
+  ): Promise<AiResult>;
 }
 
 /** Everything a runner needs (defaults wire the real app singletons). */
@@ -309,6 +500,42 @@ export interface FeatureDeps {
   /** Per-repo opt-in gate (checked before anything is gathered/sent). */
   isOptedIn(repoId: string): boolean;
 }
+
+/**
+ * Lifecycle observers for a feature run (M13). The job store adapts these
+ * onto an `AiJobTicket` (see `jobs.svelte.ts`); `signal` is the UI's
+ * Cancel button — it combines with the runner's own 120s deadline.
+ */
+export interface AiRunHooks {
+  /** Phase advance with optional human detail ("reading staged diff"). */
+  onPhase?(phase: AiJobPhase, message?: string): void;
+  /** The built prompt (system, user) — for the activity log's preview. */
+  onPrompt?(system: string, prompt: string): void;
+  /** Which backend/model routing picked (the job's live "via" badge). */
+  onServing?(backend: AiBackend, model: string | null): void;
+  /** Streamed text chunks (only when the caller wants progressive text). */
+  onDelta?(text: string): void;
+  /** Aborts the run from outside (provider observes `cancelled`). */
+  signal?: AbortSignal;
+}
+
+/** Gathering detail per feature kind (`null` = no git IO for this kind). */
+const GATHER_LABELS: Record<FeatureKind, string | null> = {
+  "commit-message": "reading staged diff",
+  "pr-title-body": "reading commits and diff",
+  "explain-hunk": null,
+  "review-staged": "reading staged diff",
+  "stash-message": "reading staged diff",
+  "branch-name": null,
+  // M13 kinds take pre-gathered ctx (their call sites own the data), so
+  // there is nothing to gather inside the runner.
+  "explain-commit": null,
+  "explain-blame": null,
+  "diagnose-workflow": null,
+  "diagnose-action": null,
+  "conflict-assist": null,
+  "release-notes": null,
+};
 
 /** Inputs a runner accepts (pre-gathered data or the id to gather for). */
 export interface FeatureCtx {
@@ -325,6 +552,25 @@ export interface FeatureCtx {
   commits?: Array<{ summary: string; sha: string }>;
   /** Model override (backend-specific id). */
   model?: string;
+  // -- M13 additions (call sites pre-gather; runners shape the prompt) ----
+  /** explain-commit: the commit's sha (display in the prompt header). */
+  sha?: string;
+  /** explain-blame: the 1-based line number. */
+  line?: number;
+  /** explain-blame: the line's text. */
+  lineText?: string;
+  /** explain-blame: the blaming commit's summary (when known). */
+  commitSummary?: string;
+  /** explain-blame: surrounding file slice (repo_read_file, capped). */
+  fileSlice?: string;
+  /** diagnose-*: run metadata (workflow name/branch/steps or command/exit). */
+  runMeta?: string;
+  /** conflict-assist: the "ours" side of the conflict. */
+  ours?: string;
+  /** conflict-assist: the "theirs" side of the conflict. */
+  theirs?: string;
+  /** release-notes: human label of the commit range ("v1.2..v1.3"). */
+  range?: string;
 }
 
 /** A finished feature run. */
@@ -368,7 +614,7 @@ const LOG_FIRST_PAGE_TIMEOUT_MS = 10_000;
 const FEATURE_TIMEOUT_MS = 120_000;
 
 /** Gathers the first log page's commits for a repo. */
-async function gatherCommits(
+export async function gatherCommits(
   git: FeatureGitClient,
   repoId: string,
 ): Promise<Array<{ summary: string; sha: string }>> {
@@ -396,11 +642,14 @@ async function gatherCommits(
  * Runs one AI feature end to end: opt-in gate → gather → prompt → generate
  * (through the supervisor, backend selection + fallback included) → parse.
  * Throws {@link AiError} on any failure; nothing is retried here.
+ * `hooks` (M13) reports phase progress and carries the external cancel
+ * signal — both optional, so existing callers are unaffected.
  */
 export async function runFeature(
   kind: FeatureKind,
   ctx: FeatureCtx,
   deps: FeatureDeps,
+  hooks?: AiRunHooks,
 ): Promise<FeatureOutcome> {
   if (!deps.isOptedIn(ctx.repoId)) {
     throw new AiError(
@@ -409,6 +658,9 @@ export async function runFeature(
       {},
     );
   }
+
+  const gatherLabel = GATHER_LABELS[kind];
+  if (gatherLabel !== null) hooks?.onPhase?.("gathering", gatherLabel);
 
   let built: { system: string; prompt: string };
   switch (kind) {
@@ -468,35 +720,123 @@ export async function runFeature(
       break;
     }
     case "branch-name": {
-      if (!ctx.description || ctx.description.trim().length === 0) {
-        throw new AiError("unknown", "branch-name needs a description", {});
+      let description = ctx.description?.trim() ?? "";
+      if (description.length === 0) {
+        // No explicit description: fall back to the branch's recent work
+        // (first log page) so "suggest a name" works without any input —
+        // the create-flow's empty-query case.
+        const commits = await gatherCommits(deps.git, ctx.repoId);
+        const lines = commits
+          .slice(0, 10)
+          .map((c) => `- ${c.summary}`)
+          .join("\n");
+        if (lines.length === 0) {
+          throw new AiError("unknown", "branch-name needs a description or branch history", {});
+        }
+        description = `Recent commits on the current branch:\n${lines}`;
       }
-      built = branchNamePrompt(ctx.description.trim());
+      built = branchNamePrompt(description);
+      break;
+    }
+    // -- M13 (pre-gathered ctx; the runner validates and shapes) ------------
+    case "explain-commit": {
+      if (!ctx.sha || !ctx.description || !ctx.diff) {
+        throw new AiError("unknown", "explain-commit needs the commit message and its diff", {});
+      }
+      built = explainCommitPrompt(ctx.sha, ctx.description, ctx.diff);
+      break;
+    }
+    case "explain-blame": {
+      if (!ctx.path || ctx.line === undefined || ctx.lineText === undefined) {
+        throw new AiError("unknown", "explain-blame needs a file path and line", {});
+      }
+      built = explainBlamePrompt(
+        ctx.path,
+        ctx.line,
+        ctx.lineText,
+        ctx.commitSummary ?? null,
+        ctx.fileSlice ?? null,
+      );
+      break;
+    }
+    case "diagnose-workflow":
+    case "diagnose-action": {
+      if (!ctx.diff) {
+        throw new AiError("unknown", "diagnosis needs the failed run's log", {});
+      }
+      const subject =
+        kind === "diagnose-workflow" ? "The workflow run" : "The action run";
+      built = diagnoseFailurePrompt(subject, ctx.runMeta ?? "(no run details)", ctx.diff);
+      break;
+    }
+    case "conflict-assist": {
+      if (!ctx.path || ctx.ours === undefined || ctx.theirs === undefined) {
+        throw new AiError("unknown", "conflict-assist needs both sides of the conflict", {});
+      }
+      built = conflictSuggestionPrompt(ctx.path, ctx.ours, ctx.theirs, ctx.diff ?? null);
+      break;
+    }
+    case "release-notes": {
+      if (!ctx.commits || ctx.commits.length === 0) {
+        throw new AiError("unknown", "release-notes needs the range's commits", {});
+      }
+      built = releaseNotesPrompt(
+        ctx.range ?? "the selected range",
+        ctx.commits,
+        ctx.diff ?? "(no file stats)",
+      );
       break;
     }
   }
 
+  hooks?.onPhase?.("prompting");
+  hooks?.onPrompt?.(built.system, built.prompt);
+
+  // Deadline + external cancel share one controller: whichever fires
+  // first aborts the request; the catch below distinguishes the two so a
+  // user cancel reports "cancelled", not a timeout.
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), FEATURE_TIMEOUT_MS);
+  const external = hooks?.signal;
+  const onExternalAbort = () => controller.abort();
+  if (external !== undefined) {
+    if (external.aborted) controller.abort();
+    else external.addEventListener("abort", onExternalAbort, { once: true });
+  }
+  hooks?.onPhase?.("generating");
   let result: AiResult;
+  const request = {
+    system: built.system,
+    prompt: built.prompt,
+    model: ctx.model,
+    sessionKey: ctx.repoId,
+    signal: controller.signal,
+    onServing: hooks?.onServing,
+  };
   try {
-    result = await deps.router.generate({
-      system: built.system,
-      prompt: built.prompt,
-      model: ctx.model,
-      sessionKey: ctx.repoId,
-      signal: controller.signal,
-    });
+    // Streaming when a consumer wants deltas and the router supports it
+    // (supervisor falls back to one-shot per backend capability anyway).
+    if (hooks?.onDelta !== undefined && deps.router.generateStream !== undefined) {
+      result = await deps.router.generateStream(request, (delta) => hooks.onDelta?.(delta));
+    } else {
+      result = await deps.router.generate(request);
+    }
   } catch (err) {
     // Without this the repo's busy flag never clears and every later AI
     // request for it is refused while the spinner runs forever.
     if (controller.signal.aborted) {
+      if (external?.aborted === true) {
+        throw new AiError("cancelled", "cancelled", {});
+      }
       throw new AiError("unavailable", "the AI backend did not finish in time", {});
     }
     throw err;
   } finally {
     clearTimeout(timer);
+    external?.removeEventListener("abort", onExternalAbort);
   }
+
+  hooks?.onPhase?.("parsing");
 
   const outcome: FeatureOutcome = { kind, result, text: result.text };
   switch (kind) {
@@ -510,6 +850,18 @@ export async function runFeature(
       break;
     case "explain-hunk":
     case "review-staged":
+      break;
+    case "conflict-assist":
+      // The suggestion IS the text — but never let conflict markers
+      // survive into the editor's custom-text field.
+      outcome.text = parseConflictSuggestion(result.text);
+      break;
+    case "explain-commit":
+    case "explain-blame":
+    case "diagnose-workflow":
+    case "diagnose-action":
+    case "release-notes":
+      // Free-form markdown answers; the text field carries them as-is.
       break;
   }
   return outcome;

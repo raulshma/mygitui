@@ -59,6 +59,12 @@ pub struct DeviceProfile {
     /// Repo-change poll interval for repos opened on this device (seconds,
     /// minimum 1).
     pub poll_secs: u32,
+    /// Connect automatically when the app launches (opt-in). `serde(default)`
+    /// keeps pre-field `devices.json` files parsing: the store's load is
+    /// all-or-nothing, so a required field would silently wipe every saved
+    /// device.
+    #[serde(default)]
+    pub auto_connect: bool,
 }
 
 impl DeviceProfile {
@@ -226,7 +232,25 @@ mod tests {
                 has_passphrase: true,
             },
             poll_secs: DEFAULT_POLL_SECS,
+            auto_connect: false,
         }
+    }
+
+    /// A profile JSON written before `auto_connect` existed must parse with
+    /// the default (`false`) instead of failing the whole-file load (which
+    /// would wipe every saved device).
+    #[test]
+    fn legacy_profile_json_defaults_auto_connect() {
+        let store = temp_store("legacy-auto-connect");
+        std::fs::create_dir_all(store.path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &store.path,
+            r#"{"devices":[{"id":"a","name":"pi","host":"192.168.1.42","port":22,"username":"raul","auth":{"kind":"key_file","key_path":"k","has_passphrase":true},"poll_secs":5}]}"#,
+        )
+        .unwrap();
+        let devices = store.list();
+        assert_eq!(devices.len(), 1);
+        assert!(!devices[0].auto_connect);
     }
 
     #[test]

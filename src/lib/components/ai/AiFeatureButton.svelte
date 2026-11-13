@@ -29,6 +29,7 @@
   import type { AiRunOptions } from "$lib/ai/ai.svelte";
   import { isAiError } from "$lib/ai/types";
   import type { FeatureOutcome } from "$lib/ai/features";
+  import { aiElapsedLabel, aiFeatureLabel, aiPhaseLabel } from "$lib/ai/registry";
   import AiSettings from "./AiSettings.svelte";
   import { floating } from "$lib/components/overlay/floating";
   import { Button } from "$lib/components/ui/button/index.js";
@@ -39,6 +40,7 @@
 
   let {
     repoId,
+    kind = undefined,
     label,
     title = undefined,
     ariaLabel = undefined,
@@ -57,6 +59,13 @@
     rootClass = undefined,
   }: {
     repoId: string;
+    /**
+     * The feature this button serves (M13): when set, the button also
+     * disappears while that feature is switched off in AI settings, and
+     * the master switch always gates visibility. Optional only for
+     * callers not yet migrated to the registry.
+     */
+    kind?: import("$lib/ai/types").FeatureKind | undefined;
     /** Button text. */
     label: string;
     /** Hover tooltip. */
@@ -100,8 +109,29 @@
     ai.config.backend === "openrouter" ? "OpenRouter" : "your opencode server",
   );
 
+  // M13 transparency: while a run is in flight the tooltip becomes a live
+  // phase + elapsed readout (the job's Cancel lives in the status bar).
+  // Narrowed to this button's feature so an unrelated job for the repo
+  // (chat, another feature) cannot put its phase in this tooltip.
+  const activeJob = $derived(ai.jobs.activeJob(repoId, kind));
+  let now = $state(Date.now());
+  $effect(() => {
+    if (!busy) return;
+    now = Date.now();
+    const timer = setInterval(() => (now = Date.now()), 1_000);
+    return () => clearInterval(timer);
+  });
+  const hintLabel = $derived.by(() => {
+    if (!busy) return title ?? label;
+    const job = activeJob;
+    if (job === null) return `${title ?? label} — working…`;
+    const phase = job.message ?? aiPhaseLabel(job.phase) ?? "working";
+    return `${aiFeatureLabel(job.feature)} — ${phase} · ${aiElapsedLabel(now - job.startedAt)}`;
+  });
+
   function openAction(): void {
     if (disabled || busy) return;
+    if (!ai.isEnabled() || (kind !== undefined && !ai.isFeatureEnabled(kind))) return;
     error = null;
     if (ai.isOptedIn(repoId)) {
       void doRun();
@@ -139,10 +169,10 @@
   }
 </script>
 
-{#if !gateVisibility || ai.isOptedIn(repoId)}
+{#if ai.isEnabled() && (kind === undefined || ai.isFeatureEnabled(kind)) && (!gateVisibility || ai.isOptedIn(repoId))}
   <span class="ai-feature relative inline-flex {rootClass ?? ''}" bind:this={root}>
     {#if icon}
-      <Hint label={title ?? label}>
+      <Hint label={hintLabel}>
         {#snippet child({ props })}
           <Button
             variant="outline"
@@ -177,7 +207,7 @@
         {/snippet}
       </Hint>
     {:else}
-      <Hint label={title ?? label}>
+      <Hint label={hintLabel}>
         {#snippet child({ props })}
           <Button
             variant="outline"

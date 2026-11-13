@@ -21,6 +21,11 @@
 //! cancel can always reach `kill`), joins the readers at EOF, then emits
 //! the final `done: true` event with the exit code — output lines always
 //! land before the done event.
+//!
+//! Environment: the child inherits the app env, overlaid with the resolved
+//! login-shell environment ([`crate::shell_env`]) so user commands resolve
+//! the same binaries as in a terminal even when the app was launched from
+//! the desktop (no shell profile in a GUI env).
 
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read};
@@ -319,6 +324,11 @@ pub fn run_action(
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    // Run in the user's login-shell environment when it resolved: a
+    // GUI-launched app has no shell profile in its own env, so user commands
+    // (nvm's node, sdkman's gradle, …) would not resolve. Unresolved, the
+    // child inherits the app env verbatim (see shell_env.rs).
+    crate::shell_env::apply_resolved(&mut cmd);
     let mut child = cmd
         .spawn()
         .map_err(|e| format!("failed to spawn action `{}`: {e}", spec.name))?;
@@ -409,7 +419,7 @@ pub fn build_shell_command(command: &str) -> std::process::Command {
     }
     #[cfg(not(windows))]
     {
-        let mut cmd = std::process::Command::new("sh");
+        let mut cmd = crate::process::command("sh");
         cmd.args(["-c", command]);
         cmd
     }

@@ -169,6 +169,20 @@ Checkpoints live at `refs/mygitui/checkpoints/<ts>-<reason>`; worktree state is 
 
 Custom actions config lives FE-side (localStorage `mygitui.actions`), scope global or per-repo.
 Layout presets FE-side (localStorage `mygitui.layouts` + per-repo overlay `mygitui.layouts.<root>`).
+Status-panel tree state FE-side (localStorage `mygitui.status.collapsed.<root>`, versioned
+envelope, parse-and-drop, debounced writes): per-repo collapsed sections and accordions
+(Staged/Changes headers, the repository accordion in submodule mode, per-submodule
+accordions + sections), so the list reopens the way it was left.
+
+**Spawn environment (login-shell overlay, `src-tauri/src/shell_env.rs`)**: a GUI-launched
+app has no shell profile in its environment (nvm's PATH, SDKMAN_DIR, cargo's bin, … are
+missing), so user-facing spawns that should behave "like in a terminal" overlay the
+resolved login-shell environment: `action_run` children and `open_with` editor/custom
+spawns. Resolution runs once (warm-up thread at boot): `$SHELL` as a login+interactive
+shell prints `/usr/bin/env -0` between markers, bounded by a timeout; any failure (no
+`$SHELL`, shells rejecting `-i`, garbage) or Windows degrades to `None` and spawns keep
+their previous environment. Overlay, not replace: spawns that sanitize first
+(`env_clear()` allowlist) apply the overlay *after* the sanitize.
 
 Gitignore quick-add: `gitignore_templates` ships a curated builtin list (Node,
 Rust, Python, C++, Go, Java, macOS, Windows, VS Code, JetBrains, Svelte, Vite,
@@ -659,7 +673,7 @@ Additive contracts only; all commands take `repo_id` unless noted.
 | `opencode_serve_start` | `cwd?: string` → `OpencodeServeState` | Idempotent: returns the live server or spawns on a free 127.0.0.1 port (ready = TCP connect; ≤30s wait). `cwd` (the active repo root) becomes the server's working directory for project resolution. Non-1.x CLIs get a generated `OPENCODE_PASSWORD` (1.x carries none); a 2.x `server password <secret>` stdout line (secret at end-of-line) overwrites it as fallback — the announced secret is authoritative when the server ignored the env var. Error copy names the fix ("not found on PATH — install opencode…"). |
 | `opencode_serve_stop` | → `OpencodeServeState` | Kills (tree-kill on Windows) and reaps the managed server; no-op when none runs. |
 | `detect_editors` | → `EditorApp[]` | Probes PATH + well-known install locations for common editors (VS Code family, Cursor, Windsurf, Zed, Sublime, Notepad++, JetBrains via Toolbox/standalone scans). `EditorApp = {id, name, path}`; the platform file manager (`id: "explorer"`) is always first. No subprocesses; not cached. |
-| `open_with` | `repo_root`, `app_id` → `void` | Spawns the app id resolved through a fresh `detect_editors` probe (frontend-supplied paths are never spawned) with the repository root as the working folder; Notepad++ passes `-openFoldersAsWorkspace`, macOS goes through `open [-a <app>]`. Sanitized environment (same allowlist as git spawns — GUI apps keep SYSTEMROOT/USERPROFILE/APPDATA/LOCALAPPDATA/PATH/HOME/TMP). |
+| `open_with` | `repo_root`, `app_id` → `void` | Spawns the app id resolved through a fresh `detect_editors` probe (frontend-supplied paths are never spawned) with the repository root as the working folder; Notepad++ passes `-openFoldersAsWorkspace`, macOS goes through `open [-a <app>]`. Environment: the sanitized allowlist (same as git spawns — GUI apps keep SYSTEMROOT/USERPROFILE/APPDATA/LOCALAPPDATA/PATH/HOME/TMP) overlaid with the resolved login-shell environment (see **Spawn environment** above — profile entries like nvm's PATH that a GUI launch misses; the overlay runs after the sanitize and degrades to the sanitized set when resolution fails). |
 | `open_popout` | `label`, `query`, `title` → `void` | Creates (or focuses, when `label` exists) a popout webview window: `query` is the window's own `?panel=…&repo=…` URL query joined onto the app origin. Built Rust-side instead of via core `create-webview-window` so the main window's `additionalBrowserArgs` are copied — WebView2 rejects a second webview environment on the same user data folder (0x8007139F). 960×680 (min 420×300), splash background; created hidden and shown by the app's page-load hook at final size (the window-state plugin restores the saved geometry right after creation, and showing before that would visibly re-layout); the capability set covers `popout-*` labels. |
 
 Shape changes (additive, mirrored in `src/lib/ipc/types.ts`):
@@ -701,6 +715,22 @@ existing field changed meaning.
   cross-match); `null` keeps URL-keyed matching for callers predating the
   argument. The `clone-progress` payload is `{url, received, total,
   objects, run_id}`; the blobless CLI path emits no progress events.
+- **`DeviceProfile.auto_connect`** (`devices.json` + `device_add` /
+  `device_update` input, `DeviceInput.auto_connect: Option<bool>`, `None` =
+  off) — opt-in per-device connect-at-launch. `#[serde(default)]` keeps
+  pre-field store files parsing (the whole-file load is all-or-nothing; a
+  required field would silently wipe every saved device). The FE runs a
+  background connect loop for flagged devices once the launch registry
+  load lands (backend backoff schedule 1/2/5/10 s cap 30 s; cancelled by a
+  manual disconnect, device removal, or an auth/host-key prompt — the user
+  owns the connect then). The backend watchdog's own reconnect still owns
+  sessions that drop after connecting.
+- **Remote-device status re-sync at launch (FE)** — `remoteDevices.load()`
+  now lands before session restore starts dialing, and re-runs once
+  restore settles; a `device-status` event for a device the list doesn't
+  know yet schedules a debounced `device_list` re-sync instead of being
+  dropped (the backend only emits on change, so a dropped event pinned a
+  stale "disconnected" chip until the next reload). No wire shape changed.
 
 ## Commands (workspace files — file browser / viewer / editor)
 
@@ -818,3 +848,111 @@ workdir on the device (`remote.root`, quoted via `remote/quoting.rs`) so
 `rshell_write` keystrokes land in a shell already at the repo root —
 mirroring the local PTY, which starts in the repo dir. Remote action runs reuse
 `action_run` / `action_cancel` and stream `action-output` (M4 contract).
+
+## M13 — AI platform integration (frontend-only: job engine, streaming, registry, assistant, six new features)
+
+Everything AI becomes observable, interruptible, and switch-off-able. The
+AI platform itself is frontend-only: no new IPC commands, CSP entries or
+dependencies — the AI HTTP already happens in the webview (`openrouter.ai`
++ localhost are CSP-allowed) and every data source the new features need
+already has IPC commands. (The same stage also lands unrelated work that
+carries its own contracts above: the login-shell spawn environment
+(`shell_env.rs`, **Spawn environment** + the `open_with` row) and the
+status tree collapse prefs (`mygitui.status.collapsed.<root>`).)
+
+**Job engine** (`src/lib/ai/jobs.svelte.ts`): every AI run — feature or
+chat — becomes an `AiJob` with the lifecycle
+`queued → gathering → prompting → generating(streaming) → parsing → done | cancelled | error`
+(see state-machines.md). `AiStore.run()` mints the job; feature buttons,
+the status bar and the assistant panel all read the same store.
+
+**Status bar contract (anti-twitch preserved)**: one row per active job in
+the fixed-height bar's middle section, alongside op rows: pulsing sparkle,
+feature label, repo name for background tabs, phase message, elapsed
+(1s-ticker), and a per-row Cancel (abort → the provider rejects → the
+runner reports `cancelled`). Rows render only when AI is enabled AND
+`config.statusBar !== false`. Clicking a row's main segment emits the
+typed bus event `ai-open-activity` (RepoView focuses the assistant panel
+with its Activity tab).
+
+**Streaming capability** (optional, feature-detected like `connection?`):
+`AiProvider.generateStream?(req, onDelta): Promise<AiResult>`. OpenRouter
+uses the SDK's `streamText` (`textStream` chunks); opencode v2 feeds the
+existing SSE subscription's `session.text.ended` parts as deltas and reads
+usage from `session.execution.succeeded`; opencode v1 falls back to
+one-shot (full text as a single delta). `ConnectionSupervisor.generateStream`
+mirrors `generate`'s ready/fallback/status semantics exactly. `AiResult`
+gains `usage?: AiUsage {inputTokens?, outputTokens?, totalTokens?, costUsd?}`
+read defensively; every result footer renders
+`via <model> · <backend> · 4s · 1.2k tokens` (`src/lib/ai/usage.ts`).
+`onDelta` contract: append chunks (v2 parts are incremental segments,
+joined with `\n` in the final text; cumulative-update events are ignored
+to avoid duplication).
+
+**Feature registry** (`src/lib/ai/registry.ts`): one `AiFeatureDef` per
+feature (title, button label, icon, keywords, streaming preference).
+Adding feature #N = a `FeatureKind` member (types.ts) + prompt
+builder/parser/`runFeature` case (features.ts) + a registry entry + one
+UI call site. The registry drives the palette `ai.*` commands, AI
+settings' per-feature toggles, status-bar/Activity labels, and the gates.
+Prompt builders stay pure and unit-tested; the M13 runners take
+pre-gathered context via `FeatureCtx` (their call sites own the data).
+
+**Master switch + toggles** (`AiConfig` in `mygitui.ai`, parse-and-drop):
+`enabled?: boolean` (opt-out, default on) hides every AI affordance
+(feature buttons, health chip, palette `ai.*` commands, status-bar rows),
+refuses runs (`AiError` kind `opt-in`), and cancels all in-flight jobs.
+`features?: Record<string, boolean>` gates per feature (keys are
+`FeatureKind`s; parse-and-drop keeps boolean values only).
+`statusBar?: boolean` hides the rows without disabling AI. The Settings
+hub's AI section and AiSettings render the switches; the `ai.settings`
+palette command stays visible when AI is off (the way back in).
+
+**New localStorage keys** (versioned envelope, `$lib/state/persist`):
+- `mygitui.ai.activity` — finished-job history ring (cap 200; response
+  text capped 20k, prompt previews 2k; never contains secrets — prompts
+  are git data + instructions only).
+- `mygitui.ai.chat` — assistant threads keyed by repo ROOT (repo ids are
+  per-launch; roots survive restarts), capped 60 messages/thread,
+  20k characters/message (either role), 20 roots (oldest-inserted drop).
+  Messages are plain data + model output; parse-and-drop validation.
+
+**Typed UI bus events** (existing map, `src/lib/palette/events.ts`):
+- `ai-show-result { title, text, meta? }` — App owns the shared result
+  dialog (AiResultDialog). Headless runs (palette commands, history-menu
+  explain, blame-line explain) route their output here so the result
+  surfaces no matter which panel is open.
+- `ai-open-activity` — status-bar AI rows deep-link into the assistant
+  panel's Activity tab (job history + usage aggregates today/7d/per
+  feature).
+
+**Assistant panel** (`panel id "assistant"` in `layoutModel.ts` +
+RepoView snippet + `panel.focus-assistant` palette command, Ctrl+Alt+A):
+registered last in `PANEL_IDS` so pre-M13 saved layouts load unchanged
+(the panel is simply absent until focused). Two tabs — Chat (per-root
+thread, advisory banner, context chips: staged diff (budgeted via
+`budgetedDiffText`), recent commits, the center pane's current file,
+pasted notes; quick prompts; streaming bubble mirroring the status-bar
+job; per-message `model · backend · duration · tokens` footer; cancel)
+and Activity (app-wide history). The chat store (`src/lib/ai/chat.svelte.ts`)
+keeps its own per-root busy slot — a chat never blocks feature runs —
+but respects the master switch and per-repo opt-in, mints `feature:
+"chat"` jobs, and persists via the envelope above. The assistant is
+advisory by contract: it never mutates; suggestions are applied by the
+user through the normal flows.
+
+**UI call sites (new features)**:
+
+| Feature | Call site(s) | Context sent |
+|---|---|---|
+| `explain-commit` | CommitDetail toolbar button; HistoryView commit menu ("Explain with AI…", gated) + palette `ai.explain-commit` (headless → result dialog) | commit message + parent0→sha diff (`budgetedDiffText`) |
+| `explain-blame` | BlameView per-line context menu (new; right-click a line) | line text + number, blaming commit summary, ±15-line file slice (`repo_read_file`, binary → omitted) |
+| `diagnose-workflow` | WorkflowRunView header button (failed runs only) | run metadata (workflow/branch/event/failed jobs) + last 40k chars of the loaded log |
+| `diagnose-action` | ActionRunView log header, next to Copy log (failed runs) | action name/command/exit code + last 40k chars of output |
+| `conflict-assist` | ConflictEditor per-conflict "AI suggest" button | both conflict sides + the marked file content (8k cap); the parsed suggestion (markers stripped by `parseConflictSuggestion`) lands in the Edit textarea — the user reviews and marks resolved themselves |
+| `release-notes` | CommitDetail compare-tab bar (range carries its commits) | range label + selected commits (newest first) + aggregate file stats (`statSummaryText`) |
+
+All six stream where the UI wants it, land in the activity log, and
+respect the master + per-feature switches. `CompareResult` gains optional
+`commits` (row multi-selections only; plain two-ref compares hide the
+release-notes button rather than send an empty commit list).

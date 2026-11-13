@@ -10,4 +10,11 @@ name: string, host: string, port: number, username: string, auth: DeviceAuth,
  * Repo-change poll interval for repos opened on this device (seconds,
  * minimum 1).
  */
-poll_secs: number, };
+poll_secs: number, 
+/**
+ * Connect automatically when the app launches (opt-in). `serde(default)`
+ * keeps pre-field `devices.json` files parsing: the store's load is
+ * all-or-nothing, so a required field would silently wipe every saved
+ * device.
+ */
+auto_connect: boolean, };

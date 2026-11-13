@@ -5,7 +5,12 @@
  * `load()` mirrors the backend registry into `devices`; `add` / `update` /
  * `remove` / `connect` / `disconnect` keep it in step around the backend
  * commands, and `device-status` events patch statuses the backend changed
- * on its own (poll reconnects, dropped sockets). The `device-status`
+ * on its own (poll reconnects, dropped sockets). An event for a device the
+ * list doesn't know yet schedules a re-sync instead of being dropped — the
+ * backend only emits on change, so a dropped event would pin a stale
+ * status until the next reload (the launch "disconnected" bug).
+ * `autoConnectOnLaunch()` runs background connect loops for devices the
+ * user flagged opt-in. The `device-status`
  * subscription and the prompt queues follow the AuthStore pattern in
  * `$lib/stores/ops.svelte`:
  *
@@ -59,6 +64,26 @@ import { describeError } from "$lib/errors";
 export const PROMPT_TIMEOUT_MS = 120_000;
 
 /**
+ * How long a `device-status` event for a device the list doesn't know yet
+ * waits before triggering a registry re-sync (trailing debounce — a burst
+ * of unknown-id events costs one `device_list`).
+ */
+export const RESYNC_DEBOUNCE_MS = 100;
+
+/**
+ * Delay before auto-connect retry attempt `attempt` (0-based). Mirrors the
+ * backend's `reconnect_backoff_secs` for dropped sessions: 1, 2, 5, 10 s,
+ * capped at 30 s forever.
+ */
+export function autoConnectBackoffMs(attempt: number): number {
+  const secs = [1, 2, 5, 10][attempt] ?? 30;
+  return Math.min(secs, 30) * 1000;
+}
+
+const sleep = (ms: number): Promise<void> =>
+  new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
  * A `DeviceInput` that re-saves `profile` unchanged (edit dialog base /
  * poll-interval updates): secrets are left out, so the backend keeps the
  * stored ones.
@@ -77,6 +102,7 @@ export function deviceInputFromProfile(profile: DeviceProfile): DeviceInput {
     password: null,
     passphrase: null,
     poll_secs: profile.poll_secs,
+    auto_connect: profile.auto_connect,
   };
 }
 
@@ -112,6 +138,13 @@ export class RemoteDeviceStore {
   /** request_id → queue arrival (ms), for {@link pruneStale}. */
   #queuedAt = new Map<string, number>();
   #unregister: Array<() => void> = [];
+  /**
+   * Device ids with a launch auto-connect loop running — also the loop's
+   * cancellation set (user disconnect / removal / prompt clears the entry).
+   */
+  #autoConnecting = new Set<string>();
+  /** Pending {@link RESYNC_DEBOUNCE_MS} re-sync from an unknown-id event. */
+  #resyncTimer: ReturnType<typeof setTimeout> | null = null;
 
   /**
    * Subscribes to the device prompt/status events (registration is
@@ -170,6 +203,7 @@ export class RemoteDeviceStore {
 
   /** Deletes a device and drops it (plus its prompts) from the store. */
   async remove(deviceId: string): Promise<void> {
+    this.#autoConnecting.delete(deviceId);
     await deviceRemove(deviceId);
     this.devices = this.devices.filter(
       (device) => device.profile.id !== deviceId,
@@ -212,6 +246,9 @@ export class RemoteDeviceStore {
    * direction.
    */
   async disconnect(deviceId: string): Promise<void> {
+    // A manual disconnect cancels the launch auto-connect loop: the user
+    // just said this device is not wanted right now.
+    this.#autoConnecting.delete(deviceId);
     if (this.statusOf(deviceId) !== "connecting") {
       this.setStatus(deviceId, "disconnected");
     }
@@ -241,6 +278,75 @@ export class RemoteDeviceStore {
     }
   }
 
+  // -- launch auto-connect ----------------------------------------------------
+
+  /**
+   * Starts background connect loops for every device flagged
+   * `auto_connect` (opt-in, off by default). Called once the initial
+   * registry load has landed, at app launch; the backend's watchdog takes
+   * over reconnection for sessions that drop later.
+   */
+  autoConnectOnLaunch(): void {
+    for (const device of this.devices) {
+      if (!device.profile.auto_connect) continue;
+      if (this.statusOf(device.profile.id) === "connected") continue;
+      this.#startAutoConnect(device.profile.id);
+    }
+  }
+
+  /** Starts one auto-connect loop (single-flighted per device). */
+  #startAutoConnect(deviceId: string): void {
+    if (this.#autoConnecting.has(deviceId)) return;
+    this.#autoConnecting.add(deviceId);
+    void this.#autoConnectRun(deviceId);
+  }
+
+  /**
+   * The loop: dial, and on failure retry with the backend's backoff
+   * schedule until connected or cancelled. Deliberately does not reuse
+   * {@link connect} — that one toasts per failure, which a background
+   * loop would spam; the chip shows the state instead. A device that is
+   * already dialing (e.g. a restored tab's open) is fine: `device_connect`
+   * serializes behind the in-flight dial at the backend handle mutex and
+   * returns its result.
+   */
+  async #autoConnectRun(deviceId: string): Promise<void> {
+    try {
+      for (let attempt = 0; ; attempt++) {
+        if (!this.#autoConnecting.has(deviceId)) return;
+        if (this.statusOf(deviceId) === "connected") return;
+        if (this.byId(deviceId) === null) return; // removed mid-flight
+        this.setStatus(deviceId, "connecting");
+        try {
+          await deviceConnect(deviceId);
+          // An authoritative `device-status` event that arrived mid-await
+          // wins; only complete the optimistic transition if it is still
+          // showing.
+          if (this.statusOf(deviceId) === "connecting") {
+            this.setStatus(deviceId, "connected");
+          }
+          return;
+        } catch {
+          if (this.statusOf(deviceId) === "connecting") {
+            this.setStatus(deviceId, "disconnected");
+          }
+        }
+        await sleep(autoConnectBackoffMs(attempt));
+      }
+    } finally {
+      this.#autoConnecting.delete(deviceId);
+    }
+  }
+
+  /** Debounced registry re-sync ({@link applyStatus}'s unknown-device path). */
+  #scheduleResync(): void {
+    if (this.#resyncTimer !== null) return;
+    this.#resyncTimer = setTimeout(() => {
+      this.#resyncTimer = null;
+      void this.load();
+    }, RESYNC_DEBOUNCE_MS);
+  }
+
   // -- prompt queue ----------------------------------------------------------
 
   /** Registers an incoming host-key prompt (public for tests). */
@@ -258,6 +364,10 @@ export class RemoteDeviceStore {
    * queues it and shows it as soon as no other prompt is on screen.
    */
   applyPrompt(prompt: PendingPrompt): void {
+    // A prompt means the dial is waiting on the user: the auto-connect
+    // loop must stop retrying under them (and re-prompting) — they own
+    // the connect now.
+    this.#autoConnecting.delete(prompt.request.device_id);
     this.pruneStale();
     this.#queuedAt.set(prompt.request.request_id, Date.now());
     this.#promptQueue.push(prompt);
@@ -267,11 +377,18 @@ export class RemoteDeviceStore {
   }
 
   /**
-   * Applies a `device-status` event: patches the device's status (unknown
-   * devices are ignored — the registry list is the source of truth for
-   * which devices exist).
+   * Applies a `device-status` event: patches the device's status. An event
+   * for a device the list doesn't know yet (boot race: the dial started
+   * before `load()` landed; a device registered from another window) is not
+   * dropped — it schedules a debounced registry re-sync, because the
+   * backend only emits on status *change* and this event would otherwise
+   * be lost for good (launch pinned "disconnected" until a reload).
    */
   applyStatus(event: DeviceStatusEvent): void {
+    if (this.byId(event.device_id) === null) {
+      this.#scheduleResync();
+      return;
+    }
     this.setStatus(event.device_id, event.status);
   }
 
@@ -346,6 +463,11 @@ export class RemoteDeviceStore {
     this.#promptQueue = [];
     this.#queuedAt.clear();
     this.pendingPrompt = null;
+    this.#autoConnecting.clear();
+    if (this.#resyncTimer !== null) {
+      clearTimeout(this.#resyncTimer);
+      this.#resyncTimer = null;
+    }
   }
 
   // -- internals ---------------------------------------------------------------

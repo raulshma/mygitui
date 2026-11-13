@@ -58,6 +58,20 @@ export interface AiConfig {
    * other one. Default `true`.
    */
   allowFallback?: boolean;
+  /**
+   * Master switch for ALL AI features (M13); default `true` (opt-out).
+   * `false` hides every AI affordance (feature buttons, health chip,
+   * assistant panel, palette entries), refuses runs at the store gate,
+   * and cancels in-flight jobs.
+   */
+  enabled?: boolean;
+  /**
+   * Per-feature toggles (M13); absent or `true` = enabled. The settings
+   * UI renders one switch per `AI_FEATURES` registry entry.
+   */
+  features?: Record<string, boolean>;
+  /** Show live AI job rows in the status bar; default `true`. */
+  statusBar?: boolean;
   /** Per-repository opt-in: AI features stay off until the user allows. */
   repoOptIn: Record<string, boolean>;
 }
@@ -93,14 +107,20 @@ export function defaultAiConfig(): AiConfig {
   return { backend: "opencode", allowFallback: true, repoOptIn: {} };
 }
 
-/** The AI features mygitui can run, v1. */
+/** The AI features mygitui can run, v1 + the M13 additions. */
 export type FeatureKind =
   | "commit-message"
   | "pr-title-body"
   | "explain-hunk"
   | "review-staged"
   | "stash-message"
-  | "branch-name";
+  | "branch-name"
+  | "explain-commit"
+  | "explain-blame"
+  | "diagnose-workflow"
+  | "diagnose-action"
+  | "conflict-assist"
+  | "release-notes";
 
 /** A model offered by a backend (flattened; selection lists + defaults). */
 export interface ModelInfo {
@@ -116,6 +136,31 @@ export interface ModelInfo {
   label?: string;
 }
 
+/** Token/usage accounting for one finished run (all fields best-effort). */
+export interface AiUsage {
+  inputTokens?: number;
+  outputTokens?: number;
+  totalTokens?: number;
+  /** Provider-reported cost in USD when it reports one (OpenRouter). */
+  costUsd?: number;
+}
+
+/**
+ * Lifecycle phase of an AI job (M13): the run machine is
+ * `queued → gathering → prompting → generating → parsing → done | cancelled | error`.
+ * Declared here (not in `jobs.svelte.ts`) so plain `.ts` feature code can
+ * emit phases without importing a runes module.
+ */
+export type AiJobPhase =
+  | "queued"
+  | "gathering"
+  | "prompting"
+  | "generating"
+  | "parsing"
+  | "done"
+  | "cancelled"
+  | "error";
+
 /** Successful generation. */
 export interface AiResult {
   /** The generated text (backend-specific post-processing already applied). */
@@ -126,6 +171,8 @@ export interface AiResult {
   backend: AiBackend;
   /** Wall-clock round trip in milliseconds. */
   elapsedMs: number;
+  /** Token/usage accounting when the backend reports it. */
+  usage?: AiUsage;
 }
 
 /** Uniform failure for anything AI: which backend and a safe message. */

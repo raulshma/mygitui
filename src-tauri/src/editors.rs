@@ -11,7 +11,10 @@
 //! Spawns use the sanitized environment ([`crate::cli::apply_sanitized_env`])
 //! like every other child: the allowlist retains the entries GUI apps need
 //! (SYSTEMROOT/USERPROFILE/APPDATA/LOCALAPPDATA/PATH/HOME/TMP…), so editors
-//! locate their config while git credentials/hooks env stays out.
+//! locate their config while git credentials/hooks env stays out. On top of
+//! that they overlay the resolved login-shell environment
+//! ([`crate::shell_env`]) so shell-profile entries (nvm & co) a GUI launch
+//! would miss reach the editor too.
 //!
 //! User-defined custom commands ([`open_with_custom`]) are the deliberate
 //! exception to the machine-verified-path rule: the frontend sends the full
@@ -469,8 +472,11 @@ pub fn open_path_with(app: &AppEntry, root: &Path) -> Result<(), String> {
     };
     cmd.arg(to_native_path(root));
     // Same sanitized environment as every other child; the allowlist keeps
-    // the entries GUI apps need (see the module docblock).
+    // the entries GUI apps need (see the module docblock). The login-shell
+    // overlay runs after the sanitize (which env_clear()s) so editors also
+    // see shell-profile entries (nvm & co) a GUI launch would miss.
     crate::cli::apply_sanitized_env(&mut cmd);
+    crate::shell_env::apply_resolved(&mut cmd);
     cmd.spawn()
         .map(|_| ())
         .map_err(|e| format!("failed to launch {}: {e}", app.name))
@@ -549,6 +555,9 @@ pub fn open_custom_with(command: &str, root: &Path) -> Result<(), String> {
     // `sh -c` elsewhere.
     let mut cmd = crate::actions::build_shell_command(&rendered);
     crate::cli::apply_sanitized_env(&mut cmd);
+    // Login-shell overlay after the sanitize (which env_clear()s) — same
+    // env as the custom shell actions (see shell_env.rs).
+    crate::shell_env::apply_resolved(&mut cmd);
     cmd.stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());

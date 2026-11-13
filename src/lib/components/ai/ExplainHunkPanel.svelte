@@ -13,7 +13,9 @@
   import { ai } from "$lib/ai/ai.svelte";
   import { isAiError } from "$lib/ai/types";
   import type { FeatureOutcome } from "$lib/ai/features";
+  import { aiResultMeta } from "$lib/ai/usage";
   import AiSettings from "./AiSettings.svelte";
+  import AiMarkdown from "./AiMarkdown.svelte";
   import { Button } from "$lib/components/ui/button/index.js";
   import { Spinner } from "$lib/components/ui/spinner/index.js";
   import Icon from "$lib/components/icons/Icon.svelte";
@@ -48,6 +50,10 @@
   let attempt = $state(0);
 
   const busy = $derived(ai.peekState(repoId).busy);
+
+  // M13: stream the running job's partial answer into the panel.
+  const activeJob = $derived(ai.jobs.activeJob(repoId, "explain-hunk"));
+  const streamedText = $derived(outcome === null ? (activeJob?.streamedText ?? null) : null);
 
   $effect(() => {
     // Fresh panel per hunk: reset and run.
@@ -104,8 +110,10 @@
 
   <div class="body overflow-y-auto px-3 py-2">
     {#if outcome}
-      <p class="text m-0 leading-[1.45] whitespace-pre-wrap [overflow-wrap:anywhere]">{outcome.result.text}</p>
-      <p class="meta mb-0 mt-ui-375 text-ui-micro text-muted-foreground">via {outcome.result.model} · {outcome.result.backend}</p>
+      <AiMarkdown text={outcome.result.text} />
+      <p class="meta mb-0 mt-ui-375 text-ui-micro text-muted-foreground">{aiResultMeta(outcome.result)}</p>
+    {:else if streamedText !== null && streamedText.length > 0}
+      <AiMarkdown text={streamedText} streaming />
     {:else if error}
       <p class="error m-0 mb-ui-375 text-destructive [overflow-wrap:anywhere]" role="alert">{error}</p>
       {#if needsOptIn}
