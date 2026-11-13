@@ -225,6 +225,7 @@ mod tests {
 
     /// Marker-delimited probe output as a well-behaved shell would print
     /// it: `noise <START> k=v\0… <END> noise`.
+    #[cfg(unix)] // parse_env_output + its helpers only exist on unix
     fn probe_bytes(noise: bool, pairs: &[(&str, &str)]) -> Vec<u8> {
         let mut out = Vec::new();
         if noise {
@@ -242,6 +243,7 @@ mod tests {
         out
     }
 
+    #[cfg(unix)] // parse_env_output only exists on unix
     #[test]
     fn parse_slices_marker_region_and_splits_nul_pairs() {
         let env = parse_env_output(&probe_bytes(
@@ -258,12 +260,14 @@ mod tests {
         );
     }
 
+    #[cfg(unix)] // parse_env_output only exists on unix
     #[test]
     fn parse_rejects_missing_markers() {
         assert!(parse_env_output(b"PATH=/usr/bin").is_none());
         assert!(parse_env_output(b"MYGITUI_SHELL_ENV_STARTPATH=/usr/bin").is_none());
     }
 
+    #[cfg(unix)] // parse_env_output only exists on unix
     #[test]
     fn parse_rejects_junk_inside_region() {
         // rc noise landing *between* the markers must not yield a half env.
@@ -276,6 +280,7 @@ mod tests {
         assert!(parse_env_output(&bytes).is_none());
     }
 
+    #[cfg(unix)] // parse_env_output only exists on unix
     #[test]
     fn parse_rejects_region_without_path() {
         let bytes = probe_bytes(false, &[("HOME", "/home/u")]);
