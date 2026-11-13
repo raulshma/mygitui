@@ -27,6 +27,7 @@
   } from "$lib/stores/tabs.svelte";
   import { opStore } from "$lib/stores/ops.svelte";
   import { syncWindowTitle } from "$lib/stores/windowTitle.svelte";
+  import { flushSplits, layouts } from "$lib/layout";
   import {
     deviceInputFromProfile,
     remoteDevices,
@@ -512,6 +513,20 @@
         void remotePollSetPaused(false);
       });
     }
+
+    // Layout + split-pref persistence runs on a 150 ms debounce; closing or
+    // reloading the window inside that window would silently drop the last
+    // change (a pending timer dies with the document). Flush on the way
+    // out — `pagehide` fires on both navigation and app close, popouts
+    // included (their splitter ratios persist too).
+    const flushPendingLayoutWrites = () => {
+      layouts.flush();
+      flushSplits();
+    };
+    window.addEventListener("pagehide", flushPendingLayoutWrites);
+    cleanups.push(() => {
+      window.removeEventListener("pagehide", flushPendingLayoutWrites);
+    });
 
     // Relaunch polish: reopen the tabs (and the focused one) from the last
     // session. Runs before the CLI-arg/deep-link listeners below, so an

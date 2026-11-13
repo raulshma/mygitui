@@ -327,7 +327,11 @@ export class LayoutStore {
     }
   }
 
-  /** Immediate synchronous flush of all pending writes (test/teardown aid). */
+  /**
+   * Immediate synchronous flush of all pending writes. Called on `pagehide`
+   * (see `App.svelte`) so closing/reloading the window inside the debounce
+   * window cannot drop a layout change; also a test/teardown aid.
+   */
   flush(): void {
     if (this.#presetsTimer) {
       clearTimeout(this.#presetsTimer);
