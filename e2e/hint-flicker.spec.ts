@@ -18,9 +18,15 @@
  *
  * A MutationObserver installed before app code records a timestamped
  * lifecycle timeline of every pill (`[data-slot="tooltip-content"]`) —
- * mounts, unmounts, data-state flips and CSS animation starts. The red
- * signal is an enter animation starting >50ms after its pill mounted;
- * the exit fade-out (data-state=closed) is by design and excluded.
+ * mounts, unmounts, data-state flips and CSS animation starts — and a
+ * per-frame sampler counts the frames each pill was already visibly
+ * shown without an animation in effect. The red signal is an enter
+ * animation starting on a pill that was already shown (or that flipped
+ * between two open states — the pre-fix mechanism, which restarts the
+ * fade even mid-flight); the exit fade-out (data-state=closed) is by
+ * design and excluded. Frames, not milliseconds: on a loaded CI runner
+ * a pill's one legit animation event lands well after its mount, which
+ * a wall-clock threshold reads as a restart.
  *
  * Asserted on live DOM state against the mocked Tauri backend (see
  * tauri-mock.ts and smoke.spec.ts for the boot pattern).
@@ -57,6 +63,9 @@ interface PillEvent {
   rect?: { x: number; y: number; w: number; h: number };
   trigger?: string;
   anim?: string;
+  /** Frames the pill had already been shown on-screen without a running
+   *  animation BEFORE this event (anim events only) — see the sampler. */
+  shown?: number;
 }
 
 async function boot(page: Page): Promise<void> {
@@ -143,11 +152,55 @@ async function boot(page: Page): Promise<void> {
       if (el.matches(SEL)) found.unshift(el);
       return found;
     };
+    // Frame sampler, per pill: how many rendered frames showed the pill
+    // connected, positioned IN the viewport, with no running animation.
+    // This, not wall-clock, is the flicker signal: "the pill was already
+    // visibly there, and only THEN did its enter animation start". It is
+    // load-invariant — under CPU contention the pill's first animation
+    // event may land long after mount (frame latency), but it always
+    // lands within a frame or two of the pill's first paint, so `shown`
+    // stays 0; the pre-fix regression (bits-ui's own delay flipping the
+    // state ~300ms in, restarting the fade on the visible pill) shows
+    // many shown frames before the late animation.
+    const live = new Map<number, Element>();
+    const shownFrames = new Map<number, number>();
+    const onScreen = (el: Element): boolean => {
+      const r = el.getBoundingClientRect();
+      return (
+        r.bottom > 0 && r.right > 0 && r.top < innerHeight && r.left < innerWidth
+      );
+    };
+    const sample = (): void => {
+      for (const [id, el] of live) {
+        if (!el.isConnected || !onScreen(el)) continue;
+        // getAnimations() computes style first, so the enter animation is
+        // created and returned HERE, in the pill's first painted frame —
+        // the legit first show never counts as "shown", however loaded
+        // the machine is. The fade's fill mode is none (the tw-animate
+        // default), so once it finishes the pill counts as shown — the
+        // exact state a restart-on-a-visible-pill flicker starts from.
+        if (el.getAnimations().length === 0) {
+          shownFrames.set(id, (shownFrames.get(id) ?? 0) + 1);
+        }
+      }
+      requestAnimationFrame(sample);
+    };
+    requestAnimationFrame(sample);
     new MutationObserver((muts) => {
       for (const m of muts) {
         if (m.type === "childList") {
-          for (const n of m.addedNodes) for (const el of pillsIn(n)) log("add", el);
-          for (const n of m.removedNodes) for (const el of pillsIn(n)) log("remove", el);
+          for (const n of m.addedNodes) {
+            for (const el of pillsIn(n)) {
+              live.set(idOf(el), el);
+              log("add", el);
+            }
+          }
+          for (const n of m.removedNodes) {
+            for (const el of pillsIn(n)) {
+              live.delete(idOf(el));
+              log("remove", el);
+            }
+          }
         } else if (
           m.type === "attributes" &&
           m.attributeName === "data-state"
@@ -179,6 +232,7 @@ async function boot(page: Page): Promise<void> {
               state: n.getAttribute("data-state"),
               text: (n.textContent ?? "").slice(0, 40),
               anim: `${e.animationName}@${Math.round(e.elapsedTime * 1000)}ms`,
+              shown: shownFrames.get(idOf(n)) ?? 0,
             });
             break;
           }
@@ -246,25 +300,40 @@ test("B: pill enter animation never restarts on a visible pill", async ({
   const row10 = page.getByRole("treeitem", { name: rowPath(10) });
   await expect(row10).toBeVisible({ timeout: 20_000 });
 
-  /** Late-enter-anims in the events recorded AFTER `mark`. */
   const now = async (): Promise<number> =>
     page.evaluate(() => Math.round(performance.now()));
-  const lateAnimsSince = async (mark: number): Promise<PillEvent[]> => {
+  /**
+   * Enter animations that (re)started on an already-visible pill, among
+   * the events recorded AFTER `mark` — the flicker. Deliberately not a
+   * wall-clock test ("the animation began >Nms after mount"): under CPU
+   * contention a pill's one legit animation event lands tens of ms after
+   * its mount (frame latency), which a clock cannot tell from a restart.
+   * Two load-invariant signals instead:
+   *  - `shown > 0`: the frame sampler saw the pill on-screen with no
+   *    animation in effect before this animation began;
+   *  - the pill has held two different OPEN data-states: the pre-fix
+   *    mechanism (instant-open → delayed-open), which restarts the fade
+   *    even mid-flight, while `shown` is still 0.
+   */
+  const restartsSince = async (mark: number): Promise<PillEvent[]> => {
     const log = (await pillLog(page)).filter((e) => e.t >= mark);
-    const addT = new Map(
-      log.filter((e) => e.kind === "add").map((e) => [e.id, e.t]),
-    );
-    // Only ENTER animations while the pill is open count: the `exit`
-    // fade-out fires in data-state=closed on close — by design, and
-    // always "late" relative to mount.
-    return log
-      .filter(
-        (e) =>
-          e.kind === "anim" &&
-          e.state !== null &&
-          e.state !== "closed",
-      )
-      .filter((e) => e.t - (addT.get(e.id) ?? e.t) > 50);
+    const openStates = new Map<number, Set<string>>();
+    const restarts: PillEvent[] = [];
+    for (const e of log) {
+      // Only ENTER animations while the pill is open count: the `exit`
+      // fade-out fires in data-state=closed on close — by design.
+      if (e.state === null || e.state === "closed") continue;
+      let states = openStates.get(e.id);
+      if (states === undefined) {
+        states = new Set();
+        openStates.set(e.id, states);
+      }
+      states.add(e.state);
+      if (e.kind === "anim" && ((e.shown ?? 0) > 0 || states.size > 1)) {
+        restarts.push(e);
+      }
+    }
+    return restarts;
   };
 
   // 1. First dwell after launch.
@@ -286,10 +355,10 @@ test("B: pill enter animation never restarts on a visible pill", async ({
   await row11.hover();
   await page.waitForTimeout(700);
 
-  const late = await lateAnimsSince(mark); // both dwells
+  const restarts = await restartsSince(mark); // both dwells
   expect(
-    late,
-    `enter animation restarted on a visible pill (the flicker): ${JSON.stringify(late)}`,
+    restarts,
+    `enter animation restarted on a visible pill (the flicker): ${JSON.stringify(restarts)}`,
   ).toEqual([]);
   // The second dwell's pill is actually open at the end.
   const first = await page

@@ -76,6 +76,15 @@ async function bootTwoTabs(page: Page): Promise<void> {
     timeout: 20_000,
   });
   await expect(page.getByRole("tab", { name: "beta — /tmp/beta" })).toBeVisible();
+  // The gesture computes drop coordinates from label geometry, and the
+  // side test in TabStrip compares them against the label's LIVE midpoint.
+  // Tab labels first lay out in the fallback font; Inter Variable (served
+  // by the dev server on demand) swaps in shortly after the first paint
+  // and re-metrics every label. A drag started before the swap aims at
+  // stale geometry: under CI load the swap can land mid-gesture, putting
+  // the recorded drop point on the "before" side of the moved midpoint —
+  // the deliberate no-op. Fonts settled ⇒ label metrics final.
+  await page.evaluate(() => document.fonts.ready);
 }
 
 /** The visible tab order, as rendered in the strip. */
@@ -107,8 +116,11 @@ async function dragTab(
   const toBox = (await to.boundingBox())!;
   const startX = fromBox.x + fromBox.width / 2;
   const startY = fromBox.y + fromBox.height / 2;
-  const endX = toBox.x + toBox.width * dropFraction;
-  const endY = toBox.y + toBox.height / 2;
+  const aim = (box: { x: number; y: number; width: number; height: number }) => ({
+    x: box.x + box.width * dropFraction,
+    y: box.y + box.height / 2,
+  });
+  const end = aim(toBox);
 
   await page.mouse.move(startX, startY);
   await page.mouse.down();
@@ -116,10 +128,25 @@ async function dragTab(
   // Several moves: Chromium's native drag needs a few px of travel, and
   // dragover must land on the target for the insertion bar + drop.
   const steps = 12;
-  for (let i = 1; i <= steps; i++) {
+  const approach = 9;
+  for (let i = 1; i <= approach; i++) {
     await page.mouse.move(
-      startX + ((endX - startX) * i) / steps,
-      startY + ((endY - startY) * i) / steps,
+      startX + ((end.x - startX) * i) / steps,
+      startY + ((end.y - startY) * i) / steps,
+    );
+  }
+  // Re-aim the final stretch at the target's LIVE box: the drop side is
+  // decided against the label's geometry at dragover time, so coordinates
+  // captured before the press go stale if the strip re-lays out mid-gesture
+  // (a loaded CI runner stretches the gesture, and a hold adds ~500ms).
+  const live = aim((await to.boundingBox()) ?? toBox);
+  const lastX = startX + ((end.x - startX) * approach) / steps;
+  const lastY = startY + ((end.y - startY) * approach) / steps;
+  const rest = steps - approach;
+  for (let i = 1; i <= rest; i++) {
+    await page.mouse.move(
+      lastX + ((live.x - lastX) * i) / rest,
+      lastY + ((live.y - lastY) * i) / rest,
     );
   }
   await page.waitForTimeout(50);
@@ -145,7 +172,13 @@ test("dropping on the target label's center reorders tabs", async ({ page }) => 
   // CELL extends over the close button, so the side test must use the
   // label's midpoint — a cell-midpoint test made this exact drop a silent
   // no-op (insert before the tab the dragged tab is already before).
-  await dragTab(page, /alpha — /, /beta — /, { dropFraction: 0.5 });
+  //
+  // Just past the label's center rather than dead on it: the side test is
+  // `clientX >= midpoint` and drag-event coordinates are floored, so the
+  // exact center of an odd-width label lands on the "before" side — the
+  // no-op. 0.6 is still left of the CELL's midpoint, so a cell-midpoint
+  // regression keeps failing here.
+  await dragTab(page, /alpha — /, /beta — /, { dropFraction: 0.6 });
   await expect.poll(() => tabOrder(page)).toEqual(["beta", "alpha"]);
 
   expect(tracked.errors, tracked.errors.join("\n")).toEqual([]);

@@ -98,12 +98,22 @@ describe("perf gate", () => {
       );
     }
     const index = buildIndex(entries);
-    const start = performance.now();
-    const hits = searchPaths(index, "fl0", 100);
-    const elapsed = performance.now() - start;
+    // Best-of-3 (same pattern as history-logic/statusModel/virtualizer):
+    // the first pass warms up the JIT; later passes dodge CPU contention
+    // from vitest workers running sibling suites in parallel. A single
+    // sample flakes past the budget under full-suite load even though
+    // scoring stays linear.
+    let best = Number.POSITIVE_INFINITY;
+    let hits = searchPaths(index, "fl0", 100);
+    for (let run = 0; run < 3; run++) {
+      const start = performance.now();
+      hits = searchPaths(index, "fl0", 100);
+      best = Math.min(best, performance.now() - start);
+    }
     expect(hits.length).toBe(100);
-    // Same rationale as the fileTreeModel gate: tolerates a loaded CI
-    // runner, still fails any super-linear scoring regression.
-    expect(elapsed).toBeLessThan(250);
+    // Same rationale as the fileTreeModel gate: a loose CI bound that
+    // still fails any super-linear scoring regression (quadratic over 50k
+    // paths would take seconds).
+    expect(best).toBeLessThan(250);
   });
 });

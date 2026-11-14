@@ -166,14 +166,23 @@ describe("perf gate", () => {
     const chunk = "Paragraph line with **bold** and `code` and a [link](https://x.dev).\n\n";
     let doc = "";
     while (doc.length < 500_000) doc += chunk;
-    const start = performance.now();
-    const { html, fences } = renderMarkdownHtml(doc);
-    const elapsed = performance.now() - start;
+    // Best-of-3 (same pattern as history-logic/statusModel/virtualizer):
+    // the first pass warms up the JIT; later passes dodge CPU contention
+    // from vitest workers running sibling suites in parallel. A single
+    // sample flakes past the budget under full-suite load.
+    let rendered = renderMarkdownHtml(doc);
+    let best = Number.POSITIVE_INFINITY;
+    for (let run = 0; run < 3; run++) {
+      const start = performance.now();
+      rendered = renderMarkdownHtml(doc);
+      best = Math.min(best, performance.now() - start);
+    }
+    const { html, fences } = rendered;
     expect(html.length).toBeGreaterThan(0);
     expect(fences).toHaveLength(0);
     // Loaded-runner budget (see fileTreeModel.test.ts rationale): solo this
-    // runs ~170ms; under full-suite contention ~4x. Any super-linear
-    // regression on 500KB would take tens of seconds — still caught.
-    expect(elapsed).toBeLessThan(1000);
+    // runs ~170ms. Any super-linear regression on 500KB would take tens of
+    // seconds — still caught.
+    expect(best).toBeLessThan(1000);
   });
 });

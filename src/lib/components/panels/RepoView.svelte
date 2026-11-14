@@ -1717,7 +1717,7 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
         value={resolved.presetId}
         onValueChange={(value) => layouts.applyPreset(root, value)}
       >
-        <Hint label="Layout preset">
+        <Hint label="Layout preset" eager>
           {#snippet child({ props })}
             <Select.Trigger
               class="preset-select max-[760px]:hidden max-w-[8.5rem] h-5 rounded-sm border-border bg-card dark:bg-card px-1 py-0 text-ui-micro text-card-foreground gap-1"

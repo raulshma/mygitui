@@ -43,6 +43,14 @@
 	 * on THIS instance's trigger; only then does the tooltip machinery
 	 * mount, already open. Hovering past during a scroll costs nothing.
 	 *
+	 * `eager` opts out of the idle→armed swap for controls that open a
+	 * bits-ui floating layer (select, menu, popover): those keep a
+	 * reference to the trigger element they first saw, so replacing it
+	 * on the dwell detaches the reference and the layer positions
+	 * against a zero rect — the control reports expanded but its list
+	 * never shows. Header/bar controls are few, so mounting their stack
+	 * up front costs nothing measurable.
+	 *
 	 * **Dismissal guarantees**: at most one pill is open app-wide (opening
 	 * one closes the previous — nested row/path/badge triggers can't stack
 	 * pills), the pill is not hoverable (`pointer-events: none`, so it can
@@ -56,6 +64,7 @@
 		label,
 		side = "bottom",
 		delayDuration,
+		eager = false,
 		child: children,
 		...restProps
 	}: TooltipPrimitive.RootProps & {
@@ -65,6 +74,14 @@
 		side?: "top" | "bottom" | "left" | "right";
 		/** Hover delay in ms (default: the provider's ~300ms). */
 		delayDuration?: number | undefined;
+		/**
+		 * Mount the tooltip stack up front instead of swapping the trigger
+		 * on the dwell. Required when the child opens a bits-ui floating
+		 * layer (select/menu/popover): those anchor to the trigger element
+		 * they first saw, and the lazy swap would leave them pointing at a
+		 * detached node (the layer never shows).
+		 */
+		eager?: boolean;
 		/** Your element becomes the trigger — spread `props` onto it. */
 		child: Snippet<[ { props: Record<string, unknown> } ]>;
 	} = $props();
@@ -76,7 +93,12 @@
 	/** How long a closed tooltip's machinery stays mounted (fade-out room). */
 	const UNARM_DELAY_MS = 400;
 
-	let armed = $state(false); // full tooltip machinery mounted
+	// svelte-ignore state_referenced_locally -- `eager` is a mount-time mode,
+	// not a live toggle: the trigger must never swap once the layer anchored
+	// to it (see the prop docs).
+	let armed = $state(eager); // full tooltip machinery mounted
+	/** Our dwell timer has fired at least once: the pill may show now. */
+	let dwelled = $state(false);
 	let open = $state(false);
 	/**
 	 * The trigger was pressed: its pill closed for the interaction (and the
@@ -118,6 +140,7 @@
 		if (empty || pressDismissed) return;
 		deferWhilePressed(() => {
 			armed = true;
+			dwelled = true;
 			open = true;
 			if (unarmTimer !== null) {
 				clearTimeout(unarmTimer);
@@ -211,7 +234,7 @@
 	function armEnter(el: EventTarget | null): void {
 		if (empty || pressDismissed) return;
 		hoverEl = el as Element | null;
-		if (armed) {
+		if (armed && dwelled) {
 			activate(); // re-enter while machinery is up: show immediately
 			return;
 		}
@@ -248,9 +271,14 @@
 	function disarm(): void {
 		hoverEl = null;
 		clearHoverTimer();
+		// An eager trigger stays mounted, but the next entry must dwell
+		// again just like the lazy one does after unarming.
+		dwelled = false;
 		if (open) {
 			open = false;
-			if (unarmTimer === null) {
+			// An eager trigger never swaps back to the idle branch: the
+			// floating layer it anchors keeps the element it first saw.
+			if (!eager && unarmTimer === null) {
 				unarmTimer = setTimeout(() => {
 					unarmTimer = null;
 					// The swap back to the idle trigger is click-hazardous
@@ -406,6 +434,12 @@
 			disableHoverableContent
 			onOpenChange={(next) => {
 				if (next) {
+					// `eager` mounts bits-ui's trigger before the pointer
+					// arrives, so its own hover/focus tracking fires right
+					// away. Only OUR dwell timer may open the pill; without
+					// this gate eager controls would show it instantly and
+					// bypass HOVER_DELAY_MS.
+					if (!open && !dwelled) return;
 					// bits-ui's trigger-level `pointerenter` (and the provider's
 					// pointerover tracking) also fire on the browser's hover
 					// recompute — scroll/virtualizer waves move elements under a
@@ -437,6 +471,12 @@
 						role="presentation"
 						use:captureTrigger
 						onpointermove={() => {
+							// Eager machinery is mounted before any dwell: the
+							// first real movement starts OUR dwell timer.
+							if (!dwelled) {
+								armEnter(triggerEl);
+								return;
+							}
 							// Closed but still armed (just dismissed): movement within
 							// the trigger shows the pill again — `pointermove` is real
 							// pointer intent by definition, unlike the re-sent
@@ -444,6 +484,17 @@
 							// A press on the trigger keeps the pill suppressed until
 							// the pointer exits (see `recordPress`).
 							if (!open && !pressDismissed) activate();
+						}}
+						onfocusin={() => {
+							if (!dwelled) armEnter(null);
+						}}
+						onfocusout={(event) => {
+							if (
+								event.relatedTarget instanceof Node &&
+								event.currentTarget.contains(event.relatedTarget)
+							)
+								return;
+							disarm();
 						}}
 					>
 						{@render children({ props: guardedChildProps(props) })}
