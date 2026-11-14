@@ -36,7 +36,11 @@
 		{sideOffset}
 		{side}
 		class={cn(
-			"cn-tooltip-content z-50 w-fit max-w-xs origin-(--bits-tooltip-content-transform-origin) rounded-sm bg-primary py-1 px-[0.55rem] text-xs leading-[1.3] text-primary-foreground shadow-sm whitespace-pre-line [overflow-wrap:anywhere]",
+			// `instant-open` carries the fade+slide here because Hint mounts
+			// its pill already open in that state (see hint.svelte); the
+			// theme only animates `delayed-open`/`open`, which a Hint pill
+			// never is.
+			"cn-tooltip-content z-50 w-fit max-w-xs origin-(--bits-tooltip-content-transform-origin) rounded-sm bg-primary py-1 px-[0.55rem] text-xs leading-[1.3] text-primary-foreground shadow-sm whitespace-pre-line [overflow-wrap:anywhere] data-[state=instant-open]:animate-in data-[state=instant-open]:fade-in-0 data-[state=instant-open]:duration-[120ms]",
 			className
 		)}
 		{...restProps}

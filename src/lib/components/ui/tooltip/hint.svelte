@@ -387,9 +387,22 @@
 
 {#if armed}
 	<Provider>
+		<!--
+			Hint opens the Root controlled (open=true at mount, bypassing
+			bits-ui's `handleOpen`), so bits-ui still counts the pill as
+			"not yet delayed-open". The pointer resting on the freshly
+			swapped trigger then starts bits-ui's own delayDuration timer;
+			when it fires ~300ms later it flips the pill's data-state
+			instant-open → delayed-open — and the theme animates on
+			`delayed-open`, restarting the fade-in on the fully visible
+			pill (it visibly blinks once — "tooltips flicker"). The dwell
+			delay lives in OUR timer (`HOVER_DELAY_MS`), so bits-ui's own
+			is given 0 and its timer never arms; the data-state stays
+			`instant-open` for the pill's whole life.
+		-->
 		<TooltipPrimitive.Root
-			{delayDuration}
 			{open}
+			delayDuration={0}
 			disableHoverableContent
 			onOpenChange={(next) => {
 				if (next) {
