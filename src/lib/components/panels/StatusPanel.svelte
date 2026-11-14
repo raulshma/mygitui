@@ -328,7 +328,11 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
    */
   interface SubmoduleData {
     info: SubmoduleInfo;
-    /** Resolved lazily: an open tab's repo id, a remote open, or a local open. */
+    /**
+     * Resolved lazily: an open tab's repo id, a remote open, or a local
+     * open. Cleared again when its backend handle dies ("repo not open"),
+     * so the next load re-resolves instead of erroring forever.
+     */
     repoId: string | null;
     root: string;
     status: RepoStatus | null;
@@ -504,39 +508,58 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
   async function loadSubmoduleStatus(subPath: string): Promise<void> {
     const entry = submodulesMap[subPath];
     if (!entry) return;
-    try {
-      entry.loading = true;
-      let subRepoId = entry.repoId;
-      if (!subRepoId) {
-        const normRoot = normalizeRepoPath(entry.root);
-        const openTab = tabStore.tabs.find(
-          (t) => normalizeRepoPath(t.root) === normRoot,
-        );
-        if (openTab) {
-          subRepoId = openTab.id;
-        } else {
-          // Remote roots are `ssh://<device-id>/<path>` URIs: they must open
-          // through `remote_repo_open` — `repo_open` would run a local git2
-          // discover on the URI and fail with an OS path error.
-          const remote = parseSshUri(entry.root);
-          const res = remote
-            ? await remoteRepoOpen(remote.deviceId, remote.path)
-            : await openRepo(entry.root);
-          subRepoId = res.repo_id;
-          openedRepoIds.add(res.repo_id);
+    // One re-resolve pass: a cached id can outlive its backend handle (the
+    // repo closed under us — this panel's cleanup racing the load, or the
+    // module's own tab closing). Dropping the dead id and re-opening once
+    // lets any reload heal the module instead of wedging it on
+    // "repo not open" until the next repo switch rebuilds the map.
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        entry.loading = true;
+        let subRepoId = entry.repoId;
+        if (!subRepoId) {
+          const normRoot = normalizeRepoPath(entry.root);
+          const openTab = tabStore.tabs.find(
+            (t) => normalizeRepoPath(t.root) === normRoot,
+          );
+          if (openTab) {
+            subRepoId = openTab.id;
+          } else {
+            // Remote roots are `ssh://<device-id>/<path>` URIs: they must open
+            // through `remote_repo_open` — `repo_open` would run a local git2
+            // discover on the URI and fail with an OS path error.
+            const remote = parseSshUri(entry.root);
+            const res = remote
+              ? await remoteRepoOpen(remote.deviceId, remote.path)
+              : await openRepo(entry.root);
+            subRepoId = res.repo_id;
+            openedRepoIds.add(res.repo_id);
+          }
+          entry.repoId = subRepoId;
         }
-        entry.repoId = subRepoId;
+        try {
+          const st = await repoStatus(subRepoId);
+          entry.status = st;
+          entry.index = buildStatusIndex(st.entries, entry.info.path, entry.info.path);
+          entry.error = null;
+          return;
+        } catch (err) {
+          const staleHandle =
+            attempt === 0 &&
+            entry.repoId === subRepoId &&
+            describeError(err).includes("repo not open");
+          if (!staleHandle) throw err;
+          entry.repoId = null;
+          openedRepoIds.delete(subRepoId);
+        }
+      } catch (err) {
+        entry.error = describeError(err);
+        entry.status = null;
+        entry.index = null;
+        return;
+      } finally {
+        entry.loading = false;
       }
-      const st = await repoStatus(subRepoId);
-      entry.status = st;
-      entry.index = buildStatusIndex(st.entries, entry.info.path, entry.info.path);
-      entry.error = null;
-    } catch (err) {
-      entry.error = describeError(err);
-      entry.status = null;
-      entry.index = null;
-    } finally {
-      entry.loading = false;
     }
   }
 
