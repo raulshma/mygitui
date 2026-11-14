@@ -1,16 +1,20 @@
 /**
  * Unit tests for the shared git formatting helpers: `classifyRef` /
- * `shortRefName`, `hashHue`, relative/absolute date formatting and
- * date-input conversion.
+ * `shortRefName`, `hashHue`, author avatar initials/colors, checkpoint
+ * summaries, relative/absolute date formatting and date-input conversion.
  */
 
 import { describe, expect, it } from "vitest";
 import {
+  authorAvatarColor,
+  authorAvatarHue,
+  authorInitials,
   classifyRef,
   dayToUnixSeconds,
   formatDateTime,
   formatRelativeTime,
   hashHue,
+  isCheckpointSummary,
   shortRefName,
 } from "$lib/git/format";
 
@@ -74,6 +78,64 @@ describe("hashHue", () => {
   it("is stable for the same key and separates simple keys", () => {
     expect(hashHue("deadbeef")).toBe(hashHue("deadbeef"));
     expect(hashHue("a")).not.toBe(hashHue("b"));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Author avatar (VSCode-style initials + deterministic color)
+// ---------------------------------------------------------------------------
+
+describe("authorInitials", () => {
+  it("takes the first letters of the first and last words", () => {
+    expect(authorInitials("Raul Sharma")).toBe("RS");
+    expect(authorInitials("Ada")).toBe("A");
+    expect(authorInitials("van der Berg, Lieke")).toBe("VL");
+  });
+
+  it("collapses whitespace and handles empty names", () => {
+    expect(authorInitials("  Ada   Lovelace  ")).toBe("AL");
+    expect(authorInitials("")).toBe("?");
+    expect(authorInitials("   ")).toBe("?");
+  });
+
+  it("treats emails as one word (first letter)", () => {
+    expect(authorInitials("raul@example.com")).toBe("R");
+  });
+
+  it("uppercases unicode first letters", () => {
+    expect(authorInitials("élise")).toBe("É");
+  });
+});
+
+describe("authorAvatarHue / authorAvatarColor", () => {
+  it("keys on email, falling back to name", () => {
+    expect(authorAvatarHue("a@x.com", "Raul")).toBe(hashHue("a@x.com"));
+    expect(authorAvatarHue("", "Raul")).toBe(hashHue("Raul"));
+    expect(authorAvatarHue("", "")).toBe(hashHue("?"));
+  });
+
+  it("renders an hsl background string", () => {
+    expect(authorAvatarColor("a@x.com", "Raul")).toBe(
+      `hsl(${hashHue("a@x.com")} 60% 55%)`,
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Checkpoint summaries
+// ---------------------------------------------------------------------------
+
+describe("isCheckpointSummary", () => {
+  it("matches the checkpoint engine's summary prefix", () => {
+    expect(isCheckpointSummary("checkpoint: pre-restore")).toBe(true);
+    expect(isCheckpointSummary("checkpoint: before rebase")).toBe(true);
+  });
+
+  it("rejects real commit summaries and partial prefixes", () => {
+    expect(isCheckpointSummary("fix: checkpoint the cache")).toBe(false);
+    expect(isCheckpointSummary("checkpointed state")).toBe(false);
+    expect(isCheckpointSummary("checkpoint")).toBe(false);
+    expect(isCheckpointSummary("")).toBe(false);
   });
 });
 

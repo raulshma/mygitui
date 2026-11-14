@@ -604,6 +604,12 @@ export function branchSwitch(
   return call<void>("branch_switch", { repo_id: repoId, name, force });
 }
 
+/** Detaches HEAD at `sha` (`git checkout --detach`). Guard with
+ * `guardCheckpoint(repoId, "pre-checkout")` first — the worktree is forced. */
+export function commitCheckout(repoId: RepoId, sha: string): Promise<void> {
+  return call<void>("commit_checkout", { repo_id: repoId, sha });
+}
+
 /** True when `name` is fully merged into `into` (safe delete). */
 export function branchIsMerged(
   repoId: RepoId,

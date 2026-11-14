@@ -33,6 +33,7 @@
     classifyRef,
     formatDateTime,
     formatRelativeTime,
+    isCheckpointSummary,
     shortRefName,
   } from "$lib/git/format";
   import { toast } from "$lib/toast";
@@ -45,6 +46,7 @@
   import { budgetedDiffText, statSummaryText } from "$lib/ai/diffBudget";
   import { aiResultMeta } from "$lib/ai/usage";
   import { emitUiEvent } from "$lib/palette/events";
+  import AuthorAvatar from "$lib/components/panels/AuthorAvatar.svelte";
 
   const iconClose = $derived(appIcon("close")!);
   const iconStar = $derived(appIcon("star")!);
@@ -66,6 +68,7 @@
     onCherryPick,
     onRevert,
     onRebaseFromHere,
+    onCheckout,
   }: {
     repoId: string;
     info: CommitInfo | null;
@@ -82,6 +85,8 @@
     onCherryPick?: () => void;
     onRevert?: () => void;
     onRebaseFromHere?: () => void;
+    /** VSCode-parity "checkout this commit" (owner opens the confirm dialog). */
+    onCheckout?: () => void;
   } = $props();
 
   // -- diff for the shown commit (lazy, token-guarded) -----------------------
@@ -310,10 +315,26 @@
     }}
   >
     {#if info}
+      <Hint label={`${info.author.name}${info.author.email ? ` <${info.author.email}>` : ""}`}>
+        {#snippet child({ props })}
+          <span {...props} class="flex-none cursor-help">
+            <AuthorAvatar name={info?.author.name ?? ""} email={info?.author.email ?? ""} />
+          </span>
+        {/snippet}
+      </Hint>
       <span class="dsha font-mono text-primary">{info.sha.slice(0, 7)}</span>
       <Hint label={info.summary}>
         {#snippet child({ props })}
-          <span class="dsummary min-w-0 flex-1 truncate font-medium text-foreground" {...props}>{info.summary}</span>
+          <span class="dsummary inline-flex min-w-0 flex-1 items-center gap-1 truncate font-medium text-foreground" {...props}>
+            <span class="min-w-0 truncate">{info?.summary ?? ""}</span>
+            {#if info && isCheckpointSummary(info.summary)}
+              <span
+                class="checkpoint-badge flex-none rounded-sm border border-border bg-muted px-1 font-normal text-ui-micro leading-[1.4] text-muted-foreground"
+                title="mygitui checkpoint snapshot"
+                >checkpoint</span
+              >
+            {/if}
+          </span>
         {/snippet}
       </Hint>
       {#if root !== ""}
@@ -388,6 +409,20 @@
               disabled={actionBusy}
             >
               Rebase from here
+            </Button>
+          {/snippet}
+        </Hint>
+      {/if}
+      {#if onCheckout}
+        <Hint label="Detach HEAD at this commit (or switch to a branch that points here)">
+          {#snippet child({ props })}
+            <Button
+              class="h-auto rounded-full px-2.5 py-0.5 text-ui-meta font-normal"
+              variant="secondary"
+              {...props}
+              onclick={onCheckout}
+            >
+              Checkout commit
             </Button>
           {/snippet}
         </Hint>

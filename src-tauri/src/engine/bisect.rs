@@ -11,9 +11,9 @@
 
 use serde::{Deserialize, Serialize};
 
-use git2::build::CheckoutBuilder;
 use git2::{Oid, Repository, Sort};
 
+use super::branches::checkout_detached;
 use super::git_engine::{EngineError, EngineResult};
 use super::libgit2::Libgit2Engine;
 use super::types::{BisectLogEntry, BisectState};
@@ -171,16 +171,6 @@ fn probe_candidates(
         .into_iter()
         .filter(|oid| *oid != bad)
         .collect())
-}
-
-/// Force the workdir+index to `commit` and detach HEAD (shared semantics
-/// with the rebase engine's replay base move).
-fn checkout_detached(repo: &Repository, commit: &git2::Commit<'_>) -> EngineResult<()> {
-    let mut checkout = CheckoutBuilder::new();
-    checkout.force();
-    repo.checkout_tree(commit.as_object(), Some(&mut checkout))?;
-    repo.set_head_detached(commit.id())?;
-    Ok(())
 }
 
 impl Libgit2Engine {

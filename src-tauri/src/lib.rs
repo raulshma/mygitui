@@ -178,6 +178,7 @@ pub fn run() {
             ipc_commands::branches,
             ipc_commands::branch_create,
             ipc_commands::branch_switch,
+            ipc_commands::commit_checkout,
             ipc_commands::branch_is_merged,
             ipc_commands::branch_delete,
             ipc_commands::branch_rename,

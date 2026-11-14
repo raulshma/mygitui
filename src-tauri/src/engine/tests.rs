@@ -1714,3 +1714,186 @@ fn log_keeps_merged_branch_line_under_its_merge() {
         "unexpected order: {shas:?}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// internal refs (checkpoints / trash / stash) stay out of history
+// ---------------------------------------------------------------------------
+
+/// Writes `refs/mygitui/*` + `refs/stash` fixtures: a checkpoint snapshot
+/// commit and a trash tip, both parented on HEAD (HEAD itself does not
+/// move — the app's undo model), plus a stash commit. Every hidden commit
+/// is reachable only from its hidden ref.
+fn plant_internal_refs(temp: &TempRepo) -> (String, String) {
+    let repo: &Repository = temp;
+    let sig = repo.signature().expect("signature");
+    let head = repo
+        .head()
+        .expect("head")
+        .peel_to_commit()
+        .expect("head commit");
+    let tree = head.tree().expect("tree");
+
+    // Checkpoint snapshot: same tree as HEAD, parented on HEAD, only
+    // reachable from its hidden ref.
+    let cp = repo
+        .commit(
+            None,
+            &sig,
+            &sig,
+            "checkpoint: pre-restore\n\nmygitui-checkpoint\nbranch: main\nworktree: yes\n",
+            &tree,
+            &[&head],
+        )
+        .expect("checkpoint commit");
+    repo.reference(
+        "refs/mygitui/checkpoints/1-pre-restore",
+        cp,
+        true,
+        "test: checkpoint ref",
+    )
+    .expect("checkpoint ref");
+
+    // Trash tip: a force-deleted branch head kept alive by the trash ref.
+    let trash = repo
+        .commit(None, &sig, &sig, "deleted branch tip", &tree, &[&head])
+        .expect("trash commit");
+    repo.reference("refs/mygitui/trash/x", trash, true, "test: trash ref")
+        .expect("trash ref");
+
+    // Stash: a plain commit behind refs/stash (the walk must not care).
+    let stash = repo
+        .commit(None, &sig, &sig, "WIP on main", &tree, &[&head])
+        .expect("stash commit");
+    repo.reference("refs/stash", stash, true, "test: stash ref")
+        .expect("stash ref");
+
+    (cp.to_string(), stash.to_string())
+}
+
+#[test]
+fn log_excludes_internal_refs_from_walk_and_decorations() {
+    let temp = TempRepo::new("internal-refs");
+    temp.write("a.txt", "one\n");
+    temp.add_all_and_commit("base");
+    temp.write("a.txt", "two\n");
+    temp.add_all_and_commit("second");
+    let (cp_sha, stash_sha) = plant_internal_refs(&temp);
+
+    let (page, next) = ENGINE
+        .log(&temp, &LogFilter::default(), 50, None)
+        .expect("log");
+    assert!(next.is_none(), "two real commits must end the walk");
+    assert_eq!(
+        page.len(),
+        2,
+        "internal commits leak into the walk: {page:?}"
+    );
+    for commit in &page {
+        assert_ne!(commit.sha, cp_sha, "checkpoint commit leaked into the log");
+        assert_ne!(commit.sha, stash_sha, "stash commit leaked into the log");
+        for r in &commit.refs {
+            assert!(
+                !r.starts_with("mygitui/") && *r != "stash",
+                "internal decoration chip leaked: {r}"
+            );
+        }
+    }
+}
+
+#[test]
+fn branch_reachable_checkpoint_commit_stays_visible() {
+    // A checkpoint adopted into a branch (reset-to-here / restore) is a real
+    // ancestor: the walk must include it and surface its checkpoint summary.
+    let temp = TempRepo::new("adopted-checkpoint");
+    temp.write("a.txt", "one\n");
+    temp.add_all_and_commit("base");
+    temp.write("a.txt", "two\n");
+    temp.add_all_and_commit("second");
+    let (cp_sha, _stash_sha) = plant_internal_refs(&temp);
+
+    let cp_commit = temp
+        .revparse_single(&cp_sha)
+        .expect("checkpoint object")
+        .peel_to_commit()
+        .expect("checkpoint commit");
+    temp.branch("from-cp", &cp_commit, false).expect("branch");
+
+    let (page, _next) = ENGINE
+        .log(&temp, &LogFilter::default(), 50, None)
+        .expect("log");
+    let adopted = page
+        .iter()
+        .find(|c| c.sha == cp_sha)
+        .expect("adopted checkpoint visible");
+    assert!(adopted.summary.starts_with("checkpoint: "));
+    // The branch decoration is real (short name, no hidden prefix).
+    assert!(
+        adopted.refs.iter().any(|r| r == "from-cp"),
+        "branch decoration missing: {:?}",
+        adopted.refs
+    );
+}
+
+// ---------------------------------------------------------------------------
+// checkout_commit (detach HEAD at a commit)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn checkout_commit_detaches_and_switch_back_restores() {
+    let temp = TempRepo::new("checkout-commit");
+    temp.write("a.txt", "one\n");
+    temp.add_all_and_commit("one");
+    let first = temp.head_sha();
+    temp.write("a.txt", "two\n");
+    temp.add_all_and_commit("two");
+    assert_ne!(temp.head_sha(), first, "fixture sanity");
+    // TempRepo::new uses Repository::init's default branch name.
+    let branch = temp
+        .head()
+        .expect("head")
+        .shorthand()
+        .expect("branch name")
+        .to_string();
+
+    ENGINE
+        .checkout_commit(&temp, &first)
+        .expect("checkout commit");
+    assert!(
+        temp.head_detached().expect("detached query"),
+        "HEAD must detach"
+    );
+    assert_eq!(
+        temp.head()
+            .expect("head")
+            .target()
+            .expect("target")
+            .to_string(),
+        first
+    );
+    let content =
+        std::fs::read_to_string(temp.workdir().unwrap().join("a.txt")).expect("workdir read");
+    assert_eq!(
+        content, "one\n",
+        "workdir must match the checked-out commit"
+    );
+
+    // The documented way back: a branch switch re-attaches HEAD.
+    ENGINE
+        .branch_switch_impl(&temp, &branch, false)
+        .expect("switch back");
+    assert!(
+        !temp.head_detached().expect("detached query"),
+        "switch must re-attach HEAD"
+    );
+}
+
+#[test]
+fn checkout_commit_rejects_unknown_sha() {
+    let temp = TempRepo::new("checkout-commit-miss");
+    temp.write("a.txt", "one\n");
+    temp.add_all_and_commit("one");
+    let err = ENGINE
+        .checkout_commit(&temp, "0123456789abcdef0123456789abcdef01234567")
+        .expect_err("unknown sha must fail");
+    assert!(matches!(err, EngineError::Invalid(_)), "{err:?}");
+}

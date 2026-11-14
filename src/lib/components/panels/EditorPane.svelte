@@ -302,6 +302,7 @@
       onCherryPick={historyActions?.cherryPick}
       onRevert={historyActions?.revert}
       onRebaseFromHere={historyActions?.rebaseFromHere}
+      onCheckout={historyActions?.checkout}
     />
   {:else if compare}
     <CommitDetail

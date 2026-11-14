@@ -40,7 +40,7 @@ export function shortRefName(ref: string): string {
 }
 
 // ---------------------------------------------------------------------------
-// Stable hash hue (blame shas, ref accents)
+// Stable hash hue (blame shas, ref accents, author avatars)
 // ---------------------------------------------------------------------------
 
 /** Deterministic hue (0–359) for a string — stable across sessions/mounts. */
@@ -50,6 +50,51 @@ export function hashHue(key: string): number {
     h = (Math.imul(31, h) + key.charCodeAt(i)) | 0;
   }
   return Math.abs(h) % 360;
+}
+
+// ---------------------------------------------------------------------------
+// Author avatar (VSCode Source Control Graph style: initials, no network)
+// ---------------------------------------------------------------------------
+
+/**
+ * 1–2 uppercase initials for the avatar circle — first letter of the first
+ * and last words ("Raul Sharma" → "RS", "raul" → "R", "" → "?"). Emails are
+ * one word, so they yield their first letter.
+ */
+export function authorInitials(name: string): string {
+  const words = name.trim().split(/\s+/).filter(Boolean);
+  if (words.length === 0) return "?";
+  const first = [...(words[0] ?? "")][0]?.toUpperCase() ?? "";
+  if (words.length === 1) return first || "?";
+  const last = [...(words[words.length - 1] ?? "")][0]?.toUpperCase() ?? "";
+  return (first + last) || "?";
+}
+
+/** Avatar background hue: the identity's email, falling back to the name. */
+export function authorAvatarHue(email: string, name: string): number {
+  return hashHue(email.trim() || name.trim() || "?");
+}
+
+/** Deterministic `hsl()` background for an author avatar (white initials). */
+export function authorAvatarColor(email: string, name: string): string {
+  return `hsl(${authorAvatarHue(email, name)} 60% 55%)`;
+}
+
+// ---------------------------------------------------------------------------
+// Checkpoint commits (mygitui undo snapshots)
+// ---------------------------------------------------------------------------
+
+/** Summary prefix the checkpoint engine stamps onto snapshot commits. */
+export const CHECKPOINT_SUMMARY_PREFIX = "checkpoint: ";
+
+/**
+ * True when a commit summary marks a mygitui checkpoint snapshot. Checkpoint
+ * refs are excluded from the history walk, but a snapshot committed into a
+ * branch (e.g. adopted via "reset to here") is a real ancestor — those rows
+ * render with a "checkpoint" badge instead.
+ */
+export function isCheckpointSummary(summary: string): boolean {
+  return summary.startsWith(CHECKPOINT_SUMMARY_PREFIX);
 }
 
 // ---------------------------------------------------------------------------

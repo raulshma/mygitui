@@ -114,6 +114,17 @@ fn checkout_branch_target(
     Ok(())
 }
 
+/// Force the workdir+index to `commit`'s tree and detach HEAD at it
+/// (`git checkout --detach`; shared with the bisect engine's probe moves
+/// and the history panel's "checkout commit" action).
+pub(crate) fn checkout_detached(repo: &Repository, commit: &git2::Commit<'_>) -> EngineResult<()> {
+    let mut checkout = CheckoutBuilder::new();
+    checkout.force();
+    repo.checkout_tree(commit.as_object(), Some(&mut checkout))?;
+    repo.set_head_detached(commit.id())?;
+    Ok(())
+}
+
 impl Libgit2Engine {
     pub(crate) fn branches_impl(&self, repo: &Repository) -> EngineResult<Vec<BranchInfo>> {
         let mut out = Vec::new();
@@ -179,6 +190,14 @@ impl Libgit2Engine {
         })?;
         let refname = branch.get().name().unwrap_or_default().to_owned();
         checkout_branch_target(repo, &refname, &commit, force)?;
+        Ok(())
+    }
+
+    /// `git checkout --detach <sha>`: point HEAD at the commit itself.
+    /// Callers snapshot a checkpoint first (the worktree is forced).
+    pub(crate) fn commit_checkout_impl(&self, repo: &Repository, sha: &str) -> EngineResult<()> {
+        let commit = resolve_commit(repo, sha)?;
+        checkout_detached(repo, &commit)?;
         Ok(())
     }
 

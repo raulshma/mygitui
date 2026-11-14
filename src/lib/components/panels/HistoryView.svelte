@@ -40,12 +40,16 @@
   import {
     archiveSpec,
     branchCreate,
+    branchSwitch,
     branches,
     cherryPick,
+    commitCheckout,
     describe,
+    guardCheckpoint,
     pickSaveFile,
     repoDiff,
     revertCommits,
+    stashPush,
     tagCreate,
   } from "$lib/ipc/client";
   import type { BranchInfo, CommitInfo, FileDiff, MergeResult } from "$lib/ipc/types";
@@ -86,6 +90,7 @@
     classifyRef,
     formatDateTime,
     formatRelativeTime,
+    isCheckpointSummary,
     shortRefName,
   } from "$lib/git/format";
   import { toast } from "$lib/toast";
@@ -96,6 +101,8 @@
   import { Checkbox } from "$lib/components/ui/checkbox/index.js";
   import { Input } from "$lib/components/ui/input/index.js";
   import { appIcon } from "$lib/components/icons/library.svelte";
+  import ConfirmDialog from "$lib/components/safety/ConfirmDialog.svelte";
+  import AuthorAvatar from "$lib/components/panels/AuthorAvatar.svelte";
 
   const iconSearch = $derived(appIcon("search")!);
   const iconPopout = $derived(appIcon("open-in-new")!);
@@ -105,6 +112,8 @@
   const iconCompare = $derived(appIcon("compare-arrows")!);
   const iconClose = $derived(appIcon("close")!);
   const iconRetry = $derived(appIcon("restart-alt")!);
+  const iconCheckout = $derived(appIcon("alt-route")!);
+  const iconBranch = $derived(appIcon("fork-right")!);
 
   let {
     repoId,
@@ -220,6 +229,72 @@
   let tagAt = $state<DialogState<{ sha: string }>>(closedDialog());
   /** "Reset current branch to here…" ResetDialog. */
   let resetTo = $state<DialogState<{ sha: string }>>(closedDialog());
+  /**
+   * "Checkout commit" ConfirmDialog (row hover action + context menu).
+   * The sha travels with open like the dialogs above; the summary only
+   * feeds the dialog text and may degrade to "" after a restart.
+   */
+  let checkoutAt = $state<DialogState<{ sha: string; summary: string }>>(
+    closedDialog(),
+  );
+
+  /** HEAD sha from the tab status (null when unknown/unloaded). */
+  const headSha = $derived(
+    tabStore.tabs.find((t) => t.id === repoId)?.status?.head ?? null,
+  );
+  /** True when the worktree has entries (dirty) — checkout offers stash. */
+  const worktreeDirty = $derived(
+    (tabStore.tabs.find((t) => t.id === repoId)?.status?.entries.length ?? 0) > 0,
+  );
+
+  /**
+   * A local branch pointing at `commit` (branch checkouts switch instead of
+   * detaching, like VSCode): the first local branch decoration, where the
+   * "HEAD -> main" label contributes its `main`.
+   */
+  function localBranchAt(commit: CommitInfo): string | null {
+    for (const ref of commit.refs) {
+      if (ref === "HEAD") continue;
+      const name = ref.startsWith("HEAD -> ") ? ref.slice("HEAD -> ".length) : ref;
+      if (classifyRef(name) === "local") return name;
+    }
+    return null;
+  }
+
+  /** Opens the checkout confirmation for `sha` (hover action / menu entry). */
+  function requestCheckout(sha: string): void {
+    const row = commits.find((c) => c.sha === sha);
+    checkoutAt = openDialog({ sha, summary: row?.summary ?? "" });
+  }
+
+  /**
+   * ConfirmDialog result: optionally stash first, snapshot a guard
+   * checkpoint (the worktree is forced), then branch-switch or detach.
+   * The history restarts via repo-changed; status refresh renders the
+   * "detached @ sha" state.
+   */
+  async function runCheckout(sha: string, branch: string | null, stashFirst: boolean): Promise<void> {
+    checkoutAt = closedDialog();
+    try {
+      if (stashFirst) {
+        await stashPush(repoId, `pre-checkout stash (checkout ${sha.slice(0, 7)})`);
+      }
+      await guardCheckpoint(repoId, "pre-checkout");
+      if (branch) {
+        await branchSwitch(repoId, branch, stashFirst ? false : true);
+        toast(`Switched to ${branch}`, { kind: "success" });
+      } else {
+        await commitCheckout(repoId, sha);
+        toast(`Checked out ${sha.slice(0, 7)} — detached HEAD`, { kind: "success" });
+      }
+    } catch (err) {
+      toast(
+        `Checkout failed: ${err instanceof Error ? err.message : String(err)}`,
+        { kind: "error" },
+      );
+    }
+    void tabStore.refreshStatus(repoId);
+  }
 
   // -- virtualizer + canvas scroll sync ------------------------------------------
 
@@ -343,6 +418,7 @@
         branchFrom = closedDialog();
         tagAt = closedDialog();
         resetTo = closedDialog();
+        checkoutAt = closedDialog();
         pendingReveal = null;
         sync.reset();
       });
@@ -656,6 +732,7 @@
       cherryPick: () => void doCherryPick(),
       revert: () => void doRevert(),
       rebaseFromHere,
+      checkout: () => requestCheckout(info.sha),
     });
   });
 
@@ -943,6 +1020,7 @@
         if (action === "cherry-pick") void doCherryPick();
         else if (action === "revert") void doRevert();
         else if (action === "bookmark") toggleBookmark(sha);
+        else if (action === "checkout") requestCheckout(sha);
       }),
     ];
     return () => {
@@ -980,6 +1058,17 @@
       { id: "copy-describe", label: "Copy describe", run: () => void copyDescribe(sha) },
       { id: "archive", label: "Export archive…", run: () => void exportArchive(sha) },
     ];
+    // VSCode-parity checkout: hidden at HEAD; a branch tip switches to the
+    // branch instead of detaching (labels travel with the target).
+    if (sha !== headSha) {
+      const row = commits.find((c) => c.sha === sha);
+      const branch = row ? localBranchAt(row) : null;
+      entries.unshift({
+        id: "checkout",
+        label: branch ? `Switch to ${branch}` : "Checkout commit…",
+        run: () => requestCheckout(sha),
+      });
+    }
     // M13: AI explain, gated like every AI affordance (master + feature).
     if (ai.isEnabled() && ai.isFeatureEnabled("explain-commit")) {
       entries.push({ id: "ai-explain", label: "Explain with AI…", run: () => void explainCommit(sha) });
@@ -1405,7 +1494,7 @@
         {#each visible as v (v.commit.sha)}
           <div
             id={`commit-row-${v.idx}`}
-            class="row absolute inset-x-0 flex cursor-pointer items-center border-b border-border/45 py-0 text-ui-base {sidebar ? "gap-1 pr-2 pl-2" : "gap-1.5 pr-2.5 pl-3"} {v.idx === selectedIdx
+            class="row group absolute inset-x-0 flex cursor-pointer items-center border-b border-border/45 py-0 text-ui-base {sidebar ? "gap-1 pr-2 pl-2" : "gap-1.5 pr-2.5 pl-3"} {v.idx === selectedIdx
               ? "bg-secondary text-secondary-foreground"
               : multiSet.has(v.commit.sha)
                 ? "bg-secondary/45 hover:bg-secondary/60"
@@ -1426,7 +1515,31 @@
               }
             }}
           >
-            <span class="sha flex-none font-mono {v.idx === selectedIdx ? "" : "text-muted-foreground"}">{v.commit.sha.slice(0, 7)}</span>
+            <!-- VSCode Source Control Graph row: avatar → subject →
+                 branch labels → hover actions → relative time. The hash
+                 lives in the summary tooltip, the copy chip, and the
+                 detail pane. -->
+            <Hint label={`${v.commit.author.name}${v.commit.author.email ? ` <${v.commit.author.email}>` : ""}`}>
+              {#snippet child({ props })}
+                <span {...props} class="avatar-cell flex-none cursor-help">
+                  <AuthorAvatar name={v.commit.author.name} email={v.commit.author.email} />
+                </span>
+              {/snippet}
+            </Hint>
+            <Hint label={`${v.commit.sha}\n${v.commit.message.trim()}`}>
+              {#snippet child({ props })}
+                <span {...props} class="summary inline-flex min-w-0 flex-1 cursor-help items-center gap-1 truncate">
+                  <span class="min-w-0 truncate">{v.commit.summary}</span>
+                  {#if isCheckpointSummary(v.commit.summary)}
+                    <span
+                      class="checkpoint-badge flex-none rounded-sm border border-border bg-muted px-1 text-ui-micro leading-[1.4] text-muted-foreground"
+                      title="mygitui checkpoint snapshot"
+                      >checkpoint</span
+                    >
+                  {/if}
+                </span>
+              {/snippet}
+            </Hint>
             {#each v.commit.refs.slice(0, 3) as ref, i (`${v.commit.sha}:${i}:${ref}`)}
               {@const kind = classifyRef(ref)}
               {@const scope =
@@ -1471,19 +1584,72 @@
                 {/snippet}
               </Hint>
             {/if}
-            <Hint label={v.commit.summary}>
-              {#snippet child({ props })}
-                <span {...props} class="summary min-w-0 flex-1 truncate">{v.commit.summary}</span>
-              {/snippet}
-            </Hint>
-            <span class="author max-w-40 flex-none truncate {v.idx === selectedIdx ? "" : "text-muted-foreground"} {sidebar ? "hidden" : ""}">{v.commit.author.name}</span>
+            <!-- Hover actions: copy hash, checkout, create branch. `hidden`
+                 (not opacity) keeps the cluster out of hit-testing and the
+                 a11y tree until hover — an invisible button must never eat a
+                 row click. It overlays the row's right edge over the date
+                 (hidden while hovering), matching the row tint via bg-inherit;
+                 buttons stop propagation so the row click stays a pure
+                 selection. -->
+            <span class="row-actions absolute inset-y-0 right-1.5 hidden items-center gap-0.5 bg-inherit pl-1.5 group-hover:flex">
+              <Hint label="Copy commit hash" side="top">
+                {#snippet child({ props })}
+                  <button
+                    {...props}
+                    type="button"
+                    class="sha-copy flex-none cursor-pointer rounded-sm border border-border bg-muted px-1 font-mono text-ui-micro leading-[1.4] tabular-nums text-muted-foreground hover:text-foreground"
+                    aria-label="Copy commit hash"
+                    onclick={(e) => {
+                      e.stopPropagation();
+                      void copyToClipboard(v.commit.sha, "SHA copied to clipboard", "Could not copy the SHA");
+                    }}
+                  >{v.commit.sha.slice(0, 7)}</button>
+                {/snippet}
+              </Hint>
+              {#if v.commit.sha !== headSha}
+                {@const branch = localBranchAt(v.commit)}
+                <Hint label={branch ? `Switch to ${branch}` : "Checkout commit (detached HEAD)"} side="top">
+                  {#snippet child({ props })}
+                    <button
+                      {...props}
+                      type="button"
+                      class="checkout-action inline-flex size-5 flex-none cursor-pointer items-center justify-center rounded-sm text-muted-foreground hover:bg-accent hover:text-foreground"
+                      aria-label={branch ? `Switch to ${branch}` : "Checkout commit (detached HEAD)"}
+                      onclick={(e) => {
+                        e.stopPropagation();
+                        requestCheckout(v.commit.sha);
+                      }}
+                    >
+                      <Icon icon={iconCheckout} size={14} />
+                    </button>
+                  {/snippet}
+                </Hint>
+              {/if}
+              <Hint label="Create branch here" side="top">
+                {#snippet child({ props })}
+                  <button
+                    {...props}
+                    type="button"
+                    class="branch-action inline-flex size-5 flex-none cursor-pointer items-center justify-center rounded-sm text-muted-foreground hover:bg-accent hover:text-foreground"
+                    aria-label="Create branch here"
+                    onclick={(e) => {
+                      e.stopPropagation();
+                      branchFrom = openDialog({ sha: v.commit.sha });
+                    }}
+                  >
+                    <Icon icon={iconBranch} size={14} />
+                  </button>
+                {/snippet}
+              </Hint>
+            </span>
             <Hint label={formatDateTime(v.commit.author.time)}>
               {#snippet child({ props })}
                 <!-- Relative label stays compact in the row; the exact local
-                     timestamp rides on hover ("3 weeks ago" alone goes stale). -->
+                     timestamp rides on hover ("3 weeks ago" alone goes stale).
+                     Hidden while the hover-actions overlay covers it. -->
                 <span
                   {...props}
-                  class="date flex-none cursor-help text-ui-micro text-muted-foreground tabular-nums"
+                  class="date flex-none cursor-help text-ui-micro text-muted-foreground tabular-nums group-hover:invisible"
                   >{formatRelativeTime(v.commit.author.time)}</span
                 >
               {/snippet}
@@ -1564,6 +1730,9 @@
           onCherryPick={() => void doCherryPick()}
           onRevert={() => void doRevert()}
           onRebaseFromHere={rebaseFromHere}
+          onCheckout={() => {
+            if (selectedInfo) requestCheckout(selectedInfo.sha);
+          }}
           onPopout={selectedInfo ? popOutDetail : undefined}
         />
       {/snippet}
@@ -1625,5 +1794,50 @@
       onClose={() => (resetTo = closedDialog())}
       onDone={onResetFromHereDone}
     />
+  {/if}
+
+  {#if checkoutAt.open}
+    {@const sha = checkoutAt.sha}
+    {@const summary = checkoutAt.summary}
+    {@const target = commits.find((c) => c.sha === sha)}
+    {@const branch = target ? localBranchAt(target) : null}
+    <ConfirmDialog
+      open={true}
+      title={branch ? `Switch to ${branch}` : `Checkout ${sha.slice(0, 7)}`}
+      danger={worktreeDirty}
+      confirmLabel={
+        branch
+          ? worktreeDirty ? "Discard changes and switch" : "Switch"
+          : worktreeDirty ? "Discard changes and checkout" : "Checkout"
+      }
+      alternateLabel={worktreeDirty ? "Stash changes first" : undefined}
+      onConfirm={() => void runCheckout(sha, branch, false)}
+      onAlternate={() => void runCheckout(sha, branch, true)}
+      onCancel={() => (checkoutAt = closedDialog())}
+    >
+      {#snippet message()}
+        {#if summary}
+          <p class="mb-2 font-medium">{summary}</p>
+        {/if}
+        {#if branch}
+          <p>
+            Checks out the branch{worktreeDirty
+              ? " — conflicting local modifications are discarded"
+              : ""}.
+          </p>
+        {:else}
+          <p>
+            HEAD will detach at <span class="font-mono">{sha.slice(0, 7)}</span> —
+            you are leaving the branch. Create a branch from here to keep new work.
+          </p>
+        {/if}
+        {#if worktreeDirty}
+          <p class="mt-2">
+            The worktree has uncommitted changes: stash them first, or proceed and
+            discard conflicting modifications (a checkpoint snapshot is taken either way).
+          </p>
+        {/if}
+      {/snippet}
+    </ConfirmDialog>
   {/if}
 </section>

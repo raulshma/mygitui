@@ -1633,6 +1633,10 @@ impl GitEngine for Libgit2Engine {
         self.branch_switch_impl(repo, name, force)
     }
 
+    fn checkout_commit(&self, repo: &Repository, sha: &str) -> EngineResult<()> {
+        self.commit_checkout_impl(repo, sha)
+    }
+
     fn branch_is_merged(&self, repo: &Repository, name: &str, into: &str) -> EngineResult<bool> {
         self.branch_is_merged_impl(repo, name, into)
     }

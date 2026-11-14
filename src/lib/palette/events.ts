@@ -63,7 +63,10 @@ export interface UiEventMap {
   /** Open file history for a path: `{ path, repoId? }`. */
   "open-file-history": { path: string; repoId?: string };
   /** Request a commit action from anywhere: `{ sha, action }`. */
-  "commit-action": { sha: string; action: "cherry-pick" | "revert" | "bookmark" };
+  "commit-action": {
+    sha: string;
+    action: "cherry-pick" | "revert" | "bookmark" | "checkout";
+  };
   /** Open the AI settings dialog (M12 AiHealthChip / anywhere). */
   "open-ai-settings": undefined;
   /** Open the appearance customizer (App owns the dialog). */

@@ -13,4 +13,6 @@ export interface HistoryCommitActions {
   cherryPick: () => void;
   revert: () => void;
   rebaseFromHere: () => void;
+  /** VSCode-parity "checkout this commit" (opens the confirm dialog). */
+  checkout: () => void;
 }

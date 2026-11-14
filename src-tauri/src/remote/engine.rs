@@ -669,6 +669,16 @@ impl RemoteGitEngine {
         Ok(())
     }
 
+    /// `git checkout --detach <sha>`: detach HEAD at the commit (matches the
+    /// local engine's `checkout_commit`). Callers snapshot a checkpoint first.
+    pub fn checkout_detach(&self, sha: &str) -> Result<(), String> {
+        self.git_checked(
+            &format!("checkout -q --detach {}", shell_quote(sha)),
+            "checkout commit",
+        )?;
+        Ok(())
+    }
+
     pub fn branch_is_merged(&self, name: &str, into: &str) -> Result<bool, String> {
         let out = self.git_raw(
             &format!(
@@ -2198,7 +2208,8 @@ impl RemoteGitEngine {
         // `--date=short` (device timezone, matching the local engine's
         // committer-tz bucketing closely enough for the activity chart).
         let raw = self.git_out(&format!(
-            "log --all --since={max_days}.days.ago --date=short --format='%cd%x09%an%x09%ae'"
+            "log{} --all --since={max_days}.days.ago --date=short --format='%cd%x09%an%x09%ae'",
+            internal_ref_exclude_args()
         ))?;
         let needle = author.map(|a| a.to_ascii_lowercase());
         let mut days: Vec<(String, u32)> = Vec::new();
@@ -2227,7 +2238,8 @@ impl RemoteGitEngine {
 
     pub fn contributor_stats(&self, max_days: u32) -> Result<Vec<Contributor>, String> {
         let raw = self.git_out(&format!(
-            "log --all --since={max_days}.days.ago --date=short --format='%an%x09%ae%x09%cd'"
+            "log{} --all --since={max_days}.days.ago --date=short --format='%an%x09%ae%x09%cd'",
+            internal_ref_exclude_args()
         ))?;
         let mut out: Vec<Contributor> = Vec::new();
         for line in raw.lines() {
@@ -2521,6 +2533,23 @@ pub fn diff_range(old: &DiffSide, new: &DiffSide) -> Result<String, String> {
     Ok(args)
 }
 
+/// Ref globs that must stay out of every `--all` walk, stats pass and
+/// decoration: mygitui's internal refs (undo checkpoints, trash tips) and
+/// the stash. The local engine filters the same refs via
+/// `short_ref_name` (`engine/libgit2.rs`); git applies `--exclude` to the
+/// ref selectors that FOLLOW it, so these flags must precede `--all`.
+pub const INTERNAL_REF_GLOBS: &[&str] = &["refs/mygitui/*", "refs/stash"];
+
+/// Shell-quoted `--exclude` args for [`INTERNAL_REF_GLOBS`].
+pub fn internal_ref_exclude_args() -> String {
+    let mut args = String::new();
+    for glob in INTERNAL_REF_GLOBS {
+        args.push_str(" --exclude=");
+        args.push_str(&shell_quote(glob));
+    }
+    args
+}
+
 /// Log args: format + filters + pagination (`limit` = page size; `after` =
 /// last sha of the previous page).
 pub fn log_args(filter: &LogFilter, limit: usize, after: Option<&str>) -> String {
@@ -2556,6 +2585,7 @@ pub fn log_args(filter: &LogFilter, limit: usize, after: Option<&str>) -> String
             args.push_str(&shell_quote(r));
         }
     } else {
+        args.push_str(&internal_ref_exclude_args());
         args.push_str(" --all");
     }
     if let Some(cursor) = after {
@@ -2784,5 +2814,40 @@ mod tests {
     fn literal_spec_pins_glob_metacharacters() {
         assert_eq!(literal_spec("a[1].txt"), "':(literal)a[1].txt'");
         assert_eq!(literal_spec("it's *"), "':(literal)it'\\''s *'");
+    }
+
+    // -- internal-ref exclusions (checkpoints / trash / stash) ----------------
+
+    #[test]
+    fn log_args_all_branches_excludes_internal_refs() {
+        let args = log_args(&LogFilter::default(), 500, None);
+        // git applies --exclude to the ref selectors that FOLLOW it, so the
+        // flags must land before `--all`.
+        let exclude = args.find("--exclude=").expect("exclusions present");
+        let all = args.find(" --all").expect("--all present");
+        assert!(exclude < all, "exclusions must precede --all: {args}");
+        // Quoted so the remote shell never glob-expands the `*`.
+        assert!(args.contains("--exclude='refs/mygitui/*'"), "{args}");
+        assert!(args.contains("--exclude='refs/stash'"), "{args}");
+    }
+
+    #[test]
+    fn log_args_branch_scope_has_no_exclusions() {
+        let filter = LogFilter {
+            refs: vec!["main".to_string()],
+            ..Default::default()
+        };
+        let args = log_args(&filter, 500, None);
+        assert!(!args.contains("--all"), "{args}");
+        assert!(!args.contains("--exclude"), "{args}");
+        assert!(args.contains(" 'main'"), "{args}");
+    }
+
+    #[test]
+    fn exclude_args_are_shell_quoted() {
+        assert_eq!(
+            internal_ref_exclude_args(),
+            " --exclude='refs/mygitui/*' --exclude='refs/stash'",
+        );
     }
 }

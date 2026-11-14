@@ -1222,6 +1222,37 @@ pub async fn branch_switch(
     .await
 }
 
+/// Detach HEAD at a commit (`git checkout --detach <sha>`), the history
+/// panel's "checkout commit" action. The workdir+index are forced to the
+/// commit's tree, so the FE snapshots a `guard_checkpoint("pre-checkout")`
+/// first (same flow as the hard resets).
+#[tauri::command(rename_all = "snake_case")]
+pub async fn commit_checkout(
+    repo_id: RepoId,
+    sha: String,
+    state: State<'_, RepoManager>,
+) -> Result<(), String> {
+    let handle = get_handle(&state, &repo_id)?;
+    if let Some(remote) = handle.remote() {
+        return finish_op(enqueue_remote_mutation(
+            &handle,
+            remote,
+            "checkout",
+            move |git, _ws| git.checkout_detach(&sha),
+        ))
+        .await;
+    }
+    let engine = handle.engine();
+    let repo = handle.repo()?;
+    finish_op(enqueue_mutation(
+        &handle,
+        &repo,
+        "checkout",
+        move |_ctx, repo| engine.checkout_commit(repo, &sha),
+    ))
+    .await
+}
+
 /// `r#into` unraws to the IPC arg key `into` (contracts.md M2).
 #[tauri::command(rename_all = "snake_case")]
 pub async fn branch_is_merged(

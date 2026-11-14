@@ -83,6 +83,7 @@ events). Arg keys snake_case (commands use `rename_all`).
 | `branches` | `repo_id` | `BranchInfo[]` |
 | `branch_create` | `repo_id, name, from?, checkout: bool` | `void` |
 | `branch_switch` | `repo_id, name, force: bool` | `void` |
+| `commit_checkout` | `repo_id, sha` | `void` — detach HEAD at the commit (`git checkout --detach`); workdir+index forced, so the FE guards with `guard_checkpoint("pre-checkout")` first |
 | `branch_is_merged` | `repo_id, name, into` | `bool` |
 | `branch_delete` | `repo_id, name, force: bool` | `void` |
 | `branch_rename` | `repo_id, old, new` | `void` |
@@ -100,7 +101,7 @@ events). Arg keys snake_case (commands use `rename_all`).
 
 | Event | Payload | Meaning |
 |---|---|---|
-| `op-progress` | `{ repo_id, op_id, kind, message, pct: number \| null, done: bool, error: string \| null, outcome: "completed" \| "cancelled" \| "failed" \| null }` | op-queue progress for mutations and net ops: throttled updates plus a final `done` event on success or failure (failures toast FE-side). `outcome` is set on the final event only (`null` on intermediate progress): `cancelled` is reserved for ops aborted through `op_cancel` (backend sentinel `ops::CANCELLED_ERR` = "cancelled", classified by `OpOutcome::for_error`); `failed` covers every other error. Queue-dispatched reads (`status`, `refs`, `blame`, `diff`, …) emit nothing — their errors return through the command. Kinds: `stage`, `commit`, `branch`, `merge`, `rebase`, `bisect`, `stash`, `worktree`, `checkpoint`, `submodule`, `discard`, `clean`, `fetch`, `pull`, `push`, `maintenance`, `archive`, `sparse`, `lfs` (tags report as `branch`, remote config ops as `fetch`) |
+| `op-progress` | `{ repo_id, op_id, kind, message, pct: number \| null, done: bool, error: string \| null, outcome: "completed" \| "cancelled" \| "failed" \| null }` | op-queue progress for mutations and net ops: throttled updates plus a final `done` event on success or failure (failures toast FE-side). `outcome` is set on the final event only (`null` on intermediate progress): `cancelled` is reserved for ops aborted through `op_cancel` (backend sentinel `ops::CANCELLED_ERR` = "cancelled", classified by `OpOutcome::for_error`); `failed` covers every other error. Queue-dispatched reads (`status`, `refs`, `blame`, `diff`, …) emit nothing — their errors return through the command. Kinds: `stage`, `commit`, `branch`, `checkout`, `merge`, `rebase`, `bisect`, `stash`, `worktree`, `checkpoint`, `submodule`, `discard`, `clean`, `fetch`, `pull`, `push`, `maintenance`, `archive`, `sparse`, `lfs` (tags report as `branch`, remote config ops as `fetch`) |
 | `op-log` | `{ repo_id, op_id, kind, line }` | raw, unthrottled child output while an op runs; currently streams commit/signing hooks and the `push` CLI fallback (pre-push hook present). The FE keeps the newest session per repo and renders it in the workspace output strip. |
 | `auth-request` | `{ op_id, repo_id, url, kind: "https-user" \| "https-pass" \| "ssh-passphrase", prompt }` | engine needs credentials; FE shows dialog, answers via `auth_respond` |
 

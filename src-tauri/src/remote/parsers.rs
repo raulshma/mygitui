@@ -356,12 +356,29 @@ pub fn parse_log_records(raw: &str) -> Vec<CommitInfo> {
 }
 
 /// Split git's `%D` decoration list ("HEAD -> main, origin/main, tag: v1").
+/// Internal refs — mygitui's checkpoints/trash and the stash — are dropped
+/// so they never surface as chips even if a device's git version skips the
+/// `--exclude` flags during decoration (`engine.rs::INTERNAL_REF_GLOBS`).
 fn parse_decorations(field: &str) -> Vec<String> {
     let field = field.trim();
     if field.is_empty() {
         return Vec::new();
     }
-    field.split(", ").map(|s| s.trim().to_string()).collect()
+    field
+        .split(", ")
+        .map(|s| s.trim())
+        .filter(|s| !is_hidden_decoration(s))
+        .map(str::to_string)
+        .collect()
+}
+
+/// `%D` renders refs relative to `refs/` ("mygitui/checkpoints/1-x",
+/// "stash"); accept the prefixed spellings too for robustness.
+fn is_hidden_decoration(name: &str) -> bool {
+    name == "stash"
+        || name == "refs/stash"
+        || name.starts_with("mygitui/")
+        || name.starts_with("refs/mygitui/")
 }
 
 // ---------- blame (porcelain) ----------
@@ -1186,6 +1203,24 @@ subject line\n\nbody line\n\u{1}";
         assert_eq!(c.summary, "subject line");
         assert!(c.message.ends_with("body line"));
         assert_eq!(c.refs, vec!["HEAD -> main", "origin/main"]);
+    }
+
+    #[test]
+    fn decorations_drop_internal_refs() {
+        // mygitui checkpoints/trash and the stash never surface as chips,
+        // even if a device's git skips --exclude during decoration.
+        let refs = parse_decorations(
+            "HEAD -> main, mygitui/checkpoints/1-pre-restore, origin/main, stash, tag: v1",
+        );
+        assert_eq!(refs, vec!["HEAD -> main", "origin/main", "tag: v1"]);
+        assert_eq!(parse_decorations("stash"), Vec::<String>::new());
+        assert_eq!(
+            parse_decorations("refs/mygitui/trash/x"),
+            Vec::<String>::new()
+        );
+        // The HEAD label itself always survives.
+        assert_eq!(parse_decorations("HEAD"), vec!["HEAD"]);
+        assert_eq!(parse_decorations(""), Vec::<String>::new());
     }
 
     const GOLDEN_BLAME: &str = "0123456789012345678901234567890123456789 1 1 1\n\

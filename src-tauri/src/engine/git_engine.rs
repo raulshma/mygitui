@@ -134,6 +134,12 @@ pub trait GitEngine: Send + Sync {
         Err(EngineError::Unsupported("branch_switch".into()))
     }
 
+    /// Detach HEAD at `sha` (`git checkout --detach`); the workdir+index are
+    /// forced to the commit's tree. Callers snapshot a checkpoint first.
+    fn checkout_commit(&self, _repo: &Repository, _sha: &str) -> EngineResult<()> {
+        Err(EngineError::Unsupported("checkout_commit".into()))
+    }
+
     /// Merged-into check used by delete guards and the cleanup wizard.
     fn branch_is_merged(&self, _repo: &Repository, _name: &str, _into: &str) -> EngineResult<bool> {
         Err(EngineError::Unsupported("branch_is_merged".into()))
