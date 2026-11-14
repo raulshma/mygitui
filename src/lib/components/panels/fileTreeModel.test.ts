@@ -232,8 +232,11 @@ describe("perf gate", () => {
     expect(filtered.length).toBeGreaterThan(0);
     const elapsed = performance.now() - start;
     // The gate targets algorithmic blowups (a quadratic pass over 100k
-    // nodes takes seconds): the budget tolerates a loaded CI runner but
-    // still fails any super-linear regression.
-    expect(elapsed).toBeLessThan(250);
+    // nodes takes seconds): the budget tolerates a loaded runner — the
+    // linear baseline sits well under it even 4-6× slowed (the first
+    // 250 ms budget failed a pre-push run at 746 ms right after the
+    // cargo test compile storm) — while still failing any super-linear
+    // regression with margin to spare.
+    expect(elapsed).toBeLessThan(1000);
   });
 });
