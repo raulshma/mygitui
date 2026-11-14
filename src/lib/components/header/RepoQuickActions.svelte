@@ -17,12 +17,15 @@
    * palette.
    *
    * Feedback rules:
-   * - a local in-flight flag gives instant disabled/spinner feedback before
-   *   the backend's first op-progress event arrives and blocks double clicks;
+   * - a local in-flight flag gives instant disabled feedback before the
+   *   backend's first op-progress event arrives and blocks double clicks;
    * - post-completion status refresh is delegated to the owner (`onMutated`);
    * - only the running verb is announced; the whole control is disabled
-   *   while any fetch/pull/push runs because the backend serializes them
-   *   per repo anyway.
+   *   while any user-started fetch/pull/push runs because the backend
+   *   serializes them per repo anyway. Background auto-fetch is excluded:
+   *   it must neither spin nor disable these controls.
+   * - running progress itself renders in the app-wide status bar, the single
+   *   loader surface; this header deliberately has no spinner.
    */
 
   import type { SyncVerb } from "$lib/git/sync";
@@ -59,6 +62,7 @@
     type SyncOutcome,
   } from "$lib/git/sync";
   import { opsFor } from "$lib/stores/ops.svelte";
+  import { autofetch } from "$lib/stores/autofetch.svelte";
   import { headerPins } from "$lib/stores/headerPins.svelte";
   import { toast } from "$lib/toast";
   import { Button } from "$lib/components/ui/button/index.js";
@@ -68,7 +72,6 @@
     showMenuAtElement,
   } from "$lib/components/menu/contextMenuStore.svelte";
   import Icon from "$lib/components/icons/Icon.svelte";
-  import { Spinner } from "$lib/components/ui/spinner/index.js";
   import { appIcon } from "$lib/components/icons/library.svelte";
   import { describeError } from "$lib/errors";
 
@@ -102,9 +105,18 @@
     pending !== null && pending.repoId === repoId ? pending.verb : null,
   );
 
-  /** Sync ops already running for this repo (any entry point). */
+  /**
+   * Sync ops already running for this repo (any entry point), except a
+   * background auto-fetch: that must not make the header look busy or lock
+   * the user out while it ticks. The status bar still shows it (with its
+   * cancel), and the backend queue serializes user actions behind it.
+   */
   const activeOps = $derived(
-    opsFor(repoId).filter((op) => isSyncVerb(op.kind)),
+    opsFor(repoId).filter(
+      (op) =>
+        isSyncVerb(op.kind) &&
+        !(op.kind === "fetch" && autofetch.isFetching(repoId)),
+    ),
   );
   const netBusy = $derived(activeOps.length > 0);
   const activeVerb = $derived(
@@ -313,11 +325,7 @@
         onclick={() => void run(primaryVerb)}
       >
         <span class="verb-icon inline-flex h-3.5 w-3.5 flex-none items-center justify-center">
-          {#if runningVerb !== null}
-            <Spinner class="size-3.5" role="presentation" aria-hidden="true" />
-          {:else}
-            <Icon icon={iconSync} size={14} />
-          {/if}
+          <Icon icon={iconSync} size={14} />
         </span>
         <span class="sync-word flex-none font-medium leading-none max-[760px]:hidden">Sync</span>
         {#if behind > 0 && runningVerb === null}
@@ -358,11 +366,7 @@
           oncontextmenu={(event) => openPinContext(event, verb)}
         >
           <span class="verb-icon inline-flex h-3.5 w-3.5 flex-none items-center justify-center">
-            {#if runningVerb === verb}
-              <Spinner class="size-3.5" role="presentation" aria-hidden="true" />
-            {:else}
-              <Icon icon={verbIcon(verb)} size={14} />
-            {/if}
+            <Icon icon={verbIcon(verb)} size={14} />
           </span>
           {#if pinCount(verb) !== null && runningVerb === null}
             {@const badge = pinCount(verb)!}

@@ -97,7 +97,6 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
   import { trapTab } from "$lib/components/safety/trapTab";
   import { rebaseMonitor } from "$lib/components/rebase/rebaseStore.svelte";
   import CommitBar from "$lib/components/panels/CommitBar.svelte";
-  import OpLogStrip from "$lib/components/panels/OpLogStrip.svelte";
   import EditorPane from "$lib/components/panels/EditorPane.svelte";
   import Icon from "$lib/components/icons/Icon.svelte";
   import { Button } from "$lib/components/ui/button/index.js";
@@ -1772,8 +1771,6 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
       </Hint>
     </span>
   </header>
-
-  <OpLogStrip {repoId} />
 
   {#if opSource && (conflictCount > 0 || (opSource === "rebase" && rebaseMonitor.paused))}
     <div

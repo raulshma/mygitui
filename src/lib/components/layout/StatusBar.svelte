@@ -9,11 +9,13 @@
    * every auto-fetch tick.)
    *
    * Left: the active repo's branch (click opens the branch switcher), a Sync
-   * item (click runs the contextual pull/push/fetch verb; the spinner rides
-   * the shared op store, so ops started anywhere spin it) and the
+   * item (click runs the contextual pull/push/fetch verb) and the
    * working-copy change count (click focuses the Status panel). Middle: one
-   * item per in-flight backend op across all open repos — progress, percent
-   * and the cooperative Cancel. Right: the in-progress git state
+   * item per in-flight backend op across all open repos — the ONE spinner
+   * surface for git work, so header/commit controls never duplicate it;
+   * progress, percent and the cooperative Cancel live here. Hook/CLI output
+   * (pre-push, commit hooks) rides a chip on the right and expands into a
+   * fixed overlay above the bar. Right: the in-progress git state
  * (merge/rebase/…), the repo's auto-fetch cadence (click opens the Remotes
  * panel), and the remote device connection.
    *
@@ -24,12 +26,14 @@
   import {
     cancelOp,
     kindLabel,
+    opLogsFor,
     opStore,
     type ActiveOp,
   } from "$lib/stores/ops.svelte";
   import { refreshStatus, tabStore } from "$lib/stores/tabs.svelte";
   import { autofetch } from "$lib/stores/autofetch.svelte";
   import { remoteDevices } from "$lib/stores/remoteDevices.svelte";
+  import OpLogStrip from "$lib/components/panels/OpLogStrip.svelte";
   import { emitUiEvent } from "$lib/palette/events";
   import {
     fetchDefaultRemote,
@@ -59,6 +63,8 @@
   const iconAlert = $derived(appIcon("triangle-alert")!);
   const iconRefresh = $derived(appIcon("refresh")!);
   const iconChanges = $derived(panelIconData("status"));
+  const iconOutput = $derived(appIcon("terminal")!);
+  const iconDone = $derived(appIcon("check-circle")!);
 
   /** "1 commit" / "3 commits" for tooltips; counts capped like the header. */
   function commitCount(count: number): string {
@@ -106,6 +112,45 @@
     active?.deviceId ? remoteDevices.statusOf(active.deviceId) : null,
   );
 
+  // -- hook/CLI output (pre-push, commit hooks) ------------------------------
+
+  /** Newest output session for the active repo, kept after the op ends. */
+  const logSession = $derived(
+    repoId === null ? null : opLogsFor(repoId),
+  );
+  const logTitle = $derived(
+    logSession === null ? "" : `${kindLabel(logSession.kind)} output`,
+  );
+  const logCount = $derived(
+    logSession === null
+      ? 0
+      : logSession.lines.length,
+  );
+  const logFailed = $derived(
+    logSession !== null && logSession.done && logSession.error !== null,
+  );
+
+  /**
+   * Explicit toggle (no auto-close), but a *new* session opens itself once:
+   * the old in-flow strip appeared as soon as hook output arrived, and this
+   * preserves that cue without ever shifting the workspace. The overlay
+   * stays put when the user closes it; only the next op reopens it.
+   */
+  let logOpen = $state(false);
+  let shownLogOpId = $state<string | null>(null);
+  $effect(() => {
+    const session = logSession;
+    if (session === null) {
+      shownLogOpId = null;
+      logOpen = false;
+      return;
+    }
+    if (session.op_id !== shownLogOpId) {
+      shownLogOpId = session.op_id;
+      logOpen = true;
+    }
+  });
+
   // -- sync item (same verbs + helpers as the header quick actions) ----------
 
   const VERB_LABELS: Record<SyncVerb, string> = {
@@ -117,11 +162,22 @@
     return kind === "fetch" || kind === "pull" || kind === "push";
   }
 
-  /** Sync ops already running for the active repo (any entry point). */
+  /**
+   * Sync ops already running for the active repo (any entry point), except
+   * a background auto-fetch: it must not put the sync control into a busy
+   * state. The middle op row still shows it (with its cancel), and the
+   * backend queue serializes anything the user starts behind it.
+   */
   const syncOps = $derived(
     repoId === null
       ? []
-      : opStore.opsFor(repoId).filter((op) => isSyncVerb(op.kind)),
+      : opStore
+          .opsFor(repoId)
+          .filter(
+            (op) =>
+              isSyncVerb(op.kind) &&
+              !(op.kind === "fetch" && autofetch.isFetching(repoId)),
+          ),
   );
 
   /**
@@ -272,11 +328,22 @@
   });
 </script>
 
-<footer
-  class="status-bar flex h-6 min-w-0 flex-none items-center gap-ui-3 overflow-hidden border-t border-border bg-muted/80 px-ui-2 text-ui-micro text-muted-foreground"
-  aria-label="Status bar"
-  aria-busy={opRows.length > 0 || aiRows.length > 0}
->
+<!-- The hook-output overlay is a sibling of the footer, not a child: the
+     footer's overflow-hidden would clip it. Anchored to this wrapper's top
+     edge, it floats over the workspace without shifting anything. -->
+<div class="status-bar-root relative min-w-0 flex-none">
+  {#if logOpen && logSession !== null && repoId !== null}
+    <div
+      class="op-log-layer absolute inset-x-0 bottom-full z-10 shadow-md [&>section]:border-b-0"
+    >
+      <OpLogStrip {repoId} />
+    </div>
+  {/if}
+  <footer
+    class="status-bar flex h-6 min-w-0 flex-none items-center gap-ui-3 overflow-hidden border-t border-border bg-muted/80 px-ui-2 text-ui-micro text-muted-foreground"
+    aria-label="Status bar"
+    aria-busy={opRows.length > 0 || aiRows.length > 0}
+  >
   <!-- Left: the active repo's branch / sync / changes. -->
   <div class="repo-state flex min-w-0 flex-none items-center gap-ui-1">
     {#if branchLabel !== null}
@@ -316,11 +383,7 @@
             class="sync-icon inline-flex size-3.5 flex-none items-center justify-center"
             aria-hidden="true"
           >
-            {#if runningVerb !== null}
-              <Spinner class="size-3" role="presentation" aria-hidden="true" />
-            {:else}
-              <Icon icon={iconSync} size={14} />
-            {/if}
+            <Icon icon={iconSync} size={14} />
           </span>
           {#if behind > 0 && runningVerb === null}
             <span
@@ -399,7 +462,6 @@
             class="inline-flex flex-none items-center gap-ui-2 pr-ui-2"
             role="status"
           >
-            <Spinner class="size-3" role="presentation" aria-hidden="true" />
             Cancelling…
           </span>
         {:else}
@@ -496,8 +558,40 @@
     {/each}
   </div>
 
-  <!-- Right: repo state + cadence + device connection. -->
+  <!-- Right: hook output + repo state + cadence + device connection. -->
   <div class="extras flex flex-none items-center gap-ui-2 pr-ui-2">
+    {#if logSession !== null}
+      <Hint label={logOpen ? `Hide ${logTitle}` : `Show ${logTitle}`}>
+        {#snippet child({ props })}
+          <button
+            {...props}
+            class="sb-log inline-flex h-full flex-none items-center gap-ui-2 px-ui-2 transition-colors duration-[120ms] hover:bg-accent hover:text-accent-foreground focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary"
+            type="button"
+            aria-label={logOpen ? `Hide ${logTitle}` : `Show ${logTitle}`}
+            aria-expanded={logOpen}
+            aria-busy={!logSession.done}
+            onclick={() => (logOpen = !logOpen)}
+          >
+            <span
+              class="inline-flex size-3.5 flex-none items-center justify-center"
+              class:text-primary={logSession.done && logSession.error === null}
+              class:text-destructive={logFailed}
+              aria-hidden="true"
+            >
+              {#if logFailed}
+                <Icon icon={iconAlert} size={12} />
+              {:else if logSession.done}
+                <Icon icon={iconDone} size={12} />
+              {:else}
+                <Icon icon={iconOutput} size={12} />
+              {/if}
+            </span>
+            <span class="truncate">{logTitle}</span>
+            <span class="flex-none tabular-nums">{logCount}</span>
+          </button>
+        {/snippet}
+      </Hint>
+    {/if}
     {#if opStateLabel !== null}
       <span
         class="sb-state inline-flex flex-none items-center gap-ui-2 rounded-full bg-destructive/15 px-ui-3 py-px font-medium text-destructive"
@@ -559,3 +653,4 @@
     {/if}
   </div>
 </footer>
+</div>

@@ -7,16 +7,16 @@
    * dismissed. The strip surfaces the output across the workspace (it is
    * not tied to the panel that started the op).
    *
-   * In-flight op progress deliberately does NOT render here — it moved to
-   * the app-wide `StatusBar`, because a strip row mounting/unmounting in
-   * flow below the header shifted the whole workspace on every auto-fetch
-   * tick. Ops that emit no hook lines never mount this strip at all.
+   * In-flight op progress deliberately does NOT render here — the app-wide
+   * `StatusBar` is the single loader surface. `StatusBar` also mounts this
+   * strip in a fixed overlay above itself, so hook output appears next to
+   * the operation that produced it without shifting the workspace in flow.
+   * Ops that emit no hook lines never mount this strip at all.
    */
   import { clearOpLogs, opLogsFor } from "$lib/stores/ops.svelte";
   import Icon from "$lib/components/icons/Icon.svelte";
   import { Button } from "$lib/components/ui/button/index.js";
   import { Hint } from "$lib/components/ui/tooltip/index.js";
-  import { Spinner } from "$lib/components/ui/spinner/index.js";
   import { appIcon } from "$lib/components/icons/library.svelte";
 
   let { repoId }: { repoId: string } = $props();
@@ -69,15 +69,14 @@
           : ''} {session.done && session.error !== null ? 'text-destructive' : ''}"
         aria-hidden="true"
       >
-        {#if !session.done}
-          <Spinner class="size-3" role="presentation" aria-hidden="true" />
-        {:else if session.error}
+        {#if session.error}
           <Icon icon={iconError} size={14} />
-        {:else}
+        {:else if session.done}
           <Icon icon={iconDone} size={14} />
+        {:else}
+          <Icon icon={iconOutput} size={14} />
         {/if}
       </span>
-      <Icon icon={iconOutput} size={14} />
       <span class="title shrink-0 font-semibold text-foreground">{title}</span>
       <span class="meta shrink-0 text-ui-micro text-muted-foreground tabular-nums"
         >{countLabel}</span

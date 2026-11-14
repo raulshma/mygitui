@@ -135,6 +135,14 @@ export class AutofetchStore {
   /** Interval minutes per repo root (0 = off); persisted on change. */
   config: Record<string, number> = $state({});
 
+  /**
+   * In-flight background fetches per repo (1 = running). Reactive so the
+   * header/status-bar sync controls can tell an auto-fetch apart from an
+   * op the user started: a background tick must not make those controls
+   * look busy (let alone lock them out for its duration).
+   */
+  fetching: Record<RepoId, number> = $state({});
+
   #storage: StorageLike | null;
   #scheduler: Scheduler;
   #running = new Map<RepoId, RunningFetch>();
@@ -178,6 +186,26 @@ export class AutofetchStore {
   /** True when auto-fetch is currently running for the repo. */
   isRunning(repoId: RepoId): boolean {
     return this.#running.has(repoId);
+  }
+
+  /** True while a background fetch started by this store is in flight. */
+  isFetching(repoId: RepoId): boolean {
+    return (this.fetching[repoId] ?? 0) > 0;
+  }
+
+  #beginFetch(repoId: RepoId): void {
+    this.fetching = {
+      ...this.fetching,
+      [repoId]: (this.fetching[repoId] ?? 0) + 1,
+    };
+  }
+
+  #endFetch(repoId: RepoId): void {
+    const count = (this.fetching[repoId] ?? 0) - 1;
+    const next = { ...this.fetching };
+    if (count > 0) next[repoId] = count;
+    else delete next[repoId];
+    this.fetching = next;
   }
 
   /**
@@ -224,6 +252,7 @@ export class AutofetchStore {
     if (this.getInterval(root) <= 0 || this.#running.has(repoId)) return;
 
     const tick = (): void => {
+      this.#beginFetch(repoId);
       fetchRepo(repoId, { remote, prune: true, refs: [], depth: null })
         .then((stats: NetStats) => {
           // A stop during the fetch must not toast for a closed repo.
@@ -241,7 +270,8 @@ export class AutofetchStore {
             `Auto-fetch failed: ${describeError(err)}`,
             { kind: "error" },
           );
-        });
+        })
+        .finally(() => this.#endFetch(repoId));
     };
 
     const timer = this.#scheduler.setInterval(tick, minutes * 60_000);

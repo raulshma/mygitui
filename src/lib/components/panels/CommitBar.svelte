@@ -33,7 +33,6 @@
   import { toast } from "$lib/toast";
   import { showMenuAtElement } from "$lib/components/menu/contextMenuStore.svelte";
   import { Button } from "$lib/components/ui/button/index.js";
-  import { Spinner } from "$lib/components/ui/spinner/index.js";
   import { Input } from "$lib/components/ui/input/index.js";
   import { Textarea } from "$lib/components/ui/textarea/index.js";
   import { Hint } from "$lib/components/ui/tooltip/index.js";
@@ -548,13 +547,8 @@ ${m.body}` : m.subject;
                 disabled={!canCommitPush}
                 onclick={() => void doCommit(true)}
               >
-                {#if pushing || pushBusy}
-                  <Spinner class="size-3" role="presentation" aria-hidden="true" />
-                  <span>Pushing…</span>
-                {:else}
-                  <Icon icon={iconPush} size={14} />
-                  <span>Commit &amp; Push</span>
-                {/if}
+                <Icon icon={iconPush} size={14} />
+                <span>{pushing ? "Pushing…" : "Commit & Push"}</span>
               </Button>
             {/snippet}
           </Hint>
@@ -569,7 +563,6 @@ ${m.body}` : m.subject;
                 disabled={!canCommit}
               >
                 {#if commitBusy || committing}
-                  <Spinner class="size-3" role="presentation" aria-hidden="true" />
                   <span>Committing…</span>
                 {:else}
                   <span>Commit</span>
