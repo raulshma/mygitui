@@ -473,7 +473,11 @@ impl TempRepo {
         repo.config()
             .and_then(|mut c| {
                 c.set_str("user.name", "Engine Test")?;
-                c.set_str("user.email", "engine@test.local")
+                c.set_str("user.email", "engine@test.local")?;
+                // Deterministic workdir bytes: the machine-wide core.autocrlf
+                // would otherwise rewrite checked-out files to CRLF (Windows
+                // runners), breaking byte-exact assertions on checkout.
+                c.set_bool("core.autocrlf", false)
             })
             .expect("configure identity");
         TempRepo { _dir: dir, repo }
