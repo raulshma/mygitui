@@ -362,7 +362,25 @@
   /** Render window: the canvas's reported window when live, else our own. */
   const range = $derived(sync.renderWindow());
 
+  /**
+   * The last user-scrolled position as the top row's commit sha + scrollTop —
+   * the anchor a stream restart restores the viewport from (see
+   * `pendingScrollRestore`). Captured at scroll time because `#beginStream`
+   * wipes the pages before the restart effect runs: reading them there would
+   * see an empty log. The `total` guard skips the scroll event a restart's
+   * collapsed spacer fires (scrollTop clamping to 0), which would otherwise
+   * overwrite the anchor with the wiped log.
+   */
+  let lastScroll = { sha: null as string | null, top: 0 };
+
   function onScroll(): void {
+    if (total > 0) {
+      const top = scrollerEl?.scrollTop ?? 0;
+      lastScroll = {
+        sha: commits[Math.floor(top / ROW_HEIGHT)]?.sha ?? null,
+        top,
+      };
+    }
     if (sync.onListScroll().end >= total) store.loadMore();
   }
 
@@ -394,6 +412,13 @@
 
   /** Scroll to the restored selection once its commit lands in the log. */
   let restoreScroll = false;
+
+  /**
+   * Armed by the restart effect with the pre-restart top row's commit (see
+   * `lastScroll`); the effect below jumps back to it once the re-walked log
+   * delivers that commit. Null when there is nothing to restore.
+   */
+  let pendingScrollRestore = $state<{ sha: string } | null>(null);
 
   /**
    * Parked `history-select-commit` request whose commit has not reached the
@@ -432,6 +457,11 @@
         resetTo = closedDialog();
         checkoutAt = closedDialog();
         pendingReveal = null;
+        // A different repo's scroll anchor is meaningless: drop it before
+        // the restart effect below arms a restore from it (same flush,
+        // declaration order).
+        lastScroll = { sha: null, top: 0 };
+        pendingScrollRestore = null;
         sync.reset();
       });
     }
@@ -458,8 +488,21 @@
     // selection re-resolves and re-scrolls as its commit lands (the
     // restore effects below). Untracked reset: the ports read the bound
     // elements, which must not enter this effect's dependencies.
+    //
+    // The reset also collapses the spacer (the store wiped its pages), so
+    // the browser clamps scrollTop to 0 — arm the viewport restore from the
+    // pre-restart anchor (`lastScroll`, captured at scroll time) so a
+    // background refresh lands the user back where they were instead of at
+    // the top. At the very top there is nothing to preserve, and a pending
+    // persisted selection owns the scroll instead.
     void store.restartEpoch;
-    untrack(() => sync.reset());
+    untrack(() => {
+      sync.reset();
+      pendingScrollRestore =
+        lastScroll.sha !== null && lastScroll.top > 0 && !restoreScroll
+          ? { sha: lastScroll.sha }
+          : null;
+    });
   });
 
   /**
@@ -493,6 +536,56 @@
       restoreScroll = false;
       // The center editor may still show the vanished commit's detail.
       if (sidebar) onSelectCommit?.(null);
+    }
+  });
+
+  /**
+   * Restores the viewport across a stream restart. `#beginStream` wipes the
+   * pages on every restart (watcher refresh, abort-restart, filter edit) —
+   * the spacer collapses, scrollTop clamps to 0 and the user is thrown to
+   * the top mid-browse, which on an active repo (background fetches,
+   * worktree churn re-triggering the walk) reads as "the list keeps
+   * resetting itself". The anchor commit usually sits on the re-walked
+   * log's first pages (the walk is newest-first and the tip rarely moves),
+   * so the jump lands within the already-released window.
+   *
+   * Deliberately NO eager page release (`resolveRestoredSelection`'s
+   * reveal loop): a commit the natural window never reaches — deep in a
+   * huge log, or one the new filter excludes — just drops the restore when
+   * the stream exhausts (the pre-fix behavior, top) instead of pulling the
+   * whole history into the index for it. A pending parent navigation
+   * (`revealSha`) owns the scroll instead, as does any scroll the user
+   * managed during the gap; a scroller measuring 0px (panel hidden behind
+   * a keep-alive host) drops it too — the value would not stick anyway.
+   */
+  $effect(() => {
+    const pending = pendingScrollRestore;
+    if (!pending) return;
+    if (revealSha) {
+      pendingScrollRestore = null;
+      return;
+    }
+    const el = scrollerEl;
+    if (!el || el.clientHeight === 0) {
+      pendingScrollRestore = null;
+      return;
+    }
+    // A non-zero scrollTop with rows on screen means the user scrolled
+    // after the data landed — their position wins. During the wipe gap
+    // (total === 0) the collapsed spacer pins scrollTop to 0, so this
+    // cannot misfire on the arming flush.
+    if (total > 0 && el.scrollTop > 0) {
+      pendingScrollRestore = null;
+      return;
+    }
+    void store.flat; // re-run as pages release into the index
+    const idx = store.indexOfSha(pending.sha);
+    if (idx >= 0) {
+      pendingScrollRestore = null;
+      el.scrollTop = idx * ROW_HEIGHT;
+      sync.onListScroll();
+    } else if (!store.loading && !store.hasMore) {
+      pendingScrollRestore = null;
     }
   });
 

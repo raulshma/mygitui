@@ -20,6 +20,9 @@
  *   - Event shims: `plugin:event|listen` / `unlisten` resolve with ids and
  *     register the (transformCallback-registered) handler; tests can push
  *     events with `window.__TAURI_MOCK__.emit(event, payload)`.
+ *   - `window.__TAURI_MOCK__.commands` — the live command-mock map; the
+ *     handle's `setCommand` replaces entries mid-test (init-script options
+ *     are serialized at install, so Node-side mutations never reach it).
  *
  * Streaming commands (`*_stream` taking a `Channel`) deliver one empty page
  * through the channel (`{ index, message }`) and resolve.
@@ -66,6 +69,14 @@ export async function installTauriMock(
         { event, payload },
       );
     },
+    async setCommand(command: string, value: CommandMock): Promise<void> {
+      await page.evaluate(
+        ({ command: cmd, value: v }) => {
+          window.__TAURI_MOCK__.commands[cmd] = v;
+        },
+        { command, value },
+      );
+    },
   };
 }
 
@@ -77,6 +88,13 @@ export interface TauriMockHandle {
   callsOf(command: string): Promise<Array<Record<string, unknown>>>;
   /** Delivers a backend event to registered listeners. */
   emit(event: string, payload: unknown): Promise<void>;
+  /**
+   * Replaces one command's mock value IN THE PAGE. Init-script options are
+   * serialized at install time, so mutating the Node-side object does
+   * nothing — tests that change what a command returns mid-run (a restarted
+   * log stream serving a different page) go through here.
+   */
+  setCommand(command: string, value: CommandMock): Promise<void>;
 }
 
 /** Collects console errors + page errors; use with `expect(errors).toEqual([])`. */
@@ -660,6 +678,7 @@ function BOOTSTRAP(options: TauriMockOptions): void {
   };
   (window as unknown as Record<string, unknown>).__TAURI_MOCK__ = {
     calls,
+    commands: commandMocks,
     emit(event: string, payload: unknown): void {
       for (const { event: name, handler } of [...listeners.values()]) {
         if (name !== event) continue;
