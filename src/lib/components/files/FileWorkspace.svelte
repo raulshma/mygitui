@@ -44,10 +44,23 @@
     meta: FileMeta | null;
   }
 
+  /**
+   * Capture API the workspace attaches for its owner (RepoView): the
+   * pull-based half of workspace-session persistence — dirty editor doc
+   * text is read at repo-switch time, while the editors are still mounted.
+   */
+  export interface WorkspaceCapture {
+    /** Current CodeMirror doc text per dirty open file (buffer capture). */
+    dirtyDocs(): Record<string, string>;
+  }
+
   /** Editor API captured via bind:this per open file. */
   interface EditorApi {
     save(): Promise<boolean>;
     reload(): Promise<void>;
+    getDocText(): string;
+    getScrollTop(): number;
+    applyDesiredScroll(): void;
   }
 
   let {
@@ -56,6 +69,10 @@
     openFiles,
     active = null,
     visible = true,
+    initialDocs = null,
+    initialScrolls = null,
+    onScroll = undefined,
+    attach = undefined,
     onActivate,
     onClose,
     onMutated = undefined,
@@ -68,6 +85,18 @@
     active: string | null;
     /** False while another center view covers a retained workspace. */
     visible?: boolean;
+    /**
+     * Workspace-session restore seed: dirty-buffer doc text per path,
+     * applied by an editor's FIRST mount (null = plain open). Consumed by
+     * FileEditor at init; cleared by the owner once the restore settles.
+     */
+    initialDocs?: Record<string, string> | null;
+    /** Saved scroll positions per `file:<path>` key (session restore). */
+    initialScrolls?: Record<string, number> | null;
+    /** Scroll capture from an editor (event-driven, rAF-coalesced). */
+    onScroll?: (path: string, scrollTop: number) => void;
+    /** Attaches the capture API (null on unmount) for switch-time saves. */
+    attach?: (api: WorkspaceCapture | null) => void;
     onActivate: (path: string) => void;
     onClose: (path: string) => void;
     /** After a successful save (status refresh). */
@@ -90,6 +119,36 @@
     for (const key of Object.keys(editorRefs)) {
       if (!alive.has(key)) delete editorRefs[key];
     }
+  });
+
+  // Attach the switch-time capture API for the owner (RepoView saves dirty
+  // buffers while the old editors are still mounted); detach on unmount.
+  $effect(() => {
+    attach?.({
+      dirtyDocs: () => {
+        const out: Record<string, string> = {};
+        for (const file of openFiles) {
+          if (!file.dirty) continue;
+          const text = editorRefs[file.path]?.getDocText();
+          if (typeof text === "string") out[file.path] = text;
+        }
+        return out;
+      },
+    });
+    return () => attach?.(null);
+  });
+
+  // A hidden pane (display:none) loses its scroll offset, and a restored
+  // editor mounts clamped to 0 while its tab is inactive. When a tab is
+  // (re)activated, re-apply the editor's remembered scroll — rAF so the
+  // class flip has laid out and clientHeight is real again.
+  $effect(() => {
+    const path = active;
+    if (path === null) return;
+    const editor = editorRefs[path];
+    if (!editor) return;
+    const raf = requestAnimationFrame(() => editor.applyDesiredScroll());
+    return () => cancelAnimationFrame(raf);
   });
 
   // --- Close flow (dirty guard) --------------------------------------------
@@ -376,8 +435,13 @@
             bind:dirty={file.dirty}
             onSaved={onMutated}
             previewMode={previewModeFor(file.path)}
+            initialDoc={initialDocs?.[file.path]}
+            initialScrollTop={initialScrolls?.[`file:${file.path}`]}
+            onScroll={(top) => onScroll?.(file.path, top)}
           />
         {:else}
+          <!-- Image/binary previews render centered cards in an overflow-auto
+               pane; their (rare) scroll offset is not worth persisting. -->
           <FilePreview {repoId} {root} path={file.path} meta={file.meta} />
         {/if}
       </div>

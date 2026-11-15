@@ -88,7 +88,10 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
     statFile,
     streamDiff,
   } from "$lib/ipc/client";
-  import type { OpenFileInfo } from "$lib/components/files/FileWorkspace.svelte";
+  import type {
+    OpenFileInfo,
+    WorkspaceCapture,
+  } from "$lib/components/files/FileWorkspace.svelte";
   import StatusPanel from "$lib/components/panels/StatusPanel.svelte";
   import ConflictEditor from "$lib/components/merge/ConflictEditor.svelte";
   import BisectBanner from "$lib/components/bisect/BisectBanner.svelte";
@@ -156,6 +159,13 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
     tabStore,
   } from "$lib/stores/tabs.svelte";
   import { loadHistoryPrefs } from "$lib/stores/historyPrefs";
+  import {
+    diffScrollKey,
+    fileScrollKey,
+    workspaceSession,
+    type SessionCenterKind,
+    type StoredDiffRef,
+  } from "$lib/stores/workspaceSession.svelte";
   import { railPins } from "$lib/stores/railPins.svelte";
   import { startAuthEvents, startOpsEvents } from "$lib/stores/ops.svelte";
   import { autofetch } from "$lib/stores/autofetch.svelte";
@@ -261,12 +271,94 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
   /** Quick-open (Ctrl+P) overlay visibility. */
   let quickOpenVisible = $state(false);
 
+  // --- Workspace session (per-root persistence across switches/relaunch) -----
+
+  // The session store is the durable home of the workspace state below:
+  // every mutation point mirrors into it (`syncSession`), the repo-switch
+  // effect restores from it. The fields here stay the RUNTIME truth — the
+  // session only ever observes them.
+
+  /** Root the switch effect last saved/restored for (null = mount). */
+  let lastSessionRoot: string | null = null;
+  /** Guards a restore against a rapid A→B→A switch (stale continuation). */
+  let restoreToken = 0;
+  /** FileWorkspace capture API (dirty doc text), attached by the panel. */
+  let workspaceCapture: WorkspaceCapture | null = null;
+  /**
+   * Editor seed for the restore window: dirty-buffer doc text (memory only)
+   * + saved scroll positions, keyed `file:<path>`, consumed by the
+   * FileEditors the restore mounts; cleared once they all loaded.
+   */
+  let editorSeed = $state<{
+    docs: Record<string, string>;
+    scrolls: Record<string, number>;
+  } | null>(null);
+  /** Stored diff whose entry waits for the new repo's status to land. */
+  let pendingDiffRestore = $state<StoredDiffRef | null>(null);
+  /** Scroll the next-mounted DiffViewer restores (null = top, as always). */
+  let diffScrollSeed = $state<number | null>(null);
+
+  /**
+   * Mirrors the live workspace state into the current root's session. One
+   * write-through for every mutation point, so the session can never drift
+   * from the runtime state it restores. Transient center views (compare,
+   * run logs) record as "empty": they need not persist.
+   */
+  function syncSession(): void {
+    if (root === "") return;
+    // Transient center views (compare, run logs) record as "empty": they
+    // need not persist, and coming back lands on an empty editor instead
+    // of resurrecting a stale one.
+    const centerKind: SessionCenterKind =
+      center.kind === "files"
+        ? "files"
+        : center.kind === "diff"
+          ? "diff"
+          : center.kind === "commit"
+            ? "commit"
+            : "empty";
+    workspaceSession.patch(root, {
+      openFiles: openFiles.map((f) => f.path),
+      activeFile,
+      centerKind,
+      diffs:
+        center.kind === "diff"
+          ? [{ path: center.entry.path, scope: center.scope }]
+          : [],
+      activeDiffPath: center.kind === "diff" ? center.entry.path : null,
+      commitSha: center.kind === "commit" ? center.commit.sha : null,
+    });
+    workspaceSession.setCommit(
+      root,
+      center.kind === "commit" ? center.commit : null,
+    );
+  }
+
+  /** Scroll capture from the file workspace (event-driven, session write). */
+  function onFileScrollCapture(path: string, top: number): void {
+    if (root === "") return;
+    workspaceSession.setScroll(root, fileScrollKey(path), top);
+  }
+
+  /** Scroll capture from the open working-copy diff. */
+  function onDiffScrollCapture(top: number): void {
+    const path = diffEntry?.path;
+    if (path === undefined || root === "") return;
+    workspaceSession.setScroll(root, diffScrollKey(path), top);
+  }
+
+  /** Stable attach callback: the workspace registers its capture API once. */
+  function attachCapture(api: WorkspaceCapture | null): void {
+    workspaceCapture = api;
+  }
+
   /** Open (or focus) a workdir file in the center workspace. */
   async function openWorkdirFile(path: string): Promise<void> {
     const existing = openFiles.find((f) => f.path === path);
     if (existing) {
       activeFile = path;
       center = { kind: "files" };
+      syncSession();
       return;
     }
     const file: OpenFileInfo = { path, dirty: false, meta: null };
@@ -274,6 +366,7 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
     activeFile = path;
     // Single mode transition: the workspace replaces whatever was showing.
     center = { kind: "files" };
+    syncSession();
     try {
       const meta: FileMeta = await statFile(repoId, path);
       // Write through the proxied array: the local `file` is the raw
@@ -298,6 +391,10 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
     if (openFiles.length === 0 && center.kind === "files") {
       center = EMPTY_PANE;
     }
+    // Drop the tab's saved scroll + buffer with it — a later restore must
+    // not resurrect a file the user dismissed.
+    if (root !== "") workspaceSession.forgetFile(root, path);
+    syncSession();
   }
 
   function workdirDiffFor(path: string): void {
@@ -1001,9 +1098,27 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
     return () => terminals.dispose(latestRepoId);
   });
 
-  // Reset view state when switching repos.
+  // Reset view state when switching repos — then restore the new root's
+  // persisted workspace session (open files, active tab, center pane, diff,
+  // scroll positions). The wipe itself stays: open tabs are keyed by workdir
+  // path only, and keeping repo A's editors mounted across a switch would
+  // run repo A's paths against repo B's IPC (read/write the wrong repo's
+  // files) — restore re-opens everything through the normal open paths, so
+  // every IPC call targets the NEW repoId.
   $effect(() => {
     void repoId;
+    void root;
+    // Capture the outgoing repo's dirty buffers while their editors are
+    // still mounted (the wipe below unmounts them). Plain-variable read:
+    // the capture API must not become an effect dependency.
+    const previousRoot = lastSessionRoot;
+    lastSessionRoot = root;
+    const capture = workspaceCapture;
+    if (previousRoot !== null && previousRoot !== root && capture !== null) {
+      for (const [path, text] of Object.entries(capture.dirtyDocs())) {
+        workspaceSession.setBuffer(previousRoot, path, text);
+      }
+    }
     selected = [];
     center = EMPTY_PANE;
     diffFiles = [];
@@ -1016,11 +1131,104 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
     // from repo A would suppress repo B's CommitBar until the next status
     // snapshot landed.
     hasSubmodules = false;
-    // The file workspace is repo-scoped: open tabs are keyed by workdir
-    // path only, and keeping them across a switch would run repo A's
-    // paths against repo B's IPC (read/write the wrong repo's files).
     openFiles = [];
     activeFile = null;
+    pendingDiffRestore = null;
+    diffScrollSeed = null;
+    editorSeed = null;
+    // Untracked: the restore reads reactive state (status, openFiles) whose
+    // changes must not re-trigger this wipe.
+    untrack(() => void restoreWorkspaceSession(root));
+  });
+
+  /**
+   * Re-opens the new root's persisted workspace after the wipe: file tabs
+   * go through {@link openWorkdirFile} (stat IPC targeted at the new
+   * repoId), then the active tab, the center pane and the open diff. A
+   * stored diff resolves its StatusEntry against the current status —
+   * deferred via {@link pendingDiffRestore} when the snapshot has not
+   * landed yet; a path whose change is gone is skipped silently. A commit
+   * detail restores from the in-memory commit object (in-app switch); on a
+   * cold launch there is none, and HistoryView's persisted-selection
+   * resolve re-opens it through the "restore" select, which the session's
+   * `centerKind: "commit"` now permits.
+   */
+  async function restoreWorkspaceSession(targetRoot: string): Promise<void> {
+    const session = workspaceSession.get(targetRoot);
+    if (session === null) return;
+    const token = ++restoreToken;
+    const paths = session.openFiles;
+    if (paths.length > 0) {
+      // Editor seed for the FileEditors this restore mounts: dirty-buffer
+      // text (drained — it must not re-apply after a later close/reopen)
+      // and the saved per-file scroll positions.
+      const scrolls: Record<string, number> = {};
+      for (const [key, top] of Object.entries(session.scrolls)) {
+        if (key.startsWith("file:")) scrolls[key] = top;
+      }
+      editorSeed = { docs: workspaceSession.takeBuffers(targetRoot), scrolls };
+      await Promise.all(paths.map((path) => openWorkdirFile(path)));
+      if (token !== restoreToken) return;
+      editorSeed = null;
+    }
+    if (
+      session.activeFile !== null &&
+      openFiles.some((f) => f.path === session.activeFile)
+    ) {
+      activeFile = session.activeFile;
+      syncSession();
+    }
+    if (session.centerKind === "diff" && session.activeDiffPath !== null) {
+      const path = session.activeDiffPath;
+      const scope =
+        session.diffs.find((d) => d.path === path)?.scope ?? "unstaged";
+      const current = status;
+      if (current === null) {
+        // Status has not landed yet — resolve once it does (effect below).
+        pendingDiffRestore = { path, scope };
+      } else {
+        restoreDiffForEntry(current, { path, scope });
+      }
+    } else if (session.centerKind === "commit" && session.commitSha !== null) {
+      const memo = workspaceSession.commitFor(targetRoot);
+      if (memo !== null && memo.sha === session.commitSha) {
+        center = { kind: "commit", commit: memo };
+        syncSession();
+      }
+      // Cold launch: leave the center empty; HistoryView's resolve owns it.
+    }
+  }
+
+  /** Resolves a restored diff ref against a landed status and opens it. */
+  function restoreDiffForEntry(current: RepoStatus, ref: StoredDiffRef): void {
+    const entry = current.entries.find(
+      (e) => e.path === ref.path || e.old_path === ref.path,
+    );
+    if (!entry) return; // the change is gone (committed/discarded) — skip
+    const top = workspaceSession.get(root)?.scrolls[diffScrollKey(ref.path)];
+    void openDiff(entry, undefined, undefined, undefined, ref.scope, {
+      initialScroll: top,
+    });
+  }
+
+  /** Consumes a deferred diff restore once the new repo's status lands. */
+  $effect(() => {
+    const pending = pendingDiffRestore;
+    if (pending === null || status === null) return;
+    pendingDiffRestore = null;
+    const entry = status.entries.find(
+      (e) => e.path === pending.path || e.old_path === pending.path,
+    );
+    if (!entry) {
+      // The stored diff's change vanished while we were away: fall back to
+      // the normal empty-editor behavior (re-arm first-change auto-open).
+      if (center.kind === "empty") autoOpenedFor = null;
+      return;
+    }
+    const top = workspaceSession.get(root)?.scrolls[diffScrollKey(pending.path)];
+    void openDiff(entry, undefined, undefined, undefined, pending.scope, {
+      initialScroll: top,
+    });
   });
 
   // -- repo-switch transition --------------------------------------------------
@@ -1076,6 +1284,7 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
     diffLoading = false;
     diffError = null;
     center = { kind: "workflowRun", runId };
+    syncSession();
     focusPanel("diff");
   }
 
@@ -1086,6 +1295,7 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
     diffLoading = false;
     diffError = null;
     center = { kind: "actionRun", runId };
+    syncSession();
     focusPanel("diff");
   }
 
@@ -1106,12 +1316,17 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
     targetRoot?: string,
     targetRepoName?: string,
     scope: DiffScope = "unstaged",
+    /** Restore-only extras (a workspace session putting this diff back). */
+    opts?: { initialScroll?: number },
   ): Promise<void> {
     const token = ++diffToken;
     center = { kind: "diff", entry, scope };
     diffFiles = [];
     diffLoading = true;
     diffError = null;
+    // Consumed by the DiffViewer the stream remounts (null = top, as always).
+    diffScrollSeed = opts?.initialScroll ?? null;
+    syncSession();
     const { oldSide, newSide } = diffScopeSides(scope);
     diffRepoId = targetRepoId ?? repoId;
     diffRoot = targetRoot ?? root;
@@ -1176,6 +1391,9 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
   let autoOpenedFor = $state<string | null>(null);
   $effect(() => {
     if (autoOpenedFor === repoId || status === null) return;
+    // A workspace restore in flight owns the center: skip without pinning
+    // auto-open, so a restored diff whose path vanished can fall back to it.
+    if (pendingDiffRestore !== null) return;
     autoOpenedFor = repoId;
     const prefs = root ? loadHistoryPrefs(root) : null;
     if (prefs?.selectedSha) return;
@@ -1315,6 +1533,9 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
     diffRepoId = null;
     diffRoot = null;
     diffRepoName = null;
+    // Record the dismissal: the session's centerKind is what keeps a
+    // re-entry's HistoryView restore from re-opening what the user closed.
+    syncSession();
   }
 
   /** History sidebar: a commit row was selected (or restored on mount). */
@@ -1324,12 +1545,23 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
   ): void {
     // A restored selection only opens when nothing is in the editor: after
     // history is collapsed/reopened it must not replace an open file diff.
-    if (source === "restore" && center.kind !== "empty") {
-      return;
+    // AND the session must say the detail was open when we left this repo —
+    // that is what makes a dismissal stick across a repo switch (clearEditor
+    // recorded "empty") while a relaunch with the detail open brings it back.
+    if (source === "restore") {
+      const session = workspaceSession.get(root);
+      const allowed =
+        session !== null &&
+        session.centerKind === "commit" &&
+        (session.commitSha === null || session.commitSha === info?.sha);
+      if (!allowed || center.kind !== "empty") {
+        return;
+      }
     }
     if (info === null) {
       // Deselect: close a shown commit detail, leave other modes alone.
       if (center.kind === "commit") center = EMPTY_PANE;
+      syncSession();
       return;
     }
     center = { kind: "commit", commit: info };
@@ -1337,6 +1569,7 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
     diffFiles = [];
     diffLoading = false;
     diffError = null;
+    syncSession();
   }
 
   /** History sidebar: compare results open in the center editor. */
@@ -1346,6 +1579,7 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
     diffFiles = [];
     diffLoading = false;
     diffError = null;
+    syncSession();
   }
 
   function onHistoryActions(actions: HistoryCommitActions | null): void {
@@ -1579,11 +1813,19 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
     onEditEntry={diffRepoId === repoId && diffEntry
       ? () => void openWorkdirFile(diffEntry!.path)
       : undefined}
-    onActivateFile={(path) => (activeFile = path)}
+    onActivateFile={(path) => {
+      activeFile = path;
+      syncSession();
+    }}
     onCloseFile={closeWorkdirFile}
     onOpenDiffFile={workdirDiffFor}
     onOpenFirstChange={openFirstChange}
     onBrowseHistory={() => focusPanel("history")}
+    filesSeed={editorSeed}
+    onFileScroll={onFileScrollCapture}
+    attachWorkspace={attachCapture}
+    diffInitialScroll={diffScrollSeed}
+    onDiffScroll={onDiffScrollCapture}
   />
 {/snippet}
 {#snippet branchesPanel()}

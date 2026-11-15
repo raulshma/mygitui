@@ -22,6 +22,7 @@ import { onRepoChange } from "$lib/events/repoEvents";
 import { RecentRepoStore } from "$lib/entry/recentRepos";
 import { terminals } from "$lib/terminal/terminalStore.svelte";
 import { opStore } from "$lib/stores/ops.svelte";
+import { workspaceSession } from "$lib/stores/workspaceSession.svelte";
 import { evictFileIndex } from "$lib/components/files/QuickOpen.svelte";
 import { conflictsStore } from "$lib/components/panels/conflictsStore.svelte";
 import { statsStore } from "$lib/stats/statsStore.svelte";
@@ -496,11 +497,14 @@ export class TabStore {
    *
    * The same choke point drops the per-repo panel caches (conflicts
    * banner, stats heatmap, detected projects, the op-store hook log and
-   * completed-op history, and QuickOpen's file index) — they must not
-   * outlive their repo id and leak into the next open of the same path.
+   * completed-op history, QuickOpen's file index, and the persisted
+   * workspace session) — they must not outlive their repo and leak into
+   * the next open of the same path.
    */
   async closeTab(id: RepoId): Promise<void> {
     if (this.tabs.every((tab) => tab.id !== id)) return;
+    // Root lookup before any splice, for the root-keyed evictions below.
+    const closing = this.tabs.find((tab) => tab.id === id)!;
     terminals.dispose(id);
     conflictsStore.clear(id);
     statsStore.clear(id);
@@ -508,6 +512,7 @@ export class TabStore {
     opStore.clearLogs(id);
     opStore.clearHistory(id);
     evictFileIndex(id);
+    workspaceSession.forget(closing.root);
     try {
       await closeRepo(id);
     } catch (err) {

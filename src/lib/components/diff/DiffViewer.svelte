@@ -71,6 +71,8 @@
     hunkDiscard = false,
     /** Called after a successful hunk stage/unstage/discard. */
     onMutated = undefined,
+    initialScrollTop = undefined,
+    onScrollChange = undefined,
   }: {
     files: FileDiff[];
     mode?: DiffMode;
@@ -82,6 +84,14 @@
     hunkStaging?: "stage" | "unstage";
     hunkDiscard?: boolean;
     onMutated?: () => void;
+    /**
+     * Workspace-session restore: scroll position the FIRST landed files
+     * batch applies (overriding the reset-to-0 below, once). Read at
+     * mount; normal re-streams keep resetting to the top.
+     */
+    initialScrollTop?: number;
+    /** Scroll capture (rAF-coalesced with the visible-window update). */
+    onScrollChange?: (scrollTop: number) => void;
   } = $props();
 
   /** Rows rendered beyond the viewport (px, top and bottom). */
@@ -94,6 +104,15 @@
   let scrollTop = $state(0);
   let viewportH = $state(0);
   let viewportW = $state(0);
+
+  // svelte-ignore state_referenced_locally -- the restore seed is consumed
+  // once, at the first landed files batch after mount; later prop updates
+  // (a re-streamed diff) must keep the normal reset-to-top behavior.
+  /** Saved position waiting to be applied when the diff rows land. */
+  let pendingRestore: number | null =
+    typeof initialScrollTop === "number" && initialScrollTop > 0
+      ? initialScrollTop
+      : null;
 
   const collapsedSet = $derived(new Set(Object.keys(collapsed).filter((p) => collapsed[p])));
   const model = $derived(buildRowModel(files, mode, collapsedSet));
@@ -646,12 +665,23 @@
   }
 
   // A new diff (or a mode/wrap change — row indices and geometry shift)
-  // resets the scroll position and any selection.
+  // resets the scroll position and any selection — unless a workspace
+  // session restore is waiting: it consumes the reset once, when the rows
+  // have landed (re-asserted on the next frame, after the virtualizer's
+  // spacer has its final height).
   $effect(() => {
     void files;
     selectionCtl.clearLines();
-    scrollTop = 0;
-    viewportEl?.scrollTo(0, 0);
+    const restore = pendingRestore;
+    if (restore !== null && files.length > 0) {
+      pendingRestore = null;
+      scrollTop = restore;
+      viewportEl?.scrollTo(0, restore);
+      requestAnimationFrame(() => viewportEl?.scrollTo(0, restore));
+    } else {
+      scrollTop = 0;
+      viewportEl?.scrollTo(0, 0);
+    }
   });
 
   $effect(() => {
@@ -681,6 +711,7 @@
     scrollRaf = requestAnimationFrame(() => {
       scrollRaf = 0;
       scrollTop = viewportEl?.scrollTop ?? 0;
+      onScrollChange?.(scrollTop);
     });
   }
   $effect(() => {

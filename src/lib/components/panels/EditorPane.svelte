@@ -21,7 +21,10 @@
   import type { CommitInfo, FileDiff, RepoStatus, StatusEntry } from "$lib/ipc/types";
   import type { CompareResult } from "$lib/components/panels/compare";
   import type { HistoryCommitActions } from "$lib/components/panels/historySidebar";
-  import type { OpenFileInfo } from "$lib/components/files/FileWorkspace.svelte";
+  import type {
+    OpenFileInfo,
+    WorkspaceCapture,
+  } from "$lib/components/files/FileWorkspace.svelte";
   import { diffHunkActions, type DiffScope } from "$lib/components/panels/statusModel";
   import CommitDetail from "$lib/components/panels/CommitDetail.svelte";
   import DiffViewer from "$lib/components/diff/DiffViewer.svelte";
@@ -100,6 +103,11 @@
     onOpenFirstChange = undefined,
     onBrowseHistory = undefined,
     onScopeChange = undefined,
+    filesSeed = null,
+    onFileScroll = undefined,
+    attachWorkspace = undefined,
+    diffInitialScroll = null,
+    onDiffScroll = undefined,
   }: {
     repoId: string;
     /** Worktree root (bookmark persistence); empty in popouts. */
@@ -193,6 +201,23 @@
     onBrowseHistory?: () => void;
     /** Re-opens the working-copy diff at the other scope (staged ↔ unstaged). */
     onScopeChange?: (scope: DiffScope) => void;
+    /**
+     * Workspace-session restore seed for the file workspace: dirty-buffer
+     * doc text + saved scroll positions per `file:<path>` key, consumed by
+     * the editors the restore mounts (null = plain open, behave as always).
+     */
+    filesSeed?: {
+      docs: Record<string, string>;
+      scrolls: Record<string, number>;
+    } | null;
+    /** Scroll capture from an open file's editor (per-path, px). */
+    onFileScroll?: (path: string, scrollTop: number) => void;
+    /** Attaches the file workspace's capture API (dirty docs at switch time). */
+    attachWorkspace?: (api: WorkspaceCapture | null) => void;
+    /** Scroll the next-mounted working-copy diff restores (null = top). */
+    diffInitialScroll?: number | null;
+    /** Scroll capture from the open working-copy diff (px). */
+    onDiffScroll?: (scrollTop: number) => void;
   } = $props();
 
   /** Welcome summary: unique changed paths + upstream position. */
@@ -258,6 +283,10 @@
           openFiles={files.openFiles}
           active={files.active}
           visible={files.visible}
+          initialDocs={filesSeed?.docs ?? null}
+          initialScrolls={filesSeed?.scrolls ?? null}
+          onScroll={(path, top) => onFileScroll?.(path, top)}
+          attach={attachWorkspace}
           onActivate={(path) => onActivateFile?.(path)}
           onClose={(path) => onCloseFile?.(path)}
           onMutated={onMutated}
@@ -560,6 +589,8 @@
             hunkStaging={hunkActions.staging}
             hunkDiscard={hunkActions.discard}
             {onMutated}
+            initialScrollTop={diffInitialScroll ?? undefined}
+            onScrollChange={onDiffScroll}
           />
         {/if}
       </div>

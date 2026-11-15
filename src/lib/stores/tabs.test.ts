@@ -16,6 +16,7 @@ import { resetRepoEvents } from "$lib/events/repoEvents";
 import { RecentRepoStore, type StorageLike } from "$lib/entry/recentRepos";
 import { terminals } from "$lib/terminal/terminalStore.svelte";
 import { opStore } from "$lib/stores/ops.svelte";
+import { workspaceSession } from "$lib/stores/workspaceSession.svelte";
 import { conflictsStore } from "$lib/components/panels/conflictsStore.svelte";
 import { statsStore } from "$lib/stats/statsStore.svelte";
 import { projectsStore } from "$lib/stores/projects.svelte";
@@ -386,6 +387,7 @@ describe("closeTab cache hygiene", () => {
     const clearStats = vi.spyOn(statsStore, "clear");
     const clearProjects = vi.spyOn(projectsStore, "clear");
     const clearHistory = vi.spyOn(opStore, "clearHistory");
+    const forgetSession = vi.spyOn(workspaceSession, "forget");
 
     await store.closeTab("missing");
 
@@ -393,10 +395,28 @@ describe("closeTab cache hygiene", () => {
     expect(clearStats).not.toHaveBeenCalled();
     expect(clearProjects).not.toHaveBeenCalled();
     expect(clearHistory).not.toHaveBeenCalled();
+    expect(forgetSession).not.toHaveBeenCalled();
     clearConflicts.mockRestore();
     clearStats.mockRestore();
     clearProjects.mockRestore();
     clearHistory.mockRestore();
+    forgetSession.mockRestore();
+  });
+
+  it("forgets the closed repo's workspace session, keyed by root", async () => {
+    const store = freshStore();
+    mockOpenRepo.mockResolvedValue(ALPHA);
+    await store.openTab("C:/repos/alpha");
+    const forgetSession = vi.spyOn(workspaceSession, "forget");
+
+    try {
+      await store.closeTab("repo-1");
+
+      // Root-keyed (the session's stable cross-launch identity), not repo id.
+      expect(forgetSession).toHaveBeenCalledWith("C:/repos/alpha");
+    } finally {
+      forgetSession.mockRestore();
+    }
   });
 });
 

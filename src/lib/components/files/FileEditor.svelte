@@ -34,6 +34,9 @@
     dirty = $bindable(false),
     onSaved = undefined,
     previewMode = "off",
+    initialDoc = undefined,
+    initialScrollTop = undefined,
+    onScroll = undefined,
   }: {
     repoId: string;
     /** Workdir-relative path (forward slashes). */
@@ -45,6 +48,19 @@
     onSaved?: () => void;
     /** Markdown preview layout (parent decides; markdown files only). */
     previewMode?: "off" | "split" | "preview";
+    /**
+     * Workspace-session restore: buffer text this editor's FIRST mount
+     * shows instead of re-reading the file (the dirty flag flips with it).
+     * Read once at init — later changes must not re-seed.
+     */
+    initialDoc?: string;
+    /**
+     * Saved scroll position applied once the doc lands (session restore).
+     * Read once at init; afterwards the editor tracks its own scrolls.
+     */
+    initialScrollTop?: number;
+    /** Scroll capture (rAF-coalesced with the preview sync below). */
+    onScroll?: (scrollTop: number) => void;
   } = $props();
 
   let status = $state<"loading" | "ready" | "error">("loading");
@@ -66,6 +82,17 @@
   // svelte-ignore state_referenced_locally -- the mount-time stat is the
   // intended anchor; reload()/save() update this field explicitly.
   let currentMeta: FileMeta = meta;
+  // svelte-ignore state_referenced_locally -- restore seeds are consumed at
+  // mount time on purpose (see the props above); later prop updates must
+  // never re-seed a live editor.
+  /** Buffer text this editor's first mount shows (consumed once). */
+  let pendingInitialDoc: string | undefined = initialDoc;
+  // svelte-ignore state_referenced_locally -- same mount-time seed rule.
+  /** Remembered scroll (seed at mount; every scroll event keeps it fresh). */
+  let desiredScrollTop: number | null =
+    typeof initialScrollTop === "number" && initialScrollTop > 0
+      ? initialScrollTop
+      : null;
   /** Checkpoint taken for the current dirty session (one per session). */
   let checkpointed = false;
   /** Guards the async load against rapid path changes. */
@@ -244,11 +271,25 @@
       status = "loading";
       void (async () => {
         try {
+          const seed = pendingInitialDoc;
+          pendingInitialDoc = undefined;
+          if (seed !== undefined) {
+            // Workspace-session buffer restore: skip the read and show the
+            // captured text (the dirty flag flips with it).
+            const loaded = await loadCm();
+            if (token !== loadToken) return;
+            cm = loaded;
+            currentMeta = meta;
+            mount(hostEl, seed);
+            dirty = true;
+            status = "ready";
+            return;
+          }
           const [loaded, bytes] = await Promise.all([loadCm(), readFile(repoId, path)]);
           if (token !== loadToken) return;
           cm = loaded;
           currentMeta = meta;
-          mount(hostEl, bytes);
+          mount(hostEl, decoder.decode(bytes));
           status = "ready";
         } catch (err) {
           if (token !== loadToken) return;
@@ -279,7 +320,7 @@
     }
   }
 
-  /** Editor scroll → preview follow (rAF-coalesced, preview may be absent). */
+  /** Editor scroll → capture + preview follow (rAF-coalesced). */
   function onEditorScroll(): void {
     if (scrollRaf !== 0) return;
     scrollRaf = requestAnimationFrame(() => {
@@ -292,7 +333,12 @@
             state: { doc: { lineAt(pos: number): { number: number } } };
           }
         | null;
-      if (!v || !previewRef) return;
+      if (!v) return;
+      // Remember where the user is (re-applied when a hidden pane is
+      // re-shown) and report upward for session persistence.
+      desiredScrollTop = v.scrollDOM.scrollTop;
+      onScroll?.(v.scrollDOM.scrollTop);
+      if (!previewRef) return;
       const block = v.lineBlockAtHeight(v.scrollDOM.scrollTop);
       const line = v.state.doc.lineAt(block.from).number;
       previewRef.syncFromEditor(line - 1, v.defaultLineHeight);
@@ -314,10 +360,29 @@
     v.focus();
   }
 
-  /** Current editor text (read by the preview at render time). */
-  function getDocText(): string {
+  /** Current editor text (preview render + switch-time buffer capture). */
+  export function getDocText(): string {
     const v = view as { state: { doc: { toString(): string } } } | null;
     return v === null ? "" : v.state.doc.toString();
+  }
+
+  /** Current editor scroll offset (workspace-session capture). */
+  export function getScrollTop(): number {
+    const v = view as { scrollDOM: { scrollTop: number } } | null;
+    return v === null ? 0 : v.scrollDOM.scrollTop;
+  }
+
+  /**
+   * Re-applies the remembered scroll position (session restore, or a pane
+   * coming back from display:none — rAF so the DOM has laid out).
+   */
+  export function applyDesiredScroll(): void {
+    if (desiredScrollTop === null) return;
+    const target = desiredScrollTop;
+    requestAnimationFrame(() => {
+      const v = view as { scrollDOM: HTMLElement } | null;
+      if (v) v.scrollDOM.scrollTop = target;
+    });
   }
 
   // Re-measure CM when the preview toggle changes the editor column width
@@ -329,13 +394,12 @@
     }
   });
 
-  function mount(hostEl: HTMLDivElement | undefined, bytes: Uint8Array): void {
+  function mount(hostEl: HTMLDivElement | undefined, doc: string): void {
     if (!hostEl || !cm) return;
     destroyView();
     const c = cm;
     wrapCompartment = new c.Compartment();
     languageCompartment = new c.Compartment();
-    const doc = decoder.decode(bytes);
     const extensions: import("@codemirror/state").Extension[] = [
       c.basicSetup,
       ...buildTheme(c),
@@ -370,6 +434,10 @@
     view = nextView;
     docLength = nextView.state.doc.length;
     nextView.scrollDOM.addEventListener("scroll", onEditorScroll);
+    // Session restore / remembered position, applied once the view has laid
+    // out (rAF); a display:none pane clamps to 0 and FileWorkspace re-applies
+    // this when the tab becomes visible again.
+    applyDesiredScroll();
     // Lazy per-language grammar (async, swapped into its compartment).
     const desc = c.LanguageDescription.matchFilename(c.languages, basename(path));
     if (desc) {
@@ -444,7 +512,7 @@
       if (token !== loadToken) return;
       currentMeta = fresh;
       checkpointed = false;
-      mount(host, bytes);
+      mount(host, decoder.decode(bytes));
     } catch (err) {
       toast(String(err), { kind: "error" });
     }
