@@ -213,7 +213,7 @@ for (const destination of ["diff", "commit", "workflow"] as const) {
     await expect(page.locator(".workspace .dirty")).toBeVisible();
 
     if (destination === "diff") {
-      await page.getByRole("button", { name: "Diff", exact: true }).click();
+      await page.getByRole("button", { name: "Open diff" }).click();
       await expect(page.locator(".editor .file-editor .epath")).toHaveText("src/app.ts");
     } else if (destination === "commit") {
       await page.locator("#commit-row-0").click();

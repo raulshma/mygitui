@@ -188,7 +188,7 @@ test("files panel: browse tree, open a file in the workspace", async ({
   // 5. Diff cross-link routes through the status entries. README (now
   //    active) has no status entry, so reactivate the modified file first.
   await page.getByRole("tab", { name: "app.ts" }).click();
-  await page.getByRole("button", { name: "Diff", exact: true }).click();
+  await page.getByRole("button", { name: "Open diff" }).click();
   await expect(page.getByRole("button", { name: "Edit", exact: true })).toBeVisible();
 
   expect(tracked.errors, tracked.errors.join("\n")).toEqual([]);
