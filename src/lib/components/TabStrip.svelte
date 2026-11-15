@@ -51,6 +51,7 @@
   import { isTauri } from "$lib/entry/dragdrop";
   import { revealItemInDir } from "@tauri-apps/plugin-opener";
   import { describeError } from "$lib/errors";
+  import { copyText } from "$lib/clipboard";
   import { toast } from "$lib/toast";
   import Icon from "$lib/components/icons/Icon.svelte";
   import { appIcon } from "$lib/components/icons/library.svelte";
@@ -296,12 +297,7 @@
       {
         id: "copy-path",
         label: "Copy Repo Path",
-        // Inline clipboard like BranchSwitcher (no shared helper exists).
-        run: () =>
-          void navigator.clipboard.writeText(tab.root).then(
-            () => toast(`Copied ${tab.root}`),
-            () => toast("Could not access the clipboard", { kind: "error" }),
-          ),
+        run: () => void copyText(tab.root),
       },
       {
         id: "reveal",

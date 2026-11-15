@@ -12,6 +12,7 @@
    */
   import { branchCreate, branches, reflog } from "$lib/ipc/client";
   import type { BranchInfo, ReflogEntry } from "$lib/ipc/types";
+  import { copyText } from "$lib/clipboard";
   import { toast } from "$lib/toast";
   import { emitUiEvent } from "$lib/palette/events";
   import { showMenuAt, type MenuEntry } from "$lib/components/menu/contextMenuStore.svelte";
@@ -89,9 +90,7 @@
   }
 
   function copySha(entry: ReflogEntry): void {
-    void navigator.clipboard?.writeText(entry.new_sha).then(() =>
-      toast(`${shortSha(entry.new_sha)} copied`, { kind: "success" }),
-    );
+    void copyText(entry.new_sha, shortSha(entry.new_sha));
   }
 
   function entryMenu(event: MouseEvent, entry: ReflogEntry): void {

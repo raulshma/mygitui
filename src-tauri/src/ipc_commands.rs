@@ -1086,7 +1086,17 @@ pub async fn commit(
             Err(EngineError::Unsupported(reason)) => {
                 ctx.emit_progress(&format!("falling back to git CLI: {reason}"), None);
                 ctx.emit_log(&format!("using git CLI: {reason}"));
-                cli::commit_via_cli(&workdir, &options, &mut |line| ctx.emit_log(line))
+                // Cancellation-aware CLI path (see fetch/push): op_cancel
+                // flips the ctx token and the CLI's polled child wait
+                // kills a git stuck on a hung hook instead of wedging the
+                // mutation lane forever.
+                let cancel = ctx.cancel_token();
+                cli::commit_via_cli(
+                    &workdir,
+                    &options,
+                    &mut |line| ctx.emit_log(line),
+                    cancel.as_deref(),
+                )
             }
             Err(err) => Err(engine_err(err)),
         };
@@ -1871,8 +1881,16 @@ pub async fn push(
                 // (pre-push present). Stream the hook output into op-log.
                 Err(EngineError::Unsupported(reason)) => {
                     ctx.emit_log(&format!("using git CLI: {reason}"));
-                    cli::push_via_cli(&workdir, &options, &mut |line| ctx.emit_log(line))
-                        .map_err(EngineError::Invalid)
+                    // Cancel-aware CLI path (see git_stream): the polled
+                    // child wait kills a hung pre-push hook on op_cancel.
+                    let cancel = ctx.cancel_token();
+                    cli::push_via_cli(
+                        &workdir,
+                        &options,
+                        &mut |line| ctx.emit_log(line),
+                        cancel.as_deref(),
+                    )
+                    .map_err(EngineError::Invalid)
                 }
                 other => other,
             }
@@ -2321,7 +2339,9 @@ pub async fn repo_read_file(
 /// Largest file `repo_read_file` will ship over IPC. Anything bigger fails
 /// with a clear error instead of freezing the bridge (and the editor) on a
 /// multi-GB read; real source files are orders of magnitude smaller.
-const READ_FILE_MAX_BYTES: u64 = 32 * 1024 * 1024;
+/// Shared with the blame engine, which materializes the same file (see
+/// `engine::libgit2::blame`).
+pub(crate) const READ_FILE_MAX_BYTES: u64 = 32 * 1024 * 1024;
 
 /// Synchronous body of [`repo_read_file`] (validation + disk read). Path
 /// validation is shared with the workspace file-browser commands
@@ -4791,11 +4811,14 @@ use crate::forge::{
 };
 
 /// Detect `gh` on PATH and whether the user is authenticated (no repo).
+/// A panicking `spawn_blocking` task resolves as a real error (the FE's
+/// catch logs it and falls back to "unavailable") instead of the old
+/// `unwrap_or_default()`'s misleading `available: false`.
 #[tauri::command(rename_all = "snake_case")]
-pub async fn forge_status() -> ForgeStatus {
+pub async fn forge_status() -> Result<ForgeStatus, String> {
     tauri::async_runtime::spawn_blocking(forge::status_sync)
         .await
-        .unwrap_or_default()
+        .map_err(|e| format!("forge_status task failed: {e}"))
 }
 
 /// Owner/repo/branch context of one open repo (derived from the `origin`

@@ -391,7 +391,23 @@ impl OpQueue {
                     }
                     return;
                 }
-                let result = run(ctx);
+                // A panicking op must still resolve the caller's oneshot
+                // with a clear error and emit the failed done event — an
+                // unresolved promise hangs the awaiting command forever.
+                let result =
+                    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run(ctx))) {
+                        Ok(result) => result,
+                        Err(payload) => {
+                            tracing::error!(
+                                repo = %final_repo,
+                                op = %final_op,
+                                kind = %final_kind,
+                                panic = panic_message(&payload),
+                                "op panicked"
+                            );
+                            Err("internal error: op worker panicked".to_string())
+                        }
+                    };
                 // The registry entry dies with the op: a later cancel_op
                 // correctly reports "unknown/finished".
                 inner.cancels.lock().remove(&final_op);
@@ -443,7 +459,11 @@ impl OpQueue {
         if let Some(sender) = guard.as_ref() {
             return sender.clone();
         }
-        let tx = spawn_worker(&format!("op-queue-{}", self.inner.repo_id.0));
+        let tx = spawn_worker(
+            &format!("op-queue-{}", self.inner.repo_id.0),
+            self.inner.clone(),
+            Lane::Mutation,
+        );
         *guard = Some(tx.clone());
         tx
     }
@@ -454,25 +474,57 @@ impl OpQueue {
         if let Some(sender) = guard.as_ref() {
             return sender.clone();
         }
-        let tx = spawn_worker(&format!("op-read-{}", self.inner.repo_id.0));
+        let tx = spawn_worker(
+            &format!("op-read-{}", self.inner.repo_id.0),
+            self.inner.clone(),
+            Lane::Read,
+        );
         *guard = Some(tx.clone());
         tx
     }
 }
 
 /// Spawn one queue worker: drains until every sender (incl. the queue's own)
-/// is gone.
-fn spawn_worker(name: &str) -> mpsc::Sender<Job> {
+/// is gone. A panic that escapes a job closure (op panics are caught inside
+/// it — this is the last-resort guard for a panic in the queue's own
+/// bookkeeping) must not brick the queue: log it, drop the cached sender so
+/// the next enqueue respawns a fresh worker, and exit this loop; the
+/// channel's remaining jobs are dropped and their callers resolve via the
+/// closed oneshot ("closed before completion") instead of hanging.
+fn spawn_worker(name: &str, inner: Arc<QueueInner>, lane: Lane) -> mpsc::Sender<Job> {
     let (tx, rx) = mpsc::channel::<Job>();
     std::thread::Builder::new()
         .name(name.to_owned())
         .spawn(move || {
             for job in rx {
-                (job.run)();
+                if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| (job.run)())).is_err() {
+                    match lane {
+                        Lane::Mutation => {
+                            drop(inner.sender.lock().take());
+                        }
+                        Lane::Read => {
+                            drop(inner.read_sender.lock().take());
+                        }
+                    }
+                    tracing::error!(
+                        repo = %inner.repo_id.0,
+                        "op worker thread panicked; the next enqueue respawns it"
+                    );
+                    break;
+                }
             }
         })
         .expect("spawn op queue worker thread");
     tx
+}
+
+/// Readable message from a panic payload (for the structured error log).
+fn panic_message(payload: &Box<dyn std::any::Any + Send>) -> String {
+    payload
+        .downcast_ref::<&str>()
+        .map(|s| (*s).to_string())
+        .or_else(|| payload.downcast_ref::<String>().cloned())
+        .unwrap_or_else(|| "non-string panic payload".to_string())
 }
 
 /// Handout to one running op: identity fields, the throttled emitter, and
@@ -964,6 +1016,47 @@ mod tests {
         let (id, rx) = queue.enqueue("stage", move |_ctx| Ok(()));
         recv(rx).unwrap();
         assert!(!queue.cancel_op("test-repo", &id), "finished op unknown");
+        queue.shutdown();
+    }
+
+    // -------------------------------------------------------------------
+    // Worker panic containment
+    // -------------------------------------------------------------------
+
+    /// A panicking op must not brick the repo's mutation queue: the caller
+    /// resolves with a clear "internal error" (instead of hanging on the
+    /// oneshot) and the queue keeps serving subsequent ops.
+    #[test]
+    fn panicking_op_resolves_the_caller_and_queue_keeps_serving() {
+        let queue = queue();
+        let sink = CollectorSink::shared();
+        queue.set_sink(sink.clone());
+
+        // The default panic hook is process-global; silence it for the
+        // deliberate panic below and restore it right away.
+        let prev_hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {}));
+        let (op_id, rx) = queue.enqueue("commit", move |_ctx| -> Result<String, String> {
+            panic!("deliberate op panic");
+        });
+        let err = recv(rx).unwrap_err();
+        std::panic::set_hook(prev_hook);
+
+        assert_eq!(err, "internal error: op worker panicked", "got {err}");
+        // The op registry entry is gone (finished, not wedged).
+        assert!(!queue.cancel_op("test-repo", &op_id), "panicked op unknown");
+        // The final done event still fired, classified as a real failure.
+        let last = sink.snapshot().pop().expect("done event");
+        assert!(last.done);
+        assert_eq!(
+            last.error.as_deref(),
+            Some("internal error: op worker panicked")
+        );
+        assert_eq!(last.outcome, Some(OpOutcome::Failed));
+
+        // The queue keeps serving: the next op runs fine.
+        let (_id, rx2) = queue.enqueue("stage", move |_ctx| Ok(7u32));
+        assert_eq!(recv(rx2).unwrap(), 7);
         queue.shutdown();
     }
 }

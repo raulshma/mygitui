@@ -266,23 +266,22 @@ struct ServeEntry {
 }
 
 /// Owns the managed server child; `Drop` kills it (app-exit backstop, same
-/// contract as the pty registry).
+/// contract as the pty registry). Cheaply cloneable (shared `Arc` inner) so
+/// the async `opencode_serve_start` command can move a handle into its
+/// blocking task.
+#[derive(Clone, Default)]
 pub struct OpenCodeServerRegistry {
+    inner: Arc<RegistryInner>,
+}
+
+#[derive(Default)]
+struct RegistryInner {
     entry: Mutex<Option<ServeEntry>>,
     /// Serializes full startup attempts while status/stop remain responsive.
     starting: Mutex<()>,
 }
 
-impl Default for OpenCodeServerRegistry {
-    fn default() -> Self {
-        Self {
-            entry: Mutex::new(None),
-            starting: Mutex::new(()),
-        }
-    }
-}
-
-impl Drop for OpenCodeServerRegistry {
+impl Drop for RegistryInner {
     fn drop(&mut self) {
         if let Some(mut entry) = self.entry.lock().take() {
             kill_child(&mut entry.child);
@@ -444,7 +443,7 @@ impl OpenCodeServerRegistry {
 
     /// Current state (reaping a child that exited since the last call).
     pub fn status(&self) -> OpencodeServeState {
-        let mut guard = self.entry.lock();
+        let mut guard = self.inner.entry.lock();
         Self::reap_dead(&mut guard);
         match guard.as_ref() {
             Some(entry) => Self::state_of(entry),
@@ -458,9 +457,9 @@ impl OpenCodeServerRegistry {
         // A settings refresh and a feature request can arrive together.
         // Coalesce those starts here too, instead of briefly running two
         // OpenCode servers and killing whichever loses the registry race.
-        let _starting = self.starting.lock();
+        let _starting = self.inner.starting.lock();
         {
-            let mut guard = self.entry.lock();
+            let mut guard = self.inner.entry.lock();
             Self::reap_dead(&mut guard);
             if let Some(entry) = guard.as_ref() {
                 return Self::state_of(entry);
@@ -597,7 +596,7 @@ impl OpenCodeServerRegistry {
                 Ok(None) => {}
             }
             if TcpStream::connect(("127.0.0.1", port)).is_ok() {
-                let mut guard = self.entry.lock();
+                let mut guard = self.inner.entry.lock();
                 // A racing start won the slot? Then tear our duplicate down.
                 if guard.is_some() {
                     drop(guard);
@@ -634,7 +633,7 @@ impl OpenCodeServerRegistry {
 
     /// Stops the managed server (no-op when none is running).
     pub fn stop(&self) -> OpencodeServeState {
-        if let Some(mut entry) = self.entry.lock().take() {
+        if let Some(mut entry) = self.inner.entry.lock().take() {
             kill_child(&mut entry.child);
         }
         OpencodeServeState::default()
@@ -645,10 +644,14 @@ impl OpenCodeServerRegistry {
 // Tauri commands
 // ---------------------------------------------------------------------------
 
-/// Probes for a local opencode CLI (PATH scan + `--version`).
+/// Probes for a local opencode CLI (PATH scan + `--version`). Async: the
+/// probe can take up to `VERSION_TIMEOUT`, and sync Tauri commands run on
+/// the main thread.
 #[tauri::command(rename_all = "snake_case")]
-pub fn opencode_detect() -> OpencodeDetection {
-    detect_binary()
+pub async fn opencode_detect() -> OpencodeDetection {
+    tauri::async_runtime::spawn_blocking(detect_binary)
+        .await
+        .unwrap_or_else(|_| OpencodeDetection::not_installed())
 }
 
 /// State of the managed opencode server (starts nothing).
@@ -659,13 +662,26 @@ pub fn opencode_serve_status(
     registry.status()
 }
 
-/// Starts (or returns the running) managed opencode server.
+/// Starts (or returns the running) managed opencode server. Async: startup
+/// blocks on binary detection and a readiness poll, and sync Tauri commands
+/// run on the main thread. The `Result` wrapper is a Tauri requirement for
+/// async commands with borrowed `State` params — even a dropped startup task
+/// maps into the failed-start state below, so the frontend keeps receiving
+/// an `OpencodeServeState` either way.
 #[tauri::command(rename_all = "snake_case")]
-pub fn opencode_serve_start(
+pub async fn opencode_serve_start(
     cwd: Option<String>,
     registry: tauri::State<'_, OpenCodeServerRegistry>,
-) -> OpencodeServeState {
-    registry.start(cwd.as_deref().map(Path::new))
+) -> Result<OpencodeServeState, String> {
+    let registry = registry.inner().clone();
+    let state =
+        tauri::async_runtime::spawn_blocking(move || registry.start(cwd.as_deref().map(Path::new)))
+            .await
+            .unwrap_or_else(|e| OpencodeServeState {
+                error: Some(format!("opencode serve start task failed: {e}")),
+                ..OpencodeServeState::default()
+            });
+    Ok(state)
 }
 
 /// Stops the managed opencode server.

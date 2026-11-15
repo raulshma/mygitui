@@ -57,6 +57,7 @@
   import { isTauri } from "$lib/entry/dragdrop";
   import { openTab } from "$lib/stores/tabs.svelte";
   import { toast } from "$lib/toast";
+  import { copyText } from "$lib/clipboard";
   import { appIcon } from "$lib/components/icons/library.svelte";
   import { closedDialog, openDialog, type DialogState } from "$lib/state/dialog";
 
@@ -551,16 +552,12 @@
       {
         id: "copy-path",
         label: "Copy path",
-        run: () => {
-          void navigator.clipboard.writeText(`${root}/${node.path}`);
-        },
+        run: () => void copyText(`${root}/${node.path}`),
       },
       {
         id: "copy-rel",
         label: "Copy relative path",
-        run: () => {
-          void navigator.clipboard.writeText(node.path);
-        },
+        run: () => void copyText(node.path),
       },
       { separator: true },
       {

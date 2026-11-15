@@ -55,6 +55,7 @@
   } from "$lib/ipc/client";
   import { onRepoChange } from "$lib/events/repoEvents";
   import { describeError } from "$lib/errors";
+  import { copyText } from "$lib/clipboard";
   import { appSettings } from "$lib/state/appSettings.svelte";
   import { openTab, parseSshUri, refreshStatus, tabStore } from "$lib/stores/tabs.svelte";
   import { normalizeRepoPath } from "$lib/stores/switcher.svelte";
@@ -220,19 +221,6 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
    */
   let ignoreFor = $state<string | null>(null);
   let ignoreChoices = $state<{ label: string; pattern: string }[]>([]);
-
-  /**
-   * Clipboard write with the app's toast feedback (same
-   * `navigator.clipboard` + toast pattern the other panels use).
-   */
-  async function copyText(text: string): Promise<void> {
-    try {
-      await navigator.clipboard.writeText(text);
-      toast("Copied", { kind: "success" });
-    } catch (err) {
-      toast(`Copy failed: ${describeError(err)}`, { kind: "error" });
-    }
-  }
 
   /** Candidate ignore patterns for one path: exact, `*.ext`, `dir/`. */
   function choicesFor(path: string): { label: string; pattern: string }[] {
@@ -597,7 +585,9 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
   function cleanupOpenedRepos(): void {
     for (const id of openedRepoIds) {
       if (!tabStore.tabs.some((t) => t.id === id)) {
-        void closeRepo(id);
+        // Best-effort teardown: the handle may already be gone ("repo not
+        // open") after a routine repo switch — never surface that rejection.
+        void closeRepo(id).catch(() => {});
       }
     }
     openedRepoIds.clear();

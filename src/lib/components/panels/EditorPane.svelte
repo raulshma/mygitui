@@ -37,6 +37,7 @@
   const iconPrev = $derived(appIcon("arrow-upward")!);
   const iconNext = $derived(appIcon("arrow-downward")!);
   const iconClose = $derived(appIcon("close")!);
+  const iconRetry = $derived(appIcon("refresh")!);
 
   // The lazy views must keep the *same* promise across updates: `{#await
   // import(...)}` would hand Svelte a fresh promise on every parent update,
@@ -68,6 +69,7 @@
     status = null,
     diffFiles = [],
     diffLoading = false,
+    diffError = null,
     diffScope = "unstaged",
     historyActions = null,
     workflowRunId = null,
@@ -88,6 +90,8 @@
     onPrevFile = undefined,
     onNextFile = undefined,
     onStageEntry = undefined,
+    stageBusy = false,
+    onRetryDiff = undefined,
     onDiscardEntry = undefined,
     onEditEntry = undefined,
     onActivateFile = undefined,
@@ -113,6 +117,12 @@
     /** Streamed diff for `entry`. */
     diffFiles?: FileDiff[];
     diffLoading?: boolean;
+    /**
+     * Failure message from the last diff load (null = none): renders a
+     * distinct error empty state with Retry instead of the "No changes"
+     * state, which would read as if the file had no diff.
+     */
+    diffError?: string | null;
     /**
      * Which working-copy comparison the streamed diff shows (VSCode
      * semantics): `staged` = HEAD→index, `unstaged` = index→worktree.
@@ -163,6 +173,10 @@
     onNextFile?: () => void;
     /** Stages (unstage=false) or unstages the open file. */
     onStageEntry?: (unstage: boolean) => void;
+    /** True while that stage/unstage IPC is in flight (buttons disable). */
+    stageBusy?: boolean;
+    /** Re-runs the working-copy diff load after a failure. */
+    onRetryDiff?: () => void;
     /** Asks the owner to confirm discarding the open file's changes. */
     onDiscardEntry?: () => void;
     /** Opens the shown file in the file workspace (editor mode). */
@@ -398,6 +412,7 @@
                   variant="outline"
                   type="button"
                   {...props}
+                  disabled={stageBusy}
                   onclick={() => onStageEntry?.(false)}
                 >
                   Stage
@@ -412,6 +427,7 @@
                   variant="outline"
                   type="button"
                   {...props}
+                  disabled={stageBusy}
                   onclick={() => onStageEntry?.(true)}
                 >
                   Unstage
@@ -491,6 +507,24 @@
             <Spinner class="size-4" role="presentation" aria-hidden="true" />
             Loading diff…
           </p>
+        {:else if diffError !== null}
+          <!-- A failed diff load must not fall through to the "No changes"
+               state (it would read as if the file had no diff): distinct
+               error state + Retry, same affordance as the status panel's
+               statusError block. -->
+          <div
+            class="flex-1 min-h-0 flex flex-col items-center justify-center gap-2 px-4 py-8 text-center text-muted-foreground select-none"
+            role="alert"
+          >
+            <p class="empty-title m-0 text-ui-base font-medium text-foreground">Couldn't load diff</p>
+            <p class="m-0 max-w-64 text-ui-xs break-words">{diffError}</p>
+            {#if onRetryDiff}
+              <Button variant="outline" size="sm" onclick={onRetryDiff}>
+                <Icon icon={iconRetry} size={16} />
+                Retry
+              </Button>
+            {/if}
+          </div>
         {:else if diffFiles.length === 0}
           <EmptyState
             title={diffScope === "staged"

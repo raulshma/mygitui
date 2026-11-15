@@ -223,8 +223,10 @@ Shell discovery: Windows prefers `pwsh.exe` → `powershell.exe` → `cmd.exe`
 Lifecycle: at most 8 concurrent sessions (`pty_create` rejects past the
 cap); a session that exits on its own unregisters itself. Sessions are NOT
 killed backend-side on repo close — the FE must `pty_kill` each terminal
-panel's session when its tab closes; as a backstop the registry's `Drop`
-kills every remaining shell on app exit.
+panel's session when its tab closes; as a backstop `run()`'s
+`RunEvent::Exit` handler calls the registry's `kill_all()` so every
+remaining shell dies on app exit (Tauri does not drop managed state, so a
+`Drop`-based backstop would never fire).
 
 ## Commands (M6 — forge / gh-assisted GitHub flow)
 
@@ -675,7 +677,9 @@ Additive contracts only; all commands take `repo_id` unless noted.
 | `opencode_serve_stop` | → `OpencodeServeState` | Kills (tree-kill on Windows) and reaps the managed server; no-op when none runs. |
 | `detect_editors` | → `EditorApp[]` | Probes PATH + well-known install locations for common editors (VS Code family, Cursor, Windsurf, Zed, Sublime, Notepad++, JetBrains via Toolbox/standalone scans). `EditorApp = {id, name, path}`; the platform file manager (`id: "explorer"`) is always first. No subprocesses; not cached. |
 | `open_with` | `repo_root`, `app_id` → `void` | Spawns the app id resolved through a fresh `detect_editors` probe (frontend-supplied paths are never spawned) with the repository root as the working folder; Notepad++ passes `-openFoldersAsWorkspace`, macOS goes through `open [-a <app>]`. Environment: the sanitized allowlist (same as git spawns — GUI apps keep SYSTEMROOT/USERPROFILE/APPDATA/LOCALAPPDATA/PATH/HOME/TMP) overlaid with the resolved login-shell environment (see **Spawn environment** above — profile entries like nvm's PATH that a GUI launch misses; the overlay runs after the sanitize and degrades to the sanitized set when resolution fails). |
+| `open_with_custom` | `repo_root`, `app_id`, `name`, `command` → `void` | Opens the repository root with a user-defined command. The frontend sends the full spec per launch (`app_id`/`name` are log context only); nothing is persisted backend-side. Same spawn environment as `open_with`; failures log a warning and reject. |
 | `open_popout` | `label`, `query`, `title` → `void` | Creates (or focuses, when `label` exists) a popout webview window: `query` is the window's own `?panel=…&repo=…` URL query joined onto the app origin. Built Rust-side instead of via core `create-webview-window` so the main window's `additionalBrowserArgs` are copied — WebView2 rejects a second webview environment on the same user data folder (0x8007139F). 960×680 (min 420×300), splash background; created hidden and shown by the app's page-load hook at final size (the window-state plugin restores the saved geometry right after creation, and showing before that would visibly re-layout); the capability set covers `popout-*` labels. |
+| `updater_relaunch` | → `void` | Exits and relaunches the process (`AppHandle::restart`) after an update install — on macOS/Linux the app keeps running until this is invoked; the invoke never resolves because the webview goes away first. |
 
 Shape changes (additive, mirrored in `src/lib/ipc/types.ts`):
 - `LogFilter.pickaxe_regex` — pickaxe `-G` (patch regex) alongside `-S`.
@@ -749,9 +753,10 @@ rule as discard/repo_clean).
 
 | Command | Args | Returns | Notes |
 |---|---|---|---|
+| `repo_read_file` | `repo_id, path` | raw bytes (`tauri::ipc::Response` — the webview receives an `ArrayBuffer`, not a JSON number array) | Raw bytes of one workdir file; backs the conflict editor's marker preview and file/workspace previews. Path validated like every workspace command; a missing file resolves to empty content ("no preview written"); a non-regular file rejects; files above the 32 MB IPC cap reject with a "larger than the 32 MB read limit" error instead of freezing the bridge. |
 | `repo_list_dir` | `repo_id, path, include_ignored: bool` | `DirListing` | One directory level. Bounded (`ignore::WalkBuilder` max_depth 1), gitignore-aware (`.gitignore` chain + `.git/info/exclude` + global excludes; the `include_ignored` toggle turns every filter off), dirs-first natural sort, `.git` never listed. Directories that are gitlink entries in the index surface as `kind: "submodule"`. Capped at 5000 entries with `truncated: true` (error-free truncation). |
 | `repo_stat_file` | `repo_id, path` | `FileMeta` | Size, content classification (`text` / `image` by extension list mirroring the diff engine / `binary` by NUL sniff of the first 8 KiB), `readonly`, and `mtime_ms` (epoch millis) — the FE decides how to open a file before transferring bytes, and the editor's save compares mtimes. |
-| `repo_write_file` | `repo_id, path, content: number[], expected_mtime: number \| null` | `FileMeta` | The editor's save. `expected_mtime` guard: when set, it must equal the file's current mtime (or the file must be missing with `0` = create), otherwise a "changed on disk" conflict error rejects the write and the FE offers reload/overwrite. Writes are atomic (temp file + rename in the same dir), parent dirs created on demand. `null` overwrites unconditionally (tooling only — the editor always sends an mtime). |
+| `repo_write_file` | `repo_id, path, content_b64: string (base64), expected_mtime: number \| null` | `FileMeta` | The editor's save. `content_b64` is base64 (STANDARD, with padding): the FE encodes the bytes once and the bridge carries a compact string instead of a JSON number array (~7-8 bytes per byte of file). `expected_mtime` guard: when set, it must equal the file's current mtime (or the file must be missing with `0` = create), otherwise a "changed on disk" conflict error rejects the write and the FE offers reload/overwrite. Writes are atomic (temp file + rename in the same dir), parent dirs created on demand. `null` overwrites unconditionally (tooling only — the editor always sends an mtime). |
 | `repo_create_entry` | `repo_id, path, kind: "file"\|"dir"` | `void` | Creates with parent dirs; errors when the path exists. |
 | `repo_rename_entry` | `repo_id, path, new_path` | `void` | Renames/moves within the worktree; errors when source is missing or target exists. |
 | `repo_delete_entry` | `repo_id, path` | `CheckpointInfo` | Checkpoint first (reason `delete <path>`), then remove — file or directory tree. |

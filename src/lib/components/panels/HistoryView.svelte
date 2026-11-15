@@ -94,6 +94,7 @@
     shortRefName,
   } from "$lib/git/format";
   import { toast } from "$lib/toast";
+  import { copyText } from "$lib/clipboard";
   import Icon from "$lib/components/icons/Icon.svelte";
   import { Button } from "$lib/components/ui/button/index.js";
   import { Hint } from "$lib/components/ui/tooltip/index.js";
@@ -884,43 +885,16 @@
     planner = openDialog({ baseSha: selectedInfo.sha });
   }
 
-  /**
-   * Writes `text` to the clipboard with success/error toasts (the shared
-   * helper behind "Copy sha" and M12's "Copy describe").
-   */
-  async function copyToClipboard(
-    text: string,
-    okMessage: string,
-    errMessage: string,
-  ): Promise<boolean> {
-    try {
-      await navigator.clipboard.writeText(text);
-      toast(okMessage, { kind: "success" });
-      return true;
-    } catch {
-      toast(errMessage, { kind: "error" });
-      return false;
-    }
-  }
-
   async function copySha(): Promise<void> {
     if (!selectedInfo) return;
-    await copyToClipboard(
-      selectedInfo.sha,
-      "SHA copied to clipboard",
-      "Could not copy the SHA",
-    );
+    await copyText(selectedInfo.sha, "SHA");
   }
 
   /** M12: `git describe` for a commit → clipboard (menu + detail action). */
   async function copyDescribe(sha: string): Promise<void> {
     try {
       const text = await describe(repoId, sha);
-      await copyToClipboard(
-        text,
-        `Describe copied: ${text}`,
-        "Could not copy the describe",
-      );
+      await copyText(text);
     } catch (err) {
       toast(`Describe failed: ${describeError(err)}`, { kind: "error" });
     }
@@ -1115,17 +1089,26 @@
 
   /** M11: zip/tar export of the commit's tree via the save picker. */
   async function exportArchive(spec: string): Promise<void> {
-    const destination = await pickSaveFile("Export archive", `archive-${spec.slice(0, 8)}.zip`, [
-      { name: "Zip archive", extensions: ["zip"] },
-      { name: "Tar archive", extensions: ["tar", "gz"] },
-    ]);
-    if (!destination) return;
-    const format = destination.endsWith(".zip")
-      ? "zip"
-      : destination.endsWith(".tar")
-        ? "tar"
-        : "tar.gz";
+    // A large archive can take a while; ride the opBusy flag so concurrent
+    // ops stay gated and the existing busy surfaces (sidebar actions,
+    // CommitDetail) reflect it.
+    if (opBusy) return;
+    opBusy = true;
     try {
+      const destination = await pickSaveFile(
+        "Export archive",
+        `archive-${spec.slice(0, 8)}.zip`,
+        [
+          { name: "Zip archive", extensions: ["zip"] },
+          { name: "Tar archive", extensions: ["tar", "gz"] },
+        ],
+      );
+      if (!destination) return;
+      const format = destination.endsWith(".zip")
+        ? "zip"
+        : destination.endsWith(".tar")
+          ? "tar"
+          : "tar.gz";
       await archiveSpec(repoId, spec, format, destination);
       toast(`Archive written to ${destination}`, { kind: "success" });
     } catch (err) {
@@ -1133,6 +1116,8 @@
         `Archive failed: ${err instanceof Error ? err.message : String(err)}`,
         { kind: "error" },
       );
+    } finally {
+      opBusy = false;
     }
   }
 
@@ -1601,7 +1586,7 @@
                     aria-label="Copy commit hash"
                     onclick={(e) => {
                       e.stopPropagation();
-                      void copyToClipboard(v.commit.sha, "SHA copied to clipboard", "Could not copy the SHA");
+                      void copyText(v.commit.sha, "SHA");
                     }}
                   >{v.commit.sha.slice(0, 7)}</button>
                 {/snippet}

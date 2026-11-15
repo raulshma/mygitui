@@ -73,8 +73,11 @@ pub struct RepoChangedEvent {
     pub full: bool,
 }
 
-/// Workdir-relative path components never worth reporting (dependency and
-/// build output directories; heuristic until real ignore parsing lands).
+/// Dependency/build directory names for the fallback flood guard:
+/// untracked churn under these (`node_modules` installs, `target` builds,
+/// `dist`/`build`/`.next` outputs) never reaches clients. Not a hard drop —
+/// the event loop consults the real gitignore matcher first and never
+/// drops tracked paths (see `IgnoreCache::drops` / `TrackedIndex`).
 pub const IGNORED_DIRS: [&str; 5] = ["node_modules", "target", ".next", "dist", "build"];
 
 /// Entries directly under `.git/` that DO matter (HEAD moves, index writes,
@@ -99,23 +102,18 @@ pub fn is_git_entry_allowed(name: &str) -> bool {
 
 /// Baseline ignore filter on a repo-relative, forward-slash path.
 ///
-/// This is the part that needs no repo context:
-/// - any component in [`IGNORED_DIRS`] → ignored;
+/// This is the part that needs no repo context — `.git` internals only:
 /// - a `.git` component with no successor (the directory itself) → ignored;
 /// - the component right after `.git` not in [`ALLOWED_GIT_ENTRIES`] →
 ///   ignored (deep `.git` internals; lock files such as `index.lock` are
 ///   dropped because only exact allowed names pass).
 ///
-/// Per-repo gitignore matching (root/nested `.gitignore`, excludes, global
-/// excludesFile) lives in [`IgnoreCache`] and runs after this check in the
-/// event loop.
+/// Everything else runs in the event loop: per-repo gitignore matching
+/// ([`IgnoreCache`]), the [`IGNORED_DIRS`] fallback for paths the matcher
+/// does not cover, and the tracked-path exemption ([`TrackedIndex`]) that
+/// keeps versioned files under e.g. `build/` reportable.
 pub fn is_ignored_rel(rel: &str) -> bool {
     let comps: Vec<&str> = rel.split('/').filter(|c| !c.is_empty()).collect();
-    for comp in &comps {
-        if IGNORED_DIRS.contains(comp) {
-            return true;
-        }
-    }
     for (i, comp) in comps.iter().enumerate() {
         if *comp == ".git" {
             match comps.get(i + 1) {
@@ -127,6 +125,13 @@ pub fn is_ignored_rel(rel: &str) -> bool {
         }
     }
     false
+}
+
+/// Whether any path component is an [`IGNORED_DIRS`] dependency/build dir.
+/// Fallback flood guard only — the event loop consults it after the
+/// gitignore matcher and never for tracked paths.
+fn has_ignored_dir_component(rel: &str) -> bool {
+    rel.split('/').any(|comp| IGNORED_DIRS.contains(&comp))
 }
 
 /// Whether a repo-relative path means HEAD (or a ref) may have moved.
@@ -218,7 +223,10 @@ fn nested_gitignores(root: &Path) -> Vec<PathBuf> {
 /// Pure gitignore decision (free fn so tests can build matchers without a
 /// repo): drop when the path OR any parent matches an `Ignore` pattern —
 /// a plain `matched` call would miss `build/x` for a `build/` dir pattern,
-/// which git expresses by not descending at all.
+/// which git expresses by not descending at all. (Lib code goes through
+/// [`IgnoreCache::drops`], which also weighs whitelists and the
+/// [`IGNORED_DIRS`] fallback.)
+#[cfg_attr(not(test), allow(dead_code))]
 fn ignore_matches(gi: &Gitignore, rel: &str, is_dir: bool) -> bool {
     matches!(
         gi.matched_path_or_any_parents(rel, is_dir),
@@ -228,10 +236,12 @@ fn ignore_matches(gi: &Gitignore, rel: &str, is_dir: bool) -> bool {
 
 /// Mtime-tracked gitignore matcher for one repo root. Built from the root
 /// `.gitignore`, nested `.gitignore` files (to [`GITIGNORE_MAX_DEPTH`]),
-/// `.git/info/exclude`, and the global `core.excludesFile` — plus a baseline
-/// pattern list for dependency/build dirs git itself would never ignore.
-/// Rebuilt lazily when any source's mtime changed, or forced when a source
-/// file is itself an event (it may be brand new).
+/// `.git/info/exclude`, and the global `core.excludesFile` — real ignore
+/// patterns only. (Dependency/build dirs are NOT baked in here: the
+/// [`IGNORED_DIRS`] list is a separate fallback in [`IgnoreCache::drops`]
+/// so a tracked file under `build/` can still be reported.) Rebuilt lazily
+/// when any source's mtime changed, or forced when a source file is itself
+/// an event (it may be brand new).
 struct IgnoreCache {
     root: PathBuf,
     gi: Gitignore,
@@ -242,11 +252,6 @@ struct IgnoreCache {
 impl IgnoreCache {
     fn build(root: &Path) -> IgnoreCache {
         let mut builder = GitignoreBuilder::new(root);
-        // Baseline: `node_modules/` etc. are noise in every repo, ignored or
-        // not — git has no default ignore for them.
-        for dir in IGNORED_DIRS {
-            let _ = builder.add_line(None, &format!("{dir}/"));
-        }
         let mut files = nested_gitignores(root);
         if let Some(exclude) = git_dir_of(root)
             .map(|git_dir| git_dir.join("info/exclude"))
@@ -297,8 +302,81 @@ impl IgnoreCache {
     }
 
     /// Whether a repo-relative path is ignored (parents included).
+    // Test-only since the event loop moved to the full `drops` decision.
+    #[cfg_attr(not(test), allow(dead_code))]
     fn ignores(&self, rel: &str, is_dir: bool) -> bool {
         ignore_matches(&self.gi, rel, is_dir)
+    }
+
+    /// The full drop decision for one event path (P2 fix): tracked files
+    /// always flow — git status reports them no matter what the ignore
+    /// rules say, so no flood guard may drop them (a versioned `build/`
+    /// script is legal). Otherwise the real gitignore chain decides
+    /// (genuinely ignored → drop; an explicit `!` whitelist → flow); only
+    /// for paths the chain has NO opinion on does the [`IGNORED_DIRS`]
+    /// fallback drop untracked dependency/build churn.
+    fn drops(&self, rel: &str, is_dir: bool, tracked: bool) -> bool {
+        if tracked {
+            return false;
+        }
+        match self.gi.matched_path_or_any_parents(rel, is_dir) {
+            ignore::Match::Ignore(_) => true,
+            ignore::Match::Whitelist(_) => false,
+            ignore::Match::None => has_ignored_dir_component(rel),
+        }
+    }
+}
+
+/// Sorted snapshot of the git index's file paths, consulted by the
+/// [`IGNORED_DIRS`] fallback: a tracked file under `build/` must still
+/// produce `repo-changed` events (git status reflects tracked files no
+/// matter what the ignore rules say), while `node_modules` churn git
+/// itself never tracks stays flood-guarded. Rebuilt when `.git/index`'s
+/// mtime changes (checked once per debounce window, like [`IgnoreCache`])
+/// or forced when a `.git/index` event arrives (mtime granularity is too
+/// coarse for fast successive writes on some filesystems).
+struct TrackedIndex {
+    /// mtime of the index file at build time.
+    seen: Option<SystemTime>,
+    /// Sorted repo-relative paths (forward slashes) for O(log n) lookup.
+    paths: Vec<String>,
+}
+
+impl TrackedIndex {
+    fn build(root: &Path) -> TrackedIndex {
+        let index_path = git_dir_of(root).map(|git_dir| git_dir.join("index"));
+        let seen = index_path.as_deref().and_then(mtime_of);
+        let mut paths = Vec::new();
+        // Best-effort like the ignore sources: a repo that will not open
+        // (bare, locked, mid-clone) contributes no tracked paths, and the
+        // fallback stays fully conservative (drops everything under
+        // IGNORED_DIRS it does not know to be tracked).
+        if let Ok(repo) = git2::Repository::open(root) {
+            if let Ok(index) = repo.index() {
+                for entry in index.iter() {
+                    paths.push(String::from_utf8_lossy(&entry.path).into_owned());
+                }
+            }
+        }
+        paths.sort();
+        paths.dedup();
+        TrackedIndex { seen, paths }
+    }
+
+    /// Rebuild when the index changed on disk (stage, commit, checkout,
+    /// checkpoint restore...).
+    fn refresh_if_changed(&mut self, root: &Path) {
+        let index_path = git_dir_of(root).map(|git_dir| git_dir.join("index"));
+        if index_path.as_deref().and_then(mtime_of) != self.seen {
+            *self = TrackedIndex::build(root);
+        }
+    }
+
+    /// Whether `rel` (a repo-relative file path) is in the git index.
+    fn contains(&self, rel: &str) -> bool {
+        self.paths
+            .binary_search_by(|probe| probe.as_str().cmp(rel))
+            .is_ok()
     }
 }
 
@@ -483,6 +561,9 @@ fn run(
     // M12: gitignore-aware filtering. Built once per watcher lifetime and
     // refreshed lazily (source mtimes) or forced (a .gitignore event).
     let mut ignores = IgnoreCache::build(&ctx.root);
+    // P2: the git index's tracked paths, for the IGNORED_DIRS fallback —
+    // a tracked file under build/ must still produce events.
+    let mut tracked = TrackedIndex::build(&ctx.root);
 
     let mut attempts = 0usize;
     let mut watcher = create_watcher(&ctx.root, &tx);
@@ -500,8 +581,10 @@ fn run(
     }
 
     'events: loop {
-        // Re-check the ignore sources once per debounce window.
+        // Re-check the ignore sources and the git index once per debounce
+        // window.
         ignores.refresh_if_changed();
+        tracked.refresh_if_changed(&ctx.root);
 
         let mut pending: Vec<String> = Vec::new();
         let mut head_moved = false;
@@ -550,10 +633,17 @@ fn run(
                             // filtering the rest of the window with it.
                             ignores.force_rebuild();
                         }
+                        if rel == ".git/index" {
+                            // Staging changed the tracked set: rebuild
+                            // before filtering the rest of the window
+                            // (mtime granularity is too coarse to catch
+                            // fast successive index writes).
+                            tracked = TrackedIndex::build(&ctx.root);
+                        }
                         let is_dir = std::fs::metadata(strip_verbatim(path))
                             .map(|m| m.is_dir())
                             .unwrap_or(false);
-                        if ignores.ignores(&rel, is_dir) {
+                        if ignores.drops(&rel, is_dir, tracked.contains(&rel)) {
                             continue;
                         }
                         if is_head_move_rel(&rel) {
@@ -626,13 +716,30 @@ mod tests {
         assert!(!is_ignored_rel("src/main.py"));
         assert!(!is_ignored_rel("README.md"));
         assert!(!is_ignored_rel("a/b/c.txt"));
+        // IGNORED_DIRS is no longer a hard drop here: tracked files under
+        // build/ must flow — the fallback lives in `IgnoreCache::drops`.
+        assert!(!is_ignored_rel("node_modules/react/index.js"));
+        assert!(!is_ignored_rel("crates/target/debug/x"));
+        assert!(!is_ignored_rel("web/.next/static/x.js"));
+        assert!(!is_ignored_rel("dist/bundle.js"));
+        assert!(!is_ignored_rel("build/out.obj"));
+        assert!(!is_ignored_rel("apps/web/node_modules/x"));
+    }
+
+    #[test]
+    fn ignored_dir_component_fallback_scope() {
         // Dependency/build directories at any depth.
-        assert!(is_ignored_rel("node_modules/react/index.js"));
-        assert!(is_ignored_rel("crates/target/debug/x"));
-        assert!(is_ignored_rel("web/.next/static/x.js"));
-        assert!(is_ignored_rel("dist/bundle.js"));
-        assert!(is_ignored_rel("build/out.obj"));
-        assert!(is_ignored_rel("apps/web/node_modules/x"));
+        assert!(has_ignored_dir_component("node_modules/react/index.js"));
+        assert!(has_ignored_dir_component("crates/target/debug/x"));
+        assert!(has_ignored_dir_component("web/.next/static/x.js"));
+        assert!(has_ignored_dir_component("dist/bundle.js"));
+        assert!(has_ignored_dir_component("build/out.obj"));
+        assert!(has_ignored_dir_component("apps/web/node_modules/x"));
+        // Whole-component match only: a name merely starting with one of
+        // the entries is a normal path.
+        assert!(!has_ignored_dir_component("src/main.py"));
+        assert!(!has_ignored_dir_component("buildsystem/config.rs"));
+        assert!(!has_ignored_dir_component("distutils/setup.py"));
     }
 
     #[test]
@@ -845,12 +952,78 @@ mod tests {
     fn default_ignored_dirs_stay_dropped_without_gitignore() {
         let repo = TempRepo::new("baseline");
         let cache = IgnoreCache::build(&repo.0);
+        // Without any ignore file the gitignore chain has no opinion, so
+        // the IGNORED_DIRS fallback decides (untracked churn stays out).
         assert!(
-            cache.ignores("node_modules/react/index.js", false),
+            cache.drops("node_modules/react/index.js", false, false),
             "baseline ignore list keeps dependency churn out"
         );
-        assert!(cache.ignores("target/debug/x", false));
-        assert!(!cache.ignores("src/main.rs", false));
+        assert!(cache.drops("target/debug/x", false, false));
+        assert!(!cache.drops("src/main.rs", false, false));
+        // ...but never drops tracked files (P2: a versioned build/ script
+        // must still produce repo-changed events).
+        assert!(!cache.drops("build/out.obj", false, true));
+        assert!(!cache.drops("node_modules/react/index.js", false, true));
+    }
+
+    /// The P2 fix end to end: a tracked file under `build/` produces an
+    /// event; a gitignored file under `node_modules/` still does not.
+    #[test]
+    fn tracked_file_under_build_flows_gitignored_node_modules_does_not() {
+        let repo = TempRepo::new("tracked-build");
+        repo.write(".gitignore", "node_modules/\n");
+        repo.write("build/out.txt", "generated");
+        repo.write("node_modules/pkg/index.js", "vendored");
+        {
+            let r = git2::Repository::open(&repo.0).expect("open temp repo");
+            let mut index = r.index().expect("index");
+            index.add_path(Path::new("build/out.txt")).expect("add");
+            index.write().expect("write index");
+        }
+        let cache = IgnoreCache::build(&repo.0);
+        let tracked = TrackedIndex::build(&repo.0);
+        assert!(
+            tracked.contains("build/out.txt"),
+            "the staged path is in the index snapshot"
+        );
+        assert!(
+            !cache.drops("build/out.txt", false, tracked.contains("build/out.txt")),
+            "tracked file under build/ must produce an event"
+        );
+        assert!(
+            cache.drops("build/out.txt", false, false),
+            "the same path untracked stays flood-guarded"
+        );
+        assert!(
+            cache.drops(
+                "node_modules/pkg/index.js",
+                false,
+                tracked.contains("node_modules/pkg/index.js")
+            ),
+            "gitignored node_modules churn must not produce events"
+        );
+        assert!(!cache.drops("src/main.rs", false, false), "code kept");
+    }
+
+    #[test]
+    fn tracked_index_rebuilds_when_the_index_changes() {
+        let repo = TempRepo::new("tracked-refresh");
+        repo.write("a/build/thing.txt", "x");
+        let mut tracked = TrackedIndex::build(&repo.0);
+        assert!(
+            !tracked.contains("a/build/thing.txt"),
+            "unstaged path unknown to the snapshot"
+        );
+        {
+            let r = git2::Repository::open(&repo.0).expect("open temp repo");
+            let mut index = r.index().expect("index");
+            index.add_path(Path::new("a/build/thing.txt")).expect("add");
+            index.write().expect("write index");
+        }
+        // Same mtime on fast filesystems — force the rebuild like the
+        // `.git/index` event path does.
+        tracked = TrackedIndex::build(&repo.0);
+        assert!(tracked.contains("a/build/thing.txt"));
     }
 
     #[test]

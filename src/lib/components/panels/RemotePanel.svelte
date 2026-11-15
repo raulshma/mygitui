@@ -121,8 +121,10 @@
     // Reload when the repo switches.
     void repoId;
     editing = null;
+    compareToken++;
     compareKey = null;
     compareFiles = null;
+    compareLoading = false;
     expandedRemote = null;
     remoteBranchList = [];
     showAllRemoteBranches = {};
@@ -293,12 +295,19 @@
     );
   }
 
+  /** In-flight config mutation (add / set-url / remove remote, delete remote
+   *  branch): the submit + card controls disable so a rapid double-submit
+   *  cannot fire the same IPC twice. */
+  let configBusy = $state(false);
+
   async function onAdd(): Promise<void> {
     const name = addName.trim();
     const url = addUrl.trim();
-    if (!name || !url) return;
+    if (!name || !url || configBusy) return;
+    configBusy = true;
     try {
       await remoteAdd(repoId, name, url);
+      toast(`Added remote ${name}`, { kind: "success" });
       addName = "";
       addUrl = "";
       void reload();
@@ -306,6 +315,8 @@
       toast(`Add remote failed: ${err instanceof Error ? err.message : String(err)}`, {
         kind: "error",
       });
+    } finally {
+      configBusy = false;
     }
   }
 
@@ -326,13 +337,18 @@
     }
     expandedRemote = remote.name;
     // Stale-response guard: a slow list for the old repo must not fill the
-    // expanded card after the switch.
+    // expanded card after the switch — and remote A's late response must not
+    // overwrite the list after remote B's card was expanded (there is one
+    // shared `remoteBranchList`, so a result only lands while its own remote
+    // is still the expanded one).
     const id = repoId;
+    const expanded = remote.name;
     try {
       const branchList = await remoteBranches(id);
-      if (id !== repoId) return;
+      if (id !== repoId || expandedRemote !== expanded) return;
       remoteBranchList = branchList;
     } catch (err) {
+      if (id !== repoId || expandedRemote !== expanded) return;
       toast(
         `Remote branches failed: ${err instanceof Error ? err.message : String(err)}`,
         { kind: "error" },
@@ -369,12 +385,26 @@
   async function onDeleteRemoteBranchConfirmed(): Promise<void> {
     const rb = deleteCandidate;
     deleteCandidate = null;
-    if (!rb) return;
+    if (!rb || configBusy) return;
     const id = repoId;
-    if (await remoteBranchDelete(id, rb.remote, rb.name)) {
-      const branchList = await remoteBranches(id);
-      if (id !== repoId) return;
-      remoteBranchList = branchList;
+    configBusy = true;
+    try {
+      if (await remoteBranchDelete(id, rb.remote, rb.name)) {
+        // The delete succeeded (and toasted inside the helper) — the list
+        // refresh below must not reject out of the confirm handler: a
+        // transient failure would pop the app-wide runtime-error banner on
+        // top of a success. Fall back to the panel reload, which reports
+        // through `error`.
+        try {
+          const branchList = await remoteBranches(id);
+          if (id !== repoId) return;
+          remoteBranchList = branchList;
+        } catch {
+          void reload();
+        }
+      }
+    } finally {
+      configBusy = false;
     }
   }
 
@@ -387,22 +417,30 @@
   let compareKey = $state<string | null>(null);
   let compareFiles = $state<FileDiff[] | null>(null);
   let compareLoading = $state(false);
+  /** Guards the compare against stale responses (another row opened, or the
+   *  repo switched, mid-flight — the same token pattern as FilesPanel's list
+   *  and CommitDetail's diff). */
+  let compareToken = 0;
 
   async function onCompareHead(rb: RemoteBranchInfo): Promise<void> {
     const key = `${rb.remote}/${rb.name}`;
+    const token = ++compareToken;
     compareKey = key;
     compareFiles = null;
     compareLoading = true;
     try {
-      compareFiles = await repoDiff(repoId, { commit: "HEAD" }, { commit: key });
+      const files = await repoDiff(repoId, { commit: "HEAD" }, { commit: key });
+      if (token !== compareToken) return;
+      compareFiles = files;
     } catch (err) {
+      if (token !== compareToken) return;
       toast(
         `Compare failed: ${err instanceof Error ? err.message : String(err)}`,
         { kind: "error" },
       );
       compareKey = null;
     } finally {
-      compareLoading = false;
+      if (token === compareToken) compareLoading = false;
     }
   }
 
@@ -412,31 +450,39 @@
 
   async function onRemoveConfirmed(): Promise<void> {
     const remote = removeCandidate;
-    if (!remote) return;
+    if (!remote || configBusy) return;
     removeCandidate = null;
+    configBusy = true;
     try {
       await remoteRemove(repoId, remote.name);
+      toast(`Removed remote ${remote.name}`, { kind: "success" });
       void reload();
     } catch (err) {
       toast(`Remove remote failed: ${err instanceof Error ? err.message : String(err)}`, {
         kind: "error",
       });
+    } finally {
+      configBusy = false;
     }
   }
 
   async function onSetUrl(): Promise<void> {
-    if (!editing) return;
+    if (!editing || configBusy) return;
     const { name, field, value } = editing;
     const url = value.trim();
     editing = null;
     if (!url) return;
+    configBusy = true;
     try {
       await remoteSetUrl(repoId, name, url, field === "push_url");
+      toast(`Updated remote URL for ${name}`, { kind: "success" });
       void reload();
     } catch (err) {
       toast(`Set URL failed: ${err instanceof Error ? err.message : String(err)}`, {
         kind: "error",
       });
+    } finally {
+      configBusy = false;
     }
   }
 </script>
@@ -610,6 +656,7 @@
                     {...props}
                     type="submit"
                     aria-label="Save remote URL"
+                    disabled={configBusy}
                   >
                     <Icon icon={iconCheck} size={16} />
                   </Button>
@@ -660,6 +707,7 @@
                       {...props}
                       type="button"
                       aria-label={`Edit fetch URL for ${remote.name}`}
+                      disabled={configBusy}
                       onclick={() =>
                         (editing = { name: remote.name, field: "url", value: remote.url })}
                     >
@@ -677,6 +725,7 @@
                         {...props}
                         type="button"
                         aria-label={`Edit push URL for ${remote.name}`}
+                        disabled={configBusy}
                         onclick={() =>
                           (editing = {
                             name: remote.name,
@@ -698,6 +747,7 @@
                       {...props}
                       type="button"
                       aria-label={`Remove remote ${remote.name}`}
+                      disabled={configBusy}
                       onclick={() => void onRemove(remote)}
                     >
                       <Icon icon={iconRemove} size={16} />
@@ -1025,7 +1075,7 @@
       type="submit"
       aria-label="Add remote"
       title="Add a new remote"
-      disabled={!addName.trim() || !addUrl.trim()}
+      disabled={!addName.trim() || !addUrl.trim() || configBusy}
     >
       <Icon icon={iconAdd} size={16} />
     </Button>

@@ -27,6 +27,7 @@
   import type { CommitInfo } from "$lib/ipc/types";
   import type { CompareResult } from "$lib/components/panels/compare";
   import { toast } from "$lib/toast";
+  import { copyText } from "$lib/clipboard";
   import CommitDetail from "./CommitDetail.svelte";
   import SplitPane from "$lib/components/layout/SplitPane.svelte";
   import { readSplitRatio, writeSplitRatio } from "$lib/layout/splitPrefs";
@@ -80,9 +81,7 @@
   );
 
   function copySha(sha: string): void {
-    void navigator.clipboard.writeText(sha).then(() =>
-      toast("Copied commit sha", { kind: "success" }),
-    );
+    void copyText(sha, "commit sha");
   }
 
   let blameOpen = $state(false);

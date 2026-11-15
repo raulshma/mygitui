@@ -111,9 +111,26 @@ export type PendingPrompt =
   | { kind: "hostkey"; request: HostKeyRequestEvent }
   | { kind: "auth"; request: DeviceAuthRequestEvent };
 
+/**
+ * Outcome of {@link RemoteDeviceStore.forgetHostKey}: a pinned key was
+ * removed (`forgotten`), nothing was pinned (`none`), or the backend
+ * command failed (`failed` — the store toasts the error, so the caller
+ * stays silent instead of adding a contradicting message).
+ */
+export type ForgetHostKeyResult = "forgotten" | "none" | "failed";
+
 export class RemoteDeviceStore {
   /** All registered devices, in registry order. */
   devices: DeviceInfo[] = $state([]);
+
+  /**
+   * Human-readable failure from the last {@link load}, or `null` when the
+   * registry loaded fine. Cleared on the next successful load — the home
+   * view renders it (with a Retry) instead of the "no devices yet" empty
+   * state, so a backend hiccup at launch never reads as "nothing
+   * registered".
+   */
+  loadError: string | null = $state(null);
 
   /**
    * The connect prompt the dialog is showing, or `null` when none is
@@ -172,15 +189,17 @@ export class RemoteDeviceStore {
 
   /**
    * Refreshes the device registry from the backend. Never throws — a
-   * failure leaves the current list and logs a warning (the home view
-   * renders whatever is known).
+   * failure leaves the current list and records {@link loadError} (the
+   * home view renders the error with a Retry instead of the empty state;
+   * the state is the single error surface, nothing is logged here).
    */
   async load(): Promise<void> {
     try {
       const list = await deviceList();
       this.devices = Array.isArray(list) ? list : [];
+      this.loadError = null;
     } catch (err) {
-      console.warn("[devices] device_list failed:", err);
+      this.loadError = describeError(err);
     }
   }
 
@@ -263,18 +282,19 @@ export class RemoteDeviceStore {
   }
 
   /**
-   * Removes the device's pinned host key. Resolves `true` when a key was
-   * pinned; never throws (the caller toasts the outcome).
+   * Removes the device's pinned host key. Never throws — resolves
+   * {@link ForgetHostKeyResult}; a failed command is toasted here so the
+   * caller doesn't add a second, contradicting message.
    */
-  async forgetHostKey(deviceId: string): Promise<boolean> {
+  async forgetHostKey(deviceId: string): Promise<ForgetHostKeyResult> {
     try {
-      return await deviceForgetHostKey(deviceId);
+      return (await deviceForgetHostKey(deviceId)) ? "forgotten" : "none";
     } catch (err) {
       toast(
         `Forget host key failed: ${describeError(err)}`,
         { kind: "error" },
       );
-      return false;
+      return "failed";
     }
   }
 
@@ -460,6 +480,7 @@ export class RemoteDeviceStore {
     for (const unregister of this.#unregister) unregister();
     this.#unregister = [];
     this.devices = [];
+    this.loadError = null;
     this.#promptQueue = [];
     this.#queuedAt.clear();
     this.pendingPrompt = null;

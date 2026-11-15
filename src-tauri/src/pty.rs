@@ -258,8 +258,10 @@ impl PtyRegistry {
     }
 
     /// Kill and forget every live session (app exit / Drop). The sessions'
-    /// `Drop` impls re-kill, so this is belt and braces.
-    fn kill_all(&self) {
+    /// `Drop` impls re-kill, so this is belt and braces. App exit goes
+    /// through `run()`'s `RunEvent::Exit` handler (Tauri never drops
+    /// managed state, so [`Drop`] only fires in tests and teardown paths).
+    pub(crate) fn kill_all(&self) {
         let sessions: Vec<Arc<Session>> =
             self.inner.sessions.lock().drain().map(|(_, s)| s).collect();
         for session in sessions {
@@ -270,8 +272,11 @@ impl PtyRegistry {
 
 impl Drop for PtyRegistry {
     fn drop(&mut self) {
-        // Orphan-kill on app exit: every remaining child dies here, which
-        // also unblocks the exit-waiter threads so their Arcs drop.
+        // Orphan-kill on teardown: every remaining child dies here, which
+        // also unblocks the exit-waiter threads so their Arcs drop. (The
+        // graceful-exit path calls `kill_all` from `run()`'s
+        // `RunEvent::Exit` handler instead — Tauri never drops managed
+        // state, so this only fires in tests.)
         self.kill_all();
     }
 }

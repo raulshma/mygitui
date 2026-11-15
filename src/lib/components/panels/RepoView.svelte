@@ -242,6 +242,9 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
   let diffRepoName = $state<string | null>(null);
   let diffFiles: FileDiff[] = $state([]);
   let diffLoading = $state(false);
+  /** Failure message from the last diff load (null = none): a dropped
+   *  backend handle must render as an error, not as "No changes". */
+  let diffError = $state<string | null>(null);
   /** Multi-selection action toolbar state reported by the history sidebar. */
   let historyActions = $state<HistoryCommitActions | null>(null);
   /** Commit to reveal/select in history (parent navigation from the editor). */
@@ -973,6 +976,7 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
     center = EMPTY_PANE;
     diffFiles = [];
     diffLoading = false;
+    diffError = null;
     historyActions = null;
     pendingHistorySha = null;
     conflictEditorOpen = false;
@@ -1038,6 +1042,7 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
     diffToken++;
     diffFiles = [];
     diffLoading = false;
+    diffError = null;
     center = { kind: "workflowRun", runId };
     focusPanel("diff");
   }
@@ -1047,6 +1052,7 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
     diffToken++;
     diffFiles = [];
     diffLoading = false;
+    diffError = null;
     center = { kind: "actionRun", runId };
     focusPanel("diff");
   }
@@ -1073,6 +1079,7 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
     center = { kind: "diff", entry, scope };
     diffFiles = [];
     diffLoading = true;
+    diffError = null;
     const { oldSide, newSide } = diffScopeSides(scope);
     diffRepoId = targetRepoId ?? repoId;
     diffRoot = targetRoot ?? root;
@@ -1090,11 +1097,26 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
         },
         [entry.path],
       );
-    } catch {
-      if (token === diffToken) diffFiles = [];
+    } catch (err) {
+      if (token === diffToken) {
+        diffFiles = [];
+        diffError = err instanceof Error ? err.message : String(err);
+      }
     } finally {
       if (token === diffToken) diffLoading = false;
     }
+  }
+
+  /** Re-runs the current working-copy diff load (the error state's Retry). */
+  function reopenDiff(): void {
+    if (diffEntry === null) return;
+    void openDiff(
+      diffEntry,
+      diffRepoId ?? undefined,
+      diffRoot ?? undefined,
+      diffRepoName ?? undefined,
+      diffScope,
+    );
   }
 
   function onEditorMutated(): void {
@@ -1167,10 +1189,16 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
     }
   }
 
+  /** True while the open file's stage/unstage IPC is in flight: the diff
+   *  header's Stage/Unstage buttons disable (a rapid double-click fired
+   *  duplicate stage calls + duplicate toasts). */
+  let staging = $state(false);
+
   /** Header Stage/Unstage for the open file. */
   async function stageOpenEntry(unstage: boolean): Promise<void> {
     const current = diffEntry;
-    if (!current || diffRepoId !== repoId) return;
+    if (!current || diffRepoId !== repoId || staging) return;
+    staging = true;
     try {
       await stage(repoId, { targets: [{ file: current.path }], unstage });
       refresh();
@@ -1183,6 +1211,8 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
         `${unstage ? "Unstage" : "Stage"} failed: ${err instanceof Error ? err.message : String(err)}`,
         { kind: "error" },
       );
+    } finally {
+      staging = false;
     }
   }
 
@@ -1249,6 +1279,7 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
     center = EMPTY_PANE;
     diffFiles = [];
     diffLoading = false;
+    diffError = null;
     diffRepoId = null;
     diffRoot = null;
     diffRepoName = null;
@@ -1273,6 +1304,7 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
     diffToken++;
     diffFiles = [];
     diffLoading = false;
+    diffError = null;
   }
 
   /** History sidebar: compare results open in the center editor. */
@@ -1281,6 +1313,7 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
     diffToken++;
     diffFiles = [];
     diffLoading = false;
+    diffError = null;
   }
 
   function onHistoryActions(actions: HistoryCommitActions | null): void {
@@ -1465,6 +1498,8 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
     entry={diffEntry}
     diffFiles={diffFiles}
     diffLoading={diffLoading}
+    diffError={diffError}
+    onRetryDiff={diffEntry ? reopenDiff : undefined}
     diffScope={diffScope}
     historyActions={historyActions}
     workflowRunId={workflowRunId}
@@ -1507,6 +1542,7 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
     onStageEntry={diffRepoId === repoId
       ? (unstage) => void stageOpenEntry(unstage)
       : undefined}
+    stageBusy={staging}
     onDiscardEntry={diffRepoId === repoId ? requestDiscardOpenEntry : undefined}
     onEditEntry={diffRepoId === repoId && diffEntry
       ? () => void openWorkdirFile(diffEntry!.path)

@@ -57,6 +57,7 @@
     trackingLocalBranch,
   } from "$lib/git/branchListModel";
   import { describeGitError } from "$lib/errors";
+  import { copyText } from "$lib/clipboard";
   import { toast } from "$lib/toast";
   import { emitUiEvent, onUiEvent } from "$lib/palette/events";
   import { showMenuAt, type MenuEntry } from "$lib/components/menu/contextMenuStore.svelte";
@@ -105,6 +106,8 @@
   let createNameEl = $state<HTMLInputElement | undefined>(undefined);
   /** True while a fetch (all remotes or one) runs; both fetch buttons disable. */
   let fetchBusy = $state(false);
+  /** True while the create-branch IPC runs; the submit button disables. */
+  let creating = $state(false);
   /** Clock time of the last completed reload (hover affordance on Refresh). */
   let lastRefreshed = $state<Date | null>(null);
 
@@ -241,13 +244,18 @@
 
   async function onCreate(): Promise<void> {
     const name = newName.trim();
-    if (!name) return;
-    await run(`Create branch ${name}`, () =>
-      branchCreate(repoId, name, newCheckout, newFrom || undefined),
-    );
-    newName = "";
-    newFrom = "";
-    newCheckout = true;
+    if (!name || creating) return;
+    creating = true;
+    try {
+      await run(`Create branch ${name}`, () =>
+        branchCreate(repoId, name, newCheckout, newFrom || undefined),
+      );
+      newName = "";
+      newFrom = "";
+      newCheckout = true;
+    } finally {
+      creating = false;
+    }
   }
 
   async function onRename(): Promise<void> {
@@ -321,24 +329,32 @@
   // -- M9: merged-branch cleanup wizard --------------------------------------
 
   async function onCleanupStart(): Promise<void> {
-    const into = headBranch?.name ?? "HEAD";
-    const candidates: { name: string; checked: boolean }[] = [];
-    for (const branch of list) {
-      if (branch.is_head) continue;
-      try {
-        if (await branchIsMerged(repoId, branch.name, into)) {
-          candidates.push({ name: branch.name, checked: true });
+    // One IPC per candidate branch — seconds on big repos — so the toolbar
+    // button disables for the whole scan, not just the delete run.
+    if (cleanupBusy) return;
+    cleanupBusy = true;
+    try {
+      const into = headBranch?.name ?? "HEAD";
+      const candidates: { name: string; checked: boolean }[] = [];
+      for (const branch of list) {
+        if (branch.is_head) continue;
+        try {
+          if (await branchIsMerged(repoId, branch.name, into)) {
+            candidates.push({ name: branch.name, checked: true });
+          }
+        } catch {
+          // Unresolvable branch (unborn etc.) — skip it.
         }
-      } catch {
-        // Unresolvable branch (unborn etc.) — skip it.
       }
+      if (candidates.length === 0) {
+        toast(`No branches are fully merged into ${into}`, { kind: "info" });
+        return;
+      }
+      cleanupCandidates = candidates;
+      cleanupOpen = true;
+    } finally {
+      cleanupBusy = false;
     }
-    if (candidates.length === 0) {
-      toast(`No branches are fully merged into ${into}`, { kind: "info" });
-      return;
-    }
-    cleanupCandidates = candidates;
-    cleanupOpen = true;
   }
 
   async function onCleanupRun(): Promise<void> {
@@ -396,11 +412,6 @@
     emitUiEvent("history-select-commit", { sha, repoId, toastOnMiss: true });
   }
 
-  function copyName(name: string): void {
-    void navigator.clipboard.writeText(name);
-    toast(`Copied ${name}`, { kind: "info" });
-  }
-
   function branchMenu(event: MouseEvent, branch: BranchInfo): void {
     const entries: MenuEntry[] = [];
     if (!branch.is_head) {
@@ -431,7 +442,7 @@
         label: "Reset current branch to here…",
         run: () => (resetTo = branch.name),
       },
-      { id: "copy", label: "Copy branch name", run: () => copyName(branch.name) },
+      { id: "copy", label: "Copy branch name", run: () => void copyText(branch.name) },
     );
     if (!branch.is_head) {
       entries.push({
@@ -470,7 +481,7 @@
       {
         id: "copy",
         label: "Copy name",
-        run: () => copyName(`${rb.remote}/${rb.name}`),
+        run: () => void copyText(`${rb.remote}/${rb.name}`),
       },
       { separator: true },
       {
@@ -575,7 +586,7 @@
         type="submit"
         aria-label="Create branch"
         title="Create the branch"
-        disabled={!newName.trim()}
+        disabled={!newName.trim() || creating}
       >
         <Icon icon={iconAdd} size={16} />
       </Button>

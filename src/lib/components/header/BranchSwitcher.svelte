@@ -53,6 +53,7 @@
     syncSkipMessage,
     syncSuccessMessage,
   } from "$lib/git/sync";
+  import { copyText } from "$lib/clipboard";
   import { toast } from "$lib/toast";
   import { ai } from "$lib/ai/ai.svelte";
   import AiFeatureButton from "$lib/components/ai/AiFeatureButton.svelte";
@@ -376,7 +377,7 @@
       {
         id: "copy",
         label: "Copy branch name",
-        run: () => void navigator.clipboard.writeText(branch.name),
+        run: () => void copyText(branch.name, "branch name"),
       },
       { separator: true },
       {
@@ -407,7 +408,7 @@
         id: "copy",
         label: "Copy name",
         run: () =>
-          void navigator.clipboard.writeText(`${rb.remote}/${rb.name}`),
+          void copyText(`${rb.remote}/${rb.name}`, "branch name"),
       },
       { separator: true },
       {

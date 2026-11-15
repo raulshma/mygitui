@@ -23,6 +23,8 @@ use super::types::{
     RemoteBranchInfo, RemoteInfo, RepoStatus, SigningInfo, StageRequest, StageTarget, StatusEntry,
     TagInfo,
 };
+// Shared IPC read cap (`repo_read_file`): blame materializes the same file.
+use crate::ipc_commands::READ_FILE_MAX_BYTES;
 
 /// Lines longer than this (bytes) skip the imara-diff word pass; the whole
 /// line is already visually marked as changed.
@@ -42,6 +44,19 @@ const LOG_ORDER_CACHE_MAX_COMMITS: usize = 2_000_000;
 const IMAGE_EXTENSIONS: [&str; 9] = [
     "png", "jpg", "jpeg", "gif", "webp", "bmp", "svg", "ico", "avif",
 ];
+
+/// Clear rejection for a file above the shared repo_read_file IPC cap
+/// (`crate::ipc_commands::READ_FILE_MAX_BYTES`): blame materializes the
+/// whole final file, and a multi-GB blob must fail instead of freezing
+/// the UI. The FE blame view toasts command errors, so this surfaces
+/// like any other blame failure.
+fn blame_too_large(path: &str, bytes: u64) -> EngineError {
+    EngineError::Invalid(format!(
+        "`{path}` is {} MB — larger than the {} MB blame limit",
+        bytes / (1024 * 1024),
+        crate::ipc_commands::READ_FILE_MAX_BYTES / (1024 * 1024)
+    ))
+}
 
 /// A topological order for one exact set of walk heads. The order is derived
 /// only from the reachable commits, so it stays valid until a head moves
@@ -1513,9 +1528,11 @@ impl GitEngine for Libgit2Engine {
             }
         };
 
-        let blame = repo.blame_file(Path::new(path), Some(&mut opts))?;
-
         // Blame maps hunks onto the *final* file; read that file's lines.
+        // Checked BEFORE the (potentially slow) blame computation: refuse
+        // to materialize unbounded files — a multi-GB blob must fail with
+        // a clear error instead of freezing the UI. Same threshold and
+        // error style as the repo_read_file IPC cap (shared constant).
         let content: Vec<u8> = match &target_commit {
             Some(commit) => {
                 let tree = tree_of(commit)?;
@@ -1529,15 +1546,27 @@ impl GitEngine for Libgit2Engine {
                     .to_object(repo)?
                     .peel_to_blob()
                     .map_err(|e| EngineError::Invalid(format!("`{path}` is not a blob: {e}")))?;
+                let len = blob.size() as u64;
+                if len > READ_FILE_MAX_BYTES {
+                    return Err(blame_too_large(path, len));
+                }
                 blob.content().to_vec()
             }
             None => {
                 let workdir = repo
                     .workdir()
                     .ok_or_else(|| EngineError::Invalid("bare repository has no workdir".into()))?;
-                std::fs::read(workdir.join(path))?
+                let full = workdir.join(path);
+                if let Ok(meta) = std::fs::metadata(&full) {
+                    if meta.len() > READ_FILE_MAX_BYTES {
+                        return Err(blame_too_large(path, meta.len()));
+                    }
+                }
+                std::fs::read(full)?
             }
         };
+
+        let blame = repo.blame_file(Path::new(path), Some(&mut opts))?;
         let lines: Vec<String> = String::from_utf8_lossy(&content)
             .split('\n')
             .map(|l| l.trim_end_matches('\r').to_owned())
@@ -1952,5 +1981,57 @@ mod m12_pickaxe_tests {
             [c4.as_str(), c3.as_str(), c2.as_str(), c1.as_str()],
             "no filter applied"
         );
+    }
+
+    /// Blame refuses to materialize a file above the shared repo_read_file
+    /// IPC cap (committed blob and unborn-HEAD workdir file) instead of
+    /// reading unbounded bytes.
+    #[test]
+    fn blame_refuses_oversized_files() {
+        let oversized = READ_FILE_MAX_BYTES + 1;
+
+        // Committed blob above the cap (HEAD is the default blame target).
+        let fx = init_fixture("blame-cap");
+        commit_file(&fx.repo, "small.txt", "one\ntwo\n", "c1 base");
+        let lines = ENGINE
+            .blame(&fx.repo, "small.txt", None)
+            .expect("small file blames");
+        assert_eq!(lines.len(), 2);
+        let big = fx.repo.workdir().unwrap().join("big.bin");
+        std::fs::write(&big, vec![b'x'; oversized as usize]).expect("write big file");
+        // Stage + commit the big file WITHOUT rewriting it (commit_file
+        // would overwrite the content under test).
+        {
+            let mut index = fx.repo.index().expect("index");
+            index.add_path(Path::new("big.bin")).expect("add big");
+            index.write().expect("write index");
+            let tree = fx
+                .repo
+                .find_tree(index.write_tree().expect("tree"))
+                .expect("tree");
+            let sig = fx.repo.signature().expect("signature");
+            let parent = fx.repo.head().unwrap().peel_to_commit().unwrap();
+            fx.repo
+                .commit(Some("HEAD"), &sig, &sig, "c2 big file", &tree, &[&parent])
+                .expect("commit");
+        }
+        match ENGINE.blame(&fx.repo, "big.bin", None) {
+            Err(EngineError::Invalid(msg)) => {
+                assert!(msg.contains("blame limit"), "{msg}");
+                assert!(msg.contains("32 MB"), "{msg}");
+            }
+            other => panic!("expected Invalid for oversized blob, got {other:?}"),
+        }
+
+        // Workdir arm: unborn HEAD (no commits) reads the file from disk.
+        let fx2 = init_fixture("blame-cap-unborn");
+        let big2 = fx2.repo.workdir().unwrap().join("big.bin");
+        std::fs::write(&big2, vec![b'x'; oversized as usize]).expect("write big file");
+        match ENGINE.blame(&fx2.repo, "big.bin", None) {
+            Err(EngineError::Invalid(msg)) => assert!(msg.contains("blame limit"), "{msg}"),
+            other => panic!("expected Invalid for oversized workdir file, got {other:?}"),
+        }
+        let _ = std::fs::remove_file(&big);
+        let _ = std::fs::remove_file(&big2);
     }
 }

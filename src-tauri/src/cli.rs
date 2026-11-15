@@ -15,11 +15,24 @@
 
 use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Command, ExitStatus, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::engine::types::{CommitOptions, NetStats, PushOptions};
+
+/// Poll tick for the cancel-aware child wait (see [`git_stream`]): small
+/// enough that `op_cancel` feels instant, coarse enough to never matter
+/// next to a real git operation.
+const CANCEL_POLL: Duration = Duration::from_millis(150);
+
+/// Grace window for draining the reader threads after a cancel-kill. The
+/// killed git's own pipes close (its readers hit EOF), but hook
+/// grandchildren can inherit the pipe ends and keep the readers from EOF
+/// forever — the drain is bounded so a leaked grandchild cannot wedge the
+/// op lane (same shape as the forge runner's reader grace).
+const KILL_DRAIN_GRACE: Duration = Duration::from_secs(2);
 
 /// Non-`GIT_*` environment keys passed through to the child git: enough for
 /// it to locate its config, crypto, and helpers on Windows and Unix.
@@ -145,23 +158,15 @@ pub(crate) fn build_push_args(opts: &PushOptions) -> Vec<String> {
 
 /// Run `git <args>` in `workdir` with the sanitized environment; success
 /// returns trimmed stdout; failure returns stderr, falling back to stdout
-/// (some failures, e.g. "nothing to commit", print there).
-fn git(workdir: &Path, args: &[String]) -> Result<String, String> {
-    let mut cmd = crate::process::command("git");
-    cmd.current_dir(workdir).args(args);
-    apply_sanitized_env(&mut cmd);
-    let output = cmd
-        .output()
-        .map_err(|err| format!("failed to spawn git: {err}"))?;
-    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if output.status.success() {
-        Ok(stdout)
-    } else {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        let detail = if stderr.is_empty() { stdout } else { stderr };
-        let head = args.first().map(String::as_str).unwrap_or_default();
-        Err(format!("git {head} failed: {detail}"))
-    }
+/// (some failures, e.g. "nothing to commit", print there). `cancel` is the
+/// op's cancellation token — polled while git runs (see [`git_stream`]).
+fn git(workdir: &Path, args: &[String], cancel: Option<&AtomicBool>) -> Result<String, String> {
+    // Same polled child as the streaming variants (one cancel-aware wait
+    // loop for every CLI invocation — a plain `output()` wait would hang
+    // forever on a wedged git); lines are folded into the captured
+    // streams instead of being forwarded.
+    let output = git_stream(workdir, args, &mut |_| {}, cancel)?;
+    Ok(output.stdout)
 }
 
 /// Captured output of a streamed child, split by stream.
@@ -175,10 +180,22 @@ struct StreamOutput {
 /// Capturing both streams keeps the failure diagnostics identical to
 /// [`git`]; the callback is invoked on the calling thread so it may borrow
 /// the op context (it is not `Send`).
+///
+/// Cancellation: `cancel` is the op's token (`OpCtx::cancel_token`). The
+/// child is polled with `try_wait` on a fixed tick and the token checked
+/// between ticks — a blocking `wait()` would consult neither, so a hung
+/// hook used to wedge the mutation lane forever. On cancel the child is
+/// killed and the shared [`crate::ops::CANCELLED_ERR`] is returned (the
+/// same error shape `op_cancel` produces for the libgit2 net ops, so the
+/// queue classifies the op as `cancelled`). Deliberately NO deadline: a
+/// slow hook (a release build inside `pre-commit`) is legitimate work and
+/// only the user's op-cancel may stop it — an aggressive timeout would
+/// kill honest commits.
 fn git_stream(
     workdir: &Path,
     args: &[String],
     on_line: &mut dyn FnMut(&str),
+    cancel: Option<&AtomicBool>,
 ) -> Result<StreamOutput, String> {
     let mut cmd = crate::process::command("git");
     cmd.current_dir(workdir)
@@ -206,6 +223,62 @@ fn git_stream(
 
     let mut stdout_text = String::new();
     let mut stderr_text = String::new();
+    // Cancellation-aware wait: fold lines as they arrive; between ticks
+    // poll the child and check the token. The token is consulted on every
+    // wake-up (lines flowing or not), so even a chatty child cannot delay
+    // the abort past one tick.
+    let mut status: Option<ExitStatus> = None;
+    let cancelled = loop {
+        match rx.recv_timeout(CANCEL_POLL) {
+            Ok((is_stdout, line)) => {
+                if is_stdout {
+                    stdout_text.push_str(&line);
+                    stdout_text.push('\n');
+                } else {
+                    stderr_text.push_str(&line);
+                    stderr_text.push('\n');
+                }
+                if !line.trim().is_empty() {
+                    on_line(&line);
+                }
+            }
+            // Both readers hit EOF: the child's streams are closed.
+            Err(mpsc::RecvTimeoutError::Disconnected) => break false,
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+        }
+        if cancel.is_some_and(|token| token.load(Ordering::Acquire)) {
+            break true;
+        }
+        match child.try_wait() {
+            Ok(Some(exit)) => status = Some(exit),
+            Ok(None) => {}
+            Err(err) => return Err(format!("failed to wait for git: {err}")),
+        }
+    };
+
+    if cancelled {
+        // Kill so the child's pipes close and the readers hit EOF; drain
+        // them bounded (hook grandchildren may inherit the pipe ends and
+        // never EOF) and detach the threads — they exit whenever the
+        // pipes finally close, and their captured output no longer
+        // matters.
+        let _ = child.kill();
+        let _ = child.wait();
+        let deadline = Instant::now() + KILL_DRAIN_GRACE;
+        while Instant::now() < deadline {
+            match rx.recv_timeout(Duration::from_millis(50)) {
+                Ok(_) => {} // trailing output, discarded
+                Err(_) => break,
+            }
+        }
+        drop(out_reader);
+        drop(err_reader);
+        return Err(crate::ops::CANCELLED_ERR.to_string());
+    }
+
+    // Child exited (status observed above) or its streams closed: drain
+    // the trailing lines so failure diagnostics and the push report keep
+    // every byte, then reap.
     for (is_stdout, line) in rx {
         if is_stdout {
             stdout_text.push_str(&line);
@@ -218,12 +291,14 @@ fn git_stream(
             on_line(&line);
         }
     }
-
-    let status = child
-        .wait()
-        .map_err(|err| format!("failed to wait for git: {err}"))?;
     let _ = out_reader.join();
     let _ = err_reader.join();
+    let status = match status {
+        Some(status) => status,
+        None => child
+            .wait()
+            .map_err(|err| format!("failed to wait for git: {err}"))?,
+    };
 
     if status.success() {
         Ok(StreamOutput {
@@ -261,17 +336,29 @@ fn read_stream_lines<R: Read>(reader: R, is_stdout: bool, tx: mpsc::Sender<(bool
 
 /// Commit via the git CLI (hooks + signing run for real). Returns the new
 /// HEAD sha (`git rev-parse HEAD` after committing). Every stdout/stderr line
-/// is handed to `on_line` while the command runs.
+/// is handed to `on_line` while the command runs. `cancel` is the op's
+/// cancellation token (`OpCtx::cancel_token`): a hung hook is killed and the
+/// shared "cancelled" error returned instead of wedging the op lane — see
+/// [`git_stream`].
 pub fn commit_via_cli(
     workdir: &Path,
     opts: &CommitOptions,
     on_line: &mut dyn FnMut(&str),
+    cancel: Option<&AtomicBool>,
 ) -> Result<String, String> {
     let file = write_message_file(&opts.message)?;
     let result = (|| {
+        // A cancel that raced the engine phase must not spawn git at all.
+        if cancel.is_some_and(|token| token.load(Ordering::Acquire)) {
+            return Err(crate::ops::CANCELLED_ERR.to_string());
+        }
         let args = build_commit_args(&file.to_string_lossy(), opts);
-        git_stream(workdir, &args, on_line)?;
-        git(workdir, &["rev-parse".to_string(), "HEAD".to_string()])
+        git_stream(workdir, &args, on_line, cancel)?;
+        git(
+            workdir,
+            &["rev-parse".to_string(), "HEAD".to_string()],
+            cancel,
+        )
     })();
     let _ = std::fs::remove_file(&file);
     result
@@ -279,14 +366,20 @@ pub fn commit_via_cli(
 
 /// Push via the git CLI so a `pre-push` hook really runs (and streams its
 /// output). Returns the refs reported by `git push`; the report is written to
-/// stderr alongside progress, so parse both streams.
+/// stderr alongside progress, so parse both streams. `cancel` is the op's
+/// cancellation token (see [`commit_via_cli`] / [`git_stream`]).
 pub fn push_via_cli(
     workdir: &Path,
     opts: &PushOptions,
     on_line: &mut dyn FnMut(&str),
+    cancel: Option<&AtomicBool>,
 ) -> Result<NetStats, String> {
+    // A cancel that raced the queue-skip check must not spawn git.
+    if cancel.is_some_and(|token| token.load(Ordering::Acquire)) {
+        return Err(crate::ops::CANCELLED_ERR.to_string());
+    }
     let args = build_push_args(opts);
-    let output = git_stream(workdir, &args, on_line)?;
+    let output = git_stream(workdir, &args, on_line, cancel)?;
     let report = format!("{}\n{}", output.stdout, output.stderr);
     let updated_refs = crate::engine::netops::parse_push_report(&report);
     Ok(NetStats {
@@ -313,6 +406,7 @@ fn write_message_file(message: &str) -> Result<PathBuf, String> {
 mod tests {
     use super::*;
     use crate::engine::types::GitSignature;
+    use std::sync::Arc;
 
     fn opts() -> CommitOptions {
         CommitOptions {
@@ -467,7 +561,7 @@ mod tests {
         git_init(&["add", "file.txt"]);
 
         let mut seen: Vec<String> = Vec::new();
-        let sha = commit_via_cli(&dir, &opts(), &mut |line| seen.push(line.to_string()))
+        let sha = commit_via_cli(&dir, &opts(), &mut |line| seen.push(line.to_string()), None)
             .expect("cli commit succeeds");
         assert_eq!(sha.len(), 40, "sha from rev-parse HEAD: {sha}");
         assert!(
@@ -485,7 +579,7 @@ mod tests {
         let mut amended = opts();
         amended.amend = true;
         amended.message = "amended".to_string();
-        let sha2 = commit_via_cli(&dir, &amended, &mut |_line| {}).expect("amend succeeds");
+        let sha2 = commit_via_cli(&dir, &amended, &mut |_line| {}, None).expect("amend succeeds");
         assert_eq!(sha2.len(), 40);
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -545,6 +639,7 @@ mod tests {
                 ..PushOptions::default()
             },
             &mut |line| seen.push(line.to_string()),
+            None,
         )
         .expect("cli push succeeds");
         assert_eq!(
@@ -558,5 +653,75 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Real-git integration: a hung pre-commit hook is killed by op-cancel
+    /// and the commit resolves with the shared "cancelled" error quickly
+    /// instead of wedging the mutation lane for the hook's full (30 s)
+    /// runtime. Requires `git` on PATH — run with `cargo test -- --ignored`.
+    #[test]
+    #[ignore = "shells out to real git in a temp repo"]
+    fn cli_commit_cancel_kills_a_hung_hook() {
+        let dir = std::env::temp_dir().join(format!(
+            "mygitui-cli-cancel-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let run = |args: &[&str]| {
+            let out = Command::new("git")
+                .args(args)
+                .current_dir(&dir)
+                .output()
+                .expect("spawn git");
+            assert!(
+                out.status.success(),
+                "git {:?}: {}",
+                args,
+                String::from_utf8_lossy(&out.stderr)
+            );
+        };
+        run(&["init", "-q"]);
+        run(&["config", "user.email", "test@example.com"]);
+        run(&["config", "user.name", "Test"]);
+        std::fs::write(dir.join("file.txt"), b"one").unwrap();
+        run(&["add", "file.txt"]);
+        // The hook the test cancels mid-run (git runs hooks through its
+        // bundled sh on every platform, so a shebang script works even on
+        // Windows; no exec bit is needed there, and git ignores mode bits
+        // set via std::fs on Windows).
+        std::fs::write(dir.join(".git/hooks/pre-commit"), "#!/bin/sh\nsleep 30\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(
+                dir.join(".git/hooks/pre-commit"),
+                std::fs::Permissions::from_mode(0o755),
+            );
+        }
+
+        // Simulate op_cancel arriving 300 ms into the (30 s) hook.
+        let token = Arc::new(AtomicBool::new(false));
+        let cancel_token = token.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(300));
+            cancel_token.store(true, Ordering::Release);
+        });
+
+        let started = Instant::now();
+        let err = commit_via_cli(&dir, &opts(), &mut |_| {}, Some(&token))
+            .expect_err("cancelled commit must fail");
+        assert_eq!(err, crate::ops::CANCELLED_ERR, "op_cancel error shape");
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "cancel must not wait out the 30 s hook (took {:?})",
+            started.elapsed()
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

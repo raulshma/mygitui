@@ -58,6 +58,8 @@
 
   let deleting = $state<TagInfo | null>(null);
   let pushing = $state(false);
+  /** True while the tag-create IPC runs; the Create button disables. */
+  let creating = $state(false);
 
   $effect(() => {
     void repoId;
@@ -93,7 +95,8 @@
 
   async function onCreate(): Promise<void> {
     const name = newName.trim();
-    if (!name) return;
+    if (!name || creating) return;
+    creating = true;
     try {
       if (newSigned) {
         await tagCreateSigned(
@@ -119,6 +122,8 @@
         `Tag create failed: ${err instanceof Error ? err.message : String(err)}`,
         { kind: "error" },
       );
+    } finally {
+      creating = false;
     }
   }
 
@@ -277,7 +282,7 @@
       <Button
         class="h-auto rounded-full px-3 py-0.5 text-ui-meta"
         type="submit"
-        disabled={!newName.trim()}
+        disabled={!newName.trim() || creating}
       >
         Create
       </Button>

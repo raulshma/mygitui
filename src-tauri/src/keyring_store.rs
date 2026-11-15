@@ -27,33 +27,43 @@ fn entry(key: &str) -> Result<Entry, String> {
 /// Read a secret from the OS keyring.
 ///
 /// Returns `Ok(None)` when no entry exists for `key` (never set, or deleted).
+/// Async: OS-keyring I/O (D-Bus/Keychain) can stall, and sync Tauri commands
+/// run on the main thread.
 #[tauri::command]
-pub fn secrets_get(key: String) -> Result<Option<String>, String> {
-    match entry(&key)?.get_password() {
+pub async fn secrets_get(key: String) -> Result<Option<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || match entry(&key)?.get_password() {
         Ok(value) => Ok(Some(value)),
         Err(keyring::Error::NoEntry) => Ok(None),
         Err(e) => Err(format!("failed to read secret: {e}")),
-    }
+    })
+    .await
+    .map_err(|e| format!("failed to read secret: {e}"))?
 }
 
 /// Store (create or overwrite) a secret in the OS keyring.
 #[tauri::command]
-pub fn secrets_set(key: String, value: String) -> Result<(), String> {
-    entry(&key)?
-        .set_password(&value)
-        .map_err(|e| format!("failed to store secret: {e}"))
+pub async fn secrets_set(key: String, value: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        entry(&key)?
+            .set_password(&value)
+            .map_err(|e| format!("failed to store secret: {e}"))
+    })
+    .await
+    .map_err(|e| format!("failed to store secret: {e}"))?
 }
 
 /// Delete a secret from the OS keyring.
 ///
 /// Idempotent: deleting a key that does not exist is `Ok(())`.
 #[tauri::command]
-pub fn secrets_delete(key: String) -> Result<(), String> {
-    match entry(&key)?.delete_credential() {
+pub async fn secrets_delete(key: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || match entry(&key)?.delete_credential() {
         Ok(()) => Ok(()),
         Err(keyring::Error::NoEntry) => Ok(()),
         Err(e) => Err(format!("failed to delete secret: {e}")),
-    }
+    })
+    .await
+    .map_err(|e| format!("failed to delete secret: {e}"))?
 }
 
 #[cfg(test)]
@@ -103,12 +113,14 @@ mod tests {
             return;
         }
         let key = "test/roundtrip".to_string();
-        secrets_set(key.clone(), "s3cret-valu3".to_string()).expect("set should succeed");
+        tauri::async_runtime::block_on(secrets_set(key.clone(), "s3cret-valu3".to_string()))
+            .expect("set should succeed");
         assert_eq!(
-            secrets_get(key.clone()).expect("get after set should succeed"),
+            tauri::async_runtime::block_on(secrets_get(key.clone()))
+                .expect("get after set should succeed"),
             Some("s3cret-valu3".to_string())
         );
-        secrets_delete(key).expect("cleanup delete should succeed");
+        tauri::async_runtime::block_on(secrets_delete(key)).expect("cleanup delete should succeed");
     }
 
     #[test]
@@ -118,9 +130,11 @@ mod tests {
         }
         let key = "test/never_set".to_string();
         // Ensure it is absent even if a previous run left it behind.
-        secrets_delete(key.clone()).expect("pre-clean delete should succeed");
+        tauri::async_runtime::block_on(secrets_delete(key.clone()))
+            .expect("pre-clean delete should succeed");
         assert_eq!(
-            secrets_get(key).expect("get of missing secret should succeed"),
+            tauri::async_runtime::block_on(secrets_get(key))
+                .expect("get of missing secret should succeed"),
             None
         );
     }
@@ -131,13 +145,16 @@ mod tests {
             return;
         }
         let key = "test/delete".to_string();
-        secrets_set(key.clone(), "doomed".to_string()).expect("set should succeed");
-        secrets_delete(key.clone()).expect("delete should succeed");
+        tauri::async_runtime::block_on(secrets_set(key.clone(), "doomed".to_string()))
+            .expect("set should succeed");
+        tauri::async_runtime::block_on(secrets_delete(key.clone())).expect("delete should succeed");
         assert_eq!(
-            secrets_get(key.clone()).expect("get after delete should succeed"),
+            tauri::async_runtime::block_on(secrets_get(key.clone()))
+                .expect("get after delete should succeed"),
             None
         );
         // Deleting again is idempotent, not an error.
-        secrets_delete(key).expect("delete of missing secret should succeed");
+        tauri::async_runtime::block_on(secrets_delete(key))
+            .expect("delete of missing secret should succeed");
     }
 }

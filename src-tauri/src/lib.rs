@@ -139,11 +139,12 @@ pub fn run() {
         // events) track their live children here.
         .manage(actions::ActionRegistry::default())
         // M5: embedded terminal sessions (pty_create/pty_write/pty_resize/
-        // pty_kill + pty-output/pty-exit events) live here; dropping the
-        // registry on app exit kills every remaining shell.
+        // pty_kill + pty-output/pty-exit events) live here; the
+        // RunEvent::Exit handler below kills every remaining shell (Tauri
+        // does NOT drop managed state, so the registry's Drop never fires).
         .manage(pty::PtyRegistry::default())
         // AI: the managed `opencode serve` child (opencode_serve_start/
-        // status/stop); dropped on app exit, killing the server.
+        // status/stop); killed by the RunEvent::Exit handler below.
         .manage(opencode::OpenCodeServerRegistry::default())
         // Remote (SSH) devices: live-session pool (`device_*` commands),
         // remote shell sessions (`rshell_*`), and remote action runs.
@@ -337,12 +338,16 @@ pub fn run() {
             }
         })
         // Tauri does NOT drop managed state on exit (verified live: the
-        // pty registry's Drop comment notwithstanding) — kill the managed
-        // opencode serve tree explicitly on the graceful-exit path.
+        // registries' Drop impls never fire) — kill the managed opencode
+        // serve tree and every remaining pty shell explicitly on the
+        // graceful-exit path.
         .build(tauri::generate_context!())
         .expect("error while building mygitui")
         .run(|app, event| {
             if let tauri::RunEvent::Exit = event {
+                if let Some(registry) = app.try_state::<pty::PtyRegistry>() {
+                    registry.kill_all();
+                }
                 if let Some(registry) = app.try_state::<opencode::OpenCodeServerRegistry>() {
                     registry.stop();
                 }

@@ -160,7 +160,7 @@ impl RemoteShellRegistry {
     /// `cd <root> && exec $SHELL` after the pty request (see
     /// `DeviceSession::shell`).
     #[allow(clippy::too_many_arguments)]
-    pub fn create(
+    pub async fn create(
         &self,
         _repo_id: &RepoId,
         remote: &crate::repo::RemoteHandle,
@@ -169,11 +169,11 @@ impl RemoteShellRegistry {
         sink: Arc<dyn ShellSink>,
     ) -> Result<String, String> {
         self.inner.ensure_slot()?;
-        let channel = tauri::async_runtime::block_on(remote.git().session.shell(
-            rows.max(1) as u32,
-            cols.max(1) as u32,
-            Some(&remote.root),
-        ))?;
+        let channel = remote
+            .git()
+            .session
+            .shell(rows.max(1) as u32, cols.max(1) as u32, Some(&remote.root))
+            .await?;
         let (mut read_half, write_half) = channel.split();
         let id = format!(
             "rshell-{:x}",
@@ -417,9 +417,12 @@ fn flush_pending(
 
 // ---------- IPC commands ----------
 
-/// Open a remote shell for `repo_id` (must be a remote project).
+/// Open a remote shell for `repo_id` (must be a remote project). Async: the
+/// SSH connect + auth/host-key handshake can take minutes, and sync Tauri
+/// commands run on the main thread — a parked main thread could never answer
+/// those prompts.
 #[tauri::command(rename_all = "snake_case")]
-pub fn rshell_create(
+pub async fn rshell_create(
     repo_id: RepoId,
     rows: Option<u16>,
     cols: Option<u16>,
@@ -433,13 +436,15 @@ pub fn rshell_create(
     let remote = handle
         .remote()
         .ok_or_else(|| "terminal over SSH requires a remote project".to_string())?;
-    registry.create(
-        &repo_id,
-        remote,
-        rows.unwrap_or(24),
-        cols.unwrap_or(80),
-        Arc::new(TauriShellSink::new(app)),
-    )
+    registry
+        .create(
+            &repo_id,
+            remote,
+            rows.unwrap_or(24),
+            cols.unwrap_or(80),
+            Arc::new(TauriShellSink::new(app)),
+        )
+        .await
 }
 
 /// Send frontend input (keystrokes, paste) to the remote shell.

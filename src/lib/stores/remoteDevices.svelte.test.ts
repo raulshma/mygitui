@@ -129,11 +129,18 @@ describe("registry (load / add / update / remove)", () => {
     expect(store.statusOf("d2")).toBe("connected");
   });
 
-  it("load keeps the current list on failure (never throws)", async () => {
+  it("load keeps the current list on failure (never throws) and sets loadError", async () => {
     mockDeviceList.mockRejectedValue(new Error("backend gone") as never);
     const store = new RemoteDeviceStore();
     await store.load();
     expect(store.devices).toEqual([]);
+    expect(store.loadError).toBe("backend gone");
+
+    // A later successful load clears the error (the home view's Retry).
+    mockDeviceList.mockResolvedValue([device("d1")]);
+    await store.load();
+    expect(store.loadError).toBeNull();
+    expect(store.devices).toHaveLength(1);
   });
 
   it("add appends, update replaces, remove drops the entry", async () => {
@@ -274,12 +281,14 @@ describe("registry (load / add / update / remove)", () => {
     ).toBe(true);
   });
 
-  it("forgetHostKey resolves whether a key was pinned and never throws", async () => {
+  it("forgetHostKey reports forgotten / none / failed and never throws", async () => {
     const store = new RemoteDeviceStore();
     mockDeviceForgetHostKey.mockResolvedValue(true);
-    await expect(store.forgetHostKey("d1")).resolves.toBe(true);
+    await expect(store.forgetHostKey("d1")).resolves.toBe("forgotten");
+    mockDeviceForgetHostKey.mockResolvedValue(false);
+    await expect(store.forgetHostKey("d1")).resolves.toBe("none");
     mockDeviceForgetHostKey.mockRejectedValue(new Error("io") as never);
-    await expect(store.forgetHostKey("d1")).resolves.toBe(false);
+    await expect(store.forgetHostKey("d1")).resolves.toBe("failed");
   });
 });
 

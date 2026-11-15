@@ -319,12 +319,13 @@
   async function forgetHostKey(): Promise<void> {
     const profile = deviceDetail?.profile;
     if (!profile) return;
-    const had = await remoteDevices.forgetHostKey(profile.id);
-    if (had) {
+    const outcome = await remoteDevices.forgetHostKey(profile.id);
+    if (outcome === "forgotten") {
       toast(`Host key for ${profile.name} forgotten — next connect re-prompts`);
-    } else {
+    } else if (outcome === "none") {
       toast(`${profile.name} has no pinned host key`);
     }
+    // "failed": the store already toasted the error — stay silent here.
   }
 
   async function removeDevice(): Promise<void> {
@@ -1239,6 +1240,27 @@
               </div>
 
               <DeviceBrowser deviceId={deviceDetail.profile.id} />
+            </div>
+          {:else if remoteDevices.loadError && (remoteDevices.devices?.length ?? 0) === 0}
+            <!-- device_list failed: never dress a backend hiccup up as
+                 "no devices yet" — show the error with a Retry instead. -->
+            <div
+              class="devices-error m-0 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-dashed border-border px-6 py-5"
+            >
+              <p
+                class="devices-error-msg m-0 min-w-0 flex-1 text-ui-base leading-normal text-destructive"
+                role="alert"
+              >
+                Couldn't load the device list: {remoteDevices.loadError}
+              </p>
+              <button
+                class="add-btn pill-btn pill-btn-md pill-btn-primary"
+                type="button"
+                onclick={() => void remoteDevices.load()}
+              >
+                <Icon icon={iconAdd} size={14} />
+                Retry
+              </button>
             </div>
           {:else if (remoteDevices.devices?.length ?? 0) === 0}
             <p
