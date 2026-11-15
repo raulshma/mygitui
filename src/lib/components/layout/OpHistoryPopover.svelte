@@ -1,15 +1,16 @@
 <script lang="ts">
   /**
-   * Recent-operations popover — the durable half of the status bar's ops
-   * area, mounted by `StatusBar` while no op is in flight for the active
-   * repo.
+   * Recent-operations popover — the status bar's ops surface, mounted by
+   * `StatusBar` from the idle history chip or from clicking a network op
+   * row whose repo has no hook output.
    *
-   * Lists the repo's completed-op history ring (`OpStore.history`, newest
-   * first): kind label, last message, relative finish time and an outcome
-   * chip in `ActionRunView`'s visual language (primary=succeeded,
-   * destructive=failed, muted=cancelled), with the terminal error kept on
-   * failed rows — the 9 s toast is long gone by the time a user reviews
-   * "what ran and what failed" here.
+   * Lists the repo's in-flight ops (`OpStore.ops`, spinner + kind + message
+   * + percent) in a distinct section above the completed-op history ring
+   * (`OpStore.history`, newest first): kind label, last message, relative
+   * finish time and an outcome chip in `ActionRunView`'s visual language
+   * (primary=succeeded, destructive=failed, muted=cancelled), with the
+   * terminal error kept on failed rows — the 9 s toast is long gone by the
+   * time a user reviews "what ran and what failed" here.
    *
    * Anchored overlay idiom shared with the branch switcher: the `floating`
    * action portals the panel to `<body>` (preferred side ABOVE the anchor —
@@ -21,12 +22,15 @@
   import {
     kindLabel,
     opHistoryFor,
+    opsFor,
+    type ActiveOp,
     type OpHistoryEntry,
     type OpHistoryOutcome,
   } from "$lib/stores/ops.svelte";
   import { formatRelativeTime } from "$lib/git/format";
   import { floating } from "$lib/components/overlay/floating";
   import Icon from "$lib/components/icons/Icon.svelte";
+  import { Spinner } from "$lib/components/ui/spinner/index.js";
   import { appIcon } from "$lib/components/icons/library.svelte";
 
   let {
@@ -34,7 +38,7 @@
     anchor,
     onClose,
   }: {
-    /** Repo whose history the popover lists (its tab owns the trigger). */
+    /** Repo whose ops the popover lists (its tab owns the trigger). */
     repoId: string;
     /** Trigger element the panel anchors to (the status-bar chip). */
     anchor: HTMLElement | undefined;
@@ -47,6 +51,8 @@
   const iconBan = $derived(appIcon("ban")!);
 
   const entries = $derived(opHistoryFor(repoId));
+  /** The repo's in-flight ops, listed above the completed ring. */
+  const running = $derived(opsFor(repoId));
 
   /** Row icon + chip classes per outcome (see ActionRunView's chips). */
   const OUTCOME_STYLES: Record<
@@ -107,73 +113,125 @@
   >
     <h3 class="m-0 text-xs font-semibold text-foreground">Recent operations</h3>
     <span class="meta flex-none text-ui-micro tabular-nums"
-      >{entries.length} op{entries.length === 1 ? "" : "s"}</span
+      >{entries.length + running.length} op{entries.length + running.length === 1
+        ? ""
+        : "s"}</span
     >
   </div>
-  <!-- Scrollable list, keyboard-reachable like the log strip's lines. -->
-  <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
-  <ul
-    class="m-0 max-h-80 list-none overflow-auto p-0 outline-none focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary"
-    tabindex="0"
-    aria-label="Recent operations list"
-  >
-    {#if entries.length === 0}
-      <!-- Defensive: the parent closes an emptied popover, but the clear
-           can land between render and effect — never show a blank panel. -->
-      <li class="state p-3 text-ui-base text-muted-foreground" role="status">
-        No recent operations.
-      </li>
-    {:else}
-      {#each entries as entry (entry.op_id)}
-        {@const style = OUTCOME_STYLES[entry.outcome]}
+  {#if running.length > 0}
+    <!-- In-flight ops, the live half of the story the ring tells: same row
+         anatomy as the completed list — the spinner stands where the
+         outcome icon sits, the percent where the finish time sits, and a
+         muted "running" chip fills the outcome column so the sections scan
+         as one table. -->
+    <ul
+      class="m-0 flex-none list-none border-b border-border p-0"
+      aria-label="Running operations"
+      aria-busy="true"
+    >
+      {#each running as op (op.op_id)}
         <li
           class="row flex flex-none items-start gap-ui-3 border-b border-border px-2 py-1.5 last:border-b-0 text-ui-micro"
         >
           <span
-            class="inline-flex size-3.5 flex-none items-center justify-center {entry.outcome ===
-            "succeeded"
-              ? "text-primary"
-              : entry.outcome === "failed"
-                ? "text-destructive"
-                : "text-muted-foreground"}"
+            class="inline-flex size-3.5 flex-none items-center justify-center text-muted-foreground"
             aria-hidden="true"
           >
-            {#if style.icon === "done"}
-              <Icon icon={iconDone} size={14} />
-            {:else if style.icon === "alert"}
-              <Icon icon={iconAlert} size={14} />
-            {:else}
-              <Icon icon={iconBan} size={14} />
-            {/if}
+            <Spinner class="size-3" role="presentation" aria-hidden="true" />
           </span>
           <div class="min-w-0 flex-1">
             <div class="flex min-w-0 items-baseline gap-ui-2">
               <span class="flex-none font-semibold text-foreground"
-                >{kindLabel(entry.kind)}</span
+                >{kindLabel(op.kind)}</span
               >
               <span class="min-w-0 flex-1 truncate text-muted-foreground"
-                >{entry.message}</span
+                >{op.message}</span
               >
-              <span
-                class="flex-none text-muted-foreground tabular-nums"
-                title="Finished {relative(entry)}">{relative(entry)}</span
-              >
+              {#if op.pct !== null}
+                <span class="flex-none text-muted-foreground tabular-nums"
+                  >{Math.round(op.pct)}%</span
+                >
+              {/if}
             </div>
-            {#if entry.error !== null}
-              <p
-                class="m-0 mt-px text-ui-micro text-destructive [overflow-wrap:anywhere]"
-              >
-                {entry.error}
-              </p>
-            {/if}
           </div>
           <span
-            class={`flex-none rounded-full px-2 py-px text-ui-micro font-semibold ${style.chip}`}
+            class="flex-none rounded-full bg-muted px-2 py-px text-ui-micro font-semibold text-muted-foreground"
           >
-            {entry.outcome}
+            running
           </span>
         </li>
       {/each}
-    {/if}
-  </ul>
+    </ul>
+  {/if}
+  {#if entries.length > 0 || running.length === 0}
+    <!-- Scrollable list, keyboard-reachable like the log strip's lines.
+         Skipped entirely while only in-flight ops are listed (nothing
+         completed yet) — the "No recent operations." fallback below still
+         covers the defensive both-empty case. -->
+    <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+    <ul
+      class="m-0 max-h-80 list-none overflow-auto p-0 outline-none focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary"
+      tabindex="0"
+      aria-label="Recent operations list"
+    >
+      {#if entries.length === 0}
+        <!-- Defensive: the parent closes an emptied popover, but the clear
+             can land between render and effect — never show a blank panel. -->
+        <li class="state p-3 text-ui-base text-muted-foreground" role="status">
+          No recent operations.
+        </li>
+      {:else}
+        {#each entries as entry (entry.op_id)}
+          {@const style = OUTCOME_STYLES[entry.outcome]}
+          <li
+            class="row flex flex-none items-start gap-ui-3 border-b border-border px-2 py-1.5 last:border-b-0 text-ui-micro"
+          >
+            <span
+              class="inline-flex size-3.5 flex-none items-center justify-center {entry.outcome ===
+              "succeeded"
+                ? "text-primary"
+                : entry.outcome === "failed"
+                  ? "text-destructive"
+                  : "text-muted-foreground"}"
+              aria-hidden="true"
+            >
+              {#if style.icon === "done"}
+                <Icon icon={iconDone} size={14} />
+              {:else if style.icon === "alert"}
+                <Icon icon={iconAlert} size={14} />
+              {:else}
+                <Icon icon={iconBan} size={14} />
+              {/if}
+            </span>
+            <div class="min-w-0 flex-1">
+              <div class="flex min-w-0 items-baseline gap-ui-2">
+                <span class="flex-none font-semibold text-foreground"
+                  >{kindLabel(entry.kind)}</span
+                >
+                <span class="min-w-0 flex-1 truncate text-muted-foreground"
+                  >{entry.message}</span
+                >
+                <span
+                  class="flex-none text-muted-foreground tabular-nums"
+                  title="Finished {relative(entry)}">{relative(entry)}</span
+                >
+              </div>
+              {#if entry.error !== null}
+                <p
+                  class="m-0 mt-px text-ui-micro text-destructive [overflow-wrap:anywhere]"
+                >
+                  {entry.error}
+                </p>
+              {/if}
+            </div>
+            <span
+              class={`flex-none rounded-full px-2 py-px text-ui-micro font-semibold ${style.chip}`}
+            >
+              {entry.outcome}
+            </span>
+          </li>
+        {/each}
+      {/if}
+    </ul>
+  {/if}
 </div>

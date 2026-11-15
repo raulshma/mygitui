@@ -4,8 +4,10 @@
  * changes reflect the active tab's status and wire their clicks (branch
  * switcher / Status panel focus via the UI bus), the sync item runs the
  * contextual verb through the shared sync helpers, background-repo ops carry
- * the tab name, cancel goes through the op store, and the auto-fetch chip
- * mirrors the cadence.
+ * the tab name, cancel goes through the op store, the auto-fetch chip
+ * mirrors the cadence, and every network op row is click-through — to the
+ * log overlay when hook output exists, otherwise to the recent-ops popover
+ * (exclusively with it).
  */
 
 import {
@@ -14,6 +16,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/svelte";
 import { tick } from "svelte";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -186,6 +189,7 @@ beforeEach(() => {
   tabStore.activeId = null;
   opStore.ops = {};
   opStore.logs = {};
+  opStore.history = {};
   autofetch.config = {};
 });
 
@@ -195,6 +199,7 @@ afterEach(() => {
   tabStore.activeId = null;
   opStore.ops = {};
   opStore.logs = {};
+  opStore.history = {};
   autofetch.config = {};
 });
 
@@ -420,7 +425,7 @@ describe("StatusBar", () => {
     );
   });
 
-  it("op rows without hook output stay inert", async () => {
+  it("log-less network op rows open the recent-ops popover", async () => {
     tabStore.tabs = [tab({ status: status() })];
     tabStore.activeId = "r1";
     render(StatusBar);
@@ -429,14 +434,171 @@ describe("StatusBar", () => {
       progress({
         op_id: "op-1",
         repo_id: "r1",
-        message: "fetching origin",
+        kind: "push",
+        message: "pushing to origin",
+        pct: 12,
       }),
     );
     await tick();
 
-    // No op-log session → the row is plain text, not a click target.
-    expect(screen.getByText("fetching origin").closest("button")).toBeNull();
+    // No op-log session, but a network op: the row's main segment is a
+    // real button (like the log rows) whose accessible name carries the
+    // op message.
+    const rowText = screen.getByText("pushing to origin");
+    const rowButton = rowText.closest("button");
+    expect(rowButton).not.toBeNull();
+    expect(rowButton?.getAttribute("aria-expanded")).toBe("false");
+
+    // Clicking it opens the recent-ops popover anchored to the row,
+    // listing the in-flight op.
+    await fireEvent.click(rowText);
+    await tick();
+    const popover = screen.getByRole("dialog", { name: "Recent operations" });
+    const running = within(popover).getByRole("list", {
+      name: "Running operations",
+    });
+    expect(within(running).getByText("pushing to origin")).not.toBeNull();
+    expect(within(running).getByText("12%")).not.toBeNull();
+    expect(within(running).getByText("running")).not.toBeNull();
+    expect(rowButton?.getAttribute("aria-expanded")).toBe("true");
+
+    // Toggling the row again closes it.
+    await fireEvent.click(rowText);
+    await tick();
+    expect(
+      screen.queryByRole("dialog", { name: "Recent operations" }),
+    ).toBeNull();
+    expect(rowButton?.getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it("non-network op rows without hook output stay inert", async () => {
+    tabStore.tabs = [tab({ status: status() })];
+    tabStore.activeId = "r1";
+    render(StatusBar);
+
+    opStore.applyProgress(
+      progress({
+        op_id: "op-1",
+        repo_id: "r1",
+        kind: "stage",
+        message: "staging changes",
+      }),
+    );
+    await tick();
+
+    // No op-log session and nothing to view: the row is plain text.
+    expect(screen.getByText("staging changes").closest("button")).toBeNull();
     expect(screen.queryByText("output")).toBeNull();
+  });
+
+  it("the row popover flips its in-flight listing to completed history as the op finishes", async () => {
+    tabStore.tabs = [tab({ status: status() })];
+    tabStore.activeId = "r1";
+    render(StatusBar);
+
+    opStore.applyProgress(
+      progress({
+        op_id: "op-1",
+        repo_id: "r1",
+        kind: "pull",
+        message: "pulling origin",
+        pct: 55,
+      }),
+    );
+    await tick();
+    await fireEvent.click(screen.getByText("pulling origin"));
+    await tick();
+
+    const popover = screen.getByRole("dialog", { name: "Recent operations" });
+    expect(
+      within(popover).getByRole("list", { name: "Running operations" }),
+    ).not.toBeNull();
+    expect(
+      within(popover).queryByRole("list", { name: "Recent operations list" }),
+    ).toBeNull();
+
+    opStore.applyProgress(
+      progress({
+        op_id: "op-1",
+        repo_id: "r1",
+        kind: "pull",
+        message: "pulling origin",
+        done: true,
+        outcome: "completed",
+      }),
+    );
+    await tick();
+
+    // The same popover, still open and visible (now anchored to the idle
+    // chip the finished op leaves behind), lists the completed entry.
+    const donePopover = screen.getByRole("dialog", {
+      name: "Recent operations",
+    });
+    expect(
+      within(donePopover).queryByRole("list", { name: "Running operations" }),
+    ).toBeNull();
+    const history = within(donePopover).getByRole("list", {
+      name: "Recent operations list",
+    });
+    expect(within(history).getByText("Pull")).not.toBeNull();
+    expect(within(history).getByText("succeeded")).not.toBeNull();
+  });
+
+  it("opening the popover closes the log overlay and vice versa", async () => {
+    tabStore.tabs = [tab({ status: status() })];
+    tabStore.activeId = "r1";
+    render(StatusBar);
+
+    // A push with hook output: the new session auto-opens the overlay.
+    opStore.applyProgress(
+      progress({
+        op_id: "op-1",
+        repo_id: "r1",
+        kind: "push",
+        message: "pushing to origin",
+      }),
+    );
+    opStore.applyLog({
+      repo_id: "r1",
+      op_id: "op-1",
+      kind: "push",
+      line: "husky > pre-push",
+    });
+    await tick();
+    expect(screen.getByRole("region", { name: "Push output" })).not.toBeNull();
+
+    // The op completes; the idle chip appears next to the open overlay.
+    opStore.applyProgress(
+      progress({
+        op_id: "op-1",
+        repo_id: "r1",
+        kind: "push",
+        message: "pushing to origin",
+        done: true,
+        outcome: "completed",
+      }),
+    );
+    await tick();
+
+    // Opening the popover from the chip closes the overlay…
+    await fireEvent.click(
+      screen.getByRole("button", { name: /Recent operations — last:/ }),
+    );
+    await tick();
+    expect(screen.queryByRole("region", { name: "Push output" })).toBeNull();
+    expect(
+      screen.getByRole("dialog", { name: "Recent operations" }),
+    ).not.toBeNull();
+
+    // …and opening the overlay from the log chip closes the popover.
+    await fireEvent.click(
+      screen.getByRole("button", { name: "Show Push output" }),
+    );
+    await tick();
+    expect(screen.getByRole("region", { name: "Push output" })).not.toBeNull();
+    expect(
+      screen.queryByRole("dialog", { name: "Recent operations" }),
+    ).toBeNull();
   });
 
   it("clicking a background repo's op row opens that repo's log", async () => {
@@ -465,6 +627,38 @@ describe("StatusBar", () => {
     await tick();
     expect(screen.getByRole("region", { name: "Push output" })).not.toBeNull();
     expect(screen.getByText("r2 pre-push hook line")).not.toBeNull();
+  });
+
+  it("clicking a background repo's log-less op row opens that repo's popover", async () => {
+    tabStore.tabs = [
+      tab({ id: "r1", name: "mygitui", root: "/repo", status: status() }),
+      tab({ id: "r2", name: "other-repo", root: "/other", status: null }),
+    ];
+    tabStore.activeId = "r1";
+    render(StatusBar);
+
+    // The row targets ITS repo: the popover lists r2's in-flight op, not
+    // the active repo's (empty) ops.
+    opStore.ops = {
+      r2: [
+        activeOp({
+          op_id: "op-2",
+          kind: "push",
+          message: "pushing to origin",
+        }),
+      ],
+    };
+    await tick();
+
+    await fireEvent.click(screen.getByText("pushing to origin"));
+    await tick();
+
+    const popover = screen.getByRole("dialog", { name: "Recent operations" });
+    const running = within(popover).getByRole("list", {
+      name: "Running operations",
+    });
+    expect(within(running).getByText("pushing to origin")).not.toBeNull();
+    expect(within(running).getByText("Push")).not.toBeNull();
   });
 
   it("auto-fetch chip mirrors the repo cadence (hidden when off) and opens the Remotes panel", async () => {

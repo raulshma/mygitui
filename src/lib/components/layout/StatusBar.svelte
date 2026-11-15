@@ -13,10 +13,12 @@
    * working-copy change count (click focuses the Status panel). Middle: one
    * item per in-flight backend op across all open repos — the ONE spinner
    * surface for git work, so header/commit controls never duplicate it;
-   * progress, percent and the cooperative Cancel live here, and rows whose
-   * repo has hook output (pre-push, commit hooks) are click-through: clicking
-   * e.g. "pushing to …" opens the log overlay. Hook/CLI output also rides a
-   * chip on the right and expands into the same fixed overlay above the bar.
+   * progress, percent and the cooperative Cancel live here, and every
+   * network row is click-through: rows whose repo has hook output
+   * (pre-push, commit hooks) open the log overlay, while fetch/pull/push
+   * rows without output yet open the recent-ops popover for their repo.
+   * Hook/CLI output also rides a chip on the right and expands into the
+   * same fixed overlay above the bar.
    * When the ACTIVE repo has no op in flight but completed-op history, the
    * same area shows a quiet outcome chip (success check / alert icon) that
    * opens the recent-ops popover (`OpHistoryPopover`) — the after-the-fact
@@ -152,6 +154,7 @@
   /** Show/hide the overlay for one repo (chip + op-row click-through). */
   function toggleLog(target: string): void {
     logRepoId = logRepoId === target ? null : target;
+    histRepoId = null; // the log overlay and the popover are exclusive
   }
 
   /**
@@ -169,6 +172,7 @@
     if (seenLogOps[repoId] === session.op_id) return;
     seenLogOps = { ...seenLogOps, [repoId]: session.op_id };
     logRepoId = repoId;
+    histRepoId = null; // the cue opening the overlay closes the popover
   });
 
   // The session a closed overlay pointed at can be dismissed out from under
@@ -293,7 +297,8 @@
    * global: an auto-fetch on this repo or a push started from a panel all
    * land here). Rows for a background repo carry its tab name. `logKind` is
    * the repo's hook/CLI output session (pre-commit / pre-push lines), when
-   * one exists — such rows are click-through to the log overlay.
+   * one exists — such rows are click-through to the log overlay, and
+   * log-less network rows (fetch/pull/push) to the recent-ops popover.
    */
   const opRows = $derived(
     Object.entries(opStore.ops).flatMap(([opRepoId, list]) => {
@@ -335,17 +340,32 @@
   });
 
   /**
-   * Repo whose history the popover shows (`null` = closed). Same pattern
-   * as `logRepoId`: an open popover always belongs to the active repo, so
-   * a tab switch while open simply closes it.
+   * Repo whose history the popover shows (`null` = closed). Opened by the
+   * idle chip (active repo) or by clicking a network op row with no log
+   * session — any repo, anchored to the row button. One popover at a time:
+   * opening (or auto-opening) the log overlay closes it and vice versa.
    */
   let histRepoId = $state<string | null>(null);
-  const histOpen = $derived(repoId !== null && histRepoId === repoId);
+  /** Whether the idle chip's own popover is the open one (its aria state). */
+  const histChipOpen = $derived(repoId !== null && histRepoId === repoId);
   let histTriggerEl = $state<HTMLButtonElement | null>(null);
 
-  function toggleHistory(): void {
+  function toggleHistory(trigger: HTMLButtonElement): void {
     if (repoId === null) return;
     histRepoId = histRepoId === repoId ? null : repoId;
+    histTriggerEl = trigger;
+    logRepoId = null; // the log overlay and the popover are exclusive
+  }
+
+  /**
+   * Same toggle from an op row: the trigger is the row's main segment, so
+   * the panel anchors there instead of the idle chip — the "view the op"
+   * click-through for network rows that have no hook output to show.
+   */
+  function toggleRowHistory(target: string, trigger: HTMLButtonElement): void {
+    histRepoId = histRepoId === target ? null : target;
+    histTriggerEl = trigger;
+    logRepoId = null; // the log overlay and the popover are exclusive
   }
 
   /** Closes the popover and returns focus to its trigger (Escape/outside). */
@@ -356,9 +376,21 @@
 
   // A popover whose history was evicted (tab close clears it with the
   // other per-repo caches) has nothing left to list — close it, like the
-  // log-overlay effect above retires a dismissed session.
+  // log-overlay effect above retires a dismissed session. A row-opened
+  // popover also closes once its repo's ops drain: the row button it is
+  // anchored to is gone then (the active repo instead re-anchors to the
+  // idle chip the finished op leaves behind, so it stays to show the
+  // outcome).
   $effect(() => {
-    if (histRepoId !== null && opHistoryFor(histRepoId).length === 0) {
+    if (histRepoId === null) return;
+    if (
+      opHistoryFor(histRepoId).length === 0 &&
+      opStore.opsFor(histRepoId).length === 0
+    ) {
+      histRepoId = null;
+      return;
+    }
+    if (histRepoId !== repoId && !opStore.busy(histRepoId)) {
       histRepoId = null;
     }
   });
@@ -425,9 +457,9 @@
   {/if}
   <!-- The recent-ops popover portals itself to <body> via the floating
        action, so unlike the log overlay it needs no layer wrapper here. -->
-  {#if histOpen && repoId !== null}
+  {#if histRepoId !== null}
     <OpHistoryPopover
-      repoId={repoId}
+      repoId={histRepoId}
       anchor={histTriggerEl ?? undefined}
       onClose={closeHistory}
     />
@@ -571,8 +603,32 @@
               </button>
             {/snippet}
           </Hint>
+        {:else if isSyncVerb(row.op.kind)}
+          <!-- No hook output for this repo, but a network op (fetch/pull/
+               push): the row's main segment opens the recent-ops popover
+               for its repo — the same click-through as the log rows,
+               falling back to the op history + in-flight list when there
+               is no output to show. -->
+          <Hint
+            label={histRepoId === row.repoId
+              ? "Hide recent operations"
+              : "Show recent operations"}
+          >
+            {#snippet child({ props })}
+              <button
+                {...props}
+                class="flex h-full min-w-0 flex-1 items-center gap-ui-2 text-left transition-colors duration-[120ms] hover:bg-accent hover:text-accent-foreground focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary"
+                type="button"
+                aria-expanded={histRepoId === row.repoId}
+                aria-haspopup="dialog"
+                onclick={(e) => toggleRowHistory(row.repoId, e.currentTarget)}
+              >
+                {@render opMain(row)}
+              </button>
+            {/snippet}
+          </Hint>
         {:else}
-          <!-- No hook output for this repo: the row stays inert text. -->
+          <!-- Neither hook output nor a network op: the row stays inert. -->
           <div class="flex min-w-0 flex-1 items-center gap-ui-2">
             {@render opMain(row)}
           </div>
@@ -693,8 +749,8 @@
             type="button"
             aria-label={historyTitle}
             aria-haspopup="dialog"
-            aria-expanded={histOpen}
-            onclick={toggleHistory}
+            aria-expanded={histChipOpen}
+            onclick={(e) => toggleHistory(e.currentTarget)}
           >
             <span
               class="inline-flex size-3.5 flex-none items-center justify-center {lastOutcome ===
