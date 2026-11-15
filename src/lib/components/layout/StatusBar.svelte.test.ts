@@ -185,6 +185,7 @@ beforeEach(() => {
   tabStore.tabs = [];
   tabStore.activeId = null;
   opStore.ops = {};
+  opStore.logs = {};
   autofetch.config = {};
 });
 
@@ -193,6 +194,7 @@ afterEach(() => {
   tabStore.tabs = [];
   tabStore.activeId = null;
   opStore.ops = {};
+  opStore.logs = {};
   autofetch.config = {};
 });
 
@@ -371,6 +373,98 @@ describe("StatusBar", () => {
     render(StatusBar);
 
     expect(screen.getByText("Merge in progress")).not.toBeNull();
+  });
+
+  it("hook-bearing op rows toggle the log overlay (click 'pushing to …')", async () => {
+    tabStore.tabs = [tab({ status: status() })];
+    tabStore.activeId = "r1";
+    render(StatusBar);
+
+    opStore.applyProgress(
+      progress({
+        op_id: "op-1",
+        repo_id: "r1",
+        kind: "push",
+        message: "pushing to origin",
+      }),
+    );
+    // A new session opens the overlay once (the pre-existing cue)…
+    opStore.applyLog({
+      repo_id: "r1",
+      op_id: "op-1",
+      kind: "push",
+      line: "husky > pre-push (node v22)",
+    });
+    await tick();
+    // The overlay strip (a named <section> → role="region"; the chip shows
+    // the same title text, so query by role).
+    expect(screen.getByRole("region", { name: "Push output" })).not.toBeNull();
+
+    // …and the op row's main segment toggles it closed and back open, so a
+    // user who dismissed the output can bring it back from the op itself.
+    const rowText = screen.getByText("pushing to origin");
+    expect(rowText.closest("button")).not.toBeNull();
+    await fireEvent.click(rowText);
+    await tick();
+    expect(screen.queryByRole("region", { name: "Push output" })).toBeNull();
+    expect(rowText.closest("button")?.getAttribute("aria-expanded")).toBe(
+      "false",
+    );
+
+    await fireEvent.click(rowText);
+    await tick();
+    expect(screen.getByRole("region", { name: "Push output" })).not.toBeNull();
+    expect(screen.getByText("husky > pre-push (node v22)")).not.toBeNull();
+    expect(rowText.closest("button")?.getAttribute("aria-expanded")).toBe(
+      "true",
+    );
+  });
+
+  it("op rows without hook output stay inert", async () => {
+    tabStore.tabs = [tab({ status: status() })];
+    tabStore.activeId = "r1";
+    render(StatusBar);
+
+    opStore.applyProgress(
+      progress({
+        op_id: "op-1",
+        repo_id: "r1",
+        message: "fetching origin",
+      }),
+    );
+    await tick();
+
+    // No op-log session → the row is plain text, not a click target.
+    expect(screen.getByText("fetching origin").closest("button")).toBeNull();
+    expect(screen.queryByText("output")).toBeNull();
+  });
+
+  it("clicking a background repo's op row opens that repo's log", async () => {
+    tabStore.tabs = [
+      tab({ id: "r1", name: "mygitui", root: "/repo", status: status() }),
+      tab({ id: "r2", name: "other-repo", root: "/other", status: null }),
+    ];
+    tabStore.activeId = "r1";
+    render(StatusBar);
+
+    // Logs for a background repo never auto-open (the cue tracks the active
+    // repo) — its op row is the only way to surface them.
+    opStore.ops = {
+      r2: [activeOp({ op_id: "op-2", kind: "push", message: "pushing to origin" })],
+    };
+    opStore.applyLog({
+      repo_id: "r2",
+      op_id: "op-2",
+      kind: "push",
+      line: "r2 pre-push hook line",
+    });
+    await tick();
+    expect(screen.queryByRole("region", { name: "Push output" })).toBeNull();
+
+    await fireEvent.click(screen.getByText("pushing to origin"));
+    await tick();
+    expect(screen.getByRole("region", { name: "Push output" })).not.toBeNull();
+    expect(screen.getByText("r2 pre-push hook line")).not.toBeNull();
   });
 
   it("auto-fetch chip mirrors the repo cadence (hidden when off) and opens the Remotes panel", async () => {

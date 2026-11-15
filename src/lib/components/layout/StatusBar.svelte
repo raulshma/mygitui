@@ -13,9 +13,11 @@
    * working-copy change count (click focuses the Status panel). Middle: one
    * item per in-flight backend op across all open repos — the ONE spinner
    * surface for git work, so header/commit controls never duplicate it;
-   * progress, percent and the cooperative Cancel live here. Hook/CLI output
-   * (pre-push, commit hooks) rides a chip on the right and expands into a
-   * fixed overlay above the bar. Right: the in-progress git state
+   * progress, percent and the cooperative Cancel live here, and rows whose
+   * repo has hook output (pre-push, commit hooks) are click-through: clicking
+   * e.g. "pushing to …" opens the log overlay. Hook/CLI output also rides a
+   * chip on the right and expands into the same fixed overlay above the bar.
+   * Right: the in-progress git state
  * (merge/rebase/…), the repo's auto-fetch cadence (click opens the Remotes
  * panel), and the remote device connection.
    *
@@ -131,24 +133,40 @@
   );
 
   /**
+   * Repo whose log session the overlay shows (`null` = closed). Usually the
+   * active repo (the right-side chip), but a click on a running op row —
+   * e.g. the "pushing to …" item, where a pre-push hook streams its verify
+   * output — opens that op's repo instead, background tabs included.
+   */
+  let logRepoId = $state<string | null>(null);
+  const logChipOpen = $derived(repoId !== null && logRepoId === repoId);
+
+  /** Show/hide the overlay for one repo (chip + op-row click-through). */
+  function toggleLog(target: string): void {
+    logRepoId = logRepoId === target ? null : target;
+  }
+
+  /**
    * Explicit toggle (no auto-close), but a *new* session opens itself once:
    * the old in-flow strip appeared as soon as hook output arrived, and this
    * preserves that cue without ever shifting the workspace. The overlay
-   * stays put when the user closes it; only the next op reopens it.
+   * stays put when the user closes it; only the next op reopens it. Seen
+   * op ids are tracked per repo so switching tabs doesn't replay the cue
+   * for a session the user has already seen.
    */
-  let logOpen = $state(false);
-  let shownLogOpId = $state<string | null>(null);
+  let seenLogOps = $state<Record<string, string>>({});
   $effect(() => {
     const session = logSession;
-    if (session === null) {
-      shownLogOpId = null;
-      logOpen = false;
-      return;
-    }
-    if (session.op_id !== shownLogOpId) {
-      shownLogOpId = session.op_id;
-      logOpen = true;
-    }
+    if (session === null || repoId === null) return;
+    if (seenLogOps[repoId] === session.op_id) return;
+    seenLogOps = { ...seenLogOps, [repoId]: session.op_id };
+    logRepoId = repoId;
+  });
+
+  // The session a closed overlay pointed at can be dismissed out from under
+  // it (strip's ✕, store reset): an overlay with nothing to show is closed.
+  $effect(() => {
+    if (logRepoId !== null && opLogsFor(logRepoId) === null) logRepoId = null;
   });
 
   // -- sync item (same verbs + helpers as the header quick actions) ----------
@@ -265,18 +283,23 @@
   /**
    * One flat row per in-flight backend op, across every open repo (ops are
    * global: an auto-fetch on this repo or a push started from a panel all
-   * land here). Rows for a background repo carry its tab name.
+   * land here). Rows for a background repo carry its tab name. `logKind` is
+   * the repo's hook/CLI output session (pre-commit / pre-push lines), when
+   * one exists — such rows are click-through to the log overlay.
    */
   const opRows = $derived(
-    Object.entries(opStore.ops).flatMap(([opRepoId, list]) =>
-      list.map((op: ActiveOp) => ({
+    Object.entries(opStore.ops).flatMap(([opRepoId, list]) => {
+      const log = opStore.logs[opRepoId] ?? null;
+      return list.map((op: ActiveOp) => ({
         op,
+        repoId: opRepoId,
         repoName:
           opRepoId === repoId
             ? null
             : (tabStore.tabs.find((t) => t.id === opRepoId)?.name ?? null),
-      })),
-    ),
+        logKind: log?.kind ?? null,
+      }));
+    }),
   );
 
   // -- AI jobs (M13) ------------------------------------------------------------
@@ -332,11 +355,11 @@
      footer's overflow-hidden would clip it. Anchored to this wrapper's top
      edge, it floats over the workspace without shifting anything. -->
 <div class="status-bar-root relative min-w-0 flex-none">
-  {#if logOpen && logSession !== null && repoId !== null}
+  {#if logRepoId !== null && opLogsFor(logRepoId) !== null}
     <div
       class="op-log-layer absolute inset-x-0 bottom-full z-10 shadow-md [&>section]:border-b-0"
     >
-      <OpLogStrip {repoId} />
+      <OpLogStrip repoId={logRepoId} />
     </div>
   {/if}
   <footer
@@ -434,26 +457,56 @@
     class="running-ops flex min-w-0 flex-1 items-center gap-ui-3 overflow-hidden"
     aria-label="Running operations"
   >
+    {#snippet opMain(row: (typeof opRows)[number])}
+      <span
+        class="inline-flex size-3.5 flex-none items-center justify-center"
+        aria-hidden="true"
+      >
+        <Spinner class="size-3" role="presentation" aria-hidden="true" />
+      </span>
+      {#if row.repoName !== null}
+        <span class="flex-none font-medium text-foreground"
+          >{row.repoName}</span
+        >
+      {/if}
+      <span class="flex-none font-medium text-foreground"
+        >{kindLabel(row.op.kind)}</span
+      >
+      <span class="min-w-0 flex-1 truncate text-left">{row.op.message}</span>
+    {/snippet}
     {#each opRows as row (row.op.op_id)}
       <div
         class="sb-op flex min-w-0 flex-1 items-center gap-ui-2"
         aria-label={`${kindLabel(row.op.kind)} in progress`}
       >
-        <span
-          class="inline-flex size-3.5 flex-none items-center justify-center"
-          aria-hidden="true"
-        >
-          <Spinner class="size-3" role="presentation" aria-hidden="true" />
-        </span>
-        {#if row.repoName !== null}
-          <span class="flex-none font-medium text-foreground"
-            >{row.repoName}</span
+        {#if row.logKind !== null}
+          <!-- Hook/CLI output exists for this op's repo: the row's main
+               segment opens the log overlay (same click-through as the AI
+               rows), so clicking "pushing to …" reveals the pre-push /
+               pre-commit hook lines behind it. -->
+          <Hint
+            label={logRepoId === row.repoId
+              ? `Hide ${kindLabel(row.logKind)} output`
+              : `Show ${kindLabel(row.logKind)} output`}
           >
+            {#snippet child({ props })}
+              <button
+                {...props}
+                class="flex h-full min-w-0 flex-1 items-center gap-ui-2 text-left transition-colors duration-[120ms] hover:bg-accent hover:text-accent-foreground focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary"
+                type="button"
+                aria-expanded={logRepoId === row.repoId}
+                onclick={() => toggleLog(row.repoId)}
+              >
+                {@render opMain(row)}
+              </button>
+            {/snippet}
+          </Hint>
+        {:else}
+          <!-- No hook output for this repo: the row stays inert text. -->
+          <div class="flex min-w-0 flex-1 items-center gap-ui-2">
+            {@render opMain(row)}
+          </div>
         {/if}
-        <span class="flex-none font-medium text-foreground"
-          >{kindLabel(row.op.kind)}</span
-        >
-        <span class="min-w-0 flex-1 truncate text-left">{row.op.message}</span>
         {#if row.op.pct !== null}
           <span class="flex-none tabular-nums">{Math.round(row.op.pct)}%</span>
         {/if}
@@ -561,16 +614,18 @@
   <!-- Right: hook output + repo state + cadence + device connection. -->
   <div class="extras flex flex-none items-center gap-ui-2 pr-ui-2">
     {#if logSession !== null}
-      <Hint label={logOpen ? `Hide ${logTitle}` : `Show ${logTitle}`}>
+      <Hint label={logChipOpen ? `Hide ${logTitle}` : `Show ${logTitle}`}>
         {#snippet child({ props })}
           <button
             {...props}
             class="sb-log inline-flex h-full flex-none items-center gap-ui-2 px-ui-2 transition-colors duration-[120ms] hover:bg-accent hover:text-accent-foreground focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary"
             type="button"
-            aria-label={logOpen ? `Hide ${logTitle}` : `Show ${logTitle}`}
-            aria-expanded={logOpen}
+            aria-label={logChipOpen ? `Hide ${logTitle}` : `Show ${logTitle}`}
+            aria-expanded={logChipOpen}
             aria-busy={!logSession.done}
-            onclick={() => (logOpen = !logOpen)}
+            onclick={() => {
+              if (repoId !== null) toggleLog(repoId);
+            }}
           >
             <span
               class="inline-flex size-3.5 flex-none items-center justify-center"
