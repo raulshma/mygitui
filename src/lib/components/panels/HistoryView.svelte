@@ -25,13 +25,16 @@
    *      `SplitPane` (ratio persisted as a global pref, `splitPrefs`); the
    *      detail's own meta↔diff split lives inside `CommitDetail`.
    *
-   * Data: one HistoryStore per mounted view (see `$lib/stores/history.svelte`)
-   * started/destroyed in an `$effect` keyed on `repoId`. The store applies
-   * the persisted per-root filter itself INSIDE `start()` before the first
-   * stream request (restore ordering is store-internal code order now); this
-   * view hydrates only the non-filter UI state (selection + detail
-   * visibility) on mount/re-target and saves everything on change
-   * (`historyPrefs`).
+ * Data: one HistoryStore per mounted view (see `$lib/stores/history.svelte`)
+ * started/destroyed in an `$effect` keyed on `repoId`. The store applies
+ * the persisted per-root filter itself INSIDE `start()` before the first
+ * stream request (restore ordering is store-internal code order now); this
+ * view hydrates only the non-filter UI state (selection + detail
+ * visibility) on mount/re-target and saves everything on change
+ * (`historyPrefs`). The branch-scope dropdown's feed comes from the shared
+ * refs cache (`$lib/stores/refs.svelte`) and follows external ref moves
+ * through the debounced repo-change effect below (the log restarts via the
+ * store's own subscription).
    *
    * Keyboard: the list is a role="listbox" — j/k or arrows move the
    * selection (g/G/Home/End jump), and aria-activedescendant tracks it.
@@ -41,7 +44,6 @@
     archiveSpec,
     branchCreate,
     branchSwitch,
-    branches,
     cherryPick,
     commitCheckout,
     describe,
@@ -55,6 +57,8 @@
   import type { BranchInfo, CommitInfo, FileDiff, MergeResult } from "$lib/ipc/types";
   import { closedDialog, openDialog, type DialogState } from "$lib/state/dialog";
   import { describeError } from "$lib/errors";
+  import { isSignificant, onRepoChange } from "$lib/events/repoEvents";
+  import { branchesFor, invalidateRefs } from "$lib/stores/refs.svelte";
   import GraphCanvas from "$lib/components/graph/GraphCanvas.svelte";
   import EmptyState from "../layout/EmptyState.svelte";
   import CompareBar from "$lib/components/panels/CompareBar.svelte";
@@ -217,7 +221,7 @@
   const multiSet = $derived(new Set(multiShas));
   /** Anchor commit for shift-click ranges (last plain click). */
   let anchorSha: string | null = null;
-  /** True while a cherry-pick/revert IPC is in flight. */
+  /** True while a cherry-pick/revert/checkout/archive IPC is in flight. */
   let opBusy = $state(false);
   /** Interactive rebase planner for `HEAD..baseSha` (one state, args ride along). */
   let planner = $state<DialogState<{ baseSha: string }>>(closedDialog());
@@ -272,10 +276,15 @@
    * ConfirmDialog result: optionally stash first, snapshot a guard
    * checkpoint (the worktree is forced), then branch-switch or detach.
    * The history restarts via repo-changed; status refresh renders the
-   * "detached @ sha" state.
+   * "detached @ sha" state. Rides `opBusy` like its siblings (cherry-pick/
+   * revert/archive): a long forced checkout keeps the detail toolbar and
+   * the commit menu's op entries disabled instead of letting a second op
+   * queue behind it.
    */
   async function runCheckout(sha: string, branch: string | null, stashFirst: boolean): Promise<void> {
+    if (opBusy) return;
     checkoutAt = closedDialog();
+    opBusy = true;
     try {
       if (stashFirst) {
         await stashPush(repoId, `pre-checkout stash (checkout ${sha.slice(0, 7)})`);
@@ -293,6 +302,8 @@
         `Checkout failed: ${err instanceof Error ? err.message : String(err)}`,
         { kind: "error" },
       );
+    } finally {
+      opBusy = false;
     }
     void tabStore.refreshStatus(repoId);
   }
@@ -586,7 +597,10 @@
     const token = ++branchToken;
     const target = repoId;
     try {
-      const list = await branches(target);
+      // The dropdown's feed rides the shared refs cache
+      // (`$lib/stores/refs.svelte`) — the four panel surfaces use the same
+      // cache, so a repo open scans once, not five times.
+      const list = await branchesFor(target);
       if (token !== branchToken) return;
       branchList = list;
     } catch {
@@ -599,6 +613,41 @@
     void repoId; // re-fetch when the repo switches
     branchList = [];
     void refreshBranches();
+  });
+
+  // The dropdown never refreshed after external ref moves (terminal,
+  // outside editors, the header switcher) or after this view's OWN
+  // "Branch from here…" — a branch created mid-session was missing from
+  // the scope list until a repo re-switch. Refresh on significant repo
+  // changes for this repo, debounced 500 ms like FilesPanel's tree refresh
+  // so a watcher burst coalesces into one fetch; the LOG itself restarts
+  // through the store's own repo-changed subscription — this effect only
+  // feeds the scope dropdown. The view is keep-alive mounted (TabGroup),
+  // so this also refetches while hidden — accepted: the read is cheap and
+  // shared (the refs cache was already dropped by its own repoEvents
+  // subscription; every surface's debounced refresh then shares ONE
+  // rescan). StatusPanel's cleanup pattern: the pending debounce dies with
+  // the view, or it would fire a branchesFor() IPC after the repo
+  // re-targeted.
+  $effect(() => {
+    let refreshTimer: ReturnType<typeof setTimeout> | null = null;
+    const unregister = onRepoChange({
+      filter: (change) => change.repo_id === repoId && isSignificant(change),
+      handle: () => {
+        if (refreshTimer) clearTimeout(refreshTimer);
+        refreshTimer = setTimeout(() => {
+          refreshTimer = null;
+          void refreshBranches();
+        }, 500);
+      },
+    });
+    return () => {
+      unregister();
+      if (refreshTimer) {
+        clearTimeout(refreshTimer);
+        refreshTimer = null;
+      }
+    };
   });
 
   /**
@@ -908,6 +957,13 @@
     try {
       await branchCreate(repoId, name, false, sha);
       toast(`Created branch ${name} at ${sha.slice(0, 7)}`, { kind: "success" });
+      // The new ref must reach the scope dropdown NOW, not on the next
+      // watcher batch: drop the shared refs cache first (its TTL slot
+      // still holds the pre-mutation list), then refetch — the debounced
+      // repo-change refresh below re-serves the repopulated slot, so the
+      // follow-up watcher burst costs no extra scan.
+      invalidateRefs(repoId);
+      void refreshBranches();
       void tabStore.refreshStatus(repoId);
     } catch (err) {
       toast(
@@ -1020,17 +1076,20 @@
    */
   function commitMenuEntries(sha: string): MenuEntry[] {
     const bookmarked = root !== "" && bookmarkStore.has(root, sha);
+    // The opBusy-gated handlers (cherry-pick/revert/rebase/archive) bail
+    // silently on their guard; a disabled entry says why instead of a
+    // click doing nothing mid-op.
     const entries: MenuEntry[] = [
-      { id: "pick", label: "Cherry-pick…", run: () => void doCherryPick() },
-      { id: "revert", label: "Revert…", run: () => void doRevert() },
-      { id: "rebase", label: "Rebase from here…", run: rebaseFromHere },
+      { id: "pick", label: "Cherry-pick…", disabled: opBusy, run: () => void doCherryPick() },
+      { id: "revert", label: "Revert…", disabled: opBusy, run: () => void doRevert() },
+      { id: "rebase", label: "Rebase from here…", disabled: opBusy, run: rebaseFromHere },
       { id: "bookmark", label: bookmarked ? "Remove bookmark" : "Bookmark commit", run: () => toggleBookmark(sha) },
       { id: "branch-from", label: "Branch from here…", run: () => (branchFrom = openDialog({ sha })) },
       { id: "tag-at", label: "Tag here…", run: () => (tagAt = openDialog({ sha })) },
       { id: "reset-to", label: "Reset current branch to here…", run: () => (resetTo = openDialog({ sha })) },
       { id: "copy", label: "Copy sha", run: copySha },
       { id: "copy-describe", label: "Copy describe", run: () => void copyDescribe(sha) },
-      { id: "archive", label: "Export archive…", run: () => void exportArchive(sha) },
+      { id: "archive", label: "Export archive…", disabled: opBusy, run: () => void exportArchive(sha) },
     ];
     // VSCode-parity checkout: hidden at HEAD; a branch tip switches to the
     // branch instead of detaching (labels travel with the target).

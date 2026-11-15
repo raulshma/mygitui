@@ -1,9 +1,11 @@
 /**
- * Toast stack bounds: coalescing repeats, the visible cap, and pause/resume
- * interaction with a coalesced toast.
+ * Toast stack bounds: coalescing repeats, the echo window (one failure
+ * reported by two surfaces must not read "×2"), the visible cap, and
+ * pause/resume interaction with a coalesced toast.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { dismissToast, getToasts, pauseToast, resumeToast, toast } from "$lib/toast";
+import { ECHO_WINDOW_MS } from "$lib/toast.svelte";
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -18,7 +20,9 @@ afterEach(() => {
 describe("toast coalescing", () => {
   it("merges an identical message into a repeat count instead of stacking", () => {
     toast("Copied path");
+    vi.advanceTimersByTime(ECHO_WINDOW_MS + 1); // past the echo window
     toast("Copied path");
+    vi.advanceTimersByTime(ECHO_WINDOW_MS + 1);
     toast("Copied path");
     expect(getToasts()).toHaveLength(1);
     expect(getToasts()[0]!.count).toBe(3);
@@ -56,6 +60,24 @@ describe("toast coalescing", () => {
   });
 });
 
+describe("toast echo window", () => {
+  it("does not count an identical toast inside the window (two surfaces, one failure)", () => {
+    toast("Fetch failed: boom", { kind: "error" });
+    vi.advanceTimersByTime(200);
+    toast("Fetch failed: boom", { kind: "error" });
+    expect(getToasts()).toHaveLength(1);
+    expect(getToasts()[0]!.count).toBe(1);
+  });
+
+  it("counts an identical toast once the window has passed", () => {
+    toast("Fetch failed: boom", { kind: "error" });
+    vi.advanceTimersByTime(ECHO_WINDOW_MS + 1);
+    toast("Fetch failed: boom", { kind: "error" });
+    expect(getToasts()).toHaveLength(1);
+    expect(getToasts()[0]!.count).toBe(2);
+  });
+});
+
 describe("toast stack cap", () => {
   it("drops the oldest past four visible toasts", () => {
     for (const message of ["a", "b", "c", "d", "e"]) toast(message);
@@ -74,6 +96,7 @@ describe("toast stack cap", () => {
 
   it("counts a coalesced repeat as one slot, not a new one", () => {
     for (const message of ["a", "b", "c", "d"]) toast(message);
+    vi.advanceTimersByTime(ECHO_WINDOW_MS + 1); // a real repeat, not an echo
     toast("a");
     expect(getToasts().map((item) => item.message)).toEqual(["a", "b", "c", "d"]);
     expect(getToasts()[0]!.count).toBe(2);

@@ -10,9 +10,17 @@
    * include-untracked checkboxes — untracked on by default). Every
    * mutation refreshes the repo status (stashing changes the worktree)
    * and reloads the list.
+   *
+   * External changes (the terminal panel, an outside editor — a stash is
+   * `refs/stash`, so every external push/drop surfaces as a significant
+   * repo-change) reload the list through the debounced repo-change effect
+   * below. The stash list is panel-specific and stays OUT of the shared
+   * refs cache (`$lib/stores/refs.svelte`); only branch/remote reads ride
+   * that cache.
    */
   import { repoDiff, stashApply, stashBranch, stashDrop, stashList, stashPush } from "$lib/ipc/client";
   import type { FileDiff, StashInfo } from "$lib/ipc/types";
+  import { isSignificant, onRepoChange } from "$lib/events/repoEvents";
   import { describeError } from "$lib/errors";
   import { refreshStatus } from "$lib/stores/tabs.svelte";
   import { toast } from "$lib/toast";
@@ -72,6 +80,37 @@
     formOpen = false;
     branchFor = null;
     void reload();
+  });
+
+  // External stash moves (the terminal panel, an outside editor) never
+  // reached this panel before — it reloaded only on repo switch and after
+  // its OWN mutations. Reload on significant repo changes (a stash write
+  // is a `refs/stash` write, which the watcher reports as head_moved),
+  // debounced 500 ms like FilesPanel's tree refresh so a watcher burst
+  // coalesces into one reload. The panel is keep-alive mounted (TabGroup),
+  // so this also reloads while hidden — accepted: `stash_list` is a cheap
+  // read. StatusPanel's cleanup pattern: the pending debounce dies with
+  // the panel, or it would fire reload() IPC against a repo that may
+  // since have been switched away.
+  $effect(() => {
+    let reloadTimer: ReturnType<typeof setTimeout> | null = null;
+    const unregister = onRepoChange({
+      filter: (change) => change.repo_id === repoId && isSignificant(change),
+      handle: () => {
+        if (reloadTimer) clearTimeout(reloadTimer);
+        reloadTimer = setTimeout(() => {
+          reloadTimer = null;
+          void reload();
+        }, 500);
+      },
+    });
+    return () => {
+      unregister();
+      if (reloadTimer) {
+        clearTimeout(reloadTimer);
+        reloadTimer = null;
+      }
+    };
   });
 
   async function reload(): Promise<void> {

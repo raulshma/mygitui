@@ -812,10 +812,11 @@
         variant="ghost"
         size="sm"
         type="button"
+        disabled={loading}
         onclick={() => void reload()}
       >
         <Icon icon={iconRefresh} size={14} />
-        Refresh
+        {loading ? "Refreshing…" : "Refresh"}
       </Button>
       <span class="foot-spacer flex-1"></span>
       <Button

@@ -35,6 +35,7 @@
     insertListing,
     removeEntry,
     renameEntry as renameNode,
+    restoreExpanded,
     type BadgeKind,
     type FileNode,
   } from "./fileTreeModel";
@@ -276,27 +277,66 @@
     void (async () => {
       rootLoading = true;
       await refreshTree();
-      // Re-expand persisted dirs (breadth-first through the levels).
-      const wanted = persistedExpanded(tree);
-      for (const path of wanted) {
-        await listInto(path, true);
-      }
+      // Persisted expansion restores to a fixed point: after the root
+      // lists, only level-1 dirs are visible and each restored level
+      // reveals the next (restoreExpanded lists levels in parallel).
+      const token = listToken;
+      await restoreExpanded(
+        tree,
+        (path) => fileTreePrefs.isExpanded(root, path),
+        async (path) => {
+          try {
+            return await listDir(repoId, path, fileTreePrefs.showIgnored);
+          } catch {
+            return null; // dir deleted since it was persisted — skip
+          }
+        },
+        () => token !== listToken,
+      );
     })();
   });
 
   // External changes (backend watcher/poller): re-list the visible tree.
   // Debounced — one mutation can surface as a burst of events, and each
-  // refresh costs one listing per expanded dir.
+  // refresh costs one listing per expanded dir — AND throttled to one full
+  // refresh per window: under continuous writes the watcher force-flushes a
+  // batch every 2s (watcher.rs MAX_WINDOW), so an SSH-backed repo would
+  // otherwise pay one SFTP round-trip per expanded dir every ~2.5s for a
+  // tree that rarely changed. `full` resyncs and an unlisted (empty) tree
+  // bypass the throttle; manual refreshes call refreshTree directly and are
+  // never throttled.
+  const WATCHER_REFRESH_MIN_MS = 3_000;
   let repoChangeTimer: ReturnType<typeof setTimeout> | null = null;
+  /** When the last watcher-driven refresh ran (throttle window start). */
+  let lastWatcherRefreshAt = 0;
+  /** The current burst contained a `full` resync (lifts the throttle). */
+  let burstHasFull = false;
+
+  function runWatcherRefresh(): void {
+    repoChangeTimer = null;
+    const treeEmpty = tree.children === null || tree.children.length === 0;
+    const sinceLast = Date.now() - lastWatcherRefreshAt;
+    if (!burstHasFull && !treeEmpty && sinceLast < WATCHER_REFRESH_MIN_MS) {
+      // Inside the window: hold the refresh for the trailing edge so the
+      // burst is still applied, just not at watcher speed.
+      repoChangeTimer = setTimeout(
+        runWatcherRefresh,
+        WATCHER_REFRESH_MIN_MS - sinceLast,
+      );
+      return;
+    }
+    burstHasFull = false;
+    lastWatcherRefreshAt = Date.now();
+    void refreshTree();
+  }
+
   $effect(() => {
     const unregister = onRepoChange({
       filter: (change) => change.repo_id === repoId,
-      handle: () => {
+      handle: (change) => {
+        burstHasFull = burstHasFull || change.full;
         if (repoChangeTimer) clearTimeout(repoChangeTimer);
-        repoChangeTimer = setTimeout(() => {
-          repoChangeTimer = null;
-          void refreshTree();
-        }, 500);
+        repoChangeTimer = setTimeout(runWatcherRefresh, 500);
       },
     });
     return () => {
@@ -307,26 +347,6 @@
       }
     };
   });
-
-  function persistedExpanded(node: FileNode): string[] {
-    // The prefs store is async-persisted but synchronously readable; walk
-    // the current tree and expand any node the store says was expanded.
-    const out: string[] = [];
-    const queue: FileNode[] = [node];
-    while (queue.length > 0) {
-      const current = queue.shift()!;
-      if (current.children === null) continue;
-      for (const child of current.children) {
-        if (child.kind === "dir" && fileTreePrefs.isExpanded(root, child.path)) {
-          out.push(child.path);
-        }
-        if (child.kind === "dir" && child.children !== null) {
-          queue.push(child);
-        }
-      }
-    }
-    return out;
-  }
 
   // Status refreshes (watcher-driven) re-roll badges automatically via the
   // derived; the tree itself only refreshes on explicit user action.

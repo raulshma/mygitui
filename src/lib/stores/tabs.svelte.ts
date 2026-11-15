@@ -22,6 +22,7 @@ import { onRepoChange } from "$lib/events/repoEvents";
 import { RecentRepoStore } from "$lib/entry/recentRepos";
 import { terminals } from "$lib/terminal/terminalStore.svelte";
 import { opStore } from "$lib/stores/ops.svelte";
+import { evictFileIndex } from "$lib/components/files/QuickOpen.svelte";
 import { conflictsStore } from "$lib/components/panels/conflictsStore.svelte";
 import { statsStore } from "$lib/stats/statsStore.svelte";
 import { projectsStore } from "$lib/stores/projects.svelte";
@@ -494,8 +495,9 @@ export class TabStore {
    * its tab closes"). `dispose` is a no-op for repos without a session.
    *
    * The same choke point drops the per-repo panel caches (conflicts
-   * banner, stats heatmap, detected projects) — they must not outlive
-   * their repo id and leak into the next open of the same path.
+   * banner, stats heatmap, detected projects, the op-store hook log and
+   * completed-op history, and QuickOpen's file index) — they must not
+   * outlive their repo id and leak into the next open of the same path.
    */
   async closeTab(id: RepoId): Promise<void> {
     if (this.tabs.every((tab) => tab.id !== id)) return;
@@ -503,6 +505,9 @@ export class TabStore {
     conflictsStore.clear(id);
     statsStore.clear(id);
     projectsStore.clear(id);
+    opStore.clearLogs(id);
+    opStore.clearHistory(id);
+    evictFileIndex(id);
     try {
       await closeRepo(id);
     } catch (err) {

@@ -12,6 +12,8 @@
  */
 
 import { mount, unmount } from "svelte";
+import { describeError } from "$lib/errors";
+import { toast } from "$lib/toast";
 
 /** Tears the mounted dialog down; null while the dialog is closed. */
 let teardown: (() => void) | null = null;
@@ -33,7 +35,11 @@ export function openAboutDialog(): void {
       teardown = () => unmount(instance);
     })
     .catch((err: unknown) => {
+      // Console-only would leave the palette command a silent no-op.
       console.error("[mygitui] About dialog failed to open:", err);
+      toast(`Could not open the About dialog: ${describeError(err)}`, {
+        kind: "error",
+      });
       target.remove();
     });
 }

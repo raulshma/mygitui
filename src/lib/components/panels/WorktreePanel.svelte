@@ -10,9 +10,14 @@
    * the worktree is locked or prunable). The add form takes a path (text
    * input + native folder picker), then either an existing not-checked-out
    * branch or a new branch name.
+   *
+   * The branch feed for the add form comes from the shared refs cache
+   * (`$lib/stores/refs.svelte`) — the four other ref-listing surfaces use
+   * the same cache, so a repo open scans once, not five times. External
+   * ref moves (terminal, outside editors) reload this panel through the
+   * debounced repo-change effect below.
    */
   import {
-    branches,
     pickFolder,
     worktreeAdd,
     worktreePrune,
@@ -20,6 +25,8 @@
     worktrees,
   } from "$lib/ipc/client";
   import type { BranchInfo, WorktreeInfo } from "$lib/ipc/types";
+  import { isSignificant, onRepoChange } from "$lib/events/repoEvents";
+  import { branchesFor, invalidateRefs } from "$lib/stores/refs.svelte";
   import { openTab } from "$lib/stores/tabs.svelte";
   import { toast } from "$lib/toast";
   import ConfirmDialog from "$lib/components/safety/ConfirmDialog.svelte";
@@ -95,7 +102,7 @@
       toast(`Pruned ${pruned} stale worktree${pruned === 1 ? "" : "s"}`, {
         kind: "success",
       });
-      await reload();
+      reloadAfterMutation();
       onMutated?.();
     } catch (err) {
       fail("Prune worktrees", err);
@@ -112,6 +119,38 @@
     void reload();
   });
 
+  // External ref moves (the terminal panel, an outside editor, the header
+  // switcher) never reached this panel before — it reloaded only on repo
+  // switch and after its OWN mutations. Reload on significant repo
+  // changes, debounced 500 ms like FilesPanel's tree refresh so a watcher
+  // burst coalesces into one reload. The panel is keep-alive mounted
+  // (TabGroup), so this also reloads while hidden — accepted: the reads
+  // are cheap and shared (the refs cache was already dropped by its own
+  // repoEvents subscription; every panel's debounced reload then shares
+  // ONE rescan). StatusPanel's cleanup pattern: the pending debounce dies
+  // with the panel, or it would fire reload() IPC against a repo that may
+  // since have been switched away.
+  $effect(() => {
+    let reloadTimer: ReturnType<typeof setTimeout> | null = null;
+    const unregister = onRepoChange({
+      filter: (change) => change.repo_id === repoId && isSignificant(change),
+      handle: () => {
+        if (reloadTimer) clearTimeout(reloadTimer);
+        reloadTimer = setTimeout(() => {
+          reloadTimer = null;
+          void reload();
+        }, 500);
+      },
+    });
+    return () => {
+      unregister();
+      if (reloadTimer) {
+        clearTimeout(reloadTimer);
+        reloadTimer = null;
+      }
+    };
+  });
+
   async function reload(): Promise<void> {
     // Stale-response guard: the panel is keep-alive across repo switches —
     // a slow worktree list from repo A must never land after the switch.
@@ -119,7 +158,9 @@
     loading = true;
     error = null;
     try {
-      const [wt, br] = await Promise.all([worktrees(id), branches(id)]);
+      // worktrees is panel-specific (uncached); the branch feed for the
+      // add form rides the shared refs cache (module header).
+      const [wt, br] = await Promise.all([worktrees(id), branchesFor(id)]);
       if (id !== repoId) return;
       list = wt;
       allBranches = br;
@@ -143,9 +184,22 @@
     });
   }
 
+  /**
+   * Post-mutation reload: `worktree add -b` creates a branch ref in the
+   * common git dir, so drop the shared refs cache FIRST — a plain reload
+   * could still be served the pre-mutation branch list from the cache's
+   * TTL window (the watcher event that invalidates it may still be
+   * batched/in flight). Remove/prune invalidate too: harmless for the
+   * branch list and keeps one idiom per panel.
+   */
+  function reloadAfterMutation(): void {
+    invalidateRefs(repoId);
+    void reload();
+  }
+
   function afterMutation(what: string, detail: string): void {
     toast(`${what}: ${detail}`, { kind: "success" });
-    void reload();
+    reloadAfterMutation();
     onMutated?.();
   }
 
@@ -185,7 +239,7 @@
       removeConfirmFor = null;
       removeForce = false;
       toast(`Removed worktree ${info.name}`, { kind: "success" });
-      void reload();
+      reloadAfterMutation();
       onMutated?.();
     } catch (err) {
       fail("Remove worktree", err);

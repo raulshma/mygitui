@@ -22,6 +22,7 @@ function keyEvent(
     altKey?: boolean;
     shiftKey?: boolean;
     metaKey?: boolean;
+    repeat?: boolean;
     editable?: boolean;
     capture?: boolean;
   },
@@ -32,6 +33,7 @@ function keyEvent(
     altKey: init.altKey ?? false,
     shiftKey: init.shiftKey ?? false,
     metaKey: init.metaKey ?? false,
+    repeat: init.repeat ?? false,
     bubbles: true,
   });
   if (init.editable || init.capture) {
@@ -130,6 +132,12 @@ describe("defForEvent (match logic)", () => {
   it("skips events aimed at a shortcut-capture field", () => {
     expect(
       defForEvent(keyEvent({ key: "R", ctrlKey: true, shiftKey: true, capture: true }), DEFS, "pc"),
+    ).toBeNull();
+  });
+
+  it("returns null for auto-repeat keydowns (a held key must not re-run)", () => {
+    expect(
+      defForEvent(keyEvent({ key: "R", ctrlKey: true, shiftKey: true, repeat: true }), DEFS, "pc"),
     ).toBeNull();
   });
 });

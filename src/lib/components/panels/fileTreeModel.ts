@@ -264,6 +264,78 @@ function detach(root: FileNode, path: string): FileNode | null {
 }
 
 // ---------------------------------------------------------------------------
+// Persisted expansion restore (FilesPanel hydration)
+// ---------------------------------------------------------------------------
+
+/**
+ * Dirs (breadth-first) the expansion prefs mark expanded AND whose parent
+ * level is currently listed — the restore worklist. Dirs deeper than the
+ * listed levels stay invisible (`children === null`) and only join the
+ * list once the level above them has been listed.
+ */
+export function persistedExpanded(
+  root: FileNode,
+  isExpanded: (path: string) => boolean,
+): string[] {
+  const out: string[] = [];
+  const queue: FileNode[] = [root];
+  while (queue.length > 0) {
+    const current = queue.shift()!;
+    if (current.children === null) continue;
+    for (const child of current.children) {
+      if (child.kind === "dir" && isExpanded(child.path)) {
+        out.push(child.path);
+      }
+      if (child.kind === "dir" && child.children !== null) {
+        queue.push(child);
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * Restores a persisted expansion set into a freshly listed tree, level by
+ * level, until a fixed point: only a listed parent exposes deeper persisted
+ * dirs, so a single pass could restore level 1 alone — each round lists
+ * everything currently wanted in PARALLEL, then recomputes (a listing may
+ * reveal the next level). `list` returns the listing or `null` on failure
+ * (a persisted dir may have been deleted since — skipped, not fatal);
+ * `isStale` aborts between and during listings (the panel's listToken: a
+ * repo switch or superseding refresh must win). `maxDepth` caps the loop
+ * defensively — each round descends at least one level, so 12 is far past
+ * any real repo nesting.
+ */
+export async function restoreExpanded(
+  root: FileNode,
+  isExpanded: (path: string) => boolean,
+  list: (path: string) => Promise<DirListing | null>,
+  isStale: () => boolean = () => false,
+  maxDepth = 12,
+): Promise<void> {
+  const handled = new Set<string>();
+  for (let depth = 0; depth < maxDepth; depth++) {
+    const wanted = persistedExpanded(root, isExpanded).filter(
+      (path) => !handled.has(path),
+    );
+    if (wanted.length === 0) return;
+    await Promise.all(
+      wanted.map(async (path) => {
+        const listing = await list(path);
+        if (isStale()) return;
+        if (listing === null) return;
+        const node = insertListing(root, listing);
+        if (node) node.expanded = true;
+      }),
+    );
+    if (isStale()) return;
+    // Failed listings count as handled too — a vanished dir must not be
+    // retried every round (that would spin to the depth cap).
+    for (const path of wanted) handled.add(path);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Flatten (render rows) + filter
 // ---------------------------------------------------------------------------
 

@@ -31,17 +31,27 @@
    * semantics), "Merge…" (MergeDialog), the toolbar Fetch, and the row
    * context menus. Every mutation reloads BOTH lists and notifies the
    * owner (`onMutated` → RepoView refreshStatus).
+   *
+   * Branch/remote reads go through the shared refs cache
+   * (`$lib/stores/refs.svelte`) — the four other ref-listing surfaces use
+   * the same cache, so a repo open scans once, not five times. External
+   * ref moves (terminal, outside editors) reload this panel through the
+   * debounced repo-change effect below.
    */
   import {
     branchCreate,
     branchDelete,
     branchIsMerged,
-    branches,
     fetchRepo,
     remoteBranches,
-    remotes,
   } from "$lib/ipc/client";
   import type { BranchInfo, RemoteBranchInfo, RemoteInfo } from "$lib/ipc/types";
+  import { isSignificant, onRepoChange } from "$lib/events/repoEvents";
+  import {
+    branchesFor,
+    invalidateRefs,
+    remotesFor,
+  } from "$lib/stores/refs.svelte";
   import {
     fetchDefaultRemote,
     fetchOptions,
@@ -158,7 +168,7 @@
     // Reload when the repo switches. Reading `ops` re-runs this when the
     // controller was recreated above, pointing the new instance at reload.
     void repoId;
-    ops.setReload(reload);
+    ops.setReload(reloadAfterMutation);
     renaming = null;
     resetTo = null;
     merging = null;
@@ -169,6 +179,38 @@
     collapsedGroups = {};
     remoteDelete = null;
     void reload();
+  });
+
+  // External ref moves (the terminal panel, an outside editor, the header
+  // switcher) never reached this panel before — it reloaded only on repo
+  // switch and after its OWN mutations. Reload on significant repo
+  // changes, debounced 500 ms like FilesPanel's tree refresh so a watcher
+  // burst coalesces into one reload. The panel is keep-alive mounted
+  // (TabGroup), so this also reloads while hidden — accepted: the reads
+  // are cheap and shared (the refs cache was already dropped by its own
+  // repoEvents subscription; every panel's debounced reload then shares
+  // ONE rescan). StatusPanel's cleanup pattern: the pending debounce dies
+  // with the panel, or it would fire reload() IPC against a repo that may
+  // since have been switched away.
+  $effect(() => {
+    let reloadTimer: ReturnType<typeof setTimeout> | null = null;
+    const unregister = onRepoChange({
+      filter: (change) => change.repo_id === repoId && isSignificant(change),
+      handle: () => {
+        if (reloadTimer) clearTimeout(reloadTimer);
+        reloadTimer = setTimeout(() => {
+          reloadTimer = null;
+          void reload();
+        }, 500);
+      },
+    });
+    return () => {
+      unregister();
+      if (reloadTimer) {
+        clearTimeout(reloadTimer);
+        reloadTimer = null;
+      }
+    };
   });
 
   // Palette commands ride the typed event bus.
@@ -198,22 +240,22 @@
     loading = true;
     error = null;
     try {
-      const [local, remote] = await Promise.all([
-        branches(id),
+      // branches/remotes ride the shared refs cache (module header); the
+      // remote-tracking walk is panel-specific and stays direct. All three
+      // land in ONE await so the lists and the empty-remote hint paint
+      // together (a two-step await rendered "fetch to discover" for a frame
+      // before flipping to the no-remotes hint).
+      const [local, remote, configured] = await Promise.all([
+        branchesFor(id),
         remoteBranches(id),
+        // A pure config read that only refines the empty-remote hint — a
+        // failure here must not blank the whole panel, so it stays
+        // best-effort and degrades to "remotes configured".
+        remotesFor(id).catch(() => [] as RemoteInfo[]),
       ]);
       if (id !== repoId) return;
       list = local;
       remoteList = remote;
-      // A pure config read that only refines the empty-remote hint — a
-      // failure here must not blank the whole panel, so it stays best-effort.
-      let configured: RemoteInfo[] = [];
-      try {
-        configured = await remotes(id);
-      } catch {
-        configured = [];
-      }
-      if (id !== repoId) return;
       hasRemotes = configured.length > 0;
       ops.setList(local);
       lastRefreshed = new Date();
@@ -225,8 +267,19 @@
     }
   }
 
-  function afterMutation(): void {
+  /**
+   * Post-mutation reload: refs moved, so the shared refs cache must be
+   * dropped FIRST — a plain reload could still be served the pre-mutation
+   * lists from the cache's TTL window (the backend watcher event that
+   * invalidates it may still be batched/in flight).
+   */
+  function reloadAfterMutation(): void {
+    invalidateRefs(repoId);
     void reload();
+  }
+
+  function afterMutation(): void {
+    reloadAfterMutation();
     onMutated?.();
   }
 
@@ -280,8 +333,9 @@
         return;
       }
       toast(syncSuccessMessage("fetch", outcome), { kind: "success" });
-      // New remote branches may have appeared.
-      await reload();
+      // New remote branches may have appeared (and upstream ahead/behind
+      // moved) — fetch results bypass the refs cache's TTL.
+      reloadAfterMutation();
     } catch (err) {
       toast(
         `Fetch failed: ${err instanceof Error ? err.message : String(err)}`,
@@ -301,7 +355,7 @@
       toast(`Fetched ${remote} (${netStatsSummary(stats)})`, {
         kind: "success",
       });
-      await reload();
+      reloadAfterMutation();
     } catch (err) {
       toast(
         `Fetch failed: ${err instanceof Error ? err.message : String(err)}`,

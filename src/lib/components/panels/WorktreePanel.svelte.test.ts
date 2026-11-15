@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/svelte";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { WorktreeInfo } from "$lib/ipc/types";
 
 const mocks = vi.hoisted(() => ({
@@ -9,6 +9,20 @@ const mocks = vi.hoisted(() => ({
   worktreePrune: vi.fn(),
   worktreeRemove: vi.fn(),
   worktrees: vi.fn(),
+  // $lib/events/repoEvents (imported by the refs cache the panel's branch
+  // feed rides) pulls these in transitively; only onRepoChanged is actually
+  // subscribed (by the cache's invalidation wiring) and it is never fed.
+  onRepoChanged: vi.fn(),
+  onCloneProgress: vi.fn(),
+  onOpProgress: vi.fn(),
+  onOpLog: vi.fn(),
+  onAuthRequest: vi.fn(),
+  onActionOutput: vi.fn(),
+  onPtyOutput: vi.fn(),
+  onPtyExit: vi.fn(),
+  onHostkeyRequest: vi.fn(),
+  onDeviceAuthRequest: vi.fn(),
+  onDeviceStatus: vi.fn(),
 }));
 
 vi.mock("$lib/ipc/client", () => ({
@@ -18,6 +32,17 @@ vi.mock("$lib/ipc/client", () => ({
   worktreePrune: mocks.worktreePrune,
   worktreeRemove: mocks.worktreeRemove,
   worktrees: mocks.worktrees,
+  onRepoChanged: mocks.onRepoChanged,
+  onCloneProgress: mocks.onCloneProgress,
+  onOpProgress: mocks.onOpProgress,
+  onOpLog: mocks.onOpLog,
+  onAuthRequest: mocks.onAuthRequest,
+  onActionOutput: mocks.onActionOutput,
+  onPtyOutput: mocks.onPtyOutput,
+  onPtyExit: mocks.onPtyExit,
+  onHostkeyRequest: mocks.onHostkeyRequest,
+  onDeviceAuthRequest: mocks.onDeviceAuthRequest,
+  onDeviceStatus: mocks.onDeviceStatus,
 }));
 
 vi.mock("$lib/stores/tabs.svelte", () => ({
@@ -33,6 +58,7 @@ vi.mock("$lib/toast", () => ({
 }));
 
 import { toast } from "$lib/toast";
+import { refsCache } from "$lib/stores/refs.svelte";
 import WorktreePanel from "./WorktreePanel.svelte";
 
 function linkedWorktree(patch: Partial<WorktreeInfo> = {}): WorktreeInfo {
@@ -48,6 +74,14 @@ function linkedWorktree(patch: Partial<WorktreeInfo> = {}): WorktreeInfo {
     ...patch,
   };
 }
+
+// The refs cache is a module SINGLETON shared by every test here: clear it
+// so one test's landed branch list is never re-served from its TTL slot to
+// the next test's panel (stop() drops the invalidation listener too; the
+// next read re-registers lazily).
+afterEach(() => {
+  refsCache.stop();
+});
 
 describe("WorktreePanel remove flow", () => {
   it(

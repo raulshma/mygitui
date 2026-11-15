@@ -58,6 +58,7 @@ import {
   refreshStatus,
   tabStore,
 } from "$lib/stores/tabs.svelte";
+import { busy as opBusy, kindLabel } from "$lib/stores/ops.svelte";
 import { openSwitcher } from "$lib/stores/switcher.svelte";
 import { guardNow, loadUndo } from "$lib/stores/safety.svelte";
 import { resetBindings } from "$lib/palette/keybinds";
@@ -182,10 +183,24 @@ function reportOutcome(
   ok(syncSuccessMessage(verb, outcome, branch));
 }
 
+/**
+ * Sync-runner guard: the header/status-bar surfaces disable their buttons
+ * while a sync op runs (the op store's `activeOps`), but a palette/keybind
+ * trigger has no button to disable — without this check it would enqueue a
+ * duplicate op behind the backend's per-repo serial queue. Toasts info and
+ * returns true when the verb is already running for the repo.
+ */
+function syncAlreadyRunning(verb: SyncVerb, repoId: string): boolean {
+  if (!opBusy(repoId, verb)) return false;
+  toast(`${kindLabel(verb)} is already running`, { kind: "info" });
+  return true;
+}
+
 /** Fetches the repo's primary remote (`prune` toggles --prune). */
 async function runFetch(ctx: CommandCtx, prune: boolean): Promise<void> {
   const repoId = ctx.repoId;
   if (repoId === null) return;
+  if (syncAlreadyRunning("fetch", repoId)) return;
   reportOutcome("fetch", await fetchDefaultRemote(repoId, prune));
 }
 
@@ -193,6 +208,7 @@ async function runFetch(ctx: CommandCtx, prune: boolean): Promise<void> {
 async function runPull(ctx: CommandCtx): Promise<void> {
   const repoId = ctx.repoId;
   if (repoId === null) return;
+  if (syncAlreadyRunning("pull", repoId)) return;
   const branch = tabStore.active?.status?.branch ?? null;
   reportOutcome("pull", await pullCurrentBranch(repoId, branch), branch);
 }
@@ -201,6 +217,7 @@ async function runPull(ctx: CommandCtx): Promise<void> {
 async function runPush(ctx: CommandCtx): Promise<void> {
   const repoId = ctx.repoId;
   if (repoId === null) return;
+  if (syncAlreadyRunning("push", repoId)) return;
   const branch = tabStore.active?.status?.branch ?? null;
   reportOutcome("push", await pushCurrentBranch(repoId, branch), branch);
 }

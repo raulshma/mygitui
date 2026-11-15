@@ -11,10 +11,15 @@
    * NetStats (updated refs + objects). Add / remove / set-url forms manage
    * the remote config, and the footer selects the per-repo auto-fetch
    * interval (localStorage-backed `autofetch` store).
+   *
+   * Remotes/branches reads go through the shared refs cache
+   * (`$lib/stores/refs.svelte`) — the four other ref-listing surfaces use
+   * the same cache, so a repo open scans once, not five times. External
+   * ref moves (terminal, outside editors) reload this panel through the
+   * debounced repo-change effect below.
    */
   import {
     branchCheckoutRemote,
-    branches,
     fetchRepo,
     pullRepo,
     pushRepo,
@@ -22,7 +27,6 @@
     remoteBranches,
     remoteRemove,
     remoteSetUrl,
-    remotes,
     repoDiff,
   } from "$lib/ipc/client";
   import type {
@@ -31,6 +35,12 @@
     RemoteBranchInfo,
     RemoteInfo,
   } from "$lib/ipc/types";
+  import { isSignificant, onRepoChange } from "$lib/events/repoEvents";
+  import {
+    branchesFor,
+    invalidateRefs,
+    remotesFor,
+  } from "$lib/stores/refs.svelte";
   import { opsFor } from "$lib/stores/ops.svelte";
   import { autofetch } from "$lib/stores/autofetch.svelte";
   import { tabStore } from "$lib/stores/tabs.svelte";
@@ -131,6 +141,38 @@
     void reload();
   });
 
+  // External ref moves (the terminal panel, an outside editor, the header
+  // switcher) never reached this panel before — it reloaded only on repo
+  // switch and after its OWN mutations. Reload on significant repo
+  // changes, debounced 500 ms like FilesPanel's tree refresh so a watcher
+  // burst coalesces into one reload. The panel is keep-alive mounted
+  // (TabGroup), so this also reloads while hidden — accepted: the reads
+  // are cheap and shared (the refs cache was already dropped by its own
+  // repoEvents subscription; every panel's debounced reload then shares
+  // ONE rescan). StatusPanel's cleanup pattern: the pending debounce dies
+  // with the panel, or it would fire reload() IPC against a repo that may
+  // since have been switched away.
+  $effect(() => {
+    let reloadTimer: ReturnType<typeof setTimeout> | null = null;
+    const unregister = onRepoChange({
+      filter: (change) => change.repo_id === repoId && isSignificant(change),
+      handle: () => {
+        if (reloadTimer) clearTimeout(reloadTimer);
+        reloadTimer = setTimeout(() => {
+          reloadTimer = null;
+          void reload();
+        }, 500);
+      },
+    });
+    return () => {
+      unregister();
+      if (reloadTimer) {
+        clearTimeout(reloadTimer);
+        reloadTimer = null;
+      }
+    };
+  });
+
   async function reload(): Promise<void> {
     // Stale-response guard: the panel is keep-alive across repo switches —
     // a slow remotes/branches response from repo A must never land after
@@ -139,7 +181,8 @@
     loading = true;
     error = null;
     try {
-      const [remoteList, branchList] = await Promise.all([remotes(id), branches(id)]);
+      // Both reads ride the shared refs cache (module header).
+      const [remoteList, branchList] = await Promise.all([remotesFor(id), branchesFor(id)]);
       if (id !== repoId) return;
       list = remoteList;
       branchNames = branchList.map((b) => b.name);
@@ -153,6 +196,16 @@
     } finally {
       if (id === repoId) loading = false;
     }
+  }
+
+  /**
+   * Post-mutation reload: refs or remote config moved, so drop the shared
+   * refs cache FIRST — a plain reload could still be served the
+   * pre-mutation lists from the cache's TTL window.
+   */
+  function reloadAfterMutation(): void {
+    invalidateRefs(repoId);
+    void reload();
   }
 
   function branchFor(remote: RemoteInfo): string {
@@ -180,7 +233,7 @@
       const stats = await run();
       netStatsToast(action, remote.name, stats);
       if (refreshRepo) {
-        void reload();
+        reloadAfterMutation();
         onMutated?.();
       }
     } catch (err) {
@@ -310,7 +363,7 @@
       toast(`Added remote ${name}`, { kind: "success" });
       addName = "";
       addUrl = "";
-      void reload();
+      reloadAfterMutation();
     } catch (err) {
       toast(`Add remote failed: ${err instanceof Error ? err.message : String(err)}`, {
         kind: "error",
@@ -400,7 +453,7 @@
           if (id !== repoId) return;
           remoteBranchList = branchList;
         } catch {
-          void reload();
+          reloadAfterMutation();
         }
       }
     } finally {
@@ -456,7 +509,7 @@
     try {
       await remoteRemove(repoId, remote.name);
       toast(`Removed remote ${remote.name}`, { kind: "success" });
-      void reload();
+      reloadAfterMutation();
     } catch (err) {
       toast(`Remove remote failed: ${err instanceof Error ? err.message : String(err)}`, {
         kind: "error",
@@ -476,7 +529,7 @@
     try {
       await remoteSetUrl(repoId, name, url, field === "push_url");
       toast(`Updated remote URL for ${name}`, { kind: "success" });
-      void reload();
+      reloadAfterMutation();
     } catch (err) {
       toast(`Set URL failed: ${err instanceof Error ? err.message : String(err)}`, {
         kind: "error",

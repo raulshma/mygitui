@@ -9,9 +9,19 @@
    * copies its sha; the right-click menu (and per-entry buttons) offer the
    * recovery actions: select the commit in history, reset the current
    * branch to it (ResetDialog), or branch from here.
+   *
+   * The ref selector's branch feed comes from the shared refs cache
+   * (`$lib/stores/refs.svelte`) — the four other ref-listing surfaces use
+   * the same cache, so a repo open scans once, not five times; the reflog
+   * itself is panel-specific and stays uncached. External ref moves
+   * (terminal, outside editors) reload through the debounced repo-change
+   * effect below — the reflog is exactly the surface that must follow
+   * HEAD moves it did not cause.
    */
-  import { branchCreate, branches, reflog } from "$lib/ipc/client";
+  import { branchCreate, reflog } from "$lib/ipc/client";
   import type { BranchInfo, ReflogEntry } from "$lib/ipc/types";
+  import { isSignificant, onRepoChange } from "$lib/events/repoEvents";
+  import { branchesFor, invalidateRefs } from "$lib/stores/refs.svelte";
   import { copyText } from "$lib/clipboard";
   import { toast } from "$lib/toast";
   import { emitUiEvent } from "$lib/palette/events";
@@ -64,6 +74,40 @@
     void reload();
   });
 
+  // External ref moves (the terminal panel, an outside editor, the header
+  // switcher) never reached this panel before — it reloaded only on repo
+  // switch and after its OWN mutations. Reload on significant repo
+  // changes, debounced 500 ms like FilesPanel's tree refresh so a watcher
+  // burst coalesces into one reload. The selected ref is kept: a HEAD move
+  // elsewhere should refresh the reflog the user is reading, not yank the
+  // selector back to HEAD (that reset stays a repo-switch behavior). The
+  // panel is keep-alive mounted (TabGroup), so this also reloads while
+  // hidden — accepted: the reads are cheap and shared (the refs cache was
+  // already dropped by its own repoEvents subscription; every panel's
+  // debounced reload then shares ONE rescan). StatusPanel's cleanup
+  // pattern: the pending debounce dies with the panel, or it would fire
+  // reload() IPC against a repo that may since have been switched away.
+  $effect(() => {
+    let reloadTimer: ReturnType<typeof setTimeout> | null = null;
+    const unregister = onRepoChange({
+      filter: (change) => change.repo_id === repoId && isSignificant(change),
+      handle: () => {
+        if (reloadTimer) clearTimeout(reloadTimer);
+        reloadTimer = setTimeout(() => {
+          reloadTimer = null;
+          void reload();
+        }, 500);
+      },
+    });
+    return () => {
+      unregister();
+      if (reloadTimer) {
+        clearTimeout(reloadTimer);
+        reloadTimer = null;
+      }
+    };
+  });
+
   async function reload(): Promise<void> {
     // Stale-response guard: the panel is keep-alive across repo switches —
     // a slow reflog from repo A must never land after the switch.
@@ -72,7 +116,9 @@
     error = null;
     try {
       const refName = selectedRef === "HEAD" ? undefined : selectedRef;
-      const [log, br] = await Promise.all([reflog(id, refName), branches(id)]);
+      // reflog is panel-specific (uncached); the ref selector's branch
+      // feed rides the shared refs cache (module header).
+      const [log, br] = await Promise.all([reflog(id, refName), branchesFor(id)]);
       if (id !== repoId) return;
       entries = log;
       branchList = br;
@@ -128,6 +174,11 @@
       toast(`Created branch ${name} at ${shortSha(sha)} (checked out)`, {
         kind: "success",
       });
+      // Refs moved (new branch + HEAD), so the shared refs cache must be
+      // dropped FIRST — a plain reload could still be served the
+      // pre-mutation branch list from the cache's TTL window (the watcher
+      // event that invalidates it may still be batched/in flight).
+      invalidateRefs(repoId);
       void reload();
     } catch (err) {
       toast(

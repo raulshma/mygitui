@@ -247,6 +247,8 @@
   let removeDeviceOpen = $state(false);
   /** Draft of the detail view's poll-interval field (seconds). */
   let pollDraft = $state(5);
+  /** True while the detail view's poll-interval save RPC is in flight. */
+  let savingPoll = $state(false);
   /** Draft of the detail view's auto-connect-on-launch toggle. */
   let autoConnectDraft = $state(false);
 
@@ -277,7 +279,8 @@
   /** Persists the detail view's poll-interval draft via device_update. */
   async function savePollInterval(): Promise<void> {
     const profile = deviceDetail?.profile;
-    if (!profile) return;
+    if (!profile || savingPoll) return;
+    savingPoll = true;
     const seconds = Math.max(1, Math.floor(pollDraft) || 1);
     try {
       await remoteDevices.update({
@@ -290,6 +293,8 @@
     } catch (err) {
       const message = describeError(err);
       toast(`Failed to update ${profile.name}: ${message}`, { kind: "error" });
+    } finally {
+      savingPoll = false;
     }
   }
 
@@ -1219,9 +1224,10 @@
                 <button
                   class="detail-btn pill-btn pill-btn-sm pill-btn-ghost"
                   type="button"
+                  disabled={savingPoll}
                   onclick={() => void savePollInterval()}
                 >
-                  Save
+                  {savingPoll ? "Saving…" : "Save"}
                 </button>
                 <button
                   class="detail-btn pill-btn pill-btn-sm pill-btn-ghost"

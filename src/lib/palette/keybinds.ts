@@ -436,6 +436,10 @@ export function startKeybinds(onAction: (commandId: string) => void): () => void
   if (cleanup !== null) return () => {};
   const platform = detectPlatform();
   const handler = (event: KeyboardEvent): void => {
+    // Auto-repeat must not re-fire the bound action: holding a key repeats
+    // keydown ~30×/s, which would flip-flop toggle targets (the palette)
+    // every frame and enqueue duplicate fetch/pull/push network ops.
+    if (event.repeat) return;
     const combo = comboFromEvent(event, platform);
     if (combo === null) return;
     if (isEditableTarget(event.target) && !hasModifier(combo)) return;

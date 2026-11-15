@@ -77,6 +77,8 @@ export function shortcutHolders(
 /**
  * The def whose shortcut matches this keydown, or `null`. Generic over the
  * concrete def type so callers keep full `ActionDef`s back. Skips:
+ *   - auto-repeat keydowns (a held key must not re-run the action — the
+ *     backend caps concurrent shells at 3, then error-toasts);
  *   - events that cannot form a combo (bare modifier presses);
  *   - modifier-less combos while the focus is in an editable field
  *     (typing protection — same rule as the palette keybinds);
@@ -88,6 +90,7 @@ export function defForEvent<T extends ShortcutDef>(
   defs: readonly T[],
   platform: Platform,
 ): T | null {
+  if (event.repeat) return null;
   const target = event.target;
   if (
     target instanceof HTMLElement &&

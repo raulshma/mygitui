@@ -107,7 +107,6 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
     remapSelection,
     selectionActions,
     toggleSelection,
-    type SelectionActions,
   } from "./statusSelection";
   import { statusTreePrefs } from "./statusTreePrefs.svelte";
 
@@ -251,7 +250,10 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
         onAfterMutation?.();
       }
     } catch (err) {
-      toast(`Ignore failed: ${describeError(err)}`, { kind: "error" });
+      // Remote repos run gitignore_add as an enqueued "gitignore" op, whose
+      // failure the op store also toasts — same wording so the two coalesce
+      // (local writes skip the queue; this is then the only toast).
+      toast(`Gitignore failed: ${describeError(err)}`, { kind: "error" });
     }
   }
 
@@ -660,7 +662,7 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
     // of watcher events (or one touching several submodules) reloads the
     // module list + every submodule status once, not once per event.
     let moduleReloadTimer: ReturnType<typeof setTimeout> | null = null;
-    return onRepoChange({
+    const unregister = onRepoChange({
       handle: (change) => {
         if (change.repo_id === repoId) {
           if (
@@ -684,6 +686,13 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
         }
       },
     });
+    // The pending debounce must die with the panel (FilesPanel's cleanup
+    // pattern): left armed it would still fire reloadModules() IPC after
+    // unmount, against a repo that may since have been closed.
+    return () => {
+      if (moduleReloadTimer) clearTimeout(moduleReloadTimer);
+      unregister();
+    };
   });
 
   $effect(() => {
@@ -940,7 +949,10 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
       onAfterMutation?.();
       await reloadModules();
     } catch (err) {
-      toast(`Submodule update failed: ${describeError(err)}`, { kind: "error" });
+      // Byte-identical to the op store's toast (backend kind "submodule"):
+      // the store coalesces repeats, so any wording difference here would
+      // stack a second toast for the same failure.
+      toast(`Submodule failed: ${describeError(err)}`, { kind: "error" });
     } finally {
       moduleBusy = null;
     }
@@ -954,7 +966,8 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
       toast(`Synced submodule ${info.path}`, { kind: "success" });
       await reloadModules();
     } catch (err) {
-      toast(`Submodule sync failed: ${describeError(err)}`, { kind: "error" });
+      // Same op-store byte-identity as updateSubmodule above.
+      toast(`Submodule failed: ${describeError(err)}`, { kind: "error" });
     } finally {
       moduleBusy = null;
     }
@@ -1054,8 +1067,10 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
       }
       const remaps = queueRemaps(queued);
       const hasModule = !subPath && paths.some((path) => moduleByPath.has(path));
+      // "Stage" covers both directions: the backend enqueues unstage as the
+      // same "stage" op kind, so the op store's toast says "Stage failed".
       void mutate(
-        stageLabel(actions),
+        "Stage",
         () =>
           Promise.all([
             actions.unstage.length > 0
@@ -1097,7 +1112,7 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
           unstage: true,
         })),
       );
-      void mutate(`Unstage all in ${subPath}`, () => stageAll(sub.repoId!, true)).then((ok) => {
+      void mutate("Stage", () => stageAll(sub.repoId!, true)).then((ok) => {
         settleRemaps(remaps, ok);
         if (ok) {
           void loadSubmoduleStatus(subPath);
@@ -1119,7 +1134,7 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
           unstage: false,
         },
       ]);
-      void mutate(`Stage all in ${subPath}`, () =>
+      void mutate("Stage", () =>
         stage(sub.repoId!, { targets: files, unstage: false }),
       ).then((ok) => {
         settleRemaps(remaps, ok);
@@ -1155,7 +1170,7 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
       },
     ]);
     void mutate(
-      `${unstage ? "Unstage" : "Stage"} all in ${subPath} (${sectionId})`,
+      "Stage",
       () =>
         stage(sub.repoId!, {
           targets: rows.map((r) => ({ file: r.entry.path })),
@@ -1169,18 +1184,6 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
         void reloadModules();
       }
     });
-  }
-
-  /** Error-toast label: the verb plus the file count when it is not 1. */
-  function stageLabel(actions: SelectionActions): string {
-    const verbs: string[] = [];
-    if (actions.unstage.length > 0) {
-      verbs.push(countLabel("Unstage", actions.unstage.length));
-    }
-    if (actions.stage.length > 0) {
-      verbs.push(countLabel("Stage", actions.stage.length));
-    }
-    return verbs.join(" + ") || "Stage";
   }
 
   /** Section-header action: stage Changes or unstage Staged Changes. */
@@ -1199,7 +1202,7 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
     ]);
     const hasModule = rows.some((row) => moduleByPath.has(row.entry.path));
     void mutate(
-      `${unstage ? "Unstage" : "Stage"} all in ${section.label}`,
+      "Stage",
       () =>
         stage(repoId, {
           targets: rows.map((row) => ({ file: row.entry.path })),
@@ -1227,7 +1230,7 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
           unstage: true,
         })),
       );
-      void mutate("Unstage all files", () => stageAll(repoId, true)).then(
+      void mutate("Stage", () => stageAll(repoId, true)).then(
         (ok) => {
           settleRemaps(remaps, ok);
           if (ok && moduleList.length > 0) void reloadModules();
@@ -1246,7 +1249,7 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
     const remaps = queueRemaps([{ prefix: "", paths, unstage: false }]);
     const files = [...paths];
     const hasModule = files.some((path) => moduleByPath.has(path));
-    void mutate("Stage all files", () =>
+    void mutate("Stage", () =>
       stage(repoId, {
         targets: files.map((file) => ({ file })),
         unstage: false,
@@ -1257,9 +1260,17 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
     });
   }
 
-  /** Runs one staging mutation: error toast on failure, refresh on success. */
+  /**
+   * Runs one staging/discard mutation: refresh on success, error toast on
+   * failure. `opLabel` is the op-store kind label ("Stage", "Discard") —
+   * the backend enqueues every one of these as an op, so the op store
+   * already toasts `${kindLabel(kind)} failed: <error>` on failure. This
+   * toast must be byte-identical to it: the toast store coalesces repeat
+   * messages, and any wording difference (file counts, "Unstage …") stacks
+   * a second, confusing toast for the same failure instead.
+   */
   async function mutate(
-    label: string,
+    opLabel: string,
     run: () => Promise<void>,
   ): Promise<boolean> {
     mutating = true;
@@ -1268,7 +1279,7 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
       onAfterMutation?.();
       return true;
     } catch (err) {
-      toast(`${label} failed: ${describeError(err)}`, { kind: "error" });
+      toast(`${opLabel} failed: ${describeError(err)}`, { kind: "error" });
       return false;
     } finally {
       mutating = false;
@@ -1656,9 +1667,7 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
         return list;
       });
       await mutate(
-        repoCandidates.length > 1
-          ? `Discard ${repoCandidates.length} files`
-          : `Discard ${repoCandidates[0]!.entry.path}`,
+        "Discard",
         async () => {
           // A non-null warning means the discard succeeded but the undo
           // checkpoint failed (e.g. no git identity) — surface it instead

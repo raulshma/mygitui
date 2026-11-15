@@ -335,6 +335,150 @@ describe("OpStore", () => {
     expect(store.busy("repo-1")).toBe(true);
     store.stop();
   });
+
+  // -- completed-op history ring -----------------------------------------------
+
+  it("a done op lands in history as succeeded (typed outcome) and leaves the active list", () => {
+    const store = new OpStore();
+    store.applyProgress(
+      progress({ op_id: "a", repo_id: "repo-1", kind: "push", message: "pushing to origin" }),
+    );
+    // The final event carries the op's last message (backend contract).
+    store.applyProgress(
+      progress({
+        op_id: "a",
+        repo_id: "repo-1",
+        kind: "push",
+        message: "pushing to origin",
+        done: true,
+        outcome: "completed",
+      }),
+    );
+
+    expect(store.opsFor("repo-1")).toEqual([]); // still dropped from active
+    expect(store.historyFor("repo-1")).toHaveLength(1);
+    expect(store.historyFor("repo-1")[0]).toMatchObject({
+      op_id: "a",
+      kind: "push",
+      message: "pushing to origin",
+      outcome: "succeeded",
+      error: null,
+    });
+    expect(store.historyFor("repo-2")).toEqual([]); // per-repo
+  });
+
+  it("records failed ops via the typed outcome and keeps the error", () => {
+    const store = new OpStore();
+    store.applyProgress(progress({ op_id: "a", repo_id: "repo-1", kind: "push" }));
+    store.applyProgress(
+      progress({
+        op_id: "a",
+        repo_id: "repo-1",
+        kind: "push",
+        done: true,
+        error: "non-fast-forward",
+        outcome: "failed",
+      }),
+    );
+
+    expect(store.historyFor("repo-1")[0]).toMatchObject({
+      outcome: "failed",
+      error: "non-fast-forward",
+    });
+  });
+
+  it("classifies failed and cancelled via legacy error text when outcome is absent", () => {
+    const store = new OpStore();
+    store.applyProgress(progress({ op_id: "a", repo_id: "repo-1", kind: "fetch" }));
+    store.applyProgress(
+      progress({ op_id: "a", repo_id: "repo-1", kind: "fetch", done: true, error: "cancelled" }),
+    );
+    store.applyProgress(progress({ op_id: "b", repo_id: "repo-1", kind: "pull" }));
+    store.applyProgress(
+      progress({ op_id: "b", repo_id: "repo-1", kind: "pull", done: true, error: "merge conflict" }),
+    );
+
+    const [pull, fetch] = store.historyFor("repo-1"); // newest first
+    expect(pull).toMatchObject({ op_id: "b", outcome: "failed", error: "merge conflict" });
+    expect(fetch).toMatchObject({ op_id: "a", outcome: "cancelled", error: "cancelled" });
+  });
+
+  it("records cancelled via the typed outcome even when the error text lacks 'cancel'", () => {
+    const store = new OpStore();
+    store.applyProgress(progress({ op_id: "a", repo_id: "repo-1", kind: "push" }));
+    store.applyProgress(
+      progress({
+        op_id: "a",
+        repo_id: "repo-1",
+        kind: "push",
+        done: true,
+        error: "remote hook declined the push",
+        outcome: "cancelled",
+      }),
+    );
+
+    expect(store.historyFor("repo-1")[0]).toMatchObject({
+      outcome: "cancelled",
+      error: "remote hook declined the push",
+    });
+  });
+
+  it("started_at approximates the first progress event; done-as-first-event records zero duration", () => {
+    const store = new OpStore();
+    const before = Date.now();
+    store.applyProgress(progress({ op_id: "a", repo_id: "repo-1" }));
+    const afterFirst = Date.now();
+    store.applyProgress(
+      progress({ op_id: "a", repo_id: "repo-1", done: true, outcome: "completed" }),
+    );
+
+    const seen = store.historyFor("repo-1")[0]!;
+    expect(seen.started_at).toBeGreaterThanOrEqual(before);
+    expect(seen.started_at).toBeLessThanOrEqual(afterFirst);
+    expect(seen.finished_at).toBeGreaterThanOrEqual(seen.started_at);
+
+    // An op whose done event is the first one seen (fast op / store restart
+    // mid-run) falls back to a zero duration instead of a wrong start.
+    store.applyProgress(
+      progress({ op_id: "b", repo_id: "repo-1", done: true, outcome: "completed" }),
+    );
+    const unseen = store.historyFor("repo-1")[0]!;
+    expect(unseen.op_id).toBe("b");
+    expect(unseen.started_at).toBe(unseen.finished_at);
+  });
+
+  it("caps the ring at 25 per repo, newest first, oldest dropped", () => {
+    const store = new OpStore();
+    for (let i = 0; i < 30; i++) {
+      store.applyProgress(progress({ op_id: `op-${i}`, repo_id: "repo-1" }));
+      store.applyProgress(
+        progress({ op_id: `op-${i}`, repo_id: "repo-1", done: true, outcome: "completed" }),
+      );
+    }
+
+    const history = store.historyFor("repo-1");
+    expect(history).toHaveLength(25);
+    expect(history[0]?.op_id).toBe("op-29"); // newest at the front
+    expect(history[24]?.op_id).toBe("op-5"); // op-0 … op-4 fell off
+    expect(history.some((entry) => entry.op_id === "op-4")).toBe(false);
+  });
+
+  it("clearHistory drops only the repo's history; stop clears everything", () => {
+    const store = new OpStore();
+    for (const repo of ["repo-1", "repo-2"]) {
+      store.applyProgress(progress({ op_id: "a", repo_id: repo }));
+      store.applyProgress(
+        progress({ op_id: "a", repo_id: repo, done: true, outcome: "completed" }),
+      );
+    }
+
+    store.clearHistory("repo-1");
+    expect(store.historyFor("repo-1")).toEqual([]);
+    expect(store.historyFor("repo-2")).toHaveLength(1);
+
+    store.stop();
+    expect(store.historyFor("repo-2")).toEqual([]);
+  });
 });
 
 // ---------------------------------------------------------------------------

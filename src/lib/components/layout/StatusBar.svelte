@@ -17,9 +17,13 @@
    * repo has hook output (pre-push, commit hooks) are click-through: clicking
    * e.g. "pushing to …" opens the log overlay. Hook/CLI output also rides a
    * chip on the right and expands into the same fixed overlay above the bar.
+   * When the ACTIVE repo has no op in flight but completed-op history, the
+   * same area shows a quiet outcome chip (success check / alert icon) that
+   * opens the recent-ops popover (`OpHistoryPopover`) — the after-the-fact
+   * "what ran and what failed" surface the transient op row never gave.
    * Right: the in-progress git state
  * (merge/rebase/…), the repo's auto-fetch cadence (click opens the Remotes
- * panel), and the remote device connection.
+   * panel), and the remote device connection.
    *
    * Reads the store singletons directly (no props), like the Toaster. The
    * bar itself is never conditionally sized — that constancy is the
@@ -28,6 +32,7 @@
   import {
     cancelOp,
     kindLabel,
+    opHistoryFor,
     opLogsFor,
     opStore,
     type ActiveOp,
@@ -36,6 +41,7 @@
   import { autofetch } from "$lib/stores/autofetch.svelte";
   import { remoteDevices } from "$lib/stores/remoteDevices.svelte";
   import OpLogStrip from "$lib/components/panels/OpLogStrip.svelte";
+  import OpHistoryPopover from "$lib/components/layout/OpHistoryPopover.svelte";
   import { emitUiEvent } from "$lib/palette/events";
   import {
     fetchDefaultRemote,
@@ -45,6 +51,7 @@
     syncSuccessMessage,
     type SyncVerb,
   } from "$lib/git/sync";
+  import { formatRelativeTime } from "$lib/git/format";
   import { conflictSource, conflictSourceLabel } from "$lib/components/panels/panelModel";
   import { panelIconData } from "$lib/layout/layoutModel";
   import { toast } from "$lib/toast";
@@ -67,6 +74,7 @@
   const iconChanges = $derived(panelIconData("status"));
   const iconOutput = $derived(appIcon("terminal")!);
   const iconDone = $derived(appIcon("check-circle")!);
+  const iconBan = $derived(appIcon("ban")!);
 
   /** "1 commit" / "3 commits" for tooltips; counts capped like the header. */
   function commitCount(count: number): string {
@@ -302,6 +310,59 @@
     }),
   );
 
+  // -- completed-op history (recent-ops chip + popover) ----------------------
+
+  /**
+   * Completed ops of the active repo, newest first. The quiet chip that
+   * surfaces them renders ONLY while no op is in flight for the repo (the
+   * in-flight row owns the ops area; the chip takes the idle slot) — it
+   * shows the newest entry's outcome as its icon and opens the
+   * {@link OpHistoryPopover} for the full ring. Icon-only by design: the
+   * chip must stay quiet next to (and never be confused with) live rows.
+   */
+  const opHistory = $derived(repoId === null ? [] : opHistoryFor(repoId));
+  /** The newest entry's outcome drives the chip's icon + color. */
+  const lastOutcome = $derived(opHistory[0]?.outcome ?? null);
+  const showHistoryChip = $derived(
+    repoId !== null && opHistory.length > 0 && !opStore.busy(repoId),
+  );
+
+  /** Chip tooltip / accessible name: the newest op in one line. */
+  const historyTitle = $derived.by(() => {
+    const last = opHistory[0];
+    if (last === undefined) return "Recent operations";
+    return `Recent operations — last: ${kindLabel(last.kind)} ${last.outcome}, ${formatRelativeTime(Math.round(last.finished_at / 1000))}`;
+  });
+
+  /**
+   * Repo whose history the popover shows (`null` = closed). Same pattern
+   * as `logRepoId`: an open popover always belongs to the active repo, so
+   * a tab switch while open simply closes it.
+   */
+  let histRepoId = $state<string | null>(null);
+  const histOpen = $derived(repoId !== null && histRepoId === repoId);
+  let histTriggerEl = $state<HTMLButtonElement | null>(null);
+
+  function toggleHistory(): void {
+    if (repoId === null) return;
+    histRepoId = histRepoId === repoId ? null : repoId;
+  }
+
+  /** Closes the popover and returns focus to its trigger (Escape/outside). */
+  function closeHistory(): void {
+    histRepoId = null;
+    histTriggerEl?.focus();
+  }
+
+  // A popover whose history was evicted (tab close clears it with the
+  // other per-repo caches) has nothing left to list — close it, like the
+  // log-overlay effect above retires a dismissed session.
+  $effect(() => {
+    if (histRepoId !== null && opHistoryFor(histRepoId).length === 0) {
+      histRepoId = null;
+    }
+  });
+
   // -- AI jobs (M13) ------------------------------------------------------------
 
   /**
@@ -361,6 +422,15 @@
     >
       <OpLogStrip repoId={logRepoId} />
     </div>
+  {/if}
+  <!-- The recent-ops popover portals itself to <body> via the floating
+       action, so unlike the log overlay it needs no layer wrapper here. -->
+  {#if histOpen && repoId !== null}
+    <OpHistoryPopover
+      repoId={repoId}
+      anchor={histTriggerEl ?? undefined}
+      onClose={closeHistory}
+    />
   {/if}
   <footer
     class="status-bar flex h-6 min-w-0 flex-none items-center gap-ui-3 overflow-hidden border-t border-border bg-muted/80 px-ui-2 text-ui-micro text-muted-foreground"
@@ -609,6 +679,44 @@
         {/if}
       </div>
     {/each}
+    {#if showHistoryChip}
+      <!-- Idle ops area with completed history: the quiet outcome chip
+           (newest entry's result as its icon) opens the recent-ops
+           popover. Hidden entirely while the repo has an op in flight —
+           the spinner row owns the area then. -->
+      <Hint label={historyTitle}>
+        {#snippet child({ props })}
+          <button
+            {...props}
+            bind:this={histTriggerEl}
+            class="sb-hist inline-flex h-full flex-none items-center px-ui-2 transition-colors duration-[120ms] hover:bg-accent hover:text-accent-foreground focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary"
+            type="button"
+            aria-label={historyTitle}
+            aria-haspopup="dialog"
+            aria-expanded={histOpen}
+            onclick={toggleHistory}
+          >
+            <span
+              class="inline-flex size-3.5 flex-none items-center justify-center {lastOutcome ===
+              "failed"
+                ? "text-destructive"
+                : lastOutcome === "succeeded"
+                  ? "text-primary"
+                  : "text-muted-foreground"}"
+              aria-hidden="true"
+            >
+              {#if lastOutcome === "failed"}
+                <Icon icon={iconAlert} size={12} />
+              {:else if lastOutcome === "succeeded"}
+                <Icon icon={iconDone} size={12} />
+              {:else}
+                <Icon icon={iconBan} size={12} />
+              {/if}
+            </span>
+          </button>
+        {/snippet}
+      </Hint>
+    {/if}
   </div>
 
   <!-- Right: hook output + repo state + cadence + device connection. -->

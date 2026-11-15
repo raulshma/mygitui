@@ -8,8 +8,10 @@ import {
   flattenVisible,
   insertEntry,
   insertListing,
+  persistedExpanded,
   removeEntry,
   renameEntry,
+  restoreExpanded,
   sortSiblings,
   type FileNode,
 } from "./fileTreeModel";
@@ -199,6 +201,103 @@ describe("buildStatusBadges", () => {
     expect(badges.get("docs")).toBe("added");
     expect(badges.has("src/gone.txt")).toBe(true);
     expect(badges.has("docs")).toBe(true);
+  });
+});
+
+describe("persistedExpanded + restoreExpanded (expansion restore)", () => {
+  it("persistedExpanded sees only dirs under listed levels", () => {
+    const root = createRoot();
+    insertListing(root, listing("", [["a", "dir"], ["top.txt", "file"]]));
+    const expanded = new Set(["a", "a/b"]);
+    const isExpanded = (path: string) => expanded.has(path);
+    // Level 1 (a) is visible through the root listing; a/b only once a
+    // has been listed — exactly the fixed-point problem restoreExpanded
+    // exists for.
+    expect(persistedExpanded(root, isExpanded)).toEqual(["a"]);
+    insertListing(root, listing("a", [["b", "dir"]]));
+    expect(persistedExpanded(root, isExpanded)).toEqual(["a", "a/b"]);
+  });
+
+  it("restores a two-level persisted expansion to a fixed point", async () => {
+    const root = createRoot();
+    insertListing(root, listing("", [["a", "dir"], ["top.txt", "file"]]));
+    const expanded = new Set(["a", "a/b"]);
+    const listed: string[] = [];
+    await restoreExpanded(
+      root,
+      (path) => expanded.has(path),
+      async (path) => {
+        listed.push(path);
+        if (path === "a") return listing("a", [["b", "dir"], ["main.rs", "file"]]);
+        if (path === "a/b") return listing("a/b", [["deep.rs", "file"]]);
+        return null;
+      },
+    );
+    // Both levels listed (one round each — a/b only becomes visible after
+    // a's listing lands), both re-expanded, deepest file reachable.
+    expect(listed).toEqual(["a", "a/b"]);
+    expect(findNode(root, "a")!.expanded).toBe(true);
+    expect(findNode(root, "a/b")!.expanded).toBe(true);
+    expect(findNode(root, "a/b/deep.rs")).not.toBeNull();
+  });
+
+  it("lists same-level dirs in parallel", async () => {
+    const root = createRoot();
+    insertListing(root, listing("", [["a", "dir"], ["b", "dir"]]));
+    // a's listing cannot resolve until b's listing has been requested: a
+    // sequential (await-in-for) restore would deadlock here and time out.
+    let releaseA: (() => void) | null = null;
+    const aStarted = new Promise<void>((resolve) => {
+      releaseA = resolve;
+    });
+    await restoreExpanded(
+      root,
+      () => true,
+      async (path) => {
+        if (path === "a") {
+          await aStarted;
+          return listing("a", []);
+        }
+        releaseA!();
+        return listing("b", []);
+      },
+    );
+    expect(findNode(root, "a")!.children).toEqual([]);
+    expect(findNode(root, "b")!.children).toEqual([]);
+  });
+
+  it("skips failed listings without retrying them each round", async () => {
+    const root = createRoot();
+    insertListing(root, listing("", [["gone", "dir"]]));
+    const calls: string[] = [];
+    await restoreExpanded(
+      root,
+      () => true,
+      async (path) => {
+        calls.push(path);
+        return null; // every listing fails (dir deleted since persisted)
+      },
+    );
+    expect(calls).toEqual(["gone"]); // attempted once, then counted as handled
+  });
+
+  it("drops results and stops once stale", async () => {
+    const root = createRoot();
+    insertListing(root, listing("", [["a", "dir"]]));
+    let stale = false;
+    const listed: string[] = [];
+    await restoreExpanded(
+      root,
+      () => true,
+      async (path) => {
+        listed.push(path);
+        stale = true; // a repo switch / refresh superseded the restore
+        return listing(path, [["x.rs", "file"]]);
+      },
+      () => stale,
+    );
+    expect(listed).toEqual(["a"]);
+    expect(findNode(root, "a")!.children).toBeNull(); // response dropped
   });
 });
 

@@ -304,6 +304,7 @@ describe("startKeybinds (window listener)", () => {
       altKey: init.altKey ?? false,
       shiftKey: init.shiftKey ?? false,
       metaKey: init.metaKey ?? false,
+      repeat: init.repeat ?? false,
       bubbles: true,
       cancelable: true,
     });
@@ -333,6 +334,18 @@ describe("startKeybinds (window listener)", () => {
       expect(onAction).not.toHaveBeenCalled();
       dispatchKeydown({ key: "k", ctrlKey: true, altKey: true });
       expect(onAction).toHaveBeenCalledWith("app.palette");
+    } finally {
+      stop();
+    }
+  });
+
+  it("ignores auto-repeated keydowns (a held key fires the action once)", () => {
+    const onAction = vi.fn();
+    const stop = startKeybinds(onAction);
+    try {
+      const prevented = dispatchKeydown({ key: "p", ctrlKey: true, shiftKey: true, repeat: true });
+      expect(onAction).not.toHaveBeenCalled();
+      expect(prevented).toBe(false); // repeats pass through untouched
     } finally {
       stop();
     }

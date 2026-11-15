@@ -21,6 +21,9 @@
  * one channel until the log is exhausted; a new `repo_log_stream` for the
  * same repo cancels the previous one server-side, so "cancel" here means
  * invalidating stale callbacks (generation tokens) rather than an IPC call.
+ * A walk the backend aborts (repo generation moved under it) ALSO just
+ * resolves — the resolve handler detects it via the last accepted
+ * `next_cursor` and schedules a debounced restart (see `#beginStream`).
  * Arriving pages land in a pending buffer and are released to the UI in
  * chunks of {@link RELEASE_CHUNK_COMMITS} commits — `loadMore()` (wired to
  * GraphCanvas `onReachEnd`) releases the next chunk, which keeps huge repos
@@ -45,6 +48,11 @@ import { describeError } from "$lib/errors";
 
 /** Debounce for filter edits before the stream restarts (ms). */
 export const FILTER_DEBOUNCE_MS = 200;
+
+/** Abort-restart backoff: `FILTER_DEBOUNCE_MS · 2^n` up to this many steps… */
+const ABORT_BACKOFF_STEPS = 5;
+/** …never exceeding this ceiling (the base debounce is 200 ms → 200/400/800/1600/3200). */
+const ABORT_BACKOFF_MAX_MS = 3_200;
 
 /** How many commits each release window hands to the UI at once. */
 export const RELEASE_CHUNK_COMMITS = 1_000;
@@ -99,6 +107,23 @@ export class HistoryStore {
   #started = false;
   #token = 0;
   #acceptedGen = 0;
+  /**
+   * `next_cursor` of the most recently ACCEPTED page — recorded in
+   * `#onPage` after the staleness gates, so release chunking never
+   * affects it (a page can sit unreleased in `#pending` and still prove
+   * the walk continued). `undefined` = no page accepted this stream.
+   * Backend contract: only a walk that ran to exhaustion emits a final
+   * `next_cursor: null` page (even for an empty repo), so on resolve
+   * `null` is the ONE value meaning "complete" — anything else was an
+   * abort (see the abort→restart contract in `#beginStream`).
+   */
+  #acceptedCursor: string | null | undefined = undefined;
+  /**
+   * Consecutive abort→restart round-trips (reset when a walk exhausts).
+   * Drives the exponential backoff that keeps two same-repo log views
+   * from superseding each other forever — see `#beginStream`.
+   */
+  #abortRestarts = 0;
   #debounceTimer: ReturnType<typeof setTimeout> | null = null;
   #unregisterWatcher: (() => void) | null = null;
 
@@ -275,6 +300,7 @@ export class HistoryStore {
     untrack(() => (this.restartEpoch += 1));
     this.#index.reset();
     this.#pending = [];
+    this.#acceptedCursor = undefined;
     this.#releasedCommits = 0;
     this.#releaseCap = RELEASE_CHUNK_COMMITS;
     this.pages = [];
@@ -296,7 +322,42 @@ export class HistoryStore {
         this.#onPage(token, page),
       )
         .then(() => {
-          if (this.#token === token) this.loading = false;
+          if (this.#token !== token) return;
+          // Abort→restart contract: the backend walk ends SILENTLY when the
+          // repo generation moves under it (every watcher batch bumps it —
+          // including paths-only workdir churn like a file save, which the
+          // `isSignificant` watcher filter ignores), when a newer stream
+          // supersedes this one, or on an engine error: the channel just
+          // closes and the promise resolves. Only an exhausted walk emits a
+          // final `next_cursor: null` page, so a resolved stream whose last
+          // accepted page still holds a cursor — or that accepted no page at
+          // all — was aborted mid-walk. Restart through the shared debounce
+          // instead of presenting a truncated graph as complete; `loading`
+          // stays true across the debounce (the log is knowingly
+          // incomplete). Loop-safety is a filter-edit restart's: one
+          // debounced re-request per abort, and each restart re-snapshots
+          // the generation server-side, so a quiescent repo settles on the
+          // first retry. One abort source is NOT self-limiting though: the
+          // backend allows ONE log stream per repo (`begin_log_stream`
+          // cancels the previous), so two live views of the same repo (the
+          // history tab + a file-history popout) supersede each other's
+          // walk — each restart cancels the other view mid-walk, whose
+          // restart cancels this one. Consecutive aborts therefore back off
+          // exponentially (capped); a walk that finishes between the
+          // other view's restarts exhausts, resets the counter, and the
+          // views settle instead of ping-ponging at the base debounce.
+          if (this.#acceptedCursor !== null) {
+            this.#abortRestarts = Math.min(this.#abortRestarts + 1, ABORT_BACKOFF_STEPS);
+            this.#scheduleRestart(
+              Math.min(
+                FILTER_DEBOUNCE_MS * 2 ** (this.#abortRestarts - 1),
+                ABORT_BACKOFF_MAX_MS,
+              ),
+            );
+            return;
+          }
+          this.#abortRestarts = 0;
+          this.loading = false;
         })
         .catch((err: unknown) => {
           if (this.#token === token) {
@@ -318,6 +379,10 @@ export class HistoryStore {
       this.#acceptedGen = page.generation;
       this.generation = page.generation;
     }
+    // Newest proof of walk progress (or exhaustion): kept at acceptance
+    // time — pages may wait unreleased in `#pending`, but `#beginStream`'s
+    // resolve handler must still see whether the walk was truncated.
+    this.#acceptedCursor = page.next_cursor;
     this.#pending.push(page);
     this.#release();
     this.pendingCount = this.#pending.length;
@@ -342,12 +407,12 @@ export class HistoryStore {
     }
   }
 
-  #scheduleRestart(): void {
+  #scheduleRestart(delay: number = FILTER_DEBOUNCE_MS): void {
     this.#clearDebounce();
     this.#debounceTimer = setTimeout(() => {
       this.#debounceTimer = null;
       this.#beginStream();
-    }, FILTER_DEBOUNCE_MS);
+    }, delay);
   }
 
   #clearDebounce(): void {
@@ -376,6 +441,8 @@ export class HistoryStore {
   #resetState(): void {
     this.#index.reset();
     this.#pending = [];
+    this.#abortRestarts = 0;
+    this.#acceptedCursor = undefined;
     this.#releasedCommits = 0;
     this.#releaseCap = RELEASE_CHUNK_COMMITS;
     this.pages = [];

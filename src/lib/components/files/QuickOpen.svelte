@@ -3,10 +3,32 @@
 
   Mounted per open (RepoView owns visibility): fetches the backend file
   index once per repo (module-level cache with a staleness window, so
-  repeated opens are instant) and scores it per keystroke through the
-  pure `quickOpenModel`. Combobox/listbox a11y pattern like the command
+  repeated opens are instant; evicted by the tab store when the repo's
+  tab closes) and scores it per keystroke through the pure
+  `quickOpenModel`. Combobox/listbox a11a pattern like the command
   palette: arrows move, Enter picks, Escape closes.
 -->
+<script module lang="ts">
+  import type { PathIndex } from "./quickOpenModel";
+
+  /**
+   * Module-level per-repo index cache — genuinely module scope (an instance
+   * script `const` would be rebuilt per dialog mount, defeating the
+   * "repeated opens are instant" window below). The tab store's closeTab
+   * evicts a repo's entry via {@link evictFileIndex} so a closed repo's
+   * paths (up to the 50k-entry backend cap) never outlive its tab.
+   */
+  const cache = new Map<
+    string,
+    { index: PathIndex; fetchedAt: number }
+  >();
+
+  /** Drops `repoId`'s cached file index (tab close — see closeTab). */
+  export function evictFileIndex(repoId: string): void {
+    cache.delete(repoId);
+  }
+</script>
+
 <script lang="ts">
   import type { FileIndexEntry } from "$lib/ipc/types";
   import { fileIndex } from "$lib/ipc/client";
@@ -14,7 +36,6 @@
     buildIndex,
     pathTokens,
     searchPaths,
-    type PathIndex,
   } from "./quickOpenModel";
   import { fileIconForPath, fileIconColorForPath } from "$lib/components/icons/fileIcons";
   import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.svelte";
@@ -36,11 +57,6 @@
 
   const iconSearch = $derived(appIcon("search")!);
 
-  /** Module-level per-repo index cache (survives dialog remounts). */
-  const cache = new Map<
-    string,
-    { index: PathIndex; fetchedAt: number }
-  >();
   const STALE_MS = 60_000;
   const VISIBLE = 12;
 

@@ -7,7 +7,10 @@
  * flows from the row menu through the ConfirmDialog into `remoteBranchDelete`
  * + reload. The show-more expander caps each section at the model's page
  * size. The controller factory and the IPC layer are mocked (same seam as
- * the BranchSwitcher / WorktreePanel suites).
+ * the BranchSwitcher / WorktreePanel suites). The panel's branch/remote
+ * reads go through the shared refs cache, so the mock must also carry the
+ * `$lib/events/repoEvents` seams (the history.svelte suite's transitive
+ * seam list) and the cache singleton is reset between tests.
  */
 
 import {
@@ -74,6 +77,20 @@ const mocks = vi.hoisted(() => {
     tagCreateSigned: vi.fn(),
     tagDelete: vi.fn(),
     tagList: vi.fn(),
+    // $lib/events/repoEvents (imported by the refs cache) pulls these in
+    // transitively; only onRepoChanged is actually subscribed (by the
+    // cache's invalidation wiring) and it is never fed here.
+    onRepoChanged: vi.fn(),
+    onCloneProgress: vi.fn(),
+    onOpProgress: vi.fn(),
+    onOpLog: vi.fn(),
+    onAuthRequest: vi.fn(),
+    onActionOutput: vi.fn(),
+    onPtyOutput: vi.fn(),
+    onPtyExit: vi.fn(),
+    onHostkeyRequest: vi.fn(),
+    onDeviceAuthRequest: vi.fn(),
+    onDeviceStatus: vi.fn(),
   };
 });
 
@@ -108,6 +125,7 @@ vi.mock("$lib/toast", () => ({
 
 import { toast } from "$lib/toast";
 import { contextMenu } from "$lib/components/menu/contextMenuStore.svelte";
+import { refsCache } from "$lib/stores/refs.svelte";
 import BranchPanel from "./BranchPanel.svelte";
 
 function branch(patch: Partial<BranchInfo> & { name: string }): BranchInfo {
@@ -143,6 +161,12 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   contextMenu.hide();
+  // The refs cache is a module SINGLETON shared by every test here: without
+  // this, a landed branch/remote list would be re-served from its TTL slot
+  // to the next test's panel (skewing `mocks.branches` call counts and
+  // rendering the previous test's data). stop() clears the slots and drops
+  // the cache's invalidation listener; the next read re-registers lazily.
+  refsCache.stop();
 });
 
 function renderPanel(onMutated?: () => void): void {

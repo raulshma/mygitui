@@ -4,8 +4,12 @@
  * `OpStore` mirrors the backend's per-repo serial op queue: `op-progress`
  * events are upserted into a repo→ops map (fresh reference per update so
  * rune readers re-run), dropped when `done`, and failures surface as error
- * toasts. Panels drive spinners / inline progress off `busy()` /
- * `opsFor()`. `cancel(opId)` requests cooperative cancellation via
+ * toasts. A done op also lands in a small per-repo history ring
+ * (`history`) — the durable "what ran and how it ended" record the
+ * transient toast and op row never gave — which the status bar surfaces
+ * through its recent-ops popover. Panels drive spinners / inline progress
+ * off `busy()` / `opsFor()`. `cancel(opId)` requests cooperative
+ * cancellation via
  * `op_cancel` and flags the op so the strip can spin it; a done event whose
  * error means cancellation toasts as info, not error. Raw hook/CLI output
  * arrives on `op-log` and is kept per repo in `logs` (rendered by
@@ -55,6 +59,40 @@ export interface OpLogSession {
   error: string | null;
 }
 
+/**
+ * Terminal outcome of a completed op as recorded in {@link OpHistoryEntry}
+ * — the backend's `OpOutcome` (`completed`/`cancelled`/`failed`) mapped to
+ * user-facing vocabulary.
+ */
+export type OpHistoryOutcome = "succeeded" | "failed" | "cancelled";
+
+/**
+ * One COMPLETED op, kept per repo in {@link OpStore.history} so the user
+ * can review "what ran and what failed" after the fact (the in-flight op
+ * row and the 9 s toast are gone by then).
+ */
+export interface OpHistoryEntry {
+  op_id: string;
+  kind: string;
+  /** Last progress message the op emitted. */
+  message: string;
+  outcome: OpHistoryOutcome;
+  /** The op's terminal error (`null` unless it failed / was cancelled). */
+  error: string | null;
+  /** First-seen timestamp (epoch ms; see `OpStore.#firstSeenAt`). */
+  started_at: number;
+  /** Done-event timestamp (epoch ms). */
+  finished_at: number;
+}
+
+/**
+ * Completed ops kept per repo. 25 is deep enough to cover a working
+ * session's ops (auto-fetches included) yet small enough that the ring is
+ * trivially bounded and the popover listing it stays scannable — the log
+ * strip's `MAX_LOG_LINES` plays the same bounding role for output.
+ */
+const MAX_HISTORY_PER_REPO = 25;
+
 /** Keep the hook log bounded even when a chatty hook floods the pipe. */
 const MAX_LOG_LINES = 500;
 
@@ -102,12 +140,47 @@ export function isCancelledOp(p: OpProgress): boolean {
   return p.error !== null && isCancellationError(p.error);
 }
 
+/**
+ * History classification of a done event ({@link OpHistoryEntry.outcome}):
+ * the backend's typed `outcome` wins (`OpOutcome::for_error` in ops.rs is
+ * the single sentinel-comparison site — `completed` means no error at all,
+ * `cancelled` is reserved for the op-cancel path, everything else
+ * `failed`); the error-text fallback covers events from a backend that
+ * predates the field, the same split {@link isCancelledOp} makes for the
+ * toast.
+ */
+export function classifyOutcome(p: OpProgress): OpHistoryOutcome {
+  if (p.outcome === "completed") return "succeeded";
+  if (p.outcome === "failed") return "failed";
+  if (p.outcome === "cancelled") return "cancelled";
+  // Legacy (no typed outcome): no error → succeeded, else error text.
+  if (p.error === null) return "succeeded";
+  return isCancellationError(p.error) ? "cancelled" : "failed";
+}
+
 export class OpStore {
   /** Active ops per repo (repos with no ops have no entry). */
   ops: Record<RepoId, ActiveOp[]> = $state({});
 
   /** Latest op output per repo (hook/CLI lines), kept after completion. */
   logs: Record<RepoId, OpLogSession> = $state({});
+
+  /**
+   * Completed ops per repo, newest first, capped at
+   * {@link MAX_HISTORY_PER_REPO} (repos with no history have no entry).
+   * The status bar's recent-ops popover renders it; `closeTab` clears a
+   * repo's entry with the other per-repo caches.
+   */
+  history: Record<RepoId, OpHistoryEntry[]> = $state({});
+
+  /**
+   * First-seen timestamp (epoch ms) per in-flight op id. The backend has
+   * no op-started event, and progress events may arrive before `pct > 0`,
+   * so the FIRST progress event is the best `started_at` approximation
+   * history can get. Plain (non-`$state`) map: pure bookkeeping whose only
+   * reader is the done path that immediately deletes its entry.
+   */
+  #firstSeenAt = new Map<string, number>();
 
   /**
    * Retires the auth dialog for an op that ended without an answer (see
@@ -138,6 +211,7 @@ export class OpStore {
   applyProgress(p: OpProgress): void {
     if (p.done) {
       this.#finishLog(p);
+      this.#recordHistory(p);
       // An auth dialog waiting on this op must not outlive it: the op
       // ended without an answer (cancelled / failed / dropped), so clear
       // the dialog now instead of showing it until the backend's own 120 s
@@ -164,6 +238,7 @@ export class OpStore {
     this.#clearStaleLog(p);
     const list = this.ops[p.repo_id] ?? [];
     const idx = list.findIndex((op) => op.op_id === p.op_id);
+    if (idx === -1) this.#firstSeenAt.set(p.op_id, Date.now());
     const entry: ActiveOp = {
       op_id: p.op_id,
       kind: p.kind,
@@ -215,6 +290,23 @@ export class OpStore {
     this.logs = logs;
   }
 
+  /** Completed-op history for a repo, newest first (empty array when none). */
+  historyFor(repoId: RepoId): OpHistoryEntry[] {
+    return this.history[repoId] ?? [];
+  }
+
+  /**
+   * Drops the repo's completed-op history (the history twin of
+   * {@link clearLogs}; `closeTab` calls it so history never outlives its
+   * repo id and leaks into the next open of the same path).
+   */
+  clearHistory(repoId: RepoId): void {
+    if (this.history[repoId] === undefined) return;
+    const history = { ...this.history };
+    delete history[repoId];
+    this.history = history;
+  }
+
   /** A new op of the same kind discards the previous run's stale output. */
   #clearStaleLog(p: OpProgress): void {
     const current = this.logs[p.repo_id];
@@ -229,6 +321,36 @@ export class OpStore {
     this.logs = {
       ...this.logs,
       [p.repo_id]: { ...current, done: true, error: p.error },
+    };
+  }
+
+  /**
+   * Pushes one done op onto the repo's history ring (newest first, capped
+   * at {@link MAX_HISTORY_PER_REPO}). `started_at` comes from the first
+   * progress event seen for the op; when the done event IS the first one
+   * (a store that restarted mid-op, or a fast op whose throttled progress
+   * never fired), the entry records a zero duration rather than a wrong
+   * one. Classification goes through {@link classifyOutcome}.
+   */
+  #recordHistory(p: OpProgress): void {
+    const finishedAt = Date.now();
+    const startedAt = this.#firstSeenAt.get(p.op_id) ?? finishedAt;
+    this.#firstSeenAt.delete(p.op_id);
+    const entry: OpHistoryEntry = {
+      op_id: p.op_id,
+      kind: p.kind,
+      message: p.message,
+      outcome: classifyOutcome(p),
+      error: p.error,
+      started_at: startedAt,
+      finished_at: finishedAt,
+    };
+    this.history = {
+      ...this.history,
+      [p.repo_id]: [entry, ...(this.history[p.repo_id] ?? [])].slice(
+        0,
+        MAX_HISTORY_PER_REPO,
+      ),
     };
   }
 
@@ -288,6 +410,8 @@ export class OpStore {
     this.#unregister = [];
     this.ops = {};
     this.logs = {};
+    this.history = {};
+    this.#firstSeenAt.clear();
   }
 }
 
@@ -315,6 +439,11 @@ export function cancelOp(opId: string): Promise<boolean> {
 
 export function opLogsFor(repoId: RepoId): OpLogSession | null {
   return opStore.logsFor(repoId);
+}
+
+/** Completed-op history for a repo, newest first (see `OpStore.history`). */
+export function opHistoryFor(repoId: RepoId): OpHistoryEntry[] {
+  return opStore.historyFor(repoId);
 }
 
 export function clearOpLogs(repoId: RepoId): void {

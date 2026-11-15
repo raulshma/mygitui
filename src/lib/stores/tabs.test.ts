@@ -336,20 +336,67 @@ describe("closeTab cache hygiene", () => {
     clearProjects.mockRestore();
   });
 
+  it("clears the op-store completed-op history for the closed repo (other repos keep theirs)", async () => {
+    const store = freshStore();
+    mockOpenRepo.mockResolvedValue(ALPHA);
+    await store.openTab("C:/repos/alpha");
+    // Seed completed ops directly (the same direct-store idiom the busy
+    // test uses): one for the repo being closed, one for another repo.
+    opStore.history = {
+      "repo-1": [
+        {
+          op_id: "op-1",
+          kind: "push",
+          message: "pushing to origin",
+          outcome: "failed",
+          error: "non-fast-forward",
+          started_at: 1,
+          finished_at: 2,
+        },
+      ],
+      "repo-9": [
+        {
+          op_id: "op-9",
+          kind: "fetch",
+          message: "contacting remote",
+          outcome: "succeeded",
+          error: null,
+          started_at: 1,
+          finished_at: 2,
+        },
+      ],
+    };
+    const clearHistory = vi.spyOn(opStore, "clearHistory");
+
+    try {
+      await store.closeTab("repo-1");
+
+      expect(clearHistory).toHaveBeenCalledWith("repo-1");
+      expect(opStore.historyFor("repo-1")).toEqual([]);
+      expect(opStore.historyFor("repo-9")).toHaveLength(1);
+    } finally {
+      clearHistory.mockRestore();
+      opStore.history = {};
+    }
+  });
+
   it("touches no cache for an unknown id (early return)", async () => {
     const store = freshStore();
     const clearConflicts = vi.spyOn(conflictsStore, "clear");
     const clearStats = vi.spyOn(statsStore, "clear");
     const clearProjects = vi.spyOn(projectsStore, "clear");
+    const clearHistory = vi.spyOn(opStore, "clearHistory");
 
     await store.closeTab("missing");
 
     expect(clearConflicts).not.toHaveBeenCalled();
     expect(clearStats).not.toHaveBeenCalled();
     expect(clearProjects).not.toHaveBeenCalled();
+    expect(clearHistory).not.toHaveBeenCalled();
     clearConflicts.mockRestore();
     clearStats.mockRestore();
     clearProjects.mockRestore();
+    clearHistory.mockRestore();
   });
 });
 

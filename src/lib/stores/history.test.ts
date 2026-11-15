@@ -364,6 +364,109 @@ describe("staleness", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Server-side walk abort (generation moved under the stream)
+// ---------------------------------------------------------------------------
+
+describe("server-side walk abort", () => {
+  it("re-requests (debounced) when the stream resolves mid-walk: last accepted page still holds a cursor", async () => {
+    vi.useFakeTimers();
+    const store = new HistoryStore();
+    store.start("repo-1");
+    // Mid-walk page — the backend promised more (cursor set) — then the
+    // repo generation moved under the walk (e.g. a paths-only save) and the
+    // channel just closed: resolve, no error, no final page.
+    calls[0]!.deliver({ ...makePage(0, 2, 0), next_cursor: "cursor-1" });
+    expect(store.flat.commits).toHaveLength(2);
+
+    calls[0]!.finish();
+    await flush();
+    // Aborted ≠ exhausted: must not look complete…
+    expect(store.loading).toBe(true);
+    // …and must re-request through the shared debounce, not immediately.
+    expect(calls).toHaveLength(1);
+
+    await vi.advanceTimersByTimeAsync(200);
+    expect(calls).toHaveLength(2);
+
+    // The retried walk exhausts (final page carries a null cursor) → settles.
+    calls[1]!.deliver(makePage(0, 2, 0));
+    calls[1]!.finish();
+    await flush();
+    expect(store.loading).toBe(false);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(calls).toHaveLength(2); // exhausted → no restart loop
+  });
+
+  it("treats a resolve with zero accepted pages as an abort (an exhausted walk always sends its final page)", async () => {
+    vi.useFakeTimers();
+    const store = new HistoryStore();
+    store.start("repo-1");
+
+    // Cancelled/generation-moved before the first page ever shipped.
+    calls[0]!.finish();
+    await flush();
+    expect(store.loading).toBe(true);
+    expect(calls).toHaveLength(1);
+
+    await vi.advanceTimersByTimeAsync(200);
+    expect(calls).toHaveLength(2);
+  });
+
+  it("backs off consecutive aborts (two same-repo log views supersede each other) and resets after an exhausted walk", async () => {
+    vi.useFakeTimers();
+    const store = new HistoryStore();
+    store.start("repo-1");
+
+    // First abort → base debounce (200 ms).
+    calls[0]!.deliver({ ...makePage(0, 2, 0), next_cursor: "cursor-1" });
+    calls[0]!.finish();
+    await flush();
+    await vi.advanceTimersByTimeAsync(200);
+    expect(calls).toHaveLength(2);
+
+    // Second consecutive abort → delay doubles to 400 ms…
+    calls[1]!.deliver({ ...makePage(0, 2, 0), next_cursor: "cursor-2" });
+    calls[1]!.finish();
+    await flush();
+    await vi.advanceTimersByTimeAsync(200);
+    expect(calls).toHaveLength(2); // …so it has NOT restarted yet at 200 ms
+    await vi.advanceTimersByTimeAsync(200);
+    expect(calls).toHaveLength(3);
+
+    // The retried walk exhausts → counter resets, the view settles.
+    calls[2]!.deliver(makePage(0, 2, 0));
+    calls[2]!.finish();
+    await flush();
+    expect(store.loading).toBe(false);
+
+    // A head-move restarts the stream (fresh walk, not the abort path)…
+    watcherHandlers[0]!({ repo_id: "repo-1", paths: [], head_moved: true, full: false });
+    expect(calls).toHaveLength(4);
+    // …and the NEXT abort starts from the base debounce again — 200 ms,
+    // not the 800 ms a never-reset counter would demand.
+    calls[3]!.deliver({ ...makePage(0, 2, 0), next_cursor: "cursor-3" });
+    calls[3]!.finish();
+    await flush();
+    await vi.advanceTimersByTimeAsync(200);
+    expect(calls).toHaveLength(5);
+  });
+
+  it("does not restart an exhausted walk (final page carries a null cursor)", async () => {
+    vi.useFakeTimers();
+    const store = new HistoryStore();
+    store.start("repo-1");
+
+    calls[0]!.deliver(makePage(0, 2, 0)); // next_cursor: null → done
+    calls[0]!.finish();
+    await flush();
+    expect(store.loading).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(calls).toHaveLength(1); // complete → no re-request
+  });
+});
+
+// ---------------------------------------------------------------------------
 // repo-changed restart
 // ---------------------------------------------------------------------------
 

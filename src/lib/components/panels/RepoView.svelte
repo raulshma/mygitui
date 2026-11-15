@@ -790,12 +790,44 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
   );
   const conflictCount = $derived(conflictFiles.length);
 
-  // While an operation is in progress, (re)fetch the conflict list; the
-  // moment the status is clean, drop the cache and any open editor.
+  /**
+   * Cheap fingerprint of the conflicted set (repo id + per-file path and
+   * change kinds, so a stage change on a conflicted file counts too).
+   * Status refreshes land every ~2s during a merge (the watcher's
+   * force-flush window) and a completed load itself re-triggers the
+   * effect below through the store's reactive entry — the fingerprint
+   * turns those repeats into no-ops so `load` only runs when the set
+   * actually changed (or transitions clean → in-progress).
+   */
+  const conflictSignature = $derived(
+    status
+      ? [
+          repoId,
+          ...status.entries
+            .filter(
+              (entry) =>
+                entry.index === "conflicted" ||
+                entry.worktree === "conflicted",
+            )
+            .map((entry) => `${entry.path}:${entry.index}:${entry.worktree}`)
+            .sort(),
+        ].join("\n")
+      : null,
+  );
+  /** Fingerprint the conflict list was last loaded for (null = clean). */
+  let loadedConflictSignature: string | null = null;
+
+  // While an operation is in progress, (re)fetch the conflict list when
+  // the conflicted set changed; the moment the status is clean, drop the
+  // cache and any open editor.
   $effect(() => {
+    const signature = conflictSignature;
     if (opSource) {
+      if (loadedConflictSignature === signature) return;
+      loadedConflictSignature = signature;
       void conflictsStore.load(repoId);
     } else {
+      loadedConflictSignature = null;
       conflictsStore.clear(repoId);
       conflictEditorOpen = false;
     }
