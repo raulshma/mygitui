@@ -2,7 +2,9 @@
  * File-editor preferences (module singleton): line-wrap toggle, persisted
  * under `mygitui.files.wrap` like the diff viewer's `mygitui.diff.wrap`;
  * markdown preview layout (`mygitui.files.md-view`) — the segmented
- * Edit/Split/Preview choice, remembered across sessions per the app.
+ * Edit/Split/Preview choice, remembered across sessions per the app;
+ * close-all confirm (`mygitui.files.close-all-confirm`) — whether closing
+ * every workspace tab at once asks first while files have unsaved edits.
  */
 
 const WRAP_KEY = "mygitui.files.wrap";
@@ -35,6 +37,26 @@ function readMdView(): MdViewMode {
 let wrap = $state(readWrap());
 let mdView = $state(readMdView());
 
+/**
+ * Parse helper for the close-all confirm flag (pure; tested directly):
+ * the flag defaults to ON — anything but a stored "0" keeps asking.
+ */
+export function parseCloseAllConfirm(raw: string | null): boolean {
+  return raw !== "0";
+}
+
+const CLOSE_ALL_CONFIRM_KEY = "mygitui.files.close-all-confirm";
+
+function readCloseAllConfirm(): boolean {
+  try {
+    return parseCloseAllConfirm(localStorage.getItem(CLOSE_ALL_CONFIRM_KEY));
+  } catch {
+    return true;
+  }
+}
+
+let closeAllConfirm = $state(readCloseAllConfirm());
+
 export const editorPrefs = {
   get wrap(): boolean {
     return wrap;
@@ -64,5 +86,17 @@ export const editorPrefs = {
     const next = MD_VIEW_MODES[(MD_VIEW_MODES.indexOf(mdView) + 1) % MD_VIEW_MODES.length];
     this.setMdView(next);
     return next;
+  },
+  /** Whether close-all asks before closing while files have unsaved edits. */
+  get closeAllConfirm(): boolean {
+    return closeAllConfirm;
+  },
+  setCloseAllConfirm(value: boolean): void {
+    closeAllConfirm = value;
+    try {
+      localStorage.setItem(CLOSE_ALL_CONFIRM_KEY, value ? "1" : "0");
+    } catch {
+      // Keep the in-memory preference.
+    }
   },
 };

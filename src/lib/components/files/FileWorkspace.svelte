@@ -13,8 +13,12 @@
     FilePreview inline; binaries and >20MB files get the preview card.
   - Closing a dirty tab asks Save / Don't save / Esc-cancel first; Save
     delegates to that editor's exported `save()`.
-  - Header actions: Diff cross-link (working-copy diff for the active
-    file), wrap toggle, Close-all (keeps dirty tabs with a toast).
+  - Header actions live OUTSIDE the scrolling strip (pinned at the right
+    edge, icon-only): Diff cross-link (working-copy diff for the active
+    file), wrap toggle, Close-all — visible no matter how many tabs are
+    open. Close-all asks first while files have unsaved edits (kept-dirty
+    semantics never change); a "Don't ask again" checkbox persists the
+    opt-out via editorPrefs.
 -->
 <script lang="ts">
   import type { FileMeta } from "$lib/ipc/types";
@@ -22,6 +26,7 @@
   import FilePreview from "./FilePreview.svelte";
   import DialogShell from "$lib/components/safety/DialogShell.svelte";
   import { Button } from "$lib/components/ui/button/index.js";
+  import { Checkbox } from "$lib/components/ui/checkbox/index.js";
   import { Spinner } from "$lib/components/ui/spinner/index.js";
   import { Toggle } from "$lib/components/ui/toggle/index.js";
   import { Hint } from "$lib/components/ui/tooltip/index.js";
@@ -218,6 +223,46 @@
     }
   }
 
+  // --- Close-all confirm (editorPrefs flag) ---------------------------------
+
+  let closeAllOpen = $state(false);
+  /** The dialog's "Don't ask again" checkbox for the pending decision. */
+  let closeAllDontAsk = $state(false);
+  /** Summary of what the close will do (kept-dirty files spelled out). */
+  let closeAllSummary = $state("");
+
+  /**
+   * Close-all asks first while files have unsaved edits and anything
+   * would actually close (kept-dirty semantics: unsaved work is never
+   * discarded, with or without the dialog). Opted-out users — or a
+   * close where nothing is at stake — run it directly.
+   */
+  function requestCloseAll(): void {
+    const dirtyCount = openFiles.filter((f) => f.dirty).length;
+    const savedCount = openFiles.length - dirtyCount;
+    if (
+      dirtyCount === 0 ||
+      savedCount === 0 ||
+      !editorPrefs.closeAllConfirm
+    ) {
+      closeAll();
+      return;
+    }
+    closeAllSummary = `${savedCount} ${savedCount === 1 ? "file" : "files"} will close. ${dirtyCount} ${dirtyCount === 1 ? "file has" : "files have"} unsaved edits and will stay open.`;
+    closeAllDontAsk = false;
+    closeAllOpen = true;
+  }
+
+  function closeAllConfirmed(): void {
+    if (closeAllDontAsk) editorPrefs.setCloseAllConfirm(false);
+    closeAllOpen = false;
+    closeAll();
+  }
+
+  function closeAllCancel(): void {
+    closeAllOpen = false;
+  }
+
   function tabMenu(event: MouseEvent, path: string): void {
     event.preventDefault();
     const entries: MenuEntry[] = [
@@ -285,11 +330,15 @@
 </script>
 
 <div class="workspace flex h-full min-h-0 min-w-0 flex-col bg-card" aria-label="File workspace">
-  <div
-    class="strip flex flex-none items-stretch gap-0 overflow-x-auto border-b border-border bg-card [scrollbar-width:thin]"
-    role="tablist"
-    aria-label="Open files"
-  >
+  <!-- Tab strip + header actions: the actions live OUTSIDE the scroll
+       container (flex-none at the right edge), so they stay visible no
+       matter how many tabs scroll underneath the divider. -->
+  <div class="strip flex flex-none items-stretch border-b border-border bg-card">
+    <div
+      class="tscroll flex min-w-0 flex-1 items-stretch gap-0 overflow-x-auto [scrollbar-width:thin]"
+      role="tablist"
+      aria-label="Open files"
+    >
     {#each openFiles as file (file.path)}
       {@const isActive = file.path === active}
       <Hint label={file.path}>
@@ -355,8 +404,8 @@
         {/snippet}
       </Hint>
     {/each}
-    <span class="tspacer flex-1"></span>
-    <div class="tactions flex flex-none items-center gap-0.5 px-1">
+    </div>
+    <div class="tactions flex flex-none items-center gap-0.5 border-l border-border bg-card px-1">
       {#if mdActive}
         <div class="seg inline-flex flex-none items-center gap-0 rounded-full border border-border px-1" role="group" aria-label="Markdown view">
           {#each MD_VIEW_SEGMENTS as seg (seg.id)}
@@ -377,44 +426,52 @@
           {/each}
         </div>
       {/if}
-      <Button
-        type="button"
-        class="tact h-auto gap-1 rounded-sm px-2 py-px text-ui-micro font-normal disabled:cursor-default disabled:opacity-45"
-        variant="ghost"
-        title="Open the working-copy diff for this file"
-        disabled={active === null || onOpenDiff === undefined}
-        onclick={() => active !== null && onOpenDiff?.(active)}
-      >
-        <Icon icon={iconDiff} size={14} />
-        Diff
-      </Button>
+      <Hint label="Open diff">
+        {#snippet child({ props })}
+          <Button
+            {...props}
+            type="button"
+            class="tact text-muted-foreground hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-3.5"
+            variant="ghost"
+            size="icon-xs"
+            aria-label="Open diff"
+            disabled={active === null || onOpenDiff === undefined}
+            onclick={() => active !== null && onOpenDiff?.(active)}
+          >
+            <Icon icon={iconDiff} size={14} />
+          </Button>
+        {/snippet}
+      </Hint>
       <Hint label={editorPrefs.wrap ? "Disable word wrap" : "Enable word wrap"}>
         {#snippet child({ props })}
           <Button
             {...props}
             type="button"
-            class="tact h-auto gap-1 rounded-sm px-2 py-px text-ui-micro font-normal {editorPrefs.wrap
+            class="tact text-muted-foreground hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-3.5 {editorPrefs.wrap
               ? 'bg-primary/10 text-primary'
               : ''}"
             variant="ghost"
+            size="icon-xs"
+            aria-label={editorPrefs.wrap ? "Disable word wrap" : "Enable word wrap"}
+            aria-pressed={editorPrefs.wrap}
             onclick={() => editorPrefs.setWrap(!editorPrefs.wrap)}
           >
             <Icon icon={iconWrap} size={14} />
-            Wrap
           </Button>
         {/snippet}
       </Hint>
-      <Hint label="Close all saved files">
+      <Hint label="Close all files">
         {#snippet child({ props })}
           <Button
             {...props}
             type="button"
-            class="tact h-auto gap-1 rounded-sm px-2 py-px text-ui-micro font-normal"
+            class="tact text-muted-foreground hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-3.5"
             variant="ghost"
-            onclick={closeAll}
+            size="icon-xs"
+            aria-label="Close all files"
+            onclick={requestCloseAll}
           >
             <Icon icon={iconClose} size={14} />
-            Close all
           </Button>
         {/snippet}
       </Hint>
@@ -488,6 +545,46 @@
         variant="outline"
         type="button"
         onclick={confirmCancel}
+      >
+        Cancel
+      </Button>
+    {/snippet}
+  </DialogShell>
+
+  <!-- Close-all: only while files have unsaved edits (kept-dirty semantics
+       are spelled out — unsaved work is never discarded here) and the user
+       has not opted out via the persisted "Don't ask again" flag. -->
+  <DialogShell
+    bind:open={closeAllOpen}
+    labelledBy="fw-closeall-title"
+    describedBy="fw-closeall-body"
+    width="24rem"
+    onCancel={closeAllCancel}
+  >
+    {#snippet children()}
+      <h3 class="dlg-title m-0 mb-ui-4 text-sm font-medium text-foreground" id="fw-closeall-title">Close all files?</h3>
+      <p class="dlg-body m-0 text-ui-base leading-[1.45] text-muted-foreground" id="fw-closeall-body">
+        {closeAllSummary}
+      </p>
+      <label class="mt-ui-4 flex cursor-pointer items-center gap-2 text-ui-meta font-normal text-muted-foreground">
+        <Checkbox bind:checked={closeAllDontAsk} />
+        <span>Don't ask again</span>
+      </label>
+    {/snippet}
+    {#snippet actions()}
+      <Button
+        class="dlg-btn dlg-primary h-auto rounded-full px-3 py-1 text-ui-meta"
+        type="button"
+        data-autofocus
+        onclick={closeAllConfirmed}
+      >
+        Close saved files
+      </Button>
+      <Button
+        class="dlg-btn h-auto rounded-full px-3 py-1 text-ui-meta font-normal"
+        variant="outline"
+        type="button"
+        onclick={closeAllCancel}
       >
         Cancel
       </Button>

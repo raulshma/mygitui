@@ -26,6 +26,7 @@
     WorkspaceCapture,
   } from "$lib/components/files/FileWorkspace.svelte";
   import { diffHunkActions, type DiffScope } from "$lib/components/panels/statusModel";
+  import { fileForDiffTab, type DiffTab } from "$lib/components/panels/diffTabs";
   import CommitDetail from "$lib/components/panels/CommitDetail.svelte";
   import DiffViewer from "$lib/components/diff/DiffViewer.svelte";
   import Icon from "$lib/components/icons/Icon.svelte";
@@ -69,6 +70,7 @@
     commit = null,
     compare = null,
     entry = null,
+    diffTabs = [],
     status = null,
     diffFiles = [],
     diffLoading = false,
@@ -81,6 +83,8 @@
     entryCount = 0,
     files = null,
     onClose = undefined,
+    onActivateDiffTab = undefined,
+    onCloseDiffTab = undefined,
     onCloseCompare = undefined,
     onCloseWorkflowRun = undefined,
     onCloseActionRun = undefined,
@@ -120,6 +124,12 @@
     compare?: CompareResult | null;
     /** Working-copy change selected in the status sidebar. */
     entry?: StatusEntry | null;
+    /**
+     * Open working-copy diffs (multi-diff tab model). Empty or a single
+     * tab renders the plain header; two or more add the tab strip above
+     * it (modeled on the file workspace's).
+     */
+    diffTabs?: DiffTab[];
     /** Latest repo status (welcome summary when nothing is open). */
     status?: RepoStatus | null;
     /** Streamed diff for `entry`. */
@@ -161,6 +171,10 @@
     } | null;
     /** Clears the editor (closes the current commit/diff). */
     onClose?: () => void;
+    /** Activates (focuses) an open diff tab. */
+    onActivateDiffTab?: (path: string) => void;
+    /** Closes one open diff tab (the owner neighbor-activates the rest). */
+    onCloseDiffTab?: (path: string) => void;
     onCloseCompare?: () => void;
     /** Closes the GitHub Actions run view. */
     onCloseWorkflowRun?: () => void;
@@ -258,6 +272,20 @@
         : entry.worktree !== "unmodified";
     return otherSideHasChanges ? other : null;
   });
+
+  /**
+   * The streamed files the ACTIVE diff tab shows — one diff visible at a
+   * time; the stream covers every open path and each tab filters out its
+   * own FileDiff list.
+   */
+  const activeDiffFiles = $derived(
+    entry ? fileForDiffTab(diffFiles, entry.path) : [],
+  );
+
+  function basename(path: string): string {
+    const idx = path.lastIndexOf("/");
+    return idx === -1 ? path : path.slice(idx + 1);
+  }
 </script>
 
 <div
@@ -358,8 +386,118 @@
     />
   {:else if entry}
     <div class="file-editor flex min-h-0 min-w-0 flex-col">
+      {#if diffTabs.length > 1}
+        <!-- Multi-diff tab strip (modeled on the file workspace's): the
+             close-all action lives OUTSIDE the scroll container so it
+             stays reachable no matter how many tabs are open. -->
+        <div class="dtabs-row flex flex-none items-stretch border-b border-border bg-card">
+          <div
+            class="dtabs flex min-w-0 flex-1 items-stretch overflow-x-auto [scrollbar-width:thin]"
+            role="tablist"
+            aria-label="Open diffs"
+          >
+            {#each diffTabs as tab (tab.entry.path)}
+              {@const isActive = tab.entry.path === entry.path}
+              <Hint label={tab.entry.path}>
+                {#snippet child({ props })}
+                  <!-- svelte-ignore a11y_click_events_have_key_events -- keyboard
+                       handling lives on the diff header's buttons + prev/next -->
+                  <div
+                    {...props}
+                    class="dtab flex h-8 max-w-56 flex-none cursor-pointer items-center gap-ui-3 border-r border-border py-0 pl-2.5 pr-ui-3 whitespace-nowrap select-none text-ui-meta {isActive
+                      ? 'bg-card text-foreground shadow-[inset_0_2px_0_var(--primary)]'
+                      : 'text-muted-foreground hover:bg-accent'}"
+                    role="tab"
+                    aria-selected={isActive}
+                    tabindex="-1"
+                    onclick={() => onActivateDiffTab?.(tab.entry.path)}
+                    onauxclick={(event) => {
+                      if (event.button === 1) onCloseDiffTab?.(tab.entry.path);
+                    }}
+                    onmousedown={(event) => {
+                      // Middle only: suppress the browser's autoscroll.
+                      if (event.button === 1) event.preventDefault();
+                    }}
+                  >
+                    <span class="tname min-w-0 overflow-hidden text-ellipsis">{basename(tab.entry.path)}</span>
+                    <Hint
+                      label={tab.scope === "staged"
+                        ? "Staged changes"
+                        : "Unstaged changes"}
+                    >
+                      {#snippet child({ props: dotProps })}
+                        <span
+                          {...dotProps}
+                          tabindex="-1"
+                          class="dscope size-[7px] flex-none rounded-full {tab.scope === "staged"
+                            ? "bg-primary"
+                            : "bg-muted-foreground/60"}"
+                        ></span>
+                      {/snippet}
+                    </Hint>
+                    <Hint label="Close diff (middle-click)">
+                      {#snippet child({ props })}
+                        <Button
+                          {...props}
+                          class="tclose size-5 rounded-full text-muted-foreground opacity-65 hover:bg-accent hover:text-accent-foreground hover:opacity-100 [&_svg:not([class*='size-'])]:size-3"
+                          variant="ghost"
+                          size="icon-sm"
+                          type="button"
+                          aria-label={`Close ${basename(tab.entry.path)}`}
+                          tabindex={-1}
+                          onclick={(event) => {
+                            event.stopPropagation();
+                            onCloseDiffTab?.(tab.entry.path);
+                          }}
+                        >
+                          <Icon icon={iconClose} size={12} />
+                        </Button>
+                      {/snippet}
+                    </Hint>
+                  </div>
+                {/snippet}
+              </Hint>
+            {/each}
+          </div>
+          <div class="dtactions flex flex-none items-center gap-0.5 border-l border-border bg-card px-1">
+            {#if onClose}
+              <Hint label="Close all diffs">
+                {#snippet child({ props })}
+                  <Button
+                    {...props}
+                    class="text-muted-foreground hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-3.5"
+                    variant="ghost"
+                    size="icon-xs"
+                    type="button"
+                    aria-label="Close all diffs"
+                    onclick={onClose}
+                  >
+                    <Icon icon={iconClose} size={14} />
+                  </Button>
+                {/snippet}
+              </Hint>
+            {/if}
+          </div>
+        </div>
+      {/if}
+      <!-- svelte-ignore a11y_no_static_element_interactions -->
+      <!-- Middle-click anywhere on the header row closes the editor (the
+           CommitDetail header idiom); the buttons inside keep their own
+           click flow — their events simply bubble up through this row. -->
       <header
         class="ehead flex min-h-7 flex-none items-center gap-ui-4 border-b border-border bg-popover px-2.5 py-0.5 text-ui-base"
+        onauxclick={(event) => {
+          if (event.button === 1 && onClose) {
+            event.preventDefault();
+            onClose();
+          }
+        }}
+        onmousedown={(event) => {
+          // Middle only: suppress the browser's autoscroll affordance. The
+          // primary button keeps its default so header buttons stay clickable
+          // and focusable as usual.
+          if (event.button === 1) event.preventDefault();
+        }}
       >
         <Hint label={entry.path}>
           {#snippet child({ props })}
@@ -554,7 +692,10 @@
               </Button>
             {/if}
           </div>
-        {:else if diffFiles.length === 0}
+        {:else if activeDiffFiles.length === 0}
+          <!-- The ACTIVE tab's file list, not the whole stream's: with
+               several tabs open, another tab's files must not hide this
+               tab's scope-specific empty state. -->
           <EmptyState
             title={diffScope === "staged"
               ? "No staged changes for this file."
@@ -583,15 +724,21 @@
             {/if}
           </EmptyState>
         {:else}
-          <DiffViewer
-            files={diffFiles}
-            {repoId}
-            hunkStaging={hunkActions.staging}
-            hunkDiscard={hunkActions.discard}
-            {onMutated}
-            initialScrollTop={diffInitialScroll ?? undefined}
-            onScrollChange={onDiffScroll}
-          />
+          <!-- Keyed by the active tab's path: a tab switch remounts the
+               viewer so its one-shot `initialScrollTop` restore applies
+               (the outgoing tab's scroll was captured to the workspace
+               session while it was visible). -->
+          {#key entry.path}
+            <DiffViewer
+              files={activeDiffFiles}
+              {repoId}
+              hunkStaging={hunkActions.staging}
+              hunkDiscard={hunkActions.discard}
+              {onMutated}
+              initialScrollTop={diffInitialScroll ?? undefined}
+              onScrollChange={onDiffScroll}
+            />
+          {/key}
         {/if}
       </div>
     </div>

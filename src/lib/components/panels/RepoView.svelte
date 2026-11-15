@@ -80,6 +80,14 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
     type DiffScope,
   } from "$lib/components/panels/statusModel";
   import {
+    activeDiffTab,
+    diffPageForOpenPaths,
+    neighborDiffPath,
+    upsertDiffTab,
+    withoutDiffTab,
+    type DiffTab,
+  } from "$lib/components/panels/diffTabs";
+  import {
     discard,
     mergeAbort,
     rebaseAbort,
@@ -215,7 +223,7 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
    */
   type CenterPane =
     | { kind: "empty" }
-    | { kind: "diff"; entry: StatusEntry; scope: DiffScope }
+    | { kind: "diff"; tabs: DiffTab[]; activePath: string }
     | { kind: "commit"; commit: CommitInfo }
     | { kind: "compare"; result: CompareResult }
     | { kind: "workflowRun"; runId: number }
@@ -228,11 +236,20 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
 
   // Per-mode projections. Reads keep the old names (the template and the
   // diff-stream plumbing below are unchanged); writes go through `center`.
-  const diffEntry = $derived(center.kind === "diff" ? center.entry : null);
+  // The diff mode holds a TAB LIST (like the file workspace): `diffEntry` /
+  // `diffScope` are the ACTIVE tab's entry + comparison, so every existing
+  // consumer (entry refresh, prev/next, hunk actions, session sync) keeps
+  // its single-diff semantics.
+  const diffTabList = $derived(center.kind === "diff" ? center.tabs : []);
+  const diffEntry = $derived.by<StatusEntry | null>(() => {
+    if (center.kind !== "diff") return null;
+    return activeDiffTab(center.tabs, center.activePath)?.entry ?? null;
+  });
   /** Which working-copy comparison the open diff shows (staged or unstaged). */
-  const diffScope = $derived(
-    center.kind === "diff" ? center.scope : ("unstaged" as DiffScope),
-  );
+  const diffScope = $derived.by<DiffScope>(() => {
+    if (center.kind !== "diff") return "unstaged";
+    return activeDiffTab(center.tabs, center.activePath)?.scope ?? "unstaged";
+  });
   const selectedCommit = $derived(
     center.kind === "commit" ? center.commit : null,
   );
@@ -261,6 +278,13 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
   let pendingHistorySha = $state<string | null>(null);
   /** Guards the working-copy diff stream against stale pages. */
   let diffToken = 0;
+  /**
+   * The sides the current `diffFiles` batch was streamed for. Tabs carry
+   * their own scope (a staged row next to an unstaged one opens both), but
+   * one stream answers ONE sides pair — activating a tab whose scope
+   * differs re-streams under its sides (see {@link activateDiffTab}).
+   */
+  let diffStreamScope = $state<DiffScope>("unstaged");
 
   // --- File workspace state (open workdir files, VS Code-style) -------------
 
@@ -293,8 +317,11 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
     docs: Record<string, string>;
     scrolls: Record<string, number>;
   } | null>(null);
-  /** Stored diff whose entry waits for the new repo's status to land. */
-  let pendingDiffRestore = $state<StoredDiffRef | null>(null);
+  /** Stored diffs whose entries wait for the new repo's status to land. */
+  let pendingDiffRestore = $state<{
+    refs: StoredDiffRef[];
+    activePath: string | null;
+  } | null>(null);
   /** Scroll the next-mounted DiffViewer restores (null = top, as always). */
   let diffScrollSeed = $state<number | null>(null);
 
@@ -323,9 +350,9 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
       centerKind,
       diffs:
         center.kind === "diff"
-          ? [{ path: center.entry.path, scope: center.scope }]
+          ? center.tabs.map((t) => ({ path: t.entry.path, scope: t.scope }))
           : [],
-      activeDiffPath: center.kind === "diff" ? center.entry.path : null,
+      activeDiffPath: center.kind === "diff" ? center.activePath : null,
       commitSha: center.kind === "commit" ? center.commit.sha : null,
     });
     workspaceSession.setCommit(
@@ -449,6 +476,28 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
       group.tabs[Math.min(Math.max(group.active, 0), group.tabs.length - 1)] ??
       null
     );
+  });
+
+  /**
+   * The panel active before the current one (`undefined` until the first
+   * effect run — the mount value must not count as a transition).
+   */
+  let lastActivityPanel: PanelId | null | undefined = undefined;
+
+  // Switching TO the files panel reveals what the center shows: the open
+  // diff's file, else the active workspace tab. Fires on the transition
+  // only — rail clicks, tab-group activations and palette focus all land
+  // here; re-renders while files is already active never re-emit, so the
+  // user's manual tree selection is not fought.
+  $effect(() => {
+    const panel = activityPanel;
+    const previous = lastActivityPanel;
+    lastActivityPanel = panel;
+    if (panel !== "files" || previous === undefined || previous === "files") {
+      return;
+    }
+    const path = diffEntry?.path ?? activeFile;
+    if (path !== null) emitUiEvent("files-reveal-path", { repoId, path });
   });
 
   /** History holder (the right sidebar in the default layout). */
@@ -1144,10 +1193,10 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
   /**
    * Re-opens the new root's persisted workspace after the wipe: file tabs
    * go through {@link openWorkdirFile} (stat IPC targeted at the new
-   * repoId), then the active tab, the center pane and the open diff. A
-   * stored diff resolves its StatusEntry against the current status —
+   * repoId), then the active tab, the center pane and the open diff tabs.
+   * Stored diffs resolve their StatusEntries against the current status —
    * deferred via {@link pendingDiffRestore} when the snapshot has not
-   * landed yet; a path whose change is gone is skipped silently. A commit
+   * landed yet; paths whose change is gone are skipped silently. A commit
    * detail restores from the in-memory commit object (in-app switch); on a
    * cold launch there is none, and HistoryView's persisted-selection
    * resolve re-opens it through the "restore" select, which the session's
@@ -1178,16 +1227,13 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
       activeFile = session.activeFile;
       syncSession();
     }
-    if (session.centerKind === "diff" && session.activeDiffPath !== null) {
-      const path = session.activeDiffPath;
-      const scope =
-        session.diffs.find((d) => d.path === path)?.scope ?? "unstaged";
+    if (session.centerKind === "diff" && session.diffs.length > 0) {
       const current = status;
       if (current === null) {
         // Status has not landed yet — resolve once it does (effect below).
-        pendingDiffRestore = { path, scope };
+        pendingDiffRestore = { refs: session.diffs, activePath: session.activeDiffPath };
       } else {
-        restoreDiffForEntry(current, { path, scope });
+        restoreDiffTabs(current, session.diffs, session.activeDiffPath);
       }
     } else if (session.centerKind === "commit" && session.commitSha !== null) {
       const memo = workspaceSession.commitFor(targetRoot);
@@ -1199,16 +1245,37 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
     }
   }
 
-  /** Resolves a restored diff ref against a landed status and opens it. */
-  function restoreDiffForEntry(current: RepoStatus, ref: StoredDiffRef): void {
-    const entry = current.entries.find(
-      (e) => e.path === ref.path || e.old_path === ref.path,
+  /**
+   * Resolves a restored diff-tab set against a landed status and opens it
+   * as one multi-diff stream: every ref whose change still exists becomes
+   * a tab, the stored active path (or the last surviving tab) is focused.
+   * Returns false when nothing survived (all changes gone).
+   */
+  function restoreDiffTabs(
+    current: RepoStatus,
+    refs: StoredDiffRef[],
+    activePath: string | null,
+  ): boolean {
+    const tabs: DiffTab[] = [];
+    for (const ref of refs) {
+      const entry = current.entries.find(
+        (e) => e.path === ref.path || e.old_path === ref.path,
+      );
+      if (entry) tabs.push({ entry, scope: ref.scope });
+    }
+    if (tabs.length === 0) return false;
+    const active = tabs.some((t) => t.entry.path === activePath)
+      ? activePath!
+      : tabs[tabs.length - 1]!.entry.path;
+    void streamDiffTabs(
+      tabs,
+      active,
+      undefined,
+      undefined,
+      undefined,
+      scrollSeedFor(active),
     );
-    if (!entry) return; // the change is gone (committed/discarded) — skip
-    const top = workspaceSession.get(root)?.scrolls[diffScrollKey(ref.path)];
-    void openDiff(entry, undefined, undefined, undefined, ref.scope, {
-      initialScroll: top,
-    });
+    return true;
   }
 
   /** Consumes a deferred diff restore once the new repo's status lands. */
@@ -1216,19 +1283,12 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
     const pending = pendingDiffRestore;
     if (pending === null || status === null) return;
     pendingDiffRestore = null;
-    const entry = status.entries.find(
-      (e) => e.path === pending.path || e.old_path === pending.path,
-    );
-    if (!entry) {
-      // The stored diff's change vanished while we were away: fall back to
-      // the normal empty-editor behavior (re-arm first-change auto-open).
+    const restored = restoreDiffTabs(status, pending.refs, pending.activePath);
+    if (!restored) {
+      // Every stored diff's change vanished while we were away: fall back
+      // to the normal empty-editor behavior (re-arm first-change auto-open).
       if (center.kind === "empty") autoOpenedFor = null;
-      return;
     }
-    const top = workspaceSession.get(root)?.scrolls[diffScrollKey(pending.path)];
-    void openDiff(entry, undefined, undefined, undefined, pending.scope, {
-      initialScroll: top,
-    });
   });
 
   // -- repo-switch transition --------------------------------------------------
@@ -1309,6 +1369,11 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
    * equals the old head→worktree one — which is why every entry point that
    * has no section (auto-open, prev/next, the file workspace) defaults to
    * "unstaged".
+   *
+   * Multi-diff model: opening a second file APPENDS a tab (an already-open
+   * path just focuses its tab, refreshing the entry + scope) and the one
+   * stream request covers every open path — each tab filters its own files
+   * out of the result in the view.
    */
   async function openDiff(
     entry: StatusEntry,
@@ -1319,18 +1384,48 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
     /** Restore-only extras (a workspace session putting this diff back). */
     opts?: { initialScroll?: number },
   ): Promise<void> {
+    const existing = center.kind === "diff" ? center.tabs : [];
+    await streamDiffTabs(
+      upsertDiffTab(existing, entry, scope),
+      entry.path,
+      targetRepoId,
+      targetRoot,
+      targetRepoName,
+      opts?.initialScroll ?? null,
+    );
+  }
+
+  /**
+   * Streams the working-copy diff for a full open-tab set: sets the diff
+   * center with `activePath` focused and requests every open path in one
+   * stream (the sides follow the ACTIVE tab's scope — a mixed-scope set
+   * re-streams when another tab activates, see {@link activateDiffTab}).
+   * Pages accumulate: the ~50-file pages together cover all open paths.
+   */
+  async function streamDiffTabs(
+    tabs: DiffTab[],
+    activePath: string,
+    targetRepoId?: string,
+    targetRoot?: string,
+    targetRepoName?: string,
+    initialScroll: number | null = null,
+  ): Promise<void> {
+    const active = activeDiffTab(tabs, activePath);
+    if (!active) return;
     const token = ++diffToken;
-    center = { kind: "diff", entry, scope };
+    center = { kind: "diff", tabs, activePath: active.entry.path };
     diffFiles = [];
     diffLoading = true;
     diffError = null;
+    diffStreamScope = active.scope;
     // Consumed by the DiffViewer the stream remounts (null = top, as always).
-    diffScrollSeed = opts?.initialScroll ?? null;
+    diffScrollSeed = initialScroll;
     syncSession();
-    const { oldSide, newSide } = diffScopeSides(scope);
+    const { oldSide, newSide } = diffScopeSides(active.scope);
     diffRepoId = targetRepoId ?? repoId;
     diffRoot = targetRoot ?? root;
     diffRepoName = targetRepoName ?? "";
+    const openPaths = tabs.map((t) => t.entry.path);
     try {
       await streamDiff(
         diffRepoId,
@@ -1338,11 +1433,12 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
         newSide,
         (page) => {
           if (token !== diffToken) return;
-          diffFiles = page.filter(
-            (f) => f.path === entry.path || f.old_path === entry.path,
-          );
+          diffFiles = [
+            ...diffFiles,
+            ...diffPageForOpenPaths(page, openPaths),
+          ];
         },
-        [entry.path],
+        openPaths,
       );
     } catch (err) {
       if (token === diffToken) {
@@ -1352,6 +1448,74 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
     } finally {
       if (token === diffToken) diffLoading = false;
     }
+  }
+
+  /** The saved session scroll of a diff path (what a tab switch restores). */
+  function scrollSeedFor(path: string): number | null {
+    if (root === "") return null;
+    return workspaceSession.get(root)?.scrolls[diffScrollKey(path)] ?? null;
+  }
+
+  /** Focuses an open diff tab (workspace-tab click). */
+  function activateDiffTab(path: string): void {
+    if (center.kind !== "diff") return;
+    const tab = center.tabs.find((t) => t.entry.path === path);
+    if (!tab) return;
+    if (tab.scope !== diffStreamScope) {
+      // The streamed sides follow the activated tab's scope: re-stream so
+      // the shown diff really is that tab's staged/unstaged view.
+      void streamDiffTabs(
+        center.tabs,
+        path,
+        diffRepoId ?? undefined,
+        diffRoot ?? undefined,
+        diffRepoName ?? undefined,
+        scrollSeedFor(path),
+      );
+      return;
+    }
+    // Same comparison as the shown batch: just switch, the viewer remounts
+    // (keyed by path) and restores the tab's saved scroll.
+    diffScrollSeed = scrollSeedFor(path);
+    center = { kind: "diff", tabs: center.tabs, activePath: path };
+    syncSession();
+  }
+
+  /** Closes one diff tab (per-tab ✕ / middle-click); the last one empties. */
+  function closeDiffTab(path: string): void {
+    if (center.kind !== "diff") return;
+    const previous = center;
+    const tabs = withoutDiffTab(previous.tabs, path);
+    if (tabs.length === 0) {
+      clearEditor();
+      return;
+    }
+    const activePath =
+      neighborDiffPath(previous.tabs, previous.activePath, path) ??
+      tabs[0]!.entry.path;
+    if (activePath === previous.activePath) {
+      // An inactive tab closed: the shown diff stays, no remount.
+      center = { kind: "diff", tabs, activePath };
+      syncSession();
+      return;
+    }
+    // The activated neighbor remounts the viewer: seed its saved scroll,
+    // re-streaming when its comparison differs from the streamed sides.
+    diffScrollSeed = scrollSeedFor(activePath);
+    const tab = tabs.find((t) => t.entry.path === activePath)!;
+    if (tab.scope !== diffStreamScope) {
+      void streamDiffTabs(
+        tabs,
+        activePath,
+        diffRepoId ?? undefined,
+        diffRoot ?? undefined,
+        diffRepoName ?? undefined,
+        diffScrollSeed,
+      );
+      return;
+    }
+    center = { kind: "diff", tabs, activePath };
+    syncSession();
   }
 
   /** Re-runs the current working-copy diff load (the error state's Retry). */
@@ -1406,18 +1570,30 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
     }
   });
 
-  /** Keep the open diff's entry kinds in sync with the refreshed status —
-   *  staging from the header flips the entry state. The scope stays: the pane
-   *  keeps comparing the sides the user opened (a staged view simply goes
-   *  empty once everything is staged). */
+  /** Keep every open diff tab's entry kinds in sync with the refreshed
+   *  status — staging from the header flips the active entry's state, and
+   *  the tab-strip indicators need the inactive tabs fresh too. The scopes
+   *  stay: each tab keeps comparing the sides it was opened with (a staged
+   *  view simply goes empty once everything is staged). */
   $effect(() => {
-    const current = diffEntry;
-    if (!current || diffRepoId !== repoId || !status) return;
+    const tabs = diffTabList;
+    if (tabs.length === 0 || diffRepoId !== repoId || !status) return;
     if (center.kind !== "diff") return;
-    const fresh = status.entries.find((e) => e.path === current.path);
-    if (!fresh) return;
-    if (fresh.index !== current.index || fresh.worktree !== current.worktree) {
-      center = { kind: "diff", entry: fresh, scope: center.scope };
+    let changed = false;
+    const freshTabs = tabs.map((tab) => {
+      const fresh = status.entries.find((e) => e.path === tab.entry.path);
+      if (!fresh) return tab;
+      if (
+        fresh.index === tab.entry.index &&
+        fresh.worktree === tab.entry.worktree
+      ) {
+        return tab;
+      }
+      changed = true;
+      return { ...tab, entry: fresh };
+    });
+    if (changed) {
+      center = { kind: "diff", tabs: freshTabs, activePath: center.activePath };
     }
   });
 
@@ -1762,6 +1938,9 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
     commit={selectedCommit}
     compare={compareResult}
     entry={diffEntry}
+    diffTabs={diffTabList}
+    onActivateDiffTab={activateDiffTab}
+    onCloseDiffTab={closeDiffTab}
     diffFiles={diffFiles}
     diffLoading={diffLoading}
     diffError={diffError}
