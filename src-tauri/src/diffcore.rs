@@ -135,26 +135,34 @@ pub(crate) fn discard_selection(
         return Ok(());
     }
 
-    let (diff, delta_idx) = source_diff(repo, path, false)?;
-    let patch = Patch::from_diff(&diff, delta_idx)?;
-    let delta = diff.get_delta(delta_idx).expect("chosen delta exists");
-    if delta.flags().contains(git2::DiffFlags::BINARY) {
-        return Err(EngineError::Invalid(format!(
-            "binary hunk discard unsupported: {path}"
-        )));
-    }
-    let mut hunks: Vec<RawHunk> = match &patch {
-        Some(patch) => raw_hunks(patch)?,
-        None => Vec::new(),
-    };
-    if hunks.is_empty() && delta.status() == git2::Delta::Untracked {
-        hunks = untracked_hunks(repo, path)?;
-    }
-    for (hunk_idx, hunk) in hunks.iter_mut().enumerate() {
-        if let Some(subset) = subsets.get(&(hunk_idx as u32)) {
-            mark_kept(hunk, subset);
+    // Diff + patch live only inside this scope. libgit2 loads the workdir
+    // side of the patch by mmapping the working file when no filters apply
+    // (see libgit2 diff_file.c), and Windows refuses to rewrite a file with
+    // a mapped section open (os error 1224). RawHunk owns its line bytes,
+    // so dropping the patch before the fs::write below releases the mapping.
+    let hunks = {
+        let (diff, delta_idx) = source_diff(repo, path, false)?;
+        let patch = Patch::from_diff(&diff, delta_idx)?;
+        let delta = diff.get_delta(delta_idx).expect("chosen delta exists");
+        if delta.flags().contains(git2::DiffFlags::BINARY) {
+            return Err(EngineError::Invalid(format!(
+                "binary hunk discard unsupported: {path}"
+            )));
         }
-    }
+        let mut hunks: Vec<RawHunk> = match &patch {
+            Some(patch) => raw_hunks(patch)?,
+            None => Vec::new(),
+        };
+        if hunks.is_empty() && delta.status() == git2::Delta::Untracked {
+            hunks = untracked_hunks(repo, path)?;
+        }
+        for (hunk_idx, hunk) in hunks.iter_mut().enumerate() {
+            if let Some(subset) = subsets.get(&(hunk_idx as u32)) {
+                mark_kept(hunk, subset);
+            }
+        }
+        hunks
+    };
 
     // Workdir bytes split into lines WITH their trailing newlines preserved.
     let workdir = repo
