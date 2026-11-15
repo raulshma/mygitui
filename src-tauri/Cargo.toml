@@ -1,6 +1,6 @@
 [package]
 name = "mygitui"
-version = "0.1.32"
+version = "0.1.33"
 description = "Fast, configurable Git GUI with AI-assisted workflows"
 authors = ["raulshma"]
 edition = "2021"
