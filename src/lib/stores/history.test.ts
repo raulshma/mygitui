@@ -252,11 +252,15 @@ describe("filter debounce", () => {
       follow: false,
       pickaxe: null,
     });
-    // Restart resets the released pages until fresh ones arrive.
-    expect(store.pages).toHaveLength(0);
+    // The previous list stays rendered (stale retention) until the fresh
+    // walk's first page swaps in — a restart must not blank the view.
+    expect(store.pages).toHaveLength(1);
+    expect(store.flat.commits).toHaveLength(2);
     expect(store.loading).toBe(true);
 
     calls[1]!.deliver(makePage(10, 1, 0));
+    // The stale page retired, fresh page swapped in atomically.
+    expect(store.pages).toHaveLength(1);
     expect(store.flat.commits.map((c) => c.summary)).toEqual(["commit 10"]);
   });
 
@@ -331,16 +335,19 @@ describe("staleness", () => {
     store.setFilter({ text: "z" });
     await vi.advanceTimersByTimeAsync(200);
     expect(calls).toHaveLength(2);
+    // Stale retention: the pre-restart list stays rendered while the new
+    // walk streams.
+    expect(store.flat.commits).toHaveLength(2);
 
     calls[0]!.deliver(makePage(50, 1, 0)); // old stream, stale token
-    expect(store.flat.commits).toHaveLength(0);
+    expect(store.flat.commits).toHaveLength(2); // still the retained list
 
     calls[0]!.finish(); // old stream completing must not clear loading
     await flush();
     expect(store.loading).toBe(true);
 
-    calls[1]!.deliver(makePage(60, 1, 0));
-    expect(store.flat.commits).toHaveLength(1);
+    calls[1]!.deliver(makePage(60, 1, 1));
+    expect(store.flat.commits.map((c) => c.summary)).toEqual(["commit 60"]);
   });
 
   it("ignores pages with a stale backend generation", () => {
@@ -364,16 +371,16 @@ describe("staleness", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Server-side walk abort (generation moved under the stream)
+// Server-side walk abort (superseded / cancelled before exhaustion)
 // ---------------------------------------------------------------------------
 
 describe("server-side walk abort", () => {
-  it("re-requests (debounced) when the stream resolves mid-walk: last accepted page still holds a cursor", async () => {
+  it("re-requests (grace + debounce) when the stream resolves mid-walk: last accepted page still holds a cursor", async () => {
     vi.useFakeTimers();
     const store = new HistoryStore();
     store.start("repo-1");
-    // Mid-walk page — the backend promised more (cursor set) — then the
-    // repo generation moved under the walk (e.g. a paths-only save) and the
+    // Mid-walk page — the backend promised more (cursor set) — then a
+    // newer request superseded the walk (or the handle closed) and the
     // channel just closed: resolve, no error, no final page.
     calls[0]!.deliver({ ...makePage(0, 2, 0), next_cursor: "cursor-1" });
     expect(store.flat.commits).toHaveLength(2);
@@ -382,9 +389,12 @@ describe("server-side walk abort", () => {
     await flush();
     // Aborted ≠ exhausted: must not look complete…
     expect(store.loading).toBe(true);
-    // …and must re-request through the shared debounce, not immediately.
+    // …and must re-request through the grace check + shared debounce, not
+    // immediately (the exhaustion page may still be in flight).
     expect(calls).toHaveLength(1);
 
+    await vi.advanceTimersByTimeAsync(250); // grace fires: nothing landed
+    expect(calls).toHaveLength(1); // debounce armed, not elapsed
     await vi.advanceTimersByTimeAsync(200);
     expect(calls).toHaveLength(2);
 
@@ -402,14 +412,63 @@ describe("server-side walk abort", () => {
     const store = new HistoryStore();
     store.start("repo-1");
 
-    // Cancelled/generation-moved before the first page ever shipped.
+    // Superseded/cancelled before the first page ever shipped.
     calls[0]!.finish();
     await flush();
     expect(store.loading).toBe(true);
     expect(calls).toHaveLength(1);
 
+    await vi.advanceTimersByTimeAsync(250);
+    expect(calls).toHaveLength(1);
     await vi.advanceTimersByTimeAsync(200);
     expect(calls).toHaveLength(2);
+  });
+
+  it("settles when the exhaustion page lands AFTER the resolve (large-payload fetch lag)", async () => {
+    vi.useFakeTimers();
+    const store = new HistoryStore();
+    store.start("repo-1");
+
+    // Tauri sends channel payloads over 8 KB through an async fetch
+    // round-trip: the command promise resolves while the last page is
+    // still in flight. Pre-fix this read as a truncation and restarted
+    // forever (the eternal "Streaming…" loop on multi-page walks).
+    calls[0]!.deliver({ ...makePage(0, 2, 0), next_cursor: "cursor-1" });
+    calls[0]!.finish();
+    await flush();
+    expect(store.loading).toBe(true);
+
+    calls[0]!.deliver(makePage(2, 2, 0)); // final page, late
+    await flush();
+    expect(store.loading).toBe(false);
+    expect(store.flat.commits).toHaveLength(4);
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(calls).toHaveLength(1); // no abort restart
+  });
+
+  it("re-arms the grace check while pages keep landing after the resolve", async () => {
+    vi.useFakeTimers();
+    const store = new HistoryStore();
+    store.start("repo-1");
+
+    calls[0]!.deliver({ ...makePage(0, 2, 0), next_cursor: "cursor-1" });
+    calls[0]!.finish();
+    await flush();
+
+    // Slow delivery under load: a page lands inside the grace window and
+    // pushes the truncation check out instead of letting it fire mid-walk.
+    await vi.advanceTimersByTimeAsync(200);
+    calls[0]!.deliver({ ...makePage(2, 2, 0), next_cursor: "cursor-2" });
+    await vi.advanceTimersByTimeAsync(200); // past the ORIGINAL grace deadline
+    expect(calls).toHaveLength(1);
+    expect(store.loading).toBe(true);
+
+    calls[0]!.deliver(makePage(4, 2, 0)); // exhaustion page
+    await flush();
+    expect(store.loading).toBe(false);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(calls).toHaveLength(1);
   });
 
   it("backs off consecutive aborts (two same-repo log views supersede each other) and resets after an exhausted walk", async () => {
@@ -417,19 +476,19 @@ describe("server-side walk abort", () => {
     const store = new HistoryStore();
     store.start("repo-1");
 
-    // First abort → base debounce (200 ms).
+    // First abort → grace (250 ms) + base debounce (200 ms).
     calls[0]!.deliver({ ...makePage(0, 2, 0), next_cursor: "cursor-1" });
     calls[0]!.finish();
     await flush();
-    await vi.advanceTimersByTimeAsync(200);
+    await vi.advanceTimersByTimeAsync(450);
     expect(calls).toHaveLength(2);
 
-    // Second consecutive abort → delay doubles to 400 ms…
+    // Second consecutive abort → debounce doubles to 400 ms…
     calls[1]!.deliver({ ...makePage(0, 2, 0), next_cursor: "cursor-2" });
     calls[1]!.finish();
     await flush();
-    await vi.advanceTimersByTimeAsync(200);
-    expect(calls).toHaveLength(2); // …so it has NOT restarted yet at 200 ms
+    await vi.advanceTimersByTimeAsync(450);
+    expect(calls).toHaveLength(2); // …so it has NOT restarted yet at 200 ms debounce
     await vi.advanceTimersByTimeAsync(200);
     expect(calls).toHaveLength(3);
 
@@ -447,7 +506,7 @@ describe("server-side walk abort", () => {
     calls[3]!.deliver({ ...makePage(0, 2, 0), next_cursor: "cursor-3" });
     calls[3]!.finish();
     await flush();
-    await vi.advanceTimersByTimeAsync(200);
+    await vi.advanceTimersByTimeAsync(450);
     expect(calls).toHaveLength(5);
   });
 
@@ -483,7 +542,10 @@ describe("repo-changed watcher", () => {
 
     watcherHandlers[0]!({ repo_id: "repo-1", paths: [], head_moved: true, full: false });
     expect(calls).toHaveLength(2);
-    expect(store.pages).toHaveLength(0); // fresh stream state
+    // Stale retention: the old list stays visible until the fresh walk's
+    // first page swaps in.
+    expect(store.pages).toHaveLength(1);
+    expect(store.flat.commits).toHaveLength(2);
 
     watcherHandlers[0]!({ repo_id: "other", paths: [], head_moved: true, full: false });
     expect(calls).toHaveLength(2); // not our repo → no restart
@@ -504,7 +566,33 @@ describe("repo-changed watcher", () => {
 
     watcherHandlers[0]!({ repo_id: "repo-1", paths: [], head_moved: false, full: true });
     expect(calls).toHaveLength(2); // watcher resync → restart
-    expect(store.pages).toHaveLength(0);
+    expect(store.pages).toHaveLength(1); // retained until the new walk's first page
+    expect(store.flat.commits).toHaveLength(2);
+
+    calls[1]!.deliver(makePage(100, 2, 1));
+    expect(store.pages).toHaveLength(1); // stale page retired, fresh swapped
+    expect(store.flat.commits.map((c) => c.summary)).toEqual(["commit 100", "commit 101"]);
+  });
+
+  it("ignores worktree churn (the remote poller's paths-only event)", async () => {
+    // Remote poll ticks fire on every workdir save (`isSignificant` must
+    // stay false for them) — stamping churn `full: true` restarted the
+    // stream every poll and the header spinner never settled.
+    const store = new HistoryStore();
+    store.start("repo-1");
+    await flush();
+
+    calls[0]!.deliver(makePage(0, 2, 1));
+    expect(store.flat.commits).toHaveLength(2);
+
+    watcherHandlers[0]!({
+      repo_id: "repo-1",
+      paths: ["src/a.ts", "docs/b.md"],
+      head_moved: false,
+      full: false,
+    });
+    expect(calls).toHaveLength(1); // churn → no restart
+    expect(store.pages).toHaveLength(1);
   });
 });
 
@@ -573,7 +661,12 @@ describe("destroy", () => {
     calls[1]!.deliver(makePage(0, 2, 1));
     watcherHandlers[0]!({ repo_id: "repo-1", paths: [], head_moved: true, full: false });
     expect(calls).toHaveLength(3);
-    expect(store.pages).toHaveLength(0); // fresh stream state
+    // Stale retention: the retained list stays until the fresh walk's
+    // first page swaps in.
+    expect(store.pages).toHaveLength(1);
+    expect(store.flat.commits).toHaveLength(2);
+    calls[2]!.deliver(makePage(50, 1, 1));
+    expect(store.flat.commits.map((c) => c.summary)).toEqual(["commit 50"]);
   });
 });
 
@@ -669,7 +762,8 @@ describe("resolveRestoredSelection", () => {
   it("stays pending while the stream may still deliver the commit", () => {
     const store = new HistoryStore();
     store.start("repo-1");
-    calls[0]!.deliver(makePage(0, 2, 0));
+    // Mid-walk page (cursor set): the walk may still deliver the commit.
+    calls[0]!.deliver({ ...makePage(0, 2, 0), next_cursor: "cursor-1" });
 
     // Stream still in flight (loading) and nothing buffered to reveal.
     expect(store.resolveRestoredSelection(sha(99_999))).toEqual({ kind: "pending" });

@@ -25,7 +25,12 @@
  *     are serialized at install, so Node-side mutations never reach it).
  *
  * Streaming commands (`*_stream` taking a `Channel`) deliver one empty page
- * through the channel (`{ index, message }`) and resolve.
+ * through the channel (`{ index, message }`) and resolve. A `{ pages: [...] }`
+ * override streams a multi-page walk; `resolveBeforeLastPage: true` resolves
+ * the command before the last page lands (Tauri's large-payload fetch path).
+ * Channel indices increment per channel — the real `Channel` class queues
+ * out-of-order messages forever, so a constant index strands every page
+ * after the first.
  */
 
 import type { Page, TestInfo } from "@playwright/test";
@@ -575,6 +580,7 @@ function BOOTSTRAP(options: TauriMockOptions): void {
   }
 
   const callbacks = new Map<number, (raw: unknown) => void>();
+  const channelIndex = new Map<number, number>();
   const listeners = new Map<number, { event: string; handler: number }>();
   let nextCallbackId = 1;
   let nextEventId = 1;
@@ -583,7 +589,10 @@ function BOOTSTRAP(options: TauriMockOptions): void {
   /** Pushes one message through a Channel arg (instance or serialized id).
    *  Delivered on a MICROTASK (never synchronously inside `invoke`) — the
    *  real backend delivers channel pages from its event loop, and running
-   *  app effects rely on pages arriving outside the calling effect's stack. */
+   *  app effects rely on pages arriving outside the calling effect's stack.
+   *  Indices increment per channel: the real `Channel` class only processes
+   *  `index === nextMessageIndex` and queues the rest forever, so a constant
+   *  index would strand every page after the first. */
   function deliverChannel(channel: unknown, message: unknown): void {
     let id: number | null = null;
     if (typeof channel === "string") {
@@ -593,7 +602,10 @@ function BOOTSTRAP(options: TauriMockOptions): void {
       id = Number((channel as { id: unknown }).id);
     }
     const callback = id === null ? undefined : callbacks.get(id);
-    if (callback) queueMicrotask(() => callback({ index: 0, message }));
+    if (!callback || id === null) return;
+    const index = channelIndex.get(id) ?? 0;
+    channelIndex.set(id, index + 1);
+    queueMicrotask(() => callback({ index, message }));
   }
 
   const internals = {
@@ -608,6 +620,7 @@ function BOOTSTRAP(options: TauriMockOptions): void {
     },
     unregisterCallback(id: number): void {
       callbacks.delete(id);
+      channelIndex.delete(id);
     },
     convertFileSrc(path: string, _protocol?: string): string {
       return path;
@@ -634,10 +647,41 @@ function BOOTSTRAP(options: TauriMockOptions): void {
       // real backend resolves these commands only when the walk ends, i.e.
       // after every channel page, and the history store's abort detector
       // treats a resolve with no accepted final page as a truncated walk.
+      // A `{ pages: [...] }` mock value delivers a multi-page walk (one page
+      // per macrotask, resolve after the last) like the real 500-commit
+      // pagination; a plain page object keeps the single-page shape.
+      // `resolveBeforeLastPage: true` models Tauri's large-payload fetch
+      // path: pages over 8 KB reach the JS Channel through an async fetch
+      // round-trip, so the command promise resolves while the last page is
+      // still in flight (the store must not read that as a truncation).
       if (cmd === "repo_log_stream" || cmd === "repo_file_history") {
-        const page = (cmd in commandMocks ? commandMocks[cmd] : EMPTY_LOG_PAGE);
-        deliverChannel((args as { on_page?: unknown })?.on_page, page);
-        return Promise.resolve(null);
+        const mock = cmd in commandMocks ? commandMocks[cmd] : EMPTY_LOG_PAGE;
+        const shape = mock as { pages?: unknown; resolveBeforeLastPage?: unknown };
+        const pages = Array.isArray(shape?.pages)
+          ? (shape.pages as unknown[])
+          : [mock];
+        const lateLast =
+          shape?.resolveBeforeLastPage === true && pages.length > 1;
+        const channel = (args as { on_page?: unknown })?.on_page;
+        return new Promise((resolve) => {
+          const step = (i: number): void => {
+            if (i === pages.length - 1) {
+              if (lateLast) {
+                setTimeout(() => {
+                  resolve(null);
+                  setTimeout(() => deliverChannel(channel, pages[i]), 0);
+                }, 0);
+              } else {
+                deliverChannel(channel, pages[i]);
+                setTimeout(() => resolve(null), 0);
+              }
+              return;
+            }
+            deliverChannel(channel, pages[i]);
+            setTimeout(() => step(i + 1), 0);
+          };
+          step(0);
+        });
       }
       if (cmd === "repo_diff_stream") {
         const page = cmd in commandMocks ? commandMocks[cmd] : [];

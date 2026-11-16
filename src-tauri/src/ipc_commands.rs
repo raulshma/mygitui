@@ -5,8 +5,10 @@
 //! commands push pages over `tauri::ipc::Channel`s: diff pages of
 //! [`DIFF_PAGE_SIZE`] files, log pages of [`LOG_PAGE_SIZE`] commits laid out
 //! by the graph module. Streams stop early when the channel send fails
-//! (client gone) or the stream was superseded/cancelled; log streams abort
-//! when the repo generation moves (the client re-requests).
+//! (client gone) or the stream was superseded/cancelled. A generation move
+//! does NOT truncate a log walk: churn batches would otherwise kill and
+//! restart the walk on every file save; freshness comes from the client
+//! restarting on significant `repo-changed` events.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -259,10 +261,11 @@ pub async fn repo_diff_stream(
 
 /// Stream the commit log in [`LOG_PAGE_SIZE`] pages over `on_page`. A new
 /// call for the same repo replaces (cancels) the previous stream. The
-/// command resolves when the walk ENDS — exhausted, superseded, or aborted —
-/// so the caller can tell a truncated walk from a complete one (the history
-/// store's abort→restart contract relies on it; a plain spawn would resolve
-/// the promise at open time and every open would read as an abort).
+/// command resolves when the walk ENDS — exhausted, superseded, or
+/// cancelled — so the caller can tell a truncated walk from a complete one
+/// (the history store's abort→restart contract relies on it; a plain spawn
+/// would resolve the promise at open time and every open would read as an
+/// abort).
 #[tauri::command(rename_all = "snake_case")]
 pub async fn repo_log_stream(
     repo_id: RepoId,
@@ -299,11 +302,19 @@ pub async fn repo_file_history(
 }
 
 /// Shared log/file-history streaming loop. Ends when the walk is exhausted,
-/// the stream is cancelled/superseded, the client drops the channel, or the
-/// repo generation moved (stale; the client re-requests). Cancellation and
-/// generation moves end silently (`Ok`) — the client re-requests on its own;
+/// the stream is cancelled/superseded, or the client drops the channel.
+/// Cancellation ends silently (`Ok`) — the client re-requests on its own;
 /// an engine error is surfaced (`Err`) so the UI can show it instead of
 /// treating a broken walk as a mere abort.
+///
+/// There is NO generation-abort: every watcher batch bumps the generation,
+/// including paths-only workdir churn the `isSignificant` filter ignores,
+/// so aborting on a move killed and restarted the walk on every file save
+/// (the eternal "Streaming…" spinner on busy workdirs). The revwalk is a
+/// consistent snapshot: a ref move under it yields a complete-but-older
+/// log, and the significant `repo-changed` event (head_moved/full)
+/// restarts the stream for freshness. Pages carry their snapshot
+/// `generation` for the client's stale-page gate.
 fn stream_log(
     handle: Arc<RepoHandle>,
     filter: LogFilter,
@@ -326,9 +337,6 @@ fn stream_log(
     loop {
         if token.is_cancelled() || handle.is_closed() {
             break;
-        }
-        if handle.generation() != start_generation {
-            break; // repo changed under us: abort, client re-requests
         }
 
         let page = {
@@ -374,11 +382,16 @@ fn stream_log(
 /// whole (bounded) walk in one shot, so ONE queued read produces the full
 /// result and this loop only lays it out and pages it over the channel.
 /// Graph rows come from the same pure `graph::types::layout_page` with lane
-/// state carried across pages; abort checks mirror the local loop (stream
-/// cancelled/superseded, repo closed, or generation moved between sends).
-/// An EMPTY walk still ships one empty final page — only an exhausted walk
-/// emits `next_cursor: null`, so a zero-page resolve would read as an abort
-/// on the client (an endless restart loop for empty remote repos).
+/// state carried across pages. There is NO generation-abort (same rule as
+/// the local walk): the commit list was fully read before the first
+/// send, so it is complete and self-consistent even if the repo changed
+/// during the (multi-second, churn-prone) SSH read — aborting would waste
+/// the entire read and just restart the same race. Freshness is the
+/// client's job: significant `repo-changed` events restart the stream, and
+/// pages carry their snapshot `generation`. An EMPTY walk still ships one
+/// empty final page — only an exhausted walk emits `next_cursor: null`, so
+/// a zero-page resolve would read as an abort on the client (an endless
+/// restart loop for empty remote repos).
 fn stream_log_remote(
     handle: &Arc<RepoHandle>,
     remote: Arc<crate::repo::RemoteHandle>,
@@ -410,9 +423,6 @@ fn stream_log_remote(
     for (index, commits) in pages.into_iter().enumerate() {
         if token.is_cancelled() || handle.is_closed() {
             return Ok(());
-        }
-        if handle.generation() != start_generation {
-            return Ok(()); // repo changed under us: abort, client re-requests
         }
         let next_cursor = if index + 1 < total {
             commits.last().map(|c| c.sha.clone())
@@ -469,6 +479,80 @@ mod tests {
         let pages = chunk_vec(vec![1u8; 50], 50);
         assert_eq!(pages.len(), 1);
         assert_eq!(pages[0].len(), 50);
+    }
+
+    /// A paths-only watcher batch (workdir churn) bumps the generation but
+    /// must NOT truncate the log walk: aborting on any generation move
+    /// killed and restarted the walk on every file save — the eternal
+    /// "Streaming…" spinner on busy workdirs. The bump lands
+    /// deterministically mid-walk from the page callback (`send` is
+    /// synchronous), i.e. between page 1 and page 2.
+    #[test]
+    fn log_walk_completes_despite_mid_walk_generation_bump() {
+        let dir = std::env::temp_dir().join(format!(
+            "mygitui-ipc-churn-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let repo = git2::Repository::init(&dir).unwrap();
+        // More than LOG_PAGE_SIZE commits so the walk ships two pages and
+        // the bump lands between them.
+        {
+            let sig = git2::Signature::now("t", "t@example.test").unwrap();
+            let tree_id = repo.index().unwrap().write_tree().unwrap();
+            let tree = repo.find_tree(tree_id).unwrap();
+            let mut parent: Option<git2::Commit> = None;
+            for i in 0..=LOG_PAGE_SIZE {
+                let parents: Vec<&git2::Commit> = parent.iter().collect();
+                let id = repo
+                    .commit(Some("HEAD"), &sig, &sig, &format!("c{i}"), &tree, &parents)
+                    .unwrap();
+                parent = Some(repo.find_commit(id).unwrap());
+            }
+        }
+        drop(repo);
+
+        let manager = RepoManager::new();
+        let info = manager.open_unwatched(&dir).unwrap();
+        let handle = manager.get(&info.repo_id).unwrap();
+        let generation = handle.generation_shared();
+        let pages: Arc<std::sync::Mutex<Vec<LogPage>>> =
+            Arc::new(std::sync::Mutex::new(Vec::new()));
+        let sink = pages.clone();
+        let channel = Channel::new(move |body| {
+            if let tauri::ipc::InvokeResponseBody::Json(json) = body {
+                let page: LogPage = serde_json::from_str(&json).unwrap();
+                let mut guard = sink.lock().unwrap();
+                if guard.is_empty() {
+                    // First page shipped: a churn batch lands mid-walk.
+                    generation.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                }
+                guard.push(page);
+            }
+            Ok(())
+        });
+        let token = handle.begin_log_stream();
+        stream_log(handle.clone(), LogFilter::default(), channel, token).unwrap();
+
+        let pages = pages.lock().unwrap();
+        assert!(
+            pages.len() >= 2,
+            "walk must page past the bump: {}",
+            pages.len()
+        );
+        assert!(
+            pages.last().unwrap().next_cursor.is_none(),
+            "final page must prove exhaustion, not a silent abort"
+        );
+        let total: usize = pages.iter().map(|p| p.commits.len()).sum();
+        assert_eq!(total, LOG_PAGE_SIZE + 1);
+        manager.close(&info.repo_id);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
 

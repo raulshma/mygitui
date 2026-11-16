@@ -23,12 +23,20 @@ are GENERATED from it (see "Type single-sourcing" below).
 
 Streaming rules: every stream carries a `generation` number; when repo state
 changes the backend bumps the generation and clients discard stale pages.
-Cancel = drop the channel (backend detects closed channel) or next request
-with same kind+repo replaces the prior stream. The stream command's promise
-resolves only when the walk ENDS (exhausted, superseded, generation-moved,
-or engine error → rejection) — never at request acceptance; only an
-exhausted walk emits a final `next_cursor: null` page (empty repos
-included), so a resolve without one means the walk was truncated.
+A generation bump does NOT truncate an in-flight walk (workdir churn would
+otherwise kill and restart the log on every file save); freshness comes
+from clients restarting on significant `repo-changed` events
+(`head_moved`/`full`). Cancel = drop the channel (backend detects closed
+channel) or next request with same kind+repo replaces the prior stream.
+The stream command's promise resolves only when the walk ENDS (exhausted,
+superseded, cancelled, or engine error → rejection) — never at request
+acceptance; only an exhausted walk emits a final `next_cursor: null` page
+(empty repos included). Exhaustion is proven by that PAGE, not by the
+resolve: Tauri delivers channel payloads over 8 KB through an async fetch
+round-trip, so the promise routinely resolves while the last page(s) are
+still in flight. Clients settle on accepting the null-cursor page and treat
+a resolve without it as a truncation only after a grace window with no
+further page delivery (then restart, with backoff).
 
 ## Commands (M0, already live)
 
