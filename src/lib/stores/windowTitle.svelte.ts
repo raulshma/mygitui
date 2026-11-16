@@ -6,7 +6,15 @@
  * — the same source RepoView counts changes from). App.svelte wires ONE
  * `$effect` here: every reactive read (tabs, activeId, status) re-runs it
  * and the result is pushed to the native window via
- * `getCurrentWindow().setTitle`.
+ * `getCurrentWindow().setTitle`. The computed string is mirrored into the
+ * reactive `windowTitle.current` so the custom title bar
+ * (`TitleBar.svelte`) can display the same title the OS chrome used to.
+ *
+ * Popout windows are skipped: their title is set by the Rust `open_popout`
+ * command from the caller's string (the query contract carries no title),
+ * and this module's tab-store read would clobber it with the bare app
+ * name — the popout's custom title bar therefore reads the native title
+ * instead.
  *
  * Guarded with the shared `isTauri()` check (see `$lib/entry/dragdrop`):
  * outside a Tauri webview (plain browser / e2e / vitest) the call no-ops.
@@ -25,11 +33,34 @@ const APP_NAME = "mygitui";
 let lastTitle: string | null = null;
 let warned = false;
 
+/** Reactive mirror of the title `syncWindowTitle` derived last. */
+const titleState = $state<{ current: string }>({ current: APP_NAME });
+
+/** The title derived from the active tab, for display (read reactively). */
+export const windowTitle = {
+  get current(): string {
+    return titleState.current;
+  },
+};
+
+/** True when this webview is a panel popout (see `$lib/layout/popout`). */
+function inPopoutWindow(): boolean {
+  try {
+    return (
+      typeof location !== "undefined" &&
+      new URLSearchParams(location.search).has("panel")
+    );
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Recomputes the title from the active tab and pushes it when changed.
  * Call from an `$effect` (the reactive reads make the effect re-run).
  */
 export function syncWindowTitle(): void {
+  if (inPopoutWindow()) return; // popouts keep their Rust-provided title
   const tab = tabStore.active;
   const dirty = (tab?.status?.entries.length ?? 0) > 0;
   const title = tab
@@ -37,6 +68,7 @@ export function syncWindowTitle(): void {
     : APP_NAME;
   if (title === lastTitle) return; // unchanged → skip the IPC round-trip
   lastTitle = title;
+  titleState.current = title;
   if (!isTauri()) return; // browser / e2e: no native window to title
   try {
     getCurrentWindow()

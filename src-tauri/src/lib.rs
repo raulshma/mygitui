@@ -112,6 +112,21 @@ pub fn run() {
                 let _ = remote_app.emit(event, payload.clone());
             });
             *app.state::<CliArgs>().0.lock().unwrap() = cli_args;
+            // Custom title bar (TitleBar.svelte): on Windows/Linux drop the
+            // native chrome entirely so the app bar owns dragging and the
+            // window controls. macOS keeps a decorated window and instead
+            // uses the config's `titleBarStyle: "Overlay"` + `hiddenTitle`
+            // (parsed on every platform, applied on macOS only) so the
+            // native traffic lights float over the app bar. Must run while
+            // the window is still hidden — config windows exist by setup
+            // time and nothing is on screen yet, so no flash; popouts are
+            // decorated by their builder in popout.rs instead.
+            #[cfg(not(target_os = "macos"))]
+            for window in app.webview_windows().values() {
+                if let Err(err) = window.set_decorations(false) {
+                    tracing::warn!("failed to drop native window chrome: {err}");
+                }
+            }
             // Warm the login-shell environment probe in the background: a
             // GUI-launched app has no shell profile in its env (nvm & co
             // missing), and action/editor spawns overlay the resolved env —

@@ -56,6 +56,22 @@ pub async fn open_popout(
         // file-drop repo opening) never reach the page. File drops are
         // handled in-page instead (see `$lib/entry/dragdrop.ts`).
         .disable_drag_drop_handler();
+    // Custom title bar (TitleBar.svelte), matching the main window: on
+    // Windows/Linux the popout is undecorated and the app bar owns the
+    // controls; on macOS the overlay style keeps the native traffic
+    // lights over the app bar (the main window's half of this split lives
+    // in tauri.conf.json's `titleBarStyle`/`hiddenTitle` + lib.rs's
+    // setup-time `set_decorations(false)`).
+    #[cfg(target_os = "macos")]
+    {
+        builder = builder
+            .title_bar_style(tauri::TitleBarStyle::Overlay)
+            .hidden_title(true);
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        builder = builder.decorations(false);
+    }
     if let Some(args) = browser_args {
         builder = builder.additional_browser_args(&args);
     }

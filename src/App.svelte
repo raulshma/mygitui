@@ -40,6 +40,7 @@
   import Toaster from "$lib/components/Toaster.svelte";
   import TabStrip from "$lib/components/TabStrip.svelte";
   import StatusBar from "$lib/components/layout/StatusBar.svelte";
+  import TitleBar from "$lib/components/layout/TitleBar.svelte";
   import ThemeToggle from "$lib/components/ThemeToggle.svelte";
   import Icon from "$lib/components/icons/Icon.svelte";
   import EmptyState from "$lib/components/layout/EmptyState.svelte";
@@ -649,6 +650,10 @@
 </script>
 
 <div class="app-shell flex h-full flex-col overflow-hidden bg-background text-foreground">
+  <!-- Custom window chrome (decorations are off on Windows/Linux; macOS
+       overlays its traffic lights over this bar). First child so every
+       view — popout, tab strip, launch, home — sits below it. -->
+  <TitleBar />
   {#if popout}
     <!-- M4 F1 popout window: exactly one panel, own store wiring. -->
     <main class="popout-view flex min-h-0 flex-1 [&>*]:min-h-0 [&>*]:flex-1">
