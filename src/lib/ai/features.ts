@@ -602,11 +602,13 @@ async function gatherStagedDiff(git: FeatureGitClient, repoId: string): Promise<
 }
 
 /**
- * Deadline for the first log page. `repo_log_stream` resolves as soon as the
- * backend ACCEPTS the command (it walks on a spawned thread), so a stream
- * superseded before its first page — a history refresh or watcher bump
- * cancels it — would otherwise leave this promise pending forever and wedge
- * the repo's AI busy flag.
+ * Deadline for the first log page. `repo_log_stream` resolves its promise
+ * when the backend walk ends, which can take a while on a big or remote
+ * repo — and a stream superseded before its first page (a history refresh
+ * or watcher bump cancels it) resolves without ever delivering one. This
+ * deadline guards `gatherCommits` against a stalled or superseded walk
+ * wedging the repo's AI busy flag; the promise itself resolves via the
+ * first-page callback.
  */
 const LOG_FIRST_PAGE_TIMEOUT_MS = 10_000;
 

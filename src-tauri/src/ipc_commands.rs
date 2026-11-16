@@ -258,9 +258,13 @@ pub async fn repo_diff_stream(
 }
 
 /// Stream the commit log in [`LOG_PAGE_SIZE`] pages over `on_page`. A new
-/// call for the same repo replaces (cancels) the previous stream.
+/// call for the same repo replaces (cancels) the previous stream. The
+/// command resolves when the walk ENDS — exhausted, superseded, or aborted —
+/// so the caller can tell a truncated walk from a complete one (the history
+/// store's abort→restart contract relies on it; a plain spawn would resolve
+/// the promise at open time and every open would read as an abort).
 #[tauri::command(rename_all = "snake_case")]
-pub fn repo_log_stream(
+pub async fn repo_log_stream(
     repo_id: RepoId,
     filter: LogFilter,
     on_page: Channel<LogPage>,
@@ -268,16 +272,15 @@ pub fn repo_log_stream(
 ) -> Result<(), String> {
     let handle = get_handle(&state, &repo_id)?;
     let token = handle.begin_log_stream();
-    std::thread::Builder::new()
-        .name(format!("log-stream-{}", repo_id.0))
-        .spawn(move || stream_log(handle, filter, on_page, token))
-        .map_err(|e| format!("failed to spawn log stream: {e}"))?;
-    Ok(())
+    tauri::async_runtime::spawn_blocking(move || stream_log(handle, filter, on_page, token))
+        .await
+        .map_err(|e| format!("log stream task failed: {e}"))?
 }
 
-/// Stream one file's history (follows renames) as [`LogPage`]s over `on_page`.
+/// Stream one file's history (follows renames) as [`LogPage`]s over
+/// `on_page`. Resolves when the walk ends (see [`repo_log_stream`]).
 #[tauri::command(rename_all = "snake_case")]
-pub fn repo_file_history(
+pub async fn repo_file_history(
     repo_id: RepoId,
     path: String,
     on_page: Channel<LogPage>,
@@ -290,28 +293,28 @@ pub fn repo_file_history(
         ..LogFilter::default()
     };
     let token = handle.begin_history_stream();
-    std::thread::Builder::new()
-        .name(format!("history-stream-{}", repo_id.0))
-        .spawn(move || stream_log(handle, filter, on_page, token))
-        .map_err(|e| format!("failed to spawn history stream: {e}"))?;
-    Ok(())
+    tauri::async_runtime::spawn_blocking(move || stream_log(handle, filter, on_page, token))
+        .await
+        .map_err(|e| format!("history stream task failed: {e}"))?
 }
 
 /// Shared log/file-history streaming loop. Ends when the walk is exhausted,
 /// the stream is cancelled/superseded, the client drops the channel, or the
-/// repo generation moved (stale; the client re-requests).
+/// repo generation moved (stale; the client re-requests). Cancellation and
+/// generation moves end silently (`Ok`) — the client re-requests on its own;
+/// an engine error is surfaced (`Err`) so the UI can show it instead of
+/// treating a broken walk as a mere abort.
 fn stream_log(
     handle: Arc<RepoHandle>,
     filter: LogFilter,
     on_page: Channel<LogPage>,
     token: Arc<StreamHandle>,
-) {
+) -> Result<(), String> {
     if let Some(remote) = handle.remote() {
-        stream_log_remote(&handle, remote.clone(), filter, on_page, token);
-        return;
+        return stream_log_remote(&handle, remote.clone(), filter, on_page, token);
     }
     let Ok(repo) = handle.repo() else {
-        return; // unreachable: remote repos took the branch above
+        return Ok(()); // unreachable: remote repos took the branch above
     };
     let start_generation = handle.generation();
     let mut cursor: Option<String> = None;
@@ -339,7 +342,7 @@ fn stream_log(
                         error = %err,
                         "log stream: engine error, aborting"
                     );
-                    break;
+                    return Err(err.to_string());
                 }
             }
         };
@@ -364,6 +367,7 @@ fn stream_log(
         }
         cursor = next_cursor;
     }
+    Ok(())
 }
 
 /// Remote twin of [`stream_log`]: the remote engine's `log` returns the
@@ -372,13 +376,16 @@ fn stream_log(
 /// Graph rows come from the same pure `graph::types::layout_page` with lane
 /// state carried across pages; abort checks mirror the local loop (stream
 /// cancelled/superseded, repo closed, or generation moved between sends).
+/// An EMPTY walk still ships one empty final page — only an exhausted walk
+/// emits `next_cursor: null`, so a zero-page resolve would read as an abort
+/// on the client (an endless restart loop for empty remote repos).
 fn stream_log_remote(
     handle: &Arc<RepoHandle>,
     remote: Arc<crate::repo::RemoteHandle>,
     filter: LogFilter,
     on_page: Channel<LogPage>,
     token: Arc<StreamHandle>,
-) {
+) -> Result<(), String> {
     let start_generation = handle.generation();
     let rx = enqueue_remote_read(handle, &remote, "log", move |git, _ws| {
         git.log(&filter, REMOTE_LOG_LIMIT, None)
@@ -391,9 +398,9 @@ fn stream_log_remote(
                 error = %err,
                 "remote log stream: engine error, aborting"
             );
-            return;
+            return Err(err);
         }
-        Err(_) => return, // queue closed before completion
+        Err(_) => return Ok(()), // queue closed before completion
     };
 
     let pages = chunk_vec(commits, LOG_PAGE_SIZE);
@@ -402,10 +409,10 @@ fn stream_log_remote(
     let mut lanes = types::LaneState::default();
     for (index, commits) in pages.into_iter().enumerate() {
         if token.is_cancelled() || handle.is_closed() {
-            break;
+            return Ok(());
         }
         if handle.generation() != start_generation {
-            break; // repo changed under us: abort, client re-requests
+            return Ok(()); // repo changed under us: abort, client re-requests
         }
         let next_cursor = if index + 1 < total {
             commits.last().map(|c| c.sha.clone())
@@ -425,6 +432,17 @@ fn stream_log_remote(
             break; // client dropped the channel
         }
     }
+    // Exhausted without a single page (empty remote repo): the client only
+    // sees `next_cursor: null` on a final page, so ship the empty one.
+    if total == 0 && !token.is_cancelled() && !handle.is_closed() {
+        let _ = on_page.send(LogPage {
+            commits: Vec::new(),
+            rows: Vec::new(),
+            next_cursor: None,
+            generation: start_generation,
+        });
+    }
+    Ok(())
 }
 
 #[cfg(test)]

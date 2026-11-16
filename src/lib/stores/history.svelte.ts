@@ -323,29 +323,32 @@ export class HistoryStore {
       )
         .then(() => {
           if (this.#token !== token) return;
-          // Abort→restart contract: the backend walk ends SILENTLY when the
-          // repo generation moves under it (every watcher batch bumps it —
-          // including paths-only workdir churn like a file save, which the
-          // `isSignificant` watcher filter ignores), when a newer stream
-          // supersedes this one, or on an engine error: the channel just
-          // closes and the promise resolves. Only an exhausted walk emits a
-          // final `next_cursor: null` page, so a resolved stream whose last
-          // accepted page still holds a cursor — or that accepted no page at
-          // all — was aborted mid-walk. Restart through the shared debounce
-          // instead of presenting a truncated graph as complete; `loading`
-          // stays true across the debounce (the log is knowingly
-          // incomplete). Loop-safety is a filter-edit restart's: one
-          // debounced re-request per abort, and each restart re-snapshots
-          // the generation server-side, so a quiescent repo settles on the
-          // first retry. One abort source is NOT self-limiting though: the
-          // backend allows ONE log stream per repo (`begin_log_stream`
-          // cancels the previous), so two live views of the same repo (the
-          // history tab + a file-history popout) supersede each other's
-          // walk — each restart cancels the other view mid-walk, whose
-          // restart cancels this one. Consecutive aborts therefore back off
-          // exponentially (capped); a walk that finishes between the
-          // other view's restarts exhausts, resets the counter, and the
-          // views settle instead of ping-ponging at the base debounce.
+          // Abort→restart contract. `repo_log_stream` resolves its promise
+          // when the backend walk ENDS (the command awaits the walk task),
+          // and only an exhausted walk emits a final `next_cursor: null`
+          // page. So a resolved stream whose last accepted page still holds
+          // a cursor — or that accepted no page at all — was aborted
+          // mid-walk: the backend walk ends silently when the repo
+          // generation moves under it (a newer stream superseded it — that
+          // case is filtered by the token gate above — or the watcher/poller
+          // bumped the generation on workdir churn the `isSignificant`
+          // filter ignores). Restart through the shared debounce instead of
+          // presenting a truncated graph as complete; `loading` stays true
+          // across the debounce (the log is knowingly incomplete).
+          // Loop-safety is a filter-edit restart's: one debounced re-request
+          // per abort, and each restart re-snapshots the generation
+          // server-side, so a quiescent repo settles on the first retry.
+          // Engine errors now REJECT the stream (see `.catch`), so they no
+          // longer masquerade as silent aborts. One abort source is NOT
+          // self-limiting though: the backend allows ONE log stream per repo
+          // (`begin_log_stream` cancels the previous), so two live views of
+          // the same repo (the history tab + a file-history popout)
+          // supersede each other's walk — each restart cancels the other
+          // view mid-walk, whose restart cancels this one. Consecutive
+          // aborts therefore back off exponentially (capped); a walk that
+          // finishes between the other view's restarts exhausts, resets the
+          // counter, and the views settle instead of ping-ponging at the
+          // base debounce.
           if (this.#acceptedCursor !== null) {
             this.#abortRestarts = Math.min(this.#abortRestarts + 1, ABORT_BACKOFF_STEPS);
             this.#scheduleRestart(

@@ -629,7 +629,11 @@ function BOOTSTRAP(options: TauriMockOptions): void {
         return Promise.resolve(null);
       }
 
-      // Streaming: deliver one page through the channel, then resolve.
+      // Streaming: deliver one page through the channel, then resolve. The
+      // page lands on a microtask BEFORE the invoke promise settles — the
+      // real backend resolves these commands only when the walk ends, i.e.
+      // after every channel page, and the history store's abort detector
+      // treats a resolve with no accepted final page as a truncated walk.
       if (cmd === "repo_log_stream" || cmd === "repo_file_history") {
         const page = (cmd in commandMocks ? commandMocks[cmd] : EMPTY_LOG_PAGE);
         deliverChannel((args as { on_page?: unknown })?.on_page, page);

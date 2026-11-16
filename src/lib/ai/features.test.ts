@@ -423,8 +423,9 @@ describe("runFeature", () => {
   });
 
   it("fails instead of hanging when the log stream never sends a page", async () => {
-    // repo_log_stream resolves on acceptance, so a stream superseded before
-    // its first page used to leave pr-title-body pending forever.
+    // A walk superseded before its first page (history refresh, watcher
+    // bump) resolves without delivering anything, so the first-page
+    // deadline is what keeps pr-title-body from pending forever.
     vi.useFakeTimers();
     try {
       const deps = makeDeps();

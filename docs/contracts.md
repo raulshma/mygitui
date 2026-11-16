@@ -24,7 +24,11 @@ are GENERATED from it (see "Type single-sourcing" below).
 Streaming rules: every stream carries a `generation` number; when repo state
 changes the backend bumps the generation and clients discard stale pages.
 Cancel = drop the channel (backend detects closed channel) or next request
-with same kind+repo replaces the prior stream.
+with same kind+repo replaces the prior stream. The stream command's promise
+resolves only when the walk ENDS (exhausted, superseded, generation-moved,
+or engine error → rejection) — never at request acceptance; only an
+exhausted walk emits a final `next_cursor: null` page (empty repos
+included), so a resolve without one means the walk was truncated.
 
 ## Commands (M0, already live)
 
