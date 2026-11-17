@@ -337,17 +337,19 @@ pub fn parse_log_records(raw: &str) -> Vec<CommitInfo> {
         let ct: i64 = fields.next().unwrap_or("0").parse().unwrap_or(0);
         let ci = fields.next().unwrap_or("");
         let refs_field = fields.next().unwrap_or("");
-        let message = fields.next().unwrap_or("");
+        // %B (full body) is parsed for the summary only: CommitInfo no
+        // longer carries the message — full bodies load on demand via the
+        // `repo_commit_message` command.
+        let body = fields.next().unwrap_or("");
         // ISO tails carry the numeric timezone (%ai = 2024-01-02 10:20:30 +0530).
         let author_tz = ai.rsplit(' ').next().unwrap_or("");
         let committer_tz = ci.rsplit(' ').next().unwrap_or("");
-        let summary = message.lines().next().unwrap_or("").to_string();
+        let summary = body.lines().next().unwrap_or("").to_string();
         commits.push(CommitInfo {
             sha,
             parents,
             author: signature_from(an, ae, at, author_tz),
             committer: signature_from(cn, ce, ct, committer_tz),
-            message: message.trim_end_matches('\n').to_string(),
             summary,
             refs: parse_decorations(refs_field),
         });
@@ -1201,7 +1203,6 @@ subject line\n\nbody line\n\u{1}";
         assert_eq!(c.author.offset_minutes, 330);
         assert_eq!(c.committer.time, 1700000100);
         assert_eq!(c.summary, "subject line");
-        assert!(c.message.ends_with("body line"));
         assert_eq!(c.refs, vec!["HEAD -> main", "origin/main"]);
     }
 

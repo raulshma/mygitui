@@ -179,6 +179,7 @@ pub fn run() {
             ipc_commands::os_accent_color,
             ipc_commands::repo_close,
             ipc_commands::repo_status,
+            ipc_commands::repo_commit_message,
             ipc_commands::repo_refs,
             ipc_commands::repo_blame,
             ipc_commands::repo_diff,

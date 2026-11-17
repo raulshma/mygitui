@@ -245,34 +245,41 @@ fn branch_create_switch_rename_delete_guards() {
     };
 
     // Create without checkout: HEAD stays on main.
-    ENGINE.branch_create(&f.a, "feature", None, false).unwrap();
+    ENGINE
+        .branch_create(&f.a, "feature", None, false, &mut |_| {})
+        .unwrap();
     assert_eq!(names(&f.a), ["feature", "main"]);
     assert!(!ENGINE.branches(&f.a).unwrap()[0].is_head);
 
     // Duplicate name → Invalid.
-    match ENGINE.branch_create(&f.a, "feature", None, false) {
+    match ENGINE.branch_create(&f.a, "feature", None, false, &mut |_| {}) {
         Err(EngineError::Invalid(msg)) => assert!(msg.contains("already exists"), "{msg}"),
         other => panic!("expected Invalid, got {other:?}"),
     }
 
     // Create with checkout from an older commit: workdir follows.
     ENGINE
-        .branch_create(&f.a, "old", Some(&base), true)
+        .branch_create(&f.a, "old", Some(&base), true, &mut |_| {})
         .unwrap();
-    assert_eq!(ENGINE.status(&f.a).unwrap().branch.as_deref(), Some("old"));
+    assert_eq!(
+        ENGINE.status(&f.a, None).unwrap().branch.as_deref(),
+        Some("old")
+    );
     assert!(
         !f.a.workdir().unwrap().join("two.md").exists(),
         "workdir rolled back to the branch point"
     );
 
     // Safe switch back restores two.md; "old" is merged (ancestor of main).
-    ENGINE.branch_switch(&f.a, "main", false).unwrap();
+    ENGINE
+        .branch_switch(&f.a, "main", false, &mut |_| {})
+        .unwrap();
     assert!(f.a.workdir().unwrap().join("two.md").exists());
     assert!(ENGINE.branch_is_merged(&f.a, "old", "main").unwrap());
     ENGINE.branch_delete(&f.a, "old", false).unwrap();
 
     // Missing branch switch → Invalid not-found.
-    match ENGINE.branch_switch(&f.a, "nope", false) {
+    match ENGINE.branch_switch(&f.a, "nope", false, &mut |_| {}) {
         Err(EngineError::Invalid(msg)) => assert!(msg.contains("not found"), "{msg}"),
         other => panic!("expected Invalid, got {other:?}"),
     }
@@ -288,9 +295,13 @@ fn branch_create_switch_rename_delete_guards() {
     }
 
     // Unmerged branch: commit on feature, then try deleting from main.
-    ENGINE.branch_switch(&f.a, "feature", false).unwrap();
+    ENGINE
+        .branch_switch(&f.a, "feature", false, &mut |_| {})
+        .unwrap();
     commit_file(&f.a, "feature.md", "feat\n", "feature work");
-    ENGINE.branch_switch(&f.a, "main", false).unwrap();
+    ENGINE
+        .branch_switch(&f.a, "main", false, &mut |_| {})
+        .unwrap();
     assert!(!ENGINE.branch_is_merged(&f.a, "feature", "main").unwrap());
     match ENGINE.branch_delete(&f.a, "feature", false) {
         Err(EngineError::Invalid(msg)) => assert!(msg.contains("not fully merged"), "{msg}"),
@@ -300,11 +311,15 @@ fn branch_create_switch_rename_delete_guards() {
     assert_eq!(names(&f.a), ["main"]);
 
     // Rename follows HEAD when renaming the current branch.
-    ENGINE.branch_create(&f.a, "topic", None, false).unwrap();
-    ENGINE.branch_switch(&f.a, "topic", false).unwrap();
+    ENGINE
+        .branch_create(&f.a, "topic", None, false, &mut |_| {})
+        .unwrap();
+    ENGINE
+        .branch_switch(&f.a, "topic", false, &mut |_| {})
+        .unwrap();
     ENGINE.branch_rename(&f.a, "topic", "topic2").unwrap();
     assert_eq!(
-        ENGINE.status(&f.a).unwrap().branch.as_deref(),
+        ENGINE.status(&f.a, None).unwrap().branch.as_deref(),
         Some("topic2")
     );
     assert_eq!(names(&f.a), ["main", "topic2"]);
@@ -442,8 +457,12 @@ fn fetch_updates_tracking_refs_and_prunes_deletions() {
     let f = NetFixture::new("fetch-prune");
 
     // B pushes a topic branch; A fetches it via the default refspec.
-    ENGINE.branch_create(&f.b, "topic", None, false).unwrap();
-    ENGINE.branch_switch(&f.b, "topic", false).unwrap();
+    ENGINE
+        .branch_create(&f.b, "topic", None, false, &mut |_| {})
+        .unwrap();
+    ENGINE
+        .branch_switch(&f.b, "topic", false, &mut |_| {})
+        .unwrap();
     let topic_tip = commit_file(&f.b, "topic.md", "t\n", "topic work");
     raw_push(&f.b, "refs/heads/topic:refs/heads/topic");
 
@@ -464,7 +483,7 @@ fn fetch_updates_tracking_refs_and_prunes_deletions() {
 
     // A local branch tracking origin/topic (for the gone check below).
     ENGINE
-        .branch_create(&f.a, "topic", Some("origin/topic"), false)
+        .branch_create(&f.a, "topic", Some("origin/topic"), false, &mut |_| {})
         .unwrap();
     let mut local_topic = f.a.find_branch("topic", BranchType::Local).unwrap();
     local_topic.set_upstream(Some("origin/topic")).unwrap();
@@ -597,7 +616,7 @@ fn pull_diverged_creates_merge_commit_by_default() {
     assert_eq!(commit.parent_id(1).unwrap().to_string(), remote_tip);
     // Merge state cleaned up; the local branch is 2 ahead of its upstream
     // (local commit + merge commit) with nothing left behind.
-    let status = ENGINE.status(&f.a).unwrap();
+    let status = ENGINE.status(&f.a, None).unwrap();
     assert!(!status.merging && !status.rebasing);
     assert_eq!((status.ahead, status.behind), (2, 0));
     // Both sides' files landed in the workdir.
@@ -660,7 +679,7 @@ fn pull_rebase_diverged_replays_local_commits() {
     assert_eq!(head.summary().ok(), Some(Some("a local")));
     assert!(f.a.workdir().unwrap().join("local.md").exists());
     assert!(f.a.workdir().unwrap().join("remote.md").exists());
-    let status = ENGINE.status(&f.a).unwrap();
+    let status = ENGINE.status(&f.a, None).unwrap();
     assert!(!status.merging && !status.rebasing);
     assert_eq!((status.ahead, status.behind), (1, 0));
 }
@@ -685,7 +704,7 @@ fn pull_rebase_conflict_pauses_in_rebase_state_and_aborts_cleanly() {
 
     // The rebase is paused exactly like an interactive rebase: state live,
     // conflicts exposed for the FE editor.
-    let status = ENGINE.status(&f.a).unwrap();
+    let status = ENGINE.status(&f.a, None).unwrap();
     assert!(status.rebasing, "rebase state active after conflicted pull");
     assert!(
         ENGINE
@@ -699,7 +718,7 @@ fn pull_rebase_conflict_pauses_in_rebase_state_and_aborts_cleanly() {
     // Abort restores the pre-pull local state.
     ENGINE.rebase_abort(&f.a).expect("rebase abort");
     assert_eq!(head_sha(&f.a), before);
-    let status = ENGINE.status(&f.a).unwrap();
+    let status = ENGINE.status(&f.a, None).unwrap();
     assert!(!status.rebasing && status.entries.is_empty());
 }
 
@@ -717,7 +736,7 @@ fn pull_conflict_leaves_merge_state_for_resolution() {
     }
     // HEAD unmoved, merge state exposed for the (M3) resolution UI.
     assert_eq!(head_sha(&f.a), before);
-    let status = ENGINE.status(&f.a).unwrap();
+    let status = ENGINE.status(&f.a, None).unwrap();
     assert!(status.merging, "MERGE_HEAD present after conflicted pull");
 }
 
@@ -770,8 +789,12 @@ fn cancelled_pull_refuses_up_front() {
 #[test]
 fn push_branch_sets_upstream_and_reports_progress() {
     let f = NetFixture::new("push-upstream");
-    ENGINE.branch_create(&f.a, "feature", None, false).unwrap();
-    ENGINE.branch_switch(&f.a, "feature", false).unwrap();
+    ENGINE
+        .branch_create(&f.a, "feature", None, false, &mut |_| {})
+        .unwrap();
+    ENGINE
+        .branch_switch(&f.a, "feature", false, &mut |_| {})
+        .unwrap();
     commit_file(&f.a, "feat.md", "f\n", "feature work");
     let tip = head_sha(&f.a);
 
@@ -988,8 +1011,12 @@ fn push_tags_publishes_all_local_tags() {
 #[test]
 fn push_explicit_refs_and_delete_remote_branch() {
     let f = NetFixture::new("push-refs-delete");
-    ENGINE.branch_create(&f.a, "feature", None, false).unwrap();
-    ENGINE.branch_switch(&f.a, "feature", false).unwrap();
+    ENGINE
+        .branch_create(&f.a, "feature", None, false, &mut |_| {})
+        .unwrap();
+    ENGINE
+        .branch_switch(&f.a, "feature", false, &mut |_| {})
+        .unwrap();
     let tip = commit_file(&f.a, "feat.md", "f\n", "feature work");
 
     // Explicit ref push (bare branch name in `refs`).
@@ -1128,8 +1155,12 @@ fn tags_list_reports_annotated_and_lightweight_metadata() {
 fn remote_branches_and_checkout_creates_tracking_local() {
     let f = NetFixture::new("remote-checkout");
     // B pushes a topic branch; A fetches it.
-    ENGINE.branch_create(&f.b, "topic", None, false).unwrap();
-    ENGINE.branch_switch(&f.b, "topic", false).unwrap();
+    ENGINE
+        .branch_create(&f.b, "topic", None, false, &mut |_| {})
+        .unwrap();
+    ENGINE
+        .branch_switch(&f.b, "topic", false, &mut |_| {})
+        .unwrap();
     let topic_tip = commit_file(&f.b, "topic.md", "t\n", "topic work");
     raw_push(&f.b, "refs/heads/topic:refs/heads/topic");
     ENGINE.fetch(&f.a, &fetch_opts(false), &mut |_| {}).unwrap();
@@ -1159,11 +1190,11 @@ fn remote_branches_and_checkout_creates_tracking_local() {
 
     // Checkout creates the local branch at the tracking tip with upstream set.
     let local = ENGINE
-        .branch_checkout_remote(&f.a, "origin", "topic", None)
+        .branch_checkout_remote(&f.a, "origin", "topic", None, &mut |_| {})
         .expect("checkout remote branch");
     assert_eq!(local, "topic");
     assert_eq!(
-        ENGINE.status(&f.a).unwrap().branch.as_deref(),
+        ENGINE.status(&f.a, None).unwrap().branch.as_deref(),
         Some("topic")
     );
     assert!(f.a.workdir().unwrap().join("topic.md").exists());
@@ -1177,12 +1208,12 @@ fn remote_branches_and_checkout_creates_tracking_local() {
     assert_eq!(topic.sha, topic_tip);
 
     // Existing local name → Invalid; custom name works.
-    match ENGINE.branch_checkout_remote(&f.a, "origin", "topic", None) {
+    match ENGINE.branch_checkout_remote(&f.a, "origin", "topic", None, &mut |_| {}) {
         Err(EngineError::Invalid(msg)) => assert!(msg.contains("already exists"), "{msg}"),
         other => panic!("expected Invalid, got {other:?}"),
     }
     let renamed = ENGINE
-        .branch_checkout_remote(&f.a, "origin", "topic", Some("topic-local"))
+        .branch_checkout_remote(&f.a, "origin", "topic", Some("topic-local"), &mut |_| {})
         .expect("checkout with custom name");
     assert_eq!(renamed, "topic-local");
     let custom = ENGINE
@@ -1194,7 +1225,7 @@ fn remote_branches_and_checkout_creates_tracking_local() {
     assert_eq!(custom.upstream.as_deref(), Some("origin/topic"));
 
     // Missing remote branch → Invalid.
-    match ENGINE.branch_checkout_remote(&f.a, "origin", "ghost", None) {
+    match ENGINE.branch_checkout_remote(&f.a, "origin", "ghost", None, &mut |_| {}) {
         Err(EngineError::Invalid(msg)) => assert!(msg.contains("not found"), "{msg}"),
         other => panic!("expected Invalid, got {other:?}"),
     }

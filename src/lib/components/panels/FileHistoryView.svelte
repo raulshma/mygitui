@@ -47,7 +47,7 @@
   const ROW_HEIGHT = 44;
   const OVERSCAN = 10;
 
-  const history = new HistoryStore({ follow: true });
+  const history = new HistoryStore({ follow: true, consumerId: "file-history" });
 
   onMount(() => {
     history.setFilter({ path });
@@ -255,7 +255,9 @@
             onkeydown={(e) => onRowKeydown(commit, idx, e)}
           >
             <div class="main flex min-w-0 flex-col">
-              <Hint label={commit.message}>
+              <!-- Log pages carry only the summary — the hover hint shows the
+                   same first line (the full body lives in the detail pane). -->
+              <Hint label={commit.summary}>
                 {#snippet child({ props })}
                   <span class="summary overflow-hidden text-ellipsis whitespace-nowrap text-sm" {...props}
                     >{commit.summary}</span

@@ -7,9 +7,25 @@
 use git2::build::CheckoutBuilder;
 use git2::{BranchType, Repository};
 
-use super::git_engine::{EngineError, EngineResult};
+use super::git_engine::{CheckoutProgress, EngineError, EngineResult};
 use super::libgit2::Libgit2Engine;
 use super::types::{BranchInfo, GitSignature, RemoteBranchInfo, TagInfo};
+
+/// Wire libgit2's checkout progress callback (one call per processed path)
+/// into `builder`, forwarding `phase` + step counts to `progress`.
+fn wire_checkout_progress<'cb>(
+    builder: &mut CheckoutBuilder<'cb>,
+    phase: &'static str,
+    progress: &'cb mut dyn FnMut(CheckoutProgress),
+) {
+    builder.progress(move |_path, completed, total| {
+        progress(CheckoutProgress {
+            phase,
+            completed,
+            total,
+        });
+    });
+}
 
 /// Branch name of HEAD; also resolves unborn (symbolic-only) HEAD.
 /// Twin of the private helper in libgit2.rs (that file is owned by C1).
@@ -97,11 +113,13 @@ fn upstream_info(
 /// Update the working directory + index to `commit`'s tree, then point HEAD
 /// at the branch ref (`git switch` semantics: workdir first, HEAD last).
 /// `force` discards conflicting local modifications instead of refusing.
+/// Workdir progress flows through `progress` (phase `"checkout"`).
 fn checkout_branch_target(
     repo: &Repository,
     refname: &str,
     commit: &git2::Commit<'_>,
     force: bool,
+    progress: &mut dyn FnMut(CheckoutProgress),
 ) -> EngineResult<()> {
     let mut cb = CheckoutBuilder::new();
     if force {
@@ -109,6 +127,7 @@ fn checkout_branch_target(
     } else {
         cb.safe();
     }
+    wire_checkout_progress(&mut cb, "checkout", progress);
     repo.checkout_tree(commit.tree()?.as_object(), Some(&mut cb))?;
     repo.set_head(refname)?;
     Ok(())
@@ -116,10 +135,16 @@ fn checkout_branch_target(
 
 /// Force the workdir+index to `commit`'s tree and detach HEAD at it
 /// (`git checkout --detach`; shared with the bisect engine's probe moves
-/// and the history panel's "checkout commit" action).
-pub(crate) fn checkout_detached(repo: &Repository, commit: &git2::Commit<'_>) -> EngineResult<()> {
+/// and the history panel's "checkout commit" action). Workdir progress
+/// flows through `progress` (phase `"checkout"`; bisect passes a no-op).
+pub(crate) fn checkout_detached(
+    repo: &Repository,
+    commit: &git2::Commit<'_>,
+    progress: &mut dyn FnMut(CheckoutProgress),
+) -> EngineResult<()> {
     let mut checkout = CheckoutBuilder::new();
     checkout.force();
+    wire_checkout_progress(&mut checkout, "checkout", progress);
     repo.checkout_tree(commit.as_object(), Some(&mut checkout))?;
     repo.set_head_detached(commit.id())?;
     Ok(())
@@ -155,6 +180,7 @@ impl Libgit2Engine {
         name: &str,
         from: Option<&str>,
         checkout: bool,
+        progress: &mut dyn FnMut(CheckoutProgress),
     ) -> EngineResult<()> {
         let commit = match from {
             Some(spec) => resolve_commit(repo, spec)?,
@@ -168,7 +194,7 @@ impl Libgit2Engine {
             .map_err(map_already_exists(name))?;
         if checkout {
             let refname = branch.get().name().unwrap_or_default().to_owned();
-            checkout_branch_target(repo, &refname, &commit, false)?;
+            checkout_branch_target(repo, &refname, &commit, false, progress)?;
         }
         Ok(())
     }
@@ -178,6 +204,7 @@ impl Libgit2Engine {
         repo: &Repository,
         name: &str,
         force: bool,
+        progress: &mut dyn FnMut(CheckoutProgress),
     ) -> EngineResult<()> {
         let branch = repo
             .find_branch(name, BranchType::Local)
@@ -189,15 +216,20 @@ impl Libgit2Engine {
             ))
         })?;
         let refname = branch.get().name().unwrap_or_default().to_owned();
-        checkout_branch_target(repo, &refname, &commit, force)?;
+        checkout_branch_target(repo, &refname, &commit, force, progress)?;
         Ok(())
     }
 
     /// `git checkout --detach <sha>`: point HEAD at the commit itself.
     /// Callers snapshot a checkpoint first (the worktree is forced).
-    pub(crate) fn commit_checkout_impl(&self, repo: &Repository, sha: &str) -> EngineResult<()> {
+    pub(crate) fn commit_checkout_impl(
+        &self,
+        repo: &Repository,
+        sha: &str,
+        progress: &mut dyn FnMut(CheckoutProgress),
+    ) -> EngineResult<()> {
         let commit = resolve_commit(repo, sha)?;
-        checkout_detached(repo, &commit)?;
+        checkout_detached(repo, &commit, progress)?;
         Ok(())
     }
 
@@ -413,6 +445,7 @@ impl Libgit2Engine {
         remote: &str,
         name: &str,
         new_local: Option<&str>,
+        progress: &mut dyn FnMut(CheckoutProgress),
     ) -> EngineResult<String> {
         let tracking_ref = format!("refs/remotes/{remote}/{name}");
         let tracking = repo.find_reference(&tracking_ref).map_err(|_| {
@@ -428,7 +461,7 @@ impl Libgit2Engine {
         let mut branch = repo.branch(local_name, &commit, false)?;
         branch.set_upstream(Some(&format!("{remote}/{name}")))?;
         let refname = format!("refs/heads/{local_name}");
-        checkout_branch_target(repo, &refname, &commit, false)?;
+        checkout_branch_target(repo, &refname, &commit, false, progress)?;
         Ok(local_name.to_owned())
     }
 }

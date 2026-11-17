@@ -1439,6 +1439,9 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
           ];
         },
         openPaths,
+        // Own stream slot so the workspace diff pane never supersedes the
+        // agent/commit-detail/popout diff streams (per-consumer slots).
+        "repo-diff",
       );
     } catch (err) {
       if (token === diffToken) {

@@ -244,7 +244,7 @@ impl Libgit2Engine {
         } else {
             midpoint(repo, &candidates)?
         };
-        checkout_detached(repo, &probe)?;
+        checkout_detached(repo, &probe, &mut |_| {})?;
         to_public(repo, &st)
     }
 
@@ -314,7 +314,7 @@ impl Libgit2Engine {
         }
         let probe = midpoint(repo, &candidates)?;
         if probe.id() != current.id() {
-            checkout_detached(repo, &probe)?;
+            checkout_detached(repo, &probe, &mut |_| {})?;
         }
         to_public(repo, &st)
     }
@@ -332,7 +332,7 @@ impl Libgit2Engine {
         } else {
             repo.set_head_detached(orig.id())?;
         }
-        checkout_detached(repo, &orig)?;
+        checkout_detached(repo, &orig, &mut |_| {})?;
         if let Some(branch) = st.orig_branch.as_deref() {
             // checkout_detached detached HEAD; re-attach to the branch.
             repo.set_head(branch)?;

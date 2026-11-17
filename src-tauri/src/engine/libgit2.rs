@@ -16,7 +16,9 @@ use git2::{
 use imara_diff::{Algorithm, Diff as WordDiff, InternedInput, TokenSource};
 use parking_lot::Mutex;
 
-use super::git_engine::{EngineError, EngineResult, FetchProgress, GitEngine, PushProgress};
+use super::git_engine::{
+    CheckoutProgress, EngineError, EngineResult, FetchProgress, GitEngine, PushProgress,
+};
 use super::types::{
     BlameLine, BranchInfo, ChangeKind, CommitInfo, CommitOptions, DiffHunk, DiffLine, DiffSide,
     FetchOptions, FileDiff, GitSignature, HookInfo, LogFilter, NetStats, PullOptions, PushOptions,
@@ -492,17 +494,24 @@ fn refs_cached(repo: &Repository) -> EngineResult<RefsCacheEntry> {
 }
 
 fn commit_info(commit: &Commit<'_>, decos: &HashMap<Oid, Vec<String>>) -> CommitInfo {
-    let message = commit.message().unwrap_or_default().to_owned();
     let summary = match commit.summary() {
         Ok(Some(s)) => s.to_owned(),
-        _ => message.lines().next().unwrap_or_default().to_owned(),
+        // libgit2's summary is None when the message has no clean first
+        // line (leading newlines); fall back to the raw message's first
+        // line like the remote parser does.
+        _ => commit
+            .message()
+            .unwrap_or_default()
+            .lines()
+            .next()
+            .unwrap_or_default()
+            .to_owned(),
     };
     CommitInfo {
         sha: commit.id().to_string(),
         parents: commit.parent_ids().map(|p| p.to_string()).collect(),
         author: sig_to_model(commit.author()),
         committer: sig_to_model(commit.committer()),
-        message,
         summary,
         refs: decos.get(&commit.id()).cloned().unwrap_or_default(),
     }
@@ -1162,7 +1171,7 @@ fn topo_order(repo: &Repository, heads: &[Oid]) -> EngineResult<Vec<Oid>> {
 }
 
 impl GitEngine for Libgit2Engine {
-    fn status(&self, repo: &Repository) -> EngineResult<RepoStatus> {
+    fn status(&self, repo: &Repository, paths: Option<&[String]>) -> EngineResult<RepoStatus> {
         let mut opts = StatusOptions::new();
         opts.include_untracked(true)
             .recurse_untracked_dirs(true)
@@ -1170,6 +1179,13 @@ impl GitEngine for Libgit2Engine {
             // Gitlinks show up in the working-copy list like VSCode does:
             // a dirty/uninitialized submodule is a change to the superproject.
             .exclude_submodules(false);
+        if let Some(paths) = paths {
+            // Same pathspec semantics (default fnmatch) the incremental
+            // merge's removal step uses via `git2::Pathspec`.
+            for path in paths {
+                opts.pathspec(path.as_str());
+            }
+        }
 
         let statuses = repo.statuses(Some(&mut opts))?;
         let mut entries = Vec::with_capacity(statuses.len());
@@ -1499,6 +1515,27 @@ impl GitEngine for Libgit2Engine {
         Ok((commits, next_cursor))
     }
 
+    fn commit_message(&self, repo: &Repository, sha: &str) -> EngineResult<Option<String>> {
+        let commit = match repo.revparse_single(sha) {
+            Ok(obj) => match obj.peel_to_commit() {
+                Ok(commit) => commit,
+                // Resolvable but not a commit (blob/tree/tag without one).
+                Err(_) => return Ok(None),
+            },
+            // Unknown sha/revision: `None`, not an error (the FE probes for
+            // details of commits it already saw, which may be gone).
+            Err(e) if e.code() == git2::ErrorCode::NotFound => return Ok(None),
+            Err(e) => return Err(e.into()),
+        };
+        Ok(Some(
+            commit
+                .message()
+                .unwrap_or_default()
+                .trim_end_matches('\n')
+                .to_owned(),
+        ))
+    }
+
     fn blame(
         &self,
         repo: &Repository,
@@ -1654,16 +1691,28 @@ impl GitEngine for Libgit2Engine {
         name: &str,
         from: Option<&str>,
         checkout: bool,
+        progress: &mut dyn FnMut(CheckoutProgress),
     ) -> EngineResult<()> {
-        self.branch_create_impl(repo, name, from, checkout)
+        self.branch_create_impl(repo, name, from, checkout, progress)
     }
 
-    fn branch_switch(&self, repo: &Repository, name: &str, force: bool) -> EngineResult<()> {
-        self.branch_switch_impl(repo, name, force)
+    fn branch_switch(
+        &self,
+        repo: &Repository,
+        name: &str,
+        force: bool,
+        progress: &mut dyn FnMut(CheckoutProgress),
+    ) -> EngineResult<()> {
+        self.branch_switch_impl(repo, name, force, progress)
     }
 
-    fn checkout_commit(&self, repo: &Repository, sha: &str) -> EngineResult<()> {
-        self.commit_checkout_impl(repo, sha)
+    fn checkout_commit(
+        &self,
+        repo: &Repository,
+        sha: &str,
+        progress: &mut dyn FnMut(CheckoutProgress),
+    ) -> EngineResult<()> {
+        self.commit_checkout_impl(repo, sha, progress)
     }
 
     fn branch_is_merged(&self, repo: &Repository, name: &str, into: &str) -> EngineResult<bool> {
@@ -1706,8 +1755,9 @@ impl GitEngine for Libgit2Engine {
         remote: &str,
         name: &str,
         new_local: Option<&str>,
+        progress: &mut dyn FnMut(CheckoutProgress),
     ) -> EngineResult<String> {
-        self.branch_checkout_remote_impl(repo, remote, name, new_local)
+        self.branch_checkout_remote_impl(repo, remote, name, new_local, progress)
     }
 
     fn remotes(&self, repo: &Repository) -> EngineResult<Vec<RemoteInfo>> {

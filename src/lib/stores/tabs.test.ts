@@ -103,6 +103,28 @@ function freshStore(): TabStore {
   return new TabStore(new RecentRepoStore(noStorage));
 }
 
+/**
+ * Overrides jsdom's `visibilityState` for the hidden-window gate tests
+ * (an own configurable property shadows the prototype getter; the cleanup
+ * delete restores it).
+ */
+function setHidden(hidden: boolean): void {
+  Object.defineProperty(document, "visibilityState", {
+    value: hidden ? "hidden" : "visible",
+    configurable: true,
+  });
+}
+
+/**
+ * One macrotask turn: lets the background `refreshStatus` settle fully
+ * (status swap AND the coalescing bookkeeping's `.finally`), so a watcher
+ * dispatch afterwards starts its own fetch cycle instead of racing the
+ * open-tab refresh's exit window.
+ */
+function flushAsync(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
 beforeEach(() => {
   mockOpenRepo.mockReset();
   mockCloseRepo.mockReset();
@@ -649,6 +671,41 @@ describe("refreshStatus", () => {
     expect(store.tabs[0]?.status).toEqual(STATUS_2);
   });
 
+  it("unions coalesced path batches; a merged-in full request upgrades the trailing fetch", async () => {
+    const store = freshStore();
+    mockOpenRepo.mockResolvedValue(ALPHA);
+    mockRepoStatus.mockResolvedValue(STATUS_1);
+    await store.openTab("C:/repos/alpha");
+    await vi.waitFor(() => {
+      expect(store.tabs[0]?.status).toEqual(STATUS_1);
+    });
+
+    let release!: (value: typeof STATUS_1) => void;
+    const first = new Promise<typeof STATUS_1>((resolve) => {
+      release = resolve;
+    });
+    mockRepoStatus.mockReset();
+    mockRepoStatus.mockReturnValueOnce(first).mockResolvedValue(STATUS_2);
+
+    const a = store.refreshStatus("repo-1", ["a.ts"]);
+    const b = store.refreshStatus("repo-1", ["a.ts", "b.ts"]);
+    // A full request subsumes the pending batch…
+    const c = store.refreshStatus("repo-1");
+    // …so this later path batch rides along as a full rescan too.
+    const d = store.refreshStatus("repo-1", ["c.ts"]);
+
+    // First (running) fetch carries the initial incremental batch.
+    expect(mockRepoStatus).toHaveBeenCalledTimes(1);
+    expect(mockRepoStatus).toHaveBeenLastCalledWith("repo-1", ["a.ts"]);
+
+    release(STATUS_1);
+    await Promise.all([a, b, c, d]);
+    // Trailing fetch: full rescan (the coalesced full request upgraded it).
+    expect(mockRepoStatus).toHaveBeenCalledTimes(2);
+    expect(mockRepoStatus).toHaveBeenLastCalledWith("repo-1");
+    expect(store.tabs[0]?.status).toEqual(STATUS_2);
+  });
+
   it("is a no-op for unknown ids", async () => {
     const store = freshStore();
     await store.refreshStatus("missing");
@@ -702,6 +759,103 @@ describe("startTabEvents", () => {
     handlers[0]?.({ repo_id: "who-is-this", paths: [], head_moved: false, full: true });
     await Promise.resolve(); // flush microtasks
 
+    expect(mockRepoStatus).not.toHaveBeenCalled();
+  });
+
+  it("passes a path-scoped batch's paths to repo_status (incremental rescan)", async () => {
+    mockOpenRepo.mockResolvedValue(ALPHA);
+    mockRepoStatus.mockResolvedValue(STATUS_1);
+    await openTab("C:/repos/alpha");
+    await vi.waitFor(() => expect(mockRepoStatus).toHaveBeenCalled());
+    await flushAsync();
+    mockRepoStatus.mockClear();
+
+    const handlers: Array<(event: RepoChangedEvent) => void> = [];
+    mockOnRepoChanged.mockImplementation((cb) => {
+      handlers.push(cb);
+      return Promise.resolve(() => {});
+    });
+    startTabEvents();
+
+    mockRepoStatus.mockResolvedValue(STATUS_2);
+    handlers[0]?.({
+      repo_id: "repo-1",
+      paths: ["src/a.ts"],
+      head_moved: false,
+      full: false,
+    });
+
+    await vi.waitFor(() => {
+      expect(mockRepoStatus).toHaveBeenCalledWith("repo-1", ["src/a.ts"]);
+      expect(tabStore.tabs[0]?.status).toEqual(STATUS_2);
+    });
+  });
+
+  it("refreshes without paths for head moves and full resyncs", async () => {
+    mockOpenRepo.mockResolvedValue(ALPHA);
+    mockRepoStatus.mockResolvedValue(STATUS_1);
+    await openTab("C:/repos/alpha");
+    await vi.waitFor(() => expect(mockRepoStatus).toHaveBeenCalled());
+    await flushAsync();
+    mockRepoStatus.mockClear();
+
+    const handlers: Array<(event: RepoChangedEvent) => void> = [];
+    mockOnRepoChanged.mockImplementation((cb) => {
+      handlers.push(cb);
+      return Promise.resolve(() => {});
+    });
+    startTabEvents();
+
+    handlers[0]?.({ repo_id: "repo-1", paths: ["src/a.ts"], head_moved: true, full: false });
+    handlers[0]?.({ repo_id: "repo-1", paths: [], head_moved: false, full: true });
+
+    await vi.waitFor(() => {
+      // Both batches are head_moved/full — full rescans, no paths argument.
+      expect(mockRepoStatus).toHaveBeenCalledWith("repo-1");
+      expect(mockRepoStatus).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  it("defers watcher refreshes while hidden and drains one coalesced refresh per repo on visible", async () => {
+    mockOpenRepo.mockResolvedValue(ALPHA);
+    await openTab("C:/repos/alpha");
+    mockOpenRepo.mockResolvedValue(BETA);
+    await openTab("C:/repos/beta");
+    await vi.waitFor(() => expect(mockRepoStatus).toHaveBeenCalledTimes(2));
+    await flushAsync();
+    mockRepoStatus.mockClear();
+
+    const handlers: Array<(event: RepoChangedEvent) => void> = [];
+    mockOnRepoChanged.mockImplementation((cb) => {
+      handlers.push(cb);
+      return Promise.resolve(() => {});
+    });
+    startTabEvents();
+
+    setHidden(true);
+    try {
+      // Two path batches for repo-1 (must union) + a head move for repo-2
+      // (upgrades the pending refresh to a full rescan).
+      handlers[0]?.({ repo_id: "repo-1", paths: ["src/a.ts"], head_moved: false, full: false });
+      handlers[0]?.({ repo_id: "repo-1", paths: ["src/b.ts"], head_moved: false, full: false });
+      handlers[0]?.({ repo_id: "repo-2", paths: ["other.txt"], head_moved: true, full: false });
+      await Promise.resolve(); // flush microtasks
+      expect(mockRepoStatus).not.toHaveBeenCalled(); // hidden — no fetch
+    } finally {
+      setHidden(false);
+    }
+
+    document.dispatchEvent(new Event("visibilitychange"));
+    await vi.waitFor(() => {
+      expect(mockRepoStatus).toHaveBeenCalledWith("repo-1", ["src/a.ts", "src/b.ts"]);
+      expect(mockRepoStatus).toHaveBeenCalledWith("repo-2");
+      expect(mockRepoStatus).toHaveBeenCalledTimes(2); // one drain per repo
+    });
+
+    // The pending map is drained: another visibility flip is a no-op.
+    mockRepoStatus.mockClear();
+    document.dispatchEvent(new Event("visibilitychange"));
+    await Promise.resolve();
     expect(mockRepoStatus).not.toHaveBeenCalled();
   });
 });

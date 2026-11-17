@@ -19,15 +19,17 @@
  *
  * Streaming model: the backend pushes `LogPage`s of up to 500 commits over
  * one channel until the log is exhausted; a new `repo_log_stream` for the
- * same repo cancels the previous one server-side, so "cancel" here means
+ * same CONSUMER cancels that consumer's previous stream server-side (each
+ * view passes its own `consumerId` — history, file-history, popouts — so
+ * concurrent views never supersede each other), so "cancel" here means
  * invalidating stale callbacks (generation tokens) rather than an IPC call.
  * Exhaustion is proven by the final `next_cursor: null` PAGE, which settles
  * the store on acceptance: Tauri delivers channel payloads over 8 KB via an
  * async fetch round-trip, so the command promise can resolve while the last
  * pages are still in flight. A resolve without the exhaustion page arms a
- * grace check; a walk the backend ends early (superseded by a newer request,
- * cancelled, repo closed) delivers nothing more, the grace fires, and a
- * debounced restart follows (see `#beginStream` / `#armGrace`).
+ * grace check; a walk the backend ends early (truncated, cancelled, repo
+ * closed) delivers nothing more, the grace fires, and a debounced restart
+ * follows (see `#beginStream` / `#armGrace`).
  * Arriving pages land in a pending buffer and are released to the UI in
  * chunks of {@link RELEASE_CHUNK_COMMITS} commits — `loadMore()` (wired to
  * GraphCanvas `onReachEnd`) releases the next chunk, which keeps huge repos
@@ -52,11 +54,6 @@ import { describeError } from "$lib/errors";
 
 /** Debounce for filter edits before the stream restarts (ms). */
 export const FILTER_DEBOUNCE_MS = 200;
-
-/** Abort-restart backoff: `FILTER_DEBOUNCE_MS · 2^n` up to this many steps… */
-const ABORT_BACKOFF_STEPS = 5;
-/** …never exceeding this ceiling (the base debounce is 200 ms → 200/400/800/1600/3200). */
-const ABORT_BACKOFF_MAX_MS = 3_200;
 
 /**
  * Grace window between the stream promise resolving and a missing
@@ -114,6 +111,12 @@ export class HistoryStore {
   readonly #index = new LogIndex();
   /** Rename-following walk (file-history mode). */
   readonly #follow: boolean;
+  /**
+   * Backend stream-slot id for this store's `repo_log_stream` (per-consumer
+   * slots per kind: a same-consumer replacement cancels only this store's
+   * walk, and concurrent views of the same repo keep theirs).
+   */
+  readonly #consumerId: string;
   #pending: LogPage[] = [];
   #releasedCommits = 0;
   #releaseCap = RELEASE_CHUNK_COMMITS;
@@ -140,12 +143,6 @@ export class HistoryStore {
    * without it only arms the grace check (see `#armGrace`).
    */
   #acceptedCursor: string | null | undefined = undefined;
-  /**
-   * Consecutive abort→restart round-trips (reset when a walk exhausts).
-   * Drives the exponential backoff that keeps two same-repo log views
-   * from superseding each other forever — see `#beginStream`.
-   */
-  #abortRestarts = 0;
   #debounceTimer: ReturnType<typeof setTimeout> | null = null;
   /** Pending "did the exhaustion page land?" check after a resolve. */
   #graceTimer: ReturnType<typeof setTimeout> | null = null;
@@ -154,9 +151,13 @@ export class HistoryStore {
   /**
    * `opts.follow` marks a file-history store: the walk follows the path in
    * `filter.path` through renames (backend `LogFilter.follow`).
+   * `opts.consumerId` names the backend stream slot (default "default");
+   * each view of the same repo must pass a distinct one so concurrent
+   * walks do not cancel each other.
    */
-  constructor(opts: { follow?: boolean } = {}) {
+  constructor(opts: { follow?: boolean; consumerId?: string } = {}) {
     this.#follow = opts.follow ?? false;
+    this.#consumerId = opts.consumerId ?? "default";
   }
 
   /** Repo this store is bound to, or null before `start`/after `destroy`. */
@@ -357,8 +358,11 @@ export class HistoryStore {
       // renderer eventually OOMs). Filter edits restart through the explicit
       // debounced `setFilter` path instead.
       const snapshot = untrack(() => this.filter);
-      streamLog(repoId, toLogFilter(snapshot, { follow: this.#follow }), (page) =>
-        this.#onPage(token, page),
+      streamLog(
+        repoId,
+        toLogFilter(snapshot, { follow: this.#follow }),
+        (page) => this.#onPage(token, page),
+        this.#consumerId,
       )
         .then(() => {
           if (this.#token !== token) return;
@@ -371,26 +375,18 @@ export class HistoryStore {
           // in flight at resolve time. Exhaustion is therefore proven by
           // the final PAGE (`#onPage` settles on it); a resolve without it
           // only arms a grace check (`#armGrace`), re-armed while pages
-          // keep landing. A walk truly ended mid-flight (handle closed /
-          // channel dropped before exhaustion) delivers nothing more, the
-          // grace fires, and we restart through the shared debounce instead
-          // of presenting a truncated graph as complete; `loading` stays
-          // true across it (the log is knowingly incomplete).
-          // Generation moves do NOT truncate walks (churn would restart the
-          // log forever); freshness comes from the significant-event
-          // restart below. Engine errors REJECT the stream (see `.catch`),
-          // so they no longer masquerade as silent aborts. One abort source
-          // is NOT self-limiting though: the backend allows ONE log stream
-          // per repo (`begin_log_stream` cancels the previous), so two live
-          // views of the same repo (the history tab + a file-history popout)
-          // supersede each other's walk — each restart cancels the other
-          // view mid-walk, whose restart cancels this one. Consecutive
-          // aborts therefore back off exponentially (capped); a walk that
-          // finishes between the other view's restarts exhausts, resets the
-          // counter, and the views settle instead of ping-ponging at the
-          // base debounce.
+          // keep landing. A walk truly ended mid-flight (truncated / repo
+          // closed) delivers nothing more, the grace fires, and we restart
+          // through the shared debounce instead of presenting a truncated
+          // graph as complete; `loading` stays true across it (the log is
+          // knowingly incomplete). Generation moves do NOT truncate walks
+          // (churn would restart the log forever); freshness comes from the
+          // significant-event restart below. Engine errors REJECT the
+          // stream (see `.catch`), so they do not masquerade as silent
+          // aborts — and a restart by another view cannot be the cause
+          // either: streams carry distinct consumer ids, so a replacement
+          // only ever cancels this store's own walk.
           if (this.#acceptedCursor === null) {
-            this.#abortRestarts = 0;
             this.loading = false;
             return;
           }
@@ -429,7 +425,6 @@ export class HistoryStore {
     if (page.next_cursor === null) {
       // Exhaustion proof: the walk ended backend-side. Settle HERE, not in
       // the resolve handler — large pages reach us after the promise does.
-      this.#abortRestarts = 0;
       this.loading = false;
     } else if (this.#graceTimer !== null) {
       // Delivery is still progressing after the resolve: push the truncation
@@ -470,8 +465,9 @@ export class HistoryStore {
 
   /**
    * Post-resolve truncation check: settle if the exhaustion page landed
-   * (large-payload delivery lag), otherwise restart with abort backoff.
-   * Re-armed by every accepted page so slow delivery never reads as abort.
+   * (large-payload delivery lag), otherwise restart through the shared
+   * debounce. Re-armed by every accepted page so slow delivery never reads
+   * as abort.
    */
   #armGrace(token: number): void {
     this.#clearGrace();
@@ -479,17 +475,11 @@ export class HistoryStore {
       this.#graceTimer = null;
       if (this.#token !== token) return;
       if (this.#acceptedCursor === null) {
-        this.#abortRestarts = 0;
         this.loading = false;
         return;
       }
-      this.#abortRestarts = Math.min(this.#abortRestarts + 1, ABORT_BACKOFF_STEPS);
       this.#scheduleRestart(
         `walk aborted (last cursor: ${String(this.#acceptedCursor)})`,
-        Math.min(
-          FILTER_DEBOUNCE_MS * 2 ** (this.#abortRestarts - 1),
-          ABORT_BACKOFF_MAX_MS,
-        ),
       );
     }, RESOLVE_GRACE_MS);
   }
@@ -532,7 +522,6 @@ export class HistoryStore {
   #resetState(): void {
     this.#index.reset();
     this.#pending = [];
-    this.#abortRestarts = 0;
     this.#acceptedCursor = undefined;
     this.#releasedCommits = 0;
     this.#releaseCap = RELEASE_CHUNK_COMMITS;

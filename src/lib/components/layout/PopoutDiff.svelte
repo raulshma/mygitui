@@ -30,15 +30,24 @@
     files = [];
     loading = true;
     error = null;
-    const run = streamDiff(id, "head", "worktree", (page) => {
-      // Stale-page guard, twin of RepoView's `diffToken` check in its diff
-      // stream callback: a debounced `reload` bump re-runs this effect and
-      // resets `files` while the previous stream may still be paging —
-      // without the generation gate its late pages interleave into the
-      // fresh array as duplicates.
-      if (generation !== reload) return;
-      files = [...files, ...page];
-    })
+    const run = streamDiff(
+      id,
+      "head",
+      "worktree",
+      (page) => {
+        // Stale-page guard, twin of RepoView's `diffToken` check in its diff
+        // stream callback: a debounced `reload` bump re-runs this effect and
+        // resets `files` while the previous stream may still be paging —
+        // without the generation gate its late pages interleave into the
+        // fresh array as duplicates.
+        if (generation !== reload) return;
+        files = [...files, ...page];
+      },
+      undefined,
+      // Own stream slot so the popout never supersedes the workspace's
+      // diff stream (per-consumer slots backend-side).
+      "popout-diff",
+    )
       .then(() => {
         if (generation === reload) loading = false;
       })

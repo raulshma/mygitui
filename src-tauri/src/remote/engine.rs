@@ -278,6 +278,28 @@ impl RemoteGitEngine {
         Ok((commits, next_cursor))
     }
 
+    /// Full commit message of `sha` (trailing newline stripped, matching the
+    /// local engine's `commit_message`). `None` when the sha does not
+    /// resolve to a commit on the device.
+    pub fn commit_message(&self, sha: &str) -> Result<Option<String>, String> {
+        match self.git_checked(
+            &format!("show -s --format=%B {}", shell_quote(sha)),
+            "commit_message",
+        ) {
+            Ok(out) => Ok(Some(out.stdout_str().trim_end_matches('\n').to_owned())),
+            // Missing object: the stderr tail carries git's wording; treat
+            // it as a probe miss (`None`), everything else stays an error.
+            Err(err)
+                if err.contains("unknown revision")
+                    || err.contains("bad revision")
+                    || err.contains("not a valid object name") =>
+            {
+                Ok(None)
+            }
+            Err(err) => Err(err),
+        }
+    }
+
     pub fn blame(&self, path: &str, from: Option<&str>) -> Result<Vec<BlameLine>, String> {
         let range = match from {
             Some(r) => format!("{} --", shell_quote(r)),

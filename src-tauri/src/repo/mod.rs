@@ -4,9 +4,10 @@
 //! [`RepoManager`] owns one [`RepoHandle`] per open repo tab. A handle keeps
 //! the `git2::Repository` opened once (locked per engine call — git2's
 //! `Repository` is `Send` but not `Sync`), the engine instance, the bumpable
-//! generation counter the FS watcher advances, and cancellation slots for the
-//! active log/file-history streams (a new stream for the same repo+kind
-//! cancels the previous one).
+//! generation counter the FS watcher advances, per-consumer stream
+//! cancellation slots (a new stream for the same repo+kind+consumer cancels
+//! that consumer's previous one; other consumers are unaffected), and the
+//! full-status snapshot for path-gated incremental status refreshes.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -18,9 +19,13 @@ use parking_lot::Mutex;
 use tauri::Emitter;
 
 use crate::engine::git_engine::{EngineError, EngineResult, GitEngine, GitEngineM12, GitEngineM3};
-use crate::engine::types::{RepoId, RepoInfo};
+use crate::engine::types::{RepoId, RepoInfo, RepoStatus, StatusEntry};
 use crate::ops::OpQueue;
 use crate::watcher::{self, RepoWatcher};
+
+/// Touched-path limit for incremental status merges: beyond it a full
+/// rescan is cheaper than splicing the cached snapshot.
+const STATUS_INCREMENTAL_PATH_LIMIT: usize = 200;
 
 /// Construct the engine used for newly opened repositories.
 ///
@@ -63,20 +68,33 @@ impl StreamHandle {
     }
 }
 
-/// Install a fresh stream token in `slot`, cancelling the previous tenant.
-fn install_stream(slot: &Mutex<Option<Arc<StreamHandle>>>) -> Arc<StreamHandle> {
-    let mut guard = slot.lock();
-    if let Some(previous) = guard.take() {
-        tracing::debug!(
-            owner_thread = ?previous.owner_thread_id,
-            "install_stream: cancelled previous stream"
-        );
-        previous.cancel();
-    }
-    let token = Arc::new(StreamHandle::new());
-    *guard = Some(token.clone());
-    token
+/// Which stream surface a token belongs to (per-consumer slot maps are
+/// keyed by kind; see [`RepoHandle::begin_stream`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StreamKind {
+    Log,
+    FileHistory,
+    Diff,
 }
+
+impl StreamKind {
+    /// Wire/diagnostic name of the kind.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            StreamKind::Log => "log",
+            StreamKind::FileHistory => "file_history",
+            StreamKind::Diff => "diff",
+        }
+    }
+}
+
+/// Consumer id used when a stream command does not name one.
+const DEFAULT_CONSUMER: &str = "default";
+
+/// Max concurrently installed streams per kind (per repo). Beyond the cap
+/// the OLDEST consumer's token is evicted (cancelled) — a hard bound on
+/// per-repo stream threads even with buggy clients.
+const MAX_STREAMS_PER_KIND: usize = 4;
 
 /// Runtime state for one open repository.
 pub struct RepoHandle {
@@ -103,13 +121,30 @@ pub struct RepoHandle {
     /// M2: serial op queue for mutations/net ops (contracts.md M2). M1
     /// read commands bypass it and share the `repo` mutex instead.
     ops: OpQueue,
-    /// Active log stream; a new request cancels the previous.
-    log_stream: Mutex<Option<Arc<StreamHandle>>>,
-    /// Active file-history stream; independent of `log_stream`.
-    history_stream: Mutex<Option<Arc<StreamHandle>>>,
+    /// Per-consumer stream tokens: kind -> (consumer_id, token) pairs in
+    /// install order. A new install for the same (kind, consumer) cancels
+    /// and replaces only that consumer's token (new view wins within a
+    /// consumer); other consumers are unaffected. A Vec, not a map, keeps
+    /// insertion order for oldest-eviction at the cap.
+    streams: Mutex<StreamSlots>,
+    /// Cached full-status snapshot for path-gated incremental refreshes
+    /// ([`RepoHandle::status`]); keyed by the generation it was taken at,
+    /// so any watcher/mutation bump invalidates it.
+    status_cache: Mutex<Option<StatusSnapshot>>,
     closed: AtomicBool,
     watcher: Mutex<Option<RepoWatcher>>,
 }
+
+/// A full-status snapshot cached for [`RepoHandle::status`]'s incremental
+/// merge, valid while the repo generation is unchanged.
+struct StatusSnapshot {
+    generation: u64,
+    status: RepoStatus,
+}
+
+/// Per-kind stream slots: kind name -> (consumer_id, token) pairs in
+/// install order (see [`RepoHandle::streams`]).
+type StreamSlots = HashMap<&'static str, Vec<(String, Arc<StreamHandle>)>>;
 
 /// Where a repo lives: the local filesystem, or a remote device over SSH.
 #[derive(Clone)]
@@ -204,25 +239,123 @@ impl RepoHandle {
         self.closed.load(Ordering::SeqCst)
     }
 
-    /// Register a new log stream, cancelling any previous one.
-    pub fn begin_log_stream(&self) -> Arc<StreamHandle> {
-        install_stream(&self.log_stream)
+    /// Register a stream token for `(kind, consumer)`, cancelling the
+    /// previous token of the SAME consumer only (new view wins within a
+    /// consumer; other consumers are unaffected). When the per-kind cap
+    /// ([`MAX_STREAMS_PER_KIND`]) would overflow, the oldest consumer's
+    /// token is evicted (cancelled). `consumer_id` absent → "default".
+    pub fn begin_stream(&self, kind: StreamKind, consumer_id: Option<&str>) -> Arc<StreamHandle> {
+        let consumer = consumer_id.unwrap_or(DEFAULT_CONSUMER).to_owned();
+        let mut streams = self.streams.lock();
+        let slots = streams.entry(kind.as_str()).or_default();
+        if let Some(pos) = slots.iter().position(|(id, _)| *id == consumer) {
+            let (_, previous) = slots.remove(pos);
+            tracing::debug!(
+                kind = kind.as_str(),
+                consumer = %consumer,
+                owner_thread = ?previous.owner_thread_id,
+                "begin_stream: cancelled the consumer's previous stream"
+            );
+            previous.cancel();
+        }
+        let token = Arc::new(StreamHandle::new());
+        slots.push((consumer, token.clone()));
+        if slots.len() > MAX_STREAMS_PER_KIND {
+            let (_, evicted) = slots.remove(0);
+            tracing::debug!(
+                kind = kind.as_str(),
+                "begin_stream: cap exceeded, evicted the oldest consumer's stream"
+            );
+            evicted.cancel();
+        }
+        token
     }
 
-    /// Register a new file-history stream, cancelling any previous one.
-    pub fn begin_history_stream(&self) -> Arc<StreamHandle> {
-        install_stream(&self.history_stream)
+    /// Status with path-gated incremental merge (contracts.md
+    /// `repo_status`): with `Some(paths)` on a fresh cache, only those
+    /// pathspecs are rescanned and the fresh entries are spliced into the
+    /// cached full snapshot; every other case — no paths, stale or absent
+    /// cache, git-dir paths (index churn can restage everything), or a
+    /// large touched set — falls back to a full rescan, which repopulates
+    /// the cache. The returned [`RepoStatus`] has the same shape and
+    /// path-sorted entries either way. The cache is keyed by the repo
+    /// generation: any watcher batch or mutation bump invalidates it.
+    pub fn status(
+        &self,
+        repo: &git2::Repository,
+        paths: Option<&[String]>,
+    ) -> EngineResult<RepoStatus> {
+        let generation = self.generation();
+        // Incremental eligibility (cheap checks first; conservative
+        // fallbacks): a non-empty touched set within the size budget, no
+        // git-dir paths (index churn can restage everything), and a cache
+        // snapshot taken at this exact generation.
+        let incremental: Option<(&[String], Vec<StatusEntry>)> = match paths {
+            Some(slice)
+                if !slice.is_empty()
+                    && slice.len() <= STATUS_INCREMENTAL_PATH_LIMIT
+                    && !slice.iter().any(|p| p.starts_with(".git/")) =>
+            {
+                let cache = self.status_cache.lock();
+                match cache.as_ref() {
+                    Some(snapshot) if snapshot.generation == generation => {
+                        Some((slice, snapshot.status.entries.clone()))
+                    }
+                    _ => None,
+                }
+            }
+            _ => None,
+        };
+        let status = match incremental {
+            // Incremental merge: fresh entries for the touched paths only.
+            Some((paths, cached_entries)) => {
+                let mut fresh = self.engine.status(repo, Some(paths))?;
+                // Same pathspec semantics the engine scan used, so removal
+                // and insertion cover exactly the same path set.
+                let spec = git2::Pathspec::new(paths.iter().map(|p| p.as_str()))?;
+                let mut entries: Vec<StatusEntry> = cached_entries
+                    .into_iter()
+                    .filter(|entry| {
+                        let touched_path =
+                            spec.matches_path(Path::new(&entry.path), git2::PathspecFlags::empty());
+                        let touched_old = entry.old_path.as_deref().is_some_and(|old| {
+                            spec.matches_path(Path::new(old), git2::PathspecFlags::empty())
+                        });
+                        !(touched_path || touched_old)
+                    })
+                    .collect();
+                entries.append(&mut fresh.entries);
+                entries.sort_by(|a, b| {
+                    a.path
+                        .cmp(&b.path)
+                        .then_with(|| a.old_path.cmp(&b.old_path))
+                });
+                fresh.entries = entries;
+                fresh
+            }
+            // Full rescan.
+            None => self.engine.status(repo, None)?,
+        };
+        // Repopulate the cache only when the repo stayed still during the
+        // scan: a mid-scan generation move means the snapshot is already
+        // stale and the next call must rescan.
+        if self.generation() == generation {
+            *self.status_cache.lock() = Some(StatusSnapshot {
+                generation,
+                status: status.clone(),
+            });
+        }
+        Ok(status)
     }
 
     /// Tear down: mark closed, cancel streams, stop the watcher (or the
     /// remote poller). Idempotent.
     fn shutdown(&self) {
         self.closed.store(true, Ordering::SeqCst);
-        if let Some(token) = self.log_stream.lock().take() {
-            token.cancel();
-        }
-        if let Some(token) = self.history_stream.lock().take() {
-            token.cancel();
+        for (_, slots) in self.streams.lock().drain() {
+            for (_, token) in slots {
+                token.cancel();
+            }
         }
         // M2 op queue: stop accepting new ops; the worker drains its
         // backlog (jobs still resolve) and then exits.
@@ -337,8 +470,8 @@ impl RepoManager {
             engine: default_engine(),
             m3: m3_engine(),
             m12: m12_engine(),
-            log_stream: Mutex::new(None),
-            history_stream: Mutex::new(None),
+            streams: Mutex::new(HashMap::new()),
+            status_cache: Mutex::new(None),
             closed: AtomicBool::new(false),
             watcher: Mutex::new(None),
         });
@@ -426,8 +559,8 @@ impl RepoManager {
             engine: default_engine(),
             m3: m3_engine(),
             m12: m12_engine(),
-            log_stream: Mutex::new(None),
-            history_stream: Mutex::new(None),
+            streams: Mutex::new(HashMap::new()),
+            status_cache: Mutex::new(None),
             closed: AtomicBool::new(false),
             watcher: Mutex::new(None),
         });
@@ -662,26 +795,181 @@ mod tests {
     }
 
     #[test]
-    fn new_stream_cancels_previous_and_close_cancels_all() {
+    fn same_consumer_replacement_cancels_and_close_cancels_all() {
         ensure_fixtures();
         let mgr = RepoManager::new();
         let info = mgr.open_unwatched(&fixtures_basic()).unwrap();
         let handle = mgr.get(&info.repo_id).unwrap();
 
-        let first = handle.begin_log_stream();
+        let first = handle.begin_stream(StreamKind::Log, Some("main"));
         assert!(!first.is_cancelled());
-        let second = handle.begin_log_stream();
-        assert!(first.is_cancelled(), "new log stream cancels the previous");
+        let second = handle.begin_stream(StreamKind::Log, Some("main"));
+        assert!(
+            first.is_cancelled(),
+            "same-consumer replacement cancels the old token"
+        );
         assert!(!second.is_cancelled());
 
-        // The history slot is an independent stream kind.
-        let history = handle.begin_history_stream();
+        // Other consumers on the same kind are unaffected (new view wins
+        // within a consumer only).
+        let other = handle.begin_stream(StreamKind::Log, Some("popout"));
+        assert!(!second.is_cancelled());
+        assert!(!other.is_cancelled());
+
+        // Stream kinds are independent maps.
+        let history = handle.begin_stream(StreamKind::FileHistory, None);
+        let diff = handle.begin_stream(StreamKind::Diff, None);
         assert!(!second.is_cancelled());
         assert!(!history.is_cancelled());
+        assert!(!diff.is_cancelled());
 
         mgr.close(&info.repo_id);
         assert!(second.is_cancelled());
+        assert!(other.is_cancelled());
         assert!(history.is_cancelled());
+        assert!(diff.is_cancelled());
         assert!(handle.is_closed());
+    }
+
+    #[test]
+    fn per_kind_stream_cap_evicts_the_oldest_consumer() {
+        ensure_fixtures();
+        let mgr = RepoManager::new();
+        let info = mgr.open_unwatched(&fixtures_basic()).unwrap();
+        let handle = mgr.get(&info.repo_id).unwrap();
+
+        let mut tokens = Vec::new();
+        for i in 0..MAX_STREAMS_PER_KIND {
+            tokens.push(handle.begin_stream(StreamKind::Log, Some(&format!("c{i}"))));
+        }
+        assert!(
+            tokens.iter().all(|t| !t.is_cancelled()),
+            "up to the cap nothing is evicted"
+        );
+        // One more consumer: the oldest entry ("c0") is evicted+cancelled.
+        let newest = handle.begin_stream(StreamKind::Log, Some("overflow"));
+        assert!(tokens[0].is_cancelled(), "oldest consumer evicted at cap");
+        assert!(
+            tokens[1..].iter().all(|t| !t.is_cancelled()),
+            "later consumers survive eviction"
+        );
+        assert!(!newest.is_cancelled());
+
+        // Same-consumer re-install does not evict anyone else.
+        let replaced = handle.begin_stream(StreamKind::Log, Some("c1"));
+        assert!(tokens[1].is_cancelled(), "replaced consumer cancelled");
+        assert!(!replaced.is_cancelled());
+        assert!(!newest.is_cancelled(), "other consumers untouched");
+        mgr.close(&info.repo_id);
+    }
+
+    #[test]
+    fn incremental_status_merge_matches_full_rescan() {
+        use crate::engine::types::ChangeKind;
+
+        let dir = temp_dir("status-incr");
+        git2::Repository::init(&dir).expect("init repo");
+        let base = dir.join("a.txt");
+        let other = dir.join("b.txt");
+        std::fs::write(&base, "one\n").unwrap();
+        std::fs::write(&other, "two\n").unwrap();
+        // The index borrows its repo: keep the handle alive alongside it.
+        // Commit both files so the baseline status is clean (unborn HEAD
+        // would list the staged files as index-side additions).
+        let setup_repo = git2::Repository::open(&dir).unwrap();
+        let mut index = setup_repo.index().unwrap();
+        index.add_path(Path::new("a.txt")).unwrap();
+        index.add_path(Path::new("b.txt")).unwrap();
+        let tree_oid = index.write_tree().unwrap();
+        let sig = git2::Signature::now("t", "t@example.test").unwrap();
+        {
+            let tree = setup_repo.find_tree(tree_oid).unwrap();
+            setup_repo
+                .commit(Some("HEAD"), &sig, &sig, "init", &tree, &[])
+                .unwrap();
+        }
+        index.write().unwrap();
+        drop(index);
+        drop(setup_repo);
+
+        let mgr = RepoManager::new();
+        let info = mgr.open_unwatched(&dir).unwrap();
+        let handle = mgr.get(&info.repo_id).unwrap();
+        let repo = handle.repo().unwrap();
+
+        // Full rescan populates the cache.
+        let full = handle.status(&repo.lock(), None).unwrap();
+        assert!(full.entries.is_empty(), "clean baseline");
+
+        // Modify a.txt, then an incremental refresh over [a.txt]: the cache
+        // is still fresh (no watcher runs here — the touched path is the
+        // caller's claim), so the merge path runs and must equal a full
+        // rescan (same entries, same order).
+        std::fs::write(&base, "one\ntwo\n").unwrap();
+        let incremental = handle
+            .status(&repo.lock(), Some(&["a.txt".to_string()]))
+            .unwrap();
+        let full_after = handle.status(&repo.lock(), None).unwrap();
+        assert_eq!(incremental.entries, full_after.entries);
+        assert_eq!(incremental.entries.len(), 1);
+        assert_eq!(incremental.entries[0].path, "a.txt");
+        assert_eq!(incremental.entries[0].worktree, ChangeKind::Modified);
+
+        // Delete + add mix in one batch: merge covers both paths.
+        std::fs::remove_file(&other).unwrap();
+        let added = dir.join("c.txt");
+        std::fs::write(&added, "three\n").unwrap();
+        let incremental = handle
+            .status(
+                &repo.lock(),
+                Some(&["b.txt".to_string(), "c.txt".to_string()]),
+            )
+            .unwrap();
+        let full_after = handle.status(&repo.lock(), None).unwrap();
+        assert_eq!(incremental.entries, full_after.entries);
+        assert_eq!(
+            incremental
+                .entries
+                .iter()
+                .map(|e| e.path.as_str())
+                .collect::<Vec<_>>(),
+            vec!["a.txt", "b.txt", "c.txt"],
+            "a.txt still modified, b.txt reported deleted, c.txt added, path-sorted"
+        );
+        assert_eq!(incremental.entries[1].worktree, ChangeKind::Deleted);
+
+        // Staging touches `.git/index`: git-dir paths fall back to a full
+        // rescan (conservative — staging can restage everything).
+        let staging_repo = git2::Repository::open(&dir).unwrap();
+        let mut index = staging_repo.index().unwrap();
+        index.add_path(Path::new("a.txt")).unwrap();
+        index.write().unwrap();
+        drop(index);
+        drop(staging_repo);
+        let staged = handle
+            .status(&repo.lock(), Some(&[".git/index".to_string()]))
+            .unwrap();
+        let full_after = handle.status(&repo.lock(), None).unwrap();
+        assert_eq!(staged.entries, full_after.entries);
+        assert!(
+            staged
+                .entries
+                .iter()
+                .any(|e| e.path == "a.txt" && e.index != ChangeKind::Unmodified),
+            "staged entry present after the fallback rescan"
+        );
+
+        // A generation move invalidates the cache: the merge must not run
+        // against a stale snapshot (next call rescans fully and matches).
+        handle.generation_shared().fetch_add(1, Ordering::Relaxed);
+        std::fs::write(&base, "one\ntwo\nthree\n").unwrap();
+        let after_bump = handle
+            .status(&repo.lock(), Some(&["a.txt".to_string()]))
+            .unwrap();
+        let full_after = handle.status(&repo.lock(), None).unwrap();
+        assert_eq!(after_bump.entries, full_after.entries);
+
+        mgr.close(&info.repo_id);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

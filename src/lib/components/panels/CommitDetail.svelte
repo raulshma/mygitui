@@ -4,9 +4,10 @@
    * list↔detail split and the `?panel=commitdetail` popout window.
    *
    * Owns everything selection-independent about one commit's detail: the
-   * lazy parent0→sha diff fetch (token-guarded), `git describe`, the blame
-   * tab, and the meta↔files SplitPane (ratio persisted as `history-meta`,
-   * the same pref the inline pane always used). Everything that needs the
+   * parent0→sha diff stream (token-guarded, per-consumer stream slot),
+   * `git describe`, the full-message fetch, the blame tab, and the
+   * meta↔files SplitPane (ratio persisted as `history-meta`, the same pref
+   * the inline pane always used). Everything that needs the
    * surrounding view — closing, parent navigation, cherry-pick/revert/
    * rebase, popping out — arrives as optional callbacks, so the popout can
    * wire single-commit versions and omit the rest (close button, bookmark
@@ -16,7 +17,7 @@
    * which is private — the exported `toggleBlameFirstFile()` reimplements
    * the old HistoryView handler and reports whether it did anything.
    */
-  import { repoDiff, describe } from "$lib/ipc/client";
+  import { streamDiff, describe, commitMessage } from "$lib/ipc/client";
   import type { CommitInfo, FileDiff } from "$lib/ipc/types";
   import DiffViewer from "$lib/components/diff/DiffViewer.svelte";
   import BlameView from "$lib/components/panels/BlameView.svelte";
@@ -61,6 +62,8 @@
     actionCount = 1,
     /** True while a cherry-pick/revert IPC is in flight (owner's state). */
     actionBusy = false,
+    /** Backend stream-slot id for the commit diff (popouts pass their own). */
+    diffConsumerId = "commit-detail",
     onClose,
     onCloseCompare,
     onPopout,
@@ -78,6 +81,7 @@
     root?: string;
     actionCount?: number;
     actionBusy?: boolean;
+    diffConsumerId?: string;
     onClose?: () => void;
     onCloseCompare?: () => void;
     onPopout?: () => void;
@@ -89,11 +93,14 @@
     onCheckout?: () => void;
   } = $props();
 
-  // -- diff for the shown commit (lazy, token-guarded) -----------------------
+  // -- diff for the shown commit (streamed, token-guarded) --------------------
 
   let detailFiles = $state<FileDiff[] | null>(null);
   let detailLoading = $state(false);
+  let detailError = $state<string | null>(null);
   let diffToken = 0;
+  /** Bumped by the error state's Retry to re-run the streaming effect. */
+  let diffReload = $state(0);
   let blameTarget = $state<{ path: string; from: string } | null>(null);
   // Merge commits can touch thousands of files; the file list renders a
   // page + "Show all" until the user asks for the rest.
@@ -108,29 +115,44 @@
   $effect(() => {
     const current = info;
     void repoId; // reload on repo switch
+    void diffReload; // the error state's Retry re-runs the stream
     blameTarget = null;
     fileShowAll = false;
     const token = ++diffToken;
     if (!current || current.parents.length === 0) {
       detailFiles = null;
       detailLoading = false;
+      detailError = null;
       return;
     }
     detailLoading = true;
-    detailFiles = null;
-    repoDiff(repoId, { commit: current.parents[0] as string }, { commit: current.sha })
-      .then((files) => {
+    detailFiles = [];
+    detailError = null;
+    // Streamed like every other large diff (RepoView/PopoutDiff): pages of
+    // ~50 files accumulate, so huge merge commits render incrementally
+    // instead of waiting on one multi-megabyte response. The popout passes
+    // its own consumer id so the two windows' streams never supersede
+    // each other backend-side.
+    streamDiff(
+      repoId,
+      { commit: current.parents[0] as string },
+      { commit: current.sha },
+      (page) => {
         if (token !== diffToken) return;
-        detailFiles = files;
+        detailFiles = [...(detailFiles ?? []), ...page];
+      },
+      undefined,
+      diffConsumerId,
+    )
+      .then(() => {
+        if (token !== diffToken) return;
         detailLoading = false;
       })
       .catch((err: unknown) => {
         if (token !== diffToken) return;
         detailLoading = false;
-        detailFiles = null;
-        toast(`Diff failed: ${describeError(err)}`, {
-          kind: "error",
-        });
+        detailFiles = [];
+        detailError = describeError(err);
       });
   });
 
@@ -157,6 +179,32 @@
   // Compare results take over the files pane — drop any blame tab.
   $effect(() => {
     if (compare) blameTarget = null;
+  });
+
+  // -- full commit message (fetched on demand) --------------------------------
+
+  /**
+   * Full `summary` + body of the shown commit. Log pages carry only the
+   * summary; until the fetch lands (or when it fails) the meta pane shows
+   * the summary — for single-line messages, the common case, they are the
+   * same text.
+   */
+  let fullMessage = $state<string | null>(null);
+  let messageToken = 0;
+
+  $effect(() => {
+    const sha = info?.sha;
+    void repoId; // reload on repo switch
+    fullMessage = null;
+    if (!sha) return;
+    const token = ++messageToken;
+    commitMessage(repoId, sha)
+      .then((message) => {
+        if (token === messageToken && message !== null) fullMessage = message;
+      })
+      .catch(() => {
+        /* the summary stays shown — the body is additive detail */
+      });
   });
 
   function openBlame(path: string): void {
@@ -218,18 +266,24 @@
   // -- M13: AI explain (commit) / release notes (compare range) -----------------
 
   /** explain-commit: the loaded commit + its parent0 diff, budgeted. */
-  function runExplainCommit(opts?: AiRunOptions) {
+  async function runExplainCommit(opts?: AiRunOptions) {
     const current = info;
     const files = detailFiles;
     if (!current || files === null || files.length === 0) {
       return Promise.reject(new Error("this commit has no loaded diff to explain"));
+    }
+    // Log pages carry only the summary; the AI prompt gets the full body
+    // (usually already fetched for the meta pane — reuse it).
+    let message = fullMessage;
+    if (message === null) {
+      message = await commitMessage(repoId, current.sha).catch(() => null);
     }
     return ai.run(
       "explain-commit",
       {
         repoId,
         sha: current.sha,
-        description: current.message,
+        description: message ?? current.summary,
         diff: budgetedDiffText(files),
       },
       undefined,
@@ -495,7 +549,16 @@
         <div class="dtabbody flex min-h-0 flex-1 flex-col">
           <DiffViewer files={compare.files} />
         </div>
-      {:else if detailLoading}
+      {:else if detailError}
+        <div class="dstate m-auto flex flex-col items-center gap-2 text-ui-base text-muted-foreground">
+          <p role="alert">Diff failed: {detailError}</p>
+          <Button
+            class="h-auto rounded-full px-2.5 py-0.5 text-ui-meta font-normal"
+            variant="outline"
+            onclick={() => (diffReload += 1)}
+          >Retry</Button>
+        </div>
+      {:else if detailLoading && (detailFiles === null || detailFiles.length === 0)}
         <p class="dstate m-auto text-ui-base text-muted-foreground" role="status">Loading diff…</p>
       {:else if !info || info.parents.length === 0}
         <p class="dstate m-auto text-ui-base text-muted-foreground">Root commit — nothing to diff against.</p>
@@ -637,7 +700,7 @@
                 </dd>
               {/if}
             </dl>
-            <pre class="msg mt-2 whitespace-pre-wrap rounded-sm border border-border bg-muted p-2 font-mono text-ui-meta text-foreground [overflow-wrap:anywhere]">{info.message}</pre>
+            <pre class="msg mt-2 whitespace-pre-wrap rounded-sm border border-border bg-muted p-2 font-mono text-ui-meta text-foreground [overflow-wrap:anywhere]">{fullMessage ?? info.summary}</pre>
           </aside>
           {/if}
             {/snippet}

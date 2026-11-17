@@ -12,6 +12,10 @@
 //! - regex log page      < 16 ms   (500 commits, `regex` grep, one page)
 //! - file-history page   < 16 ms   (path-filtered page over a file touched
 //!   in 250 of 500 commits)
+//! - graph layout        (merge-heavy synthetic history: 40 branches merged
+//!   into a 120-commit trunk — lane assignment on a branched DAG)
+//! - log page @ 250k     < 16 ms   (500-commit page + layout over a 250k-
+//!   commit linear history; the topological order is cached)
 //! - bisect step         < 20 ms   (start + one mark + untimed reset, 500
 //!   linear commits)
 //!
@@ -168,6 +172,183 @@ fn big_diff_repo() -> PathBuf {
     dir
 }
 
+/// Merge-heavy synthetic history: trunk commits, then short branches merged
+/// back via 2-parent merge commits. Wide lane state with bends and
+/// convergences exercises `lane_of` and the pass-through bookkeeping
+/// (item 14). Every commit shares one tree — the bench only reads commits.
+const MERGE_TRUNK: usize = 120;
+/// Branches merged back into the trunk (3 commits + 1 merge each).
+const MERGE_BRANCHES: usize = 40;
+
+fn merge_heavy_repo() -> PathBuf {
+    /// Commits per branch before its merge.
+    const BRANCH_COMMITS: usize = 3;
+
+    let dir = std::env::temp_dir().join(format!("mygitui-bench-mergeheavy-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let repo = Repository::init(&dir).unwrap();
+    let mut cfg = repo.config().unwrap();
+    let _ = cfg.set_str("user.name", "Bench");
+    let _ = cfg.set_str("user.email", "bench@local");
+    let sig = Signature::new("Bench", "bench@local", &Time::new(1_700_000_000, 0)).unwrap();
+
+    let mut index = repo.index().unwrap();
+    std::fs::write(dir.join("trunk.txt"), "trunk\n").unwrap();
+    index.add_path(std::path::Path::new("trunk.txt")).unwrap();
+    let tree_oid = index.write_tree().unwrap();
+    let tree = repo.find_tree(tree_oid).unwrap();
+
+    // Trunk on an explicit ref (HEAD may stay unborn; the engine walks
+    // branch tips from the refs cache either way).
+    let mut main = repo
+        .commit(Some("refs/heads/main"), &sig, &sig, "trunk 0", &tree, &[])
+        .unwrap();
+    let mut trunk_tips = Vec::with_capacity(MERGE_TRUNK);
+    for i in 1..MERGE_TRUNK {
+        main = repo
+            .commit(
+                Some("refs/heads/main"),
+                &sig,
+                &sig,
+                &format!("trunk {i}"),
+                &tree,
+                &[&repo.find_commit(main).unwrap()],
+            )
+            .unwrap();
+        trunk_tips.push(main);
+    }
+    for b in 0..MERGE_BRANCHES {
+        // Spread the branch points across the trunk.
+        let base = trunk_tips[b * (MERGE_TRUNK - 1) / MERGE_BRANCHES];
+        let branch_ref = format!("refs/heads/branch{b}");
+        let mut tip = base;
+        for c in 0..BRANCH_COMMITS {
+            tip = repo
+                .commit(
+                    Some(&branch_ref),
+                    &sig,
+                    &sig,
+                    &format!("branch{b} c{c}"),
+                    &tree,
+                    &[&repo.find_commit(tip).unwrap()],
+                )
+                .unwrap();
+        }
+        let branch_commit = repo.find_commit(tip).unwrap();
+        let main_commit = repo.find_commit(main).unwrap();
+        main = repo
+            .commit(
+                Some("refs/heads/main"),
+                &sig,
+                &sig,
+                &format!("merge branch{b}"),
+                &tree,
+                &[&main_commit, &branch_commit],
+            )
+            .unwrap();
+    }
+    dir
+}
+
+/// 250k-commit linear history sharing one tree: the bulk gate for page +
+/// layout at scale (item 14). Setup mirrors the 500-commit fixture but
+/// skips blob/index churn — the bench only reads commits.
+fn bulk_history_repo() -> PathBuf {
+    const COMMITS: usize = 250_000;
+    let dir = std::env::temp_dir().join(format!("mygitui-bench-bulk-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let repo = Repository::init(&dir).unwrap();
+    let mut cfg = repo.config().unwrap();
+    let _ = cfg.set_str("user.name", "Bench");
+    let _ = cfg.set_str("user.email", "bench@local");
+    let sig = Signature::new("Bench", "bench@local", &Time::new(1_700_000_000, 0)).unwrap();
+    std::fs::write(dir.join("bulk.txt"), "bulk\n").unwrap();
+    let mut index = repo.index().unwrap();
+    index.add_path(std::path::Path::new("bulk.txt")).unwrap();
+    let tree_oid = index.write_tree().unwrap();
+    let tree = repo.find_tree(tree_oid).unwrap();
+    let mut parent: Option<git2::Oid> = None;
+    for i in 0..COMMITS {
+        let parents: Vec<git2::Commit> = parent
+            .map(|oid| vec![repo.find_commit(oid).unwrap()])
+            .unwrap_or_default();
+        let parent_refs: Vec<&git2::Commit> = parents.iter().collect();
+        parent = Some(
+            repo.commit(
+                Some("HEAD"),
+                &sig,
+                &sig,
+                &format!("commit {i}"),
+                &tree,
+                &parent_refs,
+            )
+            .unwrap(),
+        );
+    }
+    dir
+}
+
+/// Item 14: layout over the whole merge-heavy walk (lane assignment on a
+/// branched DAG — the O(1) lane lookup and per-row edge bitmap hot path).
+fn bench_graph_layout(c: &mut Criterion) {
+    let dir = merge_heavy_repo();
+    let repo = Repository::open(&dir).unwrap();
+    let engine = Libgit2Engine::new();
+    let filter = LogFilter::default();
+    // Setup: the whole (trunk + branches + merges) walk in one page.
+    let (commits, _) = engine
+        .log(&repo, &filter, MERGE_TRUNK + MERGE_BRANCHES * 4, None)
+        .unwrap();
+    let total = commits.len();
+    assert!(total >= MERGE_TRUNK + MERGE_BRANCHES * 4);
+    let mut group = c.benchmark_group("graph");
+    group.throughput(criterion::Throughput::Elements(total as u64));
+    group.bench_function("layout_merge_heavy", |b| {
+        b.iter_batched(
+            graph::LaneState::default,
+            |mut lanes| {
+                let rows = graph::layout_page(&commits, &mut lanes);
+                assert_eq!(rows.len(), total);
+            },
+            criterion::BatchSize::SmallInput,
+        )
+    });
+    group.finish();
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Item 14: one 500-commit page + layout over a 250k-commit linear history.
+/// The topological order is built once and cached — the warm-up call
+/// (outside the timed closure) populates it, and the timed loop measures a
+/// cached-order page exactly like the streaming hot path.
+fn bench_log_250k(c: &mut Criterion) {
+    let dir = bulk_history_repo();
+    let repo = Repository::open(&dir).unwrap();
+    let engine = Libgit2Engine::new();
+    let filter = LogFilter::default();
+    let _ = engine.log(&repo, &filter, 500, None).unwrap();
+    let mut group = c.benchmark_group("log");
+    group.throughput(criterion::Throughput::Elements(500));
+    group.bench_function("page500_plus_layout_250k", |b| {
+        b.iter_batched(
+            graph::LaneState::default,
+            |mut lanes| {
+                let t0 = Instant::now();
+                let (commits, _) = engine.log(&repo, &filter, 500, None).unwrap();
+                let rows = graph::layout_page(&commits, &mut lanes);
+                assert_eq!(commits.len(), 500);
+                assert_eq!(rows.len(), 500);
+                t0.elapsed()
+            },
+            criterion::BatchSize::SmallInput,
+        )
+    });
+    group.finish();
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 fn bench_status(c: &mut Criterion) {
     let dir = fixture_repo();
     let repo = Repository::open(&dir).unwrap();
@@ -177,7 +358,7 @@ fn bench_status(c: &mut Criterion) {
     group.bench_function("full_500_files_200_modified", |b| {
         b.iter(|| {
             let t0 = Instant::now();
-            let s = engine.status(&repo).unwrap();
+            let s = engine.status(&repo, None).unwrap();
             assert!(s.entries.len() >= 100);
             t0.elapsed()
         })
@@ -343,7 +524,7 @@ fn bench_cold_open(c: &mut Criterion) {
         b.iter(|| {
             drop(repo.take()); // close the handle: next open is a cold open
             let r = Repository::open(&dir).unwrap();
-            let s = engine.status(&r).unwrap();
+            let s = engine.status(&r, None).unwrap();
             assert!(s.entries.len() >= 100);
             repo = Some(r);
         })
@@ -448,6 +629,8 @@ criterion_group!(
     benches,
     bench_status,
     bench_log_layout,
+    bench_graph_layout,
+    bench_log_250k,
     bench_diff,
     bench_refs_ops,
     bench_cold_open,

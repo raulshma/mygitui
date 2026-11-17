@@ -45,7 +45,6 @@ function commit(i: number): CommitInfo {
     parents: i > 0 ? [sha(i - 1)] : [],
     author: { name: `A ${i}`, email: `a${i}@x.com`, time: 1_700_000 + i, offset_minutes: 0 },
     committer: { name: `A ${i}`, email: `a${i}@x.com`, time: 1_700_000 + i, offset_minutes: 0 },
-    message: `commit ${i}\n`,
     summary: `commit ${i}`,
     refs: [],
   };
@@ -66,6 +65,7 @@ function makePage(
 interface StreamCall {
   repoId: string;
   filter: LogFilter;
+  consumerId: string | undefined;
   deliver: (page: LogPage) => void;
   finish: () => void;
 }
@@ -80,12 +80,12 @@ beforeEach(() => {
   unlistenSpy = vi.fn();
   mockStreamLog.mockReset();
   mockOnRepoChanged.mockReset();
-  mockStreamLog.mockImplementation(((repoId: string, filter: LogFilter, onPage: (p: LogPage) => void) => {
+  mockStreamLog.mockImplementation(((repoId: string, filter: LogFilter, onPage: (p: LogPage) => void, consumerId: string | undefined) => {
     let finish!: () => void;
     const done = new Promise<void>((resolve) => {
       finish = resolve;
     });
-    calls.push({ repoId, filter, deliver: onPage, finish });
+    calls.push({ repoId, filter, consumerId, deliver: onPage, finish });
     return done;
   }) as typeof streamLog);
   mockOnRepoChanged.mockImplementation(((cb: (event: RepoChangedEvent) => void) => {
@@ -139,6 +139,20 @@ describe("start + page append", () => {
     calls[0]!.finish();
     await flush();
     expect(store.loading).toBe(false);
+  });
+
+  it("passes its consumerId as the stream slot (default \"default\")", () => {
+    const store = new HistoryStore();
+    store.start("repo-1");
+    expect(calls[0]!.consumerId).toBe("default");
+
+    // A distinct slot per view: concurrent same-repo views (workspace
+    // history, popout, file history) must never supersede each other's
+    // backend walk — the backend cancels per consumer.
+    const popout = new HistoryStore({ consumerId: "popout-history" });
+    popout.start("repo-1");
+    expect(calls[1]!.consumerId).toBe("popout-history");
+    popout.destroy();
   });
 
   it("dedupes boundary-overlap shas across pages", () => {
@@ -371,7 +385,7 @@ describe("staleness", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Server-side walk abort (superseded / cancelled before exhaustion)
+// Server-side walk abort (truncated / cancelled before exhaustion)
 // ---------------------------------------------------------------------------
 
 describe("server-side walk abort", () => {
@@ -471,7 +485,7 @@ describe("server-side walk abort", () => {
     expect(calls).toHaveLength(1);
   });
 
-  it("backs off consecutive aborts (two same-repo log views supersede each other) and resets after an exhausted walk", async () => {
+  it("restarts every truncation at the base debounce (no backoff: per-consumer slots ended the supersession ping-pong)", async () => {
     vi.useFakeTimers();
     const store = new HistoryStore();
     store.start("repo-1");
@@ -483,16 +497,18 @@ describe("server-side walk abort", () => {
     await vi.advanceTimersByTimeAsync(450);
     expect(calls).toHaveLength(2);
 
-    // Second consecutive abort → debounce doubles to 400 ms…
+    // A second consecutive abort restarts after the SAME base debounce —
+    // the exponential backoff existed only because two same-repo log views
+    // superseded each other's single backend slot; streams now carry
+    // distinct consumer ids, so an abort is a genuine truncation and there
+    // is nothing to back off from.
     calls[1]!.deliver({ ...makePage(0, 2, 0), next_cursor: "cursor-2" });
     calls[1]!.finish();
     await flush();
     await vi.advanceTimersByTimeAsync(450);
-    expect(calls).toHaveLength(2); // …so it has NOT restarted yet at 200 ms debounce
-    await vi.advanceTimersByTimeAsync(200);
     expect(calls).toHaveLength(3);
 
-    // The retried walk exhausts → counter resets, the view settles.
+    // The retried walk exhausts → the view settles.
     calls[2]!.deliver(makePage(0, 2, 0));
     calls[2]!.finish();
     await flush();
@@ -501,8 +517,7 @@ describe("server-side walk abort", () => {
     // A head-move restarts the stream (fresh walk, not the abort path)…
     watcherHandlers[0]!({ repo_id: "repo-1", paths: [], head_moved: true, full: false });
     expect(calls).toHaveLength(4);
-    // …and the NEXT abort starts from the base debounce again — 200 ms,
-    // not the 800 ms a never-reset counter would demand.
+    // …and the NEXT abort again restarts after the base debounce.
     calls[3]!.deliver({ ...makePage(0, 2, 0), next_cursor: "cursor-3" });
     calls[3]!.finish();
     await flush();

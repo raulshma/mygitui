@@ -27,15 +27,16 @@ use crate::engine::types::{
     WorktreeInfo,
 };
 use crate::graph::types::{self, GraphRow};
-use crate::repo::{RepoHandle, RepoManager, StreamHandle};
+use crate::repo::{RepoHandle, RepoManager, StreamHandle, StreamKind};
 
 /// Commits per `repo_log_stream` / `repo_file_history` page.
 const LOG_PAGE_SIZE: usize = 500;
 /// Files per `repo_diff_stream` page.
 const DIFF_PAGE_SIZE: usize = 50;
-/// Whole-walk cap for the remote log stream: the remote engine returns the
-/// log in one shot (no cursor paging), so the stream fetches once and pages
-/// locally. Generous bound protects device + host memory.
+/// Whole-walk cap for the remote log stream: the stream walks in
+/// [`LOG_PAGE_SIZE`] pages (one SSH round-trip each, cancel checks between
+/// pages) and stops hard at this many fetched commits. Generous bound
+/// protects device + host memory.
 const REMOTE_LOG_LIMIT: usize = 100_000;
 /// Entry cap for the remote reflog read (the remote engine has no local
 /// `name` argument; see the `reflog` command's remote branch).
@@ -112,9 +113,16 @@ pub async fn repo_close(
     Ok(())
 }
 
+/// Working-copy status. `paths` (repo-relative, from a watcher batch's
+/// `paths`) gates an incremental refresh: only those pathspecs are rescanned
+/// and merged into the cached full snapshot; absent paths (or any fallback
+/// condition — stale cache, git-dir paths, large touched set) trigger a full
+/// rescan. Same `RepoStatus` shape and ordering either way; remote repos
+/// always rescan fully (see `RepoHandle::status` for the exact rules).
 #[tauri::command(rename_all = "snake_case")]
 pub async fn repo_status(
     repo_id: RepoId,
+    paths: Option<Vec<String>>,
     state: State<'_, RepoManager>,
 ) -> Result<RepoStatus, String> {
     let handle = get_handle(&state, &repo_id)?;
@@ -127,10 +135,10 @@ pub async fn repo_status(
         ))
         .await;
     }
-    let engine = handle.engine();
     let repo = handle.repo()?;
+    let status_handle = handle.clone();
     finish_op(enqueue_read(&handle, &repo, "status", move |_ctx, repo| {
-        engine.status(repo)
+        status_handle.status(repo, paths.as_deref())
     }))
     .await
 }
@@ -213,17 +221,21 @@ pub async fn repo_diff(
 }
 
 /// Stream a diff in pages of [`DIFF_PAGE_SIZE`] files over `on_page`.
-/// Stops early when the channel send fails (client gone).
+/// Carries a per-consumer stream slot (see [`repo_log_stream`]); stops
+/// early when the channel send fails (client gone) or the stream is
+/// cancelled (a new request for the same repo+kind+consumer).
 #[tauri::command(rename_all = "snake_case")]
 pub async fn repo_diff_stream(
     repo_id: RepoId,
     old: DiffSide,
     new: DiffSide,
     paths: Option<Vec<String>>,
+    consumer_id: Option<String>,
     on_page: Channel<Vec<FileDiff>>,
     state: State<'_, RepoManager>,
 ) -> Result<(), String> {
     let handle = get_handle(&state, &repo_id)?;
+    let token = handle.begin_stream(StreamKind::Diff, consumer_id.as_deref());
     if let Some(remote) = handle.remote() {
         // The remote engine returns the complete diff in one shot: one
         // queued read, then page it out exactly like the local result.
@@ -235,6 +247,9 @@ pub async fn repo_diff_stream(
         ))
         .await?;
         for page in chunk_vec(diffs, DIFF_PAGE_SIZE) {
+            if token.is_cancelled() || handle.is_closed() {
+                return Ok(());
+            }
             if on_page.send(page).is_err() {
                 break; // client dropped the channel
             }
@@ -250,8 +265,15 @@ pub async fn repo_diff_stream(
         // hunk, every line) is materialized; a client that leaves mid-
         // stream also stops paying for the rest.
         let mut page: Vec<FileDiff> = Vec::with_capacity(DIFF_PAGE_SIZE);
+        let mut cancelled = false;
         engine
             .diff_stream(&repo, &old, &new, paths.as_deref(), &mut |file| {
+                // Per-page cancel check (same rule as the log walk): a
+                // superseded/closed stream stops building patches.
+                if token.is_cancelled() || handle.is_closed() {
+                    cancelled = true;
+                    return false;
+                }
                 page.push(file);
                 if page.len() < DIFF_PAGE_SIZE {
                     return true;
@@ -260,6 +282,9 @@ pub async fn repo_diff_stream(
                 on_page.send(std::mem::take(&mut page)).is_ok()
             })
             .map_err(engine_err)?;
+        if cancelled {
+            return Ok(());
+        }
         if !page.is_empty() {
             let _ = on_page.send(page);
         }
@@ -270,22 +295,25 @@ pub async fn repo_diff_stream(
     Ok(())
 }
 
-/// Stream the commit log in [`LOG_PAGE_SIZE`] pages over `on_page`. A new
-/// call for the same repo replaces (cancels) the previous stream. The
-/// command resolves when the walk ENDS — exhausted, superseded, or
-/// cancelled — so the caller can tell a truncated walk from a complete one
-/// (the history store's abort→restart contract relies on it; a plain spawn
-/// would resolve the promise at open time and every open would read as an
-/// abort).
+/// Stream the commit log in [`LOG_PAGE_SIZE`] pages over `on_page`. Streams
+/// carry PER-CONSUMER slots: a new call for the same repo+kind+consumer
+/// replaces (cancels) only that consumer's previous stream, so concurrent
+/// consumers (e.g. main history view and a popout detail) never cancel
+/// each other. `consumer_id` absent → "default". The command resolves when
+/// the walk ENDS — exhausted, superseded, or cancelled — so the caller can
+/// tell a truncated walk from a complete one (the history store's
+/// abort→restart contract relies on it; a plain spawn would resolve the
+/// promise at open time and every open would read as an abort).
 #[tauri::command(rename_all = "snake_case")]
 pub async fn repo_log_stream(
     repo_id: RepoId,
     filter: LogFilter,
+    consumer_id: Option<String>,
     on_page: Channel<LogPage>,
     state: State<'_, RepoManager>,
 ) -> Result<(), String> {
     let handle = get_handle(&state, &repo_id)?;
-    let token = handle.begin_log_stream();
+    let token = handle.begin_stream(StreamKind::Log, consumer_id.as_deref());
     tauri::async_runtime::spawn_blocking(move || stream_log(handle, filter, on_page, token))
         .await
         .map_err(|e| format!("log stream task failed: {e}"))?
@@ -297,6 +325,7 @@ pub async fn repo_log_stream(
 pub async fn repo_file_history(
     repo_id: RepoId,
     path: String,
+    consumer_id: Option<String>,
     on_page: Channel<LogPage>,
     state: State<'_, RepoManager>,
 ) -> Result<(), String> {
@@ -306,10 +335,39 @@ pub async fn repo_file_history(
         follow: true,
         ..LogFilter::default()
     };
-    let token = handle.begin_history_stream();
+    let token = handle.begin_stream(StreamKind::FileHistory, consumer_id.as_deref());
     tauri::async_runtime::spawn_blocking(move || stream_log(handle, filter, on_page, token))
         .await
         .map_err(|e| format!("history stream task failed: {e}"))?
+}
+
+/// Full commit message of one commit (on-demand: log pages carry only
+/// `summary`). `None` when the sha does not resolve to a commit.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn repo_commit_message(
+    repo_id: RepoId,
+    sha: String,
+    state: State<'_, RepoManager>,
+) -> Result<Option<String>, String> {
+    let handle = get_handle(&state, &repo_id)?;
+    if let Some(remote) = handle.remote() {
+        return finish_op(enqueue_remote_read(
+            &handle,
+            remote,
+            "commit_message",
+            move |git, _ws| git.commit_message(&sha),
+        ))
+        .await;
+    }
+    let engine = handle.engine();
+    let repo = handle.repo()?;
+    finish_op(enqueue_read(
+        &handle,
+        &repo,
+        "commit_message",
+        move |_ctx, repo| engine.commit_message(repo, &sha),
+    ))
+    .await
 }
 
 /// Shared log/file-history streaming loop. Ends when the walk is exhausted,
@@ -389,20 +447,24 @@ fn stream_log(
     Ok(())
 }
 
-/// Remote twin of [`stream_log`]: the remote engine's `log` returns the
-/// whole (bounded) walk in one shot, so ONE queued read produces the full
-/// result and this loop only lays it out and pages it over the channel.
-/// Graph rows come from the same pure `graph::types::layout_page` with lane
-/// state carried across pages. There is NO generation-abort (same rule as
-/// the local walk): the commit list was fully read before the first
-/// send, so it is complete and self-consistent even if the repo changed
-/// during the (multi-second, churn-prone) SSH read — aborting would waste
-/// the entire read and just restart the same race. Freshness is the
-/// client's job: significant `repo-changed` events restart the stream, and
-/// pages carry their snapshot `generation`. An EMPTY walk still ships one
-/// empty final page — only an exhausted walk emits `next_cursor: null`, so
-/// a zero-page resolve would read as an abort on the client (an endless
-/// restart loop for empty remote repos).
+/// Remote twin of [`stream_log`]: the local walk's cursor loop over SSH
+/// round-trips — one queued read per [`LOG_PAGE_SIZE`] page with cancel
+/// checks between pages, so a slow device fetch never outruns a superseded
+/// stream and memory stays bounded by one page instead of the whole walk.
+/// Overall fetch volume is capped at [`REMOTE_LOG_LIMIT`] commits; reaching
+/// the cap ends the walk (final page ships `next_cursor: null`, read as
+/// exhausted). Graph rows come from the same pure
+/// `graph::types::layout_page` with lane state carried across pages. There
+/// is NO generation-abort (same rule as the local walk): the commit list of
+/// each page was fully read before its send, so it is complete and self-
+/// consistent even if the repo changed during the (multi-second,
+/// churn-prone) SSH read — aborting would waste the entire read and just
+/// restart the same race. Freshness is the client's job: significant
+/// `repo-changed` events restart the stream, and pages carry their snapshot
+/// `generation`. An EMPTY walk still ships one empty final page — only an
+/// exhausted walk emits `next_cursor: null`, so a zero-page resolve would
+/// read as an abort on the client (an endless restart loop for empty
+/// remote repos).
 fn stream_log_remote(
     handle: &Arc<RepoHandle>,
     remote: Arc<crate::repo::RemoteHandle>,
@@ -411,57 +473,57 @@ fn stream_log_remote(
     token: Arc<StreamHandle>,
 ) -> Result<(), String> {
     let start_generation = handle.generation();
-    let rx = enqueue_remote_read(handle, &remote, "log", move |git, _ws| {
-        git.log(&filter, REMOTE_LOG_LIMIT, None)
-    });
-    let (commits, _next_cursor) = match rx.blocking_recv() {
-        Ok(Ok(result)) => result,
-        Ok(Err(err)) => {
-            tracing::warn!(
-                repo = %handle.id.0,
-                error = %err,
-                "remote log stream: engine error, aborting"
-            );
-            return Err(err);
-        }
-        Err(_) => return Ok(()), // queue closed before completion
-    };
-
-    let pages = chunk_vec(commits, LOG_PAGE_SIZE);
-    let total = pages.len();
     // Lane state belongs to this stream (same rule as the local loop).
     let mut lanes = types::LaneState::default();
-    for (index, commits) in pages.into_iter().enumerate() {
+    let mut cursor: Option<String> = None;
+    let mut fetched = 0usize;
+    loop {
         if token.is_cancelled() || handle.is_closed() {
             return Ok(());
         }
-        let next_cursor = if index + 1 < total {
-            commits.last().map(|c| c.sha.clone())
-        } else {
-            None
+        let page_limit = LOG_PAGE_SIZE.min(REMOTE_LOG_LIMIT - fetched);
+        let filter = filter.clone();
+        let after = cursor.clone();
+        let rx = enqueue_remote_read(handle, &remote, "log", move |git, _ws| {
+            git.log(&filter, page_limit, after.as_deref())
+        });
+        let (commits, next_cursor) = match rx.blocking_recv() {
+            Ok(Ok(result)) => result,
+            Ok(Err(err)) => {
+                tracing::warn!(
+                    repo = %handle.id.0,
+                    error = %err,
+                    "remote log stream: engine error, aborting"
+                );
+                return Err(err);
+            }
+            Err(_) => return Ok(()), // queue closed before completion
         };
+        // Cancel may have landed during the SSH read: stop before sending.
+        if token.is_cancelled() || handle.is_closed() {
+            return Ok(());
+        }
+        fetched += commits.len();
+        // Hard stop at the overall cap: end as exhausted so a huge history
+        // can never loop the device forever.
+        let done = next_cursor.is_none() || fetched >= REMOTE_LOG_LIMIT;
+        let next_cursor = if done { None } else { next_cursor };
         let rows = types::layout_page(&commits, &mut lanes);
         if on_page
             .send(LogPage {
                 commits,
                 rows,
-                next_cursor,
+                next_cursor: next_cursor.clone(),
                 generation: start_generation,
             })
             .is_err()
         {
             break; // client dropped the channel
         }
-    }
-    // Exhausted without a single page (empty remote repo): the client only
-    // sees `next_cursor: null` on a final page, so ship the empty one.
-    if total == 0 && !token.is_cancelled() && !handle.is_closed() {
-        let _ = on_page.send(LogPage {
-            commits: Vec::new(),
-            rows: Vec::new(),
-            next_cursor: None,
-            generation: start_generation,
-        });
+        if done {
+            break;
+        }
+        cursor = next_cursor;
     }
     Ok(())
 }
@@ -547,7 +609,7 @@ mod tests {
             }
             Ok(())
         });
-        let token = handle.begin_log_stream();
+        let token = handle.begin_stream(StreamKind::Log, None);
         stream_log(handle.clone(), LogFilter::default(), channel, token).unwrap();
 
         let pages = pages.lock();
@@ -851,7 +913,7 @@ mod clone_tests {
 use tokio::sync::oneshot;
 
 use crate::cli;
-use crate::engine::git_engine::{FetchProgress, PushProgress};
+use crate::engine::git_engine::{CheckoutProgress, FetchProgress, PushProgress};
 use crate::engine::types::{
     BranchInfo, ChangeKind, CommitOptions, FetchOptions, HookInfo, MergetoolInfo, MergetoolResult,
     NetStats, PullOptions, PushOptions, RemoteInfo, SigningInfo, StageRequest, StageTarget,
@@ -883,6 +945,19 @@ where
         result.map_err(engine_err)
     });
     rx
+}
+
+/// Forward checkout/reset workdir progress ([`CheckoutProgress`], libgit2's
+/// per-path callback) onto the op's throttled `op-progress` surface: the
+/// phase is the message, completed/total the percentage. Throttling lives
+/// in [`OpCtx::emit_progress`] (≥80 ms), matching fetch/push progress.
+fn emit_checkout_progress(ctx: &OpCtx, progress: CheckoutProgress) {
+    let pct = if progress.total > 0 {
+        Some(progress.completed as f64 * 100.0 / progress.total as f64)
+    } else {
+        None
+    };
+    ctx.emit_progress(progress.phase, pct);
 }
 
 /// Enqueue a read-only engine op on the repo's read lane: `f` runs with the
@@ -1312,7 +1387,11 @@ pub async fn branch_create(
         &handle,
         &repo,
         "branch",
-        move |_ctx, repo| engine.branch_create(repo, &name, from.as_deref(), checkout),
+        move |ctx, repo| {
+            engine.branch_create(repo, &name, from.as_deref(), checkout, &mut |progress| {
+                emit_checkout_progress(&ctx, progress)
+            })
+        },
     ))
     .await
 }
@@ -1340,7 +1419,11 @@ pub async fn branch_switch(
         &handle,
         &repo,
         "branch",
-        move |_ctx, repo| engine.branch_switch(repo, &name, force),
+        move |ctx, repo| {
+            engine.branch_switch(repo, &name, force, &mut |progress| {
+                emit_checkout_progress(&ctx, progress)
+            })
+        },
     ))
     .await
 }
@@ -1371,7 +1454,11 @@ pub async fn commit_checkout(
         &handle,
         &repo,
         "checkout",
-        move |_ctx, repo| engine.checkout_commit(repo, &sha),
+        move |ctx, repo| {
+            engine.checkout_commit(repo, &sha, &mut |progress| {
+                emit_checkout_progress(&ctx, progress)
+            })
+        },
     ))
     .await
 }
@@ -1590,7 +1677,15 @@ pub async fn branch_checkout_remote(
         &handle,
         &repo,
         "branch",
-        move |_ctx, repo| engine.branch_checkout_remote(repo, &remote, &name, new_local.as_deref()),
+        move |ctx, repo| {
+            engine.branch_checkout_remote(
+                repo,
+                &remote,
+                &name,
+                new_local.as_deref(),
+                &mut |progress| emit_checkout_progress(&ctx, progress),
+            )
+        },
     ))
     .await
 }
@@ -2580,14 +2675,25 @@ pub async fn conflicts(
     .await
 }
 
+/// Resolve one conflicted file. `custom_content_b64` carries the editor's
+/// bytes as base64 (STANDARD, with padding — same encoding as
+/// `repo_write_file`'s `content_b64`): a compact string over the IPC bridge
+/// instead of a JSON number array (~7-8 bytes per byte of file).
 #[tauri::command(rename_all = "snake_case")]
 pub async fn conflict_resolve(
     repo_id: RepoId,
     path: String,
     resolution: ConflictResolution,
-    custom_content: Option<Vec<u8>>,
+    custom_content_b64: Option<String>,
     state: State<'_, RepoManager>,
 ) -> Result<(), String> {
+    let custom_content = match custom_content_b64.as_deref() {
+        Some(b64) => Some(
+            base64::Engine::decode(&base64::engine::general_purpose::STANDARD, b64.as_bytes())
+                .map_err(|e| format!("invalid conflict content encoding: {e}"))?,
+        ),
+        None => None,
+    };
     let handle = get_handle(&state, &repo_id)?;
     if let Some(remote) = handle.remote() {
         return finish_op(enqueue_remote_mutation(
@@ -2690,7 +2796,11 @@ pub async fn reset(
         &handle,
         &repo,
         "merge",
-        move |_ctx, repo| engine.reset(repo, kind, &to),
+        move |ctx, repo| {
+            engine.reset(repo, kind, &to, &mut |progress| {
+                emit_checkout_progress(&ctx, progress)
+            })
+        },
     ))
     .await
 }

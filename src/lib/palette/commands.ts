@@ -32,6 +32,7 @@
 
 import {
   checkpointGc,
+  commitMessage,
   pickFolder,
   repoDiff,
   stashApply,
@@ -742,10 +743,12 @@ export const COMMANDS: Command[] = [
           return;
         }
         const files = await repoDiff(ctx.repoId!, { commit: head.parents[0] }, { commit: head.sha });
+        // Log pages carry only the summary; the AI prompt gets the full body.
+        const message = await commitMessage(ctx.repoId!, head.sha).catch(() => null);
         const outcome = await ai.run("explain-commit", {
           repoId: ctx.repoId!,
           sha: head.sha,
-          description: head.message,
+          description: message ?? head.summary,
           diff: budgetedDiffText(files),
         });
         emitUiEvent("ai-show-result", {

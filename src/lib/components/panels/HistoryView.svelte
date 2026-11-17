@@ -46,6 +46,7 @@
     branchSwitch,
     cherryPick,
     commitCheckout,
+    commitMessage,
     describe,
     guardCheckpoint,
     pickSaveFile,
@@ -180,7 +181,15 @@
   const GRAPH_WIDTH = 220;
   const OVERSCAN = 10;
 
-  const store = new HistoryStore();
+  // Capturing the initial `root` is intended: the prop is fixed per mounting
+  // site (RepoView passes the worktree root; popouts pass nothing), so the
+  // stream slot never changes for a live view.
+  // svelte-ignore state_referenced_locally
+  const store = new HistoryStore({
+    // Per-consumer stream slot: the popout window (root "") gets its own so
+    // it never cancels the workspace view's walk (and vice versa).
+    consumerId: root === "" ? "popout-history" : "history",
+  });
 
   // -- selection + detail state ------------------------------------------------
 
@@ -1217,10 +1226,12 @@
     }
     try {
       const files = await repoDiff(repoId, { commit: parent }, { commit: sha });
+      // Log pages carry only the summary; the AI prompt gets the full body.
+      const message = await commitMessage(repoId, sha).catch(() => null);
       const outcome = await ai.run("explain-commit", {
         repoId,
         sha,
-        description: row.message,
+        description: message ?? row.summary,
         diff: budgetedDiffText(files),
       });
       emitUiEvent("ai-show-result", {
@@ -1663,7 +1674,9 @@
                 </span>
               {/snippet}
             </Hint>
-            <Hint label={`${v.commit.sha}\n${v.commit.message.trim()}`}>
+            <!-- Log pages carry only the summary — the hover hint shows the
+                 same first line (the full body lives in the detail pane). -->
+            <Hint label={`${v.commit.sha}\n${v.commit.summary}`}>
               {#snippet child({ props })}
                 <span {...props} class="summary inline-flex min-w-0 flex-1 cursor-help items-center gap-1 truncate">
                   <span class="min-w-0 truncate">{v.commit.summary}</span>

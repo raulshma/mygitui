@@ -54,7 +54,7 @@ fn find_by_path<'a>(files: &'a [super::types::FileDiff], path: &str) -> &'a supe
 #[test]
 fn status_reports_untracked_and_branch() {
     let repo = open_fixture("basic");
-    let status = ENGINE.status(&repo).expect("status");
+    let status = ENGINE.status(&repo, None).expect("status");
 
     assert_eq!(status.branch.as_deref(), Some("main"));
     assert!(!status.detached);
@@ -355,7 +355,7 @@ fn refs_list_branches_and_peeled_tag() {
     assert_eq!(tag_sha, main_sha, "tag v1.0.0 sits on main's tip");
 
     // main ref matches HEAD.
-    let status = ENGINE.status(&repo).unwrap();
+    let status = ENGINE.status(&repo, None).unwrap();
     assert_eq!(status.head.as_deref(), Some(main_sha.as_str()));
 }
 
@@ -403,7 +403,7 @@ fn blame_reports_line_origins() {
 #[test]
 fn conflicted_status_shows_merge_state() {
     let repo = open_fixture("conflicted");
-    let status = ENGINE.status(&repo).expect("status");
+    let status = ENGINE.status(&repo, None).expect("status");
 
     assert!(status.merging, "MERGE_HEAD present");
     assert!(!status.rebasing);
@@ -434,7 +434,7 @@ fn conflicted_status_shows_merge_state() {
 #[test]
 fn worktree_main_repo_opens_cleanly() {
     let repo = open_fixture("worktree/repo");
-    let status = ENGINE.status(&repo).expect("status");
+    let status = ENGINE.status(&repo, None).expect("status");
     assert_eq!(status.branch.as_deref(), Some("main"));
     assert!(status.entries.is_empty(), "main worktree is clean");
 
@@ -583,7 +583,7 @@ fn staged_and_worktree_kinds_map_correctly() {
 
     std::fs::remove_file(temp.workdir().unwrap().join("gone.txt")).expect("rm gone");
 
-    let status = ENGINE.status(&temp).expect("status");
+    let status = ENGINE.status(&temp, None).expect("status");
 
     let entry = |path: &str| {
         status
@@ -630,7 +630,7 @@ fn rename_in_status_reports_old_path() {
     temp.stage("renamed.txt");
     temp.stage_removal("old.txt");
 
-    let status = ENGINE.status(&temp).expect("status");
+    let status = ENGINE.status(&temp, None).expect("status");
     let entry = status
         .entries
         .iter()
@@ -1860,7 +1860,7 @@ fn checkout_commit_detaches_and_switch_back_restores() {
         .to_string();
 
     ENGINE
-        .checkout_commit(&temp, &first)
+        .checkout_commit(&temp, &first, &mut |_| {})
         .expect("checkout commit");
     assert!(
         temp.head_detached().expect("detached query"),
@@ -1883,7 +1883,7 @@ fn checkout_commit_detaches_and_switch_back_restores() {
 
     // The documented way back: a branch switch re-attaches HEAD.
     ENGINE
-        .branch_switch_impl(&temp, &branch, false)
+        .branch_switch_impl(&temp, &branch, false, &mut |_| {})
         .expect("switch back");
     assert!(
         !temp.head_detached().expect("detached query"),
@@ -1897,7 +1897,11 @@ fn checkout_commit_rejects_unknown_sha() {
     temp.write("a.txt", "one\n");
     temp.add_all_and_commit("one");
     let err = ENGINE
-        .checkout_commit(&temp, "0123456789abcdef0123456789abcdef01234567")
+        .checkout_commit(
+            &temp,
+            "0123456789abcdef0123456789abcdef01234567",
+            &mut |_| {},
+        )
         .expect_err("unknown sha must fail");
     assert!(matches!(err, EngineError::Invalid(_)), "{err:?}");
 }

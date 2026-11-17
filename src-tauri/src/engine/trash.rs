@@ -344,7 +344,7 @@ mod tests {
 
         let engine = Libgit2Engine::new();
         engine
-            .branch_create_impl(&repo, "feature/foo.bar", None, false)
+            .branch_create_impl(&repo, "feature/foo.bar", None, false, &mut |_| {})
             .unwrap();
         // Advance main so the feature branch is unmerged (deletable with force).
         commit_file(&repo, "b.txt", "two\n", "two");
@@ -395,7 +395,7 @@ mod tests {
 
         let engine = Libgit2Engine::new();
         engine
-            .branch_create_impl(&repo, "topic", None, false)
+            .branch_create_impl(&repo, "topic", None, false, &mut |_| {})
             .unwrap();
         engine.branch_delete_impl(&repo, "topic", true).unwrap();
         let id = engine.branch_trash_list(&repo).unwrap()[0].id.clone();
@@ -429,7 +429,7 @@ mod tests {
 
         let engine = Libgit2Engine::new();
         engine
-            .branch_create_impl(&repo, "old-name", None, false)
+            .branch_create_impl(&repo, "old-name", None, false, &mut |_| {})
             .unwrap();
         engine.branch_delete_impl(&repo, "old-name", true).unwrap();
         let id = engine.branch_trash_list(&repo).unwrap()[0].id.clone();
@@ -451,14 +451,14 @@ mod tests {
 
         let engine = Libgit2Engine::new();
         engine
-            .branch_create_impl(&repo, "topic", None, false)
+            .branch_create_impl(&repo, "topic", None, false, &mut |_| {})
             .unwrap();
         engine.branch_delete_impl(&repo, "topic", true).unwrap();
         let id = engine.branch_trash_list(&repo).unwrap()[0].id.clone();
 
         // Recreate a DIFFERENT branch with the same name; restore must refuse.
         engine
-            .branch_create_impl(&repo, "topic", Some("HEAD"), false)
+            .branch_create_impl(&repo, "topic", Some("HEAD"), false, &mut |_| {})
             .unwrap();
         match engine.branch_trash_restore(&repo, &id, None) {
             Err(EngineError::Invalid(msg)) => {

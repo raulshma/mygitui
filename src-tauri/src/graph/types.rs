@@ -30,6 +30,8 @@
 //!   feeding the same commits through any page split with a shared
 //!   `LaneState` yields byte-identical rows.
 
+use std::collections::HashMap;
+
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
@@ -56,18 +58,40 @@ pub struct GraphRow {
 /// Incremental layout state carried between pages.
 #[derive(Debug, Default)]
 pub struct LaneState {
-    /// sha -> lane assignment for active (unmerged) branches.
+    /// sha -> lane assignment for active (unmerged) branches. The Vec is
+    /// the ordering authority (lane indices); `lane_index` mirrors it
+    /// (sha → lane) so `lane_of` is O(1) instead of a linear scan with a
+    /// string compare per commit/parent on wide graphs.
     pub lanes: Vec<Option<String>>,
+    /// Mirror of `lanes`: sha → lane index. Kept in sync by [`Self::set_lane`].
+    lane_index: HashMap<String, u16>,
     pub next_free: u16,
 }
 
 impl LaneState {
     /// Lane currently holding `sha`, if any.
     fn lane_of(&self, sha: &str) -> Option<u16> {
-        self.lanes
-            .iter()
-            .position(|slot| slot.as_deref() == Some(sha))
-            .map(|i| i as u16)
+        self.lane_index.get(sha).copied()
+    }
+
+    /// Write one lane's occupancy, keeping the sha→lane mirror in sync.
+    /// Each sha occupies at most one lane (a parent is only placed when
+    /// `lane_of` misses it), so clearing a slot always targets the map's
+    /// only entry for that sha.
+    fn set_lane(&mut self, lane: u16, sha: Option<&str>) {
+        let index = usize::from(lane);
+        if let Some(old) = &self.lanes[index] {
+            if self.lane_index.get(old).copied() == Some(lane) {
+                self.lane_index.remove(old);
+            }
+        }
+        match sha {
+            Some(sha) => {
+                self.lanes[index] = Some(sha.to_owned());
+                self.lane_index.insert(sha.to_owned(), lane);
+            }
+            None => self.lanes[index] = None,
+        }
     }
 
     /// Lowest free lane; reuses freed slots first, extends only when every
@@ -114,6 +138,10 @@ pub fn layout_page(
     // Reused per row: the open-lane bitmap changes size with the graph width,
     // but allocating a fresh Vec for every commit is avoidable.
     let mut open_before: Vec<bool> = Vec::new();
+    // Per-row bitmap of lanes an edge leaves from: O(1) membership tests for
+    // the pass-through loop below (the previous `edges.iter().any` scan made
+    // the row O(width * edges)).
+    let mut edge_sources: Vec<bool> = Vec::new();
 
     for commit in commits {
         // Existing lines may converge with a parent edge on this row, but
@@ -127,7 +155,7 @@ pub fn layout_page(
             None => state.allocate_lane(),
         };
         // The commit is consumed; its slot is free until a parent reclaims it.
-        state.lanes[usize::from(lane)] = None;
+        state.set_lane(lane, None);
 
         // 2. Wire parents, collecting edges from this row to the parent
         //    nodes. First-parent special case: when the first parent was
@@ -146,9 +174,9 @@ pub fn layout_page(
                         // line that claimed it bends in below this row. Keep
                         // its source lane clear for this row so another
                         // parent edge cannot cross the bend.
-                        state.lanes[usize::from(existing)] = None;
+                        state.set_lane(existing, None);
                         reserved_bend_sources.push(existing);
-                        state.lanes[usize::from(lane)] = Some(parent.clone());
+                        state.set_lane(lane, Some(parent.as_str()));
                         edges.push(GraphEdge {
                             from: existing,
                             to: lane,
@@ -163,11 +191,11 @@ pub fn layout_page(
                 None => {
                     if idx == 0 {
                         // First parent continues in the commit's own lane.
-                        state.lanes[usize::from(lane)] = Some(parent.clone());
+                        state.set_lane(lane, Some(parent.as_str()));
                         lane
                     } else {
                         let opened = state.allocate_lane_excluding(&reserved_bend_sources);
-                        state.lanes[usize::from(opened)] = Some(parent.clone());
+                        state.set_lane(opened, Some(parent.as_str()));
                         opened
                     }
                 }
@@ -179,11 +207,15 @@ pub fn layout_page(
         // unless an edge explicitly leaves their lane. An incoming edge to
         // that lane brings another line in; it does not carry the existing
         // line onward to the same parent.
+        edge_sources.clear();
+        edge_sources.resize(state.lanes.len(), false);
+        for edge in &edges {
+            if let Some(source) = edge_sources.get_mut(usize::from(edge.from)) {
+                *source = true;
+            }
+        }
         for (m, slot) in state.lanes.iter().enumerate() {
-            if slot.is_some()
-                && open_before.get(m).copied().unwrap_or(false)
-                && !edges.iter().any(|edge| usize::from(edge.from) == m)
-            {
+            if slot.is_some() && open_before.get(m).copied().unwrap_or(false) && !edge_sources[m] {
                 let m = m as u16;
                 edges.push(GraphEdge { from: m, to: m });
             }

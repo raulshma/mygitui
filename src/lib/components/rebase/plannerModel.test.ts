@@ -28,7 +28,6 @@ function commit(sha: string, summary = `subject ${sha}`): CommitInfo {
     parents: [],
     author: { name: "Ada", email: "ada@example.com", time: 1, offset_minutes: 0 },
     committer: { name: "Ada", email: "ada@example.com", time: 1, offset_minutes: 0 },
-    message: `${summary}\n\nbody of ${sha}\n`,
     summary,
     refs: [],
   };
@@ -97,11 +96,11 @@ describe("buildPlan", () => {
     expect(plan.map((r) => r.sha)).toEqual(["old", "mid", "head"]);
   });
 
-  it("defaults every row to pick and prefills the reword buffer", () => {
+  it("defaults every row to pick with an empty reword buffer (full message fetched on reword)", () => {
     const [row] = buildPlan([LOG[0] as CommitInfo]);
     expect(row?.action).toBe("pick");
     expect(row?.summary).toBe("subject head");
-    expect(row?.message).toBe((LOG[0] as CommitInfo).message);
+    expect(row?.message).toBe("");
   });
 
   it("builds an empty plan for an empty range", () => {

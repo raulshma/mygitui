@@ -93,7 +93,6 @@ function commit(i: number, refs: string[] = []): CommitInfo {
     parents: i > 0 ? [sha(i - 1)] : [],
     author: { name: `Author ${i}`, email: `a${i}@x.com`, time: 1_700_000 + i, offset_minutes: 0 },
     committer: { name: `Author ${i}`, email: `a${i}@x.com`, time: 1_700_000 + i, offset_minutes: 0 },
-    message: `commit ${i}\n\nbody ${i}\n`,
     summary: `commit ${i}`,
     refs,
   };

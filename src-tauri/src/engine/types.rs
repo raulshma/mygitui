@@ -40,7 +40,7 @@ pub enum ChangeKind {
     Ignored,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct StatusEntry {
     pub path: String,
@@ -140,9 +140,9 @@ pub struct CommitInfo {
     pub parents: Vec<String>,
     pub author: GitSignature,
     pub committer: GitSignature,
-    /// Full commit message.
-    pub message: String,
-    /// First line of the message.
+    /// First line of the message. Full bodies are NOT carried on log pages
+    /// (they dominate the page payload); fetch on demand via the
+    /// `repo_commit_message` command.
     pub summary: String,
     /// Ref decorations (branches/tags/HEAD) pointing at this commit.
     pub refs: Vec<String>,

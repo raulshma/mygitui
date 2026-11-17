@@ -29,7 +29,7 @@
    * status-panel editor; a running rebase is never stopped by closing — the
    * shared monitor keeps watching, and RepoView's top banner carries
    * Continue/Abort while this dialog is hidden. */
-  import { rebaseStart, streamLog, autosquashPlan } from "$lib/ipc/client";
+  import { rebaseStart, streamLog, autosquashPlan, commitMessage } from "$lib/ipc/client";
   import type { CommitInfo, RebaseStep } from "$lib/ipc/types";
   import { toast } from "$lib/toast";
   import ConfirmDialog from "$lib/components/safety/ConfirmDialog.svelte";
@@ -75,6 +75,21 @@
 
   let dragFrom = $state<number | null>(null);
   let dragOver = $state<number | null>(null);
+
+  /**
+   * Prefills the reword buffer with the commit's full original message the
+   * moment a row flips to `reword` (log pages carry only the summary, so
+   * `buildPlan` starts the buffer empty). Never clobbers user input: an
+   * untouched empty buffer only, and only while the row is still on
+   * `reword` when the fetch lands.
+   */
+  async function prefillReword(row: PlanRow): Promise<void> {
+    if (row.action !== "reword" || row.message !== "") return;
+    const message = await commitMessage(repoId, row.sha).catch(() => null);
+    if (message !== null && row.action === "reword" && row.message === "") {
+      row.message = message;
+    }
+  }
 
   const validationError = $derived(validatePlan(toRebaseSteps(rows)));
   const canStart = $derived(
@@ -369,6 +384,7 @@
                 <select
                   class="action w-[5.5rem] flex-none rounded-md border border-border bg-muted px-1 py-0.5 text-xs text-foreground focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring"
                   bind:value={row.action}
+                  onchange={() => void prefillReword(row)}
                   aria-label={`Action for ${row.summary}`}
                 >
                   {#each REBASE_ACTIONS as action (action)}

@@ -53,7 +53,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use git2::build::CheckoutBuilder;
 use git2::{Index, Repository, RepositoryState, Signature, Time};
 
-use super::git_engine::{EngineError, EngineResult, GitEngineM3};
+use super::git_engine::{CheckoutProgress, EngineError, EngineResult, GitEngineM3};
 use super::libgit2::Libgit2Engine;
 use super::netops::cancelled_err;
 use super::types::{
@@ -674,7 +674,13 @@ impl GitEngineM3 for Libgit2Engine {
         sequencer_apply(repo, shas, Sequencer::Revert)
     }
 
-    fn reset(&self, repo: &Repository, kind: ResetKind, to: &str) -> EngineResult<()> {
+    fn reset(
+        &self,
+        repo: &Repository,
+        kind: ResetKind,
+        to: &str,
+        progress: &mut dyn FnMut(CheckoutProgress),
+    ) -> EngineResult<()> {
         // --keep/--merge have no libgit2 equivalent; the CLI implements their
         // dirty-file safety rules, so they run as one atomic `git reset`
         // (validation, workdir, index, ref). Everything else stays native:
@@ -706,8 +712,16 @@ impl GitEngineM3 for Libgit2Engine {
             }
             ResetKind::Hard => {
                 // checkout_tree also updates the index (libgit2 default).
+                // Workdir progress flows through `progress` (phase "reset").
                 let mut checkout = CheckoutBuilder::new();
                 checkout.force();
+                checkout.progress(|_path, completed, total| {
+                    progress(CheckoutProgress {
+                        phase: "reset",
+                        completed,
+                        total,
+                    });
+                });
                 repo.checkout_tree(target.tree()?.as_object(), Some(&mut checkout))?;
             }
             // Handled above via the CLI.

@@ -183,7 +183,7 @@ fn status_reports_dirty_submodule_as_gitlink_change() {
     run_git(&parent_path, &["commit", "-m", "add submodule"]);
     let parent = open(&parent_path);
 
-    let clean = ENGINE.status(&parent).expect("status");
+    let clean = ENGINE.status(&parent, None).expect("status");
     assert!(
         clean.entries.iter().all(|e| e.path != "sub"),
         "clean submodule stays out of status: {:?}",
@@ -193,7 +193,7 @@ fn status_reports_dirty_submodule_as_gitlink_change() {
     // Moving the child's HEAD past the recorded gitlink is a worktree change
     // in the superproject (same signal VSCode's source control shows).
     commit_file(&parent_path.join("sub"), "lib.txt", "v2\n", "child v2");
-    let dirty = ENGINE.status(&parent).expect("status");
+    let dirty = ENGINE.status(&parent, None).expect("status");
     let entry = dirty
         .entries
         .iter()

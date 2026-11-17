@@ -36,7 +36,6 @@ fn mk(sha: &str, parents: &[&str]) -> CommitInfo {
         parents: parents.iter().map(|p| (*p).to_string()).collect(),
         author: sig(),
         committer: sig(),
-        message: String::new(),
         summary: String::new(),
         refs: Vec::new(),
     }

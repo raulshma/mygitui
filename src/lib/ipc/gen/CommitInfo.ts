@@ -3,11 +3,9 @@ import type { GitSignature } from "./GitSignature";
 
 export type CommitInfo = { sha: string, parents: Array<string>, author: GitSignature, committer: GitSignature, 
 /**
- * Full commit message.
- */
-message: string, 
-/**
- * First line of the message.
+ * First line of the message. Full bodies are NOT carried on log pages
+ * (they dominate the page payload); fetch on demand via the
+ * `repo_commit_message` command.
  */
 summary: string, 
 /**

@@ -195,7 +195,7 @@ fn conflicted_fixture(name: &str) -> Fixture {
     commit_file(&fx.repo, "conflict3.txt", "base three\n", "base: conflict3");
     commit_file(&fx.repo, "keep.txt", "same\n", "base: keep");
     ENGINE
-        .branch_create(&fx.repo, "feature", None, true)
+        .branch_create(&fx.repo, "feature", None, true, &mut |_| {})
         .expect("branch feature");
     commit_file(
         &fx.repo,
@@ -222,7 +222,7 @@ fn conflicted_fixture(name: &str) -> Fixture {
         "feature: new file",
     );
     ENGINE
-        .branch_switch(&fx.repo, "main", false)
+        .branch_switch(&fx.repo, "main", false, &mut |_| {})
         .expect("switch back to main");
     commit_file(&fx.repo, "conflict1.txt", "main one\n", "main: conflict1");
     commit_file(&fx.repo, "conflict2.txt", "main two\n", "main: conflict2");
@@ -252,11 +252,11 @@ fn merge_fast_forward_moves_branch_and_workdir() {
     let fx = init_fixture("merge-ff");
     let base = commit_file(&fx.repo, "file.txt", "base\n", "base");
     ENGINE
-        .branch_create(&fx.repo, "feature", None, true)
+        .branch_create(&fx.repo, "feature", None, true, &mut |_| {})
         .expect("branch feature");
     let feature_tip = commit_file(&fx.repo, "file.txt", "feature\n", "feature work");
     ENGINE
-        .branch_switch(&fx.repo, "main", false)
+        .branch_switch(&fx.repo, "main", false, &mut |_| {})
         .expect("switch back");
 
     let result = ENGINE
@@ -279,11 +279,11 @@ fn cancelled_merge_refuses_before_touching_refs() {
     let fx = init_fixture("merge-cancel");
     commit_file(&fx.repo, "base.txt", "base\n", "base");
     ENGINE
-        .branch_create(&fx.repo, "feature", None, true)
+        .branch_create(&fx.repo, "feature", None, true, &mut |_| {})
         .expect("branch feature");
     let feature_tip = commit_file(&fx.repo, "feature.txt", "feature\n", "feature adds");
     ENGINE
-        .branch_switch(&fx.repo, "main", false)
+        .branch_switch(&fx.repo, "main", false, &mut |_| {})
         .expect("switch back");
     let main_tip = head_sha(&fx.repo);
 
@@ -309,11 +309,11 @@ fn merge_diverged_creates_two_parent_commit() {
     let fx = init_fixture("merge-diverged");
     let base = commit_file(&fx.repo, "base.txt", "base\n", "base");
     ENGINE
-        .branch_create(&fx.repo, "feature", None, true)
+        .branch_create(&fx.repo, "feature", None, true, &mut |_| {})
         .expect("branch feature");
     let feature_tip = commit_file(&fx.repo, "feature.txt", "from feature\n", "feature adds");
     ENGINE
-        .branch_switch(&fx.repo, "main", false)
+        .branch_switch(&fx.repo, "main", false, &mut |_| {})
         .expect("switch back");
     let main_tip = commit_file(&fx.repo, "main.txt", "from main\n", "main adds");
 
@@ -356,11 +356,11 @@ fn merge_no_ff_forces_merge_commit() {
     let fx = init_fixture("merge-no-ff");
     let main_before = commit_file(&fx.repo, "file.txt", "base\n", "base");
     ENGINE
-        .branch_create(&fx.repo, "feature", None, true)
+        .branch_create(&fx.repo, "feature", None, true, &mut |_| {})
         .expect("branch feature");
     let feature_tip = commit_file(&fx.repo, "file.txt", "feature\n", "feature work");
     ENGINE
-        .branch_switch(&fx.repo, "main", false)
+        .branch_switch(&fx.repo, "main", false, &mut |_| {})
         .expect("switch back");
 
     let result = ENGINE
@@ -392,7 +392,7 @@ fn merge_up_to_date_is_noop() {
     let fx = init_fixture("merge-up-to-date");
     let base = commit_file(&fx.repo, "file.txt", "base\n", "base");
     ENGINE
-        .branch_create(&fx.repo, "feature", None, false)
+        .branch_create(&fx.repo, "feature", None, false, &mut |_| {})
         .expect("branch feature at base");
 
     let result = ENGINE
@@ -427,7 +427,7 @@ fn merge_conflict_reports_files_and_keeps_clean_paths() {
     // Merge state is live: MERGE_HEAD, libgit2 state, status flag, markers.
     assert!(fx.repo.path().join("MERGE_HEAD").exists());
     assert_eq!(fx.repo.state(), RepositoryState::Merge);
-    let status = ENGINE.status(&fx.repo).expect("status");
+    let status = ENGINE.status(&fx.repo, None).expect("status");
     assert!(status.merging);
     let marked = workdir_text(&fx.repo, "conflict1.txt");
     assert!(
@@ -459,7 +459,7 @@ fn merge_abort_restores_head_state() {
     // Conflicted file restored to HEAD content, merge-added file removed.
     assert_eq!(workdir_text(&fx.repo, "conflict1.txt"), "main one\n");
     assert!(!fx.repo.workdir().unwrap().join("feature_new.txt").exists());
-    let status = ENGINE.status(&fx.repo).expect("status");
+    let status = ENGINE.status(&fx.repo, None).expect("status");
     assert!(status.entries.is_empty(), "workdir clean after abort");
     assert!(!status.merging);
 }
@@ -483,11 +483,11 @@ fn diverged_fixture(name: &str) -> (Fixture, String, String) {
     let fx = init_fixture(name);
     commit_file(&fx.repo, "base.txt", "base\n", "base");
     ENGINE
-        .branch_create(&fx.repo, "feature", None, true)
+        .branch_create(&fx.repo, "feature", None, true, &mut |_| {})
         .expect("branch feature");
     let feature_tip = commit_file(&fx.repo, "feature.txt", "from feature\n", "feature adds");
     ENGINE
-        .branch_switch(&fx.repo, "main", false)
+        .branch_switch(&fx.repo, "main", false, &mut |_| {})
         .expect("switch back");
     let main_tip = commit_file(&fx.repo, "main.txt", "from main\n", "main adds");
     (fx, main_tip, feature_tip)
@@ -514,7 +514,7 @@ fn merge_squash_stages_result_without_commit_or_state() {
     assert!(!fx.repo.path().join("MERGE_HEAD").exists());
     assert!(fx.repo.path().join("SQUASH_MSG").exists());
     assert_eq!(fx.repo.state(), RepositoryState::Clean);
-    let status = ENGINE.status(&fx.repo).expect("status");
+    let status = ENGINE.status(&fx.repo, None).expect("status");
     assert!(!status.merging);
     // Both sides' content is in the workdir; the merge result is staged.
     assert_eq!(workdir_text(&fx.repo, "feature.txt"), "from feature\n");
@@ -553,11 +553,11 @@ fn merge_squash_on_ffable_branch_stages_instead_of_moving() {
     commit_file(&fx.repo, "file.txt", "base\n", "base");
     let main_tip = head_sha(&fx.repo);
     ENGINE
-        .branch_create(&fx.repo, "feature", None, true)
+        .branch_create(&fx.repo, "feature", None, true, &mut |_| {})
         .expect("branch feature");
     commit_file(&fx.repo, "new.txt", "feature\n", "feature adds");
     ENGINE
-        .branch_switch(&fx.repo, "main", false)
+        .branch_switch(&fx.repo, "main", false, &mut |_| {})
         .expect("switch back");
 
     let result = ENGINE
@@ -630,7 +630,7 @@ fn merge_squash_conflict_drops_merge_state_keeps_markers() {
         .peel_to_commit()
         .expect("commit");
     assert_eq!(head.parent_count(), 1);
-    let status = ENGINE.status(&fx.repo).expect("status");
+    let status = ENGINE.status(&fx.repo, None).expect("status");
     assert!(!status.merging && !status.sequencer && status.entries.is_empty());
 }
 
@@ -653,7 +653,7 @@ fn merge_no_commit_stages_and_awaits_merge_commit() {
     assert_eq!(head_sha(&fx.repo), main_tip, "no commit yet");
     // Merge state live for the finishing (2-parent) commit.
     assert!(fx.repo.path().join("MERGE_HEAD").exists());
-    let status = ENGINE.status(&fx.repo).expect("status");
+    let status = ENGINE.status(&fx.repo, None).expect("status");
     assert!(status.merging);
 
     ENGINE
@@ -844,7 +844,7 @@ fn cherry_pick_preserves_message_and_author() {
     let fx = init_fixture("cherry-pick");
     commit_file(&fx.repo, "base.txt", "base\n", "base");
     ENGINE
-        .branch_create(&fx.repo, "feature", None, true)
+        .branch_create(&fx.repo, "feature", None, true, &mut |_| {})
         .expect("branch feature");
     let x1 = commit_file_as(
         &fx.repo,
@@ -856,7 +856,7 @@ fn cherry_pick_preserves_message_and_author() {
     );
     let x2 = commit_file(&fx.repo, "widget.txt", "widget v2\n", "feat: widget v2");
     ENGINE
-        .branch_switch(&fx.repo, "main", false)
+        .branch_switch(&fx.repo, "main", false, &mut |_| {})
         .expect("switch back");
     let main_tip = commit_file(&fx.repo, "mainline.txt", "main\n", "mainline work");
 
@@ -903,11 +903,11 @@ fn cherry_pick_conflict_writes_sequencer_state() {
     let fx = init_fixture("cherry-pick-conflict");
     commit_file(&fx.repo, "shared.txt", "base\n", "base");
     ENGINE
-        .branch_create(&fx.repo, "feature", None, true)
+        .branch_create(&fx.repo, "feature", None, true, &mut |_| {})
         .expect("branch feature");
     let x = commit_file(&fx.repo, "shared.txt", "feature\n", "feature edit");
     ENGINE
-        .branch_switch(&fx.repo, "main", false)
+        .branch_switch(&fx.repo, "main", false, &mut |_| {})
         .expect("switch back");
     commit_file(&fx.repo, "shared.txt", "main\n", "main edit");
 
@@ -930,7 +930,7 @@ fn cherry_pick_conflict_writes_sequencer_state() {
         "CHERRY_PICK_HEAD names the failed commit: {pick_head:?}"
     );
     assert_eq!(fx.repo.state(), RepositoryState::CherryPick);
-    let status = ENGINE.status(&fx.repo).expect("status");
+    let status = ENGINE.status(&fx.repo, None).expect("status");
     assert!(status.sequencer);
     // Workdir shows the 3-way markers.
     let marked = workdir_text(&fx.repo, "shared.txt");
@@ -943,13 +943,13 @@ fn cherry_pick_sequence_stops_at_first_conflict() {
     commit_file(&fx.repo, "a.txt", "a base\n", "base a");
     commit_file(&fx.repo, "b.txt", "b base\n", "base b");
     ENGINE
-        .branch_create(&fx.repo, "feature", None, true)
+        .branch_create(&fx.repo, "feature", None, true, &mut |_| {})
         .expect("branch feature");
     let x1 = commit_file(&fx.repo, "a.txt", "a feature\n", "feature: a");
     let x2 = commit_file(&fx.repo, "b.txt", "b feature\n", "feature: b");
     let x3 = commit_file(&fx.repo, "a.txt", "a feature 3\n", "feature: a again");
     ENGINE
-        .branch_switch(&fx.repo, "main", false)
+        .branch_switch(&fx.repo, "main", false, &mut |_| {})
         .expect("switch back");
     commit_file(&fx.repo, "b.txt", "b main\n", "main: b");
 
@@ -1052,11 +1052,11 @@ fn pick_conflict_fixture(name: &str) -> (Fixture, String) {
     let fx = init_fixture(name);
     commit_file(&fx.repo, "shared.txt", "base\n", "base");
     ENGINE
-        .branch_create(&fx.repo, "feature", None, true)
+        .branch_create(&fx.repo, "feature", None, true, &mut |_| {})
         .expect("branch feature");
     let x = commit_file(&fx.repo, "shared.txt", "feature\n", "feature edit");
     ENGINE
-        .branch_switch(&fx.repo, "main", false)
+        .branch_switch(&fx.repo, "main", false, &mut |_| {})
         .expect("switch back");
     commit_file(&fx.repo, "shared.txt", "main\n", "main edit");
     (fx, x)
@@ -1071,7 +1071,7 @@ fn assert_sequencer_cleared(fx: &Fixture) {
         ENGINE.conflicts(&fx.repo).expect("conflicts").is_empty(),
         "index must be conflict-free after abort"
     );
-    let status = ENGINE.status(&fx.repo).expect("status");
+    let status = ENGINE.status(&fx.repo, None).expect("status");
     assert!(!status.sequencer, "sequencer flag must drop");
 }
 
@@ -1120,12 +1120,12 @@ fn cherry_pick_abort_keeps_landed_picks_of_the_leg() {
     commit_file(&fx.repo, "a.txt", "a base\n", "base a");
     commit_file(&fx.repo, "b.txt", "b base\n", "base b");
     ENGINE
-        .branch_create(&fx.repo, "feature", None, true)
+        .branch_create(&fx.repo, "feature", None, true, &mut |_| {})
         .expect("branch feature");
     let x1 = commit_file(&fx.repo, "a.txt", "a feature\n", "feature: a");
     let x2 = commit_file(&fx.repo, "b.txt", "b feature\n", "feature: b");
     ENGINE
-        .branch_switch(&fx.repo, "main", false)
+        .branch_switch(&fx.repo, "main", false, &mut |_| {})
         .expect("switch back");
     commit_file(&fx.repo, "b.txt", "b main\n", "main: b");
 
@@ -1267,7 +1267,7 @@ fn commit_after_resolved_merge_takes_merge_head_parent_and_clears_state() {
     assert!(!fx.repo.path().join("MERGE_MSG").exists());
     assert!(!fx.repo.path().join("MERGE_MODE").exists());
     assert_eq!(fx.repo.state(), RepositoryState::Clean);
-    let status = ENGINE.status(&fx.repo).expect("status");
+    let status = ENGINE.status(&fx.repo, None).expect("status");
     assert!(!status.merging, "RepoStatus::merging must drop");
     assert!(status.entries.is_empty(), "clean tree after finishing");
     // Resolved bytes landed.
@@ -1283,11 +1283,11 @@ fn merge_finishing_commit_allowed_when_resolved_tree_matches_head() {
     let fx = init_fixture("merge-empty-tree");
     commit_file(&fx.repo, "file.txt", "base\n", "base");
     ENGINE
-        .branch_create(&fx.repo, "feature", None, true)
+        .branch_create(&fx.repo, "feature", None, true, &mut |_| {})
         .expect("branch feature");
     commit_file(&fx.repo, "sub.txt", "sub\n", "feature adds");
     ENGINE
-        .branch_switch(&fx.repo, "main", false)
+        .branch_switch(&fx.repo, "main", false, &mut |_| {})
         .expect("switch back");
     commit_file(&fx.repo, "sub.txt", "main\n", "main adds same file");
     let result = ENGINE
@@ -1327,7 +1327,7 @@ fn merge_finishing_commit_allowed_when_resolved_tree_matches_head() {
         .expect("commit");
     assert_eq!(head.parent_count(), 2);
     assert_eq!(fx.repo.state(), RepositoryState::Clean);
-    let status = ENGINE.status(&fx.repo).expect("status");
+    let status = ENGINE.status(&fx.repo, None).expect("status");
     assert!(!status.merging);
 }
 
@@ -1369,7 +1369,7 @@ fn reset_soft_moves_ref_only() {
     let (fx, base) = reset_fixture("reset-soft");
 
     ENGINE
-        .reset(&fx.repo, ResetKind::Soft, &base)
+        .reset(&fx.repo, ResetKind::Soft, &base, &mut |_| {})
         .expect("soft reset");
 
     assert_eq!(head_sha(&fx.repo), base);
@@ -1391,7 +1391,7 @@ fn reset_mixed_resets_index_keeps_workdir() {
     let (fx, base) = reset_fixture("reset-mixed");
 
     ENGINE
-        .reset(&fx.repo, ResetKind::Mixed, &base)
+        .reset(&fx.repo, ResetKind::Mixed, &base, &mut |_| {})
         .expect("mixed reset");
 
     assert_eq!(head_sha(&fx.repo), base);
@@ -1413,7 +1413,7 @@ fn reset_hard_checks_out_target_tree() {
     let (fx, base) = reset_fixture("reset-hard");
 
     ENGINE
-        .reset(&fx.repo, ResetKind::Hard, &base)
+        .reset(&fx.repo, ResetKind::Hard, &base, &mut |_| {})
         .expect("hard reset");
 
     assert_eq!(head_sha(&fx.repo), base);
@@ -1426,7 +1426,7 @@ fn reset_hard_checks_out_target_tree() {
         staged_content(&fx.repo, "a.txt", 0).as_deref(),
         Some(b"base\n".as_slice())
     );
-    let status = ENGINE.status(&fx.repo).expect("status");
+    let status = ENGINE.status(&fx.repo, None).expect("status");
     assert!(status.entries.is_empty(), "fully clean after hard reset");
 }
 
@@ -1456,7 +1456,7 @@ fn reset_hard_on_unborn_head_seeds_branch() {
         .expect("orphan commit");
 
     ENGINE
-        .reset(&repo, ResetKind::Hard, &seed.to_string())
+        .reset(&repo, ResetKind::Hard, &seed.to_string(), &mut |_| {})
         .expect("hard reset onto unborn HEAD");
 
     assert_eq!(head_sha(&repo), seed.to_string());
@@ -1506,7 +1506,7 @@ fn reset_keep_updates_changed_files_preserves_unrelated() {
     write_file(&fx.repo, "u.txt", "u-local\n");
 
     ENGINE
-        .reset(&fx.repo, ResetKind::Keep, &base)
+        .reset(&fx.repo, ResetKind::Keep, &base, &mut |_| {})
         .expect("keep reset");
 
     assert_eq!(head_sha(&fx.repo), base);
@@ -1514,7 +1514,7 @@ fn reset_keep_updates_changed_files_preserves_unrelated() {
     // unrelated dirty file keeps its local content.
     assert_eq!(workdir_text(&fx.repo, "a.txt"), "base\n");
     assert_eq!(workdir_text(&fx.repo, "u.txt"), "u-local\n");
-    let status = ENGINE.status(&fx.repo).expect("status");
+    let status = ENGINE.status(&fx.repo, None).expect("status");
     assert!(
         status.entries.iter().any(|e| e.path == "u.txt"),
         "u.txt still shows as modified"
@@ -1531,7 +1531,7 @@ fn reset_keep_refuses_conflicting_dirty_file() {
     write_file(&fx.repo, "a.txt", "local\n");
 
     let err = ENGINE
-        .reset(&fx.repo, ResetKind::Keep, &base)
+        .reset(&fx.repo, ResetKind::Keep, &base, &mut |_| {})
         .expect_err("keep reset must refuse");
     assert_invalid(err);
 
@@ -1549,7 +1549,7 @@ fn reset_merge_updates_changed_files_keeps_unrelated() {
     write_file(&fx.repo, "u.txt", "u-local\n");
 
     ENGINE
-        .reset(&fx.repo, ResetKind::Merge, &base)
+        .reset(&fx.repo, ResetKind::Merge, &base, &mut |_| {})
         .expect("merge reset");
 
     assert_eq!(head_sha(&fx.repo), base);
@@ -1571,7 +1571,7 @@ fn reset_merge_refuses_conflicting_dirty_file() {
     write_file(&fx.repo, "a.txt", "local\n");
 
     let err = ENGINE
-        .reset(&fx.repo, ResetKind::Merge, &base)
+        .reset(&fx.repo, ResetKind::Merge, &base, &mut |_| {})
         .expect_err("merge reset must refuse");
     assert_invalid(err);
 
@@ -1586,11 +1586,11 @@ fn merge_remote_tracking_branch_message() {
     let fx = init_fixture("merge-remote-msg");
     commit_file(&fx.repo, "base.txt", "base\n", "base");
     ENGINE
-        .branch_create(&fx.repo, "feature", None, true)
+        .branch_create(&fx.repo, "feature", None, true, &mut |_| {})
         .expect("branch feature");
     let feature_tip = commit_file(&fx.repo, "feature.txt", "f\n", "feature adds");
     ENGINE
-        .branch_switch(&fx.repo, "main", false)
+        .branch_switch(&fx.repo, "main", false, &mut |_| {})
         .expect("switch back");
     commit_file(&fx.repo, "main.txt", "m\n", "main adds");
     // Simulate a fetched tracking ref pointing at the feature tip.

@@ -13,7 +13,6 @@ function commit(sha: string): CommitInfo {
     parents: [],
     author: { name: "Ada", email: "ada@example.com", time: 1, offset_minutes: 0 },
     committer: { name: "Ada", email: "ada@example.com", time: 1, offset_minutes: 0 },
-    message: `${sha}\n`,
     summary: `commit ${sha}`,
     refs: [],
   };

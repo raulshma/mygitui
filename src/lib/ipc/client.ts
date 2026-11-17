@@ -299,9 +299,15 @@ export function closeRepo(repoId: RepoId): Promise<void> {
   return call<void>("repo_close", { repo_id: repoId });
 }
 
-/** Snapshot of branch state + working-copy entries. */
-export function repoStatus(repoId: RepoId): Promise<RepoStatus> {
-  return call<RepoStatus>("repo_status", { repo_id: repoId });
+/**
+ * Snapshot of branch state + working-copy entries. `paths` (a watcher
+ * batch's changed paths) makes the backend rescan only those paths and
+ * merge them into its cached status; omitted = full rescan.
+ */
+export function repoStatus(repoId: RepoId, paths?: string[]): Promise<RepoStatus> {
+  const args: Record<string, unknown> = { repo_id: repoId };
+  if (paths !== undefined) args.paths = paths;
+  return call<RepoStatus>("repo_status", args);
 }
 
 /** All refs as `[name, sha]` pairs. */
@@ -333,16 +339,22 @@ export function repoDiff(
   return call<FileDiff[]>("repo_diff", args);
 }
 
-/** Streams a diff as pages of ~50 files. */
+/**
+ * Streams a diff as pages of ~50 files. `consumerId` names the caller's
+ * stream slot (backend per-consumer slots per kind: a same-consumer
+ * replacement cancels only that consumer's stream; omitted = "default").
+ */
 export function streamDiff(
   repoId: RepoId,
   oldSide: DiffSide,
   newSide: DiffSide,
   onFilePage: (files: FileDiff[]) => void,
   paths?: string[],
+  consumerId?: string,
 ): Promise<void> {
   const args: Record<string, unknown> = { repo_id: repoId, old: oldSide, new: newSide };
   if (paths !== undefined) args.paths = paths;
+  if (consumerId !== undefined) args.consumer_id = consumerId;
   return runStream<FileDiff[]>(
     "repo_diff_stream",
     args,
@@ -351,24 +363,36 @@ export function streamDiff(
   );
 }
 
-/** Streams the commit log as `LogPage`s of up to 500 commits. */
+/**
+ * Streams the commit log as `LogPage`s of up to 500 commits. `consumerId`
+ * names the caller's stream slot (see {@link streamDiff}).
+ */
 export function streamLog(
   repoId: RepoId,
   filter: LogFilter,
   onPage: (page: LogPage) => void,
+  consumerId?: string,
 ): Promise<void> {
-  return runStream<LogPage>("repo_log_stream", { repo_id: repoId, filter }, EMPTY_LOG_PAGE, onPage);
+  const args: Record<string, unknown> = { repo_id: repoId, filter };
+  if (consumerId !== undefined) args.consumer_id = consumerId;
+  return runStream<LogPage>("repo_log_stream", args, EMPTY_LOG_PAGE, onPage);
 }
 
-/** Streams the history of a single file, following renames. */
+/**
+ * Streams the history of a single file, following renames. `consumerId`
+ * names the caller's stream slot (see {@link streamDiff}).
+ */
 export function streamFileHistory(
   repoId: RepoId,
   path: string,
   onPage: (page: LogPage) => void,
+  consumerId?: string,
 ): Promise<void> {
+  const args: Record<string, unknown> = { repo_id: repoId, path };
+  if (consumerId !== undefined) args.consumer_id = consumerId;
   return runStream<LogPage>(
     "repo_file_history",
-    { repo_id: repoId, path },
+    args,
     EMPTY_LOG_PAGE,
     onPage,
   );
@@ -934,7 +958,9 @@ export async function conflictResolve(
     repo_id: repoId,
     path,
     resolution,
-    custom_content: customContent ? Array.from(customContent) : undefined,
+    // Same base64 wire format as `repo_write_file`'s `content_b64` — a
+    // compact string over the JSON bridge instead of a ~7-8x number array.
+    custom_content_b64: customContent ? bytesToBase64(customContent) : undefined,
   });
 }
 
@@ -1766,6 +1792,16 @@ export function commitSignature(
   sha: string,
 ): Promise<CommitSignature> {
   return call<CommitSignature>("commit_signature", { repo_id: repoId, sha });
+}
+
+/**
+ * Full commit message of one commit (`summary` + body). Log pages carry
+ * only the first line (`CommitInfo.summary`); display/authoring surfaces
+ * that need the body fetch it here on demand. `null` when the commit is
+ * unknown (pruned / abbreviated sha miss).
+ */
+export function commitMessage(repoId: RepoId, sha: string): Promise<string | null> {
+  return call<string | null>("repo_commit_message", { repo_id: repoId, sha });
 }
 
 /** Branches preserved under `refs/mygitui/trash/*`, newest first. */

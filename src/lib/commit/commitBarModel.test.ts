@@ -22,7 +22,6 @@ function commit(sha: string, summary: string): CommitInfo {
     parents: [],
     author,
     committer: author,
-    message: `${summary}\n`,
     summary,
     refs: [],
   };

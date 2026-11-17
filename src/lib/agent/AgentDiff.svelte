@@ -55,6 +55,9 @@
         files = [...files, ...page];
       },
       [p],
+      // Own stream slot so the agent pane never supersedes the workspace
+      // diff streams (per-consumer slots backend-side).
+      "agent-diff",
     )
       .then(() => {
         if (current === gen) landed = true;

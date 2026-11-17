@@ -187,10 +187,14 @@ export class TabStore {
   readonly #recents: RecentRepoStore;
   readonly #sessionStorage: SessionStorage | null;
 
-  /** Per-repo status refresh cycle (coalesces event bursts). */
+  /**
+   * Per-repo status refresh cycle (coalesces event bursts). `paths` is the
+   * incremental batch queued for the NEXT fetch (`null` = full rescan): a
+   * coalesced path batch unions into it, a coalesced full request resets it.
+   */
   readonly #statusRefresh = new Map<
     RepoId,
-    { again: boolean; promise: Promise<void> }
+    { again: boolean; paths: string[] | null; promise: Promise<void> }
   >();
 
   constructor(
@@ -586,29 +590,48 @@ export class TabStore {
    * Refetches `repo_status` for a tab and swaps in the new status object
    * (fresh reference → rune reactivity). Never throws.
    *
+   * `paths` (a watcher batch's changed paths) makes the backend rescan just
+   * those paths and merge them into its cached status; omitted = full
+   * rescan — what every non-watcher caller (open, activation, post-mutation)
+   * and every head-move/full batch gets.
+   *
    * Coalesced per repo: a burst of watcher events / post-mutation refreshes
    * shares one fetch, plus at most one trailing fetch when another request
-   * arrived while it was running. Callers all resolve once the status they
-   * asked for is in (never while a pre-request fetch is still stale).
+   * arrived while it was running. Merged path batches union their paths;
+   * any merged-in full request upgrades the trailing fetch to a full rescan.
+   * Callers all resolve once the status they asked for is in (never while a
+   * pre-request fetch is still stale).
    */
-  async refreshStatus(id: RepoId): Promise<void> {
+  async refreshStatus(id: RepoId, paths?: string[]): Promise<void> {
+    const pending = paths !== undefined && paths.length > 0 ? [...new Set(paths)] : null;
     const running = this.#statusRefresh.get(id);
     if (running) {
       running.again = true;
+      if (pending === null) {
+        running.paths = null; // a full rescan subsumes any pending batch
+      } else if (running.paths !== null) {
+        running.paths = [...new Set([...running.paths, ...pending])];
+      }
       return running.promise;
     }
-    const state: { again: boolean; promise: Promise<void> } = {
-      again: false,
-      promise: Promise.resolve(),
-    };
+    const state: {
+      again: boolean;
+      paths: string[] | null;
+      promise: Promise<void>;
+    } = { again: false, paths: pending, promise: Promise.resolve() };
     this.#statusRefresh.set(id, state);
     state.promise = (async () => {
       do {
         state.again = false;
         const tab = this.tabs.find((t) => t.id === id);
         if (!tab) return;
+        // Take the queued batch (null = full) before fetching; a request
+        // coalescing during the fetch overwrites it for the next round.
+        const batch = state.paths;
+        state.paths = null;
         try {
-          tab.status = await repoStatus(id);
+          tab.status =
+            batch === null ? await repoStatus(id) : await repoStatus(id, batch);
           tab.statusError = null;
         } catch (err) {
           console.warn(`[tabs] repo_status failed for ${id}:`, err);
@@ -690,13 +713,33 @@ export function restoreSession(): Promise<void> {
   return tabStore.restoreSession();
 }
 
-export function refreshStatus(id: RepoId): Promise<void> {
-  return tabStore.refreshStatus(id);
+export function refreshStatus(id: RepoId, paths?: string[]): Promise<void> {
+  return tabStore.refreshStatus(id, paths);
 }
 
 // -- repo-changed watcher wiring ------------------------------------------
 
 let unregisterEvents: (() => void) | null = null;
+let unregisterVisibility: (() => void) | null = null;
+
+/**
+ * Status refreshes skipped while the window was hidden, keyed by repo.
+ * Value: the unioned path batch, or `null` for a full rescan (any
+ * head_moved/full batch seen while hidden upgrades the pending refresh).
+ */
+const hiddenPending = new Map<RepoId, string[] | null>();
+
+/** Queues a watcher batch for the "returned to visibility" refresh. */
+function recordHiddenPending(id: RepoId, paths: string[] | null): void {
+  const queued = hiddenPending.get(id);
+  if (queued === undefined) {
+    hiddenPending.set(id, paths);
+  } else if (queued === null || paths === null) {
+    hiddenPending.set(id, null); // a full rescan subsumes path batches
+  } else {
+    hiddenPending.set(id, [...new Set([...queued, ...paths])]);
+  }
+}
 
 /**
  * Subscribes the tab store to backend `repo-changed` events through the
@@ -704,7 +747,15 @@ let unregisterEvents: (() => void) | null = null;
  * ANY watcher event for a known tab triggers a status refresh — `head_moved`
  * and `full` alike, and index/workdir churn too — because the tab status
  * covers the working copy as well as refs, so no event kind is skippable.
- * Idempotent: safe to call from every entry point.
+ * Path-scoped batches (plain workdir churn) pass the changed paths to
+ * `repo_status` for an incremental rescan; head moves / full resyncs
+ * refresh without paths (full).
+ *
+ * Hidden-window gate (same pattern as ForgePanel's polling): while
+ * `document.visibilityState` is "hidden" no fetch fires — the batch is
+ * recorded instead, and returning to visibility drains ONE coalesced
+ * refresh per pending repo. Idempotent: safe to call from every entry
+ * point.
  */
 export function startTabEvents(): void {
   if (unregisterEvents !== null) return;
@@ -713,15 +764,42 @@ export function startTabEvents(): void {
     handle: (change) => {
       const tab = tabStore.tabs.find((t) => t.id === change.repo_id);
       if (!tab) return;
-      void tabStore.refreshStatus(tab.id);
+      // Incremental only for path-scoped batches; head moves and full
+      // resyncs rebuild the whole status (refs + working copy).
+      const paths = change.kind === "paths" ? change.paths : undefined;
+      if (
+        typeof document !== "undefined" &&
+        document.visibilityState === "hidden"
+      ) {
+        recordHiddenPending(tab.id, paths ?? null);
+        return;
+      }
+      void tabStore.refreshStatus(tab.id, paths);
     },
   });
+  if (typeof document !== "undefined" && unregisterVisibility === null) {
+    const onVisibilityChange = (): void => {
+      if (document.visibilityState !== "visible") return;
+      if (hiddenPending.size === 0) return;
+      const pending = [...hiddenPending.entries()];
+      hiddenPending.clear();
+      for (const [id, paths] of pending) {
+        void tabStore.refreshStatus(id, paths ?? undefined);
+      }
+    };
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    unregisterVisibility = () =>
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+  }
 }
 
 /** Stops the watcher subscription and clears the singleton (test helper). */
 export function resetTabStore(): void {
   unregisterEvents?.();
   unregisterEvents = null;
+  unregisterVisibility?.();
+  unregisterVisibility = null;
+  hiddenPending.clear();
   tabStore.tabs = [];
   tabStore.activeId = null;
   tabStore.restoring = false;

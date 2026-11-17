@@ -59,13 +59,20 @@
       follow: false,
       pickaxe: null,
     };
-    streamLog(repoId, filter, (page) => {
-      if (generation !== reload || info !== null) return;
-      const exact = page.commits.find((c) => c.sha === target);
-      // Abbreviated input resolves to the full sha — accept a prefix match.
-      const match = exact ?? page.commits.find((c) => c.sha.startsWith(target)) ?? null;
-      if (match) info = match;
-    })
+    streamLog(
+      repoId,
+      filter,
+      (page) => {
+        if (generation !== reload || info !== null) return;
+        const exact = page.commits.find((c) => c.sha === target);
+        // Abbreviated input resolves to the full sha — accept a prefix match.
+        const match = exact ?? page.commits.find((c) => c.sha.startsWith(target)) ?? null;
+        if (match) info = match;
+      },
+      // Own stream slot: the popout's walk (and its diff stream below)
+      // must not supersede the workspace views' or the default consumers'.
+      "popout-commit-detail",
+    )
       .then(() => {
         if (generation !== reload) return;
         if (info === null) {
@@ -151,6 +158,7 @@
     <CommitDetail
       {repoId}
       {info}
+      diffConsumerId="popout-commit-detail"
       actionCount={1}
       actionBusy={opBusy}
       onSelectParent={(parent) => (currentSha = parent)}

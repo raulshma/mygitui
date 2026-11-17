@@ -195,7 +195,8 @@ export function linearLog(count: number): {
 export function historyCommands(opts: {
   commits: Array<Record<string, unknown>>;
   rows: Array<Record<string, unknown>>;
-  /** `repo_diff` reply (default: no changed files). */
+  /** `repo_diff` reply; also the single `repo_diff_stream` page the commit
+   * detail streams (default: no changed files). */
   diff?: CommandMock;
   describe?: string;
   /** `commit_signature` reply (default: valid). */
@@ -209,6 +210,8 @@ export function historyCommands(opts: {
       generation: 1,
     },
     repo_diff: opts.diff ?? [],
+    // CommitDetail streams its diff (a plain array mock = one page).
+    repo_diff_stream: opts.diff ?? [],
     describe: opts.describe ?? "v1.0.0",
     commit_signature: opts.signature ?? { state: "valid" },
   };
@@ -697,6 +700,22 @@ function BOOTSTRAP(options: TauriMockOptions): void {
       if (cmd.startsWith("repo_list_dir") || WORKSPACE_COMMANDS.has(cmd)) {
         const result = applyWorkspace(cmd, args ?? {});
         if (result !== undefined) return Promise.resolve(result);
+      }
+
+      // The commit detail pane fetches the full message of the shown
+      // commit (`repo_commit_message`); answer from the mocked log fixture,
+      // accepting abbreviated shas like the real backend resolves them.
+      if (cmd === "repo_commit_message") {
+        const sha = String((args as { sha?: string })?.sha ?? "");
+        const log = commandMocks.repo_log_stream as
+          | { commits?: Array<Record<string, unknown>> }
+          | undefined;
+        const hit = log?.commits?.find(
+          (c) =>
+            c.sha === sha ||
+            (typeof c.sha === "string" && c.sha.startsWith(sha)),
+        );
+        return Promise.resolve(typeof hit?.message === "string" ? hit.message : null);
       }
 
       if (cmd in commandMocks) {

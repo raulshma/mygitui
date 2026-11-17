@@ -11,23 +11,38 @@ are GENERATED from it (see "Type single-sourcing" below).
 |---|---|---|---|
 | `repo_open` | `path: string` | `RepoInfo` | opens repo, starts watcher, new tab |
 | `repo_close` | `repo_id: string` | `void` | stops watcher, drops caches |
-| `repo_status` | `repo_id: string` | `RepoStatus` (gained additive `bisecting: bool` — a `BISECT_LOG` search no longer reads as "clean"; both engines share one precedence function, `engine/in_progress.rs`) | |
+| `repo_status` | `repo_id: string, paths?: string[]` | `RepoStatus` (gained additive `bisecting: bool` — a `BISECT_LOG` search no longer reads as "clean"; both engines share one precedence function, `engine/in_progress.rs`). `paths` (repo-relative, from a watcher batch's `paths`) gates an incremental refresh: only those pathspecs are rescanned and merged into a cached full snapshot keyed by the repo generation. Absent/empty `paths`, any generation move (stale cache), git-dir paths (`.git/…` — index churn can restage everything), or >200 touched paths fall back to a full rescan. Same shape and path-sorted entry order either way; remote repos always rescan fully | |
 | `repo_diff` | `repo_id, old: DiffSide, new: DiffSide, paths?: string[]` | `FileDiff[]` | small/medium diffs |
-| `repo_diff_stream` | `repo_id, old, new, paths?, channel: Channel<FileDiff[]>` | `void` | pages of ~50 files |
-| `repo_log_stream` | `repo_id, filter: LogFilter, channel: Channel<LogPage>` | `void` | pages of 500; see LogPage |
+| `repo_diff_stream` | `repo_id, old, new, paths?, consumer_id?: string, channel: Channel<FileDiff[]>` | `void` | pages of ~50 files; carries a per-consumer stream slot (cancels per page) |
+| `repo_log_stream` | `repo_id, filter: LogFilter, consumer_id?: string, channel: Channel<LogPage>` | `void` | pages of 500; see LogPage |
 | `repo_blame` | `repo_id, path: string, from?: string` | `BlameLine[]` | |
 | `repo_refs` | `repo_id` | `[string, string][]` | ref name → sha |
-| `repo_file_history` | `repo_id, path: string, channel: Channel<LogPage>` | `void` | follow renames |
+| `repo_file_history` | `repo_id, path: string, consumer_id?: string, channel: Channel<LogPage>` | `void` | follow renames |
+| `repo_commit_message` | `repo_id, sha: string` | `string \| null` | full commit message on demand (log pages carry only `summary`); `null` when `sha` does not resolve to a commit; trailing newline trimmed |
 
 `LogPage = { commits: CommitInfo[]; rows: GraphRow[]; next_cursor: string | null; generation: number }`
+
+`CommitInfo` carries `summary` (first message line) but NOT the full
+message — full bodies dominated the page payload. Commit detail and similar
+surfaces fetch the body on demand via `repo_commit_message`.
 
 Streaming rules: every stream carries a `generation` number; when repo state
 changes the backend bumps the generation and clients discard stale pages.
 A generation bump does NOT truncate an in-flight walk (workdir churn would
 otherwise kill and restart the log on every file save); freshness comes
 from clients restarting on significant `repo-changed` events
-(`head_moved`/`full`). Cancel = drop the channel (backend detects closed
-channel) or next request with same kind+repo replaces the prior stream.
+(`head_moved`/`full`). Slots are PER-CONSUMER: each stream command takes
+`consumer_id` (absent → `"default"`) and a new request for the same
+repo+kind+consumer cancels and replaces only that consumer's previous
+stream (new view wins within a consumer); other consumers are unaffected —
+e.g. the main history view and a popout commit detail never cancel each
+other. Per kind (`log`, `file_history`, `diff`) the repo keeps at most 4
+installed consumers; beyond that the OLDEST consumer's token is evicted
+(cancelled). Cancel = drop the channel (backend detects closed channel) or
+a new request with the same kind+consumer as above. The remote log walk
+fetches in pages of 500 (one SSH round-trip per page, cancel checks
+between pages) under a hard cap of 100 000 fetched commits — reaching the
+cap ends the walk as exhausted (`next_cursor: null`).
 The stream command's promise resolves only when the walk ENDS (exhausted,
 superseded, cancelled, or engine error → rejection) — never at request
 acceptance; only an exhausted walk emits a final `next_cursor: null` page
@@ -113,7 +128,7 @@ events). Arg keys snake_case (commands use `rename_all`).
 
 | Event | Payload | Meaning |
 |---|---|---|
-| `op-progress` | `{ repo_id, op_id, kind, message, pct: number \| null, done: bool, error: string \| null, outcome: "completed" \| "cancelled" \| "failed" \| null }` | op-queue progress for mutations and net ops: throttled updates plus a final `done` event on success or failure (failures toast FE-side). `outcome` is set on the final event only (`null` on intermediate progress): `cancelled` is reserved for ops aborted through `op_cancel` (backend sentinel `ops::CANCELLED_ERR` = "cancelled", classified by `OpOutcome::for_error`); `failed` covers every other error. Queue-dispatched reads (`status`, `refs`, `blame`, `diff`, …) emit nothing — their errors return through the command. Kinds: `stage`, `commit`, `branch`, `checkout`, `merge`, `rebase`, `bisect`, `stash`, `worktree`, `checkpoint`, `submodule`, `discard`, `clean`, `fetch`, `pull`, `push`, `maintenance`, `archive`, `sparse`, `lfs` (tags report as `branch`, remote config ops as `fetch`) |
+| `op-progress` | `{ repo_id, op_id, kind, message, pct: number \| null, done: bool, error: string \| null, outcome: "completed" \| "cancelled" \| "failed" \| null }` | op-queue progress for mutations and net ops: throttled updates plus a final `done` event on success or failure (failures toast FE-side). `outcome` is set on the final event only (`null` on intermediate progress): `cancelled` is reserved for ops aborted through `op_cancel` (backend sentinel `ops::CANCELLED_ERR` = "cancelled", classified by `OpOutcome::for_error`); `failed` covers every other error. Queue-dispatched reads (`status`, `refs`, `blame`, `diff`, …) emit nothing — their errors return through the command. Kinds: `stage`, `commit`, `branch`, `checkout`, `merge`, `rebase`, `bisect`, `stash`, `worktree`, `checkpoint`, `submodule`, `discard`, `clean`, `fetch`, `pull`, `push`, `maintenance`, `archive`, `sparse`, `lfs` (tags report as `branch`, remote config ops as `fetch`). `branch`/`checkout` ops that update the workdir (branch switch/create-with-checkout, remote-branch checkout, `commit_checkout`, `reset` hard) emit throttled intermediate progress from libgit2's checkout callback: message = phase (`"checkout"` or `"reset"`), `pct` = processed/total paths (`null` until a total is known) |
 | `op-log` | `{ repo_id, op_id, kind, line }` | raw, unthrottled child output while an op runs; currently streams commit/signing hooks and the `push` CLI fallback (pre-push hook present). The FE keeps the newest session per repo and renders it in the workspace output strip. |
 | `auth-request` | `{ op_id, repo_id, url, kind: "https-user" \| "https-pass" \| "ssh-passphrase", prompt }` | engine needs credentials; FE shows dialog, answers via `auth_respond` |
 
@@ -133,7 +148,7 @@ Same op-queue + op-progress machinery as M2. All `#[tauri::command(rename_all = 
 | `merge_branch` | `repo_id, ref_name, no_ff: bool` | `MergeResult` |
 | `merge_abort` | `repo_id` | `void` |
 | `conflicts` | `repo_id` | `ConflictFile[]` |
-| `conflict_resolve` | `repo_id, path, resolution, custom_content?: number[] (bytes)` | `void` |
+| `conflict_resolve` | `repo_id, path, resolution, custom_content_b64?: string (base64, STANDARD with padding — the editor's file bytes; same encoding as `repo_write_file`'s `content_b64`)` | `void` |
 | `cherry_pick` | `repo_id, shas: string[]` | `MergeResult` |
 | `revert` | `repo_id, shas: string[]` | `MergeResult` |
 | `sequencer_abort` | `repo_id` | `void` (aborts in-progress cherry-pick/revert state) |
@@ -534,7 +549,9 @@ per call. TS mirrors live in `src/lib/ipc/client.ts` (`DayCount`,
   detail header; `PopoutCommitDetail` self-wires the `CommitInfo`
   fetch via a one-root log walk, parent clicks retarget the window;
   the bookmark star stays hidden in popouts — bookmarks persist per
-  worktree root, which only the main window knows).
+  worktree root, which only the main window knows). The full message
+  body loads on demand via `repo_commit_message` (log pages carry only
+  `summary`).
 - **Hunk actions in DiffViewer** — optional `repoId` +
   `hunkStaging` ("stage"|"unstage") + `hunkDiscard` props; RepoView's
   working-copy pane enables them only when the shown file has no

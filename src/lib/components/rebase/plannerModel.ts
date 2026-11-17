@@ -45,7 +45,8 @@ export const REBASE_ACTIONS: readonly RebaseAction[] = [
 /**
  * One editable row of the planner todo (oldest-first display order).
  * `summary` is display-only; `message` is the reword editor buffer
- * (prefilled with the original commit message, honored only for `reword`).
+ * (honored only for `reword` — the planner fills it with the commit's
+ * full original message on demand, since log pages carry only the summary).
  */
 export interface PlanRow {
   sha: string;
@@ -98,8 +99,9 @@ export function cutAtBase(
 
 /**
  * Builds the initial planner todo from a HEAD-first commit range: rows in
- * oldest-first (todo) order, action `pick`, reword buffer prefilled with the
- * full original message.
+ * oldest-first (todo) order, action `pick`, empty reword buffer (the full
+ * original message is fetched on demand when a row flips to `reword` —
+ * log pages carry only the summary).
  */
 export function buildPlan(commits: CommitInfo[]): PlanRow[] {
   return commits
@@ -109,7 +111,7 @@ export function buildPlan(commits: CommitInfo[]): PlanRow[] {
       sha: commit.sha,
       summary: commit.summary,
       action: "pick" as const,
-      message: commit.message,
+      message: "",
     }));
 }
 

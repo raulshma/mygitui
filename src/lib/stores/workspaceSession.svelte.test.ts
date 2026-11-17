@@ -241,7 +241,6 @@ describe("WorkspaceSessionStore", () => {
       parents: [],
       author: sig,
       committer: sig,
-      message: "feat: x",
       summary: "feat: x",
       refs: [],
     };

@@ -35,7 +35,11 @@ pub enum EngineError {
 /// All methods are synchronous: git2 is not async. IPC commands wrap them in
 /// `tauri::async_runtime::spawn_blocking`.
 pub trait GitEngine: Send + Sync {
-    fn status(&self, repo: &Repository) -> EngineResult<RepoStatus>;
+    /// Working-copy status. `Some(paths)` limits the ENTRY scan to those
+    /// pathspecs (same options as the full scan; head info is always
+    /// computed) so callers can merge path-limited results into a cached
+    /// full snapshot; `None` is the full rescan.
+    fn status(&self, repo: &Repository, paths: Option<&[String]>) -> EngineResult<RepoStatus>;
 
     /// Diff two sides, optionally restricted to `paths` (prefix-matched).
     fn diff(
@@ -76,6 +80,12 @@ pub trait GitEngine: Send + Sync {
         limit: usize,
         after: Option<&str>,
     ) -> EngineResult<(Vec<CommitInfo>, Option<String>)>;
+
+    /// Full commit message of `sha` (on-demand: log pages carry only
+    /// `summary`). `None` when `sha` does not resolve to a commit.
+    fn commit_message(&self, _repo: &Repository, _sha: &str) -> EngineResult<Option<String>> {
+        Err(EngineError::Unsupported("commit_message".into()))
+    }
 
     fn blame(
         &self,
@@ -126,17 +136,29 @@ pub trait GitEngine: Send + Sync {
         _name: &str,
         _from: Option<&str>,
         _checkout: bool,
+        _progress: &mut dyn FnMut(CheckoutProgress),
     ) -> EngineResult<()> {
         Err(EngineError::Unsupported("branch_create".into()))
     }
 
-    fn branch_switch(&self, _repo: &Repository, _name: &str, _force: bool) -> EngineResult<()> {
+    fn branch_switch(
+        &self,
+        _repo: &Repository,
+        _name: &str,
+        _force: bool,
+        _progress: &mut dyn FnMut(CheckoutProgress),
+    ) -> EngineResult<()> {
         Err(EngineError::Unsupported("branch_switch".into()))
     }
 
     /// Detach HEAD at `sha` (`git checkout --detach`); the workdir+index are
     /// forced to the commit's tree. Callers snapshot a checkpoint first.
-    fn checkout_commit(&self, _repo: &Repository, _sha: &str) -> EngineResult<()> {
+    fn checkout_commit(
+        &self,
+        _repo: &Repository,
+        _sha: &str,
+        _progress: &mut dyn FnMut(CheckoutProgress),
+    ) -> EngineResult<()> {
         Err(EngineError::Unsupported("checkout_commit".into()))
     }
 
@@ -185,6 +207,7 @@ pub trait GitEngine: Send + Sync {
         _remote: &str,
         _name: &str,
         _new_local: Option<&str>,
+        _progress: &mut dyn FnMut(CheckoutProgress),
     ) -> EngineResult<String> {
         Err(EngineError::Unsupported("branch_checkout_remote".into()))
     }
@@ -250,6 +273,21 @@ pub struct FetchProgress {
     pub done: bool,
 }
 
+/// Checkout/reset workdir progress (libgit2's checkout progress callback,
+/// one call per processed path). The IPC layer forwards it to the op's
+/// throttled `op-progress` surface with `phase` as the message and
+/// completed/total as the percentage.
+#[derive(Debug, Clone, Copy)]
+pub struct CheckoutProgress {
+    /// Which surface is updating the workdir: `"checkout"` (branch switch /
+    /// detach) or `"reset"` (hard reset).
+    pub phase: &'static str,
+    /// Paths processed so far.
+    pub completed: usize,
+    /// Total paths libgit2 expects to process.
+    pub total: usize,
+}
+
 /// Push-specific progress (per-ref).
 #[derive(Debug, Clone, Default)]
 pub struct PushProgress {
@@ -309,7 +347,13 @@ pub trait GitEngineM3: Send + Sync {
         Err(EngineError::Unsupported("sequencer_abort".into()))
     }
 
-    fn reset(&self, _repo: &Repository, _kind: ResetKind, _to: &str) -> EngineResult<()> {
+    fn reset(
+        &self,
+        _repo: &Repository,
+        _kind: ResetKind,
+        _to: &str,
+        _progress: &mut dyn FnMut(CheckoutProgress),
+    ) -> EngineResult<()> {
         Err(EngineError::Unsupported("reset".into()))
     }
 

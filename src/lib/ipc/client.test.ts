@@ -16,6 +16,8 @@ import {
   cloneRepo,
   closeRepo,
   commit,
+  commitMessage,
+  conflictResolve,
   discard,
   fetchRepo,
   hooksList,
@@ -111,7 +113,6 @@ const LOG_PAGE: LogPage = {
       parents: ["def456"],
       author: { name: "Ada", email: "ada@example.com", time: 1_700_000_000, offset_minutes: 60 },
       committer: { name: "Ada", email: "ada@example.com", time: 1_700_000_000, offset_minutes: 60 },
-      message: "Initial commit\n",
       summary: "Initial commit",
       refs: ["HEAD -> main"],
     },
@@ -230,6 +231,29 @@ describe("ipc client command wrappers", () => {
     expect(calls[0]?.args).toEqual({ repo_id: "repo-1" });
   });
 
+  it("repoStatus forwards an incremental paths batch; omitted paths = full rescan", async () => {
+    const { transport, calls } = mockTransport(() => REPO_STATUS);
+    setTransport(transport);
+
+    await repoStatus("repo-1", ["src/a.ts", "src/b.ts"]);
+
+    expect(calls[0]?.args).toEqual({
+      repo_id: "repo-1",
+      paths: ["src/a.ts", "src/b.ts"],
+    });
+  });
+
+  it("commitMessage resolves the repo_commit_message payload verbatim", async () => {
+    const { transport, calls } = mockTransport(() => "subject\n\nbody");
+    setTransport(transport);
+
+    await expect(commitMessage("repo-1", "abc123")).resolves.toBe(
+      "subject\n\nbody",
+    );
+    expect(calls[0]?.command).toBe("repo_commit_message");
+    expect(calls[0]?.args).toEqual({ repo_id: "repo-1", sha: "abc123" });
+  });
+
   it("repoRefs returns name→sha pairs", async () => {
     const refs: [string, string][] = [
       ["refs/heads/main", "abc123"],
@@ -337,6 +361,28 @@ describe("ipc client streaming wrappers", () => {
     expect(pages).toEqual([LOG_PAGE]);
     expect(calls[0]?.command).toBe("repo_file_history");
     expect(calls[0]?.args).toMatchObject({ repo_id: "repo-1", path: "src/a.ts" });
+  });
+
+  it("stream wrappers forward the optional consumer_id as the stream slot", async () => {
+    const { transport, calls } = mockTransport((call) => {
+      if (call.command === "repo_diff_stream") {
+        channelOf<FileDiff[]>(call).onmessage([FILE_DIFF]);
+      } else {
+        channelOf<LogPage>(call).onmessage(EMPTY_LOG_PAGE);
+      }
+    });
+    setTransport(transport);
+
+    await streamLog("repo-1", { regex: false, refs: [], follow: false }, () => {}, "history");
+    await streamFileHistory("repo-1", "src/a.ts", () => {}, "file-history");
+    await streamDiff("repo-1", "head", "worktree", () => {}, ["src/a.ts"], "repo-diff");
+
+    expect(calls[0]?.command).toBe("repo_log_stream");
+    expect(calls[0]?.args.consumer_id).toBe("history");
+    expect(calls[1]?.command).toBe("repo_file_history");
+    expect(calls[1]?.args.consumer_id).toBe("file-history");
+    expect(calls[2]?.command).toBe("repo_diff_stream");
+    expect(calls[2]?.args.consumer_id).toBe("repo-diff");
   });
 
   it("streaming uses an injected channel factory when provided", async () => {
@@ -869,6 +915,29 @@ describe("ipc client checkpoint-flag wrappers", () => {
 // ---------------------------------------------------------------------------
 // M3 conflict-editor file access (E1, appended)
 // ---------------------------------------------------------------------------
+
+describe("conflict_resolve custom content (base64 wire format)", () => {
+  it("encodes customContent as base64 (same wire format as repo_write_file) and omits it when absent", async () => {
+    const { transport, calls } = mockTransport(() => undefined);
+    setTransport(transport);
+
+    await conflictResolve("repo-1", "src/a.txt", "both", new Uint8Array([1, 2, 3]));
+    await conflictResolve("repo-1", "src/a.txt", "ours");
+
+    expect(calls[0]?.command).toBe("conflict_resolve");
+    expect(calls[0]?.args).toEqual({
+      repo_id: "repo-1",
+      path: "src/a.txt",
+      resolution: "both",
+      custom_content_b64: "AQID",
+    });
+    expect(calls[1]?.args).toEqual({
+      repo_id: "repo-1",
+      path: "src/a.txt",
+      resolution: "ours",
+    });
+  });
+});
 
 describe("ipc client repo_read_file wrapper", () => {
   it("readFile sends repo_id + path and returns the bytes as a Uint8Array", async () => {
