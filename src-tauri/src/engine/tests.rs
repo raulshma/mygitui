@@ -1901,3 +1901,49 @@ fn checkout_commit_rejects_unknown_sha() {
         .expect_err("unknown sha must fail");
     assert!(matches!(err, EngineError::Invalid(_)), "{err:?}");
 }
+
+// ---------------------------------------------------------------------------
+// path validation at the discard boundary (engine::paths)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn discard_rejects_traversal_and_absolute_paths_and_writes_nothing() {
+    let temp = TempRepo::new("discard-traversal");
+    temp.write("a.txt", "one\n");
+    temp.add_all_and_commit("one");
+    temp.write("a.txt", "modified\n");
+
+    // A `..` target would escape the workdir into the temp dir's parent;
+    // nothing may be written there.
+    let escape = temp
+        ._dir
+        .parent()
+        .expect("temp dir has a parent")
+        .join("mygitui-escape-probe.txt");
+    let _ = std::fs::remove_file(&escape);
+    for bad in [
+        "../mygitui-escape-probe.txt",
+        "sub/../../escape",
+        "/etc/passwd",
+    ] {
+        let err = ENGINE
+            .discard(&temp.repo, &[StageTarget::File(bad.to_string())])
+            .expect_err("unvalidated target must fail");
+        assert!(matches!(err, EngineError::Invalid(_)), "{err:?}");
+    }
+    assert!(
+        !escape.exists(),
+        "a `..` target must never write outside the workdir"
+    );
+    // Nothing inside the workdir changed either: the file keeps its dirty bytes.
+    let content = std::fs::read_to_string(temp._dir.join("a.txt")).expect("read a.txt");
+    assert_eq!(content, "modified\n");
+
+    // The happy path still discards (validation did not break discard).
+    ENGINE
+        .discard(&temp.repo, &[StageTarget::File("a.txt".into())])
+        .expect("plain relative discard");
+    let content = std::fs::read_to_string(temp._dir.join("a.txt")).expect("read a.txt");
+    assert_eq!(content, "one\n");
+    let _ = std::fs::remove_file(&escape);
+}

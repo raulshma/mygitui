@@ -145,6 +145,13 @@ fn stage_file(repo: &Repository, path: &str, unstage: bool) -> EngineResult<()> 
 
 /// Whole-file discard: back to HEAD when tracked there, gone when not.
 fn discard_file(repo: &Repository, path: &str) -> EngineResult<()> {
+    // IPC-supplied path: validated before any work so a traversal or absolute
+    // target can neither replace the join base below nor touch anything
+    // outside the workdir.
+    let workdir = repo
+        .workdir()
+        .ok_or_else(|| EngineError::Invalid("bare repository has no workdir".into()))?;
+    let file = super::paths::validate_workdir_path(workdir, path)?;
     let head = head_commit_object(repo)?;
     let in_head = head
         .as_ref()
@@ -165,11 +172,8 @@ fn discard_file(repo: &Repository, path: &str) -> EngineResult<()> {
     } else {
         // Not in HEAD (untracked or newly added): index entry out, file gone.
         repo.reset_default(None, [path])?;
-        if let Some(workdir) = repo.workdir() {
-            let file = workdir.join(path);
-            if std::fs::symlink_metadata(&file).is_ok() {
-                remove_workdir_file(&file)?;
-            }
+        if std::fs::symlink_metadata(&file).is_ok() {
+            remove_workdir_file(&file)?;
         }
     }
     Ok(())
@@ -205,7 +209,9 @@ fn write_workdir_bytes(repo: &Repository, path: &str, content: &[u8]) -> EngineR
     let workdir = repo
         .workdir()
         .ok_or_else(|| EngineError::Invalid("bare repository has no workdir".into()))?;
-    let file = workdir.join(path);
+    // IPC-supplied path: reject absolute forms and `..` before the join —
+    // an absolute path would replace the base and escape the workdir.
+    let file = super::paths::validate_workdir_path(workdir, path)?;
     if let Some(parent) = file.parent() {
         std::fs::create_dir_all(parent)?;
     }

@@ -204,7 +204,10 @@ fn write_workdir_file(repo: &Repository, path: &str, content: &[u8]) -> EngineRe
     let workdir = repo
         .workdir()
         .ok_or_else(|| EngineError::Invalid("bare repository has no workdir".into()))?;
-    let file = workdir.join(path);
+    // FE-supplied path (conflict resolution): reject absolute forms and `..`
+    // before the join — an absolute path would replace the base and escape
+    // the workdir.
+    let file = super::paths::validate_workdir_path(workdir, path)?;
     if let Some(parent) = file.parent() {
         std::fs::create_dir_all(parent)?;
     }

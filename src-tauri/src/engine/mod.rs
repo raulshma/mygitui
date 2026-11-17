@@ -5,6 +5,7 @@ pub mod in_progress;
 pub mod libgit2;
 pub mod mutations;
 pub mod netops;
+pub(crate) mod paths;
 pub mod types;
 
 #[cfg(test)]

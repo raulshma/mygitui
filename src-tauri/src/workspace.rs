@@ -29,8 +29,9 @@
 use std::cmp::Ordering;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
+use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use tauri::State;
 use ts_rs::TS;
@@ -145,46 +146,10 @@ pub enum NewEntryKind {
 
 /// Validate a workdir-relative path (no absolute form, no `..`, no Windows
 /// prefixes, must stay inside `root`) and return the joined absolute path.
-/// Shared by every workspace command and `read_workdir_file`.
+/// Shared by every workspace command and `read_workdir_file`; the rules live
+/// in `engine::paths` so the engine's workdir writers enforce the same set.
 pub(crate) fn validate_rel_path(root: &Path, path: &str) -> Result<PathBuf, String> {
-    if path.is_empty() {
-        return Err("path is empty".into());
-    }
-    let relative = Path::new(path);
-    if relative.is_absolute() || has_windows_prefix(relative) {
-        return Err(format!("path must be workdir-relative: `{path}`"));
-    }
-    if relative
-        .components()
-        .any(|component| component == std::path::Component::ParentDir)
-    {
-        return Err(format!("path must not contain `..`: `{path}`"));
-    }
-    let full = root.join(relative);
-    // Belt and braces: a drive-relative form like `C:foo` slips past the
-    // absolute check but `join` replaces the base with it — the containment
-    // check catches every replacement case.
-    if full.strip_prefix(root).is_err() {
-        return Err(format!("path escapes the repository: `{path}`"));
-    }
-    Ok(full)
-}
-
-/// True when `path` carries a Windows prefix (`C:\`, `\\?\C:\`, `\\server`).
-pub(crate) fn has_windows_prefix(path: &Path) -> bool {
-    #[cfg(windows)]
-    {
-        use std::path::Component;
-        matches!(
-            path.components().next(),
-            Some(Component::Prefix(_)) | Some(Component::RootDir)
-        )
-    }
-    #[cfg(not(windows))]
-    {
-        let _ = path;
-        false
-    }
+    crate::engine::paths::validate_rel_path(root, path)
 }
 
 /// Mutating ops refuse to touch `.git` internals: any path with a `.git`
@@ -477,7 +442,7 @@ pub(crate) fn file_index_impl_with_cap(root: &Path, cap: usize) -> Result<FileIn
                     if path.is_empty() {
                         return ignore::WalkState::Continue;
                     }
-                    let mut guard = entries.lock().unwrap();
+                    let mut guard = entries.lock();
                     if guard.len() >= cap {
                         truncated.store(true, AtomicOrdering::Relaxed);
                         stop.store(true, AtomicOrdering::Relaxed);
@@ -495,8 +460,7 @@ pub(crate) fn file_index_impl_with_cap(root: &Path, cap: usize) -> Result<FileIn
     }
     let mut entries = Arc::try_unwrap(entries)
         .map_err(|_| "index collector still shared".to_string())?
-        .into_inner()
-        .unwrap();
+        .into_inner();
     entries.sort_by(|a, b| natural_cmp(&a.path, &b.path));
     Ok(FileIndex {
         entries,
