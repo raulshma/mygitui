@@ -13,6 +13,13 @@
     "phosphor": "plus",
     "ri": "add-line"
   },
+  "agent": {
+    "lucide": "bot",
+    "tabler": "robot",
+    "hugeicons": "robot-01",
+    "phosphor": "robot",
+    "ri": "robot-2-line"
+  },
   "alt-route": {
     "lucide": "split",
     "tabler": "arrows-split-2",

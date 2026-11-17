@@ -42,6 +42,8 @@
   import StatusBar from "$lib/components/layout/StatusBar.svelte";
   import TitleBar from "$lib/components/layout/TitleBar.svelte";
   import ThemeToggle from "$lib/components/ThemeToggle.svelte";
+  import AgentModeToggle from "$lib/agent/AgentModeToggle.svelte";
+  import { agentMode } from "$lib/agent/agentMode.svelte";
   import Icon from "$lib/components/icons/Icon.svelte";
   import EmptyState from "$lib/components/layout/EmptyState.svelte";
   import { Input } from "$lib/components/ui/input/index.js";
@@ -701,6 +703,7 @@
         {#snippet trailing()}
           <UpdateChip compact />
           <AiHealthChip compact />
+          <AgentModeToggle />
           <Hint label="Settings (Ctrl+,)">
             {#snippet child({ props })}
               <Button
@@ -795,6 +798,34 @@
       {:else}
         <main class="repo-view flex min-h-0 min-w-0 flex-1 overflow-hidden">
           {#if active}
+            {#if agentMode.enabled}
+              {#await import("$lib/agent/AgentView.svelte")}
+                <div
+                  class="repo-loading grid flex-1 place-content-center justify-items-center gap-2.5 text-sm text-muted-foreground"
+                  aria-busy="true"
+                >
+                  <span
+                    class="launch-spinner size-[1.4rem] animate-spin rounded-full border-[2.5px] border-primary/25 border-t-primary"
+                    aria-hidden="true"
+                  ></span>
+                  <span>Loading workspace…</span>
+                </div>
+              {:then AgentViewModule}
+                <AgentViewModule.default
+                  repoId={active.id}
+                  name={active.name}
+                  root={active.root}
+                  status={active.status}
+                />
+              {:catch}
+                <p
+                  class="repo-load-error m-auto text-destructive"
+                  role="alert"
+                >
+                  The repository workspace could not be loaded. Restart the app to try again.
+                </p>
+              {/await}
+            {:else}
               {#await import("$lib/components/panels/RepoView.svelte")}
                 <div
                   class="repo-loading grid flex-1 place-content-center justify-items-center gap-2.5 text-sm text-muted-foreground"
@@ -822,6 +853,7 @@
                   The repository workspace could not be loaded. Restart the app to try again.
                 </p>
               {/await}
+            {/if}
           {/if}
         </main>
       {/if}
@@ -858,6 +890,7 @@
             <div class="home-utilities flex flex-none items-center gap-1.5">
               <UpdateChip />
               <AiHealthChip />
+              <AgentModeToggle />
               <Hint label="Settings (Ctrl+,)">
                 {#snippet child({ props })}
                   <Button
