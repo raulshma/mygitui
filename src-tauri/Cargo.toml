@@ -57,11 +57,12 @@ russh = { version = "0.65.0", default-features = false, features = ["flate2", "r
 futures-util = "0.3.34"
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
+# unwinding (not abort) is required: the op-queue contains panics via
+# catch_unwind so a worker panic cannot take down the whole app.
 [profile.release]
 codegen-units = 1
 lto = true
 opt-level = 3
-panic = "abort"
 strip = true
 
 [dev-dependencies]
