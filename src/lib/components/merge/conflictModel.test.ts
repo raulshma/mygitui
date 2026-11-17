@@ -1,8 +1,9 @@
 /**
  * Unit tests for the pure conflict model (`conflictModel.ts`): parsing the
  * D1 path-labeled marker format (and libgit2's label variants), every
- * resolution combination, malformed marker degradation, and multibyte
- * round-trips at the UTF-8 boundary.
+ * resolution combination, malformed marker degradation, multibyte
+ * round-trips at the UTF-8 boundary, and byte-hygiene preservation on
+ * resolved writes (BOM, line-ending style, non-UTF-8 gate).
  */
 
 import { describe, expect, it } from "vitest";
@@ -10,8 +11,12 @@ import {
   applyResolutions,
   countConflicts,
   decodeUtf8,
+  decodeUtf8Strict,
+  detectEol,
   effectiveContent,
+  encodeResolved,
   encodeUtf8,
+  hasUtf8Bom,
   parseConflicts,
   unresolvedConflicts,
   type ConflictSegment,
@@ -346,6 +351,128 @@ describe("UTF-8 boundary", () => {
     const segments = parseConflicts(decodeUtf8(encodeUtf8(original)), PATH);
     const out = applyResolutions(segments, new Map([[0, "theirs" as ResolutionChoice]]), new Map());
     expect(decodeUtf8(encodeUtf8(out))).toBe("彼の行\n");
+  });
+});
+
+describe("byte hygiene: BOM, line endings, non-UTF-8 gate", () => {
+  const BOM = [0xef, 0xbb, 0xbf];
+
+  it("re-emits the original's UTF-8 BOM on a resolved write (parsing stays BOM-free)", () => {
+    const text = d1Preview("o", "t");
+    const original = Uint8Array.from([...BOM, ...Array.from(encodeUtf8(text))]);
+    expect(hasUtf8Bom(original)).toBe(true);
+
+    // strict decode succeeds and consumes the BOM, so parsing sees clean text
+    const body = decodeUtf8Strict(original);
+    expect(body).toBe(text);
+    const resolved = applyResolutions(
+      parseConflicts(body!, PATH),
+      new Map([[0, "theirs" as ResolutionChoice]]),
+      new Map(),
+    );
+    const out = encodeResolved(resolved, original);
+
+    expect(Array.from(out.slice(0, 3))).toEqual(BOM);
+    // read-back drops the BOM again: the write round-trips byte-exactly
+    expect(decodeUtf8(out)).toBe("t\n");
+  });
+
+  it("writes BOM-less files without a BOM", () => {
+    const original = encodeUtf8(d1Preview("o", "t"));
+    expect(hasUtf8Bom(original)).toBe(false);
+    const resolved = applyResolutions(
+      parseConflicts(decodeUtf8(original), PATH),
+      new Map([[0, "ours" as ResolutionChoice]]),
+      new Map(),
+    );
+    const out = encodeResolved(resolved, original);
+    expect(hasUtf8Bom(out)).toBe(false);
+    expect(decodeUtf8(out)).toBe("o\n");
+  });
+
+  it("round-trips CRLF files: chosen sides keep CRLF, unresolved stays byte-identical", () => {
+    const text = `<<<<<<< ${PATH}\r\nours\r\n=======\r\ntheirs\r\n>>>>>>> ${PATH}\r\nfooter\r\n`;
+    const original = encodeUtf8(text);
+    const body = decodeUtf8Strict(original)!;
+    expect(detectEol(body)).toBe("crlf");
+    const segments = parseConflicts(body, PATH);
+
+    // pass-through (no choices) reproduces the file byte-for-byte
+    expect(applyResolutions(segments, new Map(), new Map())).toBe(text);
+
+    // a chosen side keeps its per-line \r; the join restores \r\n
+    const oursOut = applyResolutions(segments, new Map([[0, "ours" as ResolutionChoice]]), new Map());
+    expect(oursOut).toBe("ours\r\nfooter\r\n");
+    expect(decodeUtf8(encodeResolved(oursOut, original))).toBe("ours\r\nfooter\r\n");
+  });
+
+  it("re-styles fresh custom content to the file's dominant CRLF style", () => {
+    const text = `<<<<<<< ${PATH}\r\nours\r\n=======\r\ntheirs\r\n>>>>>>> ${PATH}\r\nfooter\r\n`;
+    const original = encodeUtf8(text);
+    const segments = parseConflicts(decodeUtf8Strict(original)!, PATH);
+
+    // custom text typed into the editor carries bare \n (browser textarea)
+    const customOut = applyResolutions(segments, new Map(), new Map([[0, "hand merged"]]));
+    expect(customOut).toBe("hand merged\nfooter\r\n");
+    expect(decodeUtf8(encodeResolved(customOut, original))).toBe("hand merged\r\nfooter\r\n");
+  });
+
+  it("mixed endings, LF-dominant: per-line \\r round-trips verbatim and nothing is rewritten", () => {
+    const text = `header\r\n<<<<<<< ${PATH}\nours\n=======\ntheirs\n>>>>>>> ${PATH}\nfooter\n`;
+    const original = encodeUtf8(text);
+    expect(detectEol(decodeUtf8Strict(original)!)).toBe("lf");
+    const segments = parseConflicts(decodeUtf8Strict(original)!, PATH);
+    const customOut = applyResolutions(segments, new Map(), new Map([[0, "hand merged"]]));
+    // the CRLF header line keeps its \r; the LF-dominant style leaves the
+    // rest untouched (withEol is a no-op for lf)
+    expect(decodeUtf8(encodeResolved(customOut, original))).toBe("header\r\nhand merged\nfooter\n");
+  });
+
+  it("mixed endings, CRLF-dominant: stray lone-LF lines are re-styled to the dominant CRLF", () => {
+    const text = `header\n<<<<<<< ${PATH}\r\nours\r\n=======\r\ntheirs\r\n>>>>>>> ${PATH}\r\nfooter\r\n`;
+    const original = encodeUtf8(text);
+    expect(detectEol(decodeUtf8Strict(original)!)).toBe("crlf");
+    const segments = parseConflicts(decodeUtf8Strict(original)!, PATH);
+    const customOut = applyResolutions(segments, new Map(), new Map([[0, "hand merged"]]));
+    // documented pragmatic rule: in a predominantly-CRLF file every bare \n
+    // becomes \r\n, so the stray LF header line gains its \r too
+    expect(decodeUtf8(encodeResolved(customOut, original))).toBe("header\r\nhand merged\r\nfooter\r\n");
+  });
+
+  it("detectEol: crlf only when strictly more than half the endings are \\r\\n (ties stay lf)", () => {
+    expect(detectEol("a\nb\nc\n")).toBe("lf");
+    expect(detectEol("a\r\nb\r\nc\r\n")).toBe("crlf");
+    expect(detectEol("a\r\nb\n")).toBe("lf");
+    expect(detectEol("a\r\nb\nc\n")).toBe("lf");
+    expect(detectEol("no newlines")).toBe("lf");
+    expect(detectEol("")).toBe("lf");
+  });
+
+  it("decodeUtf8Strict gates non-UTF-8 bytes; decodeUtf8 stays lenient", () => {
+    expect(decodeUtf8Strict(encodeUtf8("héllo ✓"))).toBe("héllo ✓");
+    expect(decodeUtf8Strict([0xff, 0xfe, 0x00])).toBe(null); // never-valid bytes
+    expect(decodeUtf8Strict([0x61, 0xc3, 0x28])).toBe(null); // truncated 2-byte sequence
+    expect(decodeUtf8Strict([0x80])).toBe(null); // lone continuation byte
+    expect(decodeUtf8Strict([0xed, 0xa0, 0x80])).toBe(null); // surrogate, forbidden in UTF-8
+    // a BOM'd file still strict-decodes: the BOM is consumed, not an error
+    expect(decodeUtf8Strict([...BOM, 0x61])).toBe("a");
+    // the lenient decoder keeps a lossy view so the editor has something to show
+    expect(decodeUtf8([0xff])).toBe("\uFFFD");
+  });
+
+  it("preserves BOM and CRLF together through the full pipeline", () => {
+    const text = `<<<<<<< ${PATH}\r\nours\r\n=======\r\ntheirs\r\n>>>>>>> ${PATH}\r\n`;
+    const original = Uint8Array.from([...BOM, ...Array.from(encodeUtf8(text))]);
+    const body = decodeUtf8Strict(original)!;
+    const resolved = applyResolutions(
+      parseConflicts(body, PATH),
+      new Map([[0, "theirs" as ResolutionChoice]]),
+      new Map(),
+    );
+    const out = encodeResolved(resolved, original);
+    expect(Array.from(out.slice(0, 3))).toEqual(BOM);
+    expect(Array.from(out.slice(-2))).toEqual([0x0d, 0x0a]);
+    expect(decodeUtf8(out)).toBe("theirs\r\n");
   });
 });
 

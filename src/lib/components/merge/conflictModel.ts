@@ -16,8 +16,12 @@
  * carry libgit2's own markers (`<<<<<<< HEAD` … `>>>>>>> <label>`), so the
  * parser accepts ANY `<<<<<<<`/`>>>>>>>` label and merely records whether
  * the labels match the D1 path format. Everything here is string-based
- * (multibyte-safe by construction); UTF-8 byte conversion happens only in
- * {@link decodeUtf8} / {@link encodeUtf8} at the IPC boundary.
+ * (multibyte-safe by construction); UTF-8 byte conversion happens only at
+ * the IPC boundary, where resolved writes preserve the original file's byte
+ * hygiene — the BOM ({@link hasUtf8Bom} / {@link encodeUtf8}) and its
+ * dominant line-ending style ({@link detectEol} / {@link withEol}), combined
+ * in {@link encodeResolved}. Files that are not valid UTF-8 are never
+ * re-encoded ({@link decodeUtf8Strict} gates that in the editor).
  *
  * Malformed input degrades, never throws: an opening marker with no
  * separator, a separator with no closing marker, or loose `=======` /
@@ -231,12 +235,91 @@ export function effectiveContent(
 // UTF-8 boundary (multibyte-safe: strings everywhere else)
 // ---------------------------------------------------------------------------
 
-/** Decodes IPC bytes (`number[]` from `repo_read_file`) as UTF-8. */
+/**
+ * Decodes IPC bytes (`number[]` from `repo_read_file`) as UTF-8. Lenient:
+ * invalid sequences become U+FFFD, so the editor always has something to
+ * show. The leading BOM is consumed (TextDecoder's default) — parsed text
+ * never carries U+FEFF, and {@link encodeResolved} re-emits the original's
+ * BOM bytes on write.
+ */
 export function decodeUtf8(bytes: number[] | Uint8Array): string {
   return new TextDecoder().decode(Uint8Array.from(bytes));
 }
 
+/**
+ * Strict decode for the write-back gate: null when the bytes are not valid
+ * UTF-8. Re-encoding such a file from decoded text can never round-trip —
+ * every invalid byte would come back as U+FFFD's EF BF BD — so callers must
+ * write the original bytes instead of editor text for these files.
+ */
+export function decodeUtf8Strict(bytes: number[] | Uint8Array): string | null {
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(Uint8Array.from(bytes));
+  } catch {
+    return null;
+  }
+}
+
+/** True when the bytes open with a UTF-8 BOM (EF BB BF). */
+export function hasUtf8Bom(bytes: number[] | Uint8Array): boolean {
+  return bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf;
+}
+
+/** Line-ending style a file is written back with. */
+export type Eol = "lf" | "crlf";
+
+/**
+ * The file's dominant line-ending style: "crlf" when strictly more than half
+ * of its `\n`s belong to a `\r\n` pair (ties and CRLF-less files count as
+ * lf). Pragmatic whole-file rule for mixed endings — per-line `\r` inside
+ * the parsed segments round-trips verbatim regardless, so {@link withEol}
+ * only ever re-styles content written fresh (custom resolutions) plus stray
+ * lone `\n`s in a predominantly-CRLF file.
+ */
+export function detectEol(text: string): Eol {
+  const total = (text.match(/\n/g) ?? []).length;
+  const crlf = (text.match(/\r\n/g) ?? []).length;
+  return crlf * 2 > total ? "crlf" : "lf";
+}
+
+/**
+ * Re-styles line endings to `eol`. "lf" is a no-op: pass-through text keeps
+ * its per-line `\r` untouched and nothing is normalized away. "crlf" turns
+ * every bare `\n` into `\r\n` (the normalize-then-convert dance leaves
+ * existing `\r\n` and lone `\r` alone), so custom content typed into the
+ * editor lands with the file's dominant style.
+ */
+export function withEol(text: string, eol: Eol): string {
+  if (eol === "lf") return text;
+  return text.replace(/\r\n/g, "\n").replace(/\n/g, "\r\n");
+}
+
 /** Encodes text to the UTF-8 bytes `conflict_resolve` expects. */
-export function encodeUtf8(text: string): Uint8Array {
-  return new TextEncoder().encode(text);
+export function encodeUtf8(text: string, opts?: { bom?: boolean }): Uint8Array {
+  const body = new TextEncoder().encode(text);
+  if (opts?.bom !== true) return body;
+  // TextEncoder never emits a BOM; re-emit the original's explicitly so a
+  // BOM'd file stays BOM'd after a resolved write (decodeUtf8 stripped it).
+  const out = new Uint8Array(body.length + 3);
+  out[0] = 0xef;
+  out[1] = 0xbb;
+  out[2] = 0xbf;
+  out.set(body, 3);
+  return out;
+}
+
+/**
+ * The bytes a resolved file is written with: the resolved text re-encoded,
+ * with the original's BOM re-emitted ({@link decodeUtf8} consumed it) and
+ * its dominant line-ending style restored ({@link withEol}). `originalBytes`
+ * is the same load the editor decoded; the internal re-decode keeps this
+ * function the single authority on what "original style" means.
+ */
+export function encodeResolved(
+  resolvedText: string,
+  originalBytes: number[] | Uint8Array,
+): Uint8Array {
+  return encodeUtf8(withEol(resolvedText, detectEol(decodeUtf8(originalBytes))), {
+    bom: hasUtf8Bom(originalBytes),
+  });
 }

@@ -18,6 +18,11 @@
    * Any choice change after a mark un-marks the file (the mark would be
    * stale). Files whose workdir copy parses to zero conflicts (binary,
    * already flat) are sent through unchanged so the path still resolves.
+   * Resolved writes restore the original file's BOM and dominant
+   * line-ending style; files that are not valid UTF-8 are shown lossily and
+   * never re-encoded — conflicts in them cannot be resolved in-editor (the
+   * write would corrupt their bytes), while zero-conflict files still pass
+   * through byte-exactly.
    *
    * Workdir content arrives through `client.readFile` (`repo_read_file`,
    * appended for this lane) once per file, lazily on first selection.
@@ -42,8 +47,9 @@
     applyResolutions,
     countConflicts,
     decodeUtf8,
+    decodeUtf8Strict,
     effectiveContent,
-    encodeUtf8,
+    encodeResolved,
     parseConflicts,
     unresolvedConflicts,
     type ResolutionChoice,
@@ -85,6 +91,11 @@ import type { FeatureOutcome } from "$lib/ai/features";
   let marked = $state<Record<string, boolean>>({});
   /** Conflict ordinal currently open in the Edit textarea, per file. */
   let editing = $state<Record<string, number>>({});
+  /**
+   * Files whose bytes are not valid UTF-8 (strict decode failed). Their
+   * content is shown lossily and never re-encoded — see `ensureLoaded`.
+   */
+  let nonUtf8 = $state<Record<string, boolean>>({});
 
   // "" until the validity effect below picks the first file (avoids
   // capturing only the initial `files` value).
@@ -133,6 +144,10 @@ import type { FeatureOutcome } from "$lib/ai/features";
   );
   /** Unsaved choices/custom text that a "Mark resolved" has not persisted. */
   const dirty = $derived(selected !== null && !marked[selected.path]);
+  /** The selected file's bytes are not valid UTF-8 (writes gated). */
+  const nonUtf8Selected = $derived(selected !== null && nonUtf8[selected.path] === true);
+  /** Non-UTF-8 files with conflict markers: nothing can be written from editor text. */
+  const writeBlocked = $derived(nonUtf8Selected && total > 0);
 
   /** Segments in file order with their conflict ordinals attached. */
   const renderItems = $derived.by(() => {
@@ -188,7 +203,21 @@ import type { FeatureOutcome } from "$lib/ai/features";
     try {
       const bytes = await readFile(repoId, path);
       rawBytes[path] = bytes;
-      texts[path] = decodeUtf8(bytes);
+      const strict = decodeUtf8Strict(bytes);
+      if (strict === null) {
+        // not valid UTF-8: the lossy view below keeps marker detection and
+        // the byte-exact pass-through working, but re-encoding editor text
+        // would replace every invalid byte with U+FFFD, so all resolution
+        // writes are gated off for this file (see `writeBlocked`).
+        nonUtf8[path] = true;
+        texts[path] = decodeUtf8(bytes);
+        toast(
+          `${path}: not valid UTF-8 — shown lossily; conflict resolution is disabled because re-encoding would corrupt the file`,
+          { kind: "error" },
+        );
+      } else {
+        texts[path] = strict;
+      }
     } catch (err) {
       loadErrors[path] = errorMessage(err);
     }
@@ -379,7 +408,11 @@ import type { FeatureOutcome } from "$lib/ai/features";
   /**
    * The bytes "Mark resolved" sends: the serialized file with resolutions
    * applied; zero-conflict files go through as the untouched original bytes
-   * (re-encoding decoded binary would corrupt it).
+   * (re-encoding decoded binary would corrupt it). Non-UTF-8 files are also
+   * never re-encoded — `markResolved` gates them before we get here, but the
+   * pass-through stands regardless. Everything else goes through
+   * `encodeResolved`, which restores the original's BOM and dominant
+   * line-ending style.
    */
   function serializeFor(path: string): Uint8Array {
     const body = texts[path];
@@ -387,8 +420,10 @@ import type { FeatureOutcome } from "$lib/ai/features";
     if (body === null || body === undefined) return Uint8Array.from(original ?? []);
     const fileSegments = parseConflicts(body, path);
     if (countConflicts(fileSegments) === 0) return Uint8Array.from(original ?? []);
-    return encodeUtf8(
+    if (nonUtf8[path] === true) return Uint8Array.from(original ?? []);
+    return encodeResolved(
       applyResolutions(fileSegments, mapOf(choicesByFile, path), mapOf(customsByFile, path)),
+      original ?? [],
     );
   }
 
@@ -397,6 +432,13 @@ import type { FeatureOutcome } from "$lib/ai/features";
     if (file === null || busyState !== null) return;
     if (text === null) {
       toast(`Cannot resolve ${file.path}: content not loaded`, { kind: "error" });
+      return;
+    }
+    if (writeBlocked) {
+      toast(
+        `${file.path}: not valid UTF-8 — conflicts cannot be resolved here because re-encoding the file would corrupt its bytes`,
+        { kind: "error" },
+      );
       return;
     }
     if (unresolved.length > 0) {
@@ -575,6 +617,20 @@ import type { FeatureOutcome } from "$lib/ai/features";
             Base unavailable (rename/add conflict) — showing ours vs theirs only.
           </p>
         {/if}
+        {#if nonUtf8Selected}
+          <p
+            class="hint flex-none bg-destructive/10 px-2.5 py-1 text-ui-micro text-destructive"
+            role="alert"
+          >
+            {#if writeBlocked}
+              Not valid UTF-8 — content is shown lossily and conflicts cannot be resolved here:
+              re-encoding would replace the file's invalid bytes. Resolve it in an external editor
+              instead.
+            {:else}
+              Not valid UTF-8 — marking resolved writes the original bytes unchanged.
+            {/if}
+          </p>
+        {/if}
         <div class="content min-h-0 flex-1 overflow-auto p-2.5 font-mono text-xs leading-[1.35]">
           {#each renderItems as item (item.key)}
             {#if item.kind === "line"}
@@ -606,7 +662,7 @@ import type { FeatureOutcome } from "$lib/ai/features";
                     class={tbIdle}
                     size="xs"
                     type="button"
-                    disabled={resolvingPath === selected.path}
+                    disabled={resolvingPath === selected.path || writeBlocked}
                     aria-label={`Choose ours for conflict ${index + 1}`}
                     onclick={() => choose(index, "ours")}>Choose ours</Button
                   >
@@ -615,7 +671,7 @@ import type { FeatureOutcome } from "$lib/ai/features";
                     class={tbIdle}
                     size="xs"
                     type="button"
-                    disabled={resolvingPath === selected.path}
+                    disabled={resolvingPath === selected.path || writeBlocked}
                     aria-label={`Choose theirs for conflict ${index + 1}`}
                     onclick={() => choose(index, "theirs")}>Choose theirs</Button
                   >
@@ -634,7 +690,7 @@ import type { FeatureOutcome } from "$lib/ai/features";
                       class={tbIdle}
                       size="xs"
                       type="button"
-                      disabled={resolvingPath === selected.path}
+                      disabled={resolvingPath === selected.path || writeBlocked}
                       aria-label={`Edit conflict ${index + 1}`}
                       onclick={() => startEdit(index)}>Edit</Button
                     >
@@ -650,7 +706,7 @@ import type { FeatureOutcome } from "$lib/ai/features";
                     errorPrefix="AI suggestion failed"
                     gateVisibility={false}
                     compact
-                    disabled={resolvingPath === selected.path}
+                    disabled={resolvingPath === selected.path || writeBlocked}
                     run={(opts) => runSuggest(index, opts)}
                     onResult={(outcome) => onSuggestion(index, outcome)}
                   />
@@ -661,7 +717,7 @@ import type { FeatureOutcome } from "$lib/ai/features";
                     aria-label={`Custom resolution for conflict ${index + 1}`}
                     rows={Math.max(3, (customMap.get(index) ?? "").split("\n").length)}
                     value={draftFor(index)}
-                    disabled={resolvingPath === selected.path}
+                    disabled={resolvingPath === selected.path || writeBlocked}
                     oninput={(event) => setCustom(index, event.currentTarget.value)}
                   ></textarea>
                 {:else}
@@ -701,7 +757,7 @@ import type { FeatureOutcome } from "$lib/ai/features";
             class={tbIdle}
             size="xs"
             type="button"
-            disabled={total === 0 || resolvingPath === selected.path}
+            disabled={total === 0 || resolvingPath === selected.path || writeBlocked}
             title="Resolve every conflict in this file with our side"
             onclick={() => resolveAll("ours")}>Resolve all ours</Button
           >
@@ -710,7 +766,7 @@ import type { FeatureOutcome } from "$lib/ai/features";
             class={tbIdle}
             size="xs"
             type="button"
-            disabled={total === 0 || resolvingPath === selected.path}
+            disabled={total === 0 || resolvingPath === selected.path || writeBlocked}
             title="Resolve every conflict in this file with their side"
             onclick={() => resolveAll("theirs")}>Resolve all theirs</Button
           >
@@ -729,15 +785,17 @@ import type { FeatureOutcome } from "$lib/ai/features";
             </Hint>
           {/if}
           <Button
-            variant={resolvingPath === selected.path || text === null || unresolved.length > 0 ? "outline" : "ghost"}
-            class={"primary " + (resolvingPath === selected.path || text === null || unresolved.length > 0 ? tbIdle : tbTonal)}
+            variant={resolvingPath === selected.path || text === null || unresolved.length > 0 || writeBlocked ? "outline" : "ghost"}
+            class={"primary " + (resolvingPath === selected.path || text === null || unresolved.length > 0 || writeBlocked ? tbIdle : tbTonal)}
             size="xs"
             type="button"
-            disabled={resolvingPath === selected.path || text === null || unresolved.length > 0}
+            disabled={resolvingPath === selected.path || text === null || unresolved.length > 0 || writeBlocked}
             title={
-              unresolved.length > 0
-                ? `${unresolved.length} conflict(s) still unresolved`
-                : "Write the resolved content, stage and clear the conflict"
+              writeBlocked
+                ? "Not valid UTF-8 — re-encoding this file would corrupt its bytes"
+                : unresolved.length > 0
+                  ? `${unresolved.length} conflict(s) still unresolved`
+                  : "Write the resolved content, stage and clear the conflict"
             }
             onclick={() => void markResolved()}>Mark resolved (Ctrl+Enter)</Button
           >
