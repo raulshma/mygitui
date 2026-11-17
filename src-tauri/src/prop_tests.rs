@@ -22,6 +22,7 @@ use proptest::prelude::*;
 use git2::{Repository, RepositoryInitOptions};
 
 use crate::diffcore::{apply_selection, Selection};
+use crate::editors::render_command;
 use crate::engine::git_engine::{GitEngine, GitEngineM3};
 use crate::engine::libgit2::Libgit2Engine;
 use crate::engine::types::{CommitOptions, DiffSide};
@@ -150,6 +151,37 @@ fn nonempty_lines() -> impl Strategy<Value = Vec<String>> {
     proptest::collection::vec(proptest::sample::select(lines_pool()), 1..=40usize)
 }
 
+/// Shell-hostile path fragments: each alone (and in any combination) must
+/// never break out of the quoted region the custom-command renderer builds
+/// around a repo root.
+fn hostile_path_fragments() -> Vec<String> {
+    [
+        "/repo",
+        " ",
+        "'",
+        "\"",
+        "$(reboot)",
+        ";",
+        "\n",
+        "`id`",
+        "$PATH",
+        "&",
+        "|",
+        ">",
+        "<",
+        "\\tmp",
+        "..",
+    ]
+    .iter()
+    .map(|s| (*s).to_string())
+    .collect()
+}
+
+fn hostile_paths() -> impl Strategy<Value = String> {
+    proptest::collection::vec(proptest::sample::select(hostile_path_fragments()), 1..=6)
+        .prop_map(|parts| parts.concat())
+}
+
 /// One property case: a base state (2..=6 files), a per-file mutation spec
 /// (keep / modify with fresh content / delete) and 0..=2 extra untracked
 /// files for the mutated state.
@@ -272,6 +304,38 @@ proptest! {
         for j in 0..case.extras.len() {
             let extra = repo.workdir().unwrap().join(format!("extra{j}.txt"));
             prop_assert!(!extra.exists(), "untracked extra{j}.txt survived restore");
+        }
+    }
+
+    /// (c) Custom "open with" command rendering: whatever a repo path
+    /// contains (spaces, quotes, `$()`, `;`, newlines), the rendered command
+    /// line must keep the root inside ONE quoted region — stripping the
+    /// outer quotes and undoing the escape must return the path byte-exact,
+    /// so no fragment can terminate the quote early or inject a second
+    /// shell word.
+    #[test]
+    fn rendered_custom_command_keeps_the_root_in_one_quoted_region(path in hostile_paths()) {
+        let rendered = render_command("{path}", &path);
+        #[cfg(windows)]
+        {
+            // cmd /C branch: the value is double-quoted as-is (a literal `"`
+            // in a path would terminate the region — documented limitation).
+            prop_assert_eq!(&rendered, &format!("\"{path}\""));
+        }
+        #[cfg(not(windows))]
+        {
+            // sh -c branch: POSIX single quotes with the `'\''` escape.
+            let expected = format!("'{}'", path.replace('\'', "'\\''"));
+            prop_assert_eq!(&rendered, &expected);
+            let inner = rendered
+                .strip_prefix('\'')
+                .and_then(|rest| rest.strip_suffix('\''))
+                .expect("outer single quotes must wrap the whole root");
+            let unescaped = inner.replace("'\\''", "'");
+            prop_assert_eq!(&unescaped, &path);
+            // The appended form (template without {path}) quotes identically.
+            let appended = render_command("app", &path);
+            prop_assert_eq!(&appended, &format!("app {expected}"));
         }
     }
 }

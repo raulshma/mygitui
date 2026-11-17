@@ -8,8 +8,9 @@
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
+use parking_lot::Mutex;
 use serde::Serialize;
 use ts_rs::TS;
 
@@ -49,7 +50,6 @@ impl RemoteActionRegistry {
         self.inner
             .runs
             .lock()
-            .unwrap()
             .insert(run_id.clone(), cancelled.clone());
 
         let run_id_thread = run_id.clone();
@@ -114,14 +114,14 @@ impl RemoteActionRegistry {
                 });
                 // Finished runs leave the registry so a later `cancel`
                 // reports false (mirrors the local registry's done flag).
-                registry.runs.lock().unwrap().remove(&run_id_cleanup);
+                registry.runs.lock().remove(&run_id_cleanup);
                 let _ = &git;
             });
         if let Err(e) = reader {
             // The run never started: drop the registry entry instead of
             // leaking it (a stale flag would make `cancel` report true
             // for a dead run forever).
-            self.inner.runs.lock().unwrap().remove(&run_id);
+            self.inner.runs.lock().remove(&run_id);
             return Err(format!("spawn remote action: {e}"));
         }
         Ok(run_id)
@@ -129,7 +129,7 @@ impl RemoteActionRegistry {
 
     /// Cancel a run (`false` when unknown/finished).
     pub fn cancel(&self, run_id: &str) -> bool {
-        match self.inner.runs.lock().unwrap().get(run_id) {
+        match self.inner.runs.lock().get(run_id) {
             Some(flag) => {
                 flag.store(true, Ordering::SeqCst);
                 true

@@ -24,10 +24,11 @@
 
 use std::sync::{
     atomic::{AtomicU64, Ordering},
-    Arc, Mutex,
+    Arc,
 };
 use std::time::{Duration, Instant};
 
+use parking_lot::Mutex;
 use serde::Serialize;
 use tauri::ipc::Channel;
 use tauri::{AppHandle, State};
@@ -75,11 +76,11 @@ pub struct PendingUpdate(Mutex<Option<tauri_plugin_updater::Update>>);
 
 impl PendingUpdate {
     fn store(&self, update: tauri_plugin_updater::Update) {
-        *self.0.lock().unwrap() = Some(update);
+        *self.0.lock() = Some(update);
     }
 
     fn take(&self) -> Option<tauri_plugin_updater::Update> {
-        self.0.lock().unwrap().take()
+        self.0.lock().take()
     }
 }
 
@@ -146,7 +147,7 @@ pub async fn updater_check(
         .map_err(|err| err.to_string())?;
     let Some(update) = update else {
         // Up to date — forget whatever an earlier check may have parked.
-        *pending.0.lock().unwrap() = None;
+        *pending.0.lock() = None;
         return Ok(None);
     };
     let info = UpdateInfo {

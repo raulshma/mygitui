@@ -92,13 +92,7 @@ pub fn tag_sign_via_cli(
     target: Option<&str>,
     message: &str,
 ) -> Result<(), String> {
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    let file = std::env::temp_dir().join(format!("mygitui-tag-{}-{nanos}.msg", std::process::id()));
-    std::fs::write(&file, message)
-        .map_err(|err| format!("cannot write tag message file: {err}"))?;
+    let file = crate::cli::write_message_file("tag", message)?;
     let result = (|| {
         let mut args = vec![
             "tag".to_string(),

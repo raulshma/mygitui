@@ -13,7 +13,7 @@
 //! needs to run pass through ([`sanitize_env`]). The commit message always
 //! travels via `-F <temp file>` so no shell quoting is ever involved.
 
-use std::io::{BufRead, BufReader, Read};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -346,7 +346,7 @@ pub fn commit_via_cli(
     on_line: &mut dyn FnMut(&str),
     cancel: Option<&AtomicBool>,
 ) -> Result<String, String> {
-    let file = write_message_file(&opts.message)?;
+    let file = write_message_file("commit", &opts.message)?;
     let result = (|| {
         // A cancel that raced the engine phase must not spawn git at all.
         if cancel.is_some_and(|token| token.load(Ordering::Acquire)) {
@@ -389,16 +389,32 @@ pub fn push_via_cli(
     })
 }
 
-/// Unique temp file for the commit message (removed by the caller).
-fn write_message_file(message: &str) -> Result<PathBuf, String> {
+/// Unique temp file for a commit/tag message handed to git via `-F`
+/// (removed by the caller). Shared by the commit path and the tag-sign
+/// path (`prefix` distinguishes the file names). Created owner-only:
+/// messages sit in the shared temp dir, so 0600 keeps other local users
+/// from reading them while git holds the file. (Windows needs no extra
+/// step: default ACLs on files created in %TEMP% are per-user.)
+pub(crate) fn write_message_file(prefix: &str, message: &str) -> Result<PathBuf, String> {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or(0);
-    let path =
-        std::env::temp_dir().join(format!("mygitui-commit-{}-{nanos}.msg", std::process::id()));
-    std::fs::write(&path, message)
-        .map_err(|err| format!("failed to write commit message file: {err}"))?;
+    let path = std::env::temp_dir().join(format!(
+        "mygitui-{prefix}-{}-{nanos}.msg",
+        std::process::id()
+    ));
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    options
+        .open(&path)
+        .and_then(|mut file| file.write_all(message.as_bytes()))
+        .map_err(|err| format!("failed to write {prefix} message file: {err}"))?;
     Ok(path)
 }
 
@@ -416,6 +432,18 @@ mod tests {
             allow_empty: false,
             author: None,
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn message_file_is_owner_only_and_round_trips() {
+        let path = write_message_file("commit", "secret body\n").expect("write message file");
+        let meta = std::fs::metadata(&path).expect("message file exists");
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(meta.permissions().mode() & 0o777, 0o600);
+        let content = std::fs::read_to_string(&path).expect("read back");
+        assert_eq!(content, "secret body\n");
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]

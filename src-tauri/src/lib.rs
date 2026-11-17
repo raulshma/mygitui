@@ -42,7 +42,7 @@ mod workspace_tests;
 /// the frontend via `cli_args_initial`. The single-instance plugin handles
 /// the *second*-launch path by emitting `cli-args` directly.
 #[derive(Default)]
-pub struct CliArgs(pub std::sync::Mutex<Vec<String>>);
+pub struct CliArgs(pub parking_lot::Mutex<Vec<String>>);
 
 /// M0 bootstrap: single-instance with CLI arg forwarding, updater wiring.
 /// The L1 lane adds `keyring_store` (secret storage for AI provider keys).
@@ -111,7 +111,7 @@ pub fn run() {
             remote::prompts::init(move |event, payload| {
                 let _ = remote_app.emit(event, payload.clone());
             });
-            *app.state::<CliArgs>().0.lock().unwrap() = cli_args;
+            *app.state::<CliArgs>().0.lock() = cli_args;
             // Custom title bar (TitleBar.svelte): on Windows/Linux drop the
             // native chrome entirely so the app bar owns dragging and the
             // window controls. macOS keeps a decorated window and instead

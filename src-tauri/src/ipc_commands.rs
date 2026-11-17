@@ -79,7 +79,7 @@ pub fn chunk_vec<T>(items: Vec<T>, size: usize) -> Vec<Vec<T>> {
 /// Second-launch arguments arrive via the `cli-args` event instead.
 #[tauri::command(rename_all = "snake_case")]
 pub async fn cli_args_initial(state: State<'_, crate::CliArgs>) -> Result<Vec<String>, String> {
-    Ok(std::mem::take(&mut state.0.lock().unwrap()))
+    Ok(std::mem::take(&mut state.0.lock()))
 }
 
 /// Open (or reuse) the repository at/above `path` and start its watcher.
@@ -92,12 +92,23 @@ pub async fn repo_open(
     state.open(&app, Path::new(&path)).map_err(engine_err)
 }
 
-/// Close a repository: stop its watcher, cancel its streams, drop caches.
-/// Async: the watcher teardown joins the debounce thread, which can wait
-/// out an in-flight emit — that must not occupy the main thread.
+/// Close a repository: stop its watcher, cancel its streams, drop caches,
+/// and kill the repo's terminal sessions (backend backstop — the FE
+/// normally `pty_kill`s its terminal panels itself). Async: the watcher
+/// teardown joins the debounce thread, which can wait out an in-flight
+/// emit — that must not occupy the main thread.
 #[tauri::command(rename_all = "snake_case")]
-pub async fn repo_close(repo_id: RepoId, state: State<'_, RepoManager>) -> Result<(), String> {
+pub async fn repo_close(
+    repo_id: RepoId,
+    state: State<'_, RepoManager>,
+    registry: State<'_, crate::pty::PtyRegistry>,
+) -> Result<(), String> {
+    // The session root must be captured before the handle leaves the map.
+    let root = state.get(&repo_id).map(|handle| handle.root.clone());
     state.close(&repo_id);
+    if let Some(root) = root {
+        crate::pty::kill_sessions_for_root(&registry, &root);
+    }
     Ok(())
 }
 
@@ -521,13 +532,13 @@ mod tests {
         let info = manager.open_unwatched(&dir).unwrap();
         let handle = manager.get(&info.repo_id).unwrap();
         let generation = handle.generation_shared();
-        let pages: Arc<std::sync::Mutex<Vec<LogPage>>> =
-            Arc::new(std::sync::Mutex::new(Vec::new()));
+        let pages: Arc<parking_lot::Mutex<Vec<LogPage>>> =
+            Arc::new(parking_lot::Mutex::new(Vec::new()));
         let sink = pages.clone();
         let channel = Channel::new(move |body| {
             if let tauri::ipc::InvokeResponseBody::Json(json) = body {
                 let page: LogPage = serde_json::from_str(&json).unwrap();
-                let mut guard = sink.lock().unwrap();
+                let mut guard = sink.lock();
                 if guard.is_empty() {
                     // First page shipped: a churn batch lands mid-walk.
                     generation.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -539,7 +550,7 @@ mod tests {
         let token = handle.begin_log_stream();
         stream_log(handle.clone(), LogFilter::default(), channel, token).unwrap();
 
-        let pages = pages.lock().unwrap();
+        let pages = pages.lock();
         assert!(
             pages.len() >= 2,
             "walk must page past the bump: {}",
@@ -3446,6 +3457,15 @@ pub async fn lfs_run(
     .await
 }
 
+/// Argument guard for the CLI clone, same family as [`archive_arg_ok`]:
+/// argv entries never touch a shell, but a leading `-` would be parsed as a
+/// git flag — clone accepts option-shaped transfer configs right after its
+/// subcommand (`--upload-pack=<cmd>` runs it), so option-shaped URLs are
+/// rejected up front. The `;` check keeps the original metacharacter contract.
+fn clone_args_ok(url: &str, destination: &str) -> bool {
+    !url.is_empty() && !url.starts_with('-') && !url.contains(';') && !destination.is_empty()
+}
+
 /// Blobless (partial) clone via the git CLI: `git clone --filter=blob:none`.
 #[tauri::command(rename_all = "snake_case")]
 pub async fn clone_blobless(
@@ -3453,7 +3473,7 @@ pub async fn clone_blobless(
     destination: String,
     depth: Option<u32>,
 ) -> Result<String, String> {
-    if url.contains(';') || destination.is_empty() {
+    if !clone_args_ok(&url, &destination) {
         return Err("invalid clone arguments".into());
     }
     let parent = std::path::Path::new(&destination)
@@ -3476,6 +3496,24 @@ pub async fn clone_blobless(
     })
     .await
     .map_err(|e| format!("clone_blobless task failed: {e}"))?
+}
+
+#[cfg(test)]
+mod clone_blobless_tests {
+    use super::clone_args_ok;
+
+    #[test]
+    fn url_guard_rejects_option_shaped_and_metacharacters() {
+        assert!(clone_args_ok("https://example.com/repo.git", "/tmp/dest"));
+        assert!(clone_args_ok("git@github.com:me/repo.git", "dest"));
+        // A leading dash would be parsed as a git flag (option injection).
+        assert!(!clone_args_ok("--upload-pack=touch /tmp/x", "dest"));
+        assert!(!clone_args_ok("-ufoo", "dest"));
+        // The original metacharacter contract stays.
+        assert!(!clone_args_ok("https://example.com/x.git;rm -rf /", "dest"));
+        assert!(!clone_args_ok("", "dest"));
+        assert!(!clone_args_ok("https://example.com/repo.git", ""));
+    }
 }
 
 #[tauri::command(rename_all = "snake_case")]

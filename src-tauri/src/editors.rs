@@ -509,16 +509,38 @@ pub async fn open_with(repo_root: String, app_id: String) -> Result<(), String> 
 
 // -- user-defined custom commands ----------------------------------------------
 
+/// Shell-quotes `value` for the platform shell that wraps custom commands
+/// (`actions::build_shell_command`): POSIX single quotes with the `'\''`
+/// escape for `sh -c`, double quotes for `cmd /C`. The cmd branch is
+/// conservative: `%` still expands variables inside double quotes and cmd
+/// has no safe escape for it there, so a root containing `%` may expand
+/// (documented limitation; `%` in a repo path is exotic).
+fn quote_for_platform_shell(value: &str) -> String {
+    #[cfg(windows)]
+    {
+        format!("\"{value}\"")
+    }
+    #[cfg(not(windows))]
+    {
+        format!("'{}'", value.replace('\'', "'\\''"))
+    }
+}
+
 /// Renders the command line spawned for a user-defined custom app:
-/// every `{path}` occurrence becomes the repo root; a template without
-/// `{path}` gets the (double-quoted) root appended as the final argument —
-/// the platform shell parses the line, so the quotes protect paths with
-/// spaces. With `{path}` present, quoting is the template author's job.
+/// every `{path}` occurrence becomes the (shell-quoted) repo root; a
+/// template without `{path}` gets the quoted root appended as the final
+/// argument. The platform shell parses the line (`sh -c` on Unix, `cmd /C`
+/// on Windows — see [`crate::actions::build_shell_command`]), so the app
+/// quotes the root for that shell in BOTH cases — quoting is not the
+/// template author's job: a repo path with spaces, quotes or shell
+/// metacharacters must never terminate the quoted region or inject a
+/// second word into the command line.
 pub fn render_command(command: &str, root: &str) -> String {
+    let quoted = quote_for_platform_shell(root);
     if command.contains("{path}") {
-        command.replace("{path}", root)
+        command.replace("{path}", &quoted)
     } else {
-        format!("{command} \"{root}\"")
+        format!("{command} {quoted}")
     }
 }
 
@@ -699,25 +721,64 @@ mod tests {
         assert!(zed.path.ends_with(exe));
     }
 
-    /// Custom command templates: `{path}` is substituted (every occurrence);
-    /// a template without the placeholder gets the root appended quoted.
+    /// Custom command templates: `{path}` is substituted (every occurrence)
+    /// with the shell-quoted root; a template without the placeholder gets
+    /// the quoted root appended.
     #[test]
     fn render_command_substitutes_path_placeholder() {
-        assert_eq!(
-            render_command("code {path}", "/repos/demo"),
-            "code /repos/demo"
-        );
-        assert_eq!(
-            render_command("{path} --git-dir {path}/.git", "/r"),
-            "/r --git-dir /r/.git"
-        );
+        #[cfg(windows)]
+        {
+            assert_eq!(
+                render_command("code {path}", "/repos/demo"),
+                "code \"/repos/demo\""
+            );
+            assert_eq!(
+                render_command("{path} --git-dir {path}/.git", "/r"),
+                "\"/r\" --git-dir \"/r\"/.git"
+            );
+        }
+        #[cfg(not(windows))]
+        {
+            assert_eq!(
+                render_command("code {path}", "/repos/demo"),
+                "code '/repos/demo'"
+            );
+            assert_eq!(
+                render_command("{path} --git-dir {path}/.git", "/r"),
+                "'/r' --git-dir '/r'/.git"
+            );
+        }
     }
 
     #[test]
     fn render_command_appends_quoted_root_without_placeholder() {
+        #[cfg(windows)]
         assert_eq!(
             render_command("kitty", "/repos/my repo"),
             "kitty \"/repos/my repo\""
+        );
+        #[cfg(not(windows))]
+        assert_eq!(
+            render_command("kitty", "/repos/my repo"),
+            "kitty '/repos/my repo'"
+        );
+    }
+
+    /// A hostile root (quotes, `$()`, `;`, newline) stays inside one quoted
+    /// region: on POSIX the single-quoted form escapes every `'` as `'\''`
+    /// so nothing can end the quote early or start a new shell word.
+    #[cfg(not(windows))]
+    #[test]
+    fn render_command_quotes_hostile_roots() {
+        let rendered = render_command("code {path}", "/a b$(reboot); `x` \"q\" 'a' \n$V");
+        assert_eq!(
+            rendered, "code '/a b$(reboot); `x` \"q\" '\\''a'\\'' \n$V'",
+            "every single quote must become the '\\'' escape"
+        );
+        // Same for the appended (no placeholder) form.
+        assert_eq!(
+            render_command("code", "/a; rm -rf ~"),
+            "code '/a; rm -rf ~'"
         );
     }
 

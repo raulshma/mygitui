@@ -25,12 +25,12 @@
 //!
 //! Registry: a process-global [`PtyRegistry`] (tauri-managed state) owns
 //! every live session, ids are `pty-<counter hex>`, and at most
-//! [`MAX_SESSIONS`] run at once (further `pty_create` rejects). Sessions
-//! are NOT tied to the repo lifecycle backend-side: closing a repo tab is
-//! the frontend's job to `pty_kill` its terminal panels; as a backstop the
-//! registry's `Drop` kills every remaining child on app exit (and
-//! [`Session::drop`] kills again if an `Arc` outlives the registry in a
-//! waiter thread).
+//! [`MAX_SESSIONS`] run at once (further `pty_create` rejects). Closing a
+//! repo tab normally has the frontend `pty_kill` its terminal panels; the
+//! backend backstops that: each session records the root it was created
+//! at, `repo_close` calls [`kill_sessions_for_root`], and the registry's
+//! `Drop` kills every remaining child on app exit (and [`Session::drop`]
+//! kills again if an `Arc` outlives the registry in a waiter thread).
 //!
 //! Threading: the child handle itself lives in the exit-waiter thread
 //! (blocked in `wait`); the session keeps a `clone_killer()` handle so
@@ -43,7 +43,7 @@
 
 use std::collections::HashMap;
 use std::io::{Read, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc};
 use std::time::{Duration, Instant};
@@ -171,6 +171,9 @@ pub(crate) struct Session {
     /// `Sync` — tauri-managed state requires it — not for write
     /// concurrency: resize is the only caller).
     master: Mutex<Box<dyn MasterPty + Send>>,
+    /// Repo root the session was created at (`pty_create`'s cwd): the
+    /// repo-close backstop ([`kill_sessions_for_root`]) matches on this.
+    root: PathBuf,
 }
 
 impl Session {
@@ -401,6 +404,7 @@ pub(crate) fn spawn_session(
         writer,
         killer: Mutex::new(killer),
         master: Mutex::new(pair.master),
+        root: spec.cwd.clone(),
     });
     registry.insert(&session_id, session.clone());
     reservation.commit();
@@ -695,6 +699,37 @@ pub(crate) fn kill_session(registry: &PtyRegistry, session_id: &str) -> Result<(
         .ok_or_else(|| format!("unknown pty session: {session_id}"))?;
     session.kill();
     Ok(())
+}
+
+/// Repo-close backstop: kill and forget every session rooted at/under
+/// `root` (the FE normally `pty_kill`s its terminal panels when a repo tab
+/// closes — this catches the cases where it does not). Matching is lexical
+/// (`Path::starts_with`) on the root each session was created with.
+/// Returns how many sessions were killed. Idempotent: an already-gone
+/// session simply does not match.
+pub(crate) fn kill_sessions_for_root(registry: &PtyRegistry, root: &Path) -> usize {
+    // Collect + remove under the lock, kill outside it (same order as
+    // `kill_all`; the killed children's exit waiters re-lock to unregister).
+    let orphans: Vec<Arc<Session>> = {
+        let mut sessions = registry.inner.sessions.lock();
+        let ids: Vec<String> = sessions
+            .iter()
+            .filter(|(_, session)| session.root.starts_with(root))
+            .map(|(id, _)| id.clone())
+            .collect();
+        let mut removed = Vec::with_capacity(ids.len());
+        for id in ids {
+            if let Some(session) = sessions.remove(&id) {
+                removed.push(session);
+            }
+        }
+        removed
+    };
+    let killed = orphans.len();
+    for session in orphans {
+        session.kill();
+    }
+    killed
 }
 
 #[cfg(test)]

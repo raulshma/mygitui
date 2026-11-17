@@ -521,11 +521,11 @@ mod tests {
     /// is single-flighted — parallel tests queue on the lock instead of each
     /// running the script and wiping it out from under the others.
     fn ensure_fixtures() {
-        static BOOTSTRAP: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        static BOOTSTRAP: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
         if fixtures_basic().join(".git").exists() {
             return;
         }
-        let _guard = BOOTSTRAP.lock().unwrap();
+        let _guard = BOOTSTRAP.lock();
         // A sibling test may have finished generating while we waited.
         if fixtures_basic().join(".git").exists() {
             return;

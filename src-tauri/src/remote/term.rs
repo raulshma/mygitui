@@ -294,7 +294,7 @@ impl RemoteShellRegistry {
 mod tests {
     use super::*;
 
-    use std::sync::Mutex as StdMutex;
+    use parking_lot::Mutex as StdMutex;
 
     #[derive(Default)]
     struct FakeChannel {
@@ -309,7 +309,7 @@ mod tests {
             Ok(())
         }
         fn close(&self) {
-            self.closed.lock().unwrap().push(());
+            self.closed.lock().push(());
         }
     }
 
@@ -321,7 +321,7 @@ mod tests {
     impl ShellSink for SinkCollector {
         fn emit_output(&self, _event: &PtyOutput) {}
         fn emit_exit(&self, event: &PtyExit) {
-            self.exits.lock().unwrap().push(event.clone());
+            self.exits.lock().push(event.clone());
         }
     }
 
@@ -346,7 +346,7 @@ mod tests {
 
         inner.finish_session("rshell-a", 0, &sink);
         assert!(inner.sessions.lock().is_empty(), "entry must be removed");
-        let exits = sink.exits.lock().unwrap();
+        let exits = sink.exits.lock();
         assert_eq!(exits.len(), 1);
         assert_eq!(exits[0].session_id, "rshell-a");
         assert_eq!(exits[0].code, 0);
@@ -363,7 +363,7 @@ mod tests {
         inner.sessions.lock().remove("rshell-a"); // kill() got there first
 
         inner.finish_session("rshell-a", 0, &sink);
-        assert_eq!(sink.exits.lock().unwrap().len(), 1);
+        assert_eq!(sink.exits.lock().len(), 1);
     }
 
     /// kill(): removes the entry and closes the channel; unknown ids
@@ -379,7 +379,7 @@ mod tests {
             channel.clone() as Arc<dyn ShellChannel>,
         );
         assert!(registry.kill("rshell-x"));
-        assert_eq!(channel.closed.lock().unwrap().len(), 1);
+        assert_eq!(channel.closed.lock().len(), 1);
         assert!(registry.inner.sessions.lock().is_empty());
         assert!(!registry.kill("rshell-x"));
     }

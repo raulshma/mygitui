@@ -12,9 +12,9 @@ use parking_lot::Mutex;
 use portable_pty::CommandBuilder;
 
 use crate::pty::{
-    coalesce_ready, kill_session, resize_session, spawn_session, strip_cursor_probes,
-    write_to_session, PtyExit, PtyOutput, PtyRegistry, PtySink, SessionSpec, COALESCE_WINDOW,
-    MAX_EVENT_BYTES, MAX_SESSIONS,
+    coalesce_ready, kill_session, kill_sessions_for_root, resize_session, spawn_session,
+    strip_cursor_probes, write_to_session, PtyExit, PtyOutput, PtyRegistry, PtySink, SessionSpec,
+    COALESCE_WINDOW, MAX_EVENT_BYTES, MAX_SESSIONS,
 };
 
 /// How long output/exit assertions wait before failing (ConPTY/termios
@@ -101,6 +101,17 @@ impl PtySink for CollectorPtySink {
 fn spec(command: Option<CommandBuilder>) -> SessionSpec {
     SessionSpec {
         cwd: std::env::temp_dir(),
+        rows: 24,
+        cols: 80,
+        command,
+    }
+}
+
+/// Same, with an explicit cwd (the kill-for-root test needs sessions rooted
+/// at distinct directories).
+fn spec_at(cwd: &std::path::Path, command: Option<CommandBuilder>) -> SessionSpec {
+    SessionSpec {
+        cwd: cwd.to_path_buf(),
         rows: 24,
         cols: 80,
         command,
@@ -484,4 +495,82 @@ fn registry_drop_kills_remaining_children() {
     );
     let fresh = PtyRegistry::default();
     assert_eq!(fresh.live_count(), 0);
+}
+
+/// Repo-close backstop: killing by root removes every session created at
+/// or under that root and leaves sessions rooted elsewhere alone. Real
+/// children (blocked until killed), so the pty-exit events prove the kills
+/// landed.
+#[test]
+fn kill_for_root_takes_sessions_at_and_under_the_root_only() {
+    let registry = PtyRegistry::default();
+    let sink = CollectorPtySink::shared();
+
+    // Three scratch dirs: the closed root, a dir under it (the "under"
+    // match) and an unrelated root that must survive.
+    let base = std::env::temp_dir().join(format!("mygitui-pty-root-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    let root_a = base.join("a");
+    let under_a = root_a.join("sub");
+    let root_b = base.join("b");
+    for dir in [&root_a, &under_a, &root_b] {
+        std::fs::create_dir_all(dir).expect("mkdir scratch root");
+    }
+
+    let in_root = spawn_session(
+        &registry,
+        spec_at(&root_a, Some(blocking_command())),
+        sink.clone(),
+    )
+    .expect("spawn session at root");
+    let under_root = spawn_session(
+        &registry,
+        spec_at(&under_a, Some(blocking_command())),
+        sink.clone(),
+    )
+    .expect("spawn session under root");
+    let elsewhere = spawn_session(
+        &registry,
+        spec_at(&root_b, Some(blocking_command())),
+        sink.clone(),
+    )
+    .expect("spawn session at another root");
+
+    // Repo close for root_a: both matching sessions die, the unrelated one
+    // stays live.
+    let killed = kill_sessions_for_root(&registry, &root_a);
+    assert_eq!(killed, 2, "the session at and the one under the root die");
+    assert_eq!(registry.live_count(), 1, "unrelated session survives");
+    assert!(registry.get(&elsewhere).is_some());
+    assert!(registry.get(&in_root).is_none());
+    assert!(registry.get(&under_root).is_none());
+
+    assert!(
+        wait_for(KILL_TIMEOUT, || sink
+            .exits()
+            .iter()
+            .filter(|event| event.session_id == in_root || event.session_id == under_root)
+            .count()
+            == 2),
+        "killed-by-root sessions must fire pty-exit; got: {}",
+        sink.joined_output()
+    );
+
+    // Idempotent: a second close pass finds nothing.
+    assert_eq!(kill_sessions_for_root(&registry, &root_a), 0);
+
+    // The other repo's close takes only its own session.
+    assert_eq!(kill_sessions_for_root(&registry, &root_b), 1);
+    assert_eq!(registry.live_count(), 0);
+    assert!(
+        wait_for(KILL_TIMEOUT, || sink.exits().len() == 3),
+        "every killed session fires exactly one exit event"
+    );
+
+    // Delayed scratch cleanup: killed children may hold the cwd briefly
+    // (Windows locks a directory while it is a process's cwd).
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(50));
+        let _ = std::fs::remove_dir_all(base);
+    });
 }
