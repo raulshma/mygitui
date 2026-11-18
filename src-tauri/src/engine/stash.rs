@@ -1155,14 +1155,44 @@ fn fresh_created_branch<'r>(
     })
 }
 
+/// Compare two worktree specs as paths, resolving the platform spellings
+/// that can differ for the very same directory: macOS `std::env::temp_dir()`
+/// is `/var/...` (a symlink to `/private/var/...`) while libgit2 reports the
+/// resolved path; Windows 8.3 short names (`RUNNER~1`) and the `\\?\`
+/// verbatim prefix `canonicalize()` adds show up on one side but not the
+/// other. Falls back to the raw paths when either side no longer exists (a
+/// pruned worktree), so a plain string match still resolves.
+fn same_worktree_path(a: &Path, b: &Path) -> bool {
+    if a == b {
+        return true;
+    }
+    fn resolved(path: &Path) -> PathBuf {
+        let Ok(canon) = std::fs::canonicalize(path) else {
+            return path.to_path_buf();
+        };
+        #[cfg(windows)]
+        {
+            // std::canonicalize adds `\\?\`; libgit2 worktree paths never
+            // carry it (dunce-style strip, same as opencode.rs).
+            let text = canon.as_os_str().to_string_lossy();
+            if let Some(rest) = text.strip_prefix(r"\\?\UNC\") {
+                return PathBuf::from(format!(r"\\{rest}"));
+            }
+            if let Some(rest) = text.strip_prefix(r"\\?\") {
+                return PathBuf::from(rest.to_string());
+            }
+        }
+        canon
+    }
+    resolved(a) == resolved(b)
+}
+
 /// Resolve a worktree by NAME first (the `worktree_remove` convention),
 /// then by PATH (`git worktree lock/unlock` take paths). Linked worktrees
 /// only — the lock/unlock impls refuse the main worktree themselves.
 fn is_main_worktree_path(repo: &Repository, spec: &str) -> bool {
-    // PathBuf equality compares components, so a trailing separator
-    // (`/tmp/repo/`) still matches the bare workdir path.
     repo.workdir()
-        .map(|w| w == Path::new(spec))
+        .map(|w| same_worktree_path(w, Path::new(spec)))
         .unwrap_or(false)
 }
 
@@ -1178,7 +1208,7 @@ fn find_worktree_by_spec(repo: &Repository, spec: &str) -> EngineResult<Worktree
             continue; // non-UTF-8 worktree name
         };
         if let Ok(wt) = repo.find_worktree(name) {
-            if wt.path().to_string_lossy() == spec {
+            if same_worktree_path(wt.path(), Path::new(spec)) {
                 return Ok(wt);
             }
         }

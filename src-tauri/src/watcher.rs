@@ -1557,19 +1557,31 @@ mod tests {
         let upgrade_state = upgrade_state.expect("upgrade state event");
         assert!(upgrade_state.alive, "the upgrade is a live watcher");
 
-        // Still watching: another write arrives (now event-driven).
-        std::fs::write(repo.0.join("post-upgrade.txt"), b"via inotify\n").expect("write file");
-        let deadline = Instant::now() + Duration::from_secs(5);
+        // Still watching: new writes arrive through the recommended backend.
+        // FSEvents (macOS) can coalesce or drop a write made immediately
+        // after the stream is armed, so retry with a short backoff instead
+        // of pinning one event to a tight deadline. Any batch carrying one
+        // of our probe names proves the upgraded watcher still feeds the
+        // pipeline.
+        let mut names = Vec::<String>::new();
+        let deadline = Instant::now() + Duration::from_secs(10);
         let mut found = false;
         while Instant::now() < deadline {
-            match batch_rx.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
+            let name = format!("post-upgrade-{}.txt", names.len());
+            std::fs::write(repo.0.join(&name), b"via recommended\n").expect("write file");
+            names.push(name);
+            let wait = deadline
+                .saturating_duration_since(Instant::now())
+                .min(Duration::from_millis(700));
+            match batch_rx.recv_timeout(wait) {
                 Ok(batch) => {
-                    if batch.paths.iter().any(|p| p == "post-upgrade.txt") {
+                    if batch.paths.iter().any(|p| names.iter().any(|n| n == p)) {
                         found = true;
                         break;
                     }
                 }
-                Err(_) => break,
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
             }
         }
         assert!(found, "watching must continue after the upgrade");

@@ -747,14 +747,18 @@ mod tests {
                 "{subcommand}: {err}"
             );
         }
-        // The allowed ones pass the guard (they fail here with git-lfs not
-        // installed / not a lfs repo — not with the unsupported message).
+        // The allowed ones must pass the guard. Whether they then succeed
+        // depends on the runner: git-lfs is installed on CI (where `install`
+        // writes hooks and returns Ok) but not in a bare local checkout.
+        // Accept either outcome — only the allowlist message is forbidden.
         for subcommand in ["pull", "push", "install", "fetch"] {
-            let err = lfs_run(dir.path(), subcommand).unwrap_err();
-            assert!(
-                !err.contains("unsupported git lfs subcommand"),
-                "{subcommand}: {err}"
-            );
+            match lfs_run(dir.path(), subcommand) {
+                Ok(_) => {}
+                Err(err) => assert!(
+                    !err.contains("unsupported git lfs subcommand"),
+                    "{subcommand}: {err}"
+                ),
+            }
         }
     }
 

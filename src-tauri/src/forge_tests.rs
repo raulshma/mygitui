@@ -271,28 +271,53 @@ fn pr_template_sync_reads_the_first_existing_file() {
     ));
     let github = dir.join(".github");
     std::fs::create_dir_all(github.join("PULL_REQUEST_TEMPLATE")).unwrap();
-    // Both flat variants exist: the uppercase one must win.
     std::fs::write(
         github.join("PULL_REQUEST_TEMPLATE/pull_request_template.md"),
         "dir form",
     )
     .unwrap();
-    std::fs::write(github.join("PULL_REQUEST_TEMPLATE.md"), "upper flat").unwrap();
+
+    // The two flat variants differ only in case. macOS (APFS) and Windows
+    // (NTFS) default to case-insensitive filesystems, where writing both
+    // would overwrite a single file — the "uppercase wins" assertion cannot
+    // hold there. Probe with a throwaway pair and only exercise the
+    // case-ordering when the filesystem keeps them distinct (cf. the
+    // README's probe-and-skip convention for platform facilities).
+    let case_sensitive = {
+        let upper = github.join("mygitui-case-probe-ABC");
+        let lower = github.join("mygitui-case-probe-abc");
+        let _ = std::fs::remove_file(&upper);
+        std::fs::write(&upper, b"probe").unwrap();
+        let distinct = std::fs::read(&lower).is_err();
+        let _ = std::fs::remove_file(&upper);
+        let _ = std::fs::remove_file(&lower);
+        distinct
+    };
+    if case_sensitive {
+        std::fs::write(github.join("PULL_REQUEST_TEMPLATE.md"), "upper flat").unwrap();
+    }
     std::fs::write(github.join("pull_request_template.md"), "lower flat").unwrap();
     assert_eq!(
         crate::forge::pr_template_sync(&dir).as_deref(),
         Some("dir form")
     );
 
-    // Without the dir form, the uppercase flat file wins.
+    // Without the dir form, the uppercase flat file wins on case-sensitive
+    // filesystems; elsewhere the lowercase file is the only one that exists.
     std::fs::remove_dir_all(github.join("PULL_REQUEST_TEMPLATE")).unwrap();
     assert_eq!(
         crate::forge::pr_template_sync(&dir).as_deref(),
-        Some("upper flat")
+        Some(if case_sensitive {
+            "upper flat"
+        } else {
+            "lower flat"
+        })
     );
 
     // Only the lowercase variant left.
-    std::fs::remove_file(github.join("PULL_REQUEST_TEMPLATE.md")).unwrap();
+    if case_sensitive {
+        std::fs::remove_file(github.join("PULL_REQUEST_TEMPLATE.md")).unwrap();
+    }
     assert_eq!(
         crate::forge::pr_template_sync(&dir).as_deref(),
         Some("lower flat")
