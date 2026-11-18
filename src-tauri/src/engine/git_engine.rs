@@ -97,6 +97,15 @@ pub trait GitEngine: Send + Sync {
         from: Option<&str>,
     ) -> EngineResult<Vec<BlameLine>>;
 
+    /// Raw bytes of one blob at `path` on diff `side` (image diffs):
+    /// worktree reads the workdir file, index reads the staged blob, and
+    /// head/commit sides resolve the side's tree. A missing path, a
+    /// traversal/absolute path, or a blob above the shared `repo_read_file`
+    /// IPC cap is an error — the caller renders a placeholder.
+    fn blob(&self, _repo: &Repository, _side: &DiffSide, _path: &str) -> EngineResult<Vec<u8>> {
+        Err(EngineError::Unsupported("blob".into()))
+    }
+
     /// List local + remote branches and tags with their target shas
     /// (decorations model used by the log walker and branch panel).
     fn refs(&self, repo: &Repository) -> EngineResult<Vec<(String, String)>>;

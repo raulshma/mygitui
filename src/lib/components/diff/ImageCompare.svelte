@@ -51,19 +51,36 @@
       load(target.old_path ?? target.path, true),
       load(target.path, false),
     ]).then(([o, n]) => {
-      if (!alive) return;
+      if (!alive) {
+        // The row went away mid-load: drop the URLs it would have adopted
+        // (the cleanup below already ran and saw nothing).
+        revokeUrls([o, n]);
+        return;
+      }
       oldUrl = o;
       newUrl = n;
       loading = false;
     });
     return () => {
       alive = false;
+      // The loader hands back a fresh object URL per call; revoke whatever
+      // this row adopted so virtualized rows scrolling out (and file
+      // switches) do not leak their blobs. Non-object URLs (data:, cached
+      // strings) revoke as no-ops.
+      revokeUrls([oldUrl, newUrl]);
     };
   });
 
   function switchToOverlay(next: boolean): void {
     overlay = next;
     if (!overlay) blink = false;
+  }
+
+  /** Drops adopted object URLs (no-op for non-object URL strings). */
+  function revokeUrls(urls: Array<string | null>): void {
+    for (const url of urls) {
+      if (url !== null) URL.revokeObjectURL(url);
+    }
   }
 </script>
 

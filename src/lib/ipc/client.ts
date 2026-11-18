@@ -1100,6 +1100,30 @@ export async function readFile(repoId: string, path: string): Promise<Uint8Array
   return Uint8Array.from(payload);
 }
 
+/**
+ * Raw bytes of one blob on a diff side (`path` workdir-relative): the
+ * worktree side reads the working file, the index/head/commit sides read
+ * the committed/staged blob — commit-to-commit image diffs need sides
+ * `readFile` (workdir only) cannot reach. Unlike `readFile` there is no
+ * missing-file fallback: a side without the path (a deleted file's new
+ * side, an added file's old side) rejects, and the image pane renders its
+ * "unavailable" placeholder. Same raw-response shape and IPC cap as
+ * `readFile` (see its note on ArrayBuffer vs the historical number[]).
+ */
+export async function readBlob(
+  repoId: string,
+  side: DiffSide,
+  path: string,
+): Promise<Uint8Array<ArrayBuffer>> {
+  const payload = await invokeTauri<ArrayBuffer | number[]>("repo_blob", {
+    repo_id: repoId,
+    side,
+    path,
+  });
+  if (payload instanceof ArrayBuffer) return new Uint8Array(payload);
+  return Uint8Array.from(payload);
+}
+
 /** Base64 (STANDARD) of `bytes` — the file-save wire format. Prefers the
  * built-in `toBase64` (evergreen webviews), falls back to chunked btoa. */
 function bytesToBase64(bytes: Uint8Array): string {

@@ -19,6 +19,7 @@ use parking_lot::Mutex;
 use super::git_engine::{
     CheckoutProgress, EngineError, EngineResult, FetchProgress, GitEngine, PushProgress,
 };
+use super::paths::validate_workdir_path;
 use super::types::{
     BlameLine, BranchInfo, ChangeKind, CommitInfo, CommitOptions, DiffHunk, DiffLine, DiffSide,
     FetchOptions, FileDiff, GitSignature, HookInfo, LogFilter, NetStats, PullOptions, PushOptions,
@@ -55,6 +56,16 @@ const IMAGE_EXTENSIONS: [&str; 9] = [
 fn blame_too_large(path: &str, bytes: u64) -> EngineError {
     EngineError::Invalid(format!(
         "`{path}` is {} MB — larger than the {} MB blame limit",
+        bytes / (1024 * 1024),
+        crate::ipc_commands::READ_FILE_MAX_BYTES / (1024 * 1024)
+    ))
+}
+
+/// Same rejection for `blob` (image diffs): both diff sides materialize
+/// whole blobs, so the shared repo_read_file IPC cap applies identically.
+fn blob_too_large(path: &str, bytes: u64) -> EngineError {
+    EngineError::Invalid(format!(
+        "`{path}` is {} MB — larger than the {} MB read limit",
         bytes / (1024 * 1024),
         crate::ipc_commands::READ_FILE_MAX_BYTES / (1024 * 1024)
     ))
@@ -1648,6 +1659,65 @@ impl GitEngine for Libgit2Engine {
         }
         out.sort_by_key(|l| l.line_no);
         Ok(out)
+    }
+
+    fn blob(&self, repo: &Repository, side: &DiffSide, path: &str) -> EngineResult<Vec<u8>> {
+        // Read-only lookup, but the same relative/`..`-free rules as the
+        // workdir writers apply (shared `engine::paths` validation) so a
+        // hostile path cannot even reach the tree/index lookup.
+        let workdir = repo
+            .workdir()
+            .ok_or_else(|| EngineError::Invalid("bare repository has no workdir".into()))?;
+        validate_workdir_path(workdir, path)?;
+
+        let guarded = |bytes: &[u8]| -> EngineResult<Vec<u8>> {
+            let len = bytes.len() as u64;
+            if len > READ_FILE_MAX_BYTES {
+                return Err(blob_too_large(path, len));
+            }
+            Ok(bytes.to_vec())
+        };
+
+        match side {
+            DiffSide::Worktree => {
+                let full = workdir.join(Path::new(path));
+                let meta = std::fs::metadata(&full).map_err(|_| {
+                    EngineError::Invalid(format!("`{path}` not found in the working tree"))
+                })?;
+                if !meta.is_file() {
+                    return Err(EngineError::Invalid(format!(
+                        "`{path}` is not a regular file"
+                    )));
+                }
+                if meta.len() > READ_FILE_MAX_BYTES {
+                    return Err(blob_too_large(path, meta.len()));
+                }
+                std::fs::read(full)
+                    .map_err(|e| EngineError::Invalid(format!("reading `{path}` failed: {e}")))
+            }
+            DiffSide::Index => {
+                let index = repo.index()?;
+                let entry = index.get_path(Path::new(path), 0).ok_or_else(|| {
+                    EngineError::Invalid(format!("`{path}` not found in the index"))
+                })?;
+                let blob = repo.find_blob(entry.id)?;
+                guarded(blob.content())
+            }
+            DiffSide::Head | DiffSide::Commit(_) => {
+                // None = unborn HEAD: nothing to read the blob from.
+                let tree = side_tree(repo, side)?.ok_or_else(|| {
+                    EngineError::Invalid(format!("`{path}` not found: side has no tree"))
+                })?;
+                let entry = tree.get_path(Path::new(path)).map_err(|e| {
+                    EngineError::Invalid(format!("`{path}` not found in `{side:?}`: {e}"))
+                })?;
+                let blob = entry
+                    .to_object(repo)?
+                    .peel_to_blob()
+                    .map_err(|e| EngineError::Invalid(format!("`{path}` is not a blob: {e}")))?;
+                guarded(blob.content())
+            }
+        }
     }
 
     fn refs(&self, repo: &Repository) -> EngineResult<Vec<(String, String)>> {

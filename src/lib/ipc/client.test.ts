@@ -31,6 +31,7 @@ import {
   pickFolder,
   pullRepo,
   pushRepo,
+  readBlob,
   readFile,
   remotes,
   remoteAdd,
@@ -976,6 +977,53 @@ describe("ipc client repo_read_file wrapper", () => {
     expect(err).toBeInstanceOf(IpcError);
     expect((err as IpcError).command).toBe("repo_read_file");
     expect((err as IpcError).message).toContain("..");
+  });
+});
+
+describe("ipc client repo_blob wrapper", () => {
+  it("readBlob sends repo_id + side + path and returns the bytes as a Uint8Array", async () => {
+    // A PNG magic number — what the image-diff loader wraps into a Blob.
+    const bytes = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+    const { transport, calls } = mockTransport(() => bytes);
+    setTransport(transport);
+
+    await expect(
+      readBlob("repo-1", { commit: "abc123" }, "assets/logo.png"),
+    ).resolves.toEqual(Uint8Array.from(bytes));
+
+    expect(calls).toEqual([
+      {
+        command: "repo_blob",
+        args: { repo_id: "repo-1", side: { commit: "abc123" }, path: "assets/logo.png" },
+      },
+    ]);
+  });
+
+  it("readBlob passes plain side strings through verbatim", async () => {
+    const { transport, calls } = mockTransport(() => []);
+    setTransport(transport);
+
+    await expect(readBlob("repo-1", "index", "a.png")).resolves.toEqual(
+      Uint8Array.of(),
+    );
+    expect(calls[0]?.args).toEqual({
+      repo_id: "repo-1",
+      side: "index",
+      path: "a.png",
+    });
+  });
+
+  it("readBlob normalizes failures (missing path, oversized) to IpcError", async () => {
+    const { transport } = mockTransport(() => {
+      throw "`gone.png` not found in the working tree";
+    });
+    setTransport(transport);
+
+    const err = await readBlob("repo-1", "worktree", "gone.png").catch(
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(IpcError);
+    expect((err as IpcError).command).toBe("repo_blob");
   });
 });
 

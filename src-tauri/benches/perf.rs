@@ -414,7 +414,7 @@ fn bench_diff(c: &mut Criterion) {
         b.iter(|| {
             let t0 = Instant::now();
             let files = engine
-                .diff(&repo, &DiffSide::Head, &DiffSide::Worktree, None)
+                .diff(&repo, &DiffSide::Head, &DiffSide::Worktree, None, false)
                 .unwrap();
             assert!(!files.is_empty());
             t0.elapsed()
@@ -434,7 +434,7 @@ fn bench_diff(c: &mut Criterion) {
         b.iter(|| {
             let t0 = Instant::now();
             let files = engine
-                .diff(&repo, &DiffSide::Head, &DiffSide::Worktree, None)
+                .diff(&repo, &DiffSide::Head, &DiffSide::Worktree, None, false)
                 .unwrap();
             assert_eq!(files.len(), 1, "{:?} files", files.len());
             assert!(

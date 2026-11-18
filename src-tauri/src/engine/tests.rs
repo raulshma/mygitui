@@ -8,10 +8,12 @@ use git2::{IndexAddOption, Repository};
 
 use super::git_engine::{EngineError, GitEngine};
 use super::libgit2::Libgit2Engine;
+// Shared repo_read_file IPC cap (the blob oversize test reads the same bound).
 use super::types::{
     ChangeKind, CommitOptions, DiffSide, GitSignature, LineRange, LogFilter, StageRequest,
     StageTarget,
 };
+use crate::ipc_commands::READ_FILE_MAX_BYTES;
 
 static ENGINE: Libgit2Engine = Libgit2Engine::new();
 
@@ -1992,4 +1994,110 @@ fn discard_rejects_traversal_and_absolute_paths_and_writes_nothing() {
     let content = std::fs::read_to_string(temp._dir.join("a.txt")).expect("read a.txt");
     assert_eq!(content, "one\n");
     let _ = std::fs::remove_file(&escape);
+}
+
+// ---------------------------------------------------------------------------
+// blob (image-diff side reads)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn blob_reads_head_index_and_worktree_sides() {
+    let temp = TempRepo::new("blob-sides");
+    temp.write("img.bin", "committed-v1");
+    temp.add_all_and_commit("c1 base");
+
+    // Worktree rewrite (unstaged) + staged rewrite: three different bytes.
+    temp.write("img.bin", "worktree-v3");
+    {
+        let mut index = temp.repo.index().expect("index");
+        index.add_path(Path::new("img.bin")).expect("stage");
+        index.write().expect("write index");
+    }
+
+    let head = ENGINE
+        .blob(&temp.repo, &DiffSide::Head, "img.bin")
+        .expect("head blob");
+    assert_eq!(head, b"committed-v1");
+
+    let index = ENGINE
+        .blob(&temp.repo, &DiffSide::Index, "img.bin")
+        .expect("index blob");
+    assert_eq!(index, b"worktree-v3");
+
+    let worktree = ENGINE
+        .blob(&temp.repo, &DiffSide::Worktree, "img.bin")
+        .expect("worktree blob");
+    assert_eq!(worktree, b"worktree-v3");
+}
+
+#[test]
+fn blob_reads_commit_side_by_sha() {
+    let temp = TempRepo::new("blob-commit-side");
+    temp.write("img.bin", "v1");
+    let c1 = temp.add_all_and_commit("c1");
+    temp.write("img.bin", "v2");
+    let _c2 = temp.add_all_and_commit("c2");
+
+    let old = ENGINE
+        .blob(&temp.repo, &DiffSide::Commit(c1.to_string()), "img.bin")
+        .expect("parent-side blob");
+    assert_eq!(old, b"v1");
+}
+
+#[test]
+fn blob_missing_path_is_an_error() {
+    let temp = TempRepo::new("blob-missing");
+    temp.write("a.txt", "one\n");
+    temp.add_all_and_commit("c1");
+
+    // A side without the path (deleted file's new side, added file's old
+    // side) rejects — the FE renders its "unavailable" placeholder.
+    for side in [DiffSide::Head, DiffSide::Index, DiffSide::Worktree] {
+        let err = ENGINE
+            .blob(&temp.repo, &side, "gone.png")
+            .expect_err("missing path must fail");
+        assert!(matches!(err, EngineError::Invalid(_)), "{err:?}");
+    }
+}
+
+#[test]
+fn blob_rejects_traversal_and_absolute_paths() {
+    let temp = TempRepo::new("blob-traversal");
+    temp.write("a.txt", "one\n");
+    temp.add_all_and_commit("c1");
+
+    for bad in ["../outside.png", "sub/../../escape.png", "/etc/passwd"] {
+        let err = ENGINE
+            .blob(&temp.repo, &DiffSide::Head, bad)
+            .expect_err("unvalidated path must fail");
+        assert!(matches!(err, EngineError::Invalid(_)), "{err:?}");
+    }
+}
+
+#[test]
+fn blob_refuses_oversized_files() {
+    let oversized = READ_FILE_MAX_BYTES + 1;
+    let temp = TempRepo::new("blob-cap");
+    let big = temp.repo.workdir().unwrap().join("big.png");
+    std::fs::write(&big, vec![b'x'; oversized as usize]).expect("write big file");
+    // Stage + commit WITHOUT rewriting the file (TempRepo::write would
+    // replace the content under test); commit_tree commits the index as-is.
+    {
+        let mut index = temp.repo.index().expect("index");
+        index.add_path(Path::new("big.png")).expect("add big");
+        index.write().expect("write index");
+    }
+    temp.commit_tree("c1 big");
+
+    // Committed blob above the cap...
+    let err = ENGINE
+        .blob(&temp.repo, &DiffSide::Head, "big.png")
+        .expect_err("oversized committed blob must fail");
+    assert!(err.to_string().contains("read limit"), "{err}");
+
+    // ...and the worktree side of the same file.
+    let err = ENGINE
+        .blob(&temp.repo, &DiffSide::Worktree, "big.png")
+        .expect_err("oversized worktree file must fail");
+    assert!(err.to_string().contains("read limit"), "{err}");
 }

@@ -28,6 +28,8 @@ use super::quoting::{shell_quote, shell_quote_all};
 use super::transport::{DeviceSession, ExecOutput, DEFAULT_EXEC_TIMEOUT, LONG_EXEC_TIMEOUT};
 use crate::engine::git_engine::{FetchProgress, PushProgress};
 use crate::engine::stats::{Contributor, DayCount};
+// Shared IPC read cap (`repo_read_file`): image-diff blobs read the same
+// whole files over the wire.
 use crate::engine::types::{
     BisectLogEntry, BisectMark, BisectState, BlameLine, BranchInfo, BranchTrashEntry,
     CheckpointInfo, CommitInfo, CommitOptions, CommitSignature, ConflictFile, ConflictResolution,
@@ -37,6 +39,7 @@ use crate::engine::types::{
     RepoHealth, RepoStatus, ResetKind, SigningInfo, SparseInfo, StageRequest, StageTarget,
     StashInfo, SubmoduleInfo, TagInfo, WorktreeInfo,
 };
+use crate::ipc_commands::READ_FILE_MAX_BYTES;
 
 /// Hook kinds surfaced by the hooks panel (mirrors `engine/mutations.rs`).
 const KNOWN_HOOKS: [&str; 5] = [
@@ -314,6 +317,42 @@ impl RemoteGitEngine {
         let mut lines = parse_blame(&raw);
         lines.sort_by_key(|l| l.line_no);
         Ok(lines)
+    }
+
+    /// Raw bytes of one blob on a tree-ish diff side (`repo_blob`; image
+    /// diffs). Worktree reads ride the workspace's SFTP reader in the
+    /// command's closure, so this covers index/HEAD/commit sides only:
+    /// `cat-file -s` guards the shared repo_read_file IPC cap first, then
+    /// `cat-file blob` ships the bytes (binary-safe stdout, long timeout).
+    pub fn blob(&self, side: &DiffSide, path: &str) -> Result<Vec<u8>, String> {
+        let rel = crate::remote::workspace::validate_rel_posix(path)?;
+        let spec = match side {
+            DiffSide::Worktree => {
+                return Err(format!("`{path}`: worktree blobs read over the workspace"));
+            }
+            DiffSide::Index => format!(":0:{rel}"),
+            DiffSide::Head => format!("HEAD:{rel}"),
+            DiffSide::Commit(at) => format!("{at}:{rel}"),
+        };
+        let spec = shell_quote(&spec);
+        let size = self
+            .git_raw(&format!("cat-file -s {spec}"), DEFAULT_EXEC_TIMEOUT)?
+            .checked("cat-file -s")?
+            .stdout_str()
+            .trim()
+            .parse::<usize>()
+            .map_err(|e| format!("blob size for `{path}`: {e}"))?;
+        if size as u64 > READ_FILE_MAX_BYTES {
+            return Err(format!(
+                "`{path}` is {} MB — larger than the {} MB read limit",
+                size / (1024 * 1024),
+                READ_FILE_MAX_BYTES / (1024 * 1024)
+            ));
+        }
+        Ok(self
+            .git_raw(&format!("cat-file blob {spec}"), LONG_EXEC_TIMEOUT)?
+            .checked("cat-file blob")?
+            .stdout)
     }
 
     pub fn diff(

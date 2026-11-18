@@ -2594,6 +2594,52 @@ fn read_workdir_file(root: &Path, path: &str) -> Result<Vec<u8>, String> {
     }
 }
 
+/// Raw bytes of one blob at `path` on diff `side` (`repo_blob`): image
+/// diffs need both sides of commit-to-commit comparisons, and only the
+/// worktree side lives on disk (`repo_read_file`). Missing paths,
+/// traversal/absolute paths, and blobs above [`READ_FILE_MAX_BYTES`] all
+/// reject — the FE renders the "unavailable" placeholder for them. Unlike
+/// [`repo_read_file`] there is no missing-file fallback: a side without
+/// the path (a deleted file's new side) IS the placeholder case.
+///
+/// Returns a raw IPC response (`tauri::ipc::Response`) like
+/// [`repo_read_file`] — bytes ship as an `ArrayBuffer`, never a JSON
+/// number array.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn repo_blob(
+    repo_id: RepoId,
+    side: DiffSide,
+    path: String,
+    state: State<'_, RepoManager>,
+) -> Result<tauri::ipc::Response, String> {
+    let handle = get_handle(&state, &repo_id)?;
+    let content = if let Some(remote) = handle.remote() {
+        finish_op(enqueue_remote_read(
+            &handle,
+            remote,
+            "blob",
+            move |git, ws| {
+                // Worktree blobs are device files: the workspace's SFTP
+                // reader (missing file → error, the placeholder case).
+                if matches!(side, DiffSide::Worktree) {
+                    ws.read_file(&path)
+                } else {
+                    git.blob(&side, &path)
+                }
+            },
+        ))
+        .await?
+    } else {
+        let engine = handle.engine();
+        let repo = handle.repo()?;
+        finish_op(enqueue_read(&handle, &repo, "blob", move |_ctx, repo| {
+            engine.blob(repo, &side, &path)
+        }))
+        .await?
+    };
+    Ok(tauri::ipc::Response::new(content))
+}
+
 // ---------- M3: power + safety commands ----------
 
 #[tauri::command(rename_all = "snake_case")]

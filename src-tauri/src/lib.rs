@@ -264,6 +264,7 @@ pub fn run() {
             ipc_commands::worktree_remove,
             ipc_commands::reflog,
             ipc_commands::repo_read_file,
+            ipc_commands::repo_blob,
             workspace::repo_list_dir,
             workspace::repo_stat_file,
             workspace::repo_write_file,
