@@ -468,10 +468,31 @@ pub fn strip_verbatim(p: &Path) -> PathBuf {
 
 /// Repo-relative, forward-slash rendering of an absolute event path.
 /// Paths outside `root` (or with unmatchable prefixes) are returned as-is.
+///
+/// Backends spell the same directory differently: FSEvents on macOS reports
+/// the canonical `/private/var/...` while `root` is the symlinked
+/// `/var/...` from `temp_dir()`/the open dialog, and Windows
+/// `canonicalize()` adds a `\\?\` prefix. Canonicalizing both sides first
+/// keeps `strip_prefix` working, so downstream path matching (staging,
+/// status refresh) sees `"src/main.py"`, never an absolute path.
 pub fn relativize(root: &Path, path: &Path) -> String {
     let root = strip_verbatim(root);
     let path = strip_verbatim(path);
-    let rel = path.strip_prefix(&root).unwrap_or(&path);
+    let canon_root = root.canonicalize().unwrap_or_else(|_| root.clone());
+    // An event may reference a path that was already deleted; its parent
+    // usually still exists, so canonicalize that and re-attach the name.
+    let canon_path =
+        path.canonicalize()
+            .unwrap_or_else(|_| match (path.parent(), path.file_name()) {
+                (Some(parent), Some(name)) if !parent.as_os_str().is_empty() => parent
+                    .canonicalize()
+                    .map(|p| p.join(name))
+                    .unwrap_or_else(|_| path.clone()),
+                _ => path.clone(),
+            });
+    let canon_root = strip_verbatim(&canon_root);
+    let canon_path = strip_verbatim(&canon_path);
+    let rel = canon_path.strip_prefix(&canon_root).unwrap_or(&canon_path);
     rel.to_string_lossy().replace('\\', "/")
 }
 
@@ -1085,6 +1106,27 @@ mod tests {
         let root = Path::new("C:/Code/mygitui/fixtures/basic");
         let path = Path::new("C:/Code/mygitui/README.md");
         assert_eq!(relativize(root, path), "C:/Code/mygitui/README.md");
+    }
+
+    /// FSEvents hands back canonical paths (`/private/var/...` on macOS)
+    /// while the watcher root can be a symlinked alias (`/var/...`). Without
+    /// canonicalizing both sides the relative path degenerates into the
+    /// absolute one and every downstream path match misses.
+    #[cfg(unix)]
+    #[test]
+    fn relativize_resolves_symlinked_root_prefix() {
+        use std::os::unix::fs::symlink;
+
+        let base = std::env::temp_dir().join(format!("mygitui-relativize-{}", std::process::id()));
+        let real = base.join("real");
+        let alias = base.join("alias");
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(real.join("src")).expect("create temp dir");
+        symlink(&real, &alias).expect("symlink alias");
+        let event_path = alias.join("src/main.py");
+        std::fs::write(&event_path, b"x").expect("write file");
+        assert_eq!(relativize(&alias, &event_path), "src/main.py");
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     /// Integration-style: needs a real FS and the OS watcher backend.
