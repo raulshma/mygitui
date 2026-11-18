@@ -21,10 +21,10 @@ use ts_rs::TS;
 use crate::engine::git_engine::EngineError;
 use crate::engine::types::{
     BisectLogEntry, BisectMark, BisectState, BlameLine, BranchTrashEntry, CheckpointInfo,
-    CommitInfo, CommitSignature, ConflictFile, ConflictResolution, DiffSide, FileDiff, LfsStatus,
-    LogFilter, MergeOptions, MergeResult, RebaseState, RebaseStep, ReflogEntry, RemoteBranchInfo,
-    RepoHealth, RepoId, RepoInfo, RepoStatus, ResetKind, SparseInfo, StashInfo, TagInfo,
-    WorktreeInfo,
+    CommitInfo, CommitSignature, ConflictFile, ConflictResolution, DiffQuery, DiffSide, FileDiff,
+    LfsStatus, LogFilter, MergeOptions, MergeResult, RebaseState, RebaseStep, ReflogEntry,
+    RemoteBranchInfo, RepoHealth, RepoId, RepoInfo, RepoStatus, ResetKind, SparseInfo, StashInfo,
+    TagInfo, WorktreeInfo,
 };
 use crate::graph::types::{self, GraphRow};
 use crate::repo::{RepoHandle, RepoManager, StreamHandle, StreamKind};
@@ -199,25 +199,42 @@ pub async fn repo_diff(
     repo_id: RepoId,
     old: DiffSide,
     new: DiffSide,
-    paths: Option<Vec<String>>,
+    query: Option<DiffQuery>,
     state: State<'_, RepoManager>,
 ) -> Result<Vec<FileDiff>, String> {
     let handle = get_handle(&state, &repo_id)?;
+    let (paths, ignore_ws) = diff_query_parts(query);
     if let Some(remote) = handle.remote() {
         return finish_op(enqueue_remote_read(
             &handle,
             remote,
             "diff",
-            move |git, _ws| git.diff(&old, &new, paths.as_deref()),
+            move |git, _ws| git.diff(&old, &new, paths.as_deref(), ignore_ws),
         ))
         .await;
     }
     let engine = handle.engine();
     let repo = handle.repo()?;
     finish_op(enqueue_read(&handle, &repo, "diff", move |_ctx, repo| {
-        engine.diff(repo, &old, &new, paths.as_deref())
+        engine.diff(repo, &old, &new, paths.as_deref(), ignore_ws)
     }))
     .await
+}
+
+/// Split a diff query into the engine-shaped parts: `None`/empty paths is
+/// "all paths", and the whitespace flag defaults to false.
+fn diff_query_parts(query: Option<DiffQuery>) -> (Option<Vec<String>>, bool) {
+    match query {
+        Some(q) => (
+            if q.paths.is_empty() {
+                None
+            } else {
+                Some(q.paths)
+            },
+            q.ignore_whitespace,
+        ),
+        None => (None, false),
+    }
 }
 
 /// Stream a diff in pages of [`DIFF_PAGE_SIZE`] files over `on_page`.
@@ -229,12 +246,13 @@ pub async fn repo_diff_stream(
     repo_id: RepoId,
     old: DiffSide,
     new: DiffSide,
-    paths: Option<Vec<String>>,
+    query: Option<DiffQuery>,
     consumer_id: Option<String>,
     on_page: Channel<Vec<FileDiff>>,
     state: State<'_, RepoManager>,
 ) -> Result<(), String> {
     let handle = get_handle(&state, &repo_id)?;
+    let (paths, ignore_ws) = diff_query_parts(query);
     let token = handle.begin_stream(StreamKind::Diff, consumer_id.as_deref());
     if let Some(remote) = handle.remote() {
         // The remote engine returns the complete diff in one shot: one
@@ -243,7 +261,7 @@ pub async fn repo_diff_stream(
             &handle,
             remote,
             "diff",
-            move |git, _ws| git.diff(&old, &new, paths.as_deref()),
+            move |git, _ws| git.diff(&old, &new, paths.as_deref(), ignore_ws),
         ))
         .await?;
         for page in chunk_vec(diffs, DIFF_PAGE_SIZE) {
@@ -267,20 +285,27 @@ pub async fn repo_diff_stream(
         let mut page: Vec<FileDiff> = Vec::with_capacity(DIFF_PAGE_SIZE);
         let mut cancelled = false;
         engine
-            .diff_stream(&repo, &old, &new, paths.as_deref(), &mut |file| {
-                // Per-page cancel check (same rule as the log walk): a
-                // superseded/closed stream stops building patches.
-                if token.is_cancelled() || handle.is_closed() {
-                    cancelled = true;
-                    return false;
-                }
-                page.push(file);
-                if page.len() < DIFF_PAGE_SIZE {
-                    return true;
-                }
-                // Full page: ship it; a failed send = client gone.
-                on_page.send(std::mem::take(&mut page)).is_ok()
-            })
+            .diff_stream(
+                &repo,
+                &old,
+                &new,
+                paths.as_deref(),
+                ignore_ws,
+                &mut |file| {
+                    // Per-page cancel check (same rule as the log walk): a
+                    // superseded/closed stream stops building patches.
+                    if token.is_cancelled() || handle.is_closed() {
+                        cancelled = true;
+                        return false;
+                    }
+                    page.push(file);
+                    if page.len() < DIFF_PAGE_SIZE {
+                        return true;
+                    }
+                    // Full page: ship it; a failed send = client gone.
+                    on_page.send(std::mem::take(&mut page)).is_ok()
+                },
+            )
             .map_err(engine_err)?;
         if cancelled {
             return Ok(());

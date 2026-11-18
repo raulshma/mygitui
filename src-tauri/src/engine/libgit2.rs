@@ -689,11 +689,20 @@ fn highlight_hunk(lines: &mut [DiffLine]) {
 // diff conversion
 // ---------------------------------------------------------------------------
 
-fn build_diff<'r>(repo: &'r Repository, old: &DiffSide, new: &DiffSide) -> EngineResult<Diff<'r>> {
+fn build_diff<'r>(
+    repo: &'r Repository,
+    old: &DiffSide,
+    new: &DiffSide,
+    ignore_ws: bool,
+) -> EngineResult<Diff<'r>> {
     let mut opts = DiffOptions::new();
     if matches!(new, DiffSide::Worktree) {
         // GUI parity: show untracked files as additions in worktree diffs.
         opts.include_untracked(true).recurse_untracked_dirs(true);
+    }
+    if ignore_ws {
+        // `git diff -w` parity: skip all-whitespace differences.
+        opts.ignore_whitespace(true);
     }
     let mut diff = match (old, new) {
         (DiffSide::Index, DiffSide::Worktree) => {
@@ -785,12 +794,13 @@ impl Libgit2Engine {
         repo: &'r Repository,
         old: &DiffSide,
         new: &DiffSide,
+        ignore_ws: bool,
     ) -> EngineResult<Option<Diff<'r>>> {
         match (old, new) {
             (DiffSide::Worktree, _) | (DiffSide::Index, DiffSide::Index) => return Ok(None),
             _ => {}
         }
-        build_diff(repo, old, new).map(Some)
+        build_diff(repo, old, new, ignore_ws).map(Some)
     }
 }
 
@@ -1262,8 +1272,9 @@ impl GitEngine for Libgit2Engine {
         old: &DiffSide,
         new: &DiffSide,
         paths: Option<&[String]>,
+        ignore_ws: bool,
     ) -> EngineResult<Vec<FileDiff>> {
-        let Some(diff) = self.diff_build(repo, old, new)? else {
+        let Some(diff) = self.diff_build(repo, old, new, ignore_ws)? else {
             return Ok(Vec::new());
         };
         diff_to_files(repo, &diff, paths)
@@ -1278,9 +1289,10 @@ impl GitEngine for Libgit2Engine {
         old: &DiffSide,
         new: &DiffSide,
         paths: Option<&[String]>,
+        ignore_ws: bool,
         on_file: &mut dyn FnMut(FileDiff) -> bool,
     ) -> EngineResult<()> {
-        let Some(diff) = self.diff_build(repo, old, new)? else {
+        let Some(diff) = self.diff_build(repo, old, new, ignore_ws)? else {
             return Ok(());
         };
         for idx in 0..diff.deltas().len() {

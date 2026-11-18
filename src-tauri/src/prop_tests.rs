@@ -242,7 +242,7 @@ proptest! {
         write_file(&repo, path, &join_lines(&b));
 
         let files = ENGINE
-            .diff(&repo, &DiffSide::Head, &DiffSide::Worktree, None)
+            .diff(&repo, &DiffSide::Head, &DiffSide::Worktree, None, false)
             .expect("worktree diff");
         let fd = files
             .iter()

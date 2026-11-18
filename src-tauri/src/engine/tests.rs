@@ -82,7 +82,7 @@ fn diff_worktree_vs_head_and_index() {
 
     // Worktree vs HEAD: only the untracked file.
     let worktree = ENGINE
-        .diff(&repo, &DiffSide::Head, &DiffSide::Worktree, None)
+        .diff(&repo, &DiffSide::Head, &DiffSide::Worktree, None, false)
         .expect("diff head..worktree");
     assert_eq!(worktree.len(), 1);
     let notes = find_by_path(&worktree, "notes.txt");
@@ -99,7 +99,7 @@ fn diff_worktree_vs_head_and_index() {
 
     // Clean index vs HEAD.
     let staged = ENGINE
-        .diff(&repo, &DiffSide::Head, &DiffSide::Index, None)
+        .diff(&repo, &DiffSide::Head, &DiffSide::Index, None, false)
         .expect("diff head..index");
     assert!(staged.is_empty(), "index matches HEAD in basic fixture");
 }
@@ -113,6 +113,7 @@ fn diff_between_commits_counts_additions() {
             &DiffSide::Commit("HEAD~1".into()),
             &DiffSide::Commit("HEAD".into()),
             None,
+            false,
         )
         .expect("diff HEAD~1..HEAD");
     assert_eq!(files.len(), 1);
@@ -130,18 +131,56 @@ fn diff_path_filter_is_component_prefix() {
     let new = DiffSide::Commit("HEAD".into());
 
     let src = ENGINE
-        .diff(&repo, &old, &new, Some(&["src".to_string()]))
+        .diff(&repo, &old, &new, Some(&["src".to_string()]), false)
         .expect("diff src filter");
     assert!(src.len() == 2, "src/main.py + src/util.py, got {src:?}");
     assert!(src.iter().all(|f| f.path.starts_with("src/")));
 
     let readme = ENGINE
-        .diff(&repo, &old, &new, Some(&["README.md".to_string()]))
+        .diff(&repo, &old, &new, Some(&["README.md".to_string()]), false)
         .expect("diff README filter");
     assert!(
         readme.is_empty(),
         "README unchanged between HEAD~2 and HEAD"
     );
+}
+
+#[test]
+fn diff_ignore_whitespace_skips_ws_only_changes() {
+    let temp = TempRepo::new("diff-ignore-ws");
+    temp.write("app.txt", "one\ntwo\n");
+    temp.add_all_and_commit("base");
+
+    // Whitespace-only change (trailing spaces): a normal diff reports it,
+    // `-w` parity reports nothing.
+    temp.write("app.txt", "one  \ntwo\n");
+    let strict = ENGINE
+        .diff(&temp, &DiffSide::Head, &DiffSide::Worktree, None, false)
+        .expect("strict diff");
+    assert_eq!(strict.len(), 1, "ws-only change visible by default");
+
+    let ignored = ENGINE
+        .diff(&temp, &DiffSide::Head, &DiffSide::Worktree, None, true)
+        .expect("ignore-ws diff");
+    // libgit2 keeps the delta entry (the blob oids differ) but strips the
+    // hunks — the entry carries no visible content, which is what the FE
+    // filters on when the mode is on.
+    assert!(
+        ignored
+            .iter()
+            .all(|f| f.hunks.is_empty() && f.additions == 0 && f.deletions == 0),
+        "ws-only change carries no visible hunks with ignore_whitespace: {ignored:?}"
+    );
+
+    // Content changes still show through: whitespace is not the whole diff.
+    temp.write("app.txt", "one  \nthree\n");
+    let mixed = ENGINE
+        .diff(&temp, &DiffSide::Head, &DiffSide::Worktree, None, true)
+        .expect("ignore-ws diff with real change");
+    let app = find_by_path(&mixed, "app.txt");
+    assert_eq!(app.additions, 1);
+    assert_eq!(app.deletions, 1);
+    assert!(app.hunks[0].lines.iter().any(|l| l.text == "three"));
 }
 
 #[test]
@@ -419,7 +458,7 @@ fn conflicted_status_shows_merge_state() {
 
     // The conflict must also be visible as a diffable side pair.
     let files = ENGINE
-        .diff(&repo, &DiffSide::Head, &DiffSide::Worktree, None)
+        .diff(&repo, &DiffSide::Head, &DiffSide::Worktree, None, false)
         .expect("diff in conflicted repo");
     assert!(
         files.iter().any(|f| f.path == "app.txt"),
@@ -602,7 +641,7 @@ fn staged_and_worktree_kinds_map_correctly() {
 
     // The staged pair sees only staged changes; the worktree pair sees the rest.
     let staged = ENGINE
-        .diff(&temp, &DiffSide::Head, &DiffSide::Index, None)
+        .diff(&temp, &DiffSide::Head, &DiffSide::Index, None, false)
         .unwrap();
     let staged_paths: Vec<&str> = staged.iter().map(|f| f.path.as_str()).collect();
     assert!(staged_paths.contains(&"mod.txt"), "{staged:?}");
@@ -610,7 +649,7 @@ fn staged_and_worktree_kinds_map_correctly() {
     assert!(!staged_paths.contains(&"gone.txt"), "{staged:?}");
 
     let unstaged = ENGINE
-        .diff(&temp, &DiffSide::Index, &DiffSide::Worktree, None)
+        .diff(&temp, &DiffSide::Index, &DiffSide::Worktree, None, false)
         .unwrap();
     let unstaged_paths: Vec<&str> = unstaged.iter().map(|f| f.path.as_str()).collect();
     assert!(unstaged_paths.contains(&"mod.txt"), "{unstaged:?}");
@@ -641,7 +680,7 @@ fn rename_in_status_reports_old_path() {
 
     // And in the diff side pair.
     let files = ENGINE
-        .diff(&temp, &DiffSide::Head, &DiffSide::Index, None)
+        .diff(&temp, &DiffSide::Head, &DiffSide::Index, None, false)
         .unwrap();
     let file = find_by_path(&files, "renamed.txt");
     assert_eq!(file.old_path.as_deref(), Some("old.txt"));
@@ -663,6 +702,7 @@ fn word_highlights_mark_changed_words() {
             &DiffSide::Commit(first),
             &DiffSide::Commit(temp.head_sha()),
             None,
+            false,
         )
         .unwrap();
     let story = find_by_path(&files, "story.txt");
@@ -698,6 +738,7 @@ fn binary_and_image_files_are_flagged() {
             &DiffSide::Commit("HEAD~1".into()),
             &DiffSide::Commit("HEAD".into()),
             None,
+            false,
         )
         .unwrap();
     // plain.txt is unchanged between the two commits: exactly the two images.
@@ -851,7 +892,7 @@ fn stage_and_unstage_modified_file() {
         .expect("stage modified");
     assert_eq!(index_blob(&temp, "a.txt"), "v1\nv2\n", "staged content");
     let staged = ENGINE
-        .diff(&temp, &DiffSide::Head, &DiffSide::Index, None)
+        .diff(&temp, &DiffSide::Head, &DiffSide::Index, None, false)
         .unwrap();
     assert_eq!(staged.len(), 1);
     assert_eq!(staged[0].path, "a.txt");
@@ -939,7 +980,7 @@ fn stage_all_roundtrip_stages_and_unstages_everything() {
 
     ENGINE.stage_all(&temp, false).expect("stage all");
     let staged = ENGINE
-        .diff(&temp, &DiffSide::Head, &DiffSide::Index, None)
+        .diff(&temp, &DiffSide::Head, &DiffSide::Index, None, false)
         .unwrap();
     let paths: Vec<&str> = staged.iter().map(|f| f.path.as_str()).collect();
     assert!(paths.contains(&"a.txt"), "{staged:?}");
@@ -950,7 +991,7 @@ fn stage_all_roundtrip_stages_and_unstages_everything() {
 
     ENGINE.stage_all(&temp, true).expect("unstage all");
     let staged = ENGINE
-        .diff(&temp, &DiffSide::Head, &DiffSide::Index, None)
+        .diff(&temp, &DiffSide::Head, &DiffSide::Index, None, false)
         .unwrap();
     assert!(
         staged.is_empty(),
@@ -982,7 +1023,7 @@ fn line_staging_stages_only_middle_change() {
     let (path, base, changed) = three_change_file(&temp);
 
     let files = ENGINE
-        .diff(&temp, &DiffSide::Index, &DiffSide::Worktree, None)
+        .diff(&temp, &DiffSide::Index, &DiffSide::Worktree, None, false)
         .unwrap();
     let file = find_by_path(&files, path);
     assert_eq!(file.hunks.len(), 3, "three independent hunks");
@@ -1080,7 +1121,7 @@ fn hunk_staging_and_unstaging_single_hunks() {
     );
 
     let files = ENGINE
-        .diff(&temp, &DiffSide::Index, &DiffSide::Worktree, None)
+        .diff(&temp, &DiffSide::Index, &DiffSide::Worktree, None, false)
         .unwrap();
     let file = find_by_path(&files, "two.txt");
     assert_eq!(file.hunks.len(), 2, "two separate hunks");
@@ -1653,6 +1694,7 @@ fn diff_index_against_commit_shows_staged_vs_target() {
             &DiffSide::Index,
             &DiffSide::Commit(first.clone()),
             None,
+            false,
         )
         .expect("index vs commit");
     assert_eq!(diff.len(), 1);
@@ -1660,7 +1702,7 @@ fn diff_index_against_commit_shows_staged_vs_target() {
 
     // Staged content vs HEAD: only "three" is index-only.
     let diff = ENGINE
-        .diff(&temp, &DiffSide::Index, &DiffSide::Head, None)
+        .diff(&temp, &DiffSide::Index, &DiffSide::Head, None, false)
         .expect("index vs HEAD");
     assert_eq!(diff.len(), 1);
     assert_eq!(diff[0].deletions, 1);
@@ -1669,7 +1711,7 @@ fn diff_index_against_commit_shows_staged_vs_target() {
     temp.write("a.txt", "one\ntwo\n");
     temp.stage("a.txt");
     let diff = ENGINE
-        .diff(&temp, &DiffSide::Index, &DiffSide::Head, None)
+        .diff(&temp, &DiffSide::Index, &DiffSide::Head, None, false)
         .unwrap();
     assert!(diff.is_empty());
 }

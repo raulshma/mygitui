@@ -321,18 +321,21 @@ impl RemoteGitEngine {
         old: &DiffSide,
         new: &DiffSide,
         paths: Option<&[String]>,
+        ignore_ws: bool,
     ) -> Result<Vec<FileDiff>, String> {
         let range = diff_range(old, new)?;
         let pathspec = path_spec(paths);
+        // `-w` mirrors the local engine's ignore-whitespace option.
+        let ws = if ignore_ws { " -w" } else { "" };
         // 1) stats via numstat (authoritative counts + renames + binary).
-        let stats_raw = self.git_out(&format!("diff --numstat -z {range}{pathspec}"))?;
+        let stats_raw = self.git_out(&format!("diff{ws} --numstat -z {range}{pathspec}"))?;
         let rows = parse_numstat(&stats_raw);
         // 2) hunks via unified patch. Standard a/ b/ prefixes are kept:
         // split_patch keys patches by their b-side, and `git apply` strips
         // the prefix when staging hunks. quotePath=false keeps non-ASCII
         // paths byte-identical to the numstat/status paths.
         let patch_raw = self.git_out(&format!(
-            "-c core.quotePath=false diff --no-color --no-ext-diff -U3 {range}{pathspec}"
+            "-c core.quotePath=false diff{ws} --no-color --no-ext-diff -U3 {range}{pathspec}"
         ))?;
         let patches = split_patch(&patch_raw);
         let mut out = Vec::new();

@@ -89,6 +89,19 @@ pub enum DiffSide {
     Commit(String),
 }
 
+/// Options for `repo_diff` / `repo_diff_stream` beyond the two sides. The FE
+/// omits the field entirely for defaults.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct DiffQuery {
+    /// Restrict the diff to these paths (prefix-matched); empty = all.
+    #[serde(default)]
+    pub paths: Vec<String>,
+    /// `git diff -w` parity: skip all-whitespace differences.
+    #[serde(default)]
+    pub ignore_whitespace: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct DiffLine {

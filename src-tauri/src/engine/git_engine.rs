@@ -42,12 +42,14 @@ pub trait GitEngine: Send + Sync {
     fn status(&self, repo: &Repository, paths: Option<&[String]>) -> EngineResult<RepoStatus>;
 
     /// Diff two sides, optionally restricted to `paths` (prefix-matched).
+    /// `ignore_ws` is `git diff -w` (all-whitespace differences skipped).
     fn diff(
         &self,
         repo: &Repository,
         old: &DiffSide,
         new: &DiffSide,
         paths: Option<&[String]>,
+        ignore_ws: bool,
     ) -> EngineResult<Vec<FileDiff>>;
 
     /// Hand one `FileDiff` at a time to `on_file` while patches build.
@@ -60,9 +62,10 @@ pub trait GitEngine: Send + Sync {
         old: &DiffSide,
         new: &DiffSide,
         paths: Option<&[String]>,
+        ignore_ws: bool,
         on_file: &mut dyn FnMut(FileDiff) -> bool,
     ) -> EngineResult<()> {
-        for file in self.diff(repo, old, new, paths)? {
+        for file in self.diff(repo, old, new, paths, ignore_ws)? {
             if !on_file(file) {
                 break;
             }
