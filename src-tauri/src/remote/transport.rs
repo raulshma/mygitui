@@ -1053,6 +1053,12 @@ impl DeviceRegistry {
         self.sessions.lock().get(device_id).cloned()
     }
 
+    /// Ids of devices with a live (pooled) session, unordered —
+    /// diagnostics (`diagnostics_bundle`).
+    pub fn connected_device_ids(&self) -> Vec<String> {
+        self.sessions.lock().keys().cloned().collect()
+    }
+
     /// Current status without connecting.
     pub fn status(&self, device_id: &str) -> DeviceStatus {
         self.peek(device_id)

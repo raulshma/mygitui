@@ -216,6 +216,20 @@ export type { CloneProgress as CloneProgressEvent } from "./gen/CloneProgress";
 /** `repo-changed` event payload. */
 export type { RepoChangedEvent } from "./gen/RepoChangedEvent";
 
+/** `repo-watch-state` event payload (watcher health, change-only). */
+export type { RepoWatchStateEvent } from "./gen/RepoWatchStateEvent";
+/** Watcher backend (`RepoWatchStateEvent.mode`). */
+export type { WatchMode } from "./gen/WatchMode";
+
+// ---------------------------------------------------------------------------
+// Diagnostics (Rust: src-tauri/src/diagnostics.rs)
+// ---------------------------------------------------------------------------
+
+/** `diagnostics_bundle` report (support snapshot for bug reports). */
+export type { DiagnosticsReport } from "./gen/DiagnosticsReport";
+/** Per-open-repo runtime facts (`DiagnosticsReport.repos`). */
+export type { RepoDiagnostics } from "./gen/RepoDiagnostics";
+
 // ---------------------------------------------------------------------------
 // Workspace files — file browser / viewer / editor (Rust: workspace.rs)
 // ---------------------------------------------------------------------------

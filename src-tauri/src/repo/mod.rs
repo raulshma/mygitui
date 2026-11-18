@@ -239,6 +239,13 @@ impl RepoHandle {
         self.closed.load(Ordering::SeqCst)
     }
 
+    /// Current FS-watcher backend (`recommended` | `poll` | `dead`),
+    /// mirrored from the debounce thread. `None` for remote repos, which
+    /// poll instead of watching (diagnostics: `watch_mode`).
+    pub fn watch_mode(&self) -> Option<crate::watcher::WatchMode> {
+        self.watcher.lock().as_ref().map(|w| w.mode())
+    }
+
     /// Register a stream token for `(kind, consumer)`, cancelling the
     /// previous token of the SAME consumer only (new view wins within a
     /// consumer; other consumers are unaffected). When the per-kind cap
@@ -393,6 +400,12 @@ impl RepoManager {
         self.repos.lock().get(id).cloned()
     }
 
+    /// Snapshot of every open handle (unordered) — diagnostics
+    /// (`diagnostics_bundle`).
+    pub fn all(&self) -> Vec<Arc<RepoHandle>> {
+        self.repos.lock().values().cloned().collect()
+    }
+
     /// Open (or reuse) the repo at/above `path` and start its FS watcher.
     /// IPC entry point for `repo_open`.
     pub fn open(&self, app: &tauri::AppHandle, path: &Path) -> EngineResult<RepoInfo> {
@@ -403,12 +416,21 @@ impl RepoManager {
                 .ops()
                 .set_sink(Arc::new(crate::ops::TauriEventSink::new(app.clone())));
             let mut slot = handle.watcher.lock();
-            // A watcher that exhausted its restart budget stays in the slot
-            // with a dead thread; replacing it makes "reopen the repo to
-            // retry" literally true. Without this check, `repo_open` reused
-            // the handle and the repo silently watched nothing forever.
+            // A watcher that exhausted its restart budget AND its poll
+            // fallback stays in the slot with a dead thread; replacing it
+            // makes "reopen the repo to retry" literally true. Without this
+            // check, `repo_open` reused the handle and the repo silently
+            // watched nothing forever.
             if slot.as_ref().is_none_or(|w| w.is_dead()) {
+                // Revival: the replaced watcher was dead (announced as
+                // `alive: false, mode: "dead"`), so announce the fresh one —
+                // a state CHANGE, unlike a plain open, which starts
+                // alive/recommended and emits nothing.
+                let revived = slot.as_ref().is_some_and(|w| w.is_dead());
                 let app = app.clone();
+                let state_app = app.clone();
+                let revival_app = app.clone();
+                let repo_id_for_revival = handle.id.clone();
                 *slot = Some(RepoWatcher::start(
                     handle.id.clone(),
                     handle.root.clone(),
@@ -422,7 +444,31 @@ impl RepoManager {
                             );
                         }
                     },
+                    move |state| {
+                        if let Err(err) = state_app.emit(watcher::REPO_WATCH_STATE_EVENT, &state) {
+                            tracing::warn!(
+                                repo = %state.repo_id.0,
+                                mode = ?state.mode,
+                                error = %err,
+                                "emit repo-watch-state failed"
+                            );
+                        }
+                    },
                 ));
+                if revived {
+                    let revival = watcher::RepoWatchStateEvent {
+                        repo_id: repo_id_for_revival,
+                        alive: true,
+                        mode: watcher::WatchMode::Recommended,
+                    };
+                    if let Err(err) = revival_app.emit(watcher::REPO_WATCH_STATE_EVENT, &revival) {
+                        tracing::warn!(
+                            repo = %revival.repo_id.0,
+                            error = %err,
+                            "emit repo-watch-state revival failed"
+                        );
+                    }
+                }
             }
         }
         Ok(info)

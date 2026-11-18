@@ -63,6 +63,7 @@ further page delivery (then restart, with backoff).
 |---|---|---|
 | `cli-args` | `string[]` | second instance launched with args (argv[0] = the executable's own path, stripped backend-side) |
 | `repo-changed` | `{ repo_id, paths: string[], head_moved: bool, full: bool }` | watcher fired; `full=true` → resync everything |
+| `repo-watch-state` | `{ repo_id, alive: bool, mode: "recommended" \| "poll" \| "dead" }` | local watcher health transitions, emitted on state CHANGE only (never per event): poll fallback engaged (`alive=true, mode="poll"` — the recommended backend failed its restart budget and a ~2s directory-scan PollWatcher with `compare_contents` took over, feeding the same `repo-changed` pipeline), transparent upgrade back to the recommended backend (re-probed every ~60s while polling; `alive=true, mode="recommended"`), death after even the poll fallback failed (`alive=false, mode="dead"`, watcher thread exited), and revival on repo reopen (`alive=true, mode="recommended"`, emitted by `repo_open` when it replaces a dead watcher). A fresh open starts alive/recommended and emits nothing. Rust: `watcher::RepoWatchStateEvent` (ts-rs) |
 
 ## Type single-sourcing (ts-rs)
 
@@ -74,8 +75,8 @@ camelCase conversion anywhere). TS types are not hand-mirrored:
    plus the payload types declared next to their commands/events
    (`forge.rs`, `pty.rs`, `engine/stats.rs`, `ops.rs`, `auth.rs`,
    `actions.rs`, `watcher.rs`, `editors.rs`, `opencode.rs`,
-   `graph/types.rs`, `ipc_commands.rs`, `remote/{actions,commands,prompts,
-   transport}.rs`).
+   `diagnostics.rs`, `graph/types.rs`, `ipc_commands.rs`,
+   `remote/{actions,commands,prompts,transport}.rs`).
 2. `cargo test export_bindings` (wrapped as `npm run gen:types`) regenerates
    one file per type into `src/lib/ipc/gen/<RustTypeName>.ts` (destination
    pinned by `TS_RS_EXPORT_DIR` in `src-tauri/.cargo/config.toml`; generated
@@ -759,12 +760,40 @@ existing field changed meaning.
   manual disconnect, device removal, or an auth/host-key prompt — the user
   owns the connect then). The backend watchdog's own reconnect still owns
   sessions that drop after connecting.
+- **`DeviceProfile.poll_secs`** — per-device repo-change poll interval
+  (seconds) consumed by the remote poller. Clamped to 2–300 on write
+  (`sanitize_profile`) and read (`DeviceStore` load): a sub-2s interval
+  would hammer the SSH session, and a typo'd day-scale value would leave
+  the tab silently stale. `#[serde(default)]` (default = `DEFAULT_POLL_SECS`
+  = 5) keeps pre-field store files parsing instead of wiping them;
+  `DeviceInput.poll_secs: Option<u32>` (`None` = default) round-trips
+  through `device_add` / `device_update`, and `remote_repo_open` starts the
+  poller with the persisted value.
 - **Remote-device status re-sync at launch (FE)** — `remoteDevices.load()`
   now lands before session restore starts dialing, and re-runs once
   restore settles; a `device-status` event for a device the list doesn't
   know yet schedules a debounced `device_list` re-sync instead of being
   dropped (the backend only emits on change, so a dropped event pinned a
   stale "disconnected" chip until the next reload). No wire shape changed.
+
+## Diagnostics (file log + report)
+
+Logic: `src-tauri/src/diagnostics.rs` (tests inline).
+
+**File logging**: the tracing subscriber (built in `setup`, where the app
+handle can resolve the app data dir) layers a rotating file sink next to
+the stderr layer: plain formatted lines (targets kept) to
+`<app-data>/logs/mygitui.log` — the same app-data root the remote device
+store persists under — rotated on write at 5 MiB into `mygitui.log.1`
+(replacing the previous generation, so at most current + one previous
+exist). Both layers share ONE env filter (`RUST_LOG` wins, `info` by
+default). A log dir that cannot be opened disables the file layer for the
+session instead of surfacing errors; the resolved path is pinned at init
+and reported by `diagnostics_bundle`.
+
+| Command | Args → Result | Notes |
+| --- | --- | --- |
+| `diagnostics_bundle` | `repo_id?: RepoId` → `DiagnosticsReport` | Support snapshot for bug reports. `DiagnosticsReport = { app_version, os, arch, repos: RepoDiagnostics[], pty_sessions, op_panics, remote_device_ids: string[], log_path, log_tail: string[] }`; `RepoDiagnostics = { repo_id, root, remote, device_id, watch_mode: "recommended" \| "poll" \| "dead" \| null, op_queue_depth }`. `repo_id` scopes `repos` to that repo (error when not open); absent → every open repo. There is no backend-side op-log ring (`EventSink` forwards `op-log` to the FE and keeps no history) — recent backend warnings/errors are covered by `log_tail` (last 50 lines, oldest first); `op_panics` counts ops caught panicking in the op queue since launch; `remote_device_ids` lists devices with a live pooled session. The tail read runs on the blocking pool (≤ 5 MiB file). New types: `DiagnosticsReport`, `RepoDiagnostics` (ts-rs). |
 
 ## Commands (workspace files — file browser / viewer / editor)
 
@@ -842,7 +871,7 @@ interpolated path/ref passes the unit-tested POSIX quoting helper
 | `device_host_key` | `device_id` | `KnownHostKey \| null` | the pinned key for the detail view |
 | `device_browse_dir` | `device_id, path` (`""`/`"~"` = home) | `DirListing` | SFTP listing; entries carry absolute POSIX paths |
 | `device_scan_repos` | `device_id, root?` (default home) | `DeviceRepoCandidate[]` | depth-limited `.git` scan, dependency/build dirs skipped, capped 200 |
-| `remote_repo_open` | `device_id, path` | `RepoInfo` (`device_id` set) | opens the remote repo as a project tab; starts the poller |
+| `remote_repo_open` | `device_id, path` | `RepoInfo` (`device_id` set) | opens the remote repo as a project tab; starts the poller at the device's `poll_secs` |
 | `remote_poll_set_paused` | `paused: bool` | `void` | pause/resume every remote repo poller (FE mirrors `visibilitychange` — polling is "paused when tab hidden") |
 | `rshell_create` | `repo_id, rows?, cols?` | `session_id: string` | remote shell over a pty'd exec channel (remote project required); the shell starts in the repo root on the device (the channel execs `cd <root> && exec "${SHELL:-/bin/sh}"` after the pty request instead of a plain shell request) |
 | `rshell_write` | `session_id, data: string` | `void` | keystrokes/paste to the remote shell |

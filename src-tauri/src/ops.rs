@@ -192,6 +192,12 @@ struct QueueInner {
     read_sender: Mutex<Option<mpsc::Sender<Job>>>,
     /// Monotonic op counter (op ids are `<repo>-op-<n hex>`).
     counter: AtomicU64,
+    /// Ops accepted but not yet finished (queued on either lane + running).
+    /// Diagnostics telemetry ([`OpQueue::depth`]); decremented on every
+    /// completion path (normal, error, cancel-skip). The one uncounted leak
+    /// is a worker killed by a queue-bookkeeping panic — its dropped
+    /// backlog stays counted, and the queue is dead right after anyway.
+    depth: AtomicU64,
     sink: RwLock<Option<Arc<dyn EventSink>>>,
     closed: AtomicBool,
     /// M12 cooperative cancellation: one token per live op, keyed by op id.
@@ -199,6 +205,16 @@ struct QueueInner {
     /// `cancel_op` flips the token and the op observes it via
     /// [`OpCtx::cancelled`]. Queued-not-started ops are skipped entirely.
     cancels: Mutex<HashMap<String, Arc<AtomicBool>>>,
+}
+
+/// Process-global count of ops that panicked and were caught by the op
+/// queue's guards (diagnostics: `op_panics`). Both catch sites count: a
+/// panicking op closure and a worker killed by queue-bookkeeping panic.
+pub(crate) static OP_PANICS: AtomicU64 = AtomicU64::new(0);
+
+/// Ops caught panicking since launch (diagnostics: `op_panics`).
+pub fn panics_caught() -> u64 {
+    OP_PANICS.load(Ordering::Relaxed)
 }
 
 /// Which worker an enqueued job runs on.
@@ -220,6 +236,7 @@ impl OpQueue {
                 sender: Mutex::new(None),
                 read_sender: Mutex::new(None),
                 counter: AtomicU64::new(0),
+                depth: AtomicU64::new(0),
                 sink: RwLock::new(None),
                 closed: AtomicBool::new(false),
                 cancels: Mutex::new(HashMap::new()),
@@ -250,6 +267,14 @@ impl OpQueue {
     /// once an `AppHandle` exists; headless callers (tests) skip it.
     pub fn set_sink(&self, sink: Arc<dyn EventSink>) {
         *self.inner.sink.write() = Some(sink);
+    }
+
+    /// Ops accepted but not yet finished (queued on either lane + running).
+    /// Diagnostics telemetry (`diagnostics_bundle` → `op_queue_depth`);
+    /// may over-count by the dropped backlog of a worker killed by a
+    /// queue-bookkeeping panic (see [`QueueInner::depth`]).
+    pub fn depth(&self) -> u64 {
+        self.inner.depth.load(Ordering::Relaxed)
     }
 
     /// Enqueue `kind` op `run` on this repo's serial queue. Returns the op
@@ -350,6 +375,9 @@ impl OpQueue {
             .cancels
             .lock()
             .insert(op_id.clone(), token.clone());
+        // Accepted: queued or running until the job closure finishes (or
+        // the send below fails because the worker is already gone).
+        self.inner.depth.fetch_add(1, Ordering::Relaxed);
         // The result sender is consumed by whoever runs first: the job's
         // closure (normal path) or the enqueue call (worker gone) — hence
         // the shared slot.
@@ -373,6 +401,7 @@ impl OpQueue {
                 };
                 // Cancelled while queued: skip execution, report as failed.
                 if token.load(Ordering::Acquire) {
+                    inner.depth.fetch_sub(1, Ordering::Relaxed);
                     inner.cancels.lock().remove(&final_op);
                     if let Some(sink) = &sink {
                         sink.emit(&OpProgress {
@@ -398,6 +427,7 @@ impl OpQueue {
                     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run(ctx))) {
                         Ok(result) => result,
                         Err(payload) => {
+                            OP_PANICS.fetch_add(1, Ordering::Relaxed);
                             tracing::error!(
                                 repo = %final_repo,
                                 op = %final_op,
@@ -410,6 +440,7 @@ impl OpQueue {
                     };
                 // The registry entry dies with the op: a later cancel_op
                 // correctly reports "unknown/finished".
+                inner.depth.fetch_sub(1, Ordering::Relaxed);
                 inner.cancels.lock().remove(&final_op);
                 let error = result.as_ref().err().cloned();
                 let event = OpProgress {
@@ -432,7 +463,9 @@ impl OpQueue {
         };
         if sender.send(job).is_err() {
             // Worker exited between the closed-check and the send (repo
-            // closed underneath us).
+            // closed underneath us): the job never runs, so the depth
+            // counter never sees its decrement.
+            self.inner.depth.fetch_sub(1, Ordering::Relaxed);
             if let Some(tx) = tx.lock().take() {
                 let _ = tx.send(Err(format!(
                     "op queue for repo {} closed before the {kind} op ran",
@@ -498,6 +531,7 @@ fn spawn_worker(name: &str, inner: Arc<QueueInner>, lane: Lane) -> mpsc::Sender<
         .spawn(move || {
             for job in rx {
                 if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| (job.run)())).is_err() {
+                    OP_PANICS.fetch_add(1, Ordering::Relaxed);
                     match lane {
                         Lane::Mutation => {
                             drop(inner.sender.lock().take());
@@ -1016,6 +1050,68 @@ mod tests {
         let (id, rx) = queue.enqueue("stage", move |_ctx| Ok(()));
         recv(rx).unwrap();
         assert!(!queue.cancel_op("test-repo", &id), "finished op unknown");
+        queue.shutdown();
+    }
+
+    // -------------------------------------------------------------------
+    // Diagnostics telemetry: queue depth + caught panics
+    // -------------------------------------------------------------------
+
+    /// `depth` counts accepted-but-unfinished ops on both lanes and returns
+    /// to zero once the backlog drains (diagnostics: `op_queue_depth`).
+    #[test]
+    fn depth_tracks_queued_and_running_ops() {
+        let queue = queue();
+        // Both ops gate on a channel so neither can complete before the
+        // assertions run (a fast read op would drain the counter first).
+        let (gate_tx, gate_rx) = std::sync::mpsc::channel::<()>();
+        let gate_rx = Arc::new(Mutex::new(Some(gate_rx)));
+        let (_id, rx) = {
+            let gate_rx = gate_rx.clone();
+            queue.enqueue("push", move |_ctx| {
+                if let Some(gate) = gate_rx.lock().take() {
+                    let _ = gate.recv(); // blocks the mutation lane
+                }
+                Ok(1u32)
+            })
+        };
+        assert_eq!(queue.depth(), 1, "the gated op counts");
+        let (gate_tx2, gate_rx2) = std::sync::mpsc::channel::<()>();
+        let gate_rx2 = Arc::new(Mutex::new(Some(gate_rx2)));
+        let (_rid, rx2) = {
+            let gate_rx2 = gate_rx2.clone();
+            queue.enqueue_read_lane("status", move |_ctx| {
+                if let Some(gate) = gate_rx2.lock().take() {
+                    let _ = gate.recv(); // blocks the read lane
+                }
+                Ok(2u32)
+            })
+        };
+        assert_eq!(queue.depth(), 2, "both lanes count");
+        drop(gate_tx);
+        drop(gate_tx2); // release both gates
+        recv(rx).unwrap();
+        recv(rx2).unwrap();
+        assert_eq!(queue.depth(), 0, "drained back to empty");
+        queue.shutdown();
+    }
+
+    /// `panics_caught` increments when an op panics (the caller still
+    /// resolves with the internal-error string). Process-global counter, so
+    /// only the increase is asserted, never an exact value.
+    #[test]
+    fn panics_caught_counts_panicking_ops() {
+        let queue = queue();
+        let before = panics_caught();
+        let prev_hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {}));
+        let (_id, rx) = queue.enqueue("commit", move |_ctx| -> Result<String, String> {
+            panic!("diagnostics counter panic");
+        });
+        let err = recv(rx).unwrap_err();
+        std::panic::set_hook(prev_hook);
+        assert_eq!(err, "internal error: op worker panicked");
+        assert!(panics_caught() > before, "caught panic counted");
         queue.shutdown();
     }
 

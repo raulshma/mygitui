@@ -8,7 +8,11 @@ export type DeviceProfile = { id: string,
 name: string, host: string, port: number, username: string, auth: DeviceAuth, 
 /**
  * Repo-change poll interval for repos opened on this device (seconds,
- * minimum 1).
+ * clamped to 2-300 on read and write; the poller in `remote/polling.rs`
+ * consumes exactly this value). `serde(default)` keeps pre-field and
+ * hand-edited `devices.json` files parsing with the global default
+ * (5s) — the store's load is all-or-nothing, so a required field would
+ * silently wipe every saved device.
  */
 poll_secs: number, 
 /**

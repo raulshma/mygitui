@@ -22,8 +22,19 @@ use ts_rs::TS;
 /// directly, not through the `secrets_*` IPC commands).
 const SERVICE: &str = "mygitui";
 
-/// Default repo-change poll interval for remote repos (seconds).
+/// Default repo-change poll interval for remote repos (seconds). Used when
+/// a device profile does not override `poll_secs` (the FE sends `None` /
+/// omits the field; see `DeviceInput`).
 pub const DEFAULT_POLL_SECS: u32 = 5;
+
+/// Lower clamp for a device's `poll_secs`: below 2s the per-device poll
+/// would hammer the SSH session with a status exec per tick.
+pub const MIN_POLL_SECS: u32 = 2;
+
+/// Upper clamp for a device's `poll_secs`: above 5 minutes a poller stops
+/// being a change feed (the user almost certainly meant minutes, and a
+/// typo'd day-scale value would leave the tab silently stale).
+pub const MAX_POLL_SECS: u32 = 300;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export)]
@@ -57,7 +68,12 @@ pub struct DeviceProfile {
     pub username: String,
     pub auth: DeviceAuth,
     /// Repo-change poll interval for repos opened on this device (seconds,
-    /// minimum 1).
+    /// clamped to 2-300 on read and write; the poller in `remote/polling.rs`
+    /// consumes exactly this value). `serde(default)` keeps pre-field and
+    /// hand-edited `devices.json` files parsing with the global default
+    /// (5s) — the store's load is all-or-nothing, so a required field would
+    /// silently wipe every saved device.
+    #[serde(default = "default_poll_secs")]
     pub poll_secs: u32,
     /// Connect automatically when the app launches (opt-in). `serde(default)`
     /// keeps pre-field `devices.json` files parsing: the store's load is
@@ -71,6 +87,11 @@ impl DeviceProfile {
     pub fn host_port(&self) -> String {
         format!("{}:{}", self.host, self.port)
     }
+}
+
+/// `serde(default)` hook for [`DeviceProfile::poll_secs`].
+fn default_poll_secs() -> u32 {
+    DEFAULT_POLL_SECS
 }
 
 /// JSON file backing the device list.
@@ -97,7 +118,16 @@ impl DeviceStore {
 
     fn load_file(&self) -> DeviceFile {
         match std::fs::read(&self.path) {
-            Ok(bytes) => serde_json::from_slice(&bytes).unwrap_or_default(),
+            Ok(bytes) => {
+                // Clamp on read too: a hand-edited `devices.json` (or one
+                // written by an older build with different clamps) must not
+                // smuggle an out-of-range poll interval into the poller.
+                let mut file: DeviceFile = serde_json::from_slice(&bytes).unwrap_or_default();
+                for device in &mut file.devices {
+                    device.poll_secs = clamp_poll_secs(device.poll_secs);
+                }
+                file
+            }
             Err(_) => DeviceFile::default(),
         }
     }
@@ -150,8 +180,15 @@ pub fn new_device_id() -> String {
     format!("dev-{}", uuid::Uuid::new_v4())
 }
 
+/// Clamp a poll interval to the accepted per-device range
+/// ([`MIN_POLL_SECS`]..=[`MAX_POLL_SECS`]). Applied on write
+/// ([`sanitize_profile`]) and read ([`DeviceStore::load_file`]).
+pub fn clamp_poll_secs(secs: u32) -> u32 {
+    secs.clamp(MIN_POLL_SECS, MAX_POLL_SECS)
+}
+
 /// Normalize a user-supplied profile before persisting: trim whitespace,
-/// default the port to 22, clamp the poll interval to >= 1s.
+/// default the port to 22, clamp the poll interval to 2-300s.
 pub fn sanitize_profile(mut profile: DeviceProfile) -> DeviceProfile {
     profile.name = profile.name.trim().to_string();
     profile.host = profile.host.trim().to_string();
@@ -162,7 +199,7 @@ pub fn sanitize_profile(mut profile: DeviceProfile) -> DeviceProfile {
     if let Some(p) = profile.auth.key_path.as_mut() {
         *p = p.trim().to_string();
     }
-    profile.poll_secs = profile.poll_secs.max(1);
+    profile.poll_secs = clamp_poll_secs(profile.poll_secs);
     if profile.name.is_empty() {
         profile.name = format!("{}@{}", profile.username, profile.host);
     }
@@ -300,16 +337,97 @@ mod tests {
         p.host = " h ".to_string();
         p.username = " u ".to_string();
         p.port = 0;
-        p.poll_secs = 0;
+        p.poll_secs = 1;
         p.auth.key_path = Some(" k ".to_string());
         let s = sanitize_profile(p);
         assert_eq!(s.port, 22);
-        assert_eq!(s.poll_secs, 1);
+        assert_eq!(s.poll_secs, MIN_POLL_SECS);
         assert_eq!(s.host, "h");
         assert_eq!(s.username, "u");
         assert_eq!(s.auth.key_path.as_deref(), Some("k"));
         // Empty name falls back to user@host.
         assert_eq!(s.name, "u@h");
+    }
+
+    /// The per-device poll interval is clamped to 2-300s on write
+    /// (`sanitize_profile`), so both typo'd day-scale values and
+    /// sub-2-second SSH hammering are rejected at the boundary.
+    #[test]
+    fn poll_secs_clamps_to_2_300_on_write() {
+        assert_eq!(clamp_poll_secs(0), MIN_POLL_SECS);
+        assert_eq!(clamp_poll_secs(1), MIN_POLL_SECS);
+        assert_eq!(clamp_poll_secs(2), 2);
+        assert_eq!(clamp_poll_secs(45), 45);
+        assert_eq!(clamp_poll_secs(300), 300);
+        assert_eq!(clamp_poll_secs(301), MAX_POLL_SECS);
+        assert_eq!(clamp_poll_secs(u32::MAX), MAX_POLL_SECS);
+
+        let mut p = sample("clamp");
+        p.poll_secs = 3600;
+        assert_eq!(sanitize_profile(p).poll_secs, MAX_POLL_SECS);
+        let mut p = sample("clamp-low");
+        p.poll_secs = 0;
+        assert_eq!(sanitize_profile(p).poll_secs, MIN_POLL_SECS);
+    }
+
+    /// A `devices.json` written before `poll_secs` existed (or hand-edited
+    /// without it) parses with the global default instead of failing the
+    /// whole-file load (which would wipe every saved device).
+    #[test]
+    fn legacy_profile_json_defaults_poll_secs() {
+        let store = temp_store("legacy-poll-secs");
+        std::fs::create_dir_all(store.path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &store.path,
+            r#"{"devices":[{"id":"a","name":"pi","host":"192.168.1.42","port":22,"username":"raul","auth":{"kind":"key_file","key_path":"k","has_passphrase":true},"auto_connect":true}]}"#,
+        )
+        .unwrap();
+        let devices = store.list();
+        assert_eq!(devices.len(), 1);
+        assert_eq!(devices[0].poll_secs, DEFAULT_POLL_SECS);
+    }
+
+    /// Clamps apply on READ too: a hand-edited out-of-range interval in the
+    /// store cannot reach the poller.
+    #[test]
+    fn poll_secs_clamps_on_read() {
+        let store = temp_store("read-clamp");
+        std::fs::create_dir_all(store.path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &store.path,
+            r#"{"devices":[{"id":"a","name":"pi","host":"192.168.1.42","port":22,"username":"raul","auth":{"kind":"key_file","key_path":"k","has_passphrase":true},"poll_secs":9999}]}"#,
+        )
+        .unwrap();
+        assert_eq!(store.get("a").unwrap().poll_secs, MAX_POLL_SECS);
+    }
+
+    /// Item 60: the per-device poll override round-trips through the store
+    /// exactly as `device_add`/`device_update` write it
+    /// (`DeviceInput.poll_secs: Option<u32>` → `unwrap_or(DEFAULT)` →
+    /// sanitize → upsert), and `remote_repo_open` hands the persisted value
+    /// to the poller via `profile.poll_secs`.
+    #[test]
+    fn per_device_poll_override_roundtrips_through_the_store() {
+        let store = temp_store("poll-override");
+        // The device_update path: a user override survives sanitize + persist.
+        let mut input = sample("a");
+        input.poll_secs = 42;
+        let profile = sanitize_profile(input);
+        store.upsert(profile.clone()).unwrap();
+        assert_eq!(store.get("a").unwrap().poll_secs, 42);
+
+        // No override (`None` from the FE → `unwrap_or(DEFAULT)`) lands on
+        // the global default.
+        let mut profile_b = sample("b");
+        profile_b.poll_secs = DEFAULT_POLL_SECS;
+        store.upsert(sanitize_profile(profile_b)).unwrap();
+        assert_eq!(store.get("b").unwrap().poll_secs, DEFAULT_POLL_SECS);
+
+        // Reload from disk (fresh store over the same file): the override
+        // is exactly what `remote_repo_open` will pass to the poller.
+        let reloaded = DeviceStore::at(store.path.clone());
+        assert_eq!(reloaded.get("a").unwrap().poll_secs, 42);
+        assert_eq!(reloaded.get("b").unwrap().poll_secs, DEFAULT_POLL_SECS);
     }
 
     #[test]

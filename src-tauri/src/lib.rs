@@ -10,6 +10,7 @@ mod actions_tests;
 mod auth;
 mod cli;
 mod credential_helper;
+mod diagnostics;
 mod diffcore;
 mod editors;
 mod forge;
@@ -48,17 +49,6 @@ pub struct CliArgs(pub parking_lot::Mutex<Vec<String>>);
 /// The L1 lane adds `keyring_store` (secret storage for AI provider keys).
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    // Tracing to stderr (`tauri dev` console; release builds keep it but it
-    // is invisible without a console). RUST_LOG overrides, e.g.
-    // RUST_LOG=mygitui_lib=debug to see device reconnect churn.
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info,mygitui_lib=info")),
-        )
-        .with_target(false)
-        .try_init()
-        .ok();
     // M12: first-launch `mygitui <path>` — previously argv was only read on
     // the second-instance path, so the first launch silently ignored it.
     let cli_args: Vec<String> = std::env::args().skip(1).collect();
@@ -103,6 +93,15 @@ pub fn run() {
         // handle; must be registered before the first net op, hence before
         // `.manage` hands out the RepoManager.
         .setup(move |app| {
+            // Tracing: stderr layer (`tauri dev` console; release builds
+            // keep it but it is invisible without a console) + rotating
+            // JSON-less line log under the app data dir
+            // (`<app-data>/logs/mygitui.log`, see `diagnostics`). Both
+            // layers share one env filter — RUST_LOG overrides, e.g.
+            // RUST_LOG=mygitui_lib=debug to see device reconnect churn.
+            // Lives in setup (not before the builder) because the log path
+            // needs the app handle to resolve the app data dir.
+            diagnostics::init_tracing(app.handle());
             auth::init(app.handle().clone());
             // Remote (SSH) devices: host-key confirms and secret asks reach
             // the frontend as events through this emitter; must be installed
@@ -251,6 +250,7 @@ pub fn run() {
             ipc_commands::worktree_unlock,
             ipc_commands::op_cancel,
             ipc_commands::repo_health,
+            diagnostics::diagnostics_bundle,
             ipc_commands::maintenance_run,
             ipc_commands::archive,
             ipc_commands::repo_bundle,
