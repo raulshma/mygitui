@@ -2,8 +2,9 @@
   /**
    * Agent mode — compact "git info" card: branch + ahead/behind, in-progress
    * op badges, working-copy counts, the first page of recent commits and a
-   * fetch/pull/push row. Every sub-block degrades silently (console.error
-   * only) when status is null or a stream fails — never a heavy panel.
+   * fetch/pull/push row. Status is null or a sync failure degrades to a
+   * compact note (never a heavy panel); a failed log stream renders an
+   * inline error row with a Retry instead of silently disappearing.
    */
   import { streamLog } from "$lib/ipc/client";
   import { refreshStatus } from "$lib/stores/tabs.svelte";
@@ -15,6 +16,7 @@
     type SyncVerb,
   } from "$lib/git/sync";
   import { describeError } from "$lib/errors";
+  import { toast } from "$lib/toast";
   import { formatRelativeTime } from "$lib/git/format";
   import type { CommitInfo, LogFilter, RepoStatus } from "$lib/ipc/types";
   import { Badge } from "$lib/components/ui/badge/index.js";
@@ -31,6 +33,7 @@
   const iconFetch = $derived(appIcon("download")!);
   const iconPull = $derived(appIcon("sync")!);
   const iconPush = $derived(appIcon("upload")!);
+  const iconRetry = $derived(appIcon("restart-alt")!);
 
   /** Same default shape `toLogFilter(EMPTY_FILTER)` serializes elsewhere. */
   const DEFAULT_LOG_FILTER: LogFilter = {
@@ -48,20 +51,28 @@
   const counts = $derived(status ? groupStatusEntries(status.entries) : null);
 
   let commits = $state<CommitInfo[]>([]);
+  /** Failure message from the last log stream (null = none): a failed
+   *  stream stays visible with a retry, not silently empty. */
+  let logError = $state<string | null>(null);
+  /** Bumped by the error row's Retry to re-run the stream. */
+  let logReload = $state(0);
 
   /** Stale-guard for the log stream (bumped per effect run). */
   let logGen = 0;
 
   $effect(() => {
     const id = repoId;
+    void logReload; // the error row's Retry re-runs the stream
     const current = ++logGen;
     commits = [];
+    logError = null;
     void streamLog(id, DEFAULT_LOG_FILTER, (page) => {
       if (current !== logGen) return;
       commits = page.commits.slice(0, MAX_COMMITS);
     }).catch((err: unknown) => {
       if (current !== logGen) return;
       commits = [];
+      logError = describeError(err);
       console.error("[AgentGitInfo] log stream failed:", err);
     });
   });
@@ -137,7 +148,21 @@
     </div>
   {/if}
 
-  {#if commits.length > 0}
+  {#if logError}
+    <div class="flex h-6 w-full items-center gap-1 border-t border-border px-1.5" role="alert">
+      <span class="min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap text-ui-micro text-destructive">Recent commits failed: {logError}</span>
+      <Button
+        class="text-muted-foreground hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-3.5"
+        variant="ghost"
+        size="icon-sm"
+        type="button"
+        aria-label="Retry recent commits"
+        onclick={() => (logReload += 1)}
+      >
+        <Icon icon={iconRetry} size={14} />
+      </Button>
+    </div>
+  {:else if commits.length > 0}
     <div class="flex h-6 w-full items-center border-t border-border px-2 text-ui-micro font-bold tracking-[0.045em] uppercase text-muted-foreground select-none">
       Recent
     </div>

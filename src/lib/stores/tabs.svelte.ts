@@ -23,6 +23,7 @@ import { RecentRepoStore } from "$lib/entry/recentRepos";
 import { terminals } from "$lib/terminal/terminalStore.svelte";
 import { opStore } from "$lib/stores/ops.svelte";
 import { workspaceSession } from "$lib/stores/workspaceSession.svelte";
+import { agentSession } from "$lib/agent/agentSession.svelte";
 import { evictFileIndex } from "$lib/components/files/QuickOpen.svelte";
 import { conflictsStore } from "$lib/components/panels/conflictsStore.svelte";
 import { statsStore } from "$lib/stats/statsStore.svelte";
@@ -517,6 +518,7 @@ export class TabStore {
     opStore.clearHistory(id);
     evictFileIndex(id);
     workspaceSession.forget(closing.root);
+    agentSession.forget(closing.root);
     try {
       await closeRepo(id);
     } catch (err) {

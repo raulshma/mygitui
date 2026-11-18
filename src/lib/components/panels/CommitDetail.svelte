@@ -20,6 +20,7 @@
   import { streamDiff, describe, commitMessage } from "$lib/ipc/client";
   import type { CommitInfo, FileDiff } from "$lib/ipc/types";
   import DiffViewer from "$lib/components/diff/DiffViewer.svelte";
+  import { createImageLoader } from "$lib/components/diff/imageLoad";
   import BlameView from "$lib/components/panels/BlameView.svelte";
   import type { CompareResult } from "$lib/components/panels/compare";
   import { openPanelPopout } from "$lib/layout/popout";
@@ -155,6 +156,31 @@
         detailError = describeError(err);
       });
   });
+
+  /**
+   * Image-diff URL loaders for both hosts in this pane, keyed by what
+   * feeds the diff: the streamed commit reads parent0→sha (the same sides
+   * the stream uses), the compare reads base→target (base may carry the
+   * range's `^` parent marker, which `DiffSide::Commit` resolves).
+   * `$derived` keeps the identity stable across stream pages (a fresh
+   * closure per render would reload every image on each page).
+   */
+  const detailImageLoader = $derived(
+    info && info.parents.length > 0
+      ? createImageLoader(repoId, {
+          old: { commit: info.parents[0] },
+          new: { commit: info.sha },
+        })
+      : undefined,
+  );
+  const compareImageLoader = $derived(
+    compare
+      ? createImageLoader(repoId, {
+          old: { commit: compare.base },
+          new: { commit: compare.target },
+        })
+      : undefined,
+  );
 
   // -- describe line (decorative) ---------------------------------------------
 
@@ -547,7 +573,7 @@
           {/if}
         </div>
         <div class="dtabbody flex min-h-0 flex-1 flex-col">
-          <DiffViewer files={compare.files} />
+          <DiffViewer files={compare.files} onLoadImage={compareImageLoader} />
         </div>
       {:else if detailError}
         <div class="dstate m-auto flex flex-col items-center gap-2 text-ui-base text-muted-foreground">
@@ -615,7 +641,7 @@
           {/if}
         </ul>
         <div class="ddiff min-h-0 flex-1 overflow-auto">
-          <DiffViewer files={detailFiles} />
+          <DiffViewer files={detailFiles} onLoadImage={detailImageLoader} />
         </div>
       {/if}
     </div>

@@ -25,10 +25,11 @@
     OpenFileInfo,
     WorkspaceCapture,
   } from "$lib/components/files/FileWorkspace.svelte";
-  import { diffHunkActions, type DiffScope } from "$lib/components/panels/statusModel";
+  import { diffHunkActions, diffScopeSides, type DiffScope } from "$lib/components/panels/statusModel";
   import { fileForDiffTab, type DiffTab } from "$lib/components/panels/diffTabs";
   import CommitDetail from "$lib/components/panels/CommitDetail.svelte";
   import DiffViewer from "$lib/components/diff/DiffViewer.svelte";
+  import { createImageLoader } from "$lib/components/diff/imageLoad";
   import Icon from "$lib/components/icons/Icon.svelte";
   import EmptyState from "../layout/EmptyState.svelte";
   import { Button } from "$lib/components/ui/button/index.js";
@@ -256,6 +257,16 @@
       ? diffHunkActions(entry, diffScope)
       : { staging: undefined, discard: false },
   );
+
+  /**
+   * Image-diff URL loader for the working-copy diff, keyed by repo +
+   * scope: `$derived` keeps the identity stable across stream pages (a
+   * fresh closure per render would reload every image on each page).
+   */
+  const imageLoader = $derived.by(() => {
+    const { oldSide, newSide } = diffScopeSides(diffScope);
+    return createImageLoader(repoId, { old: oldSide, new: newSide });
+  });
 
   /**
    * The scope the empty state can offer instead (`null` when the shown side
@@ -735,6 +746,7 @@
               hunkStaging={hunkActions.staging}
               hunkDiscard={hunkActions.discard}
               {onMutated}
+              onLoadImage={imageLoader}
               initialScrollTop={diffInitialScroll ?? undefined}
               onScrollChange={onDiffScroll}
             />

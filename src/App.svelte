@@ -30,6 +30,7 @@
   import { flushSplits, layouts } from "$lib/layout";
   import { flushHistoryPrefs } from "$lib/stores/historyPrefs";
   import { flushWorkspaceSessions } from "$lib/stores/workspaceSession.svelte";
+  import { flushAgentSessions } from "$lib/agent/agentSession.svelte";
   import {
     deviceInputFromProfile,
     remoteDevices,
@@ -535,6 +536,7 @@
       flushSplits();
       flushHistoryPrefs();
       flushWorkspaceSessions();
+      flushAgentSessions();
     };
     window.addEventListener("pagehide", flushPendingLayoutWrites);
     cleanups.push(() => {
