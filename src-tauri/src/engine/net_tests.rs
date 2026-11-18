@@ -873,6 +873,33 @@ fn push_with_pre_push_hook_routes_to_cli() {
     }
 }
 
+/// git2-rs does not expose libgit2's `GIT_PUSH_ATOMIC` push flag: an
+/// `--atomic` push must ride the CLI lane (ipc_commands maps `Unsupported`
+/// to `push_via_cli`, whose argv builder emits `--atomic`).
+#[test]
+fn atomic_push_routes_through_the_cli_lane() {
+    let f = NetFixture::new("push-atomic");
+    commit_file(&f.a, "a.md", "1\n", "c1");
+    let opts = PushOptions {
+        remote: "origin".into(),
+        branch: "main".into(),
+        atomic: true,
+        ..Default::default()
+    };
+    match ENGINE.push(&f.a, &opts, &mut |_| {}) {
+        Err(EngineError::Unsupported(msg)) => assert!(msg.contains("atomic"), "{msg}"),
+        other => panic!("expected Unsupported routing for atomic push, got {other:?}"),
+    }
+
+    // Without the flag the libgit2 path handles the push itself.
+    let plain = PushOptions {
+        remote: "origin".into(),
+        branch: "main".into(),
+        ..Default::default()
+    };
+    ENGINE.push(&f.a, &plain, &mut |_| {}).expect("plain push");
+}
+
 /// `core.hooksPath` relocates hook discovery out of `.git/hooks` (husky,
 /// pre-commit, repos keeping hooks in the worktree). Detection must follow
 /// it or the push silently skips the hook instead of routing to the CLI.

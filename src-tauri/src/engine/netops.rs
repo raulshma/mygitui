@@ -496,6 +496,16 @@ impl Libgit2Engine {
                 "pre-push hook present: routed to CLI".into(),
             ));
         }
+        // git2-rs does not expose libgit2's `git_push_options.flags`
+        // (`GIT_PUSH_ATOMIC`): atomicity is only expressible through real
+        // git, so route the push through the CLI like hook/signing pushes
+        // (ipc_commands maps `Unsupported` to `push_via_cli`, whose argv
+        // builder emits `--atomic` — see `cli::build_push_args`).
+        if opts.atomic {
+            return Err(EngineError::Unsupported(
+                "atomic push requested: routed to CLI".into(),
+            ));
+        }
         let mut branch_name: Option<String> = None;
 
         // Resolve the refspecs for this push mode:

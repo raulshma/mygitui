@@ -5,4 +5,11 @@ export type BlameLine = { line_no: number, sha: string, signature: GitSignature,
 /**
  * Final (latest) commit that touched this line.
  */
-final_sha: string, final_signature: GitSignature, text: string, };
+final_sha: string, final_signature: GitSignature, text: string, 
+/**
+ * True when the line's content was introduced by a commit listed in
+ * `.git-blame-ignore-revs` and the engine could not re-attribute it
+ * (the ignored commit added the line): the FE renders "ignored
+ * commit" styling instead of blaming the listed sha.
+ */
+ignored: boolean, };

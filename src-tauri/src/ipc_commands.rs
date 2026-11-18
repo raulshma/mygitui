@@ -20,11 +20,11 @@ use ts_rs::TS;
 
 use crate::engine::git_engine::EngineError;
 use crate::engine::types::{
-    BisectLogEntry, BisectMark, BisectState, BlameLine, BranchTrashEntry, CheckpointInfo,
-    CommitInfo, CommitSignature, ConflictFile, ConflictResolution, DiffQuery, DiffSide, FileDiff,
-    LfsStatus, LogFilter, MergeOptions, MergeResult, RebaseState, RebaseStep, ReflogEntry,
-    RemoteBranchInfo, RepoHealth, RepoId, RepoInfo, RepoStatus, ResetKind, SparseInfo, StashInfo,
-    TagInfo, WorktreeInfo,
+    BisectLogEntry, BisectMark, BisectState, BlameLine, BlameQuery, BranchTrashEntry,
+    CheckpointInfo, CommitInfo, CommitSignature, ConflictFile, ConflictResolution, DiffQuery,
+    DiffSide, FileDiff, LfsStatus, LogFilter, MergeOptions, MergeResult, RebaseState, RebaseStep,
+    ReflogEntry, RemoteBranchInfo, RepoHealth, RepoId, RepoInfo, RepoStatus, ResetKind, SparseInfo,
+    StashInfo, TagInfo, WorktreeInfo,
 };
 use crate::graph::types::{self, GraphRow};
 use crate::repo::{RepoHandle, RepoManager, StreamHandle, StreamKind};
@@ -167,27 +167,36 @@ pub async fn repo_refs(
     .await
 }
 
+/// Blame one file. `query` carries the full option surface
+/// ([`BlameQuery`]); the legacy standalone `from` argument is kept for
+/// backward compatibility — `query.from` wins when both arrive.
 #[tauri::command(rename_all = "snake_case")]
 pub async fn repo_blame(
     repo_id: RepoId,
     path: String,
     from: Option<String>,
+    query: Option<BlameQuery>,
     state: State<'_, RepoManager>,
 ) -> Result<Vec<BlameLine>, String> {
     let handle = get_handle(&state, &repo_id)?;
+    // Legacy `from` merges into the query; an explicit query wins.
+    let mut blame = query.unwrap_or_default();
+    if blame.from.is_none() {
+        blame.from = from;
+    }
     if let Some(remote) = handle.remote() {
         return finish_op(enqueue_remote_read(
             &handle,
             remote,
             "blame",
-            move |git, _ws| git.blame(&path, from.as_deref()),
+            move |git, _ws| git.blame(&path, &blame),
         ))
         .await;
     }
     let engine = handle.engine();
     let repo = handle.repo()?;
     finish_op(enqueue_read(&handle, &repo, "blame", move |_ctx, repo| {
-        engine.blame(repo, &path, from.as_deref())
+        engine.blame(repo, &path, &blame)
     }))
     .await
 }
@@ -2960,6 +2969,34 @@ pub async fn rebase_continue(
     .await
 }
 
+/// Skip the paused rebase step (`git rebase --skip`): valid only while
+/// paused on a conflicted pick or a failed `exec`; the step records nothing.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn rebase_skip(
+    repo_id: RepoId,
+    state: State<'_, RepoManager>,
+) -> Result<RebaseState, String> {
+    let handle = get_handle(&state, &repo_id)?;
+    if let Some(remote) = handle.remote() {
+        return finish_op(enqueue_remote_mutation(
+            &handle,
+            remote,
+            "rebase",
+            move |git, _ws| git.rebase_skip(),
+        ))
+        .await;
+    }
+    let engine = handle.m3();
+    let repo = handle.repo()?;
+    finish_op(enqueue_mutation(
+        &handle,
+        &repo,
+        "rebase",
+        move |_ctx, repo| engine.rebase_skip(repo),
+    ))
+    .await
+}
+
 #[tauri::command(rename_all = "snake_case")]
 pub async fn rebase_abort(repo_id: RepoId, state: State<'_, RepoManager>) -> Result<(), String> {
     let handle = get_handle(&state, &repo_id)?;
@@ -3720,12 +3757,16 @@ pub async fn stash_list(
     .await
 }
 
+/// Stash the worktree/index. `paths` limits the stash to those pathspecs
+/// (`git stash push -- <paths>`); `None`/empty stashes everything. Existing
+/// FE payloads without `paths` keep stashing all changes.
 #[tauri::command(rename_all = "snake_case")]
 pub async fn stash_push(
     repo_id: RepoId,
     message: Option<String>,
     keep_index: bool,
     include_untracked: bool,
+    paths: Option<Vec<String>>,
     state: State<'_, RepoManager>,
 ) -> Result<(), String> {
     let handle = get_handle(&state, &repo_id)?;
@@ -3734,7 +3775,14 @@ pub async fn stash_push(
             &handle,
             remote,
             "stash",
-            move |git, _ws| git.stash_push(message.as_deref(), keep_index, include_untracked),
+            move |git, _ws| {
+                git.stash_push(
+                    message.as_deref(),
+                    keep_index,
+                    include_untracked,
+                    paths.as_deref(),
+                )
+            },
         ))
         .await;
     }
@@ -3745,19 +3793,87 @@ pub async fn stash_push(
         &repo,
         "stash",
         move |_ctx, repo| {
-            engine.stash_push(repo, message.as_deref(), keep_index, include_untracked)
+            engine.stash_push(
+                repo,
+                message.as_deref(),
+                keep_index,
+                include_untracked,
+                paths.as_deref(),
+            )
         },
     ))
     .await
 }
 
+/// `git stash show <stash>`: the file diffs `stash@{index}` carries (base
+/// commit vs stash commit).
+#[tauri::command(rename_all = "snake_case")]
+pub async fn stash_show(
+    repo_id: RepoId,
+    index: u32,
+    state: State<'_, RepoManager>,
+) -> Result<Vec<FileDiff>, String> {
+    let handle = get_handle(&state, &repo_id)?;
+    if let Some(remote) = handle.remote() {
+        return finish_op(enqueue_remote_read(
+            &handle,
+            remote,
+            "stash",
+            move |git, _ws| git.stash_show(index),
+        ))
+        .await;
+    }
+    let engine = handle.m3();
+    let repo = handle.repo()?;
+    finish_op(enqueue_read(&handle, &repo, "stash", move |_ctx, repo| {
+        engine.stash_show(repo, index)
+    }))
+    .await
+}
+
+/// Rename a stash entry's message. Only the newest entry (`stash@{0}`) can
+/// be renamed — deeper renames would require rebuilding the whole reflog
+/// stack — and the engine rejects them with a clear error.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn stash_rename(
+    repo_id: RepoId,
+    index: u32,
+    message: String,
+    state: State<'_, RepoManager>,
+) -> Result<(), String> {
+    let handle = get_handle(&state, &repo_id)?;
+    if let Some(remote) = handle.remote() {
+        return finish_op(enqueue_remote_mutation(
+            &handle,
+            remote,
+            "stash",
+            move |git, _ws| git.stash_rename(index, &message),
+        ))
+        .await;
+    }
+    let engine = handle.m3();
+    let repo = handle.repo()?;
+    finish_op(enqueue_mutation(
+        &handle,
+        &repo,
+        "stash",
+        move |_ctx, repo| engine.stash_rename(repo, index, &message),
+    ))
+    .await
+}
+
+/// Apply (or pop) `stash@{index}`. `restore_index` re-instates the stashed
+/// index state (`--index`: staged changes come back staged); `None` from
+/// older FE payloads means false.
 #[tauri::command(rename_all = "snake_case")]
 pub async fn stash_apply(
     repo_id: RepoId,
     index: u32,
     pop: bool,
+    restore_index: Option<bool>,
     state: State<'_, RepoManager>,
 ) -> Result<(), String> {
+    let restore_index = restore_index.unwrap_or(false);
     let handle = get_handle(&state, &repo_id)?;
     if let Some(remote) = handle.remote() {
         // Pop = apply + drop, and the drop only runs after a clean apply
@@ -3767,7 +3883,7 @@ pub async fn stash_apply(
             remote,
             "stash",
             move |git, _ws| {
-                git.stash_apply(index)?;
+                git.stash_apply(index, restore_index)?;
                 if pop {
                     git.stash_drop(index)?;
                 }
@@ -3782,7 +3898,7 @@ pub async fn stash_apply(
         &handle,
         &repo,
         "stash",
-        move |_ctx, repo| engine.stash_apply(repo, index, pop),
+        move |_ctx, repo| engine.stash_apply(repo, index, pop, restore_index),
     ))
     .await
 }

@@ -57,7 +57,7 @@ use super::git_engine::{CheckoutProgress, EngineError, EngineResult, GitEngineM3
 use super::libgit2::Libgit2Engine;
 use super::netops::cancelled_err;
 use super::types::{
-    BisectMark, BisectState, ConflictFile, ConflictResolution, MergeFavor, MergeOptions,
+    BisectMark, BisectState, ConflictFile, ConflictResolution, FileDiff, MergeFavor, MergeOptions,
     MergeOutcome, MergeResult, PreviewInfo, ResetKind,
 };
 use crate::engine::types::{
@@ -746,6 +746,9 @@ impl GitEngineM3 for Libgit2Engine {
     fn rebase_continue(&self, repo: &Repository) -> EngineResult<RebaseState> {
         self.rebase_continue_impl(repo)
     }
+    fn rebase_skip(&self, repo: &Repository) -> EngineResult<RebaseState> {
+        self.rebase_skip_impl(repo)
+    }
     fn rebase_abort(&self, repo: &Repository) -> EngineResult<()> {
         self.rebase_abort_impl(repo)
     }
@@ -760,11 +763,24 @@ impl GitEngineM3 for Libgit2Engine {
         message: Option<&str>,
         keep_index: bool,
         include_untracked: bool,
+        paths: Option<&[String]>,
     ) -> EngineResult<()> {
-        self.stash_push_impl(repo, message, keep_index, include_untracked)
+        self.stash_push_impl(repo, message, keep_index, include_untracked, paths)
     }
-    fn stash_apply(&self, repo: &Repository, index: u32, pop: bool) -> EngineResult<()> {
-        self.stash_apply_impl(repo, index, pop)
+    fn stash_show(&self, repo: &Repository, index: u32) -> EngineResult<Vec<FileDiff>> {
+        self.stash_show_impl(repo, index)
+    }
+    fn stash_apply(
+        &self,
+        repo: &Repository,
+        index: u32,
+        pop: bool,
+        restore_index: bool,
+    ) -> EngineResult<()> {
+        self.stash_apply_impl(repo, index, pop, restore_index)
+    }
+    fn stash_rename(&self, repo: &Repository, index: u32, message: &str) -> EngineResult<()> {
+        self.stash_rename_impl(repo, index, message)
     }
     fn stash_drop(&self, repo: &Repository, index: u32) -> EngineResult<()> {
         self.stash_drop_impl(repo, index)

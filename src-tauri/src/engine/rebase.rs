@@ -13,7 +13,10 @@
 //! Steps run greedily: `rebase_start` applies steps until the plan is
 //! exhausted, an `edit` pause, or a conflict. `rebase_continue` commits the
 //! resolved index (after a conflict) or just unpauses (after `edit`), then
-//! keeps running the loop. `rebase_abort` force-restores `orig_head`.
+//! keeps running the loop. `rebase_skip` drops the paused step instead —
+//! valid on a conflicted pick (rolls the mid-merge state back to HEAD) or a
+//! failed `exec` — and records nothing for it. `rebase_abort` force-restores
+//! `orig_head`.
 //!
 //! State file schema (superset of the public `RebaseState`):
 //! `{ plan, current, paused_for_edit, mid_merge, rewritten, onto, orig_head, orig_branch }`
@@ -309,6 +312,44 @@ impl Libgit2Engine {
         }
         // A paused `exec` intentionally does NOT advance: continue re-runs it
         // (the user is expected to fix whatever failed first).
+        run_rebase(repo, &mut st, None)
+    }
+
+    /// `git rebase --skip`: drop the paused step entirely. Valid only while
+    /// paused on a conflicted pick (`mid_merge`) or a failed `exec`
+    /// (`paused_for_exec`); an `edit` pause and an idle loop reject the call
+    /// without moving anything. The step records nothing in `rewritten`
+    /// (same bookkeeping as a `drop` step); the in-flight pick's merged
+    /// index/workdir state is force-rolled back to HEAD — the rewritten
+    /// sequence so far — so the loop resumes from a clean tree.
+    pub(crate) fn rebase_skip_impl(&self, repo: &Repository) -> EngineResult<RebaseState> {
+        let mut st = load_state(repo)?.ok_or_else(|| {
+            EngineError::Invalid("no rebase in progress (mygitui/rebase.json missing)".into())
+        })?;
+        if st.paused_for_edit {
+            return Err(EngineError::Invalid(
+                "skip is only valid on a conflicted pick or a failed exec; this pause is an `edit`"
+                    .into(),
+            ));
+        }
+        if st.mid_merge {
+            // The step's merge already sits in the index (and workdir, with
+            // markers when conflicted) — discard it: workdir+index back to
+            // HEAD, which is exactly the rewritten sequence so far.
+            st.mid_merge = false;
+            let head = head_commit(repo)?;
+            hard_checkout(repo, &head)?;
+        } else if st.paused_for_exec {
+            // Skipping an exec advances past it; nothing was recorded.
+            st.paused_for_exec = false;
+            st.exec_error = None;
+        } else {
+            return Err(EngineError::Invalid(
+                "skip is only valid while paused on a conflicted pick or a failed exec".into(),
+            ));
+        }
+        st.current += 1;
+        save_state(repo, &st)?;
         run_rebase(repo, &mut st, None)
     }
 

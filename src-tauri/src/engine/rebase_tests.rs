@@ -714,3 +714,106 @@ fn state_reports_inactive_without_rebase() {
         other => panic!("expected Invalid for stray continue, got: {other:?}"),
     }
 }
+
+// ---------------------------------------------------------------------------
+// skip (Phase 5 batch A)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn skip_conflicted_pick_drops_it_and_completes() {
+    let (temp, c1, c2, orig_head) = conflicting_chain("skip-conflict");
+
+    // Replay [c2, c1]: c1's line rewrite conflicts against c2's.
+    let plan = vec![pick(&c2), pick(&c1)];
+    let state = ENGINE
+        .rebase_start_impl(&temp, &plan, None)
+        .expect("rebase start");
+    assert!(state.active && state.paused_for_conflict);
+    assert_eq!(state.current, 1, "paused at the conflicting step");
+    assert!(temp.index_has_conflicts(), "index carries conflict stages");
+
+    let state = ENGINE.rebase_skip_impl(&temp).expect("skip");
+    assert!(!state.active, "the remaining plan completes");
+    assert_eq!(state.current, 2);
+    // The skipped step records nothing: the conflicted pick is simply gone.
+    assert_eq!(state.rewritten.len(), 1);
+    assert_eq!(state.rewritten[0].0, c2);
+    // The mid-merge state was rolled back: index clean, workdir = rewritten
+    // HEAD (= c2's content).
+    assert!(!temp.index_has_conflicts());
+    assert_eq!(temp.file_content("file.txt"), "2\n");
+    // Rebuilt on the plan base (parent of c2 = the original c1) without c1's
+    // change; HEAD moved (c2 got a fresh sha).
+    assert_eq!(first_parent_summaries(&temp), ["two", "one", "base"]);
+    assert_ne!(temp.head_sha(), orig_head);
+    assert!(!ENGINE.rebase_state_impl(&temp).expect("state").active);
+}
+
+#[test]
+fn skip_requires_a_conflict_or_exec_pause() {
+    // No rebase at all.
+    let (temp, _c1, _c2, _head) = conflicting_chain("skip-idle");
+    match ENGINE.rebase_skip_impl(&temp) {
+        Err(EngineError::Invalid(msg)) => assert!(msg.contains("no rebase in progress")),
+        other => panic!("expected Invalid for stray skip, got {other:?}"),
+    }
+
+    // An `edit` pause is not skippable (it is not a step failure).
+    temp.write("f1.txt", "one\n");
+    let c1 = temp.commit("one");
+    temp.write("f2.txt", "two\n");
+    let c2 = temp.commit("two");
+    let plan = vec![pick(&c1), step("edit", &c2, None)];
+    let state = ENGINE
+        .rebase_start_impl(&temp, &plan, None)
+        .expect("edit rebase");
+    assert!(state.active && state.paused_for_edit);
+    let before = temp.head_sha();
+    match ENGINE.rebase_skip_impl(&temp) {
+        Err(EngineError::Invalid(msg)) => assert!(msg.contains("only valid"), "{msg}"),
+        other => panic!("expected Invalid for edit-pause skip, got {other:?}"),
+    }
+    assert_eq!(temp.head_sha(), before, "refused skip moves nothing");
+    assert!(
+        ENGINE
+            .rebase_state_impl(&temp)
+            .expect("state")
+            .paused_for_edit,
+        "the pause stays exactly where it was"
+    );
+    ENGINE.rebase_abort_impl(&temp).expect("cleanup abort");
+}
+
+#[test]
+fn skip_failed_exec_advances_past_it() {
+    let (temp, c1, _c2, _head) = conflicting_chain("skip-exec");
+    temp.write("extra.txt", "x\n");
+    let c3 = temp.commit("extra file");
+
+    // A failing exec pauses; skipping advances past it recording nothing.
+    let plan = vec![pick(&c1), step("exec", &c1, Some("exit 1")), pick(&c3)];
+    let state = ENGINE
+        .rebase_start_impl(&temp, &plan, None)
+        .expect("exec rebase");
+    assert!(state.active && state.paused_for_exec);
+    assert!(
+        state
+            .exec_error
+            .as_deref()
+            .unwrap_or_default()
+            .contains("exit 1"),
+        "{:?}",
+        state.exec_error
+    );
+
+    let state = ENGINE.rebase_skip_impl(&temp).expect("skip exec");
+    assert!(!state.active);
+    assert_eq!(state.current, 3);
+    assert_eq!(state.exec_error, None, "diagnostics cleared");
+    assert_eq!(state.rewritten.len(), 2, "exec steps record nothing");
+    assert!(
+        temp.repo.workdir().unwrap().join("extra.txt").exists(),
+        "the remaining pick still ran"
+    );
+    assert!(!ENGINE.rebase_state_impl(&temp).expect("state").active);
+}

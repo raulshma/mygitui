@@ -31,7 +31,7 @@ use crate::engine::stats::{Contributor, DayCount};
 // Shared IPC read cap (`repo_read_file`): image-diff blobs read the same
 // whole files over the wire.
 use crate::engine::types::{
-    BisectLogEntry, BisectMark, BisectState, BlameLine, BranchInfo, BranchTrashEntry,
+    BisectLogEntry, BisectMark, BisectState, BlameLine, BlameQuery, BranchInfo, BranchTrashEntry,
     CheckpointInfo, CommitInfo, CommitOptions, CommitSignature, ConflictFile, ConflictResolution,
     DiffHunk, DiffLine, DiffSide, FetchOptions, FileDiff, HookInfo, LfsStatus, LogFilter,
     MergeFavor, MergeOptions, MergeOutcome, MergeResult, NetStats, PreviewFile, PreviewInfo,
@@ -303,17 +303,35 @@ impl RemoteGitEngine {
         }
     }
 
-    pub fn blame(&self, path: &str, from: Option<&str>) -> Result<Vec<BlameLine>, String> {
-        let range = match from {
-            Some(r) => format!("{} --", shell_quote(r)),
-            None => "--".to_string(),
-        };
-        let raw = self
-            .git_checked(
-                &format!("blame --porcelain {range} {}", shell_quote(path)),
-                "blame",
-            )?
-            .stdout_str();
+    /// Line-by-line origin of `path` (`git blame --porcelain`). The device's
+    /// git CLI supports the whole query surface natively: `-w`, `--first-parent`,
+    /// the `<oldest>..<from>` range, and `--ignore-revs-file` for
+    /// `.git-blame-ignore-revs` (a missing file on the device surfaces as a
+    /// git error, matching terminal behavior).
+    pub fn blame(&self, path: &str, query: &BlameQuery) -> Result<Vec<BlameLine>, String> {
+        let mut args = String::from("blame --porcelain");
+        if query.ignore_whitespace {
+            args.push_str(" -w");
+        }
+        if query.first_parent {
+            args.push_str(" --first-parent");
+        }
+        if query.ignore_revs {
+            args.push_str(" --ignore-revs-file .git-blame-ignore-revs");
+        }
+        match (&query.oldest, &query.from) {
+            (Some(oldest), Some(from)) => args.push_str(&format!(
+                " {}..{} --",
+                shell_quote(oldest),
+                shell_quote(from)
+            )),
+            (Some(oldest), None) => args.push_str(&format!(" {}..HEAD --", shell_quote(oldest))),
+            (None, Some(from)) => args.push_str(&format!(" {} --", shell_quote(from))),
+            (None, None) => args.push_str(" --"),
+        }
+        args.push(' ');
+        args.push_str(&shell_quote(path));
+        let raw = self.git_checked(&args, "blame")?.stdout_str();
         let mut lines = parse_blame(&raw);
         lines.sort_by_key(|l| l.line_no);
         Ok(lines)
@@ -1029,6 +1047,11 @@ impl RemoteGitEngine {
         } else if opts.force_with_lease {
             args.push_str(" --force-with-lease");
         }
+        if opts.atomic {
+            // One transaction for every ref in the push (`--atomic`): the
+            // remote accepts all updates or rejects them all.
+            args.push_str(" --atomic");
+        }
         if opts.delete {
             args.push_str(" --delete");
         }
@@ -1131,11 +1154,15 @@ impl RemoteGitEngine {
             .collect())
     }
 
+    /// `git stash push` with the same option surface as the local engine:
+    /// message, keep-index, untracked inclusion, and the `--` pathspec list
+    /// (empty/None = all changes, like plain `git stash push`).
     pub fn stash_push(
         &self,
         message: Option<&str>,
         keep_index: bool,
         include_untracked: bool,
+        paths: Option<&[String]>,
     ) -> Result<(), String> {
         let mut args = String::from("stash push -q");
         if let Some(m) = message {
@@ -1147,12 +1174,47 @@ impl RemoteGitEngine {
         if include_untracked {
             args.push_str(" --include-untracked");
         }
+        // Pathspecs need the `--` separator (they are not revs) and literal
+        // mode so `a[1].txt` never globs (same rule as the diff pathspec).
+        if let Some(paths) = paths.filter(|p| !p.is_empty()) {
+            args.push_str(" --");
+            for path in paths {
+                args.push(' ');
+                args.push_str(&literal_spec(path));
+            }
+        }
         self.git_checked(&args, "stash push")?;
         Ok(())
     }
 
-    pub fn stash_apply(&self, index: u32) -> Result<(), String> {
-        self.git_checked(&format!("stash apply stash@{{{index}}}"), "stash apply")?;
+    /// `git stash show <stash>`: file diffs between the stash's base (first
+    /// parent) and the stash commit — the same shapes the local engine
+    /// produces via the tree-to-tree diff.
+    pub fn stash_show(&self, index: u32) -> Result<Vec<FileDiff>, String> {
+        let stash = format!("stash@{{{index}}}");
+        self.diff(
+            &DiffSide::Commit(format!("{stash}^")),
+            &DiffSide::Commit(stash),
+            None,
+            false,
+        )
+    }
+
+    /// git has no native stash rename and replacing the top reflog entry
+    /// needs plumbing this engine does not run remotely; refuse explicitly
+    /// (the FE shows it like any unsupported remote op).
+    pub fn stash_rename(&self, _index: u32, _message: &str) -> Result<(), String> {
+        Err("stash rename is not supported for remote projects".to_string())
+    }
+
+    /// `git stash apply [--index] <stash>`: `restore_index` re-instates the
+    /// stashed index state (staged changes come back staged).
+    pub fn stash_apply(&self, index: u32, restore_index: bool) -> Result<(), String> {
+        let flag = if restore_index { " --index" } else { "" };
+        self.git_checked(
+            &format!("stash apply{flag} stash@{{{index}}}"),
+            "stash apply",
+        )?;
         Ok(())
     }
 
@@ -1553,6 +1615,13 @@ impl RemoteGitEngine {
             Err(e) if e.contains("No rebase in progress") => {}
             Err(e) => return Err(e),
         }
+        self.rebase_state()
+    }
+
+    /// `git rebase --skip`: drop the stopped step (a conflicted pick or
+    /// failed exec records nothing) and report the new sequencer state.
+    pub fn rebase_skip(&self) -> Result<RebaseState, String> {
+        self.git_checked("rebase --skip", "rebase skip")?;
         self.rebase_state()
     }
 

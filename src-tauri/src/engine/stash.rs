@@ -26,13 +26,13 @@ use std::path::{Path, PathBuf};
 
 use git2::build::CheckoutBuilder;
 use git2::{
-    BranchType, ErrorCode, Repository, StashFlags, StatusOptions, Worktree, WorktreeAddOptions,
-    WorktreeLockStatus, WorktreePruneOptions,
+    BranchType, ErrorCode, Repository, StashApplyOptions, StashFlags, StashSaveOptions,
+    StatusOptions, Worktree, WorktreeAddOptions, WorktreeLockStatus, WorktreePruneOptions,
 };
 
 use super::git_engine::{EngineError, EngineResult};
-use super::libgit2::Libgit2Engine;
-use super::types::{GitSignature, ReflogEntry, StashInfo, WorktreeInfo};
+use super::libgit2::{diff_to_files, Libgit2Engine};
+use super::types::{DiffSide, FileDiff, GitSignature, ReflogEntry, StashInfo, WorktreeInfo};
 
 /// Full name of the stash ref (its reflog doubles as the stash stack).
 const STASH_REF: &str = "refs/stash";
@@ -97,6 +97,506 @@ fn stash_oid_at(repo: &Repository, index: u32) -> EngineResult<git2::Oid> {
         .ok_or_else(|| EngineError::Invalid(format!("no stash entry at index {index}")))
 }
 
+/// Error mapper for the stash save calls: libgit2 reports "no local
+/// changes" as NotFound (matches `git stash` exiting "No local changes").
+fn nothing_to_stash(e: git2::Error) -> EngineError {
+    if e.code() == ErrorCode::NotFound {
+        EngineError::Invalid("nothing to stash".into())
+    } else {
+        EngineError::Git(e)
+    }
+}
+
+/// After a selective stash (`git stash push -- <paths>`): reset every
+/// pathspec-matching path with local changes back to HEAD, exactly like the
+/// git CLI does once the stash captured them. HEAD-tracked paths get their
+/// index entry and workdir bytes restored from HEAD; staged-new paths leave
+/// the index and the workdir (nothing at HEAD to restore); untracked paths
+/// leave the workdir only when they were actually stashed
+/// (`--include-untracked`).
+fn reset_stashed_paths(
+    repo: &Repository,
+    pathspec: &git2::Pathspec,
+    include_untracked: bool,
+) -> EngineResult<()> {
+    let mut status_opts = StatusOptions::new();
+    status_opts
+        .include_untracked(true)
+        .recurse_untracked_dirs(true)
+        .exclude_submodules(true);
+    let statuses = repo.statuses(Some(&mut status_opts))?;
+
+    let head = repo.head().ok().and_then(|h| h.peel_to_commit().ok());
+    let head_tree = match &head {
+        Some(commit) => Some(commit.tree()?),
+        None => None,
+    };
+
+    for entry in statuses.iter().filter(|e| {
+        let status = e.status();
+        status.intersects(
+            git2::Status::WT_NEW
+                | git2::Status::WT_MODIFIED
+                | git2::Status::WT_DELETED
+                | git2::Status::INDEX_NEW
+                | git2::Status::INDEX_MODIFIED
+                | git2::Status::INDEX_DELETED,
+        )
+    }) {
+        let path = entry.path().unwrap_or_default().to_owned();
+        let status = entry.status();
+        if !pathspec.matches_path(Path::new(&path), git2::PathspecFlags::default()) {
+            continue;
+        }
+        // Restore from HEAD when the path is tracked there; otherwise it
+        // leaves index + workdir entirely (a fresh staged file was stashed
+        // whole; an untracked one only when include_untracked swept it).
+        let in_head = head_tree
+            .as_ref()
+            .map(|t| t.get_path(Path::new(&path)).is_ok())
+            .unwrap_or(false);
+        let untracked_only = status == git2::Status::WT_NEW;
+        if untracked_only && !include_untracked {
+            continue; // not part of the stash: keep it on disk
+        }
+        if in_head {
+            let commit = head.as_ref().expect("head checked above");
+            repo.reset_default(Some(commit.as_object()), [&path])?;
+            let blob = repo.find_blob(commit.tree()?.get_path(Path::new(&path))?.id())?;
+            let full = repo
+                .workdir()
+                .ok_or_else(|| EngineError::Invalid("bare repository has no workdir".into()))?
+                .join(&path);
+            std::fs::write(full, blob.content())?;
+        } else {
+            repo.reset_default(None, [&path])?;
+            let full = repo
+                .workdir()
+                .ok_or_else(|| EngineError::Invalid("bare repository has no workdir".into()))?
+                .join(&path);
+            if let Err(e) = std::fs::remove_file(&full) {
+                if e.kind() != std::io::ErrorKind::NotFound {
+                    return Err(e.into());
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Selective stash (`git stash push [-u] [-k] -- <paths>`), git-CLI
+/// accurate. Three libgit2 divergences are worked around:
+/// - `stash_save_with_opts` force-resets the WHOLE workdir/index after
+///   building the stash, which would destroy non-matching edits — git
+///   resets only the matching paths. The stash is therefore built with
+///   `StashFlags::KEEP_ALL` (libgit2 touches nothing) and the matching
+///   paths are reset to HEAD afterwards (`reset_stashed_paths`).
+/// - its pathspec mode copies UNTRACKED matches into the stash tree too,
+///   where their double presence (stash tree + untracked tree) makes a
+///   later apply conflict double-writing the file. libgit2 therefore only
+///   ever sees the TRACKED matching paths; untracked matches are swept into
+///   the untracked parent by its (pathspec-blind) workdir sweep.
+/// - that sweep would also capture every NON-matching untracked file, so
+///   those are held aside in the gitdir for the duration of the call.
+///
+/// With no tracked matches at all, the stash is built directly
+/// (`stash_untracked_only`) since libgit2 cannot express the shape.
+fn selective_stash(
+    fresh: &mut Repository,
+    stasher: git2::Signature<'static>,
+    message: Option<&str>,
+    keep_index: bool,
+    include_untracked: bool,
+    pathspecs: &[String],
+) -> EngineResult<()> {
+    let pathspec = git2::Pathspec::new(pathspecs.iter().map(String::as_str))?;
+    let (tracked, untracked) = selective_changes(fresh, &pathspec)?;
+    if tracked.is_empty() && untracked.is_empty() {
+        return Err(EngineError::Invalid("nothing to stash".into()));
+    }
+    let holding = if include_untracked {
+        let holding_paths = non_matching_untracked(fresh, &pathspec)?;
+        if holding_paths.is_empty() {
+            None
+        } else {
+            let workdir = fresh
+                .workdir()
+                .ok_or_else(|| EngineError::Invalid("bare repository has no workdir".into()))?
+                .to_path_buf();
+            Some(UntrackedHolding::create(
+                &workdir,
+                fresh.path(),
+                holding_paths,
+            )?)
+        }
+    } else {
+        None
+    };
+    // Restore the held-aside files on every path below: a refused stash
+    // ("nothing to stash") must never lose them.
+    if tracked.is_empty() {
+        let result = stash_untracked_only(fresh, &stasher, message, &untracked);
+        if let Some(holding) = holding {
+            holding.restore();
+        }
+        result?;
+        reset_stashed_paths(fresh, &pathspec, include_untracked)?;
+        return Ok(());
+    }
+    let mut flags = StashFlags::KEEP_ALL;
+    if keep_index {
+        flags |= StashFlags::KEEP_INDEX;
+    }
+    let mut opts = StashSaveOptions::new(stasher);
+    opts.flags(Some(flags));
+    for path in &tracked {
+        opts.pathspec(path.as_str());
+    }
+    let stash = fresh.stash_save_ext(Some(&mut opts));
+    if let Some(holding) = holding {
+        holding.restore();
+    }
+    stash.map_err(nothing_to_stash)?;
+    if !keep_index {
+        reset_stashed_paths(fresh, &pathspec, include_untracked)?;
+    }
+    Ok(())
+}
+
+/// Split the pathspec-matching local changes into tracked ones (index or
+/// worktree state of HEAD-tracked / staged paths) and untracked ones
+/// (`WT_NEW` only — never part of the stash tree).
+fn selective_changes(
+    repo: &Repository,
+    pathspec: &git2::Pathspec,
+) -> EngineResult<(Vec<String>, Vec<String>)> {
+    let mut status_opts = StatusOptions::new();
+    status_opts
+        .include_untracked(true)
+        .recurse_untracked_dirs(true)
+        .exclude_submodules(true);
+    let mut tracked = Vec::new();
+    let mut untracked = Vec::new();
+    for entry in repo.statuses(Some(&mut status_opts))?.iter() {
+        let status = entry.status();
+        if !status.intersects(
+            git2::Status::WT_NEW
+                | git2::Status::WT_MODIFIED
+                | git2::Status::WT_DELETED
+                | git2::Status::WT_RENAMED
+                | git2::Status::INDEX_NEW
+                | git2::Status::INDEX_MODIFIED
+                | git2::Status::INDEX_DELETED
+                | git2::Status::INDEX_RENAMED,
+        ) {
+            continue;
+        }
+        let Some(path) = entry.path().ok().map(str::to_owned) else {
+            continue;
+        };
+        if !pathspec.matches_path(Path::new(&path), git2::PathspecFlags::default()) {
+            continue;
+        }
+        if status == git2::Status::WT_NEW {
+            untracked.push(path);
+        } else {
+            tracked.push(path);
+        }
+    }
+    Ok((tracked, untracked))
+}
+
+/// Build the stash for `git stash push -u -- <paths>` when ONLY untracked
+/// files match: the stash tree equals the base tree (no tracked changes)
+/// and the files live only in the untracked parent — the shape git itself
+/// produces, which libgit2's pathspec mode cannot express. Message formats
+/// mirror libgit2's (`On <branch>: <msg>` / `WIP on <branch>: <sha> <subj>`).
+fn stash_untracked_only(
+    repo: &Repository,
+    stasher: &git2::Signature<'static>,
+    message: Option<&str>,
+    untracked_paths: &[String],
+) -> EngineResult<()> {
+    let head = repo.head().ok().and_then(|h| h.peel_to_commit().ok());
+    let branch = repo
+        .find_reference("HEAD")
+        .ok()
+        .and_then(|h| h.symbolic_target().ok().flatten().map(str::to_owned))
+        .map(|t| t.trim_start_matches("refs/heads/").to_owned())
+        .unwrap_or_else(|| "(no branch)".to_owned());
+    let desc = match &head {
+        Some(commit) => format!(
+            "{branch}: {:.7} {}",
+            commit.id(),
+            commit.summary().ok().flatten().unwrap_or_default()
+        ),
+        None => format!("{branch}:"),
+    };
+
+    // 1. index snapshot (the `--index` restore source).
+    let index_tree_oid = repo.index()?.write_tree()?;
+    let index_tree = repo.find_tree(index_tree_oid)?;
+    let index_parents: Vec<git2::Commit<'_>> = head.iter().cloned().collect();
+    let index_parent_refs: Vec<&git2::Commit<'_>> = index_parents.iter().collect();
+    let index_oid = repo.commit(
+        None,
+        stasher,
+        stasher,
+        &format!("index on {desc}"),
+        &index_tree,
+        &index_parent_refs,
+    )?;
+    let index_commit = repo.find_commit(index_oid)?;
+
+    // 2. untracked parent with exactly the matching files.
+    let untracked_tree_oid = write_files_tree(repo, untracked_paths)?;
+    let untracked_tree = repo.find_tree(untracked_tree_oid)?;
+    let untracked_parents = [&index_commit];
+    let untracked_oid = repo.commit(
+        None,
+        stasher,
+        stasher,
+        &format!("untracked files on {desc}"),
+        &untracked_tree,
+        &untracked_parents,
+    )?;
+    let untracked_commit = repo.find_commit(untracked_oid)?;
+
+    // 3. stash commit: base tree, stash message, parents in libgit2/git
+    // order [base, index, untracked] (stash_apply reads base from parent 0
+    // and the index parent from 1).
+    let base_tree = match &head {
+        Some(commit) => commit.tree()?,
+        None => repo.find_tree(repo.treebuilder(None)?.write()?)?,
+    };
+    let mut parents: Vec<&git2::Commit<'_>> = head.iter().collect();
+    parents.push(&index_commit);
+    parents.push(&untracked_commit);
+    let worktree_message = match message {
+        Some(msg) => format!("On {branch}: {msg}"),
+        None => format!("WIP on {desc}"),
+    };
+    let stash_oid = repo.commit(
+        None,
+        stasher,
+        stasher,
+        &worktree_message,
+        &base_tree,
+        &parents,
+    )?;
+
+    // 4. move refs/stash (creating its reflog first — refs/stash is not in
+    // libgit2's default reflog globs, so a first stash needs the explicit
+    // ensure-log or the entry would be lost).
+    repo.reference_ensure_log(STASH_REF)?;
+    repo.reference(STASH_REF, stash_oid, true, &worktree_message)?;
+    Ok(())
+}
+
+/// Build a tree containing exactly `paths` (blobs read from the workdir),
+/// with nested subtrees for directories.
+fn write_files_tree(repo: &Repository, paths: &[String]) -> EngineResult<git2::Oid> {
+    use std::collections::BTreeMap;
+
+    fn build(repo: &Repository, entries: &BTreeMap<String, Node>) -> EngineResult<git2::Oid> {
+        let mut builder = repo.treebuilder(None)?;
+        for (name, node) in entries {
+            match node {
+                Node::File(oid) => {
+                    builder.insert(name, *oid, 0o100644)?;
+                }
+                Node::Dir(sub) => {
+                    let oid = build(repo, sub)?;
+                    builder.insert(name, oid, 0o040000)?;
+                }
+            }
+        }
+        Ok(builder.write()?)
+    }
+
+    enum Node {
+        File(git2::Oid),
+        Dir(BTreeMap<String, Node>),
+    }
+
+    fn dir_map(node: &mut Node) -> &mut BTreeMap<String, Node> {
+        match node {
+            Node::Dir(map) => map,
+            Node::File(_) => unreachable!("insert descends only through Dir nodes"),
+        }
+    }
+
+    let mut root = BTreeMap::new();
+    let workdir = repo
+        .workdir()
+        .ok_or_else(|| EngineError::Invalid("bare repository has no workdir".into()))?;
+    for rel in paths {
+        let bytes = std::fs::read(workdir.join(rel))?;
+        let oid = repo.blob(&bytes)?;
+        let mut map = &mut root;
+        let parts: Vec<&str> = rel.split('/').collect();
+        for segment in &parts[..parts.len() - 1] {
+            let node = map
+                .entry((*segment).to_owned())
+                .or_insert_with(|| Node::Dir(BTreeMap::new()));
+            map = dir_map(node);
+        }
+        map.insert(parts[parts.len() - 1].to_owned(), Node::File(oid));
+    }
+    build(repo, &root)
+}
+
+/// Untracked files (status `WT_NEW`, recursive) that the pathspec does not
+/// match — the files a selective stash must NOT capture.
+fn non_matching_untracked(
+    repo: &Repository,
+    pathspec: &git2::Pathspec,
+) -> EngineResult<Vec<String>> {
+    let mut status_opts = StatusOptions::new();
+    status_opts
+        .include_untracked(true)
+        .recurse_untracked_dirs(true)
+        .exclude_submodules(true);
+    Ok(repo
+        .statuses(Some(&mut status_opts))?
+        .iter()
+        .filter(|e| e.status() == git2::Status::WT_NEW)
+        .filter_map(|e| e.path().ok().map(str::to_owned))
+        .filter(|p| !pathspec.matches_path(Path::new(p), git2::PathspecFlags::default()))
+        .collect())
+}
+
+/// Holding area for non-matching untracked files during a selective stash
+/// push: libgit2's untracked-commit sweep ignores the pathspec, so the files
+/// move into `<gitdir>/mygitui/stash-keep-<...>/` for the duration of the
+/// call and move right back. `rename` inside the same gitdir filesystem
+/// never copies bytes, so even large untracked trees cost nothing; on the
+/// rare cross-device gitdir the rename falls back to copy + remove.
+struct UntrackedHolding {
+    dir: PathBuf,
+    workdir: PathBuf,
+    moved: Vec<String>,
+}
+
+impl UntrackedHolding {
+    fn create(workdir: &Path, gitdir: &Path, paths: Vec<String>) -> EngineResult<UntrackedHolding> {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let dir = gitdir
+            .join("mygitui")
+            .join(format!("stash-keep-{}-{nanos}", std::process::id()));
+        std::fs::create_dir_all(&dir)?;
+        for rel in &paths {
+            let from = workdir.join(rel);
+            let to = dir.join(rel);
+            if let Some(parent) = to.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            move_file(&from, &to)?;
+        }
+        Ok(UntrackedHolding {
+            dir,
+            workdir: workdir.to_path_buf(),
+            moved: paths,
+        })
+    }
+
+    /// Best-effort restore (runs on success AND after a failed stash — the
+    /// workdir must never lose files to a refused stash).
+    fn restore(self) {
+        for rel in &self.moved {
+            let to = self.workdir.join(rel);
+            if let Some(parent) = to.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            let _ = move_file(&self.dir.join(rel), &to);
+        }
+        let _ = std::fs::remove_dir_all(&self.dir);
+    }
+}
+
+/// `rename`, falling back to copy + remove when source and target sit on
+/// different filesystems.
+fn move_file(from: &Path, to: &Path) -> std::io::Result<()> {
+    match std::fs::rename(from, to) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::CrossesDevices => {
+            std::fs::copy(from, to)?;
+            std::fs::remove_file(from)
+        }
+        Err(e) => Err(e),
+    }
+}
+
+/// libgit2's selective `--include-untracked` stash puts the swept untracked
+/// files into BOTH the stash tree (`stash_update_index_from_paths` adds
+/// every pathspec match) and the untracked tree. Applying such a stash
+/// double-writes the file: the untracked checkout creates it, then the safe
+/// modified checkout conflicts on the now-existing file ("1 conflict
+/// prevents checkout"). Drop the duplicated workdir copies first — the
+/// apply's own untracked checkout recreates them — but only when the
+/// workdir bytes still match the stashed blob, so a genuinely edited file
+/// keeps its right to surface as a conflict.
+fn drop_duplicated_untracked(repo: &Repository, stash_oid: git2::Oid) -> EngineResult<()> {
+    let Ok(commit) = repo.find_commit(stash_oid) else {
+        return Ok(());
+    };
+    if commit.parent_count() != 3 {
+        return Ok(()); // no untracked parent: nothing to deduplicate
+    }
+    let Some(workdir) = repo.workdir() else {
+        return Ok(());
+    };
+    let stash_tree = commit.tree()?;
+    let mut dropped: Vec<(String, git2::Oid)> = Vec::new();
+    tree_files(
+        repo,
+        &commit.parent(2)?.tree()?,
+        String::new(),
+        &mut dropped,
+    );
+    for (path, blob_oid) in dropped {
+        if stash_tree.get_path(Path::new(&path)).is_err() {
+            continue; // only duplicated entries are the double-write hazard
+        }
+        let Ok(blob) = repo.find_blob(blob_oid) else {
+            continue;
+        };
+        let file = workdir.join(&path);
+        let Ok(bytes) = std::fs::read(&file) else {
+            continue;
+        };
+        if bytes == blob.content() {
+            std::fs::remove_file(&file)?;
+        }
+    }
+    Ok(())
+}
+
+/// Collect the blob entries of a tree into `(path, oid)` pairs, recursing
+/// into subtrees.
+fn tree_files(
+    repo: &Repository,
+    tree: &git2::Tree<'_>,
+    prefix: String,
+    out: &mut Vec<(String, git2::Oid)>,
+) {
+    for entry in tree.iter() {
+        let Ok(name) = entry.name() else { continue };
+        match entry.kind() {
+            Some(git2::ObjectType::Blob) => out.push((format!("{prefix}{name}"), entry.id())),
+            Some(git2::ObjectType::Tree) => {
+                if let Ok(sub) = repo.find_tree(entry.id()) {
+                    tree_files(repo, &sub, format!("{prefix}{name}/"), out);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
 /// Error mapper for the stash stack operations libgit2 performs by index.
 fn no_such_stash(index: u32) -> impl Fn(git2::Error) -> EngineError {
     move |e: git2::Error| {
@@ -153,12 +653,17 @@ impl Libgit2Engine {
         Ok(out)
     }
 
+    /// `git stash push [-m msg] [--keep-index] [--include-untracked] [-- paths]`.
+    /// `paths` (`None` or empty = all changes) limits the stash to those
+    /// pathspecs; the untracked / keep-index flags behave identically with
+    /// and without a pathspec.
     pub(crate) fn stash_push_impl(
         &self,
         repo: &Repository,
         message: Option<&str>,
         keep_index: bool,
         include_untracked: bool,
+        paths: Option<&[String]>,
     ) -> EngineResult<()> {
         let mut fresh = Repository::open(repo.path())?;
         let stasher = unbound_signature(&mut fresh)?;
@@ -169,29 +674,70 @@ impl Libgit2Engine {
         if include_untracked {
             flags |= StashFlags::INCLUDE_UNTRACKED;
         }
-        fresh
-            .stash_save2(&stasher, message, Some(flags))
-            .map_err(|e| {
-                if e.code() == ErrorCode::NotFound {
-                    EngineError::Invalid("nothing to stash".into())
-                } else {
-                    EngineError::Git(e)
-                }
-            })?;
-        Ok(())
+        let pathspecs = paths.filter(|p| !p.is_empty());
+        if let Some(pathspecs) = pathspecs {
+            selective_stash(
+                &mut fresh,
+                stasher,
+                message,
+                keep_index,
+                include_untracked,
+                pathspecs,
+            )
+        } else {
+            fresh
+                .stash_save2(&stasher, message, Some(flags))
+                .map_err(nothing_to_stash)?;
+            Ok(())
+        }
     }
 
+    /// `git stash show <stash>`: the file diffs between the stash's base
+    /// (first parent) and the stash commit, reusing the engine's diff
+    /// pipeline (rename detection, binary/image marking, patch building).
+    /// Like `git stash show`, the (optional) third parent's untracked-tree
+    /// state is NOT included.
+    pub(crate) fn stash_show_impl(
+        &self,
+        repo: &Repository,
+        index: u32,
+    ) -> EngineResult<Vec<FileDiff>> {
+        let stash = stash_oid_at(repo, index)?;
+        let commit = repo.find_commit(stash)?;
+        let base = commit
+            .parent(0)
+            .map_err(|_| EngineError::Invalid(format!("stash entry {index} has no base commit")))?;
+        let diff = self
+            .diff_build(
+                repo,
+                &DiffSide::Commit(base.id().to_string()),
+                &DiffSide::Commit(stash.to_string()),
+                false,
+            )?
+            .ok_or_else(|| EngineError::Invalid("stash diff produced no sides".into()))?;
+        diff_to_files(repo, &diff, None)
+    }
+
+    /// `git stash apply [--index] <stash>`: `restore_index` re-instates the
+    /// stashed index state (staged changes come back staged, `--index`
+    /// semantics) instead of staging everything as unstaged.
     pub(crate) fn stash_apply_impl(
         &self,
         repo: &Repository,
         index: u32,
         pop: bool,
+        restore_index: bool,
     ) -> EngineResult<()> {
         // Pre-resolve so a bad index fails before the worktree is touched.
-        stash_oid_at(repo, index)?;
+        let stash_oid = stash_oid_at(repo, index)?;
         let mut fresh = Repository::open(repo.path())?;
+        drop_duplicated_untracked(&fresh, stash_oid)?;
+        let mut opts = StashApplyOptions::new();
+        if restore_index {
+            opts.reinstantiate_index();
+        }
         fresh
-            .stash_apply(index as usize, None)
+            .stash_apply(index as usize, Some(&mut opts))
             .map_err(no_such_stash(index))?;
         // Pop only drops after a clean apply; conflicts leave the entry in
         // place (the FE surfaces the conflict state).
@@ -200,6 +746,77 @@ impl Libgit2Engine {
                 .stash_drop(index as usize)
                 .map_err(no_such_stash(index))?;
         }
+        Ok(())
+    }
+
+    /// Rename the stash entry's message. git has no native rename, so the
+    /// stash commit is re-created (same tree, parents, author) with the new
+    /// message and `refs/stash` + its reflog move onto it. Only the newest
+    /// entry (`stash@{0}`) is supported: renaming deeper entries would need a
+    /// commit-chain/reflog rebuild of the whole stack.
+    pub(crate) fn stash_rename_impl(
+        &self,
+        repo: &Repository,
+        index: u32,
+        message: &str,
+    ) -> EngineResult<()> {
+        if index != 0 {
+            return Err(EngineError::Invalid(
+                "only the newest stash can be renamed (stash@{0})".into(),
+            ));
+        }
+        if message.trim().is_empty() {
+            return Err(EngineError::Invalid("stash message cannot be empty".into()));
+        }
+        let old_oid = stash_oid_at(repo, index)?;
+        let commit = repo.find_commit(old_oid)?;
+        let committer = repo.signature().map_err(|e| {
+            EngineError::Invalid(format!(
+                "committer identity not configured (set user.name / user.email): {e}"
+            ))
+        })?;
+        let parents: Vec<git2::Commit<'_>> = commit.parents().collect();
+        let parent_refs: Vec<&git2::Commit<'_>> = parents.iter().collect();
+        let new_oid = repo.commit(
+            None, // no ref move here; refs/stash is updated with its own reflog entry below
+            &commit.author(),
+            &committer,
+            message,
+            &commit.tree()?,
+            &parent_refs,
+        )?;
+
+        // Move the ref (force: it keeps pointing at the old commit). This
+        // appends a reflog entry (old -> renamed) whose message is the NEW
+        // stash message — `stash_list` renders the reflog message, so it
+        // must read as the renamed entry. The superseded entry that still
+        // points at the old commit is dropped below, keeping the stack
+        // length unchanged.
+        repo.reference(STASH_REF, new_oid, true, message)?;
+
+        // Reflog fix-up. `reference` may or may not append an entry
+        // (reflog-on-update is config dependent), so handle both shapes.
+        let mut reflog = repo.reflog(STASH_REF)?;
+        let newest = reflog.get(0).map(|e| e.id_new());
+        if newest == Some(new_oid) {
+            // Expected shape: [renamed, (old), ...]. Remove the stale entry
+            // pointing at the old commit; `rewrite_previous_entry` splices
+            // the chain (the renamed entry's old-id becomes the previous
+            // stash, matching what the original push wrote).
+            for i in 1..reflog.len() {
+                if reflog.get(i).map(|e| e.id_new()) == Some(old_oid) {
+                    reflog.remove(i, true)?;
+                    break;
+                }
+            }
+        } else {
+            // No reflog entry was appended: rewrite the newest entry in
+            // place via remove + append (its old-id re-reads the current
+            // ref target, so it reports the rename, not the original base).
+            reflog.remove(0, false)?;
+            reflog.append(new_oid, &committer, Some(message))?;
+        }
+        reflog.write()?;
         Ok(())
     }
 

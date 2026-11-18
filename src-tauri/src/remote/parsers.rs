@@ -413,7 +413,10 @@ pub fn parse_blame(raw: &str) -> Vec<BlameLine> {
                     time: 0,
                     offset_minutes: 0,
                 });
+            // the device's git re-attributes --ignore-revs-file lines
+            // natively, so nothing arrives pre-flagged as ignored
             lines_out.push(BlameLine {
+                ignored: false,
                 line_no: final_line,
                 sha: sha.clone(),
                 signature: author.clone(),

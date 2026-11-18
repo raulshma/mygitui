@@ -11,9 +11,9 @@
 use git2::Repository;
 
 use super::types::{
-    BlameLine, BranchInfo, CommitInfo, CommitOptions, DiffSide, FetchOptions, FileDiff, HookInfo,
-    LogFilter, NetStats, PullOptions, PushOptions, RemoteBranchInfo, RemoteInfo, RepoStatus,
-    SigningInfo, StageRequest, StageTarget, TagInfo,
+    BlameLine, BlameQuery, BranchInfo, CommitInfo, CommitOptions, DiffSide, FetchOptions, FileDiff,
+    HookInfo, LogFilter, NetStats, PullOptions, PushOptions, RemoteBranchInfo, RemoteInfo,
+    RepoStatus, SigningInfo, StageRequest, StageTarget, TagInfo,
 };
 
 pub type EngineResult<T> = Result<T, EngineError>;
@@ -90,11 +90,15 @@ pub trait GitEngine: Send + Sync {
         Err(EngineError::Unsupported("commit_message".into()))
     }
 
+    /// Line-by-line origin of `path`. `query` carries the target commit-ish
+    /// (`from`, `None` = HEAD/workdir) plus the optional oldest bound,
+    /// whitespace/first-parent filters, and `.git-blame-ignore-revs` handling
+    /// (see [`types::BlameQuery`]).
     fn blame(
         &self,
         repo: &Repository,
         path: &str,
-        from: Option<&str>,
+        query: &BlameQuery,
     ) -> EngineResult<Vec<BlameLine>>;
 
     /// Raw bytes of one blob at `path` on diff `side` (image diffs):
@@ -386,6 +390,15 @@ pub trait GitEngineM3: Send + Sync {
         Err(EngineError::Unsupported("rebase_continue".into()))
     }
 
+    /// Skip the paused rebase step entirely (`git rebase --skip`): valid only
+    /// while paused on a conflicted pick (`paused_for_conflict`) or a failed
+    /// `exec` (`paused_for_exec`). The step records nothing in `rewritten`;
+    /// the conflicted step's index/workdir merge state is rolled back to HEAD
+    /// (the rewritten sequence so far) before the loop advances.
+    fn rebase_skip(&self, _repo: &Repository) -> EngineResult<RebaseState> {
+        Err(EngineError::Unsupported("rebase_skip".into()))
+    }
+
     fn rebase_abort(&self, _repo: &Repository) -> EngineResult<()> {
         Err(EngineError::Unsupported("rebase_abort".into()))
     }
@@ -394,18 +407,43 @@ pub trait GitEngineM3: Send + Sync {
         Err(EngineError::Unsupported("stash_list".into()))
     }
 
+    /// Stash the worktree+index. `paths` limits the stash to those pathspecs
+    /// (`git stash push -- <paths>`, `None`/empty = everything, like
+    /// `stash_save2`).
     fn stash_push(
         &self,
         _repo: &Repository,
         _message: Option<&str>,
         _keep_index: bool,
         _include_untracked: bool,
+        _paths: Option<&[String]>,
     ) -> EngineResult<()> {
         Err(EngineError::Unsupported("stash_push".into()))
     }
 
-    fn stash_apply(&self, _repo: &Repository, _index: u32, _pop: bool) -> EngineResult<()> {
+    /// Show what `stash@{index}` carries: the file diffs between its base
+    /// (first parent) and the stash commit (`git stash show`).
+    fn stash_show(&self, _repo: &Repository, _index: u32) -> EngineResult<Vec<FileDiff>> {
+        Err(EngineError::Unsupported("stash_show".into()))
+    }
+
+    fn stash_apply(
+        &self,
+        _repo: &Repository,
+        _index: u32,
+        _pop: bool,
+        _restore_index: bool,
+    ) -> EngineResult<()> {
         Err(EngineError::Unsupported("stash_apply".into()))
+    }
+
+    /// Rename the stash entry at `index` (rewrites the message in place).
+    /// git has no native rename: the stash commit is re-created with the new
+    /// message and `refs/stash` moves onto it. Limitation: only `stash@{0}`
+    /// (the newest entry) can be renamed — non-top renames would require a
+    /// full reflog/stack rebuild and are rejected with a clear error.
+    fn stash_rename(&self, _repo: &Repository, _index: u32, _message: &str) -> EngineResult<()> {
+        Err(EngineError::Unsupported("stash_rename".into()))
     }
 
     fn stash_drop(&self, _repo: &Repository, _index: u32) -> EngineResult<()> {

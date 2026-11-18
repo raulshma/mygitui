@@ -129,7 +129,9 @@ pub(crate) fn build_commit_args(message_file: &str, opts: &CommitOptions) -> Vec
 }
 
 /// Pure: argv for `git push`. Mirrors [`PushOptions`] 1:1; `--force-with-lease`
-/// is the real CLI flag (the libgit2 path approximates it).
+/// is the real CLI flag (the libgit2 path approximates it), and `--atomic`
+/// only ever reaches this builder — git2-rs does not expose libgit2's
+/// atomic push flag, so atomic pushes are routed to the CLI wholesale.
 pub(crate) fn build_push_args(opts: &PushOptions) -> Vec<String> {
     let mut args = vec!["push".to_string()];
     if opts.delete {
@@ -146,6 +148,9 @@ pub(crate) fn build_push_args(opts: &PushOptions) -> Vec<String> {
     }
     if opts.set_upstream {
         args.push("--set-upstream".to_string());
+    }
+    if opts.atomic {
+        args.push("--atomic".to_string());
     }
     args.push(opts.remote.clone());
     if !opts.refs.is_empty() {
@@ -503,6 +508,28 @@ mod tests {
             build_push_args(&options),
             vec!["push", "--force", "--set-upstream", "origin", "main"]
         );
+    }
+
+    #[test]
+    fn push_args_atomic_flag_is_included_when_set() {
+        let options = PushOptions {
+            remote: "origin".to_string(),
+            branch: "main".to_string(),
+            atomic: true,
+            ..PushOptions::default()
+        };
+        assert_eq!(
+            build_push_args(&options),
+            vec!["push", "--atomic", "origin", "main"]
+        );
+
+        // Default payload (older FE omitting the field) stays flag-free.
+        let plain = PushOptions {
+            remote: "origin".to_string(),
+            branch: "main".to_string(),
+            ..PushOptions::default()
+        };
+        assert!(!build_push_args(&plain).contains(&"--atomic".to_string()));
     }
 
     #[test]

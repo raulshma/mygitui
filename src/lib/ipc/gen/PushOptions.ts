@@ -31,4 +31,11 @@ tags: boolean,
 /**
  * Delete the remote refs named in `refs` instead of updating them.
  */
-delete: boolean, };
+delete: boolean, 
+/**
+ * Push all refs as one atomic transaction (`--atomic`): the remote
+ * accepts the whole update or rejects every ref. git2-rs does not
+ * expose libgit2's `GIT_PUSH_ATOMIC` flag, so atomic pushes route
+ * through the git CLI (see `engine::netops::push_impl_ext`).
+ */
+atomic: boolean, };

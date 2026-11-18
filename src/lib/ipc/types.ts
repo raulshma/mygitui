@@ -34,6 +34,7 @@ export type { GitSignature } from "./gen/GitSignature";
 export type { CommitInfo } from "./gen/CommitInfo";
 export type { LogFilter } from "./gen/LogFilter";
 export type { BlameLine } from "./gen/BlameLine";
+export type { BlameQuery } from "./gen/BlameQuery";
 export type { RepoInfo } from "./gen/RepoInfo";
 export type { GraphEdge } from "./gen/GraphEdge";
 export type { GraphRow } from "./gen/GraphRow";

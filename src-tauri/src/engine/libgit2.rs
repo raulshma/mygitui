@@ -21,10 +21,10 @@ use super::git_engine::{
 };
 use super::paths::validate_workdir_path;
 use super::types::{
-    BlameLine, BranchInfo, ChangeKind, CommitInfo, CommitOptions, DiffHunk, DiffLine, DiffSide,
-    FetchOptions, FileDiff, GitSignature, HookInfo, LogFilter, NetStats, PullOptions, PushOptions,
-    RemoteBranchInfo, RemoteInfo, RepoStatus, SigningInfo, StageRequest, StageTarget, StatusEntry,
-    TagInfo,
+    BlameLine, BlameQuery, BranchInfo, ChangeKind, CommitInfo, CommitOptions, DiffHunk, DiffLine,
+    DiffSide, FetchOptions, FileDiff, GitSignature, HookInfo, LogFilter, NetStats, PullOptions,
+    PushOptions, RemoteBranchInfo, RemoteInfo, RepoStatus, SigningInfo, StageRequest, StageTarget,
+    StatusEntry, TagInfo,
 };
 // Shared IPC read cap (`repo_read_file`): blame materializes the same file.
 use crate::ipc_commands::READ_FILE_MAX_BYTES;
@@ -69,6 +69,73 @@ fn blob_too_large(path: &str, bytes: u64) -> EngineError {
         bytes / (1024 * 1024),
         crate::ipc_commands::READ_FILE_MAX_BYTES / (1024 * 1024)
     ))
+}
+
+/// Per-line blame attribution (owned, so the ignore-revs pass can splice).
+#[derive(Debug, Clone)]
+struct BlameOrigin {
+    sha: String,
+    signature: GitSignature,
+    final_sha: String,
+    final_signature: GitSignature,
+    ignored: bool,
+}
+
+/// One blame hunk flattened into the model fields (the git2 hunk borrows the
+/// blame, so slices own the data and let the ignore-revs pass splice runs).
+struct BlameSlice {
+    /// First line of the hunk in the final file (1-based).
+    final_start: u32,
+    lines: usize,
+    /// Commit that introduced the content (what `.git-blame-ignore-revs`
+    /// lists and what the FE colors by).
+    sha: String,
+    signature: GitSignature,
+    final_sha: String,
+    final_signature: GitSignature,
+}
+
+/// Blame `path` as it existed at `newest` — the parent-side history run the
+/// ignore-revs re-attribution pass splices from.
+fn blame_at_newest<'r>(
+    repo: &'r Repository,
+    path: &str,
+    newest: Oid,
+) -> Result<git2::Blame<'r>, git2::Error> {
+    let mut opts = BlameOptions::new();
+    opts.newest_commit(newest);
+    repo.blame_file(Path::new(path), Some(&mut opts))
+}
+
+/// Copy a blame hunk into an owned slice.
+fn blame_slice(hunk: git2::BlameHunk<'_>) -> BlameSlice {
+    BlameSlice {
+        final_start: hunk.final_start_line() as u32,
+        lines: hunk.lines_in_hunk(),
+        sha: hunk.orig_commit_id().to_string(),
+        signature: sig_opt_to_model(hunk.orig_signature()),
+        final_sha: hunk.final_commit_id().to_string(),
+        final_signature: sig_opt_to_model(hunk.final_signature()),
+    }
+}
+
+/// Full-length commit shas from `.git-blame-ignore-revs` at the workdir
+/// root (git's ignore format: one sha per line, `#` comments and blanks
+/// allowed). Shorter/abbreviated shas and garbage lines are skipped the way
+/// the parser treats them, and a missing file yields an empty set — the
+/// flag then costs one fs read per blame.
+fn blame_ignore_set(repo: &Repository) -> std::collections::HashSet<String> {
+    let Some(workdir) = repo.workdir() else {
+        return std::collections::HashSet::new();
+    };
+    let Ok(text) = std::fs::read_to_string(workdir.join(".git-blame-ignore-revs")) else {
+        return std::collections::HashSet::new();
+    };
+    text.lines()
+        .map(str::trim)
+        .filter(|line| line.len() == 40 && line.bytes().all(|b| b.is_ascii_hexdigit()))
+        .map(|line| line.to_ascii_lowercase())
+        .collect()
 }
 
 /// A topological order for one exact set of walk heads. The order is derived
@@ -815,7 +882,9 @@ impl Libgit2Engine {
     }
 }
 
-fn diff_to_files(
+/// Materialize every delta of a built diff into [`FileDiff`]s. Shared by the
+/// diff IPC surface and `stash_show` (same conversion, tree-to-tree diff).
+pub(crate) fn diff_to_files(
     repo: &Repository,
     diff: &Diff<'_>,
     paths: Option<&[String]>,
@@ -1563,29 +1632,20 @@ impl GitEngine for Libgit2Engine {
         &self,
         repo: &Repository,
         path: &str,
-        from: Option<&str>,
+        query: &BlameQuery,
     ) -> EngineResult<Vec<BlameLine>> {
-        let mut opts = BlameOptions::new();
-        let target_commit = match from {
-            Some(spec) => {
-                let commit = resolve_commit(repo, spec)?;
-                opts.newest_commit(commit.id());
-                Some(commit)
-            }
+        let target_commit = match query.from.as_deref() {
+            Some(spec) => Some(resolve_commit(repo, spec)?),
             None => {
                 // Default target is HEAD (contract: "from commit-ish or HEAD").
                 // On an unborn HEAD there is nothing to blame yet.
-                match repo.head() {
-                    Ok(head) => match head.peel_to_commit() {
-                        Ok(commit) => {
-                            opts.newest_commit(commit.id());
-                            Some(commit)
-                        }
-                        Err(_) => None,
-                    },
-                    Err(_) => None,
-                }
+                repo.head().ok().and_then(|head| head.peel_to_commit().ok())
             }
+        };
+        let newest = target_commit.as_ref().map(|commit| commit.id());
+        let oldest = match query.oldest.as_deref() {
+            Some(spec) => Some(resolve_commit(repo, spec)?.id()),
+            None => None,
         };
 
         // Blame maps hunks onto the *final* file; read that file's lines.
@@ -1599,7 +1659,7 @@ impl GitEngine for Libgit2Engine {
                 let entry = tree.get_path(Path::new(path)).map_err(|e| {
                     EngineError::Invalid(format!(
                         "`{path}` not found in `{}`: {e}",
-                        from.unwrap_or_default()
+                        query.from.as_deref().unwrap_or_default()
                     ))
                 })?;
                 let blob = entry
@@ -1626,7 +1686,133 @@ impl GitEngine for Libgit2Engine {
             }
         };
 
-        let blame = repo.blame_file(Path::new(path), Some(&mut opts))?;
+        // One blame run over the file with the query's filters; `oldest_bound`
+        // overrides the query's bound (the ignore-revs pass re-runs with a
+        // deeper bound each pass). Slices keep the hunk shape so the
+        // ignore-revs pass can re-run and splice by final line range.
+        let run_blame = |oldest_bound: Option<Oid>| -> EngineResult<Vec<BlameSlice>> {
+            let mut opts = BlameOptions::new();
+            if let Some(oid) = newest {
+                opts.newest_commit(oid);
+            }
+            let bound = oldest_bound.or(oldest);
+            if let Some(oid) = bound {
+                opts.oldest_commit(oid);
+            }
+            if query.ignore_whitespace {
+                opts.ignore_whitespace(true);
+            }
+            if query.first_parent {
+                opts.first_parent(true);
+            }
+            let blame = repo.blame_file(Path::new(path), Some(&mut opts))?;
+            Ok(blame.iter().map(blame_slice).collect())
+        };
+
+        let total_lines = {
+            // `split('\n')` yields a trailing empty element for a
+            // newline-ended file; drop it so line numbers line up.
+            let count = String::from_utf8_lossy(&content).split('\n').count();
+            if content.ends_with(b"\n") {
+                count - 1
+            } else {
+                count
+            }
+        };
+
+        // Per-final-line attribution; filled from the first blame run, then
+        // spliced by the ignore-revs pass.
+        let mut origin: Vec<Option<BlameOrigin>> = vec![None; total_lines];
+        for slice in run_blame(None)? {
+            for i in 0..slice.lines {
+                let idx = slice.final_start as usize - 1 + i;
+                if let Some(slot) = origin.get_mut(idx) {
+                    *slot = Some(BlameOrigin {
+                        sha: slice.sha.clone(),
+                        signature: slice.signature.clone(),
+                        final_sha: slice.final_sha.clone(),
+                        final_signature: slice.final_signature.clone(),
+                        ignored: false,
+                    });
+                }
+            }
+        }
+
+        // Ignore-revs post-filter (libgit2 has no --ignore-revs-file, and
+        // its oldest_commit floor cannot exclude a mid-history commit). For
+        // every line attributed to a listed commit I, blame the file AS IT
+        // EXISTED AT I's first parent — a history that excludes I — and take
+        // that run's attribution for the line (same line number: final-file
+        // and parent-file coordinates line up for formatting-only commits,
+        // which is what ignore files exist for). Lines beyond the parent's
+        // file (content I genuinely added) keep I and are flagged `ignored`
+        // so the FE can render "ignored commit". Each pass descends strictly
+        // below the matched commit, so the loop terminates on its own; the
+        // cap only guards pathological ignore files.
+        if query.ignore_revs {
+            let ignore = blame_ignore_set(repo);
+            for _ in 0..64 {
+                let Some(ignored_sha) = origin.iter().find_map(|o| {
+                    o.as_ref()
+                        .filter(|o| !o.ignored && ignore.contains(o.sha.as_str()))
+                        .map(|o| o.sha.clone())
+                }) else {
+                    break;
+                };
+                let mark = |origin: &mut Vec<Option<BlameOrigin>>| {
+                    for o in origin.iter_mut().flatten() {
+                        if o.sha == ignored_sha {
+                            o.ignored = true;
+                        }
+                    }
+                };
+                let Ok(oid) = Oid::from_str(&ignored_sha) else {
+                    break;
+                };
+                let Ok(commit) = repo.find_commit(oid) else {
+                    break; // listed but unreachable: keep the attribution
+                };
+                let Ok(parent_oid) = commit.parent_id(0) else {
+                    mark(&mut origin); // root commit listed: nothing earlier
+                    break;
+                };
+                let Ok(re_blame) = blame_at_newest(repo, path, parent_oid) else {
+                    // path predates the parent's tree shape (added later):
+                    // keep the attribution, flagged as ignored
+                    mark(&mut origin);
+                    continue;
+                };
+
+                // Attribution per line in the parent's file.
+                let mut parent_origin: Vec<Option<BlameOrigin>> = vec![None; total_lines];
+                for hunk in re_blame.iter() {
+                    for i in 0..hunk.lines_in_hunk() {
+                        let line_no = hunk.final_start_line() + i;
+                        if let Some(slot) = parent_origin.get_mut(line_no - 1) {
+                            *slot = Some(BlameOrigin {
+                                sha: hunk.orig_commit_id().to_string(),
+                                signature: sig_opt_to_model(hunk.orig_signature()),
+                                final_sha: hunk.final_commit_id().to_string(),
+                                final_signature: sig_opt_to_model(hunk.final_signature()),
+                                ignored: false,
+                            });
+                        }
+                    }
+                }
+                for (idx, slot) in origin.iter_mut().enumerate() {
+                    let o = slot.as_ref();
+                    if o.is_some_and(|o| o.sha == ignored_sha && !o.ignored) {
+                        *slot = parent_origin[idx].clone().or_else(|| {
+                            slot.clone().map(|mut o| {
+                                o.ignored = true;
+                                o
+                            })
+                        });
+                    }
+                }
+            }
+        }
+
         let lines: Vec<String> = String::from_utf8_lossy(&content)
             .split('\n')
             .map(|l| l.trim_end_matches('\r').to_owned())
@@ -1640,22 +1826,22 @@ impl GitEngine for Libgit2Engine {
         };
 
         let mut out = Vec::new();
-        for hunk in blame.iter() {
-            for i in 0..hunk.lines_in_hunk() {
-                let line_no = (hunk.final_start_line() + i) as u32;
-                let text = lines
-                    .get(line_no.saturating_sub(1) as usize)
-                    .cloned()
-                    .unwrap_or_default();
-                out.push(BlameLine {
-                    line_no,
-                    sha: hunk.orig_commit_id().to_string(),
-                    signature: sig_opt_to_model(hunk.orig_signature()),
-                    final_sha: hunk.final_commit_id().to_string(),
-                    final_signature: sig_opt_to_model(hunk.final_signature()),
-                    text,
-                });
-            }
+        for (idx, origin_slot) in origin.iter().enumerate() {
+            let Some(o) = origin_slot else { continue };
+            let line_no = idx as u32 + 1;
+            let text = lines
+                .get(line_no.saturating_sub(1) as usize)
+                .cloned()
+                .unwrap_or_default();
+            out.push(BlameLine {
+                line_no,
+                sha: o.sha.clone(),
+                signature: o.signature.clone(),
+                final_sha: o.final_sha.clone(),
+                final_signature: o.final_signature.clone(),
+                text,
+                ignored: o.ignored,
+            });
         }
         out.sort_by_key(|l| l.line_no);
         Ok(out)
@@ -2126,7 +2312,7 @@ mod m12_pickaxe_tests {
         let fx = init_fixture("blame-cap");
         commit_file(&fx.repo, "small.txt", "one\ntwo\n", "c1 base");
         let lines = ENGINE
-            .blame(&fx.repo, "small.txt", None)
+            .blame(&fx.repo, "small.txt", &BlameQuery::default())
             .expect("small file blames");
         assert_eq!(lines.len(), 2);
         let big = fx.repo.workdir().unwrap().join("big.bin");
@@ -2147,7 +2333,7 @@ mod m12_pickaxe_tests {
                 .commit(Some("HEAD"), &sig, &sig, "c2 big file", &tree, &[&parent])
                 .expect("commit");
         }
-        match ENGINE.blame(&fx.repo, "big.bin", None) {
+        match ENGINE.blame(&fx.repo, "big.bin", &BlameQuery::default()) {
             Err(EngineError::Invalid(msg)) => {
                 assert!(msg.contains("blame limit"), "{msg}");
                 assert!(msg.contains("32 MB"), "{msg}");
@@ -2159,7 +2345,7 @@ mod m12_pickaxe_tests {
         let fx2 = init_fixture("blame-cap-unborn");
         let big2 = fx2.repo.workdir().unwrap().join("big.bin");
         std::fs::write(&big2, vec![b'x'; oversized as usize]).expect("write big file");
-        match ENGINE.blame(&fx2.repo, "big.bin", None) {
+        match ENGINE.blame(&fx2.repo, "big.bin", &BlameQuery::default()) {
             Err(EngineError::Invalid(msg)) => assert!(msg.contains("blame limit"), "{msg}"),
             other => panic!("expected Invalid for oversized workdir file, got {other:?}"),
         }

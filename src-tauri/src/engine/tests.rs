@@ -10,8 +10,8 @@ use super::git_engine::{EngineError, GitEngine};
 use super::libgit2::Libgit2Engine;
 // Shared repo_read_file IPC cap (the blob oversize test reads the same bound).
 use super::types::{
-    ChangeKind, CommitOptions, DiffSide, GitSignature, LineRange, LogFilter, StageRequest,
-    StageTarget,
+    BlameQuery, ChangeKind, CommitOptions, DiffSide, GitSignature, LineRange, LogFilter,
+    StageRequest, StageTarget,
 };
 use crate::ipc_commands::READ_FILE_MAX_BYTES;
 
@@ -404,7 +404,7 @@ fn refs_list_branches_and_peeled_tag() {
 fn blame_reports_line_origins() {
     let repo = open_fixture("basic");
     let lines = ENGINE
-        .blame(&repo, "src/main.py", None)
+        .blame(&repo, "src/main.py", &BlameQuery::default())
         .expect("blame workdir");
     assert_eq!(lines.len(), 2);
     assert_eq!(lines[0].line_no, 1);
@@ -431,7 +431,14 @@ fn blame_reports_line_origins() {
 
     // Explicit commit-ish gives the same answer for a clean worktree file.
     let from_head = ENGINE
-        .blame(&repo, "src/main.py", Some("HEAD"))
+        .blame(
+            &repo,
+            "src/main.py",
+            &BlameQuery {
+                from: Some("HEAD".into()),
+                ..Default::default()
+            },
+        )
         .expect("blame HEAD");
     assert_eq!(from_head.len(), lines.len());
     assert_eq!(from_head[0].sha, lines[0].sha);
@@ -768,7 +775,16 @@ fn blame_defaults_to_head_state() {
     temp.add_all_and_commit("c2");
     let c2 = temp.head_sha();
 
-    let from_commit = ENGINE.blame(&temp, "doc.md", Some(&c2)).unwrap();
+    let from_commit = ENGINE
+        .blame(
+            &temp,
+            "doc.md",
+            &BlameQuery {
+                from: Some(c2.clone()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
     assert_eq!(from_commit.len(), 2);
     assert_eq!(from_commit[0].sha, c1);
     assert_eq!(from_commit[0].text, "first");
@@ -779,10 +795,256 @@ fn blame_defaults_to_head_state() {
     // Default (`from` = None) targets HEAD: an uncommitted workdir line does
     // not leak into the blame, and the reported text is HEAD's content.
     temp.write("doc.md", "first\nsecond\nthird (uncommitted)\n");
-    let from_head = ENGINE.blame(&temp, "doc.md", None).unwrap();
+    let from_head = ENGINE
+        .blame(&temp, "doc.md", &BlameQuery::default())
+        .unwrap();
     assert_eq!(from_head.len(), 2);
     assert_eq!(from_head[1].text, "second");
     assert_eq!(from_head[1].sha, c2);
+}
+
+// ---------------------------------------------------------------------------
+// blame query options (Phase 5 batch A): oldest bound / -w / first-parent /
+// ignore-revs
+// ---------------------------------------------------------------------------
+
+#[test]
+fn blame_oldest_bound_stops_at_boundary() {
+    let temp = TempRepo::new("blame-oldest");
+    temp.write("f.txt", "one\n");
+    temp.add_all_and_commit("c1");
+    let c1 = temp.head_sha();
+    temp.write("f.txt", "one\ntwo\n");
+    temp.add_all_and_commit("c2");
+    let c2 = temp.head_sha();
+    temp.write("f.txt", "one\ntwo\nthree\n");
+    temp.add_all_and_commit("c3");
+    let c3 = temp.head_sha();
+
+    // Unbounded: each line keeps its introducing commit.
+    let all = ENGINE
+        .blame(&temp, "f.txt", &BlameQuery::default())
+        .unwrap();
+    assert_eq!(
+        [
+            all[0].sha.as_str(),
+            all[1].sha.as_str(),
+            all[2].sha.as_str()
+        ],
+        [c1.as_str(), c2.as_str(), c3.as_str()]
+    );
+
+    // Bound at c2 (`git blame c2..HEAD`): lines already present at the bound
+    // collapse onto it as the boundary; later lines keep their commits.
+    let bounded = ENGINE
+        .blame(
+            &temp,
+            "f.txt",
+            &BlameQuery {
+                oldest: Some(c2.clone()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    assert_eq!(bounded[0].sha, c2, "pre-bound line attributes to the bound");
+    assert_eq!(bounded[1].sha, c2);
+    assert_eq!(bounded[2].sha, c3);
+
+    // Bound at c1 (the root): every line keeps its introducing commit.
+    let bounded = ENGINE
+        .blame(
+            &temp,
+            "f.txt",
+            &BlameQuery {
+                oldest: Some(c1.clone()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        [
+            bounded[0].sha.as_str(),
+            bounded[1].sha.as_str(),
+            bounded[2].sha.as_str()
+        ],
+        [c1.as_str(), c2.as_str(), c3.as_str()]
+    );
+}
+
+#[test]
+fn blame_ignore_whitespace_attributes_through_ws_only_commits() {
+    let temp = TempRepo::new("blame-ws");
+    temp.write("f.txt", "one\n");
+    temp.add_all_and_commit("c1");
+    let c1 = temp.head_sha();
+
+    // Whitespace-only rewrite (trailing spaces).
+    temp.write("f.txt", "one   \n");
+    temp.add_all_and_commit("ws only");
+    let ws = temp.head_sha();
+
+    temp.write("f.txt", "one   \ntwo\n");
+    temp.add_all_and_commit("c3");
+    let c3 = temp.head_sha();
+
+    // Default: the ws-only commit owns line 1 (it last changed it).
+    let plain = ENGINE
+        .blame(&temp, "f.txt", &BlameQuery::default())
+        .unwrap();
+    assert_eq!(plain[0].sha, ws);
+    assert_eq!(plain[1].sha, c3);
+
+    // -w: attribution passes through the whitespace-only commit.
+    let ignore_ws = ENGINE
+        .blame(
+            &temp,
+            "f.txt",
+            &BlameQuery {
+                ignore_whitespace: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    assert_eq!(ignore_ws[0].sha, c1, "line 1 traces back to its content");
+    assert_eq!(ignore_ws[1].sha, c3);
+}
+
+#[test]
+fn blame_first_parent_follows_mainline_through_merges() {
+    let temp = TempRepo::new("blame-first-parent");
+    temp.write("f.txt", "base\n");
+    temp.add_all_and_commit("base");
+    let base_oid = temp.head().unwrap().peel_to_commit().unwrap().id();
+
+    // Mainline moves on; a side branch (from base) REWRITES line 1 and adds
+    // its own line.
+    temp.write("f.txt", "base\nmain line\n");
+    temp.add_all_and_commit("main work");
+    let main_sha = temp.head_sha();
+    {
+        let base_commit = temp.find_commit(base_oid).unwrap();
+        temp.branch("side", &base_commit, false).unwrap();
+    }
+    temp.set_head("refs/heads/side").unwrap();
+    temp.write("f.txt", "BASE\nside line\n");
+    temp.add_all_and_commit("side work");
+    let side_sha = temp.head_sha();
+
+    // Back to the mainline, then merge the side branch in: tree = both
+    // changes, two parents (main tip first = the checked-out tip).
+    temp.set_head("refs/heads/master").unwrap();
+    {
+        let side_commit = temp
+            .find_commit(git2::Oid::from_str(&side_sha).unwrap())
+            .unwrap();
+        let mut checkout = git2::build::CheckoutBuilder::new();
+        checkout.force();
+        temp.checkout_tree(side_commit.as_object(), Some(&mut checkout))
+            .unwrap();
+    }
+    temp.write("f.txt", "BASE\nmain line\n");
+    temp.stage("f.txt");
+    let merge_sha = {
+        let mut index = temp.index().unwrap();
+        let tree_oid = index.write_tree().unwrap();
+        let tree = temp.find_tree(tree_oid).unwrap();
+        let sig = temp.signature().unwrap();
+        let parents = [
+            temp.find_commit(git2::Oid::from_str(&main_sha).unwrap())
+                .unwrap(),
+            temp.find_commit(git2::Oid::from_str(&side_sha).unwrap())
+                .unwrap(),
+        ];
+        let parent_refs: Vec<&git2::Commit<'_>> = parents.iter().collect();
+        temp.commit(Some("HEAD"), &sig, &sig, "merge side", &tree, &parent_refs)
+            .unwrap()
+            .to_string()
+    };
+
+    // Default: the side commit that rewrote line 1 owns it.
+    let plain = ENGINE
+        .blame(&temp, "f.txt", &BlameQuery::default())
+        .unwrap();
+    assert_eq!(plain[0].sha, side_sha, "line 1 traces to the side commit");
+    assert_eq!(plain[1].sha, main_sha, "mainline work keeps its commit");
+
+    // --first-parent: changes arriving through merges attribute to the
+    // merge commit on the first-parent chain (libgit2 walks only the
+    // first-parent history, where the line first appeared in the merge).
+    let fp = ENGINE
+        .blame(
+            &temp,
+            "f.txt",
+            &BlameQuery {
+                first_parent: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    assert_eq!(fp[0].sha, merge_sha, "side change attributes to the merge");
+    assert_eq!(fp[1].sha, main_sha);
+}
+
+#[test]
+fn blame_ignore_revs_reattributes_listed_commits() {
+    let temp = TempRepo::new("blame-ignore-revs");
+    temp.write("f.txt", "one\n");
+    temp.add_all_and_commit("c1");
+    let c1 = temp.head_sha();
+
+    // A formatting-only commit the team decided to ignore.
+    temp.write("f.txt", "one  \n");
+    temp.add_all_and_commit("reformat");
+    let c2 = temp.head_sha();
+    temp.write("f.txt", "one  \ntwo\n");
+    temp.add_all_and_commit("real work");
+    let c3 = temp.head_sha();
+
+    // .git-blame-ignore-revs at the workdir root: comment line + full sha.
+    temp.write(
+        ".git-blame-ignore-revs",
+        &format!("# formatting pass\n{c2}\n"),
+    );
+
+    // Without the flag the reformat owns line 1.
+    let plain = ENGINE
+        .blame(&temp, "f.txt", &BlameQuery::default())
+        .unwrap();
+    assert_eq!(plain[0].sha, c2);
+    assert_eq!(plain[1].sha, c3);
+
+    // With it, line 1 re-attributes to the commit that introduced the
+    // content (c1); line 2 is untouched.
+    let filtered = ENGINE
+        .blame(
+            &temp,
+            "f.txt",
+            &BlameQuery {
+                ignore_revs: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    assert_eq!(filtered[0].sha, c1, "reformat commit skipped");
+    assert_eq!(filtered[0].text, "one  ");
+    assert_eq!(filtered[1].sha, c3);
+
+    // An ignore file without matching shas changes nothing.
+    temp.write(".git-blame-ignore-revs", &format!("{c3}\n"));
+    let other = ENGINE
+        .blame(
+            &temp,
+            "f.txt",
+            &BlameQuery {
+                ignore_revs: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        [other[0].sha.as_str(), other[1].sha.as_str()],
+        [c2.as_str(), c3.as_str()]
+    );
 }
 
 #[test]
@@ -2100,4 +2362,55 @@ fn blob_refuses_oversized_files() {
         .blob(&temp.repo, &DiffSide::Worktree, "big.png")
         .expect_err("oversized worktree file must fail");
     assert!(err.to_string().contains("read limit"), "{err}");
+}
+
+#[test]
+fn scratch_blame_ignore_probe() {
+    let temp = TempRepo::new("scratch-ignore");
+    temp.write("f.txt", "one\n");
+    temp.add_all_and_commit("c1");
+    let c1 = temp.head_sha();
+    temp.write("f.txt", "one  \n");
+    temp.add_all_and_commit("reformat");
+    let c2 = temp.head_sha();
+    temp.write(
+        ".git-blame-ignore-revs",
+        &format!("# formatting pass\n{c2}\n"),
+    );
+    let ignore = {
+        // blame_ignore_set is private; reparse the file the same way here.
+        let text = std::fs::read_to_string(temp.workdir().unwrap().join(".git-blame-ignore-revs"))
+            .unwrap();
+        let set: std::collections::HashSet<String> = text
+            .lines()
+            .map(str::trim)
+            .filter(|l| l.len() == 40 && l.bytes().all(|b| b.is_ascii_hexdigit()))
+            .map(|l| l.to_ascii_lowercase())
+            .collect();
+        set
+    };
+    println!("ignore set: {ignore:?}, c2={c2}");
+    let filtered = ENGINE
+        .blame(
+            &temp,
+            "f.txt",
+            &BlameQuery {
+                ignore_revs: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    println!("line1 sha: {}", filtered[0].sha);
+    // bounded blame for comparison
+    let bounded = ENGINE
+        .blame(
+            &temp,
+            "f.txt",
+            &BlameQuery {
+                oldest: Some(c1.clone()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    println!("bounded line1 sha: {} (c1={c1})", bounded[0].sha);
 }

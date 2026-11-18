@@ -198,6 +198,36 @@ pub struct LogFilter {
     pub pickaxe_regex: Option<String>,
 }
 
+/// Options for `repo_blame` beyond the path. Every field is `#[serde(default)]`
+/// so the FE may omit any of them (a missing `Option` deserializes to `None`,
+/// a missing flag to `false`), and older FE payloads that carry only `from`
+/// keep working.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct BlameQuery {
+    /// Commit-ish to blame at; `None` = HEAD (or the workdir file when HEAD
+    /// is unborn). Same meaning as the legacy standalone `from` argument.
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub from: Option<String>,
+    /// Oldest commit bound (`git blame <oldest>..<from>`): lines already
+    /// present at `oldest` are attributed to it as the boundary commit.
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub oldest: Option<String>,
+    /// `-w` parity: attribute through commits that only change whitespace.
+    #[serde(default)]
+    pub ignore_whitespace: bool,
+    /// `--first-parent` parity: follow only the first-parent chain.
+    #[serde(default)]
+    pub first_parent: bool,
+    /// Honor `.git-blame-ignore-revs` at the workdir root: lines whose
+    /// content was introduced by a listed commit re-attribute to whichever
+    /// earlier commit introduced that content (see `engine::libgit2::blame`).
+    #[serde(default)]
+    pub ignore_revs: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct BlameLine {
@@ -208,6 +238,12 @@ pub struct BlameLine {
     pub final_sha: String,
     pub final_signature: GitSignature,
     pub text: String,
+    /// True when the line's content was introduced by a commit listed in
+    /// `.git-blame-ignore-revs` and the engine could not re-attribute it
+    /// (the ignored commit added the line): the FE renders "ignored
+    /// commit" styling instead of blaming the listed sha.
+    #[serde(default)]
+    pub ignored: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -334,6 +370,12 @@ pub struct PushOptions {
     pub tags: bool,
     /// Delete the remote refs named in `refs` instead of updating them.
     pub delete: bool,
+    /// Push all refs as one atomic transaction (`--atomic`): the remote
+    /// accepts the whole update or rejects every ref. git2-rs does not
+    /// expose libgit2's `GIT_PUSH_ATOMIC` flag, so atomic pushes route
+    /// through the git CLI (see `engine::netops::push_impl_ext`).
+    #[serde(default)]
+    pub atomic: bool,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, TS)]
@@ -661,11 +703,13 @@ pub struct RebaseState {
     /// When set: paused for `edit` — user amends the worktree, then continues.
     pub paused_for_edit: bool,
     /// When set: paused on a conflicted step — the index holds unmerged
-    /// entries; the user resolves them (status panel), then continues.
+    /// entries; the user resolves them (status panel), then continues —
+    /// or drops the step entirely via `rebase_skip`.
     #[serde(default)]
     pub paused_for_conflict: bool,
     /// When set: paused for a failed `exec` — user fixes, then continues
-    /// (the step re-runs). Diagnostics in `exec_error`. (M10)
+    /// (the step re-runs), or advances past it via `rebase_skip` (the exec
+    /// records nothing). Diagnostics in `exec_error`. (M10)
     #[serde(default)]
     pub paused_for_exec: bool,
     #[serde(default)]

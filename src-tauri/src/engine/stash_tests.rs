@@ -136,7 +136,7 @@ fn stash_push_and_list_roundtrip() {
 
     write_file(&repo, "a.txt", "two\n");
     ENGINE
-        .stash_push_impl(&repo, None, false, false)
+        .stash_push_impl(&repo, None, false, false, None)
         .expect("stash push");
 
     // The worktree is reverted to HEAD after the push.
@@ -165,7 +165,7 @@ fn stash_push_keeps_custom_message_verbatim() {
     write_file(&repo, "a.txt", "two\n");
 
     ENGINE
-        .stash_push_impl(&repo, Some("wip: half done"), false, false)
+        .stash_push_impl(&repo, Some("wip: half done"), false, false, None)
         .expect("stash push");
 
     let stashes = ENGINE.stash_list_impl(&repo).expect("stash list");
@@ -181,7 +181,7 @@ fn stash_push_without_changes_is_invalid() {
     commit_file(&repo, "a.txt", "one\n", "base");
 
     let err = ENGINE
-        .stash_push_impl(&repo, None, false, false)
+        .stash_push_impl(&repo, None, false, false, None)
         .expect_err("clean worktree must fail to stash");
     assert_eq!(expect_invalid(err), "nothing to stash");
 }
@@ -194,11 +194,13 @@ fn stash_apply_restores_and_keeps_entry() {
 
     write_file(&repo, "a.txt", "two\n");
     ENGINE
-        .stash_push_impl(&repo, None, false, false)
+        .stash_push_impl(&repo, None, false, false, None)
         .expect("stash push");
     assert_eq!(read_file(&repo, "a.txt"), "one\n");
 
-    ENGINE.stash_apply_impl(&repo, 0, false).expect("apply");
+    ENGINE
+        .stash_apply_impl(&repo, 0, false, false)
+        .expect("apply");
     assert_eq!(read_file(&repo, "a.txt"), "two\n");
     // Plain apply leaves the stash entry in place.
     assert_eq!(ENGINE.stash_list_impl(&repo).expect("list").len(), 1);
@@ -212,10 +214,10 @@ fn stash_pop_restores_and_removes_entry() {
 
     write_file(&repo, "a.txt", "two\n");
     ENGINE
-        .stash_push_impl(&repo, None, false, false)
+        .stash_push_impl(&repo, None, false, false, None)
         .expect("stash push");
 
-    ENGINE.stash_apply_impl(&repo, 0, true).expect("pop");
+    ENGINE.stash_apply_impl(&repo, 0, true, false).expect("pop");
     assert_eq!(read_file(&repo, "a.txt"), "two\n");
     assert!(ENGINE.stash_list_impl(&repo).expect("list").is_empty());
 }
@@ -231,7 +233,7 @@ fn stash_untracked_semantics() {
     write_file(&repo, "a.txt", "two\n");
     write_file(&repo, "u.txt", "untracked\n");
     ENGINE
-        .stash_push_impl(&repo, None, false, false)
+        .stash_push_impl(&repo, None, false, false, None)
         .expect("stash push without untracked");
     assert_eq!(read_file(&repo, "u.txt"), "untracked\n");
     assert_eq!(read_file(&repo, "a.txt"), "one\n");
@@ -240,13 +242,15 @@ fn stash_untracked_semantics() {
     // include_untracked: the file is swept into the stash and off the disk,
     // then restored by apply.
     ENGINE
-        .stash_push_impl(&repo, None, false, true)
+        .stash_push_impl(&repo, None, false, true, None)
         .expect("stash push with untracked");
     assert!(
         !repo.workdir().unwrap().join("u.txt").exists(),
         "untracked file should be stashed away"
     );
-    ENGINE.stash_apply_impl(&repo, 0, false).expect("apply");
+    ENGINE
+        .stash_apply_impl(&repo, 0, false, false)
+        .expect("apply");
     assert_eq!(read_file(&repo, "u.txt"), "untracked\n");
 }
 
@@ -261,7 +265,7 @@ fn stash_keep_index_leaves_staged_version_in_worktree() {
     write_file(&repo, "a.txt", "three\n");
 
     ENGINE
-        .stash_push_impl(&repo, None, true, false)
+        .stash_push_impl(&repo, None, true, false, None)
         .expect("stash push --keep-index");
 
     // The staged (index) version survives in the worktree.
@@ -282,11 +286,11 @@ fn stash_drop_removes_newest_and_rejects_bad_index() {
 
     write_file(&repo, "a.txt", "v1\n");
     ENGINE
-        .stash_push_impl(&repo, Some("first"), false, false)
+        .stash_push_impl(&repo, Some("first"), false, false, None)
         .expect("stash 1");
     write_file(&repo, "a.txt", "v2\n");
     ENGINE
-        .stash_push_impl(&repo, Some("second"), false, false)
+        .stash_push_impl(&repo, Some("second"), false, false, None)
         .expect("stash 2");
 
     // Index 0 is the newest; libgit2 prefixes custom messages with
@@ -318,7 +322,7 @@ fn stash_branch_creates_branch_from_stash_base_and_applies() {
 
     write_file(&repo, "a.txt", "two\n");
     ENGINE
-        .stash_push_impl(&repo, Some("wip changes"), false, false)
+        .stash_push_impl(&repo, Some("wip changes"), false, false, None)
         .expect("stash push");
 
     ENGINE
@@ -348,6 +352,235 @@ fn stash_branch_creates_branch_from_stash_base_and_applies() {
         .stash_branch_impl(&repo, "rescued", 0)
         .expect_err("stash stack is empty now");
     assert_eq!(expect_invalid(err), "no stash entry at index 0");
+}
+
+// ---------------------------------------------------------------------------
+// stash paths / show / rename / apply --index (Phase 5 batch A)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn stash_push_pathspec_stashes_only_matching_paths() {
+    let dir = TempDir::new("push-paths");
+    let repo = init_repo(dir.path());
+    commit_file(&repo, "a.txt", "one\n", "base");
+    commit_file(&repo, "b.txt", "one\n", "base");
+
+    write_file(&repo, "a.txt", "two\n");
+    write_file(&repo, "b.txt", "two\n");
+    ENGINE
+        .stash_push_impl(&repo, None, false, false, Some(&["a.txt".to_string()]))
+        .expect("selective stash push");
+
+    // Only the pathspec'd file was stashed away; the other keeps its edit.
+    assert_eq!(read_file(&repo, "a.txt"), "one\n");
+    assert_eq!(read_file(&repo, "b.txt"), "two\n");
+
+    // The stash itself carries exactly the matching file.
+    let shown = ENGINE.stash_show_impl(&repo, 0).expect("stash show");
+    assert_eq!(shown.len(), 1, "{shown:?}");
+    assert_eq!(shown[0].path, "a.txt");
+
+    // Popping restores only that file.
+    ENGINE.stash_apply_impl(&repo, 0, true, false).expect("pop");
+    assert_eq!(read_file(&repo, "a.txt"), "two\n");
+    assert!(ENGINE.stash_list_impl(&repo).expect("list").is_empty());
+}
+
+#[test]
+fn stash_push_pathspec_includes_matching_untracked() {
+    // --include-untracked + pathspec: the matching untracked file is swept
+    // into the stash, non-matching ones stay on disk.
+    let dir = TempDir::new("push-paths-untracked");
+    let repo = init_repo(dir.path());
+    commit_file(&repo, "a.txt", "one\n", "base");
+    write_file(&repo, "new.txt", "untracked\n");
+    write_file(&repo, "other.txt", "other\n");
+
+    ENGINE
+        .stash_push_impl(&repo, None, false, true, Some(&["new.txt".to_string()]))
+        .expect("selective stash with untracked");
+    assert!(!repo.workdir().unwrap().join("new.txt").exists());
+    assert!(repo.workdir().unwrap().join("other.txt").exists());
+
+    ENGINE
+        .stash_apply_impl(&repo, 0, false, false)
+        .expect("apply");
+    assert_eq!(read_file(&repo, "new.txt"), "untracked\n");
+    assert!(repo.workdir().unwrap().join("other.txt").exists());
+}
+
+#[test]
+fn stash_show_returns_stash_file_diffs() {
+    let dir = TempDir::new("show");
+    let repo = init_repo(dir.path());
+    commit_file(&repo, "a.txt", "one\n", "base");
+    commit_file(&repo, "b.txt", "keep\n", "base");
+
+    write_file(&repo, "a.txt", "two\n");
+    write_file(&repo, "b.txt", "changed\n");
+    ENGINE
+        .stash_push_impl(&repo, None, false, false, None)
+        .expect("stash push");
+
+    let files = ENGINE.stash_show_impl(&repo, 0).expect("stash show");
+    assert_eq!(files.len(), 2, "{files:?}");
+    let find = |p: &str| {
+        files
+            .iter()
+            .find(|f| f.path == p)
+            .unwrap_or_else(|| panic!("{p} missing from {files:?}"))
+    };
+    let a = find("a.txt");
+    assert_eq!(a.additions, 1);
+    assert_eq!(a.deletions, 1);
+    assert!(
+        a.hunks
+            .iter()
+            .any(|h| h.lines.iter().any(|l| l.text == "two")),
+        "{a:?}"
+    );
+    assert_eq!(find("b.txt").deletions, 1);
+
+    // Out-of-range index errors before any diff is built.
+    let err = ENGINE.stash_show_impl(&repo, 3).expect_err("bad index");
+    assert_eq!(expect_invalid(err), "no stash entry at index 3");
+}
+
+#[test]
+fn stash_apply_index_restores_staged_state() {
+    use super::git_engine::GitEngine;
+    use super::types::DiffSide;
+
+    let dir = TempDir::new("apply-index");
+    let repo = init_repo(dir.path());
+    commit_file(&repo, "a.txt", "one\n", "base");
+
+    // Stage "two"; the worktree holds the same content (nothing unstaged).
+    stage_content(&repo, "a.txt", "two\n");
+    write_file(&repo, "a.txt", "two\n");
+    ENGINE
+        .stash_push_impl(&repo, None, false, false, None)
+        .expect("stash push");
+    assert!(ENGINE
+        .diff(&repo, &DiffSide::Head, &DiffSide::Index, None, false)
+        .expect("clean after push")
+        .is_empty());
+
+    // Plain apply: the change comes back UNSTAGED (index stays at HEAD).
+    ENGINE
+        .stash_apply_impl(&repo, 0, false, false)
+        .expect("plain apply");
+    assert!(
+        ENGINE
+            .diff(&repo, &DiffSide::Head, &DiffSide::Index, None, false)
+            .expect("index vs head")
+            .is_empty(),
+        "plain apply must not stage anything"
+    );
+    assert_eq!(
+        ENGINE
+            .diff(&repo, &DiffSide::Index, &DiffSide::Worktree, None, false)
+            .expect("index vs worktree")
+            .len(),
+        1,
+        "the applied change sits in the worktree"
+    );
+
+    // Back to a clean tree (index == HEAD == workdir) for the --index leg.
+    write_file(&repo, "a.txt", "one\n");
+    let mut index = repo.index().unwrap();
+    index.add_path(Path::new("a.txt")).unwrap();
+    index.write().unwrap();
+
+    // --index apply: the stashed staged state comes back staged, and the
+    // entry is dropped (pop).
+    ENGINE
+        .stash_apply_impl(&repo, 0, true, true)
+        .expect("apply --index");
+    let staged = ENGINE
+        .diff(&repo, &DiffSide::Head, &DiffSide::Index, None, false)
+        .expect("index vs head");
+    assert_eq!(staged.len(), 1, "staged change restored as staged");
+    assert_eq!(staged[0].path, "a.txt");
+    assert!(
+        ENGINE.stash_list_impl(&repo).expect("list").is_empty(),
+        "pop removed the entry"
+    );
+}
+
+#[test]
+fn stash_rename_rewrites_top_message_and_keeps_stack() {
+    let dir = TempDir::new("rename-top");
+    let repo = init_repo(dir.path());
+    commit_file(&repo, "a.txt", "one\n", "base");
+    write_file(&repo, "a.txt", "two\n");
+    ENGINE
+        .stash_push_impl(&repo, Some("first"), false, false, None)
+        .expect("stash 1");
+    write_file(&repo, "a.txt", "three\n");
+    ENGINE
+        .stash_push_impl(&repo, Some("second"), false, false, None)
+        .expect("stash 2");
+
+    ENGINE
+        .stash_rename_impl(&repo, 0, "renamed: wip number two")
+        .expect("rename top");
+
+    let after = ENGINE.stash_list_impl(&repo).expect("list after rename");
+    assert_eq!(after.len(), 2, "rename must not grow or shrink the stack");
+    assert_eq!(after[0].message, "renamed: wip number two");
+    assert_eq!(after[1].message, "On main: first", "older entry untouched");
+    assert_eq!(after[0].index, 0);
+    // The author comes from the (preserved) stash commit.
+    assert_eq!(after[0].author.name, "Stash Test");
+
+    // The ref and the newest reflog entry agree on the renamed commit.
+    let stash_ref = repo.find_reference("refs/stash").expect("stash ref");
+    assert_eq!(
+        stash_ref.target().expect("target").to_string(),
+        after[0].sha
+    );
+    // The renamed entry still shows its diff, the older one still applies.
+    let shown = ENGINE
+        .stash_show_impl(&repo, 0)
+        .expect("show renamed stash");
+    assert_eq!(shown.len(), 1);
+    ENGINE
+        .stash_apply_impl(&repo, 1, false, false)
+        .expect("apply older entry");
+    assert_eq!(read_file(&repo, "a.txt"), "two\n");
+}
+
+#[test]
+fn stash_rename_rejects_non_top_and_empty_message() {
+    let dir = TempDir::new("rename-guards");
+    let repo = init_repo(dir.path());
+    commit_file(&repo, "a.txt", "one\n", "base");
+    write_file(&repo, "a.txt", "two\n");
+    ENGINE
+        .stash_push_impl(&repo, Some("first"), false, false, None)
+        .expect("stash 1");
+    write_file(&repo, "a.txt", "three\n");
+    ENGINE
+        .stash_push_impl(&repo, Some("second"), false, false, None)
+        .expect("stash 2");
+
+    let err = ENGINE
+        .stash_rename_impl(&repo, 1, "nope")
+        .expect_err("non-top rename");
+    assert_eq!(
+        expect_invalid(err),
+        "only the newest stash can be renamed (stash@{0})"
+    );
+    let err = ENGINE
+        .stash_rename_impl(&repo, 0, "   ")
+        .expect_err("empty message");
+    assert_eq!(expect_invalid(err), "stash message cannot be empty");
+
+    // Guards fired before any mutation: the stack is unchanged.
+    let stashes = ENGINE.stash_list_impl(&repo).expect("list");
+    assert_eq!(stashes.len(), 2);
+    assert_eq!(stashes[0].message, "On main: second");
 }
 
 // ---------------------------------------------------------------------------
@@ -652,7 +885,7 @@ fn log_walk_excludes_stash_commits_and_starts_at_head() {
 
     write_file(&repo, "a.txt", "two\n");
     ENGINE
-        .stash_push_impl(&repo, None, false, false)
+        .stash_push_impl(&repo, None, false, false, None)
         .expect("stash push");
     let stashes = ENGINE.stash_list_impl(&repo).expect("stash list");
     assert_eq!(stashes.len(), 1);
