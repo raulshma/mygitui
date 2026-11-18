@@ -103,6 +103,14 @@ export interface AiRunOptions {
    * dialog does not.
    */
   oneShot?: boolean;
+  /**
+   * Per-run model override from the launcher's model picker (item 55).
+   * Merged over `ctx.model` (picker wins — ctx.model is a runner-internal
+   * default) and forwarded to the provider request, which resolves the
+   * override over its configured settings default. Empty/undefined runs
+   * on the configured default.
+   */
+  model?: string;
 }
 
 /** Shared frozen default for {@link AiStore.peekState} reads (never mutated). */
@@ -524,6 +532,12 @@ export class AiStore {
       throw new AiError("unknown", "an AI request is already running for this repository", {});
     }
 
+    // Per-run model override (item 55): the launcher's picker rides the
+    // existing job-start call — opts.model wins over a ctx.model default.
+    const override = opts?.model?.trim();
+    const runCtx: FeatureCtx =
+      override !== undefined && override.length > 0 ? { ...ctx, model: override } : ctx;
+
     const deps: FeatureDeps = {
       git: git ?? (await defaultGitClient()),
       router: this.#supervisor,
@@ -533,8 +547,8 @@ export class AiStore {
 
     // The job makes this run visible: status-bar row, phase, elapsed,
     // cancel, and an activity-history record afterwards.
-    const repoName = tabStore.tabs.find((tab) => tab.id === ctx.repoId)?.name ?? null;
-    const ticket = this.jobs.begin({ repoId: ctx.repoId, repoName, feature: kind });
+    const repoName = tabStore.tabs.find((tab) => tab.id === runCtx.repoId)?.name ?? null;
+    const ticket = this.jobs.begin({ repoId: runCtx.repoId, repoName, feature: kind });
     const hooks: AiRunHooks = {
       onPhase: (phase, message) => ticket.phase(phase, message),
       onPrompt: (system, prompt) => ticket.promptPreview(`${system}\n\n${prompt}`),
@@ -550,7 +564,7 @@ export class AiStore {
     state.busy = true;
     state.error = null;
     try {
-      const outcome = await runFeature(kind, ctx, deps, hooks);
+      const outcome = await runFeature(kind, runCtx, deps, hooks);
       state.last = outcome;
       ticket.done({
         backend: outcome.result.backend,

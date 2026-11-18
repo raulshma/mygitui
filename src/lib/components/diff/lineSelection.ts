@@ -177,3 +177,23 @@ export function isLineSelected(
   }
   return false;
 }
+
+/**
+ * The selected rows' text, in hunk order, origin-marked like
+ * `formatHunkText` renders them ('+', '-', ' ' for context) — the payload
+ * the selection-scoped explain feature grounds its answer in (item 57).
+ * Mirrors `isLineSelected` exactly: what the user sees highlighted is
+ * what the prompt carries.
+ */
+export function selectedLineTexts(
+  hunkLines: readonly DiffLine[],
+  selected: ReadonlySet<number>,
+): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < hunkLines.length; i++) {
+    if (!isLineSelected(hunkLines, i, selected)) continue;
+    const line = hunkLines[i];
+    out.push(`${line.origin === "=" ? " " : line.origin}${line.text}`);
+  }
+  return out;
+}

@@ -81,7 +81,7 @@ function mockProvider(id: AiBackend, probe: AiProbeResult = { status: "ok" }) {
     available: vi.fn(async () => provider.probe.status !== "down"),
     check: vi.fn(async () => provider.probe),
     listModels: vi.fn(async () => [{ id: `${id}/model-a`, label: id }]),
-    generate: vi.fn(async (): Promise<AiResult> => ({
+    generate: vi.fn(async (_req?: { model?: string }): Promise<AiResult> => ({
       text: "feat(ui): add the thing\n\nIt was missing.",
       model: `${id}-model`,
       backend: id,
@@ -320,6 +320,45 @@ describe("AiStore opt-in gating and run state", () => {
     expect(state.busy).toBe(false);
     expect(state.error).toBeNull();
     expect(state.last?.message?.subject).toBe("feat(ui): add the thing");
+  });
+
+  it("opts.model (the run picker's choice) rides the request over the settings default", async () => {
+    const { store, git, opencode } = makeHarness();
+    store.setOptIn("r1", true);
+
+    await store.run("commit-message", { repoId: "r1" }, git, { model: "openai/gpt-5" });
+    expect(opencode.generate).toHaveBeenCalledWith(
+      expect.objectContaining({ model: "openai/gpt-5", sessionKey: "r1" }),
+    );
+    // A blank override runs on the configured default (no model in the request).
+    await store.run("commit-message", { repoId: "r1" }, git, { model: "  " });
+    const second = opencode.generate.mock.calls[1]?.[0] as { model?: string };
+    expect(second?.model).toBeUndefined();
+  });
+
+  it("opts.model wins over a ctx.model default", async () => {
+    const { store, git, opencode } = makeHarness();
+    store.setOptIn("r1", true);
+
+    await store.run(
+      "explain-hunk",
+      { repoId: "r1", path: "src/a.ts", hunk: "@@ -1 +1 @@\n+ok", model: "ctx/model" },
+      git,
+      { model: "picker/model" },
+    );
+    expect(opencode.generate).toHaveBeenCalledWith(
+      expect.objectContaining({ model: "picker/model" }),
+    );
+
+    // Without a picker choice the ctx.model default still passes through.
+    await store.run(
+      "explain-hunk",
+      { repoId: "r1", path: "src/a.ts", hunk: "@@ -1 +1 @@\n+ok", model: "ctx/model" },
+      git,
+    );
+    expect(opencode.generate).toHaveBeenLastCalledWith(
+      expect.objectContaining({ model: "ctx/model" }),
+    );
   });
 
   it("a failed run records the error and rethrows (no auto-retry)", async () => {

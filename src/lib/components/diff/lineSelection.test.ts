@@ -14,6 +14,7 @@ import {
   isLineSelected,
   mergeRanges,
   selectableAnchor,
+  selectedLineTexts,
   selectionKey,
   selectionRanges,
   selectedSet,
@@ -236,5 +237,32 @@ describe("isLineSelected (backend mark_kept semantics)", () => {
 
   it("returns false for unknown indexes or empty selections", () => {
     expect(isLineSelected(pairedHunk(), 99, selectedSet(null))).toBe(false);
+  });
+});
+
+describe("selectedLineTexts (selection-scoped explain payload, item 57)", () => {
+  it("returns the origin-marked text of exactly the lines isLineSelected paints", () => {
+    const hunk = pairedHunk();
+    // Selecting new-side 11 highlights the paired '-' run (backend
+    // mark_kept semantics) plus the ONE '+' line whose number is selected.
+    const texts = selectedLineTexts(hunk, selectedSet(beginSelection(0, 0, 11)));
+    expect(texts).toEqual(["-d1", "-d2", "+a1"]);
+    // Context rides along inside a span.
+    const full = extendSelection(beginSelection(0, 0, 10)!, 13, hunk);
+    const span = selectedLineTexts(hunk, selectedSet(full));
+    expect(span).toEqual([
+      " keep",
+      "-d1",
+      "-d2",
+      "+a1",
+      "+a2",
+      " tail",
+    ]);
+  });
+
+  it("renders '=' context lines with a space marker and returns [] when nothing is selected", () => {
+    const hunk = [line("=", "ctx", 1, 1)];
+    expect(selectedLineTexts(hunk, selectedSet(beginSelection(0, 0, 1)))).toEqual([" ctx"]);
+    expect(selectedLineTexts(hunk, new Set())).toEqual([]);
   });
 });

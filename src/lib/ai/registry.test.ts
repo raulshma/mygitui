@@ -4,7 +4,7 @@
  * and the phase/elapsed labels behave.
  */
 
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import type { FeatureKind } from "./types";
 import {
   AI_FEATURES,
@@ -12,14 +12,19 @@ import {
   aiFeatureDef,
   aiFeatureLabel,
   aiPhaseLabel,
+  allFeatureDefs,
+  customKindId,
   featureWantsStreaming,
+  isCustomKind,
+  registerCustomPromptProvider,
 } from "./registry";
 
-/** The registry must cover (exactly) the FeatureKind union. */
+/** The registry must cover (exactly) the BUILTIN FeatureKind members. */
 const ALL_KINDS: FeatureKind[] = [
   "commit-message",
   "pr-title-body",
   "explain-hunk",
+  "explain-selection",
   "review-staged",
   "stash-message",
   "branch-name",
@@ -60,6 +65,60 @@ describe("AI feature registry", () => {
     expect(featureWantsStreaming("explain-commit")).toBe(true);
     expect(featureWantsStreaming("branch-name")).toBe(false);
     expect(featureWantsStreaming("conflict-assist")).toBe(false);
+  });
+});
+
+describe("custom prompt merge (query-time, item 56)", () => {
+  afterEach(() => {
+    // Restore the empty provider so later suites see a clean registry.
+    registerCustomPromptProvider(() => []);
+  });
+
+  it("resolves custom kinds against the registered library", () => {
+    registerCustomPromptProvider(() => [
+      { id: "changelog", name: "Write a changelog entry", enabled: true },
+      { id: "off", name: "Disabled prompt", enabled: false },
+    ]);
+    const kind = "custom.changelog" as FeatureKind;
+    expect(isCustomKind(kind)).toBe(true);
+    expect(customKindId(kind)).toBe("changelog");
+    expect(isCustomKind("commit-message")).toBe(false);
+    expect(customKindId("commit-message")).toBeNull();
+    // The def (title/keywords/streaming) synthesizes from the entry name.
+    expect(aiFeatureDef(kind)?.title).toBe("Write a changelog entry");
+    expect(aiFeatureLabel(kind)).toBe("Write a changelog entry");
+    expect(featureWantsStreaming(kind)).toBe(true);
+    // Unknown ids and builtins still behave as before.
+    expect(aiFeatureDef("custom.missing" as FeatureKind)).toBeUndefined();
+    expect(aiFeatureDef("commit-message")?.kind).toBe("commit-message");
+  });
+
+  it("labels disabled entries (their history rows still exist) but never merges them", () => {
+    registerCustomPromptProvider(() => [{ id: "off", name: "Disabled prompt", enabled: false }]);
+    expect(aiFeatureLabel("custom.off" as FeatureKind)).toBe("Disabled prompt");
+    expect(
+      allFeatureDefs()
+        .filter((def) => isCustomKind(def.kind))
+        .map((def) => def.kind),
+    ).toEqual([]);
+  });
+
+  it("allFeatureDefs appends enabled customs after the builtins", () => {
+    registerCustomPromptProvider(() => [
+      { id: "a", name: "A", enabled: true },
+      { id: "b", name: "B", enabled: false },
+    ]);
+    const defs = allFeatureDefs();
+    expect(defs.slice(0, AI_FEATURES.length)).toEqual([...AI_FEATURES]);
+    expect(defs.slice(AI_FEATURES.length).map((def) => def.kind)).toEqual(["custom.a"]);
+  });
+
+  it("empty provider (library not yet loaded) keeps everything builtin", () => {
+    registerCustomPromptProvider(() => []);
+    expect(aiFeatureDef("custom.any" as FeatureKind)).toBeUndefined();
+    // No def → the generic title-case fallback (dots are not separators).
+    expect(aiFeatureLabel("custom.any" as FeatureKind)).toBe("Custom.any");
+    expect(allFeatureDefs()).toEqual([...AI_FEATURES]);
   });
 });
 

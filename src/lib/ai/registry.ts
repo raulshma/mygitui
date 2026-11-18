@@ -23,6 +23,61 @@ import type { AiJobPhase, FeatureKind } from "./types";
 /** What the rest of the app can pass around as "an AI run kind". */
 export type AiFeatureTag = FeatureKind | "chat";
 
+/** The kinds synthesized from the user's custom prompt library. */
+export type CustomFeatureKind = `custom.${string}`;
+
+/** Prefix every custom-prompt feature kind carries (`custom.<entryId>`). */
+export const CUSTOM_KIND_PREFIX = "custom.";
+
+/** True when `kind` was synthesized from a custom prompt library entry. */
+export function isCustomKind(kind: FeatureKind): kind is CustomFeatureKind {
+  return kind.startsWith(CUSTOM_KIND_PREFIX);
+}
+
+/** The custom prompt entry id behind a `` `custom.<id>` `` kind (`null` builtin). */
+export function customKindId(kind: FeatureKind): string | null {
+  return isCustomKind(kind) ? kind.slice(CUSTOM_KIND_PREFIX.length) : null;
+}
+
+/**
+ * The minimal shape the registry needs from a custom prompt entry. The
+ * registry is a plain module (no runes, no store imports), so the custom
+ * prompt STORE registers a live reader here at module init
+ * (`customPrompts.svelte.ts`); before that runs the merge is simply empty.
+ */
+export interface CustomPromptRef {
+  id: string;
+  name: string;
+  enabled: boolean;
+}
+
+let customPromptProvider: (() => readonly CustomPromptRef[]) | null = null;
+
+/** Registers the live reader over the custom prompt library (one-shot). */
+export function registerCustomPromptProvider(
+  provider: () => readonly CustomPromptRef[],
+): void {
+  customPromptProvider = provider;
+}
+
+/** Enabled custom prompt entries as registry defs (query-time merge). */
+function customFeatureDefs(): AiFeatureDef[] {
+  const entries = customPromptProvider?.() ?? [];
+  const defs: AiFeatureDef[] = [];
+  for (const entry of entries) {
+    if (!entry.enabled) continue;
+    defs.push({
+      kind: `${CUSTOM_KIND_PREFIX}${entry.id}`,
+      title: entry.name,
+      buttonLabel: entry.name,
+      icon: "edit",
+      keywords: `custom prompt ${entry.name}`,
+      streaming: true,
+    });
+  }
+  return defs;
+}
+
 /** Declarative description of one AI feature. */
 export interface AiFeatureDef {
   /** The {@link FeatureKind} dispatched through `runFeature`. */
@@ -74,6 +129,14 @@ export const AI_FEATURES: readonly AiFeatureDef[] = [
     buttonLabel: "Explain hunk",
     icon: "difference",
     keywords: "explain hunk diff change understand",
+    streaming: true,
+  },
+  {
+    kind: "explain-selection",
+    title: "Explain selected lines",
+    buttonLabel: "Explain selection",
+    icon: "difference",
+    keywords: "explain selection lines range highlight understand",
     streaming: true,
   },
   {
@@ -149,9 +212,35 @@ export const AI_FEATURES: readonly AiFeatureDef[] = [
   },
 ];
 
-/** The registry entry for `kind` (undefined for unknown kinds). */
+/** The registry entry for `kind` (undefined for unknown kinds). Custom
+ * prompt kinds resolve against the registered library at query time. */
 export function aiFeatureDef(kind: FeatureKind): AiFeatureDef | undefined {
-  return AI_FEATURES.find((def) => def.kind === kind);
+  const builtin = AI_FEATURES.find((def) => def.kind === kind);
+  if (builtin !== undefined) return builtin;
+  if (isCustomKind(kind)) {
+    const id = customKindId(kind);
+    const entry = customPromptProvider?.().find((e) => e.id === id);
+    if (entry !== undefined) {
+      return {
+        kind,
+        title: entry.name,
+        buttonLabel: entry.name,
+        icon: "edit",
+        keywords: `custom prompt ${entry.name}`,
+        streaming: true,
+      };
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Every feature, builtin registry order first, then the enabled custom
+ * prompt entries (query-time merge — the AI settings toggle list and any
+ * "all features" surface renders from this).
+ */
+export function allFeatureDefs(): AiFeatureDef[] {
+  return [...AI_FEATURES, ...customFeatureDefs()];
 }
 
 /**
@@ -166,10 +255,12 @@ export function aiFeatureLabel(kind: AiFeatureTag): string {
 /**
  * True when the feature wants token streaming. Callers still need the
  * provider-level `generateStream` capability check — this only says the
- * feature's UI is built for progressive text.
+ * feature's UI is built for progressive text. Custom prompt answers are
+ * free-form markdown, so they stream like the other explain features.
  */
 export function featureWantsStreaming(kind: AiFeatureTag): boolean {
   if (kind === "chat") return true;
+  if (isCustomKind(kind)) return true;
   return aiFeatureDef(kind)?.streaming === true;
 }
 

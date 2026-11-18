@@ -12,9 +12,11 @@
    */
   import { ai } from "$lib/ai/ai.svelte";
   import { isAiError } from "$lib/ai/types";
-  import type { FeatureOutcome } from "$lib/ai/features";
+  import type { FeatureCtx, FeatureOutcome } from "$lib/ai/features";
   import { aiResultMeta } from "$lib/ai/usage";
+  import { modelChoice } from "$lib/ai/modelChoice.svelte";
   import AiSettings from "./AiSettings.svelte";
+  import AiModelPicker from "./AiModelPicker.svelte";
   import AiMarkdown from "./AiMarkdown.svelte";
   import { Button } from "$lib/components/ui/button/index.js";
   import { Spinner } from "$lib/components/ui/spinner/index.js";
@@ -32,6 +34,8 @@
     hunkText,
     /** One-line header for the panel (the hunk's @@ header). */
     label = "",
+    /** When set, runs explain-selection over these lines (item 57). */
+    selection = null,
     onClose,
   }: {
     repoId: string;
@@ -39,6 +43,8 @@
     /** Unified-diff text of the hunk (features.formatHunkText). */
     hunkText: string;
     label?: string;
+    /** Selected-lines payload (selection-scoped explain; null = whole hunk). */
+    selection?: { lineStart: number; lineEnd: number; selectedText: string } | null;
     onClose: () => void;
   } = $props();
 
@@ -51,18 +57,36 @@
 
   const busy = $derived(ai.peekState(repoId).busy);
 
+  /** Which feature this panel instance runs (selection narrows the hunk). */
+  const feature = $derived(selection !== null ? "explain-selection" : "explain-hunk");
+
   // M13: stream the running job's partial answer into the panel.
-  const activeJob = $derived(ai.jobs.activeJob(repoId, "explain-hunk"));
+  const activeJob = $derived(ai.jobs.activeJob(repoId, feature));
   const streamedText = $derived(outcome === null ? (activeJob?.streamedText ?? null) : null);
 
   $effect(() => {
-    // Fresh panel per hunk: reset and run.
+    // Fresh panel per hunk/selection: reset and run. The model picker's
+    // per-repo choice rides the ctx (features forwards it to the request).
     void hunkText;
+    void selection;
     const token = attempt;
+    const model = modelChoice.overrideFor(repoId) ?? undefined;
+    const ctx: FeatureCtx =
+      selection !== null
+        ? {
+            repoId,
+            path,
+            hunk: hunkText,
+            selectedText: selection.selectedText,
+            lineStart: selection.lineStart,
+            lineEnd: selection.lineEnd,
+            model,
+          }
+        : { repoId, path, hunk: hunkText, model };
     outcome = null;
     error = null;
     needsOptIn = false;
-    ai.run("explain-hunk", { repoId, path, hunk: hunkText })
+    ai.run(feature, ctx)
       .then((result) => {
         if (token !== attempt) return;
         outcome = result;
@@ -90,7 +114,7 @@
   }
 </script>
 
-<div class="explain-panel absolute bottom-2 left-3 right-3 z-30 flex max-h-[45%] max-w-[34rem] flex-col rounded-xl border border-border bg-popover text-ui-base text-popover-foreground shadow-overlay" role="complementary" aria-label={`AI explanation of ${path} hunk`}>
+<div class="explain-panel absolute bottom-2 left-3 right-3 z-30 flex max-h-[45%] max-w-[38rem] flex-col rounded-xl border border-border bg-popover text-ui-base text-popover-foreground shadow-overlay" role="complementary" aria-label={`AI explanation of ${path} ${selection !== null ? "selection" : "hunk"}`}>
   <header class="head flex-none flex items-center gap-2 border-b border-border pb-ui-375 pl-3 pr-2 pt-ui-375">
     <Hint label={path}>
       {#snippet child({ props })}
@@ -99,6 +123,7 @@
     </Hint>
     <span class="hunk-label flex-none font-mono text-ui-micro text-muted-foreground">{label}</span>
     <span class="spacer flex-1"></span>
+    <AiModelPicker {repoId} disabled={busy} />
     {#if outcome}
       <Button variant="outline" size="xs" class="mini whitespace-nowrap rounded-full text-ui-meta" type="button" onclick={() => void copy()}>Copy</Button>
       <Button variant="outline" size="xs" class="mini whitespace-nowrap rounded-full text-ui-meta" type="button" onclick={retry}>Re-run</Button>

@@ -30,7 +30,9 @@
   import { isAiError } from "$lib/ai/types";
   import type { FeatureOutcome } from "$lib/ai/features";
   import { aiElapsedLabel, aiFeatureLabel, aiPhaseLabel } from "$lib/ai/registry";
+  import { modelChoice } from "$lib/ai/modelChoice.svelte";
   import AiSettings from "./AiSettings.svelte";
+  import AiModelPicker from "./AiModelPicker.svelte";
   import { floating } from "$lib/components/overlay/floating";
   import { Button } from "$lib/components/ui/button/index.js";
   import { Spinner } from "$lib/components/ui/spinner/index.js";
@@ -51,6 +53,7 @@
     compact = false,
     icon = false,
     popUp = false,
+    modelPicker = false,
     successToast = undefined,
     resultEvent = undefined,
     run,
@@ -85,6 +88,12 @@
     icon?: boolean;
     /** Open the confirm/fail overlays UPWARD (for docked-bottom bars). */
     popUp?: boolean;
+    /**
+     * Render the compact per-run model picker (item 55) beside the button
+     * while idle. The choice persists per repo and rides `run(opts)` as
+     * `AiRunOptions.model` — off for launchers whose runner ignores opts.
+     */
+    modelPicker?: boolean;
     /** Success toast copy, when the feature wants one. */
     successToast?: string | undefined;
     /** Dispatch a bubbling DOM CustomEvent with this name on success. */
@@ -150,7 +159,13 @@
     running = true;
     error = null;
     try {
-      const opts = ai.runOptsFor(repoId);
+      // The picker's per-repo choice rides the job-start call (item 55):
+      // merged with the "Just once" consent into the run options the
+      // caller forwards to ai.run.
+      const opts: AiRunOptions = {
+        ...ai.runOptsFor(repoId),
+        model: modelChoice.overrideFor(repoId) ?? undefined,
+      };
       const outcome = await run(opts);
       onResult?.(outcome);
       if (successToast) toast(successToast, { kind: "success" });
@@ -171,6 +186,11 @@
 
 {#if ai.isEnabled() && (kind === undefined || ai.isFeatureEnabled(kind)) && (!gateVisibility || ai.isOptedIn(repoId))}
   <span class="ai-feature relative inline-flex {rootClass ?? ''}" bind:this={root}>
+    {#if modelPicker && !busy}
+      <!-- Per-run model choice (item 55): compact, hidden while the run
+           is in flight so the bar never widens mid-spin. -->
+      <AiModelPicker {repoId} disabled={disabled} />
+    {/if}
     {#if icon}
       <Hint label={hintLabel}>
         {#snippet child({ props })}

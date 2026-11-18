@@ -63,6 +63,7 @@
   } from "$lib/components/menu/contextMenuStore.svelte";
   import {
     isLineSelected,
+    selectedLineTexts,
     selectedSet as toSelectedSet,
     selectionRanges,
     type LineSelection,
@@ -418,6 +419,22 @@
           id: "copy-hunk",
           label: "Copy hunk patch",
           run: () => void copyText(hunkText, "hunk patch"),
+        });
+      }
+      // Item 57: the selection-scoped explain rides the same menu as the
+      // copy actions — offered only while the row's own file+hunk has the
+      // ONE active selection (no selection → the item is hidden), and
+      // behind the same AI gates as the hunk explain button.
+      if (
+        explainSelectionEnabled &&
+        selection !== null &&
+        selection.fileIndex === row.fileIndex &&
+        selection.hunkIndex === row.hunkIndex
+      ) {
+        entries.push({
+          id: "ai-explain-selection",
+          label: "Explain selected lines",
+          run: () => explainSelection(),
         });
       }
     }
@@ -904,18 +921,29 @@
     };
   });
 
-  // -- M12 AI: explain-hunk (visible once AI is on, the feature is on, and
-  // the repo opted in — the same master + per-feature gates every other
-  // AI affordance follows, M13) ----------------------------------------------
+  // -- M12 AI: explain-hunk + item 57's selection-scoped explain (visible
+  // once AI is on, the feature is on, and the repo opted in — the same
+  // master + per-feature gates every other AI affordance follows, M13) ----
 
-  let explain = $state<{ path: string; hunkText: string; label: string } | null>(
-    null,
-  );
+  let explain = $state<{
+    path: string;
+    hunkText: string;
+    label: string;
+    selection: { lineStart: number; lineEnd: number; selectedText: string } | null;
+  } | null>(null);
 
   const explainEnabled = $derived(
     repoId !== undefined &&
       ai.isEnabled() &&
       ai.isFeatureEnabled("explain-hunk") &&
+      ai.isOptedIn(repoId),
+  );
+
+  /** Context-menu "Explain selected lines" needs its feature gate too. */
+  const explainSelectionEnabled = $derived(
+    repoId !== undefined &&
+      ai.isEnabled() &&
+      ai.isFeatureEnabled("explain-selection") &&
       ai.isOptedIn(repoId),
   );
 
@@ -928,6 +956,35 @@
       path: file.path,
       hunkText: formatHunkText(hunk),
       label: `@@ -${hunk.old_start} +${hunk.new_start} @@`,
+      selection: null,
+    };
+  }
+
+  /**
+   * Opens the selection-scoped explain (item 57): the highlighted rows'
+   * text (isLineSelected semantics, origin-marked), their new-side line
+   * range, and the whole hunk as surrounding context — the prompt builder
+   * caps the context via capDiff. Runs `explain-selection` through the
+   * same panel + job pipeline as the hunk explain.
+   */
+  function explainSelection(): void {
+    if (!repoId || !selection) return;
+    const file = files[selection.fileIndex];
+    const hunk = file?.hunks[selection.hunkIndex];
+    if (!file || !hunk) return;
+    const lines = selectedLineTexts(hunk.lines, toSelectedSet(selection));
+    if (lines.length === 0) return;
+    const lineStart = selection.lines[0];
+    const lineEnd = selection.lines.at(-1) ?? lineStart;
+    explain = {
+      path: file.path,
+      hunkText: formatHunkText(hunk),
+      label: `lines ${lineStart}–${lineEnd}`,
+      selection: {
+        lineStart,
+        lineEnd,
+        selectedText: lines.join("\n"),
+      },
     };
   }
 
@@ -1209,6 +1266,7 @@
         path={explain.path}
         hunkText={explain.hunkText}
         label={explain.label}
+        selection={explain.selection}
         onClose={() => (explain = null)}
       />
     {/if}

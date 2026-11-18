@@ -107,11 +107,18 @@ export function defaultAiConfig(): AiConfig {
   return { backend: "opencode", allowFallback: true, repoOptIn: {} };
 }
 
-/** The AI features mygitui can run, v1 + the M13 additions. */
+/**
+ * The AI features mygitui can run: the v1 + M13 builtin kinds plus the
+ * user's custom prompt library — each enabled custom entry synthesizes a
+ * `` `custom.<entryId>` `` kind (see `ai/customPrompts.svelte.ts` and the
+ * registry's query-time merge). Builtin kinds stay a closed union; the
+ * template-literal member is the ONE open slot.
+ */
 export type FeatureKind =
   | "commit-message"
   | "pr-title-body"
   | "explain-hunk"
+  | "explain-selection"
   | "review-staged"
   | "stash-message"
   | "branch-name"
@@ -120,7 +127,8 @@ export type FeatureKind =
   | "diagnose-workflow"
   | "diagnose-action"
   | "conflict-assist"
-  | "release-notes";
+  | "release-notes"
+  | `custom.${string}`;
 
 /** A model offered by a backend (flattened; selection lists + defaults). */
 export interface ModelInfo {

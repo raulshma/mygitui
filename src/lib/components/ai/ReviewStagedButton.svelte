@@ -74,6 +74,7 @@
   title="Review the staged diff with AI"
   confirmText={"Send the staged diff to {backend} for review?"}
   errorPrefix="AI review failed"
+  modelPicker
   {run}
   {onResult}
 />

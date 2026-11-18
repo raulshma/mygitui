@@ -21,7 +21,7 @@
   import { formatCombo } from "$lib/palette/keybinds";
   import { overlayStack } from "$lib/state/overlays.svelte";
   import {
-    COMMANDS,
+    allCommands,
     activeCtx,
     type Command,
   } from "$lib/palette/commands";
@@ -56,7 +56,9 @@ import { Kbd } from "$lib/components/ui/kbd/index.js";
   /** Filtered + grouped commands (Recent block on top when unfiltered). */
   const sections = $derived.by(() => {
     if (!open) return [] as PaletteSection[];
-    return paletteSections(COMMANDS, ctx, query, currentRecents());
+    // allCommands() re-merges the custom prompt library on every render, so
+    // AI-settings edits surface immediately.
+    return paletteSections(allCommands(), ctx, query, currentRecents());
   });
   /** Flat arrow-key navigation order (section by section). */
   const flat = $derived(flattenSections(sections));

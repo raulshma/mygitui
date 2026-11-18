@@ -621,6 +621,7 @@
             icon
             gateVisibility={false}
             rootClass="ai-commit"
+            modelPicker
             label="Generate commit message"
             title="Generate a commit message from the staged diff"
             ariaLabel="Generate commit message with AI"

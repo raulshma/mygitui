@@ -39,6 +39,8 @@ describe("parseAppSettings", () => {
       openFavoritesOnLaunch: true,
       useCommitTemplate: false,
       uiScalePercent: 110,
+      aiMonthlyTokenBudget: 2000000,
+      aiBudgetResetDay: 15,
       rogue: true,
     });
     expect(out).toEqual({
@@ -49,6 +51,8 @@ describe("parseAppSettings", () => {
       openFavoritesOnLaunch: true,
       useCommitTemplate: false,
       uiScalePercent: 110,
+      aiMonthlyTokenBudget: 2000000,
+      aiBudgetResetDay: 15,
     });
   });
 

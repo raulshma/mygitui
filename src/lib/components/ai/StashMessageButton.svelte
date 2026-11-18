@@ -57,6 +57,7 @@
   title="Draft a stash message with AI"
   confirmText={"Send a summary of your changes to {backend} to draft a stash message?"}
   errorPrefix="AI stash message failed"
+  modelPicker
   {run}
   {onResult}
 />

@@ -78,6 +78,7 @@ import { openAboutDialog } from "$lib/components/aboutDialog";
 import { describeError } from "$lib/errors";
 import { ai } from "$lib/ai/ai.svelte";
 import { aiFeatureDef } from "$lib/ai/registry";
+import { customPrompts } from "$lib/ai/customPrompts.svelte";
 import { budgetedDiffText } from "$lib/ai/diffBudget";
 import { aiResultMeta } from "$lib/ai/usage";
 
@@ -1018,6 +1019,61 @@ export const COMMANDS: Command[] = [
     run: () => openAboutDialog(),
   },
 ];
+
+// -- AI custom prompts (query-time registry merge) ---------------------------
+// Each enabled custom prompt entry becomes a headless AI command, mirroring
+// the mapped builtin entries above (result dialog + failure toast). Built
+
+/** The headless run commands for the enabled custom prompt entries. */
+function customPromptCommands(): Command[] {
+  return customPrompts.enabled().map((entry): Command => ({
+    id: `ai.custom.${entry.id}`,
+    // Live getter: renames in AI settings apply without a reload.
+    get title() {
+      return `AI: ${customPrompts.get(entry.id)?.name ?? entry.name}`;
+    },
+    section: "AI",
+    keywords: ["custom", "prompt", ...entry.name.split(/\s+/)],
+    when: (ctx) =>
+      ctx.repoId !== null &&
+      ai.isEnabled() &&
+      customPrompts.get(entry.id)?.enabled === true &&
+      !ai.jobs.activeJob(ctx.repoId),
+    run: async (ctx) => {
+      // Resolve the entry LIVE: it may have been edited, disabled or
+      // removed since the list rendered.
+      const current = customPrompts.get(entry.id);
+      if (current === undefined || !current.enabled) {
+        toast("This custom prompt no longer exists", { kind: "info" });
+        return;
+      }
+      try {
+        const outcome = await ai.run(`custom.${current.id}`, {
+          repoId: ctx.repoId!,
+          customTemplate: current.template,
+        });
+        emitUiEvent("ai-show-result", {
+          title: current.name,
+          text: outcome.result.text,
+          meta: aiResultMeta(outcome.result),
+        });
+      } catch (err) {
+        toast(`AI ${current.name.toLowerCase()} failed: ${describeError(err)}`, {
+          kind: "error",
+        });
+      }
+    },
+  }));
+}
+
+/**
+ * The full command list: the static builtin registry plus the custom
+ * prompt library's run commands (query-time — entries added, renamed,
+ * disabled or removed in AI settings appear without a reload).
+ */
+export function allCommands(): Command[] {
+  return [...COMMANDS, ...customPromptCommands()];
+}
 
 // ---------------------------------------------------------------------------
 // Registry queries

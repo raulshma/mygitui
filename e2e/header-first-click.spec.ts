@@ -172,7 +172,7 @@ test("layout preset select opens when the press spans the dwell swap", async ({
   await page.waitForTimeout(80);
   await page.mouse.up();
   try {
-    await expect(page.getByRole("option", { name: "Default" })).toBeVisible({
+    await expect(page.getByRole("listbox").getByRole("option", { name: "Default" })).toBeVisible({
       timeout: 4_000,
     });
   } catch (err) {
@@ -181,7 +181,7 @@ test("layout preset select opens when the press spans the dwell swap", async ({
   }
   // The listbox must STAY open — not dismiss on the click that opened it.
   await page.waitForTimeout(400);
-  await expect(page.getByRole("option", { name: "Default" })).toBeVisible();
+  await expect(page.getByRole("listbox").getByRole("option", { name: "Default" })).toBeVisible();
   await dumpTrace(page);
   expect(tracked.errors, tracked.errors.join("\n")).toEqual([]);
 });
@@ -227,7 +227,7 @@ test("layout preset select opens on a fast click", async ({ page }) => {
   const trigger = page.getByRole("combobox", { name: "Layout preset" });
   await trigger.hover();
   await clickHere(page);
-  await expect(page.getByRole("option", { name: "Default" })).toBeVisible();
+  await expect(page.getByRole("listbox").getByRole("option", { name: "Default" })).toBeVisible();
   await dumpTrace(page);
   expect(tracked.errors, tracked.errors.join("\n")).toEqual([]);
 });
@@ -252,7 +252,7 @@ test("layout preset select opens on a single click after dwell", async ({
     .toBe(true);
   await page.waitForTimeout(250);
   await clickHere(page);
-  await expect(page.getByRole("option", { name: "Default" })).toBeVisible();
+  await expect(page.getByRole("listbox").getByRole("option", { name: "Default" })).toBeVisible();
   await dumpTrace(page);
   expect(tracked.errors, tracked.errors.join("\n")).toEqual([]);
 });

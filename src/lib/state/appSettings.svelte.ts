@@ -57,6 +57,18 @@ export interface AppSettingsData {
    * store's managed style element.
    */
   uiScalePercent: number;
+  /**
+   * Soft monthly AI token budget (item 58). 0 = no budget. Never blocks a
+   * run — the status bar's usage chip only turns into a warning at 100%.
+   * Aggregation covers the LOCAL visible job history (the 200-record
+   * activity ring), so the percentage is a lower bound, not a bill.
+   */
+  aiMonthlyTokenBudget: number;
+  /**
+   * Day of month (1–31; clamped to each month's real length) the AI
+   * budget window resets on. Default 1st.
+   */
+  aiBudgetResetDay: number;
 }
 
 export const APP_SETTINGS_DEFAULTS: AppSettingsData = {
@@ -67,6 +79,8 @@ export const APP_SETTINGS_DEFAULTS: AppSettingsData = {
   openFavoritesOnLaunch: false,
   useCommitTemplate: true,
   uiScalePercent: 100,
+  aiMonthlyTokenBudget: 0,
+  aiBudgetResetDay: 1,
 };
 
 /** Terminal font size bounds shared by the setting and the terminal store. */
@@ -118,6 +132,13 @@ export function parseAppSettings(data: unknown): AppSettingsData {
     // imported value cannot leave the slider stuck between steps.
     const snapped = Math.round(raw.uiScalePercent / UI_SCALE_STEP) * UI_SCALE_STEP;
     out.uiScalePercent = Math.round(clamp(snapped, UI_SCALE_MIN, UI_SCALE_MAX));
+  }
+  if (typeof raw.aiMonthlyTokenBudget === "number" && Number.isFinite(raw.aiMonthlyTokenBudget)) {
+    // Non-negative whole tokens; 0 stays "no budget".
+    out.aiMonthlyTokenBudget = Math.max(0, Math.round(raw.aiMonthlyTokenBudget));
+  }
+  if (typeof raw.aiBudgetResetDay === "number" && Number.isFinite(raw.aiBudgetResetDay)) {
+    out.aiBudgetResetDay = Math.round(clamp(raw.aiBudgetResetDay, 1, 31));
   }
   return out;
 }
@@ -176,6 +197,16 @@ export class AppSettingsStore {
 
   get uiScalePercent(): number {
     return this.#value.uiScalePercent;
+  }
+
+  /** Soft monthly AI token budget (0 = off). */
+  get aiMonthlyTokenBudget(): number {
+    return this.#value.aiMonthlyTokenBudget;
+  }
+
+  /** Day of month the AI budget window resets on (1–31). */
+  get aiBudgetResetDay(): number {
+    return this.#value.aiBudgetResetDay;
   }
 
   /** Patch settings and persist (partial update, validated on write). */

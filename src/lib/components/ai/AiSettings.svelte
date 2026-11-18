@@ -27,6 +27,8 @@
   import { AI_BACKENDS } from "$lib/ai/types";
   import type { AiBackend, FeatureKind, ModelInfo, OpencodeMode } from "$lib/ai/types";
   import { AI_FEATURES } from "$lib/ai/registry";
+  import { customPrompts, CUSTOM_PROMPT_VARS } from "$lib/ai/customPrompts.svelte";
+  import { appSettings } from "$lib/state/appSettings.svelte";
   import {
     opencodeDetect,
     opencodeServeStatus,
@@ -42,6 +44,7 @@
   import { Button } from "$lib/components/ui/button/index.js";
   import { Input } from "$lib/components/ui/input/index.js";
   import { Checkbox } from "$lib/components/ui/checkbox/index.js";
+  import { Textarea } from "$lib/components/ui/textarea/index.js";
   import { describeError } from "$lib/errors";
 
   let {
@@ -69,6 +72,9 @@
   /** Write-only secret inputs (never rendered back, never persisted here). */
   let opencodePassword = $state("");
   let openrouterKey = $state("");
+  // Soft monthly AI usage budget (item 58): form copies, applied on Save.
+  let aiTokenBudget = $state("0");
+  let aiBudgetResetDay = $state("1");
 
   let saving = $state(false);
   let testing = $state(false);
@@ -149,6 +155,8 @@
       allowFallback = ai.config.allowFallback !== false;
       opencodePassword = "";
       openrouterKey = "";
+      aiTokenBudget = String(appSettings.aiMonthlyTokenBudget);
+      aiBudgetResetDay = String(appSettings.aiBudgetResetDay);
       showAdvanced = false;
       void refreshInstall();
     });
@@ -260,6 +268,16 @@
       ai.setOpencodeModel(opencodeModel);
       ai.setOpenrouterModel(openrouterModel);
       ai.setAllowFallback(allowFallback);
+      // Soft monthly usage budget (item 58): parsed leniently (blank/junk
+      // → 0 = off) and persisted with the app settings envelope.
+      const budget = Number(aiTokenBudget.trim());
+      const resetDay = Number(aiBudgetResetDay.trim());
+      appSettings.update({
+        aiMonthlyTokenBudget: Number.isFinite(budget) && budget > 0 ? Math.round(budget) : 0,
+        aiBudgetResetDay: Number.isFinite(resetDay) && resetDay >= 1
+          ? Math.min(31, Math.max(1, Math.round(resetDay)))
+          : 1,
+      });
       if (opencodePassword.trim().length > 0) {
         await ai.saveOpencodePassword(opencodePassword);
       }
@@ -605,6 +623,99 @@
             Repositories opt in to AI features individually (asked on first
             use of an AI feature). Secrets live in the OS keyring; the rest
             stays in local app settings.
+          </p>
+        </fieldset>
+
+        <fieldset class="group m-0 flex min-w-0 flex-col gap-[0.625rem] rounded-xl border border-border bg-muted/30 px-4 pb-4 pt-[0.9rem]">
+          <legend class="legend px-ui-35 text-xs font-semibold text-muted-foreground">Custom prompts</legend>
+          <p class="hint m-0 text-ui-meta text-muted-foreground">
+            Reusable templates that appear as AI commands in the command
+            palette. Variables:
+            {#each CUSTOM_PROMPT_VARS as variable, i (variable)}
+              <code class="font-mono text-foreground">{`{{${variable}}}`}</code>{i < CUSTOM_PROMPT_VARS.length - 1 ? ", " : ""}
+            {/each}
+            — budgeted staged diff, per-file change stats, recent commits.
+            Unknown placeholders are left as-is; edits apply immediately.
+          </p>
+          {#each customPrompts.entries as entry (entry.id)}
+            <div class="custom-prompt flex flex-col gap-1.5 rounded-lg border border-border bg-background px-3 py-2">
+              <div class="row flex items-center gap-2">
+                <Checkbox
+                  checked={entry.enabled}
+                  onCheckedChange={(checked) => customPrompts.update(entry.id, { enabled: checked === true })}
+                />
+                <Input
+                  class="input rounded"
+                  type="text"
+                  aria-label="Prompt name"
+                  placeholder="Prompt name"
+                  value={entry.name}
+                  onchange={(event) => customPrompts.update(entry.id, { name: event.currentTarget.value })}
+                />
+                <Button
+                  variant="outline"
+                  size="icon"
+                  class="icon-button flex-none rounded-full text-muted-foreground [&_svg:not([class*='size-'])]:size-3.5"
+                  type="button"
+                  aria-label={`Delete ${entry.name}`}
+                  onclick={() => customPrompts.remove(entry.id)}
+                >
+                  <Icon icon={iconClose} size={12} />
+                </Button>
+              </div>
+              <Textarea
+                class="min-h-16 resize-y rounded font-mono text-ui-meta"
+                aria-label={`Template for ${entry.name}`}
+                spellcheck="false"
+                value={entry.template}
+                onchange={(event) => customPrompts.update(entry.id, { template: event.currentTarget.value })}
+              />
+            </div>
+          {/each}
+          <div class="row flex items-center gap-3">
+            <Button
+              variant="outline"
+              size="sm"
+              class="rounded-full text-primary"
+              type="button"
+              onclick={() => customPrompts.add()}
+            >
+              Add prompt
+            </Button>
+            <span class="text-ui-micro text-muted-foreground">Enabled entries become “AI: …” palette commands.</span>
+          </div>
+        </fieldset>
+
+        <fieldset class="group m-0 flex min-w-0 flex-col gap-[0.625rem] rounded-xl border border-border bg-muted/30 px-4 pb-4 pt-[0.9rem]">
+          <legend class="legend px-ui-35 text-xs font-semibold text-muted-foreground">Usage budget</legend>
+          <div class="row flex flex-wrap items-end gap-3">
+            <label class="field flex flex-col gap-ui-125">
+              <span class="field-label text-ui-meta text-muted-foreground">Monthly token budget (0 = off)</span>
+              <Input
+                class="input w-44 rounded"
+                type="text"
+                inputmode="numeric"
+                placeholder="e.g. 2000000"
+                spellcheck="false"
+                bind:value={aiTokenBudget}
+              />
+            </label>
+            <label class="field flex flex-col gap-ui-125">
+              <span class="field-label text-ui-meta text-muted-foreground">Reset day (1–31)</span>
+              <Input
+                class="input w-24 rounded"
+                type="text"
+                inputmode="numeric"
+                spellcheck="false"
+                bind:value={aiBudgetResetDay}
+              />
+            </label>
+          </div>
+          <p class="hint m-0 text-ui-meta text-muted-foreground">
+            Soft budget — runs are never blocked. When a budget is set, the
+            status bar shows “% of monthly budget” (a warning from 100% up),
+            computed from THIS machine's visible AI activity history (the
+            most recent 200 runs) — it is a lower bound, not a bill.
           </p>
         </fieldset>
 

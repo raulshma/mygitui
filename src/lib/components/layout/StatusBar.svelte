@@ -54,12 +54,14 @@
     type SyncVerb,
   } from "$lib/git/sync";
   import { formatRelativeTime } from "$lib/git/format";
+  import { appSettings } from "$lib/state/appSettings.svelte";
   import { conflictSource, conflictSourceLabel } from "$lib/components/panels/panelModel";
   import { panelIconData } from "$lib/layout/layoutModel";
   import { toast } from "$lib/toast";
   import { describeError } from "$lib/errors";
   import { ai } from "$lib/ai/ai.svelte";
   import { aiElapsedLabel, aiFeatureLabel, aiPhaseLabel } from "$lib/ai/registry";
+  import { budgetLabel, budgetMonthStart, budgetView } from "$lib/ai/budget";
   import Icon from "$lib/components/icons/Icon.svelte";
   import { appIcon } from "$lib/components/icons/library.svelte";
   import { Hint } from "$lib/components/ui/tooltip/index.js";
@@ -442,6 +444,27 @@
       if (!live.has(id)) delete aiCancelling[id];
     }
   });
+
+  // -- AI usage budget chip (item 58) ------------------------------------------
+  //
+  // Soft budget: month-to-date tokens (from the LOCAL visible job history
+  // — the 200-record activity ring, so runs that rotated out or other
+  // machines' runs are not counted) against the configured monthly token
+  // budget. Shown only when a budget is set; at >= 100% the chip turns
+  // into a warning but runs are never blocked (soft by design — the
+  // percentage is a local lower bound, not a bill).
+
+  const budget = $derived.by(() => {
+    const limit = appSettings.aiMonthlyTokenBudget;
+    if (limit <= 0) return null;
+    const start = budgetMonthStart(Date.now(), appSettings.aiBudgetResetDay);
+    return budgetView(ai.jobs.usageSince(start).totalTokens, limit);
+  });
+  const budgetTitle = $derived(
+    budget === null
+      ? ""
+      : `AI usage: ${budget.spent} of ${budget.budget} tokens this month (local history) — soft budget, runs are not blocked`,
+  );
 </script>
 
 <!-- The hook-output overlay is a sibling of the footer, not a child: the
@@ -819,6 +842,26 @@
         <Icon icon={iconAlert} size={12} />
         {opStateLabel}
       </span>
+    {/if}
+    {#if budget !== null}
+      <!-- Soft AI budget (item 58): subtle while under, warning at 100%+
+           — and only ever a warning: runs are never blocked. -->
+      <Hint label={budgetTitle}>
+        {#snippet child({ props })}
+          <button
+            {...props}
+            class="sb-budget inline-flex h-full flex-none items-center gap-ui-2 rounded-full px-ui-2 tabular-nums transition-colors duration-[120ms] {budget.level ===
+            "over"
+              ? "bg-destructive/15 font-medium text-destructive"
+              : "text-muted-foreground hover:bg-accent hover:text-accent-foreground"} focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary"
+            type="button"
+            aria-label={budgetTitle}
+            onclick={() => emitUiEvent("open-ai-settings")}
+          >
+            {budgetLabel(budget.percent ?? 0)}
+          </button>
+        {/snippet}
+      </Hint>
     {/if}
     {#if autofetchMinutes > 0}
       <Hint label={`Auto-fetch every ${autofetchMinutes} min — click to open the Remotes panel`}>
