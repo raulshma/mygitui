@@ -21,7 +21,7 @@
   import { closeAboutDialog } from "./aboutDialog";
 
   /** Fallback when no Tauri runtime answers (browser/e2e); = package.json. */
-  const FALLBACK_VERSION = "0.1.11";
+  const FALLBACK_VERSION = "0.1.37";
 
   let version = $state(FALLBACK_VERSION);
 
