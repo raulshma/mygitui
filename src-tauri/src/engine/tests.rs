@@ -13,7 +13,7 @@ use super::types::{
     BlameQuery, ChangeKind, CommitOptions, DiffSide, GitSignature, LineRange, LogFilter,
     StageRequest, StageTarget,
 };
-use crate::ipc_commands::READ_FILE_MAX_BYTES;
+use crate::ipc::diff::READ_FILE_MAX_BYTES;
 
 static ENGINE: Libgit2Engine = Libgit2Engine::new();
 

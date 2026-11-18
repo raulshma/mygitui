@@ -24,7 +24,7 @@
 //!   for huge monorepos; the cap applies per call, before filtering).
 //!
 //! M2-lane convention: inherent `*_impl` methods on `Libgit2Engine`; the
-//! IPC commands in `ipc_commands.rs` call them directly.
+//! IPC commands in `crate::ipc::log` call them directly.
 
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};

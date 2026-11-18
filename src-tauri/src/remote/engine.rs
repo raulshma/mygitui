@@ -39,7 +39,7 @@ use crate::engine::types::{
     RemoteInfo, RepoHealth, RepoStatus, ResetKind, SigningInfo, SparseInfo, StageRequest,
     StageTarget, StashInfo, SubmoduleInfo, TagInfo, WorktreeInfo,
 };
-use crate::ipc_commands::READ_FILE_MAX_BYTES;
+use crate::ipc::diff::READ_FILE_MAX_BYTES;
 
 /// Hook kinds surfaced by the hooks panel (mirrors `engine/mutations.rs`).
 const KNOWN_HOOKS: [&str; 5] = [

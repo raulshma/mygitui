@@ -874,7 +874,7 @@ fn push_with_pre_push_hook_routes_to_cli() {
 }
 
 /// git2-rs does not expose libgit2's `GIT_PUSH_ATOMIC` push flag: an
-/// `--atomic` push must ride the CLI lane (ipc_commands maps `Unsupported`
+/// `--atomic` push must ride the CLI lane (ipc::net maps `Unsupported`
 /// to `push_via_cli`, whose argv builder emits `--atomic`).
 #[test]
 fn atomic_push_routes_through_the_cli_lane() {

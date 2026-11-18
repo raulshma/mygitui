@@ -27,7 +27,7 @@ use super::types::{
     StatusEntry, TagInfo,
 };
 // Shared IPC read cap (`repo_read_file`): blame materializes the same file.
-use crate::ipc_commands::READ_FILE_MAX_BYTES;
+use crate::ipc::diff::READ_FILE_MAX_BYTES;
 
 /// Lines longer than this (bytes) skip the imara-diff word pass; the whole
 /// line is already visually marked as changed.
@@ -49,7 +49,7 @@ const IMAGE_EXTENSIONS: [&str; 9] = [
 ];
 
 /// Clear rejection for a file above the shared repo_read_file IPC cap
-/// (`crate::ipc_commands::READ_FILE_MAX_BYTES`): blame materializes the
+/// (`crate::ipc::diff::READ_FILE_MAX_BYTES`): blame materializes the
 /// whole final file, and a multi-GB blob must fail instead of freezing
 /// the UI. The FE blame view toasts command errors, so this surfaces
 /// like any other blame failure.
@@ -57,7 +57,7 @@ fn blame_too_large(path: &str, bytes: u64) -> EngineError {
     EngineError::Invalid(format!(
         "`{path}` is {} MB — larger than the {} MB blame limit",
         bytes / (1024 * 1024),
-        crate::ipc_commands::READ_FILE_MAX_BYTES / (1024 * 1024)
+        crate::ipc::diff::READ_FILE_MAX_BYTES / (1024 * 1024)
     ))
 }
 
@@ -67,7 +67,7 @@ fn blob_too_large(path: &str, bytes: u64) -> EngineError {
     EngineError::Invalid(format!(
         "`{path}` is {} MB — larger than the {} MB read limit",
         bytes / (1024 * 1024),
-        crate::ipc_commands::READ_FILE_MAX_BYTES / (1024 * 1024)
+        crate::ipc::diff::READ_FILE_MAX_BYTES / (1024 * 1024)
     ))
 }
 

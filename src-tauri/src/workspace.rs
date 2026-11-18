@@ -2,7 +2,7 @@
 //! viewer/editor, quick-open).
 //!
 //! Reads are pure filesystem work: they never take the repo mutex and run
-//! on the blocking pool exactly like [`crate::ipc_commands::repo_read_file`]
+//! on the blocking pool exactly like [`crate::ipc::diff::repo_read_file`]
 //! — the one exception is [`repo_list_dir`], which reads the gitlink
 //! entries from the index (submodule marking) under the repo lock through
 //! the serial queue. Mutations go through [`enqueue_fs_mutation`]: the

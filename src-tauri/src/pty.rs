@@ -647,7 +647,7 @@ pub async fn pty_write(
 }
 
 /// Command body of [`pty_write`], split so tests can drive a registry
-/// without `State` (same pattern as `clean_op` in ipc_commands).
+/// without `State` (same pattern as `clean_op` in `ipc::mutations`).
 pub(crate) fn write_to_session(
     registry: &PtyRegistry,
     session_id: &str,

@@ -47,7 +47,7 @@ pub const OP_PROGRESS_EVENT: &str = "op-progress";
 pub const OP_LOG_EVENT: &str = "op-log";
 
 /// Minimum interval between two throttled progress events for one op
-/// (mirrors the clone-progress throttle in ipc_commands).
+/// (mirrors the clone-progress throttle in `ipc::net`).
 pub(crate) const THROTTLE_MS: u64 = 80;
 
 /// LEGACY error string for a caller-aborted op: the bare word the queue's
@@ -680,7 +680,7 @@ impl OpCtx {
 
 /// Pure throttle decision: the first event always fires, subsequent ones
 /// only after [`THROTTLE_MS`] (the clone-progress throttle in
-/// `ipc_commands` uses the same shape).
+/// `ipc` uses the same shape).
 pub(crate) fn throttle_ready(elapsed_ms: Option<u64>) -> bool {
     match elapsed_ms {
         None => true,

@@ -500,7 +500,7 @@ impl Libgit2Engine {
             return Err(cancelled_err());
         }
         // libgit2 never executes hooks. Presence of a runnable pre-push
-        // hook routes the push through the CLI (ipc_commands) so the hook
+        // hook routes the push through the CLI (ipc::net) so the hook
         // runs and its output can be streamed like commit hooks.
         if super::mutations::hook_active(repo, "pre-push") {
             return Err(EngineError::Unsupported(
@@ -510,7 +510,7 @@ impl Libgit2Engine {
         // git2-rs does not expose libgit2's `git_push_options.flags`
         // (`GIT_PUSH_ATOMIC`): atomicity is only expressible through real
         // git, so route the push through the CLI like hook/signing pushes
-        // (ipc_commands maps `Unsupported` to `push_via_cli`, whose argv
+        // (ipc::net maps `Unsupported` to `push_via_cli`, whose argv
         // builder emits `--atomic` — see `cli::build_push_args`).
         if opts.atomic {
             return Err(EngineError::Unsupported(
