@@ -51,6 +51,8 @@ import iconHomeRounded from "@ktibow/iconset-material-symbols/home-rounded";
 import iconInfo from "@ktibow/iconset-material-symbols/info";
 import iconInventory from "@ktibow/iconset-material-symbols/inventory";
 import iconLink from "@ktibow/iconset-material-symbols/link";
+import iconLock from "@ktibow/iconset-material-symbols/lock";
+import iconLockOpen from "@ktibow/iconset-material-symbols/lock-open";
 import iconMergeType from "@ktibow/iconset-material-symbols/merge-type";
 import iconMoreHoriz from "@ktibow/iconset-material-symbols/more-horiz";
 import iconMoreVert from "@ktibow/iconset-material-symbols/more-vert";
@@ -134,6 +136,8 @@ export const MATERIAL_SYMBOLS_ICONS: Record<string, IconifyIcon> = {
 	"info": iconInfo,
 	"inventory": iconInventory,
 	"link": iconLink,
+	"lock": iconLock,
+	"lock-open": iconLockOpen,
 	"merge-type": iconMergeType,
 	"more-horiz": iconMoreHoriz,
 	"more-vert": iconMoreVert,

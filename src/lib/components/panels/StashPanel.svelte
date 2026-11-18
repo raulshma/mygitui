@@ -18,7 +18,7 @@
    * refs cache (`$lib/stores/refs.svelte`); only branch/remote reads ride
    * that cache.
    */
-  import { repoDiff, stashApply, stashBranch, stashDrop, stashList, stashPush } from "$lib/ipc/client";
+  import { stashApply, stashBranch, stashDrop, stashList, stashPush, stashRename, stashShow } from "$lib/ipc/client";
   import type { FileDiff, StashInfo } from "$lib/ipc/types";
   import { isSignificant, onRepoChange } from "$lib/events/repoEvents";
   import { describeError } from "$lib/errors";
@@ -74,11 +74,16 @@
   let branchFor = $state<number | null>(null);
   let branchName = $state("");
 
+  // Per-row "Rename message…" prompt (inline form, like the branch one).
+  let renameFor = $state<number | null>(null);
+  let renameMessage = $state("");
+
   $effect(() => {
     // Reload when the repo switches.
     void repoId;
     formOpen = false;
     branchFor = null;
+    renameFor = null;
     void reload();
   });
 
@@ -159,13 +164,34 @@
     }
   }
 
-  async function onApply(info: StashInfo, pop: boolean): Promise<void> {
+  async function onApply(info: StashInfo, pop: boolean, restoreIndex = false): Promise<void> {
     busy = true;
     try {
-      await stashApply(repoId, info.index, pop);
-      afterMutation(pop ? "Pop" : "Apply", stashRef(info));
+      await stashApply(repoId, info.index, pop, restoreIndex);
+      const what = pop ? "Pop" : restoreIndex ? "Apply --index" : "Apply";
+      afterMutation(what, stashRef(info));
     } catch (err) {
-      fail(pop ? "Pop" : "Apply", err);
+      fail(pop ? "Pop" : restoreIndex ? "Apply --index" : "Apply", err);
+    } finally {
+      busy = false;
+    }
+  }
+
+  /** Renames the stash entry's message (backend allows `stash@{0}` only). */
+  async function onRename(info: StashInfo): Promise<void> {
+    const message = renameMessage.trim();
+    if (!message) return;
+    busy = true;
+    try {
+      await stashRename(repoId, info.index, message);
+      renameMessage = "";
+      renameFor = null;
+      afterMutation("Rename", stashRef(info));
+    } catch (err) {
+      // The backend rejects every entry but stash@{0} with a clear message —
+      // surface it verbatim (the menu entry is gated to the top stash, so
+      // this only fires on a race with an external push).
+      fail("Rename", err);
     } finally {
       busy = false;
     }
@@ -222,7 +248,7 @@
     showMenuAtElement(event.currentTarget as HTMLElement, [
       {
         id: "view",
-        label: "View diff",
+        label: "Show diff",
         icon: iconView,
         run: () => void onPreview(info),
       },
@@ -241,6 +267,13 @@
         run: () => void onApply(info, true),
       },
       {
+        id: "apply-index",
+        label: "Apply --index (keep staged)",
+        icon: iconApply,
+        disabled: busy,
+        run: () => void onApply(info, false, true),
+      },
+      {
         id: "branch",
         label: "Create branch…",
         icon: iconBranch,
@@ -248,6 +281,21 @@
         run: () => {
           branchFor = info.index;
           branchName = "";
+        },
+      },
+      {
+        // The backend can only rewrite the newest entry's message; deeper
+        // renames would rebuild the whole reflog stack. Gated here so a
+        // click can't even start what will always fail.
+        id: "rename",
+        label: info.index === 0
+          ? "Rename message…"
+          : "Rename message… (stash@{0} only)",
+        icon: iconView,
+        disabled: busy || info.index !== 0,
+        run: () => {
+          renameFor = info.index;
+          renameMessage = info.message;
         },
       },
       { separator: true },
@@ -287,18 +335,14 @@
   } | null>(null);
 
   /**
-   * "View diff": `stash^..stash` — the stash commit against its first
-   * parent (its base HEAD), i.e. `git stash show -p` semantics. Backend
-   * `repo_diff` revparses the `<sha>^` spec.
+   * "Show diff": `stash_show` — the backend's `git stash show -p` parity
+   * (base commit vs stash commit) as `FileDiff[]`, rendered by the same
+   * DiffViewer as every other diff.
    */
   async function onPreview(info: StashInfo): Promise<void> {
     preview = { info, files: null, error: null };
     try {
-      const files = await repoDiff(
-        repoId,
-        { commit: `${info.sha}^` },
-        { commit: info.sha },
-      );
+      const files = await stashShow(repoId, info.index);
       // Stale-guard: the dialog may have been closed / re-opened meanwhile.
       if (preview?.info.sha === info.sha) {
         preview = { info, files, error: null };
@@ -466,6 +510,40 @@
                 aria-label="Create branch from stash"
                 title="Create the branch"
                 disabled={busy || !branchName.trim()}
+              >
+                <Icon icon={iconCheck} size={16} />
+              </Button>
+            </form>
+          {/if}
+          {#if renameFor === info.index}
+            <!-- Inline rename prompt (prefilled with the current message).
+                 The backend renames stash@{0} only — the menu entry is
+                 gated, and a failure still surfaces its error verbatim. -->
+            <form
+              class="rename-form flex items-center gap-1.5 border-t border-dashed border-border pt-1"
+              aria-label={`New message for ${stashRef(info)}`}
+              onsubmit={(e) => {
+                e.preventDefault();
+                void onRename(info);
+              }}
+            >
+              <Input
+                class="h-auto min-w-32 flex-1 rounded px-1.5 py-0.5 text-ui-meta"
+                type="text"
+                placeholder="stash message"
+                aria-label="New stash message"
+                bind:value={renameMessage}
+                onkeydown={(e) => {
+                  if (e.key === "Escape") renameFor = null;
+                }}
+              />
+              <Button
+                variant="default"
+                size="icon-sm"
+                type="submit"
+                aria-label="Rename stash entry"
+                title="Rename this stash entry's message"
+                disabled={busy || !renameMessage.trim()}
               >
                 <Icon icon={iconCheck} size={16} />
               </Button>

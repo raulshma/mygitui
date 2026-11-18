@@ -57,6 +57,7 @@
     repoStatus,
     stage,
     stageAll,
+    stashPush,
     submoduleSync,
     submoduleUpdate,
     submodules as listSubmodules,
@@ -70,6 +71,7 @@
   import { openTab, parseSshUri, refreshStatus, tabStore } from "$lib/stores/tabs.svelte";
   import { normalizeRepoPath } from "$lib/stores/switcher.svelte";
   import CommitBar from "$lib/components/panels/CommitBar.svelte";
+  import DialogShell from "$lib/components/safety/DialogShell.svelte";
   import { toast } from "$lib/toast";
   import { patternFor } from "./gitignore";
   import {
@@ -1453,6 +1455,22 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
       });
     }
 
+    // Multi-select stash: pushes ONLY the selected paths (git stash push
+    // <pathspec>). Submodule rows stash inside their own repo — excluded
+    // here; the menu keeps one repo per invocation (this panel's repo).
+    const stashPaths = stashablePaths(targets);
+    if (stashPaths.length > 0) {
+      entries.push({
+        id: "stash-selected",
+        label: countLabel("Stash selected", stashPaths.length),
+        run: () => {
+          stashTargetPaths = stashPaths;
+          stashTargetMessage = "";
+          stashTargetIncludeUntracked = true;
+        },
+      });
+    }
+
     const single = targets.length === 1 ? targets[0]! : null;
     if (single !== null) {
       const info = !single.submodulePath
@@ -1630,6 +1648,60 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
         row.kind !== "conflicted" &&
         (row.submodulePath ? true : !moduleByPath.has(row.entry.path)),
     );
+  }
+
+  /**
+   * Repo-relative paths a "Stash selected" push would target: this repo's
+   * own (non-submodule) non-conflicted rows, deduped across the staged and
+   * changes sections (one path can appear in both; the pathspec stashes
+   * every change it has). Submodule rows are excluded — their paths are
+   * relative to a different repository.
+   */
+  function stashablePaths(rows: StatusRow[]): string[] {
+    const out: string[] = [];
+    for (const row of rows) {
+      if (row.kind === "conflicted" || row.submodulePath) continue;
+      if (moduleByPath.has(row.entry.path)) continue;
+      if (!out.includes(row.entry.path)) out.push(row.entry.path);
+    }
+    return out;
+  }
+
+  // -- "Stash selected" (pathspec stash push) ---------------------------------
+
+  /** Paths of the pending stash-selected push (null = dialog closed). */
+  let stashTargetPaths = $state<string[] | null>(null);
+  let stashTargetMessage = $state("");
+  let stashTargetIncludeUntracked = $state(true);
+  let stashTargetBusy = $state(false);
+
+  async function onStashSelectedConfirmed(): Promise<void> {
+    const paths = stashTargetPaths;
+    if (!repoId || !paths || paths.length === 0 || stashTargetBusy) return;
+    stashTargetBusy = true;
+    try {
+      await stashPush(
+        repoId,
+        stashTargetMessage.trim() || undefined,
+        false,
+        stashTargetIncludeUntracked,
+        paths,
+      );
+      stashTargetPaths = null;
+      stashTargetMessage = "";
+      toast(
+        paths.length === 1
+          ? `Stashed ${paths[0]}`
+          : `Stashed ${paths.length} selected paths`,
+        { kind: "success" },
+      );
+      await refreshStatus(repoId);
+      onAfterMutation?.();
+    } catch (err) {
+      toast(`Stash failed: ${describeError(err)}`, { kind: "error" });
+    } finally {
+      stashTargetBusy = false;
+    }
   }
 
   /**
@@ -3012,6 +3084,57 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
   danger
   onConfirm={() => void onDiscardConfirmed()}
 />
+
+{#if stashTargetPaths !== null && repoId}
+  <!-- "Stash selected" dialog: pathspec stash push of just the selection
+       (message + include-untracked, mirroring the stash panel's form). -->
+  <DialogShell
+    bind:open={
+      () => stashTargetPaths !== null,
+      (v) => {
+        if (!v) stashTargetPaths = null;
+      }
+    }
+    labelledBy="stash-selected-title"
+    width="24rem"
+    onsubmit={() => void onStashSelectedConfirmed()}
+  >
+    {#snippet children()}
+      <!-- Snippet bodies don't inherit the outer {#if} narrowing — capture
+           the path list into a local and re-guard. -->
+      {@const paths = stashTargetPaths}
+      {#if paths}
+        <h2 id="stash-selected-title" class="sdlg-title">
+          Stash {paths.length === 1 ? paths[0] : `${paths.length} selected paths`}?
+        </h2>
+        <p class="sdlg-message">
+          The selected paths' changes move to a stash; the worktree copies
+          reset to HEAD.
+        </p>
+        <Input
+          class="mb-2 h-auto w-full rounded px-2 py-1 text-xs"
+          type="text"
+          placeholder="Stash message (optional)"
+          aria-label="Stash message"
+          data-autofocus
+          bind:value={stashTargetMessage}
+        />
+        <label class="flex cursor-pointer items-center gap-1.5 text-xs text-muted-foreground">
+          <input type="checkbox" class="m-0 accent-primary" bind:checked={stashTargetIncludeUntracked} />
+          <span>include untracked files under the selected paths</span>
+        </label>
+      {/if}
+    {/snippet}
+    {#snippet actions()}
+      <button class="sdlg-secondary" type="button" onclick={() => (stashTargetPaths = null)}>
+        Cancel
+      </button>
+      <button class="sdlg-primary" type="submit" disabled={stashTargetBusy}>
+        {stashTargetBusy ? "Stashing…" : "Stash"}
+      </button>
+    {/snippet}
+  </DialogShell>
+{/if}
 
 {#if repoId}
   <GitignoreGallery

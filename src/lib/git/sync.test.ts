@@ -96,6 +96,7 @@ describe("option construction", () => {
       refs: [],
       tags: false,
       delete: false,
+      atomic: false,
     });
   });
 });

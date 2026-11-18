@@ -4,7 +4,12 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { ageBackground, ageRatios, AGE_HEAT_MAX_PCT } from "$lib/components/panels/blameModel";
+import {
+  ageBackground,
+  ageRatios,
+  AGE_HEAT_MAX_PCT,
+  buildBlameQuery,
+} from "$lib/components/panels/blameModel";
 import type { BlameLine } from "$lib/ipc/types";
 
 function blameLine(sha: string, time: number): BlameLine {
@@ -79,5 +84,54 @@ describe("ageBackground", () => {
 
   it("derives from the theme primary (color-mix)", () => {
     expect(ageBackground(1)).toMatch(/^color-mix\(in srgb, var\(--primary\)/);
+  });
+});
+
+describe("buildBlameQuery", () => {
+  it("returns null when every option is at its default", () => {
+    expect(buildBlameQuery({})).toBeNull();
+    expect(buildBlameQuery({ from: "abc123" })).toBeNull();
+    expect(buildBlameQuery({ oldest: "   " })).toBeNull();
+    expect(
+      buildBlameQuery({
+        ignoreWhitespace: false,
+        firstParent: false,
+        ignoreRevs: false,
+        oldest: "",
+      }),
+    ).toBeNull();
+  });
+
+  it("carries the from revision and trimmed oldest bound", () => {
+    expect(
+      buildBlameQuery({ from: "abc123", oldest: " def456 " }),
+    ).toEqual({
+      from: "abc123",
+      oldest: "def456",
+      ignore_whitespace: false,
+      first_parent: false,
+      ignore_revs: false,
+    });
+  });
+
+  it("forwards the toggles verbatim", () => {
+    expect(
+      buildBlameQuery({
+        ignoreWhitespace: true,
+        firstParent: true,
+        ignoreRevs: true,
+        oldest: "main",
+      }),
+    ).toEqual({
+      from: null,
+      oldest: "main",
+      ignore_whitespace: true,
+      first_parent: true,
+      ignore_revs: true,
+    });
+  });
+
+  it("accepts branch-ish oldest values verbatim (plain pass-through)", () => {
+    expect(buildBlameQuery({ oldest: "release-1.2"})?.oldest).toBe("release-1.2");
   });
 });

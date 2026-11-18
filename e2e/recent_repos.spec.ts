@@ -169,13 +169,15 @@ test("a delayed tab close preserves a newer repository selection", async ({ page
   for (const name of ["alpha", "beta", "gamma"]) {
     if (name !== "alpha") await page.getByRole("button", { name: "Recent repositories", exact: true }).click();
     await page.getByRole("button", { name: new RegExp(`^${name}\\s`) }).click();
-    await expect(page.getByRole("tab", { name: `${name} — /tmp/${name}`, exact: true })).toBeVisible();
+    // Not exact: the tab's accessible name carries the change-count badge
+    // ("alpha — /tmp/alpha, 2 changed") once the status lands.
+    await expect(page.getByRole("tab", { name: `${name} — /tmp/${name}` })).toBeVisible();
   }
   await page.getByRole("button", { name: "Close gamma", exact: true }).click();
-  const alpha = page.getByRole("tab", { name: "alpha — /tmp/alpha", exact: true });
+  const alpha = page.getByRole("tab", { name: "alpha — /tmp/alpha" });
   await alpha.click();
   await page.evaluate(() => (window as unknown as { finishTabClose: () => void }).finishTabClose());
-  await expect(page.getByRole("tab", { name: "gamma — /tmp/gamma", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("tab", { name: "gamma — /tmp/gamma" })).toHaveCount(0);
   await expect(alpha).toHaveAttribute("aria-selected", "true");
   expect(tracked.errors).toEqual([]);
 });

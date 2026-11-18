@@ -368,6 +368,7 @@ describe("push", () => {
       refs: [],
       tags: false,
       delete: false,
+      atomic: false,
     });
     expect(
       getToasts().some(
@@ -429,6 +430,7 @@ describe("remoteBranchDelete", () => {
       refs: ["feature"],
       tags: false,
       delete: true,
+      atomic: false,
     });
     expect(
       getToasts().some(

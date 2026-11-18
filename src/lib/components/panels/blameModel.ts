@@ -9,6 +9,8 @@
  * `--primary`, so dark/light themes adapt for free. No runes, no DOM.
  */
 
+import type { BlameQuery } from "$lib/ipc/types";
+
 /** Blame age scale: accent share at ratio 1 (newest). */
 export const AGE_HEAT_MAX_PCT = 28;
 
@@ -57,4 +59,44 @@ export function ageBackground(ratio: number): string {
   const pct = Math.round(clamped * AGE_HEAT_MAX_PCT);
   if (pct <= 0) return "transparent";
   return `color-mix(in srgb, var(--primary) ${pct}%, transparent)`;
+}
+
+// ---------------------------------------------------------------------------
+// Extended blame query (repo_blame's optional BlameQuery)
+// ---------------------------------------------------------------------------
+
+/** FE-side blame option inputs (BlameView toolbar toggles + oldest bound). */
+export interface BlameQueryInputs {
+  /** Revision to blame at (`None`/empty = HEAD; rides the query's `from`). */
+  from?: string | null;
+  /** Oldest bound (`git blame <oldest>..<from>`); trimmed, empty = none. */
+  oldest?: string | null;
+  ignoreWhitespace?: boolean;
+  firstParent?: boolean;
+  ignoreRevs?: boolean;
+}
+
+/**
+ * Builds the backend `BlameQuery` from the toolbar inputs, or `null` when
+ * every option is at its default — a null query keeps the IPC request to
+ * the legacy shape (the arg stays off the wire) instead of sending a
+ * structurally-identical no-op object.
+ */
+export function buildBlameQuery(
+  inputs: BlameQueryInputs,
+): BlameQuery | null {
+  const ignoreWhitespace = inputs.ignoreWhitespace ?? false;
+  const firstParent = inputs.firstParent ?? false;
+  const ignoreRevs = inputs.ignoreRevs ?? false;
+  const oldest = inputs.oldest?.trim() || null;
+  if (!ignoreWhitespace && !firstParent && !ignoreRevs && oldest === null) {
+    return null;
+  }
+  return {
+    from: inputs.from ?? null,
+    oldest,
+    ignore_whitespace: ignoreWhitespace,
+    first_parent: firstParent,
+    ignore_revs: ignoreRevs,
+  };
 }

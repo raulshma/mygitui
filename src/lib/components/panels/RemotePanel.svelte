@@ -28,6 +28,7 @@
     remoteRemove,
     remoteSetUrl,
     repoDiff,
+    statFile,
   } from "$lib/ipc/client";
   import type {
     FileDiff,
@@ -100,6 +101,14 @@
   let rebase = $state(false);
   let force = $state(false);
   let setUpstream = $state(false);
+  /** Push all refs as one atomic transaction (--atomic; routes via CLI). */
+  let atomic = $state(false);
+
+  // Advanced fetch options: depth (shallow fetch) + unshallow (full-history
+  // fetch back into a shallow clone; CLI lane backend-side).
+  let fetchDepthText = $state("");
+  /** `.git/shallow` exists (probed on repo switch) — the repo is shallow. */
+  let isShallow = $state(false);
 
   // Forms
   let addName = $state("");
@@ -138,6 +147,18 @@
     expandedRemote = null;
     remoteBranchList = [];
     showAllRemoteBranches = {};
+    fetchDepthText = "";
+    // Cheap shallow probe: `.git/shallow` exists only in shallow clones.
+    // The unshallow button below only means something there.
+    const id = repoId;
+    isShallow = false;
+    statFile(id, ".git/shallow")
+      .then(() => {
+        if (id === repoId) isShallow = true;
+      })
+      .catch(() => {
+        if (id === repoId) isShallow = false;
+      });
     void reload();
   });
 
@@ -244,9 +265,22 @@
     }
   }
 
-  function onFetch(remote: RemoteInfo): void {
+  function onFetch(remote: RemoteInfo, unshallow = false): void {
+    // Depth: empty/0 = unlimited (the arg stays null). Unshallow fetches
+    // the FULL history back (`--unshallow`), so depth is meaningless there.
+    const depth = unshallow
+      ? null
+      : fetchDepthText.trim() === "" || Number(fetchDepthText) <= 0
+        ? null
+        : Math.floor(Number(fetchDepthText));
     void runNet("fetch", remote, () =>
-      fetchRepo(repoId, { remote: remote.name, prune, refs: [], depth: null }), false);
+      fetchRepo(repoId, {
+        remote: remote.name,
+        prune,
+        refs: [],
+        depth,
+        ...(unshallow ? { unshallow: true } : {}),
+      }), false);
   }
 
   function onPull(remote: RemoteInfo): void {
@@ -270,7 +304,7 @@
         refs: [],
         tags: false,
         delete: false,
-        atomic: false,
+        atomic,
       }), true);
   }
 
@@ -1092,6 +1126,55 @@
                       </label>
                     {/snippet}
                   </Hint>
+                  <Hint label="Push: all refs go as one atomic transaction — the remote accepts everything or rejects every ref (--atomic)">
+                    {#snippet child({ props })}
+                      <label
+                        class="inline-flex cursor-pointer select-none items-center gap-1.5 whitespace-nowrap text-sm"
+                        {...props}
+                      >
+                        <Switch bind:checked={atomic} />
+                        <span class="text-muted-foreground text-xs">atomic on push</span>
+                      </label>
+                    {/snippet}
+                  </Hint>
+                  <!-- Advanced fetch: depth + unshallow share one row (there
+                       was no depth control before). -->
+                  <div class="adv-fetch flex flex-wrap items-center gap-1.5">
+                    <Hint label="Fetch depth: shallow-fetch the newest N commits (empty = unlimited)">
+                      {#snippet child({ props })}
+                        <label
+                          class="inline-flex items-center gap-1.5 whitespace-nowrap text-sm"
+                          {...props}
+                        >
+                          <span class="text-muted-foreground text-xs">depth</span>
+                          <Input
+                            class="h-auto w-16 rounded bg-background px-1.5 py-0.5 text-xs tabular-nums"
+                            type="number"
+                            min="1"
+                            placeholder="∞"
+                            aria-label="Fetch depth (empty for unlimited)"
+                            bind:value={fetchDepthText}
+                          />
+                        </label>
+                      {/snippet}
+                    </Hint>
+                    {#if isShallow}
+                      <Hint label={`Fetch the FULL history back into this shallow clone (--unshallow, ${remote.name})`}>
+                        {#snippet child({ props })}
+                          <Button
+                            {...props}
+                            class="h-auto rounded-full px-2.5 py-0.5 text-ui-meta"
+                            variant="outline"
+                            type="button"
+                            disabled={netBusy}
+                            onclick={() => onFetch(remote, true)}
+                          >
+                            Unshallow
+                          </Button>
+                        {/snippet}
+                      </Hint>
+                    {/if}
+                  </div>
                 </div>
               </details>
             </div>

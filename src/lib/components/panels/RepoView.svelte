@@ -1910,6 +1910,23 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
     }
   }
 
+  /**
+   * Skips the rebase step the backend is paused on (conflicted commit
+   * dropped, failed exec advanced past). Only rendered while the monitor
+   * reports `skippable`; no confirmation — the rebase planner's pattern
+   * keeps destructive confirms for the abort path only.
+   */
+  async function onSkipRebase(): Promise<void> {
+    if (opSource !== "rebase" || continuing || !rebaseMonitor.skippable) return;
+    continuing = true;
+    try {
+      await rebaseMonitor.skipRebase();
+      await refreshStatus(repoId);
+    } finally {
+      continuing = false;
+    }
+  }
+
   /** Aborts the in-progress operation (rebase / merge / sequencer each have
    *  their own backend command — `conflictAbortCommand`). The confirmation
    *  is a ConfirmDialog (M9 F9). */
@@ -2349,6 +2366,23 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
           >
             {continuing ? "Continuing…" : "Continue"}
           </Button>
+          {#if rebaseMonitor.skippable}
+            <!-- M12: rebase_skip — drop the conflicted commit / advance past
+                 a failed exec. Gated on the backend pause state (a skip
+                 against anything else errors backend-side). -->
+            <Button
+              class="cb-skip rounded-full border-current px-3 py-0.5 h-auto bg-transparent text-ui-meta font-normal text-inherit hover:bg-foreground/10 hover:text-inherit dark:bg-transparent dark:border-current dark:hover:bg-foreground/10"
+              variant="outline"
+              type="button"
+              disabled={continuing}
+              title={rebaseMonitor.state?.paused_for_exec
+                ? "Skip the failed exec step (nothing is recorded)"
+                : "Skip this commit — drop it from the rebase"}
+              onclick={() => void onSkipRebase()}
+            >
+              Skip this commit
+            </Button>
+          {/if}
         {/if}
         <Button
           variant="outline"

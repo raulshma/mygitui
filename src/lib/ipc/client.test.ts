@@ -22,6 +22,12 @@ import {
   fetchRepo,
   hooksList,
   IpcError,
+  lfsLock,
+  lfsLocks,
+  lfsUnlock,
+  noteAdd,
+  noteRemove,
+  commitNotes,
   onAuthRequest,
   onCloneProgress,
   onOpProgress,
@@ -38,12 +44,14 @@ import {
   remoteRemove,
   remoteSetUrl,
   repoBlame,
+  repoBundle,
   repoClean,
   repoDiff,
   repoRefs,
   repoStatus,
   resetChannelFactory,
   resetTransport,
+  rebaseSkip,
   setChannelFactory,
   setTransport,
   SECRET_KEYS,
@@ -53,25 +61,38 @@ import {
   signingInfo,
   stage,
   stageAll,
+  stashApply,
+  stashPush,
+  stashRename,
+  stashShow,
   streamDiff,
   streamFileHistory,
   streamLog,
+  submoduleAdd,
+  submoduleDeinit,
   tagCreate,
   tagDelete,
+  worktreeAdd,
+  worktreeLock,
+  worktreeUnlock,
   type ChannelLike,
   type Transport,
 } from "$lib/ipc/client";
 import type {
   BlameLine,
+  BlameQuery,
   BranchInfo,
   CommitOptions,
   FetchOptions,
   FileDiff,
   HookInfo,
+  LfsLock,
   LogPage,
   NetStats,
+  NoteInfo,
   PullOptions,
   PushOptions,
+  RebaseState,
   RemoteInfo,
   RepoInfo,
   RepoStatus,
@@ -279,6 +300,34 @@ describe("ipc client command wrappers", () => {
       repo_id: "repo-1",
       path: "src/a.ts",
       from: "abc123",
+    });
+  });
+
+  it("repoBlame forwards the optional BlameQuery verbatim (null keeps it off)", async () => {
+    const { transport, calls } = mockTransport(() => BLAME);
+    setTransport(transport);
+
+    const query: BlameQuery = {
+      from: "def456",
+      oldest: "aaa111",
+      ignore_whitespace: true,
+      first_parent: false,
+      ignore_revs: true,
+    };
+    await repoBlame("repo-1", "src/a.ts", "def456", query);
+    await repoBlame("repo-1", "src/a.ts", "def456", null);
+
+    expect(calls[0]?.args).toEqual({
+      repo_id: "repo-1",
+      path: "src/a.ts",
+      from: "def456",
+      query,
+    });
+    // A null query stays off the wire (legacy shape unchanged).
+    expect(calls[1]?.args).toEqual({
+      repo_id: "repo-1",
+      path: "src/a.ts",
+      from: "def456",
     });
   });
 
@@ -1153,5 +1202,227 @@ describe("ipc client open-with wrappers", () => {
     expect(err).toBeInstanceOf(IpcError);
     expect((err as IpcError).command).toBe("open_with_custom");
     expect((err as IpcError).message).toContain("No such file or directory");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase 5 wrappers (appended): stash extras, blame query, rebase skip,
+// bundle, notes, LFS locks, worktree locks, submodule add/deinit
+// ---------------------------------------------------------------------------
+
+describe("ipc client phase-5 wrappers", () => {
+  it("stashPush forwards optional paths; empty/null = arg omitted", async () => {
+    const { transport, calls } = mockTransport(() => undefined);
+    setTransport(transport);
+
+    await stashPush("repo-1", "wip", false, true, ["src/a.ts", "src/b.ts"]);
+    await stashPush("repo-1", undefined, true, false, null);
+    await stashPush("repo-1", undefined, false, true, []);
+
+    expect(calls[0]).toEqual({
+      command: "stash_push",
+      args: {
+        repo_id: "repo-1",
+        message: "wip",
+        keep_index: false,
+        include_untracked: true,
+        paths: ["src/a.ts", "src/b.ts"],
+      },
+    });
+    // null and [] both mean "whole worktree" — the arg stays off the wire.
+    expect(calls[1]?.args).toEqual({
+      repo_id: "repo-1",
+      message: undefined,
+      keep_index: true,
+      include_untracked: false,
+    });
+    expect(calls[2]?.args).toEqual({
+      repo_id: "repo-1",
+      message: undefined,
+      keep_index: false,
+      include_untracked: true,
+    });
+  });
+
+  it("stashShow resolves the stash's FileDiff list", async () => {
+    const { transport, calls } = mockTransport(() => [FILE_DIFF]);
+    setTransport(transport);
+
+    await expect(stashShow("repo-1", 0)).resolves.toEqual([FILE_DIFF]);
+    expect(calls[0]).toEqual({ command: "stash_show", args: { repo_id: "repo-1", index: 0 } });
+  });
+
+  it("stashRename sends index + message", async () => {
+    const { transport, calls } = mockTransport(() => undefined);
+    setTransport(transport);
+
+    await stashRename("repo-1", 0, "renamed wip");
+    expect(calls[0]).toEqual({
+      command: "stash_rename",
+      args: { repo_id: "repo-1", index: 0, message: "renamed wip" },
+    });
+  });
+
+  it("stashApply forwards pop and the optional restore_index (--index) flag", async () => {
+    const { transport, calls } = mockTransport(() => undefined);
+    setTransport(transport);
+
+    await stashApply("repo-1", 2, true);
+    await stashApply("repo-1", 0, false, true);
+
+    expect(calls[0]?.args).toEqual({ repo_id: "repo-1", index: 2, pop: true });
+    expect(calls[1]?.args).toEqual({
+      repo_id: "repo-1",
+      index: 0,
+      pop: false,
+      restore_index: true,
+    });
+  });
+
+  it("rebaseSkip resolves the resulting RebaseState", async () => {
+    const state: RebaseState = {
+      active: true,
+      plan: [],
+      current: 1,
+      paused_for_edit: false,
+      paused_for_conflict: false,
+      paused_for_exec: false,
+      exec_error: null,
+      rewritten: [],
+    };
+    const { transport, calls } = mockTransport(() => state);
+    setTransport(transport);
+
+    await expect(rebaseSkip("repo-1")).resolves.toEqual(state);
+    expect(calls[0]).toEqual({ command: "rebase_skip", args: { repo_id: "repo-1" } });
+  });
+
+  it("repoBundle sends out_path, refs and the all flag", async () => {
+    const { transport, calls } = mockTransport(() => undefined);
+    setTransport(transport);
+
+    await repoBundle("repo-1", "C:/out/mygitui-2026.bundle", ["refs/heads/main"], true);
+    expect(calls[0]).toEqual({
+      command: "repo_bundle",
+      args: {
+        repo_id: "repo-1",
+        out_path: "C:/out/mygitui-2026.bundle",
+        refs: ["refs/heads/main"],
+        all: true,
+      },
+    });
+  });
+
+  it("commitNotes resolves the NoteInfo list verbatim", async () => {
+    const notes: NoteInfo[] = [{ ref: "refs/notes/commits", text: "reviewed by ada" }];
+    const { transport, calls } = mockTransport(() => notes);
+    setTransport(transport);
+
+    await expect(commitNotes("repo-1", "abc123")).resolves.toEqual(notes);
+    expect(calls[0]).toEqual({
+      command: "commit_notes",
+      args: { repo_id: "repo-1", sha: "abc123" },
+    });
+  });
+
+  it("noteAdd / noteRemove omit note_ref when unset or empty", async () => {
+    const { transport, calls } = mockTransport(() => undefined);
+    setTransport(transport);
+
+    await noteAdd("repo-1", "abc123", "hello note");
+    await noteAdd("repo-1", "abc123", "custom", "refs/notes/reviews");
+    await noteRemove("repo-1", "abc123");
+    await noteRemove("repo-1", "abc123", "refs/notes/reviews");
+
+    expect(calls[0]?.args).toEqual({
+      repo_id: "repo-1",
+      sha: "abc123",
+      text: "hello note",
+    });
+    expect(calls[1]?.args).toEqual({
+      repo_id: "repo-1",
+      sha: "abc123",
+      text: "custom",
+      note_ref: "refs/notes/reviews",
+    });
+    expect(calls[2]?.args).toEqual({ repo_id: "repo-1", sha: "abc123" });
+    expect(calls[3]?.args).toEqual({
+      repo_id: "repo-1",
+      sha: "abc123",
+      note_ref: "refs/notes/reviews",
+    });
+  });
+
+  it("lfsLocks / lfsLock / lfsUnlock pass paths verbatim", async () => {
+    const locks: LfsLock[] = [
+      { id: "1", path: "assets/model.psd", owner: "ada" },
+    ];
+    const { transport, calls } = mockTransport((call) =>
+      call.command === "lfs_locks" ? locks : "locked assets/model.psd",
+    );
+    setTransport(transport);
+
+    await expect(lfsLocks("repo-1")).resolves.toEqual(locks);
+    await expect(lfsLock("repo-1", "assets/model.psd")).resolves.toBe(
+      "locked assets/model.psd",
+    );
+    await expect(lfsUnlock("repo-1", "assets/model.psd")).resolves.toBe(
+      "locked assets/model.psd",
+    );
+
+    expect(calls[0]?.command).toBe("lfs_locks");
+    expect(calls[1]?.args).toEqual({ repo_id: "repo-1", path: "assets/model.psd" });
+    expect(calls[2]?.args).toEqual({ repo_id: "repo-1", path: "assets/model.psd" });
+  });
+
+  it("worktreeAdd forwards the optional from_remote; lock/unlock carry reason", async () => {
+    const { transport, calls } = mockTransport(() => undefined);
+    setTransport(transport);
+
+    await worktreeAdd("repo-1", "C:/wt/x", undefined, "feature", "origin");
+    await worktreeLock("repo-1", "C:/wt/x", "wip do not touch");
+    await worktreeLock("repo-1", "C:/wt/x");
+    await worktreeUnlock("repo-1", "C:/wt/x");
+
+    expect(calls[0]?.args).toEqual({
+      repo_id: "repo-1",
+      path: "C:/wt/x",
+      branch: undefined,
+      new_branch: "feature",
+      from_remote: "origin",
+    });
+    expect(calls[1]?.args).toEqual({
+      repo_id: "repo-1",
+      path: "C:/wt/x",
+      reason: "wip do not touch",
+    });
+    // Empty/omitted reason stays off the wire.
+    expect(calls[2]?.args).toEqual({ repo_id: "repo-1", path: "C:/wt/x" });
+    expect(calls[3]?.args).toEqual({ repo_id: "repo-1", path: "C:/wt/x" });
+  });
+
+  it("submoduleAdd carries name only when set; submoduleDeinit sends the path", async () => {
+    const { transport, calls } = mockTransport(() => undefined);
+    setTransport(transport);
+
+    await submoduleAdd("repo-1", "https://host/lib.git", "vendor/lib");
+    await submoduleAdd("repo-1", "https://host/lib.git", "vendor/lib", "lib");
+    await submoduleDeinit("repo-1", "vendor/lib");
+
+    expect(calls[0]?.args).toEqual({
+      repo_id: "repo-1",
+      url: "https://host/lib.git",
+      path: "vendor/lib",
+    });
+    expect(calls[1]?.args).toEqual({
+      repo_id: "repo-1",
+      url: "https://host/lib.git",
+      path: "vendor/lib",
+      name: "lib",
+    });
+    expect(calls[2]).toEqual({
+      command: "submodule_deinit",
+      args: { repo_id: "repo-1", path: "vendor/lib" },
+    });
   });
 });

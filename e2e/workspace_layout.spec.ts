@@ -241,7 +241,12 @@ for (const destination of ["diff", "commit", "workflow"] as const) {
     await expect(page.locator(".workspace .dirty")).toBeVisible();
     expect(await mock.callsOf("repo_write_file")).toEqual([]);
     // No replacement editor read from disk; real undo still reaches the original doc.
-    expect(await mock.callsOf("repo_read_file")).toHaveLength(1);
+    // (CommitBar's one-shot `.gitmessage` template probe also lands in this
+    // command, so scope the count to the editor's own path reads.)
+    const editorReads = (await mock.callsOf("repo_read_file")).filter(
+      (call) => call.path === "src/app.ts",
+    );
+    expect(editorReads).toHaveLength(1);
     await content.click();
     await page.keyboard.press("Control+z");
     await expect(content).toHaveText("export const app = 1;");

@@ -34,6 +34,8 @@ import {
   checkpointGc,
   commitMessage,
   pickFolder,
+  pickSaveFile,
+  repoBundle,
   repoDiff,
   stashApply,
   stashList,
@@ -297,6 +299,29 @@ export const COMMANDS: Command[] = [
     section: "Repo",
     keywords: ["download", "url"],
     run: () => emitUiEvent("open-clone-dialog"),
+  },
+  {
+    // Headless bundle export (Phase 5 `repo_bundle`): the save picker's
+    // default name is `<repo-name>-<date>.bundle`; all refs (`--all`). The
+    // RepoPanel's Bundle section offers the ref-picking dialog variant.
+    id: "repo.bundle-export",
+    title: "Export bundle (all refs)…",
+    section: "Repo",
+    keywords: ["bundle", "export", "pack", "backup", "archive"],
+    when: (ctx) => ctx.repoId !== null,
+    run: async (ctx) => {
+      const repoId = ctx.repoId!;
+      const name = tabStore.active?.name ?? "repo";
+      const day = new Date().toISOString().slice(0, 10);
+      const destination = await pickSaveFile(
+        "Export bundle",
+        `${name}-${day}.bundle`,
+        [{ name: "Git bundle", extensions: ["bundle"] }],
+      );
+      if (destination === null) return;
+      await repoBundle(repoId, destination, [], true);
+      ok(`Bundle written to ${destination}`);
+    },
   },
   {
     id: "repo.refresh",

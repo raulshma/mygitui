@@ -17,14 +17,15 @@
  * Pause/conflict detection: while the backend reports an active, paused-for-
  * edit rebase the monitor also polls `conflicts()`; the first tick that sees
  * conflicts toasts once ("resolve in the status panel, then Continue") and
- * clears the flag when they go away. `continueRebase()` / `abort()` delegate
- * to the client wrappers and apply/keep the resulting state.
+ * clears the flag when they go away. `continueRebase()` / `skipRebase()` /
+ * `abort()` delegate to the client wrappers and apply/keep the resulting
+ * state.
  *
  * All backend access goes through `$lib/ipc/client` (mocked with `vi.mock`
  * in tests). Events surface as toasts (`$lib/toast`); the store never throws.
  */
 
-import { conflicts, rebaseAbort, rebaseContinue, rebaseState } from "$lib/ipc/client";
+import { conflicts, rebaseAbort, rebaseContinue, rebaseSkip, rebaseState } from "$lib/ipc/client";
 import type { ConflictFile, RebaseState, RebaseStep } from "$lib/ipc/types";
 import { toast } from "$lib/toast";
 import { describeError } from "$lib/errors";
@@ -110,6 +111,20 @@ export class RebaseMonitor {
     return this.active && this.state?.paused_for_edit === true;
   }
 
+  /**
+   * Skip is meaningful only while the backend is paused on a conflicted
+   * step (the commit is dropped) or a failed `exec` (advanced past). The
+   * backend rejects `rebase_skip` otherwise — gate the action here so the
+   * button never starts a doomed IPC.
+   */
+  get skippable(): boolean {
+    return (
+      this.active &&
+      (this.state?.paused_for_conflict === true ||
+        this.state?.paused_for_exec === true)
+    );
+  }
+
   /** Active rebase with conflicts to resolve — the Continue gate. */
   get inConflict(): boolean {
     return this.active && this.conflictCount > 0;
@@ -186,6 +201,39 @@ export class RebaseMonitor {
     } catch (err) {
       this.error = errorMessage(err);
       toast(`Rebase continue failed: ${this.error}`, { kind: "error" });
+      return null;
+    }
+  }
+
+  /**
+   * Skips the paused step (`rebase_skip`) and applies the returned state —
+   * the conflicted commit is dropped entirely, a failed `exec` is advanced
+   * past. Same shape as {@link continueRebase}: returns the new state or
+   * `null` on failure (toasted, never thrown).
+   */
+  async skipRebase(): Promise<RebaseState | null> {
+    const repoId = this.#repoId;
+    if (repoId === null) return null;
+    try {
+      const state = await rebaseSkip(repoId);
+      this.state = state;
+      this.active = state.active;
+      this.error = null;
+      if (state.active && (state.paused_for_edit || state.paused_for_conflict)) {
+        try {
+          this.conflicts = await conflicts(repoId);
+        } catch {
+          // Non-fatal — the next poll refreshes the conflict list.
+        }
+      } else {
+        this.conflicts = [];
+        this.#hadConflicts = false;
+      }
+      toast("Rebase step skipped", { kind: "info" });
+      return state;
+    } catch (err) {
+      this.error = errorMessage(err);
+      toast(`Rebase skip failed: ${this.error}`, { kind: "error" });
       return null;
     }
   }

@@ -307,6 +307,12 @@
     await monitor.continueRebase();
   }
 
+  /** Skips the paused step (conflicted commit dropped / exec advanced past). */
+  async function skipStep(): Promise<void> {
+    if (!monitor.skippable) return;
+    await monitor.skipRebase();
+  }
+
   /** Abort confirmation (ConfirmDialog state, M9 F9). */
   let abortOpen = $state(false);
 
@@ -524,6 +530,22 @@
       <div class="actions flex flex-none justify-end gap-2 pt-1">
         {#if phase === "running"}
           <Button variant="outline" class="border-destructive/60 text-destructive" type="button" onclick={cancel}>Abort rebase</Button>
+          {#if monitor.skippable}
+            <!-- M12: rebase_skip — only meaningful while paused on a
+                 conflicted step or a failed exec (backend-gated). -->
+            <Button
+              variant="outline"
+              class="text-primary"
+              type="button"
+              disabled={monitor.inConflict && !monitor.state?.paused_for_exec}
+              title={monitor.state?.paused_for_exec
+                ? "Skip the failed exec step (nothing is recorded)"
+                : "Skip this commit — drop it from the rebase"}
+              onclick={() => void skipStep()}
+            >
+              Skip this commit
+            </Button>
+          {/if}
           <span style:flex="1"></span>
           <Button variant="outline" class="text-primary" type="button" onclick={onClose}>
             Hide

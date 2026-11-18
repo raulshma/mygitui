@@ -8,6 +8,7 @@ import { describe, expect, it } from "vitest";
 import {
   EMPTY_FILTER,
   LogIndex,
+  parsePathsFilter,
   resolveRestoredSelection,
   toLogFilter,
 } from "$lib/stores/history-logic";
@@ -76,6 +77,35 @@ describe("toLogFilter", () => {
     expect(
       toLogFilter({ ...EMPTY_FILTER, scopeRef: "main" }, { follow: true }).refs,
     ).toEqual([]);
+  });
+
+  it("keeps a single path on the legacy `path` field (rename-following works)", () => {
+    const filter = toLogFilter({ ...EMPTY_FILTER, path: " src/lib/ " });
+    expect(filter.path).toBe("src/lib/");
+    expect(filter.paths).toBeUndefined();
+  });
+
+  it("sends 2+ comma/newline-separated paths as `paths` (path cleared)", () => {
+    const filter = toLogFilter({
+      ...EMPTY_FILTER,
+      path: " src/a.ts , src/b.ts\n docs/guide.md ,",
+    });
+    expect(filter.path).toBeNull();
+    expect(filter.paths).toEqual(["src/a.ts", "src/b.ts", "docs/guide.md"]);
+    // follow is passed through verbatim — the backend ignores it for a
+    // multi-path walk (no single name to shift through renames).
+    expect(filter.follow).toBe(false);
+  });
+
+  it("parsePathsFilter splits on commas and newlines, dropping empties", () => {
+    expect(parsePathsFilter("")).toEqual([]);
+    expect(parsePathsFilter("   ")).toEqual([]);
+    expect(parsePathsFilter("src/a.ts")).toEqual(["src/a.ts"]);
+    expect(parsePathsFilter("src/a.ts, src/b.ts")).toEqual([
+      "src/a.ts",
+      "src/b.ts",
+    ]);
+    expect(parsePathsFilter("a\n\nb , \nc")).toEqual(["a", "b", "c"]);
   });
 });
 

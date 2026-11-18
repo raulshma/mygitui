@@ -17,8 +17,8 @@
    * which is private — the exported `toggleBlameFirstFile()` reimplements
    * the old HistoryView handler and reports whether it did anything.
    */
-  import { streamDiff, describe, commitMessage } from "$lib/ipc/client";
-  import type { CommitInfo, FileDiff } from "$lib/ipc/types";
+  import { streamDiff, describe, commitMessage, commitNotes, noteAdd, noteRemove } from "$lib/ipc/client";
+  import type { CommitInfo, FileDiff, NoteInfo } from "$lib/ipc/types";
   import DiffViewer from "$lib/components/diff/DiffViewer.svelte";
   import { createImageLoader } from "$lib/components/diff/imageLoad";
   import BlameView from "$lib/components/panels/BlameView.svelte";
@@ -31,6 +31,7 @@
   import { readSplitRatio, writeSplitRatio } from "$lib/layout/splitPrefs";
   import { Button } from "$lib/components/ui/button/index.js";
   import { Hint } from "$lib/components/ui/tooltip/index.js";
+  import { Textarea } from "$lib/components/ui/textarea/index.js";
   import {
     classifyRef,
     formatDateTime,
@@ -206,6 +207,79 @@
   $effect(() => {
     if (compare) blameTarget = null;
   });
+
+  // -- git notes (Phase 5) ------------------------------------------------------
+  //
+  // One notes section per shown commit: the commit's notes listed (ref +
+  // text), a compact add form (textarea) and per-note remove. Collapsed to
+  // a single "Notes" toggle line while empty; the add form opens on demand
+  // (palette `notes.add-to-head` routes here too via the ui event below).
+
+  /** Notes of the shown commit (`null` until the first read lands). */
+  let notes = $state<NoteInfo[] | null>(null);
+  /** Whether the composer is open (auto-opens when notes exist). */
+  let notesOpen = $state(false);
+  let noteDraft = $state("");
+  let noteBusy = $state(false);
+  let notesToken = 0;
+
+  $effect(() => {
+    const sha = info?.sha;
+    void repoId; // reload on repo switch
+    notes = null;
+    noteDraft = "";
+    if (!sha) return;
+    const token = ++notesToken;
+    commitNotes(repoId, sha)
+      .then((list) => {
+        if (token !== notesToken) return;
+        notes = list;
+        if (list.length > 0) notesOpen = true;
+      })
+      .catch(() => {
+        // Notes are additive detail — a failed read stays collapsed.
+        if (token === notesToken) notes = [];
+      });
+  });
+
+  /** Opens the composer (external request: palette notes command). */
+  export function openNoteComposer(): void {
+    notesOpen = true;
+  }
+
+  async function onNoteAdd(): Promise<void> {
+    const sha = info?.sha;
+    const text = noteDraft.trim();
+    if (!sha || !text || noteBusy) return;
+    noteBusy = true;
+    try {
+      await noteAdd(repoId, sha, text);
+      noteDraft = "";
+      const list = await commitNotes(repoId, sha).catch(() => null);
+      if (list !== null) notes = list;
+      toast("Note added", { kind: "success" });
+    } catch (err) {
+      toast(`Note add failed: ${describeError(err)}`, { kind: "error" });
+    } finally {
+      noteBusy = false;
+    }
+  }
+
+  async function onNoteRemove(note: NoteInfo): Promise<void> {
+    const sha = info?.sha;
+    if (!sha || noteBusy) return;
+    noteBusy = true;
+    try {
+      await noteRemove(repoId, sha, note.ref);
+      const list = await commitNotes(repoId, sha).catch(() => null);
+      if (list !== null) notes = list;
+      toast("Note removed", { kind: "success" });
+    } catch (err) {
+      toast(`Note remove failed: ${describeError(err)}`, { kind: "error" });
+    } finally {
+      noteBusy = false;
+    }
+  }
 
   // -- full commit message (fetched on demand) --------------------------------
 
@@ -727,6 +801,77 @@
               {/if}
             </dl>
             <pre class="msg mt-2 whitespace-pre-wrap rounded-sm border border-border bg-muted p-2 font-mono text-ui-meta text-foreground [overflow-wrap:anywhere]">{fullMessage ?? info.summary}</pre>
+            <!-- Notes section (compact): collapsed to one toggle line while
+                 empty; lists ref + text and offers add / per-note remove. -->
+            <div class="notes mt-2" aria-label="Commit notes">
+              {#if notesOpen}
+                <div class="notes-head mb-1 flex items-center gap-1">
+                  <span class="text-ui-micro font-semibold uppercase tracking-[0.02em] text-muted-foreground">Notes</span>
+                  <Button
+                    class="h-auto rounded-sm px-1.5 py-px text-ui-meta font-normal text-muted-foreground [&_svg:not([class*='size-'])]:size-3"
+                    variant="outline"
+                    type="button"
+                    onclick={() => (notesOpen = false)}
+                    aria-label="Collapse notes"
+                  >
+                    <Icon icon={iconClose} size={12} />
+                  </Button>
+                </div>
+                {#if notes === null}
+                  <p class="m-0 text-ui-meta text-muted-foreground" role="status">Loading notes…</p>
+                {:else if notes.length === 0}
+                  <p class="m-0 mb-1 text-ui-meta text-muted-foreground">No notes on this commit.</p>
+                {:else}
+                  {#each notes as note (note.ref)}
+                    <div class="note mb-1 rounded-sm border border-border bg-muted p-1.5">
+                      <div class="note-head flex items-center gap-1.5">
+                        <Hint label={`Notes ref: ${note.ref}`}>
+                          {#snippet child({ props })}
+                            <span {...props} class="min-w-0 flex-1 truncate font-mono text-ui-tiny text-muted-foreground">{note.ref}</span>
+                          {/snippet}
+                        </Hint>
+                        <Button
+                          class="h-auto rounded-sm px-1.5 py-px text-ui-meta font-normal text-destructive"
+                          variant="outline"
+                          type="button"
+                          disabled={noteBusy}
+                          onclick={() => void onNoteRemove(note)}
+                          aria-label={`Remove note under ${note.ref}`}
+                        >
+                          Remove
+                        </Button>
+                      </div>
+                      <pre class="m-0 mt-1 whitespace-pre-wrap font-mono text-ui-meta text-foreground [overflow-wrap:anywhere]">{note.text}</pre>
+                    </div>
+                  {/each}
+                {/if}
+                <Textarea
+                  class="h-auto min-h-0 w-full resize-y rounded-sm border border-border bg-background px-2 py-1 font-mono text-ui-meta focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring md:text-xs"
+                  rows={2}
+                  bind:value={noteDraft}
+                  placeholder="Add a note (git notes)…"
+                  aria-label="New note text"
+                  spellcheck="false"
+                ></Textarea>
+                <Button
+                  class="mt-1 h-auto rounded-full px-2.5 py-0.5 text-ui-meta font-normal"
+                  variant="secondary"
+                  type="button"
+                  disabled={noteBusy || noteDraft.trim() === ""}
+                  onclick={() => void onNoteAdd()}
+                >
+                  {noteBusy ? "Adding…" : "Add note"}
+                </Button>
+              {:else}
+                <button
+                  class="notes-toggle cursor-pointer border-0 bg-transparent p-0 text-ui-micro text-muted-foreground hover:text-foreground"
+                  type="button"
+                  onclick={() => (notesOpen = true)}
+                >
+                  Notes{notes !== null && notes.length > 0 ? ` (${notes.length})` : ""}…
+                </button>
+              {/if}
+            </div>
           </aside>
           {/if}
             {/snippet}

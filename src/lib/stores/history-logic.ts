@@ -53,6 +53,17 @@ export const EMPTY_FILTER: HistoryFilterFields = {
 };
 
 /**
+ * Splits the path filter field into its pathspec list — comma and/or
+ * newline separated entries, trimmed, empties dropped. `""` → `[]`.
+ */
+export function parsePathsFilter(raw: string): string[] {
+  return raw
+    .split(/[\n,]/)
+    .map((part) => part.trim())
+    .filter((part) => part !== "");
+}
+
+/**
  * Serializes filter-bar fields into the exact backend `LogFilter` shape.
  * `refs` carries the branch scope (empty = all refs + HEAD, `["HEAD"]` =
  * the checked-out branch, `[name]` = that branch only); `follow` marks a
@@ -60,6 +71,12 @@ export const EMPTY_FILTER: HistoryFilterFields = {
  * `pickaxe_regex` is only emitted when set (keeps the serialized default
  * shape identical to the M10 contract, and `-S`/`-G` may both be present —
  * the backend intersects them).
+ *
+ * The path field accepts a comma/newline separated list (multi-pathspec
+ * walk). A SINGLE path keeps the legacy `path` field byte-identical — that
+ * is how rename-following (`follow`) keeps working. Two or more paths go
+ * out as `paths` (`path` cleared): the backend ignores `follow` for a
+ * multi-path walk — there is no single name to shift through renames.
  */
 export function toLogFilter(
   fields: HistoryFilterFields,
@@ -68,11 +85,14 @@ export function toLogFilter(
   const pickaxeRegex = fields.pickaxeRegex?.trim() || null;
   // File-history walks (follow) are single-path and never branch-scoped.
   const scopeRef = opts.follow ? "" : fields.scopeRef?.trim() || "";
+  const paths = parsePathsFilter(fields.path);
+  const singlePath = paths.length === 1 ? (paths[0] as string) : null;
   return {
     text: fields.text.trim() || null,
     regex: fields.regex,
     author: fields.author.trim() || null,
-    path: fields.path.trim() || null,
+    path: singlePath,
+    ...(paths.length > 1 ? { paths } : {}),
     after_unix: dayToUnixSeconds(fields.after, "start"),
     before_unix: dayToUnixSeconds(fields.before, "end"),
     refs: scopeRef === "" ? [] : [scopeRef],

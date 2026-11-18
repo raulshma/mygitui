@@ -70,6 +70,7 @@
   import { orderForCherryPick } from "$lib/components/rebase/plannerModel";
   import { HistoryStore } from "$lib/stores/history.svelte";
   import { createHistoryScrollSync } from "$lib/stores/historyScrollSync";
+  import { parsePathsFilter } from "$lib/stores/history-logic";
   import { tabStore } from "$lib/stores/tabs.svelte";
   import {
     loadHistoryPrefs,
@@ -732,6 +733,9 @@
   // -- derived ----------------------------------------------------------------------
 
   const commits = $derived(store.flat.commits);
+  /** How many pathspecs the path filter currently carries (2+ shows the
+   *  "rename-following off" hint; the backend ignores `follow` there). */
+  const pathFilterCount = $derived(parsePathsFilter(store.filter.path).length);
   // `total`/`visible` read THROUGH the flat wrapper, not through `commits`:
   // the wrapper object changes identity on every release, while the inner
   // array does not (LogIndex mutates in place) — a derived re-exposing the
@@ -1578,11 +1582,23 @@
       />
       <Input
         class="f h-auto w-48 flex-none rounded-sm bg-card dark:bg-card px-2 py-0.5 text-xs md:text-xs placeholder:text-muted-foreground/80"
-        placeholder="Path"
-        aria-label="Filter by path"
+        placeholder="Path (comma-separates)"
+        aria-label="Filter by path (comma or newline separated for multiple)"
         value={store.filter.path}
         oninput={(e) => store.setFilter({ path: e.currentTarget.value })}
       />
+      {#if pathFilterCount > 1}
+        <!-- Multi-pathspec walk: the backend ignores rename-following there
+             (no single name to shift through renames) — say so up front. -->
+        <Hint label="Rename-following is off while filtering multiple paths (a multi-path walk has no single name to follow through renames)">
+          {#snippet child({ props })}
+            <span
+              {...props}
+              class="inline-flex flex-none items-center rounded-full bg-muted px-1.5 py-0 text-ui-micro leading-[1.4] text-muted-foreground"
+            >{pathFilterCount} paths · follow off</span>
+          {/snippet}
+        </Hint>
+      {/if}
       <label class="date flex items-center gap-1 text-muted-foreground">
         <span class="dl">after</span>
         <Input

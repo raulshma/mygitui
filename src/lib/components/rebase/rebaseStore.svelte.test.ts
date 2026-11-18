@@ -8,7 +8,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { conflicts, rebaseAbort, rebaseContinue, rebaseState } from "$lib/ipc/client";
+import { conflicts, rebaseAbort, rebaseContinue, rebaseSkip, rebaseState } from "$lib/ipc/client";
 import type { ConflictFile, RebaseState, RebaseStep } from "$lib/ipc/types";
 import { dismissToast, getToasts } from "$lib/toast";
 import { REBASE_POLL_MS, RebaseMonitor } from "./rebaseStore.svelte";
@@ -17,11 +17,13 @@ vi.mock("$lib/ipc/client", () => ({
   rebaseState: vi.fn(),
   rebaseContinue: vi.fn(),
   rebaseAbort: vi.fn(),
+  rebaseSkip: vi.fn(),
   conflicts: vi.fn(),
 }));
 
 const mockRebaseState = vi.mocked(rebaseState);
 const mockRebaseContinue = vi.mocked(rebaseContinue);
+const mockRebaseSkip = vi.mocked(rebaseSkip);
 const mockRebaseAbort = vi.mocked(rebaseAbort);
 const mockConflicts = vi.mocked(conflicts);
 
@@ -470,5 +472,85 @@ describe("RebaseMonitor continue/abort", () => {
     expect(monitor.state?.paused_for_edit).toBe(true); // summary still visible
     expect(monitor.paused).toBe(false); // but Continue is off
     expect(monitor.pausedForEdit).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Skip delegation (rebase_skip — Phase 5)
+// ---------------------------------------------------------------------------
+
+describe("RebaseMonitor skip", () => {
+  it("skippable is true only while paused for conflict or exec", async () => {
+    mockRebaseState.mockResolvedValue(
+      state({ active: true, paused_for_conflict: true }),
+    );
+    mockConflicts.mockResolvedValue(CONFLICT_FILES);
+    const monitor = new RebaseMonitor();
+    monitor.start("repo-1");
+    await flush();
+    expect(monitor.skippable).toBe(true);
+    monitor.stop();
+
+    mockRebaseState.mockResolvedValue(
+      state({ active: true, paused_for_exec: true }),
+    );
+    const execMonitor = new RebaseMonitor();
+    execMonitor.start("repo-1");
+    await flush();
+    expect(execMonitor.skippable).toBe(true);
+    execMonitor.stop();
+
+    // Edit pause and a plain running rebase are not skippable.
+    mockRebaseState.mockResolvedValue(
+      state({ active: true, paused_for_edit: true }),
+    );
+    const editMonitor = new RebaseMonitor();
+    editMonitor.start("repo-1");
+    await flush();
+    expect(editMonitor.skippable).toBe(false);
+    editMonitor.stop();
+  });
+
+  it("skipRebase delegates to rebase_skip and applies the returned state", async () => {
+    mockRebaseState.mockResolvedValue(
+      state({ active: true, paused_for_conflict: true }),
+    );
+    mockConflicts.mockResolvedValue(CONFLICT_FILES);
+    const monitor = new RebaseMonitor();
+    monitor.start("repo-1");
+    await flush();
+
+    const next = state({ active: true, plan: [step(SHA_A)], current: 1, rewritten: [[SHA_A, SHA_A]] });
+    mockRebaseSkip.mockResolvedValue(next);
+    mockConflicts.mockResolvedValue([]);
+
+    const result = await monitor.skipRebase();
+
+    expect(mockRebaseSkip).toHaveBeenCalledWith("repo-1");
+    expect(result).toEqual(next);
+    expect(monitor.state).toEqual(next);
+    expect(monitor.conflictCount).toBe(0);
+    monitor.stop();
+  });
+
+  it("skipRebase toasts and returns null on failure (never throws)", async () => {
+    mockRebaseState.mockResolvedValue(
+      state({ active: true, paused_for_exec: true }),
+    );
+    const monitor = new RebaseMonitor();
+    monitor.start("repo-1");
+    await flush();
+    mockRebaseSkip.mockRejectedValue(new Error("rebase is not paused for skip"));
+
+    await expect(monitor.skipRebase()).resolves.toBeNull();
+    expect(monitor.error).toBe("rebase is not paused for skip");
+    expect(getToasts().some((t) => t.kind === "error" && t.message.includes("rebase is not paused for skip"))).toBe(true);
+    monitor.stop();
+  });
+
+  it("skipRebase is a no-op without a bound repo", async () => {
+    const monitor = new RebaseMonitor();
+    await expect(monitor.skipRebase()).resolves.toBeNull();
+    expect(mockRebaseSkip).not.toHaveBeenCalled();
   });
 });

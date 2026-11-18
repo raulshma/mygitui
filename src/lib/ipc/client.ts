@@ -29,6 +29,7 @@ import type {
   ActionOutputEvent,
   AuthRequest,
   BlameLine,
+  BlameQuery,
   BisectLogEntry,
   BisectMark,
   BisectState,
@@ -65,6 +66,7 @@ import type {
   HookInfo,
   HostKeyRequestEvent,
   KnownHostKey,
+  LfsLock,
   LfsStatus,
   LogFilter,
   LogPage,
@@ -74,6 +76,7 @@ import type {
   MergetoolResult,
   NetStats,
   NewEntryKind,
+  NoteInfo,
   OpLog,
   OpProgress,
   OpencodeDetection,
@@ -315,14 +318,22 @@ export function repoRefs(repoId: RepoId): Promise<[string, string][]> {
   return call<[string, string][]>("repo_refs", { repo_id: repoId });
 }
 
-/** Line-by-line blame for one file (optionally starting at a commit). */
+/**
+ * Line-by-line blame for one file (optionally starting at a commit).
+ * `query` (ipc/gen/BlameQuery.ts) carries the extended blame options —
+ * `oldest` bound, ignore-whitespace, first-parent, ignore-revs — plus its
+ * own `from`; a `query.from` wins over the standalone `from` argument.
+ * `null`/omitted keeps the request to the legacy shape.
+ */
 export function repoBlame(
   repoId: RepoId,
   path: string,
   from?: string,
+  query?: BlameQuery | null,
 ): Promise<BlameLine[]> {
   const args: Record<string, unknown> = { repo_id: repoId, path };
   if (from !== undefined) args.from = from;
+  if (query !== undefined && query !== null) args.query = query;
   return call<BlameLine[]>("repo_blame", args);
 }
 
@@ -579,6 +590,40 @@ export function lfsStatus(repoId: RepoId): Promise<LfsStatus> {
 /** Runs `git lfs pull|push|install|fetch`. */
 export function lfsRun(repoId: RepoId, subcommand: string): Promise<string> {
   return call<string>("lfs_run", { repo_id: repoId, subcommand });
+}
+
+/** The repo's LFS file locks (`git lfs locks`); requires git-lfs. */
+export function lfsLocks(repoId: RepoId): Promise<LfsLock[]> {
+  return call<LfsLock[]>("lfs_locks", { repo_id: repoId });
+}
+
+/** Locks one path on the LFS server; resolves with git-lfs's output line. */
+export function lfsLock(repoId: RepoId, path: string): Promise<string> {
+  return call<string>("lfs_lock", { repo_id: repoId, path });
+}
+
+/** Releases one lock (`git lfs unlock <path>`). */
+export function lfsUnlock(repoId: RepoId, path: string): Promise<string> {
+  return call<string>("lfs_unlock", { repo_id: repoId, path });
+}
+
+/**
+ * `git bundle create <out> [<refs>] [--all]` — a single-file pack of the
+ * selected refs. `refs` empty + `all=false` bundles every local ref (the
+ * backend's `--all`-equivalent default); `all=true` forces `--all`.
+ */
+export function repoBundle(
+  repoId: RepoId,
+  outPath: string,
+  refs: string[],
+  all: boolean,
+): Promise<void> {
+  return call<void>("repo_bundle", {
+    repo_id: repoId,
+    out_path: outPath,
+    refs,
+    all,
+  });
 }
 
 /** Blobless (partial) clone via the git CLI (`--filter=blob:none`). */
@@ -1011,6 +1056,16 @@ export async function rebaseAbort(repoId: string): Promise<void> {
   return invokeTauri("rebase_abort", { repo_id: repoId });
 }
 
+/**
+ * Skips the rebase step the backend is paused on (`rebase_skip`): the
+ * conflicted commit is dropped entirely, a failed `exec` is advanced past.
+ * The backend errors unless the rebase is paused — gate the action on
+ * `paused_for_conflict`/`paused_for_exec` for sane UX.
+ */
+export async function rebaseSkip(repoId: string): Promise<RebaseState> {
+  return invokeTauri("rebase_skip", { repo_id: repoId });
+}
+
 export async function stashList(repoId: string): Promise<StashInfo[]> {
   return invokeTauri("stash_list", { repo_id: repoId });
 }
@@ -1020,17 +1075,53 @@ export async function stashPush(
   message?: string,
   keepIndex = false,
   includeUntracked = true,
+  paths?: string[] | null,
 ): Promise<void> {
   return invokeTauri("stash_push", {
     repo_id: repoId,
     message: message ?? undefined,
     keep_index: keepIndex,
     include_untracked: includeUntracked,
+    // null = whole worktree (the backend treats None and Some([]) the same);
+    // a non-empty list stashes only those paths.
+    paths: paths && paths.length > 0 ? paths : undefined,
   });
 }
 
-export async function stashApply(repoId: string, index: number, pop = false): Promise<void> {
-  return invokeTauri("stash_apply", { repo_id: repoId, index, pop });
+/** File diffs of one stash entry (base commit vs stash commit). */
+export async function stashShow(repoId: string, index: number): Promise<FileDiff[]> {
+  return invokeTauri("stash_show", { repo_id: repoId, index });
+}
+
+/**
+ * Renames a stash entry's message. Only `stash@{0}` can be renamed (the
+ * backend rejects deeper entries — surface that error verbatim).
+ */
+export async function stashRename(
+  repoId: string,
+  index: number,
+  message: string,
+): Promise<void> {
+  return invokeTauri("stash_rename", { repo_id: repoId, index, message });
+}
+
+/**
+ * Applies a stash entry; `pop` also drops it after a clean apply.
+ * `restoreIndex` is `--index` — staged/unstaged boundaries come back too
+ * (only meaningful for stashes created with staged content).
+ */
+export async function stashApply(
+  repoId: string,
+  index: number,
+  pop = false,
+  restoreIndex?: boolean,
+): Promise<void> {
+  return invokeTauri("stash_apply", {
+    repo_id: repoId,
+    index,
+    pop,
+    restore_index: restoreIndex ?? undefined,
+  });
 }
 
 export async function stashDrop(repoId: string, index: number): Promise<void> {
@@ -1050,13 +1141,33 @@ export async function worktreeAdd(
   path: string,
   branch?: string,
   newBranch?: string,
+  fromRemote?: string,
 ): Promise<void> {
   return invokeTauri("worktree_add", {
     repo_id: repoId,
     path,
     branch: branch ?? undefined,
     new_branch: newBranch ?? undefined,
+    from_remote: fromRemote ?? undefined,
   });
+}
+
+/** `git worktree lock <path|name>` — blocks prune/remove of a worktree. */
+export async function worktreeLock(
+  repoId: string,
+  path: string,
+  reason?: string,
+): Promise<void> {
+  return invokeTauri("worktree_lock", {
+    repo_id: repoId,
+    path,
+    reason: reason && reason !== "" ? reason : undefined,
+  });
+}
+
+/** `git worktree unlock <path|name>`. */
+export async function worktreeUnlock(repoId: string, path: string): Promise<void> {
+  return invokeTauri("worktree_unlock", { repo_id: repoId, path });
 }
 
 export async function worktreeRemove(repoId: string, name: string, force = false): Promise<void> {
@@ -1285,6 +1396,32 @@ export function submoduleSync(repoId: string, path?: string): Promise<void> {
     repo_id: repoId,
     path: path ?? undefined,
   });
+}
+
+/**
+ * `git submodule add <url> <path>` (optional module `name`); the caller is
+ * responsible for URL sanity (the backend re-checks option-shaped values).
+ */
+export function submoduleAdd(
+  repoId: string,
+  url: string,
+  path: string,
+  name?: string,
+): Promise<void> {
+  return call<void>("submodule_add", {
+    repo_id: repoId,
+    url,
+    path,
+    name: name && name !== "" ? name : undefined,
+  });
+}
+
+/**
+ * `git submodule deinit <path>` — clears the module's working tree of its
+ * contents (uninitialized submodule). NOT undoable via checkpoints.
+ */
+export function submoduleDeinit(repoId: string, path: string): Promise<void> {
+  return call<void>("submodule_deinit", { repo_id: repoId, path });
 }
 
 /** Appends one pattern to the repo-root `.gitignore` (creates if missing). */
@@ -1868,6 +2005,41 @@ export function branchTrashRestore(
 /** `git worktree prune` — returns the number of pruned worktrees. */
 export function worktreePrune(repoId: RepoId): Promise<number> {
   return call<number>("worktree_prune", { repo_id: repoId });
+}
+
+// ---------- M12/Phase 5: git notes ----------
+
+/** The notes attached to one commit (one per notes ref). */
+export function commitNotes(repoId: RepoId, sha: string): Promise<NoteInfo[]> {
+  return call<NoteInfo[]>("commit_notes", { repo_id: repoId, sha });
+}
+
+/** Attaches a note to a commit (`noteRef` omitted = `refs/notes/commits`). */
+export function noteAdd(
+  repoId: RepoId,
+  sha: string,
+  text: string,
+  noteRef?: string,
+): Promise<void> {
+  return call<void>("note_add", {
+    repo_id: repoId,
+    sha,
+    text,
+    note_ref: noteRef && noteRef !== "" ? noteRef : undefined,
+  });
+}
+
+/** Removes a commit's note under `noteRef` (omitted = the default ref). */
+export function noteRemove(
+  repoId: RepoId,
+  sha: string,
+  noteRef?: string,
+): Promise<void> {
+  return call<void>("note_remove", {
+    repo_id: repoId,
+    sha,
+    note_ref: noteRef && noteRef !== "" ? noteRef : undefined,
+  });
 }
 
 /** Recorded mark history for a live bisect, oldest first. */

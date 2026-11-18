@@ -13,18 +13,23 @@
   import {
     archiveSpec,
     hooksList,
+    lfsLock,
+    lfsLocks,
     lfsRun,
     lfsStatus,
+    lfsUnlock,
     maintenanceRun,
     pickSaveFile,
     readFile,
+    repoBundle,
     repoHealth,
+    repoRefs,
     sparseApply,
     sparseInfo,
     statFile,
     writeFile,
   } from "$lib/ipc/client";
-  import type { HookInfo, LfsStatus, RepoHealth, SparseInfo } from "$lib/ipc/types";
+  import type { HookInfo, LfsLock, LfsStatus, RepoHealth, SparseInfo } from "$lib/ipc/types";
   import { toast } from "$lib/toast";
   import { formatRelativeTime } from "$lib/git/format";
   import { Button } from "$lib/components/ui/button/index.js";
@@ -33,6 +38,7 @@
   import { isTauri } from "$lib/entry/dragdrop";
   import { openPath } from "@tauri-apps/plugin-opener";
   import { tabStore } from "$lib/stores/tabs.svelte";
+  import DialogShell from "$lib/components/safety/DialogShell.svelte";
   import { hookPathFor, hookRowsFor, hooksSummary } from "./hooksModel";
   import {
     parseGitAttributes,
@@ -64,6 +70,17 @@
   let archiveFormat = $state<"zip" | "tar" | "tar.gz">("zip");
   let archiving = $state(false);
 
+  // Bundle export (Phase 5 `repo_bundle`): all-refs checkbox + optional
+  // ref picker; destination via the same save-file picker as archive.
+  let bundleOpen = $state(false);
+  let bundleAll = $state(true);
+  /** Full ref list ([name, sha] pairs), fetched once per dialog open. */
+  let bundleRefList = $state<[string, string][]>([]);
+  let bundleLoadingRefs = $state(false);
+  /** Refs ticked in the picker (used when `bundleAll` is off). */
+  let bundleSelected = $state<string[]>([]);
+  let bundling = $state(false);
+
   // Sparse
   let sparse = $state<SparseInfo | null>(null);
   let sparseText = $state("");
@@ -76,6 +93,14 @@
   let lfsBusy = $state(false);
   /** The LFS read failed (muted error line + Retry in its section). */
   let lfsError = $state<string | null>(null);
+
+  // LFS file locks (`git lfs locks`; Phase 5). Best-effort like the rest of
+  // the LFS section — the sub-section stays hidden when the list is null.
+  let lfsLockList = $state<LfsLock[] | null>(null);
+  let lfsLockError = $state<string | null>(null);
+  /** Path to lock: free text with the tracked patterns as suggestions. */
+  let lfsLockPathInput = $state("");
+  let lfsLockBusy = $state(false);
 
   // Hooks (`.git/hooks` has no backend read/write; the section lists
   // kind/present/executable and derives each hook file's path for
@@ -117,6 +142,10 @@
     sparse = null;
     sparseText = "";
     lfs = null;
+    lfsLockList = [];
+    lfsLockError = null;
+    lfsLockPathInput = "";
+    bundleOpen = false;
     sparseError = null;
     lfsError = null;
     hooks = null;
@@ -160,6 +189,7 @@
         if (id !== repoId) return;
         lfsError = null;
         lfs = status;
+        if (status.installed) void loadLfsLocks(id);
       })
       .catch((err) => {
         if (id !== repoId) return;
@@ -322,6 +352,60 @@
     }
   }
 
+  // -- Bundle export ----------------------------------------------------------
+
+  /** Opens the dialog and (re)fetches the ref list for the picker. */
+  function openBundle(): void {
+    bundleOpen = true;
+    bundleAll = true;
+    bundleSelected = [];
+    bundleRefList = [];
+    bundleLoadingRefs = true;
+    repoRefs(repoId)
+      .then((refs) => {
+        bundleRefList = refs;
+        bundleLoadingRefs = false;
+      })
+      .catch(() => {
+        // The picker degrades to empty — all-refs export still works.
+        bundleRefList = [];
+        bundleLoadingRefs = false;
+      });
+  }
+
+  /** `<repo-name>-2026-11-18.bundle` — the save-dialog default name. */
+  const bundleDefaultName = $derived.by(() => {
+    const name = tabStore.tabs.find((tab) => tab.id === repoId)?.name ?? "repo";
+    const day = new Date().toISOString().slice(0, 10);
+    return `${name}-${day}.bundle`;
+  });
+
+  async function onBundleExport(): Promise<void> {
+    if (bundling) return;
+    const destination = await pickSaveFile("Export bundle", bundleDefaultName, [
+      { name: "Git bundle", extensions: ["bundle"] },
+    ]);
+    if (!destination) return;
+    bundling = true;
+    try {
+      await repoBundle(
+        repoId,
+        destination,
+        bundleAll ? [] : bundleSelected,
+        bundleAll,
+      );
+      bundleOpen = false;
+      toast(`Bundle written to ${destination}`, { kind: "success" });
+    } catch (err) {
+      toast(
+        `Bundle export failed: ${err instanceof Error ? err.message : String(err)}`,
+        { kind: "error" },
+      );
+    } finally {
+      bundling = false;
+    }
+  }
+
   async function onSparseApply(add: boolean): Promise<void> {
     if (sparseBusy) return;
     const patterns = sparseText
@@ -363,6 +447,55 @@
       );
     } finally {
       lfsBusy = false;
+    }
+  }
+
+  /** Best-effort lock list (needs git-lfs + a reachable LFS server). */
+  async function loadLfsLocks(id: string): Promise<void> {
+    try {
+      const locks = await lfsLocks(id);
+      if (id !== repoId) return;
+      lfsLockError = null;
+      lfsLockList = locks;
+    } catch (err) {
+      if (id !== repoId) return;
+      lfsLockError = err instanceof Error ? err.message : String(err);
+    }
+  }
+
+  async function onLfsLock(): Promise<void> {
+    const path = lfsLockPathInput.trim();
+    if (!path || lfsLockBusy) return;
+    lfsLockBusy = true;
+    try {
+      await lfsLock(repoId, path);
+      toast(`Locked ${path}`, { kind: "success" });
+      lfsLockPathInput = "";
+      await loadLfsLocks(repoId);
+    } catch (err) {
+      toast(
+        `Lock failed: ${err instanceof Error ? err.message : String(err)}`,
+        { kind: "error" },
+      );
+    } finally {
+      lfsLockBusy = false;
+    }
+  }
+
+  async function onLfsUnlock(path: string): Promise<void> {
+    if (lfsLockBusy) return;
+    lfsLockBusy = true;
+    try {
+      await lfsUnlock(repoId, path);
+      toast(`Unlocked ${path}`, { kind: "success" });
+      await loadLfsLocks(repoId);
+    } catch (err) {
+      toast(
+        `Unlock failed: ${err instanceof Error ? err.message : String(err)}`,
+        { kind: "error" },
+      );
+    } finally {
+      lfsLockBusy = false;
     }
   }
 
@@ -578,6 +711,23 @@
       </div>
     </section>
 
+    <section class="group border-t border-border px-2 py-1.5" aria-label="Bundle export">
+      <h2 class="head mb-1.5 text-xs font-semibold uppercase tracking-[0.05em] text-muted-foreground">Bundle</h2>
+      <div class="row flex items-center gap-1.5">
+        <p class="state m-0 min-w-0 flex-1 text-xs text-muted-foreground">
+          One-file pack of the selected refs (`git bundle create`) — clone or fetch from it later.
+        </p>
+        <Button
+          class="h-auto rounded-full px-3 py-px text-ui-meta"
+          type="button"
+          disabled={bundling}
+          onclick={openBundle}
+        >
+          {bundling ? "Exporting…" : "Export…"}
+        </Button>
+      </div>
+    </section>
+
     <section class="group border-t border-border px-2 py-1.5" aria-label="Sparse checkout">
       <h2 class="head mb-1.5 text-xs font-semibold uppercase tracking-[0.05em] text-muted-foreground">Sparse checkout (cone mode)</h2>
       {#if sparseError}
@@ -647,6 +797,64 @@
           <Button class="h-auto rounded px-2 py-px text-ui-meta font-normal text-muted-foreground" variant="outline" type="button" disabled={lfsBusy} onclick={() => void onLfs("push")}>Push</Button>
           <Button class="h-auto rounded px-2 py-px text-ui-meta font-normal text-muted-foreground" variant="outline" type="button" disabled={lfsBusy} onclick={() => void onLfs("fetch")}>Fetch</Button>
         </div>
+        <!-- Locks sub-section (Phase 5 `git lfs locks`): list + lock/unlock.
+             Hidden until the first list read lands (best-effort). -->
+        {#if lfsLockError}
+          <p class="state mb-1.5 mt-2 text-ui-tiny text-muted-foreground">
+            Locks unavailable: {lfsLockError}
+          </p>
+        {/if}
+        {#if lfsLockList}
+          <div class="lfs-locks mt-2" aria-label="LFS file locks">
+            <p class="state mb-1 text-ui-micro font-semibold uppercase tracking-[0.05em] text-muted-foreground">
+              Locks {lfsLockList.length > 0 ? `(${lfsLockList.length})` : ""}
+            </p>
+            {#if lfsLockList.length === 0}
+              <p class="state mb-1 text-xs text-muted-foreground">No locks held on the LFS server.</p>
+            {:else}
+              <ul class="m-0 mb-1 flex list-none flex-col gap-0.5 p-0" role="list" aria-label="LFS locks">
+                {#each lfsLockList as lock (lock.id)}
+                  <li class="flex min-w-0 items-center gap-2 rounded border border-transparent px-1 py-0.5 hover:border-border">
+                    <span class="min-w-0 flex-1 truncate font-mono text-ui-meta text-foreground" title={lock.path}>{lock.path}</span>
+                    <span class="shrink-0 text-ui-tiny text-muted-foreground">{lock.owner || "unknown owner"}</span>
+                    <Button
+                      class="h-auto rounded px-2 py-px text-ui-tiny font-normal text-muted-foreground"
+                      variant="outline"
+                      type="button"
+                      disabled={lfsLockBusy}
+                      title="Release this lock (git lfs unlock)"
+                      onclick={() => void onLfsUnlock(lock.path)}
+                    >
+                      Unlock
+                    </Button>
+                  </li>
+                {/each}
+              </ul>
+            {/if}
+            <div class="lock-form flex items-center gap-1.5">
+              <input
+                class="min-w-20 flex-1 rounded border border-border bg-background px-[7px] py-px font-mono text-xs text-foreground"
+                list="lfs-tracked-patterns"
+                bind:value={lfsLockPathInput}
+                placeholder="path to lock, e.g. assets/model.psd"
+                aria-label="LFS path to lock"
+              />
+              <datalist id="lfs-tracked-patterns">
+                {#each lfs.tracked_patterns as pattern (pattern)}
+                  <option value={pattern}></option>
+                {/each}
+              </datalist>
+              <Button
+                class="h-auto rounded-full px-3 py-px text-ui-meta"
+                type="button"
+                disabled={lfsLockBusy || lfsLockPathInput.trim() === ""}
+                onclick={() => void onLfsLock()}
+              >
+                Lock
+              </Button>
+            </div>
+          </div>
+        {/if}
       {:else if lfs}
         <p class="state warn mb-1.5 text-xs text-amber-600 dark:text-amber-400">
           git lfs is not installed — install it from <code class="font-mono">git-lfs.com</code>, then re-run setup here.
@@ -766,3 +974,68 @@
     <p class="state mb-1.5 text-xs text-muted-foreground">Loading health…</p>
   {/if}
 </aside>
+
+{#if bundleOpen}
+  <!-- Bundle export dialog: all-refs checkbox + optional ref picker; the
+       save-file flow reuses pickSaveFile like the archive export. -->
+  <DialogShell
+    bind:open={
+      () => bundleOpen,
+      (v) => {
+        if (!v) bundleOpen = false;
+      }
+    }
+    labelledBy="bundle-title"
+    width="26rem"
+    onsubmit={() => void onBundleExport()}
+  >
+    {#snippet children()}
+      <h2 id="bundle-title" class="sdlg-title">Export bundle</h2>
+      <label class="mb-2 flex cursor-pointer items-center gap-1.5 text-xs">
+        <input type="checkbox" class="m-0 accent-primary" data-autofocus bind:checked={bundleAll} />
+        <span>all refs (--all)</span>
+      </label>
+      {#if !bundleAll}
+        <div class="mb-2 max-h-48 overflow-y-auto rounded border border-border bg-background px-2 py-1">
+          {#if bundleLoadingRefs}
+            <p class="m-0 py-1 text-xs text-muted-foreground">Loading refs…</p>
+          {:else if bundleRefList.length === 0}
+            <p class="m-0 py-1 text-xs text-muted-foreground">No refs found.</p>
+          {:else}
+            {#each bundleRefList as [ref] (ref)}
+              <label class="flex cursor-pointer items-center gap-1.5 py-0.5 text-xs">
+                <input
+                  type="checkbox"
+                  class="m-0 accent-primary"
+                  checked={bundleSelected.includes(ref)}
+                  onchange={(e) => {
+                    const on = e.currentTarget.checked;
+                    bundleSelected = on
+                      ? [...bundleSelected, ref]
+                      : bundleSelected.filter((r) => r !== ref);
+                  }}
+                />
+                <span class="min-w-0 truncate font-mono">{ref}</span>
+              </label>
+            {/each}
+          {/if}
+        </div>
+      {/if}
+      <p class="sdlg-message mb-0">
+        Saved via the file picker as a single <code class="font-mono">.bundle</code> file.
+      </p>
+    {/snippet}
+    {#snippet actions()}
+      <button class="sdlg-secondary" type="button" onclick={() => (bundleOpen = false)}>
+        Cancel
+      </button>
+      <button
+        class="sdlg-primary"
+        type="submit"
+        disabled={bundling || (!bundleAll && bundleSelected.length === 0)}
+      >
+        {bundling ? "Exporting…" : "Export"}
+      </button>
+    {/snippet}
+  </DialogShell>
+{/if}

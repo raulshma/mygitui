@@ -14,12 +14,14 @@
    * worktree as a repository tab.
    */
   import { describeError } from "$lib/errors";
-  import { submoduleSync, submoduleUpdate, submodules } from "$lib/ipc/client";
+  import { submoduleAdd, submoduleDeinit, submoduleSync, submoduleUpdate, submodules } from "$lib/ipc/client";
   import type { SubmoduleInfo } from "$lib/ipc/types";
   import { openTab } from "$lib/stores/tabs.svelte";
   import { toast } from "$lib/toast";
+  import ConfirmDialog from "$lib/components/safety/ConfirmDialog.svelte";
   import { Button } from "$lib/components/ui/button/index.js";
   import { Hint } from "$lib/components/ui/tooltip/index.js";
+  import { Input } from "$lib/components/ui/input/index.js";
   import EmptyState from "../layout/EmptyState.svelte";
   import Icon from "$lib/components/icons/Icon.svelte";
   import { splitPath, submoduleDisplay } from "./statusModel";
@@ -43,6 +45,29 @@
   const iconOpen = $derived(appIcon("open-in-new")!);
   const iconModule = $derived(appIcon("folder-special")!);
   const iconCheck = $derived(appIcon("check-circle")!);
+  const iconAdd = $derived(appIcon("add")!);
+  const iconDeinit = $derived(appIcon("delete-sweep")!);
+
+  // "Add submodule" inline form (Phase 5 `submodule_add`): url + path +
+  // optional module name; client-side URL sanity (no leading dash — an
+  // option-shaped value would be parsed as a git flag backend-side).
+  let formOpen = $state(false);
+  let addUrl = $state("");
+  let addPath = $state("");
+  let addName = $state("");
+
+  /** True when a value is empty or starts with "-" (option-shaped). */
+  function optionShaped(value: string): boolean {
+    const trimmed = value.trim();
+    return trimmed === "" || trimmed.startsWith("-");
+  }
+
+  /** All three fields non-empty, sane, path without a leading dash. */
+  const addValid = $derived(
+    !optionShaped(addUrl) &&
+      !optionShaped(addPath) &&
+      (addName.trim() === "" || !optionShaped(addName)),
+  );
 
   let list = $state<SubmoduleInfo[]>([]);
   let loading = $state(false);
@@ -157,6 +182,54 @@
       fail("Open", err);
     }
   }
+
+  // -- add submodule (Phase 5) --------------------------------------------------
+
+  async function onAdd(): Promise<void> {
+    if (!addValid || busy) return;
+    busy = true;
+    try {
+      await submoduleAdd(
+        repoId,
+        addUrl.trim(),
+        addPath.trim(),
+        addName.trim() || undefined,
+      );
+      toast(`Added submodule ${addPath.trim()}`, { kind: "success" });
+      addUrl = "";
+      addPath = "";
+      addName = "";
+      formOpen = false;
+      void reload();
+      onMutated?.();
+    } catch (err) {
+      fail("Add submodule", err);
+    } finally {
+      busy = false;
+    }
+  }
+
+  // -- deinit (Phase 5) ---------------------------------------------------------
+
+  /** Submodule pending a deinit confirmation. */
+  let deinitCandidate = $state<SubmoduleInfo | null>(null);
+
+  async function onDeinitConfirmed(): Promise<void> {
+    const info = deinitCandidate;
+    if (!info || busy) return;
+    deinitCandidate = null;
+    busy = true;
+    try {
+      await submoduleDeinit(repoId, info.path);
+      toast(`Deinitialized submodule ${info.path}`, { kind: "success" });
+      void reload();
+      onMutated?.();
+    } catch (err) {
+      fail("Submodule deinit", err);
+    } finally {
+      busy = false;
+    }
+  }
 </script>
 
 <aside class="submodule-panel flex min-h-0 flex-col bg-card text-ui-base text-foreground" aria-label="Submodules">
@@ -193,6 +266,19 @@
       {/snippet}
     </Hint>
     <Button
+      class={`relative text-muted-foreground after:absolute after:-inset-1 after:content-[''] hover:bg-accent hover:text-accent-foreground ${loading ? "[&_svg]:animate-spin" : ""} aria-pressed:bg-accent aria-pressed:text-accent-foreground [&_svg:not([class*='size-'])]:size-4`}
+      variant="ghost"
+      size="icon-xs"
+      type="button"
+      aria-label={formOpen ? "Close add-submodule form" : "Add submodule"}
+      aria-pressed={formOpen}
+      title={formOpen ? "Close the add-submodule form" : "Add a submodule"}
+      disabled={busy}
+      onclick={() => (formOpen = !formOpen)}
+    >
+      <Icon icon={iconAdd} size={16} />
+    </Button>
+    <Button
       class={`relative text-muted-foreground after:absolute after:-inset-1 after:content-[''] hover:bg-accent hover:text-accent-foreground ${loading ? "[&_svg]:animate-spin" : ""} [&_svg:not([class*='size-'])]:size-4`}
       variant="ghost"
       size="icon-xs"
@@ -205,6 +291,53 @@
       <Icon icon={iconRefresh} size={16} />
     </Button>
   </div>
+
+  {#if formOpen}
+    <!-- Add-submodule form: url + path + optional name. Client-side URL
+         sanity (no leading dash) keeps option-shaped values off the wire. -->
+    <form
+      class="add-form flex flex-col gap-1.5 border-b border-border bg-muted/50 px-1.5 py-1.5"
+      aria-label="Add submodule"
+      onsubmit={(e) => {
+        e.preventDefault();
+        void onAdd();
+      }}
+    >
+      <Input
+        class="h-auto w-full rounded px-2 py-0.5 font-mono text-ui-meta"
+        type="text"
+        placeholder="repository URL"
+        aria-label="Submodule repository URL"
+        bind:value={addUrl}
+      />
+      <div class="flex gap-1.5">
+        <Input
+          class="h-auto min-w-0 flex-1 rounded px-2 py-0.5 font-mono text-ui-meta"
+          type="text"
+          placeholder="path, e.g. vendor/lib"
+          aria-label="Submodule path"
+          bind:value={addPath}
+        />
+        <Input
+          class="h-auto w-32 shrink-0 rounded px-2 py-0.5 font-mono text-ui-meta"
+          type="text"
+          placeholder="name (optional)"
+          aria-label="Submodule name (optional)"
+          bind:value={addName}
+        />
+      </div>
+      <div class="flex items-center justify-end gap-1.5">
+        <Button
+          class="h-auto rounded-full px-3 py-0.5 text-ui-meta"
+          type="submit"
+          disabled={busy || !addValid}
+          title={addValid ? "Add the submodule" : "URL and path are required and may not start with a dash"}
+        >
+          Add
+        </Button>
+      </div>
+    </form>
+  {/if}
 
   {#if error}
     <div class="state error flex flex-col items-start gap-1.5 py-4 px-3 text-[var(--app-deleted)]" role="alert">
@@ -285,6 +418,27 @@
                 <Icon icon={iconSync} size={16} />
               </Button>
               {#if info.initialized}
+                <!-- Phase 5 deinit: clears the module's workdir contents
+                     (confirm first — not checkpointed upstream). -->
+                <Hint label="Deinit this submodule (clears its working tree contents)">
+                  {#snippet child({ props })}
+                    <Button
+                      {...props}
+                      class="relative text-destructive after:absolute after:-inset-1 after:content-[''] hover:bg-destructive/10 hover:text-destructive [&_svg:not([class*='size-'])]:size-4"
+                      variant="ghost"
+                      size="icon-xs"
+                      type="button"
+                      aria-label={`Deinit submodule ${info.path}`}
+                      tabindex={-1}
+                      disabled={busy}
+                      onclick={() => (deinitCandidate = info)}
+                    >
+                      <Icon icon={iconDeinit} size={16} />
+                    </Button>
+                  {/snippet}
+                </Hint>
+              {/if}
+              {#if info.initialized}
                 <Hint label="Open this submodule as a tab">
                   {#snippet child({ props })}
                     <Button
@@ -328,3 +482,19 @@
     </ul>
   {/if}
 </aside>
+
+<ConfirmDialog
+  bind:open={
+    () => deinitCandidate !== null,
+    (v) => {
+      if (!v) deinitCandidate = null;
+    }
+  }
+  title={deinitCandidate ? `Deinit submodule “${deinitCandidate.path}”?` : ""}
+  message={deinitCandidate
+    ? `${deinitCandidate.url}\nThe module's working tree contents are removed and it becomes uninitialized (the .gitmodules entry stays). This cannot be undone via the app's checkpoints.`
+    : ""}
+  confirmLabel="Deinit submodule"
+  danger
+  onConfirm={() => void onDeinitConfirmed()}
+/>

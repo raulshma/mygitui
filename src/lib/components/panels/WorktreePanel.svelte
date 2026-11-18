@@ -19,12 +19,15 @@
    */
   import {
     pickFolder,
+    remoteBranches,
     worktreeAdd,
+    worktreeLock,
     worktreePrune,
     worktreeRemove,
     worktrees,
+    worktreeUnlock,
   } from "$lib/ipc/client";
-  import type { BranchInfo, WorktreeInfo } from "$lib/ipc/types";
+  import type { BranchInfo, RemoteBranchInfo, WorktreeInfo } from "$lib/ipc/types";
   import { isSignificant, onRepoChange } from "$lib/events/repoEvents";
   import { branchesFor, invalidateRefs } from "$lib/stores/refs.svelte";
   import { openTab } from "$lib/stores/tabs.svelte";
@@ -61,6 +64,9 @@
   const iconBrowse = $derived(appIcon("folder-open")!);
   const iconOpen = $derived(appIcon("open-in-new")!);
   const iconRemove = $derived(appIcon("delete")!);
+  const iconLock = $derived(appIcon("lock")!);
+  const iconUnlock = $derived(appIcon("lock-open")!);
+  const iconCheck = $derived(appIcon("check")!);
 
   let list = $state<WorktreeInfo[]>([]);
   let allBranches = $state<BranchInfo[]>([]);
@@ -78,10 +84,16 @@
   // Add form
   let formOpen = $state(false);
   let addPath = $state("");
-  /** "existing" = check out an existing branch; "new" = create one. */
-  let addMode = $state<"existing" | "new">("existing");
+  /**
+   * "existing" = check out an existing branch; "new" = create one;
+   * "remote" = create the local branch at a remote-tracking tip (Phase 5
+   * `from_remote` `<remote>/<branch>` shorthand) and put the worktree on it.
+   */
+  let addMode = $state<"existing" | "new" | "remote">("existing");
   let addBranch = $state("");
   let addNewBranch = $state("");
+  /** `<remote>/<name>` picked in the remote-branch mode. */
+  let addRemoteBranch = $state("");
 
   /** Branches safe to check out in a new worktree (not checked out here). */
   const candidates = $derived(worktreeCandidateBranches(allBranches));
@@ -116,6 +128,7 @@
     void repoId;
     formOpen = false;
     removeConfirmFor = null;
+    lockReasonFor = null;
     void reload();
   });
 
@@ -159,7 +172,8 @@
     error = null;
     try {
       // worktrees is panel-specific (uncached); the branch feed for the
-      // add form rides the shared refs cache (module header).
+      // add form rides the shared refs cache (module header). The
+      // remote-branch feed for the "remote" add mode is best-effort.
       const [wt, br] = await Promise.all([worktrees(id), branchesFor(id)]);
       if (id !== repoId) return;
       list = wt;
@@ -175,6 +189,30 @@
       error = err instanceof Error ? err.message : String(err);
     } finally {
       if (id === repoId) loading = false;
+    }
+    loadRemoteBranches(id);
+  }
+
+  // -- remote-branch feed for the "remote" add mode ---------------------------
+
+  let remoteBranchList = $state<RemoteBranchInfo[]>([]);
+
+  /** `<remote>/<name>` specs offered by the remote-branch mode. */
+  const remoteBranchSpecs = $derived(
+    remoteBranchList.map((rb) => `${rb.remote}/${rb.name}`),
+  );
+
+  /** Best-effort feed; the select degrades to an empty list on failure. */
+  async function loadRemoteBranches(id: string): Promise<void> {
+    try {
+      const rbs = await remoteBranches(id);
+      if (id !== repoId) return;
+      remoteBranchList = rbs;
+      if (!remoteBranchSpecs.includes(addRemoteBranch)) {
+        addRemoteBranch = remoteBranchSpecs[0] ?? "";
+      }
+    } catch {
+      if (id === repoId) remoteBranchList = [];
     }
   }
 
@@ -261,13 +299,22 @@
     try {
       if (addMode === "existing") {
         await worktreeAdd(repoId, path, addBranch || undefined);
-      } else {
+      } else if (addMode === "new") {
         const name = addNewBranch.trim();
         if (!name) {
           busy = false;
           return;
         }
         await worktreeAdd(repoId, path, undefined, name);
+      } else {
+        // Remote-branch mode: `<remote>/<name>` spec — the backend creates
+        // the local branch at the tracking tip and puts the worktree on it.
+        const spec = addRemoteBranch.trim();
+        if (!spec) {
+          busy = false;
+          return;
+        }
+        await worktreeAdd(repoId, path, undefined, undefined, spec);
       }
       addPath = "";
       addNewBranch = "";
@@ -275,6 +322,43 @@
       afterMutation("Add worktree", path);
     } catch (err) {
       fail("Add worktree", err);
+    } finally {
+      busy = false;
+    }
+  }
+
+  // -- lock / unlock (Phase 5) -----------------------------------------------
+
+  /** Path of the worktree an inline lock-reason form is open for. */
+  let lockReasonFor = $state<string | null>(null);
+  let lockReason = $state("");
+
+  function onLock(info: WorktreeInfo): void {
+    lockReasonFor = info.path;
+    lockReason = "";
+  }
+
+  async function onLockConfirmed(info: WorktreeInfo): Promise<void> {
+    busy = true;
+    try {
+      await worktreeLock(repoId, info.path, lockReason.trim() || undefined);
+      lockReasonFor = null;
+      lockReason = "";
+      afterMutation("Lock worktree", info.name);
+    } catch (err) {
+      fail("Lock worktree", err);
+    } finally {
+      busy = false;
+    }
+  }
+
+  async function onUnlock(info: WorktreeInfo): Promise<void> {
+    busy = true;
+    try {
+      await worktreeUnlock(repoId, info.path);
+      afterMutation("Unlock worktree", info.name);
+    } catch (err) {
+      fail("Unlock worktree", err);
     } finally {
       busy = false;
     }
@@ -361,7 +445,7 @@
           type="submit"
           aria-label="Create worktree"
           title="Create the linked worktree"
-          disabled={busy || !addPath.trim() || (addMode === "new" && !addNewBranch.trim())}
+          disabled={busy || !addPath.trim() || (addMode === "new" && !addNewBranch.trim()) || (addMode === "remote" && !addRemoteBranch.trim())}
         >
           <Icon icon={iconAdd} size={16} />
         </Button>
@@ -376,6 +460,7 @@
           >
             <option value="existing">existing branch</option>
             <option value="new">new branch</option>
+            <option value="remote">remote branch</option>
           </select>
         </label>
         {#if addMode === "existing"}
@@ -388,6 +473,27 @@
               <option value={branch.name}>{branch.name}</option>
             {/each}
           </select>
+        {:else if addMode === "remote"}
+          <!-- Remote-branch mode: the local branch is created at the
+               tracking tip automatically (`worktree_add` from_remote
+               `<remote>/<branch>`). -->
+          <Hint label="Creates a local branch tracking this remote branch, then checks the worktree out on it">
+            {#snippet child({ props })}
+              <select
+                {...props}
+                class="max-w-56 rounded border border-input bg-background px-2 py-0.5 font-mono text-ui-meta text-foreground focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-1"
+                aria-label="Remote branch for the worktree"
+                bind:value={addRemoteBranch}
+              >
+                {#if remoteBranchSpecs.length === 0}
+                  <option value="">(fetch to discover remote branches)</option>
+                {/if}
+                {#each remoteBranchSpecs as spec (spec)}
+                  <option value={spec}>{spec}</option>
+                {/each}
+              </select>
+            {/snippet}
+          </Hint>
         {:else}
           <input
             class="new-branch min-w-32 flex-1 rounded border border-input bg-background px-2 py-0.5 font-mono text-ui-meta text-foreground focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-1"
@@ -489,6 +595,44 @@
               >
                 <Icon icon={iconOpen} size={16} />
               </Button>
+              {#if info.locked}
+                <!-- Locked worktrees resist prune/remove — unlock here. -->
+                <Hint label="Unlock this worktree (allows prune / remove)">
+                  {#snippet child({ props })}
+                    <Button
+                      {...props}
+                      class="relative text-muted-foreground after:absolute after:-inset-1 after:content-[''] hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-4"
+                      variant="ghost"
+                      size="icon-xs"
+                      type="button"
+                      aria-label={`Unlock worktree ${info.name}`}
+                      title="Unlock this worktree"
+                      disabled={busy}
+                      onclick={() => void onUnlock(info)}
+                    >
+                      <Icon icon={iconUnlock} size={16} />
+                    </Button>
+                  {/snippet}
+                </Hint>
+              {:else}
+                <Hint label="Lock this worktree (blocks prune / remove; optional reason)">
+                  {#snippet child({ props })}
+                    <Button
+                      {...props}
+                      class="relative text-muted-foreground after:absolute after:-inset-1 after:content-[''] hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-4"
+                      variant="ghost"
+                      size="icon-xs"
+                      type="button"
+                      aria-label={`Lock worktree ${info.name}`}
+                      title="Lock this worktree"
+                      disabled={busy}
+                      onclick={() => onLock(info)}
+                    >
+                      <Icon icon={iconLock} size={16} />
+                    </Button>
+                  {/snippet}
+                </Hint>
+              {/if}
               <Button
                 class="relative text-destructive after:absolute after:-inset-1 after:content-[''] hover:bg-destructive/10 hover:text-destructive [&_svg:not([class*='size-'])]:size-4"
                 variant="ghost"
@@ -503,6 +647,36 @@
               </Button>
             {/if}
           </div>
+          {#if lockReasonFor === info.path && !removingPath}
+            <!-- Inline lock-reason prompt (optional text, like the stash
+                 branch/rename forms). -->
+            <form
+              class="lock-form flex items-center gap-1.5 border-t border-dashed border-border pt-1"
+              aria-label={`Lock reason for ${info.name}`}
+              onsubmit={(e) => {
+                e.preventDefault();
+                void onLockConfirmed(info);
+              }}
+            >
+              <input
+                class="min-w-32 flex-1 rounded border border-input bg-background px-2 py-0.5 text-ui-meta text-foreground focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-1"
+                type="text"
+                placeholder="reason (optional)"
+                aria-label="Lock reason"
+                bind:value={lockReason}
+              />
+              <Button
+                variant="default"
+                size="icon-sm"
+                type="submit"
+                aria-label="Lock worktree"
+                title="Lock this worktree"
+                disabled={busy}
+              >
+                <Icon icon={iconCheck} size={16} />
+              </Button>
+            </form>
+          {/if}
           {#if removeConfirmFor === info.path && removingPath !== info.path}
             <div class="remove-confirm flex items-center gap-2 border-t border-dashed border-border pt-1">
               {#if worktreeNeedsForce(info)}

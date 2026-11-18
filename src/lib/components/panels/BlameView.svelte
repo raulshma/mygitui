@@ -23,7 +23,7 @@
    * a breadcrumb stack — "Back" pops it. Sha chips keep emitting
    * history-select-commit.
    */
-  import { readFile, repoBlame, streamLog } from "$lib/ipc/client";
+  import { readFile, repoBlame, statFile, streamLog } from "$lib/ipc/client";
   import { toast } from "$lib/toast";
   import { emitUiEvent } from "$lib/palette/events";
   import type { BlameLine, LogFilter } from "$lib/ipc/types";
@@ -32,7 +32,8 @@
     formatRelativeTime,
     hashHue,
   } from "$lib/git/format";
-  import { ageBackground, ageRatios } from "./blameModel";
+  import { ageBackground, ageRatios, buildBlameQuery } from "./blameModel";
+  import { blameQueryPrefs } from "./blameQuery.svelte";
   import Icon from "$lib/components/icons/Icon.svelte";
   import { appIcon } from "$lib/components/icons/library.svelte";
   import { showMenuAt, type MenuEntry } from "$lib/components/menu/contextMenuStore.svelte";
@@ -43,6 +44,7 @@
   const iconClose = $derived(appIcon("close")!);
   import { Button } from "$lib/components/ui/button/index.js";
   import { Hint } from "$lib/components/ui/tooltip/index.js";
+  import { Input } from "$lib/components/ui/input/index.js";
   import EmptyState from "../layout/EmptyState.svelte";
   import { describeError } from "$lib/errors";
 
@@ -78,6 +80,38 @@
   let blameFrom = $state<string[]>([]);
   /** Current re-blame offer ("Blame from <sha>'s parent"). */
   let reblame = $state<{ sha: string; parent: string } | null>(null);
+
+  // -- extended blame query (repo_blame's BlameQuery) --------------------------
+  //
+  // The three toggles live in the session-level `blameQueryPrefs` store
+  // (shared by every mounted BlameView, survives blame open/close);
+  // `oldest` is a per-view bound (a query input, like the revision).
+
+  /** Oldest commit bound (`git blame <oldest>..<from>`), as typed. */
+  let oldest = $state("");
+  /** Whether `.git-blame-ignore-revs` exists at the workdir root — the
+   *  ignore-revs toggle only means something with the file present. */
+  let hasIgnoreRevsFile = $state(false);
+
+  // Cheap probe on view open (and repo switch): the backend statFile
+  // rejects for a missing path, which maps to "no ignore-revs file".
+  $effect(() => {
+    const id = repoId;
+    hasIgnoreRevsFile = false;
+    statFile(id, ".git-blame-ignore-revs")
+      .then(() => {
+        if (id === repoId) hasIgnoreRevsFile = true;
+      })
+      .catch(() => {
+        if (id === repoId) hasIgnoreRevsFile = false;
+      });
+  });
+
+  // An ignore-revs toggle without the file is meaningless — flip it off
+  // when the file vanishes (branch switch, new clone).
+  $effect(() => {
+    if (!hasIgnoreRevsFile) blameQueryPrefs.ignoreRevs = false;
+  });
 
   /** sha → parents (blame commits are immutable; cache for the view's life). */
   const parentsCache = new Map<string, string[]>();
@@ -178,11 +212,21 @@
     const repo = repoId;
     const file = path;
     const rev = effectiveFrom; // tracked: reload when any of these change
+    // Extended query options are tracked too: flipping a toggle (or editing
+    // the oldest bound) re-runs the blame. Null = every option at default,
+    // the arg stays off the wire.
+    const query = buildBlameQuery({
+      from: rev ?? null,
+      oldest,
+      ignoreWhitespace: blameQueryPrefs.ignoreWhitespace,
+      firstParent: blameQueryPrefs.firstParent,
+      ignoreRevs: blameQueryPrefs.ignoreRevs,
+    });
     const token = ++reqToken;
     lines = null;
     error = null;
     loading = true;
-    repoBlame(repo, file, rev)
+    repoBlame(repo, file, rev, query)
       .then((result) => {
         if (token !== reqToken) return;
         lines = result;
@@ -338,6 +382,70 @@
         >
       {/if}
     {/if}
+    <!-- Extended blame query: session-level toggles (shared by every
+         mounted BlameView via blameQueryPrefs) + the oldest bound. The
+         ignore-revs toggle is only enabled while .git-blame-ignore-revs
+         exists at the workdir root (probed on view open below). -->
+    <span class="bquery ml-auto flex shrink-0 items-center gap-2">
+      <Hint label="Ignore whitespace-only changes (-w)">
+        {#snippet child({ props })}
+          <label
+            {...props}
+            class="flex cursor-pointer items-center gap-1 whitespace-nowrap text-ui-micro text-muted-foreground"
+          >
+            <input type="checkbox" class="m-0 accent-primary" bind:checked={blameQueryPrefs.ignoreWhitespace} />
+            <span>-w</span>
+          </label>
+        {/snippet}
+      </Hint>
+      <Hint label="Follow only the first-parent chain (--first-parent)">
+        {#snippet child({ props })}
+          <label
+            {...props}
+            class="flex cursor-pointer items-center gap-1 whitespace-nowrap text-ui-micro text-muted-foreground"
+          >
+            <input type="checkbox" class="m-0 accent-primary" bind:checked={blameQueryPrefs.firstParent} />
+            <span>first-parent</span>
+          </label>
+        {/snippet}
+      </Hint>
+      <Hint label={hasIgnoreRevsFile
+        ? "Honor .git-blame-ignore-revs (re-attribute lines from listed commits)"
+        : ".git-blame-ignore-revs does not exist in this repository"}>
+        {#snippet child({ props })}
+          <label
+            {...props}
+            class="flex items-center gap-1 whitespace-nowrap text-ui-micro text-muted-foreground {hasIgnoreRevsFile
+              ? "cursor-pointer"
+              : "cursor-not-allowed opacity-50"}"
+          >
+            <input
+              type="checkbox"
+              class="m-0 accent-primary"
+              bind:checked={blameQueryPrefs.ignoreRevs}
+              disabled={!hasIgnoreRevsFile}
+            />
+            <span>ignore-revs</span>
+          </label>
+        {/snippet}
+      </Hint>
+      <Input
+        class="h-auto w-28 shrink-0 rounded bg-background px-1.5 py-0 font-mono text-ui-micro md:text-ui-micro"
+        type="text"
+        placeholder="oldest bound…"
+        aria-label="Oldest commit bound (sha, short sha, or branch)"
+        value={oldest}
+        onchange={(e) => (oldest = e.currentTarget.value)}
+        onkeydown={(e) => {
+          // Escape reverts the draft (the change event only fires on Enter
+          // / blur, so typing never triggers a reload storm).
+          if (e.key === "Escape") {
+            e.currentTarget.value = oldest;
+            e.currentTarget.blur();
+          }
+        }}
+      />
+    </span>
     {#if loading}
       <span class="bstate ml-auto text-muted-foreground" role="status"
         >Loading blame…</span
@@ -455,6 +563,19 @@
       <span class="bdate shrink-0 text-muted-foreground">
         {v.line ? formatRelativeTime(v.line.signature.time) : ""}
       </span>
+      {#if v.line?.ignored}
+        <!-- The group's lines come from a commit listed in
+             .git-blame-ignore-revs that could not be re-attributed. -->
+        <Hint label="Ignored commit — listed in .git-blame-ignore-revs">
+          {#snippet child({ props })}
+            <span
+              {...props}
+              class="ignored-chip shrink-0 rounded-full border border-border bg-muted px-1 text-ui-micro italic leading-[1.4] text-muted-foreground"
+            >ignored</span
+            >
+          {/snippet}
+        </Hint>
+      {/if}
       <span class="bcount ml-auto shrink-0 text-muted-foreground"
         >{v.count} {v.count === 1 ? "line" : "lines"}</span
       >
@@ -462,7 +583,7 @@
   {:else}
     <Hint
       label={v.line
-        ? `${v.line.signature.name} · ${formatDateTime(v.line.signature.time)} — click to blame from this commit's parent`
+        ? `${v.line.signature.name} · ${formatDateTime(v.line.signature.time)}${v.line.ignored ? " — ignored commit (listed in .git-blame-ignore-revs)" : ""} — click to blame from this commit's parent`
         : ""}
     >
       {#snippet child({ props })}
@@ -471,7 +592,10 @@
         <div
           {...props}
           tabindex="-1"
-          class="bline group/bline flex h-full cursor-pointer items-center gap-2 py-0 pl-2 pr-3 text-xs text-foreground whitespace-pre"
+          class="bline group/bline flex h-full cursor-pointer items-center gap-2 py-0 pl-2 pr-3 text-xs whitespace-pre {v.line
+            ?.ignored
+            ? "text-muted-foreground"
+            : "text-foreground"}"
           role="listitem"
           aria-posinset={idx + 1}
           style:background={ageBackground(heat.get(v.sha) ?? 0)}
@@ -483,7 +607,10 @@
             >{v.line?.line_no}</span
           >
           <span
-            class="btext font-mono [tab-size:4] group-hover/bline:underline group-hover/bline:decoration-dotted group-hover/bline:underline-offset-3"
+            class="btext font-mono [tab-size:4] group-hover/bline:underline group-hover/bline:decoration-dotted group-hover/bline:underline-offset-3 {v.line
+              ?.ignored
+              ? "italic"
+              : ""}"
             >{v.line?.text ?? ""}</span
           >
         </div>

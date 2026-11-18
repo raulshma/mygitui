@@ -577,5 +577,19 @@
     "tabler": "text-wrap",
     "hugeicons": "text-wrap",
     "ri": "text-wrap"
+  },
+  "lock": {
+    "lucide": "lock",
+    "tabler": "lock",
+    "hugeicons": "lock",
+    "phosphor": "lock-simple",
+    "ri": "lock-line"
+  },
+  "lock-open": {
+    "lucide": "lock-open",
+    "tabler": "lock-open",
+    "hugeicons": "lock-open",
+    "phosphor": "lock-simple-open",
+    "ri": "lock-unlock-line"
   }
 }
