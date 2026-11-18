@@ -41,6 +41,32 @@ export interface UiEventMap {
   "diff-toggle-mode": undefined;
   /** Toggle diff line wrapping (persisted; every mounted viewer flips). */
   "diff-toggle-wrap": undefined;
+  /**
+   * Open the diff viewer's find bar (Ctrl/Cmd+F; every mounted viewer
+   * opens its own — the focused tab's is the one the user sees).
+   */
+  "diff-find": undefined;
+  /** Jump to the next hunk-header row in every mounted diff viewer. */
+  "diff-next-hunk": undefined;
+  /** Jump to the previous hunk-header row in every mounted diff viewer. */
+  "diff-prev-hunk": undefined;
+  /** Jump to the next file-header row in every mounted diff viewer. */
+  "diff-next-file": undefined;
+  /** Jump to the previous file-header row in every mounted diff viewer. */
+  "diff-prev-file": undefined;
+  /** Scroll every mounted diff viewer back to its first change. */
+  "diff-first-change": undefined;
+  /**
+   * The ignore-whitespace diff query preference flipped: `{ ignore }`.
+   * Emitted by the diff toolbar toggle; streaming parents re-run their
+   * diff fetches so the backend strips ws-only deltas.
+   */
+  "diff-ignore-ws-changed": { ignore: boolean };
+  /**
+   * Open the history panel's jump-to-SHA input (SHA / short SHA / branch
+   * / tag); every mounted HistoryView shows its own inline input.
+   */
+  "history-jump-to-sha": undefined;
   /** Open the conflict editor. */
   "open-conflicts": undefined;
   /** Re-scan merge conflicts. */
@@ -138,6 +164,13 @@ export interface UiEventMap {
   "files-quick-open": undefined;
   /** Save the active file in the file workspace (Ctrl+S / palette). */
   "files-save": undefined;
+  /**
+   * Open the CodeMirror search panel on the active editor (palette). The
+   * global `ctrl+f` is owned by the diff find (`diff.find`), so the main
+   * window's editor search is palette-routed; popouts (no keybind engine)
+   * keep the in-editor Mod-f binding.
+   */
+  "files-find": undefined;
   /**
    * Cycle the markdown preview layout (edit → split → preview) for the
    * active file (Ctrl+Shift+V / palette; no-op when it isn't markdown).

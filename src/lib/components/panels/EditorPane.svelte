@@ -112,6 +112,7 @@
     onFileScroll = undefined,
     attachWorkspace = undefined,
     diffInitialScroll = null,
+    diffInitialRow = null,
     onDiffScroll = undefined,
   }: {
     repoId: string;
@@ -231,8 +232,10 @@
     attachWorkspace?: (api: WorkspaceCapture | null) => void;
     /** Scroll the next-mounted working-copy diff restores (null = top). */
     diffInitialScroll?: number | null;
+    /** Saved first-visible-row seed (row restore beats px drift; null = top). */
+    diffInitialRow?: number | null;
     /** Scroll capture from the open working-copy diff (px). */
-    onDiffScroll?: (scrollTop: number) => void;
+    onDiffScroll?: (scrollTop: number, firstVisibleRow: number) => void;
   } = $props();
 
   /** Welcome summary: unique changed paths + upstream position. */
@@ -748,6 +751,7 @@
               {onMutated}
               onLoadImage={imageLoader}
               initialScrollTop={diffInitialScroll ?? undefined}
+              initialRow={diffInitialRow ?? undefined}
               onScrollChange={onDiffScroll}
             />
           {/key}

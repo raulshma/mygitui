@@ -122,6 +122,9 @@
     syntaxHighlighting: typeof import("@codemirror/language")["syntaxHighlighting"];
     LanguageDescription: typeof import("@codemirror/language")["LanguageDescription"];
     languages: typeof import("@codemirror/language-data")["languages"];
+    searchKeymap: readonly import("@codemirror/view").KeyBinding[];
+    highlightSelectionMatches: typeof import("@codemirror/search")["highlightSelectionMatches"];
+    openSearchPanel: typeof import("@codemirror/search")["openSearchPanel"];
   };
   let cm: Cm | null = null;
   let wrapCompartment: import("@codemirror/state").Compartment | null = null;
@@ -133,13 +136,15 @@
   }
 
   async function loadCm(): Promise<Cm> {
-    const [core, state, viewMod, language, languageData] = await Promise.all([
-      import("codemirror"),
-      import("@codemirror/state"),
-      import("@codemirror/view"),
-      import("@codemirror/language"),
-      import("@codemirror/language-data"),
-    ]);
+    const [core, state, viewMod, language, languageData, search] =
+      await Promise.all([
+        import("codemirror"),
+        import("@codemirror/state"),
+        import("@codemirror/view"),
+        import("@codemirror/language"),
+        import("@codemirror/language-data"),
+        import("@codemirror/search"),
+      ]);
     return {
       EditorView: core.EditorView,
       keymap: viewMod.keymap,
@@ -152,6 +157,9 @@
       syntaxHighlighting: language.syntaxHighlighting,
       LanguageDescription: language.LanguageDescription,
       languages: languageData.languages,
+      searchKeymap: search.searchKeymap,
+      highlightSelectionMatches: search.highlightSelectionMatches,
+      openSearchPanel: search.openSearchPanel,
     };
   }
 
@@ -366,6 +374,18 @@
     return v === null ? "" : v.state.doc.toString();
   }
 
+  /**
+   * Opens the CodeMirror search panel (palette `files-find`; the global
+   * ctrl+f belongs to the diff find, so the main window routes here). The
+   * in-editor Mod-f binding covers popouts, which run no keybind engine.
+   * No-op (no throw) before the editor has mounted.
+   */
+  export function find(): void {
+    if (view === null || cm === null) return;
+    cm.openSearchPanel(view as Parameters<typeof cm.openSearchPanel>[0]);
+    (view as { focus(): void }).focus();
+  }
+
   /** Current editor scroll offset (workspace-session capture). */
   export function getScrollTop(): number {
     const v = view as { scrollDOM: { scrollTop: number } } | null;
@@ -403,6 +423,13 @@
     const extensions: import("@codemirror/state").Extension[] = [
       c.basicSetup,
       ...buildTheme(c),
+      // Search wiring from @codemirror/search (kept lazy: loaded in loadCm
+      // with the rest of the editor chunk). basicSetup carries both today;
+      // the explicit entries pin the dependency (and the Mod-f panel) even
+      // if the basicSetup recipe ever drops it — a duplicate keymap entry
+      // resolves first-match and is harmless.
+      c.keymap.of(c.searchKeymap),
+      c.highlightSelectionMatches(),
       wrapCompartment.of(editorWrapExt()),
       c.EditorView.updateListener.of((update) => {
         if (update.docChanged) {

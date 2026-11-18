@@ -281,23 +281,31 @@ describe("ipc client command wrappers", () => {
     });
   });
 
-  it("repoDiff passes sides verbatim and omits optional paths", async () => {
+  it("repoDiff passes sides verbatim and omits the query without options", async () => {
     const { transport, calls } = mockTransport(() => [FILE_DIFF]);
     setTransport(transport);
 
     await repoDiff("repo-1", "head", "worktree");
     await repoDiff("repo-1", { commit: "abc123" }, "index", ["src/a.ts"]);
+    await repoDiff("repo-1", "head", "worktree", ["src/a.ts"], true);
 
     expect(calls[0]?.args).toEqual({
       repo_id: "repo-1",
       old: "head",
       new: "worktree",
     });
+    // Paths ride inside the optional DiffQuery, never as a top-level arg.
     expect(calls[1]?.args).toEqual({
       repo_id: "repo-1",
       old: { commit: "abc123" },
       new: "index",
-      paths: ["src/a.ts"],
+      query: { paths: ["src/a.ts"], ignore_whitespace: false },
+    });
+    expect(calls[2]?.args).toEqual({
+      repo_id: "repo-1",
+      old: "head",
+      new: "worktree",
+      query: { paths: ["src/a.ts"], ignore_whitespace: true },
     });
   });
 });
@@ -329,7 +337,7 @@ describe("ipc client streaming wrappers", () => {
     );
   });
 
-  it("streamDiff delivers file pages and forwards optional paths", async () => {
+  it("streamDiff delivers file pages and forwards options inside the query", async () => {
     const { transport, calls } = mockTransport((call) => {
       channelOf<FileDiff[]>(call).onmessage([FILE_DIFF]);
     });
@@ -346,7 +354,26 @@ describe("ipc client streaming wrappers", () => {
       repo_id: "repo-1",
       old: "head",
       new: "worktree",
-      paths: ["src/a.ts"],
+      query: { paths: ["src/a.ts"], ignore_whitespace: false },
+    });
+
+    // No options at all: the query arg stays off the invoke entirely.
+    await streamDiff("repo-1", "head", "worktree", () => {});
+    expect(calls[1]?.args).not.toHaveProperty("query");
+
+    // Ignore-whitespace rides the query alongside the paths.
+    await streamDiff(
+      "repo-1",
+      "head",
+      "worktree",
+      () => {},
+      ["src/a.ts"],
+      "repo-diff",
+      true,
+    );
+    expect(calls[2]?.args).toMatchObject({
+      consumer_id: "repo-diff",
+      query: { paths: ["src/a.ts"], ignore_whitespace: true },
     });
   });
 

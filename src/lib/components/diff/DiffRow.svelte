@@ -19,6 +19,7 @@
     fileKindLetter,
     rowHeight,
     type DiffRow,
+    type FindSpan,
     type LoadImageFn,
   } from "$lib/components/diff/rowModel";
   import {
@@ -59,6 +60,12 @@
     filePath = null,
     /** Token-cache revision: bumping it repaints rows once parses land. */
     syntaxRevision = 0,
+    /** Word-level highlight rendering (diff toolbar preference; default on). */
+    wordHighlights = true,
+    /** Find-in-diff spans for THIS row (viewer resolves; undefined = none). */
+    findSpans = undefined,
+    /** Row context menu (copy line / hunk patch / file patch / path). */
+    onRowMenu = undefined,
     /** Hunk-header staging button label ("Unstage hunk" when unstaging). */
     stageLabel = "Stage hunk",
     /** M12 line selection: O(1) membership check for a hunk line index. */
@@ -91,6 +98,9 @@
     onDiscardHunk?: (fileIndex: number, hunkIndex: number) => void;
     filePath?: string | null;
     syntaxRevision?: number;
+    wordHighlights?: boolean;
+    findSpans?: readonly FindSpan[] | undefined;
+    onRowMenu?: ((event: MouseEvent, row: DiffRow) => void) | undefined;
     stageLabel?: string;
     selectedAt?:
       | ((fileIndex: number, hunkIndex: number, lineIndex: number | null) => boolean)
@@ -133,6 +143,16 @@
   }
 
   /**
+   * Find spans for one half of the row (pair rows address their halves;
+   * whole-text rows use null). Undefined when nothing matches that half.
+   */
+  function findFor(side: "left" | "right" | null): readonly FindSpan[] | undefined {
+    if (findSpans === undefined || findSpans.length === 0) return undefined;
+    const hits = findSpans.filter((span) => span.side === side);
+    return hits.length > 0 ? hits : undefined;
+  }
+
+  /**
    * Wrap-height correction: the row root's height is forced inline (the
    * virtualizer's contract), so the natural height is the tallest `.txt`
    * span. Reported upstream only in wrap mode (viewer gates the handler).
@@ -168,14 +188,18 @@
   }
 </script>
 
-<!-- Line text: syntax tokens win over word-level highlights. Kept on one
-     line: the cells are white-space:pre, so stray template whitespace would
-     render as spaces. -->
-{#snippet text(line: DiffLine)}
+<!-- Line text: find-match spans win over everything (they must stay
+     visible under syntax tokens), then syntax tokens, then the word-level
+     highlights (gated by the `wordHighlights` preference). Kept on one
+     line: the cells are white-space:pre, so stray template whitespace
+     would render as spaces. -->
+{#snippet text(line: DiffLine, spans?: readonly FindSpan[])}
   {@const tokens = syntax(line)}
-  {#if tokens !== null}
+  {#if spans !== undefined && spans.length > 0}
+    {#each spans as span, i}{#if i === 0 && span.start > 0}{line.text.slice(0, span.start)}{/if}{#if i > 0}{line.text.slice(spans[i - 1]?.end ?? 0, span.start)}{/if}<span class="hl rounded-[2px] {span.active ? "bg-[var(--diff-find-active-bg)]" : "bg-[var(--diff-find-bg)]"}">{line.text.slice(span.start, span.end)}</span>{#if i === spans.length - 1 && span.end < line.text.length}{line.text.slice(span.end)}{/if}{/each}
+  {:else if tokens !== null}
     {#each tokens as token}{#if token.color}<span style:color={token.color}>{token.text}</span>{:else}{token.text}{/if}{/each}
-  {:else if line.highlights.length > 0}
+  {:else if wordHighlights && line.highlights.length > 0}
     {#each applyHighlights(line.text, line.highlights) as seg}{#if seg.hl}<span class="hl rounded-[2px] bg-[var(--diff-hl-bg)]">{seg.text}</span>{:else}{seg.text}{/if}{/each}
   {:else}
     {line.text}
@@ -184,7 +208,8 @@
 
 {#if row.kind === "file-header"}
   {@const change = fileChangeKind(row.file)}
-  <div class="row file-header flex w-full box-border items-center gap-ui-4 border-y border-[var(--diff-divider)] bg-[var(--diff-file-bg)] py-0 pl-1 pr-3 shadow-[inset_3px_0_var(--diff-file-accent)]" style:height={`${rowHeight(row)}px`}>
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
+  <div class="row file-header flex w-full box-border items-center gap-ui-4 border-y border-[var(--diff-divider)] bg-[var(--diff-file-bg)] py-0 pl-1 pr-3 shadow-[inset_3px_0_var(--diff-file-accent)]" style:height={`${rowHeight(row)}px`} oncontextmenu={(e) => onRowMenu?.(e, row)}>
     <button
       type="button"
       class="collapse grid h-[22px] w-[22px] shrink-0 cursor-pointer place-items-center rounded-[4px] border-0 bg-transparent p-0 text-[12px] text-muted-foreground hover:bg-accent focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary"
@@ -239,6 +264,7 @@
     class="row hunk-header group/hh flex w-full box-border items-center gap-2 border-b border-[var(--diff-divider)] bg-[var(--diff-hunk-bg)] px-3 shadow-[inset_2px_0_var(--diff-hunk-accent)] focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary"
     class:has-selection={selectionCount > 0}
     style:height={`${rowHeight(row)}px`}
+    oncontextmenu={(e) => onRowMenu?.(e, row)}
     tabindex="0"
     role="heading"
     aria-level="3"
@@ -311,11 +337,13 @@
        section. The empty sign spacer keeps text columns aligned with the
        pair rows directly above/below. `data-row-index` addresses the row
        for the viewer's split-selection highlights. -->
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div
     class="row line context flex w-full box-border"
     data-row-index={rowIndex}
     style:height={`${heightPx ?? rowHeight(row)}px`}
     use:measure
+    oncontextmenu={(e) => onRowMenu?.(e, row)}
   >
     <div
       class="half flex min-w-0 flex-[1_1_50%] {selCls(selectedInRow(row.lineIndex))}"
@@ -334,7 +362,7 @@
         }}
       >{row.line.old_no ?? ""}</button>
       <span style={signStyle} class="sign shrink-0 select-none text-center font-mono text-[12px] leading-[20px] whitespace-pre [tab-size:8]" aria-hidden="true"></span>
-      <span style={txtStyle} class="txt min-w-0 flex-1 overflow-hidden font-mono text-[12px] leading-[20px] [tab-size:8] {wrap ? "whitespace-pre-wrap break-words" : "whitespace-pre"}" class:wrap={wrap}>{@render text(row.line)}</span>
+      <span style={txtStyle} class="txt min-w-0 flex-1 overflow-hidden font-mono text-[12px] leading-[20px] [tab-size:8] {wrap ? "whitespace-pre-wrap break-words" : "whitespace-pre"}" class:wrap={wrap}>{@render text(row.line, findFor(null))}</span>
     </div>
     <div
       class="half right flex min-w-0 flex-[1_1_50%] border-l border-[var(--diff-divider)] {selCls(selectedInRow(row.lineIndex))}"
@@ -353,16 +381,18 @@
         }}
       >{row.line.new_no ?? ""}</button>
       <span style={signStyle} class="sign shrink-0 select-none text-center font-mono text-[12px] leading-[20px] whitespace-pre [tab-size:8]" aria-hidden="true"></span>
-      <span style={txtStyle} class="txt min-w-0 flex-1 overflow-hidden font-mono text-[12px] leading-[20px] [tab-size:8] {wrap ? "whitespace-pre-wrap break-words" : "whitespace-pre"}" class:wrap={wrap}>{@render text(row.line)}</span>
+      <span style={txtStyle} class="txt min-w-0 flex-1 overflow-hidden font-mono text-[12px] leading-[20px] [tab-size:8] {wrap ? "whitespace-pre-wrap break-words" : "whitespace-pre"}" class:wrap={wrap}>{@render text(row.line, findFor(null))}</span>
     </div>
   </div>
 
 {:else if row.kind === "pair"}
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div
     class="row line pair flex w-full box-border"
     data-row-index={rowIndex}
     style:height={`${heightPx ?? rowHeight(row)}px`}
     use:measure
+    oncontextmenu={(e) => onRowMenu?.(e, row)}
   >
     <div
       class="half flex min-w-0 flex-[1_1_50%] {row.left
@@ -384,7 +414,7 @@
           }}
         >{row.left.old_no ?? ""}</button>
         <span style={signStyle} class="sign del shrink-0 select-none text-center font-mono text-[12px] leading-[20px] font-bold whitespace-pre [tab-size:8] text-[var(--app-deleted)]" aria-hidden="true">−</span>
-        <span style={txtStyle} class="txt min-w-0 flex-1 overflow-hidden font-mono text-[12px] leading-[20px] [tab-size:8] {wrap ? "whitespace-pre-wrap break-words" : "whitespace-pre"}" class:wrap={wrap}>{@render text(row.left)}</span>
+        <span style={txtStyle} class="txt min-w-0 flex-1 overflow-hidden font-mono text-[12px] leading-[20px] [tab-size:8] {wrap ? "whitespace-pre-wrap break-words" : "whitespace-pre"}" class:wrap={wrap}>{@render text(row.left, findFor("left"))}</span>
       {/if}
     </div>
     <div
@@ -407,7 +437,7 @@
           }}
         >{row.right.new_no ?? ""}</button>
         <span style={signStyle} class="sign add shrink-0 select-none text-center font-mono text-[12px] leading-[20px] font-bold whitespace-pre [tab-size:8] text-[var(--app-added)]" aria-hidden="true">+</span>
-        <span style={txtStyle} class="txt min-w-0 flex-1 overflow-hidden font-mono text-[12px] leading-[20px] [tab-size:8] {wrap ? "whitespace-pre-wrap break-words" : "whitespace-pre"}" class:wrap={wrap}>{@render text(row.right)}</span>
+        <span style={txtStyle} class="txt min-w-0 flex-1 overflow-hidden font-mono text-[12px] leading-[20px] [tab-size:8] {wrap ? "whitespace-pre-wrap break-words" : "whitespace-pre"}" class:wrap={wrap}>{@render text(row.right, findFor("right"))}</span>
       {/if}
     </div>
   </div>
@@ -416,12 +446,14 @@
   {@const isAdd = row.line.origin === "+"}
   {@const isDel = row.line.origin === "-"}
   {@const lineNo = row.side === "old" ? row.line.old_no : row.line.new_no}
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div
     class="row line single{isAdd ? " add" : isDel ? " del" : ""} flex w-full box-border {isAdd || isDel ? washCls(isAdd ? "add" : "del") : ""} {selCls(selectedInRow(row.lineIndex))}"
     class:selected={selectedInRow(row.lineIndex)}
     data-row-index={rowIndex}
     style:height={`${heightPx ?? rowHeight(row)}px`}
     use:measure
+    oncontextmenu={(e) => onRowMenu?.(e, row)}
   >
     <button
       type="button"
@@ -436,18 +468,20 @@
       }}
     >{lineNo ?? ""}</button>
     <span style={signStyle} class="sign{isAdd ? " add" : isDel ? " del" : ""} shrink-0 select-none text-center font-mono text-[12px] leading-[20px] whitespace-pre [tab-size:8] {isAdd ? "font-bold text-[var(--app-added)]" : isDel ? "font-bold text-[var(--app-deleted)]" : ""}" aria-hidden="true">{row.line.origin.trim()}</span>
-    <span style={txtStyle} class="txt min-w-0 flex-1 overflow-hidden font-mono text-[12px] leading-[20px] [tab-size:8] {wrap ? "whitespace-pre-wrap break-words" : "whitespace-pre"}" class:wrap={wrap}>{@render text(row.line)}</span>
+    <span style={txtStyle} class="txt min-w-0 flex-1 overflow-hidden font-mono text-[12px] leading-[20px] [tab-size:8] {wrap ? "whitespace-pre-wrap break-words" : "whitespace-pre"}" class:wrap={wrap}>{@render text(row.line, findFor(null))}</span>
   </div>
 
 {:else if row.kind === "line"}
   {@const isAdd = row.line.origin === "+"}
   {@const isDel = row.line.origin === "-"}
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div
     class="row line single{isAdd ? " add" : isDel ? " del" : ""} flex w-full box-border {isAdd || isDel ? washCls(isAdd ? "add" : "del") : ""} {selCls(selectedInRow(row.lineIndex))}"
     class:selected={selectedInRow(row.lineIndex)}
     data-row-index={rowIndex}
     style:height={`${heightPx ?? rowHeight(row)}px`}
     use:measure
+    oncontextmenu={(e) => onRowMenu?.(e, row)}
   >
     <button
       type="button"
@@ -474,16 +508,18 @@
       }}
     >{row.line.new_no ?? ""}</button>
     <span style={signStyle} class="sign{isAdd ? " add" : isDel ? " del" : ""} shrink-0 select-none text-center font-mono text-[12px] leading-[20px] whitespace-pre [tab-size:8] {isAdd ? "font-bold text-[var(--app-added)]" : isDel ? "font-bold text-[var(--app-deleted)]" : ""}" aria-hidden="true">{row.line.origin.trim()}</span>
-    <span style={txtStyle} class="txt min-w-0 flex-1 overflow-hidden font-mono text-[12px] leading-[20px] [tab-size:8] {wrap ? "whitespace-pre-wrap break-words" : "whitespace-pre"}" class:wrap={wrap}>{@render text(row.line)}</span>
+    <span style={txtStyle} class="txt min-w-0 flex-1 overflow-hidden font-mono text-[12px] leading-[20px] [tab-size:8] {wrap ? "whitespace-pre-wrap break-words" : "whitespace-pre"}" class:wrap={wrap}>{@render text(row.line, findFor(null))}</span>
   </div>
 
 {:else if row.kind === "binary"}
-  <div class="row binary flex w-full box-border items-center justify-center" style:height={`${rowHeight(row)}px`}>
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
+  <div class="row binary flex w-full box-border items-center justify-center" style:height={`${rowHeight(row)}px`} oncontextmenu={(e) => onRowMenu?.(e, row)}>
     <span class="binary-note text-ui-base text-muted-foreground">Binary file — changes not shown</span>
   </div>
 
 {:else if row.kind === "image"}
-  <div class="row image block w-full" style:height={`${rowHeight(row)}px`}>
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
+  <div class="row image block w-full" style:height={`${rowHeight(row)}px`} oncontextmenu={(e) => onRowMenu?.(e, row)}>
     <ImageCompare file={row.file} {onLoadImage} />
   </div>
 {/if}

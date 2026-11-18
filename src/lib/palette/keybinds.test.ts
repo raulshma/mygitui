@@ -282,6 +282,20 @@ describe("conflict detection", () => {
   it("returns an empty list for unique bindings", () => {
     expect(findConflicts(DEFAULT_BINDINGS)).toEqual([]);
   });
+
+  it("binds the diff find + navigation commands to unused combos", () => {
+    // PageUp/PageDown combos: modifier+arrows would collide with
+    // CodeMirror's move/copy-line default keymap in the file editor.
+    expect(DEFAULT_BINDINGS["diff.find"]).toBe("ctrl+f");
+    expect(DEFAULT_BINDINGS["diff.next-hunk"]).toBe("alt+pagedown");
+    expect(DEFAULT_BINDINGS["diff.prev-hunk"]).toBe("alt+pageup");
+    expect(DEFAULT_BINDINGS["diff.next-file"]).toBe("alt+shift+pagedown");
+    expect(DEFAULT_BINDINGS["diff.prev-file"]).toBe("alt+shift+pageup");
+    expect(DEFAULT_BINDINGS["diff.first-change"]).toBe("alt+home");
+    // Editor find has no default combo: the global ctrl+f belongs to the
+    // diff find (popouts keep their in-editor Mod-f via searchKeymap).
+    expect(DEFAULT_BINDINGS["files.find"]).toBeUndefined();
+  });
 });
 
 describe("startKeybinds (window listener)", () => {

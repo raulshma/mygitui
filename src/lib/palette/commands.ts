@@ -542,6 +542,14 @@ export const COMMANDS: Command[] = [
     when: (ctx) => ctx.repoId !== null,
     run: () => dispatch("history-toggle-blame"),
   },
+  {
+    id: "history.jump-to-sha",
+    title: "Jump to commit…",
+    section: "History",
+    keywords: ["go to sha", "short sha", "branch", "tag", "quick open"],
+    when: (ctx) => ctx.repoId !== null,
+    run: () => dispatch("history-jump-to-sha"),
+  },
 
   // -- Diff -----------------------------------------------------------------
   {
@@ -559,6 +567,60 @@ export const COMMANDS: Command[] = [
     keywords: ["wrap", "scroll", "long lines"],
     when: (ctx) => ctx.repoId !== null,
     run: () => dispatch("diff-toggle-wrap"),
+  },
+  {
+    id: "diff.find",
+    title: "Find in diff",
+    section: "Diff",
+    keywords: ["search", "locate", "ctrl+f", "filter rows"],
+    shortcut: "ctrl+f",
+    when: (ctx) => ctx.repoId !== null,
+    run: () => dispatch("diff-find"),
+  },
+  {
+    id: "diff.next-hunk",
+    title: "Go to next hunk",
+    section: "Diff",
+    keywords: ["jump", "change", "navigate", "down"],
+    shortcut: "alt+pagedown",
+    when: (ctx) => ctx.repoId !== null,
+    run: () => dispatch("diff-next-hunk"),
+  },
+  {
+    id: "diff.prev-hunk",
+    title: "Go to previous hunk",
+    section: "Diff",
+    keywords: ["jump", "change", "navigate", "up"],
+    shortcut: "alt+pageup",
+    when: (ctx) => ctx.repoId !== null,
+    run: () => dispatch("diff-prev-hunk"),
+  },
+  {
+    id: "diff.next-file",
+    title: "Go to next file in diff",
+    section: "Diff",
+    keywords: ["jump", "navigate", "down"],
+    shortcut: "alt+shift+pagedown",
+    when: (ctx) => ctx.repoId !== null,
+    run: () => dispatch("diff-next-file"),
+  },
+  {
+    id: "diff.prev-file",
+    title: "Go to previous file in diff",
+    section: "Diff",
+    keywords: ["jump", "navigate", "up"],
+    shortcut: "alt+shift+pageup",
+    when: (ctx) => ctx.repoId !== null,
+    run: () => dispatch("diff-prev-file"),
+  },
+  {
+    id: "diff.first-change",
+    title: "Jump to first change in diff",
+    section: "Diff",
+    keywords: ["jump", "top", "navigate", "beginning"],
+    shortcut: "alt+home",
+    when: (ctx) => ctx.repoId !== null,
+    run: () => dispatch("diff-first-change"),
   },
 
   // -- Conflicts ------------------------------------------------------------
@@ -662,6 +724,17 @@ export const COMMANDS: Command[] = [
     shortcut: "ctrl+s",
     when: (ctx) => ctx.repoId !== null,
     run: () => emitUiEvent("files-save"),
+  },
+  {
+    // No default combo: the global ctrl+f belongs to the diff find. Users
+    // can bind this from the keybind settings; popout editors keep their
+    // in-editor Mod-f (no keybind engine there).
+    id: "files.find",
+    title: "Find in file…",
+    section: "Files",
+    keywords: ["search", "editor", "ctrl+f", "replace"],
+    when: (ctx) => ctx.repoId !== null,
+    run: () => emitUiEvent("files-find"),
   },
   {
     id: "files.markdown-view",

@@ -66,6 +66,7 @@
     getDocText(): string;
     getScrollTop(): number;
     applyDesiredScroll(): void;
+    find(): void;
   }
 
   let {
@@ -301,6 +302,15 @@
       if (!visible || active === null) return;
       const editor = editorRefs[active];
       if (editor) void editor.save();
+    });
+  });
+
+  // Palette `files.find`: open the search panel on the active editor (the
+  // global ctrl+f belongs to the diff find; see FileEditor.find).
+  $effect(() => {
+    return onUiEvent("files-find", () => {
+      if (!visible || active === null) return;
+      editorRefs[active]?.find();
     });
   });
 

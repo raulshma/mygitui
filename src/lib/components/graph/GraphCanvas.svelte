@@ -305,6 +305,7 @@
       surface: theme.surface,
       outline: theme.outline,
       hoverRow: hover?.row ?? -1,
+      hoverLane: hover?.lane ?? undefined,
       headRow,
       focusRow: safeFocusRow,
       focusRing: hasFocus,

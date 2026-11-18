@@ -161,3 +161,30 @@ export function rowTop(layout: VLayout, rowIndex: number): number {
   const bucket = buckets[lo];
   return bucket.top + (clamped - bucket.firstRow) * bucket.rowHeight;
 }
+
+/**
+ * The first row whose top edge is at or below `scrollTop` — the inverse of
+ * `rowTop` (binary search over the same buckets). 0 for an empty layout or
+ * a negative scroll; clamped to the last row. This is the scroll-stable
+ * position the workspace session persists (a row index survives wrap/mode
+ * height changes where a px offset would drift).
+ */
+export function firstVisibleRow(layout: VLayout, scrollTop: number): number {
+  const buckets = layout.buckets;
+  if (buckets.length === 0 || scrollTop <= 0) return 0;
+  let lo = 0;
+  let hi = buckets.length - 1;
+  let result = 0;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (buckets[mid].top <= scrollTop) {
+      result = mid;
+      lo = mid + 1;
+    } else {
+      hi = mid - 1;
+    }
+  }
+  const bucket = buckets[result];
+  const within = Math.floor((scrollTop - bucket.top) / bucket.rowHeight);
+  return Math.min(bucket.firstRow + Math.max(0, within), layout.totalRows - 1);
+}

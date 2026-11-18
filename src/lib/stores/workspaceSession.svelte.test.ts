@@ -10,6 +10,7 @@ import type { CommitInfo, GitSignature } from "$lib/ipc/types";
 import {
   WORKSPACE_SESSION_DEBOUNCE_MS,
   WORKSPACE_SESSION_KEY_PREFIX,
+  diffRowKey,
   diffScrollKey,
   emptyStoredSession,
   fileScrollKey,
@@ -185,6 +186,24 @@ describe("WorkspaceSessionStore", () => {
     expect(store.get(ROOT)!.scrolls).toEqual({
       "file:src/a.ts": 250,
       "diff:src/a.ts": 999,
+    });
+  });
+
+  it("keeps the diff first-visible-row alongside the px scroll", () => {
+    // The row seed rides the same scrolls map under `diffrow:<path>` — no
+    // schema change, and the file: filter in RepoView's restore skips it.
+    const store = new WorkspaceSessionStore();
+    store.setScroll(ROOT, diffScrollKey("src/a.ts"), 400);
+    store.setScroll(ROOT, diffRowKey("src/a.ts"), 12);
+    expect(store.get(ROOT)!.scrolls).toEqual({
+      "diff:src/a.ts": 400,
+      "diffrow:src/a.ts": 12,
+    });
+    // Round-trips through the envelope (after the debounced write flush).
+    store.flush();
+    expect(new WorkspaceSessionStore().get(ROOT)!.scrolls).toEqual({
+      "diff:src/a.ts": 400,
+      "diffrow:src/a.ts": 12,
     });
   });
 

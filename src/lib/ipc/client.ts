@@ -326,16 +326,33 @@ export function repoBlame(
   return call<BlameLine[]>("repo_blame", args);
 }
 
+/**
+ * Builds the optional backend `DiffQuery` (see ipc/gen/DiffQuery.ts) from
+ * the FE-side options: `paths` restricts the diff (prefix-matched) and
+ * `ignoreWs` asks for `git diff -w` parity. `undefined` — the arg is left
+ * OFF the invoke entirely — means backend defaults; a query is only sent
+ * when the caller actually passes an option.
+ */
+function diffQuery(
+  paths: string[] | undefined,
+  ignoreWs: boolean | undefined,
+): { paths: string[]; ignore_whitespace: boolean } | undefined {
+  if (paths === undefined && ignoreWs === undefined) return undefined;
+  return { paths: paths ?? [], ignore_whitespace: ignoreWs ?? false };
+}
+
 /** One-shot diff for small/medium changes; larger diffs should stream. */
 export function repoDiff(
   repoId: RepoId,
   oldSide: DiffSide,
   newSide: DiffSide,
   paths?: string[],
+  ignoreWs?: boolean,
 ): Promise<FileDiff[]> {
   // `new` is a reserved word, so it can only appear as a property key.
   const args: Record<string, unknown> = { repo_id: repoId, old: oldSide, new: newSide };
-  if (paths !== undefined) args.paths = paths;
+  const query = diffQuery(paths, ignoreWs);
+  if (query !== undefined) args.query = query;
   return call<FileDiff[]>("repo_diff", args);
 }
 
@@ -351,9 +368,11 @@ export function streamDiff(
   onFilePage: (files: FileDiff[]) => void,
   paths?: string[],
   consumerId?: string,
+  ignoreWs?: boolean,
 ): Promise<void> {
   const args: Record<string, unknown> = { repo_id: repoId, old: oldSide, new: newSide };
-  if (paths !== undefined) args.paths = paths;
+  const query = diffQuery(paths, ignoreWs);
+  if (query !== undefined) args.query = query;
   if (consumerId !== undefined) args.consumer_id = consumerId;
   return runStream<FileDiff[]>(
     "repo_diff_stream",

@@ -239,3 +239,48 @@ function row1Center(): number {
 function row2Center(): number {
   return 2.5 * 24;
 }
+
+describe("drawGraph lane hover emphasis", () => {
+  const rows = [
+    row("a", 0, 2, [{ from: 0, to: 0 }]),
+    row("b", 1, 2, [{ from: 1, to: 1 }, { from: 0, to: 1 }]),
+    row("c", 1, 2, [{ from: 1, to: 1 }]),
+  ];
+
+  function lineWidths(ops: RecordedOp[]): number[] {
+    return opsNamed(ops, "set lineWidth").map((entry) => entry.args[0] as number);
+  }
+
+  it("keeps the base width for every edge without a hover lane", () => {
+    const { ctx, ops } = createMockContext();
+    drawGraph(ctx, baseParams({ rows, first: 0, last: rows.length }));
+    // One assignment per edge (4 edges), all at the base width.
+    expect(lineWidths(ops)).toEqual([1.5, 1.5, 1.5, 1.5]);
+  });
+
+  it("draws the hovered lane's edges thicker across the visible page", () => {
+    const { ctx, ops } = createMockContext();
+    drawGraph(ctx, baseParams({ rows, first: 0, last: rows.length, hoverLane: 1 }));
+    // Three edges on lane 1 (rows b ×2 + c) at 2.5, the shared-lane edge
+    // on row b (from lane 0) also emphasized via its `to`, row a's stays 1.5.
+    const widths = lineWidths(ops);
+    expect(widths.filter((w) => w === 2.5)).toHaveLength(3);
+    expect(widths).toContain(1.5);
+  });
+
+  it("paints a translucent halo behind the hovered lane's dots", () => {
+    const { ctx, ops } = createMockContext();
+    drawGraph(ctx, baseParams({ rows, first: 0, last: rows.length, hoverLane: 1 }));
+    const arcs = opsNamed(ops, "arc");
+    // rows b + c carry lane-1 dots: halo arc (r = 4 + 3.5) + dot arc each.
+    const radii = arcs.map((entry) => entry.args[2]);
+    expect(radii.filter((r) => r === 7.5)).toHaveLength(2);
+  });
+
+  it("no emphasis without a hover lane", () => {
+    const { ctx, ops } = createMockContext();
+    drawGraph(ctx, baseParams({ rows, first: 0, last: rows.length }));
+    const arcs = opsNamed(ops, "arc").map((entry) => entry.args[2]);
+    expect(new Set(arcs)).toEqual(new Set([4])); // plain node dots only
+  });
+});

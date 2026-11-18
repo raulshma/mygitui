@@ -51,6 +51,7 @@
     guardCheckpoint,
     pickSaveFile,
     repoDiff,
+    repoRefs,
     revertCommits,
     stashPush,
     tagCreate,
@@ -438,6 +439,124 @@
    * one (the sha may sit outside the restored filter's window).
    */
   let pendingReveal = $state<{ sha: string; toastOnMiss: boolean } | null>(null);
+
+  // -- jump-to-SHA (palette `history.jump-to-sha`) ------------------------------
+  //
+  // A small inline input (not the QuickOpen component — this is one field
+  // with one resolution rule): accepts a sha / short sha / branch / tag.
+  // Success routes through the same `history-select-commit` machine as the
+  // cross-panel reveals (parked retry while the stream delivers; a miss
+  // with toastOnMiss is ONE info toast). Failures surface INLINE — never
+  // as a toast storm.
+
+  let jumpOpen = $state(false);
+  let jumpError = $state<string | null>(null);
+  let jumpInputEl = $state<HTMLInputElement | null>(null);
+  /** Full ref list ([name, sha] pairs), fetched once per open. */
+  let jumpRefs: Array<[string, string]> | null = null;
+
+  function openJump(): void {
+    jumpOpen = true;
+    jumpError = null;
+    jumpRefs = null;
+    requestAnimationFrame(() => jumpInputEl?.focus());
+  }
+
+  function closeJump(): void {
+    jumpOpen = false;
+    jumpError = null;
+    jumpRefs = null;
+  }
+
+  /** True when `value` looks like a (full or short) hex sha. */
+  function isShaLike(value: string): boolean {
+    return /^[0-9a-f]{4,40}$/i.test(value);
+  }
+
+  /** Selects a resolved commit through the parked-reveal machine + closes. */
+  function revealJumpSha(sha: string): void {
+    jumpOpen = false;
+    jumpError = null;
+    jumpRefs = null;
+    if (store.revealSha(sha)) {
+      select(sha, { scroll: true });
+    } else {
+      // Parked: selects when the stream delivers the commit; a miss costs
+      // one info toast (the sha may sit outside the loaded window).
+      pendingReveal = { sha, toastOnMiss: true };
+    }
+  }
+
+  /**
+   * Resolution order: exact loaded sha → unique short-sha prefix among the
+   * loaded commits → ref name (branch/tag, short or fully qualified) →
+   * a 40-char sha the stream has not reached yet (parked) → inline error.
+   */
+  async function jumpSubmit(): Promise<void> {
+    const raw = (jumpInputEl?.value ?? "").trim();
+    if (raw === "") {
+      jumpError = "Enter a sha, branch, or tag";
+      return;
+    }
+    const needle = raw.toLowerCase();
+    const exact = commits.find((c) => c.sha === needle);
+    if (exact) {
+      revealJumpSha(exact.sha);
+      return;
+    }
+    if (isShaLike(needle)) {
+      const prefixMatches = commits.filter((c) => c.sha.startsWith(needle));
+      if (prefixMatches.length === 1) {
+        revealJumpSha(prefixMatches[0].sha);
+        return;
+      }
+      if (prefixMatches.length > 1) {
+        jumpError = `${prefixMatches.length} commits share this short sha — enter more characters`;
+        return;
+      }
+    }
+    // Refs: branches and tags by short or fully qualified name (cached per
+    // open — the list is small and the jump bar is transient).
+    if (jumpRefs === null) {
+      try {
+        jumpRefs = await repoRefs(repoId);
+      } catch {
+        jumpRefs = []; // degrade: sha resolution still works
+      }
+    }
+    const wanted = needle;
+    const refHit =
+      jumpRefs.find(([name]) => name.toLowerCase() === wanted) ??
+      jumpRefs.find(
+        ([name]) =>
+          name.toLowerCase() === `refs/heads/${wanted}` ||
+          name.toLowerCase() === `refs/tags/${wanted}` ||
+          name.toLowerCase() === `refs/remotes/${wanted}`,
+      );
+    if (refHit) {
+      revealJumpSha(refHit[1]);
+      return;
+    }
+    // A full sha the stream has not delivered yet: park it on the same
+    // reveal machine (it selects on delivery, one info toast on exhaust).
+    if (needle.length === 40 && isShaLike(needle)) {
+      revealJumpSha(needle);
+      return;
+    }
+    jumpError = `No commit, branch, or tag matches “${raw}”`;
+  }
+
+  function jumpKeydown(event: KeyboardEvent): void {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      void jumpSubmit();
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      closeJump();
+    } else if (jumpError !== null) {
+      jumpError = null;
+    }
+  }
 
   /**
    * Repo re-targeting — on mount and on every repo switch it resets
@@ -955,6 +1074,33 @@
         return;
     }
     event.preventDefault();
+    // Shift + movement extends the multi-selection over the anchor..target
+    // row range (the shift-click machine, driven by keys; Home/End reach
+    // the list ends). The anchor stays put, so repeated shifts grow the
+    // same range; a plain click/arrow resets it (select()).
+    if (event.shiftKey) {
+      const anchorIdx =
+        anchorSha !== null
+          ? store.indexOfSha(anchorSha)
+          : current >= 0
+            ? current
+            : next;
+      const lo = Math.min(Math.max(anchorIdx, 0), next);
+      const hi = Math.max(Math.max(anchorIdx, 0), next);
+      const range: string[] = [];
+      for (let i = lo; i <= hi; i++) {
+        const commit = commits[i];
+        if (commit) range.push(commit.sha);
+      }
+      if (range.length > 0) {
+        multiShas = range;
+        const sha = commits[next]?.sha;
+        if (sha) select(sha, { keepMulti: true, scroll: true });
+        return;
+      }
+      // The anchor row is no longer in the loaded stream: fall through to
+      // the plain move (which re-anchors), like shift-click's degradation.
+    }
     const sha = commits[next]?.sha;
     if (sha) select(sha, { scroll: true });
   }
@@ -1139,6 +1285,7 @@
           pendingReveal = { sha, toastOnMiss: toastOnMiss ?? false };
         }
       }),
+      onUiEvent("history-jump-to-sha", () => openJump()),
       onUiEvent("graph-open-context-menu", ({ sha, clientX, clientY }) => {
         // Right-click on the graph canvas: same behavior as the DOM list's
         // row menu — select the commit, then open the commit menu at the
@@ -1610,6 +1757,44 @@
     </span>
   </div>
 
+  {#if jumpOpen}
+    <!-- Jump-to-SHA quick open (palette `history.jump-to-sha`): one input,
+         sha / short sha / branch / tag; errors surface inline, never as
+         toasts. -->
+    <div class="jumpbar flex flex-wrap items-center gap-1.5 border-b border-border bg-popover px-2.5 py-1 text-xs" role="search" aria-label="Jump to commit">
+      <span class="relative inline-flex min-w-0 flex-1 basis-40 items-center text-muted-foreground">
+        <span class="pointer-events-none absolute left-[0.45rem] inline-flex opacity-75">
+          <Icon icon={iconSearch} size={12} />
+        </span>
+        <Input
+          class="h-auto rounded-sm bg-card px-6 py-0.5 text-xs placeholder:text-muted-foreground/80"
+          bind:ref={jumpInputEl}
+          type="text"
+          placeholder="Jump to sha, branch, or tag…"
+          aria-label="Jump to commit"
+          aria-invalid={jumpError !== null}
+          onkeydown={jumpKeydown}
+        />
+      </span>
+      <Button
+        class="h-6 shrink-0 rounded-sm px-2.5 text-ui-meta leading-[1.5] font-normal"
+        variant="outline"
+        type="button"
+        onclick={() => void jumpSubmit()}
+      >Go</Button>
+      <Button
+        class="h-6 shrink-0 rounded-sm px-2 text-ui-meta leading-[1.5] font-normal text-muted-foreground"
+        variant="ghost"
+        type="button"
+        aria-label="Close jump-to-commit"
+        onclick={closeJump}
+      >✕</Button>
+      {#if jumpError !== null}
+        <span class="jump-error w-full text-ui-tiny text-destructive" role="alert">{jumpError}</span>
+      {/if}
+    </div>
+  {/if}
+
   {#if showCompare}
     <CompareBar {repoId} {onCompare} />
   {/if}
@@ -1634,6 +1819,7 @@
       onscroll={onScroll}
       role="listbox"
       aria-label="Commits"
+      aria-multiselectable="true"
       tabindex="0"
       aria-activedescendant={activeDescendant}
       onkeydown={onKeydown}

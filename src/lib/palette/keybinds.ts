@@ -65,6 +65,16 @@ export const DEFAULT_BINDINGS: Record<string, string> = {
   "files.quick-open": "ctrl+p",
   "files.save": "ctrl+s",
   "files.markdown-view": "ctrl+shift+v",
+  // Diff surface (find + hunk/file navigation). PageUp/PageDown combos:
+  // modifier+arrow combos would collide with CodeMirror's default keymap
+  // (Alt-Arrow moves/copies lines in the file editor), and these were all
+  // unused before.
+  "diff.find": "ctrl+f",
+  "diff.next-hunk": "alt+pagedown",
+  "diff.prev-hunk": "alt+pageup",
+  "diff.next-file": "alt+shift+pagedown",
+  "diff.prev-file": "alt+shift+pageup",
+  "diff.first-change": "alt+home",
 };
 
 // ---------------------------------------------------------------------------

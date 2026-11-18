@@ -31,6 +31,13 @@ export interface DrawParams {
   outline: string;
   /** Highlight bands / rings; -1 or undefined disables. */
   hoverRow?: number;
+  /**
+   * Lane under the pointer (from the hover hit test): its segments and
+   * commit dots are emphasized ACROSS the visible page (wider edges, a
+   * translucent halo per dot) — the row band marks where you are, the lane
+   * paint shows where that branch runs. `undefined`/`null` disables.
+   */
+  hoverLane?: number | null;
   headRow?: number;
   focusRow?: number;
   /** Draw the focus ring (canvas has keyboard focus). */
@@ -61,6 +68,7 @@ export function drawGraph(ctx: CanvasRenderingContext2D, p: DrawParams): void {
   const nodeRadius = p.nodeRadius ?? 4;
   const edgeWidth = p.edgeWidth ?? 1.5;
   const color = (lane: number): string => laneColor(lane, p.palette);
+  const hoverLane = p.hoverLane ?? null;
 
   ctx.save();
   ctx.translate(0, -p.scrollTop);
@@ -91,8 +99,13 @@ export function drawGraph(ctx: CanvasRenderingContext2D, p: DrawParams): void {
     for (const edge of row.edges) {
       const x1 = crisp(laneX(edge.from, p.laneWidth, p.padding), edgeWidth);
       const x2 = crisp(laneX(edge.to, p.laneWidth, p.padding), edgeWidth);
+      // Lane hover: draw that lane's segments (in OR out of the hovered
+      // row) a step thicker so its run stands out across the page — no
+      // relayout, same lane color.
+      const emphasized =
+        hoverLane !== null && (edge.from === hoverLane || edge.to === hoverLane);
       ctx.strokeStyle = override ?? color(edge.from);
-      ctx.lineWidth = edgeWidth;
+      ctx.lineWidth = emphasized ? edgeWidth + 1 : edgeWidth;
       ctx.beginPath();
       ctx.moveTo(x1, y1);
       if (x1 === x2) {
@@ -106,13 +119,21 @@ export function drawGraph(ctx: CanvasRenderingContext2D, p: DrawParams): void {
   }
 
   // 3) Commit nodes on top of the edges. A bookmarked node (M7) gets a
-  //    small dashed ring marker in addition (display-only in M7).
+  //    small dashed ring marker in addition (display-only in M7). A node
+  //    on the hovered lane gets a translucent halo in its lane color —
+  //    the dot-level half of the lane emphasis (see the edge pass).
   for (let i = first; i < last; i += 1) {
     const row = p.rows[i];
     if (!row) continue;
     const override = p.colorOverrides?.get(i);
     const cx = laneX(row.lane, p.laneWidth, p.padding);
     const cy = rowCenterY(i, p.rowHeight);
+    if (hoverLane !== null && row.lane === hoverLane) {
+      ctx.beginPath();
+      ctx.arc(cx, cy, nodeRadius + 3.5, 0, TAU);
+      ctx.fillStyle = withAlpha(override ?? color(row.lane), 0.25);
+      ctx.fill();
+    }
     ctx.beginPath();
     ctx.arc(cx, cy, nodeRadius, 0, TAU);
     ctx.fillStyle = override ?? color(row.lane);

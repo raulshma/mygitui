@@ -11,10 +11,14 @@ import {
   fileChangeKind,
   fileKindLabel,
   fileKindLetter,
+  filePatchText,
+  findMatches,
   hunkCounts,
+  hunkPatchText,
   isContextLine,
   rowHeight,
   rowHeights,
+  rowLineText,
   ROW_HEIGHTS,
 } from "$lib/components/diff/rowModel";
 
@@ -456,5 +460,243 @@ describe("stats and heights", () => {
     const heights = rowHeights(model.rows);
     expect(heights).toHaveLength(model.rows.length);
     expect(new Set(heights).size).toBeLessThanOrEqual(3); // header/hunk/line
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Whitespace toggles (rowModelOptions)
+// ---------------------------------------------------------------------------
+
+describe("buildRowModel whitespace options", () => {
+  /** A ws-only pair ('foo ' → 'foo') plus a real change, one hunk. */
+  function wsMixedHunk(): DiffHunk {
+    return hunk([
+      line(" ", "ctx", 1, 1),
+      line("-", "foo ", 2, null),
+      line("+", "foo", null, 2),
+      line("-", "real del", 3, null),
+      line("+", "real add", null, 3),
+    ]);
+  }
+
+  it("hideWhitespaceRows drops trim-equal +/- pairs, keeps the rest", () => {
+    const model = buildRowModel(
+      [file({ hunks: [wsMixedHunk()] })],
+      "unified",
+      NO_COLLAPSE,
+      { hideWhitespaceRows: true },
+    );
+    const texts = model.rows
+      .filter((r) => r.kind === "line")
+      .map((r) => (r as { line: DiffLine }).line.text);
+    // The 'foo '/foo pair is gone; context and the real change stay.
+    expect(texts).toEqual(["ctx", "real del", "real add"]);
+  });
+
+  it("hideWhitespaceRows keeps counts consistent with the visible rows", () => {
+    const off = buildRowModel([file({ additions: 2, deletions: 2, hunks: [wsMixedHunk()] })], "unified", NO_COLLAPSE);
+    const on = buildRowModel(
+      [file({ additions: 2, deletions: 2, hunks: [wsMixedHunk()] })],
+      "unified",
+      NO_COLLAPSE,
+      { hideWhitespaceRows: true },
+    );
+    expect(off.totalAdditions).toBe(2);
+    expect(off.totalDeletions).toBe(2);
+    expect(on.totalAdditions).toBe(1);
+    expect(on.totalDeletions).toBe(1);
+    // Hunk header counts shrink with the hidden rows too.
+    const header = on.rows.find((r) => r.kind === "hunk-header") as {
+      oldCount: number;
+      newCount: number;
+    };
+    expect(header.oldCount).toBe(2); // ctx + real del
+    expect(header.newCount).toBe(2); // ctx + real add
+  });
+
+  it("hideWhitespaceRows re-pairs split rows over the hidden pair", () => {
+    const model = buildRowModel(
+      [file({ hunks: [wsMixedHunk()] })],
+      "split",
+      NO_COLLAPSE,
+      { hideWhitespaceRows: true },
+    );
+    const kinds = model.rows.map((r) => r.kind);
+    expect(kinds).toEqual(["file-header", "hunk-header", "context", "pair"]);
+    const pair = model.rows[3] as { left: DiffLine | null; right: DiffLine | null };
+    expect(pair.left).toMatchObject({ text: "real del" });
+    expect(pair.right).toMatchObject({ text: "real add" });
+  });
+
+  it("hideWhitespaceRows never hides context or unpaired changes", () => {
+    const h = hunk([
+      line(" ", "  ", 1, 1), // whitespace-only CONTEXT — must stay
+      line("+", "  ", null, 2), // unpaired blank add — must stay
+    ]);
+    const model = buildRowModel([file({ hunks: [h] })], "unified", NO_COLLAPSE, {
+      hideWhitespaceRows: true,
+    });
+    const texts = model.rows
+      .filter((r) => r.kind === "line")
+      .map((r) => (r as { line: DiffLine }).line.text);
+    expect(texts).toEqual(["  ", "  "]);
+  });
+
+  it("hideWhitespaceRows keeps original lineIndex targets (selection)", () => {
+    const model = buildRowModel(
+      [file({ hunks: [wsMixedHunk()] })],
+      "unified",
+      NO_COLLAPSE,
+      { hideWhitespaceRows: true },
+    );
+    const lineRows = model.rows.filter((r) => r.kind === "line") as Array<{
+      lineIndex: number;
+    }>;
+    // Hidden indices 1/2 are skipped, but the kept rows still carry their
+    // ORIGINAL positional index in the hunk's line list.
+    expect(lineRows.map((r) => r.lineIndex)).toEqual([0, 3, 4]);
+  });
+
+  it("ignoreWhitespaceFiles drops zero-hunk text files, keeps binary/image", () => {
+    const files = [
+      file({ path: "ws-only.txt" }), // ws-only delta → 0 hunks
+      file({ path: "blob.bin", binary: true }), // binary placeholder stays
+      file({ path: "img.png", is_image: true }),
+      file({ hunks: [hunk([line("+", "x", null, 1)])] }),
+    ];
+    const model = buildRowModel(files, "unified", NO_COLLAPSE, {
+      ignoreWhitespaceFiles: true,
+    });
+    const headers = model.rows.filter((r) => r.kind === "file-header") as Array<{
+      file: FileDiff;
+    }>;
+    expect(headers.map((h) => h.file.path)).toEqual(["blob.bin", "img.png", "src/a.txt"]);
+    expect(model.fileCount).toBe(3);
+  });
+
+  it("without options the model is unchanged and fileCount matches the input", () => {
+    const files = [file({ path: "a.txt" }), file({ path: "b.txt" })];
+    const model = buildRowModel(files, "unified", NO_COLLAPSE);
+    expect(model.fileCount).toBe(2);
+    expect(model.rows.filter((r) => r.kind === "file-header")).toHaveLength(2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Copy actions (unified patch synthesis)
+// ---------------------------------------------------------------------------
+
+describe("filePatchText / hunkPatchText", () => {
+  it("synthesizes proper headers and @@ hunks for a modified file", () => {
+    const f = file({ old_path: null, hunks: [changeHunk()] });
+    const patch = filePatchText(f);
+    const lines = patch.split("\n");
+    expect(lines[0]).toBe("diff --git a/src/a.txt b/src/a.txt");
+    expect(lines[1]).toBe("--- a/src/a.txt");
+    expect(lines[2]).toBe("+++ b/src/a.txt");
+    expect(lines[3]).toBe("@@ -1,4 +1,4 @@");
+    expect(lines.slice(4)).toEqual([
+      " keep",
+      "-old",
+      "-old2",
+      "+new",
+      "+new2",
+      " tail",
+    ]);
+  });
+
+  it("uses /dev/null sides and a/old_path for added, deleted, renamed files", () => {
+    const added = file({
+      path: "new.txt",
+      additions: 1,
+      hunks: [hunk([line("+", "x", null, 1)])],
+    });
+    expect(filePatchText(added).split("\n").slice(0, 3)).toEqual([
+      "diff --git a/new.txt b/new.txt",
+      "--- /dev/null",
+      "+++ b/new.txt",
+    ]);
+    const deleted = file({
+      path: "old.txt",
+      deletions: 1,
+      hunks: [hunk([line("-", "x", 1, null)])],
+    });
+    expect(filePatchText(deleted).split("\n").slice(0, 3)).toEqual([
+      "diff --git a/old.txt b/old.txt",
+      "--- a/old.txt",
+      "+++ /dev/null",
+    ]);
+    const renamed = file({
+      path: "b.txt",
+      old_path: "a.txt",
+      hunks: [hunk([line(" ", "x", 1, 1)])],
+    });
+    const header = filePatchText(renamed).split("\n").slice(0, 3);
+    expect(header[0]).toBe("diff --git a/a.txt b/b.txt");
+    expect(header[1]).toBe("--- a/a.txt");
+    expect(header[2]).toBe("+++ b/b.txt");
+  });
+
+  it("hunkPatchText returns one hunk's patch and null for a bad index", () => {
+    const f = file({
+      hunks: [hunk([line("+", "a", null, 1)], 1, 1), hunk([line("-", "b", 5, null)], 5, 5)],
+    });
+    expect(hunkPatchText(f, 1)).toBe("@@ -5,1 +5,0 @@\n-b");
+    expect(hunkPatchText(f, 9)).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Find-in-diff
+// ---------------------------------------------------------------------------
+
+describe("findMatches", () => {
+  it("matches case-insensitively across unified rows and reports ranges", () => {
+    const model = buildRowModel([file({ hunks: [changeHunk()] })], "unified", NO_COLLAPSE);
+    // rows: 0 header, 1 hunk-header, 2 keep, 3 old, 4 old2, 5 new, ...
+    const hits = findMatches(model.rows, "OLD");
+    expect(hits).toEqual([
+      { rowIndex: 3, side: null, start: 0, end: 3 },
+      { rowIndex: 4, side: null, start: 0, end: 3 },
+    ]);
+  });
+
+  it("addresses split halves (left then right) per pair row", () => {
+    const model = buildRowModel([file({ hunks: [changeHunk()] })], "split", NO_COLLAPSE);
+    // rows: 0 header, 1 hunk-header, 2 context, 3 pair(old|new), 4 pair(old2|new2)
+    const hits = findMatches(model.rows, "old2");
+    expect(hits).toEqual([{ rowIndex: 4, side: "left", start: 0, end: 4 }]);
+  });
+
+  it("returns every non-overlapping occurrence and skips empty queries", () => {
+    const model = buildRowModel(
+      [file({ hunks: [hunk([line("+", "abab", null, 1)])] })],
+      "unified",
+      NO_COLLAPSE,
+    );
+    expect(findMatches(model.rows, "ab").map((m) => m.start)).toEqual([0, 2]);
+    expect(findMatches(model.rows, "")).toEqual([]);
+  });
+
+  it("skips header rows (no searchable line text)", () => {
+    const model = buildRowModel(
+      [file({ path: "keep-old.txt", hunks: [changeHunk()] })],
+      "unified",
+      NO_COLLAPSE,
+    );
+    expect(findMatches(model.rows, "keep-old.txt")).toEqual([]);
+  });
+});
+
+describe("rowLineText", () => {
+  it("returns the row text, honoring the requested split half", () => {
+    const split = buildRowModel([file({ hunks: [changeHunk()] })], "split", NO_COLLAPSE);
+    const pair = split.rows[3];
+    expect(rowLineText(pair, "left")).toBe("old");
+    expect(rowLineText(pair, "right")).toBe("new");
+    expect(rowLineText(pair, null)).toBe("old");
+    const unified = buildRowModel([file({ hunks: [changeHunk()] })], "unified", NO_COLLAPSE);
+    expect(rowLineText(unified.rows[3], null)).toBe("old");
+    expect(rowLineText(unified.rows[0], null)).toBeNull(); // header row
   });
 });

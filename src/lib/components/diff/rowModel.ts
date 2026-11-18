@@ -133,11 +133,70 @@ export interface RowModel {
   totalAdditions: number;
   /** Σ deletions across all files (toolbar stat). */
   totalDeletions: number;
+  /**
+   * Files represented in the row list — smaller than the input's length
+   * when the ignore-whitespace toggle dropped ws-only (zero-hunk) files,
+   * so the toolbar's file count matches what is rendered.
+   */
+  fileCount: number;
 }
 
 /** Context origins: ' ' (plain context) and '=' (marker/context variant). */
 export function isContextLine(line: DiffLine): boolean {
   return line.origin === " " || line.origin === "=";
+}
+
+/** Optional row-model filters driven by the diff toolbar toggles. */
+export interface RowModelOptions {
+  /**
+   * "Ignore whitespace" (backend `DiffQuery.ignore_whitespace` parity,
+   * FE-side): drop file entries whose change carried NO hunks — libgit2
+   * strips ws-only deltas but keeps the file entry, which would otherwise
+   * render as a bare header row. Binary/image entries always stay.
+   */
+  ignoreWhitespaceFiles?: boolean;
+  /**
+   * "Hide whitespace changes": pure row filter. Heuristic — within each
+   * change block, the k-th '-' is paired with the k-th '+' (the split
+   * view's alignment); a pair whose TRIMMED texts are equal hides both
+   * lines. Context lines are never hidden, and unpaired '-'/'+' lines
+   * (pure adds/deletes, even blank ones) always stay.
+   */
+  hideWhitespaceRows?: boolean;
+}
+
+/**
+ * Marks the whitespace-only change pairs in one hunk's line list (see
+ * {@link RowModelOptions.hideWhitespaceRows} for the heuristic). Returns a
+ * parallel `boolean[]` — `true` hides the line at that index.
+ */
+export function whitespaceHiddenLines(lines: readonly DiffLine[]): boolean[] {
+  const hidden = new Array<boolean>(lines.length).fill(false);
+  let i = 0;
+  while (i < lines.length) {
+    if (isContextLine(lines[i])) {
+      i++;
+      continue;
+    }
+    const dels: number[] = [];
+    const adds: number[] = [];
+    let j = i;
+    while (j < lines.length && !isContextLine(lines[j])) {
+      (lines[j].origin === "-" ? dels : adds).push(j);
+      j++;
+    }
+    const pairs = Math.min(dels.length, adds.length);
+    for (let k = 0; k < pairs; k++) {
+      const del = lines[dels[k]]!;
+      const add = lines[adds[k]]!;
+      if (del.text.trim() === add.text.trim()) {
+        hidden[dels[k]!] = true;
+        hidden[adds[k]!] = true;
+      }
+    }
+    i = j;
+  }
+  return hidden;
 }
 
 /** Change kind shown on a file header badge. */
@@ -213,7 +272,10 @@ export function fileKindLabel(kind: FileChangeKind): string {
 }
 
 /** Line counts for the "@@ -oldStart,oldCount +newStart,newCount @@" header. */
-export function hunkCounts(hunk: DiffHunk): { oldCount: number; newCount: number } {
+export function hunkCounts(hunk: { lines: readonly DiffLine[] }): {
+  oldCount: number;
+  newCount: number;
+} {
   let oldCount = 0;
   let newCount = 0;
   for (const line of hunk.lines) {
@@ -254,48 +316,61 @@ export function rowHeights(rows: readonly DiffRow[]): number[] {
  * form a block; k-th '-' pairs with k-th '+' of the block; the longer run
  * pads with null. (libgit2 emits '-'-runs before '+'-runs per block, but the
  * walker is order-agnostic so interleaved orders still pair sensibly.)
+ * `hidden` marks whitespace-pair lines to skip (see
+ * {@link whitespaceHiddenLines}); `lineIndex`/`leftIndex`/`rightIndex` stay
+ * POSITIONAL in the hunk's original line list (M12 selection targets).
  * `fileIndex`/`hunkIndex` are stamped onto every row (M12 selection owner).
  */
 function appendHunkBodySplit(
   lines: readonly DiffLine[],
+  hidden: readonly boolean[],
   rows: DiffRow[],
   fileIndex: number,
   hunkIndex: number,
 ): void {
   let i = 0;
   while (i < lines.length) {
+    if (hidden[i]) {
+      i++;
+      continue;
+    }
     const line = lines[i];
     if (isContextLine(line)) {
       rows.push({ kind: "context", line, fileIndex, hunkIndex, lineIndex: i });
       i++;
       continue;
     }
-    // Gather one change block: consecutive '+'/'-' lines.
+    // Gather one change block: consecutive '+'/'-' lines (hidden lines are
+    // consumed silently and excluded from the pairing).
     const blockStart = i;
-    while (i < lines.length && !isContextLine(lines[i])) i++;
+    let j = i;
     let dels = 0;
     let adds = 0;
-    for (let k = blockStart; k < i; k++) {
-      if (lines[k].origin === "-") dels++;
-      else adds++;
+    while (j < lines.length && !isContextLine(lines[j])) {
+      if (!hidden[j]) {
+        if (lines[j].origin === "-") dels++;
+        else adds++;
+      }
+      j++;
     }
+    i = j;
     const pairs = Math.max(dels, adds);
     let d = blockStart;
     let a = blockStart;
     for (let k = 0; k < pairs; k++) {
-      while (d < i && lines[d].origin !== "-") d++;
-      while (a < i && lines[a].origin !== "+") a++;
+      while (d < j && (hidden[d] || lines[d].origin !== "-")) d++;
+      while (a < j && (hidden[a] || lines[a].origin !== "+")) a++;
       rows.push({
         kind: "pair",
-        left: d < i ? lines[d] : null,
-        right: a < i ? lines[a] : null,
+        left: d < j ? lines[d] : null,
+        right: a < j ? lines[a] : null,
         fileIndex,
         hunkIndex,
-        leftIndex: d < i ? d : null,
-        rightIndex: a < i ? a : null,
+        leftIndex: d < j ? d : null,
+        rightIndex: a < j ? a : null,
       });
-      if (d < i) d++;
-      if (a < i) a++;
+      if (d < j) d++;
+      if (a < j) a++;
     }
   }
 }
@@ -326,13 +401,19 @@ function appendHunkBodySingle(
 
 /**
  * Build the row list for the current mode. `collapsedPaths` (keyed by
- * FileDiff.path) replaces a file's body with just its header.
+ * FileDiff.path) replaces a file's body with just its header. `options`
+ * carries the whitespace toggles (see {@link RowModelOptions}); the hidden
+ * markers stay positional in each hunk's line list, so selection/line
+ * targets (M12) keep addressing the original `hunk.lines`.
  */
 export function buildRowModel(
   files: readonly FileDiff[],
   mode: DiffMode,
   collapsedPaths: ReadonlySet<string>,
+  options: RowModelOptions = {},
 ): RowModel {
+  const ignoreWsFiles = options.ignoreWhitespaceFiles === true;
+  const hideWsRows = options.hideWhitespaceRows === true;
   const rows: DiffRow[] = [];
   /** Parallel to `rows`: owning file's index (syntax highlighting, M11). */
   const fileIndexes: number[] = [];
@@ -342,18 +423,52 @@ export function buildRowModel(
   let maxLineText = "";
   let totalAdditions = 0;
   let totalDeletions = 0;
+  let fileCount = 0;
 
   for (let fileIndex = 0; fileIndex < files.length; fileIndex++) {
     const file = files[fileIndex];
+    // Ignore-whitespace: ws-only deltas arrive as zero-hunk file entries
+    // (binary/image placeholders always render). Dropped files keep their
+    // original `fileIndex` — the indexes stay aligned with the input list.
+    if (
+      ignoreWsFiles &&
+      file.hunks.length === 0 &&
+      !file.binary &&
+      !file.is_image
+    ) {
+      continue;
+    }
+    fileCount++;
+    // Per-hunk hidden markers (all-false unless the hide filter is on).
+    const hiddenPerHunk = hideWsRows
+      ? file.hunks.map((hunk) => whitespaceHiddenLines(hunk.lines))
+      : null;
     totalAdditions += file.additions;
     totalDeletions += file.deletions;
-    for (const hunk of file.hunks) {
-      for (const line of hunk.lines) {
-        if (line.text.length > maxTextChars) maxTextChars = line.text.length;
-        const cols = visualColumns(line.text);
+    if (hiddenPerHunk !== null) {
+      // Keep the +/- stats consistent with what is actually rendered:
+      // subtract the hidden pair members from the backend's file counters.
+      for (let h = 0; h < file.hunks.length; h++) {
+        const hidden = hiddenPerHunk[h];
+        const lines = file.hunks[h].lines;
+        for (let i = 0; i < hidden.length; i++) {
+          if (!hidden[i]) continue;
+          if (lines[i].origin === "-") totalDeletions--;
+          else totalAdditions--;
+        }
+      }
+    }
+    for (let hunkIndex = 0; hunkIndex < file.hunks.length; hunkIndex++) {
+      const lines = file.hunks[hunkIndex].lines;
+      const hidden = hiddenPerHunk?.[hunkIndex];
+      for (let i = 0; i < lines.length; i++) {
+        if (hidden?.[i]) continue;
+        const text = lines[i].text;
+        if (text.length > maxTextChars) maxTextChars = text.length;
+        const cols = visualColumns(text);
         if (cols > maxLineCols) {
           maxLineCols = cols;
-          maxLineText = line.text;
+          maxLineText = text;
         }
       }
     }
@@ -380,7 +495,12 @@ export function buildRowModel(
       change === "added" ? "new" : change === "deleted" ? "old" : null;
     for (let hunkIndex = 0; hunkIndex < file.hunks.length; hunkIndex++) {
       const hunk = file.hunks[hunkIndex];
-      const { oldCount, newCount } = hunkCounts(hunk);
+      const hidden = hiddenPerHunk?.[hunkIndex];
+      // Hunk-header counts stay consistent with the visible rows.
+      const visibleLines = hidden
+        ? hunk.lines.filter((_, i) => !hidden[i])
+        : hunk.lines;
+      const { oldCount, newCount } = hunkCounts({ lines: visibleLines });
       rows.push({
         kind: "hunk-header",
         fileIndex,
@@ -393,6 +513,7 @@ export function buildRowModel(
       fileIndexes.push(fileIndex);
       if (mode === "unified") {
         for (let lineIndex = 0; lineIndex < hunk.lines.length; lineIndex++) {
+          if (hidden?.[lineIndex]) continue;
           rows.push({
             kind: "line",
             line: hunk.lines[lineIndex],
@@ -408,7 +529,13 @@ export function buildRowModel(
         for (let i = before; i < rows.length; i++) fileIndexes.push(fileIndex);
       } else {
         const before = rows.length;
-        appendHunkBodySplit(hunk.lines, rows, fileIndex, hunkIndex);
+        appendHunkBodySplit(
+          hunk.lines,
+          hidden ?? EMPTY_HIDDEN,
+          rows,
+          fileIndex,
+          hunkIndex,
+        );
         if (rows.length > before) hasSplitRows = true;
         for (let i = before; i < rows.length; i++) fileIndexes.push(fileIndex);
       }
@@ -423,5 +550,170 @@ export function buildRowModel(
     maxLineText,
     totalAdditions,
     totalDeletions,
+    fileCount,
   };
+}
+
+/** Shared all-false hidden marker for the no-filter path. */
+const EMPTY_HIDDEN: readonly boolean[] = [];
+
+// ---------------------------------------------------------------------------
+// Copy actions (unified patch synthesis) — pure text, unit tested.
+// ---------------------------------------------------------------------------
+
+/** Prefixes hunk lines with their patch sign (unknown origins read as context). */
+function patchSign(origin: DiffLine["origin"]): string {
+  return origin === "-" || origin === "+" ? origin : " ";
+}
+
+/**
+ * Unified patch text for one file: `diff --git` / `---` / `+++` headers
+ * (a `/dev/null` side for pure adds/deletes, `a/<old_path>` for renames)
+ * followed by every hunk's `@@` header and signed lines. Best-effort
+ * synthesis from the `FileDiff` payload — good enough to paste/re-apply
+ * context, not byte-identical to `git diff` output (no index lines, no
+ * rename bipcharts).
+ */
+export function filePatchText(file: FileDiff): string {
+  const parts = [`diff --git a/${file.old_path ?? file.path} b/${file.path}`];
+  parts.push(
+    fileChangeKind(file) === "added"
+      ? "--- /dev/null"
+      : `--- a/${file.old_path ?? file.path}`,
+  );
+  parts.push(
+    fileChangeKind(file) === "deleted"
+      ? "+++ /dev/null"
+      : `+++ b/${file.path}`,
+  );
+  for (let hunkIndex = 0; hunkIndex < file.hunks.length; hunkIndex++) {
+    const header = hunkHeaderText(file, hunkIndex);
+    if (header === null) continue; // unreachable: the hunk exists
+    parts.push(header);
+    for (const line of file.hunks[hunkIndex].lines) {
+      parts.push(patchSign(line.origin) + line.text);
+    }
+  }
+  return parts.join("\n");
+}
+
+/** The "@@ -a,b +c,d @@" line for one of `file`'s hunks (null = no hunk). */
+function hunkHeaderText(file: FileDiff, hunkIndex: number): string | null {
+  const hunk = file.hunks[hunkIndex];
+  if (!hunk) return null;
+  const { oldCount, newCount } = hunkCounts(hunk);
+  return `@@ -${hunk.old_start},${oldCount} +${hunk.new_start},${newCount} @@`;
+}
+
+/**
+ * One hunk's patch text (`@@` header + signed lines), without the file
+ * headers. Null when the file has no such hunk.
+ */
+export function hunkPatchText(file: FileDiff, hunkIndex: number): string | null {
+  const header = hunkHeaderText(file, hunkIndex);
+  if (header === null) return null;
+  const parts = [header];
+  for (const line of file.hunks[hunkIndex].lines) {
+    parts.push(patchSign(line.origin) + line.text);
+  }
+  return parts.join("\n");
+}
+
+// ---------------------------------------------------------------------------
+// Find-in-diff — pure search over the flattened row model.
+// ---------------------------------------------------------------------------
+
+/** One find hit: the row (and split half) plus the matched char range. */
+export interface FindMatch {
+  rowIndex: number;
+  /** Split-row half carrying the hit; null for whole-row text rows. */
+  side: "left" | "right" | null;
+  /** Matched range in the row's text (JS string indices). */
+  start: number;
+  end: number;
+}
+
+/**
+ * Render-side find highlight handed to DiffRow: the matched char range of
+ * one row half plus whether it is the currently navigated match.
+ */
+export interface FindSpan {
+  side: "left" | "right" | null;
+  start: number;
+  end: number;
+  active: boolean;
+}
+
+/** The searchable line texts of one row (headers/binary/image have none). */
+export function rowSearchTexts(row: DiffRow): Array<{
+  side: "left" | "right" | null;
+  text: string;
+}> {
+  switch (row.kind) {
+    case "line":
+    case "single":
+    case "context":
+      return [{ side: null, text: row.line.text }];
+    case "pair": {
+      const out: Array<{ side: "left" | "right" | null; text: string }> = [];
+      if (row.left !== null) out.push({ side: "left", text: row.left.text });
+      if (row.right !== null) out.push({ side: "right", text: row.right.text });
+      return out;
+    }
+    default:
+      return [];
+  }
+}
+
+/**
+ * Case-insensitive SUBSTRING matches of `query` over the row model (the
+ * documented heuristic: plain indexOf, no regex; matching folds case with
+ * toLowerCase — fast and Unicode-simple; non-overlapping per text). Empty
+ * queries match nothing. Header/hunk-header/binary/image rows carry no
+ * searchable line text and are skipped.
+ */
+export function findMatches(
+  rows: readonly DiffRow[],
+  query: string,
+): FindMatch[] {
+  const needle = query.toLowerCase();
+  if (needle === "") return [];
+  const out: FindMatch[] = [];
+  for (let rowIndex = 0; rowIndex < rows.length; rowIndex++) {
+    for (const { side, text } of rowSearchTexts(rows[rowIndex])) {
+      const haystack = text.toLowerCase();
+      let from = 0;
+      for (;;) {
+        const at = haystack.indexOf(needle, from);
+        if (at === -1) break;
+        out.push({ rowIndex, side, start: at, end: at + needle.length });
+        from = at + needle.length;
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * The rendered line text of one row (context-menu "copy line"). `side`
+ * picks the half of a split pair row; null takes the row's single text
+ * (or, for an unpaired pair row, whichever half exists).
+ */
+export function rowLineText(
+  row: DiffRow,
+  side: "left" | "right" | null,
+): string | null {
+  switch (row.kind) {
+    case "line":
+    case "single":
+    case "context":
+      return row.line.text;
+    case "pair": {
+      if (side === "left") return row.left?.text ?? null;
+      if (side === "right") return row.right?.text ?? null;
+      return row.left?.text ?? row.right?.text ?? null;
+    }
+    default:
+      return null;
+  }
 }

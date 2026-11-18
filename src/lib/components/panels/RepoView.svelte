@@ -168,12 +168,14 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
   } from "$lib/stores/tabs.svelte";
   import { loadHistoryPrefs } from "$lib/stores/historyPrefs";
   import {
+    diffRowKey,
     diffScrollKey,
     fileScrollKey,
     workspaceSession,
     type SessionCenterKind,
     type StoredDiffRef,
   } from "$lib/stores/workspaceSession.svelte";
+  import { diffPrefs } from "$lib/diff/diffPrefs.svelte";
   import { railPins } from "$lib/stores/railPins.svelte";
   import { startAuthEvents, startOpsEvents } from "$lib/stores/ops.svelte";
   import { autofetch } from "$lib/stores/autofetch.svelte";
@@ -324,6 +326,12 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
   } | null>(null);
   /** Scroll the next-mounted DiffViewer restores (null = top, as always). */
   let diffScrollSeed = $state<number | null>(null);
+  /**
+   * First-visible-row the next-mounted DiffViewer restores (null = top).
+   * Row seeds survive wrap/mode height changes that drift px offsets; the
+   * px seed stays for payloads saved before rows were recorded.
+   */
+  let diffRowSeed = $state<number | null>(null);
 
   /**
    * Mirrors the live workspace state into the current root's session. One
@@ -367,12 +375,40 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
     workspaceSession.setScroll(root, fileScrollKey(path), top);
   }
 
-  /** Scroll capture from the open working-copy diff. */
-  function onDiffScrollCapture(top: number): void {
+  /** Scroll capture from the open working-copy diff (px + first row). */
+  function onDiffScrollCapture(top: number, firstRow: number): void {
     const path = diffEntry?.path;
     if (path === undefined || root === "") return;
     workspaceSession.setScroll(root, diffScrollKey(path), top);
+    workspaceSession.setScroll(root, diffRowKey(path), firstRow);
   }
+
+  /** The saved session first-visible-row of a diff path (tab restore). */
+  function rowSeedFor(path: string): number | null {
+    if (root === "") return null;
+    return workspaceSession.get(root)?.scrolls[diffRowKey(path)] ?? null;
+  }
+
+  /**
+   * The ignore-whitespace preference flipped in a diff toolbar (typed bus):
+   * re-stream the workspace diff so the backend query honors the new flag
+   * (the viewer's row model drops the ws-only zero-hunk file entries once
+   * the fresh pages land).
+   */
+  $effect(() => {
+    return onUiEvent("diff-ignore-ws-changed", () => {
+      if (center.kind !== "diff") return;
+      void streamDiffTabs(
+        center.tabs,
+        center.activePath,
+        diffRepoId ?? undefined,
+        diffRoot ?? undefined,
+        diffRepoName ?? undefined,
+        scrollSeedFor(center.activePath),
+        rowSeedFor(center.activePath),
+      );
+    });
+  });
 
   /** Stable attach callback: the workspace registers its capture API once. */
   function attachCapture(api: WorkspaceCapture | null): void {
@@ -1184,6 +1220,7 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
     activeFile = null;
     pendingDiffRestore = null;
     diffScrollSeed = null;
+    diffRowSeed = null;
     editorSeed = null;
     // Untracked: the restore reads reactive state (status, openFiles) whose
     // changes must not re-trigger this wipe.
@@ -1274,6 +1311,7 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
       undefined,
       undefined,
       scrollSeedFor(active),
+      rowSeedFor(active),
     );
     return true;
   }
@@ -1382,7 +1420,7 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
     targetRepoName?: string,
     scope: DiffScope = "unstaged",
     /** Restore-only extras (a workspace session putting this diff back). */
-    opts?: { initialScroll?: number },
+    opts?: { initialScroll?: number; initialRow?: number },
   ): Promise<void> {
     const existing = center.kind === "diff" ? center.tabs : [];
     await streamDiffTabs(
@@ -1392,6 +1430,7 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
       targetRoot,
       targetRepoName,
       opts?.initialScroll ?? null,
+      opts?.initialRow ?? null,
     );
   }
 
@@ -1409,6 +1448,7 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
     targetRoot?: string,
     targetRepoName?: string,
     initialScroll: number | null = null,
+    initialRow: number | null = null,
   ): Promise<void> {
     const active = activeDiffTab(tabs, activePath);
     if (!active) return;
@@ -1420,6 +1460,7 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
     diffStreamScope = active.scope;
     // Consumed by the DiffViewer the stream remounts (null = top, as always).
     diffScrollSeed = initialScroll;
+    diffRowSeed = initialRow;
     syncSession();
     const { oldSide, newSide } = diffScopeSides(active.scope);
     diffRepoId = targetRepoId ?? repoId;
@@ -1442,6 +1483,8 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
         // Own stream slot so the workspace diff pane never supersedes the
         // agent/commit-detail/popout diff streams (per-consumer slots).
         "repo-diff",
+        // The toolbar's ignore-whitespace flag rides the backend query.
+        diffPrefs.ignoreWs,
       );
     } catch (err) {
       if (token === diffToken) {
@@ -1474,12 +1517,14 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
         diffRoot ?? undefined,
         diffRepoName ?? undefined,
         scrollSeedFor(path),
+        rowSeedFor(path),
       );
       return;
     }
     // Same comparison as the shown batch: just switch, the viewer remounts
     // (keyed by path) and restores the tab's saved scroll.
     diffScrollSeed = scrollSeedFor(path);
+    diffRowSeed = rowSeedFor(path);
     center = { kind: "diff", tabs: center.tabs, activePath: path };
     syncSession();
   }
@@ -1505,6 +1550,7 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
     // The activated neighbor remounts the viewer: seed its saved scroll,
     // re-streaming when its comparison differs from the streamed sides.
     diffScrollSeed = scrollSeedFor(activePath);
+    diffRowSeed = rowSeedFor(activePath);
     const tab = tabs.find((t) => t.entry.path === activePath)!;
     if (tab.scope !== diffStreamScope) {
       void streamDiffTabs(
@@ -1514,6 +1560,7 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
         diffRoot ?? undefined,
         diffRepoName ?? undefined,
         diffScrollSeed,
+        diffRowSeed,
       );
       return;
     }
@@ -2007,6 +2054,7 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
     onFileScroll={onFileScrollCapture}
     attachWorkspace={attachCapture}
     diffInitialScroll={diffScrollSeed}
+    diffInitialRow={diffRowSeed}
     onDiffScroll={onDiffScrollCapture}
   />
 {/snippet}

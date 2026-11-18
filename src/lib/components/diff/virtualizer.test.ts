@@ -9,7 +9,7 @@
 import { describe, expect, it } from "vitest";
 import type { DiffHunk, DiffLine, FileDiff } from "$lib/ipc/types";
 import { buildRowModel, rowHeights, ROW_HEIGHTS } from "$lib/components/diff/rowModel";
-import { buildLayout, rowTop, visibleSlices, type VLayout } from "$lib/components/diff/virtualizer";
+import { buildLayout, firstVisibleRow, rowTop, visibleSlices, type VLayout } from "$lib/components/diff/virtualizer";
 
 // ---------------------------------------------------------------------------
 // Bucket construction
@@ -304,5 +304,36 @@ describe("perf gate (10k hunks / 200k rows)", () => {
         expect(rowTop(layout, slice.firstRow)).toBeCloseTo(slice.top, 10);
       }
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// firstVisibleRow (rowTop's inverse — the scroll-stable restore position)
+// ---------------------------------------------------------------------------
+
+describe("firstVisibleRow", () => {
+  it("resolves the row under a scrollTop across buckets", () => {
+    // buckets: row0@40px, rows1-3@20px (top 40), rows4-5@26px (top 100)
+    const layout = buildLayout([40, 20, 20, 20, 26, 26]);
+    expect(firstVisibleRow(layout, 0)).toBe(0);
+    expect(firstVisibleRow(layout, 39)).toBe(0);
+    expect(firstVisibleRow(layout, 40)).toBe(1);
+    expect(firstVisibleRow(layout, 99)).toBe(3);
+    expect(firstVisibleRow(layout, 100)).toBe(4);
+    // Past the end clamps to the last row.
+    expect(firstVisibleRow(layout, 10_000)).toBe(5);
+  });
+
+  it("round-trips with rowTop", () => {
+    const layout = buildLayout([40, 20, 20, 20, 26, 26, 20]);
+    for (let row = 0; row < layout.totalRows; row++) {
+      expect(firstVisibleRow(layout, rowTop(layout, row))).toBe(row);
+    }
+  });
+
+  it("handles empty layouts and negative scrolls", () => {
+    expect(firstVisibleRow(buildLayout([]), 100)).toBe(0);
+    const layout = buildLayout([20, 20]);
+    expect(firstVisibleRow(layout, -5)).toBe(0);
   });
 });

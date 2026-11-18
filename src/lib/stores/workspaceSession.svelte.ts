@@ -73,6 +73,16 @@ export function diffScrollKey(path: string): string {
   return `diff:${path}`;
 }
 
+/**
+ * Scroll-record key for an open diff's FIRST VISIBLE ROW (the scroll-stable
+ * restore position: a row index survives wrap/mode height changes that
+ * would drift a px offset). Stored in the same `scrolls` map as the px
+ * keys, so parsing needs no schema change.
+ */
+export function diffRowKey(path: string): string {
+  return `diffrow:${path}`;
+}
+
 /** The session value used before anything was persisted for a root. */
 export function emptyStoredSession(): StoredWorkspaceSession {
   return {

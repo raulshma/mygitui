@@ -14,9 +14,9 @@
    */
   import { describeError } from "$lib/errors";
   import type { FileDiff } from "$lib/ipc/types";
-  import { onMount } from "svelte";
+  import { onMount, untrack } from "svelte";
   import { discard, stage } from "$lib/ipc/client";
-  import { onUiEvent } from "$lib/palette/events";
+  import { emitUiEvent, onUiEvent } from "$lib/palette/events";
   import { appSettings } from "$lib/state/appSettings.svelte";
   import { toast } from "$lib/toast";
   import { ai } from "$lib/ai/ai.svelte";
@@ -29,17 +29,38 @@
   import { currentScheme, THEME_SCHEME_EVENT } from "$lib/theme";
   import {
     buildRowModel,
+    filePatchText,
+    findMatches,
+    hunkPatchText,
     rowHeights,
+    rowLineText,
     ROW_HEIGHTS,
     type DiffMode,
+    type FindSpan,
     type LoadImageFn,
   } from "$lib/components/diff/rowModel";
-  import { buildLayout, visibleSlices } from "$lib/components/diff/virtualizer";
+  import {
+    buildLayout,
+    firstVisibleRow,
+    rowTop,
+    visibleSlices,
+  } from "$lib/components/diff/virtualizer";
   import { measureLineWidth } from "$lib/components/diff/textWidth";
   import { wrappedHeights, wrapMetrics } from "$lib/components/diff/wrapHeights";
   import { GUTTER_PX } from "$lib/components/diff/metrics";
   import { readWrapPref, writeWrapPref } from "$lib/diff/wrapPref";
   import { readDiffModePref, writeDiffModePref } from "$lib/diff/modePref";
+  import {
+    diffPrefs,
+    setHideWs,
+    setIgnoreWs,
+    setWordHighlights,
+  } from "$lib/diff/diffPrefs.svelte";
+  import { copyText } from "$lib/clipboard";
+  import {
+    showMenuAt,
+    type MenuEntry,
+  } from "$lib/components/menu/contextMenuStore.svelte";
   import {
     isLineSelected,
     selectedSet as toSelectedSet,
@@ -72,7 +93,9 @@
     /** Called after a successful hunk stage/unstage/discard. */
     onMutated = undefined,
     initialScrollTop = undefined,
+    initialRow = undefined,
     onScrollChange = undefined,
+    onVisibleRowChange = undefined,
   }: {
     files: FileDiff[];
     mode?: DiffMode;
@@ -90,8 +113,26 @@
      * mount; normal re-streams keep resetting to the top.
      */
     initialScrollTop?: number;
-    /** Scroll capture (rAF-coalesced with the visible-window update). */
-    onScrollChange?: (scrollTop: number) => void;
+    /**
+     * Workspace-session restore, row form: first-visible-row the first
+     * landed batch scrolls to (converted through the layout — a row index
+     * survives wrap/mode height changes that drift a px offset). Preferred
+     * over `initialScrollTop` when both are present.
+     */
+    initialRow?: number;
+    /**
+     * Scroll capture (rAF-coalesced with the visible-window update): the
+     * px offset plus the first visible row (the scroll-stable restore
+     * position; callers may ignore either argument).
+     */
+    onScrollChange?: (scrollTop: number, firstVisibleRow: number) => void;
+    /**
+     * First-visible-row capture (workspace-session per-diff restore): a
+     * row index survives wrap/mode height changes that would drift a px
+     * offset. Reported alongside the scroll capture; only scroll events
+     * report (a never-scrolled diff restores to the top, as before).
+     */
+    onVisibleRowChange?: (rowIndex: number) => void;
   } = $props();
 
   /** Rows rendered beyond the viewport (px, top and bottom). */
@@ -113,9 +154,23 @@
     typeof initialScrollTop === "number" && initialScrollTop > 0
       ? initialScrollTop
       : null;
+  // svelte-ignore state_referenced_locally -- same mount-time seed rule as
+  // the px seed above; the row seed wins when both are present.
+  /** Saved first-visible-row waiting to be applied when the rows land. */
+  let pendingRestoreRow: number | null =
+    typeof initialRow === "number" && initialRow > 0 ? initialRow : null;
 
   const collapsedSet = $derived(new Set(Object.keys(collapsed).filter((p) => collapsed[p])));
-  const model = $derived(buildRowModel(files, mode, collapsedSet));
+  // Whitespace toggles (diffPrefs) feed the model: "ignore whitespace"
+  // drops the zero-hunk file entries the backend keeps for ws-only deltas,
+  // "hide whitespace changes" filters the paired ws-only rows (rowModel.ts
+  // owns the heuristic) so counts/virtualization stay consistent.
+  const model = $derived(
+    buildRowModel(files, mode, collapsedSet, {
+      ignoreWhitespaceFiles: diffPrefs.ignoreWs,
+      hideWhitespaceRows: diffPrefs.hideWs,
+    }),
+  );
 
   // -- wrap: estimated heights + measured corrections --------------------------
 
@@ -174,6 +229,218 @@
 
   // Palette command rides the bus; every mounted viewer flips its wrap.
   $effect(() => onUiEvent("diff-toggle-wrap", toggleWrap));
+
+  // -- whitespace + word-highlight toggles (diffPrefs, see diffPrefs.svelte) --
+
+  /** Ignore-whitespace flips the backend query: streaming parents re-run. */
+  function toggleIgnoreWs(): void {
+    const next = !diffPrefs.ignoreWs;
+    setIgnoreWs(next);
+    emitUiEvent("diff-ignore-ws-changed", { ignore: next });
+  }
+
+  function toggleHideWs(): void {
+    setHideWs(!diffPrefs.hideWs);
+  }
+
+  function toggleWordHighlights(): void {
+    setWordHighlights(!diffPrefs.wordHighlights);
+  }
+
+  // -- find-in-diff (Ctrl/Cmd+F via the palette `diff.find` event) -----------
+  //
+  // Case-insensitive substring matching over the flattened row model (the
+  // documented heuristic, see rowModel.findMatches). Matches highlight in
+  // the rendered text; Enter/Shift+Enter step next/prev and the viewport
+  // scrolls to the active match's row.
+
+  let findOpen = $state(false);
+  let findQuery = $state("");
+  let findIdx = $state(0);
+  let findInputEl = $state<HTMLInputElement | null>(null);
+
+  const matches = $derived(findMatches(model.rows, findQuery));
+  /** `findIdx` clamped into the live match list (rows may have shrunk). */
+  const activeFindIdx = $derived(
+    matches.length === 0 ? -1 : Math.min(findIdx, matches.length - 1),
+  );
+
+  /** Per-row highlight spans for DiffRow (active match marked). */
+  const findSpansByRow = $derived.by(() => {
+    if (matches.length === 0) return null;
+    const map = new Map<number, FindSpan[]>();
+    for (let i = 0; i < matches.length; i++) {
+      const match = matches[i];
+      const spans = map.get(match.rowIndex) ?? [];
+      spans.push({
+        side: match.side,
+        start: match.start,
+        end: match.end,
+        active: i === activeFindIdx,
+      });
+      map.set(match.rowIndex, spans);
+    }
+    return map;
+  });
+
+  /** File/hunk header-row indexes for the jump navigation. */
+  const headerRows = $derived.by(() => {
+    const fileRows: number[] = [];
+    const hunkRows: number[] = [];
+    for (let i = 0; i < model.rows.length; i++) {
+      const kind = model.rows[i].kind;
+      if (kind === "file-header") fileRows.push(i);
+      else if (kind === "hunk-header") hunkRows.push(i);
+    }
+    return { fileRows, hunkRows };
+  });
+
+  function openFind(): void {
+    findOpen = true;
+    requestAnimationFrame(() => {
+      findInputEl?.focus();
+      findInputEl?.select();
+    });
+  }
+
+  function closeFind(): void {
+    findOpen = false;
+  }
+
+  /** Find-as-you-type: reset to the first match and follow it. */
+  $effect(() => {
+    const query = findQuery;
+    const open = findOpen;
+    if (!open) return;
+    findIdx = 0;
+    untrack(() => {
+      const first = matches[0];
+      if (first !== undefined) scrollToRow(first.rowIndex);
+    });
+    void query;
+  });
+
+  function findStep(delta: number): void {
+    if (matches.length === 0) return;
+    findIdx = (activeFindIdx + delta + matches.length) % matches.length;
+    const match = matches[findIdx];
+    if (match !== undefined) scrollToRow(match.rowIndex);
+  }
+
+  function findKeydown(event: KeyboardEvent): void {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      findStep(event.shiftKey ? -1 : 1);
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      closeFind();
+    }
+  }
+
+  // -- diff navigation (palette `diff.*` events, implemented against the
+  //    row model: next/prev walk the file/hunk header rows, wrapping) -------
+
+  /** Scrolls the viewport so `rowIndex` is its top row. */
+  function scrollToRow(rowIndex: number): void {
+    const top = rowTop(layout, rowIndex);
+    scrollTop = top;
+    viewportEl?.scrollTo(0, top);
+  }
+
+  /** Jumps to the next/previous header row (wraps at both ends). */
+  function jumpHeaders(indices: readonly number[], forward: boolean): void {
+    if (indices.length === 0) return;
+    const current = firstVisibleRow(layout, scrollTop);
+    let target: number;
+    if (forward) {
+      target = indices.find((i) => i > current) ?? indices[0];
+    } else {
+      let previous = -1;
+      for (const i of indices) {
+        if (i >= current) break;
+        previous = i;
+      }
+      target = previous >= 0 ? previous : indices[indices.length - 1];
+    }
+    scrollToRow(target);
+  }
+
+  function jumpFirstChange(): void {
+    const first = headerRows.hunkRows[0] ?? headerRows.fileRows[0];
+    if (first !== undefined) scrollToRow(first);
+  }
+
+  // Palette commands / keybinds ride the bus; every mounted viewer jumps.
+  $effect(() => {
+    const unlisteners = [
+      onUiEvent("diff-find", openFind),
+      onUiEvent("diff-next-hunk", () => jumpHeaders(headerRows.hunkRows, true)),
+      onUiEvent("diff-prev-hunk", () => jumpHeaders(headerRows.hunkRows, false)),
+      onUiEvent("diff-next-file", () => jumpHeaders(headerRows.fileRows, true)),
+      onUiEvent("diff-prev-file", () => jumpHeaders(headerRows.fileRows, false)),
+      onUiEvent("diff-first-change", jumpFirstChange),
+    ];
+    return () => {
+      for (const unlisten of unlisteners) unlisten();
+    };
+  });
+
+  // -- copy actions (row / file-header context menu; clipboard via the
+  //    shared copyText helper, like every other surface) ----------------------
+
+  /**
+   * Row context menu: copy the line under the pointer (a split row copies
+   * the half it hit), the hunk patch, the whole file patch, or the path.
+   */
+  function rowMenu(event: MouseEvent, rowIndex: number): void {
+    const row = model.rows[rowIndex];
+    if (row === undefined) return;
+    event.preventDefault();
+    const half =
+      event.target instanceof Element ? event.target.closest(".half") : null;
+    const side: "left" | "right" = half?.classList.contains("right")
+      ? "right"
+      : "left";
+    const entries: MenuEntry[] = [];
+    const lineText = rowLineText(row, row.kind === "pair" ? side : null);
+    if (lineText !== null) {
+      entries.push({
+        id: "copy-line",
+        label: "Copy line",
+        run: () => void copyText(lineText, "line"),
+      });
+    }
+    if (row.kind !== "file-header" && row.kind !== "binary" && row.kind !== "image") {
+      const file = files[row.fileIndex];
+      const hunkText = hunkPatchText(file, row.hunkIndex);
+      if (hunkText !== null) {
+        entries.push({
+          id: "copy-hunk",
+          label: "Copy hunk patch",
+          run: () => void copyText(hunkText, "hunk patch"),
+        });
+      }
+    }
+    // The fileIndexes parallel array covers every row kind (binary/image
+    // rows carry no fileIndex of their own).
+    const file =
+      row.kind === "file-header"
+        ? row.file
+        : files[model.fileIndexes[rowIndex] ?? 0];
+    entries.push(
+      {
+        id: "copy-patch",
+        label: "Copy file patch",
+        run: () => void copyText(filePatchText(file), "patch"),
+      },
+      {
+        id: "copy-path",
+        label: "Copy path",
+        run: () => void copyText(file.path, "path"),
+      },
+    );
+    showMenuAt(event, entries);
+  }
 
   /**
    * Horizontal extent of the scroll content.
@@ -668,16 +935,26 @@
   // resets the scroll position and any selection — unless a workspace
   // session restore is waiting: it consumes the reset once, when the rows
   // have landed (re-asserted on the next frame, after the virtualizer's
-  // spacer has its final height).
+  // spacer has its final height). The row seed wins over the px seed and
+  // converts through the layout at apply time (untracked: the layout's
+  // later measure corrections must not re-run this effect — it would fall
+  // into the reset branch and throw the restore away).
   $effect(() => {
     void files;
     selectionCtl.clearLines();
+    const restoreRow = pendingRestoreRow;
     const restore = pendingRestore;
-    if (restore !== null && files.length > 0) {
+    if (files.length > 0 && (restoreRow !== null || restore !== null)) {
+      pendingRestoreRow = null;
       pendingRestore = null;
-      scrollTop = restore;
-      viewportEl?.scrollTo(0, restore);
-      requestAnimationFrame(() => viewportEl?.scrollTo(0, restore));
+      const top = untrack(() =>
+        restoreRow !== null ? rowTop(layout, restoreRow) : restore,
+      );
+      if (typeof top === "number" && top > 0) {
+        scrollTop = top;
+        viewportEl?.scrollTo(0, top);
+        requestAnimationFrame(() => viewportEl?.scrollTo(0, top));
+      }
     } else {
       scrollTop = 0;
       viewportEl?.scrollTo(0, 0);
@@ -711,7 +988,9 @@
     scrollRaf = requestAnimationFrame(() => {
       scrollRaf = 0;
       scrollTop = viewportEl?.scrollTop ?? 0;
-      onScrollChange?.(scrollTop);
+      const row = firstVisibleRow(layout, scrollTop);
+      onScrollChange?.(scrollTop, row);
+      onVisibleRowChange?.(row);
     });
   }
   $effect(() => {
@@ -721,7 +1000,9 @@
   });
 </script>
 
-{#if files.length === 0}
+{#if files.length === 0 || model.rows.length === 0}
+  <!-- rows.length === 0: every file entry was ws-only and the
+       ignore-whitespace toggle dropped them (the normal empty state). -->
   <div class="diff-viewer empty relative flex h-full min-h-0 flex-col bg-background">
     <EmptyState title="No changes" hint="Select a file with differences to see its diff here." />
   </div>
@@ -767,12 +1048,104 @@
           >Wrap</Toggle>
         {/snippet}
       </Hint>
+      <!-- Whitespace + word-highlight preferences (persisted globally in
+           diffPrefs; the ws toggles re-query/filter the diff, the
+           highlight toggle gates DiffRow's word-level spans). -->
+      <Hint label="Ignore whitespace-only changes (re-queries the diff)">
+        {#snippet child({ props })}
+          <Toggle
+            {...props}
+            class="ml-1.5 h-auto shrink-0 rounded border border-border px-2 py-0 text-ui-micro leading-[1.5] font-normal text-muted-foreground aria-pressed:font-semibold aria-pressed:text-foreground focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary focus-visible:ring-0"
+            pressed={diffPrefs.ignoreWs}
+            onPressedChange={() => toggleIgnoreWs()}
+            aria-label="Ignore whitespace"
+          >Ignore ws</Toggle>
+        {/snippet}
+      </Hint>
+      <Hint label="Hide whitespace-only changed lines">
+        {#snippet child({ props })}
+          <Toggle
+            {...props}
+            class="ml-1.5 h-auto shrink-0 rounded border border-border px-2 py-0 text-ui-micro leading-[1.5] font-normal text-muted-foreground aria-pressed:font-semibold aria-pressed:text-foreground focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary focus-visible:ring-0"
+            pressed={diffPrefs.hideWs}
+            onPressedChange={() => toggleHideWs()}
+            aria-label="Hide whitespace changes"
+          >Hide ws</Toggle>
+        {/snippet}
+      </Hint>
+      <Hint label="Word-level highlights on changed lines">
+        {#snippet child({ props })}
+          <Toggle
+            {...props}
+            class="ml-1.5 h-auto shrink-0 rounded border border-border px-2 py-0 text-ui-micro leading-[1.5] font-normal text-muted-foreground aria-pressed:font-semibold aria-pressed:text-foreground focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary focus-visible:ring-0"
+            pressed={diffPrefs.wordHighlights}
+            onPressedChange={() => toggleWordHighlights()}
+            aria-label="Word highlights"
+          >Word hl</Toggle>
+        {/snippet}
+      </Hint>
       <span class="stats ml-auto flex items-center gap-ui-4 text-ui-micro text-muted-foreground tabular-nums">
-        <span class="stat-files">{files.length} {files.length === 1 ? "file" : "files"}</span>
+        <span class="stat-files">{model.fileCount} {model.fileCount === 1 ? "file" : "files"}</span>
         <span class="stat-adds text-[var(--app-added)]">+{model.totalAdditions}</span>
         <span class="stat-dels text-[var(--app-deleted)]">−{model.totalDeletions}</span>
       </span>
     </div>
+
+    {#if findOpen}
+      <!-- Find bar (palette `diff.find` / Ctrl/Cmd+F): case-insensitive
+           substring over the rendered rows; Enter / Shift+Enter step. -->
+      <div class="findbar flex min-h-7 shrink-0 items-center gap-1.5 border-b border-[var(--diff-divider)] bg-card px-2.5 py-0.5" role="search" aria-label="Find in diff">
+        <input
+          bind:this={findInputEl}
+          bind:value={findQuery}
+          type="text"
+          placeholder="Find (case-insensitive)"
+          aria-label="Find in diff"
+          class="h-6 min-w-0 flex-1 rounded-sm border border-border bg-background px-2 font-mono text-ui-tiny leading-[1.5] outline-none placeholder:text-muted-foreground/70 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary"
+          onkeydown={findKeydown}
+        />
+        <span class="find-count shrink-0 whitespace-nowrap text-ui-micro leading-[1.5] tabular-nums text-muted-foreground" role="status">
+          {matches.length === 0
+            ? "No matches"
+            : `${activeFindIdx + 1} of ${matches.length}`}
+        </span>
+        <Hint label="Previous match (Shift+Enter)">
+          {#snippet child({ props })}
+            <button
+              {...props}
+              type="button"
+              class="find-prev h-6 shrink-0 cursor-pointer rounded-sm border border-border bg-background px-2 text-ui-tiny leading-[1.5] text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+              aria-label="Previous match"
+              disabled={matches.length === 0}
+              onclick={() => findStep(-1)}
+            >↑</button>
+          {/snippet}
+        </Hint>
+        <Hint label="Next match (Enter)">
+          {#snippet child({ props })}
+            <button
+              {...props}
+              type="button"
+              class="find-next h-6 shrink-0 cursor-pointer rounded-sm border border-border bg-background px-2 text-ui-tiny leading-[1.5] text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+              aria-label="Next match"
+              disabled={matches.length === 0}
+              onclick={() => findStep(1)}
+            >↓</button>
+          {/snippet}
+        </Hint>
+        <Hint label="Close find (Esc)">
+          {#snippet child({ props })}
+            <button
+              {...props}
+              type="button"
+              class="find-close h-6 shrink-0 cursor-pointer rounded-sm border border-border bg-background px-2 text-ui-tiny leading-[1.5] text-muted-foreground hover:text-foreground"
+              aria-label="Close find"
+              onclick={closeFind}
+            >✕</button>
+          {/snippet}
+        </Hint>
+      </div>
+    {/if}
 
     <!-- tabindex makes the scroller itself keyboard-scrollable (arrow keys);
          region is noninteractive by design — the ignore is deliberate. -->
@@ -809,6 +1182,9 @@
                   ? (files[model.fileIndexes[slice.firstRow + i]]?.path ?? null)
                   : null}
                 syntaxRevision={syntaxTick}
+                wordHighlights={diffPrefs.wordHighlights}
+                findSpans={findSpansByRow?.get(slice.firstRow + i)}
+                onRowMenu={(event) => rowMenu(event, slice.firstRow + i)}
                 selectedAt={selectionEnabled ? selectedAt : undefined}
                 onGutterClick={selectionEnabled ? selectionCtl.gutterClick : undefined}
                 selectionCount={row.kind === "hunk-header"
@@ -861,6 +1237,9 @@
     --diff-hunk-accent: color-mix(in srgb, var(--primary) 65%, transparent);
     /* M12 line selection highlight. */
     --diff-sel-bg: color-mix(in srgb, var(--primary) 24%, transparent);
+    /* Find-in-diff: soft wash for matches, stronger for the active one. */
+    --diff-find-bg: color-mix(in srgb, var(--app-modified) 24%, transparent);
+    --diff-find-active-bg: color-mix(in srgb, var(--primary) 45%, transparent);
   }
 
   /*
@@ -877,6 +1256,8 @@
     --diff-empty-bg: color-mix(in srgb, var(--muted) 20%, transparent);
     --diff-hl-bg: color-mix(in srgb, var(--app-modified) 42%, transparent);
     --diff-sel-bg: color-mix(in srgb, var(--primary) 30%, transparent);
+    --diff-find-bg: color-mix(in srgb, var(--app-modified) 36%, transparent);
+    --diff-find-active-bg: color-mix(in srgb, var(--primary) 52%, transparent);
   }
 
   /* Split-view selection paint (see the split view block in the script):

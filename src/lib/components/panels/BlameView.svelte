@@ -377,6 +377,33 @@
       >
     {:else if rows.length === 0}
       <span class="bstate ml-auto text-muted-foreground">No blame data</span>
+    {:else}
+      <!-- Age heat key: the same ageBackground swatches the line rows
+           render, newest → oldest. Decorative (aria-hidden) — the row
+           tooltips carry the actual author/date data. -->
+      <span
+        class="blegend ml-auto inline-flex shrink-0 items-center gap-1 text-ui-micro text-muted-foreground"
+        aria-hidden="true"
+      >
+        newest
+        <span
+          class="bsw inline-block size-2.5 rounded-[3px] border border-border"
+          style:background={ageBackground(1)}
+        ></span>
+        <span
+          class="bsw inline-block size-2.5 rounded-[3px] border border-border"
+          style:background={ageBackground(0.66)}
+        ></span>
+        <span
+          class="bsw inline-block size-2.5 rounded-[3px] border border-border"
+          style:background={ageBackground(0.33)}
+        ></span>
+        <span
+          class="bsw inline-block size-2.5 rounded-[3px] border border-border"
+          style:background={ageBackground(0)}
+        ></span>
+        oldest
+      </span>
     {/if}
   </header>
 
