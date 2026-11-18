@@ -95,6 +95,57 @@ camelCase conversion anywhere). TS types are not hand-mirrored:
    Rust. `src/lib/ipc/client.ts` provides typed wrappers; UI never calls
    `invoke` directly.
 
+## Errors
+
+Commands keep returning `Result<T, String>` (changing ~140 signatures is not
+worth the churn), so errors cross the boundary as strings with TWO shapes,
+distinguished by the FE:
+
+1. **Structured envelope** (engine-originated failures — the bulk: git
+   operations, net ops, CLI/maintenance lanes) — a single-line JSON string:
+
+   ```
+   {"mygitui_error":1, "code":"engine", "message":"git error: …", "detail":null}
+   ```
+
+   `mygitui_error` is the version marker (always `1`; the FE's detection
+   key — JSON without it stays raw text). `code` is the `ErrCode` enum
+   (snake_case): `cancelled`, `engine` (git2/libgit2), `cli` (git CLI
+   failures), `invalid` (bad input/path/args), `not_found`, `unsupported`,
+   `timeout`, `forge` (pass-through detail), `io`, `unknown`. `message` is
+   human text carrying the raw git/CLI wording, so the FE's
+   `describeGitError` heuristics keep enriching generic codes. `detail` is
+   structured context when the source has one (`null` for engine mappings
+   in this pass). Mapping: `EngineError::code()` (git_engine.rs) is the
+   single variant→code site; `engine_err` (ipc_commands.rs) serializes the
+   envelope; the `Cli` variant wraps raw CLI-lane strings via
+   `EngineError::cli`, which routes the cancellation sentinel to the
+   cancelled code. Rust types: `ErrCode`, `IpcErrorEnvelope` (ts-rs →
+   `src/lib/ipc/gen/`).
+
+2. **Raw string** (misc commands until migrated: `.map_err(|e|
+   e.to_string())` formatters, queue-rejection/panic strings, remote-device
+   lanes) — passed through verbatim; the FE falls back to its text
+   heuristics (`describeGitError` + loose `/cancel/i` matching).
+
+FE normalization: `toIpcError` (client.ts) detects the marker via
+`parseIpcErrorEnvelope` and builds `IpcError { command, message, code?,
+detail? }`; `code` is absent for raw strings. `ipcErrorText` renders either
+shape as human text (display points never show envelope JSON). The forge
+commands keep their existing structured path (`ForgeError {kind, message,
+url}` object rejection → `ForgeIpcError`).
+
+**Cancellation**: the op-cancel path is the envelope with `code:
+"cancelled"` — produced by `IpcErrorEnvelope::cancelled()` (op queue's
+queued-not-started skip) and `netops::cancelled_err` → `EngineError::
+Cancelled` (cooperative cancellation, incl. the CLI lanes' sentinel via
+`EngineError::cli`). The op queue's classifier `OpOutcome::for_error`
+(ops.rs, single comparison site) classifies BOTH the envelope and the
+legacy bare word `"cancelled"` (`ops::CANCELLED_ERR`) for one release; the
+FE's `isCancellationError` (ops.svelte.ts) mirrors that split — envelope
+code wins, bare/loose legacy text stays accepted, envelope-shaped-but-
+invalid strings never match loosely.
+
 ## Commands (M2 — mutations)
 
 All run through the per-repo serial op queue; mutations and net ops stream
@@ -129,7 +180,7 @@ events). Arg keys snake_case (commands use `rename_all`).
 
 | Event | Payload | Meaning |
 |---|---|---|
-| `op-progress` | `{ repo_id, op_id, kind, message, pct: number \| null, done: bool, error: string \| null, outcome: "completed" \| "cancelled" \| "failed" \| null }` | op-queue progress for mutations and net ops: throttled updates plus a final `done` event on success or failure (failures toast FE-side). `outcome` is set on the final event only (`null` on intermediate progress): `cancelled` is reserved for ops aborted through `op_cancel` (backend sentinel `ops::CANCELLED_ERR` = "cancelled", classified by `OpOutcome::for_error`); `failed` covers every other error. Queue-dispatched reads (`status`, `refs`, `blame`, `diff`, …) emit nothing — their errors return through the command. Kinds: `stage`, `commit`, `branch`, `checkout`, `merge`, `rebase`, `bisect`, `stash`, `worktree`, `checkpoint`, `submodule`, `discard`, `clean`, `fetch`, `pull`, `push`, `maintenance`, `archive`, `sparse`, `lfs` (tags report as `branch`, remote config ops as `fetch`). `branch`/`checkout` ops that update the workdir (branch switch/create-with-checkout, remote-branch checkout, `commit_checkout`, `reset` hard) emit throttled intermediate progress from libgit2's checkout callback: message = phase (`"checkout"` or `"reset"`), `pct` = processed/total paths (`null` until a total is known) |
+| `op-progress` | `{ repo_id, op_id, kind, message, pct: number \| null, done: bool, error: string \| null, outcome: "completed" \| "cancelled" \| "failed" \| null }` | op-queue progress for mutations and net ops: throttled updates plus a final `done` event on success or failure (failures toast FE-side). `outcome` is set on the final event only (`null` on intermediate progress): `cancelled` is reserved for ops aborted through `op_cancel` (classified by `OpOutcome::for_error`: the error envelope with `code: "cancelled"` — see Errors — plus the legacy bare sentinel `ops::CANCELLED_ERR` = "cancelled" for one release); `failed` covers every other error. `error` carries the wire form (structured envelope for engine-originated failures, raw string for misc lanes); `message` is always human text (envelope errors contribute their `message`). Queue-dispatched reads (`status`, `refs`, `blame`, `diff`, …) emit nothing — their errors return through the command. Kinds: `stage`, `commit`, `branch`, `checkout`, `merge`, `rebase`, `bisect`, `stash`, `worktree`, `checkpoint`, `submodule`, `discard`, `clean`, `fetch`, `pull`, `push`, `maintenance`, `archive`, `sparse`, `lfs` (tags report as `branch`, remote config ops as `fetch`). `branch`/`checkout` ops that update the workdir (branch switch/create-with-checkout, remote-branch checkout, `commit_checkout`, `reset` hard) emit throttled intermediate progress from libgit2's checkout callback: message = phase (`"checkout"` or `"reset"`), `pct` = processed/total paths (`null` until a total is known) |
 | `op-log` | `{ repo_id, op_id, kind, line }` | raw, unthrottled child output while an op runs; currently streams commit/signing hooks and the `push` CLI fallback (pre-push hook present). The FE keeps the newest session per repo and renders it in the workspace output strip. |
 | `auth-request` | `{ op_id, repo_id, url, kind: "https-user" \| "https-pass" \| "ssh-passphrase", prompt }` | engine needs credentials; FE shows dialog, answers via `auth_respond` |
 

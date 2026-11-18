@@ -289,8 +289,8 @@ fn cancelled_merge_refuses_before_touching_refs() {
 
     let cancel = AtomicBool::new(true);
     match ENGINE.merge_branch_ext(&fx.repo, "feature", &Default::default(), Some(&cancel)) {
-        Err(EngineError::Invalid(msg)) => assert_eq!(msg, "cancelled"),
-        other => panic!("expected Invalid(cancelled), got {other:?}"),
+        Err(EngineError::Cancelled) => {}
+        other => panic!("expected EngineError::Cancelled, got {other:?}"),
     }
     // Nothing moved: refs, HEAD, workdir, and no merge state.
     assert_eq!(head_sha(&fx.repo), main_tip);

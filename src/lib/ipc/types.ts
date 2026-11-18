@@ -65,6 +65,10 @@ export type { OpOutcome } from "./gen/OpOutcome";
 export type { OpLog } from "./gen/OpLog";
 /** `auth-request` event payload (Rust: `AuthRequestEvent`). */
 export type { AuthRequestEvent as AuthRequest } from "./gen/AuthRequestEvent";
+/** Machine-readable error class of the error envelope (`IpcErrorEnvelope.code`). */
+export type { ErrCode } from "./gen/ErrCode";
+/** Structured error envelope (engine-originated IPC failures; docs/contracts.md "Errors"). */
+export type { IpcErrorEnvelope } from "./gen/IpcErrorEnvelope";
 
 // ---------------------------------------------------------------------------
 // M3: power + safety

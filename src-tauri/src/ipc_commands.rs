@@ -22,8 +22,8 @@ use crate::engine::git_engine::EngineError;
 use crate::engine::types::{
     BisectLogEntry, BisectMark, BisectState, BlameLine, BlameQuery, BranchTrashEntry,
     CheckpointInfo, CommitInfo, CommitSignature, ConflictFile, ConflictResolution, DiffQuery,
-    DiffSide, FileDiff, LfsLock, LfsStatus, LogFilter, MergeOptions, MergeResult, NoteInfo,
-    RebaseState, RebaseStep, ReflogEntry, RemoteBranchInfo, RepoHealth, RepoId, RepoInfo,
+    DiffSide, FileDiff, IpcErrorEnvelope, LfsLock, LfsStatus, LogFilter, MergeOptions, MergeResult,
+    NoteInfo, RebaseState, RebaseStep, ReflogEntry, RemoteBranchInfo, RepoHealth, RepoId, RepoInfo,
     RepoStatus, ResetKind, SparseInfo, StashInfo, TagInfo, WorktreeInfo,
 };
 use crate::graph::types::{self, GraphRow};
@@ -58,8 +58,14 @@ fn get_handle(state: &RepoManager, repo_id: &RepoId) -> Result<Arc<RepoHandle>, 
         .ok_or_else(|| format!("repo not open: {}", repo_id.0))
 }
 
+/// Engine-originated failures cross the boundary as the structured error
+/// envelope (a JSON string with the `mygitui_error` marker — see
+/// docs/contracts.md "Errors"); the FE rebuilds a typed `IpcError` from it.
+/// Command signatures stay `Result<T, String>`; misc commands that format
+/// raw strings (`.map_err(|e| e.to_string())`) keep them raw and the FE
+/// falls back to its text heuristics.
 fn engine_err(err: EngineError) -> String {
-    err.to_string()
+    IpcErrorEnvelope::from(&err).to_json()
 }
 
 /// Split `items` into consecutive chunks of at most `size` (the last may be
@@ -1267,10 +1273,12 @@ fn discard_op(
             // discard (see [`discard_checkpoint_outcome`]).
             let warning = {
                 let guard = repo.lock();
+                // The warning travels inside the SUCCESS payload — plain
+                // Display text, not the transport error envelope.
                 discard_checkpoint_outcome(
                     checkpoint,
                     || m3.checkpoint_create_scoped(&guard, "discard changes", &paths),
-                    engine_err,
+                    |err| err.to_string(),
                 )
                 .map_err(engine_err)?
             };
@@ -1342,12 +1350,16 @@ pub async fn commit(
                 // kills a git stuck on a hung hook instead of wedging the
                 // mutation lane forever.
                 let cancel = ctx.cancel_token();
+                // The CLI error crosses the boundary directly (the closure
+                // returns `Result<_, String>`), so it needs the envelope here
+                // instead of the shared `result.map_err(engine_err)` tail.
                 cli::commit_via_cli(
                     &workdir,
                     &options,
                     &mut |line| ctx.emit_log(line),
                     cancel.as_deref(),
                 )
+                .map_err(|e| engine_err(EngineError::cli(e)))
             }
             Err(err) => Err(engine_err(err)),
         };
@@ -1782,7 +1794,7 @@ pub async fn tag_create_signed(
         "branch",
         move |_ctx, _repo| {
             crate::mergetool::tag_sign_via_cli(&root, &name, target.as_deref(), &message)
-                .map_err(EngineError::Invalid)
+                .map_err(EngineError::cli)
         },
     ))
     .await
@@ -2062,7 +2074,7 @@ pub async fn fetch(
                         &mut |line| ctx.emit_log(line),
                         cancel.as_deref(),
                     )
-                    .map_err(EngineError::Invalid)
+                    .map_err(EngineError::cli)
                 }
                 other => other,
             }
@@ -2179,7 +2191,7 @@ pub async fn push(
                         &mut |line| ctx.emit_log(line),
                         cancel.as_deref(),
                     )
-                    .map_err(EngineError::Invalid)
+                    .map_err(EngineError::cli)
                 }
                 other => other,
             }
@@ -3502,7 +3514,7 @@ pub async fn maintenance_run(
                         .map(|(loose, packed_kib)| {
                             format!("loose objects: {loose}, packed size: {packed_kib} KiB")
                         })
-                        .map_err(EngineError::Invalid);
+                        .map_err(EngineError::cli);
                 }
                 // M12: dangling-object census — needs stderr capture, so it
                 // bypasses plain `git_run` and writes the fsck.json cache.
@@ -3518,7 +3530,7 @@ pub async fn maintenance_run(
                                 }
                             )
                         })
-                        .map_err(EngineError::Invalid);
+                        .map_err(EngineError::cli);
                 }
                 other => {
                     return Err(EngineError::Invalid(format!(
@@ -3527,7 +3539,7 @@ pub async fn maintenance_run(
                 }
             };
             let args = parsed.args();
-            crate::maintenance::git_run(workdir, args).map_err(EngineError::Invalid)
+            crate::maintenance::git_run(workdir, args).map_err(EngineError::cli)
         },
     ))
     .await
@@ -3582,7 +3594,7 @@ pub async fn archive(
                 &["archive", "--format", &format, &spec, "-o", &destination],
             )
             .map(|_| ())
-            .map_err(EngineError::Invalid)
+            .map_err(EngineError::cli)
         },
     ))
     .await
@@ -3627,7 +3639,7 @@ pub async fn repo_bundle(
         "bundle",
         move |_ctx, _repo| {
             crate::maintenance::bundle_create(std::path::Path::new(&root), &out_path, &refs, all)
-                .map_err(EngineError::Invalid)
+                .map_err(EngineError::cli)
         },
     ))
     .await
@@ -3684,7 +3696,7 @@ pub async fn sparse_apply(
         "sparse",
         move |_ctx, _repo| {
             crate::maintenance::sparse_apply(std::path::Path::new(&root), &patterns, add)
-                .map_err(EngineError::Invalid)
+                .map_err(EngineError::cli)
         },
     ))
     .await
@@ -3743,7 +3755,7 @@ pub async fn lfs_run(
         "lfs",
         move |_ctx, _repo| {
             crate::maintenance::lfs_run(std::path::Path::new(&root), &subcommand)
-                .map_err(EngineError::Invalid)
+                .map_err(EngineError::cli)
         },
     ))
     .await
@@ -3801,7 +3813,7 @@ pub async fn lfs_lock(
         "lfs",
         move |_ctx, _repo| {
             crate::maintenance::lfs_lock(std::path::Path::new(&root), &path)
-                .map_err(EngineError::Invalid)
+                .map_err(EngineError::cli)
         },
     ))
     .await
@@ -3832,7 +3844,7 @@ pub async fn lfs_unlock(
         "lfs",
         move |_ctx, _repo| {
             crate::maintenance::lfs_unlock(std::path::Path::new(&root), &path)
-                .map_err(EngineError::Invalid)
+                .map_err(EngineError::cli)
         },
     ))
     .await
@@ -4831,7 +4843,7 @@ mod discard_tests {
                     attempted.set(true);
                     failed()
                 },
-                engine_err
+                |err| err.to_string()
             )
             .unwrap(),
             None
@@ -4842,7 +4854,7 @@ mod discard_tests {
         );
 
         // Enabled + failure: the reason becomes the warning, not an error.
-        let warning = discard_checkpoint_outcome(true, failed, engine_err).unwrap();
+        let warning = discard_checkpoint_outcome(true, failed, |err| err.to_string()).unwrap();
         assert!(
             warning
                 .as_deref()
@@ -4852,7 +4864,7 @@ mod discard_tests {
 
         // Enabled + success: no warning.
         assert_eq!(
-            discard_checkpoint_outcome(true, created, engine_err).unwrap(),
+            discard_checkpoint_outcome(true, created, |err| err.to_string()).unwrap(),
             None
         );
     }
@@ -5508,7 +5520,7 @@ pub async fn note_add(
                 &text,
                 note_ref.as_deref(),
             )
-            .map_err(EngineError::Invalid)
+            .map_err(EngineError::cli)
         },
     ))
     .await
@@ -5541,7 +5553,7 @@ pub async fn note_remove(
         "notes",
         move |_ctx, _repo| {
             crate::maintenance::note_remove(std::path::Path::new(&root), &sha, note_ref.as_deref())
-                .map_err(EngineError::Invalid)
+                .map_err(EngineError::cli)
         },
     ))
     .await

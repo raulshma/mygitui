@@ -16,7 +16,9 @@ pct: number | null,
  */
 done: boolean, 
 /**
- * `Some(msg)` when the op failed.
+ * `Some(msg)` when the op failed: the structured error envelope (JSON
+ * string, `mygitui_error` marker) for engine-originated failures, a raw
+ * string for misc lanes. `message` carries the human text either way.
  */
 error: string | null, 
 /**

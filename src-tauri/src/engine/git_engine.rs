@@ -11,9 +11,9 @@
 use git2::Repository;
 
 use super::types::{
-    BlameLine, BlameQuery, BranchInfo, CommitInfo, CommitOptions, DiffSide, FetchOptions, FileDiff,
-    HookInfo, LogFilter, NetStats, PullOptions, PushOptions, RemoteBranchInfo, RemoteInfo,
-    RepoStatus, SigningInfo, StageRequest, StageTarget, TagInfo,
+    BlameLine, BlameQuery, BranchInfo, CommitInfo, CommitOptions, DiffSide, ErrCode, FetchOptions,
+    FileDiff, HookInfo, IpcErrorEnvelope, LogFilter, NetStats, PullOptions, PushOptions,
+    RemoteBranchInfo, RemoteInfo, RepoStatus, SigningInfo, StageRequest, StageTarget, TagInfo,
 };
 
 pub type EngineResult<T> = Result<T, EngineError>;
@@ -28,6 +28,49 @@ pub enum EngineError {
     Unsupported(String),
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
+    /// A git CLI failure string (`cli.rs` fetch/push/commit lanes,
+    /// `maintenance.rs` runners): the sanitized CLI layers return raw
+    /// stderr text; the IPC boundary wraps it via [`EngineError::cli`].
+    #[error("git CLI failed: {0}")]
+    Cli(String),
+    /// A caller-aborted op (the shared `ops::CANCELLED_ERR` sentinel in
+    /// envelope form). Produced by `netops::cancelled_err` and by
+    /// [`EngineError::cli`] when a CLI lane reports the sentinel.
+    #[error("operation cancelled")]
+    Cancelled,
+}
+
+impl EngineError {
+    /// Machine-readable error class for the IPC error envelope. The single
+    /// variant→code mapping site — the IPC layer never matches variants to
+    /// classify, it calls this via the envelope.
+    pub fn code(&self) -> ErrCode {
+        match self {
+            Self::Git(_) => ErrCode::Engine,
+            Self::Invalid(_) => ErrCode::Invalid,
+            Self::Unsupported(_) => ErrCode::Unsupported,
+            Self::Io(_) => ErrCode::Io,
+            Self::Cli(_) => ErrCode::Cli,
+            Self::Cancelled => ErrCode::Cancelled,
+        }
+    }
+
+    /// Wraps a raw git-CLI failure string (`cli.rs` / `maintenance.rs`
+    /// lanes). The shared cancellation sentinel keeps its code — the CLI
+    /// cancel checks return the bare word, everything else is a `Cli` error.
+    pub fn cli(msg: String) -> Self {
+        if msg == crate::ops::CANCELLED_ERR {
+            Self::Cancelled
+        } else {
+            Self::Cli(msg)
+        }
+    }
+}
+
+impl From<&EngineError> for IpcErrorEnvelope {
+    fn from(err: &EngineError) -> Self {
+        IpcErrorEnvelope::new(err.code(), err.to_string())
+    }
 }
 
 /// Read operations for one open repository.
@@ -691,5 +734,70 @@ pub trait GitEngineM12: Send + Sync {
         _max_days: u32,
     ) -> EngineResult<Vec<Contributor>> {
         Err(EngineError::Unsupported("contributor_stats".into()))
+    }
+}
+
+#[cfg(test)]
+mod error_code_tests {
+    use super::*;
+
+    /// Each `EngineError` variant maps to its `ErrCode` (the single mapping
+    /// site `engine_err` rides on); the envelope carries the variant's
+    /// `Display` text as the message so the FE heuristics keep matching.
+    #[test]
+    fn every_variant_maps_to_a_code() {
+        let cases: Vec<(EngineError, ErrCode)> = vec![
+            (
+                EngineError::Git(git2::Error::new(
+                    git2::ErrorCode::NotFound,
+                    git2::ErrorClass::Reference,
+                    "refname does not exist",
+                )),
+                ErrCode::Engine,
+            ),
+            (EngineError::Invalid("bad path".into()), ErrCode::Invalid),
+            (
+                EngineError::Unsupported("blob".into()),
+                ErrCode::Unsupported,
+            ),
+            (
+                EngineError::Io(std::io::Error::other("disk full")),
+                ErrCode::Io,
+            ),
+            (EngineError::Cli("remote rejected".into()), ErrCode::Cli),
+            (EngineError::Cancelled, ErrCode::Cancelled),
+        ];
+        for (err, code) in cases {
+            assert_eq!(err.code(), code, "{err:?}");
+            let env = IpcErrorEnvelope::from(&err);
+            assert_eq!(env.code, code);
+            assert_eq!(env.message, err.to_string());
+            assert_eq!(env.mygitui_error, IpcErrorEnvelope::VERSION);
+            assert_eq!(env.detail, None, "{err:?}");
+        }
+    }
+
+    /// `EngineError::cli` routes the shared cancellation sentinel to the
+    /// cancelled code; CLI stderr keeps the `cli` code.
+    #[test]
+    fn cli_constructor_keeps_the_cancelled_sentinel() {
+        assert_eq!(
+            EngineError::cli(crate::ops::CANCELLED_ERR.to_owned()).code(),
+            ErrCode::Cancelled
+        );
+        assert!(matches!(
+            EngineError::cli("remote rejected".into()),
+            EngineError::Cli(_)
+        ));
+    }
+
+    /// The cancelled envelope wire form: code `cancelled`, human message.
+    #[test]
+    fn cancelled_error_produces_the_cancelled_envelope() {
+        let json = IpcErrorEnvelope::from(&EngineError::Cancelled).to_json();
+        let parsed: serde_json::Value = serde_json::from_str(&json).expect("valid json");
+        assert_eq!(parsed["code"], "cancelled");
+        assert_eq!(parsed["mygitui_error"], serde_json::json!(1));
+        assert_eq!(parsed["message"], "operation cancelled");
     }
 }

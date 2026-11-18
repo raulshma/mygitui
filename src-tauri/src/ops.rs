@@ -38,7 +38,7 @@ use parking_lot::{Mutex, RwLock};
 use serde::Serialize;
 use ts_rs::TS;
 
-use crate::engine::types::RepoId;
+use crate::engine::types::{ErrCode, IpcErrorEnvelope, RepoId};
 
 /// `op-progress` event name (contracts.md, Events M2).
 pub const OP_PROGRESS_EVENT: &str = "op-progress";
@@ -50,11 +50,38 @@ pub const OP_LOG_EVENT: &str = "op-log";
 /// (mirrors the clone-progress throttle in ipc_commands).
 pub(crate) const THROTTLE_MS: u64 = 80;
 
-/// Error string for a caller-aborted op. The queue's queued-skip and the
-/// engine's cooperative cancellation (`netops::cancelled_err`) both use
-/// exactly this word; [`OpOutcome::for_error`] is the single comparison
-/// site, and the FE keeps a regex fallback keyed on it.
+/// LEGACY error string for a caller-aborted op: the bare word the queue's
+/// queued-skip, the CLI cancel checks, and (before the error envelope) the
+/// engine's cooperative cancellation all returned. Production now emits the
+/// envelope with `code: "cancelled"` (`IpcErrorEnvelope::cancelled`), and
+/// [`OpOutcome::for_error`] classifies BOTH shapes for one release so
+/// backlevel mocks/tests keep working.
 pub const CANCELLED_ERR: &str = "cancelled";
+
+/// Parses the structured error envelope out of a terminal op error string.
+/// `None` for raw strings (misc lanes keep those until migrated) and for
+/// JSON without the version marker.
+fn parse_envelope(error: &str) -> Option<IpcErrorEnvelope> {
+    let envelope = serde_json::from_str::<IpcErrorEnvelope>(error).ok()?;
+    (envelope.mygitui_error == IpcErrorEnvelope::VERSION).then_some(envelope)
+}
+
+/// True when the terminal error string means the op was aborted through the
+/// op-cancel path: the structured envelope (`code: "cancelled"`) or the
+/// legacy bare word (see [`CANCELLED_ERR`]). Every other error is a real
+/// failure.
+fn is_cancelled_error(error: &str) -> bool {
+    error == CANCELLED_ERR || parse_envelope(error).is_some_and(|e| e.code == ErrCode::Cancelled)
+}
+
+/// Human text for a terminal op error: envelope errors contribute their
+/// message, raw strings pass through unchanged. Used for the done event's
+/// display-only `message` field — `error` itself keeps the raw wire form.
+fn error_display(error: &str) -> String {
+    parse_envelope(error)
+        .map(|e| e.message)
+        .unwrap_or_else(|| error.to_owned())
+}
 
 /// Terminal classification of one op (`OpProgress.outcome`). `cancelled`
 /// is reserved for ops aborted through the op-cancel path — any other
@@ -75,7 +102,7 @@ impl OpOutcome {
     pub fn for_error(error: Option<&str>) -> Self {
         match error {
             None => OpOutcome::Completed,
-            Some(msg) if msg == CANCELLED_ERR => OpOutcome::Cancelled,
+            Some(msg) if is_cancelled_error(msg) => OpOutcome::Cancelled,
             Some(_) => OpOutcome::Failed,
         }
     }
@@ -95,7 +122,9 @@ pub struct OpProgress {
     pub pct: Option<f64>,
     /// True on the final event of an op.
     pub done: bool,
-    /// `Some(msg)` when the op failed.
+    /// `Some(msg)` when the op failed: the structured error envelope (JSON
+    /// string, `mygitui_error` marker) for engine-originated failures, a raw
+    /// string for misc lanes. `message` carries the human text either way.
     pub error: Option<String>,
     /// Terminal classification, set on the final event only.
     pub outcome: Option<OpOutcome>,
@@ -399,24 +428,28 @@ impl OpQueue {
                     last_emit: Mutex::new(None),
                     cancel: Some(token.clone()),
                 };
-                // Cancelled while queued: skip execution, report as failed.
+                // Cancelled while queued: skip execution, report as
+                // cancelled (the envelope shape, matching the engine's
+                // cooperative cancellation — see `IpcErrorEnvelope::cancelled`).
                 if token.load(Ordering::Acquire) {
                     inner.depth.fetch_sub(1, Ordering::Relaxed);
                     inner.cancels.lock().remove(&final_op);
+                    let cancelled = IpcErrorEnvelope::cancelled();
+                    let error = cancelled.to_json();
                     if let Some(sink) = &sink {
                         sink.emit(&OpProgress {
                             repo_id: final_repo,
                             op_id: final_op,
                             kind: final_kind,
-                            message: CANCELLED_ERR.to_string(),
+                            message: cancelled.message,
                             pct: None,
                             done: true,
-                            error: Some(CANCELLED_ERR.to_string()),
+                            error: Some(error.clone()),
                             outcome: Some(OpOutcome::Cancelled),
                         });
                     }
                     if let Some(tx) = job_tx.lock().take() {
-                        let _ = tx.send(Err(CANCELLED_ERR.to_string()));
+                        let _ = tx.send(Err(error));
                     }
                     return;
                 }
@@ -447,7 +480,12 @@ impl OpQueue {
                     repo_id: final_repo,
                     op_id: final_op,
                     kind: final_kind,
-                    message: error.clone().unwrap_or_else(|| "done".to_string()),
+                    // Display text: envelope errors contribute their message
+                    // (see `error_display`); `error` keeps the wire form.
+                    message: error
+                        .as_deref()
+                        .map(error_display)
+                        .unwrap_or_else(|| "done".to_string()),
                     pct: if error.is_some() { None } else { Some(100.0) },
                     done: true,
                     outcome: Some(OpOutcome::for_error(error.as_deref())),
@@ -699,6 +737,56 @@ mod tests {
 
     /// One throttling interval for tests that need to cross it.
     const TEST_TICK: Duration = Duration::from_millis(THROTTLE_MS + 30);
+
+    /// The cancelled envelope classifies as cancelled — the shape the
+    /// engine's cooperative cancellation now produces (via `engine_err`).
+    #[test]
+    fn for_error_classifies_the_cancelled_envelope() {
+        let envelope = IpcErrorEnvelope::cancelled().to_json();
+        assert_eq!(
+            OpOutcome::for_error(Some(&envelope)),
+            OpOutcome::Cancelled,
+            "{envelope:?}"
+        );
+    }
+
+    /// The legacy bare sentinel still classifies as cancelled (one-release
+    /// backward compatibility — CLI lanes and old mocks return it).
+    #[test]
+    fn for_error_still_classifies_the_legacy_bare_sentinel() {
+        assert_eq!(
+            OpOutcome::for_error(Some(CANCELLED_ERR)),
+            OpOutcome::Cancelled
+        );
+    }
+
+    /// Any other shape is a real failure: envelope errors with a non-
+    /// cancelled code, raw strings, and malformed/garbage "envelopes".
+    #[test]
+    fn for_error_classifies_other_errors_as_failed() {
+        let engine_env = IpcErrorEnvelope::new(ErrCode::Engine, "git error: boom").to_json();
+        assert_eq!(OpOutcome::for_error(Some(&engine_env)), OpOutcome::Failed);
+        // A JSON string without the version marker is not an envelope.
+        let markerless = r#"{"code":"cancelled","message":"x"}"#;
+        assert_eq!(OpOutcome::for_error(Some(markerless)), OpOutcome::Failed);
+        // Not JSON at all — misc-lane raw string.
+        assert_eq!(
+            OpOutcome::for_error(Some("merge conflict")),
+            OpOutcome::Failed
+        );
+        assert_eq!(OpOutcome::for_error(None), OpOutcome::Completed);
+    }
+
+    /// The done event's `message` field carries human text even when the
+    /// error is the structured envelope; raw strings pass through.
+    #[test]
+    fn error_display_prefers_the_envelope_message() {
+        assert_eq!(
+            error_display(&IpcErrorEnvelope::new(ErrCode::Engine, "git error: boom").to_json()),
+            "git error: boom"
+        );
+        assert_eq!(error_display("merge conflict"), "merge conflict");
+    }
 
     fn queue() -> OpQueue {
         let queue = OpQueue::new(RepoId("test-repo".to_string()));
@@ -988,7 +1076,12 @@ mod tests {
 
         drop(gate_tx); // release op 1
         assert_eq!(recv(rx1).unwrap(), 1, "running op finishes normally");
-        assert_eq!(recv(rx2).unwrap_err(), "cancelled", "queued op skipped");
+        let skip_err = recv(rx2).unwrap_err();
+        assert_eq!(
+            parse_envelope(&skip_err).map(|e| e.code),
+            Some(ErrCode::Cancelled),
+            "queued op skipped with the cancelled envelope: {skip_err:?}"
+        );
         assert!(!ran.load(Ordering::SeqCst), "skipped closure never ran");
 
         // The queue keeps serving: a later op runs fine.

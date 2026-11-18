@@ -20,6 +20,93 @@
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
+// ---------- IPC error envelope (see docs/contracts.md, "Errors") ----------
+
+/// Machine-readable error class of [`IpcErrorEnvelope`]. `EngineError`
+/// variants map onto it via `EngineError::code` (single mapping site); the
+/// remaining codes are produced outside the engine or reserved: `cancelled`
+/// (op-cancel path), `forge` (pass-through detail), `timeout` / `not_found`
+/// / `unknown` for future refinement of generic failures.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+#[serde(rename_all = "snake_case")]
+pub enum ErrCode {
+    Cancelled,
+    /// git2/libgit2 failure (`EngineError::Git`).
+    Engine,
+    /// git CLI failure (`EngineError::Cli`).
+    Cli,
+    /// Bad input, path, or arguments (`EngineError::Invalid`).
+    Invalid,
+    NotFound,
+    /// Operation not supported by this engine (`EngineError::Unsupported`).
+    Unsupported,
+    Timeout,
+    /// Forge (`gh`) failure; `detail` carries the pass-through context.
+    Forge,
+    /// Filesystem error (`EngineError::Io`).
+    Io,
+    Unknown,
+}
+
+/// Structured error envelope for engine-originated IPC failures. Command
+/// signatures stay `Result<T, String>`, so the envelope crosses the boundary
+/// as a JSON STRING with the `mygitui_error` marker field; the FE detects
+/// the marker and rebuilds a typed error, falling back to its text
+/// heuristics for raw strings (misc commands keep those until migrated).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct IpcErrorEnvelope {
+    /// Envelope version marker (always 1); the FE's detection key.
+    pub mygitui_error: u32,
+    pub code: ErrCode,
+    /// Human-readable message (raw git/CLI text included, so the FE's
+    /// `describeGitError` heuristics keep enriching generic codes).
+    pub message: String,
+    /// Extra structured context when the source has one (forge pass-through
+    /// today; `null` for engine mappings in this pass).
+    pub detail: Option<String>,
+}
+
+impl IpcErrorEnvelope {
+    /// Current envelope version (`IpcErrorEnvelope.mygitui_error`).
+    pub const VERSION: u32 = 1;
+
+    pub fn new(code: ErrCode, message: impl Into<String>) -> Self {
+        Self {
+            mygitui_error: Self::VERSION,
+            code,
+            message: message.into(),
+            detail: None,
+        }
+    }
+
+    /// Attaches structured context (builder style).
+    pub fn with_detail(mut self, detail: impl Into<String>) -> Self {
+        self.detail = Some(detail.into());
+        self
+    }
+
+    /// The op-cancelled envelope: the queue's queued-skip path and the
+    /// engine's cooperative cancellation (`netops::cancelled_err` →
+    /// `EngineError::Cancelled`) both end up as this shape.
+    pub fn cancelled() -> Self {
+        Self::new(ErrCode::Cancelled, "operation cancelled")
+    }
+
+    /// Wire form: a single-line JSON object string (the transport carries
+    /// errors as strings; `serde_json` cannot fail on this all-scalar shape,
+    /// the fallback keeps the raw message text renderable regardless).
+    pub fn to_json(&self) -> String {
+        serde_json::to_string(self).unwrap_or_else(|_| {
+            format!(
+                "{{\"mygitui_error\":{},\"code\":\"unknown\"}}",
+                Self::VERSION
+            )
+        })
+    }
+}
+
 /// Stable identifier for an open repo (one per app tab).
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
 #[ts(export)]
@@ -868,4 +955,71 @@ pub struct SubmoduleInfo {
     pub initialized: bool,
     /// "new commits", "modified content", "untracked content", "" = clean.
     pub status: String,
+}
+
+#[cfg(test)]
+mod error_envelope_tests {
+    use super::*;
+
+    /// The wire form is a single-line JSON object with the version marker;
+    /// `ErrCode` serializes snake_case (the FE's typed discriminator).
+    #[test]
+    fn envelope_serializes_marker_and_snake_case_code() {
+        let json = IpcErrorEnvelope::new(ErrCode::Engine, "git error: boom").to_json();
+        let parsed: serde_json::Value = serde_json::from_str(&json).expect("valid json");
+        assert_eq!(parsed["mygitui_error"], serde_json::json!(1));
+        assert_eq!(parsed["code"], "engine");
+        assert_eq!(parsed["message"], "git error: boom");
+        assert_eq!(parsed["detail"], serde_json::Value::Null);
+    }
+
+    /// Every ErrCode value round-trips through the wire form (one assert per
+    /// code so a serde rename typo fails the exact variant, not a neighbor).
+    #[test]
+    fn every_err_code_serializes_snake_case() {
+        let codes = [
+            (ErrCode::Cancelled, "cancelled"),
+            (ErrCode::Engine, "engine"),
+            (ErrCode::Cli, "cli"),
+            (ErrCode::Invalid, "invalid"),
+            (ErrCode::NotFound, "not_found"),
+            (ErrCode::Unsupported, "unsupported"),
+            (ErrCode::Timeout, "timeout"),
+            (ErrCode::Forge, "forge"),
+            (ErrCode::Io, "io"),
+            (ErrCode::Unknown, "unknown"),
+        ];
+        for (code, wire) in codes {
+            let json = IpcErrorEnvelope::new(code, "m").to_json();
+            assert_eq!(
+                json,
+                format!(
+                    "{{\"mygitui_error\":1,\"code\":\"{wire}\",\"message\":\"m\",\"detail\":null}}"
+                ),
+                "{wire}"
+            );
+        }
+    }
+
+    /// `detail` carries structured context (forge pass-through shape).
+    #[test]
+    fn envelope_round_trips_detail() {
+        let env = IpcErrorEnvelope::new(ErrCode::Forge, "already exists")
+            .with_detail("https://example.com/pr/7");
+        assert_eq!(env.detail.as_deref(), Some("https://example.com/pr/7"));
+        let parsed: IpcErrorEnvelope = serde_json::from_str(&env.to_json()).expect("round trip");
+        assert_eq!(parsed, env);
+    }
+
+    /// The cancelled envelope carries code `cancelled` — the single shape
+    /// the op-queue classifier (`OpOutcome::for_error`) and the FE's
+    /// `isCancellationError` both accept as structured cancellation.
+    #[test]
+    fn cancelled_envelope_carries_cancelled_code() {
+        let env = IpcErrorEnvelope::cancelled();
+        assert_eq!(env.code, ErrCode::Cancelled);
+        let parsed: IpcErrorEnvelope = serde_json::from_str(&env.to_json()).expect("valid json");
+        assert_eq!(parsed.code, ErrCode::Cancelled);
+        assert_eq!(parsed.mygitui_error, IpcErrorEnvelope::VERSION);
+    }
 }

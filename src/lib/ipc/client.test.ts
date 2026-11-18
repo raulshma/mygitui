@@ -22,6 +22,7 @@ import {
   fetchRepo,
   hooksList,
   IpcError,
+  ipcErrorText,
   lfsLock,
   lfsLocks,
   lfsUnlock,
@@ -540,6 +541,105 @@ describe("ipc client error handling", () => {
     expect(err).toBeInstanceOf(IpcError);
     expect((err as IpcError).command).toBe("repo_status");
     expect((err as IpcError).message).toBe("boom");
+  });
+
+  it("unwraps the backend error envelope: code, message and detail ride the IpcError", async () => {
+    const envelope = JSON.stringify({
+      mygitui_error: 1,
+      code: "invalid",
+      message: "invalid path or ref: no such worktree",
+      detail: null,
+    });
+    const { transport } = mockTransport(() => {
+      throw envelope;
+    });
+    setTransport(transport);
+
+    const err = await repoStatus("repo-1").catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(IpcError);
+    const ipcErr = err as IpcError;
+    expect(ipcErr.command).toBe("repo_status");
+    expect(ipcErr.message).toBe("invalid path or ref: no such worktree");
+    expect(ipcErr.code).toBe("invalid");
+    expect(ipcErr.detail).toBeUndefined();
+  });
+
+  it("the cancelled envelope keeps its code on the IpcError", async () => {
+    const envelope = JSON.stringify({
+      mygitui_error: 1,
+      code: "cancelled",
+      message: "operation cancelled",
+      detail: null,
+    });
+    const { transport } = mockTransport(() => {
+      throw envelope;
+    });
+    setTransport(transport);
+
+    const err = await fetchRepo("repo-1", {
+      remote: "origin",
+      refs: [],
+      prune: false,
+      depth: null,
+      unshallow: false,
+    }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(IpcError);
+    expect((err as IpcError).code).toBe("cancelled");
+    expect((err as IpcError).message).toBe("operation cancelled");
+  });
+
+  it("envelope detail passes through to IpcError.detail", async () => {
+    const envelope = JSON.stringify({
+      mygitui_error: 1,
+      code: "forge",
+      message: "already exists",
+      detail: "https://example.com/pr/7",
+    });
+    const { transport } = mockTransport(() => {
+      throw envelope;
+    });
+    setTransport(transport);
+
+    const err = await repoStatus("repo-1").catch((e: unknown) => e);
+    expect((err as IpcError).code).toBe("forge");
+    expect((err as IpcError).detail).toBe("https://example.com/pr/7");
+  });
+
+  it("raw strings keep the legacy fallback: no code, message verbatim", async () => {
+    const { transport } = mockTransport(() => {
+      // JSON-shaped but WITHOUT the version marker: not an envelope, the
+      // FE heuristics keep handling it as raw text.
+      throw '{"code":"cancelled","message":"x"}';
+    });
+    setTransport(transport);
+
+    const err = await repoStatus("repo-1").catch((e: unknown) => e);
+    const ipcErr = err as IpcError;
+    expect(ipcErr.message).toBe('{"code":"cancelled","message":"x"}');
+    expect(ipcErr.code).toBeUndefined();
+  });
+
+  it("garbage JSON stays a raw message", async () => {
+    const { transport } = mockTransport(() => {
+      throw "{not json at all";
+    });
+    setTransport(transport);
+
+    const err = await repoStatus("repo-1").catch((e: unknown) => e);
+    const ipcErr = err as IpcError;
+    expect(ipcErr.message).toBe("{not json at all");
+    expect(ipcErr.code).toBeUndefined();
+  });
+
+  it("ipcErrorText renders envelope errors as their message, raw strings verbatim", () => {
+    const envelope = JSON.stringify({
+      mygitui_error: 1,
+      code: "cli",
+      message: "remote rejected",
+      detail: null,
+    });
+    expect(ipcErrorText(envelope)).toBe("remote rejected");
+    expect(ipcErrorText("merge conflict")).toBe("merge conflict");
   });
 
   it("streaming failures normalize to IpcError too", async () => {

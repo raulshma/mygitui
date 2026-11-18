@@ -69,6 +69,7 @@ import type {
   GitignoreTemplate,
   HookInfo,
   HostKeyRequestEvent,
+  IpcErrorEnvelope,
   KnownHostKey,
   LfsLock,
   LfsStatus,
@@ -161,21 +162,85 @@ export type {
 /** Uniform failure for any backend command: which command failed and why. */
 export class IpcError extends Error {
   readonly command: string;
+  /** Backend error-envelope code (`mygitui_error` marker); absent for raw
+   * string errors (misc commands until migrated — see docs/contracts.md
+   * "Errors"). */
+  readonly code?: string;
+  /** Envelope pass-through context when the backend attached one. */
+  readonly detail?: string;
 
-  constructor(command: string, message: string) {
+  constructor(command: string, message: string, code?: string, detail?: string) {
     super(message);
     this.name = "IpcError";
     this.command = command;
+    this.code = code;
+    this.detail = detail;
   }
+}
+
+/**
+ * Parses the backend's structured error envelope out of a rejection string
+ * (`{"mygitui_error":1, code, message, detail}` — engine-originated failures
+ * cross the boundary as this JSON string; see docs/contracts.md "Errors").
+ * Returns `null` for raw strings (misc commands until migrated) and for
+ * JSON without the version marker, so the FE heuristics keep handling those.
+ */
+export function parseIpcErrorEnvelope(raw: string): IpcErrorEnvelope | null {
+  if (!raw.startsWith("{")) return null;
+  try {
+    const parsed = JSON.parse(raw) as {
+      mygitui_error?: unknown;
+      code?: unknown;
+      message?: unknown;
+      detail?: unknown;
+    };
+    if (
+      parsed.mygitui_error !== 1 ||
+      typeof parsed.code !== "string" ||
+      typeof parsed.message !== "string"
+    ) {
+      return null;
+    }
+    return {
+      mygitui_error: 1,
+      // Any string keeps forward compatibility with codes a newer backend
+      // adds; the union type narrows for typed consumers.
+      code: parsed.code as IpcErrorEnvelope["code"],
+      message: parsed.message,
+      detail: typeof parsed.detail === "string" ? parsed.detail : null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Human display text for a backend error string: the envelope's message
+ * when the string is the structured envelope, the raw string otherwise.
+ * Display points (toasts, history rows) render through this so envelope
+ * JSON never leaks into the UI.
+ */
+export function ipcErrorText(raw: string): string {
+  return parseIpcErrorEnvelope(raw)?.message ?? raw;
 }
 
 /** Coerces any thrown value into an `IpcError` (already-IpcError passes through). */
 function toIpcError(command: string, err: unknown): IpcError {
   if (err instanceof IpcError) return err;
-  let message = "unknown IPC error";
   if (typeof err === "string") {
-    message = err;
-  } else if (
+    const envelope = parseIpcErrorEnvelope(err);
+    if (envelope) {
+      return new IpcError(
+        command,
+        envelope.message,
+        envelope.code,
+        envelope.detail ?? undefined,
+      );
+    }
+    return new IpcError(command, err);
+  }
+  let message = "unknown IPC error";
+  if (
     typeof err === "object" &&
     err !== null &&
     typeof (err as { message?: unknown }).message === "string"

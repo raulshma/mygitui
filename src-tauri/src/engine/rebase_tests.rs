@@ -266,8 +266,8 @@ fn cancelled_rebase_start_refuses_up_front() {
 
     let cancel = std::sync::atomic::AtomicBool::new(true);
     match ENGINE.rebase_start_ext(&temp, &[pick(&c1)], None, Some(&cancel)) {
-        Err(EngineError::Invalid(msg)) => assert_eq!(msg, "cancelled"),
-        other => panic!("expected Invalid(cancelled), got {other:?}"),
+        Err(EngineError::Cancelled) => {}
+        other => panic!("expected EngineError::Cancelled, got {other:?}"),
     }
     assert_eq!(
         temp.head_sha(),

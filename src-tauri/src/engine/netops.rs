@@ -96,10 +96,11 @@ fn expand_refspec(remote: &str, spec: &str) -> String {
 
 /// Error raised when an op observes its cancellation token. Shared with the
 /// merge/rebase phase loops (same convention so the FE treats every
-/// cancellation uniformly); the word itself lives in
-/// [`crate::ops::CANCELLED_ERR`] next to its classifier.
+/// cancellation uniformly); the envelope code (`ErrCode::Cancelled`) and the
+/// legacy bare word ([`crate::ops::CANCELLED_ERR`], still returned by the
+/// CLI lanes) both classify via the same `ops.rs` classifier.
 pub(crate) fn cancelled_err() -> EngineError {
-    EngineError::Invalid(crate::ops::CANCELLED_ERR.to_owned())
+    EngineError::Cancelled
 }
 
 /// Core fetch: download + update tips + collect stats, running the given
@@ -1211,8 +1212,8 @@ mod tests {
             )
             .expect_err("cancelled op must not run");
         match err {
-            EngineError::Invalid(msg) => assert_eq!(msg, "cancelled"),
-            other => panic!("expected Invalid(cancelled), got {other:?}"),
+            EngineError::Cancelled => {}
+            other => panic!("expected EngineError::Cancelled, got {other:?}"),
         }
     }
 

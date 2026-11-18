@@ -768,8 +768,8 @@ fn cancelled_pull_refuses_up_front() {
 
     let cancel = AtomicBool::new(true);
     match ENGINE.pull_impl_ext(&f.a, &pull_opts(), &mut |_| {}, Some(&cancel)) {
-        Err(EngineError::Invalid(msg)) => assert_eq!(msg, "cancelled"),
-        other => panic!("expected Invalid(cancelled), got {other:?}"),
+        Err(EngineError::Cancelled) => {}
+        other => panic!("expected EngineError::Cancelled, got {other:?}"),
     }
     assert_eq!(head_sha(&f.a), before, "cancelled pull must not move HEAD");
     // The fetch never ran: the tracking ref misses b's advance.

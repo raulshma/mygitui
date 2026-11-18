@@ -24,6 +24,7 @@ import {
   authStore,
   AuthStore,
   invertStageEntry,
+  isCancellationError,
   MAX_UNDO_PER_REPO,
   opStore,
   OpStore,
@@ -31,23 +32,30 @@ import {
   type UiUndoEntry,
 } from "$lib/stores/ops.svelte";
 
-vi.mock("$lib/ipc/client", () => ({
-  authRespond: vi.fn(),
-  opCancel: vi.fn(),
-  checkpointRestore: vi.fn(),
-  checkpoints: vi.fn(),
-  stage: vi.fn(),
-  onAuthRequest: vi.fn(),
-  onOpProgress: vi.fn(),
-  onOpLog: vi.fn(),
-  // $lib/events/repoEvents (imported by ops.svelte) pulls the other event
-  // seams in transitively; they are never called in this suite.
-  onRepoChanged: vi.fn(),
-  onCloneProgress: vi.fn(),
-  onActionOutput: vi.fn(),
-  onPtyOutput: vi.fn(),
-  onPtyExit: vi.fn(),
-}));
+vi.mock("$lib/ipc/client", async (importOriginal) => {
+  // The pure envelope helpers (`ipcErrorText`, `parseIpcErrorEnvelope`)
+  // stay real: the store uses them for cancellation classification and
+  // error display, and the tests below pin that behavior.
+  const actual = await importOriginal<typeof import("$lib/ipc/client")>();
+  return {
+    ...actual,
+    authRespond: vi.fn(),
+    opCancel: vi.fn(),
+    checkpointRestore: vi.fn(),
+    checkpoints: vi.fn(),
+    stage: vi.fn(),
+    onAuthRequest: vi.fn(),
+    onOpProgress: vi.fn(),
+    onOpLog: vi.fn(),
+    // $lib/events/repoEvents (imported by ops.svelte) pulls the other event
+    // seams in transitively; they are never called in this suite.
+    onRepoChanged: vi.fn(),
+    onCloneProgress: vi.fn(),
+    onActionOutput: vi.fn(),
+    onPtyOutput: vi.fn(),
+    onPtyExit: vi.fn(),
+  };
+});
 
 const mockAuthRespond = vi.mocked(authRespond);
 const mockOnAuthRequest = vi.mocked(onAuthRequest);
@@ -413,6 +421,86 @@ describe("OpStore", () => {
     const [pull, fetch] = store.historyFor("repo-1"); // newest first
     expect(pull).toMatchObject({ op_id: "b", outcome: "failed", error: "merge conflict" });
     expect(fetch).toMatchObject({ op_id: "a", outcome: "cancelled", error: "cancelled" });
+  });
+
+  it("classifies the structured cancelled envelope via the error code (legacy text stays accepted)", () => {
+    // The envelope the engine's cooperative cancellation now produces.
+    const cancelledEnvelope = JSON.stringify({
+      mygitui_error: 1,
+      code: "cancelled",
+      message: "operation cancelled",
+      detail: null,
+    });
+    expect(isCancellationError(cancelledEnvelope)).toBe(true);
+    // The legacy bare sentinel (CLI lanes, one-release compatibility).
+    expect(isCancellationError("cancelled")).toBe(true);
+    // Loosely-matched legacy variants.
+    expect(isCancellationError("push cancelled by user")).toBe(true);
+    // An envelope with a non-cancelled code is a real failure — even when
+    // the message happens to contain "cancel".
+    const failedEnvelope = JSON.stringify({
+      mygitui_error: 1,
+      code: "engine",
+      message: "fetch interrupted, not cancelled",
+      detail: null,
+    });
+    expect(isCancellationError(failedEnvelope)).toBe(false);
+    // Raw misc-lane strings: no envelope, plain heuristics.
+    expect(isCancellationError("merge conflict")).toBe(false);
+    // JSON without the version marker is raw text, not an envelope.
+    expect(isCancellationError('{"code":"cancelled"}')).toBe(false);
+  });
+
+  it("toasts the cancelled envelope as info and records the human message in history", () => {
+    const store = new OpStore();
+    const envelope = JSON.stringify({
+      mygitui_error: 1,
+      code: "cancelled",
+      message: "operation cancelled",
+      detail: null,
+    });
+    store.applyProgress(progress({ op_id: "a", repo_id: "repo-1", kind: "push" }));
+    store.applyProgress(
+      progress({ op_id: "a", repo_id: "repo-1", kind: "push", done: true, error: envelope }),
+    );
+
+    expect(getToasts().some((t) => t.kind === "info" && t.message === "Cancelled")).toBe(true);
+    expect(
+      getToasts().some(
+        (t) => t.kind === "error" && t.message.includes("mygitui_error"),
+      ),
+    ).toBe(false);
+    expect(store.historyFor("repo-1")[0]).toMatchObject({
+      outcome: "cancelled",
+      error: "operation cancelled",
+    });
+  });
+
+  it("renders envelope errors as their message (never envelope JSON) in toast and history", () => {
+    const store = new OpStore();
+    const envelope = JSON.stringify({
+      mygitui_error: 1,
+      code: "engine",
+      message: "non-fast-forward",
+      detail: null,
+    });
+    store.applyProgress(progress({ op_id: "a", repo_id: "repo-1", kind: "push" }));
+    store.applyProgress(
+      progress({ op_id: "a", repo_id: "repo-1", kind: "push", done: true, error: envelope }),
+    );
+
+    expect(
+      getToasts().some(
+        (t) => t.kind === "error" && t.message.includes("Push failed: non-fast-forward"),
+      ),
+    ).toBe(true);
+    expect(
+      getToasts().some((t) => t.message.includes("mygitui_error")),
+    ).toBe(false);
+    expect(store.historyFor("repo-1")[0]).toMatchObject({
+      outcome: "failed",
+      error: "non-fast-forward",
+    });
   });
 
   it("records cancelled via the typed outcome even when the error text lacks 'cancel'", () => {

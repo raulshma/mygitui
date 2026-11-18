@@ -27,7 +27,14 @@
  * `vi.mock` in tests).
  */
 
-import { authRespond, checkpointRestore, opCancel, stage } from "$lib/ipc/client";
+import {
+  authRespond,
+  checkpointRestore,
+  ipcErrorText,
+  opCancel,
+  parseIpcErrorEnvelope,
+  stage,
+} from "$lib/ipc/client";
 import { describeError } from "$lib/errors";
 import { onAuthRequest, onOpLog, onOpProgress } from "$lib/events/repoEvents";
 import type { AuthRequest, OpLog, OpProgress, RepoId } from "$lib/ipc/types";
@@ -161,16 +168,23 @@ export function kindLabel(kind: string): string {
 
 /**
  * Whether an op's final error means it was cancelled, not failed. The
- * backend's cooperative cancellation surfaces as the bare text "cancelled"
- * (`netops.rs` `cancelled_err()` and the op queue's queued-not-started skip
- * both use exactly that word), matched loosely so wrapped variants still
- * hit. Every other error is a real failure.
+ * structured envelope decides when present (`code: "cancelled"` — the
+ * engine's cooperative cancellation and the op queue's queued-not-started
+ * skip both produce it; see the Errors contract in docs/contracts.md); the
+ * legacy bare text "cancelled" and wrapped variants stay accepted for one
+ * release (matched loosely, `/cancel/i`).
  *
  * Fallback only — final `op-progress` events carry a typed `outcome`
  * (backend `OpOutcome::for_error`, the single sentinel comparison site);
  * prefer that via {@link isCancelledOp}.
  */
 export function isCancellationError(error: string): boolean {
+  const envelope = parseIpcErrorEnvelope(error);
+  if (envelope) return envelope.code === "cancelled";
+  // Envelope-shaped but not valid (no marker etc.): not the sentinel — its
+  // JSON text can contain the word "cancelled", which must not match
+  // loosely. Prose strings keep the loose legacy matching.
+  if (error.startsWith("{")) return false;
   return /cancel/i.test(error);
 }
 
@@ -276,7 +290,11 @@ export class OpStore {
         if (isCancelledOp(p)) {
           toast("Cancelled", { kind: "info" });
         } else {
-          toast(`${kindLabel(p.kind)} failed: ${p.error}`, { kind: "error" });
+          // `p.error` may be the structured envelope (JSON string) — render
+          // its human message (see `ipcErrorText`).
+          toast(`${kindLabel(p.kind)} failed: ${ipcErrorText(p.error)}`, {
+            kind: "error",
+          });
         }
       }
       const remaining = this.ops[p.repo_id] ?? [];
@@ -465,9 +483,11 @@ export class OpStore {
     const entry: OpHistoryEntry = {
       op_id: p.op_id,
       kind: p.kind,
-      message: p.message,
+      // Display text: the backend's error envelope (JSON string) renders as
+      // its human message (`ipcErrorText`); raw strings pass through.
+      message: ipcErrorText(p.message),
       outcome: classifyOutcome(p),
-      error: p.error,
+      error: p.error === null ? null : ipcErrorText(p.error),
       started_at: startedAt,
       finished_at: finishedAt,
     };

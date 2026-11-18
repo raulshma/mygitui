@@ -52,7 +52,11 @@ vi.mock("$lib/toast", () => ({
 // StatusBar reads the store singletons (ops / tabs / autofetch /
 // remoteDevices), which bind these client functions at module load. None of
 // the commands run here except `repoStatus` (post-sync status refresh).
-vi.mock("$lib/ipc/client", () => ({
+vi.mock("$lib/ipc/client", async (importOriginal) => ({
+  // Real module first: its pure envelope helpers (ipcErrorText,
+  // parseIpcErrorEnvelope) stay real for the op store's error display and
+  // cancellation classification; the command stubs below override.
+  ...(await importOriginal<typeof import("$lib/ipc/client")>()),
   authRespond: vi.fn(),
   opCancel: vi.fn(),
   openRepo: vi.fn(),

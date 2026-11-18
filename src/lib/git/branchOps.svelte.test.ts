@@ -38,7 +38,14 @@ const mocks = vi.hoisted(() => ({
   onOpProgress: vi.fn(),
 }));
 
-vi.mock("$lib/ipc/client", () => ({ ...mocks }));
+vi.mock("$lib/ipc/client", async (importOriginal) => ({
+  // The real module's pure envelope helpers (ipcErrorText,
+  // parseIpcErrorEnvelope) stay real: the op store's error display and
+  // cancellation classification ride on them; the controller verbs above
+  // stay mocked.
+  ...(await importOriginal<typeof import("$lib/ipc/client")>()),
+  ...mocks,
+}));
 
 import type { BranchInfo, PreviewInfo, StatusEntry } from "$lib/ipc/types";
 import { getToasts } from "$lib/toast";

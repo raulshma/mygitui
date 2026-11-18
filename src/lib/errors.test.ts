@@ -106,4 +106,21 @@ describe("describeGitError", () => {
     const raw = "cannot delete the current branch `main`; switch away first";
     expect(describeGitError(raw)).toBe(raw);
   });
+
+  // The structured error envelope (docs/contracts.md "Errors") carries the
+  // raw git text inside `IpcError.message`; describeGitError stays the
+  // enrichment fallback and keeps matching on that text. Raw strings (misc
+  // commands) hit the same heuristics unchanged.
+  it("enriches the message the error envelope carries, like raw text", () => {
+    const envelopeMessage = "git error: authentication not allowed";
+    expect(describeError(new Error(envelopeMessage))).toBe(envelopeMessage);
+    expect(describeGitError(envelopeMessage)).toBe(
+      "Authentication with the remote failed — check your credentials and try again.",
+    );
+    expect(
+      describeGitError(
+        "git CLI failed: ! [remote rejected] main -> main (protected branch)",
+      ),
+    ).toBe("The remote refuses this change — the branch is protected there.");
+  });
 });
