@@ -17,6 +17,12 @@
  * "disconnected") — so a repository living on another machine is
  * identifiable at a glance; the tooltip's `ssh://` root says the same.
  *
+ * Status badges (`tabBadge.ts`, the status bar's derivation): a dirty
+ * repository shows a small dot after its name (tooltip "N changed") and a
+ * branch that is ahead of / behind its upstream shows a compact ↑n ↓n chip
+ * (tooltip "N ahead / N behind"). Both stay out of the way when zero, and
+ * counts cap at "99+" so a huge number cannot widen the tab.
+ *
    * Drag-to-reorder (mouse only, HTML5 dnd — the RebasePlanner idiom, no
    * libraries): the tab label is `draggable`; dragging it over another tab
    * shows an insertion bar on the side of the hovered tab label's midpoint
@@ -57,6 +63,13 @@
   import { appIcon } from "$lib/components/icons/library.svelte";
   import { Button } from "$lib/components/ui/button/index.js";
   import { Hint } from "$lib/components/ui/tooltip/index.js";
+  import {
+    aheadBehindLabel,
+    badgeCount,
+    changedLabel,
+    tabAriaSuffix,
+    tabBadge,
+  } from "$lib/components/tabBadge";
   import iconClose from "@ktibow/iconset-material-symbols/close";
   import iconAdd from "@ktibow/iconset-material-symbols/add";
 
@@ -351,6 +364,7 @@
       {@const dropping = dropTargetId === tab.id && dragTabId !== null}
       {@const deviceConnected =
         tab.deviceId !== null && remoteDevices.statusOf(tab.deviceId) === "connected"}
+      {@const badge = tabBadge(tab.status)}
       <!-- Dragover/drop live on the tab cell (label + close area both accept
            a drop); dragstart only from the label — the close button stays a
            plain click target. -->
@@ -385,7 +399,7 @@
               aria-selected={isActive}
               {...props}
               tabindex={isActive ? 0 : -1}
-              aria-label={`${tab.name} — ${tab.root}`}
+              aria-label={`${tab.name} — ${tab.root}${tabAriaSuffix(badge)}`}
               draggable="true"
               onclick={() => setActive(tab.id)}
               onauxclick={(event) => onAuxClick(event, tab.id)}
@@ -410,6 +424,28 @@
                 </span>
               {/if}
               <span class="name block min-w-0 overflow-hidden text-ellipsis whitespace-nowrap">{tab.name}</span>
+              {#if badge.changed > 0}
+                <!-- Dirty mark: dot only (a count would resize the strip);
+                     the number lives in the tooltip / accessible name. -->
+                <span
+                  class="dirty-mark ml-0.5 inline-block size-1.5 flex-none rounded-full bg-primary"
+                  role="img"
+                  aria-label={changedLabel(badge.changed)}
+                  title={changedLabel(badge.changed)}
+                ></span>
+              {/if}
+              {#if badge.ahead > 0 || badge.behind > 0}
+                <!-- Ahead/behind chip: halves render only when non-zero. -->
+                <span
+                  class="ab-chip ml-0.5 inline-flex flex-none items-center gap-0.5 text-ui-micro leading-none text-muted-foreground tabular-nums"
+                  role="img"
+                  aria-label={aheadBehindLabel(badge.ahead, badge.behind)}
+                  title={aheadBehindLabel(badge.ahead, badge.behind)}
+                >
+                  {#if badge.ahead > 0}<span class="ab-ahead">↑{badgeCount(badge.ahead)}</span>{/if}
+                  {#if badge.behind > 0}<span class="ab-behind">↓{badgeCount(badge.behind)}</span>{/if}
+                </span>
+              {/if}
             </button>
           {/snippet}
         </Hint>

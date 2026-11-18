@@ -10,6 +10,13 @@
    * virtualize (visible window + spacers), rows share one roving
    * tabindex (Up/Down/Home/End move, Enter/Space opens), and failed
    * mutations toast instead of dying in the console.
+   *
+   * Drag & drop staging (mouse-only accelerator, StatusPanel's model):
+   * rows are draggable and the section headers (plus empty bodies) accept
+   * the drop — an unstaged-side row onto Staged stages it, a staged row
+   * onto Changed/Untracked unstages it (pure decision in
+   * `panels/statusDnd.ts`), wired through this component's own
+   * `runMutation`. Foreign drags are ignored and keyboard paths untouched.
    */
   import type { ChangeKind, RepoStatus, StatusEntry } from "$lib/ipc/types";
   import { discard, stage } from "$lib/ipc/client";
@@ -22,6 +29,13 @@
   import { visibleRange } from "$lib/components/graph/layout";
   import Icon from "$lib/components/icons/Icon.svelte";
   import { appIcon } from "$lib/components/icons/library.svelte";
+  import {
+    STATUS_ROW_DRAG_TYPE,
+    dropAction,
+    isStatusRowDrag,
+    sectionSide,
+    type DragOrigin,
+  } from "$lib/components/panels/statusDnd";
   import {
     groupStatusEntries,
     isDiscardable,
@@ -326,6 +340,76 @@
     onOpenPath?.(entry.path, openSide(entry));
   }
 
+  // -- drag & drop staging (the StatusPanel accelerator, single-row) ----------
+
+  /** The entry being dragged (in-flight state; dataTransfer is the fallback). */
+  let dragEntry = $state<StatusEntry | null>(null);
+  /** Section id the pointer is over (drives the header highlight). */
+  let dropSectionId = $state<string | null>(null);
+
+  /** Starts a row drag: marker type first, text/plain fallback (TabStrip idiom). */
+  function onRowDragStart(event: DragEvent, entry: StatusEntry): void {
+    dragEntry = entry;
+    event.dataTransfer?.setData(STATUS_ROW_DRAG_TYPE, entry.path);
+    event.dataTransfer?.setData("text/plain", entry.path);
+    if (event.dataTransfer) event.dataTransfer.effectAllowed = "move";
+  }
+
+  /** Accepts the drag over a section and marks it the current drop target. */
+  function onSectionDragOver(event: DragEvent, sectionId: string): void {
+    if (dragEntry === null || !isStatusRowDrag(event)) return;
+    event.preventDefault();
+    if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+    dropSectionId = sectionId;
+  }
+
+  /**
+   * Drop: stage/unstage per the section pair (same-side drops do nothing).
+   * Staging a conflicted worktree side is skipped (the button's rule); the
+   * mutation goes through `runMutation` like every other action here.
+   */
+  function onSectionDrop(event: DragEvent, sectionId: string): void {
+    if (dragEntry === null || !isStatusRowDrag(event)) return;
+    event.preventDefault();
+    // In-flight state is primary; the payload path is the fallback.
+    const raw = event.dataTransfer?.getData(STATUS_ROW_DRAG_TYPE) ?? "";
+    const entry =
+      dragEntry ?? flatRows.find((candidate) => candidate.path === raw) ?? null;
+    if (entry !== null) {
+      const origin: DragOrigin = originOf(entry);
+      if (dropAction(origin, sectionSide(sectionId)) === "stage") {
+        if (isStageable(entry)) {
+          void runMutation("Stage", () =>
+            stage(repoId, { targets: [{ file: entry.path }], unstage: false }),
+          );
+        }
+      } else if (dropAction(origin, sectionSide(sectionId)) === "unstage") {
+        void runMutation("Unstage", () =>
+          stage(repoId, { targets: [{ file: entry.path }], unstage: true }),
+        );
+      }
+    }
+    clearDrag();
+  }
+
+  /** Fires on the source row whether or not the drop was accepted. */
+  function onRowDragEnd(): void {
+    clearDrag();
+  }
+
+  function clearDrag(): void {
+    dragEntry = null;
+    dropSectionId = null;
+  }
+
+  /** A staged-section row drags from the staged side; everything else unstaged. */
+  function originOf(entry: StatusEntry): DragOrigin {
+    const staged = sections
+      .find((section) => section.id === "staged")
+      ?.entries.some((candidate) => candidate.path === entry.path);
+    return staged === true ? "staged" : "unstaged";
+  }
+
   /** Pointer clicks move roving focus too, so keyboard nav continues from
    *  the clicked row (StatusPanel's onRowClick behavior). */
   function rowClick(entry: StatusEntry): void {
@@ -354,6 +438,9 @@
     aria-label={rowTitle(entry, kind)}
     tabindex={entry.path === tabIndexKey ? 0 : -1}
     bind:this={rowEls[entry.path]}
+    draggable="true"
+    ondragstart={(event) => onRowDragStart(event, entry)}
+    ondragend={onRowDragEnd}
     onclick={() => rowClick(entry)}
     onkeydown={onTreeKeydown}
   >
@@ -441,8 +528,18 @@
       use:trackTreeViewport
     >
       {#each sectionWindows as window (window.section.id)}
-        <div class="section" role="group" aria-label={window.section.label}>
-          <div class="flex h-6 w-full flex-none items-center gap-ui-3 box-border border-b border-border bg-card px-2 select-none">
+        <!-- svelte-ignore a11y_no_static_element_interactions -->
+        <div
+          class="section"
+          role="group"
+          aria-label={window.section.label}
+          ondragover={(event) => onSectionDragOver(event, window.section.id)}
+          ondrop={(event) => onSectionDrop(event, window.section.id)}
+        >
+          <div
+            class="flex h-6 w-full flex-none items-center gap-ui-3 box-border border-b border-border bg-card px-2 select-none"
+            style:background-color={dropSectionId === window.section.id ? "var(--app-hover)" : null}
+          >
             <span class="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap text-ui-micro leading-[1.2] font-bold tracking-[0.045em] uppercase text-muted-foreground">{window.section.label}</span>
             <span class="ml-auto min-w-5 shrink-0 rounded-full bg-muted px-1.5 text-center text-ui-micro font-semibold tabular-nums text-muted-foreground">{window.section.entries.length}</span>
           </div>

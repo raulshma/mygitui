@@ -74,6 +74,7 @@
   import { executeCommandById, isPaletteOpen, togglePalette } from "$lib/palette/palette.svelte";
   import { isSwitcherOpen } from "$lib/stores/switcher.svelte";
   import { contextMenu } from "$lib/components/menu/contextMenuStore.svelte";
+  import { isShortcutsOpen } from "$lib/components/help/shortcuts.svelte";
   import { onUiEvent } from "$lib/palette/events";
   import AiHealthChip from "$lib/components/ai/AiHealthChip.svelte";
   import UpdateChip from "$lib/components/UpdateChip.svelte";
@@ -147,6 +148,9 @@
   const settingsOverlay = lazyOverlay(
     () => import("$lib/components/settings/SettingsDialog.svelte"),
   );
+  const shortcutsOverlay = lazyOverlay(
+    () => import("$lib/components/help/ShortcutsOverlay.svelte"),
+  );
   const aiResultOverlay = lazyOverlay(
     () => import("$lib/components/ai/AiResultDialog.svelte"),
   );
@@ -164,6 +168,7 @@
     confirmOverlay.chunk,
     appearanceOverlay.chunk,
     settingsOverlay.chunk,
+    shortcutsOverlay.chunk,
     aiResultOverlay.chunk,
   ];
   function warmNextOverlay(): void {
@@ -1495,6 +1500,13 @@
 {#if settingsOpen || settingsOverlay.landed}
   {#await settingsOverlay.chunk() then SettingsDialogModule}
     <SettingsDialogModule.default bind:open={settingsOpen} />
+  {/await}
+{/if}
+
+<!-- `?` shortcuts cheatsheet (palette command help.shortcuts; store-driven). -->
+{#if isShortcutsOpen() || shortcutsOverlay.landed}
+  {#await shortcutsOverlay.chunk() then ShortcutsOverlayModule}
+    <ShortcutsOverlayModule.default />
   {/await}
 {/if}
 

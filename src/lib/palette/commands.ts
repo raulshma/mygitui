@@ -63,6 +63,7 @@ import { busy as opBusy, kindLabel } from "$lib/stores/ops.svelte";
 import { openSwitcher } from "$lib/stores/switcher.svelte";
 import { guardNow, loadUndo } from "$lib/stores/safety.svelte";
 import { resetBindings } from "$lib/palette/keybinds";
+import { openShortcuts } from "$lib/components/help/shortcuts.svelte";
 import {
   currentScheme,
   getThemePreference,
@@ -844,6 +845,21 @@ export const COMMANDS: Command[] = [
   },
 
   // -- App ------------------------------------------------------------------
+  {
+    // Own section ("Help") so the cheatsheet command groups visibly at the
+    // end of the palette; the overlay itself is store-driven (openShortcuts)
+    // because the registry must not statically import Svelte components.
+    id: "help.shortcuts",
+    title: "Keyboard shortcuts (cheatsheet)",
+    section: "Help",
+    keywords: ["keybindings", "hotkeys", "help", "?", "reference"],
+    // Default combo shift+? (pressing ? produces event.key "?" with Shift
+    // held — see DEFAULT_BINDINGS.help.shortcuts). The global keybind engine
+    // routes this id back here; shift-only combos are ignored while typing,
+    // so ? keeps typing its character in inputs.
+    shortcut: "shift+?",
+    run: () => openShortcuts(),
+  },
   {
     id: "app.quick-switcher",
     title: "Open quick switcher",

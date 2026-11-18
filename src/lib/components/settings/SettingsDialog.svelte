@@ -70,7 +70,24 @@
   import { editorPrefs } from "$lib/components/files/editorPrefs.svelte";
   import { fileTreePrefs } from "$lib/components/panels/fileTreePrefs.svelte";
   import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.svelte";
-  import { resetBindings } from "$lib/palette/keybinds";
+  import {
+    beginKeyCapture,
+    clearBinding,
+    comboFromEvent,
+    currentBindings,
+    DEFAULT_BINDINGS,
+    detectPlatform,
+    endKeyCapture,
+    resetBindings,
+    setBinding,
+  } from "$lib/palette/keybinds";
+  import { COMMANDS } from "$lib/palette/commands";
+  import {
+    matchesShortcutQuery,
+    shortcutSections,
+    type ShortcutSection,
+  } from "$lib/palette/shortcutSections";
+  import { bindingConflict, conflictWarning } from "./keybindsModel";
   import { emitUiEvent } from "$lib/palette/events";
   import { openAboutDialog } from "$lib/components/aboutDialog";
   import { ai } from "$lib/ai/ai.svelte";
@@ -159,7 +176,7 @@
   /** Hand-drawn block (override list, custom apps, storage inspector). */
   interface CustomRowDef extends BaseRowDef {
     kind: "custom";
-    render: "overrides" | "apps" | "inspector";
+    render: "overrides" | "apps" | "inspector" | "keybinds";
   }
 
   type SettingRowDef =
@@ -190,6 +207,7 @@
     | "openwith"
     | "ai"
     | "updates"
+    | "keybinds"
     | "advanced";
 
   let {
@@ -397,6 +415,133 @@
     settings.reset();
     rescan();
     toast("App settings reset to defaults", { kind: "info" });
+  }
+
+  // --- Keyboard shortcuts editor ------------------------------------------------
+
+  /**
+   * Click-to-capture rebinding over the palette registry (the shared
+   * section/binding derivation in `shortcutSections.ts` — the `?` cheatsheet
+   * renders the same data). The engine owns persistence via `setBinding` /
+   * `clearBinding`; this component only mirrors the effective map (module
+   * state is not reactive) and re-syncs it on open and after every mutation.
+   *
+   * Capture: the row's button is armed with `beginKeyCapture` (the global
+   * matcher must not swallow already-bound combos first), captures the next
+   * keydown through `comboFromEvent`, and Escape cancels. A conflict found
+   * with `bindingConflict` (findConflicts over the candidate map) shows an
+   * inline warning and the binding applies only after "Use anyway".
+   */
+
+  /** Mirror of the effective bindings (defaults + overrides). */
+  let keybindMap = $state<Record<string, string>>({});
+  /** Command id whose capture control is armed, or `null`. */
+  let capturing = $state<string | null>(null);
+  /** Candidate combo awaiting a conflict confirmation. */
+  let pendingCombo = $state<{ id: string; combo: string } | null>(null);
+  /** Filter over the command list. */
+  let keybindQuery = $state("");
+
+  // Re-sync the mirror when the dialog opens (bindings may have changed via
+  // the palette command since the last visit); a closed dialog never stays
+  // armed — the capture effect below tears the sink down with it.
+  $effect(() => {
+    if (!open) return;
+    untrack(() => {
+      keybindMap = currentBindings();
+      capturing = null;
+      pendingCombo = null;
+    });
+  });
+
+  // While a row is armed, raw keydowns route through the engine's capture
+  // sink into the capture handler; disarming (or closing the dialog) ends it.
+  $effect(() => {
+    if (!open || capturing === null) return;
+    beginKeyCapture((event) => onCaptureKeydown(event, capturing!));
+    return () => endKeyCapture();
+  });
+
+  /** Filtered + grouped command list (registry order). */
+  const keybindSections = $derived.by<ShortcutSection[]>(() =>
+    shortcutSections(keybindMap)
+      .map((section) => ({
+        ...section,
+        entries: section.entries.filter((entry) =>
+          matchesShortcutQuery(entry, keybindQuery),
+        ),
+      }))
+      .filter((section) => section.entries.length > 0),
+  );
+
+  const keybindMatchCount = $derived(
+    keybindSections.reduce((sum, section) => sum + section.entries.length, 0),
+  );
+
+  /** Inline warning for the pending conflicting combo, or `null`. */
+  const pendingWarning = $derived(
+    pendingCombo === null
+      ? null
+      : bindingConflict(keybindMap, COMMANDS, pendingCombo.id, pendingCombo.combo),
+  );
+
+  function startCapture(id: string): void {
+    capturing = id;
+    pendingCombo = null;
+  }
+
+  function cancelCapture(): void {
+    capturing = null;
+    pendingCombo = null;
+  }
+
+  /** Applies through the engine (persists) and refreshes the mirror. */
+  function applyBinding(id: string, combo: string): void {
+    if (setBinding(id, combo) === null) return;
+    keybindMap = currentBindings();
+    cancelCapture();
+  }
+
+  function clearOneBinding(id: string): void {
+    clearBinding(id);
+    keybindMap = currentBindings();
+    if (capturing === id) cancelCapture();
+  }
+
+  /**
+   * The armed control's keydown: Escape cancels; anything that parses as a
+   * combo is captured — conflict-free combos apply immediately, colliding
+   * ones park as `pendingCombo` behind the inline warning. The event is
+   * always swallowed so capturing never scrolls, tabs away, or closes the
+   * dialog.
+   */
+  function onCaptureKeydown(event: KeyboardEvent, id: string): void {
+    if (capturing !== id) return;
+    if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
+      cancelCapture();
+      return;
+    }
+    const combo = comboFromEvent(event, detectPlatform());
+    if (combo === null) return; // modifier-only press — keep listening
+    event.preventDefault();
+    event.stopPropagation();
+    if (bindingConflict(keybindMap, COMMANDS, id, combo) === null) {
+      applyBinding(id, combo);
+    } else {
+      pendingCombo = { id, combo };
+    }
+  }
+
+  function confirmPendingBinding(): void {
+    if (pendingCombo === null) return;
+    applyBinding(pendingCombo.id, pendingCombo.combo);
+  }
+
+  /** True when a row's binding is a user override (differs from the default). */
+  function isOverride(id: string): boolean {
+    return keybindMap[id] !== undefined && keybindMap[id] !== DEFAULT_BINDINGS[id];
   }
 
   // --- Search -----------------------------------------------------------------
@@ -871,6 +1016,24 @@
       ],
     },
     {
+      id: "keybinds",
+      label: "Keyboard shortcuts",
+      icon: "swap-horiz",
+      blurb: "Rebind every palette command — overrides are remembered per machine.",
+      rows: [
+        {
+          kind: "custom",
+          id: "keybind-editor",
+          title: "Command shortcuts",
+          description:
+            "Click a shortcut and press the new combo (Esc cancels). Collisions warn before they apply; Reset restores a command's default.",
+          keywords:
+            "keybinds shortcuts hotkeys rebind capture bindings palette keyboard reset",
+          render: "keybinds",
+        },
+      ],
+    },
+    {
       id: "advanced",
       label: "Advanced",
       icon: "inventory",
@@ -881,7 +1044,7 @@
           id: "keybinds",
           title: "Keyboard shortcuts",
           description:
-            "Rebind commands from the command palette (Ctrl/Cmd+Shift+P); overrides are remembered per machine.",
+            "Rebind commands in the Keyboard shortcuts section; overrides are remembered per machine.",
           keywords: "keybinds shortcuts hotkeys reset bindings palette",
           buttons: [{ label: "Reset all keybinds", onclick: resetKeybinds }],
         },
@@ -1099,6 +1262,127 @@
       </div>
     {:else if row.render === "apps"}
       <CustomAppsSection store={apps} />
+    {:else if row.render === "keybinds"}
+      <div class="flex flex-col gap-2">
+        <div class="flex flex-wrap items-center justify-between gap-2">
+          <span class="flex min-w-0 flex-col gap-0.5">
+            <span id={`settings-${row.id}-label`} class={ROW_TITLE}>{row.title}</span>
+            <span class={ROW_DESC}>{resolveText(row.description ?? "")}</span>
+          </span>
+          <div class="relative flex w-full max-w-xs min-w-40 flex-none items-center">
+            {#if searchIcon}
+              <span class="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground">
+                <Icon icon={searchIcon} size={13} />
+              </span>
+            {/if}
+            <input
+              class="h-7 w-full rounded-lg border border-border bg-black/5 pl-7 pr-2 text-ui-base text-foreground placeholder:text-muted-foreground focus-visible:-outline-offset-1 focus-visible:outline-2 focus-visible:outline-primary dark:bg-black/20"
+              type="text"
+              placeholder="Filter commands…"
+              aria-label="Filter commands"
+              bind:value={keybindQuery}
+              onkeydown={(event) => {
+                // Escape clears the filter first (dialog closes second).
+                if (event.key === "Escape" && keybindQuery !== "") {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  keybindQuery = "";
+                }
+              }}
+            />
+          </div>
+        </div>
+
+        {#if pendingCombo !== null && pendingWarning !== null}
+          <!-- Inline conflict warning: shown BEFORE the binding applies;
+               "Use anyway" applies it, any re-capture replaces it. -->
+          <p
+            class="m-0 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border border-border bg-muted/40 px-3 py-2 {ROW_DESC}"
+            role="alert"
+          >
+            <span class="min-w-0 flex-1 text-foreground">{conflictWarning(pendingWarning)}.</span>
+            <span class="flex flex-none items-center gap-2">
+              <Button variant="outline" class="h-7 rounded-full px-3 text-ui-meta" type="button" onclick={confirmPendingBinding}>
+                Use anyway
+              </Button>
+              <Button variant="ghost" class="h-7 rounded-full px-3 text-ui-meta" type="button" onclick={cancelCapture}>
+                Cancel
+              </Button>
+            </span>
+          </p>
+        {/if}
+
+        {#if keybindSections.length === 0}
+          <p class="m-0 rounded-xl border border-dashed border-border px-4 py-6 text-center {ROW_DESC}">
+            No commands match “{keybindQuery}”.
+          </p>
+        {:else}
+          {#each keybindSections as section (section.name)}
+            <section class="flex flex-col gap-1" aria-label={`${section.name} commands`}>
+              <h4 class="m-0 pt-2 text-ui-meta font-semibold uppercase tracking-wide text-muted-foreground">
+                {section.name}
+              </h4>
+              {#each section.entries as entry (entry.command.id)}
+                <div class="flex items-center justify-between gap-3 rounded-lg border border-border bg-card/40 px-3 py-1.5">
+                  <span class="min-w-0 flex-1 truncate text-sm text-foreground" title={entry.command.title}>
+                    {entry.command.title}
+                  </span>
+                  <span class="flex flex-none items-center gap-1.5">
+                    {#if isOverride(entry.command.id)}
+                      <span class="rounded-full bg-primary/10 px-1.5 py-px text-ui-micro text-primary">custom</span>
+                    {/if}
+                    <!-- The capture control: shows the binding when idle,
+                         "Press keys…" while armed; captures on keydown. -->
+                    <button
+                      type="button"
+                      class="min-w-28 cursor-pointer rounded-md border border-border bg-muted/50 px-2.5 py-1 text-center text-ui-meta text-foreground transition-colors hover:border-ring/50 hover:bg-muted focus-visible:-outline-offset-1 focus-visible:outline-2 focus-visible:outline-primary {capturing === entry.command.id ? 'border-primary bg-background' : ''}"
+                      aria-label={`Change shortcut for ${entry.command.title}`}
+                      aria-pressed={capturing === entry.command.id}
+                      onclick={(event) => {
+                        startCapture(entry.command.id);
+                        (event.currentTarget as HTMLButtonElement).focus();
+                      }}
+                      onkeydown={(event) => onCaptureKeydown(event, entry.command.id)}
+                    >
+                      {#if capturing === entry.command.id}
+                        Press keys… (Esc cancels)
+                      {:else if entry.display !== null}
+                        <Kbd>{entry.display}</Kbd>
+                      {:else}
+                        Unbound
+                      {/if}
+                    </button>
+                    <Hint label="Restore the default shortcut">
+                      {#snippet child({ props })}
+                        <Button
+                          {...props}
+                          variant="ghost"
+                          size="icon-xs"
+                          type="button"
+                          class="text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+                          aria-label={`Reset shortcut for ${entry.command.title}`}
+                          disabled={keybindMap[entry.command.id] === undefined}
+                          onclick={() => clearOneBinding(entry.command.id)}
+                        >
+                          {#if closeIcon}
+                            <Icon icon={closeIcon} size={12} />
+                          {:else}
+                            ×
+                          {/if}
+                        </Button>
+                      {/snippet}
+                    </Hint>
+                  </span>
+                </div>
+              {/each}
+            </section>
+          {/each}
+          <p class="m-0 {ROW_DESC}">
+            {keybindMatchCount}
+            {keybindMatchCount === 1 ? "command" : "commands"}
+          </p>
+        {/if}
+      </div>
     {:else if row.render === "inspector"}
       <div class="inspector flex flex-col gap-2">
         <div class="inspector-head flex flex-wrap items-center justify-between gap-2">

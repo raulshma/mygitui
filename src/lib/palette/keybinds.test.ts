@@ -11,12 +11,15 @@ import {
   KEYBINDS_STORAGE_KEY,
   __resetKeybindsForTests,
   canonicalCombo,
+  beginKeyCapture,
   comboFromEvent,
   comboToString,
   currentBindings,
   detectPlatform,
+  endKeyCapture,
   findConflicts,
   formatCombo,
+  hasCtrlOrAlt,
   primaryModifierLabel,
   getBinding,
   getOverrides,
@@ -114,6 +117,14 @@ describe("combo canonicalization", () => {
     expect(hasModifier("not a combo")).toBe(false);
   });
 
+  it("hasCtrlOrAlt accepts only real chord modifiers (shift alone is typing)", () => {
+    expect(hasCtrlOrAlt("ctrl+k")).toBe(true);
+    expect(hasCtrlOrAlt("alt+pagedown")).toBe(true);
+    expect(hasCtrlOrAlt("shift+?")).toBe(false); // typed "?" character
+    expect(hasCtrlOrAlt("f5")).toBe(false);
+    expect(hasCtrlOrAlt("not a combo")).toBe(false);
+  });
+
   it("formats combos for display", () => {
     expect(formatCombo("ctrl+shift+p", "pc")).toBe("Ctrl+Shift+P");
     expect(formatCombo("ctrl+alt+arrowleft", "pc")).toBe("Ctrl+Alt+←");
@@ -186,6 +197,15 @@ describe("event matching", () => {
       "ctrl+alt+arrowright",
     );
     expect(comboFromEvent(keyEvent({ key: "A", ctrlKey: true }), "pc")).toBe("ctrl+a");
+  });
+
+  it("pressing ? is the shift+? combo (event.key carries the shifted glyph)", () => {
+    // The `?` cheatsheet's binding: shift+/ on a US layout yields key "?".
+    expect(comboFromEvent(keyEvent({ key: "?", shiftKey: true }), "pc")).toBe("shift+?");
+    expect(
+      matchEvent(keyEvent({ key: "?", shiftKey: true }), { "help.shortcuts": "shift+?" }, "pc"),
+    ).toBe("help.shortcuts");
+    expect(DEFAULT_BINDINGS["help.shortcuts"]).toBe("shift+?");
   });
 });
 
@@ -385,11 +405,48 @@ describe("startKeybinds (window listener)", () => {
       // f5 is bound but modifier-less: swallowed by the editable rule.
       dispatchKeydown({ key: "F5" }, input);
       expect(onAction).not.toHaveBeenCalled();
-      // Modified combos still fire from inputs.
+      // Shift-only combos ARE typed text (`?` = shift+?): ignored in inputs
+      // so typing a question mark never opens the cheatsheet. help.shortcuts
+      // ships a default shift+? binding (see DEFAULT_BINDINGS).
+      dispatchKeydown({ key: "?", shiftKey: true }, input);
+      expect(onAction).not.toHaveBeenCalled();
+      // Ctrl/alt combos still fire from inputs.
       dispatchKeydown({ key: "p", ctrlKey: true, shiftKey: true }, input);
       expect(onAction).toHaveBeenCalledWith("app.palette");
       input.remove();
     } finally {
+      stop();
+    }
+  });
+
+  it("fires shift-only combos outside inputs (the ? cheatsheet)", () => {
+    const onAction = vi.fn();
+    const stop = startKeybinds(onAction);
+    try {
+      // help.shortcuts defaults to shift+? (DEFAULT_BINDINGS).
+      dispatchKeydown({ key: "?", shiftKey: true });
+      expect(onAction).toHaveBeenCalledWith("help.shortcuts");
+    } finally {
+      stop();
+    }
+  });
+
+  it("capture mode hands keydowns to the sink and runs no global action", () => {
+    const onAction = vi.fn();
+    const stop = startKeybinds(onAction);
+    try {
+      const sink = vi.fn();
+      beginKeyCapture(sink);
+      // A bound combo: captured raw, never matched — the editor decides.
+      const prevented = dispatchKeydown({ key: "p", ctrlKey: true, shiftKey: true });
+      expect(sink).toHaveBeenCalledTimes(1);
+      expect(onAction).not.toHaveBeenCalled();
+      expect(prevented).toBe(false); // the sink decides what to swallow
+      endKeyCapture();
+      dispatchKeydown({ key: "p", ctrlKey: true, shiftKey: true });
+      expect(onAction).toHaveBeenCalledWith("app.palette");
+    } finally {
+      endKeyCapture();
       stop();
     }
   });

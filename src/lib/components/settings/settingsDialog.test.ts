@@ -22,7 +22,8 @@ vi.mock("$lib/toast", () => ({
 import { toast } from "$lib/toast";
 import SettingsDialog from "./SettingsDialog.svelte";
 import { COMMANDS } from "$lib/palette/commands";
-import { DEFAULT_BINDINGS } from "$lib/palette/keybinds";
+import { DEFAULT_BINDINGS, __resetKeybindsForTests, setBinding } from "$lib/palette/keybinds";
+import { closeShortcuts, isShortcutsOpen } from "$lib/components/help/shortcuts.svelte";
 import {
   AppSettingsStore,
   APP_SETTINGS_DEFAULTS,
@@ -76,6 +77,8 @@ describe("SettingsDialog", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     resetPersistedState();
+    // Keybind overrides: in-memory + persisted, back to defaults.
+    __resetKeybindsForTests(localStorage);
     // Fresh stores over the real jsdom localStorage, so envelope writes can
     // be asserted directly.
     settings = new AppSettingsStore(localStorage);
@@ -359,6 +362,154 @@ describe("SettingsDialog", () => {
   });
 });
 
+describe("SettingsDialog keybind editor", () => {
+  let settings: AppSettingsStore;
+  let apps: CustomAppsStore;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    localStorage.clear();
+    __resetKeybindsForTests(localStorage);
+    settings = new AppSettingsStore(localStorage);
+    apps = new CustomAppsStore(localStorage);
+  });
+
+  afterEach(() => {
+    cleanup();
+    __resetKeybindsForTests();
+  });
+
+  /** Opens the dialog on the Keyboard shortcuts section. */
+  async function openKeybinds(): Promise<void> {
+    render(SettingsDialog, { open: true, settings, apps });
+    await fireEvent.click(screen.getByRole("button", { name: "Keyboard shortcuts" }));
+  }
+
+  /** The capture control of one command row (aria-named button). */
+  function captureButton(commandTitle: string): HTMLButtonElement {
+    return screen.getByRole("button", {
+      name: `Change shortcut for ${commandTitle}`,
+    }) as HTMLButtonElement;
+  }
+
+  it("lists palette commands grouped by section with their current bindings", async () => {
+    await openKeybinds();
+
+    // Grouped by the registry's section names…
+    expect(screen.getByRole("region", { name: "Repo commands" })).toBeTruthy();
+    expect(screen.getByRole("region", { name: "App commands" })).toBeTruthy();
+    // …with titles and pre-formatted bindings.
+    expect(screen.getByText("Open repository…")).toBeTruthy();
+    const palette = captureButton("Toggle command palette");
+    expect(palette.textContent).toContain("Ctrl+Shift+P");
+    // Unbound commands (e.g. files.find) show a placeholder instead.
+    expect(captureButton("Find in file…").textContent).toContain("Unbound");
+  });
+
+  it("filters the command list", async () => {
+    await openKeybinds();
+
+    await fireEvent.input(screen.getByLabelText("Filter commands"), {
+      target: { value: "follow system" },
+    });
+    expect(screen.getByText("Theme: follow system setting")).toBeTruthy();
+    expect(screen.queryByText("Open repository…")).toBeNull();
+    expect(screen.getByText(/1 command/)).toBeTruthy();
+
+    await fireEvent.input(screen.getByLabelText("Filter commands"), {
+      target: { value: "zzz-nothing" },
+    });
+    expect(screen.getByText(/No commands match/)).toBeTruthy();
+  });
+
+  it("captures a new binding on keydown and persists the override", async () => {
+    await openKeybinds();
+
+    const button = captureButton("Refresh repository status");
+    expect(button.textContent).toContain("F5"); // the default
+
+    await fireEvent.click(button);
+    expect(button.textContent).toContain("Press keys…");
+    expect(button.getAttribute("aria-pressed")).toBe("true");
+
+    await fireEvent.keyDown(button, { key: "r", ctrlKey: true, altKey: true });
+    expect(button.textContent).toContain("Ctrl+Alt+R");
+    // Persisted through the engine's override store…
+    expect(JSON.parse(localStorage.getItem("mygitui.keybinds") as string)).toEqual({
+      "repo.refresh": "ctrl+alt+r",
+    });
+    // …and marked as a user override in the row.
+    expect(screen.getByText("custom")).toBeTruthy();
+  });
+
+  it("Escape cancels a capture without changing anything", async () => {
+    await openKeybinds();
+
+    const button = captureButton("Refresh repository status");
+    await fireEvent.click(button);
+    await fireEvent.keyDown(button, { key: "Escape" });
+
+    expect(button.textContent).toContain("F5");
+    expect(button.getAttribute("aria-pressed")).toBe("false");
+    // Nothing was persisted (no override was ever written).
+    expect(localStorage.getItem("mygitui.keybinds")).toBeNull();
+    // The dialog itself stayed open (the Escape did not close it).
+    expect(screen.getByText("Command shortcuts")).toBeTruthy();
+  });
+
+  it("warns about conflicts inline before applying, then applies on confirm", async () => {
+    await openKeybinds();
+
+    // ctrl+shift+p already belongs to "Toggle command palette".
+    const button = captureButton("Refresh repository status");
+    await fireEvent.click(button);
+    await fireEvent.keyDown(button, { key: "p", ctrlKey: true, shiftKey: true });
+
+    // Inline warning shown; the binding is NOT applied yet.
+    const warning = screen.getByRole("alert");
+    expect(warning.textContent).toContain(
+      "Ctrl+Shift+P is already bound to Toggle command palette",
+    );
+    // The conflicting combo is parked, not applied (no override written yet).
+    expect(localStorage.getItem("mygitui.keybinds")).toBeNull();
+
+    await fireEvent.click(screen.getByRole("button", { name: "Use anyway" }));
+    expect(JSON.parse(localStorage.getItem("mygitui.keybinds") as string)).toEqual({
+      "repo.refresh": "ctrl+shift+p",
+    });
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("Cancel dismisses a conflicting capture without applying", async () => {
+    await openKeybinds();
+
+    const button = captureButton("Refresh repository status");
+    await fireEvent.click(button);
+    await fireEvent.keyDown(button, { key: "p", ctrlKey: true, shiftKey: true });
+    await fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(button.textContent).toContain("F5");
+    expect(localStorage.getItem("mygitui.keybinds")).toBeNull();
+  });
+
+  it("resets one command back to its default", async () => {
+    setBinding("repo.refresh", "ctrl+alt+r");
+    await openKeybinds();
+
+    const reset = screen.getByRole("button", { name: "Reset shortcut for Refresh repository status" });
+    expect((reset as HTMLButtonElement).disabled).toBe(false);
+    await fireEvent.click(reset);
+
+    expect(JSON.parse(localStorage.getItem("mygitui.keybinds") as string)).toEqual({});
+    expect(captureButton("Refresh repository status").textContent).toContain("F5");
+    // Commands without any binding have nothing to reset (disabled).
+    expect((screen.getByRole("button", { name: "Reset shortcut for Find in file…" }) as HTMLButtonElement).disabled).toBe(
+      true,
+    );
+  });
+});
+
 describe("settings registry wiring", () => {
   it("registers app.settings near the other app.* commands with the Ctrl+, keybind", () => {
     const command = COMMANDS.find((entry) => entry.id === "app.settings");
@@ -366,6 +517,24 @@ describe("settings registry wiring", () => {
     expect(command?.section).toBe("App");
     expect(command?.shortcut).toBe("ctrl+comma");
     expect(DEFAULT_BINDINGS["app.settings"]).toBe("ctrl+comma");
+  });
+
+  it("registers the ? cheatsheet command with the shift+? keybind", () => {
+    const command = COMMANDS.find((entry) => entry.id === "help.shortcuts");
+    expect(command).toBeDefined();
+    expect(command?.section).toBe("Help");
+    expect(command?.shortcut).toBe("shift+?");
+    expect(DEFAULT_BINDINGS["help.shortcuts"]).toBe("shift+?");
+  });
+
+  it("opens the cheatsheet overlay through the shared store when the command runs", () => {
+    const command = COMMANDS.find((entry) => entry.id === "help.shortcuts");
+    expect(command).toBeDefined();
+    expect(isShortcutsOpen()).toBe(false);
+    command?.run({ repoId: null, root: null });
+    expect(isShortcutsOpen()).toBe(true);
+    closeShortcuts();
+    expect(isShortcutsOpen()).toBe(false);
   });
 
   it("opens the dialog through the typed UI bus when the command runs", () => {

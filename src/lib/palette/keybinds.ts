@@ -15,9 +15,9 @@
  * persist to localStorage `"mygitui.keybinds"` as `{commandId: combo}`.
  *
  * Editable-target rule: while the focus is in an input/textarea/content-
- * editable, only combos containing at least one modifier (ctrl/alt) are
- * honored — modifier-less keys (plain letters, F5) are ignored so typing is
- * never hijacked.
+ * editable, only combos carrying ctrl or alt are honored — plain letters,
+ * F5, and shift-only chords (which ARE typed text: `shift+?` is the `?`
+ * character) are ignored so typing is never hijacked.
  */
 
 /** Minimal storage surface this module needs (subset of DOM `Storage`). */
@@ -75,6 +75,10 @@ export const DEFAULT_BINDINGS: Record<string, string> = {
   "diff.next-file": "alt+shift+pagedown",
   "diff.prev-file": "alt+shift+pageup",
   "diff.first-change": "alt+home",
+  // The `?` cheatsheet. Pressing ? produces `event.key === "?"` with Shift
+  // held (US layouts: ? is shift+/), so comboFromEvent canonicalizes it to
+  // "shift+?" — that is the matching combo string, not "shift+/".
+  "help.shortcuts": "shift+?",
 };
 
 // ---------------------------------------------------------------------------
@@ -169,6 +173,18 @@ export function canonicalCombo(input: string): string | null {
 export function hasModifier(combo: string): boolean {
   const parts = parseCombo(combo);
   return parts !== null && (parts.ctrl || parts.alt || parts.shift);
+}
+
+/**
+ * True when the combo carries a real chord modifier (ctrl or alt) — one
+ * that cannot come from plain typing. Shift alone does not qualify: on a
+ * keyboard, shift+letter / shift+symbol IS just a typed character (`?`,
+ * `!`, `A`), so such combos must stay out of the editable-target honor
+ * list (see the module doc's editable rule).
+ */
+export function hasCtrlOrAlt(combo: string): boolean {
+  const parts = parseCombo(combo);
+  return parts !== null && (parts.ctrl || parts.alt);
 }
 
 /** Named keys that read better as a glyph than as their raw token. */
@@ -435,6 +451,32 @@ export function isEditableTarget(target: EventTarget | null): boolean {
 
 let cleanup: (() => void) | null = null;
 
+// -- capture mode (rebind UIs) -------------------------------------------------
+//
+// A click-to-capture control (the Settings keybind editor) needs first crack
+// at raw keydowns: the global matcher would otherwise swallow every
+// already-bound combo in its window capture-phase listener before the
+// capture button ever saw the event. While a sink is installed the listener
+// hands each event to it and runs no global action; the sink decides what to
+// swallow (preventDefault/stopPropagation) and when to end the capture.
+
+/** The active capture sink, or `null` when the engine matches normally. */
+let captureSink: ((event: KeyboardEvent) => void) | null = null;
+
+/**
+ * Routes every non-repeat keydown the listener sees to `sink` instead of
+ * matching bindings, until {@link endKeyCapture}. One sink at a time (the
+ * last install wins — only the Settings editor uses this).
+ */
+export function beginKeyCapture(sink: (event: KeyboardEvent) => void): void {
+  captureSink = sink;
+}
+
+/** Ends capture mode; the matcher behaves normally again. */
+export function endKeyCapture(): void {
+  captureSink = null;
+}
+
 /**
  * Installs the global keydown listener (capture phase, on `window`): matches
  * every event against the current bindings and invokes `onAction(commandId)`
@@ -450,9 +492,15 @@ export function startKeybinds(onAction: (commandId: string) => void): () => void
     // keydown ~30×/s, which would flip-flop toggle targets (the palette)
     // every frame and enqueue duplicate fetch/pull/push network ops.
     if (event.repeat) return;
+    if (captureSink !== null) {
+      // A capture control owns the keyboard (keybind editor): it gets the
+      // raw event and decides what to swallow; no global action fires.
+      captureSink(event);
+      return;
+    }
     const combo = comboFromEvent(event, platform);
     if (combo === null) return;
-    if (isEditableTarget(event.target) && !hasModifier(combo)) return;
+    if (isEditableTarget(event.target) && !hasCtrlOrAlt(combo)) return;
     const commandId = matchEvent(event, currentBindings(), platform);
     if (commandId === null) return;
     event.preventDefault();

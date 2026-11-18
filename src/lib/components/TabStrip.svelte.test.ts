@@ -2,12 +2,15 @@
  * TabStrip overflow behavior: the active tab is scrolled back into view,
  * vertical wheel moves the horizontal strip, and the edge fades track the
  * scroll position. jsdom has no layout, so metrics are stubbed per test.
+ * Also covers the status badges (dirty dot + ahead/behind chip) derived
+ * from `tab.status` via `tabBadge.ts`.
  */
 import { cleanup, fireEvent, render, screen } from "@testing-library/svelte";
 import { tick } from "svelte";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetTabStore, setActive, tabStore, type Tab } from "$lib/stores/tabs.svelte";
 import { resetTransport, setTransport } from "$lib/ipc/client";
+import type { RepoStatus } from "$lib/ipc/types";
 import TabStrip from "./TabStrip.svelte";
 
 function tab(index: number): Tab {
@@ -20,6 +23,23 @@ function tab(index: number): Tab {
     deviceId: null,
     openError: null,
   } as Tab;
+}
+
+/** A minimal status snapshot with the given shape (tests tweak counts). */
+function status(init: Partial<RepoStatus>): RepoStatus {
+  return {
+    branch: "main",
+    head: null,
+    detached: false,
+    ahead: 0,
+    behind: 0,
+    merging: false,
+    rebasing: false,
+    sequencer: false,
+    bisecting: false,
+    entries: [],
+    ...init,
+  };
 }
 
 /** Gives the strip a 500px viewport over 200px-wide tabs. */
@@ -161,6 +181,68 @@ describe("TabStrip overflow", () => {
     await tick();
     await fireEvent.click(screen.getByLabelText("Close repo 2"));
     expect(tabStore.tabs.map((entry) => entry.id)).toEqual(["repo-1", "repo-3", "repo-4"]);
+  });
+});
+
+describe("TabStrip status badges", () => {
+  it("stays bare for tabs without a status or a clean one", async () => {
+    tabStore.tabs = [
+      tab(1),
+      { ...tab(2), status: status({ entries: [] }) },
+    ];
+    render(TabStrip);
+    await tick();
+    expect(document.querySelector(".dirty-mark")).toBeNull();
+    expect(document.querySelector(".ab-chip")).toBeNull();
+    // The accessible name keeps its original shape.
+    expect(screen.getByLabelText("repo 2 — /repos/2")).toBeTruthy();
+  });
+
+  it("shows a dirty dot with the change count and extends the name", async () => {
+    tabStore.tabs = [
+      {
+        ...tab(1),
+        status: status({
+          entries: [
+            { path: "a.ts", old_path: null, index: "modified", worktree: "unmodified" },
+            // Same path on both sides counts once (unique-paths rule).
+            { path: "a.ts", old_path: null, index: "unmodified", worktree: "modified" },
+            { path: "b.ts", old_path: null, index: "untracked", worktree: "untracked" },
+          ],
+        }),
+      },
+    ];
+    render(TabStrip);
+    await tick();
+    const dot = document.querySelector<HTMLElement>(".dirty-mark");
+    expect(dot).not.toBeNull();
+    expect(dot!.title).toBe("2 changed");
+    expect(screen.getByLabelText("2 changed")).toBeTruthy();
+    expect(screen.getByLabelText("repo 1 — /repos/1, 2 changed")).toBeTruthy();
+    expect(document.querySelector(".ab-chip")).toBeNull();
+  });
+
+  it("renders the ahead/behind chip with only the non-zero halves", async () => {
+    tabStore.tabs = [
+      { ...tab(1), status: status({ ahead: 2 }) },
+      { ...tab(2), status: status({ behind: 3 }) },
+      { ...tab(3), status: status({ ahead: 1, behind: 4 }) },
+      { ...tab(4), status: status({ ahead: 120, behind: 0 }) },
+    ];
+    render(TabStrip);
+    await tick();
+    const chips = [...document.querySelectorAll<HTMLElement>(".ab-chip")];
+    expect(chips.length).toBe(4);
+    expect(chips[0]!.textContent!.replace(/\s/g, "")).toBe("↑2");
+    expect(chips[0]!.title).toBe("2 ahead");
+    expect(chips[1]!.textContent!.replace(/\s/g, "")).toBe("↓3");
+    expect(chips[1]!.title).toBe("3 behind");
+    expect(chips[2]!.textContent!.replace(/\s/g, "")).toBe("↑1↓4");
+    expect(chips[2]!.title).toBe("1 ahead / 4 behind");
+    // Counts cap at "99+"; the tooltip carries the real number.
+    expect(chips[3]!.textContent!.replace(/\s/g, "")).toBe("↑99+");
+    expect(chips[3]!.title).toBe("120 ahead");
+    expect(screen.getByLabelText("repo 3 — /repos/3, 1 ahead / 4 behind")).toBeTruthy();
   });
 });
 

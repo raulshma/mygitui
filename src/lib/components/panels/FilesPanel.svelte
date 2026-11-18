@@ -11,8 +11,8 @@
     their own repo tab.
   - Keyboard: arrows/Home/End navigate, Right/Left expand/collapse,
     Enter opens, F2 renames, Delete deletes, typing jumps to the filter.
-  - Virtualized: fixed 24px rows, windowed via `visibleRange` (spacer
-    divs + overscan), matching StatusPanel's approach.
+  - Virtualized: fixed 24px rows via the shared VirtualList (spacer +
+    absolutely-positioned window, overscan), like BlameView.
   - Context menu: open, diff (when changed), file history, blame, copy
     paths, reveal in status, external editor, new/rename/delete.
 -->
@@ -38,9 +38,10 @@
     restoreExpanded,
     type BadgeKind,
     type FileNode,
+    type FlatRow,
   } from "./fileTreeModel";
   import { fileTreePrefs } from "./fileTreePrefs.svelte";
-  import { visibleRange } from "$lib/components/graph/layout";
+  import VirtualList from "$lib/components/layout/VirtualList.svelte";
   import { fileIconForPath, fileIconColorForPath } from "$lib/components/icons/fileIcons";
   import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.svelte";
   import Icon from "$lib/components/icons/Icon.svelte";
@@ -91,7 +92,6 @@
 
   const FILE_ROW_HEIGHT = 24;
   const ROW_OVERSCAN = 12;
-  const VIRTUALIZE_THRESHOLD = 150;
   const INDENT_PX = 12;
 
   let tree = $state<FileNode>(createRoot());
@@ -114,39 +114,22 @@
   });
 
   // --- Viewport (virtualization) --------------------------------------------
+  //
+  // The shared VirtualList owns the viewport tracking + windowing; the
+  // panel only drives it for keyboard nav (scrollToIndex) and focus
+  // hand-off from the filter box (element()). Rows render through its
+  // snippet with the original ids (files-row-<index>) so the
+  // aria-activedescendant tree keeps working.
 
-  let scrollTop = $state(0);
-  let viewportHeight = $state(0);
-  let treeElement: HTMLDivElement | undefined;
-
-  const virtualized = $derived(rows.length > VIRTUALIZE_THRESHOLD);
-  const { first, last } = $derived(
-    virtualized
-      ? visibleRange(scrollTop, viewportHeight, rows.length, FILE_ROW_HEIGHT, ROW_OVERSCAN)
-      : { first: 0, last: rows.length },
-  );
-  const topSpacer = $derived(first * FILE_ROW_HEIGHT);
-  const bottomSpacer = $derived(Math.max(0, (rows.length - last) * FILE_ROW_HEIGHT));
-  const visibleRows = $derived(rows.slice(first, last));
-
-  function trackViewport(node: HTMLDivElement) {
-    treeElement = node;
-    const update = () => {
-      scrollTop = node.scrollTop;
-      viewportHeight = Math.max(1, node.clientHeight);
-    };
-    const observer = new ResizeObserver(update);
-    observer.observe(node);
-    node.addEventListener("scroll", update, { passive: true });
-    update();
-    return {
-      destroy() {
-        observer.disconnect();
-        node.removeEventListener("scroll", update);
-        if (treeElement === node) treeElement = undefined;
-      },
-    };
+  /** The VirtualList instance surface this panel drives. */
+  interface VirtualListApi {
+    scrollToIndex(index: number, align?: "nearest" | "center"): void;
+    viewportSize(): number;
+    viewportScrollTop(): number;
+    element(): HTMLDivElement | null;
   }
+
+  let list = $state<VirtualListApi | undefined>(undefined);
 
   // --- Listing --------------------------------------------------------------
 
@@ -370,12 +353,12 @@
     }
     selectedPath = path;
     const index = rows.findIndex((row) => row.node.path === path);
-    if (index !== -1 && treeElement) {
+    if (index !== -1 && list) {
       const target = index * FILE_ROW_HEIGHT;
-      const viewportTop = treeElement.scrollTop;
-      const viewportBottom = viewportTop + treeElement.clientHeight;
-      if (target < viewportTop || target + FILE_ROW_HEIGHT > viewportBottom) {
-        treeElement.scrollTop = Math.max(0, target - treeElement.clientHeight / 2);
+      const viewTop = list.viewportScrollTop();
+      const viewBottom = viewTop + list.viewportSize();
+      if (target < viewTop || target + FILE_ROW_HEIGHT > viewBottom) {
+        list.scrollToIndex(index, "center");
       }
     }
     revealHighlight = path;
@@ -630,7 +613,7 @@
   // --- Keyboard ---------------------------------------------------------------
 
   function focusFilter(): void {
-    treeElement?.closest(".files")?.querySelector("input")?.focus();
+    list?.element()?.closest(".files")?.querySelector("input")?.focus();
   }
 
   function onTreeKeydown(event: KeyboardEvent): void {
@@ -655,11 +638,10 @@
         move(rows.length - 1);
         break;
       case "PageDown":
-        move(at + Math.floor(viewportHeight / FILE_ROW_HEIGHT));
+        move(at + Math.floor((list?.viewportSize() ?? 0) / FILE_ROW_HEIGHT));
         break;
       case "PageUp":
-        move(at - Math.floor(viewportHeight / FILE_ROW_HEIGHT));
-        break;
+        move(at - Math.floor((list?.viewportSize() ?? 0) / FILE_ROW_HEIGHT));
       case "ArrowRight": {
         const row = rows[at]!;
         if (row.node.kind === "dir" && !row.node.expanded) toggleDir(row.node);
@@ -709,14 +691,7 @@
   function selectAndScroll(path: string): void {
     selectedPath = path;
     const index = rows.findIndex((row) => row.node.path === path);
-    if (index === -1 || !treeElement) return;
-    const top = index * FILE_ROW_HEIGHT;
-    const viewTop = treeElement.scrollTop;
-    const viewBottom = viewTop + treeElement.clientHeight;
-    if (top < viewTop) treeElement.scrollTop = top;
-    else if (top + FILE_ROW_HEIGHT > viewBottom) {
-      treeElement.scrollTop = top + FILE_ROW_HEIGHT - treeElement.clientHeight;
-    }
+    if (index !== -1) list?.scrollToIndex(index);
   }
 
   // --- Render helpers ----------------------------------------------------------
@@ -823,7 +798,7 @@
             event.stopPropagation();
           }
           if (event.key === "ArrowDown") {
-            treeElement?.focus();
+            list?.element()?.focus();
             event.preventDefault();
           }
         }}
@@ -849,110 +824,113 @@
     </Hint>
   </div>
 
-  <div
-    class="tree min-h-0 flex-1 select-none overflow-auto pb-3 outline-none focus-visible:shadow-[inset_0_0_0_2px_var(--ring)]"
-    role="tree"
-    aria-label="Repository files"
-    tabindex="0"
-    aria-activedescendant={selectedPath !== "" ? `files-row-${rows.findIndex((r) => r.node.path === selectedPath)}` : undefined}
-    use:trackViewport
-    onkeydown={onTreeKeydown}
-  >
-    {#if rootLoading && rows.length === 0}
-      <p class="state inline-flex items-center gap-1.5 p-4 text-xs text-muted-foreground" role="status"><Spinner class="size-4" role="presentation" aria-hidden="true" /> Reading files…</p>
-    {:else if loadError !== null && rows.length === 0}
-      <p class="state state-error inline-flex items-center gap-1.5 p-4 text-xs text-destructive" role="alert">{loadError}</p>
-    {:else if rows.length === 0}
-      <EmptyState title={filter !== "" ? "No matches" : "Empty repository"} />
-    {:else}
-      {#if virtualized}
-        <div class="row-spacer w-full" style={`height:${topSpacer}px`}></div>
-      {/if}
-      {#each visibleRows as row, i (row.node.path)}
-        {@const index = first + i}
-        {@const node = row.node}
-        {@const badge = badges.get(node.path)}
-        {@const isDir = node.kind === "dir" || node.kind === "submodule"}
-        <!-- svelte-ignore a11y_interactive_supports_focus -->
-        <!-- svelte-ignore a11y_click_events_have_key_events -->
-        <!-- aria-activedescendant tree: the container carries focus + keys -->
-        <div
-          id={`files-row-${index}`}
-          class="row flex h-6 cursor-pointer items-center gap-1 whitespace-nowrap pr-2 text-foreground hover:bg-[color:var(--app-hover)] aria-selected:bg-[color:var(--app-active)] [&.disabled]:text-muted-foreground {node.path === revealHighlight ? 'animate-[files-flash_1.5s_ease-out]' : ''}"
-          class:sel={node.path === selectedPath}
-          class:disabled={node.kind === "submodule"}
-          role="treeitem"
-          aria-selected={node.path === selectedPath}
-          aria-expanded={isDir && node.kind === "dir" ? node.expanded : undefined}
-          aria-level={row.depth + 1}
-          style={`padding-left:${row.depth * INDENT_PX + 6}px`}
-          onclick={() => activate(node)}
-          ondblclick={() => node.kind === "file" && openFile(node)}
-          oncontextmenu={(event) => rowMenu(event, node)}
-        >
-          <span class="chev inline-flex w-3.5 flex-none justify-center">
-            {#if node.kind === "dir"}
-              <Button
-                variant="ghost"
-                size="icon-xs"
-                class="chev-btn size-3.5 rounded-none p-0 text-muted-foreground hover:bg-transparent hover:text-foreground dark:hover:bg-transparent [&_svg:not([class*='size-'])]:size-3.5"
-                tabindex={-1}
-                aria-label={node.expanded ? `Collapse ${node.name}` : `Expand ${node.name}`}
-                onclick={(event) => {
-                  event.stopPropagation();
-                  toggleDir(node);
-                }}
-              >
-                <Icon icon={node.expanded ? iconChevronDown : iconChevronRight} size={14} />
-              </Button>
-            {/if}
-          </span>
-          <span
-            class="ficon inline-flex flex-none items-center"
-            style={`color:${node.kind === "dir" || node.kind === "submodule" ? "var(--primary)" : fileIconColorForPath(node.path, fileIconPreferences.theme)}`}
+  {#snippet row(entry: FlatRow, index: number)}
+    {@const node = entry.node}
+    {@const badge = badges.get(node.path)}
+    {@const isDir = node.kind === "dir" || node.kind === "submodule"}
+    <!-- svelte-ignore a11y_interactive_supports_focus -->
+    <!-- svelte-ignore a11y_click_events_have_key_events -->
+    <!-- aria-activedescendant tree: the container carries focus + keys -->
+    <div
+      id={`files-row-${index}`}
+      class="row flex h-full cursor-pointer items-center gap-1 whitespace-nowrap pr-2 text-foreground hover:bg-[color:var(--app-hover)] aria-selected:bg-[color:var(--app-active)] [&.disabled]:text-muted-foreground {node.path === revealHighlight ? 'animate-[files-flash_1.5s_ease-out]' : ''}"
+      class:sel={node.path === selectedPath}
+      class:disabled={node.kind === "submodule"}
+      role="treeitem"
+      aria-selected={node.path === selectedPath}
+      aria-expanded={isDir && node.kind === "dir" ? node.expanded : undefined}
+      aria-level={entry.depth + 1}
+      style={`padding-left:${entry.depth * INDENT_PX + 6}px`}
+      onclick={() => activate(node)}
+      ondblclick={() => node.kind === "file" && openFile(node)}
+      oncontextmenu={(event) => rowMenu(event, node)}
+    >
+      <span class="chev inline-flex w-3.5 flex-none justify-center">
+        {#if node.kind === "dir"}
+          <Button
+            variant="ghost"
+            size="icon-xs"
+            class="chev-btn size-3.5 rounded-none p-0 text-muted-foreground hover:bg-transparent hover:text-foreground dark:hover:bg-transparent [&_svg:not([class*='size-'])]:size-3.5"
+            tabindex={-1}
+            aria-label={node.expanded ? `Collapse ${node.name}` : `Expand ${node.name}`}
+            onclick={(event) => {
+              event.stopPropagation();
+              toggleDir(node);
+            }}
           >
-            <Icon
-              icon={node.kind === "dir" || node.kind === "submodule" ? (node.kind === "submodule" ? iconSubmodule : iconFolder) : fileIconForPath(node.path, fileIconPreferences.theme)}
-              size={14}
-            />
-          </span>
-          <Hint label={node.path}>
-            {#snippet child({ props })}
-              <!-- svelte-ignore a11y_no_noninteractive_tabindex (aria-activedescendant tree: rows must stay out of tab order) -->
-              <span class="name min-w-0 flex-1 overflow-hidden text-ellipsis" {...props} tabindex={-1}>{node.name}</span>
-            {/snippet}
-          </Hint>
-          {#if node.kind === "file" && node.size !== null && !isDir}
-            <span class="size flex-none text-ui-tiny tabular-nums text-muted-foreground">{formatSize(node.size)}</span>
-          {/if}
-          {#if node.truncated}
-            <Hint label="Listing capped — some entries are missing">
-              {#snippet child({ props })}
-                <!-- svelte-ignore a11y_no_noninteractive_tabindex (aria-activedescendant tree: rows must stay out of tab order) -->
-                <span class="trunc flex-none text-muted-foreground" {...props} tabindex={-1}>…</span>
-              {/snippet}
-            </Hint>
-          {/if}
-          {#if badge}
-            <Hint label={`Git: ${badge}`}>
-              {#snippet child({ props })}
-                <!-- svelte-ignore a11y_no_noninteractive_tabindex (aria-activedescendant tree: rows must stay out of tab order) -->
-                <span
-                  class="badge size-2 flex-none rounded-full"
-                  {...props}
-                  tabindex={-1}
-                  style={`background:${BADGE_VAR[badge]}`}
-                ></span>
-              {/snippet}
-            </Hint>
-          {/if}
-        </div>
-      {/each}
-      {#if virtualized}
-        <div class="row-spacer w-full" style={`height:${bottomSpacer}px`}></div>
+            <Icon icon={node.expanded ? iconChevronDown : iconChevronRight} size={14} />
+          </Button>
+        {/if}
+      </span>
+      <span
+        class="ficon inline-flex flex-none items-center"
+        style={`color:${node.kind === "dir" || node.kind === "submodule" ? "var(--primary)" : fileIconColorForPath(node.path, fileIconPreferences.theme)}`}
+      >
+        <Icon
+          icon={node.kind === "dir" || node.kind === "submodule" ? (node.kind === "submodule" ? iconSubmodule : iconFolder) : fileIconForPath(node.path, fileIconPreferences.theme)}
+          size={14}
+        />
+      </span>
+      <Hint label={node.path}>
+        {#snippet child({ props })}
+          <!-- svelte-ignore a11y_no_noninteractive_tabindex (aria-activedescendant tree: rows must stay out of tab order) -->
+          <span class="name min-w-0 flex-1 overflow-hidden text-ellipsis" {...props} tabindex={-1}>{node.name}</span>
+        {/snippet}
+      </Hint>
+      {#if node.kind === "file" && node.size !== null && !isDir}
+        <span class="size flex-none text-ui-tiny tabular-nums text-muted-foreground">{formatSize(node.size)}</span>
       {/if}
-    {/if}
-  </div>
+      {#if node.truncated}
+        <Hint label="Listing capped — some entries are missing">
+          {#snippet child({ props })}
+            <!-- svelte-ignore a11y_no_noninteractive_tabindex (aria-activedescendant tree: rows must stay out of tab order) -->
+            <span class="trunc flex-none text-muted-foreground" {...props} tabindex={-1}>…</span>
+          {/snippet}
+        </Hint>
+      {/if}
+      {#if badge}
+        <Hint label={`Git: ${badge}`}>
+          {#snippet child({ props })}
+            <!-- svelte-ignore a11y_no_noninteractive_tabindex (aria-activedescendant tree: rows must stay out of tab order) -->
+            <span
+              class="badge size-2 flex-none rounded-full"
+              {...props}
+              tabindex={-1}
+              style={`background:${BADGE_VAR[badge]}`}
+            ></span>
+          {/snippet}
+        </Hint>
+      {/if}
+    </div>
+  {/snippet}
+
+  <VirtualList
+    items={rows}
+    rowHeight={FILE_ROW_HEIGHT}
+    overscan={ROW_OVERSCAN}
+    scrollerClass="tree min-h-0 flex-1 select-none overflow-auto pb-3 outline-none focus-visible:shadow-[inset_0_0_0_2px_var(--ring)]"
+    scrollerProps={{
+      role: "tree",
+      "aria-label": "Repository files",
+      tabindex: 0,
+      "aria-activedescendant":
+        selectedPath !== ""
+          ? `files-row-${rows.findIndex((r) => r.node.path === selectedPath)}`
+          : undefined,
+      onkeydown: onTreeKeydown,
+    }}
+    {row}
+  >
+    {#snippet empty()}
+      {#if rootLoading}
+        <p class="state inline-flex items-center gap-1.5 p-4 text-xs text-muted-foreground" role="status"><Spinner class="size-4" role="presentation" aria-hidden="true" /> Reading files…</p>
+      {:else if loadError !== null}
+        <p class="state state-error inline-flex items-center gap-1.5 p-4 text-xs text-destructive" role="alert">{loadError}</p>
+      {:else}
+        <EmptyState title={filter !== "" ? "No matches" : "Empty repository"} />
+      {/if}
+    {/snippet}
+  </VirtualList>
 
   <PromptDialog
     bind:open={

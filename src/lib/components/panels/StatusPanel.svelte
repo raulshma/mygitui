@@ -22,6 +22,13 @@
    * an unselected row collapses the selection to that row first. After a
    * mutation the selection follows files across the group move on refresh.
    *
+   * Drag & drop staging (mouse-only accelerator): rows are draggable and
+   * the staged/unstaged section headers (plus empty bodies) accept the
+   * drop — unstaged → staged stages, staged → unstaged unstages (pure
+   * decision in `statusDnd.ts`); a multi-selection drag carries the whole
+   * selection, and the drop routes through the same `stageAction` as the
+   * buttons, so keyboard paths and conflicted-row rules are untouched.
+   *
    * Submodules: `submodules(repoId)` supplies checked-out vs recorded state.
    * A submodule that the superproject's status already reports is enriched
    * in place (folder icon + short "new commits"/"modified"/"untracked"
@@ -108,6 +115,13 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
     selectionActions,
     toggleSelection,
   } from "./statusSelection";
+  import {
+    STATUS_ROW_DRAG_TYPE,
+    dropAction,
+    isStatusRowDrag,
+    sectionSide,
+    type DragOrigin,
+  } from "./statusDnd";
   import { statusTreePrefs } from "./statusTreePrefs.svelte";
 
   let {
@@ -1787,6 +1801,65 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
     saveCollapsed(`section:${id}`, collapsed[id]);
   }
 
+  // -- drag & drop staging (accelerator for the stage/unstage buttons) -------
+  //
+  // Rows are draggable; the staged/unstaged section headers and their empty
+  // bodies accept the drop. The decision (stage vs unstage vs no-op) is the
+  // pure `dropAction(origin, target)` in statusDnd.ts; the actual mutation
+  // goes through `stageAction`, so multi-selection carries (VS Code: the
+  // whole selection moves when the dragged row is part of it) and conflicted
+  // rows stay out — identical to the hover buttons and the `s` key. The
+  // handlers only act on drags this panel started (MIME marker), so OS file
+  // drops and tab reorders are untouched, and every keyboard path is too.
+
+  /** The row being dragged (in-flight state; dataTransfer is the fallback). */
+  let dragRow = $state<StatusRow | null>(null);
+  /** Key of the section the pointer is over (drives the header highlight). */
+  let dropSectionKey = $state<string | null>(null);
+
+  /** Starts a row drag: marker type first, text/plain fallback (TabStrip idiom). */
+  function onRowDragStart(event: DragEvent, row: StatusRow): void {
+    dragRow = row;
+    event.dataTransfer?.setData(STATUS_ROW_DRAG_TYPE, row.key);
+    event.dataTransfer?.setData("text/plain", row.entry.path);
+    if (event.dataTransfer) event.dataTransfer.effectAllowed = "move";
+  }
+
+  /** Accepts the drag over a section and marks it the current drop target. */
+  function onSectionDragOver(event: DragEvent, key: string): void {
+    if (dragRow === null || !isStatusRowDrag(event)) return;
+    event.preventDefault();
+    if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+    dropSectionKey = key;
+  }
+
+  /** Drop: stage/unstage per the section pair; same-side drops do nothing. */
+  function onSectionDrop(event: DragEvent, key: string, sectionId: string): void {
+    if (dragRow === null || !isStatusRowDrag(event)) return;
+    event.preventDefault();
+    // In-flight state is primary; the payload key is the fallback should the
+    // state ever be lost mid-drag (the TabStrip shape).
+    const raw = event.dataTransfer?.getData(STATUS_ROW_DRAG_TYPE) ?? "";
+    const row = dragRow ?? visibleRows.find((candidate) => candidate.key === raw) ?? null;
+    if (row !== null) {
+      const origin: DragOrigin = row.section === "staged" ? "staged" : "unstaged";
+      if (dropAction(origin, sectionSide(sectionId)) !== "noop") {
+        stageAction(row);
+      }
+    }
+    clearDrag();
+  }
+
+  /** Fires on the source row whether or not the drop was accepted. */
+  function onRowDragEnd(): void {
+    clearDrag();
+  }
+
+  function clearDrag(): void {
+    dragRow = null;
+    dropSectionKey = null;
+  }
+
 </script>
 
 <svelte:window
@@ -2003,6 +2076,9 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
             data-row-key={row.key}
             data-kind={row.kind}
             bind:this={rowEls[row.key]}
+            draggable="true"
+            ondragstart={(event) => onRowDragStart(event, row)}
+            ondragend={onRowDragEnd}
             onkeydown={onTreeKeydown}
             oncontextmenu={(event) => rowMenu(event, row)}
             onclick={(event) =>
@@ -2292,8 +2368,15 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
               <div class="sub-clean-hint px-3 py-2 text-ui-meta text-muted-foreground italic">No matching changes in main repository</div>
             {:else}
               {#each sections as section, sectionIndex (section.id)}
-                <div class="section" role="group" aria-labelledby={`main-section-${section.id}`}>
-                  <div class="section-header group/header sticky top-0 z-2 flex items-center w-full h-6 box-border bg-card border-b border-border select-none" class:border-t={sectionIndex > 0}>
+                <!-- svelte-ignore a11y_no_static_element_interactions -->
+                <div
+                  class="section"
+                  role="group"
+                  aria-labelledby={`main-section-${section.id}`}
+                  ondragover={(event) => onSectionDragOver(event, `main:${section.id}`)}
+                  ondrop={(event) => onSectionDrop(event, `main:${section.id}`, section.id)}
+                >
+                  <div class="section-header group/header sticky top-0 z-2 flex items-center w-full h-6 box-border bg-card border-b border-border select-none" class:border-t={sectionIndex > 0} style:background-color={dropSectionKey === `main:${section.id}` ? "var(--app-hover)" : null}>
                     <button
                       class="section-toggle flex-1 min-w-0 flex items-center gap-ui-3 h-6 bg-transparent border-0 text-muted-foreground text-ui-micro font-bold tracking-[0.045em] uppercase px-2 cursor-pointer text-left hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-2"
                       type="button"
@@ -2547,8 +2630,15 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
                 {:else}
                   {#each subFilteredSections as subSection, subSectionIndex (subSection.id)}
                     {@const subSecCollapsed = isSubSectionCollapsed(info.path, subSection.id)}
-                    <div class="section" role="group" aria-labelledby={`sub-${info.path}-${subSection.id}`}>
-                      <div class="section-header group/header sticky top-0 z-2 flex items-center w-full h-6 box-border bg-card border-b border-border select-none" class:border-t={subSectionIndex > 0}>
+                    <!-- svelte-ignore a11y_no_static_element_interactions -->
+                    <div
+                      class="section"
+                      role="group"
+                      aria-labelledby={`sub-${info.path}-${subSection.id}`}
+                      ondragover={(event) => onSectionDragOver(event, `sub:${info.path}:${subSection.id}`)}
+                      ondrop={(event) => onSectionDrop(event, `sub:${info.path}:${subSection.id}`, subSection.id)}
+                    >
+                      <div class="section-header group/header sticky top-0 z-2 flex items-center w-full h-6 box-border bg-card border-b border-border select-none" class:border-t={subSectionIndex > 0} style:background-color={dropSectionKey === `sub:${info.path}:${subSection.id}` ? "var(--app-hover)" : null}>
                         <button
                           class="section-toggle flex-1 min-w-0 flex items-center gap-ui-3 h-6 bg-transparent border-0 text-muted-foreground text-ui-micro font-bold tracking-[0.045em] uppercase px-2 cursor-pointer text-left hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-2"
                           type="button"
@@ -2626,8 +2716,15 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
       >
         {#each sectionWindows as window, windowIndex (window.section.id)}
           {@const section = window.section}
-          <div class="section" role="group" aria-labelledby={`section-${section.id}`}>
-            <div class="section-header group/header sticky top-0 z-2 flex items-center w-full h-6 box-border bg-card border-b border-border select-none" class:border-t={windowIndex > 0}>
+          <!-- svelte-ignore a11y_no_static_element_interactions -->
+          <div
+            class="section"
+            role="group"
+            aria-labelledby={`section-${section.id}`}
+            ondragover={(event) => onSectionDragOver(event, section.id)}
+            ondrop={(event) => onSectionDrop(event, section.id, section.id)}
+          >
+            <div class="section-header group/header sticky top-0 z-2 flex items-center w-full h-6 box-border bg-card border-b border-border select-none" class:border-t={windowIndex > 0} style:background-color={dropSectionKey === section.id ? "var(--app-hover)" : null}>
               <button
                 class="section-toggle flex-1 min-w-0 flex items-center gap-ui-3 h-6 bg-transparent border-0 text-muted-foreground text-ui-micro font-bold tracking-[0.045em] uppercase px-2 cursor-pointer text-left hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-2"
                 type="button"

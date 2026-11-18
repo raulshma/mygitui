@@ -11,9 +11,9 @@
    * Rendering: contiguous lines with the same authoring sha are grouped under
    * one header row (sha chip + author + date + line count); line rows show
    * only line number + text, so the header "collapses" the repeated metadata.
-   * All rows have a fixed height and are virtualized (spacer + absolute
-   * rows) over an independently scrolling pane. Clicking a sha shows the
-   * M2 placeholder toast (commit actions land in M2).
+   * All rows have a fixed height and are virtualized over an independently
+   * scrolling pane via the shared VirtualList (spacer + absolute rows).
+   * Clicking a sha shows the M2 placeholder toast (commit actions land in M2).
    *
    * M12 (lane C): every line row carries an age tint derived from its
    * authoring commit's signature time (newest = strongest accent, oldest =
@@ -36,6 +36,7 @@
   import Icon from "$lib/components/icons/Icon.svelte";
   import { appIcon } from "$lib/components/icons/library.svelte";
   import { showMenuAt, type MenuEntry } from "$lib/components/menu/contextMenuStore.svelte";
+  import VirtualList from "$lib/components/layout/VirtualList.svelte";
   import { ai } from "$lib/ai/ai.svelte";
   import { aiResultMeta } from "$lib/ai/usage";
 
@@ -196,40 +197,10 @@
   });
 
   // -- virtualizer -----------------------------------------------------------
-
-  let scrollerEl = $state<HTMLDivElement | undefined>(undefined);
-  let range = $state({ start: 0, end: 0 });
-
-  function updateRange(): void {
-    const el = scrollerEl;
-    if (!el) return;
-    const total = rows.length;
-    const first = Math.floor(el.scrollTop / ROW_HEIGHT);
-    const count = Math.ceil(el.clientHeight / ROW_HEIGHT);
-    const start = Math.max(0, first - OVERSCAN);
-    const end = Math.min(total, first + count + OVERSCAN);
-    if (start !== range.start || end !== range.end) range = { start, end };
-  }
-
-  function onScroll(): void {
-    updateRange();
-  }
-
-  $effect(() => {
-    // Fill the initial viewport once data lands (or the pane resizes on
-    // mount) — afterwards the scroll handler keeps the range fresh.
-    void rows.length;
-    updateRange();
-  });
-
-  const visible = $derived.by(() => {
-    const out: Array<{ row: BlameRow; idx: number }> = [];
-    for (let i = range.start; i < range.end; i++) {
-      const row = rows[i];
-      if (row) out.push({ row, idx: i });
-    }
-    return out;
-  });
+  //
+  // The shared VirtualList owns the viewport tracking + windowing now; the
+  // view only renders rows through its snippet (group headers and lines
+  // keep their original markup, roles and handlers).
 
   function shaColor(sha: string): string {
     return `hsl(${hashHue(sha)} 60% 55%)`;
@@ -448,76 +419,75 @@
   {:else if rows.length === 0}
     <EmptyState title={`No blame lines for ${path}.`} />
   {:else}
-    <div class="bscroll min-h-0 flex-1 overflow-auto" bind:this={scrollerEl} onscroll={onScroll}>
-      <div
-        class="bspacer relative w-max min-w-full"
-        role="list"
-        aria-label={"Blame lines for " + path}
-        style:height={`${rows.length * ROW_HEIGHT}px`}
-      >
-        {#each visible as v (v.idx)}
-          {#if v.row.kind === "group"}
-            <div
-              class="bgroup absolute inset-x-0 flex items-center gap-2 bg-muted/70 py-0 pl-2 pr-3 text-xs text-muted-foreground whitespace-pre"
-              style:top={`${v.idx * ROW_HEIGHT}px`}
-              style:height={`${ROW_HEIGHT}px`}
-            >
-              <Hint label="Show this commit in history">
-                {#snippet child({ props })}
-                  <button
-                    {...props}
-                    class="bsha shrink-0 cursor-pointer border-0 bg-transparent px-1 font-mono text-xs hover:underline focus-visible:rounded-xs focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary"
-                    style:color={shaColor(v.row.sha)}
-                    onclick={() => shaClick(v.row.sha)}
-                  >
-                    {v.row.sha.slice(0, 8)}
-                  </button>
-                {/snippet}
-              </Hint>
-              <span class="bauthor max-w-48 shrink-0 overflow-hidden text-ellipsis text-foreground"
-                >{v.row.line?.signature.name ?? ""}</span
-              >
-              <span class="bdate shrink-0 text-muted-foreground">
-                {v.row.line ? formatRelativeTime(v.row.line.signature.time) : ""}
-              </span>
-              <span class="bcount ml-auto shrink-0 text-muted-foreground"
-                >{v.row.count} {v.row.count === 1 ? "line" : "lines"}</span
-              >
-            </div>
-          {:else}
-            <Hint
-              label={v.row.line
-                ? `${v.row.line.signature.name} · ${formatDateTime(v.row.line.signature.time)} — click to blame from this commit's parent`
-                : ""}
-            >
-              {#snippet child({ props })}
-                <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-                <!-- svelte-ignore a11y_click_events_have_key_events -->
-                <div
-                  {...props}
-                  tabindex="-1"
-                  class="bline group/bline absolute inset-x-0 flex cursor-pointer items-center gap-2 py-0 pl-2 pr-3 text-xs text-foreground whitespace-pre"
-                  role="listitem"
-                  style:top={`${v.idx * ROW_HEIGHT}px`}
-                  style:height={`${ROW_HEIGHT}px`}
-                  style:background={ageBackground(heat.get(v.row.sha) ?? 0)}
-                  onclick={() => lineClick(v.row.sha)}
-                  oncontextmenu={(e) => lineMenu(e, v.row)}
-                >
-                  <span
-                    class="bno w-12 shrink-0 select-none text-right font-mono text-muted-foreground"
-                    >{v.row.line?.line_no}</span
-                  >
-                  <span
-                    class="btext font-mono [tab-size:4] group-hover/bline:underline group-hover/bline:decoration-dotted group-hover/bline:underline-offset-3"
-                    >{v.row.line?.text ?? ""}</span
-                  >
-                </div>
-              {/snippet}
-            </Hint>
-          {/if}
-        {/each}
-      </div>
-    </div>
+    <VirtualList
+      items={rows}
+      rowHeight={ROW_HEIGHT}
+      overscan={OVERSCAN}
+      scrollerClass="bscroll min-h-0 flex-1 overflow-auto"
+      ariaRole="list"
+      ariaLabel={"Blame lines for " + path}
+      {row}
+    />
   {/if}
 </div>
+
+{#snippet row(v: BlameRow, idx: number)}
+  {#if v.kind === "group"}
+    <!-- Positioned by the VirtualList wrapper; the row fills its box. -->
+    <div
+      class="bgroup flex h-full items-center gap-2 bg-muted/70 py-0 pl-2 pr-3 text-xs text-muted-foreground whitespace-pre"
+    >
+      <Hint label="Show this commit in history">
+        {#snippet child({ props })}
+          <button
+            {...props}
+            class="bsha shrink-0 cursor-pointer border-0 bg-transparent px-1 font-mono text-xs hover:underline focus-visible:rounded-xs focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary"
+            style:color={shaColor(v.sha)}
+            onclick={() => shaClick(v.sha)}
+          >
+            {v.sha.slice(0, 8)}
+          </button>
+        {/snippet}
+      </Hint>
+      <span class="bauthor max-w-48 shrink-0 overflow-hidden text-ellipsis text-foreground"
+        >{v.line?.signature.name ?? ""}</span
+      >
+      <span class="bdate shrink-0 text-muted-foreground">
+        {v.line ? formatRelativeTime(v.line.signature.time) : ""}
+      </span>
+      <span class="bcount ml-auto shrink-0 text-muted-foreground"
+        >{v.count} {v.count === 1 ? "line" : "lines"}</span
+      >
+    </div>
+  {:else}
+    <Hint
+      label={v.line
+        ? `${v.line.signature.name} · ${formatDateTime(v.line.signature.time)} — click to blame from this commit's parent`
+        : ""}
+    >
+      {#snippet child({ props })}
+        <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+        <!-- svelte-ignore a11y_click_events_have_key_events -->
+        <div
+          {...props}
+          tabindex="-1"
+          class="bline group/bline flex h-full cursor-pointer items-center gap-2 py-0 pl-2 pr-3 text-xs text-foreground whitespace-pre"
+          role="listitem"
+          aria-posinset={idx + 1}
+          style:background={ageBackground(heat.get(v.sha) ?? 0)}
+          onclick={() => lineClick(v.sha)}
+          oncontextmenu={(e) => lineMenu(e, v)}
+        >
+          <span
+            class="bno w-12 shrink-0 select-none text-right font-mono text-muted-foreground"
+            >{v.line?.line_no}</span
+          >
+          <span
+            class="btext font-mono [tab-size:4] group-hover/bline:underline group-hover/bline:decoration-dotted group-hover/bline:underline-offset-3"
+            >{v.line?.text ?? ""}</span
+          >
+        </div>
+      {/snippet}
+    </Hint>
+  {/if}
+{/snippet}
