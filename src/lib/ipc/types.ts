@@ -112,6 +112,7 @@ export type { PtyExit as PtyExitEvent } from "./gen/PtyExit";
 
 import type { CheckInfo } from "./gen/CheckInfo";
 import type { ForgeError as ForgeFailure } from "./gen/ForgeError";
+import type { ForgeNotification } from "./gen/ForgeNotification";
 
 export type { ForgeStatus } from "./gen/ForgeStatus";
 export type { ForgeContext } from "./gen/ForgeContext";
@@ -119,6 +120,11 @@ export type { PrCreated } from "./gen/PrCreated";
 export type { PrInfo } from "./gen/PrInfo";
 export type { CheckInfo } from "./gen/CheckInfo";
 export type { ForgeError as ForgeFailure } from "./gen/ForgeError";
+export type { ForgeIssue } from "./gen/ForgeIssue";
+export type { ForgeIssueComment } from "./gen/ForgeIssueComment";
+export type { ForgeIssueDetail } from "./gen/ForgeIssueDetail";
+export type { IssueCreated } from "./gen/IssueCreated";
+export type { ForgeNotification } from "./gen/ForgeNotification";
 export type { WorkflowRun } from "./gen/WorkflowRun";
 export type { WorkflowStep } from "./gen/WorkflowStep";
 export type { WorkflowJob } from "./gen/WorkflowJob";
@@ -133,6 +139,10 @@ export type CheckState = CheckInfo["state"];
 // FE-only: alias of the generated `ForgeFailure["kind"]` string-literal union
 // (values are the Rust `forge::KIND_*` consts).
 export type ForgeFailureKind = ForgeFailure["kind"];
+
+// FE-only: alias of the generated `ForgeNotification["kind"]` union
+// (derived backend-side from the notification subject URL).
+export type ForgeNotificationKind = ForgeNotification["kind"];
 
 // ---------------------------------------------------------------------------
 // M7: contribution statistics (Rust: src-tauri/src/engine/stats.rs)

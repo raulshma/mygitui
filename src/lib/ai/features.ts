@@ -16,6 +16,9 @@
 import type { DiffHunk, DiffSide, FileDiff, LogFilter, LogPage, RepoId } from "$lib/ipc/types";
 import { budgetedDiffText, MAX_DIFF_CHARS } from "./diffBudget";
 import type { ConnectionSupervisor } from "./connection";
+import { isCustomKind } from "./registry";
+import type { CustomFeatureKind } from "./registry";
+import { renderTemplate } from "./customPrompts.svelte";
 import { AiError } from "./types";
 import type { AiBackend, AiJobPhase, AiResult, FeatureKind } from "./types";
 
@@ -114,13 +117,18 @@ export function parseCommitMessage(text: string): { subject: string; body: strin
   return { subject, body };
 }
 
-/** Pull request title + body prompt from the branch's commits + diff stats. */
+/**
+ * Pull request title + body prompt from the branch's commits + diff stats.
+ * `template` (the repo's pull-request template, when one exists) is pasted
+ * into the prompt so the generated description follows its structure.
+ */
 export function prTitleBodyPrompt(
   commits: Array<{ summary: string; sha: string }>,
   diffSummary: string,
+  template?: string | null,
 ): { system: string; prompt: string } {
   const system = [
-    "You write pull request titles and descriptions for a desktop Git client.",
+    "You write pull request titles for a desktop Git client.",
     "The title is a single line (at most 72 characters, imperative mood, no trailing period).",
     "The body summarizes the motivation and the main changes as short bullet points.",
     GUARDRAILS,
@@ -128,7 +136,7 @@ export function prTitleBodyPrompt(
   const commitLines = commits
     .map((c) => `- ${c.sha.slice(0, 7)} ${c.summary}`)
     .join("\n");
-  const prompt = [
+  const parts = [
     "Write a pull request title and description for this branch.",
     "",
     "Commits (oldest intent, newest last is not guaranteed):",
@@ -136,10 +144,18 @@ export function prTitleBodyPrompt(
     "",
     "Changed files:",
     diffSummary || "(no file stats)",
-    "",
-    MESSAGE_FORMAT,
-  ].join("\n");
-  return { system, prompt };
+  ];
+  if (template && template.trim().length > 0) {
+    parts.push(
+      "",
+      "The repository's pull-request template — the description must fill it in (keep its headings, replace the placeholder text):",
+      "```markdown",
+      template,
+      "```",
+    );
+  }
+  parts.push("", MESSAGE_FORMAT);
+  return { system, prompt: parts.join("\n") };
 }
 
 /** Prompt explaining a single diff hunk in a file. */
@@ -293,6 +309,66 @@ export function explainBlamePrompt(
       GUARDRAILS,
     ].join(" "),
     prompt: parts.join("\n"),
+  };
+}
+
+/**
+ * System + user prompt explaining a USER-SELECTED line range inside one
+ * diff hunk: the selected rows' text (origin-marked, new-side numbers),
+ * the file path and range, plus the surrounding hunk as minimal context.
+ * The hunk context rides the same {@link capDiff} budget as every diff
+ * input; the selection itself is the payload the answer must ground in.
+ * Free-form markdown answer.
+ */
+export function explainSelectionPrompt(
+  path: string,
+  lineStart: number,
+  lineEnd: number,
+  selectedText: string,
+  hunkContext: string | null,
+): { system: string; prompt: string } {
+  const parts = [
+    `File: ${path}`,
+    lineStart === lineEnd
+      ? `Selected line ${lineStart}:`
+      : `Selected lines ${lineStart}–${lineEnd}:`,
+    "```",
+    selectedText,
+    "```",
+  ];
+  if (hunkContext !== null && hunkContext.trim().length > 0) {
+    parts.push("Surrounding hunk (context):", "```diff", capDiff(hunkContext), "```");
+  }
+  parts.push(
+    "Explain what the selected lines do and how they relate to the surrounding change: intent, mechanics, and anything worth watching out for. Be brief and concrete.",
+  );
+  return {
+    system: [
+      "You explain source code selections to developers, grounded strictly in the provided content — say so when the context is not enough to be sure.",
+      "Answer in concise GitHub-flavored markdown.",
+      GUARDRAILS,
+    ].join(" "),
+    prompt: parts.join("\n"),
+  };
+}
+
+/**
+ * System + user prompt for a CUSTOM prompt library entry: the rendered
+ * template IS the prompt (variable placeholders are interpolated by the
+ * runner before this builder sees it). The system prompt carries the
+ * shared guardrails plus the free-form markdown contract; the user's
+ * instructions ride the user prompt, so provider system-prompt handling
+ * differences never mute them.
+ */
+export function customPromptPrompt(rendered: string): { system: string; prompt: string } {
+  return {
+    system: [
+      "You run a user-written prompt template inside a desktop Git client.",
+      "Follow the user's instructions in the prompt; the provided repository data (diff, summary, commits) is the only ground truth.",
+      "Answer in concise GitHub-flavored markdown.",
+      GUARDRAILS,
+    ].join(" "),
+    prompt: rendered,
   };
 }
 
@@ -519,22 +595,16 @@ export interface AiRunHooks {
   signal?: AbortSignal;
 }
 
-/** Gathering detail per feature kind (`null` = no git IO for this kind). */
-const GATHER_LABELS: Record<FeatureKind, string | null> = {
+/**
+ * Gathering detail per feature kind (absent = no git IO for this kind).
+ * `Partial` because `FeatureKind` is an open union — the custom prompt
+ * kinds are handled by {@link runCustomFeature} before this is consulted.
+ */
+const GATHER_LABELS: Partial<Record<FeatureKind, string>> = {
   "commit-message": "reading staged diff",
   "pr-title-body": "reading commits and diff",
-  "explain-hunk": null,
   "review-staged": "reading staged diff",
   "stash-message": "reading staged diff",
-  "branch-name": null,
-  // M13 kinds take pre-gathered ctx (their call sites own the data), so
-  // there is nothing to gather inside the runner.
-  "explain-commit": null,
-  "explain-blame": null,
-  "diagnose-workflow": null,
-  "diagnose-action": null,
-  "conflict-assist": null,
-  "release-notes": null,
 };
 
 /** Inputs a runner accepts (pre-gathered data or the id to gather for). */
@@ -550,6 +620,8 @@ export interface FeatureCtx {
   diff?: string;
   /** pr-title-body: pre-gathered commits (else first log page). */
   commits?: Array<{ summary: string; sha: string }>;
+  /** pr-title-body: the repo's pull-request template (prompted verbatim). */
+  template?: string;
   /** Model override (backend-specific id). */
   model?: string;
   // -- M13 additions (call sites pre-gather; runners shape the prompt) ----
@@ -571,6 +643,21 @@ export interface FeatureCtx {
   theirs?: string;
   /** release-notes: human label of the commit range ("v1.2..v1.3"). */
   range?: string;
+  // -- explain-selection (the DiffViewer selection is the opener context) --
+  /** explain-selection: the selected rows' text (origin-marked). */
+  selectedText?: string;
+  /** explain-selection: first selected new-side line number. */
+  lineStart?: number;
+  /** explain-selection: last selected new-side line number. */
+  lineEnd?: number;
+  // -- custom prompt library (`custom.<id>` kinds) ---------------------------
+  /**
+   * custom kinds: the entry's raw template, interpolated by the runner
+   * with the gathered repository data. The launcher resolves it from the
+   * custom prompt store so features.ts stays store-free. Distinct from
+   * `template` (pr-title-body's pull-request template).
+   */
+  customTemplate?: string;
 }
 
 /** A finished feature run. */
@@ -599,6 +686,54 @@ const EMPTY_LOG_FILTER: LogFilter = {
 async function gatherStagedDiff(git: FeatureGitClient, repoId: string): Promise<string> {
   const files = await git.repoDiff(repoId, "head", "index");
   return stagedDiffText(files);
+}
+
+/**
+ * Runs one CUSTOM prompt feature (`custom.<entryId>`): the launcher
+ * resolved the entry and passed its raw template via `ctx.template`.
+ * Supported placeholders (documented set, shared with the builtin
+ * builders' data): `{{diff}}` — budgeted staged diff, `{{summary}}` —
+ * per-file add/del stats, `{{commits}}` — the branch's recent commits.
+ * Each variable is gathered ONLY when the template references it, and
+ * interpolated through `renderTemplate` from the custom prompt store.
+ * The answer is free-form markdown (no parse step).
+ */
+async function runCustomFeature(
+  kind: CustomFeatureKind,
+  ctx: FeatureCtx,
+  deps: FeatureDeps,
+  hooks?: AiRunHooks,
+): Promise<FeatureOutcome> {
+  const template = ctx.customTemplate?.trim() ?? "";
+  if (template.length === 0) {
+    throw new AiError(
+      "unknown",
+      "this custom prompt no longer exists — check AI settings",
+      {},
+    );
+  }
+  hooks?.onPhase?.("gathering", "gathering context");
+
+  const vars: Record<string, string> = {};
+  if (template.includes("{{diff}}") || template.includes("{{summary}}")) {
+    const files = await deps.git.repoDiff(ctx.repoId, "head", "index");
+    if (template.includes("{{diff}}")) {
+      // Same budgeted rendering the commit-message runner uses, so a big
+      // staged change keeps every file represented (stats always included).
+      vars.diff = budgetedDiffText(files);
+    }
+    if (template.includes("{{summary}}")) vars.summary = diffSummaryText(files);
+  }
+  if (template.includes("{{commits}}")) {
+    const commits = await gatherCommits(deps.git, ctx.repoId);
+    vars.commits =
+      commits.length > 0
+        ? commits.slice(0, 20).map((c) => `- ${c.sha.slice(0, 7)} ${c.summary}`).join("\n")
+        : "(no commits)";
+  }
+
+  const built = customPromptPrompt(renderTemplate(template, vars));
+  return finishFeature(kind, ctx, built, deps, hooks);
 }
 
 /**
@@ -643,6 +778,8 @@ export async function gatherCommits(
 /**
  * Runs one AI feature end to end: opt-in gate → gather → prompt → generate
  * (through the supervisor, backend selection + fallback included) → parse.
+ * Custom prompt kinds (`custom.<id>`) branch into {@link runCustomFeature}
+ * after the opt-in gate; builtins share the {@link finishFeature} tail.
  * Throws {@link AiError} on any failure; nothing is retried here.
  * `hooks` (M13) reports phase progress and carries the external cancel
  * signal — both optional, so existing callers are unaffected.
@@ -661,8 +798,12 @@ export async function runFeature(
     );
   }
 
+  // Custom prompt kinds branch off before the builtin switch: they gather
+  // on demand from the template's placeholders and skip the parse step.
+  if (isCustomKind(kind)) return runCustomFeature(kind, ctx, deps, hooks);
+
   const gatherLabel = GATHER_LABELS[kind];
-  if (gatherLabel !== null) hooks?.onPhase?.("gathering", gatherLabel);
+  if (gatherLabel !== undefined) hooks?.onPhase?.("gathering", gatherLabel);
 
   let built: { system: string; prompt: string };
   switch (kind) {
@@ -689,7 +830,7 @@ export async function runFeature(
     case "pr-title-body": {
       const commits = ctx.commits ?? (await gatherCommits(deps.git, ctx.repoId));
       const files = await deps.git.repoDiff(ctx.repoId, "head", "index");
-      built = prTitleBodyPrompt(commits, diffSummaryText(files));
+      built = prTitleBodyPrompt(commits, diffSummaryText(files), ctx.template);
       break;
     }
     case "explain-hunk": {
@@ -697,6 +838,22 @@ export async function runFeature(
         throw new AiError("unknown", "explain-hunk needs a file path and hunk text", {});
       }
       built = explainHunkPrompt(ctx.path, ctx.hunk);
+      break;
+    }
+    case "explain-selection": {
+      if (!ctx.path || ctx.lineStart === undefined || ctx.lineEnd === undefined) {
+        throw new AiError("unknown", "explain-selection needs the file path and line range", {});
+      }
+      if (!ctx.selectedText || ctx.selectedText.trim().length === 0) {
+        throw new AiError("unknown", "explain-selection needs the selected lines' text", {});
+      }
+      built = explainSelectionPrompt(
+        ctx.path,
+        ctx.lineStart,
+        ctx.lineEnd,
+        ctx.selectedText,
+        ctx.hunk ?? null,
+      );
       break;
     }
     case "review-staged": {
@@ -791,6 +948,23 @@ export async function runFeature(
     }
   }
 
+  return finishFeature(kind, ctx, built, deps, hooks);
+}
+
+/**
+ * The shared generate + parse tail behind every builtin and custom run:
+ * prompt hooks → deadline/cancel-guarded generation through the router →
+ * per-kind parsing. `kind` has already been narrowed past the custom
+ * branch, but the parse switch tolerates any kind (unknown ones keep the
+ * raw text), so custom kinds can share this tail too.
+ */
+async function finishFeature(
+  kind: FeatureKind,
+  ctx: FeatureCtx,
+  built: { system: string; prompt: string },
+  deps: FeatureDeps,
+  hooks?: AiRunHooks,
+): Promise<FeatureOutcome> {
   hooks?.onPhase?.("prompting");
   hooks?.onPrompt?.(built.system, built.prompt);
 
@@ -851,6 +1025,7 @@ export async function runFeature(
       outcome.branchName = parseBranchName(result.text);
       break;
     case "explain-hunk":
+    case "explain-selection":
     case "review-staged":
       break;
     case "conflict-assist":
@@ -863,7 +1038,9 @@ export async function runFeature(
     case "diagnose-workflow":
     case "diagnose-action":
     case "release-notes":
+    default:
       // Free-form markdown answers; the text field carries them as-is.
+      // (Custom prompt kinds land here via the default arm.)
       break;
   }
   return outcome;

@@ -58,6 +58,30 @@ pub const PR_LIST_JSON_FIELDS: &str = "number,title,headRefName,baseRefName,stat
 /// How many PRs `pr_list` requests (`gh pr list --limit`).
 pub const PR_LIST_LIMIT: usize = 50;
 
+/// `--json` field list of `issue_list` (all optional fields parse
+/// tolerantly, so older gh versions still work).
+pub const ISSUE_LIST_JSON_FIELDS: &str = "number,title,state,author,updatedAt,labels";
+
+/// How many issues `issue_list` requests (`gh issue list --limit`).
+pub const ISSUE_LIST_LIMIT: usize = 50;
+
+/// `--json` field list of `issue_view` (`gh issue view`).
+pub const ISSUE_VIEW_JSON_FIELDS: &str =
+    "number,title,state,author,body,comments,labels,url,updatedAt";
+
+/// Candidate workdir paths of the pull-request template, tried in order
+/// (GitHub's `.github` discovery minus the `docs/` fallback mygitui does
+/// not read): the `PULL_REQUEST_TEMPLATE/` directory form wins over the
+/// flat file, and the flat file's case variants come last.
+pub const PR_TEMPLATE_PATHS: [&str; 3] = [
+    ".github/PULL_REQUEST_TEMPLATE/pull_request_template.md",
+    ".github/PULL_REQUEST_TEMPLATE.md",
+    ".github/pull_request_template.md",
+];
+
+/// Budget for `gh api notifications` reads.
+pub const NOTIFICATIONS_TIMEOUT: Duration = Duration::from_secs(60);
+
 /// `--json` field list of `workflow_runs` (`gh run list`).
 pub const RUN_LIST_JSON_FIELDS: &str = "attempt,conclusion,createdAt,databaseId,displayTitle,event,headBranch,headSha,name,number,startedAt,status,updatedAt,url,workflowDatabaseId,workflowName";
 
@@ -267,6 +291,83 @@ pub struct WorkflowInfo {
 pub struct WorkflowInput {
     pub key: String,
     pub value: String,
+}
+
+/// One issue of `issue_list`.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, TS)]
+#[ts(export)]
+pub struct ForgeIssue {
+    pub number: u64,
+    pub title: String,
+    /// `open` | `closed` (verbatim gh value — issues have no `merged`).
+    pub state: String,
+    /// Author login (empty when gh omits it).
+    pub author: String,
+    /// ISO-8601 last-update timestamp (optional in tolerant parsing).
+    pub updated_at: Option<String>,
+    /// Label names, in gh order.
+    pub labels: Vec<String>,
+}
+
+/// One comment inside [`ForgeIssueDetail`].
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, TS)]
+#[ts(export)]
+pub struct ForgeIssueComment {
+    /// Comment author login (empty when gh omits it).
+    pub author: String,
+    /// Markdown body (may be empty when gh omits it).
+    pub body: String,
+    /// ISO-8601 creation timestamp (optional in tolerant parsing).
+    pub created_at: Option<String>,
+}
+
+/// `issue_view` payload: one issue plus its comments.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, TS)]
+#[ts(export)]
+pub struct ForgeIssueDetail {
+    pub number: u64,
+    pub title: String,
+    /// `open` | `closed` (verbatim gh value).
+    pub state: String,
+    pub author: String,
+    /// Markdown body (empty when gh omits it).
+    pub body: String,
+    pub labels: Vec<String>,
+    /// GitHub issue page URL (empty when gh omits it).
+    pub url: String,
+    pub updated_at: Option<String>,
+    pub comments: Vec<ForgeIssueComment>,
+}
+
+/// `issue_create` success payload.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, TS)]
+#[ts(export)]
+pub struct IssueCreated {
+    pub url: String,
+    pub number: u64,
+}
+
+/// One GitHub notification thread (`gh api notifications`; GitHub's default
+/// listing is the unread set).
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, TS)]
+#[ts(export)]
+pub struct ForgeNotification {
+    /// REST thread id (the mark-read target).
+    pub id: u64,
+    /// `pull` | `issue` | `commit` | `other` — derived from `subject_url`
+    /// (string-literal union in the generated TS type; the FE narrows it
+    /// via `ForgeNotificationKind`).
+    #[ts(type = "\"pull\" | \"issue\" | \"commit\" | \"other\"")]
+    pub kind: String,
+    pub subject_title: String,
+    /// REST URL of the subject (the PR/issue/commit page the thread is about).
+    pub subject_url: String,
+    /// Repository name (REST `repository.name`).
+    pub repository: String,
+    /// ISO-8601 last-update timestamp (optional in tolerant parsing).
+    pub updated_at: Option<String>,
+    /// Why the user was notified (`review_requested`, `mention`, …).
+    pub reason: String,
 }
 
 /// Structured `pr_create` failure (the command's rejection value; FE name
@@ -553,31 +654,14 @@ pub fn parse_pr_list_json(payload: &str) -> Vec<PrInfo> {
                 updated_at: option_string("updatedAt"),
                 merged_at: option_string("mergedAt"),
                 closed_at: option_string("closedAt"),
-                author: item
-                    .get("author")
-                    .and_then(|author| author.get("login"))
-                    .and_then(serde_json::Value::as_str)
-                    .unwrap_or_default()
-                    .to_owned(),
+                author: json_author_login(&item),
                 body: string_field("body"),
                 additions: number_field("additions"),
                 deletions: number_field("deletions"),
                 changed_files: number_field("changedFiles"),
                 review_decision: string_field("reviewDecision"),
                 mergeable: string_field("mergeable"),
-                labels: item
-                    .get("labels")
-                    .and_then(serde_json::Value::as_array)
-                    .map(|labels| {
-                        labels
-                            .iter()
-                            .filter_map(|label| {
-                                label.get("name").and_then(serde_json::Value::as_str)
-                            })
-                            .map(str::to_owned)
-                            .collect()
-                    })
-                    .unwrap_or_default(),
+                labels: json_label_names(&item),
             })
         })
         .collect()
@@ -634,6 +718,29 @@ fn json_u64(item: &serde_json::Value, key: &str) -> u64 {
     item.get(key)
         .and_then(serde_json::Value::as_u64)
         .unwrap_or(0)
+}
+
+/// Author login of a gh JSON object (`author.login`; `""` when missing).
+fn json_author_login(item: &serde_json::Value) -> String {
+    item.get("author")
+        .and_then(|author| author.get("login"))
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default()
+        .to_owned()
+}
+
+/// Label names of a gh JSON object (`labels[].name`, in gh order).
+fn json_label_names(item: &serde_json::Value) -> Vec<String> {
+    item.get("labels")
+        .and_then(serde_json::Value::as_array)
+        .map(|labels| {
+            labels
+                .iter()
+                .filter_map(|label| label.get("name").and_then(serde_json::Value::as_str))
+                .map(str::to_owned)
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// One gh run object → [`WorkflowRun`]; `None` when the run id is missing.
@@ -748,6 +855,122 @@ pub fn parse_workflow_list_json(payload: &str) -> Vec<WorkflowInfo> {
         .collect()
 }
 
+/// Parse `gh issue list --json …` output tolerantly: entries without a
+/// numeric `number` are skipped, missing strings default to `""`/`None`.
+pub fn parse_issue_list_json(payload: &str) -> Vec<ForgeIssue> {
+    let Ok(items) = serde_json::from_str::<Vec<serde_json::Value>>(payload) else {
+        return Vec::new();
+    };
+    items
+        .into_iter()
+        .filter_map(|item| {
+            let number = item.get("number")?.as_u64()?;
+            Some(ForgeIssue {
+                number,
+                title: json_string(&item, "title"),
+                state: json_string(&item, "state"),
+                author: json_author_login(&item),
+                updated_at: json_option_string(&item, "updatedAt"),
+                labels: json_label_names(&item),
+            })
+        })
+        .collect()
+}
+
+/// Parse `gh issue view <n> --json …` output; `None` when the payload is
+/// not an object. Comment entries that are not objects are skipped; the
+/// rest parse tolerantly (missing fields default to `""`/`None`).
+pub fn parse_issue_view_json(payload: &str) -> Option<ForgeIssueDetail> {
+    let item: serde_json::Value = serde_json::from_str(payload).ok()?;
+    if !item.is_object() {
+        return None;
+    }
+    let comments = item
+        .get("comments")
+        .and_then(serde_json::Value::as_array)
+        .map(|comments| {
+            comments
+                .iter()
+                .filter(|comment| comment.is_object())
+                .map(|comment| ForgeIssueComment {
+                    author: json_author_login(comment),
+                    body: json_string(comment, "body"),
+                    created_at: json_option_string(comment, "createdAt"),
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    Some(ForgeIssueDetail {
+        number: json_u64(&item, "number"),
+        title: json_string(&item, "title"),
+        state: json_string(&item, "state"),
+        author: json_author_login(&item),
+        body: json_string(&item, "body"),
+        labels: json_label_names(&item),
+        url: json_string(&item, "url"),
+        updated_at: json_option_string(&item, "updatedAt"),
+        comments,
+    })
+}
+
+/// Notification kind for a subject URL (`/pull/`/`/pulls/` — html vs REST —
+/// → pull, `/issues/` → issue, `/commit`/`/commits` → commit, anything else
+/// → other). Pure.
+pub fn notification_kind(subject_url: &str) -> &'static str {
+    if subject_url.contains("/pull/") || subject_url.contains("/pulls/") {
+        "pull"
+    } else if subject_url.contains("/issues/") {
+        "issue"
+    } else if subject_url.contains("/commit") {
+        "commit"
+    } else {
+        "other"
+    }
+}
+
+/// Parse `gh api notifications` output (array of REST thread objects —
+/// snake_case keys, `subject`/`repository` nested) tolerantly: entries
+/// without a numeric `id` are skipped, missing strings default to `""`/
+/// `None`, and `kind` derives from the subject URL.
+pub fn parse_notifications_json(payload: &str) -> Vec<ForgeNotification> {
+    let Ok(items) = serde_json::from_str::<Vec<serde_json::Value>>(payload) else {
+        return Vec::new();
+    };
+    items
+        .into_iter()
+        .filter_map(|item| {
+            let id = item.get("id")?.as_u64()?;
+            let subject_title = item
+                .get("subject")
+                .and_then(|subject| subject.get("title"))
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default()
+                .to_owned();
+            let subject_url = item
+                .get("subject")
+                .and_then(|subject| subject.get("url"))
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default()
+                .to_owned();
+            let repository = item
+                .get("repository")
+                .and_then(|repo| repo.get("name"))
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default()
+                .to_owned();
+            Some(ForgeNotification {
+                id,
+                kind: notification_kind(&subject_url).to_owned(),
+                subject_title,
+                subject_url,
+                repository,
+                updated_at: json_option_string(&item, "updated_at"),
+                reason: json_string(&item, "reason"),
+            })
+        })
+        .collect()
+}
+
 /// Fallback check parser for `gh pr checks` table output (older gh without
 /// `--json`, or non-tty rows). Each non-empty line carries a check name plus
 /// a state word (`pass`/`fail`/`pending`/`skipping`, possibly as
@@ -824,9 +1047,9 @@ fn icon_state(line: &str) -> Option<(&'static str, &str)> {
     None
 }
 
-/// Parse the PR number out of a `/pull/<digits>` URL.
-pub fn pr_number_of(url: &str) -> Option<u64> {
-    let idx = url.find("/pull/")? + "/pull/".len();
+/// Parse the number out of a `<segment><digits>` URL (`/pull/12` → 12).
+fn number_in_url(url: &str, segment: &str) -> Option<u64> {
+    let idx = url.find(segment)? + segment.len();
     let digits: String = url[idx..]
         .chars()
         .take_while(char::is_ascii_digit)
@@ -834,11 +1057,21 @@ pub fn pr_number_of(url: &str) -> Option<u64> {
     digits.parse().ok()
 }
 
-/// Extract the first `github.com/<owner>/<repo>/pull/<n>` URL from gh
-/// output (the create-success line and the already-exists error both carry
-/// one). Occurrences are tried left to right; a `/pull/` match only counts
-/// when digits follow.
-pub fn extract_pull_url(text: &str) -> Option<String> {
+/// Parse the PR number out of a `/pull/<digits>` URL.
+pub fn pr_number_of(url: &str) -> Option<u64> {
+    number_in_url(url, "/pull/")
+}
+
+/// Parse the issue number out of an `/issues/<digits>` URL.
+pub fn issue_number_of(url: &str) -> Option<u64> {
+    number_in_url(url, "/issues/")
+}
+
+/// Extract the first `github.com/<owner>/<repo><segment><digits>` URL from
+/// gh output (segment e.g. `/pull/` or `/issues/`; the create-success lines
+/// and the already-exists errors carry one). Occurrences are tried left to
+/// right; a match only counts when digits follow.
+fn extract_github_url(text: &str, segment: &str) -> Option<String> {
     const NEEDLE: &str = "github.com/";
     let mut from = 0;
     while let Some(rel) = text[from..].find(NEEDLE) {
@@ -850,7 +1083,7 @@ pub fn extract_pull_url(text: &str) -> Option<String> {
             })
             .unwrap_or(rest.len());
         let token = &rest[..end];
-        if let Some(url) = pull_url_of_token(token) {
+        if let Some(url) = segment_url_of_token(token, segment) {
             return Some(url);
         }
         from = start + NEEDLE.len();
@@ -858,20 +1091,30 @@ pub fn extract_pull_url(text: &str) -> Option<String> {
     None
 }
 
-/// `github.com/o/r/pull/12` (with or without scheme prefix in the token) →
-/// canonical `https://github.com/o/r/pull/12`.
-fn pull_url_of_token(token: &str) -> Option<String> {
+/// Extract the first PR URL (`…/pull/<n>`) from gh output.
+pub fn extract_pull_url(text: &str) -> Option<String> {
+    extract_github_url(text, "/pull/")
+}
+
+/// Extract the first issue URL (`…/issues/<n>`) from gh output.
+pub fn extract_issue_url(text: &str) -> Option<String> {
+    extract_github_url(text, "/issues/")
+}
+
+/// `github.com/o/r/issues/12` (with or without scheme prefix in the token)
+/// → canonical `https://github.com/o/r/issues/12`.
+fn segment_url_of_token(token: &str, segment: &str) -> Option<String> {
     const PREFIX: &str = "github.com/";
     let path = token.strip_prefix(PREFIX)?;
     let mut search = 0;
-    while let Some(rel) = path[search..].find("/pull/") {
+    while let Some(rel) = path[search..].find(segment) {
         let repo = &path[..search + rel];
-        let after = &path[search + rel + "/pull/".len()..];
+        let after = &path[search + rel + segment.len()..];
         let digits: String = after.chars().take_while(char::is_ascii_digit).collect();
         if !digits.is_empty() {
-            return Some(format!("https://github.com/{repo}/pull/{digits}"));
+            return Some(format!("https://github.com/{repo}{segment}{digits}"));
         }
-        search += rel + "/pull/".len();
+        search += rel + segment.len();
     }
     None
 }
@@ -1131,7 +1374,7 @@ fn run_gh_action(
 }
 
 /// [`run_gh_action`] with the shared mutating-command budget.
-fn run_pr_action(root: &Path, args: Vec<String>, label: &str) -> Result<String, ForgeError> {
+fn run_gh_mutating(root: &Path, args: Vec<String>, label: &str) -> Result<String, ForgeError> {
     run_gh_action(root, args, label, ACTION_TIMEOUT)
 }
 
@@ -1178,7 +1421,7 @@ pub fn pr_merge_sync(
     auto: bool,
 ) -> Result<String, ForgeError> {
     let args = pr_merge_args(number, method, delete_branch, auto)?;
-    run_pr_action(root, args, "pr merge")
+    run_gh_mutating(root, args, "pr merge")
 }
 
 /// Body of `pr_close`: close a PR, optionally leaving a comment.
@@ -1192,7 +1435,7 @@ pub fn pr_close_sync(
         args.push("--comment".to_string());
         args.push(comment.to_string());
     }
-    run_pr_action(root, args, "pr close")
+    run_gh_mutating(root, args, "pr close")
 }
 
 /// Body of `pr_reopen`: reopen a closed PR, optionally leaving a comment.
@@ -1206,7 +1449,7 @@ pub fn pr_reopen_sync(
         args.push("--comment".to_string());
         args.push(comment.to_string());
     }
-    run_pr_action(root, args, "pr reopen")
+    run_gh_mutating(root, args, "pr reopen")
 }
 
 /// Body of `pr_ready`: mark ready for review, or convert back to draft
@@ -1216,13 +1459,13 @@ pub fn pr_ready_sync(root: &Path, number: u64, ready: bool) -> Result<String, Fo
     if !ready {
         args.push("--undo".to_string());
     }
-    run_pr_action(root, args, "pr ready")
+    run_gh_mutating(root, args, "pr ready")
 }
 
 /// Body of `pr_checkout`: check out the PR's head branch locally.
 pub fn pr_checkout_sync(root: &Path, number: u64) -> Result<String, ForgeError> {
     let args = vec!["pr".to_string(), "checkout".to_string(), number.to_string()];
-    run_pr_action(root, args, "pr checkout")
+    run_gh_mutating(root, args, "pr checkout")
 }
 
 /// Body of `pr_comment`: post a comment (`gh pr comment --body-file`).
@@ -1239,7 +1482,7 @@ pub fn pr_comment_sync(root: &Path, number: u64, body: &str) -> Result<String, F
         "--body-file".to_string(),
         body_file.to_string_lossy().into_owned(),
     ];
-    let result = run_pr_action(root, args, "pr comment");
+    let result = run_gh_mutating(root, args, "pr comment");
     let _ = std::fs::remove_file(&body_file);
     result
 }
@@ -1280,11 +1523,77 @@ pub fn pr_review_sync(
         args.push("--body-file".to_string());
         args.push(path.to_string_lossy().into_owned());
     }
-    let result = run_pr_action(root, args, "pr review");
+    let result = run_gh_mutating(root, args, "pr review");
     if let Some(path) = body_file {
         let _ = std::fs::remove_file(path);
     }
     result
+}
+
+// -- PR edit + template ------------------------------------------------------
+
+/// Arguments of `pr_edit` (`gh pr edit <n> [--title <t>] [--body-file <f>]`).
+/// `body_file` is the temp file [`write_body_file`] produced for the new
+/// body; at least one of title/body must be present (gh rejects an empty
+/// edit).
+pub fn pr_edit_args(
+    number: u64,
+    title: Option<&str>,
+    body_file: Option<&Path>,
+) -> Result<Vec<String>, ForgeError> {
+    let title = title.map(str::trim).filter(|t| !t.is_empty());
+    if title.is_none() && body_file.is_none() {
+        return Err(ForgeError::other(
+            "nothing to edit — provide a title or a body",
+        ));
+    }
+    let mut args = vec!["pr".to_string(), "edit".to_string(), number.to_string()];
+    if let Some(title) = title {
+        args.push("--title".to_string());
+        args.push(title.to_string());
+    }
+    if let Some(path) = body_file {
+        args.push("--body-file".to_string());
+        args.push(path.to_string_lossy().into_owned());
+    }
+    Ok(args)
+}
+
+/// Body of `pr_edit`: update a PR's title and/or body (`gh pr edit`, the
+/// shared 120 s mutating budget; the body travels through the same temp
+/// file channel as `pr_create`, so quoting never matters). The temp file
+/// is removed on both success and failure paths.
+pub fn pr_edit_sync(
+    root: &Path,
+    number: u64,
+    title: Option<&str>,
+    body: Option<&str>,
+) -> Result<String, ForgeError> {
+    let title = title.map(str::trim).filter(|t| !t.is_empty());
+    let body_file = match body.map(str::trim).filter(|b| !b.is_empty()) {
+        Some(body) => Some(write_body_file(body)?),
+        None => None,
+    };
+    let result = pr_edit_args(number, title, body_file.as_deref())
+        .and_then(|args| run_gh_mutating(root, args, "pr edit"));
+    if let Some(path) = body_file {
+        let _ = std::fs::remove_file(path);
+    }
+    result
+}
+
+/// First present template among [`PR_TEMPLATE_PATHS`], resolved through
+/// `read` (`None` = no template). A missing file or non-UTF-8 content reads
+/// as absent; the first readable candidate wins verbatim.
+pub fn pick_pr_template(read: impl Fn(&str) -> Option<String>) -> Option<String> {
+    PR_TEMPLATE_PATHS.iter().find_map(|rel| read(rel))
+}
+
+/// Body of `pr_template` (local repo): first template file under `root`.
+/// The template is an optional convenience, so read errors (permissions)
+/// count as "absent" instead of failing the command.
+pub fn pr_template_sync(root: &Path) -> Option<String> {
+    pick_pr_template(|rel| std::fs::read_to_string(root.join(rel)).ok())
 }
 
 /// Body of `pr_checks`: JSON mode first (`gh pr checks <n> --json
@@ -1316,6 +1625,180 @@ pub fn pr_checks_sync(root: &Path, number: u64) -> Result<Vec<CheckInfo>, String
     }
     let combined = format!("{}\n{}", outcome.stderr, outcome.stdout);
     Err(trim_message(&combined))
+}
+
+// ---------------------------------------------------------------------------
+// Issues (browse/close/reopen/create via the same gh patterns as PRs)
+// ---------------------------------------------------------------------------
+
+/// Normalize an issue-list state filter (`open`/`closed`/`all`); blank means
+/// `open` (issues have no `merged` state).
+pub fn normalize_issue_state(state: &str) -> Result<&'static str, String> {
+    match state.trim().to_ascii_lowercase().as_str() {
+        "" | "open" => Ok("open"),
+        "closed" => Ok("closed"),
+        "all" => Ok("all"),
+        other => Err(format!(
+            "invalid issue state filter {other:?} — use open, closed, or all"
+        )),
+    }
+}
+
+/// Arguments of `issue_list` (state filter normalized by the caller).
+pub fn issue_list_args(state: &str) -> Result<Vec<String>, String> {
+    let normalized = normalize_issue_state(state)?;
+    Ok(vec![
+        "issue".to_string(),
+        "list".to_string(),
+        "--state".to_string(),
+        normalized.to_string(),
+        "--json".to_string(),
+        ISSUE_LIST_JSON_FIELDS.to_string(),
+        "--limit".to_string(),
+        ISSUE_LIST_LIMIT.to_string(),
+    ])
+}
+
+/// Body of `issue_list`: `gh issue list --state <state> --json … --limit 50`.
+pub fn issue_list_sync(root: &Path, state: &str) -> Result<Vec<ForgeIssue>, String> {
+    let args = issue_list_args(state)?;
+    let output = read_gh(root, &args, LIST_TIMEOUT)?;
+    Ok(parse_issue_list_json(&output))
+}
+
+/// Body of `issue_view`: one issue with its body and comments
+/// (`gh issue view <n> --json …`).
+pub fn issue_view_sync(root: &Path, number: u64) -> Result<ForgeIssueDetail, String> {
+    let args = vec![
+        "issue".to_string(),
+        "view".to_string(),
+        number.to_string(),
+        "--json".to_string(),
+        ISSUE_VIEW_JSON_FIELDS.to_string(),
+    ];
+    let output = read_gh(root, &args, LIST_TIMEOUT)?;
+    parse_issue_view_json(&output)
+        .ok_or_else(|| "could not parse `gh issue view --json` output".to_string())
+}
+
+/// Shared tail of issue close/reopen: `gh issue <verb> <n> [--comment c]`.
+fn issue_state_change(
+    root: &Path,
+    verb: &str,
+    number: u64,
+    comment: Option<&str>,
+) -> Result<String, ForgeError> {
+    let mut args = vec!["issue".to_string(), verb.to_string(), number.to_string()];
+    if let Some(comment) = comment.map(str::trim).filter(|c| !c.is_empty()) {
+        args.push("--comment".to_string());
+        args.push(comment.to_string());
+    }
+    run_gh_mutating(root, args, &format!("issue {verb}"))
+}
+
+/// Body of `issue_close`: close an issue, optionally leaving a comment.
+pub fn issue_close_sync(
+    root: &Path,
+    number: u64,
+    comment: Option<&str>,
+) -> Result<String, ForgeError> {
+    issue_state_change(root, "close", number, comment)
+}
+
+/// Body of `issue_reopen`: reopen a closed issue, optionally leaving a
+/// comment.
+pub fn issue_reopen_sync(
+    root: &Path,
+    number: u64,
+    comment: Option<&str>,
+) -> Result<String, ForgeError> {
+    issue_state_change(root, "reopen", number, comment)
+}
+
+/// Body of `issue_create`: `gh issue create --title <t> [--body-file <tmp>]`
+/// (the body is optional). Success is the issue URL line in the output;
+/// failures classify via [`forge_failure`].
+pub fn issue_create_sync(root: &Path, title: &str, body: &str) -> Result<IssueCreated, ForgeError> {
+    let title = title.trim();
+    if title.is_empty() {
+        return Err(ForgeError::other("title must not be empty"));
+    }
+    let body_file = if body.trim().is_empty() {
+        None
+    } else {
+        Some(write_body_file(body)?)
+    };
+    let mut args = vec![
+        "issue".to_string(),
+        "create".to_string(),
+        "--title".to_string(),
+        title.to_string(),
+    ];
+    if let Some(path) = &body_file {
+        args.push("--body-file".to_string());
+        args.push(path.to_string_lossy().into_owned());
+    }
+    let outcome = run_program(GH, Some(root), &args, CREATE_TIMEOUT);
+    if let Some(path) = body_file {
+        let _ = std::fs::remove_file(path);
+    }
+
+    if let Some(err) = &outcome.spawn_error {
+        return Err(forge_failure(Some(err), ""));
+    }
+    let combined = format!("{}\n{}", outcome.stdout, outcome.stderr);
+    if outcome.code == Some(0) && !outcome.timed_out {
+        if let Some(url) = extract_issue_url(&combined) {
+            let number = issue_number_of(&url).unwrap_or(0);
+            return Ok(IssueCreated { url, number });
+        }
+        return Err(ForgeError::other(format!(
+            "gh issue create succeeded but no issue URL was found in its output: {}",
+            trim_message(&combined)
+        )));
+    }
+    if outcome.timed_out {
+        return Err(ForgeError::other(
+            "gh issue create timed out after 120 s and was killed — check `gh issue list` before retrying",
+        ));
+    }
+    Err(forge_failure(None, &combined))
+}
+
+// ---------------------------------------------------------------------------
+// Notifications (gh api notifications — list, mark one / all read)
+// ---------------------------------------------------------------------------
+
+/// Body of `notifications_list`: the user's unread notification threads
+/// (`gh api notifications`).
+pub fn notifications_list_sync(root: &Path) -> Result<Vec<ForgeNotification>, String> {
+    let args = vec!["api".to_string(), "notifications".to_string()];
+    let output = read_gh(root, &args, NOTIFICATIONS_TIMEOUT)?;
+    Ok(parse_notifications_json(&output))
+}
+
+/// Body of `notification_mark_read`: mark one thread read
+/// (`gh api threads/<id> -X PATCH`).
+pub fn notification_mark_read_sync(root: &Path, id: u64) -> Result<(), ForgeError> {
+    let args = vec![
+        "api".to_string(),
+        format!("threads/{id}"),
+        "-X".to_string(),
+        "PATCH".to_string(),
+    ];
+    run_gh_mutating(root, args, "api threads").map(|_| ())
+}
+
+/// Body of `notifications_mark_all_read`: mark every thread read
+/// (`gh api notifications -X PUT`).
+pub fn notifications_mark_all_read_sync(root: &Path) -> Result<(), ForgeError> {
+    let args = vec![
+        "api".to_string(),
+        "notifications".to_string(),
+        "-X".to_string(),
+        "PUT".to_string(),
+    ];
+    run_gh_mutating(root, args, "api notifications").map(|_| ())
 }
 
 // ---------------------------------------------------------------------------

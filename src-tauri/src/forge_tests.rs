@@ -8,12 +8,14 @@
 use std::time::{Duration, Instant};
 
 use crate::forge::{
-    cap_log, extract_pull_url, forge_failure, normalize_pr_state, normalize_run_status,
-    parse_github_remote, parse_pr_checks_json, parse_pr_checks_table, parse_pr_list_json,
-    parse_workflow_list_json, parse_workflow_run_detail_json, parse_workflow_runs_json,
+    cap_log, extract_issue_url, extract_pull_url, forge_failure, issue_list_args,
+    normalize_issue_state, normalize_pr_state, normalize_run_status, notification_kind,
+    parse_github_remote, parse_issue_list_json, parse_issue_view_json, parse_notifications_json,
+    parse_pr_checks_json, parse_pr_checks_table, parse_pr_list_json, parse_workflow_list_json,
+    parse_workflow_run_detail_json, parse_workflow_runs_json, pick_pr_template, pr_edit_args,
     pr_list_args, pr_merge_args, pr_number_of, prefix_job_log, run_program, strip_log_bom,
     version_from_output, workflow_dispatch_args, workflow_runs_args, ForgeError, WorkflowInput,
-    KIND_ALREADY_EXISTS, KIND_NOT_AUTHED, KIND_NO_GH, KIND_OTHER, MAX_LOG_CHARS,
+    KIND_ALREADY_EXISTS, KIND_NOT_AUTHED, KIND_NO_GH, KIND_OTHER, MAX_LOG_CHARS, PR_TEMPLATE_PATHS,
 };
 
 // ---------------------------------------------------------------------------
@@ -180,6 +182,351 @@ fn pr_merge_args_map_methods_and_flags() {
     let err = pr_merge_args(1, "fast-forward", false, false).unwrap_err();
     assert_eq!(err.kind, KIND_OTHER);
     assert!(err.message.contains("unknown merge method"));
+}
+
+#[test]
+fn pr_edit_args_build_title_and_body_flags() {
+    // Title only.
+    let title_only = pr_edit_args(7, Some("New title"), None).unwrap();
+    assert_eq!(title_only, vec!["pr", "edit", "7", "--title", "New title"]);
+
+    // Body only (the temp-file path travels as argv; no shell anywhere).
+    let body_only = pr_edit_args(7, None, Some(std::path::Path::new("/tmp/b.md"))).unwrap();
+    assert_eq!(
+        body_only,
+        vec!["pr", "edit", "7", "--body-file", "/tmp/b.md"]
+    );
+
+    // Both, with surrounding whitespace trimmed off the title.
+    let both = pr_edit_args(
+        12,
+        Some("  Both  "),
+        Some(std::path::Path::new("/tmp/b2.md")),
+    )
+    .unwrap();
+    assert_eq!(
+        both,
+        vec![
+            "pr",
+            "edit",
+            "12",
+            "--title",
+            "Both",
+            "--body-file",
+            "/tmp/b2.md"
+        ]
+    );
+
+    // Blank title counts as absent.
+    let blank = pr_edit_args(1, Some("   "), None).unwrap_err();
+    assert_eq!(blank.kind, KIND_OTHER);
+    assert!(blank.message.contains("nothing to edit"));
+}
+
+#[test]
+fn pr_edit_sync_maps_gh_failures_onto_forgerror_kinds() {
+    // pr_edit_sync wraps `run_gh_mutating`, so a failed gh run classifies
+    // through `forge_failure` exactly like the other mutating commands —
+    // pinned here at the classification seam (spawn failure → NoGh, auth
+    // markers → NotAuthed, exit failures → Other).
+    let err = forge_failure(Some("gh: program not found"), "");
+    assert_eq!(err.kind, KIND_NO_GH);
+    let err = forge_failure(None, "gh: Not logged into github.com");
+    assert_eq!(err.kind, KIND_NOT_AUTHED);
+    let err = forge_failure(None, "some pr edit failure");
+    assert_eq!(err.kind, KIND_OTHER);
+}
+
+// ---------------------------------------------------------------------------
+// PR template discovery
+// ---------------------------------------------------------------------------
+
+#[test]
+fn pick_pr_template_prefers_the_directory_form_over_flat_files() {
+    // Discovery order: dir form → flat `.github/PULL_REQUEST_TEMPLATE.md` →
+    // lowercase flat variant. `read` returns Some for "present" paths.
+    let present =
+        |wanted: &str, rel: &str| -> Option<String> { (rel == wanted).then(|| rel.to_string()) };
+    assert_eq!(
+        pick_pr_template(|rel| present(".github/PULL_REQUEST_TEMPLATE.md", rel)),
+        Some(".github/PULL_REQUEST_TEMPLATE.md".to_string())
+    );
+    assert_eq!(
+        pick_pr_template(|rel| present(".github/pull_request_template.md", rel)),
+        Some(".github/pull_request_template.md".to_string())
+    );
+    assert_eq!(
+        pick_pr_template(|rel| present(PR_TEMPLATE_PATHS[0], rel)),
+        Some(PR_TEMPLATE_PATHS[0].to_string())
+    );
+    assert_eq!(pick_pr_template(|_| None), None);
+}
+
+#[test]
+fn pr_template_sync_reads_the_first_existing_file() {
+    let dir = std::env::temp_dir().join(format!(
+        "mygitui-forge-template-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let github = dir.join(".github");
+    std::fs::create_dir_all(github.join("PULL_REQUEST_TEMPLATE")).unwrap();
+    // Both flat variants exist: the uppercase one must win.
+    std::fs::write(
+        github.join("PULL_REQUEST_TEMPLATE/pull_request_template.md"),
+        "dir form",
+    )
+    .unwrap();
+    std::fs::write(github.join("PULL_REQUEST_TEMPLATE.md"), "upper flat").unwrap();
+    std::fs::write(github.join("pull_request_template.md"), "lower flat").unwrap();
+    assert_eq!(
+        crate::forge::pr_template_sync(&dir).as_deref(),
+        Some("dir form")
+    );
+
+    // Without the dir form, the uppercase flat file wins.
+    std::fs::remove_dir_all(github.join("PULL_REQUEST_TEMPLATE")).unwrap();
+    assert_eq!(
+        crate::forge::pr_template_sync(&dir).as_deref(),
+        Some("upper flat")
+    );
+
+    // Only the lowercase variant left.
+    std::fs::remove_file(github.join("PULL_REQUEST_TEMPLATE.md")).unwrap();
+    assert_eq!(
+        crate::forge::pr_template_sync(&dir).as_deref(),
+        Some("lower flat")
+    );
+
+    // No template anywhere → None (missing repos count too).
+    std::fs::remove_file(github.join("pull_request_template.md")).unwrap();
+    assert_eq!(crate::forge::pr_template_sync(&dir), None);
+    assert_eq!(crate::forge::pr_template_sync(&dir.join("nope")), None);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+// ---------------------------------------------------------------------------
+// Issues (list/view parsing + args)
+// ---------------------------------------------------------------------------
+
+const ISSUE_LIST_FIXTURE: &str = r#"[
+  {
+    "number": 42,
+    "title": "Panel flickers on open",
+    "state": "open",
+    "author": { "login": "octocat" },
+    "updatedAt": "2026-11-01T12:00:00Z",
+    "labels": [{ "name": "bug", "color": "ff0000" }, { "name": "ui" }]
+  },
+  {
+    "number": 41,
+    "title": "Old one",
+    "state": "closed"
+  },
+  { "title": "no number — skipped" }
+]"#;
+
+#[test]
+fn issue_list_json_parses_fixture_tolerantly() {
+    let issues = parse_issue_list_json(ISSUE_LIST_FIXTURE);
+    assert_eq!(issues.len(), 2, "entries without a number are skipped");
+    assert_eq!(issues[0].number, 42);
+    assert_eq!(issues[0].title, "Panel flickers on open");
+    assert_eq!(issues[0].state, "open");
+    assert_eq!(issues[0].author, "octocat");
+    assert_eq!(
+        issues[0].updated_at.as_deref(),
+        Some("2026-11-01T12:00:00Z")
+    );
+    assert_eq!(issues[0].labels, vec!["bug", "ui"]);
+    // Missing fields default instead of failing the entry.
+    assert_eq!(issues[1].author, "");
+    assert_eq!(issues[1].updated_at, None);
+    assert_eq!(issues[1].labels, Vec::<String>::new());
+    assert_eq!(issues[1].state, "closed");
+}
+
+#[test]
+fn issue_list_json_garbage_and_empty_yield_empty() {
+    assert!(parse_issue_list_json("").is_empty());
+    assert!(parse_issue_list_json("not json at all").is_empty());
+    assert!(parse_issue_list_json("{}").is_empty());
+    assert!(parse_issue_list_json("[]").is_empty());
+}
+
+#[test]
+fn issue_state_filter_and_list_args_are_normalized() {
+    assert_eq!(normalize_issue_state("").unwrap(), "open");
+    assert_eq!(normalize_issue_state(" OPEN ").unwrap(), "open");
+    assert_eq!(normalize_issue_state("closed").unwrap(), "closed");
+    assert_eq!(normalize_issue_state("all").unwrap(), "all");
+    assert!(
+        normalize_issue_state("merged").is_err(),
+        "issues have no merged"
+    );
+
+    let args = issue_list_args("all").unwrap();
+    assert_eq!(&args[..4], ["issue", "list", "--state", "all"]);
+    assert!(args.iter().any(|arg| arg.contains("updatedAt")));
+    let limit = args.iter().position(|arg| arg == "--limit").unwrap();
+    assert_eq!(args[limit + 1], "50");
+}
+
+const ISSUE_VIEW_FIXTURE: &str = r#"{
+  "number": 42,
+  "title": "Panel flickers on open",
+  "state": "open",
+  "author": { "login": "octocat" },
+  "body": "Steps to reproduce:\n1. open the panel\n2. watch it flicker",
+  "labels": [{ "name": "bug" }],
+  "url": "https://github.com/acme/widget/issues/42",
+  "updatedAt": "2026-11-01T12:00:00Z",
+  "comments": [
+    {
+      "author": { "login": "helga" },
+      "body": "Reproduced on Linux.",
+      "createdAt": "2026-11-02T09:00:00Z"
+    },
+    { "body": "Comment without an author." },
+    "not an object — skipped"
+  ]
+}"#;
+
+#[test]
+fn issue_view_json_parses_fixture_tolerantly() {
+    let detail = parse_issue_view_json(ISSUE_VIEW_FIXTURE).expect("valid detail");
+    assert_eq!(detail.number, 42);
+    assert_eq!(detail.title, "Panel flickers on open");
+    assert_eq!(detail.state, "open");
+    assert_eq!(detail.author, "octocat");
+    assert!(detail.body.contains("Steps to reproduce"));
+    assert_eq!(detail.labels, vec!["bug"]);
+    assert_eq!(detail.url, "https://github.com/acme/widget/issues/42");
+    assert_eq!(detail.updated_at.as_deref(), Some("2026-11-01T12:00:00Z"));
+    assert_eq!(detail.comments.len(), 2, "non-object comments are skipped");
+    assert_eq!(detail.comments[0].author, "helga");
+    assert_eq!(detail.comments[0].body, "Reproduced on Linux.");
+    assert_eq!(
+        detail.comments[0].created_at.as_deref(),
+        Some("2026-11-02T09:00:00Z")
+    );
+    assert_eq!(detail.comments[1].author, "", "missing author tolerates");
+    assert_eq!(detail.comments[1].created_at, None);
+}
+
+#[test]
+fn issue_view_json_missing_fields_and_garbage() {
+    // Missing body/comments/labels tolerate to defaults.
+    let detail = parse_issue_view_json(r#"{"number": 7}"#).expect("minimal object");
+    assert_eq!(detail.number, 7);
+    assert_eq!(detail.title, "");
+    assert_eq!(detail.body, "");
+    assert!(detail.comments.is_empty());
+    assert!(detail.labels.is_empty());
+    // Non-object payloads reject.
+    assert!(parse_issue_view_json("").is_none());
+    assert!(parse_issue_view_json("[]").is_none());
+    assert!(parse_issue_view_json("garbage").is_none());
+}
+
+// ---------------------------------------------------------------------------
+// Notifications (gh api output parsing + URL→kind derivation)
+// ---------------------------------------------------------------------------
+
+const NOTIFICATIONS_FIXTURE: &str = r#"[
+  {
+    "id": 1001,
+    "unread": true,
+    "reason": "review_requested",
+    "updated_at": "2026-11-10T08:00:00Z",
+    "subject": {
+      "title": "Add issues panel",
+      "url": "https://api.github.com/repos/acme/widget/pulls/55"
+    },
+    "repository": { "id": 1, "name": "widget", "full_name": "acme/widget" }
+  },
+  {
+    "id": 1002,
+    "reason": "mention",
+    "subject": {
+      "title": "Crash on empty diff",
+      "url": "https://api.github.com/repos/acme/widget/issues/9"
+    },
+    "repository": { "name": "widget" }
+  },
+  {
+    "id": 1003,
+    "reason": "ci_activity",
+    "subject": {
+      "title": "A commit you follow broke CI",
+      "url": "https://api.github.com/repos/acme/widget/commits/abc123"
+    },
+    "repository": { "name": "widget" }
+  },
+  {
+    "id": 1004,
+    "reason": "release_published",
+    "subject": {
+      "title": "v2.0",
+      "url": "https://api.github.com/repos/acme/widget/releases/77"
+    },
+    "repository": { "name": "widget" }
+  },
+  { "reason": "no id — skipped" }
+]"#;
+
+#[test]
+fn notifications_json_parses_and_derives_kinds() {
+    let items = parse_notifications_json(NOTIFICATIONS_FIXTURE);
+    assert_eq!(items.len(), 4, "entries without an id are skipped");
+    assert_eq!(items[0].id, 1001);
+    assert_eq!(items[0].kind, "pull");
+    assert_eq!(items[0].subject_title, "Add issues panel");
+    assert_eq!(
+        items[0].subject_url,
+        "https://api.github.com/repos/acme/widget/pulls/55"
+    );
+    assert_eq!(items[0].repository, "widget");
+    assert_eq!(items[0].reason, "review_requested");
+    assert_eq!(items[0].updated_at.as_deref(), Some("2026-11-10T08:00:00Z"));
+    assert_eq!(items[1].kind, "issue");
+    assert_eq!(items[1].updated_at, None);
+    assert_eq!(items[2].kind, "commit");
+    assert_eq!(items[3].kind, "other");
+}
+
+#[test]
+fn notifications_json_garbage_and_empty_yield_empty() {
+    assert!(parse_notifications_json("").is_empty());
+    assert!(parse_notifications_json("not json").is_empty());
+    assert!(parse_notifications_json("{}").is_empty());
+    assert!(parse_notifications_json("[]").is_empty());
+}
+
+#[test]
+fn notification_kind_derives_from_the_subject_url() {
+    assert_eq!(
+        notification_kind("https://api.github.com/repos/o/r/pulls/5"),
+        "pull"
+    );
+    assert_eq!(notification_kind("https://github.com/o/r/pull/12"), "pull");
+    assert_eq!(
+        notification_kind("https://api.github.com/repos/o/r/issues/9"),
+        "issue"
+    );
+    assert_eq!(
+        notification_kind("https://github.com/o/r/issues/3"),
+        "issue"
+    );
+    assert_eq!(
+        notification_kind("https://api.github.com/repos/o/r/commits/abc123"),
+        "commit"
+    );
+    assert_eq!(
+        notification_kind("https://api.github.com/repos/o/r/releases/4"),
+        "other"
+    );
+    assert_eq!(notification_kind(""), "other");
 }
 
 #[test]
@@ -551,6 +898,33 @@ fn pr_number_parses_from_url() {
     );
     assert_eq!(pr_number_of("https://github.com/a/b/pull/"), None);
     assert_eq!(pr_number_of("https://github.com/a/b/tree/main"), None);
+}
+
+#[test]
+fn extract_issue_url_and_issue_number_mirror_the_pull_helpers() {
+    assert_eq!(
+        extract_issue_url("Creating issue:\nhttps://github.com/acme/widget/issues/42\n").as_deref(),
+        Some("https://github.com/acme/widget/issues/42")
+    );
+    // Pull URLs must not leak into the issue extractor (and vice versa).
+    assert_eq!(
+        extract_issue_url("https://github.com/acme/widget/pull/42"),
+        None
+    );
+    assert_eq!(extract_issue_url("no issue url here"), None);
+    assert_eq!(
+        crate::forge::issue_number_of("https://github.com/a/b/issues/9"),
+        Some(9)
+    );
+    assert_eq!(
+        crate::forge::issue_number_of("https://github.com/a/b/issues/"),
+        None
+    );
+    // An issue number must not parse out of a pull URL.
+    assert_eq!(
+        crate::forge::issue_number_of("https://github.com/a/b/pull/9"),
+        None
+    );
 }
 
 // ---------------------------------------------------------------------------

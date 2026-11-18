@@ -922,12 +922,17 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
 
   // H2's CreatePrDialog asks for AI generation via the typed UI bus; H1's
   // runFeature answers it. One bridge, registered once per workspace mount.
+  // The dialog's `template` (the repo's PR template, when one exists) rides
+  // along so the generated description follows its structure.
   $effect(() => {
-    return onUiEvent("ai-generate-pr", ({ repoId: target }) => {
+    return onUiEvent("ai-generate-pr", ({ repoId: target, template }) => {
       void (async () => {
         try {
           const { ai } = await import("$lib/ai/ai.svelte");
-          const outcome = await ai.run("pr-title-body", { repoId: target });
+          const outcome = await ai.run("pr-title-body", {
+            repoId: target,
+            template: template ?? undefined,
+          });
           emitUiEvent("ai-pr-result", {
             subject: outcome.message?.subject ?? outcome.result.text,
             body: outcome.message?.body ?? "",

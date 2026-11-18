@@ -178,6 +178,26 @@ describe("other prompt builders", () => {
     expect(prompt).toContain("bbb5678");
     expect(prompt).toContain("add parser");
     expect(prompt).toContain("- src/a.ts (+2/-1)");
+    expect(prompt).not.toContain("pull-request template");
+  });
+
+  it("prTitleBodyPrompt embeds the pull-request template when present", () => {
+    const template = "## Motivation\n\n## Changes\n\n- [ ] item";
+    const { prompt } = prTitleBodyPrompt(
+      [{ summary: "add parser", sha: "aaa1234abcd" }],
+      "- src/a.ts (+2/-1)",
+      template,
+    );
+    expect(prompt).toContain("pull-request template");
+    expect(prompt).toContain("## Motivation");
+    expect(prompt).toContain("## Changes");
+    // Absent or blank templates leave no template section behind.
+    expect(prTitleBodyPrompt([], "", null).prompt).not.toContain(
+      "pull-request template",
+    );
+    expect(prTitleBodyPrompt([], "", "   \n  ").prompt).not.toContain(
+      "pull-request template",
+    );
   });
 
   it("explainHunkPrompt names the file and embeds the hunk", () => {
@@ -375,6 +395,20 @@ describe("runFeature", () => {
     expect(deps.git.streamLog).toHaveBeenCalled();
     expect(req.prompt).toContain("abc1234");
     expect(req.prompt).toContain("- src/a.ts (+2/-1)");
+    expect(req.prompt).not.toContain("pull-request template");
+  });
+
+  it("pr-title-body includes the repo template in the prompt when present", async () => {
+    const deps = makeDeps();
+    await runFeature(
+      "pr-title-body",
+      { repoId: "r1", template: "## Checklist\n\n- [ ] tests pass" },
+      deps,
+    );
+    const req = deps.generate.mock.calls[0][0];
+    expect(req.prompt).toContain("pull-request template");
+    expect(req.prompt).toContain("## Checklist");
+    expect(req.prompt).toContain("- [ ] tests pass");
   });
 
   it("explain-hunk needs path + hunk", async () => {
@@ -479,9 +513,11 @@ describe("runFeature", () => {
 
 import {
   conflictSuggestionPrompt,
+  customPromptPrompt,
   diagnoseFailurePrompt,
   explainBlamePrompt,
   explainCommitPrompt,
+  explainSelectionPrompt,
   parseConflictSuggestion,
   releaseNotesPrompt,
 } from "./features";
@@ -677,5 +713,132 @@ describe("runFeature M13 kinds", () => {
     await expect(
       runFeature("release-notes", { repoId: "r1", range: "v1..v2" }, deps),
     ).rejects.toMatchObject({ kind: "unknown" });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// explain-selection (item 57) + custom prompt kinds (item 56)
+// ---------------------------------------------------------------------------
+
+describe("explainSelectionPrompt (item 57)", () => {
+  it("carries the file path, line range and the selected rows' text", () => {
+    const built = explainSelectionPrompt("src/a.ts", 4, 9, "+const b = 3;\n export { a, b };", "@@ -1 +1 @@\n+const b = 3;");
+    expect(built.system).toContain("explain source code selections");
+    expect(built.system).toContain("Never include secrets");
+    expect(built.prompt).toContain("File: src/a.ts");
+    expect(built.prompt).toContain("Selected lines 4–9:");
+    expect(built.prompt).toContain("Surrounding hunk (context):");
+    expect(built.prompt).toContain("+const b = 3;");
+  });
+
+  it("names a single line when the range collapses", () => {
+    const built = explainSelectionPrompt("a.ts", 3, 3, "+x", null);
+    expect(built.prompt).toContain("Selected line 3:");
+    expect(built.prompt).not.toContain("Surrounding hunk");
+  });
+
+  it("caps the surrounding hunk context at the diff budget (truncation note)", () => {
+    const huge = Array.from({ length: 60_000 }, (_, i) => `+line ${i}`).join("\n");
+    const built = explainSelectionPrompt("a.ts", 1, 2, "+x", huge);
+    expect(built.prompt).toContain("[diff truncated:");
+    expect(built.prompt.length).toBeLessThan(huge.length);
+    // The selection itself is never truncated away.
+    expect(built.prompt).toContain("+x");
+  });
+
+  it("omits the context block when the hunk is whitespace-only", () => {
+    const built = explainSelectionPrompt("a.ts", 1, 2, "+x", "   \n  ");
+    expect(built.prompt).not.toContain("Surrounding hunk");
+  });
+});
+
+describe("explain-selection runner (item 57)", () => {
+  it("needs path, line range and selected text; gathers no git data", async () => {
+    const deps = makeDeps({ generate: () => "It updates b." });
+    await expect(
+      runFeature("explain-selection", { repoId: "r1" }, deps),
+    ).rejects.toMatchObject({ kind: "unknown" });
+    await expect(
+      runFeature("explain-selection", { repoId: "r1", path: "a.ts", lineStart: 1, lineEnd: 2 }, deps),
+    ).rejects.toMatchObject({ kind: "unknown" });
+
+    const outcome = await runFeature(
+      "explain-selection",
+      {
+        repoId: "r1",
+        path: "src/a.ts",
+        lineStart: 2,
+        lineEnd: 3,
+        selectedText: "+const b = 3;\n export { a, b };",
+        hunk: "@@ -1 +1 @@\n+const b = 3;",
+      },
+      deps,
+    );
+    expect(outcome.kind).toBe("explain-selection");
+    expect(outcome.text).toBe("It updates b.");
+    expect(deps.git.repoDiff).not.toHaveBeenCalled();
+    const req = deps.generate.mock.calls[0][0] as { prompt: string; model?: string };
+    expect(req.prompt).toContain("Selected lines 2–3:");
+    expect(req.prompt).toContain("@@ -1 +1 @@");
+  });
+});
+
+describe("custom prompt kinds (item 56)", () => {
+  it("customPromptPrompt frames the rendered template with guardrails", () => {
+    const built = customPromptPrompt("Explain {{diff}}");
+    expect(built.system).toContain("user-written prompt template");
+    expect(built.system).toContain("Never include secrets");
+    expect(built.prompt).toBe("Explain {{diff}}");
+  });
+
+  it("interpolates only the referenced variables from gathered git data", async () => {
+    const deps = makeDeps({
+      generate: () => "done",
+      commits: [{ summary: "add thing", sha: "abc1234def" }],
+    });
+    const outcome = await runFeature(
+      "custom.test",
+      { repoId: "r1", customTemplate: "Diff:\n{{diff}}\nStats:\n{{summary}}\nLog:\n{{commits}}\nKeep {{unknown}} as-is" },
+      deps,
+    );
+    expect(outcome.kind).toBe("custom.test");
+    expect(outcome.text).toBe("done");
+    expect(deps.git.repoDiff).toHaveBeenCalledTimes(1);
+    expect(deps.git.streamLog).toHaveBeenCalledTimes(1);
+    const req = deps.generate.mock.calls[0][0] as { prompt: string; system: string };
+    expect(req.prompt).toContain("- src/a.ts (+2/-1)"); // {{summary}}
+    expect(req.prompt).toContain("const b = 3;"); // {{diff}} content
+    expect(req.prompt).toContain("- abc1234 add thing"); // {{commits}}
+    expect(req.prompt).toContain("Keep {{unknown}} as-is");
+    expect(req.system).toContain("Never include secrets");
+  });
+
+  it("gathers nothing for templates without placeholders", async () => {
+    const deps = makeDeps();
+    await runFeature("custom.static", { repoId: "r1", customTemplate: "Say hello." }, deps);
+    expect(deps.git.repoDiff).not.toHaveBeenCalled();
+    expect(deps.git.streamLog).not.toHaveBeenCalled();
+    expect((deps.generate.mock.calls[0][0] as { prompt: string }).prompt).toBe("Say hello.");
+  });
+
+  it("refuses a blank template (the entry was removed or emptied)", async () => {
+    const deps = makeDeps();
+    await expect(
+      runFeature("custom.test", { repoId: "r1" }, deps),
+    ).rejects.toMatchObject({ kind: "unknown" });
+    await expect(
+      runFeature("custom.test", { repoId: "r1", customTemplate: "   " }, deps),
+    ).rejects.toMatchObject({ kind: "unknown" });
+    expect(deps.generate).not.toHaveBeenCalled();
+  });
+
+  it("the per-run model override rides the custom request", async () => {
+    const deps = makeDeps({ generate: () => "done" });
+    await runFeature(
+      "custom.test",
+      { repoId: "r1", customTemplate: "Say hello.", model: "picker/model" },
+      deps,
+    );
+    expect(deps.generate.mock.calls[0][0].model).toBe("picker/model");
   });
 });

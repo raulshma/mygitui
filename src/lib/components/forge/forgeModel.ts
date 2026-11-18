@@ -245,6 +245,94 @@ export function prNumberFromUrl(url: string | null): number | null {
 }
 
 // ---------------------------------------------------------------------------
+// Issues (Phase 6 batch A)
+// ---------------------------------------------------------------------------
+
+/** True when a gh issue state means the issue can still be closed/edited. */
+export function isIssueOpen(state: string): boolean {
+  return state === "open";
+}
+
+/** Display label for an issue state (gh reports lowercase values). */
+export function issueStateLabel(state: string): string {
+  switch (state) {
+    case "open":
+      return "Open";
+    case "closed":
+      return "Closed";
+    default:
+      return state || "Unknown";
+  }
+}
+
+/** Chip CSS class for an issue state (reuses the PR chip palette). */
+export function issueStateClass(state: string): string {
+  return state === "open" ? "chip-pr-open" : "chip-pr-closed";
+}
+
+/**
+ * Parses the issue number out of an `/issues/<digits>` URL (`null`
+ * otherwise). The path segment is identical in html and REST URLs.
+ */
+export function issueNumberFromUrl(url: string | null): number | null {
+  if (!url) return null;
+  const match = /\/issues\/(\d+)/.exec(url);
+  return match ? Number(match[1]) : null;
+}
+
+// ---------------------------------------------------------------------------
+// Notifications (Phase 6 batch A)
+// ---------------------------------------------------------------------------
+
+/**
+ * Parses the PR number out of a `/pull/<digits>` or REST `/pulls/<digits>`
+ * URL (`null` otherwise) — notification subject URLs use the REST form
+ * (`api.github.com/.../pulls/55`), issue pages carry `/pull/`.
+ */
+export function prNumberFromNotificationUrl(url: string | null): number | null {
+  if (!url) return null;
+  const match = /\/pulls?\/(\d+)/.exec(url);
+  return match ? Number(match[1]) : null;
+}
+
+/** Display label for a notification kind. */
+export function notificationKindLabel(kind: string): string {
+  switch (kind) {
+    case "pull":
+      return "Pull request";
+    case "issue":
+      return "Issue";
+    case "commit":
+      return "Commit";
+    default:
+      return "GitHub";
+  }
+}
+
+/**
+ * Converts a REST subject URL (`https://api.github.com/repos/o/r/pulls/55`)
+ * into its html page (`https://github.com/o/r/pull/55`): the API path maps
+ * `pulls/` → `pull/` and `commits/` → `commit/`; other segments carry over
+ * (issues/issues, releases/releases). `null` when the URL is not an
+ * api.github.com repo path (html URLs pass through as-is).
+ */
+export function htmlUrlFromApiUrl(url: string): string | null {
+  const match =
+    /^https?:\/\/api\.github\.com\/repos\/([^/]+)\/([^/]+)\/(.+)$/.exec(url);
+  if (!match) return null;
+  const [, owner, repo, tail] = match;
+  const segment = tail.split("/")[0];
+  const html =
+    segment === "pulls" ? "pull" : segment === "commits" ? "commit" : segment;
+  return `https://github.com/${owner}/${repo}/${html}${tail.slice(segment.length)}`;
+}
+
+/** Humanizes a notification reason (`review_requested` → "review requested"). */
+export function notificationReasonLabel(reason: string): string {
+  return reason.trim().replaceAll("_", " ");
+}
+
+// ---------------------------------------------------------------------------
 // GitHub Actions
 // ---------------------------------------------------------------------------
 

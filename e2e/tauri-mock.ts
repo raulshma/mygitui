@@ -331,6 +331,8 @@ function BOOTSTRAP(options: TauriMockOptions): void {
     "conflicts",
     "pr_list",
     "pr_checks",
+    "issue_list",
+    "notifications_list",
     "workflow_runs",
     "workflow_list",
     "project_detect",

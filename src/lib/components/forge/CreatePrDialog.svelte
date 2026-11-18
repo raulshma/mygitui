@@ -2,13 +2,16 @@
   Create-PR dialog (M6 forge) — AI-prefillable PR creation.
 
   On open it resets, loads the base-branch options (`branches()`,
-  preferring remote-tracked branches) and up to 10 recent commits (first
-  log page) as the AI hint. "Generate title/body" emits the typed
-  `ai-generate-pr` UI event (`$lib/palette/events`; payload
-  `{ repoId, commits: [{ sha, summary }] }`) and the dialog listens for
-  `ai-pr-result` (`{ subject, body }`) to fill the fields — user typing
-  clears the pending wait (docs/contracts.md "M6 FE contracts";
-  reconciled with H1's commit-message contract by the orchestrator).
+  preferring remote-tracked branches), up to 10 recent commits (first
+  log page) as the AI hint and the repo's PR template (`prTemplate`,
+  best-effort): the template prefills the description once, only while
+  the body is still empty (one-shot; typing first wins). "Generate
+  title/body" emits the typed `ai-generate-pr` UI event
+  (`$lib/palette/events`; payload `{ repoId, commits, template }`) and
+  the dialog listens for `ai-pr-result` (`{ subject, body }`) to fill
+  the fields — user typing clears the pending wait (docs/contracts.md
+  "M6 FE contracts"; reconciled with H1's commit-message contract by the
+  orchestrator).
 
   Create runs `prCreate` (120 s backend timeout): success toasts, calls
   `onCreated` (the owner refreshes context + PR list; the dialog stays
@@ -21,6 +24,7 @@
     branches,
     ForgeIpcError,
     prCreate,
+    prTemplate,
     streamLog,
     type PrCreated,
   } from "$lib/ipc/client";
@@ -66,6 +70,8 @@
   let existingUrl = $state<string | null>(null);
   /** Recent commits handed to the AI layer as context. */
   let commits = $state<{ sha: string; summary: string }[]>([]);
+  /** The repo's PR template (best-effort; prefills an empty body once). */
+  let template = $state<string | null>(null);
   let aiPending = $state(false);
   /** Inline failure from the last AI generation (cleared on retry/success). */
   let aiError = $state<string | null>(null);
@@ -87,6 +93,7 @@
     created = null;
     existingUrl = null;
     commits = [];
+    template = null;
     aiPending = false;
     aiError = null;
     clearTimeout(aiTimer);
@@ -103,6 +110,20 @@
         if (current !== seq) return;
         error = describeError(err);
         loading = false;
+      });
+
+    // The repo's PR template prefills an empty body exactly once: a fetch
+    // that lands after the user typed (or after the AI filled the fields)
+    // must not clobber the text — but the template still rides the AI
+    // prompt below. No template → nothing to prefill.
+    prTemplate(repoId)
+      .then((found) => {
+        if (current !== seq || !found) return;
+        template = found;
+        if (body.trim().length === 0) body = found;
+      })
+      .catch(() => {
+        // The template is an optional convenience; creation works without it.
       });
 
     // First log page → up to 10 recent commit summaries as the AI hint.
@@ -172,7 +193,7 @@
   function requestAi(): void {
     aiPending = true;
     aiError = null;
-    emitUiEvent("ai-generate-pr", { repoId, commits });
+    emitUiEvent("ai-generate-pr", { repoId, commits, template });
     // The answer round-trips the typed UI bus; if no bridge is listening
     // (AI unconfigured, or the dialog mounted outside a workspace), the
     // button would stick on "Waiting…" forever. The deadline turns that

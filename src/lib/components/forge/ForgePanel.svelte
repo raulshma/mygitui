@@ -4,11 +4,17 @@
    *
    * Banner first: gh missing → install link, gh unauthenticated → copyable
    * `gh auth login`, non-GitHub origin → explanation. When ready, the panel
-   * shows the current branch's PR card (state chips, author/stats/labels,
-   * checks with pass/fail/pending icons + refresh/watch, merge/close/reopen,
-   * draft↔ready, checkout, comments and reviews) and the filtered repo PR
-   * list. "Create PR" opens {@link CreatePrDialog}; a successful create
-   * refreshes context + list here.
+   * shows four tabs. "Pull requests": the current branch's PR card (state
+   * chips, author/stats/labels, checks with pass/fail/pending icons +
+   * refresh/watch, merge/close/reopen/edit, draft↔ready, checkout, comments
+   * and reviews) and the filtered repo PR list. "Issues" (Phase 6): the
+   * filtered issue list with lazily loaded detail (sanitized-markdown body
+   * + comments) and close/reopen. "Notifications" (Phase 6): the user's
+   * unread threads with mark-read + deep navigation into the PR/issue tabs
+   * (commit/release kinds open GitHub). "Actions": workflow runs. All three
+   * list tabs load on activation and refresh on demand — only PR checks
+   * auto-poll. "Create PR" opens {@link CreatePrDialog}, "New issue" opens
+   * {@link CreateIssueDialog}; a successful create refreshes context + list.
    *
    * MOUNTING CONTRACT (docs/contracts.md "M6 FE contracts"): this component
    * takes `{ repoId }` and needs a `"forge"` PanelId registry entry to be
@@ -17,6 +23,10 @@
    */
   import { untrack } from "svelte";
   import type {
+    ForgeIssue,
+    ForgeIssueDetail,
+    ForgeNotification,
+    IssueStateFilter,
     PrInfo,
     PrMergeMethod,
     PrReviewAction,
@@ -33,7 +43,9 @@
   import { Button } from "$lib/components/ui/button/index.js";
   import { Label } from "$lib/components/ui/label/index.js";
   import { Hint } from "$lib/components/ui/tooltip/index.js";
+  import AiMarkdown from "$lib/components/ai/AiMarkdown.svelte";
   import CreatePrDialog from "./CreatePrDialog.svelte";
+  import CreateIssueDialog from "./CreateIssueDialog.svelte";
   import {
     GH_AUTH_COMMAND,
     GH_INSTALL_DOCS_URL,
@@ -41,11 +53,19 @@
     checkIcon,
     checkStateClass,
     checkSummaryLabel,
+    htmlUrlFromApiUrl,
+    isIssueOpen,
     isPrOpen,
+    issueNumberFromUrl,
+    issueStateClass,
+    issueStateLabel,
+    notificationKindLabel,
+    notificationReasonLabel,
     parseWorkflowInputs,
     prAgeLabel,
     prForBranch,
     prMergeBlockedReason,
+    prNumberFromNotificationUrl,
     prStateClass,
     prStateLabel,
     reviewDecisionLabel,
@@ -95,16 +115,40 @@
     "run-unknown": "bg-accent text-muted-foreground",
   };
 
-  type ForgeTab = "prs" | "actions";
+  type ForgeTab = "prs" | "issues" | "notifications" | "actions";
   let tab = $state<ForgeTab>("prs");
 
   let dialogOpen = $state(false);
+  let issueDialogOpen = $state(false);
   /** Ensure() runs once per repo (status flips would otherwise re-trigger). */
   let ensuredRepo = $state<string | null>(null);
   /** Currently expanded PR row (its checks/actions render inline). */
   let expandedNumber = $state<number | null>(null);
   /** PRs whose checks auto-refresh every 10 s (user-toggled). */
   let watching = $state<number[]>([]);
+
+  // Issues tab state (list + lazily loaded detail; no auto-polling).
+  let issuesEnsuredFor = $state<string | null>(null);
+  /** Currently expanded issue row (its body/comments render inline). */
+  let expandedIssue = $state<number | null>(null);
+
+  // Notifications tab state (refresh on open / manual; no auto-polling).
+  let notificationsEnsuredFor = $state<string | null>(null);
+
+  // PR edit (title/body) dialog.
+  let editOpen = $state(false);
+  let editTarget = $state<PrInfo | null>(null);
+  let editTitle = $state("");
+  let editBody = $state("");
+  let editError = $state("");
+
+  // Issue close/reopen dialog.
+  type IssueTextAction = "close" | "reopen";
+  let issueTextOpen = $state(false);
+  let issueTextAction = $state<IssueTextAction>("close");
+  let issueTextTarget = $state<ForgeIssue | null>(null);
+  let issueTextBody = $state("");
+  let issueTextError = $state("");
 
   // Actions tab state.
   let runsEnsuredFor = $state<string | null>(null);
@@ -140,16 +184,26 @@
     if (ensuredRepo === repoId) return;
     ensuredRepo = repoId;
     expandedNumber = null;
+    expandedIssue = null;
     watching = [];
     runsEnsuredFor = null;
+    issuesEnsuredFor = null;
+    notificationsEnsuredFor = null;
     branchFilter = "";
     statusFilter = "";
     workflowFilter = "";
     dispatchOpen = false;
     void forgeStore.ensure(repoId);
-    if (untrack(() => tab) === "actions") {
+    const active = untrack(() => tab);
+    if (active === "actions") {
       runsEnsuredFor = repoId;
       void forgeStore.ensureActions(repoId);
+    } else if (active === "issues") {
+      issuesEnsuredFor = repoId;
+      void forgeStore.ensureIssues(repoId);
+    } else if (active === "notifications") {
+      notificationsEnsuredFor = repoId;
+      void forgeStore.ensureNotifications(repoId);
     }
   });
 
@@ -248,6 +302,7 @@
   });
 
   const canCreate = $derived(banner.kind === "ready" && !!context?.branch);
+  const canCreateIssue = $derived(banner.kind === "ready");
   const mergeBusy = $derived(
     mergeTarget ? forgeStore.isBusy(repoId, mergeTarget.number) : false,
   );
@@ -259,6 +314,16 @@
   async function openUrl(url: string): Promise<void> {
     const ok = await openExternal(url);
     if (!ok) toast(`Could not open ${url}`, { kind: "error" });
+  }
+
+  /** Opens a notification subject URL: REST API URLs convert to html pages. */
+  function openSubjectUrl(url: string): void {
+    void openUrl(htmlUrlFromApiUrl(url) ?? url);
+  }
+
+  /** Html page URL of one of the context repo's issues. */
+  function issuePageUrl(number: number): string {
+    return `https://github.com/${context?.owner ?? ""}/${context?.repo ?? ""}/issues/${number}`;
   }
 
   async function copyAuthCommand(): Promise<void> {
@@ -306,9 +371,18 @@
 
   function selectTab(next: ForgeTab): void {
     tab = next;
+    // Every list tab loads on first activation only (TTL-guarded in the
+    // store); refreshes are explicit. Issues and notifications never
+    // auto-poll — unlike the watched PR checks and active runs.
     if (next === "actions" && runsEnsuredFor !== repoId) {
       runsEnsuredFor = repoId;
       void forgeStore.ensureActions(repoId);
+    } else if (next === "issues" && issuesEnsuredFor !== repoId) {
+      issuesEnsuredFor = repoId;
+      void forgeStore.ensureIssues(repoId);
+    } else if (next === "notifications" && notificationsEnsuredFor !== repoId) {
+      notificationsEnsuredFor = repoId;
+      void forgeStore.ensureNotifications(repoId);
     }
   }
 
@@ -547,6 +621,180 @@
       toast(errorText(err), { kind: "error" });
     }
   }
+
+  // -- PR edit dialog -------------------------------------------------------
+
+  function openEdit(pr: PrInfo): void {
+    editTarget = pr;
+    editTitle = pr.title;
+    editBody = pr.body;
+    editError = "";
+    editOpen = true;
+  }
+
+  const editBusy = $derived(
+    editTarget ? forgeStore.isBusy(repoId, editTarget.number) : false,
+  );
+  const editChanged = $derived(
+    !!editTarget &&
+      (editTitle.trim() !== editTarget.title || editBody !== editTarget.body),
+  );
+
+  async function confirmEdit(): Promise<void> {
+    const pr = editTarget;
+    if (!pr) return;
+    if (!editTitle.trim() && editBody.trim().length === 0) {
+      editError = "Nothing to edit — keep a title or a description.";
+      return;
+    }
+    editError = "";
+    try {
+      await forgeStore.editPr(repoId, pr.number, editTitle.trim(), editBody);
+      editOpen = false;
+      toast(`Edited #${pr.number}`, { kind: "success" });
+      editTarget = null;
+    } catch (err) {
+      editError = errorText(err);
+    }
+  }
+
+  // -- issues tab -----------------------------------------------------------
+
+  const issues = $derived(forgeStore.issuesFor(repoId));
+  const issuesLoading = $derived(forgeStore.issuesLoadingFor(repoId));
+  const issuesError = $derived(forgeStore.issuesErrorFor(repoId));
+  const issueFilter = $derived(forgeStore.issueFilterFor(repoId));
+
+  function setIssueFilter(value: string): void {
+    expandedIssue = null;
+    void forgeStore.refreshIssues(repoId, value as IssueStateFilter);
+  }
+
+  /** Expands/collapses one issue row (expanding lazily loads its detail). */
+  function toggleIssueExpanded(number: number): void {
+    expandedIssue = expandedIssue === number ? null : number;
+    if (expandedIssue !== null) void forgeStore.loadIssueDetail(repoId, number);
+  }
+
+  function refreshIssues(): void {
+    void forgeStore.refreshIssues(repoId);
+  }
+
+  function onIssueCreated(): void {
+    void forgeStore.refreshIssues(repoId);
+  }
+
+  function openIssueText(action: IssueTextAction, issue: ForgeIssue): void {
+    issueTextAction = action;
+    issueTextTarget = issue;
+    issueTextBody = "";
+    issueTextError = "";
+    issueTextOpen = true;
+  }
+
+  const issueTextBusy = $derived(
+    issueTextTarget ? forgeStore.isIssueBusy(repoId, issueTextTarget.number) : false,
+  );
+  const issueTextTitle = $derived.by(() => {
+    const n = issueTextTarget?.number ?? 0;
+    return issueTextAction === "close" ? `Close #${n}` : `Reopen #${n}`;
+  });
+  const issueTextConfirm = $derived(
+    issueTextAction === "close" ? "Close" : "Reopen",
+  );
+  const issueTextSuccess = $derived(
+    issueTextAction === "close" ? "Closed" : "Reopened",
+  );
+
+  async function confirmIssueText(): Promise<void> {
+    const issue = issueTextTarget;
+    if (!issue) return;
+    issueTextError = "";
+    try {
+      const body = issueTextBody.trim();
+      if (issueTextAction === "close") {
+        await forgeStore.closeIssue(repoId, issue.number, body || null);
+      } else {
+        await forgeStore.reopenIssue(repoId, issue.number, body || null);
+      }
+      issueTextOpen = false;
+      toast(`${issueTextSuccess} #${issue.number}`, { kind: "success" });
+      issueTextTarget = null;
+      // The store reset the detail cache (state changed); an expanded row
+      // must not sit on the stale entry.
+      if (expandedIssue === issue.number) {
+        void forgeStore.loadIssueDetail(repoId, issue.number);
+      }
+    } catch (err) {
+      issueTextError = errorText(err);
+    }
+  }
+
+  // -- notifications tab ----------------------------------------------------
+
+  const notifications = $derived(forgeStore.notificationsFor(repoId));
+  const notificationsLoading = $derived(forgeStore.notificationsLoadingFor(repoId));
+  const notificationsError = $derived(forgeStore.notificationsErrorFor(repoId));
+  let markAllBusy = $state(false);
+
+  function refreshNotifications(): void {
+    void forgeStore.refreshNotifications(repoId);
+  }
+
+  async function markRead(item: ForgeNotification): Promise<void> {
+    try {
+      await forgeStore.markNotificationRead(repoId, item.id);
+    } catch (err) {
+      toast(errorText(err), { kind: "error" });
+    }
+  }
+
+  async function markAllRead(): Promise<void> {
+    markAllBusy = true;
+    try {
+      await forgeStore.markAllNotificationsRead(repoId);
+    } catch (err) {
+      toast(errorText(err), { kind: "error" });
+    } finally {
+      markAllBusy = false;
+    }
+  }
+
+  /**
+   * Deep navigation for one notification: pull/issue threads switch to the
+   * matching tab and expand the target in the refreshed list (falling back
+   * to the GitHub page when it is not in the visible filter); commit and
+   * other kinds have no panel surface and open GitHub instead.
+   */
+  async function openNotification(item: ForgeNotification): Promise<void> {
+    const htmlUrl = htmlUrlFromApiUrl(item.subject_url) ?? item.subject_url;
+    if (item.kind === "pull") {
+      const number = prNumberFromNotificationUrl(item.subject_url);
+      if (number === null) return openSubjectUrl(item.subject_url);
+      selectTab("prs");
+      const list = await forgeStore.refreshPrs(repoId);
+      if (list.some((pr) => pr.number === number)) {
+        expandedNumber = number;
+      } else {
+        openSubjectUrl(item.subject_url);
+      }
+      return;
+    }
+    if (item.kind === "issue") {
+      const number = issueNumberFromUrl(item.subject_url);
+      if (number === null) return openSubjectUrl(item.subject_url);
+      selectTab("issues");
+      const list = await forgeStore.refreshIssues(repoId);
+      if (list.some((issue) => issue.number === number)) {
+        expandedIssue = number;
+        void forgeStore.loadIssueDetail(repoId, number);
+      } else {
+        openSubjectUrl(item.subject_url);
+      }
+      return;
+    }
+    openSubjectUrl(item.subject_url);
+  }
 </script>
 
 <aside class="forge-panel flex min-h-0 flex-col overflow-y-auto text-ui-base" aria-label="Pull requests">
@@ -651,6 +899,14 @@
           onclick={() => openText("comment", pr)}
         >
           Comment
+        </Button>
+        <Button class={tb} variant="outline"
+          type="button"
+          title="Edit title and description"
+          disabled={busy}
+          onclick={() => openEdit(pr)}
+        >
+          Edit
         </Button>
         <Button class="{tb} danger border-current/45 text-[var(--app-deleted)]" variant="outline"
           type="button"
@@ -772,6 +1028,30 @@
         Pull requests
       </button>
       <button
+        class="tab cursor-pointer rounded-full border-none bg-transparent px-2.5 py-0.5 text-ui-meta {tab === "issues"
+          ? "bg-accent font-semibold text-accent-foreground"
+          : "text-muted-foreground"}"
+        class:active={tab === "issues"}
+        type="button"
+        role="tab"
+        aria-selected={tab === "issues"}
+        onclick={() => selectTab("issues")}
+      >
+        Issues
+      </button>
+      <button
+        class="tab cursor-pointer rounded-full border-none bg-transparent px-2.5 py-0.5 text-ui-meta {tab === "notifications"
+          ? "bg-accent font-semibold text-accent-foreground"
+          : "text-muted-foreground"}"
+        class:active={tab === "notifications"}
+        type="button"
+        role="tab"
+        aria-selected={tab === "notifications"}
+        onclick={() => selectTab("notifications")}
+      >
+        Notifications
+      </button>
+      <button
         class="tab cursor-pointer rounded-full border-none bg-transparent px-2.5 py-0.5 text-ui-meta {tab === "actions"
           ? "bg-accent font-semibold text-accent-foreground"
           : "text-muted-foreground"}"
@@ -822,6 +1102,54 @@
         onclick={() => (dialogOpen = true)}
       >
         Create PR
+      </Button>
+    {:else if tab === "issues"}
+      <select
+        class="filter flex-none rounded-sm border border-border bg-background px-1 py-px text-ui-meta text-foreground"
+        aria-label="Issue state filter"
+        value={issueFilter}
+        onchange={(event) => setIssueFilter(event.currentTarget.value)}
+      >
+        <option value="open">Open</option>
+        <option value="closed">Closed</option>
+        <option value="all">All</option>
+      </select>
+      <Button class={tb} variant="outline"
+        type="button"
+        onclick={() => void forgeStore.refreshStatus()}
+        disabled={forgeStore.statusLoading}
+      >
+        {forgeStore.statusLoading ? "Checking…" : "Re-check gh"}
+      </Button>
+      <Button class={tb} variant="outline" type="button" onclick={refreshIssues} disabled={issuesLoading}>
+        {issuesLoading ? "Loading…" : "Refresh"}
+      </Button>
+      <Button
+        class="act h-auto flex-none rounded-full px-3 py-0.5 text-ui-meta"
+        type="button"
+        disabled={!canCreateIssue}
+        onclick={() => (issueDialogOpen = true)}
+      >
+        New issue
+      </Button>
+    {:else if tab === "notifications"}
+      <Button class={tb} variant="outline"
+        type="button"
+        onclick={() => void forgeStore.refreshStatus()}
+        disabled={forgeStore.statusLoading}
+      >
+        {forgeStore.statusLoading ? "Checking…" : "Re-check gh"}
+      </Button>
+      <Button class={tb} variant="outline" type="button" onclick={refreshNotifications} disabled={notificationsLoading}>
+        {notificationsLoading ? "Loading…" : "Refresh"}
+      </Button>
+      <Button
+        class="act h-auto flex-none rounded-full px-3 py-0.5 text-ui-meta"
+        type="button"
+        disabled={markAllBusy || notifications.length === 0}
+        onclick={() => void markAllRead()}
+      >
+        Mark all read
       </Button>
     {:else}
       <input
@@ -1058,6 +1386,235 @@
         {/if}
       </div>
     {/if}
+  {:else if tab === "issues"}
+    {#if context}
+      <div class="section issues-section mx-2 mb-3 mt-2">
+        <h3 class="section-title mb-1 mt-0 text-ui-meta font-semibold uppercase tracking-[0.04em] text-muted-foreground">
+          {issueFilter === "open"
+            ? "Open issues"
+            : issueFilter === "all"
+              ? "All issues"
+              : "Closed issues"}
+        </h3>
+        {#if issuesError}
+          <p class="error-inline my-ui-15 text-xs text-destructive [overflow-wrap:anywhere]" role="alert">{issuesError}</p>
+        {/if}
+        {#if issues.length === 0}
+          <p class="muted my-1 text-ui-meta text-muted-foreground">
+            {issuesLoading
+              ? "Loading issues…"
+              : issuesError
+                ? "Could not load issues."
+                : "No issues match this filter."}
+          </p>
+        {:else}
+          <ul class="issues m-0 flex list-none flex-col gap-1 p-0" role="list" aria-label="Issues">
+            {#each issues as issue (issue.number)}
+              <li>
+                <div class="issue-line flex min-w-0 items-start gap-1">
+                  <Hint label="Show body and comments">
+                    {#snippet child({ props })}
+                      <button
+                        class="issue-row flex-1 flex w-full min-w-0 cursor-pointer items-center gap-ui-375 rounded-lg border border-border bg-card px-2 py-ui-375 text-left text-ui-meta text-foreground hover:bg-accent focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary"
+                        {...props}
+                        type="button"
+                        aria-expanded={expandedIssue === issue.number}
+                        onclick={() => toggleIssueExpanded(issue.number)}
+                      >
+                        <span class="expand-icon w-[1em] flex-none text-center text-muted-foreground" aria-hidden="true">
+                          {expandedIssue === issue.number ? "▾" : "▸"}
+                        </span>
+                        <span
+                          class="chip {issueStateClass(issue.state)} {chipTone[issueStateClass(issue.state)] ?? "bg-accent text-foreground"} flex-none rounded-full px-2 py-px text-ui-tiny font-semibold"
+                        >{issueStateLabel(issue.state)}</span>
+                        <Hint label={issue.title}>
+                          {#snippet child({ props })}
+                            <span class="issue-title min-w-0 truncate font-semibold text-foreground" {...props}>{issue.title}</span>
+                          {/snippet}
+                        </Hint>
+                        <span class="pr-no flex-none font-mono text-ui-meta text-muted-foreground">#{issue.number}</span>
+                        {#if issue.labels.length > 0}
+                          <span class="labels inline-flex min-w-0 max-w-[35%] flex-none flex-wrap gap-ui-2">
+                            {#each issue.labels as label (label)}
+                              <span class="label max-w-36 truncate rounded-full border border-border px-2 py-[0.02rem] text-ui-tiny">{label}</span>
+                            {/each}
+                          </span>
+                        {/if}
+                        {#if issue.author}
+                          <span class="issue-author ml-auto flex-none text-ui-micro text-muted-foreground">by {issue.author}</span>
+                        {/if}
+                        {#if prAgeLabel(issue.updated_at)}
+                          <span class="age flex-none text-ui-micro text-muted-foreground">updated {prAgeLabel(issue.updated_at)} ago</span>
+                        {/if}
+                      </button>
+                    {/snippet}
+                  </Hint>
+                  <Hint label="Open on GitHub">
+                    {#snippet child({ props })}
+                      <Button class="{tb} mt-ui-375" variant="outline"
+                        {...props}
+                        type="button"
+                        onclick={() => void openUrl(issuePageUrl(issue.number))}
+                      >
+                        Open
+                      </Button>
+                    {/snippet}
+                  </Hint>
+                </div>
+                {#if expandedIssue === issue.number}
+                  {@const detail = forgeStore.issueDetailFor(repoId, issue.number)}
+                  {@const detailLoading = forgeStore.issueDetailLoadingFor(repoId, issue.number)}
+                  {@const detailError = forgeStore.issueDetailErrorFor(repoId, issue.number)}
+                  {@const issueBusy = forgeStore.isIssueBusy(repoId, issue.number)}
+                  <div class="expand mb-1 ml-[1.5rem] mt-1">
+                    {#if detailError}
+                      <p class="error my-1 text-ui-meta text-destructive [overflow-wrap:anywhere]" role="alert">Could not load issue: {detailError}</p>
+                    {:else if detail === null}
+                      <p class="muted my-1 text-ui-meta text-muted-foreground" aria-live="polite">
+                        {detailLoading ? "Loading issue…" : ""}
+                      </p>
+                    {:else}
+                      {#if detail.body.trim()}
+                        <div class="issue-body mt-1 max-h-72 overflow-auto rounded-r-sm border-l-2 border-border bg-muted/40 px-2 py-ui-4 text-ui-meta text-muted-foreground">
+                          <AiMarkdown text={detail.body} />
+                        </div>
+                      {/if}
+                      <div class="issue-actions mt-ui-3 flex flex-wrap items-center gap-1" aria-label={`Actions for issue ${issue.number}`}>
+                        {#if isIssueOpen(detail.state)}
+                          <Button class="{tb} danger border-current/45 text-[var(--app-deleted)]" variant="outline"
+                            type="button"
+                            title="Close this issue"
+                            disabled={issueBusy}
+                            onclick={() => openIssueText("close", detail)}
+                          >
+                            Close
+                          </Button>
+                        {:else}
+                          <Button class={tb} variant="outline"
+                            type="button"
+                            title="Reopen this issue"
+                            disabled={issueBusy}
+                            onclick={() => openIssueText("reopen", detail)}
+                          >
+                            Reopen
+                          </Button>
+                        {/if}
+                        <Button class={tb} variant="outline" type="button" onclick={() => void openUrl(detail.url || issuePageUrl(issue.number))}>
+                          Open
+                        </Button>
+                        {#if issueBusy}
+                          <span class="busy text-ui-micro text-muted-foreground" aria-live="polite">Working…</span>
+                        {/if}
+                      </div>
+                      {#if detail.comments.length > 0}
+                        <div class="comments mt-2 border-t border-border pt-ui-375">
+                          <h4 class="m-0 text-ui-meta font-semibold text-muted-foreground">
+                            {detail.comments.length} comment{detail.comments.length === 1 ? "" : "s"}
+                          </h4>
+                          <ul class="comment-list m-0 mt-1 flex list-none flex-col gap-ui-35 p-0" role="list" aria-label="Issue comments">
+                            {#each detail.comments as comment, idx (idx)}
+                              <li class="comment rounded-lg border border-border bg-card px-2 py-ui-35">
+                                <div class="comment-head flex flex-wrap items-baseline gap-ui-375 text-ui-micro text-muted-foreground">
+                                  <span class="author font-semibold text-foreground">{comment.author || "ghost"}</span>
+                                  {#if prAgeLabel(comment.created_at)}
+                                    <span class="age">commented {prAgeLabel(comment.created_at)} ago</span>
+                                  {/if}
+                                </div>
+                                <div class="comment-body mt-1 text-ui-meta text-muted-foreground">
+                                  <AiMarkdown text={comment.body} />
+                                </div>
+                              </li>
+                            {/each}
+                          </ul>
+                        </div>
+                      {/if}
+                    {/if}
+                  </div>
+                {/if}
+              </li>
+            {/each}
+          </ul>
+        {/if}
+      </div>
+    {/if}
+  {:else if tab === "notifications"}
+    {#if context}
+      <div class="section notifications-section mx-2 mb-3 mt-2">
+        <h3 class="section-title mb-1 mt-0 text-ui-meta font-semibold uppercase tracking-[0.04em] text-muted-foreground">
+          Unread notifications
+          <span class="ml-1 normal-case tracking-normal text-ui-micro text-muted-foreground">across your repositories</span>
+        </h3>
+        {#if notificationsError}
+          <p class="error-inline my-ui-15 text-xs text-destructive [overflow-wrap:anywhere]" role="alert">{notificationsError}</p>
+        {/if}
+        {#if notifications.length === 0}
+          <p class="muted my-1 text-ui-meta text-muted-foreground">
+            {notificationsLoading
+              ? "Loading notifications…"
+              : notificationsError
+                ? "Could not load notifications."
+                : "No unread notifications — you're all caught up."}
+          </p>
+        {:else}
+          <ul class="notifications m-0 flex list-none flex-col gap-1 p-0" role="list" aria-label="Notifications">
+            {#each notifications as item (item.id)}
+              <li class="notification min-w-0 overflow-hidden rounded-lg border border-border bg-card">
+                <div class="notification-line flex min-w-0 flex-wrap items-start gap-ui-375 px-2 py-ui-375">
+                  <Hint label={notificationKindLabel(item.kind)}>
+                    {#snippet child({ props })}
+                      <button
+                        class="notif-main group flex min-w-0 flex-[1_1_14rem] cursor-pointer flex-wrap items-baseline gap-x-ui-35 gap-y-ui-15 rounded-sm border-none bg-transparent p-0 text-left text-ui-meta text-inherit focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary"
+                        {...props}
+                        type="button"
+                        onclick={() => void openNotification(item)}
+                      >
+                        <span class="notif-kind flex-none rounded-full border border-border px-2 py-px text-ui-tiny text-muted-foreground">
+                          {notificationKindLabel(item.kind)}
+                        </span>
+                        <Hint label={item.subject_title}>
+                          {#snippet child({ props })}
+                            <span class="notif-title min-w-0 flex-[1_1_auto] truncate font-semibold text-foreground group-hover:underline" {...props}>{item.subject_title}</span>
+                          {/snippet}
+                        </Hint>
+                        <span class="notif-meta flex min-w-0 flex-[1_1_100%] flex-wrap items-center gap-ui-375 text-ui-micro text-muted-foreground">
+                          <span class="repo flex-none">{item.repository}</span>
+                          {#if item.reason}
+                            <span class="reason flex-none rounded-full bg-accent px-2 py-px text-foreground">{notificationReasonLabel(item.reason)}</span>
+                          {/if}
+                          {#if prAgeLabel(item.updated_at)}
+                            <span class="age text-ui-micro text-muted-foreground">{prAgeLabel(item.updated_at)} ago</span>
+                          {/if}
+                        </span>
+                      </button>
+                    {/snippet}
+                  </Hint>
+                  <span class="notif-actions ml-auto flex flex-none flex-wrap items-center justify-end gap-ui-2">
+                    <Button class={tb} variant="outline"
+                      type="button"
+                      title="Mark this notification read"
+                      onclick={() => void markRead(item)}
+                    >
+                      Mark read
+                    </Button>
+                    <Hint label="Open on GitHub">
+                      {#snippet child({ props })}
+                        <Button class={tb} variant="outline"
+                          {...props}
+                          type="button"
+                          onclick={() => openSubjectUrl(item.subject_url)}
+                        >
+                          Open
+                        </Button>
+                      {/snippet}
+                    </Hint>
+                  </span>
+                </div>
+              </li>
+            {/each}
+          </ul>
+        {/if}
+      </div>
+    {/if}
   {:else if context}
     {#if branchPr}
       <div class="card current mx-2 my-1 rounded-lg border border-border bg-card px-2.5 py-2">
@@ -1185,6 +1742,13 @@
   {/if}
 
   <CreatePrDialog {repoId} open={dialogOpen} onClose={() => (dialogOpen = false)} onCreated={onCreated} />
+
+  <CreateIssueDialog
+    {repoId}
+    open={issueDialogOpen}
+    onClose={() => (issueDialogOpen = false)}
+    onCreated={onIssueCreated}
+  />
 
   <DialogShell
     bind:open={dispatchOpen}
@@ -1346,6 +1910,96 @@
         disabled={textBusy}
       >
         {textConfirm}
+      </button>
+    {/snippet}
+  </DialogShell>
+
+  <DialogShell
+    bind:open={editOpen}
+    labelledBy="forge-edit-title"
+    width="34rem"
+    onCancel={() => (editTarget = null)}
+    onsubmit={() => void confirmEdit()}
+  >
+    <h2 class="sdlg-title" id="forge-edit-title">Edit pull request</h2>
+    <p class="sdlg-message">#{editTarget?.number} — only the title and description can be edited.</p>
+    <Label class="dialog-field dialog-field-top mt-2 flex items-start gap-2 text-ui-base">
+      <span class="pt-ui-35">Title</span>
+      <input
+        class="dialog-text mt-0 w-auto min-w-0 flex-1 rounded-sm border border-border bg-background p-2 text-ui-base text-foreground"
+        aria-label="Pull request title"
+        bind:value={editTitle}
+        data-autofocus
+      />
+    </Label>
+    <Label class="dialog-field dialog-field-top mt-2 flex items-start gap-2 text-ui-base">
+      <span class="pt-ui-35">Description</span>
+      <textarea
+        class="dialog-text mt-0 w-auto min-w-0 flex-1 resize-y rounded-sm border border-border bg-background p-2 text-ui-base text-foreground"
+        aria-label="Pull request description"
+        rows="8"
+        bind:value={editBody}
+      ></textarea>
+    </Label>
+    {#if editError}
+      <p class="dialog-error m-0 mt-[0.6rem] text-xs text-destructive" role="alert">{editError}</p>
+    {/if}
+    {#snippet actions()}
+      <button
+        class="sdlg-secondary"
+        type="button"
+        disabled={editBusy}
+        onclick={() => {
+          editOpen = false;
+          editTarget = null;
+        }}
+      >
+        Cancel
+      </button>
+      <button class="sdlg-primary" type="submit" disabled={editBusy || !editChanged}>
+        {editBusy ? "Saving…" : "Save"}
+      </button>
+    {/snippet}
+  </DialogShell>
+
+  <DialogShell
+    bind:open={issueTextOpen}
+    labelledBy="forge-issue-text-title"
+    onCancel={() => (issueTextTarget = null)}
+    onsubmit={() => void confirmIssueText()}
+  >
+    <h2 class="sdlg-title" id="forge-issue-text-title">{issueTextTitle}</h2>
+    <p class="sdlg-message">{issueTextTarget?.title ?? ""} — optional comment.</p>
+    <textarea
+      class="dialog-text mt-1 w-full resize-y rounded-sm border border-border bg-background p-2 text-ui-base text-foreground"
+      rows="5"
+      bind:value={issueTextBody}
+      placeholder={issueTextAction === "close"
+        ? "Why is this being closed? (optional)"
+        : "Why is this being reopened? (optional)"}
+      data-autofocus
+    ></textarea>
+    {#if issueTextError}
+      <p class="dialog-error m-0 mt-[0.6rem] text-xs text-destructive" role="alert">{issueTextError}</p>
+    {/if}
+    {#snippet actions()}
+      <button
+        class="sdlg-secondary"
+        type="button"
+        disabled={issueTextBusy}
+        onclick={() => {
+          issueTextOpen = false;
+          issueTextTarget = null;
+        }}
+      >
+        Cancel
+      </button>
+      <button
+        class={issueTextAction === "close" ? "sdlg-danger" : "sdlg-primary"}
+        type="submit"
+        disabled={issueTextBusy}
+      >
+        {issueTextConfirm}
       </button>
     {/snippet}
   </DialogShell>

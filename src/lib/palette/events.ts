@@ -117,10 +117,15 @@ export interface UiEventMap {
   "open-updates": undefined;
   /**
    * Ask the mounted RepoView's AI bridge to generate a PR title/body
-   * (CreatePrDialog prefill): `{ repoId, commits }` — up to 10 recent
-   * commit summaries as context (may be empty).
+   * (CreatePrDialog prefill): `{ repoId, commits, template }` — up to 10
+   * recent commit summaries as context (may be empty) plus the repo's
+   * pull-request template when one exists (the answer should follow it).
    */
-  "ai-generate-pr": { repoId: string; commits: { sha: string; summary: string }[] };
+  "ai-generate-pr": {
+    repoId: string;
+    commits: { sha: string; summary: string }[];
+    template?: string | null;
+  };
   /** AI bridge answer: the generated PR title + body. */
   "ai-pr-result": { subject: string; body: string };
   /** AI bridge failure: human-readable reason (dialog clears its wait). */

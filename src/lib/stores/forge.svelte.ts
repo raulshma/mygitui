@@ -18,10 +18,19 @@
 import {
   forgeContext,
   forgeStatus,
+  issueClose,
+  issueCreate,
+  issueList,
+  issueReopen,
+  issueView,
+  notificationMarkRead,
+  notificationsList,
+  notificationsMarkAllRead,
   prChecks,
   prCheckout,
   prClose,
   prComment,
+  prEdit,
   prList,
   prMerge,
   prReady,
@@ -38,7 +47,11 @@ import {
 import type {
   CheckInfo,
   ForgeContext,
+  ForgeIssue,
+  ForgeIssueDetail,
+  ForgeNotification,
   ForgeStatus,
+  IssueStateFilter,
   PrInfo,
   PrMergeMethod,
   PrReviewAction,
@@ -54,6 +67,11 @@ import { AsyncMap } from "$lib/state/async.svelte";
 
 /** Storage key for one PR's checks. */
 export function checksKey(repoId: RepoId, number: number): string {
+  return `${repoId}:${number}`;
+}
+
+/** Storage key for one issue's detail (body + comments). */
+export function issueDetailKey(repoId: RepoId, number: number): string {
   return `${repoId}:${number}`;
 }
 
@@ -99,6 +117,22 @@ export class ForgeStore {
 
   /** CI checks per `"<repoId>:<number>"` (lazy, per opened PR). */
   #checks = new AsyncMap<CheckInfo[]>();
+
+  // -- Issues (Phase 6 batch A; refreshed on demand, never auto-polled) -----
+
+  /** Issue list per repo id. */
+  #issues = new AsyncMap<ForgeIssue[]>();
+  /** Selected issue-list state filter per repo id (default "open"). */
+  issueFilters = $state<Record<string, IssueStateFilter>>({});
+  /** Issue detail (body + comments) per `"<repoId>:<number>"` (lazy). */
+  #issueDetails = new AsyncMap<ForgeIssueDetail>();
+  /** Mutating issue action in flight per `"<repoId>:<number>"`. */
+  #issueBusy = $state<Record<string, boolean>>({});
+
+  // -- Notifications (Phase 6 batch A; refreshed on open / manual) ----------
+
+  /** Unread notification threads per repo id. */
+  #notifications = new AsyncMap<ForgeNotification[]>();
 
   // -- GitHub Actions -------------------------------------------------------
 
@@ -293,6 +327,20 @@ export class ForgeStore {
     return out;
   }
 
+  /** Updates a PR's title and/or body, then refreshes the list. */
+  async editPr(
+    repoId: RepoId,
+    number: number,
+    title: string,
+    body: string,
+  ): Promise<string> {
+    const out = await this.#runAction(repoId, number, () =>
+      prEdit(repoId, number, title || null, body || null),
+    );
+    await this.refreshPrs(repoId);
+    return out;
+  }
+
   // -- GitHub Actions -------------------------------------------------------
 
   /** Refreshes one repo's run list (resolves [] on error; error is visible). */
@@ -429,6 +477,136 @@ export class ForgeStore {
       delete busy[repoId];
       this.#dispatchBusy = busy;
     }
+  }
+
+  // -- Issues ---------------------------------------------------------------
+
+  /** Refreshes one repo's issue list (resolves [] on error; error visible). */
+  async refreshIssues(
+    repoId: RepoId,
+    state: IssueStateFilter = this.issueFilterFor(repoId),
+  ): Promise<ForgeIssue[]> {
+    this.issueFilters = { ...this.issueFilters, [repoId]: state };
+    const list = await this.#issues.run(repoId, () => issueList(repoId, state), {
+      onError: (err) => console.warn("[forge] issue list failed:", err),
+    });
+    return list ?? [];
+  }
+
+  /** TTL-guarded issue-list read (first Issues-tab activation). */
+  async ensureIssues(repoId: RepoId): Promise<ForgeIssue[]> {
+    const list = await this.#issues.ensure(
+      repoId,
+      () => issueList(repoId, this.issueFilterFor(repoId)),
+      ForgeStore.PANEL_ENSURE_TTL_MS,
+      { onError: (err) => console.warn("[forge] issue list failed:", err) },
+    );
+    return list ?? [];
+  }
+
+  /** Runs `fn` while marking one issue busy; always clears the flag. */
+  async #runIssueAction<T>(
+    repoId: RepoId,
+    number: number,
+    fn: () => Promise<T>,
+  ): Promise<T> {
+    const key = issueDetailKey(repoId, number);
+    this.#issueBusy = { ...this.#issueBusy, [key]: true };
+    try {
+      return await fn();
+    } finally {
+      const busy = { ...this.#issueBusy };
+      delete busy[key];
+      this.#issueBusy = busy;
+    }
+  }
+
+  /** Lazily loads one issue's body + comments (keyed per repo+number). */
+  async loadIssueDetail(
+    repoId: RepoId,
+    number: number,
+  ): Promise<ForgeIssueDetail | null> {
+    return this.#issueDetails.run(
+      issueDetailKey(repoId, number),
+      () => issueView(repoId, number),
+      { onError: (err) => console.warn("[forge] issue view failed:", err) },
+    );
+  }
+
+  /** Creates an issue, then refreshes the list. */
+  async createIssue(repoId: RepoId, title: string, body: string): Promise<void> {
+    await issueCreate(repoId, title, body);
+    await this.refreshIssues(repoId);
+  }
+
+  /** Closes an issue (optional comment), then refreshes list + detail. */
+  async closeIssue(
+    repoId: RepoId,
+    number: number,
+    comment: string | null = null,
+  ): Promise<string> {
+    const out = await this.#runIssueAction(repoId, number, () =>
+      issueClose(repoId, number, comment),
+    );
+    this.#issueDetails.reset(issueDetailKey(repoId, number));
+    await this.refreshIssues(repoId);
+    return out;
+  }
+
+  /** Reopens a closed issue (optional comment), then refreshes list + detail. */
+  async reopenIssue(
+    repoId: RepoId,
+    number: number,
+    comment: string | null = null,
+  ): Promise<string> {
+    const out = await this.#runIssueAction(repoId, number, () =>
+      issueReopen(repoId, number, comment),
+    );
+    this.#issueDetails.reset(issueDetailKey(repoId, number));
+    await this.refreshIssues(repoId);
+    return out;
+  }
+
+  // -- Notifications --------------------------------------------------------
+
+  /**
+   * Refreshes one repo's notification threads (resolves [] on error;
+   * error visible). Called when the tab opens and from its refresh button;
+   * never auto-polled.
+   */
+  async refreshNotifications(repoId: RepoId): Promise<ForgeNotification[]> {
+    const list = await this.#notifications.run(repoId, () => notificationsList(repoId), {
+      onError: (err) => console.warn("[forge] notifications failed:", err),
+    });
+    return list ?? [];
+  }
+
+  /** TTL-guarded notifications read (first tab activation). */
+  async ensureNotifications(repoId: RepoId): Promise<ForgeNotification[]> {
+    const list = await this.#notifications.ensure(
+      repoId,
+      () => notificationsList(repoId),
+      ForgeStore.PANEL_ENSURE_TTL_MS,
+      { onError: (err) => console.warn("[forge] notifications failed:", err) },
+    );
+    return list ?? [];
+  }
+
+  /** Marks one thread read and drops it from the cached list. */
+  async markNotificationRead(repoId: RepoId, id: number): Promise<void> {
+    await notificationMarkRead(repoId, id);
+    const entry = this.#notifications.get(repoId);
+    if (entry.state !== "ready") return;
+    this.#notifications.set(
+      repoId,
+      entry.data.filter((item) => item.id !== id),
+    );
+  }
+
+  /** Marks every thread read and clears the cached list. */
+  async markAllNotificationsRead(repoId: RepoId): Promise<void> {
+    await notificationsMarkAllRead(repoId);
+    this.#notifications.set(repoId, []);
   }
 
   /** First activation of the Actions tab: runs + workflow files. Ensure
@@ -632,6 +810,58 @@ export class ForgeStore {
 
   isDispatchBusy(repoId: RepoId): boolean {
     return this.#dispatchBusy[repoId] ?? false;
+  }
+
+  // -- Issues read helpers --------------------------------------------------
+
+  /** Issue list, or the list a failed refresh left visible. */
+  issuesFor(repoId: RepoId): ForgeIssue[] {
+    return this.#staleData(this.#issues, repoId) ?? [];
+  }
+
+  issuesLoadingFor(repoId: RepoId): boolean {
+    return this.#mapLoading(this.#issues, repoId);
+  }
+
+  issuesErrorFor(repoId: RepoId): string | null {
+    return this.#mapError(this.#issues, repoId);
+  }
+
+  issueFilterFor(repoId: RepoId): IssueStateFilter {
+    return this.issueFilters[repoId] ?? "open";
+  }
+
+  isIssueBusy(repoId: RepoId, number: number): boolean {
+    return this.#issueBusy[issueDetailKey(repoId, number)] ?? false;
+  }
+
+  /** Issue detail (body + comments) for `number`, or null while loading. */
+  issueDetailFor(repoId: RepoId, number: number): ForgeIssueDetail | null {
+    return this.#readyData(this.#issueDetails, issueDetailKey(repoId, number));
+  }
+
+  issueDetailLoadingFor(repoId: RepoId, number: number): boolean {
+    return this.#mapLoading(this.#issueDetails, issueDetailKey(repoId, number));
+  }
+
+  /** The issue-detail fetch failure, if the latest fetch failed. */
+  issueDetailErrorFor(repoId: RepoId, number: number): string | null {
+    return this.#mapError(this.#issueDetails, issueDetailKey(repoId, number));
+  }
+
+  // -- Notifications read helpers ------------------------------------------
+
+  /** Notification threads, or the list a failed refresh left visible. */
+  notificationsFor(repoId: RepoId): ForgeNotification[] {
+    return this.#staleData(this.#notifications, repoId) ?? [];
+  }
+
+  notificationsLoadingFor(repoId: RepoId): boolean {
+    return this.#mapLoading(this.#notifications, repoId);
+  }
+
+  notificationsErrorFor(repoId: RepoId): string | null {
+    return this.#mapError(this.#notifications, repoId);
   }
 }
 

@@ -5856,6 +5856,191 @@ pub async fn pr_review(
     .map_err(|e| ForgeError::other(format!("pr_review task failed: {e}")))?
 }
 
+/// Edit a PR's title and/or body (`gh pr edit`; at least one must be given).
+#[tauri::command(rename_all = "snake_case")]
+pub async fn pr_edit(
+    repo_id: RepoId,
+    number: u64,
+    title: Option<String>,
+    body: Option<String>,
+    state: State<'_, RepoManager>,
+) -> Result<String, ForgeError> {
+    let root = get_handle(&state, &repo_id)
+        .map_err(ForgeError::other)?
+        .root
+        .clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        forge::pr_edit_sync(&root, number, title.as_deref(), body.as_deref())
+    })
+    .await
+    .map_err(|e| ForgeError::other(format!("pr_edit task failed: {e}")))?
+}
+
+/// The repo's pull-request template (first of
+/// [`forge::PR_TEMPLATE_PATHS`] present under the workdir; `None` when the
+/// repo has none). Remote repos read through the workspace file channel.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn pr_template(
+    repo_id: RepoId,
+    state: State<'_, RepoManager>,
+) -> Result<Option<String>, String> {
+    let handle = get_handle(&state, &repo_id)?;
+    if let Some(remote) = handle.remote() {
+        return finish_op(enqueue_remote_read(
+            &handle,
+            remote,
+            "pr_template",
+            move |_git, ws| {
+                Ok(forge::pick_pr_template(|rel| {
+                    if ws.exists(rel).unwrap_or(false) {
+                        ws.read_file(rel)
+                            .ok()
+                            .and_then(|bytes| String::from_utf8(bytes).ok())
+                    } else {
+                        None
+                    }
+                }))
+            },
+        ))
+        .await;
+    }
+    let root = handle.root.clone();
+    tauri::async_runtime::spawn_blocking(move || Ok(forge::pr_template_sync(&root)))
+        .await
+        .map_err(|e| format!("pr_template task failed: {e}"))?
+}
+
+// -- Issues ------------------------------------------------------------------
+
+/// Issues of the repo (`gh issue list --state <state> --json … --limit 50`).
+#[tauri::command(rename_all = "snake_case")]
+pub async fn issue_list(
+    repo_id: RepoId,
+    state_filter: Option<String>,
+    state: State<'_, RepoManager>,
+) -> Result<Vec<forge::ForgeIssue>, String> {
+    let root = get_handle(&state, &repo_id)?.root.clone();
+    let filter = state_filter.unwrap_or_else(|| "open".to_string());
+    tauri::async_runtime::spawn_blocking(move || forge::issue_list_sync(&root, &filter))
+        .await
+        .map_err(|e| format!("issue_list task failed: {e}"))?
+}
+
+/// One issue with its body and comments (`gh issue view <n> --json …`).
+#[tauri::command(rename_all = "snake_case")]
+pub async fn issue_view(
+    repo_id: RepoId,
+    number: u64,
+    state: State<'_, RepoManager>,
+) -> Result<forge::ForgeIssueDetail, String> {
+    let root = get_handle(&state, &repo_id)?.root.clone();
+    tauri::async_runtime::spawn_blocking(move || forge::issue_view_sync(&root, number))
+        .await
+        .map_err(|e| format!("issue_view task failed: {e}"))?
+}
+
+/// Create an issue (`gh issue create --title <t> [--body-file <tmp>]`; the
+/// body is optional). Rejection is the structured [`ForgeError`].
+#[tauri::command(rename_all = "snake_case")]
+pub async fn issue_create(
+    repo_id: RepoId,
+    title: String,
+    body: String,
+    state: State<'_, RepoManager>,
+) -> Result<forge::IssueCreated, ForgeError> {
+    let root = get_handle(&state, &repo_id)
+        .map_err(ForgeError::other)?
+        .root
+        .clone();
+    tauri::async_runtime::spawn_blocking(move || forge::issue_create_sync(&root, &title, &body))
+        .await
+        .map_err(|e| ForgeError::other(format!("issue_create task failed: {e}")))?
+}
+
+/// Close an issue with an optional comment.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn issue_close(
+    repo_id: RepoId,
+    number: u64,
+    comment: Option<String>,
+    state: State<'_, RepoManager>,
+) -> Result<String, ForgeError> {
+    let root = get_handle(&state, &repo_id)
+        .map_err(ForgeError::other)?
+        .root
+        .clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        forge::issue_close_sync(&root, number, comment.as_deref())
+    })
+    .await
+    .map_err(|e| ForgeError::other(format!("issue_close task failed: {e}")))?
+}
+
+/// Reopen a closed issue with an optional comment.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn issue_reopen(
+    repo_id: RepoId,
+    number: u64,
+    comment: Option<String>,
+    state: State<'_, RepoManager>,
+) -> Result<String, ForgeError> {
+    let root = get_handle(&state, &repo_id)
+        .map_err(ForgeError::other)?
+        .root
+        .clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        forge::issue_reopen_sync(&root, number, comment.as_deref())
+    })
+    .await
+    .map_err(|e| ForgeError::other(format!("issue_reopen task failed: {e}")))?
+}
+
+// -- Notifications -----------------------------------------------------------
+
+/// The user's unread notification threads (`gh api notifications`; GitHub's
+/// default listing is the unread set).
+#[tauri::command(rename_all = "snake_case")]
+pub async fn notifications_list(
+    repo_id: RepoId,
+    state: State<'_, RepoManager>,
+) -> Result<Vec<forge::ForgeNotification>, String> {
+    let root = get_handle(&state, &repo_id)?.root.clone();
+    tauri::async_runtime::spawn_blocking(move || forge::notifications_list_sync(&root))
+        .await
+        .map_err(|e| format!("notifications_list task failed: {e}"))?
+}
+
+/// Mark one notification thread read (`gh api threads/<id> -X PATCH`).
+#[tauri::command(rename_all = "snake_case")]
+pub async fn notification_mark_read(
+    repo_id: RepoId,
+    id: u64,
+    state: State<'_, RepoManager>,
+) -> Result<(), ForgeError> {
+    let root = get_handle(&state, &repo_id)
+        .map_err(ForgeError::other)?
+        .root
+        .clone();
+    tauri::async_runtime::spawn_blocking(move || forge::notification_mark_read_sync(&root, id))
+        .await
+        .map_err(|e| ForgeError::other(format!("notification_mark_read task failed: {e}")))?
+}
+
+/// Mark every notification thread read (`gh api notifications -X PUT`).
+#[tauri::command(rename_all = "snake_case")]
+pub async fn notifications_mark_all_read(
+    repo_id: RepoId,
+    state: State<'_, RepoManager>,
+) -> Result<(), ForgeError> {
+    let root = get_handle(&state, &repo_id)
+        .map_err(ForgeError::other)?
+        .root
+        .clone();
+    tauri::async_runtime::spawn_blocking(move || forge::notifications_mark_all_read_sync(&root))
+        .await
+        .map_err(|e| ForgeError::other(format!("notifications_mark_all_read task failed: {e}")))?
+}
+
 // -- GitHub Actions ---------------------------------------------------------
 
 /// Recent workflow runs (`gh run list`), optionally filtered by branch,

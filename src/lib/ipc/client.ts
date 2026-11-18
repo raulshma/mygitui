@@ -61,6 +61,10 @@ import type {
   ForgeContext,
   ForgeFailure,
   ForgeFailureKind,
+  ForgeIssue,
+  ForgeIssueComment,
+  ForgeIssueDetail,
+  ForgeNotification,
   ForgeStatus,
   GitignoreTemplate,
   HookInfo,
@@ -82,6 +86,7 @@ import type {
   OpencodeDetection,
   OpencodeServeState,
   PreviewInfo,
+  IssueCreated,
   PrCreated,
   PrInfo,
   ProjectInfo,
@@ -128,8 +133,13 @@ export type {
   ForgeContext,
   ForgeFailure,
   ForgeFailureKind,
+  ForgeIssue,
+  ForgeIssueComment,
+  ForgeIssueDetail,
+  ForgeNotification,
   ForgeStatus,
   GitignoreTemplate,
+  IssueCreated,
   PrCreated,
   PrInfo,
   ProjectInfo,
@@ -1794,6 +1804,103 @@ export function prReview(
     action,
     body,
   });
+}
+
+/**
+ * Edits a PR's title and/or body (`gh pr edit`; at least one must be
+ * non-empty). Rejects with {@link ForgeIpcError} like the other mutations.
+ */
+export function prEdit(
+  repoId: RepoId,
+  number: number,
+  title: string | null,
+  body: string | null,
+): Promise<string> {
+  return callForge<string>("pr_edit", {
+    repo_id: repoId,
+    number,
+    title,
+    body,
+  });
+}
+
+/**
+ * The repo's pull-request template (`.github` discovery; `null` when the
+ * repo has none). Best-effort: callers treat failures as "no template".
+ */
+export function prTemplate(repoId: RepoId): Promise<string | null> {
+  return call<string | null>("pr_template", { repo_id: repoId });
+}
+
+/** Issue-list state filter (issues have no `merged`; mirrors the backend). */
+export type IssueStateFilter = "open" | "closed" | "all";
+
+/** Issues of the repo (`gh issue list --state <state> --json … --limit 50`). */
+export function issueList(
+  repoId: RepoId,
+  state: IssueStateFilter = "open",
+): Promise<ForgeIssue[]> {
+  return call<ForgeIssue[]>("issue_list", { repo_id: repoId, state_filter: state });
+}
+
+/** One issue with its body and comments (`gh issue view <n> --json …`). */
+export function issueView(
+  repoId: RepoId,
+  number: number,
+): Promise<ForgeIssueDetail> {
+  return call<ForgeIssueDetail>("issue_view", { repo_id: repoId, number });
+}
+
+/**
+ * Creates an issue via `gh issue create` (the body is optional). Rejects
+ * with {@link ForgeIpcError} like `prCreate`.
+ */
+export function issueCreate(
+  repoId: RepoId,
+  title: string,
+  body: string,
+): Promise<IssueCreated> {
+  return callForge<IssueCreated>("issue_create", {
+    repo_id: repoId,
+    title,
+    body,
+  });
+}
+
+/** Close an issue, optionally leaving a comment. */
+export function issueClose(
+  repoId: RepoId,
+  number: number,
+  comment: string | null = null,
+): Promise<string> {
+  return callForge<string>("issue_close", { repo_id: repoId, number, comment });
+}
+
+/** Reopen a closed issue, optionally leaving a comment. */
+export function issueReopen(
+  repoId: RepoId,
+  number: number,
+  comment: string | null = null,
+): Promise<string> {
+  return callForge<string>("issue_reopen", { repo_id: repoId, number, comment });
+}
+
+/**
+ * The user's unread GitHub notification threads for the repo
+ * (`gh api notifications`; GitHub's default listing is the unread set).
+ */
+export function notificationsList(repoId: RepoId): Promise<ForgeNotification[]> {
+  return call<ForgeNotification[]>("notifications_list", { repo_id: repoId });
+}
+
+/** Mark one notification thread read (`gh api threads/<id> -X PATCH`). */
+export function notificationMarkRead(repoId: RepoId, id: number): Promise<void> {
+  return callForge<void>("notification_mark_read", { repo_id: repoId, id });
+}
+
+/** Mark every notification thread read (`gh api notifications -X PUT`). */
+export function notificationsMarkAllRead(repoId: RepoId): Promise<void> {
+  return callForge<void>("notifications_mark_all_read", { repo_id: repoId });
 }
 
 /** Run-list status filter (`gh run list --status`). */

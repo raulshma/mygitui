@@ -11,11 +11,19 @@ import {
   activityDurationLabel,
   checkIcon,
   checkSummaryLabel,
+  htmlUrlFromApiUrl,
+  isIssueOpen,
   isPrOpen,
+  issueNumberFromUrl,
+  issueStateClass,
+  issueStateLabel,
+  notificationKindLabel,
+  notificationReasonLabel,
   parseWorkflowInputs,
   prAgeLabel,
   prForBranch,
   prMergeBlockedReason,
+  prNumberFromNotificationUrl,
   prNumberFromUrl,
   prStateClass,
   prStateLabel,
@@ -407,5 +415,63 @@ describe("parseWorkflowInputs", () => {
     expect(parseWorkflowInputs("novalue").error).toContain("key=value");
     expect(parseWorkflowInputs("=x").error).toContain("empty");
     expect(parseWorkflowInputs("a=1\na=2").error).toContain("Duplicate");
+  });
+});
+
+describe("issues", () => {
+  it("maps gh issue states onto labels and chip classes", () => {
+    expect(isIssueOpen("open")).toBe(true);
+    expect(isIssueOpen("closed")).toBe(false);
+    expect(isIssueOpen("")).toBe(false);
+    expect(issueStateLabel("open")).toBe("Open");
+    expect(issueStateLabel("closed")).toBe("Closed");
+    expect(issueStateLabel("")).toBe("Unknown");
+    expect(issueStateClass("open")).toBe("chip-pr-open");
+    expect(issueStateClass("closed")).toBe("chip-pr-closed");
+  });
+
+  it("parses the issue number out of html and REST URLs", () => {
+    expect(issueNumberFromUrl("https://github.com/a/b/issues/9")).toBe(9);
+    expect(
+      issueNumberFromUrl("https://api.github.com/repos/a/b/issues/9"),
+    ).toBe(9);
+    expect(issueNumberFromUrl("https://github.com/a/b/issues/")).toBeNull();
+    expect(issueNumberFromUrl("https://github.com/a/b/pull/9")).toBeNull();
+    expect(issueNumberFromUrl(null)).toBeNull();
+  });
+});
+
+describe("notifications", () => {
+  it("parses the PR number out of html and REST subject URLs", () => {
+    expect(prNumberFromNotificationUrl("https://github.com/a/b/pull/12")).toBe(12);
+    expect(
+      prNumberFromNotificationUrl("https://api.github.com/repos/a/b/pulls/55"),
+    ).toBe(55);
+    expect(prNumberFromNotificationUrl("https://github.com/a/b/issues/9")).toBeNull();
+    expect(prNumberFromNotificationUrl(null)).toBeNull();
+  });
+
+  it("labels the notification kinds and humanizes reasons", () => {
+    expect(notificationKindLabel("pull")).toBe("Pull request");
+    expect(notificationKindLabel("issue")).toBe("Issue");
+    expect(notificationKindLabel("commit")).toBe("Commit");
+    expect(notificationKindLabel("other")).toBe("GitHub");
+    expect(notificationReasonLabel("review_requested")).toBe("review requested");
+    expect(notificationReasonLabel("ci_activity")).toBe("ci activity");
+    expect(notificationReasonLabel("")).toBe("");
+  });
+
+  it("converts REST subject URLs to html pages and passes html through", () => {
+    expect(htmlUrlFromApiUrl("https://api.github.com/repos/a/b/pulls/55")).toBe(
+      "https://github.com/a/b/pull/55",
+    );
+    expect(htmlUrlFromApiUrl("https://api.github.com/repos/a/b/issues/9")).toBe(
+      "https://github.com/a/b/issues/9",
+    );
+    expect(
+      htmlUrlFromApiUrl("https://api.github.com/repos/a/b/commits/abc123"),
+    ).toBe("https://github.com/a/b/commit/abc123");
+    expect(htmlUrlFromApiUrl("https://github.com/a/b/pull/55")).toBeNull();
+    expect(htmlUrlFromApiUrl("https://api.github.com/user")).toBeNull();
   });
 });
