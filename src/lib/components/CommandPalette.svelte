@@ -38,6 +38,7 @@ import {
   type RankedCommand,
 } from "$lib/palette/palette.svelte";
 import { commandIcon } from "$lib/palette/commandIcons";
+import { t } from "$lib/i18n";
 import Icon from "$lib/components/icons/Icon.svelte";
 import { trapTab } from "$lib/components/safety/trapTab";
 import { Input } from "$lib/components/ui/input/index.js";
@@ -198,7 +199,12 @@ import { Kbd } from "$lib/components/ui/kbd/index.js";
         aria-activedescendant={flat.length > 0 ? optionId(activeIndex) : undefined}
         aria-label="Search commands"
         aria-autocomplete="list"
-        placeholder="Type a command… ({tabStore.tabs.length > 0 ? tabStore.active?.name : 'no repository'})"
+        placeholder={t("palette.searchPlaceholder", {
+          repo:
+            tabStore.tabs.length > 0
+              ? (tabStore.active?.name ?? "")
+              : t("common.noRepository"),
+        })}
         bind:value={query}
         bind:ref={inputEl}
         onkeydown={onInputKeydown}

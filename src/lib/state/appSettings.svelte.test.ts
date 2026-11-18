@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
+import { getLocale, setLocale } from "$lib/i18n";
 import {
   APP_SETTINGS_DEFAULTS,
   APP_SETTINGS_KEY,
@@ -41,6 +42,7 @@ describe("parseAppSettings", () => {
       uiScalePercent: 110,
       aiMonthlyTokenBudget: 2000000,
       aiBudgetResetDay: 15,
+      locale: "en",
       rogue: true,
     });
     expect(out).toEqual({
@@ -53,6 +55,7 @@ describe("parseAppSettings", () => {
       uiScalePercent: 110,
       aiMonthlyTokenBudget: 2000000,
       aiBudgetResetDay: 15,
+      locale: "en",
     });
   });
 
@@ -70,6 +73,13 @@ describe("parseAppSettings", () => {
     expect(parseAppSettings({ uiScalePercent: 3 }).uiScalePercent).toBe(UI_SCALE_MIN);
     expect(parseAppSettings({ uiScalePercent: 500 }).uiScalePercent).toBe(UI_SCALE_MAX);
     expect(parseAppSettings({ uiScalePercent: "x" }).uiScalePercent).toBe(100);
+  });
+
+  it("keeps only registered locales (i18n pilot: en)", () => {
+    expect(parseAppSettings({ locale: "en" }).locale).toBe("en");
+    // Unknown locales re-default until a catalog registers them.
+    expect(parseAppSettings({ locale: "de" }).locale).toBe("en");
+    expect(parseAppSettings({ locale: 42 }).locale).toBe("en");
   });
 });
 
@@ -96,6 +106,26 @@ describe("AppSettingsStore", () => {
     const reloaded = new AppSettingsStore(storage);
     expect(reloaded.checkpointsEnabled).toBe(false);
     expect(reloaded.terminalFontSize).toBe(16);
+  });
+
+  it("round-trips the locale and syncs it into the i18n module", () => {
+    const storage = memoryStorage();
+    let store = new AppSettingsStore(storage);
+    expect(store.value.locale).toBe("en");
+    expect(getLocale()).toBe("en");
+
+    store.update({ locale: "en" });
+    expect(JSON.parse(storage.getItem(APP_SETTINGS_KEY)!)).toMatchObject({
+      v: 1,
+      data: { locale: "en" },
+    });
+
+    // A fresh store (launch restore) reads the persisted locale and feeds
+    // t()'s active locale through setLocale.
+    setLocale("en");
+    store = new AppSettingsStore(storage);
+    expect(store.value.locale).toBe("en");
+    expect(getLocale()).toBe("en");
   });
 
   it("re-defaults on a malformed envelope", () => {

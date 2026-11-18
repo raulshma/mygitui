@@ -30,7 +30,9 @@
  * Streaming commands (`*_stream` taking a `Channel`) deliver one empty page
  * through the channel (`{ index, message }`) and resolve. A `{ pages: [...] }`
  * override streams a multi-page walk; `resolveBeforeLastPage: true` resolves
- * the command before the last page lands (Tauri's large-payload fetch path).
+ * the command before the last page lands (Tauri's large-payload fetch path);
+ * `pageGapMs: N` spaces the pages N ms apart (and delays the first page by N,
+ * default 0) so tests can land `emit`-ed events in the middle of a walk.
  * Channel indices increment per channel — the real `Channel` class queues
  * out-of-order messages forever, so a constant index strands every page
  * after the first.
@@ -678,12 +680,17 @@ function BOOTSTRAP(options: TauriMockOptions): void {
       // still in flight (the store must not read that as a truncation).
       if (cmd === "repo_log_stream" || cmd === "repo_file_history") {
         const mock = cmd in commandMocks ? commandMocks[cmd] : EMPTY_LOG_PAGE;
-        const shape = mock as { pages?: unknown; resolveBeforeLastPage?: unknown };
+        const shape = mock as {
+          pages?: unknown;
+          resolveBeforeLastPage?: unknown;
+          pageGapMs?: unknown;
+        };
         const pages = Array.isArray(shape?.pages)
           ? (shape.pages as unknown[])
           : [mock];
         const lateLast =
           shape?.resolveBeforeLastPage === true && pages.length > 1;
+        const gap = typeof shape?.pageGapMs === "number" ? Math.max(0, shape.pageGapMs) : 0;
         const channel = (args as { on_page?: unknown })?.on_page;
         return new Promise((resolve) => {
           const step = (i: number): void => {
@@ -700,9 +707,9 @@ function BOOTSTRAP(options: TauriMockOptions): void {
               return;
             }
             deliverChannel(channel, pages[i]);
-            setTimeout(() => step(i + 1), 0);
+            setTimeout(() => step(i + 1), gap);
           };
-          step(0);
+          setTimeout(() => step(0), gap);
         });
       }
       if (cmd === "repo_diff_stream") {

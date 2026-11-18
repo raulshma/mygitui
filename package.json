@@ -18,7 +18,8 @@
     "prepare": "git config core.hooksPath hooks",
     "gen:icons": "node scripts/generate-icon-sets.mjs",
     "prune:styles": "node scripts/prune-style-sheets.mjs",
-    "release:bump": "node scripts/release-bump.mjs"
+    "release:bump": "node scripts/release-bump.mjs",
+    "test:coverage": "vitest run --coverage"
   },
   "license": "MIT",
   "dependencies": {
@@ -88,6 +89,7 @@
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/svelte": "^5.4.2",
     "@types/node": "^24",
+    "@vitest/coverage-v8": "5.0.3",
     "bits-ui": "^2.20.2",
     "clsx": "^2.1.1",
     "cn": "^0.5.1",

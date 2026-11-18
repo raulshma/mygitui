@@ -9,6 +9,17 @@
  * Adding a language = one new catalog module with the same keys plus a
  * `setLocale` registration. Missing keys fall back to English, then to the
  * key itself (never undefined in the UI).
+ *
+ * Pilot status (roadmap item 69): the path is WIRED END TO END with English
+ * only. `appSettings.locale` ("en", Settings → Appearance → Language) feeds
+ * `setLocale`, and a handful of shared surfaces read through `t()`
+ * (ConfirmDialog defaults, Toaster aria labels, ShortcutsOverlay title,
+ * CommandPalette placeholder). A full rollout is deferred until a second
+ * locale is actually wanted: `t()` reads the module-level active locale
+ * non-reactively (already-rendered views do not re-translate on a switch),
+ * so real locales want a reactive catalog first. `describeError`'s user-
+ * facing strings are also deliberately out of the pilot — they are built
+ * from raw engine error text, which is not translatable string-by-string.
  */
 
 export type Locale = "en";
@@ -40,6 +51,16 @@ const catalogs: Record<Locale, Catalog> = {
     "action.close": "Close",
     "action.cancel": "Cancel",
     "action.confirm": "Confirm",
+
+    // Pilot surfaces (item 69) — the strings routed through t() to prove
+    // the resolution path; keep this block small until locales are wanted.
+    "common.noRepository": "no repository",
+    "palette.searchPlaceholder": "Type a command… ({repo})",
+    "shortcuts.title": "Keyboard shortcuts",
+    "toaster.dismiss": "Dismiss notification",
+    "toaster.repeated": "Repeated {count} times",
+    "settings.language": "Language",
+    "settings.languageMore": "More languages",
     "action.create": "Create",
     "action.delete": "Delete",
     "action.stage": "Stage",

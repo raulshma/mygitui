@@ -13,6 +13,7 @@
  */
 
 import { loadVersioned, writeEnvelope, type StorageLike } from "$lib/state/persist";
+import { setLocale, type Locale } from "$lib/i18n";
 
 /** localStorage key for the global settings envelope. */
 export const APP_SETTINGS_KEY = "mygitui.settings";
@@ -69,6 +70,13 @@ export interface AppSettingsData {
    * budget window resets on. Default 1st.
    */
   aiBudgetResetDay: number;
+  /**
+   * Interface locale (i18n pilot, item 69). "en" is the only registered
+   * locale; unknown values re-default on parse. The store syncs the value
+   * into `$lib/i18n`'s `setLocale` on load and on every update, so `t()`
+   * always reads the persisted choice.
+   */
+  locale: Locale;
 }
 
 export const APP_SETTINGS_DEFAULTS: AppSettingsData = {
@@ -81,6 +89,7 @@ export const APP_SETTINGS_DEFAULTS: AppSettingsData = {
   uiScalePercent: 100,
   aiMonthlyTokenBudget: 0,
   aiBudgetResetDay: 1,
+  locale: "en",
 };
 
 /** Terminal font size bounds shared by the setting and the terminal store. */
@@ -140,6 +149,9 @@ export function parseAppSettings(data: unknown): AppSettingsData {
   if (typeof raw.aiBudgetResetDay === "number" && Number.isFinite(raw.aiBudgetResetDay)) {
     out.aiBudgetResetDay = Math.round(clamp(raw.aiBudgetResetDay, 1, 31));
   }
+  // Only registered locales pass; anything else re-defaults (the i18n
+  // catalog itself falls back to English, then the key).
+  if (raw.locale === "en") out.locale = raw.locale;
   return out;
 }
 
@@ -164,6 +176,9 @@ export class AppSettingsStore {
       parse: parseAppSettings,
     });
     if (loaded !== null) this.#value = loaded;
+    // The i18n pilot's locale path: t() reads the module-level active
+    // locale, synced from the persisted setting here and on every update.
+    setLocale(this.#value.locale);
   }
 
   /** Current settings (reactive). */
@@ -214,6 +229,7 @@ export class AppSettingsStore {
     const next = parseAppSettings({ ...this.#value, ...patch });
     this.#value = next;
     writeEnvelope(this.#storage, APP_SETTINGS_KEY, next);
+    setLocale(next.locale);
   }
 
   /** Reset to defaults and persist. */

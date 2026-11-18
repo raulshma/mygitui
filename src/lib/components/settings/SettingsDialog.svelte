@@ -43,6 +43,7 @@
   import Icon from "$lib/components/icons/Icon.svelte";
   import { appIcon } from "$lib/components/icons/library.svelte";
   import { toast } from "$lib/toast";
+  import { t } from "$lib/i18n";
   import {
     appSettings,
     APP_SETTINGS_DEFAULTS,
@@ -127,6 +128,8 @@
   interface SegmentedOption {
     value: string;
     label: string;
+    /** Rendered but not selectable (placeholder for future choices). */
+    disabled?: boolean;
   }
 
   /** Text that may be computed at render time (version lines, statuses). */
@@ -134,6 +137,14 @@
 
   function resolveText(text: DynamicText): string {
     return typeof text === "function" ? text() : text;
+  }
+
+  /** Pill styling for one segmented option (selected / unselected / disabled placeholder). */
+  function pillClass(option: SegmentedOption, current: string): string {
+    if (option.disabled === true) return "cursor-not-allowed text-muted-foreground/60";
+    return current === option.value
+      ? "cursor-pointer bg-background font-medium text-foreground shadow-sm"
+      : "cursor-pointer text-muted-foreground hover:text-foreground";
   }
 
   interface BaseRowDef {
@@ -924,6 +935,20 @@
       blurb: "How the app looks — customizer and file icons.",
       rows: [
         {
+          kind: "segmented",
+          id: "language",
+          title: t("settings.language"),
+          description:
+            "Interface language (the i18n pilot ships English; more locales are planned).",
+          keywords: "language locale i18n translation english",
+          options: [
+            { value: "en", label: "English" },
+            { value: "more", label: t("settings.languageMore"), disabled: true },
+          ],
+          get: () => settings.value.locale,
+          set: (value) => settings.update({ locale: value === "en" ? "en" : settings.value.locale }),
+        },
+        {
           kind: "action",
           id: "appearance-customize",
           title: "Customize appearance",
@@ -1450,9 +1475,11 @@
               type="button"
               role="radio"
               aria-checked={row.get() === option.value}
-              class="cursor-pointer rounded-md px-2.5 py-1 text-ui-meta transition-colors {row.get() === option.value
-                ? 'bg-background font-medium text-foreground shadow-sm'
-                : 'text-muted-foreground hover:text-foreground'} focus-visible:-outline-offset-1 focus-visible:outline-2 focus-visible:outline-primary"
+              disabled={option.disabled === true}
+              class="rounded-md px-2.5 py-1 text-ui-meta transition-colors focus-visible:-outline-offset-1 focus-visible:outline-2 focus-visible:outline-primary {pillClass(
+                option,
+                row.get(),
+              )}"
               onclick={() => row.set(option.value)}
             >
               {option.label}

@@ -14,14 +14,15 @@
 <script lang="ts">
   import * as Dialog from "$lib/components/ui/dialog/index.js";
   import { Button } from "$lib/components/ui/button/index.js";
+  import { t } from "$lib/i18n";
   import type { Snippet } from "svelte";
 
   let {
     open = $bindable(false),
     title,
     message = "",
-    confirmLabel = "Confirm",
-    cancelLabel = "Cancel",
+    confirmLabel = t("action.confirm"),
+    cancelLabel = t("action.cancel"),
     alternateLabel = undefined,
     alternateDanger = false,
     danger = false,

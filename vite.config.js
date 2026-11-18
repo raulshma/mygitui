@@ -106,5 +106,30 @@ export default defineConfig({
     server: {
       deps: {},
     },
+    // Coverage (roadmap item 68): provider v8 over the app code. The include
+    // is extension-scoped AND `include` must stay set (the honest all-files
+    // scope): a bare `src/lib/**` would pull `src/lib/theme/styles/*.css`
+    // into the remapper, which parses every included file as JS and dies on
+    // CSS (PARSE_ERROR → truncated report). Note the measured baseline
+    // differs by scope: with vitest's default (no `include`) only files
+    // LOADED by tests count (74.5% lines); with `include` set, never-imported
+    // modules count as 0% too, giving the honest all-files numbers the
+    // thresholds below are derived from (lines 43.85%, statements 39.76% —
+    // dominated by the untested UI components). Thresholds sit slightly
+    // BELOW the measurement so CI stays green with headroom; tighten as
+    // coverage grows. Deliberately NOT wired into CI in this pass — when
+    // that happens, add `--coverage` to the workflow's test step (or a
+    // dedicated job).
+    coverage: {
+      provider: "v8",
+      include: ["src/lib/**/*.{js,ts,svelte}"],
+      // Machine-generated ts-rs IPC bindings (type-only, zero runtime
+      // statements) are report noise — hundreds of meaningless 0% rows.
+      exclude: ["src/lib/ipc/gen/**"],
+      thresholds: {
+        lines: 42,
+        statements: 38,
+      },
+    },
   },
 });

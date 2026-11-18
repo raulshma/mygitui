@@ -27,4 +27,25 @@ describe("i18n groundwork", () => {
     expect(getLocale()).toBe("en");
     expect(t("action.refresh")).toBe("Refresh");
   });
+
+  // Pilot surfaces (item 69): the keys the wired call sites read.
+  it("resolves the pilot keys (ConfirmDialog defaults, Toaster aria, shortcuts, palette)", () => {
+    expect(t("action.cancel")).toBe("Cancel");
+    expect(t("action.confirm")).toBe("Confirm");
+    expect(t("toaster.dismiss")).toBe("Dismiss notification");
+    expect(t("shortcuts.title")).toBe("Keyboard shortcuts");
+    expect(t("common.noRepository")).toBe("no repository");
+  });
+
+  it("interpolates the pilot's {vars} (palette placeholder, repeat count)", () => {
+    expect(t("palette.searchPlaceholder", { repo: "r1" })).toBe("Type a command… (r1)");
+    expect(t("palette.searchPlaceholder", { repo: "no repository" })).toBe(
+      "Type a command… (no repository)",
+    );
+    expect(t("toaster.repeated", { count: 3 })).toBe("Repeated 3 times");
+  });
+
+  it("falls back to the key for a missing pilot key", () => {
+    expect(t("pilot.not.yet.cataloged")).toBe("pilot.not.yet.cataloged");
+  });
 });

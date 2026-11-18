@@ -37,12 +37,18 @@ jobs:
 
       # Perf gates (plan §19) measured in release mode. Each run downloads
       # the previous nightly's criterion data and saves the new results under
-      # the `nightly` named baseline. Criterion always diffs each benchmark
-      # against the `base` results from the downloaded data, so the previous
-      # nightly's numbers are what we compare to. A missing previous artifact
-      # (first run / retention expiry) just saves fresh. Note: criterion only
-      # *reports* regressions ("Performance has regressed."); it does not
-      # exit non-zero on them — check the report for regressions.
+      # the `nightly` named baseline. The previous saved baseline is renamed
+      # to `prev` before the bench run (so the fresh `--save-baseline nightly`
+      # cannot clobber it) and the Regression gate below compares the two,
+      # failing the run on a >15% median regression. A missing previous
+      # artifact (first run / retention expiry) just saves fresh — nothing to
+      # compare against yet. Note: criterion itself only *reports*
+      # regressions ("Performance has regressed."); it does not exit non-zero
+      # on them, which is why the gate reads the saved estimates directly.
+      # critcmp was considered for the comparison (the roadmap's first pick)
+      # but was rejected: its `-t` flag is a display filter only — it also
+      # never exits non-zero on regressions — so it would add a multi-minute
+      # nightly `cargo install` plus fragile table scraping for no gating.
       # `--baseline` cannot be combined with `--save-baseline` (clap
       # conflict in criterion 0.8).
       - name: Download previous baseline
@@ -55,10 +61,80 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Preserve previous baseline for the gate
+        run: |
+          cd target/criterion 2>/dev/null || exit 0
+          find . -type d -name nightly | while read -r dir; do
+            mv "$dir" "$(dirname "$dir")/prev"
+          done
+
       - name: Run benches
         run: cargo bench --bench perf -- --save-baseline nightly
 
+      # Cross-run artifact plumbing (download + rename + re-save) is kept
+      # deliberately simple; if it ever proves fragile (action-download-
+      # artifact breakage, retention expiry), the gate degrades gracefully
+      # to a same-run smoke check — a run with no `prev` data passes after
+      # asserting the fresh nightly estimates parse and are finite.
+      - name: Regression gate (>15% median regression fails the run)
+        run: |
+          python3 - <<'PY'
+          import json
+          import math
+          import pathlib
+          import sys
+
+          root = pathlib.Path("target/criterion")
+
+          def median(estimates: pathlib.Path):
+              value = json.loads(estimates.read_text())["median"]["point_estimate"]
+              if not isinstance(value, (int, float)) or not math.isfinite(value):
+                  raise ValueError(f"non-finite median: {value!r}")
+              return float(value)
+
+          rows, regressed, fresh = [], [], 0
+          for estimates in sorted(root.glob("**/nightly/estimates.json")):
+              # Every fresh estimate must parse and be finite, even when there
+              # is nothing to compare (same-run smoke check).
+              fresh += 1
+              try:
+                  after = median(estimates)
+              except (OSError, ValueError, KeyError) as err:
+                  print(f"GATE ERROR: {estimates}: {err}")
+                  sys.exit(1)
+              previous = estimates.parent.parent / "prev" / "estimates.json"
+              if not previous.exists():
+                  continue  # benchmark added since the last run
+              try:
+                  before = median(previous)
+              except (OSError, ValueError, KeyError):
+                  continue  # unreadable previous data — not a gate failure
+              name = str(estimates.parent.parent.relative_to(root))
+              change = (after - before) / before * 100.0
+              rows.append((name, before, after, change))
+              if change > 15.0:
+                  regressed.append((name, change))
+
+          if fresh == 0:
+              print("GATE ERROR: no criterion estimates found — benches ran?")
+              sys.exit(1)
+          if not rows:
+              print("No previous baseline found (first run or expired artifact); "
+                    "gate skipped — fresh numbers saved as the next baseline.")
+              sys.exit(0)
+
+          print(f"{'benchmark':50} {'prev median':>14} {'new median':>14} {'change':>9}")
+          for name, before, after, change in rows:
+              print(f"{name:50} {before:>12.0f}ns {after:>12.0f}ns {change:>+8.1f}%")
+          if regressed:
+              for name, change in regressed:
+                  print(f"REGRESSION: {name} median regressed {change:+.1f}% (> 15%)")
+              sys.exit(1)
+          print("Regression gate passed: no benchmark regressed beyond 15% median.")
+          PY
+
       - name: Upload criterion reports
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: criterion-${{ github.run_id }}

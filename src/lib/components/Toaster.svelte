@@ -11,6 +11,7 @@
    */
   import { fly } from "svelte/transition";
   import { dismissToast, getToasts, pauseToast, resumeToast, type ToastKind } from "$lib/toast";
+  import { t } from "$lib/i18n";
   import { Button } from "$lib/components/ui/button/index.js";
   import Icon from "$lib/components/icons/Icon.svelte";
   import iconSuccess from "@ktibow/iconset-material-symbols/check-circle";
@@ -67,7 +68,7 @@
       {#if item.count > 1}
         <span
           class="repeat flex-none rounded-full bg-muted px-1.5 py-0.5 text-ui-tiny font-semibold leading-none text-muted-foreground tabular-nums"
-          aria-label={`Repeated ${item.count} times`}
+          aria-label={t("toaster.repeated", { count: item.count })}
         >×{item.count}</span>
       {/if}
       <Button
@@ -75,7 +76,7 @@
         variant="ghost"
         size="icon-xs"
         type="button"
-        aria-label="Dismiss notification"
+        aria-label={t("toaster.dismiss")}
         onclick={() => dismissToast(item.id)}
       >
         <Icon icon={iconClose} size={13} />

@@ -18,6 +18,7 @@
    * element on close.
    */
   import { overlayStack } from "$lib/state/overlays.svelte";
+  import { t } from "$lib/i18n";
   import { currentBindings } from "$lib/palette/keybinds";
   import {
     matchesShortcutQuery,
@@ -102,14 +103,14 @@
       class="panel flex flex-col overflow-hidden w-[min(40rem,calc(100vw-2rem))] max-h-[75vh] bg-popover text-popover-foreground rounded-xl shadow-lg"
       role="dialog"
       aria-modal="true"
-      aria-label="Keyboard shortcuts"
+      aria-label={t("shortcuts.title")}
       tabindex="-1"
       bind:this={panelEl}
       onclick={(event) => event.stopPropagation()}
       onkeydown={onPanelKeydown}
     >
       <header class="flex flex-none items-center gap-3 border-b border-border px-4 py-2.5">
-        <h2 class="m-0 shrink-0 text-sm font-semibold text-foreground">Keyboard shortcuts</h2>
+        <h2 class="m-0 shrink-0 text-sm font-semibold text-foreground">{t("shortcuts.title")}</h2>
         <span class="min-w-0 flex-1 text-ui-meta text-muted-foreground">
           Rebind in Settings → Keyboard shortcuts
         </span>
