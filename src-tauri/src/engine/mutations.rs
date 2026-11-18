@@ -212,17 +212,20 @@ fn write_workdir_bytes(repo: &Repository, path: &str, content: &[u8]) -> EngineR
     // IPC-supplied path: reject absolute forms and `..` before the join —
     // an absolute path would replace the base and escape the workdir.
     let file = super::paths::validate_workdir_path(workdir, path)?;
+    // Blob bytes are LF; the workdir gets the checkout-style conversion the
+    // same way `git checkout -- <path>` smudges (autocrlf/eol attributes).
+    let content = super::eol::convert_to_workdir(repo, path, content);
     if let Some(parent) = file.parent() {
         std::fs::create_dir_all(parent)?;
     }
     make_writable_if_readonly(&file);
-    match std::fs::write(&file, content) {
+    match std::fs::write(&file, &content) {
         Ok(()) => Ok(()),
         // A read-only file blocks O_WRONLY even for its owner on Unix.
         // Git recreates the file instead of widening its mode; do the same.
         Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
             std::fs::remove_file(&file)?;
-            std::fs::write(file, content)?;
+            std::fs::write(file, &content)?;
             Ok(())
         }
         Err(e) => Err(e.into()),

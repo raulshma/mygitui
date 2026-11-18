@@ -208,10 +208,13 @@ fn write_workdir_file(repo: &Repository, path: &str, content: &[u8]) -> EngineRe
     // before the join — an absolute path would replace the base and escape
     // the workdir.
     let file = super::paths::validate_workdir_path(workdir, path)?;
+    // checkout-style smudge (autocrlf/eol attributes) — see eol.rs; content
+    // the FE preserved as CRLF already carries CR and passes through.
+    let content = super::eol::convert_to_workdir(repo, path, content);
     if let Some(parent) = file.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    std::fs::write(file, content)?;
+    std::fs::write(file, &content)?;
     Ok(())
 }
 

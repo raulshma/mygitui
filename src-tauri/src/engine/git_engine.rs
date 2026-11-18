@@ -183,6 +183,15 @@ pub trait GitEngine: Send + Sync {
         Err(EngineError::Unsupported("branch_is_merged".into()))
     }
 
+    /// Merge base of two commitishes — the three-dot compare's `A...B`
+    /// anchor (`git merge-base a b`). `None` when the histories are
+    /// unrelated. Criss-cross merges can have several bases; git reports
+    /// all of them while the compare only needs one side to diff against,
+    /// so the first is returned.
+    fn merge_base(&self, _repo: &Repository, _a: &str, _b: &str) -> EngineResult<Option<String>> {
+        Err(EngineError::Unsupported("merge_base".into()))
+    }
+
     fn branch_delete(&self, _repo: &Repository, _name: &str, _force: bool) -> EngineResult<()> {
         Err(EngineError::Unsupported("branch_delete".into()))
     }

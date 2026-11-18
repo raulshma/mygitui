@@ -47,6 +47,7 @@ import {
   repoBundle,
   repoClean,
   repoDiff,
+  repoMergeBase,
   repoRefs,
   repoStatus,
   resetChannelFactory,
@@ -357,6 +358,31 @@ describe("ipc client command wrappers", () => {
       new: "worktree",
       query: { paths: ["src/a.ts"], ignore_whitespace: true },
     });
+  });
+
+  it("repoMergeBase sends both refs and returns null for unrelated histories", async () => {
+    // null = the backend's Ok(None) (git merge-base exit 1), not an error.
+    const { transport, calls } = mockTransport((call) =>
+      call.command === "repo_merge_base" && call.args.a === "main"
+        ? "bbbb2223334445566"
+        : null,
+    );
+    setTransport(transport);
+
+    expect(await repoMergeBase("repo-1", "main", "feature")).toBe(
+      "bbbb2223334445566",
+    );
+    expect(await repoMergeBase("repo-1", "orphan-a", "orphan-b")).toBeNull();
+    expect(calls).toEqual([
+      {
+        command: "repo_merge_base",
+        args: { repo_id: "repo-1", a: "main", b: "feature" },
+      },
+      {
+        command: "repo_merge_base",
+        args: { repo_id: "repo-1", a: "orphan-a", b: "orphan-b" },
+      },
+    ]);
   });
 });
 

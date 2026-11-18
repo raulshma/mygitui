@@ -1615,3 +1615,79 @@ fn merge_remote_tracking_branch_message() {
         Some("Merge remote-tracking branch 'origin/main'")
     );
 }
+
+// ---------------------------------------------------------------------------
+// merge_base (three-dot compare anchor, phase 5 item 50)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn merge_base_returns_the_divergence_point() {
+    let fx = init_fixture("merge-base");
+    let base = commit_file(&fx.repo, "base.txt", "b\n", "base");
+    ENGINE
+        .branch_create(&fx.repo, "feature", None, true, &mut |_| {})
+        .expect("branch feature");
+    let feature_tip = commit_file(&fx.repo, "feature.txt", "f\n", "feature adds");
+    ENGINE
+        .branch_switch(&fx.repo, "main", false, &mut |_| {})
+        .expect("switch back");
+    let main_tip = commit_file(&fx.repo, "main.txt", "m\n", "main adds");
+
+    // Both directions, by branch name or sha: the base is the point the
+    // histories diverged at.
+    assert_eq!(
+        ENGINE
+            .merge_base(&fx.repo, "main", "feature")
+            .expect("base"),
+        Some(base.clone())
+    );
+    assert_eq!(
+        ENGINE
+            .merge_base(&fx.repo, &feature_tip, "main")
+            .expect("base"),
+        Some(base.clone())
+    );
+    // A commit merges with any descendant at itself.
+    assert_eq!(
+        ENGINE.merge_base(&fx.repo, &base, "feature").expect("base"),
+        Some(base.clone())
+    );
+    let _ = main_tip;
+}
+
+#[test]
+fn merge_base_of_unrelated_histories_is_none() {
+    let fx = init_fixture("merge-base-orphan");
+    commit_file(&fx.repo, "main.txt", "m\n", "main root");
+
+    // An orphan root commit on its own ref (HEAD stays on main).
+    write_file(&fx.repo, "orphan.txt", "o\n");
+    let mut index = fx.repo.index().expect("index");
+    index
+        .add_all(["*"].iter(), IndexAddOption::DEFAULT, None)
+        .expect("add all");
+    index.write().expect("write index");
+    let tree_oid = index.write_tree().expect("tree");
+    let tree = fx.repo.find_tree(tree_oid).expect("tree");
+    let sig = fx.repo.signature().expect("signature");
+    fx.repo
+        .commit(
+            Some("refs/heads/orphan"),
+            &sig,
+            &sig,
+            "orphan root",
+            &tree,
+            &[],
+        )
+        .expect("orphan commit");
+
+    // No shared history: None, not an error.
+    assert_eq!(
+        ENGINE
+            .merge_base(&fx.repo, "main", "orphan")
+            .expect("no error"),
+        None
+    );
+    // An unresolvable side is an error, not None.
+    assert_invalid(ENGINE.merge_base(&fx.repo, "main", "nope").unwrap_err());
+}

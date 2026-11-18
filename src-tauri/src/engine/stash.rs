@@ -179,7 +179,9 @@ fn reset_stashed_paths(
                 .workdir()
                 .ok_or_else(|| EngineError::Invalid("bare repository has no workdir".into()))?
                 .join(&path);
-            std::fs::write(full, blob.content())?;
+            // checkout-style smudge (autocrlf/eol attributes) — see eol.rs
+            let content = super::eol::convert_to_workdir(repo, &path, blob.content());
+            std::fs::write(full, content)?;
         } else {
             repo.reset_default(None, [&path])?;
             let full = repo

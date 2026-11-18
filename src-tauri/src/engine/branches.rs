@@ -249,6 +249,26 @@ impl Libgit2Engine {
         }
     }
 
+    /// Merge base of two commitishes for the three-dot compare
+    /// (`A...B` diffs merge-base(A,B) → B). Unrelated histories have no
+    /// base: `Ok(None)`, not an error. `repo.merge_base` picks one base
+    /// when a criss-cross history has several — git's `merge-base --all`
+    /// would list them all, but the compare only anchors on one.
+    pub(crate) fn merge_base_impl(
+        &self,
+        repo: &Repository,
+        a: &str,
+        b: &str,
+    ) -> EngineResult<Option<String>> {
+        let left = resolve_commit(repo, a)?;
+        let right = resolve_commit(repo, b)?;
+        match repo.merge_base(left.id(), right.id()) {
+            Ok(base) => Ok(Some(base.to_string())),
+            Err(e) if e.code() == git2::ErrorCode::NotFound => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
     pub(crate) fn branch_delete_impl(
         &self,
         repo: &Repository,

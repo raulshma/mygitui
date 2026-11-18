@@ -177,8 +177,11 @@
   const compareImageLoader = $derived(
     compare
       ? createImageLoader(repoId, {
-          old: { commit: compare.base },
-          new: { commit: compare.target },
+          // CompareBar results carry their exact sides (three-dot bases and
+          // worktree/index/head targets are not plain commits); range
+          // compares fall back to the base→target commit sides.
+          old: compare.sides?.old ?? { commit: compare.base },
+          new: compare.sides?.new ?? { commit: compare.target },
         })
       : undefined,
   );

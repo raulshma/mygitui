@@ -329,6 +329,35 @@ pub async fn repo_diff_stream(
     Ok(())
 }
 
+/// Merge base of two commitishes — the three-dot compare's `A...B` anchor.
+/// `None` for unrelated histories (`git merge-base` exits 1 there) or a
+/// criss-cross criss: the first of several bases is reported (the compare
+/// only anchors one side; see `GitEngine::merge_base`).
+#[tauri::command(rename_all = "snake_case")]
+pub async fn repo_merge_base(
+    repo_id: RepoId,
+    a: String,
+    b: String,
+    state: State<'_, RepoManager>,
+) -> Result<Option<String>, String> {
+    let handle = get_handle(&state, &repo_id)?;
+    if let Some(remote) = handle.remote() {
+        return finish_op(enqueue_remote_read(
+            &handle,
+            remote,
+            "diff",
+            move |git, _ws| git.merge_base(&a, &b),
+        ))
+        .await;
+    }
+    let engine = handle.engine();
+    let repo = handle.repo()?;
+    finish_op(enqueue_read(&handle, &repo, "diff", move |_ctx, repo| {
+        engine.merge_base(repo, &a, &b)
+    }))
+    .await
+}
+
 /// Stream the commit log in [`LOG_PAGE_SIZE`] pages over `on_page`. Streams
 /// carry PER-CONSUMER slots: a new call for the same repo+kind+consumer
 /// replaces (cancels) only that consumer's previous stream, so concurrent

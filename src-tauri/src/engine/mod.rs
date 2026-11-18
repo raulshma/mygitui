@@ -1,5 +1,6 @@
 pub mod bisect;
 pub mod branches;
+pub mod eol;
 pub mod git_engine;
 pub mod in_progress;
 pub mod libgit2;
@@ -30,6 +31,8 @@ mod stash_tests;
 mod bisect_tests;
 #[cfg(test)]
 mod checkpoint_tests;
+#[cfg(test)]
+mod eol_tests;
 pub mod signing;
 pub mod stats;
 #[cfg(test)]

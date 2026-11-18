@@ -2014,6 +2014,10 @@ impl GitEngine for Libgit2Engine {
         self.branch_is_merged_impl(repo, name, into)
     }
 
+    fn merge_base(&self, repo: &Repository, a: &str, b: &str) -> EngineResult<Option<String>> {
+        self.merge_base_impl(repo, a, b)
+    }
+
     fn branch_delete(&self, repo: &Repository, name: &str, force: bool) -> EngineResult<()> {
         self.branch_delete_impl(repo, name, force)
     }

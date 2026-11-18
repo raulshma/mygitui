@@ -56,7 +56,7 @@
     stashPush,
     tagCreate,
   } from "$lib/ipc/client";
-  import type { BranchInfo, CommitInfo, FileDiff, MergeResult } from "$lib/ipc/types";
+  import type { BranchInfo, CommitInfo, DiffSide, FileDiff, MergeResult } from "$lib/ipc/types";
   import { closedDialog, openDialog, type DialogState } from "$lib/state/dialog";
   import { describeError } from "$lib/errors";
   import { isSignificant, onRepoChange } from "$lib/events/repoEvents";
@@ -1111,7 +1111,12 @@
 
   // -- commit detail: diff/describe/blame live in CommitDetail ------------------
 
-  function onCompare(files: FileDiff[], base: string, target: string): void {
+  function onCompare(
+    files: FileDiff[],
+    base: string,
+    target: string,
+    sides?: { old: DiffSide; new: DiffSide },
+  ): void {
     // Attach the multi-selection's commits (when the compare came from
     // selected rows) so the center detail can offer AI release notes.
     const selected = rangeCommits();
@@ -1119,10 +1124,10 @@
     if (sidebar) {
       // The workspace renders the result in the center editor; this panel
       // stays a pure list (no detail pane of its own).
-      onCompareResult?.({ files, base, target, commits });
+      onCompareResult?.({ files, base, target, commits, sides });
       return;
     }
-    compare = { files, base, target, commits };
+    compare = { files, base, target, commits, sides };
     detailOpen = true;
   }
 
@@ -1812,7 +1817,7 @@
   {/if}
 
   {#if showCompare}
-    <CompareBar {repoId} {onCompare} />
+    <CompareBar {repoId} {root} {onCompare} />
   {/if}
 
   <!-- 2. log: DOM rows (left) + GraphCanvas (right), scroll-synced.

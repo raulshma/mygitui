@@ -781,6 +781,21 @@ impl RemoteGitEngine {
         }
     }
 
+    /// Merge base of two commitishes (three-dot compare anchor). git exits
+    /// 1 with no output when the histories are unrelated — that is `None`,
+    /// not an error, matching the local engine.
+    pub fn merge_base(&self, a: &str, b: &str) -> Result<Option<String>, String> {
+        let out = self.git_raw(
+            &format!("merge-base {} {}", shell_quote(a), shell_quote(b)),
+            DEFAULT_EXEC_TIMEOUT,
+        )?;
+        match out.exit_code {
+            0 => Ok(Some(out.stdout_str().trim().to_string())),
+            1 => Ok(None),
+            _ => Err(format!("merge-base failed: {}", out.stderr_str().trim())),
+        }
+    }
+
     pub fn branch_delete(&self, name: &str, force: bool) -> Result<(), String> {
         // Same guard as the local engine (`engine/branches.rs`): git's own
         // refusal ("Cannot delete branch 'x' checked out at …") is a worktree

@@ -319,6 +319,14 @@ export function repoRefs(repoId: RepoId): Promise<[string, string][]> {
 }
 
 /**
+ * Merge base of two commitishes — the three-dot compare's `A...B` anchor.
+ * `null` when the histories are unrelated (git merge-base exits 1 there).
+ */
+export function repoMergeBase(repoId: RepoId, a: string, b: string): Promise<string | null> {
+  return call<string | null>("repo_merge_base", { repo_id: repoId, a, b });
+}
+
+/**
  * Line-by-line blame for one file (optionally starting at a commit).
  * `query` (ipc/gen/BlameQuery.ts) carries the extended blame options —
  * `oldest` bound, ignore-whitespace, first-parent, ignore-revs — plus its

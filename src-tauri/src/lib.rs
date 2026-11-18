@@ -184,6 +184,7 @@ pub fn run() {
             ipc_commands::repo_blame,
             ipc_commands::repo_diff,
             ipc_commands::repo_diff_stream,
+            ipc_commands::repo_merge_base,
             ipc_commands::repo_log_stream,
             ipc_commands::repo_file_history,
             ipc_commands::repo_clone,

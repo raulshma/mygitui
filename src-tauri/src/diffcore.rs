@@ -27,11 +27,20 @@
 //! Hunk `@@` headers are recomputed from the kept lines, and
 //! `\ No newline at end of file` markers are regenerated for whichever side's
 //! final kept line lacks a trailing newline. Binary files are rejected.
+//!
+//! eol: diff line content comes out of libgit2's odb-normalized diff (the
+//! workdir side runs through the TO_ODB filters, so an autocrlf=true repo
+//! diffs LF even when the workdir file is CRLF). Two writes therefore need
+//! explicit eol care: hunk staging of an untracked file reads RAW workdir
+//! bytes (normalize toward LF for the index, `git add` clean parity), and
+//! discard surgery writes recomputed workdir bytes (re-smudge restored lines
+//! to the file's CRLF checkout style when the repo converts).
 
 use std::collections::BTreeMap;
 
 use git2::{ApplyLocation, Diff, DiffOptions, Patch, Repository};
 
+use crate::engine::eol;
 use crate::engine::git_engine::{EngineError, EngineResult};
 use crate::engine::types::LineRange;
 
@@ -170,6 +179,9 @@ pub(crate) fn discard_selection(
         .ok_or_else(|| EngineError::Invalid("bare repository has no workdir".into()))?;
     let bytes = std::fs::read(workdir.join(path))?;
     let lines: Vec<&[u8]> = split_lines(&bytes);
+    // Restored/kept patch lines are odb-normalized (LF); re-smudge them when
+    // the workdir file lives in CRLF under a converting repo config.
+    let crlf = eol::restore_lines_as_crlf(repo, path, &bytes);
 
     let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
     let mut consumed: usize = 0; // workdir lines already emitted/skipped
@@ -188,13 +200,13 @@ pub(crate) fn discard_selection(
         for line in &hunk.lines {
             match (line.origin, line.kept) {
                 // Context: present in the workdir region; emit.
-                (' ', _) => out.extend_from_slice(&line.content),
+                (' ', _) => out.extend_from_slice(&eol::smudge_line(&line.content, crlf)),
                 // Selected addition: discard (drop the line).
                 ('+', true) => {}
                 // Unselected addition: keep.
-                ('+', false) => out.extend_from_slice(&line.content),
+                ('+', false) => out.extend_from_slice(&eol::smudge_line(&line.content, crlf)),
                 // Selected deletion: restore the line.
-                ('-', true) => out.extend_from_slice(&line.content),
+                ('-', true) => out.extend_from_slice(&eol::smudge_line(&line.content, crlf)),
                 // Unselected deletion: stays deleted.
                 ('-', false) => {}
                 _ => {}
@@ -435,12 +447,16 @@ fn raw_hunks(patch: &Patch<'_>) -> EngineResult<Vec<RawHunk>> {
 }
 
 /// Untracked files carry no libgit2 patch: synthesize a single all-added
-/// hunk from the workdir content.
+/// hunk from the workdir content. The bytes are normalized toward LF first
+/// (`git add` clean parity, phase 5 item 49): the raw workdir file is CRLF
+/// under autocrlf=true, while the staged blob must match what
+/// `index.add_path` (which runs the same filter) stores.
 fn untracked_hunks(repo: &Repository, path: &str) -> EngineResult<Vec<RawHunk>> {
     let workdir = repo
         .workdir()
         .ok_or_else(|| EngineError::Invalid("bare repository has no workdir".into()))?;
-    let bytes = std::fs::read(workdir.join(path))?;
+    let raw = std::fs::read(workdir.join(path))?;
+    let bytes = eol::convert_to_index(repo, path, &raw);
     if bytes.contains(&0) {
         return Err(EngineError::Invalid(format!(
             "binary hunk staging unsupported: {path}"
