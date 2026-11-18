@@ -389,7 +389,7 @@ describe("startKeybinds (window listener)", () => {
     const onAction = vi.fn();
     const stop = startKeybinds(onAction);
     try {
-      dispatchKeydown({ key: "z", ctrlKey: true });
+      dispatchKeydown({ key: "g", ctrlKey: true });
       expect(onAction).not.toHaveBeenCalled();
     } finally {
       stop();
@@ -413,6 +413,26 @@ describe("startKeybinds (window listener)", () => {
       // Ctrl/alt combos still fire from inputs.
       dispatchKeydown({ key: "p", ctrlKey: true, shiftKey: true }, input);
       expect(onAction).toHaveBeenCalledWith("app.palette");
+      input.remove();
+    } finally {
+      stop();
+    }
+  });
+
+  it("keeps ctrl+z text undo in editables (edit.undo exemption)", () => {
+    const onAction = vi.fn();
+    const stop = startKeybinds(onAction);
+    try {
+      const input = document.createElement("input");
+      document.body.append(input);
+      // edit.undo is bound to ctrl+z (DEFAULT_BINDINGS) but exempted from
+      // editable targets: typing keeps its native text undo.
+      const inInput = dispatchKeydown({ key: "z", ctrlKey: true }, input);
+      expect(onAction).not.toHaveBeenCalled();
+      expect(inInput).toBe(false); // the event was not swallowed
+      // Outside an editable target the command fires.
+      dispatchKeydown({ key: "z", ctrlKey: true });
+      expect(onAction).toHaveBeenCalledWith("edit.undo");
       input.remove();
     } finally {
       stop();

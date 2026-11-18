@@ -28,6 +28,8 @@ import { evictFileIndex } from "$lib/components/files/QuickOpen.svelte";
 import { conflictsStore } from "$lib/components/panels/conflictsStore.svelte";
 import { statsStore } from "$lib/stats/statsStore.svelte";
 import { projectsStore } from "$lib/stores/projects.svelte";
+import { favoriteRepos, FAVORITES_LAUNCH_CAP } from "$lib/stores/favoriteRepos.svelte";
+import { appSettings } from "$lib/state/appSettings.svelte";
 import { describeError } from "$lib/errors";
 
 /** One open repository tab. */
@@ -250,12 +252,17 @@ export class TabStore {
    * at their stored strip position, so resolve order never reshuffles the
    * strip. Tabs opened before this call (CLI arg / deep link) are kept and
    * deduped by root.
+   *
+   * With the "Open favorite repos on launch" setting on, up to five
+   * favorites not already open join the restored strip afterwards (best
+   * effort — vanished folders skip silently). Failures never throw.
    */
   async restoreSession(): Promise<void> {
     const session = parseStoredSession(
       this.#sessionStorage?.getItem(SESSION_STORAGE_KEY) ?? null,
     );
     if (session.roots.length === 0) {
+      await this.#openFavoritesOnLaunch();
       this.restoring = false;
       return;
     }
@@ -286,9 +293,30 @@ export class TabStore {
       if (this.active === null && this.tabs.length > 0) {
         this.activeId = this.tabs[0]!.id;
       }
+      await this.#openFavoritesOnLaunch();
       this.restoring = false;
       this.restoreRoot = null;
       this.#persistSession();
+    }
+  }
+
+  /**
+   * The favorites half of {@link restoreSession}: opens the first
+   * {@link FAVORITES_LAUNCH_CAP} favorite roots that have no tab yet
+   * (deduped against the just-restored session, path-normalized), never
+   * changing focus. No-op unless the setting is on; open failures (folder
+   * vanished) are swallowed like session roots are.
+   */
+  async #openFavoritesOnLaunch(): Promise<void> {
+    if (!appSettings.openFavoritesOnLaunch) return;
+    const openRoots = new Set(this.tabs.map((tab) => tab.root.toLowerCase()));
+    const pending = favoriteRepos
+      .launchList(FAVORITES_LAUNCH_CAP)
+      .filter((root) => !openRoots.has(root.toLowerCase()));
+    for (const root of pending) {
+      await this.openTab(root, { activate: false }).catch(() => {
+        // Folder deleted/moved — skip silently, like session roots.
+      });
     }
   }
 
@@ -516,6 +544,7 @@ export class TabStore {
     projectsStore.clear(id);
     opStore.clearLogs(id);
     opStore.clearHistory(id);
+    opStore.clearUndo(id);
     evictFileIndex(id);
     workspaceSession.forget(closing.root);
     agentSession.forget(closing.root);

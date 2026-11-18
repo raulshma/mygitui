@@ -46,8 +46,10 @@
   import {
     appSettings,
     APP_SETTINGS_DEFAULTS,
+    APP_SETTINGS_KEY,
     AppSettingsStore,
     AUTOFETCH_MINUTES_MAX,
+    parseAppSettings,
     TERMINAL_FONT_MAX,
     TERMINAL_FONT_MIN,
   } from "$lib/state/appSettings.svelte";
@@ -92,6 +94,25 @@
   import { openAboutDialog } from "$lib/components/aboutDialog";
   import { ai } from "$lib/ai/ai.svelte";
   import { formatDateTime } from "$lib/git/format";
+  import { tabStore } from "$lib/stores/tabs.svelte";
+  import {
+    applySettingsImport,
+    collectSettingsExport,
+    parseSettingsImport,
+    validateSettingsImport,
+  } from "./settingsTransfer";
+  import {
+    emptyPrefs,
+    loadHistoryPrefs,
+    saveHistoryPrefs,
+  } from "$lib/stores/historyPrefs";
+  import { branchColorStore, type BranchColorRule } from "$lib/stats/branchColors.svelte";
+  import {
+    commitExtras,
+    COMMIT_WIDTH_MAX,
+    COMMIT_WIDTH_MIN,
+  } from "$lib/commit/commitExtras.svelte";
+  import { UI_SCALE_MAX, UI_SCALE_MIN, UI_SCALE_STEP } from "$lib/state/appSettings.svelte";
   import iconChevronDown from "@ktibow/iconset-material-symbols/expand-more";
 
   /** Fallback when no Tauri runtime answers (browser/e2e); = package.json. */
@@ -176,7 +197,7 @@
   /** Hand-drawn block (override list, custom apps, storage inspector). */
   interface CustomRowDef extends BaseRowDef {
     kind: "custom";
-    render: "overrides" | "apps" | "inspector" | "keybinds";
+    render: "overrides" | "apps" | "inspector" | "keybinds" | "repo-history" | "repo-colors";
   }
 
   type SettingRowDef =
@@ -201,6 +222,7 @@
   type SectionId =
     | "general"
     | "appearance"
+    | "repo"
     | "git"
     | "editor"
     | "terminal"
@@ -272,6 +294,175 @@
   const autofetchOverrides = $derived(
     Object.entries(autofetch.config).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)),
   );
+
+  // --- This repository (per-repo overrides, active-tab scoped) ----------------
+  //
+  // The section consolidates the per-repo overrides that already exist —
+  // auto-fetch cadence, saved history filters, branch-color rules, the
+  // commit wrap-ruler width — reading and writing the SAME stores the
+  // panels use. No new persistence schema; the section itself only appears
+  // while a repository tab is active (the workspace session, which has no
+  // form fields here, is honestly omitted).
+
+  /** Active tab's repo root, or `null` on the home view (hides the section). */
+  const activeRoot = $derived(tabStore.active?.root ?? null);
+  const activeRepoName = $derived(tabStore.active?.name ?? "");
+
+  // Saved history-filter mirrors (localStorage prefs, not reactive stores —
+  // re-read when the dialog opens or the repo changes, like diffMode).
+  let historyText = $state("");
+  let historyAuthor = $state("");
+  let historyPath = $state("");
+
+  $effect(() => {
+    const root = activeRoot;
+    if (!open || root === null) return;
+    untrack(() => {
+      const prefs = loadHistoryPrefs(root) ?? emptyPrefs();
+      historyText = prefs.filter.text;
+      historyAuthor = prefs.filter.author;
+      historyPath = prefs.filter.path;
+    });
+  });
+
+  /** Persists one history-filter field through the prefs module. */
+  function setHistoryField(field: "text" | "author" | "path", value: string): void {
+    const root = activeRoot;
+    if (root === null) return;
+    if (field === "text") historyText = value;
+    else if (field === "author") historyAuthor = value;
+    else historyPath = value;
+    const prefs = loadHistoryPrefs(root) ?? emptyPrefs();
+    saveHistoryPrefs(root, {
+      ...prefs,
+      filter: { ...prefs.filter, [field]: value },
+    });
+  }
+
+  /** Clears the repo's saved history state (filters + selection + pane). */
+  function resetHistoryPrefs(): void {
+    const root = activeRoot;
+    if (root === null) return;
+    saveHistoryPrefs(root, emptyPrefs());
+    historyText = "";
+    historyAuthor = "";
+    historyPath = "";
+    toast(`Cleared saved history state for ${activeRepoName || root}`, { kind: "info" });
+  }
+
+  // Branch-color rules (the StatsPanel's editor data, consolidated here).
+  $effect(() => {
+    const root = activeRoot;
+    if (!open || root === null) return;
+    branchColorStore.ensure(root);
+  });
+
+  const branchRules = $derived(activeRoot === null ? [] : branchColorStore.rules(activeRoot));
+
+  /** Add-rule form mirrors. */
+  let rulePattern = $state("");
+  let ruleColor = $state("");
+
+  function addBranchRule(): void {
+    const root = activeRoot;
+    if (root === null) return;
+    const rule = branchColorStore.addRule(root, rulePattern, ruleColor);
+    if (rule === null) {
+      toast("A rule needs a pattern and a color (duplicate patterns are rejected)", {
+        kind: "error",
+      });
+      return;
+    }
+    rulePattern = "";
+    ruleColor = "";
+  }
+
+  function removeBranchRule(index: number): void {
+    const root = activeRoot;
+    if (root === null) return;
+    branchColorStore.removeRule(root, index);
+  }
+
+  // --- Settings export / import ------------------------------------------------
+
+  /** Hidden file input backing the Import button. */
+  let importEl = $state<HTMLInputElement | null>(null);
+
+  /**
+   * Downloads the settings bundle as JSON via a Blob + object-URL anchor
+   * (the workspace file-save flow writes through the backend's workdir
+   * commands, which cannot reach an arbitrary save path).
+   */
+  function exportSettings(): void {
+    try {
+      const file = collectSettingsExport(globalThis.localStorage ?? null);
+      const blob = new Blob([JSON.stringify(file, null, 2)], {
+        type: "application/json",
+      });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = `mygitui-settings-${file.exportedAt.slice(0, 10)}.json`;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      // Revoke on a delay so the download has started before the URL dies.
+      setTimeout(() => URL.revokeObjectURL(url), 5_000);
+      toast(`Exported ${Object.keys(file.data).length} setting groups`, {
+        kind: "success",
+      });
+    } catch {
+      toast("Settings export failed", { kind: "error" });
+    }
+  }
+
+  function importSettings(): void {
+    importEl?.click();
+  }
+
+  /** Confirm gate for the post-import reload (most stores read at launch). */
+  let reloadOpen = $state(false);
+
+  /** The reload the import flow offers: everything re-reads at launch. */
+  function reloadNow(): void {
+    reloadOpen = false;
+    location.reload();
+  }
+
+  async function onImportFile(event: Event): Promise<void> {
+    const input = event.currentTarget as HTMLInputElement;
+    const file = input.files?.[0] ?? null;
+    input.value = ""; // allow re-picking the same file later
+    if (file === null) return;
+    let text = "";
+    try {
+      text = await file.text();
+    } catch {
+      toast("Could not read the selected file", { kind: "error" });
+      return;
+    }
+    const parsed = parseSettingsImport(text);
+    if (!parsed.ok) {
+      toast(`Import failed: ${parsed.error}`, { kind: "error" });
+      return;
+    }
+    const checked = validateSettingsImport(parsed.file);
+    if (!checked.ok) {
+      toast(`Import failed: ${checked.error} — nothing was applied`, {
+        kind: "error",
+      });
+      return;
+    }
+    const applied = applySettingsImport(globalThis.localStorage ?? null, parsed.file);
+    // Live-refresh the one store with a write path (the rest read at launch,
+    // hence the reload offer below).
+    const settingsData = parsed.file.data[APP_SETTINGS_KEY];
+    if (settingsData !== undefined) settings.update(parseAppSettings(settingsData));
+    toast(`Imported ${applied.length} setting ${applied.length === 1 ? "group" : "groups"}`, {
+      kind: "success",
+    });
+    if (applied.some((key) => key !== APP_SETTINGS_KEY)) reloadOpen = true;
+  }
 
   // --- AI ---------------------------------------------------------------------
 
@@ -616,8 +807,8 @@
       return;
     }
     event.preventDefault();
-    const index = SECTIONS.findIndex((section) => section.id === active);
-    const last = SECTIONS.length - 1;
+    const index = sections.findIndex((section) => section.id === active);
+    const last = sections.length - 1;
     const next =
       event.key === "ArrowDown"
         ? Math.min(index + 1, last)
@@ -626,7 +817,7 @@
           : event.key === "Home"
             ? 0
             : last;
-    const target = SECTIONS[next];
+    const target = sections[next];
     if (!target || target.id === active) return;
     selectSection(target.id);
     document.getElementById(`settings-nav-${target.id}`)?.focus();
@@ -683,7 +874,7 @@
    * The dialog's entire content. Getters read reactive stores during render,
    * so every row tracks its store; setters write straight through.
    */
-  const SECTIONS: readonly SectionDef[] = [
+  const BASE_SECTIONS: readonly SectionDef[] = [
     {
       id: "general",
       label: "General",
@@ -704,6 +895,16 @@
           ],
           get: () => themeChoice,
           set: setTheme,
+        },
+        {
+          kind: "toggle",
+          id: "open-favorites-on-launch",
+          title: "Open favorite repos on launch",
+          description:
+            "Restores up to five favorited repositories next to the last session's tabs (star repos from the quick switcher or the tab-strip menu).",
+          keywords: "favorites star launch restore startup quick switcher",
+          get: () => settings.openFavoritesOnLaunch,
+          set: (value) => settings.update({ openFavoritesOnLaunch: value }),
         },
         {
           kind: "action",
@@ -750,6 +951,66 @@
       ],
     },
     {
+      id: "repo",
+      label: "This repository",
+      icon: "folder-code",
+      blurb: "Per-repo overrides for the repository in the active tab.",
+      rows: [
+        {
+          kind: "number",
+          id: "repo-autofetch",
+          title: "Auto-fetch every",
+          description:
+            "This repo's fetch cadence override; 0 clears it so the default cadence applies. Set from here or the Branches panel.",
+          keywords: "override fetch interval per repo minutes cadence",
+          ariaLabel: "Auto-fetch override for this repository, in minutes",
+          min: 0,
+          max: AUTOFETCH_MINUTES_MAX,
+          unit: "min",
+          get: () => (activeRoot !== null ? (autofetch.config[activeRoot] ?? 0) : 0),
+          set: (value) => {
+            if (activeRoot !== null) {
+              autofetch.setInterval(activeRoot, Number.isFinite(value) ? value : 0);
+            }
+          },
+        },
+        {
+          kind: "number",
+          id: "repo-commit-width",
+          title: "Commit message wrap ruler",
+          description:
+            "Vertical guide column in the commit message box (git convention: 72). Per repository.",
+          keywords: "commit width ruler wrap columns message guide",
+          ariaLabel: "Commit message wrap-ruler column for this repository",
+          min: COMMIT_WIDTH_MIN,
+          max: COMMIT_WIDTH_MAX,
+          unit: "col",
+          get: () => (activeRoot !== null ? commitExtras.widthFor(activeRoot) : 72),
+          set: (value) => {
+            if (activeRoot !== null && Number.isFinite(value)) {
+              commitExtras.setWidth(activeRoot, value);
+            }
+          },
+        },
+        {
+          kind: "custom",
+          id: "repo-history",
+          title: "Saved history filters",
+          keywords: "history filter saved state per repo reset",
+          render: "repo-history",
+        },
+        {
+          kind: "custom",
+          id: "repo-colors",
+          title: "Branch color rules",
+          keywords: "branch colors graph rules per repo patterns",
+          render: "repo-colors",
+        },
+      ],
+      outro:
+        "These fields edit the same stores the panels use. The workspace session (open files and diffs) is managed from the workspace itself and has no form here.",
+    },
+    {
       id: "git",
       label: "Git",
       icon: "account-tree",
@@ -774,6 +1035,16 @@
           keywords: "confirm discard prompt destructive clean",
           get: () => settings.confirmDiscard,
           set: (value) => settings.update({ confirmDiscard: value }),
+        },
+        {
+          kind: "toggle",
+          id: "use-commit-template",
+          title: "Use commit template",
+          description:
+            "Prefill the commit message box from the repository's `.gitmessage` file (its root), once per repo, only when the box is empty.",
+          keywords: "commit template gitmessage prefill message",
+          get: () => settings.useCommitTemplate,
+          set: (value) => settings.update({ useCommitTemplate: value }),
         },
         {
           kind: "number",
@@ -1057,6 +1328,18 @@
         },
         {
           kind: "action",
+          id: "export-import",
+          title: "Export / import settings",
+          description:
+            "Download every known app setting (appearance, keybinds, pins, auto-fetch cadences, favorites, recents, workspace sessions) as one JSON file, or apply such a file back. Import validates every group before anything applies, then offers a reload so every store picks it up.",
+          keywords: "export import backup restore transfer json migrate settings",
+          buttons: [
+            { label: "Export settings", onclick: exportSettings },
+            { label: "Import settings…", onclick: importSettings },
+          ],
+        },
+        {
+          kind: "action",
           id: "reset-all",
           title: "Reset all app settings",
           danger: true,
@@ -1087,9 +1370,29 @@
   const ROW_TITLE = "text-sm font-medium text-foreground";
   const ROW_DESC = "text-ui-meta text-muted-foreground";
 
-  const activeSection = $derived(
-    SECTIONS.find((section) => section.id === active) ?? SECTIONS[0],
+  /**
+   * Visible sections: the per-repo "This repository" section exists only
+   * while a repository tab is active (its rows read the active tab's root).
+   */
+  const sections = $derived(
+    activeRoot === null
+      ? BASE_SECTIONS.filter((section) => section.id !== "repo")
+      : BASE_SECTIONS,
   );
+
+  /** Falls back to the first visible section when the active one hides. */
+  const activeSection = $derived.by<SectionDef>(() => {
+    const found = sections.find((section) => section.id === active);
+    return found ?? sections[0]!;
+  });
+
+  // A section that vanished (its repo tab closed) must not stay selected.
+  $effect(() => {
+    if (!open) return;
+    if (!sections.some((section) => section.id === active)) {
+      active = sections[0]!.id;
+    }
+  });
 
   /** Section-header glyph (mirrors {@link searchIcon}: same reason). */
   const activeSectionIcon = $derived(appIcon(activeSection.icon));
@@ -1097,7 +1400,7 @@
   /** Sections with ≥1 matching row, in nav order. */
   const searchResults = $derived.by(() => {
     if (!searching) return [];
-    return SECTIONS.map((section) => ({
+    return sections.map((section) => ({
       section,
       rows: section.rows.filter((row) => rowHaystack(row).includes(normalizedQuery)),
     })).filter((group) => group.rows.length > 0);
@@ -1262,6 +1565,126 @@
       </div>
     {:else if row.render === "apps"}
       <CustomAppsSection store={apps} />
+    {:else if row.render === "repo-history"}
+      <div class="flex flex-col gap-2">
+        <span class="flex min-w-0 flex-col gap-0.5">
+          <span id={`settings-${row.id}-label`} class={ROW_TITLE}>{row.title}</span>
+          <span class={ROW_DESC}>
+            The History panel restores these filter fields for {activeRepoName || "this repository"}.
+          </span>
+        </span>
+        <div class="grid gap-2 sm:grid-cols-3">
+          <label class="flex min-w-0 flex-col gap-1">
+            <span class="text-ui-meta text-muted-foreground">Search text</span>
+            <input
+              class="h-7 w-full rounded-lg border border-border bg-black/5 px-2 text-ui-base text-foreground focus-visible:-outline-offset-1 focus-visible:outline-2 focus-visible:outline-primary dark:bg-black/20"
+              type="text"
+              aria-label="Saved history search text"
+              bind:value={historyText}
+              onchange={() => setHistoryField("text", historyText)}
+            />
+          </label>
+          <label class="flex min-w-0 flex-col gap-1">
+            <span class="text-ui-meta text-muted-foreground">Author</span>
+            <input
+              class="h-7 w-full rounded-lg border border-border bg-black/5 px-2 text-ui-base text-foreground focus-visible:-outline-offset-1 focus-visible:outline-2 focus-visible:outline-primary dark:bg-black/20"
+              type="text"
+              aria-label="Saved history author filter"
+              bind:value={historyAuthor}
+              onchange={() => setHistoryField("author", historyAuthor)}
+            />
+          </label>
+          <label class="flex min-w-0 flex-col gap-1">
+            <span class="text-ui-meta text-muted-foreground">Path</span>
+            <input
+              class="h-7 w-full rounded-lg border border-border bg-black/5 px-2 font-mono text-ui-meta text-foreground focus-visible:-outline-offset-1 focus-visible:outline-2 focus-visible:outline-primary dark:bg-black/20"
+              type="text"
+              aria-label="Saved history path filter"
+              bind:value={historyPath}
+              onchange={() => setHistoryField("path", historyPath)}
+            />
+          </label>
+        </div>
+        <div class="flex items-center gap-2">
+          <Button variant="outline" class="h-7 rounded-full px-3 text-ui-meta" type="button" onclick={resetHistoryPrefs}>
+            Clear saved state
+          </Button>
+          <span class="{ROW_DESC}">Also clears the repo's saved selection and detail pane.</span>
+        </div>
+      </div>
+    {:else if row.render === "repo-colors"}
+      <div class="flex flex-col gap-2">
+        <span class="flex min-w-0 flex-col gap-0.5">
+          <span id={`settings-${row.id}-label`} class={ROW_TITLE}>{row.title}</span>
+          <span class={ROW_DESC}>
+            Pattern → color rules for the commit graph (first match wins; the Stats panel edits the same list).
+          </span>
+        </span>
+        {#if branchRules.length === 0}
+          <p class="m-0 {ROW_DESC}">No color rules for this repository yet.</p>
+        {:else}
+          <ul class="m-0 flex list-none flex-col gap-1 p-0" role="list" aria-label="Branch color rules">
+            {#each branchRules as rule, i (rule.pattern)}
+              <li class="flex min-w-0 items-center justify-between gap-3 rounded-md border border-border px-2.5 py-1.5">
+                <span class="flex min-w-0 items-center gap-2">
+                  <span
+                    class="size-3.5 shrink-0 rounded-full border border-border"
+                    style="background: {rule.color}"
+                    aria-hidden="true"
+                  ></span>
+                  <span class="min-w-0 truncate font-mono text-ui-meta text-foreground" title={rule.pattern}>{rule.pattern}</span>
+                </span>
+                <span class="flex flex-none items-center gap-2">
+                  <span class="{ROW_DESC} font-mono" title={rule.color}>{rule.color}</span>
+                  <Hint label={`Remove the ${rule.pattern} rule`}>
+                    {#snippet child({ props })}
+                      <Button
+                        {...props}
+                        variant="ghost"
+                        size="icon-xs"
+                        type="button"
+                        aria-label={`Remove branch color rule ${rule.pattern}`}
+                        onclick={() => removeBranchRule(i)}
+                      >
+                        {#if closeIcon}
+                          <Icon icon={closeIcon} size={12} />
+                        {:else}
+                          ×
+                        {/if}
+                      </Button>
+                    {/snippet}
+                  </Hint>
+                </span>
+              </li>
+            {/each}
+          </ul>
+        {/if}
+        <div class="flex flex-wrap items-center gap-2">
+          <input
+            class="h-7 w-40 rounded-lg border border-border bg-black/5 px-2 font-mono text-ui-meta text-foreground focus-visible:-outline-offset-1 focus-visible:outline-2 focus-visible:outline-primary dark:bg-black/20"
+            type="text"
+            placeholder="pattern (e.g. feature/*)"
+            aria-label="New branch color rule pattern"
+            bind:value={rulePattern}
+          />
+          <input
+            class="h-7 w-28 rounded-lg border border-border bg-black/5 px-2 font-mono text-ui-meta text-foreground focus-visible:-outline-offset-1 focus-visible:outline-2 focus-visible:outline-primary dark:bg-black/20"
+            type="text"
+            placeholder="color"
+            aria-label="New branch color rule color"
+            bind:value={ruleColor}
+          />
+          <Button
+            variant="outline"
+            class="h-7 rounded-full px-3 text-ui-meta"
+            type="button"
+            disabled={rulePattern.trim() === "" || ruleColor.trim() === ""}
+            onclick={addBranchRule}
+          >
+            Add rule
+          </Button>
+        </div>
+      </div>
     {:else if row.render === "keybinds"}
       <div class="flex flex-col gap-2">
         <div class="flex flex-wrap items-center justify-between gap-2">
@@ -1498,7 +1921,7 @@
           class="flex w-44 flex-none flex-col gap-0.5 overflow-y-auto border-r border-border bg-muted/30 px-2 py-3"
           aria-label="Settings sections"
         >
-          {#each SECTIONS as section (section.id)}
+          {#each sections as section (section.id)}
             {@const sectionIcon = appIcon(section.icon)}
             {@const isActive = active === section.id && !searching}
             <button
@@ -1611,4 +2034,22 @@
   confirmLabel="Reset settings"
   danger
   onConfirm={resetAllSettings}
+/>
+
+<ConfirmDialog
+  bind:open={reloadOpen}
+  title="Reload to finish the import?"
+  message="The imported settings are stored, but most panels read their settings once at launch. Reload now to apply everything (open editors with unsaved changes keep their files on disk; only unsaved buffer edits are lost). You can also reload later — restarting the app applies the same settings."
+  confirmLabel="Reload now"
+  onConfirm={reloadNow}
+/>
+
+<!-- Import file picker (hidden; the Advanced row's button opens it). -->
+<input
+  bind:this={importEl}
+  type="file"
+  accept="application/json,.json"
+  class="hidden"
+  aria-label="Import settings file"
+  onchange={(event) => void onImportFile(event)}
 />

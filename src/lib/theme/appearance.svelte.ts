@@ -29,6 +29,7 @@ import {
 } from "./preset/codec.js";
 import { buildFontVars, buildThemeVars } from "./preset/composer.js";
 import { getFont, type FontHeadingName } from "./preset/values.js";
+import { appSettings } from "$lib/state/appSettings.svelte";
 
 /** localStorage key holding the serialized {@link AppearanceConfig}. */
 export const APPEARANCE_STORAGE_KEY = "mygitui.appearance";
@@ -182,6 +183,17 @@ class AppearanceStore {
 		this.#persistAndApply();
 	}
 
+	/**
+	 * Re-applies the current state to the document without a config change.
+	 * The root font-size multiplier lives in appSettings (a settings-dialog
+	 * field), not the preset codec (whose codes round-trip with
+	 * shadcn-svelte.com/create) — after the slider moves, this re-renders
+	 * the managed style element with the new `html` font-size rule.
+	 */
+	refresh(): void {
+		this.#applyToDocument();
+	}
+
 	#persistAndApply(): void {
 		if (this.#initialized) {
 			saveConfig(this.#config);
@@ -272,16 +284,26 @@ class AppearanceStore {
 
 			// Token overrides — one style element, rebuilt per change. The
 			// exact default needs no element: app.css already ships those
-			// tokens, and injecting them again only adds matching work.
+			// tokens, and injecting them again only adds matching work. The
+			// root font-size multiplier (item 42) rides the same element —
+			// for the default config it is the ONLY rule injected (the
+			// default tokens must not be duplicated), and it keeps the
+			// element alive whenever it differs from 100%.
 			const element = document.getElementById(STYLE_ELEMENT_ID) as HTMLStyleElement | null;
-			if (encodeAppearance(config) === DEFAULT_CODE) {
+			const scaleCss = buildScaleCss(appSettings.uiScalePercent);
+			const isDefaultTokens = encodeAppearance(config) === DEFAULT_CODE;
+			const css =
+				isDefaultTokens
+					? scaleCss
+					: [buildCss(config), scaleCss].filter((block) => block !== "").join("\n");
+			if (isDefaultTokens && scaleCss === "") {
 				element?.remove();
 			} else if (element) {
-				element.textContent = buildCss(config);
+				element.textContent = css;
 			} else {
 				const created = document.createElement("style");
 				created.id = STYLE_ELEMENT_ID;
-				created.textContent = buildCss(config);
+				created.textContent = css;
 				document.head.appendChild(created);
 			}
 
@@ -378,6 +400,19 @@ function fontNames(config: AppearanceConfig): string[] {
 export function buildCss(config: AppearanceConfig): string {
 	const { light, dark } = buildThemeVars(config);
 	return `${schemeBlock(":root", light)}\n${schemeBlock(".dark", dark)}`;
+}
+
+/**
+ * The root font-size multiplier rule (batch B item 42): `html { font-size:
+ * calc(100% * m/100) }` scales every rem-based size (the whole Tailwind
+ * spacing/typography scale) without touching app.css, which sets no html
+ * font-size of its own. Empty string at 100% — the default injects no CSS.
+ * The xterm font size is independent (its own px setting) and unaffected.
+ */
+export function buildScaleCss(percent: number): string {
+	if (!Number.isFinite(percent) || percent === 100) return "";
+	const safe = Math.round(percent) / 100;
+	return `html {\n\tfont-size: calc(100% * ${safe});\n}`;
 }
 
 /**

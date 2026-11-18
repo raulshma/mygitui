@@ -8,10 +8,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   authRespond,
+  checkpointRestore,
+  checkpoints,
   onAuthRequest,
   onOpLog,
   onOpProgress,
   opCancel,
+  stage,
 } from "$lib/ipc/client";
 import type { AuthRequest, OpLog, OpProgress } from "$lib/ipc/types";
 import { resetRepoEvents } from "$lib/events/repoEvents";
@@ -20,14 +23,20 @@ import {
   AUTH_PROMPT_TIMEOUT_MS,
   authStore,
   AuthStore,
+  invertStageEntry,
+  MAX_UNDO_PER_REPO,
   opStore,
   OpStore,
   type AuthAnswerPayload,
+  type UiUndoEntry,
 } from "$lib/stores/ops.svelte";
 
 vi.mock("$lib/ipc/client", () => ({
   authRespond: vi.fn(),
   opCancel: vi.fn(),
+  checkpointRestore: vi.fn(),
+  checkpoints: vi.fn(),
+  stage: vi.fn(),
   onAuthRequest: vi.fn(),
   onOpProgress: vi.fn(),
   onOpLog: vi.fn(),
@@ -45,6 +54,9 @@ const mockOnAuthRequest = vi.mocked(onAuthRequest);
 const mockOnOpProgress = vi.mocked(onOpProgress);
 const mockOnOpLog = vi.mocked(onOpLog);
 const mockOpCancel = vi.mocked(opCancel);
+const mockStage = vi.mocked(stage);
+const mockCheckpoints = vi.mocked(checkpoints);
+const mockCheckpointRestore = vi.mocked(checkpointRestore);
 
 // ---------------------------------------------------------------------------
 // Fixtures + subscription harness
@@ -478,6 +490,124 @@ describe("OpStore", () => {
 
     store.stop();
     expect(store.historyFor("repo-2")).toEqual([]);
+  });
+});
+
+describe("UI undo stack (batch B item 41)", () => {
+  const stageEntry = (label = "stage 1 file"): UiUndoEntry => ({
+    kind: "stage",
+    staged: ["a.txt"],
+    unstaged: [],
+    label,
+  });
+  const checkpointEntry = (id = "cp-1"): UiUndoEntry => ({
+    kind: "checkpoint",
+    checkpointId: id,
+    label: `discard — restore checkpoint ${id}`,
+  });
+
+  beforeEach(() => {
+    mockStage.mockReset();
+    mockCheckpoints.mockReset();
+    mockCheckpointRestore.mockReset();
+    mockStage.mockResolvedValue(undefined);
+    mockCheckpointRestore.mockResolvedValue(undefined);
+  });
+
+  it("pushes up to MAX_UNDO_PER_REPO entries, dropping the oldest", () => {
+    const store = new OpStore();
+    for (let i = 0; i < MAX_UNDO_PER_REPO + 2; i++) {
+      store.pushUndo("repo-1", stageEntry(`e${i}`));
+    }
+    expect(store.undoCount("repo-1")).toBe(MAX_UNDO_PER_REPO);
+    // Newest kept; the two oldest dropped.
+    const stack = store.undoStacks["repo-1"]!;
+    expect(stack.at(-1)?.kind === "stage" && stack.at(-1)!.label === `e${MAX_UNDO_PER_REPO + 1}`).toBe(
+      true,
+    );
+    expect(stack[0]?.kind === "stage" && stack[0]!.label === "e2").toBe(true);
+    // Stacks are per repo.
+    expect(store.undoCount("repo-2")).toBe(0);
+  });
+
+  it("inverts stage entries: undo stages what was unstaged and vice versa", () => {
+    expect(
+      invertStageEntry({ kind: "stage", staged: ["a", "b"], unstaged: ["c"], label: "x" }),
+    ).toEqual({ restage: ["c"], unstage: ["a", "b"] });
+  });
+
+  it("runUndo pops the newest stage entry and re-runs the inverted stage", async () => {
+    const store = new OpStore();
+    store.pushUndo("repo-1", {
+      kind: "stage",
+      staged: ["a.txt"],
+      unstaged: ["b.txt"],
+      label: "stage/unstage of 2 files",
+    });
+    mockStage.mockResolvedValue(undefined);
+
+    const entry = await store.runUndo("repo-1");
+
+    expect(entry).not.toBeNull();
+    expect(store.undoCount("repo-1")).toBe(0);
+    // unstage first (invert of "staged"), then restage.
+    expect(mockStage).toHaveBeenNthCalledWith(1, "repo-1", {
+      targets: [{ file: "a.txt" }],
+      unstage: true,
+    });
+    expect(mockStage).toHaveBeenNthCalledWith(2, "repo-1", {
+      targets: [{ file: "b.txt" }],
+      unstage: false,
+    });
+    // Success toast announces what was undone.
+    expect(getToasts().some((t) => t.message.startsWith("Undone:"))).toBe(true);
+  });
+
+  it("runUndo restores a discard's checkpoint via checkpoint_restore", async () => {
+    const store = new OpStore();
+    store.pushUndo("repo-1", checkpointEntry("cp-9"));
+
+    const entry = await store.runUndo("repo-1");
+
+    expect(entry).toEqual({ kind: "checkpoint", checkpointId: "cp-9", label: "discard — restore checkpoint cp-9" });
+    expect(mockCheckpointRestore).toHaveBeenCalledWith("repo-1", "cp-9");
+    expect(mockStage).not.toHaveBeenCalled();
+  });
+
+  it("refuses to undo while an op is in flight (stack untouched)", async () => {
+    const store = new OpStore();
+    store.applyProgress(progress({ op_id: "a", repo_id: "repo-1" })); // in-flight op
+    store.pushUndo("repo-1", stageEntry());
+
+    const entry = await store.runUndo("repo-1");
+
+    expect(entry).toBeNull();
+    expect(store.undoCount("repo-1")).toBe(1);
+    expect(mockStage).not.toHaveBeenCalled();
+    expect(getToasts().some((t) => t.message.includes("Wait for the running op"))).toBe(true);
+  });
+
+  it("consumes the entry and toasts on an undo failure", async () => {
+    const store = new OpStore();
+    store.pushUndo("repo-1", checkpointEntry("cp-gone"));
+    mockCheckpointRestore.mockRejectedValue(new Error("checkpoint vanished"));
+
+    const entry = await store.runUndo("repo-1");
+
+    expect(entry).not.toBeNull(); // consumed even though it failed
+    expect(store.undoCount("repo-1")).toBe(0);
+    expect(getToasts().some((t) => t.message.startsWith("Undo failed:"))).toBe(true);
+  });
+
+  it("clearUndo drops the repo's stack without touching others", () => {
+    const store = new OpStore();
+    store.pushUndo("repo-1", stageEntry());
+    store.pushUndo("repo-2", stageEntry());
+
+    store.clearUndo("repo-1");
+
+    expect(store.undoCount("repo-1")).toBe(0);
+    expect(store.undoCount("repo-2")).toBe(1);
   });
 });
 

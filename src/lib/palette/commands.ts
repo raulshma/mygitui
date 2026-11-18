@@ -59,8 +59,9 @@ import {
   refreshStatus,
   tabStore,
 } from "$lib/stores/tabs.svelte";
-import { busy as opBusy, kindLabel } from "$lib/stores/ops.svelte";
+import { busy as opBusy, kindLabel, runUndoFor, undoCountFor } from "$lib/stores/ops.svelte";
 import { openSwitcher } from "$lib/stores/switcher.svelte";
+import { favoriteRepos } from "$lib/stores/favoriteRepos.svelte";
 import { guardNow, loadUndo } from "$lib/stores/safety.svelte";
 import { resetBindings } from "$lib/palette/keybinds";
 import { openShortcuts } from "$lib/components/help/shortcuts.svelte";
@@ -357,6 +358,51 @@ export const COMMANDS: Command[] = [
     keywords: ["close every repo"],
     run: () => {
       for (const tab of [...tabStore.tabs]) void closeTab(tab.id);
+    },
+  },
+  {
+    // Minimal UI undo (batch B item 41): pops the per-repo reversible-action
+    // stack (stage/unstage selections invert; a discard restores the
+    // discard's checkpoint). ctrl+z is exempted from editable targets in the
+    // keybind engine, so typing text keeps its native undo.
+    id: "edit.undo",
+    get title() {
+      const repoId = tabStore.activeId;
+      const count = repoId !== null ? undoCountFor(repoId) : 0;
+      return count > 0 ? `Undo last action (${count} pending)` : "Undo last action";
+    },
+    section: "Edit",
+    keywords: ["undo", "stage", "unstage", "discard", "checkpoint", "revert", "ctrl+z"],
+    shortcut: "ctrl+z",
+    when: (ctx) => ctx.repoId !== null,
+    run: async (ctx) => {
+      const repoId = ctx.repoId!;
+      const entry = await runUndoFor(repoId);
+      if (entry !== null) await refreshStatus(repoId);
+    },
+  },
+  {
+    id: "repos.toggle-favorite",
+    // Getter: the palette label mirrors the current favorite state, like
+    // the theme toggle mirrors the scheme.
+    get title() {
+      const root = tabStore.active?.root ?? null;
+      const suffix =
+        root !== null && favoriteRepos.has(root) ? " (favorited — removes)" : "";
+      return `Toggle favorite for this repository${suffix}`;
+    },
+    section: "Repo",
+    keywords: ["star", "favorite", "quick switcher", "launch"],
+    when: (ctx) => ctx.root !== null,
+    run: (ctx) => {
+      const root = ctx.root!;
+      const name = tabStore.active?.name ?? root;
+      const now = favoriteRepos.toggle(root);
+      ok(
+        now
+          ? `Added ${name} to favorites`
+          : `Removed ${name} from favorites`,
+      );
     },
   },
 

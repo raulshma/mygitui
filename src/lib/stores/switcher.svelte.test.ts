@@ -140,6 +140,31 @@ describe("buildSwitcherItems", () => {
     );
     expect(items.map((i) => i.target)).toEqual(["repo-1", "C:/repos/other"]);
   });
+
+  it("pins favorites between tabs and recents", () => {
+    const items = buildSwitcherItems(
+      [recent("C:/repos/alpha"), recent("C:/repos/beta")],
+      [tab("repo-1", "C:/repos/gamma")],
+      ["/fav/one", "C:/repos/beta"],
+    );
+    // Favorites sit above the recents; a favorite that is also a recent
+    // (beta) appears only once, in the favorites block.
+    expect(items.map((i) => `${i.kind}:${i.sub}`)).toEqual([
+      "tab:C:/repos/gamma",
+      "favorite:/fav/one",
+      "favorite:C:/repos/beta",
+      "recent:C:/repos/alpha",
+    ]);
+  });
+
+  it("drops favorites that already have an open tab (normalized compare)", () => {
+    const items = buildSwitcherItems(
+      [recent("C:/repos/other")],
+      [tab("repo-1", "C:/repos/gamma")],
+      ["C:\\repos\\gamma\\"],
+    );
+    expect(items.map((i) => i.kind)).toEqual(["tab", "recent"]);
+  });
 });
 
 describe("normalizeRepoPath / repoBasename", () => {

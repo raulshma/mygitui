@@ -113,6 +113,38 @@
   --sidebar-ring: oklch(0.556 0 0);
 }
 
+/*
+ * Increased-contrast mode (batch B item 42): users whose OS asks for
+ * `prefers-contrast: more` get stronger borders, darker (light-mode) /
+ * brighter (dark-mode) body text, and maximally-opposite text-on-accent.
+ * The overrides sit in app.css so they apply to the DEFAULT token set
+ * without any injected style; the appearance store's managed element only
+ * overrides the SAME custom properties, and since it loads after this
+ * stylesheet a customized theme keeps its own (already live-normalized)
+ * values — acceptable: the customizer's presets are high-contrast by
+ * construction, and the media query still upgrades every token the preset
+ * does not touch. Values stay in the same oklch hue space; only chroma /
+ * lightness push toward the extremes.
+ */
+@media (prefers-contrast: more) {
+  :root {
+    --foreground: oklch(0.09 0 0);
+    --muted-foreground: oklch(0.4 0 0);
+    --border: oklch(0.75 0 0);
+    --input: oklch(0.72 0 0);
+    --ring: oklch(0.35 0 0);
+    --primary-foreground: oklch(1 0 0);
+  }
+
+  .dark {
+    --foreground: oklch(1 0 0);
+    --muted-foreground: oklch(0.85 0 0);
+    --border: oklch(1 0 0 / 32%);
+    --input: oklch(1 0 0 / 38%);
+    --ring: oklch(0.85 0 0);
+  }
+}
+
 /* Dense-UI text ramp (static): `text-ui-*` utilities sized below Tailwind's
  * text-* scale, for the app's compact chrome — list rows, chips, meta labels.
  *

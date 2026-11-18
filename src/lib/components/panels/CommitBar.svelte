@@ -24,12 +24,13 @@
    * is staged and HEAD exists (read from the tab store's status); the HEAD
    * summary is fetched lazily through a one-page `stream_log`.
    */
-  import { commit, hooksList, signingInfo, streamLog } from "$lib/ipc/client";
+  import { commit, hooksList, readFile, signingInfo, streamLog } from "$lib/ipc/client";
   import type { GitSignature, HookInfo, LogFilter, RepoStatus, SigningInfo } from "$lib/ipc/types";
   import { describeError } from "$lib/errors";
   import { pushCurrentBranch, syncSkipMessage } from "$lib/git/sync";
   import { busy } from "$lib/stores/ops.svelte";
   import { tabStore } from "$lib/stores/tabs.svelte";
+  import { appSettings } from "$lib/state/appSettings.svelte";
   import { toast } from "$lib/toast";
   import { showMenuAtElement } from "$lib/components/menu/contextMenuStore.svelte";
   import { Button } from "$lib/components/ui/button/index.js";
@@ -40,6 +41,12 @@
   import { ai } from "$lib/ai/ai.svelte";
   import AiFeatureButton from "$lib/components/ai/AiFeatureButton.svelte";
   import { fixupMessage, hasStagedChanges, headCommitInPage } from "$lib/commit/commitBarModel";
+  import {
+    commitExtras,
+    rulerLeftCss,
+    templateFromBody,
+  } from "$lib/commit/commitExtras.svelte";
+  import { untrack } from "svelte";
   import { appIcon } from "$lib/components/icons/library.svelte";
 
   let {
@@ -63,6 +70,7 @@
   const iconSigning = $derived(appIcon("verified")!);
   const iconHook = $derived(appIcon("bolt")!);
   const iconOptions = $derived(appIcon("tune")!);
+  const iconRecents = $derived(appIcon("history")!);
 
   let message = $state("");
   let messageEl = $state<HTMLTextAreaElement | null>(null);
@@ -189,6 +197,63 @@
       });
   });
 
+  // -- Commit authoring niceties (template prefill, recent messages, ruler) ----
+
+  /** The repo's persisted-per-root identity (recents/ruler/template keys). */
+  const repoRoot = $derived(
+    tabStore.tabs.find((tab) => tab.id === repoId)?.root ?? repoId,
+  );
+
+  /** Recent accepted messages for the dropdown (reactive via the store). */
+  const recentMessages = $derived(commitExtras.recentsFor(repoRoot));
+
+  /** Wrap-ruler column for the repo (per-root setting, default 72). */
+  const rulerWidth = $derived(commitExtras.widthFor(repoRoot));
+
+  let templateToken = 0;
+
+  $effect(() => {
+    // Hydrate the per-root extras once per repo (outside derived reads),
+    // then attempt the one-shot commit-template prefill. The gate reads the
+    // draft untracked (a keystroke must not re-run this effect) and marks
+    // the repo attempted regardless of the outcome, so a repo is only
+    // probed once per session — and only prefills while it is still empty.
+    const root = repoRoot;
+    commitExtras.ensure(root);
+    const allowed = untrack(() =>
+      commitExtras.claimTemplatePrefill(root, appSettings.useCommitTemplate, message),
+    );
+    if (!allowed) return;
+    const token = ++templateToken;
+    // No config-reading command exists in the backend, so the template
+    // source is the `.gitmessage` file at the workdir root (git's
+    // commit.template convention). A missing file silently skips.
+    readFile(repoId, ".gitmessage")
+      .then((bytes) => {
+        if (token !== templateToken) return;
+        const draft = templateFromBody(new TextDecoder().decode(bytes));
+        if (draft !== "") message = draft;
+      })
+      .catch(() => {
+        // No template in this repo — nothing to prefill.
+      });
+  });
+
+  /** Recalls a recent commit message into the draft. */
+  function recallMessage(text: string): void {
+    message = text;
+  }
+
+  /** The recent-messages dropdown (one entry per stored message). */
+  function openRecentMessages(event: MouseEvent): void {
+    const entries = recentMessages.map((text) => ({
+      id: `recall-${text}`,
+      label: text.split("\n", 1)[0] ?? text,
+      run: () => recallMessage(text),
+    }));
+    showMenuAtElement(event.currentTarget as HTMLElement, entries);
+  }
+
   /** Builds the CommitOptions author override, or null when not filled. */
   function authorOverride(): GitSignature | null {
     const name = authorName.trim();
@@ -231,7 +296,9 @@
     committing = false;
     if (sha === null) return; // unreachable: success always yields a sha
 
-    // Commit landed: clear the form, refresh, then optionally push.
+    // Commit landed: remember the message for the recall dropdown, then
+    // clear the form, refresh, and optionally push.
+    commitExtras.rememberMessage(repoRoot, message);
     message = "";
     authorName = "";
     authorEmail = "";
@@ -399,23 +466,58 @@
   }}
 >
   <div class="row-main flex flex-col gap-1 min-h-0">
+    {#if recentMessages.length > 0}
+      <!-- Recall strip above the textarea: one dropdown of this repo's last
+           accepted messages (newest first). -->
+      <div class="recall flex items-center gap-1">
+        <Hint label="Recall a recent commit message for this repository">
+          {#snippet child({ props })}
+            <Button
+              {...props}
+              class="h-auto gap-1 rounded px-1.5 py-px text-ui-micro font-normal text-muted-foreground"
+              variant="ghost"
+              type="button"
+              aria-label="Recent commit messages"
+              aria-haspopup="menu"
+              onclick={openRecentMessages}
+            >
+              {#if iconRecents}
+                <Icon icon={iconRecents} size={12} />
+              {/if}
+              <span>Recent messages ({recentMessages.length})</span>
+            </Button>
+          {/snippet}
+        </Hint>
+      </div>
+    {/if}
     <label class="sr-only" for="commit-message">Commit message</label>
-    <Hint label="Commit message (Ctrl+Enter commits, Ctrl+Shift+Enter commits and pushes)">
-      {#snippet child({ props })}
-        <Textarea
-          class="message flex-none w-full min-w-0 box-border field-sizing-fixed min-h-7 max-h-44 resize-none overflow-y-hidden rounded-sm px-2 py-0.5 text-xs leading-[1.35] font-mono bg-background"
-          placeholder="Commit message… Ctrl+↵"
-          aria-keyshortcuts="Control+Enter Meta+Enter Control+Shift+Enter Meta+Shift+Enter"
-          rows={1}
-          bind:ref={messageEl}
-          bind:value={message}
-          {...props}
-          id="commit-message"
-          onkeydown={onMessageKeydown}
-          disabled={commitBusy || committing}
-        />
-      {/snippet}
-    </Hint>
+    <div class="message-wrap relative w-full min-w-0">
+      <Hint label="Commit message (Ctrl+Enter commits, Ctrl+Shift+Enter commits and pushes)">
+        {#snippet child({ props })}
+          <Textarea
+            class="message flex-none w-full min-w-0 box-border field-sizing-fixed min-h-7 max-h-44 resize-none overflow-y-hidden rounded-sm px-2 py-0.5 text-xs leading-[1.35] font-mono bg-background"
+            placeholder="Commit message… Ctrl+↵"
+            aria-keyshortcuts="Control+Enter Meta+Enter Control+Shift+Enter Meta+Shift+Enter"
+            rows={1}
+            bind:ref={messageEl}
+            bind:value={message}
+            {...props}
+            id="commit-message"
+            onkeydown={onMessageKeydown}
+            disabled={commitBusy || committing}
+          />
+        {/snippet}
+      </Hint>
+      <!-- Wrap ruler: a static 1px guide at the per-repo commit-width column.
+           The box pads px-2 and the text is monospace, so the column lands at
+           `padding + width × 1ch` (see rulerLeftCss). Overlay only — no
+           scroll/perf interaction with the textarea. -->
+      <div
+        class="ruler pointer-events-none absolute inset-y-0 border-l border-dashed border-border/80 text-xs font-mono leading-[1.35]"
+        style="left: {rulerLeftCss(rulerWidth)}"
+        aria-hidden="true"
+      ></div>
+    </div>
 
     <div class="controls flex items-center flex-wrap gap-x-[0.375rem] gap-y-1 w-full min-w-0">
       <div class="opt-switches flex items-center gap-0.5 min-w-0">

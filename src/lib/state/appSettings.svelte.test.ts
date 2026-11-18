@@ -4,6 +4,8 @@ import {
   APP_SETTINGS_KEY,
   AppSettingsStore,
   parseAppSettings,
+  UI_SCALE_MAX,
+  UI_SCALE_MIN,
 } from "./appSettings.svelte";
 
 /** A storage stub that never throws (write failures swallowed). */
@@ -34,6 +36,9 @@ describe("parseAppSettings", () => {
       terminalFontSize: 15.6,
       defaultAutofetchMinutes: 10,
       confirmDiscard: false,
+      openFavoritesOnLaunch: true,
+      useCommitTemplate: false,
+      uiScalePercent: 110,
       rogue: true,
     });
     expect(out).toEqual({
@@ -41,6 +46,9 @@ describe("parseAppSettings", () => {
       terminalFontSize: 16,
       defaultAutofetchMinutes: 10,
       confirmDiscard: false,
+      openFavoritesOnLaunch: true,
+      useCommitTemplate: false,
+      uiScalePercent: 110,
     });
   });
 
@@ -49,6 +57,15 @@ describe("parseAppSettings", () => {
     expect(parseAppSettings({ terminalFontSize: 90 }).terminalFontSize).toBe(28);
     expect(parseAppSettings({ defaultAutofetchMinutes: -5 }).defaultAutofetchMinutes).toBe(0);
     expect(parseAppSettings({ defaultAutofetchMinutes: 99999 }).defaultAutofetchMinutes).toBe(720);
+  });
+
+  it("clamps and snaps the ui scale onto the slider grid", () => {
+    expect(parseAppSettings({ uiScalePercent: 105 }).uiScalePercent).toBe(105);
+    // Off-grid values snap to the nearest 5-step.
+    expect(parseAppSettings({ uiScalePercent: 108 }).uiScalePercent).toBe(110);
+    expect(parseAppSettings({ uiScalePercent: 3 }).uiScalePercent).toBe(UI_SCALE_MIN);
+    expect(parseAppSettings({ uiScalePercent: 500 }).uiScalePercent).toBe(UI_SCALE_MAX);
+    expect(parseAppSettings({ uiScalePercent: "x" }).uiScalePercent).toBe(100);
   });
 });
 

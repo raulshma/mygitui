@@ -49,6 +49,7 @@
   import * as DropdownMenu from "$lib/components/ui/dropdown-menu/index.js";
   import {
     closeRepo,
+    checkpoints,
     discard,
     gitignoreAdd,
     openRepo,
@@ -64,6 +65,8 @@
   import { describeError } from "$lib/errors";
   import { copyText } from "$lib/clipboard";
   import { appSettings } from "$lib/state/appSettings.svelte";
+  import { pushUndoAction } from "$lib/stores/ops.svelte";
+  import { sortNewestFirst } from "$lib/components/safety/safetyModel";
   import { openTab, parseSshUri, refreshStatus, tabStore } from "$lib/stores/tabs.svelte";
   import { normalizeRepoPath } from "$lib/stores/switcher.svelte";
   import CommitBar from "$lib/components/panels/CommitBar.svelte";
@@ -1042,6 +1045,15 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
     }
   }
 
+  /** The undo-stack label for a stage/unstage action ("stage 3 files"). */
+  function undoStageLabel(stagedCount: number, unstagedCount: number): string {
+    const noun = (n: number): string => `${n} ${n === 1 ? "file" : "files"}`;
+    if (stagedCount > 0 && unstagedCount > 0) {
+      return `stage/unstage of ${noun(stagedCount + unstagedCount)}`;
+    }
+    return unstagedCount > 0 ? `unstage ${noun(unstagedCount)}` : `stage ${noun(stagedCount)}`;
+  }
+
   /**
    * Row action (hover button, context menu, `s`): Staged rows unstage,
    * Changes rows stage. VS Code applies it to the whole selection when the
@@ -1103,6 +1115,13 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
       ).then((ok) => {
         settleRemaps(remaps, ok);
         if (ok) {
+          // Reversible → the UI-undo stack (ctrl+z inverts the selection).
+          pushUndoAction(rid, {
+            kind: "stage",
+            staged: actions.stage,
+            unstaged: actions.unstage,
+            label: undoStageLabel(actions.stage.length, actions.unstage.length),
+          });
           if (subPath) {
             void loadSubmoduleStatus(subPath);
             onAfterMutation?.();
@@ -1680,6 +1699,11 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
         if (old && old !== row.entry.path) list.push({ file: old });
         return list;
       });
+      // The discard is NOT directly reversible; with checkpoints on the
+      // backend snapshots one first, and the UI-undo stack records
+      // "restore checkpoint <id>" against it (a 1s clock slop absorbs the
+      // second-resolution timestamp rounding).
+      const discardStartedSec = Math.floor(Date.now() / 1000) - 1;
       await mutate(
         "Discard",
         async () => {
@@ -1695,7 +1719,23 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
             });
           }
         },
-      );
+      ).then(async (ok) => {
+        if (!ok || !checkpointsEnabled) return;
+        try {
+          const list = sortNewestFirst(await checkpoints(rid));
+          const cp = list.find((entry) => entry.created_at >= discardStartedSec);
+          if (cp) {
+            pushUndoAction(rid, {
+              kind: "checkpoint",
+              checkpointId: cp.id,
+              label: `discard — restore checkpoint ${cp.id.slice(0, 8)}`,
+            });
+          }
+        } catch {
+          // Checkpoint listing failed: the discard stands, just without a
+          // UI-undo entry (the Undo panel still lists the checkpoint).
+        }
+      });
       if (subPath) {
         void loadSubmoduleStatus(subPath);
       }

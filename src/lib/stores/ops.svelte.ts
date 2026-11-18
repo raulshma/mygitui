@@ -27,7 +27,7 @@
  * `vi.mock` in tests).
  */
 
-import { authRespond, opCancel } from "$lib/ipc/client";
+import { authRespond, checkpointRestore, opCancel, stage } from "$lib/ipc/client";
 import { describeError } from "$lib/errors";
 import { onAuthRequest, onOpLog, onOpProgress } from "$lib/events/repoEvents";
 import type { AuthRequest, OpLog, OpProgress, RepoId } from "$lib/ipc/types";
@@ -92,6 +92,51 @@ export interface OpHistoryEntry {
  * strip's `MAX_LOG_LINES` plays the same bounding role for output.
  */
 const MAX_HISTORY_PER_REPO = 25;
+
+// ---------------------------------------------------------------------------
+// Minimal UI undo (batch B item 41) — a bounded per-repo stack of reversible
+// UI actions. Session-only: never persisted, cleared when the repo closes.
+// ---------------------------------------------------------------------------
+
+/**
+ * One recorded UI action that undo knows how to reverse. Stage/unstage
+ * selections invert (the undo stages what was unstaged and vice versa);
+ * a discard is NOT invertible, but the backend snapshots a checkpoint
+ * first — the entry records "restore checkpoint <id>" and undo calls
+ * `checkpoint_restore` with it (the same call the Undo panel makes).
+ */
+export type UiUndoEntry =
+  | {
+      kind: "stage";
+      /** Paths the original action moved to the index. */
+      staged: string[];
+      /** Paths the original action moved back to the worktree. */
+      unstaged: string[];
+      label: string;
+    }
+  | {
+      kind: "checkpoint";
+      /** `CheckpointInfo.id` of the discard's pre-discard snapshot. */
+      checkpointId: string;
+      label: string;
+    };
+
+/**
+ * Stack depth per repo. Small on purpose: undo is for slipping back from a
+ * misclick, not a history browser (the Undo panel covers checkpoints).
+ */
+export const MAX_UNDO_PER_REPO = 8;
+
+/**
+ * The inverse of a stage/unstage action: undo stages what the original
+ * unstaged and unstages what it staged (the StageTarget lists the StatusPanel
+ * then builds). Pure so tests pin the mapping.
+ */
+export function invertStageEntry(
+  entry: Extract<UiUndoEntry, { kind: "stage" }>,
+): { restage: string[]; unstage: string[] } {
+  return { restage: [...entry.unstaged], unstage: [...entry.staged] };
+}
 
 /** Keep the hook log bounded even when a chatty hook floods the pipe. */
 const MAX_LOG_LINES = 500;
@@ -181,6 +226,14 @@ export class OpStore {
    * reader is the done path that immediately deletes its entry.
    */
   #firstSeenAt = new Map<string, number>();
+
+  /**
+   * Reversible-action stacks per repo, oldest first (pop from the end) and
+   * capped at {@link MAX_UNDO_PER_REPO}. Session-only by design — nothing
+   * here is persisted, and `clearLogs`/`clearHistory`'s closeTab cleanup
+   * drops a repo's stack with it ({@link clearUndo}).
+   */
+  undoStacks: Record<RepoId, UiUndoEntry[]> = $state({});
 
   /**
    * Retires the auth dialog for an op that ended without an answer (see
@@ -293,6 +346,79 @@ export class OpStore {
   /** Completed-op history for a repo, newest first (empty array when none). */
   historyFor(repoId: RepoId): OpHistoryEntry[] {
     return this.history[repoId] ?? [];
+  }
+
+  // -- Minimal UI undo (see UiUndoEntry) ---------------------------------------
+
+  /** Records one reversible action for a repo (bounded, session-only). */
+  pushUndo(repoId: RepoId, entry: UiUndoEntry): void {
+    const stack = this.undoStacks[repoId] ?? [];
+    const next = [...stack, entry].slice(-MAX_UNDO_PER_REPO);
+    this.undoStacks = { ...this.undoStacks, [repoId]: next };
+  }
+
+  /** Reversible actions pending for a repo, oldest first (0 when none). */
+  undoCount(repoId: RepoId): number {
+    return this.undoStacks[repoId]?.length ?? 0;
+  }
+
+  /**
+   * Pops the newest entry and reverses it: a stage entry re-runs stage with
+   * the inverted selections; a checkpoint entry calls `checkpoint_restore`
+   * (the backend restores the discard's snapshot and auto-checkpoints the
+   * pre-restore state). While ANY op runs for the repo the undo is refused
+   * (info toast, stack untouched) — the same mutating guard the panels
+   * apply. The caller refreshes the repo status afterwards (ops.svelte
+   * must not import the tab store — the tab store imports this module).
+   * Returns the popped entry, or `null` when the stack was empty or the
+   * undo was refused.
+   */
+  async runUndo(repoId: RepoId): Promise<UiUndoEntry | null> {
+    const stack = this.undoStacks[repoId] ?? [];
+    if (stack.length === 0) return null;
+    if (this.busy(repoId)) {
+      toast("Wait for the running op to finish, then undo again", { kind: "info" });
+      return null;
+    }
+    const entry = stack[stack.length - 1]!;
+    this.undoStacks = {
+      ...this.undoStacks,
+      [repoId]: stack.slice(0, -1),
+    };
+    try {
+      if (entry.kind === "stage") {
+        const inverse = invertStageEntry(entry);
+        // The backend enqueues both directions under the same "stage" op
+        // kind (the StatusPanel flow does exactly this for mixed actions).
+        if (inverse.unstage.length > 0) {
+          await stage(repoId, {
+            targets: inverse.unstage.map((file) => ({ file })),
+            unstage: true,
+          });
+        }
+        if (inverse.restage.length > 0) {
+          await stage(repoId, {
+            targets: inverse.restage.map((file) => ({ file })),
+            unstage: false,
+          });
+        }
+      } else {
+        await checkpointRestore(repoId, entry.checkpointId);
+      }
+    } catch (err) {
+      toast(`Undo failed: ${describeError(err)}`, { kind: "error" });
+      return entry; // consumed even on failure — the state may have moved
+    }
+    toast(`Undone: ${entry.label}`, { kind: "success" });
+    return entry;
+  }
+
+  /** Drops a repo's undo stack (repo closed; test helper). */
+  clearUndo(repoId: RepoId): void {
+    if (!(repoId in this.undoStacks)) return;
+    const stacks = { ...this.undoStacks };
+    delete stacks[repoId];
+    this.undoStacks = stacks;
   }
 
   /**
@@ -411,6 +537,7 @@ export class OpStore {
     this.ops = {};
     this.logs = {};
     this.history = {};
+    this.undoStacks = {};
     this.#firstSeenAt.clear();
   }
 }
@@ -448,6 +575,29 @@ export function opHistoryFor(repoId: RepoId): OpHistoryEntry[] {
 
 export function clearOpLogs(repoId: RepoId): void {
   opStore.clearLogs(repoId);
+}
+
+/** Records one reversible UI action (see {@link UiUndoEntry}). */
+export function pushUndoAction(repoId: RepoId, entry: UiUndoEntry): void {
+  opStore.pushUndo(repoId, entry);
+}
+
+/** Reversible actions pending for a repo (see {@link OpStore.undoCount}). */
+export function undoCountFor(repoId: RepoId): number {
+  return opStore.undoCount(repoId);
+}
+
+/**
+ * Pops and reverses the newest UI action; the caller refreshes the repo
+ * status afterwards (see {@link OpStore.runUndo}).
+ */
+export function runUndoFor(repoId: RepoId): Promise<UiUndoEntry | null> {
+  return opStore.runUndo(repoId);
+}
+
+/** Drops a repo's undo stack (repo closed; see {@link OpStore.clearUndo}). */
+export function clearUndoFor(repoId: RepoId): void {
+  opStore.clearUndo(repoId);
 }
 
 // ---------------------------------------------------------------------------

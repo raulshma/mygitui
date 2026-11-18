@@ -38,6 +38,25 @@ export interface AppSettingsData {
    * switch for users who find it noisy.)
    */
   confirmDiscard: boolean;
+  /**
+   * Open up to five favorite repositories (see
+   * `$lib/stores/favoriteRepos.svelte`) at launch, in favorites order,
+   * when they are not already part of the restored session.
+   */
+  openFavoritesOnLaunch: boolean;
+  /**
+   * Prefill the commit message box from the repo's `.gitmessage` template
+   * (config `commit.template` is not readable through the current backend,
+   * so the workdir-root file is the template source) when the box opens
+   * empty.
+   */
+  useCommitTemplate: boolean;
+  /**
+   * Root font-size multiplier in percent (85–125, step 5, 100 = default).
+   * Applied as `html { font-size: calc(100% * m/100) }` by the appearance
+   * store's managed style element.
+   */
+  uiScalePercent: number;
 }
 
 export const APP_SETTINGS_DEFAULTS: AppSettingsData = {
@@ -45,6 +64,9 @@ export const APP_SETTINGS_DEFAULTS: AppSettingsData = {
   terminalFontSize: 13,
   defaultAutofetchMinutes: 0,
   confirmDiscard: true,
+  openFavoritesOnLaunch: false,
+  useCommitTemplate: true,
+  uiScalePercent: 100,
 };
 
 /** Terminal font size bounds shared by the setting and the terminal store. */
@@ -54,6 +76,12 @@ export const TERMINAL_FONT_MAX = 28;
 /** Auto-fetch cadence bounds (minutes; 0 = off). */
 export const AUTOFETCH_MINUTES_MIN = 0;
 export const AUTOFETCH_MINUTES_MAX = 720;
+
+/** Root font-size multiplier bounds (percent). */
+export const UI_SCALE_MIN = 85;
+export const UI_SCALE_MAX = 125;
+/** Slider step; parsing snaps stored values onto the step grid. */
+export const UI_SCALE_STEP = 5;
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
@@ -79,6 +107,18 @@ export function parseAppSettings(data: unknown): AppSettingsData {
     );
   }
   if (typeof raw.confirmDiscard === "boolean") out.confirmDiscard = raw.confirmDiscard;
+  if (typeof raw.openFavoritesOnLaunch === "boolean") {
+    out.openFavoritesOnLaunch = raw.openFavoritesOnLaunch;
+  }
+  if (typeof raw.useCommitTemplate === "boolean") {
+    out.useCommitTemplate = raw.useCommitTemplate;
+  }
+  if (typeof raw.uiScalePercent === "number" && Number.isFinite(raw.uiScalePercent)) {
+    // Snap onto the 5-point slider grid (85, 90, …, 125) so a hand-edited or
+    // imported value cannot leave the slider stuck between steps.
+    const snapped = Math.round(raw.uiScalePercent / UI_SCALE_STEP) * UI_SCALE_STEP;
+    out.uiScalePercent = Math.round(clamp(snapped, UI_SCALE_MIN, UI_SCALE_MAX));
+  }
   return out;
 }
 
@@ -124,6 +164,18 @@ export class AppSettingsStore {
 
   get confirmDiscard(): boolean {
     return this.#value.confirmDiscard;
+  }
+
+  get openFavoritesOnLaunch(): boolean {
+    return this.#value.openFavoritesOnLaunch;
+  }
+
+  get useCommitTemplate(): boolean {
+    return this.#value.useCommitTemplate;
+  }
+
+  get uiScalePercent(): number {
+    return this.#value.uiScalePercent;
   }
 
   /** Patch settings and persist (partial update, validated on write). */

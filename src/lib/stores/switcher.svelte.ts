@@ -3,9 +3,10 @@
  *
  * Lives in a `.svelte.ts` module because the open/closed flag is a `$state`
  * rune. Also hosts the switcher's pure pieces so they are unit-testable
- * without a DOM: item building (open tabs first, then recents not already
- * open), the tiny fuzzy scorer (subsequence + consecutive/word-start
- * bonuses) and activation (openTab for recents, setActive for tabs).
+ * without a DOM: item building (open tabs first, then favorites, then
+ * recents — open roots excluded), the tiny fuzzy scorer (subsequence +
+ * consecutive/word-start bonuses) and activation (openTab for recents and
+ * favorites, setActive for tabs).
  */
 
 import {
@@ -16,17 +17,18 @@ import {
   type Tab,
 } from "$lib/stores/tabs.svelte";
 import type { RecentRepo } from "$lib/entry/recentRepos";
+import { favoriteRepos } from "$lib/stores/favoriteRepos.svelte";
 
-/** One switcher row: an open tab or a recent repository. */
+/** One switcher row: an open tab, a favorite, or a recent repository. */
 export interface SwitcherItem {
-  /** Unique row id (`tab:<id>` / `recent:<path>`). */
+  /** Unique row id (`tab:<id>` / `favorite:<path>` / `recent:<path>`). */
   id: string;
-  kind: "tab" | "recent";
+  kind: "tab" | "favorite" | "recent";
   /** Repo name (bold line). */
   label: string;
-  /** Full path (dim line). */
+  /** Full path (dim line) — also the favorite-set key. */
   sub: string;
-  /** Tab id (`kind === "tab"`) or repo path (`kind === "recent"`). */
+  /** Tab id (`kind === "tab"`) or repo path (`kind !== "tab"`). */
   target: string;
 }
 
@@ -56,10 +58,13 @@ export function toggleSwitcher(): void {
 
 /**
  * Test seam: current store state plus the items the switcher would show
- * right now (snapshot of open tabs + recents).
+ * right now (snapshot of open tabs + favorites + recents).
  */
 export function switcherSnapshot(): { open: boolean; items: SwitcherItem[] } {
-  return { open, items: buildSwitcherItems(recentRepos.list(), tabStore.tabs) };
+  return {
+    open,
+    items: buildSwitcherItems(recentRepos.list(), tabStore.tabs, favoriteRepos.favorites),
+  };
 }
 
 /** Normalizes a path for open-vs-recent deduping (separators + case). */
@@ -78,11 +83,14 @@ export function repoBasename(path: string): string {
 
 /**
  * Builds the switcher list: open tabs first (switching is instant), then
- * recents that do not already have an open tab (path-normalized compare).
+ * favorite repositories, then recents — favorites and recents skip roots
+ * that already have an open tab (path-normalized compare), and a favorite
+ * that is also a recent appears only once, in the favorites block.
  */
 export function buildSwitcherItems(
   recents: readonly RecentRepo[],
   tabs: readonly Tab[],
+  favorites: readonly string[] = [],
 ): SwitcherItem[] {
   const items: SwitcherItem[] = tabs.map((tab) => ({
     id: `tab:${tab.id}`,
@@ -92,6 +100,17 @@ export function buildSwitcherItems(
     target: tab.id,
   }));
   const openRoots = new Set(tabs.map((tab) => normalizeRepoPath(tab.root)));
+  for (const favorite of favorites) {
+    if (openRoots.has(normalizeRepoPath(favorite))) continue;
+    openRoots.add(normalizeRepoPath(favorite));
+    items.push({
+      id: `favorite:${favorite}`,
+      kind: "favorite",
+      label: repoBasename(favorite),
+      sub: favorite,
+      target: favorite,
+    });
+  }
   for (const recent of recents) {
     if (openRoots.has(normalizeRepoPath(recent.path))) continue;
     items.push({
@@ -103,6 +122,15 @@ export function buildSwitcherItems(
     });
   }
   return items;
+}
+
+/**
+ * Flips `item`'s repository in the favorite set (the row's star toggle).
+ * Open tabs favorite their root; favorites/recents favorite their path.
+ * Returns the new favorite state (true = now favorited).
+ */
+export function toggleItemFavorite(item: SwitcherItem): boolean {
+  return favoriteRepos.toggle(item.sub);
 }
 
 /** True when `haystack[i]` starts a "word" (separator boundary or camelCase). */

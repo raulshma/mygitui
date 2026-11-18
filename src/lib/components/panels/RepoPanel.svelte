@@ -12,19 +12,37 @@
 <script lang="ts">
   import {
     archiveSpec,
+    hooksList,
     lfsRun,
     lfsStatus,
     maintenanceRun,
     pickSaveFile,
+    readFile,
     repoHealth,
     sparseApply,
     sparseInfo,
+    statFile,
+    writeFile,
   } from "$lib/ipc/client";
-  import type { LfsStatus, RepoHealth, SparseInfo } from "$lib/ipc/types";
+  import type { HookInfo, LfsStatus, RepoHealth, SparseInfo } from "$lib/ipc/types";
   import { toast } from "$lib/toast";
   import { formatRelativeTime } from "$lib/git/format";
   import { Button } from "$lib/components/ui/button/index.js";
   import { Hint } from "$lib/components/ui/tooltip/index.js";
+  import { copyText } from "$lib/clipboard";
+  import { isTauri } from "$lib/entry/dragdrop";
+  import { openPath } from "@tauri-apps/plugin-opener";
+  import { tabStore } from "$lib/stores/tabs.svelte";
+  import { hookPathFor, hookRowsFor, hooksSummary } from "./hooksModel";
+  import {
+    parseGitAttributes,
+    ruleIsLfs,
+    serializeGitAttributes,
+    setLfsRule,
+    setLockableRule,
+    upsertRule,
+    type AttributesLine,
+  } from "./attributesModel";
 
   let {
     repoId,
@@ -59,6 +77,40 @@
   /** The LFS read failed (muted error line + Retry in its section). */
   let lfsError = $state<string | null>(null);
 
+  // Hooks (`.git/hooks` has no backend read/write; the section lists
+  // kind/present/executable and derives each hook file's path for
+  // open-in-editor / copy — see hooksModel).
+  let hooks = $state<HookInfo[] | null>(null);
+  let hooksError = $state<string | null>(null);
+
+  // .gitattributes manager (batch B item 40): the root file is a normal
+  // workdir file, so repo_read_file / repo_write_file reach it. Edits are
+  // read-modify-write with a stale check (re-read before write; a file
+  // changed underneath aborts and reloads instead of clobbering).
+  let attrBaseline = $state("");
+  let attrDraft = $state("");
+  let attrMtime = $state<number | null>(null);
+  let attrBusy = $state(false);
+  let attrError = $state<string | null>(null);
+  // Add-entry form state.
+  let newPattern = $state("");
+  let newLfs = $state(false);
+  let newText = $state(false);
+  let newEolLf = $state(false);
+  let newEolCrlf = $state(false);
+  let newBinary = $state(false);
+
+  /** The repo root this panel's tab belongs to (null for unknown ids). */
+  const repoRoot = $derived(tabStore.tabs.find((tab) => tab.id === repoId)?.root ?? null);
+
+  const hookRows = $derived(hookRowsFor(hooks ?? [], repoRoot));
+
+  /** Parsed view of the draft (rules + preserved comments/blanks). */
+  const attrLines = $derived.by<AttributesLine[]>(() => parseGitAttributes(attrDraft));
+
+  /** Unsaved edits pending (the Save button's gate). */
+  const attrDirty = $derived(attrDraft !== attrBaseline);
+
   $effect(() => {
     void repoId;
     health = null;
@@ -67,6 +119,12 @@
     lfs = null;
     sparseError = null;
     lfsError = null;
+    hooks = null;
+    hooksError = null;
+    attrBaseline = "";
+    attrDraft = "";
+    attrMtime = null;
+    attrError = null;
     void reload();
   });
 
@@ -107,6 +165,103 @@
         if (id !== repoId) return;
         lfsError = err instanceof Error ? err.message : String(err);
       });
+    hooksList(id)
+      .then((list) => {
+        if (id !== repoId) return;
+        hooksError = null;
+        hooks = list;
+      })
+      .catch((err) => {
+        if (id !== repoId) return;
+        hooksError = err instanceof Error ? err.message : String(err);
+      });
+    loadAttributes(id);
+  }
+
+  /** Reads .gitattributes (a missing file reads as empty) + its mtime. */
+  async function loadAttributes(id: string): Promise<void> {
+    try {
+      const bytes = await readFile(id, ".gitattributes");
+      if (id !== repoId) return;
+      const text = new TextDecoder().decode(bytes);
+      attrBaseline = text;
+      attrDraft = text;
+      attrError = null;
+      const meta = await statFile(id, ".gitattributes").catch(() => null);
+      if (id !== repoId || meta === null) return;
+      attrMtime = meta.mtime_ms;
+    } catch (err) {
+      if (id !== repoId) return;
+      attrError = err instanceof Error ? err.message : String(err);
+    }
+  }
+
+  /**
+   * Applies `edit` to the parsed draft and saves: read-modify-write with a
+   * stale check — the file is re-read before the write, and if it changed
+   * underneath (another process/git) the write is dropped with an error
+   * toast and the fresh content loaded instead (nothing partial applied).
+   */
+  async function saveAttributes(edit: (lines: AttributesLine[]) => AttributesLine[]): Promise<void> {
+    if (attrBusy) return;
+    attrBusy = true;
+    try {
+      const fresh = new TextDecoder().decode(await readFile(repoId, ".gitattributes"));
+      if (fresh !== attrBaseline) {
+        attrBaseline = fresh;
+        attrDraft = fresh;
+        const meta = await statFile(repoId, ".gitattributes").catch(() => null);
+        if (meta !== null) attrMtime = meta.mtime_ms;
+        toast(
+          ".gitattributes changed on disk — the latest version is loaded; re-apply your edit.",
+          { kind: "error" },
+        );
+        return;
+      }
+      const next = serializeGitAttributes(edit(parseGitAttributes(attrBaseline)));
+      await writeFile(repoId, ".gitattributes", new TextEncoder().encode(next), attrMtime);
+      attrBaseline = next;
+      attrDraft = next;
+      const meta = await statFile(repoId, ".gitattributes").catch(() => null);
+      if (meta !== null) attrMtime = meta.mtime_ms;
+      toast(".gitattributes updated", { kind: "success" });
+    } catch (err) {
+      toast(
+        `.gitattributes update failed: ${err instanceof Error ? err.message : String(err)}`,
+        { kind: "error" },
+      );
+    } finally {
+      attrBusy = false;
+    }
+  }
+
+  /** The LFS toggle on one rule's pattern. */
+  function toggleLfs(pattern: string, enabled: boolean): void {
+    void saveAttributes((lines) => setLfsRule(lines, pattern, enabled));
+  }
+
+  /** The lockable toggle on one rule's pattern. */
+  function toggleLockable(pattern: string, enabled: boolean): void {
+    void saveAttributes((lines) => setLockableRule(lines, pattern, enabled));
+  }
+
+  /** Adds the form's entry (pattern + checked attribute tokens). */
+  function addAttributeEntry(): void {
+    const pattern = newPattern.trim();
+    if (pattern === "") return;
+    const attrs: string[] = [];
+    if (newLfs) attrs.push("filter=lfs");
+    if (newText) attrs.push("text");
+    if (newEolLf) attrs.push("eol=lf");
+    if (newEolCrlf) attrs.push("eol=crlf");
+    if (newBinary) attrs.push("binary");
+    if (attrs.length === 0) {
+      toast("Check at least one attribute for the new pattern", { kind: "error" });
+      return;
+    }
+    void saveAttributes((lines) => upsertRule(lines, pattern, attrs));
+    newPattern = "";
+    newLfs = newText = newEolLf = newEolCrlf = newBinary = false;
   }
 
   function fmtSize(bytes: number): string {
@@ -210,6 +365,28 @@
       lfsBusy = false;
     }
   }
+
+  // -- Hooks -------------------------------------------------------------------
+
+  /** Opens a hook file in the OS default handler (opener plugin). */
+  async function openHook(path: string): Promise<void> {
+    if (!isTauri()) {
+      toast("Opening files needs the desktop app", { kind: "info" });
+      return;
+    }
+    try {
+      await openPath(path);
+    } catch (err) {
+      toast(
+        `Could not open ${path}: ${err instanceof Error ? err.message : String(err)}`,
+        { kind: "error" },
+      );
+    }
+  }
+
+  function copyHookPath(path: string): void {
+    void copyText(path, "hook path");
+  }
 </script>
 
 <aside
@@ -298,6 +475,77 @@
             </div>
           {/if}
         </div>
+      {/if}
+    </section>
+
+    <section class="group border-t border-border px-2 py-1.5" aria-label="Git hooks">
+      <h2 class="head mb-1.5 text-xs font-semibold uppercase tracking-[0.05em] text-muted-foreground">Hooks</h2>
+      {#if hooksError}
+        <p class="state mb-1.5 flex flex-wrap items-center gap-2 text-xs text-destructive" role="alert">
+          {hooksError}
+          <Button
+            class="h-auto rounded px-2 py-px text-ui-meta font-normal text-muted-foreground"
+            variant="outline"
+            type="button"
+            onclick={() => void reload()}
+          >
+            Retry
+          </Button>
+        </p>
+      {:else if hooks === null}
+        <p class="state mb-1.5 text-xs text-muted-foreground">Loading hooks…</p>
+      {:else if hookRows.length === 0}
+        <p class="state mb-1.5 text-xs text-muted-foreground">No hooks reported.</p>
+      {:else}
+        <p class="state mb-1.5 text-xs text-muted-foreground">{hooksSummary(hooks)}</p>
+        <ul class="m-0 flex list-none flex-col gap-0.5 p-0" role="list" aria-label="Git hooks">
+          {#each hookRows as row (row.kind)}
+            <li class="hook-row flex min-w-0 items-center justify-between gap-2 rounded border border-transparent px-1 py-0.5 hover:border-border">
+              <span class="flex min-w-0 items-center gap-1.5">
+                <span class="min-w-0 truncate font-mono text-ui-meta text-foreground" title={row.kind}>{row.kind}</span>
+                {#if row.present}
+                  <span class="shrink-0 rounded-full bg-muted px-1.5 py-px text-ui-tiny leading-normal text-muted-foreground">present</span>
+                {/if}
+                {#if row.executable}
+                  <span class="shrink-0 rounded-full bg-primary/10 px-1.5 py-px text-ui-tiny leading-normal text-primary">executable</span>
+                {/if}
+              </span>
+              <span class="flex flex-none items-center gap-1">
+                <Hint label={row.canOpen ? `Open ${row.path} in the default editor` : "The hook file does not exist yet"}>
+                  {#snippet child({ props })}
+                    <Button
+                      {...props}
+                      class="h-auto rounded px-2 py-px text-ui-meta font-normal text-muted-foreground"
+                      variant="outline"
+                      type="button"
+                      disabled={!row.canOpen}
+                      onclick={() => void openHook(row.path)}
+                    >
+                      Open in editor
+                    </Button>
+                  {/snippet}
+                </Hint>
+                <Hint label="Copy the hook file's path">
+                  {#snippet child({ props })}
+                    <Button
+                      {...props}
+                      class="h-auto rounded px-2 py-px text-ui-meta font-normal text-muted-foreground"
+                      variant="outline"
+                      type="button"
+                      disabled={!row.canCopy}
+                      onclick={() => copyHookPath(row.path)}
+                    >
+                      Copy path
+                    </Button>
+                  {/snippet}
+                </Hint>
+              </span>
+            </li>
+          {/each}
+        </ul>
+        <p class="state mt-1 mb-0 text-ui-tiny text-muted-foreground">
+          Hook files live under <code class="font-mono">.git/hooks</code> in the repository — edit them with “Open in editor”.
+        </p>
       {/if}
     </section>
 
@@ -392,7 +640,7 @@
         {#if lfs.tracked_patterns.length > 0}
           <p class="state mb-1.5 text-xs text-muted-foreground">Tracking: {lfs.tracked_patterns.join(", ")}</p>
         {:else}
-          <p class="state mb-1.5 text-xs text-muted-foreground">No filter=lfs patterns in tracked .gitattributes.</p>
+          <p class="state mb-1.5 text-xs text-muted-foreground">No filter=lfs patterns yet — add them in the .gitattributes section below.</p>
         {/if}
         <div class="ops flex flex-wrap gap-1.5">
           <Button class="h-auto rounded px-2 py-px text-ui-meta font-normal text-muted-foreground" variant="outline" type="button" disabled={lfsBusy} onclick={() => void onLfs("pull")}>Pull</Button>
@@ -405,6 +653,113 @@
         </p>
       {:else}
         <p class="state mb-1.5 text-xs text-muted-foreground">Detecting…</p>
+      {/if}
+    </section>
+
+    <section class="group border-t border-border px-2 py-1.5" aria-label=".gitattributes manager">
+      <h2 class="head mb-1.5 text-xs font-semibold uppercase tracking-[0.05em] text-muted-foreground">.gitattributes</h2>
+      {#if attrError}
+        <p class="state mb-1.5 flex flex-wrap items-center gap-2 text-xs text-destructive" role="alert">
+          {attrError}
+          <Button
+            class="h-auto rounded px-2 py-px text-ui-meta font-normal text-muted-foreground"
+            variant="outline"
+            type="button"
+            onclick={() => void reload()}
+          >
+            Retry
+          </Button>
+        </p>
+      {:else}
+        {#if attrLines.length === 0 || attrLines.every((line) => line.kind === "raw" && line.text.trim() === "")}
+          <p class="state mb-1.5 text-xs text-muted-foreground">
+            No .gitattributes in the repository root yet — the first entry below creates it.
+          </p>
+        {:else}
+          <ul class="m-0 mb-1.5 flex list-none flex-col gap-0.5 p-0" role="list" aria-label=".gitattributes entries">
+            {#each attrLines as line, i (i)}
+              {#if line.kind === "raw"}
+                {#if line.text.trim() !== ""}
+                  <li class="text-ui-tiny text-muted-foreground" aria-label="Comment">{line.text.trim()}</li>
+                {/if}
+              {:else}
+                <li class="flex min-w-0 flex-wrap items-center justify-between gap-x-2 gap-y-0.5 rounded border border-transparent px-1 py-0.5 hover:border-border">
+                  <span class="flex min-w-0 flex-wrap items-center gap-1.5">
+                    <span class="min-w-0 truncate font-mono text-ui-meta text-foreground" title={line.pattern}>{line.pattern}</span>
+                    {#each line.attrs as attr (attr)}
+                      <span class="shrink-0 rounded-full bg-muted px-1.5 py-px font-mono text-ui-tiny leading-normal text-muted-foreground">{attr}</span>
+                    {/each}
+                  </span>
+                  <span class="flex flex-none items-center gap-1">
+                    <Button
+                      class="h-auto rounded px-2 py-px text-ui-tiny font-normal text-muted-foreground"
+                      variant="outline"
+                      type="button"
+                      disabled={attrBusy}
+                      title={ruleIsLfs(line) ? "Remove the filter=lfs pattern (-filter=lfs)" : "Track this pattern with git lfs (filter=lfs)"}
+                      onclick={() => toggleLfs(line.pattern, !ruleIsLfs(line))}
+                    >
+                      {ruleIsLfs(line) ? "Untrack LFS" : "Track LFS"}
+                    </Button>
+                    <Button
+                      class="h-auto rounded px-2 py-px text-ui-tiny font-normal text-muted-foreground"
+                      variant="outline"
+                      type="button"
+                      disabled={attrBusy}
+                      title="Toggle the lockable attribute (git lfs lock/unlock needs it)"
+                      onclick={() => {
+                        const mention = line.attrs.includes("lockable");
+                        toggleLockable(line.pattern, !mention);
+                      }}
+                    >
+                      {line.attrs.includes("lockable") ? "Unlockable" : "Lockable"}
+                    </Button>
+                  </span>
+                </li>
+              {/if}
+            {/each}
+          </ul>
+        {/if}
+        <div class="add flex flex-col gap-1">
+          <div class="flex items-center gap-1.5">
+            <input
+              class="min-w-20 flex-1 rounded border border-border bg-background px-[7px] py-px font-mono text-xs text-foreground"
+              bind:value={newPattern}
+              placeholder="pattern, e.g. *.psd or assets/"
+              aria-label="New .gitattributes pattern"
+            />
+            <Button
+              class="h-auto rounded-full px-3 py-px text-ui-meta"
+              type="button"
+              disabled={attrBusy || newPattern.trim() === ""}
+              onclick={addAttributeEntry}
+            >
+              Add entry
+            </Button>
+          </div>
+          <div class="flex flex-wrap items-center gap-x-3 gap-y-1 text-ui-meta text-muted-foreground">
+            <label class="flex cursor-pointer items-center gap-1">
+              <input type="checkbox" bind:checked={newLfs} /> <span class="font-mono">filter=lfs</span>
+            </label>
+            <label class="flex cursor-pointer items-center gap-1">
+              <input type="checkbox" bind:checked={newText} /> <span class="font-mono">text</span>
+            </label>
+            <label class="flex cursor-pointer items-center gap-1">
+              <input type="checkbox" bind:checked={newEolLf} /> <span class="font-mono">eol=lf</span>
+            </label>
+            <label class="flex cursor-pointer items-center gap-1">
+              <input type="checkbox" bind:checked={newEolCrlf} /> <span class="font-mono">eol=crlf</span>
+            </label>
+            <label class="flex cursor-pointer items-center gap-1">
+              <input type="checkbox" bind:checked={newBinary} /> <span class="font-mono">binary</span>
+            </label>
+          </div>
+          {#if attrDirty}
+            <p class="m-0 text-ui-tiny text-muted-foreground">
+              Edits apply per entry with a re-read-before-write guard (a file changed underneath reloads instead of saving).
+            </p>
+          {/if}
+        </div>
       {/if}
     </section>
   {:else}

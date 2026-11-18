@@ -23,6 +23,7 @@ import { toast } from "$lib/toast";
 import SettingsDialog from "./SettingsDialog.svelte";
 import { COMMANDS } from "$lib/palette/commands";
 import { DEFAULT_BINDINGS, __resetKeybindsForTests, setBinding } from "$lib/palette/keybinds";
+import { resetTabStore, tabStore } from "$lib/stores/tabs.svelte";
 import { closeShortcuts, isShortcutsOpen } from "$lib/components/help/shortcuts.svelte";
 import {
   AppSettingsStore,
@@ -31,6 +32,7 @@ import {
 } from "$lib/state/appSettings.svelte";
 import { CustomAppsStore, CUSTOM_APPS_KEY } from "$lib/openwith/customApps.svelte";
 import { autofetch, AUTOFETCH_STORAGE_KEY } from "$lib/stores/autofetch.svelte";
+import { railPins } from "$lib/stores/railPins.svelte";
 import { updater, UPDATER_STORAGE_KEY } from "$lib/stores/updater.svelte";
 import {
   terminalThemePref,
@@ -507,6 +509,146 @@ describe("SettingsDialog keybind editor", () => {
     expect((screen.getByRole("button", { name: "Reset shortcut for Find in file…" }) as HTMLButtonElement).disabled).toBe(
       true,
     );
+  });
+});
+
+describe("export / import + new toggles (batch B)", () => {
+  let settings: AppSettingsStore;
+  let apps: CustomAppsStore;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // Standalone reset (the main describe's helper is scoped there).
+    localStorage.clear();
+    for (const root of Object.keys(autofetch.config)) autofetch.setInterval(root, 0);
+    railPins.clear();
+    settings = new AppSettingsStore(localStorage);
+    apps = new CustomAppsStore(localStorage);
+    // The "This repository" section must stay hidden: no tab is open.
+    tabStore.tabs = [];
+    tabStore.activeId = null;
+  });
+
+  afterEach(() => {
+    cleanup();
+    resetTabStore();
+  });
+
+  afterEach(() => {
+    resetTabStore();
+  });
+
+  function envelopeData(key: string): Record<string, unknown> {
+    return JSON.parse(localStorage.getItem(key) as string) as Record<string, unknown>;
+  }
+
+  it("hides the This repository section without an active tab and shows it with one", async () => {
+    const { unmount } = render(SettingsDialog, { open: true, settings, apps });
+    expect(screen.queryByRole("button", { name: "This repository" })).toBeNull();
+    unmount();
+
+    const fakeTab = {
+      id: "repo-1",
+      name: "demo",
+      root: "/tmp/demo",
+      status: null,
+      statusError: null,
+      generation: 0,
+      deviceId: null,
+      openError: null,
+    };
+    tabStore.tabs = [fakeTab];
+    tabStore.activeId = "repo-1";
+
+    const mounted = render(SettingsDialog, { open: true, settings, apps });
+    await fireEvent.click(screen.getByRole("button", { name: "This repository" }));
+    expect(screen.getByLabelText("Auto-fetch override for this repository, in minutes")).toBeTruthy();
+    expect(screen.getByLabelText("Commit message wrap-ruler column for this repository")).toBeTruthy();
+    mounted.unmount();
+  });
+
+  it("persists the favorites-on-launch and commit-template toggles", async () => {
+    render(SettingsDialog, { open: true, settings, apps });
+
+    await fireEvent.click(screen.getByRole("switch", { name: "Open favorite repos on launch" }));
+    await fireEvent.click(screen.getByRole("button", { name: "Git" }));
+    await fireEvent.click(screen.getByRole("switch", { name: "Use commit template" }));
+
+    const data = envelopeData("mygitui.settings") as { data: Record<string, unknown> };
+    expect(data.data.openFavoritesOnLaunch).toBe(true);
+    expect(data.data.useCommitTemplate).toBe(false);
+  });
+
+  it("rejects a foreign import file with an error toast and applies nothing", async () => {
+    render(SettingsDialog, { open: true, settings, apps });
+    await fireEvent.click(screen.getByRole("button", { name: "Advanced" }));
+
+    const input = screen.getByLabelText("Import settings file") as HTMLInputElement;
+    const file = new File(["{}"], "settings.json", { type: "application/json" });
+    await fireEvent.change(input, { target: { files: [file] } });
+
+    expect(vi.mocked(toast).mock.calls.some(([msg]) => String(msg).startsWith("Import failed"))).toBe(
+      true,
+    );
+  });
+
+  it("applies a valid exported bundle and offers the reload", async () => {
+    // A bundle with one extra pin override lands in storage per-key.
+    const bundle = {
+      "mygitui-settings-export": true,
+      version: 1,
+      exportedAt: "2026-01-01T00:00:00.000Z",
+      data: { "mygitui.railPins": ["stashes"] },
+    };
+    render(SettingsDialog, { open: true, settings, apps });
+    await fireEvent.click(screen.getByRole("button", { name: "Advanced" }));
+
+    const input = screen.getByLabelText("Import settings file") as HTMLInputElement;
+    const file = new File([JSON.stringify(bundle)], "settings.json", {
+      type: "application/json",
+    });
+    await fireEvent.change(input, { target: { files: [file] } });
+
+    expect(JSON.parse(localStorage.getItem("mygitui.railPins") as string)).toEqual({
+      v: 1,
+      data: ["stashes"],
+    });
+    expect(await screen.findByText("Reload to finish the import?")).toBeTruthy();
+  });
+
+  it("exports a bundle download with the wrapper marker", async () => {
+    localStorage.setItem("mygitui.railPins", JSON.stringify({ v: 1, data: ["reflog"] }));
+    let savedBlob: Blob | null = null;
+    let savedName = "";
+    const originalCreate = URL.createObjectURL;
+    const originalRevoke = URL.revokeObjectURL;
+    const originalClick = HTMLAnchorElement.prototype.click;
+    URL.createObjectURL = (blob: Blob) => {
+      savedBlob = blob;
+      return "blob:mock";
+    };
+    URL.revokeObjectURL = () => {};
+    HTMLAnchorElement.prototype.click = function (this: HTMLAnchorElement) {
+      savedName = this.download;
+      return;
+    };
+
+    try {
+      render(SettingsDialog, { open: true, settings, apps });
+      await fireEvent.click(screen.getByRole("button", { name: "Advanced" }));
+      await fireEvent.click(screen.getByRole("button", { name: "Export settings" }));
+    } finally {
+      URL.createObjectURL = originalCreate;
+      URL.revokeObjectURL = originalRevoke;
+      HTMLAnchorElement.prototype.click = originalClick;
+    }
+
+    expect(savedBlob).not.toBeNull();
+    expect(savedName).toContain("mygitui-settings-");
+    const text = await (savedBlob as unknown as Blob).text();
+    const parsed = JSON.parse(text) as Record<string, unknown>;
+    expect(parsed["mygitui-settings-export"]).toBe(true);
+    expect((parsed.data as Record<string, unknown>)["mygitui.railPins"]).toEqual(["reflog"]);
   });
 });
 

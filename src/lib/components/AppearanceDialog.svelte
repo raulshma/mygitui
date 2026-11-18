@@ -23,6 +23,12 @@
   import { toast } from "$lib/toast";
   import { currentScheme, THEME_SCHEME_EVENT, type ColorScheme } from "$lib/theme";
   import { appearance } from "$lib/theme/appearance.svelte";
+  import {
+    appSettings,
+    UI_SCALE_MAX,
+    UI_SCALE_MIN,
+    UI_SCALE_STEP,
+  } from "$lib/state/appSettings.svelte";
   import { preloadIconSet } from "$lib/components/icons/library.svelte";
   import {
     ALL_THEMES,
@@ -337,6 +343,39 @@
               </AppearancePill>
             {/each}
           </RadioGroup.Root>
+        </section>
+
+        <!-- UI scale (batch B item 42): root font-size multiplier. Lives in
+             appSettings (the preset codec's codes round-trip with
+             shadcn-svelte.com/create, so it cannot ride the config); the
+             appearance store re-renders its managed style element on
+             change. -->
+        <section class="flex flex-col gap-2">
+          <h3 class="text-sm font-medium">Interface scale</h3>
+          <div class="flex items-center gap-3">
+            <label class="sr-only" for="ui-scale-slider">Interface scale slider</label>
+            <input
+              id="ui-scale-slider"
+              type="range"
+              min={UI_SCALE_MIN}
+              max={UI_SCALE_MAX}
+              step={UI_SCALE_STEP}
+              value={appSettings.uiScalePercent}
+              class="w-full accent-primary"
+              aria-valuetext={`${appSettings.uiScalePercent}%`}
+              oninput={(event) => {
+                const raw = Number((event.currentTarget as HTMLInputElement).value);
+                appSettings.update({ uiScalePercent: raw });
+                appearance.refresh();
+              }}
+            />
+            <span class="w-12 shrink-0 text-right text-xs tabular-nums text-muted-foreground">
+              {appSettings.uiScalePercent}%
+            </span>
+          </div>
+          <p class="text-xs text-muted-foreground">
+            Scales the whole interface (85%–125%). The terminal's font size has its own setting.
+          </p>
         </section>
       </div>
     </ScrollArea>

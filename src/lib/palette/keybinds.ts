@@ -79,7 +79,21 @@ export const DEFAULT_BINDINGS: Record<string, string> = {
   // held (US layouts: ? is shift+/), so comboFromEvent canonicalizes it to
   // "shift+?" — that is the matching combo string, not "shift+/".
   "help.shortcuts": "shift+?",
+  // Minimal UI undo (batch B item 41). ctrl+z was free across the registry;
+  // the command is EDITABLE_HONORED so it never hijacks text undo in
+  // inputs/editors (see EDITABLE_HONORED below).
+  "edit.undo": "ctrl+z",
 };
+
+/**
+ * Commands that must NOT fire while the focus sits in an editable target,
+ * even though their combos carry ctrl (the editable rule above lets ctrl
+ * chords through everywhere else — diff.find/files.save hijack text fields
+ * on purpose). `edit.undo` is exempted: in an input or CodeMirror editor,
+ * ctrl+z keeps its native TEXT undo; the UI-undo command works everywhere
+ * else (panels, trees, the shell).
+ */
+export const EDITABLE_EXEMPT_IDS: ReadonlySet<string> = new Set(["edit.undo"]);
 
 // ---------------------------------------------------------------------------
 // Combo parsing / canonicalization
@@ -500,9 +514,14 @@ export function startKeybinds(onAction: (commandId: string) => void): () => void
     }
     const combo = comboFromEvent(event, platform);
     if (combo === null) return;
-    if (isEditableTarget(event.target) && !hasCtrlOrAlt(combo)) return;
+    const editable = isEditableTarget(event.target);
+    if (editable && !hasCtrlOrAlt(combo)) return;
     const commandId = matchEvent(event, currentBindings(), platform);
     if (commandId === null) return;
+    // An exempt command never hijacks an editable target (see the doc on
+    // EDITABLE_EXEMPT_IDS): match first (so overrides still register), then
+    // bow out without swallowing the event.
+    if (editable && EDITABLE_EXEMPT_IDS.has(commandId)) return;
     event.preventDefault();
     event.stopPropagation();
     onAction(commandId);

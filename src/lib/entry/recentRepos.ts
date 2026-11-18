@@ -19,7 +19,8 @@ export interface StorageLike {
   setItem(key: string, value: string): void;
 }
 
-const STORAGE_KEY = "mygitui.recent-repos";
+/** Exported for the settings export/import bundle (settingsTransfer.ts). */
+export const STORAGE_KEY = "mygitui.recent-repos";
 
 /**
  * Canonical form used to compare repository paths. Windows lets the same

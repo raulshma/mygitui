@@ -12,12 +12,14 @@
    * `aria-activedescendant`; ↑/↓/Home/End navigate, Enter opens, Esc closes.
    */
   import { recentRepos, tabStore } from "$lib/stores/tabs.svelte";
+  import { favoriteRepos } from "$lib/stores/favoriteRepos.svelte";
   import {
     activateSwitcherItem,
     buildSwitcherItems,
     closeSwitcher,
     isSwitcherOpen,
     rankSwitcherItems,
+    toggleItemFavorite,
     toggleSwitcher,
     type RankedItem,
   } from "$lib/stores/switcher.svelte";
@@ -25,9 +27,16 @@
   import { trapTab } from "$lib/components/safety/trapTab";
   import { Input } from "$lib/components/ui/input/index.js";
   import { Badge } from "$lib/components/ui/badge/index.js";
+  import { Hint } from "$lib/components/ui/tooltip/index.js";
+  import Icon from "$lib/components/icons/Icon.svelte";
+  import { appIcon } from "$lib/components/icons/library.svelte";
   import { describeError } from "$lib/errors";
 
   const open = $derived(isSwitcherOpen());
+
+  /** Star glyphs resolved reactively (plain divs can't host `{@const}`). */
+  const starIcon = $derived(appIcon("star"));
+  const starOutlineIcon = $derived(appIcon("star-outline"));
 
   let query = $state("");
   let activeIndex = $state(0);
@@ -36,10 +45,39 @@
   /** Element focused before the switcher opened (restored on close). */
   let restoreTo: HTMLElement | null = null;
 
-  // Snapshot recents/tabs while computing matches; tabs are rune state so
-  // this stays fresh, and recents are re-read on every open (see effect).
-  const items = $derived(buildSwitcherItems(recentRepos.list(), tabStore.tabs));
+  // Snapshot recents/tabs while computing matches; tabs and the favorite
+  // set are rune state so this stays fresh, and recents are re-read on
+  // every open (see effect).
+  const items = $derived(
+    buildSwitcherItems(recentRepos.list(), tabStore.tabs, favoriteRepos.favorites),
+  );
   const ranked = $derived(rankSwitcherItems(items, query));
+
+  /**
+   * Flat render list: the ranked rows are grouped into a Favorites block
+   * (first) and an Open tabs & recents block (second), with separator
+   * headings between them (`role="separator"` listbox children — keyboard
+   * navigation stays on `ranked`'s option indexes and skips these).
+   * `favoriteRepos.favorites` is only read to re-render the stars when the
+   * set flips.
+   */
+  type RenderRow = { type: "option"; item: RankedItem; index: number } | { type: "separator"; label: string };
+  const rows = $derived.by<RenderRow[]>(() => {
+    void favoriteRepos.favorites;
+    const favs: RenderRow[] = [];
+    const rest: RenderRow[] = [];
+    ranked.forEach((item, index) => {
+      (item.kind === "favorite" ? favs : rest).push({ type: "option", item, index });
+    });
+    const out: RenderRow[] = [];
+    if (favs.length > 0) {
+      out.push({ type: "separator", label: "Favorites" });
+      out.push(...favs);
+      if (rest.length > 0) out.push({ type: "separator", label: "Repositories" });
+    }
+    out.push(...rest);
+    return out;
+  });
 
   // Opening resets the session, remembers the invoker and focuses the
   // input; closing restores focus there and clears it.
@@ -140,6 +178,16 @@
     const len = item.label.length;
     return new Set(item.positions.filter((p) => p < len));
   }
+
+  /** Flips the row's repo in the favorite set without activating the row. */
+  function star(event: MouseEvent, item: RankedItem): void {
+    event.stopPropagation();
+    event.preventDefault();
+    const now = toggleItemFavorite(item);
+    toast(now ? `Added ${item.label} to favorites` : `Removed ${item.label} from favorites`, {
+      kind: "info",
+    });
+  }
 </script>
 
 <svelte:window onkeydown={onGlobalKeydown} />
@@ -181,42 +229,72 @@
         role="listbox"
         aria-label="Repositories"
       >
-        {#each ranked as item, i (item.id)}
-          {@const hits = labelHits(item)}
-          <li
-            id={`sw-opt-${i}`}
-            class="option flex items-center gap-2 px-3 py-2 rounded-full cursor-pointer min-w-0"
-            class:active={i === activeIndex}
-            class:bg-accent={i === activeIndex}
-            role="option"
-            aria-selected={i === activeIndex}
-            onclick={() => void activate(item)}
-            onkeydown={(event) => {
-              if (event.key === "Enter") {
-                event.preventDefault();
-                void activate(item);
-              }
-            }}
-            onmouseenter={() => (activeIndex = i)}
-          >
-            <span class="label min-w-0 font-medium whitespace-nowrap overflow-hidden text-ellipsis">
-              {#each item.label as ch, j (j)}<span
-                  class:hl={hits.has(j)}
-                  class:text-primary={hits.has(j)}
-                  class:font-bold={hits.has(j)}
-                >{ch}</span>{/each}
-            </span>
-            <span
-              class="sub flex-1 min-w-0 text-muted-foreground font-mono text-ui-micro whitespace-nowrap overflow-hidden text-ellipsis"
-            >{item.sub}</span>
-            {#if item.kind === "tab"}
-              <Badge
-                class="badge shrink-0 uppercase tracking-[0.05em] text-primary"
-                variant="outline"
-                aria-label="Open tab"
-              >open</Badge>
-            {/if}
-          </li>
+        {#each rows as row (row.type === "option" ? row.item.id : `sep-${row.label}`)}
+          {#if row.type === "separator"}
+            <li
+              class="sep px-3 pt-2 pb-1 text-ui-micro font-semibold uppercase tracking-wide text-muted-foreground"
+              role="separator"
+              aria-orientation="horizontal"
+            >{row.label}</li>
+          {:else}
+            {@const item = row.item}
+            {@const i = row.index}
+            {@const hits = labelHits(item)}
+            <li
+              id={`sw-opt-${i}`}
+              class="option flex items-center gap-2 px-3 py-2 rounded-full cursor-pointer min-w-0"
+              class:active={i === activeIndex}
+              class:bg-accent={i === activeIndex}
+              role="option"
+              aria-selected={i === activeIndex}
+              onclick={() => void activate(item)}
+              onkeydown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  void activate(item);
+                }
+              }}
+              onmouseenter={() => (activeIndex = i)}
+            >
+              <span class="label min-w-0 font-medium whitespace-nowrap overflow-hidden text-ellipsis">
+                {#each item.label as ch, j (j)}<span
+                    class:hl={hits.has(j)}
+                    class:text-primary={hits.has(j)}
+                    class:font-bold={hits.has(j)}
+                  >{ch}</span>{/each}
+              </span>
+              <span
+                class="sub flex-1 min-w-0 text-muted-foreground font-mono text-ui-micro whitespace-nowrap overflow-hidden text-ellipsis"
+              >{item.sub}</span>
+              {#if item.kind === "tab"}
+                <Badge
+                  class="badge shrink-0 uppercase tracking-[0.05em] text-primary"
+                  variant="outline"
+                  aria-label="Open tab"
+                >open</Badge>
+              {/if}
+              <Hint label={favoriteRepos.has(item.sub) ? "Remove from favorites" : "Add to favorites"}>
+                {#snippet child({ props })}
+                  <button
+                    {...props}
+                    type="button"
+                    class="shrink-0 flex cursor-pointer items-center justify-center rounded-full size-6 text-muted-foreground hover:bg-accent hover:text-primary aria-pressed:text-primary"
+                    aria-pressed={favoriteRepos.has(item.sub)}
+                    aria-label={favoriteRepos.has(item.sub) ? `Remove ${item.label} from favorites` : `Add ${item.label} to favorites`}
+                    onclick={(e) => star(e, item)}
+                  >
+                    {#if favoriteRepos.has(item.sub) && starIcon}
+                      <Icon icon={starIcon} size={15} />
+                    {:else if !favoriteRepos.has(item.sub) && starOutlineIcon}
+                      <Icon icon={starOutlineIcon} size={15} />
+                    {:else}
+                      ★
+                    {/if}
+                  </button>
+                {/snippet}
+              </Hint>
+            </li>
+          {/if}
         {/each}
         {#if ranked.length === 0}
           <li

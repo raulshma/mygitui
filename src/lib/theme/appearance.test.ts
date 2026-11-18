@@ -13,7 +13,9 @@ import {
   appearance,
   buildCss,
   buildFontCss,
+  buildScaleCss,
 } from "./appearance.svelte";
+import { appSettings } from "$lib/state/appSettings.svelte";
 import { DEFAULT_APPEARANCE, encodeAppearance } from "./preset/codec";
 import { getBaseColor } from "./preset/values";
 
@@ -162,5 +164,51 @@ describe("buildCss / buildFontCss", () => {
     const body = buildFontCss({ ...DEFAULT_APPEARANCE, font: "lora" });
     expect(body).toContain("--font-sans: 'Lora Variable', serif");
     expect(body).toContain("--font-heading: 'Lora Variable', serif");
+  });
+});
+
+describe("buildScaleCss (root font-size multiplier, item 42)", () => {
+  it("injects nothing at the default 100%", () => {
+    expect(buildScaleCss(100)).toBe("");
+    // Junk is treated as the default too.
+    expect(buildScaleCss(Number.NaN)).toBe("");
+  });
+
+  it("serializes a multiplier rule for off-default scales", () => {
+    expect(buildScaleCss(85)).toContain("font-size: calc(100% * 0.85)");
+    expect(buildScaleCss(125)).toContain("font-size: calc(100% * 1.25)");
+    expect(buildScaleCss(105)).toContain("font-size: calc(100% * 1.05)");
+    // The rule targets the root element so every rem-based size scales.
+    expect(buildScaleCss(110)).toMatch(/^html \{/);
+  });
+});
+
+describe("ui scale application (managed style element)", () => {
+  beforeEach(() => {
+    resetDom();
+    // Each scale test starts from the defaults on BOTH surfaces: the
+    // multiplier (appSettings) and the config (earlier tests in this file
+    // mutate the shared store singleton — reset() re-defaults and applies).
+    appSettings.update({ uiScalePercent: 100 });
+    appearance.reset();
+  });
+
+  it("keeps the default (no element) when the scale is 100", () => {
+    appearance.refresh();
+    expect(document.getElementById("mygitui-appearance")).toBeNull();
+  });
+
+  it("keeps the style element alive for a scale-only change and drops it at 100", () => {
+    appSettings.update({ uiScalePercent: 125 });
+    appearance.refresh();
+    const element = document.getElementById("mygitui-appearance");
+    expect(element).not.toBeNull();
+    expect(element!.textContent).toContain("font-size: calc(100% * 1.25)");
+    // No token overrides: the default tokens must not be re-injected.
+    expect(element!.textContent).not.toContain("--background:");
+
+    appSettings.update({ uiScalePercent: 100 });
+    appearance.refresh();
+    expect(document.getElementById("mygitui-appearance")).toBeNull();
   });
 });

@@ -54,6 +54,7 @@
   } from "$lib/stores/tabs.svelte";
   import { showMenuAt, type MenuEntry } from "$lib/components/menu/contextMenuStore.svelte";
   import { remoteDevices } from "$lib/stores/remoteDevices.svelte";
+  import { favoriteRepos } from "$lib/stores/favoriteRepos.svelte";
   import { isTauri } from "$lib/entry/dragdrop";
   import { revealItemInDir } from "@tauri-apps/plugin-opener";
   import { describeError } from "$lib/errors";
@@ -307,6 +308,17 @@
         },
       },
       { separator: true },
+      {
+        id: "favorite",
+        label: favoriteRepos.has(tab.root) ? "Remove Favorite" : "Add to Favorites",
+        run: () => {
+          const now = favoriteRepos.toggle(tab.root);
+          toast(
+            now ? `Added ${tab.name} to favorites` : `Removed ${tab.name} from favorites`,
+            { kind: "info" },
+          );
+        },
+      },
       {
         id: "copy-path",
         label: "Copy Repo Path",
