@@ -17,7 +17,8 @@
     "tauri": "tauri",
     "prepare": "git config core.hooksPath hooks",
     "gen:icons": "node scripts/generate-icon-sets.mjs",
-    "prune:styles": "node scripts/prune-style-sheets.mjs"
+    "prune:styles": "node scripts/prune-style-sheets.mjs",
+    "release:bump": "node scripts/release-bump.mjs"
   },
   "license": "MIT",
   "dependencies": {

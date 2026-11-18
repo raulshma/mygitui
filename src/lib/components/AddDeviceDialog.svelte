@@ -13,7 +13,13 @@
    */
   import { deviceTest } from "$lib/ipc/client";
   import type { AuthKind, DeviceInput, DeviceProfile } from "$lib/ipc/types";
-  import { remoteDevices } from "$lib/stores/remoteDevices.svelte";
+  import {
+    POLL_SECS_DEFAULT,
+    POLL_SECS_MAX,
+    POLL_SECS_MIN,
+    parsePollSecs,
+    remoteDevices,
+  } from "$lib/stores/remoteDevices.svelte";
   import { toast } from "$lib/toast";
   import { trapTab } from "$lib/components/safety/trapTab";
   import * as Dialog from "$lib/components/ui/dialog/index.js";
@@ -44,7 +50,8 @@
   let keyPath = $state("");
   let passphrase = $state("");
   let password = $state("");
-  let pollSecs = $state(5);
+  /** Poll-interval draft: blank = the global default (parsed by parsePollSecs). */
+  let pollText = $state("");
   let autoConnect = $state(false);
 
   let busy = $state(false);
@@ -80,7 +87,7 @@
       keyPath = edit?.auth.key_path ?? "";
       passphrase = "";
       password = "";
-      pollSecs = edit?.poll_secs ?? 5;
+      pollText = edit !== null ? String(edit.poll_secs) : "";
       autoConnect = edit?.auto_connect ?? false;
       error = "";
       testResult = "";
@@ -120,7 +127,8 @@
         passphrase !== "" || (edit !== null && edit.auth.has_passphrase),
       password: password !== "" ? password : null,
       passphrase: passphrase !== "" ? passphrase : null,
-      poll_secs: pollSecs,
+      // null = the global default (the backend clamps 2-300 when set).
+      poll_secs: parsePollSecs(pollText),
       auto_connect: autoConnect,
     };
   }
@@ -345,10 +353,16 @@
         <Input
           class="input"
           type="number"
-          min="1"
-          bind:value={pollSecs}
+          min={POLL_SECS_MIN}
+          max={POLL_SECS_MAX}
+          placeholder={`${POLL_SECS_DEFAULT} (global default)`}
+          aria-label="Poll interval in seconds (blank = global default)"
+          bind:value={pollText}
           disabled={busy}
         />
+        <span class="text-muted-foreground text-[0.65rem]">
+          {POLL_SECS_MIN}–{POLL_SECS_MAX} s · blank = global default ({POLL_SECS_DEFAULT} s)
+        </span>
       </Label>
 
       <Label class="check flex cursor-pointer items-center gap-1.5 text-sm text-foreground">

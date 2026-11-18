@@ -94,6 +94,7 @@ vi.mock("$lib/ipc/client", () => ({
   onHostkeyRequest: vi.fn(),
   onDeviceAuthRequest: vi.fn(),
   onDeviceStatus: vi.fn(),
+  onRepoWatchState: vi.fn(),
 }));
 
 import { opCancel } from "$lib/ipc/client";

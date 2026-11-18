@@ -15,6 +15,7 @@
 import { conflicts } from "$lib/ipc/client";
 import type { ConflictFile, RepoId } from "$lib/ipc/types";
 import { describeError } from "$lib/errors";
+import { registerRepoEvictor } from "$lib/state/repoEvictors";
 
 /** Cached state for one repository. */
 export interface ConflictsEntry {
@@ -101,3 +102,7 @@ export class ConflictsStore {
 
 /** The application-wide conflicts cache. */
 export const conflictsStore = new ConflictsStore();
+
+// Caches per-repo state: registers with the eviction registry so closeTab
+// (the single choke point) drops the closed repo's entry.
+registerRepoEvictor((repoId) => conflictsStore.clear(repoId));

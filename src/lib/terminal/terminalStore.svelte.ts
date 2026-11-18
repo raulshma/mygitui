@@ -1,21 +1,37 @@
 /**
- * Terminal session store (Svelte 5 runes) — one PTY session per repository.
+ * Terminal session store (Svelte 5 runes) — multiple PTY sessions per
+ * repository (terminal tabs; splits are out of scope).
+ *
+ * Identity: a session is keyed by the pair `(repoId, terminalId)`; terminal
+ * ids are per-repo `"t1"`, `"t2"`, … minted in creation order and tracked
+ * in a per-repo ordered list (`order`) with the focused one in `active`
+ * (both session-level state — terminals are never restored across
+ * restarts, so nothing here persists).
  *
  * Lifecycle:
- * - `ensure(repoId)` lazily creates (via the injected factory) the terminal
- *   UI instance + the backend pty on the first panel mount; later calls
- *   return the same live session (hide/show of the panel does NOT restart
- *   the shell — the xterm element is simply re-parented by the panel).
- *   Repositories on an SSH device pass `remote` and get a remote shell
- *   (`rshell_create`) instead — identical session ids and events.
- * - Input: `term.onData` → `ptyWrite` / `rshellWrite`. Output: `pty-output`
- *   events are dispatched by session id → `term.write`. Exit: `pty-exit` →
- *   toast + cleanup; no auto-recreate (the user restarts from the panel).
- * - `dispose(repoId)` (RepoView unmount = repo tab closed) kills the pty
- *   and drops the session. `restart` = kill + fresh create. `kill` = user
- *   stop button.
- * - Resize: the panel fits the terminal, then calls `resize` — debounced
- *   100 ms before reaching `pty_resize` / `rshell_resize`.
+ * - `ensure(repoId)` lazily creates (via the injected factory) the ACTIVE
+ *   terminal's UI instance + backend pty on the first panel mount; later
+ *   calls return the same live session (hide/show of the panel does NOT
+ *   restart the shell — the xterm element is simply re-parented by the
+ *   panel). Repositories on an SSH device pass `remote` and get a remote
+ *   shell (`rshell_create`) instead — identical session ids and events.
+ * - `create(repoId)` (the panel's "+" button) adds a NEW terminal id,
+ *   activates it and creates its session — capped at
+ *   {@link MAX_TERMINALS_PER_REPO} per repo (the backend caps 8 pty
+ *   sessions globally; the per-repo cap stays conservative). `close`
+ *   removes one tab; `setActive` switches without touching sessions.
+ * - Input: `term.onData` → `ptyWrite` / `rshellWrite`; snippets write
+ *   whole commands through `writeInput` (command + Enter into the ACTIVE
+ *   session's pty). Output: `pty-output` events are dispatched by pty
+ *   session id → that session's `term.write`. Exit: `pty-exit` → toast +
+ *   cleanup of that one session; no auto-recreate (the user restarts from
+ *   the panel).
+ * - `dispose(repoId)` (RepoView unmount = repo tab closed) kills and
+ *   forgets ALL of the repo's terminals. `restart` = kill + fresh create
+ *   for the active terminal. `kill` = user stop button (active terminal).
+ * - Resize: the panel fits the visible (active) terminal, then calls
+ *   `resize` — debounced 100 ms before reaching `pty_resize` /
+ *   `rshell_resize`.
  *
  * The xterm.js classes never appear here: the store only knows the
  * `TerminalLike` / `TerminalHandle` interfaces, and the real factory is
@@ -63,6 +79,32 @@ export const TERMINAL_FONT_SIZE = 13;
 export function terminalFontSize(): number {
   const size = appSettings.terminalFontSize;
   return Number.isFinite(size) ? size : TERMINAL_FONT_SIZE;
+}
+
+/**
+ * Terminal tabs per repo: the conservative FE cap (the backend allows 8 pty
+ * sessions globally — all repos combined — so 4 per repo can never wedge a
+ * second tab's shell start on its own).
+ */
+export const MAX_TERMINALS_PER_REPO = 4;
+
+/**
+ * Composite session key: one terminal of one repo. Terminal ids are
+ * per-repo (`"t1"` …), so the raw repoId alone is no longer a session key.
+ */
+export function sessionKey(repoId: string, terminalId: string): string {
+  return `${repoId}::${terminalId}`;
+}
+
+/** Splits a composite key back; `null` for keys without the separator. */
+export function splitSessionKey(
+  key: string,
+): { repoId: string; terminalId: string } | null {
+  const sep = key.lastIndexOf("::");
+  if (sep <= 0) return null;
+  const repoId = key.slice(0, sep);
+  const terminalId = key.slice(sep + 2);
+  return repoId !== "" && terminalId !== "" ? { repoId, terminalId } : null;
 }
 
 /** Lifecycle of a repo's terminal (drives the panel's UI states). */
@@ -115,9 +157,11 @@ export interface TerminalHandle {
 /** Creates one terminal UI instance; injectable for tests. */
 export type TerminalFactory = () => TerminalHandle;
 
-/** One repo's terminal: the pty identity plus the UI it is attached to. */
+/** One repo terminal tab: the pty identity plus the UI it is attached to. */
 export interface TerminalSession {
   readonly repoId: string;
+  /** Per-repo terminal id (`"t1"` …) — half of the session key. */
+  readonly terminalId: string;
   /** Backend pty id; `null` until `pty_create` resolves (or after exit). */
   sessionId: string | null;
   /**
@@ -134,9 +178,14 @@ export interface TerminalSession {
   error: string | null;
 }
 
-function unavailableSession(repoId: string, error: string | null): TerminalSession {
+function unavailableSession(
+  repoId: string,
+  terminalId: string,
+  error: string | null,
+): TerminalSession {
   return {
     repoId,
+    terminalId,
     sessionId: null,
     remote: false,
     status: "unavailable",
@@ -148,14 +197,26 @@ function unavailableSession(repoId: string, error: string | null): TerminalSessi
 }
 
 export class TerminalStore {
-  /** Per-repo sessions (reactive record keyed by repoId). */
+  /** All sessions, keyed by the composite {@link sessionKey}. */
   sessions: Record<string, TerminalSession> = $state({});
+
+  /**
+   * Per-repo terminal ids in tab order. Repos without terminals are absent
+   * (empty read), so the panel can fall back to the first terminal.
+   */
+  order: Record<string, string[]> = $state({});
+
+  /**
+   * Per-repo focused terminal id (session-level only — terminals are not
+   * restored across restarts, so nothing here persists).
+   */
+  active: Record<string, string> = $state({});
 
   #factory: TerminalFactory | null = null;
   #unregisterEvents: (() => void) | null = null;
-  /** pty session id → repoId (non-reactive dispatch index). */
+  /** pty session id → composite session key (non-reactive dispatch index). */
   readonly #bySession = new Map<string, string>();
-  /** repoId → freshness token; async `pty_create` continuations check it. */
+  /** session key → freshness token; async `pty_create` continuations check it. */
   readonly #tokens = new Map<string, object>();
   readonly #resizeTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
@@ -164,58 +225,151 @@ export class TerminalStore {
     this.#factory = factory;
   }
 
-  /** The repo's session record, or `null` when none exists. */
+  /** The repo's ordered terminal ids (empty array when it has none). */
+  list(repoId: string): string[] {
+    return this.order[repoId] ?? [];
+  }
+
+  /** The repo's focused terminal id, or `null` when it has no terminals. */
+  activeId(repoId: string): string | null {
+    return this.active[repoId] ?? this.list(repoId)[0] ?? null;
+  }
+
+  /** The repo's ACTIVE session record, or `null` when none exists. */
   session(repoId: string): TerminalSession | null {
-    return this.sessions[repoId] ?? null;
+    const id = this.activeId(repoId);
+    return id === null ? null : (this.sessions[sessionKey(repoId, id)] ?? null);
+  }
+
+  /** One specific terminal's session, or `null` for unknown ids. */
+  sessionById(repoId: string, terminalId: string): TerminalSession | null {
+    return this.sessions[sessionKey(repoId, terminalId)] ?? null;
   }
 
   /**
-   * The repo's terminal session, creating it lazily (terminal UI + pty).
+   * The ACTIVE terminal's session, creating it lazily (terminal UI + pty).
    * Safe to call from a mount `$effect`: the first call creates, later ones
    * return the existing starting/live session unchanged. `remote` selects
    * the remote-shell transport for repositories on an SSH device.
    */
   ensure(repoId: string, remote = false): TerminalSession | null {
-    const existing = this.sessions[repoId];
+    let id = this.activeId(repoId);
+    if (id === null) {
+      // First terminal of the repo — allocate its tab slot.
+      id = this.#allocate(repoId);
+      this.active[repoId] = id;
+    }
+    const key = sessionKey(repoId, id);
+    const existing = this.sessions[key];
     if (existing && (existing.status === "starting" || existing.status === "live")) {
       return existing;
     }
-    return this.#create(repoId, remote);
-  }
-
-  /** Kill + fresh session (the panel's Restart button). */
-  restart(repoId: string, remote = false): TerminalSession | null {
-    this.#teardown(repoId, { markExited: false, remove: false });
-    return this.#create(repoId, remote);
-  }
-
-  /** User stop: kills the pty and marks the session exited. */
-  kill(repoId: string): void {
-    this.#teardown(repoId, { markExited: true, remove: false });
+    return this.#create(repoId, id, remote);
   }
 
   /**
-   * Repo teardown (RepoView unmount = the repo tab was closed): kills the
-   * pty and forgets the session entirely. No-op for unknown repos.
+   * Opens a NEW terminal tab for the repo ("+" button): mints the next
+   * terminal id, appends it to the tab order, activates it and creates its
+   * session. Returns `null` (no-op) when the per-repo cap
+   * {@link MAX_TERMINALS_PER_REPO} is reached.
+   */
+  create(repoId: string, remote = false): TerminalSession | null {
+    if (this.list(repoId).length >= MAX_TERMINALS_PER_REPO) return null;
+    const id = this.#allocate(repoId);
+    this.active[repoId] = id;
+    return this.#create(repoId, id, remote);
+  }
+
+  /** Focuses one of the repo's terminal tabs (no-op for unknown ids). */
+  setActive(repoId: string, terminalId: string): void {
+    if (!this.list(repoId).includes(terminalId)) return;
+    this.active[repoId] = terminalId;
+  }
+
+  /** Kill + fresh session for the ACTIVE terminal (the Restart button). */
+  restart(repoId: string, remote = false): TerminalSession | null {
+    const id = this.activeId(repoId);
+    if (id === null) return this.ensure(repoId, remote);
+    const key = sessionKey(repoId, id);
+    this.#teardown(key, { markExited: false, remove: false });
+    return this.#create(repoId, id, remote);
+  }
+
+  /** User stop: kills the ACTIVE pty and marks the session exited. */
+  kill(repoId: string): void {
+    const id = this.activeId(repoId);
+    if (id === null) return;
+    this.#teardown(sessionKey(repoId, id), { markExited: true, remove: false });
+  }
+
+  /**
+   * Closes ONE terminal tab: kills its pty, drops the session, removes it
+   * from the tab order and re-focuses the neighbor (left preferred, then
+   * right — the tab-strip rule). Closing the last terminal leaves the repo
+   * without terminals (the panel's next `ensure` starts a fresh one).
+   */
+  close(repoId: string, terminalId: string): void {
+    const ids = this.list(repoId);
+    const index = ids.indexOf(terminalId);
+    if (index === -1) return;
+    this.#teardown(sessionKey(repoId, terminalId), { markExited: false, remove: true });
+    const remaining = ids.filter((id) => id !== terminalId);
+    if (remaining.length === 0) {
+      delete this.order[repoId];
+      delete this.active[repoId];
+      return;
+    }
+    this.order[repoId] = remaining;
+    if (this.active[repoId] === terminalId) {
+      // Left neighbor preferred, then the first remaining one.
+      this.active[repoId] = remaining[Math.max(0, index - 1)]!;
+    }
+  }
+
+  /**
+   * Repo teardown (RepoView unmount = the repo tab was closed): kills and
+   * forgets ALL of the repo's terminals (every tab), plus the tab order and
+   * the focused id. No-op for unknown repos.
    */
   dispose(repoId: string): void {
-    this.#teardown(repoId, { markExited: false, remove: true });
+    for (const id of this.list(repoId)) {
+      this.#teardown(sessionKey(repoId, id), { markExited: false, remove: true });
+    }
+    delete this.order[repoId];
+    delete this.active[repoId];
+  }
+
+  /**
+   * Writes a snippet command (plus Enter) into the ACTIVE terminal's pty —
+   * the same channel the keystroke stream uses, so the shell sees and
+   * echoes it like typed input. Dropped silently (returns `false`) while
+   * the session has no live pty (starting / exited / unavailable).
+   */
+  writeInput(repoId: string, data: string): boolean {
+    const entry = this.session(repoId);
+    if (!entry?.sessionId) return false;
+    void this.#writeShell(entry.sessionId, data, entry.remote).catch(() => {});
+    return true;
   }
 
   /**
    * Size sync (panel ResizeObserver → fit addon → here). Debounced
-   * {@link RESIZE_DEBOUNCE_MS}; silently skipped while the repo has no live
-   * pty (the panel refits — and lands here again — once it attaches).
+   * {@link RESIZE_DEBOUNCE_MS}; silently skipped while the ACTIVE session
+   * has no live pty (the panel refits — and lands here again — once it
+   * attaches). Only the visible terminal is ever measured.
    */
   resize(repoId: string, cols: number, rows: number): void {
-    if (!this.sessions[repoId]?.sessionId) return;
-    const timer = this.#resizeTimers.get(repoId);
+    const id = this.activeId(repoId);
+    if (id === null) return;
+    const key = sessionKey(repoId, id);
+    if (!this.sessions[key]?.sessionId) return;
+    const timer = this.#resizeTimers.get(key);
     if (timer) clearTimeout(timer);
     this.#resizeTimers.set(
-      repoId,
+      key,
       setTimeout(() => {
-        this.#resizeTimers.delete(repoId);
-        const entry = this.sessions[repoId];
+        this.#resizeTimers.delete(key);
+        const entry = this.sessions[key];
         if (!entry?.sessionId) return;
         void this.#resizeShell(entry.sessionId, rows, cols, entry.remote).catch(() => {});
       }, RESIZE_DEBOUNCE_MS),
@@ -261,14 +415,29 @@ export class TerminalStore {
     return remote ? rshellKill(sessionId) : ptyKill(sessionId);
   }
 
-  #create(repoId: string, remote = false): TerminalSession | null {
+  /** Mints the next per-repo terminal id and appends it to the tab order. */
+  #allocate(repoId: string): string {
+    const ids = this.list(repoId);
+    // Highest numeric suffix + 1: ids never collide, even after closes.
+    let max = 0;
+    for (const id of ids) {
+      const n = Number(id.replace(/^t/, ""));
+      if (Number.isInteger(n) && n > max) max = n;
+    }
+    const next = `t${max + 1}`;
+    this.order[repoId] = [...ids, next];
+    return next;
+  }
+
+  #create(repoId: string, terminalId: string, remote = false): TerminalSession | null {
+    const key = sessionKey(repoId, terminalId);
     if (!isTauri()) {
-      this.sessions[repoId] = unavailableSession(repoId, null);
-      return this.sessions[repoId];
+      this.sessions[key] = unavailableSession(repoId, terminalId, null);
+      return this.sessions[key];
     }
     if (!this.#factory) {
-      this.sessions[repoId] = unavailableSession(repoId, "no terminal factory");
-      return this.sessions[repoId];
+      this.sessions[key] = unavailableSession(repoId, terminalId, "no terminal factory");
+      return this.sessions[key];
     }
     this.#startEvents();
 
@@ -277,8 +446,9 @@ export class TerminalStore {
       handle = this.#factory();
     } catch (err) {
       const message = describeError(err);
-      this.sessions[repoId] = {
+      this.sessions[key] = {
         repoId,
+        terminalId,
         sessionId: null,
         remote,
         status: "failed",
@@ -287,11 +457,12 @@ export class TerminalStore {
         setTheme: null,
         error: message,
       };
-      return this.sessions[repoId];
+      return this.sessions[key];
     }
 
-    this.sessions[repoId] = {
+    this.sessions[key] = {
       repoId,
+      terminalId,
       sessionId: null,
       remote,
       status: "starting",
@@ -300,38 +471,40 @@ export class TerminalStore {
       setTheme: handle.setTheme,
       error: null,
     };
-    const entry = this.sessions[repoId];
+    const entry = this.sessions[key];
     const token = {};
-    this.#tokens.set(repoId, token);
+    this.#tokens.set(key, token);
 
     // Keystrokes: drop silently until the pty id arrives (first ms only).
+    // The closure is scoped to THIS terminal's session key — a keystroke
+    // can never land in another tab's shell.
     entry.term?.onData((data) => {
-      const current = this.sessions[repoId];
+      const current = this.sessions[key];
       if (!current?.sessionId) return;
       void this.#writeShell(current.sessionId, data, current.remote).catch(() => {});
     });
 
     this.#createShell(repoId, remote, handle.term.rows, handle.term.cols)
       .then((sessionId) => {
-        if (this.#tokens.get(repoId) !== token) {
+        if (this.#tokens.get(key) !== token) {
           // Session was torn down / replaced meanwhile: kill the orphan.
           void this.#killShell(sessionId, remote).catch(() => {});
           return;
         }
-        const current = this.sessions[repoId];
+        const current = this.sessions[key];
         if (!current || current.status !== "starting") {
           void this.#killShell(sessionId, remote).catch(() => {});
           return;
         }
         current.sessionId = sessionId;
         current.status = "live";
-        this.#bySession.set(sessionId, repoId);
+        this.#bySession.set(sessionId, key);
       })
       .catch((err) => {
-        if (this.#tokens.get(repoId) !== token) return;
-        this.#tokens.delete(repoId);
+        if (this.#tokens.get(key) !== token) return;
+        this.#tokens.delete(key);
         const message = describeError(err);
-        const current = this.sessions[repoId];
+        const current = this.sessions[key];
         if (current) {
           current.term?.dispose();
           current.term = null;
@@ -347,12 +520,12 @@ export class TerminalStore {
   }
 
   #teardown(
-    repoId: string,
+    key: string,
     opts: { markExited: boolean; remove: boolean },
   ): void {
-    this.#tokens.delete(repoId);
-    this.#cancelResize(repoId);
-    const entry = this.sessions[repoId];
+    this.#tokens.delete(key);
+    this.#cancelResize(key);
+    const entry = this.sessions[key];
     if (!entry) return;
     if (entry.sessionId) {
       this.#bySession.delete(entry.sessionId);
@@ -360,7 +533,7 @@ export class TerminalStore {
     }
     entry.term?.dispose();
     if (opts.remove) {
-      delete this.sessions[repoId];
+      delete this.sessions[key];
       return;
     }
     entry.sessionId = null;
@@ -392,18 +565,18 @@ export class TerminalStore {
   }
 
   #applyOutput(sessionId: string, data: string): void {
-    const repoId = this.#bySession.get(sessionId);
-    if (repoId === undefined) return;
-    this.sessions[repoId]?.term?.write(data);
+    const key = this.#bySession.get(sessionId);
+    if (key === undefined) return;
+    this.sessions[key]?.term?.write(data);
   }
 
   #applyExit(sessionId: string, code: number): void {
-    const repoId = this.#bySession.get(sessionId);
-    if (repoId === undefined) return;
+    const key = this.#bySession.get(sessionId);
+    if (key === undefined) return;
     this.#bySession.delete(sessionId);
-    this.#tokens.delete(repoId);
-    this.#cancelResize(repoId);
-    const entry = this.sessions[repoId];
+    this.#tokens.delete(key);
+    this.#cancelResize(key);
+    const entry = this.sessions[key];
     if (entry) {
       entry.sessionId = null;
       entry.status = "exited";
@@ -415,10 +588,10 @@ export class TerminalStore {
     toast(`Terminal exited (code ${code})`);
   }
 
-  #cancelResize(repoId: string): void {
-    const timer = this.#resizeTimers.get(repoId);
+  #cancelResize(key: string): void {
+    const timer = this.#resizeTimers.get(key);
     if (timer) clearTimeout(timer);
-    this.#resizeTimers.delete(repoId);
+    this.#resizeTimers.delete(key);
   }
 }
 

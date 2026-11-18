@@ -13,6 +13,7 @@ import {
 } from "$lib/ipc/client";
 import type { RepoChangedEvent } from "$lib/ipc/types";
 import { resetRepoEvents } from "$lib/events/repoEvents";
+import { registerRepoEvictor } from "$lib/state/repoEvictors";
 import { RecentRepoStore, type StorageLike } from "$lib/entry/recentRepos";
 import { terminals } from "$lib/terminal/terminalStore.svelte";
 import { opStore } from "$lib/stores/ops.svelte";
@@ -439,6 +440,35 @@ describe("closeTab cache hygiene", () => {
     } finally {
       forgetSession.mockRestore();
     }
+  });
+
+  it("runs the eviction registry callbacks for the closing repo id", async () => {
+    const store = freshStore();
+    mockOpenRepo.mockResolvedValue(ALPHA);
+    await store.openTab("C:/repos/alpha");
+    const seen: string[] = [];
+    const unregister = registerRepoEvictor((repoId) => seen.push(repoId));
+
+    try {
+      await store.closeTab("repo-1");
+
+      // Registered stores (conflicts/stats/projects caches) evict through
+      // the registry now — closeTab runs every callback with the repo id.
+      expect(seen).toEqual(["repo-1"]);
+    } finally {
+      unregister();
+    }
+  });
+
+  it("does not run eviction callbacks for an unknown id (early return)", async () => {
+    const seen: string[] = [];
+    const unregister = registerRepoEvictor((repoId) => seen.push(repoId));
+
+    const store = freshStore();
+    await store.closeTab("missing");
+
+    expect(seen).toEqual([]);
+    unregister();
   });
 });
 

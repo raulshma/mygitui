@@ -1,9 +1,9 @@
 /**
  * Backend push-event fan-out — one Tauri subscription per event name.
  *
- * Every backend push event (`repo-changed`, `op-progress`, `op-log`,
- * `auth-request`, `action-output`, `clone-progress`, `pty-output`, `pty-exit`,
- * `hostkey-request`, `device-auth-request`, `device-status`) used to be
+ * Every backend push event (`repo-changed`, `repo-watch-state`, `op-progress`,
+ * `op-log`, `auth-request`, `action-output`, `clone-progress`, `pty-output`,
+ * `pty-exit`, `hostkey-request`, `device-auth-request`, `device-status`) used to be
  * subscribed by each consumer independently, and every one of them carried
  * its own copy of the idempotent-start flag + `#unlisten` + try/catch
  * lifecycle (tabs, ops ×2, actions, terminal, popouts, history instances).
@@ -40,6 +40,7 @@ import type {
   PtyExitEvent,
   PtyOutputEvent,
   RepoChangedEvent,
+  RepoWatchStateEvent,
 } from "$lib/ipc/types";
 
 /**
@@ -229,6 +230,10 @@ const deviceStatusChannel = new EventChannel<DeviceStatusEvent>(
   "device-status",
   (forward) => client.onDeviceStatus(forward),
 );
+const repoWatchStateChannel = new EventChannel<RepoWatchStateEvent>(
+  "repo-watch-state",
+  (forward) => client.onRepoWatchState(forward),
+);
 
 // ---------------------------------------------------------------------------
 // Public registrations (consumers import these; unsubscribe is synchronous)
@@ -313,6 +318,22 @@ export function onDeviceStatus(
   return deviceStatusChannel.register({ handle });
 }
 
+/** A `repo-watch-state` registration: `filter` declares which repos matter. */
+export interface RepoWatchStateListener {
+  /**
+   * Which watch-state events this consumer reacts to — e.g. a same-repo
+   * predicate for a per-repo surface, `() => true` when every event matters.
+   */
+  filter?: (event: RepoWatchStateEvent) => boolean;
+  /** Called for every event the filter accepted. */
+  handle: (event: RepoWatchStateEvent) => void;
+}
+
+/** Subscribes to `repo-watch-state`; returns the synchronous unsubscribe. */
+export function onRepoWatchState(listener: RepoWatchStateListener): () => void {
+  return repoWatchStateChannel.register(listener);
+}
+
 /**
  * Test helper: drops every listener and unsubscribes every backend event,
  * so the next registration starts from a clean module (each event name
@@ -330,4 +351,5 @@ export function resetRepoEvents(): void {
   hostkeyRequestChannel.reset();
   deviceAuthRequestChannel.reset();
   deviceStatusChannel.reset();
+  repoWatchStateChannel.reset();
 }

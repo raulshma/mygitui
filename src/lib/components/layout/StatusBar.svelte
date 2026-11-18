@@ -39,9 +39,15 @@
     opStore,
     type ActiveOp,
   } from "$lib/stores/ops.svelte";
-  import { refreshStatus, tabStore } from "$lib/stores/tabs.svelte";
+  import { refreshStatus, tabStore, closeTab, openTab } from "$lib/stores/tabs.svelte";
   import { autofetch } from "$lib/stores/autofetch.svelte";
   import { remoteDevices } from "$lib/stores/remoteDevices.svelte";
+  import {
+    startWatchHealth,
+    watchChipKind,
+    watchHealth,
+  } from "$lib/stores/watchHealth.svelte";
+  import ConfirmDialog from "$lib/components/safety/ConfirmDialog.svelte";
   import OpLogStrip from "$lib/components/panels/OpLogStrip.svelte";
   import OpHistoryPopover from "$lib/components/layout/OpHistoryPopover.svelte";
   import { emitUiEvent } from "$lib/palette/events";
@@ -125,6 +131,51 @@
   const deviceStatus = $derived(
     active?.deviceId ? remoteDevices.statusOf(active.deviceId) : null,
   );
+
+  // -- watcher health chip (item 62) --------------------------------------------
+  //
+  // Only ever visible when the ACTIVE repo's watcher is NOT healthy: the
+  // poll fallback shows a muted "watch: poll (fallback)" chip, a dead
+  // watcher shows the danger chip with a Reopen action (reload the tab —
+  // repo_open revives the watcher). Healthy + recommended is the default
+  // backend state and emits nothing, so the bar stays calm the rest of the
+  // time. The subscription is lazy and module-owned: the first StatusBar
+  // mount starts it, for the app's lifetime.
+
+  startWatchHealth();
+
+  const watchState = $derived(repoId !== null ? watchHealth.state(repoId) : null);
+  const watchKind = $derived(watchChipKind(watchState));
+  const watchTitle = $derived.by(() => {
+    if (watchState === null) return "";
+    // `since` is ms; the formatter wants seconds (the 1s ticker below keeps
+    // it fresh while the chip is visible).
+    const when = formatRelativeTime(Math.floor(watchState.since / 1000), {
+      now: Math.floor(now / 1000),
+    });
+    if (watchKind === "dead") {
+      return `Watcher for this repository is not working (changed ${when}) — changes will not refresh until the repository is reopened`;
+    }
+    return `FS watcher unavailable for this repository (changed ${when}) — change detection polls instead`;
+  });
+
+  /** Reopen confirmation (a tab reload is the revive path). */
+  let watchReopenOpen = $state(false);
+
+  /** Revives the repo: closes the tab and re-opens its root (repo_open). */
+  async function reopenWatchRepo(): Promise<void> {
+    const tab = tabStore.active;
+    if (tab === null) return;
+    watchReopenOpen = false;
+    try {
+      await closeTab(tab.id);
+      await openTab(tab.root);
+    } catch (err) {
+      // A refused open (e.g. the folder vanished) must not land on the
+      // runtime error banner — the tab is already closed, so toast it.
+      toast(`Reopen failed: ${describeError(err)}`, { kind: "error" });
+    }
+  }
 
   // -- hook/CLI output (pre-push, commit hooks) ------------------------------
 
@@ -421,7 +472,8 @@
   /** 1s ticker for the elapsed labels — runs only while rows are visible. */
   let now = $state(Date.now());
   $effect(() => {
-    if (aiRows.length === 0) return;
+    // The watch-health chip's relative "changed …" label shares the ticker.
+    if (aiRows.length === 0 && watchKind === null) return;
     now = Date.now();
     const timer = setInterval(() => (now = Date.now()), 1_000);
     return () => clearInterval(timer);
@@ -843,6 +895,36 @@
         {opStateLabel}
       </span>
     {/if}
+    {#if watchKind !== null && watchState !== null}
+      <!-- Watcher health (item 62): ONLY shown when the repo is not
+           healthy — muted for the poll fallback, danger + Reopen when the
+           watcher is dead. Healthy + recommended emits nothing, so the bar
+           stays calm otherwise. -->
+      <span
+        class="sb-watch inline-flex flex-none items-center gap-ui-2 rounded-full px-ui-3 py-px {watchKind === 'dead'
+          ? 'bg-destructive/15 font-medium text-destructive'
+          : 'text-muted-foreground'}"
+        role="status"
+        data-kind={watchKind}
+      >
+        <Icon icon={watchKind === "dead" ? iconAlert : iconRefresh} size={12} />
+        {watchKind === "dead" ? "watch: dead" : "watch: poll (fallback)"}
+        {#if watchKind === "dead"}
+          <Hint label="Reopen this repository to revive its watcher">
+            {#snippet child({ props })}
+              <button
+                {...props}
+                class="inline-flex cursor-pointer items-center gap-ui-1 rounded-full border-0 bg-transparent p-0 font-medium text-inherit underline decoration-dotted underline-offset-2 hover:opacity-80 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-destructive"
+                type="button"
+                onclick={() => (watchReopenOpen = true)}
+              >
+                Reopen
+              </button>
+            {/snippet}
+          </Hint>
+        {/if}
+      </span>
+    {/if}
     {#if budget !== null}
       <!-- Soft AI budget (item 58): subtle while under, warning at 100%+
            — and only ever a warning: runs are never blocked. -->
@@ -915,4 +997,15 @@
     {/if}
   </div>
 </footer>
+
+<!-- Watcher-dead reopen (item 62): a tab reload is the revive path —
+     repo_close + repo_open re-registers the repository and restarts the
+     watcher fresh (the backend emits the revival watch state). -->
+<ConfirmDialog
+  bind:open={() => watchReopenOpen, (v) => { if (!v) watchReopenOpen = false; }}
+  title="Reopen this repository?"
+  message="The file watcher is not working, so changes will not refresh. Reopening the tab restarts it (unsaved editor buffers are kept)."
+  confirmLabel="Reopen"
+  onConfirm={() => void reopenWatchRepo()}
+/>
 </div>

@@ -104,6 +104,7 @@ import type {
   RepoId,
   RepoInfo,
   RepoStatus,
+  RepoWatchStateEvent,
   ResetKind,
   SigningInfo,
   UpdateInfo,
@@ -479,6 +480,18 @@ export function onRepoChanged(
   cb: (event: RepoChangedEvent) => void,
 ): Promise<() => void> {
   return subscribe("repo-changed", cb);
+}
+
+/**
+ * Subscribes to `repo-watch-state` events (watcher health transitions per
+ * open repo — poll fallback engaged, upgrade back to recommended, death,
+ * revival on reopen). Same contract as {@link onRepoChanged}: never throws,
+ * no-op unlisten outside Tauri.
+ */
+export function onRepoWatchState(
+  cb: (event: RepoWatchStateEvent) => void,
+): Promise<() => void> {
+  return subscribe("repo-watch-state", cb);
 }
 
 // ---------------------------------------------------------------------------

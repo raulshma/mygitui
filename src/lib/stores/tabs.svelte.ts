@@ -25,11 +25,9 @@ import { opStore } from "$lib/stores/ops.svelte";
 import { workspaceSession } from "$lib/stores/workspaceSession.svelte";
 import { agentSession } from "$lib/agent/agentSession.svelte";
 import { evictFileIndex } from "$lib/components/files/QuickOpen.svelte";
-import { conflictsStore } from "$lib/components/panels/conflictsStore.svelte";
-import { statsStore } from "$lib/stats/statsStore.svelte";
-import { projectsStore } from "$lib/stores/projects.svelte";
 import { favoriteRepos, FAVORITES_LAUNCH_CAP } from "$lib/stores/favoriteRepos.svelte";
 import { appSettings } from "$lib/state/appSettings.svelte";
+import { runRepoEvictors } from "$lib/state/repoEvictors";
 import { describeError } from "$lib/errors";
 
 /** One open repository tab. */
@@ -528,20 +526,23 @@ export class TabStore {
    * contract ("the FE must `pty_kill` each terminal panel's session when
    * its tab closes"). `dispose` is a no-op for repos without a session.
    *
-   * The same choke point drops the per-repo panel caches (conflicts
-   * banner, stats heatmap, detected projects, the op-store hook log and
-   * completed-op history, QuickOpen's file index, and the persisted
-   * workspace session) — they must not outlive their repo and leak into
-   * the next open of the same path.
+   * The same choke point drops the per-repo panel caches: the eviction
+   * registry (`$lib/state/repoEvictors`) fans out to every store that
+   * registered a per-repo eviction (conflicts banner, stats heatmap,
+   * detected projects, …), followed here by the op-store hook log and
+   * completed-op history, QuickOpen's file index, and the root-keyed
+   * persisted sessions (workspace + agent — only the closing tab knows the
+   * repoId → root mapping, so they stay direct calls). Cached state must
+   * not outlive its repo and leak into the next open of the same path.
    */
   async closeTab(id: RepoId): Promise<void> {
     if (this.tabs.every((tab) => tab.id !== id)) return;
     // Root lookup before any splice, for the root-keyed evictions below.
     const closing = this.tabs.find((tab) => tab.id === id)!;
+    runRepoEvictors(id);
+    // Ordering-sensitive (the M5 pty_kill contract) — kept special-cased,
+    // ahead of the registry fan-out's store teardowns.
     terminals.dispose(id);
-    conflictsStore.clear(id);
-    statsStore.clear(id);
-    projectsStore.clear(id);
     opStore.clearLogs(id);
     opStore.clearHistory(id);
     opStore.clearUndo(id);

@@ -13,6 +13,7 @@
 import { projectDetect } from "$lib/ipc/client";
 import type { ProjectInfo, RepoId } from "$lib/ipc/types";
 import { describeError } from "$lib/errors";
+import { registerRepoEvictor } from "$lib/state/repoEvictors";
 
 export class ProjectsStore {
   /** Detection result per repository id (empty array = scanned, none found). */
@@ -112,3 +113,7 @@ export class ProjectsStore {
 
 /** The application-wide detected-projects store. */
 export const projectsStore = new ProjectsStore();
+
+// Caches per-repo state: registers with the eviction registry so closeTab
+// (the single choke point) drops the closed repo's entry.
+registerRepoEvictor((repoId) => projectsStore.clear(repoId));

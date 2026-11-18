@@ -18,11 +18,15 @@ import {
 } from "$lib/ipc/client";
 import { getToasts } from "$lib/toast";
 import {
+  POLL_SECS_DEFAULT,
+  POLL_SECS_MAX,
+  POLL_SECS_MIN,
   PROMPT_TIMEOUT_MS,
   RESYNC_DEBOUNCE_MS,
   RemoteDeviceStore,
   autoConnectBackoffMs,
   deviceInputFromProfile,
+  parsePollSecs,
 } from "$lib/stores/remoteDevices.svelte";
 import type {
   DeviceInfo,
@@ -289,6 +293,80 @@ describe("registry (load / add / update / remove)", () => {
     await expect(store.forgetHostKey("d1")).resolves.toBe("none");
     mockDeviceForgetHostKey.mockRejectedValue(new Error("io") as never);
     await expect(store.forgetHostKey("d1")).resolves.toBe("failed");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Sync-status detail rows (item 60): lastStatusAt / lastError + poll parsing
+// ---------------------------------------------------------------------------
+
+describe("sync-status detail state", () => {
+  it("setStatus stamps lastStatusAt; connect success clears lastError", async () => {
+    mockDeviceList.mockResolvedValue([device("d1")]);
+    const store = new RemoteDeviceStore();
+    await store.load();
+    const before = Date.now();
+
+    store.setStatus("d1", "connecting");
+    expect(store.lastStatusAt["d1"]).toBeGreaterThanOrEqual(before);
+
+    store.setError("d1", "no route");
+    expect(store.lastError["d1"]).toBe("no route");
+
+    mockDeviceConnect.mockResolvedValue("connected");
+    await store.connect("d1");
+    expect(store.lastError["d1"]).toBeNull();
+    // Status changed again (connecting → connected) — a later stamp.
+    expect(store.lastStatusAt["d1"]).toBeGreaterThanOrEqual(before);
+  });
+
+  it("connect failures record the error detail; stop() clears everything", async () => {
+    mockDeviceList.mockResolvedValue([device("d1")]);
+    const store = new RemoteDeviceStore();
+    await store.load();
+
+    mockDeviceConnect.mockRejectedValue(new Error("no route") as never);
+    await store.connect("d1");
+    expect(store.lastError["d1"]).toBe("no route");
+    expect(store.lastStatusAt["d1"]).toBeGreaterThan(0);
+
+    store.stop();
+    expect(store.lastStatusAt).toEqual({});
+    expect(store.lastError).toEqual({});
+  });
+
+  it("an authoritative device-status event stamps the change time too", async () => {
+    mockDeviceList.mockResolvedValue([device("d1")]);
+    const store = new RemoteDeviceStore();
+    await store.load();
+
+    store.applyStatus({ device_id: "d1", status: "connected" });
+    expect(store.lastStatusAt["d1"]).toBeGreaterThan(0);
+    expect(store.statusOf("d1")).toBe("connected");
+  });
+});
+
+describe("parsePollSecs (per-device poll interval field, item 60)", () => {
+  it("blank / junk resolves to null (the global default)", () => {
+    expect(parsePollSecs("")).toBeNull();
+    expect(parsePollSecs("   ")).toBeNull();
+    expect(parsePollSecs("abc")).toBeNull();
+  });
+
+  it("numbers pass through clamped to 2-300", () => {
+    expect(parsePollSecs("10")).toBe(10);
+    expect(parsePollSecs(" 15 ")).toBe(15);
+    expect(parsePollSecs("1")).toBe(2);
+    expect(parsePollSecs("0")).toBe(2);
+    expect(parsePollSecs("-5")).toBe(2);
+    expect(parsePollSecs("301")).toBe(300);
+    expect(parsePollSecs("99.9")).toBe(99);
+  });
+
+  it("bounds match the backend's clamp range", () => {
+    expect(POLL_SECS_MIN).toBe(2);
+    expect(POLL_SECS_MAX).toBe(300);
+    expect(POLL_SECS_DEFAULT).toBe(5);
   });
 });
 

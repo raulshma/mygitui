@@ -12,11 +12,16 @@
    * - "Browse files": `device_browse_dir` one level at a time (`path` `""`
    *   = the device home); entries carry ABSOLUTE device paths, so
    *   navigation and the breadcrumb trail are plain string prefixes. A
-   *   manual path field jumps anywhere (including `~`).
+   *   manual path field jumps anywhere (including `~`). Clicking a file
+   *   opens it in the containing repository's file editor: the workspace
+   *   reads/saves (`repo_read_file` / `repo_write_file`) are routed through
+   *   the device's remote workspace lane backend-side, so the editor writes
+   *   back to the device over SFTP.
    */
   import { deviceBrowseDir, deviceScanRepos } from "$lib/ipc/client";
   import type { DeviceRepoCandidate, DirListing } from "$lib/ipc/types";
-  import { openRemoteTab } from "$lib/stores/tabs.svelte";
+  import { openRemoteTab, setActive, sshUri, tabStore } from "$lib/stores/tabs.svelte";
+  import { workspaceSession } from "$lib/stores/workspaceSession.svelte";
   import { toast } from "$lib/toast";
   import Icon from "$lib/components/icons/Icon.svelte";
   import { appIcon } from "$lib/components/icons/library.svelte";
@@ -133,6 +138,64 @@
       // belt-and-braces path (e.g. an unknown device id).
       const message = describeError(err);
       toast(`Failed to open ${repoPath}: ${message}`, { kind: "error" });
+    }
+  }
+
+  /**
+   * Opens a browsed device file in its repository's file editor (item 60).
+   *
+   * Remote repos ARE writable through the workspace lane: the backend runs
+   * `repo_read_file` / `repo_write_file` against the device's
+   * `RemoteWorkspace` (SFTP) for repos with a remote handle — so the normal
+   * FilesPanel editor flow works unchanged on remote repositories.
+   *
+   * Routing: the file must live inside an OPEN remote repo tab (longest
+   * root wins) or a scanned repo candidate; the workspace session is seeded
+   * with the repo-relative path so the (re)mounted / switched RepoView
+   * restores it through the standard editor flow — no events to race a
+   * freshly-mounted workspace. Without a containing repo the click stays
+   * read-only guidance (workspace commands need a repo context).
+   */
+  async function openRemoteFile(entryPath: string): Promise<void> {
+    // Entries carry absolute device paths; tab roots are the `ssh://` URIs.
+    const uri = sshUri(deviceId, entryPath);
+    const open = tabStore.tabs
+      .filter(
+        (tab) =>
+          tab.deviceId === deviceId &&
+          tab.openError === null &&
+          uri.startsWith(`${tab.root}/`),
+      )
+      .sort((a, b) => b.root.length - a.root.length)[0] ?? null;
+    const scanned = (candidates ?? [])
+      .filter((candidate) => candidate.path !== "" && entryPath.startsWith(`${candidate.path}/`))
+      .sort((a, b) => b.path.length - a.path.length)[0] ?? null;
+    const root = open?.root ?? (scanned !== null ? sshUri(deviceId, scanned.path) : null);
+    const relative = open !== null
+      ? uri.slice(open.root.length + 1)
+      : scanned !== null
+        ? entryPath.slice(scanned.path.length + 1)
+        : null;
+    if (root === null || relative === null || relative === "") {
+      toast("Open the repository containing this file to edit its files.", {
+        kind: "info",
+      });
+      return;
+    }
+    // Seed the workspace session (merged, never clobbering the repo's other
+    // open files): the switch/mount restore opens the file and makes it the
+    // active editor tab.
+    const session = workspaceSession.get(root);
+    const openFiles = session?.openFiles ?? [];
+    workspaceSession.patch(root, {
+      openFiles: openFiles.includes(relative) ? openFiles : [...openFiles, relative],
+      activeFile: relative,
+      centerKind: "files",
+    });
+    if (open !== null) {
+      setActive(open.id);
+    } else {
+      await openProject(scanned!.path);
     }
   }
 
@@ -304,8 +367,11 @@
                   <span class="row-name truncate min-w-0 text-sm">{entry.name}</span>
                 </button>
               {:else}
-                <span
-                  class="row static flex w-full min-w-0 flex-1 items-center gap-2.5 px-2.5 py-1.5"
+                <button
+                  class="row text-foreground flex w-full min-w-0 flex-1 cursor-pointer items-center gap-2.5 border-0 bg-transparent px-2.5 py-1.5 text-left"
+                  type="button"
+                  title="Open in the repository's file editor"
+                  onclick={() => void openRemoteFile(entry.path)}
                 >
                   <span
                     class="row-icon muted text-muted-foreground inline-flex flex-none opacity-70"
@@ -314,7 +380,7 @@
                     <Icon icon={iconDir} size={18} />
                   </span>
                   <span class="row-name truncate min-w-0 text-sm">{entry.name}</span>
-                </span>
+                </button>
               {/if}
             </li>
           {:else}

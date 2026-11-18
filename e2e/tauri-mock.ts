@@ -9,6 +9,9 @@
  *     (snake_case payloads mirroring `src/lib/ipc/types.ts`), a generic
  *     fallback (`[]` for known list commands, `null` otherwise), and
  *     records every call in `window.__TAURI_MOCK__.calls` for assertions.
+ *   - `plugin:app|version` — what `getVersion()` (@tauri-apps/api/app)
+ *     invokes; mocked with the real package.json version so the About
+ *     surfaces show the shipping version in e2e runs too.
  *   - `transformCallback(callback, once)` — identity-with-registry: stores
  *     the callback and returns an id (used by `Channel` and event handlers).
  *   - `unregisterCallback(id)` — channel cleanup.
@@ -33,7 +36,15 @@
  * after the first.
  */
 
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import type { Page, TestInfo } from "@playwright/test";
+
+/** The shipping version, read once from package.json (never drifts). */
+const APP_VERSION: string = (
+  JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as
+    { version?: string }
+).version ?? "0.0.0";
 
 /** Resolve value for a command; `{ __error__: "msg" }` rejects. */
 export type CommandMock = unknown;
@@ -41,6 +52,8 @@ export type CommandMock = unknown;
 /** Per-command overrides merged over the built-in defaults. */
 export interface TauriMockOptions {
   commands?: Record<string, CommandMock>;
+  /** `plugin:app|version` reply (default: the real package.json version). */
+  version?: string;
 }
 
 /**
@@ -52,7 +65,9 @@ export async function installTauriMock(
   page: Page,
   options: TauriMockOptions = {},
 ): Promise<TauriMockHandle> {
-  await page.addInitScript(BOOTSTRAP, options ?? {});
+  // The version default is applied here (Node side, reads package.json);
+  // explicit per-test overrides win.
+  await page.addInitScript(BOOTSTRAP, { version: APP_VERSION, ...options });
   return {
     async calls(): Promise<Array<{ cmd: string; args: Record<string, unknown> }>> {
       return page.evaluate(() => window.__TAURI_MOCK__.calls);
@@ -261,6 +276,8 @@ function BOOTSTRAP(options: TauriMockOptions): void {
   }
   const commandMocks: Record<string, CommandMock> = {
     // -- core commands (payloads mirror src/lib/ipc/types.ts, snake_case) --
+    // App version (getVersion() invokes `plugin:app|version`; item 65).
+    "plugin:app|version": options.version,
     repo_open: {
       repo_id: seededRepoId ?? "r1",
       root: "/tmp/repo",

@@ -33,8 +33,12 @@
   import { flushAgentSessions } from "$lib/agent/agentSession.svelte";
   import {
     deviceInputFromProfile,
+    parsePollSecs,
     remoteDevices,
     startRemoteDeviceEvents,
+    POLL_SECS_DEFAULT,
+    POLL_SECS_MAX,
+    POLL_SECS_MIN,
     PROMPT_TIMEOUT_MS,
   } from "$lib/stores/remoteDevices.svelte";
   import { toast } from "$lib/toast";
@@ -62,6 +66,7 @@
   import iconBack from "@ktibow/iconset-material-symbols/arrow-back-rounded";
   import iconDevices from "@ktibow/iconset-material-symbols/devices";
   import iconEdit from "@ktibow/iconset-material-symbols/edit";
+  import iconChevronDown from "@ktibow/iconset-material-symbols/expand-more";
   import iconSettings from "@ktibow/iconset-material-symbols/settings";
   // Startup: the popout-only views below are dynamically imported inside
   // the popout branch — the main window never renders them, so their
@@ -256,12 +261,21 @@
   );
   /** Delete-device confirmation. */
   let removeDeviceOpen = $state(false);
-  /** Draft of the detail view's poll-interval field (seconds). */
-  let pollDraft = $state(5);
+  /**
+   * Draft of the detail view's poll-interval field (seconds; blank = the
+   * global default — parsed through `parsePollSecs`, 2–300 clamped).
+   */
+  let pollDraft = $state("");
   /** True while the detail view's poll-interval save RPC is in flight. */
   let savingPoll = $state(false);
   /** Draft of the detail view's auto-connect-on-launch toggle. */
   let autoConnectDraft = $state(false);
+  /**
+   * Sync-status detail rows (item 60): which device list rows are expanded
+   * (deviceId → open). Per-row richer state: last status change, poll
+   * interval, auth kind, open repo tabs, last connection error.
+   */
+  let expandedDeviceRows = $state<Record<string, boolean>>({});
 
   /** The focused device entry, or `null` when the list is shown. */
   const deviceDetail = $derived(
@@ -276,7 +290,8 @@
 
   function openDeviceDetail(deviceId: string): void {
     deviceDetailId = deviceId;
-    pollDraft = remoteDevices.byId(deviceId)?.profile.poll_secs ?? 5;
+    const secs = remoteDevices.byId(deviceId)?.profile.poll_secs;
+    pollDraft = typeof secs === "number" ? String(secs) : "";
   }
 
   function openAddDevice(): void {
@@ -292,15 +307,22 @@
     const profile = deviceDetail?.profile;
     if (!profile || savingPoll) return;
     savingPoll = true;
-    const seconds = Math.max(1, Math.floor(pollDraft) || 1);
+    // Blank = the global default (null); otherwise clamped to 2–300 s —
+    // the backend clamps the stored profile to the same range.
+    const seconds = parsePollSecs(pollDraft);
     try {
       await remoteDevices.update({
         ...deviceInputFromProfile(profile),
         poll_secs: seconds,
       });
-      toast(`Poll interval for ${profile.name} set to ${seconds}s`, {
-        kind: "success",
-      });
+      toast(
+        seconds === null
+          ? `Poll interval for ${profile.name} reset to the global default`
+          : `Poll interval for ${profile.name} set to ${seconds}s`,
+        {
+          kind: "success",
+        },
+      );
     } catch (err) {
       const message = describeError(err);
       toast(`Failed to update ${profile.name}: ${message}`, { kind: "error" });
@@ -1252,8 +1274,10 @@
                   <input
                     class="poll-input w-[5.5rem] rounded border border-border bg-card px-2 py-ui-35 text-ui-base text-foreground focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-primary"
                     type="number"
-                    min="1"
-                    aria-label="Poll interval in seconds"
+                    min={POLL_SECS_MIN}
+                    max={POLL_SECS_MAX}
+                    placeholder={`${POLL_SECS_DEFAULT} (default)`}
+                    aria-label="Poll interval in seconds (blank = global default)"
                     bind:value={pollDraft}
                   />
                 </label>
@@ -1327,7 +1351,7 @@
           {:else}
             <ul class="repo-list m-0 flex list-none flex-col gap-1.5 p-0">
               {#each remoteDevices.devices ?? [] as device (device.profile.id)}
-                <li class="repo-row-wrapper group/row flex items-center gap-0.5 rounded-xl border border-transparent bg-muted/40 pr-ui-35 transition-colors hover:border-border hover:bg-muted/70 focus-within:border-border focus-within:bg-muted/70">
+                <li class="repo-row-wrapper group/row flex flex-wrap items-center gap-0.5 rounded-xl border border-transparent bg-muted/40 pr-ui-35 transition-colors hover:border-border hover:bg-muted/70 focus-within:border-border focus-within:bg-muted/70">
                   <button
                     class="repo-row flex min-w-0 flex-1 cursor-pointer items-center gap-3 rounded-xl border border-transparent bg-transparent px-3 py-[0.55rem] text-left text-foreground hover:border-transparent hover:bg-transparent focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary"
                     type="button"
@@ -1362,6 +1386,31 @@
                     </span>
                   </button>
                   <span class="row-actions flex flex-none items-center gap-0.5 opacity-75 transition-opacity group-hover/row:opacity-100 group-focus-within/row:opacity-100">
+                    <Hint label={expandedDeviceRows[device.profile.id] ? "Hide sync details" : "Show sync details"}>
+                      {#snippet child({ props })}
+                        <button
+                          class="row-action inline-flex size-7 cursor-pointer items-center justify-center rounded-lg border-0 bg-transparent p-0 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-primary"
+                          type="button"
+                          {...props}
+                          aria-label={`${expandedDeviceRows[device.profile.id] ? "Hide" : "Show"} sync details for ${device.profile.name}`}
+                          aria-expanded={expandedDeviceRows[device.profile.id] ?? false}
+                          onclick={() =>
+                            (expandedDeviceRows = {
+                              ...expandedDeviceRows,
+                              [device.profile.id]: !(expandedDeviceRows[device.profile.id] ?? false),
+                            })}
+                        >
+                          <span
+                            class="inline-flex transition-transform {expandedDeviceRows[device.profile.id]
+                              ? 'rotate-180'
+                              : ''}"
+                            aria-hidden="true"
+                          >
+                            <Icon icon={iconChevronDown} size={14} />
+                          </span>
+                        </button>
+                      {/snippet}
+                    </Hint>
                     <Hint label="Edit device">
                       {#snippet child({ props })}
                         <button
@@ -1376,6 +1425,40 @@
                       {/snippet}
                     </Hint>
                   </span>
+                  {#if expandedDeviceRows[device.profile.id] ?? false}
+                    <!-- Sync-status detail (item 60): richer per-device state
+                         from what already flows (profile + device-status
+                         events + open tabs) — no extra backend calls. -->
+                    <div
+                      class="device-details grid w-full grid-cols-[max-content_1fr] gap-x-3 gap-y-0.5 rounded-xl border border-border bg-card px-3 py-2 text-ui-micro"
+                      data-testid={`device-details-${device.profile.id}`}
+                    >
+                      <span class="text-muted-foreground">connection</span>
+                      <span class="text-foreground">
+                        {device.status}
+                        {#if remoteDevices.lastStatusAt[device.profile.id]}
+                          · changed {formatRelativeTime(Math.floor(remoteDevices.lastStatusAt[device.profile.id] / 1000))}
+                        {/if}
+                      </span>
+                      <span class="text-muted-foreground">poll</span>
+                      <span class="text-foreground">
+                        every {device.profile.poll_secs}s (per-device; 2–300 s, blank = 5s global default)
+                      </span>
+                      <span class="text-muted-foreground">auth</span>
+                      <span class="text-foreground">
+                        {device.profile.auth.kind === "key_file" ? "key file" : "password"}
+                        {#if device.profile.auto_connect}· auto-connect on launch{/if}
+                      </span>
+                      <span class="text-muted-foreground">open repos</span>
+                      <span class="text-foreground tabular-nums">
+                        {tabStore.tabs.filter((tab) => tab.deviceId === device.profile.id).length}
+                      </span>
+                      {#if remoteDevices.lastError[device.profile.id]}
+                        <span class="text-muted-foreground">last error</span>
+                        <span class="text-destructive">{remoteDevices.lastError[device.profile.id]}</span>
+                      {/if}
+                    </div>
+                  {/if}
                 </li>
               {/each}
             </ul>

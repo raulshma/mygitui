@@ -18,7 +18,10 @@ import { isTauri } from "$lib/entry/dragdrop";
 import { resetRepoEvents } from "$lib/events/repoEvents";
 import { toast } from "$lib/toast";
 import {
+  MAX_TERMINALS_PER_REPO,
   RESIZE_DEBOUNCE_MS,
+  sessionKey,
+  splitSessionKey,
   TerminalStore,
   type TerminalFactory,
   type TerminalLike,
@@ -154,7 +157,7 @@ describe("TerminalStore.ensure", () => {
     expect(entry!.sessionId).toBe("pty-1");
   });
 
-  it("reuses the live session (one per repo, no duplicate ptys)", async () => {
+  it("reuses the live session (one per repo terminal, no duplicate ptys)", async () => {
     const store = new TerminalStore();
     store.setFactory(makeFactory().factory);
 
@@ -367,6 +370,266 @@ describe("TerminalStore kill / restart / dispose", () => {
     expect(mockPtyKill).toHaveBeenCalledTimes(1);
     expect(mockPtyKill).toHaveBeenCalledWith("pty-late");
     expect(store.session("r1")).toBeNull();
+  });
+});
+
+describe("TerminalStore multi-session (terminal tabs, item 59)", () => {
+  it("sessionKey round-trips through splitSessionKey", () => {
+    expect(splitSessionKey(sessionKey("repo-1", "t2"))).toEqual({
+      repoId: "repo-1",
+      terminalId: "t2",
+    });
+    expect(splitSessionKey("repo-1::t1")).toEqual({ repoId: "repo-1", terminalId: "t1" });
+    // Repo ids may themselves contain "::" — the split takes the LAST one.
+    expect(splitSessionKey("a::b::t3")).toEqual({ repoId: "a::b", terminalId: "t3" });
+    expect(splitSessionKey("no-separator")).toBeNull();
+    expect(splitSessionKey("::t1")).toBeNull();
+  });
+
+  it("ensure allocates the first terminal id and tracks it as active", () => {
+    const store = new TerminalStore();
+    store.setFactory(makeFactory().factory);
+
+    store.ensure("r1");
+
+    expect(store.list("r1")).toEqual(["t1"]);
+    expect(store.activeId("r1")).toBe("t1");
+    expect(store.session("r1")!.terminalId).toBe("t1");
+  });
+
+  it("create opens a second tab: own pty, tab order grows, new tab is active", async () => {
+    const store = new TerminalStore();
+    const { factory, created } = makeFactory();
+    store.setFactory(factory);
+    store.ensure("r1");
+    await flush();
+
+    const second = store.create("r1");
+    await flush();
+
+    expect(second).not.toBeNull();
+    expect(second!.terminalId).toBe("t2");
+    expect(store.list("r1")).toEqual(["t1", "t2"]);
+    expect(store.activeId("r1")).toBe("t2");
+    expect(store.session("r1")).toBe(second);
+    expect(mockPtyCreate).toHaveBeenCalledTimes(2);
+    expect(created).toHaveLength(2);
+    // Session records are keyed by the composite key, not the repo id.
+    expect(store.sessionById("r1", "t1")!.sessionId).toBe("pty-1");
+    expect(store.sessionById("r1", "t2")!.sessionId).toBe("pty-2");
+  });
+
+  it("create returns null (and adds nothing) at the per-repo cap", () => {
+    const store = new TerminalStore();
+    store.setFactory(makeFactory().factory);
+    for (let i = 0; i < MAX_TERMINALS_PER_REPO; i++) {
+      if (i === 0) store.ensure("r1");
+      else store.create("r1");
+    }
+    expect(store.list("r1")).toHaveLength(MAX_TERMINALS_PER_REPO);
+    expect(mockPtyCreate).toHaveBeenCalledTimes(MAX_TERMINALS_PER_REPO);
+
+    expect(store.create("r1")).toBeNull();
+    expect(store.list("r1")).toHaveLength(MAX_TERMINALS_PER_REPO);
+    expect(mockPtyCreate).toHaveBeenCalledTimes(MAX_TERMINALS_PER_REPO);
+  });
+
+  it("setActive switches the focused tab without creating sessions", async () => {
+    const store = new TerminalStore();
+    store.setFactory(makeFactory().factory);
+    store.ensure("r1");
+    store.create("r1");
+    await flush();
+    mockPtyCreate.mockClear();
+
+    store.setActive("r1", "t1");
+
+    expect(store.activeId("r1")).toBe("t1");
+    expect(store.session("r1")!.terminalId).toBe("t1");
+    expect(mockPtyCreate).not.toHaveBeenCalled();
+    // Unknown ids are ignored.
+    store.setActive("r1", "t9");
+    expect(store.activeId("r1")).toBe("t1");
+  });
+
+  it("pty-output routes to the owning terminal only", async () => {
+    const store = new TerminalStore();
+    const { factory, created } = makeFactory();
+    store.setFactory(factory);
+    store.ensure("r1");
+    await flush();
+    store.create("r1");
+    await flush();
+
+    emitOutput!("pty-1", "one\r\n");
+    emitOutput!("pty-2", "two\r\n");
+
+    expect(created[0]!.writes).toEqual(["one\r\n"]);
+    expect(created[1]!.writes).toEqual(["two\r\n"]);
+  });
+
+  it("exit marks only that session exited; the other tabs stay live", async () => {
+    const store = new TerminalStore();
+    store.setFactory(makeFactory().factory);
+    store.ensure("r1");
+    await flush();
+    store.create("r1");
+    await flush();
+
+    emitExit!("pty-1", 0);
+    await flush();
+
+    expect(store.sessionById("r1", "t1")!.status).toBe("exited");
+    expect(store.sessionById("r1", "t2")!.status).toBe("live");
+    expect(mockPtyKill).not.toHaveBeenCalled(); // it died on its own
+  });
+
+  it("close removes one tab: kills its pty, re-focuses the left neighbor", async () => {
+    const store = new TerminalStore();
+    const { factory, created } = makeFactory();
+    store.setFactory(factory);
+    store.ensure("r1");
+    await flush();
+    store.create("r1");
+    await flush();
+    store.create("r1"); // t3, active
+    await flush();
+
+    store.close("r1", "t3");
+
+    expect(mockPtyKill).toHaveBeenCalledWith("pty-3");
+    expect(created[2]!.disposed).toBe(true);
+    expect(store.list("r1")).toEqual(["t1", "t2"]);
+    expect(store.activeId("r1")).toBe("t2");
+    expect(store.sessionById("r1", "t3")).toBeNull();
+  });
+
+  it("close of a background tab keeps the active tab focused", async () => {
+    const store = new TerminalStore();
+    store.setFactory(makeFactory().factory);
+    store.ensure("r1");
+    await flush();
+    store.create("r1"); // t2 active
+    await flush();
+
+    store.close("r1", "t1");
+
+    expect(store.list("r1")).toEqual(["t2"]);
+    expect(store.activeId("r1")).toBe("t2");
+  });
+
+  it("close of the last terminal clears the repo's tab state", async () => {
+    const store = new TerminalStore();
+    store.setFactory(makeFactory().factory);
+    store.ensure("r1");
+    await flush();
+
+    store.close("r1", "t1");
+
+    expect(store.list("r1")).toEqual([]);
+    expect(store.activeId("r1")).toBeNull();
+    expect(store.session("r1")).toBeNull();
+    // The next ensure starts a fresh first terminal.
+    store.ensure("r1");
+    expect(store.list("r1")).toEqual(["t1"]);
+  });
+
+  it("close for an unknown terminal id is a no-op", async () => {
+    const store = new TerminalStore();
+    store.setFactory(makeFactory().factory);
+    store.ensure("r1");
+    await flush();
+
+    expect(() => store.close("r1", "t9")).not.toThrow();
+    expect(() => store.close("ghost", "t1")).not.toThrow();
+    expect(store.list("r1")).toEqual(["t1"]);
+    expect(mockPtyKill).not.toHaveBeenCalled();
+  });
+
+  it("dispose kills and forgets ALL of the repo's terminals (repo tab closed)", async () => {
+    const store = new TerminalStore();
+    const { factory, created } = makeFactory();
+    store.setFactory(factory);
+    store.ensure("r1");
+    await flush();
+    store.create("r1");
+    await flush();
+    store.create("r1");
+    await flush();
+
+    store.dispose("r1");
+
+    expect(mockPtyKill).toHaveBeenCalledTimes(3);
+    expect(mockPtyKill).toHaveBeenCalledWith("pty-1");
+    expect(mockPtyKill).toHaveBeenCalledWith("pty-2");
+    expect(mockPtyKill).toHaveBeenCalledWith("pty-3");
+    for (const term of created) expect(term.disposed).toBe(true);
+    expect(store.list("r1")).toEqual([]);
+    expect(store.activeId("r1")).toBeNull();
+    expect(Object.keys(store.sessions)).toHaveLength(0);
+    // A later mount starts from scratch.
+    store.ensure("r1");
+    expect(store.list("r1")).toEqual(["t1"]);
+  });
+
+  it("writeInput writes command + Enter to the ACTIVE session's pty", async () => {
+    const store = new TerminalStore();
+    store.setFactory(makeFactory().factory);
+    store.ensure("r1");
+    await flush();
+    store.create("r1"); // t2 is active now
+    await flush();
+
+    expect(store.writeInput("r1", "git status\r")).toBe(true);
+    expect(mockPtyWrite).toHaveBeenLastCalledWith("pty-2", "git status\r");
+  });
+
+  it("writeInput drops silently (false) without a live pty", async () => {
+    const store = new TerminalStore();
+    store.setFactory(makeFactory().factory);
+
+    expect(store.writeInput("ghost", "git status\r")).toBe(false);
+
+    store.ensure("r1"); // still starting — no session id yet
+    expect(store.writeInput("r1", "git status\r")).toBe(false);
+    expect(mockPtyWrite).not.toHaveBeenCalled();
+  });
+
+  it("keystrokes land in their own terminal's shell (per-tab onData closure)", async () => {
+    const store = new TerminalStore();
+    const { factory, created } = makeFactory();
+    store.setFactory(factory);
+    store.ensure("r1");
+    await flush();
+    store.create("r1");
+    await flush();
+
+    created[0]!.type("tab-one");
+    created[1]!.type("tab-two");
+
+    expect(mockPtyWrite).toHaveBeenNthCalledWith(1, "pty-1", "tab-one");
+    expect(mockPtyWrite).toHaveBeenNthCalledWith(2, "pty-2", "tab-two");
+  });
+
+  it("restart replaces only the ACTIVE terminal", async () => {
+    const store = new TerminalStore();
+    const { factory, created } = makeFactory();
+    store.setFactory(factory);
+    store.ensure("r1");
+    await flush();
+    store.create("r1"); // t2 active
+    await flush();
+
+    const restarted = store.restart("r1");
+    await flush();
+
+    expect(restarted!.terminalId).toBe("t2");
+    expect(restarted!.sessionId).toBe("pty-3");
+    expect(store.list("r1")).toEqual(["t1", "t2"]);
+    // t1's session was untouched.
+    expect(store.sessionById("r1", "t1")!.sessionId).toBe("pty-1");
+    expect(created[0]!.disposed).toBe(false);
+    expect(created[1]!.disposed).toBe(true);
   });
 });
 

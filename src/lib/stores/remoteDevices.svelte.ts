@@ -80,6 +80,29 @@ export function autoConnectBackoffMs(attempt: number): number {
   return Math.min(secs, 30) * 1000;
 }
 
+// -- per-device poll interval (item 60) ---------------------------------------
+
+/** Device poll-interval bounds (seconds) — the backend clamps the same range. */
+export const POLL_SECS_MIN = 2;
+export const POLL_SECS_MAX = 300;
+
+/** The global default applied when a device has no per-device interval. */
+export const POLL_SECS_DEFAULT = 5;
+
+/**
+ * Parses the dialogs' poll-interval field: blank = the global default
+ * (`null` — `DeviceInput.poll_secs` is `Option<u32>`), otherwise the input
+ * clamped to 2–300 s (the backend clamps `DeviceProfile.poll_secs` to the
+ * same range). Non-numeric junk resolves to the default too.
+ */
+export function parsePollSecs(raw: string): number | null {
+  const trimmed = raw.trim();
+  if (trimmed === "") return null;
+  const value = Number(trimmed);
+  if (!Number.isFinite(value)) return null;
+  return Math.min(POLL_SECS_MAX, Math.max(POLL_SECS_MIN, Math.floor(value)));
+}
+
 const sleep = (ms: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -122,6 +145,20 @@ export type ForgetHostKeyResult = "forgotten" | "none" | "failed";
 export class RemoteDeviceStore {
   /** All registered devices, in registry order. */
   devices: DeviceInfo[] = $state([]);
+
+  /**
+   * deviceId → local time of the last connection-status change (the
+   * sync-status detail rows, item 60 — `device-status` events only carry
+   * the new status, so the "changed when" timestamp is client-side).
+   */
+  lastStatusAt: Record<string, number> = $state({});
+
+  /**
+   * deviceId → detail of the last connect/disconnect failure, or `null`
+   * once a connect succeeds again. Client-side bookkeeping (the backend
+   * reports failures as command errors, not as events).
+   */
+  lastError: Record<string, string | null> = $state({});
 
   /**
    * Human-readable failure from the last {@link load}, or `null` when the
@@ -244,10 +281,12 @@ export class RemoteDeviceStore {
       if (this.statusOf(deviceId) === "connecting") {
         this.setStatus(deviceId, "connected");
       }
+      this.setError(deviceId, null);
     } catch (err) {
       if (this.statusOf(deviceId) === "connecting") {
         this.setStatus(deviceId, "disconnected");
       }
+      this.setError(deviceId, describeError(err));
       toast(
         `Connect failed: ${describeError(err)}`,
         { kind: "error" },
@@ -274,6 +313,7 @@ export class RemoteDeviceStore {
     try {
       await deviceDisconnect(deviceId);
     } catch (err) {
+      this.setError(deviceId, describeError(err));
       toast(
         `Disconnect failed: ${describeError(err)}`,
         { kind: "error" },
@@ -345,11 +385,14 @@ export class RemoteDeviceStore {
           if (this.statusOf(deviceId) === "connecting") {
             this.setStatus(deviceId, "connected");
           }
+          this.setError(deviceId, null);
           return;
         } catch {
           if (this.statusOf(deviceId) === "connecting") {
             this.setStatus(deviceId, "disconnected");
           }
+          // Recorded for the detail row (no toast — the loop would spam).
+          this.setError(deviceId, "connect failed (auto-connect retrying)");
         }
         await sleep(autoConnectBackoffMs(attempt));
       }
@@ -481,6 +524,8 @@ export class RemoteDeviceStore {
     this.#unregister = [];
     this.devices = [];
     this.loadError = null;
+    this.lastStatusAt = {};
+    this.lastError = {};
     this.#promptQueue = [];
     this.#queuedAt.clear();
     this.pendingPrompt = null;
@@ -498,6 +543,13 @@ export class RemoteDeviceStore {
     this.devices = this.devices.map((device) =>
       device.profile.id === deviceId ? { ...device, status } : device,
     );
+    // Client-side "changed when" stamp for the detail rows.
+    this.lastStatusAt = { ...this.lastStatusAt, [deviceId]: Date.now() };
+  }
+
+  /** Records/clears the device's last connection failure (detail rows). */
+  setError(deviceId: string, message: string | null): void {
+    this.lastError = { ...this.lastError, [deviceId]: message };
   }
 
   /** Shows the next queued prompt (or closes the slot). */

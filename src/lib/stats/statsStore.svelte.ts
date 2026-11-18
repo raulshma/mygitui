@@ -14,6 +14,7 @@ import { commitActivity, contributorStats } from "$lib/ipc/client";
 import type { RepoId } from "$lib/ipc/types";
 import type { Contributor, DayCount } from "$lib/ipc/client";
 import { describeError } from "$lib/errors";
+import { registerRepoEvictor } from "$lib/state/repoEvictors";
 
 /** Default stats window in days (~1 year, GitHub-heatmap scale). */
 export const DEFAULT_MAX_DAYS = 365;
@@ -140,3 +141,7 @@ export class StatsStore {
 
 /** The application-wide stats cache. */
 export const statsStore = new StatsStore();
+
+// Caches per-repo state: registers with the eviction registry so closeTab
+// (the single choke point) drops the closed repo's entry.
+registerRepoEvictor((repoId) => statsStore.clear(repoId));
