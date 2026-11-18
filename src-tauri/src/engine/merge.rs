@@ -797,8 +797,9 @@ impl GitEngineM3 for Libgit2Engine {
         path: &str,
         branch: Option<&str>,
         new_branch: Option<&str>,
+        from_remote: Option<&str>,
     ) -> EngineResult<()> {
-        self.worktree_add_impl(repo, path, branch, new_branch)
+        self.worktree_add_impl(repo, path, branch, new_branch, from_remote)
     }
     fn worktree_remove(&self, repo: &Repository, name: &str, force: bool) -> EngineResult<()> {
         self.worktree_remove_impl(repo, name, force)

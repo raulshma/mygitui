@@ -176,13 +176,29 @@ pub struct LogFilter {
     pub author: Option<String>,
     #[ts(optional = nullable)]
     pub path: Option<String>,
+    /// Multi-pathspec log filter (`git log -- <p1> <p2> ...`): commits
+    /// touching ANY of the listed paths. When non-empty it SUPERSEDES
+    /// `path` (which stays for the single-path default and is how `follow`
+    /// keeps working — see below); `None`/empty = not in effect. Expressed
+    /// as `Option` with `#[serde(default)]` + `#[ts(optional = nullable)]`
+    /// so the FE may omit the field entirely: ts-rs cannot mark
+    /// non-`Option` fields optional in the generated TS, and a required
+    /// property would break every existing `LogFilter` literal (same
+    /// treatment as the M10 pickaxe fields).
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub paths: Option<Vec<String>>,
     #[ts(optional = nullable)]
     pub after_unix: Option<i64>,
     #[ts(optional = nullable)]
     pub before_unix: Option<i64>,
     /// Restrict the walk to these commit-ish roots; empty = all refs + HEAD.
     pub refs: Vec<String>,
-    /// Follow renames for `path` (single-path walks only).
+    /// Follow renames for the path filter (single-path walks only). With
+    /// MULTIPLE paths in effect (`paths` holding 2+, or `paths` non-empty
+    /// alongside `path`) `follow` is IGNORED: rename following tracks one
+    /// path through its rename history — a multi-path walk has no single
+    /// name to shift, and git's own `--follow` is single-path-only too.
     pub follow: bool,
     /// Pickaxe `-S`: only commits whose patch adds or removes this string.
     /// (M10; cost is one tree-diff per candidate commit.)
@@ -333,8 +349,27 @@ pub struct FetchOptions {
     pub prune: bool,
     /// Fetch only these refs; empty = all.
     pub refs: Vec<String>,
-    /// Fetch depth (partial clone support via CLI fallback path).
+    /// Fetch depth. Deepening an existing shallow clone works through the
+    /// current libgit2 fetch lane over network transports
+    /// (`git_fetch_options.depth` negotiates the new shallow boundary
+    /// against the remote, same as `git fetch --depth=<n>`); `None` =
+    /// unlimited. libgit2 limitation, documented on the lane: the LOCAL
+    /// transport (plain paths / `file://`) refuses shallow negotiation
+    /// outright ("shallow fetch is not supported by the local transport") —
+    /// local remotes deepen through the CLI lane instead, which carries the
+    /// same `--depth=<n>` flag.
     pub depth: Option<u32>,
+    /// `--unshallow`: fetch the FULL history back into a shallow clone.
+    /// libgit2 cannot unshallow (no way to clear the shallow boundary), so
+    /// this routes through the git CLI like atomic push: `fetch_impl` asks
+    /// for it via `EngineError::Unsupported` and the IPC `fetch` command
+    /// maps that to `cli::fetch_via_cli`. `Option` + `#[serde(default)]` +
+    /// `#[ts(optional = nullable)]` so the FE may omit the field (ts-rs
+    /// cannot make a plain `bool` optional in the generated TS); missing/
+    /// null/false all mean "no unshallow".
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub unshallow: Option<bool>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, TS)]
@@ -553,6 +588,35 @@ pub struct LfsStatus {
     pub version: Option<String>,
     /// `filter=lfs` patterns declared in tracked `.gitattributes` files.
     pub tracked_patterns: Vec<String>,
+}
+
+/// One git-lfs file lock (`git lfs locks`, Phase 5). Parsed from
+/// `git lfs locks --json`; the plain-text fallback fills the same shape.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct LfsLock {
+    /// The lock id assigned by the LFS server.
+    pub id: String,
+    /// Path relative to the repo root.
+    pub path: String,
+    /// Owner display name ("" when the server reports none).
+    pub owner: String,
+}
+
+// ---------- Phase 5: git notes ----------
+
+/// One git note attached to a commit (`git notes`, Phase 5). `ref` is the
+/// full notes ref the note lives under (`refs/notes/commits` by default);
+/// a commit can carry one note per notes ref.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct NoteInfo {
+    // Renamed on the wire: `ref` is a Rust keyword (written `r#ref` here)
+    // and ts-rs mirrors the serde rename into the generated TS type.
+    #[serde(rename = "ref")]
+    pub r#ref: String,
+    /// The note body (multi-line, verbatim).
+    pub text: String,
 }
 
 // ---------- M12: signature verification / branch trash ----------

@@ -289,6 +289,16 @@ impl Libgit2Engine {
         progress: &mut dyn FnMut(FetchProgress),
         cancel: Option<&AtomicBool>,
     ) -> EngineResult<NetStats> {
+        // Deepening works through the libgit2 lane (opts.depth, see
+        // fetch_with_refspecs); unshallowing does not — libgit2 cannot clear
+        // the shallow boundary. Route to the CLI like atomic push (the IPC
+        // fetch command maps `Unsupported` to `cli::fetch_via_cli`, whose
+        // argv builder emits `--unshallow` — see `cli::build_fetch_args`).
+        if opts.unshallow == Some(true) {
+            return Err(EngineError::Unsupported(
+                "unshallow fetch requested: routed to CLI".into(),
+            ));
+        }
         let refspecs: Vec<String> = opts
             .refs
             .iter()

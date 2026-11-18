@@ -20,7 +20,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use crate::engine::types::{CommitOptions, NetStats, PushOptions};
+use crate::engine::types::{CommitOptions, FetchOptions, NetStats, PushOptions};
 
 /// Poll tick for the cancel-aware child wait (see [`git_stream`]): small
 /// enough that `op_cancel` feels instant, coarse enough to never matter
@@ -159,6 +159,54 @@ pub(crate) fn build_push_args(opts: &PushOptions) -> Vec<String> {
         args.push(opts.branch.clone());
     }
     args
+}
+
+/// Pure: argv for `git fetch` (the CLI fallback lane). The libgit2 fetch
+/// covers plain fetches and depth deepening; only `--unshallow` needs real
+/// git (libgit2 cannot clear the shallow boundary), but the builder maps
+/// every [`FetchOptions`] flag so the fallback lane stays a full fetch
+/// surface.
+pub(crate) fn build_fetch_args(opts: &FetchOptions) -> Vec<String> {
+    let mut args = vec!["fetch".to_string(), "--progress".to_string()];
+    if opts.prune {
+        args.push("--prune".to_string());
+    }
+    if opts.unshallow == Some(true) {
+        args.push("--unshallow".to_string());
+    }
+    if let Some(depth) = opts.depth {
+        args.push(format!("--depth={depth}"));
+    }
+    args.push(opts.remote.clone());
+    args.extend(opts.refs.iter().cloned());
+    args
+}
+
+/// Fetch via the git CLI (libgit2 has no `--unshallow` — the engine asks
+/// for this lane through `EngineError::Unsupported`, mapped in the IPC
+/// `fetch` command exactly like the push hook/atomic routing). Updated refs
+/// are parsed from the transfer report (`old..new ref -> dst`, the same
+/// shape `git push` prints), so `NetStats.updated_refs` matches the
+/// libgit2 lane's semantics; byte/object counters stay 0 (the CLI report
+/// carries no parseable totals).
+pub fn fetch_via_cli(
+    workdir: &Path,
+    opts: &FetchOptions,
+    on_line: &mut dyn FnMut(&str),
+    cancel: Option<&AtomicBool>,
+) -> Result<NetStats, String> {
+    // A cancel that raced the engine phase must not spawn git at all.
+    if cancel.is_some_and(|token| token.load(Ordering::Acquire)) {
+        return Err(crate::ops::CANCELLED_ERR.to_string());
+    }
+    let args = build_fetch_args(opts);
+    let output = git_stream(workdir, &args, on_line, cancel)?;
+    let report = format!("{}\n{}", output.stdout, output.stderr);
+    Ok(NetStats {
+        received_bytes: 0,
+        objects: 0,
+        updated_refs: crate::engine::netops::parse_push_report(&report),
+    })
 }
 
 /// Run `git <args>` in `workdir` with the sanitized environment; success
@@ -778,5 +826,45 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod fetch_args_tests {
+    use super::*;
+    use crate::engine::types::FetchOptions;
+
+    #[test]
+    fn build_fetch_args_maps_every_flag() {
+        let opts = FetchOptions {
+            remote: "upstream".into(),
+            prune: true,
+            unshallow: Some(true),
+            depth: Some(32),
+            refs: vec!["refs/heads/main".into(), "v1".into()],
+        };
+        assert_eq!(
+            build_fetch_args(&opts),
+            vec![
+                "fetch",
+                "--progress",
+                "--prune",
+                "--unshallow",
+                "--depth=32",
+                "upstream",
+                "refs/heads/main",
+                "v1"
+            ]
+        );
+
+        // Default (no flags): remote only, refs empty = remote's refspecs.
+        let opts = FetchOptions {
+            remote: "origin".into(),
+            ..Default::default()
+        };
+        assert_eq!(
+            build_fetch_args(&opts),
+            vec!["fetch", "--progress", "origin"]
+        );
     }
 }

@@ -187,6 +187,7 @@
         refs: [],
         tags: true,
         delete: false,
+        atomic: false,
       });
       toast(
         `Pushed ${stats.updated_refs.length} tag${stats.updated_refs.length === 1 ? "" : "s"} to ${remote.name}`,

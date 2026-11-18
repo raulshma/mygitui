@@ -165,6 +165,8 @@ export type { ProjectScript } from "./gen/ProjectScript";
 export type { RepoHealth } from "./gen/RepoHealth";
 export type { SparseInfo } from "./gen/SparseInfo";
 export type { LfsStatus } from "./gen/LfsStatus";
+/** One git-lfs file lock (`lfs_locks`; Phase 5). */
+export type { LfsLock } from "./gen/LfsLock";
 
 // ---------------------------------------------------------------------------
 // M12: signature verify / branch trash
@@ -173,6 +175,12 @@ export type { LfsStatus } from "./gen/LfsStatus";
 export type { SignatureKind } from "./gen/SignatureKind";
 export type { CommitSignature } from "./gen/CommitSignature";
 export type { BranchTrashEntry } from "./gen/BranchTrashEntry";
+
+// ---------------------------------------------------------------------------
+// Phase 5: git notes (`commit_notes` / `note_add` / `note_remove`)
+// ---------------------------------------------------------------------------
+
+export type { NoteInfo } from "./gen/NoteInfo";
 
 // ---------------------------------------------------------------------------
 // M12: AI managed opencode (Rust: src-tauri/src/opencode.rs)

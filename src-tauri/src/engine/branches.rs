@@ -447,21 +447,39 @@ impl Libgit2Engine {
         new_local: Option<&str>,
         progress: &mut dyn FnMut(CheckoutProgress),
     ) -> EngineResult<String> {
-        let tracking_ref = format!("refs/remotes/{remote}/{name}");
-        let tracking = repo.find_reference(&tracking_ref).map_err(|_| {
-            EngineError::Invalid(format!("remote branch `{remote}/{name}` not found"))
-        })?;
-        let commit = tracking.peel_to_commit()?;
         let local_name = new_local.unwrap_or(name);
-        if repo.find_branch(local_name, BranchType::Local).is_ok() {
-            return Err(EngineError::Invalid(format!(
-                "branch `{local_name}` already exists; switch to it or pick another name"
-            )));
-        }
-        let mut branch = repo.branch(local_name, &commit, false)?;
-        branch.set_upstream(Some(&format!("{remote}/{name}")))?;
+        create_branch_at_tracking(repo, remote, name, local_name)?;
+        let tracking = repo
+            .find_reference(&format!("refs/remotes/{remote}/{name}"))?
+            .peel_to_commit()?;
         let refname = format!("refs/heads/{local_name}");
-        checkout_branch_target(repo, &refname, &commit, false, progress)?;
+        checkout_branch_target(repo, &refname, &tracking, false, progress)?;
         Ok(local_name.to_owned())
     }
+}
+
+/// Create the local branch at the remote-tracking tip with upstream
+/// configured — NO checkout. Shared by `branch_checkout_remote` (which then
+/// checks the branch out in the current worktree) and `worktree_add`'s
+/// `from_remote` lane (which puts the worktree on it instead). Returns the
+/// local branch name.
+pub(crate) fn create_branch_at_tracking(
+    repo: &Repository,
+    remote: &str,
+    name: &str,
+    local_name: &str,
+) -> EngineResult<String> {
+    let tracking_ref = format!("refs/remotes/{remote}/{name}");
+    let tracking = repo
+        .find_reference(&tracking_ref)
+        .map_err(|_| EngineError::Invalid(format!("remote branch `{remote}/{name}` not found")))?;
+    let commit = tracking.peel_to_commit()?;
+    if repo.find_branch(local_name, BranchType::Local).is_ok() {
+        return Err(EngineError::Invalid(format!(
+            "branch `{local_name}` already exists; switch to it or pick another name"
+        )));
+    }
+    let mut branch = repo.branch(local_name, &commit, false)?;
+    branch.set_upstream(Some(&format!("{remote}/{name}")))?;
+    Ok(local_name.to_owned())
 }

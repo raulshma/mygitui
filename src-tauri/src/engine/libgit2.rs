@@ -1052,10 +1052,18 @@ fn cursor_not_found(after: &str) -> EngineError {
     ))
 }
 
-/// Does `commit` change anything at `path` (plain pathspec diff)?
-fn commit_touches_path(repo: &Repository, commit: &Commit<'_>, path: &str) -> EngineResult<bool> {
+/// Does `commit` change anything matching any of `paths` (plain pathspec
+/// diff; DiffOptions accepts multiple pathspecs, matching
+/// `git log -- <p1> <p2>` where one hit suffices)?
+fn commit_touches_paths(
+    repo: &Repository,
+    commit: &Commit<'_>,
+    paths: &[String],
+) -> EngineResult<bool> {
     let mut opts = DiffOptions::new();
-    opts.pathspec(path);
+    for path in paths {
+        opts.pathspec(path);
+    }
     let tree = tree_of(commit)?;
     let parent_tree = commit.parent(0).ok().map(|p| tree_of(&p)).transpose()?;
     let diff = repo.diff_tree_to_tree(parent_tree.as_ref(), Some(&tree), Some(&mut opts))?;
@@ -1500,6 +1508,24 @@ impl GitEngine for Libgit2Engine {
         } else {
             None
         };
+        // Effective path filter: `paths` (multi-pathspec) supersedes `path`
+        // when non-empty (documented on LogFilter.paths). `follow` tracks ONE
+        // path through renames, so it only ever applies to a single-path
+        // walk: when several paths are in effect it is ignored (matching
+        // git's single-path-only `--follow`), and the followed path then
+        // moves out of `effective_paths` into `follow_path` so the loop
+        // below never applies both.
+        let mut effective_paths: Vec<String> =
+            match filter.paths.as_deref().filter(|p| !p.is_empty()) {
+                Some(paths) => paths.to_vec(),
+                None if follow_path.is_some() => {
+                    Vec::new() // single path + follow: handled by commit_follows_path
+                }
+                None => filter.path.clone().into_iter().collect(),
+            };
+        if filter.follow && effective_paths.len() == 1 {
+            follow_path = Some(effective_paths.remove(0));
+        }
 
         let mut commits: Vec<CommitInfo> = Vec::new();
         let mut next_cursor = None;
@@ -1540,14 +1566,15 @@ impl GitEngine for Libgit2Engine {
                 }
             }
 
-            if let Some(path) = &filter.path {
-                let touched = match &mut follow_path {
-                    Some(current) => commit_follows_path(repo, &commit, current),
-                    None => commit_touches_path(repo, &commit, path)?,
-                };
-                if !touched {
-                    continue;
+            let touched = match &mut follow_path {
+                Some(current) => commit_follows_path(repo, &commit, current),
+                None if !effective_paths.is_empty() => {
+                    commit_touches_paths(repo, &commit, &effective_paths)?
                 }
+                _ => true, // no path filter in effect
+            };
+            if !touched {
+                continue;
             }
 
             if let Some(after_unix) = filter.after_unix {
@@ -2299,6 +2326,89 @@ mod m12_pickaxe_tests {
             [c4.as_str(), c3.as_str(), c2.as_str(), c1.as_str()],
             "no filter applied"
         );
+    }
+
+    // -- multi-pathspec log filter (Phase 5 item 47) ------------------------
+
+    /// The token fixture commits alternate files: c1/c2/c4 touch `f.txt`,
+    /// c3 touches `g.txt` — exactly the either/or shape a two-path filter
+    /// needs.
+    #[test]
+    fn log_two_path_filter_returns_commits_touching_either() {
+        let (fx, [c1, c2, c3, c4]) = token_fixture("multi-path");
+
+        // Single path still narrows to its own commits.
+        let (commits, _) = ENGINE
+            .log(
+                &fx.repo,
+                &LogFilter {
+                    paths: Some(vec!["g.txt".into()]),
+                    ..Default::default()
+                },
+                100,
+                None,
+            )
+            .expect("log");
+        assert_eq!(shas(&commits), [c3.as_str()], "g.txt only: c3");
+
+        // Two pathspecs: the union, newest first.
+        let (commits, _) = ENGINE
+            .log(
+                &fx.repo,
+                &LogFilter {
+                    paths: Some(vec!["f.txt".into(), "g.txt".into()]),
+                    ..Default::default()
+                },
+                100,
+                None,
+            )
+            .expect("log");
+        assert_eq!(
+            shas(&commits),
+            [c4.as_str(), c3.as_str(), c2.as_str(), c1.as_str()],
+            "either path matches"
+        );
+
+        // `paths` supersedes `path` when both are set.
+        let (commits, _) = ENGINE
+            .log(
+                &fx.repo,
+                &LogFilter {
+                    path: Some("f.txt".into()),
+                    paths: Some(vec!["g.txt".into()]),
+                    ..Default::default()
+                },
+                100,
+                None,
+            )
+            .expect("log");
+        assert_eq!(shas(&commits), [c3.as_str()], "paths wins over path");
+    }
+
+    /// Documented choice (LogFilter.follow): rename following is
+    /// single-path-only — with several paths in effect `follow` is ignored
+    /// and the walk degrades to a plain either-or pathspec match.
+    #[test]
+    fn log_multi_path_ignores_follow() {
+        let (fx, [c1, c2, c3, c4]) = token_fixture("multi-follow");
+        let (commits, _) = ENGINE
+            .log(
+                &fx.repo,
+                &LogFilter {
+                    paths: Some(vec!["f.txt".into(), "g.txt".into()]),
+                    follow: true, // must NOT derail the multi-path walk
+                    ..Default::default()
+                },
+                100,
+                None,
+            )
+            .expect("log");
+        assert_eq!(
+            shas(&commits),
+            [c4.as_str(), c3.as_str(), c2.as_str(), c1.as_str()],
+            "same result as without follow"
+        );
+        let _ = (c1, c2, c3, c4);
     }
 
     /// Blame refuses to materialize a file above the shared repo_read_file

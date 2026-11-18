@@ -8,7 +8,7 @@
 
 use std::path::{Path, PathBuf};
 
-use super::git_engine::GitEngine;
+use super::git_engine::{EngineError, GitEngine};
 use super::libgit2::Libgit2Engine;
 use super::types::{ChangeKind, StageRequest, StageTarget};
 
@@ -81,6 +81,17 @@ fn run_git(dir: &Path, args: &[&str]) {
         "git {args:?} failed: {}",
         String::from_utf8_lossy(&out.stderr)
     );
+}
+
+/// The engine lane spawns git with its sanitized environment (which passes
+/// `GIT_*` through), so the local-transport opt-in travels via the env
+/// config channel instead of `-c` flags. It must be env-based because the
+/// nested `git clone` inside `git submodule add` reads neither the
+/// superproject's repo-local config nor any `-c` of an outer command.
+fn allow_file_protocol() {
+    std::env::set_var("GIT_CONFIG_COUNT", "1");
+    std::env::set_var("GIT_CONFIG_KEY_0", "protocol.file.allow");
+    std::env::set_var("GIT_CONFIG_VALUE_0", "always");
 }
 
 /// Write a file, stage everything, commit on the current branch.
@@ -308,4 +319,169 @@ fn deinitialized_submodule_reports_not_initialized() {
     assert_eq!(sub.recorded_sha, child_head, "gitlink still recorded");
     assert!(!sub.initialized, "deinitialized = not openable");
     assert_ne!(sub.status, "", "open failure is surfaced, not silent");
+}
+
+// ---------------------------------------------------------------------------
+// submodule add / deinit (Phase 5 item 48f)
+// ---------------------------------------------------------------------------
+
+/// `submodule_add_impl` mirrors `git submodule add`: clones the module into
+/// the workdir, records the `.gitmodules` entry and stages the gitlink.
+#[test]
+fn submodule_add_registers_clones_and_stages() {
+    let sandbox = Sandbox::new("add");
+    let child = sandbox.child();
+    let parent = sandbox.parent();
+    std::fs::create_dir_all(&child).expect("mkdir child");
+    std::fs::create_dir_all(&parent).expect("mkdir parent");
+
+    run_git(&child, &["init", "-b", "main"]);
+    commit_file(&child, "lib.txt", "v1\n", "child v1");
+    let child_head = head_sha(&child);
+
+    run_git(&parent, &["init", "-b", "main"]);
+    commit_file(&parent, "README.md", "super\n", "parent init");
+    allow_file_protocol();
+
+    let parent_repo = open(&parent);
+    ENGINE
+        .submodule_add_impl(&parent_repo, child.to_str().unwrap(), "sub", None)
+        .expect("submodule add");
+
+    let subs = list(&ENGINE, &parent_repo);
+    assert_eq!(subs.len(), 1, "one submodule: {subs:?}");
+    let sub = &subs[0];
+    assert_eq!(sub.path, "sub");
+    assert!(sub.initialized, "add clones and checks out the module");
+    assert_eq!(sub.head_sha.as_deref(), Some(child_head.as_str()));
+    assert_eq!(sub.recorded_sha, child_head, "gitlink staged at child HEAD");
+    assert!(!sub.url.is_empty(), ".gitmodules carries the url");
+    assert!(parent.join(".gitmodules").exists());
+
+    // The gitlink sits in the superproject index (what `git status` shows
+    // as the staged new submodule).
+    let index = parent_repo.index().expect("index");
+    let entry = index.get_path(Path::new("sub"), 0).expect("gitlink entry");
+    assert_eq!(entry.id.to_string(), child_head);
+}
+
+/// A custom `--name` lands in `.gitmodules` (the section name drives
+/// `SubmoduleInfo.name`); option-shaped urls/names are rejected before any
+/// git runs.
+#[test]
+fn submodule_add_custom_name_and_argument_guards() {
+    let sandbox = Sandbox::new("add-name");
+    let child = sandbox.child();
+    let parent = sandbox.parent();
+    std::fs::create_dir_all(&child).expect("mkdir child");
+    std::fs::create_dir_all(&parent).expect("mkdir parent");
+
+    run_git(&child, &["init", "-b", "main"]);
+    commit_file(&child, "lib.txt", "v1\n", "child v1");
+    run_git(&parent, &["init", "-b", "main"]);
+    commit_file(&parent, "README.md", "super\n", "parent init");
+    allow_file_protocol();
+
+    let parent_repo = open(&parent);
+
+    // Guards fire before the CLI: an option-shaped url would be parsed as
+    // a git flag (the clone `--upload-pack=<cmd>` injection family), and a
+    // metacharacter name breaks the IPC contract.
+    let err = ENGINE
+        .submodule_add_impl(&parent_repo, "-upload-pack=touch /tmp/x", "sub", None)
+        .expect_err("option-shaped url");
+    match err {
+        EngineError::Invalid(msg) => assert!(msg.contains("invalid submodule"), "{msg}"),
+        other => panic!("expected Invalid, got {other:?}"),
+    }
+    let err = ENGINE
+        .submodule_add_impl(
+            &parent_repo,
+            child.to_str().unwrap(),
+            "sub",
+            Some("--exec=touch"),
+        )
+        .expect_err("option-shaped name");
+    match err {
+        EngineError::Invalid(msg) => assert!(msg.contains("invalid submodule name"), "{msg}"),
+        other => panic!("expected Invalid, got {other:?}"),
+    }
+    assert!(!parent.join(".gitmodules").exists(), "nothing recorded");
+    assert!(!parent.join("sub").exists(), "no checkout happened");
+
+    // The happy path with an explicit name.
+    ENGINE
+        .submodule_add_impl(
+            &parent_repo,
+            child.to_str().unwrap(),
+            "sub",
+            Some("custom-name"),
+        )
+        .expect("submodule add with name");
+    let subs = list(&ENGINE, &parent_repo);
+    assert_eq!(subs.len(), 1, "{subs:?}");
+    assert_eq!(subs[0].name, "custom-name", ".gitmodules section name");
+    assert_eq!(subs[0].path, "sub");
+}
+
+/// `submodule_deinit_impl` matches `git submodule deinit -f`: the workdir
+/// checkout is emptied and the module unregistered, while `.gitmodules`
+/// and the index gitlink stay untouched (re-init via submodule_update).
+#[test]
+fn submodule_deinit_empties_workdir_and_keeps_gitmodules() {
+    let (sandbox, child_head) = setup_with_submodule("deinit-p5");
+    let parent_path = sandbox.parent();
+    run_git(&parent_path, &["commit", "-m", "add submodule"]);
+    let parent = open(&parent_path);
+
+    ENGINE
+        .submodule_deinit_impl(&parent, "sub")
+        .expect("submodule deinit");
+
+    // Workdir emptied (CLI clears the checkout; the empty dir remains).
+    let sub_dir = parent_path.join("sub");
+    assert!(sub_dir.exists(), "deinit keeps the (empty) directory");
+    let survivors: Vec<std::ffi::OsString> = std::fs::read_dir(&sub_dir)
+        .expect("list dir")
+        .filter_map(|e| e.ok())
+        .map(|e| e.file_name())
+        .collect();
+    assert!(survivors.is_empty(), "workdir emptied, got: {survivors:?}");
+
+    // `.gitmodules` and the index gitlink survive.
+    assert!(parent_path.join(".gitmodules").exists());
+    let index = parent.index().expect("index");
+    let entry = index.get_path(Path::new("sub"), 0).expect("gitlink entry");
+    assert_eq!(entry.id.to_string(), child_head, "index keeps the gitlink");
+
+    // CLI truth: `git submodule status` reports the module uninitialized
+    // (the `-` prefix); the engine listing agrees that the checkout is
+    // gone while the recorded sha stays.
+    let status = {
+        let out = std::process::Command::new("git")
+            .args(["submodule", "status"])
+            .current_dir(&parent_path)
+            .output()
+            .expect("submodule status");
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    };
+    assert!(
+        status.trim_start().starts_with('-'),
+        "deinit unregistered the module: {status:?}"
+    );
+
+    let subs = list(&ENGINE, &parent);
+    assert_eq!(subs.len(), 1, "still listed: {subs:?}");
+    assert_eq!(subs[0].path, "sub");
+    assert_eq!(subs[0].recorded_sha, child_head, "recorded sha untouched");
+    assert!(!subs[0].initialized, "no openable checkout anymore");
+
+    // Deinit an unknown path surfaces the friendly not-found error.
+    let err = ENGINE
+        .submodule_deinit_impl(&parent, "nope")
+        .expect_err("unknown path");
+    match err {
+        EngineError::Invalid(msg) => assert!(msg.contains("not found"), "{msg}"),
+        other => panic!("expected Invalid, got {other:?}"),
+    }
 }

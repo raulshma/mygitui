@@ -348,6 +348,7 @@ export class BranchOpsController {
         refs: [],
         tags: false,
         delete: false,
+        atomic: false,
       });
       toast(
         `Pushed ${branch.name} (${stats.updated_refs.length} ref${
@@ -408,6 +409,7 @@ export async function remoteBranchDelete(
       refs: [name],
       tags: false,
       delete: true,
+      atomic: false,
     });
     toast(`Deleted remote branch ${remote}/${name}`, { kind: "success" });
     return true;

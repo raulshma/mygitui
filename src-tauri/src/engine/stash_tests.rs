@@ -613,7 +613,13 @@ fn worktree_add_list_remove_roundtrip() {
         .to_string();
 
     ENGINE
-        .worktree_add_impl(&repo, wt_path.to_str().unwrap(), Some("feature"), None)
+        .worktree_add_impl(
+            &repo,
+            wt_path.to_str().unwrap(),
+            Some("feature"),
+            None,
+            None,
+        )
         .expect("worktree add");
     assert!(wt_path.join(".git").is_file(), "worktree checked out");
 
@@ -654,7 +660,13 @@ fn worktree_remove_rejects_dirty_linked_worktrees_without_losing_data() {
         let (dir, repo) = repo_with_feature_branch(&format!("wt-dirty-{dirty}"));
         let wt_path = dir.sub("wt-dirty");
         ENGINE
-            .worktree_add_impl(&repo, wt_path.to_str().unwrap(), Some("feature"), None)
+            .worktree_add_impl(
+                &repo,
+                wt_path.to_str().unwrap(),
+                Some("feature"),
+                None,
+                None,
+            )
             .expect("worktree add");
         let linked = Repository::open(&wt_path).expect("open linked worktree");
         if matches!(dirty, "staged" | "mixed") {
@@ -708,7 +720,13 @@ fn worktree_remove_matches_git_for_ignored_only_worktrees() {
     let (dir, repo) = repo_with_feature_branch("wt-ignored-only");
     let wt_path = dir.sub("wt-ignored");
     ENGINE
-        .worktree_add_impl(&repo, wt_path.to_str().unwrap(), Some("feature"), None)
+        .worktree_add_impl(
+            &repo,
+            wt_path.to_str().unwrap(),
+            Some("feature"),
+            None,
+            None,
+        )
         .unwrap();
     std::fs::write(repo.path().join("info/exclude"), "*.ignored\n").unwrap();
     std::fs::write(wt_path.join("cache.ignored"), "ignored cache\n").unwrap();
@@ -726,7 +744,7 @@ fn worktree_add_new_branch_and_argument_guards() {
     let wt_path = _dir.sub("wt-fresh");
 
     ENGINE
-        .worktree_add_impl(&repo, wt_path.to_str().unwrap(), None, Some("fresh"))
+        .worktree_add_impl(&repo, wt_path.to_str().unwrap(), None, Some("fresh"), None)
         .expect("worktree add with new branch");
     assert!(repo.find_branch("fresh", git2::BranchType::Local).is_ok());
     let wts = ENGINE.worktrees_impl(&repo).expect("worktrees");
@@ -739,7 +757,13 @@ fn worktree_add_new_branch_and_argument_guards() {
 
     // Neither branch nor new_branch is out of M3 scope.
     let err = ENGINE
-        .worktree_add_impl(&repo, _dir.sub("wt-none").to_str().unwrap(), None, None)
+        .worktree_add_impl(
+            &repo,
+            _dir.sub("wt-none").to_str().unwrap(),
+            None,
+            None,
+            None,
+        )
         .expect_err("detached add unsupported");
     assert!(expect_invalid(err).contains("requires"));
 
@@ -749,6 +773,7 @@ fn worktree_add_new_branch_and_argument_guards() {
             &repo,
             _dir.sub("wt-nope").to_str().unwrap(),
             Some("nope"),
+            None,
             None,
         )
         .expect_err("unknown branch");
@@ -764,6 +789,7 @@ fn worktree_add_rejects_branch_checked_out_elsewhere() {
             _dir.sub("wt-a").to_str().unwrap(),
             Some("feature"),
             None,
+            None,
         )
         .expect("first add ok");
     let err = ENGINE
@@ -771,6 +797,7 @@ fn worktree_add_rejects_branch_checked_out_elsewhere() {
             &repo,
             _dir.sub("wt-b").to_str().unwrap(),
             Some("feature"),
+            None,
             None,
         )
         .expect_err("second checkout of same branch");
@@ -788,6 +815,7 @@ fn worktree_locked_detection_and_remove_guards() {
             &repo,
             _dir.sub("wt-l").to_str().unwrap(),
             Some("feature"),
+            None,
             None,
         )
         .expect("worktree add");
@@ -905,4 +933,178 @@ fn log_walk_excludes_stash_commits_and_starts_at_head() {
     let head = repo.head().expect("head").target().expect("target");
     assert_eq!(page[0].sha, head.to_string(), "HEAD pops first");
     assert_eq!(page[0].summary, "base");
+}
+
+// ---------------------------------------------------------------------------
+// worktree lock/unlock + from_remote (Phase 5 item 48c)
+// ---------------------------------------------------------------------------
+
+/// Lock/unlock round-trip by NAME and by PATH, with the main-worktree
+/// refusal git enforces ("The main working tree cannot be locked or
+/// unlocked") mirrored up front.
+#[test]
+fn worktree_lock_unlock_roundtrip() {
+    let (dir, repo) = repo_with_feature_branch("wt-lock-unlock");
+    let wt_path = dir.sub("wt-lock");
+    ENGINE
+        .worktree_add_impl(
+            &repo,
+            wt_path.to_str().unwrap(),
+            Some("feature"),
+            None,
+            None,
+        )
+        .expect("worktree add");
+
+    // Lock by name with a reason: the reason is readable through libgit2
+    // (what the FE tooltip shows) and the listing flips `locked`.
+    ENGINE
+        .worktree_lock_impl(&repo, "wt-lock", Some("release freeze"))
+        .expect("lock by name");
+    let wt = repo.find_worktree("wt-lock").expect("worktree");
+    match wt.is_locked().expect("lock status") {
+        git2::WorktreeLockStatus::Locked(reason) => {
+            assert_eq!(reason.as_deref(), Some("release freeze"))
+        }
+        other => panic!("expected Locked, got {other:?}"),
+    }
+    let wts = ENGINE.worktrees_impl(&repo).expect("worktrees");
+    assert!(wts.iter().find(|w| w.name == "wt-lock").unwrap().locked);
+
+    // Unlock by name, re-lock by PATH without a reason (empty -> plain lock).
+    ENGINE
+        .worktree_unlock_impl(&repo, "wt-lock")
+        .expect("unlock by name");
+    assert!(!repo
+        .find_worktree("wt-lock")
+        .expect("worktree")
+        .is_locked()
+        .map(|s| matches!(s, git2::WorktreeLockStatus::Locked(_)))
+        .unwrap_or(false));
+    ENGINE
+        .worktree_lock_impl(&repo, wt_path.to_str().unwrap(), None)
+        .expect("lock by path");
+    assert!(matches!(
+        repo.find_worktree("wt-lock")
+            .expect("worktree")
+            .is_locked()
+            .expect("lock status"),
+        git2::WorktreeLockStatus::Locked(_)
+    ));
+    ENGINE
+        .worktree_unlock_impl(&repo, wt_path.to_str().unwrap())
+        .expect("unlock by path");
+
+    // Main worktree refusal (git refuses too; we reject before libgit2).
+    let main_path = repo.workdir().unwrap().to_str().unwrap().to_owned();
+    let err = ENGINE
+        .worktree_lock_impl(&repo, &main_path, None)
+        .expect_err("main worktree lock");
+    assert_eq!(expect_invalid(err), "the main worktree cannot be locked");
+    let err = ENGINE
+        .worktree_unlock_impl(&repo, &main_path)
+        .expect_err("main worktree unlock");
+    assert_eq!(expect_invalid(err), "the main worktree cannot be unlocked");
+
+    // Unknown spec (neither a worktree name nor a path).
+    let err = ENGINE
+        .worktree_lock_impl(&repo, "nope", None)
+        .expect_err("unknown worktree");
+    assert_eq!(expect_invalid(err), "worktree `nope` not found");
+}
+
+/// `worktree_add(from_remote = "origin/feature")`: creates the local branch
+/// at the tracking tip with upstream configured (the
+/// `branch_checkout_remote` logic) and adds the worktree on it — without
+/// touching the main worktree's checkout.
+#[test]
+fn worktree_add_from_remote_creates_branch_and_worktree() {
+    // Origin repo holding the remote `feature` branch.
+    let (origin_dir, origin_repo) = repo_with_feature_branch("wt-fromremote-origin");
+    let (dir, repo) = repo_with_feature_branch("wt-fromremote");
+
+    // Register the local origin and fetch its tracking ref (plain path
+    // transport, no credentials needed).
+    repo.remote("origin", origin_dir.path().to_str().unwrap())
+        .expect("add remote")
+        .fetch(
+            &["refs/heads/feature:refs/remotes/origin/feature"],
+            None,
+            None,
+        )
+        .expect("fetch tracking ref");
+    let origin_sha = origin_repo
+        .find_branch("feature", git2::BranchType::Local)
+        .expect("origin feature")
+        .get()
+        .target()
+        .expect("target")
+        .to_string();
+    // The main repo has no local `feature` yet (repo_with_feature_branch
+    // creates `feature` on the origin side too — drop it here so the
+    // from_remote lane has room to create it).
+    repo.find_branch("feature", git2::BranchType::Local)
+        .expect("main repo feature")
+        .delete()
+        .expect("delete local feature");
+
+    let wt_path = dir.sub("wt-fromremote");
+    ENGINE
+        .worktree_add_impl(
+            &repo,
+            wt_path.to_str().unwrap(),
+            None,
+            None,
+            Some("origin/feature"),
+        )
+        .expect("worktree add from remote");
+
+    // The local branch was created at the tracking tip, upstream configured.
+    let branch = repo
+        .find_branch("feature", git2::BranchType::Local)
+        .expect("local branch created");
+    assert_eq!(
+        branch.get().target().expect("target").to_string(),
+        origin_sha,
+        "branch points at the tracking tip"
+    );
+    assert_eq!(
+        branch.upstream().expect("upstream").name(),
+        Ok(Some("origin/feature"))
+    );
+
+    // The worktree sits on it; the main worktree stayed on `main`.
+    assert!(wt_path.join(".git").is_file(), "worktree checked out");
+    let wts = ENGINE.worktrees_impl(&repo).expect("worktrees");
+    let wt = wts
+        .iter()
+        .find(|w| w.name == "wt-fromremote")
+        .expect("worktree entry");
+    assert_eq!(wt.branch.as_deref(), Some("feature"));
+
+    // Argument guards: shorthand must be `<remote>/<branch>`, and
+    // `from_remote` cannot combine with the other two selectors.
+    let err = ENGINE
+        .worktree_add_impl(
+            &repo,
+            dir.sub("wt-bad-spec").to_str().unwrap(),
+            None,
+            None,
+            Some("feature"),
+        )
+        .expect_err("no slash in spec");
+    assert!(
+        expect_invalid(err).contains("<remote>/<branch>"),
+        "shorthand guard"
+    );
+    let err = ENGINE
+        .worktree_add_impl(
+            &repo,
+            dir.sub("wt-bad-combo").to_str().unwrap(),
+            Some("main"),
+            None,
+            Some("origin/feature"),
+        )
+        .expect_err("combined selectors");
+    assert!(expect_invalid(err).contains("`from_remote` cannot be combined"));
 }

@@ -464,6 +464,7 @@ pub trait GitEngineM3: Send + Sync {
         _path: &str,
         _branch: Option<&str>,
         _new_branch: Option<&str>,
+        _from_remote: Option<&str>,
     ) -> EngineResult<()> {
         Err(EngineError::Unsupported("worktree_add".into()))
     }
@@ -590,6 +591,23 @@ pub trait GitEngineM12: Send + Sync {
         Err(EngineError::Unsupported("worktree_prune".into()))
     }
 
+    /// `git worktree lock [--reason <r>] <path|name>` (Phase 5): mark a
+    /// linked worktree as locked so prune/never-remove workflows skip it.
+    /// The lock state (and reason) is what `worktrees` reports back.
+    fn worktree_lock(
+        &self,
+        _repo: &Repository,
+        _path: &str,
+        _reason: Option<&str>,
+    ) -> EngineResult<()> {
+        Err(EngineError::Unsupported("worktree_lock".into()))
+    }
+
+    /// `git worktree unlock <path|name>` (Phase 5).
+    fn worktree_unlock(&self, _repo: &Repository, _path: &str) -> EngineResult<()> {
+        Err(EngineError::Unsupported("worktree_unlock".into()))
+    }
+
     /// Recorded mark history for a live bisect (empty when none).
     fn bisect_log(&self, _repo: &Repository) -> EngineResult<Vec<BisectLogEntry>> {
         Err(EngineError::Unsupported("bisect_log".into()))
@@ -624,6 +642,27 @@ pub trait GitEngineM12: Send + Sync {
     /// `.gitmodules` into the repository config. (M4)
     fn submodule_sync(&self, _repo: &Repository, _path: Option<&str>) -> EngineResult<()> {
         Err(EngineError::Unsupported("submodule_sync".into()))
+    }
+
+    /// `git submodule add [--name <name>] <url> <path>` via the git CLI
+    /// (Phase 5): stages the gitlink + `.gitmodules` entry and clones the
+    /// submodule into the workdir.
+    fn submodule_add(
+        &self,
+        _repo: &Repository,
+        _url: &str,
+        _path: &str,
+        _name: Option<&str>,
+    ) -> EngineResult<()> {
+        Err(EngineError::Unsupported("submodule_add".into()))
+    }
+
+    /// `git submodule deinit -f <path>` via the git CLI (Phase 5): unregister
+    /// the submodule and empty its workdir. The index keeps the gitlink and
+    /// `.gitmodules` stays (CLI semantics) — re-init later with
+    /// `submodule_update(init = true)`.
+    fn submodule_deinit(&self, _repo: &Repository, _path: &str) -> EngineResult<()> {
+        Err(EngineError::Unsupported("submodule_deinit".into()))
     }
 
     /// Commits per local day inside the window, day ascending. (M7)

@@ -118,6 +118,47 @@ pub fn git_run(workdir: &Path, args: &[&str]) -> Result<String, String> {
     }
 }
 
+/// Argument guard for the CLI-lane subcommands that take user-supplied
+/// values (archive spec/destination, bundle out-path/refs, lfs lock paths,
+/// note refs/shas). Arguments reach git as argv entries (never a shell), but
+/// the IPC contract promises a metacharacter guard: reject shell
+/// metacharacters, control characters, and option-shaped values (a leading
+/// `-` would be parsed as a flag). Formerly `archive_arg_ok` next to the
+/// archive command; moved here so every CLI lane (engine + IPC) guards
+/// through one home.
+pub(crate) fn cli_arg_ok(value: &str) -> bool {
+    !value.is_empty()
+        && !value.starts_with('-')
+        && !value.chars().any(|c| {
+            matches!(
+                c,
+                ';' | '&'
+                    | '|'
+                    | '$'
+                    | '`'
+                    | '('
+                    | ')'
+                    | '<'
+                    | '>'
+                    | '"'
+                    | '\''
+                    | '\n'
+                    | '\r'
+                    | '\0'
+            )
+        })
+}
+
+/// URL/destination guard for the CLI clone family (`clone_blobless` IPC
+/// command, `submodule_add`): argv entries never touch a shell, but a
+/// leading `-` would be parsed as a git flag — clone accepts option-shaped
+/// transfer configs right after its subcommand (`--upload-pack=<cmd>` runs
+/// it), so option-shaped URLs are rejected up front. The `;` check keeps the
+/// original metacharacter contract.
+pub(crate) fn clone_args_ok(url: &str, destination: &str) -> bool {
+    !url.is_empty() && !url.starts_with('-') && !url.contains(';') && !destination.is_empty()
+}
+
 /// The maintenance operations the Health panel exposes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -258,7 +299,7 @@ fn now_secs() -> i64 {
 // sparse checkout + LFS (CLI edges)
 // ---------------------------------------------------------------------------
 
-use crate::engine::types::{LfsStatus, SparseInfo};
+use crate::engine::types::{LfsLock, LfsStatus, NoteInfo, SparseInfo};
 
 /// Sparse-checkout state (`git sparse-checkout list`; `--cone` detection
 /// from config `core.sparseCheckoutCone`).
@@ -324,13 +365,237 @@ pub fn lfs_status(workdir: &Path) -> LfsStatus {
     }
 }
 
-/// Runs a `git lfs` subcommand (`pull` | `push` | `install`).
+/// Runs a `git lfs` subcommand (`pull` | `push` | `install` | `fetch`).
 pub fn lfs_run(workdir: &Path, subcommand: &str) -> Result<String, String> {
     let allowed = ["pull", "push", "install", "fetch"];
     if !allowed.contains(&subcommand) {
         return Err(format!("unsupported git lfs subcommand `{subcommand}`"));
     }
     git_run(workdir, &["lfs", subcommand])
+}
+
+// ---------------------------------------------------------------------------
+// git lfs locks (Phase 5 item 48a)
+// ---------------------------------------------------------------------------
+
+/// `git lfs locks --json` item (subset we surface; unknown fields ignored).
+#[derive(Deserialize)]
+struct LfsLockJson {
+    #[serde(default)]
+    id: String,
+    #[serde(default)]
+    path: String,
+    #[serde(default)]
+    owner: Option<LfsOwnerJson>,
+}
+
+#[derive(Deserialize)]
+struct LfsOwnerJson {
+    #[serde(default)]
+    name: String,
+}
+
+/// Parse `git lfs locks --json` output into [`LfsLock`] entries; falls back
+/// to the plain-text lines (tab-separated `id`, `owner`, `path` — older lfs
+/// builds / non-JSON output) when JSON parsing fails. A data row is
+/// recognized by its numeric id, so a header line never slips through.
+pub(crate) fn parse_lfs_locks(raw: &str) -> Vec<LfsLock> {
+    if let Ok(items) = serde_json::from_str::<Vec<LfsLockJson>>(raw) {
+        return items
+            .into_iter()
+            .map(|lock| LfsLock {
+                id: lock.id,
+                path: lock.path,
+                owner: lock.owner.map(|o| o.name).unwrap_or_default(),
+            })
+            .collect();
+    }
+    let mut out = Vec::new();
+    for line in raw.lines() {
+        let fields: Vec<&str> = line.split('\t').map(str::trim).collect();
+        if fields.len() < 3 || fields[0].parse::<u64>().is_err() {
+            continue;
+        }
+        out.push(LfsLock {
+            id: fields[0].to_owned(),
+            owner: fields[1].to_owned(),
+            path: fields[2].to_owned(),
+        });
+    }
+    out
+}
+
+/// argv for `git lfs locks --json` (pure; unit-tested — the real run needs
+/// git-lfs installed).
+pub(crate) fn lfs_locks_args() -> Vec<String> {
+    vec!["lfs".into(), "locks".into(), "--json".into()]
+}
+
+/// argv for `git lfs lock <path>` (pure; same reasoning as
+/// [`lfs_locks_args`]).
+pub(crate) fn lfs_lock_args(path: &str) -> Vec<String> {
+    vec!["lfs".into(), "lock".into(), path.into()]
+}
+
+/// argv for `git lfs unlock <path>` (pure).
+pub(crate) fn lfs_unlock_args(path: &str) -> Vec<String> {
+    vec!["lfs".into(), "unlock".into(), path.into()]
+}
+
+/// Shared path guard for the lfs lock/unlock lanes: same rules as
+/// [`cli_arg_ok`] with a friendly message. Called before spawning so an
+/// option-shaped path never reaches git's own flag parser.
+fn lfs_path_checked(path: &str) -> Result<(), String> {
+    if cli_arg_ok(path) {
+        return Ok(());
+    }
+    Err(format!("invalid lfs lock path `{path}`"))
+}
+
+/// `git lfs locks` — list file locks (JSON preferred; plain-text fallback,
+/// see [`parse_lfs_locks`]).
+pub fn lfs_locks(workdir: &Path) -> Result<Vec<LfsLock>, String> {
+    let argv: Vec<String> = lfs_locks_args();
+    let raw = git_run_argv(workdir, &argv).or_else(|_| git_run(workdir, &["lfs", "locks"]))?;
+    Ok(parse_lfs_locks(&raw))
+}
+
+/// `git lfs lock <path>` — lock a file; returns git-lfs's output line.
+pub fn lfs_lock(workdir: &Path, path: &str) -> Result<String, String> {
+    lfs_path_checked(path)?;
+    let argv: Vec<String> = lfs_lock_args(path);
+    git_run_argv(workdir, &argv)
+}
+
+/// `git lfs unlock <path>` — release a lock; returns git-lfs's output line.
+pub fn lfs_unlock(workdir: &Path, path: &str) -> Result<String, String> {
+    lfs_path_checked(path)?;
+    let argv: Vec<String> = lfs_unlock_args(path);
+    git_run_argv(workdir, &argv)
+}
+
+/// [`git_run`] taking owned strings (the argv builders above produce them).
+fn git_run_argv(workdir: &Path, argv: &[String]) -> Result<String, String> {
+    let arg_refs: Vec<&str> = argv.iter().map(String::as_str).collect();
+    git_run(workdir, &arg_refs)
+}
+
+// ---------------------------------------------------------------------------
+// git bundle (Phase 5 item 48d)
+// ---------------------------------------------------------------------------
+
+/// `git bundle create <out_path> (--all | refs...)` — a portable packfile of
+/// the selected refs (mirror of the archive CLI lane). The caller validates
+/// `out_path`/refs with [`cli_arg_ok`] (the archive arg guard family);
+/// `all` and `refs` are mutually exclusive exactly like the CLI.
+pub fn bundle_create(
+    workdir: &Path,
+    out_path: &str,
+    refs: &[String],
+    all: bool,
+) -> Result<(), String> {
+    if all && !refs.is_empty() {
+        return Err("bundle takes either `all` or explicit refs, not both".into());
+    }
+    if !all && refs.is_empty() {
+        return Err("bundle requires either `all` or at least one ref".into());
+    }
+    if !cli_arg_ok(out_path) {
+        return Err(format!("invalid bundle destination `{out_path}`"));
+    }
+    for r in refs {
+        if !cli_arg_ok(r) {
+            return Err(format!("invalid bundle ref `{r}`"));
+        }
+    }
+    let mut args: Vec<&str> = vec!["bundle", "create", out_path];
+    if all {
+        args.push("--all");
+    }
+    let ref_refs: Vec<&str> = refs.iter().map(String::as_str).collect();
+    args.extend(ref_refs.iter().copied());
+    git_run(workdir, &args)?;
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// git notes (Phase 5 item 48e)
+// ---------------------------------------------------------------------------
+
+/// The notes ref `git notes` uses when none is given.
+pub(crate) const DEFAULT_NOTES_REF: &str = "refs/notes/commits";
+
+/// The `--ref=<r>` flag for the notes CLI edges; `None`/empty resolves to
+/// [`DEFAULT_NOTES_REF`]. `r` is guarded with [`cli_arg_ok`] (an
+/// option-shaped ref would be parsed as a git flag).
+fn notes_ref_flag(note_ref: Option<&str>) -> Result<String, String> {
+    let r = note_ref
+        .map(str::trim)
+        .filter(|r| !r.is_empty())
+        .unwrap_or(DEFAULT_NOTES_REF);
+    if !cli_arg_ok(r) {
+        return Err(format!("invalid notes ref `{r}`"));
+    }
+    Ok(format!("--ref={r}"))
+}
+
+/// Sha guard shared by the notes commands: commit-ishes are fine, but an
+/// option-shaped value must never reach git's flag parser.
+fn note_sha_checked(sha: &str) -> Result<(), String> {
+    if cli_arg_ok(sha) {
+        return Ok(());
+    }
+    Err(format!("invalid commit sha `{sha}`"))
+}
+
+/// Every note attached to `sha`, one entry per notes ref that holds a note
+/// for it (`git notes --ref <r> show <sha>`; a missing note fails the
+/// subcommand, which simply skips that ref).
+pub fn commit_notes(workdir: &Path, sha: &str) -> Result<Vec<NoteInfo>, String> {
+    note_sha_checked(sha)?;
+    let refs = git_run(
+        workdir,
+        &["for-each-ref", "--format=%(refname)", "refs/notes/"],
+    )?;
+    let mut out = Vec::new();
+    for r in refs.lines().map(str::trim).filter(|l| !l.is_empty()) {
+        let flag = notes_ref_flag(Some(r))?;
+        if let Ok(text) = git_run(workdir, &["notes", &flag, "show", sha]) {
+            out.push(NoteInfo {
+                r#ref: r.to_owned(),
+                text,
+            });
+        }
+    }
+    Ok(out)
+}
+
+/// `git notes add [--ref <r>] -F <file> <sha>` — the note text travels via
+/// the commit-message temp-file helper (multi-line safe, argv-only, never a
+/// shell; the file is removed afterwards like every `-F` consumer).
+pub fn note_add(
+    workdir: &Path,
+    sha: &str,
+    text: &str,
+    note_ref: Option<&str>,
+) -> Result<(), String> {
+    note_sha_checked(sha)?;
+    let flag = notes_ref_flag(note_ref)?;
+    let file = crate::cli::write_message_file("note", text)?;
+    let result = git_run(
+        workdir,
+        &["notes", &flag, "add", "-F", &file.to_string_lossy(), sha],
+    );
+    let _ = std::fs::remove_file(&file);
+    result.map(|_| ())
+}
+
+/// `git notes remove [--ref <r>] <sha>` — deletes the note under that ref.
+pub fn note_remove(workdir: &Path, sha: &str, note_ref: Option<&str>) -> Result<(), String> {
+    note_sha_checked(sha)?;
+    let flag = notes_ref_flag(note_ref)?;
+    git_run(workdir, &["notes", &flag, "remove", sha])?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -375,7 +640,7 @@ mod tests {
         repo
     }
 
-    fn commit_file(repo: &git2::Repository, path: &str, content: &str, message: &str) {
+    fn commit_file(repo: &git2::Repository, path: &str, content: &str, message: &str) -> String {
         let file = repo.workdir().unwrap().join(path);
         std::fs::write(file, content).expect("write file");
         let mut index = repo.index().expect("index");
@@ -392,7 +657,8 @@ mod tests {
         }
         let parent_refs: Vec<&git2::Commit<'_>> = parents.iter().collect();
         repo.commit(Some("HEAD"), &sig, &sig, message, &tree, &parent_refs)
-            .expect("commit");
+            .expect("commit")
+            .to_string()
     }
 
     #[test]
@@ -463,5 +729,214 @@ mod tests {
         assert_eq!(dangling, 0, "fully referenced repo: {samples:?}");
         assert!(samples.is_empty());
         assert_eq!(read_fsck_cache(&git_dir).unwrap().dangling, 0);
+    }
+
+    // -- lfs (Phase 5 item 48a) ----------------------------------------------
+
+    #[test]
+    fn lfs_run_rejects_arbitrary_subcommands() {
+        let dir = TempDir::new("lfs-allow");
+        init_repo(dir.path());
+        // The allowlist stays pull/push/install/fetch: anything else (here
+        // `env`, which would dump git-lfs's environment) is rejected before
+        // git is spawned.
+        for subcommand in ["env", "locks", "lock", "unlock", "version", ""] {
+            let err = lfs_run(dir.path(), subcommand).expect_err(subcommand);
+            assert!(
+                err.contains("unsupported git lfs subcommand"),
+                "{subcommand}: {err}"
+            );
+        }
+        // The allowed ones pass the guard (they fail here with git-lfs not
+        // installed / not a lfs repo — not with the unsupported message).
+        for subcommand in ["pull", "push", "install", "fetch"] {
+            let err = lfs_run(dir.path(), subcommand).unwrap_err();
+            assert!(
+                !err.contains("unsupported git lfs subcommand"),
+                "{subcommand}: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn lfs_argv_builders_are_pinned() {
+        assert_eq!(lfs_locks_args(), vec!["lfs", "locks", "--json"]);
+        assert_eq!(lfs_lock_args("a.bin"), vec!["lfs", "lock", "a.bin"]);
+        assert_eq!(lfs_unlock_args("a.bin"), vec!["lfs", "unlock", "a.bin"]);
+    }
+
+    #[test]
+    fn lfs_lock_arg_guards_reject_option_shaped_and_empty_paths() {
+        let dir = TempDir::new("lfs-guard");
+        init_repo(dir.path());
+        // Guards fire before any spawn: a leading `-` would be parsed as a
+        // git flag (option injection), metacharacters break the IPC contract.
+        for path in ["", "-x", "--upload-pack=touch /tmp/x", "a;b", "$(danger)"] {
+            let err = lfs_lock(dir.path(), path).expect_err(path);
+            assert!(err.contains("invalid lfs lock path"), "{path}: {err}");
+            let err = lfs_unlock(dir.path(), path).expect_err(path);
+            assert!(err.contains("invalid lfs lock path"), "{path}: {err}");
+        }
+    }
+
+    #[test]
+    fn parse_lfs_locks_json_and_text_fallback() {
+        // Primary shape: `git lfs locks --json`.
+        let json = r#"[{"id":"12","path":"a.bin","owner":{"name":"bob"},
+                        "locked_at":"2026-01-01T00:00:00Z"}]"#;
+        let locks = parse_lfs_locks(json);
+        assert_eq!(locks.len(), 1);
+        assert_eq!(locks[0].id, "12");
+        assert_eq!(locks[0].path, "a.bin");
+        assert_eq!(locks[0].owner, "bob");
+
+        // Missing owner object parses to "".
+        assert_eq!(parse_lfs_locks(r#"[{"id":"1","path":"p"}]"#)[0].owner, "");
+
+        // Text fallback: tab-separated id/owner/path, header skipped.
+        let text = "ID\tOwner\tPath\n7\talice\tbig.bin\n8\t\tsub dir/b.bin\n";
+        let locks = parse_lfs_locks(text);
+        assert_eq!(locks.len(), 2);
+        assert_eq!(locks[0].id, "7");
+        assert_eq!(locks[0].owner, "alice");
+        assert_eq!(locks[0].path, "big.bin");
+        assert_eq!(locks[1].owner, "");
+        assert_eq!(locks[1].path, "sub dir/b.bin");
+
+        // Garbage parses to nothing (never panics the listing).
+        assert!(parse_lfs_locks("").is_empty());
+        assert!(parse_lfs_locks("not json at all").is_empty());
+    }
+
+    // -- bundle (Phase 5 item 48d) -------------------------------------------
+
+    /// `git bundle verify` via std::process (independent of the runner under
+    /// test), mirroring the spec's verification suggestion.
+    fn bundle_verify(workdir: &Path, bundle: &Path) -> Result<(), String> {
+        let out = std::process::Command::new("git")
+            .args(["bundle", "verify"])
+            .arg(bundle)
+            .current_dir(workdir)
+            .output()
+            .map_err(|e| e.to_string())?;
+        if out.status.success() {
+            Ok(())
+        } else {
+            Err(String::from_utf8_lossy(&out.stderr).into_owned())
+        }
+    }
+
+    #[test]
+    fn bundle_create_round_trips_via_verify() {
+        let dir = TempDir::new("bundle-all");
+        let repo = init_repo(dir.path());
+        commit_file(&repo, "a.txt", "one\n", "base");
+
+        // --all form.
+        let all_path = dir.path().join("all.bundle");
+        bundle_create(dir.path(), all_path.to_str().unwrap(), &[], true).expect("bundle --all");
+        assert!(all_path.metadata().expect("bundle file").len() > 0);
+        bundle_verify(dir.path(), &all_path).expect("git bundle verify --all bundle");
+
+        // Explicit-refs form (HEAD is a valid bundle rev).
+        let refs_path = dir.path().join("refs.bundle");
+        bundle_create(
+            dir.path(),
+            refs_path.to_str().unwrap(),
+            &["HEAD".to_owned()],
+            false,
+        )
+        .expect("bundle with refs");
+        bundle_verify(dir.path(), &refs_path).expect("git bundle verify refs bundle");
+    }
+
+    #[test]
+    fn bundle_create_rejects_bad_input_before_spawning() {
+        let dir = TempDir::new("bundle-guard");
+        let repo = init_repo(dir.path());
+        commit_file(&repo, "a.txt", "one\n", "base");
+
+        // Exactly one of (all, refs) — never both, never neither.
+        let both = bundle_create(
+            dir.path(),
+            dir.path().join("x.bundle").to_str().unwrap(),
+            &["HEAD".to_owned()],
+            true,
+        )
+        .unwrap_err();
+        assert!(both.contains("not both"), "{both}");
+        let neither = bundle_create(dir.path(), "x.bundle", &[], false).unwrap_err();
+        assert!(neither.contains("at least one ref"), "{neither}");
+
+        // Destination and ref guards (option-shaped values would be parsed
+        // as git flags).
+        let err = bundle_create(dir.path(), "-o", &[], true).unwrap_err();
+        assert!(err.contains("invalid bundle destination"), "{err}");
+        let err = bundle_create(dir.path(), "x.bundle", &["--all".to_owned()], false).unwrap_err();
+        assert!(err.contains("invalid bundle ref"), "{err}");
+
+        // Nothing was written by the rejected runs.
+        assert!(!dir.path().join("x.bundle").exists());
+    }
+
+    // -- notes (Phase 5 item 48e) --------------------------------------------
+
+    #[test]
+    fn notes_add_list_remove_round_trip() {
+        let dir = TempDir::new("notes");
+        let repo = init_repo(dir.path());
+        let sha = commit_file(&repo, "a.txt", "one\n", "base");
+
+        // Empty listing before anything is added.
+        assert!(commit_notes(dir.path(), &sha)
+            .expect("empty list")
+            .is_empty());
+
+        // Add under the default ref (multi-line text via the message file).
+        // The runner trims trailing whitespace, so the stored text loses its
+        // final newline (git notes content itself is unchanged).
+        note_add(dir.path(), &sha, "review note\nsecond line\n", None).expect("note add");
+        let notes = commit_notes(dir.path(), &sha).expect("list");
+        assert_eq!(notes.len(), 1);
+        assert_eq!(notes[0].r#ref, "refs/notes/commits");
+        assert_eq!(notes[0].text, "review note\nsecond line");
+
+        // A second notes ref holds an independent note for the same sha.
+        note_add(dir.path(), &sha, "audit", Some("refs/notes/audit")).expect("note add alt");
+        let notes = commit_notes(dir.path(), &sha).expect("list both");
+        assert_eq!(notes.len(), 2);
+        assert!(notes
+            .iter()
+            .any(|n| n.r#ref == "refs/notes/audit" && n.text == "audit"));
+
+        // Remove round-trips per ref.
+        note_remove(dir.path(), &sha, None).expect("remove default");
+        let notes = commit_notes(dir.path(), &sha).expect("list after remove");
+        assert_eq!(notes.len(), 1);
+        assert_eq!(notes[0].r#ref, "refs/notes/audit");
+        note_remove(dir.path(), &sha, Some("refs/notes/audit")).expect("remove alt");
+        assert!(commit_notes(dir.path(), &sha)
+            .expect("final list")
+            .is_empty());
+    }
+
+    #[test]
+    fn notes_commands_guard_sha_and_ref_before_spawning() {
+        let dir = TempDir::new("notes-guard");
+        init_repo(dir.path());
+        // Option-shaped values would be parsed as git flags.
+        let err = commit_notes(dir.path(), "--all").unwrap_err();
+        assert!(err.contains("invalid commit sha"), "{err}");
+        let err = note_add(dir.path(), "-x", "t", None).unwrap_err();
+        assert!(err.contains("invalid commit sha"), "{err}");
+        let err = note_add(dir.path(), "abc", "t", Some("--exec=touch")).unwrap_err();
+        assert!(err.contains("invalid notes ref"), "{err}");
+        let err = note_remove(dir.path(), "abc", Some(";bad")).unwrap_err();
+        assert!(err.contains("invalid notes ref"), "{err}");
+        // Empty/None ref resolves to the default.
+        assert_eq!(
+            notes_ref_flag(None).expect("default ref"),
+            "--ref=refs/notes/commits"
+        );
     }
 }

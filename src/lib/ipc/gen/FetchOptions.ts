@@ -6,6 +6,25 @@ export type FetchOptions = { remote: string, prune: boolean,
  */
 refs: Array<string>, 
 /**
- * Fetch depth (partial clone support via CLI fallback path).
+ * Fetch depth. Deepening an existing shallow clone works through the
+ * current libgit2 fetch lane over network transports
+ * (`git_fetch_options.depth` negotiates the new shallow boundary
+ * against the remote, same as `git fetch --depth=<n>`); `None` =
+ * unlimited. libgit2 limitation, documented on the lane: the LOCAL
+ * transport (plain paths / `file://`) refuses shallow negotiation
+ * outright ("shallow fetch is not supported by the local transport") —
+ * local remotes deepen through the CLI lane instead, which carries the
+ * same `--depth=<n>` flag.
  */
-depth: number | null, };
+depth: number | null, 
+/**
+ * `--unshallow`: fetch the FULL history back into a shallow clone.
+ * libgit2 cannot unshallow (no way to clear the shallow boundary), so
+ * this routes through the git CLI like atomic push: `fetch_impl` asks
+ * for it via `EngineError::Unsupported` and the IPC `fetch` command
+ * maps that to `cli::fetch_via_cli`. `Option` + `#[serde(default)]` +
+ * `#[ts(optional = nullable)]` so the FE may omit the field (ts-rs
+ * cannot make a plain `bool` optional in the generated TS); missing/
+ * null/false all mean "no unshallow".
+ */
+unshallow?: boolean | null, };

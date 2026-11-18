@@ -20,6 +20,7 @@ function blameLine(sha: string, time: number): BlameLine {
       offset_minutes: 0,
     },
     text: "x",
+    ignored: false,
   };
 }
 

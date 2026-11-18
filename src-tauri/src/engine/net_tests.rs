@@ -1257,3 +1257,155 @@ fn remote_branches_and_checkout_creates_tracking_local() {
         other => panic!("expected Invalid, got {other:?}"),
     }
 }
+
+// ---------------------------------------------------------------------------
+// shallow history: depth deepening + unshallow routing (Phase 5 item 48b)
+// ---------------------------------------------------------------------------
+
+/// Number of commits reachable from the tracking ref (the shallow-history
+/// probe for the tests below). Called on freshly-opened handles: libgit2
+/// caches the shallow grafts per handle, so a fetch that rewrites the
+/// boundary needs a re-open to be visible here.
+fn tracking_history_len(repo: &Repository) -> usize {
+    let mut revwalk = repo.revwalk().expect("revwalk");
+    revwalk
+        .push_ref("refs/remotes/origin/main")
+        .expect("push tracking ref");
+    revwalk.count()
+}
+
+/// `git clone --depth 1` via the CLI (shallow setup must not depend on the
+/// engine under test).
+fn cli_shallow_clone(url: &str, dest: &Path) -> PathBuf {
+    let out = std::process::Command::new("git")
+        .args(["clone", "--depth", "1", "-q", url])
+        .arg(dest)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .output()
+        .expect("spawn git clone");
+    assert!(
+        out.status.success(),
+        "shallow clone failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    dest.to_path_buf()
+}
+
+/// `unshallow: true` cannot run through libgit2 (it cannot clear the
+/// shallow boundary): the engine asks for the CLI lane with `Unsupported`,
+/// which the IPC fetch command maps to `fetch_via_cli`.
+#[test]
+fn fetch_unshallow_routes_to_the_cli_lane() {
+    let f = NetFixture::new("shallow-unshallow");
+    let opts = FetchOptions {
+        remote: "origin".into(),
+        unshallow: Some(true),
+        ..Default::default()
+    };
+    match ENGINE.fetch(&f.a, &opts, &mut |_| {}) {
+        Err(EngineError::Unsupported(reason)) => {
+            assert!(reason.contains("unshallow"), "{reason}");
+        }
+        other => panic!("expected Unsupported, got {other:?}"),
+    }
+}
+
+/// `FetchOptions.depth` routes through the libgit2 fetch lane
+/// (`fetch_with_refspecs` -> `FetchOptions::depth`), where deepening works
+/// over network transports. The LOCAL transport (what every offline test
+/// uses) is a documented libgit2 limitation — it refuses shallow
+/// negotiation outright — which is exactly why the CLI lane below covers
+/// local remotes.
+#[test]
+fn fetch_depth_local_transport_limitation_is_documented() {
+    let f = NetFixture::new("shallow-depth-local");
+    let opts = FetchOptions {
+        remote: "origin".into(),
+        depth: Some(3),
+        ..Default::default()
+    };
+    match ENGINE.fetch(&f.a, &opts, &mut |_| {}) {
+        Err(EngineError::Git(err)) => assert!(
+            err.message().contains("shallow fetch is not supported"),
+            "libgit2 local-transport refusal, got: {err}"
+        ),
+        other => panic!("expected the libgit2 shallow refusal, got {other:?}"),
+    }
+}
+
+/// End-to-end through the CLI lane (`fetch_via_cli`): a depth-1 clone
+/// deepens via `--depth`, then `--unshallow` clears the boundary entirely.
+/// The remote advances after the clone so the transfer report carries real
+/// `old..new ref -> dst` lines (what `NetStats.updated_refs` parses).
+#[test]
+fn fetch_via_cli_deepens_and_unshallows_a_shallow_clone() {
+    let f = NetFixture::new("shallow-cli");
+    commit_file(&f.b, "two.md", "2\n", "second commit");
+    raw_push(&f.b, "refs/heads/main:refs/heads/main");
+    commit_file(&f.b, "three.md", "3\n", "third commit");
+    raw_push(&f.b, "refs/heads/main:refs/heads/main");
+
+    let clone_dir = TempDir::new("shallow-cli-clone");
+    let shallow_path = cli_shallow_clone(
+        &file_url(f.origin.path()),
+        &clone_dir.path().join("shallow"),
+    );
+    let shallow = Repository::open(&shallow_path).expect("open shallow clone");
+    shallow
+        .config()
+        .and_then(|mut c| {
+            c.set_str("user.name", "Net Test")?;
+            c.set_str("user.email", "net@test.local")
+        })
+        .expect("configure identity");
+    assert_eq!(
+        tracking_history_len(&shallow),
+        1,
+        "depth-1 clone is shallow"
+    );
+    drop(shallow);
+
+    // Deepen one step: `--depth=2` pulls in the second commit.
+    let deepen = FetchOptions {
+        remote: "origin".into(),
+        depth: Some(2),
+        ..Default::default()
+    };
+    let stats =
+        crate::cli::fetch_via_cli(&shallow_path, &deepen, &mut |_| {}, None).expect("deepen fetch");
+    assert_eq!(stats.updated_refs.len(), 0, "tracking ref did not move");
+    let shallow = Repository::open(&shallow_path).expect("re-open after deepen");
+    assert_eq!(
+        tracking_history_len(&shallow),
+        2,
+        "--depth=2 deepened the shallow clone"
+    );
+    drop(shallow);
+
+    // Remote advances again; `--unshallow` takes the tracking ref past the
+    // old boundary AND clears it, so the report carries the ref update.
+    commit_file(&f.b, "four.md", "4\n", "fourth commit");
+    raw_push(&f.b, "refs/heads/main:refs/heads/main");
+    let unshallow = FetchOptions {
+        remote: "origin".into(),
+        unshallow: Some(true),
+        ..Default::default()
+    };
+    let stats = crate::cli::fetch_via_cli(&shallow_path, &unshallow, &mut |_| {}, None)
+        .expect("unshallow fetch");
+    assert!(
+        stats.updated_refs.iter().any(|(r, _)| r == "origin/main"),
+        "transfer report parsed: {:?}",
+        stats.updated_refs
+    );
+    let shallow = Repository::open(&shallow_path).expect("re-open after unshallow");
+    assert_eq!(
+        tracking_history_len(&shallow),
+        4,
+        "--unshallow restored the full history"
+    );
+    assert!(
+        !shallow_path.join(".git").join("shallow").exists(),
+        "the shallow boundary file is gone"
+    );
+}

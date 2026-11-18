@@ -137,6 +137,67 @@ impl Libgit2Engine {
         }
         Ok(())
     }
+
+    /// `git submodule add [--name <name>] <url> <path>` (Phase 5) via the
+    /// git CLI — git2 has no one-shot add binding that registers the
+    /// module, clones it, stages the gitlink AND updates `.gitmodules`.
+    /// argv-only (never a shell); the URL/path go through the CLI clone's
+    /// guard family (`clone_args_ok`) so option-shaped values (e.g.
+    /// `--upload-pack=<cmd>` URLs) are rejected before git's flag parser
+    /// sees them. Credentials come from git's own helpers (sanitized env).
+    pub(crate) fn submodule_add_impl(
+        &self,
+        repo: &Repository,
+        url: &str,
+        path: &str,
+        name: Option<&str>,
+    ) -> EngineResult<()> {
+        if !crate::maintenance::clone_args_ok(url, path) {
+            return Err(EngineError::Invalid(
+                "invalid submodule url or path (option-shaped/metacharacter values are rejected)"
+                    .into(),
+            ));
+        }
+        if let Some(name) = name {
+            if !crate::maintenance::cli_arg_ok(name) {
+                return Err(EngineError::Invalid(format!(
+                    "invalid submodule name `{name}`"
+                )));
+            }
+        }
+        let workdir = repo
+            .workdir()
+            .ok_or_else(|| EngineError::Invalid("bare repositories have no workdir".into()))?;
+        let mut args: Vec<String> = vec!["submodule".into(), "add".into()];
+        if let Some(name) = name {
+            args.push("--name".into());
+            args.push(name.into());
+        }
+        args.push(url.into());
+        args.push(path.into());
+        let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
+        crate::maintenance::git_run(workdir, &arg_refs).map_err(EngineError::Invalid)?;
+        Ok(())
+    }
+
+    /// `git submodule deinit -f -- <path>` (Phase 5): unregister the
+    /// submodule and empty its workdir — CLI semantics kept intact:
+    /// `.gitmodules` stays, the index keeps the gitlink, only the local
+    /// config entry is dropped and the checkout is emptied. Re-init later
+    /// via `submodule_update(init = true)`.
+    pub(crate) fn submodule_deinit_impl(&self, repo: &Repository, path: &str) -> EngineResult<()> {
+        // Friendly not-found error before the CLI runs (git's own message
+        // for an unknown path is terse).
+        find_submodule(repo, path)?;
+        let workdir = repo
+            .workdir()
+            .ok_or_else(|| EngineError::Invalid("bare repositories have no workdir".into()))?;
+        // The `--` separator keeps a leading-dash path from being parsed as
+        // a deinit flag (same defense as the other CLI lanes).
+        crate::maintenance::git_run(workdir, &["submodule", "deinit", "-f", "--", path])
+            .map_err(EngineError::Invalid)?;
+        Ok(())
+    }
 }
 
 /// "new commits" / "modified content" / "untracked content", " / "-joined;

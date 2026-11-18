@@ -33,11 +33,11 @@ use crate::engine::stats::{Contributor, DayCount};
 use crate::engine::types::{
     BisectLogEntry, BisectMark, BisectState, BlameLine, BlameQuery, BranchInfo, BranchTrashEntry,
     CheckpointInfo, CommitInfo, CommitOptions, CommitSignature, ConflictFile, ConflictResolution,
-    DiffHunk, DiffLine, DiffSide, FetchOptions, FileDiff, HookInfo, LfsStatus, LogFilter,
-    MergeFavor, MergeOptions, MergeOutcome, MergeResult, NetStats, PreviewFile, PreviewInfo,
-    PullOptions, PushOptions, RebaseState, RebaseStep, ReflogEntry, RemoteBranchInfo, RemoteInfo,
-    RepoHealth, RepoStatus, ResetKind, SigningInfo, SparseInfo, StageRequest, StageTarget,
-    StashInfo, SubmoduleInfo, TagInfo, WorktreeInfo,
+    DiffHunk, DiffLine, DiffSide, FetchOptions, FileDiff, HookInfo, LfsLock, LfsStatus, LogFilter,
+    MergeFavor, MergeOptions, MergeOutcome, MergeResult, NetStats, NoteInfo, PreviewFile,
+    PreviewInfo, PullOptions, PushOptions, RebaseState, RebaseStep, ReflogEntry, RemoteBranchInfo,
+    RemoteInfo, RepoHealth, RepoStatus, ResetKind, SigningInfo, SparseInfo, StageRequest,
+    StageTarget, StashInfo, SubmoduleInfo, TagInfo, WorktreeInfo,
 };
 use crate::ipc_commands::READ_FILE_MAX_BYTES;
 
@@ -147,15 +147,19 @@ impl RemoteGitEngine {
         .checked(what)
     }
 
-    /// `git archive`: binary stdout, long timeout, hard cap.
-    fn git_archive_bytes(&self, args: &str) -> Result<Vec<u8>, String> {
-        let out = self
-            .git_raw(args, LONG_EXEC_TIMEOUT)?
-            .checked("git archive")?;
+    /// Binary stdout for output-producing git subcommands (`archive`,
+    /// `bundle create -`): long timeout, hard cap.
+    fn git_binary_out(&self, args: &str, what: &str) -> Result<Vec<u8>, String> {
+        let out = self.git_raw(args, LONG_EXEC_TIMEOUT)?.checked(what)?;
         if out.stdout.len() > ARCHIVE_CAP {
-            return Err("archive exceeds 512 MiB".to_string());
+            return Err(format!("{what} exceeds 512 MiB"));
         }
         Ok(out.stdout)
+    }
+
+    /// `git archive`: binary stdout, long timeout, hard cap.
+    fn git_archive_bytes(&self, args: &str) -> Result<Vec<u8>, String> {
+        self.git_binary_out(args, "git archive")
     }
 
     /// Probe a path's existence on the device (`[ -e ]`).
@@ -987,6 +991,11 @@ impl RemoteGitEngine {
         }
         if let Some(depth) = opts.depth {
             args.push_str(&format!(" --depth={depth}"));
+        }
+        // Device git supports `--unshallow` natively (no CLI routing needed
+        // here — that is the local libgit2 engine's constraint).
+        if opts.unshallow == Some(true) {
+            args.push_str(" --unshallow");
         }
         args.push_str(&format!(" {}", shell_quote(&opts.remote)));
         for r in &opts.refs {
@@ -2064,6 +2073,41 @@ impl RemoteGitEngine {
         Ok(())
     }
 
+    /// `git bundle create` streamed to a LOCAL destination file: the bundle
+    /// is written to the device's stdout (`git bundle create -`), travels
+    /// over SSH, and lands in the same local file the archive lane writes.
+    /// The exclusivity/precondition checks mirror
+    /// `crate::maintenance::bundle_create`; every value is shell-quoted.
+    pub fn bundle(
+        &self,
+        out_path: &std::path::Path,
+        refs: &[String],
+        all: bool,
+    ) -> Result<(), String> {
+        if all && !refs.is_empty() {
+            return Err("bundle takes either `all` or explicit refs, not both".into());
+        }
+        if !all && refs.is_empty() {
+            return Err("bundle requires either `all` or at least one ref".into());
+        }
+        let mut args = String::from("bundle create -");
+        if all {
+            args.push_str(" --all");
+        }
+        for r in refs {
+            args.push(' ');
+            args.push_str(&shell_quote(r));
+        }
+        let bytes = self.git_binary_out(&args, "git bundle")?;
+        // A git too old for stdout bundles answers with an error message,
+        // not the bundle magic: fail instead of writing a junk file.
+        if !bytes.starts_with(b"# v2 git bundle") && !bytes.starts_with(b"# v3 git bundle") {
+            return Err("device git refused `bundle create -` (older git?)".into());
+        }
+        std::fs::write(out_path, bytes).map_err(|e| format!("write bundle: {e}"))?;
+        Ok(())
+    }
+
     pub fn sparse_info(&self) -> Result<SparseInfo, String> {
         let enabled = self
             .git_raw(
@@ -2165,6 +2209,36 @@ impl RemoteGitEngine {
         Ok(out.stdout_str().trim().to_string())
     }
 
+    /// `git lfs locks` on the device (Phase 5): JSON preferred, the
+    /// maintenance parser handles the plain-text fallback. Requires
+    /// git-lfs on the device, like every other lfs lane.
+    pub fn lfs_locks(&self) -> Result<Vec<LfsLock>, String> {
+        let raw = self
+            .git_out("lfs locks --json")
+            .or_else(|_| self.git_out("lfs locks"))?;
+        Ok(crate::maintenance::parse_lfs_locks(&raw))
+    }
+
+    /// `git lfs lock <path>` on the device (returns git-lfs's output line).
+    /// shell_quote covers the transport; the empty/option-shaped guard
+    /// mirrors the local lane before git's own flag parsing sees it.
+    pub fn lfs_lock(&self, path: &str) -> Result<String, String> {
+        if !crate::maintenance::cli_arg_ok(path) {
+            return Err(format!("invalid lfs lock path `{path}`"));
+        }
+        let out = self.git_checked(&format!("lfs lock {}", shell_quote(path)), "lfs lock")?;
+        Ok(out.stdout_str().trim().to_string())
+    }
+
+    /// `git lfs unlock <path>` on the device.
+    pub fn lfs_unlock(&self, path: &str) -> Result<String, String> {
+        if !crate::maintenance::cli_arg_ok(path) {
+            return Err(format!("invalid lfs lock path `{path}`"));
+        }
+        let out = self.git_checked(&format!("lfs unlock {}", shell_quote(path)), "lfs unlock")?;
+        Ok(out.stdout_str().trim().to_string())
+    }
+
     // ---------- worktrees / submodules / reflog / trash ----------
 
     pub fn worktrees(&self) -> Result<Vec<WorktreeInfo>, String> {
@@ -2176,6 +2250,7 @@ impl RemoteGitEngine {
         path: &str,
         branch: Option<&str>,
         new_branch: Option<&str>,
+        from_remote: Option<&str>,
     ) -> Result<(), String> {
         let mut args = String::from("worktree add");
         if let Some(nb) = new_branch {
@@ -2187,7 +2262,40 @@ impl RemoteGitEngine {
             args.push(' ');
             args.push_str(&shell_quote(b));
         }
+        if let Some(spec) = from_remote {
+            // `<remote>/<branch>` shorthand as the start point: git's DWIM
+            // creates a local branch named after the remote branch at the
+            // tracking tip and checks it out in the new worktree (the local
+            // lane does the same via `create_branch_at_tracking`; here git
+            // handles it, minus the upstream configuration which
+            // `worktree add` cannot set).
+            args.push(' ');
+            args.push_str(&shell_quote(spec));
+        }
         self.git_checked(&args, "worktree add")?;
+        Ok(())
+    }
+
+    /// `git worktree lock [--reason <r>] <path>` (Phase 5). git refuses the
+    /// main worktree on its own ("The main working tree cannot be locked"),
+    /// matching the local lane's guard.
+    pub fn worktree_lock(&self, path: &str, reason: Option<&str>) -> Result<(), String> {
+        let mut args = String::from("worktree lock");
+        if let Some(reason) = reason.map(str::trim).filter(|r| !r.is_empty()) {
+            args.push_str(&format!(" --reason {}", shell_quote(reason)));
+        }
+        args.push(' ');
+        args.push_str(&shell_quote(path));
+        self.git_checked(&args, "worktree lock")?;
+        Ok(())
+    }
+
+    /// `git worktree unlock <path>` (Phase 5).
+    pub fn worktree_unlock(&self, path: &str) -> Result<(), String> {
+        self.git_checked(
+            &format!("worktree unlock {}", shell_quote(path)),
+            "worktree unlock",
+        )?;
         Ok(())
     }
 
@@ -2267,6 +2375,97 @@ impl RemoteGitEngine {
     pub fn submodule_sync(&self, recursive: bool) -> Result<(), String> {
         let flag = if recursive { " --recursive" } else { "" };
         self.git_checked(&format!("submodule sync{flag}"), "submodule sync")?;
+        Ok(())
+    }
+
+    /// `git submodule add [--name <name>] <url> <path>` on the device
+    /// (Phase 5). Same guard family as the local lane: option-shaped URLs
+    /// never reach git's flag parser.
+    pub fn submodule_add(&self, url: &str, path: &str, name: Option<&str>) -> Result<(), String> {
+        if !crate::maintenance::clone_args_ok(url, path) {
+            return Err("invalid submodule url/path".into());
+        }
+        let mut args = String::from("submodule add");
+        if let Some(name) = name {
+            if !crate::maintenance::cli_arg_ok(name) {
+                return Err(format!("invalid submodule name `{name}`"));
+            }
+            args.push_str(&format!(" --name {}", shell_quote(name)));
+        }
+        args.push(' ');
+        args.push_str(&shell_quote(url));
+        args.push(' ');
+        args.push_str(&shell_quote(path));
+        self.git_checked(&args, "submodule add")?;
+        Ok(())
+    }
+
+    /// `git submodule deinit -f -- <path>` on the device (unregister + empty
+    /// workdir; index and `.gitmodules` untouched, like the local lane).
+    pub fn submodule_deinit(&self, path: &str) -> Result<(), String> {
+        if path.is_empty() {
+            return Err("submodule path required".into());
+        }
+        self.git_checked(
+            &format!("submodule deinit -f -- {}", shell_quote(path)),
+            "submodule deinit",
+        )?;
+        Ok(())
+    }
+
+    // ---------- git notes (Phase 5) ----------
+
+    /// Every note attached to `sha`, one entry per notes ref holding one.
+    /// `git notes --ref <r> show <sha>` fails when that ref holds no note —
+    /// the failure just skips the ref.
+    pub fn commit_notes(&self, sha: &str) -> Result<Vec<NoteInfo>, String> {
+        let refs_raw = self.git_out("for-each-ref --format=%(refname) refs/notes/")?;
+        let mut out = Vec::new();
+        for r in refs_raw.lines().map(str::trim).filter(|l| !l.is_empty()) {
+            if let Ok(text) = self.git_out(&format!(
+                "notes --ref={} show {}",
+                shell_quote(r),
+                shell_quote(sha)
+            )) {
+                out.push(NoteInfo {
+                    r#ref: r.to_owned(),
+                    text,
+                });
+            }
+        }
+        Ok(out)
+    }
+
+    /// `git notes add --ref <r> -m <text> <sha>` on the device. Multi-line
+    /// text is safe: shell_quote single-quotes the value (newlines live
+    /// inside the quoted argument, never as shell separators).
+    pub fn note_add(&self, sha: &str, text: &str, note_ref: Option<&str>) -> Result<(), String> {
+        let r = note_ref
+            .map(str::trim)
+            .filter(|r| !r.is_empty())
+            .unwrap_or(crate::maintenance::DEFAULT_NOTES_REF);
+        self.git_checked(
+            &format!(
+                "notes add --ref={} -m {} {}",
+                shell_quote(r),
+                shell_quote(text),
+                shell_quote(sha)
+            ),
+            "notes add",
+        )?;
+        Ok(())
+    }
+
+    /// `git notes remove --ref <r> <sha>` on the device.
+    pub fn note_remove(&self, sha: &str, note_ref: Option<&str>) -> Result<(), String> {
+        let r = note_ref
+            .map(str::trim)
+            .filter(|r| !r.is_empty())
+            .unwrap_or(crate::maintenance::DEFAULT_NOTES_REF);
+        self.git_checked(
+            &format!("notes remove --ref={} {}", shell_quote(r), shell_quote(sha)),
+            "notes remove",
+        )?;
         Ok(())
     }
 
@@ -2725,11 +2924,28 @@ pub fn log_args(filter: &LogFilter, limit: usize, after: Option<&str>) -> String
         args.push_str(&format!(" ^{}", shell_quote(cursor)));
     }
     args.push_str(&format!(" -n {limit}"));
-    if let Some(path) = &filter.path {
+    // Multi-pathspec supersedes the single-path field when non-empty
+    // (documented on LogFilter.paths). `--follow` tracks ONE path through
+    // renames (git's own `--follow` is single-path-only), so it is kept for
+    // a single-path walk and dropped when several paths are in effect —
+    // the local engine ignores it there the same way.
+    let explicit_paths = filter.paths.as_deref().unwrap_or_default();
+    let paths: Vec<&String> = if explicit_paths.is_empty() {
+        filter.path.iter().collect()
+    } else {
+        explicit_paths.iter().collect()
+    };
+    if paths.len() == 1 {
         if filter.follow {
             args.push_str(" --follow");
         }
-        args.push_str(&format!(" -- {}", shell_quote(path)));
+        args.push_str(&format!(" -- {}", shell_quote(paths[0])));
+    } else if !paths.is_empty() {
+        args.push_str(" --");
+        for path in paths {
+            args.push(' ');
+            args.push_str(&shell_quote(path));
+        }
     }
     args
 }
@@ -2982,5 +3198,63 @@ mod tests {
             internal_ref_exclude_args(),
             " --exclude='refs/mygitui/*' --exclude='refs/stash'",
         );
+    }
+
+    // -- multi-pathspec log filter (Phase 5 item 47) ------------------------
+
+    #[test]
+    fn log_args_emit_every_path_quoted_after_the_separator() {
+        let filter = LogFilter {
+            paths: Some(vec!["src/main.rs".into(), "weird name".into()]),
+            ..Default::default()
+        };
+        let args = log_args(&filter, 100, None);
+        assert!(args.contains(" -- 'src/main.rs' 'weird name'"), "{args}");
+        assert!(!args.contains("--follow"), "{args}");
+        assert!(!args.contains("--literal"), "plain pathspec parity: {args}");
+    }
+
+    #[test]
+    fn log_args_multi_path_supersedes_single_path() {
+        let filter = LogFilter {
+            path: Some("f.txt".into()),
+            paths: Some(vec!["g.txt".into()]),
+            ..Default::default()
+        };
+        let args = log_args(&filter, 100, None);
+        assert!(args.contains(" -- 'g.txt'"), "{args}");
+        assert!(!args.contains("'f.txt'"), "paths wins over path: {args}");
+    }
+
+    /// Documented choice: `--follow` survives only a single-path walk.
+    #[test]
+    fn log_args_follow_applies_to_single_path_only() {
+        let single = LogFilter {
+            path: Some("f.txt".into()),
+            follow: true,
+            ..Default::default()
+        };
+        assert!(log_args(&single, 100, None).contains(" --follow"));
+
+        let multi = LogFilter {
+            paths: Some(vec!["f.txt".into(), "g.txt".into()]),
+            follow: true,
+            ..Default::default()
+        };
+        let args = log_args(&multi, 100, None);
+        assert!(
+            !args.contains("--follow"),
+            "follow dropped for multi: {args}"
+        );
+
+        // A one-entry `paths` still counts as a single-path walk.
+        let lone = LogFilter {
+            paths: Some(vec!["f.txt".into()]),
+            follow: true,
+            ..Default::default()
+        };
+        let args = log_args(&lone, 100, None);
+        assert!(args.contains(" --follow"), "{args}");
+        assert!(args.contains(" -- 'f.txt'"), "{args}");
     }
 }

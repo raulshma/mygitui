@@ -84,6 +84,7 @@ export function pushOptions(remote: string, branch: string): PushOptions {
     refs: [],
     tags: false,
     delete: false,
+    atomic: false,
   };
 }
 

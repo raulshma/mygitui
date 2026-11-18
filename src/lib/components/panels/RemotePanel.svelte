@@ -270,6 +270,7 @@
         refs: [],
         tags: false,
         delete: false,
+        atomic: false,
       }), true);
   }
 
@@ -343,6 +344,7 @@
           refs: [],
           tags: false,
           delete: false,
+          atomic: false,
         }),
       true,
     );

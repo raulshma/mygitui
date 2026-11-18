@@ -21,6 +21,18 @@
 //! - `worktrees` leads with the main worktree (`is_main: true`; libgit2's
 //!   `git_worktree_list` never includes it) followed by the linked ones;
 //!   each entry's HEAD is read from its admin dir under the common gitdir.
+//! - `worktree_lock`/`worktree_unlock` (Phase 5) run through libgit2's
+//!   `Worktree::lock/unlock` — the same lock state the listing reads back,
+//!   so no CLI round-trip. git's refusal of the main worktree is mirrored
+//!   up front ("the main worktree cannot be locked/unlocked"). The spec
+//!   argument accepts a worktree NAME (the `worktree_remove` convention)
+//!   or its PATH (what `git worktree lock` takes).
+//! - `worktree_add(from_remote)` (Phase 5): `<remote>/<branch>` shorthand
+//!   creates the local branch at the tracking tip with upstream configured
+//!   (shared `create_branch_at_tracking` helper from branches.rs, the same
+//!   logic `branch_checkout_remote` uses) and the worktree is added on it;
+//!   `branch`/`new_branch` stay mutually exclusive with it. The branch name
+//!   may itself contain `/` — only the FIRST slash splits the remote off.
 
 use std::path::{Path, PathBuf};
 
@@ -935,6 +947,7 @@ impl Libgit2Engine {
         path: &str,
         branch: Option<&str>,
         new_branch: Option<&str>,
+        from_remote: Option<&str>,
     ) -> EngineResult<()> {
         let path = Path::new(path);
         // Worktree name = last path component (what `git worktree add` shows).
@@ -949,20 +962,26 @@ impl Libgit2Engine {
                 ))
             })?;
 
-        // M3 scope: a worktree always starts on a branch — existing or fresh.
-        // (libgit2 rejects an already-checked-out branch with
-        // "reference ... is already checked out".)
-        let reference = match (branch, new_branch) {
-            (Some(_), Some(_)) => {
+        // M3 scope: a worktree always starts on a branch — existing, fresh,
+        // or (Phase 5) created at a remote-tracking tip. (libgit2 rejects an
+        // already-checked-out branch with "reference ... is already checked
+        // out".)
+        let reference = match (branch, new_branch, from_remote) {
+            (Some(_), Some(_), _) => {
                 return Err(EngineError::Invalid(
                     "pass either `branch` or `new_branch`, not both".into(),
                 ));
             }
-            (Some(name), None) => repo
+            (Some(_), _, Some(_)) | (None, Some(_), Some(_)) => {
+                return Err(EngineError::Invalid(
+                    "`from_remote` cannot be combined with `branch` or `new_branch`".into(),
+                ));
+            }
+            (Some(name), None, None) => repo
                 .find_branch(name, BranchType::Local)
                 .map_err(|_| EngineError::Invalid(format!("branch `{name}` not found")))?
                 .into_reference(),
-            (None, Some(name)) => {
+            (None, Some(name), None) => {
                 let commit = repo
                     .head()
                     .map_err(|_| {
@@ -974,9 +993,25 @@ impl Libgit2Engine {
                 let branch = fresh_created_branch(repo, name, &commit)?;
                 branch.into_reference()
             }
-            (None, None) => {
+            (None, None, Some(spec)) => {
+                // `<remote>/<branch>` shorthand: create the local branch at
+                // the tracking tip (upstream configured, no checkout) via
+                // the shared `branch_checkout_remote` helper, then put the
+                // worktree on it. A branch name of its own may contain
+                // `/`; only the FIRST slash splits the remote off.
+                let (remote, name) = spec.split_once('/').ok_or_else(|| {
+                    EngineError::Invalid(format!(
+                        "`{spec}` is not a remote branch (`<remote>/<branch>` expected)"
+                    ))
+                })?;
+                let local_name =
+                    super::branches::create_branch_at_tracking(repo, remote, name, name)?;
+                repo.find_branch(&local_name, BranchType::Local)?
+                    .into_reference()
+            }
+            (None, None, None) => {
                 return Err(EngineError::Invalid(
-                    "worktree_add requires `branch` or `new_branch` (detached adds are not supported)".into(),
+                    "worktree_add requires `branch`, `new_branch`, or `from_remote` (detached adds are not supported)".into(),
                 ));
             }
         };
@@ -984,6 +1019,41 @@ impl Libgit2Engine {
         let mut opts = WorktreeAddOptions::new();
         opts.reference(Some(&reference));
         repo.worktree(name, path, Some(&opts))?;
+        Ok(())
+    }
+
+    /// `git worktree lock [--reason <r>] <path|name>` (Phase 5). The same
+    /// libgit2 lock state the `worktrees` listing reads back
+    /// (`WorktreeLockStatus::Locked(reason)`), so the FE lock flag and the
+    /// lock reason are authoritative without a CLI round-trip. git refuses
+    /// the main worktree; we mirror that up front (before the spec lookup,
+    /// which only sees linked worktrees).
+    pub(crate) fn worktree_lock_impl(
+        &self,
+        repo: &Repository,
+        path: &str,
+        reason: Option<&str>,
+    ) -> EngineResult<()> {
+        if is_main_worktree_path(repo, path) {
+            return Err(EngineError::Invalid(
+                "the main worktree cannot be locked".into(),
+            ));
+        }
+        let wt = find_worktree_by_spec(repo, path)?;
+        wt.lock(reason.map(str::trim).filter(|r| !r.is_empty()))?;
+        Ok(())
+    }
+
+    /// `git worktree unlock <path|name>` (Phase 5). Same main-worktree
+    /// refusal as git (`The main working tree cannot be locked or unlocked`).
+    pub(crate) fn worktree_unlock_impl(&self, repo: &Repository, path: &str) -> EngineResult<()> {
+        if is_main_worktree_path(repo, path) {
+            return Err(EngineError::Invalid(
+                "the main worktree cannot be unlocked".into(),
+            ));
+        }
+        let wt = find_worktree_by_spec(repo, path)?;
+        wt.unlock()?;
         Ok(())
     }
 
@@ -1081,6 +1151,37 @@ fn fresh_created_branch<'r>(
             EngineError::Git(e)
         }
     })
+}
+
+/// Resolve a worktree by NAME first (the `worktree_remove` convention),
+/// then by PATH (`git worktree lock/unlock` take paths). Linked worktrees
+/// only — the lock/unlock impls refuse the main worktree themselves.
+fn is_main_worktree_path(repo: &Repository, spec: &str) -> bool {
+    // PathBuf equality compares components, so a trailing separator
+    // (`/tmp/repo/`) still matches the bare workdir path.
+    repo.workdir()
+        .map(|w| w == Path::new(spec))
+        .unwrap_or(false)
+}
+
+/// Resolve a worktree by NAME first (the `worktree_remove` convention),
+/// then by PATH (`git worktree lock/unlock` take paths). Linked worktrees
+/// only — the lock/unlock impls refuse the main worktree themselves.
+fn find_worktree_by_spec(repo: &Repository, spec: &str) -> EngineResult<Worktree> {
+    if let Ok(wt) = repo.find_worktree(spec) {
+        return Ok(wt);
+    }
+    for entry in repo.worktrees()?.iter() {
+        let Some(name) = entry.ok().flatten() else {
+            continue; // non-UTF-8 worktree name
+        };
+        if let Ok(wt) = repo.find_worktree(name) {
+            if wt.path().to_string_lossy() == spec {
+                return Ok(wt);
+            }
+        }
+    }
+    Err(EngineError::Invalid(format!("worktree `{spec}` not found")))
 }
 
 /// The main worktree's listing entry: path/name from the repo workdir,
@@ -1233,7 +1334,13 @@ mod tests {
         // the main entry must still come first.
         let linked_path = dir.path().join("aaa-linked");
         ENGINE
-            .worktree_add_impl(&repo, linked_path.to_str().unwrap(), None, Some("linked"))
+            .worktree_add_impl(
+                &repo,
+                linked_path.to_str().unwrap(),
+                None,
+                Some("linked"),
+                None,
+            )
             .expect("worktree add");
 
         let wts = ENGINE.worktrees_impl(&repo).expect("worktrees");
@@ -1272,7 +1379,13 @@ mod tests {
         // With a linked worktree present and valid: still zero.
         let linked_path = dir.path().join("linked");
         ENGINE
-            .worktree_add_impl(&repo, linked_path.to_str().unwrap(), None, Some("linked"))
+            .worktree_add_impl(
+                &repo,
+                linked_path.to_str().unwrap(),
+                None,
+                Some("linked"),
+                None,
+            )
             .expect("worktree add");
         let pruned = ENGINE.worktree_prune_impl(&repo).expect("prune");
         assert_eq!(pruned, 0);
@@ -1289,7 +1402,13 @@ mod tests {
         commit_file(&repo, "a.txt", "one\n", "base");
         let linked_path = dir.path().join("linked");
         ENGINE
-            .worktree_add_impl(&repo, linked_path.to_str().unwrap(), None, Some("linked"))
+            .worktree_add_impl(
+                &repo,
+                linked_path.to_str().unwrap(),
+                None,
+                Some("linked"),
+                None,
+            )
             .expect("worktree add");
 
         // Simulate a worktree whose directory vanished (git's classic prune

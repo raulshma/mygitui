@@ -11,13 +11,29 @@ text?: string | null,
 /**
  * When set, `text` is treated as a regex.
  */
-regex: boolean, author?: string | null, path?: string | null, after_unix?: number | null, before_unix?: number | null, 
+regex: boolean, author?: string | null, path?: string | null, 
+/**
+ * Multi-pathspec log filter (`git log -- <p1> <p2> ...`): commits
+ * touching ANY of the listed paths. When non-empty it SUPERSEDES
+ * `path` (which stays for the single-path default and is how `follow`
+ * keeps working — see below); `None`/empty = not in effect. Expressed
+ * as `Option` with `#[serde(default)]` + `#[ts(optional = nullable)]`
+ * so the FE may omit the field entirely: ts-rs cannot mark
+ * non-`Option` fields optional in the generated TS, and a required
+ * property would break every existing `LogFilter` literal (same
+ * treatment as the M10 pickaxe fields).
+ */
+paths?: Array<string> | null, after_unix?: number | null, before_unix?: number | null, 
 /**
  * Restrict the walk to these commit-ish roots; empty = all refs + HEAD.
  */
 refs: Array<string>, 
 /**
- * Follow renames for `path` (single-path walks only).
+ * Follow renames for the path filter (single-path walks only). With
+ * MULTIPLE paths in effect (`paths` holding 2+, or `paths` non-empty
+ * alongside `path`) `follow` is IGNORED: rename following tracks one
+ * path through its rename history — a multi-path walk has no single
+ * name to shift, and git's own `--follow` is single-path-only too.
  */
 follow: boolean, 
 /**

@@ -22,9 +22,9 @@ use crate::engine::git_engine::EngineError;
 use crate::engine::types::{
     BisectLogEntry, BisectMark, BisectState, BlameLine, BlameQuery, BranchTrashEntry,
     CheckpointInfo, CommitInfo, CommitSignature, ConflictFile, ConflictResolution, DiffQuery,
-    DiffSide, FileDiff, LfsStatus, LogFilter, MergeOptions, MergeResult, RebaseState, RebaseStep,
-    ReflogEntry, RemoteBranchInfo, RepoHealth, RepoId, RepoInfo, RepoStatus, ResetKind, SparseInfo,
-    StashInfo, TagInfo, WorktreeInfo,
+    DiffSide, FileDiff, LfsLock, LfsStatus, LogFilter, MergeOptions, MergeResult, NoteInfo,
+    RebaseState, RebaseStep, ReflogEntry, RemoteBranchInfo, RepoHealth, RepoId, RepoInfo,
+    RepoStatus, ResetKind, SparseInfo, StashInfo, TagInfo, WorktreeInfo,
 };
 use crate::graph::types::{self, GraphRow};
 use crate::repo::{RepoHandle, RepoManager, StreamHandle, StreamKind};
@@ -2017,8 +2017,26 @@ pub async fn fetch(
             // cancel token and are not on a trait — the engine is stateless,
             // so a fresh instance behaves identically to `handle.engine()`.
             let engine = crate::engine::libgit2::Libgit2Engine::new();
-            let net_repo = open_net_handle(&workdir)?;
-            engine.fetch_impl_ext(&net_repo, &options, progress, ctx.cancel_token().as_deref())
+            let outcome = open_net_handle(&workdir).and_then(|net_repo| {
+                engine.fetch_impl_ext(&net_repo, &options, progress, ctx.cancel_token().as_deref())
+            });
+            match outcome {
+                // libgit2 cannot unshallow (`FetchOptions.unshallow`): the
+                // engine asks for the CLI, same routing as the atomic push.
+                // Stream the fetch report into op-log.
+                Err(EngineError::Unsupported(reason)) => {
+                    ctx.emit_log(&format!("using git CLI: {reason}"));
+                    let cancel = ctx.cancel_token();
+                    cli::fetch_via_cli(
+                        &workdir,
+                        &options,
+                        &mut |line| ctx.emit_log(line),
+                        cancel.as_deref(),
+                    )
+                    .map_err(EngineError::Invalid)
+                }
+                other => other,
+            }
         },
     ))
     .await
@@ -3489,28 +3507,10 @@ pub async fn maintenance_run(
 /// Arguments reach `git archive` as argv entries (never a shell), but the
 /// IPC contract promises a metacharacter guard on `spec`/`destination`:
 /// reject shell metacharacters, control characters, and option-shaped
-/// values (a leading `-` would be parsed as a flag).
+/// values (a leading `-` would be parsed as a flag). Lives in
+/// `maintenance` so every CLI lane guards through one home.
 fn archive_arg_ok(value: &str) -> bool {
-    !value.is_empty()
-        && !value.starts_with('-')
-        && !value.chars().any(|c| {
-            matches!(
-                c,
-                ';' | '&'
-                    | '|'
-                    | '$'
-                    | '`'
-                    | '('
-                    | ')'
-                    | '<'
-                    | '>'
-                    | '"'
-                    | '\''
-                    | '\n'
-                    | '\r'
-                    | '\0'
-            )
-        })
+    crate::maintenance::cli_arg_ok(value)
 }
 
 /// `git archive --format <zip|tar|tar.gz> <ref> -o <destination>`.
@@ -3554,6 +3554,51 @@ pub async fn archive(
             )
             .map(|_| ())
             .map_err(EngineError::Invalid)
+        },
+    ))
+    .await
+}
+
+/// `git bundle create <out_path> (--all | refs...)` (Phase 5): a portable
+/// packfile of the selected refs, written to a local file. Mirror of
+/// [`archive`]: same arg-guard family (`archive_arg_ok` via
+/// `maintenance::bundle_create`), and the remote lane streams the bundle
+/// bytes over SSH into the same local destination file.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn repo_bundle(
+    repo_id: RepoId,
+    out_path: String,
+    refs: Vec<String>,
+    all: bool,
+    state: State<'_, RepoManager>,
+) -> Result<(), String> {
+    // Pre-queue guards mirroring `archive` (the same rules also run inside
+    // maintenance::bundle_create, so direct engine callers are covered too).
+    if !archive_arg_ok(&out_path) || refs.iter().any(|r| !archive_arg_ok(r)) {
+        return Err("invalid bundle arguments".into());
+    }
+    let handle = get_handle(&state, &repo_id)?;
+    if let Some(remote) = handle.remote() {
+        // Remote bundle: `git bundle create -` on the device, bytes written
+        // to this machine's destination (like the archive lane).
+        let destination_path = std::path::PathBuf::from(&out_path);
+        return finish_op(enqueue_remote_mutation(
+            &handle,
+            remote,
+            "bundle",
+            move |git, _ws| git.bundle(&destination_path, &refs, all),
+        ))
+        .await;
+    }
+    let root = handle.root.clone();
+    let repo = handle.repo()?;
+    finish_op(enqueue_mutation(
+        &handle,
+        &repo,
+        "bundle",
+        move |_ctx, _repo| {
+            crate::maintenance::bundle_create(std::path::Path::new(&root), &out_path, &refs, all)
+                .map_err(EngineError::Invalid)
         },
     ))
     .await
@@ -3675,13 +3720,100 @@ pub async fn lfs_run(
     .await
 }
 
-/// Argument guard for the CLI clone, same family as [`archive_arg_ok`]:
-/// argv entries never touch a shell, but a leading `-` would be parsed as a
-/// git flag — clone accepts option-shaped transfer configs right after its
-/// subcommand (`--upload-pack=<cmd>` runs it), so option-shaped URLs are
-/// rejected up front. The `;` check keeps the original metacharacter contract.
+/// `git lfs locks` — list the repo's file locks (Phase 5). Parsed from
+/// `--json` (plain-text fallback); requires git-lfs, like every lfs lane.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn lfs_locks(
+    repo_id: RepoId,
+    state: State<'_, RepoManager>,
+) -> Result<Vec<LfsLock>, String> {
+    let handle = get_handle(&state, &repo_id)?;
+    if let Some(remote) = handle.remote() {
+        return finish_op(enqueue_remote_read(
+            &handle,
+            remote,
+            "lfs",
+            move |git, _ws| git.lfs_locks(),
+        ))
+        .await;
+    }
+    let root = handle.root.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::maintenance::lfs_locks(std::path::Path::new(&root))
+    })
+    .await
+    .map_err(|e| format!("lfs_locks task failed: {e}"))?
+}
+
+/// `git lfs lock <path>` — lock a file (Phase 5); resolves with git-lfs's
+/// output line. The path guard lives in the maintenance lane (option-shaped
+/// values would be parsed as git flags).
+#[tauri::command(rename_all = "snake_case")]
+pub async fn lfs_lock(
+    repo_id: RepoId,
+    path: String,
+    state: State<'_, RepoManager>,
+) -> Result<String, String> {
+    let handle = get_handle(&state, &repo_id)?;
+    if let Some(remote) = handle.remote() {
+        return finish_op(enqueue_remote_mutation(
+            &handle,
+            remote,
+            "lfs",
+            move |git, _ws| git.lfs_lock(&path),
+        ))
+        .await;
+    }
+    let root = handle.root.clone();
+    let repo = handle.repo()?;
+    finish_op(enqueue_mutation(
+        &handle,
+        &repo,
+        "lfs",
+        move |_ctx, _repo| {
+            crate::maintenance::lfs_lock(std::path::Path::new(&root), &path)
+                .map_err(EngineError::Invalid)
+        },
+    ))
+    .await
+}
+
+/// `git lfs unlock <path>` — release a lock (Phase 5).
+#[tauri::command(rename_all = "snake_case")]
+pub async fn lfs_unlock(
+    repo_id: RepoId,
+    path: String,
+    state: State<'_, RepoManager>,
+) -> Result<String, String> {
+    let handle = get_handle(&state, &repo_id)?;
+    if let Some(remote) = handle.remote() {
+        return finish_op(enqueue_remote_mutation(
+            &handle,
+            remote,
+            "lfs",
+            move |git, _ws| git.lfs_unlock(&path),
+        ))
+        .await;
+    }
+    let root = handle.root.clone();
+    let repo = handle.repo()?;
+    finish_op(enqueue_mutation(
+        &handle,
+        &repo,
+        "lfs",
+        move |_ctx, _repo| {
+            crate::maintenance::lfs_unlock(std::path::Path::new(&root), &path)
+                .map_err(EngineError::Invalid)
+        },
+    ))
+    .await
+}
+
+/// Argument guard for the CLI clone, same family as [`archive_arg_ok`]
+/// (the check itself lives in `maintenance` next to the other CLI-lane
+/// guards, shared with `submodule_add`).
 fn clone_args_ok(url: &str, destination: &str) -> bool {
-    !url.is_empty() && !url.starts_with('-') && !url.contains(';') && !destination.is_empty()
+    crate::maintenance::clone_args_ok(url, destination)
 }
 
 /// Blobless (partial) clone via the git CLI: `git clone --filter=blob:none`.
@@ -3990,6 +4122,7 @@ pub async fn worktree_add(
     path: String,
     branch: Option<String>,
     new_branch: Option<String>,
+    from_remote: Option<String>,
     state: State<'_, RepoManager>,
 ) -> Result<(), String> {
     let handle = get_handle(&state, &repo_id)?;
@@ -3998,7 +4131,14 @@ pub async fn worktree_add(
             &handle,
             remote,
             "worktree",
-            move |git, _ws| git.worktree_add(&path, branch.as_deref(), new_branch.as_deref()),
+            move |git, _ws| {
+                git.worktree_add(
+                    &path,
+                    branch.as_deref(),
+                    new_branch.as_deref(),
+                    from_remote.as_deref(),
+                )
+            },
         ))
         .await;
     }
@@ -4009,8 +4149,73 @@ pub async fn worktree_add(
         &repo,
         "worktree",
         move |_ctx, repo| {
-            engine.worktree_add(repo, &path, branch.as_deref(), new_branch.as_deref())
+            engine.worktree_add(
+                repo,
+                &path,
+                branch.as_deref(),
+                new_branch.as_deref(),
+                from_remote.as_deref(),
+            )
         },
+    ))
+    .await
+}
+
+/// `git worktree lock [--reason <r>] <path|name>` (Phase 5): the spec may be
+/// a linked worktree's name or its path. Locked worktrees show `locked` in
+/// `worktrees` (and the reason drives the FE tooltip).
+#[tauri::command(rename_all = "snake_case")]
+pub async fn worktree_lock(
+    repo_id: RepoId,
+    path: String,
+    reason: Option<String>,
+    state: State<'_, RepoManager>,
+) -> Result<(), String> {
+    let handle = get_handle(&state, &repo_id)?;
+    if let Some(remote) = handle.remote() {
+        return finish_op(enqueue_remote_mutation(
+            &handle,
+            remote,
+            "worktree",
+            move |git, _ws| git.worktree_lock(&path, reason.as_deref()),
+        ))
+        .await;
+    }
+    let engine = handle.m12();
+    let repo = handle.repo()?;
+    finish_op(enqueue_mutation(
+        &handle,
+        &repo,
+        "worktree",
+        move |_ctx, repo| engine.worktree_lock(repo, &path, reason.as_deref()),
+    ))
+    .await
+}
+
+/// `git worktree unlock <path|name>` (Phase 5).
+#[tauri::command(rename_all = "snake_case")]
+pub async fn worktree_unlock(
+    repo_id: RepoId,
+    path: String,
+    state: State<'_, RepoManager>,
+) -> Result<(), String> {
+    let handle = get_handle(&state, &repo_id)?;
+    if let Some(remote) = handle.remote() {
+        return finish_op(enqueue_remote_mutation(
+            &handle,
+            remote,
+            "worktree",
+            move |git, _ws| git.worktree_unlock(&path),
+        ))
+        .await;
+    }
+    let engine = handle.m12();
+    let repo = handle.repo()?;
+    finish_op(enqueue_mutation(
+        &handle,
+        &repo,
+        "worktree",
+        move |_ctx, repo| engine.worktree_unlock(repo, &path),
     ))
     .await
 }
@@ -5140,6 +5345,175 @@ pub async fn submodule_sync(
         &repo,
         "submodule",
         move |_ctx, repo| engine.submodule_sync(repo, path.as_deref()),
+    ))
+    .await
+}
+
+/// `git submodule add [--name <name>] <url> <path>` (Phase 5, CLI lane):
+/// clones the submodule, stages the gitlink and the `.gitmodules` entry.
+/// URL/path run through the CLI clone's guard (`clone_args_ok`) before the
+/// op is queued.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn submodule_add(
+    repo_id: RepoId,
+    url: String,
+    path: String,
+    name: Option<String>,
+    state: State<'_, RepoManager>,
+) -> Result<(), String> {
+    // Same up-front guard family as clone_blobless (defense in depth: the
+    // engine impl re-checks).
+    if !crate::maintenance::clone_args_ok(&url, &path) {
+        return Err("invalid submodule arguments".into());
+    }
+    let handle = get_handle(&state, &repo_id)?;
+    if let Some(remote) = handle.remote() {
+        return finish_op(enqueue_remote_mutation(
+            &handle,
+            remote,
+            "submodule",
+            move |git, _ws| git.submodule_add(&url, &path, name.as_deref()),
+        ))
+        .await;
+    }
+    let engine = handle.m12();
+    let repo = handle.repo()?;
+    finish_op(enqueue_mutation(
+        &handle,
+        &repo,
+        "submodule",
+        move |_ctx, repo| engine.submodule_add(repo, &url, &path, name.as_deref()),
+    ))
+    .await
+}
+
+/// `git submodule deinit -f <path>` (Phase 5, CLI lane): unregister the
+/// submodule and empty its workdir; `.gitmodules` and the index gitlink
+/// stay (re-init via `submodule_update(init = true)`).
+#[tauri::command(rename_all = "snake_case")]
+pub async fn submodule_deinit(
+    repo_id: RepoId,
+    path: String,
+    state: State<'_, RepoManager>,
+) -> Result<(), String> {
+    let handle = get_handle(&state, &repo_id)?;
+    if let Some(remote) = handle.remote() {
+        return finish_op(enqueue_remote_mutation(
+            &handle,
+            remote,
+            "submodule",
+            move |git, _ws| git.submodule_deinit(&path),
+        ))
+        .await;
+    }
+    let engine = handle.m12();
+    let repo = handle.repo()?;
+    finish_op(enqueue_mutation(
+        &handle,
+        &repo,
+        "submodule",
+        move |_ctx, repo| engine.submodule_deinit(repo, &path),
+    ))
+    .await
+}
+
+// ---------- Phase 5: git notes (CLI lane) ----------
+
+/// Every note attached to `sha`, one entry per notes ref that holds one
+/// (`git notes` CLI edges; the local lane parses refs + shows each note).
+#[tauri::command(rename_all = "snake_case")]
+pub async fn commit_notes(
+    repo_id: RepoId,
+    sha: String,
+    state: State<'_, RepoManager>,
+) -> Result<Vec<NoteInfo>, String> {
+    let handle = get_handle(&state, &repo_id)?;
+    if let Some(remote) = handle.remote() {
+        return finish_op(enqueue_remote_read(
+            &handle,
+            remote,
+            "notes",
+            move |git, _ws| git.commit_notes(&sha),
+        ))
+        .await;
+    }
+    let root = handle.root.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::maintenance::commit_notes(std::path::Path::new(&root), &sha)
+    })
+    .await
+    .map_err(|e| format!("commit_notes task failed: {e}"))?
+}
+
+/// `git notes add [--ref <r>] <sha>` — attaches `text` (multi-line safe: it
+/// travels via the commit-message temp-file helper, never a shell).
+/// `note_ref` none/empty = the default `refs/notes/commits`.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn note_add(
+    repo_id: RepoId,
+    sha: String,
+    text: String,
+    note_ref: Option<String>,
+    state: State<'_, RepoManager>,
+) -> Result<(), String> {
+    let handle = get_handle(&state, &repo_id)?;
+    if let Some(remote) = handle.remote() {
+        return finish_op(enqueue_remote_mutation(
+            &handle,
+            remote,
+            "notes",
+            move |git, _ws| git.note_add(&sha, &text, note_ref.as_deref()),
+        ))
+        .await;
+    }
+    let root = handle.root.clone();
+    let repo = handle.repo()?;
+    finish_op(enqueue_mutation(
+        &handle,
+        &repo,
+        "notes",
+        move |_ctx, _repo| {
+            crate::maintenance::note_add(
+                std::path::Path::new(&root),
+                &sha,
+                &text,
+                note_ref.as_deref(),
+            )
+            .map_err(EngineError::Invalid)
+        },
+    ))
+    .await
+}
+
+/// `git notes remove [--ref <r>] <sha>` — deletes the note under that ref
+/// (default `refs/notes/commits`).
+#[tauri::command(rename_all = "snake_case")]
+pub async fn note_remove(
+    repo_id: RepoId,
+    sha: String,
+    note_ref: Option<String>,
+    state: State<'_, RepoManager>,
+) -> Result<(), String> {
+    let handle = get_handle(&state, &repo_id)?;
+    if let Some(remote) = handle.remote() {
+        return finish_op(enqueue_remote_mutation(
+            &handle,
+            remote,
+            "notes",
+            move |git, _ws| git.note_remove(&sha, note_ref.as_deref()),
+        ))
+        .await;
+    }
+    let root = handle.root.clone();
+    let repo = handle.repo()?;
+    finish_op(enqueue_mutation(
+        &handle,
+        &repo,
+        "notes",
+        move |_ctx, _repo| {
+            crate::maintenance::note_remove(std::path::Path::new(&root), &sha, note_ref.as_deref())
+                .map_err(EngineError::Invalid)
+        },
     ))
     .await
 }

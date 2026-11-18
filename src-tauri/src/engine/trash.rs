@@ -213,6 +213,20 @@ impl GitEngineM12 for Libgit2Engine {
         self.worktree_prune_impl(repo)
     }
 
+    fn worktree_lock(
+        &self,
+        repo: &Repository,
+        path: &str,
+        reason: Option<&str>,
+    ) -> EngineResult<()> {
+        // Same worktree-lane forwarding as `worktree_prune` above (Phase 5).
+        self.worktree_lock_impl(repo, path, reason)
+    }
+
+    fn worktree_unlock(&self, repo: &Repository, path: &str) -> EngineResult<()> {
+        self.worktree_unlock_impl(repo, path)
+    }
+
     fn commit_signature(&self, repo: &Repository, sha: &str) -> EngineResult<CommitSignature> {
         self.commit_signature_impl(repo, sha)
     }
@@ -242,6 +256,20 @@ impl GitEngineM12 for Libgit2Engine {
 
     fn submodule_sync(&self, repo: &Repository, path: Option<&str>) -> EngineResult<()> {
         self.submodule_sync_impl(repo, path)
+    }
+
+    fn submodule_add(
+        &self,
+        repo: &Repository,
+        url: &str,
+        path: &str,
+        name: Option<&str>,
+    ) -> EngineResult<()> {
+        self.submodule_add_impl(repo, url, path, name)
+    }
+
+    fn submodule_deinit(&self, repo: &Repository, path: &str) -> EngineResult<()> {
+        self.submodule_deinit_impl(repo, path)
     }
 
     fn commit_activity(

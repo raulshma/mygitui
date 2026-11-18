@@ -157,6 +157,7 @@ const BLAME: BlameLine[] = [
     final_sha: "abc123",
     final_signature: { name: "Ada", email: "ada@example.com", time: 1, offset_minutes: 0 },
     text: "hello",
+    ignored: false,
   },
 ];
 
@@ -642,6 +643,7 @@ const PUSH_OPTIONS: PushOptions = {
   refs: [],
   tags: false,
   delete: false,
+  atomic: false,
 };
 
 const NET_STATS: NetStats = {
