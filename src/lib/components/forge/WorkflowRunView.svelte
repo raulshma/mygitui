@@ -42,17 +42,19 @@
     workflowEventLabel,
   } from "./forgeModel";
   import { describeError } from "$lib/errors";
-import { ai } from "$lib/ai/ai.svelte";
-import {
-  diagnoseFailureAgenticPrompt,
-  diagnoseLogTail,
-  DIAGNOSE_AGENTIC_LOG_CHARS,
-} from "$lib/ai/features";
-import type { FeatureOutcome } from "$lib/ai/features";
-import type { AiRunOptions } from "$lib/ai/ai.svelte";
-import AiFeatureButton from "$lib/components/ai/AiFeatureButton.svelte";
-import { aiResultMetaWithMode } from "$lib/ai/usage";
-import { emitUiEvent } from "$lib/palette/events";
+  import { isRetryableWithoutTools } from "$lib/ai/types";
+  import { ai } from "$lib/ai/ai.svelte";
+  import {
+    diagnoseExecutionMode,
+    diagnoseFailureAgenticPrompt,
+    diagnoseLogTail,
+    DIAGNOSE_AGENTIC_LOG_CHARS,
+  } from "$lib/ai/features";
+  import type { FeatureOutcome } from "$lib/ai/features";
+  import type { AiRunOptions } from "$lib/ai/ai.svelte";
+  import AiFeatureButton from "$lib/components/ai/AiFeatureButton.svelte";
+  import { aiResultMetaWithMode, budgetStopNote } from "$lib/ai/usage";
+  import { emitUiEvent } from "$lib/palette/events";
 
   let {
     repoId,
@@ -304,6 +306,9 @@ import { emitUiEvent } from "$lib/palette/events";
 
   // -- M13: AI diagnosis of the failed run --------------------------------------
 
+  /** The last agentic attempt failed post-start — offer a single-shot retry. */
+  let diagnoseRetryable = $state(false);
+
   /** Cap for the log tail sent to the model (the full log can be 1.5 MB). */
   const DIAG_LOG_TAIL_CHARS = 40_000;
 
@@ -315,7 +320,12 @@ import { emitUiEvent } from "$lib/palette/events";
    * TRIMMED log tail rides the prompt; otherwise — and on a pre-start
    * refusal — the single-shot path runs exactly as before.
    */
-  async function runDiagnose(opts?: AiRunOptions): Promise<FeatureOutcome> {
+  async function runDiagnose(
+    opts?: AiRunOptions & { forceSingleShot?: boolean },
+  ): Promise<FeatureOutcome> {
+    // Every invocation supersedes the previous failure's retry offer; a
+    // new failure re-arms it below.
+    diagnoseRetryable = false;
     const current = run;
     const log = (logText ?? "").trim();
     if (!current || log.length === 0) {
@@ -330,11 +340,17 @@ import { emitUiEvent } from "$lib/palette/events";
     const tail = log.length > DIAG_LOG_TAIL_CHARS ? log.slice(-DIAG_LOG_TAIL_CHARS) : log;
     const fallback = async (): Promise<FeatureOutcome> =>
       ai.run("diagnose-workflow", { repoId, runMeta: meta, diff: tail }, undefined, opts);
-    // Mode wiring (chunk 5): "single-shot" and "off" always take the
+    // Mode wiring (chunk 5/6): "single-shot" and "off" always take the
     // single-shot path with NO capability probe ("off" hides the button
     // entirely — the {#if} below — so this is a defensive path only);
-    // "auto" keeps the agentic-first flow.
-    if (ai.featureMode("diagnose-workflow") !== "auto") return fallback();
+    // "auto" keeps the agentic-first flow unless this is the forced
+    // single-shot retry after a post-start agentic failure.
+    if (
+      diagnoseExecutionMode(ai.featureMode("diagnose-workflow"), opts?.forceSingleShot === true) !==
+      "agentic"
+    ) {
+      return fallback();
+    }
     if (!(await ai.agenticAvailable())) return fallback();
     const built = diagnoseFailureAgenticPrompt(
       "The workflow run",
@@ -342,24 +358,46 @@ import { emitUiEvent } from "$lib/palette/events";
       diagnoseLogTail(log, DIAGNOSE_AGENTIC_LOG_CHARS),
       "workflow",
     );
-    const { result } = await ai.runAgenticWithFallback({
-      repoId,
-      prompt: built.prompt,
-      system: built.system,
-      model: opts?.model,
-      feature: "diagnose-workflow",
-      oneShot: opts?.oneShot,
-      fallback: async () => (await fallback()).result,
-    });
+    let agenticStarted = false;
+    let result;
+    try {
+      ({ result } = await ai.runAgenticWithFallback({
+        repoId,
+        prompt: built.prompt,
+        system: built.system,
+        model: opts?.model,
+        feature: "diagnose-workflow",
+        oneShot: opts?.oneShot,
+        onController: () => {
+          agenticStarted = true;
+        },
+        fallback: async () => (await fallback()).result,
+      }));
+    } catch (err) {
+      // Post-start unavailable-class failures (connection lost, dead
+      // stream) offer a one-click single-shot retry; a pre-start refusal
+      // already fell back and a fallback failure is NOT retried as
+      // single-shot again. Budget stops resolve (partial output + banner)
+      // and other failures keep today's UI.
+      if (isRetryableWithoutTools(err, agenticStarted)) {
+        diagnoseRetryable = true;
+      }
+      throw err;
+    }
     return { kind: "diagnose-workflow", text: result.text, result };
   }
 
   function onDiagnose(outcome: import("$lib/ai/features").FeatureOutcome): void {
     const current = run;
+    const budgetStopped = outcome.result.budgetStopped === true;
+    const budgetNote = budgetStopped
+      ? ` · ${budgetStopNote(outcome.result.budgetToolCalls ?? 0, outcome.result.elapsedMs)}`
+      : "";
     emitUiEvent("ai-show-result", {
       title: `Diagnosis: ${current?.name ?? "workflow run"} #${current?.number ?? ""}`,
       text: outcome.text ?? outcome.result.text,
-      meta: aiResultMetaWithMode(outcome.result),
+      // The note already carries the run clock — drop the meta's duplicate.
+      meta: `${aiResultMetaWithMode(outcome.result, { seconds: !budgetStopped })}${budgetNote}`,
     });
   }
 
@@ -634,6 +672,9 @@ import { emitUiEvent } from "$lib/palette/events";
             compact
             disabled={(logText ?? "").trim().length === 0}
             run={runDiagnose}
+            retryWithoutTools={diagnoseRetryable
+              ? (opts?: AiRunOptions) => runDiagnose({ ...opts, forceSingleShot: true })
+              : undefined}
             onResult={onDiagnose}
           />
         {/if}

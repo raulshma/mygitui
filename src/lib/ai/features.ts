@@ -20,7 +20,7 @@ import { isCustomKind } from "./registry";
 import type { CustomFeatureKind } from "./registry";
 import { renderTemplate } from "./customPrompts.svelte";
 import { AiError } from "./types";
-import type { AiBackend, AiJobPhase, AiResult, FeatureKind } from "./types";
+import type { AiBackend, AiJobPhase, AiResult, FeatureKind, AiFeatureMode } from "./types";
 
 // ---------------------------------------------------------------------------
 // Shared prompt plumbing
@@ -405,6 +405,19 @@ export const DIAGNOSE_AGENTIC_LOG_CHARS = 12_000;
 /** Trims `log` to its last `maxChars` characters (the log tail). */
 export function diagnoseLogTail(log: string, maxChars: number = DIAGNOSE_AGENTIC_LOG_CHARS): string {
   return log.length > maxChars ? log.slice(-maxChars) : log;
+}
+
+/**
+ * Which path one diagnose run executes (chunk 6): `"agentic"` only when
+ * the persisted feature mode is "auto" AND the caller has not forced the
+ * single-shot retry; every other combination runs the single-shot path
+ * with NO capability probe.
+ */
+export function diagnoseExecutionMode(
+  mode: AiFeatureMode,
+  forceSingleShot: boolean,
+): "agentic" | "single-shot" {
+  return mode === "auto" && !forceSingleShot ? "agentic" : "single-shot";
 }
 
 /**

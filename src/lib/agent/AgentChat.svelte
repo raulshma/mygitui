@@ -15,7 +15,7 @@
   import { describeError } from "$lib/errors";
   import { ai } from "$lib/ai/ai.svelte";
   import { aiElapsedLabel, aiPhaseLabel } from "$lib/ai/registry";
-  import { aiResultSeconds, aiUsageLabel } from "$lib/ai/usage";
+  import { aiResultSeconds, aiUsageLabel, budgetStopNote } from "$lib/ai/usage";
   import { isAiError } from "$lib/ai/types";
   import type { ChatContextSelection, ChatMessage } from "$lib/ai/chat.svelte";
   import { emitUiEvent } from "$lib/palette/events";
@@ -103,13 +103,21 @@
     el.scrollTop = el.scrollHeight;
   });
 
-  function send(question: string): void {
+  function send(question: string, forceSingleShot = false): void {
     const text = question.trim();
     if (text.length === 0 || busy) return;
     draft = "";
     pinned = true;
     void ai
-      .sendChat({ repoId, root, question: text, context: CHAT_CONTEXT, agentic })
+      .sendChat({
+        repoId,
+        root,
+        question: text,
+        context: CHAT_CONTEXT,
+        // Forced retries (chunk 6) bypass the chip: the failed agentic turn
+        // re-runs single-shot; the thread binding is untouched.
+        agentic: forceSingleShot ? false : agentic,
+      })
       .catch((err: unknown) => {
         // Cancelled turns already landed in the thread with their partial
         // text — no extra toast; real failures did too, plus one toast.
@@ -118,13 +126,18 @@
       });
   }
 
-  /** Re-sends the question that preceded a failed assistant turn. */
-  function retryAfter(message: ChatMessage): void {
+  /**
+   * Re-sends the question that preceded a failed assistant turn. The
+   * forced variant (chunk 6) retries WITHOUT tools: the composer chip is
+   * bypassed and the single-shot path runs — the thread's opencode
+   * binding stays untouched for future agentic sends.
+   */
+  function retryAfter(message: ChatMessage, forceSingleShot = false): void {
     const index = conversation.indexOf(message);
     if (index <= 0) return;
     const prior = conversation[index - 1];
     if (prior.role !== "user") return;
-    send(prior.text);
+    send(prior.text, forceSingleShot);
   }
 
   function clearConversation(): void {
@@ -252,6 +265,15 @@
               <p class="m-0 text-destructive" role="alert">{message.error}</p>
             {:else}
               <AiMarkdown text={message.text} />
+              {#if message.budgetStopped}
+                <!-- Budget stop (chunk 6): partial output, NOT an error. -->
+                <p
+                  class="mt-1 flex items-center gap-1 border-t border-border pt-1 text-ui-micro text-muted-foreground"
+                  role="note"
+                >
+                  {budgetStopNote(message.budgetToolCalls ?? 0, message.elapsedMs ?? 0)}
+                </p>
+              {/if}
             {/if}
           </div>
           <!-- Compact footer: serving meta / cancelled / failure + retry. -->
@@ -265,10 +287,10 @@
               <button
                 class="inline-flex items-center gap-0.5 rounded-sm px-1 py-px text-ui-micro text-foreground hover:bg-accent focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary"
                 type="button"
-                onclick={() => retryAfter(message)}
+                onclick={() => retryAfter(message, message.retryable === true)}
               >
                 <Icon icon={iconRetry} size={10} />
-                Retry
+                {message.retryable === true ? "Retry without tools" : "Retry"}
               </button>
             </span>
           {/if}

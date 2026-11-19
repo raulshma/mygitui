@@ -16,7 +16,9 @@
    *   - Busy spinner while `run()` is in flight; failures toast + render
    *     an inline Retry/Dismiss; `AiError` kind "opt-in" re-arms the
    *     confirm instead. `successToast` fires on success (the commit
-   *     message's "review before committing" nudge).
+   *     message's "review before committing" nudge). When the caller
+   *     supplies `retryWithoutTools`, the failure popover swaps Retry
+   *     for "Retry without tools" (chunk 6's agentic failure recovery).
    *   - `icon` renders the compact sparkle circle (the commit-bar
    *     variant) instead of the text pill.
    *
@@ -57,6 +59,7 @@
     successToast = undefined,
     resultEvent = undefined,
     run,
+    retryWithoutTools = undefined,
     onResult = undefined,
     /** Extra class(es) on the root span (e.g. a legacy hook for tests). */
     rootClass = undefined,
@@ -100,6 +103,14 @@
     resultEvent?: string | undefined;
     /** The feature runner (closes over any context it needs). */
     run: (opts?: AiRunOptions) => Promise<FeatureOutcome>;
+    /**
+     * Alternative retry for a failure the caller judges retryable WITHOUT
+     * tools (chunk 6: a post-start unavailable-class agentic failure).
+     * When set, the failure popover's retry action becomes "Retry without
+     * tools" and calls this runner instead of `run`; absent = the normal
+     * Retry, byte-identical for every other caller.
+     */
+    retryWithoutTools?: ((opts?: AiRunOptions) => Promise<FeatureOutcome>) | undefined;
     /** Called with the finished outcome (the caller owns the result UI). */
     onResult?: (outcome: FeatureOutcome) => void;
     /** Extra class(es) on the root span (e.g. a legacy hook for tests). */
@@ -175,7 +186,7 @@
     await doRun();
   }
 
-  async function doRun(): Promise<void> {
+  async function doRun(forceSingleShot = false): Promise<void> {
     running = true;
     error = null;
     try {
@@ -186,7 +197,11 @@
         ...ai.runOptsFor(repoId),
         model: modelChoice.overrideFor(repoId) ?? undefined,
       };
-      const outcome = await run(opts);
+      // Chunk 6: a retry the caller marked as "without tools" runs the
+      // alternative closure (the diagnose views force single-shot there);
+      // every other invocation goes through `run` exactly as before.
+      const alternative = forceSingleShot ? retryWithoutTools : undefined;
+      const outcome = alternative !== undefined ? await alternative(opts) : await run(opts);
       onResult?.(outcome);
       if (successToast) toast(successToast, { kind: "success" });
       if (resultEvent) {
@@ -316,7 +331,19 @@
         use:floating={{ anchor: root, above: popUp, alignEnd: icon }}
       >
         <span class="fail-text text-ui-meta text-destructive [overflow-wrap:anywhere]">{error}</span>
-        <Button variant="outline" size="xs" class="mini rounded-full text-ui-meta" type="button" onclick={() => void doRun()}>Retry</Button>
+        {#if retryWithoutTools !== undefined}
+          <Button
+            variant="outline"
+            size="xs"
+            class="mini rounded-full text-ui-meta"
+            type="button"
+            onclick={() => void doRun(true)}
+          >
+            Retry without tools
+          </Button>
+        {:else}
+          <Button variant="outline" size="xs" class="mini rounded-full text-ui-meta" type="button" onclick={() => void doRun()}>Retry</Button>
+        {/if}
         <Button variant="outline" size="xs" class="mini rounded-full text-ui-meta" type="button" onclick={() => (error = null)}>Dismiss</Button>
       </div>
     {/if}

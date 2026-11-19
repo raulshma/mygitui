@@ -859,6 +859,9 @@ describe("AiStore.runAgentic (chunk 2)", () => {
       backend: "opencode",
       model: "opencode-model",
     });
+    // No budget stop: the fields stay absent (not `false`/`0`).
+    expect(result.budgetStopped).toBeUndefined();
+    expect(result.budgetToolCalls).toBeUndefined();
     // The run was served as a first-class job with the agentic snapshot.
     const record = store.jobs.history[0];
     expect(record).toMatchObject({
@@ -874,6 +877,40 @@ describe("AiStore.runAgentic (chunk 2)", () => {
     ]);
     expect(record?.usage).toMatchObject({ totalTokens: 30 });
     expect(store.jobs.activeJob("r1", "chat")).toBeNull();
+  });
+
+  it("maps a budget stop and its tool-call count into the result (chunk 6)", async () => {
+    const { store, opencode } = makeHarness();
+    store.setOptIn("r1", true);
+    opencode.runAgentic.mockImplementation(
+      async (req: { onController?: (c: AgenticRunController) => void }) => {
+        const controller = new AgenticRunController({
+          sessionID: "sess-1",
+          budget: { maxToolCalls: 1 },
+          reply: async () => undefined,
+          interrupt: async () => undefined,
+        });
+        req.onController?.(controller);
+        controller.handleToolCalled({ id: "t1", input: { command: "ls" }, executed: true });
+        return fakeResult(controller, {
+          text: "partial findings",
+          budgetStopped: true,
+          budgetReason: "tool-calls",
+        });
+      },
+    );
+    const result = await store.runAgentic({ repoId: "r1", prompt: "x", feature: "chat" });
+    expect(result).toMatchObject({
+      text: "partial findings",
+      budgetStopped: true,
+      budgetToolCalls: 1,
+    });
+    // The job snapshot records the same outcome from the bound controller.
+    expect(store.jobs.history[0]?.agentic).toMatchObject({
+      budgetStopped: true,
+      budgetReason: "tool-calls",
+    });
+    expect(store.jobs.history[0]?.status).toBe("done");
   });
 
   it("cancel settles the job as cancelled with the partial text kept", async () => {
@@ -1144,15 +1181,19 @@ describe("AiStore.agenticAvailable / runAgenticWithFallback (chunk 4)", () => {
       }),
     );
     const fallback = vi.fn(async (): Promise<AiResult> => ({ text: "single", model: "m", backend: "opencode", elapsedMs: 1 }));
+    const onController = vi.fn();
     const { result, mode } = await store.runAgenticWithFallback({
       repoId: "r1",
       prompt: "p",
       feature: "diagnose-action",
+      onController,
       fallback,
     });
     expect(mode).toBe("single-shot");
     expect(result.text).toBe("single");
     expect(fallback).toHaveBeenCalledTimes(1);
+    // A pre-start refusal never dispatched — no single-shot-retry offer.
+    expect(onController).not.toHaveBeenCalled();
   });
 
   it("a post-start failure surfaces honestly (no fallback re-run)", async () => {
@@ -1170,15 +1211,19 @@ describe("AiStore.agenticAvailable / runAgenticWithFallback (chunk 4)", () => {
       throw new AiError("unavailable", "dead stream", { backend: "opencode" });
     });
     const fallback = vi.fn(async (): Promise<AiResult> => ({ text: "single", model: "m", backend: "opencode", elapsedMs: 1 }));
+    const onController = vi.fn();
     await expect(
       store.runAgenticWithFallback({
         repoId: "r1",
         prompt: "p",
         feature: "diagnose-workflow",
+        onController,
         fallback,
       }),
     ).rejects.toMatchObject({ kind: "unavailable" });
     expect(fallback).not.toHaveBeenCalled();
+    // The dispatch started, so the caller may offer a single-shot retry.
+    expect(onController).toHaveBeenCalledTimes(1);
   });
 
   it("a false probe skips the agentic attempt entirely (no doomed ticket)", async () => {
@@ -1546,5 +1591,61 @@ describe("Agentic chat — fix round (chunk 5 review)", () => {
     expect(opencode.runAgentic).not.toHaveBeenCalled();
     expect(store.jobs.history).toHaveLength(0);
     expect(store.chat.sessionFor("/repo")).toBeNull();
+  });
+});
+
+describe("Agentic budget controls (chunk 6)", () => {
+  it("setAgenticBudget round-trips through parse (both caps)", async () => {
+    const storage = memStorage();
+    const first = new AiStore({ storage, providers: {} });
+    first.setAgenticBudget({ maxWallClockMs: 90_000, maxToolCalls: 25 });
+    const second = new AiStore({ storage, providers: {} });
+    expect(second.config.agenticBudget).toEqual({ maxWallClockMs: 90_000, maxToolCalls: 25 });
+    expect(resolveAgenticBudget(second.config)).toEqual({
+      maxWallClockMs: 90_000,
+      maxToolCalls: 25,
+    });
+  });
+
+  it("a single field set leaves the other on the default", async () => {
+    const storage = memStorage();
+    const first = new AiStore({ storage, providers: {} });
+    first.setAgenticBudget({ maxToolCalls: 10 });
+    const second = new AiStore({ storage, providers: {} });
+    expect(second.config.agenticBudget).toEqual({ maxToolCalls: 10 });
+    expect(resolveAgenticBudget(second.config)).toEqual({ maxWallClockMs: 300_000, maxToolCalls: 10 });
+  });
+
+  it("undefined restores the defaults (the reset affordance)", async () => {
+    const storage = memStorage();
+    const first = new AiStore({ storage, providers: {} });
+    first.setAgenticBudget({ maxWallClockMs: 90_000, maxToolCalls: 25 });
+    first.setAgenticBudget(undefined);
+    const second = new AiStore({ storage, providers: {} });
+    expect(second.config.agenticBudget).toBeUndefined();
+    expect(resolveAgenticBudget(second.config)).toEqual({ maxWallClockMs: 300_000, maxToolCalls: 40 });
+  });
+
+  it("invalid input cannot corrupt config (the parser drops 0/negatives)", () => {
+    const config = parseAiConfig(
+      JSON.stringify({
+        backend: "opencode",
+        agenticBudget: { maxWallClockMs: 0, maxToolCalls: -3 },
+      }),
+    );
+    expect(config.agenticBudget).toBeUndefined();
+    expect(resolveAgenticBudget(config)).toEqual({ maxWallClockMs: 300_000, maxToolCalls: 40 });
+  });
+
+  it("budgetStopNote formats the settled banner copy", async () => {
+    const { budgetStopNote, aiResultMetaWithMode } = await import("./usage");
+    expect(budgetStopNote(12, 150_000)).toBe("Stopped at budget — 12 tool calls in 2:30");
+    expect(budgetStopNote(0, 4_000)).toBe("Stopped at budget — 0 tool calls in 0:04");
+    expect(budgetStopNote(-1, 0)).toBe("Stopped at budget — 0 tool calls in 0:00");
+    expect(budgetStopNote(2.6, 61_000)).toBe("Stopped at budget — 3 tool calls in 1:01");
+    // The diagnose dialog drops the meta's seconds when the note supplies them.
+    const result = { model: "m", backend: "opencode" as const, elapsedMs: 150_000, sessionID: "s" };
+    expect(aiResultMetaWithMode(result)).toBe("agentic · via m · opencode · 2m 30s");
+    expect(aiResultMetaWithMode(result, { seconds: false })).toBe("agentic · via m · opencode");
   });
 });

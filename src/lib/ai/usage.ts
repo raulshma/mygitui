@@ -49,11 +49,31 @@ export function aiResultSeconds(elapsedMs: number): string {
  * The one result footer: "via <model> · <backend> · 4s · 1.2k tokens".
  * Usage/seconds parts drop out when unknown.
  */
-export function aiResultMeta(result: Pick<AiResult, "model" | "backend" | "elapsedMs" | "usage">): string {
-  const parts = [`via ${result.model}`, result.backend, aiResultSeconds(result.elapsedMs)];
+export function aiResultMeta(
+  result: Pick<AiResult, "model" | "backend" | "elapsedMs" | "usage">,
+  opts: { seconds?: boolean } = {},
+): string {
+  const parts = [`via ${result.model}`, result.backend];
+  if (opts.seconds !== false) parts.push(aiResultSeconds(result.elapsedMs));
   const usage = aiUsageLabel(result.usage);
   if (usage !== null) parts.push(usage);
   return parts.join(" · ");
+}
+
+/** "M:MM" — the budget banner's clock (whole minutes, zero-padded seconds). */
+function budgetClock(elapsedMs: number): string {
+  const total = Number.isFinite(elapsedMs) ? Math.max(0, Math.round(elapsedMs / 1000)) : 0;
+  return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
+}
+
+/**
+ * The settled budget-stop banner (chunk 6): "Stopped at budget — N tool
+ * calls in M:MM". Shared by the chat bubble banner and the diagnose
+ * result meta — one copy, one format.
+ */
+export function budgetStopNote(toolCalls: number, elapsedMs: number): string {
+  const calls = Number.isFinite(toolCalls) ? Math.max(0, Math.round(toolCalls)) : 0;
+  return `Stopped at budget — ${calls} tool calls in ${budgetClock(elapsedMs)}`;
 }
 
 /**
@@ -64,7 +84,8 @@ export function aiResultMeta(result: Pick<AiResult, "model" | "backend" | "elaps
  */
 export function aiResultMetaWithMode(
   result: Pick<AiResult, "model" | "backend" | "elapsedMs" | "usage" | "sessionID">,
+  opts: { seconds?: boolean } = {},
 ): string {
-  const base = aiResultMeta(result);
+  const base = aiResultMeta(result, opts);
   return result.sessionID !== undefined ? `agentic · ${base}` : base;
 }

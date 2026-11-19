@@ -45,6 +45,7 @@ import type { FeatureRouter } from "./features";
 import { budgetedDiffText } from "./diffBudget";
 import { formatFileDiff, gatherCommits } from "./features";
 import { aiFeatureLabel } from "./registry";
+import { isRetryableWithoutTools } from "./types";
 import { describeError } from "$lib/errors";
 import { AiJobStore } from "./jobs.svelte";
 import type { AiJobTicket } from "./jobs.svelte";
@@ -115,6 +116,22 @@ export interface ChatMessage {
    * carry no marker.
    */
   mode?: "agentic" | "single-shot";
+  /**
+   * The agentic run hit its budget cap (chunk 6): `text` holds the partial
+   * output and the turn is NOT an error — the bubble renders the budget
+   * banner. Absent otherwise.
+   */
+  budgetStopped?: boolean;
+  /** Tool calls observed before the budget stop (with `budgetStopped`). */
+  budgetToolCalls?: number;
+  /**
+   * The failed turn is retryable WITHOUT tools (chunk 6): an agentic run
+   * failed post-start with an unavailable-class error (connection lost,
+   * dead-stream backstop) — the panel offers "Retry without tools".
+   * Budget stops (partial output kept) and other failures are not
+   * retryable.
+   */
+  retryable?: boolean;
 }
 
 /** Which context chips the user enabled for one turn. */
@@ -273,6 +290,12 @@ export function parseChatThreads(data: unknown): Record<string, ChatMessage[]> |
         error: typeof m.error === "string" ? m.error : undefined,
         cancelled: m.cancelled === true ? true : undefined,
         mode: m.mode === "agentic" || m.mode === "single-shot" ? m.mode : undefined,
+        budgetStopped: m.budgetStopped === true ? true : undefined,
+        budgetToolCalls:
+          typeof m.budgetToolCalls === "number" && Number.isFinite(m.budgetToolCalls)
+            ? Math.max(0, Math.round(m.budgetToolCalls))
+            : undefined,
+        retryable: m.retryable === true ? true : undefined,
       });
     }
     if (messages.length > 0) out[root] = messages.slice(-CHAT_MESSAGE_CAP);
@@ -437,7 +460,8 @@ export class ChatStore {
     /** Which mode actually produced this turn's output (bubble meta). */
     let mode: ChatMessage["mode"];
     /** The agentic run dispatched (onController fired) — post-start
-     * failures surface honestly instead of degrading to single-shot. */
+     * failures surface honestly instead of degrading to single-shot, and
+     * are retryable without tools (chunk 6). */
     let runStarted = false;
     try {
       if (opts.agentic === true && this.#agentic !== null) {
@@ -467,7 +491,11 @@ export class ChatStore {
               runStarted = true;
             },
           });
-          const elapsedMs = this.#now() - startedAt;
+          // A budget stop's banner reads the run's own elapsed (the budget
+          // window), not the turn clock that also covers store/capability
+          // overhead.
+          const elapsedMs =
+            result.budgetStopped === true ? result.elapsedMs : this.#now() - startedAt;
           const reply: ChatMessage = {
             id: this.#mintId(),
             role: "assistant",
@@ -478,6 +506,12 @@ export class ChatStore {
             elapsedMs,
             usage: result.usage ?? null,
             mode,
+            // A budget stop is NOT an error: the partial text renders as
+            // the reply with its own banner (chunk 6) — distinct from
+            // cancelled/error turns.
+            budgetStopped: result.budgetStopped === true ? true : undefined,
+            budgetToolCalls:
+              result.budgetStopped === true ? (result.budgetToolCalls ?? 0) : undefined,
           };
           ticket.done({
             backend: result.backend,
@@ -603,6 +637,13 @@ export class ChatStore {
         at: this.#now(),
         error: message,
         mode,
+        // Chunk 6: an agentic run that failed POST-start with an
+        // unavailable-class error is retryable WITHOUT tools (the
+        // panels render "Retry without tools"). Budget stops resolve
+        // (partial output, banner) and never reach this path; opt-in,
+        // cancelled and ordinary failures are not retryable.
+        retryable:
+          mode === "agentic" && isRetryableWithoutTools(err, runStarted) ? true : undefined,
       };
       ticket.failed(message);
       this.#append(opts.root, failed);

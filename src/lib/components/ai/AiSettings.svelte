@@ -27,7 +27,13 @@
   import { AI_BACKENDS } from "$lib/ai/types";
 import type { SavedPermission } from "$lib/ai/opencode";
 import type { OpenCodeProvider } from "$lib/ai/opencode";
-  import type { AiBackend, FeatureKind, ModelInfo, OpencodeMode } from "$lib/ai/types";
+  import type {
+    AiAgenticBudget,
+    AiBackend,
+    FeatureKind,
+    ModelInfo,
+    OpencodeMode,
+  } from "$lib/ai/types";
   import { AGENTIC_FEATURES, AI_FEATURES, aiFeatureLabel } from "$lib/ai/registry";
 import type { AiFeatureMode } from "$lib/ai/types";
   import { customPrompts, CUSTOM_PROMPT_VARS } from "$lib/ai/customPrompts.svelte";
@@ -152,6 +158,42 @@ import type { AiFeatureMode } from "$lib/ai/types";
     }
   }
 
+  // -- Agentic budget (chunk 6): caps for ONE agentic run. Empty fields
+  // mean "use default" (resolveAgenticBudget's field-by-field fallback);
+  // save() drops values below 1 so the config never carries 0/negatives.
+  // Like every other field here, edits land on Save — Reset only clears
+  // the inputs (Cancel discards it).
+  let budgetWallMinutes = $state("");
+  let budgetToolCalls = $state("");
+
+  /**
+   * Hard ceiling for the wall-clock cap: `setTimeout` overflows (fires
+   * after ~1 ms) beyond 2^31-1 ms, so a larger value would budget-stop
+   * every run instantly.
+   */
+  const BUDGET_WALL_MAX_MINUTES = 24 * 60;
+
+  function resetAgenticBudget(): void {
+    budgetWallMinutes = "";
+    budgetToolCalls = "";
+  }
+
+  /**
+   * One budget input → its cap: blank means "use the default", and any
+   * value below 1 (the parser would drop 0/negatives) is treated the
+   * same instead of being written to the config. `max` clamps the value
+   * (the wall clock's `setTimeout` ceiling). Accepts numeric strings
+   * from the input (which a number field may hand back as a number).
+   */
+  function parseBudgetCap(value: string | number, max?: number): number | undefined {
+    const text = String(value).trim();
+    if (text.length === 0) return undefined;
+    const parsed = Number(text);
+    if (!Number.isFinite(parsed) || parsed < 1) return undefined;
+    const rounded = Math.round(parsed);
+    return max !== undefined ? Math.min(rounded, max) : rounded;
+  }
+
   async function removeSavedRule(id: string): Promise<void> {
     const provider = ai.supervisor.provider("opencode");
     removingRule = id;
@@ -228,6 +270,14 @@ import type { AiFeatureMode } from "$lib/ai/types";
       showAdvanced = false;
       savedRules = null;
       savedRuleError = null;
+      budgetWallMinutes =
+        ai.config.agenticBudget?.maxWallClockMs !== undefined
+          ? String(ai.config.agenticBudget.maxWallClockMs / 60_000)
+          : "";
+      budgetToolCalls =
+        ai.config.agenticBudget?.maxToolCalls !== undefined
+          ? String(ai.config.agenticBudget.maxToolCalls)
+          : "";
       void refreshInstall();
       if (backendChoice === "opencode" && opencodeEnabled) void refreshSavedRules();
     });
@@ -344,6 +394,23 @@ import type { AiFeatureMode } from "$lib/ai/types";
           ai.setFeatureMode(kind as AiFeatureModeKey, mode);
         }
       }
+      // Agentic budget (chunk 6): empty field = default; invalid input is
+      // dropped (never 0/negatives in the config — the parser drops those
+      // on reload anyway).
+      const wallMinutes = parseBudgetCap(budgetWallMinutes, BUDGET_WALL_MAX_MINUTES);
+      const toolCalls = parseBudgetCap(budgetToolCalls);
+      const agenticBudget: AiAgenticBudget = {};
+      if (wallMinutes !== undefined) {
+        agenticBudget.maxWallClockMs = wallMinutes * 60_000;
+      }
+      if (toolCalls !== undefined) {
+        agenticBudget.maxToolCalls = toolCalls;
+      }
+      ai.setAgenticBudget(
+        agenticBudget.maxWallClockMs !== undefined || agenticBudget.maxToolCalls !== undefined
+          ? agenticBudget
+          : undefined,
+      );
       ai.setBackend(backendChoice);
       ai.setOpencodeMode(opencodeModeChoice);
       // Kept even in managed mode (attach needs it again after a switch);
@@ -520,6 +587,51 @@ import type { AiFeatureMode } from "$lib/ai/types";
                 </label>
               {/if}
             {/each}
+            {#if AGENTIC_FEATURES.length > 0}
+              <div class="agentic-budget flex flex-col gap-[3px] border-t border-border pt-[0.625rem] pl-4">
+                <span class="text-ui-base">Agentic run budget</span>
+                <span class="text-ui-meta font-normal text-muted-foreground">
+                  Bounds ONE agentic run. An empty field — or a value below 1 — uses the default
+                  (5 minutes / 40 tool calls).
+                </span>
+                <div class="flex flex-wrap items-center gap-3 pt-px">
+                  <label class="field flex items-center gap-ui-375 text-ui-meta">
+                    <span class="flex-none text-muted-foreground">Wall clock (minutes)</span>
+                    <Input
+                      class="w-20 rounded"
+                      type="number"
+                      min="1"
+                      max={BUDGET_WALL_MAX_MINUTES}
+                      step="1"
+                      bind:value={budgetWallMinutes}
+                      aria-label="Agentic run wall clock cap in minutes"
+                      placeholder="5"
+                    />
+                  </label>
+                  <label class="field flex items-center gap-ui-375 text-ui-meta">
+                    <span class="flex-none text-muted-foreground">Tool calls</span>
+                    <Input
+                      class="w-20 rounded"
+                      type="number"
+                      min="1"
+                      step="1"
+                      bind:value={budgetToolCalls}
+                      aria-label="Agentic run tool-call cap"
+                      placeholder="40"
+                    />
+                  </label>
+                  <Button
+                    variant="link"
+                    size="sm"
+                    class="link relative h-auto p-0 text-ui-meta underline after:absolute after:-inset-1 after:content-['']"
+                    type="button"
+                    onclick={resetAgenticBudget}
+                  >
+                    Reset to defaults
+                  </Button>
+                </div>
+              </div>
+            {/if}
             <label class="radio flex cursor-pointer items-baseline gap-ui-375 text-ui-base">
               <Checkbox bind:checked={statusBar} />
               <span>

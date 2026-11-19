@@ -699,6 +699,9 @@ export class AiStore {
         backend: "opencode",
         elapsedMs: run.elapsedMs,
         sessionID: run.sessionID,
+        ...(run.budgetStopped === true
+          ? { budgetStopped: true, budgetToolCalls: run.steps?.length ?? 0 }
+          : {}),
         ...(run.usage !== undefined ? { usage: run.usage } : {}),
       };
     } catch (err) {
@@ -783,6 +786,13 @@ export class AiStore {
     feature: AiFeatureTag;
     oneShot?: boolean;
     onDelta?: (delta: string) => void;
+    /**
+     * Fires synchronously once the agentic run's controller exists — i.e.
+     * the run dispatched. Callers use it to tell a POST-start failure
+     * (surface honestly) from a pre-start refusal that silently falls
+     * back (chunk 6's single-shot retry offer).
+     */
+    onController?: (controller: AgenticRunController) => void;
     /** A pre-resolved connection (skips the capability probe). */
     connection?: ResolvedConnection;
     fallback: () => Promise<AiResult>;
@@ -811,8 +821,9 @@ export class AiStore {
         oneShot: input.oneShot,
         ticket,
         onDelta: input.onDelta,
-        onController: () => {
+        onController: (controller) => {
           runStarted = true;
+          input.onController?.(controller);
         },
       });
       // Clear BEFORE the ticket settles/returns — no path may leave the

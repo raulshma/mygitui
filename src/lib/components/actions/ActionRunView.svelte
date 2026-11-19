@@ -35,12 +35,14 @@
   import type { AiRunOptions } from "$lib/ai/ai.svelte";
   import AiFeatureButton from "$lib/components/ai/AiFeatureButton.svelte";
   import {
+    diagnoseExecutionMode,
     diagnoseFailureAgenticPrompt,
     diagnoseLogTail,
     DIAGNOSE_AGENTIC_LOG_CHARS,
   } from "$lib/ai/features";
   import type { FeatureOutcome } from "$lib/ai/features";
-  import { aiResultMetaWithMode } from "$lib/ai/usage";
+  import { aiResultMetaWithMode, budgetStopNote } from "$lib/ai/usage";
+  import { isRetryableWithoutTools } from "$lib/ai/types";
   import { emitUiEvent } from "$lib/palette/events";
 
   let {
@@ -134,6 +136,9 @@
 
   // -- M13: AI diagnosis of the failed action run -------------------------------
 
+  /** The last agentic attempt failed post-start — offer a single-shot retry. */
+  let diagnoseRetryable = $state(false);
+
   /** Cap for the log tail sent to the model. */
   const DIAG_LOG_TAIL_CHARS = 40_000;
 
@@ -150,7 +155,12 @@
    * otherwise — and on a pre-start refusal — the single-shot path runs
    * exactly as before.
    */
-  async function runDiagnose(opts?: AiRunOptions): Promise<FeatureOutcome> {
+  async function runDiagnose(
+    opts?: AiRunOptions & { forceSingleShot?: boolean },
+  ): Promise<FeatureOutcome> {
+    // Every invocation supersedes the previous failure's retry offer; a
+    // new failure re-arms it below.
+    diagnoseRetryable = false;
     const current = run;
     if (!current) {
       return Promise.reject(new Error("the run is not loaded"));
@@ -167,10 +177,16 @@
     const tail = log.length > DIAG_LOG_TAIL_CHARS ? log.slice(-DIAG_LOG_TAIL_CHARS) : log;
     const fallback = async (): Promise<FeatureOutcome> =>
       ai.run("diagnose-action", { repoId, runMeta: meta, diff: tail }, undefined, opts);
-    // Mode wiring (chunk 5): "single-shot"/"off" take the single-shot path
-    // with NO capability probe ("off" hides the button — the {#if} below);
-    // "auto" keeps the agentic-first flow.
-    if (ai.featureMode("diagnose-action") !== "auto") return fallback();
+    // Mode wiring (chunk 5/6): "single-shot"/"off" take the single-shot
+    // path with NO capability probe ("off" hides the button — the {#if}
+    // below); "auto" keeps the agentic-first flow unless this is the
+    // forced single-shot retry after a post-start agentic failure.
+    if (
+      diagnoseExecutionMode(ai.featureMode("diagnose-action"), opts?.forceSingleShot === true) !==
+      "agentic"
+    ) {
+      return fallback();
+    }
     if (!(await ai.agenticAvailable())) return fallback();
     const built = diagnoseFailureAgenticPrompt(
       "The action run",
@@ -178,24 +194,46 @@
       diagnoseLogTail(log, DIAGNOSE_AGENTIC_LOG_CHARS),
       "action",
     );
-    const { result } = await ai.runAgenticWithFallback({
-      repoId,
-      prompt: built.prompt,
-      system: built.system,
-      model: opts?.model,
-      feature: "diagnose-action",
-      oneShot: opts?.oneShot,
-      fallback: async () => (await fallback()).result,
-    });
+    let agenticStarted = false;
+    let result;
+    try {
+      ({ result } = await ai.runAgenticWithFallback({
+        repoId,
+        prompt: built.prompt,
+        system: built.system,
+        model: opts?.model,
+        feature: "diagnose-action",
+        oneShot: opts?.oneShot,
+        onController: () => {
+          agenticStarted = true;
+        },
+        fallback: async () => (await fallback()).result,
+      }));
+    } catch (err) {
+      // Post-start unavailable-class failures (connection lost, dead
+      // stream) offer a one-click single-shot retry; a pre-start refusal
+      // already fell back and a fallback failure is NOT retried as
+      // single-shot again. Budget stops resolve (partial output + banner)
+      // and other failures keep today's UI.
+      if (isRetryableWithoutTools(err, agenticStarted)) {
+        diagnoseRetryable = true;
+      }
+      throw err;
+    }
     return { kind: "diagnose-action", text: result.text, result };
   }
 
   function onDiagnose(outcome: import("$lib/ai/features").FeatureOutcome): void {
     const current = run;
+    const budgetStopped = outcome.result.budgetStopped === true;
+    const budgetNote = budgetStopped
+      ? ` · ${budgetStopNote(outcome.result.budgetToolCalls ?? 0, outcome.result.elapsedMs)}`
+      : "";
     emitUiEvent("ai-show-result", {
       title: `Diagnosis: ${current?.name ?? "action run"}`,
       text: outcome.text ?? outcome.result.text,
-      meta: aiResultMetaWithMode(outcome.result),
+      // The note already carries the run clock — drop the meta's duplicate.
+      meta: `${aiResultMetaWithMode(outcome.result, { seconds: !budgetStopped })}${budgetNote}`,
     });
   }
 </script>
@@ -336,6 +374,9 @@
             gateVisibility={false}
             compact
             run={runDiagnose}
+            retryWithoutTools={diagnoseRetryable
+              ? (opts?: AiRunOptions) => runDiagnose({ ...opts, forceSingleShot: true })
+              : undefined}
             onResult={onDiagnose}
           />
         {/if}

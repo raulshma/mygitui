@@ -38,6 +38,8 @@ vi.mock("$lib/ai/ai.svelte", () => ({
   },
 }));
 
+import { ai } from "$lib/ai/ai.svelte";
+import { AiError } from "$lib/ai/types";
 import AiFeatureButton from "./AiFeatureButton.svelte";
 
 afterEach(() => {
@@ -47,6 +49,7 @@ afterEach(() => {
 beforeEach(() => {
   featureMode.mockReturnValue("auto");
   config.backend = "opencode";
+  vi.mocked(ai.isOptedIn).mockReturnValue(false);
 });
 
 function renderButton(kind: "diagnose-workflow" | "explain-hunk" | undefined): void {
@@ -110,5 +113,67 @@ describe("AiFeatureButton — agentic opt-in disclosure (chunk 5)", () => {
     await openConfirm();
     const dialog = screen.getByRole("dialog", { name: "Allow AI for this repository" });
     expect(dialog.textContent).not.toContain("the agent can read files in this repo");
+  });
+});
+
+describe("AiFeatureButton — retry without tools (chunk 6)", () => {
+  async function renderFailing(
+    retryWithoutTools?: () => Promise<import("$lib/ai/features").FeatureOutcome>,
+  ): Promise<{ run: ReturnType<typeof vi.fn>; onResult: ReturnType<typeof vi.fn> }> {
+    vi.mocked(ai.isOptedIn).mockReturnValue(true);
+    const run = vi.fn(async () => {
+      throw new AiError("unavailable", "opencode request failed: fetch failed", {
+        backend: "opencode",
+      });
+    });
+    const onResult = vi.fn();
+    render(AiFeatureButton, {
+      props: {
+        repoId: "r1",
+        kind: "diagnose-workflow",
+        label: "AI diagnose",
+        confirmText: "Send this run's log tail to {backend} for a diagnosis?",
+        errorPrefix: "AI diagnose failed",
+        gateVisibility: false,
+        compact: true,
+        run,
+        ...(retryWithoutTools !== undefined ? { retryWithoutTools } : {}),
+        onResult,
+      },
+    });
+    await fireEvent.click(screen.getByRole("button", { name: "AI diagnose" }));
+    // The failure popover settles after the async runner rejects.
+    await screen.findByText("opencode request failed: fetch failed");
+    return { run, onResult };
+  }
+
+  it("offers the single-shot retry in the error line when supplied", async () => {
+    const retry = vi.fn(async () => ({
+      kind: "diagnose-workflow" as const,
+      result: { text: "ok", model: "m", backend: "opencode" as const, elapsedMs: 1 },
+    }));
+    const { run, onResult } = await renderFailing(retry);
+
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+    const button = screen.getByRole("button", { name: "Retry without tools" });
+    await fireEvent.click(button);
+    await vi.waitFor(() => expect(retry).toHaveBeenCalledTimes(1));
+
+    // The ordinary runner ran only for the failed first attempt.
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(onResult).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "diagnose-workflow" }),
+    );
+    // Success clears the failure popover.
+    expect(screen.queryByText("opencode request failed: fetch failed")).toBeNull();
+  });
+
+  it("keeps the ordinary Retry when no alternative is supplied", async () => {
+    const { run } = await renderFailing();
+    expect(screen.queryByRole("button", { name: "Retry without tools" })).toBeNull();
+    const button = screen.getByRole("button", { name: "Retry" });
+    await fireEvent.click(button);
+    // Retry goes back through the normal runner.
+    await vi.waitFor(() => expect(run).toHaveBeenCalledTimes(2));
   });
 });

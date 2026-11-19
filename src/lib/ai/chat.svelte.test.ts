@@ -21,7 +21,7 @@ import {
   parseChatThreads,
 } from "./chat.svelte";
 import type { ChatAgenticRunner, ChatGitClient, ChatStoreDeps } from "./chat.svelte";
-import { AiError } from "./types";
+import { AiError, isRetryableWithoutTools } from "./types";
 import type { AiResult } from "./types";
 import type { FeatureRouter } from "./features";
 
@@ -989,5 +989,178 @@ describe("ChatStore per-feature gate (chunk 5)", () => {
     });
     expect(agentic).toHaveBeenCalledTimes(1);
     expect(store.conversationFor("/repo")).toHaveLength(2);
+  });
+});
+
+describe("Agentic chat — budget stops and single-shot retry (chunk 6)", () => {
+  /** A harness with the agentic seam pre-wired to a per-test vi.fn. */
+  function makeAgenticHarness() {
+    const h = makeHarness({ withAgentic: true });
+    h.agentic!.mockResolvedValue(runnerResult());
+    return h as ReturnType<typeof makeHarness> & { agentic: ReturnType<typeof vi.fn> };
+  }
+
+  it("a budget-stopped agentic turn is a distinct partial reply (not cancel/error)", async () => {
+    const h = makeAgenticHarness();
+    h.agentic!.mockImplementation(async (input: ChatAgenticInput) => {
+      // A real controller at its tool-call cap, as the budget settle does.
+      const controller = new AgenticRunController({
+        sessionID: "sess-9",
+        budget: { maxToolCalls: 1 },
+        reply: async () => undefined,
+        interrupt: async () => undefined,
+      });
+      input.onController?.(controller);
+      // The real glue binds the controller to the ticket — mirror it so
+      // the job snapshot carries the agentic outcome.
+      h.jobs.bindAgentic(input.ticket.id, controller);
+      controller.handleToolCalled({ id: "t1", input: { command: "ls" }, executed: true });
+      return {
+        ...runnerResult("partial findings"),
+        budgetStopped: true,
+        budgetToolCalls: 1,
+        steps: [...controller.steps],
+      };
+    });
+    const reply = await h.store.send({
+      repoId: "r1", root: "/repo", question: "q", context: CONTEXT, agentic: true,
+    });
+    expect(reply).toMatchObject({
+      role: "assistant",
+      mode: "agentic",
+      text: "partial findings",
+      budgetStopped: true,
+      budgetToolCalls: 1,
+    });
+    // NOT an error or cancellation:
+    expect(reply.error).toBeUndefined();
+    expect(reply.cancelled).toBeUndefined();
+    expect(reply.retryable).toBeUndefined();
+    const record = h.jobs.history[0];
+    expect(record?.status).toBe("done");
+    expect(record?.agentic?.budgetStopped).toBe(true);
+    // Round-trips through storage:
+    const parsed = parseChatThreads(JSON.parse(JSON.stringify({ "/repo": [reply] })));
+    expect(parsed?.["/repo"]?.[0]).toMatchObject({ budgetStopped: true, budgetToolCalls: 1 });
+  });
+
+  it("a post-start unavailable failure marks the turn retryable", async () => {
+    const h = makeAgenticHarness();
+    h.agentic!.mockImplementation(async (input: ChatAgenticInput) => {
+      input.onController?.({} as never);
+      input.onDelta?.("partial ");
+      throw new AiError("unavailable", "opencode request failed: fetch failed", {
+        backend: "opencode",
+      });
+    });
+    await h.store
+      .send({ repoId: "r1", root: "/repo", question: "q", context: CONTEXT, agentic: true })
+      .catch(() => {});
+    const failed = h.store.conversationFor("/repo").at(-1);
+    expect(failed).toMatchObject({ role: "assistant", mode: "agentic", retryable: true });
+    expect(failed?.error).toBeTruthy();
+  });
+
+  it("a pre-start refusal (opt-in) is not retryable", async () => {
+    const h = makeAgenticHarness();
+    h.agentic!.mockRejectedValue(
+      new AiError("opt-in", "AI features are not enabled for this repository", {}),
+    );
+    await h.store
+      .send({ repoId: "r1", root: "/repo", question: "q", context: CONTEXT, agentic: true })
+      .catch(() => {});
+    const failed = h.store.conversationFor("/repo").at(-1);
+    expect(failed).toMatchObject({ role: "assistant", mode: "agentic" });
+    expect(failed?.retryable).toBeUndefined();
+  });
+
+  it("the forced single-shot retry bypasses the seam and keeps the thread binding", async () => {
+    const h = makeAgenticHarness();
+    // Bind the thread to a session through a successful agentic turn.
+    await h.store.send({
+      repoId: "r1", root: "/repo", question: "first", context: CONTEXT, agentic: true,
+    });
+    expect(h.store.sessionFor("/repo")).toBe("sess-9");
+    const agenticCalls = h.agentic!.mock.calls.length;
+
+    // The panels' "Retry without tools" passes agentic:false for that turn
+    // only — the single-shot router serves it and the binding is untouched.
+    const retry = await h.store.send({
+      repoId: "r1", root: "/repo", question: "first", context: CONTEXT, agentic: false,
+    });
+    expect(h.agentic!.mock.calls.length).toBe(agenticCalls);
+    expect(h.router.generate).toHaveBeenCalledTimes(1);
+    expect(retry.mode).toBe("single-shot");
+    expect(retry.retryable).toBeUndefined();
+    expect(h.store.sessionFor("/repo")).toBe("sess-9");
+
+    // The binding still serves the NEXT agentic send.
+    await h.store.send({
+      repoId: "r1", root: "/repo", question: "third", context: CONTEXT, agentic: true,
+    });
+    expect((h.agentic!.mock.calls.at(-1)![0] as ChatAgenticInput).sessionID).toBe("sess-9");
+  });
+
+  it("non-retryable failures carry no marker (budget stops resolve; others differ)", async () => {
+    const h = makeAgenticHarness();
+    // Ordinary agentic failure:
+    h.agentic!.mockRejectedValue(new AiError("bad-response", "opencode exploded", {}));
+    await h.store
+      .send({ repoId: "r1", root: "/repo", question: "q", context: CONTEXT, agentic: true })
+      .catch(() => {});
+    expect(h.store.conversationFor("/repo").at(-1)?.retryable).toBeUndefined();
+
+    // A budget stop RESOLVES (partial output + banner) — never retryable.
+    const h2 = makeAgenticHarness();
+    h2.agentic!.mockResolvedValue({
+      ...runnerResult("partial"),
+      budgetStopped: true,
+      budgetToolCalls: 3,
+    });
+    await h2.store.send({
+      repoId: "r1", root: "/repo", question: "q", context: CONTEXT, agentic: true,
+    });
+    expect(h2.store.conversationFor("/repo").at(-1)?.retryable).toBeUndefined();
+  });
+
+  it("parse validates the new turn markers (junk dropped)", () => {
+    const parsed = parseChatThreads({
+      "/r": [
+        { id: "a", role: "assistant", text: "x", at: 1, budgetStopped: true, budgetToolCalls: 4, retryable: true },
+        { id: "b", role: "assistant", text: "y", at: 2, budgetStopped: "yes", budgetToolCalls: "many", retryable: "sure" },
+        { id: "c", role: "assistant", text: "z", at: 3, budgetStopped: true, budgetToolCalls: -4 },
+      ],
+    });
+    expect(parsed?.["/r"]).toEqual([
+      expect.objectContaining({ budgetStopped: true, budgetToolCalls: 4, retryable: true }),
+      expect.objectContaining({ budgetStopped: undefined, budgetToolCalls: undefined, retryable: undefined }),
+      expect.objectContaining({ budgetStopped: true, budgetToolCalls: 0 }),
+    ]);
+  });
+});
+
+describe("diagnoseExecutionMode (chunk 6)", () => {
+  it("auto + not forced → agentic; everything else → single-shot", async () => {
+    const { diagnoseExecutionMode } = await import("./features");
+    expect(diagnoseExecutionMode("auto", false)).toBe("agentic");
+    expect(diagnoseExecutionMode("auto", true)).toBe("single-shot");
+    expect(diagnoseExecutionMode("single-shot", false)).toBe("single-shot");
+    expect(diagnoseExecutionMode("single-shot", true)).toBe("single-shot");
+    expect(diagnoseExecutionMode("off", false)).toBe("single-shot");
+  });
+});
+
+describe("isRetryableWithoutTools (chunk 6)", () => {
+  it("only a POST-start unavailable-class failure arms the tools-free retry", () => {
+    const unavailable = new AiError("unavailable", "fetch failed", {});
+    expect(isRetryableWithoutTools(unavailable, true)).toBe(true);
+    // Pre-start refusal: already fell back; nothing to retry.
+    expect(isRetryableWithoutTools(unavailable, false)).toBe(false);
+    // Other kinds never arm it (opt-in refusals, cancellations, bad output).
+    for (const kind of ["opt-in", "cancelled", "bad-response", "unknown"] as const) {
+      expect(isRetryableWithoutTools(new AiError(kind, "x", {}), true)).toBe(false);
+    }
+    expect(isRetryableWithoutTools(new Error("fetch failed"), true)).toBe(false);
+    expect(isRetryableWithoutTools(null, true)).toBe(false);
   });
 });

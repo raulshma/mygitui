@@ -87,8 +87,8 @@ export interface AiConfig {
 /**
  * Budget caps for ONE agentic run (both enforced by the run controller:
  * a breach fires a session interrupt and settles the run as
- * budget-stopped — partial text is kept). Overridable so users can loosen
- * or tighten the ceiling; the UI stays out of it.
+ * budget-stopped — partial text is kept). Overridable in AI settings so
+ * users can loosen or tighten the ceiling.
  */
 export interface AiAgenticBudget {
   /** Wall-clock cap per run in milliseconds; default {@link AGENTIC_WALL_CLOCK_MS}. */
@@ -251,6 +251,13 @@ export interface AiResult {
    * session 1:1; throwaway runs remove theirs). Absent on single-shot.
    */
   sessionID?: string;
+  /**
+   * Agentic budget outcome (chunk 6): a budget cap fired and the run was
+   * interrupted — `text` holds the partial output. Absent otherwise.
+   */
+  budgetStopped?: boolean;
+  /** Tool calls observed before the budget stop (with `budgetStopped`). */
+  budgetToolCalls?: number;
 }
 
 /** Uniform failure for anything AI: which backend and a safe message. */
@@ -293,6 +300,17 @@ export type AiErrorKind =
 /** True when `err` is an {@link AiError}. */
 export function isAiError(err: unknown): err is AiError {
   return err instanceof AiError;
+}
+
+/**
+ * Whether a failed agentic run may be retried WITHOUT tools (chunk 6):
+ * only a POST-start `unavailable`-class failure (connection lost, dead
+ * stream). A pre-start refusal already fell back to single-shot, and
+ * budget stops, cancellations and other failures are never retried this
+ * way. `runStarted` is the caller's `onController` flag.
+ */
+export function isRetryableWithoutTools(err: unknown, runStarted: boolean): boolean {
+  return runStarted && isAiError(err) && err.kind === "unavailable";
 }
 
 /** Safe message for toasts/logs: never leaks secret material. */
